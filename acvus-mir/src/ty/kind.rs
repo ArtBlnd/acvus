@@ -1,6 +1,6 @@
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::arg::{EffectArg, IdentityTerm, LenTerm, TypeArg};
+use super::arg::{IdentityTerm, LenTerm, TypeArg};
 use super::effect::EffectTerm;
 use super::flow::FlowTerm;
 use super::num::IntTy;
@@ -205,11 +205,11 @@ impl<V: Phase> TyKind<V> {
                 holds: *holds,
                 values: values.clone(),
             },
-            TyKind::UserDefined { id, type_args, effect_args, identity_args } => TyKind::UserDefined {
+            TyKind::UserDefined { id, type_args, effect, identity } => TyKind::UserDefined {
                 id: *id,
                 type_args: type_args.iter().map(|type_arg| arg(type_arg, map)).collect(),
-                effect_args: effect_args.clone(),
-                identity_args: identity_args.clone(),
+                effect: effect.clone(),
+                identity: *identity,
             },
             TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, arg(target, map)),
             TyKind::Closures(signatures) => TyKind::Closures(signatures.iter().map(|signature| map(*signature)).collect()),

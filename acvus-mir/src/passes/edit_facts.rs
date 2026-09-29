@@ -1148,8 +1148,8 @@ mod tests {
         let map_ty = types.intern(TyKind::UserDefined {
             id: map,
             type_args: Box::new([]),
-            effect_args: Box::new([]),
-            identity_args: Box::new([]),
+            effect: None,
+            identity: None,
         });
         let mut_map = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(map_ty)));
         let slice = types.intern(TyKind::Slice(int));
@@ -1194,9 +1194,10 @@ mod tests {
                 id: map,
                 type_params: Box::new([]),
                 specializes: Box::new([]),
-                effect_params: 0,
-                identity_params: 0,
+                carries_effect: false,
+                carries_identity: false,
                 lifetimes: 0,
+                kind: crate::decl::UserTypeKind::Opaque,
             }],
             casts: Vec::new(),
             conversions: Vec::new(),
@@ -1230,8 +1231,8 @@ mod tests {
         let map_ty = types.intern(TyKind::UserDefined {
             id: a.map,
             type_args: Box::new([]),
-            effect_args: Box::new([]),
-            identity_args: Box::new([]),
+            effect: None,
+            identity: None,
         });
         let mut_map = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(map_ty)));
         let slice = types.intern(TyKind::Slice(int));

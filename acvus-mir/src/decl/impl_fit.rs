@@ -3,7 +3,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ty::{EffectArg, EffectTerm, IdentityTerm, LenTerm, ObjectTy, Poly, TyId, TyKind, TypeArg, Types};
+use crate::ty::{EffectTerm, IdentityTerm, LenTerm, ObjectTy, Poly, TyId, TyKind, TypeArg, Types};
 
 /// Whether `impl` is `generic` with each of the generic function's type,
 /// effect, length, identity and mark variables replaced by one choice.
@@ -206,20 +206,20 @@ impl Choice<'_> {
                 TyKind::UserDefined {
                     id: a_id,
                     type_args: a_types,
-                    effect_args: a_effects,
-                    identity_args: a_identities,
+                    effect: a_effect,
+                    identity: a_identity,
                 },
                 TyKind::UserDefined {
                     id: b_id,
                     type_args: b_types,
-                    effect_args: b_effects,
-                    identity_args: b_identities,
+                    effect: b_effect,
+                    identity: b_identity,
                 },
             ) => {
                 a_id == b_id
                     && all_pairs(a_types, b_types, |a, b| self.type_arg(a, b))
-                    && all_pairs(a_effects, b_effects, |a, b| self.effect_arg(a, b))
-                    && all_pairs(a_identities, b_identities, |a, b| self.identity(a, b))
+                    && all_pairs(a_effect.as_slice(), b_effect.as_slice(), |a, b| self.effect(a, b))
+                    && all_pairs(a_identity.as_slice(), b_identity.as_slice(), |a, b| self.identity(a, b))
             }
             (TyKind::Ref(a_mutability, a), TyKind::Ref(b_mutability, b)) => {
                 a_mutability == b_mutability && self.type_arg(a, b)
@@ -253,14 +253,6 @@ impl Choice<'_> {
             TypeArg::Specialized(_) => mark == Mark::Specialized,
         };
         marks_fit && self.ty(generic.ty(), r#impl.ty())
-    }
-
-    fn effect_arg(&mut self, generic: &EffectArg<Poly>, r#impl: &EffectArg<Poly>) -> bool {
-        let marks_fit = matches!(
-            (generic, r#impl),
-            (EffectArg::Uniform(_), EffectArg::Uniform(_)) | (EffectArg::Specialized(_), EffectArg::Specialized(_))
-        );
-        marks_fit && self.effect(generic.effect(), r#impl.effect())
     }
 
     fn effect(&mut self, generic: &EffectTerm<Poly>, r#impl: &EffectTerm<Poly>) -> bool {

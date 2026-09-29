@@ -19,7 +19,7 @@ use crate::decl::{Base, Declarations, Head, VerifiedConversion};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{FnValue, FnValues, Reach, ValuesVarId, is_transparent};
 use crate::ty::{
-    Effect, EffectArg, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, Mutability, ObjectTy,
+    Effect, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, Mutability, ObjectTy,
     TyKind, TyVarId, TypeArg,
 };
 
@@ -212,12 +212,11 @@ fn heads_up(decls: &Declarations, head: Head) -> Vec<Head> {
 }
 
 /// Whether a value of `head` carries an identity (types §3): its type, or
-/// a reference's target, is an extern-defined type with an identity
-/// parameter.
+/// a reference's target, is an extern-defined type that carries one.
 fn carries_identity(decls: &Declarations, head: Head) -> bool {
     match head {
         Head::Base(Base::Named(id)) | Head::Ref(_, Base::Named(id)) => {
-            decls.user_type(id).is_some_and(|declared| declared.identity_params > 0)
+            decls.user_type(id).is_some_and(|declared| declared.carries_identity)
         }
         Head::Base(_) | Head::Ref(..) => false,
     }
@@ -601,11 +600,11 @@ impl Infer {
         meeting.next()
     }
 
-    /// The identity a value of `node` carries: an extern-defined type's
-    /// one identity argument, through references.
+    /// The identity a value of `node` carries: the one an extern-defined
+    /// type carries, through references.
     fn identity_of(&self, node: Term) -> Option<IdentityTerm<InferPhase>> {
         match self.types.kind(node) {
-            TyKind::UserDefined { identity_args, .. } => identity_args.first().copied(),
+            TyKind::UserDefined { identity, .. } => *identity,
             TyKind::Ref(_, target) => match self.end(target.ty()) {
                 End::Node { node, .. } => self.identity_of(node),
                 End::Unbound(..) => None,
@@ -927,20 +926,20 @@ impl Infer {
                 TyKind::UserDefined {
                     id: id_a,
                     type_args: type_args_a,
-                    effect_args: effect_args_a,
-                    identity_args: identity_args_a,
+                    effect: effect_a,
+                    identity: identity_a,
                 },
                 TyKind::UserDefined {
                     id: id_b,
                     type_args: type_args_b,
-                    effect_args: effect_args_b,
-                    identity_args: identity_args_b,
+                    effect: effect_b,
+                    identity: identity_b,
                 },
             ) => {
                 if id_a != id_b
                     || type_args_a.len() != type_args_b.len()
-                    || effect_args_a.len() != effect_args_b.len()
-                    || identity_args_a.len() != identity_args_b.len()
+                    || effect_a.is_some() != effect_b.is_some()
+                    || identity_a.is_some() != identity_b.is_some()
                 {
                     return Err(heads);
                 }
@@ -949,21 +948,28 @@ impl Infer {
                     .zip(type_args_b.iter())
                     .map(|(x, y)| self.relate_type_arg(a, b, x, y))
                     .collect::<Result<_, _>>()?;
-                let effect_args = effect_args_a
-                    .iter()
-                    .zip(effect_args_b.iter())
-                    .map(|(x, y)| self.relate_effect_arg(a, b, x, y))
-                    .collect::<Result<_, _>>()?;
-                let identity_args = identity_args_a
-                    .iter()
-                    .zip(identity_args_b.iter())
-                    .map(|(x, y)| self.identity_vars.unify(x, y).map_err(|Unequal| heads.clone()))
-                    .collect::<Result<_, _>>()?;
+                let effect = effect_a
+                    .zip(effect_b)
+                    .map(|(effect_a, effect_b)| match how {
+                        Relation::Eq => self
+                            .effect_vars
+                            .unify(&effect_a, &effect_b)
+                            .map_err(|Unequal| self.effects_mismatch(&effect_a, &effect_b)),
+                        Relation::Join(_) => self
+                            .effect_vars
+                            .join(&effect_a, &effect_b, Effect::join)
+                            .map_err(|_| self.effects_mismatch(&effect_a, &effect_b)),
+                    })
+                    .transpose()?;
+                let identity = identity_a
+                    .zip(identity_b)
+                    .map(|(x, y)| self.identity_vars.unify(&x, &y).map_err(|Unequal| heads))
+                    .transpose()?;
                 TyKind::UserDefined {
                     id: id_a,
                     type_args,
-                    effect_args,
-                    identity_args,
+                    effect,
+                    identity,
                 }
             }
             (TyKind::Ref(mutability_a, x), TyKind::Ref(mutability_b, y)) => {
@@ -1178,27 +1184,5 @@ impl Infer {
             }
             CellEnd::Var { var, value: None } => TypeArg::Open(var, ty),
         })
-    }
-
-    fn relate_effect_arg(
-        &mut self,
-        a: Term,
-        b: Term,
-        x: &EffectArg<InferPhase>,
-        y: &EffectArg<InferPhase>,
-    ) -> Result<EffectArg<InferPhase>, Mismatch> {
-        let unify = |infer: &mut Infer, x, y| {
-            infer
-                .effect_vars
-                .unify(x, y)
-                .map_err(|Unequal| Mismatch::Heads { a, b })
-        };
-        match (x, y) {
-            (EffectArg::Uniform(x), EffectArg::Uniform(y)) => Ok(EffectArg::Uniform(unify(self, x, y)?)),
-            (EffectArg::Specialized(x), EffectArg::Specialized(y)) => Ok(EffectArg::Specialized(unify(self, x, y)?)),
-            (EffectArg::Uniform(_), EffectArg::Specialized(_)) | (EffectArg::Specialized(_), EffectArg::Uniform(_)) => {
-                Err(Mismatch::Mark { a, b })
-            }
-        }
     }
 }

@@ -8,6 +8,7 @@ use super::{
     Adjustment, Capture, CaptureOf, Captured, Exceeding, Impl, Inputs, Interfaces, Iteration, Name, RefusalKind, TryExit, Typeck, UnitCall,
     check_script, check_template,
 };
+use super::decision::variables_of;
 use crate::decl::{CastRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::infer::ShapeCoercion;
 use crate::ty::structural::PartKey;
@@ -179,9 +180,10 @@ impl Fixture {
             id: vec_id,
             type_params: Box::new([TyVarBound::Any]),
             specializes: Box::new([false]),
-            effect_params: 0,
-            identity_params: 0,
+            carries_effect: false,
+            carries_identity: false,
             lifetimes: 0,
+            kind: crate::decl::UserTypeKind::Opaque,
         });
         let e = self.var(0);
         let vec_e = self.vec_of(vec_id, e);
@@ -196,8 +198,8 @@ impl Fixture {
         self.ty(TyKind::UserDefined {
             id: vec_id,
             type_args: Box::new([TypeArg::Uniform(element)]),
-            effect_args: Box::new([]),
-            identity_args: Box::new([]),
+            effect: None,
+            identity: None,
         })
     }
 
@@ -208,6 +210,7 @@ impl Fixture {
             .iter()
             .map(|ty| ImplSig {
                 ty: *ty,
+                bounds: vec![TyVarBound::Any; variables_of(&self.raw.types, &[*ty])].into(),
                 param_names: self.param_names(self.arity(*ty)),
                 requires: Box::new([]),
                 facts: Default::default(),
@@ -222,6 +225,7 @@ impl Fixture {
             .iter()
             .map(|ty| ImplSig {
                 ty: *ty,
+                bounds: vec![TyVarBound::Any; variables_of(&self.raw.types, &[*ty])].into(),
                 param_names: self.param_names(self.arity(*ty)),
                 requires: Box::new([]),
                 facts: facts.clone(),
@@ -2167,15 +2171,16 @@ fn a_view_step_names_its_impl() {
         id: other_id,
         type_params: Box::new([]),
         specializes: Box::new([]),
-        effect_params: 0,
-        identity_params: 0,
+        carries_effect: false,
+        carries_identity: false,
         lifetimes: 0,
+        kind: crate::decl::UserTypeKind::Opaque,
     });
     let other = fx.ty(TyKind::UserDefined {
         id: other_id,
         type_args: Box::new([]),
-        effect_args: Box::new([]),
-        identity_args: Box::new([]),
+        effect: None,
+        identity: None,
     });
     let bool_ty = fx.ty(TyKind::Bool);
     let shared_other = fx.reference(Mutability::Shared, other);
@@ -2339,6 +2344,7 @@ fn a_view_steps_requirements_are_reached() {
     });
     let view = ImplSig {
         ty: at_vec,
+        bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at_vec])].into(),
         param_names: fx.param_names(1),
         requires: Box::new([crate::decl::Requirement {
             generic_function: clone,
@@ -2706,7 +2712,7 @@ fn an_unclaimed_flow_set_takes_every_flow_at_a_stall() {
 fn generic_with_impl(fx: &mut Fixture, name: &str, generic: TyId<Poly>, at: TyId<Poly>, facts: DeclaredFacts) -> QualifiedRef {
     let id = QualifiedRef::root(fx.name(name));
     let arity = fx.arity(generic);
-    let concrete = Box::new([ImplSig { ty: at, param_names: fx.param_names(arity), requires: Box::new([]), facts }]);
+    let concrete = Box::new([ImplSig { ty: at, bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at])].into(), param_names: fx.param_names(arity), requires: Box::new([]), facts }]);
     let scheme = Scheme {
         ty: generic,
         param_names: fx.param_names(arity),
@@ -2861,6 +2867,7 @@ fn a_requirement_a_lift_would_answer_is_refused_as_unimplemented() {
     });
     let view = ImplSig {
         ty: at_vec,
+        bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at_vec])].into(),
         param_names: fx.param_names(1),
         requires: Box::new([crate::decl::Requirement { generic_function: clone, pattern: clones_e, fact: None }]),
         facts: Default::default(),

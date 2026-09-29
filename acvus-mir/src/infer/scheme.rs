@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use super::{Bound, Infer, Term};
 use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound};
 use crate::ty::{
-    Calls, CallsTerm, Concrete, EffectArg, EffectTerm, EffectVarId, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityTerm, IdentityVarId,
+    Calls, CallsTerm, Concrete, EffectTerm, EffectVarId, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityTerm, IdentityVarId,
     Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy, Phase, Poly, ReprVarId, Ty, TyId, TyKind, TypeArg, Types,
 };
 
@@ -271,27 +271,18 @@ impl Infer {
             TyKind::UserDefined {
                 id,
                 type_args,
-                effect_args,
-                identity_args,
+                effect,
+                identity,
             } => TyKind::UserDefined {
                 id: *id,
                 type_args: type_args.iter().map(|arg| self.type_arg_at(at, arg)).collect(),
-                effect_args: effect_args
-                    .iter()
-                    .map(|arg| match arg {
-                        EffectArg::Uniform(effect) => EffectArg::Uniform(self.effect_at(at, effect)),
-                        EffectArg::Specialized(effect) => EffectArg::Specialized(self.effect_at(at, effect)),
-                    })
-                    .collect(),
-                identity_args: identity_args
-                    .iter()
-                    .map(|identity| match identity {
-                        IdentityTerm::Known(id) => IdentityTerm::Known(*id),
-                        IdentityTerm::Var(index) => {
-                            IdentityTerm::Var(*at.identity_vars.entry(index.index()).or_insert_with(|| self.fresh_identity()))
-                        }
-                    })
-                    .collect(),
+                effect: effect.as_ref().map(|effect| self.effect_at(at, effect)),
+                identity: identity.map(|identity| match identity {
+                    IdentityTerm::Known(id) => IdentityTerm::Known(id),
+                    IdentityTerm::Var(index) => {
+                        IdentityTerm::Var(*at.identity_vars.entry(index.index()).or_insert_with(|| self.fresh_identity()))
+                    }
+                }),
             },
             TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, self.type_arg_at(at, target)),
         };

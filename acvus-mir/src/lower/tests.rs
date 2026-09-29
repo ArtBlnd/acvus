@@ -108,6 +108,7 @@ impl Fixture {
             .iter()
             .map(|ty| ImplSig {
                 ty: *ty,
+                bounds: vec![TyVarBound::Any; variables_of(&self.raw.types, *ty)].into(),
                 param_names: self.param_names(match self.raw.types.kind(*ty) {
                     TyKind::Fn { params, .. } => params.len(),
                     _ => 0,
@@ -127,9 +128,10 @@ impl Fixture {
             id: vec_id,
             type_params: Box::new([TyVarBound::Any]),
             specializes: Box::new([false]),
-            effect_params: 0,
-            identity_params: 0,
+            carries_effect: false,
+            carries_identity: false,
             lifetimes: 0,
+            kind: crate::decl::UserTypeKind::Opaque,
         });
         let e = self.ty(TyKind::Var(0));
         let vec_e = self.vec(vec_id, e);
@@ -147,8 +149,8 @@ impl Fixture {
         self.ty(TyKind::UserDefined {
             id: vec_id,
             type_args: Box::new([TypeArg::Uniform(element)]),
-            effect_args: Box::new([]),
-            identity_args: Box::new([]),
+            effect: None,
+            identity: None,
         })
     }
 
@@ -248,6 +250,20 @@ impl Fixture {
         let module = lower_template(&decls, &typeck, types, &template);
         Lowered::checked(module, self.names)
     }
+}
+
+/// How many type variables `ty` holds: one past the largest index.
+fn variables_of(types: &Types<Poly>, ty: TyId<Poly>) -> usize {
+    let mut largest: Option<u32> = None;
+    let mut stack = vec![ty];
+    while let Some(at) = stack.pop() {
+        let kind = types.kind(at);
+        if let TyKind::Var(var) = kind {
+            largest = Some(largest.map_or(*var, |known| known.max(*var)));
+        }
+        kind.for_each_child(|child| stack.push(child));
+    }
+    largest.map_or(0, |largest| largest as usize + 1)
 }
 
 /// A lowered module whose every body holds the editor's invariants.
@@ -947,15 +963,16 @@ fn a_declared_conversion_step_is_a_call_of_its_via() {
         id: meters_id,
         type_params: Box::new([]),
         specializes: Box::new([]),
-        effect_params: 0,
-        identity_params: 0,
+        carries_effect: false,
+        carries_identity: false,
         lifetimes: 0,
+        kind: crate::decl::UserTypeKind::Opaque,
     });
     let meters = fx.ty(TyKind::UserDefined {
         id: meters_id,
         type_args: Box::new([]),
-        effect_args: Box::new([]),
-        identity_args: Box::new([]),
+        effect: None,
+        identity: None,
     });
     let int = fx.int();
     let via_ty = fx.function(&[int], meters, Effect::pure());
@@ -1599,7 +1616,7 @@ fn a_lifted_eq_asks_each_parts_impl_in_order() {
     let at_int = fx.function(&[shared, shared], bool_ty, Effect::pure());
     let eq = fx.raw.core.eq;
     let facts = DeclaredFacts { access: Box::new([crate::decl::declared::Access::Equivalence]), ..Default::default() };
-    let concrete = Box::new([ImplSig { ty: at_int, param_names: fx.param_names(2), requires: Box::new([]), facts }]);
+    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts }]);
     fx.raw.lang_impls.push((eq, Impls { concrete, generic: None }));
     let pair = fx.ty(TyKind::Tuple(Box::new([int, int]), ()));
     fx.input("t", pair);
@@ -1727,7 +1744,7 @@ fn an_array_rebuilt_from_no_argument_or_several_is_one_map() {
     let generic = fx.function(&[shared_t, shared_t], t, Effect::pure());
     let at_int = fx.function(&[shared_int, shared_int], int, Effect::pure());
     let id = QualifiedRef::root(fx.name("pick"));
-    let concrete = Box::new([ImplSig { ty: at_int, param_names: fx.param_names(2), requires: Box::new([]), facts: DeclaredFacts::default() }]);
+    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts: DeclaredFacts::default() }]);
     let scheme = Scheme {
         ty: generic,
         param_names: fx.param_names(2),

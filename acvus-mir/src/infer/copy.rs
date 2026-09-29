@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::cells::{Cells, End as CellEnd, MarkTerm, ValuesTerm, VarTerm};
 use super::{FlowId, Infer, Term, VarState};
 use crate::ty::{
-    EffectArg, EffectTerm, EffectVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy,
+    EffectTerm, EffectVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy,
     ReprVarId, TyKind, TyVarId, TypeArg, ValuesVarId,
 };
 
@@ -130,12 +130,11 @@ impl Infer {
                     reach_cell(&self.effect_vars, effect, &mut reached.effects);
                     reach_cell(&self.values_vars, &ValuesTerm::Var(*values), &mut reached.values);
                 }
-                TyKind::UserDefined { type_args, effect_args, identity_args, .. } => {
-                    for arg in effect_args.iter() {
-                        let (EffectArg::Uniform(effect) | EffectArg::Specialized(effect)) = arg;
+                TyKind::UserDefined { type_args, effect, identity, .. } => {
+                    if let Some(effect) = effect {
                         reach_cell(&self.effect_vars, effect, &mut reached.effects);
                     }
-                    for identity in identity_args.iter() {
+                    if let Some(identity) = identity {
                         reach_cell(&self.identity_vars, identity, &mut reached.identities);
                     }
                     for arg in type_args.iter() {
@@ -306,17 +305,11 @@ impl Infer {
                 holds: *holds,
                 values: self.copy_values(*values, at),
             },
-            TyKind::UserDefined { id, type_args, effect_args, identity_args } => TyKind::UserDefined {
+            TyKind::UserDefined { id, type_args, effect, identity } => TyKind::UserDefined {
                 id: *id,
                 type_args: type_args.iter().map(|arg| copy_arg(self, arg, memo)).collect(),
-                effect_args: effect_args
-                    .iter()
-                    .map(|arg| match arg {
-                        EffectArg::Uniform(effect) => EffectArg::Uniform(self.copy_effect(effect, at)),
-                        EffectArg::Specialized(effect) => EffectArg::Specialized(self.copy_effect(effect, at)),
-                    })
-                    .collect(),
-                identity_args: identity_args.iter().map(|identity| self.copy_identity(identity, at)).collect(),
+                effect: effect.as_ref().map(|effect| self.copy_effect(effect, at)),
+                identity: identity.as_ref().map(|identity| self.copy_identity(identity, at)),
             },
             TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, copy_arg(self, target, memo)),
             leaf => leaf.clone(),

@@ -12,7 +12,7 @@ use crate::passes::analysis::{
     Analysis, AnalysisManager, InitAnnotations, Initialization, LiveAnnotations, Liveness, LoanAnnotations, Loans,
 };
 use crate::ty::{
-    Alignment, Calls, Concrete, Contexts, Cost, Effect, EffectArg, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IdentityId,
+    Alignment, Calls, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IdentityId,
     IdentityTerm, IntTy, Mutability, ObjectTy, Reissue, SplitCost, Ty, TyKind, TypeArg, Types,
 };
 
@@ -400,8 +400,10 @@ b3(v6: i64):
 }
 
 /// A function type's effect, flows, calls and holds, and a declared type's
-/// effect and identity arguments, print in a bracket where they differ from
-/// their defaults (types §5), and not at all where they equal them.
+/// identity, print in a bracket where they differ from their defaults
+/// (types §5), and not at all where they equal them. A declared type's
+/// effect prints after its type arguments as `with` and the effect, wherever
+/// it carries one (extern-fn §8).
 #[test]
 fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
     let names = Interner::new();
@@ -430,23 +432,21 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
     let everything = function(&[ref_int], ref_int, reading, flows, Calls::Many, Holds::Mut);
     let writing = Effect::new(Reissue::Opaque, true, Contexts::new(), Contexts::from([d]), SplitCost::Unavailable);
     let no_flows = function(&[], int, writing, Flows::none(), Calls::Many, Holds::Shared);
-    let vec = |types: &mut Types<Concrete>, effect_args: Box<[EffectArg<Concrete>]>, identity_args: Box<[IdentityTerm<Concrete>]>| {
+    let vec = |types: &mut Types<Concrete>, effect: Option<EffectTerm<Concrete>>, identity: Option<IdentityTerm<Concrete>>| {
         types.intern(TyKind::UserDefined {
             id: QualifiedRef::root(names.intern("Vec")),
             type_args: Box::new([TypeArg::Specialized(int)]),
-            effect_args,
-            identity_args,
+            effect,
+            identity,
         })
     };
-    let plain_vec = vec(&mut types, Box::new([EffectArg::Uniform(EffectTerm::Known(Effect::opaque()))]), Box::new([]));
+    let plain_vec = vec(&mut types, None, None);
+    let opaque_vec = vec(&mut types, Some(EffectTerm::Known(Effect::opaque())), None);
+    let pure_vec = vec(&mut types, Some(EffectTerm::Known(Effect::pure())), None);
     let marked_vec = vec(
         &mut types,
-        Box::new([
-            EffectArg::Uniform(EffectTerm::Known(Effect::pure())),
-            EffectArg::Specialized(EffectTerm::Known(Effect::opaque())),
-            EffectArg::Uniform(EffectTerm::Known(pure_reading(c))),
-        ]),
-        Box::new([IdentityTerm::Known(IdentityId::from_raw(3))]),
+        Some(EffectTerm::Known(pure_reading(c))),
+        Some(IdentityTerm::Known(IdentityId::from_raw(3))),
     );
 
     let shown = |ty| crate::ty::print::ty(&types, &names, ty);
@@ -458,7 +458,9 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
     );
     assert_eq!(shown(no_flows), "fn() -> i64 [writes=[@d], flows=[], holds=shared]");
     assert_eq!(shown(plain_vec), "Vec<#i64>");
-    assert_eq!(shown(marked_vec), "Vec<#i64> [e0=pure, e1=#opaque, e2=(pure, reads=[@c]), id0=3]");
+    assert_eq!(shown(opaque_vec), "Vec<#i64> with opaque");
+    assert_eq!(shown(pure_vec), "Vec<#i64> with pure");
+    assert_eq!(shown(marked_vec), "Vec<#i64> with (pure, reads=[@c]) [id0=3]");
 }
 
 fn pure_reading(context: QualifiedRef) -> Effect {

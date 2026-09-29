@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 use super::cells::{Cells, End as CellEnd, MarkTerm, VarTerm};
 use super::{Infer, Mark, Term, VarState};
 use crate::ty::{
-    Concrete, EffectArg, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, ObjectTy, Ty,
+    Concrete, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, ObjectTy, Ty,
     TyKind, TyVarId, TypeArg, Types,
 };
 
@@ -126,31 +126,22 @@ impl Infer {
             TyKind::UserDefined {
                 id,
                 type_args,
-                effect_args,
-                identity_args,
+                effect,
+                identity,
             } => TyKind::UserDefined {
                 id: *id,
                 type_args: type_args
                     .iter()
                     .map(|arg| self.freeze_type_arg(arg, &mut freeze))
                     .collect::<Result<_, _>>()?,
-                effect_args: effect_args
-                    .iter()
-                    .map(|arg| {
-                        Ok(match arg {
-                            EffectArg::Uniform(effect) => {
-                                EffectArg::Uniform(EffectTerm::Known(self.settled(&self.effect_vars, effect)?))
-                            }
-                            EffectArg::Specialized(effect) => {
-                                EffectArg::Specialized(EffectTerm::Known(self.settled(&self.effect_vars, effect)?))
-                            }
-                        })
-                    })
-                    .collect::<Result<_, _>>()?,
-                identity_args: identity_args
-                    .iter()
+                effect: effect
+                    .as_ref()
+                    .map(|effect| Ok(EffectTerm::Known(self.settled(&self.effect_vars, effect)?)))
+                    .transpose()?,
+                identity: identity
+                    .as_ref()
                     .map(|identity| Ok(IdentityTerm::Known(self.settled(&self.identity_vars, identity)?)))
-                    .collect::<Result<_, _>>()?,
+                    .transpose()?,
             },
             TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, self.freeze_type_arg(target, &mut freeze)?),
             TyKind::Var(_) => unreachable!("freeze_kind: freeze_level follows a variable before reading its kind"),

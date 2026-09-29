@@ -1315,8 +1315,8 @@ fn identities(names: &Interner, to_string: bool) -> Declarations {
         types.intern(TyKind::UserDefined {
             id,
             type_args: Box::new([]),
-            effect_args: Box::new([]),
-            identity_args: Box::new([IdentityTerm::Var(0)]),
+            effect: None,
+            identity: Some(IdentityTerm::Var(0)),
         })
     };
     let (token_ty, span_ty) = (with_identity(&mut types, token), with_identity(&mut types, span));
@@ -1325,9 +1325,10 @@ fn identities(names: &Interner, to_string: bool) -> Declarations {
         id,
         type_params: Box::new([]),
         specializes: Box::new([]),
-        effect_params: 0,
-        identity_params: 1,
+        carries_effect: false,
+        carries_identity: true,
         lifetimes: 0,
+        kind: crate::decl::UserTypeKind::Opaque,
     };
     let mut casts = vec![("token_span", token_ty, span_ty)];
     if to_string {
@@ -1342,8 +1343,8 @@ impl Fixture {
         self.kind(TyKind::UserDefined {
             id: token,
             type_args: Box::new([]),
-            effect_args: Box::new([]),
-            identity_args: Box::new([IdentityTerm::Known(IdentityId::from_raw(identity))]),
+            effect: None,
+            identity: Some(IdentityTerm::Known(IdentityId::from_raw(identity))),
         })
     }
 }

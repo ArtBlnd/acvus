@@ -104,16 +104,17 @@ impl Fixture {
             id,
             type_params: Box::new([TyVarBound::Any]),
             specializes: Box::new([false]),
-            effect_params: 0,
-            identity_params: 0,
+            carries_effect: false,
+            carries_identity: false,
             lifetimes: 0,
+            kind: crate::decl::UserTypeKind::Opaque,
         });
         let int = self.int();
         self.ty(TyKind::UserDefined {
             id,
             type_args: Box::new([TypeArg::Uniform(int)]),
-            effect_args: Box::new([]),
-            identity_args: Box::new([]),
+            effect: None,
+            identity: None,
         })
     }
 

@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 use super::cells::Shift;
 use super::{Infer, Term, VarState};
 use crate::ty::{
-    CallsTerm, EffectArg, EffectTerm, EffectVarId, FlowTerm, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
+    CallsTerm, EffectTerm, EffectVarId, FlowTerm, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
     LenTerm, LenVarId, ObjectTy, ReprVarId, TyKind, TyVarId, TypeArg, ValuesVarId,
 };
 
@@ -153,23 +153,14 @@ impl Imported {
                 },
                 values: self.values_var(*values),
             },
-            TyKind::UserDefined { id, type_args, effect_args, identity_args } => TyKind::UserDefined {
+            TyKind::UserDefined { id, type_args, effect, identity } => TyKind::UserDefined {
                 id: *id,
                 type_args: type_args.iter().map(arg).collect(),
-                effect_args: effect_args
-                    .iter()
-                    .map(|effect| match effect {
-                        EffectArg::Uniform(effect) => EffectArg::Uniform(self.effect(effect)),
-                        EffectArg::Specialized(effect) => EffectArg::Specialized(self.effect(effect)),
-                    })
-                    .collect(),
-                identity_args: identity_args
-                    .iter()
-                    .map(|identity| match identity {
-                        IdentityTerm::Known(known) => IdentityTerm::Known(*known),
-                        IdentityTerm::Var(var) => IdentityTerm::Var(self.identity_var(*var)),
-                    })
-                    .collect(),
+                effect: effect.as_ref().map(|effect| self.effect(effect)),
+                identity: identity.map(|identity| match identity {
+                    IdentityTerm::Known(known) => IdentityTerm::Known(known),
+                    IdentityTerm::Var(var) => IdentityTerm::Var(self.identity_var(var)),
+                }),
             },
             TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, arg(target)),
             TyKind::Closures(signatures) => TyKind::Closures(signatures.iter().map(|signature| self.term(*signature)).collect()),

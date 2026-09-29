@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 use super::cells::{Cells, End as CellEnd, MarkTerm, ValuesTerm, VarTerm};
 use super::{Bound, Infer, Term};
 use crate::ty::{
-    CallsTerm, EffectArg, EffectTerm, EffectVarId, FlowTerm, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
+    CallsTerm, EffectTerm, EffectVarId, FlowTerm, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
     LenTerm, LenVarId, ReprVarId, TyKind, TyVarId, TypeArg, Types, ValuesVarId,
 };
 
@@ -192,20 +192,13 @@ impl<'c> Canonical<'c> {
                 holds: self.holds.term(&from.holds_vars, &holds, &mut self.states.holds),
                 values: self.values_var(values),
             },
-            TyKind::UserDefined { id, type_args, effect_args, identity_args } => TyKind::UserDefined {
+            TyKind::UserDefined { id, type_args, effect, identity } => TyKind::UserDefined {
                 id,
                 type_args: type_args.iter().map(|arg| self.arg(*arg)).collect(),
-                effect_args: effect_args
-                    .iter()
-                    .map(|arg| match arg {
-                        EffectArg::Uniform(effect) => EffectArg::Uniform(self.effect(effect)),
-                        EffectArg::Specialized(effect) => EffectArg::Specialized(self.effect(effect)),
-                    })
-                    .collect(),
-                identity_args: identity_args
-                    .iter()
-                    .map(|identity| self.identities.term(&from.identity_vars, identity, &mut self.states.identities))
-                    .collect(),
+                effect: effect.as_ref().map(|effect| self.effect(effect)),
+                identity: identity
+                    .as_ref()
+                    .map(|identity| self.identities.term(&from.identity_vars, identity, &mut self.states.identities)),
             },
             TyKind::Ref(mutability, target) => TyKind::Ref(mutability, self.arg(target)),
             other => other,

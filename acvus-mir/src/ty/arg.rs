@@ -1,4 +1,3 @@
-use super::effect::EffectTerm;
 use super::{Phase, TyId};
 
 /// A type argument, with or without `#` (types §8). The mark stands only at
@@ -21,7 +20,6 @@ impl<V: Phase> TypeArg<V> {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LenTerm<V: Phase> {

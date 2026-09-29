@@ -114,7 +114,7 @@ impl Case {
                     other => panic!("an impl's type is a function type, not {other:?}"),
                 };
                 let param_names = (0..arity).map(|at| self.names.intern(&format!("p{at}"))).collect();
-                ImplSig { ty: *ty, param_names, requires: Box::new([]), facts: DeclaredFacts::default() }
+                ImplSig { ty: *ty, bounds: Box::new([]), param_names, requires: Box::new([]), facts: DeclaredFacts::default() }
             })
             .collect();
         self.raw.lang_impls.push((item, Impls { concrete, generic: None }));

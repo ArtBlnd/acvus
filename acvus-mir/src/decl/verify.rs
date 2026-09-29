@@ -81,9 +81,6 @@ pub enum Refused {
     /// lang item whose meaning is the language's own, `as_ref` and `as_mut`
     /// (operators §2).
     TakesNoImpls { id: QualifiedRef },
-    /// A type with more than one identity parameter. Not stated in
-    /// rfc_compiler; carried from the registry's rule until it is.
-    TwoIdentities { id: QualifiedRef },
     /// Facts stated on a declaration that has impls: a call reaches one of
     /// its impls, whose facts are the call's (`Scheme`).
     FactsBesideImpls { function: QualifiedRef },
@@ -302,9 +299,6 @@ fn first_of_each(ids: impl Iterator<Item = QualifiedRef>) -> Vec<QualifiedRef> {
 fn extern_types(user_types: Vec<UserTypeDecl>, refused: &mut Vec<Refused>) -> FxHashMap<QualifiedRef, UserTypeDecl> {
     let mut by_id: FxHashMap<QualifiedRef, UserTypeDecl> = FxHashMap::default();
     for decl in user_types {
-        if decl.identity_params > 1 {
-            refused.push(Refused::TwoIdentities { id: decl.id });
-        }
         match by_id.contains_key(&decl.id) {
             true => refused.push(Refused::DuplicateType { id: decl.id }),
             false => {
@@ -1339,15 +1333,16 @@ mod tests {
                 id,
                 type_params: Box::new([]),
                 specializes: Box::new([]),
-                effect_params: 0,
-                identity_params: 0,
+                carries_effect: false,
+                carries_identity: false,
                 lifetimes,
+                kind: crate::decl::UserTypeKind::Opaque,
             });
             self.ty(TyKind::UserDefined {
                 id,
                 type_args: Box::new([]),
-                effect_args: Box::new([]),
-                identity_args: Box::new([]),
+                effect: None,
+                identity: None,
             })
         }
 
@@ -1427,8 +1422,11 @@ mod tests {
 
         /// A concrete impl at `ty` stating no fact.
         fn r#impl(&self, ty: TyId<Poly>, requires: Box<[Requirement]>) -> ImplSig {
+            let mut variables = FxHashSet::default();
+            super::type_variables(&self.raw.types, ty, &mut FxHashSet::default(), &mut variables);
             ImplSig {
                 ty,
+                bounds: vec![TyVarBound::Any; variables.len()].into(),
                 param_names: self.param_names(ty),
                 requires,
                 facts: DeclaredFacts::default(),
@@ -1625,23 +1623,6 @@ mod tests {
         fixture.user_type(id, 0);
         fixture.user_type(id, 1);
         assert_eq!(refusals(fixture), vec![Refused::DuplicateType { id }]);
-    }
-
-    /// The registry's rule `Refused::TwoIdentities` carries: a type has at
-    /// most one identity parameter.
-    #[test]
-    fn a_type_with_two_identities_is_refused() {
-        let mut fixture = Fixture::new();
-        let id = fixture.name("m", "T");
-        fixture.raw.user_types.push(UserTypeDecl {
-            id,
-            type_params: Box::new([]),
-            specializes: Box::new([]),
-            effect_params: 0,
-            identity_params: 2,
-            lifetimes: 0,
-        });
-        assert_eq!(refusals(fixture), vec![Refused::TwoIdentities { id }]);
     }
 
     /// types §3: a declared cast from `S` to `T` is `S`'s one step up, and
@@ -2091,6 +2072,7 @@ mod tests {
                 impls: Some(Impls {
                     concrete: Box::new([ImplSig {
                         ty: impl_ty,
+                        bounds: Box::new([]),
                         param_names: fixture.param_names(impl_ty),
                         requires: Box::new([]),
                         facts: DeclaredFacts {
@@ -2343,8 +2325,8 @@ mod tests {
         fixture.ty(TyKind::UserDefined {
             id,
             type_args: Box::new([]),
-            effect_args: Box::new([]),
-            identity_args: Box::new([]),
+            effect: None,
+            identity: None,
         })
     }
 

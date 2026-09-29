@@ -18,7 +18,7 @@ use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 
 use crate::ir::{known_effect, known_len};
 use crate::ty::{
-    Alignment, Calls, Concrete, Effect, EffectArg, FlowEnd, FlowTerm, Flows, Holds, IdentityTerm, ObjectTy, Reissue,
+    Alignment, Calls, Concrete, Effect, FlowEnd, FlowTerm, Flows, Holds, IdentityTerm, ObjectTy, Reissue,
     SplitCost, Ty, TyKind, TypeArg, Types,
 };
 
@@ -125,7 +125,7 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             }
             write_bracket(&carried, out);
         }
-        TyKind::UserDefined { id, type_args, effect_args, identity_args } => {
+        TyKind::UserDefined { id, type_args, effect, identity } => {
             out.push_str(&qualified(names, *id));
             if !type_args.is_empty() {
                 out.push('<');
@@ -137,18 +137,17 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
                 }
                 out.push('>');
             }
-            let mut carried: Vec<String> = Vec::new();
-            for (index, arg) in effect_args.iter().enumerate() {
-                if let Some(effect) = effect_arg(names, arg) {
-                    carried.push(format!("e{index}={effect}"));
-                }
+            if let Some(effect) = effect {
+                out.push_str(" with ");
+                out.push_str(&carried_effect(names, known_effect(effect)));
             }
-            for (index, identity) in identity_args.iter().enumerate() {
+            let mut carried: Vec<String> = Vec::new();
+            if let Some(identity) = identity {
                 let identity = match identity {
                     IdentityTerm::Known(identity) => identity.to_raw(),
                     IdentityTerm::Var(var) => match *var {},
                 };
-                carried.push(format!("id{index}={identity}"));
+                carried.push(format!("id0={identity}"));
             }
             write_bracket(&carried, out);
         }
@@ -239,22 +238,16 @@ fn effect_terms(names: &Interner, effect: &Effect) -> Vec<String> {
     terms
 }
 
-/// An effect argument where it differs from an unmarked opaque effect:
-/// its terms, `#` before them where it is marked specializable (types §8),
-/// several in parentheses.
-fn effect_arg(names: &Interner, arg: &EffectArg<Concrete>) -> Option<String> {
-    let (marked, effect) = match arg {
-        EffectArg::Uniform(effect) => (false, known_effect(effect)),
-        EffectArg::Specialized(effect) => (true, known_effect(effect)),
-    };
+/// The effect an extern-defined type carries: its terms, several in
+/// parentheses, and `opaque` where it has none, so a type carrying the
+/// opaque effect never prints as one carrying no effect.
+fn carried_effect(names: &Interner, effect: &Effect) -> String {
     let terms = effect_terms(names, effect);
-    let effect = match terms.len() {
-        0 if !marked => return None,
-        0 => "opaque".to_string(),
-        1 => terms[0].clone(),
+    match terms.as_slice() {
+        [] => "opaque".to_string(),
+        [term] => term.clone(),
         _ => format!("({})", terms.join(", ")),
-    };
-    Some(if marked { format!("#{effect}") } else { effect })
+    }
 }
 
 /// `flows=[p0->ret, ..]` where the flows are listed, nothing for every flow

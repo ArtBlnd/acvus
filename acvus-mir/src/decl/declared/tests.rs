@@ -101,7 +101,7 @@ impl Fixture {
         let shared = self.reference(Mutability::Shared, int);
         let bool_ty = self.ty(TyKind::Bool);
         let ty = self.function(&[shared, shared], bool_ty);
-        let r#impl = ImplSig { ty, param_names: self.param_names(2), requires: Box::new([]), facts };
+        let r#impl = ImplSig { ty, bounds: Box::new([]), param_names: self.param_names(2), requires: Box::new([]), facts };
         let eq = self.raw.core.eq;
         self.raw.lang_impls.push((eq, Impls { concrete: Box::new([r#impl]), generic: None }));
     }
@@ -164,16 +164,17 @@ fn well_formed_facts_of_every_kind_verify() {
     let map = f.ty(TyKind::UserDefined {
         id: QualifiedRef::root(f.interner.intern("Map")),
         type_args: Box::new([]),
-        effect_args: Box::new([]),
-        identity_args: Box::new([]),
+        effect: None,
+        identity: None,
     });
     f.raw.user_types.push(crate::decl::UserTypeDecl {
         id: QualifiedRef::root(f.interner.intern("Map")),
         type_params: Box::new([]),
         specializes: Box::new([]),
-        effect_params: 0,
-        identity_params: 0,
+        carries_effect: false,
+        carries_identity: false,
         lifetimes: 0,
+        kind: crate::decl::UserTypeKind::Opaque,
     });
     let mut_map = f.reference(Mutability::Mut, map);
 
