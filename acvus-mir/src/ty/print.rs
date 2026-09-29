@@ -29,23 +29,16 @@ pub fn ty(types: &Types<Concrete>, names: &Interner, ty: Ty) -> String {
     out
 }
 
-/// A name as a program writes it, `ns::name` or the bare name; a function a
-/// script declares, by its script and its instance, `ns::script::name#0`.
+/// A name as a program writes it: its namespace's path and the name,
+/// joined by `::`; a name of the root namespace bare.
 pub fn qualified(names: &Interner, name: QualifiedRef) -> String {
-    let mut out = String::new();
-    if let Some(namespace) = name.namespace {
-        out.push_str(names.resolve(namespace));
-        out.push_str("::");
-    }
-    if let Some(scope) = name.scope {
-        out.push_str(names.resolve(scope.script));
-        out.push_str("::");
-    }
-    out.push_str(names.resolve(name.name));
-    if let Some(scope) = name.scope {
-        out.push_str(&format!("#{}", scope.instance));
-    }
-    out
+    names
+        .path(name.namespace)
+        .into_iter()
+        .chain(std::iter::once(name.name))
+        .map(|segment| names.resolve(segment).to_string())
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String) {
