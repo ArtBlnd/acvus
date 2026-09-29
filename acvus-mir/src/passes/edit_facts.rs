@@ -34,7 +34,7 @@ use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Definition, InstId,
 use crate::ir::{Checked, IndexBound, PathSeg, RefTarget, ValueId, fn_effect};
 use crate::passes::analysis::{
     AffineValues, Analysis, AnalysisManager, ContentLiveness, Dominators, Escapes, IntervalValues, LoopTree, Loans,
-    Point, PostDominators, Storage, TouchedPlace, ValueBounds,
+    Point, PostDominators, Reach, Storage, TouchedPlace, ValueBounds,
 };
 use crate::passes::domain::{Bound, Interval, JoinSemiLattice};
 use crate::ty::{CastTy, Concrete, Ty, Types, positions};
@@ -469,7 +469,9 @@ fn store_never_read(body: &Body, loans: &Loans, store: InstId) -> bool {
 }
 
 /// Whether no write to the slot `context` lives in stands on a path from the
-/// body's entry to the commit `commit`. Storing into the slot the value a
+/// body's entry to the commit `commit`. A move out of the slot changes the
+/// context and is a write; a commit's own `Take` gives it back and is not.
+/// Storing into the slot the value a
 /// `Fetch` of `context` produced, with no commit of `context` between the
 /// two, writes back what was loaded and is not a write (context §3). A body
 /// with no slot marked for `context` has nothing to read this from, and the
@@ -485,7 +487,9 @@ fn commit_never_written(
         return false;
     };
     let storage = Storage::Slot(slot);
-    let writes = |site: Site| loans.writes(site).contains(&storage) && !writes_back_a_load(body, site, slot, context);
+    let writes = |site: Site| {
+        (loans.writes(site).contains(&storage) && !writes_back_a_load(body, site, slot, context)) || moves_out(body, loans, site, storage)
+    };
     let block = body.block_of(commit);
     let earlier = std::iter::successors(body.first_inst(block), |at| body.next_in_block(*at)).take_while(|at| *at != commit);
     if earlier.map(Site::Inst).any(writes) {
@@ -504,6 +508,18 @@ fn commit_never_written(
         pending.extend(preds[&at].iter().copied());
     }
     true
+}
+
+/// Whether `site` moves a part of `storage` out, which changes what it
+/// holds, by name or through a reference: every move but a commit's own
+/// `Take`, which gives the slot back (`Body::committed_slot`).
+fn moves_out(body: &Body, loans: &Loans, site: Site, storage: Storage) -> bool {
+    let commit_take = matches!(site, Site::Inst(take) if body.is_commit_take(take));
+    !commit_take
+        && loans
+            .accesses(site)
+            .iter()
+            .any(|access| access.reach == Reach::Move && access.places.iter().any(|place| place.storage == storage))
 }
 
 /// Whether `site` is a whole `Assign` into `slot` of a value a `Fetch` of

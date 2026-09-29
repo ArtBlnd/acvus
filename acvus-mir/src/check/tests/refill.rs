@@ -13,22 +13,22 @@ fn with_context() -> Fixture {
     fx
 }
 
-/// context §1: a context taken out is filled again before the run ends.
+/// context §1, §3: a context taken out is filled again before its commit
+/// gives it back.
 #[test]
-fn a_context_taken_and_not_written_back_refuses_the_return() {
+fn a_context_taken_and_not_written_back_refuses_its_commit() {
     let source = "consume(@c); 0";
     let refusals = with_context().refusals(source);
     let [Refusal { kind: RefusalKind::NotRefilled { taken }, span }] = refusals[..] else {
         panic!("one NotRefilled: {refusals:?}");
     };
     assert_eq!(taken, span_of(source, "@c", 0), "naming the take");
-    assert!(covers(span, span_of(source, "0", 0)), "at the return: {span:?}");
+    assert!(covers(span, span_of(source, "0", 0)), "at the commit, which the return makes: {span:?}");
 }
 
 /// context §1: a context written again after its take is filled at the
 /// return.
 #[test]
-#[ignore = "open: the commit of a written context moves its slot before the return"]
 fn a_context_taken_and_written_back_is_admitted() {
     let refusals = with_context().refusals("consume(@c); @c = make(); 0");
     assert_eq!(refusals, []);

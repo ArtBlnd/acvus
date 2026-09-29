@@ -10,7 +10,8 @@
 //!   `replace_operand` (G3) for a value.
 //! - `remove_dead_context_ops`, scopes `Discharge` and `Remove`: a load
 //!   whose value is never read and a commit of a context the body never
-//!   writes do not exist (context §3), through `discharge` (G1).
+//!   writes, nor moves out of, do not exist (context §3), through
+//!   `discharge` (G1).
 //! - `insert_drops`, scope `Cfg` for an edge split and then `Drops`: what
 //!   the program holds that does not copy is dropped where its liveness
 //!   ends, and what moves to another holder is not (ownership §6), through
@@ -76,7 +77,8 @@ pub fn clone_strings(module: &mut Module, am: &mut AnalysisManager<'_>) {
     }
 }
 
-/// Every body: each commit of a context the body never writes, then each
+/// Every body: each commit of a context the body never writes, a move out
+/// of its slot being a write (`EditFacts`' `NeverWritten`), then each
 /// load whose stored value no read reaches, is offered to `discharge`,
 /// which removes it where `EditFacts` proves it `NeverWritten` or
 /// `NeverRead`; a volatile context's are never proven (D61). A commit is

@@ -7,7 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::op::Op;
-use crate::ir::{DebugInfo, ExitTrip, ForSource, OrderEdge, SwitchKey, ValueId};
+use crate::ir::{DebugInfo, ExitTrip, ForSource, OrderEdge, RefTarget, SwitchKey, ValueId};
 use crate::ty::{Concrete, Ty, Types};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -769,6 +769,37 @@ impl Body {
             Def::Slot { context, .. } => context,
             def => panic!("{slot:?} is defined at {def:?}, not as a slot"),
         }
+    }
+
+    /// The slot the commit `commit` gives back to its context, and the
+    /// `Take` of it that is the commit's first half: a commit of a context
+    /// held in a slot is the whole `Take` of the slot and the `Commit` of
+    /// what it took (context §3). `None` where `commit` is no such commit,
+    /// as a volatile context's is not. Cost: O(1).
+    pub fn committed_slot(&self, commit: InstId) -> Option<(ValueId, InstId)> {
+        let Op::Commit { context, value, .. } = self.inst(commit).op() else {
+            return None;
+        };
+        let Definition::Inst(take) = self.definition(*value) else {
+            return None;
+        };
+        let Op::Take { target: RefTarget::Var(slot), path, .. } = self.inst(take).op() else {
+            return None;
+        };
+        (path.is_empty() && self.context_of_slot(*slot) == Some(*context)).then_some((*slot, take))
+    }
+
+    /// Whether `take` is the first half of a commit (`committed_slot`):
+    /// every use of what it takes is a commit that gives its slot back.
+    /// Cost: O(the uses of its result).
+    pub fn is_commit_take(&self, take: InstId) -> bool {
+        let Some(taken) = self.inst(take).result() else {
+            return false;
+        };
+        self.use_count(taken) > 0
+            && self.users(taken).all(|user| {
+                matches!(user, Site::Inst(commit) if self.committed_slot(commit).is_some_and(|(_, first)| first == take))
+            })
     }
 
     /// Every value of the body, in no stated order. Cost: O(values).
