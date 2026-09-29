@@ -67,7 +67,7 @@ pub(super) fn operand<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>, mutability:
         Expr::FieldAccess { object, field, span, .. } => {
             let object = operand(cx, object, mutability);
             let ty = part_ty(cx, &object, *field);
-            field_of(cx, object, *field, ty, mutability, *span)
+            field_of(cx, object, *field, ty, *span)
         }
         Expr::Index { callee_id, object, index, span, .. } => {
             let element = element_of(cx, object, *callee_id);
@@ -119,16 +119,24 @@ fn context_operand(cx: &mut Lcx<'_, '_>, context: QualifiedRef, ty: Ty, span: Sp
 }
 
 /// Field `field` of `object`, through a reference as Rust auto-derefs.
-/// Field `field` of `object`, a place of type `ty`, lent for `mutability`:
-/// a reference on the way is read at the least of its own and that, what
-/// the path reaches (ownership §5).
-fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, ty: Ty, mutability: Mutability, span: Span) -> Operand {
+/// Field `field` of `object`, a place of type `ty`: a reference on the way
+/// is read at the least of its own mutability and the path's before it,
+/// what the path reaches (ownership §5). The path's is the reference the
+/// place is reached through, each on the way already read at its least.
+fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, ty: Ty, span: Span) -> Operand {
     match object {
         Operand::Place(place) if is_ref(cx, place.ty) => {
             let TyKind::Ref(made, target) = cx.kind(place.ty) else { unreachable!("matched as a reference") };
             let (made, target) = (*made, target.ty());
+            let least = match place.target {
+                RefTarget::Through(through) => match cx.kind(cx.value_ty(through)) {
+                    TyKind::Ref(path, _) => made.least(*path),
+                    other => panic!("a place is reached through a reference, not {other:?}"),
+                },
+                _ => made,
+            };
             let reference = read(cx, Operand::Place(place), span);
-            let reference = reborrow(cx, reference, made, target, made.least(mutability), span);
+            let reference = reborrow(cx, reference, made, target, least, span);
             Operand::Place(Place { target: RefTarget::Through(reference), path: vec![PathSeg::Field(field)], ty })
         }
         Operand::Place(place) => Operand::Place(place.with(PathSeg::Field(field), ty)),

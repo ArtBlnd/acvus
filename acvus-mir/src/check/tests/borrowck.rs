@@ -156,10 +156,10 @@ fn two_mut_loans_on_two_elements_of_one_array_are_refused() {
 /// `&mut o`, alive while it lives, so reading `o.b` by name meets it. `y`,
 /// the `&mut v` stored in `o.b` reborrowed at its store, is made while `x`
 /// lives, and `*x = 2` reaches `v` while `y` lives: one fact, at `y`'s
-/// store. `r.b` lowers to a `Take` of `b` through a shared `Ref` of `r`, so
-/// `x`'s chain runs through that `Take`'s reborrow, within both the
-/// reference stored in `o.b`, made by the object within `&mut v`, and the
-/// shared `Ref`, within `r`'s store; `y`'s through the stored one.
+/// store. `r.b` lowers to a `Take` of `b` through `r`, a path of `&mut`
+/// alone, so `x`'s chain runs through that `Take`'s reborrow, within both
+/// the reference stored in `o.b`, made by the object within `&mut v`, and
+/// `r`'s store; `y`'s through the stored one.
 #[test]
 fn a_reference_read_through_another_keeps_the_first_reference_s_loan_alive() {
     let fx = Fixture::new();
@@ -173,7 +173,7 @@ fn a_reference_read_through_another_keeps_the_first_reference_s_loan_alive() {
     assert_eq!(*trace, ConflictTrace { earlier: vec![r, on_o], later: Vec::new(), uses: Vec::new() });
     let read_through = span_of(source, "r.b", 0);
     let uses = vec![span_of(source, "*x = 2;", 0)];
-    let earlier = vec![x, read_through, read_through, object, r, on_v, on_o];
+    let earlier = vec![x, read_through, object, r, on_v, on_o];
     assert_eq!(*reborrowed, conflict(y, earlier, vec![y, object, on_v], uses));
 }
 

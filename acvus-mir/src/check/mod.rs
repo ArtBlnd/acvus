@@ -43,7 +43,7 @@ pub struct Refusal {
 /// A loan conflict's whole trace, each loan named by where it was made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConflictTrace {
-    /// The loan that lived first: where it was made, then each loan it was made through, innermost first.
+    /// The live loan the access met: where it was made, then each loan it was made through, innermost first.
     pub earlier: Vec<Span>,
     /// The conflicting side's loan chain, where the access made or used a loan (a lend or reborrow), innermost first; empty for an access by name.
     pub later: Vec<Span>,
