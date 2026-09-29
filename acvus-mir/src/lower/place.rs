@@ -207,6 +207,16 @@ pub(super) fn lower_borrow<S: Slot>(cx: &mut Lcx<'_, '_>, mutable: bool, place: 
         true => Mutability::Mut,
         false => Mutability::Shared,
     };
+    // A generalized binding is lent as the value its name reads, kept at
+    // the use's signature; its storage, holding every signature, is never
+    // lent (functions §2).
+    if let Expr::Ident { id, .. } = place
+        && let Some(crate::typeck::Name::Binding(binder)) = cx.typeck.names.get(id).copied()
+        && super::closure::is_generalized(cx, binder)
+    {
+        let value = super::expr::lower_expr(cx, place);
+        return lend(cx, Operand::Value(value), mutability, span);
+    }
     let operand = operand(cx, place, mutability);
     lend(cx, operand, mutability, span)
 }

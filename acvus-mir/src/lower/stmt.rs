@@ -2,7 +2,7 @@
 //! to SSA is a pass. A statement whose value is `!` ends its block: no run
 //! gets past it (types §4).
 
-use acvus_ast::{AstId, ElseBranch, Expr, Slot, Span, Stmt};
+use acvus_ast::{Expr, Slot, Span, Stmt};
 
 use super::call::convert;
 use super::control::{lower_for, lower_loop_exit, lower_while, lower_while_let};
@@ -39,9 +39,6 @@ pub(super) fn lower_stmt<S: Slot>(cx: &mut Lcx<'_, '_>, stmt: &Stmt<S>) {
             }
         }
         Stmt::LetBind { binder, expr, .. } => {
-            if super::closure::is_generalized(cx, binder.id) {
-                generalized_value(cx, binder.id, expr);
-            }
             let value = lower_expr(cx, expr);
             let value = convert(cx, expr.id(), value, expr.span());
             let ty = cx.ty(binder.id);
@@ -58,9 +55,6 @@ pub(super) fn lower_stmt<S: Slot>(cx: &mut Lcx<'_, '_>, stmt: &Stmt<S>) {
             let Some(Name::Binding(binder)) = cx.typeck.names.get(id).copied() else {
                 panic!("an assignment names a binding in an admitted program")
             };
-            if super::closure::is_generalized(cx, binder) {
-                generalized_value(cx, binder, expr);
-            }
             let value = lower_expr(cx, expr);
             let value = convert(cx, *id, value, expr.span());
             let ty = cx.ty(binder);
@@ -88,46 +82,3 @@ pub(super) fn lower_stmt<S: Slot>(cx: &mut Lcx<'_, '_>, stmt: &Stmt<S>) {
     }
 }
 
-/// The type of the generalized binding `binder`'s value at this body, at
-/// its binder and at every site `value`'s value passes through outside a
-/// lambda (functions §2): where it is written, the value holds every
-/// signature the binding has.
-fn generalized_value<S: Slot>(cx: &mut Lcx<'_, '_>, binder: AstId, value: &Expr<S>) {
-    let ty = super::closure::value_type(cx, binder);
-    cx.value_types.insert(binder, ty);
-    let mut sites = Vec::new();
-    value_path(value, &mut sites);
-    for site in sites {
-        cx.value_types.insert(site, ty);
-    }
-}
-
-/// Every site a value passes through to be the value of `expr`: `expr`'s
-/// own, and each branch's, arm's or block's tail's, down to a lambda or a
-/// name.
-fn value_path<S: Slot>(expr: &Expr<S>, out: &mut Vec<AstId>) {
-    out.push(expr.id());
-    match expr {
-        Expr::Paren { inner, .. } => value_path(inner, out),
-        Expr::Block { tail, .. } => value_path(tail, out),
-        Expr::If { then_tail, else_branch, .. } | Expr::IfLet { then_tail, else_branch, .. } => {
-            if let Some(tail) = then_tail {
-                value_path(tail, out);
-            }
-            match else_branch.as_deref() {
-                Some(ElseBranch::ElseIf(expr)) => value_path(expr, out),
-                Some(ElseBranch::Else { tail: Some(tail), .. }) => value_path(tail, out),
-                Some(ElseBranch::Else { tail: None, .. }) | None => {}
-            }
-        }
-        Expr::Match { arms, .. } => {
-            for arm in arms {
-                out.push(arm.id);
-                if let Some(tail) = &arm.tail {
-                    value_path(tail, out);
-                }
-            }
-        }
-        _ => {}
-    }
-}

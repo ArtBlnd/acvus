@@ -48,11 +48,6 @@ pub(super) struct Lcx<'a, 'm> {
     /// What this body reads at each of its sites: the run's, or the
     /// instance's it is lowered at (functions §2).
     pub decided: super::decided::Decided<'a>,
-    /// The type a generalized binding's value has at this body, at its
-    /// binder and at each site its value passes through outside a lambda
-    /// (functions §2): the closure type of its set of signatures.
-    /// Inherited by nested bodies.
-    pub value_types: FxHashMap<AstId, Ty>,
     /// Each generalized lambda's body at each signature, made once for the
     /// module (functions §2: a signature determines its code).
     pub bodies: std::rc::Rc<std::cell::RefCell<FxHashMap<(AstId, Ty), crate::ir::cfg::BodyId>>>,
@@ -78,12 +73,11 @@ pub(super) struct Lcx<'a, 'm> {
 }
 
 impl<'a, 'm> Lcx<'a, 'm> {
-    pub fn new(decls: &'a Declarations, typeck: &'a Typeck, builder: Builder<'m>, anyorder: usize) -> Self {
+    pub fn new(decls: &'a Declarations, decided: super::decided::Decided<'a>, builder: Builder<'m>, anyorder: usize) -> Self {
         Lcx {
             decls,
-            typeck,
-            decided: super::decided::Decided::run(typeck),
-            value_types: FxHashMap::default(),
+            typeck: decided.typeck,
+            decided,
             bodies: std::rc::Rc::default(),
             builder,
             bindings: FxHashMap::default(),
@@ -102,10 +96,7 @@ impl<'a, 'm> Lcx<'a, 'm> {
     /// # Panics
     /// typeck recorded none: every site of an admitted program is typed.
     pub fn ty(&self, site: AstId) -> Ty {
-        match self.value_types.get(&site) {
-            Some(ty) => *ty,
-            None => self.decided.ty(site),
-        }
+        self.decided.ty(site)
     }
 
     pub fn kind(&self, ty: Ty) -> &TyKind<crate::ty::Concrete> {

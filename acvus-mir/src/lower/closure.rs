@@ -76,13 +76,10 @@ fn lower_body<S: Slot>(cx: &mut Lcx<'_, '_>, lambda: Lambda<'_, '_, S>, passed: 
         namer.finish()
     };
     let decls = cx.decls;
-    let typeck = cx.typeck;
     let anyorder = cx.anyorder;
-    let (value_types, bodies) = (cx.value_types.clone(), cx.bodies.clone());
+    let bodies = cx.bodies.clone();
     let nested = cx.builder.build_nested(ordered, ret);
-    let mut inner = Lcx::new(decls, typeck, nested, anyorder);
-    inner.decided = decided;
-    inner.value_types = value_types;
+    let mut inner = Lcx::new(decls, decided, nested, anyorder);
     inner.bodies = bodies;
     if anyorder > 0 {
         inner.builder.open_anyorder();
@@ -172,7 +169,7 @@ fn signatures(cx: &Lcx<'_, '_>, binder: AstId) -> Vec<Signature> {
         .typeck
         .instances
         .iter()
-        .filter(|(_, instance)| instance.binder == Some(binder) && within_view(cx, instance))
+        .filter(|(_, instance)| instance.binder == Some(binder) && super::decided::within(cx.typeck, instance, cx.decided.instance))
         .map(|(id, instance)| (*id, instance))
         .collect();
     instances.sort_by_key(|(id, _)| id.0);
@@ -196,30 +193,6 @@ fn at_signatures(cx: &mut Lcx<'_, '_>, mut signatures: Vec<Ty>) -> Ty {
         [one] => one,
         _ => cx.builder.intern(TyKind::Closures(signatures.into())),
     }
-}
-
-/// Whether `instance` is one this body's code is lowered for: made within
-/// the instance this body is at, at any depth, or any at the run's level.
-fn within_view(cx: &Lcx<'_, '_>, instance: &InstanceDecided) -> bool {
-    let Some(view) = cx.decided.instance else {
-        return true;
-    };
-    let mut at = instance.within;
-    while let Some(within) = at {
-        if within == view {
-            return true;
-        }
-        at = cx.typeck.instances.get(&within).and_then(|instance| instance.within);
-    }
-    false
-}
-
-/// The type a value of `binder` has at this body (functions §2): the one
-/// signature's function type where it has one, and the closure type of its
-/// set of signatures otherwise.
-pub(super) fn value_type(cx: &mut Lcx<'_, '_>, binder: AstId) -> Ty {
-    let signatures = signatures(cx, binder).iter().map(|signature| signature.ty).collect();
-    at_signatures(cx, signatures)
 }
 
 /// A lambda of the generalized binding `binder` (functions §2): its
@@ -253,7 +226,7 @@ fn lower_generalized_lambda<S: Slot>(
         };
         bodies.push(made);
     }
-    let ty = value_type(cx, binder);
+    let ty = cx.decided.value_type(binder);
     let captures = passed.iter().map(|passed| passed.value).collect();
     cx.builder.push(Op::MakeClosure { bodies, captures }, ty, span)
 }

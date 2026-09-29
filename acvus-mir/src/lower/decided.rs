@@ -5,8 +5,9 @@
 //! decisions through this view; none reads `Typeck`'s site tables directly.
 
 use acvus_ast::AstId;
+use rustc_hash::FxHashMap;
 
-use crate::ty::Ty;
+use crate::ty::{Concrete, Ty, TyKind, Types};
 use crate::typeck::{Adjustment, AsCast, Chosen, Coercion, InstanceDecided, InstanceId, Iteration, StructureTree, TryExit, Typeck};
 
 /// A view of `Typeck` at one instance, or at none.
@@ -14,12 +15,73 @@ use crate::typeck::{Adjustment, AsCast, Chosen, Coercion, InstanceDecided, Insta
 pub(super) struct Decided<'a> {
     pub typeck: &'a Typeck,
     pub instance: Option<InstanceId>,
+    /// The type a generalized binding's value has at each body it is
+    /// lowered in (`closure_types`).
+    pub closures: &'a ClosureTypes,
+}
+
+/// The type of each generalized binding's value in each body it may be
+/// written in, by binder and by the instance the body is at: the one
+/// signature's function type where its instances there have one, and the
+/// `Closures` type of their set otherwise (functions §2).
+pub(super) type ClosureTypes = FxHashMap<(AstId, Option<InstanceId>), Ty>;
+
+/// Every `ClosureTypes` entry, interned into `types`: each binder at the
+/// run, and at each instance a body may be lowered at.
+pub(super) fn closure_types(typeck: &Typeck, types: &mut Types<Concrete>) -> ClosureTypes {
+    let views: Vec<Option<InstanceId>> = std::iter::once(None).chain(typeck.instances.keys().copied().map(Some)).collect();
+    let mut out = FxHashMap::default();
+    for binder in typeck.generalized.keys() {
+        for view in &views {
+            let mut signatures: Vec<Ty> = typeck
+                .instances
+                .values()
+                .filter(|instance| instance.binder == Some(*binder) && within(typeck, instance, *view))
+                .map(|instance| {
+                    *instance.types.get(binder).unwrap_or_else(|| panic!("typeck records each instance's signature at its binder"))
+                })
+                .collect();
+            signatures.sort_by_key(|signature| signature.canonical_key());
+            signatures.dedup();
+            let ty = match signatures[..] {
+                [one] => one,
+                _ => types.intern(TyKind::Closures(signatures.into())),
+            };
+            out.insert((*binder, *view), ty);
+        }
+    }
+    out
+}
+
+/// Whether `instance` is one a body at `view` makes code for: made within
+/// `view`, at any depth, or any at the run's level.
+pub(super) fn within(typeck: &Typeck, instance: &InstanceDecided, view: Option<InstanceId>) -> bool {
+    let Some(view) = view else {
+        return true;
+    };
+    let mut at = instance.within;
+    while let Some(within) = at {
+        if within == view {
+            return true;
+        }
+        at = typeck.instances.get(&within).and_then(|instance| instance.within);
+    }
+    false
 }
 
 impl<'a> Decided<'a> {
     /// The run's own view.
-    pub fn run(typeck: &'a Typeck) -> Decided<'a> {
-        Decided { typeck, instance: None }
+    pub fn run(typeck: &'a Typeck, closures: &'a ClosureTypes) -> Decided<'a> {
+        Decided { typeck, instance: None, closures }
+    }
+
+    /// The type a value of the generalized binding `binder` has at this
+    /// view's body.
+    pub fn value_type(&self, binder: AstId) -> Ty {
+        *self
+            .closures
+            .get(&(binder, self.instance))
+            .unwrap_or_else(|| panic!("every generalized binding has a type at every view, and not {binder:?}"))
     }
 
     /// `get` of the view's instance, then of each instance it was made
@@ -46,6 +108,11 @@ impl<'a> Decided<'a> {
     /// No table the view reads types `site`: every site of an admitted
     /// program is typed at every instance it is lowered at.
     pub fn ty(&self, site: AstId) -> Ty {
+        // A site a generalized binding's value passes through where it is
+        // written holds every signature it has at this body.
+        if let Some(binder) = self.typeck.value_sites.get(&site) {
+            return self.value_type(*binder);
+        }
         self.read(|at| at.types.get(&site).copied(), |run| run.types.get(&site).copied())
             .unwrap_or_else(|| panic!("typeck types every site of an admitted program, and not {site:?}"))
     }
@@ -85,6 +152,6 @@ impl<'a> Decided<'a> {
     /// The same view at `instance`, a lambda body's instance within this
     /// one.
     pub fn at(&self, instance: InstanceId) -> Decided<'a> {
-        Decided { typeck: self.typeck, instance: Some(instance) }
+        Decided { typeck: self.typeck, instance: Some(instance), closures: self.closures }
     }
 }

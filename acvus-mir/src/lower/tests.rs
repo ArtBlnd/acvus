@@ -1640,3 +1640,49 @@ fn a_generalized_binding_passed_as_a_value_is_specialized_to_its_parameter() {
         .expect("the call of `apply`");
     assert!(matches!(lowered.kind_of(body, apply_arg), TyKind::Fn { params, .. } if params.len() == 1), "{}", shown(body));
 }
+
+/// functions §2, D67 item 9: `&f` of a generalized binding lends the value
+/// its name reads, kept at the use's signature and put in a slot of its
+/// own; the binding's storage is never lent.
+#[test]
+fn a_borrow_of_a_generalized_binding_lends_a_specialized_value() {
+    let mut fx = Fixture::new();
+    let (int, bool_ty) = (fx.int(), fx.ty(TyKind::Bool));
+    for (name, ty) in [("on_int", int), ("on_bool", bool_ty)] {
+        let taken = fx.function(&[ty], ty, Effect::pure());
+        let lent = fx.reference(Mutability::Shared, taken);
+        let applies = fx.function(&[lent], ty, Effect::pure());
+        fx.declare(name, applies, 1);
+    }
+    let lowered = fx.script("let f = |x| -> x; let a = on_int(&f); let b = on_bool(&f); 0");
+    let body = lowered.entry();
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let specialized: Vec<crate::ir::ValueId> =
+        insts.iter().filter(|inst| matches!(inst.op(), Op::Specialize { .. })).filter_map(|inst| inst.result()).collect();
+    assert_eq!(specialized.len(), 2, "{}", shown(body));
+    for value in specialized {
+        let stored = insts.iter().any(|inst| matches!(inst.op(), Op::Assign { target: RefTarget::Var(_), path, value: stored, .. } if path.is_empty() && *stored == value));
+        assert!(stored, "the specialized value is put in a slot and lent from there: {}", shown(body));
+    }
+}
+
+/// functions §2: a generalized binding's value passing through a `match`
+/// and a block is of its closure type at every site typeck recorded it
+/// passes through, with no form inspected by lower.
+#[test]
+fn a_generalized_value_through_a_match_and_a_block_is_of_its_closure_type() {
+    let source = "let x = match 1 { 1 => { let z = 0; |v| -> (v, v) }, _ => |v| -> (v, v), }; let p = x(10); let q = x(true); 0";
+    let lowered = Fixture::new().script(source);
+    let body = lowered.entry();
+    let made: Vec<crate::ir::ValueId> = body
+        .blocks()
+        .flat_map(|(_, block)| block.insts())
+        .filter(|inst| matches!(inst.op(), Op::MakeClosure { .. }))
+        .filter_map(|inst| inst.result())
+        .collect();
+    let [left, right] = made[..] else {
+        panic!("two closures: {}", shown(body));
+    };
+    assert_eq!(body.ty_of(left), body.ty_of(right), "{}", shown(body));
+    assert!(matches!(lowered.kind_of(body, left), TyKind::Closures(signatures) if signatures.len() == 2), "{}", shown(body));
+}

@@ -252,13 +252,11 @@ pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&m
         holds: Holds::Nothing,
     });
     let result_ty = cx.builder.intern(TyKind::Array(mapped, LenTerm::Known(len), ()));
-    let (decls, typeck, anyorder) = (cx.decls, cx.typeck, cx.anyorder);
+    let (decls, anyorder) = (cx.decls, cx.anyorder);
     let name = decls.core().receiver_param();
     let nested = cx.builder.build_nested(super::ctxt::ordered(&effect), mapped);
-    let (decided, value_types, bodies) = (cx.decided, cx.value_types.clone(), cx.bodies.clone());
-    let mut inner = Lcx::new(decls, typeck, nested, anyorder);
-    inner.decided = decided;
-    inner.value_types = value_types;
+    let (decided, bodies) = (cx.decided, cx.bodies.clone());
+    let mut inner = Lcx::new(decls, decided, nested, anyorder);
     inner.bodies = bodies;
     if anyorder > 0 {
         inner.builder.open_anyorder();

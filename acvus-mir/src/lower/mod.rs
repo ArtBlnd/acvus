@@ -56,9 +56,11 @@ pub fn lower_script<S: Slot>(decls: &Declarations, typeck: &Typeck, types: Types
         namer.finish()
     };
     let ret = run_result(typeck);
+    let mut types = types;
+    let closures = decided::closure_types(typeck, &mut types);
     let mut module = Module::new(types);
     let builder = module.build_body(ordered(&typeck.body_effect), ret);
-    let mut cx = Lcx::new(decls, typeck, builder, 0);
+    let mut cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
     enter_body(&mut cx, &named);
     enter_inputs(&mut cx, &named);
     let value = stmt::lower_body(&mut cx, &script.stmts, script.tail.as_deref(), script.span);
@@ -91,9 +93,11 @@ pub fn lower_template<S: Slot>(
         namer.finish()
     };
     let ret = run_result(typeck);
+    let mut types = types;
+    let closures = decided::closure_types(typeck, &mut types);
     let mut module = Module::new(types);
     let builder = module.build_body(ordered(&typeck.body_effect), ret);
-    let mut cx = Lcx::new(decls, typeck, builder, 0);
+    let mut cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
     enter_body(&mut cx, &named);
     enter_inputs(&mut cx, &named);
     template::open_output(&mut cx, template.span);

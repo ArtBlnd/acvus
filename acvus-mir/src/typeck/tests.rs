@@ -3057,3 +3057,20 @@ fn a_lend_of_an_array_of_references_reborrows_each_at_the_weaker_mutability() {
         assert!(is_int(&checked, target.ty(), IntTy::I64), "{source}");
     }
 }
+
+/// functions §2: `&f` of a generalized binding lends the value its name
+/// reads at that use's instance, so two borrows reach two signatures.
+#[test]
+fn a_generalized_binding_is_lent_at_each_uses_signature() {
+    let mut fx = Fixture::new();
+    let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+    for (name, ty) in [("on_int", i64_ty), ("on_bool", bool_ty)] {
+        let taken = fx.pure(&[ty], ty);
+        let lent = fx.reference(Mutability::Shared, taken);
+        let applies = fx.pure(&[lent], ty);
+        fx.declare(name, applies, &[]);
+    }
+    let (checked, _) = fx.script("let f = |x| -> x; let a = on_int(&f); let b = on_bool(&f); 0");
+    checked.admitted();
+    assert_eq!(checked.typeck.instances.len(), 2);
+}
