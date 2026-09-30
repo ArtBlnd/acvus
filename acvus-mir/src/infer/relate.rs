@@ -216,7 +216,7 @@ fn heads_up(decls: &Declarations, head: Head) -> Vec<Head> {
 /// a reference's target, is an extern-defined type that carries one.
 fn carries_identity(decls: &Declarations, head: Head) -> bool {
     match head {
-        Head::Base(Base::Named { id, .. }) | Head::Ref(_, Base::Named { id, .. }) => {
+        Head::Base(Base::Named(id)) | Head::Ref(_, Base::Named(id)) => {
             decls.user_type(id).is_some_and(|declared| declared.carries_identity)
         }
         Head::Base(_) | Head::Ref(..) => false,
@@ -720,6 +720,9 @@ impl Infer {
             return Ok(());
         };
         match self.types.kind(node).clone() {
+            // A mark written marked, a `#` parameter's, is fixed as a
+            // known effect is, and joining it would leave it as it is.
+            TyKind::UserDefined { marked: MarkTerm::Known(Mark::Marked), .. } => Err(Mismatch::Mark { a: node, b: node }),
             TyKind::UserDefined { marked, .. } => self
                 .mark_vars
                 .join(&marked, &MarkTerm::Known(Mark::Unmarked), Mark::join)
