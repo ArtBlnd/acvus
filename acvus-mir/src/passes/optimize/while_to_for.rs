@@ -407,33 +407,38 @@ mod tests {
         assert_whole(&f.module, id);
     }
 
-    /// A triangular nest:
+    /// A triangular nest over `ty`, its inner test `j <op> i`:
     ///
     /// ```text
     /// entry(m):  zero = 0; mm = max(m, zero); jump outer(zero)
     /// outer(i):  c = i < mm; while c { obody } else oexit
     /// obody:     jump inner(zero)
-    /// inner(j):  d = j < i; while d { ibody } else iexit
+    /// inner(j):  d = j <op> i; while d { ibody } else iexit
     /// ibody:     one = 1; j2 = j + one; jump inner(j2)
     /// iexit:     one' = 1; i2 = i + one'; jump outer(i2)
     /// oexit:     return i
     /// ```
-    ///
-    /// The inner count is `{0, +, 1}` over the outer loop, the evolution of
-    /// `i`, so it is made in `obody`, the inner preheader, as `i as u64`;
-    /// the outer count is `mm`.
-    #[test]
-    fn a_count_varying_with_an_outer_loop_is_made_from_its_header_parameter() {
-        let mut f = Fixture::new();
-        let (int, bool, nm) = (f.int, f.bool, f.name("m"));
-        let mut builder: Builder<'_> = f.module.build_body(false, int);
-        let m = builder.param(nm, int, Span::ZERO);
-        let zero = builder.push(int_const(0), int, Span::ZERO);
-        let mm = builder.push(binary(BinOp::Max, m, zero), int, Span::ZERO);
-        let outer = builder.new_block(&[int]);
+    struct Triangular {
+        id: BodyId,
+        entry: BlockId,
+        outer: BlockId,
+        obody: BlockId,
+        inner: BlockId,
+        i: ValueId,
+        j: ValueId,
+        mm: ValueId,
+    }
+
+    fn triangular(f: &mut Fixture, ty: Ty, op: BinOp) -> Triangular {
+        let (bool, nm) = (f.bool, f.name("m"));
+        let mut builder: Builder<'_> = f.module.build_body(false, ty);
+        let m = builder.param(nm, ty, Span::ZERO);
+        let zero = builder.push(int_const(0), ty, Span::ZERO);
+        let mm = builder.push(binary(BinOp::Max, m, zero), ty, Span::ZERO);
+        let outer = builder.new_block(&[ty]);
         let i = builder.block_params(outer)[0];
         let [obody, oexit] = [(); 2].map(|()| builder.new_block(&[]));
-        let inner = builder.new_block(&[int]);
+        let inner = builder.new_block(&[ty]);
         let j = builder.block_params(inner)[0];
         let [ibody, iexit] = [(); 2].map(|()| builder.new_block(&[]));
         builder.terminate(jump(outer, vec![zero]), Span::ZERO);
@@ -443,20 +448,31 @@ mod tests {
         builder.switch_to(obody);
         builder.terminate(jump(inner, vec![zero]), Span::ZERO);
         builder.switch_to(inner);
-        let d = builder.push(binary(BinOp::Lt, j, i), bool, Span::ZERO);
+        let d = builder.push(binary(op, j, i), bool, Span::ZERO);
         builder.terminate(while_loop(d, ibody, iexit), Span::ZERO);
         builder.switch_to(ibody);
-        let one = builder.push(int_const(1), int, Span::ZERO);
-        let j2 = builder.push(add(j, one), int, Span::ZERO);
+        let one = builder.push(int_const(1), ty, Span::ZERO);
+        let j2 = builder.push(add(j, one), ty, Span::ZERO);
         builder.terminate(jump(inner, vec![j2]), Span::ZERO);
         builder.switch_to(iexit);
-        let one = builder.push(int_const(1), int, Span::ZERO);
-        let i2 = builder.push(add(i, one), int, Span::ZERO);
+        let one = builder.push(int_const(1), ty, Span::ZERO);
+        let i2 = builder.push(add(i, one), ty, Span::ZERO);
         builder.terminate(jump(outer, vec![i2]), Span::ZERO);
         builder.switch_to(oexit);
         builder.terminate(ret(i), Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
+        Triangular { id, entry, outer, obody, inner, i, j, mm }
+    }
+
+    /// `j < i`: the inner count is `{0, +, 1}` over the outer loop, the
+    /// evolution of `i`, so it is made in `obody`, the inner preheader, as
+    /// `i as u64`; the outer count is `mm`.
+    #[test]
+    fn a_count_varying_with_an_outer_loop_is_made_from_its_header_parameter() {
+        let mut f = Fixture::new();
+        let int = f.int;
+        let Triangular { id, entry, outer, obody, inner, i, j, mm } = triangular(&mut f, int, BinOp::Lt);
 
         f.run::<WhileToFor>(id);
 
@@ -470,6 +486,36 @@ mod tests {
         assert_eq!(body.block(outer).params(), [i]);
         assert_eq!(body.block(inner).params(), [j]);
         assert!(f.ops(id, outer).is_empty() && f.ops(id, inner).is_empty(), "{}", f.snapshot(id));
+        assert_whole(&f.module, id);
+    }
+
+    /// `j <= i` over `i32`: the inner count is `{1, +, 1}` over the outer
+    /// loop, `i`'s step with a start one higher, so it is `i + 1`. With `i`
+    /// in `[0, i32::MAX]`, `i + 1` is not proven within `i32`, so it is made
+    /// in `i64` as `(i as i64) + 1`, then cast to `u64`, in `obody`.
+    #[test]
+    fn a_count_with_an_outer_parameters_step_is_made_from_it_by_its_offset() {
+        let mut f = Fixture::new();
+        let i32 = f.module.types_mut().intern(TyKind::Int(IntTy::I32));
+        let Triangular { id, obody, inner, i, .. } = triangular(&mut f, i32, BinOp::Lte);
+
+        f.run::<WhileToFor>(id);
+
+        let body = f.module.body(id);
+        let (inner_at, inner_hi) = range_of(body, inner);
+        assert_zero_in(&f, id, obody, inner_at);
+        let sum = cast_source(body, inner_hi);
+        let Op::BinOp { op: BinOp::Add, left, right } = defining_op(body, sum) else {
+            panic!("the count is i + 1:\n{}", f.snapshot(id))
+        };
+        assert!(
+            matches!(defining_op(body, *left), Op::Cast { src, to: CastTy::Int(IntTy::I64) } if *src == i),
+            "{}",
+            f.snapshot(id)
+        );
+        assert!(matches!(defining_op(body, *right), Op::Const { value: acvus_ast::Literal::Int(1) }), "{}", f.snapshot(id));
+        let Definition::Inst(made) = body.definition(sum) else { unreachable!() };
+        assert_eq!(body.block_of(made), obody);
         assert_whole(&f.module, id);
     }
 }

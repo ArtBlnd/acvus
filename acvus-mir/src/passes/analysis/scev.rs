@@ -130,6 +130,22 @@ impl Evolutions {
     pub fn trip_count(&self, over: LoopId) -> Option<&TripCount> {
         self.trips.get(&over)
     }
+
+    /// `a + b` by the recurrence algebra; `Unknown` where it names none.
+    pub fn sum(&self, a: &Evolution, b: &Evolution) -> Evolution {
+        Algebra { loops: &self.loops }.add(a, b)
+    }
+
+    /// `a - b` by the recurrence algebra; `Unknown` where it names none.
+    pub fn difference(&self, a: &Evolution, b: &Evolution) -> Evolution {
+        Algebra::negate(b).map_or(Evolution::Unknown, |negated| self.sum(a, &negated))
+    }
+
+    /// `a · b` by the recurrence algebra; `Unknown` where it names none,
+    /// as for a product of two recurrences.
+    pub fn product(&self, a: &Evolution, b: &Evolution) -> Evolution {
+        Algebra { loops: &self.loops }.mul(a, b)
+    }
 }
 
 /// The analysis the manager keeps. It reads the body's values and control
