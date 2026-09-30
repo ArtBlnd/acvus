@@ -1,0 +1,111 @@
+---
+source: tests/acvus-mir-test/tests/optimized_cross_fn.rs
+expression: opt
+---
+=== main ===
+     0 |   r0 = fetch @offset
+     1 |   r1 = fetch @scale
+     2 |   r2 = fetch @source_id
+     3 |   r3 = spawn #0(r2) [r4 ->]
+     4 |   r5 = fetch @precision
+     7 |   commit @offset = r0 (not written)
+     8 |   commit @scale = r1 (not written)
+     9 |   commit @source_id = r2 (not written)
+    10 |   commit @precision = r5 (not written)
+    11 |   r6 = eval r3 [-> r7]
+    12 |   r8 = r6 * r1
+    13 |   r9 = r8 / 1000 (r10)
+    14 |   r11 = r9 + r0
+    15 |   r12 = r9 / 10 (r13)
+    16 |   r14 = r11 + r12
+    17 |   r15 = r14 / r5
+    18 |   r16 = r15 * r5
+    19 |   r17 = spawn #1(r9, r14, r16) [r7 ->]
+    20 |   r18 = eval r17 [-> r19]
+    21 |   commit @stage2 = r14
+    22 |   commit @stage3 = r16
+    23 |   commit @stage1 = r9
+    24 |   return r16 [r19]
+
+    ; orders: what the body's yielded Order waits for
+    ;   eval@20 <- spawn@19 #1 <- eval@11 <- spawn@3 #0 <- r4(entry)
+
+    ; r0 (@offset) : i64
+    ; r1 (@scale) : i64
+    ; r2 (@source_id) : i64
+    ; r3 (v87) : Handle<i64>
+    ; r4 (v1) : Order
+    ; r5 (@precision) : i64
+    ; r6 (fetch_data(...)) : i64
+    ; r7 (v20) : Order
+    ; r8 (v68) : i64
+    ; r9 (v70) : i64
+    ; r10 (v69) : i64
+    ; r11 (v75) : i64
+    ; r12 (v78) : i64
+    ; r13 (v77) : i64
+    ; r14 (v79) : i64
+    ; r15 (v84) : i64
+    ; r16 (v86) : i64
+    ; r17 (v88) : Handle<i64>
+    ; r18 (log_pipeline(...)) : i64
+    ; r19 (v42) : Order
+    ; r20 (v44) : i64
+    ; r21 (s1) : i64
+    ; r22 (v50) : i64
+    ; r23 (raw) : i64
+    ; r24 (v47) : i64
+    ; r25 ($prec) : i64
+    ; r26 (s1) : i64
+    ; r27 (v51) : Order
+    ; r28 (s2) : i64
+    ; r29 (v56) : i64
+    ; r30 (s1) : i64
+    ; r31 (v62) : i64
+    ; r32 (s3) : i64
+    ; r33 (normalize(...)) : i64
+    ; r34 (@stage2) : i64
+    ; r35 (v49) : i64
+    ; r36 (s2) : i64
+    ; r37 ($offset) : i64
+    ; r38 (@source_id) : i64
+    ; r39 (v55) : i64
+    ; r40 (s3) : i64
+    ; r41 (@source_id) : i64
+    ; r42 (v61) : i64
+    ; r43 (@scale) : i64
+    ; r44 ($scale) : i64
+    ; r45 (v48) : i64
+    ; r46 (enrich(...)) : i64
+    ; r47 ($val) : i64
+    ; r48 (v54) : i64
+    ; r49 (s3) : i64
+    ; r50 (v60) : i64
+    ; r51 (v41) : Order
+    ; r52 ($prec) : i64
+    ; r53 ($val) : i64
+    ; r54 (@offset) : i64
+    ; r55 (@offset) : i64
+    ; r56 (@stage3) : i64
+    ; r57 (v53) : i64
+    ; r58 (finalize(...)) : i64
+    ; r59 (@precision) : i64
+    ; r60 (v59) : i64
+    ; r61 (raw) : i64
+    ; r62 ($order) : Order
+    ; r63 (v46) : i64
+    ; r64 (s1) : i64
+    ; r65 (v52) : Order
+    ; r66 (@precision) : i64
+    ; r67 (v58) : i64
+    ; r68 (s3) : i64
+    ; r69 (v45) : i64
+    ; r70 (@scale) : i64
+    ; r71 (s2) : i64
+    ; r72 ($val) : i64
+    ; r73 (@stage1) : i64
+    ; r74 (v57) : i64
+    ; r75 (s2) : i64
+    ; r76 ($val) : i64
+    ; r77 (v19) : Order
+    ; r78 (v63) : i64

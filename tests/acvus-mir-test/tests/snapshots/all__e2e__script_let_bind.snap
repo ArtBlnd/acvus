@@ -1,0 +1,12 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     1 |   assign x = 1 (r0)
+     2 |   r1 = take x
+     3 |   return r1
+
+    ; r0 (v1) : i64
+    ; r1 (x) : i64
+    ; r2 (x) : i64

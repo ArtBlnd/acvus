@@ -1,0 +1,15 @@
+---
+source: tests/acvus-mir-test/tests/inline.rs
+expression: ir
+---
+=== main ===
+     1 |   assign v3 = 42 (r0)
+     2 |   r1 = ref &v3
+     3 |   r2 = call #0(r1)
+     4 |   return r2
+
+    ; r0 (v1) : i64
+    ; r1 ($param_1.) : &i64
+    ; r2 (to_string(...)) : String
+    ; r3 (v3) : i64
+    ; r4 (wrap(...)) : String

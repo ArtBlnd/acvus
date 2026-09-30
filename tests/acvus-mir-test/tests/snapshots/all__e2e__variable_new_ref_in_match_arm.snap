@@ -1,0 +1,49 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = "yes"
+  T2 = "no"
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = fetch @role
+     4 |   assign <template> = T0
+     5 |   r3 = const_str T0
+     6 |   switch r2 { "admin" -> L1, _ -> L2 }
+     7 | L1:
+     8 |   r4 = const_str T1
+    10 |   jump L0(() (r5), r4)
+    11 | L2:
+    12 |   r6 = const_str T2
+    14 |   jump L0(() (r7), r6)
+    15 | L0(r8: Unit, r9: &str):
+    16 |   r10 = ref &mut <template>
+    17 |   append r10 r9
+    18 |   r11 = take <template>
+    19 |   commit @role = r2 (not written)
+    20 |   return r11
+
+    ; r0 (v17) : String
+    ; r1 (v18) : &str
+    ; r2 (@role) : String
+    ; r3 (v5) : &str
+    ; r4 (v8) : &str
+    ; r5 (v9) : Unit
+    ; r6 (v10) : &str
+    ; r7 (v11) : Unit
+    ; r8 (v12) : Unit
+    ; r9 (v19) : &str
+    ; r10 (<template>.) : &mut String
+    ; r11 (v15) : String
+    ; r12 (v3) : String
+    ; r13 (selected) : &str
+    ; r14 (v20) : String
+    ; r15 (@role) : String
+    ; r16 (<template>) : String
+    ; r17 (v7) : String
+    ; r18 (selected) : &str
+    ; r19 (v16) : String

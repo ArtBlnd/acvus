@@ -1,0 +1,5 @@
+---
+source: tests/acvus-mir-test/tests/harness.rs
+expression: case.refused()
+---
+app::main: UnknownName nowhere @0..7

@@ -1,0 +1,54 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = "admin\n"
+  T2 = "user\n"
+  T3 = "guest\n"
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = fetch @role
+     3 |   assign <template> = T0
+     4 |   switch r1 { "admin" -> L1, "user" -> L2, _ -> L3 }
+     5 | L1:
+     6 |   r2 = const_str T1
+     7 |   r3 = ref &mut <template>
+     8 |   append r3 r2
+    10 |   jump L0(() (r4))
+    11 | L2:
+    12 |   r5 = const_str T2
+    13 |   r6 = ref &mut <template>
+    14 |   append r6 r5
+    16 |   jump L0(() (r7))
+    17 | L3:
+    18 |   r8 = const_str T3
+    19 |   r9 = ref &mut <template>
+    20 |   append r9 r8
+    22 |   jump L0(() (r10))
+    23 | L0(r11: Unit):
+    24 |   r12 = take <template>
+    25 |   commit @role = r1 (not written)
+    26 |   return r12
+
+    ; r0 (v18) : String
+    ; r1 (@role) : String
+    ; r2 (v6) : &str
+    ; r3 (<template>.) : &mut String
+    ; r4 (v8) : Unit
+    ; r5 (v9) : &str
+    ; r6 (<template>.) : &mut String
+    ; r7 (v11) : Unit
+    ; r8 (v12) : &str
+    ; r9 (<template>.) : &mut String
+    ; r10 (v14) : Unit
+    ; r11 (v15) : Unit
+    ; r12 (v16) : String
+    ; r13 (v3) : String
+    ; r14 (v17) : String
+    ; r15 (@role) : String
+    ; r16 (<template>) : String
+    ; r17 (v5) : String
+    ; r18 (v19) : String

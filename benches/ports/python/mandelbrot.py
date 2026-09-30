@@ -1,4 +1,4 @@
-"""mandelbrot 200x100x200, ported from acvus-interpreter-test/benches/mandelbrot.rs.
+"""mandelbrot 200x100x200, ported from tests/acvus-interpreter-test/benches/mandelbrot.rs.
 
 Obligation across artifacts: the three nested loops and the compound loop
 condition are that file's `rust_mandelbrot`, which is what the bench's

@@ -937,7 +937,7 @@ impl Width {
 /// it.
 ///
 /// Obligation across artifacts: that a call form's body inlines into the
-/// operation holding it is asserted by `acvus-interpreter-test/benches/
+/// operation holding it is asserted by `tests/acvus-interpreter-test/benches/
 /// asm_probe.rs` on the release machine, which is why every form below is
 /// `#[inline]` and none of them is reachable through a `dyn`.
 pub trait Handler<Rt>: Send + Sync + 'static

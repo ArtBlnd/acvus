@@ -3,7 +3,7 @@ target/
 .claude/
 *.md
 wit/
-acvus-mir-test/tests/snapshots/
+tests/acvus-mir-test/tests/snapshots/
 pomollu-frontend/node_modules/
 pomollu-frontend/.svelte-kit/
 pomollu-frontend/build/

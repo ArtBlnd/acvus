@@ -3,17 +3,17 @@ resolver = "3"
 members = [
     "acvus-utils",
     "acvus-interpreter",
-    "acvus-interpreter-test",
+    "tests/acvus-interpreter-test",
     "acvus-ast",
     "acvus-mir",
     "acvus-cli",
-    "acvus-mir-test",
+    "tests/acvus-mir-test",
     "acvus-ext",
     "acvus-ext-net",
     "acvus-lsp",
     "acvus-extern",
     "acvus-extern-macro",
-    "acvus-wasm-probe",
+    "tests/acvus-wasm-probe",
 ]
 
 [workspace.package]

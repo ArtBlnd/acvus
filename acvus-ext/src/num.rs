@@ -201,7 +201,7 @@ macro_rules! wrapping_pow_wide {
 /// `format!` builds its `Arguments` on the stack and hands their address to
 /// the formatting machinery. An `Op::run` that inlines a handler doing that
 /// holds a stack address across a callee, and LLVM's sibling-call rule then
-/// refuses the tail call `acvus-interpreter-test/benches/asm_probe.rs`
+/// refuses the tail call `tests/acvus-interpreter-test/benches/asm_probe.rs`
 /// asserts every operation ends with. Keeping the format in a function of
 /// its own leaves the address in that function's frame; the `inline(never)`
 /// is that contract's half here, and the bench is the other.

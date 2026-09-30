@@ -154,7 +154,7 @@ where
 /// The settled type names no object, or the object lacks a field the
 /// projection borrows. `typeck.rs::refused_projection_parameter` refuses
 /// such an argument ahead of preparation, and the seven cases that fix it
-/// are `acvus-mir-test/tests/projection_parameter.rs`.
+/// are `tests/acvus-mir-test/tests/projection_parameter.rs`.
 pub fn object_fields_at<'a, const K: usize>(
     at: ArgAt<'a>,
     names: [&str; K],

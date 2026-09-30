@@ -1,4 +1,4 @@
--- shapes rows at n = 1 000 000, ported from acvus-interpreter-test/benches/shapes.rs.
+-- shapes rows at n = 1 000 000, ported from tests/acvus-interpreter-test/benches/shapes.rs.
 --
 -- Obligation across artifacts: each row is the semantics of that file's `rust_*`
 -- twin. Lua has one aggregate, so the twin's `struct Point` is a table with the

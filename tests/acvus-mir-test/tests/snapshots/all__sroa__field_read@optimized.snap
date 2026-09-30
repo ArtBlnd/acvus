@@ -1,0 +1,72 @@
+---
+source: tests/acvus-mir-test/tests/sroa.rs
+expression: listing
+---
+=== main ===
+     0 |   r0 = fetch @n
+     2 |   jump L0
+     3 | L0:
+     4 |   r1 = max(r0, 0 (r2))
+     5 |   r3 = r1 as u64
+     6 |   r4 = 0 (r2) as u64
+     7 |   r5 = r3 -% r4
+     9 |   r6 = 0 (r2) *% 3 (r7)
+    11 |   check r6 + r5 * 3 (r8)
+    12 |   jump L2(r5)
+    13 | L2(r9: u64):
+    14 |   r10 = r9 as i64
+    16 |   r11 = r10 *% 3 (r12)
+    17 |   commit @n = r0 (not written)
+    18 |   return r11
+
+    ; r0 (@n) : i64
+    ; r1 (v45) : i64
+    ; r2 (v9) : i64
+    ; r3 (v46) : u64
+    ; r4 (v47) : u64
+    ; r5 (v48) : u64
+    ; r6 (v49) : i64
+    ; r7 (v50) : i64
+    ; r8 (v51) : i64
+    ; r9 (v40) : u64
+    ; r10 (v41) : i64
+    ; r11 (v43) : i64
+    ; r12 (v42) : i64
+    ; r13 (v44) : i64
+    ; r14 (acc) : i64
+    ; r15 (v3) : i64
+    ; r16 (v25) : i64
+    ; r17 (p) : {x: i64, y: i64}
+    ; r18 (v28) : i64
+    ; r19 (v21) : i64
+    ; r20 (v24) : i64
+    ; r21 (v5) : {x: i64, y: i64}
+    ; r22 (v27) : i64
+    ; r23 (v31) : i64
+    ; r24 (@n) : i64
+    ; r25 (v34) : i64
+    ; r26 (p.x) : i64
+    ; r27 (v37) : i64
+    ; r28 (v18) : i64
+    ; r29 (acc) : i64
+    ; r30 (v30) : i64
+    ; r31 (i) : i64
+    ; r32 (v33) : i64
+    ; r33 (acc) : i64
+    ; r34 (v36) : i64
+    ; r35 (p.y) : i64
+    ; r36 (v39) : i64
+    ; r37 (v20) : i64
+    ; r38 (v23) : i64
+    ; r39 (@n) : i64
+    ; r40 (v4) : i64
+    ; r41 (v26) : i64
+    ; r42 (v29) : i64
+    ; r43 (v32) : i64
+    ; r44 (i) : i64
+    ; r45 (v35) : Bool
+    ; r46 (v13) : Bool
+    ; r47 (v38) : i64
+    ; r48 (v16) : i64
+    ; r49 (v7) : i64
+    ; r50 (i) : i64

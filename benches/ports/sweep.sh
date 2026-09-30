@@ -5,7 +5,7 @@
 # Per row: one warm-up execution per runtime, discarded, then three reps that
 # alternate across the six runtimes one row at a time. `uptime` is written
 # before every rep and a rep waits while the 1-minute load average is 16 or
-# above, which is the protocol acvus-interpreter-test/benches/README.md states.
+# above, which is the protocol tests/acvus-interpreter-test/benches/README.md states.
 # acvus and Rust are one execution of the bench binary, so the sweep's
 # `execute/us` and `rust/us` are drawn in the same rep as the ports beside them.
 #

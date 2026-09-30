@@ -1,0 +1,34 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== literals ===
+  T0 = ""
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = fetch @flag
+     3 |   assign <template> = T0
+     4 |   r2 = !r1
+     5 |   assign x = r2
+     6 |   r3 = ref &x
+     7 |   r4 = call #0(r3)
+     8 |   r5 = ref &mut <template>
+     9 |   append r5 r4
+    10 |   r6 = take <template>
+    11 |   commit @flag = r1 (not written)
+    12 |   return r6
+
+    ; r0 (v13) : Bool
+    ; r1 (@flag) : Bool
+    ; r2 (v6) : Bool
+    ; r3 (x.) : &Bool
+    ; r4 (to_string(...)) : String
+    ; r5 (<template>.) : &mut String
+    ; r6 (v11) : String
+    ; r7 (x) : Bool
+    ; r8 (v3) : String
+    ; r9 (@flag) : Bool
+    ; r10 (@flag) : Bool
+    ; r11 (v12) : Bool
+    ; r12 (<template>) : String

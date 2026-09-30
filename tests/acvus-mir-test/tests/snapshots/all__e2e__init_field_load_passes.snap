@@ -1,0 +1,17 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     1 |   r1 = object {x: 42 (r0)}
+     2 |   assign @a = r1
+     3 |   r2 = take @a.x
+     4 |   r3 = take @a
+     5 |   commit @a = r3
+     6 |   return r2
+
+    ; r0 (v3) : i64
+    ; r1 (v4) : {x: i64}
+    ; r2 (@a.x) : i64
+    ; r3 (v6) : {x: i64}
+    ; r4 (@a) : {x: i64}

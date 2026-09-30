@@ -1,0 +1,14 @@
+---
+source: tests/acvus-mir-test/tests/script.rs
+expression: ir
+---
+=== main ===
+     0 |   r0 = undef
+     2 |   commit @x = 42 (r1)
+     3 |   return 42 (r1)
+
+    ; r0 (v6) : i64
+    ; r1 (v3) : i64
+    ; r2 (@x) : i64
+    ; r3 (v5) : i64
+    ; r4 (@x) : i64

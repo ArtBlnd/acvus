@@ -4091,7 +4091,7 @@ impl<'a> ObjectShape<'a> {
     /// The acvus type of a projection is `&S` over an **at-least** field set,
     /// where the struct's own is `Declared`: a projection naming a subset of
     /// the object's fields borrows those alone, which `ObjectTy::meet`
-    /// already admits and `acvus-mir-test/tests/projection_parameter.rs`
+    /// already admits and `tests/acvus-mir-test/tests/projection_parameter.rs`
     /// pins.
     ///
     /// Rule 6 gives every derived struct a projection and `#[projection]`

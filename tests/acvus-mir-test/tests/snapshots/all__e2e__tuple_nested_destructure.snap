@@ -1,0 +1,47 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = "\n"
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = fetch @data
+     3 |   assign @data = r2
+     5 |   assign <template> = T0
+     6 |   r3 = ref &@data
+     7 |   r4 = ref &(*r3)[0]
+     8 |   r5 = ref &(*r3)[1]
+     9 |   r6 = ref &(*r5).x
+    10 |   r7 = ref &mut <template>
+    11 |   append r7 r4
+    12 |   r8 = const_str T1
+    13 |   r9 = ref &mut <template>
+    14 |   append r9 r8
+    16 |   r10 = take <template>
+    17 |   r11 = take @data
+    18 |   commit @data = r11 (not written)
+    19 |   return r10
+
+    ; r0 (v18) : &String
+    ; r1 (v19) : &i64
+    ; r2 (@data) : (String, {x: i64})
+    ; r3 (@data.) : &(String, {x: i64})
+    ; r4 (label) : &String
+    ; r5 ((*r5).[1]) : &{x: i64}
+    ; r6 (x) : &i64
+    ; r7 (<template>.) : &mut String
+    ; r8 (v13) : &str
+    ; r9 (<template>.) : &mut String
+    ; r10 (v16) : String
+    ; r11 (v17) : (String, {x: i64})
+    ; r12 (v3) : String
+    ; r13 (label) : &String
+    ; r14 (@data) : (String, {x: i64})
+    ; r15 (<template>) : String
+    ; r16 (v15) : Unit
+    ; r17 (x) : &i64
+    ; r18 (label) : &String

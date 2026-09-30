@@ -1,0 +1,72 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = "\n"
+  T2 = "empty\n"
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = fetch @users
+     2 |   assign @users = r1
+     4 |   assign <template> = T0
+     5 |   r2 = ref &@users
+     6 |   jump L1
+     7 | L1:
+     9 |   r3 = ref &(*r2)[0]
+    10 |   if true (r4) -> L2 else L3 join L4
+    11 | L2:
+    13 |   jump L4(true (r5))
+    14 | L3:
+    16 |   jump L4(false (r6))
+    17 | L4(r7: Bool):
+    18 |   jump_if r7 then L5 else L6
+    19 | L5:
+    20 |   r8 = ref &(*r2)[0]
+    21 |   r9 = take (*r8).name
+    22 |   r10 = ref &mut <template>
+    23 |   append r10 r9
+    24 |   r11 = const_str T1
+    25 |   r12 = ref &mut <template>
+    26 |   append r12 r11
+    28 |   jump L0(() (r13), r8)
+    29 | L6:
+    30 |   r14 = const_str T2
+    31 |   r15 = ref &mut <template>
+    32 |   append r15 r14
+    34 |   jump L0(() (r16), r0)
+    35 | L0(r17: Unit, r18: &{name: String}):
+    36 |   r19 = take <template>
+    37 |   r20 = take @users
+    38 |   commit @users = r20 (not written)
+    39 |   return r19
+
+    ; r0 (v25) : &{name: String}
+    ; r1 (@users) : Array<{name: String}, 3>
+    ; r2 (@users.) : &Array<{name: String}, 3>
+    ; r3 ((*r5).[0]) : &{name: String}
+    ; r4 (v6) : Bool
+    ; r5 (v9) : Bool
+    ; r6 (v10) : Bool
+    ; r7 (v8) : Bool
+    ; r8 (first) : &{name: String}
+    ; r9 ((*r13).name) : String
+    ; r10 (<template>.) : &mut String
+    ; r11 (v16) : &str
+    ; r12 (<template>.) : &mut String
+    ; r13 (v18) : Unit
+    ; r14 (v19) : &str
+    ; r15 (<template>.) : &mut String
+    ; r16 (v21) : Unit
+    ; r17 (v22) : Unit
+    ; r18 (v27) : &{name: String}
+    ; r19 (v23) : String
+    ; r20 (v24) : Array<{name: String}, 3>
+    ; r21 (v3) : String
+    ; r22 (v26) : &{name: String}
+    ; r23 (v13) : &{name: String}
+    ; r24 (@users) : Array<{name: String}, 3>
+    ; r25 (first) : &{name: String}
+    ; r26 (<template>) : String

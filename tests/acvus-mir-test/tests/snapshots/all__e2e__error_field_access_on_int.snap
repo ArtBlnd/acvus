@@ -1,0 +1,5 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: result.unwrap_err()
+---
+[infer:test] [3..9] no field `foo` on type i64

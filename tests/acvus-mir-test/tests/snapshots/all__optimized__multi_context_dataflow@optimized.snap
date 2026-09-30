@@ -1,0 +1,46 @@
+---
+source: tests/acvus-mir-test/tests/optimized.rs
+expression: opt
+---
+=== main ===
+     0 |   r0 = fetch @a
+     1 |   r1 = fetch @scale
+     2 |   r2 = fetch @b
+     3 |   r3 = r0 + r2
+     4 |   r4 = r3 * r1
+     5 |   r5 = r4 + r0
+     6 |   commit @output = r5
+     7 |   commit @a = r0 (not written)
+     8 |   commit @scale = r1 (not written)
+     9 |   commit @b = r2 (not written)
+    10 |   return r5
+
+    ; r0 (@a) : i64
+    ; r1 (@scale) : i64
+    ; r2 (@b) : i64
+    ; r3 (v11) : i64
+    ; r4 (v15) : i64
+    ; r5 (v19) : i64
+    ; r6 (@a) : i64
+    ; r7 (v22) : i64
+    ; r8 (v25) : i64
+    ; r9 (@a) : i64
+    ; r10 (v28) : i64
+    ; r11 (sum) : i64
+    ; r12 (v30) : i64
+    ; r13 (scaled) : i64
+    ; r14 (@scale) : i64
+    ; r15 (@output) : i64
+    ; r16 (@output) : i64
+    ; r17 (v23) : i64
+    ; r18 (@a) : i64
+    ; r19 (v21) : i64
+    ; r20 (v24) : i64
+    ; r21 (@scale) : i64
+    ; r22 (v27) : i64
+    ; r23 (v26) : i64
+    ; r24 (@b) : i64
+    ; r25 (v29) : i64
+    ; r26 (@b) : i64
+    ; r27 (sum) : i64
+    ; r28 (scaled) : i64

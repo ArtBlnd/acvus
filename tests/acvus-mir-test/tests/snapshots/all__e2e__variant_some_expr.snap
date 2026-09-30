@@ -1,0 +1,21 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== literals ===
+  T0 = ""
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     4 |   r2 = variant Some(42 (r3))
+     5 |   return T0
+
+    ; r0 (v7) : String
+    ; r1 (v8) : Option<i64>
+    ; r2 (v4) : Option<i64>
+    ; r3 (v3) : i64
+    ; r4 (v6) : String
+    ; r5 (<template>) : String
+    ; r6 (x) : Option<i64>
+    ; r7 (v1) : String

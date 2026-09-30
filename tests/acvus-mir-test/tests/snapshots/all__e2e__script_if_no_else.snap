@@ -1,0 +1,20 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     1 |   assign x = 0 (r0)
+     3 |   if true (r1) -> L0 else L1 join L1
+     4 | L0:
+     6 |   assign x = 1 (r2)
+     7 |   jump L1
+     8 | L1:
+    10 |   r3 = take x
+    11 |   return r3
+
+    ; r0 (v1) : i64
+    ; r1 (v3) : Bool
+    ; r2 (v4) : i64
+    ; r3 (x) : i64
+    ; r4 (v5) : Unit
+    ; r5 (x) : i64

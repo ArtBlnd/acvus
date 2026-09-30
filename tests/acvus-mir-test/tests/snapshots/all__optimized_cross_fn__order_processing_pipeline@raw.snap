@@ -1,0 +1,341 @@
+---
+source: tests/acvus-mir-test/tests/optimized_cross_fn.rs
+expression: raw
+---
+-- calc_discount --
+=== main ===
+     0 |   r0 = take $v1
+     1 |   r1 = take $v2
+     2 |   r2 = r0 * r1
+     4 |   r3 = r2 / 100 (r4)
+     5 |   return r3
+
+    ; r0 ($subtotal) : i64
+    ; r1 ($rate) : i64
+    ; r2 (v5) : i64
+    ; r3 (v7) : i64
+    ; r4 (v6) : i64
+    ; r5 (v1) : i64
+    ; r6 (v2) : i64
+
+-- calc_tax --
+=== main ===
+     0 |   r0 = take $v1
+     1 |   r1 = take $v2
+     2 |   r2 = r0 * r1
+     4 |   r3 = r2 / 100 (r4)
+     5 |   return r3
+
+    ; r0 ($amount) : i64
+    ; r1 ($rate) : i64
+    ; r2 (v5) : i64
+    ; r3 (v7) : i64
+    ; r4 (v6) : i64
+    ; r5 (v1) : i64
+    ; r6 (v2) : i64
+
+-- format_receipt --
+=== literals ===
+  T0 = " sub:"
+  T1 = " disc:"
+  T2 = " tax:"
+  T3 = " ship:"
+  T4 = " total:"
+
+=== main ===
+     0 |   r0 = ref &$v1
+     1 |   r1 = const_str T0
+     2 |   r2 = string_concat [r0, r1]
+     3 |   assign v10 = r2
+     4 |   r3 = ref &v10
+     5 |   r4 = ref &$v2
+     6 |   r5 = call #0(r4)
+     7 |   assign v14 = r5
+     8 |   r6 = ref &v14
+     9 |   r7 = string_concat [r3, r6]
+    10 |   assign v17 = r7
+    11 |   r8 = ref &v17
+    12 |   r9 = const_str T1
+    13 |   r10 = string_concat [r8, r9]
+    14 |   assign v21 = r10
+    15 |   r11 = ref &v21
+    16 |   r12 = ref &$v3
+    17 |   r13 = call #0(r12)
+    18 |   assign v25 = r13
+    19 |   r14 = ref &v25
+    20 |   r15 = string_concat [r11, r14]
+    21 |   assign v28 = r15
+    22 |   r16 = ref &v28
+    23 |   r17 = const_str T2
+    24 |   r18 = string_concat [r16, r17]
+    25 |   assign v32 = r18
+    26 |   r19 = ref &v32
+    27 |   r20 = ref &$v4
+    28 |   r21 = call #0(r20)
+    29 |   assign v36 = r21
+    30 |   r22 = ref &v36
+    31 |   r23 = string_concat [r19, r22]
+    32 |   assign v39 = r23
+    33 |   r24 = ref &v39
+    34 |   r25 = const_str T3
+    35 |   r26 = string_concat [r24, r25]
+    36 |   assign v43 = r26
+    37 |   r27 = ref &v43
+    38 |   r28 = ref &$v5
+    39 |   r29 = call #0(r28)
+    40 |   assign v47 = r29
+    41 |   r30 = ref &v47
+    42 |   r31 = string_concat [r27, r30]
+    43 |   assign v50 = r31
+    44 |   r32 = ref &v50
+    45 |   r33 = const_str T4
+    46 |   r34 = string_concat [r32, r33]
+    47 |   assign v54 = r34
+    48 |   r35 = ref &v54
+    49 |   r36 = ref &$v6
+    50 |   r37 = call #0(r36)
+    51 |   assign v58 = r37
+    52 |   r38 = ref &v58
+    53 |   r39 = string_concat [r35, r38]
+    54 |   return r39
+
+    ; r0 ($param_1.) : &String
+    ; r1 (v8) : &str
+    ; r2 (v9) : String
+    ; r3 (var_10.) : &String
+    ; r4 ($param_2.) : &i64
+    ; r5 (to_string(...)) : String
+    ; r6 (var_14.) : &String
+    ; r7 (v16) : String
+    ; r8 (var_17.) : &String
+    ; r9 (v19) : &str
+    ; r10 (v20) : String
+    ; r11 (var_21.) : &String
+    ; r12 ($param_3.) : &i64
+    ; r13 (to_string(...)) : String
+    ; r14 (var_25.) : &String
+    ; r15 (v27) : String
+    ; r16 (var_28.) : &String
+    ; r17 (v30) : &str
+    ; r18 (v31) : String
+    ; r19 (var_32.) : &String
+    ; r20 ($param_4.) : &i64
+    ; r21 (to_string(...)) : String
+    ; r22 (var_36.) : &String
+    ; r23 (v38) : String
+    ; r24 (var_39.) : &String
+    ; r25 (v41) : &str
+    ; r26 (v42) : String
+    ; r27 (var_43.) : &String
+    ; r28 ($param_5.) : &i64
+    ; r29 (to_string(...)) : String
+    ; r30 (var_47.) : &String
+    ; r31 (v49) : String
+    ; r32 (var_50.) : &String
+    ; r33 (v52) : &str
+    ; r34 (v53) : String
+    ; r35 (var_54.) : &String
+    ; r36 ($param_6.) : &i64
+    ; r37 (to_string(...)) : String
+    ; r38 (var_58.) : &String
+    ; r39 (v60) : String
+    ; r40 (v25) : String
+    ; r41 (v6) : i64
+    ; r42 (v50) : String
+    ; r43 (v17) : String
+    ; r44 (v36) : String
+    ; r45 (v4) : i64
+    ; r46 (v10) : String
+    ; r47 (v43) : String
+    ; r48 (v5) : i64
+    ; r49 (v54) : String
+    ; r50 (v3) : i64
+    ; r51 (v47) : String
+    ; r52 (v28) : String
+    ; r53 (v21) : String
+    ; r54 (v58) : String
+    ; r55 (v14) : String
+    ; r56 (v39) : String
+    ; r57 (v1) : String
+    ; r58 (v2) : i64
+    ; r59 (v32) : String
+
+-- main --
+=== main ===
+     0 |   assign $order = r0
+     1 |   r1 = fetch @item_count
+     2 |   assign @item_count = r1
+     3 |   r2 = fetch @shipping
+     4 |   assign @shipping = r2
+     5 |   r3 = fetch @tax_rate
+     6 |   assign @tax_rate = r3
+     7 |   r4 = fetch @default_ship
+     8 |   assign @default_ship = r4
+     9 |   r5 = fetch @discount_rate
+    10 |   assign @discount_rate = r5
+    11 |   r6 = fetch @customer
+    12 |   assign @customer = r6
+    13 |   r7 = fetch @free_ship_min
+    14 |   assign @free_ship_min = r7
+    15 |   r8 = take @item_count
+    17 |   r9 = r8 * 100 (r10)
+    18 |   assign subtotal = r9
+    19 |   r11 = take subtotal
+    20 |   r12 = take @discount_rate
+    21 |   r13 = call #0(r11, r12)
+    22 |   assign discount = r13
+    23 |   r14 = take subtotal
+    24 |   r15 = take discount
+    25 |   r16 = r14 - r15
+    26 |   r17 = take @tax_rate
+    27 |   r18 = call #1(r16, r17)
+    28 |   assign tax = r18
+    29 |   r19 = take subtotal
+    30 |   r20 = take discount
+    31 |   r21 = r19 - r20
+    32 |   r22 = take tax
+    33 |   r23 = r21 + r22
+    34 |   assign total = r23
+    35 |   r24 = take total
+    36 |   r25 = take @free_ship_min
+    37 |   r26 = r24 > r25
+    38 |   r27 = test r26 == true
+    39 |   if r27 -> L0 else L1 join L1
+    40 | L0:
+    42 |   assign @shipping = 0 (r28)
+    43 |   jump L1
+    44 | L1:
+    46 |   r29 = take total
+    47 |   r30 = take @free_ship_min
+    48 |   r31 = r29 <= r30
+    49 |   r32 = test r31 == true
+    50 |   if r32 -> L2 else L3 join L3
+    51 | L2:
+    52 |   r33 = take @default_ship
+    53 |   assign @shipping = r33
+    54 |   jump L3
+    55 | L3:
+    57 |   r34 = take total
+    58 |   r35 = take @shipping
+    59 |   r36 = r34 + r35
+    60 |   assign final_total = r36
+    61 |   r37 = take @customer
+    62 |   r38 = take subtotal
+    63 |   r39 = take discount
+    64 |   r40 = take tax
+    65 |   r41 = take @shipping
+    66 |   r42 = take final_total
+    67 |   r43 = call #2(r37, r38, r39, r40, r41, r42)
+    68 |   assign receipt = r43
+    69 |   r44 = take final_total
+    70 |   assign @total_out = r44
+    71 |   r45 = take receipt
+    72 |   assign @receipt_out = r45
+    73 |   r46 = take receipt
+    74 |   r47 = take $order
+    75 |   r48 = call #3(r46) [r47 -> r49]
+    76 |   assign $order = r49
+    77 |   r50 = take final_total
+    78 |   r51 = take @item_count
+    79 |   commit @item_count = r51 (not written)
+    80 |   r52 = take @total_out
+    81 |   commit @total_out = r52
+    82 |   r53 = take @shipping
+    83 |   commit @shipping = r53
+    84 |   r54 = take @tax_rate
+    85 |   commit @tax_rate = r54 (not written)
+    86 |   r55 = take @default_ship
+    87 |   commit @default_ship = r55 (not written)
+    88 |   r56 = take @receipt_out
+    89 |   commit @receipt_out = r56
+    90 |   r57 = take @discount_rate
+    91 |   commit @discount_rate = r57 (not written)
+    92 |   r58 = take @customer
+    93 |   commit @customer = r58 (not written)
+    94 |   r59 = take @free_ship_min
+    95 |   commit @free_ship_min = r59 (not written)
+    96 |   r60 = take $order
+    97 |   return r50 [r60]
+
+    ; orders: what the body's yielded Order waits for
+    ;   r60(entry)
+
+    ; r0 (v1) : Order
+    ; r1 (@item_count) : i64
+    ; r2 (@shipping) : i64
+    ; r3 (@tax_rate) : i64
+    ; r4 (@default_ship) : i64
+    ; r5 (@discount_rate) : i64
+    ; r6 (@customer) : String
+    ; r7 (@free_ship_min) : i64
+    ; r8 (@item_count) : i64
+    ; r9 (v23) : i64
+    ; r10 (v22) : i64
+    ; r11 (subtotal) : i64
+    ; r12 (@discount_rate) : i64
+    ; r13 (calc_discount(...)) : i64
+    ; r14 (subtotal) : i64
+    ; r15 (discount) : i64
+    ; r16 (v31) : i64
+    ; r17 (@tax_rate) : i64
+    ; r18 (calc_tax(...)) : i64
+    ; r19 (subtotal) : i64
+    ; r20 (discount) : i64
+    ; r21 (v37) : i64
+    ; r22 (tax) : i64
+    ; r23 (v39) : i64
+    ; r24 (total) : i64
+    ; r25 (@free_ship_min) : i64
+    ; r26 (v43) : Bool
+    ; r27 (v44) : Bool
+    ; r28 (v45) : i64
+    ; r29 (total) : i64
+    ; r30 (@free_ship_min) : i64
+    ; r31 (v49) : Bool
+    ; r32 (v50) : Bool
+    ; r33 (@default_ship) : i64
+    ; r34 (total) : i64
+    ; r35 (@shipping) : i64
+    ; r36 (v55) : i64
+    ; r37 (@customer) : String
+    ; r38 (subtotal) : i64
+    ; r39 (discount) : i64
+    ; r40 (tax) : i64
+    ; r41 (@shipping) : i64
+    ; r42 (final_total) : i64
+    ; r43 (format_receipt(...)) : String
+    ; r44 (final_total) : i64
+    ; r45 (receipt) : String
+    ; r46 (receipt) : String
+    ; r47 (v69) : Order
+    ; r48 (send_email(...)) : i64
+    ; r49 (v70) : Order
+    ; r50 (final_total) : i64
+    ; r51 (v72) : i64
+    ; r52 (v73) : i64
+    ; r53 (v74) : i64
+    ; r54 (v75) : i64
+    ; r55 (v76) : i64
+    ; r56 (v77) : String
+    ; r57 (v78) : i64
+    ; r58 (v79) : String
+    ; r59 (v80) : i64
+    ; r60 (v81) : Order
+    ; r61 (final_total) : i64
+    ; r62 (discount) : i64
+    ; r63 (@shipping) : i64
+    ; r64 (subtotal) : i64
+    ; r65 (@total_out) : i64
+    ; r66 (@default_ship) : i64
+    ; r67 (@customer) : String
+    ; r68 (@item_count) : i64
+    ; r69 (@tax_rate) : i64
+    ; r70 (tax) : i64
+    ; r71 (@discount_rate) : i64
+    ; r72 (total) : i64
+    ; r73 ($order) : Order
+    ; r74 (v46) : Unit
+    ; r75 (v52) : Unit
+    ; r76 (receipt) : String
+    ; r77 (@receipt_out) : String
+    ; r78 (@free_ship_min) : i64

@@ -1,0 +1,5 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: result.unwrap_err()
+---
+[infer:test] [2..30] type mismatch: expected i64, got String

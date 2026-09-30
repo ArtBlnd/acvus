@@ -1,0 +1,40 @@
+---
+source: tests/acvus-mir-test/tests/optimized.rs
+expression: opt
+---
+=== main ===
+     0 |   r0 = fetch @stats
+     1 |   assign @stats = r0
+     2 |   r1 = take @stats.count
+     4 |   r2 = r1 + 1 (r3)
+     5 |   r4 = take @stats.threshold
+     6 |   r5 = r2 > r4
+     7 |   r6 = test r5 == true
+     8 |   if r6 -> L0 else L1 join L1
+     9 | L0:
+    10 |   assign @stats.count = r2
+    12 |   assign @stats.exceeded = true (r7)
+    13 |   jump L1
+    14 | L1:
+    15 |   r8 = take @stats.count
+    16 |   r9 = take @stats
+    17 |   commit @stats = r9
+    18 |   return r8
+
+    ; r0 (@stats) : {count: i64, exceeded: Bool, threshold: i64}
+    ; r1 (@stats.count) : i64
+    ; r2 (v5) : i64
+    ; r3 (v4) : i64
+    ; r4 (@stats.threshold) : i64
+    ; r5 (v9) : Bool
+    ; r6 (v10) : Bool
+    ; r7 (v12) : Bool
+    ; r8 (@stats.count) : i64
+    ; r9 (v15) : {count: i64, exceeded: Bool, threshold: i64}
+    ; r10 (count) : i64
+    ; r11 (count) : i64
+    ; r12 (v17) : i64
+    ; r13 (@stats) : {count: i64, exceeded: Bool, threshold: i64}
+    ; r14 (count) : i64
+    ; r15 (v13) : Unit
+    ; r16 (v16) : i64

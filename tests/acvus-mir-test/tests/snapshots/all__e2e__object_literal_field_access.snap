@@ -1,0 +1,34 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== literals ===
+  T0 = ""
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = fetch @name
+     3 |   assign <template> = T0
+     4 |   r2 = string_clone r1
+     5 |   r3 = object {name: r2}
+     6 |   assign o = r3
+     7 |   r4 = take o.name
+     8 |   r5 = ref &mut <template>
+     9 |   append r5 r4
+    10 |   r6 = take <template>
+    11 |   commit @name = r1 (not written)
+    12 |   return r6
+
+    ; r0 (v12) : String
+    ; r1 (@name) : String
+    ; r2 (v13) : String
+    ; r3 (v6) : {name: String}
+    ; r4 (o.name) : String
+    ; r5 (<template>.) : &mut String
+    ; r6 (v10) : String
+    ; r7 (o) : {name: String}
+    ; r8 (v11) : String
+    ; r9 (v3) : String
+    ; r10 (@name) : String
+    ; r11 (@name) : String
+    ; r12 (<template>) : String

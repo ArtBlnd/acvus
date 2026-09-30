@@ -1,0 +1,56 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== literals ===
+  T0 = ""
+  T1 = "admin\n"
+  T2 = "guest"
+  T3 = "\n"
+
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = undef
+     2 |   r2 = fetch @role
+     4 |   assign <template> = T0
+     5 |   switch r2 { "admin" -> L1, _ -> L2 }
+     6 | L1:
+     7 |   r3 = const_str T1
+     8 |   r4 = ref &mut <template>
+     9 |   append r4 r3
+    11 |   jump L0(() (r5), r1)
+    12 | L2:
+    13 |   r6 = const_str T2
+    14 |   r7 = ref &mut <template>
+    15 |   append r7 r6
+    16 |   r8 = const_str T3
+    17 |   r9 = ref &mut <template>
+    18 |   append r9 r8
+    20 |   jump L0(() (r10), r6)
+    21 | L0(r11: Unit, r12: &str):
+    22 |   r13 = take <template>
+    23 |   commit @role = r2 (not written)
+    24 |   return r13
+
+    ; r0 (v19) : String
+    ; r1 (v20) : &str
+    ; r2 (@role) : String
+    ; r3 (v6) : &str
+    ; r4 (<template>.) : &mut String
+    ; r5 (v8) : Unit
+    ; r6 (v9) : &str
+    ; r7 (<template>.) : &mut String
+    ; r8 (v13) : &str
+    ; r9 (<template>.) : &mut String
+    ; r10 (v15) : Unit
+    ; r11 (v16) : Unit
+    ; r12 (v22) : &str
+    ; r13 (v17) : String
+    ; r14 (fallback) : &str
+    ; r15 (v3) : String
+    ; r16 (fallback) : &str
+    ; r17 (v18) : String
+    ; r18 (v21) : String
+    ; r19 (v5) : String
+    ; r20 (@role) : String
+    ; r21 (<template>) : String
