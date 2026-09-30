@@ -62,6 +62,10 @@ pub enum Mismatch {
     /// Two marks that are not one: a mark fixed marked, by a `#`
     /// parameter, that a use would raise (types §8).
     Mark { a: Term, b: Term },
+    /// An identity made in a body instantiation would enter what was made
+    /// outside it, with no ancestor carrying no identity to take instead
+    /// (types §3).
+    IdentityEscapes { term: Term },
 }
 
 impl Mismatch {
@@ -80,6 +84,7 @@ impl Mismatch {
             Mismatch::NotOneOf { .. } => "NotOneOf",
             Mismatch::Values { .. } => "Values",
             Mismatch::Mark { .. } => "Mark",
+            Mismatch::IdentityEscapes { .. } => "IdentityEscapes",
         }
     }
 }

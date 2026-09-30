@@ -28,7 +28,10 @@ pub enum MarkTerm<V: Phase> {
     Var(V::MarkVar),
 }
 
-acvus_utils::declare_local_id!(pub IdentityId);
+// An identity is made where a call gives it, in whichever unit's store,
+// and a store imports another's terms: its id is unique across them all
+// (types §3), so it is allocated globally, never per store.
+acvus_utils::declare_id!(pub IdentityId);
 
 /// The source a value of a type with an identity came from (types §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -21,11 +21,11 @@ mod tests;
 
 use crate::ty::{
     Calls, CallsTerm, Effect, CallsVarId, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Holds, HoldsTerm, HoldsVarId,
-    IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId, Mark, MarkTerm, TyId, TyKind, TyVarId,
+    IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId, Mark, MarkTerm, TyId, TyKind, TyVarId,
     Types, FnValues, ValuesVarId,
 };
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use cells::{Cells, End as CellEnd, FlowRefused, ValuesTerm};
 
@@ -59,6 +59,11 @@ pub enum Bound {
     Settled,
 }
 
+/// How deep in body instantiations a variable or an identity was made
+/// (types §3): 0 is the unit's own body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Level(pub u32);
+
 /// The solving state of one checked unit.
 pub struct Infer {
     types: Types<InferPhase>,
@@ -78,6 +83,21 @@ pub struct Infer {
     mark_vars: Cells<MarkTerm<InferPhase>>,
     len_vars: Cells<LenTerm<InferPhase>>,
     identity_vars: Cells<IdentityTerm<InferPhase>>,
+    /// The body instantiation now being checked (types §3): a unit's body,
+    /// a lambda's, and a loop's iteration each raise it by one. Every type
+    /// and identity variable, and every identity made, is of the level it
+    /// was made at.
+    level: Level,
+    /// Each type variable's level, by its number. A variable bound into a
+    /// term of a lower level takes that lower level, as does every variable
+    /// the term holds (level lowering).
+    ty_levels: Vec<Level>,
+    /// Each identity variable's level, by its number.
+    identity_levels: Vec<Level>,
+    /// The level each identity was made at. An identity never enters a
+    /// variable of a lower level (types §3): it would escape the body
+    /// instantiation it belongs to.
+    made_at: FxHashMap<IdentityId, Level>,
     flow_vars: Cells<FlowTerm<InferPhase>>,
     holds_vars: Cells<HoldsTerm>,
     calls_vars: Cells<CallsTerm>,
