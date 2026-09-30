@@ -70,6 +70,10 @@ pub enum RefusalKind {
     /// larger effect (effects).
     ClosureExceedsSlot(Exceeding),
     NoConversion,
+    /// A value carrying an identity made in a body instantiation, a call's
+    /// or a loop's iteration, stored where that body did not make, with no
+    /// ancestor carrying no identity to take instead (types §3).
+    IdentityEscapes,
     /// `for` over a value that is no reference to a container, array or
     /// range (control-flow).
     NotIterable,
@@ -184,6 +188,7 @@ impl RefusalKind {
             | RefusalKind::ReturnInTemplate
             | RefusalKind::PatternInValue
             | RefusalKind::NoConversion
+            | RefusalKind::IdentityEscapes
             | RefusalKind::NotIterable
             | RefusalKind::NotTryable
             | RefusalKind::NotAReference
@@ -234,6 +239,7 @@ pub(super) fn mismatch(cx: &mut Ctxt<'_>, mismatch: Mismatch, span: Span) {
         Mismatch::OpaqueLacksField { .. } | Mismatch::OpaqueLacksVariant { .. } => RefusalKind::GrowsOpaque,
         Mismatch::NotOneOf { value, .. } => RefusalKind::NotOneOfFunctionValues { value },
         Mismatch::Conversions { candidates } if candidates.is_empty() => RefusalKind::NoConversion,
+        Mismatch::IdentityEscapes { .. } => RefusalKind::IdentityEscapes,
         other => RefusalKind::Mismatch(other),
     };
     push(cx, kind, span);

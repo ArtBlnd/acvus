@@ -48,8 +48,9 @@ pub(super) fn check_lambda<S: Slot>(
             calls: Calls::Many,
         },
     );
-    // The lambda's parameters, result and body are its own walk (S7).
-    let (result, param_terms) = super::generalize::walk(cx, site, |cx| {
+    // The lambda's parameters, result and body are its own walk (S7), and
+    // one instantiation of its body at each call (types §3).
+    let (result, param_terms) = super::generalize::walk(cx, site, |cx| cx.in_body(|cx| {
         let result = cx.fresh();
         cx.scope.push_lambda(site, captures_by_move, result);
         let mut param_terms = Vec::with_capacity(params.len());
@@ -69,7 +70,7 @@ pub(super) fn check_lambda<S: Slot>(
         let value = check_expr(cx, body, Demand::Read);
         cx.enter(body.id(), value, result, crate::ty::Reach::Named, body.span());
         (result, param_terms)
-    });
+    }));
     // A body that calls nothing has no effect to order (effects §1).
     let effect = cx
         .scope

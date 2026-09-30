@@ -27,10 +27,10 @@ use acvus_ast::{AstId, Span};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
-use super::decision::{Decision, MapTerms, Reading, fire_owned_round};
+use super::decision::{Decision, Made, MapTerms, Reading, fire_owned_round};
 use super::output::{Adjustment, AsCast, Chosen, CoercionNode, Converted, Entered, Iteration, StructureNode, TryExit};
-use crate::infer::{AtInstance, CopiedFlow, Term, VarMarks, VarsOf};
-use crate::ty::{EffectTerm, Infer as InferPhase, TyVarId};
+use crate::infer::{AtInstance, CopiedFlow, Level, Term, VarMarks, VarsOf};
+use crate::ty::{EffectTerm, IdentityId, IdentityVarId, Infer as InferPhase, TyVarId};
 
 /// A binding whose values are generalized, by its binder's site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -594,11 +594,11 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
     let in_lambda = |owner: Option<AstId>| nested_in(&walks, &lambdas_only, owner);
     let types: Vec<Term> = owned
         .iter()
-        .filter(|(_, owner)| in_lambda(*owner))
+        .filter(|(_, made)| in_lambda(made.owner))
         .flat_map(|(decision, _)| decision.terms())
         .chain([term])
         .collect();
-    let effects: Vec<_> = owned.iter().filter(|(_, owner)| in_lambda(*owner)).flat_map(|(decision, _)| decision.effects()).collect();
+    let effects: Vec<_> = owned.iter().filter(|(_, made)| in_lambda(made.owner)).flat_map(|(decision, _)| decision.effects()).collect();
     let reached = cx.infer.reached(types, effects);
     let generalized = Generalized {
         types: sorted(reached.types.iter().copied().filter(|var| cx.infer.is_unbound(*var) && own.made(|marks| marks.types, var.0) && !held.types.contains(var)), |var| var.0),
@@ -633,14 +633,53 @@ fn settle_unit(cx: &mut Ctxt<'_>, id: SchemeId, term: Term) {
         values: sorted(reached.values.iter().copied(), |var| var.0),
     };
     let requirements = split_requirements(cx, owned, &generalized);
-    cx.out.schemes[id.0 as usize].settled = Some(Settled { generalized, requirements });
+    let (term, generalized, requirements) = generalize_result_identities(cx, term, generalized, requirements);
+    let scheme = &mut cx.out.schemes[id.0 as usize];
+    scheme.term = term;
+    scheme.settled = Some(Settled { generalized, requirements });
+}
+
+/// A scheme's function type `term` whose result holds identities the unit's
+/// body made: each is a variable the scheme generalizes, in its type and its
+/// requirements, which each call makes a fresh identity of
+/// (`fire_instantiate`), as a declaration's call does (types §3).
+fn generalize_result_identities(cx: &mut Ctxt<'_>, term: Term, mut generalized: Generalized, requirements: Box<[Decision]>) -> (Term, Generalized, Box<[Decision]>) {
+    let made = cx.infer.result_identities_made_from(term, Level(0));
+    if made.is_empty() {
+        return (term, generalized, requirements);
+    }
+    let abstracted: FxHashMap<IdentityId, IdentityVarId> = made.into_iter().map(|identity| (identity, cx.infer.fresh_identity())).collect();
+    let mut abstracting = Abstracting { infer: &mut cx.infer, abstracted: &abstracted, memo: FxHashMap::default() };
+    let term = abstracting.ty(term);
+    let requirements = requirements.iter().map(|decision| decision.map_terms(&mut abstracting)).collect();
+    let mut identities: Vec<IdentityVarId> = generalized.identities.iter().copied().chain(abstracted.into_values()).collect();
+    identities.sort_by_key(|var| var.0);
+    generalized.identities = identities.into();
+    (term, generalized, requirements)
+}
+
+/// A scheme's terms with each identity it generalizes its variable.
+struct Abstracting<'a> {
+    infer: &'a mut crate::infer::Infer,
+    abstracted: &'a FxHashMap<IdentityId, IdentityVarId>,
+    memo: FxHashMap<Term, Term>,
+}
+
+impl MapTerms for Abstracting<'_> {
+    fn ty(&mut self, term: Term) -> Term {
+        self.infer.abstract_identities(term, self.abstracted, &mut self.memo)
+    }
+
+    fn effect(&mut self, effect: &EffectTerm<InferPhase>) -> EffectTerm<InferPhase> {
+        effect.clone()
+    }
 }
 
 /// Each of `owned` that reads a variable of `generalized` is a requirement,
 /// made at each use; the others go back to the check.
-fn split_requirements(cx: &mut Ctxt<'_>, owned: Vec<(Decision, Option<AstId>)>, generalized: &Generalized) -> Box<[Decision]> {
+fn split_requirements(cx: &mut Ctxt<'_>, owned: Vec<(Decision, Made)>, generalized: &Generalized) -> Box<[Decision]> {
     let mut requirements = Vec::new();
-    for (decision, owner) in owned {
+    for (decision, made) in owned {
         let reads = cx.infer.reached(decision.terms(), decision.effects());
         let generalizes = reads.types.iter().any(|var| generalized.types.contains(var))
             || reads.effects.iter().any(|var| generalized.effects.contains(var))
@@ -650,7 +689,7 @@ fn split_requirements(cx: &mut Ctxt<'_>, owned: Vec<(Decision, Option<AstId>)>, 
             || reads.values.iter().any(|var| generalized.values.contains(var));
         match generalizes {
             true => requirements.push(decision),
-            false => cx.decisions.restore(decision, owner),
+            false => cx.decisions.restore(decision, made),
         }
     }
     requirements.into()
@@ -668,7 +707,7 @@ fn sorted<T>(vars: impl Iterator<Item = T>, key: impl Fn(&T) -> u32) -> Box<[T]>
 /// scheme is settled.
 pub(super) fn instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: AstId, span: Span) -> Term {
     let result = cx.fresh();
-    cx.decisions.push(Decision::Instantiate { scheme, site: use_site, span, result });
+    cx.decisions.push(Decision::Instantiate { scheme, site: use_site, span, result }, cx.infer.level());
     result
 }
 
@@ -679,6 +718,7 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
         return Err(());
     };
     let (at, flows) = cx.infer.instance_at(&generalized);
+    cx.infer.mint_result_identities_at(term, &at);
     copied_flows(cx, &flows);
     let within = cx.out.firing_in;
     // A unit's code is compiled at its own instantiation, never here.
@@ -716,7 +756,7 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
             decision => (instance, decision),
         };
         let decision = decision.map_terms(&mut Copying { infer: &mut cx.infer, through: &mut cx.out.through, at: &at, memo: &mut memo });
-        cx.decisions.push(Decision::In { instance: at_instance, decision: Box::new(decision) });
+        cx.decisions.push(Decision::In { instance: at_instance, decision: Box::new(decision) }, cx.infer.level());
     }
     Ok(())
 }

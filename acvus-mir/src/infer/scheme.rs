@@ -7,9 +7,9 @@ use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
 use super::{Bound, FlowId, Infer, Term};
-use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound, effect_variables};
+use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound, effect_variables, identity_variables};
 use crate::ty::{
-    Calls, CallsTerm, Concrete, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityTerm, IdentityVarId,
+    Calls, CallsTerm, Concrete, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityId, IdentityTerm,
     Infer as InferPhase, Label, LenTerm, LenVarId, Mark, MarkTerm, ObjectTy, Phase, Poly, Ty, TyId, TyKind, Types,
 };
 
@@ -121,7 +121,7 @@ where
     ty_vars: FxHashMap<u32, Term>,
     effect_vars: FxHashMap<u32, EffectTerm<InferPhase>>,
     len_vars: FxHashMap<u32, LenVarId>,
-    identity_vars: FxHashMap<u32, IdentityVarId>,
+    identity_vars: FxHashMap<u32, IdentityTerm<InferPhase>>,
 }
 
 impl<'a, V> AtUse<'a, V>
@@ -163,6 +163,7 @@ impl Infer {
             }
         }
         at.ty_vars.extend((0u32..).zip(vars));
+        self.mint_result_identities(&mut at, scheme.ty);
         let (ty, flows) = match scheme.impls {
             // A generic function's call reaches one of its impls, and the
             // impl's own signature states the work the call runs
@@ -183,6 +184,22 @@ impl Infer {
             })
             .collect();
         Instantiated { ty, requirements, flows, declared_result, pair }
+    }
+
+    /// Each identity variable `ty`'s result holds and none of its parameters
+    /// gives, a fresh identity made at this use (types §3): a call makes
+    /// it, one per call site in each instantiation of the body the call is
+    /// in.
+    fn mint_result_identities(&mut self, at: &mut AtUse<'_, Poly>, ty: TyId<Poly>) {
+        let written = at.written;
+        let TyKind::Fn { params, ret, .. } = written.kind(ty) else {
+            return;
+        };
+        let given = identity_variables(written, params.iter().copied());
+        for var in identity_variables(written, [*ret]).difference(&given) {
+            let made = self.make_identity(self.level);
+            at.identity_vars.insert(*var, IdentityTerm::Known(made));
+        }
     }
 
     /// The function type `ty` with each of its parameters' and its result's
@@ -326,6 +343,19 @@ impl Infer {
         self.instantiate_ty(&mut at, ty)
     }
 
+    /// A context's declared type at this use, as `instantiate_type` makes
+    /// one, each identity it holds the context's own (context §3):
+    /// `identities`, by placeholder, made once per context at the
+    /// outermost level, since a context is storage apart from every body.
+    pub fn instantiate_context(&mut self, decls: &Declarations, ty: TyId<Poly>, identities: &mut FxHashMap<u32, IdentityId>) -> Term {
+        let mut at = AtUse::new(decls.types(), Placeholders::Absent);
+        for var in identity_variables(decls.types(), [ty]) {
+            let identity = *identities.entry(var).or_insert_with(|| self.make_identity(super::Level(0)));
+            at.identity_vars.insert(var, IdentityTerm::Known(identity));
+        }
+        self.instantiate_ty(&mut at, ty)
+    }
+
     /// A concrete type, such as a fixed input's, at this use, as
     /// `instantiate_type` makes a declared one: written elsewhere.
     pub fn instantiate_concrete(&mut self, types: &Types<Concrete>, ty: Ty) -> Term {
@@ -434,9 +464,9 @@ impl Infer {
                 type_args: type_args.iter().map(|arg| self.instantiate_ty(at, *arg)).collect(),
                 effect: effect.as_ref().map(|effect| self.effect_at(at, effect)),
                 identity: identity.map(|identity| match identity {
-                    IdentityTerm::Known(id) => IdentityTerm::Known(id),
+                    IdentityTerm::Known(id) => self.written_identity(id),
                     IdentityTerm::Var(index) => {
-                        IdentityTerm::Var(*at.identity_vars.entry(index.index()).or_insert_with(|| self.fresh_identity()))
+                        *at.identity_vars.entry(index.index()).or_insert_with(|| IdentityTerm::Var(self.fresh_identity()))
                     }
                 }),
                 marked: match marked {
@@ -449,6 +479,13 @@ impl Infer {
         let term = self.intern(kind);
         at.built.insert(ty, term);
         term
+    }
+
+    /// An identity a written type names: made outside every body this
+    /// store checks, at the outermost level, unless this store made it.
+    fn written_identity(&mut self, identity: IdentityId) -> IdentityTerm<InferPhase> {
+        self.made_at.entry(identity).or_insert(super::Level(0));
+        IdentityTerm::Known(identity)
     }
 
     /// The variable of the placeholder `index`.

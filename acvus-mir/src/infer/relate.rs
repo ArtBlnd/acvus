@@ -12,15 +12,15 @@ use std::cmp::Ordering;
 use acvus_utils::{Astr, QualifiedRef};
 
 use super::cells::{End as CellEnd, Exceeds, Unequal, ValuesTerm};
-use super::{End, Infer, Term, VarState};
+use super::{End, Infer, Level, Term, VarState};
 use super::closed::poly_head;
 use super::Closed;
 use crate::decl::{Base, Declarations, Head, VerifiedConversion};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{FnValue, FnValues, Reach, ValuesVarId, is_transparent};
 use crate::ty::{
-    Effect, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, Mark, MarkTerm, Mutability, ObjectTy,
-    TyKind, TyVarId,
+    Effect, EffectTerm, Flows, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, Mark, MarkTerm, Mutability,
+    ObjectTy, TyKind, TyVarId,
 };
 
 /// Why two terms do not relate: B's refusals (refusals).
@@ -163,6 +163,24 @@ impl Relation {
             (Relation::Join(_), Side::B) => Some(Reach::Named),
         }
     }
+}
+
+/// Why two identities are not one (types §3): two identities, or one made
+/// in a body instantiation entering a variable made outside it, on `Side`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdentitiesApart {
+    Two,
+    Escapes(Side),
+}
+
+/// What a term holds that a variable's level bounds (types §3): each type
+/// variable on its way and each identity variable at the end of its chain,
+/// which take that level where theirs is higher, and whether it holds an
+/// identity made above it, which escapes.
+struct HeldBelow {
+    ty_vars: Vec<TyVarId>,
+    identity_vars: Vec<IdentityVarId>,
+    escapes: bool,
 }
 
 /// A member of two sorted member lists: on both sides, or on one.
@@ -309,6 +327,16 @@ impl Infer {
             End::Unbound(..) if value.head == Head::Base(Base::Never) => return Ok(Entered::Folded),
             // The slot takes the value's type by being linked to the
             // value's last variable where it has one (types §1).
+            // A value holding an identity made above the slot's level
+            // takes its nearest ancestor carrying no identity (types §3).
+            End::Unbound(var, _) if self.held_below(self.ty_levels[var.0 as usize], value.term).escapes => {
+                let Some(target) = heads_up(decls, value.head).into_iter().find(|head| !carries_identity(decls, *head)) else {
+                    return Err(Mismatch::IdentityEscapes { term: value.term });
+                };
+                let climbed = self.climb(decls, value.term, value.head, target)?;
+                self.bind(var, None, climbed)?;
+                return Ok(Entered::Folded);
+            }
             End::Unbound(var, _) => {
                 let value_holder = match self.end(of) {
                     End::Node { holder, .. } => holder,
@@ -334,10 +362,14 @@ impl Infer {
         let target = match self.head_of(slot_node) {
             None => None,
             Some(slot_head) if value.head == never || slot_head == never => None,
-            Some(slot_head) => match self.nearest_common_ancestor(decls, value, slot_node, slot_head) {
-                Some(target) => Some((slot_head, target)),
-                None => return self.convert(decls, value, (slot_head, reach), holder, slot_node),
-            },
+            Some(slot_head) => {
+                let apart = self.identities_apart(value.term, slot_node, holder);
+                match (self.nearest_common_ancestor(decls, value, slot_head, apart.is_some()), apart) {
+                    (Some(target), _) => Some((slot_head, target)),
+                    (None, Some(IdentitiesApart::Escapes(_))) => return Err(Mismatch::IdentityEscapes { term: value.term }),
+                    (None, _) => return self.convert(decls, value, (slot_head, reach), holder, slot_node),
+                }
+            }
         };
         // Folded at one head, neither side climbing, the value is of the
         // slot's type: it is linked to the slot. Where either climbs, the
@@ -580,25 +612,113 @@ impl Infer {
     }
 
     /// Where `value` and a slot of `slot_head` meet (types §3): the first
-    /// head up from the value's that is also up from the slot's; for two
-    /// identities, the first such head that carries none. `None` where
-    /// there is no such head.
-    fn nearest_common_ancestor(
-        &mut self,
-        decls: &Declarations,
-        value: Closed,
-        slot_node: Term,
-        slot_head: Head,
-    ) -> Option<Head> {
+    /// head up from the value's that is also up from the slot's; where
+    /// their identities are `apart`, the first such head that carries none.
+    /// `None` where there is no such head.
+    fn nearest_common_ancestor(&self, decls: &Declarations, value: Closed, slot_head: Head, apart: bool) -> Option<Head> {
         let value_chain = heads_up(decls, value.head);
         let slot_chain = heads_up(decls, slot_head);
-        let common = value_chain.iter().copied().filter(|head| slot_chain.contains(head));
-        let two_identities = match (self.identity_of(value.term), self.identity_of(slot_node)) {
-            (Some(x), Some(y)) => self.identity_vars.unify(&x, &y).is_err(),
-            _ => false,
-        };
-        let mut meeting = common.filter(|head| !two_identities || !carries_identity(decls, *head));
+        let mut meeting = value_chain
+            .into_iter()
+            .filter(|head| slot_chain.contains(head))
+            .filter(|head| !apart || !carries_identity(decls, *head));
         meeting.next()
+    }
+
+    /// Whether `value` entering `slot_node`, held by `holder`, keeps no one
+    /// identity (types §3): the two carry two identities, or the value
+    /// holds one made above the holder's level, or above the level of the
+    /// slot's identity variable. Identities that may be one are made one.
+    fn identities_apart(&mut self, value: Term, slot_node: Term, holder: Option<(TyVarId, Term)>) -> Option<IdentitiesApart> {
+        if let Some((var, _)) = holder
+            && self.held_below(self.ty_levels[var.0 as usize], value).escapes
+        {
+            return Some(IdentitiesApart::Escapes(Side::A));
+        }
+        match (self.identity_of(value), self.identity_of(slot_node)) {
+            (Some(x), Some(y)) => self.unify_identities(&x, &y).err(),
+            _ => None,
+        }
+    }
+
+    /// Makes two identities one (types §3): two known identities are one
+    /// only where they are the same; a variable takes a known identity
+    /// only where it was made at or below the variable's level; two
+    /// variables made one are of the lower of their levels.
+    fn unify_identities(&mut self, a: &IdentityTerm<InferPhase>, b: &IdentityTerm<InferPhase>) -> Result<IdentityTerm<InferPhase>, IdentitiesApart> {
+        let (end_a, end_b) = (self.identity_vars.end(a), self.identity_vars.end(b));
+        let known = |end: &CellEnd<IdentityTerm<InferPhase>>| match end {
+            CellEnd::Known(identity) | CellEnd::Var { value: Some(identity), .. } => Some(*identity),
+            CellEnd::Var { value: None, .. } => None,
+        };
+        let open = |end: &CellEnd<IdentityTerm<InferPhase>>| match end {
+            CellEnd::Var { var, value: None } => Some(*var),
+            CellEnd::Known(_) | CellEnd::Var { value: Some(_), .. } => None,
+        };
+        for (var, identity, side) in [(open(&end_a), known(&end_b), Side::B), (open(&end_b), known(&end_a), Side::A)] {
+            if let (Some(var), Some(identity)) = (var, identity)
+                && self.made_at(identity) > self.identity_levels[var.0 as usize]
+            {
+                return Err(IdentitiesApart::Escapes(side));
+            }
+        }
+        let lowest = [open(&end_a), open(&end_b)].into_iter().flatten().map(|var| self.identity_levels[var.0 as usize]).min();
+        let one = self.identity_vars.unify(a, b).map_err(|Unequal| IdentitiesApart::Two)?;
+        if let (CellEnd::Var { var, value: None }, Some(lowest)) = (self.identity_vars.end(&one), lowest) {
+            let level = &mut self.identity_levels[var.0 as usize];
+            *level = (*level).min(lowest);
+        }
+        Ok(one)
+    }
+
+    /// What `term` holds that a variable of `level` bounds, bound
+    /// variables followed.
+    fn held_below(&self, level: Level, term: Term) -> HeldBelow {
+        let mut held = HeldBelow { ty_vars: Vec::new(), identity_vars: Vec::new(), escapes: false };
+        let mut seen = rustc_hash::FxHashSet::default();
+        let mut stack = vec![term];
+        while let Some(at) = stack.pop() {
+            if !seen.insert(at) {
+                continue;
+            }
+            let kind = self.types.kind(at);
+            match kind {
+                TyKind::Var(var) => {
+                    held.ty_vars.push(*var);
+                    if let VarState::Bound(to) = &self.ty_vars[var.0 as usize] {
+                        stack.push(*to);
+                    }
+                }
+                TyKind::UserDefined { identity: Some(identity), .. } => match self.identity_vars.end(identity) {
+                    CellEnd::Known(made) | CellEnd::Var { value: Some(made), .. } => held.escapes |= self.made_at(made) > level,
+                    CellEnd::Var { var, value: None } => held.identity_vars.push(var),
+                },
+                _ => {}
+            }
+            kind.for_each_child(|child| stack.push(child));
+        }
+        held
+    }
+
+    /// A variable of `level` becoming `term` (types §3): every variable
+    /// `term` holds takes `level` where its own is higher, so that what an
+    /// outer variable holds is outer; refused where `term` holds an
+    /// identity made above `level`, which would escape the body
+    /// instantiation it belongs to.
+    fn lower_into(&mut self, level: Level, term: Term) -> Result<(), Mismatch> {
+        let held = self.held_below(level, term);
+        if held.escapes {
+            return Err(Mismatch::IdentityEscapes { term });
+        }
+        for var in held.ty_vars {
+            let own = &mut self.ty_levels[var.0 as usize];
+            *own = (*own).min(level);
+        }
+        for var in held.identity_vars {
+            let own = &mut self.identity_levels[var.0 as usize];
+            *own = (*own).min(level);
+        }
+        Ok(())
     }
 
     /// The identity a value of `node` carries: the one an extern-defined
@@ -701,6 +821,7 @@ impl Infer {
         let bound = bound_v
             .meet(bound_w)
             .ok_or(Mismatch::Bound { var: v, term: w_term })?;
+        self.lower_into(self.ty_levels[v.0 as usize], w_term)?;
         self.ty_vars[w.0 as usize] = VarState::Unbound(bound);
         self.ty_vars[v.0 as usize] = VarState::Bound(w_term);
         self.keep_exclusions(v, w_term);
@@ -797,6 +918,7 @@ impl Infer {
         }
         self.refuse_excluded(var, node)?;
         let target = holder.map_or(node, |(_, held)| held);
+        self.lower_into(self.ty_levels[var.0 as usize], target)?;
         self.ty_vars[var.0 as usize] = VarState::Bound(target);
         self.keep_exclusions(var, target);
         if self.unmarked.contains(&var) {
@@ -837,6 +959,7 @@ impl Infer {
             return Err(Mismatch::Occurs { var, in_term: to });
         }
         self.refuse_excluded(var, to)?;
+        self.lower_into(self.ty_levels[var.0 as usize], to)?;
         self.ty_vars[var.0 as usize] = VarState::Bound(to);
         self.keep_exclusions(var, to);
         if self.unmarked.contains(&var) {
@@ -1026,7 +1149,13 @@ impl Infer {
                     .transpose()?;
                 let identity = identity_a
                     .zip(identity_b)
-                    .map(|(x, y)| self.identity_vars.unify(&x, &y).map_err(|Unequal| heads))
+                    .map(|(x, y)| {
+                        self.unify_identities(&x, &y).map_err(|apart| match apart {
+                            IdentitiesApart::Two => heads,
+                            IdentitiesApart::Escapes(Side::A) => Mismatch::IdentityEscapes { term: a },
+                            IdentitiesApart::Escapes(Side::B) => Mismatch::IdentityEscapes { term: b },
+                        })
+                    })
                     .transpose()?;
                 // Marks join as effects do (types §8): `eq` makes them one
                 // and fixes them, a join raises both to the higher.

@@ -134,6 +134,10 @@ impl Infer {
             mark_vars: Cells::new(),
             len_vars: Cells::new(),
             identity_vars: Cells::new(),
+            level: Level::default(),
+            ty_levels: Vec::new(),
+            identity_levels: Vec::new(),
+            made_at: FxHashMap::default(),
             flow_vars: Cells::new(),
             holds_vars: Cells::new(),
             calls_vars: Cells::new(),
@@ -182,7 +186,40 @@ impl Infer {
     pub fn fresh(&mut self, bound: Bound) -> Term {
         let var = TyVarId(u32::try_from(self.ty_vars.len()).expect("Infer::fresh: u32::MAX variables"));
         self.ty_vars.push(VarState::Unbound(bound));
+        self.ty_levels.push(self.level);
         self.types.intern(TyKind::Var(var))
+    }
+
+    /// The body instantiation now being checked (types §3).
+    pub fn level(&self) -> Level {
+        self.level
+    }
+
+    /// Checks from here at `level`, returning the level it replaces: a
+    /// body instantiation entered or left, or a decision fired at the
+    /// level it was made at.
+    pub fn set_level(&mut self, level: Level) -> Level {
+        std::mem::replace(&mut self.level, level)
+    }
+
+    /// A fresh identity, made at `at` (types §3): only the compiler makes
+    /// one.
+    pub fn make_identity(&mut self, at: Level) -> IdentityId {
+        let identity = IdentityId::alloc();
+        self.made_at.insert(identity, at);
+        identity
+    }
+
+    /// The level `identity` was made at.
+    ///
+    /// # Panics
+    /// `identity` was neither made here nor met in a written type or an
+    /// imported store, each of which records its level.
+    fn made_at(&self, identity: IdentityId) -> Level {
+        *self
+            .made_at
+            .get(&identity)
+            .unwrap_or_else(|| panic!("{identity:?} is made by `make_identity`, or met written or imported with its level"))
     }
 
     /// A mark a value an extern fn gives marked starts at: marked, and
@@ -205,7 +242,9 @@ impl Infer {
     }
 
     pub fn fresh_identity(&mut self) -> IdentityVarId {
-        self.identity_vars.fresh("Infer::fresh_identity: u32::MAX variables")
+        let var = self.identity_vars.fresh("Infer::fresh_identity: u32::MAX variables");
+        self.identity_levels.push(self.level);
+        var
     }
 
     pub fn fresh_flow(&mut self) -> FlowVarId {

@@ -12,7 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::cells::{Cells, End as CellEnd, ValuesTerm, VarTerm};
 use super::{FlowId, Infer, Term, VarState};
 use crate::ty::{
-    EffectTerm, EffectVarId, FlowTerm, FlowVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm, LenVarId,
+    EffectTerm, EffectVarId, FlowTerm, FlowVarId, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm, LenVarId,
     ObjectTy, TyKind, TyVarId, ValuesVarId,
 };
 
@@ -189,6 +189,110 @@ impl Infer {
             copied.push(CopiedFlow { of, copy });
         }
         (at, copied)
+    }
+
+    /// Each identity variable `at` copies that `function`'s result holds
+    /// and none of its parameters does, at this instance a fresh identity
+    /// made at this level (types §3): a call of the binding makes it, as a
+    /// declaration's call does (`scheme`). A term that is no function type
+    /// has neither.
+    pub fn mint_result_identities_at(&mut self, function: Term, at: &AtInstance) {
+        let TyKind::Fn { params, ret, .. } = self.types.kind(self.shallow(function)).clone() else {
+            return;
+        };
+        let given = self.reached(params.iter().copied(), []).identities;
+        let result = self.reached([ret], []).identities;
+        for var in result.difference(&given) {
+            let Some(copy) = at.identities.get(var).copied() else {
+                continue;
+            };
+            let made = self.make_identity(self.level);
+            self.identity_vars
+                .unify(&IdentityTerm::Var(copy), &IdentityTerm::Known(made))
+                .expect("an instance's copy of an identity variable is unbound");
+        }
+    }
+
+    /// Each identity `function`'s result holds that was made at `from` or
+    /// above, known: what a body made that leaves it as its result
+    /// (types §3).
+    pub fn result_identities_made_from(&self, function: Term, from: super::Level) -> Vec<IdentityId> {
+        let TyKind::Fn { ret, .. } = self.types.kind(self.shallow(function)) else {
+            return Vec::new();
+        };
+        let mut made = Vec::new();
+        let mut seen = FxHashSet::default();
+        let mut stack = vec![*ret];
+        while let Some(at) = stack.pop() {
+            if !seen.insert(at) {
+                continue;
+            }
+            let kind = self.types.kind(at);
+            match kind {
+                TyKind::Var(var) => {
+                    if let VarState::Bound(to) = &self.ty_vars[var.0 as usize] {
+                        stack.push(*to);
+                    }
+                }
+                TyKind::UserDefined { identity: Some(identity), .. } => {
+                    if let CellEnd::Known(identity) | CellEnd::Var { value: Some(identity), .. } = self.identity_vars.end(identity)
+                        && self.made_at(identity) >= from
+                        && !made.contains(&identity)
+                    {
+                        made.push(identity);
+                    }
+                }
+                _ => {}
+            }
+            kind.for_each_child(|child| stack.push(child));
+        }
+        made
+    }
+
+    /// `term` with each identity `abstracted` names its variable there,
+    /// bound variables followed; a node holding none of them is `term`
+    /// itself. What a scheme generalizes is then a variable (types §3).
+    pub fn abstract_identities(&mut self, term: Term, abstracted: &FxHashMap<IdentityId, IdentityVarId>, memo: &mut FxHashMap<Term, Term>) -> Term {
+        acvus_utils::grow(|| self.abstract_level(term, abstracted, memo))
+    }
+
+    fn abstract_level(&mut self, term: Term, abstracted: &FxHashMap<IdentityId, IdentityVarId>, memo: &mut FxHashMap<Term, Term>) -> Term {
+        if let Some(done) = memo.get(&term) {
+            return *done;
+        }
+        let kind = self.types.kind(term).clone();
+        let made = match kind {
+            TyKind::Var(var) => match &self.ty_vars[var.0 as usize] {
+                VarState::Bound(to) => {
+                    let to = *to;
+                    let made = self.abstract_identities(to, abstracted, memo);
+                    if made == to { term } else { made }
+                }
+                VarState::Unbound(_) => term,
+            },
+            kind => {
+                let mut parts = Vec::new();
+                kind.for_each_child(|part| parts.push(part));
+                let mut given = parts
+                    .into_iter()
+                    .map(|part| self.abstract_identities(part, abstracted, memo))
+                    .collect::<Vec<_>>()
+                    .into_iter();
+                let mut rebuilt = kind.with_children(&mut |_| given.next().expect("one part given for each part read"));
+                if let TyKind::UserDefined { identity: Some(identity), .. } = &mut rebuilt
+                    && let CellEnd::Known(known) | CellEnd::Var { value: Some(known), .. } = self.identity_vars.end(identity)
+                    && let Some(var) = abstracted.get(&known)
+                {
+                    *identity = IdentityTerm::Var(*var);
+                }
+                match rebuilt == kind {
+                    true => term,
+                    false => self.intern(rebuilt),
+                }
+            }
+        };
+        memo.insert(term, made);
+        made
     }
 
     /// `effect` at an instance: a generalized variable its copy.

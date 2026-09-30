@@ -8,7 +8,7 @@
 use rustc_hash::FxHashMap;
 
 use super::cells::{Cells, End as CellEnd, ValuesTerm, VarTerm};
-use super::{Bound, Infer, Term};
+use super::{Bound, Infer, Level, Term};
 use crate::ty::{
     CallsTerm, EffectTerm, EffectVarId, FlowTerm, FlowVarId, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
     LenTerm, LenVarId, MarkTerm, TyKind, TyVarId, Types, ValuesVarId,
@@ -50,7 +50,8 @@ pub struct Canonical<'c> {
 }
 
 /// The state of each variable a copy reached, by its number there: a type
-/// variable's bound and whether it is a reference's target (types §4);
+/// variable's bound, its level (types §3) and whether it is a reference's
+/// target (types §4); an identity variable's level;
 /// any other kind's value so far and whether `eq` fixed it; and the effect
 /// flows into or out of a reached effect variable (effects §1).
 #[derive(Debug, PartialEq)]
@@ -59,6 +60,8 @@ pub struct VarStates {
     effects: Vec<CellState<crate::ty::Effect>>,
     lengths: Vec<CellState<usize>>,
     identities: Vec<CellState<crate::ty::IdentityId>>,
+    /// Each identity variable's level, by its number (types §3).
+    identity_levels: Vec<Level>,
     marks: Vec<CellState<crate::ty::Mark>>,
     flows: Vec<CellState<crate::ty::Flows>>,
     holds: Vec<CellState<crate::ty::Holds>>,
@@ -70,6 +73,7 @@ pub struct VarStates {
 #[derive(Debug, PartialEq)]
 struct TyVarState {
     bound: Bound,
+    level: Level,
     reference_target: bool,
     unmarked: bool,
 }
@@ -143,6 +147,7 @@ impl<'c> Canonical<'c> {
                 effects: Vec::new(),
                 lengths: Vec::new(),
                 identities: Vec::new(),
+                identity_levels: Vec::new(),
                 marks: Vec::new(),
                 flows: Vec::new(),
                 holds: Vec::new(),
@@ -221,6 +226,7 @@ impl<'c> Canonical<'c> {
         self.types.insert(var, number);
         self.states.types.push(TyVarState {
             bound: bound.clone(),
+            level: self.from.ty_levels[var.0 as usize],
             reference_target: self.from.reference_targets.contains(&var),
             unmarked: self.from.unmarked.contains(&var),
         });
@@ -261,6 +267,7 @@ impl<'c> Canonical<'c> {
             }
             at += 1;
         }
+        self.states.identity_levels = self.identities.order.iter().map(|var| self.from.identity_levels[var.0 as usize]).collect();
         self.states
     }
 }

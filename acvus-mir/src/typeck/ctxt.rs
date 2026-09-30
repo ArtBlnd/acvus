@@ -1,5 +1,5 @@
 use acvus_ast::{AstId, Span};
-use acvus_utils::Interner;
+use acvus_utils::{Interner, QualifiedRef};
 
 use super::decision::{Decision, Decisions, Pending};
 use super::interface::Interfaces;
@@ -7,7 +7,7 @@ use super::output::Output;
 use super::refusal;
 use super::scope::{Run, Scope};
 use crate::decl::Declarations;
-use crate::infer::{Bound, Closed, Infer, Term};
+use crate::infer::{Bound, Closed, Infer, Level, Term};
 use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Mutability, Poly, TyId, TyKind};
 
 /// The shared state of one checked body (S1): the declarations and the
@@ -34,6 +34,16 @@ impl<'d> Ctxt<'d> {
             decisions: Decisions::default(),
             out: Output::default(),
         }
+    }
+
+    /// `check` run as one instantiation of a body, a lambda's or a loop's
+    /// iteration, one level inside the body around it (types §3).
+    pub fn in_body<R>(&mut self, check: impl FnOnce(&mut Ctxt<'d>) -> R) -> R {
+        let around = self.infer.level();
+        self.infer.set_level(Level(around.0 + 1));
+        let checked = check(self);
+        self.infer.set_level(around);
+        checked
     }
 
     pub fn fresh(&mut self) -> Term {
@@ -120,7 +130,7 @@ impl<'d> Ctxt<'d> {
             among: IntTy::ALL.into(),
             literal: true,
         });
-        self.decisions.push(Decision::Settle { span, term });
+        self.decisions.push(Decision::Settle { span, term }, self.infer.level());
         term
     }
 
@@ -142,10 +152,12 @@ impl<'d> Ctxt<'d> {
         self.infer.fixed(&pending, term)
     }
 
-    /// A context's declared type at this body: every node `Opaque`
-    /// (types §1).
-    pub fn declared(&mut self, ty: TyId<Poly>) -> Term {
-        self.infer.instantiate_type(self.decls, ty)
+    /// `context`'s declared type at this body: every node `Opaque`
+    /// (types §1), and each identity it holds the one this check made
+    /// for it (context §3).
+    pub fn context_type(&mut self, context: QualifiedRef, ty: TyId<Poly>) -> Term {
+        let identities = self.out.context_identities.entry(context).or_default();
+        self.infer.instantiate_context(self.decls, ty, identities)
     }
 
     /// A `&` or `&mut` of a value of term `target`, decided once its head

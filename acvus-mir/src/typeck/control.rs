@@ -62,19 +62,27 @@ pub(super) fn check_match<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, scrutinee: &
     result
 }
 
+/// A `while`: its condition and its body are evaluated at each iteration,
+/// one instantiation of the loop's body (types §3).
 pub(super) fn check_while<S: Slot>(cx: &mut Ctxt<'_>, cond: &Expr<S>, body: &[Stmt<S>]) {
-    check_condition(cx, cond);
-    cx.scope.push_loop();
-    check_stmts(cx, body);
-    cx.scope.pop();
+    cx.in_body(|cx| {
+        check_condition(cx, cond);
+        cx.scope.push_loop();
+        check_stmts(cx, body);
+        cx.scope.pop();
+    });
 }
 
+/// A `while let`: its source, its pattern and its body are evaluated at
+/// each iteration, one instantiation of the loop's body (types §3).
 pub(super) fn check_while_let<S: Slot>(cx: &mut Ctxt<'_>, pattern: &Pattern<S>, source: &Expr<S>, body: &[Stmt<S>]) {
-    let scrutinee = check_expr(cx, source, Demand::Read);
-    cx.scope.push_loop();
-    check_pattern(cx, pattern, scrutinee);
-    check_stmts(cx, body);
-    cx.scope.pop();
+    cx.in_body(|cx| {
+        let scrutinee = check_expr(cx, source, Demand::Read);
+        cx.scope.push_loop();
+        check_pattern(cx, pattern, scrutinee);
+        check_stmts(cx, body);
+        cx.scope.pop();
+    });
 }
 
 /// A `for`: an `Iterate` decision on its head's type (control-flow); by
@@ -117,17 +125,21 @@ pub(super) fn check_for<S: Slot>(
         }
     };
     cx.record(binder.id, item);
-    cx.scope.push_loop();
-    cx.scope.define(
-        binder.name,
-        Binding {
-            binder: binder.id,
-            term: item,
-            scheme: None,
-        },
-    );
-    check_stmts(cx, body);
-    cx.scope.pop();
+    // The head is evaluated once; each iteration of the body is one
+    // instantiation of it (types §3).
+    cx.in_body(|cx| {
+        cx.scope.push_loop();
+        cx.scope.define(
+            binder.name,
+            Binding {
+                binder: binder.id,
+                term: item,
+                scheme: None,
+            },
+        );
+        check_stmts(cx, body);
+        cx.scope.pop();
+    });
 }
 
 /// `?`: a `Try` decision on its operand's type (control-flow); what it
@@ -142,7 +154,7 @@ pub(super) fn check_try<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, inner: &Expr<S>
         operand,
         value,
         exit,
-    });
+    }, cx.infer.level());
     if let Some(result) = leaves_to(cx, span) {
         cx.enter(site, exit, result, crate::ty::Reach::Named, span);
     }

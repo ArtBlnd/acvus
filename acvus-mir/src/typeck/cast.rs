@@ -18,6 +18,6 @@ pub(super) fn check_cast<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, expr: &Expr<S>
         refusal::push(cx, RefusalKind::UnknownCastTarget { name: target }, target_span);
         return cx.fresh();
     };
-    cx.decisions.push(Decision::Cast { site, span, source, to });
+    cx.decisions.push(Decision::Cast { site, span, source, to }, cx.infer.level());
     cx.node(to.into())
 }

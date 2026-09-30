@@ -14,7 +14,7 @@
 //! Deterministic: the same type prints the same text. An object's fields and
 //! an enum's variants print in the order the type holds them.
 
-use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
+use acvus_utils::{Interner, QualifiedRef};
 
 use crate::ir::{known_effect, known_len};
 use crate::ty::{
@@ -140,7 +140,7 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             let mut carried: Vec<String> = Vec::new();
             if let Some(identity) = identity {
                 let identity = match identity {
-                    IdentityTerm::Known(identity) => identity.to_raw(),
+                    IdentityTerm::Known(identity) => identity.index(),
                     IdentityTerm::Var(var) => match *var {},
                 };
                 carried.push(format!("id0={identity}"));

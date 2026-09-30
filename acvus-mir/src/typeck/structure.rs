@@ -420,7 +420,7 @@ fn reach_part(cx: &mut Ctxt<'_>, reach: PartReach<'_>) {
     // part, as `default`'s, the result is where its type is read.
     let result = ret;
     let required = RequiredAt { generic_function: function, pattern, fact: law };
-    cx.decisions.push(Decision::Reach { site: node, span, callee: Callee::Part(required), args, result, effect: effect.clone() });
+    cx.decisions.push(Decision::Reach { site: node, span, callee: Callee::Part(required), args, result, effect: effect.clone() }, cx.infer.level());
 }
 
 /// `function`'s signature at fresh variables, its lift's type variable made

@@ -2,7 +2,7 @@
 //! written out from the module doc's rules.
 
 use acvus_ast::{Literal, Span};
-use acvus_utils::{Astr, Interner, LocalIdOps, QualifiedRef};
+use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{Annotate, Names, View, body, module};
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
@@ -444,10 +444,11 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
     let plain_vec = vec(&mut types, None, None, Mark::Unmarked);
     let opaque_vec = vec(&mut types, Some(EffectTerm::Known(Effect::opaque())), None, Mark::Marked);
     let pure_vec = vec(&mut types, Some(EffectTerm::Known(Effect::pure())), None, Mark::Marked);
+    let identity = IdentityId::alloc();
     let marked_vec = vec(
         &mut types,
         Some(EffectTerm::Known(pure_reading(c))),
-        Some(IdentityTerm::Known(IdentityId::from_raw(3))),
+        Some(IdentityTerm::Known(identity)),
         Mark::Marked,
     );
 
@@ -462,7 +463,7 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
     assert_eq!(shown(plain_vec), "Vec<i64>");
     assert_eq!(shown(opaque_vec), "#Vec<i64> with opaque");
     assert_eq!(shown(pure_vec), "#Vec<i64> with pure");
-    assert_eq!(shown(marked_vec), "#Vec<i64> with (pure, reads=[@c]) [id0=3]");
+    assert_eq!(shown(marked_vec), format!("#Vec<i64> with (pure, reads=[@c]) [id0={}]", identity.index()));
 }
 
 fn pure_reading(context: QualifiedRef) -> Effect {

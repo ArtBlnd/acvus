@@ -251,7 +251,7 @@ pub(super) fn reach_call(cx: &mut Ctxt<'_>, site: AstId, callee: Callee, args: V
         args: args.into(),
         result,
         effect,
-    });
+    }, cx.infer.level());
     result
 }
 
@@ -276,7 +276,7 @@ pub(super) fn reach_in(
         args: args.into(),
         result,
         effect,
-    });
+    }, cx.infer.level());
     result
 }
 

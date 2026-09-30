@@ -200,7 +200,7 @@ pub(super) fn check_literal(cx: &mut Ctxt<'_>, literal: &Literal, span: Span) ->
                 among,
                 literal: true,
             });
-            cx.decisions.push(Decision::Settle { span, term });
+            cx.decisions.push(Decision::Settle { span, term }, cx.infer.level());
             term
         }
         Literal::IntOf(suffixed) => cx.node(TyKind::Int(suffixed.width.into())),

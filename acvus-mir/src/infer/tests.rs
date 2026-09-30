@@ -1,4 +1,4 @@
-use acvus_utils::{Astr, Interner, LocalIdOps, QualifiedRef};
+use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::*;
 use crate::decl::{
@@ -1332,13 +1332,13 @@ fn identities(names: &Interner, to_string: bool) -> Declarations {
 }
 
 impl Fixture {
-    fn token(&mut self, identity: usize) -> Term {
+    fn token(&mut self, identity: IdentityId) -> Term {
         let token = QualifiedRef::root(self.name("Token"));
         self.kind(TyKind::UserDefined {
             id: token,
             type_args: Box::new([]),
             effect: None,
-            identity: Some(IdentityTerm::Known(IdentityId::from_raw(identity))),
+            identity: Some(IdentityTerm::Known(identity)),
             marked: MarkTerm::Known(Mark::Unmarked),
         })
     }
@@ -1349,7 +1349,8 @@ impl Fixture {
 fn values_of_one_identity_keep_it() {
     let mut fx = Fixture::new();
     let decls = identities(&fx.names, true);
-    let token = fx.token(0);
+    let identity = fx.infer.make_identity(Level(0));
+    let token = fx.token(identity);
     let (value, slot) = (fx.held(token), fx.held(token));
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
     assert_eq!(fx.infer.shallow(slot), token);
@@ -1361,7 +1362,8 @@ fn values_of_one_identity_keep_it() {
 fn two_identities_meet_past_every_identity_carrying_ancestor() {
     let mut fx = Fixture::new();
     let decls = identities(&fx.names, true);
-    let (first, second) = (fx.token(0), fx.token(1));
+    let (one, other) = (fx.infer.make_identity(Level(0)), fx.infer.make_identity(Level(0)));
+    let (first, second) = (fx.token(one), fx.token(other));
     let (value, slot) = (fx.held(second), fx.held(first));
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
     assert_eq!(fx.infer.types().kind(fx.infer.shallow(slot)), &TyKind::String);
@@ -1374,7 +1376,8 @@ fn two_identities_meet_past_every_identity_carrying_ancestor() {
 fn two_identities_with_no_identity_free_ancestor_do_not_meet() {
     let mut fx = Fixture::new();
     let decls = identities(&fx.names, false);
-    let (first, second) = (fx.token(0), fx.token(1));
+    let (one, other) = (fx.infer.make_identity(Level(0)), fx.infer.make_identity(Level(0)));
+    let (first, second) = (fx.token(one), fx.token(other));
     let (value, slot) = (fx.held(second), fx.held(first));
     assert_eq!(
         fx.enter(&decls, value, slot),

@@ -4,7 +4,7 @@ use rustc_hash::FxHashSet;
 use super::TyVarBound;
 use super::declared::{Access, Action, NamedFact, Relation, Source};
 use super::labels::LabelledSignature;
-use crate::ty::{EffectTerm, Poly, TyId, TyKind, Types};
+use crate::ty::{EffectTerm, IdentityTerm, Poly, TyId, TyKind, Types};
 
 /// An extern fn's declaration (extern-fn): its signature, a function type
 /// whose effect carries its split (effects §6), the bound of each type
@@ -139,6 +139,25 @@ pub(crate) fn effect_variables(types: &Types<Poly>, tys: impl IntoIterator<Item 
             _ => None,
         };
         if let Some(EffectTerm::Var(var)) = effect {
+            variables.insert(*var);
+        }
+        kind.for_each_child(|child| stack.push(child));
+    }
+    variables
+}
+
+/// Every identity variable `tys` mention: an extern-defined type's, at any
+/// depth.
+pub(crate) fn identity_variables(types: &Types<Poly>, tys: impl IntoIterator<Item = TyId<Poly>>) -> FxHashSet<u32> {
+    let mut variables = FxHashSet::default();
+    let mut seen = FxHashSet::default();
+    let mut stack: Vec<TyId<Poly>> = tys.into_iter().collect();
+    while let Some(at) = stack.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        let kind = types.kind(at);
+        if let TyKind::UserDefined { identity: Some(IdentityTerm::Var(var)), .. } = kind {
             variables.insert(*var);
         }
         kind.for_each_child(|child| stack.push(child));

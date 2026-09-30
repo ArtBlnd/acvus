@@ -64,7 +64,7 @@ pub(super) fn note_access(cx: &mut Ctxt<'_>, context: QualifiedRef, access: Acce
 /// grows and equals only itself (context §2, types §1).
 pub(super) fn context_term(cx: &mut Ctxt<'_>, _site: AstId, context: QualifiedRef, span: Span) -> Option<Term> {
     match cx.decls.context(context) {
-        Some(ty) => Some(cx.declared(ty)),
+        Some(ty) => Some(cx.context_type(context, ty)),
         None => {
             refusal::push(cx, RefusalKind::UnknownContext { context }, span);
             None

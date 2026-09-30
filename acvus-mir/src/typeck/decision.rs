@@ -30,7 +30,7 @@ use super::reach::{self, Candidate, Match, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
 use crate::decl::{Base, Head, ImplSig, Scheme};
-use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, PairAt, RequiredAt, Term};
+use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, Level, OpenSources, PairAt, RequiredAt, Term};
 use crate::ty::structural::structure;
 use crate::ty::{
     CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mark, MarkTerm, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, Types,
@@ -404,6 +404,14 @@ impl Callee {
     }
 }
 
+/// Where a pending decision was made: its owner (S7) and its level
+/// (types §3), which it fires in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Made {
+    pub owner: Option<AstId>,
+    pub level: Level,
+}
+
 /// The pending decisions, and what they may still change.
 #[derive(Default)]
 pub(super) struct Decisions {
@@ -411,6 +419,10 @@ pub(super) struct Decisions {
     /// Each pending decision's owner, by position in `pending`: the
     /// innermost lambda it was made in, `None` for the run (S7).
     owners: Vec<Option<AstId>>,
+    /// Each pending decision's level, by position in `pending`: the body
+    /// instantiation it was made in, where what it makes is made when it
+    /// fires (types §3).
+    levels: Vec<Level>,
     /// The owner a decision pushed now takes: the lambda whose body is
     /// being walked, or the owner of the decision being fired.
     pub owner: Option<AstId>,
@@ -422,32 +434,36 @@ pub(super) struct Decisions {
 impl Decisions {
     /// `decision` pending, owned by `self.owner`; made while a requirement
     /// fires at an instance, it is that instance's too (S7, G).
-    pub fn push(&mut self, decision: Decision) {
+    pub fn push(&mut self, decision: Decision, level: Level) {
         let decision = match self.within {
             Some(instance) if !matches!(decision, Decision::In { .. }) => Decision::In { instance, decision: Box::new(decision) },
             _ => decision,
         };
         self.pending.push(decision);
         self.owners.push(self.owner);
+        self.levels.push(level);
     }
 
-    fn remove(&mut self, at: usize) -> (Decision, Option<AstId>) {
-        (self.pending.remove(at), self.owners.remove(at))
+    fn remove(&mut self, at: usize) -> (Decision, Made) {
+        let made = Made { owner: self.owners.remove(at), level: self.levels.remove(at) };
+        (self.pending.remove(at), made)
     }
 
-    fn insert(&mut self, at: usize, decision: Decision, owner: Option<AstId>) {
+    fn insert(&mut self, at: usize, decision: Decision, made: Made) {
         self.pending.insert(at, decision);
-        self.owners.insert(at, owner);
+        self.owners.insert(at, made.owner);
+        self.levels.insert(at, made.level);
     }
 
     fn take_all(&mut self) -> Vec<Decision> {
         self.owners.clear();
+        self.levels.clear();
         std::mem::take(&mut self.pending)
     }
 
-    /// Every pending decision owned by one of `owned`, taken out with its
-    /// owner, in order.
-    pub(super) fn take_owned(&mut self, owned: &dyn Fn(Option<AstId>) -> bool) -> Vec<(Decision, Option<AstId>)> {
+    /// Every pending decision owned by one of `owned`, taken out with where
+    /// it was made, in order.
+    pub(super) fn take_owned(&mut self, owned: &dyn Fn(Option<AstId>) -> bool) -> Vec<(Decision, Made)> {
         let mut taken = Vec::new();
         let mut at = 0;
         while at < self.pending.len() {
@@ -459,10 +475,11 @@ impl Decisions {
         taken
     }
 
-    /// `decision`, owned by `owner`, pending again.
-    pub(super) fn restore(&mut self, decision: Decision, owner: Option<AstId>) {
+    /// `decision`, made where `made` says, pending again.
+    pub(super) fn restore(&mut self, decision: Decision, made: Made) {
         self.pending.push(decision);
-        self.owners.push(owner);
+        self.owners.push(made.owner);
+        self.levels.push(made.level);
     }
 
     /// Each pending decision with its owner.
@@ -609,7 +626,7 @@ pub(super) fn decide(cx: &mut Ctxt<'_>, decision: Decision) {
     if let Decision::Enter { slot, .. } = &decision
         && matches!(cx.infer.types().kind(cx.infer.shallow(*slot)), TyKind::Var(_))
     {
-        cx.decisions.push(decision);
+        cx.decisions.push(decision, cx.infer.level());
         return;
     }
     let top = read_head(&decision).is_some_and(|term| {
@@ -622,10 +639,10 @@ pub(super) fn decide(cx: &mut Ctxt<'_>, decision: Decision) {
         // there (`meeting_waits`), though its own head is closed.
         true => {
             if let Err(waiting) = fire(cx, decision, Reading::Closed) {
-                cx.decisions.push(waiting);
+                cx.decisions.push(waiting, cx.infer.level());
             }
         }
-        false => cx.decisions.push(decision),
+        false => cx.decisions.push(decision, cx.infer.level()),
     }
 }
 
@@ -634,11 +651,11 @@ fn fire_round(cx: &mut Ctxt<'_>, reading: Reading) -> bool {
     let mut fired = false;
     let mut at = 0;
     while at < cx.decisions.pending.len() {
-        let (decision, owner) = cx.decisions.remove(at);
-        match fire_owned(cx, decision, owner, reading) {
+        let (decision, made) = cx.decisions.remove(at);
+        match fire_owned(cx, decision, made, reading) {
             Ok(()) => fired = true,
             Err(waiting) => {
-                cx.decisions.insert(at, waiting, owner);
+                cx.decisions.insert(at, waiting, made);
                 at += 1;
             }
         }
@@ -647,9 +664,17 @@ fn fire_round(cx: &mut Ctxt<'_>, reading: Reading) -> bool {
 }
 
 /// Fires `decision` as `owner`'s: what it pushes is `owner`'s too (S7).
-pub(super) fn fire_owned(cx: &mut Ctxt<'_>, decision: Decision, owner: Option<AstId>, reading: Reading) -> Result<(), Decision> {
-    let enclosing = std::mem::replace(&mut cx.decisions.owner, owner);
-    let fired = fire(cx, decision, reading);
+pub(super) fn fire_owned(cx: &mut Ctxt<'_>, decision: Decision, made: Made, reading: Reading) -> Result<(), Decision> {
+    as_made(cx, made, |cx| fire(cx, decision, reading))
+}
+
+/// `fire` run where a decision was `made`: what it pushes is its owner's,
+/// and what it makes is of its level (S7, types §3).
+fn as_made<R>(cx: &mut Ctxt<'_>, made: Made, fire: impl FnOnce(&mut Ctxt<'_>) -> R) -> R {
+    let enclosing = std::mem::replace(&mut cx.decisions.owner, made.owner);
+    let level = cx.infer.set_level(made.level);
+    let fired = fire(cx);
+    cx.infer.set_level(level);
     cx.decisions.owner = enclosing;
     fired
 }
@@ -664,11 +689,11 @@ pub(super) fn fire_owned_round(cx: &mut Ctxt<'_>, owned: &dyn Fn(&Decision, Opti
             at += 1;
             continue;
         }
-        let (decision, owner) = cx.decisions.remove(at);
-        match fire_owned(cx, decision, owner, reading) {
+        let (decision, made) = cx.decisions.remove(at);
+        match fire_owned(cx, decision, made, reading) {
             Ok(()) => fired = true,
             Err(waiting) => {
-                cx.decisions.insert(at, waiting, owner);
+                cx.decisions.insert(at, waiting, made);
                 at += 1;
             }
         }
@@ -1753,7 +1778,7 @@ pub(super) fn push_required(cx: &mut Ctxt<'_>, site: AstId, span: Span, required
         args,
         result,
         effect: serves.clone(),
-    });
+    }, cx.infer.level());
 }
 
 /// `offer`'s type at fresh variables with the generic function's bounds,
@@ -1786,7 +1811,7 @@ pub(super) fn instantiate_scheme(cx: &mut Ctxt<'_>, scheme: &Scheme, span: Span)
     }
     if let Some(pair) = &instantiated.pair {
         let PairAt { mark, positions, specialized } = pair.clone();
-        cx.decisions.push(Decision::StartMark { span, positions: positions.into(), mark, specialized });
+        cx.decisions.push(Decision::StartMark { span, positions: positions.into(), mark, specialized }, cx.infer.level());
     }
     instantiated
 }
@@ -1849,7 +1874,7 @@ pub(super) fn settle_bounded(cx: &mut Ctxt<'_>, ty: Term, span: Span) {
     for var in unbound_vars(cx, [ty]) {
         if bounded.contains(&var) {
             let term = cx.node(TyKind::Var(var));
-            cx.decisions.push(Decision::Settle { span, term });
+            cx.decisions.push(Decision::Settle { span, term }, cx.infer.level());
         }
     }
 }
@@ -1903,13 +1928,11 @@ fn uses_decide_owned(cx: &mut Ctxt<'_>, owned: &dyn Fn(&Decision, Option<AstId>)
             at += 1;
             continue;
         }
-        let (decision, owner) = cx.decisions.remove(at);
-        let enclosing = std::mem::replace(&mut cx.decisions.owner, owner);
-        match decision {
+        let (decision, made) = cx.decisions.remove(at);
+        as_made(cx, made, |cx| match decision {
             Decision::In { instance, decision } => super::generalize::in_instance(cx, instance, |cx| decide_by_use(cx, *decision)),
             decision => decide_by_use(cx, decision),
-        }
-        cx.decisions.owner = enclosing;
+        });
         decided = true;
     }
     decided

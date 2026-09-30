@@ -59,7 +59,7 @@ pub(super) fn check_method_call<S: Slot>(
         body,
         place,
     };
-    cx.decisions.push(Decision::Adjust(Box::new(adjust)));
+    cx.decisions.push(Decision::Adjust(Box::new(adjust)), cx.infer.level());
     result
 }
 
