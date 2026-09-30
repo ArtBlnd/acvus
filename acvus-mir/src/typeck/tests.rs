@@ -54,7 +54,12 @@ impl Checked {
 
 impl Fixture {
     fn new() -> Self {
-        let names = Interner::new();
+        Self::with_names(Interner::new())
+    }
+
+    /// A fixture interning into `names`, which another fixture may share,
+    /// so that the names of the two are one.
+    fn with_names(names: Interner) -> Self {
         let core = Core::of(&names);
         Self {
             names,
@@ -333,6 +338,21 @@ impl Fixture {
         let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &self.inputs);
         let typeck = check_script(&self.names, &decls, &interfaces, Inputs::Fixed(&inputs), &mut types, &script);
         (Checked { typeck, types }, script, names)
+    }
+
+    /// Each of `sources` checked alone with its inputs open against one
+    /// verification of the declarations, and its interface.
+    fn interfaces(self, sources: &[&str]) -> Vec<super::Interface> {
+        let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
+        sources
+            .iter()
+            .map(|source| {
+                let script = acvus_ast::parse_script(&self.names, source).expect("the unit's source parses");
+                let checked = check_script(&self.names, &decls, &Interfaces::new(), Inputs::Open, &mut Types::new(), &script);
+                assert!(checked.refusals.is_empty(), "{source} is refused: {:?}", checked.refusals);
+                checked.interface.expect("an open check gives its interface")
+            })
+            .collect()
     }
 
     fn template(self, source: &str) -> (Checked, Template) {
@@ -3752,7 +3772,11 @@ fn a_name_reaching_several_extern_fns_taken_as_a_value_is_refused_by_its_written
 /// `each(f: fn(i64) -> i64) -> i64`, whose closure may hold a `&mut`; and
 /// `apply(f: fn(i64) -> X<I>) -> X<I>`. The fixture, and `Y`'s name.
 fn identity_fixture(ancestor: bool) -> (Fixture, QualifiedRef) {
-    let mut fx = Fixture::new();
+    identity_fixture_in(Fixture::new(), ancestor)
+}
+
+/// The identity fixture declared into `fx`.
+fn identity_fixture_in(mut fx: Fixture, ancestor: bool) -> (Fixture, QualifiedRef) {
     let (x, y) = (QualifiedRef::root(fx.name("X")), QualifiedRef::root(fx.name("Y")));
     for (id, carries_identity) in [(x, true), (y, false)] {
         fx.raw.user_types.push(UserTypeDecl { id, type_params: Box::new([]), carries_effect: false, carries_identity, lifetimes: 0 });
@@ -3975,4 +3999,43 @@ fn a_contexts_identity_is_one_across_units() {
     let units = [(&["lib"][..], "g", "@p"), (&["lib"][..], "h", "@p")];
     let (checked, _, _) = with_context().script_with_units(&units, "join(lib::g(), lib::h())");
     checked.admitted();
+}
+
+/// graph, early cutoff: an interface is the same as another but for the
+/// identities its check's bodies made. Each check allocates those anew, so
+/// the canonical form numbers them by the order it first reaches them; an
+/// identity made outside every body, a context's, is the same storage in
+/// every check under one verification of the declarations, and keeps its
+/// id. `$x` is of the identity `make` gave in the body, and the result
+/// holds none, so the interface holds it known.
+#[test]
+fn an_interface_is_the_same_but_for_the_identities_its_bodies_made() {
+    let names = Interner::new();
+    let with_context = || {
+        let (mut fx, _) = identity_fixture_in(Fixture::with_names(names.clone()), false);
+        let x = QualifiedRef::root(fx.name("X"));
+        let x_i = fx.ty(TyKind::UserDefined {
+            id: x,
+            type_args: Box::new([]),
+            effect: None,
+            identity: Some(IdentityTerm::Var(0)),
+            marked: MarkTerm::Known(Mark::Unmarked),
+        });
+        fx.context("p", x_i);
+        fx
+    };
+    let body_made = "let a = join(make(), $x); 1";
+    let [one, other] = &with_context().interfaces(&[body_made, body_made])[..] else {
+        panic!("two interfaces");
+    };
+    assert!(one.same(other), "one source checked twice is the same");
+
+    let [one, other] = &with_context().interfaces(&["@p", "@p"])[..] else {
+        panic!("two interfaces");
+    };
+    assert!(one.same(other), "a context's identity is one under one verification");
+    let [elsewhere] = &with_context().interfaces(&["@p"])[..] else {
+        panic!("one interface");
+    };
+    assert!(!one.same(elsewhere), "two verifications make two identities of the context");
 }

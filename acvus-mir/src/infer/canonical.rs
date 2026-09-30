@@ -1,16 +1,19 @@
 //! A store's terms copied into a table another store's copies share: each
 //! bound variable followed to its value, and each variable of every kind
 //! renumbered by the order the copy first reaches it, with its state beside
-//! it. Two sets of terms are one but for the names of their variables where
-//! each side, copied in the same order, gives the same terms and the same
-//! states (typeck::Interface::same).
+//! it. An identity a check's bodies made is renumbered as a variable is,
+//! since each check allocates it anew; one made outside every body is the
+//! same storage in every check, and is copied as it is. Two sets of terms
+//! are one but for the names of their variables and of the identities their
+//! bodies made where each side, copied in the same order, gives the same
+//! terms and the same states (typeck::Interface::same).
 
 use rustc_hash::FxHashMap;
 
 use super::cells::{Cells, End as CellEnd, ValuesTerm, VarTerm};
 use super::{Bound, Infer, Level, Term};
 use crate::ty::{
-    CallsTerm, EffectTerm, EffectVarId, FlowTerm, FlowVarId, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
+    CallsTerm, EffectTerm, EffectVarId, FlowTerm, FlowVarId, HoldsTerm, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase,
     LenTerm, LenVarId, MarkTerm, TyKind, TyVarId, Types, ValuesVarId,
 };
 
@@ -18,11 +21,21 @@ use crate::ty::{
 /// equal exactly where their shapes are.
 pub struct CanonicalTable {
     types: Types<InferPhase>,
+    /// The identity each side copies the one its bodies made that it
+    /// reaches n-th to, by n: made here, so it is none a check made.
+    made: Vec<IdentityId>,
 }
 
 impl CanonicalTable {
     pub fn new() -> CanonicalTable {
-        CanonicalTable { types: Types::new() }
+        CanonicalTable { types: Types::new(), made: Vec::new() }
+    }
+
+    fn made(&mut self, number: usize) -> IdentityId {
+        if number == self.made.len() {
+            self.made.push(IdentityId::alloc());
+        }
+        self.made[number]
     }
 }
 
@@ -35,8 +48,11 @@ impl Default for CanonicalTable {
 /// One store's terms being copied into a `CanonicalTable`.
 pub struct Canonical<'c> {
     from: &'c Infer,
-    into: &'c mut Types<InferPhase>,
+    into: &'c mut CanonicalTable,
     memo: FxHashMap<Term, Term>,
+    /// Each identity the bodies made reached so far, by the order it was
+    /// first reached.
+    made: FxHashMap<IdentityId, usize>,
     types: FxHashMap<TyVarId, TyVarId>,
     effects: Renumbered<EffectTerm<InferPhase>>,
     lengths: Renumbered<LenTerm<InferPhase>>,
@@ -131,8 +147,9 @@ impl<'c> Canonical<'c> {
     pub fn new(from: &'c Infer, table: &'c mut CanonicalTable) -> Canonical<'c> {
         Canonical {
             from,
-            into: &mut table.types,
+            into: table,
             memo: FxHashMap::default(),
+            made: FxHashMap::default(),
             types: FxHashMap::default(),
             effects: Renumbered::new(),
             lengths: Renumbered::new(),
@@ -177,7 +194,7 @@ impl<'c> Canonical<'c> {
                 self.slots(children)
             }
         };
-        let copied = self.into.intern(kind);
+        let copied = self.into.types.intern(kind);
         self.memo.insert(term, copied);
         copied
     }
@@ -202,9 +219,7 @@ impl<'c> Canonical<'c> {
                 id,
                 type_args,
                 effect: effect.as_ref().map(|effect| self.effect(effect)),
-                identity: identity
-                    .as_ref()
-                    .map(|identity| self.identities.term(&from.identity_vars, identity, &mut self.states.identities)),
+                identity: identity.as_ref().map(|identity| self.identity(identity)),
                 marked: self.marks.term(&from.mark_vars, &marked, &mut self.states.marks),
             },
             other => other,
@@ -241,8 +256,33 @@ impl<'c> Canonical<'c> {
         cell_var(&mut self.lengths, &self.from.len_vars, var, &mut self.states.lengths)
     }
 
+    fn identity(&mut self, identity: &IdentityTerm<InferPhase>) -> IdentityTerm<InferPhase> {
+        match identity {
+            IdentityTerm::Known(identity) => IdentityTerm::Known(self.made_identity(*identity)),
+            IdentityTerm::Var(var) => IdentityTerm::Var(self.identity_var(*var)),
+        }
+    }
+
+    /// An identity variable's chain's end renumbered, the identity it holds
+    /// copied as a known one is.
     pub fn identity_var(&mut self, var: IdentityVarId) -> IdentityVarId {
-        cell_var(&mut self.identities, &self.from.identity_vars, var, &mut self.states.identities)
+        let CellEnd::Var { var, value } = self.from.identity_vars.end(&IdentityTerm::Var(var)) else {
+            panic!("Canonical: a variable's chain ends at a variable")
+        };
+        let value = value.map(|identity| self.made_identity(identity));
+        self.identities.var(&self.from.identity_vars, var, value, &mut self.states.identities)
+    }
+
+    /// `identity` copied: one the bodies made (types §3) numbered by the
+    /// order the copy first reaches it, one made outside every body as it
+    /// is.
+    fn made_identity(&mut self, identity: IdentityId) -> IdentityId {
+        if self.from.made_at(identity) < Level::UNIT {
+            return identity;
+        }
+        let next = self.made.len();
+        let number = *self.made.entry(identity).or_insert(next);
+        self.into.made(number)
     }
 
     pub fn flow_var(&mut self, var: FlowVarId) -> FlowVarId {

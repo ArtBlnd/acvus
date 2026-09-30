@@ -105,8 +105,7 @@ pub(crate) struct Exported {
 /// A unit's scheme, settled in `cx`, moved into a store of its own with the
 /// schemes and instances its requirements name (typeck::Interface).
 pub(super) fn export(cx: &Ctxt<'_>, scheme: SchemeId) -> (crate::infer::Infer, Exported) {
-    let mut store = crate::infer::Infer::new();
-    let imported = store.import(&cx.infer);
+    let (store, imported) = crate::infer::Infer::copied_out(&cx.infer);
     let mut moving = Moving { terms: &imported, schemes: 0, instances: 0 };
     let exported = Exported {
         scheme: moving.scheme(&cx.out.schemes[scheme.0 as usize]),

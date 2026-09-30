@@ -32,6 +32,18 @@ pub struct Imported {
 }
 
 impl Infer {
+    /// A store of `from`'s terms alone, for a unit's interface
+    /// (typeck::Interface). It is no check, so each identity keeps the
+    /// level `from` made it at: what `from`'s bodies made stays told from
+    /// what came from outside them (types §3), which a canonical form
+    /// needs. A check importing this store takes every one as its outside.
+    pub fn copied_out(from: &Infer) -> (Infer, Imported) {
+        let mut store = Infer::new();
+        let imported = store.import(from);
+        store.made_at.clone_from(&from.made_at);
+        (store, imported)
+    }
+
     /// Every term of `from` brought into this store (the module doc).
     pub fn import(&mut self, from: &Infer) -> Imported {
         let types = u32::try_from(self.ty_vars.len()).expect("Infer::import: u32::MAX type variables");

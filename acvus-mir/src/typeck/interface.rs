@@ -20,7 +20,8 @@ use crate::infer::Infer;
 /// reaches, copied out of the unit's check when it is settled. A call
 /// instantiates it by the one instantiation a let-bound scheme has, copying
 /// from that store into the caller's. Two interfaces are equal when their
-/// schemes are, variables compared by the order they are first reached.
+/// schemes are, variables and the identities the unit's bodies made
+/// compared by the order they are first reached.
 pub struct Interface {
     /// The terms of the check the scheme was settled in.
     pub(crate) store: Infer,
@@ -32,10 +33,13 @@ pub struct Interface {
 }
 
 impl Interface {
-    /// Whether `other` is this interface but for the names of its variables
-    /// and the sites and spans its requirements carry: the same parameters,
-    /// function type and requirements, variables matched by the order they
-    /// are first reached. What a caller's check admits depends on nothing
+    /// Whether `other` is this interface but for the names of its variables,
+    /// the identities its check's bodies made, and the sites and spans its
+    /// requirements carry: the same parameters, function type and
+    /// requirements, variables and those identities matched by the order
+    /// they are first reached. Each check allocates the identities its
+    /// bodies make anew; one made outside every body is the same storage
+    /// in every check and is matched as it is (types §3). What a caller's check admits depends on nothing
     /// else; only a refusal reads a site (graph: early cutoff).
     pub fn same(&self, other: &Interface) -> bool {
         let mut table = crate::infer::CanonicalTable::new();
