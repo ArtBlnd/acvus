@@ -17,7 +17,7 @@ use crate::passes::domain::{
     Affine, AffineDomain, Bound, Combination, Constant, ConstantDomain, Interval, IntervalDomain, Limit, Symbol, ValueDomain,
     Widen, bounds_on,
 };
-use crate::ty::{CastTy, Concrete, TyKind, Types};
+use crate::ty::{CastTy, Concrete, Ty, TyKind, Types};
 
 /// Every value's constant, conditional on the arms a known condition takes
 /// (Wegman and Zadeck). Cost: the sparse engine's, with height 3.
@@ -101,7 +101,13 @@ impl OperandTypes<'_> {
     /// run computes lies in its type; extern fn §9: a parameter is a valid
     /// value of its type).
     pub(super) fn interval_top(&self, value: ValueId) -> Interval {
-        match self.of(value) {
+        self.interval_top_of(self.body.ty_of(value))
+    }
+
+    /// The interval of a value of type `ty` where nothing in the body
+    /// bounds it, as `interval_top`.
+    pub(super) fn interval_top_of(&self, ty: Ty) -> Interval {
+        match CastTy::of_kind(self.types.kind(ty)) {
             Some(CastTy::Int(width)) => Interval::of_width(width),
             _ => Interval::full(),
         }

@@ -18,16 +18,21 @@
 //!
 //! Which successors run (`executable`):
 //! - `Diamond`, `JumpIf`: by the condition's constant, as `ConstantValues`.
-//! - `Switch` on `Tag` keys: the set is the tag value's tags, `Any` read as
-//!   every variant of its type, a reference's target's where the tag value
-//!   is a reference. An arm runs where its key is in the set; `default`
-//!   where the set holds a tag no key names.
-//! - `Switch` on `Bool` keys: by the constant; `default` where a `bool` value
-//!   the constant allows has no key.
-//! - `Switch` on `Int` or `Char` keys: by the interval; `default` where the
-//!   interval holds a value no key names.
+//! - `Switch`: by the fact of the value it switches on, which is its tag
+//!   value, or that value's target where the tag value is a reference. The
+//!   analysis tracks no storage's contents, so a target's fact is the top
+//!   of its type, an integer's interval its type's range (undefined
+//!   behaviour §2).
+//!   - On `Tag` keys: the set is the value's tags, `Any` read as every
+//!     variant of its type. An arm runs where its key is in the set;
+//!     `default` where the set holds a tag no key names.
+//!   - On `Bool` keys: by the constant; `default` where a `bool` value the
+//!     constant allows has no key.
+//!   - On `Int` or `Char` keys: by the interval; `default` where the
+//!     interval holds a value no key names.
 //! - Every other terminator: all its successors.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use acvus_ast::Literal;
@@ -240,8 +245,21 @@ impl<'m> Matches<'m> {
         }
     }
 
+    /// The fact of the value a `Switch` on `tag` switches on: the tag
+    /// value's own, or, where it is a reference, the top of its target's
+    /// type.
+    fn switched<'f>(&self, tag: ValueId, fact: &'f MatchValue) -> Cow<'f, MatchValue> {
+        match self.kind(tag) {
+            TyKind::Ref(_, target) => {
+                Cow::Owned(MatchValue { interval: self.operand_types.interval_top_of(*target), ..self.domain.top() })
+            }
+            _ => Cow::Borrowed(fact),
+        }
+    }
+
     fn switch(&self, tag: ValueId, arms: &[(SwitchKey, BlockId, Vec<ValueId>)], default: Option<BlockId>, fact: &MatchValue) -> Executable {
         let keys: Vec<SwitchKey> = arms.iter().map(|(key, _, _)| *key).collect();
+        let fact = self.switched(tag, fact);
         let chosen = match keys.first() {
             Some(SwitchKey::Tag(_)) => self.tag_choice(tag, &keys, &fact.tags),
             Some(SwitchKey::Bool(_)) => bool_choice(&keys, &fact.constant),
