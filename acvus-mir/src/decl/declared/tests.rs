@@ -297,7 +297,7 @@ fn a_combine_whose_type_does_not_fit_the_update_is_refused() {
     let string = f.ty(TyKind::String);
     let mut_string = f.reference(Mutability::Mut, string);
     let mut_int = f.reference(Mutability::Mut, int);
-    let append = f.declare("append", &[mut_string, string], unit, DeclaredFacts::default());
+    let append = f.declare("append", &[mut_string, string], unit, combine(None, false, None));
     let g = f.declare("g", &[mut_int, int], unit, actions(vec![Action::Update(update(whole(0), append))]));
     assert_eq!(f.refusals(), vec![Refused::CombineDoesNotFit { declared: own(g), combine: append }]);
 }
@@ -339,7 +339,7 @@ fn an_inverse_needs_no_combine_of_its_own() {
     let unit = f.ty(TyKind::Unit);
     let stack = f.ty(TyKind::String);
     let mut_stack = f.reference(Mutability::Mut, stack);
-    let append = f.declare("append", &[mut_stack, stack], unit, DeclaredFacts::default());
+    let append = f.declare("append", &[mut_stack, stack], unit, combine(None, false, None));
     let push = f.declare("push", &[mut_stack, stack], unit, actions(vec![Action::Update(update(whole(0), append))]));
     f.declare("pop", &[mut_stack], stack, actions(vec![Action::InverseOf { place: whole(0), other: push }]));
     assert_eq!(f.refusals(), Vec::new());
@@ -353,7 +353,7 @@ fn an_inverse_through_a_shared_reference_is_refused() {
     let unit = f.ty(TyKind::Unit);
     let mut_int = f.reference(Mutability::Mut, int);
     let shared_int = f.reference(Mutability::Shared, int);
-    let add_into = f.declare("add_into", &[mut_int, int], unit, DeclaredFacts::default());
+    let add_into = f.declare("add_into", &[mut_int, int], unit, combine(None, false, None));
     let add = f.declare("add", &[mut_int, int], unit, actions(vec![Action::Update(update(whole(0), add_into))]));
     let g = f.declare("g", &[shared_int], unit, actions(vec![Action::InverseOf { place: whole(0), other: add }]));
     assert_eq!(f.refusals(), vec![Refused::PlaceNotLentMutably { declared: own(g), param: 0 }]);
@@ -642,4 +642,29 @@ fn a_combine_is_the_named_fact_an_impl_stating_one_resolves() {
     assert!(NamedFact::Combine.stated_by(&stated));
     assert!(!NamedFact::Combine.stated_by(&actions(vec![Action::TotalOrder])));
     assert!(!NamedFact::TotalOrder.stated_by(&stated));
+}
+
+/// extern-fn §3: an update of a place is the action of a combine, so the
+/// function it names is declared one, and its laws are read there.
+#[test]
+fn an_update_by_a_function_not_declared_a_combine_is_refused() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let unit = f.ty(TyKind::Unit);
+    let mut_int = f.reference(Mutability::Mut, int);
+    let add_into = f.declare("add_into", &[mut_int, int], unit, DeclaredFacts::default());
+    let g = f.declare("g", &[mut_int, int], unit, actions(vec![Action::Update(update(whole(0), add_into))]));
+    assert_eq!(f.refusals(), vec![Refused::UpdateByNoCombine { declared: own(g), combine: add_into }]);
+}
+
+/// A combine of either shape updates a place that holds its state.
+#[test]
+fn an_update_by_a_value_shaped_combine_verifies() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let unit = f.ty(TyKind::Unit);
+    let mut_int = f.reference(Mutability::Mut, int);
+    let max = f.declare("max", &[int, int], int, combine(None, true, None));
+    f.declare("raise", &[mut_int, int], unit, actions(vec![Action::Update(update(whole(0), max))]));
+    assert_eq!(f.refusals(), Vec::new());
 }

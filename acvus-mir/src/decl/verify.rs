@@ -144,9 +144,12 @@ pub enum Refused {
     /// A total order stated on a declaration not of type `fn(&T, &T) ->
     /// int`, whose sign compares its two arguments (extern-fn §3).
     TotalOrderDoesNotFit { declared: Declared },
-    /// A combine that is no declared `fn(&mut S, S)`, `S` the type the
-    /// updated place holds: an update is the action of a combine on the
-    /// place (extern-fn §3).
+    /// An update whose combine is no declaration stated a combine: an
+    /// update of a place is the action of a combine (extern-fn §3).
+    UpdateByNoCombine { declared: Declared, combine: QualifiedRef },
+    /// A combine that is no `fn(&mut S, S)` or `fn(S, S) -> S`, `S` the type
+    /// the updated place holds: an update is the action of a combine on
+    /// the place (extern-fn §3).
     CombineDoesNotFit { declared: Declared, combine: QualifiedRef },
     /// A combine stated on a declaration that is no associative operation
     /// on one type `S`, `fn(S, S) -> S` or `fn(&mut S, S)` (extern-fn §3).

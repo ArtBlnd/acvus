@@ -80,18 +80,23 @@ fn refuse_ill_formed_update(
     if !stated.place_well_formed(types, &update.place, true, refused) {
         return;
     }
-    let combine = functions.get(&update.combine).map(|combine| combine.ty);
-    let Some(combine) = combine.filter(|ty| combine_state(types, *ty).is_some()) else {
-        refused.push(Refused::CombineDoesNotFit { declared, combine: update.combine });
+    let Some(combine) = functions.get(&update.combine).filter(|scheme| states_combine(scheme)) else {
+        refused.push(Refused::UpdateByNoCombine { declared, combine: update.combine });
         return;
     };
     if let Some(held) = stated.held_at(types, &update.place) {
         let lent_mut = types.intern(TyKind::Ref(Mutability::Mut, held));
         let unit = types.intern(TyKind::Unit);
-        if !fits(types, combine, &[lent_mut, held], unit) {
+        let fitting = fits(types, combine.ty, &[lent_mut, held], unit) || fits(types, combine.ty, &[held, held], held);
+        if !fitting {
             refused.push(Refused::CombineDoesNotFit { declared, combine: update.combine });
         }
     }
+}
+
+/// Whether `scheme` or one of its impls is declared a combine.
+fn states_combine(scheme: &Scheme) -> bool {
+    super::stated_facts(scheme).any(|facts| facts.action.iter().any(|action| matches!(action, Action::Combine(_))))
 }
 
 /// A combine is an operation on one `S`, value shaped or update shaped,
@@ -153,19 +158,4 @@ fn refuse_ill_formed_inverse(
 fn operation_state(types: &Types<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> Option<TyId<Poly>> {
     let (state, operand) = super::step_state(types, params, ret)?;
     (state == operand).then_some(state)
-}
-
-/// `S` of a combine of type `fn(&mut S, S) -> ()`; `None` for a function of
-/// any other type.
-fn combine_state(types: &Types<Poly>, ty: TyId<Poly>) -> Option<TyId<Poly>> {
-    let TyKind::Fn { params, ret, .. } = types.kind(ty) else {
-        return None;
-    };
-    let [first, second] = params[..] else {
-        return None;
-    };
-    let TyKind::Ref(Mutability::Mut, lent) = types.kind(first) else {
-        return None;
-    };
-    (*lent == second && matches!(types.kind(*ret), TyKind::Unit)).then_some(second)
 }
