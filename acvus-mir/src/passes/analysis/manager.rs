@@ -65,18 +65,8 @@ pub struct AnalysisManager<'d> {
     decls: &'d Declarations,
     kept: FxHashMap<Key, Kept>,
     /// The results being computed, innermost last, each until its
-    /// `compute` returns.
-    computing: Vec<Computing>,
-}
-
-/// A result being computed and what it has read so far.
-struct Computing {
-    key: Key,
-    reads: &'static [Aspect],
-    dependencies: FxHashSet<Key>,
-    /// An aspect it reads changed, or a result it read was dropped or not
-    /// kept, while it was computed; so it is not kept when it ends.
-    read_stale: bool,
+    /// `compute` returns, with the results each has read so far.
+    computing: Vec<(Key, FxHashSet<Key>)>,
 }
 
 impl<'d> AnalysisManager<'d> {
@@ -103,9 +93,9 @@ impl<'d> AnalysisManager<'d> {
         let facts = match self.kept_facts(key) {
             Some(facts) => facts,
             None => {
-                self.begin(key, A::READS, || format!("{} for {body:?}", std::any::type_name::<A>()));
+                self.begin(key, || format!("{} for {body:?}", std::any::type_name::<A>()));
                 let facts: Rc<dyn Any> = Rc::new(A::compute(self, module, body));
-                self.end(key, Rc::clone(&facts));
+                self.end(key, Rc::clone(&facts), A::READS);
                 facts
             }
         };
@@ -126,9 +116,9 @@ impl<'d> AnalysisManager<'d> {
         let facts = match self.kept_facts(key) {
             Some(facts) => facts,
             None => {
-                self.begin(key, A::READS, || std::any::type_name::<A>().to_owned());
+                self.begin(key, || std::any::type_name::<A>().to_owned());
                 let facts: Rc<dyn Any> = Rc::new(A::compute(self, module));
-                self.end(key, Rc::clone(&facts));
+                self.end(key, Rc::clone(&facts), A::READS);
                 facts
             }
         };
@@ -138,35 +128,31 @@ impl<'d> AnalysisManager<'d> {
 
     /// Drops every kept analysis of `body`, and every kept module
     /// analysis, that reads an aspect `changes` touched, and every kept
-    /// result that read a dropped one, transitively; a result being
-    /// computed that meets either is not kept when it ends. Cost: O((kept
-    /// results + results being computed) · aspects) for the direct scan,
-    /// and O(dropped results + their edges) beyond it.
+    /// result that read a dropped one, transitively. Cost: O(kept results
+    /// · aspects) for the direct scan, and O(dropped results + their edges)
+    /// beyond it.
     pub fn invalidate(&mut self, body: BodyId, changes: &Changes) {
-        let stale_reads = |key: &Key, reads: &[Aspect]| {
-            let of_body = match key {
+        let stale: Vec<Key> = self
+            .kept
+            .iter()
+            .filter(|(key, _)| match key {
                 Key::Body(_, of) => *of == body,
                 Key::Module(_) => true,
-            };
-            of_body && reads.iter().any(|aspect| changes.touched(*aspect))
-        };
-        let kept = self.kept.iter().filter(|(key, kept)| stale_reads(key, kept.reads)).map(|(key, _)| *key);
-        let computing = self.computing.iter().filter(|computing| stale_reads(&computing.key, computing.reads)).map(|computing| computing.key);
-        let stale: Vec<Key> = kept.chain(computing).collect();
+            })
+            .filter(|(_, kept)| kept.reads.iter().any(|aspect| changes.touched(*aspect)))
+            .map(|(key, _)| *key)
+            .collect();
         self.drop_with_dependents(stale);
     }
 
     /// Drops every kept module analysis, since each ranges over the body
     /// set `changed` records a change of, and every kept result that read
-    /// a dropped one, transitively; a module analysis being computed is
-    /// not kept when it ends. Body analyses no dropped result reached are
-    /// kept. Cost: O(kept results + results being computed) for the scan,
-    /// and O(dropped results + their edges) beyond it.
+    /// a dropped one, transitively. Body analyses no dropped result reached
+    /// are kept. Cost: O(kept results) for the scan, and O(dropped results
+    /// + their edges) beyond it.
     pub fn invalidate_body_set(&mut self, changed: BodySetChanged) {
         let BodySetChanged { .. } = changed;
-        let kept = self.kept.keys().copied();
-        let computing = self.computing.iter().map(|computing| computing.key);
-        let stale: Vec<Key> = kept.chain(computing).filter(|key| matches!(key, Key::Module(_))).collect();
+        let stale: Vec<Key> = self.kept.keys().filter(|key| matches!(key, Key::Module(_))).copied().collect();
         self.drop_with_dependents(stale);
     }
 
@@ -176,46 +162,32 @@ impl<'d> AnalysisManager<'d> {
 
     /// # Panics
     /// `key` is being computed; `name` names it.
-    fn begin<N>(&mut self, key: Key, reads: &'static [Aspect], name: N)
+    fn begin<N>(&mut self, key: Key, name: N)
     where
         N: FnOnce() -> String,
     {
         assert!(
-            self.computing.iter().all(|computing| computing.key != key),
+            self.computing.iter().all(|(computing, _)| *computing != key),
             "{} was requested while it is being computed; an analysis that depends on itself is a compiler defect",
             name()
         );
-        self.computing.push(Computing { key, reads, dependencies: FxHashSet::default(), read_stale: false });
+        self.computing.push((key, FxHashSet::default()));
     }
 
-    /// Keeps the result `key`, unless something it read changed or was
-    /// dropped while it was computed; then it keeps neither the result nor
-    /// its edges.
-    fn end(&mut self, key: Key, facts: Rc<dyn Any>) {
-        let Computing { key: computed, reads, dependencies, read_stale } = self.computing.pop().expect("a result that ends was begun");
+    fn end(&mut self, key: Key, facts: Rc<dyn Any>, reads: &'static [Aspect]) {
+        let (computed, dependencies) = self.computing.pop().expect("a result that ends was begun");
         assert_eq!(computed, key, "requests end innermost first");
-        if read_stale {
-            for dependency in &dependencies {
-                if let Some(kept) = self.kept.get_mut(dependency) {
-                    kept.dependents.remove(&key);
-                }
-            }
-            return;
+        for dependency in &dependencies {
+            let kept = self.kept.get_mut(dependency).expect("a result read during a compute is kept until the compute ends");
+            kept.dependents.insert(key);
         }
         self.kept.insert(key, Kept { facts, reads, dependencies, dependents: FxHashSet::default() });
     }
 
     /// Records that the result being computed, if any, read `key`.
     fn record_read(&mut self, key: Key) {
-        let Some(reader) = self.computing.last_mut() else {
-            return;
-        };
-        reader.dependencies.insert(key);
-        match self.kept.get_mut(&key) {
-            Some(kept) => {
-                kept.dependents.insert(reader.key);
-            }
-            None => reader.read_stale = true,
+        if let Some((_, dependencies)) = self.computing.last_mut() {
+            dependencies.insert(key);
         }
     }
 
@@ -225,9 +197,6 @@ impl<'d> AnalysisManager<'d> {
         let mut pending = stale;
         while let Some(key) = pending.pop() {
             let Some(dropped) = self.kept.remove(&key) else {
-                if let Some(reader) = self.computing.iter_mut().find(|computing| computing.key == key) {
-                    reader.read_stale = true;
-                }
                 continue;
             };
             for dependency in &dropped.dependencies {
