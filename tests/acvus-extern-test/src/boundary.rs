@@ -31,11 +31,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use acvus_extern::callback::RustFn;
 use acvus_extern::done::Done;
 use acvus_extern::runtime::{Crosses, ObjectBody, RefTarget, Runtime, TupleBody, VariantBody};
+use acvus_extern::seal::ShapeViews;
 use acvus_extern::{
     LayoutFact, Release, Releasing, Settled, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
 };
 
 use crate::runtime::WordRuntime;
+use crate::shapes::{Labelled, Maybe, Nested, Record};
 
 const _: () = assert!(
     size_of::<usize>() <= size_of::<u64>(),
@@ -295,6 +297,25 @@ impl Held {
     pub fn same(&self) -> Word {
         self.0
     }
+
+    /// A value the runtime made and keeps, released by this holder's drop.
+    pub(crate) fn kept(value: Word) -> Held {
+        Held(value)
+    }
+
+    /// The Rust function this value is, made at the runtime `R`. The run
+    /// calls a function value it holds as it passes arguments: trusting that
+    /// the checker typed it a function, and that the host runs one runtime.
+    pub(crate) fn rust_fn<R>(&self) -> &RustFn<R>
+    where
+        R: Runtime,
+    {
+        assert_eq!(self.0.kind, Kind::Closure, "a call of a value that is no function");
+        // SAFETY: a `Closure` word points at a live slot `closure` made from a
+        // `RustFn<R>` at the one runtime the run uses, and the slot lives as
+        // long as this holder owns the value.
+        unsafe { &(*self.0.address::<Slot<RustFn<R>>>()).value }
+    }
 }
 
 impl Drop for Held {
@@ -424,8 +445,8 @@ impl Parts {
             .into_iter()
     }
 
-    fn lent(&self, i: u32) -> Word {
-        Word::pointing(Kind::Ref, self.0[i as usize].as_ptr())
+    fn part(&self, i: u32) -> *mut Word {
+        self.0[i as usize].as_ptr()
     }
 }
 
@@ -509,33 +530,110 @@ pub(crate) fn take_variant(v: Word, _at: Settled<'_>) -> WordVariant {
     unsafe { unbox(v, Kind::Variant) }
 }
 
-/// The aggregate a lent aggregate names.
+/// The aggregate a place holds: through a `Ref`, the aggregate it names; a
+/// part of an aggregate holds its aggregate itself.
 ///
 /// # Safety
-/// `v` is a live `Ref` to a live aggregate.
-unsafe fn named(v: Word) -> Word {
-    debug_assert_eq!(v.kind, Kind::Ref);
-    // SAFETY: the caller's contract.
-    unsafe { v.address::<Word>().read() }
+/// `v` is a live aggregate, or a live `Ref` to one.
+unsafe fn aggregate(v: Word) -> Word {
+    match v.kind {
+        // SAFETY: the caller's contract.
+        Kind::Ref => unsafe { v.address::<Word>().read() },
+        _ => v,
+    }
 }
 
-pub(crate) fn lent_part(v: Word, i: u32, _at: Settled<'_>) -> Word {
-    // SAFETY: under `Settled`, `v` is a lent aggregate, a `Ref` to it, and
-    // the aggregate's body is live for the call. The body is only read here.
+/// The allocation the `i`-th part of the aggregate a place holds lies in.
+///
+/// # Safety
+/// As `aggregate`'s, and the aggregate has a part `i`.
+unsafe fn part_of(v: Word, i: u32) -> *mut Word {
+    // SAFETY: the caller's contract. The body is only read here.
     unsafe {
-        let aggregate = named(v);
+        let aggregate = aggregate(v);
         match aggregate.kind {
-            Kind::Tuple => (*aggregate.address::<WordTuple>()).0.lent(i),
-            Kind::Object => (*aggregate.address::<WordObject>()).0.lent(i),
-            Kind::Variant => (*aggregate.address::<WordVariant>()).payload.lent(i),
+            Kind::Tuple => (*aggregate.address::<WordTuple>()).0.part(i),
+            Kind::Object => (*aggregate.address::<WordObject>()).0.part(i),
+            Kind::Variant => (*aggregate.address::<WordVariant>()).payload.part(i),
             kind => unreachable!("a {kind:?} value has no parts"),
         }
     }
 }
 
-pub(crate) fn lent_tag(v: Word, _at: Settled<'_>) -> u32 {
+pub(crate) fn lent_part<'a>(v: &'a Word, i: u32, _at: Settled<'a>) -> &'a Word {
+    // SAFETY: under `Settled`, `v` is a lent aggregate's place, and each part
+    // lies in an allocation of its own that the aggregate keeps live and in
+    // place while the call lends it (S1); no exclusive lend of the part is
+    // live meanwhile.
+    unsafe { &*part_of(*v, i) }
+}
+
+pub(crate) fn lent_part_mut<'a>(v: &'a mut Word, i: u32, _at: Settled<'a>) -> &'a mut Word {
+    // SAFETY: as `lent_part`'s, the aggregate lent exclusively, so no other
+    // lend of the part is live meanwhile.
+    unsafe { &mut *part_of(*v, i) }
+}
+
+pub(crate) fn lent_tag(v: &Word, _at: Settled<'_>) -> u32 {
     // SAFETY: as `lent_part`'s, for a variant.
-    unsafe { (*named(v).address::<WordVariant>()).tag }
+    unsafe { (*aggregate(*v).address::<WordVariant>()).tag }
+}
+
+/// What a reference value `reference` made names, for the loan `'l` it was
+/// made under.
+///
+/// # Safety
+/// `v` is a live `Part` or `WidePart` made from a `P`, and the storage it
+/// names is live for `'l`.
+unsafe fn named_part<P>(v: Word) -> *mut P
+where
+    P: ?Sized,
+{
+    match v.kind {
+        Kind::Part => {
+            assert!(
+                size_of::<*mut P>() == size_of::<*mut u8>(),
+                "a thin reference value names a thin target"
+            );
+            let thin = v.address::<u8>();
+            // SAFETY: a `*mut P` of a thin `P` is the address alone, as
+            // `reference` wrote it.
+            unsafe { ptr::from_ref(&thin).cast::<*mut P>().read() }
+        }
+        // SAFETY: the caller's contract.
+        Kind::WidePart => unsafe { wide_target::<P>(v) },
+        kind => unreachable!("a {kind:?} value is no reference value"),
+    }
+}
+
+pub(crate) fn referent<'l, P>(v: Word, _at: Settled<'l>) -> &'l P
+where
+    P: ?Sized,
+{
+    // SAFETY: under `Settled`, `v` is a reference value made from a `P` the
+    // call lent, which names it until the loan `'l` ends (S2), and no
+    // exclusive lend of it is live meanwhile.
+    unsafe { &*named_part::<P>(v) }
+}
+
+pub(crate) fn referent_mut<'l, P>(v: Word, _at: Settled<'l>) -> &'l mut P
+where
+    P: ?Sized,
+{
+    // SAFETY: as `referent`'s, for a writable reference value made from an
+    // exclusive borrow, whose provenance it carries.
+    unsafe { &mut *named_part::<P>(v) }
+}
+
+/// The Rust function a closure value is, made at the runtime `R`.
+pub(crate) fn callee<'a, R>(v: Word, _at: Settled<'a>) -> &'a RustFn<R>
+where
+    R: Runtime,
+{
+    // SAFETY: under `Settled`, `v` is a closure the call is lent, a slot
+    // `closure` made from a `RustFn<R>` at the runtime the call runs at, live
+    // for the call.
+    unsafe { &(*v.address::<Slot<RustFn<R>>>()).value }
 }
 
 // What `Validate` reads.
@@ -581,13 +679,15 @@ unsafe impl SignedS1 for WordRuntime {}
 // its metadata, and makes no copy of the part. By S1 the part stays at that
 // address until the checker's loan ends, so the reference names it.
 unsafe impl SignedS2 for WordRuntime {}
-// SAFETY: `WordRuntime` starts no other run: it implements no `CallsBack`,
-// so it never calls a closure, and it keeps no value of its own. It lends
-// storage in place only to the call it is lent for, and it releases an
-// allocation only when the value that owns it is released, moved out or
-// handed over. So no storage it lends to another run and no value it keeps
-// exists to release early. This argument must be made again with
-// `CallsBack`.
+// SAFETY: `WordRuntime` starts no run that outlives the call starting it. A
+// closure is a Rust function, and calling one, returning or awaited, runs
+// its glue to the end before the call returns or its future completes; an
+// awaited call's future holds only the values moved into it, which it
+// releases when dropped, and lends none of the caller's storage (crossing
+// §3). No work is left aloft when a call ends, so storage lent to a callee
+// is read only within the lend, and the runtime keeps no value past the
+// call that keeps it. It releases an allocation only when the value that
+// owns it is released, moved out or handed over.
 unsafe impl SignedS3 for WordRuntime {}
 
 // The test types' structural facts.
@@ -625,12 +725,26 @@ unsafe impl Structural for Pair {
     const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
 }
 
+// SAFETY: each shape below stands in for `shape!`'s expansion of its
+// declaration, and `shapes` implements `Projected` for it as that expansion
+// does: `AGGREGATE` is its aggregate, and each part is lent, projected or
+// held at the type the declaration gives it, in the order of its name's text.
+unsafe impl ShapeViews for Labelled {}
+// SAFETY: as for `Labelled`.
+unsafe impl ShapeViews for Nested {}
+// SAFETY: as for `Labelled`.
+unsafe impl ShapeViews for Record {}
+// SAFETY: as for `Labelled`.
+unsafe impl ShapeViews for Maybe {}
+
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
     use std::sync::Arc;
 
-    use super::{Kind, Parts, Slot, Word, erase, free, materialize, target};
+    use acvus_extern::runtime::RefTarget;
+
+    use super::{Kind, Parts, Slot, Word, erase, free, materialize, named_part, reference, target};
 
     #[test]
     fn a_scalar_round_trips_through_the_word() {
@@ -743,5 +857,50 @@ mod tests {
 
         // SAFETY: `kept` holds a `String`, read once.
         assert_eq!(unsafe { materialize::<String>(kept) }, "lent and written");
+    }
+
+    #[test]
+    fn a_reference_value_reads_back_the_thin_target_it_was_made_from() {
+        let lent = String::from("thin");
+
+        let v = reference(RefTarget::Shared(&lent));
+
+        assert_eq!(v.kind(), Kind::Part);
+        // SAFETY: `v` was made from `&lent`, which is live and shared.
+        assert!(std::ptr::eq(unsafe { named_part::<String>(v) }, &lent));
+    }
+
+    #[test]
+    fn a_reference_value_reads_back_the_text_and_run_it_was_made_from() {
+        let text = String::from("a wide target");
+        let run = [3i64, 5, 8];
+
+        let text_v = reference(RefTarget::Shared(&text[2..6]));
+        let run_v = reference(RefTarget::Shared(&run[1..]));
+
+        assert_eq!((text_v.kind(), run_v.kind()), (Kind::WidePart, Kind::WidePart));
+        // SAFETY: each value was made from a live shared borrow of its type,
+        // and is released once after its read.
+        unsafe {
+            assert_eq!(&*named_part::<str>(text_v), "wide");
+            assert_eq!(&*named_part::<[i64]>(run_v), &[5, 8]);
+            free(text_v);
+            free(run_v);
+        }
+    }
+
+    #[test]
+    fn a_write_through_a_writable_reference_value_lands_in_its_target() {
+        let mut run = [3i64, 5, 8];
+
+        let v = reference(RefTarget::Exclusive(&mut run[..2]));
+        // SAFETY: `v` was made from the exclusive borrow above, which nothing
+        // else uses until the write ends, and is released once.
+        unsafe {
+            (*named_part::<[i64]>(v))[1] = -5;
+            free(v);
+        }
+
+        assert_eq!(run, [3, -5, 8]);
     }
 }

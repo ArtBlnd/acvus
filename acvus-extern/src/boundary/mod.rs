@@ -10,6 +10,8 @@
 //! - `instance`: an impl value reaches only the receiver it was chosen for
 //!   (G6, K14).
 //! - `signed`: the facts no type can carry, signed by a runtime or a derive.
+//! - `seal`: the crossing traits whose methods choose a typed read's type are
+//!   implemented only here and by `shape!` (safety §1).
 //! - `adapter`: the adapter's signatures of S1-S3, X's carried over (K15).
 
 #![allow(unsafe_code)]
@@ -18,6 +20,7 @@ pub(crate) mod adapter;
 pub(crate) mod entry;
 pub(crate) mod instance;
 pub(crate) mod loaned;
+pub mod seal;
 pub(crate) mod signed;
 pub(crate) mod stored;
 pub(crate) mod uniform;

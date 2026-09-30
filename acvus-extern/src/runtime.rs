@@ -64,16 +64,18 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     type Object: ObjectBody<Self::Value>;
     type Variant: VariantBody<Self::Value>;
 
-    /// A shared lend of storage; its borrow is the lend.
-    type Shared<'a, T: Crosses + 'a>: Deref<Target = T>;
+    /// A shared lend of storage; its borrow is the lend. Every guard is
+    /// `Send`, as what it lends is (`Crosses`), so an awaited body holds one
+    /// across a wait (macros §1).
+    type Shared<'a, T: Crosses + 'a>: Deref<Target = T> + Send;
     /// An exclusive lend of storage; its drop is the loan's end, and what the
     /// drop does is a constant of `T` (K13).
-    type Exclusive<'a, T: Crosses + 'a>: DerefMut<Target = T>;
+    type Exclusive<'a, T: Crosses + 'a>: DerefMut<Target = T> + Send;
     /// A program's array lent as a slice.
-    type SharedSlice<'a, T: Crosses + 'a>: Deref<Target = [T]>;
-    type ExclusiveSlice<'a, T: Crosses + 'a>: DerefMut<Target = [T]>;
+    type SharedSlice<'a, T: Crosses + 'a>: Deref<Target = [T]> + Send;
+    type ExclusiveSlice<'a, T: Crosses + 'a>: DerefMut<Target = [T]> + Send;
     /// A `String`'s bytes lent as text.
-    type SharedStr<'a>: Deref<Target = str>;
+    type SharedStr<'a>: Deref<Target = str> + Send;
 
     /// Moves a value out at its settled type, releasing its storage. The one
     /// caller is `Uniform::into_inner`, where a handler needs the value itself;
@@ -95,8 +97,9 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     ) -> Self::ExclusiveSlice<'a, T>;
     fn shared_str<'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedStr<'a>;
 
-    /// An aggregate taken apart into its parts, each then held by a `Uniform`;
-    /// called only by `Uniform`'s conversion into a shape's owned view.
+    /// An aggregate handed over, taken apart into its parts, each then held
+    /// by a `Uniform`: a shape's owned view, and a callback's result read at
+    /// its loan form.
     fn take_tuple(&self, v: Self::Value, at: Settled<'_>) -> Self::Tuple;
     fn take_object(&self, v: Self::Value, at: Settled<'_>) -> Self::Object;
     fn take_variant(&self, v: Self::Value, at: Settled<'_>) -> Self::Variant;
@@ -107,17 +110,23 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     fn make_object(&self, fields: impl ExactSizeIterator<Item = Self::Value>, at: Settled<'_>) -> Self::Value;
     fn make_variant(&self, tag: u32, payload: Option<Self::Value>, at: Settled<'_>) -> Self::Value;
 
-    /// The `i`-th part of an aggregate the call lent, its storage lent in
-    /// place: the aggregate still owns it, and it is read only through a
-    /// guard, so a projection is a guard at each leaf. A variant's payload is
-    /// its part 0.
-    fn lent_part<'a>(&'a self, v: Self::Value, i: u32, at: Settled<'a>) -> Self::Value;
-    /// The tag of a variant the call lent.
-    fn lent_tag(&self, v: Self::Value, at: Settled<'_>) -> u32;
+    /// The place of the `i`-th part of an aggregate the call lent, from the
+    /// aggregate's place: the aggregate still owns the part, and it is read
+    /// only through a guard made from this place, so a projection is a guard
+    /// at each leaf. A variant's payload is its part 0.
+    fn lent_part<'a>(&'a self, v: &'a Self::Value, i: u32, at: Settled<'a>) -> &'a Self::Value;
+    fn lent_part_mut<'a>(&'a self, v: &'a mut Self::Value, i: u32, at: Settled<'a>) -> &'a mut Self::Value;
+    /// The tag of a variant the call lent, read from its place.
+    fn lent_tag(&self, v: &Self::Value, at: Settled<'_>) -> u32;
 
     /// The reference value made from a part of storage the call lent; a
     /// borrowed result is one (crossing §4).
     fn reference<'a, P: ?Sized>(&'a self, target: RefTarget<'a, P>, at: Settled<'a>) -> Self::Value;
+    /// What a reference value names, read back for the loan `'l` it was made
+    /// under: by S2 it names its target until that loan ends (runtime
+    /// contract §2, Typed reads).
+    fn target<'l, P: ?Sized>(&'l self, v: Self::Value, at: Settled<'l>) -> &'l P;
+    fn target_mut<'l, P: ?Sized>(&'l self, v: Self::Value, at: Settled<'l>) -> &'l mut P;
 
     fn interner(&self) -> &Interner;
     fn sleep(&self, d: Duration) -> impl Future<Output = ()> + Send;

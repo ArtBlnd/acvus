@@ -5,17 +5,15 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use acvus_extern::Settled;
 use acvus_extern::adapter::{Breach, Validate, Validity};
-use acvus_extern::callback::{RustFn, RustFns};
+use acvus_extern::callback::{CallArgs, CallsBack, LoanForm, RustFn, RustFns};
+use acvus_extern::{Entry, Settled, SiteShape};
 use acvus_extern::impls::Family;
 use acvus_extern::impls::task::TaskKind;
-use acvus_extern::runtime::{Crosses, RefTarget, Runtime};
+use acvus_extern::runtime::{Crosses, Mutability, RefTarget, Runtime};
 use acvus_utils::Interner;
 
-use crate::boundary::{self, Kind, WordObject, WordTuple, WordVariant, scalar_kind};
-
-use crate::boundary::Word;
+use crate::boundary::{self, Held, Kind, Word, WordObject, WordTuple, WordVariant, scalar_kind};
 
 /// The runtime: its interner, and nothing else; every value's storage is its
 /// own allocation.
@@ -87,16 +85,28 @@ impl Runtime for WordRuntime {
         boundary::make_variant(tag, payload, at)
     }
 
-    fn lent_part<'a>(&'a self, v: Word, i: u32, at: Settled<'a>) -> Word {
+    fn lent_part<'a>(&'a self, v: &'a Word, i: u32, at: Settled<'a>) -> &'a Word {
         boundary::lent_part(v, i, at)
     }
 
-    fn lent_tag(&self, v: Word, at: Settled<'_>) -> u32 {
+    fn lent_part_mut<'a>(&'a self, v: &'a mut Word, i: u32, at: Settled<'a>) -> &'a mut Word {
+        boundary::lent_part_mut(v, i, at)
+    }
+
+    fn lent_tag(&self, v: &Word, at: Settled<'_>) -> u32 {
         boundary::lent_tag(v, at)
     }
 
     fn reference<'a, P: ?Sized>(&'a self, target: RefTarget<'a, P>, _at: Settled<'a>) -> Word {
         boundary::reference(target)
+    }
+
+    fn target<'l, P: ?Sized>(&'l self, v: Word, at: Settled<'l>) -> &'l P {
+        boundary::referent(v, at)
+    }
+
+    fn target_mut<'l, P: ?Sized>(&'l self, v: Word, at: Settled<'l>) -> &'l mut P {
+        boundary::referent_mut(v, at)
     }
 
     fn interner(&self) -> &Interner {
@@ -106,6 +116,72 @@ impl Runtime for WordRuntime {
     fn sleep(&self, d: Duration) -> impl Future<Output = ()> + Send {
         Deadline(Instant::now() + d)
     }
+}
+
+impl CallsBack for WordRuntime {
+    fn call_now<'l, R, A, U>(&self, rt: &'l R, closure: Word, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
+    where
+        R: Runtime<Value = Word>,
+        A: CallArgs<R>,
+        U: LoanForm,
+    {
+        let run = A::lend_run(args, rt, at).map(Held::kept).collect();
+        let result = call_closure(rt, closure, run, A::lent().collect(), at);
+        U::read(result, rt, at)
+    }
+
+    fn call_later<'a, R, A, U>(
+        &self,
+        rt: &'a R,
+        closure: Word,
+        args: A::Moved,
+        at: Settled<'a>,
+    ) -> impl Future<Output = U> + Send
+    where
+        R: Runtime<Value = Word>,
+        A: CallArgs<R>,
+        U: Crosses,
+    {
+        let run: Vec<Held> = A::move_run(args, rt, at).map(Held::kept).collect();
+        let lent: Box<[Option<Mutability>]> = A::lent().collect();
+        async move {
+            let result = call_closure(rt, closure, run, lent, at);
+            <U as LoanForm>::read(result, rt, at)
+        }
+    }
+}
+
+/// Calls the Rust function `closure` is with the argument run `run`, each
+/// passed as `lent` says, and gives its result. A value given is the callee's
+/// from here on; a reference value lent is the caller's, released after the
+/// call.
+fn call_closure<'a, R>(
+    rt: &'a R,
+    closure: Word,
+    run: Vec<Held>,
+    lent: Box<[Option<Mutability>]>,
+    at: Settled<'a>,
+) -> Word
+where
+    R: Runtime<Value = Word>,
+{
+    let mut values = Vec::with_capacity(run.len());
+    let mut references = Vec::new();
+    for (held, passed) in run.into_iter().zip(&lent) {
+        match passed {
+            Some(_) => {
+                values.push(held.same());
+                references.push(held);
+            }
+            None => values.push(held.hand_over()),
+        }
+    }
+    let site = SiteShape::new(lent, Box::new([]));
+
+    let done = boundary::callee::<R>(closure, at).call(Entry::new(rt, &mut values, &site));
+
+    drop(references);
+    done.into_value()
 }
 
 impl RustFns for WordRuntime {

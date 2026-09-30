@@ -23,12 +23,15 @@ pub enum Pass {
     /// The variable's value, a reference, passed to a call that reads what it
     /// names; the variable still owns it.
     Same(usize, Mutability),
+    /// The variable's value, a function, passed to a call that calls it; the
+    /// variable still owns it.
+    Function(usize),
 }
 
 impl Pass {
     fn lent(self) -> Option<Mutability> {
         match self {
-            Pass::Give(_) => None,
+            Pass::Give(_) | Pass::Function(_) => None,
             Pass::Lend(_, m) | Pass::Same(_, m) => Some(m),
         }
     }
@@ -69,13 +72,26 @@ where
         self.keep(done)
     }
 
+    /// Calls the Rust function the variable `function` holds with the
+    /// arguments `passes` names, as a script calls a function value, and
+    /// keeps its result in a new variable, whose index it returns.
+    pub fn call_function(&mut self, function: usize, passes: &[Pass]) -> usize {
+        let mut args = self.arguments(passes);
+        let site = Self::site(passes);
+
+        let callee = self.variables[function].as_deref().expect("a function given away is not called");
+        let done = callee.rust_fn::<R>().call(Entry::new(self.runtime, &mut args, &site));
+
+        self.keep(done)
+    }
+
     fn arguments(&mut self, passes: &[Pass]) -> Vec<Word> {
         let mut args = Vec::with_capacity(passes.len());
         for &pass in passes {
             let arg = match pass {
                 Pass::Give(i) => self.variables[i].take().expect("a variable is given once").hand_over(),
                 Pass::Lend(i, _) => self.variable(i).lend(),
-                Pass::Same(i, _) => self.variable(i).same(),
+                Pass::Same(i, _) | Pass::Function(i) => self.variable(i).same(),
             };
             args.push(arg);
         }

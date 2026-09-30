@@ -7,8 +7,8 @@ use std::mem::ManuallyDrop;
 use crate::boundary::entry::Settled;
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
 use crate::context::Opens;
-use crate::runtime::{Crosses, Runtime};
-use crate::shape::Projected;
+use crate::runtime::{Crosses, ObjectBody, Runtime, TupleBody, VariantBody};
+use crate::shape::{Aggregate, OwnedParts, Projected};
 
 /// The permission to release one value, made only by an owning holder's drop.
 pub struct Releasing {
@@ -73,10 +73,18 @@ impl<R: Runtime, S: Projected<R>> Uniform<R, S> {
     /// The shape's owned view: the aggregate taken apart once, each part then
     /// held by its own `Uniform`.
     pub fn into_view<'c>(self, cx: &'c impl Opens<'c, R>) -> S::Owned {
-        todo!(
-            "structural gap: nothing says whether S is taken apart by take_tuple, take_object or \
-             take_variant before S::owned is given its parts"
-        )
+        let runtime = cx.runtime();
+        let at = Settled::of_the_entry();
+        let aggregate = self.into_value();
+        let parts = match S::AGGREGATE {
+            Aggregate::Tuple => OwnedParts::of_the_body(None, runtime.take_tuple(aggregate, at).into_parts()),
+            Aggregate::Object => OwnedParts::of_the_body(None, runtime.take_object(aggregate, at).into_fields()),
+            Aggregate::Variant => {
+                let (tag, payload) = runtime.take_variant(aggregate, at).into_payload();
+                OwnedParts::of_the_body(Some(tag), payload.into_iter())
+            }
+        };
+        S::owned(parts)
     }
 }
 
@@ -240,13 +248,22 @@ mod tests {
         fn make_variant(&self, _: u32, _: Option<Counted>, _: Settled<'_>) -> Counted {
             unreachable!("the release tests make no variant")
         }
-        fn lent_part<'a>(&'a self, _: Counted, _: u32, _: Settled<'a>) -> Counted {
+        fn lent_part<'a>(&'a self, _: &'a Counted, _: u32, _: Settled<'a>) -> &'a Counted {
             unreachable!("the release tests lend no storage")
         }
-        fn lent_tag(&self, _: Counted, _: Settled<'_>) -> u32 {
+        fn lent_part_mut<'a>(&'a self, _: &'a mut Counted, _: u32, _: Settled<'a>) -> &'a mut Counted {
+            unreachable!("the release tests lend no storage")
+        }
+        fn lent_tag(&self, _: &Counted, _: Settled<'_>) -> u32 {
             unreachable!("the release tests lend no storage")
         }
         fn reference<'a, P: ?Sized>(&'a self, _: RefTarget<'a, P>, _: Settled<'a>) -> Counted {
+            unreachable!("the release tests make no reference")
+        }
+        fn target<'l, P: ?Sized>(&'l self, _: Counted, _: Settled<'l>) -> &'l P {
+            unreachable!("the release tests make no reference")
+        }
+        fn target_mut<'l, P: ?Sized>(&'l self, _: Counted, _: Settled<'l>) -> &'l mut P {
             unreachable!("the release tests make no reference")
         }
         fn interner(&self) -> &Interner {

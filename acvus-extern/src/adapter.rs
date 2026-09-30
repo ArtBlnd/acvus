@@ -117,7 +117,11 @@ fn range_of<P: ?Sized>(target: &P) -> Range<usize> {
 /// Lent storage, tracked by address after Tree Borrows: each lend is a node
 /// over its address range, a part borrowed from a lend is its child, and an
 /// access or a lend is checked against the nodes over the range it touches.
-/// A range no node covers is untracked, and nothing is checked there.
+/// A lend made through a reference value is that reference's child, as a
+/// pointer derived from a tag is the tag's child; a reference value is known
+/// only by the range it names, so a lend inside a live reference's range is
+/// taken to be made through it. A range no node covers is untracked, and
+/// nothing is checked there.
 struct Borrows {
     nodes: Vec<Node>,
     next: u64,
@@ -131,8 +135,16 @@ struct Node {
     tag: Tag,
     range: Range<usize>,
     access: Mutability,
+    made: Made,
     parent: Option<Tag>,
     depth: u32,
+}
+
+/// What made a node: a guard's lend, or a reference value borrowed from one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Made {
+    Lend,
+    Reference,
 }
 
 impl Node {
@@ -161,9 +173,32 @@ impl Borrows {
         tag
     }
 
-    /// A lend of `range` for a guard.
+    /// A lend of `range` for a guard: a child of the reference it is made
+    /// through, if any, and checked against every other node over its range.
     fn lend(&mut self, range: Range<usize>, access: Mutability) -> Result<Tag, Breach> {
-        if let Some(held) = self.nodes.iter().find(|n| n.overlaps(&range) && conflict(n.access, access)) {
+        let through = self
+            .nodes
+            .iter()
+            .filter(|n| n.made == Made::Reference && n.holds(&range))
+            .max_by_key(|n| n.depth);
+        let parent = match through {
+            Some(reference) if reference.access == Mutability::Shared && access == Mutability::Exclusive => {
+                return Err(Breach {
+                    what: format!(
+                        "an Exclusive lend of {range:#x?} is made through a shared reference to {:#x?}",
+                        reference.range
+                    ),
+                });
+            }
+            Some(reference) => Some((reference.tag, reference.depth)),
+            None => None,
+        };
+        let lineage = self.lineage(parent.map(|(tag, _)| tag));
+        let held = self
+            .nodes
+            .iter()
+            .find(|n| !lineage.contains(&n.tag) && n.overlaps(&range) && conflict(n.access, access));
+        if let Some(held) = held {
             return Err(Breach {
                 what: format!(
                     "a {access:?} lend of {range:#x?} overlaps a live {:?} lend of {:#x?}",
@@ -172,8 +207,23 @@ impl Borrows {
             });
         }
         let tag = self.fresh();
-        self.nodes.push(Node { tag, range, access, parent: None, depth: 0 });
+        let (parent, depth) = match parent {
+            Some((parent, depth)) => (Some(parent), depth + 1),
+            None => (None, 0),
+        };
+        self.nodes.push(Node { tag, range, access, made: Made::Lend, parent, depth });
         Ok(tag)
+    }
+
+    /// `tag` and its ancestors.
+    fn lineage(&self, tag: Option<Tag>) -> Vec<Tag> {
+        let mut lineage = Vec::new();
+        let mut next = tag;
+        while let Some(tag) = next {
+            lineage.push(tag);
+            next = self.nodes.iter().find(|n| n.tag == tag).and_then(|n| n.parent);
+        }
+        lineage
     }
 
     /// A part borrowed from a lend, for a reference value.
@@ -197,7 +247,7 @@ impl Borrows {
         }
         let (parent, depth) = (parent.tag, parent.depth + 1);
         let tag = self.fresh();
-        self.nodes.push(Node { tag, range, access, parent: Some(parent), depth });
+        self.nodes.push(Node { tag, range, access, made: Made::Reference, parent: Some(parent), depth });
         Ok(Some(tag))
     }
 
@@ -309,11 +359,15 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
         self.inner.make_variant(tag, payload, at)
     }
 
-    fn lent_part<'a>(&'a self, v: Self::Value, i: u32, at: Settled<'a>) -> Self::Value {
+    fn lent_part<'a>(&'a self, v: &'a Self::Value, i: u32, at: Settled<'a>) -> &'a Self::Value {
         self.inner.lent_part(v, i, at)
     }
 
-    fn lent_tag(&self, v: Self::Value, at: Settled<'_>) -> u32 {
+    fn lent_part_mut<'a>(&'a self, v: &'a mut Self::Value, i: u32, at: Settled<'a>) -> &'a mut Self::Value {
+        self.inner.lent_part_mut(v, i, at)
+    }
+
+    fn lent_tag(&self, v: &Self::Value, at: Settled<'_>) -> u32 {
         self.inner.lent_tag(v, at)
     }
 
@@ -327,6 +381,14 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
             breach.detected();
         }
         self.inner.reference(target, at)
+    }
+
+    fn target<'l, P: ?Sized>(&'l self, v: Self::Value, at: Settled<'l>) -> &'l P {
+        self.inner.target(v, at)
+    }
+
+    fn target_mut<'l, P: ?Sized>(&'l self, v: Self::Value, at: Settled<'l>) -> &'l mut P {
+        self.inner.target_mut(v, at)
     }
 
     fn interner(&self) -> &Interner {
@@ -365,23 +427,30 @@ impl<X: Instances + Validate> Instances for Adapter<X> {
 }
 
 impl<X: CallsBack + Validate> CallsBack for Adapter<X> {
-    fn call_now<'l, R, A, U>(&self, closure: Self::Value, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
+    fn call_now<'l, R, A, U>(&self, rt: &'l R, closure: Self::Value, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
     where
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
         U: LoanForm,
     {
         self.inner.validate_closure(&closure, at).pass_or_panic();
-        self.inner.call_now::<R, A, U>(closure, args, at)
+        self.inner.call_now::<R, A, U>(rt, closure, args, at)
     }
-    fn call_later<R, A, U>(&self, closure: Self::Value, args: A::Moved, at: Settled<'_>) -> impl Future<Output = U> + Send
+
+    fn call_later<'a, R, A, U>(
+        &self,
+        rt: &'a R,
+        closure: Self::Value,
+        args: A::Moved,
+        at: Settled<'a>,
+    ) -> impl Future<Output = U> + Send
     where
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
         U: Crosses,
     {
         self.inner.validate_closure(&closure, at).pass_or_panic();
-        self.inner.call_later::<R, A, U>(closure, args, at)
+        self.inner.call_later::<R, A, U>(rt, closure, args, at)
     }
 }
 
@@ -468,6 +537,40 @@ mod tests {
 
         assert!(borrows.nodes.is_empty());
         assert!(borrows.lend(8..12, Exclusive).is_ok());
+    }
+
+    #[test]
+    fn a_lend_through_a_live_reference_is_its_child() {
+        let mut borrows = Borrows::new();
+        let whole = borrows.lend(0..24, Exclusive).unwrap();
+        let reference = borrows.reborrow(0..24, Exclusive).unwrap().unwrap();
+
+        let through = borrows.lend(0..24, Exclusive).unwrap();
+
+        let node = borrows.nodes.iter().find(|n| n.tag == through).unwrap();
+        assert_eq!(node.parent, Some(reference));
+        borrows.end(whole);
+        assert!(borrows.nodes.is_empty());
+    }
+
+    #[test]
+    fn a_lend_beside_a_live_exclusive_lend_is_still_a_breach() {
+        let mut borrows = Borrows::new();
+        borrows.lend(0..24, Exclusive).unwrap();
+        borrows.reborrow(8..16, Exclusive).unwrap().unwrap();
+
+        assert!(borrows.lend(0..24, Shared).is_err());
+        assert!(borrows.lend(4..12, Exclusive).is_err());
+    }
+
+    #[test]
+    fn an_exclusive_lend_through_a_shared_reference_is_a_breach() {
+        let mut borrows = Borrows::new();
+        borrows.lend(0..24, Shared).unwrap();
+        borrows.reborrow(8..16, Shared).unwrap().unwrap();
+
+        assert!(borrows.lend(8..16, Exclusive).is_err());
+        assert!(borrows.lend(8..16, Shared).is_ok());
     }
 
     #[test]

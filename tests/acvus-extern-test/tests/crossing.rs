@@ -11,8 +11,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use acvus_extern::adapter::Adapter;
-use acvus_extern::mode::{ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
+use acvus_extern::callback::{CallsBack, Lent, LentMut, RustFn, RustFns};
+use acvus_extern::guard::{Guard, GuardMut};
+use acvus_extern::mode::{ByCallback, ByMut, ByProjection, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use acvus_extern::runtime::{Crosses, Mutability, Runtime};
+use acvus_extern_test::shapes::{Labelled, Maybe, MaybeOwned, MaybeRef, Nested, Record};
 use acvus_extern_test::{Frame, Pair, Pass, Tally, Word, WordRuntime};
 
 use Mutability::{Exclusive, Shared};
@@ -66,6 +69,20 @@ on_both! {
     a_projection_result_composes_its_leaves_into_a_tuple: projection_tuple;
     a_projection_result_composes_a_lent_payload_into_a_variant: projection_variant;
     a_projection_result_left_in_pieces_panics_and_releases_them_once: projection_uncomposed;
+    a_lent_tuple_is_projected_a_guard_at_each_leaf: projected_tuple;
+    a_lent_object_is_projected_in_the_order_of_its_names: projected_object;
+    a_shape_nested_in_a_lent_tuple_is_projected_in_place: projected_nested;
+    a_lent_variant_is_projected_by_its_tag: projected_variant;
+    a_held_tuple_is_taken_apart_into_its_owned_view: viewed_tuple;
+    a_held_nested_shape_is_viewed_part_by_part: viewed_nested;
+    a_held_variant_is_viewed_by_its_tag_and_its_payload_released_once: viewed_variant;
+    an_awaited_body_holds_a_guard_across_a_wait: awaited_guard_held;
+    a_returned_rust_fn_is_called_as_a_script_calls_a_function_value: rust_fn_called;
+    a_rust_fn_releases_what_it_captures_once: rust_fn_released;
+    a_callback_is_lent_a_part_of_the_handlers_storage: callback_lent;
+    a_callback_writes_through_a_part_lent_exclusively: callback_lent_mut;
+    a_callback_is_lent_text: callback_lent_text;
+    an_awaited_callback_takes_its_arguments_by_move: callback_awaited;
 }
 
 /// A variable holding `value`, made as a program makes one: the result of a
@@ -523,6 +540,344 @@ fn projection_uncomposed<R: Runtime<Value = Word>>(runtime: &R) {
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
+/// A variable holding the tuple `(label, count)`, as a program makes one.
+fn produce_labelled<R>(frame: &mut Frame<'_, R>, label: &str, count: i64) -> usize
+where
+    R: Runtime<Value = Word>,
+{
+    let label = String::from(label);
+    frame.call(&[], |entry| {
+        entry.open::<(), ()>(|cx, (), ()| {
+            cx.finish_projection(|result| {
+                result.value(label);
+                result.value(count);
+                result.tuple(2);
+            })
+        })
+    })
+}
+
+fn projected_tuple<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let tuple = produce_labelled(&mut frame, "leaves", 2);
+
+    let mut read = None;
+    frame.call(&[Pass::Lend(tuple, Shared)], |entry| {
+        entry.open::<(ByProjection<Labelled>,), ()>(|cx, (lent,), ()| {
+            read = Some((String::from(lent.label.as_str()), *lent.count));
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read, Some((String::from("leaves"), 2)));
+}
+
+fn projected_object<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let object = frame.call(&[], |entry| {
+        entry.open::<(), ()>(|cx, (), ()| {
+            cx.finish_projection(|result| {
+                result.value(7i64);
+                result.value(String::from("record"));
+                result.object(2);
+            })
+        })
+    });
+
+    let mut read = None;
+    frame.call(&[Pass::Lend(object, Shared)], |entry| {
+        entry.open::<(ByProjection<Record>,), ()>(|cx, (lent,), ()| {
+            read = Some((*lent.count, String::from(lent.name.as_str())));
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read, Some((7, String::from("record"))));
+}
+
+fn projected_nested<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let nested = frame.call(&[], |entry| {
+        entry.open::<(), ()>(|cx, (), ()| {
+            cx.finish_projection(|result| {
+                result.value(String::from("inner"));
+                result.value(3i64);
+                result.tuple(2);
+                result.value(true);
+                result.tuple(2);
+            })
+        })
+    });
+
+    let mut read = None;
+    frame.call(&[Pass::Lend(nested, Shared)], |entry| {
+        entry.open::<(ByProjection<Nested>,), ()>(|cx, (lent,), ()| {
+            read = Some((String::from(lent.inner.label.as_str()), *lent.inner.count, *lent.flag));
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read, Some((String::from("inner"), 3, true)));
+}
+
+/// A variable holding `Maybe::Some(value)`, or `Maybe::None`.
+fn produce_maybe<R>(frame: &mut Frame<'_, R>, value: Option<Tally>) -> usize
+where
+    R: Runtime<Value = Word>,
+{
+    frame.call(&[], |entry| {
+        entry.open::<(), ()>(|cx, (), ()| {
+            cx.finish_projection(|result| match value {
+                Some(value) => {
+                    result.value(value);
+                    result.variant(1, true);
+                }
+                None => result.variant(0, false),
+            })
+        })
+    })
+}
+
+fn projected_variant<R: Runtime<Value = Word>>(runtime: &R) {
+    let (value, drops) = tally();
+    let mut frame = Frame::new(runtime);
+    let some = produce_maybe(&mut frame, Some(value));
+    let none = produce_maybe(&mut frame, None);
+
+    let mut read = Vec::new();
+    frame.call(&[Pass::Lend(some, Shared), Pass::Lend(none, Shared)], |entry| {
+        entry.open::<(ByProjection<Maybe>, ByProjection<Maybe>), ()>(|cx, (some, none), ()| {
+            for lent in [some, none] {
+                read.push(match lent {
+                    MaybeRef::Some(tally) => Some(Arc::strong_count(&tally.0)),
+                    MaybeRef::None => None,
+                });
+            }
+            cx.finish(())
+        })
+    });
+    assert_eq!(read, [Some(2), None]);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(frame);
+
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+fn viewed_tuple<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let tuple = produce_labelled(&mut frame, "owned", 4);
+
+    let mut read = None;
+    frame.call(&[Pass::Give(tuple)], |entry| {
+        entry.open::<(ByUniform<Labelled>,), ()>(|cx, (held,), ()| {
+            let view = held.into_view(&cx);
+            read = Some((view.label.into_inner(&cx), view.count.into_inner(&cx)));
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read, Some((String::from("owned"), 4)));
+}
+
+fn viewed_nested<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let nested = frame.call(&[], |entry| {
+        entry.open::<(), ()>(|cx, (), ()| {
+            cx.finish_projection(|result| {
+                result.value(String::from("deep"));
+                result.value(5i64);
+                result.tuple(2);
+                result.value(false);
+                result.tuple(2);
+            })
+        })
+    });
+
+    let mut read = None;
+    frame.call(&[Pass::Give(nested)], |entry| {
+        entry.open::<(ByUniform<Nested>,), ()>(|cx, (held,), ()| {
+            let view = held.into_view(&cx);
+            let inner = view.inner.into_view(&cx);
+            read = Some((*inner.label.open(&cx) == "deep", inner.count.into_inner(&cx), *view.flag.open(&cx)));
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read, Some((true, 5, false)));
+}
+
+fn viewed_variant<R: Runtime<Value = Word>>(runtime: &R) {
+    let (value, drops) = tally();
+    let mut frame = Frame::new(runtime);
+    let some = produce_maybe(&mut frame, Some(value));
+    let none = produce_maybe(&mut frame, None);
+
+    let mut read = Vec::new();
+    frame.call(&[Pass::Give(some), Pass::Give(none)], |entry| {
+        entry.open::<(ByUniform<Maybe>, ByUniform<Maybe>), ()>(|cx, (some, none), ()| {
+            for held in [some, none] {
+                read.push(matches!(held.into_view(&cx), MaybeOwned::Some(_)));
+            }
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read, [true, false]);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+fn awaited_guard_held<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let text = produce(&mut frame, String::from("held across a wait"));
+
+    let length = executor().block_on(frame.call_awaited(&[Pass::Lend(text, Shared)], async |entry| {
+        let body = entry.open_awaited::<(ByRef<String>,), (), _>(|cx, (lent,), ()| async move {
+            cx.sleep(Duration::from_millis(1)).await;
+            let length = lent.len() as i64;
+            cx.finish(length)
+        });
+        sent(body).await
+    }));
+
+    assert_eq!(read::<_, i64>(&mut frame, length), 18);
+    assert_eq!(read::<_, String>(&mut frame, text), "held across a wait");
+}
+
+/// A variable holding the function `f`, as a program holds a function an
+/// extern returned.
+fn produce_fn<R>(frame: &mut Frame<'_, R>, f: RustFn<R>) -> usize
+where
+    R: RustFns<Value = Word>,
+{
+    frame.call(&[], |entry| entry.open::<(), ()>(|cx, (), ()| cx.finish_rust_fn(f)))
+}
+
+/// The length of a `String` lent to it.
+fn length_of<R: Runtime>((text,): (Guard<'_, R::Shared<'_, String>>,)) -> i64 {
+    text.len() as i64
+}
+
+/// `length_of`, as a Rust function.
+fn length<R: RustFns>() -> RustFn<R> {
+    RustFn::new::<(ByRef<String>,), i64>(length_of::<R>)
+}
+
+fn rust_fn_called<R: RustFns<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let function = produce_fn(&mut frame, length());
+    let short = produce(&mut frame, String::from("four"));
+    let long = produce(&mut frame, String::from("eleven long"));
+
+    let first = frame.call_function(function, &[Pass::Lend(short, Shared)]);
+    let second = frame.call_function(function, &[Pass::Lend(long, Shared)]);
+
+    assert_eq!(read::<_, i64>(&mut frame, first), 4);
+    assert_eq!(read::<_, i64>(&mut frame, second), 11);
+    assert_eq!(read::<_, String>(&mut frame, short), "four");
+}
+
+fn rust_fn_released<R: RustFns<Value = Word>>(runtime: &R) {
+    let (captured, drops) = tally();
+    let mut frame = Frame::new(runtime);
+    let function = produce_fn(
+        &mut frame,
+        RustFn::new::<(ByValue<i64>,), i64>(move |(n,)| n + Arc::strong_count(&captured.0) as i64),
+    );
+
+    let forty = produce(&mut frame, 40i64);
+    let called = frame.call_function(function, &[Pass::Give(forty)]);
+    assert_eq!(read::<_, i64>(&mut frame, called), 42);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(frame);
+
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+fn callback_lent<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let function = produce_fn(&mut frame, length());
+    let text = produce(&mut frame, String::from("lent to a callback"));
+
+    let called = frame.call(&[Pass::Lend(text, Shared), Pass::Function(function)], |entry| {
+        entry.open::<(ByRef<String>, ByCallback<(Lent<String>,), i64, ()>), ()>(|cx, (text, callback), ()| {
+            let first = callback.call(&cx, (&*text,));
+            let second = callback.call(&cx, (&*text,));
+            cx.finish(first + second)
+        })
+    });
+
+    assert_eq!(read::<_, i64>(&mut frame, called), 36);
+    assert_eq!(read::<_, String>(&mut frame, text), "lent to a callback");
+}
+
+fn append_written<R: Runtime>((mut text,): (GuardMut<'_, R::Exclusive<'_, String>>,)) {
+    text.push_str(" and written");
+}
+
+fn words_in<R: Runtime>((text,): (Guard<'_, R::SharedStr<'_>>,)) -> i64 {
+    text.split(' ').count() as i64
+}
+
+fn callback_lent_mut<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let append = produce_fn(
+        &mut frame,
+        RustFn::new::<(ByMut<String>,), ()>(append_written::<R>),
+    );
+    let text = produce(&mut frame, String::from("lent"));
+
+    frame.call(&[Pass::Lend(text, Exclusive), Pass::Function(append)], |entry| {
+        entry.open::<(ByMut<String>, ByCallback<(LentMut<String>,), (), ()>), ()>(|cx, (mut text, callback), ()| {
+            callback.call(&cx, (&mut *text,));
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read::<_, String>(&mut frame, text), "lent and written");
+}
+
+fn callback_lent_text<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let count = produce_fn(
+        &mut frame,
+        RustFn::new::<(ByStr,), i64>(words_in::<R>),
+    );
+    let text = produce(&mut frame, String::from("three short words and more"));
+
+    let called = frame.call(&[Pass::Lend(text, Shared), Pass::Function(count)], |entry| {
+        entry.open::<(ByStr, ByCallback<(Lent<str>,), i64, ()>), ()>(|cx, (text, callback), ()| {
+            let words = callback.call(&cx, (&text[..17],));
+            cx.finish(words)
+        })
+    });
+
+    assert_eq!(read::<_, i64>(&mut frame, called), 3);
+}
+
+fn callback_awaited<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
+    let (value, drops) = tally();
+    let mut frame = Frame::new(runtime);
+    let consume = produce_fn(
+        &mut frame,
+        RustFn::new::<(ByValue<String>, ByValue<Tally>), i64>(|(text, tally)| {
+            drop(tally);
+            text.len() as i64
+        }),
+    );
+
+    let called = executor().block_on(frame.call_awaited(&[Pass::Function(consume)], async |entry| {
+        let body = entry.open_awaited::<(ByCallback<(String, Tally), i64, ()>,), (), _>(|cx, (callback,), ()| async move {
+            cx.sleep(Duration::from_millis(1)).await;
+            let length = callback.call_await(&cx, (String::from("moved"), value)).await;
+            cx.finish(length)
+        });
+        sent(body).await
+    }));
+
+    assert_eq!(read::<_, i64>(&mut frame, called), 5);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
 // Breaches the adapter's tracking covers. Under `WordRuntime` alone each is
 // undefined behaviour, so they run on the adapter only.
 
@@ -547,6 +902,21 @@ fn the_adapter_refuses_a_lend_at_a_type_the_value_is_not() {
 
     frame.call(&[Pass::Lend(variable, Shared)], |entry| {
         entry.open::<(ByRef<i64>,), ()>(|cx, _, ()| cx.finish(()))
+    });
+}
+
+#[test]
+#[should_panic(expected = "a I64 value is called as a closure")]
+fn the_adapter_refuses_a_callback_that_is_no_closure() {
+    let runtime = Adapter::new(WordRuntime::default());
+    let mut frame = Frame::new(&runtime);
+    let variable = produce(&mut frame, 7i64);
+
+    frame.call(&[Pass::Function(variable)], |entry| {
+        entry.open::<(ByCallback<(), i64, ()>,), ()>(|cx, (callback,), ()| {
+            let called = callback.call(&cx, ());
+            cx.finish(called)
+        })
     });
 }
 

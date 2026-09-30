@@ -17,6 +17,9 @@ pub mod impls;
 pub mod runtime;
 pub mod shape;
 
+#[doc(hidden)]
+pub use boundary::seal;
+
 pub use boundary::entry::{Args, Entry, Settled, SiteShape, mode};
 pub use boundary::instance::{Instance, InstanceEntry, InstanceOf};
 pub use boundary::loaned::{Loaned, LoanedMut};

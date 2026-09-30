@@ -6,6 +6,7 @@ use std::ops::{Deref, DerefMut};
 
 use crate::boundary::entry::{Settled, SiteShape};
 use crate::boundary::uniform::Uniform;
+use crate::callback::{RustFn, RustFns};
 use crate::done::Done;
 use crate::guard::{Guard, GuardMut};
 use crate::runtime::{Crosses, RefTarget, Runtime};
@@ -84,6 +85,14 @@ impl<'c, R: Runtime> Returning<'c, R> {
         let value = self.runtime.reference(RefTarget::Exclusive(part(&mut *guard)), Settled::of_the_entry());
         drop(guard);
         Done::of(value)
+    }
+}
+
+impl<'c, R: RustFns> Returning<'c, R> {
+    /// Finishes the call with a Rust function, as a script function value of
+    /// the function type it was made at.
+    pub fn finish_rust_fn(self, f: RustFn<R>) -> Done<R> {
+        Done::of(self.runtime.rust_fn(f))
     }
 }
 
