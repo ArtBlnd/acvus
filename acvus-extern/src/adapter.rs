@@ -12,7 +12,7 @@
 //! breach may be refused.
 
 use std::ops::{Deref, DerefMut, Range};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use acvus_utils::Interner;
@@ -71,34 +71,108 @@ impl<X: Runtime + Validate> Adapter<X> {
     }
 }
 
+/// The tracker's lock. Nothing panics while holding it: every breach is
+/// returned out of `Borrows` and raised after the lock is released.
+fn lock(borrows: &Mutex<Borrows>) -> MutexGuard<'_, Borrows> {
+    borrows.lock().expect("the borrow tracker's lock is poisoned")
+}
+
 /// Lent storage, tracked by address after Tree Borrows: each lend is a node
 /// over its address range, a part borrowed from a lend is its child, and an
 /// access or a lend is checked against the nodes over the range it touches.
 /// A range no node covers is untracked, and nothing is checked there.
-struct Borrows {}
+struct Borrows {
+    nodes: Vec<Node>,
+    next: u64,
+}
 
 /// One node of `Borrows`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Tag(u64);
 
+struct Node {
+    tag: Tag,
+    range: Range<usize>,
+    access: Mutability,
+    parent: Option<Tag>,
+    depth: u32,
+}
+
+impl Node {
+    fn overlaps(&self, range: &Range<usize>) -> bool {
+        self.range.start < range.end && range.start < self.range.end
+    }
+
+    fn holds(&self, range: &Range<usize>) -> bool {
+        self.range.start <= range.start && range.end <= self.range.end
+    }
+}
+
+/// Two lends of one address conflict unless both are shared.
+fn conflict(a: Mutability, b: Mutability) -> bool {
+    a == Mutability::Exclusive || b == Mutability::Exclusive
+}
+
 impl Borrows {
     fn new() -> Self {
-        todo!("an empty tree")
+        Borrows { nodes: Vec::new(), next: 0 }
+    }
+
+    fn fresh(&mut self) -> Tag {
+        let tag = Tag(self.next);
+        self.next += 1;
+        tag
     }
 
     /// A lend of `range` for a guard.
     fn lend(&mut self, range: Range<usize>, access: Mutability) -> Result<Tag, Breach> {
-        todo!("a root node over range, checked against the nodes it overlaps")
+        if let Some(held) = self.nodes.iter().find(|n| n.overlaps(&range) && conflict(n.access, access)) {
+            return Err(Breach {
+                what: format!(
+                    "a {access:?} lend of {range:#x?} overlaps a live {:?} lend of {:#x?}",
+                    held.access, held.range
+                ),
+            });
+        }
+        let tag = self.fresh();
+        self.nodes.push(Node { tag, range, access, parent: None, depth: 0 });
+        Ok(tag)
     }
 
     /// A part borrowed from a lend, for a reference value.
+    ///
+    /// Only the parent's access is checked. A part lies inside its parent, so
+    /// a live lend of another guard that overlaps the part overlaps the
+    /// parent too, and `lend` already refused whichever of the two came
+    /// second. Two parts of one lend are Rust borrows of one guard, which
+    /// Rust's borrow checker already orders.
     fn reborrow(&mut self, range: Range<usize>, access: Mutability) -> Result<Option<Tag>, Breach> {
-        todo!("a child of the node whose range holds it; None where no node covers the range")
+        let Some(parent) = self.nodes.iter().filter(|n| n.holds(&range)).max_by_key(|n| n.depth) else {
+            return Ok(None);
+        };
+        if parent.access == Mutability::Shared && access == Mutability::Exclusive {
+            return Err(Breach {
+                what: format!(
+                    "a writable reference to {range:#x?} is made from a shared lend of {:#x?}",
+                    parent.range
+                ),
+            });
+        }
+        let (parent, depth) = (parent.tag, parent.depth + 1);
+        let tag = self.fresh();
+        self.nodes.push(Node { tag, range, access, parent: Some(parent), depth });
+        Ok(Some(tag))
     }
 
     /// A guard dropped.
     fn end(&mut self, tag: Tag) {
-        todo!("the node and its children end")
+        let mut ended = vec![tag];
+        let mut next = 0;
+        while let Some(&tag) = ended.get(next) {
+            ended.extend(self.nodes.iter().filter(|n| n.parent == Some(tag)).map(|n| n.tag));
+            next += 1;
+        }
+        self.nodes.retain(|n| !ended.contains(&n.tag));
     }
 }
 
@@ -125,7 +199,7 @@ impl<G: DerefMut> DerefMut for Tracked<'_, G> {
 
 impl<G> Drop for Tracked<'_, G> {
     fn drop(&mut self) {
-        todo!("end the tag")
+        lock(self.borrows).end(self.tag);
     }
 }
 
@@ -234,5 +308,92 @@ impl<X: CallsBack + Validate> CallsBack for Adapter<X> {
         U: Crosses,
     {
         async { todo!("validate the closure, then X's call_later") }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Borrows;
+    use crate::runtime::Mutability::{Exclusive, Shared};
+
+    #[test]
+    fn shared_lends_of_one_range_coexist() {
+        let mut borrows = Borrows::new();
+
+        borrows.lend(0..8, Shared).unwrap();
+
+        assert!(borrows.lend(4..12, Shared).is_ok());
+    }
+
+    #[test]
+    fn an_exclusive_lend_over_a_live_shared_lend_is_a_breach() {
+        let mut borrows = Borrows::new();
+        borrows.lend(0..8, Shared).unwrap();
+
+        assert!(borrows.lend(4..12, Exclusive).is_err());
+        assert!(borrows.lend(8..16, Exclusive).is_ok());
+    }
+
+    #[test]
+    fn a_shared_lend_over_a_live_exclusive_lend_is_a_breach() {
+        let mut borrows = Borrows::new();
+        borrows.lend(0..8, Exclusive).unwrap();
+
+        assert!(borrows.lend(7..8, Shared).is_err());
+        assert!(borrows.lend(8..9, Shared).is_ok());
+    }
+
+    #[test]
+    fn a_part_inside_a_lend_is_its_child() {
+        let mut borrows = Borrows::new();
+        let whole = borrows.lend(0..24, Exclusive).unwrap();
+
+        let part = borrows.reborrow(8..16, Exclusive).unwrap().unwrap();
+
+        let node = borrows.nodes.iter().find(|n| n.tag == part).unwrap();
+        assert_eq!(node.parent, Some(whole));
+    }
+
+    #[test]
+    fn a_writable_part_of_a_shared_lend_is_a_breach() {
+        let mut borrows = Borrows::new();
+        borrows.lend(0..24, Shared).unwrap();
+
+        assert!(borrows.reborrow(8..16, Exclusive).is_err());
+        assert!(borrows.reborrow(8..16, Shared).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_lend_that_ended_no_longer_conflicts() {
+        let mut borrows = Borrows::new();
+        let exclusive = borrows.lend(0..8, Exclusive).unwrap();
+        assert!(borrows.lend(0..8, Shared).is_err());
+
+        borrows.end(exclusive);
+
+        assert!(borrows.lend(0..8, Shared).is_ok());
+    }
+
+    #[test]
+    fn a_lend_ends_with_its_parts() {
+        let mut borrows = Borrows::new();
+        let whole = borrows.lend(0..24, Exclusive).unwrap();
+        borrows.reborrow(8..16, Exclusive).unwrap().unwrap();
+        borrows.reborrow(8..12, Shared).unwrap().unwrap();
+
+        borrows.end(whole);
+
+        assert!(borrows.nodes.is_empty());
+        assert!(borrows.lend(8..12, Exclusive).is_ok());
+    }
+
+    #[test]
+    fn a_range_no_lend_covers_is_untracked() {
+        let mut borrows = Borrows::new();
+        borrows.lend(0..24, Shared).unwrap();
+
+        assert!(borrows.reborrow(100..108, Exclusive).unwrap().is_none());
+        assert!(borrows.reborrow(16..32, Exclusive).unwrap().is_none());
+        assert_eq!(borrows.nodes.len(), 1);
     }
 }
