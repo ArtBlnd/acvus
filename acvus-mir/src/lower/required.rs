@@ -21,14 +21,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::ir::cfg::edit::{
-    CannotRemoveParam, Cfg, Clones, Drops, Editor, InstRef, NoFacts, PartOf, Position,
-    Value,
+    CannotRemoveParam, Cfg, Clones, Drops, Editor, InstRef, NoFacts, PartOf, Position, RootStep, RootedPlace, Value,
 };
 use crate::ir::cfg::takings::{Named, Taken, by_value, inst_takings, terminator_takings};
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Inst, InstId, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{Callee, PathSeg, RefTarget, ValueId};
-use crate::passes::analysis::{AnalysisManager, ContentLiveness, Liveness, Loans, Presence, Reach, Storage};
+use crate::passes::analysis::{AnalysisManager, ContentLiveness, Liveness, Loans, Presence, Reach, Storage, Stored, stored};
 use crate::passes::edit_facts::EditFacts;
 use crate::ty::{Calls, Concrete, Mutability, Ty, TyKind, Types, copies};
 
@@ -80,13 +79,21 @@ pub fn clone_strings(module: &mut Module, am: &mut AnalysisManager<'_>) {
 ///   with the span of the edge's source terminator, where it ends.
 /// - A slot's content, or a by-value parameter's storage content: the
 ///   same, by `ContentLiveness`, through `drop_content`; a store that no read
-///   follows ends the content it stores. A `Take` through a reference to
-///   the place alone moves out of it as one by name does.
-/// - A context: its content is the page's until the body overwrites it;
-///   the old content of an overwrite is the body's and is dropped just
-///   before the store, the `Take` that takes it out standing on the order
-///   chain for a volatile context, and the body never drops the content at
-///   its end (context §3, D71).
+///   follows ends the content it stores, whether it names the place or
+///   reaches it through a reference to it alone (`OverwriteEnd::ByLiveness`).
+///   A `Take` through a reference to the place alone moves out of it as one
+///   by name does.
+/// - What a store into a context or storage outside the body, or through a
+///   reference that may reach several places, overwrites
+///   (`OverwriteEnd::AtStore`): the body does not end it by its liveness, so
+///   it ends at the last point it is known to be that content. In one
+///   place, each part present on every path is dropped just before the
+///   store (`drop_overwritten`), and each part present on some paths only
+///   on each edge where it is last known present, named from its root
+///   (`rooted_place`, `drop_overwritten_on_edge`). Among several places,
+///   all it replaces is dropped just before the store. A `Take` of a
+///   volatile context stands on the order chain, and the body never drops
+///   a context's content at its end (context §3, D71).
 /// - A value or a place's content some part of which that does not copy is
 ///   moved out, or stored into: the part moved is ended by its holder, each
 ///   other unit (`ir::parts`) ends where its own liveness ends, dropped
@@ -109,8 +116,8 @@ pub fn clone_strings(module: &mut Module, am: &mut AnalysisManager<'_>) {
 ///
 /// # Panics
 /// A parameter is dead where the body or its block starts, where no edge of
-/// its own carries the drop; a context's part is read or taken on some
-/// paths only before an overwrite; a parameter is both a value and a
+/// its own carries the drop; a store overwrites content it cannot end,
+/// which `check::moveck` refuses; a parameter is both a value and a
 /// storage. Each message states the question.
 pub fn insert_drops(module: &mut Module, am: &mut AnalysisManager<'_>) {
     for body in module.body_ids() {
@@ -157,13 +164,273 @@ fn later_in_block(body: &Body, site: Site, inst: InstId) -> bool {
     }
 }
 
-/// The place a direct `Take`, `Ref` or `Assign` names that the body owns:
-/// a slot or a by-value parameter's own storage.
-fn named_place(target: &RefTarget) -> Option<ValueId> {
-    match target {
-        RefTarget::Var(place) | RefTarget::Param(place) => Some(*place),
-        RefTarget::Through(_) | RefTarget::Context(_) => None,
+/// The name of the place `inst`, a store whose place is exactly one place
+/// (`Stored::One`), valid on `edge` (`RootedPlace`): `None` where no root
+/// reaches that place by a way no write between `edge` and the store
+/// changes, and `check::moveck` then refuses the store.
+pub(crate) fn rooted_place(body: &Body, loans: &Loans, inst: &Inst, edge: (BlockId, BlockId)) -> Option<RootedPlace> {
+    let Op::Assign { target, path, .. } = inst.op() else {
+        return None;
+    };
+    let region = Region::between(body, loans, edge.1, inst.id());
+    let mut name = match target {
+        RefTarget::Context(context) => {
+            (!region.written(Storage::Context(*context))).then(|| RootedPlace { root: *target, steps: Vec::new() })?
+        }
+        RefTarget::Through(reference) => region.lent_by(*reference)?,
+        RefTarget::Var(_) | RefTarget::Param(_) => return None,
+    };
+    push_path(&mut name, path);
+    Some(name)
+}
+
+fn push_path(name: &mut RootedPlace, path: &[PathSeg]) {
+    if path.is_empty() {
+        return;
     }
+    match name.steps.last_mut() {
+        Some(RootStep::Path(last)) => last.extend(path.iter().cloned()),
+        Some(RootStep::Deref) | None => name.steps.push(RootStep::Path(path.to_vec())),
+    }
+}
+
+/// What stands on the paths from the start of a block to a store, up to
+/// the store: its instructions, and how many of its sites write each
+/// storage.
+struct Region<'b> {
+    body: &'b Body,
+    start: BlockId,
+    insts: FxHashSet<InstId>,
+    writes: FxHashMap<Storage, usize>,
+}
+
+impl<'b> Region<'b> {
+    /// Cost: O(the blocks and instructions from `from` up to `store`).
+    fn between(body: &'b Body, loans: &Loans, from: BlockId, store: InstId) -> Region<'b> {
+        let store_block = body.block_of(store);
+        let mut region = Region { body, start: from, insts: FxHashSet::default(), writes: FxHashMap::default() };
+        let count = |region: &mut Region<'b>, site: Site| {
+            for storage in loans.writes(site) {
+                *region.writes.entry(*storage).or_default() += 1;
+            }
+        };
+        let mut seen: FxHashSet<BlockId> = FxHashSet::from_iter([from]);
+        let mut pending = vec![from];
+        while let Some(block) = pending.pop() {
+            let record = body.block(block);
+            for inst in record.insts().take_while(|inst| inst.id() != store) {
+                region.insts.insert(inst.id());
+                count(&mut region, Site::Inst(inst.id()));
+            }
+            if block == store_block {
+                continue;
+            }
+            count(&mut region, Site::Term(block));
+            for edge in record.terminator().edges() {
+                if seen.insert(edge.to) {
+                    pending.push(edge.to);
+                }
+            }
+        }
+        region
+    }
+
+    fn written(&self, storage: Storage) -> bool {
+        self.writes.contains_key(&storage)
+    }
+
+    /// The name of the place `reference` lends, valid where the region
+    /// starts: the root it is read from, which the region reads and does
+    /// not write, or the one store into that root the region makes before
+    /// the read on every path.
+    fn lent_by(&self, reference: ValueId) -> Option<RootedPlace> {
+        let Definition::Inst(at) = self.body.definition(reference) else {
+            return None;
+        };
+        match self.body.inst(at).op() {
+            Op::Ref { target, path, .. } => {
+                let mut name = self.root_of(*target, at)?;
+                push_path(&mut name, path);
+                Some(name)
+            }
+            Op::Take { target, path, .. } => {
+                if let (RefTarget::Var(root) | RefTarget::Param(root), true) = (target, path.is_empty())
+                    && let Some(stored) = self.only_store_before(*root, at)
+                {
+                    return self.lent_by(stored);
+                }
+                let mut name = self.root_of(*target, at)?;
+                push_path(&mut name, path);
+                name.steps.push(RootStep::Deref);
+                Some(name)
+            }
+            _ => None,
+        }
+    }
+
+    /// The name of `target` as the instruction `at` in the region reads
+    /// it: a slot or a parameter's own storage the region does not write, a
+    /// context it does not write, or the place a reference lends.
+    fn root_of(&self, target: RefTarget, at: InstId) -> Option<RootedPlace> {
+        match target {
+            RefTarget::Var(root) | RefTarget::Param(root) => {
+                let storage = own_storage(self.body, root);
+                (self.insts.contains(&at) && !self.written(storage)).then(|| RootedPlace { root: target, steps: Vec::new() })
+            }
+            RefTarget::Context(context) => {
+                (!self.written(Storage::Context(context))).then(|| RootedPlace { root: target, steps: Vec::new() })
+            }
+            RefTarget::Through(reference) => self.lent_by(reference),
+        }
+    }
+
+    /// The value the one whole store into `root` the region makes holds,
+    /// where that store stands before `at` on every path the region takes
+    /// to it.
+    fn only_store_before(&self, root: ValueId, at: InstId) -> Option<ValueId> {
+        if self.writes.get(&own_storage(self.body, root)) != Some(&1) || !self.insts.contains(&at) {
+            return None;
+        }
+        let mut stores = self.insts.iter().map(|inst| self.body.inst(*inst)).filter(|inst| {
+            matches!(inst.op(), Op::Assign { target: RefTarget::Var(named) | RefTarget::Param(named), .. } if *named == root)
+        });
+        let (Some(store), None) = (stores.next(), stores.next()) else {
+            return None;
+        };
+        let Op::Assign { path, value, .. } = store.op() else {
+            unreachable!("a store is an Assign");
+        };
+        (path.is_empty() && self.every_path_passes(store.id(), at)).then_some(*value)
+    }
+
+    /// Whether every path the region takes from its start to `at` passes
+    /// the instruction `through`.
+    fn every_path_passes(&self, through: InstId, at: InstId) -> bool {
+        let (through_block, at_block) = (self.body.block_of(through), self.body.block_of(at));
+        if through_block == at_block && self.body.comes_before(through, at) {
+            return true;
+        }
+        let mut seen: FxHashSet<BlockId> = FxHashSet::from_iter([self.start]);
+        let mut pending = vec![self.start];
+        while let Some(block) = pending.pop() {
+            if block == at_block {
+                return false;
+            }
+            if block == through_block {
+                continue;
+            }
+            for edge in self.body.block(block).terminator().edges() {
+                if seen.insert(edge.to) {
+                    pending.push(edge.to);
+                }
+            }
+        }
+        true
+    }
+}
+
+/// Where the content a store overwrites ends (ownership §6: a value ends
+/// at exactly one place).
+pub(crate) enum OverwriteEnd<'a> {
+    /// The store writes one place the body owns, a slot or a by-value
+    /// parameter's own storage, by name or through a reference that reaches
+    /// that place alone, at `path`: the old content ends where its liveness
+    /// ends, as for any store by name.
+    ByLiveness { place: ValueId, path: &'a [PathSeg] },
+    /// The store writes a context, storage outside the body, or one of the
+    /// places a reference may reach (`Stored::Several`). The body does not
+    /// end that content where its liveness ends, or cannot tell which place
+    /// holds it, so the old content is dropped just before the store,
+    /// through the name the store uses.
+    AtStore(Stored<'a>),
+}
+
+/// Where the content `inst` overwrites ends, where it is a store.
+pub(crate) fn overwrite_end<'a>(loans: &'a Loans, inst: &'a Inst) -> Option<OverwriteEnd<'a>> {
+    Some(match stored(loans, inst)? {
+        Stored::One { place: Storage::Slot(place) | Storage::Param(place), path } => OverwriteEnd::ByLiveness { place, path },
+        stored => OverwriteEnd::AtStore(stored),
+    })
+}
+
+/// Among `places`, which a store through a reference that may reach
+/// several places may reach, those where some part of what it overwrites
+/// may be absent just before it: the store cannot tell which it writes, so
+/// what it replaces must be there at each (R3).
+pub(crate) fn absent_among<'p>(
+    content: &'p ContentLiveness,
+    inst: &'p Inst,
+    places: &'p [(Storage, &'p [PathSeg])],
+) -> impl Iterator<Item = (Storage, &'p [PathSeg])> + 'p {
+    places.iter().copied().filter(move |(place, path)| {
+        content.units(*place).into_iter().flatten().filter(|unit| overlap(path, unit)).any(|unit| {
+            !matches!(content.presence_before(inst.id(), *place, unit), Presence::Present | Presence::Unreached)
+        })
+    })
+}
+
+/// A unit a store into one place overwrites that is present on some paths
+/// only, ended on an edge into the paths' meeting where it is present
+/// (R1): the edge, the unit below the store's path, and the place's name
+/// there, `None` where no root names it (R2).
+pub(crate) struct EdgeDrop {
+    pub from: BlockId,
+    pub to: BlockId,
+    pub unit: Path,
+    pub below: Path,
+    pub name: Option<RootedPlace>,
+}
+
+/// Each unit of `place` the store `inst` overwrites at `path`, of a value
+/// of type `ty`, that does not copy and is present on some paths only just
+/// before it, on each edge where it is last known present.
+pub(crate) fn edge_drops(
+    body: &Body,
+    types: &Types<Concrete>,
+    loans: &Loans,
+    content: &ContentLiveness,
+    inst: &Inst,
+    (place, path): (Storage, &[PathSeg]),
+    ty: Ty,
+) -> Vec<EdgeDrop> {
+    let units = content.units(place).expect("a place a store that does not copy writes has units");
+    let block = body.block_of(inst.id());
+    let mut drops = Vec::new();
+    for unit in units.iter().filter(|unit| covers(path, unit) && !copies(types, parts::part_ty(types, ty, &unit[path.len()..]))) {
+        if content.presence_before(inst.id(), place, unit) != Presence::Maybe {
+            continue;
+        }
+        for (from, to) in edges_where_present(body, content, place, unit, block) {
+            let name = rooted_place(body, loans, inst, (from, to));
+            drops.push(EdgeDrop { from, to, unit: unit.clone(), below: unit[path.len()..].to_vec(), name });
+        }
+    }
+    drops
+}
+
+/// The edges on which `unit` of `place`, present on some paths only where
+/// `block` starts, is last known present: each edge into a meeting of
+/// paths where it is present, walking back through blocks where it is
+/// present on some paths only.
+fn edges_where_present(body: &Body, content: &ContentLiveness, place: Storage, unit: &[PathSeg], block: BlockId) -> Vec<(BlockId, BlockId)> {
+    let preds = body.predecessors();
+    let mut edges = Vec::new();
+    let mut visited: FxHashSet<BlockId> = FxHashSet::from_iter([block]);
+    let mut pending = vec![block];
+    while let Some(join) = pending.pop() {
+        for pred in &preds[&join] {
+            match content.presence_at_end(*pred, place, unit) {
+                Presence::Present => edges.push((*pred, join)),
+                Presence::Absent | Presence::Unreached => {}
+                Presence::Maybe => {
+                    if visited.insert(*pred) {
+                        pending.push(*pred);
+                    }
+                }
+            }
+        }
+    }
+    edges
 }
 
 /// The storage `place`, a slot or a by-value parameter the body names as a
@@ -310,6 +577,12 @@ enum Ended {
     Value(ValueId),
     Content(Storage),
     Part { of: PartOf, unit: Path },
+    /// The part at `below` of what the store the drop stands before
+    /// overwrites.
+    Overwritten { below: Path },
+    /// The part at `below` of the place `name` names, on the edge into `to`
+    /// whose source the drop stands at the end of.
+    OverwrittenOnEdge { name: RootedPlace, below: Path, to: BlockId },
 }
 
 /// A drop the plan places, with the span it stands at.
@@ -437,6 +710,20 @@ fn drop_all(editor: &mut Editor<'_, Drops>, drops: impl Iterator<Item = PlannedD
             Ended::Value(value) => editor.insert_drop(*value, at, span),
             Ended::Content(place) => editor.drop_content(named_target(*place), at, span),
             Ended::Part { of, unit } => editor.drop_part(*of, unit, at, span),
+            Ended::Overwritten { below } => {
+                let Position::Before(store) = at else {
+                    panic!("what a store overwrites is dropped before the store, not at {at:?}");
+                };
+                editor.drop_overwritten(store, below, span);
+                Ok(())
+            }
+            Ended::OverwrittenOnEdge { name, below, to } => {
+                let Position::End(from) = at else {
+                    panic!("what a store overwrites is dropped on an edge at its source's end, not at {at:?}");
+                };
+                editor.drop_overwritten_on_edge((from, *to), name, below, span);
+                Ok(())
+            }
         };
         placed.unwrap_or_else(|refused| panic!("the plan drops {ended:?} at {at:?}, where it is still read: {refused:?}"));
     }
@@ -478,7 +765,7 @@ impl PlanFacts<'_> {
                 }
             }
         }
-        self.context_overwrites(&mut plan, &mut walked);
+        self.overwrites(&mut plan, &mut walked);
         plan
     }
 
@@ -608,8 +895,10 @@ impl PlanFacts<'_> {
         owned && !copies(self.types, body.ty_of(place))
     }
 
-    /// The places the site reads, by `Loans`, and the place it stores into
-    /// whole, which starts a new content there.
+    /// The places the site reads, by `Loans`, and those a store that drops
+    /// what it overwrites may reach, and the place it stores into whole
+    /// where its old content ends by liveness, which starts a new content
+    /// there.
     fn content_events(&self, site: Site, inst: &Inst) -> SmallVec<[ValueId; 2]> {
         let mut places: SmallVec<[ValueId; 2]> = self
             .loans
@@ -617,11 +906,13 @@ impl PlanFacts<'_> {
             .iter()
             .filter_map(|storage| storage_place(*storage))
             .collect();
-        if let Op::Assign { target, path, .. } = inst.op()
-            && path.is_empty()
-            && let Some(place) = named_place(target)
-        {
-            places.push(place);
+        match overwrite_end(self.loans, inst) {
+            Some(OverwriteEnd::ByLiveness { place, path }) if path.is_empty() => places.push(place),
+            Some(OverwriteEnd::AtStore(Stored::Several(reached))) => {
+                places.extend(reached.iter().filter_map(|(place, _)| storage_place(*place)));
+            }
+            Some(OverwriteEnd::AtStore(Stored::One { .. })) => {}
+            Some(OverwriteEnd::ByLiveness { .. }) | None => {}
         }
         places
     }
@@ -695,106 +986,91 @@ impl PlanFacts<'_> {
         }
     }
 
-    /// Before each store by name that overwrites a context, whole or in
-    /// part, each unit it replaces is the body's where the context holds it
-    /// there, and is dropped (context §3, D71). Where the context holds it
-    /// on some paths only, nothing reads it between the join and the store,
-    /// so its liveness ended on the edges into the join: it is dropped on
-    /// each such edge where it is present (ownership §6, D74).
-    fn context_overwrites(&self, plan: &mut DropPlan, walked: &mut FxHashSet<WalkedEdge>) {
+    /// Before each store whose old content ends at the store
+    /// (`OverwriteEnd::AtStore`), of a value that does not copy, that
+    /// content is dropped, taken out through the name the store uses
+    /// (ownership §6, context §3, D71). In one place, each unit it replaces
+    /// that does not copy ends at the last point it is known to be that
+    /// content (R1): just before the store where it is present on every
+    /// path, and on each edge into the paths' meeting where it is present,
+    /// named from its root (R2), where it is present on some paths only.
+    /// Among several places a reference may reach, all it replaces ends at
+    /// the store, present at each (R3). `check::moveck` refuses a store
+    /// whose content cannot end so.
+    fn overwrites(&self, plan: &mut DropPlan, walked: &mut FxHashSet<WalkedEdge>) {
         let body = self.body;
         for (block, record) in body.blocks() {
             for inst in record.insts() {
-                let Some((place, path)) = self.context_overwritten(inst) else {
+                let Some(OverwriteEnd::AtStore(stored)) = overwrite_end(self.loans, inst) else {
                     continue;
                 };
-                let units = self.content.units(place).expect("a context that does not copy has units");
-                for unit in units.iter().filter(|unit| covers(path, unit) && !self.part_copies(place_ty(body, place), unit)) {
-                    match self.content.presence_before(inst.id(), place, unit) {
-                        Presence::Present => {
-                            let drop = PlannedDrop { ended: self.place_part(place, unit), span: inst.span() };
-                            plan.before.entry(Site::Inst(inst.id())).or_default().push(drop);
+                let Op::Assign { value, .. } = inst.op() else {
+                    unreachable!("an overwrite is a store");
+                };
+                let ty = body.ty_of(*value);
+                if copies(self.types, ty) {
+                    continue;
+                }
+                let at_store = |below: Path| PlannedDrop { ended: Ended::Overwritten { below }, span: inst.span() };
+                match stored {
+                    Stored::One { place, path } => {
+                        let units = self.content.units(place).expect("a place a store that does not copy writes has units");
+                        let present = units
+                            .iter()
+                            .filter(|unit| covers(path, unit) && !self.part_copies(ty, &unit[path.len()..]))
+                            .filter(|unit| self.content.presence_before(inst.id(), place, unit) == Presence::Present);
+                        for unit in present {
+                            plan.before.entry(Site::Inst(inst.id())).or_default().push(at_store(unit[path.len()..].to_vec()));
                         }
-                        Presence::Absent | Presence::Unreached => {}
-                        Presence::Maybe => {
-                            assert!(
-                                self.untouched(place, unit, block, Some(inst.id())),
-                                "the context {place:?}'s part {unit:?} is read or taken on some paths only before \
-                                 {:?} of {block:?} overwrites it; check refuses a read of content moved out on some \
-                                 path, and insert_drops runs after check",
-                                inst.id()
-                            );
-                            self.drop_where_present(place, unit, block, true, plan, walked);
+                        for EdgeDrop { from, to, unit, below, name } in edge_drops(body, self.types, self.loans, self.content, inst, (place, path), ty) {
+                            let name = name.unwrap_or_else(|| {
+                                panic!(
+                                    "{:?} of {block:?} overwrites {place:?}'s part {unit:?}, present on the edge {from:?} to \
+                                     {to:?}, which no root names there; check::moveck refuses such a store, and \
+                                     insert_drops runs after check",
+                                    inst.id()
+                                )
+                            });
+                            if walked.insert((from, to, place, unit)) {
+                                let drop = PlannedDrop {
+                                    ended: Ended::OverwrittenOnEdge { name, below, to },
+                                    span: body.block(from).terminator_span(),
+                                };
+                                plan.on_edges.push(EdgeDrops { from, to, drops: vec![drop] });
+                            }
                         }
+                    }
+                    Stored::Several(places) => {
+                        let absent: Vec<_> = absent_among(self.content, inst, &places).collect();
+                        assert!(
+                            absent.is_empty(),
+                            "{:?} of {block:?} stores through a reference that may reach {absent:?}, where what it \
+                             replaces may be absent; check::moveck refuses such a store, and insert_drops runs after check",
+                            inst.id()
+                        );
+                        plan.before.entry(Site::Inst(inst.id())).or_default().push(at_store(Vec::new()));
                     }
                 }
             }
         }
     }
 
-    /// The context `inst` stores into by name, whole or in part, and the
-    /// path, where its type does not copy.
-    fn context_overwritten<'i>(&self, inst: &'i Inst) -> Option<(Storage, &'i [PathSeg])> {
-        let Op::Assign { target: RefTarget::Context(context), path, .. } = inst.op() else {
-            return None;
-        };
-        let place = Storage::Context(*context);
-        (!copies(self.types, place_ty(self.body, place))).then_some((place, path.as_slice()))
-    }
-
-    /// Whether nothing in `block` before the instruction `upto`, or before
-    /// the block's end where that is none, reads, takes, lends or stores
-    /// `unit` of `place`.
-    fn untouched(&self, place: Storage, unit: &[PathSeg], block: BlockId, upto: Option<InstId>) -> bool {
-        self.body.block(block).insts().take_while(|inst| Some(inst.id()) != upto).all(|inst| {
-            let site = Site::Inst(inst.id());
-            match place_of(inst.op()) {
-                Some((target, path)) if Storage::by_name(target) == Some(place) => !overlap(path, unit),
-                _ => !self.loans.reads(site).contains(&place),
-            }
-        })
-    }
-
     /// `unit` of `place` is present on some paths only where `block`
-    /// starts: it is dropped on each edge into the join where it is
-    /// present, walking back through blocks where it is present on some
-    /// paths only. `assert_untouched` asserts, for a context, that nothing
-    /// touches it on the way. An edge already given this unit's drop is not
-    /// given it again.
+    /// starts: it is dropped by its name on each edge where it is last
+    /// known present (`edges_where_present`). An edge already given this
+    /// unit's drop is not given it again.
     fn drop_where_present(
         &self,
         place: Storage,
         unit: &[PathSeg],
         block: BlockId,
-        assert_untouched: bool,
         plan: &mut DropPlan,
         walked: &mut FxHashSet<WalkedEdge>,
     ) {
-        let body = self.body;
-        let preds = body.predecessors();
-        let mut visited: FxHashSet<BlockId> = FxHashSet::from_iter([block]);
-        let mut pending = vec![block];
-        while let Some(join) = pending.pop() {
-            for pred in &preds[&join] {
-                match self.content.presence_at_end(*pred, place, unit) {
-                    Presence::Present => {
-                        if walked.insert((*pred, join, place, unit.to_vec())) {
-                            let drop = PlannedDrop { ended: self.place_part(place, unit), span: body.block(*pred).terminator_span() };
-                            plan.on_edges.push(EdgeDrops { from: *pred, to: join, drops: vec![drop] });
-                        }
-                    }
-                    Presence::Absent | Presence::Unreached => {}
-                    Presence::Maybe => {
-                        assert!(
-                            !assert_untouched || self.untouched(place, unit, *pred, None),
-                            "the context {place:?}'s part {unit:?} is read or taken on some paths only in \
-                             {pred:?}, before an overwrite; check refuses such a read, and insert_drops runs after check"
-                        );
-                        if visited.insert(*pred) {
-                            pending.push(*pred);
-                        }
-                    }
-                }
+        for (from, to) in edges_where_present(self.body, self.content, place, unit, block) {
+            if walked.insert((from, to, place, unit.to_vec())) {
+                let drop = PlannedDrop { ended: self.place_part(place, unit), span: self.body.block(from).terminator_span() };
+                plan.on_edges.push(EdgeDrops { from, to, drops: vec![drop] });
             }
         }
     }
@@ -1104,13 +1380,20 @@ impl PlanFacts<'_> {
         let ended = || Ended::Part { of: PartOf::Place(named_target(own_storage(body, place))), unit: unit.to_vec() };
         for inst in record.insts() {
             let site = Site::Inst(inst.id());
-            let event = match place_of(inst.op()) {
-                Some((RefTarget::Var(named) | RefTarget::Param(named), path)) if *named == place => match inst.op() {
+            let event = match (overwrite_end(self.loans, inst), place_of(inst.op())) {
+                (Some(OverwriteEnd::ByLiveness { place: stored, path }), _) if stored == place => {
+                    covers(parts::owned_region(path), unit).then_some(PlaceEvent::Stored)
+                }
+                (Some(OverwriteEnd::AtStore(Stored::Several(places))), _)
+                    if places.iter().any(|(reached, path)| storage_place(*reached) == Some(place) && overlap(path, unit)) =>
+                {
+                    Some(PlaceEvent::Read)
+                }
+                (_, Some((RefTarget::Var(named) | RefTarget::Param(named), path))) if *named == place => match inst.op() {
                     Op::Take { .. } if covers(parts::owned_region(path), unit) && !self.takes_a_copy(inst) => {
                         Some(PlaceEvent::Moved)
                     }
                     Op::Take { .. } if overlap(path, unit) => Some(PlaceEvent::Read),
-                    Op::Assign { .. } if covers(parts::owned_region(path), unit) => Some(PlaceEvent::Stored),
                     _ => None,
                 },
                 _ => match self.moved_through(inst) {
@@ -1132,7 +1415,7 @@ impl PlanFacts<'_> {
             match presence {
                 Presence::Present => plan.after.entry(site).or_default().push(PlannedDrop { ended: ended(), span: inst.span() }),
                 Presence::Absent | Presence::Unreached => {}
-                Presence::Maybe => self.drop_where_present(own_storage(self.body, place), unit, block, false, plan, walked),
+                Presence::Maybe => self.drop_where_present(own_storage(self.body, place), unit, block, plan, walked),
             }
         }
         let is_param = matches!(body.definition(place), Definition::Param(_));
@@ -1171,7 +1454,7 @@ impl PlanFacts<'_> {
                     plan.on_edges.push(EdgeDrops { from: block, to: edge.to, drops: vec![drop] });
                 }
                 Presence::Absent | Presence::Unreached => {}
-                Presence::Maybe => self.drop_where_present(own_storage(self.body, place), unit, block, false, plan, walked),
+                Presence::Maybe => self.drop_where_present(own_storage(self.body, place), unit, block, plan, walked),
             }
         }
     }
@@ -1195,18 +1478,6 @@ fn named_target(place: Storage) -> RefTarget {
         Storage::Param(param) => RefTarget::Param(param),
         Storage::Context(context) => RefTarget::Context(context),
         Storage::Outside { .. } => panic!("{place:?} is outside the body, and named by no place"),
-    }
-}
-
-/// The type of `place`, a place by name.
-///
-/// # Panics
-/// `place` is storage outside the body.
-fn place_ty(body: &Body, place: Storage) -> Ty {
-    match place {
-        Storage::Slot(value) | Storage::Param(value) => body.ty_of(value),
-        Storage::Context(context) => body.context_ty(context),
-        Storage::Outside { .. } => panic!("{place:?} is outside the body, and no place by name"),
     }
 }
 
