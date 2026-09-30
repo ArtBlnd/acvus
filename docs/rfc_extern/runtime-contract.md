@@ -4,7 +4,7 @@ The runtime contract is the seam between extern fns and whatever runs them. Ever
 
 ## 1. Values
 
-A value's representation is not part of the contract. The contract holds even when the runtime's value is a trivial safe enum of any size, so a safe, slow runtime implementing it runs every extern fn. The extern side reaches values only through the contract's operations, generic over the runtime and dispatched statically, so a runtime pays nothing for the generality.
+A value's representation is not part of the contract. The contract holds whatever a runtime's value is, a trivial enum of any size included. The extern side reaches values only through the contract's operations, generic over the runtime and dispatched statically, so a runtime pays nothing for the generality.
 
 **Nothing anywhere makes a runtime value from a Rust value.** No function, trait or conversion turns a `T` into a `Value`. A value of the runtime exists only where the crossing made it, at the type the checker settled for that site. The reason is variance: a path from `T` to `Value` makes `fn(Value)` usable as `fn(T)`, and a function parameter is contravariant, so a function written for one type would be called with a value made from another. That is undefined behaviour, and no bound or `unsafe` marker on the path prevents it; the path does not exist.
 
@@ -34,11 +34,13 @@ An extern-defined generic type is stored as one Rust value. Where a type argumen
 
 ## 3. What a caller owes
 
-Every typed read states its caller's obligation over the checker's typing of the read path, never over how the value was made: this value, reached through this runtime's own operations along a path the checker typed `T`, is taken at `T`. The extern side discharges it from the checker. A runtime that checks its reads turns a breach into a panic; a runtime that trusts them trusts its own reads.
+Every typed read states its caller's obligation over the checker's typing of the read path, never over how the value was made: this value, reached through this runtime's own operations along a path the checker typed `T`, is taken at `T`. The extern side discharges it from the checker, and a runtime trusts its own reads.
 
 The extern side reinterprets a part the runtime handed it only by a layout-only cast under a layout witness, and every later typed read of that part goes back to the runtime. A layout witness is made only where the layout identity it proves is signed, at the type (safety §2, L), and nowhere else.
 
-The entry is safe. The axiom enters only where a runtime trusts its own typed reads: such a runtime owes that each value is live at the type the checker settled for the site (safety §3). A runtime that checks its reads owes nothing, so a safe runtime needs no `unsafe` of its own: it implements a safe trait that hands out its storage as safe Rust objects, and the extern side's adapter over that trait implements the contract and signs the facts, once, in its boundary. That implementation holds because no Rust reference to lent storage outlives the guard it came from (limitations §3), so the extern side relies on storage only while a guard lends it.
+The entry is safe. Every runtime that implements the contract trusts its own typed reads, and owes that each value is live at the type the checker settled for the site (safety §3). A checking runtime is no second implementation. For every runtime X, the adapter over X implements the contract with X's representation and X's operations; it tracks the guards, loans and reads those operations make, and turns a breach of the checker's typing or of S1-S3 into a panic where X would have undefined behaviour. So the adapter runs everything X runs. The host chooses whether to run X or the adapter over X, and the extern side, written against the contract alone, cannot tell which. The adapter's tracking holds because no Rust reference to lent storage outlives the guard it came from (limitations §3), so the extern side relies on storage only while a guard lends it.
+
+*Rejected.* A checking runtime that implements the contract over a storage of its own: it represents less than the runtime it checks, and each thing it cannot represent becomes a restriction on the contract.
 
 ## 4. What the runtime signs
 
