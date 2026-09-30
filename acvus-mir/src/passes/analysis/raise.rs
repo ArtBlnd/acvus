@@ -23,7 +23,9 @@
 //!
 //! The analysis is a query the manager keeps per body; it writes nothing
 //! into the IR. It asks the manager for each callee's endings outside its own
-//! component, so the manager never meets a body it is computing.
+//! component, so the manager never meets a body it is computing; the
+//! manager records those reads, so an edit that drops a callee's endings
+//! drops its callers' too.
 //!
 //! Cost: O(instructions + loops) per body over the facts it reads (the
 //! value analyses, the match facts, the scalar evolution and the callees'
@@ -469,6 +471,7 @@ mod tests {
     use crate::ir::cfg::Builder;
     use crate::ir::{BinOp, ForSource, IndexMode};
     use crate::passes::optimize::tests::{Fixture, add, int_const, ret};
+    use crate::passes::optimize::{BodyTransform, Sccp};
     use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId};
 
     /// `apply(f: fn(i64) -> i64) -> i64`, whose own code is declared
@@ -829,6 +832,56 @@ mod tests {
         let (endings, _) = empty_endings(&f, clean_caller);
         assert!(!endings.may_trap(made(&f, clean_caller, clean_call)));
         assert_eq!(endings.body(), Ending { may_trap: false, finishes: true });
+    }
+
+    /// The callee `|x| x / zero` behind a condition known false, and the
+    /// caller `f = the callee; r = f(a)`:
+    ///
+    /// ```text
+    /// callee entry(x):  zero = 0; t = true; jump_if t { kept } else { trapping }
+    /// kept:             return x
+    /// trapping:         q = x / zero; return q
+    /// ```
+    ///
+    /// The trapping block is reachable until `sccp` takes the known arm and
+    /// prunes it; the caller's endings, kept by the same manager, follow the
+    /// callee's edit.
+    #[test]
+    fn a_callers_endings_follow_its_callees_edit() {
+        let mut f = Fixture::new();
+        let (int, bool, closure_ty, na, nx) = (f.int, f.bool, f.pure_unary, f.name("a"), f.name("x"));
+        let mut builder = f.module.build_body(false, int);
+        let x = builder.param(nx, int, Span::ZERO);
+        let zero = builder.push(int_const(0), int, Span::ZERO);
+        let t = builder.push(Op::Const { value: acvus_ast::Literal::Bool(true) }, bool, Span::ZERO);
+        let [kept, trapping] = [(); 2].map(|()| builder.new_block(&[]));
+        let jump_if = Terminator::JumpIf { cond: t, then_to: kept, then_args: Vec::new(), else_to: trapping, else_args: Vec::new() };
+        builder.terminate(jump_if, Span::ZERO);
+        builder.switch_to(kept);
+        builder.terminate(ret(x), Span::ZERO);
+        builder.switch_to(trapping);
+        let q = builder.push(binary(BinOp::Div, x, zero), int, Span::ZERO);
+        builder.terminate(ret(q), Span::ZERO);
+        let callee = builder.seal().expect("the body has no open state");
+        let mut builder = f.module.build_body(false, int);
+        let a = builder.param(na, int, Span::ZERO);
+        let function = builder.push(closure(vec![callee]), closure_ty, Span::ZERO);
+        let r = builder.push(call_of(function, closure_ty, vec![a]), int, Span::ZERO);
+        builder.terminate(ret(r), Span::ZERO);
+        let caller = builder.seal().expect("the body has no open state");
+        let decls = crate::passes::optimize::tests::declarations(&f.interner);
+        let mut am = AnalysisManager::new(&decls);
+
+        let before = am.get::<Raise>(&f.module, caller);
+        assert!(before.may_trap(made(&f, caller, r)), "the callee's trapping block is reachable");
+
+        let changes = Sccp::run(&mut f.module, callee, &mut am);
+        am.invalidate(callee, &changes);
+
+        assert_eq!(am.get::<Raise>(&f.module, callee).body(), Ending::CLEAN, "sccp pruned the trapping block");
+        let after = am.get::<Raise>(&f.module, caller);
+        assert!(!after.may_trap(made(&f, caller, r)), "the caller's endings were dropped with the callee's");
+        assert_eq!(after.body(), Ending::CLEAN);
     }
 
     /// `entry(a, o): s = Some(a); u = unwrap s; v = unwrap o; return u`.

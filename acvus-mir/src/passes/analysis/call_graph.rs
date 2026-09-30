@@ -7,7 +7,8 @@
 //! every component it reaches.
 //!
 //! The manager keeps it once per module, as a module analysis: it reads
-//! the bodies' instructions, so an edit of any body's instructions drops it.
+//! the bodies' instructions, so an edit of any body's instructions drops
+//! it, and it ranges over the module's bodies, so an added body drops it.
 //!
 //! Cost: O(bodies + instructions) for the graph and its components, since
 //! each edge is one instruction's.
@@ -79,11 +80,17 @@ impl CallGraph {
     /// O(1).
     ///
     /// # Panics
-    /// Either is a body the graph was not made over: a body built after the
-    /// manager kept the graph, which no edit records, is a compiler defect.
+    /// Either is a body the graph was not made over: the manager drops the
+    /// graph when a seal adds a body, so this is a module whose body set
+    /// changed without `AnalysisManager::invalidate_body_set`, a compiler
+    /// defect.
     pub(crate) fn same_component(&self, a: BodyId, b: BodyId) -> bool {
         let component = |body: BodyId| {
-            *self.component_of.get(&body).unwrap_or_else(|| panic!("{body:?} was built after the call graph was made"))
+            *self.component_of.get(&body).unwrap_or_else(|| {
+                panic!(
+                    "{body:?} is not among the bodies the call graph was made over; a kept module analysis ranges over every body, so the body set changed without AnalysisManager::invalidate_body_set"
+                )
+            })
         };
         component(a) == component(b)
     }

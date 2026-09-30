@@ -189,7 +189,8 @@ where
 }
 
 /// `step` for a transform over the module; every body is asserted in its
-/// form before, and every body it changed is checked after.
+/// form before, and every body it changed is checked after. A body a seal
+/// added drops the module analyses, which range over every body.
 fn module_step<T>(module: &mut Module, am: &mut AnalysisManager<'_>) -> Vec<(BodyId, Changes)>
 where
     T: ModuleTransform + Requires,
@@ -201,6 +202,9 @@ where
         }
     }
     let changed = T::run(module, am);
+    if let Some(body_set_change) = module.take_body_set_change() {
+        am.invalidate_body_set(body_set_change);
+    }
     for (body, changes) in &changed {
         am.invalidate(*body, changes);
         if CHECKED && recorded_any(changes) {

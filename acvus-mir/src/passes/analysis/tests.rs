@@ -1027,16 +1027,16 @@ fn invalidation_drops_exactly_the_analyses_whose_reads_changed() {
     );
 }
 
-/// How many bodies the module has.
-struct BodyCount;
+/// How many instructions the module's bodies hold.
+struct InstCount;
 
-impl ModuleAnalysis for BodyCount {
+impl ModuleAnalysis for InstCount {
     type Facts = usize;
 
     const READS: &'static [Aspect] = &[Aspect::Instructions];
 
     fn compute(_am: &mut AnalysisManager<'_>, module: &Module) -> usize {
-        module.body_ids().count()
+        module.body_ids().map(|body| module.body(body).blocks().map(|(_, block)| block.insts().len()).sum::<usize>()).sum()
     }
 }
 
@@ -1048,16 +1048,189 @@ fn a_module_analysis_is_kept_once_and_dropped_by_any_bodys_edit_of_what_it_reads
     let [body, other] = identity_bodies(&mut f);
     let decls = empty_declarations(&f.interner);
     let mut am = AnalysisManager::new(&decls);
-    let first = am.get_of_module::<BodyCount>(&f.module);
-    assert_eq!(*first, 2);
-    assert!(Rc::ptr_eq(&first, &am.get_of_module::<BodyCount>(&f.module)), "the second request returns the kept facts");
+    let first = am.get_of_module::<InstCount>(&f.module);
+    assert_eq!(*first, 0);
+    assert!(Rc::ptr_eq(&first, &am.get_of_module::<InstCount>(&f.module)), "the second request returns the kept facts");
 
     am.invalidate(body, &changed(Aspect::CfgShape));
-    let kept = am.get_of_module::<BodyCount>(&f.module);
+    let kept = am.get_of_module::<InstCount>(&f.module);
     assert!(Rc::ptr_eq(&first, &kept), "a disjoint aspect keeps it");
 
     am.invalidate(other, &changed(Aspect::Instructions));
-    assert!(!Rc::ptr_eq(&kept, &am.get_of_module::<BodyCount>(&f.module)), "an edit of any body that it reads drops it");
+    assert!(!Rc::ptr_eq(&kept, &am.get_of_module::<InstCount>(&f.module)), "an edit of any body that it reads drops it");
+}
+
+/// How many bodies the module has: it reads no aspect of any body, only
+/// the body set.
+struct BodyCount;
+
+impl ModuleAnalysis for BodyCount {
+    type Facts = usize;
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(_am: &mut AnalysisManager<'_>, module: &Module) -> usize {
+        module.body_ids().count()
+    }
+}
+
+/// The module's body count, read through the manager; nothing of its own
+/// body.
+struct CountedBodies;
+
+impl Analysis for CountedBodies {
+    type Facts = Rc<usize>;
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(am: &mut AnalysisManager<'_>, module: &Module, _body: BodyId) -> Rc<usize> {
+        am.get_of_module::<BodyCount>(module)
+    }
+}
+
+/// The block count of the module's first body, read through the manager;
+/// nothing of its own body.
+struct FirstBodysBlocks;
+
+impl Analysis for FirstBodysBlocks {
+    type Facts = Rc<usize>;
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(am: &mut AnalysisManager<'_>, module: &Module, _body: BodyId) -> Rc<usize> {
+        let first = module.body_ids().next().expect("the module has a body");
+        am.get::<BlockCount>(module, first)
+    }
+}
+
+/// `FirstBodysBlocks` of its own body, read through the manager: two hops
+/// from the first body's `BlockCount`.
+struct FirstBodysBlocksAgain;
+
+impl Analysis for FirstBodysBlocksAgain {
+    type Facts = Rc<Rc<usize>>;
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Rc<Rc<usize>> {
+        am.get::<FirstBodysBlocks>(module, body)
+    }
+}
+
+/// The module's instruction count, read through the manager; nothing of
+/// its own body.
+struct CountedInsts;
+
+impl Analysis for CountedInsts {
+    type Facts = Rc<usize>;
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(am: &mut AnalysisManager<'_>, module: &Module, _body: BodyId) -> Rc<usize> {
+        am.get_of_module::<InstCount>(module)
+    }
+}
+
+/// Every aspect an edit may touch.
+fn every_aspect() -> Changes {
+    let mut changes = Changes::default();
+    for aspect in [Aspect::CfgShape, Aspect::Instructions, Aspect::Types, Aspect::Storage, Aspect::OrderTokens] {
+        changes.record(aspect);
+    }
+    changes
+}
+
+/// A body analysis that read another body's analysis is dropped by an edit
+/// of that body in an aspect the read analysis reads, and kept by one in
+/// no such aspect; an analysis of the reading body that read nothing of
+/// the edited one is kept.
+#[test]
+fn a_body_analysis_is_dropped_with_another_bodys_analysis_it_read() {
+    let mut f = fixture();
+    let [first, second] = identity_bodies(&mut f);
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let reads_first = am.get::<FirstBodysBlocks>(&f.module, second);
+    let own_blocks = am.get::<BlockCount>(&f.module, second);
+
+    am.invalidate(first, &changed(Aspect::Instructions));
+    let kept = am.get::<FirstBodysBlocks>(&f.module, second);
+    assert!(Rc::ptr_eq(&reads_first, &kept), "BlockCount of the first body reads no instruction, so it and its reader are kept");
+
+    am.invalidate(first, &changed(Aspect::CfgShape));
+    assert!(!Rc::ptr_eq(&kept, &am.get::<FirstBodysBlocks>(&f.module, second)), "the read BlockCount was dropped, so its reader is");
+    assert!(Rc::ptr_eq(&own_blocks, &am.get::<BlockCount>(&f.module, second)), "an analysis that read nothing of the first body is kept");
+}
+
+/// Dropping reaches a reader two reads away.
+#[test]
+fn a_drop_reaches_every_reader_transitively() {
+    let mut f = fixture();
+    let [first, second] = identity_bodies(&mut f);
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let two_hops = am.get::<FirstBodysBlocksAgain>(&f.module, second);
+
+    am.invalidate(first, &changed(Aspect::Types));
+    let kept = am.get::<FirstBodysBlocksAgain>(&f.module, second);
+    assert!(Rc::ptr_eq(&two_hops, &kept), "nothing it reads, directly or through others, reads types");
+
+    am.invalidate(first, &changed(Aspect::CfgShape));
+    assert!(!Rc::ptr_eq(&kept, &am.get::<FirstBodysBlocksAgain>(&f.module, second)), "BlockCount, two reads away, was dropped");
+}
+
+/// A body analysis that read a module analysis is dropped with it, by an
+/// edit of a body the reader is not of.
+#[test]
+fn a_body_analysis_is_dropped_with_a_module_analysis_it_read() {
+    let mut f = fixture();
+    let [body, other] = identity_bodies(&mut f);
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let reader = am.get::<CountedInsts>(&f.module, body);
+    let own_blocks = am.get::<BlockCount>(&f.module, body);
+
+    am.invalidate(other, &changed(Aspect::CfgShape));
+    let kept = am.get::<CountedInsts>(&f.module, body);
+    assert!(Rc::ptr_eq(&reader, &kept), "InstCount reads no CFG shape, so it and its reader are kept");
+
+    am.invalidate(other, &changed(Aspect::Instructions));
+    assert!(!Rc::ptr_eq(&kept, &am.get::<CountedInsts>(&f.module, body)), "InstCount was dropped, so its reader is");
+    assert!(Rc::ptr_eq(&own_blocks, &am.get::<BlockCount>(&f.module, body)), "an analysis that read no module analysis is kept");
+}
+
+/// A module analysis ranges over the body set: no edit of a body drops
+/// one that reads no aspect, and a body added drops it and its readers,
+/// while an analysis of a body that read no module analysis is kept.
+#[test]
+fn a_body_added_drops_the_module_analyses_and_their_readers() {
+    let mut f = fixture();
+    let [body, other] = identity_bodies(&mut f);
+    f.module.take_body_set_change();
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let count = am.get_of_module::<BodyCount>(&f.module);
+    let reader = am.get::<CountedBodies>(&f.module, body);
+    let own_blocks = am.get::<BlockCount>(&f.module, body);
+    assert_eq!(*count, 2);
+
+    am.invalidate(body, &every_aspect());
+    am.invalidate(other, &every_aspect());
+    assert!(Rc::ptr_eq(&count, &am.get_of_module::<BodyCount>(&f.module)), "no edit of a body changes the body set");
+    assert!(Rc::ptr_eq(&reader, &am.get::<CountedBodies>(&f.module, body)));
+    assert!(f.module.take_body_set_change().is_none(), "no seal since the record was taken");
+    let own_blocks_after_edits = am.get::<BlockCount>(&f.module, body);
+    assert!(!Rc::ptr_eq(&own_blocks, &own_blocks_after_edits), "the edit of its CFG shape dropped it");
+
+    let [_added] = identity_bodies(&mut f);
+    let change = f.module.take_body_set_change().expect("the seal recorded that the body set changed");
+    am.invalidate_body_set(change);
+    let recounted = am.get_of_module::<BodyCount>(&f.module);
+    assert_eq!(*recounted, 3, "the module analysis was dropped and ranges over the added body");
+    let reread = am.get::<CountedBodies>(&f.module, body);
+    assert!(!Rc::ptr_eq(&reader, &reread), "its reader was dropped with it");
+    assert!(Rc::ptr_eq(&*reread, &recounted), "the reader reads the recount");
+    assert!(Rc::ptr_eq(&own_blocks_after_edits, &am.get::<BlockCount>(&f.module, body)), "an analysis that read no module analysis is kept");
 }
 
 // -- Dominators, post-dominators, loops --------------------------------------

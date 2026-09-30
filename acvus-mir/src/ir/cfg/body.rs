@@ -40,6 +40,19 @@ pub struct Module {
     /// Each unit instantiation body a call claimed, with the function type
     /// the call claimed it at.
     pub(super) claimed: FxHashMap<BodyId, Ty>,
+    /// Set by each seal, since the last `take_body_set_change`.
+    pub(super) body_set_change: Option<BodySetChanged>,
+}
+
+/// The record that a seal added a body to the module since the record was
+/// last taken. Only a seal makes one.
+#[derive(Debug)]
+pub struct BodySetChanged(());
+
+impl BodySetChanged {
+    pub(super) fn record() -> BodySetChanged {
+        BodySetChanged(())
+    }
 }
 
 /// What a value is: its type, where it is defined, and whether it is an
@@ -585,7 +598,13 @@ impl Module {
     ///
     /// Cost: O(1).
     pub fn new(types: Types<Concrete>) -> Module {
-        Module { bodies: Vec::new(), entry: None, types, claimed: FxHashMap::default() }
+        Module { bodies: Vec::new(), entry: None, types, claimed: FxHashMap::default(), body_set_change: None }
+    }
+
+    /// Takes the record that a seal added a body since the record was last
+    /// taken, leaving none. Cost: O(1).
+    pub fn take_body_set_change(&mut self) -> Option<BodySetChanged> {
+        self.body_set_change.take()
     }
 
     /// A Builder for a new body of this module, whose every return yields
