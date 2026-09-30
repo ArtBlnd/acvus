@@ -24,10 +24,11 @@ pub enum RefusalKind {
     UnnamedVariant { tag: Astr },
     UnknownName { name: Astr },
     UnknownContext { context: QualifiedRef },
-    /// An extern fn named where no call of it stands: it is called, never
-    /// taken as a value, and a lambda calling it stands where a function
-    /// value is wanted (extern-fn §1).
-    ExternAsValue { declaration: QualifiedRef },
+    /// A name of extern fns written where no call of it stands, by the
+    /// name as written: an extern fn is called, never taken as a value, and
+    /// a lambda calling it stands where a function value is wanted
+    /// (extern-fn §1).
+    ExternAsValue { name: QualifiedRef },
     /// A call by name of what is no unit: only a unit's parameters have
     /// names a call passes by (programs §1, §2).
     NamedArgumentsToNonUnit,
@@ -150,7 +151,7 @@ impl RefusalKind {
             RefusalKind::UnnamedVariant { tag } => format!("UnnamedVariant {}", name(tag)),
             RefusalKind::UnknownName { name: unknown } => format!("UnknownName {}", name(unknown)),
             RefusalKind::UnknownContext { context } => format!("UnknownContext @{}", path(context)),
-            RefusalKind::ExternAsValue { declaration } => format!("ExternAsValue {}", path(declaration)),
+            RefusalKind::ExternAsValue { name: written } => format!("ExternAsValue {}", path(written)),
             RefusalKind::UnitCalledByPosition { unit } => format!("UnitCalledByPosition {}", path(unit)),
             RefusalKind::UnknownArgument { unit, name: argument } => format!("UnknownArgument {}({}:)", path(unit), name(argument)),
             RefusalKind::DuplicateArgument { unit, name: argument } => format!("DuplicateArgument {}({}:)", path(unit), name(argument)),

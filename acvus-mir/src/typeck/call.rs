@@ -280,10 +280,10 @@ pub(super) fn reach_in(
     result
 }
 
-/// A declaration named where no call of it stands: refused as
-/// `ExternAsValue` (extern-fn §1); the term left is fresh, so the program
-/// around it is still checked.
-pub(super) fn declaration_value(cx: &mut Ctxt<'_>, declaration: QualifiedRef, span: Span) -> Term {
-    refusal::push(cx, RefusalKind::ExternAsValue { declaration }, span);
+/// `name`, reaching one declaration or several, named where no call of it
+/// stands: refused as `ExternAsValue` whatever it reaches (extern-fn §1);
+/// the term left is fresh, so the program around it is still checked.
+pub(super) fn declaration_value(cx: &mut Ctxt<'_>, name: QualifiedRef, span: Span) -> Term {
+    refusal::push(cx, RefusalKind::ExternAsValue { name }, span);
     cx.fresh()
 }

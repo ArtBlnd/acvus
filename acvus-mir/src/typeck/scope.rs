@@ -315,25 +315,14 @@ pub(super) fn check_ident(
             None => found.binding.term,
         };
     }
-    let declarations: Box<[QualifiedRef]> = if name.namespace.is_root() {
-        cx.decls.overloads(name.name).into()
-    } else {
-        cx.decls.scheme(name).map(|_| name).into_iter().collect()
+    let names_a_declaration = match name.namespace.is_root() {
+        true => !cx.decls.overloads(name.name).is_empty(),
+        false => cx.decls.scheme(name).is_some(),
     };
-    match &declarations[..] {
-        [declaration] => super::call::declaration_value(cx, *declaration, span),
-        [] => {
+    match names_a_declaration {
+        true => super::call::declaration_value(cx, name, span),
+        false => {
             refusal::push(cx, RefusalKind::UnknownName { name: name.name }, span);
-            cx.fresh()
-        }
-        // A name used as a value has no argument to decide among its
-        // declarations by (types §6).
-        _ => {
-            let kind = RefusalKind::SeveralDeclarations {
-                name: name.name,
-                left: declarations,
-            };
-            refusal::push(cx, kind, span);
             cx.fresh()
         }
     }

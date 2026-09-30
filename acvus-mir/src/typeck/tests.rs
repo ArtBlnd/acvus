@@ -3622,7 +3622,26 @@ fn an_extern_fn_taken_as_a_value_is_refused() {
     let len = fx.declare("len", len_ty, &[]);
     let source = "let xs = 1; let f = len; f(&xs)";
     let (checked, _) = fx.script(source);
-    assert_eq!(checked.refusals(), vec![&RefusalKind::ExternAsValue { declaration: len }]);
+    assert_eq!(checked.refusals(), vec![&RefusalKind::ExternAsValue { name: len }]);
+    let start = source.find("= len;").expect("the source names `len`") + "= ".len();
+    assert_eq!(checked.typeck.refusals[0].span, acvus_ast::Span { start, end: start + "len".len() }, "refused at the name");
+}
+
+/// extern-fn §1: the value use is what is refused, so a bare name reaching
+/// two declarations is refused as one used as a value, by the name as
+/// written, and not as several declarations.
+#[test]
+fn a_name_reaching_several_extern_fns_taken_as_a_value_is_refused_by_its_written_name() {
+    let mut fx = Fixture::new();
+    let i64_ty = fx.int(IntTy::I64);
+    let shared = fx.reference(Mutability::Shared, i64_ty);
+    let len_ty = fx.pure(&[shared], i64_ty);
+    fx.overload("a", "len", len_ty);
+    fx.overload("b", "len", len_ty);
+    let written = QualifiedRef::root(fx.name("len"));
+    let source = "let xs = 1; let f = len; f(&xs)";
+    let (checked, _) = fx.script(source);
+    assert_eq!(checked.refusals(), vec![&RefusalKind::ExternAsValue { name: written }]);
     let start = source.find("= len;").expect("the source names `len`") + "= ".len();
     assert_eq!(checked.typeck.refusals[0].span, acvus_ast::Span { start, end: start + "len".len() }, "refused at the name");
 }
