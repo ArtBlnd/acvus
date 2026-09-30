@@ -1680,10 +1680,10 @@ fn split_edge_into_a_loops_body_makes_the_new_block_the_loops_body() {
     let middle = editor.split_edge(header, loop_body);
     editor.finish();
     let body = f.body(id);
-    let Terminator::While { body: stage, .. } = body.block(header).terminator() else {
+    let Terminator::While { body: entered, .. } = body.block(header).terminator() else {
         panic!("the header still loops")
     };
-    assert_eq!(*stage, middle);
+    assert_eq!(*entered, middle);
     assert!(matches!(body.block(middle).terminator(), Terminator::Jump { to, .. } if *to == loop_body));
 }
 

@@ -107,8 +107,8 @@ fn the_full_level_reaches_the_expected_form() {
 
     let body = f.module.body(id);
     assert!(body.slots().is_empty(), "{}", f.snapshot(id));
-    let Some((header, cond_stage, exit)) = body.blocks().find_map(|(block, record)| match record.terminator() {
-        Terminator::While { body: stage, exit, .. } => Some((block, *stage, *exit)),
+    let Some((header, loop_body, exit)) = body.blocks().find_map(|(block, record)| match record.terminator() {
+        Terminator::While { body, exit, .. } => Some((block, *body, *exit)),
         _ => None,
     }) else {
         panic!("the loop stays:\n{}", f.snapshot(id))
@@ -118,7 +118,7 @@ fn the_full_level_reaches_the_expected_form() {
     };
     let ops = |block: BlockId| -> Vec<&Op> { body.block(block).insts().map(|inst| inst.op()).collect() };
 
-    let [Op::BinOp { op: BinOp::Add, left, right: u }] = ops(cond_stage)[..] else {
+    let [Op::BinOp { op: BinOp::Add, left, right: u }] = ops(loop_body)[..] else {
         panic!("the loop body is one addition:\n{}", f.snapshot(id))
     };
     assert_eq!(left, acc);

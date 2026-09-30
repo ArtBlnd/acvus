@@ -217,7 +217,7 @@ mod tests {
         let header = body
             .blocks()
             .find_map(|(block, record)| match record.terminator() {
-                Terminator::While { body: stage, .. } if *stage == loop_body => Some(block),
+                Terminator::While { body, .. } if *body == loop_body => Some(block),
                 _ => None,
             })
             .expect("the loop keeps its header");

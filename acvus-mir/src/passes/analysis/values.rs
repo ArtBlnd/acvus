@@ -152,7 +152,7 @@ impl SparseAnalysis for Constants<'_> {
             Terminator::JumpIf { then_to, else_to, .. } | Terminator::Diamond { then_to, else_to, .. } => {
                 branch(operands[0], *then_to, *else_to)
             }
-            Terminator::While { body: stage, exit, .. } => branch(operands[0], *stage, *exit),
+            Terminator::While { body, exit, .. } => branch(operands[0], *body, *exit),
             Terminator::Switch { arms, default, .. } => {
                 let known = match operands[0] {
                     Constant::Bottom => return Executable::Only(Vec::new()),
@@ -378,10 +378,10 @@ impl SparseAnalysis for Affines<'_> {
     /// left, a range's end its `hi` and a slice's its length. An array's
     /// counter and an element are `top`.
     fn supplied(&self, terminator: &Terminator, to: BlockId, index: usize, operands: &[&Affine]) -> Affine {
-        let Terminator::For { source, body: stage, .. } = terminator else {
+        let Terminator::For { source, body, .. } = terminator else {
             panic!("only a For supplies parameters, not {terminator:?}")
         };
-        if to != *stage || index != source.counter_param() {
+        if to != *body || index != source.counter_param() {
             return Affine::Top;
         }
         let end = match (source, operands) {

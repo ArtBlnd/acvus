@@ -2111,8 +2111,8 @@ impl Forward<'_> {
     /// value out by value.
     fn step_terminator(&self, block: BlockId, terminator: &Terminator, state: &mut State, record: &mut Record) {
         let site = Site::Term(block);
-        let (source, stage) = match terminator {
-            Terminator::For { source, body: stage, .. } => (source, stage),
+        let (source, body) = match terminator {
+            Terminator::For { source, body, .. } => (source, body),
             Terminator::Return { value, .. } => {
                 self.passed(state, *value, site, None, record);
                 self.page_of_terminator(terminator).record(site, record);
@@ -2120,7 +2120,7 @@ impl Forward<'_> {
             }
             _ => return,
         };
-        let params = self.body.block(*stage).params();
+        let params = self.body.block(*body).params();
         let element = match source {
             ForSource::Slice(slice) => Some(self.reborrow(state, *slice, Mode::Shared, site, record)),
             ForSource::SliceMut(slice) => Some(self.reborrow(state, *slice, Mode::Exclusive, site, record)),

@@ -487,15 +487,15 @@ fn a_for_over_a_reference_to_an_array_traverses_its_view() {
 fn a_for_over_a_range_is_a_for_of_its_bounds() {
     let lowered = Fixture::new().script("for i in 0..3 { i; } 1");
     let body = lowered.entry();
-    let stage = lowered
+    let loop_body = lowered
         .entry_terminators()
         .into_iter()
         .find_map(|terminator| match terminator {
-            Terminator::For { source: ForSource::Range { .. }, body: stage, .. } => Some(*stage),
+            Terminator::For { source: ForSource::Range { .. }, body, .. } => Some(*body),
             _ => None,
         })
         .expect("a For over a range");
-    assert_eq!(body.block(stage).params().len(), 1);
+    assert_eq!(body.block(loop_body).params().len(), 1);
 }
 
 /// `while let` is a `While` whose condition is the pattern's test, the
@@ -508,16 +508,16 @@ fn while_let_is_a_while_on_the_patterns_test() {
     fx.input("o", option);
     let lowered = fx.script("let o = $o; while let Some(x) = o { o = None; } 1");
     let body = lowered.entry();
-    let (cond, stage) = lowered
+    let (cond, loop_body) = lowered
         .entry_terminators()
         .into_iter()
         .find_map(|terminator| match terminator {
-            Terminator::While { cond, body: stage, .. } => Some((*cond, *stage)),
+            Terminator::While { cond, body, .. } => Some((*cond, *body)),
             _ => None,
         })
         .expect("a While");
     assert!(matches!(lowered.kind_of(body, cond), TyKind::Bool));
-    let bound: Vec<_> = body.block(stage).insts().collect();
+    let bound: Vec<_> = body.block(loop_body).insts().collect();
     assert!(
         matches!(bound[0].op(), Op::Take { path, .. } if *path == [PathSeg::Payload]),
         "the body binds x first, taking the payload out of the scrutinee's slot (D89): {}",
@@ -1669,7 +1669,7 @@ fn fors(lowered: &Lowered) -> Vec<(&ForSource, crate::ir::cfg::BlockId, crate::i
         .entry_terminators()
         .into_iter()
         .filter_map(|terminator| match terminator {
-            Terminator::For { source, body: stage, exit, .. } => Some((source, *stage, *exit)),
+            Terminator::For { source, body, exit, .. } => Some((source, *body, *exit)),
             _ => None,
         })
         .collect()

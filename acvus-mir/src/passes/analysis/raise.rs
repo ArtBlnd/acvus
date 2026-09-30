@@ -447,7 +447,7 @@ where
 /// bounds.
 fn head_bounds(body: &Body, loops: &LoopTree, evolutions: &Evolutions, of: LoopId) -> bool {
     match body.block(loops.header(of)).terminator() {
-        Terminator::For { body: stage, exit, .. } => loops.contains(of, *stage) && !loops.contains(of, *exit),
+        Terminator::For { body, exit, .. } => loops.contains(of, *body) && !loops.contains(of, *exit),
         Terminator::While { .. } => evolutions.trip_count(of).is_some(),
         Terminator::Jump { .. }
         | Terminator::JumpIf { .. }

@@ -310,7 +310,7 @@ where
             Terminator::JumpIf { then_to, else_to, .. } | Terminator::Diamond { then_to, else_to, .. } => {
                 branch(operands[0], *then_to, *else_to)
             }
-            Terminator::While { body: stage, exit, .. } => branch(operands[0], *stage, *exit),
+            Terminator::While { body, exit, .. } => branch(operands[0], *body, *exit),
             _ => Executable::All,
         }
     }
@@ -605,14 +605,14 @@ impl SparseAnalysis for Ranges<'_> {
     }
 
     fn supplied(&self, terminator: &Terminator, to: BlockId, index: usize, operands: &[&Const]) -> Const {
-        let Terminator::For { source: ForSource::Range { .. }, body: stage, .. } = terminator else {
+        let Terminator::For { source: ForSource::Range { .. }, body, .. } = terminator else {
             return Const::Top;
         };
         let [Const::Int(at), Const::Int(hi), ..] = operands else {
             return Const::Top;
         };
         match (to, index) {
-            (to, 0) if to == *stage && *hi == at + 1 => Const::Int(*at),
+            (to, 0) if to == *body && *hi == at + 1 => Const::Int(*at),
             _ => Const::Top,
         }
     }

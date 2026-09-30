@@ -833,10 +833,10 @@ fn a_retarget_updates_a_loops_body_and_exit() {
     let mut rewriter = f.module.rewrite(id);
     rewriter.retarget(loop_body, other_body);
     rewriter.retarget(exit, other_exit);
-    let Terminator::While { body: stage, exit: now, .. } = rewriter.body().block(header).terminator() else {
+    let Terminator::While { body, exit: now, .. } = rewriter.body().block(header).terminator() else {
         panic!("the header still ends in its loop")
     };
-    assert_eq!(*stage, other_body);
+    assert_eq!(*body, other_body);
     assert_eq!(*now, other_exit);
 }
 
