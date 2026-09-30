@@ -1267,16 +1267,6 @@ fn a_containers_element_is_indexed_through_as_slice() {
 
 // Contexts (context §2-3, ownership §5)
 
-/// ownership §5: a run's result has a type with no positions.
-#[test]
-fn a_runs_result_holds_no_loan() {
-    let mut fx = Fixture::new();
-    let i64_ty = fx.int(IntTy::I64);
-    fx.context("n", i64_ty);
-    let (checked, _) = fx.script("&@n");
-    assert_eq!(checked.refusals(), vec![&RefusalKind::HoldsLoans]);
-}
-
 /// context §3: a value stored into a context outlives the run, so its type
 /// has no positions.
 #[test]

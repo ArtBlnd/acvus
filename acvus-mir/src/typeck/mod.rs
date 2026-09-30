@@ -90,7 +90,7 @@ pub fn check_script<S: Slot>(
     let value = stmt::check_body(&mut cx, &script.stmts, tail);
     let site = tail.map_or(script.id, Expr::id);
     let span = tail.map_or(script.span, Expr::span);
-    let result = context::check_run_result(&mut cx, site, value, span);
+    let result = context::check_body_result(&mut cx, site, value, span);
     let unit = open.then(|| unit_scheme(&mut cx, script.id, result));
     generalize::generalize_all(&mut cx);
     export_unit(&mut cx, unit);

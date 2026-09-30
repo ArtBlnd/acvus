@@ -184,13 +184,19 @@ pub struct Refused {
 
 /// A refusal of a unit: its checker's (typeck's or check's), or the
 /// graph's (a cycle of calls through no `fn`, an entry whose declared
-/// types the unit's interface does not admit or which names no unit).
+/// types the unit's interface does not admit or which names no unit, an
+/// entry whose result holds a loan).
 #[derive(Debug)]
 pub enum Refusal {
     Typeck(crate::typeck::Refusal),
     Check(crate::check::Refusal),
     Cycle { through: Vec<QualifiedRef> },
     EntryDoesNotFit { entry: QualifiedRef },
+    /// A run's result has a type with no positions (ownership §5): the
+    /// host receives it after the run, whose loans have ended. A unit
+    /// called by another may give what its parameters lend; only the one a
+    /// host runs may not.
+    EntryHoldsLoans { entry: QualifiedRef },
 }
 
 impl Graph {
@@ -541,6 +547,11 @@ impl<'g> Building<'g> {
         };
         if !fits {
             self.refuse(unit, Refusal::EntryDoesNotFit { entry: unit });
+            return None;
+        }
+        let ret = module.module.body(body).ret();
+        if crate::ty::positions(module.module.types(), declarations, ret) > 0 {
+            self.refuse(unit, Refusal::EntryHoldsLoans { entry: unit });
             return None;
         }
         Some((unit, Entry { module: unit, body }))

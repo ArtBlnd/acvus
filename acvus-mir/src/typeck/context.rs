@@ -5,7 +5,6 @@ use acvus_ast::{AstId, Span};
 use acvus_utils::QualifiedRef;
 
 use super::ctxt::Ctxt;
-use super::decision::Decision;
 use super::output::Name;
 use super::refusal::{self, RefusalKind};
 use super::place::Demand;
@@ -81,14 +80,14 @@ pub(super) fn refuse_held_loans(cx: &mut Ctxt<'_>, context: Term, span: Span) {
     }
 }
 
-/// A run's result holds no loan (ownership §5), read once its type is
-/// solved. The tail enters the run's result at `site`, its own, as a
-/// `return` or a `?` enters it at theirs (types §3, §7). The run's result
-/// slot is returned.
-pub(super) fn check_run_result(cx: &mut Ctxt<'_>, site: AstId, tail: Term, span: Span) -> Term {
+/// The body's result: the tail enters it at `site`, its own, as a
+/// `return` or a `?` enters it at theirs (types §3, §7). A unit's result
+/// may hold what its parameters lend, as a lambda's may (ownership §5);
+/// only a run's result holds no loan, which is judged where a host runs
+/// the unit as an entry (`graph`). The result slot is returned.
+pub(super) fn check_body_result(cx: &mut Ctxt<'_>, site: AstId, tail: Term, span: Span) -> Term {
     let result = super::control::body_result(cx);
     cx.enter(site, tail, result, crate::ty::Reach::Named, span);
-    cx.decisions.push(Decision::HoldsNoLoans { span, term: result });
     result
 }
 

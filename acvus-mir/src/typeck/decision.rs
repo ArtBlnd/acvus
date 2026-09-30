@@ -132,9 +132,6 @@ pub(super) enum Decision {
     /// A bounded variable some use must answer (types §5), refused where
     /// none does.
     Settle { span: Span, term: Term },
-    /// A value that outlives the run, whose type has no positions
-    /// (ownership §5), read once no variable is left in it.
-    HoldsNoLoans { span: Span, term: Term },
     /// The mark a `#` pair's positions share at a use (types §8), started
     /// once each position's type is known: marked where every one is one
     /// of `specialized`, unmarked otherwise.
@@ -228,7 +225,6 @@ impl Decision {
             | Decision::Operand { .. }
             | Decision::Cast { .. }
             | Decision::Settle { .. }
-            | Decision::HoldsNoLoans { .. }
             | Decision::StartMark { .. } => Vec::new(),
         };
         outputs.into_iter()
@@ -275,8 +271,7 @@ impl Decision {
             Decision::Compare { operand, .. } | Decision::Operand { operand, .. } => {
                 vec![*operand]
             }
-            Decision::Settle { term, .. }
-            | Decision::HoldsNoLoans { term, .. } => vec![*term],
+            Decision::Settle { term, .. } => vec![*term],
             Decision::StartMark { positions, .. } => positions.to_vec(),
             Decision::Instantiate { result, .. } => vec![*result],
             Decision::In { decision, .. } => decision.terms(),
@@ -296,7 +291,6 @@ impl Decision {
             Decision::Try { .. }
             | Decision::Cast { .. }
             | Decision::Settle { .. }
-            | Decision::HoldsNoLoans { .. }
             | Decision::StartMark { .. }
             | Decision::Lend { .. }
             | Decision::Field { .. }
@@ -335,7 +329,6 @@ impl Decision {
             }
             Decision::Cast { site, span, source, to } => Decision::Cast { site: f.site(site), span: f.span(span), source: f.ty(source), to },
             Decision::Settle { span, term } => Decision::Settle { span: f.span(span), term: f.ty(term) },
-            Decision::HoldsNoLoans { span, term } => Decision::HoldsNoLoans { span: f.span(span), term: f.ty(term) },
             Decision::StartMark { span, positions, mark, specialized } => Decision::StartMark {
                 span: f.span(span),
                 positions: positions.iter().map(|position| f.ty(*position)).collect(),
@@ -602,7 +595,6 @@ fn read_head(decision: &Decision) -> Option<Term> {
         Decision::Reach { .. }
         | Decision::Instantiate { .. }
         | Decision::Settle { .. }
-        | Decision::HoldsNoLoans { .. }
         | Decision::StartMark { .. } => None,
     }
 }
@@ -828,15 +820,6 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
                 }
                 Ok(()) => {}
                 Err(mismatch) => refusal::mismatch(cx, mismatch, span),
-            }
-            Ok(())
-        }
-        Decision::HoldsNoLoans { span, term } => {
-            if !unbound_vars(cx, [term]).is_empty() {
-                return Err(Decision::HoldsNoLoans { span, term });
-            }
-            if super::context::holds_positions(cx, term) {
-                refusal::push(cx, RefusalKind::HoldsLoans, span);
             }
             Ok(())
         }
@@ -2023,8 +2006,6 @@ fn default_unconstrained(cx: &mut Ctxt<'_>, outside_pending: bool) -> bool {
 fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
     match decision {
         Decision::Settle { span, .. } => refusal::push(cx, RefusalKind::BoundUnanswered, span),
-        // Its type holds a variable some other refusal left open.
-        Decision::HoldsNoLoans { .. } => {}
         // Its positions were never known: some other refusal left them
         // open, and writeback takes its mark unmarked.
         Decision::StartMark { .. } => {}

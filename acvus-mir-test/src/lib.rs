@@ -237,6 +237,7 @@ fn shown(names: &Interner, refusal: &Refusal) -> String {
     match refusal {
         Refusal::Cycle { through } => format!("Cycle [{}]", through.iter().map(|unit| written(names, *unit)).collect::<Vec<_>>().join(", ")),
         Refusal::EntryDoesNotFit { entry } => format!("EntryDoesNotFit {}", written(names, *entry)),
+        Refusal::EntryHoldsLoans { entry } => format!("EntryHoldsLoans {}", written(names, *entry)),
         Refusal::Typeck(refusal) => format!("{} @{}..{}", refusal.kind.written(names), refusal.span.start, refusal.span.end),
         Refusal::Check(refusal) => format!("{} @{}..{}", refusal.kind.written(), refusal.span.start, refusal.span.end),
     }
