@@ -172,7 +172,9 @@ const CHECKED: bool = cfg!(any(debug_assertions, test));
 type Kept = (((TypesAgree, DefDominatesUses, OrderChainWhole, StructureKept), NeverDiverges), SplitTakenOnce);
 
 /// Runs `T` over `body` with its required form asserted before, and the
-/// analyses it made stale dropped and the IR's invariants checked after.
+/// analyses it made stale dropped and the IR's invariants checked after. A
+/// body a seal added drops the module analyses, which range over every
+/// body.
 fn step<T>(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes
 where
     T: BodyTransform + Requires,
@@ -181,6 +183,9 @@ where
         assert_form(module, body, am, T::FORM, T::NAME);
     }
     let changes = T::run(module, body, am);
+    if let Some(body_set_change) = module.take_body_set_change() {
+        am.invalidate_body_set(body_set_change);
+    }
     am.invalidate(body, &changes);
     if CHECKED {
         assert_kept(module, body, T::NAME);

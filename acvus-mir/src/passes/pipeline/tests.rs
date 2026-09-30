@@ -1,9 +1,12 @@
+use std::rc::Rc;
+
 use acvus_ast::{Literal, Span};
 
 use super::*;
 use crate::ir::cfg::edit::{Editor, Position, Value};
 use crate::ir::cfg::{BlockId, Body, Definition, Terminator};
 use crate::ir::{BinOp, ValueId};
+use crate::passes::analysis::{CallGraph, Raise};
 use crate::passes::edit_facts::EditFacts;
 use crate::passes::optimize::tests::{Fixture, add, assign, bool_const, declarations, int_const, jump, ret, take, trapping_div};
 
@@ -304,4 +307,50 @@ fn a_loop_keeps_its_empty_preheader_into_p7() {
     let [of] = loops.loops().collect::<Vec<_>>()[..] else { panic!("one loop stays:\n{}", f.snapshot(id)) };
     let Some(preheader) = loops.preheader(of) else { panic!("the loop has a preheader:\n{}", f.snapshot(id)) };
     assert!(f.module.body(id).block(preheader).insts().is_empty(), "nothing is hoisted:\n{}", f.snapshot(id));
+}
+
+/// Seals a new body `|n| n`, over the parameter of the body it runs on,
+/// and edits none.
+struct SealsABody;
+
+impl BodyTransform for SealsABody {
+    const NAME: &'static str = "seals_a_body";
+
+    fn run(module: &mut Module, body: BodyId, _am: &mut AnalysisManager<'_>) -> Changes {
+        let (name, param) = module.body(body).params()[0];
+        let (ret_ty, param_ty) = (module.body(body).ret(), module.body(body).ty_of(param));
+        let mut builder = module.build_body(false, ret_ty);
+        let n = builder.param(name, param_ty, Span::ZERO);
+        builder.terminate(ret(n), Span::ZERO);
+        builder.seal().expect("the body has no open state");
+        Changes::default()
+    }
+}
+
+impl Requires for SealsABody {
+    const FORM: Form = Form::Lowered;
+}
+
+/// A body transform that seals a body drops the kept call graph, which
+/// ranges over every body, and `Raise`, which read it, though it records
+/// no edit of its own body.
+#[test]
+fn a_body_a_step_seals_drops_the_module_analyses_and_their_readers() {
+    let mut f = Fixture::new();
+    let (int, nn) = (f.int, f.name("n"));
+    let mut builder = f.module.build_body(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    let decls = declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let graph = am.get_of_module::<CallGraph>(&f.module);
+    let endings = am.get::<Raise>(&f.module, id);
+
+    step::<SealsABody>(&mut f.module, id, &mut am);
+
+    assert_eq!(f.module.body_ids().count(), 2);
+    assert!(f.module.take_body_set_change().is_none(), "the step drained the record");
+    assert!(!Rc::ptr_eq(&graph, &am.get_of_module::<CallGraph>(&f.module)), "the call graph was dropped");
+    assert!(!Rc::ptr_eq(&endings, &am.get::<Raise>(&f.module, id)), "Raise read the call graph, so it was dropped with it");
 }
