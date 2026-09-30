@@ -13,7 +13,7 @@ use crate::ir::cfg::edit::{
 use crate::ir::cfg::{BodyId, Changes, Module, Op};
 use crate::passes::analysis::{AnalysisManager, Escapes, LoopTree};
 use crate::passes::optimize::{
-    Bce, BodyTransform, Commute, Dce, Dse, Gvn, Inline, IvCanon, Licm, LoopDeletion, Lsr, Mem2Reg, ModuleTransform,
+    Bce, BodyTransform, Commute, Dce, Dse, Gvn, Inline, IvCanon, Licm, LoopDeletion, Mem2Reg, ModuleTransform,
     Reborrow, Schedule, Sccp, SimplifyCfg, Sink, SplitCalls, Sroa, WhileToFor, union_of,
 };
 
@@ -92,7 +92,10 @@ fn motion(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
 
 /// The loop group (compilation §4), in the order of the standard loop
 /// pipeline: promotion to a counted loop, induction-variable simplification,
-/// deletion, then strength reduction, which reads the loops the others left.
+/// then deletion. Strength reduction is not built: it adds a join, which
+/// compilation §4 asks a transformation not to do, and gains nothing in the
+/// interpreter, where a multiplication costs what an addition does; it is for
+/// a loop that cannot run in parallel anyway, and comes when one needs it.
 /// `bce` runs again since a promoted loop's counter proves indices; `dce`
 /// removes what the rewrites left unread. None edits a block's preheader away,
 /// so F2 holds.
@@ -100,7 +103,6 @@ fn loops(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
     step::<WhileToFor>(module, body, am);
     step::<IvCanon>(module, body, am);
     step::<LoopDeletion>(module, body, am);
-    // lsr takes its place here as it is filled.
     step::<Bce>(module, body, am);
     step::<Dce>(module, body, am);
 }
@@ -176,9 +178,6 @@ impl Requires for IvCanon {
     const FORM: Form = Form::LoopsCanonical;
 }
 impl Requires for LoopDeletion {
-    const FORM: Form = Form::LoopsCanonical;
-}
-impl Requires for Lsr {
     const FORM: Form = Form::LoopsCanonical;
 }
 impl Requires for Commute {

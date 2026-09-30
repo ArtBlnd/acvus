@@ -1,12 +1,17 @@
 //! A loop that does nothing observable goes (LoopDeletion; compilation §1).
 //!
-//! A natural loop is deleted where every instruction in it has no effect, may
-//! not trap and finishes, every loop inside it finishes (`analysis::Raise`),
+//! A natural loop is deleted where every edge that leaves it goes to its head's
+//! exit, which it alone enters, and no block in it returns or diverges (an
+//! early exit elsewhere would be lost); every instruction in it has no effect,
+//! may not trap and finishes, every loop inside it finishes (`analysis::Raise`),
 //! and every value it gives its exit, or defines and has used after it, is
 //! invariant in it or computable at the exit by the scalar evolution. Those
 //! values are computed in the preheader or after the loop instead, under
 //! undefined behaviour §2's rule for a value the run as written did not
-//! compute, and the preheader jumps to the exit.
+//! compute, and the loop goes as a composition of the existing edits: each
+//! exit parameter removed for its made value, each header parameter for its
+//! entry argument, the header retargeted to the exit, and the unreached blocks
+//! pruned.
 //!
 //! Form: F2, SSA, in and out.
 //!
