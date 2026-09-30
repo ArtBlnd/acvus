@@ -17,7 +17,7 @@ The glue it emits contains no `unsafe`.
 
 ## 2. The derive
 
-The derive makes a Rust type an opaque registered type (types §2). It reads the definition and emits exactly the structural facts about it that no stable Rust bound can state (safety §2), and nothing else. It emits no projection types: an opaque type crosses as itself. An object or an enum an extern takes or gives needs no derive: its shape is written in the declaration, and the extern reads and builds it through the runtime's aggregates (types §1).
+The derive makes a Rust type an opaque registered type (types §2). It reads the definition and emits exactly the structural facts about it that no stable Rust bound can state (safety §2), and nothing else. It emits no projection types: an opaque type crosses as itself. Neither macro specializes a type argument: a specialization is a whole type a registry names (registry). An object or an enum an extern takes or gives needs no derive: its shape is written in the declaration, and the extern reads and builds it through the runtime's aggregates (types §1).
 
 ## 3. What the macros emit, and what they do not
 
