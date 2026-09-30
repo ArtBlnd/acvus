@@ -183,7 +183,6 @@ impl Fixture {
             carries_effect: false,
             carries_identity: false,
             lifetimes: 0,
-            kind: crate::decl::UserTypeKind::Opaque,
         });
         let e = self.var(0);
         let vec_e = self.vec_of(vec_id, e);
@@ -2174,7 +2173,6 @@ fn a_view_step_names_its_impl() {
         carries_effect: false,
         carries_identity: false,
         lifetimes: 0,
-        kind: crate::decl::UserTypeKind::Opaque,
     });
     let other = fx.ty(TyKind::UserDefined {
         id: other_id,

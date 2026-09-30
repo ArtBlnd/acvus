@@ -107,7 +107,6 @@ impl Fixture {
             carries_effect: false,
             carries_identity: false,
             lifetimes: 0,
-            kind: crate::decl::UserTypeKind::Opaque,
         });
         let int = self.int();
         self.ty(TyKind::UserDefined {

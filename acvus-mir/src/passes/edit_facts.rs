@@ -1197,7 +1197,6 @@ mod tests {
                 carries_effect: false,
                 carries_identity: false,
                 lifetimes: 0,
-                kind: crate::decl::UserTypeKind::Opaque,
             }],
             casts: Vec::new(),
             conversions: Vec::new(),

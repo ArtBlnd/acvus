@@ -9,7 +9,6 @@ use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::impl_fit::is_impl_of;
 use super::{
     CastRule, ContextDecl, Core, Declarations, EntryDecl, Impls, RawDeclarations, Requirement, Scheme, TyVarBound, UserTypeDecl,
-    UserTypeKind,
 };
 use super::declared::{self, Atom, Subject};
 use super::segments::{Segment, segments};
@@ -78,10 +77,6 @@ pub enum Refused {
     NotAFunction { function: QualifiedRef },
     /// Two types under one name.
     DuplicateType { id: QualifiedRef },
-    /// Two fields of one derived struct under one name (rfc_extern types §1).
-    DuplicateField { id: QualifiedRef, name: Astr },
-    /// Two variants of one extern enum under one name (rfc_extern types §2).
-    DuplicateVariant { id: QualifiedRef, name: Astr },
     /// A generic function declared under a lang item's name: the compiler
     /// builds every lang item's generic function itself (operators §2).
     CoreGenericFunction { id: QualifiedRef },
@@ -155,9 +150,6 @@ pub enum Written {
     Entry(QualifiedRef),
     Cast(QualifiedRef),
     Conversion(QualifiedRef),
-    /// A derived struct's field or an extern enum's variant payload, by the
-    /// type that declares it.
-    UserType(QualifiedRef),
 }
 
 /// Build the verified set, or every refusal the set earns.
@@ -177,14 +169,12 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     let mut refused = Vec::new();
 
     let functions = with_lang_items(&mut types, &core, functions, lang_impls, &mut refused);
-    let user_type_order = first_of_each(user_types.iter().map(|declared| declared.id));
     let user_types = extern_types(user_types, &mut refused);
     let unreadable = refuse_unwritable_types(
         &types,
         DeclaredTypes {
             functions: &functions,
             user_types: &user_types,
-            user_type_order: &user_type_order,
             casts: &casts,
             conversions: &conversions,
             contexts: &contexts,
@@ -308,43 +298,18 @@ fn first_of_each(ids: impl Iterator<Item = QualifiedRef>) -> Vec<QualifiedRef> {
 }
 
 /// The extern types by id (extern-fn §8). The first declaration of an id
-/// stands; every later one is refused. A standing one names each of its
-/// fields or variants once.
+/// stands; every later one is refused.
 fn extern_types(user_types: Vec<UserTypeDecl>, refused: &mut Vec<Refused>) -> FxHashMap<QualifiedRef, UserTypeDecl> {
     let mut by_id: FxHashMap<QualifiedRef, UserTypeDecl> = FxHashMap::default();
     for decl in user_types {
         match by_id.contains_key(&decl.id) {
             true => refused.push(Refused::DuplicateType { id: decl.id }),
             false => {
-                refuse_duplicate_members(&decl, refused);
                 by_id.insert(decl.id, decl);
             }
         }
     }
     by_id
-}
-
-/// Each name a derived struct gives two fields, or an extern enum two
-/// variants, refused once.
-fn refuse_duplicate_members(decl: &UserTypeDecl, refused: &mut Vec<Refused>) {
-    let (names, refusal): (Vec<Astr>, fn(QualifiedRef, Astr) -> Refused) = match &decl.kind {
-        UserTypeKind::Derived { fields } => (
-            fields.iter().map(|(name, _)| *name).collect(),
-            |id, name| Refused::DuplicateField { id, name },
-        ),
-        UserTypeKind::Enum { variants } => (
-            variants.iter().map(|(name, _)| *name).collect(),
-            |id, name| Refused::DuplicateVariant { id, name },
-        ),
-        UserTypeKind::Opaque => return,
-    };
-    let mut seen = FxHashSet::default();
-    let mut reported = FxHashSet::default();
-    for name in names {
-        if !seen.insert(name) && reported.insert(name) {
-            refused.push(refusal(decl.id, name));
-        }
-    }
 }
 
 /// Every bare name with every declaration of that name, in any namespace,
@@ -540,8 +505,6 @@ impl TreeSizes<'_> {
 struct DeclaredTypes<'d> {
     functions: &'d [(QualifiedRef, Scheme)],
     user_types: &'d FxHashMap<QualifiedRef, UserTypeDecl>,
-    /// The extern types' ids in declaration order, each once.
-    user_type_order: &'d [QualifiedRef],
     casts: &'d [CastRule],
     conversions: &'d [ConversionRule],
     contexts: &'d [(QualifiedRef, ContextDecl)],
@@ -578,20 +541,11 @@ fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Writ
         ]
     });
     let contexts = declared.contexts.iter().map(|(id, declared)| (Written::Context(*id), declared.ty));
-    let user_types = declared.user_type_order.iter().flat_map(|id| {
-        let members: Vec<TyId<Poly>> = match &declared.user_types[id].kind {
-            UserTypeKind::Derived { fields } => fields.iter().map(|(_, ty)| *ty).collect(),
-            UserTypeKind::Enum { variants } => variants.iter().filter_map(|(_, payload)| *payload).collect(),
-            UserTypeKind::Opaque => Vec::new(),
-        };
-        members.into_iter().map(|ty| (Written::UserType(*id), ty))
-    });
     functions
         .chain(casts)
         .chain(conversions)
         .chain(contexts)
         .chain(declared.entries.iter().flat_map(entry_types))
-        .chain(user_types)
 }
 
 /// extern-fn §8: a type term names only declared types; effects §3, §6:
@@ -1393,7 +1347,6 @@ mod tests {
                 carries_effect: false,
                 carries_identity: false,
                 lifetimes,
-                kind: crate::decl::UserTypeKind::Opaque,
             });
             self.ty(TyKind::UserDefined {
                 id,
@@ -2913,80 +2866,6 @@ mod tests {
                 false => assert_eq!(refusals(fixture), vec![Refused::BoundsDoNotFit { function: f }]),
             }
         }
-    }
-
-    fn derived(fixture: &mut Fixture, id: QualifiedRef, kind: UserTypeKind) {
-        fixture.raw.user_types.push(UserTypeDecl {
-            id,
-            type_params: Box::new([]),
-            specializes: Box::new([]),
-            carries_effect: false,
-            carries_identity: false,
-            lifetimes: 0,
-            kind,
-        });
-    }
-
-    /// rfc_extern types §1-3: an extern type states how much of it a
-    /// program sees, and the verified set gives it back as declared.
-    #[test]
-    fn an_extern_types_kind_is_taken_in_as_declared() {
-        let mut fixture = Fixture::new();
-        let (point, color, handle) = (fixture.name("m", "Point"), fixture.name("m", "Color"), fixture.name("m", "Handle"));
-        let int = fixture.ty(TyKind::Int(IntTy::I64));
-        let [x, y, red, rgb] = ["x", "y", "Red", "Rgb"].map(|name| fixture.interner.intern(name));
-        let fields = UserTypeKind::Derived { fields: Box::new([(x, int), (y, int)]) };
-        let variants = UserTypeKind::Enum { variants: Box::new([(red, None), (rgb, Some(int))]) };
-        derived(&mut fixture, point, fields.clone());
-        derived(&mut fixture, color, variants.clone());
-        derived(&mut fixture, handle, UserTypeKind::Opaque);
-        let decls = fixture.verify().expect("three well-formed extern types verify");
-        let kind = |id| decls.user_type(id).map(|declared| &declared.kind);
-        assert_eq!(kind(point), Some(&fields));
-        assert_eq!(kind(color), Some(&variants));
-        assert_eq!(kind(handle), Some(&UserTypeKind::Opaque));
-    }
-
-    /// rfc_extern types §1-2: a derived struct names each field once, and an
-    /// enum each variant once; a name given twice is refused once, however
-    /// often it repeats.
-    #[test]
-    fn a_member_name_given_twice_is_refused() {
-        let mut fixture = Fixture::new();
-        let (point, color) = (fixture.name("m", "Point"), fixture.name("m", "Color"));
-        let int = fixture.ty(TyKind::Int(IntTy::I64));
-        let (x, red) = (fixture.interner.intern("x"), fixture.interner.intern("Red"));
-        derived(&mut fixture, point, UserTypeKind::Derived { fields: Box::new([(x, int), (x, int), (x, int)]) });
-        derived(&mut fixture, color, UserTypeKind::Enum { variants: Box::new([(red, None), (red, Some(int))]) });
-        assert_eq!(
-            refusals(fixture),
-            vec![
-                Refused::DuplicateField { id: point, name: x },
-                Refused::DuplicateVariant { id: color, name: red },
-            ]
-        );
-    }
-
-    /// extern-fn §8, types §4: a field's or a variant's type is held to what
-    /// every declared type is: it names only declared types and holds no
-    /// reference to a reference.
-    #[test]
-    fn a_member_type_is_held_to_what_every_declared_type_is() {
-        let mut fixture = Fixture::new();
-        let (point, color, missing) = (fixture.name("m", "Point"), fixture.name("m", "Color"), fixture.name("m", "Missing"));
-        let undeclared = undeclared(&mut fixture, missing);
-        let s = fixture.shared_str();
-        let twice = fixture.reference(Mutability::Shared, s);
-        let (x, red) = (fixture.interner.intern("x"), fixture.interner.intern("Red"));
-        derived(&mut fixture, point, UserTypeKind::Derived { fields: Box::new([(x, undeclared)]) });
-        derived(&mut fixture, color, UserTypeKind::Enum { variants: Box::new([(red, Some(twice))]) });
-        assert_eq!(
-            refusals(fixture),
-            vec![
-                Refused::UndeclaredType { written: Written::UserType(point), id: missing },
-                Refused::ReferenceToReference { written: Written::UserType(color) },
-            ]
-        );
     }
 
     /// `Refused`: every refusal a set earns is reported, not the first.

@@ -174,7 +174,6 @@ fn well_formed_facts_of_every_kind_verify() {
         carries_effect: false,
         carries_identity: false,
         lifetimes: 0,
-        kind: crate::decl::UserTypeKind::Opaque,
     });
     let mut_map = f.reference(Mutability::Mut, map);
 

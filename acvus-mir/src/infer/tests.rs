@@ -1328,7 +1328,6 @@ fn identities(names: &Interner, to_string: bool) -> Declarations {
         carries_effect: false,
         carries_identity: true,
         lifetimes: 0,
-        kind: crate::decl::UserTypeKind::Opaque,
     };
     let mut casts = vec![("token_span", token_ty, span_ty)];
     if to_string {

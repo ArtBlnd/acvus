@@ -131,7 +131,6 @@ impl Fixture {
             carries_effect: false,
             carries_identity: false,
             lifetimes: 0,
-            kind: crate::decl::UserTypeKind::Opaque,
         });
         let e = self.ty(TyKind::Var(0));
         let vec_e = self.vec(vec_id, e);
@@ -966,7 +965,6 @@ fn a_declared_conversion_step_is_a_call_of_its_via() {
         carries_effect: false,
         carries_identity: false,
         lifetimes: 0,
-        kind: crate::decl::UserTypeKind::Opaque,
     });
     let meters = fx.ty(TyKind::UserDefined {
         id: meters_id,
