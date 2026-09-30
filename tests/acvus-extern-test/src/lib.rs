@@ -20,6 +20,6 @@ mod frame;
 mod runtime;
 pub mod shapes;
 
-pub use boundary::{Held, Pair, PartsMut, Tally, Word};
+pub use boundary::{Held, Pair, Tally, Word};
 pub use frame::{Frame, Pass};
 pub use runtime::WordRuntime;

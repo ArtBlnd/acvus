@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use acvus_extern::callback::RustCallee;
 use acvus_extern::done::Done;
 use acvus_extern::runtime::{Crosses, ObjectBody, RefTarget, Runtime, TupleBody, VariantBody};
-use acvus_extern::seal::{Crossing, ShapeViews, opaque};
+use acvus_extern::seal::{ShapeViews, opaque};
 use acvus_extern::{
     LayoutFact, Release, Releasing, Settled, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
 };
@@ -574,32 +574,14 @@ pub(crate) fn lent_part<'a>(v: &'a Word, i: u32, _at: Settled<'a>) -> &'a Word {
     unsafe { &*part_of(*v, i) }
 }
 
-pub(crate) fn lent_parts_mut<'a>(v: &'a mut Word, _at: Settled<'a>) -> PartsMut<'a> {
-    // SAFETY: under `Settled`, `v` is a lent aggregate's place, live for
-    // `'a`; the aggregate's body is only read here.
-    PartsMut(unsafe { parts_of(*v) }.iter())
+pub(crate) fn lent_parts_mut<'a>(v: &'a mut Word, _at: Settled<'a>) -> impl ExactSizeIterator<Item = &'a mut Word> {
+    // SAFETY: as `part_of`'s; the aggregate's body is only read here.
+    let parts = unsafe { parts_of(*v) };
+    // SAFETY: as `lent_part`'s, the aggregate lent exclusively, so no other
+    // lend of a part is live meanwhile; each part lies in an allocation of
+    // its own, so the parts lent together are disjoint.
+    parts.iter().map(|part| unsafe { &mut *part.as_ptr() })
 }
-
-/// The parts of an aggregate lent exclusively, together, in its order.
-pub struct PartsMut<'a>(std::slice::Iter<'a, NonNull<Word>>);
-
-impl<'a> Iterator for PartsMut<'a> {
-    type Item = &'a mut Word;
-
-    fn next(&mut self) -> Option<&'a mut Word> {
-        // SAFETY: as `lent_part`'s, the aggregate lent exclusively for `'a`,
-        // so no other lend of a part is live meanwhile. Each part lies in an
-        // allocation of its own and the slice iterator yields each once, so
-        // the parts lent together are disjoint.
-        self.0.next().map(|part| unsafe { &mut *part.as_ptr() })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
-    }
-}
-
-impl ExactSizeIterator for PartsMut<'_> {}
 
 pub(crate) fn lent_tag(v: &Word, _at: Settled<'_>) -> u32 {
     // SAFETY: as `lent_part`'s, for a variant.
@@ -717,47 +699,41 @@ unsafe impl SignedS2 for WordRuntime {}
 // owns it is released, moved out or handed over.
 unsafe impl SignedS3 for WordRuntime {}
 
-// The test types' structural facts and crossings.
+// The test types' structural facts.
 
-/// `Crosses` for an opaque test type, as the derive emits it: given and
-/// taken whole, lent as a guard, sealed by `Crossing`.
+/// The crossing items of an opaque test type, as the derive emits them: given
+/// and taken whole, lent as a guard.
 macro_rules! opaque_crossing {
-    ($t:ty) => {
-        // SAFETY: the `Crosses` below is the derive's opaque one: given,
-        // taken and lent at the type itself.
-        unsafe impl Crossing for $t {}
+    () => {
+        type Lent<'c, R: Runtime>
+            = opaque::Lent<'c, R, Self>
+        where
+            Self: 'c;
+        type LentMut<'c, R: Runtime>
+            = opaque::LentMut<'c, R, Self>
+        where
+            Self: 'c;
 
-        impl Crosses for $t {
-            type Lent<'c, R: Runtime>
-                = opaque::Lent<'c, R, Self>
-            where
-                Self: 'c;
-            type LentMut<'c, R: Runtime>
-                = opaque::LentMut<'c, R, Self>
-            where
-                Self: 'c;
+        fn give<R: Runtime>(self, rt: &R, at: Settled<'_>) -> R::Value {
+            opaque::give(self, rt, at)
+        }
 
-            fn give<R: Runtime>(self, rt: &R, at: Settled<'_>) -> R::Value {
-                opaque::give(self, rt, at)
-            }
+        fn take<R: Runtime>(v: R::Value, rt: &R, at: Settled<'_>) -> Self {
+            opaque::take(v, rt, at)
+        }
 
-            fn take<R: Runtime>(v: R::Value, rt: &R, at: Settled<'_>) -> Self {
-                opaque::take(v, rt, at)
-            }
+        fn lent<'c, R: Runtime>(rt: &'c R, place: &'c R::Value, at: Settled<'c>) -> Self::Lent<'c, R>
+        where
+            Self: 'c,
+        {
+            opaque::lent(rt, place, at)
+        }
 
-            fn lent<'c, R: Runtime>(rt: &'c R, place: &'c R::Value, at: Settled<'c>) -> Self::Lent<'c, R>
-            where
-                Self: 'c,
-            {
-                opaque::lent(rt, place, at)
-            }
-
-            fn lent_mut<'c, R: Runtime>(rt: &'c R, place: &'c mut R::Value, at: Settled<'c>) -> Self::LentMut<'c, R>
-            where
-                Self: 'c,
-            {
-                opaque::lent_mut(rt, place, at)
-            }
+        fn lent_mut<'c, R: Runtime>(rt: &'c R, place: &'c mut R::Value, at: Settled<'c>) -> Self::LentMut<'c, R>
+        where
+            Self: 'c,
+        {
+            opaque::lent_mut(rt, place, at)
         }
     };
 }
@@ -786,6 +762,8 @@ unsafe impl Structural for Tally {
     type Canon = Tally;
 
     const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
+
+    opaque_crossing!();
 }
 
 // SAFETY: as for `Tally`.
@@ -793,10 +771,9 @@ unsafe impl Structural for Pair {
     type Canon = Pair;
 
     const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
-}
 
-opaque_crossing!(Tally);
-opaque_crossing!(Pair);
+    opaque_crossing!();
+}
 
 // SAFETY: each shape below stands in for `shape!`'s expansion of its
 // declaration, and `shapes` implements `Projected` for it as that expansion

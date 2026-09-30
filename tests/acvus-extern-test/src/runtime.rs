@@ -13,7 +13,7 @@ use acvus_extern::impls::task::TaskKind;
 use acvus_extern::runtime::{Crosses, Mutability, RefTarget, Runtime};
 use acvus_utils::Interner;
 
-use crate::boundary::{self, Held, Kind, PartsMut, Word, WordObject, WordTuple, WordVariant, scalar_kind};
+use crate::boundary::{self, Held, Kind, Word, WordObject, WordTuple, WordVariant, scalar_kind};
 
 /// The runtime: its interner, and nothing else; every value's storage is its
 /// own allocation.
@@ -32,7 +32,6 @@ impl Runtime for WordRuntime {
     type SharedSlice<'a, T: Crosses + 'a> = &'a [T];
     type ExclusiveSlice<'a, T: Crosses + 'a> = &'a mut [T];
     type SharedStr<'a> = &'a str;
-    type PartsMut<'a> = PartsMut<'a>;
 
     fn take<T: Crosses>(&self, v: Word, at: Settled<'_>) -> T {
         boundary::take(v, at)
@@ -90,7 +89,7 @@ impl Runtime for WordRuntime {
         boundary::lent_part(v, i, at)
     }
 
-    fn lent_parts_mut<'a>(&'a self, v: &'a mut Word, at: Settled<'a>) -> PartsMut<'a> {
+    fn lent_parts_mut<'a>(&'a self, v: &'a mut Word, at: Settled<'a>) -> impl ExactSizeIterator<Item = &'a mut Word> {
         boundary::lent_parts_mut(v, at)
     }
 

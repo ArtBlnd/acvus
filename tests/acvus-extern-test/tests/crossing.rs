@@ -93,7 +93,7 @@ on_both! {
     options_results_and_tuples_nest_as_the_languages_values: language_values_nested;
     a_part_of_a_languages_value_is_released_once: language_value_released;
     a_rust_fn_body_reads_its_held_argument_through_its_context: rust_fn_with_context;
-    a_callback_result_borrowing_its_argument_is_read_back_through_its_target: callback_borrowed_result;
+    a_callback_result_borrowed_as_text_is_read_back: callback_borrowed_result;
 }
 
 /// A variable holding `value`, made as a program makes one: the result of a
@@ -764,7 +764,7 @@ where
 }
 
 /// The length of a `String` lent to it.
-fn length_of<R: Runtime>(_: &Returning<'_, R>, (text,): &mut (Guard<'_, R::Shared<'_, String>>,)) -> i64 {
+fn length_of<R: Runtime>(_: &Returning<'_, R>, (text,): (Guard<'_, R::Shared<'_, String>>,)) -> i64 {
     text.len() as i64
 }
 
@@ -792,8 +792,8 @@ fn rust_fn_released<R: RustFns<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
     let function = produce_fn(
         &mut frame,
-        RustFn::<R, (ByValue<i64>,), i64>::new(move |_: &Returning<'_, R>, (n,): &mut (i64,)| {
-            *n + Arc::strong_count(&captured.0) as i64
+        RustFn::<R, (ByValue<i64>,), i64>::new(move |_: &Returning<'_, R>, (n,): (i64,)| {
+            n + Arc::strong_count(&captured.0) as i64
         }),
     );
 
@@ -823,11 +823,11 @@ fn callback_lent<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
     assert_eq!(read::<_, String>(&mut frame, text), "lent to a callback");
 }
 
-fn append_written<R: Runtime>(_: &Returning<'_, R>, (text,): &mut (GuardMut<'_, R::Exclusive<'_, String>>,)) {
+fn append_written<R: Runtime>(_: &Returning<'_, R>, (mut text,): (GuardMut<'_, R::Exclusive<'_, String>>,)) {
     text.push_str(" and written");
 }
 
-fn words_in<R: Runtime>(_: &Returning<'_, R>, (text,): &mut (Guard<'_, R::SharedStr<'_>>,)) -> i64 {
+fn words_in<R: Runtime>(_: &Returning<'_, R>, (text,): (Guard<'_, R::SharedStr<'_>>,)) -> i64 {
     text.split(' ').count() as i64
 }
 
@@ -868,8 +868,9 @@ fn callback_lent_text<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
 }
 
 /// The length of a `String` taken by value; the `Tally` held beside it is
-/// released with the arguments, unread.
-fn length_of_given<R: Runtime>(_: &Returning<'_, R>, (text, _): &mut (String, Uniform<R, Tally>)) -> i64 {
+/// dropped unread.
+fn length_and_drop<R: Runtime>(_: &Returning<'_, R>, (text, tally): (String, Uniform<R, Tally>)) -> i64 {
+    drop(tally);
     text.len() as i64
 }
 
@@ -878,7 +879,7 @@ fn callback_awaited<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
     let consume = produce_fn(
         &mut frame,
-        RustFn::<R, (ByValue<String>, ByUniform<Tally>), i64>::new(length_of_given::<R>),
+        RustFn::<R, (ByValue<String>, ByUniform<Tally>), i64>::new(length_and_drop::<R>),
     );
 
     let called = executor().block_on(frame.call_awaited(&[Pass::Function(consume)], async |entry| {
@@ -1060,10 +1061,9 @@ fn language_value_released<R: Runtime<Value = Word>>(runtime: &R) {
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
-/// The length of a `String` held by value, read in place through the body's
-/// context.
-fn held_length<R: Runtime>(cx: &Returning<'_, R>, (held,): &mut (Uniform<R, String>,)) -> i64 {
-    held.open(cx).len() as i64
+/// The length of a `String` held by value, taken through the body's context.
+fn held_length<R: Runtime>(cx: &Returning<'_, R>, (held,): (Uniform<R, String>,)) -> i64 {
+    held.into_inner(cx).len() as i64
 }
 
 fn rust_fn_with_context<R: RustFns<Value = Word>>(runtime: &R) {
@@ -1076,28 +1076,25 @@ fn rust_fn_with_context<R: RustFns<Value = Word>>(runtime: &R) {
     assert_eq!(read::<_, i64>(&mut frame, called), 4);
 }
 
-/// The text of a `String` lent to it: a result borrowing its argument.
-fn text_of<'c, 's, R: Runtime>(_: &Returning<'c, R>, (text,): &'s mut (Guard<'c, R::Shared<'c, String>>,)) -> &'s str {
-    text.as_str()
+/// A borrowed result that borrows nothing its call lent.
+fn static_label<'c, R: Runtime>(_: &Returning<'c, R>, _: (Guard<'c, R::Shared<'c, String>>,)) -> &'c str {
+    "a static label"
 }
 
 fn callback_borrowed_result<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
-    let function = produce_fn(&mut frame, RustFn::<R, (ByRef<String>,), Lent<str>>::new(text_of::<R>));
-    let text = produce(&mut frame, String::from("lent and borrowed back"));
+    let label = produce_fn(&mut frame, RustFn::<R, (ByRef<String>,), Lent<str>>::new(static_label::<R>));
+    let text = produce(&mut frame, String::from("lent"));
 
-    let mut read_back = None;
-    frame.call(&[Pass::Lend(text, Shared), Pass::Function(function)], |entry| {
+    let called = frame.call(&[Pass::Lend(text, Shared), Pass::Function(label)], |entry| {
         entry.open::<(ByRef<String>, ByCallback<(Lent<String>,), Lent<str>, ()>), ()>(|cx, (text, callback), ()| {
-            let borrowed = callback.call(&cx, (&*text,));
-            read_back = Some((String::from(borrowed), std::ptr::eq(borrowed.as_ptr(), text.as_ptr())));
-            cx.finish(())
+            let label = callback.call(&cx, (&*text,));
+            let length = label.len() as i64;
+            cx.finish(length)
         })
     });
-    let borrowed = frame.call_function(function, &[Pass::Lend(text, Shared)]);
 
-    assert_eq!(read_back, Some((String::from("lent and borrowed back"), true)));
-    assert_eq!(read_text(&mut frame, Pass::Same(borrowed, Shared)), "lent and borrowed back");
+    assert_eq!(read::<_, i64>(&mut frame, called), 14);
 }
 
 // Breaches the adapter's tracking covers. Under `WordRuntime` alone each is
