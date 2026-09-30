@@ -12,7 +12,7 @@ use super::cells::Shift;
 use super::{Infer, Term, VarState};
 use crate::ty::{
     CallsTerm, EffectTerm, EffectVarId, FlowTerm, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
-    LenTerm, LenVarId, ObjectTy, TyKind, TyVarId, ValuesVarId,
+    LenTerm, LenVarId, MarkTerm, MarkVarId, ObjectTy, TyKind, TyVarId, ValuesVarId,
 };
 
 /// How an import moved the other store's terms into this one.
@@ -24,6 +24,7 @@ pub struct Imported {
     effects: Shift,
     lengths: Shift,
     identities: Shift,
+    marks: Shift,
     flows: Shift,
     holds: Shift,
     calls: Shift,
@@ -40,6 +41,7 @@ impl Infer {
             effects: self.effect_vars.import(&from.effect_vars),
             lengths: self.len_vars.import(&from.len_vars),
             identities: self.identity_vars.import(&from.identity_vars),
+            marks: self.mark_vars.import(&from.mark_vars),
             flows: self.flow_vars.import(&from.flow_vars),
             holds: self.holds_vars.import(&from.holds_vars),
             calls: self.calls_vars.import(&from.calls_vars),
@@ -56,6 +58,7 @@ impl Infer {
             VarState::Bound(to) => VarState::Bound(imported.term(*to)),
         }));
         self.reference_targets.extend(from.reference_targets.iter().map(|var| imported.ty_var(*var)));
+        self.unmarked.extend(from.unmarked.iter().map(|var| imported.ty_var(*var)));
         imported
     }
 }
@@ -90,6 +93,13 @@ impl Imported {
 
     pub fn identity_var(&self, var: IdentityVarId) -> IdentityVarId {
         IdentityVarId(var.0 + self.identities.vars)
+    }
+
+    pub fn mark(&self, mark: MarkTerm<InferPhase>) -> MarkTerm<InferPhase> {
+        match mark {
+            MarkTerm::Known(known) => MarkTerm::Known(known),
+            MarkTerm::Var(var) => MarkTerm::Var(MarkVarId(var.0 + self.marks.vars)),
+        }
     }
 
     pub fn values_var(&self, var: ValuesVarId) -> ValuesVarId {
@@ -147,7 +157,7 @@ impl Imported {
                     IdentityTerm::Known(known) => IdentityTerm::Known(known),
                     IdentityTerm::Var(var) => IdentityTerm::Var(self.identity_var(var)),
                 }),
-                marked: *marked,
+                marked: self.mark(*marked),
             },
             TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, self.term(*target)),
             TyKind::Closures(signatures) => TyKind::Closures(signatures.iter().map(|signature| self.term(*signature)).collect()),

@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 use super::cells::{Cells, End as CellEnd, VarTerm};
 use super::{Infer, Term, VarState};
 use crate::ty::{
-    Concrete, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, ObjectTy, Ty,
+    Concrete, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, MarkTerm, ObjectTy, Ty,
     TyKind, TyVarId, Types,
 };
 
@@ -23,6 +23,7 @@ pub enum Unsettled {
     Effect(crate::ty::EffectVarId),
     Len(crate::ty::LenVarId),
     Identity(crate::ty::IdentityVarId),
+    Mark(crate::ty::MarkVarId),
     Flow(crate::ty::FlowVarId),
     Holds(crate::ty::HoldsVarId),
     Calls(crate::ty::CallsVarId),
@@ -132,7 +133,7 @@ impl Infer {
                     .as_ref()
                     .map(|identity| Ok(IdentityTerm::Known(self.settled(&self.identity_vars, identity)?)))
                     .transpose()?,
-                marked: *marked,
+                marked: MarkTerm::Known(self.settled(&self.mark_vars, marked)?),
             },
             TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, freeze(*target)?),
             TyKind::Var(_) => unreachable!("freeze_kind: freeze_level follows a variable before reading its kind"),

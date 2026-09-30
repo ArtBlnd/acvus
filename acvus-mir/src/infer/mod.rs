@@ -21,7 +21,7 @@ mod tests;
 
 use crate::ty::{
     Calls, CallsTerm, Effect, CallsVarId, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Holds, HoldsTerm, HoldsVarId,
-    IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId, TyId, TyKind, TyVarId,
+    IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId, Mark, MarkTerm, TyId, TyKind, TyVarId,
     Types, FnValues, ValuesVarId,
 };
 
@@ -66,7 +66,16 @@ pub struct Infer {
     /// Every variable a reference's target is, which types §4 keeps from
     /// being bound to a reference.
     reference_targets: FxHashSet<TyVarId>,
+    /// Every variable that never stands for a marked type (types §8): a
+    /// declaration's type variable, and an extern-defined type's argument.
+    /// Binding one raises every mark in what it stands for, as a part or
+    /// itself; widening where a marked type may stand is how a
+    /// specialization comes to change a meaning (`vector<bool>`), so this
+    /// stays the narrow rule.
+    unmarked: FxHashSet<TyVarId>,
     effect_vars: Cells<EffectTerm<InferPhase>>,
+    /// The marks of extern-defined types (types §8), joined as effects are.
+    mark_vars: Cells<MarkTerm<InferPhase>>,
     len_vars: Cells<LenTerm<InferPhase>>,
     identity_vars: Cells<IdentityTerm<InferPhase>>,
     flow_vars: Cells<FlowTerm<InferPhase>>,
@@ -100,7 +109,9 @@ impl Infer {
             types: Types::new(),
             ty_vars: Vec::new(),
             reference_targets: FxHashSet::default(),
+            unmarked: FxHashSet::default(),
             effect_vars: Cells::new(),
+            mark_vars: Cells::new(),
             len_vars: Cells::new(),
             identity_vars: Cells::new(),
             flow_vars: Cells::new(),
@@ -127,6 +138,13 @@ impl Infer {
     /// variables or not. Every caller builds a reference over a target it
     /// already holds to types §4.
     pub fn intern(&mut self, kind: TyKind<InferPhase>) -> Term {
+        if let TyKind::UserDefined { type_args, .. } = &kind {
+            for arg in type_args.iter() {
+                if let End::Unbound(var, _) = self.end(*arg) {
+                    self.unmarked.insert(var);
+                }
+            }
+        }
         if let TyKind::Ref(_, target) = &kind {
             match self.end(*target) {
                 End::Unbound(var, _) => {
@@ -145,6 +163,17 @@ impl Infer {
         let var = TyVarId(u32::try_from(self.ty_vars.len()).expect("Infer::fresh: u32::MAX variables"));
         self.ty_vars.push(VarState::Unbound(bound));
         self.types.intern(TyKind::Var(var))
+    }
+
+    /// A mark a value an extern fn gives marked starts at: marked, and
+    /// raised by each use that takes it unmarked (types §8).
+    pub fn fresh_mark(&mut self) -> MarkTerm<InferPhase> {
+        let var = self.mark_vars.fresh("Infer::fresh_mark: u32::MAX variables");
+        let term = MarkTerm::Var(var);
+        self.mark_vars
+            .join(&term, &MarkTerm::Known(Mark::Marked), Mark::join)
+            .expect("a fresh mark is fixed at nothing");
+        term
     }
 
     pub fn fresh_effect(&mut self) -> EffectVarId {

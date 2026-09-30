@@ -14,7 +14,7 @@ use super::{
 use super::declared::{self, Atom, Subject};
 use super::segments::{Segment, segments};
 use crate::ty::{
-    Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LifetimesOf, Mutability, ObjectTy,
+    Alignment, Declared, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LenTerm, LifetimesOf, Mutability, ObjectTy,
     Poly, TyId, TyKind, Types,
 };
 
@@ -59,12 +59,12 @@ pub enum Refused {
     /// A declared type holds a reference whose target is a reference
     /// (types §4).
     ReferenceToReference { written: Written },
-    /// A declared type holds a marked extern-defined type with a type
-    /// variable in it: only a whole concrete type carries `#` (types §8).
+    /// A declared type holds a marked extern-defined type with a variable
+    /// in it but its identity: only a whole concrete type carries `#`
+    /// (types §8).
     MarkedOverTypeVariable { written: Written },
-    /// A declared type holds a marked type as a part of another type other
-    /// than as what a reference lends or as a function type's parameter or
-    /// result: no other type holds a marked one (types §8).
+    /// A declared type holds a marked type as an extern-defined type's
+    /// argument, which a marked type never is (types §8).
     MarkedPart { written: Written },
     /// A declared cast or a view from a marked type, or a reference to one:
     /// a marked type's one step up is the same type unmarked (types §8).
@@ -715,6 +715,31 @@ fn holds_type_variable(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
     false
 }
 
+/// Whether `ty` holds a variable of any kind but an identity, which is a
+/// binding each call makes, not a variable a use settles (types §3, §8).
+fn holds_variable(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
+    let mut seen = FxHashSet::default();
+    let mut stack = vec![ty];
+    while let Some(at) = stack.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        let kind = types.kind(at);
+        let variable = match kind {
+            TyKind::Var(_) => true,
+            TyKind::Array(_, len, _) => matches!(len, LenTerm::Var(_)),
+            TyKind::Fn { effect, .. } => matches!(effect, EffectTerm::Var(_)),
+            TyKind::UserDefined { effect, .. } => matches!(effect, Some(EffectTerm::Var(_))),
+            _ => false,
+        };
+        if variable {
+            return true;
+        }
+        kind.for_each_child(|child| stack.push(child));
+    }
+    false
+}
+
 /// What a type term names: every extern-defined type, each once, whether
 /// it holds a type only the IR writes, whether it holds a reference to a
 /// reference, and whether it holds a marked type over a type variable or
@@ -744,12 +769,15 @@ impl TypeTerms {
                 }
                 _ => {}
             }
-            if is_marked(types, ty) && holds_type_variable(types, ty) {
+            if is_marked(types, ty) && holds_variable(types, ty) {
                 self.marked_over_variable = true;
             }
-            let holds_marked = matches!(kind, TyKind::Ref(..) | TyKind::Fn { .. });
+            // Only an extern-defined type's argument is never a marked type;
+            // a reference, a function type and a transparent structured
+            // type hold one as any part (types §8).
+            let argument = matches!(kind, TyKind::UserDefined { .. });
             kind.for_each_child(|child| {
-                self.marked_part |= !holds_marked && is_marked(types, child);
+                self.marked_part |= argument && is_marked(types, child);
                 self.read(types, child)
             });
         })

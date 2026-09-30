@@ -150,6 +150,11 @@ impl Infer {
                 panic!("instance_at: a generalized type variable is unbound")
             };
             let fresh = self.fresh(bound);
+            if self.unmarked.contains(var)
+                && let TyKind::Var(copy) = self.types.kind(fresh)
+            {
+                self.unmarked.insert(*copy);
+            }
             at.types.insert(*var, fresh);
         }
         for var in vars.lengths.iter() {

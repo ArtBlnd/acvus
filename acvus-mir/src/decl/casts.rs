@@ -40,27 +40,6 @@ pub enum Head {
     Ref(Mutability, Base),
 }
 
-impl Head {
-    /// Whether its constructor, or a reference's target's, is a marked
-    /// extern-defined type (types §8).
-    pub fn is_marked(self) -> bool {
-        matches!(self, Head::Base(Base::Named { marked: true, .. }) | Head::Ref(_, Base::Named { marked: true, .. }))
-    }
-
-    /// The head `Step::Unmark` reaches from this one: the same with its
-    /// extern-defined type unmarked.
-    ///
-    /// # Panics
-    /// The head is not marked: only a marked head steps up by `Unmark`.
-    pub fn unmarked(self) -> Head {
-        match self {
-            Head::Base(Base::Named { id, marked: true }) => Head::Base(Base::Named { id, marked: false }),
-            Head::Ref(mutability, Base::Named { id, marked: true }) => Head::Ref(mutability, Base::Named { id, marked: false }),
-            unmarked => panic!("only a marked head steps up by Unmark, not {unmarked:?}"),
-        }
-    }
-}
-
 /// A constructor. A reference's target is never a reference (types §4), so
 /// no reference is a `Base`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -83,18 +62,9 @@ pub enum Base {
     Object,
     Enum(QualifiedRef),
     Fn,
-    /// An extern-defined type, marked `#` or not: two heads, the marked one
-    /// a step below the unmarked (types §8).
-    Named { id: QualifiedRef, marked: bool },
-}
-
-/// One step up the tree (types §3, §8): a declared cast or a view, or the
-/// step from a marked extern-defined type to the same type unmarked, where
-/// a backend takes the unmarked type's representation.
-#[derive(Debug, Clone, Copy)]
-pub enum Step<'t> {
-    Cast(&'t VerifiedExternCast),
-    Unmark,
+    /// An extern-defined type, marked or not: its mark is a member, not
+    /// its constructor (types §6, §8).
+    Named(QualifiedRef),
 }
 
 /// The declared casts and the views (operators §5) as one tree: every head
@@ -108,12 +78,9 @@ pub struct CastTree {
 }
 
 impl CastTree {
-    /// The one step up from `head`, if any: a marked head's is `Unmark`,
-    /// which no declared cast shares (types §8).
-    pub fn step_up(&self, head: Head) -> Option<Step<'_>> {
-        match head.is_marked() {
-            true => Some(Step::Unmark),
-            false => self.up.get(&head).map(Step::Cast),
-        }
+    /// The one step up from `head`, if any. A mark is never stepped: a
+    /// cast from `F<T>` taken by a marked value raises its mark (types §8).
+    pub fn step_up(&self, head: Head) -> Option<&VerifiedExternCast> {
+        self.up.get(&head)
     }
 }

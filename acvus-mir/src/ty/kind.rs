@@ -1,6 +1,6 @@
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::arg::{IdentityTerm, LenTerm};
+use super::arg::{IdentityTerm, LenTerm, MarkTerm};
 use super::effect::EffectTerm;
 use super::flow::FlowTerm;
 use super::num::IntTy;
@@ -59,11 +59,12 @@ pub enum TyKind<V: Phase> {
         effect: Option<EffectTerm<V>>,
         /// The one identity it carries, where it declares one (types §3).
         identity: Option<IdentityTerm<V>>,
-        /// `#`: this whole concrete type, a type of its own, never part of
-        /// another type but as what a reference lends or as a function
-        /// type's parameter or result; its one step up is the same type
-        /// unmarked (types §8).
-        marked: bool,
+        /// `#` (types §8): a member of the type, not its constructor, known
+        /// once nothing can meet in it (§6). Marked below unmarked, it joins
+        /// as an effect does: a value an extern fn gives marked starts so,
+        /// each use taking it unmarked raises it, and a `#` parameter fixes
+        /// it. Only a whole concrete extern-defined type is ever marked.
+        marked: MarkTerm<V>,
     },
     Ref(Mutability, TyId<V>),
     /// A closure with code at each of a set of function types over one

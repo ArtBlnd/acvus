@@ -15,11 +15,11 @@ use super::cells::{End as CellEnd, Exceeds, Unequal, ValuesTerm};
 use super::{End, Infer, Term, VarState};
 use super::closed::poly_head;
 use super::Closed;
-use crate::decl::{Base, Declarations, Head, Step, VerifiedConversion};
+use crate::decl::{Base, Declarations, Head, VerifiedConversion};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{FnValue, FnValues, Reach, ValuesVarId, is_transparent};
 use crate::ty::{
-    Effect, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, Mutability, ObjectTy,
+    Effect, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, Mark, MarkTerm, Mutability, ObjectTy,
     TyKind, TyVarId,
 };
 
@@ -59,6 +59,9 @@ pub enum Mismatch {
     /// Two function types `eq` made one whose function values differ, each
     /// as known so far (types §2).
     Values { a: Option<FnValues>, b: Option<FnValues> },
+    /// Two marks that are not one: a mark fixed marked, by a `#`
+    /// parameter, that a use would raise (types §8).
+    Mark { a: Term, b: Term },
 }
 
 impl Mismatch {
@@ -76,6 +79,7 @@ impl Mismatch {
             Mismatch::Effects { .. } => "Effects",
             Mismatch::NotOneOf { .. } => "NotOneOf",
             Mismatch::Values { .. } => "Values",
+            Mismatch::Mark { .. } => "Mark",
         }
     }
 }
@@ -202,10 +206,7 @@ fn heads_up(decls: &Declarations, head: Head) -> Vec<Head> {
     let mut heads = vec![head];
     let mut at = head;
     while let Some(step) = decls.casts().step_up(at) {
-        at = match step {
-            Step::Cast(cast) => poly_head(decls.types(), cast.rule().to),
-            Step::Unmark => at.unmarked(),
-        };
+        at = poly_head(decls.types(), step.rule().to);
         heads.push(at);
     }
     heads
@@ -607,8 +608,9 @@ impl Infer {
 
     /// `node`, of head `from`, stepped up the tree to `to` through each
     /// step: a cast's `from` pattern is made one with the type reached, and
-    /// its `to` pattern is the type above; above a marked type is the same
-    /// type unmarked (types §8).
+    /// its `to` pattern is the type above. A cast is declared from an
+    /// unmarked type, so a step taken from a marked value raises its mark
+    /// first (types §8).
     ///
     /// # Panics
     /// `to` is not up from `from`: callers climb to a common ancestor.
@@ -619,15 +621,11 @@ impl Infer {
                 .casts()
                 .step_up(head)
                 .expect("climb: the target is up the tree from the start");
-            (at, head) = match step {
-                Step::Cast(cast) => {
-                    let rule = cast.rule();
-                    let (pattern_from, pattern_to) = self.instantiate_ends(decls.types(), rule.from, rule.to);
-                    self.relate(pattern_from, at, Relation::Eq)?;
-                    (pattern_to, poly_head(decls.types(), rule.to))
-                }
-                Step::Unmark => (self.unmarked(at), head.unmarked()),
-            };
+            let rule = step.rule();
+            let (pattern_from, pattern_to) = self.instantiate_ends(decls.types(), rule.from, rule.to);
+            self.raise_mark(at)?;
+            self.relate(pattern_from, at, Relation::Eq)?;
+            (at, head) = (pattern_to, poly_head(decls.types(), rule.to));
         }
         Ok(at)
     }
@@ -694,35 +692,81 @@ impl Infer {
             .ok_or(Mismatch::Bound { var: v, term: w_term })?;
         self.ty_vars[w.0 as usize] = VarState::Unbound(bound);
         self.ty_vars[v.0 as usize] = VarState::Bound(w_term);
-        self.keep_reference_target(v, w_term);
+        self.keep_exclusions(v, w_term);
         Ok(())
     }
 
     /// `var`, linked to `to`, passes its mark as a reference's target to
     /// the last variable on `to`'s chain, the one later rebound: two
     /// variables made one keep the mark if either has it (types §4).
-    fn keep_reference_target(&mut self, var: TyVarId, to: Term) {
-        if !self.reference_targets.contains(&var) {
-            return;
+    fn keep_exclusions(&mut self, var: TyVarId, to: Term) {
+        let last = match self.end(to) {
+            End::Unbound(last, _) | End::Node { holder: Some((last, _)), .. } => last,
+            End::Node { holder: None, .. } => return,
+        };
+        if self.reference_targets.contains(&var) {
+            self.reference_targets.insert(last);
         }
-        match self.end(to) {
-            End::Unbound(last, _) | End::Node { holder: Some((last, _)), .. } => {
-                self.reference_targets.insert(last);
+        if self.unmarked.contains(&var) {
+            self.unmarked.insert(last);
+        }
+    }
+
+    /// Raises the mark of `term`'s extern-defined type, or of what the
+    /// reference `term` lends, to unmarked (types §8): refused where a `#`
+    /// parameter fixed it marked.
+    fn raise_mark(&mut self, term: Term) -> Result<(), Mismatch> {
+        let End::Node { node, .. } = self.end(term) else {
+            return Ok(());
+        };
+        match self.types.kind(node).clone() {
+            TyKind::UserDefined { marked, .. } => self
+                .mark_vars
+                .join(&marked, &MarkTerm::Known(Mark::Unmarked), Mark::join)
+                .map(drop)
+                .map_err(|_| Mismatch::Mark { a: node, b: node }),
+            TyKind::Ref(_, target) => self.raise_mark(target),
+            _ => Ok(()),
+        }
+    }
+
+    /// What a declaration's type variable stands for is unmarked wherever it
+    /// would hold a marked type as itself or as a part (types §8): each mark
+    /// it holds is raised, and each variable it holds is kept so. What a
+    /// reference lends and a function type's parameters and result are not
+    /// parts it holds.
+    fn demand_unmarked(&mut self, term: Term) -> Result<(), Mismatch> {
+        acvus_utils::grow(|| match self.end(term) {
+            End::Unbound(var, _) => {
+                self.unmarked.insert(var);
+                Ok(())
             }
-            End::Node { holder: None, .. } => {}
-        }
+            End::Node { node, .. } => match self.types.kind(node).clone() {
+                TyKind::UserDefined { type_args, .. } => {
+                    self.raise_mark(node)?;
+                    type_args.iter().try_for_each(|arg| self.demand_unmarked(*arg))
+                }
+                TyKind::Ref(..) | TyKind::Fn { .. } => Ok(()),
+                kind => {
+                    let mut parts = Vec::new();
+                    kind.for_each_child(|part| parts.push(part));
+                    parts.into_iter().try_for_each(|part| self.demand_unmarked(part))
+                }
+            },
+        })
     }
 
     /// Refuses `var` becoming `to` where `var` is a reference's target and
     /// `to` is a reference (types §4).
-    fn refuse_reference_target(&self, var: TyVarId, to: Term) -> Result<(), Mismatch> {
+    fn refuse_excluded(&self, var: TyVarId, to: Term) -> Result<(), Mismatch> {
         let End::Node { node, .. } = self.end(to) else {
             return Ok(());
         };
-        match self.reference_targets.contains(&var) && matches!(self.types.kind(node), TyKind::Ref(..)) {
-            true => Err(Mismatch::ReferenceToReference { target: node }),
-            false => Ok(()),
+        let kind = self.types.kind(node);
+        if self.reference_targets.contains(&var) && matches!(kind, TyKind::Ref(..)) {
+            return Err(Mismatch::ReferenceToReference { target: node });
         }
+        Ok(())
     }
 
     /// Binds the unbound `var` to `node`, through the variable that holds
@@ -737,10 +781,13 @@ impl Infer {
         if !bound.admits(self.types.kind(node)) {
             return Err(Mismatch::Bound { var, term: node });
         }
-        self.refuse_reference_target(var, node)?;
+        self.refuse_excluded(var, node)?;
         let target = holder.map_or(node, |(_, held)| held);
         self.ty_vars[var.0 as usize] = VarState::Bound(target);
-        self.keep_reference_target(var, target);
+        self.keep_exclusions(var, target);
+        if self.unmarked.contains(&var) {
+            self.demand_unmarked(target)?;
+        }
         Ok(target)
     }
 
@@ -775,9 +822,12 @@ impl Infer {
         if self.occurs(var, to) {
             return Err(Mismatch::Occurs { var, in_term: to });
         }
-        self.refuse_reference_target(var, to)?;
+        self.refuse_excluded(var, to)?;
         self.ty_vars[var.0 as usize] = VarState::Bound(to);
-        self.keep_reference_target(var, to);
+        self.keep_exclusions(var, to);
+        if self.unmarked.contains(&var) {
+            self.demand_unmarked(to)?;
+        }
         Ok(())
     }
 
@@ -936,7 +986,6 @@ impl Infer {
                 },
             ) => {
                 if id_a != id_b
-                    || marked_a != marked_b
                     || type_args_a.len() != type_args_b.len()
                     || effect_a.is_some() != effect_b.is_some()
                     || identity_a.is_some() != identity_b.is_some()
@@ -965,12 +1014,21 @@ impl Infer {
                     .zip(identity_b)
                     .map(|(x, y)| self.identity_vars.unify(&x, &y).map_err(|Unequal| heads))
                     .transpose()?;
+                // Marks join as effects do (types §8): `eq` makes them one
+                // and fixes them, a join raises both to the higher.
+                let marked = match how {
+                    Relation::Eq => self.mark_vars.unify(&marked_a, &marked_b).map_err(|Unequal| Mismatch::Mark { a, b })?,
+                    Relation::Join(_) => self
+                        .mark_vars
+                        .join(&marked_a, &marked_b, Mark::join)
+                        .map_err(|_| Mismatch::Mark { a, b })?,
+                };
                 TyKind::UserDefined {
                     id: id_a,
                     type_args,
                     effect,
                     identity,
-                    marked: marked_a,
+                    marked,
                 }
             }
             (TyKind::Ref(mutability_a, x), TyKind::Ref(mutability_b, y)) => {

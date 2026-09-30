@@ -10,7 +10,7 @@ use super::{Bound, FlowId, Infer, Term};
 use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound, effect_variables};
 use crate::ty::{
     Calls, CallsTerm, Concrete, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityTerm, IdentityVarId,
-    Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy, Phase, Poly, Ty, TyId, TyKind, Types,
+    Infer as InferPhase, Label, LenTerm, LenVarId, MarkTerm, ObjectTy, Phase, Poly, Ty, TyId, TyKind, Types,
 };
 
 /// A requirement at the use's own terms: an impl of `generic_function` whose
@@ -59,6 +59,7 @@ pub(super) trait Instantiable:
         LenVar: Placeholder,
         IdentityVar: Placeholder,
         FlowVar = Infallible,
+        MarkVar = Infallible,
         HoldsTerm = Holds,
         CallsTerm = Calls,
         ValuesTerm = (),
@@ -137,6 +138,13 @@ impl Infer {
     pub fn instantiate_in(&mut self, poly: &Types<Poly>, scheme: &Scheme) -> Instantiated {
         let mut at = AtUse::new(poly, Placeholders::Declared);
         let vars: Vec<Term> = scheme.bounds.iter().map(|declared| self.fresh(bound_of(declared))).collect();
+        // A declaration's type variable never stands for a marked type
+        // (types §8): each is kept unmarked for as long as it is solved.
+        for var in &vars {
+            if let TyKind::Var(var) = self.types.kind(*var) {
+                self.unmarked.insert(*var);
+            }
+        }
         at.ty_vars.extend((0u32..).zip(vars));
         let (ty, flows) = match scheme.impls {
             // A generic function's call reaches one of its impls, and the
@@ -316,7 +324,10 @@ impl Infer {
                         IdentityTerm::Var(*at.identity_vars.entry(index.index()).or_insert_with(|| self.fresh_identity()))
                     }
                 }),
-                marked: *marked,
+                marked: match marked {
+                    MarkTerm::Known(mark) => MarkTerm::Known(*mark),
+                    MarkTerm::Var(never) => match *never {},
+                },
             },
             TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, self.instantiate_ty(at, *target)),
         };

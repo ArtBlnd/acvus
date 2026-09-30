@@ -27,7 +27,7 @@ use rustc_hash::FxHashMap;
 use crate::ty::{LifetimesOf, Poly, TyId, Types};
 
 pub use bound::TyVarBound;
-pub use casts::{Base, CastRule, CastTree, Head, Step, VerifiedExternCast};
+pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
 pub use conversions::{ConversionRule, VerifiedConversion};
 pub use core::{Core, Tags};
 pub use declared::NamedFact;

@@ -186,11 +186,10 @@ pub enum Op {
         src: ValueId,
         to: CastTy,
     },
-    /// The step from a marked extern-defined type `#F<A>` to `F<A>` (types
-    /// §8): the value is unchanged, and a backend holding `#F<A>` in a
-    /// representation of its own takes `F<A>`'s here. Its result's type is
-    /// `src`'s unmarked. A backend treating `#F<A>` as `F<A>` makes it a
-    /// copy.
+    /// A value a call gave at its declared result type, taken at the type
+    /// its uses settled, which differs from it only in marks raised to
+    /// unmarked (types §8): the one place its representation changes. A
+    /// backend treating `#F<A>` as `F<A>` makes it a copy.
     Unmark {
         src: ValueId,
     },

@@ -1,5 +1,5 @@
 //! The variables whose value is a term of their own kind: an effect, a
-//! length, an identity, a set of flows, what a function value's
+//! length, an identity, a mark, a set of flows, what a function value's
 //! captures hold, how often it may be called, and which function values a
 //! function type may be. Each is unbound, known, or
 //! made one with another variable of its kind, so that two variables made
@@ -9,7 +9,8 @@ use rustc_hash::FxHashSet;
 
 use crate::ty::{
     Calls, CallsTerm, CallsVarId, Effect, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Flows, Holds, HoldsTerm,
-    HoldsVarId, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase, LenTerm, LenVarId, FnValues,
+    HoldsVarId, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase, LenTerm, LenVarId, FnValues, Mark, MarkTerm,
+    MarkVarId,
     ValuesVarId,
 };
 
@@ -507,6 +508,33 @@ impl VarTerm for FlowTerm<InferPhase> {
         match self {
             FlowTerm::Known(value) => Read::Known(value),
             FlowTerm::Var(var) => Read::Var(*var),
+        }
+    }
+}
+
+impl VarTerm for MarkTerm<InferPhase> {
+    type Var = MarkVarId;
+    type Value = Mark;
+
+    fn var_of_index(index: u32) -> MarkVarId {
+        MarkVarId(index)
+    }
+    fn index(var: MarkVarId) -> usize {
+        var.0 as usize
+    }
+    fn unsettled(var: MarkVarId) -> Unsettled {
+        Unsettled::Mark(var)
+    }
+    fn of_var(var: MarkVarId) -> Self {
+        MarkTerm::Var(var)
+    }
+    fn of_value(value: Mark) -> Self {
+        MarkTerm::Known(value)
+    }
+    fn read(&self) -> Read<'_, Self> {
+        match self {
+            MarkTerm::Known(value) => Read::Known(value),
+            MarkTerm::Var(var) => Read::Var(*var),
         }
     }
 }

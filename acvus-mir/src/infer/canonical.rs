@@ -11,7 +11,7 @@ use super::cells::{Cells, End as CellEnd, ValuesTerm, VarTerm};
 use super::{Bound, Infer, Term};
 use crate::ty::{
     CallsTerm, EffectTerm, EffectVarId, FlowTerm, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
-    LenTerm, LenVarId, TyKind, TyVarId, Types, ValuesVarId,
+    LenTerm, LenVarId, MarkTerm, TyKind, TyVarId, Types, ValuesVarId,
 };
 
 /// The table both sides' copies are interned in, so that two copies are
@@ -41,6 +41,7 @@ pub struct Canonical<'c> {
     effects: Renumbered<EffectTerm<InferPhase>>,
     lengths: Renumbered<LenTerm<InferPhase>>,
     identities: Renumbered<IdentityTerm<InferPhase>>,
+    marks: Renumbered<MarkTerm<InferPhase>>,
     flows: Renumbered<FlowTerm<InferPhase>>,
     holds: Renumbered<HoldsTerm>,
     calls: Renumbered<CallsTerm>,
@@ -58,6 +59,7 @@ pub struct VarStates {
     effects: Vec<CellState<crate::ty::Effect>>,
     lengths: Vec<CellState<usize>>,
     identities: Vec<CellState<crate::ty::IdentityId>>,
+    marks: Vec<CellState<crate::ty::Mark>>,
     flows: Vec<CellState<crate::ty::Flows>>,
     holds: Vec<CellState<crate::ty::Holds>>,
     calls: Vec<CellState<crate::ty::Calls>>,
@@ -69,6 +71,7 @@ pub struct VarStates {
 struct TyVarState {
     bound: Bound,
     reference_target: bool,
+    unmarked: bool,
 }
 
 /// `into ⊒ from` (effects §1).
@@ -130,6 +133,7 @@ impl<'c> Canonical<'c> {
             effects: Renumbered::new(),
             lengths: Renumbered::new(),
             identities: Renumbered::new(),
+            marks: Renumbered::new(),
             flows: Renumbered::new(),
             holds: Renumbered::new(),
             calls: Renumbered::new(),
@@ -139,6 +143,7 @@ impl<'c> Canonical<'c> {
                 effects: Vec::new(),
                 lengths: Vec::new(),
                 identities: Vec::new(),
+                marks: Vec::new(),
                 flows: Vec::new(),
                 holds: Vec::new(),
                 calls: Vec::new(),
@@ -195,7 +200,7 @@ impl<'c> Canonical<'c> {
                 identity: identity
                     .as_ref()
                     .map(|identity| self.identities.term(&from.identity_vars, identity, &mut self.states.identities)),
-                marked,
+                marked: self.marks.term(&from.mark_vars, &marked, &mut self.states.marks),
             },
             other => other,
         }
@@ -214,7 +219,11 @@ impl<'c> Canonical<'c> {
             panic!("Canonical::ty_var: a variable reached through `shallow` is unbound")
         };
         self.types.insert(var, number);
-        self.states.types.push(TyVarState { bound: bound.clone(), reference_target: self.from.reference_targets.contains(&var) });
+        self.states.types.push(TyVarState {
+            bound: bound.clone(),
+            reference_target: self.from.reference_targets.contains(&var),
+            unmarked: self.from.unmarked.contains(&var),
+        });
         number
     }
 

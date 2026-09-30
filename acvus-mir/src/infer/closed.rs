@@ -89,26 +89,6 @@ impl Infer {
             kind => Some(Head::Base(base_of(kind))),
         }
     }
-
-    /// The type one `Step::Unmark` above `term`, a marked extern-defined
-    /// type or a reference to one: the same type unmarked (types §8).
-    ///
-    /// # Panics
-    /// `term`'s head is not marked: callers step up by `Unmark` only from a
-    /// marked head, which `head_of` read at a node.
-    pub(crate) fn unmarked(&mut self, term: Term) -> Term {
-        let End::Node { node, .. } = self.end(term) else {
-            panic!("a marked head is read at a node")
-        };
-        let kind = match self.types.kind(node).clone() {
-            TyKind::UserDefined { id, type_args, effect, identity, marked: true } => {
-                TyKind::UserDefined { id, type_args, effect, identity, marked: false }
-            }
-            TyKind::Ref(mutability, target) => TyKind::Ref(mutability, self.unmarked(target)),
-            unmarked => panic!("only a marked head steps up by Unmark, not {unmarked:?}"),
-        };
-        self.intern(kind)
-    }
 }
 
 /// The head of a declared cast's end (types §3).
@@ -139,7 +119,7 @@ fn base_of<V: Phase>(kind: &TyKind<V>) -> Base {
         TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
         TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
-        TyKind::UserDefined { id, marked, .. } => Base::Named { id: *id, marked: *marked },
+        TyKind::UserDefined { id, .. } => Base::Named(*id),
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::Ref(..) => panic!(
