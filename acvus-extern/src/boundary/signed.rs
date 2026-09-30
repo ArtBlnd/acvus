@@ -1,5 +1,7 @@
 //! The facts no type can carry (runtime contract §4, safety §2).
 
+use crate::runtime::Crosses;
+
 /// S1: storage a shared guard lends keeps its address, and is written only
 /// under an exclusive loan, until the checker's loan ends, after the guard
 /// drops as well.
@@ -31,6 +33,22 @@ pub enum LayoutFact {
     CanonicalOf,
 }
 
+impl LayoutFact {
+    /// The fact of a constructor whose canonical form is the same constructor
+    /// over its parts' canonical forms: it is its own canonical form exactly
+    /// when every part is.
+    const fn of_parts(parts: &[LayoutFact]) -> LayoutFact {
+        let mut i = 0;
+        while i < parts.len() {
+            if let LayoutFact::CanonicalOf = parts[i] {
+                return LayoutFact::CanonicalOf;
+            }
+            i += 1;
+        }
+        LayoutFact::OwnCanonical
+    }
+}
+
 /// A generic parameter the checker's flows track, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GenericParam {
@@ -59,4 +77,104 @@ pub struct StructuralFacts {
 pub unsafe trait Structural {
     type Canon: Structural<Canon = Self::Canon> + 'static;
     const FACTS: StructuralFacts;
+}
+
+/// The types the crossing names as their own canonical form, signed here.
+macro_rules! own_canonical {
+    ($($t:ty),+ $(,)?) => {$(
+        // SAFETY: `Canon` is `Self`, so size, alignment, field offsets and
+        // release are one. The type has no lifetime or type parameter, so it
+        // reaches none and has no interior mutability over one, as `FACTS`
+        // states with an empty generic list.
+        unsafe impl Structural for $t {
+            type Canon = $t;
+
+            const FACTS: StructuralFacts = StructuralFacts {
+                layout: LayoutFact::OwnCanonical,
+                generics: &[],
+            };
+        }
+
+        impl Crosses for $t {}
+    )+};
+}
+
+own_canonical!(
+    i8,
+    i16,
+    i32,
+    i64,
+    u8,
+    u16,
+    u32,
+    u64,
+    f64,
+    bool,
+    char,
+    String,
+    ()
+);
+
+/// A generic list entry per type parameter of a constructor.
+macro_rules! type_param {
+    ($p:ident) => {
+        GenericParam::Type
+    };
+}
+
+/// The standard constructors the crossing names, each its own canonical form
+/// over its parts' canonical forms.
+macro_rules! canonical_over_parts {
+    (<$($p:ident),+> $ty:ty => $canon:ty) => {
+        // SAFETY: `Canon` is the same constructor applied to each part's
+        // `Canon`. Each part has its canonical form's size, alignment, field
+        // offsets and release by the part's own `Structural` signature, so
+        // the constructor, whose layout and drop glue are computed from its
+        // parts', has its canonical form's; Rust promises no layout shared by
+        // two instantiations of a `repr(Rust)` type, so field order at equal
+        // size and alignment is argued from this, and the size and alignment
+        // are asserted per instantiation by `LayoutWitness::canonical`. The
+        // constructor holds each type parameter as a part, projects through
+        // none, and adds no interior mutability; `FACTS` lists one type
+        // parameter per part and derives the layout fact from the parts'.
+        unsafe impl<$($p),+> Structural for $ty
+        where
+            $($p: Structural,)+
+        {
+            type Canon = $canon;
+
+            const FACTS: StructuralFacts = StructuralFacts {
+                layout: LayoutFact::of_parts(&[$($p::FACTS.layout),+]),
+                generics: &[$(type_param!($p)),+],
+            };
+        }
+
+        impl<$($p),+> Crosses for $ty where $($p: Crosses,)+ {}
+    };
+}
+
+canonical_over_parts!(<T> Option<T> => Option<T::Canon>);
+canonical_over_parts!(<T, E> Result<T, E> => Result<T::Canon, E::Canon>);
+
+/// Tuples up to twelve parts, the arity the standard library's own tuple
+/// impls stop at.
+macro_rules! tuple_canonical {
+    ($(($($p:ident),+))+) => {$(
+        canonical_over_parts!(<$($p),+> ($($p,)+) => ($($p::Canon,)+));
+    )+};
+}
+
+tuple_canonical! {
+    (A)
+    (A, B)
+    (A, B, C)
+    (A, B, C, D)
+    (A, B, C, D, E)
+    (A, B, C, D, E, F)
+    (A, B, C, D, E, F, G)
+    (A, B, C, D, E, F, G, H)
+    (A, B, C, D, E, F, G, H, I)
+    (A, B, C, D, E, F, G, H, I, J)
+    (A, B, C, D, E, F, G, H, I, J, K)
+    (A, B, C, D, E, F, G, H, I, J, K, L)
 }

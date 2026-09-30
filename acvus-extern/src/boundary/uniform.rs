@@ -4,6 +4,7 @@
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
+use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
 use crate::runtime::Runtime;
 
 /// The permission to release one value, made only by an owning holder's drop.
@@ -17,6 +18,10 @@ pub trait Release: Copy {
     fn release(self, releasing: Releasing);
 }
 
+/// The uniform index fixed: every `Uniform<R, X>` has `Uniform<R, Never>` as
+/// its canonical form.
+pub enum Never {}
+
 /// The uniform value at a type variable `X`. No trait implemented on it has an
 /// item that depends on `X` (runtime contract §1).
 #[repr(transparent)]
@@ -27,6 +32,236 @@ pub struct Uniform<R: Runtime, X> {
 
 impl<R: Runtime, X> Drop for Uniform<R, X> {
     fn drop(&mut self) {
-        todo!("release the value once through a Releasing")
+        (*self.value).release(Releasing { _private: () });
+    }
+}
+
+// SAFETY: `Uniform` is `repr(transparent)` over the runtime value, and its
+// index is a `PhantomData<fn() -> X>` of size 0 and alignment 1 for every `X`,
+// so `Uniform<R, X>` and `Uniform<R, Never>` have one size, alignment and
+// field offset. Their release is the one `Drop` above, which cannot depend on
+// `X` (E0367). `X` is held only as that phantom, no projection through it
+// exists, and nothing over it is interior-mutable. `FACTS` states the index as
+// the one type parameter the checker's flows read; the runtime `R` is not
+// declared to the checker.
+unsafe impl<R, X> Structural for Uniform<R, X>
+where
+    R: Runtime,
+{
+    type Canon = Uniform<R, Never>;
+
+    const FACTS: StructuralFacts = StructuralFacts {
+        layout: LayoutFact::CanonicalOf,
+        generics: &[GenericParam::Type],
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use std::marker::PhantomData;
+    use std::mem::ManuallyDrop;
+    use std::ops::{Deref, DerefMut};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use acvus_utils::Interner;
+
+    use super::{Never, Release, Releasing, Uniform};
+    use crate::boundary::entry::Settled;
+    use crate::boundary::signed::{LayoutFact, SignedS1, SignedS2, SignedS3, Structural};
+    use crate::boundary::stored::LayoutWitness;
+    use crate::runtime::{Crosses, ObjectBody, RefTarget, Runtime, TupleBody, VariantBody};
+
+    /// A value that counts its releases and names no storage.
+    #[derive(Clone, Copy)]
+    struct Counted {
+        releases: &'static AtomicUsize,
+        id: u32,
+    }
+
+    impl Release for Counted {
+        fn release(self, _releasing: Releasing) {
+            self.releases.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// A runtime whose only live operation is release; the tests read no value
+    /// through it.
+    struct Counting;
+
+    // SAFETY: `Counting` lends no storage, makes no reference value and keeps
+    // nothing: every operation that would is unreachable below.
+    unsafe impl SignedS1 for Counting {}
+    // SAFETY: as for S1.
+    unsafe impl SignedS2 for Counting {}
+    // SAFETY: as for S1.
+    unsafe impl SignedS3 for Counting {}
+
+    struct NoBody;
+
+    impl TupleBody<Counted> for NoBody {
+        fn arity(&self) -> u32 {
+            unreachable!("the release tests make no tuple")
+        }
+        fn take_part(&mut self, _: u32) -> Counted {
+            unreachable!("the release tests make no tuple")
+        }
+    }
+
+    impl ObjectBody<Counted> for NoBody {
+        fn len(&self) -> u32 {
+            unreachable!("the release tests make no object")
+        }
+        fn take_field(&mut self, _: u32) -> Counted {
+            unreachable!("the release tests make no object")
+        }
+    }
+
+    impl VariantBody<Counted> for NoBody {
+        fn tag(&self) -> u32 {
+            unreachable!("the release tests make no variant")
+        }
+        fn take_payload(&mut self) -> Option<Counted> {
+            unreachable!("the release tests make no variant")
+        }
+    }
+
+    struct NoGuard<T: ?Sized>(PhantomData<fn() -> Box<T>>);
+
+    impl<T: ?Sized> Deref for NoGuard<T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            unreachable!("the release tests lend no storage")
+        }
+    }
+
+    impl<T: ?Sized> DerefMut for NoGuard<T> {
+        fn deref_mut(&mut self) -> &mut T {
+            unreachable!("the release tests lend no storage")
+        }
+    }
+
+    impl Runtime for Counting {
+        type Value = Counted;
+        type Tuple = NoBody;
+        type Object = NoBody;
+        type Variant = NoBody;
+        type Shared<'a, T: Crosses + 'a> = NoGuard<T>;
+        type Exclusive<'a, T: Crosses + 'a> = NoGuard<T>;
+        type SharedSlice<'a, T: Crosses + 'a> = NoGuard<[T]>;
+        type ExclusiveSlice<'a, T: Crosses + 'a> = NoGuard<[T]>;
+        type SharedStr<'a> = NoGuard<str>;
+
+        fn take<T: Crosses>(&self, _: Counted, _: Settled<'_>) -> T {
+            unreachable!("the release tests read no value")
+        }
+        fn give<T: Crosses>(&self, _: T, _: Settled<'_>) -> Counted {
+            unreachable!("the release tests make no value")
+        }
+        fn shared<'a, T: Crosses + 'a>(&'a self, _: Counted, _: Settled<'a>) -> NoGuard<T> {
+            unreachable!("the release tests lend no storage")
+        }
+        fn exclusive<'a, T: Crosses + 'a>(&'a self, _: Counted, _: Settled<'a>) -> NoGuard<T> {
+            unreachable!("the release tests lend no storage")
+        }
+        fn shared_slice<'a, T: Crosses + 'a>(&'a self, _: Counted, _: Settled<'a>) -> NoGuard<[T]> {
+            unreachable!("the release tests lend no storage")
+        }
+        fn exclusive_slice<'a, T: Crosses + 'a>(
+            &'a self,
+            _: Counted,
+            _: Settled<'a>,
+        ) -> NoGuard<[T]> {
+            unreachable!("the release tests lend no storage")
+        }
+        fn shared_str<'a>(&'a self, _: Counted, _: Settled<'a>) -> NoGuard<str> {
+            unreachable!("the release tests lend no storage")
+        }
+        fn take_tuple(&self, _: Counted, _: Settled<'_>) -> NoBody {
+            unreachable!("the release tests make no tuple")
+        }
+        fn take_object(&self, _: Counted, _: Settled<'_>) -> NoBody {
+            unreachable!("the release tests make no object")
+        }
+        fn take_variant(&self, _: Counted, _: Settled<'_>) -> NoBody {
+            unreachable!("the release tests make no variant")
+        }
+        fn lent_shared<'a, T: Crosses + 'a>(&'a self, _: NoGuard<T>) -> Counted {
+            unreachable!("the release tests lend no storage")
+        }
+        fn lent_exclusive<'a, T: Crosses + 'a>(&'a self, _: NoGuard<T>) -> Counted {
+            unreachable!("the release tests lend no storage")
+        }
+        fn reference(&self, _: RefTarget<'_, Counted>) -> Counted {
+            unreachable!("the release tests make no reference")
+        }
+        fn interner(&self) -> &Interner {
+            unreachable!("the release tests intern no name")
+        }
+        async fn sleep(&self, _: Duration) {
+            unreachable!("the release tests do not wait")
+        }
+    }
+
+    /// The index of a type variable in the tests.
+    struct X;
+
+    fn owned<I>(releases: &'static AtomicUsize, id: u32) -> Uniform<Counting, I> {
+        Uniform {
+            value: ManuallyDrop::new(Counted { releases, id }),
+            _index: PhantomData,
+        }
+    }
+
+    #[test]
+    fn a_dropped_uniform_releases_its_value_once() {
+        static RELEASES: AtomicUsize = AtomicUsize::new(0);
+
+        drop(owned::<X>(&RELEASES, 0));
+
+        assert_eq!(RELEASES.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_uniform_cast_to_its_canonical_form_is_still_released_once() {
+        static RELEASES: AtomicUsize = AtomicUsize::new(0);
+
+        let canon = LayoutWitness::<Option<Uniform<Counting, X>>, _>::canonical()
+            .cast(Some(owned(&RELEASES, 0)));
+        assert_eq!(RELEASES.load(Ordering::SeqCst), 0);
+        drop(canon);
+
+        assert_eq!(RELEASES.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_canonical_uniform_reads_back_at_its_index_in_place() {
+        static RELEASES: AtomicUsize = AtomicUsize::new(0);
+        let mut canon: (Uniform<Counting, Never>, i64) = (owned(&RELEASES, 7), 1);
+
+        let at_x =
+            LayoutWitness::<(Uniform<Counting, X>, i64), _>::canonical().cast_back_mut(&mut canon);
+        at_x.1 = 2;
+        assert_eq!(at_x.0.value.id, 7);
+        drop(canon);
+
+        assert_eq!(RELEASES.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_constructor_over_a_uniform_is_not_its_own_canonical_form() {
+        assert_eq!(
+            <Uniform<Counting, X>>::FACTS.layout,
+            LayoutFact::CanonicalOf
+        );
+        assert_eq!(
+            <(i64, Option<Uniform<Counting, X>>)>::FACTS.layout,
+            LayoutFact::CanonicalOf
+        );
+        assert_eq!(
+            <(i64, Option<char>)>::FACTS.layout,
+            LayoutFact::OwnCanonical
+        );
+        assert_eq!(<Result<(i64, u8), String>>::FACTS.generics.len(), 2);
     }
 }
