@@ -199,6 +199,11 @@ pub enum Refused {
     /// that is no `&mut`: only a `&mut` argument's value changes during a
     /// call (extern-fn §3).
     OldOfNoMutableReference { declared: Declared, param: usize },
+    /// A signature stated total whose parameter holds a function type at
+    /// some depth: the call may run that function, and a function value's
+    /// ending is its own, which the declaration cannot answer for
+    /// (extern-fn §4).
+    TotalCallsBack { declared: Declared, param: usize },
 }
 
 /// Where a declaration writes a type.
