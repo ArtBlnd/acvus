@@ -60,6 +60,6 @@ No word encoding, frame layout or register. No default or vacant value, and no d
 
 - A call reaches its handler by static dispatch. A synchronous call performs no dynamic dispatch and no allocation beyond what its declared types require.
 - Where a call through the boundary is in tail position in its caller, the boundary executes nothing after it, and no address of the caller's frame is live across it.
-- The action at a loan's end is a constant of the lent type. A loan whose end has no action compiles to no code and is not tested at run time.
+- The action at a loan's end is a constant of the lent type, and upkeep only: a loan whose guard is forgotten stays sound (crossing §1). A loan whose end has no action compiles to no code and is not tested at run time.
 
 *Why.* A run-time test at each loan's end, or boundary code after a tail call, costs every call its inlining and its tail call, including calls whose loans need no action.

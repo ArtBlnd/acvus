@@ -4,7 +4,7 @@ How values and references cross between a run and an extern fn.
 
 ## 1. One entry
 
-Each call has one entry. The entry opens the call's guards and hands them to the call's body inside a closure, so no guard escapes it and none can be forgotten. Everything after the entry is safe.
+Each call has one entry. The entry opens the call's guards and hands them to the call's body inside a closure, so no guard outlives the call. Forgetting a guard is safe: nothing sound rests on a guard's drop, so a loan's end action is a representation's upkeep, never a fact soundness needs. Everything after the entry is safe.
 
 ## 2. Projections
 
