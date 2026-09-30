@@ -13,8 +13,8 @@ use crate::ir::cfg::edit::{
 use crate::ir::cfg::{BodyId, Changes, Module, Op};
 use crate::passes::analysis::{AnalysisManager, Escapes, LoopTree};
 use crate::passes::optimize::{
-    Bce, BodyTransform, Commute, Dce, Dse, Gvn, Inline, Licm, Mem2Reg, ModuleTransform, Reborrow, Schedule, Sccp,
-    SimplifyCfg, Sink, SplitCalls, Sroa, union_of,
+    Bce, BodyTransform, Commute, Dce, Dse, Gvn, Inline, IvCanon, Licm, LoopDeletion, Lsr, Mem2Reg, ModuleTransform,
+    Reborrow, Schedule, Sccp, SimplifyCfg, Sink, SplitCalls, Sroa, WhileToFor, union_of,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +46,7 @@ fn optimize_fully(module: &mut Module, am: &mut AnalysisManager<'_>) {
         storage(module, body, am);
         proofs(module, body, am);
         motion(module, body, am);
+        loops(module, body, am);
         effects(module, body, am);
     }
 }
@@ -81,14 +82,26 @@ fn proofs(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
 }
 
 /// P6. `licm` runs last because it makes every loop's preheader, and
-/// `simplify_cfg`, which P3* runs, bypasses a preheader left empty; P7
-/// edits no block, so F2 holds from here into P7 (D73). The loop group,
-/// planned with the user (compilation §4), is reserved after it; nothing
-/// runs there yet.
+/// `simplify_cfg`, which P3* runs, bypasses a preheader left empty; the loop
+/// group and P7 keep F2, so it holds from here into P7 (D73).
 fn motion(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
     step::<Sink>(module, body, am);
     scalar_fixpoint(module, body, am, scalar_round);
     step::<Licm>(module, body, am);
+}
+
+/// The loop group (compilation §4), in the order of the standard loop
+/// pipeline: promotion to a counted loop, induction-variable simplification,
+/// deletion, then strength reduction, which reads the loops the others left.
+/// `bce` runs again since a promoted loop's counter proves indices; `dce`
+/// removes what the rewrites left unread. None edits a block's preheader away,
+/// so F2 holds.
+fn loops(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
+    step::<WhileToFor>(module, body, am);
+    // iv_canon, loop_deletion and lsr take their places here, in that order,
+    // as each is filled.
+    step::<Bce>(module, body, am);
+    step::<Dce>(module, body, am);
 }
 
 /// P7. Nothing after `schedule` moves an instruction.
@@ -154,6 +167,18 @@ impl Requires for Licm {
 }
 impl Requires for Sink {
     const FORM: Form = Form::Ssa;
+}
+impl Requires for WhileToFor {
+    const FORM: Form = Form::LoopsCanonical;
+}
+impl Requires for IvCanon {
+    const FORM: Form = Form::LoopsCanonical;
+}
+impl Requires for LoopDeletion {
+    const FORM: Form = Form::LoopsCanonical;
+}
+impl Requires for Lsr {
+    const FORM: Form = Form::LoopsCanonical;
 }
 impl Requires for Commute {
     const FORM: Form = Form::LoopsCanonical;
