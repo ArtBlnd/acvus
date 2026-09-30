@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 
 use super::{Element, Place, Stated, fits, fits_part};
 use crate::decl::{Refused, Scheme};
-use crate::ty::{Mutability, Poly, TyKind, Types};
+use crate::ty::{EffectTerm, Mutability, Poly, Reissue, TyKind, Types};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Access {
@@ -76,6 +76,9 @@ pub(super) fn refuse_ill_formed(
     if access.iter().filter(|form| matches!(form, Access::Touches(_))).count() > 1 {
         refused.push(Refused::TwoAccesses { declared });
     }
+    if access.iter().filter(|form| matches!(form, Access::Gives { .. })).count() > 1 {
+        refused.push(Refused::TwoResultsGiven { declared });
+    }
     for form in access {
         match form {
             Access::Touches(touches) => {
@@ -115,8 +118,12 @@ fn refuse_ill_formed_gives(
         }
         return;
     };
-    let through_ty = functions.get(&through).map(|scheme| scheme.ty);
-    let fitting = through_ty.is_some_and(|ty| match held {
+    let Some(through_scheme) = functions.get(&through) else {
+        refused.push(Refused::GivesThroughDoesNotFit { declared, through });
+        return;
+    };
+    let ty = through_scheme.ty;
+    let fitting = match held {
         Some(held) => {
             let lent = types.intern(TyKind::Ref(Mutability::Shared, held));
             fits(types, ty, &[lent], stated.ret)
@@ -129,10 +136,23 @@ fn refuse_ill_formed_gives(
             }
             _ => false,
         },
-    });
+    };
     if !fitting {
         refused.push(Refused::GivesThroughDoesNotFit { declared, through });
     }
+    if !is_declared_pure(types, through_scheme) {
+        refused.push(Refused::GivesThroughNotPure { declared, through });
+    }
+}
+
+/// Whether a call of `scheme` is pure: its own effect is known pure and it
+/// runs no work its parameters give (extern-fn §2).
+fn is_declared_pure(types: &Types<Poly>, scheme: &Scheme) -> bool {
+    let own_pure = match types.kind(scheme.ty) {
+        TyKind::Fn { effect: EffectTerm::Known(effect), .. } => effect.reissue() == Reissue::Pure,
+        _ => false,
+    };
+    own_pure && scheme.runs.is_empty()
 }
 
 fn refuse_ill_formed_touch(stated: &Stated<'_>, types: &Types<Poly>, touch: &Touch, refused: &mut Vec<Refused>) {

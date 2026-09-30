@@ -668,3 +668,62 @@ fn an_update_by_a_value_shaped_combine_verifies() {
     f.declare("raise", &[mut_int, int], unit, actions(vec![Action::Update(update(whole(0), max))]));
     assert_eq!(f.refusals(), Vec::new());
 }
+
+/// extern-fn §3: `through` is a declared pure function of what the place
+/// held.
+#[test]
+fn a_result_given_through_a_function_not_declared_pure_is_refused() {
+    let mut f = Fixture::new();
+    let string = f.ty(TyKind::String);
+    let index = f.index();
+    let mut_string = f.reference(Mutability::Mut, string);
+    let shared_string = f.reference(Mutability::Shared, string);
+    let mut scheme = f.scheme(&[shared_string], index, None, DeclaredFacts::default());
+    scheme.ty = f.ty(TyKind::Fn {
+        params: Box::new([shared_string]),
+        ret: index,
+        effect: EffectTerm::Known(Effect::opaque()),
+        flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+        values: (),
+    });
+    let len = f.push("len", scheme);
+    let gives = Access::Gives { place: whole(0), through: Some(len) };
+    let facts = DeclaredFacts { access: Box::new([gives]), ..DeclaredFacts::default() };
+    let g = f.declare("g", &[mut_string], index, facts);
+    assert_eq!(f.refusals(), vec![Refused::GivesThroughNotPure { declared: own(g), through: len }]);
+}
+
+/// extern-fn §3: a call has one result.
+#[test]
+fn two_results_given_on_one_declaration_are_refused() {
+    let mut f = Fixture::new();
+    let string = f.ty(TyKind::String);
+    let mut_string = f.reference(Mutability::Mut, string);
+    let gives = |param| Access::Gives { place: whole(param), through: None };
+    let facts = DeclaredFacts { access: Box::new([gives(0), gives(1)]), ..DeclaredFacts::default() };
+    let g = f.declare("g", &[mut_string, mut_string], string, facts);
+    assert_eq!(f.refusals(), vec![Refused::TwoResultsGiven { declared: own(g) }]);
+}
+
+/// extern-fn §3: a stream made from another is made by a form that makes
+/// one; the call's own stream's forms and a consumption make none.
+#[test]
+fn a_stream_of_a_form_that_makes_no_stream_from_another_is_refused() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let zero = f.declare("zero", &[], int, DeclaredFacts::default());
+    let flatten = |inner| sources(vec![Source::Flatten { from: Stream::Of(Box::new(inner)) }]);
+    let consume =
+        Source::Consume { from: Stream::Param(0), init: Step::Declared(zero), update: Step::Param(0), finish: None };
+    let g = f.declare("g", &[int], int, flatten(Source::Stepwise));
+    let h = f.declare("h", &[int], int, flatten(consume));
+    assert_eq!(
+        f.refusals(),
+        vec![
+            Refused::StreamOfNoStreamMadeFromAnother { declared: own(g) },
+            Refused::StreamOfNoStreamMadeFromAnother { declared: own(h) },
+        ]
+    );
+}

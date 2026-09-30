@@ -111,7 +111,14 @@ fn refuse_ill_formed_stream(
         Stream::Param(param) => {
             stated.param(*param, refused);
         }
-        Stream::Of(inner) => refuse_ill_formed_form(stated, inner, functions, types, refused),
+        Stream::Of(inner) => match **inner {
+            Source::Map { .. } | Source::Filter { .. } | Source::TakeWhile { .. } | Source::Flatten { .. } => {
+                refuse_ill_formed_form(stated, inner, functions, types, refused);
+            }
+            Source::Splittable | Source::Stepwise | Source::Count { .. } | Source::Consume { .. } => {
+                refused.push(Refused::StreamOfNoStreamMadeFromAnother { declared: stated.declared });
+            }
+        },
     }
 }
 

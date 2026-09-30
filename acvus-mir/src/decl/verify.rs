@@ -141,6 +141,12 @@ pub enum Refused {
     /// whose function is no declared `fn(&H) -> R`, `H` what the place
     /// holds and `R` the call's result (extern-fn §3).
     GivesThroughDoesNotFit { declared: Declared, through: QualifiedRef },
+    /// A result stated to be a declared function of what a place held,
+    /// whose function is not declared pure (extern-fn §3).
+    GivesThroughNotPure { declared: Declared, through: QualifiedRef },
+    /// Two statements of what a call's result is: a call has one result
+    /// (extern-fn §3).
+    TwoResultsGiven { declared: Declared },
     /// A total order stated on a declaration not of type `fn(&T, &T) ->
     /// int`, whose sign compares its two arguments (extern-fn §3).
     TotalOrderDoesNotFit { declared: Declared },
@@ -169,6 +175,10 @@ pub enum Refused {
     /// A closure argument that is no function of one element, or a
     /// predicate whose answer is no `bool` (extern-fn §3).
     ClosureDoesNotFit { declared: Declared, param: usize },
+    /// A stream read from a form that makes no stream from another: the
+    /// call's own stream's form, or a consumption, which gives a result
+    /// (extern-fn §3).
+    StreamOfNoStreamMadeFromAnother { declared: Declared },
     /// A consumption's initial value that is no declared `fn() -> S` and no
     /// parameter of type `S`, `S` its state (extern-fn §3).
     ConsumeInitDoesNotFit { declared: Declared, init: declared::Step },
