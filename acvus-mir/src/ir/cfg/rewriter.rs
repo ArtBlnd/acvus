@@ -181,6 +181,39 @@ impl<'m> Rewriter<'m> {
         shifts
     }
 
+    /// The loop ending `header` takes `head`. Cost: `Body::set_loop_head`'s.
+    ///
+    /// # Panics
+    /// As `Body::set_loop_head`.
+    pub fn set_loop_head(&mut self, header: BlockId, head: &super::edit::Head, supplied: &[Ty]) -> Vec<ValueId> {
+        let module = &mut *self.module;
+        let params = module.bodies[self.body.0 as usize].set_loop_head(&module.types, header, head, supplied);
+        self.changes.record(Aspect::CfgShape);
+        self.changes.record(Aspect::Instructions);
+        params
+    }
+
+    /// A new last parameter of `block`. Cost: `Body::add_param`'s.
+    ///
+    /// # Panics
+    /// As `Body::add_param`.
+    pub fn add_param(&mut self, block: BlockId, ty: Ty, incoming: &[(BlockId, usize, ValueId)]) -> ValueId {
+        let module = &mut *self.module;
+        let param = module.bodies[self.body.0 as usize].add_param(&module.types, block, ty, incoming);
+        self.changes.record(Aspect::Instructions);
+        param
+    }
+
+    /// The block parameter `param` gives way to `with`. Cost:
+    /// `Body::replace_param`'s.
+    ///
+    /// # Panics
+    /// As `Body::replace_param`.
+    pub fn replace_param(&mut self, param: ValueId, with: ValueId) {
+        self.body_mut().replace_param(param, with);
+        self.changes.record(Aspect::Instructions);
+    }
+
     /// `block`'s two-way branch becomes a jump into one arm. Cost:
     /// `Body::take_arm`'s.
     ///

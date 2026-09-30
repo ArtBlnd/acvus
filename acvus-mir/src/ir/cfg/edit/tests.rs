@@ -2588,3 +2588,219 @@ fn discharge_of_a_checked_index_proves_its_bound_and_keeps_the_index() {
     assert!(matches!(insts[0].op(), Op::Index { bound: crate::ir::IndexBound::Proven, .. }));
     assert_eq!(result_of(&insts[0]), e);
 }
+
+// -- Loop edits ----------------------------------------------------------------
+
+/// ```text
+/// entry(n, x):  zero = 0; jump header(zero)
+/// header(i):    c = i < n; while c { stage } else exit
+/// stage:        one = 1; i1 = i + one; jump header(i1)
+/// exit:         return i
+/// ```
+struct Counting {
+    id: BodyId,
+    entry: BlockId,
+    header: BlockId,
+    stage: BlockId,
+    exit: BlockId,
+    n: ValueId,
+    zero: ValueId,
+    i: ValueId,
+    c: ValueId,
+    one: ValueId,
+    i1: ValueId,
+}
+
+fn counting(f: &mut Fixture) -> Counting {
+    let (int, bool) = (f.int, f.bool);
+    let (nn, nx) = (f.interner.intern("n"), f.interner.intern("x"));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    builder.param(nx, int, Span::ZERO);
+    let zero = builder.push(int_const(0), int, Span::ZERO);
+    let header = builder.new_block(&[int]);
+    let i = builder.block_params(header)[0];
+    let [stage, exit] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(Terminator::Jump { to: header, args: vec![zero] }, Span::ZERO);
+    builder.switch_to(header);
+    let c = builder.push(Op::BinOp { op: BinOp::Lt, left: i, right: n }, bool, Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: stage, exit, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(stage);
+    let one = builder.push(int_const(1), int, Span::ZERO);
+    let i1 = builder.push(add(i, one), int, Span::ZERO);
+    builder.terminate(Terminator::Jump { to: header, args: vec![i1] }, Span::ZERO);
+    builder.switch_to(exit);
+    builder.terminate(ret(i), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    let entry = entry_of(f, id);
+    Counting { id, entry, header, stage, exit, n, zero, i, c, one, i1 }
+}
+
+fn loop_editor<'m>(f: &'m mut Fixture, id: BodyId, facts: &'m mut NoFacts) -> Editor<'m, Loop> {
+    Editor::<Loop>::new(&mut f.module, id, facts)
+}
+
+/// `set_head` makes the `While` a `For` over `zero..n` with the same body
+/// and exit: the body takes the counter, and the condition loses its use.
+/// Then back to a `While` on `c`: the counter, unused, goes.
+#[test]
+fn set_head_turns_a_while_into_a_for_and_back() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let mut facts = NoFacts;
+    let mut editor = loop_editor(&mut f, lp.id, &mut facts);
+    let supplied = editor.set_head(lp.header, Head::For { source: ForSource::Range { at: lp.zero, hi: lp.n } });
+    let changes = editor.finish();
+
+    let [counter] = supplied.expect("zero and n are settled before the header runs")[..] else {
+        panic!("a range supplies one parameter")
+    };
+    let body = f.body(lp.id);
+    let Terminator::For { source: ForSource::Range { at, hi }, body: stage, exit, exit_args } = body.block(lp.header).terminator() else {
+        panic!("the header ends in a For")
+    };
+    assert_eq!((*at, *hi, *stage, *exit), (lp.zero, lp.n, lp.stage, lp.exit));
+    assert!(exit_args.is_empty());
+    assert_eq!(body.block(lp.stage).params(), &[counter]);
+    assert_eq!(body.ty_of(counter), f.int);
+    assert_eq!(body.use_count(lp.c), 0, "the condition loses its use");
+    assert!(changes.touched(Aspect::CfgShape));
+
+    let mut facts = NoFacts;
+    let mut editor = loop_editor(&mut f, lp.id, &mut facts);
+    assert_eq!(editor.set_head(lp.header, Head::While { cond: lp.c }), Ok(Vec::new()));
+    editor.finish();
+    let body = f.body(lp.id);
+    assert!(matches!(body.block(lp.header).terminator(), Terminator::While { cond, .. } if *cond == lp.c));
+    assert!(body.block(lp.stage).params().is_empty(), "the unused counter goes");
+}
+
+/// `set_head` refuses a block with no loop, a range end the header
+/// computes or the loop carries, a body another block enters, and a slice
+/// source that is an integer; the refusals leave the body as it was.
+#[test]
+fn set_head_refuses_no_loop_an_unsettled_end_a_body_entered_elsewhere_and_a_type_mismatch() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let before = snapshot(f.body(lp.id));
+    let mut facts = NoFacts;
+    let mut editor = loop_editor(&mut f, lp.id, &mut facts);
+    let range = |at, hi| Head::For { source: ForSource::Range { at, hi } };
+    assert_eq!(editor.set_head(lp.stage, range(lp.zero, lp.n)), Err(CannotEditLoop::NotALoop));
+    assert_eq!(editor.set_head(lp.header, range(lp.zero, lp.i)), Err(CannotEditLoop::NotSettled(lp.i)));
+    assert_eq!(editor.set_head(lp.header, range(lp.zero, lp.c)), Err(CannotEditLoop::NotSettled(lp.c)));
+    editor.finish();
+    assert_eq!(snapshot(f.body(lp.id)), before);
+
+    let (int, bool) = (f.int, f.bool);
+    let (nn, nd) = (f.interner.intern("n"), f.interner.intern("d"));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    let d = builder.param(nd, bool, Span::ZERO);
+    let zero = builder.push(int_const(0), int, Span::ZERO);
+    let [header, stage, exit] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(
+        Terminator::JumpIf { cond: d, then_to: header, then_args: Vec::new(), else_to: stage, else_args: Vec::new() },
+        Span::ZERO,
+    );
+    builder.switch_to(header);
+    builder.terminate(Terminator::While { cond: d, body: stage, exit, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(stage);
+    builder.terminate(jump(header), Span::ZERO);
+    builder.switch_to(exit);
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    let mut facts = NoFacts;
+    let mut editor = loop_editor(&mut f, id, &mut facts);
+    assert_eq!(editor.set_head(header, range(zero, d)), Err(CannotEditLoop::BodyEnteredElsewhere));
+    editor.finish();
+
+    let lp = counting(&mut f);
+    let mut facts = NoFacts;
+    let mut editor = loop_editor(&mut f, lp.id, &mut facts);
+    let over_an_integer = Head::For { source: ForSource::Slice(lp.n) };
+    assert_eq!(editor.set_head(lp.header, over_an_integer), Err(CannotEditLoop::TypeMismatch(lp.n)));
+    editor.finish();
+}
+
+/// `add_join` adds a header parameter `s` with `zero` on entry and `i1`
+/// on the back edge; `remove_join` then replaces `i` with `s`, which
+/// dominates every use of `i`, and its arguments go.
+#[test]
+fn add_join_hands_a_value_to_the_next_iteration_and_remove_join_takes_one_away() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let mut facts = NoFacts;
+    let mut editor = loop_editor(&mut f, lp.id, &mut facts);
+    let s = editor.add_join(lp.header, lp.zero, &[(lp.stage, lp.i1)]).expect("zero is settled and i1 reaches the back edge");
+    editor.remove_join(lp.header, lp.i, s).expect("s is a header parameter too, dominating every use of i");
+    editor.finish();
+
+    let body = f.body(lp.id);
+    assert_eq!(body.block(lp.header).params(), &[s]);
+    assert!(matches!(body.block(lp.entry).terminator(), Terminator::Jump { args, .. } if args == &[lp.zero]));
+    assert!(matches!(body.block(lp.stage).terminator(), Terminator::Jump { args, .. } if args == &[lp.i1]));
+    assert!(matches!(body.block(lp.exit).terminator(), Terminator::Return { value, .. } if *value == s));
+    assert!(matches!(body.inst(body.block(lp.stage).insts().nth(1).expect("i1 stays").id()).op(),
+        Op::BinOp { left, .. } if *left == s));
+}
+
+/// `add_join` refuses an `init` the loop computes, a back edge `next`
+/// misses or names twice, and a `next` value of another type;
+/// `remove_join` refuses a value that is no join parameter, one of another
+/// type, and a replacement that does not dominate a use.
+#[test]
+fn add_join_and_remove_join_refuse_what_breaks_their_form() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let before = snapshot(f.body(lp.id));
+    let mut facts = NoFacts;
+    let mut editor = loop_editor(&mut f, lp.id, &mut facts);
+    assert_eq!(editor.add_join(lp.header, lp.one, &[(lp.stage, lp.i1)]), Err(CannotEditLoop::NotSettled(lp.one)));
+    assert_eq!(editor.add_join(lp.header, lp.zero, &[]), Err(CannotEditLoop::BackEdges));
+    assert_eq!(editor.add_join(lp.header, lp.zero, &[(lp.stage, lp.i1), (lp.stage, lp.i1)]), Err(CannotEditLoop::BackEdges));
+    assert_eq!(editor.add_join(lp.header, lp.zero, &[(lp.stage, lp.c)]), Err(CannotEditLoop::TypeMismatch(lp.c)));
+    assert_eq!(editor.remove_join(lp.header, lp.n, lp.zero), Err(CannotEditLoop::NotAJoinParam(lp.n)));
+    assert_eq!(editor.remove_join(lp.header, lp.i, lp.c), Err(CannotEditLoop::TypeMismatch(lp.c)));
+    assert_eq!(editor.remove_join(lp.header, lp.i, lp.i1), Err(CannotEditLoop::NotSettled(lp.i1)));
+    assert_eq!(editor.remove_join(lp.stage, lp.i, lp.zero), Err(CannotEditLoop::NotALoop));
+    editor.finish();
+    assert_eq!(snapshot(f.body(lp.id)), before);
+}
+
+/// `add_exit` gives the exit a parameter filled with `i` on the header's
+/// edge into it; `remove_exit` then replaces it with `n`.
+#[test]
+fn add_exit_gives_the_exit_a_value_and_remove_exit_takes_it_away() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let mut facts = NoFacts;
+    let mut editor = loop_editor(&mut f, lp.id, &mut facts);
+    let left = editor.add_exit(lp.header, lp.i).expect("i reaches the header's end");
+    let body = editor.body();
+    assert_eq!(body.block(lp.exit).params(), &[left]);
+    assert!(matches!(body.block(lp.header).terminator(), Terminator::While { exit_args, .. } if exit_args == &[lp.i]));
+
+    editor.remove_exit(lp.header, left, lp.n).expect("n dominates every use of the exit parameter");
+    editor.finish();
+    let body = f.body(lp.id);
+    assert!(body.block(lp.exit).params().is_empty());
+    assert!(matches!(body.block(lp.header).terminator(), Terminator::While { exit_args, .. } if exit_args.is_empty()));
+}
+
+/// `add_exit` refuses a value the body computes, which does not reach the
+/// header's edge into the exit; `remove_exit` refuses a value that is no
+/// exit parameter.
+#[test]
+fn add_exit_and_remove_exit_refuse_what_breaks_their_form() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let before = snapshot(f.body(lp.id));
+    let mut facts = NoFacts;
+    let mut editor = loop_editor(&mut f, lp.id, &mut facts);
+    assert_eq!(editor.add_exit(lp.header, lp.i1), Err(CannotEditLoop::NotSettled(lp.i1)));
+    assert_eq!(editor.remove_exit(lp.header, lp.i, lp.zero), Err(CannotEditLoop::NotAnExitParam(lp.i)));
+    assert_eq!(editor.add_exit(lp.exit, lp.zero), Err(CannotEditLoop::NotALoop));
+    editor.finish();
+    assert_eq!(snapshot(f.body(lp.id)), before);
+}

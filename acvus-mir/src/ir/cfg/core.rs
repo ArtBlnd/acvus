@@ -20,6 +20,7 @@ use acvus_utils::LocalFactory;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
+use super::edit::Head;
 use super::body::{BlockData, BlockId, Body, Def, Edge, Inst, InstId, InstList, OrderUse, Site, Terminator, UseSites, ValueDef};
 use super::op::Op;
 use super::order::At;
@@ -789,6 +790,79 @@ impl Body {
             }
         }
         shifts
+    }
+
+    /// The loop ending `header` is headed by `head`, keeping its body, exit
+    /// and exit arguments. The body's parameters become one per type of
+    /// `supplied`: the leading ones the old head supplied stay, as many as
+    /// both supply, those past the new head's go, and new ones follow. It
+    /// returns the body's parameters. Cost: O(the terminator's operands and
+    /// the body's parameters).
+    ///
+    /// # Panics
+    /// `header` does not end in a loop; a parameter that goes has a use; a
+    /// kept parameter's type is not the one `supplied` names for it.
+    pub(super) fn set_loop_head(&mut self, types: &Types<Concrete>, header: BlockId, head: &Head, supplied: &[Ty]) -> Vec<ValueId> {
+        let site = Site::Term(header);
+        let old = std::mem::replace(&mut self.blocks[header.index()].terminator, Terminator::Diverge);
+        let (body, exit, exit_args) = match old.clone() {
+            Terminator::For { body, exit, exit_args, .. } | Terminator::While { body, exit, exit_args, .. } => (body, exit, exit_args),
+            other => panic!("{header:?} ends in {other:?}, not in a loop"),
+        };
+        let new = match head {
+            Head::While { cond } => Terminator::While { cond: *cond, body, exit, exit_args },
+            Head::For { source } => Terminator::For { source: *source, body, exit, exit_args },
+        };
+        for value in old.operands() {
+            self.use_sites_mut(value).remove_one(site);
+        }
+        for value in new.operands() {
+            self.use_sites_mut(value).add(site, 1);
+        }
+        self.blocks[header.index()].terminator = new;
+
+        let old_params = std::mem::take(&mut self.blocks[body.index()].params);
+        let kept = old_params.len().min(supplied.len());
+        for (param, ty) in old_params[..kept].iter().zip(supplied) {
+            assert_eq!(self.value_def(*param).ty, *ty, "{param:?} is kept as the new head's parameter of {ty:?}");
+        }
+        for gone in &old_params[kept..] {
+            self.refuse_used(*gone).unwrap_or_else(|used| panic!("{:?}, which the new head does not supply, has a use", used.value));
+            self.drop_value(*gone);
+        }
+        let mut params = old_params[..kept].to_vec();
+        for (index, ty) in supplied.iter().enumerate().skip(kept) {
+            params.push(self.make_value(types, *ty, Def::BlockParam(body, index)));
+        }
+        self.blocks[body.index()].params = params.clone();
+        params
+    }
+
+    /// A new last parameter of `block`, of `ty`, filled on each edge
+    /// `incoming` names by source block and edge position. Cost:
+    /// `place_param`'s.
+    ///
+    /// # Panics
+    /// As `place_param`, or `ty` is refused by `make_value`.
+    pub(super) fn add_param(&mut self, types: &Types<Concrete>, block: BlockId, ty: Ty, incoming: &[(BlockId, usize, ValueId)]) -> ValueId {
+        let index = self.blocks[block.index()].params.len();
+        let param = self.make_value(types, ty, Def::BlockParam(block, index));
+        self.place_param(block, param, incoming);
+        param
+    }
+
+    /// Every use of the block parameter `param` becomes a use of `with`,
+    /// and `param` goes with its argument on every edge into its block.
+    /// Cost: `replace_all_uses`' and `remove_block_param`'s.
+    ///
+    /// # Panics
+    /// `param` is no block parameter, or its type is not `with`'s.
+    pub(super) fn replace_param(&mut self, param: ValueId, with: ValueId) {
+        let Def::BlockParam(block, index) = self.def_of(param) else {
+            panic!("{param:?} is not a block parameter")
+        };
+        self.replace_all_uses(param, with);
+        self.remove_block_param(block, index);
     }
 
     /// `block`'s `Switch` becomes a jump into the arm whose key is `key`, or
