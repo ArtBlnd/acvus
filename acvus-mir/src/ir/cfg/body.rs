@@ -375,19 +375,15 @@ impl Head {
     }
 
     /// The kinds of the body parameters the head supplies, in order: none
-    /// for a `While`, whose condition is a `Bool`, and a `For`'s source's
-    /// (`ForSource::supplied_kinds`). Refused at an operand of another
-    /// type. Cost: O(the element's kind).
+    /// for a `While`, and a `For`'s source's (`ForSource::supplied_kinds`).
+    /// Cost: O(the element's kind).
     pub fn supplied_kinds(
         &self,
         ty_of: impl Fn(ValueId) -> Ty,
         types: &Types<Concrete>,
     ) -> Result<SmallVec<[TyKind<Concrete>; 2]>, UnfitOperand> {
         match self {
-            Head::While { cond } => match types.kind(ty_of(*cond)) {
-                TyKind::Bool => Ok(SmallVec::new()),
-                _ => Err(UnfitOperand { operand: *cond }),
-            },
+            Head::While { .. } => Ok(SmallVec::new()),
             Head::For { source } => source.supplied_kinds(ty_of, types),
         }
     }

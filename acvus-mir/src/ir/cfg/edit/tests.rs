@@ -2811,8 +2811,9 @@ fn set_head_refuses_a_rebinding_of_another_length() {
     assert!(unchecked.is_err(), "the counter would go with its use left");
 }
 
-/// The new counter is a `u64` where the old was an `i64`, a value of
-/// another type replaces the counter, and a `While` tests an integer; made
+/// The new counter is a `u64` where the old was an `i64`, a range's end
+/// differs in type from its start, and a value of another type replaces
+/// the counter; made
 /// unchecked, the core refuses to hand an `i64`'s uses to a `u64`.
 #[test]
 fn set_head_refuses_a_type_mismatch() {
@@ -2827,12 +2828,7 @@ fn set_head_refuses_a_type_mismatch() {
         |editor| editor.set_head(header, Head::While { cond: c }, &[Rebind::Value(c)]),
         CannotEditLoop::TypeMismatch(c),
     );
-    assert_refused(
-        &mut f,
-        lp.id,
-        |editor| editor.set_head(header, Head::While { cond: n }, &[Rebind::Value(n)]),
-        CannotEditLoop::TypeMismatch(n),
-    );
+    assert_refused(&mut f, lp.id, |editor| editor.set_head(header, range(n, wide), &counter), CannotEditLoop::TypeMismatch(wide));
 
     let unchecked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, range(wide, wide), &counter)))
@@ -2858,22 +2854,6 @@ fn set_head_refuses_a_value_that_does_not_dominate_a_use() {
 
     let checked = unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, Head::While { cond: c }, &rebind)));
     assert_eq!(violated(checked), "DefDominatesUses");
-}
-
-/// A parameter the old head supplied goes with the edit, so it cannot take
-/// another's uses; made unchecked, it would go with its uses left.
-#[test]
-fn set_head_refuses_an_old_supplied_parameter_as_a_value() {
-    let mut f = fixture();
-    let lp = ranged(&mut f);
-    let (header, one, n, k) = (lp.header, lp.one, lp.n, lp.k);
-    let rebind = [Rebind::Value(k)];
-    assert_refused(&mut f, lp.id, |editor| editor.set_head(header, range(one, n), &rebind), CannotEditLoop::NotSettled(k));
-
-    let unchecked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, range(one, n), &rebind)))
-    }));
-    assert!(unchecked.is_err(), "the counter would go with its use left");
 }
 
 /// ```text
@@ -3027,34 +3007,6 @@ fn add_join_refuses_a_next_value_of_another_type() {
     let (entry, int) = (lp.entry, f.int);
     let checked = unchecked(&mut f, lp.id, |rewriter| drop(rewriter.add_block_param(header, int, &[(entry, 0, zero), (stage, 0, c)])));
     assert_eq!(violated(checked), "TypesAgree");
-}
-
-/// ```text
-/// entry(n, d): while d { stage } else exit
-/// stage:       return n
-/// exit:        return n
-/// ```
-/// The header is the body's entry, which the body's start enters with no
-/// argument. Made unchecked, the entry gains a parameter nothing fills and
-/// the keeps accept it: this check alone keeps such a parameter out.
-#[test]
-fn add_join_refuses_a_header_entered_without_arguments() {
-    let mut f = fixture();
-    let (int, bool, nn, nd) = (f.int, f.bool, f.name("n"), f.name("d"));
-    let mut builder = f.build(false, int);
-    let n = builder.param(nn, int, Span::ZERO);
-    let d = builder.param(nd, bool, Span::ZERO);
-    let [stage, exit] = [(); 2].map(|()| builder.new_block(&[]));
-    builder.terminate(Terminator::While { cond: d, body: stage, exit, exit_args: Vec::new() }, Span::ZERO);
-    for block in [stage, exit] {
-        builder.switch_to(block);
-        builder.terminate(ret(n), Span::ZERO);
-    }
-    let id = builder.seal().expect("the body has no open state");
-    let header = entry_of(&f, id);
-    assert_refused(&mut f, id, |editor| editor.add_join(header, n, &[]), CannotEditLoop::EnteredWithoutArguments);
-
-    assert_eq!(unchecked(&mut f, id, |rewriter| drop(rewriter.add_block_param(header, int, &[]))), Ok(()));
 }
 
 /// `n` is the body's parameter, not the header's; the join is the header's

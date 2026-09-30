@@ -7,8 +7,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dominators::{Dominators, def_points};
 use crate::ir::cfg::body::InstId;
-use crate::ir::cfg::{BlockId, Body, Head, Inst, Op, OrderUse, Site, Terminator};
-use crate::ir::{BinOp, Callee, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
+use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator};
+use crate::ir::{BinOp, Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
 use crate::ty::structural;
 use crate::ty::{CastTy, Concrete, IntTy, Mark, MarkTerm, Mutability, Ty, TyKind, Types};
 
@@ -734,7 +734,9 @@ impl TypeCheck<'_> {
     fn terminator(&self, block: BlockId, terminator: &Terminator) -> Found {
         let at = |detail: String| format!("{block:?}'s terminator: {detail}");
         match terminator {
-            Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => self.is_bool(*cond).map_err(at)?,
+            Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } | Terminator::While { cond, .. } => {
+                self.is_bool(*cond).map_err(at)?
+            }
             Terminator::Return { value, order, .. } => {
                 self.same(*value, self.body.ret(), "the body's result type").map_err(at)?;
                 if let Some(order) = order {
@@ -750,9 +752,8 @@ impl TypeCheck<'_> {
                     self.key_fits(key, scrutinee).map_err(at)?;
                 }
             }
-            Terminator::For { .. } | Terminator::While { .. } => {
-                let parts = terminator.as_loop().expect("a For or a While is a loop terminator");
-                self.loop_head(parts.head, parts.body).map_err(at)?;
+            Terminator::For { source, body, .. } => {
+                self.loop_source(source, *body).map_err(at)?;
             }
             Terminator::Jump { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
@@ -790,17 +791,17 @@ impl TypeCheck<'_> {
         found(fits, || format!("the key {key:?} names no value of {:?}", self.kind(scrutinee)))
     }
 
-    /// A loop's head against what it hands its body: its operands are of
-    /// types it takes, and the body's leading parameters are of the types
-    /// it supplies (`Head::supplied_kinds`). How many there are is the
-    /// edge's check.
-    fn loop_head(&self, head: Head, body: BlockId) -> Found {
-        let supplied = head.supplied_kinds(|value| self.ty(value), self.types).map_err(|unfit| {
-            format!("{:?} is {:?}, which {head:?} does not take", unfit.operand, self.kind(self.ty(unfit.operand)))
+    /// A `For`'s source against what it hands its body: its operands are of
+    /// types it traverses, and the body's leading parameters are of the
+    /// types it supplies (`ForSource::supplied_kinds`). How many there are
+    /// is the edge's check.
+    fn loop_source(&self, source: &ForSource, body: BlockId) -> Found {
+        let supplied = source.supplied_kinds(|value| self.ty(value), self.types).map_err(|unfit| {
+            format!("{:?} is {:?}, which {source:?} does not traverse", unfit.operand, self.kind(self.ty(unfit.operand)))
         })?;
         for (param, kind) in self.body.block(body).params().iter().zip(&supplied) {
             let ty = self.ty(*param);
-            found(self.kind(ty) == kind, || format!("{param:?} is {:?}, and {head:?} supplies {kind:?}", self.kind(ty)))?;
+            found(self.kind(ty) == kind, || format!("{param:?} is {:?}, and {source:?} supplies {kind:?}", self.kind(ty)))?;
         }
         Ok(())
     }

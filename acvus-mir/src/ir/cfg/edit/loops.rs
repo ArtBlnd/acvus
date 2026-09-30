@@ -32,16 +32,11 @@ pub enum CannotEditLoop {
     NotALoop,
     /// A value is not defined where the edit reads it: a `For`'s operand
     /// defined in or after the header, a `While`'s condition not defined
-    /// where the header ends, an argument not defined at the end of its
-    /// edge's source, or a parameter the old head supplied, which the edit
-    /// removes, named as a replacement.
+    /// where the header ends, or an argument not defined at the end of its
+    /// edge's source.
     NotSettled(ValueId),
-    /// The body is entered otherwise than by the head's own edge.
+    /// The body is entered by a block other than the header.
     BodyEnteredElsewhere,
-    /// A new parameter's block is entered by something that passes no
-    /// argument: the body's start into its entry, or a loop's edge into
-    /// its body, which fills the body's parameters itself.
-    EnteredWithoutArguments,
     /// The rebinding names `named` parameters where the old head supplied
     /// `supplied`.
     RebindCount { supplied: usize, named: usize },
@@ -79,13 +74,12 @@ where
     /// this edit with `Rebind::Supplied` followed by inserting the
     /// computation and moving the uses to it with `replace_use`.
     ///
-    /// Refused as `NotALoop`; `RebindCount`; `TypeMismatch` at an operand
-    /// of a type the new head does not take, at an old parameter whose
+    /// Refused as `NotALoop`; `RebindCount`; `TypeMismatch` at a `For`
+    /// operand of a type its source does not traverse, at an old parameter whose
     /// named supplied parameter differs in type, or at a value of another
     /// type than the parameter it replaces; `NotSettled` at a `For`
-    /// operand not defined before the header runs, a `While` condition
-    /// not defined where the header ends, or a value the old head
-    /// supplied; `BodyEnteredElsewhere`; `NoSuchSupplied`; and
+    /// operand not defined before the header runs, or a `While` condition
+    /// not defined where the header ends; `BodyEnteredElsewhere`; `NoSuchSupplied`; and
     /// `DoesNotDominate` at the first use, in block order, a value would
     /// take over without dominating it. Cost: O(the head's operands, the
     /// edges into the body and the uses of the old parameters) queries of
@@ -112,7 +106,7 @@ where
                 return Err(CannotEditLoop::NotSettled(operand));
             }
         }
-        if !self.entered_by_its_head_alone(header, loop_body) {
+        if self.shape().predecessors[&loop_body][..] != [header] {
             return Err(CannotEditLoop::BodyEnteredElsewhere);
         }
         for (param, rebind) in old_supplied.iter().zip(rebind) {
@@ -131,9 +125,6 @@ where
                     if body.ty_of(value) != param_ty {
                         return Err(CannotEditLoop::TypeMismatch(value));
                     }
-                    if old_supplied.contains(&value) {
-                        return Err(CannotEditLoop::NotSettled(value));
-                    }
                     let mut sites: Vec<Site> = body.users(*param).collect();
                     sites.sort_by_key(|site| site_order(body, *site));
                     if let Some(site) = sites.into_iter().find(|site| !self.dominates(value, site_position(*site))) {
@@ -151,7 +142,7 @@ where
     /// block. A back edge is an edge into the header from a block the header
     /// dominates. Returns the parameter.
     ///
-    /// Refused as `NotALoop`; `EnteredWithoutArguments`; `BackEdges` where
+    /// Refused as `NotALoop`; `BackEdges` where
     /// `next` does not name each back edge's source exactly once;
     /// `NotSettled` at an argument not defined at the end of its edge's
     /// source; and `TypeMismatch` at a `next` value of another type than
@@ -162,7 +153,6 @@ where
     /// `init` is an order token, which only the Builder makes.
     pub fn add_join(&mut self, header: BlockId, init: ValueId, next: &[(BlockId, ValueId)]) -> Result<ValueId, CannotEditLoop> {
         self.loop_at(header)?;
-        self.takes_arguments(header)?;
         let preds = self.shape().predecessors[&header].clone();
         let start = self.block_start(header);
         let (back, entering): (Vec<BlockId>, Vec<BlockId>) =
@@ -206,7 +196,7 @@ where
     /// Adds a value the loop gives its exit: a parameter of the exit block
     /// filled by `value` on every edge into it. Returns the parameter.
     ///
-    /// Refused as `NotALoop`; `EnteredWithoutArguments`; and `NotSettled`
+    /// Refused as `NotALoop`; and `NotSettled`
     /// where `value` is not defined at the end of a block with an edge into
     /// the exit. Cost: O(the edges into the exit) queries of the needs, and
     /// `Body::add_block_param`'s.
@@ -215,7 +205,6 @@ where
     /// `value` is an order token, which only the Builder makes.
     pub fn add_exit(&mut self, header: BlockId, value: ValueId) -> Result<ValueId, CannotEditLoop> {
         let exit = self.loop_at(header)?.exit;
-        self.takes_arguments(exit)?;
         let preds = self.shape().predecessors[&exit].clone();
         if preds.iter().any(|pred| !self.dominates(value, Position::End(*pred))) {
             return Err(CannotEditLoop::NotSettled(value));
@@ -260,31 +249,6 @@ where
         }
         self.replace_uses(param, with).map_err(CannotEditLoop::DoesNotDominate)?;
         self.remove_param(param).map_err(CannotEditLoop::RemoveParam)
-    }
-
-    /// Refused as `EnteredWithoutArguments` where `block` is the body's
-    /// entry or an edge into it fills parameters itself.
-    fn takes_arguments(&mut self, block: BlockId) -> Result<(), CannotEditLoop> {
-        let preds = self.shape().predecessors[&block].clone();
-        let body = self.body_ref();
-        let supplied_into = |from: &BlockId| body.block(*from).terminator().edges().iter().any(|edge| edge.to == block && edge.supplied > 0);
-        if block == body.entry() || preds.iter().any(supplied_into) {
-            return Err(CannotEditLoop::EnteredWithoutArguments);
-        }
-        Ok(())
-    }
-
-    /// Whether the only way into `loop_body` is `header`'s edge into its
-    /// body: it is not the entry, and no other edge, the loop's exit edge
-    /// included, enters it.
-    fn entered_by_its_head_alone(&mut self, header: BlockId, loop_body: BlockId) -> bool {
-        let preds = self.shape().predecessors[&loop_body].clone();
-        let body = self.body_ref();
-        let edges_in: usize = preds
-            .iter()
-            .map(|from| body.block(*from).terminator().edges().iter().filter(|edge| edge.to == loop_body).count())
-            .sum();
-        loop_body != body.entry() && preds[..] == [header] && edges_in == 1
     }
 
     /// Whether `value` is defined in `block`: a parameter of it or the
