@@ -2048,12 +2048,12 @@ fn number(n: i128) -> Evolution {
     Evolution::Invariant(Polynomial::constant(n))
 }
 
-fn recurrence(over: LoopId, start: Evolution, step: Evolution) -> Evolution {
+fn recurrence(over: LoopId, start: Evolution, step: Polynomial<Symbol>) -> Evolution {
     Evolution::Recurrence(Rc::new(Recurrence { over, start, step }))
 }
 
 fn mul(left: ValueId, right: ValueId) -> Op {
-    binary(BinOp::Mul(Overflow::Trap), left, right)
+    binary(BinOp::Mul, left, right)
 }
 
 fn range_for(at: ValueId, hi: ValueId, body: BlockId, exit: BlockId) -> Terminator {
@@ -2155,7 +2155,7 @@ fn a_range_fors_counter_rises_by_one_from_its_start_and_it_runs_hi_less_at_times
     let (loops, scev) = evolutions(&f, lp.id);
     let over = loops.innermost(lp.header).expect("the header heads a loop");
 
-    assert_eq!(*scev.of(lp.values.counter), recurrence(over, invariant(atom(lp.values.a)), number(1)));
+    assert_eq!(*scev.of(lp.values.counter), recurrence(over, invariant(atom(lp.values.a)), Polynomial::constant(1)));
     assert_eq!(scev.trip_count(over), Some(&TripCount::Exact(number(5))));
 }
 
@@ -2168,7 +2168,7 @@ fn a_range_whose_length_may_be_negative_names_no_trip_count() {
     let (loops, scev) = evolutions(&f, lp.id);
     let over = loops.innermost(lp.header).expect("the header heads a loop");
 
-    assert_eq!(*scev.of(lp.values.counter), recurrence(over, invariant(atom(lp.values.a)), number(1)));
+    assert_eq!(*scev.of(lp.values.counter), recurrence(over, invariant(atom(lp.values.a)), Polynomial::constant(1)));
     assert_eq!(scev.trip_count(over), None);
 }
 
@@ -2187,8 +2187,8 @@ fn a_derived_induction_scales_and_shifts_the_counter() {
     let over = loops.innermost(lp.header).expect("the header heads a loop");
     let (scaled, shifted) = lp.inside;
 
-    assert_eq!(*scev.of(scaled), recurrence(over, number(0), number(4)));
-    assert_eq!(*scev.of(shifted), recurrence(over, invariant(atom(lp.values.a)), number(4)));
+    assert_eq!(*scev.of(scaled), recurrence(over, number(0), Polynomial::constant(4)));
+    assert_eq!(*scev.of(shifted), recurrence(over, invariant(atom(lp.values.a)), Polynomial::constant(4)));
 }
 
 /// `for c in 0..n { sq = c * c; cn = c * n }`: `c · c` is of the second
@@ -2206,7 +2206,7 @@ fn a_product_of_two_recurrences_of_one_loop_is_unknown() {
     let (square, scaled) = lp.inside;
 
     assert_eq!(*scev.of(square), Evolution::Unknown);
-    assert_eq!(*scev.of(scaled), recurrence(over, number(0), invariant(atom(lp.values.n))));
+    assert_eq!(*scev.of(scaled), recurrence(over, number(0), atom(lp.values.n)));
 }
 
 /// `r0 = f(); for c in 0..n { r = f(); s = r + c }`: a call outside every
@@ -2244,7 +2244,7 @@ fn a_call_in_a_loop_is_unknown_and_one_outside_every_loop_is_its_own_atom() {
 /// outer:           for row in zero..h { outer_body } else exit
 /// outer_body(row): r = f(); jump inner
 /// inner:           for col in zero..w { inner_body } else outer_latch
-/// inner_body(col): t = row * w; idx = t + col; wide = w + w; jump inner
+/// inner_body(col): t = row * w; idx = t + col; wide = w + w; cross = row * col; jump inner
 /// outer_latch:     jump outer
 /// exit:            return zero
 /// ```
@@ -2259,6 +2259,7 @@ struct NestedFor {
     t: ValueId,
     idx: ValueId,
     wide: ValueId,
+    cross: ValueId,
 }
 
 fn nested_for(f: &mut Fixture) -> NestedFor {
@@ -2286,13 +2287,14 @@ fn nested_for(f: &mut Fixture) -> NestedFor {
     let t = builder.push(mul(row, w), int, Span::ZERO);
     let idx = builder.push(add(t, col), int, Span::ZERO);
     let wide = builder.push(add(w, w), int, Span::ZERO);
+    let cross = builder.push(mul(row, col), int, Span::ZERO);
     builder.terminate(jump(inner, Vec::new()), Span::ZERO);
     builder.switch_to(outer_latch);
     builder.terminate(jump(outer, Vec::new()), Span::ZERO);
     builder.switch_to(exit);
     builder.terminate(ret(zero), Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
-    NestedFor { id, outer, inner, w, row, col, r, t, idx, wide }
+    NestedFor { id, outer, inner, w, row, col, r, t, idx, wide, cross }
 }
 
 /// `idx = row * w + col` is a recurrence of the inner loop by one, from
@@ -2304,13 +2306,23 @@ fn a_nested_index_is_a_recurrence_of_the_inner_loop_starting_at_one_of_the_outer
     let (loops, scev) = evolutions(&f, n.id);
     let outer = loops.innermost(n.outer).expect("the outer header heads a loop");
     let inner = loops.innermost(n.inner).expect("the inner header heads a loop");
-    let w = invariant(atom(n.w));
 
-    assert_eq!(*scev.of(n.row), recurrence(outer, number(0), number(1)));
-    assert_eq!(*scev.of(n.col), recurrence(inner, number(0), number(1)));
-    assert_eq!(*scev.of(n.t), recurrence(outer, number(0), w.clone()));
-    assert_eq!(*scev.of(n.idx), recurrence(inner, recurrence(outer, number(0), w), number(1)));
+    assert_eq!(*scev.of(n.row), recurrence(outer, number(0), Polynomial::constant(1)));
+    assert_eq!(*scev.of(n.col), recurrence(inner, number(0), Polynomial::constant(1)));
+    assert_eq!(*scev.of(n.t), recurrence(outer, number(0), atom(n.w)));
+    assert_eq!(*scev.of(n.idx), recurrence(inner, recurrence(outer, number(0), atom(n.w)), Polynomial::constant(1)));
     assert_eq!(*scev.of(n.wide), invariant(atom(n.w).checked_scale(2).expect("2w is an element")));
+}
+
+/// `row * col` would step the inner loop by the outer recurrence `row`: a
+/// product of induction variables, whose step is no element of the ring.
+#[test]
+fn a_product_of_recurrences_of_two_nested_loops_is_unknown() {
+    let mut f = fixture();
+    let n = nested_for(&mut f);
+    let (_, scev) = evolutions(&f, n.id);
+
+    assert_eq!(*scev.of(n.cross), Evolution::Unknown);
 }
 
 /// A value is invariant in a loop exactly where no iteration of that loop
@@ -2394,7 +2406,7 @@ fn a_while_stepping_by_two_below_a_bound_it_divides_runs_the_quotient() {
     let (loops, scev) = evolutions(&f, lp.id);
     let over = loops.innermost(lp.header).expect("the header heads a loop");
 
-    assert_eq!(*scev.of(lp.i), recurrence(over, number(0), number(2)));
+    assert_eq!(*scev.of(lp.i), recurrence(over, number(0), Polynomial::constant(2)));
     assert_eq!(scev.trip_count(over), Some(&TripCount::Exact(invariant(atom(lp.j)))));
 }
 
@@ -2418,6 +2430,6 @@ fn a_while_left_early_runs_at_most_its_count() {
     let (loops, scev) = evolutions(&f, lp.id);
     let over = loops.innermost(lp.header).expect("the header heads a loop");
 
-    assert_eq!(*scev.of(lp.i), recurrence(over, number(0), number(2)));
+    assert_eq!(*scev.of(lp.i), recurrence(over, number(0), Polynomial::constant(2)));
     assert_eq!(scev.trip_count(over), Some(&TripCount::AtMost(invariant(atom(lp.j)))));
 }

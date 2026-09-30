@@ -3,12 +3,13 @@
 //!
 //! A value is an element of the value ring (`domain::ring`) over the body's
 //! atoms, or a first-degree recurrence `{start, +, step}_L` over one loop `L`:
-//! its value at `L`'s k-th iteration is `start + k·step`, where `step` is
-//! invariant in `L` and `start` is invariant in `L` too (it may itself be a
-//! recurrence of a loop around `L`). No recurrence is of a higher degree in its
-//! own loop: a value whose step changes with its loop's own iteration is
-//! unknown (the user's decision: each loop first degree, coefficients in the
-//! ring; no full ring of recurrences).
+//! its value at `L`'s k-th iteration is `start + k·step`, where `start` is
+//! invariant in `L` (it may itself be a recurrence of a loop around `L`) and
+//! `step` is an element of the ring. No recurrence is of a higher degree in
+//! its own loop, and no step is a recurrence of a loop around: either is a
+//! product of induction variables, which is unknown here (the user's
+//! decision: each loop first degree, coefficients in the ring; no full ring
+//! of recurrences).
 //!
 //! Arithmetic is exact over the integers: overflow is undefined (operators
 //! §intro), so a recurrence needs no wrap flag and no pass reasons about one.
@@ -38,7 +39,7 @@ use acvus_ast::Literal;
 use rustc_hash::FxHashMap;
 
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Inst, Module, Op, Terminator};
-use crate::ir::{BinOp, ForSource, Overflow, UnaryOp, ValueId, known_len};
+use crate::ir::{BinOp, ForSource, UnaryOp, ValueId, known_len};
 use crate::passes::analysis::dominators::Graph;
 use crate::passes::analysis::{Analysis, AnalysisManager, IntervalValues, LoopId, LoopTree, SparseFacts};
 use crate::passes::domain::{Bound, Interval, IntervalDomain, Polynomial, Symbol};
@@ -51,7 +52,8 @@ pub enum Evolution {
     /// the value's definition that it is read in.
     Invariant(Polynomial<Symbol>),
     /// `{start, +, step}` over `over`: `start + k·step` at the loop's k-th
-    /// iteration, both invariant in `over`.
+    /// iteration, `start` invariant in `over` and `step` an element of the
+    /// ring, never zero.
     Recurrence(Rc<Recurrence>),
     /// No evolution this analysis names.
     Unknown,
@@ -61,18 +63,19 @@ pub enum Evolution {
 pub struct Recurrence {
     pub over: LoopId,
     pub start: Evolution,
-    pub step: Evolution,
+    pub step: Polynomial<Symbol>,
 }
 
 /// How many times a loop's body runs, where the analysis names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TripCount {
-    /// Exactly this many, on every run that enters the loop, as an
-    /// evolution invariant in the loop (it may vary with a loop around it).
+    /// Exactly this many, on every run that enters the loop and neither
+    /// traps nor stops inside it, as an evolution invariant in the loop (it
+    /// may vary with a loop around it). A trap ends the run, so it is no
+    /// early exit for the count.
     Exact(Evolution),
-    /// At most this many: a loop the body may leave early, or a pull loop
-    /// whose count its maker's declared relation bounds (extern fn §3,
-    /// relation; source, count).
+    /// At most this many: a loop the body may leave early, by a branch out
+    /// of it or a return.
     AtMost(Evolution),
 }
 
@@ -107,11 +110,8 @@ impl Evolutions {
     }
 
     /// Whether `value` is invariant in `over`: its evolution holds no
-    /// recurrence of `over` or of a loop inside it.
-    ///
-    /// A value of no named evolution is invariant exactly where it is
-    /// defined outside `over`: one defined inside may change on every
-    /// iteration, and nothing here says it does not.
+    /// recurrence of `over` or of a loop inside it. An `Unknown` value is
+    /// invariant in `over` only where it is defined outside `over`.
     pub fn is_invariant(&self, value: ValueId, over: LoopId) -> bool {
         let inside_over = |of: LoopId| self.loops.contains(over, self.loops.header(of));
         match self.of(value) {
@@ -124,15 +124,16 @@ impl Evolutions {
     /// The trip count of `over`, where the analysis names one. A `For` over a
     /// range runs `max(hi - at, 0)` times, over a slice its length, over an
     /// array its length; a `While` whose only exit compares a recurrence of it
-    /// with a value invariant in it runs the count that comparison gives; a
-    /// pull loop runs at most what its iterator's maker's relation states.
+    /// with a value invariant in it runs the count that comparison gives. A
+    /// pull loop has none here: the loop analysis that names each loop's
+    /// head, from the declared sources, will supply its bound.
     pub fn trip_count(&self, over: LoopId) -> Option<&TripCount> {
         self.trips.get(&over)
     }
 }
 
 /// The analysis the manager keeps. It reads the body's values and control
-/// flow, the loop tree, and the declarations' relations and sources.
+/// flow, the loop tree, and the interval values.
 pub struct ScalarEvolution;
 
 impl Analysis for ScalarEvolution {
@@ -370,7 +371,7 @@ impl Scev<'_> {
     }
 
     /// The form of an instruction's integer result: exact ring arithmetic
-    /// on `+`, `-`, `*` and negation, which trap rather than wrap, and a
+    /// on `+`, `-`, `*` and negation, and a
     /// slice's length where the slice is one value on every run.
     fn transfer(&self, inst: &Inst, at: BlockId) -> Option<Polynomial<Symbol>> {
         match inst.op() {
@@ -378,15 +379,15 @@ impl Scev<'_> {
                 Literal::Int(n) => Some(Polynomial::constant(n)),
                 other => panic!("an integer constant is an integer literal, not {other:?}"),
             },
-            Op::BinOp { op: op @ (BinOp::Add(Overflow::Trap) | BinOp::Sub(Overflow::Trap) | BinOp::Mul(Overflow::Trap)), left, right } => {
+            Op::BinOp { op: op @ (BinOp::Add | BinOp::Sub | BinOp::Mul), left, right } => {
                 let (left, right) = (self.read(*left, at)?, self.read(*right, at)?);
                 match op {
-                    BinOp::Add(_) => left.checked_add(&right),
-                    BinOp::Sub(_) => left.checked_sub(&right),
+                    BinOp::Add => left.checked_add(&right),
+                    BinOp::Sub => left.checked_sub(&right),
                     _ => left.checked_mul(&right),
                 }
             }
-            Op::UnaryOp { op: UnaryOp::Neg(Overflow::Trap), operand } => self.read(*operand, at)?.checked_neg(),
+            Op::UnaryOp { op: UnaryOp::Neg, operand } => self.read(*operand, at)?.checked_neg(),
             Op::SliceLen { src } if self.outside_every_loop(*src) => Some(Polynomial::atom(Symbol::Len(*src))),
             _ => None,
         }
@@ -417,7 +418,7 @@ impl Scev<'_> {
             ForSource::Range { at, .. } => self.read_around(*at, of).map_or(Evolution::Unknown, |at| self.resolve(&at)),
             ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_) => Evolution::Invariant(Polynomial::zero()),
         };
-        let evolution = self.algebra().recurrence(of, start, Evolution::Invariant(Polynomial::constant(1)));
+        let evolution = self.algebra().recurrence(of, start, Polynomial::constant(1));
         self.resolved.insert(counter, evolution);
     }
 
@@ -454,7 +455,10 @@ impl Scev<'_> {
         let (Some(start), Some(step)) = (the_one(&starts), the_one(&steps)) else {
             return Evolution::Unknown;
         };
-        self.algebra().recurrence(of, self.resolve(start), self.resolve(step))
+        let Evolution::Invariant(step) = self.resolve(step) else {
+            return Evolution::Unknown;
+        };
+        self.algebra().recurrence(of, self.resolve(start), step)
     }
 
     /// The evolution `form` is, each induction atom replaced by its own.
@@ -559,10 +563,7 @@ impl Scev<'_> {
         let Evolution::Recurrence(difference) = self.resolve(&difference) else {
             return None;
         };
-        let Evolution::Invariant(step) = &difference.step else {
-            return None;
-        };
-        let step = step.as_constant()?;
+        let step = difference.step.as_constant()?;
         if difference.over != of {
             return None;
         }
@@ -583,7 +584,7 @@ impl Scev<'_> {
             Evolution::Invariant(polynomial) => Some(self.polynomial_interval(polynomial)),
             Evolution::Recurrence(recurrence) => {
                 let iterations = Interval::exactly(0).at_least_lo();
-                let risen = iterations.product(&self.interval(&recurrence.step)?);
+                let risen = iterations.product(&self.polynomial_interval(&recurrence.step));
                 Some(self.interval(&recurrence.start)?.sum(&risen))
             }
             Evolution::Unknown => None,
@@ -659,7 +660,7 @@ fn exact_quotient(algebra: &Algebra<'_>, evolution: &Evolution, divisor: i128) -
         Evolution::Invariant(polynomial) => polynomial_quotient(polynomial, divisor).map(Evolution::Invariant),
         Evolution::Recurrence(recurrence) => {
             let start = exact_quotient(algebra, &recurrence.start, divisor)?;
-            let step = exact_quotient(algebra, &recurrence.step, divisor)?;
+            let step = polynomial_quotient(&recurrence.step, divisor)?;
             Some(algebra.recurrence(recurrence.over, start, step))
         }
         Evolution::Unknown => None,
@@ -695,7 +696,10 @@ impl Algebra<'_> {
             (Evolution::Unknown, _) | (_, Evolution::Unknown) => Evolution::Unknown,
             (Evolution::Invariant(a), Evolution::Invariant(b)) => known(a.checked_add(b)),
             (Evolution::Recurrence(a), Evolution::Recurrence(b)) if a.over == b.over => {
-                self.recurrence(a.over, self.add(&a.start, &b.start), self.add(&a.step, &b.step))
+                let Some(step) = a.step.checked_add(&b.step) else {
+                    return Evolution::Unknown;
+                };
+                self.recurrence(a.over, self.add(&a.start, &b.start), step)
             }
             _ => match self.inner_and_invariant(a, b) {
                 Some((inner, invariant)) => self.recurrence(inner.over, self.add(&inner.start, invariant), inner.step.clone()),
@@ -704,17 +708,19 @@ impl Algebra<'_> {
         }
     }
 
-    /// A product of two recurrences of one loop is of the second degree in
-    /// it, which no evolution here is.
+    /// A product of two recurrences is a product of induction variables:
+    /// of one loop it is of the second degree in it, and of two loops its
+    /// step is a recurrence of the outer. Neither is an evolution here.
     fn mul(&self, a: &Evolution, b: &Evolution) -> Evolution {
         match (a, b) {
             (Evolution::Unknown, _) | (_, Evolution::Unknown) => Evolution::Unknown,
             (Evolution::Invariant(a), Evolution::Invariant(b)) => known(a.checked_mul(b)),
             _ => match self.inner_and_invariant(a, b) {
-                Some((inner, invariant)) => {
-                    self.recurrence(inner.over, self.mul(&inner.start, invariant), self.mul(&inner.step, invariant))
-                }
-                None => Evolution::Unknown,
+                Some((inner, invariant @ Evolution::Invariant(factor))) => match inner.step.checked_mul(factor) {
+                    Some(step) => self.recurrence(inner.over, self.mul(&inner.start, invariant), step),
+                    None => Evolution::Unknown,
+                },
+                Some((_, Evolution::Recurrence(_) | Evolution::Unknown)) | None => Evolution::Unknown,
             },
         }
     }
@@ -725,7 +731,7 @@ impl Algebra<'_> {
             Evolution::Recurrence(recurrence) => Some(Evolution::Recurrence(Rc::new(Recurrence {
                 over: recurrence.over,
                 start: Algebra::negate(&recurrence.start)?,
-                step: Algebra::negate(&recurrence.step)?,
+                step: recurrence.step.checked_neg()?,
             }))),
             Evolution::Unknown => None,
         }
@@ -753,17 +759,12 @@ impl Algebra<'_> {
     }
 
     /// `{start, +, step}` over `over`, which is `start` itself where `step`
-    /// is zero. A step is an element of the ring, the user's decision that
-    /// each loop's recurrence has its coefficients in the ring, so a step
-    /// that is a recurrence of a loop around gives no evolution.
-    fn recurrence(&self, over: LoopId, start: Evolution, step: Evolution) -> Evolution {
-        if start == Evolution::Unknown {
-            return Evolution::Unknown;
-        }
-        match &step {
-            Evolution::Invariant(by) if by.as_constant() == Some(0) => start,
-            Evolution::Invariant(_) => Evolution::Recurrence(Rc::new(Recurrence { over, start, step })),
-            Evolution::Recurrence(_) | Evolution::Unknown => Evolution::Unknown,
+    /// is zero.
+    fn recurrence(&self, over: LoopId, start: Evolution, step: Polynomial<Symbol>) -> Evolution {
+        match (&start, step.as_constant()) {
+            (Evolution::Unknown, _) => Evolution::Unknown,
+            (_, Some(0)) => start,
+            _ => Evolution::Recurrence(Rc::new(Recurrence { over, start, step })),
         }
     }
 }
