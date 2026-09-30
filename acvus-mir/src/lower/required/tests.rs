@@ -6,7 +6,8 @@ use acvus_utils::{Interner, QualifiedRef};
 
 use super::*;
 use crate::decl::{ContextDecl, Core, Declarations, LoopMarkers, RawDeclarations};
-use crate::ir::cfg::Builder;
+use crate::ir::cfg::edit::{Invariant, OrderChainWhole};
+use crate::ir::cfg::{Builder, OrderUse};
 use crate::ty::{Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, TypeArg};
 
 struct Fixture {
@@ -79,8 +80,8 @@ impl Fixture {
     }
 }
 
-/// Three contexts: `page`, an `i64`; `clock`, a volatile `i64`; and
-/// `note`, a `String`.
+/// Four contexts: `page`, an `i64`; `clock`, a volatile `i64`; `note`, a
+/// `String`; and `tape`, a volatile `String`.
 fn declarations(interner: &Interner) -> Declarations {
     let mut types = Types::<crate::ty::Poly>::new();
     let int = types.intern(TyKind::Int(IntTy::I64));
@@ -94,12 +95,17 @@ fn declarations(interner: &Interner) -> Declarations {
         casts: Vec::new(),
         conversions: Vec::new(),
         lang_impls: Vec::new(),
-        contexts: vec![context("page", int, false), context("clock", int, true), context("note", string, false)],
+        contexts: vec![
+            context("page", int, false),
+            context("clock", int, true),
+            context("note", string, false),
+            context("tape", string, true),
+        ],
         entries: Vec::new(),
         loop_markers: LoopMarkers::default(),
         core: Core::of(interner),
     })
-    .expect("three contexts under three names verify")
+    .expect("four contexts under four names verify")
 }
 
 fn at(n: u32) -> Span {
@@ -134,8 +140,8 @@ fn take_context(context: QualifiedRef) -> Op {
     Op::Take { target: RefTarget::Context(context), path: Vec::new(), taken_out: false }
 }
 
-fn names_context(op: &Op, context: QualifiedRef) -> bool {
-    matches!(op.place(), Some((RefTarget::Context(named), _)) if *named == context)
+fn is_context_take_of(op: &Op, context: QualifiedRef) -> bool {
+    matches!(op, Op::Take { target: RefTarget::Context(named), path, .. } if *named == context && path.is_empty())
 }
 
 fn diamond(cond: ValueId, then_to: BlockId, else_to: BlockId, join: BlockId) -> Terminator {
@@ -444,30 +450,35 @@ fn a_slot_content_overwritten_before_being_read_is_dropped_at_the_overwrite() {
     assert_eq!(drops(&ops), 1, "the second content moves into the call");
 }
 
-/// `note` is overwritten: its content is the page's, and the assign drops
-/// what it held (context §3). The body takes nothing out of it and drops
-/// nothing.
+/// `note` is overwritten: its content, the page's until then, becomes the
+/// body's at the overwrite and is taken out and dropped just before it,
+/// with the overwrite's span; nothing is dropped at the end.
 #[test]
-fn a_context_written_in_the_body_is_assigned_and_the_body_drops_nothing_of_it() {
+fn a_context_written_in_the_body_has_its_old_content_dropped_at_the_overwrite() {
     let mut f = fixture();
     let t = f.t;
     let note = f.context("note");
     let mut builder = f.module.build_body(true, t.int);
     let entry = builder.current_block();
-    builder.context(note, t.string);
+    builder.context(note, t.string, false);
     let written = text(t, &mut builder, at(2));
     builder.push_unit(assign_context(note, written), at(3));
     let n = builder.push(constant(0), t.int, at(5));
     builder.terminate(ret(n), Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
-    let before = f.ops(id, entry).len();
 
     run(&mut f, insert_drops);
 
     let ops = f.ops(id, entry);
-    assert_eq!(ops.len(), before, "nothing is added: {ops:?}");
-    assert!(matches!(&ops[1], Op::Assign { value, .. } if *value == written));
-    assert_eq!(drops(&ops), 0);
+    let [_, old, dropped, overwrite, _] = &ops[..] else {
+        panic!("the old content is taken out and dropped before the overwrite: {ops:?}")
+    };
+    assert!(is_context_take_of(old, note));
+    let content = f.module.body(id).block(entry).insts().nth(1).expect("the block holds that instruction").result().expect("a Take yields a value");
+    assert!(is_drop_of(dropped, content));
+    assert!(matches!(overwrite, Op::Assign { value, .. } if *value == written));
+    assert_eq!(f.module.body(id).block(entry).insts().nth(2).expect("the block holds that instruction").span(), at(3), "the drop takes the overwrite's span");
+    assert_eq!(drops(&ops), 1);
 }
 
 /// `note` is read through a reference, never written: its content stays
@@ -479,7 +490,7 @@ fn a_context_never_written_gets_no_drop() {
     let note = f.context("note");
     let mut builder = f.module.build_body(true, t.bool);
     let entry = builder.current_block();
-    builder.context(note, t.string);
+    builder.context(note, t.string, false);
     let lent = builder.push(Op::Ref { target: RefTarget::Context(note), path: Vec::new(), mutability: Mutability::Shared }, t.string_ref, at(2));
     let same = builder.push(Op::StringEq { a: lent, b: lent }, t.bool, at(2));
     builder.terminate(ret(same), Span::ZERO);
@@ -491,6 +502,68 @@ fn a_context_never_written_gets_no_drop() {
     let ops = f.ops(id, entry);
     assert_eq!(ops.len(), before, "nothing is added: {ops:?}");
     assert_eq!(drops(&ops), 0);
+}
+
+/// `tape` is volatile and overwritten: the take that takes its old content
+/// out before the overwrite stands on the order chain, just before the
+/// overwrite (context §3), and the drop after it.
+#[test]
+fn an_overwrite_of_a_volatile_context_takes_its_old_content_out_on_the_chain() {
+    let mut f = fixture();
+    let t = f.t;
+    let tape = f.context("tape");
+    let mut builder = f.module.build_body(true, t.int);
+    let entry = builder.current_block();
+    builder.context(tape, t.string, true);
+    let written = text(t, &mut builder, at(2));
+    builder.push_effect_unit(assign_context(tape, written), at(3));
+    let n = builder.push(constant(0), t.int, at(5));
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, insert_drops);
+
+    let body = f.module.body(id);
+    let insts: Vec<_> = body.block(entry).insts().collect();
+    let [_, old, dropped, overwrite, _] = &insts[..] else {
+        panic!("the old content is taken out and dropped before the overwrite: {:?}", f.ops(id, entry))
+    };
+    assert!(is_context_take_of(old.op(), tape));
+    assert!(is_drop_of(dropped.op(), old.result().expect("a Take yields a value")));
+    let (Some(OrderUse::Edge(take)), Some(OrderUse::Edge(store))) = (old.order(), overwrite.order()) else {
+        panic!("the take and the overwrite stand on the chain: {:?} {:?}", old.order(), overwrite.order())
+    };
+    assert_eq!(store.before, take.after, "the take stands just before the overwrite on the chain");
+    assert_eq!(dropped.order(), None);
+    assert_eq!(<OrderChainWhole as Invariant>::check(body, f.module.types()), Ok(()));
+}
+
+/// `tape` is volatile and read twice, each read's content read again by
+/// the return (context §1): each take becomes a clone of a shared lend of
+/// it, the lend on the order chain in the take's place (context §3).
+#[test]
+fn a_volatile_string_context_read_twice_is_cloned_by_lends_on_the_chain() {
+    let mut f = fixture();
+    let t = f.t;
+    let tape = f.context("tape");
+    let mut builder = f.module.build_body(true, t.int);
+    builder.context(tape, t.string, true);
+    let first = builder.push_effect(take_context(tape), t.string, at(1));
+    let second = builder.push_effect(take_context(tape), t.string, at(2));
+    let n = builder.push(t.call(t.takes_two_strings, vec![first, second]), t.int, at(3));
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, clone_strings);
+
+    let body = f.module.body(id);
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let lends: Vec<_> = insts.iter().filter(|inst| matches!(inst.op(), Op::Ref { target: RefTarget::Context(named), .. } if *named == tape)).collect();
+    assert_eq!(lends.len(), 2, "{:?}", f.all_ops(id));
+    assert!(lends.iter().all(|inst| inst.order().is_some()), "each lend stands on the chain");
+    assert_eq!(insts.iter().filter(|inst| is_context_take_of(inst.op(), tape)).count(), 0, "no take is left");
+    assert_eq!(insts.iter().filter(|inst| matches!(inst.op(), Op::StringClone { .. })).count(), 2);
+    assert_eq!(<OrderChainWhole as Invariant>::check(body, f.module.types()), Ok(()));
 }
 
 /// Integers and booleans, read and left unused, get no drop.
@@ -592,19 +665,18 @@ fn a_dead_body_parameter_is_dropped_at_the_entry_with_its_binders_span() {
     assert_eq!(f.module.body(id).block(entry).insts().nth(0).expect("the block holds that instruction").span(), at(4));
 }
 
-/// The then arm takes `note` out into a call and puts a new content back,
-/// the else arm overwrites it, and the join overwrites it again. Each
-/// assign drops what the context held (context §3); the body takes nothing
-/// out of it to drop, and the content the then arm took moves into the
-/// call.
+/// The then arm takes `note` out and puts a new content back, the else arm
+/// overwrites it, and the join overwrites it again. The then arm's store
+/// fills an empty context and drops nothing; the else arm's and the join's
+/// each drop the content they replace.
 #[test]
-fn a_context_moved_out_on_one_arm_and_reassigned_on_both_gets_no_drop_of_the_body() {
+fn a_context_moved_out_on_one_arm_and_reassigned_on_both_is_dropped_at_each_overwrite_of_a_held_content() {
     let mut f = fixture();
     let t = f.t;
     let (note, nc) = (f.context("note"), f.interner.intern("c"));
     let mut builder = f.module.build_body(true, t.int);
     let cond = builder.param(nc, t.bool, at(1));
-    builder.context(note, t.string);
+    builder.context(note, t.string, false);
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(cond, then_block, else_block, join), at(7));
     builder.switch_to(then_block);
@@ -626,22 +698,30 @@ fn a_context_moved_out_on_one_arm_and_reassigned_on_both_gets_no_drop_of_the_bod
 
     run(&mut f, insert_drops);
 
-    let ops = f.all_ops(id);
-    assert_eq!(drops(&ops), 0, "{ops:?}");
-    assert_eq!(ops.iter().filter(|op| names_context(op, note)).count(), 4, "one take and three assigns: {ops:?}");
+    assert_eq!(drops(&f.ops(id, then_block)), 0, "the then arm refills an empty context");
+    let dropped_before = |block: BlockId, stored: ValueId| {
+        let ops = f.ops(id, block);
+        let store = ops.iter().position(|op| matches!(op, Op::Assign { value, .. } if *value == stored));
+        let store = store.expect("the overwrite stays");
+        store >= 2 && is_context_take_of(&ops[store - 2], note) && matches!(ops[store - 1], Op::Drop { .. })
+    };
+    assert!(dropped_before(else_block, other), "the page's content is dropped before the else arm's overwrite");
+    assert!(dropped_before(join, last), "the arms' content is dropped before the join's overwrite");
+    assert_eq!(drops(&f.all_ops(id)), 2);
 }
 
-/// The then arm takes `note` out into a call, the else arm leaves it, and
-/// the join overwrites it: the assign drops what the context held on the
-/// else path (context §3), and the body splits no edge to drop it.
+/// The then arm takes `note` out, the else arm leaves it, and the join
+/// overwrites it. At the overwrite the context holds content on the else
+/// path only: that content's liveness ended on the edge from the else arm,
+/// so it is dropped there, with that arm's terminator's span.
 #[test]
-fn a_context_held_on_one_path_only_at_an_overwrite_gets_no_drop_of_the_body() {
+fn a_context_held_on_one_path_only_at_an_overwrite_is_dropped_on_the_edge_where_it_is_held() {
     let mut f = fixture();
     let t = f.t;
     let (note, nc) = (f.context("note"), f.interner.intern("c"));
     let mut builder = f.module.build_body(true, t.int);
     let cond = builder.param(nc, t.bool, at(1));
-    builder.context(note, t.string);
+    builder.context(note, t.string, false);
     let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(diamond(cond, then_block, else_block, join), at(7));
     builder.switch_to(then_block);
@@ -661,8 +741,18 @@ fn a_context_held_on_one_path_only_at_an_overwrite_gets_no_drop_of_the_body() {
 
     let body = f.module.body(id);
     assert!(matches!(body.block(then_block).terminator(), Terminator::Jump { to, .. } if *to == join), "the then edge is not split");
-    assert!(matches!(body.block(else_block).terminator(), Terminator::Jump { to, .. } if *to == join), "the else edge is not split");
-    assert_eq!(drops(&f.all_ops(id)), 0);
+    let Terminator::Jump { to: middle, .. } = body.block(else_block).terminator() else {
+        panic!("the else arm still jumps")
+    };
+    assert_ne!(*middle, join, "the else edge is split");
+    let split = f.ops(id, *middle);
+    let [taken_out, dropped] = &split[..] else {
+        panic!("the split edge takes the content out and drops it: {split:?}")
+    };
+    assert!(is_context_take_of(taken_out, note));
+    assert!(matches!(dropped, Op::Drop { .. }));
+    assert_eq!(body.block(*middle).insts().nth(1).expect("the block holds that instruction").span(), at(9), "the drop takes the else arm's terminator's span");
+    assert_eq!(drops(&f.all_ops(id)), 1);
 }
 
 /// A parameter lent by a `Ref` and also passed as a value lives in two

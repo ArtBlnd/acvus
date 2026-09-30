@@ -913,7 +913,7 @@ impl Forward<'_> {
             _ => return Page::default(),
         };
         let effect = fn_effect(self.types, callee_ty).expect("a call's callee type is a function type");
-        let named = self.body.contexts().iter().map(|(context, _)| *context);
+        let named = self.body.contexts().iter().map(|named| named.context);
         match effect.reissue() {
             Reissue::Opaque => Page { reads: named.clone().collect(), writes: named.collect() },
             Reissue::Pure | Reissue::Idempotent => Page {
@@ -928,7 +928,7 @@ impl Forward<'_> {
     fn page_of_terminator(&self, terminator: &Terminator) -> Page {
         match terminator {
             Terminator::Return { .. } => {
-                Page { reads: self.body.contexts().iter().map(|(context, _)| *context).collect(), writes: BTreeSet::new() }
+                Page { reads: self.body.contexts().iter().map(|named| named.context).collect(), writes: BTreeSet::new() }
             }
             _ => Page::default(),
         }
@@ -2199,8 +2199,8 @@ impl DenseAnalysis for Forward<'_> {
         for slot in body.slots() {
             state.storages.insert(Storage::Slot(*slot), empty(self.width(body.ty_of(*slot))));
         }
-        for (context, ty) in body.contexts() {
-            state.storages.insert(Storage::Context(*context), empty(self.width(*ty)));
+        for named in body.contexts() {
+            state.storages.insert(Storage::Context(named.context), empty(self.width(named.ty)));
         }
         for Held { value, positions } in self.defined_before_entry() {
             if body.params().iter().any(|(_, param)| *param == value) {

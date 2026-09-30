@@ -175,7 +175,7 @@ fn element(cx: &mut Lcx<'_, '_>, matched: &Matched, at: ListAt, span: Span) -> M
 fn slice_ref(cx: &mut Lcx<'_, '_>, place: &Place, lent: Mutability, span: Span) -> ValueId {
     let ty = cx.ref_ty(lent, place.ty);
     let op = Op::Ref { target: place.target, path: place.path.clone(), mutability: lent };
-    cx.builder.push(op, ty, span)
+    cx.builder.push_place(op, ty, span)
 }
 
 /// The type of `part` of a `whole`.
@@ -367,7 +367,7 @@ pub(super) fn tag_source(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) ->
         Matched::Held { place, .. } | Matched::Place { place, .. } => {
             let ty = cx.ref_ty(Mutability::Shared, place.ty);
             let op = Op::Ref { target: place.target, path: place.path.clone(), mutability: Mutability::Shared };
-            cx.builder.push(op, ty, span)
+            cx.builder.push_place(op, ty, span)
         }
     }
 }

@@ -304,7 +304,7 @@ impl Analysis for ContentLiveness {
 fn units_of(body: &Body, types: &Types<Concrete>, loans: &Loans) -> FxHashMap<Storage, Vec<Path>> {
     let mut cuts: FxHashMap<Storage, Vec<Path>> = FxHashMap::default();
     let slots = body.slots().iter().map(|slot| Storage::Slot(*slot));
-    let contexts = body.contexts().iter().map(|(context, _)| Storage::Context(*context));
+    let contexts = body.contexts().iter().map(|named| Storage::Context(named.context));
     for place in slots.chain(contexts) {
         if !copies(types, place_ty(body, place)) {
             cuts.entry(place).or_default();

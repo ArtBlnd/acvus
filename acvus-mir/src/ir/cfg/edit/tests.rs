@@ -350,12 +350,12 @@ impl LoanFacts for TestFacts {
 }
 
 impl ContentFacts for TestFacts {
-    fn content_read_after(&mut self, _: Asked<'_>, place: ValueId, _: Position) -> bool {
-        self.content_read.contains(&place)
+    fn content_read_after(&mut self, _: Asked<'_>, place: RefTarget, _: Position) -> bool {
+        matches!(place, RefTarget::Var(slot) | RefTarget::Param(slot) if self.content_read.contains(&slot))
     }
 
-    fn part_read_after(&mut self, _: Asked<'_>, place: ValueId, _: &[crate::ir::PathSeg], _: Position) -> bool {
-        self.content_read.contains(&place)
+    fn part_read_after(&mut self, _: Asked<'_>, place: RefTarget, _: &[crate::ir::PathSeg], _: Position) -> bool {
+        matches!(place, RefTarget::Var(slot) | RefTarget::Param(slot) if self.content_read.contains(&slot))
     }
 }
 
@@ -1226,6 +1226,32 @@ fn order_chain_whole_holds_on_a_built_body_and_catches_a_dropped_token() {
     assert!(matches!(refused, Err(Violation { invariant: "OrderChainWhole", .. })), "{refused:?}");
 }
 
+/// A body taking the context `page`, of `volatile` as the body records it,
+/// on the chain where it is volatile.
+fn taking_page(f: &mut Fixture, volatile: bool) -> BodyId {
+    let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
+    let mut builder = f.build(true, int);
+    builder.context(page, int, volatile);
+    let taken = builder.push_place(Op::Take { target: RefTarget::Context(page), path: Vec::new(), taken_out: false }, int, at(1));
+    builder.terminate(ret(taken), Span::ZERO);
+    builder.seal().expect("the body has no open state")
+}
+
+/// context §3: a volatile context's place operation off the chain, and a
+/// place operation on the chain of a context that is not volatile, break
+/// the chain's invariant.
+#[test]
+fn order_chain_whole_catches_a_context_place_operation_on_the_wrong_side_of_the_chain() {
+    let mut f = fixture();
+    for volatile in [false, true] {
+        let id = taking_page(&mut f, volatile);
+        assert_eq!(<OrderChainWhole as Invariant>::check(f.body(id), f.module.types()), Ok(()), "volatile: {volatile}");
+        body_mut(&mut f, id).contexts[0].volatile = !volatile;
+        let refused = <OrderChainWhole as Invariant>::check(f.body(id), f.module.types());
+        assert!(matches!(refused, Err(Violation { invariant: "OrderChainWhole", .. })), "volatile: {volatile}: {refused:?}");
+    }
+}
+
 #[test]
 fn structure_kept_holds_on_a_built_body_and_catches_a_join_that_is_no_block() {
     let mut f = fixture();
@@ -1455,7 +1481,7 @@ fn taking_a_context(f: &mut Fixture, ty: Ty) -> BodyId {
     let (na, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
     let mut builder = f.build(true, f.int);
     let a = builder.param(na, int, acvus_ast::Span::ZERO);
-    builder.context(page, ty);
+    builder.context(page, ty, false);
     builder.push(Op::Take { target: RefTarget::Context(page), path: Vec::new(), taken_out: false }, ty, at(1));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     builder.seal().expect("the body has no open state")
@@ -2347,13 +2373,13 @@ fn drop_content_takes_the_content_out_and_drops_it_unless_it_is_read_after() {
     let mut facts = TestFacts::of(&f.module, id);
     facts.content_read.insert(s);
     let mut editor = Editor::<Drops>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.drop_content(s, Position::Before(inst_ref(editor.body(), entry, 3)), at(9)), Err(CannotDrop::ContentReadAfter));
+    assert_eq!(editor.drop_content(RefTarget::Var(s), Position::Before(inst_ref(editor.body(), entry, 3)), at(9)), Err(CannotDrop::ContentReadAfter));
     editor.finish();
     assert_eq!(f.insts(id, entry).len(), 4);
 
     facts.content_read.clear();
     let mut editor = Editor::<Drops>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.drop_content(s, Position::Before(inst_ref(editor.body(), entry, 3)), at(9)), Ok(()));
+    assert_eq!(editor.drop_content(RefTarget::Var(s), Position::Before(inst_ref(editor.body(), entry, 3)), at(9)), Ok(()));
     editor.finish();
     let insts = f.insts(id, entry);
     let taken = insts[3].result().expect("a Take yields a value");

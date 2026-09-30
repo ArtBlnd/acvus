@@ -613,7 +613,7 @@ fn a_volatile_context_take_and_assign_are_threaded_on_the_chain() {
     let mut f = fixture();
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
     let mut builder = build(&mut f.module, true, f.int);
-    builder.context(page, int);
+    builder.context(page, int, true);
     let taken = builder.push_effect(take_context(page), int, at(30));
     let assign = Op::Assign { target: RefTarget::Context(page), path: Vec::new(), value: taken, restores: false };
     builder.push_effect_unit(assign, at(31));
@@ -637,7 +637,7 @@ fn a_pure_body_takes_no_context_on_the_chain() {
     let mut f = fixture();
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
     let mut builder = build(&mut f.module, false, f.int);
-    builder.context(page, int);
+    builder.context(page, int, true);
     builder.push_effect(take_context(page), int, at(34));
 }
 
@@ -654,7 +654,7 @@ fn removing_a_take_on_the_chain_rethreads_the_token_around_it() {
     let mut f = fixture();
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
     let mut builder = build(&mut f.module, true, f.int);
-    builder.context(page, int);
+    builder.context(page, int, true);
     let unread = builder.push_effect(take_context(page), int, at(35));
     let read = builder.push_effect(take_context(page), int, at(36));
     builder.terminate(ret(read), acvus_ast::Span::ZERO);

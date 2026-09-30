@@ -27,7 +27,7 @@ use crate::ir::cfg::edit::{
     Asked, ContentFacts, DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved,
 };
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Definition, InstId, Op, Site, Terminator};
-use crate::ir::{Checked, IndexBound, Intrinsic, PathSeg, ValueId, fn_effect};
+use crate::ir::{Checked, IndexBound, Intrinsic, PathSeg, RefTarget, ValueId, fn_effect};
 use crate::passes::analysis::{
     AffineValues, Analysis, AnalysisManager, ContentLiveness, Dominators, Escapes, IntervalValues, LoopTree, Loans,
     Point, PostDominators, Storage, TouchedPlace, ValueBounds,
@@ -221,20 +221,20 @@ impl LoanFacts for EditFacts<'_, '_> {
 impl ContentFacts for EditFacts<'_, '_> {
     /// Read from the content liveness. Cost: O(1), and its own when an edit
     /// dropped it.
-    fn content_read_after(&mut self, asked: Asked<'_>, place: ValueId, at: Position) -> bool {
+    fn content_read_after(&mut self, asked: Asked<'_>, place: RefTarget, at: Position) -> bool {
         let content = self.get::<ContentLiveness>(asked);
         let live = match at {
             Position::Before(inst) => content.live_before(inst.id()),
             Position::End(block) => content.live_before_terminator(block),
         };
-        live.contains(&own_storage(asked.body(), place))
+        live.contains(&by_name(place))
     }
 
     /// Read from the content liveness. Cost: O(the place's units), and its
     /// own when an edit dropped it.
-    fn part_read_after(&mut self, asked: Asked<'_>, place: ValueId, path: &[PathSeg], at: Position) -> bool {
+    fn part_read_after(&mut self, asked: Asked<'_>, place: RefTarget, path: &[PathSeg], at: Position) -> bool {
         let content = self.get::<ContentLiveness>(asked);
-        let place = own_storage(asked.body(), place);
+        let place = by_name(place);
         match at {
             Position::Before(inst) => content.part_live_before(inst.id(), place, path),
             Position::End(block) => content.part_live_before_terminator(block, place, path),
@@ -242,16 +242,12 @@ impl ContentFacts for EditFacts<'_, '_> {
     }
 }
 
-/// The storage `place`, a slot or a by-value parameter, is.
+/// The storage `place`, a place by name, is.
 ///
 /// # Panics
-/// `place` is neither.
-fn own_storage(body: &Body, place: ValueId) -> Storage {
-    match body.definition(place) {
-        Definition::Slot(_) => Storage::Slot(place),
-        Definition::Param(_) => Storage::Param(place),
-        definition => panic!("{place:?} is defined at {definition:?}, and only a slot or a parameter has its own storage"),
-    }
+/// `place` is reached through a reference.
+fn by_name(place: RefTarget) -> Storage {
+    Storage::by_name(&place).unwrap_or_else(|| panic!("{place:?} is not a place by name"))
 }
 
 impl OrderFacts for EditFacts<'_, '_> {
@@ -1037,8 +1033,8 @@ mod tests {
         let int = f.int;
         let (page, clock) = (QualifiedRef::root(f.interner.intern("page")), QualifiedRef::root(f.interner.intern("clock")));
         let mut builder = f.module.build_body(true, int);
-        builder.context(page, int);
-        builder.context(clock, int);
+        builder.context(page, int, false);
+        builder.context(clock, int, true);
         let one = builder.push(constant(1), int, Span::ZERO);
         builder.push_unit(assign_context(page, one), Span::ZERO);
         builder.push_unit(assign_context(page, one), Span::ZERO);
@@ -1071,7 +1067,7 @@ mod tests {
         let int = f.int;
         let clock = QualifiedRef::root(f.interner.intern("clock"));
         let mut builder = f.module.build_body(true, int);
-        builder.context(clock, int);
+        builder.context(clock, int, true);
         let one = builder.push(constant(1), int, Span::ZERO);
         builder.push_effect_unit(assign_context(clock, one), Span::ZERO);
         builder.push_effect_unit(assign_context(clock, one), Span::ZERO);

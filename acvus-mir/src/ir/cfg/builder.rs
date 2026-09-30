@@ -14,10 +14,10 @@ use acvus_ast::Span;
 use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 
-use super::body::{BlockData, BlockId, Body, BodyId, Def, Inst, InstList, Module, OrderUse, Terminator};
+use super::body::{BlockData, BlockId, Body, BodyContext, BodyId, Def, Inst, InstList, Module, OrderUse, Terminator};
 use super::order::At;
 use super::op::Op;
-use crate::ir::{OrderEdge, RefTarget, ValueId, fn_effect};
+use crate::ir::{OrderEdge, ValueId, fn_effect};
 use crate::ty::{Concrete, Reissue, Ty, TyKind, Types};
 
 /// Open state left at `seal`.
@@ -210,18 +210,35 @@ impl<'m> Builder<'m> {
         value
     }
 
-    /// States that the body names `context`, of type `ty`, which
-    /// `RefTarget::Context` then addresses (context §3). Cost: O(the
-    /// contexts named so far).
+    /// States that the body names `context`, of type `ty`, volatile as its
+    /// declaration states, which `RefTarget::Context` then addresses
+    /// (context §3). Cost: O(the contexts named so far).
     ///
     /// # Panics
     /// The body names `context` already.
-    pub fn context(&mut self, context: QualifiedRef, ty: Ty) {
-        assert!(
-            self.body.contexts.iter().all(|(named, _)| *named != context),
-            "the body names {context:?} once"
-        );
-        self.body.contexts.push((context, ty));
+    pub fn context(&mut self, context: QualifiedRef, ty: Ty, volatile: bool) {
+        assert!(self.body.named_context(context).is_none(), "the body names {context:?} once");
+        self.body.contexts.push(BodyContext { context, ty, volatile });
+    }
+
+    /// Appends `op`, a `Take` or a `Ref`, typed `ty`, and returns its
+    /// result: as an effect where it names a volatile context, whose every
+    /// place operation is one (context §3), and as `push` does otherwise.
+    /// Cost: `push`'s or `push_effect`'s.
+    pub fn push_place(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
+        match self.body.on_volatile_context(&op) {
+            true => self.push_effect(op, ty, span),
+            false => self.push(op, ty, span),
+        }
+    }
+
+    /// Appends `op`, an `Assign`, as `push_place` appends a `Take`. Cost:
+    /// `push_unit`'s or `push_effect_unit`'s.
+    pub fn push_place_unit(&mut self, op: Op, span: Span) {
+        match self.body.on_volatile_context(&op) {
+            true => self.push_effect_unit(op, span),
+            false => self.push_unit(op, span),
+        }
     }
 
     /// Appends a non-effectful instruction with one result, typed `ty`, and
@@ -243,11 +260,11 @@ impl<'m> Builder<'m> {
     /// operands).
     ///
     /// # Panics
-    /// `op` yields a value; it is a call whose effect is not pure, which is
-    /// an effect; it is a `Spawn`, a `TakeEffect` or a `Merge`, which only
-    /// the core writes; it names a context the body does not name; an
-    /// operand is not a value of this body; the current block is
-    /// terminated.
+    /// `op` yields a value; it is a call whose effect is not pure, or a place
+    /// operation on a volatile context, which are effects; it is a `Spawn`,
+    /// a `TakeEffect` or a `Merge`, which only the core writes; it names a
+    /// context the body does not name; an operand is not a value of this
+    /// body; the current block is terminated.
     pub fn push_unit(&mut self, op: Op, span: Span) {
         assert!(!op.has_result(), "{op:?} yields a value; it is pushed by push");
         self.assert_not_on_chain(&op);
@@ -265,12 +282,12 @@ impl<'m> Builder<'m> {
     ///
     /// # Panics
     /// The body is not ordered; `op` is neither such a call nor a place
-    /// operation on a context the body names; an operand is not a value of
-    /// this body; the current block is terminated.
+    /// operation on a volatile context the body names; an operand is not a
+    /// value of this body; the current block is terminated.
     pub fn push_effect(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
         assert!(
-            self.effectful_call(&op) || self.names_a_context(&op),
-            "push_effect takes a call whose effect is not pure or a place operation on a context, not {op:?}"
+            self.effectful_call(&op) || self.body.on_volatile_context(&op),
+            "push_effect takes a call whose effect is not pure or a place operation on a volatile context, not {op:?}"
         );
         let result = self.new_result(ty);
         self.append_effect(op, Some(result), span);
@@ -283,11 +300,14 @@ impl<'m> Builder<'m> {
     ///
     /// # Panics
     /// The body is not ordered; `op` yields a value or is not a place
-    /// operation on a context the body names; an operand is not a value of
-    /// this body; the current block is terminated.
+    /// operation on a volatile context the body names; an operand is not a
+    /// value of this body; the current block is terminated.
     pub fn push_effect_unit(&mut self, op: Op, span: Span) {
         assert!(!op.has_result(), "{op:?} yields a value; it is pushed by push_effect");
-        assert!(self.names_a_context(&op), "push_effect_unit takes a place operation on a context, not {op:?}");
+        assert!(
+            self.body.on_volatile_context(&op),
+            "push_effect_unit takes a place operation on a volatile context, not {op:?}"
+        );
         self.append_effect(op, None, span);
     }
 
@@ -653,22 +673,10 @@ impl<'m> Builder<'m> {
             "{op:?} is written only by the core (effects §3, §6)"
         );
         assert!(!self.effectful_call(op), "a call whose effect is not pure is pushed by push_effect");
-        self.names_a_context(op);
-    }
-
-    /// Whether `op` is a place operation on a context.
-    ///
-    /// # Panics
-    /// It names a context the body does not name.
-    fn names_a_context(&self, op: &Op) -> bool {
-        let Some((RefTarget::Context(context), _)) = op.place() else {
-            return false;
-        };
         assert!(
-            self.body.contexts.iter().any(|(named, _)| named == context),
-            "{op:?} names {context:?}, which the body does not name"
+            !self.body.on_volatile_context(op),
+            "a place operation on a volatile context is an effect (context §3), pushed by push_effect"
         );
-        true
     }
 
     /// A result of the next instruction made, which is appended next.

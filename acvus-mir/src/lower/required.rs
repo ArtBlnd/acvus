@@ -82,9 +82,11 @@ pub fn clone_strings(module: &mut Module, am: &mut AnalysisManager<'_>) {
 ///   same, by `ContentLiveness`, through `drop_content`; a store that no read
 ///   follows ends the content it stores. A `Take` through a reference to
 ///   the place alone moves out of it as one by name does.
-/// - A context: its content is the page's, never the body's; an `Assign`
-///   into it drops what it held (context §3), and the body drops nothing
-///   of it.
+/// - A context: its content is the page's until the body overwrites it;
+///   the old content of an overwrite is the body's and is dropped just
+///   before the store, the `Take` that takes it out standing on the order
+///   chain for a volatile context, and the body never drops the content at
+///   its end (context §3, D71).
 /// - A value or a place's content some part of which that does not copy is
 ///   moved out, or stored into: the part moved is ended by its holder, each
 ///   other unit (`ir::parts`) ends where its own liveness ends, dropped
@@ -107,7 +109,9 @@ pub fn clone_strings(module: &mut Module, am: &mut AnalysisManager<'_>) {
 ///
 /// # Panics
 /// A parameter is dead where the body or its block starts, where no edge of
-/// its own carries the drop; a parameter is both a value and a storage. Each message states the question.
+/// its own carries the drop; a context's part is read or taken on some
+/// paths only before an overwrite; a parameter is both a value and a
+/// storage. Each message states the question.
 pub fn insert_drops(module: &mut Module, am: &mut AnalysisManager<'_>) {
     for body in module.body_ids() {
         insert_drops_in(module, body, am);
@@ -178,15 +182,9 @@ fn own_storage(body: &Body, place: ValueId) -> Storage {
 // -- clone_strings -----------------------------------------------------------
 
 /// Each `Take` of a `String` by name, whole or a field, whose part of the
-/// place is read again after it becomes a clone of that part (S4). A
-/// volatile context's `Take` is left as it is: its clone would be a place
-/// operation of it off the order chain (context §3).
+/// place is read again after it becomes a clone of that part (S4).
 fn clone_place_reads(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
     let content = am.get::<ContentLiveness>(module, body);
-    let decls = am.decls();
-    let volatile = |context: acvus_utils::QualifiedRef| {
-        decls.context_is_volatile(context).unwrap_or_else(|| panic!("the context {context:?} a body names is declared"))
-    };
     let (of, types) = (module.body(body), module.types());
     let mut read_again: Vec<ValueId> = Vec::new();
     for (_, record) in of.blocks() {
@@ -198,11 +196,6 @@ fn clone_place_reads(module: &mut Module, body: BodyId, am: &mut AnalysisManager
             let Some(place) = Storage::by_name(target) else {
                 continue;
             };
-            if let Storage::Context(context) = place
-                && volatile(context)
-            {
-                continue;
-            }
             if is_string(types, of.ty_of(result)) && content.part_live_after(Site::Inst(inst.id()), place, path) {
                 read_again.push(result);
             }
@@ -315,7 +308,7 @@ fn clone_before_terminator(editor: &mut Editor<'_, Value>, liveness: &Liveness, 
 #[derive(Debug, Clone)]
 enum Ended {
     Value(ValueId),
-    Content(ValueId),
+    Content(Storage),
     Part { of: PartOf, unit: Path },
 }
 
@@ -442,7 +435,7 @@ fn drop_all(editor: &mut Editor<'_, Drops>, drops: impl Iterator<Item = PlannedD
     for PlannedDrop { ended, span } in drops {
         let placed = match &ended {
             Ended::Value(value) => editor.insert_drop(*value, at, span),
-            Ended::Content(place) => editor.drop_content(*place, at, span),
+            Ended::Content(place) => editor.drop_content(named_target(*place), at, span),
             Ended::Part { of, unit } => editor.drop_part(*of, unit, at, span),
         };
         placed.unwrap_or_else(|refused| panic!("the plan drops {ended:?} at {at:?}, where it is still read: {refused:?}"));
@@ -485,6 +478,7 @@ impl PlanFacts<'_> {
                 }
             }
         }
+        self.context_overwrites(&mut plan, &mut walked);
         plan
     }
 
@@ -650,7 +644,7 @@ impl PlanFacts<'_> {
                     .any(|operand| operand.value == place && operand.names_place && operand.taken == Taken::Moved)
                     || self.moved_through(inst).is_some_and(|(moved, region)| moved == place && region.is_empty());
                 if !takes_all {
-                    let drop = PlannedDrop { ended: Ended::Content(place), span: inst.span() };
+                    let drop = PlannedDrop { ended: Ended::Content(own_storage(body, place)), span: inst.span() };
                     plan.after.entry(site).or_default().push(drop);
                 }
             }
@@ -658,7 +652,7 @@ impl PlanFacts<'_> {
         if block == body.entry() {
             for (_, param) in body.params() {
                 if self.ends_whole(cuts, *param) && !self.content.live_at_start(block).contains(&own_storage(body, *param)) {
-                    let drop = PlannedDrop { ended: Ended::Content(*param), span: body.binder_span(*param) };
+                    let drop = PlannedDrop { ended: Ended::Content(own_storage(body, *param)), span: body.binder_span(*param) };
                     plan.at_start.entry(block).or_default().push(drop);
                 }
             }
@@ -693,7 +687,7 @@ impl PlanFacts<'_> {
             let ended_places = places
                 .iter()
                 .filter(|place| !self.content.live_at_start(edge.to).contains(&own_storage(body, **place)))
-                .map(|place| PlannedDrop { ended: Ended::Content(*place), span });
+                .map(|place| PlannedDrop { ended: Ended::Content(own_storage(body, *place)), span });
             let drops: Vec<PlannedDrop> = ended_values.chain(ended_places).collect();
             if !drops.is_empty() {
                 plan.on_edges.push(EdgeDrops { from: block, to: edge.to, drops });
@@ -701,16 +695,78 @@ impl PlanFacts<'_> {
         }
     }
 
+    /// Before each store by name that overwrites a context, whole or in
+    /// part, each unit it replaces is the body's where the context holds it
+    /// there, and is dropped (context §3, D71). Where the context holds it
+    /// on some paths only, nothing reads it between the join and the store,
+    /// so its liveness ended on the edges into the join: it is dropped on
+    /// each such edge where it is present (ownership §6, D74).
+    fn context_overwrites(&self, plan: &mut DropPlan, walked: &mut FxHashSet<WalkedEdge>) {
+        let body = self.body;
+        for (block, record) in body.blocks() {
+            for inst in record.insts() {
+                let Some((place, path)) = self.context_overwritten(inst) else {
+                    continue;
+                };
+                let units = self.content.units(place).expect("a context that does not copy has units");
+                for unit in units.iter().filter(|unit| covers(path, unit) && !self.part_copies(place_ty(body, place), unit)) {
+                    match self.content.presence_before(inst.id(), place, unit) {
+                        Presence::Present => {
+                            let drop = PlannedDrop { ended: self.place_part(place, unit), span: inst.span() };
+                            plan.before.entry(Site::Inst(inst.id())).or_default().push(drop);
+                        }
+                        Presence::Absent | Presence::Unreached => {}
+                        Presence::Maybe => {
+                            assert!(
+                                self.untouched(place, unit, block, Some(inst.id())),
+                                "the context {place:?}'s part {unit:?} is read or taken on some paths only before \
+                                 {:?} of {block:?} overwrites it; check refuses a read of content moved out on some \
+                                 path, and insert_drops runs after check",
+                                inst.id()
+                            );
+                            self.drop_where_present(place, unit, block, true, plan, walked);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The context `inst` stores into by name, whole or in part, and the
+    /// path, where its type does not copy.
+    fn context_overwritten<'i>(&self, inst: &'i Inst) -> Option<(Storage, &'i [PathSeg])> {
+        let Op::Assign { target: RefTarget::Context(context), path, .. } = inst.op() else {
+            return None;
+        };
+        let place = Storage::Context(*context);
+        (!copies(self.types, place_ty(self.body, place))).then_some((place, path.as_slice()))
+    }
+
+    /// Whether nothing in `block` before the instruction `upto`, or before
+    /// the block's end where that is none, reads, takes, lends or stores
+    /// `unit` of `place`.
+    fn untouched(&self, place: Storage, unit: &[PathSeg], block: BlockId, upto: Option<InstId>) -> bool {
+        self.body.block(block).insts().take_while(|inst| Some(inst.id()) != upto).all(|inst| {
+            let site = Site::Inst(inst.id());
+            match place_of(inst.op()) {
+                Some((target, path)) if Storage::by_name(target) == Some(place) => !overlap(path, unit),
+                _ => !self.loans.reads(site).contains(&place),
+            }
+        })
+    }
+
     /// `unit` of `place` is present on some paths only where `block`
     /// starts: it is dropped on each edge into the join where it is
     /// present, walking back through blocks where it is present on some
-    /// paths only. An edge already given this unit's drop is not given it
-    /// again.
+    /// paths only. `assert_untouched` asserts, for a context, that nothing
+    /// touches it on the way. An edge already given this unit's drop is not
+    /// given it again.
     fn drop_where_present(
         &self,
-        place: ValueId,
+        place: Storage,
         unit: &[PathSeg],
         block: BlockId,
+        assert_untouched: bool,
         plan: &mut DropPlan,
         walked: &mut FxHashSet<WalkedEdge>,
     ) {
@@ -720,7 +776,7 @@ impl PlanFacts<'_> {
         let mut pending = vec![block];
         while let Some(join) = pending.pop() {
             for pred in &preds[&join] {
-                match self.content.presence_at_end(*pred, own_storage(body, place), unit) {
+                match self.content.presence_at_end(*pred, place, unit) {
                     Presence::Present => {
                         if walked.insert((*pred, join, place, unit.to_vec())) {
                             let drop = PlannedDrop { ended: self.place_part(place, unit), span: body.block(*pred).terminator_span() };
@@ -729,6 +785,11 @@ impl PlanFacts<'_> {
                     }
                     Presence::Absent | Presence::Unreached => {}
                     Presence::Maybe => {
+                        assert!(
+                            !assert_untouched || self.untouched(place, unit, *pred, None),
+                            "the context {place:?}'s part {unit:?} is read or taken on some paths only in \
+                             {pred:?}, before an overwrite; check refuses such a read, and insert_drops runs after check"
+                        );
                         if visited.insert(*pred) {
                             pending.push(*pred);
                         }
@@ -740,10 +801,10 @@ impl PlanFacts<'_> {
 
     /// What ends `unit` of `place`: its whole content where the unit is the
     /// whole, and the part otherwise.
-    fn place_part(&self, place: ValueId, unit: &[PathSeg]) -> Ended {
+    fn place_part(&self, place: Storage, unit: &[PathSeg]) -> Ended {
         match unit.is_empty() {
             true => Ended::Content(place),
-            false => Ended::Part { of: PartOf::Place(place), unit: unit.to_vec() },
+            false => Ended::Part { of: PartOf::Place(named_target(place)), unit: unit.to_vec() },
         }
     }
 
@@ -751,8 +812,9 @@ impl PlanFacts<'_> {
         inst.result().is_some_and(|taken| copies(self.types, self.body.ty_of(taken)))
     }
 
-    fn part_copies(&self, holder: ValueId, unit: &[PathSeg]) -> bool {
-        copies(self.types, parts::part_ty(self.types, self.body.ty_of(holder), unit))
+    /// Whether the part `unit` of a holder of type `holder` copies.
+    fn part_copies(&self, holder: Ty, unit: &[PathSeg]) -> bool {
+        copies(self.types, parts::part_ty(self.types, holder, unit))
     }
 
     /// Whether the body drops `place`'s content whole where its liveness
@@ -777,7 +839,7 @@ impl PlanFacts<'_> {
 
 /// An edge a walk back from a join gave a unit's drop: its source, its
 /// target, the place, and the unit.
-type WalkedEdge = (BlockId, BlockId, ValueId, Path);
+type WalkedEdge = (BlockId, BlockId, Storage, Path);
 
 /// The holders a body cuts, each with its units that do not copy: a value,
 /// with where each unit is live, and a place the body owns.
@@ -857,7 +919,7 @@ impl PlanFacts<'_> {
             .map(|(value, cuts)| {
                 let units = parts::units(self.types, body.ty_of(value), &cuts)
                     .into_iter()
-                    .filter(|unit| !self.part_copies(value, unit))
+                    .filter(|unit| !self.part_copies(body.ty_of(value), unit))
                     .map(|unit| self.value_unit(&preds, value, unit))
                     .collect();
                 (value, units)
@@ -871,7 +933,7 @@ impl PlanFacts<'_> {
             .filter_map(|place| {
                 let units = self.content.units(own_storage(body, *place))?;
                 let cut = !matches!(units, [whole] if whole.is_empty());
-                cut.then(|| (*place, units.iter().filter(|unit| !self.part_copies(*place, unit)).cloned().collect()))
+                cut.then(|| (*place, units.iter().filter(|unit| !self.part_copies(body.ty_of(*place), unit)).cloned().collect()))
             })
             .collect();
         Cuts { values, places }
@@ -1039,7 +1101,7 @@ impl PlanFacts<'_> {
         walked: &mut FxHashSet<WalkedEdge>,
     ) {
         let (body, record) = (self.body, self.body.block(block));
-        let ended = || Ended::Part { of: PartOf::Place(place), unit: unit.to_vec() };
+        let ended = || Ended::Part { of: PartOf::Place(named_target(own_storage(body, place))), unit: unit.to_vec() };
         for inst in record.insts() {
             let site = Site::Inst(inst.id());
             let event = match place_of(inst.op()) {
@@ -1070,7 +1132,7 @@ impl PlanFacts<'_> {
             match presence {
                 Presence::Present => plan.after.entry(site).or_default().push(PlannedDrop { ended: ended(), span: inst.span() }),
                 Presence::Absent | Presence::Unreached => {}
-                Presence::Maybe => self.drop_where_present(place, unit, block, plan, walked),
+                Presence::Maybe => self.drop_where_present(own_storage(self.body, place), unit, block, false, plan, walked),
             }
         }
         let is_param = matches!(body.definition(place), Definition::Param(_));
@@ -1105,11 +1167,11 @@ impl PlanFacts<'_> {
             }
             match self.content.presence_at_end(block, own_storage(self.body, place), unit) {
                 Presence::Present => {
-                    let drop = PlannedDrop { ended: Ended::Part { of: PartOf::Place(place), unit: unit.to_vec() }, span };
+                    let drop = PlannedDrop { ended: Ended::Part { of: PartOf::Place(named_target(own_storage(self.body, place))), unit: unit.to_vec() }, span };
                     plan.on_edges.push(EdgeDrops { from: block, to: edge.to, drops: vec![drop] });
                 }
                 Presence::Absent | Presence::Unreached => {}
-                Presence::Maybe => self.drop_where_present(place, unit, block, plan, walked),
+                Presence::Maybe => self.drop_where_present(own_storage(self.body, place), unit, block, false, plan, walked),
             }
         }
     }
@@ -1121,6 +1183,31 @@ enum PlaceEvent {
     Read,
     Stored,
     Moved,
+}
+
+/// The target that names `place`, a place by name.
+///
+/// # Panics
+/// `place` is storage outside the body, which nothing names by name.
+fn named_target(place: Storage) -> RefTarget {
+    match place {
+        Storage::Slot(slot) => RefTarget::Var(slot),
+        Storage::Param(param) => RefTarget::Param(param),
+        Storage::Context(context) => RefTarget::Context(context),
+        Storage::Outside { .. } => panic!("{place:?} is outside the body, and named by no place"),
+    }
+}
+
+/// The type of `place`, a place by name.
+///
+/// # Panics
+/// `place` is storage outside the body.
+fn place_ty(body: &Body, place: Storage) -> Ty {
+    match place {
+        Storage::Slot(value) | Storage::Param(value) => body.ty_of(value),
+        Storage::Context(context) => body.context_ty(context),
+        Storage::Outside { .. } => panic!("{place:?} is outside the body, and no place by name"),
+    }
 }
 
 /// The place the body owns that `storage` is: a slot or a by-value

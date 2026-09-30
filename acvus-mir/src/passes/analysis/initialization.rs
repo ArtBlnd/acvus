@@ -197,7 +197,7 @@ impl Holder {
 fn units_of(body: &Body, types: &Types<Concrete>, decls: &Declarations, loans: &Loans) -> FxHashMap<Storage, Vec<Path>> {
     let mut holders: FxHashMap<Storage, Holder> =
         body.slots().iter().map(|slot| (Storage::Slot(*slot), Holder::typed(body.ty_of(*slot)))).collect();
-    holders.extend(body.contexts().iter().map(|(context, ty)| (Storage::Context(*context), Holder::typed(*ty))));
+    holders.extend(body.contexts().iter().map(|named| (Storage::Context(named.context), Holder::typed(named.ty))));
     let outside = body.params().iter().chain(body.captures()).map(|(_, value)| *value).filter(|value| !body.is_token(*value));
     for of in outside {
         for (position, lent) in lent_types(types, decls, body.ty_of(of)).into_iter().enumerate() {

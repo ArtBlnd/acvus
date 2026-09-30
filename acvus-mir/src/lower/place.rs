@@ -217,7 +217,7 @@ pub(super) fn read(cx: &mut Lcx<'_, '_>, operand: Operand, span: Span) -> ValueI
     match operand {
         Operand::Place(place) => {
             let op = Op::Take { target: place.target, path: place.path, taken_out: false };
-            cx.push_place(op, place.ty, span)
+            cx.builder.push_place(op, place.ty, span)
         }
         Operand::Value(value) => value,
     }
@@ -245,7 +245,7 @@ pub(super) fn lend(cx: &mut Lcx<'_, '_>, operand: Operand, mutability: Mutabilit
         }
     };
     let ty = cx.ref_ty(mutability, place.ty);
-    cx.push_place(Op::Ref { target: place.target, path: place.path, mutability }, ty, span)
+    cx.builder.push_place(Op::Ref { target: place.target, path: place.path, mutability }, ty, span)
 }
 
 /// `reference`, a `made` reference to `target`, as a `wanted` one: itself
@@ -443,7 +443,7 @@ pub(super) fn lower_store<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>, va
 
 pub(super) fn assign(cx: &mut Lcx<'_, '_>, place: Place, value: ValueId, span: Span) {
     let op = Op::Assign { target: place.target, path: place.path, value, restores: false };
-    cx.push_store(op, span);
+    cx.builder.push_place_unit(op, span);
 }
 
 fn store_target<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>) -> Place {

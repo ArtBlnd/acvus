@@ -72,11 +72,9 @@ pub enum Op {
         /// until the `Assign` that restores it after the call.
         taken_out: bool,
     },
-    /// Move `value` into a storage. Into the body's own storage or through a
-    /// reference it drops nothing: the old content, where the program holds
-    /// it, is dropped by an explicit `Drop` before this store (ownership
-    /// §6). Into a context it drops what the context held, which is the
-    /// page's, not the program's (context §3). An assignment to a variable.
+    /// Move `value` into a storage; it drops nothing. The old content, where
+    /// the program holds it, is dropped by an explicit `Drop` before this
+    /// store (ownership §6). An assignment to a variable.
     Assign {
         target: RefTarget,
         path: Vec<PathSeg>,

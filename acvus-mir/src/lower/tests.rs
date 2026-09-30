@@ -741,7 +741,7 @@ fn a_context_is_a_place_by_name_with_nothing_at_entry_around_a_call_or_at_return
         })
         .collect();
     assert_eq!(shape, vec!["take", "call", "assign"], "{}", shown(body));
-    assert_eq!(body.contexts().iter().map(|(context, _)| *context).collect::<Vec<_>>(), vec![n]);
+    assert_eq!(body.contexts().iter().map(|named| named.context).collect::<Vec<_>>(), vec![n]);
     let off_the_chain = insts.iter().filter(|inst| names_context(inst.op(), n).is_some()).all(|inst| inst.order().is_none());
     assert!(off_the_chain, "a context not volatile carries no token: {}", shown(body));
 }
@@ -761,8 +761,8 @@ fn a_volatile_contexts_place_operations_carry_order_tokens() {
 }
 
 /// context §3: after the required steps a context is lent and assigned
-/// where the program does, and nothing takes it out to drop it: an assign
-/// into it drops what it held.
+/// where the program does, and an overwrite of a content the body holds is
+/// preceded by a take of that content, which is dropped.
 #[test]
 fn a_context_is_lent_and_assigned_as_written_through_the_required_steps() {
     let shape = |source: &str| {
@@ -779,8 +779,25 @@ fn a_context_is_lent_and_assigned_as_written_through_the_required_steps() {
         ops.iter().filter_map(|op| names_context(op, c)).collect::<Vec<_>>()
     };
     assert_eq!(shape("len(&@c)"), vec!["lend"], "only read");
-    assert_eq!(shape("@c = make(); len(&@c)"), vec!["assign", "lend"], "written before any read");
-    assert_eq!(shape("let n = len(&@c); @c = make(); n"), vec!["lend", "assign"], "read, then written");
+    assert_eq!(shape("@c = make(); len(&@c)"), vec!["take", "assign", "lend"], "written before any read");
+    assert_eq!(shape("let n = len(&@c); @c = make(); n"), vec!["lend", "take", "assign"], "read, then written");
+}
+
+/// context §1, §3: a volatile `String` context read twice is admitted
+/// through the required steps: each read, its content read again by the
+/// return, becomes a clone of a shared lend on the order chain.
+#[test]
+fn a_volatile_string_context_read_twice_is_admitted_through_clones() {
+    let mut fx = Fixture::new();
+    let (int, string) = (fx.int(), fx.ty(TyKind::String));
+    let both = fx.function(&[string, string], int, Effect::pure());
+    fx.declare("both", both, 2);
+    let tape = fx.context("tape", string, true);
+    let lowered = fx.required("let a = @tape; let b = @tape; both(a, b)");
+    let body = lowered.entry();
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let on_tape: Vec<_> = insts.iter().filter_map(|inst| names_context(inst.op(), tape).map(|kind| (kind, inst.order().is_some()))).collect();
+    assert_eq!(on_tape, vec![("lend", true), ("lend", true)], "{}", shown(body));
 }
 
 /// context §3: the full pipeline promotes no context. The store before the

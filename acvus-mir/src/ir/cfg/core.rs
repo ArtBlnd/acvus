@@ -1091,6 +1091,47 @@ impl Body {
         }
     }
 
+    /// Inserts an instruction of `op` at `at` on the order chain, where it
+    /// stands just before what comes next on the chain there: the
+    /// instruction `At::Before` names, which stands on it, or the token
+    /// the terminator of the block `At::End` names passes on. It consumes
+    /// that token and yields a new one, which the instruction or the
+    /// terminator consumes in its place. It returns its result, a new value
+    /// of `ty` where `ty` is given. Cost: O(its operands and the
+    /// terminator's), and amortized O(1) for its place.
+    ///
+    /// # Panics
+    /// `At::Before` names an instruction that does not consume a token by
+    /// an edge of the chain, or `At::End` a block whose terminator passes on
+    /// no token or several.
+    pub(super) fn insert_chained(&mut self, types: &Types<Concrete>, at: At, op: Op, ty: Option<Ty>, span: Span) -> Option<ValueId> {
+        let (next, before) = match at {
+            At::Before(next) => match self.inst(next).order {
+                Some(OrderUse::Edge(edge)) => (Site::Inst(next), edge.before),
+                other => panic!("{next:?} stands on the chain by an edge, not {other:?}; nothing is chained before it"),
+            },
+            At::End(block) => {
+                let mut tokens: SmallVec<[ValueId; 2]> = SmallVec::new();
+                for value in self.blocks[block.index()].terminator.operands() {
+                    if self.is_token(value) && !tokens.contains(&value) {
+                        tokens.push(value);
+                    }
+                }
+                let [token] = tokens[..] else {
+                    panic!("{block:?}'s terminator passes on one token to chain before, not {tokens:?}")
+                };
+                (Site::Term(block), token)
+            }
+        };
+        let id = self.peek_inst_id();
+        let result = ty.map(|ty| self.make_value(types, ty, Def::Inst(id)));
+        let after = self.make_token(types, self.ty_of(before), Def::Inst(id));
+        let inst = self.make_inst(op, result, Some(OrderUse::Edge(OrderEdge { before, after })), span);
+        self.link(at, inst);
+        self.replace_uses_at(next, before, after);
+        result
+    }
+
     /// Inserts a `Drop` of `value` at `at`. Cost: O(1) amortized.
     ///
     /// # Panics
@@ -1168,9 +1209,9 @@ impl Body {
             self.slot_spans.insert(copy, callee.slot_spans[slot]);
             copied.insert(*slot, copy);
         }
-        for (context, ty) in &callee.contexts {
-            if self.contexts.iter().all(|(named, _)| named != context) {
-                self.contexts.push((*context, *ty));
+        for named in &callee.contexts {
+            if self.contexts.iter().all(|held| held.context != named.context) {
+                self.contexts.push(*named);
             }
         }
         let base = self.blocks.len();

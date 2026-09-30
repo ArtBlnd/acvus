@@ -1,6 +1,7 @@
 //! Contexts (context §3): a context is a place outside the body, which a
 //! body names by `RefTarget::Context` and reads, takes, lends and assigns
-//! as any place. A body states the contexts it names; where the page is
+//! as any place. A body states the contexts it names, each with the
+//! volatility its declaration states; where the page is
 //! seen beyond the program, at a call that may touch a context and at a
 //! return, is `passes::analysis::Loans`' to record, not lower's. A
 //! volatile context's place operations are effects, on the order chain.
@@ -264,10 +265,15 @@ impl<'t> Namer<'t> {
     }
 }
 
-/// The body's entry: it states each context it names, with its type.
+/// The body's entry: it states each context it names, with its type and
+/// the volatility its declaration states.
 pub(super) fn enter_body(cx: &mut Lcx<'_, '_>, named: &Named) {
     for NamedContext { context, ty } in &named.contexts {
-        cx.builder.context(*context, *ty);
+        let volatile = cx
+            .decls
+            .context_is_volatile(*context)
+            .unwrap_or_else(|| panic!("the context {context:?} an admitted program names is declared"));
+        cx.builder.context(*context, *ty, volatile);
     }
 }
 

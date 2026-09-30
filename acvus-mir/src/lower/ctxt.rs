@@ -10,7 +10,7 @@ use acvus_utils::Astr;
 
 use crate::decl::Declarations;
 use crate::ir::cfg::{BlockId, Builder, Op, Terminator};
-use crate::ir::{Callee, Chosen as IrChosen, ExternImpl, RefTarget, ValueId};
+use crate::ir::{Callee, Chosen as IrChosen, ExternImpl, ValueId};
 use crate::ty::{Effect, IntTy, Mutability, Reissue, Ty, TyKind, TypeArg};
 use crate::typeck::{Chosen, Impl, Typeck};
 
@@ -166,38 +166,6 @@ impl<'a, 'm> Lcx<'a, 'm> {
     pub fn bind(&mut self, binder: AstId, home: Home, span: Span) {
         self.bindings.insert(binder, home);
         self.binder_spans.insert(binder, span);
-    }
-
-    /// Appends `op`, a `Take` or a `Ref`, typed `ty`, and returns its
-    /// result: on the order chain where it names a volatile context, whose
-    /// every place operation is an effect (context §3).
-    pub fn push_place(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
-        match self.volatile_place(&op) {
-            true => self.builder.push_effect(op, ty, span),
-            false => self.builder.push(op, ty, span),
-        }
-    }
-
-    /// Appends `op`, an `Assign`: on the order chain where it names a
-    /// volatile context, as `push_place` does.
-    pub fn push_store(&mut self, op: Op, span: Span) {
-        match self.volatile_place(&op) {
-            true => self.builder.push_effect_unit(op, span),
-            false => self.builder.push_unit(op, span),
-        }
-    }
-
-    /// Whether `op` names a context declared volatile.
-    ///
-    /// # Panics
-    /// It names a context the declarations do not declare.
-    fn volatile_place(&self, op: &Op) -> bool {
-        let Some((RefTarget::Context(context), _)) = op.place() else {
-            return false;
-        };
-        self.decls
-            .context_is_volatile(*context)
-            .unwrap_or_else(|| panic!("the context {context:?} an admitted program names is declared"))
     }
 
     /// The impl `chosen` reached, numbered as the IR numbers a generic

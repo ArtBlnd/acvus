@@ -902,8 +902,9 @@ pub enum CannotDrop {
 /// Whose part `drop_part` ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartOf {
-    /// A slot or a by-value parameter's own storage.
-    Place(ValueId),
+    /// A place by name: a slot, a by-value parameter's own storage or a
+    /// context.
+    Place(RefTarget),
     Value(ValueId),
 }
 
@@ -1289,31 +1290,49 @@ where
         Ok(())
     }
 
-    /// S3, for a storage: the whole content of `place`, a slot or a by-value
-    /// parameter's own storage, is taken out at `at` and dropped there, as
-    /// a `Take` of it followed by a `Drop` of what it took. Refused as
-    /// `ContentReadAfter` where the content may be read from `at` on.
+    /// S3, for a storage: the whole content of `place`, a place by name, a
+    /// slot, a by-value parameter's own storage or a context, is taken out
+    /// at `at` and dropped there, as a `Take` of it followed by a `Drop` of
+    /// what it took; the `Take` of a volatile context stands on the order
+    /// chain (context §3). Refused as `ContentReadAfter` where the content
+    /// may be read from `at` on.
     ///
     /// # Panics
-    /// `place` is neither a slot nor a parameter of the body, or `at` names
-    /// no position of the body.
-    pub fn drop_content(&mut self, place: ValueId, at: Position, span: Span) -> Result<(), CannotDrop> {
-        let target = match self.body_ref().def_of(place) {
-            Def::Slot { .. } => RefTarget::Var(place),
-            Def::Param(_) => RefTarget::Param(place),
-            def => panic!("{place:?} is defined at {def:?}, and only a slot or a parameter has its own storage"),
-        };
+    /// `place` is not a place by name of the body, or `at` names no
+    /// position of the body.
+    pub fn drop_content(&mut self, place: RefTarget, at: Position, span: Span) -> Result<(), CannotDrop> {
+        let ty = self.named_place_ty(place);
         let asked = Asked::new(self.module, self.body);
         if self.needs.content_read_after(asked, place, at) {
             return Err(CannotDrop::ContentReadAfter);
         }
-        let ty = self.body_ref().ty_of(place);
+        let taken = Op::Take { target: place, path: Vec::new(), taken_out: false };
         self.edit(|rewriter| {
-            let taken = Op::Take { target, path: Vec::new(), taken_out: false };
-            let content = rewriter.insert(at.at(), taken, ty, span);
+            let content = insert_place_op(rewriter, at.at(), taken, ty, span);
             rewriter.insert_drop(at.at(), content, span);
         });
         Ok(())
+    }
+
+    /// The type of `place`, a place by name of the body.
+    ///
+    /// # Panics
+    /// `place` names a slot that is none, a parameter that is none, or a
+    /// place through a reference.
+    fn named_place_ty(&self, place: RefTarget) -> Ty {
+        let body = self.body_ref();
+        match place {
+            RefTarget::Var(slot) => {
+                assert!(matches!(body.def_of(slot), Def::Slot { .. }), "{slot:?} is not a slot of the body");
+                body.ty_of(slot)
+            }
+            RefTarget::Param(param) => {
+                assert!(matches!(body.def_of(param), Def::Param(_)), "{param:?} is not a parameter of the body");
+                body.ty_of(param)
+            }
+            RefTarget::Context(context) => body.context_ty(context),
+            RefTarget::Through(reference) => panic!("a place through {reference:?} is not a place by name"),
+        }
     }
 
     /// S3, for a part (ownership §6): the part of `of` at `path` is taken
@@ -1333,15 +1352,11 @@ where
         let asked = Asked::new(self.module, self.body);
         let taken = match of {
             PartOf::Place(place) => {
-                let target = match self.body_ref().def_of(place) {
-                    Def::Slot { .. } => RefTarget::Var(place),
-                    Def::Param(_) => RefTarget::Param(place),
-                    def => panic!("{place:?} is defined at {def:?}, and only a slot or a parameter has its own storage"),
-                };
+                let holder = self.named_place_ty(place);
                 if self.needs.part_read_after(asked, place, path, at) {
                     return Err(CannotDrop::ContentReadAfter);
                 }
-                (place, Op::Take { target, path: path.to_vec(), taken_out: false })
+                (holder, Op::Take { target: place, path: path.to_vec(), taken_out: false })
             }
             PartOf::Value(value) => {
                 assert!(
@@ -1355,13 +1370,13 @@ where
                 }) {
                     return Err(CannotDrop::UsedAfter(site));
                 }
-                (value, extraction(self.module.types(), self.body_ref().ty_of(value), value, path))
+                (self.body_ref().ty_of(value), extraction(self.module.types(), self.body_ref().ty_of(value), value, path))
             }
         };
         let (holder, op) = taken;
-        let ty = parts::part_ty(self.module.types(), self.body_ref().ty_of(holder), path);
+        let ty = parts::part_ty(self.module.types(), holder, path);
         self.edit(|rewriter| {
-            let part = rewriter.insert(at.at(), op, ty, span);
+            let part = insert_place_op(rewriter, at.at(), op, ty, span);
             rewriter.insert_drop(at.at(), part, span);
         });
         Ok(())
@@ -1385,6 +1400,16 @@ where
         let mut uses: Vec<Site> = body.users(value).collect();
         uses.sort_by_key(|site| site_order(body, *site));
         uses.into_iter().find(|site| follows(*site) && counts(*site))
+    }
+}
+
+/// `op` inserted at `at`, typed `ty`: on the order chain where it is a
+/// place operation on a volatile context, whose every place operation is
+/// an effect (context §3), and off it otherwise.
+fn insert_place_op(rewriter: &mut Rewriter<'_>, at: At, op: Op, ty: Ty, span: Span) -> ValueId {
+    match rewriter.body().on_volatile_context(&op) {
+        true => rewriter.insert_chained(at, op, Some(ty), span).expect("a take yields what it takes"),
+        false => rewriter.insert(at, op, ty, span),
     }
 }
 
@@ -1438,8 +1463,9 @@ where
     /// `Ref` of that place and a `StringClone` of it, with the `Take`'s
     /// span; what used the `Take`'s result uses the clone, and the place
     /// keeps its content (ownership §3). `&String` is interned in the
-    /// module's table. Refused as `NotAString` where the place is not a
-    /// `String`.
+    /// module's table. The `Ref` of a volatile context stands on the order
+    /// chain, in the `Take`'s place there (context §3). Refused as
+    /// `NotAString` where the place is not a `String`.
     ///
     /// # Panics
     /// `take` is not a `Take`.
@@ -1457,7 +1483,7 @@ where
         let at = At::Before(take.id);
         let shifts = self.edit(|rewriter| {
             let lent = rewriter.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string)));
-            let reference = rewriter.insert(at, Op::Ref { target, path, mutability: Mutability::Shared }, lent, span);
+            let reference = insert_place_op(rewriter, at, Op::Ref { target, path, mutability: Mutability::Shared }, lent, span);
             let clone = rewriter.insert(at, Op::StringClone { src: reference }, string, span);
             rewriter.replace_all_uses(read, clone);
             rewriter.remove_inst(take.id).expect("a Take whose uses went to its clone has none")

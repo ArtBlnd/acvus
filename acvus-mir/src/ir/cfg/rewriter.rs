@@ -134,6 +134,23 @@ impl<'m> Rewriter<'m> {
         result
     }
 
+    /// Inserts an instruction of `op` on the order chain at `at`, and
+    /// returns its result where `ty` is given. Cost:
+    /// `Body::insert_chained`'s.
+    ///
+    /// # Panics
+    /// As `Body::insert_chained`.
+    pub fn insert_chained(&mut self, at: At, op: Op, ty: Option<Ty>, span: Span) -> Option<ValueId> {
+        let module = &mut *self.module;
+        let body = &mut module.bodies[self.body.0 as usize];
+        let inserted = body.peek_inst_id();
+        let result = body.insert_chained(&module.types, at, op, ty, span);
+        for aspect in inst_aspects(self.body().inst(inserted)) {
+            self.changes.record(aspect);
+        }
+        result
+    }
+
     /// Removes the instruction at `index` of `block`, refused while its
     /// result has uses; the token is rethreaded around an effectful call,
     /// and a split call's taking goes with its start. It returns the

@@ -136,6 +136,16 @@ impl UseSites {
     }
 }
 
+/// A context a body names: its type, and whether it is volatile, as its
+/// declaration states (context §3). The body carries it so that the IR
+/// reads volatility from itself alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BodyContext {
+    pub context: QualifiedRef,
+    pub ty: Ty,
+    pub volatile: bool,
+}
+
 pub struct Body {
     pub(super) ret: Ty,
     pub(super) blocks: Vec<BlockData>,
@@ -146,8 +156,9 @@ pub struct Body {
     pub(super) captures: Vec<(Astr, ValueId)>,
     pub(super) order_param: Option<ValueId>,
     pub(super) slots: Vec<ValueId>,
-    /// The contexts the body names, with their types (context §3).
-    pub(super) contexts: Vec<(QualifiedRef, Ty)>,
+    /// The contexts the body names, with their types and volatility
+    /// (context §3).
+    pub(super) contexts: Vec<BodyContext>,
     /// The span of the binding each slot stores.
     pub(super) slot_spans: FxHashMap<ValueId, Span>,
     /// The span of the binder each parameter and capture names.
@@ -760,11 +771,24 @@ impl Body {
         }
     }
 
-    /// The contexts the body names, each once, with its type, in the order
-    /// it first names them: the storage `RefTarget::Context` names (context
-    /// §3). Cost: O(1).
-    pub fn contexts(&self) -> &[(QualifiedRef, Ty)] {
+    /// The contexts the body names, each once, with its type and
+    /// volatility, in the order it first names them: the storage
+    /// `RefTarget::Context` names (context §3). Cost: O(1).
+    pub fn contexts(&self) -> &[BodyContext] {
         &self.contexts
+    }
+
+    /// `context`, which the body names. Cost: O(the body's contexts).
+    ///
+    /// # Panics
+    /// The body does not name `context`.
+    pub fn context(&self, context: QualifiedRef) -> BodyContext {
+        self.named_context(context).unwrap_or_else(|| panic!("the body names {context:?} among its contexts"))
+    }
+
+    /// `context`, where the body names it. Cost: O(the body's contexts).
+    pub fn named_context(&self, context: QualifiedRef) -> Option<BodyContext> {
+        self.contexts.iter().find(|named| named.context == context).copied()
     }
 
     /// The type of `context`, which the body names. Cost: O(the body's
@@ -773,11 +797,23 @@ impl Body {
     /// # Panics
     /// The body does not name `context`.
     pub fn context_ty(&self, context: QualifiedRef) -> Ty {
-        self.contexts
-            .iter()
-            .find(|(named, _)| *named == context)
-            .map(|(_, ty)| *ty)
-            .unwrap_or_else(|| panic!("the body names {context:?} among its contexts"))
+        self.context(context).ty
+    }
+
+    /// Whether `op` is a place operation on a volatile context, which is an
+    /// effect and stands on the order chain (context §3). Cost: O(the
+    /// body's contexts).
+    ///
+    /// # Panics
+    /// `op` names a context the body does not name.
+    pub fn on_volatile_context(&self, op: &Op) -> bool {
+        match op.place() {
+            Some((crate::ir::RefTarget::Context(context), _)) => self
+                .named_context(*context)
+                .unwrap_or_else(|| panic!("{op:?} names {context:?}, which the body does not name"))
+                .volatile,
+            _ => false,
+        }
     }
 
     /// Every value of the body, in no stated order. Cost: O(values).

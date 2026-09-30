@@ -57,14 +57,15 @@ pub struct Effect;
 pub struct Storage;
 /// Loop structure (compilation §4); its operations come with the loop design.
 pub struct Loop;
-/// Removal on a proven fact: dse, bce, and the required removal of unread
-/// loads and unwritten commits (G1).
+/// Removal on a proven fact: dse and bce (G1).
 pub struct Discharge;
 /// Inlining (S2).
 pub struct Inline;
-/// Drop insertion, used by the required step only (S3).
+/// Drop insertion, used by the required step only (S3); a take out of a
+/// volatile context stands on the order chain (context §3).
 pub struct Drops;
-/// Clones of `String` reads, used by the required step only (S4).
+/// Clones of `String` reads, used by the required step only (S4); a lend
+/// of a volatile context stands on the order chain (context §3).
 pub struct Clones;
 
 /// Every scope keeps these.
@@ -92,8 +93,8 @@ scope!(Storage, [Instructions, Storage], 'n => dyn LoanFacts + 'n, Base, [Promot
 scope!(Loop, [CfgShape, Instructions], 'n => NoFacts, Base, [EditsLoops]);
 scope!(Discharge, [Instructions, Storage, OrderTokens], 'n => dyn DischargeFacts + 'n, Base, [Discharges]);
 scope!(Inline, [CfgShape, Instructions, Storage, OrderTokens, Types], 'n => NoFacts, (Base, SplitTakenOnce), [Inlines]);
-scope!(Drops, [Instructions, Storage], 'n => dyn DropFacts + 'n, Base, [InsertsDrops]);
-scope!(Clones, [Instructions, Storage, Types], 'n => NoFacts, Base, [ClonesReads]);
+scope!(Drops, [Instructions, Storage, OrderTokens], 'n => dyn DropFacts + 'n, Base, [InsertsDrops]);
+scope!(Clones, [Instructions, Storage, OrderTokens, Types], 'n => NoFacts, Base, [ClonesReads]);
 
 /// What motion reads: dominance and loans. Effect order is not motion's:
 /// an effect's token keeps it on its chain, so dominance alone keeps it in

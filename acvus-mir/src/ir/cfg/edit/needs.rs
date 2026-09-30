@@ -6,7 +6,7 @@
 
 use super::{InstRef, Position};
 use crate::ir::cfg::{Body, BodyId, Changes, Module, Site};
-use crate::ir::{PathSeg, ValueId};
+use crate::ir::{PathSeg, RefTarget, ValueId};
 
 /// The body a query asks about, in the module that holds it, as it stands
 /// when the query is made.
@@ -93,13 +93,12 @@ pub enum Unobserved {
 }
 
 pub trait ContentFacts: Facts {
-    /// Whether the content of `place`, a slot or a by-value parameter's
-    /// own storage, may be read from `at` on, before a whole store replaces
-    /// it or the body ends.
-    fn content_read_after(&mut self, asked: Asked<'_>, place: ValueId, at: Position) -> bool;
+    /// Whether the content of `place`, a place by name, may be read from
+    /// `at` on, before a whole store replaces it or the body ends.
+    fn content_read_after(&mut self, asked: Asked<'_>, place: RefTarget, at: Position) -> bool;
     /// Whether any part of `place`'s content overlapping `path` may be read
     /// from `at` on, before a store replaces that part or the body ends.
-    fn part_read_after(&mut self, asked: Asked<'_>, place: ValueId, path: &[PathSeg], at: Position) -> bool;
+    fn part_read_after(&mut self, asked: Asked<'_>, place: RefTarget, path: &[PathSeg], at: Position) -> bool;
 }
 
 pub trait DischargeFacts: Facts {

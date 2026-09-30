@@ -216,7 +216,8 @@ pub enum RefTarget {
     Through(ValueId),
     /// A context, a place outside the body on the host's page, by its name
     /// (context §3). It aliases no other place. `Take` copies or moves it
-    /// by its type, `Assign` drops what it held, `Ref` lends it in place.
+    /// by its type, `Assign` stores into it as into any place, `Ref` lends
+    /// it in place.
     Context(QualifiedRef),
 }
 
