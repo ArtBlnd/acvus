@@ -47,9 +47,6 @@ where
     }
 
     /// The sum of the powers; the unit has degree zero.
-    ///
-    /// # Panics
-    /// The sum leaves `u32`, as `mul` panics.
     pub fn degree(&self) -> u32 {
         self.factors
             .iter()
@@ -62,12 +59,10 @@ where
         self.factors.iter().map(|(atom, power)| (atom, *power))
     }
 
-    /// `self · other`: powers of a shared atom add.
-    ///
-    /// # Panics
-    /// A power leaves `u32`. A polynomial never asks for such a product,
-    /// since its monomials stay within `MAX_DEGREE`.
-    pub fn mul(&self, other: &Self) -> Self {
+    /// `self · other`: powers of a shared atom add. Only a polynomial's
+    /// product calls it, after refusing a degree past `MAX_DEGREE`, so no
+    /// power it builds leaves `u32`.
+    fn mul(&self, other: &Self) -> Self {
         let mut powers: BTreeMap<&A, u32> = self.factors().collect();
         for (atom, power) in other.factors() {
             let sum = powers.entry(atom).or_insert(0);
