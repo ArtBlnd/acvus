@@ -9,31 +9,36 @@ use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::entry::SiteShape;
 use crate::boundary::seal::ExternFns;
+use crate::decl::Declaration;
 use crate::done::Done;
 use crate::runtime::Runtime;
 
-/// A function a runtime can register: its path, and its dispatch at the
-/// runtime `R`. Only `#[extern_fn]` implements it (the seal); a dispatch
+/// A function's dispatch at the runtime `R`: a registered function's, or a
+/// function value's. Only `#[extern_fn]` implements it (the seal); a dispatch
 /// written by hand could open an argument at another type than the
 /// declaration's.
 pub trait ExternFn<R: Runtime>: ExternFns + Send + Sync + 'static {
-    /// The declaration's path, the name a compiled call names it by.
-    fn path(&self, names: &Interner) -> QualifiedRef;
-
     /// Runs one call: the entry over `args` and `site`, each argument opened
     /// by its mode, the body, and its result.
     fn call(&self, runtime: &R, args: &[R::Value], site: &SiteShape<R>) -> Done<R>;
 }
 
-/// An awaited function a runtime can register: its path, and its dispatch at
-/// the runtime `R`, whose call is a future the runtime awaits. The future's
+/// A function a registry declares: its path and what the compiler knows of
+/// it. A function value is a dispatch only, and has neither.
+pub trait Declared {
+    /// The declaration's path, the name a compiled call names it by.
+    fn path(&self, names: &Interner) -> QualifiedRef;
+
+    /// What the compiler knows of the function.
+    fn declaration(&self, names: &Interner) -> Declaration;
+}
+
+/// An awaited function's dispatch at the runtime `R`, whose call is a future
+/// the runtime awaits. The future's
 /// type is the function's own; the runtime registering it is generic over the
 /// function, so how it holds the function and its future is the runtime's
 /// own. Only `#[extern_fn]` implements it (the seal), for an `async fn`.
 pub trait AwaitedFn<R: Runtime>: ExternFns + Send + Sync + 'static {
-    /// The declaration's path, the name a compiled call names it by.
-    fn path(&self, names: &Interner) -> QualifiedRef;
-
     /// Runs one call: the entry over `args` and `site`, each argument opened
     /// by its mode before the future is made, the body awaited, and its
     /// result.
@@ -58,11 +63,11 @@ pub enum Refused {
 pub trait Registers: Runtime {
     fn register<F>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: ExternFn<Self>;
+        F: ExternFn<Self> + Declared;
 
     fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: AwaitedFn<Self>;
+        F: AwaitedFn<Self> + Declared;
 
     /// The returning function registered at `path`.
     fn registered(&self, path: QualifiedRef) -> Option<&dyn ExternFn<Self>>;

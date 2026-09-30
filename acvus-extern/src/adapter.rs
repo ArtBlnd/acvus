@@ -26,7 +26,7 @@ use crate::boundary::instance::InstanceEntry;
 use crate::impls::{Family, Instances, Task};
 use crate::boundary::entry::SiteShape;
 use crate::done::Done;
-use crate::register::{AwaitedFn, ExternFn, Refused, Registers};
+use crate::register::{AwaitedFn, Declared, ExternFn, Refused, Registers};
 use crate::boundary::uniform::Primitive;
 use crate::runtime::{
     Crosses, Mutability, Opaque, OpaqueKind, OptionKind, PrimitiveKind, RefKind, RefTarget, ResultKind, Runtime,
@@ -721,17 +721,17 @@ impl<X: Runtime> Adapter<X> {
 impl<X: Runtime> Registers for Adapter<X> {
     fn register<F>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: ExternFn<Self>,
+        F: ExternFn<Self> + Declared,
     {
-        let path = ExternFn::path(&f, self.inner.interner());
+        let path = Declared::path(&f, self.inner.interner());
         self.enter(path, Registered::Returning(Box::new(f)))
     }
 
     fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: AwaitedFn<Self>,
+        F: AwaitedFn<Self> + Declared,
     {
-        let path = AwaitedFn::path(&f, self.inner.interner());
+        let path = Declared::path(&f, self.inner.interner());
         self.enter(path, Registered::Awaited(Box::new(f)))
     }
 

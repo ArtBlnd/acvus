@@ -5,6 +5,7 @@ edition = "2024"
 license-file.workspace = true
 
 [dependencies]
+acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
 
 [dev-dependencies]

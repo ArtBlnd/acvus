@@ -10,7 +10,7 @@ use acvus_extern::callback::{CallArgs, CallsBack, LoanForm};
 use acvus_extern::{Settled, SiteShape};
 use acvus_extern::runtime::{Crosses, Mutability, Runtime};
 use acvus_extern::done::Done;
-use acvus_extern::register::{AwaitedFn, ExternFn, Refused, Registers};
+use acvus_extern::register::{AwaitedFn, Declared, ExternFn, Refused, Registers};
 use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::{self, Held, Kinds, Word};
@@ -67,17 +67,17 @@ impl WordRuntime {
 impl Registers for WordRuntime {
     fn register<F>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: ExternFn<Self>,
+        F: ExternFn<Self> + Declared,
     {
-        let path = ExternFn::path(&f, &self.interner);
+        let path = Declared::path(&f, &self.interner);
         self.enter(path, Registered::Returning(Box::new(f)))
     }
 
     fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: AwaitedFn<Self>,
+        F: AwaitedFn<Self> + Declared,
     {
-        let path = AwaitedFn::path(&f, &self.interner);
+        let path = Declared::path(&f, &self.interner);
         self.enter(path, Registered::Awaited(Box::new(f)))
     }
 

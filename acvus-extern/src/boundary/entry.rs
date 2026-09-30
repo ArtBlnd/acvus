@@ -3,6 +3,7 @@
 //! arguments and its context inside a closure (G1, G9, G10).
 
 use std::marker::PhantomData;
+use std::ops::Deref;
 
 use crate::context::{Awaited, Returning};
 use crate::done::Done;
@@ -107,6 +108,23 @@ pub trait Mode<R: Runtime>: sealed::Sealed {
     where
         Self: 'c,
         R: 'c;
+
+    /// The Rust argument the handler's parameter takes, borrowed for `'h`.
+    type Arg<'h, 'c>
+    where
+        'c: 'h,
+        Self: 'c,
+        R: 'c;
+
+    /// The handler's argument made from what the entry opened: a value moved
+    /// on, or a lent one kept in `keep` for the call and borrowed from it.
+    /// The glue holds one `keep` per parameter, so a synchronous and an
+    /// awaited body pass arguments alike.
+    fn arg<'h, 'c>(opened: Self::Opened<'c>, keep: &'h mut Option<Self::Opened<'c>>) -> Self::Arg<'h, 'c>
+    where
+        'c: 'h,
+        Self: 'c,
+        R: 'c;
 }
 
 /// A requirement's mode: how the entry opens the impl the site chose.
@@ -199,8 +217,25 @@ use crate::impls::receiver::{Reads, Steps};
 use crate::impls::{Family, Instances};
 use crate::runtime::{Crosses, RefKind};
 
+/// How a mode's opened value becomes the handler's argument: moved on, or
+/// kept and borrowed, shared or exclusive.
+macro_rules! passed {
+    (moved, $opened:ty) => { $opened };
+    (kept, $opened:ty) => { &'h <$opened as ::std::ops::Deref>::Target };
+    (kept_mut, $opened:ty) => { &'h mut <$opened as ::std::ops::Deref>::Target };
+}
+
+macro_rules! pass {
+    (moved, $opened:ident, $keep:ident) => {{
+        let _ = $keep;
+        $opened
+    }};
+    (kept, $opened:ident, $keep:ident) => { &**$keep.insert($opened) };
+    (kept_mut, $opened:ident, $keep:ident) => { &mut **$keep.insert($opened) };
+}
+
 macro_rules! modes {
-    ($([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
+    ($([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, $passed:ident, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
         impl<$($g)*> sealed::Sealed for $m {}
 
         impl<R: Runtime, $($g)*> Mode<R> for $m {
@@ -218,6 +253,22 @@ macro_rules! modes {
             {
                 $open
             }
+
+            type Arg<'h, 'c>
+                = passed!($passed, $opened)
+            where
+                'c: 'h,
+                Self: 'c,
+                R: 'c;
+
+            fn arg<'h, 'c>(opened: Self::Opened<'c>, keep: &'h mut Option<Self::Opened<'c>>) -> Self::Arg<'h, 'c>
+            where
+                'c: 'h,
+                Self: 'c,
+                R: 'c,
+            {
+                pass!($passed, opened, keep)
+            }
         }
     )+};
 }
@@ -226,15 +277,15 @@ const SHARED: Option<Mutability> = Some(Mutability::Shared);
 const EXCLUSIVE: Option<Mutability> = Some(Mutability::Exclusive);
 
 modes! {
-    [T] ByUniform<T> => Uniform<R, T>, None,
+    [T] ByUniform<T> => Uniform<R, T>, None, moved,
         |_runtime, v, _at| Uniform::of_the_crossing(*v);
-    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED,
+    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED, kept,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
-    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, EXCLUSIVE,
+    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, EXCLUSIVE, kept_mut,
         |runtime, v, at| GuardMut::of_the_entry(<R::Ref as RefKind<R>>::target_mut(runtime, *v, at));
-    [] ByStr => Guard<'c, &'c str>, SHARED,
+    [] ByStr => Guard<'c, &'c str>, SHARED, kept,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
-    [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None,
+    [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None, moved,
         |_runtime, v, _at| Callback::of_the_entry(*v);
 }
 
@@ -256,6 +307,22 @@ impl<R: Runtime, T: Crosses<R>> Mode<R> for ByValue<T> {
     {
         T::take(runtime, *v, at)
     }
+
+    type Arg<'h, 'c>
+        = T
+    where
+        'c: 'h,
+        Self: 'c,
+        R: 'c;
+
+    fn arg<'h, 'c>(opened: T, _keep: &'h mut Option<T>) -> T
+    where
+        'c: 'h,
+        Self: 'c,
+        R: 'c,
+    {
+        opened
+    }
 }
 
 impl<T> sealed::Sealed for ByRef<T> {}
@@ -276,6 +343,22 @@ impl<R: Runtime, T: Crosses<R>> Mode<R> for ByRef<T> {
     {
         Guard::of_the_entry(T::open_ref(runtime, *v, at))
     }
+
+    type Arg<'h, 'c>
+        = &'h <T::Open<'c> as Deref>::Target
+    where
+        'c: 'h,
+        Self: 'c,
+        R: 'c;
+
+    fn arg<'h, 'c>(opened: Self::Opened<'c>, keep: &'h mut Option<Self::Opened<'c>>) -> Self::Arg<'h, 'c>
+    where
+        'c: 'h,
+        Self: 'c,
+        R: 'c,
+    {
+        &**keep.insert(opened)
+    }
 }
 
 impl<T> sealed::Sealed for ByMut<T> {}
@@ -295,6 +378,22 @@ impl<R: Runtime, T: Crosses<R>> Mode<R> for ByMut<T> {
         R: 'c,
     {
         GuardMut::of_the_entry(T::open_ref_mut(runtime, *v, at))
+    }
+
+    type Arg<'h, 'c>
+        = &'h mut <T::OpenMut<'c> as Deref>::Target
+    where
+        'c: 'h,
+        Self: 'c,
+        R: 'c;
+
+    fn arg<'h, 'c>(opened: Self::Opened<'c>, keep: &'h mut Option<Self::Opened<'c>>) -> Self::Arg<'h, 'c>
+    where
+        'c: 'h,
+        Self: 'c,
+        R: 'c,
+    {
+        &mut **keep.insert(opened)
     }
 }
 

@@ -78,6 +78,7 @@ dependencies = [
 name = "acvus-extern"
 version = "0.1.0"
 dependencies = [
+ "acvus-mir",
  "acvus-utils",
  "tokio",
 ]
@@ -99,6 +100,7 @@ name = "acvus-extern-test"
 version = "0.1.0"
 dependencies = [
  "acvus-extern",
+ "acvus-mir",
  "acvus-utils",
  "tokio",
 ]

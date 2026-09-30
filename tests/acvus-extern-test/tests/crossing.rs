@@ -17,7 +17,10 @@ use acvus_extern::context::Returning;
 use acvus_extern::guard::{Guard, GuardMut};
 use acvus_extern::mode::{ByCallback, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use acvus_extern::done::Done;
-use acvus_extern::register::{AwaitedFn, ExternFn, Refused, Registers};
+use acvus_extern::decl::{Binders, DeclCx, DeclType, Declaration, Role};
+use acvus_extern::register::{AwaitedFn, Declared, ExternFn, Refused, Registers};
+use acvus_mir::decl::DeclaredFacts;
+use acvus_mir::ty::Effect;
 use acvus_extern::runtime::{Crosses, Mutability, Runtime};
 use acvus_extern::{Entry, SiteShape};
 use acvus_utils::{Interner, QualifiedRef};
@@ -127,11 +130,34 @@ struct Add;
 #[allow(unsafe_code)]
 unsafe impl acvus_extern::seal::ExternFns for Add {}
 
-impl<R: Runtime> ExternFn<R> for Add {
+/// A declaration of the parameters `params`, each of its type, and the result
+/// `U`, pure, standing in for what `#[extern_fn]` reads off a signature.
+fn declared<U: DeclType>(names: &Interner, path: &str, params: &[(&str, fn(&mut DeclCx<'_>) -> acvus_extern::decl::DeclTy)]) -> Declaration {
+    let mut cx = DeclCx { names };
+    Declaration {
+        path: QualifiedRef::root(names.intern(path)),
+        binders: Binders::default(),
+        params: params.iter().map(|(name, ty)| (names.intern(name), ty(&mut cx))).collect(),
+        result: U::decl_ty(&mut cx),
+        effect: Effect::pure(),
+        runs: Vec::new(),
+        facts: DeclaredFacts::default(),
+        requires: Vec::new(),
+        role: Role::Function,
+    }
+}
+
+impl Declared for Add {
     fn path(&self, names: &Interner) -> QualifiedRef {
         QualifiedRef::root(names.intern("add"))
     }
 
+    fn declaration(&self, names: &Interner) -> Declaration {
+        declared::<u64>(names, "add", &[("a", u64::decl_ty), ("b", u64::decl_ty)])
+    }
+}
+
+impl<R: Runtime> ExternFn<R> for Add {
     fn call(&self, runtime: &R, args: &[R::Value], site: &SiteShape<R>) -> Done<R> {
         Entry::new(runtime, args, site).open::<(ByValue<u64>, ByValue<u64>), ()>(|cx, (a, b), ()| cx.finish(a + b))
     }
@@ -166,11 +192,17 @@ struct Measure;
 #[allow(unsafe_code)]
 unsafe impl acvus_extern::seal::ExternFns for Measure {}
 
-impl<R: Runtime> AwaitedFn<R> for Measure {
+impl Declared for Measure {
     fn path(&self, names: &Interner) -> QualifiedRef {
         QualifiedRef::root(names.intern("measure"))
     }
 
+    fn declaration(&self, names: &Interner) -> Declaration {
+        declared::<i64>(names, "measure", &[("text", String::decl_ty)])
+    }
+}
+
+impl<R: Runtime> AwaitedFn<R> for Measure {
     fn call<'c>(
         &'c self,
         runtime: &'c R,
@@ -204,10 +236,15 @@ fn registered_both_ways<R: Registers<Value = Word>>(mut runtime: R) {
     // SAFETY: as `Measure`'s; this one only takes the path `add`.
     #[allow(unsafe_code)]
     unsafe impl acvus_extern::seal::ExternFns for AddAwaited {}
-    impl<R: Runtime> AwaitedFn<R> for AddAwaited {
+    impl Declared for AddAwaited {
         fn path(&self, names: &Interner) -> QualifiedRef {
             QualifiedRef::root(names.intern("add"))
         }
+        fn declaration(&self, names: &Interner) -> Declaration {
+            declared::<()>(names, "add", &[])
+        }
+    }
+    impl<R: Runtime> AwaitedFn<R> for AddAwaited {
         fn call<'c>(
             &'c self,
             runtime: &'c R,
@@ -645,10 +682,6 @@ where
     U: Crosses<R>,
     F: for<'c> Fn(&Returning<'c, R>, A::Opened<'c>) -> U + Send + Sync + 'static,
 {
-    fn path(&self, names: &Interner) -> QualifiedRef {
-        QualifiedRef::root(names.intern("lambda"))
-    }
-
     fn call(&self, runtime: &R, args: &[R::Value], site: &SiteShape<R>) -> Done<R> {
         Entry::new(runtime, args, site).open::<A, ()>(|cx, args, ()| {
             let result = (self.f)(&cx, args);
