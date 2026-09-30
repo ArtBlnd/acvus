@@ -91,7 +91,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         body_effect,
         interface: cx.out.interface.take(),
         result,
-        refusals: std::mem::take(&mut cx.out.refusals),
+        refusals: super::refusal::frozen(&cx.infer, std::mem::take(&mut cx.out.refusals)),
     }
 }
 

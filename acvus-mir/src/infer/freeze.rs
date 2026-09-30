@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 use super::cells::{Cells, End as CellEnd, VarTerm};
 use super::{Infer, Term, VarState};
 use crate::ty::{
-    Concrete, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, MarkTerm, ObjectTy, Ty,
+    Concrete, Effect, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, MarkTerm, ObjectTy, Ty,
     TyKind, TyVarId, Types,
 };
 
@@ -40,10 +40,7 @@ impl Infer {
             return Ok(*done);
         }
         let frozen = match self.types.kind(term) {
-            TyKind::Var(var) => match &self.ty_vars[var.0 as usize] {
-                VarState::Unbound(_) => return Err(Unsettled::Ty(*var)),
-                VarState::Bound(to) => self.freeze(into, memo, *to)?,
-            },
+            TyKind::Var(var) => self.freeze_var(into, memo, *var)?,
             kind => {
                 let kind = self.freeze_kind(into, memo, kind)?;
                 into.intern(kind)
@@ -51,6 +48,19 @@ impl Infer {
         };
         memo.done.insert(term, frozen);
         Ok(frozen)
+    }
+
+    /// The type `var` is bound to, frozen.
+    pub fn freeze_var(&self, into: &mut Types<Concrete>, memo: &mut FreezeMemo, var: TyVarId) -> Result<Ty, Unsettled> {
+        match &self.ty_vars[var.0 as usize] {
+            VarState::Unbound(_) => Err(Unsettled::Ty(var)),
+            VarState::Bound(to) => self.freeze(into, memo, *to),
+        }
+    }
+
+    /// The effect `effect` settled to.
+    pub fn freeze_effect(&self, effect: &EffectTerm<InferPhase>) -> Result<Effect, Unsettled> {
+        self.settled(&self.effect_vars, effect)
     }
 
     fn freeze_kind(

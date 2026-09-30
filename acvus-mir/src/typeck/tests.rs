@@ -5,7 +5,7 @@ use acvus_ast::{AstId, ElseBranch, Expr, Script, Stmt, Template};
 use acvus_utils::{Astr, Interner, Namespace, QualifiedRef};
 
 use super::{
-    Adjustment, Capture, CaptureOf, Captured, Exceeding, Impl, Inputs, Interfaces, Iteration, Name, RefusalKind, TryExit, Typeck, UnitCall,
+    Adjustment, Capture, CaptureOf, Captured, Exceeding, FrozenMismatch, Impl, Inputs, Interfaces, Iteration, Name, RefusalKind, TryExit, Typeck, UnitCall,
     check_script, check_template,
 };
 use super::decision::variables_of;
@@ -1568,12 +1568,34 @@ fn a_function_value_a_call_gives_whose_effect_does_not_fit_is_a_mismatch_of_effe
     let touching = fx.pure(&[], opaque);
     fx.declare("touching", touching, &[]);
     let (checked, _) = fx.script("apply(touching())");
-    let [RefusalKind::Mismatch(crate::infer::Mismatch::Effects { a_is, b_is, .. })] = checked.refusals()[..] else {
+    let [RefusalKind::Mismatch(FrozenMismatch { mismatch: Mismatch::Effects { a_is, b_is, .. }, .. })] = checked.refusals()[..] else {
         panic!("one mismatch of effects: {:?}", checked.refusals());
     };
     let mut effects = [a_is.clone(), b_is.clone()];
     effects.sort_by_key(|effect| effect.reissue());
     assert_eq!(effects, [crate::ty::Effect::pure(), crate::ty::Effect::opaque()]);
+}
+
+/// A refusal states the effects that did not meet, each as the type printer
+/// writes an effect, frozen at writeback: the declared slot's `pure` and
+/// the call's result's `opaque`.
+#[test]
+fn a_mismatch_of_effects_prints_both_effects() {
+    let mut fx = Fixture::new();
+    declare_apply(&mut fx);
+    let i64_ty = fx.int(IntTy::I64);
+    let opaque = fx.function(&[i64_ty], i64_ty, EffectTerm::Known(crate::ty::Effect::opaque()));
+    let touching = fx.pure(&[], opaque);
+    fx.declare("touching", touching, &[]);
+    let names = fx.names.clone();
+    let (checked, _) = fx.script("apply(touching())");
+    let [refusal] = &checked.typeck.refusals[..] else {
+        panic!("one refusal: {:?}", checked.refusals());
+    };
+    let written = refusal.kind.written(&names);
+    let mut effects: Vec<&str> = written.strip_prefix("Mismatch Effects ").unwrap_or_else(|| panic!("{written}")).split(' ').collect();
+    effects.sort_unstable();
+    assert_eq!(effects, ["opaque", "pure"], "{written}");
 }
 
 /// `apply`, a pure `core::add` at `i64`, and `touch(i64) -> i64`, opaque.
@@ -1928,7 +1950,28 @@ fn an_object_lacking_a_field_its_parameter_names_is_refused() {
     let takes = fx.pure(&[object], unit);
     fx.declare("f", takes, &[]);
     let (checked, _) = fx.script("f({ a: 1, })");
-    assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(crate::infer::Mismatch::Heads { .. })]), "{:?}", checked.refusals());
+    assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(FrozenMismatch { mismatch: Mismatch::Heads { .. }, .. })]), "{:?}", checked.refusals());
+}
+
+/// A refusal states the types that did not meet: a heads mismatch prints
+/// the value's type and the slot's after its shape, frozen at writeback,
+/// where the literal no use decided is `i64` (types §5). A refusal cloned
+/// is equal to it, its types in a table of its own.
+#[test]
+fn a_mismatch_of_heads_prints_both_types() {
+    let mut fx = Fixture::new();
+    let (a, b) = (fx.name("a"), fx.name("b"));
+    let (i64_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::Unit));
+    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, i64_ty), (b, i64_ty)]), ())));
+    let takes = fx.pure(&[object], unit);
+    fx.declare("f", takes, &[]);
+    let names = fx.names.clone();
+    let (checked, _) = fx.script("f({ a: 1, })");
+    let [refusal] = &checked.typeck.refusals[..] else {
+        panic!("one refusal: {:?}", checked.refusals());
+    };
+    assert_eq!(refusal.kind.written(&names), "Mismatch Heads {a: i64} {a: i64, b: i64}");
+    assert_eq!(&refusal.clone(), refusal);
 }
 
 /// types §3: an enum entering a declaration's parameter widens to the
@@ -1947,7 +1990,7 @@ fn an_enum_widens_to_the_variants_a_declarations_parameter_names() {
         fx.declare("f", takes, &[]);
         let (checked, script) = fx.script(source);
         if !admitted {
-            assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(crate::infer::Mismatch::Heads { .. })]), "{:?}", checked.refusals());
+            assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(FrozenMismatch { mismatch: Mismatch::Heads { .. }, .. })]), "{:?}", checked.refusals());
             continue;
         }
         checked.admitted();
@@ -3034,7 +3077,7 @@ fn a_reference_to_a_structure_is_coerced_through_its_target() {
         let (checked, _) = fx.script(source);
         match admitted {
             true => checked.admitted(),
-            false => assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(crate::infer::Mismatch::Heads { .. })]), "{:?}", checked.refusals()),
+            false => assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(FrozenMismatch { mismatch: Mismatch::Heads { .. }, .. })]), "{:?}", checked.refusals()),
         }
     }
 }
@@ -3760,7 +3803,7 @@ fn is_named(checked: &Checked, ty: Ty, named: QualifiedRef) -> bool {
 /// parameter, a node that climbs to no ancestor, so the two stay two
 /// heads (types §3).
 fn refused_as_two_heads(checked: &Checked) -> bool {
-    matches!(checked.refusals()[..], [RefusalKind::Mismatch(Mismatch::Heads { .. })])
+    matches!(checked.refusals()[..], [RefusalKind::Mismatch(FrozenMismatch { mismatch: Mismatch::Heads { .. }, .. })])
 }
 
 /// `source` checked against the identity fixture, `ancestor` as it says,

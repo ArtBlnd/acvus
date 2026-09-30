@@ -135,7 +135,7 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             }
             if let Some(effect) = effect {
                 out.push_str(" with ");
-                out.push_str(&carried_effect(names, known_effect(effect)));
+                out.push_str(&self::effect(names, known_effect(effect)));
             }
             let mut carried: Vec<String> = Vec::new();
             if let Some(identity) = identity {
@@ -222,10 +222,10 @@ fn effect_terms(names: &Interner, effect: &Effect) -> Vec<String> {
     terms
 }
 
-/// The effect an extern-defined type carries: its terms, several in
-/// parentheses, and `opaque` where it has none, so a type carrying the
-/// opaque effect never prints as one carrying no effect.
-fn carried_effect(names: &Interner, effect: &Effect) -> String {
+/// An effect standing alone, as an extern-defined type carries one: its
+/// terms, several in parentheses, and `opaque` where it has none, so the
+/// opaque effect never prints as no effect.
+pub fn effect(names: &Interner, effect: &Effect) -> String {
     let terms = effect_terms(names, effect);
     match terms.as_slice() {
         [] => "opaque".to_string(),

@@ -23,33 +23,59 @@ use crate::ty::{
     ObjectTy, TyKind, TyVarId,
 };
 
+/// What a mismatch holds of each kind of term: the check's own terms while
+/// solving, and what they froze to once the check is done
+/// (`typeck::FrozenMismatch`).
+pub trait MismatchTerms: std::fmt::Debug + Clone + PartialEq {
+    type Ty: std::fmt::Debug + Clone + PartialEq;
+    type TyVar: std::fmt::Debug + Clone + PartialEq;
+    type Effect: std::fmt::Debug + Clone + PartialEq;
+}
+
+/// A mismatch's terms while solving: the check's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Solving;
+
+impl MismatchTerms for Solving {
+    type Ty = Term;
+    type TyVar = TyVarId;
+    type Effect = EffectTerm<InferPhase>;
+}
+
+/// Each term of one mismatch taken to another representation of its terms.
+pub trait MapMismatch<From: MismatchTerms, Into: MismatchTerms> {
+    fn ty(&mut self, ty: From::Ty) -> Into::Ty;
+    fn ty_var(&mut self, var: From::TyVar) -> Into::TyVar;
+    fn effect(&mut self, effect: From::Effect) -> Into::Effect;
+}
+
 /// Why two terms do not relate: B's refusals (refusals).
 #[derive(Debug, Clone, PartialEq)]
-pub enum Mismatch {
+pub enum Mismatch<T: MismatchTerms = Solving> {
     /// Two heads that are not one head.
-    Heads { a: Term, b: Term },
+    Heads { a: T::Ty, b: T::Ty },
     /// A variable would contain itself (occurs check).
-    Occurs { var: TyVarId, in_term: Term },
+    Occurs { var: T::TyVar, in_term: T::Ty },
     /// A field an opaque object lacks, which a transparent one would add.
-    OpaqueLacksField { object: Term, field: Astr },
+    OpaqueLacksField { object: T::Ty, field: Astr },
     /// A variant a closed enum lacks (patterns §2).
-    OpaqueLacksVariant { r#enum: Term, tag: Astr },
+    OpaqueLacksVariant { r#enum: T::Ty, tag: Astr },
     /// Two enums of two names (types §2).
     TwoEnums { a: QualifiedRef, b: QualifiedRef },
     /// A variable's bound does not admit the term.
-    Bound { var: TyVarId, term: Term },
+    Bound { var: T::TyVar, term: T::Ty },
     /// No subtyping relates a value and its slot, and not exactly one
     /// declared conversion takes the value's head to the slot's: these are
     /// the ones that do, none or several (types §7).
     Conversions { candidates: Box<[QualifiedRef]> },
     /// A reference whose target would be a reference (types §4).
-    ReferenceToReference { target: Term },
+    ReferenceToReference { target: T::Ty },
     /// Two function types whose effects differ, or whose effect one side
     /// fixed and the other would grow past (types §2, D94): the two effect
     /// terms, and what each is.
     Effects {
-        a: EffectTerm<InferPhase>,
-        b: EffectTerm<InferPhase>,
+        a: T::Effect,
+        b: T::Effect,
         a_is: Effect,
         b_is: Effect,
     },
@@ -61,15 +87,15 @@ pub enum Mismatch {
     Values { a: Option<FnValues>, b: Option<FnValues> },
     /// Two marks that are not one: a mark fixed marked, by a `#`
     /// parameter, that a use would raise (types §8).
-    Mark { a: Term, b: Term },
+    Mark { a: T::Ty, b: T::Ty },
     /// An identity made in a body instantiation would enter what was made
     /// outside it, with no ancestor carrying no identity to take instead
     /// (types §3).
-    IdentityEscapes { term: Term },
+    IdentityEscapes { term: T::Ty },
 }
 
-impl Mismatch {
-    /// Which relation failed, without its terms, which are the check's.
+impl<T: MismatchTerms> Mismatch<T> {
+    /// Which relation failed, without its terms.
     pub fn shape(&self) -> &'static str {
         match self {
             Mismatch::Heads { .. } => "Heads",
@@ -85,6 +111,26 @@ impl Mismatch {
             Mismatch::Values { .. } => "Values",
             Mismatch::Mark { .. } => "Mark",
             Mismatch::IdentityEscapes { .. } => "IdentityEscapes",
+        }
+    }
+
+    /// This mismatch with each of its terms taken through `map`, every
+    /// other part as it is.
+    pub fn map<Into: MismatchTerms>(self, map: &mut impl MapMismatch<T, Into>) -> Mismatch<Into> {
+        match self {
+            Mismatch::Heads { a, b } => Mismatch::Heads { a: map.ty(a), b: map.ty(b) },
+            Mismatch::Occurs { var, in_term } => Mismatch::Occurs { var: map.ty_var(var), in_term: map.ty(in_term) },
+            Mismatch::OpaqueLacksField { object, field } => Mismatch::OpaqueLacksField { object: map.ty(object), field },
+            Mismatch::OpaqueLacksVariant { r#enum, tag } => Mismatch::OpaqueLacksVariant { r#enum: map.ty(r#enum), tag },
+            Mismatch::TwoEnums { a, b } => Mismatch::TwoEnums { a, b },
+            Mismatch::Bound { var, term } => Mismatch::Bound { var: map.ty_var(var), term: map.ty(term) },
+            Mismatch::Conversions { candidates } => Mismatch::Conversions { candidates },
+            Mismatch::ReferenceToReference { target } => Mismatch::ReferenceToReference { target: map.ty(target) },
+            Mismatch::Effects { a, b, a_is, b_is } => Mismatch::Effects { a: map.effect(a), b: map.effect(b), a_is, b_is },
+            Mismatch::NotOneOf { value, of } => Mismatch::NotOneOf { value, of },
+            Mismatch::Values { a, b } => Mismatch::Values { a, b },
+            Mismatch::Mark { a, b } => Mismatch::Mark { a: map.ty(a), b: map.ty(b) },
+            Mismatch::IdentityEscapes { term } => Mismatch::IdentityEscapes { term: map.ty(term) },
         }
     }
 }

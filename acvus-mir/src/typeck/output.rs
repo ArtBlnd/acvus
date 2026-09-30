@@ -348,7 +348,7 @@ pub(super) struct Output {
     pub body_effect: Option<EffectTerm<InferPhase>>,
     /// The unit's interface, where its inputs were open (`generalize::export`).
     pub interface: Option<super::interface::Interface>,
-    pub refusals: Vec<Refusal>,
+    pub refusals: Vec<super::refusal::Made>,
 }
 
 /// What typeck hands on: every decision at concrete types.

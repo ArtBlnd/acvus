@@ -6,8 +6,8 @@ use acvus_ast::Span;
 use acvus_utils::{Astr, QualifiedRef};
 
 use super::ctxt::Ctxt;
-use crate::infer::Mismatch;
-use crate::ty::{Calls, CastTy, Effect, EffectTerm, Holds, Infer as InferPhase};
+use crate::infer::{FreezeMemo, Infer, MapMismatch, Mismatch, MismatchTerms, Solving, Unsettled};
+use crate::ty::{Calls, CastTy, Concrete, Effect, EffectTerm, Holds, Infer as InferPhase, Ty, TyVarId, Types};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Refusal {
@@ -63,7 +63,7 @@ pub enum RefusalKind {
     /// (operators §5).
     UnknownCastTarget { name: Astr },
     // B: two types that do not relate.
-    Mismatch(Mismatch),
+    Mismatch(FrozenMismatch),
     /// A lambda needs more of its function type than a type it was made
     /// equal to states (D94): it holds a stronger loan (ownership §5), is
     /// called once where many calls are stated (functions §3), or has a
@@ -143,10 +143,133 @@ pub enum Exceeding {
     Effect { needs: Effect, slot: Effect },
 }
 
+/// A mismatch's terms once the check is done: each frozen as far as it
+/// settled, or, where a refusal left a variable in it open, that variable
+/// as freeze reports it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frozen;
+
+impl MismatchTerms for Frozen {
+    type Ty = Result<Ty, Unsettled>;
+    type TyVar = Result<Ty, Unsettled>;
+    type Effect = Result<Effect, Unsettled>;
+}
+
+/// A mismatch whose terms were frozen at writeback, the one point where
+/// every decision is made and the check's store is still alive. Its types
+/// are interned in a table of its own, since a refusal outlives both the
+/// store and the table the check froze its other types into.
+pub struct FrozenMismatch {
+    pub mismatch: Mismatch<Frozen>,
+    pub types: Types<Concrete>,
+}
+
+impl FrozenMismatch {
+    fn freeze(infer: &Infer, mismatch: Mismatch) -> FrozenMismatch {
+        let mut types = Types::new();
+        let mismatch = mismatch.map(&mut Freeze { infer, into: &mut types, memo: FreezeMemo::default() });
+        FrozenMismatch { mismatch, types }
+    }
+
+    /// The mismatch with its types interned in `into`.
+    fn transplanted(&self, into: &mut Types<Concrete>) -> Mismatch<Frozen> {
+        self.mismatch.clone().map(&mut Transplant { from: &self.types, into })
+    }
+
+    /// Its shape, then each type or effect it holds, in the order it holds
+    /// them.
+    fn written(&self, names: &acvus_utils::Interner) -> String {
+        let ty = |side: &Result<Ty, Unsettled>| match side {
+            Ok(ty) => crate::ty::print::ty(&self.types, names, *ty),
+            Err(open) => format!("{open:?}"),
+        };
+        let effect = |side: &Result<Effect, Unsettled>| match side {
+            Ok(effect) => crate::ty::print::effect(names, effect),
+            Err(open) => format!("{open:?}"),
+        };
+        let terms = match &self.mismatch {
+            Mismatch::Heads { a, b } | Mismatch::Mark { a, b } => vec![ty(a), ty(b)],
+            Mismatch::Occurs { var, in_term: term } | Mismatch::Bound { var, term } => vec![ty(var), ty(term)],
+            Mismatch::OpaqueLacksField { object: term, .. }
+            | Mismatch::OpaqueLacksVariant { r#enum: term, .. }
+            | Mismatch::ReferenceToReference { target: term }
+            | Mismatch::IdentityEscapes { term } => vec![ty(term)],
+            Mismatch::Effects { a, b, .. } => vec![effect(a), effect(b)],
+            Mismatch::TwoEnums { .. } | Mismatch::Conversions { .. } | Mismatch::NotOneOf { .. } | Mismatch::Values { .. } => Vec::new(),
+        };
+        std::iter::once(self.mismatch.shape().to_string()).chain(terms).collect::<Vec<_>>().join(" ")
+    }
+}
+
+impl Clone for FrozenMismatch {
+    fn clone(&self) -> Self {
+        let mut types = Types::new();
+        let mismatch = self.transplanted(&mut types);
+        FrozenMismatch { mismatch, types }
+    }
+}
+
+/// Equal where the shapes and the types they hold are, whichever tables
+/// the types are interned in.
+impl PartialEq for FrozenMismatch {
+    fn eq(&self, other: &Self) -> bool {
+        let mut types = Types::new();
+        self.transplanted(&mut types) == other.transplanted(&mut types)
+    }
+}
+
+impl std::fmt::Debug for FrozenMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kinds: Vec<_> = self.types.ids().map(|id| (id, self.types.kind(id))).collect();
+        f.debug_struct("FrozenMismatch").field("mismatch", &self.mismatch).field("types", &kinds).finish()
+    }
+}
+
+/// A mismatch's terms frozen by the check's store, into one table.
+struct Freeze<'f> {
+    infer: &'f Infer,
+    into: &'f mut Types<Concrete>,
+    memo: FreezeMemo,
+}
+
+impl MapMismatch<Solving, Frozen> for Freeze<'_> {
+    fn ty(&mut self, ty: crate::infer::Term) -> Result<Ty, Unsettled> {
+        self.infer.freeze(self.into, &mut self.memo, ty)
+    }
+
+    fn ty_var(&mut self, var: TyVarId) -> Result<Ty, Unsettled> {
+        self.infer.freeze_var(self.into, &mut self.memo, var)
+    }
+
+    fn effect(&mut self, effect: EffectTerm<InferPhase>) -> Result<Effect, Unsettled> {
+        self.infer.freeze_effect(&effect)
+    }
+}
+
+/// A frozen mismatch's types moved from one table into another.
+struct Transplant<'t> {
+    from: &'t Types<Concrete>,
+    into: &'t mut Types<Concrete>,
+}
+
+impl MapMismatch<Frozen, Frozen> for Transplant<'_> {
+    fn ty(&mut self, ty: Result<Ty, Unsettled>) -> Result<Ty, Unsettled> {
+        ty.map(|ty| self.into.transplant(self.from, ty))
+    }
+
+    fn ty_var(&mut self, var: Result<Ty, Unsettled>) -> Result<Ty, Unsettled> {
+        self.ty(var)
+    }
+
+    fn effect(&mut self, effect: Result<Effect, Unsettled>) -> Result<Effect, Unsettled> {
+        effect
+    }
+}
+
 impl RefusalKind {
     /// The refusal in notation (no prose): its kind, and each name it
-    /// holds as the program writes it. A mismatch's types are terms of the
-    /// check, gone once it is done, so it is written by its shape alone.
+    /// holds as the program writes it; a mismatch by its shape and the
+    /// types it holds.
     pub fn written(&self, names: &acvus_utils::Interner) -> String {
         let name = |astr: &Astr| names.resolve(*astr).to_string();
         let path = |unit: &QualifiedRef| crate::ty::print::qualified(names, *unit);
@@ -162,7 +285,7 @@ impl RefusalKind {
             RefusalKind::MissingArgument { unit, name: argument } => format!("MissingArgument {}({}:)", path(unit), name(argument)),
             RefusalKind::VariantArity { tag } => format!("VariantArity {}", name(tag)),
             RefusalKind::UnknownCastTarget { name: target } => format!("UnknownCastTarget {}", name(target)),
-            RefusalKind::Mismatch(mismatch) => format!("Mismatch {}", mismatch.shape()),
+            RefusalKind::Mismatch(mismatch) => format!("Mismatch {}", mismatch.written(names)),
             RefusalKind::ClosureExceedsSlot(exceeding) => format!("ClosureExceedsSlot {exceeding:?}"),
             RefusalKind::CastNotAdmitted { from, to } => match from {
                 Some(from) => format!("CastNotAdmitted {from:?} as {to:?}"),
@@ -204,9 +327,30 @@ impl RefusalKind {
     }
 }
 
+/// A refusal as the check makes it. A mismatch holds the check's terms
+/// until writeback freezes them (`frozen`).
+#[derive(Debug)]
+pub(super) enum Made {
+    Refusal(Refusal),
+    Mismatch { mismatch: Mismatch, span: Span },
+}
+
 /// The one way a refusal is made (S4).
 pub(super) fn push(cx: &mut Ctxt<'_>, kind: RefusalKind, span: Span) {
-    cx.out.refusals.push(Refusal { kind, span });
+    cx.out.refusals.push(Made::Refusal(Refusal { kind, span }));
+}
+
+/// Every refusal the check made, in the order it made them, each
+/// mismatch's terms frozen by `infer`, the check's store.
+pub(super) fn frozen(infer: &Infer, made: Vec<Made>) -> Vec<Refusal> {
+    made.into_iter()
+        .map(|made| match made {
+            Made::Refusal(refusal) => refusal,
+            Made::Mismatch { mismatch, span } => {
+                Refusal { kind: RefusalKind::Mismatch(FrozenMismatch::freeze(infer, mismatch)), span }
+            }
+        })
+        .collect()
 }
 
 /// B's refusal in the dimension that refuses: growth into an opaque term is
@@ -235,12 +379,11 @@ pub(super) fn mismatch(cx: &mut Ctxt<'_>, mismatch: Mismatch, span: Span) {
             return;
         }
     }
-    let kind = match mismatch {
-        Mismatch::OpaqueLacksField { .. } | Mismatch::OpaqueLacksVariant { .. } => RefusalKind::GrowsOpaque,
-        Mismatch::NotOneOf { value, .. } => RefusalKind::NotOneOfFunctionValues { value },
-        Mismatch::Conversions { candidates } if candidates.is_empty() => RefusalKind::NoConversion,
-        Mismatch::IdentityEscapes { .. } => RefusalKind::IdentityEscapes,
-        other => RefusalKind::Mismatch(other),
-    };
-    push(cx, kind, span);
+    match mismatch {
+        Mismatch::OpaqueLacksField { .. } | Mismatch::OpaqueLacksVariant { .. } => push(cx, RefusalKind::GrowsOpaque, span),
+        Mismatch::NotOneOf { value, .. } => push(cx, RefusalKind::NotOneOfFunctionValues { value }, span),
+        Mismatch::Conversions { candidates } if candidates.is_empty() => push(cx, RefusalKind::NoConversion, span),
+        Mismatch::IdentityEscapes { .. } => push(cx, RefusalKind::IdentityEscapes, span),
+        other => cx.out.refusals.push(Made::Mismatch { mismatch: other, span }),
+    }
 }

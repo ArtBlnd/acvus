@@ -1178,7 +1178,7 @@ fn a_value_fixed_marked_is_refused_where_it_would_be_raised() {
         fx.identity_fn();
         let refused = fx.refused(source);
         assert!(
-            matches!(refused[..], [crate::typeck::RefusalKind::Mismatch(crate::infer::Mismatch::Mark { .. })]),
+            matches!(refused[..], [crate::typeck::RefusalKind::Mismatch(crate::typeck::FrozenMismatch { mismatch: crate::infer::Mismatch::Mark { .. }, .. })]),
             "{source}: {refused:?}"
         );
     }
