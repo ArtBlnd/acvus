@@ -4,11 +4,13 @@
 mod affine;
 mod constant;
 mod interval;
+pub mod ring;
 pub mod tags;
 
 pub use affine::{Affine, AffineDomain, Combination, Limit, Symbol, bounds_on};
 pub use constant::{Constant, ConstantDomain};
 pub use interval::{Bound, Interval, IntervalDomain};
+pub use ring::{Linear, Monomial, Polynomial};
 pub use tags::{Tags, TagsDomain};
 
 use std::cmp::Ordering;
