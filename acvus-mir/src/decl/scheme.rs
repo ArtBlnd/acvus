@@ -40,6 +40,14 @@ pub struct Scheme {
     /// gives is pure. `verify` refuses an effect variable a parameter gives
     /// that is neither here nor in the result.
     pub runs: Box<[u32]>,
+    /// The whole concrete types a registry named and made this declaration
+    /// concrete at once more (types §8, rfc_extern registry): the uniform
+    /// declaration and its `#` counterparts are this one declaration. At a
+    /// use, every position of `ty` whose type is one of these, once known,
+    /// shares one mark: marked from the start where the use's type there
+    /// is one of them, unmarked where it is not, and joined as any mark
+    /// after. Which of the pair a call is follows from that mark.
+    pub specialized: Box<[TyId<Poly>]>,
 }
 
 /// The impls of a generic function: the concrete ones in order, then
@@ -62,6 +70,8 @@ pub struct ImplSig {
     pub facts: DeclaredFacts,
     /// As `Scheme::runs`.
     pub runs: Box<[u32]>,
+    /// As `Scheme::specialized`.
+    pub specialized: Box<[TyId<Poly>]>,
 }
 
 /// The generic impl: its type is the generic function's own.
