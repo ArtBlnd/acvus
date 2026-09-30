@@ -68,7 +68,7 @@ The coercion makes a value of the slot's type. No type becomes a subtype of anot
 
 ## 5. Defaults
 
-Defaults apply only where nothing more can be decided. A type variable nothing constrains is `!`, an effect nothing constrains is opaque, a function type's flows nothing decides state every flow (as a declaration's default does, extern fn §4), a function value's loans nothing decides are none and how often it may be called is many (functions §3), and a type whose `#` nothing decides is not specialized. A variable a bound constrains and no use answers is refused. An unsuffixed integer literal is `i64` where no use decides its width.
+Defaults apply only where nothing more can be decided. A type variable nothing constrains is `!`, an effect nothing constrains is opaque, a function type's flows nothing decides state every flow (as a declaration's default does, extern fn §4), a function value's loans nothing decides are none and how often it may be called is many (functions §3). A variable a bound constrains and no use answers is refused. An unsuffixed integer literal is `i64` where no use decides its width.
 
 ## 6. Deciding by type
 
@@ -86,4 +86,4 @@ Where a value's type is not the type its slot asks for and no subtyping relates 
 
 ## 8. Specialization
 
-An extern-defined type may carry `#`, the mark that it can always be specialized, at its root: `#F<A>` is a type of its own, as distinct from `F<A>` as two types of different names, optimized whole and never part of another type. It is written in a declaration's signature as any type is, and stands only as the type of a binding, of a parameter or a result, a function type's included, or as what a reference lends. No other type carries `#`, and no other type holds a marked one: `Vec<#F<A>>`, `F<#A>`, a tuple, an object or an enum with a marked part, and a marked tuple, object or enum are not types. Its one step up in the tree of §3 is `F<A>`: a value of `#F<A>` is one of `F<A>` unchanged, never the reverse, and a cast from `F<T>` reaches it only after that step.
+An extern-defined type whole and concrete, with no type variable in it, may carry `#`, the mark that it can always be specialized, at its root: `#F<A>` is a type of its own, as distinct from `F<A>` as two types of different names, optimized whole and never part of another type. It is written in a declaration's signature as any concrete type is, never over a type variable, and stands only as the type of a binding, of a parameter or a result, a function type's included, or as what a reference lends. No other type carries `#`, and no other type holds a marked one: `Vec<#F<A>>`, `F<#A>`, a tuple, an object or an enum with a marked part, and a marked tuple, object or enum are not types. Its one step up in the tree of §3 is `F<A>`: a value of `#F<A>` is one of `F<A>` unchanged, never the reverse, and a cast from `F<T>` reaches it only after that step.
