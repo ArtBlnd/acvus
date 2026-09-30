@@ -1757,6 +1757,111 @@ mod tests {
         assert!(decls.casts().step_up(Head::Base(Base::Named { id: b, marked: false })).is_none());
     }
 
+    /// `#A`, the declared extern type `id` of no parameter, marked.
+    fn marked(fixture: &mut Fixture, id: QualifiedRef) -> TyId<Poly> {
+        fixture.ty(TyKind::UserDefined { id, type_args: Box::new([]), effect: None, identity: None, marked: true })
+    }
+
+    /// The extern type `id` of one parameter, `V<T>`, declared.
+    fn declare_one_parameter(fixture: &mut Fixture, id: QualifiedRef) {
+        fixture.raw.user_types.push(UserTypeDecl {
+            id,
+            type_params: Box::new([TyVarBound::Any]),
+            specializes: Box::new([false]),
+            carries_effect: false,
+            carries_identity: false,
+            lifetimes: 0,
+        });
+    }
+
+    fn one_parameter(fixture: &mut Fixture, id: QualifiedRef, arg: TyId<Poly>, marked: bool) -> TyId<Poly> {
+        fixture.ty(TyKind::UserDefined { id, type_args: Box::new([arg]), effect: None, identity: None, marked })
+    }
+
+    /// types §8: a marked head, or a reference to one, steps up to the same
+    /// head unmarked.
+    #[test]
+    fn a_marked_heads_one_step_up_is_the_same_head_unmarked() {
+        let mut fixture = Fixture::new();
+        let a = fixture.name("m", "A");
+        fixture.user_type(a, 0);
+        let decls = fixture.verify().expect("an extern type verifies");
+        let marked_a = Base::Named { id: a, marked: true };
+        assert!(matches!(decls.casts().step_up(Head::Base(marked_a)), Some(TreeStep::Unmark)));
+        assert!(matches!(decls.casts().step_up(Head::Ref(Mutability::Shared, marked_a)), Some(TreeStep::Unmark)));
+        assert_eq!(Head::Base(marked_a).unmarked(), Head::Base(Base::Named { id: a, marked: false }));
+    }
+
+    /// types §8: `#A` stands as a binding's type, a parameter's or a
+    /// result's, a function type's included, and as what a reference
+    /// lends.
+    #[test]
+    fn a_marked_type_stands_as_a_binding_a_parameter_a_result_or_a_lent_type() {
+        let mut fixture = Fixture::new();
+        let a = fixture.name("m", "A");
+        fixture.user_type(a, 0);
+        let marked_a = marked(&mut fixture, a);
+        let lent = fixture.reference(Mutability::Shared, marked_a);
+        let inner = fixture.function(&[marked_a], marked_a);
+        let ty = fixture.function(&[marked_a, lent, inner], marked_a);
+        let f = fixture.name("m", "f");
+        fixture.declare(f, fixture.plain(ty, 0));
+        fixture.raw.contexts.push((fixture.name("m", "c"), ContextDecl { ty: marked_a, volatile: false }));
+        assert!(fixture.verify().is_ok());
+    }
+
+    /// types §8: only a whole concrete type carries `#`.
+    #[test]
+    fn a_marked_type_over_a_type_variable_is_refused() {
+        let mut fixture = Fixture::new();
+        let v = fixture.name("m", "V");
+        declare_one_parameter(&mut fixture, v);
+        let t = fixture.ty(TyKind::Var(0));
+        let marked_v = one_parameter(&mut fixture, v, t, true);
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let ty = fixture.function(&[marked_v], int);
+        let f = fixture.name("m", "f");
+        fixture.declare(f, fixture.plain(ty, 1));
+        assert_eq!(refusals(fixture), vec![Refused::MarkedOverTypeVariable { written: Written::Function(f) }]);
+    }
+
+    /// types §8: no type but a reference and a function type holds a
+    /// marked one: not a tuple, not a type argument, not `Option`.
+    #[test]
+    fn a_marked_part_is_refused() {
+        let mut fixture = Fixture::new();
+        let (a, v) = (fixture.name("m", "A"), fixture.name("m", "V"));
+        fixture.user_type(a, 0);
+        declare_one_parameter(&mut fixture, v);
+        let marked_a = marked(&mut fixture, a);
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let tuple = fixture.ty(TyKind::Tuple(Box::new([marked_a, int]), ()));
+        let argument = one_parameter(&mut fixture, v, marked_a, false);
+        let option = fixture.ty(TyKind::Option(marked_a, ()));
+        let contexts = [("in_tuple", tuple), ("in_argument", argument), ("in_option", option)].map(|(name, ty)| {
+            let id = fixture.name("m", name);
+            fixture.raw.contexts.push((id, ContextDecl { ty, volatile: false }));
+            id
+        });
+        assert_eq!(
+            refusals(fixture),
+            contexts.map(|id| Refused::MarkedPart { written: Written::Context(id) }).to_vec()
+        );
+    }
+
+    /// types §8: a marked head's one step up is the same head unmarked, so
+    /// no declared cast leaves it.
+    #[test]
+    fn a_cast_from_a_marked_type_is_refused() {
+        let mut fixture = Fixture::new();
+        let (a, b, via) = (fixture.name("m", "A"), fixture.name("m", "B"), fixture.name("m", "a_to_b"));
+        fixture.user_type(a, 0);
+        let to = fixture.user_type(b, 0);
+        let from = marked(&mut fixture, a);
+        fixture.cast(from, to, via);
+        assert_eq!(refusals(fixture), vec![Refused::CastFromMarked { via }]);
+    }
+
     /// types §3, §7: a cast or a conversion is performed by its `via`, so
     /// a `via` that is not declared, or not of type `fn(from) -> to`, is
     /// refused.
