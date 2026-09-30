@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 
 use crate::boundary::entry::Settled;
 use crate::context::Opens;
-use crate::runtime::{Opaque, Runtime};
+use crate::runtime::{Crosses, Runtime};
 
 /// A shared loan on storage of type `T`, retained as a reference value. `'a`
 /// is the checker's loan, read by the declaration's flows; no Rust reference
@@ -21,15 +21,15 @@ pub struct LoanedMut<'a, T, R: Runtime> {
     _loan: PhantomData<(&'a mut (), fn() -> T)>,
 }
 
-impl<T: Opaque, R: Runtime> Loaned<'_, T, R> {
-    /// Opens the loan within the call `cx` belongs to.
-    pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> R::Shared<'c, T> {
-        cx.runtime().shared(&self.reference, Settled::of_the_entry())
+impl<T: Crosses<R>, R: Runtime> Loaned<'_, T, R> {
+    /// Opens the loan within the call `cx` belongs to, as `T`'s view.
+    pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> T::Open<'c> {
+        T::open_ref(cx.runtime(), self.reference, Settled::of_the_entry())
     }
 }
 
-impl<T: Opaque, R: Runtime> LoanedMut<'_, T, R> {
-    pub fn open<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> R::Exclusive<'c, T> {
-        cx.runtime().exclusive(&mut self.reference, Settled::of_the_entry())
+impl<T: Crosses<R>, R: Runtime> LoanedMut<'_, T, R> {
+    pub fn open<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> T::OpenMut<'c> {
+        T::open_ref_mut(cx.runtime(), self.reference, Settled::of_the_entry())
     }
 }

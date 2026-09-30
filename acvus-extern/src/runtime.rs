@@ -1,14 +1,16 @@
 //! The runtime contract: what every executor implements and every extern fn
 //! is written against, generic and dispatched statically (runtime contract).
 //!
-//! No method here takes a Rust value and returns a runtime value, or reads a
+//! No operation here takes a Rust value and returns a runtime value, or reads a
 //! runtime value, except under a `Settled`, which only an entry makes: a value
 //! is made and read only by the crossing, at the type the checker settled.
 //!
-//! The runtime makes and reads values by kind: an opaque value, a primitive,
-//! text, an option, a result and a tuple. A type's crossing (`Crosses`) is
-//! its own: it composes the kinds over its parts' crossings, so the runtime
-//! never sees a type's structure, only the kind's.
+//! The runtime makes, takes and lends values by kind
+//! (`OpaqueKind`, `PrimitiveKind`, `StringKind`, `OptionKind`, `ResultKind`,
+//! `TupleKind`, `RefKind`), each kind its own associated type, so a runtime
+//! implements each kind for its own representation. A type's crossing
+//! (`Crosses`) is its own: it composes its kind's operations over its parts'
+//! crossings, and the runtime never sees a type's structure, only the kind's.
 
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
@@ -16,15 +18,18 @@ use std::time::Duration;
 use acvus_utils::Interner;
 
 use crate::boundary::entry::Settled;
-use crate::boundary::seal::Crossings;
+use crate::boundary::seal::{Crossings, Referents};
 use crate::boundary::signed::{SignedS1, SignedS2, SignedS3, Structural};
 use crate::boundary::uniform::{Primitive, Release};
 
 /// A type that crosses at the runtime `R`: one of the language's types, or an
 /// extern type the derive declares. Each crossing is its type's own and is
-/// sealed: this crate writes the language's, and the derive an extern
-/// type's. `give` makes the runtime's value of `self`, and `take` moves one
-/// back out, each by its kind's operations over its parts' crossings.
+/// sealed: this crate writes the language's, and the derive an extern type's.
+///
+/// `give` makes the runtime's value of `self` and `take` moves one back out. `open` lends a held value's place as the type's view, and
+/// `open_ref` the storage a reference value names; the view is the type's own
+/// (`&T` through the kind's guard for a type the runtime holds as itself, the
+/// parts as `Uniform`s for an option, a result or a tuple).
 ///
 /// A type that crosses may carry lifetimes; a value that holds a loan holds it
 /// as a `Loaned`, never as a Rust reference.
@@ -54,14 +59,46 @@ use crate::boundary::uniform::{Primitive, Release};
 /// }
 /// ```
 pub trait Crosses<R: Runtime>: Sized + Send + Sync + Crossings {
+    type Open<'a>: Deref
+    where
+        Self: 'a,
+        R: 'a;
+    type OpenMut<'a>: DerefMut
+    where
+        Self: 'a,
+        R: 'a;
+
     fn give(self, rt: &R, at: Settled<'_>) -> R::Value;
     fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self;
+
+    fn open<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Open<'a>
+    where
+        Self: 'a;
+    fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
+    where
+        Self: 'a;
+
+    /// The storage the reference value `reference` names, lent as the view.
+    fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Open<'a>
+    where
+        Self: 'a;
+    fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
+    where
+        Self: 'a;
 }
 
-/// An extern type, held by the runtime as the Rust value itself: the one kind
-/// lent in place (`Runtime::shared`, `Runtime::exclusive`), since only its
-/// storage is a `Self`. Only the derive declares one.
-pub trait Opaque: Send + Sync + Structural + Crossings {}
+/// An extern type, held by the runtime as the Rust value itself. Only the
+/// derive declares one.
+pub trait Opaque: Send + Sync + Structural + Crossings + Referent {}
+
+/// What a reference value is made to from Rust storage: storage whose Rust
+/// type is the type the reference is read back at. A type the runtime holds as
+/// itself (an extern type, a primitive, a `String`), text, a type variable's
+/// value and a run of them are; an option, a result and a tuple, which the
+/// runtime holds in its own representation, are not, so no Rust storage of
+/// one is lent as a reference. Sealed: only this crate and the derive declare
+/// one.
+pub trait Referent: Referents {}
 
 /// A lend is shared or exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,49 +120,124 @@ pub enum RefTarget<'a, P: ?Sized> {
 pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS3 {
     type Value: Release + Send + Sync + 'static;
 
-    /// A shared lend of an opaque value's storage; its borrow is the lend.
-    /// Every guard is `Send`, as what it lends is, so an awaited body holds
-    /// one across a wait (macros §1).
-    type Shared<'a, T: Opaque + 'a>: Deref<Target = T> + Send;
-    /// An exclusive lend of an opaque value's storage; its drop is the loan's
-    /// end, and what the drop does is a constant of `T` (K13).
-    type Exclusive<'a, T: Opaque + 'a>: DerefMut<Target = T> + Send;
-
-    /// Each kind's value made, and moved back out at its settled type. A take
-    /// consumes the value: its storage is released, and the parts it hands
-    /// back are the caller's.
-    fn give_opaque<T: Opaque>(&self, value: T, at: Settled<'_>) -> Self::Value;
-    fn take_opaque<T: Opaque>(&self, v: Self::Value, at: Settled<'_>) -> T;
-
-    fn give_primitive<P: Primitive>(&self, value: P, at: Settled<'_>) -> Self::Value;
-    fn take_primitive<P: Primitive>(&self, v: Self::Value, at: Settled<'_>) -> P;
-
-    fn give_string(&self, value: String, at: Settled<'_>) -> Self::Value;
-    fn take_string(&self, v: Self::Value, at: Settled<'_>) -> String;
-
-    fn give_option(&self, value: Option<Self::Value>, at: Settled<'_>) -> Self::Value;
-    fn take_option(&self, v: Self::Value, at: Settled<'_>) -> Option<Self::Value>;
-
-    fn give_result(&self, value: Result<Self::Value, Self::Value>, at: Settled<'_>) -> Self::Value;
-    fn take_result(&self, v: Self::Value, at: Settled<'_>) -> Result<Self::Value, Self::Value>;
-
-    fn give_tuple<const N: usize>(&self, parts: [Self::Value; N], at: Settled<'_>) -> Self::Value;
-    fn take_tuple<const N: usize>(&self, v: Self::Value, at: Settled<'_>) -> [Self::Value; N];
-
-    /// The guards lend an opaque value's storage from the value's place
-    /// (runtime contract §2, Guards).
-    fn shared<'a, T: Opaque + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::Shared<'a, T>;
-    fn exclusive<'a, T: Opaque + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T>;
-
-    /// The reference value made from a part of storage the call lent; a
-    /// borrowed result is one (crossing §4).
-    fn reference<'a, P: ?Sized>(&'a self, target: RefTarget<'a, P>, at: Settled<'a>) -> Self::Value;
-    /// What a reference value names, read back for the loan `'l` it was made
-    /// under: by S2 it names its target until that loan ends (runtime
-    /// contract §2, Typed reads).
-    fn target<'l, P: ?Sized>(&'l self, v: Self::Value, at: Settled<'l>) -> &'l P;
-    fn target_mut<'l, P: ?Sized>(&'l self, v: Self::Value, at: Settled<'l>) -> &'l mut P;
+    type Opaque: OpaqueKind<Self>;
+    type Primitive: PrimitiveKind<Self>;
+    type String: StringKind<Self>;
+    type Option: OptionKind<Self>;
+    type Result: ResultKind<Self>;
+    type Tuple: TupleKind<Self>;
+    type Ref: RefKind<Self>;
 
     fn interner(&self) -> &Interner;
     fn sleep(&self, d: Duration) -> impl Future<Output = ()> + Send;
+}
+
+/// An extern type's value, holding the Rust value itself. A guard lends
+/// its storage; every guard is `Send`, as what it lends is, so an awaited body
+/// holds one across a wait (macros §1), and its drop is the lend's end (K13).
+pub trait OpaqueKind<R: Runtime> {
+    type Shared<'a, T: Opaque + 'a>: Deref<Target = T> + Send
+    where
+        R: 'a;
+    type Exclusive<'a, T: Opaque + 'a>: DerefMut<Target = T> + Send
+    where
+        R: 'a;
+
+    fn give<T: Opaque>(rt: &R, value: T, at: Settled<'_>) -> R::Value;
+    /// Moves the value out, releasing its storage.
+    fn take<T: Opaque>(rt: &R, v: R::Value, at: Settled<'_>) -> T;
+
+    fn shared<'a, T: Opaque + 'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Shared<'a, T>;
+    fn exclusive<'a, T: Opaque + 'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::Exclusive<'a, T>;
+    /// The `T` a reference value names, lent.
+    fn shared_ref<'a, T: Opaque + 'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Shared<'a, T>;
+    fn exclusive_ref<'a, T: Opaque + 'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Exclusive<'a, T>;
+}
+
+/// A primitive's value, the primitive in the runtime's own representation.
+pub trait PrimitiveKind<R: Runtime> {
+    type Shared<'a, P: Primitive>: Deref<Target = P> + Send
+    where
+        R: 'a;
+    type Exclusive<'a, P: Primitive>: DerefMut<Target = P> + Send
+    where
+        R: 'a;
+
+    fn give<P: Primitive>(rt: &R, value: P, at: Settled<'_>) -> R::Value;
+    fn take<P: Primitive>(rt: &R, v: R::Value, at: Settled<'_>) -> P;
+
+    fn shared<'a, P: Primitive>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Shared<'a, P>;
+    fn exclusive<'a, P: Primitive>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::Exclusive<'a, P>;
+    fn shared_ref<'a, P: Primitive>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Shared<'a, P>;
+    fn exclusive_ref<'a, P: Primitive>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Exclusive<'a, P>;
+}
+
+/// Text, a Rust `String`.
+pub trait StringKind<R: Runtime> {
+    type Shared<'a>: Deref<Target = String> + Send
+    where
+        R: 'a;
+    type Exclusive<'a>: DerefMut<Target = String> + Send
+    where
+        R: 'a;
+
+    fn give(rt: &R, value: String, at: Settled<'_>) -> R::Value;
+    fn take(rt: &R, v: R::Value, at: Settled<'_>) -> String;
+
+    fn shared<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Shared<'a>;
+    fn exclusive<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::Exclusive<'a>;
+    fn shared_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Shared<'a>;
+    fn exclusive_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Exclusive<'a>;
+}
+
+/// An option over its part's value. Its release releases the part. Lent, it
+/// is its part, if present, in place.
+pub trait OptionKind<R: Runtime> {
+    fn give(rt: &R, value: Option<R::Value>, at: Settled<'_>) -> R::Value;
+    fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Option<R::Value>;
+    fn shared<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Option<&'a R::Value>;
+    fn exclusive<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Option<&'a mut R::Value>;
+    /// The option a reference value names, lent.
+    fn shared_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Option<&'a R::Value>;
+    fn exclusive_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Option<&'a mut R::Value>;
+}
+
+/// A result over its ok part's or its error part's value.
+pub trait ResultKind<R: Runtime> {
+    fn give(rt: &R, value: Result<R::Value, R::Value>, at: Settled<'_>) -> R::Value;
+    fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Result<R::Value, R::Value>;
+    fn shared<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Result<&'a R::Value, &'a R::Value>;
+    fn exclusive<'a>(
+        rt: &'a R,
+        place: &'a mut R::Value,
+        at: Settled<'a>,
+    ) -> Result<&'a mut R::Value, &'a mut R::Value>;
+    fn shared_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Result<&'a R::Value, &'a R::Value>;
+    fn exclusive_ref<'a>(
+        rt: &'a R,
+        reference: R::Value,
+        at: Settled<'a>,
+    ) -> Result<&'a mut R::Value, &'a mut R::Value>;
+}
+
+/// A tuple over its `N` parts' values.
+pub trait TupleKind<R: Runtime> {
+    fn give<const N: usize>(rt: &R, parts: [R::Value; N], at: Settled<'_>) -> R::Value;
+    fn take<const N: usize>(rt: &R, v: R::Value, at: Settled<'_>) -> [R::Value; N];
+    fn shared<'a, const N: usize>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a [R::Value; N];
+    fn exclusive<'a, const N: usize>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut [R::Value; N];
+    fn shared_ref<'a, const N: usize>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a [R::Value; N];
+    fn exclusive_ref<'a, const N: usize>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut [R::Value; N];
+}
+
+/// A reference value, naming storage the call lent.
+pub trait RefKind<R: Runtime> {
+    /// The reference value made from a part of storage the call lent; a
+    /// borrowed result is one (crossing §4).
+    fn reference<'a, P: ?Sized>(rt: &'a R, target: RefTarget<'a, P>, at: Settled<'a>) -> R::Value;
+    /// What a reference value names, read back for the loan `'l` it was made
+    /// under: by S2 it names its target until that loan ends (runtime
+    /// contract §2, Typed reads).
+    fn target<'l, P: ?Sized>(rt: &'l R, v: R::Value, at: Settled<'l>) -> &'l P;
+    fn target_mut<'l, P: ?Sized>(rt: &'l R, v: R::Value, at: Settled<'l>) -> &'l mut P;
 }

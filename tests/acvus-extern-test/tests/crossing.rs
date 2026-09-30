@@ -80,6 +80,10 @@ on_both! {
     an_option_a_result_and_a_tuple_cross_by_their_parts: aggregates_round_trip;
     an_aggregate_never_taken_releases_its_parts_once: aggregate_released_once;
     a_type_variables_value_crosses_inside_an_option: uniform_inside_an_option;
+    a_string_lent_exclusively_is_written_in_place: string_lent_exclusive;
+    a_primitive_lent_exclusively_is_written_in_place: primitive_lent_exclusive;
+    a_lent_option_is_viewed_as_its_part: option_lent_as_its_part;
+    a_held_tuple_is_opened_as_its_parts: tuple_opened_as_its_parts;
 }
 
 /// Runs `case` on a `WordRuntime` and on an adapter over one, each owned, so
@@ -638,7 +642,9 @@ fn callback_lent<R: CallsBack<Value = Word>>(runtime: &R) {
     assert_eq!(read::<_, String>(&mut frame, text), "lent to a callback");
 }
 
-fn append_written<R: Runtime>(_: &Returning<'_, R>, (mut lent,): (GuardMut<'_, &mut Pair>,)) {
+/// Appends to the name of a `Pair` lent exclusively, in the view its crossing
+/// opens.
+fn append_written<'c, R: Runtime>(_: &Returning<'c, R>, (mut lent,): (GuardMut<'c, <Pair as Crosses<R>>::OpenMut<'c>>,)) {
     lent.name.push_str(" and written");
 }
 
@@ -761,11 +767,81 @@ fn uniform_inside_an_option<R: Runtime<Value = Word>>(runtime: &R) {
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
+fn string_lent_exclusive<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let variable = produce(&mut frame, String::from("lent"));
+
+    frame.call(&[Pass::Lend(variable, Exclusive)], |entry| {
+        entry.open::<(ByMut<String>,), ()>(|cx, (mut lent,), ()| {
+            lent.push_str(" and written");
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read::<_, String>(&mut frame, variable), "lent and written");
+}
+
+fn primitive_lent_exclusive<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let variable = produce(&mut frame, 5i16);
+
+    let mut before = None;
+    frame.call(&[Pass::Lend(variable, Exclusive)], |entry| {
+        entry.open::<(ByMut<i16>,), ()>(|cx, (mut lent,), ()| {
+            before = Some(*lent);
+            *lent = -300;
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(before, Some(5));
+    assert_eq!(read::<_, i16>(&mut frame, variable), -300);
+}
+
+fn option_lent_as_its_part<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let present = produce(&mut frame, Some(pair("inside")));
+    let absent = produce(&mut frame, None::<Pair>);
+
+    let mut names = Vec::new();
+    for variable in [present, absent] {
+        frame.call(&[Pass::Lend(variable, Shared)], |entry| {
+            entry.open::<(ByRef<Option<Pair>>,), ()>(|cx, (lent,), ()| {
+                names.push(lent.map(|part| part.open(&cx).name.clone()));
+                cx.finish(())
+            })
+        });
+    }
+
+    assert_eq!(names, [Some(String::from("inside")), None]);
+}
+
+fn tuple_opened_as_its_parts<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let variable = produce(&mut frame, (4i64, String::from("held")));
+
+    let mut read = None;
+    frame.call(&[Pass::Give(variable)], |entry| {
+        entry.open::<(ByUniform<(i64, String)>,), ()>(|cx, (mut held,), ()| {
+            {
+                let mut parts = held.open_mut(&cx);
+                let (number, text) = &mut *parts;
+                let doubled = number.get(&cx) * 2;
+                number.set(&cx, doubled);
+                text.open_mut(&cx).push_str(" and written");
+            }
+            read = Some(held.into_inner(&cx));
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read, Some((8, String::from("held and written"))));
+}
+
 // Breaches the adapter's tracking covers. Under `WordRuntime` alone each is
 // undefined behaviour, so they run on the adapter only.
 
 #[test]
-#[ignore = "a reference argument is read through target, which the adapter does not yet validate or track: its detection of argument lends waits for call-scoped tracking"]
 #[should_panic(expected = "overlaps a live Exclusive lend")]
 fn the_adapter_refuses_a_shared_lend_over_a_live_exclusive_one() {
     let runtime = Adapter::new(WordRuntime::default());

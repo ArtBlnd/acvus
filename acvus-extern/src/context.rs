@@ -7,7 +7,7 @@ use std::ops::{Deref, DerefMut};
 use crate::boundary::entry::{Settled, SiteShape};
 use crate::done::Done;
 use crate::guard::{Guard, GuardMut};
-use crate::runtime::{Crosses, RefTarget, Runtime};
+use crate::runtime::{Crosses, RefKind, RefTarget, Referent, Runtime};
 
 pub struct Returning<'c, R: Runtime> {
     runtime: &'c R,
@@ -63,9 +63,10 @@ impl<'c, R: Runtime> Returning<'c, R> {
     pub fn finish_lent<G, P>(self, guard: Guard<'c, G>, part: impl for<'s> FnOnce(&'s G::Target) -> &'s P) -> Done<R>
     where
         G: Deref,
-        P: ?Sized,
+        P: ?Sized + Referent,
     {
-        let value = self.runtime.reference(RefTarget::Shared(part(&*guard)), Settled::of_the_entry());
+        let at = Settled::of_the_entry();
+        let value = <R::Ref as RefKind<R>>::reference(self.runtime, RefTarget::Shared(part(&*guard)), at);
         drop(guard);
         Done::of(value)
     }
@@ -77,10 +78,11 @@ impl<'c, R: Runtime> Returning<'c, R> {
     ) -> Done<R>
     where
         G: DerefMut,
-        P: ?Sized,
+        P: ?Sized + Referent,
     {
         let mut guard = guard;
-        let value = self.runtime.reference(RefTarget::Exclusive(part(&mut *guard)), Settled::of_the_entry());
+        let at = Settled::of_the_entry();
+        let value = <R::Ref as RefKind<R>>::reference(self.runtime, RefTarget::Exclusive(part(&mut *guard)), at);
         drop(guard);
         Done::of(value)
     }

@@ -83,6 +83,33 @@ crossings! {
     [A, B, C, D, E, F, G, H, I, J, K, L] (A, B, C, D, E, F, G, H, I, J, K, L);
 }
 
+/// The seal of `Referent`: a reference value made to a referent is read back
+/// at it by its type's crossing, so a referent declared by hand could be read
+/// at a type its storage is not.
+///
+/// # Safety
+/// Only this crate implements it, for the types the runtime holds as
+/// themselves (primitives, `String`), text, a type variable's value and a run
+/// of them, and the derive, for the extern type it declares.
+pub unsafe trait Referents {}
+
+macro_rules! referents {
+    ($([$($g:tt)*] $t:ty;)+) => {$(
+        // SAFETY: storage of this type is read back at it: a primitive and a
+        // `String` by their kind's `shared_ref`, text by `target`, a type
+        // variable's value and a run of them as the class values they are.
+        unsafe impl<$($g)*> Referents for $t {}
+    )+};
+}
+
+referents! {
+    [] i8; [] i16; [] i32; [] i64; [] u8; [] u16; [] u32; [] u64; [] f64; [] bool; [] char; [] ();
+    [] String;
+    [] str;
+    [R: Runtime, X] Uniform<R, X>;
+    [R: Runtime, X] [Uniform<R, X>];
+}
+
 /// # Safety
 /// Only `#[extern_fn]` implements it, for the function it declares: the
 /// dispatch opens each argument by the mode of the declaration's parameter at

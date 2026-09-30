@@ -23,4 +23,6 @@ pub(crate) mod loaned;
 pub mod seal;
 pub(crate) mod signed;
 pub(crate) mod stored;
+#[cfg(test)]
+pub(crate) mod stub;
 pub(crate) mod uniform;

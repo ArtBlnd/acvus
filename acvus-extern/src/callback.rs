@@ -8,7 +8,7 @@ use crate::boundary::entry::Settled;
 use crate::boundary::seal::LoanForms;
 use crate::boundary::uniform::Uniform;
 use crate::context::{Awaited, Opens, Returning};
-use crate::runtime::{Crosses, Mutability, RefTarget, Runtime};
+use crate::runtime::{Crosses, Mutability, RefKind, RefTarget, Referent, Runtime};
 
 /// A callback of function type `Fn(A) -> U` at effect `E`, lent to the call
 /// `'c` (limitations §3: it carries the call's lifetime, so no handler keeps
@@ -77,43 +77,43 @@ impl<R: Runtime, T: Crosses<R>> LoanForm<R> for T {
     }
 }
 
-impl<R: Runtime, T: ?Sized + 'static> LoanForm<R> for Lent<T> {
+impl<R: Runtime, T: ?Sized + Referent + 'static> LoanForm<R> for Lent<T> {
     type At<'l> = &'l T;
 
     const LENT: Option<Mutability> = Some(Mutability::Shared);
 
     fn lend<'l>(value: &'l T, rt: &'l R, at: Settled<'l>) -> R::Value {
-        rt.reference(RefTarget::Shared(value), at)
+        <R::Ref as RefKind<R>>::reference(rt, RefTarget::Shared(value), at)
     }
 
     fn give_moved<'a>(value: &'static T, rt: &'a R, at: Settled<'a>) -> R::Value {
-        rt.reference(RefTarget::Shared(value), at)
+        <R::Ref as RefKind<R>>::reference(rt, RefTarget::Shared(value), at)
     }
 
     fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l T {
         let reference = Uniform::<R, ()>::of_the_crossing(v);
-        let target = rt.target(v, at);
+        let target = <R::Ref as RefKind<R>>::target(rt, v, at);
         drop(reference);
         target
     }
 }
 
-impl<R: Runtime, T: ?Sized + 'static> LoanForm<R> for LentMut<T> {
+impl<R: Runtime, T: ?Sized + Referent + 'static> LoanForm<R> for LentMut<T> {
     type At<'l> = &'l mut T;
 
     const LENT: Option<Mutability> = Some(Mutability::Exclusive);
 
     fn lend<'l>(value: &'l mut T, rt: &'l R, at: Settled<'l>) -> R::Value {
-        rt.reference(RefTarget::Exclusive(value), at)
+        <R::Ref as RefKind<R>>::reference(rt, RefTarget::Exclusive(value), at)
     }
 
     fn give_moved<'a>(value: &'static mut T, rt: &'a R, at: Settled<'a>) -> R::Value {
-        rt.reference(RefTarget::Exclusive(value), at)
+        <R::Ref as RefKind<R>>::reference(rt, RefTarget::Exclusive(value), at)
     }
 
     fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l mut T {
         let reference = Uniform::<R, ()>::of_the_crossing(v);
-        let target = rt.target_mut(v, at);
+        let target = <R::Ref as RefKind<R>>::target_mut(rt, v, at);
         drop(reference);
         target
     }

@@ -170,9 +170,9 @@ pub mod mode {
     /// Held by value where the handler writes `Uniform<R, T>`: read in place,
     /// released if dropped, taken only by `into_inner`.
     pub struct ByUniform<T>(PhantomData<fn() -> T>);
-    /// An opaque value lent `&T`.
+    /// Lent `&T`, opened as `T`'s view of what the reference names.
     pub struct ByRef<T>(PhantomData<fn() -> T>);
-    /// Lent `&mut T`.
+    /// Lent `&mut T`, opened as `T`'s exclusive view.
     pub struct ByMut<T>(PhantomData<fn() -> T>);
     /// A program's array lent as `&[Uniform<R, T>]` or `&mut [Uniform<R, T>]`,
     /// its argument a reference to the array or to a run of it, read through
@@ -197,7 +197,7 @@ use crate::callback::Callback;
 use crate::guard::{Guard, GuardMut};
 use crate::impls::receiver::{Reads, Steps};
 use crate::impls::{Family, Instances};
-use crate::runtime::{Crosses, Opaque};
+use crate::runtime::{Crosses, RefKind};
 
 macro_rules! modes {
     ($([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
@@ -228,16 +228,12 @@ const EXCLUSIVE: Option<Mutability> = Some(Mutability::Exclusive);
 modes! {
     [T] ByUniform<T> => Uniform<R, T>, None,
         |_runtime, v, _at| Uniform::of_the_crossing(*v);
-    [T: Opaque] ByRef<T> => Guard<'c, &'c T>, SHARED,
-        |runtime, v, at| Guard::of_the_entry(runtime.target(*v, at));
-    [T: Opaque] ByMut<T> => GuardMut<'c, &'c mut T>, EXCLUSIVE,
-        |runtime, v, at| GuardMut::of_the_entry(runtime.target_mut(*v, at));
     [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED,
-        |runtime, v, at| Guard::of_the_entry(runtime.target(*v, at));
+        |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
     [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, EXCLUSIVE,
-        |runtime, v, at| GuardMut::of_the_entry(runtime.target_mut(*v, at));
+        |runtime, v, at| GuardMut::of_the_entry(<R::Ref as RefKind<R>>::target_mut(runtime, *v, at));
     [] ByStr => Guard<'c, &'c str>, SHARED,
-        |runtime, v, at| Guard::of_the_entry(runtime.target(*v, at));
+        |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
     [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None,
         |_runtime, v, _at| Callback::of_the_entry(*v);
 }
@@ -259,6 +255,46 @@ impl<R: Runtime, T: Crosses<R>> Mode<R> for ByValue<T> {
         R: 'c,
     {
         T::take(runtime, *v, at)
+    }
+}
+
+impl<T> sealed::Sealed for ByRef<T> {}
+
+impl<R: Runtime, T: Crosses<R>> Mode<R> for ByRef<T> {
+    type Opened<'c>
+        = Guard<'c, T::Open<'c>>
+    where
+        Self: 'c,
+        R: 'c;
+
+    const LENT: Option<Mutability> = SHARED;
+
+    fn open<'c>(runtime: &'c R, v: &'c R::Value, at: Settled<'c>) -> Self::Opened<'c>
+    where
+        Self: 'c,
+        R: 'c,
+    {
+        Guard::of_the_entry(T::open_ref(runtime, *v, at))
+    }
+}
+
+impl<T> sealed::Sealed for ByMut<T> {}
+
+impl<R: Runtime, T: Crosses<R>> Mode<R> for ByMut<T> {
+    type Opened<'c>
+        = GuardMut<'c, T::OpenMut<'c>>
+    where
+        Self: 'c,
+        R: 'c;
+
+    const LENT: Option<Mutability> = EXCLUSIVE;
+
+    fn open<'c>(runtime: &'c R, v: &'c R::Value, at: Settled<'c>) -> Self::Opened<'c>
+    where
+        Self: 'c,
+        R: 'c,
+    {
+        GuardMut::of_the_entry(T::open_ref_mut(runtime, *v, at))
     }
 }
 

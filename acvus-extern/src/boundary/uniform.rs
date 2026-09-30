@@ -2,12 +2,11 @@
 //! variable, owned, and released once by its drop (G7).
 
 use std::marker::PhantomData;
-use std::mem::ManuallyDrop;
 
 use crate::boundary::entry::Settled;
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
 use crate::context::Opens;
-use crate::runtime::{Crosses, Opaque, Runtime};
+use crate::runtime::{Crosses, PrimitiveKind, Runtime};
 
 /// The permission to release one value, made only by an owning holder's drop.
 pub struct Releasing {
@@ -28,19 +27,32 @@ pub enum Never {}
 /// item that depends on `X` (runtime contract §1).
 #[repr(transparent)]
 pub struct Uniform<R: Runtime, X> {
-    value: ManuallyDrop<R::Value>,
+    value: R::Value,
     _index: PhantomData<fn() -> X>,
 }
 
 impl<R: Runtime, X> Uniform<R, X> {
     /// The value the crossing hands over, owned from here on.
     pub(crate) fn of_the_crossing(value: R::Value) -> Self {
-        Uniform { value: ManuallyDrop::new(value), _index: PhantomData }
+        Uniform { value, _index: PhantomData }
     }
 
     /// The value handed on to its next owner, unreleased.
     pub(crate) fn into_value(self) -> R::Value {
-        *ManuallyDrop::new(self).value
+        let value = self.value;
+        std::mem::forget(self);
+        value
+    }
+
+    /// The value in `place` seen as a `Uniform` at `X`, borrowed.
+    pub(crate) fn at_place(place: &R::Value) -> &Self {
+        // SAFETY: `Uniform` is `repr(transparent)` over the runtime value.
+        unsafe { &*std::ptr::from_ref(place).cast::<Self>() }
+    }
+
+    pub(crate) fn at_place_mut(place: &mut R::Value) -> &mut Self {
+        // SAFETY: as `at_place`, exclusively.
+        unsafe { &mut *std::ptr::from_mut(place).cast::<Self>() }
     }
 }
 
@@ -50,27 +62,20 @@ impl<R: Runtime, T: Crosses<R>> Uniform<R, T> {
         Uniform::of_the_crossing(value.give(cx.runtime(), Settled::of_the_entry()))
     }
 
+    /// Lends the value in place within the call `cx` belongs to, as `T`'s
+    /// view.
+    pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> T::Open<'c> {
+        T::open(cx.runtime(), &self.value, Settled::of_the_entry())
+    }
+
+    pub fn open_mut<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> T::OpenMut<'c> {
+        T::open_mut(cx.runtime(), &mut self.value, Settled::of_the_entry())
+    }
+
     /// The value itself. A `Uniform` only dropped is released and never
     /// taken.
     pub fn into_inner<'c>(self, cx: &'c impl Opens<'c, R>) -> T {
-        self.take(cx.runtime(), Settled::of_the_entry())
-    }
-
-    /// The value moved out at its type: the one place a value is taken. The
-    /// take consumes the value's storage, so the holder's release is skipped.
-    pub(crate) fn take(self, runtime: &R, at: Settled<'_>) -> T {
-        T::take(runtime, self.into_value(), at)
-    }
-}
-
-impl<R: Runtime, T: Opaque> Uniform<R, T> {
-    /// Lends the value in place within the call `cx` belongs to.
-    pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> R::Shared<'c, T> {
-        cx.runtime().shared(&self.value, Settled::of_the_entry())
-    }
-
-    pub fn open_mut<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> R::Exclusive<'c, T> {
-        cx.runtime().exclusive(&mut self.value, Settled::of_the_entry())
+        T::take(cx.runtime(), self.into_value(), Settled::of_the_entry())
     }
 }
 
@@ -79,8 +84,8 @@ mod primitive {
 }
 
 /// A primitive: it owns nothing, so it is read by a copy and written by a
-/// replacement, never lent in place.
-pub trait Primitive: Copy + Send + Sync + Structural + primitive::Sealed + 'static {}
+/// replacement.
+pub trait Primitive: Copy + Send + Sync + primitive::Sealed + 'static {}
 
 macro_rules! primitives {
     ($($t:ty),+ $(,)?) => {$(
@@ -95,19 +100,19 @@ impl<R: Runtime, T: Primitive> Uniform<R, T> {
     /// The value, read by a copy: the runtime's take of the held value's
     /// copy, which owns nothing to release.
     pub fn get<'c>(&self, cx: &'c impl Opens<'c, R>) -> T {
-        cx.runtime().take_primitive(*self.value, Settled::of_the_entry())
+        <R::Primitive as PrimitiveKind<R>>::take(cx.runtime(), self.value, Settled::of_the_entry())
     }
 
     /// The value replaced by `value`, made by the runtime.
     pub fn set<'c>(&mut self, cx: &'c impl Opens<'c, R>, value: T) {
-        let old = std::mem::replace(&mut *self.value, cx.runtime().give_primitive(value, Settled::of_the_entry()));
-        old.release(Releasing { _private: () });
+        let made = <R::Primitive as PrimitiveKind<R>>::give(cx.runtime(), value, Settled::of_the_entry());
+        std::mem::replace(&mut self.value, made).release(Releasing { _private: () });
     }
 }
 
 impl<R: Runtime, X> Drop for Uniform<R, X> {
     fn drop(&mut self) {
-        (*self.value).release(Releasing { _private: () });
+        self.value.release(Releasing { _private: () });
     }
 }
 
@@ -134,134 +139,18 @@ where
 #[cfg(test)]
 mod tests {
     use std::marker::PhantomData;
-    use std::mem::ManuallyDrop;
-    use std::ops::{Deref, DerefMut};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
 
-    use acvus_utils::Interner;
-
-    use super::{Never, Release, Releasing, Uniform};
-    use crate::boundary::entry::Settled;
-    use crate::boundary::signed::{LayoutFact, SignedS1, SignedS2, SignedS3, Structural};
+    use super::{Never, Uniform};
+    use crate::boundary::signed::{LayoutFact, Structural};
     use crate::boundary::stored::LayoutWitness;
-    use crate::boundary::uniform::Primitive;
-    use crate::runtime::{Opaque, RefTarget, Runtime};
-
-    /// A value that counts its releases and names no storage.
-    #[derive(Clone, Copy)]
-    struct Counted {
-        releases: &'static AtomicUsize,
-        id: u32,
-    }
-
-    impl Release for Counted {
-        fn release(self, _releasing: Releasing) {
-            self.releases.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    /// A runtime whose only live operation is release; the tests read no value
-    /// through it.
-    struct Counting;
-
-    // SAFETY: `Counting` lends no storage, makes no reference value and keeps
-    // nothing: every operation that would is unreachable below.
-    unsafe impl SignedS1 for Counting {}
-    // SAFETY: as for S1.
-    unsafe impl SignedS2 for Counting {}
-    // SAFETY: as for S1.
-    unsafe impl SignedS3 for Counting {}
-
-    struct NoBody;
-
-    struct NoGuard<T: ?Sized>(PhantomData<fn() -> Box<T>>);
-
-    impl<T: ?Sized> Deref for NoGuard<T> {
-        type Target = T;
-        fn deref(&self) -> &T {
-            unreachable!("the release tests lend no storage")
-        }
-    }
-
-    impl<T: ?Sized> DerefMut for NoGuard<T> {
-        fn deref_mut(&mut self) -> &mut T {
-            unreachable!("the release tests lend no storage")
-        }
-    }
-
-    impl Runtime for Counting {
-        type Value = Counted;
-        type Shared<'a, T: Opaque + 'a> = NoGuard<T>;
-        type Exclusive<'a, T: Opaque + 'a> = NoGuard<T>;
-
-        fn give_opaque<T: Opaque>(&self, _: T, _: Settled<'_>) -> Counted {
-            unreachable!("the release tests make no value")
-        }
-        fn take_opaque<T: Opaque>(&self, _: Counted, _: Settled<'_>) -> T {
-            unreachable!("the release tests read no value")
-        }
-        fn give_primitive<P: Primitive>(&self, _: P, _: Settled<'_>) -> Counted {
-            unreachable!("the release tests make no value")
-        }
-        fn take_primitive<P: Primitive>(&self, _: Counted, _: Settled<'_>) -> P {
-            unreachable!("the release tests read no value")
-        }
-        fn give_string(&self, _: String, _: Settled<'_>) -> Counted {
-            unreachable!("the release tests make no value")
-        }
-        fn take_string(&self, _: Counted, _: Settled<'_>) -> String {
-            unreachable!("the release tests read no value")
-        }
-        fn give_option(&self, _: Option<Counted>, _: Settled<'_>) -> Counted {
-            unreachable!("the release tests make no value")
-        }
-        fn take_option(&self, _: Counted, _: Settled<'_>) -> Option<Counted> {
-            unreachable!("the release tests read no value")
-        }
-        fn give_result(&self, _: Result<Counted, Counted>, _: Settled<'_>) -> Counted {
-            unreachable!("the release tests make no value")
-        }
-        fn take_result(&self, _: Counted, _: Settled<'_>) -> Result<Counted, Counted> {
-            unreachable!("the release tests read no value")
-        }
-        fn give_tuple<const N: usize>(&self, _: [Counted; N], _: Settled<'_>) -> Counted {
-            unreachable!("the release tests make no value")
-        }
-        fn take_tuple<const N: usize>(&self, _: Counted, _: Settled<'_>) -> [Counted; N] {
-            unreachable!("the release tests read no value")
-        }
-        fn shared<'a, T: Opaque + 'a>(&'a self, _: &'a Counted, _: Settled<'a>) -> NoGuard<T> {
-            unreachable!("the release tests lend no storage")
-        }
-        fn exclusive<'a, T: Opaque + 'a>(&'a self, _: &'a mut Counted, _: Settled<'a>) -> NoGuard<T> {
-            unreachable!("the release tests lend no storage")
-        }
-        fn reference<'a, P: ?Sized>(&'a self, _: RefTarget<'a, P>, _: Settled<'a>) -> Counted {
-            unreachable!("the release tests make no reference")
-        }
-        fn target<'l, P: ?Sized>(&'l self, _: Counted, _: Settled<'l>) -> &'l P {
-            unreachable!("the release tests make no reference")
-        }
-        fn target_mut<'l, P: ?Sized>(&'l self, _: Counted, _: Settled<'l>) -> &'l mut P {
-            unreachable!("the release tests make no reference")
-        }
-        fn interner(&self) -> &Interner {
-            unreachable!("the release tests intern no name")
-        }
-        async fn sleep(&self, _: Duration) {
-            unreachable!("the release tests do not wait")
-        }
-    }
+    use crate::boundary::stub::{Counted, Stub};
 
     /// The index of a type variable in the tests.
     struct X;
 
-    fn owned<I>(releases: &'static AtomicUsize, id: u32) -> Uniform<Counting, I> {
-        Uniform {
-            value: ManuallyDrop::new(Counted { releases, id }),
-            _index: PhantomData,
-        }
+    fn owned<I>(releases: &'static AtomicUsize, id: u32) -> Uniform<Stub, I> {
+        Uniform { value: Counted { releases, id }, _index: PhantomData }
     }
 
     #[test]
@@ -277,8 +166,7 @@ mod tests {
     fn a_uniform_cast_to_its_canonical_form_is_still_released_once() {
         static RELEASES: AtomicUsize = AtomicUsize::new(0);
 
-        let canon = LayoutWitness::<Option<Uniform<Counting, X>>, _>::canonical()
-            .cast(Some(owned(&RELEASES, 0)));
+        let canon = LayoutWitness::<Option<Uniform<Stub, X>>, _>::canonical().cast(Some(owned(&RELEASES, 0)));
         assert_eq!(RELEASES.load(Ordering::SeqCst), 0);
         drop(canon);
 
@@ -288,10 +176,9 @@ mod tests {
     #[test]
     fn a_canonical_uniform_reads_back_at_its_index_in_place() {
         static RELEASES: AtomicUsize = AtomicUsize::new(0);
-        let mut canon: (Uniform<Counting, Never>, i64) = (owned(&RELEASES, 7), 1);
+        let mut canon: (Uniform<Stub, Never>, i64) = (owned(&RELEASES, 7), 1);
 
-        let at_x =
-            LayoutWitness::<(Uniform<Counting, X>, i64), _>::canonical().cast_back_mut(&mut canon);
+        let at_x = LayoutWitness::<(Uniform<Stub, X>, i64), _>::canonical().cast_back_mut(&mut canon);
         at_x.1 = 2;
         assert_eq!(at_x.0.value.id, 7);
         drop(canon);
@@ -301,18 +188,9 @@ mod tests {
 
     #[test]
     fn a_constructor_over_a_uniform_is_not_its_own_canonical_form() {
-        assert_eq!(
-            <Uniform<Counting, X>>::FACTS.layout,
-            LayoutFact::CanonicalOf
-        );
-        assert_eq!(
-            <(i64, Option<Uniform<Counting, X>>)>::FACTS.layout,
-            LayoutFact::CanonicalOf
-        );
-        assert_eq!(
-            <(i64, Option<char>)>::FACTS.layout,
-            LayoutFact::OwnCanonical
-        );
+        assert_eq!(<Uniform<Stub, X>>::FACTS.layout, LayoutFact::CanonicalOf);
+        assert_eq!(<(i64, Option<Uniform<Stub, X>>)>::FACTS.layout, LayoutFact::CanonicalOf);
+        assert_eq!(<(i64, Option<char>)>::FACTS.layout, LayoutFact::OwnCanonical);
         assert_eq!(<Result<(i64, u8), String>>::FACTS.generics.len(), 2);
     }
 }

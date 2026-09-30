@@ -32,8 +32,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::register::ExternFn;
 use acvus_extern::done::Done;
-use acvus_extern::runtime::{Crosses, Opaque, RefTarget, Runtime};
-use acvus_extern::seal::Crossings;
+use acvus_extern::runtime::{
+    Crosses, Opaque, OpaqueKind, OptionKind, PrimitiveKind, RefKind, RefTarget, Referent, ResultKind, Runtime,
+    StringKind, TupleKind,
+};
+use acvus_extern::seal::{Crossings, Referents};
 use acvus_extern::{
     LayoutFact, Primitive, Release, Releasing, Settled, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
 };
@@ -95,7 +98,7 @@ fn scalar_kind<P>() -> Kind
 where
     P: Primitive,
 {
-    let canon = TypeId::of::<P::Canon>();
+    let canon = TypeId::of::<P>();
     let found = scalars().into_iter().find(|&(id, _)| id == canon);
     found.map(|(_, kind)| kind).expect("every primitive is a scalar")
 }
@@ -343,6 +346,18 @@ where
     Slot::allocate(Kind::Large, value, TypeId::of::<T::Canon>())
 }
 
+/// A tuple's parts as they lie in its slot: `Held` values, each a `Word` by
+/// `repr(transparent)`.
+fn parts<const N: usize>(held: &[Held; N]) -> &[Word; N] {
+    // SAFETY: `Held` is `repr(transparent)` over `Word`.
+    unsafe { &*ptr::from_ref(held).cast::<[Word; N]>() }
+}
+
+fn parts_mut<const N: usize>(held: &mut [Held; N]) -> &mut [Word; N] {
+    // SAFETY: as `parts`, exclusively.
+    unsafe { &mut *ptr::from_mut(held).cast::<[Word; N]>() }
+}
+
 pub(crate) fn take_opaque<T>(v: Word, _at: Settled<'_>) -> T
 where
     T: Opaque,
@@ -551,6 +566,156 @@ where
 }
 
 
+/// `WordRuntime`'s kinds, over the typed reads above.
+pub struct Kinds;
+
+impl OpaqueKind<WordRuntime> for Kinds {
+    type Shared<'a, T: Opaque + 'a> = &'a T;
+    type Exclusive<'a, T: Opaque + 'a> = &'a mut T;
+
+    fn give<T: Opaque>(_: &WordRuntime, value: T, _: Settled<'_>) -> Word {
+        give_opaque(value)
+    }
+    fn take<T: Opaque>(_: &WordRuntime, v: Word, at: Settled<'_>) -> T {
+        take_opaque(v, at)
+    }
+    fn shared<'a, T: Opaque + 'a>(_: &'a WordRuntime, place: &'a Word, at: Settled<'a>) -> &'a T {
+        self::place(place, at)
+    }
+    fn exclusive<'a, T: Opaque + 'a>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> &'a mut T {
+        place_mut(place, at)
+    }
+    fn shared_ref<'a, T: Opaque + 'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a T {
+        referent(reference, at)
+    }
+    fn exclusive_ref<'a, T: Opaque + 'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a mut T {
+        referent_mut(reference, at)
+    }
+}
+
+impl PrimitiveKind<WordRuntime> for Kinds {
+    type Shared<'a, P: Primitive> = &'a P;
+    type Exclusive<'a, P: Primitive> = &'a mut P;
+
+    fn give<P: Primitive>(_: &WordRuntime, value: P, _: Settled<'_>) -> Word {
+        scalar(value)
+    }
+    fn take<P: Primitive>(_: &WordRuntime, v: Word, at: Settled<'_>) -> P {
+        take_primitive(v, at)
+    }
+    fn shared<'a, P: Primitive>(_: &'a WordRuntime, place: &'a Word, at: Settled<'a>) -> &'a P {
+        self::place(place, at)
+    }
+    fn exclusive<'a, P: Primitive>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> &'a mut P {
+        place_mut(place, at)
+    }
+    fn shared_ref<'a, P: Primitive>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a P {
+        referent(reference, at)
+    }
+    fn exclusive_ref<'a, P: Primitive>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a mut P {
+        referent_mut(reference, at)
+    }
+}
+
+impl StringKind<WordRuntime> for Kinds {
+    type Shared<'a> = &'a String;
+    type Exclusive<'a> = &'a mut String;
+
+    fn give(_: &WordRuntime, value: String, _: Settled<'_>) -> Word {
+        give_string(value)
+    }
+    fn take(_: &WordRuntime, v: Word, at: Settled<'_>) -> String {
+        take_string(v, at)
+    }
+    fn shared<'a>(_: &'a WordRuntime, place: &'a Word, at: Settled<'a>) -> &'a String {
+        self::place(place, at)
+    }
+    fn exclusive<'a>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> &'a mut String {
+        place_mut(place, at)
+    }
+    fn shared_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a String {
+        referent(reference, at)
+    }
+    fn exclusive_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a mut String {
+        referent_mut(reference, at)
+    }
+}
+
+impl OptionKind<WordRuntime> for Kinds {
+    fn give(_: &WordRuntime, value: Option<Word>, _: Settled<'_>) -> Word {
+        give_option(value)
+    }
+    fn take(_: &WordRuntime, v: Word, at: Settled<'_>) -> Option<Word> {
+        take_option(v, at)
+    }
+    fn shared<'a>(_: &'a WordRuntime, place: &'a Word, at: Settled<'a>) -> Option<&'a Word> {
+        self::place::<Option<Held>>(place, at).as_ref().map(|part| &part.0)
+    }
+    fn exclusive<'a>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> Option<&'a mut Word> {
+        place_mut::<Option<Held>>(place, at).as_mut().map(|part| &mut part.0)
+    }
+    fn shared_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> Option<&'a Word> {
+        referent::<Option<Held>>(reference, at).as_ref().map(|part| &part.0)
+    }
+    fn exclusive_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> Option<&'a mut Word> {
+        referent_mut::<Option<Held>>(reference, at).as_mut().map(|part| &mut part.0)
+    }
+}
+
+impl ResultKind<WordRuntime> for Kinds {
+    fn give(_: &WordRuntime, value: Result<Word, Word>, _: Settled<'_>) -> Word {
+        give_result(value)
+    }
+    fn take(_: &WordRuntime, v: Word, at: Settled<'_>) -> Result<Word, Word> {
+        take_result(v, at)
+    }
+    fn shared<'a>(_: &'a WordRuntime, place: &'a Word, at: Settled<'a>) -> Result<&'a Word, &'a Word> {
+        self::place::<Result<Held, Held>>(place, at).as_ref().map(|part| &part.0).map_err(|part| &part.0)
+    }
+    fn exclusive<'a>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> Result<&'a mut Word, &'a mut Word> {
+        place_mut::<Result<Held, Held>>(place, at).as_mut().map(|part| &mut part.0).map_err(|part| &mut part.0)
+    }
+    fn shared_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> Result<&'a Word, &'a Word> {
+        referent::<Result<Held, Held>>(reference, at).as_ref().map(|part| &part.0).map_err(|part| &part.0)
+    }
+    fn exclusive_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> Result<&'a mut Word, &'a mut Word> {
+        referent_mut::<Result<Held, Held>>(reference, at).as_mut().map(|part| &mut part.0).map_err(|part| &mut part.0)
+    }
+}
+
+impl TupleKind<WordRuntime> for Kinds {
+    fn give<const N: usize>(_: &WordRuntime, parts: [Word; N], _: Settled<'_>) -> Word {
+        give_tuple(parts)
+    }
+    fn take<const N: usize>(_: &WordRuntime, v: Word, at: Settled<'_>) -> [Word; N] {
+        take_tuple(v, at)
+    }
+    fn shared<'a, const N: usize>(_: &'a WordRuntime, place: &'a Word, at: Settled<'a>) -> &'a [Word; N] {
+        parts(self::place(place, at))
+    }
+    fn exclusive<'a, const N: usize>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> &'a mut [Word; N] {
+        parts_mut(place_mut(place, at))
+    }
+    fn shared_ref<'a, const N: usize>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a [Word; N] {
+        parts(referent(reference, at))
+    }
+    fn exclusive_ref<'a, const N: usize>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a mut [Word; N] {
+        parts_mut(referent_mut(reference, at))
+    }
+}
+
+impl RefKind<WordRuntime> for Kinds {
+    fn reference<'a, P: ?Sized>(_: &'a WordRuntime, target: RefTarget<'a, P>, _: Settled<'a>) -> Word {
+        reference(target)
+    }
+    fn target<'l, P: ?Sized>(_: &'l WordRuntime, v: Word, at: Settled<'l>) -> &'l P {
+        referent(v, at)
+    }
+    fn target_mut<'l, P: ?Sized>(_: &'l WordRuntime, v: Word, at: Settled<'l>) -> &'l mut P {
+        referent_mut(v, at)
+    }
+}
+
 // SAFETY: `WordRuntime` lends three kinds of storage. A scalar is lent in the
 // word at the place the guard is given, the holder's own: an argument run the
 // run keeps for the call, a `Uniform`, or a variable. A value's slot is
@@ -626,22 +791,57 @@ unsafe impl Structural for Number {
 }
 
 /// The crossings of the test's extern types, as the derive writes them: each
-/// is opaque, given and taken as itself.
+/// is opaque, given, taken and lent as itself.
 macro_rules! opaque {
     ($($t:ty),+ $(,)?) => {$(
-        // SAFETY: this stands in for the derive: the crossing below gives and
-        // takes the type as an opaque value, at itself.
+        // SAFETY: this stands in for the derive: the crossing below gives,
+        // takes and lends the type as an opaque value, at itself.
         unsafe impl Crossings for $t {}
+        // SAFETY: as for `Crossings`: a reference to the type is read back at
+        // it by its opaque kind's `shared_ref`.
+        unsafe impl Referents for $t {}
 
+        impl Referent for $t {}
         impl Opaque for $t {}
 
         impl<R: Runtime> Crosses<R> for $t {
+            type Open<'a> = <R::Opaque as OpaqueKind<R>>::Shared<'a, $t>;
+            type OpenMut<'a> = <R::Opaque as OpaqueKind<R>>::Exclusive<'a, $t>;
+
             fn give(self, rt: &R, at: Settled<'_>) -> R::Value {
-                rt.give_opaque(self, at)
+                <R::Opaque as OpaqueKind<R>>::give(rt, self, at)
             }
 
             fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self {
-                rt.take_opaque(v, at)
+                <R::Opaque as OpaqueKind<R>>::take(rt, v, at)
+            }
+
+            fn open<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Open<'a>
+            where
+                Self: 'a,
+            {
+                <R::Opaque as OpaqueKind<R>>::shared(rt, place, at)
+            }
+
+            fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
+            where
+                Self: 'a,
+            {
+                <R::Opaque as OpaqueKind<R>>::exclusive(rt, place, at)
+            }
+
+            fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Open<'a>
+            where
+                Self: 'a,
+            {
+                <R::Opaque as OpaqueKind<R>>::shared_ref(rt, reference, at)
+            }
+
+            fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
+            where
+                Self: 'a,
+            {
+                <R::Opaque as OpaqueKind<R>>::exclusive_ref(rt, reference, at)
             }
         }
     )+};
