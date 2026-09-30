@@ -324,42 +324,6 @@ impl ForSource {
     }
 }
 
-/// Whether a `for`'s exit edge defines the loop's trip count (RFC-0057
-/// rule 9). Where it does, the terminator fills the exit block's leading
-/// parameter with it, as it fills the body block's leading parameters, and
-/// `exit_args` are the carried values that follow. A pass sets it where it
-/// reads the count, and nothing else does, so a loop no pass asked about
-/// keeps the exit edge it was lowered with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExitTrip {
-    /// The exit block's parameters are `exit_args`, one for one.
-    Absent,
-    /// The exit block's first parameter is the number of times the body
-    /// ran, a `u64`: `max(hi − at, 0)` for a range and the source's length
-    /// for a slice or an array.
-    Defined,
-}
-
-impl ExitTrip {
-    /// How many of the exit block's leading parameters the terminator
-    /// fills itself; the carried values follow them.
-    pub fn supplied_params(self) -> usize {
-        match self {
-            Self::Absent => 0,
-            Self::Defined => 1,
-        }
-    }
-
-    /// The exit block's parameter that holds the trip count, where the edge
-    /// defines one.
-    pub fn trip_param(self, exit_params: &[ValueId]) -> Option<ValueId> {
-        match self {
-            Self::Absent => None,
-            Self::Defined => exit_params.first().copied(),
-        }
-    }
-}
-
 /// The `Order` a call waits for and the `Order` it yields (RFC-0007).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrderEdge {

@@ -9,8 +9,7 @@
 //!   each with its name and type, and its result type.
 //! - `spans`: each instruction's and slot's span, `@start..end`.
 //! - `order`: the order tokens each instruction consumes and yields.
-//! - `structure`: a `Diamond`'s and a `Switch`'s join, a loop's stages and
-//!   exit.
+//! - `structure`: a `Diamond`'s and a `Switch`'s join.
 //! - `origins`: each value's `ValOrigin`.
 //! - `canonical`: values, blocks and instructions renumbered in the order
 //!   they print, blocks in reverse postorder from the entry, blocks no path
@@ -35,7 +34,7 @@ use rustc_hash::FxHashMap;
 
 use super::{Block, BlockId, Body, BodyId, Definition, InstId, Module, Op, OrderUse, Terminator};
 use crate::decl::PairMember;
-use crate::ir::{BinOp, Callee, ExitTrip, ForSource, IndexBound, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValOrigin, ValueId};
+use crate::ir::{BinOp, Callee, ForSource, IndexBound, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValOrigin, ValueId};
 use crate::ty::{self, Mutability, Ty};
 
 /// The items a print shows beyond blocks, instructions, terminators and
@@ -566,30 +565,11 @@ impl Printer<'_> {
                 }
                 text
             }
-            Terminator::For { source, stages, exit, exit_trip, exit_args } => {
-                let mut text = format!(
-                    "For({}) {} ? {} : {}",
-                    exit_trip_name(*exit_trip),
-                    self.for_source(source),
-                    self.target(stages.body(), &[]),
-                    self.target(*exit, exit_args)
-                );
-                if self.view.structure {
-                    text.push_str(&self.stages(stages));
-                }
-                text
+            Terminator::For { source, body, exit, exit_args } => {
+                format!("For {} ? {} : {}", self.for_source(source), self.target(*body, &[]), self.target(*exit, exit_args))
             }
-            Terminator::While { cond, stages, exit, exit_args } => {
-                let mut text = format!(
-                    "While {} ? {} : {}",
-                    self.value(*cond),
-                    self.target(stages.body(), &[]),
-                    self.target(*exit, exit_args)
-                );
-                if self.view.structure {
-                    text.push_str(&self.stages(stages));
-                }
-                text
+            Terminator::While { cond, body, exit, exit_args } => {
+                format!("While {} ? {} : {}", self.value(*cond), self.target(*body, &[]), self.target(*exit, exit_args))
             }
             Terminator::Return { value, order, span: _ } => {
                 let mut text = format!("Return {}", self.value(*value));
@@ -601,12 +581,6 @@ impl Printer<'_> {
             Terminator::Diverge => "Diverge".to_string(),
             Terminator::NoArmMatched { span: _ } => "NoArmMatched".to_string(),
         }
-    }
-
-    /// ` [b1, b4]`: every stage entry of a loop, the body first.
-    fn stages(&self, stages: &super::Stages) -> String {
-        let entries: Vec<String> = stages.entries().map(|entry| self.block_name(entry)).collect();
-        format!(" [{}]", entries.join(", "))
     }
 
     fn for_source(&self, source: &ForSource) -> String {
@@ -761,13 +735,6 @@ fn index_bound(bound: IndexBound) -> &'static str {
     match bound {
         IndexBound::Checked => "Checked",
         IndexBound::Proven => "Proven",
-    }
-}
-
-fn exit_trip_name(trip: ExitTrip) -> &'static str {
-    match trip {
-        ExitTrip::Absent => "Absent",
-        ExitTrip::Defined => "Defined",
     }
 }
 

@@ -58,8 +58,8 @@ pub trait SparseAnalysis {
 
     /// The fact of the parameter of `to` that `terminator` fills itself on
     /// its executable edge into `to`: the `index`th of the leading
-    /// parameters that edge supplies, such as a `For`'s counter and element
-    /// or its exit's trip count. `operands` are the facts of the
+    /// parameters that edge supplies, a `For`'s counter and element.
+    /// `operands` are the facts of the
     /// terminator's operands, order tokens left out.
     fn supplied(
         &self,

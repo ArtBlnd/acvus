@@ -10,9 +10,9 @@ use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 
 use super::*;
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Edge, Inst, Module, Op, Stages, Terminator};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Edge, Inst, Module, Op, Terminator};
 use crate::ir::cfg::Site;
-use crate::ir::{BinOp, Callee, ExitTrip, ForSource, PathSeg, RefTarget, UnaryOp, ValueId};
+use crate::ir::{BinOp, Callee, ForSource, PathSeg, RefTarget, UnaryOp, ValueId};
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
 use crate::ty::{
     Alignment, Calls, CastTy, Contexts, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability,
@@ -86,7 +86,7 @@ fn diamond(cond: ValueId, then_to: BlockId, else_to: BlockId, join: BlockId) -> 
 }
 
 fn while_loop(cond: ValueId, body: BlockId, exit: BlockId) -> Terminator {
-    Terminator::While { cond, stages: Stages::lowered(body), exit, exit_args: Vec::new() }
+    Terminator::While { cond, body: body, exit, exit_args: Vec::new() }
 }
 
 fn empty_declarations(interner: &Interner) -> Declarations {
@@ -310,7 +310,7 @@ where
             Terminator::JumpIf { then_to, else_to, .. } | Terminator::Diamond { then_to, else_to, .. } => {
                 branch(operands[0], *then_to, *else_to)
             }
-            Terminator::While { stages, exit, .. } => branch(operands[0], stages.body(), *exit),
+            Terminator::While { body: stage, exit, .. } => branch(operands[0], *stage, *exit),
             _ => Executable::All,
         }
     }
@@ -586,8 +586,7 @@ fn sparse_ends_on_an_infinite_domain_by_widening_at_the_header() {
 // -- What a terminator supplies ---------------------------------------------
 
 /// Constants, and a `For` over `at..hi` whose bounds are known: its counter
-/// on the body edge is `at` where the range holds one value, and its trip
-/// count on the exit edge is `hi - at` where that is not negative.
+/// on the body edge is `at` where the range holds one value.
 struct Ranges<'m>(Scalars<'m>);
 
 impl SparseAnalysis for Ranges<'_> {
@@ -606,15 +605,14 @@ impl SparseAnalysis for Ranges<'_> {
     }
 
     fn supplied(&self, terminator: &Terminator, to: BlockId, index: usize, operands: &[&Const]) -> Const {
-        let Terminator::For { source: ForSource::Range { .. }, stages, exit, .. } = terminator else {
+        let Terminator::For { source: ForSource::Range { .. }, body: stage, .. } = terminator else {
             return Const::Top;
         };
         let [Const::Int(at), Const::Int(hi), ..] = operands else {
             return Const::Top;
         };
         match (to, index) {
-            (to, 0) if to == stages.body() && *hi == at + 1 => Const::Int(*at),
-            (to, 0) if to == *exit && hi >= at => Const::Int(hi - at),
+            (to, 0) if to == *stage && *hi == at + 1 => Const::Int(*at),
             _ => Const::Top,
         }
     }
@@ -622,9 +620,9 @@ impl SparseAnalysis for Ranges<'_> {
 
 /// ```text
 /// entry:  at = 3; hi = 4; jump header
-/// header: for counter in at..hi { body } else exit(trip)
+/// header: for counter in at..hi { body } else exit
 /// body(counter): one = 1; x = counter + one; jump header
-/// exit(trip): return trip
+/// exit: return at
 /// ```
 #[test]
 fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
@@ -635,15 +633,14 @@ fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
     let hi = builder.push(constant(4), int, Span::ZERO);
     let header = builder.new_block(&[]);
     let loop_body = builder.new_block(&[int]);
-    let exit = builder.new_block(&[int]);
-    let (counter, trip) = (builder.block_params(loop_body)[0], builder.block_params(exit)[0]);
+    let exit = builder.new_block(&[]);
+    let counter = builder.block_params(loop_body)[0];
     builder.terminate(jump(header, Vec::new()), acvus_ast::Span::ZERO);
     builder.switch_to(header);
     builder.terminate(Terminator::For {
         source: ForSource::Range { at, hi },
-        stages: Stages::lowered(loop_body),
+        body: loop_body,
         exit,
-        exit_trip: ExitTrip::Defined,
         exit_args: Vec::new(),
     }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
@@ -651,17 +648,15 @@ fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
     let x = builder.push(add(counter, one), int, Span::ZERO);
     builder.terminate(jump(header, Vec::new()), acvus_ast::Span::ZERO);
     builder.switch_to(exit);
-    builder.terminate(ret(trip), acvus_ast::Span::ZERO);
+    builder.terminate(ret(at), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let facts = solve_sparse(&Ranges(Scalars::of(&f.module, id)), f.module.body(id));
     assert_eq!(*facts.of(counter), Const::Int(3));
     assert_eq!(*facts.of(x), Const::Int(4));
-    assert_eq!(*facts.of(trip), Const::Int(1));
 
     let unknowing = solve_sparse(&Propagate { domain: ConstDomain, scalars: Scalars::of(&f.module, id) }, f.module.body(id));
     assert_eq!(*unknowing.of(counter), Const::Top, "an analysis that knows nothing states top");
-    assert_eq!(*unknowing.of(trip), Const::Top);
 }
 
 // -- Order tokens ------------------------------------------------------------
@@ -2092,9 +2087,8 @@ fn mul(left: ValueId, right: ValueId) -> Op {
 fn range_for(at: ValueId, hi: ValueId, body: BlockId, exit: BlockId) -> Terminator {
     Terminator::For {
         source: ForSource::Range { at, hi },
-        stages: Stages::lowered(body),
+        body: body,
         exit,
-        exit_trip: ExitTrip::Absent,
         exit_args: Vec::new(),
     }
 }

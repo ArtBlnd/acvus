@@ -265,8 +265,8 @@ impl Scev<'_> {
         for of in self.loops.loops() {
             let header = self.body.block(self.loops.header(of));
             let counter = match header.terminator() {
-                Terminator::For { source, stages, .. } if self.loops.contains(of, stages.body()) => {
-                    Some(self.body.block(stages.body()).params()[source.counter_param()])
+                Terminator::For { source, body: stage, .. } if self.loops.contains(of, *stage) => {
+                    Some(self.body.block(*stage).params()[source.counter_param()])
                 }
                 _ => None,
             };
@@ -407,10 +407,10 @@ impl Scev<'_> {
                 self.resolved.insert(param, evolution);
             }
         }
-        let Terminator::For { source, stages, .. } = header.terminator() else {
+        let Terminator::For { source, body: stage, .. } = header.terminator() else {
             return;
         };
-        let counter = self.body.block(stages.body()).params()[source.counter_param()];
+        let counter = self.body.block(*stage).params()[source.counter_param()];
         if self.inductions.get(&counter) != Some(&of) {
             return;
         }
@@ -493,10 +493,10 @@ impl Scev<'_> {
         let header = self.loops.header(of);
         let heads_the_loop = |body: BlockId, exit: BlockId| self.loops.contains(of, body) && !self.loops.contains(of, exit);
         let (count, exit) = match self.body.block(header).terminator() {
-            Terminator::For { source, stages, exit, .. } if heads_the_loop(stages.body(), *exit) => {
+            Terminator::For { source, body: stage, exit, .. } if heads_the_loop(*stage, *exit) => {
                 (self.for_count(of, source)?, *exit)
             }
-            Terminator::While { cond, stages, exit, .. } if heads_the_loop(stages.body(), *exit) => {
+            Terminator::While { cond, body: stage, exit, .. } if heads_the_loop(*stage, *exit) => {
                 (self.while_count(of, *cond)?, *exit)
             }
             _ => return None,

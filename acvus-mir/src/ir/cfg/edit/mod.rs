@@ -152,7 +152,7 @@ struct ShapeIndex {
 }
 
 impl ShapeIndex {
-    /// Cost: O(blocks + edges + stages).
+    /// Cost: O(blocks + edges).
     fn of(body: &Body) -> ShapeIndex {
         ShapeIndex { predecessors: body.predecessors(), structural: body.structural_blocks() }
     }
@@ -501,7 +501,7 @@ where
 {
     /// Every edge into `from` goes to `to`, with its arguments; structure
     /// follows (core rule 6), so a `Diamond`'s or a `Switch`'s join or a
-    /// loop's stage or exit that is `from` becomes `to`. Refused as `Entry`
+    /// loop's body or exit that is `from` becomes `to`. Refused as `Entry`
     /// where `from` is the entry, which no edge enters; as `ParamsDisagree`
     /// where the two blocks' parameters differ in count or type; and as
     /// `ParamsUsedBeyond` at the first use, in block order, of a parameter
@@ -554,7 +554,7 @@ where
     }
 
     /// Removes blocks no edge reaches. A block a surviving `Diamond` or
-    /// `Switch` names as its join, or a surviving loop as a stage or its
+    /// `Switch` names as its join, or a surviving loop as its body or its
     /// exit, stays, as does every block such a block reaches or takes a
     /// value from, so the body stays whole.
     pub fn prune(&mut self) {
@@ -868,7 +868,7 @@ pub enum CannotRemoveParam {
 pub enum CannotMerge {
     /// It has other predecessors, or its predecessor other successors.
     NotStraight,
-    /// It is a `Diamond`'s join or a loop's stage or exit (D45).
+    /// It is a `Diamond`'s join or a loop's body or exit (D45).
     Structural,
 }
 
@@ -1049,7 +1049,7 @@ where
 
     /// G2: `block` joins its sole predecessor, which enters it by a `Jump`,
     /// its only edge. Refused where `block` is a `Diamond`'s or a `Switch`'s
-    /// join, or a loop's stage or exit, which never merge away (D45, D57);
+    /// join, or a loop's body or exit, which never merge away (D45, D57);
     /// and where another block or the body's start enters it, or its
     /// predecessor ends otherwise than in that jump.
     pub fn merge_into_predecessor(&mut self, block: BlockId) -> Result<(), CannotMerge> {

@@ -104,7 +104,7 @@ impl<'m> Rewriter<'m> {
         }
     }
 
-    /// Every edge into `from`, every `Diamond` join and loop stage and exit
+    /// Every edge into `from`, every `Diamond` join and loop body and exit
     /// naming it, and the entry if it is `from`, name `to` instead; `from`'s
     /// parameters agree with `to`'s, so every edge still agrees with its
     /// target. Cost: O(the body's terminators).

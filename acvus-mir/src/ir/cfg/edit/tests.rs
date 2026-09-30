@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dominators::{DefPoint, Dominators, def_points};
 use super::*;
-use crate::ir::cfg::{Aspect, Builder, Inst, OrderUse, Stages, Terminator};
+use crate::ir::cfg::{Aspect, Builder, Inst, OrderUse, Terminator};
 use crate::ir::{BinOp, Callee, RefTarget, UnaryOp};
 use crate::ir::{ForSource, SwitchKey};
 use crate::ty::{Mark, MarkTerm};
@@ -881,7 +881,7 @@ fn loop_computing(f: &mut Fixture, op: fn(ValueId, ValueId) -> Op) -> (BodyId, B
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let v = builder.push(op(a, a), int, at(1));
     builder.push(Op::BinOp { op: BinOp::Max, left: v, right: v }, int, at(2));
@@ -1008,7 +1008,7 @@ fn slot_across_a_diamond_and_a_loop(f: &mut Fixture) -> (BodyId, ValueId, [Block
     builder.switch_to(join);
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let read = builder.push(take(x), int, at(5));
     let step = builder.push(int_const(1), int, at(6));
@@ -1379,9 +1379,8 @@ fn range_loop(f: &mut Fixture, element: Ty) -> BodyId {
     builder.switch_to(header);
     builder.terminate(Terminator::For {
         source: ForSource::Range { at: a, hi: a },
-        stages: Stages::lowered(loop_body),
+        body: loop_body,
         exit,
-        exit_trip: crate::ir::ExitTrip::Absent,
         exit_args: Vec::new(),
     }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
@@ -1681,10 +1680,10 @@ fn split_edge_into_a_loops_body_makes_the_new_block_the_loops_body() {
     let middle = editor.split_edge(header, loop_body);
     editor.finish();
     let body = f.body(id);
-    let Terminator::While { stages, .. } = body.block(header).terminator() else {
+    let Terminator::While { body: stage, .. } = body.block(header).terminator() else {
         panic!("the header still loops")
     };
-    assert_eq!(stages.body(), middle);
+    assert_eq!(*stage, middle);
     assert!(matches!(body.block(middle).terminator(), Terminator::Jump { to, .. } if *to == loop_body));
 }
 
@@ -2313,7 +2312,7 @@ fn insert_drop_is_refused_inside_a_loop_before_a_use_the_back_edge_reaches() {
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     builder.push(neg(x), int, at(2));
     builder.push(neg(a), int, at(3));
@@ -2344,7 +2343,7 @@ fn insert_drop_after_the_last_use_of_a_value_each_iteration_makes_stands() {
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let y = builder.push(neg(a), int, at(2));
     builder.push(neg(y), int, at(3));

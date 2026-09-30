@@ -142,7 +142,7 @@ mod tests {
 
     use super::*;
     use crate::ir::RefTarget;
-    use crate::ir::cfg::{Builder, Op, Stages, Terminator};
+    use crate::ir::cfg::{Builder, Op, Terminator};
     use crate::passes::optimize::tests::{Fixture, add, assert_whole, int_const, jump, ret, trapping_div};
     use crate::ty::Mutability;
 
@@ -199,7 +199,7 @@ mod tests {
             else_args: Vec::new(),
         }, acvus_ast::Span::ZERO);
         builder.switch_to(header);
-        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+        builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let under_test = inside(&mut builder, &Outside { a, b, x, text });
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
@@ -217,7 +217,7 @@ mod tests {
         let header = body
             .blocks()
             .find_map(|(block, record)| match record.terminator() {
-                Terminator::While { stages, .. } if stages.body() == loop_body => Some(block),
+                Terminator::While { body: stage, .. } if *stage == loop_body => Some(block),
                 _ => None,
             })
             .expect("the loop keeps its header");
@@ -366,7 +366,7 @@ mod tests {
         builder.switch_to(right);
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(header);
-        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+        builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let sum = builder.push(add(a, b), int, Span::ZERO);
         builder.terminate(jump(header), acvus_ast::Span::ZERO);

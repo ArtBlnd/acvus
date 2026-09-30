@@ -447,7 +447,7 @@ where
 /// bounds.
 fn head_bounds(body: &Body, loops: &LoopTree, evolutions: &Evolutions, of: LoopId) -> bool {
     match body.block(loops.header(of)).terminator() {
-        Terminator::For { stages, exit, .. } => loops.contains(of, stages.body()) && !loops.contains(of, *exit),
+        Terminator::For { body: stage, exit, .. } => loops.contains(of, *stage) && !loops.contains(of, *exit),
         Terminator::While { .. } => evolutions.trip_count(of).is_some(),
         Terminator::Jump { .. }
         | Terminator::JumpIf { .. }
@@ -466,8 +466,8 @@ mod tests {
 
     use super::*;
     use crate::decl::{Core, DeclaredFacts, LoopMarkers, PairMember, RawDeclarations, Scheme, declared_fn_flows};
-    use crate::ir::cfg::{Builder, Stages};
-    use crate::ir::{BinOp, ExitTrip, ForSource, IndexMode};
+    use crate::ir::cfg::Builder;
+    use crate::ir::{BinOp, ForSource, IndexMode};
     use crate::passes::optimize::tests::{Fixture, add, int_const, ret};
     use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId};
 
@@ -560,7 +560,7 @@ mod tests {
     }
 
     fn while_loop(cond: ValueId, body: BlockId, exit: BlockId) -> Terminator {
-        Terminator::While { cond, stages: Stages::lowered(body), exit, exit_args: Vec::new() }
+        Terminator::While { cond, body: body, exit, exit_args: Vec::new() }
     }
 
     fn closure(bodies: Vec<BodyId>) -> Op {
@@ -690,7 +690,7 @@ mod tests {
         builder.switch_to(header);
         let source = ForSource::Range { at, hi: n };
         builder.terminate(
-            Terminator::For { source, stages: Stages::lowered(loop_body), exit, exit_trip: ExitTrip::Absent, exit_args: Vec::new() },
+            Terminator::For { source, body: loop_body, exit, exit_args: Vec::new() },
             Span::ZERO,
         );
         builder.switch_to(loop_body);

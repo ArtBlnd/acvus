@@ -11,7 +11,7 @@
 //!   `anyorder` scope gives its entry token inside and merges on close and
 //!   on every edge that leaves it.
 //! - `Spawn` and `TakeEffect` are made only together (effects §6).
-//! - A `Diamond`'s or a `Switch`'s join and a `For`'s or `While`'s stages
+//! - A `Diamond`'s or a `Switch`'s join and a `For`'s or `While`'s body
 //!   and exit follow every retarget, edge split, block split and block
 //!   removal.
 
@@ -435,7 +435,7 @@ impl Body {
     /// The instructions of `block` from `first` on, none where `first` is
     /// `None`, and its terminator, move to a new block with no parameters,
     /// and `block` jumps to it. `block` keeps its id, so every edge into
-    /// it, a `Diamond`'s join and a loop's stages and exit that name it
+    /// it, a `Diamond`'s join and a loop's body and exit that name it
     /// still do. Cost: O(the instructions that move and the terminator's
     /// operands).
     ///
@@ -462,7 +462,7 @@ impl Body {
         tail_id
     }
 
-    /// Every edge into `from`, every `Diamond` join and loop stage and exit
+    /// Every edge into `from`, every `Diamond` join and loop body and exit
     /// that names it, and the entry if it is `from`, name `to` instead.
     /// `to`'s own terminator is included, so an edge `to -> from` becomes a
     /// loop on `to`. Cost: O(the body's terminators).

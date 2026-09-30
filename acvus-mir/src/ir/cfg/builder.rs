@@ -482,8 +482,8 @@ impl<'m> Builder<'m> {
                     self.order_mut().leaving.insert((at, position), gathered);
                 }
             }
-            if let Terminator::For { stages, .. } | Terminator::While { stages, .. } = &terminator {
-                self.order_mut().loop_entries.insert(stages.body(), at);
+            if let Terminator::For { body, .. } | Terminator::While { body, .. } = &terminator {
+                self.order_mut().loop_entries.insert(*body, at);
             }
         }
         if let Terminator::Return { order, .. } = &mut terminator {

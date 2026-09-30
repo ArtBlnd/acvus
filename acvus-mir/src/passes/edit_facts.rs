@@ -792,7 +792,7 @@ mod tests {
         builder.switch_to(header);
         builder.terminate(Terminator::While {
             cond: c,
-            stages: crate::ir::cfg::Stages::lowered(loop_body),
+            body: loop_body,
             exit,
             exit_args: Vec::new(),
         }, acvus_ast::Span::ZERO);

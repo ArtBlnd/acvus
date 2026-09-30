@@ -471,7 +471,7 @@ fn the_token_crosses_a_loop_back_edge() {
     builder.switch_to(header);
     builder.terminate(Terminator::While {
         cond: c,
-        stages: Stages::lowered(loop_body),
+        body: loop_body,
         exit,
         exit_args: Vec::new(),
     }, acvus_ast::Span::ZERO);
@@ -776,7 +776,7 @@ fn a_start_is_not_pushed_alone() {
     );
 }
 
-// -- 6. A Diamond's join and a loop's stages and exit follow every edit ---
+// -- 6. A Diamond's join and a loop's body and exit follow every edit ---
 
 #[test]
 fn a_retarget_updates_a_diamonds_join() {
@@ -811,7 +811,7 @@ fn a_retarget_updates_a_diamonds_join() {
 }
 
 #[test]
-fn a_retarget_updates_a_loops_stages_and_exit() {
+fn a_retarget_updates_a_loops_body_and_exit() {
     let mut f = fixture();
     let (na, nc, int, bool) = (f.name("a"), f.name("c"), f.int, f.bool);
     let mut builder = build(&mut f.module, false, f.int);
@@ -819,7 +819,7 @@ fn a_retarget_updates_a_loops_stages_and_exit() {
     let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let header = builder.current_block();
     let [loop_body, exit, other_body, other_exit] = [(); 4].map(|()| builder.new_block(&[]));
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     for block in [loop_body, other_body] {
         builder.switch_to(block);
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
@@ -833,10 +833,10 @@ fn a_retarget_updates_a_loops_stages_and_exit() {
     let mut rewriter = f.module.rewrite(id);
     rewriter.retarget(loop_body, other_body);
     rewriter.retarget(exit, other_exit);
-    let Terminator::While { stages, exit: now, .. } = rewriter.body().block(header).terminator() else {
+    let Terminator::While { body: stage, exit: now, .. } = rewriter.body().block(header).terminator() else {
         panic!("the header still ends in its loop")
     };
-    assert_eq!(stages.body(), other_body);
+    assert_eq!(*stage, other_body);
     assert_eq!(*now, other_exit);
 }
 
@@ -1085,7 +1085,7 @@ fn the_core_records_every_token_it_makes() {
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let looped = builder.push_effect(loop_call, int, at(40));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);

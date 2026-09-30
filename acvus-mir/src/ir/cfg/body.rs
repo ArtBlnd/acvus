@@ -7,7 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::op::Op;
-use crate::ir::{DebugInfo, ExitTrip, ForSource, OrderEdge, SwitchKey, ValueId};
+use crate::ir::{DebugInfo, ForSource, OrderEdge, SwitchKey, ValueId};
 use crate::ty::{Concrete, Ty, Types};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -327,33 +327,6 @@ impl Inst {
     }
 }
 
-/// A loop's stage chain (effects: loop deps): the entry block of each stage,
-/// in body order; the first is the body block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Stages {
-    body: BlockId,
-    rest: Vec<BlockId>,
-}
-
-impl Stages {
-    /// The chain a loop is lowered with: one stage, the body.
-    pub fn lowered(body: BlockId) -> Stages {
-        Stages { body, rest: Vec::new() }
-    }
-
-    pub fn body(&self) -> BlockId {
-        self.body
-    }
-
-    pub fn entries(&self) -> impl Iterator<Item = BlockId> + '_ {
-        std::iter::once(self.body).chain(self.rest.iter().copied())
-    }
-
-    fn entries_mut(&mut self) -> impl Iterator<Item = &mut BlockId> {
-        std::iter::once(&mut self.body).chain(self.rest.iter_mut())
-    }
-}
-
 /// Control flow. `Diamond`, `Switch` and the loops hold structure on purpose
 /// (D44, D45, D57): the core keeps their structural blocks in step with every
 /// edit, and a `Diamond` or a `Switch` is made only by the Builder, for an
@@ -364,8 +337,8 @@ pub enum Terminator {
     JumpIf { cond: ValueId, then_to: BlockId, then_args: Vec<ValueId>, else_to: BlockId, else_args: Vec<ValueId> },
     Diamond { cond: ValueId, then_to: BlockId, then_args: Vec<ValueId>, else_to: BlockId, else_args: Vec<ValueId>, join: BlockId },
     Switch { tag: ValueId, arms: Vec<(SwitchKey, BlockId, Vec<ValueId>)>, default: Option<(BlockId, Vec<ValueId>)>, join: BlockId },
-    For { source: ForSource, stages: Stages, exit: BlockId, exit_trip: ExitTrip, exit_args: Vec<ValueId> },
-    While { cond: ValueId, stages: Stages, exit: BlockId, exit_args: Vec<ValueId> },
+    For { source: ForSource, body: BlockId, exit: BlockId, exit_args: Vec<ValueId> },
+    While { cond: ValueId, body: BlockId, exit: BlockId, exit_args: Vec<ValueId> },
     Return { value: ValueId, order: Option<ValueId>, span: Span },
     Diverge,
     /// Where no arm of a `match` answers: no run reaches it, which
@@ -384,21 +357,21 @@ pub struct Edge<'t> {
 
 impl Terminator {
     /// Every block this terminator names as a structural label: a
-    /// `Diamond`'s or a `Switch`'s join, or a loop's stage or exit (D45,
+    /// `Diamond`'s or a `Switch`'s join, or a loop's body or exit (D45,
     /// D57).
     fn for_each_structural_label(&self, mut on_label: impl FnMut(BlockId)) {
         match self {
             Terminator::Diamond { join, .. } | Terminator::Switch { join, .. } => on_label(*join),
-            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
+            Terminator::For { body, exit, .. } | Terminator::While { body, exit, .. } => {
                 on_label(*exit);
-                stages.entries().for_each(&mut on_label);
+                on_label(*body);
             }
             Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
     }
 
     /// Every edge, in the terminator's own order; a `Diamond`'s or a
-    /// `Switch`'s join and a loop's later stages are not edges. Cost: O(its edges).
+    /// `Switch`'s join is not an edge. Cost: O(its edges).
     pub fn edges(&self) -> SmallVec<[Edge<'_>; 2]> {
         fn plain(to: BlockId, args: &[ValueId]) -> Edge<'_> {
             Edge { to, supplied: 0, args }
@@ -414,12 +387,12 @@ impl Terminator {
                 .map(|(_, to, args)| plain(*to, args))
                 .chain(default.iter().map(|(to, args)| plain(*to, args)))
                 .collect(),
-            Terminator::For { source, stages, exit, exit_trip, exit_args } => smallvec::smallvec![
-                Edge { to: stages.body(), supplied: source.supplied_params(), args: &[] },
-                Edge { to: *exit, supplied: exit_trip.supplied_params(), args: exit_args },
+            Terminator::For { source, body, exit, exit_args } => smallvec::smallvec![
+                Edge { to: *body, supplied: source.supplied_params(), args: &[] },
+                plain(*exit, exit_args),
             ],
-            Terminator::While { stages, exit, exit_args, .. } => {
-                smallvec::smallvec![plain(stages.body(), &[]), plain(*exit, exit_args)]
+            Terminator::While { body, exit, exit_args, .. } => {
+                smallvec::smallvec![plain(*body, &[]), plain(*exit, exit_args)]
             }
             Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => SmallVec::new(),
         }
@@ -447,12 +420,12 @@ impl Terminator {
                     on_edge(*to, 0, Some(args));
                 }
             }
-            Terminator::For { source, stages, exit, exit_trip, exit_args } => {
-                on_edge(stages.body(), source.supplied_params(), None);
-                on_edge(*exit, exit_trip.supplied_params(), Some(exit_args));
+            Terminator::For { source, body, exit, exit_args } => {
+                on_edge(*body, source.supplied_params(), None);
+                on_edge(*exit, 0, Some(exit_args));
             }
-            Terminator::While { stages, exit, exit_args, .. } => {
-                on_edge(stages.body(), 0, None);
+            Terminator::While { body, exit, exit_args, .. } => {
+                on_edge(*body, 0, None);
                 on_edge(*exit, 0, Some(exit_args));
             }
             Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
@@ -475,8 +448,8 @@ impl Terminator {
                 Some((_, to, _)) => to,
                 None => &mut default.as_mut().expect("a Switch's edges past its arms are its default").0,
             },
-            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
-                if position == 0 { &mut stages.body } else { exit }
+            Terminator::For { body, exit, .. } | Terminator::While { body, exit, .. } => {
+                if position == 0 { body } else { exit }
             }
             Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {
                 panic!("a terminator without edges has no edge at position {position}")
@@ -485,8 +458,8 @@ impl Terminator {
     }
 
     /// Every block the terminator names: its edges' targets and its
-    /// structural blocks (a `Diamond`'s or a `Switch`'s join, every stage
-    /// entry).
+    /// structural blocks (a `Diamond`'s or a `Switch`'s join, a loop's body
+    /// and exit).
     pub(super) fn for_each_block_mut(&mut self, mut on_block: impl FnMut(&mut BlockId)) {
         match self {
             Terminator::Jump { to, .. } => on_block(to),
@@ -508,8 +481,8 @@ impl Terminator {
                 }
                 on_block(join);
             }
-            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
-                stages.entries_mut().for_each(&mut on_block);
+            Terminator::For { body, exit, .. } | Terminator::While { body, exit, .. } => {
+                on_block(body);
                 on_block(exit);
             }
             Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
@@ -519,10 +492,9 @@ impl Terminator {
     pub(super) fn for_each_block(&self, mut on_block: impl FnMut(BlockId)) {
         match self {
             Terminator::Diamond { join, .. } | Terminator::Switch { join, .. } => on_block(*join),
-            Terminator::For { stages, .. } | Terminator::While { stages, .. } => {
-                stages.entries().skip(1).for_each(&mut on_block);
-            }
-            Terminator::Jump { .. }
+            Terminator::For { .. }
+            | Terminator::While { .. }
+            | Terminator::Jump { .. }
             | Terminator::JumpIf { .. }
             | Terminator::Return { .. }
             | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
@@ -873,8 +845,8 @@ impl Body {
     }
 
     /// Whether a terminator of the body names `block` as a structural
-    /// label: a `Diamond`'s or a `Switch`'s join, or a loop's stage or exit
-    /// (D45, D57). Cost: O(blocks + stages).
+    /// label: a `Diamond`'s or a `Switch`'s join, or a loop's body or exit
+    /// (D45, D57). Cost: O(blocks).
     pub fn is_structural(&self, block: BlockId) -> bool {
         let mut named = false;
         for (_, from) in self.blocks() {
@@ -884,7 +856,7 @@ impl Body {
     }
 
     /// Whether each block, by index, is a structural label as
-    /// `is_structural` tells. Cost: O(blocks + stages).
+    /// `is_structural` tells. Cost: O(blocks).
     pub(crate) fn structural_blocks(&self) -> Vec<bool> {
         let mut structural = vec![false; self.blocks.len()];
         for (_, from) in self.blocks() {

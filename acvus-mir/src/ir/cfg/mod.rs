@@ -14,7 +14,7 @@ mod rewriter;
 pub mod takings;
 
 pub use aspect::{Aspect, Changes};
-pub use body::{Block, BlockId, Body, BodyContext, BodyId, Definition, Edge, Inst, InstId, Insts, Module, OrderUse, Site, Stages, Terminator};
+pub use body::{Block, BlockId, Body, BodyContext, BodyId, Definition, Edge, Inst, InstId, Insts, Module, OrderUse, Site, Terminator};
 pub use builder::{Builder, Unsealed};
 pub use op::Op;
 pub use core::StillUsed;

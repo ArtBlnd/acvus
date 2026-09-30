@@ -152,7 +152,7 @@ impl SparseAnalysis for Constants<'_> {
             Terminator::JumpIf { then_to, else_to, .. } | Terminator::Diamond { then_to, else_to, .. } => {
                 branch(operands[0], *then_to, *else_to)
             }
-            Terminator::While { stages, exit, .. } => branch(operands[0], stages.body(), *exit),
+            Terminator::While { body: stage, exit, .. } => branch(operands[0], *stage, *exit),
             Terminator::Switch { arms, default, .. } => {
                 let known = match operands[0] {
                     Constant::Bottom => return Executable::Only(Vec::new()),
@@ -175,24 +175,9 @@ impl SparseAnalysis for Constants<'_> {
         }
     }
 
-    /// A `For`'s counter and element are `top`; its trip count is known
-    /// where both ends of its range are.
-    fn supplied(&self, terminator: &Terminator, to: BlockId, _index: usize, operands: &[&Constant]) -> Constant {
-        let Terminator::For { source, exit, .. } = terminator else {
-            panic!("only a For supplies parameters, not {terminator:?}")
-        };
-        if to != *exit {
-            return Constant::Top;
-        }
-        match (source, operands) {
-            (ForSource::Range { .. }, [Constant::Known(at), Constant::Known(hi), ..]) => {
-                let (Literal::Int(at), Literal::Int(hi)) = (at.desugared(), hi.desugared()) else {
-                    panic!("a range's ends are integers, not {at:?} and {hi:?}")
-                };
-                Constant::Known(Literal::Int((hi - at).max(0)))
-            }
-            _ => Constant::Top,
-        }
+    /// A `For`'s counter and element are `top`.
+    fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&Constant]) -> Constant {
+        Constant::Top
     }
 }
 
@@ -256,26 +241,19 @@ impl SparseAnalysis for Intervals<'_> {
         Executable::All
     }
 
-    /// A range's counter lies in `[at, hi - 1]` and its trip count is
-    /// `max(hi - at, 0)`; a slice's or an array's counter and trip count
-    /// are counts, and its element is `top` (D60).
-    fn supplied(&self, terminator: &Terminator, to: BlockId, index: usize, operands: &[&Interval]) -> Interval {
-        let Terminator::For { source, stages, .. } = terminator else {
+    /// A range's counter lies in `[at, hi - 1]`; a slice's or an array's
+    /// counter is a count, and its element is `top` (D60).
+    fn supplied(&self, terminator: &Terminator, _to: BlockId, index: usize, operands: &[&Interval]) -> Interval {
+        let Terminator::For { source, .. } = terminator else {
             panic!("only a For supplies parameters, not {terminator:?}")
         };
-        let into_body = to == stages.body();
         match (source, operands) {
-            (ForSource::Range { .. }, [at, hi, ..]) => match into_body {
-                true => at.at_least_lo().meet(&hi.difference(&Interval::exactly(1)).at_most_hi()),
-                false => hi.difference(at).greatest(&Interval::exactly(0)),
-            },
+            (ForSource::Range { .. }, [at, hi, ..]) => at.at_least_lo().meet(&hi.difference(&Interval::exactly(1)).at_most_hi()),
             (ForSource::Range { .. }, _) => panic!("a range For reads its two ends"),
-            (ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_), _) => {
-                match into_body && index != source.counter_param() {
-                    true => Interval::full(),
-                    false => Interval::exactly(0).at_least_lo(),
-                }
-            }
+            (ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_), _) => match index == source.counter_param() {
+                true => Interval::exactly(0).at_least_lo(),
+                false => Interval::full(),
+            },
         }
     }
 }
@@ -398,12 +376,12 @@ impl SparseAnalysis for Affines<'_> {
 
     /// A counter entering a `For`'s body is its end less one less the steps
     /// left, a range's end its `hi` and a slice's its length. An array's
-    /// counter, an element and a trip count are `top`.
+    /// counter and an element are `top`.
     fn supplied(&self, terminator: &Terminator, to: BlockId, index: usize, operands: &[&Affine]) -> Affine {
-        let Terminator::For { source, stages, .. } = terminator else {
+        let Terminator::For { source, body: stage, .. } = terminator else {
             panic!("only a For supplies parameters, not {terminator:?}")
         };
-        if to != stages.body() || index != source.counter_param() {
+        if to != *stage || index != source.counter_param() {
             return Affine::Top;
         }
         let end = match (source, operands) {
@@ -591,8 +569,7 @@ mod tests {
     use super::*;
     use crate::decl::declared::{Comparison, Relation, Term};
     use crate::decl::{Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
-    use crate::ir::cfg::Stages;
-    use crate::ir::{BinOp, ExitTrip};
+    use crate::ir::BinOp;
     use crate::passes::domain::Bound;
     use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Poly, Ty, TyId, TyKind};
 
@@ -766,9 +743,9 @@ mod tests {
 
     /// ```text
     /// entry:            at = 0; hi = 10; s0 = 0; jump header(s0)
-    /// header(s):        for counter in at..hi { body } else exit(trip)
+    /// header(s):        for counter in at..hi { body } else exit
     /// body(counter):    one = 1; s1 = s + one; jump header(s1)
-    /// exit(trip):       return trip
+    /// exit:             return s
     /// ```
     /// The counter's interval is what the `For` supplies; the carried `s`
     /// widens at the header, and `s + 1` is clamped to its width.
@@ -785,15 +762,13 @@ mod tests {
         let s = builder.block_params(header)[0];
         let loop_body = builder.new_block(&[int]);
         let counter = builder.block_params(loop_body)[0];
-        let exit = builder.new_block(&[int]);
-        let trip = builder.block_params(exit)[0];
+        let exit = builder.new_block(&[]);
         builder.terminate(jump(header, vec![s0]), acvus_ast::Span::ZERO);
         builder.switch_to(header);
         builder.terminate(Terminator::For {
             source: ForSource::Range { at, hi },
-            stages: Stages::lowered(loop_body),
+            body: loop_body,
             exit,
-            exit_trip: ExitTrip::Defined,
             exit_args: Vec::new(),
         }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
@@ -801,12 +776,11 @@ mod tests {
         let s1 = builder.push(binary(BinOp::Add, s, one), int, Span::ZERO);
         builder.terminate(jump(header, vec![s1]), acvus_ast::Span::ZERO);
         builder.switch_to(exit);
-        builder.terminate(ret(trip), acvus_ast::Span::ZERO);
+        builder.terminate(ret(s), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
         let intervals = facts::<IntervalValues>(&f.module, &decls, id);
         assert_eq!(*intervals.of(counter), finite(0, 9));
-        assert_eq!(*intervals.of(trip), finite(10, 10));
         assert_eq!(
             *intervals.of(s),
             Interval::Range { lo: Bound::Finite(0), hi: Bound::PosInfinity },
@@ -816,7 +790,6 @@ mod tests {
 
         let constants = facts::<ConstantValues>(&f.module, &decls, id);
         assert_eq!(*constants.of(counter), Constant::Top);
-        assert_eq!(constants.constant(trip), Some(&Literal::Int(10)));
         assert_eq!(*constants.of(s), Constant::Top);
 
         let affine = facts::<AffineValues>(&f.module, &decls, id);

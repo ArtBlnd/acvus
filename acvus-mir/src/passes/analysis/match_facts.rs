@@ -370,8 +370,8 @@ impl SparseAnalysis for Matches<'_> {
         }
     }
 
-    /// What a terminator fills itself, a `For`'s counter, element or trip
-    /// count, is no instruction the tables name: top.
+    /// What a terminator fills itself, a `For`'s counter or element, is no
+    /// instruction the tables name: top.
     fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&MatchValue]) -> MatchValue {
         self.domain.top()
     }

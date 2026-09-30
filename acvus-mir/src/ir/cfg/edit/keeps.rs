@@ -72,7 +72,7 @@ macro_rules! invariant {
 invariant!(TypesAgree, types_agree, "Every operand's type is what its instruction takes, and every edge's arguments agree with its target's parameters.");
 invariant!(DefDominatesUses, def_dominates_uses, "Every value's definition dominates each of its uses.");
 invariant!(OrderChainWhole, order_chain_whole, "Every effectful instruction consumes exactly one live token, and every token but a Merge's reaches the body's return (effects §2-3); a Merge nothing consumes orders nothing and is a dead value (D65). A place operation on a volatile context stands on the chain, and one on a context that is not volatile does not (context §3).");
-invariant!(StructureKept, structure_kept, "Every `Diamond`'s and `Switch`'s join and every loop's stages and exit are blocks of the body (D45, D57).");
+invariant!(StructureKept, structure_kept, "Every `Diamond`'s and `Switch`'s join and every loop's body and exit are blocks of the body (D45, D57).");
 invariant!(NeverDiverges, never_diverges, "In every block the entry reaches, an instruction yielding `!` is the block's last, and the block ends in `Diverge`: no value of type `!` exists, so no run goes past one (types §4, control-flow).");
 invariant!(SplitTakenOnce, split_taken_once, "Every start of a split call is taken exactly once on every path from it (effects §6).");
 
@@ -752,11 +752,8 @@ impl TypeCheck<'_> {
                     self.key_fits(key, scrutinee).map_err(at)?;
                 }
             }
-            Terminator::For { source, stages, exit, exit_trip, .. } => {
-                self.loop_source(source, stages.body()).map_err(at)?;
-                if let Some(trip) = exit_trip.trip_param(self.body.block(*exit).params()) {
-                    self.is_u64(trip).map_err(at)?;
-                }
+            Terminator::For { source, body, .. } => {
+                self.loop_source(source, *body).map_err(at)?;
             }
             Terminator::Jump { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
@@ -1108,9 +1105,9 @@ fn structure_kept(body: &Body, _: &Types<Concrete>) -> Found {
             Terminator::Switch { join, .. } => {
                 found(is_block(*join), || format!("{id:?}'s Switch joins at {join:?}, which is not a block"))?
             }
-            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
-                for stage in stages.entries().chain(std::iter::once(*exit)) {
-                    found(is_block(stage), || format!("{id:?}'s loop names {stage:?}, which is not a block"))?;
+            Terminator::For { body, exit, .. } | Terminator::While { body, exit, .. } => {
+                for named in [*body, *exit] {
+                    found(is_block(named), || format!("{id:?}'s loop names {named:?}, which is not a block"))?;
                 }
             }
             Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}

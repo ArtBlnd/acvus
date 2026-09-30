@@ -491,7 +491,7 @@ fn a_for_over_a_range_is_a_for_of_its_bounds() {
         .entry_terminators()
         .into_iter()
         .find_map(|terminator| match terminator {
-            Terminator::For { source: ForSource::Range { .. }, stages, .. } => Some(stages.body()),
+            Terminator::For { source: ForSource::Range { .. }, body: stage, .. } => Some(*stage),
             _ => None,
         })
         .expect("a For over a range");
@@ -512,7 +512,7 @@ fn while_let_is_a_while_on_the_patterns_test() {
         .entry_terminators()
         .into_iter()
         .find_map(|terminator| match terminator {
-            Terminator::While { cond, stages, .. } => Some((*cond, stages.body())),
+            Terminator::While { cond, body: stage, .. } => Some((*cond, *stage)),
             _ => None,
         })
         .expect("a While");
@@ -1669,7 +1669,7 @@ fn fors(lowered: &Lowered) -> Vec<(&ForSource, crate::ir::cfg::BlockId, crate::i
         .entry_terminators()
         .into_iter()
         .filter_map(|terminator| match terminator {
-            Terminator::For { source, stages, exit, .. } => Some((source, stages.body(), *exit)),
+            Terminator::For { source, body: stage, exit, .. } => Some((source, *stage, *exit)),
             _ => None,
         })
         .collect()

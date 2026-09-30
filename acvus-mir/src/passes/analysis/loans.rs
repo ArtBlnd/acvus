@@ -2107,12 +2107,12 @@ impl Forward<'_> {
 
     /// A `For` fills its body's leading parameters: a slice's element is a
     /// reborrow of what the source lends, made at the `For`, an array's is
-    /// moved out of it, and the counter holds none; an exit's trip count
-    /// holds none. A `Return` passes its value out by value.
+    /// moved out of it, and the counter holds none. A `Return` passes its
+    /// value out by value.
     fn step_terminator(&self, block: BlockId, terminator: &Terminator, state: &mut State, record: &mut Record) {
         let site = Site::Term(block);
-        let (source, stages, exit, exit_trip) = match terminator {
-            Terminator::For { source, stages, exit, exit_trip, .. } => (source, stages, exit, exit_trip),
+        let (source, stage) = match terminator {
+            Terminator::For { source, body: stage, .. } => (source, stage),
             Terminator::Return { value, .. } => {
                 self.passed(state, *value, site, None, record);
                 self.page_of_terminator(terminator).record(site, record);
@@ -2120,7 +2120,7 @@ impl Forward<'_> {
             }
             _ => return,
         };
-        let params = self.body.block(stages.body()).params();
+        let params = self.body.block(*stage).params();
         let element = match source {
             ForSource::Slice(slice) => Some(self.reborrow(state, *slice, Mode::Shared, site, record)),
             ForSource::SliceMut(slice) => Some(self.reborrow(state, *slice, Mode::Exclusive, site, record)),
@@ -2136,9 +2136,6 @@ impl Forward<'_> {
                 .find(|param| *param != counter)
                 .expect("a traversal supplies its element beside its counter");
             self.define(state, element_param, element);
-        }
-        if let Some(trip) = exit_trip.trip_param(self.body.block(*exit).params()) {
-            self.define(state, trip, empty(self.width(self.body.ty_of(trip))));
         }
     }
 

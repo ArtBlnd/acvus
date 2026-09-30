@@ -2,7 +2,7 @@ use acvus_ast::{Literal, Span};
 
 use super::*;
 use crate::ir::cfg::edit::{Editor, Position, Value};
-use crate::ir::cfg::{BlockId, Body, Definition, Stages, Terminator};
+use crate::ir::cfg::{BlockId, Body, Definition, Terminator};
 use crate::ir::{BinOp, ValueId};
 use crate::passes::edit_facts::EditFacts;
 use crate::passes::optimize::tests::{Fixture, add, assign, bool_const, declarations, int_const, jump, ret, take, trapping_div};
@@ -41,7 +41,7 @@ fn sample(f: &mut Fixture) -> Sample {
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let t1 = builder.push(add(n, n), int, Span::ZERO);
     let t2 = builder.push(add(n, n), int, Span::ZERO);
@@ -108,7 +108,7 @@ fn the_full_level_reaches_the_expected_form() {
     let body = f.module.body(id);
     assert!(body.slots().is_empty(), "{}", f.snapshot(id));
     let Some((header, cond_stage, exit)) = body.blocks().find_map(|(block, record)| match record.terminator() {
-        Terminator::While { stages, exit, .. } => Some((block, stages.body(), *exit)),
+        Terminator::While { body: stage, exit, .. } => Some((block, *stage, *exit)),
         _ => None,
     }) else {
         panic!("the loop stays:\n{}", f.snapshot(id))
@@ -287,7 +287,7 @@ fn a_loop_keeps_its_empty_preheader_into_p7() {
     builder.switch_to(join);
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     builder.push(trapping_div(n, n), int, Span::ZERO);
     builder.terminate(jump(header), acvus_ast::Span::ZERO);

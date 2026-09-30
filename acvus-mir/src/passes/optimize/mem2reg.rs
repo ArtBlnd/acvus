@@ -44,7 +44,7 @@ mod tests {
 
     use super::*;
     use crate::ir::RefTarget;
-    use crate::ir::cfg::{Op, Stages, Terminator};
+    use crate::ir::cfg::{Op, Terminator};
     use crate::passes::optimize::tests::{Fixture, add, assert_whole, assign, int_const, jump, ret, take};
     use crate::ty::Mutability;
 
@@ -77,7 +77,7 @@ mod tests {
         builder.switch_to(join);
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(header);
-        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+        builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let read = builder.push(take(x), int, Span::ZERO);
         let step = builder.push(int_const(1), int, Span::ZERO);

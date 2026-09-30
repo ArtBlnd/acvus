@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use acvus_ast::Span;
 
-use crate::ir::cfg::{BodyId, Module, Op, Stages, Terminator};
+use crate::ir::cfg::{BodyId, Module, Op, Terminator};
 use crate::ir::{BinOp, RefTarget, ValueId};
 use crate::passes::analysis::AnalysisManager;
 use crate::passes::optimize::tests::{Fixture, add, assign, declarations, int_const, jump, ret, take};
@@ -96,8 +96,7 @@ fn build(f: &mut Fixture, shape: Shape, size: usize) -> BodyId {
                 builder.terminate(jump(headers[0]), Span::ZERO);
                 for depth in 0..3 {
                     builder.switch_to(headers[depth]);
-                    let stages = Stages::lowered(bodies[depth]);
-                    builder.terminate(Terminator::While { cond: c, stages, exit: exits[depth], exit_args: Vec::new() }, Span::ZERO);
+                    builder.terminate(Terminator::While { cond: c, body: bodies[depth], exit: exits[depth], exit_args: Vec::new() }, Span::ZERO);
                     builder.switch_to(bodies[depth]);
                     let invariant = builder.push(add(p, p), int, Span::ZERO);
                     let scaled = builder.push(mul(invariant, p), int, Span::ZERO);

@@ -7,7 +7,7 @@
 //! successor it is (`merge_into_predecessor`). Last, `prune` removes the
 //! blocks no edge reaches. Legality is the editor's: a bypass is refused for
 //! the entry and for a block whose parameters are read beyond its jump, and
-//! a merge for a `Diamond`'s or a `Switch`'s join and a loop's stage or exit
+//! a merge for a `Diamond`'s or a `Switch`'s join and a loop's body or exit
 //! (D45, D57). A bypass of such a label moves the structure with the edges
 //! (core rule 6), so the `Diamond`, `Switch` or loop still holds it.
 //!

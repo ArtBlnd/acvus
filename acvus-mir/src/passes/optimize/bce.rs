@@ -66,8 +66,8 @@ mod tests {
     use crate::decl::declared::{Atom, Comparison, Relation, Subject, Term};
     use crate::decl::{Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
     use crate::decl::Declarations;
-    use crate::ir::cfg::{BlockId, Inst, Stages, Terminator};
-    use crate::ir::{Callee, ExitTrip, ExternImpl, ForSource, IndexMode, RefTarget, ValueId};
+    use crate::ir::cfg::{BlockId, Inst, Terminator};
+    use crate::ir::{Callee, ExternImpl, ForSource, IndexMode, RefTarget, ValueId};
     use crate::ty::{
         Calls, Concrete, Effect, EffectTerm, FlowTerm, Holds, IntTy, LenTerm, Mutability, Poly, Ty, TyKind,
         Types,
@@ -262,9 +262,8 @@ mod tests {
         builder.terminate(
             Terminator::For {
                 source: ForSource::Range { at, hi },
-                stages: Stages::lowered(loop_body),
+                body: loop_body,
                 exit,
-                exit_trip: ExitTrip::Absent,
                 exit_args: Vec::new(),
             },
             Span::ZERO,
@@ -358,9 +357,8 @@ mod tests {
         builder.switch_to(header);
         builder.terminate(Terminator::For {
             source: ForSource::Range { at, hi },
-            stages: Stages::lowered(loop_body),
+            body: loop_body,
             exit,
-            exit_trip: ExitTrip::Absent,
             exit_args: Vec::new(),
         }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
