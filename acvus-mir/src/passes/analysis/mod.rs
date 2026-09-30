@@ -13,6 +13,7 @@ mod loans;
 mod loop_tree;
 mod manager;
 mod post_dominators;
+mod scev;
 mod sparse;
 mod values;
 
@@ -30,6 +31,7 @@ pub use liveness::Liveness;
 pub use loans::{Access, ElementAt, Loan, LoanSet, Loans, Made, Mode, Place, Reach, Storage, TouchedPlace};
 pub use loop_tree::{LoopId, LoopTree};
 pub use post_dominators::PostDominators;
+pub use scev::{Evolution, Evolutions, Recurrence, ScalarEvolution, TripCount};
 pub use manager::{Analysis, AnalysisManager};
 pub use sparse::{Executable, SparseAnalysis, SparseFacts, solve_sparse};
 pub use values::{AffineValues, ConstantValues, IntervalValues};
