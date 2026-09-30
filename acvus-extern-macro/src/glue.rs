@@ -206,8 +206,11 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         Output::Borrowed { from, mutable } => {
             let a = format_ident!("__a{}", from);
             let finish = if mutable { quote!(finish_borrowed_mut) } else { quote!(finish_borrowed) };
-            let out = sig.at_stand_ins(&sig.written_output, runtime);
-            quote!(__cx.#finish::<_, <#out as ::acvus_extern::borrowed::Borrows>::Form>(#a, move |__lent| #call))
+            quote! {
+                __cx.#finish(#a, move |__lent, __sink| {
+                    ::acvus_extern::borrowed::Borrows::made(#call, &__sink)
+                })
+            }
         }
         Output::Never => quote!(match #call {}),
         Output::Value(_) => quote! {

@@ -383,3 +383,14 @@ fn a_call_that_never_returns_traps() {
     let message = produce(&mut frame, String::from("failed on purpose"));
     frame.call_registered(path, &[Pass::Lend(message, Shared)]);
 }
+
+/// A borrowed result's parts need outlive only the borrow they are made
+/// under, whatever lifetimes their own type carries: no type variable is
+/// bounded `'static` (limitations §3). This compiles, and is all it checks.
+#[allow(dead_code)]
+fn borrows_at_any_lifetime<'s, 'x, R: Runtime>(
+    part: &'s [Uniform<R, &'x ()>],
+    sink: &acvus_extern::borrowed::Sink<'s, R>,
+) -> acvus_extern::borrowed::Made<'s, R> {
+    acvus_extern::borrowed::Borrows::made(part.first(), sink)
+}

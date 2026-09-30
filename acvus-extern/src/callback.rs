@@ -32,7 +32,9 @@ impl<A, U, E, R: Runtime> Callback<'_, '_, A, U, E, R> {
 /// `&'l mut T`. Its methods make and read values at the form's type, so it
 /// is sealed: only this crate implements it.
 pub trait LoanForm<R: Runtime>: LoanForms {
-    type At<'l>;
+    type At<'l>
+    where
+        Self: 'l;
 
     /// How a returning call passes the value `lend` makes: lent where it is a
     /// reference value, by value where it is given.
@@ -43,15 +45,16 @@ pub trait LoanForm<R: Runtime>: LoanForms {
     /// crosses as: a reference value to a lent leaf, a given value for a
     /// crossing leaf.
     #[doc(hidden)]
-    fn lend<'l>(value: Self::At<'l>, rt: &'l R, at: Settled<'l>) -> R::Value;
-    /// The value an awaited call's argument crosses as.
-    #[doc(hidden)]
-    fn give_moved<'a>(value: Self::At<'static>, rt: &'a R, at: Settled<'a>) -> R::Value;
+    fn lend<'l>(value: Self::At<'l>, rt: &'l R, at: Settled<'l>) -> R::Value
+    where
+        Self: 'l;
     /// A returning call's result read back at its form. The result is handed
     /// over, so the read owns it: a reference value is released once its
     /// target is read, and a value is taken.
     #[doc(hidden)]
-    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Self::At<'l>;
+    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Self::At<'l>
+    where
+        Self: 'l;
 }
 
 /// `&'l T`: a part of what the returning call lent, shared.
@@ -60,37 +63,47 @@ pub struct Lent<T: ?Sized>(PhantomData<fn() -> *const T>);
 pub struct LentMut<T: ?Sized>(PhantomData<fn() -> *const T>);
 
 impl<R: Runtime, T: Crosses<R>> LoanForm<R> for T {
-    type At<'l> = T;
+    type At<'l>
+        = T
+    where
+        Self: 'l;
 
     const LENT: Option<Mutability> = None;
 
-    fn lend<'l>(value: T, rt: &'l R, at: Settled<'l>) -> R::Value {
+    fn lend<'l>(value: T, rt: &'l R, at: Settled<'l>) -> R::Value
+    where
+        Self: 'l,
+    {
         value.give(rt, at)
     }
 
-    fn give_moved<'a>(value: T, rt: &'a R, at: Settled<'a>) -> R::Value {
-        value.give(rt, at)
-    }
-
-    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> T {
+    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> T
+    where
+        Self: 'l,
+    {
         T::take(rt, v, at)
     }
 }
 
-impl<R: Runtime, T: ?Sized + Referent + 'static> LoanForm<R> for Lent<T> {
-    type At<'l> = &'l T;
+impl<R: Runtime, T: ?Sized + Referent> LoanForm<R> for Lent<T> {
+    type At<'l>
+        = &'l T
+    where
+        Self: 'l;
 
     const LENT: Option<Mutability> = Some(Mutability::Shared);
 
-    fn lend<'l>(value: &'l T, rt: &'l R, at: Settled<'l>) -> R::Value {
+    fn lend<'l>(value: &'l T, rt: &'l R, at: Settled<'l>) -> R::Value
+    where
+        Self: 'l,
+    {
         <R::Ref as RefKind<R>>::reference(rt, RefTarget::Shared(value), at)
     }
 
-    fn give_moved<'a>(value: &'static T, rt: &'a R, at: Settled<'a>) -> R::Value {
-        <R::Ref as RefKind<R>>::reference(rt, RefTarget::Shared(value), at)
-    }
-
-    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l T {
+    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l T
+    where
+        Self: 'l,
+    {
         let reference = Uniform::<R, ()>::of_the_crossing(v);
         let target = <R::Ref as RefKind<R>>::target(rt, v, at);
         drop(reference);
@@ -98,20 +111,25 @@ impl<R: Runtime, T: ?Sized + Referent + 'static> LoanForm<R> for Lent<T> {
     }
 }
 
-impl<R: Runtime, T: ?Sized + Referent + 'static> LoanForm<R> for LentMut<T> {
-    type At<'l> = &'l mut T;
+impl<R: Runtime, T: ?Sized + Referent> LoanForm<R> for LentMut<T> {
+    type At<'l>
+        = &'l mut T
+    where
+        Self: 'l;
 
     const LENT: Option<Mutability> = Some(Mutability::Exclusive);
 
-    fn lend<'l>(value: &'l mut T, rt: &'l R, at: Settled<'l>) -> R::Value {
+    fn lend<'l>(value: &'l mut T, rt: &'l R, at: Settled<'l>) -> R::Value
+    where
+        Self: 'l,
+    {
         <R::Ref as RefKind<R>>::reference(rt, RefTarget::Exclusive(value), at)
     }
 
-    fn give_moved<'a>(value: &'static mut T, rt: &'a R, at: Settled<'a>) -> R::Value {
-        <R::Ref as RefKind<R>>::reference(rt, RefTarget::Exclusive(value), at)
-    }
-
-    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l mut T {
+    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l mut T
+    where
+        Self: 'l,
+    {
         let reference = Uniform::<R, ()>::of_the_crossing(v);
         let target = <R::Ref as RefKind<R>>::target_mut(rt, v, at);
         drop(reference);
@@ -127,15 +145,25 @@ mod sealed {
 /// returning call, or, where every one is a crossing type, moved into an
 /// awaited one.
 pub trait CallArgs<R: Runtime>: sealed::Sealed {
-    type Lent<'l>;
-    type Moved;
+    type Lent<'l>
+    where
+        Self: 'l;
 
     /// The argument run of a returning call, one value per parameter.
     #[doc(hidden)]
-    fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>;
+    fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>
+    where
+        Self: 'l;
     /// How a returning call passes each value of its run.
     #[doc(hidden)]
     fn lent() -> impl ExactSizeIterator<Item = Option<Mutability>>;
+}
+
+/// A callback's parameters an awaited call is given: each a crossing type,
+/// moved into the call, which lends none of the handler's storage (K3).
+pub trait MovedArgs<R: Runtime>: CallArgs<R> {
+    type Moved;
+
     /// The argument run of an awaited call.
     #[doc(hidden)]
     fn move_run<'a>(args: Self::Moved, rt: &'a R, at: Settled<'a>) -> impl ExactSizeIterator<Item = R::Value>;
@@ -147,8 +175,10 @@ macro_rules! forms {
         impl<$($f),*> sealed::Sealed for ($($f,)*) {}
 
         impl<R: Runtime, $($f: LoanForm<R>),*> CallArgs<R> for ($($f,)*) {
-            type Lent<'l> = ($($f::At<'l>,)*);
-            type Moved = ($($f::At<'static>,)*);
+            type Lent<'l>
+                = ($($f::At<'l>,)*)
+            where
+                Self: 'l;
 
             fn lent() -> impl ExactSizeIterator<Item = Option<Mutability>> {
                 let lent: [Option<Mutability>; $n] = [$($f::LENT),*];
@@ -156,16 +186,24 @@ macro_rules! forms {
             }
 
             #[allow(unused_variables)]
-            fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value> {
+            fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>
+            where
+                Self: 'l,
+            {
                 let ($($v,)*) = args;
                 let run: [R::Value; $n] = [$($f::lend($v, rt, at)),*];
                 run.into_iter()
             }
 
+        }
+
+        impl<R: Runtime, $($f: Crosses<R>),*> MovedArgs<R> for ($($f,)*) {
+            type Moved = ($($f,)*);
+
             #[allow(unused_variables)]
             fn move_run<'a>(args: Self::Moved, rt: &'a R, at: Settled<'a>) -> impl ExactSizeIterator<Item = R::Value> {
                 let ($($v,)*) = args;
-                let run: [R::Value; $n] = [$($f::give_moved($v, rt, at)),*];
+                let run: [R::Value; $n] = [$($v.give(rt, at)),*];
                 run.into_iter()
             }
         }
@@ -196,7 +234,11 @@ where
 {
     /// A returning call: the arguments lent for `'l`, the result borrowing at
     /// most what they lend.
-    pub fn call<'l>(&'l self, cx: &'l Returning<'c, R>, args: A::Lent<'l>) -> U::At<'l> {
+    pub fn call<'l>(&'l self, cx: &'l Returning<'c, R>, args: A::Lent<'l>) -> U::At<'l>
+    where
+        A: 'l,
+        U: 'l,
+    {
         let runtime = cx.runtime();
         runtime.call_now::<R, A, U>(runtime, self.closure, args, Settled::of_the_entry())
     }
@@ -204,7 +246,7 @@ where
 
 impl<'c, 'a, A, U, E, R> Callback<'c, 'a, A, U, E, R>
 where
-    A: CallArgs<R>,
+    A: MovedArgs<R>,
     U: Crosses<R>,
     R: CallsBack,
 {
@@ -225,7 +267,9 @@ pub trait CallsBack: Runtime {
     where
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
-        U: LoanForm<R>;
+        U: LoanForm<R>,
+        A: 'l,
+        U: 'l;
     fn call_later<'a, R, A, U>(
         &self,
         rt: &'a R,
@@ -235,7 +279,7 @@ pub trait CallsBack: Runtime {
     ) -> impl Future<Output = U> + Send
     where
         R: Runtime<Value = Self::Value>,
-        A: CallArgs<R>,
+        A: MovedArgs<R>,
         U: Crosses<R>;
 }
 

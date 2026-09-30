@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use acvus_extern::callback::{CallArgs, CallsBack, LoanForm};
+use acvus_extern::callback::{CallArgs, CallsBack, LoanForm, MovedArgs};
 use acvus_extern::{Settled, SiteShape};
 use acvus_extern::runtime::{Crosses, Mutability, Runtime};
 use acvus_extern::done::Done;
@@ -127,6 +127,8 @@ impl CallsBack for WordRuntime {
         R: Runtime<Value = Word>,
         A: CallArgs<R>,
         U: LoanForm<R>,
+        A: 'l,
+        U: 'l,
     {
         let run = A::lend_run(args, rt, at).map(Held::kept).collect();
         let result = call_closure(rt, closure, run, A::lent().collect(), at);
@@ -142,14 +144,14 @@ impl CallsBack for WordRuntime {
     ) -> impl Future<Output = U> + Send
     where
         R: Runtime<Value = Word>,
-        A: CallArgs<R>,
+        A: MovedArgs<R>,
         U: Crosses<R>,
     {
         let run: Vec<Held> = A::move_run(args, rt, at).map(Held::kept).collect();
         let lent: Box<[Option<Mutability>]> = A::lent().collect();
         async move {
             let result = call_closure(rt, closure, run, lent, at);
-            <U as LoanForm<R>>::read(result, rt, at)
+            U::take(rt, result, at)
         }
     }
 }

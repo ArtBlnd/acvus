@@ -20,7 +20,7 @@ use std::time::Duration;
 use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::entry::Settled;
-use crate::callback::{CallArgs, CallsBack, LoanForm};
+use crate::callback::{CallArgs, CallsBack, LoanForm, MovedArgs};
 use crate::impls::task::TaskKind;
 use crate::boundary::instance::InstanceEntry;
 use crate::impls::{Family, Instances, Task};
@@ -566,6 +566,8 @@ impl<X: CallsBack> CallsBack for Adapter<X> {
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
         U: LoanForm<R>,
+        A: 'l,
+        U: 'l,
     {
         self.inner.call_now::<R, A, U>(rt, closure, args, at)
     }
@@ -579,7 +581,7 @@ impl<X: CallsBack> CallsBack for Adapter<X> {
     ) -> impl Future<Output = U> + Send
     where
         R: Runtime<Value = Self::Value>,
-        A: CallArgs<R>,
+        A: MovedArgs<R>,
         U: Crosses<R>,
     {
         self.inner.call_later::<R, A, U>(rt, closure, args, at)
