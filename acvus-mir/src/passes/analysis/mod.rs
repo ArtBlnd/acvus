@@ -39,5 +39,7 @@ pub use scev::{Evolution, Evolutions, Recurrence, ScalarEvolution, TripCount};
 pub use manager::{Analysis, AnalysisManager, ModuleAnalysis, Queries};
 pub use sparse::{Executable, SparseAnalysis, SparseFacts, solve_sparse};
 pub use values::{AffineValues, ConstantValues, IntervalValues};
+#[cfg(test)]
+pub(crate) use values::assert_intervals_within_types;
 pub(in crate::passes) use values::ValueBounds;
 pub(in crate::passes) use values::switch_key;

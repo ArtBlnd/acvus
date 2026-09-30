@@ -287,10 +287,6 @@ where
 {
     type Domain = D;
 
-    fn domain(&self) -> &D {
-        &self.domain
-    }
-
     fn transfer(&self, inst: &Inst, operands: &[&D::Value]) -> D::Value {
         match (inst.op(), operands) {
             (Op::Const { value }, []) => {
@@ -318,6 +314,14 @@ where
     /// It knows nothing of what a terminator supplies.
     fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&D::Value]) -> D::Value {
         self.domain.top()
+    }
+
+    fn top(&self, _value: ValueId) -> D::Value {
+        self.domain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut D::Value, next: &D::Value) -> bool {
+        fact.widen(next)
     }
 }
 
@@ -592,10 +596,6 @@ struct Ranges<'m>(Scalars<'m>);
 impl SparseAnalysis for Ranges<'_> {
     type Domain = ConstDomain;
 
-    fn domain(&self) -> &ConstDomain {
-        &ConstDomain
-    }
-
     fn transfer(&self, inst: &Inst, operands: &[&Const]) -> Const {
         Propagate { domain: ConstDomain, scalars: self.0 }.transfer(inst, operands)
     }
@@ -615,6 +615,14 @@ impl SparseAnalysis for Ranges<'_> {
             (to, 0) if to == *body && *hi == at + 1 => Const::Int(*at),
             _ => Const::Top,
         }
+    }
+
+    fn top(&self, _value: ValueId) -> Const {
+        ConstDomain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut Const, next: &Const) -> bool {
+        fact.widen(next)
     }
 }
 
@@ -669,10 +677,6 @@ struct TokenBlind<'m>(Scalars<'m>);
 impl SparseAnalysis for TokenBlind<'_> {
     type Domain = ConstDomain;
 
-    fn domain(&self) -> &ConstDomain {
-        &ConstDomain
-    }
-
     fn transfer(&self, inst: &Inst, operands: &[&Const]) -> Const {
         match inst.op() {
             Op::Merge { .. } => panic!("a Merge's result is a token and is not visited"),
@@ -691,6 +695,14 @@ impl SparseAnalysis for TokenBlind<'_> {
 
     fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&Const]) -> Const {
         Const::Top
+    }
+
+    fn top(&self, _value: ValueId) -> Const {
+        ConstDomain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut Const, next: &Const) -> bool {
+        fact.widen(next)
     }
 }
 

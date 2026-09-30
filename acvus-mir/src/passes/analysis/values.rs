@@ -15,17 +15,18 @@ use crate::ir::{Callee, ExternImpl, ForSource, SwitchKey, ValueId, known_len};
 use crate::passes::analysis::{Analysis, Executable, Queries, SparseAnalysis, SparseFacts, solve_sparse};
 use crate::passes::domain::{
     Affine, AffineDomain, Bound, Combination, Constant, ConstantDomain, Interval, IntervalDomain, Limit, Symbol, ValueDomain,
-    bounds_on,
+    Widen, bounds_on,
 };
-use crate::ty::{CastTy, Concrete, TyKind, Types};
+use crate::ty::{CastTy, Concrete, Ty, TyKind, Types};
 
 /// Every value's constant, conditional on the arms a known condition takes
 /// (Wegman and Zadeck). Cost: the sparse engine's, with height 3.
 pub struct ConstantValues;
 
-/// Every integer value's interval, every arm taken. Cost: the sparse
-/// engine's, a parameter of a loop header rising at most three times under
-/// widening.
+/// Every integer value's interval, every arm taken, each within its type's
+/// range. Cost: the sparse engine's, a parameter of a loop header rising at
+/// most three times under widening, since each end jumps once to its type's
+/// bound.
 pub struct IntervalValues;
 
 /// Every integer value's affine combination of symbols, every arm taken:
@@ -95,6 +96,33 @@ impl OperandTypes<'_> {
         matches!(self.of(value), Some(CastTy::Int(_)))
     }
 
+    /// `value`'s interval where nothing in the body bounds it: an integer
+    /// value is one of its type (undefined behaviour §2: every value the
+    /// run computes lies in its type; extern fn §9: a parameter is a valid
+    /// value of its type).
+    pub(super) fn interval_top(&self, value: ValueId) -> Interval {
+        self.interval_top_of(self.body.ty_of(value))
+    }
+
+    /// The interval of a value of type `ty` where nothing in the body
+    /// bounds it, as `interval_top`.
+    pub(super) fn interval_top_of(&self, ty: Ty) -> Interval {
+        match CastTy::of_kind(self.types.kind(ty)) {
+            Some(CastTy::Int(width)) => Interval::of_width(width),
+            _ => Interval::full(),
+        }
+    }
+
+    /// Widens `value`'s interval by `next` with thresholds, an integer
+    /// value's being its type's bounds: a growing end goes to its type's
+    /// bound. Whether `fact` rose.
+    pub(super) fn widen_interval(&self, value: ValueId, fact: &mut Interval, next: &Interval) -> bool {
+        match self.of(value) {
+            Some(CastTy::Int(width)) => fact.widen_to(next, Bound::Finite(width.min()), Bound::Finite(width.max())),
+            _ => fact.widen(next),
+        }
+    }
+
     /// Whether `value` is a reference to a slice, whose element count no
     /// run changes while it exists.
     fn is_slice(&self, value: ValueId) -> bool {
@@ -134,10 +162,6 @@ struct Constants<'m> {
 
 impl SparseAnalysis for Constants<'_> {
     type Domain = ConstantDomain;
-
-    fn domain(&self) -> &ConstantDomain {
-        &ConstantDomain
-    }
 
     fn transfer(&self, inst: &Inst, operands: &[&Constant]) -> Constant {
         self.operand_types.value_operation(&ConstantDomain, inst, operands).unwrap_or(Constant::Top)
@@ -179,6 +203,14 @@ impl SparseAnalysis for Constants<'_> {
     fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&Constant]) -> Constant {
         Constant::Top
     }
+
+    fn top(&self, _value: ValueId) -> Constant {
+        ConstantDomain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut Constant, next: &Constant) -> bool {
+        fact.widen(next)
+    }
 }
 
 /// The switch key a known value is, where it is one a switch narrows on.
@@ -213,17 +245,15 @@ struct Intervals<'m> {
 impl SparseAnalysis for Intervals<'_> {
     type Domain = IntervalDomain;
 
-    fn domain(&self) -> &IntervalDomain {
-        &IntervalDomain
-    }
-
+    /// An instruction that is no value operation yields its result's `top`,
+    /// within what a call's declared Relations put it in.
     fn transfer(&self, inst: &Inst, operands: &[&Interval]) -> Interval {
         if let Some(value) = self.operand_types.value_operation(&IntervalDomain, inst, operands) {
             return value;
         }
+        let result = inst.result().expect("the engine evaluates an instruction that yields a value");
         match inst.op() {
-            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. }
-                if inst.result().is_some_and(|result| self.operand_types.is_integer(result)) =>
+            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. } if self.operand_types.is_integer(result) =>
             {
                 assert_eq!(args.len(), operands.len(), "an extern call's operands are its arguments");
                 let relations = &self.decls.call_facts(*id, *r#impl).relations;
@@ -231,9 +261,9 @@ impl SparseAnalysis for Intervals<'_> {
                 bounds_on(relations, Atom::Result)
                     .iter()
                     .filter_map(|limit| limit_interval(limit, arg_interval))
-                    .fold(Interval::full(), |result, range| result.meet(&range))
+                    .fold(self.top(result), |bounded, range| bounded.meet(&range))
             }
-            _ => Interval::full(),
+            _ => self.top(result),
         }
     }
 
@@ -242,19 +272,28 @@ impl SparseAnalysis for Intervals<'_> {
     }
 
     /// A range's counter lies in `[at, hi - 1]`; a slice's or an array's
-    /// counter is a count, and its element is `top` (D60).
-    fn supplied(&self, terminator: &Terminator, _to: BlockId, index: usize, operands: &[&Interval]) -> Interval {
+    /// counter is a count of its type, and its element is its `top` (D60).
+    fn supplied(&self, terminator: &Terminator, to: BlockId, index: usize, operands: &[&Interval]) -> Interval {
         let Terminator::For { source, .. } = terminator else {
             panic!("only a For supplies parameters, not {terminator:?}")
         };
+        let param = self.operand_types.body.block(to).params()[index];
         match (source, operands) {
             (ForSource::Range { .. }, [at, hi, ..]) => at.at_least_lo().meet(&hi.difference(&Interval::exactly(1)).at_most_hi()),
             (ForSource::Range { .. }, _) => panic!("a range For reads its two ends"),
             (ForSource::Slice(_) | ForSource::SliceMut(_) | ForSource::Array(_), _) => match index == source.counter_param() {
-                true => Interval::exactly(0).at_least_lo(),
-                false => Interval::full(),
+                true => Interval::exactly(0).at_least_lo().meet(&self.top(param)),
+                false => self.top(param),
             },
         }
+    }
+
+    fn top(&self, value: ValueId) -> Interval {
+        self.operand_types.interval_top(value)
+    }
+
+    fn widen(&self, value: ValueId, fact: &mut Interval, next: &Interval) -> bool {
+        self.operand_types.widen_interval(value, fact, next)
     }
 }
 
@@ -346,10 +385,6 @@ impl Affines<'_> {
 impl SparseAnalysis for Affines<'_> {
     type Domain = AffineDomain;
 
-    fn domain(&self) -> &AffineDomain {
-        &AffineDomain
-    }
-
     /// An operand of no known combination is read as itself.
     fn transfer(&self, inst: &Inst, operands: &[&Affine]) -> Affine {
         let body = self.operand_types.body;
@@ -399,6 +434,14 @@ impl SparseAnalysis for Affines<'_> {
             Some(counter) => Affine::Exactly(counter),
             None => Affine::Top,
         }
+    }
+
+    fn top(&self, _value: ValueId) -> Affine {
+        AffineDomain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut Affine, next: &Affine) -> bool {
+        fact.widen(next)
     }
 }
 
@@ -561,6 +604,24 @@ impl ValueBounds<'_> {
     }
 }
 
+/// Asserts that `interval` gives each integer value of `id` a fact within
+/// its type's range.
+#[cfg(test)]
+pub(crate) fn assert_intervals_within_types<F>(module: &Module, id: BodyId, interval: F)
+where
+    F: Fn(ValueId) -> Interval,
+{
+    use crate::passes::domain::JoinSemiLattice;
+
+    let body = module.body(id);
+    for value in body.values().filter(|value| !body.is_token(*value)) {
+        if let TyKind::Int(width) = module.types().kind(body.ty_of(value)) {
+            let fact = interval(value);
+            assert!(fact.le(&Interval::of_width(*width)), "{value:?}'s interval {fact:?} lies outside its type {}", width.name());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use acvus_ast::Span;
@@ -571,7 +632,7 @@ mod tests {
     use crate::decl::declared::{Comparison, Relation, Term};
     use crate::decl::{Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
     use crate::ir::BinOp;
-    use crate::passes::domain::Bound;
+    use crate::passes::domain::{Bound, JoinSemiLattice};
     use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Poly, Ty, TyId, TyKind};
 
     struct Fixture {
@@ -633,6 +694,16 @@ mod tests {
         AnalysisManager::new(decls).get::<A>(module, id)
     }
 
+    /// The body's intervals, each integer value's checked to lie within
+    /// its type's range, as is each one's interval under `MatchFacts`.
+    fn intervals_within_types(module: &Module, decls: &Declarations, id: BodyId) -> std::rc::Rc<SparseFacts<IntervalDomain>> {
+        let intervals = facts::<IntervalValues>(module, decls, id);
+        assert_intervals_within_types(module, id, |value| intervals.of(value).clone());
+        let matches = facts::<crate::passes::analysis::MatchFacts>(module, decls, id);
+        assert_intervals_within_types(module, id, |value| matches.of(value).interval.clone());
+        intervals
+    }
+
     /// `x = 2; y = 3; z = x + y; w = z * a; b = 100i8; o = b + b; r = z as i8`:
     /// the constants fold, a parameter is `top`, and an `i8` overflow is a
     /// trap, so `o` is no constant and no value above `i8::MAX`.
@@ -660,7 +731,7 @@ mod tests {
         assert_eq!(*constants.of(w), Constant::Top);
         assert_eq!(*constants.of(o), Constant::Top, "100 + 100 traps at i8");
 
-        let intervals = facts::<IntervalValues>(&f.module, &decls, id);
+        let intervals = intervals_within_types(&f.module, &decls, id);
         assert_eq!(*intervals.of(z), finite(5, 5));
         assert_eq!(*intervals.of(o), Interval::Empty, "no run passes 100 + 100 at i8");
         assert_eq!(*intervals.of(w), finite(i128::from(i64::MIN), i128::from(i64::MAX)));
@@ -703,7 +774,7 @@ mod tests {
         assert_eq!(*constants.of(e), Constant::Bottom, "the else arm is not executable");
         assert_eq!(constants.constant(p), Some(&Literal::Int(10)));
 
-        let intervals = facts::<IntervalValues>(&f.module, &decls, id);
+        let intervals = intervals_within_types(&f.module, &decls, id);
         assert_eq!(*intervals.of(p), finite(10, 20));
     }
 
@@ -749,7 +820,8 @@ mod tests {
     /// exit:             return s
     /// ```
     /// The counter's interval is what the `For` supplies; the carried `s`
-    /// widens at the header, and `s + 1` is clamped to its width.
+    /// widens at the header to its type's greatest, the threshold its
+    /// growing end jumps to, and `s + 1` is clamped to its width.
     #[test]
     fn a_loop_counter_comes_from_the_for_and_a_carried_value_widens() {
         let mut f = fixture();
@@ -780,12 +852,12 @@ mod tests {
         builder.terminate(ret(s), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
-        let intervals = facts::<IntervalValues>(&f.module, &decls, id);
+        let intervals = intervals_within_types(&f.module, &decls, id);
         assert_eq!(*intervals.of(counter), finite(0, 9));
         assert_eq!(
             *intervals.of(s),
-            Interval::Range { lo: Bound::Finite(0), hi: Bound::PosInfinity },
-            "the growing end of the carried value widens to infinity"
+            finite(0, i128::from(i64::MAX)),
+            "the growing end of the carried value widens to its type's greatest"
         );
         assert_eq!(*intervals.of(s1), finite(1, i128::from(i64::MAX)));
 
@@ -865,7 +937,7 @@ mod tests {
         builder.terminate(ret(r), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
-        let intervals = facts::<IntervalValues>(&module, &decls, id);
+        let intervals = intervals_within_types(&module, &decls, id);
         assert_eq!(*intervals.of(r), finite(0, 6));
         let constants = facts::<ConstantValues>(&module, &decls, id);
         assert_eq!(*constants.of(r), Constant::Top);
@@ -939,7 +1011,62 @@ mod tests {
         let a_plus_one = Combination::atom(Symbol::Value(a)).checked_add(&Combination::constant(1)).unwrap();
         assert_eq!(*affine.of(r), Affine::Exactly(a_plus_one));
         assert_eq!(*affine.of(d), Affine::Exactly(Combination::constant(1)));
-        let intervals = facts::<IntervalValues>(&module, &decls, id);
+        let intervals = intervals_within_types(&module, &decls, id);
         assert_eq!(*intervals.of(d), finite(i128::from(i64::MIN), i128::from(i64::MAX)));
+    }
+
+    /// `f(a: i8)`: a parameter is a valid value of its type (extern fn §9),
+    /// so `a` lies in `[-128, 127]`, and `a + 0` computes no wider.
+    #[test]
+    fn a_body_parameter_lies_in_its_type() {
+        let mut f = fixture();
+        let decls = declarations(&f.interner, Vec::new(), Types::new());
+        let (name, byte) = (f.interner.intern("a"), f.byte);
+        let mut builder = f.module.build_body(false, byte);
+        let a = builder.param(name, byte, Span::ZERO);
+        let zero = builder.push(constant(0), byte, Span::ZERO);
+        let sum = builder.push(binary(BinOp::Add, a, zero), byte, Span::ZERO);
+        builder.terminate(ret(sum), Span::ZERO);
+        let id = builder.seal().expect("the body has no open state");
+
+        let intervals = intervals_within_types(&f.module, &decls, id);
+        assert_eq!(*intervals.of(a), finite(-128, 127));
+        assert_eq!(*intervals.of(sum), finite(-128, 127));
+    }
+
+    /// ```text
+    /// entry(xs: Array<i8, 3>): jump header
+    /// header:                  for (element, counter) in xs { body } else exit
+    /// body(element, counter):  jump header
+    /// exit:                    return 0
+    /// ```
+    /// An array's counter is a `u64` count, `[0, u64::MAX]`, and its `i8`
+    /// element is any `i8`.
+    #[test]
+    fn an_arrays_counter_and_element_lie_in_their_types() {
+        let mut f = fixture();
+        let decls = declarations(&f.interner, Vec::new(), Types::new());
+        let (name, byte) = (f.interner.intern("xs"), f.byte);
+        let array = f.module.types_mut().intern(TyKind::Array(byte, crate::ty::LenTerm::Known(3), ()));
+        let count = f.module.types_mut().intern(TyKind::Int(IntTy::U64));
+        let mut builder = f.module.build_body(false, byte);
+        let xs = builder.param(name, array, Span::ZERO);
+        let header = builder.new_block(&[]);
+        let loop_body = builder.new_block(&[byte, count]);
+        let [element, counter] = [0, 1].map(|at| builder.block_params(loop_body)[at]);
+        let exit = builder.new_block(&[]);
+        builder.terminate(jump(header, Vec::new()), Span::ZERO);
+        builder.switch_to(header);
+        builder.terminate(Terminator::For { source: ForSource::Array(xs), body: loop_body, exit, exit_args: Vec::new() }, Span::ZERO);
+        builder.switch_to(loop_body);
+        builder.terminate(jump(header, Vec::new()), Span::ZERO);
+        builder.switch_to(exit);
+        let zero = builder.push(constant(0), byte, Span::ZERO);
+        builder.terminate(ret(zero), Span::ZERO);
+        let id = builder.seal().expect("the body has no open state");
+
+        let intervals = intervals_within_types(&f.module, &decls, id);
+        assert_eq!(*intervals.of(counter), finite(0, i128::from(u64::MAX)));
+        assert_eq!(*intervals.of(element), finite(-128, 127));
     }
 }
