@@ -14,6 +14,7 @@
 mod cursor;
 mod dominators;
 mod keeps;
+mod loops;
 mod needs;
 mod reach;
 mod scopes;
@@ -21,6 +22,7 @@ mod scopes;
 mod tests;
 
 pub use cursor::Cursor;
+pub use loops::{CannotEditLoop, Head};
 pub use keeps::{
     DefDominatesUses, Invariant, Invariants, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation,
 };
@@ -730,8 +732,7 @@ where
     }
 }
 
-// `EditsLoops`' operations are defined with the loop design (compilation
-// §4), after optimize's design; none exists yet.
+// `EditsLoops`' operations are the loop edits in `loops`.
 
 /// An edit made on the body directly, checked and refreshed as any edit is,
 /// for tests that provoke what no operation of the editor does.
