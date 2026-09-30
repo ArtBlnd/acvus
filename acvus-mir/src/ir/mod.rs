@@ -6,7 +6,7 @@ pub(crate) mod parts;
 
 use acvus_utils::QualifiedRef;
 use crate::decl::PairMember;
-use crate::ty::{Concrete, Ty, Types};
+use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, Types};
 
 /// An operation of the language no single op states, each read by
 /// `Op::Intrinsic` over the arguments its doc lists. A backend that runs
@@ -322,6 +322,60 @@ impl ForSource {
             Self::Slice(_) | Self::SliceMut(_) | Self::Array(_) => 1,
         }
     }
+
+    /// The types of the body parameters this source supplies, in order:
+    /// the element, then the `u64` counter where the source is a slice or
+    /// an array. Refused at the first operand whose type this source does
+    /// not traverse. The types are kinds of the one table `types`, so a
+    /// parameter has the supplied type exactly where its type's kind is
+    /// the one returned. Cost: O(the element's kind).
+    pub fn supplied_kinds(
+        &self,
+        ty_of: impl Fn(ValueId) -> Ty,
+        types: &Types<Concrete>,
+    ) -> Result<smallvec::SmallVec<[TyKind<Concrete>; 2]>, UnfitOperand> {
+        let unfit = |operand: ValueId| UnfitOperand { operand };
+        let element = match *self {
+            Self::Range { at, hi } => {
+                let at_ty = ty_of(at);
+                if !matches!(types.kind(at_ty), TyKind::Int(_)) {
+                    return Err(unfit(at));
+                }
+                if ty_of(hi) != at_ty {
+                    return Err(unfit(hi));
+                }
+                return Ok(smallvec::smallvec![types.kind(at_ty).clone()]);
+            }
+            Self::Slice(slice) | Self::SliceMut(slice) => {
+                let wanted = match self {
+                    Self::SliceMut(_) => Mutability::Mut,
+                    _ => Mutability::Shared,
+                };
+                let TyKind::Ref(held, lent) = types.kind(ty_of(slice)) else {
+                    return Err(unfit(slice));
+                };
+                let TyKind::Slice(element) = types.kind(*lent) else {
+                    return Err(unfit(slice));
+                };
+                if *held != wanted {
+                    return Err(unfit(slice));
+                }
+                TyKind::Ref(wanted, *element)
+            }
+            Self::Array(array) => match types.kind(ty_of(array)) {
+                TyKind::Array(element, _, _) => types.kind(*element).clone(),
+                _ => return Err(unfit(array)),
+            },
+        };
+        Ok(smallvec::smallvec![element, TyKind::Int(IntTy::U64)])
+    }
+}
+
+/// An operand of a loop's head whose type is not one the head traverses
+/// or tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnfitOperand {
+    pub operand: ValueId,
 }
 
 /// The `Order` a call waits for and the `Order` it yields (RFC-0007).

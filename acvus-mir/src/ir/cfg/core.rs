@@ -20,7 +20,7 @@ use acvus_utils::LocalFactory;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
-use super::body::{BlockData, BlockId, Body, Def, Edge, Inst, InstId, InstList, OrderUse, Site, Terminator, UseSites, ValueDef};
+use super::body::{BlockData, BlockId, Body, Def, Edge, Head, Inst, InstId, InstList, OrderUse, Rebind, Site, Terminator, UseSites, ValueDef};
 use super::op::Op;
 use super::order::At;
 use crate::ir::{DebugInfo, IndexBound, OrderEdge, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
@@ -352,6 +352,82 @@ impl Body {
             });
             self.use_sites_mut(*value).add(Site::Term(*from), 1);
         }
+    }
+
+    /// The loop ending `header` takes `head`, keeping its body, exit and
+    /// exit arguments. The new head's supplied parameters are made, of the
+    /// types it supplies; each parameter the old head supplied has its
+    /// uses given to what its `rebind` names and goes; the new parameters
+    /// stand first in the body, before the rest. Returns the new
+    /// parameters. Cost: O(the head's operands, the body's parameters and
+    /// the uses replaced).
+    ///
+    /// # Panics
+    /// `header` does not end in a loop; `rebind` does not name one entry per
+    /// parameter the old head supplied, or names a supplied index past the
+    /// new head's; an operand of `head` is unfit
+    /// (`Head::supplied_kinds`); or a parameter that goes still has a use
+    /// after its replacement.
+    pub(super) fn set_loop_head(&mut self, types: &mut Types<Concrete>, header: BlockId, head: Head, rebind: &[Rebind]) -> Vec<ValueId> {
+        let site = Site::Term(header);
+        let Some(parts) = self.blocks[header.index()].terminator.as_loop() else {
+            panic!("{header:?} does not end in a loop")
+        };
+        let replaced = head.terminator(parts.body, parts.exit, parts.exit_args.to_vec());
+        let old_head = parts.head;
+        let body = parts.body;
+        let supplied_before = old_head.supplied_params();
+        assert_eq!(rebind.len(), supplied_before, "one rebinding for each parameter {old_head:?} supplied");
+        let kinds = head
+            .supplied_kinds(|value| self.ty_of(value), types)
+            .unwrap_or_else(|unfit| panic!("{head:?} reads {:?}, of a type it does not take", unfit.operand));
+
+        for value in old_head.operands() {
+            self.use_sites_mut(value).remove_one(site);
+        }
+        for value in head.operands() {
+            self.use_sites_mut(value).add(site, 1);
+        }
+        self.blocks[header.index()].terminator = replaced;
+
+        let mut made = Vec::with_capacity(kinds.len());
+        for (index, kind) in kinds.into_iter().enumerate() {
+            let ty = types.intern(kind);
+            made.push(self.make_value(types, ty, Def::BlockParam(body, index)));
+        }
+        let old_params = std::mem::take(&mut self.blocks[body.index()].params);
+        let (gone, kept) = old_params.split_at(supplied_before);
+        for (param, rebind) in gone.iter().zip(rebind) {
+            let with = match rebind {
+                Rebind::Supplied(index) => *made
+                    .get(*index)
+                    .unwrap_or_else(|| panic!("{head:?} supplies {} parameters, and none at {index}", made.len())),
+                Rebind::Value(value) => *value,
+            };
+            self.replace_all_uses(*param, with);
+        }
+        for param in gone {
+            self.refuse_used(*param)
+                .unwrap_or_else(|used| panic!("{:?}, which the old head supplied, still has a use", used.value));
+            self.drop_value(*param);
+        }
+        for (offset, param) in kept.iter().enumerate() {
+            self.value_def_mut(*param).def = Def::BlockParam(body, made.len() + offset);
+        }
+        self.blocks[body.index()].params = made.iter().chain(kept).copied().collect();
+        made
+    }
+
+    /// A new last parameter of `block`, of `ty`, filled on each edge
+    /// `incoming` names by source block and edge position. Cost:
+    /// `place_param`'s.
+    ///
+    /// # Panics
+    /// As `make_value` and `place_param`.
+    pub(super) fn add_block_param(&mut self, types: &Types<Concrete>, block: BlockId, ty: Ty, incoming: &[(BlockId, usize, ValueId)]) -> ValueId {
+        let param = self.make_value(types, ty, Def::UnplacedParam(block));
+        self.place_param(block, param, incoming);
+        param
     }
 
     /// Removes every parameter of `params` whose arguments, other than the

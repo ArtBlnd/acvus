@@ -7,8 +7,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::op::Op;
-use crate::ir::{DebugInfo, ForSource, OrderEdge, SwitchKey, ValueId};
-use crate::ty::{Concrete, Ty, Types};
+use crate::ir::{DebugInfo, ForSource, OrderEdge, SwitchKey, UnfitOperand, ValueId};
+use crate::ty::{Concrete, Ty, TyKind, Types};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BodyId(pub(super) u32);
@@ -346,6 +346,79 @@ pub enum Terminator {
     NoArmMatched { span: Span },
 }
 
+/// A loop's head: how its iterations are yielded, which is a loop
+/// terminator without its body, exit and exit arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Head {
+    /// Each iteration runs where `cond`, computed in the header, is true.
+    While { cond: ValueId },
+    /// The iterations `source` yields; the body's leading parameters are the
+    /// ones it supplies.
+    For { source: ForSource },
+}
+
+impl Head {
+    /// Every value the head reads. Cost: O(1).
+    pub fn operands(&self) -> SmallVec<[ValueId; 2]> {
+        match self {
+            Head::While { cond } => smallvec::smallvec![*cond],
+            Head::For { source } => source.uses(),
+        }
+    }
+
+    /// How many of the body's leading parameters the head fills itself.
+    pub fn supplied_params(&self) -> usize {
+        match self {
+            Head::While { .. } => 0,
+            Head::For { source } => source.supplied_params(),
+        }
+    }
+
+    /// The kinds of the body parameters the head supplies, in order: none
+    /// for a `While`, whose condition is a `Bool`, and a `For`'s source's
+    /// (`ForSource::supplied_kinds`). Refused at an operand of another
+    /// type. Cost: O(the element's kind).
+    pub fn supplied_kinds(
+        &self,
+        ty_of: impl Fn(ValueId) -> Ty,
+        types: &Types<Concrete>,
+    ) -> Result<SmallVec<[TyKind<Concrete>; 2]>, UnfitOperand> {
+        match self {
+            Head::While { cond } => match types.kind(ty_of(*cond)) {
+                TyKind::Bool => Ok(SmallVec::new()),
+                _ => Err(UnfitOperand { operand: *cond }),
+            },
+            Head::For { source } => source.supplied_kinds(ty_of, types),
+        }
+    }
+
+    /// The loop terminator of this head.
+    pub fn terminator(self, body: BlockId, exit: BlockId, exit_args: Vec<ValueId>) -> Terminator {
+        match self {
+            Head::While { cond } => Terminator::While { cond, body, exit, exit_args },
+            Head::For { source } => Terminator::For { source, body, exit, exit_args },
+        }
+    }
+}
+
+/// What takes the uses of one body parameter the old head supplied, where a
+/// loop's head is replaced: the new head's supplied parameter at an index,
+/// or a value that exists before the replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rebind {
+    Supplied(usize),
+    Value(ValueId),
+}
+
+/// A loop terminator's parts beside its head.
+#[derive(Debug, Clone, Copy)]
+pub struct LoopParts<'t> {
+    pub head: Head,
+    pub body: BlockId,
+    pub exit: BlockId,
+    pub exit_args: &'t [ValueId],
+}
+
 /// One edge out of a terminator: the target's leading `supplied`
 /// parameters are filled by the terminator itself, and `args` fill the rest.
 #[derive(Debug, Clone, Copy)]
@@ -395,6 +468,20 @@ impl Terminator {
                 smallvec::smallvec![plain(*body, &[]), plain(*exit, exit_args)]
             }
             Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => SmallVec::new(),
+        }
+    }
+
+    /// The head, body, exit and exit arguments of a loop terminator; none
+    /// for any other terminator.
+    pub fn as_loop(&self) -> Option<LoopParts<'_>> {
+        match self {
+            Terminator::For { source, body, exit, exit_args } => {
+                Some(LoopParts { head: Head::For { source: *source }, body: *body, exit: *exit, exit_args })
+            }
+            Terminator::While { cond, body, exit, exit_args } => {
+                Some(LoopParts { head: Head::While { cond: *cond }, body: *body, exit: *exit, exit_args })
+            }
+            _ => None,
         }
     }
 

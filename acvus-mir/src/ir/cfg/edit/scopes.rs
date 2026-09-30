@@ -55,7 +55,8 @@ pub struct Motion;
 pub struct Effect;
 /// Storage to values (SSA construction, SROA).
 pub struct Storage;
-/// Loop structure (compilation §4); its operations come with the loop design.
+/// Loop structure (compilation §4): its heads, joins and exits, with the
+/// value and CFG edits a loop edit is composed of.
 pub struct Loop;
 /// Removal on a proven fact: dse and bce (G1).
 pub struct Discharge;
@@ -90,7 +91,7 @@ scope!(Sccp, [CfgShape, Instructions, Storage, OrderTokens], 'n => dyn Dominance
 scope!(Motion, [Instructions, OrderTokens, Storage], 'n => dyn MotionFacts + 'n, (Base, SplitTakenOnce), [MovesInsts]);
 scope!(Effect, [Instructions, OrderTokens], 'n => dyn OrderFacts + 'n, (Base, SplitTakenOnce), [EditsOrder]);
 scope!(Storage, [Instructions, Storage], 'n => dyn LoanFacts + 'n, Base, [PromotesStorage]);
-scope!(Loop, [CfgShape, Instructions], 'n => NoFacts, Base, [EditsLoops]);
+scope!(Loop, [CfgShape, Instructions, Storage, OrderTokens], 'n => dyn DominanceFacts + 'n, Base, [ReplacesValues, EditsCfg, EditsLoops]);
 scope!(Discharge, [Instructions, Storage, OrderTokens], 'n => dyn DischargeFacts + 'n, Base, [Discharges]);
 scope!(Inline, [CfgShape, Instructions, Storage, OrderTokens, Types], 'n => NoFacts, (Base, SplitTakenOnce), [Inlines]);
 scope!(Drops, [Instructions, Storage, OrderTokens], 'n => dyn DropFacts + 'n, Base, [InsertsDrops]);

@@ -2588,3 +2588,540 @@ fn discharge_of_a_checked_index_proves_its_bound_and_keeps_the_index() {
     assert!(matches!(insts[0].op(), Op::Index { bound: crate::ir::IndexBound::Proven, .. }));
     assert_eq!(result_of(&insts[0]), e);
 }
+
+// -- Loop edits ----------------------------------------------------------------
+
+/// ```text
+/// entry(n):   zero = 0; jump header(zero)
+/// header(i):  c = i < n; while c { stage } else exit
+/// stage:      one = 1; i1 = i + one; jump header(i1)
+/// exit:       return i
+/// ```
+struct Counting {
+    id: BodyId,
+    entry: BlockId,
+    header: BlockId,
+    stage: BlockId,
+    exit: BlockId,
+    n: ValueId,
+    zero: ValueId,
+    i: ValueId,
+    c: ValueId,
+    one: ValueId,
+    i1: ValueId,
+}
+
+fn counting(f: &mut Fixture) -> Counting {
+    let (int, bool, nn) = (f.int, f.bool, f.name("n"));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    let zero = builder.push(int_const(0), int, Span::ZERO);
+    let header = builder.new_block(&[int]);
+    let i = builder.block_params(header)[0];
+    let [stage, exit] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(Terminator::Jump { to: header, args: vec![zero] }, Span::ZERO);
+    builder.switch_to(header);
+    let c = builder.push(Op::BinOp { op: BinOp::Lt, left: i, right: n }, bool, Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: stage, exit, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(stage);
+    let one = builder.push(int_const(1), int, Span::ZERO);
+    let i1 = builder.push(add(i, one), int, Span::ZERO);
+    builder.terminate(Terminator::Jump { to: header, args: vec![i1] }, Span::ZERO);
+    builder.switch_to(exit);
+    builder.terminate(ret(i), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    let entry = entry_of(f, id);
+    Counting { id, entry, header, stage, exit, n, zero, i, c, one, i1 }
+}
+
+/// ```text
+/// entry(n, x): zero = 0; one = 1; wide = 0u64; jump header
+/// header:      c = zero < n; for k in zero..n { stage } else exit
+/// stage(k):    t = k + x; jump header
+/// exit:        return x
+/// ```
+struct Ranged {
+    id: BodyId,
+    header: BlockId,
+    stage: BlockId,
+    n: ValueId,
+    x: ValueId,
+    zero: ValueId,
+    one: ValueId,
+    wide: ValueId,
+    c: ValueId,
+    k: ValueId,
+    t: ValueId,
+}
+
+fn ranged(f: &mut Fixture) -> Ranged {
+    let (int, bool, nn, nx) = (f.int, f.bool, f.name("n"), f.name("x"));
+    let u64_ty = f.module_types_intern(TyKind::Int(IntTy::U64));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    let x = builder.param(nx, int, Span::ZERO);
+    let zero = builder.push(int_const(0), int, Span::ZERO);
+    let one = builder.push(int_const(1), int, Span::ZERO);
+    let wide = builder.push(int_const(0), u64_ty, Span::ZERO);
+    let header = builder.new_block(&[]);
+    let stage = builder.new_block(&[int]);
+    let k = builder.block_params(stage)[0];
+    let exit = builder.new_block(&[]);
+    builder.terminate(jump(header), Span::ZERO);
+    builder.switch_to(header);
+    let c = builder.push(Op::BinOp { op: BinOp::Lt, left: zero, right: n }, bool, Span::ZERO);
+    let source = ForSource::Range { at: zero, hi: n };
+    builder.terminate(Terminator::For { source, body: stage, exit, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(stage);
+    let t = builder.push(add(k, x), int, Span::ZERO);
+    builder.terminate(jump(header), Span::ZERO);
+    builder.switch_to(exit);
+    builder.terminate(ret(x), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    Ranged { id, header, stage, n, x, zero, one, wide, c, k, t }
+}
+
+fn range(at: ValueId, hi: ValueId) -> Head {
+    Head::For { source: ForSource::Range { at, hi } }
+}
+
+/// One `Loop` editor over `id`, with dominance computed from the body; the
+/// debug build checks every edit it makes against the scope's keeps.
+fn loop_edit<R>(f: &mut Fixture, id: BodyId, edit: impl for<'e> FnOnce(&mut Editor<'e, Loop>) -> R) -> R {
+    let mut facts = TestFacts::of(&f.module, id);
+    let mut editor = Editor::<Loop>::new(&mut f.module, id, &mut facts);
+    let made = edit(&mut editor);
+    editor.finish();
+    made
+}
+
+/// The edit is refused with `refusal`, and the body is as it was.
+fn assert_refused<T>(
+    f: &mut Fixture,
+    id: BodyId,
+    edit: impl for<'e> FnOnce(&mut Editor<'e, Loop>) -> Result<T, CannotEditLoop>,
+    refusal: CannotEditLoop,
+) {
+    let before = snapshot(f.body(id));
+    let refused = loop_edit(f, id, edit).err();
+    assert_eq!(refused, Some(refusal));
+    assert_eq!(snapshot(f.body(id)), before, "a refused loop edit leaves the body as it was");
+}
+
+/// The counterfactual of a refusal: the same change made through the
+/// Rewriter, past the editor's checks, and what the `Loop` scope's keeps
+/// then say of the body.
+fn unchecked(f: &mut Fixture, id: BodyId, edit: impl FnOnce(&mut Rewriter<'_>)) -> Result<(), Violation> {
+    let mut rewriter = f.module.rewrite(id);
+    edit(&mut rewriter);
+    rewriter.finish();
+    <<Loop as Scope>::Keeps as Invariants>::check(f.body(id), f.module.types())
+}
+
+fn violated(checked: Result<(), Violation>) -> &'static str {
+    checked.expect_err("the unchecked change breaks an invariant").invariant
+}
+
+#[test]
+fn set_head_makes_a_while_a_for_over_a_range() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, zero, n) = (lp.header, lp.zero, lp.n);
+    let supplied = loop_edit(&mut f, lp.id, |editor| editor.set_head(header, range(zero, n), &[]));
+
+    let [counter] = supplied.expect("zero and n are settled before the header runs")[..] else {
+        panic!("a range supplies one parameter")
+    };
+    let body = f.body(lp.id);
+    let Terminator::For { source: ForSource::Range { at, hi }, body: stage, exit, exit_args } = body.block(lp.header).terminator() else {
+        panic!("the header ends in a For")
+    };
+    assert_eq!((*at, *hi, *stage, *exit), (lp.zero, lp.n, lp.stage, lp.exit));
+    assert!(exit_args.is_empty());
+    assert_eq!(body.block(lp.stage).params(), &[counter]);
+    assert_eq!(body.ty_of(counter), f.int);
+    assert_eq!(body.use_count(lp.c), 0, "the condition loses its use");
+}
+
+#[test]
+fn set_head_makes_a_for_a_while_with_the_counter_rebound_to_a_value() {
+    let mut f = fixture();
+    let lp = ranged(&mut f);
+    let (header, c, zero) = (lp.header, lp.c, lp.zero);
+    let supplied = loop_edit(&mut f, lp.id, |editor| editor.set_head(header, Head::While { cond: c }, &[Rebind::Value(zero)]));
+
+    assert_eq!(supplied, Ok(Vec::new()));
+    let body = f.body(lp.id);
+    assert!(matches!(body.block(lp.header).terminator(), Terminator::While { cond, body: stage, .. } if *cond == lp.c && *stage == lp.stage));
+    assert!(body.block(lp.stage).params().is_empty());
+    assert!(!body.values().any(|value| value == lp.k), "the counter goes");
+    assert!(matches!(f.insts(lp.id, lp.stage)[0].op(), Op::BinOp { left, right, .. } if *left == lp.zero && *right == lp.x));
+}
+
+#[test]
+fn set_head_replaces_a_range_and_hands_the_counter_to_the_new_one() {
+    let mut f = fixture();
+    let lp = ranged(&mut f);
+    let (header, one, n) = (lp.header, lp.one, lp.n);
+    let supplied = loop_edit(&mut f, lp.id, |editor| editor.set_head(header, range(one, n), &[Rebind::Supplied(0)]));
+
+    let [counter] = supplied.expect("the new counter has the old one's type")[..] else {
+        panic!("a range supplies one parameter")
+    };
+    let body = f.body(lp.id);
+    assert!(matches!(body.block(lp.header).terminator(), Terminator::For { source: ForSource::Range { at, hi }, .. } if *at == lp.one && *hi == lp.n));
+    assert_eq!(body.block(lp.stage).params(), &[counter]);
+    assert!(!body.values().any(|value| value == lp.k));
+    assert!(matches!(f.insts(lp.id, lp.stage)[0].op(), Op::BinOp { left, .. } if *left == counter));
+}
+
+/// A rebinding past the new head's supplied parameters names nothing; made
+/// unchecked, the core has no parameter to hand the uses to.
+#[test]
+fn set_head_refuses_a_supplied_index_past_the_new_heads() {
+    let mut f = fixture();
+    let lp = ranged(&mut f);
+    let (header, one, n) = (lp.header, lp.one, lp.n);
+    let rebind = [Rebind::Supplied(1)];
+    assert_refused(&mut f, lp.id, |editor| editor.set_head(header, range(one, n), &rebind), CannotEditLoop::NoSuchSupplied(1));
+
+    let unchecked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, range(one, n), &rebind)))
+    }));
+    assert!(unchecked.is_err(), "the core has no supplied parameter at 1");
+}
+
+/// A rebinding that is not one per old supplied parameter; made unchecked,
+/// the core cannot tell what takes the counter's uses.
+#[test]
+fn set_head_refuses_a_rebinding_of_another_length() {
+    let mut f = fixture();
+    let lp = ranged(&mut f);
+    let (header, c) = (lp.header, lp.c);
+    assert_refused(
+        &mut f,
+        lp.id,
+        |editor| editor.set_head(header, Head::While { cond: c }, &[]),
+        CannotEditLoop::RebindCount { supplied: 1, named: 0 },
+    );
+
+    let unchecked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, Head::While { cond: c }, &[])))
+    }));
+    assert!(unchecked.is_err(), "the counter would go with its use left");
+}
+
+/// The new counter is a `u64` where the old was an `i64`, a value of
+/// another type replaces the counter, and a `While` tests an integer; made
+/// unchecked, the core refuses to hand an `i64`'s uses to a `u64`.
+#[test]
+fn set_head_refuses_a_type_mismatch() {
+    let mut f = fixture();
+    let lp = ranged(&mut f);
+    let (header, wide, c, n, k) = (lp.header, lp.wide, lp.c, lp.n, lp.k);
+    let counter = [Rebind::Supplied(0)];
+    assert_refused(&mut f, lp.id, |editor| editor.set_head(header, range(wide, wide), &counter), CannotEditLoop::TypeMismatch(k));
+    assert_refused(
+        &mut f,
+        lp.id,
+        |editor| editor.set_head(header, Head::While { cond: c }, &[Rebind::Value(c)]),
+        CannotEditLoop::TypeMismatch(c),
+    );
+    assert_refused(
+        &mut f,
+        lp.id,
+        |editor| editor.set_head(header, Head::While { cond: n }, &[Rebind::Value(n)]),
+        CannotEditLoop::TypeMismatch(n),
+    );
+
+    let unchecked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, range(wide, wide), &counter)))
+    }));
+    assert!(unchecked.is_err(), "the core replaces a value only by one of its type");
+}
+
+/// `t` is computed from the counter, so it cannot stand for the counter at
+/// its own definition; made unchecked, `t` reads itself.
+#[test]
+fn set_head_refuses_a_value_that_does_not_dominate_a_use() {
+    let mut f = fixture();
+    let lp = ranged(&mut f);
+    let (header, c, t) = (lp.header, lp.c, lp.t);
+    let use_at = site_at(f.body(lp.id), lp.stage, 0);
+    let rebind = [Rebind::Value(t)];
+    assert_refused(
+        &mut f,
+        lp.id,
+        |editor| editor.set_head(header, Head::While { cond: c }, &rebind),
+        CannotEditLoop::DoesNotDominate(DoesNotDominate { use_at }),
+    );
+
+    let checked = unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, Head::While { cond: c }, &rebind)));
+    assert_eq!(violated(checked), "DefDominatesUses");
+}
+
+/// A parameter the old head supplied goes with the edit, so it cannot take
+/// another's uses; made unchecked, it would go with its uses left.
+#[test]
+fn set_head_refuses_an_old_supplied_parameter_as_a_value() {
+    let mut f = fixture();
+    let lp = ranged(&mut f);
+    let (header, one, n, k) = (lp.header, lp.one, lp.n, lp.k);
+    let rebind = [Rebind::Value(k)];
+    assert_refused(&mut f, lp.id, |editor| editor.set_head(header, range(one, n), &rebind), CannotEditLoop::NotSettled(k));
+
+    let unchecked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, range(one, n), &rebind)))
+    }));
+    assert!(unchecked.is_err(), "the counter would go with its use left");
+}
+
+/// ```text
+/// entry(n, d): zero = 0; if d { header } else { stage }
+/// header:      while d { stage } else exit
+/// stage:       jump header
+/// exit:        return n
+/// ```
+/// The entry enters the loop's body too; made unchecked, its edge passes
+/// no argument to the counter the new head supplies.
+#[test]
+fn set_head_refuses_a_body_entered_elsewhere() {
+    let mut f = fixture();
+    let (int, bool, nn, nd) = (f.int, f.bool, f.name("n"), f.name("d"));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    let d = builder.param(nd, bool, Span::ZERO);
+    let zero = builder.push(int_const(0), int, Span::ZERO);
+    let [header, stage, exit] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(
+        Terminator::JumpIf { cond: d, then_to: header, then_args: Vec::new(), else_to: stage, else_args: Vec::new() },
+        Span::ZERO,
+    );
+    builder.switch_to(header);
+    builder.terminate(Terminator::While { cond: d, body: stage, exit, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(stage);
+    builder.terminate(jump(header), Span::ZERO);
+    builder.switch_to(exit);
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    assert_refused(&mut f, id, |editor| editor.set_head(header, range(zero, n), &[]), CannotEditLoop::BodyEnteredElsewhere);
+
+    let checked = unchecked(&mut f, id, |rewriter| drop(rewriter.set_loop_head(header, range(zero, n), &[])));
+    assert_eq!(violated(checked), "TypesAgree");
+}
+
+/// The range's end is the join parameter `i`, defined in the header, so
+/// the range would change from one iteration to the next. Made unchecked,
+/// SSA and types still hold, so the keeps accept it: this check alone
+/// keeps a `For`'s source settled before its header runs.
+#[test]
+fn set_head_refuses_a_for_operand_defined_in_the_header() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, zero, i) = (lp.header, lp.zero, lp.i);
+    assert_refused(&mut f, lp.id, |editor| editor.set_head(header, range(zero, i), &[]), CannotEditLoop::NotSettled(i));
+
+    assert_eq!(unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, range(zero, i), &[]))), Ok(()));
+}
+
+/// Every loop edit names a header; a block that ends otherwise has no head,
+/// join or exit to change.
+#[test]
+fn loop_edits_refuse_a_block_that_is_no_loop() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (stage, zero, n, i) = (lp.stage, lp.zero, lp.n, lp.i);
+    assert_refused(&mut f, lp.id, |editor| editor.set_head(stage, range(zero, n), &[]), CannotEditLoop::NotALoop);
+    assert_refused(&mut f, lp.id, |editor| editor.add_join(stage, zero, &[]), CannotEditLoop::NotALoop);
+    assert_refused(&mut f, lp.id, |editor| editor.remove_join(stage, i, zero), CannotEditLoop::NotALoop);
+    assert_refused(&mut f, lp.id, |editor| editor.add_exit(stage, zero), CannotEditLoop::NotALoop);
+    assert_refused(&mut f, lp.id, |editor| editor.remove_exit(stage, i, zero), CannotEditLoop::NotALoop);
+}
+
+/// `add_join` adds `s`, `zero` on entry and `i1` on the back edge, and
+/// `remove_join` takes `i` away in its favour: `s` is the same recurrence,
+/// renamed. Adding a join and removing it again leaves the body as it was.
+#[test]
+fn add_join_and_remove_join_round_trip() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let before = snapshot(f.body(lp.id));
+    let (header, stage, zero, i1) = (lp.header, lp.stage, lp.zero, lp.i1);
+    loop_edit(&mut f, lp.id, |editor| {
+        let s = editor.add_join(header, zero, &[(stage, i1)]).expect("zero is settled and i1 reaches the back edge");
+        editor.remove_join(header, s, zero).expect("s has no use");
+    });
+    assert_eq!(snapshot(f.body(lp.id)), before);
+
+    let i = lp.i;
+    let s = loop_edit(&mut f, lp.id, |editor| {
+        let s = editor.add_join(header, zero, &[(stage, i1)]).expect("zero is settled and i1 reaches the back edge");
+        editor.remove_join(header, i, s).expect("s is a header parameter too, dominating every use of i");
+        s
+    });
+    let body = f.body(lp.id);
+    assert_eq!(body.block(lp.header).params(), &[s]);
+    assert!(matches!(body.block(lp.entry).terminator(), Terminator::Jump { args, .. } if args == &[lp.zero]));
+    assert!(matches!(body.block(lp.stage).terminator(), Terminator::Jump { args, .. } if args == &[lp.i1]));
+    assert!(matches!(body.block(lp.exit).terminator(), Terminator::Return { value, .. } if *value == s));
+    assert!(matches!(f.insts(lp.id, lp.stage)[1].op(), Op::BinOp { left, .. } if *left == s));
+}
+
+/// `add_exit` gives the exit `left`, filled with `i`; the exit returns it,
+/// and `remove_exit` hands its use back to `i`. The body is as it was.
+#[test]
+fn add_exit_and_remove_exit_round_trip() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let before = snapshot(f.body(lp.id));
+    let (header, exit, i) = (lp.header, lp.exit, lp.i);
+    loop_edit(&mut f, lp.id, |editor| {
+        let left = editor.add_exit(header, i).expect("i is defined where the header ends");
+        let body = editor.body();
+        assert_eq!(body.block(exit).params(), &[left]);
+        assert!(matches!(body.block(header).terminator(), Terminator::While { exit_args, .. } if exit_args == &[i]));
+        editor.replace_use(Site::Term(exit), i, left).expect("left is defined at the exit's start");
+        editor.remove_exit(header, left, i).expect("i dominates the exit's return");
+    });
+    assert_eq!(snapshot(f.body(lp.id)), before);
+}
+
+/// `one` is computed in the loop, so it is not defined on the entry edge;
+/// made unchecked, the entry passes a value it does not have.
+#[test]
+fn add_join_refuses_an_init_the_loop_computes() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, stage, one, i1) = (lp.header, lp.stage, lp.one, lp.i1);
+    assert_refused(&mut f, lp.id, |editor| editor.add_join(header, one, &[(stage, i1)]), CannotEditLoop::NotSettled(one));
+
+    let (entry, int) = (lp.entry, f.int);
+    let checked = unchecked(&mut f, lp.id, |rewriter| drop(rewriter.add_block_param(header, int, &[(entry, 0, one), (stage, 0, i1)])));
+    assert_eq!(violated(checked), "DefDominatesUses");
+}
+
+/// The back edge from `stage` is not named, or named twice; made
+/// unchecked, it passes one argument to two parameters.
+#[test]
+fn add_join_refuses_back_edges_not_named_once_each() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, stage, zero, i1) = (lp.header, lp.stage, lp.zero, lp.i1);
+    assert_refused(&mut f, lp.id, |editor| editor.add_join(header, zero, &[]), CannotEditLoop::BackEdges);
+    assert_refused(&mut f, lp.id, |editor| editor.add_join(header, zero, &[(stage, i1), (stage, i1)]), CannotEditLoop::BackEdges);
+
+    let (entry, int) = (lp.entry, f.int);
+    let checked = unchecked(&mut f, lp.id, |rewriter| drop(rewriter.add_block_param(header, int, &[(entry, 0, zero)])));
+    assert_eq!(violated(checked), "TypesAgree");
+}
+
+/// `c` is a `Bool` where `zero` is an integer; made unchecked, the back
+/// edge passes a `Bool` to an integer parameter.
+#[test]
+fn add_join_refuses_a_next_value_of_another_type() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, stage, zero, c) = (lp.header, lp.stage, lp.zero, lp.c);
+    assert_refused(&mut f, lp.id, |editor| editor.add_join(header, zero, &[(stage, c)]), CannotEditLoop::TypeMismatch(c));
+
+    let (entry, int) = (lp.entry, f.int);
+    let checked = unchecked(&mut f, lp.id, |rewriter| drop(rewriter.add_block_param(header, int, &[(entry, 0, zero), (stage, 0, c)])));
+    assert_eq!(violated(checked), "TypesAgree");
+}
+
+/// ```text
+/// entry(n, d): while d { stage } else exit
+/// stage:       return n
+/// exit:        return n
+/// ```
+/// The header is the body's entry, which the body's start enters with no
+/// argument. Made unchecked, the entry gains a parameter nothing fills and
+/// the keeps accept it: this check alone keeps such a parameter out.
+#[test]
+fn add_join_refuses_a_header_entered_without_arguments() {
+    let mut f = fixture();
+    let (int, bool, nn, nd) = (f.int, f.bool, f.name("n"), f.name("d"));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    let d = builder.param(nd, bool, Span::ZERO);
+    let [stage, exit] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(Terminator::While { cond: d, body: stage, exit, exit_args: Vec::new() }, Span::ZERO);
+    for block in [stage, exit] {
+        builder.switch_to(block);
+        builder.terminate(ret(n), Span::ZERO);
+    }
+    let id = builder.seal().expect("the body has no open state");
+    let header = entry_of(&f, id);
+    assert_refused(&mut f, id, |editor| editor.add_join(header, n, &[]), CannotEditLoop::EnteredWithoutArguments);
+
+    assert_eq!(unchecked(&mut f, id, |rewriter| drop(rewriter.add_block_param(header, int, &[]))), Ok(()));
+}
+
+/// `n` is the body's parameter, not the header's; the join is the header's
+/// parameters alone.
+#[test]
+fn remove_join_refuses_a_value_that_is_no_join_parameter() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, n, zero) = (lp.header, lp.n, lp.zero);
+    assert_refused(&mut f, lp.id, |editor| editor.remove_join(header, n, zero), CannotEditLoop::NotAJoinParam(n));
+}
+
+/// `c` is a `Bool` and `i` an integer; `replace_uses` holds no refusal for
+/// this and would panic.
+#[test]
+fn remove_join_refuses_a_replacement_of_another_type() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, i, c) = (lp.header, lp.i, lp.c);
+    assert_refused(&mut f, lp.id, |editor| editor.remove_join(header, i, c), CannotEditLoop::TypeMismatch(c));
+}
+
+/// `i1` is computed in the loop after `i`'s first use, `c = i < n` in the
+/// header; `replace_uses`' refusal carries that use.
+#[test]
+fn remove_join_refuses_a_replacement_that_does_not_dominate_a_use() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, i, i1) = (lp.header, lp.i, lp.i1);
+    let use_at = site_at(f.body(lp.id), lp.header, 0);
+    assert_refused(
+        &mut f,
+        lp.id,
+        |editor| editor.remove_join(header, i, i1),
+        CannotEditLoop::DoesNotDominate(DoesNotDominate { use_at }),
+    );
+}
+
+/// `i` replaced by itself keeps its uses, so `remove_param`'s refusal
+/// carries why it stays.
+#[test]
+fn remove_join_refuses_a_parameter_that_cannot_go() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, i) = (lp.header, lp.i);
+    assert_refused(&mut f, lp.id, |editor| editor.remove_join(header, i, i), CannotEditLoop::RemoveParam(CannotRemoveParam::StillUsed));
+}
+
+/// `i1` is computed in the loop's body, which the header's edge into the
+/// exit does not pass through; made unchecked, the header passes a value it
+/// does not have.
+#[test]
+fn add_exit_refuses_a_value_not_defined_on_an_edge_into_the_exit() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, exit, i1, int) = (lp.header, lp.exit, lp.i1, f.int);
+    assert_refused(&mut f, lp.id, |editor| editor.add_exit(header, i1), CannotEditLoop::NotSettled(i1));
+
+    let checked = unchecked(&mut f, lp.id, |rewriter| drop(rewriter.add_block_param(exit, int, &[(header, 1, i1)])));
+    assert_eq!(violated(checked), "DefDominatesUses");
+}
+
+/// `i` is the header's parameter, not the exit's.
+#[test]
+fn remove_exit_refuses_a_value_that_is_no_exit_parameter() {
+    let mut f = fixture();
+    let lp = counting(&mut f);
+    let (header, i, zero) = (lp.header, lp.i, lp.zero);
+    assert_refused(&mut f, lp.id, |editor| editor.remove_exit(header, i, zero), CannotEditLoop::NotAnExitParam(i));
+}
