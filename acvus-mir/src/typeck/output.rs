@@ -259,6 +259,9 @@ pub(super) struct Entered {
     /// The effect of the body the value entered in, which each step's
     /// function joins (effects §1).
     pub body: EffectTerm<InferPhase>,
+    /// The body instantiation the value entered in, where each step is
+    /// made (types §3).
+    pub level: crate::infer::Level,
 }
 
 /// An `as` cast, at either end a `CastTy` (operators §5).

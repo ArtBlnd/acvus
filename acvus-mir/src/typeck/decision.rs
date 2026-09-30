@@ -672,9 +672,7 @@ pub(super) fn fire_owned(cx: &mut Ctxt<'_>, decision: Decision, made: Made, read
 /// and what it makes is of its level (S7, types §3).
 fn as_made<R>(cx: &mut Ctxt<'_>, made: Made, fire: impl FnOnce(&mut Ctxt<'_>) -> R) -> R {
     let enclosing = std::mem::replace(&mut cx.decisions.owner, made.owner);
-    let level = cx.infer.set_level(made.level);
-    let fired = fire(cx);
-    cx.infer.set_level(level);
+    let fired = cx.at_level(made.level, fire);
     cx.decisions.owner = enclosing;
     fired
 }
@@ -1044,6 +1042,7 @@ fn fire_enter(cx: &mut Ctxt<'_>, site: AstId, span: Span, (of, value): (Term, Cl
             value: value.term,
             slot,
             body,
+            level: cx.infer.level(),
         }),
         Ok(Entered::Converted(conversion)) => {
             let node = AstId::alloc();

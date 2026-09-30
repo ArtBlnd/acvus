@@ -325,8 +325,6 @@ impl Infer {
             // it becomes, so it decides nothing, and the slot is left to
             // what else enters it or to its default (types §5).
             End::Unbound(..) if value.head == Head::Base(Base::Never) => return Ok(Entered::Folded),
-            // The slot takes the value's type by being linked to the
-            // value's last variable where it has one (types §1).
             // A value holding an identity made above the slot's level
             // takes its nearest ancestor carrying no identity (types §3).
             End::Unbound(var, _) if self.held_below(self.ty_levels[var.0 as usize], value.term).escapes => {
@@ -337,6 +335,8 @@ impl Infer {
                 self.bind(var, None, climbed)?;
                 return Ok(Entered::Folded);
             }
+            // The slot takes the value's type by being linked to the
+            // value's last variable where it has one (types §1).
             End::Unbound(var, _) => {
                 let value_holder = match self.end(of) {
                     End::Node { holder, .. } => holder,

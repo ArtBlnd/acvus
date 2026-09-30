@@ -39,8 +39,13 @@ impl<'d> Ctxt<'d> {
     /// `check` run as one instantiation of a body, a lambda's or a loop's
     /// iteration, one level inside the body around it (types §3).
     pub fn in_body<R>(&mut self, check: impl FnOnce(&mut Ctxt<'d>) -> R) -> R {
-        let around = self.infer.level();
-        self.infer.set_level(Level(around.0 + 1));
+        let inside = Level(self.infer.level().0 + 1);
+        self.at_level(inside, check)
+    }
+
+    /// `check` run at `level`: what it makes is made there (types §3).
+    pub fn at_level<R>(&mut self, level: Level, check: impl FnOnce(&mut Ctxt<'d>) -> R) -> R {
+        let around = self.infer.set_level(level);
         let checked = check(self);
         self.infer.set_level(around);
         checked

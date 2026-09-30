@@ -390,7 +390,7 @@ fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut Freeze
         .collect();
     for entered in std::mem::take(&mut cx.out.entered) {
         let site = entered.site;
-        if let Some(steps) = climb(cx, entered) {
+        if let Some(steps) = cx.at_level(entered.level, |cx| climb(cx, entered)) {
             applied.push((site, steps));
         }
     }

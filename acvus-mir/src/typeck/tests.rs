@@ -10,9 +10,9 @@ use super::{
 };
 use super::decision::variables_of;
 use crate::decl::{CastRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
-use crate::infer::ShapeCoercion;
+use crate::infer::{Mismatch, ShapeCoercion};
 use crate::ty::structural::PartKey;
-use crate::ty::{Mark, MarkTerm};
+use crate::ty::{IdentityTerm, Mark, MarkTerm};
 use crate::ty::{
     Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind, Types,
 };
@@ -3700,4 +3700,207 @@ fn a_name_reaching_several_extern_fns_taken_as_a_value_is_refused_by_its_written
     assert_eq!(checked.refusals(), vec![&RefusalKind::ExternAsValue { name: written }]);
     let start = source.find("= len;").expect("the source names `len`") + "= ".len();
     assert_eq!(checked.typeck.refusals[0].span, acvus_ast::Span { start, end: start + "len".len() }, "refused at the name");
+}
+
+/// An extern type `X` carrying one identity and `Y` carrying none, with,
+/// where `ancestor`, the cast `X -> Y`; `make() -> X<I>`, whose identity
+/// only its result holds; `keep(x: X<I>) -> X<I>` and `join(a: X<I>, b:
+/// X<I>) -> X<I>`, which give their result their parameters' identity;
+/// `each(f: fn(i64) -> i64) -> i64`, whose closure may hold a `&mut`; and
+/// `apply(f: fn(i64) -> X<I>) -> X<I>`. The fixture, and `Y`'s name.
+fn identity_fixture(ancestor: bool) -> (Fixture, QualifiedRef) {
+    let mut fx = Fixture::new();
+    let (x, y) = (QualifiedRef::root(fx.name("X")), QualifiedRef::root(fx.name("Y")));
+    for (id, carries_identity) in [(x, true), (y, false)] {
+        fx.raw.user_types.push(UserTypeDecl { id, type_params: Box::new([]), carries_effect: false, carries_identity, lifetimes: 0 });
+    }
+    let x_i = fx.ty(TyKind::UserDefined {
+        id: x,
+        type_args: Box::new([]),
+        effect: None,
+        identity: Some(IdentityTerm::Var(0)),
+        marked: MarkTerm::Known(Mark::Unmarked),
+    });
+    let y_ty = fx.ty(TyKind::UserDefined { id: y, type_args: Box::new([]), effect: None, identity: None, marked: MarkTerm::Known(Mark::Unmarked) });
+    let i64_ty = fx.int(IntTy::I64);
+    let make = fx.pure(&[], x_i);
+    fx.declare("make", make, &[]);
+    let keep = fx.pure(&[x_i], x_i);
+    fx.declare("keep", keep, &[]);
+    let join = fx.pure(&[x_i, x_i], x_i);
+    fx.declare("join", join, &[]);
+    let holding_mut = fx.ty(TyKind::Fn {
+        params: Box::new([i64_ty]),
+        ret: i64_ty,
+        effect: EffectTerm::Known(crate::ty::Effect::pure()),
+        flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
+        calls: Calls::Many,
+        holds: Holds::Mut,
+        values: (),
+    });
+    let each = fx.pure(&[holding_mut], i64_ty);
+    fx.declare("each", each, &[]);
+    let making = fx.pure(&[i64_ty], x_i);
+    let apply = fx.pure(&[making], x_i);
+    fx.declare("apply", apply, &[]);
+    if ancestor {
+        let widening = fx.pure(&[x_i], y_ty);
+        let to_y = fx.declare("to_y", widening, &[]);
+        fx.raw.casts.push(CastRule { from: x_i, to: y_ty, via: to_y });
+    }
+    (fx, y)
+}
+
+/// Whether `ty` is the extern type `named`.
+fn is_named(checked: &Checked, ty: Ty, named: QualifiedRef) -> bool {
+    matches!(checked.kind(ty), TyKind::UserDefined { id, .. } if *id == named)
+}
+
+/// Whether the one refusal is two identities meeting at a declaration's
+/// parameter, a node that climbs to no ancestor, so the two stay two
+/// heads (types §3).
+fn refused_as_two_heads(checked: &Checked) -> bool {
+    matches!(checked.refusals()[..], [RefusalKind::Mismatch(Mismatch::Heads { .. })])
+}
+
+/// `source` checked against the identity fixture, `ancestor` as it says,
+/// and the type of its binding `name`.
+fn identity_binding(ancestor: bool, source: &str, name: &str) -> (Checked, Ty, QualifiedRef) {
+    let (fx, y) = identity_fixture(ancestor);
+    let names = fx.names.clone();
+    let (checked, script) = fx.script(source);
+    let ty = binding(&checked, &script, &names, name);
+    (checked, ty, y)
+}
+
+/// types §3: each call of a declaration whose result carries an identity
+/// its parameters do not give makes a fresh one. The values of two calls
+/// are of two identities: at a declaration's parameter, where the second
+/// cannot climb, they are refused, as two heads with the ancestor and as no
+/// conversion without it; stored into one binding, they meet at the
+/// ancestor.
+#[test]
+fn two_calls_give_two_identities() {
+    let (checked, _) = identity_fixture(true).0.script("join(make(), make())");
+    assert!(refused_as_two_heads(&checked), "refused: {:?}", checked.refusals());
+    let (checked, _) = identity_fixture(false).0.script("join(make(), make())");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoConversion]);
+
+    let (checked, a, y) = identity_binding(true, "let a = make(); a = make(); a", "a");
+    checked.admitted();
+    assert!(is_named(&checked, a, y), "`a` is at the ancestor");
+}
+
+/// types §3: a declaration gives its result a parameter's identity, so one
+/// value's identity kept through `keep` meets itself.
+#[test]
+fn an_identity_kept_through_a_parameter_is_one() {
+    let (fx, y) = identity_fixture(true);
+    let (checked, script) = fx.script("let a = make(); join(a, keep(a))");
+    checked.admitted();
+    assert!(!is_named(&checked, tail(&checked, &script), y), "the join keeps `X`");
+}
+
+/// types §3: an iteration of a loop is one instantiation of its body, and
+/// an identity made in it never enters what was made outside it: stored
+/// into a binding the loop's body did not declare, the value takes its
+/// nearest ancestor carrying no identity, and is refused where there is
+/// none.
+#[test]
+fn an_identity_made_in_a_loop_takes_its_ancestor_outside_it() {
+    let source = "let last = make(); for i in 0..3 { last = make(); } last";
+    let (checked, last, y) = identity_binding(true, source, "last");
+    checked.admitted();
+    assert!(is_named(&checked, last, y), "`last` is at the ancestor");
+    let (checked, _, _) = identity_binding(false, source, "last");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::IdentityEscapes]);
+}
+
+/// types §3: a call of a lambda is one instantiation of its body, and a
+/// captured binding was made outside it: an identity made in the lambda
+/// stored into one takes its ancestor, as a loop's does.
+#[test]
+fn an_identity_made_in_a_lambda_takes_its_ancestor_in_a_capture() {
+    let source = "let v = make(); each(|i| -> { v = make(); i }); v";
+    let (checked, v, y) = identity_binding(true, source, "v");
+    checked.admitted();
+    assert!(is_named(&checked, v, y), "`v` is at the ancestor");
+    let (checked, _, _) = identity_binding(false, source, "v");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::IdentityEscapes]);
+}
+
+/// types §3: a lambda whose value is not generalized gives its result's
+/// identity made in its body nowhere outside it: at `apply`'s result,
+/// whose identity the caller's call holds, it escapes, refused without an
+/// ancestor.
+#[test]
+fn an_identity_made_in_a_lambda_not_generalized_escapes_at_its_result() {
+    let (checked, _) = identity_fixture(false).0.script("apply(|i| -> make())");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::IdentityEscapes]);
+}
+
+/// types §3: a let-bound lambda's result identity made in its body leaves
+/// as its result, made fresh at each call as a declaration's is: one call's
+/// value kept through `keep` meets itself.
+#[test]
+#[ignore = "the lambda's result variable takes the level of the binding its function type enters before the binding is generalized, so the identity escapes there; returned to the coordinator"]
+fn a_let_bound_lambdas_result_identity_is_fresh_at_each_call() {
+    let (fx, y) = identity_fixture(true);
+    let (checked, script) = fx.script("let f = |i| -> make(); let a = f(1); join(a, keep(a))");
+    checked.admitted();
+    assert!(!is_named(&checked, tail(&checked, &script), y), "the join keeps `X`");
+}
+
+/// types §3: a call of a unit is an instantiation of its body, and its
+/// result's identity made there is made fresh at each call, as a
+/// declaration's is: two calls' values are two identities, and one call's
+/// value kept through `keep` meets itself.
+#[test]
+fn a_units_result_identity_is_fresh_at_each_call() {
+    let unit = [(&["lib"][..], "m", "make()")];
+    let (checked, _, _) = identity_fixture(true).0.script_with_units(&unit, "join(lib::m(), lib::m())");
+    assert!(refused_as_two_heads(&checked), "refused: {:?}", checked.refusals());
+    let (checked, _, _) = identity_fixture(false).0.script_with_units(&unit, "join(lib::m(), lib::m())");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoConversion]);
+
+    let (fx, y) = identity_fixture(true);
+    let names = fx.names.clone();
+    let (checked, script, _) = fx.script_with_units(&unit, "let a = lib::m(); a = lib::m(); a");
+    checked.admitted();
+    assert!(is_named(&checked, binding(&checked, &script, &names, "a"), y), "`a` is at the ancestor");
+
+    let (fx, y) = identity_fixture(true);
+    let (checked, script, _) = fx.script_with_units(&unit, "let a = lib::m(); join(a, keep(a))");
+    checked.admitted();
+    assert!(!is_named(&checked, tail(&checked, &script), y), "the join keeps `X`");
+}
+
+/// context §3: a context's identity is fresh, one per context, so two
+/// contexts' values never meet, and one context's value read twice is of
+/// one identity.
+#[test]
+fn a_contexts_identity_is_its_own() {
+    let with_contexts = |ancestor: bool| {
+        let (mut fx, y) = identity_fixture(ancestor);
+        let x = QualifiedRef::root(fx.name("X"));
+        let x_i = fx.ty(TyKind::UserDefined {
+            id: x,
+            type_args: Box::new([]),
+            effect: None,
+            identity: Some(IdentityTerm::Var(0)),
+            marked: MarkTerm::Known(Mark::Unmarked),
+        });
+        fx.context("p", x_i);
+        fx.context("q", x_i);
+        (fx, y)
+    };
+    let (checked, _) = with_contexts(true).0.script("join(@p, @q)");
+    assert!(refused_as_two_heads(&checked), "refused: {:?}", checked.refusals());
+    let (checked, _) = with_contexts(false).0.script("join(@p, @q)");
+    assert_eq!(checked.refusals(), vec![&RefusalKind::NoConversion]);
+
+    let (fx, y) = with_contexts(true);
+    let (checked, script) = fx.script("join(@p, @p)");
+    checked.admitted();
+    assert!(!is_named(&checked, tail(&checked, &script), y), "the join keeps `X`");
 }
