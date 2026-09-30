@@ -14,6 +14,7 @@ pub mod context;
 pub mod done;
 pub mod guard;
 pub mod impls;
+pub mod register;
 pub mod runtime;
 
 #[doc(hidden)]

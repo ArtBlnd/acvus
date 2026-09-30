@@ -1,6 +1,7 @@
 //! `WordRuntime`'s values and its operations.
 
 use std::any::{TypeId, type_name};
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -11,7 +12,8 @@ use acvus_extern::{Entry, Settled, SiteShape};
 use acvus_extern::impls::Family;
 use acvus_extern::impls::task::TaskKind;
 use acvus_extern::runtime::{Crosses, Mutability, RefTarget, Runtime};
-use acvus_utils::Interner;
+use acvus_extern::register::{ExternFn, Refused, Registers};
+use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::{self, Held, Kind, Word, scalar_kind};
 
@@ -20,6 +22,26 @@ use crate::boundary::{self, Held, Kind, Word, scalar_kind};
 #[derive(Default)]
 pub struct WordRuntime {
     interner: Interner,
+    /// The functions registered at this runtime, by path.
+    registered: HashMap<QualifiedRef, Box<dyn ExternFn<WordRuntime>>>,
+}
+
+impl Registers for WordRuntime {
+    fn register<F>(&mut self, f: F) -> Result<(), Refused>
+    where
+        F: ExternFn<Self>,
+    {
+        let path = f.path(&self.interner);
+        if self.registered.contains_key(&path) {
+            return Err(Refused::PathTaken(path));
+        }
+        self.registered.insert(path, Box::new(f));
+        Ok(())
+    }
+
+    fn registered(&self, path: QualifiedRef) -> Option<&dyn ExternFn<Self>> {
+        self.registered.get(&path).map(|f| &**f)
+    }
 }
 
 impl Runtime for WordRuntime {

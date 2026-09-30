@@ -8,7 +8,9 @@
 //! debug build's entry asserts that they agree.
 
 use acvus_extern::done::Done;
+use acvus_extern::register::Registers;
 use acvus_extern::runtime::{Mutability, Runtime};
+use acvus_utils::QualifiedRef;
 use acvus_extern::{Entry, SiteShape};
 
 use crate::boundary::{Held, Word};
@@ -54,20 +56,20 @@ where
     /// Calls `glue` with the arguments `passes` names, and keeps its result
     /// in a new variable, whose index it returns.
     pub fn call(&mut self, passes: &[Pass], glue: impl FnOnce(Entry<'_, R>) -> Done<R>) -> usize {
-        let mut args = self.arguments(passes);
+        let args = self.arguments(passes);
         let site = Self::site(passes);
 
-        let done = glue(Entry::new(self.runtime, &mut args, &site));
+        let done = glue(Entry::new(self.runtime, &args, &site));
 
         self.keep(done)
     }
 
     /// As `call`, for a glue whose body is awaited.
     pub async fn call_awaited(&mut self, passes: &[Pass], glue: impl AsyncFnOnce(Entry<'_, R>) -> Done<R>) -> usize {
-        let mut args = self.arguments(passes);
+        let args = self.arguments(passes);
         let site = Self::site(passes);
 
-        let done = glue(Entry::new(self.runtime, &mut args, &site)).await;
+        let done = glue(Entry::new(self.runtime, &args, &site)).await;
 
         self.keep(done)
     }
@@ -76,11 +78,27 @@ where
     /// arguments `passes` names, as a script calls a function value, and
     /// keeps its result in a new variable, whose index it returns.
     pub fn call_function(&mut self, function: usize, passes: &[Pass]) -> usize {
-        let mut args = self.arguments(passes);
+        let args = self.arguments(passes);
         let site = Self::site(passes);
 
         let callee = self.variables[function].as_deref().expect("a function given away is not called");
-        let done = callee.rust_fn::<R>().call(Entry::new(self.runtime, &mut args, &site));
+        let done = callee.rust_fn::<R>().call(Entry::new(self.runtime, &args, &site));
+
+        self.keep(done)
+    }
+
+    /// Calls the function registered at `path` with the arguments `passes`
+    /// names, as a compiled call does once its path is resolved, and keeps
+    /// its result in a new variable, whose index it returns.
+    pub fn call_registered(&mut self, path: QualifiedRef, passes: &[Pass]) -> usize
+    where
+        R: Registers,
+    {
+        let args = self.arguments(passes);
+        let site = Self::site(passes);
+
+        let f = self.runtime.registered(path).expect("a compiled call names a registered function");
+        let done = f.call(self.runtime, &args, &site);
 
         self.keep(done)
     }

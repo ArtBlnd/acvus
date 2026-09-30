@@ -43,3 +43,9 @@ unsafe impl<T> LoanForms for T where T: Crosses {}
 unsafe impl<T> LoanForms for Lent<T> where T: ?Sized {}
 // SAFETY: as `Lent`'s, exclusively.
 unsafe impl<T> LoanForms for LentMut<T> where T: ?Sized {}
+
+/// # Safety
+/// Only `#[extern_fn]` implements it, for the function it declares: the
+/// dispatch opens each argument by the mode of the declaration's parameter at
+/// that position, at the parameter's own type.
+pub unsafe trait ExternFns {}

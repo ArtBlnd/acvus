@@ -11,17 +11,19 @@
 //! as it would under X, and a use the tracking cannot yet tell apart from a
 //! breach may be refused.
 
+use std::collections::HashMap;
 use std::ops::{Deref, DerefMut, Range};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use acvus_utils::Interner;
+use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::entry::Settled;
 use crate::callback::{CallArgs, CallsBack, LoanForm, RustCallee, RustFns};
 use crate::impls::task::TaskKind;
 use crate::boundary::instance::InstanceEntry;
 use crate::impls::{Family, Instances, Task};
+use crate::register::{ExternFn, Refused, Registers};
 use crate::runtime::{Crosses, Mutability, RefTarget, Runtime};
 
 /// What a runtime answers, from its own representation, about a value the
@@ -71,14 +73,17 @@ impl Validity {
 }
 
 /// The adapter over the trusting runtime `X`.
-pub struct Adapter<X> {
+pub struct Adapter<X: Runtime + Validate> {
     inner: X,
     borrows: Mutex<Borrows>,
+    /// The functions registered at the adapter, their dispatch monomorphised
+    /// at it.
+    registered: HashMap<QualifiedRef, Box<dyn ExternFn<Adapter<X>>>>,
 }
 
 impl<X: Runtime + Validate> Adapter<X> {
     pub fn new(inner: X) -> Self {
-        Adapter { inner, borrows: Mutex::new(Borrows::new()) }
+        Adapter { inner, borrows: Mutex::new(Borrows::new()), registered: HashMap::new() }
     }
 
     pub fn inner(&self) -> &X {
@@ -520,5 +525,23 @@ mod tests {
         assert!(borrows.reborrow(100..108, Exclusive).unwrap().is_none());
         assert!(borrows.reborrow(16..32, Exclusive).unwrap().is_none());
         assert_eq!(borrows.nodes.len(), 1);
+    }
+}
+
+impl<X: Runtime + Validate> Registers for Adapter<X> {
+    fn register<F>(&mut self, f: F) -> Result<(), Refused>
+    where
+        F: ExternFn<Self>,
+    {
+        let path = f.path(self.inner.interner());
+        if self.registered.contains_key(&path) {
+            return Err(Refused::PathTaken(path));
+        }
+        self.registered.insert(path, Box::new(f));
+        Ok(())
+    }
+
+    fn registered(&self, path: QualifiedRef) -> Option<&dyn ExternFn<Self>> {
+        self.registered.get(&path).map(|f| &**f)
     }
 }

@@ -42,7 +42,7 @@ impl<R: Runtime> SiteShape<R> {
 /// (performance: facts in types).
 pub struct Entry<'c, R: Runtime> {
     runtime: &'c R,
-    args: &'c mut [R::Value],
+    args: &'c [R::Value],
     site: &'c SiteShape<R>,
 }
 
@@ -50,7 +50,7 @@ impl<'c, R: Runtime> Entry<'c, R> {
     /// The entry of one call. It is safe: the checker's decision is trusted
     /// only by the runtime's own typed reads (safety §3), and only the runtime
     /// holds values to pass here, since the host sees none (crossing §6).
-    pub fn new(runtime: &'c R, args: &'c mut [R::Value], site: &'c SiteShape<R>) -> Self {
+    pub fn new(runtime: &'c R, args: &'c [R::Value], site: &'c SiteShape<R>) -> Self {
         Entry { runtime, args, site }
     }
 
@@ -103,7 +103,7 @@ pub trait Mode<R: Runtime>: sealed::Sealed {
     const LENT: Option<Mutability>;
 
     #[doc(hidden)]
-    fn open<'c>(runtime: &'c R, v: &'c mut R::Value, at: Settled<'c>) -> Self::Opened<'c>
+    fn open<'c>(runtime: &'c R, v: &'c R::Value, at: Settled<'c>) -> Self::Opened<'c>
     where
         Self: 'c,
         R: 'c;
@@ -136,7 +136,7 @@ pub trait Args<R: Runtime>: sealed::Sealed {
     #[doc(hidden)]
     fn open<'c>(
         runtime: &'c R,
-        args: &'c mut [R::Value],
+        args: &'c [R::Value],
         lent: &[Option<Mutability>],
         at: Settled<'c>,
     ) -> Self::Opened<'c>
@@ -211,7 +211,7 @@ macro_rules! modes {
 
             const LENT: Option<Mutability> = $lent;
 
-            fn open<'c>($runtime: &'c R, $v: &'c mut R::Value, $at: Settled<'c>) -> Self::Opened<'c>
+            fn open<'c>($runtime: &'c R, $v: &'c R::Value, $at: Settled<'c>) -> Self::Opened<'c>
             where
                 Self: 'c,
                 R: 'c,
@@ -230,10 +230,10 @@ modes! {
         |runtime, v, at| Uniform::<R, T>::of_the_crossing(*v).take(runtime, at);
     [T] ByUniform<T> => Uniform<R, T>, None,
         |_runtime, v, _at| Uniform::of_the_crossing(*v);
-    [T: Crosses] ByRef<T> => Guard<'c, R::Shared<'c, T>>, SHARED,
-        |runtime, v, at| Guard::of_the_entry(runtime.shared(v, at));
-    [T: Crosses] ByMut<T> => GuardMut<'c, R::Exclusive<'c, T>>, EXCLUSIVE,
-        |runtime, v, at| GuardMut::of_the_entry(runtime.exclusive(v, at));
+    [T: Crosses] ByRef<T> => Guard<'c, &'c T>, SHARED,
+        |runtime, v, at| Guard::of_the_entry(runtime.target(*v, at));
+    [T: Crosses] ByMut<T> => GuardMut<'c, &'c mut T>, EXCLUSIVE,
+        |runtime, v, at| GuardMut::of_the_entry(runtime.target_mut(*v, at));
     [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED,
         |runtime, v, at| Guard::of_the_entry(runtime.target(*v, at));
     [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, EXCLUSIVE,
@@ -292,7 +292,7 @@ macro_rules! tuples {
             #[allow(unused_variables, clippy::unused_unit)]
             fn open<'c>(
                 runtime: &'c R,
-                args: &'c mut [R::Value],
+                args: &'c [R::Value],
                 lent: &[Option<Mutability>],
                 at: Settled<'c>,
             ) -> Self::Opened<'c>
@@ -300,7 +300,7 @@ macro_rules! tuples {
                 Self: 'c,
                 R: 'c,
             {
-                let run: &'c mut Self::Run = args.try_into().expect("a call passes one value per parameter");
+                let run: &'c Self::Run = args.try_into().expect("a call passes one value per parameter");
                 let modes: [Option<Mutability>; $n] = [$($m::LENT),*];
                 debug_assert_eq!(lent, modes, "the site passes each argument as its parameter's mode opens it");
                 let [$($v),*] = run;
