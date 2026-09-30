@@ -96,7 +96,7 @@ fn build(f: &mut Fixture, shape: Shape, size: usize) -> BodyId {
                 builder.terminate(jump(headers[0]), Span::ZERO);
                 for depth in 0..3 {
                     builder.switch_to(headers[depth]);
-                    builder.terminate(Terminator::While { cond: c, body: bodies[depth], exit: exits[depth], exit_args: Vec::new() }, Span::ZERO);
+                    builder.terminate(Terminator::While { cond: c, body: bodies[depth], body_args: Vec::new(), exit: exits[depth], exit_args: Vec::new() }, Span::ZERO);
                     builder.switch_to(bodies[depth]);
                     let invariant = builder.push(add(p, p), int, Span::ZERO);
                     let scaled = builder.push(mul(invariant, p), int, Span::ZERO);

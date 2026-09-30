@@ -472,6 +472,7 @@ fn the_token_crosses_a_loop_back_edge() {
     builder.terminate(Terminator::While {
         cond: c,
         body: loop_body,
+        body_args: Vec::new(),
         exit,
         exit_args: Vec::new(),
     }, acvus_ast::Span::ZERO);
@@ -819,7 +820,7 @@ fn a_retarget_updates_a_loops_body_and_exit() {
     let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
     let header = builder.current_block();
     let [loop_body, exit, other_body, other_exit] = [(); 4].map(|()| builder.new_block(&[]));
-    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     for block in [loop_body, other_body] {
         builder.switch_to(block);
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
@@ -1085,7 +1086,7 @@ fn the_core_records_every_token_it_makes() {
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let looped = builder.push_effect(loop_call, int, at(40));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);

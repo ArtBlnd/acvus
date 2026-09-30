@@ -7,8 +7,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use super::op::Op;
-use crate::ir::{DebugInfo, ForSource, OrderEdge, SwitchKey, ValueId};
-use crate::ty::{Concrete, Ty, Types};
+use crate::ir::{DebugInfo, ForSource, OrderEdge, SwitchKey, UnfitOperand, ValueId};
+use crate::ty::{Concrete, Ty, TyKind, Types};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BodyId(pub(super) u32);
@@ -350,13 +350,91 @@ pub enum Terminator {
     JumpIf { cond: ValueId, then_to: BlockId, then_args: Vec<ValueId>, else_to: BlockId, else_args: Vec<ValueId> },
     Diamond { cond: ValueId, then_to: BlockId, then_args: Vec<ValueId>, else_to: BlockId, else_args: Vec<ValueId>, join: BlockId },
     Switch { tag: ValueId, arms: Vec<(SwitchKey, BlockId, Vec<ValueId>)>, default: Option<(BlockId, Vec<ValueId>)>, join: BlockId },
-    For { source: ForSource, body: BlockId, exit: BlockId, exit_args: Vec<ValueId> },
-    While { cond: ValueId, body: BlockId, exit: BlockId, exit_args: Vec<ValueId> },
+    /// `body_args` fill the body's parameters after the ones `source`
+    /// supplies, as `exit_args` fill the exit's.
+    For { source: ForSource, body: BlockId, body_args: Vec<ValueId>, exit: BlockId, exit_args: Vec<ValueId> },
+    /// `body_args` fill every parameter of the body, as `exit_args` fill
+    /// the exit's.
+    While { cond: ValueId, body: BlockId, body_args: Vec<ValueId>, exit: BlockId, exit_args: Vec<ValueId> },
     Return { value: ValueId, order: Option<ValueId>, span: Span },
     Diverge,
     /// Where no arm of a `match` answers: no run reaches it, which
     /// `check::matchck` proves (patterns §3); otherwise as `Diverge`.
     NoArmMatched { span: Span },
+}
+
+/// A loop's head: how its iterations are yielded, which is a loop
+/// terminator without its body, exit and exit arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Head {
+    /// Each iteration runs where `cond`, computed in the header, is true.
+    While { cond: ValueId },
+    /// The iterations `source` yields; the body's leading parameters are the
+    /// ones it supplies.
+    For { source: ForSource },
+}
+
+impl Head {
+    /// Every value the head reads. Cost: O(1).
+    pub fn operands(&self) -> SmallVec<[ValueId; 2]> {
+        match self {
+            Head::While { cond } => smallvec::smallvec![*cond],
+            Head::For { source } => source.uses(),
+        }
+    }
+
+    /// How many of the body's leading parameters the head fills itself.
+    pub fn supplied_params(&self) -> usize {
+        match self {
+            Head::While { .. } => 0,
+            Head::For { source } => source.supplied_params(),
+        }
+    }
+
+    /// The kinds of the body parameters the head supplies, in order: none
+    /// for a `While`, whose condition is a `Bool`, and a `For`'s source's
+    /// (`ForSource::supplied_kinds`). Refused at an operand of another
+    /// type. Cost: O(the element's kind).
+    pub fn supplied_kinds(
+        &self,
+        ty_of: impl Fn(ValueId) -> Ty,
+        types: &Types<Concrete>,
+    ) -> Result<SmallVec<[TyKind<Concrete>; 2]>, UnfitOperand> {
+        match self {
+            Head::While { cond } => match types.kind(ty_of(*cond)) {
+                TyKind::Bool => Ok(SmallVec::new()),
+                _ => Err(UnfitOperand { operand: *cond }),
+            },
+            Head::For { source } => source.supplied_kinds(ty_of, types),
+        }
+    }
+
+    /// The loop terminator of this head.
+    pub fn terminator(self, body: BlockId, body_args: Vec<ValueId>, exit: BlockId, exit_args: Vec<ValueId>) -> Terminator {
+        match self {
+            Head::While { cond } => Terminator::While { cond, body, body_args, exit, exit_args },
+            Head::For { source } => Terminator::For { source, body, body_args, exit, exit_args },
+        }
+    }
+}
+
+/// What takes the uses of one body parameter the old head supplied, where a
+/// loop's head is replaced: the new head's supplied parameter at an index,
+/// or a value that exists before the replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rebind {
+    Supplied(usize),
+    Value(ValueId),
+}
+
+/// A loop terminator's parts beside its head.
+#[derive(Debug, Clone, Copy)]
+pub struct LoopParts<'t> {
+    pub head: Head,
+    pub body: BlockId,
+    pub body_args: &'t [ValueId],
+    pub exit: BlockId,
+    pub exit_args: &'t [ValueId],
 }
 
 /// One edge out of a terminator: the target's leading `supplied`
@@ -400,46 +478,56 @@ impl Terminator {
                 .map(|(_, to, args)| plain(*to, args))
                 .chain(default.iter().map(|(to, args)| plain(*to, args)))
                 .collect(),
-            Terminator::For { source, body, exit, exit_args } => smallvec::smallvec![
-                Edge { to: *body, supplied: source.supplied_params(), args: &[] },
+            Terminator::For { source, body, body_args, exit, exit_args } => smallvec::smallvec![
+                Edge { to: *body, supplied: source.supplied_params(), args: body_args },
                 plain(*exit, exit_args),
             ],
-            Terminator::While { body, exit, exit_args, .. } => {
-                smallvec::smallvec![plain(*body, &[]), plain(*exit, exit_args)]
+            Terminator::While { body, body_args, exit, exit_args, .. } => {
+                smallvec::smallvec![plain(*body, body_args), plain(*exit, exit_args)]
             }
             Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => SmallVec::new(),
         }
     }
 
-    /// Every edge's target, how many leading parameters the terminator
-    /// supplies, and the edge's argument list where it has one; a loop's
-    /// edge into its body has none.
-    pub(super) fn for_each_edge_mut(
-        &mut self,
-        mut on_edge: impl FnMut(BlockId, usize, Option<&mut Vec<ValueId>>),
-    ) {
+    /// The head, body, exit and their arguments of a loop terminator; none
+    /// for any other terminator.
+    pub fn as_loop(&self) -> Option<LoopParts<'_>> {
         match self {
-            Terminator::Jump { to, args } => on_edge(*to, 0, Some(args)),
+            Terminator::For { source, body, body_args, exit, exit_args } => {
+                Some(LoopParts { head: Head::For { source: *source }, body: *body, body_args, exit: *exit, exit_args })
+            }
+            Terminator::While { cond, body, body_args, exit, exit_args } => {
+                Some(LoopParts { head: Head::While { cond: *cond }, body: *body, body_args, exit: *exit, exit_args })
+            }
+            _ => None,
+        }
+    }
+
+    /// Every edge's target, how many leading parameters the terminator
+    /// supplies, and the edge's argument list.
+    pub(super) fn for_each_edge_mut(&mut self, mut on_edge: impl FnMut(BlockId, usize, &mut Vec<ValueId>)) {
+        match self {
+            Terminator::Jump { to, args } => on_edge(*to, 0, args),
             Terminator::JumpIf { then_to, then_args, else_to, else_args, .. }
             | Terminator::Diamond { then_to, then_args, else_to, else_args, .. } => {
-                on_edge(*then_to, 0, Some(then_args));
-                on_edge(*else_to, 0, Some(else_args));
+                on_edge(*then_to, 0, then_args);
+                on_edge(*else_to, 0, else_args);
             }
             Terminator::Switch { arms, default, .. } => {
                 for (_, to, args) in arms {
-                    on_edge(*to, 0, Some(args));
+                    on_edge(*to, 0, args);
                 }
                 if let Some((to, args)) = default {
-                    on_edge(*to, 0, Some(args));
+                    on_edge(*to, 0, args);
                 }
             }
-            Terminator::For { source, body, exit, exit_args } => {
-                on_edge(*body, source.supplied_params(), None);
-                on_edge(*exit, 0, Some(exit_args));
+            Terminator::For { source, body, body_args, exit, exit_args } => {
+                on_edge(*body, source.supplied_params(), body_args);
+                on_edge(*exit, 0, exit_args);
             }
-            Terminator::While { body, exit, exit_args, .. } => {
-                on_edge(*body, 0, None);
-                on_edge(*exit, 0, Some(exit_args));
+            Terminator::While { body, body_args, exit, exit_args, .. } => {
+                on_edge(*body, 0, body_args);
+                on_edge(*exit, 0, exit_args);
             }
             Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
@@ -542,13 +630,13 @@ impl Terminator {
                     args.iter().copied().for_each(&mut on_use);
                 }
             }
-            Terminator::For { source, exit_args, .. } => {
+            Terminator::For { source, body_args, exit_args, .. } => {
                 source.uses().into_iter().for_each(&mut on_use);
-                exit_args.iter().copied().for_each(on_use);
+                body_args.iter().chain(exit_args).copied().for_each(on_use);
             }
-            Terminator::While { cond, exit_args, .. } => {
+            Terminator::While { cond, body_args, exit_args, .. } => {
                 on_use(*cond);
-                exit_args.iter().copied().for_each(on_use);
+                body_args.iter().chain(exit_args).copied().for_each(on_use);
             }
             Terminator::Return { value, order, .. } => {
                 on_use(*value);
@@ -575,13 +663,13 @@ impl Terminator {
                     args.iter_mut().for_each(&mut on_use);
                 }
             }
-            Terminator::For { source, exit_args, .. } => {
+            Terminator::For { source, body_args, exit_args, .. } => {
                 source.for_each_use(&mut on_use);
-                exit_args.iter_mut().for_each(on_use);
+                body_args.iter_mut().chain(exit_args).for_each(on_use);
             }
-            Terminator::While { cond, exit_args, .. } => {
+            Terminator::While { cond, body_args, exit_args, .. } => {
                 on_use(cond);
-                exit_args.iter_mut().for_each(on_use);
+                body_args.iter_mut().chain(exit_args).for_each(on_use);
             }
             Terminator::Return { value, order, .. } => {
                 on_use(value);

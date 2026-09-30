@@ -22,15 +22,16 @@ mod scopes;
 mod tests;
 
 pub use cursor::Cursor;
-pub use loops::{CannotEditLoop, Head};
+pub use loops::CannotEditLoop;
+pub use super::body::{Head, Rebind};
 pub use keeps::{
     DefDominatesUses, Invariant, Invariants, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation,
 };
-pub use needs::{Asked, ContentFacts, DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
+pub use needs::{Asked, ContentFacts, DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, LoopFacts, NoFacts, OrderFacts};
 pub use scopes::{
     MotionFacts, Cfg, EditsCfg, EditsLoops, EditsOrder, Effect, Loop, Motion, MovesInsts, PromotesStorage, Remove, RemovesInsts,
     ReplacesValues, Sccp, Scope, Storage, Value, Discharge, Discharges, Drops, Inline, Inlines, InsertsDrops, Clones,
-    ClonesReads, DropFacts,
+    ClonesReads, DropFacts, LoopEditFacts,
 };
 
 use acvus_ast::Span;
@@ -1035,11 +1036,7 @@ where
         if body.use_count(param) > 0 {
             return Err(CannotRemoveParam::StillUsed);
         }
-        let supplied = body
-            .blocks()
-            .flat_map(|(_, from)| from.terminator().edges())
-            .any(|edge| edge.to == block && index < edge.supplied);
-        if supplied {
+        if supplied_by_an_edge(body, block, index) {
             return Err(CannotRemoveParam::Supplied);
         }
         self.edit(|rewriter| rewriter.remove(param))
@@ -1073,6 +1070,14 @@ where
         self.walk.settle(body);
         Ok(())
     }
+}
+
+/// Whether an edge into `block` fills its parameter at `index` itself, as a
+/// loop's edge into its body does. Cost: O(the body's edges).
+fn supplied_by_an_edge(body: &Body, block: BlockId, index: usize) -> bool {
+    body.blocks()
+        .flat_map(|(_, from)| from.terminator().edges())
+        .any(|edge| edge.to == block && index < edge.supplied)
 }
 
 /// Every operand of the instruction or terminator at `site`.

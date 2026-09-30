@@ -44,7 +44,7 @@ fn sample(f: &mut Fixture) -> Sample {
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let t1 = builder.push(add(n, n), int, Span::ZERO);
     let t2 = builder.push(add(n, n), int, Span::ZERO);
@@ -290,7 +290,7 @@ fn a_loop_keeps_its_empty_preheader_into_p7() {
     builder.switch_to(join);
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     builder.push(trapping_div(n, n), int, Span::ZERO);
     builder.terminate(jump(header), acvus_ast::Span::ZERO);

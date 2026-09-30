@@ -841,6 +841,7 @@ mod tests {
         builder.terminate(Terminator::For {
             source: ForSource::Range { at, hi },
             body: loop_body,
+            body_args: Vec::new(),
             exit,
             exit_args: Vec::new(),
         }, acvus_ast::Span::ZERO);
@@ -1057,7 +1058,7 @@ mod tests {
         let exit = builder.new_block(&[]);
         builder.terminate(jump(header, Vec::new()), Span::ZERO);
         builder.switch_to(header);
-        builder.terminate(Terminator::For { source: ForSource::Array(xs), body: loop_body, exit, exit_args: Vec::new() }, Span::ZERO);
+        builder.terminate(Terminator::For { source: ForSource::Array(xs), body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, Span::ZERO);
         builder.switch_to(loop_body);
         builder.terminate(jump(header, Vec::new()), Span::ZERO);
         builder.switch_to(exit);
