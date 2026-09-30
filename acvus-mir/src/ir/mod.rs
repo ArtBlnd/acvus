@@ -5,6 +5,7 @@ pub mod cfg;
 pub(crate) mod parts;
 
 use acvus_utils::QualifiedRef;
+use crate::decl::PairMember;
 use crate::ty::{Concrete, Ty, Types};
 
 /// An operation of the language no single op states, each read by
@@ -234,6 +235,9 @@ pub enum Callee {
         id: QualifiedRef,
         r#impl: Option<usize>,
         required: Vec<Chosen>,
+        /// Which of a `#` pair the call is (types §8); `Uniform` for a
+        /// declaration that is no pair.
+        member: PairMember,
     },
     /// Runtime-determined callable (closure, variable holding a function).
     Indirect(ValueId),
@@ -269,6 +273,7 @@ impl From<ExternImpl> for Callee {
             id,
             r#impl,
             required: Vec::new(),
+            member: PairMember::Uniform,
         }
     }
 }

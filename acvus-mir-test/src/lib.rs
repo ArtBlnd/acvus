@@ -99,7 +99,7 @@ impl Case {
             other => panic!("a declaration's type is a function type, not {other:?}"),
         };
         let param_names = (0..arity).map(|at| self.names.intern(&format!("p{at}"))).collect();
-        let scheme = Scheme { ty, param_names, bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]) };
+        let scheme = Scheme { ty, param_names, bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]) };
         self.raw.functions.push((id, scheme));
         id
     }
@@ -114,7 +114,7 @@ impl Case {
                     other => panic!("an impl's type is a function type, not {other:?}"),
                 };
                 let param_names = (0..arity).map(|at| self.names.intern(&format!("p{at}"))).collect();
-                ImplSig { ty: *ty, bounds: Box::new([]), param_names, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]) }
+                ImplSig { ty: *ty, bounds: Box::new([]), param_names, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]) }
             })
             .collect();
         self.raw.lang_impls.push((item, Impls { concrete, generic: None }));

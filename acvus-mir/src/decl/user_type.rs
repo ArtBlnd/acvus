@@ -9,8 +9,6 @@ pub struct UserTypeDecl {
     pub id: QualifiedRef,
     /// One bound per type parameter.
     pub type_params: Box<[TyVarBound]>,
-    /// Per type parameter, whether it may carry `#` (types §8).
-    pub specializes: Box<[bool]>,
     /// Whether it carries an effect (extern-fn §8): an upper bound on the
     /// work its values hold, which runs later.
     pub carries_effect: bool,

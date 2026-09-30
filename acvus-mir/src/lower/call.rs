@@ -18,6 +18,7 @@ use super::control::lower_short_circuit;
 use super::ctxt::Lcx;
 use super::expr::lower_expr;
 use super::place::{lend, operand};
+use crate::decl::PairMember;
 use crate::ir::cfg::Op;
 use crate::ir::{Callee, UnaryOp, ValueId, fn_effect};
 use crate::ty::{Mutability, Reissue, Ty, TyKind};
@@ -82,7 +83,8 @@ pub(super) fn call_reached(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>
     if cx.reached(site).r#impl == Some(Impl::Structural) {
         return super::part_tree::lifted(cx, site, args, span);
     }
-    let callee = cx.callee(cx.reached(site));
+    let member = cx.decided.pair(site).unwrap_or(PairMember::Uniform);
+    let callee = cx.callee_as(cx.reached(site), member);
     let callee_ty = cx
         .decided
         .callee(site)

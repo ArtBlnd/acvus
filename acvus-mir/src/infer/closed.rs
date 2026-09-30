@@ -4,7 +4,8 @@
 use super::{End, Infer, Term};
 use crate::decl::{Base, CastTree, Head};
 use super::cells::End as CellEnd;
-use crate::ty::{Mark, MarkTerm, ObjectTy, Phase, Poly, TyId, TyKind, TyVarId, Types};
+use super::Mismatch;
+use crate::ty::{EffectTerm, Infer as InferPhase, LenTerm, Mark, MarkTerm, ObjectTy, Phase, Poly, TyId, TyKind, TyVarId, Types};
 
 /// What the decisions still pending may do: typeck answers from its
 /// decision graph; B only asks.
@@ -44,6 +45,101 @@ impl Infer {
     /// of its cast tree still gains fields or variants.
     pub fn fixed(&self, open: &impl OpenSources, term: Term) -> bool {
         matches!(self.end(term), End::Node { .. }) && !open.may_grow(term)
+    }
+
+    /// A pair's mark started at `start`, joined into what uses made it so
+    /// far (types §8): refused where a `#` parameter fixed it marked and
+    /// the start raises it, at `position`, a position carrying it.
+    pub fn start_mark(&mut self, mark: &MarkTerm<InferPhase>, start: Mark, position: Term) -> Result<(), Mismatch> {
+        self.mark_vars
+            .join(mark, &MarkTerm::Known(start), Mark::join)
+            .map(drop)
+            .map_err(|_| Mismatch::Mark { a: position, b: position })
+    }
+
+    /// What `mark` settled to, `None` while it is unset.
+    pub fn mark_of(&self, mark: &MarkTerm<InferPhase>) -> Option<Mark> {
+        match self.mark_vars.end(mark) {
+            CellEnd::Known(value) | CellEnd::Var { value: Some(value), .. } => Some(value),
+            CellEnd::Var { value: None, .. } => None,
+        }
+    }
+
+    /// A pair's mark nothing started, its positions never known, is
+    /// unmarked (types §8); whether any was.
+    pub fn default_unstarted_marks(&mut self) -> bool {
+        self.mark_vars.default_unbound(&Mark::Unmarked)
+    }
+
+    /// Whether the type `term` is, its members read, is `ty`, a whole
+    /// concrete type a declaration writes: the same constructors and
+    /// members all the way down, marks apart, which are members of their
+    /// own (types §6, §8).
+    pub fn is_written(&self, poly: &Types<Poly>, term: Term, ty: TyId<Poly>) -> bool {
+        acvus_utils::grow(|| {
+            let End::Node { node, .. } = self.end(term) else {
+                return false;
+            };
+            let all = |terms: &[Term], tys: &[TyId<Poly>]| {
+                terms.len() == tys.len() && terms.iter().zip(tys).all(|(term, ty)| self.is_written(poly, *term, *ty))
+            };
+            let effect_is = |effect: &EffectTerm<InferPhase>, written: &EffectTerm<Poly>| match (self.effect_vars.end(effect), written) {
+                (CellEnd::Known(value) | CellEnd::Var { value: Some(value), .. }, EffectTerm::Known(written)) => value == *written,
+                _ => false,
+            };
+            match (self.types.kind(node), poly.kind(ty)) {
+                (TyKind::Int(a), TyKind::Int(b)) => a == b,
+                (TyKind::Float, TyKind::Float)
+                | (TyKind::Char, TyKind::Char)
+                | (TyKind::String, TyKind::String)
+                | (TyKind::Bool, TyKind::Bool)
+                | (TyKind::Unit, TyKind::Unit)
+                | (TyKind::Never, TyKind::Never)
+                | (TyKind::Str, TyKind::Str) => true,
+                (TyKind::Array(a, a_len, _), TyKind::Array(b, LenTerm::Known(b_len), _)) => {
+                    let len = match self.len_vars.end(a_len) {
+                        CellEnd::Known(len) | CellEnd::Var { value: Some(len), .. } => Some(len),
+                        CellEnd::Var { value: None, .. } => None,
+                    };
+                    len == Some(*b_len) && self.is_written(poly, *a, *b)
+                }
+                (TyKind::Slice(a), TyKind::Slice(b)) | (TyKind::Option(a, _), TyKind::Option(b, _)) => self.is_written(poly, *a, *b),
+                (TyKind::Result(a_ok, a_err, _), TyKind::Result(b_ok, b_err, _)) => all(&[*a_ok, *a_err], &[*b_ok, *b_err]),
+                (TyKind::Tuple(a, _), TyKind::Tuple(b, _)) => all(a, b),
+                (TyKind::Object(a), TyKind::Object(b)) => {
+                    let (a, b) = (a.fields(), b.fields());
+                    a.len() == b.len() && a.iter().zip(b).all(|((a_name, a), (b_name, b))| a_name == b_name && self.is_written(poly, *a, *b))
+                }
+                (TyKind::Enum { name: a_name, variants: a, .. }, TyKind::Enum { name: b_name, variants: b, .. }) => {
+                    a_name == b_name
+                        && a.len() == b.len()
+                        && a.iter().zip(b.iter()).all(|((a_tag, a), (b_tag, b))| {
+                            a_tag == b_tag
+                                && match (a, b) {
+                                    (Some(a), Some(b)) => self.is_written(poly, *a, *b),
+                                    (None, None) => true,
+                                    _ => false,
+                                }
+                        })
+                }
+                (
+                    TyKind::UserDefined { id: a_id, type_args: a, effect: a_effect, identity: a_identity, .. },
+                    TyKind::UserDefined { id: b_id, type_args: b, effect: b_effect, identity: b_identity, .. },
+                ) => {
+                    let effects = match (a_effect, b_effect) {
+                        (Some(a), Some(b)) => effect_is(a, b),
+                        (None, None) => true,
+                        _ => false,
+                    };
+                    a_id == b_id && a_identity.is_some() == b_identity.is_some() && effects && all(a, b)
+                }
+                (TyKind::Ref(a_held, a), TyKind::Ref(b_held, b)) => a_held == b_held && self.is_written(poly, *a, *b),
+                (TyKind::Fn { params: a, ret: a_ret, effect: a_effect, .. }, TyKind::Fn { params: b, ret: b_ret, effect: b_effect, .. }) => {
+                    effect_is(a_effect, b_effect) && all(a, b) && self.is_written(poly, *a_ret, *b_ret)
+                }
+                _ => false,
+            }
+        })
     }
 
     /// Whether `term` holds a mark cell not yet unmarked, as itself or a

@@ -223,6 +223,7 @@ impl Table<'_> {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         }
     }
 

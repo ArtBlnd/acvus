@@ -50,6 +50,15 @@ pub struct Scheme {
     pub specialized: Box<[TyId<Poly>]>,
 }
 
+/// Which of a `#` pair a call of a declaration with `specialized` types
+/// is (types §8): the uniform declaration, or its `#` counterpart, as its
+/// shared mark settled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PairMember {
+    Uniform,
+    Specialized,
+}
+
 /// The impls of a generic function: the concrete ones in order, then
 /// the generic one.
 #[derive(Debug, Clone, PartialEq, Default)]

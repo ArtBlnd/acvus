@@ -36,7 +36,7 @@ pub use copy::{AtInstance, CopiedFlow, Reached, VarMarks, VarsOf};
 pub use freeze::{FreezeMemo, Unsettled};
 pub use import::Imported;
 pub use relate::{Coerced, CoercedPart, Entered, Mismatch, ShapeCoercion};
-pub use scheme::{Instantiated, RequiredAt};
+pub use scheme::{Instantiated, PairAt, RequiredAt};
 
 pub type Term = TyId<InferPhase>;
 

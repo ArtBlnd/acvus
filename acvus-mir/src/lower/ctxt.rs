@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 use acvus_ast::{AstId, Literal, Span};
 use acvus_utils::Astr;
 
-use crate::decl::Declarations;
+use crate::decl::{Declarations, PairMember};
 use crate::ir::cfg::{BlockId, Builder, Op, Terminator};
 use crate::ir::{Callee, Chosen as IrChosen, ExternImpl, ValueId};
 use crate::ty::{Effect, IntTy, Mutability, Reissue, Ty, TyKind};
@@ -210,10 +210,16 @@ impl<'a, 'm> Lcx<'a, 'm> {
     }
 
     pub fn callee(&self, chosen: &Chosen) -> Callee {
+        self.callee_as(chosen, PairMember::Uniform)
+    }
+
+    /// The call of `chosen` as `member` of its `#` pair (types §8).
+    pub fn callee_as(&self, chosen: &Chosen, member: PairMember) -> Callee {
         Callee::Extern {
             id: chosen.declaration,
             r#impl: self.impl_index(chosen),
             required: chosen.required.iter().map(|required| self.ir_chosen(required)).collect(),
+            member,
         }
     }
 

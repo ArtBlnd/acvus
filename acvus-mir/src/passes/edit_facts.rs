@@ -1177,6 +1177,7 @@ mod tests {
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
+                specialized: Box::new([]),
             };
             (id, scheme)
         };
@@ -1196,7 +1197,6 @@ mod tests {
             user_types: vec![UserTypeDecl {
                 id: map,
                 type_params: Box::new([]),
-                specializes: Box::new([]),
                 carries_effect: false,
                 carries_identity: false,
                 lifetimes: 0,
@@ -1269,7 +1269,7 @@ mod tests {
         let v = builder.push(constant(5), int, Span::ZERO);
         let k1 = builder.push(constant(1), int, Span::ZERO);
         let k2 = builder.push(constant(2), int, Span::ZERO);
-        let call = |id, callee_ty, args| Op::FunctionCall { callee: Callee::Extern { id, r#impl: Some(0), required: Vec::new() }, callee_ty, args };
+        let call = |id, callee_ty, args| Op::FunctionCall { callee: Callee::Extern { id, r#impl: Some(0), required: Vec::new(), member: crate::decl::PairMember::Uniform }, callee_ty, args };
         builder.push(call(a.put, put_ty, vec![m, k1, v]), unit, Span::ZERO);
         builder.push(call(a.lookup, lookup_ty, vec![m, k1]), int, Span::ZERO);
         builder.push(call(a.lookup, lookup_ty, vec![m, k2]), int, Span::ZERO);

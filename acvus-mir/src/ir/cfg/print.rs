@@ -34,6 +34,7 @@ use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 use rustc_hash::FxHashMap;
 
 use super::{Block, BlockId, Body, BodyId, Definition, InstId, Module, Op, OrderUse, Terminator};
+use crate::decl::PairMember;
 use crate::ir::{BinOp, Callee, Checked, ExitTrip, ForSource, IndexBound, IndexMode, Intrinsic, Overflow, PathSeg, RefTarget, SwitchKey, UnaryOp, ValOrigin, ValueId};
 use crate::ty::{self, Mutability, Ty};
 
@@ -637,7 +638,10 @@ impl Printer<'_> {
     fn callee(&self, callee: &Callee) -> String {
         match callee {
             Callee::Direct(id) => self.qualified(*id),
-            Callee::Extern { id, r#impl, required: _ } => self.at_impl(*id, *r#impl),
+            Callee::Extern { id, r#impl, required: _, member } => match member {
+                PairMember::Uniform => self.at_impl(*id, *r#impl),
+                PairMember::Specialized => format!("#{}", self.at_impl(*id, *r#impl)),
+            },
             Callee::Indirect(value) => self.value(*value),
         }
     }

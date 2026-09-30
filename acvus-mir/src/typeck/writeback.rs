@@ -7,12 +7,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::ctxt::Ctxt;
 use super::generalize::InstanceId;
 use super::output::{Closure, Coercion, CoercionNode, Conversion, Entered, InstanceDecided, StructureNode, StructureTree, Typeck};
-use crate::decl::{Base, DeclaredFacts, Head, Scheme, TyVarBound};
+use crate::decl::{Base, DeclaredFacts, Head, PairMember, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, ShapeCoercion, Term, Unsettled};
 use crate::ty::structural::PartKey;
 use crate::ty::{
     Alignment, Calls, CallsTerm, Concrete, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, Infer as InferPhase,
-    Mutability, Ty, TyKind, Types,
+    Mark, MarkTerm, Mutability, Ty, TyKind, Types,
 };
 
 /// Freezes every decision, `result` being the run's result term.
@@ -27,6 +27,9 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         claim_flows(&mut cx, lambda);
     }
 
+    // A pair's mark whose positions were never known, which some refusal
+    // left open, is unmarked (types §8): nothing started it.
+    cx.infer.default_unstarted_marks();
     let mut memo = FreezeMemo::default();
     // Coercions first: each step's function is reached as a call is, and
     // its effect joins its body's, before any type holding that effect is
@@ -65,7 +68,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         .map(|(_, scheme)| (scheme.binder, scheme.lambdas.clone().into()))
         .collect();
     let result = freeze(&mut cx, types, &mut memo, result);
-    let (callees, unmarks) = callees(&mut cx, types, &mut memo);
+    let SettledCalls { callees, unmarks, pairs } = callees(&mut cx, types, &mut memo);
     let body_effect = match cx.out.body_effect.take() {
         Some(effect) => effect_of(&mut cx, effect),
         // A run that calls nothing has no effect to order (effects §1).
@@ -80,6 +83,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         units: std::mem::take(&mut cx.out.units),
         callees,
         unmarks,
+        pairs,
         iteration: std::mem::take(&mut cx.out.iteration),
         tries,
         coercions,
@@ -374,6 +378,7 @@ fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut Freeze
     // Each step's requirements are reaches of their own, fired now that
     // every type they read is known.
     super::decision::solve(cx);
+    cx.infer.default_unstarted_marks();
     for (site, steps) in applied {
         let mut frozen = Vec::with_capacity(steps.len());
         let mut left_open = false;
@@ -441,6 +446,7 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
                     requires: Box::new([]),
                     facts: DeclaredFacts::default(),
                     runs: Box::new([]),
+                    specialized: Box::new([]),
                 };
                 let above = super::decision::instantiate_scheme(cx, &scheme, span).ty;
                 if let Err(mismatch) = cx.infer.enter(cx.decls, at.term, at, above, crate::ty::Reach::Named) {
@@ -568,7 +574,7 @@ fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMe
                 })
                 .collect();
             let structure_trees = structure_trees(cx, types, memo);
-            let (callees, unmarks) = callees(cx, types, memo);
+            let SettledCalls { callees, unmarks, pairs } = callees(cx, types, memo);
             InstanceDecided {
                 binder: Some(binder),
                 use_site: Some(use_site),
@@ -577,6 +583,7 @@ fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMe
                 reached: std::mem::take(&mut cx.out.reached),
                 callees,
                 unmarks,
+                pairs,
                 iteration: std::mem::take(&mut cx.out.iteration),
                 tries,
                 coercions,
@@ -590,35 +597,76 @@ fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMe
     out
 }
 
-/// Each reached call's function type, its result the declared one, and
-/// each call whose uses settled its result otherwise, with the type they
-/// settled: a value given marked and taken unmarked (types §8).
-fn callees(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> (FxHashMap<AstId, Ty>, FxHashMap<AstId, Ty>) {
+/// Each reached call's function type, its result the declared one; each
+/// call whose uses settled its result otherwise, with the type they settled:
+/// a value given marked and taken unmarked; and which of a `#` pair each
+/// call of a pair's declaration is (types §8).
+fn callees(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> SettledCalls {
     let origins = std::mem::take(&mut cx.out.origins);
-    let mut callees = FxHashMap::default();
-    let mut unmarks = FxHashMap::default();
+    let pairs = std::mem::take(&mut cx.out.pairs);
+    let mut settled = SettledCalls::default();
     for (site, callee) in std::mem::take(&mut cx.out.callees) {
-        let Some(callee) = freeze(cx, types, memo, callee) else {
+        let Some(call) = settled_call(cx, types, memo, callee, origins.get(&site).copied(), pairs.get(&site).copied()) else {
             continue;
         };
-        let Some(declared) = origins.get(&site).and_then(|declared| freeze(cx, types, memo, *declared)) else {
-            callees.insert(site, callee);
-            continue;
-        };
-        let TyKind::Fn { params, ret: settled, effect, flows, calls, holds, values } = types.kind(callee).clone() else {
-            panic!("a reached call's callee is a function type");
-        };
-        match settled == declared {
-            true => {
-                callees.insert(site, callee);
-            }
-            false => {
-                unmarks.insert(site, settled);
-                callees.insert(site, types.intern(TyKind::Fn { params, ret: declared, effect, flows, calls, holds, values }));
-            }
+        settled.callees.insert(site, call.callee);
+        if let Some(unmark) = call.unmark {
+            settled.unmarks.insert(site, unmark);
+        }
+        if let Some(member) = call.member {
+            settled.pairs.insert(site, member);
         }
     }
-    (callees, unmarks)
+    settled
+}
+
+#[derive(Default)]
+struct SettledCalls {
+    callees: FxHashMap<AstId, Ty>,
+    unmarks: FxHashMap<AstId, Ty>,
+    pairs: FxHashMap<AstId, PairMember>,
+}
+
+/// A reached call frozen: its function type with its declared result, the
+/// type its uses settled that result at where it differs, and which of a
+/// `#` pair it is: the specialized one where its shared mark settled marked
+/// and its start found every position one of the pair's types (types §8).
+struct SettledCall {
+    callee: Ty,
+    unmark: Option<Ty>,
+    member: Option<PairMember>,
+}
+
+fn settled_call(
+    cx: &mut Ctxt<'_>,
+    types: &mut Types<Concrete>,
+    memo: &mut FreezeMemo,
+    callee: Term,
+    declared: Option<Term>,
+    pair: Option<MarkTerm<InferPhase>>,
+) -> Option<SettledCall> {
+    let frozen = freeze(cx, types, memo, callee)?;
+    let member = pair.map(|mark| {
+        match cx.infer.mark_of(&mark) == Some(Mark::Marked) && cx.out.started_marked.contains(&mark) {
+            true => PairMember::Specialized,
+            false => PairMember::Uniform,
+        }
+    });
+    let Some(declared) = declared else {
+        return Some(SettledCall { callee: frozen, unmark: None, member });
+    };
+    let declared = freeze(cx, types, memo, declared)?;
+    let TyKind::Fn { params, ret: settled, effect, flows, calls, holds, values } = types.kind(frozen).clone() else {
+        panic!("a reached call's callee is a function type");
+    };
+    Some(match settled == declared {
+        true => SettledCall { callee: frozen, unmark: None, member },
+        false => SettledCall {
+            callee: types.intern(TyKind::Fn { params, ret: declared, effect, flows, calls, holds, values }),
+            unmark: Some(settled),
+            member,
+        },
+    })
 }
 
 /// Each site a generalized binding's value passes through where it is

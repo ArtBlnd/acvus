@@ -30,10 +30,10 @@ use super::reach::{self, Candidate, Match, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
 use crate::decl::{Base, Head, ImplSig, Scheme};
-use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
+use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, PairAt, RequiredAt, Term};
 use crate::ty::structural::structure;
 use crate::ty::{
-    CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, Types,
+    CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mark, MarkTerm, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, Types,
 };
 
 /// A lang item a form calls (operators §2, §3, §7). `&&`, `||`,
@@ -135,6 +135,10 @@ pub(super) enum Decision {
     /// A value that outlives the run, whose type has no positions
     /// (ownership §5), read once no variable is left in it.
     HoldsNoLoans { span: Span, term: Term },
+    /// The mark a `#` pair's positions share at a use (types §8), started
+    /// once each position's type is known: marked where every one is one
+    /// of `specialized`, unmarked otherwise.
+    StartMark { span: Span, positions: Box<[Term]>, mark: MarkTerm<InferPhase>, specialized: Box<[TyId<Poly>]> },
     /// `&value` or `&mut value`: a reborrow where `value` is a reference,
     /// since a reference's target is never one (types §4).
     Lend { span: Span, value: Term, lent: Lent, result: Term },
@@ -224,7 +228,8 @@ impl Decision {
             | Decision::Operand { .. }
             | Decision::Cast { .. }
             | Decision::Settle { .. }
-            | Decision::HoldsNoLoans { .. } => Vec::new(),
+            | Decision::HoldsNoLoans { .. }
+            | Decision::StartMark { .. } => Vec::new(),
         };
         outputs.into_iter()
     }
@@ -272,6 +277,7 @@ impl Decision {
             }
             Decision::Settle { term, .. }
             | Decision::HoldsNoLoans { term, .. } => vec![*term],
+            Decision::StartMark { positions, .. } => positions.to_vec(),
             Decision::Instantiate { result, .. } => vec![*result],
             Decision::In { decision, .. } => decision.terms(),
         }
@@ -291,6 +297,7 @@ impl Decision {
             | Decision::Cast { .. }
             | Decision::Settle { .. }
             | Decision::HoldsNoLoans { .. }
+            | Decision::StartMark { .. }
             | Decision::Lend { .. }
             | Decision::Field { .. }
             | Decision::Deref { .. }
@@ -329,6 +336,12 @@ impl Decision {
             Decision::Cast { site, span, source, to } => Decision::Cast { site: f.site(site), span: f.span(span), source: f.ty(source), to },
             Decision::Settle { span, term } => Decision::Settle { span: f.span(span), term: f.ty(term) },
             Decision::HoldsNoLoans { span, term } => Decision::HoldsNoLoans { span: f.span(span), term: f.ty(term) },
+            Decision::StartMark { span, positions, mark, specialized } => Decision::StartMark {
+                span: f.span(span),
+                positions: positions.iter().map(|position| f.ty(*position)).collect(),
+                mark,
+                specialized,
+            },
             Decision::Lend { span, value, lent, result } => Decision::Lend { span: f.span(span), value: f.ty(value), lent, result: f.ty(result) },
             Decision::Field { span, object, field, part } => Decision::Field { span: f.span(span), object: f.ty(object), field, part: f.ty(part) },
             Decision::Index { callee_site, span, container, mutability, element, body } => Decision::Index {
@@ -588,7 +601,8 @@ fn read_head(decision: &Decision) -> Option<Term> {
         Decision::Reach { .. }
         | Decision::Instantiate { .. }
         | Decision::Settle { .. }
-        | Decision::HoldsNoLoans { .. } => None,
+        | Decision::HoldsNoLoans { .. }
+        | Decision::StartMark { .. } => None,
     }
 }
 
@@ -792,6 +806,30 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             TyKind::Var(_) => Err(Decision::Settle { span, term }),
             _ => Ok(()),
         },
+        Decision::StartMark { span, positions, mark, specialized } => {
+            // A mark is a member (types §6): the start reads each position's
+            // type whole, so it waits until every part of it is known.
+            let known = reading == Reading::CycleBroken
+                || (positions.iter().all(|position| cx.fixed(*position)) && unbound_vars(cx, positions.iter().copied()).is_empty());
+            if !known {
+                return Err(Decision::StartMark { span, positions, mark, specialized });
+            }
+            let named = positions
+                .iter()
+                .all(|position| specialized.iter().any(|ty| cx.infer.is_written(cx.decls.types(), *position, *ty)));
+            let start = match named {
+                true => Mark::Marked,
+                false => Mark::Unmarked,
+            };
+            match cx.infer.start_mark(&mark, start, positions[0]) {
+                Ok(()) if start == Mark::Marked => {
+                    cx.out.started_marked.insert(mark);
+                }
+                Ok(()) => {}
+                Err(mismatch) => refusal::mismatch(cx, mismatch, span),
+            }
+            Ok(())
+        }
         Decision::HoldsNoLoans { span, term } => {
             if !unbound_vars(cx, [term]).is_empty() {
                 return Err(Decision::HoldsNoLoans { span, term });
@@ -1577,7 +1615,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
         result,
         effect,
     } = decision;
-    let Instantiated { ty, requirements, declared_result, .. } = instantiate(cx, offer, span);
+    let Instantiated { ty, requirements, declared_result, pair, .. } = instantiate(cx, offer, span);
     let TyKind::Fn {
         params,
         ret,
@@ -1627,6 +1665,9 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
             cx.out.callees.insert(site, ty);
             if let Some(declared) = declared_result {
                 cx.out.origins.insert(site, declared);
+            }
+            if let Some(pair) = &pair {
+                cx.out.pairs.insert(site, pair.mark);
             }
         }
     }
@@ -1749,7 +1790,7 @@ fn instantiate(cx: &mut Ctxt<'_>, offer: Offer, span: Span) -> Instantiated {
     requirements.extend(own.requirements);
     let mut flows = generic.flows;
     flows.extend(own.flows);
-    Instantiated { ty: own.ty, requirements, flows, declared_result: own.declared_result }
+    Instantiated { ty: own.ty, requirements, flows, declared_result: own.declared_result, pair: own.pair.or(generic.pair) }
 }
 
 /// `scheme` at fresh variables, each flow into its call's effect refused,
@@ -1758,6 +1799,10 @@ pub(super) fn instantiate_scheme(cx: &mut Ctxt<'_>, scheme: &Scheme, span: Span)
     let instantiated = cx.infer.instantiate(cx.decls, scheme);
     for flow in &instantiated.flows {
         cx.out.effect_flows.insert(*flow, span);
+    }
+    if let Some(pair) = &instantiated.pair {
+        let PairAt { mark, positions, specialized } = pair.clone();
+        cx.decisions.push(Decision::StartMark { span, positions: positions.into(), mark, specialized });
     }
     instantiated
 }
@@ -1774,6 +1819,7 @@ fn impl_scheme(sig: &ImplSig) -> Scheme {
         requires: sig.requires.clone(),
         facts: sig.facts.clone(),
         runs: sig.runs.clone(),
+        specialized: sig.specialized.clone(),
     }
 }
 
@@ -1966,6 +2012,9 @@ fn refuse_left_open(cx: &mut Ctxt<'_>, decision: Decision) {
         Decision::Settle { span, .. } => refusal::push(cx, RefusalKind::BoundUnanswered, span),
         // Its type holds a variable some other refusal left open.
         Decision::HoldsNoLoans { .. } => {}
+        // Its positions were never known: some other refusal left them
+        // open, and writeback takes its mark unmarked.
+        Decision::StartMark { .. } => {}
         Decision::Reach { span, callee, .. } => {
             let open = callee_name(cx, &callee);
             refusal::push(cx, RefusalKind::NeverKnown { open }, span);

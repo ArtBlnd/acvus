@@ -81,7 +81,7 @@ impl Fixture {
     /// A plain extern fn `name` of type `ty`, with no type variable.
     fn declare(&mut self, name: &str, ty: TyId<Poly>, arity: usize) -> QualifiedRef {
         let id = QualifiedRef::root(self.name(name));
-        let scheme = Scheme { ty, param_names: self.param_names(arity), bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]) };
+        let scheme = Scheme { ty, param_names: self.param_names(arity), bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]) };
         self.raw.functions.push((id, scheme));
         id
     }
@@ -117,6 +117,7 @@ impl Fixture {
                 requires: Box::new([]),
                 facts: Default::default(),
                 runs: Box::new([]),
+                specialized: Box::new([]),
             })
             .collect();
         self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
@@ -129,7 +130,6 @@ impl Fixture {
         self.raw.user_types.push(UserTypeDecl {
             id: vec_id,
             type_params: Box::new([TyVarBound::Any]),
-            specializes: Box::new([false]),
             carries_effect: false,
             carries_identity: false,
             lifetimes: 0,
@@ -964,7 +964,6 @@ fn a_declared_conversion_step_is_a_call_of_its_via() {
     fx.raw.user_types.push(UserTypeDecl {
         id: meters_id,
         type_params: Box::new([]),
-        specializes: Box::new([]),
         carries_effect: false,
         carries_identity: false,
         lifetimes: 0,
@@ -1011,6 +1010,7 @@ impl Fixture {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         self.raw.functions.push((id, scheme));
         id
@@ -1206,7 +1206,6 @@ fn a_cast_taken_by_a_marked_value_raises_it() {
     fx.raw.user_types.push(UserTypeDecl {
         id: seq_id,
         type_params: Box::new([TyVarBound::Any]),
-        specializes: Box::new([false]),
         carries_effect: false,
         carries_identity: false,
         lifetimes: 0,
@@ -1849,7 +1848,7 @@ fn a_lifted_eq_asks_each_parts_impl_in_order() {
     let at_int = fx.function(&[shared, shared], bool_ty, Effect::pure());
     let eq = fx.raw.core.eq;
     let facts = DeclaredFacts { access: Box::new([crate::decl::declared::Access::Equivalence]), ..Default::default() };
-    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts, runs: Box::new([]) }]);
+    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts, runs: Box::new([]), specialized: Box::new([]) }]);
     fx.raw.lang_impls.push((eq, Impls { concrete, generic: None }));
     let pair = fx.ty(TyKind::Tuple(Box::new([int, int]), ()));
     fx.input("t", pair);
@@ -1977,7 +1976,7 @@ fn an_array_rebuilt_from_no_argument_or_several_is_one_map() {
     let generic = fx.function(&[shared_t, shared_t], t, Effect::pure());
     let at_int = fx.function(&[shared_int, shared_int], int, Effect::pure());
     let id = QualifiedRef::root(fx.name("pick"));
-    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]) }]);
+    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]) }]);
     let scheme = Scheme {
         ty: generic,
         param_names: fx.param_names(2),
@@ -1986,6 +1985,7 @@ fn an_array_rebuilt_from_no_argument_or_several_is_one_map() {
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
+        specialized: Box::new([]),
     };
     fx.raw.functions.push((id, scheme));
     let lowered = fx.script("let a = [1, 2]; let b = [3, 4]; let c = pick(&a, &b); 0");

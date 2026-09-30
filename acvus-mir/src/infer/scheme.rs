@@ -34,6 +34,19 @@ pub struct Instantiated {
     /// starts in a fresh cell of its own (types §8): the call gives its
     /// value at this type, and takes it at the type its uses settle.
     pub declared_result: Option<Term>,
+    /// For a declaration with `specialized` types, the one mark its
+    /// positions of those types share (types §8).
+    pub pair: Option<PairAt>,
+}
+
+/// The mark a declaration's positions of its `specialized` types share at
+/// one use, unset until those positions' types are known: it starts
+/// marked where each is one of `specialized`, unmarked otherwise.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PairAt {
+    pub mark: MarkTerm<InferPhase>,
+    pub positions: Vec<Term>,
+    pub specialized: Box<[TyId<Poly>]>,
 }
 
 /// A variable of a written type: a declaration's positional placeholder,
@@ -158,6 +171,7 @@ impl Infer {
             Some(_) => (self.instantiate_ty(&mut at, scheme.ty), Vec::new()),
             None => self.instantiate_running(&mut at, scheme.ty, &scheme.runs),
         };
+        let (ty, pair) = self.with_pair_mark(poly, ty, &scheme.specialized);
         let (ty, declared_result) = self.with_origin_marks(ty);
         let requirements = scheme
             .requires
@@ -168,7 +182,62 @@ impl Infer {
                 fact: required.fact,
             })
             .collect();
-        Instantiated { ty, requirements, flows, declared_result }
+        Instantiated { ty, requirements, flows, declared_result, pair }
+    }
+
+    /// The function type `ty` with each of its parameters' and its result's
+    /// positions of a `specialized` type's constructor, behind no reference,
+    /// in no function type and in no extern-defined type's argument, which
+    /// no marked type is (types §8), carrying one fresh mark, unset.
+    fn with_pair_mark(&mut self, poly: &Types<Poly>, ty: Term, specialized: &[TyId<Poly>]) -> (Term, Option<PairAt>) {
+        if specialized.is_empty() {
+            return (ty, None);
+        }
+        let TyKind::Fn { params, ret, effect, flows, calls, holds, values } = self.types.kind(ty).clone() else {
+            return (ty, None);
+        };
+        let named: Vec<QualifiedRef> = specialized
+            .iter()
+            .map(|named| match poly.kind(*named) {
+                TyKind::UserDefined { id, .. } => *id,
+                other => panic!("a specialized type is an extern-defined type, which alone is marked, not {other:?}"),
+            })
+            .collect();
+        let mark = MarkTerm::Var(self.mark_vars.fresh("Infer::with_pair_mark: u32::MAX variables"));
+        let mut positions = Vec::new();
+        let params = params.iter().map(|param| self.pair_positions(*param, &named, mark, &mut positions)).collect();
+        let ret = self.pair_positions(ret, &named, mark, &mut positions);
+        let ty = self.intern(TyKind::Fn { params, ret, effect, flows, calls, holds, values });
+        (ty, Some(PairAt { mark, positions, specialized: specialized.into() }))
+    }
+
+    fn pair_positions(&mut self, term: Term, named: &[QualifiedRef], mark: MarkTerm<InferPhase>, positions: &mut Vec<Term>) -> Term {
+        acvus_utils::grow(|| {
+            let kind = self.types.kind(term).clone();
+            match kind {
+                TyKind::Ref(..) | TyKind::Fn { .. } | TyKind::Var(_) => term,
+                TyKind::UserDefined { id, type_args, effect, identity, .. } if named.contains(&id) => {
+                    let position = self.intern(TyKind::UserDefined { id, type_args, effect, identity, marked: mark });
+                    positions.push(position);
+                    position
+                }
+                TyKind::UserDefined { .. } => term,
+                kind => {
+                    let mut parts = Vec::new();
+                    kind.for_each_child(|part| parts.push(part));
+                    let mut given = parts
+                        .into_iter()
+                        .map(|part| self.pair_positions(part, named, mark, positions))
+                        .collect::<Vec<_>>()
+                        .into_iter();
+                    let rebuilt = kind.with_children(&mut |_| given.next().expect("one part given for each part read"));
+                    match rebuilt == kind {
+                        true => term,
+                        false => self.intern(rebuilt),
+                    }
+                }
+            }
+        })
     }
 
     /// The function type `ty` with each mark its result holds as declared
@@ -189,7 +258,10 @@ impl Infer {
         }
     }
 
-    fn fresh_origin_marks(&mut self, term: Term) -> Term {
+    /// `term` with each mark it holds written marked, as itself or a part
+    /// but behind no reference and in no function type, a fresh mark of
+    /// its own: a value given at it starts marked (types §8).
+    pub fn fresh_origin_marks(&mut self, term: Term) -> Term {
         acvus_utils::grow(|| {
             let kind = self.types.kind(term).clone();
             if matches!(kind, TyKind::Ref(..) | TyKind::Fn { .. } | TyKind::Var(_)) {

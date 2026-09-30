@@ -47,6 +47,7 @@ use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
+use crate::decl::PairMember;
 use crate::ir::cfg::edit::{DoesNotDominate, Editor, InstRef, Value};
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Inst, Module, Op};
 use crate::ir::{BinOp, Callee, Chosen, IndexBound, IndexMode, UnaryOp, ValueId, fn_effect};
@@ -236,7 +237,7 @@ enum Shape {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum CalleeKey {
     Direct(QualifiedRef),
-    Extern { id: QualifiedRef, r#impl: Option<usize>, required: Vec<Chosen> },
+    Extern { id: QualifiedRef, r#impl: Option<usize>, required: Vec<Chosen>, member: PairMember },
     Indirect,
 }
 
@@ -331,8 +332,8 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
             }
             let callee = match callee {
                 Callee::Direct(id) => CalleeKey::Direct(*id),
-                Callee::Extern { id, r#impl, required } => {
-                    CalleeKey::Extern { id: *id, r#impl: *r#impl, required: required.clone() }
+                Callee::Extern { id, r#impl, required, member } => {
+                    CalleeKey::Extern { id: *id, r#impl: *r#impl, required: required.clone(), member: *member }
                 }
                 Callee::Indirect(_) => CalleeKey::Indirect,
             };

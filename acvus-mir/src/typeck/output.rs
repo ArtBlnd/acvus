@@ -4,13 +4,14 @@
 
 use acvus_ast::{AstId, Span};
 use acvus_utils::{Astr, QualifiedRef};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::refusal::Refusal;
+use crate::decl::PairMember;
 use crate::infer::{FlowId, Term};
 use crate::infer::ShapeCoercion;
 use crate::ty::structural::PartKey;
-use crate::ty::{CallsVarId, CastTy, Calls, Effect, EffectTerm, HoldsVarId, Infer as InferPhase, Mutability, Ty};
+use crate::ty::{CallsVarId, CastTy, Calls, Effect, EffectTerm, HoldsVarId, Infer as InferPhase, MarkTerm, Mutability, Ty};
 
 /// What a name at a site is (types §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,6 +303,12 @@ pub(super) struct Output {
     /// starts in a fresh cell of its own, with that declared result
     /// (types §8).
     pub origins: FxHashMap<AstId, Term>,
+    /// Each reached call of a declaration with `specialized` types, with the
+    /// mark its positions of those types share (types §8).
+    pub pairs: FxHashMap<AstId, MarkTerm<InferPhase>>,
+    /// Each pair's mark its start found marked: every position one of the
+    /// declaration's `specialized` types.
+    pub started_marked: FxHashSet<MarkTerm<InferPhase>>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Term>>,
     /// Each value converted by a declared conversion (types §7), at its
@@ -344,6 +351,9 @@ pub struct Typeck {
     /// its declared result, which it differs from only in marks raised
     /// (types §8): the type its value is taken at.
     pub unmarks: FxHashMap<AstId, Ty>,
+    /// Each reached call of a declaration with `specialized` types, and
+    /// which of its `#` pair it is (types §8).
+    pub pairs: FxHashMap<AstId, PairMember>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Ty>>,
     /// Each coercion, at the site of the value coerced.
@@ -393,6 +403,7 @@ pub struct InstanceDecided {
     pub reached: FxHashMap<AstId, Chosen>,
     pub callees: FxHashMap<AstId, Ty>,
     pub unmarks: FxHashMap<AstId, Ty>,
+    pub pairs: FxHashMap<AstId, PairMember>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Ty>>,
     pub coercions: FxHashMap<AstId, Coercion>,

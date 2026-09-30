@@ -129,6 +129,7 @@ mod tests {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         let as_slice_scheme = Scheme {
             ty: declared,
@@ -138,6 +139,7 @@ mod tests {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         let decls = Declarations::verify(RawDeclarations {
             types: poly,
@@ -249,7 +251,7 @@ mod tests {
             SymbolicEnd::DeclaredLen => {
                 let n = builder.param(interner.intern("n"), index, Span::ZERO);
                 let call = Op::FunctionCall {
-                    callee: Callee::Extern { id: make, r#impl: Some(0), required: Vec::new() },
+                    callee: Callee::Extern { id: make, r#impl: Some(0), required: Vec::new(), member: crate::decl::PairMember::Uniform },
                     callee_ty: make_ty,
                     args: vec![n],
                 };
@@ -331,7 +333,7 @@ mod tests {
             Made::ByADeclaredCall => {
                 let n = builder.push(constant(10), index, Span::ZERO);
                 let call = Op::FunctionCall {
-                    callee: Callee::Extern { id: make, r#impl: Some(0), required: Vec::new() },
+                    callee: Callee::Extern { id: make, r#impl: Some(0), required: Vec::new(), member: crate::decl::PairMember::Uniform },
                     callee_ty: make_ty,
                     args: vec![n],
                 };

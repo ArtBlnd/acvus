@@ -859,6 +859,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
         }]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
+        specialized: Box::new([]),
     };
     let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");
     let scheme = decls.scheme(f).expect("declared");
@@ -917,6 +918,7 @@ fn a_head_with_a_step_up_is_closed_only_when_nothing_may_change_it() {
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
+        specialized: Box::new([]),
     };
     let cast = CastRule {
         from: i32_,
@@ -1075,6 +1077,7 @@ fn with_casts_and_conversions(
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
+                specialized: Box::new([]),
             },
         ));
         via
@@ -1317,7 +1320,6 @@ fn identities(names: &Interner, to_string: bool) -> Declarations {
     let declared = |id| crate::decl::UserTypeDecl {
         id,
         type_params: Box::new([]),
-        specializes: Box::new([]),
         carries_effect: false,
         carries_identity: true,
         lifetimes: 0,
@@ -1462,6 +1464,7 @@ fn an_effect_variable_no_parameter_gives_is_pure() {
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
+        specialized: Box::new([]),
     };
     let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");
 
@@ -1515,6 +1518,7 @@ fn a_calls_effect_is_its_own_joined_with_what_it_runs() {
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([0]),
+        specialized: Box::new([]),
     };
     let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");
 

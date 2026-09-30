@@ -35,7 +35,7 @@ pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel}
 pub use lift::{Lift, LiftShape, Taking};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use segments::{Segment, segments};
-pub use scheme::{DeclaredFacts, GenericImplSig, ImplSig, Impls, Requirement, Scheme};
+pub use scheme::{DeclaredFacts, GenericImplSig, ImplSig, Impls, PairMember, Requirement, Scheme};
 pub(crate) use scheme::effect_variables;
 pub use user_type::UserTypeDecl;
 pub use verify::{Refused, Written};

@@ -864,6 +864,7 @@ mod tests {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         let decls = declarations(&interner, vec![(id_f, scheme)], poly);
 
@@ -882,7 +883,7 @@ mod tests {
         let mut builder = module.build_body(false, int);
         let x = builder.push(constant(7), int, Span::ZERO);
         let call = Op::FunctionCall {
-            callee: Callee::Extern { id: id_f, r#impl: Some(0), required: Vec::new() },
+            callee: Callee::Extern { id: id_f, r#impl: Some(0), required: Vec::new(), member: crate::decl::PairMember::Uniform },
             callee_ty,
             args: vec![x],
         };
@@ -932,6 +933,7 @@ mod tests {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         let decls = declarations(&interner, vec![(succ, scheme)], poly);
 
@@ -950,7 +952,7 @@ mod tests {
         let mut builder = module.build_body(false, int);
         let a = builder.param(interner.intern("a"), int, Span::ZERO);
         let call = Op::FunctionCall {
-            callee: Callee::Extern { id: succ, r#impl: Some(0), required: Vec::new() },
+            callee: Callee::Extern { id: succ, r#impl: Some(0), required: Vec::new(), member: crate::decl::PairMember::Uniform },
             callee_ty,
             args: vec![a],
         };

@@ -7,6 +7,7 @@
 use acvus_ast::AstId;
 use rustc_hash::FxHashMap;
 
+use crate::decl::PairMember;
 use crate::ty::{Concrete, Ty, TyKind, Types};
 use crate::typeck::{Adjustment, AsCast, Chosen, Coercion, InstanceDecided, InstanceId, Iteration, StructureTree, TryExit, Typeck, UnitCall};
 
@@ -134,6 +135,12 @@ impl<'a> Decided<'a> {
     /// settled it other than its declared result (types §8).
     pub fn unmark(&self, site: AstId) -> Option<Ty> {
         self.read(|at| at.unmarks.get(&site).copied(), |run| run.unmarks.get(&site).copied())
+    }
+
+    /// Which of a `#` pair the call at `site` is, where it calls a pair's
+    /// declaration (types §8).
+    pub fn pair(&self, site: AstId) -> Option<PairMember> {
+        self.read(|at| at.pairs.get(&site).copied(), |run| run.pairs.get(&site).copied())
     }
 
     pub fn coercion(&self, site: AstId) -> Option<&'a Coercion> {

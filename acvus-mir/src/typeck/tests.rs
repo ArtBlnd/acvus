@@ -137,6 +137,7 @@ impl Fixture {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         self.raw.functions.push((id, scheme));
         id
@@ -160,6 +161,7 @@ impl Fixture {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         self.raw.functions.push((id, scheme));
         id
@@ -181,7 +183,6 @@ impl Fixture {
         self.raw.user_types.push(UserTypeDecl {
             id: vec_id,
             type_params: Box::new([TyVarBound::Any]),
-            specializes: Box::new([false]),
             carries_effect: false,
             carries_identity: false,
             lifetimes: 0,
@@ -217,6 +218,7 @@ impl Fixture {
                 requires: Box::new([]),
                 facts: Default::default(),
                 runs: Box::new([]),
+                specialized: Box::new([]),
             })
             .collect();
         self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
@@ -233,6 +235,7 @@ impl Fixture {
                 requires: Box::new([]),
                 facts: facts.clone(),
                 runs: Box::new([]),
+                specialized: Box::new([]),
             })
             .collect();
         self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
@@ -915,6 +918,7 @@ fn a_call_reaches_the_overload_its_argument_decides() {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         fx.raw.functions.push((id, scheme));
     }
@@ -1139,6 +1143,7 @@ fn a_call_two_declarations_answer_is_refused() {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         fx.raw.functions.push((id, scheme));
     }
@@ -2176,7 +2181,6 @@ fn a_view_step_names_its_impl() {
     fx.raw.user_types.push(UserTypeDecl {
         id: other_id,
         type_params: Box::new([]),
-        specializes: Box::new([]),
         carries_effect: false,
         carries_identity: false,
         lifetimes: 0,
@@ -2359,6 +2363,7 @@ fn a_view_steps_requirements_are_reached() {
         }]),
         facts: Default::default(),
         runs: Box::new([]),
+        specialized: Box::new([]),
     };
     fx.raw.lang_impls.push((as_slice, Impls { concrete: Box::new([view]), generic: None }));
     let bool_ty = fx.ty(TyKind::Bool);
@@ -2719,7 +2724,7 @@ fn an_unclaimed_flow_set_takes_every_flow_at_a_stall() {
 fn generic_with_impl(fx: &mut Fixture, name: &str, generic: TyId<Poly>, at: TyId<Poly>, facts: DeclaredFacts) -> QualifiedRef {
     let id = QualifiedRef::root(fx.name(name));
     let arity = fx.arity(generic);
-    let concrete = Box::new([ImplSig { ty: at, bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at])].into(), param_names: fx.param_names(arity), requires: Box::new([]), facts, runs: Box::new([]) }]);
+    let concrete = Box::new([ImplSig { ty: at, bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at])].into(), param_names: fx.param_names(arity), requires: Box::new([]), facts, runs: Box::new([]), specialized: Box::new([]) }]);
     let scheme = Scheme {
         ty: generic,
         param_names: fx.param_names(arity),
@@ -2728,6 +2733,7 @@ fn generic_with_impl(fx: &mut Fixture, name: &str, generic: TyId<Poly>, at: TyId
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
+        specialized: Box::new([]),
     };
     fx.raw.functions.push((id, scheme));
     id
@@ -2814,6 +2820,7 @@ fn a_concrete_impl_is_instantiated_at_its_own_bounds() {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         let scheme = Scheme {
             ty,
@@ -2823,6 +2830,7 @@ fn a_concrete_impl_is_instantiated_at_its_own_bounds() {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            specialized: Box::new([]),
         };
         fx.raw.functions.push((id, scheme));
         let (checked, _) = fx.script(source);
@@ -2922,6 +2930,7 @@ fn a_requirement_a_lift_would_answer_is_refused_as_unimplemented() {
         requires: Box::new([crate::decl::Requirement { generic_function: clone, pattern: clones_e, fact: None }]),
         facts: Default::default(),
         runs: Box::new([]),
+        specialized: Box::new([]),
     };
     fx.raw.lang_impls.push((as_slice, Impls { concrete: Box::new([view]), generic: None }));
     let string = fx.ty(TyKind::String);

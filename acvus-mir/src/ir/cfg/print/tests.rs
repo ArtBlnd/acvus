@@ -501,9 +501,9 @@ fn an_extern_call_prints_its_impl_where_its_function_has_impls() {
     let mut builder = f.module.build_body(false, int);
     let n = builder.param(n, int, Span::ZERO);
     let xs = builder.param(xs, array_ref, Span::ZERO);
-    let at_impl = Op::FunctionCall { callee: Callee::Extern { id: eq, r#impl: Some(1), required: Vec::new() }, callee_ty: eq_ty, args: vec![n, n] };
+    let at_impl = Op::FunctionCall { callee: Callee::Extern { id: eq, r#impl: Some(1), required: Vec::new(), member: crate::decl::PairMember::Uniform }, callee_ty: eq_ty, args: vec![n, n] };
     builder.push(at_impl, bool, Span::ZERO);
-    let at_none = Op::FunctionCall { callee: Callee::Extern { id: g, r#impl: None, required: Vec::new() }, callee_ty: g_ty, args: vec![n] };
+    let at_none = Op::FunctionCall { callee: Callee::Extern { id: g, r#impl: None, required: Vec::new(), member: crate::decl::PairMember::Uniform }, callee_ty: g_ty, args: vec![n] };
     let result = builder.push(at_none, int, Span::ZERO);
     let view = Op::AsSlice { container: xs, mutability: Mutability::Shared, r#impl: crate::ir::ExternImpl { id: as_slice, r#impl: Some(0) } };
     builder.push(view, slice_ref, Span::ZERO);

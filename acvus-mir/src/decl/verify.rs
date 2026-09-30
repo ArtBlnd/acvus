@@ -1482,7 +1482,6 @@ mod tests {
             self.raw.user_types.push(UserTypeDecl {
                 id,
                 type_params: Box::new([]),
-                specializes: Box::new([]),
                 carries_effect: false,
                 carries_identity: false,
                 lifetimes,
@@ -1529,6 +1528,7 @@ mod tests {
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
+                specialized: Box::new([]),
             }
         }
 
@@ -1582,6 +1582,7 @@ mod tests {
                 requires,
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
+                specialized: Box::new([]),
             }
         }
 
@@ -1803,7 +1804,6 @@ mod tests {
         fixture.raw.user_types.push(UserTypeDecl {
             id,
             type_params: Box::new([TyVarBound::Any]),
-            specializes: Box::new([false]),
             carries_effect: false,
             carries_identity: false,
             lifetimes: 0,
@@ -2318,6 +2318,7 @@ mod tests {
                             ..DeclaredFacts::default()
                         },
                         runs: Box::new([]),
+                        specialized: Box::new([]),
                     }]),
                     generic: None,
                 }),
