@@ -103,7 +103,7 @@ use crate::ir::parts::{Path, covers, overlap};
 use acvus_utils::QualifiedRef;
 
 use crate::ir::{Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, ValueId, fn_effect};
-use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Dominators, solve_dense};
+use crate::passes::analysis::{Analysis, DenseAnalysis, Direction, Dominators, Queries, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::structural::{PartKey, structure};
 use crate::ty::{
@@ -478,9 +478,9 @@ impl Analysis for Loans {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape, Aspect::Instructions, Aspect::Storage, Aspect::Types];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Loans {
-        let reachable = am.get::<Dominators>(module, body);
-        let decls = am.decls();
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Loans {
+        let reachable = queries.get::<Dominators>(module, body);
+        let decls = queries.decls();
         let body = module.body(body);
         let forward = Forward::new(body, module.types(), decls);
         let facts = solve_dense(&forward, body);

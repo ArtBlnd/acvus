@@ -36,7 +36,7 @@ pub use loop_tree::{LoopId, LoopTree};
 pub use post_dominators::PostDominators;
 pub use raise::{Ending, Endings, Raise};
 pub use scev::{Evolution, Evolutions, Recurrence, ScalarEvolution, TripCount};
-pub use manager::{Analysis, AnalysisManager, ModuleAnalysis};
+pub use manager::{Analysis, AnalysisManager, ModuleAnalysis, Queries};
 pub use sparse::{Executable, SparseAnalysis, SparseFacts, solve_sparse};
 pub use values::{AffineValues, ConstantValues, IntervalValues};
 pub(in crate::passes) use values::ValueBounds;

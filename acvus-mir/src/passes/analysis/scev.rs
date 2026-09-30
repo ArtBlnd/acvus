@@ -41,7 +41,7 @@ use rustc_hash::FxHashMap;
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Inst, Module, Op, Terminator};
 use crate::ir::{BinOp, ForSource, UnaryOp, ValueId, known_len};
 use crate::passes::analysis::dominators::Graph;
-use crate::passes::analysis::{Analysis, AnalysisManager, IntervalValues, LoopId, LoopTree, SparseFacts};
+use crate::passes::analysis::{Analysis, IntervalValues, LoopId, LoopTree, Queries, SparseFacts};
 use crate::passes::domain::{Bound, Interval, IntervalDomain, Polynomial, Symbol};
 use crate::ty::{CastTy, Concrete, TyKind, Types};
 
@@ -140,9 +140,9 @@ impl Analysis for ScalarEvolution {
     type Facts = Evolutions;
     const READS: &'static [Aspect] = &[Aspect::CfgShape, Aspect::Instructions, Aspect::Types];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Evolutions {
-        let loops = am.get::<LoopTree>(module, body);
-        let intervals = am.get::<IntervalValues>(module, body);
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Evolutions {
+        let loops = queries.get::<LoopTree>(module, body);
+        let intervals = queries.get::<IntervalValues>(module, body);
         let body = module.body(body);
         let graph = Graph::of(body);
         let order = reverse_postorder(body, &graph);

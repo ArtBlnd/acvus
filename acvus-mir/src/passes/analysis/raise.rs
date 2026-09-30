@@ -39,8 +39,7 @@ use crate::decl::{Declarations, Ends};
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Inst, InstId, Module, Op, Terminator};
 use crate::ir::{Callee, Chosen, IndexBound, Intrinsic, ValueId};
 use crate::passes::analysis::{
-    Analysis, AnalysisManager, AffineValues, CallGraph, Dominators, Evolutions, IntervalValues, LoopId, LoopTree, MatchFacts, ScalarEvolution,
-    SparseFacts, ValueBounds,
+    AffineValues, Analysis, CallGraph, Dominators, Evolutions, IntervalValues, LoopId, LoopTree, MatchFacts, Queries, ScalarEvolution, SparseFacts, ValueBounds,
 };
 use crate::passes::analysis::match_facts::MatchDomain;
 use crate::passes::domain::{Bound, Interval, Tags};
@@ -120,18 +119,18 @@ impl Analysis for Raise {
     type Facts = Endings;
     const READS: &'static [Aspect] = &[Aspect::CfgShape, Aspect::Instructions, Aspect::Types];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Endings {
-        let dominators = am.get::<Dominators>(module, body);
-        let loops = am.get::<LoopTree>(module, body);
-        let evolutions = am.get::<ScalarEvolution>(module, body);
-        let intervals = am.get::<IntervalValues>(module, body);
-        let affine = am.get::<AffineValues>(module, body);
-        let matches = am.get::<MatchFacts>(module, body);
-        let decls = am.decls();
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Endings {
+        let dominators = queries.get::<Dominators>(module, body);
+        let loops = queries.get::<LoopTree>(module, body);
+        let evolutions = queries.get::<ScalarEvolution>(module, body);
+        let intervals = queries.get::<IntervalValues>(module, body);
+        let affine = queries.get::<AffineValues>(module, body);
+        let matches = queries.get::<MatchFacts>(module, body);
+        let decls = queries.decls();
         let raiser = Raiser {
             module,
             body: module.body(body),
-            calls: am.get_of_module::<CallGraph>(module),
+            calls: queries.get_of_module::<CallGraph>(module),
             caller: body,
             decls,
             bounds: ValueBounds { intervals: &intervals, affine: &affine, decls, body: module.body(body), types: module.types() },
@@ -142,7 +141,7 @@ impl Analysis for Raise {
         let mut of_inst = FxHashMap::default();
         for (_, block) in raiser.body.blocks() {
             for inst in block.insts() {
-                of_inst.insert(inst.id(), raiser.ending(am, inst, &mut works));
+                of_inst.insert(inst.id(), raiser.ending(queries, inst, &mut works));
             }
         }
 
@@ -182,7 +181,7 @@ impl Raiser<'_> {
     /// Whether `inst` may trap, cleared by the value analyses where its
     /// kind may, and whether it ends, by the work it runs. `works` keeps,
     /// per type, whether a value of it holds work.
-    fn ending(&self, am: &mut AnalysisManager<'_>, inst: &Inst, works: &mut FxHashMap<Ty, bool>) -> Ending {
+    fn ending(&self, queries: &mut Queries<'_, '_>, inst: &Inst, works: &mut FxHashMap<Ty, bool>) -> Ending {
         match inst.op() {
             Op::BinOp { op, right, .. } if op.can_trap_on_integers() => {
                 Ending::traps_unless(!self.is_integer(*right) || excludes_zero(&self.bounds.value_interval(*right)))
@@ -191,7 +190,7 @@ impl Raiser<'_> {
                 Ending::traps_unless(self.bounds.index_in_bounds(*slice, *index))
             }
             Op::UnwrapVariant { src } => Ending::traps_unless(self.holds_a_payload(*src)),
-            Op::FunctionCall { callee, args, .. } => self.call(am, callee, args, works),
+            Op::FunctionCall { callee, args, .. } => self.call(queries, callee, args, works),
             Op::Spawn { .. } => Ending::CLEAN,
             Op::TakeEffect { src } => {
                 let Definition::Inst(start) = self.body.definition(*src) else {
@@ -200,11 +199,11 @@ impl Raiser<'_> {
                 let Op::Spawn { callee, args, .. } = self.body.inst(start).op() else {
                     panic!("a taking's handle is a start's result (effects §6)")
                 };
-                self.call(am, callee, args, works)
+                self.call(queries, callee, args, works)
             }
             Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args } => {
                 let function = *args.last().expect("an array map's last argument is its function");
-                self.work_of(am, function)
+                self.work_of(queries, function)
             }
             op => Ending { may_trap: op.may_trap(), finishes: true },
         }
@@ -236,15 +235,15 @@ impl Raiser<'_> {
     /// own code, and of the impls the checker chose for its requirements,
     /// with the work each argument holds; a closure's, its bodies'; any
     /// other callee's is unknown.
-    fn call(&self, am: &mut AnalysisManager<'_>, callee: &Callee, args: &[ValueId], works: &mut FxHashMap<Ty, bool>) -> Ending {
+    fn call(&self, queries: &mut Queries<'_, '_>, callee: &Callee, args: &[ValueId], works: &mut FxHashMap<Ty, bool>) -> Ending {
         match callee {
             Callee::Extern { id, r#impl, required, .. } => {
                 let own = Ending::declared(self.decls.call_facts(*id, *r#impl).ends);
                 let with_required = required.iter().fold(own, |ending, chosen| ending.and(self.chosen(chosen)));
-                args.iter().fold(with_required, |ending, arg| ending.and(self.work_given(am, *arg, works)))
+                args.iter().fold(with_required, |ending, arg| ending.and(self.work_given(queries, *arg, works)))
             }
             Callee::Indirect(function) => match self.closure_bodies(*function) {
-                Some(bodies) => self.bodies_ending(am, bodies),
+                Some(bodies) => self.bodies_ending(queries, bodies),
                 None => Ending::UNKNOWN,
             },
             Callee::Direct(_) => Ending::UNKNOWN,
@@ -260,18 +259,18 @@ impl Raiser<'_> {
 
     /// The work an argument holds, which the call may run: none for a value
     /// whose type holds no work.
-    fn work_given(&self, am: &mut AnalysisManager<'_>, arg: ValueId, works: &mut FxHashMap<Ty, bool>) -> Ending {
+    fn work_given(&self, queries: &mut Queries<'_, '_>, arg: ValueId, works: &mut FxHashMap<Ty, bool>) -> Ending {
         match holds_work(self.types(), self.body.ty_of(arg), works) {
-            true => self.work_of(am, arg),
+            true => self.work_of(queries, arg),
             false => Ending::CLEAN,
         }
     }
 
     /// Running `value`: a closure made here runs one of its bodies; any
     /// other value's work is unknown.
-    fn work_of(&self, am: &mut AnalysisManager<'_>, value: ValueId) -> Ending {
+    fn work_of(&self, queries: &mut Queries<'_, '_>, value: ValueId) -> Ending {
         match self.closure_bodies(value) {
-            Some(bodies) => self.bodies_ending(am, bodies),
+            Some(bodies) => self.bodies_ending(queries, bodies),
             None => Ending::UNKNOWN,
         }
     }
@@ -293,11 +292,11 @@ impl Raiser<'_> {
 
     /// A run of any one of `bodies`: each ends as the manager's endings of
     /// it say, one in this body's own component as unknown.
-    fn bodies_ending(&self, am: &mut AnalysisManager<'_>, bodies: &[BodyId]) -> Ending {
+    fn bodies_ending(&self, queries: &mut Queries<'_, '_>, bodies: &[BodyId]) -> Ending {
         bodies.iter().fold(Ending::CLEAN, |ending, callee| {
             let callee_ending = match self.calls.same_component(self.caller, *callee) {
                 true => Ending::UNKNOWN,
-                false => am.get::<Raise>(self.module, *callee).body(),
+                false => queries.get::<Raise>(self.module, *callee).body(),
             };
             ending.and(callee_ending)
         })
@@ -467,6 +466,7 @@ mod tests {
     use acvus_utils::QualifiedRef;
 
     use super::*;
+    use crate::passes::analysis::AnalysisManager;
     use crate::decl::{Core, DeclaredFacts, LoopMarkers, PairMember, RawDeclarations, Scheme, declared_fn_flows};
     use crate::ir::cfg::Builder;
     use crate::ir::{BinOp, ForSource, IndexMode};

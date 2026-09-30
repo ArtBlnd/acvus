@@ -56,7 +56,7 @@ use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
 use crate::decl::Declarations;
 use crate::ty::{Ty, lent_types};
-use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Reach, Storage, solve_dense};
+use crate::passes::analysis::{Analysis, DenseAnalysis, Direction, Loans, Queries, Reach, Storage, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::{Concrete, Types, copies};
 
@@ -264,10 +264,10 @@ impl Analysis for ContentLiveness {
     /// `Loans`' aspects: what a site reads is read from it.
     const READS: &'static [Aspect] = &[Aspect::CfgShape, Aspect::Instructions, Aspect::Storage, Aspect::Types];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> ContentLiveness {
-        let loans = am.get::<Loans>(module, body);
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> ContentLiveness {
+        let loans = queries.get::<Loans>(module, body);
         let body = module.body(body);
-        let outside = outside_storages(body, module.types(), am.decls());
+        let outside = outside_storages(body, module.types(), queries.decls());
         let units = units_of(body, module.types(), &outside, &loans);
         let returned: Vec<Storage> = outside.keys().copied().collect();
         let backward = Backward { loans: &loans, units: &units, returned: &returned };

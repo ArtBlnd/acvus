@@ -15,6 +15,10 @@
 //!
 //! A module analysis also ranges over the module's body set, so a change
 //! of that set drops every module analysis and what read it.
+//!
+//! A compute reads through `Queries`, which can request results and
+//! nothing else, and it holds the module shared, so nothing it reads
+//! changes or is dropped before it ends.
 
 use std::any::{Any, TypeId};
 use std::rc::Rc;
@@ -32,7 +36,7 @@ pub trait Analysis: 'static {
 
     const READS: &'static [Aspect];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Self::Facts;
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Self::Facts;
 }
 
 /// An analysis of the whole module the manager keeps once. `READS` lists
@@ -42,7 +46,7 @@ pub trait ModuleAnalysis: 'static {
 
     const READS: &'static [Aspect];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module) -> Self::Facts;
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module) -> Self::Facts;
 }
 
 /// A kept result, or one being computed.
@@ -94,7 +98,7 @@ impl<'d> AnalysisManager<'d> {
             Some(facts) => facts,
             None => {
                 self.begin(key, || format!("{} for {body:?}", std::any::type_name::<A>()));
-                let facts: Rc<dyn Any> = Rc::new(A::compute(self, module, body));
+                let facts: Rc<dyn Any> = Rc::new(A::compute(&mut Queries { manager: self }, module, body));
                 self.end(key, Rc::clone(&facts), A::READS);
                 facts
             }
@@ -117,7 +121,7 @@ impl<'d> AnalysisManager<'d> {
             Some(facts) => facts,
             None => {
                 self.begin(key, || std::any::type_name::<A>().to_owned());
-                let facts: Rc<dyn Any> = Rc::new(A::compute(self, module));
+                let facts: Rc<dyn Any> = Rc::new(A::compute(&mut Queries { manager: self }, module));
                 self.end(key, Rc::clone(&facts), A::READS);
                 facts
             }
@@ -206,5 +210,33 @@ impl<'d> AnalysisManager<'d> {
             }
             pending.extend(dropped.dependents);
         }
+    }
+}
+
+/// What a compute reads through: the manager's results, each request
+/// recorded as a read of the result being computed.
+pub struct Queries<'m, 'd> {
+    manager: &'m mut AnalysisManager<'d>,
+}
+
+impl<'d> Queries<'_, 'd> {
+    pub fn decls(&self) -> &'d Declarations {
+        self.manager.decls()
+    }
+
+    /// `AnalysisManager::get`.
+    pub fn get<A>(&mut self, module: &Module, body: BodyId) -> Rc<A::Facts>
+    where
+        A: Analysis,
+    {
+        self.manager.get::<A>(module, body)
+    }
+
+    /// `AnalysisManager::get_of_module`.
+    pub fn get_of_module<A>(&mut self, module: &Module) -> Rc<A::Facts>
+    where
+        A: ModuleAnalysis,
+    {
+        self.manager.get_of_module::<A>(module)
     }
 }

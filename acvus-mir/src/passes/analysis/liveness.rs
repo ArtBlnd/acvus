@@ -16,7 +16,7 @@ use rustc_hash::FxHashSet;
 
 use crate::ir::ValueId;
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Edge, Inst, Module, Terminator};
-use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, solve_dense};
+use crate::passes::analysis::{Analysis, DenseAnalysis, Direction, Queries, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 
 pub struct Liveness {
@@ -51,7 +51,7 @@ impl Analysis for Liveness {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape, Aspect::Instructions];
 
-    fn compute(_: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Liveness {
+    fn compute(_: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Liveness {
         let body = module.body(body);
         let facts = solve_dense(&Backward, body);
         let mut at_start = FxHashMap::default();

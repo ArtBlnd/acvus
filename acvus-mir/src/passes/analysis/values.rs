@@ -12,7 +12,7 @@ use crate::decl::Declarations;
 use crate::decl::declared::{Atom, Before, Subject};
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Inst, Module, Op, Terminator};
 use crate::ir::{Callee, ExternImpl, ForSource, SwitchKey, ValueId, known_len};
-use crate::passes::analysis::{Analysis, AnalysisManager, Executable, SparseAnalysis, SparseFacts, solve_sparse};
+use crate::passes::analysis::{Analysis, Executable, Queries, SparseAnalysis, SparseFacts, solve_sparse};
 use crate::passes::domain::{
     Affine, AffineDomain, Bound, Combination, Constant, ConstantDomain, Interval, IntervalDomain, Limit, Symbol, ValueDomain,
     bounds_on,
@@ -39,7 +39,7 @@ impl Analysis for ConstantValues {
 
     const READS: &'static [Aspect] = &[Aspect::Instructions, Aspect::CfgShape, Aspect::Types];
 
-    fn compute(_am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Self::Facts {
+    fn compute(_queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Self::Facts {
         let body = module.body(body);
         solve_sparse(&Constants { operand_types: OperandTypes { types: module.types(), body } }, body)
     }
@@ -50,9 +50,9 @@ impl Analysis for IntervalValues {
 
     const READS: &'static [Aspect] = &[Aspect::Instructions, Aspect::CfgShape, Aspect::Types];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Self::Facts {
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Self::Facts {
         let body = module.body(body);
-        let intervals = Intervals { operand_types: OperandTypes { types: module.types(), body }, decls: am.decls() };
+        let intervals = Intervals { operand_types: OperandTypes { types: module.types(), body }, decls: queries.decls() };
         solve_sparse(&intervals, body)
     }
 }
@@ -62,9 +62,9 @@ impl Analysis for AffineValues {
 
     const READS: &'static [Aspect] = &[Aspect::Instructions, Aspect::CfgShape, Aspect::Types];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Self::Facts {
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Self::Facts {
         let body = module.body(body);
-        let affines = Affines { operand_types: OperandTypes { types: module.types(), body }, decls: am.decls() };
+        let affines = Affines { operand_types: OperandTypes { types: module.types(), body }, decls: queries.decls() };
         solve_sparse(&affines, body)
     }
 }
@@ -567,6 +567,7 @@ mod tests {
     use acvus_utils::{Interner, QualifiedRef};
 
     use super::*;
+    use crate::passes::analysis::AnalysisManager;
     use crate::decl::declared::{Comparison, Relation, Term};
     use crate::decl::{Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
     use crate::ir::BinOp;

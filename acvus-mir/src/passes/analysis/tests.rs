@@ -910,7 +910,7 @@ impl Analysis for BlockCount {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape];
 
-    fn compute(_am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> usize {
+    fn compute(_queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> usize {
         module.body(body).blocks().count()
     }
 }
@@ -928,8 +928,8 @@ impl Analysis for Size {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape, Aspect::Instructions];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> SizeFacts {
-        let blocks = am.get::<BlockCount>(module, body);
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> SizeFacts {
+        let blocks = queries.get::<BlockCount>(module, body);
         let insts = module.body(body).blocks().map(|(_, block)| block.insts().len()).sum();
         SizeFacts { blocks, insts }
     }
@@ -943,8 +943,8 @@ impl Analysis for Narcissus {
 
     const READS: &'static [Aspect] = &[];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) {
-        am.get::<Echo>(module, body);
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) {
+        queries.get::<Echo>(module, body);
     }
 }
 
@@ -955,8 +955,8 @@ impl Analysis for Echo {
 
     const READS: &'static [Aspect] = &[];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) {
-        am.get::<Narcissus>(module, body);
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) {
+        queries.get::<Narcissus>(module, body);
     }
 }
 
@@ -1035,7 +1035,7 @@ impl ModuleAnalysis for InstCount {
 
     const READS: &'static [Aspect] = &[Aspect::Instructions];
 
-    fn compute(_am: &mut AnalysisManager<'_>, module: &Module) -> usize {
+    fn compute(_queries: &mut Queries<'_, '_>, module: &Module) -> usize {
         module.body_ids().map(|body| module.body(body).blocks().map(|(_, block)| block.insts().len()).sum::<usize>()).sum()
     }
 }
@@ -1069,7 +1069,7 @@ impl ModuleAnalysis for BodyCount {
 
     const READS: &'static [Aspect] = &[];
 
-    fn compute(_am: &mut AnalysisManager<'_>, module: &Module) -> usize {
+    fn compute(_queries: &mut Queries<'_, '_>, module: &Module) -> usize {
         module.body_ids().count()
     }
 }
@@ -1083,8 +1083,8 @@ impl Analysis for CountedBodies {
 
     const READS: &'static [Aspect] = &[];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, _body: BodyId) -> Rc<usize> {
-        am.get_of_module::<BodyCount>(module)
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, _body: BodyId) -> Rc<usize> {
+        queries.get_of_module::<BodyCount>(module)
     }
 }
 
@@ -1097,9 +1097,9 @@ impl Analysis for FirstBodysBlocks {
 
     const READS: &'static [Aspect] = &[];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, _body: BodyId) -> Rc<usize> {
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, _body: BodyId) -> Rc<usize> {
         let first = module.body_ids().next().expect("the module has a body");
-        am.get::<BlockCount>(module, first)
+        queries.get::<BlockCount>(module, first)
     }
 }
 
@@ -1112,8 +1112,8 @@ impl Analysis for FirstBodysBlocksAgain {
 
     const READS: &'static [Aspect] = &[];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Rc<Rc<usize>> {
-        am.get::<FirstBodysBlocks>(module, body)
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Rc<Rc<usize>> {
+        queries.get::<FirstBodysBlocks>(module, body)
     }
 }
 
@@ -1126,8 +1126,8 @@ impl Analysis for CountedInsts {
 
     const READS: &'static [Aspect] = &[];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, _body: BodyId) -> Rc<usize> {
-        am.get_of_module::<InstCount>(module)
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, _body: BodyId) -> Rc<usize> {
+        queries.get_of_module::<InstCount>(module)
     }
 }
 

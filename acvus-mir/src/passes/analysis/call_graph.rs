@@ -17,7 +17,7 @@ use rustc_hash::FxHashMap;
 
 use crate::ir::cfg::{Aspect, BodyId, Definition, Module, Op};
 use crate::ir::{Callee, ValueId};
-use crate::passes::analysis::{AnalysisManager, ModuleAnalysis};
+use crate::passes::analysis::{ModuleAnalysis, Queries};
 
 /// The module's bodies, by their place among `Module::body_ids`, each with
 /// the bodies it makes closures of or calls through a closure it makes, and
@@ -33,7 +33,7 @@ impl ModuleAnalysis for CallGraph {
 
     const READS: &'static [Aspect] = &[Aspect::Instructions];
 
-    fn compute(_am: &mut AnalysisManager<'_>, module: &Module) -> CallGraph {
+    fn compute(_queries: &mut Queries<'_, '_>, module: &Module) -> CallGraph {
         CallGraph::of(module)
     }
 }

@@ -35,7 +35,7 @@ use super::values::OperandTypes;
 use crate::decl::{Declarations, Tags as PrimitiveTags};
 use crate::ir::cfg::{BlockId, BodyId, Inst, Module, Op, Terminator};
 use crate::ir::{BinOp, SwitchKey, UnaryOp, ValueId};
-use crate::passes::analysis::{Analysis, AnalysisManager, Executable, SparseAnalysis, SparseFacts, solve_sparse};
+use crate::passes::analysis::{Analysis, Executable, Queries, SparseAnalysis, SparseFacts, solve_sparse};
 use crate::passes::domain::{
     Bound, Constant, ConstantDomain, Interval, IntervalDomain, JoinSemiLattice, Tags, TagsDomain, ValueDomain, Widen,
 };
@@ -138,8 +138,8 @@ impl Analysis for MatchFacts {
         crate::ir::cfg::Aspect::Types,
     ];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Self::Facts {
-        solve_sparse(&Matches::new(module, body, am.decls()), module.body(body))
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Self::Facts {
+        solve_sparse(&Matches::new(module, body, queries.decls()), module.body(body))
     }
 }
 
