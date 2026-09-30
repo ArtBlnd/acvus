@@ -74,7 +74,7 @@ mod tests {
     use crate::ir::cfg::{BlockId, Inst, Stages, Terminator};
     use crate::ir::{Callee, Checked, ExitTrip, ExternImpl, ForSource, IndexMode, RefTarget, ValueId};
     use crate::ty::{
-        Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, Poly, Ty, TyKind,
+        Calls, Concrete, Effect, EffectTerm, FlowTerm, Holds, IntTy, LenTerm, Mutability, Poly, Ty, TyKind,
         Types,
     };
 
@@ -164,7 +164,7 @@ mod tests {
             params: Box::new([index]),
             ret: slice_ref,
             effect: EffectTerm::Known(Effect::pure()),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),

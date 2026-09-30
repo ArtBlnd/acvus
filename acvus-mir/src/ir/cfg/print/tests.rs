@@ -485,7 +485,7 @@ fn an_extern_call_prints_its_impl_where_its_function_has_impls() {
             params: params.into(),
             ret,
             effect: EffectTerm::Known(Effect::pure()),
-            flows: FlowTerm::Known(Flows::Every),
+            flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),

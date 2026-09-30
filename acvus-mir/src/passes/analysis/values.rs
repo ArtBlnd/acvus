@@ -594,7 +594,7 @@ mod tests {
     use crate::ir::cfg::Stages;
     use crate::ir::{BinOp, ExitTrip, Overflow};
     use crate::passes::domain::Bound;
-    use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Poly, Ty, TyId, TyKind};
+    use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Poly, Ty, TyId, TyKind};
 
     struct Fixture {
         module: Module,
@@ -874,7 +874,7 @@ mod tests {
             params: Box::new([int]),
             ret: int,
             effect: EffectTerm::Known(Effect::pure()),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),
@@ -943,7 +943,7 @@ mod tests {
             params: Box::new([int]),
             ret: int,
             effect: EffectTerm::Known(Effect::pure()),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),
