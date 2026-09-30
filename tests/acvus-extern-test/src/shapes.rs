@@ -30,19 +30,31 @@ pub struct LabelledOwned<R: Runtime> {
 }
 
 impl<R: Runtime> Projected<R> for Labelled {
-    type Ref<'a> = LabelledRef<'a, R>;
-    type Mut<'a> = LabelledMut<'a, R>;
+    type Ref<'a>
+        = LabelledRef<'a, R>
+    where
+        Self: 'a;
+    type Mut<'a>
+        = LabelledMut<'a, R>
+    where
+        Self: 'a;
     type Owned = LabelledOwned<R>;
 
     const AGGREGATE: Aggregate = Aggregate::Tuple;
 
-    fn project<'c>(parts: LentParts<'c, R>) -> LabelledRef<'c, R> {
+    fn project<'c>(parts: LentParts<'c, R>) -> LabelledRef<'c, R>
+    where
+        Self: 'c,
+    {
         LabelledRef { label: parts.leaf(0), count: parts.leaf(1) }
     }
 
-    fn project_mut<'c>(mut parts: LentPartsMut<'c, R>) -> LabelledMut<'c, R> {
-        let label = parts.leaf(0);
-        let count = parts.leaf(1);
+    fn project_mut<'c>(mut parts: LentPartsMut<'c, R>) -> LabelledMut<'c, R>
+    where
+        Self: 'c,
+    {
+        let label = parts.leaf();
+        let count = parts.leaf();
         LabelledMut { label, count }
     }
 
@@ -72,19 +84,31 @@ pub struct NestedOwned<R: Runtime> {
 }
 
 impl<R: Runtime> Projected<R> for Nested {
-    type Ref<'a> = NestedRef<'a, R>;
-    type Mut<'a> = NestedMut<'a, R>;
+    type Ref<'a>
+        = NestedRef<'a, R>
+    where
+        Self: 'a;
+    type Mut<'a>
+        = NestedMut<'a, R>
+    where
+        Self: 'a;
     type Owned = NestedOwned<R>;
 
     const AGGREGATE: Aggregate = Aggregate::Tuple;
 
-    fn project<'c>(parts: LentParts<'c, R>) -> NestedRef<'c, R> {
+    fn project<'c>(parts: LentParts<'c, R>) -> NestedRef<'c, R>
+    where
+        Self: 'c,
+    {
         NestedRef { inner: parts.nested::<Labelled>(0), flag: parts.leaf(1) }
     }
 
-    fn project_mut<'c>(mut parts: LentPartsMut<'c, R>) -> NestedMut<'c, R> {
-        let inner = parts.nested::<Labelled>(0);
-        let flag = parts.leaf(1);
+    fn project_mut<'c>(mut parts: LentPartsMut<'c, R>) -> NestedMut<'c, R>
+    where
+        Self: 'c,
+    {
+        let inner = parts.nested::<Labelled>();
+        let flag = parts.leaf();
         NestedMut { inner, flag }
     }
 
@@ -114,19 +138,31 @@ pub struct RecordOwned<R: Runtime> {
 }
 
 impl<R: Runtime> Projected<R> for Record {
-    type Ref<'a> = RecordRef<'a, R>;
-    type Mut<'a> = RecordMut<'a, R>;
+    type Ref<'a>
+        = RecordRef<'a, R>
+    where
+        Self: 'a;
+    type Mut<'a>
+        = RecordMut<'a, R>
+    where
+        Self: 'a;
     type Owned = RecordOwned<R>;
 
     const AGGREGATE: Aggregate = Aggregate::Object;
 
-    fn project<'c>(parts: LentParts<'c, R>) -> RecordRef<'c, R> {
+    fn project<'c>(parts: LentParts<'c, R>) -> RecordRef<'c, R>
+    where
+        Self: 'c,
+    {
         RecordRef { count: parts.leaf(0), name: parts.leaf(1) }
     }
 
-    fn project_mut<'c>(mut parts: LentPartsMut<'c, R>) -> RecordMut<'c, R> {
-        let count = parts.leaf(0);
-        let name = parts.leaf(1);
+    fn project_mut<'c>(mut parts: LentPartsMut<'c, R>) -> RecordMut<'c, R>
+    where
+        Self: 'c,
+    {
+        let count = parts.leaf();
+        let name = parts.leaf();
         RecordMut { count, name }
     }
 
@@ -159,13 +195,22 @@ const NONE: u32 = 0;
 const SOME: u32 = 1;
 
 impl<R: Runtime> Projected<R> for Maybe {
-    type Ref<'a> = MaybeRef<'a, R>;
-    type Mut<'a> = MaybeMut<'a, R>;
+    type Ref<'a>
+        = MaybeRef<'a, R>
+    where
+        Self: 'a;
+    type Mut<'a>
+        = MaybeMut<'a, R>
+    where
+        Self: 'a;
     type Owned = MaybeOwned<R>;
 
     const AGGREGATE: Aggregate = Aggregate::Variant;
 
-    fn project<'c>(parts: LentParts<'c, R>) -> MaybeRef<'c, R> {
+    fn project<'c>(parts: LentParts<'c, R>) -> MaybeRef<'c, R>
+    where
+        Self: 'c,
+    {
         match parts.tag() {
             NONE => MaybeRef::None,
             SOME => MaybeRef::Some(parts.leaf(0)),
@@ -173,10 +218,13 @@ impl<R: Runtime> Projected<R> for Maybe {
         }
     }
 
-    fn project_mut<'c>(mut parts: LentPartsMut<'c, R>) -> MaybeMut<'c, R> {
+    fn project_mut<'c>(mut parts: LentPartsMut<'c, R>) -> MaybeMut<'c, R>
+    where
+        Self: 'c,
+    {
         match parts.tag() {
             NONE => MaybeMut::None,
-            SOME => MaybeMut::Some(parts.leaf(0)),
+            SOME => MaybeMut::Some(parts.leaf()),
             tag => unreachable!("Maybe has no variant {tag}"),
         }
     }

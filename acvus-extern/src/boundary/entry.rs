@@ -280,7 +280,7 @@ impl<R: Runtime, P: Projected<R>> Mode<R> for ByProjectionMut<P> {
         Self: 'c,
         R: 'c,
     {
-        P::project_mut(LentPartsMut::of_the_entry(runtime, v, at))
+        P::project_mut(LentPartsMut::of_the_entry(runtime, v, P::AGGREGATE, at))
     }
 }
 

@@ -18,7 +18,7 @@ use std::time::Duration;
 use acvus_utils::Interner;
 
 use crate::boundary::entry::Settled;
-use crate::callback::{CallArgs, CallsBack, LoanForm, RustFn, RustFns};
+use crate::callback::{CallArgs, CallsBack, LoanForm, RustCallee, RustFns};
 use crate::impls::task::TaskKind;
 use crate::boundary::instance::InstanceEntry;
 use crate::impls::{Family, Instances, Task};
@@ -363,8 +363,12 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
         self.inner.lent_part(v, i, at)
     }
 
-    fn lent_part_mut<'a>(&'a self, v: &'a mut Self::Value, i: u32, at: Settled<'a>) -> &'a mut Self::Value {
-        self.inner.lent_part_mut(v, i, at)
+    fn lent_parts_mut<'a>(
+        &'a self,
+        v: &'a mut Self::Value,
+        at: Settled<'a>,
+    ) -> impl ExactSizeIterator<Item = &'a mut Self::Value> {
+        self.inner.lent_parts_mut(v, at)
     }
 
     fn lent_tag(&self, v: &Self::Value, at: Settled<'_>) -> u32 {
@@ -455,7 +459,7 @@ impl<X: CallsBack + Validate> CallsBack for Adapter<X> {
 }
 
 impl<X: RustFns + Validate> RustFns for Adapter<X> {
-    fn rust_fn<R>(&self, f: RustFn<R>) -> Self::Value
+    fn rust_fn<R>(&self, f: RustCallee<R>) -> Self::Value
     where
         R: Runtime<Value = Self::Value>,
     {

@@ -77,11 +77,14 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     /// A `String`'s bytes lent as text.
     type SharedStr<'a>: Deref<Target = str> + Send;
 
-    /// Moves a value out at its settled type, releasing its storage. The one
-    /// caller is `Uniform::into_inner`, where a handler needs the value itself;
-    /// a value only dropped is released and never taken (runtime contract §1).
+    /// Moves a value of an opaque type out at its settled type, releasing
+    /// its storage. It is reached only through `Uniform`'s take, where a
+    /// handler needs the value itself; a value only dropped is released and
+    /// never taken (runtime contract §1). A transparent structured type is
+    /// never taken whole: it is taken apart into its parts (crossing §2).
     fn take<T: Crosses>(&self, v: Self::Value, at: Settled<'_>) -> T;
-    /// Makes the runtime value of a result at its settled type.
+    /// Makes the runtime value of an opaque type at its settled type. A
+    /// transparent structured type is composed from its parts instead.
     fn give<T: Crosses>(&self, value: T, at: Settled<'_>) -> Self::Value;
 
     /// The guards lend storage from the value's place, so a value held in the
@@ -115,7 +118,14 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     /// only through a guard made from this place, so a projection is a guard
     /// at each leaf. A variant's payload is its part 0.
     fn lent_part<'a>(&'a self, v: &'a Self::Value, i: u32, at: Settled<'a>) -> &'a Self::Value;
-    fn lent_part_mut<'a>(&'a self, v: &'a mut Self::Value, i: u32, at: Settled<'a>) -> &'a mut Self::Value;
+    /// The places of every part of an aggregate the call lent exclusively,
+    /// in the type's order, lent together: a mutable projection lends all its
+    /// parts at once, and one exclusive place yields one live exclusive part.
+    fn lent_parts_mut<'a>(
+        &'a self,
+        v: &'a mut Self::Value,
+        at: Settled<'a>,
+    ) -> impl ExactSizeIterator<Item = &'a mut Self::Value>;
     /// The tag of a variant the call lent, read from its place.
     fn lent_tag(&self, v: &Self::Value, at: Settled<'_>) -> u32;
 

@@ -28,10 +28,10 @@ use std::ptr::{self, NonNull};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_extern::callback::RustFn;
+use acvus_extern::callback::RustCallee;
 use acvus_extern::done::Done;
 use acvus_extern::runtime::{Crosses, ObjectBody, RefTarget, Runtime, TupleBody, VariantBody};
-use acvus_extern::seal::ShapeViews;
+use acvus_extern::seal::{ShapeViews, opaque};
 use acvus_extern::{
     LayoutFact, Release, Releasing, Settled, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
 };
@@ -306,15 +306,15 @@ impl Held {
     /// The Rust function this value is, made at the runtime `R`. The run
     /// calls a function value it holds as it passes arguments: trusting that
     /// the checker typed it a function, and that the host runs one runtime.
-    pub(crate) fn rust_fn<R>(&self) -> &RustFn<R>
+    pub(crate) fn rust_fn<R>(&self) -> &RustCallee<R>
     where
         R: Runtime,
     {
         assert_eq!(self.0.kind, Kind::Closure, "a call of a value that is no function");
         // SAFETY: a `Closure` word points at a live slot `closure` made from a
-        // `RustFn<R>` at the one runtime the run uses, and the slot lives as
-        // long as this holder owns the value.
-        unsafe { &(*self.0.address::<Slot<RustFn<R>>>()).value }
+        // `RustCallee<R>` at the one runtime the run uses, and the slot lives
+        // as long as this holder owns the value.
+        unsafe { &(*self.0.address::<Slot<RustCallee<R>>>()).value }
     }
 }
 
@@ -406,11 +406,11 @@ where
 }
 
 /// A script function value made from a Rust function's glue.
-pub(crate) fn closure<R>(f: RustFn<R>) -> Word
+pub(crate) fn closure<R>(f: RustCallee<R>) -> Word
 where
     R: Runtime,
 {
-    Slot::allocate(Kind::Closure, f, TypeId::of::<RustFn<R>>())
+    Slot::allocate(Kind::Closure, f, TypeId::of::<RustCallee<R>>())
 }
 
 // Aggregates.
@@ -445,9 +445,6 @@ impl Parts {
             .into_iter()
     }
 
-    fn part(&self, i: u32) -> *mut Word {
-        self.0[i as usize].as_ptr()
-    }
 }
 
 impl Drop for Parts {
@@ -543,21 +540,30 @@ unsafe fn aggregate(v: Word) -> Word {
     }
 }
 
-/// The allocation the `i`-th part of the aggregate a place holds lies in.
+/// The parts of the aggregate a place holds, each the allocation it lies in.
 ///
 /// # Safety
-/// As `aggregate`'s, and the aggregate has a part `i`.
-unsafe fn part_of(v: Word, i: u32) -> *mut Word {
+/// As `aggregate`'s, and the aggregate stays live for `'a`.
+unsafe fn parts_of<'a>(v: Word) -> &'a [NonNull<Word>] {
     // SAFETY: the caller's contract. The body is only read here.
     unsafe {
         let aggregate = aggregate(v);
         match aggregate.kind {
-            Kind::Tuple => (*aggregate.address::<WordTuple>()).0.part(i),
-            Kind::Object => (*aggregate.address::<WordObject>()).0.part(i),
-            Kind::Variant => (*aggregate.address::<WordVariant>()).payload.part(i),
+            Kind::Tuple => &(*aggregate.address::<WordTuple>()).0.0,
+            Kind::Object => &(*aggregate.address::<WordObject>()).0.0,
+            Kind::Variant => &(*aggregate.address::<WordVariant>()).payload.0,
             kind => unreachable!("a {kind:?} value has no parts"),
         }
     }
+}
+
+/// The allocation the `i`-th part of the aggregate a place holds lies in.
+///
+/// # Safety
+/// As `parts_of`'s, and the aggregate has a part `i`.
+unsafe fn part_of(v: Word, i: u32) -> *mut Word {
+    // SAFETY: the caller's contract.
+    unsafe { parts_of(v)[i as usize].as_ptr() }
 }
 
 pub(crate) fn lent_part<'a>(v: &'a Word, i: u32, _at: Settled<'a>) -> &'a Word {
@@ -568,10 +574,13 @@ pub(crate) fn lent_part<'a>(v: &'a Word, i: u32, _at: Settled<'a>) -> &'a Word {
     unsafe { &*part_of(*v, i) }
 }
 
-pub(crate) fn lent_part_mut<'a>(v: &'a mut Word, i: u32, _at: Settled<'a>) -> &'a mut Word {
+pub(crate) fn lent_parts_mut<'a>(v: &'a mut Word, _at: Settled<'a>) -> impl ExactSizeIterator<Item = &'a mut Word> {
+    // SAFETY: as `part_of`'s; the aggregate's body is only read here.
+    let parts = unsafe { parts_of(*v) };
     // SAFETY: as `lent_part`'s, the aggregate lent exclusively, so no other
-    // lend of the part is live meanwhile.
-    unsafe { &mut *part_of(*v, i) }
+    // lend of a part is live meanwhile; each part lies in an allocation of
+    // its own, so the parts lent together are disjoint.
+    parts.iter().map(|part| unsafe { &mut *part.as_ptr() })
 }
 
 pub(crate) fn lent_tag(v: &Word, _at: Settled<'_>) -> u32 {
@@ -626,14 +635,14 @@ where
 }
 
 /// The Rust function a closure value is, made at the runtime `R`.
-pub(crate) fn callee<'a, R>(v: Word, _at: Settled<'a>) -> &'a RustFn<R>
+pub(crate) fn callee<'a, R>(v: Word, _at: Settled<'a>) -> &'a RustCallee<R>
 where
     R: Runtime,
 {
     // SAFETY: under `Settled`, `v` is a closure the call is lent, a slot
-    // `closure` made from a `RustFn<R>` at the runtime the call runs at, live
-    // for the call.
-    unsafe { &(*v.address::<Slot<RustFn<R>>>()).value }
+    // `closure` made from a `RustCallee<R>` at the runtime the call runs at,
+    // live for the call.
+    unsafe { &(*v.address::<Slot<RustCallee<R>>>()).value }
 }
 
 // What `Validate` reads.
@@ -692,6 +701,43 @@ unsafe impl SignedS3 for WordRuntime {}
 
 // The test types' structural facts.
 
+/// The crossing items of an opaque test type, as the derive emits them: given
+/// and taken whole, lent as a guard.
+macro_rules! opaque_crossing {
+    () => {
+        type Lent<'c, R: Runtime>
+            = opaque::Lent<'c, R, Self>
+        where
+            Self: 'c;
+        type LentMut<'c, R: Runtime>
+            = opaque::LentMut<'c, R, Self>
+        where
+            Self: 'c;
+
+        fn give<R: Runtime>(self, rt: &R, at: Settled<'_>) -> R::Value {
+            opaque::give(self, rt, at)
+        }
+
+        fn take<R: Runtime>(v: R::Value, rt: &R, at: Settled<'_>) -> Self {
+            opaque::take(v, rt, at)
+        }
+
+        fn lent<'c, R: Runtime>(rt: &'c R, place: &'c R::Value, at: Settled<'c>) -> Self::Lent<'c, R>
+        where
+            Self: 'c,
+        {
+            opaque::lent(rt, place, at)
+        }
+
+        fn lent_mut<'c, R: Runtime>(rt: &'c R, place: &'c mut R::Value, at: Settled<'c>) -> Self::LentMut<'c, R>
+        where
+            Self: 'c,
+        {
+            opaque::lent_mut(rt, place, at)
+        }
+    };
+}
+
 /// A value that counts its drops, for the crossing's release tests.
 pub struct Tally(pub Arc<AtomicUsize>);
 
@@ -716,6 +762,8 @@ unsafe impl Structural for Tally {
     type Canon = Tally;
 
     const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
+
+    opaque_crossing!();
 }
 
 // SAFETY: as for `Tally`.
@@ -723,6 +771,8 @@ unsafe impl Structural for Pair {
     type Canon = Pair;
 
     const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
+
+    opaque_crossing!();
 }
 
 // SAFETY: each shape below stands in for `shape!`'s expansion of its

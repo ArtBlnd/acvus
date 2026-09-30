@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use acvus_extern::adapter::{Breach, Validate, Validity};
-use acvus_extern::callback::{CallArgs, CallsBack, LoanForm, RustFn, RustFns};
+use acvus_extern::callback::{CallArgs, CallsBack, LoanForm, RustCallee, RustFns};
 use acvus_extern::{Entry, Settled, SiteShape};
 use acvus_extern::impls::Family;
 use acvus_extern::impls::task::TaskKind;
@@ -89,8 +89,8 @@ impl Runtime for WordRuntime {
         boundary::lent_part(v, i, at)
     }
 
-    fn lent_part_mut<'a>(&'a self, v: &'a mut Word, i: u32, at: Settled<'a>) -> &'a mut Word {
-        boundary::lent_part_mut(v, i, at)
+    fn lent_parts_mut<'a>(&'a self, v: &'a mut Word, at: Settled<'a>) -> impl ExactSizeIterator<Item = &'a mut Word> {
+        boundary::lent_parts_mut(v, at)
     }
 
     fn lent_tag(&self, v: &Word, at: Settled<'_>) -> u32 {
@@ -185,7 +185,7 @@ where
 }
 
 impl RustFns for WordRuntime {
-    fn rust_fn<R>(&self, f: RustFn<R>) -> Word
+    fn rust_fn<R>(&self, f: RustCallee<R>) -> Word
     where
         R: Runtime<Value = Word>,
     {

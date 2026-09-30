@@ -106,3 +106,68 @@ tuple_forms! {
     (A, B, C, D, E, F, G, H, I, J, K)
     (A, B, C, D, E, F, G, H, I, J, K, L)
 }
+
+/// The crossing of an opaque type: given and taken whole at itself, and lent
+/// as a guard. The `Structural` crossing items of the crate's opaque types,
+/// and those the derive emits, are made of these; each needs the entry's
+/// `Settled`, so none is reached outside a call.
+pub mod opaque {
+    use crate::boundary::entry::Settled;
+    use crate::guard::{Guard, GuardMut};
+    use crate::runtime::{Crosses, Runtime};
+
+    /// An opaque part lent shared in a projection.
+    pub type Lent<'c, R, T> = Guard<'c, <R as Runtime>::Shared<'c, T>>;
+    /// An opaque part lent exclusively in a projection.
+    pub type LentMut<'c, R, T> = GuardMut<'c, <R as Runtime>::Exclusive<'c, T>>;
+
+    pub fn give<T: Crosses, R: Runtime>(value: T, rt: &R, at: Settled<'_>) -> R::Value {
+        rt.give(value, at)
+    }
+
+    pub fn take<T: Crosses, R: Runtime>(v: R::Value, rt: &R, at: Settled<'_>) -> T {
+        rt.take(v, at)
+    }
+
+    pub fn lent<'c, T: Crosses + 'c, R: Runtime>(rt: &'c R, place: &'c R::Value, at: Settled<'c>) -> Lent<'c, R, T> {
+        Guard::of_the_entry(rt.shared(place, at))
+    }
+
+    pub fn lent_mut<'c, T: Crosses + 'c, R: Runtime>(
+        rt: &'c R,
+        place: &'c mut R::Value,
+        at: Settled<'c>,
+    ) -> LentMut<'c, R, T> {
+        GuardMut::of_the_entry(rt.exclusive(place, at))
+    }
+}
+
+// SAFETY: this crate's `Projected` for `Option` reads its tag by the order of
+// the variants' names, `None` 0 and `Some` 1, and its payload at `T`.
+unsafe impl<T> ShapeViews for Option<T> {}
+// SAFETY: as for `Option`: `Err` 0 and `Ok` 1, the payloads at `T` and `E`.
+unsafe impl<T, E> ShapeViews for Result<T, E> {}
+
+/// Tuples of parts up to twelve.
+macro_rules! tuple_views {
+    ($(($($p:ident),+))+) => {$(
+        // SAFETY: this crate's `Projected` for a tuple reads each part at its
+        // own type, in order.
+        unsafe impl<$($p),+> ShapeViews for ($($p,)+) {}
+    )+};
+}
+
+tuple_views! {
+    (A)
+    (A, B)
+    (A, B, C)
+    (A, B, C, D)
+    (A, B, C, D, E)
+    (A, B, C, D, E, F)
+    (A, B, C, D, E, F, G)
+    (A, B, C, D, E, F, G, H)
+    (A, B, C, D, E, F, G, H, I)
+    (A, B, C, D, E, F, G, H, I, J)
+    (A, B, C, D, E, F, G, H, I, J, K)
+    (A, B, C, D, E, F, G, H, I, J, K, L)
+}

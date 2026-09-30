@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
 use crate::boundary::entry::Settled;
-use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
+use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts, opaque_crossing};
 use crate::context::Opens;
 use crate::runtime::{Crosses, ObjectBody, Runtime, TupleBody, VariantBody};
 use crate::shape::{Aggregate, OwnedParts, Projected};
@@ -55,17 +55,20 @@ impl<R: Runtime, T: Crosses> Uniform<R, T> {
         cx.runtime().exclusive(&mut self.value, Settled::of_the_entry())
     }
 
-    /// The value itself: the one place the runtime's `take` is called. A
-    /// `Uniform` only dropped is released and never taken.
+    /// The value itself. A `Uniform` only dropped is released and never
+    /// taken.
     pub fn into_inner<'c>(self, cx: &'c impl Opens<'c, R>) -> T {
         self.take(cx.runtime(), Settled::of_the_entry())
     }
+}
 
-    /// The value moved out: the take consumes the value's storage, so the
+impl<R: Runtime, T: Structural> Uniform<R, T> {
+    /// The value moved out at its type: the one place a value is taken, the
+    /// runtime's `take` for an opaque type and the owned view for a
+    /// transparent one. The take consumes the value's storage, so the
     /// holder's release is skipped.
     pub(crate) fn take(self, runtime: &R, at: Settled<'_>) -> T {
-        let held = ManuallyDrop::new(self);
-        runtime.take(*held.value, at)
+        T::take(self.into_value(), runtime, at)
     }
 }
 
@@ -73,8 +76,10 @@ impl<R: Runtime, S: Projected<R>> Uniform<R, S> {
     /// The shape's owned view: the aggregate taken apart once, each part then
     /// held by its own `Uniform`.
     pub fn into_view<'c>(self, cx: &'c impl Opens<'c, R>) -> S::Owned {
-        let runtime = cx.runtime();
-        let at = Settled::of_the_entry();
+        self.view(cx.runtime(), Settled::of_the_entry())
+    }
+
+    pub(crate) fn view(self, runtime: &R, at: Settled<'_>) -> S::Owned {
         let aggregate = self.into_value();
         let parts = match S::AGGREGATE {
             Aggregate::Tuple => OwnedParts::of_the_body(None, runtime.take_tuple(aggregate, at).into_parts()),
@@ -101,7 +106,8 @@ impl<R: Runtime, X> Drop for Uniform<R, X> {
 // `X` (E0367). `X` is held only as that phantom, no projection through it
 // exists, and nothing over it is interior-mutable. `FACTS` states the index as
 // the one type parameter the checker's flows read; the runtime `R` is not
-// declared to the checker.
+// declared to the checker. A `Uniform` held inside a Rust value crosses
+// opaque, at itself.
 unsafe impl<R, X> Structural for Uniform<R, X>
 where
     R: Runtime,
@@ -112,6 +118,8 @@ where
         layout: LayoutFact::CanonicalOf,
         generics: &[GenericParam::Type],
     };
+
+    opaque_crossing!();
 }
 
 #[cfg(test)]
@@ -251,8 +259,14 @@ mod tests {
         fn lent_part<'a>(&'a self, _: &'a Counted, _: u32, _: Settled<'a>) -> &'a Counted {
             unreachable!("the release tests lend no storage")
         }
-        fn lent_part_mut<'a>(&'a self, _: &'a mut Counted, _: u32, _: Settled<'a>) -> &'a mut Counted {
-            unreachable!("the release tests lend no storage")
+        fn lent_parts_mut<'a>(
+            &'a self,
+            _: &'a mut Counted,
+            _: Settled<'a>,
+        ) -> impl ExactSizeIterator<Item = &'a mut Counted> {
+            unreachable!("the release tests lend no storage");
+            #[allow(unreachable_code)]
+            std::iter::empty()
         }
         fn lent_tag(&self, _: &Counted, _: Settled<'_>) -> u32 {
             unreachable!("the release tests lend no storage")
