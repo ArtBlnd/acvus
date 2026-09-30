@@ -6,13 +6,16 @@
 //! value is a kind and a 64-bit word; a scalar lies in the word, and anything
 //! larger is an allocation the word points at. It checks nothing, as the
 //! interpreter checks nothing; what it answers to `Validate` it reads from the
-//! kind, for the adapter alone.
+//! kind, for the adapter alone. `Frame` is the run that calls through it.
 //!
 //! `unsafe` is written only in `boundary`, as in every crate of the workspace.
 
 #![deny(unsafe_code)]
 
 mod boundary;
+mod frame;
 mod runtime;
 
-pub use runtime::{Word, WordRuntime};
+pub use boundary::{Held, Pair, Tally, Word};
+pub use frame::{Frame, Pass};
+pub use runtime::WordRuntime;

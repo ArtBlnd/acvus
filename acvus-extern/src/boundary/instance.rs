@@ -52,6 +52,10 @@ impl<R: Instances, F: Family<Receiver = Steps>, I> Instance<R, F, I> {
 }
 
 impl<R: Instances, F: Family<Receiver = Reads>, Ts, L> InstanceOf<R, F, Ts, L> {
+    pub(crate) fn of_the_entry(entry: R::Value) -> Self {
+        InstanceOf { entry, _at: PhantomData }
+    }
+
     pub fn call<'r>(
         &self,
         cx: &Returning<'_, R>,

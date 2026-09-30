@@ -36,6 +36,9 @@ pub trait Validate: Runtime {
     fn validate_text(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
     /// Whether `v` is an impl value of the generic function `F` at task `K`.
     fn validate_instance<F: Family, K: TaskKind>(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
+    /// Whether `v` is an impl value at all, of whatever generic function and
+    /// task.
+    fn validate_impl(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
     /// Whether `v` is a script closure.
     fn validate_closure(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
 }
@@ -56,6 +59,21 @@ pub struct Breach {
     pub what: String,
 }
 
+impl Breach {
+    fn detected(self) -> ! {
+        panic!("the adapter detected a breach: {}", self.what)
+    }
+}
+
+impl Validity {
+    fn pass_or_panic(self) {
+        match self {
+            Validity::Valid | Validity::Unknown => {}
+            Validity::Breach(breach) => breach.detected(),
+        }
+    }
+}
+
 /// The adapter over the trusting runtime `X`.
 pub struct Adapter<X> {
     inner: X,
@@ -70,12 +88,30 @@ impl<X: Runtime + Validate> Adapter<X> {
     pub fn inner(&self) -> &X {
         &self.inner
     }
+
+    /// Tracks `guard` as a lend of the storage its target occupies.
+    fn track<'a, G>(&'a self, guard: G, access: Mutability) -> Tracked<'a, G>
+    where
+        G: Deref,
+    {
+        let lent = lock(&self.borrows).lend(range_of(&*guard), access);
+        match lent {
+            Ok(tag) => Tracked { inner: guard, tag, borrows: &self.borrows },
+            Err(breach) => breach.detected(),
+        }
+    }
 }
 
 /// The tracker's lock. Nothing panics while holding it: every breach is
 /// returned out of `Borrows` and raised after the lock is released.
 fn lock(borrows: &Mutex<Borrows>) -> MutexGuard<'_, Borrows> {
     borrows.lock().expect("the borrow tracker's lock is poisoned")
+}
+
+/// The addresses a borrow's target occupies.
+fn range_of<P: ?Sized>(target: &P) -> Range<usize> {
+    let start = std::ptr::from_ref(target).addr();
+    start..start + size_of_val(target)
 }
 
 /// Lent storage, tracked by address after Tree Borrows: each lend is a node
@@ -216,56 +252,87 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
     type SharedStr<'a> = Tracked<'a, X::SharedStr<'a>>;
 
     fn take<T: Crosses>(&self, v: Self::Value, at: Settled<'_>) -> T {
-        todo!("validate at T, then X's take")
+        self.inner.validate::<T>(&v, at).pass_or_panic();
+        self.inner.take(v, at)
     }
+
     fn give<T: Crosses>(&self, value: T, at: Settled<'_>) -> Self::Value {
-        todo!("X's give")
+        self.inner.give(value, at)
     }
+
     fn shared<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::Shared<'a, T> {
-        todo!("validate at T, X's guard, lend its range shared")
+        self.inner.validate::<T>(&v, at).pass_or_panic();
+        self.track(self.inner.shared(v, at), Mutability::Shared)
     }
+
     fn exclusive<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T> {
-        todo!("validate at T, X's guard, lend its range exclusive")
+        self.inner.validate::<T>(&v, at).pass_or_panic();
+        self.track(self.inner.exclusive(v, at), Mutability::Exclusive)
     }
+
     fn shared_slice<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::SharedSlice<'a, T> {
-        todo!("validate the run, X's guard, lend its range shared")
+        self.inner.validate_run::<T>(&v, at).pass_or_panic();
+        self.track(self.inner.shared_slice(v, at), Mutability::Shared)
     }
+
     fn exclusive_slice<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::ExclusiveSlice<'a, T> {
-        todo!("validate the run, X's guard, lend its range exclusive")
+        self.inner.validate_run::<T>(&v, at).pass_or_panic();
+        self.track(self.inner.exclusive_slice(v, at), Mutability::Exclusive)
     }
+
     fn shared_str<'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::SharedStr<'a> {
-        todo!("validate the text, X's guard, lend its range shared")
+        self.inner.validate_text(&v, at).pass_or_panic();
+        self.track(self.inner.shared_str(v, at), Mutability::Shared)
     }
+
     fn take_tuple(&self, v: Self::Value, at: Settled<'_>) -> Self::Tuple {
-        todo!("X's take_tuple")
+        self.inner.take_tuple(v, at)
     }
+
     fn take_object(&self, v: Self::Value, at: Settled<'_>) -> Self::Object {
-        todo!("X's take_object")
+        self.inner.take_object(v, at)
     }
+
     fn take_variant(&self, v: Self::Value, at: Settled<'_>) -> Self::Variant {
-        todo!("X's take_variant")
+        self.inner.take_variant(v, at)
     }
+
     fn make_tuple(&self, parts: impl ExactSizeIterator<Item = Self::Value>, at: Settled<'_>) -> Self::Value {
-        todo!("X's make_tuple")
+        self.inner.make_tuple(parts, at)
     }
+
     fn make_object(&self, fields: impl ExactSizeIterator<Item = Self::Value>, at: Settled<'_>) -> Self::Value {
-        todo!("X's make_object")
+        self.inner.make_object(fields, at)
     }
+
     fn make_variant(&self, tag: u32, payload: Option<Self::Value>, at: Settled<'_>) -> Self::Value {
-        todo!("X's make_variant")
+        self.inner.make_variant(tag, payload, at)
     }
+
     fn lent_part<'a>(&'a self, v: Self::Value, i: u32, at: Settled<'a>) -> Self::Value {
-        todo!("X's lent_part")
+        self.inner.lent_part(v, i, at)
     }
+
     fn lent_tag(&self, v: Self::Value, at: Settled<'_>) -> u32 {
-        todo!("X's lent_tag")
+        self.inner.lent_tag(v, at)
     }
+
     fn reference<'a, P: ?Sized>(&'a self, target: RefTarget<'a, P>, at: Settled<'a>) -> Self::Value {
-        todo!("reborrow the part's range from the lend that holds it, then X's reference")
+        let (range, access) = match &target {
+            RefTarget::Shared(part) => (range_of(*part), Mutability::Shared),
+            RefTarget::Exclusive(part) => (range_of(&**part), Mutability::Exclusive),
+        };
+        let reborrowed = lock(&self.borrows).reborrow(range, access);
+        if let Err(breach) = reborrowed {
+            breach.detected();
+        }
+        self.inner.reference(target, at)
     }
+
     fn interner(&self) -> &Interner {
         self.inner.interner()
     }
+
     fn sleep(&self, d: Duration) -> impl Future<Output = ()> + Send {
         self.inner.sleep(d)
     }
@@ -280,16 +347,20 @@ impl<X: Instances + Validate> Instances for Adapter<X> {
     {
         self.inner.instance(entry)
     }
+
     fn entry<R, F, K>(&self, v: Self::Value, at: Settled<'_>) -> &InstanceEntry<R, F, K>
     where
         R: Runtime<Value = Self::Value>,
         F: Family,
         K: TaskKind,
     {
-        todo!("validate v as an impl value, then X's entry")
+        self.inner.validate_instance::<F, K>(&v, at).pass_or_panic();
+        self.inner.entry(v, at)
     }
+
     fn task_of(&self, v: Self::Value, at: Settled<'_>) -> Task {
-        todo!("validate v as an impl value, then X's task_of")
+        self.inner.validate_impl(&v, at).pass_or_panic();
+        self.inner.task_of(v, at)
     }
 }
 
@@ -300,7 +371,8 @@ impl<X: CallsBack + Validate> CallsBack for Adapter<X> {
         A: CallArgs<R>,
         U: LoanForm,
     {
-        todo!("validate the closure, then X's call_now")
+        self.inner.validate_closure(&closure, at).pass_or_panic();
+        self.inner.call_now::<R, A, U>(closure, args, at)
     }
     fn call_later<R, A, U>(&self, closure: Self::Value, args: A::Moved, at: Settled<'_>) -> impl Future<Output = U> + Send
     where
@@ -308,7 +380,17 @@ impl<X: CallsBack + Validate> CallsBack for Adapter<X> {
         A: CallArgs<R>,
         U: Crosses,
     {
-        async { todo!("validate the closure, then X's call_later") }
+        self.inner.validate_closure(&closure, at).pass_or_panic();
+        self.inner.call_later::<R, A, U>(closure, args, at)
+    }
+}
+
+impl<X: RustFns + Validate> RustFns for Adapter<X> {
+    fn rust_fn<R>(&self, f: RustFn<R>) -> Self::Value
+    where
+        R: Runtime<Value = Self::Value>,
+    {
+        self.inner.rust_fn(f)
     }
 }
 
@@ -396,14 +478,5 @@ mod tests {
         assert!(borrows.reborrow(100..108, Exclusive).unwrap().is_none());
         assert!(borrows.reborrow(16..32, Exclusive).unwrap().is_none());
         assert_eq!(borrows.nodes.len(), 1);
-    }
-}
-
-impl<X: RustFns + Validate> RustFns for Adapter<X> {
-    fn rust_fn<R>(&self, f: RustFn<R>) -> Self::Value
-    where
-        R: Runtime<Value = Self::Value>,
-    {
-        self.inner.rust_fn(f)
     }
 }

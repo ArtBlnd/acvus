@@ -61,7 +61,10 @@ impl<'c, R: Runtime> Entry<'c, R> {
         A: Args<R> + 'c,
         Q: Requires<R> + 'c,
     {
-        todo!("A::Run from args, each opened at Settled by its mode; Q from the site's impls; then the body")
+        let at = Settled::of_the_entry();
+        let args = A::open(self.runtime, self.args, &self.site.lent, at);
+        let requirements = Q::open(self.runtime, &self.site.impls, at);
+        body(Returning::of_the_entry(self.runtime, self.site), args, requirements)
     }
 
     pub fn open_awaited<A, Q>(
@@ -72,7 +75,12 @@ impl<'c, R: Runtime> Entry<'c, R> {
         A: Args<R> + 'c,
         Q: Requires<R> + 'c,
     {
-        async { todo!("as open, the body awaited") }
+        async {
+            todo!(
+                "structural gap: an AsyncFnOnce body's call future cannot be bounded Send on stable Rust, \
+                 so this Send future cannot await it"
+            )
+        }
     }
 }
 
@@ -87,11 +95,27 @@ pub trait Mode<R: Runtime>: sealed::Sealed {
     where
         Self: 'c,
         R: 'c;
+
+    /// How the checker passes the argument this mode opens.
+    #[doc(hidden)]
+    const LENT: Option<Mutability>;
+
+    #[doc(hidden)]
+    fn open<'c>(runtime: &'c R, v: R::Value, at: Settled<'c>) -> Self::Opened<'c>
+    where
+        Self: 'c,
+        R: 'c;
 }
 
 /// A requirement's mode: how the entry opens the impl the site chose.
 pub trait RequirementMode<R: Runtime>: sealed::Sealed {
     type Opened<'c>
+    where
+        Self: 'c,
+        R: 'c;
+
+    #[doc(hidden)]
+    fn open<'c>(runtime: &'c R, impl_value: R::Value, at: Settled<'c>) -> Self::Opened<'c>
     where
         Self: 'c,
         R: 'c;
@@ -105,11 +129,25 @@ pub trait Args<R: Runtime>: sealed::Sealed {
     where
         Self: 'c,
         R: 'c;
+
+    /// Each argument opened by its position's mode.
+    #[doc(hidden)]
+    fn open<'c>(runtime: &'c R, args: &'c [R::Value], lent: &[Option<Mutability>], at: Settled<'c>) -> Self::Opened<'c>
+    where
+        Self: 'c,
+        R: 'c;
 }
 
 /// The requirement parameters of a handler, a tuple of requirement modes.
 pub trait Requires<R: Runtime>: sealed::Sealed {
     type Opened<'c>
+    where
+        Self: 'c,
+        R: 'c;
+
+    /// Each impl the site chose opened by its requirement's mode.
+    #[doc(hidden)]
+    fn open<'c>(runtime: &'c R, impls: &'c [R::Value], at: Settled<'c>) -> Self::Opened<'c>
     where
         Self: 'c,
         R: 'c;
@@ -156,7 +194,7 @@ use crate::runtime::Crosses;
 use crate::shape::Projected;
 
 macro_rules! modes {
-    ($([$($g:tt)*] $m:ty => $opened:ty;)+) => {$(
+    ($([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
         impl<$($g)*> sealed::Sealed for $m {}
 
         impl<R: Runtime, $($g)*> Mode<R> for $m {
@@ -164,31 +202,65 @@ macro_rules! modes {
             where
                 Self: 'c,
                 R: 'c;
+
+            const LENT: Option<Mutability> = $lent;
+
+            fn open<'c>($runtime: &'c R, $v: R::Value, $at: Settled<'c>) -> Self::Opened<'c>
+            where
+                Self: 'c,
+                R: 'c,
+            {
+                $open
+            }
         }
     )+};
 }
 
+const SHARED: Option<Mutability> = Some(Mutability::Shared);
+const EXCLUSIVE: Option<Mutability> = Some(Mutability::Exclusive);
+
 modes! {
-    [T: Crosses] ByValue<T> => T;
-    [T] ByUniform<T> => Uniform<R, T>;
-    [T: Crosses] ByRef<T> => Guard<'c, R::Shared<'c, T>>;
-    [T: Crosses] ByMut<T> => GuardMut<'c, R::Exclusive<'c, T>>;
-    [T: Crosses] BySlice<T> => Guard<'c, R::SharedSlice<'c, T>>;
-    [T: Crosses] BySliceMut<T> => GuardMut<'c, R::ExclusiveSlice<'c, T>>;
-    [] ByStr => Guard<'c, R::SharedStr<'c>>;
+    [T: Crosses] ByValue<T> => T, None,
+        |runtime, v, at| Uniform::<R, T>::of_the_crossing(v).take(runtime, at);
+    [T] ByUniform<T> => Uniform<R, T>, None,
+        |_runtime, v, _at| Uniform::of_the_crossing(v);
+    [T: Crosses] ByRef<T> => Guard<'c, R::Shared<'c, T>>, SHARED,
+        |runtime, v, at| Guard::of_the_entry(runtime.shared(v, at));
+    [T: Crosses] ByMut<T> => GuardMut<'c, R::Exclusive<'c, T>>, EXCLUSIVE,
+        |runtime, v, at| GuardMut::of_the_entry(runtime.exclusive(v, at));
+    [T: Crosses] BySlice<T> => Guard<'c, R::SharedSlice<'c, T>>, SHARED,
+        |runtime, v, at| Guard::of_the_entry(runtime.shared_slice(v, at));
+    [T: Crosses] BySliceMut<T> => GuardMut<'c, R::ExclusiveSlice<'c, T>>, EXCLUSIVE,
+        |runtime, v, at| GuardMut::of_the_entry(runtime.exclusive_slice(v, at));
+    [] ByStr => Guard<'c, R::SharedStr<'c>>, SHARED,
+        |runtime, v, at| Guard::of_the_entry(runtime.shared_str(v, at));
+    [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None,
+        |_runtime, v, _at| Callback::of_the_entry(v);
 }
 
 impl<P> sealed::Sealed for ByProjection<P> {}
 impl<P> sealed::Sealed for ByProjectionMut<P> {}
-impl<A, U, E> sealed::Sealed for ByCallback<A, U, E> {}
 impl<F, I> sealed::Sealed for ByInstance<F, I> {}
 impl<F, Ts, L> sealed::Sealed for ByInstanceOf<F, Ts, L> {}
 
+/// The projection modes wait on a structural decision: `Projected` names its
+/// views but gives no way to build one, and a guard at each leaf is made only
+/// here, so neither `shape!` in another crate nor this module can compose one.
 impl<R: Runtime, P: Projected<R>> Mode<R> for ByProjection<P> {
     type Opened<'c> = P::Ref<'c>
     where
         Self: 'c,
         R: 'c;
+
+    const LENT: Option<Mutability> = SHARED;
+
+    fn open<'c>(_runtime: &'c R, _v: R::Value, _at: Settled<'c>) -> P::Ref<'c>
+    where
+        Self: 'c,
+        R: 'c,
+    {
+        todo!("structural gap: Projected gives no way to build its projection")
+    }
 }
 
 impl<R: Runtime, P: Projected<R>> Mode<R> for ByProjectionMut<P> {
@@ -196,13 +268,16 @@ impl<R: Runtime, P: Projected<R>> Mode<R> for ByProjectionMut<P> {
     where
         Self: 'c,
         R: 'c;
-}
 
-impl<R: Runtime, A, U, E> Mode<R> for ByCallback<A, U, E> {
-    type Opened<'c> = Callback<'c, 'c, A, U, E, R>
+    const LENT: Option<Mutability> = EXCLUSIVE;
+
+    fn open<'c>(_runtime: &'c R, _v: R::Value, _at: Settled<'c>) -> P::Mut<'c>
     where
         Self: 'c,
-        R: 'c;
+        R: 'c,
+    {
+        todo!("structural gap: Projected gives no way to build its projection")
+    }
 }
 
 impl<R: Instances, F: Family<Receiver = Steps>, I> RequirementMode<R> for ByInstance<F, I> {
@@ -210,6 +285,14 @@ impl<R: Instances, F: Family<Receiver = Steps>, I> RequirementMode<R> for ByInst
     where
         Self: 'c,
         R: 'c;
+
+    fn open<'c>(_runtime: &'c R, _impl_value: R::Value, _at: Settled<'c>) -> Instance<R, F, I>
+    where
+        Self: 'c,
+        R: 'c,
+    {
+        todo!("the impl cut: an Instance pairs the impl with the receiver it was chosen for")
+    }
 }
 
 impl<R: Instances, F: Family<Receiver = Reads>, Ts, L> RequirementMode<R> for ByInstanceOf<F, Ts, L> {
@@ -217,11 +300,19 @@ impl<R: Instances, F: Family<Receiver = Reads>, Ts, L> RequirementMode<R> for By
     where
         Self: 'c,
         R: 'c;
+
+    fn open<'c>(_runtime: &'c R, impl_value: R::Value, _at: Settled<'c>) -> InstanceOf<R, F, Ts, L>
+    where
+        Self: 'c,
+        R: 'c,
+    {
+        InstanceOf::of_the_entry(impl_value)
+    }
 }
 
 /// Tuples of modes up to twelve, the arity the crossing's tuples stop at.
 macro_rules! tuples {
-    ($($n:literal ($($m:ident),*))+) => {$(
+    ($($n:literal ($($m:ident $v:ident),*))+) => {$(
         impl<$($m),*> sealed::Sealed for ($($m,)*) {}
 
         impl<R: Runtime, $($m: Mode<R>),*> Args<R> for ($($m,)*) {
@@ -230,6 +321,24 @@ macro_rules! tuples {
             where
                 Self: 'c,
                 R: 'c;
+
+            #[allow(unused_variables, clippy::unused_unit)]
+            fn open<'c>(
+                runtime: &'c R,
+                args: &'c [R::Value],
+                lent: &[Option<Mutability>],
+                at: Settled<'c>,
+            ) -> Self::Opened<'c>
+            where
+                Self: 'c,
+                R: 'c,
+            {
+                let run: &Self::Run = args.try_into().expect("a call passes one value per parameter");
+                let modes: [Option<Mutability>; $n] = [$($m::LENT),*];
+                debug_assert_eq!(lent, modes, "the site passes each argument as its parameter's mode opens it");
+                let [$($v),*] = *run;
+                ($($m::open(runtime, $v, at),)*)
+            }
         }
 
         impl<R: Runtime, $($m: RequirementMode<R>),*> Requires<R> for ($($m,)*) {
@@ -237,22 +346,33 @@ macro_rules! tuples {
             where
                 Self: 'c,
                 R: 'c;
+
+            #[allow(unused_variables, clippy::unused_unit)]
+            fn open<'c>(runtime: &'c R, impls: &'c [R::Value], at: Settled<'c>) -> Self::Opened<'c>
+            where
+                Self: 'c,
+                R: 'c,
+            {
+                let run: &[R::Value; $n] = impls.try_into().expect("a site chooses one impl per requirement");
+                let [$($v),*] = *run;
+                ($($m::open(runtime, $v, at),)*)
+            }
         }
     )+};
 }
 
 tuples! {
     0 ()
-    1 (A)
-    2 (A, B)
-    3 (A, B, C)
-    4 (A, B, C, D)
-    5 (A, B, C, D, E)
-    6 (A, B, C, D, E, F)
-    7 (A, B, C, D, E, F, G)
-    8 (A, B, C, D, E, F, G, H)
-    9 (A, B, C, D, E, F, G, H, I)
-    10 (A, B, C, D, E, F, G, H, I, J)
-    11 (A, B, C, D, E, F, G, H, I, J, K)
-    12 (A, B, C, D, E, F, G, H, I, J, K, L)
+    1 (A a)
+    2 (A a, B b)
+    3 (A a, B b, C c)
+    4 (A a, B b, C c, D d)
+    5 (A a, B b, C c, D d, E e)
+    6 (A a, B b, C c, D d, E e, F f)
+    7 (A a, B b, C c, D d, E e, F f, G g)
+    8 (A a, B b, C c, D d, E e, F f, G g, H h)
+    9 (A a, B b, C c, D d, E e, F f, G g, H h, I i)
+    10 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j)
+    11 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k)
+    12 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k, L l)
 }

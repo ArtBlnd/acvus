@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 use crate::boundary::entry::{Entry, Settled};
 use crate::done::Done;
-use crate::context::{Awaited, Returning};
+use crate::context::{Awaited, Opens, Returning};
 use crate::runtime::{Crosses, Runtime};
 
 /// A callback of function type `Fn(A) -> U` at effect `E`, lent to the call
@@ -18,6 +18,12 @@ use crate::runtime::{Crosses, Runtime};
 pub struct Callback<'c, 'a, A, U, E, R: Runtime> {
     closure: R::Value,
     _at: PhantomData<(fn(&'c ()) -> &'c (), &'a (), fn(A) -> U, E)>,
+}
+
+impl<A, U, E, R: Runtime> Callback<'_, '_, A, U, E, R> {
+    pub(crate) fn of_the_entry(closure: R::Value) -> Self {
+        Callback { closure, _at: PhantomData }
+    }
 }
 
 /// A type's form over the loan `'l` a returning call lends: the Rust type it is
@@ -112,7 +118,7 @@ where
     /// A returning call: the arguments lent for `'l`, the result borrowing at
     /// most what they lend.
     pub fn call<'l>(&'l self, cx: &'l Returning<'c, R>, args: A::Lent<'l>) -> U::At<'l> {
-        todo!("call_now at the call's Settled")
+        cx.runtime().call_now::<R, A, U>(self.closure, args, Settled::of_the_entry())
     }
 }
 
@@ -125,7 +131,7 @@ where
     /// An awaited call: the arguments moved, the result borrowing nothing
     /// (crossing §3-§4).
     pub fn call_await(&self, cx: &Awaited<'c, R>, args: A::Moved) -> impl Future<Output = U> + Send {
-        async { todo!("call_later at the call's Settled") }
+        cx.runtime().call_later::<R, A, U>(self.closure, args, Settled::of_the_entry())
     }
 }
 

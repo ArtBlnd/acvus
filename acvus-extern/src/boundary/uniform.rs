@@ -4,6 +4,7 @@
 use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
+use crate::boundary::entry::Settled;
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
 use crate::context::Opens;
 use crate::runtime::{Crosses, Runtime};
@@ -42,17 +43,24 @@ impl<R: Runtime, X> Uniform<R, X> {
 impl<R: Runtime, T: Crosses> Uniform<R, T> {
     /// Lends the value in place within the call `cx` belongs to.
     pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> R::Shared<'c, T> {
-        todo!("the runtime's shared guard over the held value, under the call's Settled")
+        cx.runtime().shared(*self.value, Settled::of_the_entry())
     }
 
     pub fn open_mut<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> R::Exclusive<'c, T> {
-        todo!("the runtime's exclusive guard over the held value, under the call's Settled")
+        cx.runtime().exclusive(*self.value, Settled::of_the_entry())
     }
 
     /// The value itself: the one place the runtime's `take` is called. A
     /// `Uniform` only dropped is released and never taken.
     pub fn into_inner<'c>(self, cx: &'c impl Opens<'c, R>) -> T {
-        todo!("R::take of the held value under the call's Settled, without the release")
+        self.take(cx.runtime(), Settled::of_the_entry())
+    }
+
+    /// The value moved out: the take consumes the value's storage, so the
+    /// holder's release is skipped.
+    pub(crate) fn take(self, runtime: &R, at: Settled<'_>) -> T {
+        let held = ManuallyDrop::new(self);
+        runtime.take(*held.value, at)
     }
 }
 
@@ -60,7 +68,10 @@ impl<R: Runtime, S: Projected<R>> Uniform<R, S> {
     /// The shape's owned view: the aggregate taken apart once, each part then
     /// held by its own `Uniform`.
     pub fn into_view<'c>(self, cx: &'c impl Opens<'c, R>) -> S::Owned {
-        todo!("take_tuple, take_object or take_variant under the call's Settled, the parts into S::Owned")
+        todo!(
+            "structural gap: Projected names S::Owned but no way to build it from the parts, nor which of \
+             take_tuple, take_object or take_variant S is taken apart by"
+        )
     }
 }
 

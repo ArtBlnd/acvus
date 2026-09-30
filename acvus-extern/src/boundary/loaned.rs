@@ -3,6 +3,7 @@
 
 use std::marker::PhantomData;
 
+use crate::boundary::entry::Settled;
 use crate::context::Opens;
 use crate::runtime::{Crosses, Runtime};
 
@@ -23,12 +24,12 @@ pub struct LoanedMut<'a, T, R: Runtime> {
 impl<T: Crosses, R: Runtime> Loaned<'_, T, R> {
     /// Opens the loan within the call `cx` belongs to.
     pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> R::Shared<'c, T> {
-        todo!("read the reference value at T under a Settled this loan proves")
+        cx.runtime().shared(self.reference, Settled::of_the_entry())
     }
 }
 
 impl<T: Crosses, R: Runtime> LoanedMut<'_, T, R> {
     pub fn open<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> R::Exclusive<'c, T> {
-        todo!("read the reference value at T under a Settled this loan proves")
+        cx.runtime().exclusive(self.reference, Settled::of_the_entry())
     }
 }

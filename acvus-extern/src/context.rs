@@ -4,10 +4,10 @@
 
 use std::ops::{Deref, DerefMut};
 
-use crate::boundary::entry::SiteShape;
+use crate::boundary::entry::{Settled, SiteShape};
 use crate::done::Done;
 use crate::guard::{Guard, GuardMut};
-use crate::runtime::{Crosses, Runtime};
+use crate::runtime::{Crosses, RefTarget, Runtime};
 
 pub struct Returning<'c, R: Runtime> {
     runtime: &'c R,
@@ -24,18 +24,36 @@ mod sealed {
 }
 
 /// A context a retained loan may be opened in: either body's.
-pub trait Opens<'c, R: Runtime>: sealed::Sealed {}
+pub trait Opens<'c, R: Runtime>: sealed::Sealed {
+    /// The runtime the call runs at.
+    #[doc(hidden)]
+    fn runtime(&self) -> &'c R;
+}
 
 impl<R: Runtime> sealed::Sealed for Returning<'_, R> {}
 impl<R: Runtime> sealed::Sealed for Awaited<'_, R> {}
-impl<'c, R: Runtime> Opens<'c, R> for Returning<'c, R> {}
-impl<'c, R: Runtime> Opens<'c, R> for Awaited<'c, R> {}
+
+impl<'c, R: Runtime> Opens<'c, R> for Returning<'c, R> {
+    fn runtime(&self) -> &'c R {
+        self.runtime
+    }
+}
+
+impl<'c, R: Runtime> Opens<'c, R> for Awaited<'c, R> {
+    fn runtime(&self) -> &'c R {
+        self.runtime
+    }
+}
 
 impl<'c, R: Runtime> Returning<'c, R> {
+    pub(crate) fn of_the_entry(runtime: &'c R, site: &'c SiteShape<R>) -> Self {
+        Returning { runtime, site }
+    }
+
     /// Finishes the call with its result, crossed at the site's settled result
     /// type.
     pub fn finish<T: Crosses>(self, value: T) -> Done<R> {
-        todo!("give the value at the settled result type")
+        Done::of(self.runtime.give(value, Settled::of_the_entry()))
     }
 
     /// Finishes the call with a result that borrows a part of what the call
@@ -47,7 +65,9 @@ impl<'c, R: Runtime> Returning<'c, R> {
         G: Deref,
         P: ?Sized,
     {
-        todo!("runtime.reference(RefTarget::Shared(part(&guard)), settled), then drop the guard")
+        let value = self.runtime.reference(RefTarget::Shared(part(&*guard)), Settled::of_the_entry());
+        drop(guard);
+        Done::of(value)
     }
 
     pub fn finish_lent_mut<G, P>(
@@ -59,13 +79,20 @@ impl<'c, R: Runtime> Returning<'c, R> {
         G: DerefMut,
         P: ?Sized,
     {
-        todo!("runtime.reference(RefTarget::Exclusive(part(&mut guard)), settled), then drop the guard")
+        let mut guard = guard;
+        let value = self.runtime.reference(RefTarget::Exclusive(part(&mut *guard)), Settled::of_the_entry());
+        drop(guard);
+        Done::of(value)
     }
 }
 
 impl<'c, R: Runtime> Awaited<'c, R> {
+    pub(crate) fn of_the_entry(runtime: &'c R, site: &'c SiteShape<R>) -> Self {
+        Awaited { runtime, site }
+    }
+
     pub fn finish<T: Crosses>(self, value: T) -> Done<R> {
-        todo!("give the value at the settled result type")
+        Done::of(self.runtime.give(value, Settled::of_the_entry()))
     }
 
     pub fn sleep(&self, d: std::time::Duration) -> impl Future<Output = ()> + Send {
