@@ -11,12 +11,12 @@ use crate::runtime::{Crosses, Runtime};
 
 pub struct Returning<'c, R: Runtime> {
     runtime: &'c R,
-    site: &'c SiteShape,
+    site: &'c SiteShape<R>,
 }
 
 pub struct Awaited<'c, R: Runtime> {
     runtime: &'c R,
-    site: &'c SiteShape,
+    site: &'c SiteShape<R>,
 }
 
 mod sealed {

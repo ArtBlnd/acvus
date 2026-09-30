@@ -7,6 +7,7 @@ use std::mem::ManuallyDrop;
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
 use crate::context::Opens;
 use crate::runtime::{Crosses, Runtime};
+use crate::shape::Projected;
 
 /// The permission to release one value, made only by an owning holder's drop.
 pub struct Releasing {
@@ -52,6 +53,14 @@ impl<R: Runtime, T: Crosses> Uniform<R, T> {
     /// `Uniform` only dropped is released and never taken.
     pub fn into_inner<'c>(self, cx: &'c impl Opens<'c, R>) -> T {
         todo!("R::take of the held value under the call's Settled, without the release")
+    }
+}
+
+impl<R: Runtime, S: Projected<R>> Uniform<R, S> {
+    /// The shape's owned view: the aggregate taken apart once, each part then
+    /// held by its own `Uniform`.
+    pub fn into_view<'c>(self, cx: &'c impl Opens<'c, R>) -> S::Owned {
+        todo!("take_tuple, take_object or take_variant under the call's Settled, the parts into S::Owned")
     }
 }
 

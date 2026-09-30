@@ -9,31 +9,123 @@ use crate::done::Done;
 use crate::context::{Awaited, Returning};
 use crate::runtime::{Crosses, Runtime};
 
-/// A callback of function type `Fn(A) -> U` at effect `E`; `'a` is the loans
-/// its captures hold. Only the entry makes one.
-pub struct Callback<'a, A, U, E, R: Runtime> {
+/// A callback of function type `Fn(A) -> U` at effect `E`, lent to the call
+/// `'c` (limitations §3: it carries the call's lifetime, so no handler keeps
+/// it); `'a` is the loans its captures hold. Only the entry makes one. `A` and
+/// `U` are loan forms: a returning call lends its arguments for `'l` and its
+/// result may borrow what it lent, no longer (crossing §4); an awaited call
+/// moves its arguments and its result borrows nothing.
+pub struct Callback<'c, 'a, A, U, E, R: Runtime> {
     closure: R::Value,
-    _at: PhantomData<(&'a (), fn(A) -> U, E)>,
+    _at: PhantomData<(fn(&'c ()) -> &'c (), &'a (), fn(A) -> U, E)>,
+}
+
+/// A type's form over the loan `'l` a returning call lends: the Rust type it is
+/// at `'l`. A crossing type is itself; `Lent<T>` is `&'l T` and `LentMut<T>` is
+/// `&'l mut T`; `Opt`, `Res` and `Tup` build forms from forms, so every result
+/// that borrows what the call lent is written, at any depth.
+pub trait LoanForm {
+    type At<'l>;
+}
+
+/// `&'l T`: a part of what the returning call lent, shared.
+pub struct Lent<T: ?Sized>(PhantomData<fn() -> *const T>);
+/// `&'l mut T`: a part of what the returning call lent, exclusively.
+pub struct LentMut<T: ?Sized>(PhantomData<fn() -> *const T>);
+/// `Option` of a form.
+pub struct Opt<F>(PhantomData<fn() -> F>);
+/// `Result` of two forms.
+pub struct Res<F, G>(PhantomData<fn() -> (F, G)>);
+/// A tuple of forms, `Tup<(F, G)>`.
+pub struct Tup<Fs>(PhantomData<fn() -> Fs>);
+
+impl<T: Crosses> LoanForm for T {
+    type At<'l> = T;
+}
+
+impl<T: ?Sized + 'static> LoanForm for Lent<T> {
+    type At<'l> = &'l T;
+}
+
+impl<T: ?Sized + 'static> LoanForm for LentMut<T> {
+    type At<'l> = &'l mut T;
+}
+
+impl<F: LoanForm> LoanForm for Opt<F> {
+    type At<'l> = Option<F::At<'l>>;
+}
+
+impl<F: LoanForm, G: LoanForm> LoanForm for Res<F, G> {
+    type At<'l> = Result<F::At<'l>, G::At<'l>>;
 }
 
 mod sealed {
     pub trait Sealed {}
 }
 
-/// A callback's parameters, a tuple: lent as the handler passes them to a
-/// returning call, or moved into an awaited one.
+/// A callback's parameters, a tuple of loan forms: lent together for `'l` to a
+/// returning call, or, where every one is a crossing type, moved into an
+/// awaited one.
 pub trait CallArgs<R: Runtime>: sealed::Sealed {
     type Lent<'l>;
     type Moved;
 }
 
-impl<'a, A: CallArgs<R>, U: Crosses, E, R: CallsBack> Callback<'a, A, U, E, R> {
-    pub fn call<'l>(&self, cx: &Returning<'_, R>, args: A::Lent<'l>) -> U {
-        todo!("call_now at a Settled the callback proves")
-    }
+/// Tuples of loan forms up to twelve, the arity the crossing's tuples stop at.
+macro_rules! forms {
+    ($(($($f:ident),*))+) => {$(
+        impl<$($f: LoanForm),*> sealed::Sealed for ($($f,)*) {}
 
-    pub fn call_await(&self, cx: &Awaited<'_, R>, args: A::Moved) -> impl Future<Output = U> + Send {
-        async { todo!("call_later at a Settled the callback proves") }
+        impl<R: Runtime, $($f: LoanForm),*> CallArgs<R> for ($($f,)*) {
+            type Lent<'l> = ($($f::At<'l>,)*);
+            type Moved = ($($f::At<'static>,)*);
+        }
+
+        impl<$($f: LoanForm),*> LoanForm for Tup<($($f,)*)> {
+            type At<'l> = ($($f::At<'l>,)*);
+        }
+    )+};
+}
+
+forms! {
+    ()
+    (A)
+    (A, B)
+    (A, B, C)
+    (A, B, C, D)
+    (A, B, C, D, E)
+    (A, B, C, D, E, F)
+    (A, B, C, D, E, F, G)
+    (A, B, C, D, E, F, G, H)
+    (A, B, C, D, E, F, G, H, I)
+    (A, B, C, D, E, F, G, H, I, J)
+    (A, B, C, D, E, F, G, H, I, J, K)
+    (A, B, C, D, E, F, G, H, I, J, K, L)
+}
+
+impl<'c, 'a, A, U, E, R> Callback<'c, 'a, A, U, E, R>
+where
+    A: CallArgs<R>,
+    U: LoanForm,
+    R: CallsBack,
+{
+    /// A returning call: the arguments lent for `'l`, the result borrowing at
+    /// most what they lend.
+    pub fn call<'l>(&'l self, cx: &'l Returning<'c, R>, args: A::Lent<'l>) -> U::At<'l> {
+        todo!("call_now at the call's Settled")
+    }
+}
+
+impl<'c, 'a, A, U, E, R> Callback<'c, 'a, A, U, E, R>
+where
+    A: CallArgs<R>,
+    U: Crosses,
+    R: CallsBack,
+{
+    /// An awaited call: the arguments moved, the result borrowing nothing
+    /// (crossing §3-§4).
+    pub fn call_await(&self, cx: &Awaited<'c, R>, args: A::Moved) -> impl Future<Output = U> + Send {
+        async { todo!("call_later at the call's Settled") }
     }
 }
 
@@ -41,11 +133,11 @@ impl<'a, A: CallArgs<R>, U: Crosses, E, R: CallsBack> Callback<'a, A, U, E, R> {
 /// arguments are typed at the runtime the call runs at, `R`: the runtime
 /// itself, or the adapter over it (K15), whose values are the runtime's.
 pub trait CallsBack: Runtime {
-    fn call_now<R, A, U>(&self, closure: Self::Value, args: A::Lent<'_>, at: Settled<'_>) -> U
+    fn call_now<'l, R, A, U>(&self, closure: Self::Value, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
     where
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
-        U: Crosses;
+        U: LoanForm;
     fn call_later<R, A, U>(&self, closure: Self::Value, args: A::Moved, at: Settled<'_>) -> impl Future<Output = U> + Send
     where
         R: Runtime<Value = Self::Value>,

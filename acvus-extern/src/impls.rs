@@ -58,6 +58,10 @@ pub trait Family: 'static {
     /// The result; it may borrow the receiver `'r` where the function's
     /// flows say so.
     type Output<'r, R: Runtime>;
+    /// The glue's function pointer, typed at the function type for task `K`:
+    /// it takes the receiver as the family lends it and the rest, and gives
+    /// the result as a runtime value, which the requirer reads at its own type
+    /// through the runtime (impls §3).
     type Glue<R: Runtime, K: TaskKind>: Copy + Send + Sync + 'static;
 }
 

@@ -18,7 +18,7 @@ use std::time::Duration;
 use acvus_utils::Interner;
 
 use crate::boundary::entry::Settled;
-use crate::callback::{CallArgs, CallsBack, RustFn, RustFns};
+use crate::callback::{CallArgs, CallsBack, LoanForm, RustFn, RustFns};
 use crate::impls::task::TaskKind;
 use crate::boundary::instance::InstanceEntry;
 use crate::impls::{Family, Instances, Task};
@@ -294,11 +294,11 @@ impl<X: Instances + Validate> Instances for Adapter<X> {
 }
 
 impl<X: CallsBack + Validate> CallsBack for Adapter<X> {
-    fn call_now<R, A, U>(&self, closure: Self::Value, args: A::Lent<'_>, at: Settled<'_>) -> U
+    fn call_now<'l, R, A, U>(&self, closure: Self::Value, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
     where
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
-        U: Crosses,
+        U: LoanForm,
     {
         todo!("validate the closure, then X's call_now")
     }

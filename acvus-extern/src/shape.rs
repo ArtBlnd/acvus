@@ -4,8 +4,12 @@
 
 use crate::runtime::Runtime;
 
-/// The projections of a transparent structured type, shared and exclusive.
+/// A shape's views (types §1): by reference its projections, shared and
+/// exclusive, a guard at each leaf; by value `Owned`, a struct or an enum whose
+/// every field is a `Uniform`, so each part is released or taken on its own
+/// (runtime contract §1).
 pub trait Projected<R: Runtime> {
     type Ref<'a>;
     type Mut<'a>;
+    type Owned;
 }
