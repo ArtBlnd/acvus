@@ -46,7 +46,7 @@ use crate::passes::domain::{Bound, Interval, IntervalDomain, Polynomial, Symbol}
 use crate::ty::{CastTy, Concrete, TyKind, Types};
 
 /// How a value evolves.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Evolution {
     /// The same element of the ring on every iteration of every loop around
     /// the value's definition that it is read in.
@@ -59,7 +59,7 @@ pub enum Evolution {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Recurrence {
     pub over: LoopId,
     pub start: Evolution,

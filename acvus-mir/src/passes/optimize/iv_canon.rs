@@ -30,7 +30,7 @@
 //! changes; extern-defined types are untouched (compilation §3).
 
 use acvus_ast::Span;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::ir::ValueId;
 use crate::ir::cfg::edit::{CannotEditLoop, Editor, Loop, Position};
@@ -38,7 +38,7 @@ use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, InstId, Module,
 use crate::passes::analysis::{AnalysisManager, Dominators, Evolution, Evolutions, IntervalValues, LoopId, LoopTree, ScalarEvolution, TripCount};
 use crate::passes::edit_facts::EditFacts;
 use crate::passes::optimize::expand::Expander;
-use crate::passes::optimize::{BodyTransform, inner_first};
+use crate::passes::optimize::{BodyTransform, dominator_preorder, inner_first, nearest_common_dominator};
 use crate::ty::{IntTy, Ty, TyKind};
 
 pub struct IvCanon;
@@ -57,7 +57,7 @@ impl BodyTransform for IvCanon {
         let intervals = am.get::<IntervalValues>(module, body);
         let dominators = am.get::<Dominators>(module, body);
         let len_ty = module.types_mut().intern(TyKind::Int(IntTy::U64));
-        let expander = Expander { evolutions: &evolutions, loops: &loops, intervals: &intervals, dominators: &dominators, len_ty };
+        let expander = Expander::new(&evolutions, &loops, &intervals, &dominators, len_ty);
 
         let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Loop>::new(module, body, &mut facts);
@@ -118,7 +118,7 @@ impl Rewrite<'_> {
             let header_params = editor.body().block(self.counted.header).params();
             let index = header_params.iter().position(|held| *held == param).expect("a parameter before it left the join is the header's");
             let steps = self.steps(editor.body(), index);
-            for site in distinct_users(editor.body(), param) {
+            for site in self.in_dominance_order(editor.body(), distinct_users(editor.body(), param)) {
                 if is_step(site, &steps) || !self.in_the_body(editor.body(), site) {
                     continue;
                 }
@@ -131,16 +131,17 @@ impl Rewrite<'_> {
                 }
             }
             if distinct_users(editor.body(), param).iter().all(|site| is_step(*site, &steps)) {
-                self.leave_the_join(editor, param, &evolution);
+                self.leave_the_join(editor, param, &evolution, &steps);
             }
         }
     }
 
     /// `param`, read by its steps alone, leaves the join, its steps reading
-    /// `S + k·D` made at the start of the body, which dominates every step
-    /// the body holds; a step in the header keeps it.
-    fn leave_the_join(&self, editor: &mut Editor<'_, Loop>, param: ValueId, evolution: &Evolution) {
-        let place = block_start(editor, self.counted.loop_body);
+    /// `S + k·D` made at the latest point that dominates every step, where
+    /// a value made for an earlier use may already stand; where that point
+    /// is not in the body, the counter does not reach it and `param` stays.
+    fn leave_the_join(&self, editor: &mut Editor<'_, Loop>, param: ValueId, evolution: &Evolution, steps: &FxHashSet<InstId>) {
+        let place = self.dominating_every_step(editor, steps);
         let Some(made) = self.expander.expand(editor, evolution, editor.body().ty_of(param), place.at, place.span) else {
             return;
         };
@@ -151,6 +152,40 @@ impl Rewrite<'_> {
             Ok(()) | Err(CannotEditLoop::DoesNotDominate(_)) => {}
             Err(refusal) => panic!("a header parameter of a loop in F2 read by its steps alone leaves the join, but {param:?} is refused: {refusal:?}"),
         }
+    }
+
+    /// The latest point that dominates every step: in the nearest block
+    /// that dominates all of theirs, before the first step it holds, or at
+    /// its end; the body's start where there is no step.
+    fn dominating_every_step(&self, editor: &Editor<'_, Loop>, steps: &FxHashSet<InstId>) -> MadeAt {
+        let body = editor.body();
+        let blocks = steps.iter().map(|step| body.block_of(*step));
+        let common = blocks.fold(None, |common, block| match common {
+            None => Some(block),
+            Some(common) => nearest_common_dominator(self.dominators, common, block),
+        });
+        let Some(common) = common else {
+            return block_start(editor, self.counted.loop_body);
+        };
+        let first_step = editor.insts_of(common).into_iter().find(|inst| steps.contains(&inst.id()));
+        match first_step {
+            Some(step) => before_site(editor, Site::Inst(step.id())),
+            None => MadeAt { at: Position::End(common), span: body.block(common).terminator_span() },
+        }
+    }
+
+    /// `sites` in a preorder of the dominator tree, and in order within a
+    /// block, the terminator last, so a value made for one use stands where
+    /// the uses after it can reuse it.
+    fn in_dominance_order(&self, body: &Body, mut sites: Vec<Site>) -> Vec<Site> {
+        let rank: FxHashMap<BlockId, usize> =
+            dominator_preorder(body, self.dominators).into_iter().enumerate().map(|(rank, block)| (block, rank)).collect();
+        let position = |site: Site| match site {
+            Site::Inst(inst) => body.block(body.block_of(inst)).insts().position(|held| held.id() == inst).unwrap_or(usize::MAX),
+            Site::Term(_) => usize::MAX,
+        };
+        sites.sort_by_key(|site| (rank.get(&site_block(body, *site)).copied().unwrap_or(usize::MAX), position(*site)));
+        sites
     }
 
     /// The instructions that make the header parameter at `index` on the
@@ -545,6 +580,49 @@ mod tests {
         let Op::BinOp { left, .. } = defining_op(body, wq) else { panic!("wq stays a product") };
         assert_eq!(*left, q, "{}", f.snapshot(id));
         assert_eq!(body.block(header).params(), [q], "{}", f.snapshot(id));
+        assert_whole(&f.module, id);
+    }
+
+    /// Two uses of `i` in the body, `w = i * two` and `v = i + two`: the
+    /// first makes `k as i64` before it, which dominates the second, so
+    /// both read that one value.
+    #[test]
+    fn two_uses_of_one_recurrence_read_one_made_value() {
+        let mut f = Fixture::new();
+        let (int, nx) = (f.int, f.name("x"));
+        let u64 = f.module.types_mut().intern(TyKind::Int(IntTy::U64));
+        let mut builder = f.module.build_body(false, int);
+        let x = builder.param(nx, int, Span::ZERO);
+        let count = count(&mut builder, x, int, u64);
+        let two = builder.push(int_const(2), int, Span::ZERO);
+        let header = builder.new_block(&[int]);
+        let i = builder.block_params(header)[0];
+        let loop_body = builder.new_block(&[u64]);
+        let exit = builder.new_block(&[]);
+        builder.terminate(jump(header, vec![count.zero]), Span::ZERO);
+        builder.switch_to(header);
+        builder.terminate(range_loop(count.zu, count.n, loop_body, exit), Span::ZERO);
+        builder.switch_to(loop_body);
+        let w = builder.push(binary(BinOp::Mul, i, two), int, Span::ZERO);
+        let v = builder.push(add(i, two), int, Span::ZERO);
+        let one = builder.push(int_const(1), int, Span::ZERO);
+        let i2 = builder.push(add(i, one), int, Span::ZERO);
+        builder.terminate(jump(header, vec![i2]), Span::ZERO);
+        builder.switch_to(exit);
+        builder.terminate(ret(count.j), Span::ZERO);
+        let id = builder.seal().expect("the body has no open state");
+
+        f.run::<IvCanon>(id);
+
+        let body = f.module.body(id);
+        let k = body.block(loop_body).params()[0];
+        let (Op::BinOp { left: read_by_w, .. }, Op::BinOp { left: read_by_v, .. }) = (defining_op(body, w), defining_op(body, v)) else {
+            panic!("w and v stay binary operations")
+        };
+        assert_eq!(read_by_w, read_by_v, "{}", f.snapshot(id));
+        assert!(is_counter_cast(body, *read_by_w, k, IntTy::I64), "{}", f.snapshot(id));
+        let casts = body.block(loop_body).insts().filter(|inst| matches!(inst.op(), Op::Cast { .. })).count();
+        assert_eq!(casts, 1, "one made value serves every use, the step's included:\n{}", f.snapshot(id));
         assert_whole(&f.module, id);
     }
 }

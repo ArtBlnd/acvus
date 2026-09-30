@@ -15,8 +15,16 @@
 //! `p + (S' - S)`. The starts are made as evolutions in turn.
 //!
 //! Every value made is one the run as written did not compute, so each,
-//! every partial result included, is made only where the interval domain
-//! proves it within the width asked for (undefined behaviour §2). The
+//! every partial result included, is made only where it is proven within the
+//! width asked for (undefined behaviour §2): by the interval domain, or, for
+//! a value that is a recurrence `{S, +, D}` of a loop with a count `n`, exact
+//! or at most, by its own range there, `S + [0, n - 1]·D` where the loop's
+//! body dominates the position and `S + [0, n]·D` elsewhere inside the loop
+//! (ScalarEvolution's range of an add recurrence).
+//!
+//! An expansion made before, of the same evolution in the same type, whose
+//! value dominates the new position is reused (SCEVExpander's inserted
+//! expressions), so one value serves every use it reaches. The
 //! expansion answers none where a value it needs does not dominate the
 //! position, where neither a counter nor a same-step parameter makes a
 //! recurrence, where a value is not proven within the width, or where the
@@ -26,28 +34,42 @@
 //! for a loop nesting depth d, and O(the header's parameters) per recurrence
 //! to find a same-step parameter.
 
+use std::cell::RefCell;
+
 use acvus_ast::{Literal, Span};
+use rustc_hash::FxHashMap;
 
 use crate::ir::cfg::edit::{DominanceFacts, Editor, Position, ReplacesValues};
 use crate::ir::cfg::{Body, Definition, Op, Terminator};
 use crate::ir::{BinOp, ValueId};
-use crate::passes::analysis::{Dominators, Evolution, Evolutions, LoopTree, Point, Recurrence, SparseFacts};
+use crate::passes::analysis::{Dominators, Evolution, Evolutions, LoopTree, Point, Recurrence, SparseFacts, TripCount};
 use crate::passes::domain::{Interval, IntervalDomain, JoinSemiLattice, Polynomial, Symbol};
 use crate::ty::{CastTy, IntTy, Ty, TyKind};
 
-/// What an expansion reads. `dominators` is the manager's for the body the
-/// editor holds, computed before the edits made since: an inserted
-/// instruction, a replaced use, a replaced loop head and a removed parameter
-/// keep every edge, so it still answers for the body. `evolutions` and
-/// `intervals` hold the facts of every value that existed when they were
-/// computed, which are the values an expansion reads.
+/// What an expansion reads, and what it has made. `dominators` is the
+/// manager's for the body the editor holds, computed before the edits made
+/// since: an inserted instruction, a replaced use, a replaced loop head and a
+/// removed parameter keep every edge, so it still answers for the body.
+/// `evolutions` and `intervals` hold the facts of every value that existed
+/// when they were computed, which are the values an expansion reads.
 pub(in crate::passes) struct Expander<'f> {
-    pub evolutions: &'f Evolutions,
-    pub loops: &'f LoopTree,
-    pub intervals: &'f SparseFacts<IntervalDomain>,
-    pub dominators: &'f Dominators,
+    evolutions: &'f Evolutions,
+    loops: &'f LoopTree,
+    intervals: &'f SparseFacts<IntervalDomain>,
+    dominators: &'f Dominators,
     /// `u64`, the type of a slice's length.
-    pub len_ty: Ty,
+    len_ty: Ty,
+    /// Every value made so far, by what it is: an expansion whose value
+    /// dominates the new position is reused (SCEVExpander's inserted
+    /// expressions), so one value serves every use it reaches.
+    made: RefCell<FxHashMap<Expansion, Vec<ValueId>>>,
+}
+
+/// An evolution made in a type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Expansion {
+    evolution: Evolution,
+    ty: Ty,
 }
 
 /// A value an expansion reads as it is, cast to the width where its own
@@ -77,9 +99,20 @@ impl Planned {
     }
 }
 
-impl Expander<'_> {
-    /// `evolution`'s value at `at`, made in `ty`, an integer type; none where
-    /// it cannot be made there, as the module doc states.
+impl<'f> Expander<'f> {
+    pub fn new(
+        evolutions: &'f Evolutions,
+        loops: &'f LoopTree,
+        intervals: &'f SparseFacts<IntervalDomain>,
+        dominators: &'f Dominators,
+        len_ty: Ty,
+    ) -> Expander<'f> {
+        Expander { evolutions, loops, intervals, dominators, len_ty, made: RefCell::default() }
+    }
+
+    /// `evolution`'s value at `at`, made in `ty`, an integer type, or one
+    /// made before that dominates `at`; none where it cannot be made there,
+    /// as the module doc states.
     ///
     /// # Panics
     /// `ty` is not an integer type.
@@ -92,8 +125,15 @@ impl Expander<'_> {
             panic!("an evolution is made in an integer type, not {:?}", editor.types().kind(ty))
         };
         let planner = Planner { expander: self, body: editor.body(), range: Interval::of_width(width), at };
+        let expansion = Expansion { evolution: evolution.clone(), ty };
+        let reused = self.made.borrow().get(&expansion).and_then(|made| made.iter().copied().find(|value| planner.dominates(*value)));
+        if reused.is_some() {
+            return reused;
+        }
         let planned = planner.evolution(evolution)?;
-        Some(Made { editor, ty, width, at, span, len_ty: self.len_ty }.make(planned))
+        let value = Made { editor, ty, width, at, span, len_ty: self.len_ty }.make(planned);
+        self.made.borrow_mut().entry(expansion).or_default().push(value);
+        Some(value)
     }
 }
 
@@ -214,10 +254,63 @@ impl Planner<'_> {
             return None;
         }
         let interval = match leaf {
-            Leaf::Value(value) => self.expander.intervals.of(value).clone(),
+            Leaf::Value(value) => {
+                let domain = self.expander.intervals.of(value).clone();
+                match self.expander.evolutions.of(value) {
+                    Evolution::Recurrence(recurrence) => self.recurrence_range(recurrence).map_or(domain.clone(), |range| range.meet(&domain)),
+                    Evolution::Invariant(_) | Evolution::Unknown => domain,
+                }
+            }
             Leaf::Len(_) => Interval::of_width(IntTy::U64),
         };
         self.within(Plan::Leaf(leaf), interval)
+    }
+
+    /// The range of `{S, +, D}` over a loop with a count `n`, exact or at
+    /// most, at the position, inside the loop: `S + [0, n - 1]·D` where the
+    /// loop's body dominates the position, `S + [0, n]·D` elsewhere in it,
+    /// the header's last visit included; the start and step from their
+    /// intervals. None where the position is outside the loop or no count is
+    /// named.
+    fn recurrence_range(&self, recurrence: &Recurrence) -> Option<Interval> {
+        let block = point(self.at).block(self.body);
+        let loops = self.expander.loops;
+        if !loops.contains(recurrence.over, block) {
+            return None;
+        }
+        let (TripCount::Exact(count) | TripCount::AtMost(count)) = self.expander.evolutions.trip_count(recurrence.over)?;
+        let count = self.evolution_interval(count)?;
+        let loop_body = self.body.block(loops.header(recurrence.over)).terminator().as_loop()?.body;
+        let last = match self.expander.dominators.dominates(loop_body, block) {
+            true => count.difference(&Interval::exactly(1)),
+            false => count,
+        };
+        let iterations = Interval::exactly(0).at_least_lo().meet(&last.at_most_hi());
+        let start = self.evolution_interval(&recurrence.start)?;
+        Some(start.sum(&iterations.product(&self.polynomial_interval(&recurrence.step))))
+    }
+
+    /// The integers `evolution` may be at the position.
+    fn evolution_interval(&self, evolution: &Evolution) -> Option<Interval> {
+        match evolution {
+            Evolution::Invariant(polynomial) => Some(self.polynomial_interval(polynomial)),
+            Evolution::Recurrence(recurrence) => self.recurrence_range(recurrence),
+            Evolution::Unknown => None,
+        }
+    }
+
+    fn polynomial_interval(&self, polynomial: &Polynomial<Symbol>) -> Interval {
+        polynomial.terms().fold(Interval::exactly(0), |sum, (monomial, coefficient)| {
+            let term = monomial.factors().fold(Interval::exactly(coefficient), |product, (atom, power)| {
+                let atom = match atom {
+                    Symbol::Value(value) => self.expander.intervals.of(*value).clone(),
+                    Symbol::Len(_) => Interval::of_width(IntTy::U64),
+                    Symbol::Remaining(_) => Interval::exactly(0).at_least_lo(),
+                };
+                (0..power).fold(product, |product, _| product.product(&atom))
+            });
+            sum.sum(&term)
+        })
     }
 
     fn constant(&self, value: i128) -> Option<Planned> {

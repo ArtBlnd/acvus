@@ -75,8 +75,7 @@ impl BodyTransform for WhileToFor {
             count: module.types_mut().intern(TyKind::Int(IntTy::U64)),
             wider: module.types_mut().intern(TyKind::Int(IntTy::I64)),
         };
-        let expander =
-            Expander { evolutions: &evolutions, loops: &loops, intervals: &intervals, dominators: &dominators, len_ty: widths.count };
+        let expander = Expander::new(&evolutions, &loops, &intervals, &dominators, widths.count);
 
         let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Loop>::new(module, body, &mut facts);
@@ -489,15 +488,15 @@ mod tests {
         assert_whole(&f.module, id);
     }
 
-    /// `j <= i` over `i32`: the inner count is `{1, +, 1}` over the outer
-    /// loop, `i`'s step with a start one higher, so it is `i + 1`. With `i`
-    /// in `[0, i32::MAX]`, `i + 1` is not proven within `i32`, so it is made
-    /// in `i64` as `(i as i64) + 1`, then cast to `u64`, in `obody`.
-    #[test]
-    fn a_count_with_an_outer_parameters_step_is_made_from_it_by_its_offset() {
+    /// `j <= i`: the inner count is `{1, +, 1}` over the outer loop, `i`'s
+    /// step with a start one higher, so it is `i + 1`. In `obody`, the outer
+    /// loop's body, `i` lies in `[0, mm - 1]` by its own range, `mm` at most
+    /// the type's greatest value, so `i + 1` is proven within the type and
+    /// made there, then cast to `u64`, in `obody`.
+    fn assert_the_count_is_i_plus_one(ty_of: fn(&mut Fixture) -> Ty) {
         let mut f = Fixture::new();
-        let i32 = f.module.types_mut().intern(TyKind::Int(IntTy::I32));
-        let Triangular { id, obody, inner, i, .. } = triangular(&mut f, i32, BinOp::Lte);
+        let ty = ty_of(&mut f);
+        let Triangular { id, obody, inner, i, .. } = triangular(&mut f, ty, BinOp::Lte);
 
         f.run::<WhileToFor>(id);
 
@@ -505,17 +504,24 @@ mod tests {
         let (inner_at, inner_hi) = range_of(body, inner);
         assert_zero_in(&f, id, obody, inner_at);
         let sum = cast_source(body, inner_hi);
+        assert_eq!(body.ty_of(sum), ty, "{}", f.snapshot(id));
         let Op::BinOp { op: BinOp::Add, left, right } = defining_op(body, sum) else {
             panic!("the count is i + 1:\n{}", f.snapshot(id))
         };
-        assert!(
-            matches!(defining_op(body, *left), Op::Cast { src, to: CastTy::Int(IntTy::I64) } if *src == i),
-            "{}",
-            f.snapshot(id)
-        );
+        assert_eq!(*left, i, "{}", f.snapshot(id));
         assert!(matches!(defining_op(body, *right), Op::Const { value: acvus_ast::Literal::Int(1) }), "{}", f.snapshot(id));
         let Definition::Inst(made) = body.definition(sum) else { unreachable!() };
         assert_eq!(body.block_of(made), obody);
         assert_whole(&f.module, id);
+    }
+
+    #[test]
+    fn a_count_with_an_outer_parameters_step_is_made_from_it_by_its_offset() {
+        assert_the_count_is_i_plus_one(|f| f.int);
+    }
+
+    #[test]
+    fn a_count_with_an_outer_parameters_step_is_made_in_a_32_bit_type() {
+        assert_the_count_is_i_plus_one(|f| f.module.types_mut().intern(TyKind::Int(IntTy::I32)));
     }
 }
