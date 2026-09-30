@@ -82,6 +82,14 @@ pub enum RefusalKind {
     /// A move through a reference that lends more than one place on the
     /// paths to it (ownership §4).
     MoveThroughSeveral,
+    /// A store whose old content the body cannot end (ownership §6): a
+    /// store through a reference that may reach several places, where what
+    /// it replaces may be absent at one of them on some path, since which
+    /// content it replaces is not known; and a store into one place a part
+    /// of which is present on some paths only, where no root names that
+    /// place on an edge it is last known present on
+    /// (`lower::required::rooted_place`). `moved` where it was moved out.
+    StoreOverContentMaybeMoved { moved: Span },
 }
 
 impl RefusalKind {
@@ -101,6 +109,7 @@ impl RefusalKind {
             RefusalKind::NotRefilled { taken } => format!("NotRefilled taken {}", at(taken)),
             RefusalKind::MoveThroughShared => "MoveThroughShared".to_string(),
             RefusalKind::MoveThroughSeveral => "MoveThroughSeveral".to_string(),
+            RefusalKind::StoreOverContentMaybeMoved { moved } => format!("StoreOverContentMaybeMoved moved {}", at(moved)),
         }
     }
 }
