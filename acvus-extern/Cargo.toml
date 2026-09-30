@@ -5,18 +5,10 @@ edition = "2024"
 license-file.workspace = true
 
 [dependencies]
-acvus-ast = { path = "../acvus-ast" }
-acvus-extern-macro = { path = "../acvus-extern-macro" }
-acvus-mir = { path = "../acvus-mir" }
 acvus-utils = { path = "../acvus-utils" }
-rustc-hash = { workspace = true }
-futures = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = ["full", "visit"] }
 
 [lints]
 workspace = true
