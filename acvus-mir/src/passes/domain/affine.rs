@@ -1,19 +1,19 @@
 //! The affine domain (D83): a value is known as an affine combination of
-//! symbolic atoms with integer coefficients, `c₁·a₁ + … + cₙ·aₙ + k`, equal
-//! to it on every run that defines it; `top` where no combination is known,
-//! `bottom` where no run defines it. Two different combinations join to
-//! `top`, so the lattice has height three and its widening is its join.
+//! symbolic atoms with integer coefficients, `c₁·a₁ + … + cₙ·aₙ + k`, an
+//! element of the value ring of degree at most one, equal to it on every run
+//! that defines it; `top` where no combination is known, `bottom` where no
+//! run defines it. Two different combinations join to `top`, so the lattice
+//! has height three and its widening is its join.
 //!
 //! It is the one reader of declared Relations (extern-fn §3, D82): each is
 //! read as an affine constraint over a call's atoms and solved for the atom
 //! a reader asks about.
 
-use std::collections::BTreeMap;
-
 use acvus_ast::Literal;
 
 use crate::decl::declared::{Atom, Comparison, Relation, Term};
 use crate::ir::{BinOp, Overflow, UnaryOp, ValueId};
+use crate::passes::domain::ring::{Monomial, Polynomial};
 use crate::passes::domain::{Arithmetic, JoinSemiLattice, Operation, Scalar, ValueDomain, Widen, not_an_operation};
 use crate::ty::{CastTy, IntTy};
 
@@ -31,15 +31,16 @@ pub enum Symbol {
     Remaining(ValueId),
 }
 
-/// `Σ coefficient·atom + constant` over the integers, with no zero
-/// coefficient, so equal combinations are equal values of this type.
+/// `Σ coefficient·atom + constant` over the integers: an element of the
+/// value ring of degree at most one, held in the ring's normal form, so equal
+/// combinations are equal values of this type. Like every element of the
+/// ring, it holds at most `MAX_TERMS` terms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Combination<A>
 where
     A: Ord,
 {
-    constant: i128,
-    terms: BTreeMap<A, i128>,
+    polynomial: Polynomial<A>,
 }
 
 impl<A> Combination<A>
@@ -47,78 +48,71 @@ where
     A: Ord + Clone,
 {
     pub fn constant(constant: i128) -> Self {
-        Combination { constant, terms: BTreeMap::new() }
+        Combination { polynomial: Polynomial::constant(constant) }
     }
 
     pub fn atom(atom: A) -> Self {
-        Combination { constant: 0, terms: BTreeMap::from([(atom, 1)]) }
+        Combination { polynomial: Polynomial::atom(atom) }
     }
 
     /// The constant alone, where the combination has no atom.
     pub fn as_constant(&self) -> Option<i128> {
-        self.terms.is_empty().then_some(self.constant)
+        self.polynomial.as_constant()
     }
 
     pub fn constant_term(&self) -> i128 {
-        self.constant
+        self.polynomial.coefficient(&Monomial::unit())
     }
 
-    /// Each atom with its coefficient, none of them zero.
+    /// Each atom with its coefficient, none of them zero. A term of degree
+    /// one has exactly one factor; the constant term has none.
     pub fn terms(&self) -> impl Iterator<Item = (&A, i128)> {
-        self.terms.iter().map(|(atom, coefficient)| (atom, *coefficient))
+        self.polynomial.terms().filter_map(|(monomial, coefficient)| {
+            let (atom, _) = monomial.factors().next()?;
+            Some((atom, coefficient))
+        })
     }
 
     pub fn coefficient(&self, atom: &A) -> i128 {
-        self.terms.get(atom).copied().unwrap_or(0)
+        self.polynomial.coefficient(&Monomial::atom(atom.clone()))
     }
 
     /// `self + other`; `None` where a coefficient or the constant leaves
-    /// `i128`.
+    /// `i128`, or the sum is past `MAX_TERMS`.
     pub fn checked_add(&self, other: &Self) -> Option<Self> {
-        let mut sum = self.clone();
-        sum.constant = sum.constant.checked_add(other.constant)?;
-        for (atom, coefficient) in &other.terms {
-            let next = sum.coefficient(atom).checked_add(*coefficient)?;
-            match next {
-                0 => sum.terms.remove(atom),
-                next => sum.terms.insert(atom.clone(), next),
-            };
-        }
-        Some(sum)
+        Some(Combination::of_degree_one(self.polynomial.checked_add(&other.polynomial)?))
     }
 
     /// `factor · self`; `None` where a coefficient or the constant leaves
     /// `i128`.
     pub fn checked_scale(&self, factor: i128) -> Option<Self> {
-        if factor == 0 {
-            return Some(Combination::constant(0));
-        }
-        let terms = self
-            .terms
-            .iter()
-            .map(|(atom, coefficient)| Some((atom.clone(), coefficient.checked_mul(factor)?)))
-            .collect::<Option<BTreeMap<A, i128>>>()?;
-        Some(Combination { constant: self.constant.checked_mul(factor)?, terms })
+        Some(Combination::of_degree_one(self.polynomial.checked_scale(factor)?))
     }
 
     /// `self - other`.
     pub fn checked_sub(&self, other: &Self) -> Option<Self> {
-        self.checked_add(&other.checked_scale(-1)?)
+        Some(Combination::of_degree_one(self.polynomial.checked_sub(&other.polynomial)?))
     }
 
     /// The combination with each atom replaced by the combination `by`
-    /// gives it; `None` where `by` gives none for an atom, or arithmetic
-    /// leaves `i128`.
+    /// gives it; `None` where `by` gives none for an atom, arithmetic
+    /// leaves `i128`, or the result is past `MAX_TERMS`.
     pub fn substitute<B, F>(&self, mut by: F) -> Option<Combination<B>>
     where
         B: Ord + Clone,
         F: FnMut(&A) -> Option<Combination<B>>,
     {
-        let mut out = Combination::constant(self.constant);
-        for (atom, coefficient) in &self.terms {
-            out = out.checked_add(&by(atom)?.checked_scale(*coefficient)?)?;
-        }
-        Some(out)
+        let substituted = self.polynomial.substitute(|atom| Some(by(atom)?.polynomial))?;
+        Some(Combination::of_degree_one(substituted))
+    }
+
+    /// # Panics
+    /// `polynomial` has degree past one. Sums, multiples and substitutions
+    /// of combinations by combinations keep degree one, so a caller that
+    /// passes more has a defect.
+    fn of_degree_one(polynomial: Polynomial<A>) -> Self {
+        assert!(polynomial.degree() <= 1, "a combination of degree {}", polynomial.degree());
+        Combination { polynomial }
     }
 }
 
