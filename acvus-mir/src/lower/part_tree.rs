@@ -366,6 +366,7 @@ fn indices(
     let terminator = Terminator::For {
         source: ForSource::Range { at: from, hi: to },
         body: body_block,
+        body_args: Vec::new(),
         exit,
         exit_args: vec![at_end],
     };

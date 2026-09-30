@@ -560,7 +560,7 @@ mod tests {
     }
 
     fn while_loop(cond: ValueId, body: BlockId, exit: BlockId) -> Terminator {
-        Terminator::While { cond, body: body, exit, exit_args: Vec::new() }
+        Terminator::While { cond, body: body, body_args: Vec::new(), exit, exit_args: Vec::new() }
     }
 
     fn closure(bodies: Vec<BodyId>) -> Op {
@@ -690,7 +690,7 @@ mod tests {
         builder.switch_to(header);
         let source = ForSource::Range { at, hi: n };
         builder.terminate(
-            Terminator::For { source, body: loop_body, exit, exit_args: Vec::new() },
+            Terminator::For { source, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() },
             Span::ZERO,
         );
         builder.switch_to(loop_body);

@@ -565,11 +565,11 @@ impl Printer<'_> {
                 }
                 text
             }
-            Terminator::For { source, body, exit, exit_args } => {
-                format!("For {} ? {} : {}", self.for_source(source), self.target(*body, &[]), self.target(*exit, exit_args))
+            Terminator::For { source, body, body_args, exit, exit_args } => {
+                format!("For {} ? {} : {}", self.for_source(source), self.target(*body, body_args), self.target(*exit, exit_args))
             }
-            Terminator::While { cond, body, exit, exit_args } => {
-                format!("While {} ? {} : {}", self.value(*cond), self.target(*body, &[]), self.target(*exit, exit_args))
+            Terminator::While { cond, body, body_args, exit, exit_args } => {
+                format!("While {} ? {} : {}", self.value(*cond), self.target(*body, body_args), self.target(*exit, exit_args))
             }
             Terminator::Return { value, order, span: _ } => {
                 let mut text = format!("Return {}", self.value(*value));

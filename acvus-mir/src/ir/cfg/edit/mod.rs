@@ -27,11 +27,11 @@ pub use super::body::{Head, Rebind};
 pub use keeps::{
     DefDominatesUses, Invariant, Invariants, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation,
 };
-pub use needs::{Asked, ContentFacts, DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
+pub use needs::{Asked, ContentFacts, DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, LoopFacts, NoFacts, OrderFacts};
 pub use scopes::{
     MotionFacts, Cfg, EditsCfg, EditsLoops, EditsOrder, Effect, Loop, Motion, MovesInsts, PromotesStorage, Remove, RemovesInsts,
     ReplacesValues, Sccp, Scope, Storage, Value, Discharge, Discharges, Drops, Inline, Inlines, InsertsDrops, Clones,
-    ClonesReads, DropFacts,
+    ClonesReads, DropFacts, LoopEditFacts,
 };
 
 use acvus_ast::Span;

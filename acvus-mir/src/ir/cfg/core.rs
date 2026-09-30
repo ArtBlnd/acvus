@@ -310,9 +310,7 @@ impl Body {
                     if to != block {
                         return;
                     }
-                    let Some(args) = args.filter(|_| index >= supplied) else {
-                        panic!("{pred:?}'s terminator supplies parameter {index} of {block:?} itself")
-                    };
+                    assert!(index >= supplied, "{pred:?}'s terminator supplies parameter {index} of {block:?} itself");
                     dropped.push(args.remove(index - supplied));
                 });
             for arg in dropped {
@@ -331,10 +329,6 @@ impl Body {
     /// Places the Builder's parameter `param` last on `block`, and passes
     /// each value of `incoming` on the edge it names by source block and
     /// edge position. Cost: O(|incoming| and the named terminators' edges).
-    ///
-    /// # Panics
-    /// A named edge is a loop's edge into its body, which carries no
-    /// arguments.
     pub(super) fn place_param(&mut self, block: BlockId, param: ValueId, incoming: &[(BlockId, usize, ValueId)]) {
         let index = self.blocks[block.index()].params.len();
         self.blocks[block.index()].params.push(param);
@@ -343,9 +337,6 @@ impl Body {
             let mut edge_at = 0;
             self.blocks[from.index()].terminator.for_each_edge_mut(|_, _, args| {
                 if edge_at == *position {
-                    let Some(args) = args else {
-                        panic!("{block:?} is a loop body entered from {from:?}; it takes no parameter of the Builder's")
-                    };
                     args.push(*value);
                 }
                 edge_at += 1;
@@ -355,7 +346,7 @@ impl Body {
     }
 
     /// The loop ending `header` takes `head`, keeping its body, exit and
-    /// exit arguments. The new head's supplied parameters are made, of the
+    /// their arguments. The new head's supplied parameters are made, of the
     /// types it supplies; each parameter the old head supplied has its
     /// uses given to what its `rebind` names and goes; the new parameters
     /// stand first in the body, before the rest. Returns the new
@@ -373,7 +364,7 @@ impl Body {
         let Some(parts) = self.blocks[header.index()].terminator.as_loop() else {
             panic!("{header:?} does not end in a loop")
         };
-        let replaced = head.terminator(parts.body, parts.exit, parts.exit_args.to_vec());
+        let replaced = head.terminator(parts.body, parts.body_args.to_vec(), parts.exit, parts.exit_args.to_vec());
         let old_head = parts.head;
         let body = parts.body;
         let supplied_before = old_head.supplied_params();

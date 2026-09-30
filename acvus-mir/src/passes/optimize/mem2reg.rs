@@ -77,7 +77,7 @@ mod tests {
         builder.switch_to(join);
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(header);
-        builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+        builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let read = builder.push(take(x), int, Span::ZERO);
         let step = builder.push(int_const(1), int, Span::ZERO);

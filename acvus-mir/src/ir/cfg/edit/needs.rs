@@ -5,7 +5,7 @@
 //! until the next one (D47).
 
 use super::{InstRef, Position};
-use crate::ir::cfg::{Body, BodyId, Changes, Module, Site};
+use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Module, Site};
 use crate::ir::{PathSeg, RefTarget, ValueId};
 
 /// The body a query asks about, in the module that holds it, as it stands
@@ -61,6 +61,12 @@ pub trait DominanceFacts: Facts {
     /// path from the earlier to the later enters a block of a loop that does
     /// not hold both, since such a loop may never end.
     fn control_equivalent(&mut self, asked: Asked<'_>, a: Position, b: Position) -> bool;
+}
+
+pub trait LoopFacts: Facts {
+    /// The preheader of the loop `header` heads (F2): the one predecessor
+    /// of `header` outside that loop, where it has no other successor.
+    fn preheader(&mut self, asked: Asked<'_>, header: BlockId) -> Option<BlockId>;
 }
 
 pub trait LoanFacts: Facts {

@@ -3,7 +3,7 @@
 //! everything.
 
 use super::keeps::{DefDominatesUses, Invariants, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree};
-use super::needs::{ContentFacts, DischargeFacts, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
+use super::needs::{ContentFacts, DischargeFacts, DominanceFacts, Facts, LoanFacts, LoopFacts, NoFacts, OrderFacts};
 use crate::ir::cfg::Aspect;
 
 mod sealed {
@@ -91,7 +91,7 @@ scope!(Sccp, [CfgShape, Instructions, Storage, OrderTokens], 'n => dyn Dominance
 scope!(Motion, [Instructions, OrderTokens, Storage], 'n => dyn MotionFacts + 'n, (Base, SplitTakenOnce), [MovesInsts]);
 scope!(Effect, [Instructions, OrderTokens], 'n => dyn OrderFacts + 'n, (Base, SplitTakenOnce), [EditsOrder]);
 scope!(Storage, [Instructions, Storage], 'n => dyn LoanFacts + 'n, Base, [PromotesStorage]);
-scope!(Loop, [CfgShape, Instructions, Storage, OrderTokens], 'n => dyn DominanceFacts + 'n, Base, [ReplacesValues, EditsCfg, EditsLoops]);
+scope!(Loop, [CfgShape, Instructions, Storage, OrderTokens], 'n => dyn LoopEditFacts + 'n, Base, [ReplacesValues, EditsCfg, EditsLoops]);
 scope!(Discharge, [Instructions, Storage, OrderTokens], 'n => dyn DischargeFacts + 'n, Base, [Discharges]);
 scope!(Inline, [CfgShape, Instructions, Storage, OrderTokens, Types], 'n => NoFacts, (Base, SplitTakenOnce), [Inlines]);
 scope!(Drops, [Instructions, Storage, OrderTokens], 'n => dyn DropFacts + 'n, Base, [InsertsDrops]);
@@ -102,8 +102,12 @@ scope!(Clones, [Instructions, Storage, OrderTokens, Types], 'n => NoFacts, Base,
 /// order (D54).
 pub trait MotionFacts: DominanceFacts + LoanFacts {}
 
+/// What the loop edits read: dominance, and each loop's preheader (F2).
+pub trait LoopEditFacts: DominanceFacts + LoopFacts {}
+
 /// What drop insertion reads: dominance for a value's drop, and whether a
 /// storage's content is read after a position for a content's drop.
 pub trait DropFacts: DominanceFacts + ContentFacts {}
 impl<T> DropFacts for T where T: DominanceFacts + ContentFacts + ?Sized {}
 impl<T> MotionFacts for T where T: DominanceFacts + LoanFacts + ?Sized {}
+impl<T> LoopEditFacts for T where T: DominanceFacts + LoopFacts + ?Sized {}

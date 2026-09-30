@@ -24,7 +24,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::ir::cfg::edit::{
-    Asked, ContentFacts, DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved,
+    Asked, ContentFacts, DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, LoopFacts, OrderFacts, Position, Unobserved,
 };
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Definition, InstId, Op, Site, Terminator};
 use crate::ir::{IndexBound, Intrinsic, PathSeg, RefTarget, ValueId, fn_effect};
@@ -162,6 +162,14 @@ impl DominanceFacts for EditFacts<'_, '_> {
                 && !self.loop_between(asked, earlier.block(body), later.block(body))
         };
         in_order(a, b) || in_order(b, a)
+    }
+}
+
+impl LoopFacts for EditFacts<'_, '_> {
+    /// Cost: O(the header's predecessors), and `LoopTree`'s own when an
+    /// edit of the CFG's shape dropped it.
+    fn preheader(&mut self, asked: Asked<'_>, header: BlockId) -> Option<BlockId> {
+        self.get::<LoopTree>(asked).preheader_of(header)
     }
 }
 
@@ -793,6 +801,7 @@ mod tests {
         builder.terminate(Terminator::While {
             cond: c,
             body: loop_body,
+            body_args: Vec::new(),
             exit,
             exit_args: Vec::new(),
         }, acvus_ast::Span::ZERO);

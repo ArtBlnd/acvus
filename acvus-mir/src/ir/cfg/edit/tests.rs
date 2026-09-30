@@ -290,6 +290,21 @@ impl Facts for TestFacts {
     }
 }
 
+/// The preheader as `LoopFacts` states it, a header's predecessors outside
+/// its loop being those it does not dominate.
+impl LoopFacts for TestFacts {
+    fn preheader(&mut self, asked: Asked<'_>, header: BlockId) -> Option<BlockId> {
+        let body = asked.body();
+        let dominators = &self.dominance(asked).dominators;
+        let preds = body.predecessors();
+        let mut outside = preds[&header].iter().copied().filter(|pred| !dominators.dominates_block(header, *pred));
+        let (Some(only), None) = (outside.next(), outside.next()) else {
+            return None;
+        };
+        body.block(only).terminator().edges().iter().all(|edge| edge.to == header).then_some(only)
+    }
+}
+
 impl DominanceFacts for TestFacts {
     fn dominates(&mut self, asked: Asked<'_>, value: ValueId, at: Position) -> bool {
         let body = asked.body();
@@ -881,7 +896,7 @@ fn loop_computing(f: &mut Fixture, op: fn(ValueId, ValueId) -> Op) -> (BodyId, B
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let v = builder.push(op(a, a), int, at(1));
     builder.push(Op::BinOp { op: BinOp::Max, left: v, right: v }, int, at(2));
@@ -1008,7 +1023,7 @@ fn slot_across_a_diamond_and_a_loop(f: &mut Fixture) -> (BodyId, ValueId, [Block
     builder.switch_to(join);
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let read = builder.push(take(x), int, at(5));
     let step = builder.push(int_const(1), int, at(6));
@@ -1380,6 +1395,7 @@ fn range_loop(f: &mut Fixture, element: Ty) -> BodyId {
     builder.terminate(Terminator::For {
         source: ForSource::Range { at: a, hi: a },
         body: loop_body,
+        body_args: Vec::new(),
         exit,
         exit_args: Vec::new(),
     }, acvus_ast::Span::ZERO);
@@ -2312,7 +2328,7 @@ fn insert_drop_is_refused_inside_a_loop_before_a_use_the_back_edge_reaches() {
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     builder.push(neg(x), int, at(2));
     builder.push(neg(a), int, at(3));
@@ -2343,7 +2359,7 @@ fn insert_drop_after_the_last_use_of_a_value_each_iteration_makes_stands() {
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, body: loop_body, exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
     let y = builder.push(neg(a), int, at(2));
     builder.push(neg(y), int, at(3));
@@ -2622,7 +2638,7 @@ fn counting(f: &mut Fixture) -> Counting {
     builder.terminate(Terminator::Jump { to: header, args: vec![zero] }, Span::ZERO);
     builder.switch_to(header);
     let c = builder.push(Op::BinOp { op: BinOp::Lt, left: i, right: n }, bool, Span::ZERO);
-    builder.terminate(Terminator::While { cond: c, body: stage, exit, exit_args: Vec::new() }, Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: stage, body_args: Vec::new(), exit, exit_args: Vec::new() }, Span::ZERO);
     builder.switch_to(stage);
     let one = builder.push(int_const(1), int, Span::ZERO);
     let i1 = builder.push(add(i, one), int, Span::ZERO);
@@ -2671,7 +2687,7 @@ fn ranged(f: &mut Fixture) -> Ranged {
     builder.switch_to(header);
     let c = builder.push(Op::BinOp { op: BinOp::Lt, left: zero, right: n }, bool, Span::ZERO);
     let source = ForSource::Range { at: zero, hi: n };
-    builder.terminate(Terminator::For { source, body: stage, exit, exit_args: Vec::new() }, Span::ZERO);
+    builder.terminate(Terminator::For { source, body: stage, body_args: Vec::new(), exit, exit_args: Vec::new() }, Span::ZERO);
     builder.switch_to(stage);
     let t = builder.push(add(k, x), int, Span::ZERO);
     builder.terminate(jump(header), Span::ZERO);
@@ -2733,11 +2749,11 @@ fn set_head_makes_a_while_a_for_over_a_range() {
         panic!("a range supplies one parameter")
     };
     let body = f.body(lp.id);
-    let Terminator::For { source: ForSource::Range { at, hi }, body: stage, exit, exit_args } = body.block(lp.header).terminator() else {
+    let Terminator::For { source: ForSource::Range { at, hi }, body: stage, body_args, exit, exit_args } = body.block(lp.header).terminator() else {
         panic!("the header ends in a For")
     };
     assert_eq!((*at, *hi, *stage, *exit), (lp.zero, lp.n, lp.stage, lp.exit));
-    assert!(exit_args.is_empty());
+    assert!(body_args.is_empty() && exit_args.is_empty());
     assert_eq!(body.block(lp.stage).params(), &[counter]);
     assert_eq!(body.ty_of(counter), f.int);
     assert_eq!(body.use_count(lp.c), 0, "the condition loses its use");
@@ -2812,9 +2828,9 @@ fn set_head_refuses_a_rebinding_of_another_length() {
 }
 
 /// The new counter is a `u64` where the old was an `i64`, a range's end
-/// differs in type from its start, and a value of another type replaces
-/// the counter; made
-/// unchecked, the core refuses to hand an `i64`'s uses to a `u64`.
+/// differs in type from its start, a value of another type replaces the
+/// counter, and a `While` tests an integer; made unchecked, the core
+/// refuses to hand an `i64`'s uses to a `u64`.
 #[test]
 fn set_head_refuses_a_type_mismatch() {
     let mut f = fixture();
@@ -2829,6 +2845,12 @@ fn set_head_refuses_a_type_mismatch() {
         CannotEditLoop::TypeMismatch(c),
     );
     assert_refused(&mut f, lp.id, |editor| editor.set_head(header, range(n, wide), &counter), CannotEditLoop::TypeMismatch(wide));
+    assert_refused(
+        &mut f,
+        lp.id,
+        |editor| editor.set_head(header, Head::While { cond: n }, &[Rebind::Value(n)]),
+        CannotEditLoop::TypeMismatch(n),
+    );
 
     let unchecked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, range(wide, wide), &counter)))
@@ -2856,31 +2878,50 @@ fn set_head_refuses_a_value_that_does_not_dominate_a_use() {
     assert_eq!(violated(checked), "DefDominatesUses");
 }
 
+/// A parameter the old head supplied goes with the edit, so it cannot take
+/// another's uses; made unchecked, it would go with its uses left.
+#[test]
+fn set_head_refuses_an_old_supplied_parameter_as_a_value() {
+    let mut f = fixture();
+    let lp = ranged(&mut f);
+    let (header, one, n, k) = (lp.header, lp.one, lp.n, lp.k);
+    let rebind = [Rebind::Value(k)];
+    assert_refused(&mut f, lp.id, |editor| editor.set_head(header, range(one, n), &rebind), CannotEditLoop::NotSettled(k));
+
+    let unchecked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unchecked(&mut f, lp.id, |rewriter| drop(rewriter.set_loop_head(header, range(one, n), &rebind)))
+    }));
+    assert!(unchecked.is_err(), "the counter would go with its use left");
+}
+
 /// ```text
-/// entry(n, d): zero = 0; if d { header } else { stage }
+/// entry(n, d): zero = 0; jump header
 /// header:      while d { stage } else exit
-/// stage:       jump header
+/// stage:       if d { header } else { again }
+/// again:       jump stage
 /// exit:        return n
 /// ```
-/// The entry enters the loop's body too; made unchecked, its edge passes
-/// no argument to the counter the new head supplies.
+/// `again`, inside the loop, enters its body too; made unchecked, its edge
+/// passes no argument to the counter the new head supplies.
 #[test]
-fn set_head_refuses_a_body_entered_elsewhere() {
+fn set_head_refuses_a_body_entered_by_another_edge() {
     let mut f = fixture();
     let (int, bool, nn, nd) = (f.int, f.bool, f.name("n"), f.name("d"));
     let mut builder = f.build(false, int);
     let n = builder.param(nn, int, Span::ZERO);
     let d = builder.param(nd, bool, Span::ZERO);
     let zero = builder.push(int_const(0), int, Span::ZERO);
-    let [header, stage, exit] = [(); 3].map(|()| builder.new_block(&[]));
+    let [header, stage, again, exit] = [(); 4].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(header), Span::ZERO);
+    builder.switch_to(header);
+    builder.terminate(Terminator::While { cond: d, body: stage, body_args: Vec::new(), exit, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(stage);
     builder.terminate(
-        Terminator::JumpIf { cond: d, then_to: header, then_args: Vec::new(), else_to: stage, else_args: Vec::new() },
+        Terminator::JumpIf { cond: d, then_to: header, then_args: Vec::new(), else_to: again, else_args: Vec::new() },
         Span::ZERO,
     );
-    builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: d, body: stage, exit, exit_args: Vec::new() }, Span::ZERO);
-    builder.switch_to(stage);
-    builder.terminate(jump(header), Span::ZERO);
+    builder.switch_to(again);
+    builder.terminate(jump(stage), Span::ZERO);
     builder.switch_to(exit);
     builder.terminate(ret(n), Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
@@ -2888,6 +2929,68 @@ fn set_head_refuses_a_body_entered_elsewhere() {
 
     let checked = unchecked(&mut f, id, |rewriter| drop(rewriter.set_loop_head(header, range(zero, n), &[])));
     assert_eq!(violated(checked), "TypesAgree");
+}
+
+/// ```text
+/// entry(n, d): zero = 0; jump header
+/// header:      while d { stage } else stage
+/// stage:       return n
+/// ```
+/// The body is the exit too, so the loop's exit edge enters it; made
+/// unchecked, that edge passes no argument to the counter the new head
+/// supplies.
+#[test]
+fn set_head_refuses_a_body_that_is_the_exit() {
+    let mut f = fixture();
+    let (int, bool, nn, nd) = (f.int, f.bool, f.name("n"), f.name("d"));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    let d = builder.param(nd, bool, Span::ZERO);
+    let zero = builder.push(int_const(0), int, Span::ZERO);
+    let [header, stage] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(header), Span::ZERO);
+    builder.switch_to(header);
+    builder.terminate(Terminator::While { cond: d, body: stage, body_args: Vec::new(), exit: stage, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(stage);
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    assert_refused(&mut f, id, |editor| editor.set_head(header, range(zero, n), &[]), CannotEditLoop::BodyEnteredElsewhere);
+
+    let checked = unchecked(&mut f, id, |rewriter| drop(rewriter.set_loop_head(header, range(zero, n), &[])));
+    assert_eq!(violated(checked), "TypesAgree");
+}
+
+/// ```text
+/// entry(n, d): zero = 0; jump pre
+/// pre:         jump header
+/// header:      while d { entry } else exit
+/// exit:        return n
+/// ```
+/// The body is the body's entry, which the body's start enters with no
+/// argument. Made unchecked, the entry takes a counter the start never
+/// fills, and the keeps accept it: this check alone keeps it out.
+#[test]
+fn set_head_refuses_a_body_that_is_the_entry() {
+    let mut f = fixture();
+    let (int, bool, nn, nd) = (f.int, f.bool, f.name("n"), f.name("d"));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    let d = builder.param(nd, bool, Span::ZERO);
+    let zero = builder.push(int_const(0), int, Span::ZERO);
+    let [pre, header, exit] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(pre), Span::ZERO);
+    builder.switch_to(pre);
+    builder.terminate(jump(header), Span::ZERO);
+    builder.switch_to(header);
+    let entry = BlockId::of_index(0);
+    builder.terminate(Terminator::While { cond: d, body: entry, body_args: Vec::new(), exit, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(exit);
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    assert_eq!(entry_of(&f, id), entry);
+    assert_refused(&mut f, id, |editor| editor.set_head(header, range(zero, n), &[]), CannotEditLoop::BodyEnteredElsewhere);
+
+    assert_eq!(unchecked(&mut f, id, |rewriter| drop(rewriter.set_loop_head(header, range(zero, n), &[]))), Ok(()));
 }
 
 /// The range's end is the join parameter `i`, defined in the header, so
@@ -3076,4 +3179,126 @@ fn remove_exit_refuses_a_value_that_is_no_exit_parameter() {
     let lp = counting(&mut f);
     let (header, i, zero) = (lp.header, lp.i, lp.zero);
     assert_refused(&mut f, lp.id, |editor| editor.remove_exit(header, i, zero), CannotEditLoop::NotAnExitParam(i));
+}
+
+/// ```text
+/// entry(n, d): while d { stage } else exit
+/// stage:       return n
+/// exit:        return n
+/// ```
+/// The header is the body's entry, which the body's start enters, so the
+/// loop has no preheader and is not in F2. Made unchecked, the entry gains
+/// a parameter nothing fills and the keeps accept it: this check alone
+/// keeps it out.
+#[test]
+fn loop_edits_refuse_a_loop_without_a_preheader() {
+    let mut f = fixture();
+    let (int, bool, nn, nd) = (f.int, f.bool, f.name("n"), f.name("d"));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    let d = builder.param(nd, bool, Span::ZERO);
+    let [stage, exit] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(Terminator::While { cond: d, body: stage, body_args: Vec::new(), exit, exit_args: Vec::new() }, Span::ZERO);
+    for block in [stage, exit] {
+        builder.switch_to(block);
+        builder.terminate(ret(n), Span::ZERO);
+    }
+    let id = builder.seal().expect("the body has no open state");
+    let header = entry_of(&f, id);
+    assert_refused(&mut f, id, |editor| editor.add_join(header, n, &[]), CannotEditLoop::NoPreheader);
+    assert_refused(&mut f, id, |editor| editor.add_exit(header, n), CannotEditLoop::NoPreheader);
+    assert_refused(&mut f, id, |editor| editor.set_head(header, Head::While { cond: d }, &[]), CannotEditLoop::NoPreheader);
+
+    assert_eq!(unchecked(&mut f, id, |rewriter| drop(rewriter.add_block_param(header, int, &[]))), Ok(()));
+}
+
+/// ```text
+/// entry(n, c): zero = 0; jump pre
+/// pre:         jump header
+/// header:      while c { again } else stage(zero)
+/// again:       jump header
+/// stage(k):    jump head2
+/// head2:       for k in zero..n { stage } else done
+/// done:        return n
+/// ```
+/// The exit `stage` is another loop's body, entered by `head2`'s body edge
+/// as well as by `header`'s exit edge. The new parameter takes `n` on both:
+/// the body edge carries it after the counter it supplies.
+#[test]
+fn add_exit_gives_a_parameter_to_an_exit_that_is_another_loops_body() {
+    let mut f = fixture();
+    let (int, bool, nn, nc) = (f.int, f.bool, f.name("n"), f.name("c"));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    let c = builder.param(nc, bool, Span::ZERO);
+    let zero = builder.push(int_const(0), int, Span::ZERO);
+    let [pre, header, again] = [(); 3].map(|()| builder.new_block(&[]));
+    let stage = builder.new_block(&[int]);
+    let [head2, done] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(pre), Span::ZERO);
+    builder.switch_to(pre);
+    builder.terminate(jump(header), Span::ZERO);
+    builder.switch_to(header);
+    builder.terminate(Terminator::While { cond: c, body: again, body_args: Vec::new(), exit: stage, exit_args: vec![zero] }, Span::ZERO);
+    builder.switch_to(again);
+    builder.terminate(jump(header), Span::ZERO);
+    builder.switch_to(stage);
+    builder.terminate(jump(head2), Span::ZERO);
+    builder.switch_to(head2);
+    let source = ForSource::Range { at: zero, hi: n };
+    builder.terminate(Terminator::For { source, body: stage, body_args: Vec::new(), exit: done, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(done);
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    let added = loop_edit(&mut f, id, |editor| editor.add_exit(header, n)).expect("n is defined on every edge into stage");
+    let body = f.body(id);
+    let k = body.block(stage).params()[0];
+    assert_eq!(body.block(stage).params(), &[k, added]);
+    assert!(matches!(body.block(head2).terminator(), Terminator::For { body_args, .. } if body_args == &[n]));
+    assert!(matches!(body.block(header).terminator(), Terminator::While { exit_args, .. } if exit_args == &[zero, n]));
+    assert_eq!(<<Loop as Scope>::Keeps as Invariants>::check(body, f.module.types()), Ok(()));
+}
+
+/// ```text
+/// entry(n):  zero = 0; jump outer
+/// outer:     for k in zero..n { h } else done
+/// h(j):      c = j < n; while c { latch } else outer
+/// latch:     j1 = j + j; jump h(j1)
+/// done:      return n
+/// ```
+/// `h` is the outer loop's body and the inner loop's header. The core now
+/// gives it a parameter on the outer loop's body edge as on any edge, and
+/// the keeps hold; the editor refuses the join because the inner loop's one
+/// way in from outside, `outer`, also leaves to `done`, so the inner loop
+/// has no preheader.
+#[test]
+fn a_header_that_is_another_loops_body_takes_a_parameter_on_the_body_edge() {
+    let mut f = fixture();
+    let (int, bool, nn) = (f.int, f.bool, f.name("n"));
+    let mut builder = f.build(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    let zero = builder.push(int_const(0), int, Span::ZERO);
+    let outer = builder.new_block(&[]);
+    let h = builder.new_block(&[int]);
+    let j = builder.block_params(h)[0];
+    let [latch, done] = [(); 2].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(outer), Span::ZERO);
+    builder.switch_to(outer);
+    let source = ForSource::Range { at: zero, hi: n };
+    builder.terminate(Terminator::For { source, body: h, body_args: Vec::new(), exit: done, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(h);
+    let c = builder.push(Op::BinOp { op: BinOp::Lt, left: j, right: n }, bool, Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: latch, body_args: Vec::new(), exit: outer, exit_args: Vec::new() }, Span::ZERO);
+    builder.switch_to(latch);
+    let j1 = builder.push(add(j, j), int, Span::ZERO);
+    builder.terminate(Terminator::Jump { to: h, args: vec![j1] }, Span::ZERO);
+    builder.switch_to(done);
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    assert_refused(&mut f, id, |editor| editor.add_join(h, zero, &[(latch, j1)]), CannotEditLoop::NoPreheader);
+
+    let checked = unchecked(&mut f, id, |rewriter| drop(rewriter.add_block_param(h, int, &[(outer, 0, zero), (latch, 0, j1)])));
+    assert_eq!(checked, Ok(()));
+    assert!(matches!(f.body(id).block(outer).terminator(), Terminator::For { body_args, .. } if body_args == &[zero]));
 }

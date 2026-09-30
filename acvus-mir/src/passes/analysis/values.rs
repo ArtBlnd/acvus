@@ -768,6 +768,7 @@ mod tests {
         builder.terminate(Terminator::For {
             source: ForSource::Range { at, hi },
             body: loop_body,
+            body_args: Vec::new(),
             exit,
             exit_args: Vec::new(),
         }, acvus_ast::Span::ZERO);

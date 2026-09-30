@@ -86,7 +86,7 @@ fn diamond(cond: ValueId, then_to: BlockId, else_to: BlockId, join: BlockId) -> 
 }
 
 fn while_loop(cond: ValueId, body: BlockId, exit: BlockId) -> Terminator {
-    Terminator::While { cond, body: body, exit, exit_args: Vec::new() }
+    Terminator::While { cond, body: body, body_args: Vec::new(), exit, exit_args: Vec::new() }
 }
 
 fn empty_declarations(interner: &Interner) -> Declarations {
@@ -640,6 +640,7 @@ fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
     builder.terminate(Terminator::For {
         source: ForSource::Range { at, hi },
         body: loop_body,
+        body_args: Vec::new(),
         exit,
         exit_args: Vec::new(),
     }, acvus_ast::Span::ZERO);
@@ -2088,6 +2089,7 @@ fn range_for(at: ValueId, hi: ValueId, body: BlockId, exit: BlockId) -> Terminat
     Terminator::For {
         source: ForSource::Range { at, hi },
         body: body,
+        body_args: Vec::new(),
         exit,
         exit_args: Vec::new(),
     }
