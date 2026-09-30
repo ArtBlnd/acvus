@@ -22,6 +22,7 @@ mod simplify_cfg;
 mod sink;
 mod split_calls;
 mod sroa;
+mod while_to_for;
 #[cfg(test)]
 pub(in crate::passes) mod tests;
 
@@ -40,6 +41,7 @@ pub use simplify_cfg::SimplifyCfg;
 pub use sink::Sink;
 pub use split_calls::SplitCalls;
 pub use sroa::Sroa;
+pub use while_to_for::WhileToFor;
 
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Module};
 use crate::passes::analysis::{AnalysisManager, Dominators};
