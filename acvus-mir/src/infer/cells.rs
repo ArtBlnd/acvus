@@ -5,6 +5,8 @@
 //! made one with another variable of its kind, so that two variables made
 //! one stay one whatever either learns later.
 
+use rustc_hash::FxHashSet;
+
 use crate::ty::{
     Calls, CallsTerm, CallsVarId, Effect, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Flows, Holds, HoldsTerm,
     HoldsVarId, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase, LenTerm, LenVarId, ReprVarId, FnValues,
@@ -104,13 +106,16 @@ pub(super) struct FlowRefused<T: VarTerm> {
 /// Each variable's term; at the end of each chain, whether `eq` made its
 /// value equal to a known one, which no join may then grow; and the terms
 /// each variable flows into, one way (`flows_into`). A variable whose
-/// value rose since its flows were last followed is `rose`.
+/// value rose since its flows were last followed is `rose`. A flow once
+/// refused is `refused`: a refusal belongs to the flow, and following it
+/// again, with nothing changed, refuses nothing new.
 pub(super) struct Cells<T: VarTerm> {
     cells: Vec<Option<T>>,
     fixed: Vec<bool>,
     flows: Vec<Vec<(T, FlowId)>>,
     rose: Vec<T::Var>,
     next_flow: u32,
+    refused: FxHashSet<FlowId>,
 }
 
 impl<T: VarTerm> Cells<T> {
@@ -121,6 +126,7 @@ impl<T: VarTerm> Cells<T> {
             flows: Vec::new(),
             rose: Vec::new(),
             next_flow: 0,
+            refused: FxHashSet::default(),
         }
     }
 
@@ -140,6 +146,7 @@ impl<T: VarTerm> Cells<T> {
                 .map(|flows| flows.iter().map(|(term, flow)| (shifted(term, shift.vars), FlowId(flow.0 + shift.flows))).collect()),
         );
         self.rose.extend(from.rose.iter().map(|var| T::var_of_index(u32::try_from(T::index(*var)).expect("u32 variables") + shift.vars)));
+        self.refused.extend(from.refused.iter().map(|flow| FlowId(flow.0 + shift.flows)));
         self.next_flow += from.next_flow;
         shift
     }
@@ -192,8 +199,8 @@ impl<T: VarTerm> Cells<T> {
         match self.end(from) {
             End::Known(value) => {
                 let refused = match self.raise(into, &value, join) {
-                    Ok(()) => Vec::new(),
-                    Err(exceeds) => vec![FlowRefused { flow, into: into.clone(), exceeds }],
+                    Err(exceeds) if self.refused.insert(flow) => vec![FlowRefused { flow, into: into.clone(), exceeds }],
+                    Ok(()) | Err(_) => Vec::new(),
                 };
                 (flow, refused)
             }
@@ -206,7 +213,8 @@ impl<T: VarTerm> Cells<T> {
     }
 
     /// Follows the flows of every variable that rose, until none rises:
-    /// each flow raises its `into` to its source's value. A variable rises
+    /// each flow raises its `into` to its source's value, and a flow is
+    /// reported refused the first time only. A variable rises
     /// only up its lattice, so each is queued at most once per rise plus
     /// once per link or flow added: with h the lattice's height, O((v · h
     /// + links + flows) · the flows out of each).
@@ -218,7 +226,9 @@ impl<T: VarTerm> Cells<T> {
             };
             let flows = self.flows[T::index(root)].clone();
             for (into, flow) in flows {
-                if let Err(exceeds) = self.raise(&into, &value, join) {
+                if let Err(exceeds) = self.raise(&into, &value, join)
+                    && self.refused.insert(flow)
+                {
                     refused.push(FlowRefused { flow, into, exceeds });
                 }
             }

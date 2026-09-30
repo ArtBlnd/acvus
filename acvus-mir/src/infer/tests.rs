@@ -1426,3 +1426,23 @@ fn open_effects_and_marks_take_their_defaults() {
     let (types, frozen) = fx.freeze(open);
     assert!(matches!(types.kind(frozen), TyKind::Ref(_, TypeArg::Uniform(_))));
 }
+
+/// D94, effects §1: a refusal belongs to its flow. `a` flows into `into`,
+/// fixed pure by `eq`; joining `a` with `b`, already opaque, both sets `a`
+/// and links `b` to it, which queues `a` twice, and the one flow is
+/// refused once.
+#[test]
+fn a_flow_whose_source_is_queued_twice_is_refused_once() {
+    let mut cells = super::cells::Cells::<EffectTerm<crate::ty::Infer>>::new();
+    let fresh = |cells: &mut super::cells::Cells<EffectTerm<crate::ty::Infer>>| EffectTerm::Var(cells.fresh("test"));
+    let (into, a, b) = (fresh(&mut cells), fresh(&mut cells), fresh(&mut cells));
+    cells.unify(&into, &EffectTerm::Known(Effect::pure())).expect("a fresh variable is made pure");
+    let (flow, mut refused) = cells.flows_into(&a, &into, &Effect::join);
+    cells.join(&b, &EffectTerm::Known(Effect::opaque()), Effect::join).expect("`b` is fixed by no `eq`");
+    cells.join(&a, &b, Effect::join).expect("neither `a` nor `b` is fixed");
+    refused.extend(cells.propagate(&Effect::join));
+
+    let flows: Vec<FlowId> = refused.iter().map(|refusal| refusal.flow).collect();
+    assert_eq!(flows, vec![flow]);
+    assert_eq!(refused[0].exceeds, Exceeds { fixed: Effect::pure(), needs: Effect::opaque() });
+}
