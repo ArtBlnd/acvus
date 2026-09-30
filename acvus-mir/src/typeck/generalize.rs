@@ -45,8 +45,8 @@ pub struct InstanceId(pub u32);
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct LetScheme {
     pub binder: AstId,
-    /// The binding's term: its function type, over the generalized
-    /// variables once `generalize_all` ran.
+    /// The binding's term, where its values enter; its function type as
+    /// each use instantiates it is `Settled::ty`.
     pub term: Term,
     /// The lambdas whose values entered the binding: their bodies'
     /// decisions are what its requirements come from.
@@ -58,6 +58,10 @@ pub(super) struct LetScheme {
     pub generalizes: bool,
     /// What its value is.
     pub value: SchemeValue,
+    /// The level of the bodies its values are: an identity one of them
+    /// made, at this level or deeper, is made fresh at each use when its
+    /// result holds it (types §3).
+    pub bodies: Level,
 }
 
 /// What a scheme generalizes: the values entering a binding a `let` made,
@@ -72,6 +76,10 @@ pub(super) enum SchemeValue {
 /// A scheme settled: what it generalizes, and what it requires.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Settled {
+    /// Its function type over the generalized variables: the binding's
+    /// type, each identity its bodies made that its result holds a
+    /// variable (types §3).
+    pub ty: Term,
     /// Every variable of every kind made while checking the values that
     /// entered the binding and reached from no term the enclosing scope or
     /// a capture holds.
@@ -153,6 +161,7 @@ impl Moving<'_> {
         LetScheme {
             term: self.terms.term(scheme.term),
             settled: scheme.settled.as_ref().map(|settled| Settled {
+                ty: self.terms.term(settled.ty),
                 generalized: self.vars(&settled.generalized),
                 requirements: settled.requirements.iter().map(|decision| decision.map_terms(self)).collect(),
             }),
@@ -293,8 +302,9 @@ impl Canonicalizing<'_> {
     fn copy_scheme(&mut self, scheme: &LetScheme) -> LetScheme {
         let term = self.terms.term(scheme.term);
         let settled = scheme.settled.as_ref().map(|settled| {
+            let ty = self.terms.term(settled.ty);
             let requirements = settled.requirements.iter().map(|decision| decision.map_terms(self)).collect();
-            Settled { generalized: self.vars(&settled.generalized), requirements }
+            Settled { ty, generalized: self.vars(&settled.generalized), requirements }
         });
         LetScheme {
             binder: self.site,
@@ -303,6 +313,7 @@ impl Canonicalizing<'_> {
             settled,
             generalizes: scheme.generalizes,
             value: scheme.value,
+            bodies: scheme.bodies,
         }
     }
 
@@ -485,7 +496,9 @@ fn instance_of(cx: &Ctxt<'_>, term: Term) -> bool {
 /// finds them), and `generalize_all` settles it.
 pub(super) fn register(cx: &mut Ctxt<'_>, binder: AstId, term: Term) -> SchemeId {
     let id = SchemeId(u32::try_from(cx.out.schemes.len()).expect("register: u32::MAX schemes"));
-    cx.out.schemes.push(LetScheme { binder, term, lambdas: Vec::new(), settled: None, generalizes: false, value: SchemeValue::Entering });
+    // Its values' lambdas' bodies are one level inside the `let`.
+    let bodies = Level(cx.infer.level().0 + 1);
+    cx.out.schemes.push(LetScheme { binder, term, lambdas: Vec::new(), settled: None, generalizes: false, value: SchemeValue::Entering, bodies });
     id
 }
 
@@ -493,7 +506,7 @@ pub(super) fn register(cx: &mut Ctxt<'_>, binder: AstId, term: Term) -> SchemeId
 /// registered after every binding its walk made, so it settles last.
 pub(super) fn register_unit(cx: &mut Ctxt<'_>, root: AstId, term: Term) -> SchemeId {
     let id = SchemeId(u32::try_from(cx.out.schemes.len()).expect("register_unit: u32::MAX schemes"));
-    cx.out.schemes.push(LetScheme { binder: root, term, lambdas: Vec::new(), settled: None, generalizes: true, value: SchemeValue::Unit });
+    cx.out.schemes.push(LetScheme { binder: root, term, lambdas: Vec::new(), settled: None, generalizes: true, value: SchemeValue::Unit, bodies: Level::UNIT });
     id
 }
 
@@ -536,7 +549,7 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
     if !local {
         // An assignment gave the binding a value whose body is elsewhere:
         // it is not generalized, and each use is its one term.
-        cx.out.schemes[id.0 as usize].settled = Some(Settled { generalized: Generalized::default(), requirements: Box::new([]) });
+        cx.out.schemes[id.0 as usize].settled = Some(Settled { ty: term, generalized: Generalized::default(), requirements: Box::new([]) });
         return;
     }
     let roots: FxHashSet<AstId> = lambdas.iter().copied().chain([binder]).collect();
@@ -610,7 +623,9 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
     };
 
     let requirements = split_requirements(cx, owned, &generalized);
-    cx.out.schemes[id.0 as usize].settled = Some(Settled { generalized, requirements });
+    let bodies = cx.out.schemes[id.0 as usize].bodies;
+    let settled = generalize_result_identities(cx, term, bodies, generalized, requirements);
+    cx.out.schemes[id.0 as usize].settled = Some(settled);
 }
 
 /// A unit's scheme settled: its value is the whole check, so every decision
@@ -633,20 +648,19 @@ fn settle_unit(cx: &mut Ctxt<'_>, id: SchemeId, term: Term) {
         values: sorted(reached.values.iter().copied(), |var| var.0),
     };
     let requirements = split_requirements(cx, owned, &generalized);
-    let (term, generalized, requirements) = generalize_result_identities(cx, term, generalized, requirements);
-    let scheme = &mut cx.out.schemes[id.0 as usize];
-    scheme.term = term;
-    scheme.settled = Some(Settled { generalized, requirements });
+    let settled = generalize_result_identities(cx, term, Level::UNIT, generalized, requirements);
+    cx.out.schemes[id.0 as usize].settled = Some(settled);
 }
 
-/// A scheme's function type `term` whose result holds identities the unit's
-/// body made: each is a variable the scheme generalizes, in its type and its
-/// requirements, which each call makes a fresh identity of
-/// (`fire_instantiate`), as a declaration's call does (types §3).
-fn generalize_result_identities(cx: &mut Ctxt<'_>, term: Term, mut generalized: Generalized, requirements: Box<[Decision]>) -> (Term, Generalized, Box<[Decision]>) {
-    let made = cx.infer.result_identities_made_from(term, Level(0));
+/// A scheme settled at the function type `term`, whose result may hold
+/// identities its bodies, at level `bodies`, made: each is a variable the
+/// scheme generalizes, in its type and its requirements, which each use
+/// makes a fresh identity of (`fire_instantiate`), as a declaration's call
+/// does (types §3).
+fn generalize_result_identities(cx: &mut Ctxt<'_>, term: Term, bodies: Level, mut generalized: Generalized, requirements: Box<[Decision]>) -> Settled {
+    let made = cx.infer.result_identities_made_from(term, bodies);
     if made.is_empty() {
-        return (term, generalized, requirements);
+        return Settled { ty: term, generalized, requirements };
     }
     let abstracted: FxHashMap<IdentityId, IdentityVarId> = made.into_iter().map(|identity| (identity, cx.infer.fresh_identity())).collect();
     let mut abstracting = Abstracting { infer: &mut cx.infer, abstracted: &abstracted, memo: FxHashMap::default() };
@@ -655,7 +669,7 @@ fn generalize_result_identities(cx: &mut Ctxt<'_>, term: Term, mut generalized: 
     let mut identities: Vec<IdentityVarId> = generalized.identities.iter().copied().chain(abstracted.into_values()).collect();
     identities.sort_by_key(|var| var.0);
     generalized.identities = identities.into();
-    (term, generalized, requirements)
+    Settled { ty: term, generalized, requirements }
 }
 
 /// A scheme's terms with each identity it generalizes its variable.
@@ -713,8 +727,8 @@ pub(super) fn instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: AstId, 
 
 /// `Decision::Instantiate` fired; `Err` while its scheme is not settled.
 pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: AstId, span: Span, result: Term) -> Result<(), ()> {
-    let LetScheme { term, settled, value, .. } = cx.out.schemes[scheme.0 as usize].clone();
-    let Some(Settled { generalized, requirements }) = settled else {
+    let LetScheme { settled, value, .. } = cx.out.schemes[scheme.0 as usize].clone();
+    let Some(Settled { ty: term, generalized, requirements }) = settled else {
         return Err(());
     };
     let (at, flows) = cx.infer.instance_at(&generalized);

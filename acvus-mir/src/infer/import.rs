@@ -58,11 +58,14 @@ impl Infer {
             VarState::Bound(to) => VarState::Bound(imported.term(*to)),
         }));
         // A level is a depth of body instantiation, not a number of a
-        // variable: each variable and each identity keeps the level it was
-        // made at in the other store.
+        // variable: each variable keeps the level it was made at in the
+        // other store. An identity that store made came from outside this
+        // check.
         self.ty_levels.extend(from.ty_levels.iter().copied());
         self.identity_levels.extend(from.identity_levels.iter().copied());
-        self.made_at.extend(from.made_at.iter().map(|(identity, level)| (*identity, *level)));
+        for identity in from.made_at.keys() {
+            self.made_at.entry(*identity).or_insert(super::Level::OUTSIDE);
+        }
         self.reference_targets.extend(from.reference_targets.iter().map(|var| imported.ty_var(*var)));
         self.unmarked.extend(from.unmarked.iter().map(|var| imported.ty_var(*var)));
         imported

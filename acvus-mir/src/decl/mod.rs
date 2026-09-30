@@ -25,7 +25,7 @@ mod verify;
 use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 
-use crate::ty::{Declared, LifetimesOf, Poly, TyId, Types};
+use crate::ty::{Declared, IdentityId, LifetimesOf, Poly, TyId, Types};
 
 pub use bound::TyVarBound;
 pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
@@ -96,6 +96,10 @@ pub struct Declarations {
     /// it has one (types §1).
     lifts: FxHashMap<QualifiedRef, Lift>,
     contexts: FxHashMap<QualifiedRef, ContextDecl>,
+    /// Each context's identities, one per identity placeholder its type
+    /// holds, made once when the declarations are verified: a context is
+    /// storage of its own, the same at every check (context §3).
+    context_identities: FxHashMap<(QualifiedRef, u32), IdentityId>,
     entries: Vec<EntryDecl>,
     loop_markers: LoopMarkers,
     core: Core,
@@ -141,6 +145,12 @@ impl Declarations {
 
     pub fn context(&self, context: QualifiedRef) -> Option<TyId<Poly>> {
         self.contexts.get(&context).map(|declared| declared.ty)
+    }
+
+    /// The identity of `context` at its type's identity placeholder
+    /// `placeholder`; `None` where its type holds no such placeholder.
+    pub fn context_identity(&self, context: QualifiedRef, placeholder: u32) -> Option<IdentityId> {
+        self.context_identities.get(&(context, placeholder)).copied()
     }
 
     /// Whether `context` is declared volatile; `None` where it is not

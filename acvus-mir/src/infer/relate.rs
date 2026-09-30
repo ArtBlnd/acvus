@@ -672,7 +672,7 @@ impl Infer {
     }
 
     /// What `term` holds that a variable of `level` bounds, bound
-    /// variables followed.
+    /// variables followed, a function type's result left out.
     fn held_below(&self, level: Level, term: Term) -> HeldBelow {
         let mut held = HeldBelow { ty_vars: Vec::new(), identity_vars: Vec::new(), escapes: false };
         let mut seen = rustc_hash::FxHashSet::default();
@@ -693,6 +693,13 @@ impl Infer {
                     CellEnd::Known(made) | CellEnd::Var { value: Some(made), .. } => held.escapes |= self.made_at(made) > level,
                     CellEnd::Var { var, value: None } => held.identity_vars.push(var),
                 },
+                // A function type's result binds the identities its body
+                // makes, fresh at each call (types §3): what it holds
+                // there is its own, never the variable's it enters.
+                TyKind::Fn { params, .. } => {
+                    stack.extend(params.iter().copied());
+                    continue;
+                }
                 _ => {}
             }
             kind.for_each_child(|child| stack.push(child));

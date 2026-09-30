@@ -60,9 +60,17 @@ pub enum Bound {
 }
 
 /// How deep in body instantiations a variable or an identity was made
-/// (types §3): 0 is the unit's own body.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+/// (types §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Level(pub u32);
+
+impl Level {
+    /// Outside every body: a context's identities, those a declaration
+    /// writes, and those another unit's store made.
+    pub const OUTSIDE: Level = Level(0);
+    /// A unit's own body.
+    pub const UNIT: Level = Level(1);
+}
 
 /// The solving state of one checked unit.
 pub struct Infer {
@@ -134,7 +142,7 @@ impl Infer {
             mark_vars: Cells::new(),
             len_vars: Cells::new(),
             identity_vars: Cells::new(),
-            level: Level::default(),
+            level: Level::UNIT,
             ty_levels: Vec::new(),
             identity_levels: Vec::new(),
             made_at: FxHashMap::default(),

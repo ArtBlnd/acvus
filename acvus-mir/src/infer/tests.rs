@@ -1349,7 +1349,7 @@ impl Fixture {
 fn values_of_one_identity_keep_it() {
     let mut fx = Fixture::new();
     let decls = identities(&fx.names, true);
-    let identity = fx.infer.make_identity(Level(0));
+    let identity = fx.infer.make_identity(Level::OUTSIDE);
     let token = fx.token(identity);
     let (value, slot) = (fx.held(token), fx.held(token));
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
@@ -1362,7 +1362,7 @@ fn values_of_one_identity_keep_it() {
 fn two_identities_meet_past_every_identity_carrying_ancestor() {
     let mut fx = Fixture::new();
     let decls = identities(&fx.names, true);
-    let (one, other) = (fx.infer.make_identity(Level(0)), fx.infer.make_identity(Level(0)));
+    let (one, other) = (fx.infer.make_identity(Level::OUTSIDE), fx.infer.make_identity(Level::OUTSIDE));
     let (first, second) = (fx.token(one), fx.token(other));
     let (value, slot) = (fx.held(second), fx.held(first));
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
@@ -1376,7 +1376,7 @@ fn two_identities_meet_past_every_identity_carrying_ancestor() {
 fn two_identities_with_no_identity_free_ancestor_do_not_meet() {
     let mut fx = Fixture::new();
     let decls = identities(&fx.names, false);
-    let (one, other) = (fx.infer.make_identity(Level(0)), fx.infer.make_identity(Level(0)));
+    let (one, other) = (fx.infer.make_identity(Level::OUTSIDE), fx.infer.make_identity(Level::OUTSIDE));
     let (first, second) = (fx.token(one), fx.token(other));
     let (value, slot) = (fx.held(second), fx.held(first));
     assert_eq!(

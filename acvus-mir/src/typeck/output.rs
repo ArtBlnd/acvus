@@ -279,9 +279,6 @@ pub(super) struct Output {
     /// Each unit whose interface this check brought in, by the scheme it is
     /// here (`generalize::import`).
     pub imported: FxHashMap<acvus_utils::QualifiedRef, super::generalize::SchemeId>,
-    /// The identities each context's type holds in this check, by
-    /// placeholder, made the first time the context is named (context §3).
-    pub context_identities: FxHashMap<acvus_utils::QualifiedRef, FxHashMap<u32, crate::ty::IdentityId>>,
     /// Every scheme an import brought in: another check's, whose values are
     /// not this check's to make.
     pub foreign: rustc_hash::FxHashSet<super::generalize::SchemeId>,

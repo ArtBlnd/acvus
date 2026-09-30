@@ -264,6 +264,11 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         .filter_map(|(id, scheme)| super::lift::lift_of(&types, scheme).map(|lift| (*id, lift)))
         .collect();
 
+    let context_identities = contexts
+        .iter()
+        .flat_map(|(id, declared)| super::identity_variables(&types, [declared.ty]).into_iter().map(|placeholder| ((*id, placeholder), crate::ty::IdentityId::alloc())))
+        .collect();
+
     let decls = Declarations {
         types,
         functions,
@@ -273,6 +278,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         conversions,
         lifts,
         contexts,
+        context_identities,
         entries,
         loop_markers,
         core,

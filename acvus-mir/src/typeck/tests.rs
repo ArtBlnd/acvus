@@ -3841,14 +3841,16 @@ fn an_identity_made_in_a_lambda_not_generalized_escapes_at_its_result() {
 
 /// types §3: a let-bound lambda's result identity made in its body leaves
 /// as its result, made fresh at each call as a declaration's is: one call's
-/// value kept through `keep` meets itself.
+/// value kept through `keep` meets itself, and two calls' values are two
+/// identities.
 #[test]
-#[ignore = "the lambda's result variable takes the level of the binding its function type enters before the binding is generalized, so the identity escapes there; returned to the coordinator"]
 fn a_let_bound_lambdas_result_identity_is_fresh_at_each_call() {
     let (fx, y) = identity_fixture(true);
     let (checked, script) = fx.script("let f = |i| -> make(); let a = f(1); join(a, keep(a))");
     checked.admitted();
     assert!(!is_named(&checked, tail(&checked, &script), y), "the join keeps `X`");
+    let (checked, _) = identity_fixture(true).0.script("let f = |i| -> make(); join(f(1), f(2))");
+    assert!(refused_as_two_heads(&checked), "refused: {:?}", checked.refusals());
 }
 
 /// types §3: a call of a unit is an instantiation of its body, and its
@@ -3903,4 +3905,31 @@ fn a_contexts_identity_is_its_own() {
     let (checked, script) = fx.script("join(@p, @p)");
     checked.admitted();
     assert!(!is_named(&checked, tail(&checked, &script), y), "the join keeps `X`");
+}
+
+/// context §3, types §3: a context's identity is made once, at the
+/// declarations, outside every body, so a unit's result holding it is not
+/// made fresh at its calls: a unit returning `@p`'s value gives the caller
+/// the identity of the caller's own `@p`, and two units reading `@p` give
+/// one identity.
+#[test]
+fn a_contexts_identity_is_one_across_units() {
+    let with_context = || {
+        let (mut fx, _) = identity_fixture(false);
+        let x = QualifiedRef::root(fx.name("X"));
+        let x_i = fx.ty(TyKind::UserDefined {
+            id: x,
+            type_args: Box::new([]),
+            effect: None,
+            identity: Some(IdentityTerm::Var(0)),
+            marked: MarkTerm::Known(Mark::Unmarked),
+        });
+        fx.context("p", x_i);
+        fx
+    };
+    let (checked, _, _) = with_context().script_with_units(&[(&["lib"][..], "g", "@p")], "join(lib::g(), @p)");
+    checked.admitted();
+    let units = [(&["lib"][..], "g", "@p"), (&["lib"][..], "h", "@p")];
+    let (checked, _, _) = with_context().script_with_units(&units, "join(lib::g(), lib::h())");
+    checked.admitted();
 }

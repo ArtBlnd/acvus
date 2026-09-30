@@ -157,12 +157,11 @@ impl<'d> Ctxt<'d> {
         self.infer.fixed(&pending, term)
     }
 
-    /// `context`'s declared type at this body: every node `Opaque`
-    /// (types §1), and each identity it holds the one this check made
-    /// for it (context §3).
+    /// `context`'s declared type `ty` at this body: every node `Opaque`
+    /// (types §1), and each identity it holds the context's own
+    /// (context §3).
     pub fn context_type(&mut self, context: QualifiedRef, ty: TyId<Poly>) -> Term {
-        let identities = self.out.context_identities.entry(context).or_default();
-        self.infer.instantiate_context(self.decls, ty, identities)
+        self.infer.instantiate_context(self.decls, context, ty)
     }
 
     /// A `&` or `&mut` of a value of term `target`, decided once its head

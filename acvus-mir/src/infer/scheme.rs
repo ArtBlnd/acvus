@@ -6,7 +6,7 @@ use std::convert::Infallible;
 use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
-use super::{Bound, FlowId, Infer, Term};
+use super::{Bound, FlowId, Infer, Level, Term};
 use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound, effect_variables, identity_variables};
 use crate::ty::{
     Calls, CallsTerm, Concrete, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityId, IdentityTerm,
@@ -343,15 +343,16 @@ impl Infer {
         self.instantiate_ty(&mut at, ty)
     }
 
-    /// A context's declared type at this use, as `instantiate_type` makes
-    /// one, each identity it holds the context's own (context §3):
-    /// `identities`, by placeholder, made once per context at the
-    /// outermost level, since a context is storage apart from every body.
-    pub fn instantiate_context(&mut self, decls: &Declarations, ty: TyId<Poly>, identities: &mut FxHashMap<u32, IdentityId>) -> Term {
+    /// `context`'s declared type `ty` at this use, as `instantiate_type`
+    /// makes one, each identity it holds the one the declarations made for
+    /// it (context §3), outside every body.
+    pub fn instantiate_context(&mut self, decls: &Declarations, context: QualifiedRef, ty: TyId<Poly>) -> Term {
         let mut at = AtUse::new(decls.types(), Placeholders::Absent);
-        for var in identity_variables(decls.types(), [ty]) {
-            let identity = *identities.entry(var).or_insert_with(|| self.make_identity(super::Level(0)));
-            at.identity_vars.insert(var, IdentityTerm::Known(identity));
+        for placeholder in identity_variables(decls.types(), [ty]) {
+            let identity = decls
+                .context_identity(context, placeholder)
+                .expect("verify makes an identity for each identity placeholder of a context's type");
+            at.identity_vars.insert(placeholder, self.written_identity(identity));
         }
         self.instantiate_ty(&mut at, ty)
     }
@@ -481,10 +482,9 @@ impl Infer {
         term
     }
 
-    /// An identity a written type names: made outside every body this
-    /// store checks, at the outermost level, unless this store made it.
+    /// An identity a written type names: made outside every body.
     fn written_identity(&mut self, identity: IdentityId) -> IdentityTerm<InferPhase> {
-        self.made_at.entry(identity).or_insert(super::Level(0));
+        self.made_at.insert(identity, Level::OUTSIDE);
         IdentityTerm::Known(identity)
     }
 

@@ -142,7 +142,8 @@ fn claimed(cx: &mut Ctxt<'_>) -> Vec<Term> {
         }
         let (sites, vars) = super::generalize::instance_sites(cx, id);
         let scheme = &cx.out.schemes[cx.out.instances[at].scheme.0 as usize];
-        let unit = (scheme.value == super::generalize::SchemeValue::Unit).then_some(scheme.term);
+        let unit = (scheme.value == super::generalize::SchemeValue::Unit)
+            .then(|| scheme.settled.as_ref().expect("an instantiated scheme is settled").ty);
         let functions: Vec<Term> = sites
             .iter()
             .filter(|site| cx.out.closures.contains_key(site))
