@@ -11,6 +11,7 @@ mod boundary;
 pub mod adapter;
 pub mod callback;
 pub mod context;
+mod crossing;
 pub mod done;
 pub mod guard;
 pub mod impls;

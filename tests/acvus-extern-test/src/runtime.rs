@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use acvus_extern::callback::{CallArgs, CallsBack, LoanForm};
 use acvus_extern::{Settled, SiteShape};
-use acvus_extern::runtime::{Crosses, Mutability, RefTarget, Runtime};
+use acvus_extern::Primitive;
+use acvus_extern::runtime::{Crosses, Mutability, Opaque, RefTarget, Runtime};
 use acvus_extern::register::{ExternFn, Refused, Registers};
 use acvus_utils::{Interner, QualifiedRef};
 
@@ -43,22 +44,62 @@ impl Registers for WordRuntime {
 
 impl Runtime for WordRuntime {
     type Value = Word;
-    type Shared<'a, T: Crosses + 'a> = &'a T;
-    type Exclusive<'a, T: Crosses + 'a> = &'a mut T;
+    type Shared<'a, T: Opaque + 'a> = &'a T;
+    type Exclusive<'a, T: Opaque + 'a> = &'a mut T;
 
-    fn take<T: Crosses>(&self, v: Word, at: Settled<'_>) -> T {
-        boundary::take(v, at)
+    fn give_opaque<T: Opaque>(&self, value: T, _at: Settled<'_>) -> Word {
+        boundary::give_opaque(value)
     }
 
-    fn give<T: Crosses>(&self, value: T, _at: Settled<'_>) -> Word {
-        boundary::erase(value)
+    fn take_opaque<T: Opaque>(&self, v: Word, at: Settled<'_>) -> T {
+        boundary::take_opaque(v, at)
     }
 
-    fn shared<'a, T: Crosses + 'a>(&'a self, v: &'a Word, at: Settled<'a>) -> &'a T {
+    fn give_primitive<P: Primitive>(&self, value: P, _at: Settled<'_>) -> Word {
+        boundary::scalar(value)
+    }
+
+    fn take_primitive<P: Primitive>(&self, v: Word, at: Settled<'_>) -> P {
+        boundary::take_primitive(v, at)
+    }
+
+    fn give_string(&self, value: String, _at: Settled<'_>) -> Word {
+        boundary::give_string(value)
+    }
+
+    fn take_string(&self, v: Word, at: Settled<'_>) -> String {
+        boundary::take_string(v, at)
+    }
+
+    fn give_option(&self, value: Option<Word>, _at: Settled<'_>) -> Word {
+        boundary::give_option(value)
+    }
+
+    fn take_option(&self, v: Word, at: Settled<'_>) -> Option<Word> {
+        boundary::take_option(v, at)
+    }
+
+    fn give_result(&self, value: Result<Word, Word>, _at: Settled<'_>) -> Word {
+        boundary::give_result(value)
+    }
+
+    fn take_result(&self, v: Word, at: Settled<'_>) -> Result<Word, Word> {
+        boundary::take_result(v, at)
+    }
+
+    fn give_tuple<const N: usize>(&self, parts: [Word; N], _at: Settled<'_>) -> Word {
+        boundary::give_tuple(parts)
+    }
+
+    fn take_tuple<const N: usize>(&self, v: Word, at: Settled<'_>) -> [Word; N] {
+        boundary::take_tuple(v, at)
+    }
+
+    fn shared<'a, T: Opaque + 'a>(&'a self, v: &'a Word, at: Settled<'a>) -> &'a T {
         boundary::place(v, at)
     }
 
-    fn exclusive<'a, T: Crosses + 'a>(&'a self, v: &'a mut Word, at: Settled<'a>) -> &'a mut T {
+    fn exclusive<'a, T: Opaque + 'a>(&'a self, v: &'a mut Word, at: Settled<'a>) -> &'a mut T {
         boundary::place_mut(v, at)
     }
 
@@ -88,7 +129,7 @@ impl CallsBack for WordRuntime {
     where
         R: Runtime<Value = Word>,
         A: CallArgs<R>,
-        U: LoanForm,
+        U: LoanForm<R>,
     {
         let run = A::lend_run(args, rt, at).map(Held::kept).collect();
         let result = call_closure(rt, closure, run, A::lent().collect(), at);
@@ -105,13 +146,13 @@ impl CallsBack for WordRuntime {
     where
         R: Runtime<Value = Word>,
         A: CallArgs<R>,
-        U: Crosses,
+        U: Crosses<R>,
     {
         let run: Vec<Held> = A::move_run(args, rt, at).map(Held::kept).collect();
         let lent: Box<[Option<Mutability>]> = A::lent().collect();
         async move {
             let result = call_closure(rt, closure, run, lent, at);
-            <U as LoanForm>::read(result, rt, at)
+            <U as LoanForm<R>>::read(result, rt, at)
         }
     }
 }

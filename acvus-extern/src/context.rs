@@ -52,8 +52,8 @@ impl<'c, R: Runtime> Returning<'c, R> {
 
     /// Finishes the call with its result, crossed at the site's settled result
     /// type.
-    pub fn finish<T: Crosses>(self, value: T) -> Done<R> {
-        Done::of(self.runtime.give(value, Settled::of_the_entry()))
+    pub fn finish<T: Crosses<R>>(self, value: T) -> Done<R> {
+        Done::of(value.give(self.runtime, Settled::of_the_entry()))
     }
 
     /// Finishes the call with a result that borrows a part of what the call
@@ -91,8 +91,8 @@ impl<'c, R: Runtime> Awaited<'c, R> {
         Awaited { runtime, site }
     }
 
-    pub fn finish<T: Crosses>(self, value: T) -> Done<R> {
-        Done::of(self.runtime.give(value, Settled::of_the_entry()))
+    pub fn finish<T: Crosses<R>>(self, value: T) -> Done<R> {
+        Done::of(value.give(self.runtime, Settled::of_the_entry()))
     }
 
     pub fn sleep(&self, d: std::time::Duration) -> impl Future<Output = ()> + Send {

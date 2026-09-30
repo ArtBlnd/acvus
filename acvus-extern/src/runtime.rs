@@ -4,6 +4,11 @@
 //! No method here takes a Rust value and returns a runtime value, or reads a
 //! runtime value, except under a `Settled`, which only an entry makes: a value
 //! is made and read only by the crossing, at the type the checker settled.
+//!
+//! The runtime makes and reads values by kind: an opaque value, a primitive,
+//! text, an option, a result and a tuple. A type's crossing (`Crosses`) is
+//! its own: it composes the kinds over its parts' crossings, so the runtime
+//! never sees a type's structure, only the kind's.
 
 use std::ops::{Deref, DerefMut};
 use std::time::Duration;
@@ -11,18 +16,52 @@ use std::time::Duration;
 use acvus_utils::Interner;
 
 use crate::boundary::entry::Settled;
+use crate::boundary::seal::Crossings;
 use crate::boundary::signed::{SignedS1, SignedS2, SignedS3, Structural};
-use crate::boundary::uniform::Release;
+use crate::boundary::uniform::{Primitive, Release};
 
-/// A type a checker-settled site may be read at. It may carry lifetimes; a
-/// value that holds a loan holds it as a `Loaned`, never as a Rust reference.
-/// It is `Send + Sync`, as the runtime value it becomes is. Every `Structural`
-/// type that is `Send + Sync` crosses, by the one implementation below, so no
-/// author implements it (safety §1): an author signs only `Structural`,
-/// through the derive.
-pub trait Crosses: Sized + Send + Sync + Structural {}
+/// A type that crosses at the runtime `R`: one of the language's types, or an
+/// extern type the derive declares. Each crossing is its type's own and is
+/// sealed: this crate writes the language's, and the derive an extern
+/// type's. `give` makes the runtime's value of `self`, and `take` moves one
+/// back out, each by its kind's operations over its parts' crossings.
+///
+/// A type that crosses may carry lifetimes; a value that holds a loan holds it
+/// as a `Loaned`, never as a Rust reference.
+///
+/// A type neither declares does not cross, nor does a sequence, which is the
+/// runtime's own and is lent as a slice:
+///
+/// ```compile_fail,E0277
+/// use acvus_extern::context::Returning;
+/// use acvus_extern::done::Done;
+/// use acvus_extern::runtime::Runtime;
+///
+/// struct Undeclared;
+///
+/// fn finish<R: Runtime>(cx: Returning<'_, R>) -> Done<R> {
+///     cx.finish(Undeclared)
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// use acvus_extern::context::Returning;
+/// use acvus_extern::done::Done;
+/// use acvus_extern::runtime::Runtime;
+///
+/// fn finish<R: Runtime>(cx: Returning<'_, R>) -> Done<R> {
+///     cx.finish(vec![1i64])
+/// }
+/// ```
+pub trait Crosses<R: Runtime>: Sized + Send + Sync + Crossings {
+    fn give(self, rt: &R, at: Settled<'_>) -> R::Value;
+    fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self;
+}
 
-impl<T> Crosses for T where T: Structural + Send + Sync {}
+/// An extern type, held by the runtime as the Rust value itself: the one kind
+/// lent in place (`Runtime::shared`, `Runtime::exclusive`), since only its
+/// storage is a `Self`. Only the derive declares one.
+pub trait Opaque: Send + Sync + Structural + Crossings {}
 
 /// A lend is shared or exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,29 +83,39 @@ pub enum RefTarget<'a, P: ?Sized> {
 pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS3 {
     type Value: Release + Send + Sync + 'static;
 
-    /// A shared lend of storage; its borrow is the lend. Every guard is
-    /// `Send`, as what it lends is (`Crosses`), so an awaited body holds one
-    /// across a wait (macros §1).
-    type Shared<'a, T: Crosses + 'a>: Deref<Target = T> + Send;
-    /// An exclusive lend of storage; its drop is the loan's end, and what the
-    /// drop does is a constant of `T` (K13).
-    type Exclusive<'a, T: Crosses + 'a>: DerefMut<Target = T> + Send;
+    /// A shared lend of an opaque value's storage; its borrow is the lend.
+    /// Every guard is `Send`, as what it lends is, so an awaited body holds
+    /// one across a wait (macros §1).
+    type Shared<'a, T: Opaque + 'a>: Deref<Target = T> + Send;
+    /// An exclusive lend of an opaque value's storage; its drop is the loan's
+    /// end, and what the drop does is a constant of `T` (K13).
+    type Exclusive<'a, T: Opaque + 'a>: DerefMut<Target = T> + Send;
 
-    /// Moves a value of an opaque type out at its settled type, releasing
-    /// its storage. It is reached only through `Uniform`'s take, where a
-    /// handler needs the value itself; a value only dropped is released and
-    /// never taken (runtime contract §1).
-    fn take<T: Crosses>(&self, v: Self::Value, at: Settled<'_>) -> T;
-    /// Makes the runtime value of an opaque type at its settled type.
-    fn give<T: Crosses>(&self, value: T, at: Settled<'_>) -> Self::Value;
+    /// Each kind's value made, and moved back out at its settled type. A take
+    /// consumes the value: its storage is released, and the parts it hands
+    /// back are the caller's.
+    fn give_opaque<T: Opaque>(&self, value: T, at: Settled<'_>) -> Self::Value;
+    fn take_opaque<T: Opaque>(&self, v: Self::Value, at: Settled<'_>) -> T;
 
-    /// The guards lend storage from the value's place. A program's array is
-    /// the runtime's `Vec` of its values and a `String` a Rust `String`, so a
-    /// slice is the lend of a `Vec<Uniform<..>>` and text the lend of a
-    /// `String`, each dereferenced (runtime contract §2, Guards, Views).
-    fn shared<'a, T: Crosses + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::Shared<'a, T>;
-    fn exclusive<'a, T: Crosses + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T>;
+    fn give_primitive<P: Primitive>(&self, value: P, at: Settled<'_>) -> Self::Value;
+    fn take_primitive<P: Primitive>(&self, v: Self::Value, at: Settled<'_>) -> P;
 
+    fn give_string(&self, value: String, at: Settled<'_>) -> Self::Value;
+    fn take_string(&self, v: Self::Value, at: Settled<'_>) -> String;
+
+    fn give_option(&self, value: Option<Self::Value>, at: Settled<'_>) -> Self::Value;
+    fn take_option(&self, v: Self::Value, at: Settled<'_>) -> Option<Self::Value>;
+
+    fn give_result(&self, value: Result<Self::Value, Self::Value>, at: Settled<'_>) -> Self::Value;
+    fn take_result(&self, v: Self::Value, at: Settled<'_>) -> Result<Self::Value, Self::Value>;
+
+    fn give_tuple<const N: usize>(&self, parts: [Self::Value; N], at: Settled<'_>) -> Self::Value;
+    fn take_tuple<const N: usize>(&self, v: Self::Value, at: Settled<'_>) -> [Self::Value; N];
+
+    /// The guards lend an opaque value's storage from the value's place
+    /// (runtime contract §2, Guards).
+    fn shared<'a, T: Opaque + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::Shared<'a, T>;
+    fn exclusive<'a, T: Opaque + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T>;
 
     /// The reference value made from a part of storage the call lent; a
     /// borrowed result is one (crossing §4).

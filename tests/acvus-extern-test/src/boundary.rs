@@ -9,10 +9,14 @@
 //! run keeps, `Part` to a part of lent storage, and `WidePart` to an
 //! allocation holding the wide pointer of an unsized part.
 //!
+//! An opaque value, text, an option, a result and a tuple each lie in a slot:
+//! the Rust value itself, and a part of an option, a result or a tuple as a
+//! `Held` value the slot owns. An array is a slot holding a `Vec` of `Held`
+//! values.
+//!
 //! Every read at a type takes the entry's `Settled`, the proof that the value
 //! is live at the type the checker settled for its site (safety §3). No read
-//! checks the kind against the type; only `Validate` compares them, for the
-//! adapter.
+//! checks the kind against the type.
 
 #![allow(unsafe_code)]
 #![allow(
@@ -28,9 +32,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::register::ExternFn;
 use acvus_extern::done::Done;
-use acvus_extern::runtime::{Crosses, RefTarget, Runtime};
+use acvus_extern::runtime::{Crosses, Opaque, RefTarget, Runtime};
+use acvus_extern::seal::Crossings;
 use acvus_extern::{
-    LayoutFact, Release, Releasing, Settled, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
+    LayoutFact, Primitive, Release, Releasing, Settled, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
 };
 
 use crate::runtime::WordRuntime;
@@ -85,13 +90,14 @@ fn scalars() -> [(TypeId, Kind); 12] {
     ]
 }
 
-/// The scalar kind of `T`, where `T`'s canonical form is a scalar.
-pub(crate) fn scalar_kind<T>() -> Option<Kind>
+/// The scalar kind of the primitive `P`.
+fn scalar_kind<P>() -> Kind
 where
-    T: Structural,
+    P: Primitive,
 {
-    let canon = TypeId::of::<T::Canon>();
-    scalars().into_iter().find(|&(id, _)| id == canon).map(|(_, kind)| kind)
+    let canon = TypeId::of::<P::Canon>();
+    let found = scalars().into_iter().find(|&(id, _)| id == canon);
+    found.map(|(_, kind)| kind).expect("every primitive is a scalar")
 }
 
 /// A value: its kind and its word, as the interpreter's `Value` on master.
@@ -102,6 +108,7 @@ pub struct Word {
 }
 
 impl Word {
+    #[cfg(test)]
     pub(crate) fn kind(self) -> Kind {
         self.kind
     }
@@ -151,38 +158,45 @@ impl<T> Slot<T> {
     }
 }
 
-/// The value of `value`: a scalar in the word, anything else in a slot.
-pub(crate) fn erase<T>(value: T) -> Word
+/// A primitive's value: the scalar in the word's first bytes.
+pub(crate) fn scalar<P>(value: P) -> Word
 where
-    T: Crosses,
+    P: Primitive,
 {
-    let Some(kind) = scalar_kind::<T>() else {
-        return Slot::allocate(Kind::Large, value, TypeId::of::<T::Canon>());
-    };
+    let kind = scalar_kind::<P>();
     let mut word = 0u64;
-    // SAFETY: `T`'s canonical form is the scalar `kind` names, and `T` has
-    // its canonical form's size and alignment by `T`'s `Structural`
+    // SAFETY: `P`'s canonical form is the scalar `kind` names, and `P` has
+    // its canonical form's size and alignment by `P`'s `Structural`
     // signature; every scalar is at most 8 bytes aligned to at most 8, so a
-    // `T` fits the word's first bytes at the word's alignment.
-    unsafe { ptr::from_mut(&mut word).cast::<T>().write(value) };
+    // `P` fits the word's first bytes at the word's alignment.
+    unsafe { ptr::from_mut(&mut word).cast::<P>().write(value) };
     Word { kind, word }
 }
 
 /// # Safety
-/// `v` is a live value made from a value of `T` at `T`'s canonical type,
-/// and nothing uses it afterwards.
-unsafe fn materialize<T>(v: Word) -> T
+/// `v` is a value `scalar` made from a `P`.
+unsafe fn read_scalar<P>(v: Word) -> P
 where
-    T: Crosses,
+    P: Primitive,
 {
-    match scalar_kind::<T>() {
-        // SAFETY: `erase` wrote a `T` in the word's first bytes.
-        Some(_) => unsafe { ptr::from_ref(&v.word).cast::<T>().read() },
-        // SAFETY: `erase` allocated a `Slot` of a type with `T`'s layout and
-        // release by `T`'s `Structural` signature, and the caller's contract
-        // makes this its one use.
-        None => unsafe { Slot::<T>::take(v.address()) },
-    }
+    // SAFETY: `scalar` wrote a `P` in the word's first bytes.
+    unsafe { ptr::from_ref(&v.word).cast::<P>().read() }
+}
+
+/// A value held in a slot of its own.
+fn slotted<T>(value: T) -> Word
+where
+    T: 'static,
+{
+    Slot::allocate(Kind::Large, value, TypeId::of::<T>())
+}
+
+/// # Safety
+/// `v` is a live value `slotted` made from a `T`, and nothing uses it
+/// afterwards.
+unsafe fn unslotted<T>(v: Word) -> T {
+    // SAFETY: the caller's contract.
+    unsafe { Slot::<T>::take(v.address()) }
 }
 
 /// Where the `P` the value at `place` lends lies: a scalar's own word; a
@@ -259,7 +273,9 @@ impl Release for Word {
 }
 
 /// A value the run owns: a call's result, released by its drop. It stands in
-/// for a program's variable.
+/// for a program's variable, and for a part an option, a result, a tuple or an
+/// array holds.
+#[repr(transparent)]
 pub struct Held(Word);
 
 impl Held {
@@ -320,12 +336,73 @@ impl Drop for Held {
 // asked for here (safety §3), and storage it names stays live and in place
 // for as long as the call lends it (S1).
 
-pub(crate) fn take<T>(v: Word, _at: Settled<'_>) -> T
+pub(crate) fn give_opaque<T>(value: T) -> Word
 where
-    T: Crosses,
+    T: Opaque,
 {
-    // SAFETY: under `Settled`, `v` is a value of `T` its one holder moves out.
-    unsafe { materialize(v) }
+    Slot::allocate(Kind::Large, value, TypeId::of::<T::Canon>())
+}
+
+pub(crate) fn take_opaque<T>(v: Word, _at: Settled<'_>) -> T
+where
+    T: Opaque,
+{
+    // SAFETY: under `Settled`, `v` is a value `give_opaque` made from a `T`,
+    // which its one holder moves out.
+    unsafe { unslotted(v) }
+}
+
+pub(crate) fn take_primitive<P>(v: Word, _at: Settled<'_>) -> P
+where
+    P: Primitive,
+{
+    // SAFETY: under `Settled`, `v` is a value `scalar` made from a `P`.
+    unsafe { read_scalar(v) }
+}
+
+pub(crate) fn give_string(value: String) -> Word {
+    slotted(value)
+}
+
+pub(crate) fn take_string(v: Word, _at: Settled<'_>) -> String {
+    // SAFETY: under `Settled`, `v` is text, a `String` in a slot, which its
+    // one holder moves out.
+    unsafe { unslotted(v) }
+}
+
+pub(crate) fn give_option(value: Option<Word>) -> Word {
+    slotted(value.map(Held::kept))
+}
+
+pub(crate) fn take_option(v: Word, _at: Settled<'_>) -> Option<Word> {
+    // SAFETY: under `Settled`, `v` is an option, an `Option<Held>` in a slot,
+    // which its one holder moves out.
+    unsafe { unslotted::<Option<Held>>(v) }.map(Held::hand_over)
+}
+
+pub(crate) fn give_result(value: Result<Word, Word>) -> Word {
+    slotted(value.map(Held::kept).map_err(Held::kept))
+}
+
+pub(crate) fn take_result(v: Word, _at: Settled<'_>) -> Result<Word, Word> {
+    // SAFETY: under `Settled`, `v` is a result, a `Result<Held, Held>` in a
+    // slot, which its one holder moves out.
+    unsafe { unslotted::<Result<Held, Held>>(v) }.map(Held::hand_over).map_err(Held::hand_over)
+}
+
+pub(crate) fn give_tuple<const N: usize>(parts: [Word; N]) -> Word {
+    slotted(parts.map(Held::kept))
+}
+
+pub(crate) fn take_tuple<const N: usize>(v: Word, _at: Settled<'_>) -> [Word; N] {
+    // SAFETY: under `Settled`, `v` is a tuple of `N` parts, a `[Held; N]` in a
+    // slot, which its one holder moves out.
+    unsafe { unslotted::<[Held; N]>(v) }.map(Held::hand_over)
+}
+
+/// A program's array: a slot holding its elements.
+pub(crate) fn array(elements: Vec<Word>) -> Word {
+    slotted(elements.into_iter().map(Held::kept).collect::<Vec<Held>>())
 }
 
 pub(crate) fn place<'a, T>(v: &'a Word, _at: Settled<'a>) -> &'a T {
@@ -433,9 +510,9 @@ where
         let text = unsafe { &mut (*slot.address::<Slot<String>>()).value };
         ptr::from_mut(text.as_mut_str()) as *mut [u8]
     } else {
-        // SAFETY: the slot holds an array, a `Vec` of words, whose run is the
-        // slice of its values.
-        let run = unsafe { &mut (*slot.address::<Slot<Vec<Word>>>()).value };
+        // SAFETY: the slot holds an array, a `Vec` of `Held` values, each a
+        // `Word` by `repr(transparent)`, whose run is the slice of its values.
+        let run = unsafe { &mut (*slot.address::<Slot<Vec<Held>>>()).value };
         ptr::slice_from_raw_parts_mut(run.as_mut_ptr().cast::<u8>(), run.len())
     };
     // SAFETY: `str` and `[Word]` share `*mut [u8]`'s metadata, a length in
@@ -516,8 +593,13 @@ impl Drop for Tally {
 /// element the struct owns.
 pub struct Pair {
     pub name: String,
-    pub items: Vec<i64>,
+    pub lead: Number,
+    pub items: Vec<Number>,
 }
+
+/// An extern-defined number, for a borrowed result that names one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Number(pub i64);
 
 // SAFETY: `Canon` is `Self`, so size, alignment, field offsets and release
 // are one. `Tally` has no lifetime or type parameter, so it reaches none and
@@ -536,6 +618,37 @@ unsafe impl Structural for Pair {
     const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
 }
 
+// SAFETY: as for `Tally`.
+unsafe impl Structural for Number {
+    type Canon = Number;
+
+    const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
+}
+
+/// The crossings of the test's extern types, as the derive writes them: each
+/// is opaque, given and taken as itself.
+macro_rules! opaque {
+    ($($t:ty),+ $(,)?) => {$(
+        // SAFETY: this stands in for the derive: the crossing below gives and
+        // takes the type as an opaque value, at itself.
+        unsafe impl Crossings for $t {}
+
+        impl Opaque for $t {}
+
+        impl<R: Runtime> Crosses<R> for $t {
+            fn give(self, rt: &R, at: Settled<'_>) -> R::Value {
+                rt.give_opaque(self, at)
+            }
+
+            fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self {
+                rt.take_opaque(v, at)
+            }
+        }
+    )+};
+}
+
+opaque!(Tally, Pair, Number);
+
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
@@ -543,36 +656,36 @@ mod tests {
 
     use acvus_extern::runtime::RefTarget;
 
-    use super::{Kind, Slot, Word, erase, free, materialize, named_part, reference, target};
+    use super::{Kind, Slot, Word, free, named_part, read_scalar, reference, scalar, slotted, target, unslotted};
 
     #[test]
     fn a_scalar_round_trips_through_the_word() {
         let words = [
-            erase(-7i8),
-            erase(u64::MAX),
-            erase(1.5f64),
-            erase('\u{10FFFF}'),
-            erase(true),
+            scalar(-7i8),
+            scalar(u64::MAX),
+            scalar(1.5f64),
+            scalar('\u{10FFFF}'),
+            scalar(true),
         ];
 
         assert_eq!(words.map(Word::kind), [Kind::I8, Kind::U64, Kind::F64, Kind::Char, Kind::Bool]);
-        // SAFETY: each word was erased from the type it is read at, once.
+        // SAFETY: each word was made from the type it is read at.
         unsafe {
-            assert_eq!(materialize::<i8>(words[0]), -7);
-            assert_eq!(materialize::<u64>(words[1]), u64::MAX);
-            assert_eq!(materialize::<f64>(words[2]), 1.5);
-            assert_eq!(materialize::<char>(words[3]), '\u{10FFFF}');
-            assert!(materialize::<bool>(words[4]));
+            assert_eq!(read_scalar::<i8>(words[0]), -7);
+            assert_eq!(read_scalar::<u64>(words[1]), u64::MAX);
+            assert_eq!(read_scalar::<f64>(words[2]), 1.5);
+            assert_eq!(read_scalar::<char>(words[3]), '\u{10FFFF}');
+            assert!(read_scalar::<bool>(words[4]));
         }
     }
 
     #[test]
     fn a_value_larger_than_a_scalar_round_trips_through_an_allocation() {
-        let word = erase(String::from("large"));
+        let word = slotted(String::from("large"));
 
         assert_eq!(word.kind(), Kind::Large);
-        // SAFETY: the word was erased from a `String`, and is read once.
-        assert_eq!(unsafe { materialize::<String>(word) }, "large");
+        // SAFETY: the word was slotted from a `String`, and is read once.
+        assert_eq!(unsafe { unslotted::<String>(word) }, "large");
     }
 
     /// A value in a slot whose drop is counted by the strong count of an
@@ -608,7 +721,7 @@ mod tests {
 
     #[test]
     fn a_write_through_a_lent_scalar_lands_in_the_word_it_names() {
-        let mut kept = erase(5i16);
+        let mut kept = scalar(5i16);
         let mut lent = Word::pointing(Kind::Ref, &raw mut kept);
 
         // SAFETY: `lent` names `kept`, a live `i16`, and nothing else uses
@@ -616,19 +729,19 @@ mod tests {
         unsafe { *target::<i16>(&raw mut lent) = -300 };
 
         // SAFETY: `kept` holds an `i16`, read once.
-        assert_eq!(unsafe { materialize::<i16>(kept) }, -300);
+        assert_eq!(unsafe { read_scalar::<i16>(kept) }, -300);
     }
 
     #[test]
     fn a_write_through_a_lent_allocation_lands_in_its_slot() {
-        let mut kept = erase(String::from("lent"));
+        let mut kept = slotted(String::from("lent"));
         let mut lent = Word::pointing(Kind::Ref, &raw mut kept);
 
         // SAFETY: as for the scalar, for a `String` in a slot.
         unsafe { (*target::<String>(&raw mut lent)).push_str(" and written") };
 
         // SAFETY: `kept` holds a `String`, read once.
-        assert_eq!(unsafe { materialize::<String>(kept) }, "lent and written");
+        assert_eq!(unsafe { unslotted::<String>(kept) }, "lent and written");
     }
 
     #[test]

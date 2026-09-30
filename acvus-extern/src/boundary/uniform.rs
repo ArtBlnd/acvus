@@ -7,7 +7,7 @@ use std::mem::ManuallyDrop;
 use crate::boundary::entry::Settled;
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
 use crate::context::Opens;
-use crate::runtime::{Crosses, Runtime};
+use crate::runtime::{Crosses, Opaque, Runtime};
 
 /// The permission to release one value, made only by an owning holder's drop.
 pub struct Releasing {
@@ -44,20 +44,10 @@ impl<R: Runtime, X> Uniform<R, X> {
     }
 }
 
-impl<R: Runtime, T: Crosses> Uniform<R, T> {
-    /// A value of `T` made the runtime's by its `give`, owned from here on: an
-    /// element of a sequence a handler returns as `Vec<Uniform<R, T>>`.
+impl<R: Runtime, T: Crosses<R>> Uniform<R, T> {
+    /// A value of `T` made the runtime's by its crossing, owned from here on.
     pub fn new<'c>(cx: &'c impl Opens<'c, R>, value: T) -> Self {
-        Uniform::of_the_crossing(cx.runtime().give(value, Settled::of_the_entry()))
-    }
-
-    /// Lends the value in place within the call `cx` belongs to.
-    pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> R::Shared<'c, T> {
-        cx.runtime().shared(&self.value, Settled::of_the_entry())
-    }
-
-    pub fn open_mut<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> R::Exclusive<'c, T> {
-        cx.runtime().exclusive(&mut self.value, Settled::of_the_entry())
+        Uniform::of_the_crossing(value.give(cx.runtime(), Settled::of_the_entry()))
     }
 
     /// The value itself. A `Uniform` only dropped is released and never
@@ -69,7 +59,18 @@ impl<R: Runtime, T: Crosses> Uniform<R, T> {
     /// The value moved out at its type: the one place a value is taken. The
     /// take consumes the value's storage, so the holder's release is skipped.
     pub(crate) fn take(self, runtime: &R, at: Settled<'_>) -> T {
-        runtime.take(self.into_value(), at)
+        T::take(runtime, self.into_value(), at)
+    }
+}
+
+impl<R: Runtime, T: Opaque> Uniform<R, T> {
+    /// Lends the value in place within the call `cx` belongs to.
+    pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> R::Shared<'c, T> {
+        cx.runtime().shared(&self.value, Settled::of_the_entry())
+    }
+
+    pub fn open_mut<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> R::Exclusive<'c, T> {
+        cx.runtime().exclusive(&mut self.value, Settled::of_the_entry())
     }
 }
 
@@ -77,9 +78,9 @@ mod primitive {
     pub trait Sealed {}
 }
 
-/// A primitive the runtime holds in the value itself: it owns nothing, so it
-/// is read by a copy and written by a replacement, never lent in place.
-pub trait Primitive: Crosses + Copy + primitive::Sealed {}
+/// A primitive: it owns nothing, so it is read by a copy and written by a
+/// replacement, never lent in place.
+pub trait Primitive: Copy + Send + Sync + Structural + primitive::Sealed + 'static {}
 
 macro_rules! primitives {
     ($($t:ty),+ $(,)?) => {$(
@@ -88,18 +89,18 @@ macro_rules! primitives {
     )+};
 }
 
-primitives!(i8, i16, i32, i64, u8, u16, u32, u64, f64, bool, char);
+primitives!(i8, i16, i32, i64, u8, u16, u32, u64, f64, bool, char, ());
 
 impl<R: Runtime, T: Primitive> Uniform<R, T> {
-    /// The value, read by a copy: the runtime's `take` of the held value's
+    /// The value, read by a copy: the runtime's take of the held value's
     /// copy, which owns nothing to release.
     pub fn get<'c>(&self, cx: &'c impl Opens<'c, R>) -> T {
-        cx.runtime().take(*self.value, Settled::of_the_entry())
+        cx.runtime().take_primitive(*self.value, Settled::of_the_entry())
     }
 
-    /// The value replaced by `value`, made by the runtime's `give`.
+    /// The value replaced by `value`, made by the runtime.
     pub fn set<'c>(&mut self, cx: &'c impl Opens<'c, R>, value: T) {
-        let old = std::mem::replace(&mut *self.value, cx.runtime().give(value, Settled::of_the_entry()));
+        let old = std::mem::replace(&mut *self.value, cx.runtime().give_primitive(value, Settled::of_the_entry()));
         old.release(Releasing { _private: () });
     }
 }
@@ -144,7 +145,8 @@ mod tests {
     use crate::boundary::entry::Settled;
     use crate::boundary::signed::{LayoutFact, SignedS1, SignedS2, SignedS3, Structural};
     use crate::boundary::stored::LayoutWitness;
-    use crate::runtime::{Crosses, RefTarget, Runtime};
+    use crate::boundary::uniform::Primitive;
+    use crate::runtime::{Opaque, RefTarget, Runtime};
 
     /// A value that counts its releases and names no storage.
     #[derive(Clone, Copy)]
@@ -190,19 +192,49 @@ mod tests {
 
     impl Runtime for Counting {
         type Value = Counted;
-        type Shared<'a, T: Crosses + 'a> = NoGuard<T>;
-        type Exclusive<'a, T: Crosses + 'a> = NoGuard<T>;
+        type Shared<'a, T: Opaque + 'a> = NoGuard<T>;
+        type Exclusive<'a, T: Opaque + 'a> = NoGuard<T>;
 
-        fn take<T: Crosses>(&self, _: Counted, _: Settled<'_>) -> T {
-            unreachable!("the release tests read no value")
-        }
-        fn give<T: Crosses>(&self, _: T, _: Settled<'_>) -> Counted {
+        fn give_opaque<T: Opaque>(&self, _: T, _: Settled<'_>) -> Counted {
             unreachable!("the release tests make no value")
         }
-        fn shared<'a, T: Crosses + 'a>(&'a self, _: &'a Counted, _: Settled<'a>) -> NoGuard<T> {
+        fn take_opaque<T: Opaque>(&self, _: Counted, _: Settled<'_>) -> T {
+            unreachable!("the release tests read no value")
+        }
+        fn give_primitive<P: Primitive>(&self, _: P, _: Settled<'_>) -> Counted {
+            unreachable!("the release tests make no value")
+        }
+        fn take_primitive<P: Primitive>(&self, _: Counted, _: Settled<'_>) -> P {
+            unreachable!("the release tests read no value")
+        }
+        fn give_string(&self, _: String, _: Settled<'_>) -> Counted {
+            unreachable!("the release tests make no value")
+        }
+        fn take_string(&self, _: Counted, _: Settled<'_>) -> String {
+            unreachable!("the release tests read no value")
+        }
+        fn give_option(&self, _: Option<Counted>, _: Settled<'_>) -> Counted {
+            unreachable!("the release tests make no value")
+        }
+        fn take_option(&self, _: Counted, _: Settled<'_>) -> Option<Counted> {
+            unreachable!("the release tests read no value")
+        }
+        fn give_result(&self, _: Result<Counted, Counted>, _: Settled<'_>) -> Counted {
+            unreachable!("the release tests make no value")
+        }
+        fn take_result(&self, _: Counted, _: Settled<'_>) -> Result<Counted, Counted> {
+            unreachable!("the release tests read no value")
+        }
+        fn give_tuple<const N: usize>(&self, _: [Counted; N], _: Settled<'_>) -> Counted {
+            unreachable!("the release tests make no value")
+        }
+        fn take_tuple<const N: usize>(&self, _: Counted, _: Settled<'_>) -> [Counted; N] {
+            unreachable!("the release tests read no value")
+        }
+        fn shared<'a, T: Opaque + 'a>(&'a self, _: &'a Counted, _: Settled<'a>) -> NoGuard<T> {
             unreachable!("the release tests lend no storage")
         }
-        fn exclusive<'a, T: Crosses + 'a>(&'a self, _: &'a mut Counted, _: Settled<'a>) -> NoGuard<T> {
+        fn exclusive<'a, T: Opaque + 'a>(&'a self, _: &'a mut Counted, _: Settled<'a>) -> NoGuard<T> {
             unreachable!("the release tests lend no storage")
         }
         fn reference<'a, P: ?Sized>(&'a self, _: RefTarget<'a, P>, _: Settled<'a>) -> Counted {

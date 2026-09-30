@@ -23,7 +23,8 @@ use crate::impls::task::TaskKind;
 use crate::boundary::instance::InstanceEntry;
 use crate::impls::{Family, Instances, Task};
 use crate::register::{ExternFn, Refused, Registers};
-use crate::runtime::{Crosses, Mutability, RefTarget, Runtime};
+use crate::boundary::uniform::Primitive;
+use crate::runtime::{Crosses, Mutability, Opaque, RefTarget, Runtime};
 
 /// A breach the adapter detected: X would have undefined behaviour here.
 #[derive(Debug)]
@@ -258,22 +259,62 @@ impl<G> Drop for Tracked<'_, G> {
 
 impl<X: Runtime> Runtime for Adapter<X> {
     type Value = X::Value;
-    type Shared<'a, T: Crosses + 'a> = Tracked<'a, X::Shared<'a, T>>;
-    type Exclusive<'a, T: Crosses + 'a> = Tracked<'a, X::Exclusive<'a, T>>;
+    type Shared<'a, T: Opaque + 'a> = Tracked<'a, X::Shared<'a, T>>;
+    type Exclusive<'a, T: Opaque + 'a> = Tracked<'a, X::Exclusive<'a, T>>;
 
-    fn take<T: Crosses>(&self, v: Self::Value, at: Settled<'_>) -> T {
-        self.inner.take(v, at)
+    fn give_opaque<T: Opaque>(&self, value: T, at: Settled<'_>) -> Self::Value {
+        self.inner.give_opaque(value, at)
     }
 
-    fn give<T: Crosses>(&self, value: T, at: Settled<'_>) -> Self::Value {
-        self.inner.give(value, at)
+    fn take_opaque<T: Opaque>(&self, v: Self::Value, at: Settled<'_>) -> T {
+        self.inner.take_opaque(v, at)
     }
 
-    fn shared<'a, T: Crosses + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::Shared<'a, T> {
+    fn give_primitive<P: Primitive>(&self, value: P, at: Settled<'_>) -> Self::Value {
+        self.inner.give_primitive(value, at)
+    }
+
+    fn take_primitive<P: Primitive>(&self, v: Self::Value, at: Settled<'_>) -> P {
+        self.inner.take_primitive(v, at)
+    }
+
+    fn give_string(&self, value: String, at: Settled<'_>) -> Self::Value {
+        self.inner.give_string(value, at)
+    }
+
+    fn take_string(&self, v: Self::Value, at: Settled<'_>) -> String {
+        self.inner.take_string(v, at)
+    }
+
+    fn give_option(&self, value: Option<Self::Value>, at: Settled<'_>) -> Self::Value {
+        self.inner.give_option(value, at)
+    }
+
+    fn take_option(&self, v: Self::Value, at: Settled<'_>) -> Option<Self::Value> {
+        self.inner.take_option(v, at)
+    }
+
+    fn give_result(&self, value: Result<Self::Value, Self::Value>, at: Settled<'_>) -> Self::Value {
+        self.inner.give_result(value, at)
+    }
+
+    fn take_result(&self, v: Self::Value, at: Settled<'_>) -> Result<Self::Value, Self::Value> {
+        self.inner.take_result(v, at)
+    }
+
+    fn give_tuple<const N: usize>(&self, parts: [Self::Value; N], at: Settled<'_>) -> Self::Value {
+        self.inner.give_tuple(parts, at)
+    }
+
+    fn take_tuple<const N: usize>(&self, v: Self::Value, at: Settled<'_>) -> [Self::Value; N] {
+        self.inner.take_tuple(v, at)
+    }
+
+    fn shared<'a, T: Opaque + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::Shared<'a, T> {
         self.track(self.inner.shared(v, at), Mutability::Shared)
     }
 
-    fn exclusive<'a, T: Crosses + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T> {
+    fn exclusive<'a, T: Opaque + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T> {
         self.track(self.inner.exclusive(v, at), Mutability::Exclusive)
     }
 
@@ -335,7 +376,7 @@ impl<X: CallsBack> CallsBack for Adapter<X> {
     where
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
-        U: LoanForm,
+        U: LoanForm<R>,
     {
         self.inner.call_now::<R, A, U>(rt, closure, args, at)
     }
@@ -350,7 +391,7 @@ impl<X: CallsBack> CallsBack for Adapter<X> {
     where
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
-        U: Crosses,
+        U: Crosses<R>,
     {
         self.inner.call_later::<R, A, U>(rt, closure, args, at)
     }

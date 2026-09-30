@@ -11,7 +11,7 @@ use acvus_extern::done::Done;
 use acvus_extern::register::{ExternFn, Registers};
 use acvus_extern::runtime::{Mutability, Runtime};
 use acvus_utils::QualifiedRef;
-use acvus_extern::{Entry, SiteShape};
+use acvus_extern::{Entry, Primitive, SiteShape};
 
 use crate::boundary::{Held, Word};
 
@@ -91,6 +91,17 @@ where
     /// run's own way to make one, as a program makes a lambda.
     pub fn function(&mut self, f: impl ExternFn<R>) -> usize {
         let value = crate::boundary::closure::<R>(Box::new(f));
+        self.variables.push(Some(Box::new(Held::kept(value))));
+        self.variables.len() - 1
+    }
+
+    /// A variable holding a program's array of `elements`: the run's own way
+    /// to make one, as a program writes an array literal.
+    pub fn array<P>(&mut self, elements: &[P]) -> usize
+    where
+        P: Primitive,
+    {
+        let value = crate::boundary::array(elements.iter().map(|&e| crate::boundary::scalar(e)).collect());
         self.variables.push(Some(Box::new(Held::kept(value))));
         self.variables.len() - 1
     }

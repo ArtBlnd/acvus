@@ -164,13 +164,13 @@ pub trait Requires<R: Runtime>: sealed::Sealed {
 pub mod mode {
     use std::marker::PhantomData;
 
-    /// Taken by value where the handler needs the value itself: opened as a
-    /// `Uniform` and taken at once.
+    /// Taken by value where the handler needs the value itself: taken at once
+    /// by its crossing.
     pub struct ByValue<T>(PhantomData<fn() -> T>);
     /// Held by value where the handler writes `Uniform<R, T>`: read in place,
     /// released if dropped, taken only by `into_inner`.
     pub struct ByUniform<T>(PhantomData<fn() -> T>);
-    /// Lent `&T`.
+    /// An opaque value lent `&T`.
     pub struct ByRef<T>(PhantomData<fn() -> T>);
     /// Lent `&mut T`.
     pub struct ByMut<T>(PhantomData<fn() -> T>);
@@ -197,7 +197,7 @@ use crate::callback::Callback;
 use crate::guard::{Guard, GuardMut};
 use crate::impls::receiver::{Reads, Steps};
 use crate::impls::{Family, Instances};
-use crate::runtime::Crosses;
+use crate::runtime::{Crosses, Opaque};
 
 macro_rules! modes {
     ($([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
@@ -226,13 +226,11 @@ const SHARED: Option<Mutability> = Some(Mutability::Shared);
 const EXCLUSIVE: Option<Mutability> = Some(Mutability::Exclusive);
 
 modes! {
-    [T: Crosses] ByValue<T> => T, None,
-        |runtime, v, at| Uniform::<R, T>::of_the_crossing(*v).take(runtime, at);
     [T] ByUniform<T> => Uniform<R, T>, None,
         |_runtime, v, _at| Uniform::of_the_crossing(*v);
-    [T: Crosses] ByRef<T> => Guard<'c, &'c T>, SHARED,
+    [T: Opaque] ByRef<T> => Guard<'c, &'c T>, SHARED,
         |runtime, v, at| Guard::of_the_entry(runtime.target(*v, at));
-    [T: Crosses] ByMut<T> => GuardMut<'c, &'c mut T>, EXCLUSIVE,
+    [T: Opaque] ByMut<T> => GuardMut<'c, &'c mut T>, EXCLUSIVE,
         |runtime, v, at| GuardMut::of_the_entry(runtime.target_mut(*v, at));
     [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED,
         |runtime, v, at| Guard::of_the_entry(runtime.target(*v, at));
@@ -242,6 +240,26 @@ modes! {
         |runtime, v, at| Guard::of_the_entry(runtime.target(*v, at));
     [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None,
         |_runtime, v, _at| Callback::of_the_entry(*v);
+}
+
+impl<T> sealed::Sealed for ByValue<T> {}
+
+impl<R: Runtime, T: Crosses<R>> Mode<R> for ByValue<T> {
+    type Opened<'c>
+        = T
+    where
+        Self: 'c,
+        R: 'c;
+
+    const LENT: Option<Mutability> = None;
+
+    fn open<'c>(runtime: &'c R, v: &'c R::Value, at: Settled<'c>) -> T
+    where
+        Self: 'c,
+        R: 'c,
+    {
+        T::take(runtime, *v, at)
+    }
 }
 
 impl<F, I> sealed::Sealed for ByInstance<F, I> {}

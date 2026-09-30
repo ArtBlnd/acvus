@@ -31,7 +31,7 @@ impl<A, U, E, R: Runtime> Callback<'_, '_, A, U, E, R> {
 /// at `'l`. A crossing type is itself; `Lent<T>` is `&'l T` and `LentMut<T>` is
 /// `&'l mut T`. Its methods make and read values at the form's type, so it
 /// is sealed: only this crate implements it.
-pub trait LoanForm: LoanForms {
+pub trait LoanForm<R: Runtime>: LoanForms {
     type At<'l>;
 
     /// How a returning call passes the value `lend` makes: lent where it is a
@@ -43,15 +43,15 @@ pub trait LoanForm: LoanForms {
     /// crosses as: a reference value to a lent leaf, a given value for a
     /// crossing leaf.
     #[doc(hidden)]
-    fn lend<'l, R: Runtime>(value: Self::At<'l>, rt: &'l R, at: Settled<'l>) -> R::Value;
+    fn lend<'l>(value: Self::At<'l>, rt: &'l R, at: Settled<'l>) -> R::Value;
     /// The value an awaited call's argument crosses as.
     #[doc(hidden)]
-    fn give_moved<'a, R: Runtime>(value: Self::At<'static>, rt: &'a R, at: Settled<'a>) -> R::Value;
+    fn give_moved<'a>(value: Self::At<'static>, rt: &'a R, at: Settled<'a>) -> R::Value;
     /// A returning call's result read back at its form. The result is handed
     /// over, so the read owns it: a reference value is released once its
     /// target is read, and a value is taken.
     #[doc(hidden)]
-    fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Self::At<'l>;
+    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Self::At<'l>;
 }
 
 /// `&'l T`: a part of what the returning call lent, shared.
@@ -59,38 +59,38 @@ pub struct Lent<T: ?Sized>(PhantomData<fn() -> *const T>);
 /// `&'l mut T`: a part of what the returning call lent, exclusively.
 pub struct LentMut<T: ?Sized>(PhantomData<fn() -> *const T>);
 
-impl<T: Crosses> LoanForm for T {
+impl<R: Runtime, T: Crosses<R>> LoanForm<R> for T {
     type At<'l> = T;
 
     const LENT: Option<Mutability> = None;
 
-    fn lend<'l, R: Runtime>(value: T, rt: &'l R, at: Settled<'l>) -> R::Value {
-        rt.give(value, at)
+    fn lend<'l>(value: T, rt: &'l R, at: Settled<'l>) -> R::Value {
+        value.give(rt, at)
     }
 
-    fn give_moved<'a, R: Runtime>(value: T, rt: &'a R, at: Settled<'a>) -> R::Value {
-        rt.give(value, at)
+    fn give_moved<'a>(value: T, rt: &'a R, at: Settled<'a>) -> R::Value {
+        value.give(rt, at)
     }
 
-    fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> T {
-        Uniform::<R, T>::of_the_crossing(v).take(rt, at)
+    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> T {
+        T::take(rt, v, at)
     }
 }
 
-impl<T: ?Sized + 'static> LoanForm for Lent<T> {
+impl<R: Runtime, T: ?Sized + 'static> LoanForm<R> for Lent<T> {
     type At<'l> = &'l T;
 
     const LENT: Option<Mutability> = Some(Mutability::Shared);
 
-    fn lend<'l, R: Runtime>(value: &'l T, rt: &'l R, at: Settled<'l>) -> R::Value {
+    fn lend<'l>(value: &'l T, rt: &'l R, at: Settled<'l>) -> R::Value {
         rt.reference(RefTarget::Shared(value), at)
     }
 
-    fn give_moved<'a, R: Runtime>(value: &'static T, rt: &'a R, at: Settled<'a>) -> R::Value {
+    fn give_moved<'a>(value: &'static T, rt: &'a R, at: Settled<'a>) -> R::Value {
         rt.reference(RefTarget::Shared(value), at)
     }
 
-    fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l T {
+    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l T {
         let reference = Uniform::<R, ()>::of_the_crossing(v);
         let target = rt.target(v, at);
         drop(reference);
@@ -98,20 +98,20 @@ impl<T: ?Sized + 'static> LoanForm for Lent<T> {
     }
 }
 
-impl<T: ?Sized + 'static> LoanForm for LentMut<T> {
+impl<R: Runtime, T: ?Sized + 'static> LoanForm<R> for LentMut<T> {
     type At<'l> = &'l mut T;
 
     const LENT: Option<Mutability> = Some(Mutability::Exclusive);
 
-    fn lend<'l, R: Runtime>(value: &'l mut T, rt: &'l R, at: Settled<'l>) -> R::Value {
+    fn lend<'l>(value: &'l mut T, rt: &'l R, at: Settled<'l>) -> R::Value {
         rt.reference(RefTarget::Exclusive(value), at)
     }
 
-    fn give_moved<'a, R: Runtime>(value: &'static mut T, rt: &'a R, at: Settled<'a>) -> R::Value {
+    fn give_moved<'a>(value: &'static mut T, rt: &'a R, at: Settled<'a>) -> R::Value {
         rt.reference(RefTarget::Exclusive(value), at)
     }
 
-    fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l mut T {
+    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l mut T {
         let reference = Uniform::<R, ()>::of_the_crossing(v);
         let target = rt.target_mut(v, at);
         drop(reference);
@@ -144,9 +144,9 @@ pub trait CallArgs<R: Runtime>: sealed::Sealed {
 /// Tuples of loan forms up to twelve, the arity the crossing's tuples stop at.
 macro_rules! forms {
     ($($n:literal ($($f:ident $v:ident),*))+) => {$(
-        impl<$($f: LoanForm),*> sealed::Sealed for ($($f,)*) {}
+        impl<$($f),*> sealed::Sealed for ($($f,)*) {}
 
-        impl<R: Runtime, $($f: LoanForm),*> CallArgs<R> for ($($f,)*) {
+        impl<R: Runtime, $($f: LoanForm<R>),*> CallArgs<R> for ($($f,)*) {
             type Lent<'l> = ($($f::At<'l>,)*);
             type Moved = ($($f::At<'static>,)*);
 
@@ -191,7 +191,7 @@ forms! {
 impl<'c, 'a, A, U, E, R> Callback<'c, 'a, A, U, E, R>
 where
     A: CallArgs<R>,
-    U: LoanForm,
+    U: LoanForm<R>,
     R: CallsBack,
 {
     /// A returning call: the arguments lent for `'l`, the result borrowing at
@@ -205,7 +205,7 @@ where
 impl<'c, 'a, A, U, E, R> Callback<'c, 'a, A, U, E, R>
 where
     A: CallArgs<R>,
-    U: Crosses,
+    U: Crosses<R>,
     R: CallsBack,
 {
     /// An awaited call: the arguments moved, the result borrowing nothing
@@ -225,7 +225,7 @@ pub trait CallsBack: Runtime {
     where
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
-        U: LoanForm;
+        U: LoanForm<R>;
     fn call_later<'a, R, A, U>(
         &self,
         rt: &'a R,
@@ -236,7 +236,7 @@ pub trait CallsBack: Runtime {
     where
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
-        U: Crosses;
+        U: Crosses<R>;
 }
 
 
