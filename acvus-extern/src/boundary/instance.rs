@@ -4,7 +4,17 @@ use std::marker::PhantomData;
 
 use crate::impls::receiver::{Reads, Steps};
 use crate::context::{Awaited, Returning};
+use crate::impls::task::TaskKind;
 use crate::impls::{Family, Instances};
+use crate::runtime::Runtime;
+
+/// An impl entry: its glue already typed at the family's function type for its
+/// task, and the values of the impls it requires (impls §2). Only the boundary
+/// makes one.
+pub struct InstanceEntry<R: Runtime, F: Family, K: TaskKind> {
+    glue: F::Glue<R, K>,
+    required: Box<[R::Value]>,
+}
 
 /// A requirement of a generic function that takes its receiver by value or
 /// `&mut`: the receiver and the impl chosen for it at its site, owned as one.

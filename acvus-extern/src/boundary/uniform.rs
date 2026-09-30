@@ -5,7 +5,8 @@ use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
-use crate::runtime::Runtime;
+use crate::context::Opens;
+use crate::runtime::{Crosses, Runtime};
 
 /// The permission to release one value, made only by an owning holder's drop.
 pub struct Releasing {
@@ -28,6 +29,30 @@ pub enum Never {}
 pub struct Uniform<R: Runtime, X> {
     value: ManuallyDrop<R::Value>,
     _index: PhantomData<fn() -> X>,
+}
+
+impl<R: Runtime, X> Uniform<R, X> {
+    /// The value the crossing hands over, owned from here on.
+    pub(crate) fn of_the_crossing(value: R::Value) -> Self {
+        Uniform { value: ManuallyDrop::new(value), _index: PhantomData }
+    }
+}
+
+impl<R: Runtime, T: Crosses> Uniform<R, T> {
+    /// Lends the value in place within the call `cx` belongs to.
+    pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> R::Shared<'c, T> {
+        todo!("the runtime's shared guard over the held value, under the call's Settled")
+    }
+
+    pub fn open_mut<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> R::Exclusive<'c, T> {
+        todo!("the runtime's exclusive guard over the held value, under the call's Settled")
+    }
+
+    /// The value itself: the one place the runtime's `take` is called. A
+    /// `Uniform` only dropped is released and never taken.
+    pub fn into_inner<'c>(self, cx: &'c impl Opens<'c, R>) -> T {
+        todo!("R::take of the held value under the call's Settled, without the release")
+    }
 }
 
 impl<R: Runtime, X> Drop for Uniform<R, X> {
@@ -100,28 +125,23 @@ mod tests {
     struct NoBody;
 
     impl TupleBody<Counted> for NoBody {
-        fn arity(&self) -> u32 {
-            unreachable!("the release tests make no tuple")
-        }
-        fn take_part(&mut self, _: u32) -> Counted {
-            unreachable!("the release tests make no tuple")
+        fn into_parts(self) -> impl ExactSizeIterator<Item = Counted> {
+            unreachable!("the release tests make no tuple");
+            #[allow(unreachable_code)]
+            std::iter::empty()
         }
     }
 
     impl ObjectBody<Counted> for NoBody {
-        fn len(&self) -> u32 {
-            unreachable!("the release tests make no object")
-        }
-        fn take_field(&mut self, _: u32) -> Counted {
-            unreachable!("the release tests make no object")
+        fn into_fields(self) -> impl ExactSizeIterator<Item = Counted> {
+            unreachable!("the release tests make no object");
+            #[allow(unreachable_code)]
+            std::iter::empty()
         }
     }
 
     impl VariantBody<Counted> for NoBody {
-        fn tag(&self) -> u32 {
-            unreachable!("the release tests make no variant")
-        }
-        fn take_payload(&mut self) -> Option<Counted> {
+        fn into_payload(self) -> (u32, Option<Counted>) {
             unreachable!("the release tests make no variant")
         }
     }

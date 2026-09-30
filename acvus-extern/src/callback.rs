@@ -4,7 +4,8 @@
 
 use std::marker::PhantomData;
 
-use crate::boundary::entry::Settled;
+use crate::boundary::entry::{Entry, Settled};
+use crate::done::Done;
 use crate::context::{Awaited, Returning};
 use crate::runtime::{Crosses, Runtime};
 
@@ -50,4 +51,20 @@ pub trait CallsBack: Runtime {
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
         U: Crosses;
+}
+
+/// A Rust function an extern returns as a script function value (runtime
+/// contract §2, Rust functions): each call of it is a call through an entry,
+/// crossing its arguments at that call's settled types. Only the boundary makes
+/// one, from a handler's glue.
+pub struct RustFn<R: Runtime> {
+    call: fn(Entry<'_, R>) -> Done<R>,
+}
+
+/// Making a script function value from a Rust function. `R` is the runtime the
+/// glue runs at: the runtime itself, or the adapter over it (K15).
+pub trait RustFns: Runtime {
+    fn rust_fn<R>(&self, f: RustFn<R>) -> Self::Value
+    where
+        R: Runtime<Value = Self::Value>;
 }

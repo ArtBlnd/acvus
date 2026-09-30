@@ -35,12 +35,10 @@ pub struct Entry<'c, R: Runtime> {
 }
 
 impl<'c, R: Runtime> Entry<'c, R> {
-    /// # Safety
-    /// Each of `args` is a value of the type the checker settled for its
-    /// position at the call site `site` describes (safety §3). The runtime
-    /// that calls the entry owes it; the adapter over that runtime owes it too,
-    /// since it passes the runtime's values unchanged.
-    pub unsafe fn new(runtime: &'c R, args: &'c [R::Value], site: &'c SiteShape) -> Self {
+    /// The entry of one call. It is safe: the checker's decision is trusted
+    /// only by the runtime's own typed reads (safety §3), and only the runtime
+    /// holds values to pass here, since the host sees none (crossing §6).
+    pub fn new(runtime: &'c R, args: &'c [R::Value], site: &'c SiteShape) -> Self {
         Entry { runtime, args, site }
     }
 

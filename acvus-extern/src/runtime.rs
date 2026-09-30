@@ -16,7 +16,13 @@ use crate::boundary::uniform::Release;
 
 /// A type a checker-settled site may be read at. It may carry lifetimes; a
 /// value that holds a loan holds it as a `Loaned`, never as a Rust reference.
-pub trait Crosses: Sized + Structural {}
+/// It is `Send + Sync`, as the runtime value it becomes is. Every `Structural`
+/// type that is `Send + Sync` crosses, by the one implementation below, so no
+/// author implements it (safety §1): an author signs only `Structural`,
+/// through the derive.
+pub trait Crosses: Sized + Send + Sync + Structural {}
+
+impl<T> Crosses for T where T: Structural + Send + Sync {}
 
 /// A lend is shared or exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,22 +41,21 @@ pub enum RefTarget<'a, P: ?Sized> {
     Exclusive(&'a mut P),
 }
 
-/// A tuple's body: its parts, each an owning holder of a runtime value.
+/// A tuple's body: its parts, handed over together, each then owned by the
+/// `Uniform` that holds it; nothing tracks which were handed.
 pub trait TupleBody<V>: Send + Sync + 'static {
-    fn arity(&self) -> u32;
-    fn take_part(&mut self, i: u32) -> V;
+    fn into_parts(self) -> impl ExactSizeIterator<Item = V>;
 }
 
-/// An object's body: its fields in the settled order, each an owning holder.
+/// An object's body: its fields in the type's order (compiler: types §2),
+/// handed over together.
 pub trait ObjectBody<V>: Send + Sync + 'static {
-    fn len(&self) -> u32;
-    fn take_field(&mut self, i: u32) -> V;
+    fn into_fields(self) -> impl ExactSizeIterator<Item = V>;
 }
 
-/// A variant's body: its tag and its payload as an owning holder.
+/// A variant's body: its tag, its place in the enum's order, and its payload.
 pub trait VariantBody<V>: Send + Sync + 'static {
-    fn tag(&self) -> u32;
-    fn take_payload(&mut self) -> Option<V>;
+    fn into_payload(self) -> (u32, Option<V>);
 }
 
 pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS3 {
@@ -70,7 +75,9 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     /// A `String`'s bytes lent as text.
     type SharedStr<'a>: Deref<Target = str>;
 
-    /// Moves a value out at its settled type.
+    /// Moves a value out at its settled type, releasing its storage. The one
+    /// caller is `Uniform::into_inner`, where a handler needs the value itself;
+    /// a value only dropped is released and never taken (runtime contract §1).
     fn take<T: Crosses>(&self, v: Self::Value, at: Settled<'_>) -> T;
     /// Makes the runtime value of a result at its settled type.
     fn give<T: Crosses>(&self, value: T, at: Settled<'_>) -> Self::Value;
@@ -81,6 +88,8 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     fn exclusive_slice<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::ExclusiveSlice<'a, T>;
     fn shared_str<'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::SharedStr<'a>;
 
+    /// An aggregate taken apart into its parts, each then held by a `Uniform`;
+    /// called only by `Uniform`'s conversion into a shape's owned view.
     fn take_tuple(&self, v: Self::Value, at: Settled<'_>) -> Self::Tuple;
     fn take_object(&self, v: Self::Value, at: Settled<'_>) -> Self::Object;
     fn take_variant(&self, v: Self::Value, at: Settled<'_>) -> Self::Variant;

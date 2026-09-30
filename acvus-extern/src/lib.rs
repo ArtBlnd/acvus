@@ -18,7 +18,7 @@ pub mod runtime;
 pub mod shape;
 
 pub use boundary::entry::{Args, Entry, Settled, SiteShape};
-pub use boundary::instance::{Instance, InstanceOf};
+pub use boundary::instance::{Instance, InstanceEntry, InstanceOf};
 pub use boundary::loaned::{Loaned, LoanedMut};
 pub use boundary::signed::{SignedS1, SignedS2, SignedS3, Structural, StructuralFacts};
 pub use boundary::stored::LayoutWitness;

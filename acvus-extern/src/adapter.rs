@@ -18,9 +18,10 @@ use std::time::Duration;
 use acvus_utils::Interner;
 
 use crate::boundary::entry::Settled;
-use crate::callback::{CallArgs, CallsBack};
+use crate::callback::{CallArgs, CallsBack, RustFn, RustFns};
 use crate::impls::task::TaskKind;
-use crate::impls::{Family, InstanceEntry, Instances, Task};
+use crate::boundary::instance::InstanceEntry;
+use crate::impls::{Family, Instances, Task};
 use crate::runtime::{Crosses, Mutability, RefTarget, Runtime};
 
 /// What a runtime answers, from its own representation, about a value the
@@ -395,5 +396,14 @@ mod tests {
         assert!(borrows.reborrow(100..108, Exclusive).unwrap().is_none());
         assert!(borrows.reborrow(16..32, Exclusive).unwrap().is_none());
         assert_eq!(borrows.nodes.len(), 1);
+    }
+}
+
+impl<X: RustFns + Validate> RustFns for Adapter<X> {
+    fn rust_fn<R>(&self, f: RustFn<R>) -> Self::Value
+    where
+        R: Runtime<Value = Self::Value>,
+    {
+        self.inner.rust_fn(f)
     }
 }

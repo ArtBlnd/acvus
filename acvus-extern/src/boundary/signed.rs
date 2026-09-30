@@ -95,7 +95,6 @@ macro_rules! own_canonical {
             };
         }
 
-        impl Crosses for $t {}
     )+};
 }
 
@@ -148,8 +147,6 @@ macro_rules! canonical_over_parts {
                 generics: &[$(type_param!($p)),+],
             };
         }
-
-        impl<$($p),+> Crosses for $ty where $($p: Crosses,)+ {}
     };
 }
 

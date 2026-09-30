@@ -1,6 +1,7 @@
 //! Generic functions, impls and requirements (impls §1-§3).
 
 use crate::boundary::entry::Settled;
+use crate::boundary::instance::InstanceEntry;
 use crate::runtime::Runtime;
 
 /// The task an impl entry is read back at.
@@ -58,13 +59,6 @@ pub trait Family: 'static {
     /// flows say so.
     type Output<'r, R: Runtime>;
     type Glue<R: Runtime, K: TaskKind>: Copy + Send + Sync + 'static;
-}
-
-/// An impl entry: its glue already typed at the family's function type for its
-/// task, and the values of the impls it requires. Only the boundary makes one.
-pub struct InstanceEntry<R: Runtime, F: Family, K: TaskKind> {
-    glue: F::Glue<R, K>,
-    required: Box<[R::Value]>,
 }
 
 /// Making a value from an impl entry and reading an entry back (runtime
