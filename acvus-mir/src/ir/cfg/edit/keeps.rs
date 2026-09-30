@@ -421,7 +421,6 @@ impl TypeCheck<'_> {
                     format!("{result:?} is {:?}, not {src:?}'s {:?} with marks raised", self.kind(to), self.kind(from))
                 })
             }
-            Op::LoadFunction { .. } => self.is(Self::result(inst)?, |kind| matches!(kind, TyKind::Fn { .. }), "a function"),
             // One body at a function type, or one per signature, in order,
             // at a `Closures` type, of none or at least two (functions §2).
             Op::MakeClosure { bodies, .. } => self.is(

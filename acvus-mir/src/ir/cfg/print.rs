@@ -494,7 +494,6 @@ impl Printer<'_> {
             Op::CheckSteps { from, step, count } => format!("CheckSteps {}", self.values(&[*from, *step, *count])),
             Op::Cast { src, to } => format!("Cast({}) {}", to.name(), self.value(*src)),
             Op::Unmark { src } => format!("Unmark {}", self.value(*src)),
-            Op::LoadFunction { id } => format!("LoadFunction {}", self.qualified(*id)),
             Op::FunctionCall { callee, callee_ty: _, args } => format!("Call {}({})", self.callee(callee), self.values(args)),
             Op::Spawn { callee, callee_ty: _, args } => format!("Spawn {}({})", self.callee(callee), self.values(args)),
             Op::TakeEffect { src } => format!("TakeEffect {}", self.value(*src)),

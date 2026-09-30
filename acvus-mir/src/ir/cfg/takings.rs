@@ -118,7 +118,6 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
     match inst.op() {
         Op::Const { .. }
         | Op::ConstStr { .. }
-        | Op::LoadFunction { .. }
         | Op::ArrayBegin { .. }
         | Op::Undef => {}
         Op::StringConcat { parts } => operands.extend(parts.iter().map(|part| passed(*part))),

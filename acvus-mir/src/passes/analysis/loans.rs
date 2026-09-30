@@ -1464,7 +1464,6 @@ impl Forward<'_> {
             | Op::BinOp { .. }
             | Op::UnaryOp { .. }
             | Op::Cast { .. }
-            | Op::LoadFunction { .. }
             | Op::Merge { .. }
             | Op::ArrayBegin { .. }
             | Op::TestLiteral { .. }
@@ -2075,7 +2074,6 @@ impl Forward<'_> {
             | Op::CheckSteps { .. }
             | Op::Cast { .. }
             | Op::Unmark { .. }
-            | Op::LoadFunction { .. }
             | Op::TakeEffect { .. }
             | Op::Merge { .. }
             | Op::ArrayBegin { .. }

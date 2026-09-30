@@ -107,12 +107,10 @@ fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> ValueId {
     }
 }
 
-/// A name: a binding's value, a declaration as a function value, a
-/// context's value, or an input's.
+/// A name: a binding's value, a context's value, or an input's.
 fn lower_ident<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, expr: &Expr<S>, span: Span) -> ValueId {
     let ty = cx.ty(site);
     match cx.typeck.names.get(&site).copied() {
-        Some(Name::Declaration(declaration)) => cx.builder.push(Op::LoadFunction { id: declaration }, ty, span),
         Some(Name::Context(context)) => lower_context_read(cx, context, ty, span),
         Some(Name::Binding(binder)) if super::closure::is_generalized(cx, binder) => {
             // A use of a generalized binding: its closure at this use's
@@ -125,6 +123,10 @@ fn lower_ident<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, expr: &Expr<S>, span:
             let place = operand(cx, expr, Mutability::Shared);
             read(cx, place, span)
         }
+        Some(Name::Declaration(declaration)) => panic!(
+            "a declaration is named only as the callee of a call, which calls it without reading its name, not {declaration:?}: \
+             typeck refuses one named as a value (ExternAsValue)"
+        ),
         Some(Name::Unit(unit)) => panic!("a unit is named only as the callee of a call by name, which calls it without reading its name, not {unit:?}"),
         None => panic!("typeck names every name of an admitted program, and not {site:?}"),
     }

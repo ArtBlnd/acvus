@@ -3,7 +3,7 @@
 //! removal removes, and a refused program is never lowered (refusals).
 
 use acvus_ast::Literal;
-use acvus_utils::{Astr, QualifiedRef};
+use acvus_utils::Astr;
 
 use super::BodyId;
 use crate::ir::{
@@ -195,10 +195,6 @@ pub enum Op {
     },
 
     // Functions
-    /// Load a graph-level function into a value (for passing as argument, storing, etc.)
-    LoadFunction {
-        id: QualifiedRef,
-    },
     /// Unified function call. Callee can be a direct graph function or an indirect value.
     /// Semantically equivalent to Spawn + TakeEffect (synchronous call = spawn then immediately eval).
     /// A call whose effect is not Pure has an order edge on its instruction
@@ -353,7 +349,6 @@ macro_rules! walk_operands {
         match $op {
             Op::Const { .. }
             | Op::ConstStr { .. }
-            | Op::LoadFunction { .. }
             | Op::ArrayBegin { .. }
             | Op::Undef => {}
             Op::StringConcat { parts } => parts.into_iter().for_each(|v| $on(v)),
@@ -491,7 +486,6 @@ impl Op {
             | Op::UnaryOp { .. }
             | Op::Cast { .. }
             | Op::Unmark { .. }
-            | Op::LoadFunction { .. }
             | Op::FunctionCall { .. }
             | Op::Spawn { .. }
             | Op::TakeEffect { .. }
@@ -564,7 +558,6 @@ impl Op {
             | Op::FieldSet { .. }
             | Op::Cast { .. }
             | Op::Unmark { .. }
-            | Op::LoadFunction { .. }
             | Op::FunctionCall { .. }
             | Op::Spawn { .. }
             | Op::TakeEffect { .. }
