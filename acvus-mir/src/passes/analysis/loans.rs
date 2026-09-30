@@ -885,7 +885,7 @@ impl Forward<'_> {
         let facts = self.decls.call_facts(*id, *r#impl);
         facts.access.iter().find_map(|form| match form {
             DeclaredAccess::Touches(touches) => Some(&touches[..]),
-            DeclaredAccess::Equivalence => None,
+            DeclaredAccess::Equivalence | DeclaredAccess::Gives { .. } => None,
         })
     }
 

@@ -130,7 +130,11 @@ fn whole(param: usize) -> Place {
 }
 
 fn update(place: Place, combine: QualifiedRef) -> Update {
-    Update { place, combine, identity: None, commutative: false }
+    Update { place, combine }
+}
+
+fn combine(identity: Option<QualifiedRef>, commutative: bool, absorbing: Option<QualifiedRef>) -> DeclaredFacts {
+    actions(vec![Action::Combine(Combine { identity, commutative, absorbing })])
 }
 
 fn actions(actions: Vec<Action>) -> DeclaredFacts {
@@ -184,16 +188,15 @@ fn well_formed_facts_of_every_kind_verify() {
     let read = Touch { place: Place { param: 3, element: Some(Element::Index(4)) }, mode: Mode::Read };
     f.declare("insert", &[mut_map, int, int, shared_slice, index], unit, touches(&[stored, read]));
 
-    let add_into = f.declare("add_into", &[mut_int, int], unit, DeclaredFacts::default());
     let zero = f.declare("zero", &[], int, DeclaredFacts::default());
-    let increment = Update { identity: Some(zero), commutative: true, ..update(whole(0), add_into) };
-    let add = f.declare("add", &[mut_int, int], unit, actions(vec![Action::Update(increment)]));
+    let add_into = f.declare("add_into", &[mut_int, int], unit, combine(Some(zero), true, None));
+    let add = f.declare("add", &[mut_int, int], unit, actions(vec![Action::Update(update(whole(0), add_into))]));
     let decrement = Action::InverseOf { place: whole(0), other: add };
     f.declare("sub", &[mut_int, int], unit, actions(vec![decrement]));
     f.declare("compare", &[shared_int, shared_int], int, actions(vec![Action::TotalOrder]));
 
     let through = f.function(&[int], int);
-    let map_stream = Source::Map { from: 0, through: 1 };
+    let map_stream = Source::Map { from: Stream::Param(0), through: 1 };
     let count = Source::Count { comparison: Comparison::Le, bound: Term::Atom(Atom::Len(Subject::Arg(2))) };
     f.declare("map", &[int, through, shared_slice], int, sources(vec![Source::Stepwise, map_stream, count]));
 
@@ -306,11 +309,10 @@ fn an_identity_of_another_type_than_the_state_is_refused() {
     let unit = f.ty(TyKind::Unit);
     let string = f.ty(TyKind::String);
     let mut_int = f.reference(Mutability::Mut, int);
-    let add_into = f.declare("add_into", &[mut_int, int], unit, DeclaredFacts::default());
     let empty = f.declare("empty", &[], string, DeclaredFacts::default());
-    let with_identity = Update { identity: Some(empty), ..update(whole(0), add_into) };
-    let g = f.declare("g", &[mut_int, int], unit, actions(vec![Action::Update(with_identity)]));
-    assert_eq!(f.refusals(), vec![Refused::IdentityDoesNotFit { declared: own(g), identity: empty }]);
+    let add_into = f.declare("add_into", &[mut_int, int], unit, combine(Some(empty), false, None));
+    f.declare("g", &[mut_int, int], unit, actions(vec![Action::Update(update(whole(0), add_into))]));
+    assert_eq!(f.refusals(), vec![Refused::IdentityDoesNotFit { declared: own(add_into), identity: empty }]);
 }
 
 #[test]
@@ -370,7 +372,7 @@ fn a_predicate_that_answers_no_bool_is_refused() {
     let mut f = Fixture::new();
     let int = f.int();
     let predicate = f.function(&[int], int);
-    let g = f.declare("g", &[int, predicate], int, sources(vec![Source::Filter { from: 0, predicate: 1 }]));
+    let g = f.declare("g", &[int, predicate], int, sources(vec![Source::Filter { from: Stream::Param(0), predicate: 1 }]));
     assert_eq!(f.refusals(), vec![Refused::ClosureDoesNotFit { declared: own(g), param: 1 }]);
 }
 
@@ -478,4 +480,166 @@ fn facts_on_a_declaration_with_impls_are_refused() {
     let scheme = f.scheme(&[shared_int], int, Some(impls), read);
     let g = f.push("g", scheme);
     assert_eq!(f.refusals(), vec![Refused::FactsBesideImpls { function: g }]);
+}
+
+/// extern-fn §3: a call that stores into a place may give back what it
+/// held, whole or through a declared `fn(&H) -> R`.
+#[test]
+fn a_result_given_from_what_a_place_held_verifies() {
+    let mut f = Fixture::new();
+    let string = f.ty(TyKind::String);
+    let index = f.index();
+    let mut_string = f.reference(Mutability::Mut, string);
+    let shared_string = f.reference(Mutability::Shared, string);
+    let replaced = Touch { place: whole(0), mode: Mode::Store(Stored::Value(1)) };
+    let gives = |through| DeclaredFacts {
+        access: Box::new([Access::Touches(Box::new([replaced])), Access::Gives { place: whole(0), through }]),
+        ..DeclaredFacts::default()
+    };
+    let len = f.declare("len", &[shared_string], index, DeclaredFacts::default());
+    f.declare("replace", &[mut_string, string], string, gives(None));
+    f.declare("replace_len", &[mut_string, string], index, gives(Some(len)));
+    assert_eq!(f.refusals(), Vec::new());
+}
+
+/// A result stated to be what the place held is of the type the place
+/// holds, and a function of it takes a `&` to what the place holds and
+/// answers the call's result.
+#[test]
+fn a_result_given_of_another_type_than_the_place_holds_is_refused() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let string = f.ty(TyKind::String);
+    let mut_string = f.reference(Mutability::Mut, string);
+    let shared_int = f.reference(Mutability::Shared, int);
+    let gives = |through| DeclaredFacts {
+        access: Box::new([Access::Gives { place: whole(0), through }]),
+        ..DeclaredFacts::default()
+    };
+    let of_int = f.declare("of_int", &[shared_int], int, DeclaredFacts::default());
+    let g = f.declare("g", &[mut_string], int, gives(None));
+    let h = f.declare("h", &[mut_string], int, gives(Some(of_int)));
+    assert_eq!(
+        f.refusals(),
+        vec![
+            Refused::ResultNotWhatThePlaceHeld { declared: own(g), param: 0 },
+            Refused::GivesThroughDoesNotFit { declared: own(h), through: of_int },
+        ]
+    );
+}
+
+/// A combine is value shaped or update shaped, with an identity and an
+/// absorbing element of its state.
+#[test]
+fn a_combine_of_either_shape_verifies() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let unit = f.ty(TyKind::Unit);
+    let mut_int = f.reference(Mutability::Mut, int);
+    let least = f.declare("least", &[], int, DeclaredFacts::default());
+    let greatest = f.declare("greatest", &[], int, DeclaredFacts::default());
+    f.declare("max", &[int, int], int, combine(Some(least), true, Some(greatest)));
+    f.declare("max_into", &[mut_int, int], unit, combine(Some(least), true, Some(greatest)));
+    assert_eq!(f.refusals(), Vec::new());
+}
+
+#[test]
+fn a_combine_on_no_operation_of_one_type_or_absorbing_at_another_type_is_refused() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let string = f.ty(TyKind::String);
+    let empty = f.declare("empty", &[], string, DeclaredFacts::default());
+    let g = f.declare("g", &[int, string], int, combine(None, false, None));
+    let max = f.declare("max", &[int, int], int, combine(None, true, Some(empty)));
+    assert_eq!(
+        f.refusals(),
+        vec![
+            Refused::CombineNotAnOperation { declared: own(g) },
+            Refused::AbsorbingDoesNotFit { declared: own(max), absorbing: empty },
+        ]
+    );
+}
+
+#[test]
+fn a_take_while_verifies_as_a_filter_does() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let bool_ty = f.ty(TyKind::Bool);
+    let predicate = f.function(&[int], bool_ty);
+    let not_predicate = f.function(&[int], int);
+    let take_while = sources(vec![Source::TakeWhile { from: Stream::Param(0), predicate: 1 }]);
+    f.declare("take_while", &[int, predicate], int, take_while.clone());
+    let g = f.declare("g", &[int, not_predicate], int, take_while);
+    assert_eq!(f.refusals(), vec![Refused::ClosureDoesNotFit { declared: own(g), param: 1 }]);
+}
+
+/// The forms compose: `flat_map` is `Flatten` over `Map`, and the inner
+/// form is held to what the outer one would be.
+#[test]
+fn a_stream_of_another_form_verifies_that_form() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let through = f.function(&[int], int);
+    let flat_map = |from| sources(vec![Source::Flatten { from: Stream::Of(Box::new(Source::Map { from, through: 1 })) }]);
+    f.declare("flat_map", &[int, through], int, flat_map(Stream::Param(0)));
+    let g = f.declare("g", &[int, through], int, flat_map(Stream::Param(5)));
+    assert_eq!(f.refusals(), vec![Refused::FactNamesNoParameter { declared: own(g), param: 5 }]);
+}
+
+/// A consumption by declared steps, by closure arguments, and through a
+/// finish.
+#[test]
+fn a_consumption_whose_steps_agree_on_one_state_verifies() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let unit = f.ty(TyKind::Unit);
+    let string = f.ty(TyKind::String);
+    let mut_int = f.reference(Mutability::Mut, int);
+    let slice = f.ty(TyKind::Slice(int));
+    let shared_slice = f.reference(Mutability::Shared, slice);
+    let zero = f.declare("zero", &[], int, DeclaredFacts::default());
+    let add_into = f.declare("add_into", &[mut_int, int], unit, combine(Some(zero), true, None));
+    let show = f.declare("show", &[int], string, DeclaredFacts::default());
+    let step = f.function(&[int, int], int);
+    let consume = |init, update, finish| sources(vec![Source::Consume { from: Stream::Param(0), init, update, finish }]);
+    f.declare("sum", &[shared_slice], int, consume(Step::Declared(zero), Step::Declared(add_into), None));
+    f.declare("fold", &[shared_slice, int, step], int, consume(Step::Param(1), Step::Param(2), None));
+    f.declare("show_sum", &[shared_slice], string, consume(Step::Declared(zero), Step::Declared(add_into), Some(show)));
+    assert_eq!(f.refusals(), Vec::new());
+}
+
+/// The state is the result where no finish is stated, and every step
+/// agrees on it.
+#[test]
+fn a_consumption_whose_steps_disagree_on_the_state_is_refused() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let string = f.ty(TyKind::String);
+    let slice = f.ty(TyKind::Slice(int));
+    let shared_slice = f.reference(Mutability::Shared, slice);
+    let empty = f.declare("empty", &[], string, DeclaredFacts::default());
+    let zero = f.declare("zero", &[], int, DeclaredFacts::default());
+    let show = f.declare("show", &[int], string, DeclaredFacts::default());
+    let not_a_step = f.function(&[int], int);
+    let step = f.function(&[int, int], int);
+    let consume = |init, update, finish| sources(vec![Source::Consume { from: Stream::Param(0), init, update, finish }]);
+    let g = f.declare("g", &[shared_slice, step], int, consume(Step::Declared(empty), Step::Param(1), None));
+    let h = f.declare("h", &[shared_slice, not_a_step], int, consume(Step::Declared(zero), Step::Param(1), None));
+    let k = f.declare("k", &[shared_slice, step], int, consume(Step::Declared(zero), Step::Param(1), Some(show)));
+    assert_eq!(
+        f.refusals(),
+        vec![
+            Refused::ConsumeInitDoesNotFit { declared: own(g), init: Step::Declared(empty) },
+            Refused::ConsumeUpdateDoesNotFit { declared: own(h), update: Step::Param(1) },
+            Refused::ConsumeFinishDoesNotFit { declared: own(k), finish: Some(show) },
+        ]
+    );
+}
+
+#[test]
+fn a_combine_is_the_named_fact_an_impl_stating_one_resolves() {
+    let stated = combine(None, false, None);
+    assert!(NamedFact::Combine.stated_by(&stated));
+    assert!(!NamedFact::Combine.stated_by(&actions(vec![Action::TotalOrder])));
+    assert!(!NamedFact::TotalOrder.stated_by(&stated));
 }

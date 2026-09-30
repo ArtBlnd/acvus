@@ -60,6 +60,7 @@ fn lifts_at(lift: &Lift, structured: &Structure<'_, InferPhase>) -> bool {
         Lift::Rebuild(shape) => !sum || shape.params.len() == 1,
         Lift::Combine { law: NamedFact::TotalOrder, .. } => !sum,
         Lift::Combine { law: NamedFact::Equivalence, .. } => true,
+        Lift::Combine { law: NamedFact::Combine, .. } => false,
     }
 }
 

@@ -1,10 +1,11 @@
 //! Access (extern-fn §3): which places a call touches, and how.
 
 use acvus_utils::QualifiedRef;
+use rustc_hash::FxHashMap;
 
-use super::{Element, Place, Stated};
-use crate::decl::Refused;
-use crate::ty::{Mutability, Poly, Types};
+use super::{Element, Place, Stated, fits, fits_part};
+use crate::decl::{Refused, Scheme};
+use crate::ty::{Mutability, Poly, TyKind, Types};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Access {
@@ -64,7 +65,13 @@ impl Mode {
 }
 
 /// Refuses each access that is not well formed at `stated`'s signature.
-pub(super) fn refuse_ill_formed(stated: &Stated<'_>, types: &Types<Poly>, access: &[Access], refused: &mut Vec<Refused>) {
+pub(super) fn refuse_ill_formed(
+    stated: &Stated<'_>,
+    access: &[Access],
+    functions: &FxHashMap<QualifiedRef, Scheme>,
+    types: &mut Types<Poly>,
+    refused: &mut Vec<Refused>,
+) {
     let declared = stated.declared;
     if access.iter().filter(|form| matches!(form, Access::Touches(_))).count() > 1 {
         refused.push(Refused::TwoAccesses { declared });
@@ -80,7 +87,51 @@ pub(super) fn refuse_ill_formed(stated: &Stated<'_>, types: &Types<Poly>, access
                 refused.push(Refused::EquivalenceNotOnEq { declared });
             }
             Access::Equivalence => {}
+            Access::Gives { place, through } => refuse_ill_formed_gives(stated, place, *through, functions, types, refused),
         }
+    }
+}
+
+/// The result is what the place held, or `through` of it: `through` is a
+/// declared `fn(&H) -> R`, `H` what the place holds and `R` the call's
+/// result; without it, the result's type is what the place holds. Where
+/// the signature does not say what the place holds, only `R` is compared.
+fn refuse_ill_formed_gives(
+    stated: &Stated<'_>,
+    place: &Place,
+    through: Option<QualifiedRef>,
+    functions: &FxHashMap<QualifiedRef, Scheme>,
+    types: &mut Types<Poly>,
+    refused: &mut Vec<Refused>,
+) {
+    if !stated.place_well_formed(types, place, false, refused) {
+        return;
+    }
+    let declared = stated.declared;
+    let held = stated.held_at(types, place);
+    let Some(through) = through else {
+        if held.is_some_and(|held| held != stated.ret) {
+            refused.push(Refused::ResultNotWhatThePlaceHeld { declared, param: place.param });
+        }
+        return;
+    };
+    let through_ty = functions.get(&through).map(|scheme| scheme.ty);
+    let fitting = through_ty.is_some_and(|ty| match held {
+        Some(held) => {
+            let lent = types.intern(TyKind::Ref(Mutability::Shared, held));
+            fits(types, ty, &[lent], stated.ret)
+        }
+        None => match types.kind(ty) {
+            TyKind::Fn { params, ret, .. } => {
+                let ret = *ret;
+                matches!(params[..], [param] if matches!(types.kind(param), TyKind::Ref(Mutability::Shared, _)))
+                    && fits_part(types, ty, ret, stated.ret)
+            }
+            _ => false,
+        },
+    });
+    if !fitting {
+        refused.push(Refused::GivesThroughDoesNotFit { declared, through });
     }
 }
 

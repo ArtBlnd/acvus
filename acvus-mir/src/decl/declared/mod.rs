@@ -39,10 +39,12 @@ impl NamedFact {
         match self {
             NamedFact::Equivalence => facts.access.iter().any(|access| matches!(access, Access::Equivalence)),
             NamedFact::TotalOrder => facts.action.iter().any(|action| matches!(action, Action::TotalOrder)),
+            NamedFact::Combine => facts.action.iter().any(|action| matches!(action, Action::Combine(_))),
         }
     }
 }
 
+use super::impl_fit::is_impl_of;
 use super::{Core, DeclaredFacts, Refused, Scheme, TyVarBound};
 use crate::ty::{Declared, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
@@ -84,9 +86,9 @@ pub(super) fn refuse_ill_formed(
             let Some(stated) = Stated::of(declared, core, types, ty, bounds) else {
                 continue;
             };
-            access::refuse_ill_formed(&stated, types, &facts.access, refused);
+            access::refuse_ill_formed(&stated, &facts.access, functions, types, refused);
             action::refuse_ill_formed(&stated, &facts.action, functions, types, refused);
-            source::refuse_ill_formed(&stated, types, &facts.source, refused);
+            source::refuse_ill_formed(&stated, &facts.source, functions, types, refused);
             relation::refuse_ill_formed(&stated, types, &facts.relations, refused);
         }
     }
@@ -237,4 +239,42 @@ impl<'a> Stated<'a> {
         };
         matches!((shared(a), shared(b)), (Some(a), Some(b)) if a == b) && self.is_integer(types, self.ret)
     }
+}
+
+/// The state and the operand of a step `fn(S, P) -> S` or
+/// `fn(&mut S, P) -> ()`, each meaning `s = f(s, p)`; `None` for a function
+/// of any other shape.
+fn step_state(types: &Types<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> Option<(TyId<Poly>, TyId<Poly>)> {
+    let [first, operand] = params[..] else {
+        return None;
+    };
+    match (types.kind(first), types.kind(ret)) {
+        (TyKind::Ref(Mutability::Mut, state), TyKind::Unit) => Some((*state, operand)),
+        _ if first == ret => Some((first, operand)),
+        _ => None,
+    }
+}
+
+/// Whether the declared function type `general` is `fn(params) -> ret` at
+/// some choice of its own variables (extern-fn §6's matching). The effect,
+/// flows, calls and holds of `general` are its own, so only the
+/// parameters and the result are compared.
+fn fits(types: &mut Types<Poly>, general: TyId<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> bool {
+    let TyKind::Fn { effect, flows, calls, holds, .. } = types.kind(general).clone() else {
+        return false;
+    };
+    let specific = types.intern(TyKind::Fn { params: params.into(), ret, effect, flows, calls, holds, values: () });
+    is_impl_of(types, general, specific)
+}
+
+/// Whether `general_part`, a part of the declared function type `general`,
+/// is `part` at some choice of `general`'s own variables, the rest of
+/// `general` left unconstrained: the fit of one position where the
+/// signature says nothing of the others.
+fn fits_part(types: &mut Types<Poly>, general: TyId<Poly>, general_part: TyId<Poly>, part: TyId<Poly>) -> bool {
+    let TyKind::Fn { effect, flows, calls, holds, .. } = types.kind(general).clone() else {
+        return false;
+    };
+    let general = types.intern(TyKind::Fn { params: Box::new([]), ret: general_part, effect, flows, calls, holds, values: () });
+    fits(types, general, &[], part)
 }

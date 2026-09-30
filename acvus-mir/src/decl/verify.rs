@@ -134,6 +134,13 @@ pub enum Refused {
     /// `eq`: keys name one place as the key type's `eq` impl, declared an
     /// equivalence, calls them equal (extern-fn §3).
     EquivalenceNotOnEq { declared: Declared },
+    /// A result stated to be what a place held, of another type than the
+    /// place holds (extern-fn §3).
+    ResultNotWhatThePlaceHeld { declared: Declared, param: usize },
+    /// A result stated to be a declared function of what a place held,
+    /// whose function is no declared `fn(&H) -> R`, `H` what the place
+    /// holds and `R` the call's result (extern-fn §3).
+    GivesThroughDoesNotFit { declared: Declared, through: QualifiedRef },
     /// A total order stated on a declaration not of type `fn(&T, &T) ->
     /// int`, whose sign compares its two arguments (extern-fn §3).
     TotalOrderDoesNotFit { declared: Declared },
@@ -141,9 +148,15 @@ pub enum Refused {
     /// updated place holds: an update is the action of a combine on the
     /// place (extern-fn §3).
     CombineDoesNotFit { declared: Declared, combine: QualifiedRef },
+    /// A combine stated on a declaration that is no associative operation
+    /// on one type `S`, `fn(S, S) -> S` or `fn(&mut S, S)` (extern-fn §3).
+    CombineNotAnOperation { declared: Declared },
     /// An identity that is no declared `fn() -> S` at the combine's state
     /// (extern-fn §3).
     IdentityDoesNotFit { declared: Declared, identity: QualifiedRef },
+    /// An absorbing element that is no declared `fn() -> S` at the
+    /// combine's state (extern-fn §3).
+    AbsorbingDoesNotFit { declared: Declared, absorbing: QualifiedRef },
     /// An update declared the inverse of a function that states no update
     /// of the same place (extern-fn §3).
     InverseNotAnUpdateAtThePlace { declared: Declared, inverse: QualifiedRef },
@@ -153,6 +166,17 @@ pub enum Refused {
     /// A closure argument that is no function of one element, or a
     /// predicate whose answer is no `bool` (extern-fn §3).
     ClosureDoesNotFit { declared: Declared, param: usize },
+    /// A consumption's initial value that is no declared `fn() -> S` and no
+    /// parameter of type `S`, `S` its state (extern-fn §3).
+    ConsumeInitDoesNotFit { declared: Declared, init: declared::Step },
+    /// A consumption's update that is no declared function and no closure
+    /// argument `fn(S, E) -> S` or `fn(&mut S, E)` over its state `S`
+    /// (extern-fn §3).
+    ConsumeUpdateDoesNotFit { declared: Declared, update: declared::Step },
+    /// A consumption's finish that is no declared `fn(S) -> R`, `R` the
+    /// call's result, or, where none is stated, a state `S` that is not
+    /// the call's result (extern-fn §3).
+    ConsumeFinishDoesNotFit { declared: Declared, finish: Option<QualifiedRef> },
     /// A relation over an atom that is no integer: a relation's terms are
     /// integers (extern-fn §3).
     RelationOverNonInteger { declared: Declared, atom: Atom },

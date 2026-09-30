@@ -5,10 +5,9 @@
 use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
-use super::{Place, Stated};
+use super::{Place, Stated, fits};
 use crate::decl::Refused;
 use crate::decl::Scheme;
-use crate::decl::impl_fit::is_impl_of;
 use crate::ty::{Mutability, Poly, TyId, TyKind, Types};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +58,7 @@ pub(super) fn refuse_ill_formed(
     let declared = stated.declared;
     for action in actions {
         match action {
+            Action::Combine(combine) => refuse_ill_formed_combine(stated, combine, functions, types, refused),
             Action::Update(update) => refuse_ill_formed_update(stated, update, functions, types, refused),
             Action::InverseOf { place, other } => refuse_ill_formed_inverse(stated, place, *other, functions, types, refused),
             Action::TotalOrder if !stated.is_total_order_shape(types) => {
@@ -81,26 +81,47 @@ fn refuse_ill_formed_update(
         return;
     }
     let combine = functions.get(&update.combine).map(|combine| combine.ty);
-    let Some((combine, own_state)) = combine.and_then(|ty| Some((ty, combine_state(types, ty)?))) else {
+    let Some(combine) = combine.filter(|ty| combine_state(types, *ty).is_some()) else {
         refused.push(Refused::CombineDoesNotFit { declared, combine: update.combine });
         return;
     };
-    let state = match stated.held_at(types, &update.place) {
-        Some(held) => {
-            let lent_mut = types.intern(TyKind::Ref(Mutability::Mut, held));
-            let unit = types.intern(TyKind::Unit);
-            if !fits(types, combine, &[lent_mut, held], unit) {
-                refused.push(Refused::CombineDoesNotFit { declared, combine: update.combine });
-            }
-            held
+    if let Some(held) = stated.held_at(types, &update.place) {
+        let lent_mut = types.intern(TyKind::Ref(Mutability::Mut, held));
+        let unit = types.intern(TyKind::Unit);
+        if !fits(types, combine, &[lent_mut, held], unit) {
+            refused.push(Refused::CombineDoesNotFit { declared, combine: update.combine });
         }
-        None => own_state,
+    }
+}
+
+/// A combine is an operation on one `S`, value shaped or update shaped,
+/// and its identity and absorbing element, where stated, are declared
+/// `fn() -> S`.
+fn refuse_ill_formed_combine(
+    stated: &Stated<'_>,
+    combine: &Combine,
+    functions: &FxHashMap<QualifiedRef, Scheme>,
+    types: &mut Types<Poly>,
+    refused: &mut Vec<Refused>,
+) {
+    let declared = stated.declared;
+    let Some(state) = operation_state(types, &stated.params, stated.ret) else {
+        refused.push(Refused::CombineNotAnOperation { declared });
+        return;
     };
-    if let Some(identity) = update.identity {
-        let identity_ty = functions.get(&identity).map(|scheme| scheme.ty);
-        if !identity_ty.is_some_and(|ty| fits(types, ty, &[], state)) {
-            refused.push(Refused::IdentityDoesNotFit { declared, identity });
-        }
+    let mut is_element = |element: QualifiedRef| {
+        let element_ty = functions.get(&element).map(|scheme| scheme.ty);
+        element_ty.is_some_and(|ty| fits(types, ty, &[], state))
+    };
+    if let Some(identity) = combine.identity
+        && !is_element(identity)
+    {
+        refused.push(Refused::IdentityDoesNotFit { declared, identity });
+    }
+    if let Some(absorbing) = combine.absorbing
+        && !is_element(absorbing)
+    {
+        refused.push(Refused::AbsorbingDoesNotFit { declared, absorbing });
     }
 }
 
@@ -127,6 +148,13 @@ fn refuse_ill_formed_inverse(
     }
 }
 
+/// `S` of an operation `fn(S, S) -> S` or `fn(&mut S, S) -> ()`; `None` for
+/// a function of any other type.
+fn operation_state(types: &Types<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> Option<TyId<Poly>> {
+    let (state, operand) = super::step_state(types, params, ret)?;
+    (state == operand).then_some(state)
+}
+
 /// `S` of a combine of type `fn(&mut S, S) -> ()`; `None` for a function of
 /// any other type.
 fn combine_state(types: &Types<Poly>, ty: TyId<Poly>) -> Option<TyId<Poly>> {
@@ -140,16 +168,4 @@ fn combine_state(types: &Types<Poly>, ty: TyId<Poly>) -> Option<TyId<Poly>> {
         return None;
     };
     (*lent == second && matches!(types.kind(*ret), TyKind::Unit)).then_some(second)
-}
-
-/// Whether the declared function type `general` is `fn(params) -> ret` at
-/// some choice of its own variables (extern-fn §6's matching). The effect,
-/// flows, calls and holds of `general` are its own, so only the
-/// parameters and the result are compared.
-fn fits(types: &mut Types<Poly>, general: TyId<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> bool {
-    let TyKind::Fn { effect, flows, calls, holds, .. } = types.kind(general).clone() else {
-        return false;
-    };
-    let specific = types.intern(TyKind::Fn { params: params.into(), ret, effect, flows, calls, holds, values: () });
-    is_impl_of(types, general, specific)
 }
