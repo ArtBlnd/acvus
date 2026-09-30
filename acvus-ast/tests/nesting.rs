@@ -122,11 +122,12 @@ fn patterns_nest_one_level_each_below_their_match() {
 
 #[test]
 fn a_for_section_nests_one_level_over_its_lines() {
+    // The innermost text line is one level of its own, a `Stmt::Text`.
     let fors = |sections: usize| {
         format!("{}x\n{}", "% for x in $xs\n".repeat(sections), "% end\n".repeat(sections))
     };
-    template_ok(&fors(MAX - 2));
-    template_refused(&fors(MAX - 1));
+    template_ok(&fors(MAX - 1));
+    template_refused(&fors(MAX));
 }
 
 #[test]

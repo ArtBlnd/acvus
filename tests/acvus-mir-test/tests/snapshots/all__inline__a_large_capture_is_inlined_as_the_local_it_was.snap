@@ -1,0 +1,53 @@
+---
+source: tests/acvus-mir-test/tests/inline.rs
+expression: ir
+---
+=== literals ===
+  T0 = "hi"
+  T1 = "there"
+
+=== main ===
+     0 |   r0 = const_str T0
+     1 |   r1 = call #0(r0)
+     2 |   assign s = r1
+     3 |   r2 = take s
+     4 |   r3 = closure L0 [r2]
+     5 |   assign f = r3
+     6 |   r4 = const_str T1
+     7 |   r5 = call #0(r4)
+     8 |   r6 = ref &f
+     9 |   r7 = call r6(r5)
+    10 |   return r7
+
+    ; r0 (v1) : &str
+    ; r1 (to_string(...)) : String
+    ; r2 (s) : String
+    ; r3 (v5) : Fn(String) -> String
+    ; r4 (v7) : &str
+    ; r5 (to_string(...)) : String
+    ; r6 (f) : &Fn(String) -> String
+    ; r7 (f(...)) : String
+    ; r8 (s) : String
+    ; r9 (f) : Fn(String) -> String
+
+=== closure L0 (ValueId(1)) [captures: [ValueId(0)]] ===
+     0 |   assign s = r0
+     1 |   assign x = r1
+     2 |   r2 = take s
+     3 |   r3 = ref &(*r2)
+     4 |   r4 = as_slice &r3
+     5 |   r5 = ref &x
+     6 |   r6 = as_slice &r5
+     7 |   r7 = call #1(r4, r6)
+     8 |   return r7
+
+    ; r0 (s) : &String
+    ; r1 (v2) : String
+    ; r2 (v5) : &String
+    ; r3 ((*r5).) : &String
+    ; r4 (v7) : &str
+    ; r5 (x.) : &String
+    ; r6 (v9) : &str
+    ; r7 (concat(...)) : String
+    ; r8 (s) : &String
+    ; r9 (x) : String

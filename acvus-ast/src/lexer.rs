@@ -287,6 +287,7 @@ fn ends_a_value(token: &Token) -> bool {
         | Token::Fn
         | Token::Match
         | Token::Mut
+        | Token::Move
         | Token::As
         | Token::FmtStringStart(_)
         | Token::FmtStringMid(_)
@@ -305,6 +306,9 @@ fn ends_a_value(token: &Token) -> bool {
         | Token::Star
         | Token::Slash
         | Token::Percent
+        | Token::Caret
+        | Token::Shl
+        | Token::Shr
         | Token::Bang
         | Token::Amp
         | Token::Lt

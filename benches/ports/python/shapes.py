@@ -1,4 +1,4 @@
-"""shapes rows at n = 1 000 000, ported from acvus-interpreter-test/benches/shapes.rs.
+"""shapes rows at n = 1 000 000, ported from tests/acvus-interpreter-test/benches/shapes.rs.
 
 Obligation across artifacts: each row is the semantics of that file's `rust_*`
 twin. The twin's record is a `struct` with named fields, which in Python is a

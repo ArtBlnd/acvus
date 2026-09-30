@@ -7,4 +7,4 @@ pub use astr::*;
 mod qualified_ref;
 mod stack;
 pub use stack::grow;
-pub use qualified_ref::{FnScope, QualifiedRef};
+pub use qualified_ref::QualifiedRef;

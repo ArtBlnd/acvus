@@ -1,0 +1,84 @@
+---
+source: tests/acvus-mir-test/tests/optimized.rs
+expression: opt
+---
+=== literals ===
+  T0 = " (score: "
+  T1 = ")"
+
+=== main ===
+     0 |   r0 = fetch @min_score
+     1 |   r1 = fetch @user
+     2 |   assign @user = r1
+     3 |   r2 = take @user.age
+     5 |   r3 = r2 * 2 (r4)
+     6 |   assign score = r3
+     7 |   r5 = ref &@user.name
+     8 |   r6 = const_str T0
+     9 |   r7 = string_concat [r5, r6]
+    10 |   assign v14 = r7
+    11 |   r8 = ref &v14
+    12 |   r9 = ref &score
+    13 |   r10 = call #0(r9)
+    14 |   assign v18 = r10
+    15 |   r11 = ref &v18
+    16 |   r12 = string_concat [r8, r11]
+    17 |   drop r13
+    18 |   drop r14
+    19 |   assign v21 = r12
+    20 |   r15 = ref &v21
+    21 |   r16 = const_str T1
+    22 |   r17 = string_concat [r15, r16]
+    23 |   drop r18
+    24 |   r19 = take score
+    25 |   r20 = r19 > r0
+    26 |   r21 = take score
+    27 |   r22 = object {label: r17, score: r21, eligible: r20}
+    28 |   assign @output = r22
+    29 |   r23 = take @output.score
+    30 |   r24 = take @output
+    31 |   commit @output = r24
+    32 |   commit @min_score = r0 (not written)
+    33 |   r25 = take @user
+    34 |   commit @user = r25 (not written)
+    35 |   return r23
+
+    ; r0 (@min_score) : i64
+    ; r1 (@user) : {age: i64, name: String}
+    ; r2 (@user.age) : i64
+    ; r3 (v9) : i64
+    ; r4 (v8) : i64
+    ; r5 (@user.name) : &String
+    ; r6 (v12) : &str
+    ; r7 (v13) : String
+    ; r8 (var_14.) : &String
+    ; r9 (score.) : &i64
+    ; r10 (to_string(...)) : String
+    ; r11 (var_18.) : &String
+    ; r12 (v20) : String
+    ; r13 (v18) : String
+    ; r14 (v14) : String
+    ; r15 (var_21.) : &String
+    ; r16 (v23) : &str
+    ; r17 (v24) : String
+    ; r18 (v21) : String
+    ; r19 (score) : i64
+    ; r20 (v28) : Bool
+    ; r21 (score) : i64
+    ; r22 (v33) : {eligible: Bool, label: String, score: i64}
+    ; r23 (@output.score) : i64
+    ; r24 (v35) : {eligible: Bool, label: String, score: i64}
+    ; r25 (v37) : {age: i64, name: String}
+    ; r26 (@min_score) : i64
+    ; r27 (label) : String
+    ; r28 (@min_score) : i64
+    ; r29 (label) : String
+    ; r30 (v36) : i64
+    ; r31 (v40) : Bool
+    ; r32 (@user) : {age: i64, name: String}
+    ; r33 (v39) : String
+    ; r34 (@output) : {eligible: Bool, label: String, score: i64}
+    ; r35 (eligible) : Bool
+    ; r36 (eligible) : Bool
+    ; r37 (score) : i64
+    ; r38 (v38) : i64

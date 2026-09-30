@@ -1,4 +1,4 @@
-"""programs rows at n = 1 000 000, ported from acvus-interpreter-test/benches/programs.rs.
+"""programs rows at n = 1 000 000, ported from tests/acvus-interpreter-test/benches/programs.rs.
 
 Obligation across artifacts: `B`, `STEPS_PER_OUTER`, `TAPE`, the opcode
 numbers, `program`, `bracket_table` and the three machine bodies are that

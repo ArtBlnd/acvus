@@ -9,6 +9,7 @@ acvus-ast = { path = "../acvus-ast" }
 acvus-utils = { path = "../acvus-utils" }
 rustc-hash = { workspace = true }
 smallvec = "1"
+indexmap = "2"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

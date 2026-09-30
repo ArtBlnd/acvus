@@ -1,5 +1,0 @@
----
-source: acvus-mir-test/tests/e2e.rs
-expression: result.unwrap_err()
----
-no module produced

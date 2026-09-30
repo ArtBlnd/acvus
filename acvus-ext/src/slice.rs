@@ -79,7 +79,7 @@ where
 // used to settle: `reverse(x)` over a `Vec<#Float>` is refused with "no
 // `reverse` takes a call of type Fn(Vec<#Float>) -> Vec<_>". Measured one
 // variable apart — registering it fails
-// `acvus-mir-test/tests/regression_0041.rs`'s
+// `tests/acvus-mir-test/tests/regression_0041.rs`'s
 // `a_specialized_local_pays_one_erase_per_generic_consumer_and_none_at_its_member`,
 // unregistering it passes. A view is reversed by `swap` over its halves
 // until either `vec::reverse` takes Rust's in-place shape or RFC-0043

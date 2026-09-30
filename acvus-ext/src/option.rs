@@ -18,12 +18,12 @@
 //! a call of type Fn(Iterator<&Pt{label: String, x: i64}, Pure>,
 //! Fn({x: _}) -> _) -> Iterator<i64, Pure>``; registered beside
 //! `iter::filter`, `option::filter` refuses
-//! `acvus-interpreter-test/tests/extern_call_forms.rs`'s
+//! `tests/acvus-interpreter-test/tests/extern_call_forms.rs`'s
 //! `a | filter(|x| -> x > 1) | count` with ``no `filter` takes a call of
 //! type Fn(_, Fn(i64) -> Bool) -> Iterator<_, Pure>``. Each was measured
 //! one variable apart: unregistering that one name alone makes that one
 //! test pass. `flatten`, which takes no closure, coexists, and
-//! `acvus-interpreter-test/tests/option_methods.rs` pins that. Both rows
+//! `tests/acvus-interpreter-test/tests/option_methods.rs` pins that. Both rows
 //! return when the solver pins a closure argument from the candidates
 //! rather than after them.
 //!

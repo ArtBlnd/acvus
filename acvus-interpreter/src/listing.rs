@@ -222,7 +222,7 @@ pub fn body_listing(body: &Body) -> Vec<BlockListing> {
 /// nested under the operation that owns them.
 ///
 /// Obligation across artifacts: the oplist dumps of
-/// `acvus-interpreter-test/benches/{programs,shapes,logs}.rs` print their
+/// `tests/acvus-interpreter-test/benches/{programs,shapes,logs}.rs` print their
 /// blocks in this shape, and `acvus ops` prints this one; a reader compares
 /// the two by eye.
 pub struct Text<'b> {

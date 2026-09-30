@@ -7,9 +7,9 @@ use crate::error::{BlockStatement, ParseError, ParseErrorKind};
 use crate::list::{ListElem, build_list};
 use crate::nesting::{Level, Nested};
 use crate::parser::{
-    BindLine, Declares, ForLine, Recover, binary, block_closed, build_assign, build_call,
+    BindLine, CallArgs, Declares, ForLine, Recover, binary, block_closed, build_assign, build_call,
     expr_stmt, fn_declared, holding_one, holding_two, let_bind, literal_of, match_arm,
-    object_field, paren_or_tuple, pattern_of, recovered, resumed, stated,
+    object_field, paren_or_tuple, pattern_of, qualified_name, recovered, resumed, stated,
 };
 use crate::literal::{self, IntWidth, SuffixedInt};
 
@@ -50,6 +50,7 @@ extern {
         "fn" => Token::Fn,
         "match" => Token::Match,
         "mut" => Token::Mut,
+        "move" => Token::Move,
         "as" => Token::As,
         "&" => Token::Amp,
         "+" => Token::Plus,
@@ -57,6 +58,9 @@ extern {
         "*" => Token::Star,
         "/" => Token::Slash,
         "%" => Token::Percent,
+        "^" => Token::Caret,
+        "<<" => Token::Shl,
+        ">>" => Token::Shr,
         "!" => Token::Bang,
         "?" => Token::Question,
         "&&" => Token::AndAnd,
@@ -201,7 +205,7 @@ ArmPattern: Nested<Pattern<S>> = {
 };
 
 PatternRule: Nested<Pattern<S>> = {
-    <e:Expr> =>? pattern_of::<S>(errors, &e.root()),
+    <e:Expr> =>? pattern_of::<S>(interner, errors, &e.root()),
     <node:Unparsed> => Nested::leaf(Pattern::Error(node)),
 };
 
@@ -409,9 +413,12 @@ StmtExpr: Nested<Expr<S>> = {
 };
 
 ExprFrom<Lead>: Nested<Expr<S>> = {
-    // Lambda: |params| -> body (body is full Expr, so pipes are allowed inside)
+    // Lambda: |params| -> body (body is full Expr, so pipes are allowed inside).
+    // `move` before it moves each captured name in (functions §2).
     <l:@L> "|" <params:CommaSep<Binder>> "|" "->" <body:Expr> <r:@R> =>?
-        holding_one(body, Span::new(l, r), |body, span| Expr::Lambda { id: AstId::alloc(), params, body, span }),
+        holding_one(body, Span::new(l, r), |body, span| Expr::Lambda { id: AstId::alloc(), captures_by_move: false, params, body, span }),
+    <l:@L> "move" "|" <params:CommaSep<Binder>> "|" "->" <body:Expr> <r:@R> =>?
+        holding_one(body, Span::new(l, r), |body, span| Expr::Lambda { id: AstId::alloc(), captures_by_move: true, params, body, span }),
     // An expression and not a statement, so that it stands where a value is
     // read; `return e;` is then the expression-statement rule. There is no
     // `return;`: every body returns a value (RFC-0054).
@@ -445,12 +452,31 @@ AndExpr<Lead>: Nested<Expr<S>> = {
 
 // Comparison: ==, !=, <, >, <=, >=
 CompExpr<Lead>: Nested<Expr<S>> = {
-    <l:@L> <left:CompExpr<Lead>> "==" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Eq, right, Span::new(l, r)),
-    <l:@L> <left:CompExpr<Lead>> "!=" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Neq, right, Span::new(l, r)),
-    <l:@L> <left:CompExpr<Lead>> "<" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Lt, right, Span::new(l, r)),
-    <l:@L> <left:CompExpr<Lead>> ">" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Gt, right, Span::new(l, r)),
-    <l:@L> <left:CompExpr<Lead>> "<=" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Lte, right, Span::new(l, r)),
-    <l:@L> <left:CompExpr<Lead>> ">=" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Gte, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "==" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Eq, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "!=" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Neq, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "<" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Lt, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> ">" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Gt, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> "<=" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Lte, right, Span::new(l, r)),
+    <l:@L> <left:CompExpr<Lead>> ">=" <right:BitXorExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Gte, right, Span::new(l, r)),
+    BitXorExpr<Lead>,
+};
+
+// The bitwise operators bind as Rust's do: `^` looser than `&`, `&` looser
+// than the shifts, and the shifts looser than `+` and `-`. `|` is the pipe,
+// and bitwise or has no operator (operators §2).
+BitXorExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:BitXorExpr<Lead>> "^" <right:BitAndExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Xor, right, Span::new(l, r)),
+    BitAndExpr<Lead>,
+};
+
+BitAndExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:BitAndExpr<Lead>> "&" <right:ShiftExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::BitAnd, right, Span::new(l, r)),
+    ShiftExpr<Lead>,
+};
+
+ShiftExpr<Lead>: Nested<Expr<S>> = {
+    <l:@L> <left:ShiftExpr<Lead>> "<<" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Shl, right, Span::new(l, r)),
+    <l:@L> <left:ShiftExpr<Lead>> ">>" <right:AddExpr<PrimaryExpr>> <r:@R> =>? binary(left, BinOp::Shr, right, Span::new(l, r)),
     AddExpr<Lead>,
 };
 
@@ -529,9 +555,28 @@ CalleeExpr<Lead>: Nested<Expr<S>> = {
         let args = level.all(args);
         level.node(Expr::MethodCall { id: AstId::alloc(), callee_id: AstId::alloc(), receiver, name, name_span: Span::new(nl, nr), args, span }, span)
     },
-    <l:@L> <func:CalleeExpr<Lead>> "(" <args:CommaSep<CallArg>> ")" <r:@R> =>?
-        build_call(func, args, Span::new(l, r)),
+    <l:@L> <func:CalleeExpr<Lead>> "(" <args:Args> ")" <r:@R> =>?
+        build_call(interner, func, args, Span::new(l, r)),
     Lead,
+};
+
+// A call's arguments: all by position or all by name, never both
+// (programs §1, §2). A method call's are by position only.
+Args: CallArgs<S> = {
+    <args:CommaSep<CallArg>> => CallArgs::Positional(args),
+    <args:NamedArgs> => CallArgs::Named(args),
+};
+
+NamedArgs: Vec<(Binder, Nested<Expr<S>>)> = {
+    <args:(<NamedArg> ",")+> => args,
+    <mut args:(<NamedArg> ",")*> <last:NamedArg> => {
+        args.push(last);
+        args
+    },
+};
+
+NamedArg: (Binder, Nested<Expr<S>>) = {
+    <label:Binder> ":" <arg:CallArg> => (label, arg),
 };
 
 CallArg: Nested<Expr<S>> = {
@@ -555,6 +600,8 @@ PlainPrimary: Nested<Expr<S>> = {
     // postfix — `?` included — follows a qualified call.
     <l:@L> <ename:"ident"> "::" <tag:"ident"> <r:@R> =>
         Nested::leaf(Expr::Variant { id: AstId::alloc(), enum_name: Some(ename), tag, payload: None, span: Span::new(l, r) }),
+    <l:@L> <first:"ident"> <inner:("::" <"ident">)+> "::" <name:"ident"> <r:@R> =>
+        Nested::leaf(qualified_name(interner, first, inner, name, Span::new(l, r))),
     <l:@L> <name:"ident"> <r:@R> =>
         Nested::leaf(Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::Value, span: Span::new(l, r) }),
     <l:@L> <name:"$ref"> <r:@R> =>

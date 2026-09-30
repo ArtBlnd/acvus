@@ -1,0 +1,16 @@
+[package]
+name = "acvus-extern-test"
+version = "0.1.0"
+edition = "2024"
+license-file.workspace = true
+publish = false
+
+[dependencies]
+acvus-extern = { path = "../../acvus-extern" }
+acvus-utils = { path = "../../acvus-utils" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[lints]
+workspace = true

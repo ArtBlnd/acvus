@@ -1,0 +1,230 @@
+---
+source: tests/acvus-mir-test/tests/optimized_cross_fn.rs
+expression: raw
+---
+-- compute_score --
+=== main ===
+     0 |   r0 = take $v1
+     1 |   r1 = take $v2
+     2 |   r2 = r0 + r1
+     3 |   r3 = take $v3
+     4 |   r4 = r2 * r3
+     6 |   r5 = r4 / 100 (r6)
+     7 |   return r5
+
+    ; r0 ($profile) : i64
+    ; r1 ($history) : i64
+    ; r2 (v6) : i64
+    ; r3 ($weight) : i64
+    ; r4 (v8) : i64
+    ; r5 (v10) : i64
+    ; r6 (v9) : i64
+    ; r7 (v3) : i64
+    ; r8 (v2) : i64
+    ; r9 (v1) : i64
+
+-- format_label --
+=== literals ===
+  T0 = "User("
+  T1 = " score:"
+  T2 = ")"
+
+=== main ===
+     0 |   r0 = const_str T0
+     1 |   assign a = r0
+     2 |   r1 = ref &$v1
+     3 |   r2 = call #0(r1)
+     4 |   assign b = r2
+     5 |   r3 = const_str T1
+     6 |   assign c = r3
+     7 |   r4 = ref &$v2
+     8 |   r5 = call #0(r4)
+     9 |   assign d = r5
+    10 |   r6 = const_str T2
+    11 |   assign e = r6
+    12 |   r7 = take a
+    13 |   r8 = ref &(*r7)
+    14 |   r9 = ref &b
+    15 |   r10 = as_slice &r9
+    16 |   r11 = call #1(r8, r10)
+    17 |   assign ab = r11
+    18 |   r12 = ref &ab
+    19 |   r13 = as_slice &r12
+    20 |   r14 = take c
+    21 |   r15 = ref &(*r14)
+    22 |   r16 = call #1(r13, r15)
+    23 |   assign abc = r16
+    24 |   r17 = ref &abc
+    25 |   r18 = as_slice &r17
+    26 |   r19 = ref &d
+    27 |   r20 = as_slice &r19
+    28 |   r21 = call #1(r18, r20)
+    29 |   assign abcd = r21
+    30 |   r22 = ref &abcd
+    31 |   r23 = as_slice &r22
+    32 |   r24 = take e
+    33 |   r25 = ref &(*r24)
+    34 |   r26 = call #1(r23, r25)
+    35 |   return r26
+
+    ; r0 (v3) : &str
+    ; r1 ($param_1.) : &i64
+    ; r2 (to_string(...)) : String
+    ; r3 (v8) : &str
+    ; r4 ($param_2.) : &i64
+    ; r5 (to_string(...)) : String
+    ; r6 (v13) : &str
+    ; r7 (v15) : &str
+    ; r8 ((*r15).) : &str
+    ; r9 (b.) : &String
+    ; r10 (v18) : &str
+    ; r11 (concat(...)) : String
+    ; r12 (ab.) : &String
+    ; r13 (v22) : &str
+    ; r14 (v23) : &str
+    ; r15 ((*r23).) : &str
+    ; r16 (concat(...)) : String
+    ; r17 (abc.) : &String
+    ; r18 (v28) : &str
+    ; r19 (d.) : &String
+    ; r20 (v30) : &str
+    ; r21 (concat(...)) : String
+    ; r22 (abcd.) : &String
+    ; r23 (v34) : &str
+    ; r24 (v35) : &str
+    ; r25 ((*r35).) : &str
+    ; r26 (concat(...)) : String
+    ; r27 (c) : &str
+    ; r28 (d) : String
+    ; r29 (e) : &str
+    ; r30 (v2) : i64
+    ; r31 (ab) : String
+    ; r32 (v1) : i64
+    ; r33 (a) : &str
+    ; r34 (abc) : String
+    ; r35 (b) : String
+    ; r36 (abcd) : String
+
+-- main --
+=== main ===
+     0 |   assign $order = r0
+     1 |   r1 = fetch @weight
+     2 |   assign @weight = r1
+     3 |   r2 = fetch @alert_count
+     4 |   assign @alert_count = r2
+     5 |   r3 = fetch @threshold
+     6 |   assign @threshold = r3
+     7 |   r4 = fetch @user_id
+     8 |   assign @user_id = r4
+     9 |   r5 = take @user_id
+    10 |   r6 = take $order
+    11 |   r7 = call #0(r5) [r6 -> r8]
+    12 |   assign $order = r8
+    13 |   assign profile = r7
+    14 |   r9 = take @user_id
+    15 |   r10 = take $order
+    16 |   r11 = call #1(r9) [r10 -> r12]
+    17 |   assign $order = r12
+    18 |   assign history = r11
+    19 |   r13 = take profile
+    20 |   r14 = take history
+    21 |   r15 = take @weight
+    22 |   r16 = call #2(r13, r14, r15)
+    23 |   assign score = r16
+    24 |   r17 = take profile
+    25 |   r18 = take score
+    26 |   r19 = call #3(r17, r18)
+    27 |   assign label = r19
+    28 |   r20 = take score
+    29 |   r21 = take @threshold
+    30 |   r22 = r20 > r21
+    31 |   r23 = test r22 == true
+    32 |   if r23 -> L0 else L1 join L1
+    33 | L0:
+    34 |   r24 = take @user_id
+    35 |   r25 = take score
+    36 |   r26 = take $order
+    37 |   r27 = call #4(r24, r25) [r26 -> r28]
+    38 |   assign $order = r28
+    39 |   r29 = take @alert_count
+    41 |   r30 = r29 + 1 (r31)
+    42 |   assign @alert_count = r30
+    43 |   jump L1
+    44 | L1:
+    46 |   r32 = take label
+    47 |   assign @result_label = r32
+    48 |   r33 = take score
+    49 |   assign @result_score = r33
+    50 |   r34 = take score
+    51 |   r35 = take @result_label
+    52 |   commit @result_label = r35
+    53 |   r36 = take @weight
+    54 |   commit @weight = r36 (not written)
+    55 |   r37 = take @alert_count
+    56 |   commit @alert_count = r37
+    57 |   r38 = take @result_score
+    58 |   commit @result_score = r38
+    59 |   r39 = take @threshold
+    60 |   commit @threshold = r39 (not written)
+    61 |   r40 = take @user_id
+    62 |   commit @user_id = r40 (not written)
+    63 |   r41 = take $order
+    64 |   return r34 [r41]
+
+    ; orders: what the body's yielded Order waits for
+    ;   r41(entry)
+
+    ; r0 (v1) : Order
+    ; r1 (@weight) : i64
+    ; r2 (@alert_count) : i64
+    ; r3 (@threshold) : i64
+    ; r4 (@user_id) : i64
+    ; r5 (@user_id) : i64
+    ; r6 (v17) : Order
+    ; r7 (fetch_profile(...)) : i64
+    ; r8 (v18) : Order
+    ; r9 (@user_id) : i64
+    ; r10 (v22) : Order
+    ; r11 (fetch_history(...)) : i64
+    ; r12 (v23) : Order
+    ; r13 (profile) : i64
+    ; r14 (history) : i64
+    ; r15 (@weight) : i64
+    ; r16 (compute_score(...)) : i64
+    ; r17 (profile) : i64
+    ; r18 (score) : i64
+    ; r19 (format_label(...)) : String
+    ; r20 (score) : i64
+    ; r21 (@threshold) : i64
+    ; r22 (v36) : Bool
+    ; r23 (v37) : Bool
+    ; r24 (@user_id) : i64
+    ; r25 (score) : i64
+    ; r26 (v41) : Order
+    ; r27 (notify_alert(...)) : i64
+    ; r28 (v42) : Order
+    ; r29 (@alert_count) : i64
+    ; r30 (v45) : i64
+    ; r31 (v44) : i64
+    ; r32 (label) : String
+    ; r33 (score) : i64
+    ; r34 (score) : i64
+    ; r35 (v50) : String
+    ; r36 (v51) : i64
+    ; r37 (v52) : i64
+    ; r38 (v53) : i64
+    ; r39 (v54) : i64
+    ; r40 (v55) : i64
+    ; r41 (v56) : Order
+    ; r42 (@result_label) : String
+    ; r43 (history) : i64
+    ; r44 ($order) : Order
+    ; r45 (@weight) : i64
+    ; r46 (v46) : Unit
+    ; r47 (@result_score) : i64
+    ; r48 (@threshold) : i64
+    ; r49 (label) : String
+    ; r50 (score) : i64
+    ; r51 (@alert_count) : i64
+    ; r52 (@user_id) : i64
+    ; r53 (profile) : i64

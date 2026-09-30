@@ -1,4 +1,4 @@
-// attention 256x128, ported from acvus-interpreter-test/benches/attention.rs.
+// attention 256x128, ported from tests/acvus-interpreter-test/benches/attention.rs.
 //
 // Obligation across artifacts: `inputs` and the five loops are that file's
 // `inputs` and `rust_attention`, in the same order, and the timed region

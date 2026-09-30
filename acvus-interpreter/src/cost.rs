@@ -5,7 +5,7 @@
 //! `for range` row at n = 1 000 000 (median of five reps, 1105.4 µs)
 //! divided by the two dispatches one of its iterations runs, the `For` op
 //! and one `Add`. Every row below was derived once, from the benches in
-//! `acvus-interpreter-test/benches` measured on 2026-09-25 at master
+//! `tests/acvus-interpreter-test/benches` measured on 2026-09-25 at master
 //! 83a90e8b under that directory's README protocol, core 15. A row is the
 //! difference between two bench rows over the dispatches that separate them,
 //! rounded to a whole tick:

@@ -71,6 +71,8 @@ pub enum Token {
     Match,
     #[token("mut", priority = 3)]
     Mut,
+    #[token("move", priority = 3)]
+    Move,
     #[token("as", priority = 3)]
     As,
 
@@ -136,6 +138,10 @@ pub enum Token {
     FatArrow,
     #[token("..")]
     DotDot,
+    #[token("<<")]
+    Shl,
+    #[token(">>")]
+    Shr,
 
     // -- Single-char operators --
     #[token("+")]
@@ -148,6 +154,8 @@ pub enum Token {
     Slash,
     #[token("%")]
     Percent,
+    #[token("^")]
+    Caret,
     #[token("!")]
     Bang,
     #[token("?")]
@@ -199,7 +207,7 @@ pub enum Token {
 /// Every word the lexer reserves, each as `Token::keyword` names it.
 pub const KEYWORDS: &[&str] = &[
     "true", "false", "_", "Some", "None", "Ok", "Err", "let", "if", "else", "while", "for", "in",
-    "break", "continue", "return", "anyorder", "fn", "match", "mut", "as",
+    "break", "continue", "return", "anyorder", "fn", "match", "mut", "move", "as",
 ];
 
 impl Token {
@@ -226,6 +234,7 @@ impl Token {
             Token::Fn => Some("fn"),
             Token::Match => Some("match"),
             Token::Mut => Some("mut"),
+            Token::Move => Some("move"),
             Token::As => Some("as"),
             Token::Ident(_)
             | Token::ParamRef(_)
@@ -252,6 +261,9 @@ impl Token {
             | Token::Star
             | Token::Slash
             | Token::Percent
+            | Token::Caret
+            | Token::Shl
+            | Token::Shr
             | Token::Bang
             | Token::Question
             | Token::Amp
@@ -310,6 +322,7 @@ impl fmt::Display for Token {
             Token::Fn => write!(f, "fn"),
             Token::Match => write!(f, "match"),
             Token::Mut => write!(f, "mut"),
+            Token::Move => write!(f, "move"),
             Token::As => write!(f, "as"),
             Token::Amp => write!(f, "&"),
             Token::DoubleColon => write!(f, "::"),
@@ -318,6 +331,9 @@ impl fmt::Display for Token {
             Token::Star => write!(f, "*"),
             Token::Slash => write!(f, "/"),
             Token::Percent => write!(f, "%"),
+            Token::Caret => write!(f, "^"),
+            Token::Shl => write!(f, "<<"),
+            Token::Shr => write!(f, ">>"),
             Token::Bang => write!(f, "!"),
             Token::Question => write!(f, "?"),
             Token::AndAnd => write!(f, "&&"),

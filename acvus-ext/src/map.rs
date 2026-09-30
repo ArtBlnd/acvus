@@ -54,7 +54,7 @@ type EqOf<'a, K, E, Rt> = Closure<'a, (Ref<'a, K, Shared, Rt>, Ref<'a, K, Shared
 /// vtable that pointer would be to `Op::run`'s own slot, lent to a callee
 /// LLVM must assume keeps it, and its sibling-call rule then refuses the
 /// tail jump every operation owes its successor (RFC-0052, enforced by
-/// `acvus-interpreter-test/benches/asm_probe.rs`).
+/// `tests/acvus-interpreter-test/benches/asm_probe.rs`).
 #[derive(Payload)]
 enum Keying<'a, K, E, Rt>
 where

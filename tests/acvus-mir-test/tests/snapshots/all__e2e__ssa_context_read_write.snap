@@ -1,0 +1,19 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     0 |   r0 = undef
+     1 |   r1 = fetch @x
+     3 |   r2 = r1 + 1 (r3)
+     4 |   commit @x = r2
+     5 |   return r2
+
+    ; r0 (v8) : i64
+    ; r1 (@x) : i64
+    ; r2 (v5) : i64
+    ; r3 (v4) : i64
+    ; r4 (@x) : i64
+    ; r5 (v7) : i64
+    ; r6 (@x) : i64
+    ; r7 (@x) : i64

@@ -241,7 +241,7 @@ where
 /// with no successor returns the `BlockId` the machine's loop reads.
 ///
 /// Obligation across artifacts: that the call is a tail call is asserted by
-/// `acvus-interpreter-test/benches/asm_probe.rs` on the release machine, and
+/// `tests/acvus-interpreter-test/benches/asm_probe.rs` on the release machine, and
 /// that a `run` holds no `match`, no `let … else` and no `kind` test on a
 /// fact its own type carries is RFC-0052 rule 1.
 ///

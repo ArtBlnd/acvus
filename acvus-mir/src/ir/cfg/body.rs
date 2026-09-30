@@ -1,0 +1,1011 @@
+//! The CFG. Fields are private to `ir::cfg`: reading is by accessor, writing
+//! is through `Builder` and `Rewriter` only.
+
+use acvus_ast::Span;
+use acvus_utils::{Astr, LocalFactory, QualifiedRef};
+use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
+
+use super::op::Op;
+use crate::ir::{DebugInfo, ExitTrip, ForSource, OrderEdge, SwitchKey, ValueId};
+use crate::ty::{Concrete, Ty, Types};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BodyId(pub(super) u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BlockId(pub(super) u32);
+
+impl BlockId {
+    pub(super) fn of_index(index: usize) -> BlockId {
+        BlockId(u32::try_from(index).expect("a body holds at most u32::MAX blocks"))
+    }
+
+    /// The block's place among its body's blocks, which `Body::blocks`
+    /// yields in this order. Cost: O(1).
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// A compiled module: its bodies and the one table every type of the module
+/// is an id of. The module's result type is its entry body's; a run's result
+/// holds no positions (ownership §5), so the module states no flows. A
+/// closure's flows are on its function type, and a unit's instantiation
+/// body's on the function type its callers claimed it at (graph).
+pub struct Module {
+    pub(super) bodies: Vec<Body>,
+    pub(super) entry: Option<BodyId>,
+    pub(super) types: Types<Concrete>,
+    /// Each unit instantiation body a call claimed, with the function type
+    /// the call claimed it at.
+    pub(super) claimed: FxHashMap<BodyId, Ty>,
+}
+
+/// What a value is: its type, where it is defined, and whether it is an
+/// order token, which only the core makes.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ValueDef {
+    pub ty: Ty,
+    pub def: Def,
+    pub token: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Def {
+    Param(usize),
+    Capture(usize),
+    OrderParam,
+    /// A slot, by its place among the body's slots.
+    Slot { index: usize },
+    BlockParam(BlockId, usize),
+    /// A parameter the Builder adds to a block for the order token, whose
+    /// position is fixed at `seal`, after the caller's parameters.
+    UnplacedParam(BlockId),
+    Inst(InstId),
+}
+
+/// Where a value of a whole body is defined, as `Body::definition` gives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Definition {
+    Param(usize),
+    Capture(usize),
+    OrderParam,
+    Slot(usize),
+    BlockParam(BlockId, usize),
+    /// An instruction's result, or the order token it yields.
+    Inst(InstId),
+}
+
+/// Where a use stands: an instruction, by its identity, or a block's
+/// terminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Site {
+    Inst(InstId),
+    Term(BlockId),
+}
+
+/// The sites that use one value, each with how many of its operands do.
+#[derive(Debug, Clone, Default)]
+pub(super) struct UseSites {
+    counts: FxHashMap<Site, u32>,
+}
+
+impl UseSites {
+    pub(super) fn add(&mut self, site: Site, count: u32) {
+        *self.counts.entry(site).or_insert(0) += count;
+    }
+
+    /// # Panics
+    /// `site` does not use the value.
+    pub(super) fn remove_one(&mut self, site: Site) {
+        let count = self.counts.get_mut(&site).expect("a use being removed was recorded");
+        *count -= 1;
+        if *count == 0 {
+            self.counts.remove(&site);
+        }
+    }
+
+    /// Moves every use recorded at `from` to `to`.
+    pub(super) fn move_site(&mut self, from: Site, to: Site) {
+        if let Some(count) = self.counts.remove(&from) {
+            self.add(to, count);
+        }
+    }
+
+    pub(super) fn total(&self) -> usize {
+        self.counts.values().map(|n| *n as usize).sum()
+    }
+
+    pub(super) fn into_sites(self) -> impl Iterator<Item = (Site, u32)> {
+        self.counts.into_iter()
+    }
+
+    /// Renames the block of every terminator site through `rename`. Cost:
+    /// O(sites).
+    pub(super) fn rename_blocks(&mut self, rename: impl Fn(BlockId) -> BlockId) {
+        if !self.counts.keys().any(|site| matches!(site, Site::Term(_))) {
+            return;
+        }
+        self.counts = std::mem::take(&mut self.counts)
+            .into_iter()
+            .map(|(site, count)| {
+                let site = match site {
+                    Site::Inst(inst) => Site::Inst(inst),
+                    Site::Term(block) => Site::Term(rename(block)),
+                };
+                (site, count)
+            })
+            .collect();
+    }
+}
+
+/// A context a body names: its type, and whether it is volatile, as its
+/// declaration states (context §3). The body carries it so that the IR
+/// reads volatility from itself alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BodyContext {
+    pub context: QualifiedRef,
+    pub ty: Ty,
+    pub volatile: bool,
+}
+
+pub struct Body {
+    pub(super) ret: Ty,
+    pub(super) blocks: Vec<BlockData>,
+    /// Every instruction of the body, by its identity; none for one removed.
+    pub(super) insts: Vec<Option<InstNode>>,
+    pub(super) entry: BlockId,
+    pub(super) params: Vec<(Astr, ValueId)>,
+    pub(super) captures: Vec<(Astr, ValueId)>,
+    pub(super) order_param: Option<ValueId>,
+    pub(super) slots: Vec<ValueId>,
+    /// The contexts the body names, with their types and volatility
+    /// (context §3).
+    pub(super) contexts: Vec<BodyContext>,
+    /// The span of the binding each slot stores.
+    pub(super) slot_spans: FxHashMap<ValueId, Span>,
+    /// The span of the binder each parameter and capture names.
+    pub(super) binder_spans: FxHashMap<ValueId, Span>,
+    pub(super) values: FxHashMap<ValueId, ValueDef>,
+    /// Every value's uses; a value has an entry from its birth.
+    pub(super) uses: FxHashMap<ValueId, UseSites>,
+    pub(super) value_ids: LocalFactory<ValueId>,
+    /// The identity the next instruction made in this body takes.
+    pub(super) next_inst: u32,
+    pub(super) debug: DebugInfo,
+}
+
+/// A block as the body stores it: its parameters, the ends of its list of
+/// instructions, and its terminator.
+pub(super) struct BlockData {
+    pub(super) params: Vec<ValueId>,
+    pub(super) list: InstList,
+    pub(super) terminator: Terminator,
+    /// The span of the construct that made the terminator; a `Return`'s
+    /// is its own.
+    pub(super) terminator_span: Span,
+}
+
+/// An instruction's identity within its body, given when the instruction
+/// is made and kept while it moves between positions and blocks, and
+/// never given again. It names the instruction in a `Site` and a
+/// definition; where it stands is the body's to tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InstId(pub(super) u32);
+
+impl InstId {
+    pub(super) fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// The ends of a block's list of instructions and how many it holds.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct InstList {
+    pub(super) head: Option<InstId>,
+    pub(super) tail: Option<InstId>,
+    pub(super) len: usize,
+}
+
+/// An instruction where it stands: its block, its neighbours in the block,
+/// and its order number, which rises along the block.
+#[derive(Debug, Clone)]
+pub(super) struct InstNode {
+    pub(super) inst: Inst,
+    pub(super) block: BlockId,
+    pub(super) prev: Option<InstId>,
+    pub(super) next: Option<InstId>,
+    pub(super) order: u64,
+}
+
+/// An instruction: its operation, the value it yields, its place on the
+/// order chain, and its span. The core makes the result and the tokens; no
+/// caller names them.
+#[derive(Debug, Clone)]
+pub struct Inst {
+    pub(super) id: InstId,
+    pub(super) op: Op,
+    pub(super) result: Option<ValueId>,
+    pub(super) order: Option<OrderUse>,
+    pub(super) span: Span,
+}
+
+/// How an instruction stands on the order chain (effects §3, §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderUse {
+    /// An effectful call: it consumes one token and yields the next.
+    Edge(OrderEdge),
+    /// A split call's start: it consumes the token.
+    Start(ValueId),
+    /// A split call's taking: it yields the token that follows the call.
+    Take(ValueId),
+}
+
+impl OrderUse {
+    pub fn consumed(self) -> Option<ValueId> {
+        match self {
+            OrderUse::Edge(edge) => Some(edge.before),
+            OrderUse::Start(before) => Some(before),
+            OrderUse::Take(_) => None,
+        }
+    }
+
+    pub fn yielded(self) -> Option<ValueId> {
+        match self {
+            OrderUse::Edge(edge) => Some(edge.after),
+            OrderUse::Take(after) => Some(after),
+            OrderUse::Start(_) => None,
+        }
+    }
+}
+
+impl Body {
+    /// A new instruction with an identity of its own. Cost: O(1).
+    pub(super) fn make_inst(&mut self, op: Op, result: Option<ValueId>, order: Option<OrderUse>, span: Span) -> Inst {
+        Inst { id: self.fresh_inst_id(), op, result, order, span }
+    }
+
+    /// The identity the next instruction made in this body takes, for the
+    /// values it will define, made before it. Cost: O(1).
+    pub(super) fn peek_inst_id(&self) -> InstId {
+        InstId(self.next_inst)
+    }
+
+    pub(super) fn fresh_inst_id(&mut self) -> InstId {
+        let id = InstId(self.next_inst);
+        self.next_inst = self.next_inst.checked_add(1).expect("a body makes at most u32::MAX instructions");
+        id
+    }
+}
+
+impl Inst {
+    /// The instruction's identity. Cost: O(1).
+    pub fn id(&self) -> InstId {
+        self.id
+    }
+
+    pub fn op(&self) -> &Op {
+        &self.op
+    }
+    pub fn result(&self) -> Option<ValueId> {
+        self.result
+    }
+    pub fn order(&self) -> Option<OrderUse> {
+        self.order
+    }
+    pub fn span(&self) -> Span {
+        self.span
+    }
+
+    /// Every value the instruction defines: its result and the token it
+    /// yields.
+    pub(super) fn defs(&self) -> SmallVec<[ValueId; 2]> {
+        self.result.into_iter().chain(self.order.and_then(OrderUse::yielded)).collect()
+    }
+
+    /// Every value the instruction reads, once per operand: its operation's
+    /// operands and then the token it consumes. Cost: O(its operands).
+    pub fn operands(&self) -> SmallVec<[ValueId; 4]> {
+        let mut operands = SmallVec::new();
+        self.op.for_each_operand(|value| operands.push(value));
+        operands.extend(self.order.and_then(OrderUse::consumed));
+        operands
+    }
+
+    pub(super) fn for_each_operand_mut(&mut self, mut on_use: impl FnMut(&mut ValueId)) {
+        self.op.for_each_operand_mut(&mut on_use);
+        match &mut self.order {
+            Some(OrderUse::Edge(OrderEdge { before, .. })) | Some(OrderUse::Start(before)) => on_use(before),
+            Some(OrderUse::Take(_)) | None => {}
+        }
+    }
+
+    /// Whether the instruction consumes, yields or joins order tokens.
+    pub(super) fn is_on_order_chain(&self) -> bool {
+        self.order.is_some() || matches!(self.op, Op::Merge { .. })
+    }
+}
+
+/// A loop's stage chain (effects: loop deps): the entry block of each stage,
+/// in body order; the first is the body block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stages {
+    body: BlockId,
+    rest: Vec<BlockId>,
+}
+
+impl Stages {
+    /// The chain a loop is lowered with: one stage, the body.
+    pub fn lowered(body: BlockId) -> Stages {
+        Stages { body, rest: Vec::new() }
+    }
+
+    pub fn body(&self) -> BlockId {
+        self.body
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = BlockId> + '_ {
+        std::iter::once(self.body).chain(self.rest.iter().copied())
+    }
+
+    fn entries_mut(&mut self) -> impl Iterator<Item = &mut BlockId> {
+        std::iter::once(&mut self.body).chain(self.rest.iter_mut())
+    }
+}
+
+/// Control flow. `Diamond`, `Switch` and the loops hold structure on purpose
+/// (D44, D45, D57): the core keeps their structural blocks in step with every
+/// edit, and a `Diamond` or a `Switch` is made only by the Builder, for an
+/// `if` or a `match` region whose join it knows.
+#[derive(Debug, Clone)]
+pub enum Terminator {
+    Jump { to: BlockId, args: Vec<ValueId> },
+    JumpIf { cond: ValueId, then_to: BlockId, then_args: Vec<ValueId>, else_to: BlockId, else_args: Vec<ValueId> },
+    Diamond { cond: ValueId, then_to: BlockId, then_args: Vec<ValueId>, else_to: BlockId, else_args: Vec<ValueId>, join: BlockId },
+    Switch { tag: ValueId, arms: Vec<(SwitchKey, BlockId, Vec<ValueId>)>, default: Option<(BlockId, Vec<ValueId>)>, join: BlockId },
+    For { source: ForSource, stages: Stages, exit: BlockId, exit_trip: ExitTrip, exit_args: Vec<ValueId> },
+    While { cond: ValueId, stages: Stages, exit: BlockId, exit_args: Vec<ValueId> },
+    Return { value: ValueId, order: Option<ValueId>, span: Span },
+    Diverge,
+    /// Where no arm of a `match` answers: no run reaches it, which
+    /// `check::matchck` proves (patterns §3); otherwise as `Diverge`.
+    NoArmMatched { span: Span },
+}
+
+/// One edge out of a terminator: the target's leading `supplied`
+/// parameters are filled by the terminator itself, and `args` fill the rest.
+#[derive(Debug, Clone, Copy)]
+pub struct Edge<'t> {
+    pub to: BlockId,
+    pub supplied: usize,
+    pub args: &'t [ValueId],
+}
+
+impl Terminator {
+    /// Every block this terminator names as a structural label: a
+    /// `Diamond`'s or a `Switch`'s join, or a loop's stage or exit (D45,
+    /// D57).
+    fn for_each_structural_label(&self, mut on_label: impl FnMut(BlockId)) {
+        match self {
+            Terminator::Diamond { join, .. } | Terminator::Switch { join, .. } => on_label(*join),
+            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
+                on_label(*exit);
+                stages.entries().for_each(&mut on_label);
+            }
+            Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
+        }
+    }
+
+    /// Every edge, in the terminator's own order; a `Diamond`'s or a
+    /// `Switch`'s join and a loop's later stages are not edges. Cost: O(its edges).
+    pub fn edges(&self) -> SmallVec<[Edge<'_>; 2]> {
+        fn plain(to: BlockId, args: &[ValueId]) -> Edge<'_> {
+            Edge { to, supplied: 0, args }
+        }
+        match self {
+            Terminator::Jump { to, args } => smallvec::smallvec![plain(*to, args)],
+            Terminator::JumpIf { then_to, then_args, else_to, else_args, .. }
+            | Terminator::Diamond { then_to, then_args, else_to, else_args, .. } => {
+                smallvec::smallvec![plain(*then_to, then_args), plain(*else_to, else_args)]
+            }
+            Terminator::Switch { arms, default, .. } => arms
+                .iter()
+                .map(|(_, to, args)| plain(*to, args))
+                .chain(default.iter().map(|(to, args)| plain(*to, args)))
+                .collect(),
+            Terminator::For { source, stages, exit, exit_trip, exit_args } => smallvec::smallvec![
+                Edge { to: stages.body(), supplied: source.supplied_params(), args: &[] },
+                Edge { to: *exit, supplied: exit_trip.supplied_params(), args: exit_args },
+            ],
+            Terminator::While { stages, exit, exit_args, .. } => {
+                smallvec::smallvec![plain(stages.body(), &[]), plain(*exit, exit_args)]
+            }
+            Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => SmallVec::new(),
+        }
+    }
+
+    /// Every edge's target, how many leading parameters the terminator
+    /// supplies, and the edge's argument list where it has one; a loop's
+    /// edge into its body has none.
+    pub(super) fn for_each_edge_mut(
+        &mut self,
+        mut on_edge: impl FnMut(BlockId, usize, Option<&mut Vec<ValueId>>),
+    ) {
+        match self {
+            Terminator::Jump { to, args } => on_edge(*to, 0, Some(args)),
+            Terminator::JumpIf { then_to, then_args, else_to, else_args, .. }
+            | Terminator::Diamond { then_to, then_args, else_to, else_args, .. } => {
+                on_edge(*then_to, 0, Some(then_args));
+                on_edge(*else_to, 0, Some(else_args));
+            }
+            Terminator::Switch { arms, default, .. } => {
+                for (_, to, args) in arms {
+                    on_edge(*to, 0, Some(args));
+                }
+                if let Some((to, args)) = default {
+                    on_edge(*to, 0, Some(args));
+                }
+            }
+            Terminator::For { source, stages, exit, exit_trip, exit_args } => {
+                on_edge(stages.body(), source.supplied_params(), None);
+                on_edge(*exit, exit_trip.supplied_params(), Some(exit_args));
+            }
+            Terminator::While { stages, exit, exit_args, .. } => {
+                on_edge(stages.body(), 0, None);
+                on_edge(*exit, 0, Some(exit_args));
+            }
+            Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
+        }
+    }
+
+    /// The target of the edge at `position`, in `edges`' order. Cost: O(1).
+    ///
+    /// # Panics
+    /// The terminator has no edge at `position`.
+    pub(super) fn edge_target_mut(&mut self, position: usize) -> &mut BlockId {
+        let edges = self.edges().len();
+        assert!(position < edges, "the terminator has {edges} edges, and none at position {position}");
+        match self {
+            Terminator::Jump { to, .. } => to,
+            Terminator::JumpIf { then_to, else_to, .. } | Terminator::Diamond { then_to, else_to, .. } => {
+                if position == 0 { then_to } else { else_to }
+            }
+            Terminator::Switch { arms, default, .. } => match arms.get_mut(position) {
+                Some((_, to, _)) => to,
+                None => &mut default.as_mut().expect("a Switch's edges past its arms are its default").0,
+            },
+            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
+                if position == 0 { &mut stages.body } else { exit }
+            }
+            Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {
+                panic!("a terminator without edges has no edge at position {position}")
+            }
+        }
+    }
+
+    /// Every block the terminator names: its edges' targets and its
+    /// structural blocks (a `Diamond`'s or a `Switch`'s join, every stage
+    /// entry).
+    pub(super) fn for_each_block_mut(&mut self, mut on_block: impl FnMut(&mut BlockId)) {
+        match self {
+            Terminator::Jump { to, .. } => on_block(to),
+            Terminator::JumpIf { then_to, else_to, .. } => {
+                on_block(then_to);
+                on_block(else_to);
+            }
+            Terminator::Diamond { then_to, else_to, join, .. } => {
+                on_block(then_to);
+                on_block(else_to);
+                on_block(join);
+            }
+            Terminator::Switch { arms, default, join, .. } => {
+                for (_, to, _) in arms {
+                    on_block(to);
+                }
+                if let Some((to, _)) = default {
+                    on_block(to);
+                }
+                on_block(join);
+            }
+            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
+                stages.entries_mut().for_each(&mut on_block);
+                on_block(exit);
+            }
+            Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
+        }
+    }
+
+    pub(super) fn for_each_block(&self, mut on_block: impl FnMut(BlockId)) {
+        match self {
+            Terminator::Diamond { join, .. } | Terminator::Switch { join, .. } => on_block(*join),
+            Terminator::For { stages, .. } | Terminator::While { stages, .. } => {
+                stages.entries().skip(1).for_each(&mut on_block);
+            }
+            Terminator::Jump { .. }
+            | Terminator::JumpIf { .. }
+            | Terminator::Return { .. }
+            | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
+        }
+        for edge in self.edges() {
+            on_block(edge.to);
+        }
+    }
+
+    /// Every value the terminator reads, once per operand, in the order
+    /// `for_each_operand` walks them. Cost: O(its operands).
+    pub fn operands(&self) -> SmallVec<[ValueId; 4]> {
+        let mut operands = SmallVec::new();
+        self.for_each_operand(|value| operands.push(value));
+        operands
+    }
+
+    pub(super) fn for_each_operand(&self, mut on_use: impl FnMut(ValueId)) {
+        match self {
+            Terminator::Jump { args, .. } => args.iter().copied().for_each(on_use),
+            Terminator::JumpIf { cond, then_args, else_args, .. }
+            | Terminator::Diamond { cond, then_args, else_args, .. } => {
+                on_use(*cond);
+                then_args.iter().chain(else_args).copied().for_each(on_use);
+            }
+            Terminator::Switch { tag, arms, default, .. } => {
+                on_use(*tag);
+                for (_, _, args) in arms {
+                    args.iter().copied().for_each(&mut on_use);
+                }
+                if let Some((_, args)) = default {
+                    args.iter().copied().for_each(&mut on_use);
+                }
+            }
+            Terminator::For { source, exit_args, .. } => {
+                source.uses().into_iter().for_each(&mut on_use);
+                exit_args.iter().copied().for_each(on_use);
+            }
+            Terminator::While { cond, exit_args, .. } => {
+                on_use(*cond);
+                exit_args.iter().copied().for_each(on_use);
+            }
+            Terminator::Return { value, order, .. } => {
+                on_use(*value);
+                order.iter().copied().for_each(on_use);
+            }
+            Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
+        }
+    }
+
+    pub(super) fn for_each_operand_mut(&mut self, mut on_use: impl FnMut(&mut ValueId)) {
+        match self {
+            Terminator::Jump { args, .. } => args.iter_mut().for_each(on_use),
+            Terminator::JumpIf { cond, then_args, else_args, .. }
+            | Terminator::Diamond { cond, then_args, else_args, .. } => {
+                on_use(cond);
+                then_args.iter_mut().chain(else_args).for_each(on_use);
+            }
+            Terminator::Switch { tag, arms, default, .. } => {
+                on_use(tag);
+                for (_, _, args) in arms {
+                    args.iter_mut().for_each(&mut on_use);
+                }
+                if let Some((_, args)) = default {
+                    args.iter_mut().for_each(&mut on_use);
+                }
+            }
+            Terminator::For { source, exit_args, .. } => {
+                source.for_each_use(&mut on_use);
+                exit_args.iter_mut().for_each(on_use);
+            }
+            Terminator::While { cond, exit_args, .. } => {
+                on_use(cond);
+                exit_args.iter_mut().for_each(on_use);
+            }
+            Terminator::Return { value, order, .. } => {
+                on_use(value);
+                order.iter_mut().for_each(on_use);
+            }
+            Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
+        }
+    }
+}
+
+impl Module {
+    /// A module over the type table typeck's writeback filled. It has no
+    /// body, and so no entry, until `set_entry`.
+    ///
+    /// Cost: O(1).
+    pub fn new(types: Types<Concrete>) -> Module {
+        Module { bodies: Vec::new(), entry: None, types, claimed: FxHashMap::default() }
+    }
+
+    /// A Builder for a new body of this module, whose every return yields
+    /// a `ret`; its `seal` adds the body. An `ordered` body, one whose
+    /// effect is not pure, takes an order parameter, which the Builder makes
+    /// and threads (effects §3).
+    ///
+    /// Cost: O(1).
+    pub fn build_body(&mut self, ordered: bool, ret: Ty) -> super::Builder<'_> {
+        super::Builder::new(self, ordered, ret)
+    }
+
+    /// A Rewriter over one body of this module.
+    ///
+    /// Cost: O(1).
+    ///
+    /// # Panics
+    /// `body` is not a body of this module.
+    pub(in crate::ir::cfg) fn rewrite(&mut self, body: BodyId) -> super::Rewriter<'_> {
+        self.assert_body(body);
+        super::Rewriter::new(self, body)
+    }
+
+    /// Cost: O(1).
+    ///
+    /// # Panics
+    /// `body` is not a body of this module.
+    pub fn set_entry(&mut self, body: BodyId) {
+        self.assert_body(body);
+        self.entry = Some(body);
+    }
+
+    /// `body` claimed at `signature`, the function type a call of the unit
+    /// instantiation it is claims it at (graph, ownership §5).
+    ///
+    /// # Panics
+    /// `body` is not a body of this module, or was claimed at another
+    /// function type: a claim is decided by the instantiation's types alone.
+    pub fn claim(&mut self, body: BodyId, signature: Ty) {
+        self.assert_body(body);
+        let claimed = *self.claimed.entry(body).or_insert(signature);
+        assert_eq!(claimed, signature, "{body:?} is claimed at one function type");
+    }
+
+    /// The function type `body` was claimed at, where a call claimed it.
+    pub fn claimed(&self, body: BodyId) -> Option<Ty> {
+        self.claimed.get(&body).copied()
+    }
+
+    pub fn body(&self, id: BodyId) -> &Body {
+        &self.bodies[id.0 as usize]
+    }
+
+    /// Every body of the module, in the order their seals added them.
+    /// Cost: O(1), and O(bodies) to walk.
+    pub fn body_ids(&self) -> impl Iterator<Item = BodyId> + use<> {
+        (0..self.bodies.len()).map(|index| BodyId(u32::try_from(index).expect("a module holds at most u32::MAX bodies")))
+    }
+
+    /// Test only: the id the next sealed body takes, for a body that makes
+    /// a closure of itself. Cost: O(1).
+    #[cfg(test)]
+    pub(crate) fn next_body_id(&self) -> BodyId {
+        BodyId(u32::try_from(self.bodies.len()).expect("a module holds at most u32::MAX bodies"))
+    }
+    /// # Panics
+    /// No entry was set.
+    pub fn entry(&self) -> BodyId {
+        self.entry.expect("the module's entry was set before it is read")
+    }
+    pub fn types(&self) -> &Types<Concrete> {
+        &self.types
+    }
+
+    /// The table a check writes back into and a lowering interns into,
+    /// where one module holds several bodies checked apart (graph).
+    pub fn types_mut(&mut self) -> &mut Types<Concrete> {
+        &mut self.types
+    }
+
+    pub(super) fn assert_body(&self, body: BodyId) {
+        assert!(
+            (body.0 as usize) < self.bodies.len(),
+            "{body:?} is not a body of this module"
+        );
+    }
+}
+
+impl Body {
+    /// The type every return of the body yields.
+    pub fn ret(&self) -> Ty {
+        self.ret
+    }
+    pub fn entry(&self) -> BlockId {
+        self.entry
+    }
+    pub fn block(&self, id: BlockId) -> Block<'_> {
+        Block { body: self, data: &self.blocks[id.index()] }
+    }
+    pub fn blocks(&self) -> impl Iterator<Item = (BlockId, Block<'_>)> {
+        self.blocks.iter().enumerate().map(|(i, data)| (BlockId::of_index(i), Block { body: self, data }))
+    }
+    /// How many blocks the body has. Cost: O(1).
+    pub(crate) fn block_count(&self) -> usize {
+        self.blocks.len()
+    }
+    /// # Panics
+    /// `value` is not a value of this body: every value has a recorded type.
+    pub fn ty_of(&self, value: ValueId) -> Ty {
+        self.values.get(&value).expect("every IR value has a recorded type").ty
+    }
+    /// How many operands, over every instruction and terminator, are
+    /// `value`. Cost: O(sites that use it).
+    ///
+    /// # Panics
+    /// `value` is not a value of this body.
+    pub fn use_count(&self, value: ValueId) -> usize {
+        self.uses.get(&value).expect("every IR value has a use record").total()
+    }
+    pub fn params(&self) -> &[(Astr, ValueId)] {
+        &self.params
+    }
+    pub fn captures(&self) -> &[(Astr, ValueId)] {
+        &self.captures
+    }
+    pub fn order_param(&self) -> Option<ValueId> {
+        self.order_param
+    }
+    /// The body's storage slots, which `RefTarget::Var` names.
+    pub fn slots(&self) -> &[ValueId] {
+        &self.slots
+    }
+    /// The span of the binder that names `value`, a parameter or a capture
+    /// of the body. Cost: O(1).
+    ///
+    /// # Panics
+    /// `value` is neither.
+    pub fn binder_span(&self, value: ValueId) -> Span {
+        *self
+            .binder_spans
+            .get(&value)
+            .unwrap_or_else(|| panic!("{value:?} is a parameter or a capture of the body, which a binder names"))
+    }
+    pub fn debug(&self) -> &DebugInfo {
+        &self.debug
+    }
+
+    /// Whether `value` is an order token: the order parameter, a token an
+    /// instruction yields, a token parameter the Builder placed, or a
+    /// `Merge`'s result. Cost: O(1).
+    ///
+    /// # Panics
+    /// `value` is not a value of this body.
+    pub fn is_token(&self, value: ValueId) -> bool {
+        self.values
+            .get(&value)
+            .unwrap_or_else(|| panic!("{value:?} is not a value of this body"))
+            .token
+    }
+
+    /// Where `value` is defined. Cost: O(1).
+    ///
+    /// # Panics
+    /// `value` is not a value of this body.
+    pub fn definition(&self, value: ValueId) -> Definition {
+        match self.def_of(value) {
+            Def::Param(index) => Definition::Param(index),
+            Def::Capture(index) => Definition::Capture(index),
+            Def::OrderParam => Definition::OrderParam,
+            Def::Slot { index, .. } => Definition::Slot(index),
+            Def::BlockParam(block, index) => Definition::BlockParam(block, index),
+            Def::Inst(inst) => Definition::Inst(inst),
+            Def::UnplacedParam(block) => {
+                panic!("a sealed body has no unplaced parameter, and {block:?} has one for {value:?}")
+            }
+        }
+    }
+
+    /// The contexts the body names, each once, with its type and
+    /// volatility, in the order it first names them: the storage
+    /// `RefTarget::Context` names (context §3). Cost: O(1).
+    pub fn contexts(&self) -> &[BodyContext] {
+        &self.contexts
+    }
+
+    /// `context`, which the body names. Cost: O(the body's contexts).
+    ///
+    /// # Panics
+    /// The body does not name `context`.
+    pub fn context(&self, context: QualifiedRef) -> BodyContext {
+        self.named_context(context).unwrap_or_else(|| panic!("the body names {context:?} among its contexts"))
+    }
+
+    /// `context`, where the body names it. Cost: O(the body's contexts).
+    pub fn named_context(&self, context: QualifiedRef) -> Option<BodyContext> {
+        self.contexts.iter().find(|named| named.context == context).copied()
+    }
+
+    /// The type of `context`, which the body names. Cost: O(the body's
+    /// contexts).
+    ///
+    /// # Panics
+    /// The body does not name `context`.
+    pub fn context_ty(&self, context: QualifiedRef) -> Ty {
+        self.context(context).ty
+    }
+
+    /// Whether `op` is a place operation on a volatile context, which is an
+    /// effect and stands on the order chain (context §3). Cost: O(the
+    /// body's contexts).
+    ///
+    /// # Panics
+    /// `op` names a context the body does not name.
+    pub fn on_volatile_context(&self, op: &Op) -> bool {
+        match op.place() {
+            Some((crate::ir::RefTarget::Context(context), _)) => self
+                .named_context(*context)
+                .unwrap_or_else(|| panic!("{op:?} names {context:?}, which the body does not name"))
+                .volatile,
+            _ => false,
+        }
+    }
+
+    /// Every value of the body, in no stated order. Cost: O(values).
+    pub fn values(&self) -> impl Iterator<Item = ValueId> + '_ {
+        self.values.keys().copied()
+    }
+
+    /// Every site that reads `value`, each once however many of its
+    /// operands do. Cost: O(those sites).
+    ///
+    /// # Panics
+    /// `value` is not a value of this body.
+    pub fn users(&self, value: ValueId) -> impl Iterator<Item = Site> + '_ {
+        self.uses
+            .get(&value)
+            .unwrap_or_else(|| panic!("{value:?} is not a value of this body"))
+            .counts
+            .keys()
+            .copied()
+    }
+
+    /// Every block's predecessors, each once; every block of the body has an
+    /// entry, empty where no edge enters it. Cost: O(blocks + edges).
+    pub fn predecessors(&self) -> FxHashMap<BlockId, SmallVec<[BlockId; 2]>> {
+        let mut preds: FxHashMap<BlockId, SmallVec<[BlockId; 2]>> =
+            self.blocks().map(|(id, _)| (id, SmallVec::new())).collect();
+        for (from, block) in self.blocks() {
+            for edge in block.terminator().edges() {
+                let into = preds.get_mut(&edge.to).expect("an edge names a block of its body");
+                if !into.contains(&from) {
+                    into.push(from);
+                }
+            }
+        }
+        preds
+    }
+
+    /// Whether a terminator of the body names `block` as a structural
+    /// label: a `Diamond`'s or a `Switch`'s join, or a loop's stage or exit
+    /// (D45, D57). Cost: O(blocks + stages).
+    pub fn is_structural(&self, block: BlockId) -> bool {
+        let mut named = false;
+        for (_, from) in self.blocks() {
+            from.terminator().for_each_structural_label(|label| named |= label == block);
+        }
+        named
+    }
+
+    /// Whether each block, by index, is a structural label as
+    /// `is_structural` tells. Cost: O(blocks + stages).
+    pub(crate) fn structural_blocks(&self) -> Vec<bool> {
+        let mut structural = vec![false; self.blocks.len()];
+        for (_, from) in self.blocks() {
+            from.terminator().for_each_structural_label(|label| structural[label.index()] = true);
+        }
+        structural
+    }
+
+    /// The loop headers: the targets of the back edges of a depth-first walk
+    /// of the edges from the entry, a back edge being one into a block still
+    /// on the walk's path. A block the entry does not reach is none. Cost:
+    /// O(blocks + edges).
+    pub fn loop_headers(&self) -> FxHashSet<BlockId> {
+        let mut headers = FxHashSet::default();
+        let mut visited = vec![false; self.blocks.len()];
+        let mut on_path = vec![false; self.blocks.len()];
+        let mut path: Vec<(BlockId, usize)> = vec![(self.entry, 0)];
+        visited[self.entry.index()] = true;
+        on_path[self.entry.index()] = true;
+        while let Some((block, next)) = path.last_mut() {
+            let edges = self.blocks[block.index()].terminator.edges();
+            let Some(edge) = edges.get(*next) else {
+                on_path[block.index()] = false;
+                path.pop();
+                continue;
+            };
+            *next += 1;
+            let to = edge.to;
+            if on_path[to.index()] {
+                headers.insert(to);
+            } else if !visited[to.index()] {
+                visited[to.index()] = true;
+                on_path[to.index()] = true;
+                path.push((to, 0));
+            }
+        }
+        headers
+    }
+}
+
+/// A block of a body, as the body reads it.
+#[derive(Clone, Copy)]
+pub struct Block<'b> {
+    body: &'b Body,
+    data: &'b BlockData,
+}
+
+impl<'b> Block<'b> {
+    pub fn params(&self) -> &'b [ValueId] {
+        &self.data.params
+    }
+    /// The block's instructions in order. Cost: O(1), and O(1) per step.
+    pub fn insts(&self) -> Insts<'b> {
+        Insts { body: self.body, front: self.data.list.head, back: self.data.list.tail, remaining: self.data.list.len }
+    }
+    pub fn terminator(&self) -> &'b Terminator {
+        &self.data.terminator
+    }
+    /// The span of the construct that made the terminator: where control
+    /// leaves the block. Cost: O(1).
+    pub fn terminator_span(&self) -> Span {
+        self.data.terminator_span
+    }
+}
+
+/// A block's instructions, in order, from either end.
+#[derive(Clone)]
+pub struct Insts<'b> {
+    body: &'b Body,
+    front: Option<InstId>,
+    back: Option<InstId>,
+    remaining: usize,
+}
+
+impl<'b> Insts<'b> {
+    /// Whether none is left. Cost: O(1).
+    pub fn is_empty(&self) -> bool {
+        self.remaining == 0
+    }
+
+    /// The first one left. Cost: O(1).
+    pub fn first(&self) -> Option<&'b Inst> {
+        self.front.filter(|_| self.remaining > 0).map(|id| self.body.inst(id))
+    }
+
+    /// The last one left. Cost: O(1).
+    pub fn last(&self) -> Option<&'b Inst> {
+        self.back.filter(|_| self.remaining > 0).map(|id| self.body.inst(id))
+    }
+}
+
+impl<'b> Iterator for Insts<'b> {
+    type Item = &'b Inst;
+
+    fn next(&mut self) -> Option<&'b Inst> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let id = self.front.expect("a list with instructions left has a front");
+        let node = self.body.node(id);
+        self.front = node.next;
+        self.remaining -= 1;
+        Some(&node.inst)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl DoubleEndedIterator for Insts<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let id = self.back.expect("a list with instructions left has a back");
+        let node = self.body.node(id);
+        self.back = node.prev;
+        self.remaining -= 1;
+        Some(&node.inst)
+    }
+}
+
+impl ExactSizeIterator for Insts<'_> {}

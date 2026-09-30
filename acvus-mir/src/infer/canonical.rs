@@ -1,0 +1,324 @@
+//! A store's terms copied into a table another store's copies share: each
+//! bound variable followed to its value, and each variable of every kind
+//! renumbered by the order the copy first reaches it, with its state beside
+//! it. An identity a check's bodies made is renumbered as a variable is,
+//! since each check allocates it anew; one made outside every body is the
+//! same storage in every check, and is copied as it is. Two sets of terms
+//! are one but for the names of their variables and of the identities their
+//! bodies made where each side, copied in the same order, gives the same
+//! terms and the same states (typeck::Interface::same).
+
+use rustc_hash::FxHashMap;
+
+use super::cells::{Cells, End as CellEnd, ValuesTerm, VarTerm};
+use super::{Bound, Infer, Level, Term};
+use crate::ty::{
+    CallsTerm, EffectTerm, EffectVarId, FlowTerm, FlowVarId, HoldsTerm, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase,
+    LenTerm, LenVarId, MarkTerm, TyKind, TyVarId, Types, ValuesVarId,
+};
+
+/// The table both sides' copies are interned in, so that two copies are
+/// equal exactly where their shapes are.
+pub struct CanonicalTable {
+    types: Types<InferPhase>,
+    /// The identity each side copies the one its bodies made that it
+    /// reaches n-th to, by n: made here, so it is none a check made.
+    made: Vec<IdentityId>,
+}
+
+impl CanonicalTable {
+    pub fn new() -> CanonicalTable {
+        CanonicalTable { types: Types::new(), made: Vec::new() }
+    }
+
+    fn made(&mut self, number: usize) -> IdentityId {
+        if number == self.made.len() {
+            self.made.push(IdentityId::alloc());
+        }
+        self.made[number]
+    }
+}
+
+impl Default for CanonicalTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One store's terms being copied into a `CanonicalTable`.
+pub struct Canonical<'c> {
+    from: &'c Infer,
+    into: &'c mut CanonicalTable,
+    memo: FxHashMap<Term, Term>,
+    /// Each identity the bodies made reached so far, by the order it was
+    /// first reached.
+    made: FxHashMap<IdentityId, usize>,
+    types: FxHashMap<TyVarId, TyVarId>,
+    effects: Renumbered<EffectTerm<InferPhase>>,
+    lengths: Renumbered<LenTerm<InferPhase>>,
+    identities: Renumbered<IdentityTerm<InferPhase>>,
+    marks: Renumbered<MarkTerm<InferPhase>>,
+    flows: Renumbered<FlowTerm<InferPhase>>,
+    holds: Renumbered<HoldsTerm>,
+    calls: Renumbered<CallsTerm>,
+    values: Renumbered<ValuesTerm>,
+    states: VarStates,
+}
+
+/// The state of each variable a copy reached, by its number there: a type
+/// variable's bound, its level (types §3) and whether it is a reference's
+/// target (types §4); an identity variable's level;
+/// any other kind's value so far and whether `eq` fixed it; and the effect
+/// flows into or out of a reached effect variable (effects §1).
+#[derive(Debug, PartialEq)]
+pub struct VarStates {
+    types: Vec<TyVarState>,
+    effects: Vec<CellState<crate::ty::Effect>>,
+    lengths: Vec<CellState<usize>>,
+    identities: Vec<CellState<crate::ty::IdentityId>>,
+    /// Each identity variable's level, by its number (types §3).
+    identity_levels: Vec<Level>,
+    marks: Vec<CellState<crate::ty::Mark>>,
+    flows: Vec<CellState<crate::ty::Flows>>,
+    holds: Vec<CellState<crate::ty::Holds>>,
+    calls: Vec<CellState<crate::ty::Calls>>,
+    values: Vec<CellState<crate::ty::FnValues>>,
+    effect_flows: Vec<EffectFlow>,
+}
+
+#[derive(Debug, PartialEq)]
+struct TyVarState {
+    bound: Bound,
+    level: Level,
+    reference_target: bool,
+    unmarked: bool,
+}
+
+/// `into ⊒ from` (effects §1).
+#[derive(Debug, PartialEq)]
+struct EffectFlow {
+    from: EffectVarId,
+    into: EffectTerm<InferPhase>,
+}
+
+#[derive(Debug, PartialEq)]
+struct CellState<V> {
+    value: Option<V>,
+    fixed: bool,
+}
+
+/// One kind's variables, each by the number the copy gave it.
+struct Renumbered<T: VarTerm> {
+    numbers: FxHashMap<T::Var, T::Var>,
+    order: Vec<T::Var>,
+}
+
+impl<T: VarTerm> Renumbered<T>
+where
+    T::Var: std::hash::Hash,
+{
+    fn new() -> Self {
+        Renumbered { numbers: FxHashMap::default(), order: Vec::new() }
+    }
+
+    /// `term` copied: a known value as it is, a variable its chain's end
+    /// renumbered, its state pushed onto `states` where it is reached for
+    /// the first time.
+    fn term(&mut self, cells: &Cells<T>, term: &T, states: &mut Vec<CellState<T::Value>>) -> T {
+        match cells.end(term) {
+            CellEnd::Known(value) => T::of_value(value),
+            CellEnd::Var { var, value } => T::of_var(self.var(cells, var, value, states)),
+        }
+    }
+
+    fn var(&mut self, cells: &Cells<T>, var: T::Var, value: Option<T::Value>, states: &mut Vec<CellState<T::Value>>) -> T::Var {
+        if let Some(number) = self.numbers.get(&var) {
+            return *number;
+        }
+        let number = T::var_of_index(u32::try_from(self.order.len()).expect("Canonical: u32::MAX variables"));
+        self.numbers.insert(var, number);
+        self.order.push(var);
+        states.push(CellState { value, fixed: cells.is_fixed(var) });
+        number
+    }
+}
+
+impl<'c> Canonical<'c> {
+    pub fn new(from: &'c Infer, table: &'c mut CanonicalTable) -> Canonical<'c> {
+        Canonical {
+            from,
+            into: table,
+            memo: FxHashMap::default(),
+            made: FxHashMap::default(),
+            types: FxHashMap::default(),
+            effects: Renumbered::new(),
+            lengths: Renumbered::new(),
+            identities: Renumbered::new(),
+            marks: Renumbered::new(),
+            flows: Renumbered::new(),
+            holds: Renumbered::new(),
+            calls: Renumbered::new(),
+            values: Renumbered::new(),
+            states: VarStates {
+                types: Vec::new(),
+                effects: Vec::new(),
+                lengths: Vec::new(),
+                identities: Vec::new(),
+                identity_levels: Vec::new(),
+                marks: Vec::new(),
+                flows: Vec::new(),
+                holds: Vec::new(),
+                calls: Vec::new(),
+                values: Vec::new(),
+                effect_flows: Vec::new(),
+            },
+        }
+    }
+
+    /// `term` copied, its variables renumbered in the order this walk
+    /// reaches them: a node's types before its other kinds' variables.
+    pub fn term(&mut self, term: Term) -> Term {
+        acvus_utils::grow(|| self.term_level(term))
+    }
+
+    fn term_level(&mut self, term: Term) -> Term {
+        let term = self.from.shallow(term);
+        if let Some(done) = self.memo.get(&term) {
+            return *done;
+        }
+        let from = self.from;
+        let kind = match from.types.kind(term) {
+            TyKind::Var(var) => TyKind::Var(self.ty_var(*var)),
+            kind => {
+                let children = kind.with_children(&mut |child| self.term(child));
+                self.slots(children)
+            }
+        };
+        let copied = self.into.types.intern(kind);
+        self.memo.insert(term, copied);
+        copied
+    }
+
+    /// `kind`'s variables of every kind but types copied.
+    fn slots(&mut self, kind: TyKind<InferPhase>) -> TyKind<InferPhase> {
+        let from = self.from;
+        match kind {
+            TyKind::Array(element, len, label) => {
+                TyKind::Array(element, self.lengths.term(&from.len_vars, &len, &mut self.states.lengths), label)
+            }
+            TyKind::Fn { params, ret, effect, flows, calls, holds, values } => TyKind::Fn {
+                params,
+                ret,
+                effect: self.effect(&effect),
+                flows: self.flows.term(&from.flow_vars, &flows, &mut self.states.flows),
+                calls: self.calls.term(&from.calls_vars, &calls, &mut self.states.calls),
+                holds: self.holds.term(&from.holds_vars, &holds, &mut self.states.holds),
+                values: self.values_var(values),
+            },
+            TyKind::UserDefined { id, type_args, effect, identity, marked } => TyKind::UserDefined {
+                id,
+                type_args,
+                effect: effect.as_ref().map(|effect| self.effect(effect)),
+                identity: identity.as_ref().map(|identity| self.identity(identity)),
+                marked: self.marks.term(&from.mark_vars, &marked, &mut self.states.marks),
+            },
+            other => other,
+        }
+    }
+
+    pub fn effect(&mut self, effect: &EffectTerm<InferPhase>) -> EffectTerm<InferPhase> {
+        self.effects.term(&self.from.effect_vars, effect, &mut self.states.effects)
+    }
+
+    pub fn ty_var(&mut self, var: TyVarId) -> TyVarId {
+        if let Some(number) = self.types.get(&var) {
+            return *number;
+        }
+        let number = TyVarId(u32::try_from(self.states.types.len()).expect("Canonical: u32::MAX type variables"));
+        let super::VarState::Unbound(bound) = &self.from.ty_vars[var.0 as usize] else {
+            panic!("Canonical::ty_var: a variable reached through `shallow` is unbound")
+        };
+        self.types.insert(var, number);
+        self.states.types.push(TyVarState {
+            bound: bound.clone(),
+            level: self.from.ty_levels[var.0 as usize],
+            reference_target: self.from.reference_targets.contains(&var),
+            unmarked: self.from.unmarked.contains(&var),
+        });
+        number
+    }
+
+    pub fn effect_var(&mut self, var: EffectVarId) -> EffectVarId {
+        cell_var(&mut self.effects, &self.from.effect_vars, var, &mut self.states.effects)
+    }
+
+    pub fn length_var(&mut self, var: LenVarId) -> LenVarId {
+        cell_var(&mut self.lengths, &self.from.len_vars, var, &mut self.states.lengths)
+    }
+
+    fn identity(&mut self, identity: &IdentityTerm<InferPhase>) -> IdentityTerm<InferPhase> {
+        match identity {
+            IdentityTerm::Known(identity) => IdentityTerm::Known(self.made_identity(*identity)),
+            IdentityTerm::Var(var) => IdentityTerm::Var(self.identity_var(*var)),
+        }
+    }
+
+    /// An identity variable's chain's end renumbered, the identity it holds
+    /// copied as a known one is.
+    pub fn identity_var(&mut self, var: IdentityVarId) -> IdentityVarId {
+        let CellEnd::Var { var, value } = self.from.identity_vars.end(&IdentityTerm::Var(var)) else {
+            panic!("Canonical: a variable's chain ends at a variable")
+        };
+        let value = value.map(|identity| self.made_identity(identity));
+        self.identities.var(&self.from.identity_vars, var, value, &mut self.states.identities)
+    }
+
+    /// `identity` copied: one the bodies made (types §3) numbered by the
+    /// order the copy first reaches it, one made outside every body as it
+    /// is.
+    fn made_identity(&mut self, identity: IdentityId) -> IdentityId {
+        if self.from.made_at(identity) < Level::UNIT {
+            return identity;
+        }
+        let next = self.made.len();
+        let number = *self.made.entry(identity).or_insert(next);
+        self.into.made(number)
+    }
+
+    pub fn flow_var(&mut self, var: FlowVarId) -> FlowVarId {
+        cell_var(&mut self.flows, &self.from.flow_vars, var, &mut self.states.flows)
+    }
+
+    pub fn values_var(&mut self, var: ValuesVarId) -> ValuesVarId {
+        cell_var(&mut self.values, &self.from.values_vars, var, &mut self.states.values)
+    }
+
+    /// The states of every variable reached, once each effect flow into or
+    /// out of a reached effect variable is copied too, reaching the
+    /// variables at its other end.
+    pub fn finish(mut self) -> VarStates {
+        let mut at = 0;
+        while at < self.effects.order.len() {
+            let var = self.effects.order[at];
+            for (from, into, _) in self.from.effect_vars.flows_touching(&|touched| touched == var) {
+                let from = self.effect_var(from);
+                let into = self.effect(&into);
+                self.states.effect_flows.push(EffectFlow { from, into });
+            }
+            at += 1;
+        }
+        self.states.identity_levels = self.identities.order.iter().map(|var| self.from.identity_levels[var.0 as usize]).collect();
+        self.states
+    }
+}
+
+/// A variable of a slot that holds one, its chain's end renumbered.
+fn cell_var<T: VarTerm>(renumbered: &mut Renumbered<T>, cells: &Cells<T>, var: T::Var, states: &mut Vec<CellState<T::Value>>) -> T::Var
+where
+    T::Var: std::hash::Hash,
+{
+    let CellEnd::Var { var, value } = cells.end(&T::of_var(var)) else {
+        panic!("Canonical: a variable's chain ends at a variable")
+    };
+    renumbered.var(cells, var, value, states)
+}

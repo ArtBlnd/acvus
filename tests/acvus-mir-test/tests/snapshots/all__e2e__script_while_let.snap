@@ -1,0 +1,37 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: ir
+---
+=== main ===
+     1 |   r0 = variant Some(1 (r1))
+     2 |   assign x = r0
+     4 |   assign result = 0 (r2)
+     5 |   jump L0
+     6 | L0:
+     7 |   r3 = ref &x
+     8 |   r4 = test r3 is Some
+     9 |   jump_if r4 then L1 else L2
+    10 | L1:
+    11 |   r5 = take x.payload
+    12 |   assign v = r5
+    13 |   r6 = take v
+    14 |   assign result = r6
+    15 |   r7 = variant None
+    16 |   assign x = r7
+    17 |   jump L0
+    18 | L2:
+    19 |   r8 = take result
+    20 |   return r8
+
+    ; r0 (v2) : Option<i64>
+    ; r1 (v1) : i64
+    ; r2 (v4) : i64
+    ; r3 (x.) : &Option<i64>
+    ; r4 (v7) : Bool
+    ; r5 (v) : i64
+    ; r6 (v) : i64
+    ; r7 (v11) : Option<i64>
+    ; r8 (result) : i64
+    ; r9 (x) : Option<i64>
+    ; r10 (v) : i64
+    ; r11 (result) : i64

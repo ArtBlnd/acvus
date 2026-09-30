@@ -1,4 +1,4 @@
-// accum rows at n = 1 000 000, ported from acvus-interpreter-test/benches/accum.rs.
+// accum rows at n = 1 000 000, ported from tests/acvus-interpreter-test/benches/accum.rs.
 //
 // Obligation across artifacts: each row here is the semantics of that file's
 // `rust_*` twin, which is what the bench's `rust/us` column times. Every value

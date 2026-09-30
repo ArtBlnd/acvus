@@ -480,14 +480,11 @@ where
     /// One piece of a text line, as the append it is (RFC-0071 rule 2).
     fn append_of(&mut self, piece: &Piece) -> Result<Nested<Stmt<S>>, ParseError> {
         match piece {
-            Piece::Text { value, span } => append(
-                Nested::leaf(Expr::Literal {
-                    id: AstId::alloc(),
-                    value: Literal::String(value.clone()),
-                    span: *span,
-                }),
-                *span,
-            ),
+            Piece::Text { value, span } => Ok(Nested::leaf(Stmt::Text {
+                id: AstId::alloc(),
+                value: value.clone(),
+                span: *span,
+            })),
             Piece::Tag {
                 content,
                 span,
@@ -878,7 +875,8 @@ where
         | Stmt::WhileLet { span, .. }
         | Stmt::Anyorder { span, .. }
         | Stmt::FnDecl(FnDecl { span, .. })
-        | Stmt::Append { span, .. } => *span,
+        | Stmt::Append { span, .. }
+        | Stmt::Text { span, .. } => *span,
         Stmt::Expr(expr) => expr.span(),
         Stmt::Error(node) => node.node().span,
     }
@@ -1311,13 +1309,39 @@ pub(crate) fn paren_or_tuple<S>(
     level.node(expr, span)
 }
 
+/// `a::b::f`, a name of three or more segments: `name` is the last, and the
+/// others are its namespace.
+pub(crate) fn qualified_name<S>(
+    interner: &Interner,
+    first: Astr,
+    inner: Vec<Astr>,
+    name: Astr,
+    span: Span,
+) -> Expr<S> {
+    let path: Vec<Astr> = std::iter::once(first).chain(inner).collect();
+    Expr::Ident {
+        id: AstId::alloc(),
+        name: QualifiedRef::qualified(interner.namespace(&path), name),
+        ref_kind: RefKind::Value,
+        span,
+    }
+}
+
+/// A call's arguments as the grammar reads them, before their nesting is
+/// taken.
+pub(crate) enum CallArgs<S> {
+    Positional(Vec<Nested<Expr<S>>>),
+    Named(Vec<(Binder, Nested<Expr<S>>)>),
+}
+
 /// `ns::f(args)` and `Enum::Tag(payload)` leave this function as one shape,
 /// a call of a qualified name: which of the two a `QualifiedRef` names is
 /// decided in `acvus-mir`'s checker, against the names in scope (RFC-0030).
 /// The callee covers `ns::f`, where the name is written, and not the call.
 pub(crate) fn build_call<S>(
+    interner: &Interner,
     func: Nested<Expr<S>>,
-    args: Vec<Nested<Expr<S>>>,
+    args: CallArgs<S>,
     span: Span,
 ) -> Result<Nested<Expr<S>>, GrammarError> {
     let mut level = Level::new();
@@ -1330,13 +1354,16 @@ pub(crate) fn build_call<S>(
             ..
         } => Expr::Ident {
             id: AstId::alloc(),
-            name: QualifiedRef::qualified(namespace, tag),
+            name: QualifiedRef::qualified(interner.namespace(&[namespace]), tag),
             ref_kind: RefKind::Value,
             span: name_span,
         },
         other => other,
     };
-    let args = level.all(args);
+    let args = match args {
+        CallArgs::Positional(args) => Args::Positional(level.all(args)),
+        CallArgs::Named(args) => Args::Named(args.into_iter().map(|(label, arg)| (label, level.take(arg))).collect()),
+    };
     level.node(
         Expr::FuncCall {
             id: AstId::alloc(),
@@ -1350,16 +1377,30 @@ pub(crate) fn build_call<S>(
 
 /// Convert an expression (parsed from the LHS of `=`) to a pattern.
 pub(crate) fn pattern_of<S>(
+    interner: &Interner,
     errors: &mut Vec<ParseError>,
     expr: &Expr<S>,
 ) -> Result<Nested<Pattern<S>>, GrammarError>
 where
     S: Recover,
 {
-    acvus_utils::grow(|| pattern_of_node(errors, expr))
+    acvus_utils::grow(|| pattern_of_node(interner, errors, expr))
+}
+
+/// The enum name of a call's qualified callee, where the callee is
+/// `Enum::Tag`: a namespace of one segment.
+fn enum_name_of_callee<S>(interner: &Interner, func: &Expr<S>) -> Option<Astr> {
+    let Expr::Ident { name, .. } = func else {
+        return None;
+    };
+    match interner.path(name.namespace)[..] {
+        [enum_name] => Some(enum_name),
+        _ => None,
+    }
 }
 
 fn pattern_of_node<S>(
+    interner: &Interner,
     errors: &mut Vec<ParseError>,
     expr: &Expr<S>,
 ) -> Result<Nested<Pattern<S>>, GrammarError>
@@ -1373,7 +1414,7 @@ where
             ref_kind,
             span,
             ..
-        } => Pattern::Binding {
+        } if name.namespace.is_root() => Pattern::Binding {
             id: AstId::alloc(),
             name: name.name,
             ref_kind: *ref_kind,
@@ -1397,9 +1438,9 @@ where
             ..
         } => Pattern::List {
             id: AstId::alloc(),
-            head: patterns_of(errors, &mut level, head)?,
+            head: patterns_of(interner, errors, &mut level, head)?,
             rest: *rest,
-            tail: patterns_of(errors, &mut level, tail)?,
+            tail: patterns_of(interner, errors, &mut level, tail)?,
             span: *span,
         },
         Expr::Object { fields, span, .. } => {
@@ -1408,7 +1449,7 @@ where
                 pattern_fields.push(ObjectPatternField {
                     id: AstId::alloc(),
                     key: field.key,
-                    pattern: level.take(pattern_of(errors, &field.value)?),
+                    pattern: level.take(pattern_of(interner, errors, &field.value)?),
                     span: field.span,
                 });
             }
@@ -1424,7 +1465,7 @@ where
                 elems.push(match elem {
                     TupleElem::Wildcard(s) => TuplePatternElem::Wildcard(*s),
                     TupleElem::Expr(e) => {
-                        TuplePatternElem::Pattern(level.take(pattern_of(errors, e)?))
+                        TuplePatternElem::Pattern(level.take(pattern_of(interner, errors, e)?))
                     }
                 });
             }
@@ -1438,25 +1479,18 @@ where
         // pattern it is the variant.
         Expr::FuncCall {
             func, args, span, ..
-        } if matches!(
-            func.as_ref(),
-            Expr::Ident {
-                name: QualifiedRef {
-                    namespace: Some(_),
-                    ..
-                },
-                ..
-            }
-        ) && args.len() == 1 =>
+        } if let Some(enum_name) = enum_name_of_callee(interner, func)
+            && let Args::Positional(args) = args
+            && let [payload] = &args[..] =>
         {
             let Expr::Ident { name, .. } = func.as_ref() else {
-                unreachable!("matched above")
+                unreachable!("enum_name_of_callee reads only a name")
             };
             Pattern::Variant {
                 id: AstId::alloc(),
-                enum_name: name.namespace,
+                enum_name: Some(enum_name),
                 tag: name.name,
-                payload: Some(level.boxed(pattern_of(errors, &args[0])?)),
+                payload: Some(level.boxed(pattern_of(interner, errors, payload)?)),
                 span: *span,
             }
         }
@@ -1468,7 +1502,7 @@ where
             ..
         } => {
             let pat_payload = match payload {
-                Some(inner) => Some(level.boxed(pattern_of(errors, inner)?)),
+                Some(inner) => Some(level.boxed(pattern_of(interner, errors, inner)?)),
                 None => None,
             };
             Pattern::Variant {
@@ -1497,6 +1531,7 @@ where
 }
 
 fn patterns_of<S>(
+    interner: &Interner,
     errors: &mut Vec<ParseError>,
     level: &mut Level,
     exprs: &[Expr<S>],
@@ -1506,7 +1541,7 @@ where
 {
     exprs
         .iter()
-        .map(|expr| Ok(level.take(pattern_of(errors, expr)?)))
+        .map(|expr| Ok(level.take(pattern_of(interner, errors, expr)?)))
         .collect()
 }
 #[cfg(test)]
@@ -1541,15 +1576,14 @@ mod tests {
         expr
     }
 
-    fn text_of(stmt: &Stmt) -> &str {
-        let Expr::Literal {
-            value: Literal::String(text),
-            ..
-        } = appended(stmt)
-        else {
+    fn text_of<S>(stmt: &Stmt<S>) -> &str
+    where
+        S: std::fmt::Debug,
+    {
+        let Stmt::Text { value, .. } = stmt else {
             panic!("{stmt:?}");
         };
-        text
+        value
     }
 
     fn script(src: &str) -> Script {
@@ -1611,6 +1645,22 @@ mod tests {
         let t = template("hello world\n");
         assert_eq!(t.body.len(), 1);
         assert_eq!(text_of(&t.body[0]), "hello world\n");
+    }
+
+    /// programs §1: text and `{{ }}` are different forms, so a string
+    /// literal in a tag is an `Append`, never `Text`.
+    #[test]
+    fn text_and_a_tag_holding_a_string_are_apart() {
+        let t = template(r#"a {{ "b" }}"#);
+        assert_eq!(t.body.len(), 2);
+        assert_eq!(text_of(&t.body[0]), "a ");
+        assert!(matches!(
+            appended(&t.body[1]),
+            Expr::Literal {
+                value: Literal::String(_),
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1975,6 +2025,33 @@ mod tests {
         );
     }
 
+    /// functions §2: `move |…| -> e` moves each captured name in; a lambda
+    /// without `move` captures by reference.
+    #[test]
+    fn move_before_a_lambda_marks_it_capturing_by_move() {
+        let interner = Interner::new();
+        let s = parse_script(&interner, "let f = move |q| -> q; let g = |q| -> q; 1").unwrap();
+        let by_move: Vec<bool> = s
+            .stmts
+            .iter()
+            .map(|stmt| match stmt {
+                Stmt::LetBind {
+                    expr: Expr::Lambda { captures_by_move, .. },
+                    ..
+                } => *captures_by_move,
+                other => panic!("expected a lambda binding, found {other:?}"),
+            })
+            .collect();
+        assert_eq!(by_move, vec![true, false]);
+    }
+
+    /// `move` is reserved: it names no binding.
+    #[test]
+    fn move_is_not_a_name() {
+        let interner = Interner::new();
+        assert!(parse_script(&interner, "let move = 1; move").is_err());
+    }
+
     /// A bare `x = e;` in a lambda body parses as an assignment, not a
     /// binding, exactly as it does at the top level.
     #[test]
@@ -2061,7 +2138,7 @@ mod tests {
             ));
             assert!(matches!(
                 one(&format!("let x = f({head});")),
-                Expr::FuncCall { args, .. } if matches!(args[0], Expr::Match { .. } | Expr::If { .. })
+                Expr::FuncCall { args: Args::Positional(args), .. } if matches!(args[0], Expr::Match { .. } | Expr::If { .. })
             ));
             assert!(matches!(
                 one(&format!("let x = ({head}) + 10;")),
@@ -2188,7 +2265,7 @@ mod tests {
         let Expr::Ident { name, .. } = func.as_ref() else {
             panic!("expected a qualified name as the callee");
         };
-        assert_eq!(name.namespace.map(|ns| interner.resolve(ns)), Some("i64"));
+        assert_eq!(name.namespace, interner.namespace(&[interner.intern("i64")]));
         assert_eq!(interner.resolve(name.name), "from_str");
 
         for src in [
@@ -2199,6 +2276,126 @@ mod tests {
             "let n = E::Tag; n",
         ] {
             parse_script(&interner, src).unwrap();
+        }
+    }
+
+    /// `a::b::c` is a name only: its namespace is every segment but the
+    /// last, standing alone or as a callee.
+    #[test]
+    fn three_segments_are_a_name_in_the_namespace_of_all_but_the_last() {
+        let interner = Interner::new();
+        let [a, b, c, f] = ["a", "b", "c", "f"].map(|name| interner.intern(name));
+        let a_b = interner.namespace(&[a, b]);
+
+        let Expr::Ident { name, ref_kind, .. } = parse_expr(&interner, "a::b::c").expect("a name") else {
+            panic!("expected `a::b::c` to be a name");
+        };
+        assert_eq!(name, QualifiedRef::qualified(a_b, c));
+        assert_eq!(ref_kind, RefKind::Value);
+
+        let Expr::FuncCall { func, args, .. } = parse_expr(&interner, "a::b::f(x)").expect("a call") else {
+            panic!("expected `a::b::f(x)` to be a call");
+        };
+        let Expr::Ident { name, ref_kind, .. } = func.as_ref() else {
+            panic!("expected a name as the callee, got {func:?}");
+        };
+        assert_eq!(*name, QualifiedRef::qualified(a_b, f));
+        assert_eq!(*ref_kind, RefKind::Value);
+        assert_eq!(args.len(), 1);
+
+        let four = interner.namespace(&[a, b, c]);
+        let Expr::Ident { name, .. } = parse_expr(&interner, "a::b::c::f").expect("a name") else {
+            panic!("expected `a::b::c::f` to be a name");
+        };
+        assert_eq!(name, QualifiedRef::qualified(four, f));
+    }
+
+    /// Two segments stay what they were: `E::Tag` alone is a variant, and a
+    /// callee of two segments is the name `ns::f`, the checker deciding
+    /// which it is.
+    #[test]
+    fn two_segments_are_a_variant_or_a_callee_of_one_segment_namespace() {
+        let interner = Interner::new();
+        let [e, tag, ns, f] = ["E", "Tag", "ns", "f"].map(|name| interner.intern(name));
+
+        let Expr::Variant { enum_name, tag: written, payload: None, .. } = parse_expr(&interner, "E::Tag").expect("a variant") else {
+            panic!("expected `E::Tag` to be a variant");
+        };
+        assert_eq!((enum_name, written), (Some(e), tag));
+
+        let Expr::FuncCall { func, .. } = parse_expr(&interner, "ns::f(x)").expect("a call") else {
+            panic!("expected `ns::f(x)` to be a call");
+        };
+        let Expr::Ident { name, .. } = func.as_ref() else {
+            panic!("expected a name as the callee, got {func:?}");
+        };
+        assert_eq!(*name, QualifiedRef::qualified(interner.namespace(&[ns]), f));
+    }
+
+    /// programs §1, §2: a call's arguments are all by name, each a label
+    /// and its expression in the order written.
+    #[test]
+    fn a_call_takes_its_arguments_by_name() {
+        let interner = Interner::new();
+        let [ns, greet, user, times] = ["ns", "greet", "user", "times"].map(|name| interner.intern(name));
+        let Expr::FuncCall { func, args: Args::Named(args), .. } = parse_expr(&interner, "ns::greet(user: $u, times: 2,)").expect("a call") else {
+            panic!("expected a call by name");
+        };
+        let Expr::Ident { name, .. } = func.as_ref() else {
+            panic!("expected a name as the callee, got {func:?}");
+        };
+        assert_eq!(*name, QualifiedRef::qualified(interner.namespace(&[ns]), greet));
+        let labels: Vec<Astr> = args.iter().map(|(label, _)| label.name).collect();
+        assert_eq!(labels, vec![user, times]);
+        assert!(matches!(args[0].1, Expr::Ident { ref_kind: RefKind::ExternParam, .. }));
+        assert!(matches!(args[1].1, Expr::Literal { value: Literal::Int(2), .. }));
+    }
+
+    /// A call's arguments are all by position, and `f()` is a call by
+    /// position with none.
+    #[test]
+    fn a_call_takes_its_arguments_by_position() {
+        let interner = Interner::new();
+        let Expr::FuncCall { args: Args::Positional(args), .. } = parse_expr(&interner, "f(a, 1)").expect("a call") else {
+            panic!("expected a call by position");
+        };
+        assert_eq!(args.len(), 2);
+        let Expr::FuncCall { args: Args::Positional(args), .. } = parse_expr(&interner, "f()").expect("a call") else {
+            panic!("expected a call by position");
+        };
+        assert!(args.is_empty());
+    }
+
+    /// programs §1, §2: arguments by position and by name are never mixed
+    /// in one call, and a method call takes none by name.
+    #[test]
+    fn a_call_mixing_positions_and_names_does_not_parse() {
+        let interner = Interner::new();
+        for source in ["f(a, b: 1)", "f(b: 1, a)", "x.m(b: 1)"] {
+            assert!(parse_expr(&interner, source).is_err(), "{source} parsed");
+        }
+    }
+
+    /// A pattern names a variant with two segments, and no variant is
+    /// written with more: `a::b::C(x)` and `a::b::C` are no patterns.
+    #[test]
+    fn a_pattern_is_a_variant_of_two_segments_only() {
+        let interner = Interner::new();
+        let script = parse_script(&interner, "match v { E::Tag(x) => 1, E::Other => 2, _ => 0 }").expect("a match");
+        let Some(Expr::Match { arms, .. }) = script.tail.as_deref() else {
+            panic!("expected a trailing match expression");
+        };
+        let e = interner.intern("E");
+        assert!(matches!(&arms[0].pattern, Pattern::Variant { enum_name: Some(name), payload: Some(_), .. } if *name == e));
+        assert!(matches!(&arms[1].pattern, Pattern::Variant { enum_name: Some(name), payload: None, .. } if *name == e));
+
+        for src in ["match v { a::b::C(x) => 1, _ => 0 }", "match v { a::b::C => 1, _ => 0 }"] {
+            let refused = parse_script(&interner, src).expect_err(src);
+            assert!(
+                refused.errors.iter().any(|error| matches!(error.kind, ParseErrorKind::InvalidPattern(_))),
+                "{src}: {:?}",
+                refused.errors
+            );
         }
     }
 
@@ -2604,6 +2801,52 @@ mod tests {
         }
     }
 
+    /// The binary operator at the root of `source`, and its two operands'
+    /// operators where they are binary.
+    fn binary_shape(source: &str) -> (BinOp, Option<BinOp>, Option<BinOp>) {
+        let interner = Interner::new();
+        let parsed = parse_expr(&interner, source).expect(source);
+        let Expr::BinaryOp { op, left, right, .. } = parsed else {
+            panic!("{source} parsed as {parsed:?}");
+        };
+        let op_of = |expr: &Expr| match expr {
+            Expr::BinaryOp { op, .. } => Some(*op),
+            _ => None,
+        };
+        (op, op_of(&left), op_of(&right))
+    }
+
+    /// operators §2: `^`, `&`, `<<` and `>>` are binary operators, and
+    /// they bind as Rust's do: the shifts looser than `+`, `&` looser than
+    /// the shifts, `^` looser than `&`, and all of them tighter than a
+    /// comparison.
+    #[test]
+    fn the_bitwise_operators_bind_as_rusts() {
+        assert_eq!(binary_shape("a ^ b"), (BinOp::Xor, None, None));
+        assert_eq!(binary_shape("a & b"), (BinOp::BitAnd, None, None));
+        assert_eq!(binary_shape("a << b"), (BinOp::Shl, None, None));
+        assert_eq!(binary_shape("a >> b"), (BinOp::Shr, None, None));
+        assert_eq!(binary_shape("a << b + c"), (BinOp::Shl, None, Some(BinOp::Add)));
+        assert_eq!(binary_shape("a & b >> c"), (BinOp::BitAnd, None, Some(BinOp::Shr)));
+        assert_eq!(binary_shape("a ^ b & c"), (BinOp::Xor, None, Some(BinOp::BitAnd)));
+        assert_eq!(binary_shape("a & b ^ c"), (BinOp::Xor, Some(BinOp::BitAnd), None));
+        assert_eq!(binary_shape("a ^ b == c"), (BinOp::Eq, Some(BinOp::Xor), None));
+        assert_eq!(binary_shape("a ^ b ^ c"), (BinOp::Xor, Some(BinOp::Xor), None));
+    }
+
+    /// A `&` before an operand is still a borrow, and `a & &b` is `&` of a
+    /// borrow.
+    #[test]
+    fn a_prefix_ampersand_is_still_a_borrow() {
+        let interner = Interner::new();
+        assert!(matches!(parse_expr(&interner, "&a"), Ok(Expr::Borrow { .. })));
+        let parsed = parse_expr(&interner, "a & &b").expect("a & &b");
+        let Expr::BinaryOp { op: BinOp::BitAnd, right, .. } = parsed else {
+            panic!("a & &b parsed as {parsed:?}");
+        };
+        assert!(matches!(*right, Expr::Borrow { .. }));
+    }
+
     #[test]
     fn a_minus_after_a_value_is_subtraction() {
         let interner = Interner::new();
@@ -2813,7 +3056,7 @@ mod tests {
             let source = "f(x., y)";
             let recovered = recovered_script(source);
             assert_eq!(error_spans(&recovered), vec![Span::new(4, 5)]);
-            let Some(Expr::FuncCall { args, .. }) = recovered.tree.tail.as_deref() else {
+            let Some(Expr::FuncCall { args: Args::Positional(args), .. }) = recovered.tree.tail.as_deref() else {
                 panic!("{:?}", recovered.tree.tail);
             };
             let [Expr::Error(first), Expr::Ident { .. }] = args.as_slice() else {
@@ -2858,7 +3101,7 @@ mod tests {
             };
             assert_eq!(value.span, Span::new(8, 9));
 
-            let recovered = recovered_script("let a = # ^;");
+            let recovered = recovered_script("let a = # ~;");
             assert_eq!(
                 recovered
                     .errors
@@ -2867,7 +3110,7 @@ mod tests {
                     .collect::<Vec<_>>(),
                 vec![
                     ParseErrorKind::UnexpectedCharacter('#'),
-                    ParseErrorKind::UnexpectedCharacter('^'),
+                    ParseErrorKind::UnexpectedCharacter('~'),
                 ]
             );
         }
@@ -2916,18 +3159,7 @@ mod tests {
                 appended(&recovered.tree.body[1]),
                 Expr::Ident { .. }
             ));
-            let Stmt::Append {
-                expr:
-                    Expr::Literal {
-                        value: Literal::String(text),
-                        ..
-                    },
-                ..
-            } = recovered.tree.body.last().expect("the second line")
-            else {
-                panic!("{:?}", recovered.tree.body);
-            };
-            assert_eq!(text, "b\n");
+            assert_eq!(text_of(recovered.tree.body.last().expect("the second line")), "b\n");
         }
 
         #[test]

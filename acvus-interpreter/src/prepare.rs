@@ -745,7 +745,7 @@ fn framed(
         guard_calls(head, 0);
     }
     // RFC-0046 asked for equality here. It does not hold, and
-    // `io_in_iteration` (acvus-interpreter-test/tests/extern_fn.rs)
+    // `io_in_iteration` (tests/acvus-interpreter-test/tests/extern_fn.rs)
     // measures the gap: a closure demoted to the parameter's effect is
     // typed `Async` while its operations only add, and that body holds no
     // call for `suspends_at` to read.
@@ -9259,7 +9259,7 @@ impl SlotClass {
     /// Decided against a `Kind::Ref` for a slice's pointer register: a frame
     /// opens a kind through `Value::inline`, which carries no `Kind::Ref`.
     /// That no operation reads a pair register's kind byte is pinned by
-    /// `acvus-interpreter-test/tests/slice_pair.rs`.
+    /// `tests/acvus-interpreter-test/tests/slice_pair.rs`.
     fn claim(self) -> SlotClaim {
         match self {
             SlotClass::Whole => SlotClaim::Whole,

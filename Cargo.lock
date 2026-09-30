@@ -78,15 +78,7 @@ dependencies = [
 name = "acvus-extern"
 version = "0.1.0"
 dependencies = [
- "acvus-ast",
- "acvus-extern-macro",
- "acvus-mir",
  "acvus-utils",
- "futures",
- "proc-macro2",
- "quote",
- "rustc-hash",
- "syn 2.0.117",
  "tokio",
 ]
 
@@ -100,6 +92,15 @@ dependencies = [
  "quote",
  "syn 2.0.117",
  "trybuild",
+]
+
+[[package]]
+name = "acvus-extern-test"
+version = "0.1.0"
+dependencies = [
+ "acvus-extern",
+ "acvus-utils",
+ "tokio",
 ]
 
 [[package]]
@@ -176,6 +177,7 @@ version = "0.1.0"
 dependencies = [
  "acvus-ast",
  "acvus-utils",
+ "indexmap",
  "insta",
  "rustc-hash",
  "serde",
@@ -187,8 +189,6 @@ name = "acvus-mir-test"
 version = "0.1.0"
 dependencies = [
  "acvus-ast",
- "acvus-ext",
- "acvus-extern",
  "acvus-mir",
  "acvus-utils",
  "insta",

@@ -1,0 +1,36 @@
+---
+source: tests/acvus-mir-test/tests/optimized.rs
+expression: raw
+---
+=== main ===
+     0 |   r0 = fetch @state
+     1 |   assign @state = r0
+     2 |   r1 = take @state.step
+     4 |   r2 = r1 + 1 (r3)
+     5 |   assign @state.step = r2
+     6 |   r4 = take @state.value
+     7 |   r5 = take @state.multiplier
+     8 |   r6 = r4 * r5
+     9 |   assign @state.value = r6
+    10 |   r7 = take @state.step
+    11 |   r8 = take @state.max_steps
+    12 |   r9 = r7 >= r8
+    13 |   assign @state.done = r9
+    14 |   r10 = take @state.value
+    15 |   r11 = take @state
+    16 |   commit @state = r11
+    17 |   return r10
+
+    ; r0 (@state) : {done: Bool, max_steps: i64, multiplier: i64, step: i64, value: i64}
+    ; r1 (@state.step) : i64
+    ; r2 (v5) : i64
+    ; r3 (v4) : i64
+    ; r4 (@state.value) : i64
+    ; r5 (@state.multiplier) : i64
+    ; r6 (v8) : i64
+    ; r7 (@state.step) : i64
+    ; r8 (@state.max_steps) : i64
+    ; r9 (v11) : Bool
+    ; r10 (@state.value) : i64
+    ; r11 (v13) : {done: Bool, max_steps: i64, multiplier: i64, step: i64, value: i64}
+    ; r12 (@state) : {done: Bool, max_steps: i64, multiplier: i64, step: i64, value: i64}

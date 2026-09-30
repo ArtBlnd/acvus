@@ -1,0 +1,29 @@
+---
+source: tests/acvus-mir-test/tests/inline.rs
+expression: ir
+---
+=== literals ===
+  T0 = "hello"
+
+=== main ===
+     0 |   r0 = const_str T0
+     1 |   r1 = call #0(r0)
+     2 |   assign v4 = r1
+     3 |   r2 = ref &v4
+     4 |   r3 = as_slice &r2
+     5 |   r4 = call #1(r3)
+     6 |   assign n = r4
+     7 |   r5 = ref &n
+     8 |   r6 = call #2(r5)
+     9 |   return r6
+
+    ; r0 (v1) : &str
+    ; r1 (to_string(...)) : String
+    ; r2 ($param_1.) : &String
+    ; r3 (v6) : &str
+    ; r4 (len(...)) : u64
+    ; r5 (var_5.) : &u64
+    ; r6 (to_string(...)) : String
+    ; r7 (process(...)) : String
+    ; r8 (n) : u64
+    ; r9 (v4) : String

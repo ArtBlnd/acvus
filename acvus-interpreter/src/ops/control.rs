@@ -811,7 +811,7 @@ where
 /// The verdict is read and never landed, so this source builds no `some`
 /// for a `TestOption` to take apart again (RFC-0069). That the register the
 /// body then reads holds what the unfused head left there is the subject of
-/// `acvus-interpreter-test/tests/while_let_call.rs`, over a payload that is
+/// `tests/acvus-interpreter-test/tests/while_let_call.rs`, over a payload that is
 /// itself an `Option` — the case where landing and not landing differ.
 ///
 /// The bound is `Ret = OptionOf<One>`. A head answering a bare `bool`

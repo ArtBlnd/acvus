@@ -1,4 +1,4 @@
-//! The app corpus (`acvus-interpreter-test/app_corpus`) at the CLI's
+//! The app corpus (`tests/acvus-interpreter-test/app_corpus`) at the CLI's
 //! contract: every app runs to the result its `// expect:` header states at
 //! `--opt full` and at `--opt none`, and `acvus mir` prints, for each of its
 //! `For`s and pull loops' `While`s, the stages line and the facts under it
@@ -17,7 +17,7 @@ fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("the crate lies in the workspace")
-        .join("acvus-interpreter-test/app_corpus")
+        .join("tests/acvus-interpreter-test/app_corpus")
 }
 
 struct App {

@@ -56,7 +56,7 @@ pass; `none` runs only what a program needs to reach the machine at all, so
 `mir --opt none` prints the program the source wrote -- a loop's invariants
 still inside its body. Which programs are refused does not move with the
 level: the move, borrow and exhaustiveness checks and the validator run at
-both, and `acvus-interpreter-test/tests/differential.rs` runs the corpus at
+both, and `tests/acvus-interpreter-test/tests/differential.rs` runs the corpus at
 both levels and compares the values.
 
 A diagnostic is one `error: <message>` line, then the file, line and column,

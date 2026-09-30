@@ -147,8 +147,15 @@ pub enum Stmt<S = Clean> {
     /// graph function of its own (RFC-0100). The enclosing body runs
     /// nothing here.
     FnDecl(FnDecl<S>),
-    /// A template's text line or one of its `{{ }}` tags: the value is
-    /// appended to the template's result (RFC-0071 rules 2 and 3).
+    /// A template's literal text, appended to its result as written
+    /// (programs §1).
+    Text {
+        id: AstId,
+        value: String,
+        span: Span,
+    },
+    /// A template's `{{ }}` tag: the value is formatted and appended to the
+    /// template's result (programs §1, RFC-0071 rule 3).
     Append {
         id: AstId,
         expr: Expr<S>,
@@ -350,8 +357,9 @@ pub enum ForHead<S = Clean> {
 }
 
 /// A parsed template: a script whose text lines are output (RFC-0071).
-/// Its statements are the script's, and a text line or a `{{ }}` tag is
-/// the one statement the script does not write, `Stmt::Append`.
+/// Its statements are the script's, and its text and its `{{ }}` tags are
+/// the two statements the script does not write, `Stmt::Text` and
+/// `Stmt::Append`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Template<S = Clean> {
     pub id: AstId,
@@ -411,7 +419,7 @@ pub enum Expr<S = Clean> {
     FuncCall {
         id: AstId,
         func: Box<Expr<S>>,
-        args: Vec<Expr<S>>,
+        args: Args<S>,
         span: Span,
     },
     /// `recv.f(args)`: the call `f(recv', args)` (RFC-0030). `callee_id`
@@ -433,9 +441,13 @@ pub enum Expr<S = Clean> {
         right: Box<Expr<S>>,
         span: Span,
     },
-    /// Lambda: `|x| -> expr` or `|x, y| -> expr`.
+    /// Lambda: `|x| -> expr` or `|x, y| -> expr`, and with `move` before
+    /// it, `move |x| -> expr`.
     Lambda {
         id: AstId,
+        /// `move`: each captured name is moved into the closure when it is
+        /// made; without it, each is captured by reference (functions §2).
+        captures_by_move: bool,
         params: Vec<Binder>,
         body: Box<Expr<S>>,
         span: Span,
@@ -665,6 +677,34 @@ pub struct Binder {
     pub span: Span,
 }
 
+/// A call's arguments: all by position, or all by name (programs §1, §2).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Args<S = Clean> {
+    Positional(Vec<Expr<S>>),
+    Named(Vec<(Binder, Expr<S>)>),
+}
+
+impl<S> Args<S> {
+    /// Every argument's expression, in the order written.
+    pub fn exprs(&self) -> Box<dyn Iterator<Item = &Expr<S>> + '_> {
+        match self {
+            Args::Positional(args) => Box::new(args.iter()),
+            Args::Named(args) => Box::new(args.iter().map(|(_, arg)| arg)),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Args::Positional(args) => args.len(),
+            Args::Named(args) => args.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// A field in an object expression.
 /// Shorthand `{ name }` -> key="name", value=Ident("name", Value).
 /// Shorthand `{ $name }` -> key="name", value=Ident("name", ExternParam).
@@ -805,7 +845,6 @@ pub enum BinOp {
     Or,
     Xor,
     BitAnd,
-    BitOr,
     Shl,
     Shr,
     Mod,
@@ -958,7 +997,7 @@ fn walk_stmts_level<S>(stmts: &[Stmt<S>], refs: &mut ContextRefs) {
             // (RFC-0100 rule 2): nothing of it is the enclosing body's.
             Stmt::FnDecl(_) => {}
             Stmt::Append { expr, .. } => walk_expr(expr, refs),
-            Stmt::Error(_) => {}
+            Stmt::Text { .. } | Stmt::Error(_) => {}
         }
     }
 }
@@ -1090,7 +1129,7 @@ fn walk_expr_level<S>(expr: &Expr<S>, refs: &mut ContextRefs) {
         }
         Expr::FuncCall { func, args, .. } => {
             walk_expr(func, refs);
-            for arg in args {
+            for arg in args.exprs() {
                 walk_expr(arg, refs);
             }
         }

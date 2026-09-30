@@ -1,4 +1,4 @@
-//! The parallel-loop corpus (`acvus-interpreter-test/par_corpus`) at the
+//! The parallel-loop corpus (`tests/acvus-interpreter-test/par_corpus`) at the
 //! CLI's contract: every case runs to the value its row of `INDEX.md` states,
 //! and `acvus mir` prints, for each of its `For`s and pull loops' `While`s,
 //! the stages line, the facts `analysis::loop_deps` computes of each stage
@@ -21,7 +21,7 @@ fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("the crate lies in the workspace")
-        .join("acvus-interpreter-test/par_corpus")
+        .join("tests/acvus-interpreter-test/par_corpus")
 }
 
 struct Case {

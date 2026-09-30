@@ -14,7 +14,7 @@ use crate::regs::Regs;
 
 /// One word's place, as the operations that name it are specialized on.
 ///
-/// Obligation across artifacts: `acvus-interpreter-test/benches/asm_probe.rs`
+/// Obligation across artifacts: `tests/acvus-interpreter-test/benches/asm_probe.rs`
 /// reads the release binary, where `R0::read` is the identity on the argument
 /// register and `R0::write` is the `mov` the tail call already needed —
 /// neither lands an instruction of its own.

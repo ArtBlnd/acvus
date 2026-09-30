@@ -1,5 +1,6 @@
 //! The nodes of a parsed body, by the source they cover.
 
+use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
 use crate::ast::*;
@@ -32,6 +33,7 @@ pub struct Name {
 pub struct Nodes {
     preorder: Vec<Node>,
     names: Vec<Name>,
+    callees: Vec<QualifiedRef>,
 }
 
 impl Nodes {
@@ -42,6 +44,7 @@ impl Nodes {
         let mut nodes = Self {
             preorder: Vec::new(),
             names: Vec::new(),
+            callees: Vec::new(),
         };
         nodes.push(script.id, script.span, None);
         nodes.stmts(&script.stmts);
@@ -58,6 +61,7 @@ impl Nodes {
         let mut nodes = Self {
             preorder: Vec::new(),
             names: Vec::new(),
+            callees: Vec::new(),
         };
         nodes.push(template.id, template.span, None);
         nodes.stmts(&template.body);
@@ -71,6 +75,7 @@ impl Nodes {
         let mut nodes = Self {
             preorder: Vec::new(),
             names: Vec::new(),
+            callees: Vec::new(),
         };
         nodes.fn_decl(decl);
         nodes
@@ -135,6 +140,12 @@ impl Nodes {
     }
 
     /// Every name of the body, in source order.
+    /// Every qualified name written as a call's callee, `ns::f(..)`, in the
+    /// order written: what reaches another unit (programs).
+    pub fn callees(&self) -> &[QualifiedRef] {
+        &self.callees
+    }
+
     pub fn names(&self) -> &[Name] {
         &self.names
     }
@@ -301,6 +312,7 @@ impl Nodes {
                 self.push(*id, *span, None);
                 self.expr(expr);
             }
+            Stmt::Text { id, span, .. } => self.push(*id, *span, None),
             Stmt::Error(node) => self.error(node),
         }
     }
@@ -427,9 +439,24 @@ impl Nodes {
                 span,
             } => {
                 self.push(*id, *span, None);
+                if let Expr::Ident { name, .. } = &**func
+                    && !name.namespace.is_root()
+                {
+                    self.callees.push(*name);
+                }
                 self.expr(func);
-                for arg in args {
-                    self.expr(arg);
+                match args {
+                    Args::Positional(args) => {
+                        for arg in args {
+                            self.expr(arg);
+                        }
+                    }
+                    Args::Named(args) => {
+                        for (label, arg) in args {
+                            self.push(label.id, label.span, None);
+                            self.expr(arg);
+                        }
+                    }
                 }
             }
             Expr::MethodCall {
@@ -453,6 +480,7 @@ impl Nodes {
                 params,
                 body,
                 span,
+                ..
             } => {
                 self.push(*id, *span, None);
                 for param in params {

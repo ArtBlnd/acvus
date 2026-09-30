@@ -1,0 +1,116 @@
+---
+source: tests/acvus-mir-test/tests/optimized.rs
+expression: opt
+---
+=== literals ===
+  T0 = "unknown"
+  T1 = "senior"
+  T2 = "adult"
+  T3 = "minor"
+  T4 = " ("
+  T5 = ")"
+
+=== main ===
+     0 |   r0 = fetch @user
+     1 |   assign @user = r0
+     2 |   r1 = take @user.age
+     3 |   r2 = const_str T0
+     4 |   r3 = call #0(r2)
+     5 |   assign @output = r3
+     7 |   r4 = r1 >= 65 (r5)
+     8 |   r6 = test r4 == true
+    10 |   r7 = r1 >= 18 (r8)
+    11 |   r9 = test r7 == true
+    13 |   r10 = r1 < 18 (r11)
+    14 |   r12 = test r10 == true
+    15 |   if r6 -> L0 else L1 join L1
+    16 | L0:
+    17 |   drop r13
+    18 |   r14 = const_str T1
+    19 |   r15 = call #0(r14)
+    20 |   assign @output = r15
+    21 |   jump L1
+    22 | L1:
+    23 |   if r9 -> L2 else L3 join L3
+    24 | L2:
+    25 |   drop r13
+    26 |   r16 = const_str T2
+    27 |   r17 = call #0(r16)
+    28 |   assign @output = r17
+    29 |   jump L3
+    30 | L3:
+    31 |   if r12 -> L4 else L5 join L5
+    32 | L4:
+    33 |   drop r13
+    34 |   r18 = const_str T3
+    35 |   r19 = call #0(r18)
+    36 |   assign @output = r19
+    37 |   jump L5
+    38 | L5:
+    39 |   r20 = ref &@user.name
+    40 |   r21 = const_str T4
+    41 |   r22 = string_concat [r20, r21]
+    42 |   assign v33 = r22
+    43 |   r23 = ref &v33
+    44 |   r24 = ref &@output
+    45 |   r25 = string_concat [r23, r24]
+    46 |   drop r26
+    47 |   assign v37 = r25
+    48 |   r27 = ref &v37
+    49 |   r28 = const_str T5
+    50 |   r29 = string_concat [r27, r28]
+    51 |   drop r30
+    52 |   assign @output = r29
+    53 |   r31 = take @output
+    54 |   r32 = take @output
+    55 |   commit @output = r32
+    56 |   r33 = take @user
+    57 |   commit @user = r33 (not written)
+    58 |   return r31
+
+    ; r0 (@user) : {age: i64, name: String}
+    ; r1 (@user.age) : i64
+    ; r2 (v7) : &str
+    ; r3 (to_string(...)) : String
+    ; r4 (v11) : Bool
+    ; r5 (v10) : i64
+    ; r6 (v12) : Bool
+    ; r7 (v18) : Bool
+    ; r8 (v17) : i64
+    ; r9 (v19) : Bool
+    ; r10 (v25) : Bool
+    ; r11 (v24) : i64
+    ; r12 (v26) : Bool
+    ; r13 (@output) : String
+    ; r14 (v13) : &str
+    ; r15 (to_string(...)) : String
+    ; r16 (v20) : &str
+    ; r17 (to_string(...)) : String
+    ; r18 (v27) : &str
+    ; r19 (to_string(...)) : String
+    ; r20 (@user.name) : &String
+    ; r21 (v31) : &str
+    ; r22 (v32) : String
+    ; r23 (var_33.) : &String
+    ; r24 (@output.) : &String
+    ; r25 (v36) : String
+    ; r26 (v33) : String
+    ; r27 (var_37.) : &String
+    ; r28 (v39) : &str
+    ; r29 (v40) : String
+    ; r30 (v37) : String
+    ; r31 (@output) : String
+    ; r32 (v42) : String
+    ; r33 (v43) : {age: i64, name: String}
+    ; r34 (v44) : i64
+    ; r35 (v22) : Unit
+    ; r36 (@user) : {age: i64, name: String}
+    ; r37 (age) : i64
+    ; r38 (v47) : i64
+    ; r39 (age) : i64
+    ; r40 (v46) : i64
+    ; r41 (v15) : Unit
+    ; r42 (v45) : i64
+    ; r43 (age) : i64
+    ; r44 (age) : i64
+    ; r45 (v29) : Unit

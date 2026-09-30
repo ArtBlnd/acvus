@@ -1,0 +1,118 @@
+//! The parts of a value or of a place's content, named by paths
+//! (ownership §6): what a partial move leaves behind is ended part by part.
+//!
+//! A holder's parts are its units: the coarsest paths such that every path
+//! the body moves out of it or stores into it is a union of units. A holder
+//! nothing cuts has the one unit `[]`, itself whole.
+//!
+//! A unit never names a variant's payload: moving a variant's payload out
+//! moves everything the variant owns, since its tag copies and a variant
+//! has one payload, so a path through a payload moves the region up to that
+//! variant (`owned_region`).
+
+use super::{PathSeg, known_len};
+use crate::ty::{Concrete, Ty, TyKind, Types};
+
+pub(crate) type Path = Vec<PathSeg>;
+
+/// Whether `outer` names `inner` or a region holding it.
+pub(crate) fn covers(outer: &[PathSeg], inner: &[PathSeg]) -> bool {
+    inner.starts_with(outer)
+}
+
+/// Whether the regions `a` and `b` name share anything.
+pub(crate) fn overlap(a: &[PathSeg], b: &[PathSeg]) -> bool {
+    covers(a, b) || covers(b, a)
+}
+
+/// The region a move of `path` empties: `path` up to the first payload it
+/// steps into, since that variant then owns nothing more.
+pub(crate) fn owned_region(path: &[PathSeg]) -> &[PathSeg] {
+    let end = path.iter().position(|seg| *seg == PathSeg::Payload).unwrap_or(path.len());
+    &path[..end]
+}
+
+/// The type of the part of a `ty` at `path`.
+///
+/// # Panics
+/// `path` steps into a type without that part, or into a payload, whose
+/// type the path alone does not name: callers pass `owned_region`s.
+pub(crate) fn part_ty(types: &Types<Concrete>, ty: Ty, path: &[PathSeg]) -> Ty {
+    let mut at = ty;
+    for seg in path {
+        at = match (types.kind(at), seg) {
+            (TyKind::Tuple(items, _), PathSeg::Index(index)) => items[*index],
+            (TyKind::Array(element, _, _), PathSeg::Index(_)) => *element,
+            (TyKind::Object { fields, .. }, PathSeg::Field(field)) => field_ty(fields, *field),
+            (kind, seg) => panic!("{seg:?} names no part of {kind:?}; a path names only parts its type has"),
+        };
+    }
+    at
+}
+
+fn field_ty(fields: &[(acvus_utils::Astr, Ty)], field: acvus_utils::Astr) -> Ty {
+    fields
+        .iter()
+        .find(|(name, _)| *name == field)
+        .map(|(_, ty)| *ty)
+        .unwrap_or_else(|| panic!("{field:?} is no field of {fields:?}; a path names only fields its type has"))
+}
+
+/// The steps from a `ty` to each of its immediate parts.
+///
+/// # Panics
+/// `ty` has no parts a path names: a cut steps only into a product.
+fn children(types: &Types<Concrete>, ty: Ty) -> Vec<PathSeg> {
+    product_parts(types, ty).unwrap_or_else(|| panic!("a cut steps only into a tuple, an array or an object, not {:?}", types.kind(ty)))
+}
+
+/// The steps from a `ty` to each of its immediate parts, where it is a
+/// product.
+fn product_parts(types: &Types<Concrete>, ty: Ty) -> Option<Vec<PathSeg>> {
+    match types.kind(ty) {
+        TyKind::Tuple(items, _) => Some((0..items.len()).map(PathSeg::Index).collect()),
+        TyKind::Array(_, len, _) => Some((0..known_len(len)).map(PathSeg::Index).collect()),
+        TyKind::Object { fields, .. } => Some(fields.iter().map(|(name, _)| PathSeg::Field(*name)).collect()),
+        _ => None,
+    }
+}
+
+/// Whether `units` can cut a holder of type `ty` at `path`: every step of
+/// it is into a part of a product.
+pub(crate) fn is_cut_of(types: &Types<Concrete>, ty: Ty, path: &[PathSeg]) -> bool {
+    let mut at = ty;
+    for seg in path {
+        let Some(parts) = product_parts(types, at) else {
+            return false;
+        };
+        if !parts.contains(seg) {
+            return false;
+        }
+        at = part_ty(types, at, std::slice::from_ref(seg));
+    }
+    true
+}
+
+/// The units of a holder of type `ty` that the body cuts at `cuts`.
+///
+/// Cost: O(cuts · depth · the widest product on a cut's path).
+pub(crate) fn units(types: &Types<Concrete>, ty: Ty, cuts: &[Path]) -> Vec<Path> {
+    let mut units: Vec<Path> = vec![Vec::new()];
+    for cut in cuts {
+        let Some(split) = units.iter().position(|unit| unit.len() < cut.len() && covers(unit, cut)) else {
+            continue;
+        };
+        let unit = units.swap_remove(split);
+        for depth in unit.len()..cut.len() {
+            let above = &cut[..depth];
+            let siblings = children(types, part_ty(types, ty, above)).into_iter().filter(|seg| *seg != cut[depth]);
+            units.extend(siblings.map(|seg| {
+                let mut sibling = above.to_vec();
+                sibling.push(seg);
+                sibling
+            }));
+        }
+        units.push(cut.clone());
+    }
+    units
+}

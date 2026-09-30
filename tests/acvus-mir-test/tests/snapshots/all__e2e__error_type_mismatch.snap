@@ -1,0 +1,5 @@
+---
+source: tests/acvus-mir-test/tests/e2e.rs
+expression: result.unwrap_err()
+---
+[infer:test] [10..17] type mismatch in `+`: i64 vs Float
