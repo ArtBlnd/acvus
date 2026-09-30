@@ -1314,6 +1314,93 @@ where
         Ok(())
     }
 
+    /// S3, for what a store overwrites where it is present on some paths
+    /// only (ownership §6): the part at `below` of the place `name` names,
+    /// taken out and dropped at the end of `edge.0`, whose one edge is
+    /// into `edge.1`. The content ends on the last edge where it is known to
+    /// be that content, and nothing reads it between there and the store.
+    /// Each dereference takes the reference held at that step as a lend of
+    /// a held `&mut` does, a `Take` that reborrows it and leaves its holder
+    /// holding it (`ir::cfg::takings`), and the reborrow is dropped after
+    /// the content; the `Take` of a volatile context stands on the order
+    /// chain (context §3). No read of the content is
+    /// asked about: the caller names an edge past its last read.
+    ///
+    /// # Panics
+    /// `edge.0` does not end in one edge into `edge.1`; the root is a place
+    /// through a reference; a dereference steps where no reference is held;
+    /// or a path names no part of what it steps into.
+    pub fn drop_overwritten_on_edge(&mut self, edge: (BlockId, BlockId), name: &RootedPlace, below: &[PathSeg], span: Span) {
+        let (from, to) = edge;
+        let targets: smallvec::SmallVec<[BlockId; 2]> = self.body_ref().block(from).terminator().edges().iter().map(|edge| edge.to).collect();
+        assert!(targets[..] == [to], "{from:?} ends in edges into {targets:?}, not in one edge into {to:?}");
+        let types = self.module.types();
+        let mut ty = self.named_place_ty(name.root);
+        let mut path: Vec<PathSeg> = Vec::new();
+        let mut held_references: Vec<(Vec<PathSeg>, Ty)> = Vec::new();
+        for step in &name.steps {
+            match step {
+                RootStep::Path(steps) => {
+                    ty = parts::part_ty(types, ty, steps);
+                    path.extend(steps.iter().cloned());
+                }
+                RootStep::Deref => {
+                    let TyKind::Ref(_, target) = types.kind(ty) else {
+                        panic!("{name:?} dereferences {ty:?}, which is no reference");
+                    };
+                    held_references.push((std::mem::take(&mut path), ty));
+                    ty = *target;
+                }
+            }
+        }
+        let ty = parts::part_ty(types, ty, below);
+        path.extend(below.iter().cloned());
+        let at = At::End(from);
+        let root = name.root;
+        self.edit(|rewriter| {
+            let mut target = root;
+            let mut reborrows: Vec<ValueId> = Vec::new();
+            for (held_at, reference_ty) in held_references {
+                let reference = insert_place_op(rewriter, at, Op::Take { target, path: held_at, taken_out: false }, reference_ty, span);
+                reborrows.push(reference);
+                target = RefTarget::Through(reference);
+            }
+            let content = insert_place_op(rewriter, at, Op::Take { target, path, taken_out: false }, ty, span);
+            rewriter.insert_drop(at, content, span);
+            for reference in reborrows.into_iter().rev() {
+                rewriter.insert_drop(at, reference, span);
+            }
+        });
+    }
+
+    /// S3, for what a store overwrites where the body drops it at the
+    /// store: the part at `below` of what `store` replaces is taken out
+    /// through the name the store uses, a context by its name or a place
+    /// through a reference, and dropped, both standing immediately before
+    /// the store; the `Take` of a volatile context stands on the order chain
+    /// (context §3). The store replaces that content next, so no read of it
+    /// can follow the drop, and none is asked about.
+    ///
+    /// # Panics
+    /// `store` is not a store into a context or through a reference.
+    pub fn drop_overwritten(&mut self, store: InstRef, below: &[PathSeg], span: Span) {
+        let body = self.body_ref();
+        let Op::Assign { target, path, value, .. } = body.inst(store.id).op() else {
+            panic!("{:?} is not a store, so it overwrites nothing", store.id);
+        };
+        assert!(
+            matches!(target, RefTarget::Context(_) | RefTarget::Through(_)),
+            "{:?} stores into {target:?}, whose old content the body ends where its liveness ends",
+            store.id
+        );
+        let ty = parts::part_ty(self.module.types(), body.ty_of(*value), below);
+        let taken = Op::Take { target: *target, path: path.iter().chain(below).cloned().collect(), taken_out: false };
+        self.edit(|rewriter| {
+            let content = insert_place_op(rewriter, At::Before(store.id), taken, ty, span);
+            rewriter.insert_drop(At::Before(store.id), content, span);
+        });
+    }
+
     /// The type of `place`, a place by name of the body.
     ///
     /// # Panics
@@ -1492,3 +1579,27 @@ where
         Ok(())
     }
 }
+
+/// A name for the one place a store writes, valid on an edge before the
+/// store (ownership §4, §6): the root the store's place is reached from, a
+/// slot (holding the place, or the reference that lends it), a by-value
+/// parameter's own storage, or a context, and the way from that root to the
+/// place as the store reaches it, each step a field path or a dereference
+/// of the reference held there. It names the same place on every edge from
+/// which no write of the root stands before the store. A context is a root
+/// with no step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootedPlace {
+    pub root: RefTarget,
+    pub steps: Vec<RootStep>,
+}
+
+/// One step from a root toward the place a store writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootStep {
+    /// A field path within what is held at this point.
+    Path(Vec<PathSeg>),
+    /// The place the reference held at this point lends.
+    Deref,
+}
+
