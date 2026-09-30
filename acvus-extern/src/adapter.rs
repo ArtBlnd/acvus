@@ -5,8 +5,7 @@
 //! cannot tell which.
 //!
 //! The detection is partial and grows. Lent storage is tracked by address in a
-//! model after Tree Borrows (`Borrows`), and a typed read is checked by
-//! `Validate`, which X provides outside the contract. No tracked model is
+//! model after Tree Borrows (`Borrows`). No tracked model is
 //! known to cover every breach, so a breach the tracking does not cover passes
 //! as it would under X, and a use the tracking cannot yet tell apart from a
 //! breach may be refused.
@@ -19,37 +18,12 @@ use std::time::Duration;
 use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::entry::Settled;
-use crate::callback::{CallArgs, CallsBack, LoanForm, RustCallee, RustFns};
+use crate::callback::{CallArgs, CallsBack, LoanForm};
 use crate::impls::task::TaskKind;
 use crate::boundary::instance::InstanceEntry;
 use crate::impls::{Family, Instances, Task};
 use crate::register::{ExternFn, Refused, Registers};
 use crate::runtime::{Crosses, Mutability, RefTarget, Runtime};
-
-/// What a runtime answers, from its own representation, about a value the
-/// crossing is about to read at a type. It is not part of the contract: only
-/// the adapter asks it, and a runtime run without the adapter is never asked.
-pub trait Validate: Runtime {
-    /// Whether `v` is a value of `T`.
-    fn validate<T: Crosses>(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
-    /// Whether `v` is an impl value of the generic function `F` at task `K`.
-    fn validate_instance<F: Family, K: TaskKind>(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
-    /// Whether `v` is an impl value at all, of whatever generic function and
-    /// task.
-    fn validate_impl(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
-    /// Whether `v` is a script closure.
-    fn validate_closure(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
-}
-
-/// A runtime's answer to `Validate`.
-#[derive(Debug)]
-pub enum Validity {
-    Valid,
-    /// The value is not what the read takes it for.
-    Breach(Breach),
-    /// The runtime cannot tell from its representation.
-    Unknown,
-}
 
 /// A breach the adapter detected: X would have undefined behaviour here.
 #[derive(Debug)]
@@ -63,17 +37,8 @@ impl Breach {
     }
 }
 
-impl Validity {
-    fn pass_or_panic(self) {
-        match self {
-            Validity::Valid | Validity::Unknown => {}
-            Validity::Breach(breach) => breach.detected(),
-        }
-    }
-}
-
 /// The adapter over the trusting runtime `X`.
-pub struct Adapter<X: Runtime + Validate> {
+pub struct Adapter<X: Runtime> {
     inner: X,
     borrows: Mutex<Borrows>,
     /// The functions registered at the adapter, their dispatch monomorphised
@@ -81,7 +46,7 @@ pub struct Adapter<X: Runtime + Validate> {
     registered: HashMap<QualifiedRef, Box<dyn ExternFn<Adapter<X>>>>,
 }
 
-impl<X: Runtime + Validate> Adapter<X> {
+impl<X: Runtime> Adapter<X> {
     pub fn new(inner: X) -> Self {
         Adapter { inner, borrows: Mutex::new(Borrows::new()), registered: HashMap::new() }
     }
@@ -291,13 +256,12 @@ impl<G> Drop for Tracked<'_, G> {
     }
 }
 
-impl<X: Runtime + Validate> Runtime for Adapter<X> {
+impl<X: Runtime> Runtime for Adapter<X> {
     type Value = X::Value;
     type Shared<'a, T: Crosses + 'a> = Tracked<'a, X::Shared<'a, T>>;
     type Exclusive<'a, T: Crosses + 'a> = Tracked<'a, X::Exclusive<'a, T>>;
 
     fn take<T: Crosses>(&self, v: Self::Value, at: Settled<'_>) -> T {
-        self.inner.validate::<T>(&v, at).pass_or_panic();
         self.inner.take(v, at)
     }
 
@@ -306,12 +270,10 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
     }
 
     fn shared<'a, T: Crosses + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::Shared<'a, T> {
-        self.inner.validate::<T>(v, at).pass_or_panic();
         self.track(self.inner.shared(v, at), Mutability::Shared)
     }
 
     fn exclusive<'a, T: Crosses + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T> {
-        self.inner.validate::<T>(v, at).pass_or_panic();
         self.track(self.inner.exclusive(v, at), Mutability::Exclusive)
     }
 
@@ -344,7 +306,7 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
     }
 }
 
-impl<X: Instances + Validate> Instances for Adapter<X> {
+impl<X: Instances> Instances for Adapter<X> {
     fn instance<R, F, K>(&self, entry: InstanceEntry<R, F, K>) -> Self::Value
     where
         R: Runtime<Value = Self::Value>,
@@ -360,24 +322,21 @@ impl<X: Instances + Validate> Instances for Adapter<X> {
         F: Family,
         K: TaskKind,
     {
-        self.inner.validate_instance::<F, K>(&v, at).pass_or_panic();
         self.inner.entry(v, at)
     }
 
     fn task_of(&self, v: Self::Value, at: Settled<'_>) -> Task {
-        self.inner.validate_impl(&v, at).pass_or_panic();
         self.inner.task_of(v, at)
     }
 }
 
-impl<X: CallsBack + Validate> CallsBack for Adapter<X> {
+impl<X: CallsBack> CallsBack for Adapter<X> {
     fn call_now<'l, R, A, U>(&self, rt: &'l R, closure: Self::Value, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
     where
         R: Runtime<Value = Self::Value>,
         A: CallArgs<R>,
         U: LoanForm,
     {
-        self.inner.validate_closure(&closure, at).pass_or_panic();
         self.inner.call_now::<R, A, U>(rt, closure, args, at)
     }
 
@@ -393,17 +352,7 @@ impl<X: CallsBack + Validate> CallsBack for Adapter<X> {
         A: CallArgs<R>,
         U: Crosses,
     {
-        self.inner.validate_closure(&closure, at).pass_or_panic();
         self.inner.call_later::<R, A, U>(rt, closure, args, at)
-    }
-}
-
-impl<X: RustFns + Validate> RustFns for Adapter<X> {
-    fn rust_fn<R>(&self, f: RustCallee<R>) -> Self::Value
-    where
-        R: Runtime<Value = Self::Value>,
-    {
-        self.inner.rust_fn(f)
     }
 }
 
@@ -528,7 +477,7 @@ mod tests {
     }
 }
 
-impl<X: Runtime + Validate> Registers for Adapter<X> {
+impl<X: Runtime> Registers for Adapter<X> {
     fn register<F>(&mut self, f: F) -> Result<(), Refused>
     where
         F: ExternFn<Self>,

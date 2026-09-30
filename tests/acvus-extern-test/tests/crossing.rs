@@ -5,13 +5,14 @@
 //! `Entry::new`, as the runtime's boundary does, and the glue each test writes
 //! by hand opens them with `Entry::open`, as the attribute's glue will.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use acvus_extern::adapter::Adapter;
 use acvus_extern::Uniform;
-use acvus_extern::callback::{CallsBack, Lent, LentMut, RustFn, RustFns};
+use acvus_extern::callback::{CallsBack, Lent, LentMut};
 use acvus_extern::context::Returning;
 use acvus_extern::guard::{Guard, GuardMut};
 use acvus_extern::mode::{ByCallback, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
@@ -71,14 +72,13 @@ on_both! {
     an_awaited_body_takes_its_argument_and_finishes_after_a_wait: awaited_by_value;
     an_awaited_body_reads_its_lend_before_a_wait: awaited_lent;
     an_awaited_body_holds_a_guard_across_a_wait: awaited_guard_held;
-    a_returned_rust_fn_is_called_as_a_script_calls_a_function_value: rust_fn_called;
-    a_rust_fn_releases_what_it_captures_once: rust_fn_released;
+    a_function_value_is_called_through_its_dispatch: function_called;
+    a_function_value_releases_what_it_captures_once: function_released;
     a_callback_is_lent_a_part_of_the_handlers_storage: callback_lent;
     a_callback_writes_through_a_part_lent_exclusively: callback_lent_mut;
     a_callback_is_lent_text: callback_lent_text;
     an_awaited_callback_takes_its_arguments_by_move: callback_awaited;
-    a_rust_fn_body_reads_its_held_argument_through_its_context: rust_fn_with_context;
-    a_callback_result_borrowed_as_text_is_read_back: callback_borrowed_result;
+    a_function_body_reads_its_held_argument_through_its_context: function_with_context;
 }
 
 /// Runs `case` on a `WordRuntime` and on an adapter over one, each owned, so
@@ -590,13 +590,40 @@ fn awaited_guard_held<R: Runtime<Value = Word>>(runtime: &R) {
     assert_eq!(read::<_, String>(&mut frame, text), "held across a wait");
 }
 
-/// A variable holding the function `f`, as a program holds a function an
-/// extern returned.
-fn produce_fn<R, A, U>(frame: &mut Frame<'_, R>, f: RustFn<R, A, U>) -> usize
+/// A function value's dispatch, written as `#[extern_fn]` writes one: the
+/// entry over the argument run, each argument opened by its mode `A`, the body
+/// `f`, and its result given.
+struct Dispatch<A, F> {
+    f: F,
+    _modes: PhantomData<fn() -> A>,
+}
+
+fn dispatch<A, F>(f: F) -> Dispatch<A, F> {
+    Dispatch { f, _modes: PhantomData }
+}
+
+// SAFETY: this stands in for `#[extern_fn]`: `call` opens the arguments by
+// the modes `A` the body `f` takes them at.
+#[allow(unsafe_code)]
+unsafe impl<A, F> acvus_extern::seal::ExternFns for Dispatch<A, F> {}
+
+impl<R, A, U, F> ExternFn<R> for Dispatch<A, F>
 where
-    R: RustFns<Value = Word>,
+    R: Runtime,
+    A: acvus_extern::Args<R> + 'static,
+    U: Crosses,
+    F: for<'c> Fn(&Returning<'c, R>, A::Opened<'c>) -> U + Send + Sync + 'static,
 {
-    frame.call(&[], |entry| entry.open::<(), ()>(|cx, (), ()| cx.finish_rust_fn(f)))
+    fn path(&self, names: &Interner) -> QualifiedRef {
+        QualifiedRef::root(names.intern("lambda"))
+    }
+
+    fn call(&self, runtime: &R, args: &[R::Value], site: &SiteShape<R>) -> Done<R> {
+        Entry::new(runtime, args, site).open::<A, ()>(|cx, args, ()| {
+            let result = (self.f)(&cx, args);
+            cx.finish(result)
+        })
+    }
 }
 
 /// The length of a `String` lent to it.
@@ -604,14 +631,9 @@ fn length_of<R: Runtime>(_: &Returning<'_, R>, (text,): (Guard<'_, &String>,)) -
     text.len() as i64
 }
 
-/// `length_of`, as a Rust function.
-fn length<R: RustFns>() -> RustFn<R, (ByRef<String>,), i64> {
-    RustFn::<R, (ByRef<String>,), i64>::new(length_of::<R>)
-}
-
-fn rust_fn_called<R: RustFns<Value = Word>>(runtime: &R) {
+fn function_called<R: Runtime<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
-    let function = produce_fn(&mut frame, length());
+    let function = frame.function(dispatch::<(ByRef<String>,), _>(length_of::<R>));
     let short = produce(&mut frame, String::from("four"));
     let long = produce(&mut frame, String::from("eleven long"));
 
@@ -623,15 +645,12 @@ fn rust_fn_called<R: RustFns<Value = Word>>(runtime: &R) {
     assert_eq!(read::<_, String>(&mut frame, short), "four");
 }
 
-fn rust_fn_released<R: RustFns<Value = Word>>(runtime: &R) {
+fn function_released<R: Runtime<Value = Word>>(runtime: &R) {
     let (captured, drops) = tally();
     let mut frame = Frame::new(runtime);
-    let function = produce_fn(
-        &mut frame,
-        RustFn::<R, (ByValue<i64>,), i64>::new(move |_: &Returning<'_, R>, (n,): (i64,)| {
-            n + Arc::strong_count(&captured.0) as i64
-        }),
-    );
+    let function = frame.function(dispatch::<(ByValue<i64>,), _>(move |_: &Returning<'_, R>, (n,): (i64,)| {
+        n + Arc::strong_count(&captured.0) as i64
+    }));
 
     let forty = produce(&mut frame, 40i64);
     let called = frame.call_function(function, &[Pass::Give(forty)]);
@@ -642,9 +661,9 @@ fn rust_fn_released<R: RustFns<Value = Word>>(runtime: &R) {
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
-fn callback_lent<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
+fn callback_lent<R: CallsBack<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
-    let function = produce_fn(&mut frame, length());
+    let function = frame.function(dispatch::<(ByRef<String>,), _>(length_of::<R>));
     let text = produce(&mut frame, String::from("lent to a callback"));
 
     let called = frame.call(&[Pass::Lend(text, Shared), Pass::Function(function)], |entry| {
@@ -667,12 +686,9 @@ fn words_in<R: Runtime>(_: &Returning<'_, R>, (text,): (Guard<'_, &str>,)) -> i6
     text.split(' ').count() as i64
 }
 
-fn callback_lent_mut<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
+fn callback_lent_mut<R: CallsBack<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
-    let append = produce_fn(
-        &mut frame,
-        RustFn::<R, (ByMut<String>,), ()>::new(append_written::<R>),
-    );
+    let append = frame.function(dispatch::<(ByMut<String>,), _>(append_written::<R>));
     let text = produce(&mut frame, String::from("lent"));
 
     frame.call(&[Pass::Lend(text, Exclusive), Pass::Function(append)], |entry| {
@@ -685,12 +701,9 @@ fn callback_lent_mut<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
     assert_eq!(read::<_, String>(&mut frame, text), "lent and written");
 }
 
-fn callback_lent_text<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
+fn callback_lent_text<R: CallsBack<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
-    let count = produce_fn(
-        &mut frame,
-        RustFn::<R, (ByStr,), i64>::new(words_in::<R>),
-    );
+    let count = frame.function(dispatch::<(ByStr,), _>(words_in::<R>));
     let text = produce(&mut frame, String::from("three short words and more"));
 
     let called = frame.call(&[Pass::Lend(text, Shared), Pass::Function(count)], |entry| {
@@ -710,13 +723,10 @@ fn length_and_drop<R: Runtime>(_: &Returning<'_, R>, (text, tally): (String, Uni
     text.len() as i64
 }
 
-fn callback_awaited<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
+fn callback_awaited<R: CallsBack<Value = Word>>(runtime: &R) {
     let (value, drops) = tally();
     let mut frame = Frame::new(runtime);
-    let consume = produce_fn(
-        &mut frame,
-        RustFn::<R, (ByValue<String>, ByUniform<Tally>), i64>::new(length_and_drop::<R>),
-    );
+    let consume = frame.function(dispatch::<(ByValue<String>, ByUniform<Tally>), _>(length_and_drop::<R>));
 
     let called = executor().block_on(frame.call_awaited(&[Pass::Function(consume)], async |entry| {
         let body = entry.open_awaited::<(ByCallback<(String, Tally), i64, ()>,), (), _>(|cx, (callback,), ()| async move {
@@ -736,35 +746,14 @@ fn held_length<R: Runtime>(cx: &Returning<'_, R>, (held,): (Uniform<R, String>,)
     held.into_inner(cx).len() as i64
 }
 
-fn rust_fn_with_context<R: RustFns<Value = Word>>(runtime: &R) {
+fn function_with_context<R: Runtime<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
-    let function = produce_fn(&mut frame, RustFn::<R, (ByUniform<String>,), i64>::new(held_length::<R>));
+    let function = frame.function(dispatch::<(ByUniform<String>,), _>(held_length::<R>));
     let text = produce(&mut frame, String::from("held"));
 
     let called = frame.call_function(function, &[Pass::Give(text)]);
 
     assert_eq!(read::<_, i64>(&mut frame, called), 4);
-}
-
-/// A borrowed result that borrows nothing its call lent.
-fn static_label<'c, R: Runtime>(_: &Returning<'c, R>, _: (Guard<'c, &'c String>,)) -> &'c str {
-    "a static label"
-}
-
-fn callback_borrowed_result<R: CallsBack + RustFns<Value = Word>>(runtime: &R) {
-    let mut frame = Frame::new(runtime);
-    let label = produce_fn(&mut frame, RustFn::<R, (ByRef<String>,), Lent<str>>::new(static_label::<R>));
-    let text = produce(&mut frame, String::from("lent"));
-
-    let called = frame.call(&[Pass::Lend(text, Shared), Pass::Function(label)], |entry| {
-        entry.open::<(ByRef<String>, ByCallback<(Lent<String>,), Lent<str>, ()>), ()>(|cx, (text, callback), ()| {
-            let label = callback.call(&cx, (&*text,));
-            let length = label.len() as i64;
-            cx.finish(length)
-        })
-    });
-
-    assert_eq!(read::<_, i64>(&mut frame, called), 14);
 }
 
 // Breaches the adapter's tracking covers. Under `WordRuntime` alone each is
@@ -794,29 +783,4 @@ fn the_adapter_refuses_a_lend_at_a_type_the_value_is_not() {
     frame.call(&[Pass::Lend(variable, Shared)], |entry| {
         entry.open::<(ByRef<i64>,), ()>(|cx, _, ()| cx.finish(()))
     });
-}
-
-#[test]
-#[should_panic(expected = "a I64 value is called as a closure")]
-fn the_adapter_refuses_a_callback_that_is_no_closure() {
-    let runtime = Adapter::new(WordRuntime::default());
-    let mut frame = Frame::new(&runtime);
-    let variable = produce(&mut frame, 7i64);
-
-    frame.call(&[Pass::Function(variable)], |entry| {
-        entry.open::<(ByCallback<(), i64, ()>,), ()>(|cx, (callback,), ()| {
-            let called = callback.call(&cx, ());
-            cx.finish(called)
-        })
-    });
-}
-
-#[test]
-#[should_panic(expected = "a I64 value is read as alloc::string::String")]
-fn the_adapter_refuses_a_take_at_a_type_the_value_is_not() {
-    let runtime = Adapter::new(WordRuntime::default());
-    let mut frame = Frame::new(&runtime);
-    let variable = produce(&mut frame, 7i64);
-
-    read::<_, String>(&mut frame, variable);
 }

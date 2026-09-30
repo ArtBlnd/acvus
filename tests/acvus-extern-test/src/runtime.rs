@@ -1,21 +1,18 @@
 //! `WordRuntime`'s values and its operations.
 
-use std::any::{TypeId, type_name};
+
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use acvus_extern::adapter::{Breach, Validate, Validity};
-use acvus_extern::callback::{CallArgs, CallsBack, LoanForm, RustCallee, RustFns};
-use acvus_extern::{Entry, Settled, SiteShape};
-use acvus_extern::impls::Family;
-use acvus_extern::impls::task::TaskKind;
+use acvus_extern::callback::{CallArgs, CallsBack, LoanForm};
+use acvus_extern::{Settled, SiteShape};
 use acvus_extern::runtime::{Crosses, Mutability, RefTarget, Runtime};
 use acvus_extern::register::{ExternFn, Refused, Registers};
 use acvus_utils::{Interner, QualifiedRef};
 
-use crate::boundary::{self, Held, Kind, Word, scalar_kind};
+use crate::boundary::{self, Held, Word};
 
 /// The runtime: its interner, and nothing else; every value's storage is its
 /// own allocation.
@@ -146,20 +143,12 @@ where
     }
     let site = SiteShape::new(lent, Box::new([]));
 
-    let done = boundary::callee::<R>(closure, at).call(Entry::new(rt, &mut values, &site));
+    let done = boundary::callee::<R>(closure, at).call(rt, &values, &site);
 
     drop(references);
     done.into_value()
 }
 
-impl RustFns for WordRuntime {
-    fn rust_fn<R>(&self, f: RustCallee<R>) -> Word
-    where
-        R: Runtime<Value = Word>,
-    {
-        boundary::closure(f)
-    }
-}
 
 /// A wait until an instant. This runtime owns no timer and no executor, so
 /// the future asks to be polled again until the instant has passed; the
@@ -179,51 +168,3 @@ impl Future for Deadline {
     }
 }
 
-/// A breach named by the kind a value has and the type it was read as.
-fn read_as<T: ?Sized>(kind: Kind) -> Validity {
-    Validity::Breach(Breach { what: format!("a {kind:?} value is read as {}", type_name::<T>()) })
-}
-
-/// Whether a value named by a reference to storage outside any slot holds
-/// what it is read as cannot be told from the reference.
-fn names_a_part(kind: Kind) -> bool {
-    matches!(kind, Kind::Part | Kind::WidePart)
-}
-
-/// Whether a `Large` value holds a value of the canonical type `canon`.
-fn holds<T: ?Sized>(v: Word, canon: TypeId, at: Settled<'_>) -> Validity {
-    if boundary::canon_of(v, at) == canon {
-        Validity::Valid
-    } else {
-        read_as::<T>(Kind::Large)
-    }
-}
-
-impl Validate for WordRuntime {
-    fn validate<T: Crosses>(&self, v: &Word, at: Settled<'_>) -> Validity {
-        let named = boundary::followed(*v, at);
-        match named.kind() {
-            kind if names_a_part(kind) => Validity::Unknown,
-            Kind::Large => holds::<T>(named, TypeId::of::<T::Canon>(), at),
-            kind if kind.is_scalar() && scalar_kind::<T>() == Some(kind) => Validity::Valid,
-            kind => read_as::<T>(kind),
-        }
-    }
-
-    /// No value of this runtime is an impl value until it implements
-    /// `Instances`.
-    fn validate_instance<F: Family, K: TaskKind>(&self, v: &Word, _at: Settled<'_>) -> Validity {
-        read_as::<F>(v.kind())
-    }
-
-    fn validate_impl(&self, v: &Word, _at: Settled<'_>) -> Validity {
-        Validity::Breach(Breach { what: format!("a {:?} value is read as an impl value", v.kind()) })
-    }
-
-    fn validate_closure(&self, v: &Word, _at: Settled<'_>) -> Validity {
-        match v.kind() {
-            Kind::Closure => Validity::Valid,
-            kind => Validity::Breach(Breach { what: format!("a {kind:?} value is called as a closure") }),
-        }
-    }
-}

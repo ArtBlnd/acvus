@@ -4,11 +4,10 @@
 
 use std::marker::PhantomData;
 
-use crate::boundary::entry::{Args, Entry, Settled};
+use crate::boundary::entry::Settled;
 use crate::boundary::seal::LoanForms;
 use crate::boundary::uniform::Uniform;
 use crate::context::{Awaited, Opens, Returning};
-use crate::done::Done;
 use crate::runtime::{Crosses, Mutability, RefTarget, Runtime};
 
 /// A callback of function type `Fn(A) -> U` at effect `E`, lent to the call
@@ -240,67 +239,4 @@ pub trait CallsBack: Runtime {
         U: Crosses;
 }
 
-/// A Rust function an extern returns as a script function value of function
-/// type `A -> U` (runtime contract §2, Rust functions): `A` is its
-/// parameters' modes and `U` its result's loan form, so a declaration reads
-/// the returned function's type from the signature. Each call of it is a call
-/// through an entry, crossing its arguments at that call's settled types. Its
-/// glue is this crate's: it opens the arguments by `A`, runs the body, and
-/// finishes the result at `U`, a crossing result given and a borrowed one
-/// made a reference value, so the glue agrees with the function type.
-///
-/// The body is a handler body, higher-ranked over the call `'c`. Where an
-/// argument's opened form carries `'c`, a closure's signature is not inferred
-/// higher-ranked, so the body is a `fn` item, as the attribute emits it.
-pub struct RustFn<R: Runtime, A, U> {
-    callee: RustCallee<R>,
-    _type: PhantomData<fn(A) -> U>,
-}
 
-impl<R, A, U> RustFn<R, A, U>
-where
-    R: Runtime,
-    A: Args<R> + 'static,
-    U: LoanForm,
-{
-    pub fn new(body: impl for<'c> Fn(&Returning<'c, R>, A::Opened<'c>) -> U::At<'c> + Send + Sync + 'static) -> Self {
-        let glue = move |entry: Entry<'_, R>| {
-            entry.open::<A, ()>(|cx, args, ()| {
-                let result = body(&cx, args);
-                cx.finish_form::<U>(result)
-            })
-        };
-        RustFn { callee: RustCallee { glue: Box::new(glue) }, _type: PhantomData }
-    }
-}
-
-impl<R: Runtime, A, U> RustFn<R, A, U> {
-    /// The function with its type erased, as the runtime keeps it.
-    pub(crate) fn into_callee(self) -> RustCallee<R> {
-        self.callee
-    }
-}
-
-/// A Rust function as the runtime keeps and calls it, its function type
-/// erased; only `RustFn` makes one, so its glue is the crate's.
-pub struct RustCallee<R: Runtime> {
-    glue: Box<Glue<R>>,
-}
-
-/// A call through an entry, at the runtime `R`.
-type Glue<R> = dyn for<'e> Fn(Entry<'e, R>) -> Done<R> + Send + Sync;
-
-impl<R: Runtime> RustCallee<R> {
-    /// A call of the function, through the entry its caller made.
-    pub fn call(&self, entry: Entry<'_, R>) -> Done<R> {
-        (self.glue)(entry)
-    }
-}
-
-/// Making a script function value from a Rust function. `R` is the runtime the
-/// glue runs at: the runtime itself, or the adapter over it (K15).
-pub trait RustFns: Runtime {
-    fn rust_fn<R>(&self, f: RustCallee<R>) -> Self::Value
-    where
-        R: Runtime<Value = Self::Value>;
-}

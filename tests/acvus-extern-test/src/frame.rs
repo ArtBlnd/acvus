@@ -8,7 +8,7 @@
 //! debug build's entry asserts that they agree.
 
 use acvus_extern::done::Done;
-use acvus_extern::register::Registers;
+use acvus_extern::register::{ExternFn, Registers};
 use acvus_extern::runtime::{Mutability, Runtime};
 use acvus_utils::QualifiedRef;
 use acvus_extern::{Entry, SiteShape};
@@ -82,9 +82,17 @@ where
         let site = Self::site(passes);
 
         let callee = self.variables[function].as_deref().expect("a function given away is not called");
-        let done = callee.rust_fn::<R>().call(Entry::new(self.runtime, &args, &site));
+        let done = callee.function::<R>().call(self.runtime, &args, &site);
 
         self.keep(done)
+    }
+
+    /// A variable holding a script function value, the function `f`: the
+    /// run's own way to make one, as a program makes a lambda.
+    pub fn function(&mut self, f: impl ExternFn<R>) -> usize {
+        let value = crate::boundary::closure::<R>(Box::new(f));
+        self.variables.push(Some(Box::new(Held::kept(value))));
+        self.variables.len() - 1
     }
 
     /// Calls the function registered at `path` with the arguments `passes`

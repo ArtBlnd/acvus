@@ -5,7 +5,6 @@
 use std::ops::{Deref, DerefMut};
 
 use crate::boundary::entry::{Settled, SiteShape};
-use crate::callback::{LoanForm, RustFn, RustFns};
 use crate::done::Done;
 use crate::guard::{Guard, GuardMut};
 use crate::runtime::{Crosses, RefTarget, Runtime};
@@ -84,22 +83,6 @@ impl<'c, R: Runtime> Returning<'c, R> {
         let value = self.runtime.reference(RefTarget::Exclusive(part(&mut *guard)), Settled::of_the_entry());
         drop(guard);
         Done::of(value)
-    }
-}
-
-impl<'c, R: RustFns> Returning<'c, R> {
-    /// Finishes the call with a Rust function, as a script function value of
-    /// the function type it was made at.
-    pub fn finish_rust_fn<A, U>(self, f: RustFn<R, A, U>) -> Done<R> {
-        Done::of(self.runtime.rust_fn(f.into_callee()))
-    }
-}
-
-impl<'c, R: Runtime> Returning<'c, R> {
-    /// Finishes the call with a result at its loan form: a crossing result
-    /// given, a borrowed one made a reference value.
-    pub(crate) fn finish_form<U: LoanForm>(self, result: U::At<'c>) -> Done<R> {
-        Done::of(U::lend(result, self.runtime, Settled::of_the_entry()))
     }
 }
 
