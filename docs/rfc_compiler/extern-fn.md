@@ -14,6 +14,8 @@ Named parameters and a result. A parameter takes its value by value, by `&T` or 
 
 A type parameter is parametric, and carries one bound: any type; an integer type; or any type that the use must settle, never taken as `!`. Which shapes a function takes is said by its impls (§6), not by a bound.
 
+An extern fn is called, never taken as a value: a program names it only to call it, and where a function value is wanted it writes a lambda that calls it. So a declaration's flows (§4) are read only at its calls.
+
 ## 2. Effect
 
 A call's effect states whether reissuing it is pure, idempotent or opaque, an order in which each is below the next, so a join takes the greater; whether it commutes with other calls; whether it may be split, and at what cost (effects §6); and which contexts it reads and writes. An opaque effect is always sound (effects).
@@ -38,6 +40,8 @@ The forms of each kind are exactly those listed here, and a declaration states n
 ## 4. Flows
 
 A declaration states what a call reaches through its reference arguments (by default, everything they lend), what its result borrows from them, and how a call ends: unstated, returns or traps, or total.
+
+A function value a call gives, as its result or a part of it, has the flows its declared function type states; a declaration states none for such a type, so it has every flow (types §5).
 
 ## 5. Parameters and overloading
 
