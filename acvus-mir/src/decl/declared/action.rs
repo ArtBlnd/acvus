@@ -13,6 +13,11 @@ use crate::ty::{Mutability, Poly, TyId, TyKind, Types};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    /// The declaration is a combine (extern-fn §3): an associative
+    /// operation on `S`, value shaped `fn(S, S) -> S` or update shaped
+    /// `fn(&mut S, S)`, one meaning `s = f(s, p)`. Its laws are stated here
+    /// only; an update names it and reads them here.
+    Combine(Combine),
     Update(Update),
     /// A call's update of `place` is the inverse of `other`'s update of the
     /// same place: one after the other leaves the place as it was.
@@ -24,15 +29,23 @@ pub enum Action {
     TotalOrder,
 }
 
-/// A call's update of `place` is the action of `combine`, a declared
-/// `fn(s: &mut S, part: S)`: associative, with `identity`, a declared
-/// `fn() -> S`, where one is stated, and commutative where stated.
+/// A combine's laws: an identity, a declared `fn() -> S`, where one is
+/// stated; commutative or not; and an absorbing element, a declared
+/// `fn() -> S` the combine returns whatever the other operand, where one
+/// is stated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Combine {
+    pub identity: Option<QualifiedRef>,
+    pub commutative: bool,
+    pub absorbing: Option<QualifiedRef>,
+}
+
+/// A call's update of `place` is the action of `combine`, a declaration
+/// stating `Action::Combine`, whose laws it reads there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Update {
     pub place: Place,
     pub combine: QualifiedRef,
-    pub identity: Option<QualifiedRef>,
-    pub commutative: bool,
 }
 
 /// Refuses each action that is not well formed at `stated`'s signature.

@@ -1,6 +1,8 @@
 //! Source (extern-fn §3): how the stream a call returns yields its
 //! elements. A parameter is numbered as a call's arguments are.
 
+use acvus_utils::QualifiedRef;
+
 use super::relation::{Comparison, Term, refuse_ill_formed_term};
 use super::Stated;
 use crate::decl::Refused;
@@ -16,15 +18,39 @@ pub enum Source {
     /// The number of elements the stream yields stands in `comparison` to
     /// `bound`.
     Count { comparison: Comparison, bound: Term },
-    /// Yields each element of the stream argument `from` through the
-    /// closure argument `through`.
-    Map { from: usize, through: usize },
-    /// Yields the elements of the stream argument `from` that the closure
-    /// argument `predicate` accepts.
-    Filter { from: usize, predicate: usize },
-    /// Yields, one after another, the streams the stream argument `from`
-    /// yields.
-    Flatten { from: usize },
+    /// Yields each element of `from` through the closure argument `through`.
+    Map { from: Stream, through: usize },
+    /// Yields the elements of `from` that the closure argument `predicate`
+    /// accepts.
+    Filter { from: Stream, predicate: usize },
+    /// Yields the elements of `from` until the first the closure argument
+    /// `predicate` does not accept.
+    TakeWhile { from: Stream, predicate: usize },
+    /// Yields, one after another, the streams `from` yields.
+    Flatten { from: Stream },
+    /// The call consumes `from`: a state starts at `init`, each element in
+    /// order updates it by `update`, and the result is `finish` of the
+    /// final state, or the state itself. Where `update` is a declaration
+    /// stating `Action::Combine`, the consumption may be split; where the
+    /// state reaches that combine's absorbing element, the remaining
+    /// elements are not consumed. A closure argument states no laws, so it
+    /// is consumed in order.
+    Consume { from: Stream, init: Step, update: Step, finish: Option<QualifiedRef> },
+}
+
+/// The stream a form reads: a parameter's, or another form's, so the forms
+/// compose (`flat_map` is `Flatten` over `Map`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stream {
+    Param(usize),
+    Of(Box<Source>),
+}
+
+/// A step a consumption takes: a declared function, or a closure argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    Declared(QualifiedRef),
+    Param(usize),
 }
 
 /// Refuses each source form that is not well formed at `stated`'s

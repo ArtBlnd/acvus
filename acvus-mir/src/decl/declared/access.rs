@@ -1,5 +1,7 @@
 //! Access (extern-fn §3): which places a call touches, and how.
 
+use acvus_utils::QualifiedRef;
+
 use super::{Element, Place, Stated};
 use crate::decl::Refused;
 use crate::ty::{Mutability, Poly, Types};
@@ -11,6 +13,11 @@ pub enum Access {
     /// The declaration, an impl of `eq`, is an equivalence: two keys of its
     /// type name one place exactly when it calls them equal.
     Equivalence,
+    /// The call's result is what `place` held when the call began, or,
+    /// where `through` names one, that declared pure `fn(&H) -> R` of it
+    /// (extern-fn §3): a call that stores into a place may give back what
+    /// it held.
+    Gives { place: Place, through: Option<QualifiedRef> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

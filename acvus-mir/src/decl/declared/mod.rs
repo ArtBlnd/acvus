@@ -17,9 +17,9 @@ use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
 pub use access::{Access, Mode, Stored, Touch};
-pub use action::{Action, Update};
+pub use action::{Action, Combine, Update};
 pub use relation::{Atom, Before, Comparison, Relation, Subject, Term};
-pub use source::Source;
+pub use source::{Source, Step, Stream};
 
 /// A declared fact a requirement names at its type (extern-fn §6), which
 /// only an impl stating it resolves: one form of §3's kinds, by name.
@@ -29,6 +29,8 @@ pub enum NamedFact {
     Equivalence,
     /// A `core::cmp` impl declared a total order (`Action::TotalOrder`).
     TotalOrder,
+    /// An impl declared a combine (`Action::Combine`).
+    Combine,
 }
 
 impl NamedFact {
