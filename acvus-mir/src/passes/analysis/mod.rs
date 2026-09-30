@@ -2,6 +2,7 @@
 //! the manager that computes, keeps and invalidates facts.
 
 mod annotate;
+mod call_graph;
 mod content_liveness;
 mod initialization;
 mod match_facts;
@@ -21,6 +22,7 @@ mod values;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use call_graph::CallGraph;
 pub use content_liveness::{ContentLiveness, Presence, Stored, stored};
 pub use initialization::{Initialization, Written};
 pub use match_facts::MatchFacts;
