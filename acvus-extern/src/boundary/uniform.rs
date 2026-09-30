@@ -7,8 +7,8 @@ use std::mem::ManuallyDrop;
 use crate::boundary::entry::Settled;
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts, opaque_crossing};
 use crate::context::Opens;
-use crate::runtime::{Crosses, ObjectBody, Runtime, TupleBody, VariantBody};
-use crate::shape::{Aggregate, OwnedParts, Projected};
+use crate::runtime::{Crosses, Runtime};
+use crate::shape::{OwnedParts, Projected};
 
 /// The permission to release one value, made only by an owning holder's drop.
 pub struct Releasing {
@@ -81,15 +81,8 @@ impl<R: Runtime, S: Projected<R>> Uniform<R, S> {
 
     pub(crate) fn view(self, runtime: &R, at: Settled<'_>) -> S::Owned {
         let aggregate = self.into_value();
-        let parts = match S::AGGREGATE {
-            Aggregate::Tuple => OwnedParts::of_the_body(None, runtime.take_tuple(aggregate, at).into_parts()),
-            Aggregate::Object => OwnedParts::of_the_body(None, runtime.take_object(aggregate, at).into_fields()),
-            Aggregate::Variant => {
-                let (tag, payload) = runtime.take_variant(aggregate, at).into_payload();
-                OwnedParts::of_the_body(Some(tag), payload.into_iter())
-            }
-        };
-        S::owned(parts)
+        let (tag, parts) = runtime.take_apart(aggregate, at);
+        S::owned(OwnedParts::of_the_body(tag, parts))
     }
 }
 
@@ -136,7 +129,7 @@ mod tests {
     use crate::boundary::entry::Settled;
     use crate::boundary::signed::{LayoutFact, SignedS1, SignedS2, SignedS3, Structural};
     use crate::boundary::stored::LayoutWitness;
-    use crate::runtime::{Crosses, ObjectBody, RefTarget, Runtime, TupleBody, VariantBody};
+    use crate::runtime::{Crosses, RefTarget, Runtime};
 
     /// A value that counts its releases and names no storage.
     #[derive(Clone, Copy)]
@@ -165,28 +158,6 @@ mod tests {
 
     struct NoBody;
 
-    impl TupleBody<Counted> for NoBody {
-        fn into_parts(self) -> impl ExactSizeIterator<Item = Counted> {
-            unreachable!("the release tests make no tuple");
-            #[allow(unreachable_code)]
-            std::iter::empty()
-        }
-    }
-
-    impl ObjectBody<Counted> for NoBody {
-        fn into_fields(self) -> impl ExactSizeIterator<Item = Counted> {
-            unreachable!("the release tests make no object");
-            #[allow(unreachable_code)]
-            std::iter::empty()
-        }
-    }
-
-    impl VariantBody<Counted> for NoBody {
-        fn into_payload(self) -> (u32, Option<Counted>) {
-            unreachable!("the release tests make no variant")
-        }
-    }
-
     struct NoGuard<T: ?Sized>(PhantomData<fn() -> Box<T>>);
 
     impl<T: ?Sized> Deref for NoGuard<T> {
@@ -204,9 +175,6 @@ mod tests {
 
     impl Runtime for Counting {
         type Value = Counted;
-        type Tuple = NoBody;
-        type Object = NoBody;
-        type Variant = NoBody;
         type Shared<'a, T: Crosses + 'a> = NoGuard<T>;
         type Exclusive<'a, T: Crosses + 'a> = NoGuard<T>;
         type SharedSlice<'a, T: Crosses + 'a> = NoGuard<[T]>;
@@ -238,14 +206,10 @@ mod tests {
         fn shared_str<'a>(&'a self, _: &'a Counted, _: Settled<'a>) -> NoGuard<str> {
             unreachable!("the release tests lend no storage")
         }
-        fn take_tuple(&self, _: Counted, _: Settled<'_>) -> NoBody {
-            unreachable!("the release tests make no tuple")
-        }
-        fn take_object(&self, _: Counted, _: Settled<'_>) -> NoBody {
-            unreachable!("the release tests make no object")
-        }
-        fn take_variant(&self, _: Counted, _: Settled<'_>) -> NoBody {
-            unreachable!("the release tests make no variant")
+        fn take_apart(&self, _: Counted, _: Settled<'_>) -> (Option<u32>, impl ExactSizeIterator<Item = Counted>) {
+            unreachable!("the release tests take no aggregate apart");
+            #[allow(unreachable_code)]
+            (None, std::iter::empty())
         }
         fn make_tuple(&self, _: impl ExactSizeIterator<Item = Counted>, _: Settled<'_>) -> Counted {
             unreachable!("the release tests make no tuple")

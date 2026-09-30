@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::callback::RustCallee;
 use acvus_extern::done::Done;
-use acvus_extern::runtime::{Crosses, ObjectBody, RefTarget, Runtime, TupleBody, VariantBody};
+use acvus_extern::runtime::{Crosses, RefTarget, Runtime};
 use acvus_extern::seal::{ShapeViews, opaque};
 use acvus_extern::{
     LayoutFact, Release, Releasing, Settled, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
@@ -466,24 +466,6 @@ pub struct WordVariant {
     payload: Parts,
 }
 
-impl TupleBody<Word> for WordTuple {
-    fn into_parts(self) -> impl ExactSizeIterator<Item = Word> {
-        self.0.hand_over()
-    }
-}
-
-impl ObjectBody<Word> for WordObject {
-    fn into_fields(self) -> impl ExactSizeIterator<Item = Word> {
-        self.0.hand_over()
-    }
-}
-
-impl VariantBody<Word> for WordVariant {
-    fn into_payload(self) -> (u32, Option<Word>) {
-        (self.tag, self.payload.hand_over().next())
-    }
-}
-
 pub(crate) fn make_tuple(parts: impl ExactSizeIterator<Item = Word>, _at: Settled<'_>) -> Word {
     // SAFETY: under `Settled`, the crossing hands the parts' values over
     // (runtime contract §2, Aggregates).
@@ -512,19 +494,18 @@ unsafe fn unbox<B>(v: Word, kind: Kind) -> B {
     *unsafe { Box::from_raw(v.address::<B>()) }
 }
 
-pub(crate) fn take_tuple(v: Word, _at: Settled<'_>) -> WordTuple {
-    // SAFETY: under `Settled`, `v` is a tuple its one holder takes apart.
-    unsafe { unbox(v, Kind::Tuple) }
-}
-
-pub(crate) fn take_object(v: Word, _at: Settled<'_>) -> WordObject {
-    // SAFETY: as `take_tuple`'s, for an object.
-    unsafe { unbox(v, Kind::Object) }
-}
-
-pub(crate) fn take_variant(v: Word, _at: Settled<'_>) -> WordVariant {
-    // SAFETY: as `take_tuple`'s, for a variant.
-    unsafe { unbox(v, Kind::Variant) }
+pub(crate) fn take_apart(v: Word, _at: Settled<'_>) -> (Option<u32>, impl ExactSizeIterator<Item = Word>) {
+    // SAFETY: under `Settled`, `v` is an aggregate its one holder takes apart,
+    // boxed by the kind it carries; the box is freed and its parts handed over.
+    match v.kind {
+        Kind::Tuple => (None, unsafe { unbox::<WordTuple>(v, Kind::Tuple) }.0.hand_over()),
+        Kind::Object => (None, unsafe { unbox::<WordObject>(v, Kind::Object) }.0.hand_over()),
+        Kind::Variant => {
+            let variant = unsafe { unbox::<WordVariant>(v, Kind::Variant) };
+            (Some(variant.tag), variant.payload.hand_over())
+        }
+        kind => panic!("a value of kind {kind:?} is no aggregate to take apart"),
+    }
 }
 
 /// The aggregate a place holds: through a `Ref`, the aggregate it names; a

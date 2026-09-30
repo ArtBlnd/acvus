@@ -24,9 +24,6 @@ pub struct WordRuntime {
 
 impl Runtime for WordRuntime {
     type Value = Word;
-    type Tuple = WordTuple;
-    type Object = WordObject;
-    type Variant = WordVariant;
     type Shared<'a, T: Crosses + 'a> = &'a T;
     type Exclusive<'a, T: Crosses + 'a> = &'a mut T;
     type SharedSlice<'a, T: Crosses + 'a> = &'a [T];
@@ -61,16 +58,8 @@ impl Runtime for WordRuntime {
         boundary::text(v, at)
     }
 
-    fn take_tuple(&self, v: Word, at: Settled<'_>) -> WordTuple {
-        boundary::take_tuple(v, at)
-    }
-
-    fn take_object(&self, v: Word, at: Settled<'_>) -> WordObject {
-        boundary::take_object(v, at)
-    }
-
-    fn take_variant(&self, v: Word, at: Settled<'_>) -> WordVariant {
-        boundary::take_variant(v, at)
+    fn take_apart(&self, v: Word, at: Settled<'_>) -> (Option<u32>, impl ExactSizeIterator<Item = Word>) {
+        boundary::take_apart(v, at)
     }
 
     fn make_tuple(&self, parts: impl ExactSizeIterator<Item = Word>, at: Settled<'_>) -> Word {

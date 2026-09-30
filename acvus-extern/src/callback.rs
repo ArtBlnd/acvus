@@ -11,7 +11,7 @@ use crate::boundary::signed::tags::{ERR, NONE, OK, SOME};
 use crate::boundary::uniform::Uniform;
 use crate::context::{Awaited, Opens, Returning};
 use crate::done::Done;
-use crate::runtime::{Crosses, Mutability, RefTarget, Runtime, TupleBody, VariantBody};
+use crate::runtime::{Crosses, Mutability, RefTarget, Runtime};
 
 /// A callback of function type `Fn(A) -> U` at effect `E`, lent to the call
 /// `'c` (limitations §3: it carries the call's lifetime, so no handler keeps
@@ -73,8 +73,9 @@ pub struct Tup<Fs>(PhantomData<fn() -> Fs>);
 /// A variant handed over by a read, taken apart: its tag and its payload,
 /// each part held by a `Uniform` from here on.
 fn variant_parts<R: Runtime>(v: R::Value, rt: &R, at: Settled<'_>) -> (u32, Option<Uniform<R, ()>>) {
-    let (tag, payload) = rt.take_variant(v, at).into_payload();
-    (tag, payload.map(Uniform::of_the_crossing))
+    let (tag, mut payload) = rt.take_apart(v, at);
+    let tag = tag.expect("a variant taken apart gives its tag");
+    (tag, payload.next().map(Uniform::of_the_crossing))
 }
 
 impl<T: Crosses> LoanForm for T {
@@ -274,7 +275,7 @@ macro_rules! forms {
             #[allow(unused_variables, unused_mut, clippy::unused_unit)]
             fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Self::At<'l> {
                 let parts: Vec<Uniform<R, ()>> =
-                    rt.take_tuple(v, at).into_parts().map(Uniform::of_the_crossing).collect();
+                    rt.take_apart(v, at).1.map(Uniform::of_the_crossing).collect();
                 assert_eq!(parts.len(), $n, "a tuple read at its form has the form's arity");
                 let mut parts = parts.into_iter();
                 ($($f::read(parts.next().expect("the arity was checked").into_value(), rt, at),)*)

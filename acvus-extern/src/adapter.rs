@@ -292,9 +292,6 @@ impl<G> Drop for Tracked<'_, G> {
 
 impl<X: Runtime + Validate> Runtime for Adapter<X> {
     type Value = X::Value;
-    type Tuple = X::Tuple;
-    type Object = X::Object;
-    type Variant = X::Variant;
     type Shared<'a, T: Crosses + 'a> = Tracked<'a, X::Shared<'a, T>>;
     type Exclusive<'a, T: Crosses + 'a> = Tracked<'a, X::Exclusive<'a, T>>;
     type SharedSlice<'a, T: Crosses + 'a> = Tracked<'a, X::SharedSlice<'a, T>>;
@@ -335,16 +332,8 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
         self.track(self.inner.shared_str(v, at), Mutability::Shared)
     }
 
-    fn take_tuple(&self, v: Self::Value, at: Settled<'_>) -> Self::Tuple {
-        self.inner.take_tuple(v, at)
-    }
-
-    fn take_object(&self, v: Self::Value, at: Settled<'_>) -> Self::Object {
-        self.inner.take_object(v, at)
-    }
-
-    fn take_variant(&self, v: Self::Value, at: Settled<'_>) -> Self::Variant {
-        self.inner.take_variant(v, at)
+    fn take_apart(&self, v: Self::Value, at: Settled<'_>) -> (Option<u32>, impl ExactSizeIterator<Item = Self::Value>) {
+        self.inner.take_apart(v, at)
     }
 
     fn make_tuple(&self, parts: impl ExactSizeIterator<Item = Self::Value>, at: Settled<'_>) -> Self::Value {

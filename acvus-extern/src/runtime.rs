@@ -41,28 +41,8 @@ pub enum RefTarget<'a, P: ?Sized> {
     Exclusive(&'a mut P),
 }
 
-/// A tuple's body: its parts, handed over together, each then owned by the
-/// `Uniform` that holds it; nothing tracks which were handed.
-pub trait TupleBody<V>: Send + Sync + 'static {
-    fn into_parts(self) -> impl ExactSizeIterator<Item = V>;
-}
-
-/// An object's body: its fields in the type's order (compiler: types §2),
-/// handed over together.
-pub trait ObjectBody<V>: Send + Sync + 'static {
-    fn into_fields(self) -> impl ExactSizeIterator<Item = V>;
-}
-
-/// A variant's body: its tag, its place in the enum's order, and its payload.
-pub trait VariantBody<V>: Send + Sync + 'static {
-    fn into_payload(self) -> (u32, Option<V>);
-}
-
 pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS3 {
     type Value: Release + Send + Sync + 'static;
-    type Tuple: TupleBody<Self::Value>;
-    type Object: ObjectBody<Self::Value>;
-    type Variant: VariantBody<Self::Value>;
 
     /// A shared lend of storage; its borrow is the lend. Every guard is
     /// `Send`, as what it lends is (`Crosses`), so an awaited body holds one
@@ -100,12 +80,13 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     ) -> Self::ExclusiveSlice<'a, T>;
     fn shared_str<'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedStr<'a>;
 
-    /// An aggregate handed over, taken apart into its parts, each then held
-    /// by a `Uniform`: a shape's owned view, and a callback's result read at
-    /// its loan form.
-    fn take_tuple(&self, v: Self::Value, at: Settled<'_>) -> Self::Tuple;
-    fn take_object(&self, v: Self::Value, at: Settled<'_>) -> Self::Object;
-    fn take_variant(&self, v: Self::Value, at: Settled<'_>) -> Self::Variant;
+    /// An aggregate handed over, taken apart: its own storage released, and
+    /// its parts' values handed over in the type's order, each then held by a
+    /// `Uniform`; a variant's tag with them. A tuple's or an object's layout
+    /// is the backend's (crossing §2), so no Rust value of it exists to take;
+    /// this is the one way to own its parts apart, and only a `Uniform`'s
+    /// conversion into a shape's owned view calls it.
+    fn take_apart(&self, v: Self::Value, at: Settled<'_>) -> (Option<u32>, impl ExactSizeIterator<Item = Self::Value>);
 
     /// Makes an aggregate at its settled type from its parts' values, which
     /// it then owns (runtime contract §2, Aggregates).
