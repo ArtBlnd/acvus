@@ -7,7 +7,7 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 use crate::check::{RefusalKind, check};
 use crate::decl::{Core, Declarations, DeclaredFacts, LoopMarkers, RawDeclarations, Scheme};
 use crate::lower::lower_script;
-use crate::passes::analysis::AnalysisManager;
+use crate::passes::analysis::{AnalysisManager, MatchFacts, assert_intervals_within_types};
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Poly, TyId, TyKind, Types};
 use crate::typeck::check_script;
 
@@ -81,6 +81,10 @@ impl Fixture {
         assert!(typeck.refusals.is_empty(), "typeck refused {source}: {:?}", typeck.refusals);
         let module = lower_script(&decls, &typeck, types, &script);
         let mut am = AnalysisManager::new(&decls);
+        for body in module.body_ids() {
+            let matches = am.get::<MatchFacts>(&module, body);
+            assert_intervals_within_types(&module, body, |value| matches.of(value).interval.clone());
+        }
         check(&module, &mut am)
             .into_iter()
             .map(|refusal| (refusal.kind, source[refusal.span.start..refusal.span.end].to_string()))

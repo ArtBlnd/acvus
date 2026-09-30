@@ -287,10 +287,6 @@ where
 {
     type Domain = D;
 
-    fn domain(&self) -> &D {
-        &self.domain
-    }
-
     fn transfer(&self, inst: &Inst, operands: &[&D::Value]) -> D::Value {
         match (inst.op(), operands) {
             (Op::Const { value }, []) => {
@@ -600,10 +596,6 @@ struct Ranges<'m>(Scalars<'m>);
 impl SparseAnalysis for Ranges<'_> {
     type Domain = ConstDomain;
 
-    fn domain(&self) -> &ConstDomain {
-        &ConstDomain
-    }
-
     fn transfer(&self, inst: &Inst, operands: &[&Const]) -> Const {
         Propagate { domain: ConstDomain, scalars: self.0 }.transfer(inst, operands)
     }
@@ -684,10 +676,6 @@ struct TokenBlind<'m>(Scalars<'m>);
 
 impl SparseAnalysis for TokenBlind<'_> {
     type Domain = ConstDomain;
-
-    fn domain(&self) -> &ConstDomain {
-        &ConstDomain
-    }
 
     fn transfer(&self, inst: &Inst, operands: &[&Const]) -> Const {
         match inst.op() {

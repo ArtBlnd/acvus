@@ -96,6 +96,27 @@ impl OperandTypes<'_> {
         matches!(self.of(value), Some(CastTy::Int(_)))
     }
 
+    /// `value`'s interval where nothing in the body bounds it: an integer
+    /// value is one of its type (undefined behaviour §2: every value the
+    /// run computes lies in its type; extern fn §9: a parameter is a valid
+    /// value of its type).
+    pub(super) fn interval_top(&self, value: ValueId) -> Interval {
+        match self.of(value) {
+            Some(CastTy::Int(width)) => Interval::of_width(width),
+            _ => Interval::full(),
+        }
+    }
+
+    /// Widens `value`'s interval by `next` with thresholds, an integer
+    /// value's being its type's bounds: a growing end goes to its type's
+    /// bound. Whether `fact` rose.
+    pub(super) fn widen_interval(&self, value: ValueId, fact: &mut Interval, next: &Interval) -> bool {
+        match self.of(value) {
+            Some(CastTy::Int(width)) => fact.widen_to(next, Bound::Finite(width.min()), Bound::Finite(width.max())),
+            _ => fact.widen(next),
+        }
+    }
+
     /// Whether `value` is a reference to a slice, whose element count no
     /// run changes while it exists.
     fn is_slice(&self, value: ValueId) -> bool {
@@ -135,10 +156,6 @@ struct Constants<'m> {
 
 impl SparseAnalysis for Constants<'_> {
     type Domain = ConstantDomain;
-
-    fn domain(&self) -> &ConstantDomain {
-        &ConstantDomain
-    }
 
     fn transfer(&self, inst: &Inst, operands: &[&Constant]) -> Constant {
         self.operand_types.value_operation(&ConstantDomain, inst, operands).unwrap_or(Constant::Top)
@@ -222,10 +239,6 @@ struct Intervals<'m> {
 impl SparseAnalysis for Intervals<'_> {
     type Domain = IntervalDomain;
 
-    fn domain(&self) -> &IntervalDomain {
-        &IntervalDomain
-    }
-
     /// An instruction that is no value operation yields its result's `top`,
     /// within what a call's declared Relations put it in.
     fn transfer(&self, inst: &Inst, operands: &[&Interval]) -> Interval {
@@ -269,23 +282,12 @@ impl SparseAnalysis for Intervals<'_> {
         }
     }
 
-    /// An integer value is one of its type (undefined behaviour §2: every
-    /// value the run computes lies in its type; extern fn §9: a parameter
-    /// is a valid value of its type).
     fn top(&self, value: ValueId) -> Interval {
-        match self.operand_types.of(value) {
-            Some(CastTy::Int(width)) => Interval::of_width(width),
-            _ => Interval::full(),
-        }
+        self.operand_types.interval_top(value)
     }
 
-    /// Widening with thresholds, an integer value's being its type's
-    /// bounds: a growing end goes to its type's bound.
     fn widen(&self, value: ValueId, fact: &mut Interval, next: &Interval) -> bool {
-        match self.operand_types.of(value) {
-            Some(CastTy::Int(width)) => fact.widen_to(next, Bound::Finite(width.min()), Bound::Finite(width.max())),
-            _ => fact.widen(next),
-        }
+        self.operand_types.widen_interval(value, fact, next)
     }
 }
 
@@ -376,10 +378,6 @@ impl Affines<'_> {
 
 impl SparseAnalysis for Affines<'_> {
     type Domain = AffineDomain;
-
-    fn domain(&self) -> &AffineDomain {
-        &AffineDomain
-    }
 
     /// An operand of no known combination is read as itself.
     fn transfer(&self, inst: &Inst, operands: &[&Affine]) -> Affine {
@@ -600,6 +598,24 @@ impl ValueBounds<'_> {
     }
 }
 
+/// Asserts that `interval` gives each integer value of `id` a fact within
+/// its type's range.
+#[cfg(test)]
+pub(crate) fn assert_intervals_within_types<F>(module: &Module, id: BodyId, interval: F)
+where
+    F: Fn(ValueId) -> Interval,
+{
+    use crate::passes::domain::JoinSemiLattice;
+
+    let body = module.body(id);
+    for value in body.values().filter(|value| !body.is_token(*value)) {
+        if let TyKind::Int(width) = module.types().kind(body.ty_of(value)) {
+            let fact = interval(value);
+            assert!(fact.le(&Interval::of_width(*width)), "{value:?}'s interval {fact:?} lies outside its type {}", width.name());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use acvus_ast::Span;
@@ -672,20 +688,12 @@ mod tests {
     }
 
     /// The body's intervals, each integer value's checked to lie within
-    /// its type's range.
+    /// its type's range, as is each one's interval under `MatchFacts`.
     fn intervals_within_types(module: &Module, decls: &Declarations, id: BodyId) -> std::rc::Rc<SparseFacts<IntervalDomain>> {
         let intervals = facts::<IntervalValues>(module, decls, id);
-        let body = module.body(id);
-        for value in body.values().filter(|value| !body.is_token(*value)) {
-            if let TyKind::Int(width) = module.types().kind(body.ty_of(value)) {
-                let fact = intervals.of(value);
-                assert!(
-                    fact.le(&Interval::of_width(*width)),
-                    "{value:?}'s interval {fact:?} lies outside its type {}",
-                    width.name()
-                );
-            }
-        }
+        assert_intervals_within_types(module, id, |value| intervals.of(value).clone());
+        let matches = facts::<crate::passes::analysis::MatchFacts>(module, decls, id);
+        assert_intervals_within_types(module, id, |value| matches.of(value).interval.clone());
         intervals
     }
 

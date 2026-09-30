@@ -38,8 +38,6 @@ pub enum Executable {
 pub trait SparseAnalysis {
     type Domain: ValueDomain;
 
-    fn domain(&self) -> &Self::Domain;
-
     /// The fact of an instruction's result from its operands' facts, in the
     /// order the instruction lists its operands, order tokens left out.
     fn transfer(

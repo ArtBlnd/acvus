@@ -12,6 +12,10 @@
 //!   included. A `src` that is a reference has tags `Any`.
 //! - Every other: top.
 //!
+//! A value's top and its widening at a loop header are `IntervalValues`'
+//! for the interval: an integer value's interval lies within its type's
+//! range, and a growing end widens to its type's bound.
+//!
 //! Which successors run (`executable`):
 //! - `Diamond`, `JumpIf`: by the condition's constant, as `ConstantValues`.
 //! - `Switch` on `Tag` keys: the set is the tag value's tags, `Any` read as
@@ -335,21 +339,18 @@ fn branch(condition: &Constant, on_true: BlockId, on_false: BlockId) -> Executab
 impl SparseAnalysis for Matches<'_> {
     type Domain = MatchDomain;
 
-    fn domain(&self) -> &MatchDomain {
-        &self.domain
-    }
-
     fn transfer(&self, inst: &Inst, operands: &[&MatchValue]) -> MatchValue {
         if let Some(value) = self.operand_types.value_operation(&self.domain, inst, operands) {
             return value;
         }
+        let result = inst.result().expect("the engine evaluates an instruction that yields a value");
         match (inst.op(), operands) {
-            (Op::MakeVariant { tag, .. }, _) => MatchValue { tags: Tags::Of(BTreeSet::from([*tag])), ..self.domain.top() },
+            (Op::MakeVariant { tag, .. }, _) => MatchValue { tags: Tags::Of(BTreeSet::from([*tag])), ..self.top(result) },
             (Op::TestVariant { src, tag }, [src_fact]) => {
-                MatchValue { constant: self.tested(*src, *tag, &src_fact.tags), ..self.domain.top() }
+                MatchValue { constant: self.tested(*src, *tag, &src_fact.tags), ..self.top(result) }
             }
             (Op::TestVariant { .. }, _) => panic!("a TestVariant is handed {} operand facts, not one", operands.len()),
-            _ => self.domain.top(),
+            _ => self.top(result),
         }
     }
 
@@ -371,16 +372,22 @@ impl SparseAnalysis for Matches<'_> {
     }
 
     /// What a terminator fills itself, a `For`'s counter or element, is no
-    /// instruction the tables name: top.
-    fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&MatchValue]) -> MatchValue {
-        self.domain.top()
+    /// instruction the tables name: its top.
+    fn supplied(&self, _terminator: &Terminator, to: BlockId, index: usize, _operands: &[&MatchValue]) -> MatchValue {
+        self.top(self.operand_types.body.block(to).params()[index])
     }
 
-    fn top(&self, _value: ValueId) -> MatchValue {
-        self.domain.top()
+    /// Each component's top, the interval's by `IntervalValues`' rule.
+    fn top(&self, value: ValueId) -> MatchValue {
+        MatchValue { interval: self.operand_types.interval_top(value), ..self.domain.top() }
     }
 
-    fn widen(&self, _value: ValueId, fact: &mut MatchValue, next: &MatchValue) -> bool {
-        fact.widen(next)
+    /// Each component widens by its own domain, the interval by
+    /// `IntervalValues`' rule.
+    fn widen(&self, value: ValueId, fact: &mut MatchValue, next: &MatchValue) -> bool {
+        let tags = fact.tags.widen(&next.tags);
+        let constant = fact.constant.widen(&next.constant);
+        let interval = self.operand_types.widen_interval(value, &mut fact.interval, &next.interval);
+        tags || constant || interval
     }
 }
