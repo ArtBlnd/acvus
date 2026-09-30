@@ -4,7 +4,7 @@
 //!   block's start, `{v1, v2}`.
 //! - `InitAnnotations`, key `init`: before each instruction, each unit of
 //!   each place `Initialization` tracks, a storage outside the body as
-//!   `*p0#n` (`LoanAnnotations`'), `slot0.a=W` written on every path
+//!   `*p0#n` and a context as `@c` (`LoanAnnotations`'), `slot0.a=W` written on every path
 //!   that reaches, `N` left unwritten by some path, `M@start..end` moved out
 //!   at that span by some path, several joined by `|`.
 //! - `LoanAnnotations`, key `loans`: each value defined by the instruction
@@ -62,28 +62,36 @@ impl<'a> InitAnnotations<'a> {
     }
 
     /// Every place the analysis tracks, in the order their names print,
-    /// each outside storage after its parameter's or capture's own.
+    /// each outside storage after its parameter's or capture's own, and
+    /// the contexts after them all, by name.
     fn places(&self, names: &Names<'_>) -> Vec<Storage> {
         let mut places: Vec<Storage> = self.initialization.places().collect();
-        let mut roots: Vec<ValueId> = places.iter().map(|place| root(*place)).collect();
+        let mut roots: Vec<ValueId> = places.iter().filter_map(|place| root(*place)).collect();
         names.sort_values(&mut roots);
-        let order = |place: &Storage| roots.iter().position(|value| *value == root(*place));
-        places.sort_by_key(|place| (order(place), matches!(place, Storage::Outside { .. }), outside_position(*place)));
+        let order = |place: &Storage| root(*place).and_then(|root| roots.iter().position(|value| *value == root));
+        let context = |place: &Storage| match place {
+            Storage::Context(context) => Some(crate::ty::print::qualified(self.interner, *context)),
+            Storage::Slot(_) | Storage::Param(_) | Storage::Outside { .. } => None,
+        };
+        places.sort_by_key(|place| {
+            (context(place), order(place), matches!(place, Storage::Outside { .. }), outside_position(*place))
+        });
         places
     }
 }
 
-/// The value a place is the storage of, or lent by.
-fn root(place: Storage) -> ValueId {
+/// The value a place is the storage of, or lent by; none for a context.
+fn root(place: Storage) -> Option<ValueId> {
     match place {
-        Storage::Slot(value) | Storage::Param(value) | Storage::Outside { of: value, .. } => value,
+        Storage::Slot(value) | Storage::Param(value) | Storage::Outside { of: value, .. } => Some(value),
+        Storage::Context(_) => None,
     }
 }
 
 fn outside_position(place: Storage) -> usize {
     match place {
         Storage::Outside { position, .. } => position,
-        Storage::Slot(_) | Storage::Param(_) => 0,
+        Storage::Slot(_) | Storage::Param(_) | Storage::Context(_) => 0,
     }
 }
 
@@ -105,7 +113,7 @@ impl Annotate for InitAnnotations<'_> {
     fn before(&self, names: &Names<'_>, inst: InstId) -> Vec<(&'static str, String)> {
         let mut units: Vec<String> = Vec::new();
         for place in self.places(names) {
-            let root = storage(names, place);
+            let root = storage(names, self.interner, place);
             let mut held: Vec<String> = self
                 .initialization
                 .before(Site::Inst(inst), place, &[])
@@ -140,7 +148,7 @@ impl<'a> LoanAnnotations<'a> {
 
     /// `slot0.b~ mut @25..33`.
     fn loan(&self, names: &Names<'_>, loan: &Loan) -> String {
-        let mut text = storage(names, loan.storage);
+        let mut text = storage(names, self.interner, loan.storage);
         text.push_str(&print::path(self.interner, &loan.path));
         if !loan.exact {
             text.push('~');
@@ -161,11 +169,13 @@ impl<'a> LoanAnnotations<'a> {
 }
 
 /// A slot or a parameter's own storage by its value, `slot0`; what position
-/// `n` of a parameter or capture names outside the body, `*p0#n`.
-fn storage(names: &Names<'_>, storage: Storage) -> String {
+/// `n` of a parameter or capture names outside the body, `*p0#n`; a
+/// context by its name, `@c`.
+fn storage(names: &Names<'_>, interner: &Interner, storage: Storage) -> String {
     match storage {
         Storage::Slot(value) | Storage::Param(value) => names.value(value),
         Storage::Outside { of, position } => format!("*{}#{position}", names.value(of)),
+        Storage::Context(context) => format!("@{}", crate::ty::print::qualified(interner, context)),
     }
 }
 

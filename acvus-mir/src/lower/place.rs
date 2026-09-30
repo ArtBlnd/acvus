@@ -1,4 +1,4 @@
-//! Places: a binding, a context held in a slot, a field, `a[i]` through the
+//! Places: a binding, a context, a field, `a[i]` through the
 //! recorded `as_slice(_mut)` or the language's own view of an array
 //! (operators §3, extern-fn §1), and `*r`. A place is read by a `Take`,
 //! lent by a `Ref`, and written by an `Assign`; `&` of a reference is a
@@ -11,7 +11,7 @@ use acvus_utils::QualifiedRef;
 
 use super::call::convert;
 use super::context;
-use super::ctxt::{ContextHome, Home, Lcx};
+use super::ctxt::{Home, Lcx};
 use super::expr::lower_expr;
 use crate::ir::cfg::Op;
 use crate::ir::{IndexBound, IndexMode, PathSeg, RefTarget, ValueId, is_word};
@@ -63,7 +63,7 @@ pub(super) fn operand<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>, mutability:
         Expr::Ident { id, name, ref_kind: RefKind::ExternParam, .. } => {
             Operand::Place(input_place(cx, name.name, cx.ty(*id)))
         }
-        Expr::ContextRef { id, name, span } => context_operand(cx, *name, cx.ty(*id), *span),
+        Expr::ContextRef { id, name, .. } => Operand::Place(context::context_place(*name, cx.ty(*id))),
         Expr::FieldAccess { object, field, span, .. } => {
             let object = operand(cx, object, mutability);
             let ty = part_ty(cx, &object, *field);
@@ -111,12 +111,6 @@ pub(super) fn input_place(cx: &Lcx<'_, '_>, name: acvus_utils::Astr, ty: Ty) -> 
     Place { target, path: Vec::new(), ty }
 }
 
-fn context_operand(cx: &mut Lcx<'_, '_>, context: QualifiedRef, ty: Ty, span: Span) -> Operand {
-    match cx.context_home(context) {
-        ContextHome::Slot(slot) => Operand::Place(Place { target: RefTarget::Var(slot), path: Vec::new(), ty }),
-        ContextHome::Volatile => Operand::Value(context::load(cx, context, ty, span)),
-    }
-}
 
 /// Field `field` of `object`, through a reference as Rust auto-derefs.
 /// Field `field` of `object`, a place of type `ty`: a reference on the way
@@ -223,7 +217,7 @@ pub(super) fn read(cx: &mut Lcx<'_, '_>, operand: Operand, span: Span) -> ValueI
     match operand {
         Operand::Place(place) => {
             let op = Op::Take { target: place.target, path: place.path, taken_out: false };
-            cx.builder.push(op, place.ty, span)
+            cx.push_place(op, place.ty, span)
         }
         Operand::Value(value) => value,
     }
@@ -251,7 +245,7 @@ pub(super) fn lend(cx: &mut Lcx<'_, '_>, operand: Operand, mutability: Mutabilit
         }
     };
     let ty = cx.ref_ty(mutability, place.ty);
-    cx.builder.push(Op::Ref { target: place.target, path: place.path, mutability }, ty, span)
+    cx.push_place(Op::Ref { target: place.target, path: place.path, mutability }, ty, span)
 }
 
 /// `reference`, a `made` reference to `target`, as a `wanted` one: itself
@@ -438,73 +432,45 @@ pub(super) fn lower_deref<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, reference:
     read(cx, Operand::Place(place), span)
 }
 
-/// Where a store writes: a place, or a part of a volatile context, which
-/// is loaded, written and committed whole (context §3).
-enum StoreTarget {
-    Place(Place),
-    Volatile { context: QualifiedRef, path: Vec<PathSeg>, whole: Ty },
-}
-
 /// `place = value`: the value is evaluated first, as Rust does, and enters
 /// the place's type at its own site.
 pub(super) fn lower_store<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>, value: &Expr<S>, span: Span) {
     let stored = lower_expr(cx, value);
     let stored = convert(cx, value.id(), stored, value.span());
-    match store_target(cx, place) {
-        StoreTarget::Place(place) => assign(cx, place, stored, span),
-        StoreTarget::Volatile { context, path, .. } if path.is_empty() => context::commit(cx, context, stored, span),
-        StoreTarget::Volatile { context, path, whole } => {
-            let loaded = context::load(cx, context, whole, span);
-            let slot = cx.builder.slot(whole, span);
-            let whole_place = Place { target: RefTarget::Var(slot), path: Vec::new(), ty: whole };
-            assign(cx, whole_place.clone(), loaded, span);
-            let part = Place { target: RefTarget::Var(slot), path, ty: cx.ty(place.id()) };
-            assign(cx, part, stored, span);
-            let written = read(cx, Operand::Place(whole_place), span);
-            context::commit(cx, context, written, span);
-        }
-    }
+    let place = store_target(cx, place);
+    assign(cx, place, stored, span);
 }
 
 pub(super) fn assign(cx: &mut Lcx<'_, '_>, place: Place, value: ValueId, span: Span) {
     let op = Op::Assign { target: place.target, path: place.path, value, restores: false };
-    cx.builder.push_unit(op, span);
+    cx.push_store(op, span);
 }
 
-fn store_target<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>) -> StoreTarget {
+fn store_target<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>) -> Place {
     let ty = cx.ty(place.id());
     match place {
         AstPlace::Base(PlaceBase::Root { id, root, .. }) => match root {
             Root::Local(_) => match cx.typeck.names.get(id) {
-                Some(Name::Binding(binder)) => StoreTarget::Place(binding_place(cx, *binder, ty)),
+                Some(Name::Binding(binder)) => binding_place(cx, *binder, ty),
                 other => panic!("a store's root names a binding in an admitted program, not {other:?}"),
             },
-            Root::Context(name) => {
-                let context = QualifiedRef::root(*name);
-                match cx.context_home(context) {
-                    ContextHome::Slot(slot) => {
-                        StoreTarget::Place(Place { target: RefTarget::Var(slot), path: Vec::new(), ty })
-                    }
-                    ContextHome::Volatile => StoreTarget::Volatile { context, path: Vec::new(), whole: ty },
-                }
-            }
+            Root::Context(name) => context::context_place(QualifiedRef::root(*name), ty),
             Root::ExternParam(_) => panic!("an input is never assigned (programs §4); typeck refuses the store"),
         },
         AstPlace::Base(PlaceBase::Element { callee_id, container, index, span, .. }) => {
             let reference = element_ref(cx, container.expr(), *callee_id, index, Mutability::Mut, ty, *span);
-            StoreTarget::Place(Place { target: RefTarget::Through(reference), path: Vec::new(), ty })
+            Place { target: RefTarget::Through(reference), path: Vec::new(), ty }
         }
-        AstPlace::Field { object, field, span, .. } => match store_target(cx, object) {
-            StoreTarget::Place(object) if is_ref(cx, object.ty) => {
-                let reference = read(cx, Operand::Place(object), *span);
-                StoreTarget::Place(Place { target: RefTarget::Through(reference), path: vec![PathSeg::Field(*field)], ty })
+        AstPlace::Field { object, field, span, .. } => {
+            let object = store_target(cx, object);
+            match is_ref(cx, object.ty) {
+                true => {
+                    let reference = read(cx, Operand::Place(object), *span);
+                    Place { target: RefTarget::Through(reference), path: vec![PathSeg::Field(*field)], ty }
+                }
+                false => object.with(PathSeg::Field(*field), ty),
             }
-            StoreTarget::Place(object) => StoreTarget::Place(object.with(PathSeg::Field(*field), ty)),
-            StoreTarget::Volatile { context, mut path, whole } => {
-                path.push(PathSeg::Field(*field));
-                StoreTarget::Volatile { context, path, whole }
-            }
-        },
+        }
     }
 }
 

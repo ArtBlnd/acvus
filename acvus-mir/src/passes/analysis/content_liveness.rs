@@ -1,16 +1,19 @@
-//! For each place the body owns, a slot or a by-value parameter's own
-//! storage, whether its current content may be read before a whole store
-//! replaces it or the body ends: the dense engine, backward, over sets of
-//! places, each named by its slot or its parameter. A site gens every such
-//! place `Loans` says it reads, directly or through a reference; a store
-//! into a whole place by name kills it. A store into part of a place, or
-//! into a place through a reference, kills nothing, so a place is live
-//! wherever those leave it in doubt. A `Fetch` into a context's slot is a
-//! store into it whole, and a `Commit` from it reads it whole (context §3).
-//! The body's end reads none of its own places.
+//! For each place the body names by name, a slot, a by-value parameter's
+//! own storage or a context, whether its current content may be read
+//! before a whole store replaces it or the body ends: the dense engine,
+//! backward, over sets of places, each named by its `Storage`. A site gens
+//! every such place `Loans` says it reads, directly or through a
+//! reference; a store into a whole place by name kills it, as does any
+//! other write `Loans` records by name of a whole place, such as a call's
+//! write of a context it sees beyond the program (context §1). A store
+//! into part of a place, or into a place through a reference, kills
+//! nothing, so a place is live wherever those leave it in doubt. The body's
+//! end reads none of its own places; a `Return` reads every context
+//! (`Loans`).
 //!
 //! `Liveness` answers for values; this answers for what a place holds, which
-//! a place's own `ValueId` does not follow, since every access names it.
+//! a slot's or a parameter's own `ValueId` does not follow, since every
+//! access names it.
 //!
 //! The same answer is kept per part (ownership §6), for each place whose
 //! type does not copy: its units (`ir::parts`), cut where the body moves a
@@ -22,9 +25,9 @@
 //! covering the unit kills it. Beside it, forward, each unit's presence:
 //! a store by name into a path covering it fills it, and a `Take` that
 //! moves a covering path out of it, by name or through a reference to it
-//! alone, empties it. A `Fetch` into a context's slot fills it, and a
-//! `Commit` from it empties it. A slot starts empty and a by-value
-//! parameter's storage full.
+//! alone, empties it; any other write by name of a whole place fills it. A
+//! slot starts empty, and a by-value parameter's storage and a context
+//! full.
 //!
 //! Cost: `Loans`', and then a block's state only grows, at most once per
 //! place or unit, and each growth re-runs the transfer of the block, so
@@ -39,9 +42,10 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Committed, Definition, Edge, Inst, InstId, Module, Op, Site, Terminator};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Edge, Inst, InstId, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
+use crate::ty::Ty;
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Reach, Storage, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::{Concrete, Types, copies};
@@ -53,9 +57,9 @@ pub struct ContentLiveness {
     position: FxHashMap<InstId, (BlockId, usize)>,
     /// Per block, the places live before each instruction, and last the
     /// places live before its terminator.
-    before: FxHashMap<BlockId, Vec<FxHashSet<ValueId>>>,
-    at_end: FxHashMap<BlockId, FxHashSet<ValueId>>,
-    units: FxHashMap<ValueId, Vec<Path>>,
+    before: FxHashMap<BlockId, Vec<FxHashSet<Storage>>>,
+    at_end: FxHashMap<BlockId, FxHashSet<Storage>>,
+    units: FxHashMap<Storage, Vec<Path>>,
     /// Per block, the units live before each instruction and before its
     /// terminator, and after it.
     parts_before: FxHashMap<BlockId, Vec<FxHashSet<UnitId>>>,
@@ -66,7 +70,7 @@ pub struct ContentLiveness {
 }
 
 /// A unit of a place: the place, and the unit's index among its units.
-type UnitId = (ValueId, usize);
+type UnitId = (Storage, usize);
 
 /// Whether a unit of a place holds its content at a point, over the paths
 /// that reach it.
@@ -96,7 +100,7 @@ impl ContentLiveness {
     ///
     /// # Panics
     /// `site` is not a site of the body.
-    pub fn live_after(&self, site: Site) -> &FxHashSet<ValueId> {
+    pub fn live_after(&self, site: Site) -> &FxHashSet<Storage> {
         match site {
             Site::Inst(inst) => {
                 let (block, index) = self.position_of(inst);
@@ -116,7 +120,7 @@ impl ContentLiveness {
     ///
     /// # Panics
     /// `block` is not a block of the body.
-    pub fn live_at_start(&self, block: BlockId) -> &FxHashSet<ValueId> {
+    pub fn live_at_start(&self, block: BlockId) -> &FxHashSet<Storage> {
         &self.points(block)[0]
     }
 
@@ -125,7 +129,7 @@ impl ContentLiveness {
     ///
     /// # Panics
     /// `inst` is not an instruction of the body.
-    pub fn live_before(&self, inst: InstId) -> &FxHashSet<ValueId> {
+    pub fn live_before(&self, inst: InstId) -> &FxHashSet<Storage> {
         let (block, index) = self.position_of(inst);
         &self.points(block)[index]
     }
@@ -135,7 +139,7 @@ impl ContentLiveness {
     ///
     /// # Panics
     /// `block` is not a block of the body.
-    pub fn live_before_terminator(&self, block: BlockId) -> &FxHashSet<ValueId> {
+    pub fn live_before_terminator(&self, block: BlockId) -> &FxHashSet<Storage> {
         self.points(block).last().expect("a block's points end before its terminator")
     }
 
@@ -144,18 +148,18 @@ impl ContentLiveness {
     ///
     /// # Panics
     /// `block` is not a block of the body.
-    pub fn live_at_end(&self, block: BlockId) -> &FxHashSet<ValueId> {
+    pub fn live_at_end(&self, block: BlockId) -> &FxHashSet<Storage> {
         self.at_end.get(&block).expect("content liveness covers every block of its body")
     }
 
-    fn points(&self, block: BlockId) -> &[FxHashSet<ValueId>] {
+    fn points(&self, block: BlockId) -> &[FxHashSet<Storage>] {
         self.before.get(&block).expect("content liveness covers every block of its body")
     }
 
-    /// The units of `place`, a slot or a by-value parameter's own storage
-    /// whose type does not copy, in the order the body cuts them; `[[]]`
-    /// where nothing cuts it. `None` for any other value. Cost: O(1).
-    pub fn units(&self, place: ValueId) -> Option<&[Path]> {
+    /// The units of `place`, a slot, a by-value parameter's own storage or
+    /// a context, whose type does not copy, in the order the body cuts them;
+    /// `[[]]` where nothing cuts it. `None` for any other place. Cost: O(1).
+    pub fn units(&self, place: Storage) -> Option<&[Path]> {
         self.units.get(&place).map(Vec::as_slice)
     }
 
@@ -165,12 +169,12 @@ impl ContentLiveness {
     ///
     /// # Panics
     /// `place` has no units, or `inst` is not an instruction of the body.
-    pub fn part_live_before(&self, inst: InstId, place: ValueId, path: &[PathSeg]) -> bool {
+    pub fn part_live_before(&self, inst: InstId, place: Storage, path: &[PathSeg]) -> bool {
         let (block, index) = self.position_of(inst);
         self.part_live_at(block, index, place, path)
     }
 
-    fn part_live_at(&self, block: BlockId, index: usize, place: ValueId, path: &[PathSeg]) -> bool {
+    fn part_live_at(&self, block: BlockId, index: usize, place: Storage, path: &[PathSeg]) -> bool {
         let points = self.parts_before.get(&block).expect("content liveness covers every block of its body");
         let live = points.get(index).unwrap_or_else(|| panic!("{block:?} has no position {index}"));
         self.overlapping(place, path).any(|unit| live.contains(&unit))
@@ -178,7 +182,7 @@ impl ContentLiveness {
 
     /// As `part_live_before`, from just after the instruction or terminator
     /// at `site`. Cost: O(units of `place`).
-    pub fn part_live_after(&self, site: Site, place: ValueId, path: &[PathSeg]) -> bool {
+    pub fn part_live_after(&self, site: Site, place: Storage, path: &[PathSeg]) -> bool {
         match site {
             Site::Inst(inst) => {
                 let (block, index) = self.position_of(inst);
@@ -190,20 +194,20 @@ impl ContentLiveness {
 
     /// As `part_live_before`, from just before `block`'s terminator. Cost:
     /// O(units of `place`).
-    pub fn part_live_before_terminator(&self, block: BlockId, place: ValueId, path: &[PathSeg]) -> bool {
+    pub fn part_live_before_terminator(&self, block: BlockId, place: Storage, path: &[PathSeg]) -> bool {
         let points = self.parts_before.get(&block).expect("content liveness covers every block of its body");
         let live = points.last().expect("a block's points end before its terminator");
         self.overlapping(place, path).any(|unit| live.contains(&unit))
     }
 
     /// As `part_live_before`, from `block`'s start. Cost: O(units of `place`).
-    pub fn part_live_at_start(&self, block: BlockId, place: ValueId, path: &[PathSeg]) -> bool {
+    pub fn part_live_at_start(&self, block: BlockId, place: Storage, path: &[PathSeg]) -> bool {
         self.part_live_at(block, 0, place, path)
     }
 
     /// As `part_live_before`, after `block`'s terminator, on its way into a
     /// successor. Cost: O(units of `place`).
-    pub fn part_live_at_end(&self, block: BlockId, place: ValueId, path: &[PathSeg]) -> bool {
+    pub fn part_live_at_end(&self, block: BlockId, place: Storage, path: &[PathSeg]) -> bool {
         let live = self.parts_at_end.get(&block).expect("content liveness covers every block of its body");
         self.overlapping(place, path).any(|unit| live.contains(&unit))
     }
@@ -214,7 +218,7 @@ impl ContentLiveness {
     /// # Panics
     /// `unit` is not one of `place`'s units, or `inst` is not an
     /// instruction of the body.
-    pub fn presence_before(&self, inst: InstId, place: ValueId, unit: &[PathSeg]) -> Presence {
+    pub fn presence_before(&self, inst: InstId, place: Storage, unit: &[PathSeg]) -> Presence {
         let (block, index) = self.position_of(inst);
         let points = self.presence_before.get(&block).expect("content presence covers every block of its body");
         let state = points.get(index).unwrap_or_else(|| panic!("{block:?} has no position {index}"));
@@ -223,13 +227,13 @@ impl ContentLiveness {
 
     /// The presence of `unit` of `place` after `block`'s terminator, which
     /// changes no presence. Cost: O(units of `place`).
-    pub fn presence_at_end(&self, block: BlockId, place: ValueId, unit: &[PathSeg]) -> Presence {
+    pub fn presence_at_end(&self, block: BlockId, place: Storage, unit: &[PathSeg]) -> Presence {
         let points = self.presence_before.get(&block).expect("content presence covers every block of its body");
         let state = points.last().expect("a block's points end before its terminator");
         state.of((place, self.unit_index(place, unit)))
     }
 
-    fn unit_index(&self, place: ValueId, unit: &[PathSeg]) -> usize {
+    fn unit_index(&self, place: Storage, unit: &[PathSeg]) -> usize {
         let units = self.units.get(&place).unwrap_or_else(|| panic!("{place:?} has no units"));
         units
             .iter()
@@ -237,7 +241,7 @@ impl ContentLiveness {
             .unwrap_or_else(|| panic!("{unit:?} is not one of {place:?}'s units {units:?}"))
     }
 
-    fn overlapping<'a>(&'a self, place: ValueId, path: &'a [PathSeg]) -> impl Iterator<Item = UnitId> + 'a {
+    fn overlapping<'a>(&'a self, place: Storage, path: &'a [PathSeg]) -> impl Iterator<Item = UnitId> + 'a {
         let units = self.units.get(&place).unwrap_or_else(|| panic!("{place:?} has no units"));
         units.iter().enumerate().filter(move |(_, unit)| overlap(unit, path)).map(move |(index, _)| (place, index))
     }
@@ -295,27 +299,29 @@ impl Analysis for ContentLiveness {
     }
 }
 
-/// The places whose type does not copy, each with its units: a slot, or a
-/// parameter the body names as a storage.
-fn units_of(body: &Body, types: &Types<Concrete>, loans: &Loans) -> FxHashMap<ValueId, Vec<Path>> {
-    let mut cuts: FxHashMap<ValueId, Vec<Path>> = FxHashMap::default();
-    for slot in body.slots() {
-        if !copies(types, body.ty_of(*slot)) {
-            cuts.entry(*slot).or_default();
+/// The places whose type does not copy, each with its units: a slot, a
+/// parameter the body names as a storage, or a context the body names.
+fn units_of(body: &Body, types: &Types<Concrete>, loans: &Loans) -> FxHashMap<Storage, Vec<Path>> {
+    let mut cuts: FxHashMap<Storage, Vec<Path>> = FxHashMap::default();
+    let slots = body.slots().iter().map(|slot| Storage::Slot(*slot));
+    let contexts = body.contexts().iter().map(|(context, _)| Storage::Context(*context));
+    for place in slots.chain(contexts) {
+        if !copies(types, place_ty(body, place)) {
+            cuts.entry(place).or_default();
         }
     }
     for (_, block) in body.blocks() {
         for inst in block.insts() {
-            let (place, path, moves) = match inst.op() {
-                Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => {
+            let (place, path, moves) = match (inst.op(), by_name(inst.op())) {
+                (Op::Take { .. }, Some((place, path))) => {
                     let taken = inst.result().expect("a Take yields a value");
-                    (*place, parts::owned_region(path), !copies(types, body.ty_of(taken)))
+                    (place, parts::owned_region(path), !copies(types, body.ty_of(taken)))
                 }
-                Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, value, .. } => {
-                    (*place, parts::owned_region(path), !copies(types, body.ty_of(*value)))
+                (Op::Assign { value, .. }, Some((place, path))) => {
+                    (place, parts::owned_region(path), !copies(types, body.ty_of(*value)))
                 }
-                Op::Ref { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => (*place, path.as_slice(), false),
-                Op::Take { target: RefTarget::Through(_), .. } => {
+                (Op::Ref { .. }, Some((place, path))) => (place, path, false),
+                (Op::Take { target: RefTarget::Through(_), .. }, None) => {
                     let Some((place, path)) = moved_through(loans, inst) else {
                         continue;
                     };
@@ -324,7 +330,7 @@ fn units_of(body: &Body, types: &Types<Concrete>, loans: &Loans) -> FxHashMap<Va
                 _ => continue,
             };
             let cut = moves && !path.is_empty();
-            if copies(types, body.ty_of(place)) {
+            if copies(types, place_ty(body, place)) {
                 continue;
             }
             let place_cuts = cuts.entry(place).or_default();
@@ -333,17 +339,42 @@ fn units_of(body: &Body, types: &Types<Concrete>, loans: &Loans) -> FxHashMap<Va
             }
         }
     }
-    cuts.into_iter()
-        .filter(|(place, _)| matches!(body.definition(*place), Definition::Slot(_) | Definition::Param(_)))
-        .map(|(place, cuts)| (place, parts::units(types, body.ty_of(place), &cuts)))
-        .collect()
+    cuts.into_iter().map(|(place, cuts)| (place, parts::units(types, place_ty(body, place), &cuts))).collect()
+}
+
+/// The place a `Take`, an `Assign` or a `Ref` names by name, and its path.
+fn by_name(op: &Op) -> Option<(Storage, &[PathSeg])> {
+    match op {
+        Op::Take { target, path, .. } | Op::Assign { target, path, .. } | Op::Ref { target, path, .. } => {
+            Storage::by_name(target).map(|place| (place, path.as_slice()))
+        }
+        _ => None,
+    }
+}
+
+/// The type of `place`, a place the body names by name.
+///
+/// # Panics
+/// `place` is storage outside the body, which no path by name reaches.
+fn place_ty(body: &Body, place: Storage) -> Ty {
+    match place {
+        Storage::Slot(value) | Storage::Param(value) => body.ty_of(value),
+        Storage::Context(context) => body.context_ty(context),
+        Storage::Outside { .. } => panic!("{place:?} is outside the body, and no place by name"),
+    }
+}
+
+/// Every write `Loans` records at `site` by name of a whole place.
+fn whole_writes(loans: &Loans, site: Site) -> impl Iterator<Item = Storage> + '_ {
+    let written = loans.accesses(site).iter().filter(|access| access.reach == Reach::Write && access.through.is_empty());
+    written.flat_map(|access| &access.places).filter(|place| place.exact && place.path.is_empty()).map(|place| place.storage)
 }
 
 /// A set of places and a set of units; finite over a body, so its
 /// widening is its join.
 #[derive(Debug, Clone, PartialEq)]
 struct Live {
-    places: FxHashSet<ValueId>,
+    places: FxHashSet<Storage>,
     parts: FxHashSet<UnitId>,
 }
 
@@ -372,21 +403,33 @@ impl Widen for Live {
 
 struct Backward<'f> {
     loans: &'f Loans,
-    units: &'f FxHashMap<ValueId, Vec<Path>>,
+    units: &'f FxHashMap<Storage, Vec<Path>>,
 }
 
 impl<'f> Backward<'f> {
-    fn new(loans: &'f Loans, units: &'f FxHashMap<ValueId, Vec<Path>>) -> Self {
+    fn new(loans: &'f Loans, units: &'f FxHashMap<Storage, Vec<Path>>) -> Self {
         Backward { loans, units }
+    }
+
+    /// A store by name into `path` of `place`: the whole place where the
+    /// path is empty, and each unit the path covers.
+    fn kill(&self, place: Storage, path: &[PathSeg], state: &mut Live) {
+        if path.is_empty() {
+            state.places.remove(&place);
+        }
+        if let Some(units) = self.units.get(&place) {
+            for (index, unit) in units.iter().enumerate() {
+                if covers(parts::owned_region(path), unit) {
+                    state.parts.remove(&(place, index));
+                }
+            }
+        }
     }
 
     /// What `site` reads: the places `Loans` names, and of each, the units
     /// overlapping the path a `Take` names it by, or all of them.
-    fn gen_reads(&self, site: Site, by_name: Option<(ValueId, &[PathSeg])>, state: &mut Live) {
-        let read_places = self.loans.reads(site).iter().filter_map(|storage| match storage {
-            Storage::Slot(place) | Storage::Param(place) => Some(*place),
-            Storage::Outside { .. } => None,
-        });
+    fn gen_reads(&self, site: Site, by_name: Option<(Storage, &[PathSeg])>, state: &mut Live) {
+        let read_places = self.loans.reads(site).iter().copied().filter(|storage| !matches!(storage, Storage::Outside { .. }));
         for place in read_places {
             state.places.insert(place);
             let Some(units) = self.units.get(&place) else {
@@ -412,32 +455,28 @@ impl DenseAnalysis for Backward<'_> {
     }
 
     fn transfer(&self, inst: &Inst, state: &mut Live) {
-        let stored = match inst.op() {
-            Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => Some((place, path.as_slice())),
-            Op::Fetch { into: Some(slot), .. } => Some((slot, &[][..])),
+        let site = Site::Inst(inst.id());
+        let stored = match (inst.op(), by_name(inst.op())) {
+            (Op::Assign { .. }, Some(stored)) => Some(stored),
             _ => None,
         };
-        if let Some((place, path)) = stored {
-            if path.is_empty() {
-                state.places.remove(place);
-            }
-            if let Some(units) = self.units.get(place) {
-                for (index, unit) in units.iter().enumerate() {
-                    if covers(parts::owned_region(path), unit) {
-                        state.parts.remove(&(*place, index));
-                    }
-                }
-            }
+        let whole = whole_writes(self.loans, site).map(|place| (place, &[][..]));
+        for (place, path) in stored.into_iter().chain(whole) {
+            self.kill(place, path, state);
         }
-        let by_name = match inst.op() {
-            Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => Some((*place, path.as_slice())),
+        let read_by_name = match (inst.op(), by_name(inst.op())) {
+            (Op::Take { .. }, Some(read)) => Some(read),
             _ => None,
         };
-        self.gen_reads(Site::Inst(inst.id()), by_name, state);
+        self.gen_reads(site, read_by_name, state);
     }
 
     fn transfer_terminator(&self, block: BlockId, _: &Terminator, state: &mut Live) {
-        self.gen_reads(Site::Term(block), None, state);
+        let site = Site::Term(block);
+        for place in whole_writes(self.loans, site) {
+            self.kill(place, &[], state);
+        }
+        self.gen_reads(site, None, state);
     }
 
     fn transfer_edge(&self, _: BlockId, _: &Edge<'_>, _: &[ValueId], _: &mut Live) {}
@@ -482,29 +521,30 @@ impl Widen for PresenceOf {
     }
 }
 
-/// Forward over the units: a slot's start empty and a parameter's full; a
-/// store by name fills what it covers, and a `Take` by name of a path that
-/// does not copy, or one that moves through a reference to one place,
-/// empties what it covers.
+/// Forward over the units: a slot's start empty, and a parameter's and a
+/// context's full; a store by name fills what it covers, as does any other
+/// write by name of a whole place, and a `Take` by name of a path that does
+/// not copy, or one that moves through a reference to one place, empties
+/// what it covers.
 struct Forward<'f> {
-    units: &'f FxHashMap<ValueId, Vec<Path>>,
+    units: &'f FxHashMap<Storage, Vec<Path>>,
     types: &'f Types<Concrete>,
     body: &'f Body,
     loans: &'f Loans,
 }
 
-/// The slot or parameter, and the region in it, that a `Take` through a
+/// The place by name, and the region in it, that a `Take` through a
 /// reference moves out of, where it reaches that place alone.
-fn moved_through<'l>(loans: &'l Loans, inst: &Inst) -> Option<(ValueId, &'l [PathSeg])> {
+fn moved_through<'l>(loans: &'l Loans, inst: &Inst) -> Option<(Storage, &'l [PathSeg])> {
     let place = loans.through_one(Site::Inst(inst.id()), Reach::Move)?;
     match place.storage {
-        Storage::Slot(value) | Storage::Param(value) => Some((value, parts::owned_region(&place.path))),
+        Storage::Slot(_) | Storage::Param(_) | Storage::Context(_) => Some((place.storage, parts::owned_region(&place.path))),
         Storage::Outside { .. } => None,
     }
 }
 
 impl Forward<'_> {
-    fn set(&self, place: ValueId, path: &[PathSeg], to: Presence, state: &mut PresenceOf) {
+    fn set(&self, place: Storage, path: &[PathSeg], to: Presence, state: &mut PresenceOf) {
         let Some(units) = self.units.get(&place) else {
             return;
         };
@@ -521,12 +561,12 @@ impl DenseAnalysis for Forward<'_> {
 
     const DIRECTION: Direction = Direction::Forward;
 
-    fn entry(&self, body: &Body) -> PresenceOf {
+    fn entry(&self, _: &Body) -> PresenceOf {
         let mut state = PresenceOf::default();
         for (place, units) in self.units {
-            let start = match body.definition(*place) {
-                Definition::Param(_) => Presence::Present,
-                _ => Presence::Absent,
+            let start = match place {
+                Storage::Param(_) | Storage::Context(_) => Presence::Present,
+                Storage::Slot(_) | Storage::Outside { .. } => Presence::Absent,
             };
             state.0.extend((0..units.len()).map(|index| ((*place, index), start)));
         }
@@ -534,19 +574,20 @@ impl DenseAnalysis for Forward<'_> {
     }
 
     fn transfer(&self, inst: &Inst, state: &mut PresenceOf) {
-        match inst.op() {
-            Op::Assign { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. } => {
-                self.set(*place, parts::owned_region(path), Presence::Present, state);
+        for place in whole_writes(self.loans, Site::Inst(inst.id())) {
+            self.set(place, &[], Presence::Present, state);
+        }
+        match (inst.op(), by_name(inst.op())) {
+            (Op::Assign { .. }, Some((place, path))) => {
+                self.set(place, parts::owned_region(path), Presence::Present, state);
             }
-            Op::Fetch { into: Some(slot), .. } => self.set(*slot, &[], Presence::Present, state),
-            Op::Commit { from: Committed::Slot(slot), .. } => self.set(*slot, &[], Presence::Absent, state),
-            Op::Take { target: RefTarget::Var(place) | RefTarget::Param(place), path, .. }
-                if self.units.contains_key(place)
+            (Op::Take { .. }, Some((place, path)))
+                if self.units.contains_key(&place)
                     && !copies(self.types, self.body.ty_of(inst.result().expect("a Take yields a value"))) =>
             {
-                self.set(*place, parts::owned_region(path), Presence::Absent, state);
+                self.set(place, parts::owned_region(path), Presence::Absent, state);
             }
-            Op::Take { target: RefTarget::Through(_), .. } => {
+            (Op::Take { target: RefTarget::Through(_), .. }, None) => {
                 if let Some((place, region)) = moved_through(self.loans, inst) {
                     self.set(place, region, Presence::Absent, state);
                 }
@@ -555,7 +596,11 @@ impl DenseAnalysis for Forward<'_> {
         }
     }
 
-    fn transfer_terminator(&self, _: BlockId, _: &Terminator, _: &mut PresenceOf) {}
+    fn transfer_terminator(&self, block: BlockId, _: &Terminator, state: &mut PresenceOf) {
+        for place in whole_writes(self.loans, Site::Term(block)) {
+            self.set(place, &[], Presence::Present, state);
+        }
+    }
 
     fn transfer_edge(&self, _: BlockId, _: &Edge<'_>, _: &[ValueId], _: &mut PresenceOf) {}
 }

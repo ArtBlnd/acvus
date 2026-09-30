@@ -16,7 +16,7 @@ pub mod takings;
 pub use aspect::{Aspect, Changes};
 pub use body::{Block, BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Insts, Module, OrderUse, Site, Stages, Terminator};
 pub use builder::{Builder, Unsealed};
-pub use op::{Committed, Op};
+pub use op::Op;
 pub use core::StillUsed;
 pub(in crate::ir::cfg) use rewriter::Rewriter;
 

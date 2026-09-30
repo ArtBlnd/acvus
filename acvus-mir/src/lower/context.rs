@@ -1,10 +1,9 @@
-//! Contexts (context §3): a context that is not volatile lives in a slot,
-//! fetched into it when the body is entered, committed from it and fetched
-//! into it again around a call whose effect touches it, and committed from
-//! it at every return; a volatile one is fetched into a value at each read
-//! and committed from a value at each write. Fetches and commits are
-//! effects. Removing unread fetches and unwritten commits is the required
-//! step's.
+//! Contexts (context §3): a context is a place outside the body, which a
+//! body names by `RefTarget::Context` and reads, takes, lends and assigns
+//! as any place. A body states the contexts it names; where the page is
+//! seen beyond the program, at a call that may touch a context and at a
+//! return, is `passes::analysis::Loans`' to record, not lower's. A
+//! volatile context's place operations are effects, on the order chain.
 //!
 //! The contexts a body names are read off its own statements, not its
 //! lambdas'. Inputs (programs §4) are read off the same walk, its lambdas'
@@ -14,11 +13,10 @@
 use acvus_ast::{ElseBranch, Expr, ForHead, ObjectPatternField, Pattern, Place, PlaceBase, RefKind, Root, Slot, Span, Stmt, TuplePatternElem};
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::ctxt::{ContextHome, Home, Lcx};
+use super::ctxt::{Home, Lcx};
 use super::place::{Operand, Place as LPlace, assign, read};
-use crate::ir::cfg::{Committed, Op};
 use crate::ir::{RefTarget, ValueId};
-use crate::ty::{Effect, Reissue, Ty};
+use crate::ty::Ty;
 
 /// What a body names itself, each once, in the order it first names it.
 #[derive(Default)]
@@ -27,11 +25,10 @@ pub(super) struct Named {
     pub inputs: Vec<NamedInput>,
 }
 
-/// A context a body names, its type, and where it first names it.
+/// A context a body names, and its type.
 pub(super) struct NamedContext {
     pub context: QualifiedRef,
     pub ty: Ty,
-    pub span: Span,
 }
 
 /// An input a body names, its type, and where it first names it.
@@ -59,9 +56,9 @@ impl<'t> Namer<'t> {
         self.named
     }
 
-    fn context(&mut self, context: QualifiedRef, ty: Ty, span: Span) {
+    fn context(&mut self, context: QualifiedRef, ty: Ty) {
         if self.lambdas == 0 && !self.named.contexts.iter().any(|named| named.context == context) {
-            self.named.contexts.push(NamedContext { context, ty, span });
+            self.named.contexts.push(NamedContext { context, ty });
         }
     }
 
@@ -129,8 +126,8 @@ impl<'t> Namer<'t> {
 
     fn place<S: Slot>(&mut self, place: &Place<S>) {
         match place {
-            Place::Base(PlaceBase::Root { id, root: Root::Context(name), span }) => {
-                self.context(QualifiedRef::root(*name), self.ty(*id), *span)
+            Place::Base(PlaceBase::Root { id, root: Root::Context(name), .. }) => {
+                self.context(QualifiedRef::root(*name), self.ty(*id))
             }
             Place::Base(PlaceBase::Root { .. }) => {}
             Place::Base(PlaceBase::Element { container, index, .. }) => {
@@ -148,7 +145,7 @@ impl<'t> Namer<'t> {
     fn expr_level<S: Slot>(&mut self, expr: &Expr<S>) {
         match expr {
             Expr::Ident { id, name, ref_kind: RefKind::ExternParam, span } => self.input(name.name, self.ty(*id), *span),
-            Expr::ContextRef { id, name, span } => self.context(*name, self.ty(*id), *span),
+            Expr::ContextRef { id, name, .. } => self.context(*name, self.ty(*id)),
             Expr::Lambda { body, .. } => {
                 self.lambdas += 1;
                 self.expr(body);
@@ -241,12 +238,12 @@ impl<'t> Namer<'t> {
     /// the matched value is coerced to there, or the matched value's own.
     fn pattern<S: Slot>(&mut self, pattern: &Pattern<S>) {
         match pattern {
-            Pattern::ContextBind { id, name, span } => {
+            Pattern::ContextBind { id, name, .. } => {
                 let ty = match self.typeck.coercions.get(id) {
                     Some(coercion) => coercion.to(),
                     None => self.ty(*id),
                 };
-                self.context(*name, ty, *span);
+                self.context(*name, ty);
             }
             Pattern::List { head, tail, .. } => head.iter().chain(tail).for_each(|part| self.pattern(part)),
             Pattern::Object { fields, .. } => fields.iter().for_each(|ObjectPatternField { pattern, .. }| self.pattern(pattern)),
@@ -267,23 +264,10 @@ impl<'t> Namer<'t> {
     }
 }
 
-/// The body's entry: each context it names gets its home, a slot fetched
-/// into now where it is not volatile.
+/// The body's entry: it states each context it names, with its type.
 pub(super) fn enter_body(cx: &mut Lcx<'_, '_>, named: &Named) {
-    for NamedContext { context, ty, span } in &named.contexts {
-        let volatile = cx
-            .decls
-            .context_is_volatile(*context)
-            .unwrap_or_else(|| panic!("the context {context:?} an admitted program names is declared"));
-        let home = match volatile {
-            true => ContextHome::Volatile,
-            false => {
-                let slot = cx.builder.context_slot(*context, *ty, *span);
-                fetch_into(cx, *context, slot, *span);
-                ContextHome::Slot(slot)
-            }
-        };
-        cx.contexts.push((*context, home));
+    for NamedContext { context, ty } in &named.contexts {
+        cx.builder.context(*context, *ty);
     }
 }
 
@@ -302,97 +286,18 @@ fn slot_place(slot: ValueId, ty: Ty) -> LPlace {
     LPlace { target: RefTarget::Var(slot), path: Vec::new(), ty }
 }
 
-/// A fetch of a volatile `context`'s whole content into a value, an
-/// effect (context §3).
-pub(super) fn load(cx: &mut Lcx<'_, '_>, context: QualifiedRef, ty: Ty, span: Span) -> ValueId {
-    cx.builder.push_effect(Op::Fetch { context, into: None }, ty, span)
+/// The whole of `context`, a `ty`, as a place.
+pub(super) fn context_place(context: QualifiedRef, ty: Ty) -> LPlace {
+    LPlace { target: RefTarget::Context(context), path: Vec::new(), ty }
 }
 
-/// A commit of `value` as a volatile `context`'s whole content, an effect
-/// (context §3).
-pub(super) fn commit(cx: &mut Lcx<'_, '_>, context: QualifiedRef, value: ValueId, span: Span) {
-    cx.builder.push_effect_unit(Op::Commit { context, from: Committed::Value(value) }, span);
-}
-
-/// A fetch of `context`'s whole content into its slot, an effect
-/// (context §3).
-fn fetch_into(cx: &mut Lcx<'_, '_>, context: QualifiedRef, slot: ValueId, span: Span) {
-    cx.builder.push_effect_unit(Op::Fetch { context, into: Some(slot) }, span);
-}
-
-/// A commit of the whole content of `context`'s slot, an effect
-/// (context §3). It is written wherever the body may have written the
-/// context: whether it did is the required step's to find (D40, D41).
-fn commit_slot(cx: &mut Lcx<'_, '_>, context: QualifiedRef, slot: ValueId, span: Span) {
-    cx.builder.push_effect_unit(Op::Commit { context, from: Committed::Slot(slot) }, span);
-}
-
-/// `@x` read: its slot's value, or a load of a volatile one.
+/// `@x` read: a take of the context, which copies it where its type does.
 pub(super) fn lower_context_read(cx: &mut Lcx<'_, '_>, context: QualifiedRef, ty: Ty, span: Span) -> ValueId {
-    match cx.context_home(context) {
-        ContextHome::Slot(slot) => read(cx, Operand::Place(slot_place(slot, ty)), span),
-        ContextHome::Volatile => load(cx, context, ty, span),
-    }
-}
-
-/// The contexts held in slots that a call of `effect` may read or write:
-/// every one where the effect is opaque, and otherwise those it declares.
-fn touched(cx: &Lcx<'_, '_>, effect: &Effect) -> Vec<(QualifiedRef, ValueId)> {
-    cx.contexts
-        .iter()
-        .filter_map(|(context, home)| match home {
-            ContextHome::Slot(slot) => Some((*context, *slot)),
-            ContextHome::Volatile => None,
-        })
-        .filter(|(context, _)| {
-            effect.reissue() == Reissue::Opaque || effect.reads().contains(context) || effect.writes().contains(context)
-        })
-        .collect()
-}
-
-/// `call` bracketed for a callee of `effect`: each context it touches is
-/// committed from its slot before and fetched into it again after
-/// (context §3).
-pub(super) fn bracket_call(
-    cx: &mut Lcx<'_, '_>,
-    effect: &Effect,
-    span: Span,
-    call: impl FnOnce(&mut Lcx<'_, '_>) -> ValueId,
-) -> ValueId {
-    let touched = touched(cx, effect);
-    for (context, slot) in &touched {
-        commit_slot(cx, *context, *slot, span);
-    }
-    let result = call(cx);
-    for (context, slot) in &touched {
-        fetch_into(cx, *context, *slot, span);
-    }
-    result
-}
-
-/// Every context the body holds in a slot, committed: what a return does
-/// (context §3).
-pub(super) fn commit_all(cx: &mut Lcx<'_, '_>, span: Span) {
-    let held: Vec<(QualifiedRef, ValueId)> = cx
-        .contexts
-        .iter()
-        .filter_map(|(context, home)| match home {
-            ContextHome::Slot(slot) => Some((*context, *slot)),
-            ContextHome::Volatile => None,
-        })
-        .collect();
-    for (context, slot) in held {
-        commit_slot(cx, context, slot, span);
-    }
+    read(cx, Operand::Place(context_place(context, ty)), span)
 }
 
 /// A store into `context` of a value a pattern bound (`@x` in a pattern).
 pub(super) fn store(cx: &mut Lcx<'_, '_>, context: QualifiedRef, value: ValueId, span: Span) {
-    match cx.context_home(context) {
-        ContextHome::Slot(slot) => {
-            let ty = cx.value_ty(slot);
-            assign(cx, slot_place(slot, ty), value, span);
-        }
-        ContextHome::Volatile => commit(cx, context, value, span),
-    }
+    let ty = cx.value_ty(value);
+    assign(cx, context_place(context, ty), value, span);
 }

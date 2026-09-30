@@ -72,9 +72,11 @@ pub enum Op {
         /// until the `Assign` that restores it after the call.
         taken_out: bool,
     },
-    /// Move `value` into a storage; it drops nothing. The old content, where
-    /// the program holds it, is dropped by an explicit `Drop` before this
-    /// store (ownership §6). An assignment to a variable.
+    /// Move `value` into a storage. Into the body's own storage or through a
+    /// reference it drops nothing: the old content, where the program holds
+    /// it, is dropped by an explicit `Drop` before this store (ownership
+    /// §6). Into a context it drops what the context held, which is the
+    /// page's, not the program's (context §3). An assignment to a variable.
     Assign {
         target: RefTarget,
         path: Vec<PathSeg>,
@@ -337,17 +339,13 @@ macro_rules! walk_operands {
     ($op:expr, $on:ident, $($r:tt)*) => {{
         let on_target = |target: $($r)* RefTarget, $on: &mut dyn FnMut($($r)* ValueId)| match target {
             RefTarget::Var(v) | RefTarget::Param(v) | RefTarget::Through(v) => $on(v),
+            RefTarget::Context(_) => {}
         };
         let on_callee = |callee: $($r)* Callee, $on: &mut dyn FnMut($($r)* ValueId)| match callee {
             Callee::Indirect(v) => $on(v),
             Callee::Direct(_) | Callee::Extern { .. } => {}
         };
         match $op {
-            Op::Fetch { into, .. } => {
-                if let Some(slot) = into {
-                    $on(slot);
-                }
-            }
             Op::Const { .. }
             | Op::ConstStr { .. }
             | Op::LoadFunction { .. }
@@ -387,7 +385,6 @@ macro_rules! walk_operands {
                 $on(index);
                 $on(value);
             }
-            Op::Commit { from: Committed::Slot(v) | Committed::Value(v), .. } => $on(v),
             Op::FieldGet { object, .. } | Op::ObjectGet { object, .. } => $on(object),
             Op::FieldSet { object, value, .. } => {
                 $on(object);
@@ -443,7 +440,7 @@ impl Op {
 
     /// The place a `Take`, an `Assign` or a `Ref` names: its target and its
     /// path. Cost: O(1).
-    pub(super) fn place(&self) -> Option<(&RefTarget, &[PathSeg])> {
+    pub fn place(&self) -> Option<(&RefTarget, &[PathSeg])> {
         match self {
             Op::Take { target, path, .. } | Op::Assign { target, path, .. } | Op::Ref { target, path, .. } => {
                 Some((target, path))
@@ -469,8 +466,6 @@ impl Op {
             Op::StringAppend { .. }
             | Op::Assign { .. }
             | Op::IndexSet { .. }
-            | Op::Commit { .. }
-            | Op::Fetch { into: Some(_), .. }
             | Op::Check { .. }
             | Op::CheckSteps { .. }
             | Op::Drop { .. } => false,
@@ -484,7 +479,6 @@ impl Op {
             | Op::AsSlice { .. }
             | Op::ArrayView { .. }
             | Op::Index { .. }
-            | Op::Fetch { into: None, .. }
             | Op::FieldGet { .. }
             | Op::FieldSet { .. }
             | Op::BinOp { .. }
@@ -559,8 +553,6 @@ impl Op {
             | Op::Assign { .. }
             | Op::AsSlice { .. }
             | Op::ArrayView { .. }
-            | Op::Fetch { .. }
-            | Op::Commit { .. }
             | Op::FieldGet { .. }
             | Op::FieldSet { .. }
             | Op::Cast { .. }
@@ -599,23 +591,8 @@ impl Op {
         matches!(self, Op::Assign { .. } | Op::IndexSet { .. } | Op::StringAppend { .. } | Op::Drop { .. })
     }
 
-    /// Whether the operation loads or commits a context, an effect of its
-    /// own (context §3).
-    pub fn touches_context(&self) -> bool {
-        matches!(self, Op::Fetch { .. } | Op::Commit { .. })
-    }
-
-    /// Whether the instruction reads or writes a storage or the page.
+    /// Whether the instruction reads or writes a storage.
     pub(super) fn touches_storage(&self) -> bool {
-        matches!(
-            self,
-            Op::Ref { .. }
-                | Op::Take { .. }
-                | Op::Assign { .. }
-                | Op::IndexSet { .. }
-                | Op::StringAppend { .. }
-                | Op::Fetch { .. }
-                | Op::Commit { .. }
-        )
+        matches!(self, Op::Ref { .. } | Op::Take { .. } | Op::Assign { .. } | Op::IndexSet { .. } | Op::StringAppend { .. })
     }
 }

@@ -11,7 +11,6 @@
 use acvus_ast::{AstId, BinOp, Binder, ElseBranch, Expr, ForHead, Pattern, Slot, Span, Stmt};
 
 use super::call::convert;
-use super::context::commit_all;
 use super::ctxt::{Home, Lcx, LoopTargets};
 use super::expr::lower_expr;
 use super::pat::{Matched, bind, test};
@@ -322,10 +321,8 @@ pub(super) fn lower_loop_exit(cx: &mut Lcx<'_, '_>, to_exit: bool, span: Span) {
     }
 }
 
-/// The body's return of `value`: every context held is committed first
-/// (context §3).
+/// The body's return of `value`.
 pub(super) fn return_value(cx: &mut Lcx<'_, '_>, value: ValueId, span: Span) {
-    commit_all(cx, span);
     let terminator = match cx.reachable {
         true => Terminator::Return { value, order: None, span },
         false => Terminator::Diverge,

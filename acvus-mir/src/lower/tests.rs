@@ -10,7 +10,7 @@ use crate::decl::{
     ContextDecl, ConversionRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl,
 };
 use crate::ir::cfg::edit::{DefDominatesUses, Invariant, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation};
-use crate::ir::cfg::{Body, BodyId, Committed, Module, Op, OrderUse, Terminator};
+use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
 use crate::passes::analysis::{Loan, Mode, Storage};
 use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
@@ -707,60 +707,65 @@ fn lowered_closures(lowered: &Lowered) {
 
 // -- contexts ----------------------------------------------------------------
 
-/// A context not volatile is fetched at entry into its slot, committed
-/// from it and fetched into it again around an opaque call, and committed
-/// from it at return (context §3).
+/// Whether `op` is a place operation on `context`: its `Take`, its `Ref`
+/// or its `Assign`, named by `kind`.
+fn names_context(op: &Op, context: QualifiedRef) -> Option<&'static str> {
+    let kind = match op {
+        Op::Take { .. } => "take",
+        Op::Ref { .. } => "lend",
+        Op::Assign { .. } => "assign",
+        _ => return None,
+    };
+    matches!(op.place(), Some((RefTarget::Context(named), _)) if *named == context).then_some(kind)
+}
+
+/// A context is a place by name (context §3): read by a take and written
+/// by an assign where the program names it, with nothing around the call
+/// that may touch it, nothing at entry and nothing at the return. The body
+/// states it among its contexts, and a context not volatile stands off the
+/// order chain.
 #[test]
-fn a_context_is_loaded_at_entry_bracketed_around_a_call_and_committed_at_return() {
+fn a_context_is_a_place_by_name_with_nothing_at_entry_around_a_call_or_at_return() {
     let mut fx = Fixture::new();
     let int = fx.int();
     let n = fx.context("n", int, false);
     fx.opaque_f();
     let lowered = fx.script("let a = @n; f(1); @n = a; 1");
-    let ops = lowered.entry_ops();
-    let shape: Vec<&str> = ops
+    let body = lowered.entry();
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let shape: Vec<&str> = insts
         .iter()
-        .filter_map(|op| match op {
-            Op::Fetch { context, .. } if *context == n => Some("load"),
-            Op::Commit { context, .. } if *context == n => Some("commit"),
+        .filter_map(|inst| match inst.op() {
             Op::FunctionCall { .. } => Some("call"),
-            _ => None,
+            op => names_context(op, n),
         })
         .collect();
-    assert_eq!(shape, vec!["load", "commit", "call", "load", "commit"]);
-    let slots = lowered.entry().slots();
-    let [slot] = slots.iter().filter(|slot| lowered.entry().context_of_slot(**slot) == Some(n)).collect::<Vec<_>>()[..] else {
-        panic!("one slot holds @n: {}", shown(lowered.entry()))
-    };
-    let through_the_slot = ops.iter().all(|op| match op {
-        Op::Fetch { context, into } if *context == n => *into == Some(*slot),
-        Op::Commit { context, from } if *context == n => *from == Committed::Slot(*slot),
-        _ => true,
-    });
-    assert!(through_the_slot, "each fetch is into the slot and each commit from it: {}", shown(lowered.entry()));
+    assert_eq!(shape, vec!["take", "call", "assign"], "{}", shown(body));
+    assert_eq!(body.contexts().iter().map(|(context, _)| *context).collect::<Vec<_>>(), vec![n]);
+    let off_the_chain = insts.iter().filter(|inst| names_context(inst.op(), n).is_some()).all(|inst| inst.order().is_none());
+    assert!(off_the_chain, "a context not volatile carries no token: {}", shown(body));
 }
 
-/// A volatile context has no slot: a read is a load and a write a commit
-/// (context §3).
+/// A volatile context is a place as any other, and each of its place
+/// operations is an effect on the order chain (context §3).
 #[test]
-fn a_volatile_context_is_a_load_at_each_read_and_a_commit_at_each_write() {
+fn a_volatile_contexts_place_operations_carry_order_tokens() {
     let mut fx = Fixture::new();
     let int = fx.int();
     let clock = fx.context("clock", int, true);
     let lowered = fx.script("let a = @clock; let b = @clock; @clock = a; 1");
-    let ops = lowered.entry_ops();
-    assert_eq!(count(&ops, |op| matches!(op, Op::Fetch { context, into: None } if *context == clock)), 2);
-    assert_eq!(count(&ops, |op| matches!(op, Op::Commit { context, from: Committed::Value(_) } if *context == clock)), 1);
-    assert_eq!(count(&ops, |op| matches!(op, Op::Fetch { .. } | Op::Commit { .. })), 3, "no other fetch or commit");
     let body = lowered.entry();
-    assert!(body.slots().iter().all(|slot| body.context_of_slot(*slot).is_none()));
+    let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
+    let on_clock: Vec<_> = insts.iter().filter_map(|inst| names_context(inst.op(), clock).map(|kind| (kind, inst.order().is_some()))).collect();
+    assert_eq!(on_clock, vec![("take", true), ("take", true), ("assign", true)], "{}", shown(body));
 }
 
-/// context §3: a context only read has its fetch and no commit after the
-/// required steps; one written has both.
+/// context §3: after the required steps a context is lent and assigned
+/// where the program does, and nothing takes it out to drop it: an assign
+/// into it drops what it held.
 #[test]
-fn a_context_only_read_keeps_its_fetch_and_one_written_keeps_its_commit_too() {
-    let boundary = |source: &str| {
+fn a_context_is_lent_and_assigned_as_written_through_the_required_steps() {
+    let shape = |source: &str| {
         let mut fx = Fixture::new();
         let vec = fx.vec_of_ints();
         let (int, vec_ref) = (fx.int(), fx.reference(Mutability::Shared, vec));
@@ -771,21 +776,18 @@ fn a_context_only_read_keeps_its_fetch_and_one_written_keeps_its_commit_too() {
         let c = fx.context("c", vec, false);
         let lowered = fx.required(source);
         let ops = lowered.entry_ops();
-        let fetches = count(&ops, |op| matches!(op, Op::Fetch { context, into: Some(_) } if *context == c));
-        let commits = count(&ops, |op| matches!(op, Op::Commit { context, from: Committed::Slot(_) } if *context == c));
-        (fetches, commits)
+        ops.iter().filter_map(|op| names_context(op, c)).collect::<Vec<_>>()
     };
-    assert_eq!(boundary("len(&@c)"), (1, 0), "only read");
-    assert_eq!(boundary("@c = make(); len(&@c)"), (0, 1), "written before any read: the fetch is never read");
-    assert_eq!(boundary("let n = len(&@c); @c = make(); n"), (1, 1), "read, then written");
+    assert_eq!(shape("len(&@c)"), vec!["lend"], "only read");
+    assert_eq!(shape("@c = make(); len(&@c)"), vec!["assign", "lend"], "written before any read");
+    assert_eq!(shape("let n = len(&@c); @c = make(); n"), vec!["lend", "assign"], "read, then written");
 }
 
-/// context §3: the full pipeline promotes a context's slot to values. The
-/// fetch after the call becomes a fetch of the value the tail returns, and
-/// each commit a commit of the value the slot held there: the stored `2`
-/// before the call, the fetched value at the return.
+/// context §3: the full pipeline promotes no context. The store before the
+/// call stays, since the opaque call reads the context, and the tail takes
+/// the context after the call and returns what it took.
 #[test]
-fn a_context_slot_is_promoted_by_the_pipeline_to_fetched_and_committed_values() {
+fn a_context_stays_a_place_through_the_pipeline() {
     let mut fx = Fixture::new();
     let int = fx.int();
     let n = fx.context("n", int, false);
@@ -803,33 +805,31 @@ fn a_context_slot_is_promoted_by_the_pipeline_to_fetched_and_committed_values() 
     crate::passes::pipeline::optimize(&mut module, &mut am, crate::passes::pipeline::Level::Full);
     let lowered = Lowered::checked(module, fx.names);
     let body = lowered.entry();
-    assert!(body.slots().is_empty(), "the slot is promoted: {}", shown(body));
     let insts: Vec<_> = body.blocks().flat_map(|(_, block)| block.insts()).collect();
-    let fetched: Vec<_> = insts
-        .iter()
-        .filter(|inst| matches!(inst.op(), Op::Fetch { context, into: None } if *context == n))
-        .map(|inst| inst.result().expect("a fetch into a value yields it"))
-        .collect();
-    let [fetched] = fetched[..] else { panic!("one fetch, after the call: {}", shown(body)) };
-    let committed: Vec<_> = insts
+    let shape: Vec<&str> = insts
         .iter()
         .filter_map(|inst| match inst.op() {
-            Op::Commit { context, from: Committed::Value(value) } if *context == n => Some(*value),
-            _ => None,
+            Op::FunctionCall { .. } => Some("call"),
+            op => names_context(op, n),
         })
         .collect();
-    let [before_the_call, at_the_return] = committed[..] else { panic!("two commits of values: {}", shown(body)) };
+    assert_eq!(shape, vec!["assign", "call", "take"], "{}", shown(body));
+    let stored = insts.iter().find_map(|inst| match inst.op() {
+        Op::Assign { target: RefTarget::Context(named), value, .. } if *named == n => Some(*value),
+        _ => None,
+    });
+    let stored = stored.expect("the store stays");
     assert!(
-        matches!(insts.iter().find(|inst| inst.result() == Some(before_the_call)).map(|inst| inst.op()), Some(Op::Const { .. })),
-        "the commit before the call commits the stored constant: {}",
+        matches!(insts.iter().find(|inst| inst.result() == Some(stored)).map(|inst| inst.op()), Some(Op::Const { .. })),
+        "the store before the call stores the constant: {}",
         shown(body)
     );
-    assert_eq!(at_the_return, fetched, "the commit at the return commits the fetched value: {}", shown(body));
-    assert!(
-        matches!(body.block(body.entry()).terminator(), Terminator::Return { value, .. } if *value == fetched),
-        "the tail returns the fetched value: {}",
-        shown(body)
-    );
+    let taken = insts.iter().find(|inst| names_context(inst.op(), n) == Some("take")).and_then(|inst| inst.result());
+    let returned = body.blocks().find_map(|(_, block)| match block.terminator() {
+        Terminator::Return { value, .. } => Some(*value),
+        _ => None,
+    });
+    assert_eq!(returned, taken, "the tail returns what it took after the call: {}", shown(body));
 }
 
 // -- templates and conversions ------------------------------------------------
@@ -954,10 +954,9 @@ fn a_declared_conversion_step_is_a_call_of_its_via() {
         .and_then(|inst| inst.result())
         .expect("a call of the conversion's via");
     assert!(matches!(lowered.kind_of(body, call), TyKind::UserDefined { .. }));
-    let slot = body.slots().iter().copied().find(|slot| body.context_of_slot(*slot) == Some(m)).expect("m's slot");
     assert!(insts.iter().any(|inst| matches!(
         inst.op(),
-        Op::Assign { target: crate::ir::RefTarget::Var(target), value, .. } if *target == slot && *value == call
+        Op::Assign { target: RefTarget::Context(target), value, .. } if *target == m && *value == call
     )));
 }
 

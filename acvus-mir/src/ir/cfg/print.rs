@@ -33,7 +33,7 @@ use acvus_ast::{Literal, Span};
 use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 use rustc_hash::FxHashMap;
 
-use super::{Block, BlockId, Body, BodyId, Committed, Definition, InstId, Module, Op, OrderUse, Terminator};
+use super::{Block, BlockId, Body, BodyId, Definition, InstId, Module, Op, OrderUse, Terminator};
 use crate::ir::{BinOp, Callee, Checked, ExitTrip, ForSource, IndexBound, IndexMode, Intrinsic, Overflow, PathSeg, RefTarget, SwitchKey, UnaryOp, ValOrigin, ValueId};
 use crate::ty::{self, Mutability, Ty};
 
@@ -245,6 +245,7 @@ impl Numbering {
         let root = match target {
             RefTarget::Var(storage) | RefTarget::Param(storage) => self.value(body, *storage),
             RefTarget::Through(reference) => format!("*{}", self.value(body, *reference)),
+            RefTarget::Context(context) => format!("@{}", ty::print::qualified(names, *context)),
         };
         format!("{root}{}", path(names, at))
     }
@@ -329,13 +330,9 @@ impl Printer<'_> {
         text
     }
 
-    /// A slot's name: the context it holds, `@ns::c`, or its origin where
-    /// it has one.
+    /// A slot's name: its origin, where it has one.
     fn slot_name(&self, slot: ValueId) -> Option<String> {
-        match self.body.context_of_slot(slot) {
-            Some(context) => Some(format!("@{}", self.qualified(context))),
-            None => self.body.debug().val_origins.get(&slot).map(|origin| self.origin(origin)),
-        }
+        self.body.debug().val_origins.get(&slot).map(|origin| self.origin(origin))
     }
 
     fn block(&self, id: BlockId, out: &mut String) {
@@ -483,16 +480,6 @@ impl Printer<'_> {
                 self.value(*index),
                 self.value(*value)
             ),
-            Op::Fetch { context, into: Some(slot) } => {
-                format!("Fetch @{} into {}", self.qualified(*context), self.place(&RefTarget::Var(*slot), &[]))
-            }
-            Op::Fetch { context, into: None } => format!("Fetch @{}", self.qualified(*context)),
-            Op::Commit { context, from: Committed::Slot(slot) } => {
-                format!("Commit @{} from {}", self.qualified(*context), self.place(&RefTarget::Var(*slot), &[]))
-            }
-            Op::Commit { context, from: Committed::Value(value) } => {
-                format!("Commit @{}, {}", self.qualified(*context), self.value(*value))
-            }
             Op::FieldGet { object, field, rest } => format!("FieldGet {}{}", self.value(*object), self.fields(*field, rest)),
             Op::FieldSet { object, field, rest, value } => format!(
                 "FieldSet {}{}, {}",

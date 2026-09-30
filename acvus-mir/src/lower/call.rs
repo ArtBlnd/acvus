@@ -12,7 +12,6 @@
 
 use acvus_ast::{Args, AstId, BinOp, Binder, Expr, Literal, RefKind, Slot, Span};
 
-use super::context::bracket_call;
 use super::control::lower_short_circuit;
 use super::ctxt::Lcx;
 use super::expr::lower_expr;
@@ -58,8 +57,8 @@ pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, 
     at
 }
 
-/// A call of a callee of type `callee_ty`: pushed as an effect, bracketed
-/// by the contexts it touches, where the callee's effect is not pure.
+/// A call of a callee of type `callee_ty`: pushed as an effect where the
+/// callee's effect is not pure.
 pub(super) fn issue(cx: &mut Lcx<'_, '_>, callee: Callee, callee_ty: Ty, args: Vec<ValueId>, span: Span) -> ValueId {
     let (ret, effect) = match cx.kind(callee_ty) {
         TyKind::Fn { ret, .. } => {
@@ -71,9 +70,7 @@ pub(super) fn issue(cx: &mut Lcx<'_, '_>, callee: Callee, callee_ty: Ty, args: V
     let op = Op::FunctionCall { callee, callee_ty, args };
     match effect.reissue() {
         Reissue::Pure => cx.builder.push(op, ret, span),
-        Reissue::Idempotent | Reissue::Opaque => {
-            bracket_call(cx, &effect, span, |cx| cx.builder.push_effect(op, ret, span))
-        }
+        Reissue::Idempotent | Reissue::Opaque => cx.builder.push_effect(op, ret, span),
     }
 }
 

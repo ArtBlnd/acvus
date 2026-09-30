@@ -361,8 +361,6 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
         | Op::Assign { .. }
         | Op::IndexSet { .. }
         | Op::StringAppend { .. }
-        | Op::Fetch { .. }
-        | Op::Commit { .. }
         | Op::Spawn { .. }
         | Op::TakeEffect { .. }
         | Op::Merge { .. }

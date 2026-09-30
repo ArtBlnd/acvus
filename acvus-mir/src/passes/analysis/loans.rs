@@ -66,9 +66,14 @@
 //!    only the places that access states, in their modes.
 //! 7. A join: a block's parameter holds what any argument into it holds.
 //!
-//! A `Fetch` into a context's slot writes it whole, and a `Commit` from it
-//! moves its whole content out, or reads it where it copies (context §3);
-//! a context's content holds no loan.
+//! A context is a storage by its name (context §3), whole at entry, whose
+//! content holds no loan, since what it holds outlives the run. It is seen
+//! beyond the program, so accessed whole by name, at each call whose
+//! effect may read it (a read) or write it (a write), a call whose effect
+//! is opaque touching every context the body names, and read whole at
+//! every `Return` (context §1). A call is where its effect enters: a
+//! `FunctionCall`, `ArrayMap`'s call of its function, and a split call's
+//! taking (effects §6). These accesses are recorded as any other.
 //!
 //! Each site's accesses are recorded as `accesses`: what the takings read,
 //! write and move (`Moved`, `PartMoved`), a `Take` through a reference
@@ -91,16 +96,18 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::decl::declared::{Access as DeclaredAccess, Element, Touch};
 use crate::decl::{Declarations, segments};
 use crate::flows::segment_positions;
-use crate::ir::cfg::takings::{Taken, by_value, inst_takings};
-use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Committed, Definition, Edge, Inst, Module, Op, Site, Terminator};
+use crate::ir::cfg::takings::{Taken, by_value, place_taking};
+use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Definition, Edge, Inst, Module, Op, Site, Terminator};
 use crate::ir::parts::{Path, covers, overlap};
-use crate::ir::{Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, ValueId};
+use acvus_utils::QualifiedRef;
+
+use crate::ir::{Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, ValueId, fn_effect};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Dominators, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::structural::{PartKey, structure};
 use crate::ty::{
-    Alignment, Concrete, FlowEnd, Flows, Holds, Labelled, Mutability, PositionKind, Source, Ty, TyKind, Types,
-    lent_types, position_kinds, positions,
+    Alignment, Concrete, FlowEnd, Flows, Holds, Labelled, Mutability, PositionKind, Reissue, Source, Ty, TyKind,
+    Types, lent_types, position_kinds, positions,
 };
 
 /// A storage a loan names.
@@ -127,6 +134,7 @@ impl Storage {
         match target {
             RefTarget::Var(slot) => Some(Storage::Slot(*slot)),
             RefTarget::Param(param) => Some(Storage::Param(*param)),
+            RefTarget::Context(context) => Some(Storage::Context(*context)),
             RefTarget::Through(_) => None,
         }
     }
@@ -268,6 +276,8 @@ pub struct Loans {
     /// Every place an access reaches whose path steps into a sequence's
     /// elements.
     elements: FxHashSet<Place>,
+    /// The contexts each site sees beyond the program, where it sees any.
+    seen: FxHashMap<Site, BTreeSet<QualifiedRef>>,
 }
 
 /// The storages one site reads and writes, and the places within them.
@@ -282,6 +292,19 @@ struct Touched {
 }
 
 impl Touched {
+    /// The page `page` sees, touched whole as well.
+    fn seeing(mut self, page: &Page) -> Touched {
+        for context in &page.reads {
+            self.reads.insert(Storage::Context(*context));
+            self.read_places.insert(TouchedPlace::whole(Storage::Context(*context)));
+        }
+        for context in &page.writes {
+            self.writes.insert(Storage::Context(*context));
+            self.written_places.insert(TouchedPlace::whole(Storage::Context(*context)));
+        }
+        self
+    }
+
     fn whole(reads: BTreeSet<Storage>, writes: BTreeSet<Storage>) -> Touched {
         Touched {
             read_places: reads.iter().copied().map(TouchedPlace::whole).collect(),
@@ -431,6 +454,13 @@ impl Loans {
         reached
     }
 
+    /// The contexts `site` sees beyond the program, which it accesses whole
+    /// (context §1): those a call's effect may read or write, and every
+    /// context the body names at a `Return`. Cost: O(1).
+    pub fn page_seen(&self, site: Site) -> impl Iterator<Item = QualifiedRef> + '_ {
+        self.seen.get(&site).into_iter().flatten().copied()
+    }
+
     /// The call `value` is only an argument of, from which on it holds the
     /// loans made there (ownership §5, effects §6). Cost: O(1).
     pub fn holds_from(&self, value: ValueId) -> Option<Site> {
@@ -462,6 +492,7 @@ impl Analysis for Loans {
             within: BTreeMap::new(),
             holds_from: forward.sole_call.clone(),
             elements: FxHashSet::default(),
+            seen: FxHashMap::default(),
         };
         let mut record = Record::default();
         for (id, block) in body.blocks() {
@@ -474,11 +505,19 @@ impl Analysis for Loans {
                 let site = Site::Inst(inst.id());
                 loans.before.insert(site, state.storages.clone());
                 loans.touched.insert(site, forward.touched(inst, &state));
+                let page = forward.page_of_inst(inst);
+                if !page.is_empty() {
+                    loans.seen.insert(site, page.seen());
+                }
                 forward.step(inst, &mut state, &mut record);
             }
             let site = Site::Term(id);
             loans.before.insert(site, state.storages.clone());
             loans.touched.insert(site, forward.touched_by_terminator(block.terminator(), &state));
+            let page = forward.page_of_terminator(block.terminator());
+            if !page.is_empty() {
+                loans.seen.insert(site, page.seen());
+            }
             forward.step_terminator(id, block.terminator(), &mut state, &mut record);
             for (index, edge) in block.terminator().edges().iter().enumerate() {
                 let mut along = state.clone();
@@ -541,6 +580,39 @@ impl Record {
 
     fn made_within(&mut self, loan: &Loan, parent: &Loan) {
         self.within.entry(loan.clone()).or_default().insert(parent.clone());
+    }
+}
+
+/// The contexts a site sees beyond the program: those it reads whole, and
+/// those it writes whole (context §1).
+#[derive(Debug, Default)]
+struct Page {
+    reads: BTreeSet<QualifiedRef>,
+    writes: BTreeSet<QualifiedRef>,
+}
+
+impl Page {
+    fn is_empty(&self) -> bool {
+        self.reads.is_empty() && self.writes.is_empty()
+    }
+
+    fn seen(&self) -> BTreeSet<QualifiedRef> {
+        self.reads.union(&self.writes).copied().collect()
+    }
+
+    /// The accesses of the page at `site`: a whole read of each context it
+    /// reads, then a whole write of each it writes, by name.
+    fn record(&self, site: Site, record: &mut Record) {
+        for (reach, contexts) in [(Reach::Read, &self.reads), (Reach::Write, &self.writes)] {
+            if contexts.is_empty() {
+                continue;
+            }
+            let places = contexts
+                .iter()
+                .map(|context| Place { storage: Storage::Context(*context), path: Vec::new(), exact: true })
+                .collect();
+            record.access(site, Access { reach, places, through: LoanSet::new(), made: LoanSet::new(), on_edge: None });
+        }
     }
 }
 
@@ -816,6 +888,52 @@ impl Forward<'_> {
         })
     }
 
+    /// The contexts the instruction `inst` sees beyond the program: those
+    /// the effect of the call it is may read or write, of the contexts the
+    /// body names, every one where the effect is opaque (context §1,
+    /// extern-fn §2). A call's effect enters where it is taken (effects §6):
+    /// at a `FunctionCall`, at `ArrayMap`, which calls its function, and at
+    /// a split call's taking, not its start.
+    fn page_of_inst(&self, inst: &Inst) -> Page {
+        let callee_ty = match inst.op() {
+            Op::FunctionCall { callee_ty, .. } => *callee_ty,
+            Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args } => {
+                let [.., function] = &args[..] else { panic!("`ArrayMap` takes `[a_1, …, a_k, f]`") };
+                self.body.ty_of(*function)
+            }
+            Op::TakeEffect { src } => {
+                let Definition::Inst(start) = self.body.definition(*src) else {
+                    panic!("a taking's handle is a start's result (effects §6)")
+                };
+                match self.body.inst(start).op() {
+                    Op::Spawn { callee_ty, .. } => *callee_ty,
+                    other => panic!("a taking's handle is a start's result (effects §6), not {other:?}'s"),
+                }
+            }
+            _ => return Page::default(),
+        };
+        let effect = fn_effect(self.types, callee_ty).expect("a call's callee type is a function type");
+        let named = self.body.contexts().iter().map(|(context, _)| *context);
+        match effect.reissue() {
+            Reissue::Opaque => Page { reads: named.clone().collect(), writes: named.collect() },
+            Reissue::Pure | Reissue::Idempotent => Page {
+                reads: named.clone().filter(|context| effect.reads().contains(context)).collect(),
+                writes: named.filter(|context| effect.writes().contains(context)).collect(),
+            },
+        }
+    }
+
+    /// The contexts `terminator` sees beyond the program: every context the
+    /// body names, read whole, at a `Return` (context §1).
+    fn page_of_terminator(&self, terminator: &Terminator) -> Page {
+        match terminator {
+            Terminator::Return { .. } => {
+                Page { reads: self.body.contexts().iter().map(|(context, _)| *context).collect(), writes: BTreeSet::new() }
+            }
+            _ => Page::default(),
+        }
+    }
+
     /// The places of `access` over a call's arguments, those it reads and
     /// those it writes.
     fn touched_by_access(&self, state: &State, access: &[Touch], args: &[ValueId]) -> Touched {
@@ -1018,6 +1136,10 @@ impl Forward<'_> {
                 let Reached { parts, exact } = self.reach(self.body.ty_of(value), path)?;
                 Some(Region { ranges: parts.into_iter().map(|part| part.range).collect(), exact })
             }
+            Storage::Context(context) => {
+                let Reached { parts, exact } = self.reach(self.body.context_ty(context), path)?;
+                Some(Region { ranges: parts.into_iter().map(|part| part.range).collect(), exact })
+            }
             Storage::Outside { .. } if path.is_empty() => Some(Region { ranges: vec![0..width], exact: true }),
             Storage::Outside { .. } => None,
         }
@@ -1046,6 +1168,9 @@ impl Forward<'_> {
         match target {
             RefTarget::Var(slot) => vec![Located::by_name(Storage::Slot(*slot), &self.canonical(self.body.ty_of(*slot), path))],
             RefTarget::Param(param) => vec![Located::by_name(Storage::Param(*param), &self.canonical(self.body.ty_of(*param), path))],
+            RefTarget::Context(context) => {
+                vec![Located::by_name(Storage::Context(*context), &self.canonical(self.body.context_ty(*context), path))]
+            }
             RefTarget::Through(reference) => self.place_through(state, *reference, path),
         }
     }
@@ -1094,6 +1219,7 @@ impl Forward<'_> {
     fn names_an_element(&self, place: &Place) -> bool {
         let root = match place.storage {
             Storage::Slot(value) | Storage::Param(value) => Some(self.body.ty_of(value)),
+            Storage::Context(context) => Some(self.body.context_ty(context)),
             Storage::Outside { of, position } => lent_types(self.types, self.decls, self.body.ty_of(of))[position],
         };
         let mut at: Vec<Ty> = root.into_iter().collect();
@@ -1116,7 +1242,7 @@ impl Forward<'_> {
     fn through(&self, state: &State, target: &RefTarget) -> LoanSet {
         match target {
             RefTarget::Through(reference) => self.own(state, *reference),
-            RefTarget::Var(_) | RefTarget::Param(_) => LoanSet::new(),
+            RefTarget::Var(_) | RefTarget::Param(_) | RefTarget::Context(_) => LoanSet::new(),
         }
     }
 
@@ -1312,6 +1438,7 @@ impl Forward<'_> {
     }
 
     fn step(&self, inst: &Inst, state: &mut State, record: &mut Record) {
+        self.page_of_inst(inst).record(Site::Inst(inst.id()), record);
         if let Some(positions) = self.result(inst, state, record) {
             let result = inst.result().expect("an operation with loans yields a value");
             self.define(state, result, positions);
@@ -1333,7 +1460,6 @@ impl Forward<'_> {
             Op::Const { .. }
             | Op::ConstStr { .. }
             | Op::StringConcat { .. }
-            | Op::Fetch { into: None, .. }
             | Op::BinOp { .. }
             | Op::UnaryOp { .. }
             | Op::Cast { .. }
@@ -1356,26 +1482,6 @@ impl Forward<'_> {
                 return none();
             }
             Op::Check { .. } | Op::CheckSteps { .. } | Op::Drop { .. } => return None,
-            Op::Fetch { into: Some(slot), .. } => {
-                let place = self.place(state, &RefTarget::Var(*slot), &[]);
-                record.through(site, Reach::Write, &place, LoanSet::new());
-                let ty = self.body.ty_of(*slot);
-                self.write(state, &place, Some(ty), &empty(self.width(ty)));
-                return None;
-            }
-            Op::Commit { from: Committed::Slot(slot), .. } => {
-                let place = self.place(state, &RefTarget::Var(*slot), &[]);
-                let reach = match inst_takings(self.body, self.types, inst)[0].taken {
-                    Taken::Read => Reach::Read,
-                    Taken::Moved | Taken::PartMoved => Reach::Move,
-                };
-                record.through(site, reach, &place, LoanSet::new());
-                return None;
-            }
-            Op::Commit { from: Committed::Value(value), .. } => {
-                self.passed(state, *value, site, None, record);
-                return None;
-            }
             Op::StringAppend { target, .. } => {
                 let place = self.place_through(state, *target, &[]);
                 record.through(site, Reach::Write, &place, self.own(state, *target));
@@ -1384,8 +1490,7 @@ impl Forward<'_> {
             Op::Ref { .. } => self.lend(state, inst, record),
             Op::Take { target, path, .. } => {
                 let place = self.place(state, target, path);
-                let operand = inst_takings(self.body, self.types, inst)[0];
-                let reach = match operand.lent.unwrap_or(operand.taken) {
+                let reach = match place_taking(self.body, self.types, inst).expect("a Take takes its place") {
                     Taken::Read => Reach::Read,
                     Taken::Moved | Taken::PartMoved => Reach::Move,
                 };
@@ -1551,6 +1656,7 @@ impl Forward<'_> {
             }
             RefTarget::Var(slot) => (Storage::Slot(*slot), self.body.ty_of(*slot)),
             RefTarget::Param(param) => (Storage::Param(*param), self.body.ty_of(*param)),
+            RefTarget::Context(context) => (Storage::Context(*context), self.body.context_ty(*context)),
         };
         let path = &self.canonical(storage_ty, path);
         let place = [Located::by_name(storage, path)];
@@ -1895,6 +2001,12 @@ impl Forward<'_> {
     /// The storages an instruction reads and writes, in `state`, just
     /// before it runs.
     fn touched(&self, inst: &Inst, state: &State) -> Touched {
+        self.touched_by_operation(inst, state).seeing(&self.page_of_inst(inst))
+    }
+
+    /// What `inst` touches by its operation and its operands, apart from
+    /// the page.
+    fn touched_by_operation(&self, inst: &Inst, state: &State) -> Touched {
         if let Op::FunctionCall { callee, args, .. } | Op::Spawn { callee, args, .. } = inst.op()
             && let Some(access) = self.access(callee)
         {
@@ -1941,8 +2053,6 @@ impl Forward<'_> {
                 touched.reads.extend(named_if_reference(*b));
             }
             Op::StringClone { src } => touched.reads = named_if_reference(*src),
-            Op::Fetch { into: Some(slot), .. } => touched.writes = BTreeSet::from([Storage::Slot(*slot)]),
-            Op::Commit { from: Committed::Slot(slot), .. } => touched.reads = BTreeSet::from([Storage::Slot(*slot)]),
             Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, .. } | Op::FunctionCall { .. } | Op::Spawn { .. } => {}
             Op::Const { .. }
             | Op::ConstStr { .. }
@@ -1951,8 +2061,6 @@ impl Forward<'_> {
             | Op::AsSlice { .. }
             | Op::ArrayView { .. }
             | Op::SliceLen { .. }
-            | Op::Fetch { into: None, .. }
-            | Op::Commit { from: Committed::Value(_), .. }
             | Op::FieldGet { .. }
             | Op::FieldSet { .. }
             | Op::BinOp { .. }
@@ -1984,8 +2092,8 @@ impl Forward<'_> {
         Touched::whole(touched.reads, touched.writes)
     }
 
-    /// A `For` over a slice reads its source's storage; no other terminator
-    /// touches storage.
+    /// A `For` over a slice reads its source's storage, and a `Return` the
+    /// page; no other terminator touches storage.
     fn touched_by_terminator(&self, terminator: &Terminator, state: &State) -> Touched {
         let reads = match terminator {
             Terminator::For { source: ForSource::Slice(slice) | ForSource::SliceMut(slice), .. } => {
@@ -1993,7 +2101,7 @@ impl Forward<'_> {
             }
             _ => BTreeSet::new(),
         };
-        Touched::whole(reads, BTreeSet::new())
+        Touched::whole(reads, BTreeSet::new()).seeing(&self.page_of_terminator(terminator))
     }
 
     /// A `For` fills its body's leading parameters: a slice's element is a
@@ -2006,6 +2114,7 @@ impl Forward<'_> {
             Terminator::For { source, stages, exit, exit_trip, .. } => (source, stages, exit, exit_trip),
             Terminator::Return { value, .. } => {
                 self.passed(state, *value, site, None, record);
+                self.page_of_terminator(terminator).record(site, record);
                 return;
             }
             _ => return,
@@ -2080,14 +2189,18 @@ impl DenseAnalysis for Forward<'_> {
 
     const DIRECTION: Direction = Direction::Forward;
 
-    /// Every slot empty; every parameter and capture holding its outside
-    /// storages, each by-value parameter's own storage holding the
-    /// parameter, and each outside storage of a reference position holding
-    /// what the parameter's positions under it name.
+    /// Every slot empty and every context holding no loan; every parameter
+    /// and capture holding its outside storages, each by-value parameter's
+    /// own storage holding the parameter, and each outside storage of a
+    /// reference position holding what the parameter's positions under it
+    /// name.
     fn entry(&self, body: &Body) -> State {
         let mut state = State::bottom();
         for slot in body.slots() {
             state.storages.insert(Storage::Slot(*slot), empty(self.width(body.ty_of(*slot))));
+        }
+        for (context, ty) in body.contexts() {
+            state.storages.insert(Storage::Context(*context), empty(self.width(*ty)));
         }
         for Held { value, positions } in self.defined_before_entry() {
             if body.params().iter().any(|(_, param)| *param == value) {

@@ -7,7 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dominators::{Dominators, def_points};
 use crate::ir::cfg::body::InstId;
-use crate::ir::cfg::{BlockId, Body, Committed, Inst, Op, OrderUse, Site, Terminator};
+use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
 use crate::ty::structural;
 use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types};
@@ -527,18 +527,6 @@ impl TypeCheck<'_> {
                 let payloads = self.payloads(self.ty(*src))?;
                 self.one_of(Self::result(inst)?, &payloads, "a payload of the variant type")
             }
-            Op::Fetch { context, into: Some(slot) } | Op::Commit { context, from: Committed::Slot(slot) } => {
-                self.holds_context(*slot, *context)?;
-                self.outlives_the_run(*slot)
-            }
-            Op::Fetch { context, into: None } => {
-                self.held_in_no_slot(*context)?;
-                self.outlives_the_run(Self::result(inst)?)
-            }
-            Op::Commit { context, from: Committed::Value(value) } => {
-                self.held_in_no_slot(*context)?;
-                self.outlives_the_run(*value)
-            }
             Op::Undef | Op::Drop { .. } => Ok(()),
         }
     }
@@ -637,6 +625,7 @@ impl TypeCheck<'_> {
                 TyKind::Ref(_, lent) => lent.ty(),
                 other => return Err(format!("{reference:?} is {other:?}, not a reference")),
             },
+            RefTarget::Context(context) => self.context(*context)?,
         };
         let mut reached = vec![root];
         for seg in path {
@@ -680,33 +669,23 @@ impl TypeCheck<'_> {
         })
     }
 
-    /// `slot` is the slot the body holds `context` in.
-    fn holds_context(&self, slot: ValueId, context: QualifiedRef) -> Found {
-        let held = self.body.slots().contains(&slot) && self.body.context_of_slot(slot) == Some(context);
-        found(held, || format!("{slot:?} is not the slot the body holds {context:?} in"))
-    }
-
-    /// No slot of the body holds `context`: its fetch and its commit carry
-    /// its value (context §3).
-    fn held_in_no_slot(&self, context: QualifiedRef) -> Found {
-        let slot = self.body.slots().iter().find(|slot| self.body.context_of_slot(**slot) == Some(context));
-        found(slot.is_none(), || format!("{context:?} is held in the slot {slot:?}, and its fetch and commit name it"))
-    }
-
-    /// A value a context holds outlives the run, so its type has no
-    /// positions: no reference and no function value, at any depth
-    /// (context §3, ownership §5).
-    fn outlives_the_run(&self, value: ValueId) -> Found {
-        let mut pending = vec![self.ty(value)];
-        while let Some(ty) = pending.pop() {
-            match self.kind(ty) {
+    /// The type of `context`, which the body names, and whose value
+    /// outlives the run, so that its type has no positions: no reference
+    /// and no function value, at any depth (context §3, ownership §5).
+    fn context(&self, context: QualifiedRef) -> Result<Ty, String> {
+        let Some((_, ty)) = self.body.contexts().iter().find(|(named, _)| *named == context) else {
+            return Err(format!("{context:?} is not among the contexts the body names"));
+        };
+        let mut pending = vec![*ty];
+        while let Some(held) = pending.pop() {
+            match self.kind(held) {
                 TyKind::Ref(..) | TyKind::Fn { .. } => {
-                    return Err(format!("{value:?} goes to or comes from a context, and its type holds {:?}", self.kind(ty)));
+                    return Err(format!("{context:?} outlives the run, and its type holds {:?}", self.kind(held)));
                 }
                 kind => kind.for_each_child(|child| pending.push(child)),
             }
         }
-        Ok(())
+        Ok(*ty)
     }
 
     fn field_path(&self, object: Ty, field: acvus_utils::Astr, rest: &[acvus_utils::Astr]) -> Result<Ty, String> {

@@ -9,7 +9,6 @@
 //! - `named`, per instruction, the places it names, from `Loans` and the
 //!   instruction;
 //! - `loop_between`, per pair of blocks, from `LoopTree`;
-//! - `predecessors`, from the CFG's shape;
 //! - `commuting`, per instruction, from its operation and its callee type;
 //! - `unobserved`, per instruction, from `Loans`, `IntervalValues`,
 //!   `AffineValues`, the instruction and the uses of its result.
@@ -27,14 +26,11 @@ use smallvec::SmallVec;
 use crate::ir::cfg::edit::{
     Asked, ContentFacts, DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved,
 };
-use acvus_utils::QualifiedRef;
-
-use crate::decl::Declarations;
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Committed, Definition, InstId, Op, Site, Terminator};
-use crate::ir::{Checked, IndexBound, PathSeg, RefTarget, ValueId, fn_effect};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Definition, InstId, Op, Site, Terminator};
+use crate::ir::{Checked, IndexBound, Intrinsic, PathSeg, ValueId, fn_effect};
 use crate::passes::analysis::{
     AffineValues, Analysis, AnalysisManager, ContentLiveness, Dominators, Escapes, IntervalValues, LoopTree, Loans,
-    Point, PostDominators, Reach, Storage, TouchedPlace, ValueBounds,
+    Point, PostDominators, Storage, TouchedPlace, ValueBounds,
 };
 use crate::passes::domain::{Bound, Interval, JoinSemiLattice};
 use crate::ty::{CastTy, Concrete, Ty, Types, positions};
@@ -47,7 +43,6 @@ pub struct EditFacts<'a, 'd> {
     named: FxHashMap<InstId, BTreeSet<TouchedPlace>>,
     /// `LoopTree::loop_between` by its two blocks.
     loop_between: FxHashMap<(BlockId, BlockId), bool>,
-    predecessors: Option<FxHashMap<BlockId, SmallVec<[BlockId; 2]>>>,
     /// Whether each instruction is a call, or a call's start or taking,
     /// whose callee's declared effect commutes.
     commuting: FxHashMap<InstId, bool>,
@@ -65,7 +60,6 @@ impl<'a, 'd> EditFacts<'a, 'd> {
             body,
             named: FxHashMap::default(),
             loop_between: FxHashMap::default(),
-            predecessors: None,
             commuting: FxHashMap::default(),
             unobserved: FxHashMap::default(),
         }
@@ -122,9 +116,6 @@ impl Facts for EditFacts<'_, '_> {
         }
         if stale(LoopTree::READS, changes) {
             self.loop_between.clear();
-        }
-        if changes.touched(Aspect::CfgShape) {
-            self.predecessors = None;
         }
         if changes.touched(Aspect::Instructions) || changes.touched(Aspect::Types) {
             self.commuting.clear();
@@ -190,16 +181,26 @@ impl LoanFacts for EditFacts<'_, '_> {
         written.iter().any(|written| named.iter().any(|place| written.may_overlap(place, body)))
     }
 
-    /// An instruction that names no place, and whose operands and result
-    /// are no slot and hold no position (ownership §5), names no storage:
-    /// `Loans` gives every such value no loan and such an instruction no
-    /// read or write. Only another instruction needs `Loans`. Cost: O(its
+    /// An instruction that names no place, sees no context beyond the
+    /// program, and whose operands and result are no slot and hold no
+    /// position (ownership §5), names no storage: `Loans` gives every such
+    /// value no loan and such an instruction no read or write. A call may
+    /// see contexts, which its effect states (context §1). Only another
+    /// instruction needs `Loans`. Cost: O(its
     /// operands · their types' size), and `Loans`' own when an edit dropped
     /// it and the instruction is of the other kind.
     fn names_storage(&mut self, asked: Asked<'_>, inst: InstRef) -> bool {
         let body = asked.body();
         let record = body.inst(inst.id());
-        let names_a_place = matches!(record.op(), Op::Take { .. } | Op::Assign { .. } | Op::Ref { .. });
+        let names_a_place = matches!(
+            record.op(),
+            Op::Take { .. }
+                | Op::Assign { .. }
+                | Op::Ref { .. }
+                | Op::FunctionCall { .. }
+                | Op::TakeEffect { .. }
+                | Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, .. }
+        );
         let types = asked.module().types();
         let decls = self.am.decls();
         let holds_nothing = |value: ValueId| {
@@ -226,17 +227,30 @@ impl ContentFacts for EditFacts<'_, '_> {
             Position::Before(inst) => content.live_before(inst.id()),
             Position::End(block) => content.live_before_terminator(block),
         };
-        live.contains(&place)
+        live.contains(&own_storage(asked.body(), place))
     }
 
     /// Read from the content liveness. Cost: O(the place's units), and its
     /// own when an edit dropped it.
     fn part_read_after(&mut self, asked: Asked<'_>, place: ValueId, path: &[PathSeg], at: Position) -> bool {
         let content = self.get::<ContentLiveness>(asked);
+        let place = own_storage(asked.body(), place);
         match at {
             Position::Before(inst) => content.part_live_before(inst.id(), place, path),
             Position::End(block) => content.part_live_before_terminator(block, place, path),
         }
+    }
+}
+
+/// The storage `place`, a slot or a by-value parameter, is.
+///
+/// # Panics
+/// `place` is neither.
+fn own_storage(body: &Body, place: ValueId) -> Storage {
+    match body.definition(place) {
+        Definition::Slot(_) => Storage::Slot(place),
+        Definition::Param(_) => Storage::Param(place),
+        definition => panic!("{place:?} is defined at {definition:?}, and only a slot or a parameter has its own storage"),
     }
 }
 
@@ -252,8 +266,8 @@ impl OrderFacts for EditFacts<'_, '_> {
 }
 
 impl DischargeFacts for EditFacts<'_, '_> {
-    /// A check that never fires, a store or a load never read, and a commit
-    /// of a context never written, proven for `inst` alone. Cost: O(1) when
+    /// A check that never fires and a store never read, proven for `inst`
+    /// alone. Cost: O(1) when
     /// kept; else `Proven::unobserved`'s, and the analyses' own when an
     /// edit dropped them.
     fn discharged(&mut self, asked: Asked<'_>, inst: InstRef) -> Option<Unobserved> {
@@ -267,8 +281,7 @@ impl DischargeFacts for EditFacts<'_, '_> {
         let types = asked.module().types();
         let decls = self.am.decls();
         let bounds = ValueBounds { intervals: &intervals, affine: &affine, decls, body, types };
-        let preds = self.predecessors.get_or_insert_with(|| body.predecessors());
-        let proven = Proven { body, types, loans: &loans, bounds, decls, preds };
+        let proven = Proven { body, types, loans: &loans, bounds };
         let fact = proven.unobserved(inst.id());
         self.unobserved.insert(inst.id(), fact);
         fact
@@ -318,8 +331,6 @@ struct Proven<'f> {
     types: &'f Types<Concrete>,
     loans: &'f Loans,
     bounds: ValueBounds<'f>,
-    decls: &'f Declarations,
-    preds: &'f FxHashMap<BlockId, SmallVec<[BlockId; 2]>>,
 }
 
 impl Proven<'_> {
@@ -327,30 +338,13 @@ impl Proven<'_> {
     /// - a check whose condition the intervals show holds on every run
     ///   that reaches it;
     /// - a store whose storage no read reaches before a write replaces it
-    ///   or the body ends, per the loans;
-    /// - a fetch into a context's slot, a store, on the same terms, and a
-    ///   fetch into a value that has no use: once the slot is promoted, the
-    ///   reads of what the fetch wrote are the uses of that value;
-    /// - a commit from a context's slot that no write of the program's
-    ///   reaches from the body's entry.
+    ///   or the body ends, per the loans. A store on the order chain, a
+    ///   volatile context's, is an effect and never proven: nothing merges
+    ///   or removes it (context §3).
     ///
-    /// A volatile context's fetch and commit are never proven, whatever
-    /// their shape: nothing merges or removes them (context §3). Nor is a
-    /// commit of a value: a promoted slot's writes leave no site, so
-    /// whether one reaches the commit from the entry is not found from the
-    /// value it commits. Cost: O(the relations of a slice's impl) for a
-    /// check, O(storages it writes · the body's sites and edges) for a
-    /// store or a fetch into a slot, O(1) for a fetch into a value, and
-    /// O(the body's sites and edges) for a commit.
-    ///
-    /// # Panics
-    /// A fetch or a commit names a context `decls` does not declare.
+    /// Cost: O(the relations of a slice's impl) for a check, and O(storages
+    /// it writes · the body's sites and edges) for a store.
     fn unobserved(&self, inst: InstId) -> Option<Unobserved> {
-        let volatile = |context: QualifiedRef| {
-            self.decls
-                .context_is_volatile(context)
-                .unwrap_or_else(|| panic!("the context {context:?} a body fetches or commits is declared"))
-        };
         let record = self.body.inst(inst);
         match record.op() {
             Op::Check { op, left, right } => self.check_holds(*op, *left, *right).then_some(Unobserved::NeverFires),
@@ -359,16 +353,8 @@ impl Proven<'_> {
             | Op::IndexSet { slice, index, bound: IndexBound::Checked, .. } => {
                 self.bounds.index_in_bounds(*slice, *index).then_some(Unobserved::NeverFires)
             }
-            Op::Assign { .. } => store_never_read(self.body, self.loans, inst).then_some(Unobserved::NeverRead),
-            Op::Fetch { context, into: Some(_) } if !volatile(*context) => {
+            Op::Assign { .. } if record.order().is_none() => {
                 store_never_read(self.body, self.loans, inst).then_some(Unobserved::NeverRead)
-            }
-            Op::Fetch { context, into: None } if !volatile(*context) => {
-                let fetched = record.result().expect("a fetch into a value yields it");
-                (self.body.use_count(fetched) == 0).then_some(Unobserved::NeverRead)
-            }
-            Op::Commit { context, from: Committed::Slot(slot) } if !volatile(*context) => {
-                commit_never_written(self.body, self.loans, self.preds, inst, *slot).then_some(Unobserved::NeverWritten)
             }
             _ => None,
         }
@@ -406,20 +392,14 @@ impl Proven<'_> {
     }
 }
 
-/// The storage and path a store names directly, by a slot or a by-value
-/// parameter's own storage: an `Assign`'s, or the whole slot a `Fetch`
-/// writes; `None` for one through a reference.
+/// The storage and path an `Assign` names by name: a slot, a by-value
+/// parameter's own storage or a context; `None` for one through a
+/// reference.
 fn direct_place(op: &Op) -> Option<(Storage, &[PathSeg])> {
-    let (target, path) = match op {
-        Op::Assign { target, path, .. } => (target, path.as_slice()),
-        Op::Fetch { into: Some(slot), .. } => return Some((Storage::Slot(*slot), &[])),
-        _ => return None,
+    let Op::Assign { target, path, .. } = op else {
+        return None;
     };
-    match target {
-        RefTarget::Var(slot) => Some((Storage::Slot(*slot), path)),
-        RefTarget::Param(param) => Some((Storage::Param(*param), path)),
-        RefTarget::Through(_) => None,
-    }
+    Storage::by_name(target).map(|storage| (storage, path.as_slice()))
 }
 
 /// Whether no read of any storage the store `store` writes is reached from
@@ -477,52 +457,6 @@ fn store_never_read(body: &Body, loans: &Loans, store: InstId) -> bool {
         }
         true
     })
-}
-
-/// Whether no write of the program's to `slot` stands on a path from the
-/// body's entry to the commit `commit` from it. A move out of the slot
-/// changes the context and is a write. A `Fetch` into the slot and a
-/// `Commit` from it are the boundary's own moves of the context's content,
-/// and neither is a write of the program's (context §3).
-fn commit_never_written(
-    body: &Body,
-    loans: &Loans,
-    preds: &FxHashMap<BlockId, SmallVec<[BlockId; 2]>>,
-    commit: InstId,
-    slot: ValueId,
-) -> bool {
-    let storage = Storage::Slot(slot);
-    let writes = |site: Site| {
-        let boundary = matches!(site, Site::Inst(inst) if body.inst(inst).op().touches_context());
-        !boundary && (loans.writes(site).contains(&storage) || moves_out(loans, site, storage))
-    };
-    let block = body.block_of(commit);
-    let earlier = std::iter::successors(body.first_inst(block), |at| body.next_in_block(*at)).take_while(|at| *at != commit);
-    if earlier.map(Site::Inst).any(writes) {
-        return false;
-    }
-    let mut visited: FxHashSet<BlockId> = FxHashSet::default();
-    let mut pending: Vec<BlockId> = preds[&block].to_vec();
-    while let Some(at) = pending.pop() {
-        if !visited.insert(at) {
-            continue;
-        }
-        let sites = body.block(at).insts().map(|inst| Site::Inst(inst.id()));
-        if sites.chain([Site::Term(at)]).any(writes) {
-            return false;
-        }
-        pending.extend(preds[&at].iter().copied());
-    }
-    true
-}
-
-/// Whether `site` moves a part of `storage` out, which changes what it
-/// holds, by name or through a reference.
-fn moves_out(loans: &Loans, site: Site, storage: Storage) -> bool {
-    loans
-        .accesses(site)
-        .iter()
-        .any(|access| access.reach == Reach::Move && access.places.iter().any(|place| place.storage == storage))
 }
 
 /// Whether `inst` is a call, a start or a taking whose callee's declared
@@ -1015,12 +949,8 @@ mod tests {
         assert!(facts.conflicts(Asked::new(&f.module, s.id), moved, assign_y), "the load's storage is known at its new place");
     }
 
-    fn fetch_into(context: QualifiedRef, slot: ValueId) -> Op {
-        Op::Fetch { context, into: Some(slot) }
-    }
-
-    fn commit_from(context: QualifiedRef, slot: ValueId) -> Op {
-        Op::Commit { context, from: Committed::Slot(slot) }
+    fn assign_context(context: QualifiedRef, value: ValueId) -> Op {
+        Op::Assign { target: RefTarget::Context(context), path: Vec::new(), value, restores: false }
     }
 
     /// ```text
@@ -1094,100 +1024,88 @@ mod tests {
     }
 
     /// ```text
-    /// fetch page into c; v = c; w = fetch clock; commit page from c;
-    /// fetch page into c; one = 1; c = one; commit page from c;
-    /// commit clock = one; return v
+    /// one = 1; @page = one; @page = one; @clock = one; @clock = one;
+    /// return one
     /// ```
-    /// with `c` the slot `page` lives in and `clock` volatile.
+    /// with `clock` volatile: a store into a context is judged as any
+    /// store, the return reading every context (context §1), and a volatile
+    /// context's stores stand on the order chain and are never proven
+    /// (context §3).
     #[test]
-    fn fetches_and_commits_are_unobserved_by_the_context_slot_and_never_when_volatile() {
+    fn a_context_store_is_read_at_the_return_and_a_volatile_one_is_never_proven() {
         let mut f = fixture();
         let int = f.int;
         let (page, clock) = (QualifiedRef::root(f.interner.intern("page")), QualifiedRef::root(f.interner.intern("clock")));
         let mut builder = f.module.build_body(true, int);
-        let c = builder.context_slot(page, int, Span::ZERO);
-        builder.push_effect_unit(fetch_into(page, c), Span::ZERO);
-        let v = builder.push(take(c), int, Span::ZERO);
-        builder.push_effect(Op::Fetch { context: clock, into: None }, int, Span::ZERO);
-        builder.push_effect_unit(commit_from(page, c), Span::ZERO);
-        builder.push_effect_unit(fetch_into(page, c), Span::ZERO);
+        builder.context(page, int);
+        builder.context(clock, int);
         let one = builder.push(constant(1), int, Span::ZERO);
-        builder.push_unit(assign(c, one), Span::ZERO);
-        builder.push_effect_unit(commit_from(page, c), Span::ZERO);
-        builder.push_effect_unit(Op::Commit { context: clock, from: Committed::Value(one) }, Span::ZERO);
-        builder.terminate(Terminator::Return { value: v, order: None, span: Span::ZERO }, Span::ZERO);
+        builder.push_unit(assign_context(page, one), Span::ZERO);
+        builder.push_unit(assign_context(page, one), Span::ZERO);
+        builder.push_effect_unit(assign_context(clock, one), Span::ZERO);
+        builder.push_effect_unit(assign_context(clock, one), Span::ZERO);
+        builder.terminate(Terminator::Return { value: one, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
-        assert_eq!(f.module.body(id).context_of_slot(c), Some(page));
-        let [read, _, volatile_fetch, after_a_fetch, overwritten, _, _, after_an_assign, volatile_commit] =
-            inst_refs(&mut f.module, id)[..]
-        else {
-            panic!("the body has nine instructions")
+        let [_, overwritten, returned, volatile_overwritten, volatile_returned] = inst_refs(&mut f.module, id)[..] else {
+            panic!("the body has five instructions")
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
         let mut facts = EditFacts::new(&mut am, id);
 
-        assert_eq!(facts.discharged(Asked::new(&f.module, id), read), None, "c is read after this fetch");
         assert_eq!(
             facts.discharged(Asked::new(&f.module, id), overwritten),
             Some(Unobserved::NeverRead),
-            "c is assigned whole before any read after this fetch"
+            "@page is assigned whole again before any read"
         );
-        assert_eq!(facts.discharged(Asked::new(&f.module, id), volatile_fetch), None, "a volatile fetch is never removed");
-        assert_eq!(
-            facts.discharged(Asked::new(&f.module, id), after_a_fetch),
-            Some(Unobserved::NeverWritten),
-            "a fetch into the slot is no write of the program's"
-        );
-        assert_eq!(facts.discharged(Asked::new(&f.module, id), after_an_assign), None, "c is assigned before this commit");
-        assert_eq!(facts.discharged(Asked::new(&f.module, id), volatile_commit), None, "a volatile commit is never removed");
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), returned), None, "the return reads @page");
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), volatile_overwritten), None, "a volatile store is never removed");
+        assert_eq!(facts.discharged(Asked::new(&f.module, id), volatile_returned), None, "a volatile store is never removed");
     }
 
-    /// A volatile load nothing uses stays: `discharge` refuses it.
+    /// A volatile context's store nothing reads again stays: `discharge`
+    /// refuses it.
     #[test]
-    fn a_volatile_load_with_no_use_is_not_discharged() {
+    fn a_volatile_store_is_not_discharged() {
         let mut f = fixture();
         let int = f.int;
         let clock = QualifiedRef::root(f.interner.intern("clock"));
         let mut builder = f.module.build_body(true, int);
-        builder.push_effect(Op::Fetch { context: clock, into: None }, int, Span::ZERO);
+        builder.context(clock, int);
         let one = builder.push(constant(1), int, Span::ZERO);
+        builder.push_effect_unit(assign_context(clock, one), Span::ZERO);
+        builder.push_effect_unit(assign_context(clock, one), Span::ZERO);
         builder.terminate(Terminator::Return { value: one, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
-        let [load, _] = inst_refs(&mut f.module, id)[..] else {
-            panic!("the body has two instructions")
+        let [_, store, _] = inst_refs(&mut f.module, id)[..] else {
+            panic!("the body has three instructions")
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
         let mut facts = EditFacts::new(&mut am, id);
         let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
-        assert_eq!(editor.discharge(load), Err(CannotDischarge::NotProven));
+        assert_eq!(editor.discharge(store), Err(CannotDischarge::NotProven));
         editor.finish();
-        assert_eq!(f.module.body(id).blocks().flat_map(|(_, block)| block.insts()).count(), 2);
+        assert_eq!(f.module.body(id).blocks().flat_map(|(_, block)| block.insts()).count(), 3);
     }
 
-    /// Through `Editor<Discharge>` over `EditFacts`: a dead store, an unread
-    /// fetch and an unwritten commit go, each on the fact the refresh after
-    /// the one before still proves, and the facts refuse what is observed.
-    /// The fetch is read by the commit alone, so it is unread once the
-    /// commit goes.
+    /// Through `Editor<Discharge>` over `EditFacts`: a dead store goes on
+    /// the fact the facts prove, and the facts refuse the store that is
+    /// read.
     #[test]
     fn discharge_through_the_editor_removes_what_the_facts_prove_unobserved() {
         let mut f = fixture();
         let int = f.int;
-        let page = QualifiedRef::root(f.interner.intern("page"));
         let mut builder = f.module.build_body(true, int);
-        let (c, s) = (builder.context_slot(page, int, Span::ZERO), builder.slot(int, Span::ZERO));
+        let s = builder.slot(int, Span::ZERO);
         let one = builder.push(constant(1), int, Span::ZERO);
         builder.push_unit(assign(s, one), Span::ZERO);
         builder.push_unit(assign(s, one), Span::ZERO);
-        builder.push_effect_unit(fetch_into(page, c), Span::ZERO);
-        builder.push_effect_unit(commit_from(page, c), Span::ZERO);
         let u = builder.push(take(s), int, Span::ZERO);
         builder.terminate(Terminator::Return { value: u, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
-        let [_, dead, live, load, unwritten, _] = inst_refs(&mut f.module, id)[..] else {
-            panic!("the body has six instructions")
+        let [_, dead, live, _] = inst_refs(&mut f.module, id)[..] else {
+            panic!("the body has four instructions")
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
@@ -1196,14 +1114,11 @@ mod tests {
         {
             let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
             assert_eq!(editor.discharge(live), Err(CannotDischarge::NotProven));
-            assert_eq!(editor.discharge(unwritten), Ok(()));
-            assert_eq!(editor.discharge(load), Ok(()));
             assert_eq!(editor.discharge(dead), Ok(()));
             editor.finish();
         }
         let ops: Vec<&Op> = f.module.body(id).blocks().flat_map(|(_, block)| block.insts()).map(Inst::op).collect();
         assert_eq!(ops.len(), 3);
-        assert!(!ops.iter().any(|op| matches!(op, Op::Fetch { .. } | Op::Commit { .. })));
         assert_eq!(ops.iter().filter(|op| matches!(op, Op::Assign { .. })).count(), 1);
     }
 

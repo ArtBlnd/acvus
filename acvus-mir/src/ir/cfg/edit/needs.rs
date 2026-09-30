@@ -72,8 +72,8 @@ pub trait LoanFacts: Facts {
     /// with it on either side, for every other instruction.
     fn names_storage(&mut self, asked: Asked<'_>, inst: InstRef) -> bool;
     /// The first use of `slot` a promotion cannot rewrite: anything but a
-    /// whole-slot `Take`, `Assign`, `Fetch` or `Commit`. `None` is exactly
-    /// what `promote` requires.
+    /// whole-slot `Take` or `Assign`. `None` is exactly what `promote`
+    /// requires.
     fn escapes(&mut self, asked: Asked<'_>, slot: ValueId) -> Option<Site>;
 }
 
@@ -88,10 +88,8 @@ pub trait OrderFacts: Facts {
 pub enum Unobserved {
     /// A check never fires on any run that reaches it.
     NeverFires,
-    /// A store or a load whose value no read reaches.
+    /// A store whose value no read reaches.
     NeverRead,
-    /// A commit of a context the body never writes (context §3).
-    NeverWritten,
 }
 
 pub trait ContentFacts: Facts {

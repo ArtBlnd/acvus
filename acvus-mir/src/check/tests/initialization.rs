@@ -1,6 +1,6 @@
 //! initck and moveck over programs built from source: parsed, checked by
 //! typeck, lowered, and taken through the required steps up to
-//! `remove_dead_context_ops`, as the checks see them.
+//! `clone_strings`, as the checks see them.
 
 use super::{Fixture, covers, span_of};
 use crate::check::{Refusal, RefusalKind};

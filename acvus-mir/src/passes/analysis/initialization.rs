@@ -3,23 +3,23 @@
 //! the dense engine, forward, before promotion, when every binding is a
 //! slot. `check::initck` and `check::moveck` read it.
 //!
-//! - A place is a slot or a by-value parameter's own storage, whatever its
-//!   type: a binding is built field by field whether its fields copy or
-//!   not (ownership §4).
+//! - A place is a slot, a by-value parameter's own storage, or a context,
+//!   whatever its type: a binding is built field by field whether its
+//!   fields copy or not (ownership §4).
 //! - A place's units are its type cut at every path the body names in it,
 //!   by name or through a reference, a store's, a read's or a move's, by
 //!   `ir::parts::units`, so they cover the whole type. What a function
 //!   value's or a lifetime's position lends has no type, and is one unit.
-//! - Entry: a slot's units are never written; a by-value parameter's are
-//!   written.
+//! - Entry: a slot's units are never written; a by-value parameter's and a
+//!   context's are written (context §1).
 //! - An `Assign` into a path by name writes every unit that path covers.
 //! - A `Take` by name that `ir::cfg::takings` takes its place `Moved` or
 //!   `PartMoved` moves every unit its path covers, at its span (ownership
 //!   §2, §6). One it takes `Read` moves nothing: a value that copies, and a
 //!   `&mut`, which each use reborrows (ownership §1, §5).
-//! - A `Fetch` into a context's slot writes every unit of it; a `Commit`
-//!   from it reads every unit and leaves each never written, until the
-//!   next `Fetch` (context §1, §3). Neither is a move of the program's.
+//! - Any other write `Loans` records by name of a whole place, as where a
+//!   call writes a context it sees beyond the program, writes every unit
+//!   of it (context §1).
 //! - Storage outside the body, what each position of a parameter's or a
 //!   capture's type lends (`Loans`' `Storage::Outside`), is a place too,
 //!   its units the lent target's type cut as a slot's are, written at entry
@@ -46,8 +46,8 @@ use acvus_ast::Span;
 use rustc_hash::FxHashMap;
 
 use crate::decl::Declarations;
-use crate::ir::cfg::takings::{Taken, inst_takings};
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Committed, Edge, Inst, Module, Op, Site, Terminator};
+use crate::ir::cfg::takings::{Taken, place_taking};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Edge, Inst, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, is_cut_of, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Mode, Reach, Storage, solve_dense};
@@ -191,12 +191,13 @@ impl Holder {
     }
 }
 
-/// Every slot, every parameter the body names as a storage, and every
-/// storage outside the body; each with its units, cut at every region a
+/// Every slot, every parameter the body names as a storage, every context
+/// the body names, and every storage outside the body; each with its units, cut at every region a
 /// path by name, or through a reference to one place, reaches in it.
 fn units_of(body: &Body, types: &Types<Concrete>, decls: &Declarations, loans: &Loans) -> FxHashMap<Storage, Vec<Path>> {
     let mut holders: FxHashMap<Storage, Holder> =
         body.slots().iter().map(|slot| (Storage::Slot(*slot), Holder::typed(body.ty_of(*slot)))).collect();
+    holders.extend(body.contexts().iter().map(|(context, ty)| (Storage::Context(*context), Holder::typed(*ty))));
     let outside = body.params().iter().chain(body.captures()).map(|(_, value)| *value).filter(|value| !body.is_token(*value));
     for of in outside {
         for (position, lent) in lent_types(types, decls, body.ty_of(of)).into_iter().enumerate() {
@@ -206,11 +207,12 @@ fn units_of(body: &Body, types: &Types<Concrete>, decls: &Declarations, loans: &
     for (_, block) in body.blocks() {
         for inst in block.insts() {
             if let Some((place, region)) = named_place(inst.op()) {
-                let named = match place {
-                    Storage::Slot(value) | Storage::Param(value) => value,
-                    Storage::Outside { .. } => unreachable!("a place by name is a slot or a parameter"),
+                let ty = match place {
+                    Storage::Slot(value) | Storage::Param(value) => body.ty_of(value),
+                    Storage::Context(context) => body.context_ty(context),
+                    Storage::Outside { .. } => unreachable!("a place by name is a slot, a parameter or a context"),
                 };
-                holders.entry(place).or_insert_with(|| Holder::typed(body.ty_of(named))).cut(region);
+                holders.entry(place).or_insert_with(|| Holder::typed(ty)).cut(region);
                 continue;
             }
             if !is_through(inst.op()) {
@@ -220,6 +222,7 @@ fn units_of(body: &Body, types: &Types<Concrete>, decls: &Declarations, loans: &
             for place in reached.filter(|place| loans.is_one(place)) {
                 let holder = holders.entry(place.storage).or_insert_with(|| match place.storage {
                     Storage::Slot(value) | Storage::Param(value) => Holder::typed(body.ty_of(value)),
+                    Storage::Context(context) => Holder::typed(body.context_ty(context)),
                     Storage::Outside { .. } => panic!("{:?} is an outside storage of a parameter or a capture", place.storage),
                 });
                 let region = parts::owned_region(&place.path);
@@ -296,6 +299,15 @@ impl Forward<'_> {
         }
     }
 
+    /// Every write `Loans` records at `site` by name of a whole place
+    /// writes every unit of it.
+    fn whole_writes(&self, site: Site, state: &mut Units) {
+        let written = self.loans.accesses(site).iter().filter(|access| access.reach == Reach::Write && access.through.is_empty());
+        for place in written.flat_map(|access| &access.places).filter(|place| place.exact && place.path.is_empty()) {
+            self.set(place.storage, &[], &Written::default(), state);
+        }
+    }
+
     /// A `Take` or an `Assign` through a reference: the move or the write
     /// `Loans` records at it that reaches one place, of that place's region.
     /// A move through a shared reference does not happen (ownership §5).
@@ -328,7 +340,7 @@ impl DenseAnalysis for Forward<'_> {
         for (place, units) in self.units {
             let start = match place {
                 Storage::Slot(_) => Written { never: true, ..Written::default() },
-                Storage::Param(_) | Storage::Outside { .. } => Written::default(),
+                Storage::Param(_) | Storage::Context(_) | Storage::Outside { .. } => Written::default(),
             };
             state.0.extend((0..units.len()).map(|index| ((*place, index), start.clone())));
         }
@@ -336,35 +348,30 @@ impl DenseAnalysis for Forward<'_> {
     }
 
     fn transfer(&self, inst: &Inst, state: &mut Units) {
+        self.whole_writes(Site::Inst(inst.id()), state);
         match inst.op() {
-            Op::Assign { target: RefTarget::Var(_) | RefTarget::Param(_), .. } => {
-                let (place, region) = named_place(inst.op()).expect("matched as a store by name");
+            Op::Assign { target: RefTarget::Through(_), .. } | Op::Take { target: RefTarget::Through(_), .. } => {
+                self.transfer_through(inst, state);
+            }
+            Op::Assign { .. } => {
+                let (place, region) = named_place(inst.op()).expect("a store not through a reference is by name");
                 self.set(place, region, &Written::default(), state);
             }
-            Op::Take { target: RefTarget::Var(named) | RefTarget::Param(named), .. } => {
-                let (place, region) = named_place(inst.op()).expect("matched as a take by name");
-                let taken = inst_takings(self.body, self.types, inst)
-                    .into_iter()
-                    .find(|operand| operand.names_place && operand.value == *named)
-                    .expect("a Take by name names its place among its operands")
-                    .taken;
+            Op::Take { .. } => {
+                let (place, region) = named_place(inst.op()).expect("a take not through a reference is by name");
+                let taken = place_taking(self.body, self.types, inst).expect("a Take takes its place");
                 if matches!(taken, Taken::Moved | Taken::PartMoved) {
                     let moved = Written { moved: BTreeSet::from([inst.span()]), ..Written::default() };
                     self.set(place, region, &moved, state);
                 }
             }
-            Op::Take { target: RefTarget::Through(_), .. } | Op::Assign { target: RefTarget::Through(_), .. } => {
-                self.transfer_through(inst, state);
-            }
-            Op::Fetch { into: Some(slot), .. } => self.set(Storage::Slot(*slot), &[], &Written::default(), state),
-            Op::Commit { from: Committed::Slot(slot), .. } => {
-                self.set(Storage::Slot(*slot), &[], &Written { never: true, ..Written::default() }, state);
-            }
             _ => {}
         }
     }
 
-    fn transfer_terminator(&self, _: BlockId, _: &Terminator, _: &mut Units) {}
+    fn transfer_terminator(&self, block: BlockId, _: &Terminator, state: &mut Units) {
+        self.whole_writes(Site::Term(block), state);
+    }
 
     fn transfer_edge(&self, _: BlockId, _: &Edge<'_>, _: &[ValueId], _: &mut Units) {}
 }

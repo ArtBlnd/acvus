@@ -1,7 +1,6 @@
 //! For each slot, the first use a promotion cannot rewrite: any use but a
-//! whole-slot `Take` or `Assign` of it, or a context's `Fetch` into it or
-//! `Commit` from it, which read and write it whole (context §3); such as a
-//! `Ref`, an access to a part, or a terminator naming it. No such use is exactly what
+//! whole-slot `Take` or `Assign` of it, such as a `Ref`, an access to a
+//! part, or a terminator naming it. No such use is exactly what
 //! `Editor::promote` requires (D56). "First" is in block order, a block's
 //! instructions before its terminator.
 //!
@@ -11,7 +10,7 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::ir::cfg::{Aspect, Body, BodyId, Committed, Module, Op, Site};
+use crate::ir::cfg::{Aspect, Body, BodyId, Module, Op, Site};
 use crate::ir::{RefTarget, ValueId};
 use crate::passes::analysis::{Analysis, AnalysisManager};
 
@@ -47,8 +46,8 @@ fn first_escape(body: &Body, slot: ValueId) -> Option<Site> {
     sites.into_iter().find(|site| !promotable(body, slot, *site))
 }
 
-/// Whether the use at `site` is a whole-slot `Take`, `Assign`, `Fetch` or
-/// `Commit` of `slot` that names it nowhere else.
+/// Whether the use at `site` is a whole-slot `Take` or `Assign` of `slot`
+/// that names it nowhere else.
 fn promotable(body: &Body, slot: ValueId, site: Site) -> bool {
     let Site::Inst(inst) = site else {
         return false;
@@ -58,7 +57,6 @@ fn promotable(body: &Body, slot: ValueId, site: Site) -> bool {
         Op::Assign { target: RefTarget::Var(named), path, value, .. } => {
             *named == slot && path.is_empty() && *value != slot
         }
-        Op::Fetch { into: Some(named), .. } | Op::Commit { from: Committed::Slot(named), .. } => *named == slot,
         _ => false,
     }
 }

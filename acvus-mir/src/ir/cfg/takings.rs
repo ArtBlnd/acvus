@@ -21,15 +21,15 @@
 //!   lends, whole or in part, unless it copies or is a `&mut` (ownership
 //!   §2, §4). The reference itself is read.
 //!
-//! - A context's slot is named as a place by its `Fetch`, which writes it
-//!   whole, and by its `Commit`, which moves its whole content into the
-//!   page, reading it where it copies (context §3).
+//! - A context is a place by name that is no value of the body: a `Take`,
+//!   an `Assign` or a `Ref` of it has no operand for it, and
+//!   `place_taking` states how its place is taken (context §3).
 //!
 //! A `Take`'s `taken_out` is not read: lower makes no take-out.
 
 use smallvec::SmallVec;
 
-use crate::ir::cfg::{Body, Committed, Inst, Op, Terminator};
+use crate::ir::cfg::{Body, Inst, Op, Terminator};
 use crate::ir::parts;
 use crate::ir::{Callee, ForSource, Intrinsic, RefTarget, ValueId};
 use crate::ty::{Calls, Concrete, Mutability, Ty, TyKind, Types, copies};
@@ -101,8 +101,9 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         false => taken(src, Taken::PartMoved),
     };
     let place = |target: &RefTarget, taken: Taken| match target {
-        RefTarget::Var(named) | RefTarget::Param(named) => Operand { value: *named, taken, names_place: true, lent: None },
-        RefTarget::Through(reference) => Operand { lent: Some(taken), ..read(*reference) },
+        RefTarget::Var(named) | RefTarget::Param(named) => Some(Operand { value: *named, taken, names_place: true, lent: None }),
+        RefTarget::Through(reference) => Some(Operand { lent: Some(taken), ..read(*reference) }),
+        RefTarget::Context(_) => None,
     };
     let callee = |callee: &Callee| match callee {
         Callee::Indirect(function) => match types.kind(ty(*function)) {
@@ -113,11 +114,9 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         Callee::Direct(_) | Callee::Extern { .. } => None,
     };
     let mut operands: SmallVec<[Operand; 4]> = SmallVec::new();
-    let slot = |slot: ValueId, taken: Taken| Operand { value: slot, taken, names_place: true, lent: None };
+    let taking = || place_taking(body, types, inst).expect("a place operation takes its place");
     match inst.op() {
-        Op::Fetch { into: Some(into), .. } => operands.push(slot(*into, Taken::Read)),
-        Op::Fetch { into: None, .. }
-        | Op::Const { .. }
+        Op::Const { .. }
         | Op::ConstStr { .. }
         | Op::LoadFunction { .. }
         | Op::ArrayBegin { .. }
@@ -126,32 +125,14 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         Op::StringAppend { target, part } => operands.extend([read(*target), passed(*part)]),
         Op::StringEq { a, b } => operands.extend([read(*a), read(*b)]),
         Op::StringClone { src } => operands.push(read(*src)),
-        Op::Ref { target, .. } => operands.push(place(target, Taken::Read)),
-        Op::Take { target, path, .. } => {
-            let what_it_takes = inst.result().expect("a `Take` yields what it takes");
-            let holder_keeps = copying(what_it_takes) || is_mut_ref(types, ty(what_it_takes));
-            let taking = if holder_keeps {
-                Taken::Read
-            } else if parts::owned_region(path).is_empty() {
-                Taken::Moved
-            } else {
-                Taken::PartMoved
-            };
-            operands.push(place(target, taking));
-        }
-        Op::Assign { target, path, value, .. } => {
-            let replaces_a_part = !parts::owned_region(path).is_empty() && !copying(*value);
-            let taking = if replaces_a_part { Taken::PartMoved } else { Taken::Read };
-            operands.extend([place(target, taking), passed(*value)]);
+        Op::Ref { target, .. } | Op::Take { target, .. } => operands.extend(place(target, taking())),
+        Op::Assign { target, value, .. } => {
+            operands.extend(place(target, taking()));
+            operands.push(passed(*value));
         }
         Op::AsSlice { container: lent, .. } | Op::ArrayView { src: lent, .. } => operands.push(read(*lent)),
         Op::Index { slice, index, .. } => operands.extend([read(*slice), read(*index)]),
         Op::IndexSet { slice, index, value, .. } => operands.extend([read(*slice), read(*index), passed(*value)]),
-        Op::Commit { from: Committed::Slot(from), .. } => {
-            let taking = if copying(*from) { Taken::Read } else { Taken::Moved };
-            operands.push(slot(*from, taking));
-        }
-        Op::Commit { from: Committed::Value(value), .. } => operands.push(passed(*value)),
         Op::FieldGet { object: src, .. }
         | Op::ObjectGet { object: src, .. }
         | Op::TupleIndex { tuple: src, .. }
@@ -213,6 +194,34 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         inst.op()
     );
     operands
+}
+
+/// How the place a `Take`, a `Ref` or an `Assign` names is taken, by name
+/// or through a reference; `None` for any other operation. A `Take` reads
+/// where what it takes copies or is a `&mut`, and otherwise moves the
+/// place, whole or in part; a `Ref` reads it; an `Assign` of a part that
+/// does not copy cuts it, and any other reads it. Cost: O(1), and the
+/// size of the type taken for a `Take`.
+pub fn place_taking(body: &Body, types: &Types<Concrete>, inst: &Inst) -> Option<Taken> {
+    let copying = |value: ValueId| copies(types, body.ty_of(value));
+    Some(match inst.op() {
+        Op::Ref { .. } => Taken::Read,
+        Op::Take { path, .. } => {
+            let what_it_takes = inst.result().expect("a `Take` yields what it takes");
+            if copying(what_it_takes) || is_mut_ref(types, body.ty_of(what_it_takes)) {
+                Taken::Read
+            } else if parts::owned_region(path).is_empty() {
+                Taken::Moved
+            } else {
+                Taken::PartMoved
+            }
+        }
+        Op::Assign { path, value, .. } => match !parts::owned_region(path).is_empty() && !copying(*value) {
+            true => Taken::PartMoved,
+            false => Taken::Read,
+        },
+        _ => return None,
+    })
 }
 
 /// What `terminator` does with the values it names apart from its edges'

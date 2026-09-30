@@ -17,7 +17,7 @@ use rustc_hash::FxHashMap;
 use super::body::{BlockData, BlockId, Body, BodyId, Def, Inst, InstList, Module, OrderUse, Terminator};
 use super::order::At;
 use super::op::Op;
-use crate::ir::{OrderEdge, ValueId, fn_effect};
+use crate::ir::{OrderEdge, RefTarget, ValueId, fn_effect};
 use crate::ty::{Concrete, Reissue, Ty, TyKind, Types};
 
 /// Open state left at `seal`.
@@ -203,25 +203,25 @@ impl<'m> Builder<'m> {
     /// # Panics
     /// `ty` is `Order`: only the core makes an order token.
     pub fn slot(&mut self, ty: Ty, span: Span) -> ValueId {
-        self.make_slot(ty, span, None)
-    }
-
-    /// The slot a context that is not volatile lives in (context §3),
-    /// holding a `ty`, marked with `context` where it is born; `span` is the
-    /// span that names the context. Cost: O(1).
-    ///
-    /// # Panics
-    /// `ty` is `Order`: only the core makes an order token.
-    pub fn context_slot(&mut self, context: QualifiedRef, ty: Ty, span: Span) -> ValueId {
-        self.make_slot(ty, span, Some(context))
-    }
-
-    fn make_slot(&mut self, ty: Ty, span: Span, context: Option<QualifiedRef>) -> ValueId {
-        let def = Def::Slot { index: self.body.slots.len(), context };
+        let def = Def::Slot { index: self.body.slots.len() };
         let value = self.body.make_value(&self.module.types, ty, def);
         self.body.slots.push(value);
         self.body.slot_spans.insert(value, span);
         value
+    }
+
+    /// States that the body names `context`, of type `ty`, which
+    /// `RefTarget::Context` then addresses (context §3). Cost: O(the
+    /// contexts named so far).
+    ///
+    /// # Panics
+    /// The body names `context` already.
+    pub fn context(&mut self, context: QualifiedRef, ty: Ty) {
+        assert!(
+            self.body.contexts.iter().all(|(named, _)| *named != context),
+            "the body names {context:?} once"
+        );
+        self.body.contexts.push((context, ty));
     }
 
     /// Appends a non-effectful instruction with one result, typed `ty`, and
@@ -243,9 +243,9 @@ impl<'m> Builder<'m> {
     /// operands).
     ///
     /// # Panics
-    /// `op` yields a value; it is a call whose effect is not pure or a
-    /// context's load or commit, which are effects; it is a `Spawn`, a
-    /// `TakeEffect` or a `Merge`, which only the core writes; an
+    /// `op` yields a value; it is a call whose effect is not pure, which is
+    /// an effect; it is a `Spawn`, a `TakeEffect` or a `Merge`, which only
+    /// the core writes; it names a context the body does not name; an
     /// operand is not a value of this body; the current block is
     /// terminated.
     pub fn push_unit(&mut self, op: Op, span: Span) {
@@ -256,40 +256,38 @@ impl<'m> Builder<'m> {
     }
 
     /// Appends an effect with one result, typed `ty`, and returns the
-    /// result: a call whose callee's effect is not pure, or a volatile
-    /// context's fetch into a value (context §3). It consumes the current token and yields the next
-    /// (effects §3); inside an `anyorder` scope it consumes the scope's
-    /// entry token instead, and what it yields joins the scope's merge, a
-    /// `Merge` placed with the effect's `span`. Cost: O(its operands), and
-    /// O(1) for the token.
+    /// result: a call whose callee's effect is not pure, or a `Take` or a
+    /// `Ref` of a volatile context (context §3). It consumes the current
+    /// token and yields the next (effects §3); inside an `anyorder` scope it
+    /// consumes the scope's entry token instead, and what it yields joins the
+    /// scope's merge, a `Merge` placed with the effect's `span`. Cost: O(its
+    /// operands), and O(1) for the token.
     ///
     /// # Panics
-    /// The body is not ordered; `op` is neither such a call nor a `Fetch`
-    /// into a value; an operand is not a value of this body; the current
-    /// block is terminated.
+    /// The body is not ordered; `op` is neither such a call nor a place
+    /// operation on a context the body names; an operand is not a value of
+    /// this body; the current block is terminated.
     pub fn push_effect(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
         assert!(
-            self.effectful_call(&op) || matches!(op, Op::Fetch { into: None, .. }),
-            "push_effect takes a call whose effect is not pure or a context's fetch into a value, not {op:?}"
+            self.effectful_call(&op) || self.names_a_context(&op),
+            "push_effect takes a call whose effect is not pure or a place operation on a context, not {op:?}"
         );
         let result = self.new_result(ty);
         self.append_effect(op, Some(result), span);
         result
     }
 
-    /// Appends an effect with no result: a context's commit, or its fetch
-    /// into its slot (context §3). It stands on the order chain as
-    /// `push_effect` states. Cost: O(its operands), and O(1) for the token.
+    /// Appends an effect with no result: an `Assign` into a volatile context
+    /// (context §3). It stands on the order chain as `push_effect` states.
+    /// Cost: O(its operands), and O(1) for the token.
     ///
     /// # Panics
-    /// The body is not ordered; `op` is neither a `Commit` nor a `Fetch`
-    /// into a slot; an operand is not a value of this body; the current
-    /// block is terminated.
+    /// The body is not ordered; `op` yields a value or is not a place
+    /// operation on a context the body names; an operand is not a value of
+    /// this body; the current block is terminated.
     pub fn push_effect_unit(&mut self, op: Op, span: Span) {
-        assert!(
-            matches!(op, Op::Commit { .. } | Op::Fetch { into: Some(_), .. }),
-            "push_effect_unit takes a context's commit or its fetch into a slot, not {op:?}"
-        );
+        assert!(!op.has_result(), "{op:?} yields a value; it is pushed by push_effect");
+        assert!(self.names_a_context(&op), "push_effect_unit takes a place operation on a context, not {op:?}");
         self.append_effect(op, None, span);
     }
 
@@ -655,10 +653,22 @@ impl<'m> Builder<'m> {
             "{op:?} is written only by the core (effects §3, §6)"
         );
         assert!(!self.effectful_call(op), "a call whose effect is not pure is pushed by push_effect");
+        self.names_a_context(op);
+    }
+
+    /// Whether `op` is a place operation on a context.
+    ///
+    /// # Panics
+    /// It names a context the body does not name.
+    fn names_a_context(&self, op: &Op) -> bool {
+        let Some((RefTarget::Context(context), _)) = op.place() else {
+            return false;
+        };
         assert!(
-            !op.touches_context(),
-            "a context's load or commit is an effect (context §3), pushed by push_effect or push_effect_unit"
+            self.body.contexts.iter().any(|(named, _)| named == context),
+            "{op:?} names {context:?}, which the body does not name"
         );
+        true
     }
 
     /// A result of the next instruction made, which is appended next.

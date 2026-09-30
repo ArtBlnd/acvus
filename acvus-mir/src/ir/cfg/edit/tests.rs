@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dominators::{DefPoint, Dominators, def_points};
 use super::*;
-use crate::ir::cfg::{Aspect, Builder, Committed, Inst, OrderUse, Stages, Terminator};
+use crate::ir::cfg::{Aspect, Builder, Inst, OrderUse, Stages, Terminator};
 use crate::ir::{BinOp, Callee, Checked, Overflow, RefTarget, UnaryOp};
 use crate::ir::{ForSource, SwitchKey};
 use crate::ty::{
@@ -1450,11 +1450,13 @@ fn types_agree_checks_a_slice_length() {
     assert!(matches!(types_agree(&f, not_a_slice), Err(Violation { invariant: "TypesAgree", .. })));
 }
 
-fn fetching(f: &mut Fixture, ty: Ty) -> BodyId {
+/// A take of the context `page`, which the body names at `ty`.
+fn taking_a_context(f: &mut Fixture, ty: Ty) -> BodyId {
     let (na, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
     let mut builder = f.build(true, f.int);
     let a = builder.param(na, int, acvus_ast::Span::ZERO);
-    builder.push_effect(Op::Fetch { context: page, into: None }, ty, at(1));
+    builder.context(page, ty);
+    builder.push(Op::Take { target: RefTarget::Context(page), path: Vec::new(), taken_out: false }, ty, at(1));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     builder.seal().expect("the body has no open state")
 }
@@ -1463,9 +1465,9 @@ fn fetching(f: &mut Fixture, ty: Ty) -> BodyId {
 fn types_agree_checks_that_a_context_value_holds_no_position() {
     let mut f = fixture();
     let (int, str_ref) = (f.int, f.str_ref);
-    let good = fetching(&mut f, int);
+    let good = taking_a_context(&mut f, int);
     assert_eq!(types_agree(&f, good), Ok(()));
-    let bad = fetching(&mut f, str_ref);
+    let bad = taking_a_context(&mut f, str_ref);
     assert!(matches!(types_agree(&f, bad), Err(Violation { invariant: "TypesAgree", .. })));
 }
 
@@ -1954,41 +1956,36 @@ fn swap_refuses_a_call_that_reads_the_others_result() {
 
 // -- G1: discharge -------------------------------------------------------------
 
-/// `check(a + a); s = a; v = fetch page; commit page = a; return a`, with
-/// `s` a slot.
+/// `check(a + a); s = a; s = a; return a`, with `s` a slot.
 fn dischargeable(f: &mut Fixture) -> BodyId {
-    let (name, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
+    let (name, int) = (f.name("a"), f.int);
     let mut builder = f.build(true, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let s = builder.slot(int, at(0));
     builder.push_unit(check_add(a, a), at(1));
     builder.push_unit(assign(s, a), at(2));
-    builder.push_effect(Op::Fetch { context: page, into: None }, int, at(3));
-    builder.push_effect_unit(Op::Commit { context: page, from: Committed::Value(a) }, at(4));
+    builder.push_unit(assign(s, a), at(3));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     builder.seal().expect("the body has no open state")
 }
 
 #[test]
-fn discharge_removes_a_check_a_dead_store_an_unread_load_and_an_unwritten_commit() {
+fn discharge_removes_a_check_and_dead_stores() {
     let mut f = fixture();
     let id = dischargeable(&mut f);
     let entry = entry_of(&f, id);
     let mut facts = TestFacts::of(&f.module, id);
-    let facts_of = [Unobserved::NeverFires, Unobserved::NeverRead, Unobserved::NeverRead, Unobserved::NeverWritten];
+    let facts_of = [Unobserved::NeverFires, Unobserved::NeverRead, Unobserved::NeverRead];
     for (index, fact) in facts_of.into_iter().enumerate() {
         facts.unobserved.insert(inst_ref(f.body(id), entry, index), fact);
     }
     let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
-    for index in (0..4).rev() {
+    for index in (0..3).rev() {
         assert_eq!(editor.discharge(inst_ref(editor.body(), entry, index)), Ok(()), "instruction {index}");
     }
     let changes = editor.finish();
     assert!(f.insts(id, entry).is_empty());
     assert!(changes.touched(Aspect::Storage));
-    assert!(changes.touched(Aspect::OrderTokens));
-    let order_param = f.body(id).order_param();
-    assert_eq!(returned_order(f.body(id), entry), order_param, "the removed load and commit hand the token on");
 }
 
 #[test]
@@ -1999,20 +1996,18 @@ fn discharge_refuses_without_a_fact_and_with_the_wrong_fact() {
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
     facts.unobserved.insert(inst_ref(f.body(id), entry, 0), Unobserved::NeverRead);
-    facts.unobserved.insert(inst_ref(f.body(id), entry, 1), Unobserved::NeverWritten);
-    facts.unobserved.insert(inst_ref(f.body(id), entry, 3), Unobserved::NeverRead);
+    facts.unobserved.insert(inst_ref(f.body(id), entry, 1), Unobserved::NeverFires);
     let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
     assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 0)), Err(CannotDischarge::WrongFact), "a check needs NeverFires");
     assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 1)), Err(CannotDischarge::WrongFact), "a store needs NeverRead");
     assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 2)), Err(CannotDischarge::NotProven));
-    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 3)), Err(CannotDischarge::WrongFact), "a commit needs NeverWritten");
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
     assert!(facts.refreshed.is_empty());
 }
 
 #[test]
-#[should_panic(expected = "discharge removes a check, a store, a load or a commit")]
+#[should_panic(expected = "discharge removes a check or a store")]
 fn discharging_another_kind_is_a_callers_defect() {
     let mut f = fixture();
     let (id, _) = straight_line(&mut f);

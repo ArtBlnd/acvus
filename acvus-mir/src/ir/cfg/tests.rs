@@ -5,7 +5,7 @@ use acvus_ast::{Literal, Span};
 use acvus_utils::{Interner, QualifiedRef};
 
 use super::*;
-use crate::ir::{BinOp, Callee, OrderEdge, Overflow, SwitchKey, UnaryOp, ValueId};
+use crate::ir::{BinOp, Callee, OrderEdge, Overflow, RefTarget, SwitchKey, UnaryOp, ValueId};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue,
     SplitCost, Ty, TyKind, TypeArg, Types,
@@ -601,62 +601,62 @@ fn removing_an_effectful_call_rethreads_the_token_around_it() {
     assert!(rewriter.finish().touched(Aspect::OrderTokens));
 }
 
-/// context §3: the load and the commit are the effects, so each stands on
-/// the chain as a call whose effect is not pure does.
+/// A `Take` of the whole of `context`.
+fn take_context(context: QualifiedRef) -> Op {
+    Op::Take { target: RefTarget::Context(context), path: Vec::new(), taken_out: false }
+}
+
+/// context §3: a volatile context's take and assign are effects, so each
+/// stands on the chain as a call whose effect is not pure does.
 #[test]
-fn a_load_and_a_commit_are_threaded_on_the_chain() {
+fn a_volatile_context_take_and_assign_are_threaded_on_the_chain() {
     let mut f = fixture();
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
     let mut builder = build(&mut f.module, true, f.int);
-    let loaded = builder.push_effect(Op::Fetch { context: page, into: None }, int, at(30));
-    builder.push_effect_unit(Op::Commit { context: page, from: Committed::Value(loaded) }, at(31));
-    builder.terminate(ret(loaded), acvus_ast::Span::ZERO);
+    builder.context(page, int);
+    let taken = builder.push_effect(take_context(page), int, at(30));
+    let assign = Op::Assign { target: RefTarget::Context(page), path: Vec::new(), value: taken, restores: false };
+    builder.push_effect_unit(assign, at(31));
+    builder.terminate(ret(taken), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let body = f.body(id);
     let o0 = body.order_param().expect("an ordered body takes an order token");
     let insts: Vec<_> = body.block(body.entry()).insts().collect();
-    let load = edge_of(&insts[0]);
-    let commit = edge_of(&insts[1]);
-    assert_eq!(load.before, o0);
-    assert_eq!(commit.before, load.after);
+    let take = edge_of(&insts[0]);
+    let store = edge_of(&insts[1]);
+    assert_eq!(take.before, o0);
+    assert_eq!(store.before, take.after);
     assert_eq!(insts[1].result(), None);
-    assert_eq!(returned_order(body, body.entry()), Some(commit.after));
-}
-
-#[test]
-#[should_panic(expected = "context's load or commit is an effect")]
-fn a_load_is_not_pushed_as_pure() {
-    let mut f = fixture();
-    let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
-    build(&mut f.module, true, f.int).push(Op::Fetch { context: page, into: None }, int, at(32));
-}
-
-#[test]
-#[should_panic(expected = "context's load or commit is an effect")]
-fn a_commit_is_not_pushed_as_pure() {
-    let mut f = fixture();
-    let (name, int, page) = (f.name("a"), f.int, QualifiedRef::root(f.name("page")));
-    let mut builder = build(&mut f.module, true, f.int);
-    let a = builder.param(name, int, acvus_ast::Span::ZERO);
-    builder.push_unit(Op::Commit { context: page, from: Committed::Value(a) }, at(33));
+    assert_eq!(returned_order(body, body.entry()), Some(store.after));
 }
 
 #[test]
 #[should_panic(expected = "issues no effect")]
-fn a_pure_body_loads_no_context() {
+fn a_pure_body_takes_no_context_on_the_chain() {
     let mut f = fixture();
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
-    build(&mut f.module, false, f.int).push_effect(Op::Fetch { context: page, into: None }, int, at(34));
+    let mut builder = build(&mut f.module, false, f.int);
+    builder.context(page, int);
+    builder.push_effect(take_context(page), int, at(34));
 }
 
 #[test]
-fn removing_a_load_rethreads_the_token_around_it() {
+#[should_panic(expected = "which the body does not name")]
+fn a_context_the_body_does_not_name_is_not_taken() {
+    let mut f = fixture();
+    let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
+    build(&mut f.module, false, f.int).push(take_context(page), int, at(32));
+}
+
+#[test]
+fn removing_a_take_on_the_chain_rethreads_the_token_around_it() {
     let mut f = fixture();
     let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
     let mut builder = build(&mut f.module, true, f.int);
-    let unread = builder.push_effect(Op::Fetch { context: page, into: None }, int, at(35));
-    let read = builder.push_effect(Op::Fetch { context: page, into: None }, int, at(36));
+    builder.context(page, int);
+    let unread = builder.push_effect(take_context(page), int, at(35));
+    let read = builder.push_effect(take_context(page), int, at(36));
     builder.terminate(ret(read), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let o0 = f.body(id).order_param().expect("ordered");
@@ -668,17 +668,6 @@ fn removing_a_load_rethreads_the_token_around_it() {
     assert_eq!(insts.len(), 1);
     assert_eq!(edge_of(&insts[0]).before, o0);
     assert!(rewriter.finish().touched(Aspect::OrderTokens));
-}
-
-#[test]
-#[should_panic(expected = "not inserted as pure")]
-fn a_load_is_not_inserted_as_pure() {
-    let mut f = fixture();
-    let (int, page) = (f.int, QualifiedRef::root(f.name("page")));
-    let (id, ..) = straight_line(&mut f);
-    let entry = f.body(id).entry();
-    let first = f.body(id).first_inst(entry).expect("the entry holds instructions");
-    f.module.rewrite(id).insert(order::At::Before(first), Op::Fetch { context: page, into: None }, int, at(37));
 }
 
 // -- Interning through the Builder ---------------------------------------

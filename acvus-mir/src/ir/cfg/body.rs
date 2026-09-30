@@ -767,6 +767,19 @@ impl Body {
         &self.contexts
     }
 
+    /// The type of `context`, which the body names. Cost: O(the body's
+    /// contexts).
+    ///
+    /// # Panics
+    /// The body does not name `context`.
+    pub fn context_ty(&self, context: QualifiedRef) -> Ty {
+        self.contexts
+            .iter()
+            .find(|(named, _)| *named == context)
+            .map(|(_, ty)| *ty)
+            .unwrap_or_else(|| panic!("the body names {context:?} among its contexts"))
+    }
+
     /// Every value of the body, in no stated order. Cost: O(values).
     pub fn values(&self) -> impl Iterator<Item = ValueId> + '_ {
         self.values.keys().copied()

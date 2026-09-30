@@ -1425,12 +1425,12 @@ fn content_liveness_ends_at_a_whole_store_and_follows_a_read_through_a_reference
     let id = builder.seal().expect("the body has no open state");
 
     let content = f.facts::<ContentLiveness>(id);
-    let live_after = |index: usize| content.live_after(site_at(&f.module, id, entry, index)).contains(&s);
+    let live_after = |index: usize| content.live_after(site_at(&f.module, id, entry, index)).contains(&Storage::Slot(s));
     assert!(!live_after(1), "the first content is replaced before any read");
     assert!(live_after(3), "the second content is read through r");
     assert!(live_after(4));
     assert!(!live_after(5), "nothing reads s after the call");
-    assert!(!content.live_at_start(entry).contains(&s));
+    assert!(!content.live_at_start(entry).contains(&Storage::Slot(s)));
     assert!(content.live_at_end(entry).is_empty(), "the body's end reads none of its own slots");
 }
 

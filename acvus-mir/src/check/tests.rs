@@ -1,6 +1,6 @@
 //! The judgments over programs built from source: parsed, checked by
 //! typeck, lowered, and taken through the required steps up to
-//! `remove_dead_context_ops`, as the checks see them.
+//! `clone_strings`, as the checks see them.
 
 mod borrowck;
 mod initialization;
@@ -137,7 +137,6 @@ impl Fixture {
         let mut module = lower_script(&decls, &typeck, types, &script);
         let mut am = AnalysisManager::new(&decls);
         required::clone_strings(&mut module, &mut am);
-        required::remove_dead_context_ops(&mut module, &mut am);
         check(&module, &mut am)
     }
 }

@@ -25,7 +25,8 @@
 //! it is made through, and every other access that met the same.
 //!
 //! At every `Return`, a loan on the body's own storage, a slot or a
-//! by-value parameter's, that the result or an outside storage's content
+//! by-value parameter's, or on a context, which no flow of the body's
+//! function type names, that the result or an outside storage's content
 //! holds refuses it `LoanOutlivesBody`, naming where the loan was made. In a
 //! lambda's body, every loan an output end holds from another input end is
 //! covered by a flow its claimed function type states, a lambda's flows
@@ -274,7 +275,7 @@ fn met(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>) -> Vec<Me
     let body = module.body(body_id);
     let slots: FxHashSet<ValueId> = body.slots().iter().copied().collect();
     let order = SiteOrder::of(body);
-    let live_loans = |site: Site, values: &FxHashSet<ValueId>, places: &FxHashSet<ValueId>| -> LoanSet {
+    let live_loans = |site: Site, values: &FxHashSet<ValueId>, places: &FxHashSet<Storage>| -> LoanSet {
         let mut held = LoanSet::new();
         for value in values.iter().filter(|value| !slots.contains(value)) {
             let from = loans.holds_from(*value);
@@ -283,7 +284,7 @@ fn met(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>) -> Vec<Me
         }
         for (storage, content) in loans.contents_before(site) {
             let live = match storage {
-                Storage::Slot(place) | Storage::Param(place) => places.contains(place),
+                Storage::Slot(_) | Storage::Param(_) | Storage::Context(_) => places.contains(storage),
                 Storage::Outside { .. } => true,
             };
             if live {
@@ -420,8 +421,8 @@ fn push_once(met: &mut Vec<Met>, found: Met) {
     }
 }
 
-/// At every `Return`, each loan on the body's own storage that the result
-/// or an outside storage's content holds.
+/// At every `Return`, each loan on the body's own storage or on a context
+/// that the result or an outside storage's content holds.
 fn outlived(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>) -> Vec<Outlived> {
     let loans = am.get::<Loans>(module, body_id);
     let reachable = am.get::<Dominators>(module, body_id);
@@ -437,7 +438,8 @@ fn outlived(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>) -> V
                 held.extend(content.iter().flatten().cloned());
             }
         }
-        for loan in held.into_iter().filter(|loan| matches!(loan.storage, Storage::Slot(_) | Storage::Param(_))) {
+        let unnamed_beyond = |loan: &Loan| matches!(loan.storage, Storage::Slot(_) | Storage::Param(_) | Storage::Context(_));
+        for loan in held.into_iter().filter(unnamed_beyond) {
             let found = Outlived { at: *span, loan };
             if !outlived.contains(&found) {
                 outlived.push(found);

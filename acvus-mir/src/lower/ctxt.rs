@@ -6,11 +6,11 @@
 use rustc_hash::FxHashMap;
 
 use acvus_ast::{AstId, Literal, Span};
-use acvus_utils::{Astr, QualifiedRef};
+use acvus_utils::Astr;
 
 use crate::decl::Declarations;
 use crate::ir::cfg::{BlockId, Builder, Op, Terminator};
-use crate::ir::{Callee, Chosen as IrChosen, ExternImpl, ValueId};
+use crate::ir::{Callee, Chosen as IrChosen, ExternImpl, RefTarget, ValueId};
 use crate::ty::{Effect, IntTy, Mutability, Reissue, Ty, TyKind, TypeArg};
 use crate::typeck::{Chosen, Impl, Typeck};
 
@@ -31,15 +31,6 @@ pub(super) enum Home {
     Through(ValueId),
 }
 
-/// Where a context lives in this body (context §3): a slot loaded at entry
-/// and committed around calls and at return, or none for a volatile one,
-/// which is loaded and committed at each access.
-#[derive(Debug, Clone, Copy)]
-pub(super) enum ContextHome {
-    Slot(ValueId),
-    Volatile,
-}
-
 pub(super) struct Lcx<'a, 'm> {
     pub decls: &'a Declarations,
     /// The run's typeck, for what is decided once where a lambda is
@@ -56,8 +47,6 @@ pub(super) struct Lcx<'a, 'm> {
     /// The span of each binder, where its binding was made.
     pub binder_spans: FxHashMap<AstId, Span>,
     pub loops: Vec<LoopTargets>,
-    /// Every context the body names, in the order it first names them.
-    pub contexts: Vec<(QualifiedRef, ContextHome)>,
     /// Where each input the body names lives (programs §4): a slot of the
     /// entry body, or a lambda's capture of it.
     pub inputs: FxHashMap<Astr, Home>,
@@ -83,7 +72,6 @@ impl<'a, 'm> Lcx<'a, 'm> {
             bindings: FxHashMap::default(),
             binder_spans: FxHashMap::default(),
             loops: Vec::new(),
-            contexts: Vec::new(),
             inputs: FxHashMap::default(),
             reachable: true,
             anyorder,
@@ -180,12 +168,36 @@ impl<'a, 'm> Lcx<'a, 'm> {
         self.binder_spans.insert(binder, span);
     }
 
-    pub fn context_home(&self, context: QualifiedRef) -> ContextHome {
-        self.contexts
-            .iter()
-            .find(|(named, _)| *named == context)
-            .map(|(_, home)| *home)
-            .unwrap_or_else(|| panic!("the context {context:?} the body names is given its home at entry"))
+    /// Appends `op`, a `Take` or a `Ref`, typed `ty`, and returns its
+    /// result: on the order chain where it names a volatile context, whose
+    /// every place operation is an effect (context §3).
+    pub fn push_place(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
+        match self.volatile_place(&op) {
+            true => self.builder.push_effect(op, ty, span),
+            false => self.builder.push(op, ty, span),
+        }
+    }
+
+    /// Appends `op`, an `Assign`: on the order chain where it names a
+    /// volatile context, as `push_place` does.
+    pub fn push_store(&mut self, op: Op, span: Span) {
+        match self.volatile_place(&op) {
+            true => self.builder.push_effect_unit(op, span),
+            false => self.builder.push_unit(op, span),
+        }
+    }
+
+    /// Whether `op` names a context declared volatile.
+    ///
+    /// # Panics
+    /// It names a context the declarations do not declare.
+    fn volatile_place(&self, op: &Op) -> bool {
+        let Some((RefTarget::Context(context), _)) = op.place() else {
+            return false;
+        };
+        self.decls
+            .context_is_volatile(*context)
+            .unwrap_or_else(|| panic!("the context {context:?} an admitted program names is declared"))
     }
 
     /// The impl `chosen` reached, numbered as the IR numbers a generic

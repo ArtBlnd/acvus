@@ -465,12 +465,12 @@ where
     S: Scope,
 {
     /// Whether `inst` has an effect (effects §1, context §3): it stands on
-    /// the order chain, loads or commits a context, or calls, starts or
-    /// takes a call whose callee's reissue is not pure or that writes a
-    /// context. `Idempotent` is safe to repeat, not to skip, and `Opaque`
-    /// never vanishes.
+    /// the order chain, as a volatile context's place operation does, or it
+    /// calls, starts or takes a call whose callee's reissue is not pure or
+    /// that writes a context. `Idempotent` is safe to repeat, not to skip,
+    /// and `Opaque` never vanishes.
     fn has_effect(&self, inst: &Inst) -> bool {
-        if inst.order().is_some() || inst.op().touches_context() {
+        if inst.order().is_some() {
             return true;
         }
         let callee_ty = match inst.op() {
@@ -714,8 +714,7 @@ where
     S::Needs<'m>: LoanFacts,
 {
     /// Promotes a slot to values (SSA construction); refused where a use
-    /// other than a whole-slot `Take`, `Assign`, `Fetch` or `Commit` names
-    /// it.
+    /// other than a whole-slot `Take` or `Assign` names it.
     ///
     /// # Panics
     /// `slot` is not a slot of the body, or such a use names it though the
@@ -826,7 +825,7 @@ pub enum CannotDischarge {
     /// No analysis proves it unobservable.
     NotProven,
     /// The proven fact is not the one this instruction needs (a check needs
-    /// `NeverFires`, a store or load `NeverRead`, a commit `NeverWritten`).
+    /// `NeverFires`, a store `NeverRead`).
     WrongFact,
 }
 
@@ -1140,16 +1139,15 @@ where
     S::Needs<'m>: DischargeFacts,
 {
     /// G1: discharges what the core would keep, on the fact that proves it
-    /// unobservable: a check on `NeverFires`, a store (`Assign`) or a load
-    /// (`Fetch`) on `NeverRead`, a commit on `NeverWritten`. A `Check` or
-    /// `CheckSteps` is removed; an `Index` or `IndexSet` whose bound is
-    /// checked keeps its place, and its bound becomes proven; every other
-    /// kind is removed, and an effect's token is handed on to what used the
-    /// token it yields. The body is unchanged on a refusal.
+    /// unobservable: a check on `NeverFires`, a store (`Assign`) on
+    /// `NeverRead`. A `Check` or `CheckSteps` is removed; an `Index` or
+    /// `IndexSet` whose bound is checked keeps its place, and its bound
+    /// becomes proven; a store is removed. The body is unchanged on a
+    /// refusal.
     ///
     /// # Panics
     /// `inst` is none of those kinds, or an index whose bound is proven
-    /// already; or the facts call a load never read whose result has a use.
+    /// already.
     pub fn discharge(&mut self, inst: InstRef) -> Result<(), CannotDischarge> {
         let checked_bound = matches!(
             self.inst(inst).op(),
@@ -1158,9 +1156,8 @@ where
         let needed = match self.inst(inst).op() {
             Op::Check { .. } | Op::CheckSteps { .. } => Unobserved::NeverFires,
             _ if checked_bound => Unobserved::NeverFires,
-            Op::Assign { .. } | Op::Fetch { .. } => Unobserved::NeverRead,
-            Op::Commit { .. } => Unobserved::NeverWritten,
-            other => panic!("discharge removes a check, a store, a load or a commit, not {other:?}"),
+            Op::Assign { .. } => Unobserved::NeverRead,
+            other => panic!("discharge removes a check or a store, not {other:?}"),
         };
         let asked = Asked::new(self.module, self.body);
         match self.needs.discharged(asked, inst) {
@@ -1173,7 +1170,7 @@ where
             Some(_) => {
                 let shifts = self
                     .edit(|rewriter| rewriter.remove_inst(inst.id))
-                    .expect("a load the facts call never read has no use");
+                    .expect("a store yields nothing");
                 self.shifted(shifts);
                 Ok(())
             }

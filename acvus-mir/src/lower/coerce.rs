@@ -16,7 +16,6 @@ use acvus_ast::Span;
 use acvus_utils::Astr;
 
 use super::call::coerce;
-use super::context::bracket_call;
 use super::control::{diamond, return_value};
 use super::ctxt::Lcx;
 use crate::ir::cfg::{Op, Terminator};
@@ -276,7 +275,7 @@ pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&m
     let op = Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args };
     match effect.reissue() {
         Reissue::Pure => cx.builder.push(op, result_ty, span),
-        Reissue::Idempotent | Reissue::Opaque => bracket_call(cx, &effect, span, |cx| cx.builder.push_effect(op, result_ty, span)),
+        Reissue::Idempotent | Reissue::Opaque => cx.builder.push_effect(op, result_ty, span),
     }
 }
 

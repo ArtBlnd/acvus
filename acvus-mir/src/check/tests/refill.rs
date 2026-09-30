@@ -152,3 +152,15 @@ fn a_move_through_a_reference_lending_one_place_moves_that_place() {
     assert_eq!(moved, span_of(source, "*r", 0), "naming the move through `r`");
     assert!(covers(span, span_of(source, "x", 2)), "at the use of `x`: {span:?}");
 }
+
+/// context §1, §3: a read of a context of a copy type copies it and takes
+/// nothing out, so it is whole at a call that touches it and at the return.
+#[test]
+fn a_copy_read_of_a_context_is_admitted_with_no_refill() {
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    fx.context("n", int);
+    fx.declare_with_effect("touch", &[], int, Effect::opaque());
+    let refusals = fx.refusals("let x = @n; touch(); x");
+    assert_eq!(refusals, []);
+}

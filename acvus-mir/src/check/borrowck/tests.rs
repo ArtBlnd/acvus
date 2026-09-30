@@ -1,6 +1,6 @@
 //! borrowck over programs built as `lower/tests.rs` builds them: parsed,
 //! checked by typeck over verified declarations, lowered, and run through
-//! the required steps up to `remove_dead_context_ops`.
+//! the required steps up to `clone_strings`.
 
 use acvus_ast::{Script, Span};
 use acvus_utils::Interner;
@@ -10,7 +10,7 @@ use crate::check::ConflictTrace;
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
 use crate::ir::cfg::{Module, Op, Terminator};
 use crate::lower::lower_script;
-use crate::lower::required::{clone_strings, remove_dead_context_ops};
+use crate::lower::required::clone_strings;
 use crate::passes::analysis::{AnalysisManager, Loans};
 use crate::ty::{
     Alignment, Calls, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, Mutability, TyKind, TypeArg, Types,
@@ -46,7 +46,6 @@ impl Found {
         let mut module: Module = lower_script(&decls, &typeck, types, &script);
         let mut am = AnalysisManager::new(&decls);
         clone_strings(&mut module, &mut am);
-        remove_dead_context_ops(&mut module, &mut am);
         let conflicts = module
             .body_ids()
             .flat_map(|body| {

@@ -177,3 +177,33 @@ fn a_reference_read_through_another_keeps_the_first_reference_s_loan_alive() {
     assert_eq!(*reborrowed, conflict(y, earlier, vec![y, object, on_v], uses));
 }
 
+
+/// context §3, ownership §5: a call whose effect may read or write `@c` is
+/// an access of it, so a `&mut @c` live across such a call meets it; one
+/// refusal, at the call.
+#[test]
+fn a_mut_lend_of_a_context_live_across_a_call_touching_it_is_refused() {
+    let mut fx = Fixture::new();
+    let (vec, int) = (fx.vec_of_ints(), fx.int());
+    fx.context("c", vec);
+    let vec_mut = fx.ty(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(vec)));
+    fx.declare("push", &[vec_mut], int);
+    fx.declare_with_effect("touch", &[], int, crate::ty::Effect::opaque());
+    let source = "let r = &mut @c; touch(); push(r)";
+    let refusals = fx.refusals(source);
+    let (span, _) = one_conflict(&refusals);
+    assert!(covers(span, span_of(source, "touch()", 0)), "at the call that touches @c: {span:?}");
+}
+
+/// The same lend no longer live at the call meets nothing.
+#[test]
+fn a_mut_lend_of_a_context_dead_before_a_call_touching_it_is_admitted() {
+    let mut fx = Fixture::new();
+    let (vec, int) = (fx.vec_of_ints(), fx.int());
+    fx.context("c", vec);
+    let vec_mut = fx.ty(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(vec)));
+    fx.declare("push", &[vec_mut], int);
+    fx.declare_with_effect("touch", &[], int, crate::ty::Effect::opaque());
+    let refusals = fx.refusals("let r = &mut @c; push(r); touch()");
+    assert_eq!(refusals, []);
+}
