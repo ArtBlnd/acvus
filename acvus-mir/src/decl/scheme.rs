@@ -105,18 +105,20 @@ pub struct DeclaredFacts {
     pub ends: Ends,
 }
 
-/// How every call of a declaration ends (extern-fn §4).
+/// How the call's own code ends, for every call of a declaration
+/// (extern-fn §4). Work the call runs, a closure argument or work a value
+/// it is given holds, ends and traps as that work does, so a call returns
+/// where its own code returns and that work does, and is total where both
+/// are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Ends {
-    /// Nothing is stated: a call may return, trap, or never end.
+    /// Nothing is stated: the call's own code may return, trap, or never
+    /// end.
     #[default]
     Unstated,
-    /// Every call returns or traps.
+    /// The call's own code returns or traps.
     Returns,
-    /// Every call returns a value and never traps. `verify` refuses it on
-    /// a signature a parameter of which holds a function type, since the
-    /// call may run that function, whose ending the declaration cannot
-    /// answer for.
+    /// The call's own code returns a value and never traps.
     Total,
 }
 

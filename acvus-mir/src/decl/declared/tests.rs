@@ -743,8 +743,9 @@ fn how_a_call_ends_is_unstated_by_default() {
     assert_eq!(f.verified().call_facts(g, None).ends, Ends::Unstated);
 }
 
-/// extern-fn §4: how a call ends, stated on a declaration or on its impl,
-/// is kept through `verify`.
+/// extern-fn §4: how a call's own code ends, stated on a declaration or
+/// on its impl, is kept through `verify`, on a call given a closure
+/// argument as on any other.
 #[test]
 fn a_stated_ending_is_kept_through_verify() {
     let mut f = Fixture::new();
@@ -752,30 +753,11 @@ fn a_stated_ending_is_kept_through_verify() {
     let returns = f.declare("returns", &[int], int, ending(Ends::Returns));
     let total = f.declare("total", &[int, int], int, ending(Ends::Total));
     let by_impl = f.declare_generic("by_impl", &[int], int, ending(Ends::Total));
+    let callback = f.function(&[int], int);
+    let calls_back = f.declare("calls_back", &[callback], int, ending(Ends::Total));
     let decls = f.verified();
     assert_eq!(decls.call_facts(returns, None).ends, Ends::Returns);
     assert_eq!(decls.call_facts(total, None).ends, Ends::Total);
     assert_eq!(decls.call_facts(by_impl, Some(0)).ends, Ends::Total);
-}
-
-/// extern-fn §4: a total call may run a function value it is given, at any
-/// depth of a parameter, and that value's ending is its own. Each such
-/// parameter is refused, on a declaration and on an impl alike.
-#[test]
-fn total_is_refused_where_a_parameter_holds_a_function_type() {
-    let mut f = Fixture::new();
-    let int = f.int();
-    let callback = f.function(&[int], int);
-    let held = f.ty(TyKind::Option(callback, ()));
-    let direct = f.declare("direct", &[int, callback], int, ending(Ends::Total));
-    let nested = f.declare("nested", &[held], int, ending(Ends::Total));
-    let by_impl = f.declare_generic("by_impl", &[callback], int, ending(Ends::Total));
-    assert_eq!(
-        f.refusals(),
-        vec![
-            Refused::TotalCallsBack { declared: own(direct), param: 1 },
-            Refused::TotalCallsBack { declared: own(nested), param: 0 },
-            Refused::TotalCallsBack { declared: own(by_impl), param: 0 },
-        ]
-    );
+    assert_eq!(decls.call_facts(calls_back, None).ends, Ends::Total);
 }

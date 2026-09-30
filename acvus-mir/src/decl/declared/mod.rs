@@ -45,7 +45,7 @@ impl NamedFact {
 }
 
 use super::impl_fit::is_impl_of;
-use super::{Core, DeclaredFacts, Ends, Refused, Scheme, TyVarBound};
+use super::{Core, DeclaredFacts, Refused, Scheme, TyVarBound};
 use crate::ty::{Declared, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
 /// A parameter's storage whole, or one element of it. A parameter is
@@ -90,35 +90,8 @@ pub(super) fn refuse_ill_formed(
             action::refuse_ill_formed(&stated, &facts.action, functions, types, refused);
             source::refuse_ill_formed(&stated, &facts.source, functions, types, refused);
             relation::refuse_ill_formed(&stated, types, &facts.relations, refused);
-            refuse_total_calling_back(&stated, types, facts.ends, refused);
         }
     }
-}
-
-/// Refuses `Total` on a signature for each parameter that holds a function
-/// type at any depth (extern-fn §4).
-fn refuse_total_calling_back(stated: &Stated<'_>, types: &Types<Poly>, ends: Ends, refused: &mut Vec<Refused>) {
-    if ends != Ends::Total {
-        return;
-    }
-    for (param, ty) in stated.params.iter().enumerate() {
-        if holds_function_type(types, *ty) {
-            refused.push(Refused::TotalCallsBack { declared: stated.declared, param });
-        }
-    }
-}
-
-/// Whether `ty` is or holds a function type at any depth.
-fn holds_function_type(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
-    let mut stack = vec![ty];
-    while let Some(at) = stack.pop() {
-        let kind = types.kind(at);
-        if matches!(kind, TyKind::Fn { .. } | TyKind::Closures(_)) {
-            return true;
-        }
-        kind.for_each_child(|child| stack.push(child));
-    }
-    false
 }
 
 /// A set of facts and the signature it is stated on.
