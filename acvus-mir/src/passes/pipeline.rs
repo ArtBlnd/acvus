@@ -99,8 +99,8 @@ fn motion(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
 fn loops(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
     step::<WhileToFor>(module, body, am);
     step::<IvCanon>(module, body, am);
-    // loop_deletion and lsr take their places here, in that order, as each
-    // is filled.
+    step::<LoopDeletion>(module, body, am);
+    // lsr takes its place here as it is filled.
     step::<Bce>(module, body, am);
     step::<Dce>(module, body, am);
 }

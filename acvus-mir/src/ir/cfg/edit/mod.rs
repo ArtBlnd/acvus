@@ -472,7 +472,7 @@ where
     /// calls, starts or takes a call whose callee's reissue is not pure or
     /// that writes a context. `Idempotent` is safe to repeat, not to skip,
     /// and `Opaque` never vanishes.
-    fn has_effect(&self, inst: &Inst) -> bool {
+    pub fn has_effect(&self, inst: &Inst) -> bool {
         if inst.order().is_some() {
             return true;
         }
