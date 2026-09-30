@@ -10,10 +10,11 @@ use crate::runtime::{Mutability, Runtime};
 
 /// Proof that a read or a result is the crossing's, at the type the checker
 /// settled for the site of the call `'c`. Only the entry, and what it opens,
-/// make one.
+/// make one. `'c` is invariant, so it brands the call: a guard opened under
+/// it, and a part borrowed from that guard, belong to this call alone.
 #[derive(Clone, Copy)]
 pub struct Settled<'c> {
-    _call: PhantomData<&'c ()>,
+    _call: PhantomData<fn(&'c ()) -> &'c ()>,
 }
 
 impl Settled<'_> {
@@ -36,8 +37,9 @@ pub struct Entry<'c, R: Runtime> {
 impl<'c, R: Runtime> Entry<'c, R> {
     /// # Safety
     /// Each of `args` is a value of the type the checker settled for its
-    /// position at the call site `site` describes (safety §3); a runtime that
-    /// checks its reads calls this only from its adapter.
+    /// position at the call site `site` describes (safety §3). The runtime
+    /// that calls the entry owes it; the adapter over that runtime owes it too,
+    /// since it passes the runtime's values unchanged.
     pub unsafe fn new(runtime: &'c R, args: &'c [R::Value], site: &'c SiteShape) -> Self {
         Entry { runtime, args, site }
     }

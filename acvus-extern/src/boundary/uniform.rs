@@ -186,13 +186,22 @@ mod tests {
         fn take_variant(&self, _: Counted, _: Settled<'_>) -> NoBody {
             unreachable!("the release tests make no variant")
         }
-        fn lent_shared<'a, T: Crosses + 'a>(&'a self, _: NoGuard<T>) -> Counted {
+        fn make_tuple(&self, _: impl ExactSizeIterator<Item = Counted>, _: Settled<'_>) -> Counted {
+            unreachable!("the release tests make no tuple")
+        }
+        fn make_object(&self, _: impl ExactSizeIterator<Item = Counted>, _: Settled<'_>) -> Counted {
+            unreachable!("the release tests make no object")
+        }
+        fn make_variant(&self, _: u32, _: Option<Counted>, _: Settled<'_>) -> Counted {
+            unreachable!("the release tests make no variant")
+        }
+        fn lent_part<'a>(&'a self, _: Counted, _: u32, _: Settled<'a>) -> Counted {
             unreachable!("the release tests lend no storage")
         }
-        fn lent_exclusive<'a, T: Crosses + 'a>(&'a self, _: NoGuard<T>) -> Counted {
+        fn lent_tag(&self, _: Counted, _: Settled<'_>) -> u32 {
             unreachable!("the release tests lend no storage")
         }
-        fn reference(&self, _: RefTarget<'_, Counted>) -> Counted {
+        fn reference<'a, P: ?Sized>(&'a self, _: RefTarget<'a, P>, _: Settled<'a>) -> Counted {
             unreachable!("the release tests make no reference")
         }
         fn interner(&self) -> &Interner {

@@ -10,11 +10,11 @@
 //! - `instance`: an impl value reaches only the receiver it was chosen for
 //!   (G6, K14).
 //! - `signed`: the facts no type can carry, signed by a runtime or a derive.
-//! - `checked`: the checking adapter's signature of S1-S3 (K15).
+//! - `adapter`: the adapter's signatures of S1-S3, X's carried over (K15).
 
 #![allow(unsafe_code)]
 
-pub(crate) mod checked;
+pub(crate) mod adapter;
 pub(crate) mod entry;
 pub(crate) mod instance;
 pub(crate) mod loaned;

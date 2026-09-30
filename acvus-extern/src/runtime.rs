@@ -25,11 +25,14 @@ pub enum Mutability {
     Exclusive,
 }
 
-/// What a reference value is made from; a writable one only from an exclusive
-/// borrow of its target.
-pub enum RefTarget<'a, V> {
-    Shared(&'a V),
-    Exclusive(&'a mut V),
+/// What a reference value is made from: a part of storage the call lent,
+/// borrowed from the guard that lends it (`context::Returning::finish_lent`);
+/// a writable one only from an exclusive guard. The part is the whole lent
+/// value, a range or an element of it, a field, or storage the lent value
+/// owns, such as a `String`'s text (runtime contract §2, References).
+pub enum RefTarget<'a, P: ?Sized> {
+    Shared(&'a P),
+    Exclusive(&'a mut P),
 }
 
 /// A tuple's body: its parts, each an owning holder of a runtime value.
@@ -82,13 +85,23 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     fn take_object(&self, v: Self::Value, at: Settled<'_>) -> Self::Object;
     fn take_variant(&self, v: Self::Value, at: Settled<'_>) -> Self::Variant;
 
-    /// The reference value a borrowed result is, made from the guard it
-    /// borrows (crossing §4).
-    fn lent_shared<'a, T: Crosses + 'a>(&'a self, guard: Self::Shared<'a, T>) -> Self::Value;
-    fn lent_exclusive<'a, T: Crosses + 'a>(&'a self, guard: Self::Exclusive<'a, T>) -> Self::Value;
+    /// Makes an aggregate at its settled type from its parts' values, which
+    /// it then owns (runtime contract §2, Aggregates).
+    fn make_tuple(&self, parts: impl ExactSizeIterator<Item = Self::Value>, at: Settled<'_>) -> Self::Value;
+    fn make_object(&self, fields: impl ExactSizeIterator<Item = Self::Value>, at: Settled<'_>) -> Self::Value;
+    fn make_variant(&self, tag: u32, payload: Option<Self::Value>, at: Settled<'_>) -> Self::Value;
 
-    /// A reference value made from its target.
-    fn reference(&self, target: RefTarget<'_, Self::Value>) -> Self::Value;
+    /// The `i`-th part of an aggregate the call lent, its storage lent in
+    /// place: the aggregate still owns it, and it is read only through a
+    /// guard, so a projection is a guard at each leaf. A variant's payload is
+    /// its part 0.
+    fn lent_part<'a>(&'a self, v: Self::Value, i: u32, at: Settled<'a>) -> Self::Value;
+    /// The tag of a variant the call lent.
+    fn lent_tag(&self, v: Self::Value, at: Settled<'_>) -> u32;
+
+    /// The reference value made from a part of storage the call lent; a
+    /// borrowed result is one (crossing §4).
+    fn reference<'a, P: ?Sized>(&'a self, target: RefTarget<'a, P>, at: Settled<'a>) -> Self::Value;
 
     fn interner(&self) -> &Interner;
     fn sleep(&self, d: Duration) -> impl Future<Output = ()> + Send;

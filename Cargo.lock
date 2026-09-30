@@ -95,6 +95,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "acvus-extern-test"
+version = "0.1.0"
+dependencies = [
+ "acvus-extern",
+ "acvus-utils",
+ "tokio",
+]
+
+[[package]]
 name = "acvus-interpreter"
 version = "0.1.0"
 dependencies = [

@@ -8,10 +8,11 @@
 #![deny(unsafe_code)]
 
 mod boundary;
+pub mod adapter;
 pub mod callback;
-pub mod checked;
 pub mod context;
 pub mod done;
+pub mod guard;
 pub mod impls;
 pub mod runtime;
 pub mod shape;

@@ -2,8 +2,11 @@
 //! how it finishes. A returning body calls callbacks and impls returning; an
 //! awaited body calls them either way.
 
+use std::ops::{Deref, DerefMut};
+
 use crate::boundary::entry::SiteShape;
 use crate::done::Done;
+use crate::guard::{Guard, GuardMut};
 use crate::runtime::{Crosses, Runtime};
 
 pub struct Returning<'c, R: Runtime> {
@@ -35,13 +38,28 @@ impl<'c, R: Runtime> Returning<'c, R> {
         todo!("give the value at the settled result type")
     }
 
-    /// Finishes the call with a result that borrows what the call lent.
-    pub fn finish_lent<T: Crosses + 'c>(self, lent: R::Shared<'c, T>) -> Done<R> {
-        todo!("the reference value made from the guard")
+    /// Finishes the call with a result that borrows a part of what the call
+    /// lent: `part` picks it from the guard's target, and the reference value
+    /// is made while the guard still lends it (S2 names the target, or its
+    /// written-back copy, after the guard drops).
+    pub fn finish_lent<G, P>(self, guard: Guard<'c, G>, part: impl for<'s> FnOnce(&'s G::Target) -> &'s P) -> Done<R>
+    where
+        G: Deref,
+        P: ?Sized,
+    {
+        todo!("runtime.reference(RefTarget::Shared(part(&guard)), settled), then drop the guard")
     }
 
-    pub fn finish_lent_mut<T: Crosses + 'c>(self, lent: R::Exclusive<'c, T>) -> Done<R> {
-        todo!("the reference value made from the guard")
+    pub fn finish_lent_mut<G, P>(
+        self,
+        guard: GuardMut<'c, G>,
+        part: impl for<'s> FnOnce(&'s mut G::Target) -> &'s mut P,
+    ) -> Done<R>
+    where
+        G: DerefMut,
+        P: ?Sized,
+    {
+        todo!("runtime.reference(RefTarget::Exclusive(part(&mut guard)), settled), then drop the guard")
     }
 }
 

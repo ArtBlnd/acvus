@@ -36,13 +36,18 @@ impl<'a, A: CallArgs<R>, U: Crosses, E, R: CallsBack> Callback<'a, A, U, E, R> {
     }
 }
 
-/// Calling a script closure, returning or awaited (runtime contract §2).
+/// Calling a script closure, returning or awaited (runtime contract §2). The
+/// arguments are typed at the runtime the call runs at, `R`: the runtime
+/// itself, or the adapter over it (K15), whose values are the runtime's.
 pub trait CallsBack: Runtime {
-    fn call_now<A: CallArgs<Self>, U: Crosses>(&self, closure: Self::Value, args: A::Lent<'_>, at: Settled<'_>) -> U;
-    fn call_later<A: CallArgs<Self>, U: Crosses>(
-        &self,
-        closure: Self::Value,
-        args: A::Moved,
-        at: Settled<'_>,
-    ) -> impl Future<Output = U> + Send;
+    fn call_now<R, A, U>(&self, closure: Self::Value, args: A::Lent<'_>, at: Settled<'_>) -> U
+    where
+        R: Runtime<Value = Self::Value>,
+        A: CallArgs<R>,
+        U: Crosses;
+    fn call_later<R, A, U>(&self, closure: Self::Value, args: A::Moved, at: Settled<'_>) -> impl Future<Output = U> + Send
+    where
+        R: Runtime<Value = Self::Value>,
+        A: CallArgs<R>,
+        U: Crosses;
 }
