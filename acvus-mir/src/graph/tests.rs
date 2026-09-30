@@ -8,7 +8,7 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 use super::{Graph, Refusal, Source, Stop, Unit};
 use crate::decl::{Core, Declarations, EntryDecl, ImplSig, Impls, LoopMarkers, RawDeclarations};
 use crate::passes::pipeline::Level;
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
 struct Fixture {
     names: Interner,
@@ -56,7 +56,7 @@ impl Fixture {
             params: params.into(),
             ret,
             effect: EffectTerm::Known(Effect::pure()),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),

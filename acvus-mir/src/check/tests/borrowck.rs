@@ -7,7 +7,11 @@ use acvus_ast::Span;
 
 use super::{Fixture, covers, span_of};
 use crate::check::{ConflictTrace, Refusal, RefusalKind};
-use crate::ty::{Mutability, TyKind};
+use crate::decl::{EndLabels, LabelledSignature, Lifetime, SegmentLabel};
+use acvus_utils::QualifiedRef;
+
+use crate::decl::UserTypeDecl;
+use crate::ty::{FlowEnd, Mark, MarkTerm, Mutability, TyKind};
 
 fn conflict(span: Span, earlier: Vec<Span>, later: Vec<Span>, uses: Vec<Span>) -> Refusal {
     Refusal { kind: RefusalKind::LoanConflict { trace: ConflictTrace { earlier, later, uses } }, span }
@@ -205,5 +209,135 @@ fn a_mut_lend_of_a_context_dead_before_a_call_touching_it_is_admitted() {
     fx.declare("push", &[vec_mut], int);
     fx.declare_with_effect("touch", &[], int, crate::ty::Effect::opaque());
     let refusals = fx.refusals("let r = &mut @c; push(r); touch()");
+    assert_eq!(refusals, []);
+}
+
+/// Each end's labels, and no order on the lifetimes.
+fn lifetimes(ends: &[(FlowEnd, &[u32])]) -> LabelledSignature {
+    let ends = ends
+        .iter()
+        .map(|(end, labels)| EndLabels { end: *end, labels: labels.iter().map(|at| SegmentLabel::Lifetime(Lifetime(*at))).collect() })
+        .collect();
+    LabelledSignature { ends, outlives: Box::new([]) }
+}
+
+/// `first<'a, 'b>(x: &'a i64, y: &'b i64) -> &'a i64`.
+fn declare_first(fx: &mut Fixture) {
+    let int = fx.int();
+    let shared_int = fx.ty(TyKind::Ref(Mutability::Shared, int));
+    let labels = lifetimes(&[(FlowEnd::Result, &[0]), (FlowEnd::Param(0), &[0]), (FlowEnd::Param(1), &[1])]);
+    fx.declare_labelled("first", &[shared_int, shared_int], shared_int, labels);
+}
+
+/// extern-fn §4, ownership §5: a call of a declaration moves loans as its
+/// lifetimes state. `first`'s result takes `'a` alone, so `r` holds the
+/// loan on `a` and none on `b`: writing `b` while `r` lives meets nothing.
+#[test]
+fn a_declared_result_holds_no_loan_its_lifetimes_do_not_give_it() {
+    let mut fx = Fixture::new();
+    declare_first(&mut fx);
+    let refusals = fx.refusals("let a = 1; let b = 2; let r = first(&a, &b); b = 3; *r");
+    assert_eq!(refusals, []);
+}
+
+/// The same call: writing `a` while `r`, holding its loan, lives is one
+/// refusal, at the write.
+#[test]
+fn a_declared_result_holds_the_loan_its_lifetimes_give_it() {
+    let mut fx = Fixture::new();
+    declare_first(&mut fx);
+    let source = "let a = 1; let b = 2; let r = first(&a, &b); a = 3; *r";
+    let refusals = fx.refusals(source);
+    let (span, _) = one_conflict(&refusals);
+    assert!(covers(span_of(source, "a = 3;", 0), span), "at the write of `a`: {span:?}");
+}
+
+/// extern-fn §4: a declaration that states no lifetimes has every flow, so
+/// `pick`'s result holds the loans of both arguments: writing `b` while `r`
+/// lives is one refusal, at the write.
+#[test]
+fn a_declared_result_without_lifetimes_holds_every_arguments_loan() {
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    let shared_int = fx.ty(TyKind::Ref(Mutability::Shared, int));
+    fx.declare("pick", &[shared_int, shared_int], shared_int);
+    let source = "let a = 1; let b = 2; let r = pick(&a, &b); b = 3; *r";
+    let refusals = fx.refusals(source);
+    let (span, _) = one_conflict(&refusals);
+    assert!(covers(span_of(source, "b = 3;", 0), span), "at the write of `b`: {span:?}");
+}
+
+/// An extern `Slot<'a>` holding one lifetime; `make<'a>(x: &'a i64) ->
+/// Slot<'a>`; `read(s: &Slot) -> i64`, stating no lifetimes; and
+/// `store<'a, 'b>(dst: &'b mut Slot<'a>, src: &'<src> i64)`.
+fn declare_slot(fx: &mut Fixture, src: u32) {
+    let id = QualifiedRef::root(fx.name("Slot"));
+    fx.raw.user_types.push(UserTypeDecl {
+        id,
+        type_params: Box::new([]),
+        carries_effect: false,
+        carries_identity: false,
+        lifetimes: 1,
+    });
+    let slot = fx.ty(TyKind::UserDefined {
+        id,
+        type_args: Box::new([]),
+        effect: None,
+        identity: None,
+        marked: MarkTerm::Known(Mark::Unmarked),
+    });
+    let int = fx.int();
+    let shared_int = fx.ty(TyKind::Ref(Mutability::Shared, int));
+    let (shared_slot, mut_slot) = (fx.ty(TyKind::Ref(Mutability::Shared, slot)), fx.ty(TyKind::Ref(Mutability::Mut, slot)));
+    let unit = fx.ty(TyKind::Unit);
+    fx.declare_labelled("make", &[shared_int], slot, lifetimes(&[(FlowEnd::Result, &[0]), (FlowEnd::Param(0), &[0])]));
+    fx.declare("read", &[shared_slot], int);
+    fx.declare_labelled("store", &[mut_slot, shared_int], unit, lifetimes(&[(FlowEnd::Param(0), &[1, 0]), (FlowEnd::Param(1), &[src])]));
+}
+
+/// ownership §5, `FlowEnd`: `store` with `src: &'a i64` writes `src`'s
+/// loan through `dst` into `s`'s lifetime: writing `y` while `s` lives is
+/// one refusal, at the write.
+#[test]
+fn a_declared_write_through_a_mut_parameter_moves_the_loan_its_lifetimes_give() {
+    let mut fx = Fixture::new();
+    declare_slot(&mut fx, 0);
+    let source = "let x = 1; let y = 2; let s = make(&x); store(&mut s, &y); y = 5; read(&s)";
+    let refusals = fx.refusals(source);
+    let (span, _) = one_conflict(&refusals);
+    assert!(covers(span_of(source, "y = 5;", 0), span), "at the write of `y`: {span:?}");
+}
+
+/// The same with `src: &'c i64`, a lifetime `dst`'s target does not take:
+/// nothing of `y` is written into `s`, and writing `y` meets nothing.
+#[test]
+fn a_declared_write_through_a_mut_parameter_moves_no_loan_its_lifetimes_do_not_give() {
+    let mut fx = Fixture::new();
+    declare_slot(&mut fx, 2);
+    let refusals = fx.refusals("let x = 1; let y = 2; let s = make(&x); store(&mut s, &y); y = 5; read(&s)");
+    assert_eq!(refusals, []);
+}
+
+/// extern-fn §1: where a function value is wanted, a lambda calls the
+/// extern fn. `map`'s callback is a declared function type; the lambda's
+/// body calls `len`, whose declaration moves nothing into its `i64`
+/// result, and the whole is admitted.
+#[test]
+fn a_lambda_calling_an_extern_fn_stands_where_a_function_value_is_wanted() {
+    let mut fx = Fixture::new();
+    let int = fx.int();
+    let shared_int = fx.ty(TyKind::Ref(Mutability::Shared, int));
+    fx.declare("len", &[shared_int], int);
+    let callback = fx.ty(TyKind::Fn {
+        params: Box::new([shared_int]),
+        ret: int,
+        effect: crate::ty::EffectTerm::Known(crate::ty::Effect::pure()),
+        flows: crate::ty::FlowTerm::Known(crate::decl::declared_fn_flows()),
+        calls: crate::ty::Calls::Many,
+        holds: crate::ty::Holds::Nothing,
+        values: (),
+    });
+    fx.declare("map", &[shared_int, callback], int);
+    let refusals = fx.refusals("let xs = 1; map(&xs, |x| -> len(x))");
     assert_eq!(refusals, []);
 }

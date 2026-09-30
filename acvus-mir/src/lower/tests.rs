@@ -14,7 +14,7 @@ use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
 use crate::passes::analysis::{Loan, Mode, Storage};
 use crate::ty::{Mark, MarkTerm};
-use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
+use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 use crate::typeck::{Inputs, Interfaces, check_script, check_template};
 
 struct Fixture {
@@ -67,7 +67,7 @@ impl Fixture {
             params: params.into(),
             ret,
             effect: EffectTerm::Known(effect),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),

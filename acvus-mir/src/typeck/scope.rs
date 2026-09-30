@@ -321,7 +321,7 @@ pub(super) fn check_ident(
         cx.decls.scheme(name).map(|_| name).into_iter().collect()
     };
     match &declarations[..] {
-        [declaration] => super::call::declaration_value(cx, site, *declaration, span),
+        [declaration] => super::call::declaration_value(cx, *declaration, span),
         [] => {
             refusal::push(cx, RefusalKind::UnknownName { name: name.name }, span);
             cx.fresh()

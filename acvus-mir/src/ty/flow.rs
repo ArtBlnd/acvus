@@ -69,7 +69,7 @@ pub struct Source {
 /// states nothing about its flows gets (extern-fn §4). It is its own value
 /// because a declaration states it without counting the parameters.
 /// `Listed` holds the flows sorted, each pair of ends once per alignment,
-/// an `Any` flow standing for the `Aligned` or `Labelled` one it covers, so
+/// an `Any` flow standing for the `Aligned` one it covers, so
 /// two equal sets are equal values.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Flows {
@@ -129,9 +129,7 @@ impl Flows {
     }
 
     /// Whether `to` may take from `from` at `alignment`: an `Any` flow
-    /// admits an `Aligned` or a `Labelled` one between the same ends, and
-    /// a `Labelled` one admits only itself, since which positions it maps
-    /// depends on the ends' types.
+    /// admits an `Aligned` one between the same ends.
     pub fn admits(&self, to: FlowEnd, from: FlowEnd, alignment: &Alignment) -> bool {
         match self {
             Flows::Every => true,

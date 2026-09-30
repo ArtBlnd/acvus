@@ -5,7 +5,7 @@ use crate::decl::{
     Core, Declarations, DeclaredFacts, GenericImplSig, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme,
 };
 use crate::ty::{Mark, MarkTerm};
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, TyKind, Types};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Mutability, TyKind, Types};
 
 struct Fixture {
     interner: Interner,
@@ -54,7 +54,7 @@ impl Fixture {
             params: params.into(),
             ret,
             effect: EffectTerm::Known(Effect::pure()),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),

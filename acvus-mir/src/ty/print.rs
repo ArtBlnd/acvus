@@ -110,7 +110,7 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             out.push_str(") -> ");
             write_ty(types, names, *ret, out);
             let mut carried = effect_terms(names, known_effect(effect));
-            carried.extend(flows_term(names, flows));
+            carried.extend(flows_term(flows));
             if *calls == Calls::Once {
                 carried.push("calls=once".to_string());
             }
@@ -236,7 +236,7 @@ fn carried_effect(names: &Interner, effect: &Effect) -> String {
 
 /// `flows=[p0->ret, ..]` where the flows are listed, nothing for every flow
 /// (types §5).
-fn flows_term(names: &Interner, flows: &FlowTerm<Concrete>) -> Option<String> {
+fn flows_term(flows: &FlowTerm<Concrete>) -> Option<String> {
     let Flows::Listed(listed) = flows.get() else {
         return None;
     };
@@ -246,19 +246,6 @@ fn flows_term(names: &Interner, flows: &FlowTerm<Concrete>) -> Option<String> {
             let alignment = match &flow.alignment {
                 Alignment::Aligned => String::new(),
                 Alignment::Any => ":any".to_string(),
-                Alignment::Labelled(labelled) => {
-                    let declared = qualified(names, labelled.declared.function);
-                    let declared = match labelled.declared.r#impl {
-                        Some(at) => format!("{declared}#{at}"),
-                        None => declared,
-                    };
-                    let map: Vec<String> = labelled
-                        .map
-                        .iter()
-                        .map(|segments| format!("[{}]", segments.iter().map(usize::to_string).collect::<Vec<_>>().join(", ")))
-                        .collect();
-                    format!(":labelled({declared} {})", map.join(" "))
-                }
             };
             format!("{}->{}{alignment}", flow_end(flow.from), flow_end(flow.to))
         })

@@ -150,6 +150,7 @@ impl RefusalKind {
             RefusalKind::UnnamedVariant { tag } => format!("UnnamedVariant {}", name(tag)),
             RefusalKind::UnknownName { name: unknown } => format!("UnknownName {}", name(unknown)),
             RefusalKind::UnknownContext { context } => format!("UnknownContext @{}", path(context)),
+            RefusalKind::ExternAsValue { declaration } => format!("ExternAsValue {}", path(declaration)),
             RefusalKind::UnitCalledByPosition { unit } => format!("UnitCalledByPosition {}", path(unit)),
             RefusalKind::UnknownArgument { unit, name: argument } => format!("UnknownArgument {}({}:)", path(unit), name(argument)),
             RefusalKind::DuplicateArgument { unit, name: argument } => format!("DuplicateArgument {}({}:)", path(unit), name(argument)),
@@ -164,7 +165,6 @@ impl RefusalKind {
             },
             RefusalKind::NotOneOfFunctionValues { value } => match value {
                 crate::ty::FnValue::Lambda(_) => "NotOneOfFunctionValues lambda".to_string(),
-                crate::ty::FnValue::Declaration(declaration) => format!("NotOneOfFunctionValues {}", path(declaration)),
             },
             RefusalKind::NoDeclaration { name: missing } => format!("NoDeclaration {}", name(missing)),
             RefusalKind::SeveralDeclarations { name: several, left } => {

@@ -108,7 +108,7 @@ mod tests {
             params: Box::new([poly_index]),
             ret: poly_ref,
             effect: EffectTerm::Known(Effect::pure()),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),

@@ -60,10 +60,12 @@
 //! 6. A call: an argument's lend or reborrow is made where the call starts
 //!    (ownership §5, effects §6), so a value that is only one call's argument
 //!    holds its loans from the call on. The result and the written
-//!    arguments take loans only as the function type's flows state; one the
-//!    result takes from an argument is made at the call, within that
-//!    argument's loan, not exact. A call with a declared access touches
-//!    only the places that access states, in their modes.
+//!    arguments take loans only as the call's flows state: a declared
+//!    function's, its lifetimes read at the call's types (`call_flows`),
+//!    every flow where it states none; a function value's, its function
+//!    type's. One the result takes from an argument is made at the call,
+//!    within that argument's loan, not exact. A call with a declared
+//!    access touches only the places that access states, in their modes.
 //! 7. A join: a block's parameter holds what any argument into it holds.
 //!
 //! A context is a storage by its name (context §3), whole at entry, whose
@@ -94,8 +96,7 @@ use std::ops::Range;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::decl::declared::{Access as DeclaredAccess, Element, Touch};
-use crate::decl::{Declarations, segments};
-use crate::flows::segment_positions;
+use crate::decl::{CallFlows, Declarations, call_flows};
 use crate::ir::cfg::takings::{Taken, by_value, place_taking};
 use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Definition, Edge, Inst, Module, Op, Site, Terminator};
 use crate::ir::parts::{Path, covers, overlap};
@@ -106,7 +107,7 @@ use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Directio
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::structural::{PartKey, structure};
 use crate::ty::{
-    Alignment, Concrete, FlowEnd, Flows, Holds, Labelled, Mutability, PositionKind, Reissue, Source, Ty, TyKind,
+    Alignment, Concrete, FlowEnd, Flows, Holds, Mutability, PositionKind, Reissue, Source, Ty, TyKind,
     Types, lent_types, position_kinds, positions,
 };
 
@@ -1768,14 +1769,19 @@ impl Forward<'_> {
         let TyKind::Fn { params, ret, flows, .. } = self.types.kind(*callee_ty) else {
             panic!("a call's callee type is a function type")
         };
-        let flows = flows.get();
         let captured: Vec<LoanSet> = indirect(callee)
             .map(|function| fold(&self.deepened(state, self.body.ty_of(*function), self.value(state, *function))))
             .collect();
-        let result = self.flowed_result(flows, params, *ret, passed, &captured);
-        let result = self.taken_by_result(result, *ret, site, record);
         let callee_value = indirect(callee).next().copied();
-        for (to, region) in self.flowed_writes(flows, self.access(callee), passed, &captured, callee_value.is_some()) {
+        let (result, writes) = match callee {
+            Callee::Extern { id, r#impl, .. } => match call_flows(self.decls, self.decls.called(*id, *r#impl), self.types, params, *ret) {
+                Some(flows) => (self.declared_result(&flows, *ret, passed), self.declared_writes(&flows, self.access(callee), passed)),
+                None => self.flowed(&Flows::Every, callee, *ret, passed, &captured, callee_value.is_some()),
+            },
+            Callee::Direct(_) | Callee::Indirect(_) => self.flowed(flows.get(), callee, *ret, passed, &captured, callee_value.is_some()),
+        };
+        let result = self.taken_by_result(result, *ret, site, record);
+        for (to, region) in writes {
             let into = match to {
                 FlowEnd::Param(index) => args[index],
                 FlowEnd::Captures => callee_value.expect("only a callee value captures"),
@@ -1802,7 +1808,7 @@ impl Forward<'_> {
         let passed: Vec<Vec<LoanSet>> =
             elements.iter().zip(params.iter()).map(|(element, param)| self.deepened(state, *param, element.clone())).collect();
         let captured = vec![fold(&self.deepened(state, function_ty, self.value(state, *function)))];
-        let result = self.flowed_result(flows, params, *ret, &passed, &captured);
+        let result = self.flowed_result(flows, *ret, &passed, &captured);
         let result = self.taken_by_result(result, *ret, site, record);
         for (to, region) in self.flowed_writes(flows, None, &passed, &captured, true) {
             match to {
@@ -1848,9 +1854,26 @@ impl Forward<'_> {
         element
     }
 
+    /// A call's result and writes by `flows`, a function type's: its
+    /// result of type `ret`, and what it writes through each argument and
+    /// into its captures, where it has any.
+    fn flowed(
+        &self,
+        flows: &Flows,
+        callee: &Callee,
+        ret: Ty,
+        passed: &[Vec<LoanSet>],
+        captured: &[LoanSet],
+        captures: bool,
+    ) -> (Vec<LoanSet>, Vec<(FlowEnd, LoanSet)>) {
+        let result = self.flowed_result(flows, ret, passed, captured);
+        let writes = self.flowed_writes(flows, self.access(callee), passed, captured, captures);
+        (result, writes)
+    }
+
     /// What a callee's result of type `ret` takes by `flows` from its
-    /// arguments, `passed` as parameters of `params`, and its captures.
-    fn flowed_result(&self, flows: &Flows, params: &[Ty], ret: Ty, passed: &[Vec<LoanSet>], captured: &[LoanSet]) -> Vec<LoanSet> {
+    /// arguments, `passed`, and its captures.
+    fn flowed_result(&self, flows: &Flows, ret: Ty, passed: &[Vec<LoanSet>], captured: &[LoanSet]) -> Vec<LoanSet> {
         let mut result = empty(self.width(ret));
         for Source { from, alignment } in flows.into_end(FlowEnd::Result, passed.len()) {
             let taken = flowed_input(from, passed, captured);
@@ -1859,15 +1882,41 @@ impl Forward<'_> {
                     join_positions(&mut result, &taken);
                 }
                 Alignment::Any => spread(&mut result, &fold(&taken)),
-                Alignment::Labelled(labelled) => {
-                    let FlowEnd::Param(index) = from else {
-                        panic!("a Labelled flow's input is a parameter of the extern it is read off")
-                    };
-                    self.join_labelled(&mut result, labelled, params[index], ret, from, &taken);
+            }
+        }
+        result
+    }
+
+    /// What a declared function's result of type `ret` takes by `flows`,
+    /// each position the argument positions its flows name.
+    fn declared_result(&self, flows: &CallFlows, ret: Ty, passed: &[Vec<LoanSet>]) -> Vec<LoanSet> {
+        let mut result = empty(self.width(ret));
+        for (_, positions) in flows.into.iter().filter(|(to, _)| *to == FlowEnd::Result) {
+            assert_eq!(positions.len(), result.len(), "a declared call's flows name each position of its result");
+            for (position, takes) in result.iter_mut().zip(positions.iter()) {
+                for (param, at) in takes.iter() {
+                    position.extend(passed[*param][*at].iter().cloned());
                 }
             }
         }
         result
+    }
+
+    /// What a declared function writes by `flows` through each argument, as
+    /// `access` allows where one is declared: into a parameter its flows
+    /// name as an output, every loan of each argument it takes from, as a
+    /// function type's flows write.
+    fn declared_writes(&self, flows: &CallFlows, access: Option<&[Touch]>, passed: &[Vec<LoanSet>]) -> Vec<(FlowEnd, LoanSet)> {
+        flows
+            .into
+            .iter()
+            .filter(|(to, _)| matches!(to, FlowEnd::Param(_)) && written_by_access(access, to))
+            .map(|(to, positions)| {
+                let from: BTreeSet<usize> = positions.iter().flatten().map(|(param, _)| *param).collect();
+                let region = from.into_iter().flat_map(|param| fold(&passed[param])).collect();
+                (*to, region)
+            })
+            .collect()
     }
 
     /// What a callee writes by `flows` through each argument and into its
@@ -1881,16 +1930,9 @@ impl Forward<'_> {
         captures: bool,
     ) -> Vec<(FlowEnd, LoanSet)> {
         let arity = passed.len();
-        let written_by_access = |to: &FlowEnd| match (access, to) {
-            (None, _) => true,
-            (Some(touches), FlowEnd::Param(index)) => {
-                touches.iter().any(|touch| touch.place.param == *index && touch.mode.writes())
-            }
-            (Some(_), FlowEnd::Captures | FlowEnd::Result) => false,
-        };
         let outputs = (0..arity).map(FlowEnd::Param).chain(captures.then_some(FlowEnd::Captures));
         outputs
-            .filter(written_by_access)
+            .filter(|to| written_by_access(access, to))
             .filter_map(|to| {
                 let sources = flows.into_end(to, arity);
                 if sources.is_empty() {
@@ -1960,43 +2002,6 @@ impl Forward<'_> {
             }
         }
         own
-    }
-
-    /// Each output segment joins exactly the input segments a `Labelled`
-    /// flow's map names, position by position where both are one type
-    /// variable's part.
-    fn join_labelled(
-        &self,
-        out: &mut [LoanSet],
-        labelled: &Labelled,
-        from_ty: Ty,
-        to_ty: Ty,
-        from: FlowEnd,
-        input: &[LoanSet],
-    ) {
-        let poly = self.decls.types();
-        let to_decl = labelled.declared.end_ty(self.decls, FlowEnd::Result);
-        let from_decl = labelled.declared.end_ty(self.decls, from);
-        let to_ranges = segment_positions(poly, to_decl, self.types, to_ty, self.decls);
-        let from_ranges = segment_positions(poly, from_decl, self.types, from_ty, self.decls);
-        let to_segments = segments(poly, self.decls, to_decl);
-        let from_segments = segments(poly, self.decls, from_decl);
-        assert!(
-            labelled.map.len() == to_ranges.len() && labelled.map.iter().flatten().all(|segment| *segment < from_ranges.len()),
-            "a Labelled flow's map names the segments of its ends"
-        );
-        for (at, takes) in labelled.map.iter().enumerate() {
-            let to = to_ranges[at].clone();
-            for segment in takes.iter().copied() {
-                let values = &input[from_ranges[segment].clone()];
-                if to_segments[at].aligned_with(from_segments[segment]) {
-                    join_positions(&mut out[to.clone()], values);
-                } else {
-                    let all = fold(values);
-                    out[to.clone()].iter_mut().for_each(|position| position.extend(all.iter().cloned()));
-                }
-            }
-        }
     }
 
     /// The storages an instruction reads and writes, in `state`, just
@@ -2170,6 +2175,17 @@ fn through_loans(loans: &LoanSet, path: &[PathSeg]) -> Vec<Located> {
 
 /// What the input end `from` of a callee's flows holds: an argument
 /// `passed`, or its captures.
+/// Whether a callee with the declared `access` may write into `to`: any
+/// output where it declares none, else a parameter it touches in a mode
+/// that writes.
+fn written_by_access(access: Option<&[Touch]>, to: &FlowEnd) -> bool {
+    match (access, to) {
+        (None, _) => true,
+        (Some(touches), FlowEnd::Param(index)) => touches.iter().any(|touch| touch.place.param == *index && touch.mode.writes()),
+        (Some(_), FlowEnd::Captures | FlowEnd::Result) => false,
+    }
+}
+
 fn flowed_input(from: FlowEnd, passed: &[Vec<LoanSet>], captured: &[LoanSet]) -> Vec<LoanSet> {
     match from {
         FlowEnd::Param(index) => passed.get(index).expect("a flow names a parameter the call passes").clone(),

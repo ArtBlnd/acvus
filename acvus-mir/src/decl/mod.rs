@@ -25,7 +25,7 @@ mod verify;
 use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 
-use crate::ty::{LifetimesOf, Poly, TyId, Types};
+use crate::ty::{Declared, LifetimesOf, Poly, TyId, Types};
 
 pub use bound::TyVarBound;
 pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
@@ -186,6 +186,23 @@ impl Declarations {
             }
             None => panic!("{function:?} has no impl {}", r#impl),
         }
+    }
+
+    /// The signature a call of `function` at `r#impl` instantiates, the
+    /// impl numbered as `call_facts` numbers it: a concrete impl's own, or
+    /// for its generic impl or a declaration without impls, the scheme's.
+    ///
+    /// # Panics
+    /// As `call_facts`.
+    pub(crate) fn called(&self, function: QualifiedRef, r#impl: Option<usize>) -> Declared {
+        let scheme = self.scheme(function).unwrap_or_else(|| panic!("the call names {function:?}, which is not declared"));
+        let concrete = match (&scheme.impls, r#impl) {
+            (None, None) => None,
+            (Some(impls), Some(r#impl)) if r#impl < impls.concrete.len() => Some(r#impl),
+            (Some(impls), Some(r#impl)) if r#impl == impls.concrete.len() && impls.generic.is_some() => None,
+            (_, r#impl) => panic!("a call of {function:?} names impl {impl:?}, which it does not have"),
+        };
+        Declared { function, r#impl: concrete }
     }
 
     /// Every declared function with its scheme, in no promised order.

@@ -10,7 +10,7 @@
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{DeclaredFacts, Scheme, TyVarBound};
-use crate::ty::{Calls, CastTy, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
+use crate::ty::{Calls, CastTy, EffectTerm, FlowTerm, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
 /// The names of `core`'s generic functions: the lang items (operators §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,7 +210,7 @@ impl Table<'_> {
             params: params.into(),
             ret,
             effect: EffectTerm::Var(0),
-            flows: FlowTerm::Known(Flows::Every),
+            flows: FlowTerm::Known(super::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),

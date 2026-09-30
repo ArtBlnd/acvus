@@ -8,7 +8,7 @@ use crate::check::{RefusalKind, check};
 use crate::decl::{Core, Declarations, DeclaredFacts, LoopMarkers, RawDeclarations, Scheme};
 use crate::lower::lower_script;
 use crate::passes::analysis::AnalysisManager;
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Poly, TyId, TyKind, Types};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Poly, TyId, TyKind, Types};
 use crate::typeck::check_script;
 
 struct Fixture {
@@ -59,7 +59,7 @@ impl Fixture {
             params: Box::new([]),
             ret,
             effect: EffectTerm::Known(Effect::pure()),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),

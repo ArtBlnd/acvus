@@ -14,7 +14,7 @@ use super::{
 use super::declared::{self, Atom, Subject};
 use super::segments::{Segment, segments};
 use crate::ty::{
-    Alignment, Declared, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LenTerm, LifetimesOf, Mark, MarkTerm, Mutability, ObjectTy,
+    Declared, EffectTerm, FlowEnd, Holds, LenTerm, LifetimesOf, Mark, MarkTerm, Mutability, ObjectTy,
     Poly, TyId, TyKind, Types,
 };
 
@@ -227,7 +227,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         .filter_map(|(id, scheme)| super::lift::lift_of(&types, scheme).map(|lift| (*id, lift)))
         .collect();
 
-    let mut decls = Declarations {
+    let decls = Declarations {
         types,
         functions,
         overloads,
@@ -244,7 +244,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         .into_iter()
         .filter(|id| !unreadable.contains(id))
         .collect();
-    take_in_lifetimes(&mut decls, &lifetimes_readable, &mut refused);
+    refuse_unfit_lifetimes(&decls, &lifetimes_readable, &mut refused);
 
     match refused.is_empty() {
         true => Ok(decls),
@@ -1067,87 +1067,43 @@ fn refuse_cycles(above: &FxHashMap<Head, Head>, from_order: &[Head], refused: &m
     }
 }
 
-/// Every declared signature's lifetimes become its function type's flows
-/// (ownership §5, extern-fn §4), and nothing keeps a lifetime after.
-fn take_in_lifetimes(decls: &mut Declarations, declared_order: &[QualifiedRef], refused: &mut Vec<Refused>) {
-    let mut rewrites: Vec<FlowsOf> = Vec::new();
+/// extern-fn §4: a declaration's lifetimes fit its signature, one label per
+/// segment of each end and each order on lifetimes the labels use. They
+/// stay on the declaration, and each call of it reads them there
+/// (`call_flows`).
+fn refuse_unfit_lifetimes(decls: &Declarations, declared_order: &[QualifiedRef], refused: &mut Vec<Refused>) {
     for function in declared_order {
         let Some(scheme) = decls.functions.get(function) else {
             continue;
         };
         for signature in declared_signatures(*function, scheme) {
-            let TyKind::Fn { params, ret, .. } = decls.types.kind(signature.ty) else {
-                if signature.lifetimes.is_some() {
-                    refused.push(Refused::LabelsDoNotFit { declaration: *function });
-                }
+            let Some(lifetimes) = signature.lifetimes else {
                 continue;
             };
-            let flows = match signature.lifetimes {
-                None => Flows::Every,
-                Some(lifetimes) => match labelled_flows(decls, signature.declared, params, *ret, lifetimes) {
-                    Ok(flows) => flows,
-                    Err(LabelsDoNotFit) => {
-                        refused.push(Refused::LabelsDoNotFit { declaration: *function });
-                        continue;
-                    }
-                },
+            let fits = match decls.types.kind(signature.ty) {
+                TyKind::Fn { params, ret, .. } => fitted_ends(decls, params, *ret, lifetimes)
+                    .and_then(|ends| outlives_closure(lifetimes, &ends))
+                    .is_ok(),
+                _ => false,
             };
-            rewrites.push(FlowsOf {
-                declared: signature.declared,
-                flows,
-            });
-        }
-    }
-
-    for FlowsOf { declared, flows } in rewrites {
-        let scheme = decls
-            .functions
-            .get_mut(&declared.function)
-            .expect("a rewrite names a function read above");
-        let slot = match declared.r#impl {
-            None => &mut scheme.ty,
-            Some(at) => {
-                &mut scheme
-                    .impls
-                    .as_mut()
-                    .expect("a rewrite of an impl names a declaration with impls")
-                    .concrete[at]
-                    .ty
+            if !fits {
+                refused.push(Refused::LabelsDoNotFit { declaration: *function });
             }
-        };
-        *slot = with_flows(&mut decls.types, *slot, flows);
-    }
-    for scheme in decls.functions.values_mut() {
-        scheme.facts.lifetimes = None;
-        let Some(impls) = &mut scheme.impls else {
-            continue;
-        };
-        for r#impl in impls.concrete.iter_mut() {
-            r#impl.facts.lifetimes = None;
-        }
-        if let Some(generic) = &mut impls.generic {
-            generic.facts.lifetimes = None;
         }
     }
-}
-
-/// The flows a declared signature's function type takes.
-struct FlowsOf {
-    declared: Declared,
-    flows: Flows,
 }
 
 /// One signature a declaration states, with the lifetimes stated for it.
-struct DeclaredSignature<'s> {
-    declared: Declared,
-    ty: TyId<Poly>,
-    lifetimes: Option<&'s LabelledSignature>,
+pub(super) struct DeclaredSignature<'s> {
+    pub(super) declared: Declared,
+    pub(super) ty: TyId<Poly>,
+    pub(super) lifetimes: Option<&'s LabelledSignature>,
 }
 
 /// The scheme's own signature, whose lifetimes are its own where it has no
 /// impls and its generic impl's where it has them, then each concrete
 /// impl's.
-fn declared_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator<Item = DeclaredSignature<'_>> {
+pub(super) fn declared_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator<Item = DeclaredSignature<'_>> {
     let own_lifetimes = match &scheme.impls {
         None => scheme.facts.lifetimes.as_ref(),
         Some(impls) => impls.generic.as_ref().and_then(|generic| generic.facts.lifetimes.as_ref()),
@@ -1177,75 +1133,14 @@ fn declared_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator
     std::iter::once(own).chain(concrete)
 }
 
-/// `ty`, a function type, with its flows replaced by `flows`.
-fn with_flows(types: &mut Types<Poly>, ty: TyId<Poly>, flows: Flows) -> TyId<Poly> {
-    let mut kind = types.kind(ty).clone();
-    let TyKind::Fn { flows: slot, .. } = &mut kind else {
-        panic!("only a function type's flows are rewritten")
-    };
-    *slot = FlowTerm::Known(flows);
-    types.intern(kind)
-}
-
-struct LabelsDoNotFit;
-
-/// The flows a labelled signature states: each output segment takes every
-/// input segment of one lifetime with it, of a lifetime that outlives it,
-/// or of the same type variable.
-fn labelled_flows(
-    decls: &Declarations,
-    declared: Declared,
-    params: &[TyId<Poly>],
-    ret: TyId<Poly>,
-    signature: &LabelledSignature,
-) -> Result<Flows, LabelsDoNotFit> {
-    let ends = fitted_ends(decls, params, ret, signature)?;
-    let outlives = outlives_closure(signature, &ends)?;
-    let reaches = |from: SegmentLabel, to: SegmentLabel| match (from, to) {
-        (SegmentLabel::Lifetime(longer), SegmentLabel::Lifetime(shorter)) => {
-            longer == shorter || outlives.contains(&(longer, shorter))
-        }
-        (SegmentLabel::TypeVar(from), SegmentLabel::TypeVar(to)) => from == to,
-        (SegmentLabel::Lifetime(_), SegmentLabel::TypeVar(_))
-        | (SegmentLabel::TypeVar(_), SegmentLabel::Lifetime(_)) => false,
-    };
-
-    let mut flows = Vec::new();
-    for to in &ends {
-        for from in ends.iter().filter(|end| matches!(end.end, FlowEnd::Param(_))) {
-            let map: Box<[Box<[usize]>]> = to
-                .labels
-                .iter()
-                .zip(&to.written)
-                .map(|(&out, &written)| match written {
-                    false => Box::default(),
-                    true => from
-                        .labels
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, input)| reaches(**input, out))
-                        .map(|(at, _)| at)
-                        .collect(),
-                })
-                .collect();
-            if map.iter().any(|takes| !takes.is_empty()) {
-                flows.push(Flow {
-                    to: to.end,
-                    from: from.end,
-                    alignment: Alignment::Labelled(Box::new(Labelled { declared, map })),
-                });
-            }
-        }
-    }
-    Ok(Flows::of(flows))
-}
+pub(super) struct LabelsDoNotFit;
 
 /// One end of a signature with its labels, one per segment, and for each
 /// segment whether the call may write into it as an output.
-struct FittedEnd<'s> {
-    end: FlowEnd,
-    labels: &'s [SegmentLabel],
-    written: Vec<bool>,
+pub(super) struct FittedEnd<'s> {
+    pub(super) end: FlowEnd,
+    pub(super) labels: &'s [SegmentLabel],
+    pub(super) written: Vec<bool>,
 }
 
 /// The result and each parameter, with the labels the signature gives
@@ -1253,7 +1148,7 @@ struct FittedEnd<'s> {
 /// signature lists each end at most once. The callee's captures have no
 /// segments, since a named function captures nothing, so they fit only
 /// unlabelled and take part in no flow.
-fn fitted_ends<'s>(
+pub(super) fn fitted_ends<'s>(
     decls: &Declarations,
     params: &[TyId<Poly>],
     ret: TyId<Poly>,
@@ -1325,7 +1220,7 @@ impl SegmentLabel {
 
 /// Every `(longer, shorter)` the signature's `Outlives` give, closed under
 /// transitivity, when each names a lifetime some label uses.
-fn outlives_closure(
+pub(super) fn outlives_closure(
     signature: &LabelledSignature,
     ends: &[FittedEnd<'_>],
 ) -> Result<FxHashSet<(Lifetime, Lifetime)>, LabelsDoNotFit> {
@@ -1431,9 +1326,10 @@ mod tests {
 
     use super::*;
     use crate::decl::{
-        DeclaredFacts, EndLabels, GenericImplSig, ImplSig, Impls, LoopMarkers, Outlives, TyVarBound,
+        CallFlows, DeclaredFacts, EndLabels, GenericImplSig, ImplSig, Impls, LoopMarkers, Outlives, TyVarBound, call_flows,
+        declared_fn_flows,
     };
-    use crate::ty::{Calls, Effect, EffectTerm, IntTy, LenTerm};
+    use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, IntTy, LenTerm, Ty};
 
     struct Fixture {
         interner: Interner,
@@ -1500,7 +1396,7 @@ mod tests {
                 params: params.into(),
                 ret,
                 effect: EffectTerm::Known(Effect::pure()),
-                flows: FlowTerm::Known(Flows::none()),
+                flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
                 calls: Calls::Many,
                 holds: Holds::Nothing,
                 values: (),
@@ -1551,7 +1447,7 @@ mod tests {
                     concrete: Box::new([]),
                     generic: Some(GenericImplSig {
                         facts: DeclaredFacts {
-                            lifetimes: Some(lifetimes),
+                            lifetimes: Some(lifetimes.clone()),
                             ..DeclaredFacts::default()
                         },
                     }),
@@ -1656,17 +1552,6 @@ mod tests {
         }
     }
 
-    fn flow(to: FlowEnd, from: FlowEnd, declared: Declared, map: &[&[usize]]) -> Flow {
-        Flow {
-            to,
-            from,
-            alignment: Alignment::Labelled(Box::new(Labelled {
-                declared,
-                map: map.iter().map(|takes| Box::<[usize]>::from(*takes)).collect(),
-            })),
-        }
-    }
-
     fn own(function: QualifiedRef) -> Declared {
         Declared {
             function,
@@ -1674,15 +1559,16 @@ mod tests {
         }
     }
 
-    fn flows_at(decls: &Declarations, ty: TyId<Poly>) -> Flows {
-        let TyKind::Fn { flows, .. } = decls.types().kind(ty) else {
-            panic!("a declared signature is a function type")
-        };
-        flows.get().clone()
+    /// Flows into `to`, one list of `(parameter, position)` per position of
+    /// `to`.
+    fn into(to: FlowEnd, positions: &[&[(usize, usize)]]) -> (FlowEnd, Box<[Box<[(usize, usize)]>]>) {
+        (to, positions.iter().map(|takes| Box::<[(usize, usize)]>::from(*takes)).collect())
     }
 
-    fn own_flows(decls: &Declarations, function: QualifiedRef) -> Flows {
-        flows_at(decls, decls.scheme(function).expect("declared").ty)
+    /// The concrete `&str`.
+    fn concrete_shared_str(types: &mut Types<Concrete>) -> Ty {
+        let str_ty = types.intern(TyKind::Str);
+        types.intern(TyKind::Ref(Mutability::Shared, str_ty))
     }
 
     fn refusals(fixture: Fixture) -> Vec<Refused> {
@@ -2086,17 +1972,19 @@ mod tests {
         );
         fixture.declare(f, fixture.labelled(ty, 0, lifetimes));
         let decls = fixture.verify().expect("the labels fit");
+        let mut types = Types::new();
+        let s = concrete_shared_str(&mut types);
         assert_eq!(
-            own_flows(&decls, f),
-            Flows::of([flow(FlowEnd::Result, FlowEnd::Param(0), own(f), &[&[0]])])
+            call_flows(&decls, own(f), &types, &[s, s], s),
+            Some(CallFlows { into: vec![into(FlowEnd::Result, &[&[(0, 0)]])] })
         );
     }
 
     /// extern-fn §4: a generic impl's lifetimes are its function's own
-    /// signature's, as a declaration's without impls are, and none remains
-    /// after intake.
+    /// signature's, as a declaration's without impls are, and they stay on
+    /// the declaration after intake.
     #[test]
-    fn a_generic_impls_lifetimes_are_its_functions_flows() {
+    fn a_generic_impls_lifetimes_are_read_at_its_functions_own_signature() {
         let mut fixture = Fixture::new();
         let f = fixture.name("m", "f");
         let s = fixture.shared_str();
@@ -2109,15 +1997,17 @@ mod tests {
             ],
             &[],
         );
-        fixture.declare(f, fixture.labelled_generic(ty, 0, lifetimes));
+        fixture.declare(f, fixture.labelled_generic(ty, 0, lifetimes.clone()));
         let decls = fixture.verify().expect("the labels fit");
+        let mut types = Types::new();
+        let s = concrete_shared_str(&mut types);
         assert_eq!(
-            own_flows(&decls, f),
-            Flows::of([flow(FlowEnd::Result, FlowEnd::Param(0), own(f), &[&[0]])])
+            call_flows(&decls, own(f), &types, &[s, s], s),
+            Some(CallFlows { into: vec![into(FlowEnd::Result, &[&[(0, 0)]])] })
         );
         let scheme = decls.scheme(f).expect("declared");
         let generic = scheme.impls.as_ref().and_then(|impls| impls.generic.as_ref()).expect("a generic impl");
-        assert_eq!((&scheme.facts.lifetimes, &generic.facts.lifetimes), (&None, &None));
+        assert_eq!(generic.facts.lifetimes, Some(lifetimes));
     }
 
     /// extern-fn §4: `fn f<'a: 'b, 'b: 'c, 'c>(x: &'a str, y: &'b str, z:
@@ -2140,13 +2030,11 @@ mod tests {
         );
         fixture.declare(f, fixture.labelled(ty, 0, lifetimes));
         let decls = fixture.verify().expect("the labels fit");
+        let mut types = Types::new();
+        let s = concrete_shared_str(&mut types);
         assert_eq!(
-            own_flows(&decls, f),
-            Flows::of([
-                flow(FlowEnd::Result, FlowEnd::Param(0), own(f), &[&[0]]),
-                flow(FlowEnd::Result, FlowEnd::Param(1), own(f), &[&[0]]),
-                flow(FlowEnd::Result, FlowEnd::Param(2), own(f), &[&[0]]),
-            ])
+            call_flows(&decls, own(f), &types, &[s, s, s], s),
+            Some(CallFlows { into: vec![into(FlowEnd::Result, &[&[(0, 0), (1, 0), (2, 0)]])] })
         );
     }
 
@@ -2168,16 +2056,19 @@ mod tests {
         );
         fixture.declare(f, fixture.labelled(ty, 0, lifetimes));
         let decls = fixture.verify().expect("the labels fit");
+        let mut types = Types::new();
+        let s = concrete_shared_str(&mut types);
         assert_eq!(
-            own_flows(&decls, f),
-            Flows::of([flow(FlowEnd::Result, FlowEnd::Param(0), own(f), &[&[0]])])
+            call_flows(&decls, own(f), &types, &[s, s], s),
+            Some(CallFlows { into: vec![into(FlowEnd::Result, &[&[(0, 0)]])] })
         );
     }
 
-    /// ownership §5, `FlowEnd`: `fn push<'a, T>(v: &'a mut [T], x: T)`. A
-    /// parameter's output is what its `&mut` names, here `v`'s `T` part, and
-    /// one type variable's parts meet k-th to k-th: `v` takes from `x` and
-    /// from itself, into its `T` segment only.
+    /// ownership §5, `FlowEnd`: `fn push<'a, T>(v: &'a mut [T], x: T)`,
+    /// called at `T = (&str, &str)`. A parameter's output is what its `&mut`
+    /// names, here `v`'s `T` part, and one type variable's parts meet k-th
+    /// to k-th: each position of `v`'s `T` part takes the same position of
+    /// `x`'s and of its own, and `v`'s reference takes nothing.
     #[test]
     fn a_mut_parameter_takes_from_the_inputs_of_its_type_variable() {
         let mut fixture = Fixture::new();
@@ -2200,12 +2091,17 @@ mod tests {
             segments(decls.types(), &decls, v),
             vec![Segment::Reference, Segment::TypeVar(0)]
         );
+        let mut types = Types::new();
+        let s = concrete_shared_str(&mut types);
+        let pair = types.intern(TyKind::Tuple(Box::new([s, s]), ()));
+        let pairs = types.intern(TyKind::Slice(pair));
+        let v = types.intern(TyKind::Ref(Mutability::Mut, pairs));
+        let unit = types.intern(TyKind::Unit);
         assert_eq!(
-            own_flows(&decls, push),
-            Flows::of([
-                flow(FlowEnd::Param(0), FlowEnd::Param(0), own(push), &[&[], &[1]]),
-                flow(FlowEnd::Param(0), FlowEnd::Param(1), own(push), &[&[], &[0]]),
-            ])
+            call_flows(&decls, own(push), &types, &[v, pair], unit),
+            Some(CallFlows {
+                into: vec![into(FlowEnd::Param(0), &[&[], &[(0, 1), (1, 0)], &[(0, 2), (1, 1)]])]
+            })
         );
     }
 
@@ -2225,9 +2121,19 @@ mod tests {
         );
         fixture.declare(iter, fixture.labelled(ty, 0, lifetimes));
         let decls = fixture.verify().expect("the labels fit");
+        let mut types = Types::new();
+        let string = types.intern(TyKind::String);
+        let s = types.intern(TyKind::Ref(Mutability::Shared, string));
+        let result = types.intern(TyKind::UserDefined {
+            id: iter_ty,
+            type_args: Box::new([]),
+            effect: None,
+            identity: None,
+            marked: MarkTerm::Known(Mark::Unmarked),
+        });
         assert_eq!(
-            own_flows(&decls, iter),
-            Flows::of([flow(FlowEnd::Result, FlowEnd::Param(0), own(iter), &[&[0]])])
+            call_flows(&decls, own(iter), &types, &[s], result),
+            Some(CallFlows { into: vec![into(FlowEnd::Result, &[&[(0, 0)]])] })
         );
     }
 
@@ -2277,7 +2183,7 @@ mod tests {
     }
 
     /// extern-fn §4: a declaration that states no lifetimes has every input
-    /// flowing to every output, whatever flows its type was handed with.
+    /// flowing to every output: a call of it reads no flows off it.
     #[test]
     fn a_declaration_without_lifetimes_has_every_flow() {
         let mut fixture = Fixture::new();
@@ -2286,14 +2192,16 @@ mod tests {
         let ty = fixture.function(&[s], s);
         fixture.declare(f, fixture.plain(ty, 0));
         let decls = fixture.verify().expect("nothing to refuse");
-        assert_eq!(own_flows(&decls, f), Flows::Every);
+        let mut types = Types::new();
+        let s = concrete_shared_str(&mut types);
+        assert_eq!(call_flows(&decls, own(f), &types, &[s], s), None);
     }
 
-    /// extern-fn §4: an impl's lifetimes become the impl's own flows,
-    /// naming the impl; the scheme's type, with no generic impl to
-    /// state lifetimes, has every flow. No lifetime remains after intake.
+    /// extern-fn §4: an impl's lifetimes are read at a call of that impl,
+    /// and stay on it after intake; the scheme's own signature, with no
+    /// generic impl to state lifetimes, has every flow.
     #[test]
-    fn an_impls_flows_name_the_impl_and_no_lifetime_remains() {
+    fn an_impls_lifetimes_are_read_at_a_call_of_the_impl() {
         let mut fixture = Fixture::new();
         let f = fixture.name("m", "f");
         let var = fixture.ty(TyKind::Var(0));
@@ -2314,7 +2222,7 @@ mod tests {
                         param_names: fixture.param_names(impl_ty),
                         requires: Box::new([]),
                         facts: DeclaredFacts {
-                            lifetimes: Some(lifetimes),
+                            lifetimes: Some(lifetimes.clone()),
                             ..DeclaredFacts::default()
                         },
                         runs: Box::new([]),
@@ -2332,12 +2240,14 @@ mod tests {
             function: f,
             r#impl: Some(0),
         };
-        assert_eq!(own_flows(&decls, f), Flows::Every);
+        let mut types = Types::new();
+        let s = concrete_shared_str(&mut types);
+        assert_eq!(call_flows(&decls, own(f), &types, &[s], s), None);
         assert_eq!(
-            flows_at(&decls, r#impl.ty),
-            Flows::of([flow(FlowEnd::Result, FlowEnd::Param(0), at_impl, &[&[0]])])
+            call_flows(&decls, at_impl, &types, &[s], s),
+            Some(CallFlows { into: vec![into(FlowEnd::Result, &[&[(0, 0)]])] })
         );
-        assert_eq!(r#impl.facts.lifetimes, None);
+        assert_eq!(r#impl.facts.lifetimes, Some(lifetimes));
     }
 
     /// extern-fn §5, types §6: a bare name reaches every declaration of that
@@ -3075,7 +2985,7 @@ mod tests {
             params: Box::new([]),
             ret: int,
             effect: EffectTerm::Var(var),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),

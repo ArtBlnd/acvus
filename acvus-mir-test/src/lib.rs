@@ -16,7 +16,7 @@ use std::time::Duration;
 use acvus_mir::decl::{Core, Declarations, EntryDecl, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, DeclaredFacts, ContextDecl};
 use acvus_mir::graph::{Graph, Refusal, Source, Stop, Unit};
 use acvus_mir::ir::cfg::print::{self, View};
-use acvus_mir::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, Poly, TyId, TyKind};
+use acvus_mir::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, Poly, TyId, TyKind};
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 pub use acvus_mir::graph::Stop as At;
@@ -77,14 +77,15 @@ impl Case {
         self.raw.types.intern(kind)
     }
 
-    /// A function type of `params` to `ret` with `effect`, flowing nothing,
-    /// called any number of times, capturing nothing.
+    /// A declared function type of `params` to `ret` with `effect`, of the
+    /// flows a declared function type states, called any number of times,
+    /// capturing nothing.
     pub fn function(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>, effect: Effect) -> TyId<Poly> {
         self.ty(TyKind::Fn {
             params: params.into(),
             ret,
             effect: EffectTerm::Known(effect),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(acvus_mir::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),

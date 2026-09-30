@@ -11,11 +11,11 @@ use acvus_ast::{Script, Span};
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use crate::check::{Refusal, check};
-use crate::decl::{ContextDecl, Core, Declarations, DeclaredFacts, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
+use crate::decl::{ContextDecl, Core, Declarations, DeclaredFacts, LabelledSignature, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::lower::{lower_script, required};
 use crate::passes::analysis::AnalysisManager;
 use crate::ty::{Mark, MarkTerm};
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, ObjectTy, Poly, TyId, TyKind, Types};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, ObjectTy, Poly, TyId, TyKind, Types};
 use crate::typeck::check_script;
 
 pub(super) struct Fixture {
@@ -75,7 +75,7 @@ impl Fixture {
             params: params.into(),
             ret,
             effect: EffectTerm::Known(effect),
-            flows: FlowTerm::Known(Flows::none()),
+            flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
             calls: Calls::Many,
             holds: Holds::Nothing,
             values: (),
@@ -84,6 +84,15 @@ impl Fixture {
         let param_names = (0..params.len()).map(|at| self.name(&format!("p{at}"))).collect();
         let scheme = Scheme { ty, param_names, bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]) };
         self.raw.functions.push((id, scheme));
+        id
+    }
+
+    /// A pure extern fn `name` of these parameters and result, stating
+    /// `lifetimes` (extern-fn §4).
+    pub(super) fn declare_labelled(&mut self, name: &str, params: &[TyId<Poly>], ret: TyId<Poly>, lifetimes: LabelledSignature) -> QualifiedRef {
+        let id = self.declare(name, params, ret);
+        let (_, scheme) = self.raw.functions.last_mut().expect("the declaration just pushed");
+        scheme.facts.lifetimes = Some(lifetimes);
         id
     }
 

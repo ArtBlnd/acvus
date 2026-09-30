@@ -1,5 +1,6 @@
-//! The segments of a declared type (`labels`): what a `Labelled` flow's
-//! map is read over, and what an extern's lifetimes label.
+//! The segments of a declared type (`labels`): what an extern's lifetimes
+//! label, and what a call of it lays over its concrete positions
+//! (`call_flows`).
 
 use super::Declarations;
 use crate::ty::{LifetimesOf, Poly, TyId, TyKind, Types};

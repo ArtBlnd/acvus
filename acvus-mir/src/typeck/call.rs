@@ -9,15 +9,15 @@ use acvus_ast::{Args, AstId, Binder, Expr, RefKind, Slot, Span};
 use acvus_utils::{Astr, QualifiedRef};
 
 use super::ctxt::Ctxt;
-use super::decision::{self, Callee, Decision};
+use super::decision::{Callee, Decision};
 use super::effect::note_call_effect;
 use super::expr::check_expr;
-use super::output::{Chosen, Impl, Name, UnitCall};
+use super::output::{Name, UnitCall};
 use super::place::Demand;
 use super::refusal::{self, RefusalKind};
 use super::variant::check_variant;
 use crate::infer::Term;
-use crate::ty::{CallsTerm, EffectTerm, FlowTerm, FnValue, FnValues, HoldsTerm, TyKind};
+use crate::ty::{CallsTerm, EffectTerm, FlowTerm, HoldsTerm, TyKind};
 
 /// `f(args)`: by position, of a declaration or a value; by name, of a
 /// unit.
@@ -283,48 +283,7 @@ pub(super) fn reach_in(
 /// A declaration named where no call of it stands: refused as
 /// `ExternAsValue` (extern-fn §1); the term left is fresh, so the program
 /// around it is still checked.
-pub(super) fn declaration_value(cx: &mut Ctxt<'_>, site: AstId, declaration: QualifiedRef, span: Span) -> Term {
-    let scheme = cx
-        .decls
-        .scheme(declaration)
-        .expect("a name reaches only a declared function");
-    let r#impl = match &scheme.impls {
-        None => None,
-        Some(impls) if impls.concrete.is_empty() && impls.generic.is_some() => Some(Impl::Generic),
-        Some(_) => {
-            let kind = RefusalKind::SeveralDeclarations {
-                name: declaration.name,
-                left: Box::new([declaration]),
-            };
-            refusal::push(cx, kind, span);
-            return cx.fresh();
-        }
-    };
-    let instantiated = decision::instantiate_scheme(cx, scheme, span);
-    let value = as_value(cx, instantiated.ty, declaration);
-    cx.out.names.insert(site, Name::Declaration(declaration));
-    cx.out.reached.insert(
-        site,
-        Chosen {
-            declaration,
-            r#impl,
-            required: Box::new([]),
-        },
-    );
-    decision::settle_bounded(cx, instantiated.ty, span);
-    let body = super::effect::body_effect(cx);
-    for required in instantiated.requirements {
-        decision::push_required(cx, site, span, required, &body);
-    }
-    value
-}
-
-/// A declaration's function type `ty` as the one function value it is:
-/// the declaration, by its name (types §2).
-fn as_value(cx: &mut Ctxt<'_>, ty: Term, declaration: QualifiedRef) -> Term {
-    let TyKind::Fn { params, ret, effect, flows, calls, holds, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
-        panic!("an instantiated signature is a function type (NotAFunction)");
-    };
-    let values = cx.infer.fresh_values_of(FnValues::Of([FnValue::Declaration(declaration)].into()));
-    cx.node(TyKind::Fn { params, ret, effect, flows, calls, holds, values })
+pub(super) fn declaration_value(cx: &mut Ctxt<'_>, declaration: QualifiedRef, span: Span) -> Term {
+    refusal::push(cx, RefusalKind::ExternAsValue { declaration }, span);
+    cx.fresh()
 }

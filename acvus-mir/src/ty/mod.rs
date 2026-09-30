@@ -24,7 +24,7 @@ use rustc_hash::FxBuildHasher;
 
 pub use arg::{IdentityId, IdentityTerm, LenTerm, Mark, MarkTerm};
 pub use effect::{Contexts, Cost, Effect, EffectTerm, Reissue, SplitCost};
-pub use flow::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, Source};
+pub use flow::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Source};
 pub use facts::{LifetimesOf, PositionKind, Resolve, copies, copies_alone, copies_in, for_each_position, lent_types, position_kinds, positions};
 pub use kind::{Calls, CallsTerm, Holds, HoldsTerm, Mutability, ObjectTy, TyKind};
 pub use num::{CastTy, IntTy, WordTy};
@@ -157,11 +157,10 @@ pub struct CallsVarId(pub u32);
 pub struct ValuesVarId(pub u32);
 
 /// One function value a function type may be (types §2): a lambda, by its
-/// site, or a declaration used as a value, by its name.
+/// site. A declaration is never one: it is only called (extern-fn §1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FnValue {
     Lambda(acvus_ast::AstId),
-    Declaration(acvus_utils::QualifiedRef),
 }
 
 /// What a `ValuesVarId` holds: the function values the type may be, or

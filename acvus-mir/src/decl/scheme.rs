@@ -98,9 +98,9 @@ pub struct DeclaredFacts {
     pub action: Box<[Action]>,
     pub source: Box<[Source]>,
     pub relations: Box<[Relation]>,
-    /// The lifetimes the Rust signature names, which `verify` turns into
-    /// the declared function type's flows. `None`: the flows are every
-    /// input to every output (extern-fn §4).
+    /// The lifetimes the Rust signature names, which each call of the
+    /// declaration reads (`call_flows`). `None`: the flows are every input
+    /// to every output (extern-fn §4).
     pub lifetimes: Option<LabelledSignature>,
 }
 

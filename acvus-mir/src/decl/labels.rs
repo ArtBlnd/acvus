@@ -1,6 +1,7 @@
 //! The lifetimes an extern fn's Rust signature names (ownership §5,
-//! extern-fn §4). They exist only here: `verify` turns them into the flows
-//! of the declared function type, and nothing after intake sees a lifetime.
+//! extern-fn §4). They stay on the declaration: `verify` checks that they
+//! fit its signature, and each call of it reads them there
+//! (`call_flows`).
 //!
 //! A *segment* of a declared type is one of: the position of a reference;
 //! the position of a lifetime an extern-defined type declares; a function
