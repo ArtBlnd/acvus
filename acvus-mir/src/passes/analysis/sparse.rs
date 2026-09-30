@@ -68,14 +68,6 @@ pub trait SparseAnalysis {
         index: usize,
         operands: &[&<Self::Domain as ValueDomain>::Value],
     ) -> <Self::Domain as ValueDomain>::Value;
-
-    /// `fact` held within what `value`'s type admits, for an analysis that
-    /// knows such a bound; the engine applies it to every fact it makes, a
-    /// value from outside the body's and a widened one's included. It keeps
-    /// the fact where the analysis knows none.
-    fn within(&self, _value: ValueId, fact: <Self::Domain as ValueDomain>::Value) -> <Self::Domain as ValueDomain>::Value {
-        fact
-    }
 }
 
 pub struct SparseFacts<D>
@@ -154,7 +146,7 @@ where
             .chain(body.slots().iter().copied())
             .filter(|value| !is_token(value));
         for value in outside {
-            facts.insert(value, analysis.within(value, analysis.domain().top()));
+            facts.insert(value, analysis.domain().top());
         }
         Solver {
             analysis,
@@ -225,24 +217,15 @@ where
             .collect()
     }
 
-    /// Joins `next` into `value`'s fact, or widens it by `next`, held within
-    /// what the analysis admits for `value`, and queues `value`'s users when
-    /// the fact rose. The bound keeps the fact's height: a fact only rises,
-    /// and each one is held within the same bound.
+    /// Joins `next` into `value`'s fact, or widens it by `next`, and queues
+    /// `value`'s users when the fact rose.
     fn rise(&mut self, value: ValueId, next: &Value<A>, widen: bool) {
         let fact = self
             .facts
             .get_mut(&value)
             .expect("the solver holds a fact for every value of its body but tokens");
-        let mut risen = fact.clone();
-        if widen {
-            risen.widen(next);
-        } else {
-            risen.join(next);
-        }
-        let risen = self.analysis.within(value, risen);
-        if !risen.le(fact) {
-            *fact = risen;
+        let rose = if widen { fact.widen(next) } else { fact.join(next) };
+        if rose {
             self.risen.push(value);
         }
     }

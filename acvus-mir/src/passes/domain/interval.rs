@@ -292,7 +292,7 @@ impl Interval {
         Interval::between(Bound::Finite(lo), Bound::Finite(hi))
     }
 
-    pub(crate) fn of_width(width: IntTy) -> Interval {
+    fn of_width(width: IntTy) -> Interval {
         Interval::finite(width.min(), width.max())
     }
 

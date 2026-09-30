@@ -23,11 +23,9 @@ use crate::ty::{CastTy, Concrete, TyKind, Types};
 /// (Wegman and Zadeck). Cost: the sparse engine's, with height 3.
 pub struct ConstantValues;
 
-/// Every integer value's interval, every arm taken, each within its type's
-/// range: every value the run computes lies there (undefined behaviour §2),
-/// and a parameter is given as a valid value of its type (extern fn §9).
-/// Cost: the sparse engine's, a parameter of a loop header rising at most
-/// three times under widening.
+/// Every integer value's interval, every arm taken. Cost: the sparse
+/// engine's, a parameter of a loop header rising at most three times under
+/// widening.
 pub struct IntervalValues;
 
 /// Every integer value's affine combination of symbols, every arm taken:
@@ -241,13 +239,6 @@ impl SparseAnalysis for Intervals<'_> {
 
     fn executable(&self, _terminator: &Terminator, _operands: &[&Interval]) -> Executable {
         Executable::All
-    }
-
-    fn within(&self, value: ValueId, fact: Interval) -> Interval {
-        match self.operand_types.of(value) {
-            Some(CastTy::Int(width)) => fact.meet(&Interval::of_width(width)),
-            _ => fact,
-        }
     }
 
     /// A range's counter lies in `[at, hi - 1]`; a slice's or an array's
@@ -757,8 +748,7 @@ mod tests {
     /// exit:             return s
     /// ```
     /// The counter's interval is what the `For` supplies; the carried `s`
-    /// widens at the header to its type's greatest, and `s + 1` is clamped
-    /// to its width.
+    /// widens at the header, and `s + 1` is clamped to its width.
     #[test]
     fn a_loop_counter_comes_from_the_for_and_a_carried_value_widens() {
         let mut f = fixture();
@@ -793,8 +783,8 @@ mod tests {
         assert_eq!(*intervals.of(counter), finite(0, 9));
         assert_eq!(
             *intervals.of(s),
-            finite(0, i128::from(i64::MAX)),
-            "the growing end of the carried value widens to its type's greatest"
+            Interval::Range { lo: Bound::Finite(0), hi: Bound::PosInfinity },
+            "the growing end of the carried value widens to infinity"
         );
         assert_eq!(*intervals.of(s1), finite(1, i128::from(i64::MAX)));
 
