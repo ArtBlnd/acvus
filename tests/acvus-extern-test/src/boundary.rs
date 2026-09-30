@@ -804,6 +804,18 @@ macro_rules! opaque {
         impl Referent for $t {}
         impl Opaque for $t {}
 
+        impl acvus_extern::decl::DeclType for $t {
+            fn decl_ty(cx: &mut acvus_extern::decl::DeclCx<'_>) -> acvus_extern::decl::DeclTy {
+                acvus_extern::decl::DeclTy::Extern {
+                    name: acvus_extern::decl::path(cx.names, ::core::module_path!(), stringify!($t)),
+                    args: Vec::new(),
+                    effect: None,
+                    identity: None,
+                    lifetimes: 0,
+                }
+            }
+        }
+
         impl<R: Runtime> Crosses<R> for $t {
             type Open<'a> = <R::Opaque as OpaqueKind<R>>::Shared<'a, $t>;
             type OpenMut<'a> = <R::Opaque as OpaqueKind<R>>::Exclusive<'a, $t>;

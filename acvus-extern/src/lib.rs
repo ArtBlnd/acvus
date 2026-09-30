@@ -22,7 +22,9 @@ pub mod runtime;
 #[doc(hidden)]
 pub use boundary::seal;
 
-pub use boundary::entry::{Args, Entry, Settled, SiteShape, mode};
+pub use acvus_extern_macro::extern_fn;
+
+pub use boundary::entry::{Args, Entry, Mode, Settled, SiteShape, mode};
 pub use boundary::instance::{Instance, InstanceEntry, InstanceOf};
 pub use boundary::loaned::{Loaned, LoanedMut};
 pub use boundary::signed::{GenericParam, LayoutFact, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts};

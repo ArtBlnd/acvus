@@ -67,7 +67,7 @@ impl WordRuntime {
 impl Registers for WordRuntime {
     fn register<F>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: ExternFn<Self> + Declared,
+        F: ExternFn<Self> + Declared<Self>,
     {
         let path = Declared::path(&f, &self.interner);
         self.enter(path, Registered::Returning(Box::new(f)))
@@ -75,7 +75,7 @@ impl Registers for WordRuntime {
 
     fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: AwaitedFn<Self> + Declared,
+        F: AwaitedFn<Self> + Declared<Self>,
     {
         let path = Declared::path(&f, &self.interner);
         self.enter(path, Registered::Awaited(Box::new(f)))

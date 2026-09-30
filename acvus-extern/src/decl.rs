@@ -12,9 +12,10 @@
 pub mod ty;
 
 use acvus_mir::decl::{DeclaredFacts, NamedFact, TyVarBound};
-use acvus_mir::ty::{Effect, IntTy};
-use acvus_utils::{Astr, QualifiedRef};
+use acvus_mir::ty::{Contexts, Effect, IntTy, Reissue, SplitCost};
+use acvus_utils::Astr;
 
+pub use acvus_utils::{Interner, QualifiedRef};
 pub use ty::{DeclCx, DeclType, EffectNth, IdentityNth, Nth, ParamDecl, ParamMode, Var, kind};
 
 /// A declared type (compiler: extern fn §1, §8; types §1-§3).
@@ -106,4 +107,63 @@ pub struct Declaration {
     pub facts: DeclaredFacts,
     pub requires: Vec<Requirement>,
     pub role: Role,
+}
+
+/// A call's effect as the attribute states it (compiler: extern fn §2):
+/// whether reissuing it is pure, idempotent or opaque. Unstated, it is
+/// opaque, the effect that is always sound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stated {
+    Pure,
+    Idempotent,
+    Opaque,
+}
+
+impl Stated {
+    fn effect(self) -> Effect {
+        match self {
+            Stated::Pure => Effect::pure(),
+            Stated::Idempotent => {
+                Effect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable)
+            }
+            Stated::Opaque => Effect::opaque(),
+        }
+    }
+}
+
+/// The path of the function `name` in the Rust module `module`, as
+/// `module_path!()` spells it (macros §1).
+pub fn path(names: &Interner, module: &str, name: &str) -> QualifiedRef {
+    let segments: Vec<Astr> = module.split("::").map(|segment| names.intern(segment)).collect();
+    QualifiedRef::qualified(names.namespace(&segments), names.intern(name))
+}
+
+/// The declaration `#[extern_fn]` builds from a signature: its binders by
+/// kind, its parameters by name as their types declare them, its result and
+/// its stated effect. Every effect variable is taken to be run by the call,
+/// the bound that is always sound: a call may run each closure it is given.
+pub fn declaration(
+    names: &Interner,
+    path: QualifiedRef,
+    [types, effects, identities]: [u32; 3],
+    params: Vec<(&str, ParamDecl)>,
+    result: DeclTy,
+    effect: Stated,
+) -> Declaration {
+    Declaration {
+        path,
+        binders: Binders { types: vec![TyVarBound::Any; types as usize], effects, identities },
+        params: params
+            .into_iter()
+            .map(|(name, param)| match param {
+                ParamDecl::Argument(ty) => (names.intern(name), ty),
+            })
+            .collect(),
+        result,
+        effect: effect.effect(),
+        runs: (0..effects).collect(),
+        facts: DeclaredFacts::default(),
+        requires: Vec::new(),
+        role: Role::Function,
+    }
 }

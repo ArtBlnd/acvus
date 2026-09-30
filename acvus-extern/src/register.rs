@@ -24,8 +24,49 @@ pub trait ExternFn<R: Runtime>: ExternFns + Send + Sync + 'static {
 }
 
 /// A function a registry declares: its path and what the compiler knows of
-/// it. A function value is a dispatch only, and has neither.
-pub trait Declared {
+/// it. A function value is a dispatch only, and has neither. It is stated at
+/// the runtime `R` only because a parameter's Rust type may name it, as a
+/// type variable's `Uniform<R, T>` does; no part of it depends on `R`.
+///
+/// `#[extern_fn]` writes it from a signature, and refuses what a declaration
+/// cannot state. A key the attribute does not know:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn(pure)]
+/// fn f(a: i64) -> i64 { a }
+/// ```
+///
+/// A generic parameter bounded by anything but one `Var<kind::..>`, beside
+/// the runtime:
+///
+/// ```compile_fail
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::extern_fn]
+/// fn f<R: Runtime, T: Clone>(a: acvus_extern::Uniform<R, T>) {}
+/// ```
+///
+/// A capture not lent as `&T`:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn]
+/// fn f(#[capture] tag: String, a: i64) -> i64 { a }
+/// ```
+///
+/// A result that borrows but is no reference to a part of one lent parameter:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn]
+/// fn f(text: &str) -> Option<&str> { Some(text) }
+/// ```
+///
+/// An awaited body whose result borrows:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn]
+/// async fn f(text: &str) -> &str { text }
+/// ```
+pub trait Declared<R: Runtime> {
     /// The declaration's path, the name a compiled call names it by.
     fn path(&self, names: &Interner) -> QualifiedRef;
 
@@ -63,11 +104,11 @@ pub enum Refused {
 pub trait Registers: Runtime {
     fn register<F>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: ExternFn<Self> + Declared;
+        F: ExternFn<Self> + Declared<Self>;
 
     fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: AwaitedFn<Self> + Declared;
+        F: AwaitedFn<Self> + Declared<Self>;
 
     /// The returning function registered at `path`.
     fn registered(&self, path: QualifiedRef) -> Option<&dyn ExternFn<Self>>;
