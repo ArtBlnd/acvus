@@ -8,6 +8,7 @@
 //! Every declared type lives in the one `Types<Poly>` table the set owns.
 
 mod bound;
+mod call_flows;
 mod casts;
 mod conversions;
 mod core;
@@ -31,7 +32,8 @@ pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
 pub use conversions::{ConversionRule, VerifiedConversion};
 pub use core::{Core, Tags};
 pub use declared::NamedFact;
-pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel};
+pub use call_flows::{CallFlows, call_flows};
+pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel, declared_fn_flows};
 pub use lift::{Lift, LiftShape, Taking};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use segments::{Segment, segments};

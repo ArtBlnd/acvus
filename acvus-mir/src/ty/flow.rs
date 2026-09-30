@@ -3,13 +3,12 @@
 //!
 //! A flow names the ends of a call, not positions: `Param(i)` is the
 //! argument at `i` whatever its type, and a flow is `Aligned` (position `k`
-//! of the output from position `k` of the input), `Labelled` (each segment
-//! of the output from the input segments its map names) or `Any` (every
-//! position of the output from every position of the input). The positions
-//! an end has are its concrete type's (`ty::positions`), counted where a
-//! call is checked. A `Labelled` flow names the declaration its ends are
-//! read off, whose segments (`decl::labels`) a call reads beside the
-//! concrete types.
+//! of the output from position `k` of the input) or `Any` (every position
+//! of the output from every position of the input). The positions an end
+//! has are its concrete type's (`ty::positions`), counted where a call is
+//! checked. These are a function value's flows. An extern fn is never a
+//! value (extern-fn §1): its lifetimes stay on its declaration, and a call
+//! of it reads them there (`decl::call_flows`).
 
 use serde::{Deserialize, Serialize};
 
@@ -39,20 +38,8 @@ pub enum Alignment {
     /// Position `k` of the output takes position `k` of the input; the two
     /// ends have one shape.
     Aligned,
-    /// Each segment of the output takes the input segments its map names.
-    Labelled(Box<Labelled>),
     /// Every position of the output takes every position of the input.
     Any,
-}
-
-/// A `Labelled` flow: the declaration its ends are read off, and for each
-/// segment of the output the input segments it takes. A segment the map
-/// does not name takes nothing from this input.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Labelled {
-    /// The declaration whose signature's ends the segments are read off.
-    pub declared: Declared,
-    pub map: Box<[Box<[usize]>]>,
 }
 
 /// An extern fn's declared signature: the scheme's own, or one concrete

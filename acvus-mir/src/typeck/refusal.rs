@@ -24,6 +24,10 @@ pub enum RefusalKind {
     UnnamedVariant { tag: Astr },
     UnknownName { name: Astr },
     UnknownContext { context: QualifiedRef },
+    /// An extern fn named where no call of it stands: it is called, never
+    /// taken as a value, and a lambda calling it stands where a function
+    /// value is wanted (extern-fn §1).
+    ExternAsValue { declaration: QualifiedRef },
     /// A call by name of what is no unit: only a unit's parameters have
     /// names a call passes by (programs §1, §2).
     NamedArgumentsToNonUnit,

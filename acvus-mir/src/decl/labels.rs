@@ -47,3 +47,14 @@ pub struct LabelledSignature {
     pub ends: Box<[EndLabels]>,
     pub outlives: Box<[Outlives]>,
 }
+
+/// The flows a declared function type states as a value's type: a
+/// callback's parameter type, or a function value a call gives (extern-fn
+/// §4). A declaration states no lifetimes for such a type, so it is every
+/// flow (types §5): sound, and the widest. Every place a declared function
+/// type gets its flows reads them here, so that stating them more narrowly
+/// later (a declaration labelling that function type's lifetimes, carried
+/// here into flows) changes this one function.
+pub fn declared_fn_flows() -> crate::ty::Flows {
+    crate::ty::Flows::Every
+}
