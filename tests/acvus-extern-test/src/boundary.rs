@@ -111,6 +111,13 @@ pub struct Word {
 }
 
 impl Word {
+    /// The `i64` this value is.
+    pub fn as_i64(self) -> i64 {
+        assert_eq!(self.kind, Kind::I64, "the value is an i64");
+        // SAFETY: an `I64` value holds an `i64` in its word's first bytes.
+        unsafe { ptr::from_ref(&self.word).cast::<i64>().read() }
+    }
+
     #[cfg(test)]
     pub(crate) fn kind(self) -> Kind {
         self.kind
@@ -309,6 +316,37 @@ impl Held {
     /// A value the runtime made and keeps, released by this holder's drop.
     pub(crate) fn kept(value: Word) -> Held {
         Held(value)
+    }
+
+    /// What the option this value is holds, where its part is a reference:
+    /// the value the reference names, read at `P` and copied out. The run
+    /// reads it as the checker settled its type, `Option<&P>`.
+    pub(crate) fn option_referent<P>(&self) -> Option<P::Owned>
+    where
+        P: ?Sized + ToOwned,
+    {
+        assert_eq!(self.0.kind, Kind::Large, "an option lies in a slot");
+        // SAFETY: the value is an option, a slot holding an `Option<Held>`
+        // whose part is a reference value made from a `P` that is still
+        // live, as the checker settled for the variable.
+        let part = unsafe { &(*self.0.address::<Slot<Option<Held>>>()).value };
+        // SAFETY: as above, for the reference the part is.
+        part.as_ref().map(|reference| unsafe { (*named_part::<P>(reference.0)).to_owned() })
+    }
+
+    /// What the pair this value is holds, where both parts are references:
+    /// the values they name, read at `P` and copied out.
+    pub(crate) fn pair_referents<P>(&self) -> (P::Owned, P::Owned)
+    where
+        P: ?Sized + ToOwned,
+    {
+        assert_eq!(self.0.kind, Kind::Large, "a tuple lies in a slot");
+        // SAFETY: the value is a pair, a slot holding `[Held; 2]` whose parts
+        // are reference values made from `P`s that are still live, as the
+        // checker settled for the variable.
+        let [left, right] = unsafe { &(*self.0.address::<Slot<[Held; 2]>>()).value };
+        // SAFETY: as above, for the references the parts are.
+        unsafe { ((*named_part::<P>(left.0)).to_owned(), (*named_part::<P>(right.0)).to_owned()) }
     }
 
     /// The function this value is, made at the runtime `R`. The run calls a

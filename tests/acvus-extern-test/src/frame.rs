@@ -137,6 +137,23 @@ where
         self.keep(done)
     }
 
+    /// What the variable, an `Option<&P>`, names: the target of its part,
+    /// copied out, where it is present.
+    pub fn option_referent<P>(&self, variable: usize) -> Option<P::Owned>
+    where
+        P: ?Sized + ToOwned,
+    {
+        self.variables[variable].as_deref().expect("a variable given away is not read").option_referent::<P>()
+    }
+
+    /// What the variable, a pair of references to `P`, names, copied out.
+    pub fn pair_referents<P>(&self, variable: usize) -> (P::Owned, P::Owned)
+    where
+        P: ?Sized + ToOwned,
+    {
+        self.variables[variable].as_deref().expect("a variable given away is not read").pair_referents::<P>()
+    }
+
     fn arguments(&mut self, passes: &[Pass]) -> Vec<Word> {
         let mut args = Vec::with_capacity(passes.len());
         for &pass in passes {

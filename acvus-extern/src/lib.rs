@@ -9,6 +9,7 @@
 
 mod boundary;
 pub mod adapter;
+pub mod borrowed;
 pub mod callback;
 pub mod context;
 pub mod decl;

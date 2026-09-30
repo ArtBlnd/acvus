@@ -4,12 +4,14 @@
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token};
 
-/// A call's effect as stated (compiler: extern fn §2).
-#[derive(Clone, Copy)]
+/// A call's effect as stated (compiler: extern fn §2): a level, or one of
+/// the function's effect variables, the effect of the work it runs.
+#[derive(Clone)]
 pub enum Effect {
     Pure,
     Idempotent,
     Opaque,
+    Var(Ident),
 }
 
 #[derive(Default)]
@@ -47,12 +49,7 @@ impl Parse for ExternFnAttr {
                         "pure" => Effect::Pure,
                         "idempotent" => Effect::Idempotent,
                         "opaque" => Effect::Opaque,
-                        _ => {
-                            return Err(syn::Error::new(
-                                value.span(),
-                                "an effect is `pure`, `idempotent` or `opaque`",
-                            ));
-                        }
+                        _ => Effect::Var(value),
                     };
                     if attr.effect.replace(effect).is_some() {
                         return Err(syn::Error::new(key.span(), "`effect` is stated twice"));

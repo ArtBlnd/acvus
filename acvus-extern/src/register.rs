@@ -53,11 +53,19 @@ pub trait ExternFn<R: Runtime>: ExternFns + Send + Sync + 'static {
 /// fn f(#[capture] tag: String, a: i64) -> i64 { a }
 /// ```
 ///
-/// A result that borrows but is no reference to a part of one lent parameter:
+/// A result that borrows from more than one lent parameter:
 ///
 /// ```compile_fail
 /// #[acvus_extern::extern_fn]
-/// fn f(text: &str) -> Option<&str> { Some(text) }
+/// fn f<'a, 'b>(a: &'a str, b: &'b str) -> (&'a str, &'b str) { (a, b) }
+/// ```
+///
+/// An effect that is neither a level nor one of the function's effect
+/// variables:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn(effect = F)]
+/// fn f(a: i64) -> i64 { a }
 /// ```
 ///
 /// An awaited body whose result borrows:

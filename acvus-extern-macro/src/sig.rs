@@ -62,9 +62,11 @@ pub struct Param {
 pub enum Output {
     /// A value that crosses.
     Value(Box<Type>),
-    /// A reference to a part of what the argument at `from` lent (crossing
-    /// §4).
+    /// A value whose every leaf is a reference to a part of what the argument
+    /// at `from` lent, shared or exclusively as `mutable` says (crossing §4).
     Borrowed { from: usize, mutable: bool },
+    /// No value: the call never returns.
+    Never,
 }
 
 pub struct Sig {
@@ -119,6 +121,13 @@ impl Sig {
 
     /// The function's type arguments at the stand-ins, in order, for a
     /// turbofish; none where it has no generic type parameter.
+    /// Whether `ident` is one of the function's effect variables.
+    pub fn names_effect_variable(&self, ident: &Ident) -> bool {
+        self.generics
+            .iter()
+            .any(|g| matches!(g, Generic::Var { ident: v, kind: Kind::Effect, .. } if v == ident))
+    }
+
     /// The bounds the function states of its runtime, which its dispatch is
     /// implemented under.
     pub fn runtime_bounds(&self) -> Vec<TypeParamBound> {
@@ -137,15 +146,16 @@ impl Sig {
         }
         let args = self.generics.iter().map(|generic| match generic {
             Generic::Runtime { .. } => quote!(#runtime),
-            Generic::Var { kind, index, .. } => stand_in(*kind, *index),
+            Generic::Var { kind, index, .. } => stand_in(*kind, *index, runtime),
         });
         Some(quote!(::<#(#args),*>))
     }
 }
 
-fn stand_in(kind: Kind, index: u32) -> proc_macro2::TokenStream {
+/// A variable's stand-in: a type variable is its uniform value at its index.
+fn stand_in(kind: Kind, index: u32, runtime: &Ident) -> proc_macro2::TokenStream {
     match kind {
-        Kind::Type => quote!(::acvus_extern::decl::Nth<#index>),
+        Kind::Type => quote!(::acvus_extern::Uniform<#runtime, ::acvus_extern::decl::Nth<#index>>),
         Kind::Effect => quote!(::acvus_extern::decl::EffectNth<#index>),
         Kind::Identity => quote!(::acvus_extern::decl::IdentityNth<#index>),
     }
@@ -302,14 +312,18 @@ fn output(output: &ReturnType, params: &[Param]) -> syn::Result<Output> {
     let ReturnType::Type(_, ty) = output else {
         return Ok(Output::Value(Box::new(syn::parse_quote!(()))));
     };
-    let Type::Reference(reference) = &**ty else {
-        if borrows(ty) {
-            return Err(syn::Error::new(
-                ty.span(),
-                "a result that borrows is a reference to a part of one lent parameter (crossing §4)",
-            ));
-        }
+    if let Type::Never(_) = &**ty {
+        return Ok(Output::Never);
+    }
+    if !borrows(ty) {
         return Ok(Output::Value(ty.clone()));
+    }
+    let refused = || {
+        syn::Error::new(
+            ty.span(),
+            "a result that borrows borrows only from the one lent parameter its lifetime names, \
+             every reference in it at that lifetime (crossing §4)",
+        )
     };
     let lent: Vec<(usize, &TypeReference)> = params
         .iter()
@@ -320,25 +334,47 @@ fn output(output: &ReturnType, params: &[Param]) -> syn::Result<Output> {
             _ => None,
         })
         .collect();
-    let named = |l: &Lifetime| lent.iter().filter(|(_, r)| r.lifetime.as_ref() == Some(l)).collect::<Vec<_>>();
-    let from = match &reference.lifetime {
-        Some(l) => named(l),
-        None => lent.iter().collect(),
+    let lifetimes = result_lifetimes(ty);
+    let from: Vec<&(usize, &TypeReference)> = match lifetimes.as_slice() {
+        [] => lent.iter().collect(),
+        [only] => lent.iter().filter(|(_, r)| r.lifetime.as_ref() == Some(only)).collect(),
+        _ => return Err(refused()),
     };
     let [(from, lender)] = from.as_slice() else {
-        return Err(syn::Error::new(
-            reference.span(),
-            "a borrowed result names the one lent parameter it borrows from by its lifetime",
-        ));
+        return Err(refused());
     };
-    let mutable = reference.mutability.is_some();
-    if mutable != lender.mutability.is_some() {
-        return Err(syn::Error::new(
-            reference.span(),
-            "a borrowed result is lent as the parameter it borrows from is: shared from `&`, exclusive from `&mut`",
-        ));
+    Ok(Output::Borrowed { from: *from, mutable: lender.mutability.is_some() })
+}
+
+/// The lifetimes a result's references are written at, each once; an
+/// elided one is none. A result mixing an elided reference and a named one is
+/// refused by leaving two entries.
+fn result_lifetimes(ty: &Type) -> Vec<Lifetime> {
+    struct Lifetimes(Vec<Lifetime>, bool);
+    impl<'a> Visit<'a> for Lifetimes {
+        fn visit_type_reference(&mut self, r: &'a TypeReference) {
+            match &r.lifetime {
+                Some(l) if l.ident != "_" => {
+                    if !self.0.contains(l) {
+                        self.0.push(l.clone());
+                    }
+                }
+                _ => self.1 = true,
+            }
+            syn::visit::visit_type(self, &r.elem);
+        }
+        fn visit_lifetime(&mut self, l: &'a Lifetime) {
+            if !self.0.contains(l) {
+                self.0.push(l.clone());
+            }
+        }
     }
-    Ok(Output::Borrowed { from: *from, mutable })
+    let mut found = Lifetimes(Vec::new(), false);
+    found.visit_type(ty);
+    if found.1 && !found.0.is_empty() {
+        found.0.push(Lifetime::new("'_", Span::call_site()));
+    }
+    found.0
 }
 
 /// Whether `ty` holds a reference or names a lifetime.
@@ -378,7 +414,7 @@ impl VisitMut for StandIns<'_> {
                         return;
                     }
                     Generic::Var { ident: v, kind, index } if v == ident => {
-                        let stand_in = stand_in(*kind, *index);
+                        let stand_in = stand_in(*kind, *index, self.runtime);
                         *ty = syn::parse_quote!(#stand_in);
                         return;
                     }

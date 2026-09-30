@@ -7,7 +7,9 @@ use std::ops::{Deref, DerefMut};
 use crate::boundary::entry::{Settled, SiteShape};
 use crate::done::Done;
 use crate::guard::{Guard, GuardMut};
-use crate::runtime::{Crosses, RefKind, RefTarget, Referent, Runtime};
+use crate::borrowed::BorrowForm;
+use crate::callback::{Lent, LentMut};
+use crate::runtime::{Crosses, Referent, Runtime};
 
 pub struct Returning<'c, R: Runtime> {
     runtime: &'c R,
@@ -63,12 +65,9 @@ impl<'c, R: Runtime> Returning<'c, R> {
     pub fn finish_lent<G, P>(self, guard: Guard<'c, G>, part: impl for<'s> FnOnce(&'s G::Target) -> &'s P) -> Done<R>
     where
         G: Deref,
-        P: ?Sized + Referent,
+        P: ?Sized + Referent + 'static,
     {
-        let at = Settled::of_the_entry();
-        let value = <R::Ref as RefKind<R>>::reference(self.runtime, RefTarget::Shared(part(&*guard)), at);
-        drop(guard);
-        Done::of(value)
+        self.finish_borrowed::<G, Lent<P>>(guard, part)
     }
 
     pub fn finish_lent_mut<G, P>(
@@ -78,11 +77,37 @@ impl<'c, R: Runtime> Returning<'c, R> {
     ) -> Done<R>
     where
         G: DerefMut,
-        P: ?Sized + Referent,
+        P: ?Sized + Referent + 'static,
+    {
+        self.finish_borrowed_mut::<G, LentMut<P>>(guard, part)
+    }
+
+    /// Finishes the call with a result of the form `F` borrowing parts of
+    /// what the call lent through `guard`: an `Option`, a `Result` or a tuple
+    /// whose every leaf is such a part, each made a reference value while
+    /// the guard still lends it.
+    pub fn finish_borrowed<G, F>(self, guard: Guard<'c, G>, part: impl for<'s> FnOnce(&'s G::Target) -> F::At<'s>) -> Done<R>
+    where
+        G: Deref,
+        F: BorrowForm<R>,
+    {
+        let value = F::give(part(&*guard), self.runtime, Settled::of_the_entry());
+        drop(guard);
+        Done::of(value)
+    }
+
+    /// As `finish_borrowed`, through an exclusive guard.
+    pub fn finish_borrowed_mut<G, F>(
+        self,
+        guard: GuardMut<'c, G>,
+        part: impl for<'s> FnOnce(&'s mut G::Target) -> F::At<'s>,
+    ) -> Done<R>
+    where
+        G: DerefMut,
+        F: BorrowForm<R>,
     {
         let mut guard = guard;
-        let at = Settled::of_the_entry();
-        let value = <R::Ref as RefKind<R>>::reference(self.runtime, RefTarget::Exclusive(part(&mut *guard)), at);
+        let value = F::give(part(&mut *guard), self.runtime, Settled::of_the_entry());
         drop(guard);
         Done::of(value)
     }

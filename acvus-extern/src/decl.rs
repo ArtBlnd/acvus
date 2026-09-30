@@ -31,6 +31,8 @@ pub enum DeclTy {
     Str,
     /// The declaration's N-th type parameter.
     Param(u32),
+    /// No value: the result of a call that never returns.
+    Never,
     Ref { mutable: bool, target: Box<DeclTy> },
     /// The run a program's array lends; only under a `Ref` (crossing §2).
     Slice(Box<DeclTy>),

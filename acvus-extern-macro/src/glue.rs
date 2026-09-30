@@ -12,6 +12,14 @@ use crate::sig::{Output, Role, Sig};
 
 pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStream> {
     let sig = Sig::read(&mut func)?;
+    if let Some(Effect::Var(var)) = &attr.effect
+        && !sig.names_effect_variable(var)
+    {
+        return Err(syn::Error::new(
+            var.span(),
+            "an effect is `pure`, `idempotent`, `opaque`, or one of the function's `Var<kind::Effect>` parameters",
+        ));
+    }
     let marker = func.sig.ident.clone();
     let vis = &func.vis;
     let runtime = format_ident!("__R");
@@ -72,8 +80,11 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
 
 fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let name = attr.name.clone().unwrap_or_else(|| LitStr::new(&marker.to_string(), marker.span()));
-    let effect = match attr.effect.unwrap_or(Effect::Opaque) {
-        Effect::Pure => quote!(Pure),
+    // A call whose effect is an effect variable's states nothing of its own:
+    // its effect is the work it runs, which every effect variable is taken to
+    // be (`decl::declaration`).
+    let effect = match attr.effect.clone().unwrap_or(Effect::Opaque) {
+        Effect::Pure | Effect::Var(_) => quote!(Pure),
         Effect::Idempotent => quote!(Idempotent),
         Effect::Opaque => quote!(Opaque),
     };
@@ -84,12 +95,9 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
         quote!((#name, <#ty as ::acvus_extern::decl::ParamMode>::decl(&mut __cx)))
     });
     let result = match &sig.output {
-        Output::Value(ty) => {
-            let ty = sig.at_stand_ins(ty, runtime);
-            quote!(<#ty as ::acvus_extern::decl::DeclType>::decl_ty(&mut __cx))
-        }
-        Output::Borrowed { .. } => {
-            let ty = sig.at_stand_ins(&borrowed_ty(sig), runtime);
+        Output::Never => quote!(::acvus_extern::decl::DeclTy::Never),
+        Output::Value(_) | Output::Borrowed { .. } => {
+            let ty = sig.at_stand_ins(&sig.written_output, runtime);
             quote!(<#ty as ::acvus_extern::decl::DeclType>::decl_ty(&mut __cx))
         }
     };
@@ -116,14 +124,6 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     }
 }
 
-/// The declared result of a borrowed result: the reference as written.
-fn borrowed_ty(sig: &Sig) -> syn::Type {
-    match &sig.output {
-        Output::Borrowed { .. } => sig.written_output.clone(),
-        Output::Value(ty) => (**ty).clone(),
-    }
-}
-
 fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let arguments: Vec<(usize, Ident, syn::Type)> = sig
         .params
@@ -139,7 +139,7 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let opened = arguments.iter().map(|(_, a, _)| a);
     let lent = match sig.output {
         Output::Borrowed { from, .. } => Some(from),
-        Output::Value(_) => None,
+        Output::Value(_) | Output::Never => None,
     };
 
     // Each argument but the lent one is made by its mode, kept where lent, in
@@ -176,6 +176,13 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let args_tuple = quote!((#(#modes,)*));
     let opened_tuple = quote!((#(#opened,)*));
 
+    let awaited_finish = match sig.output {
+        Output::Never => quote!(match #call.await {}),
+        Output::Value(_) | Output::Borrowed { .. } => quote! {
+            let __result = #call.await;
+            __cx.finish(__result)
+        },
+    };
     if sig.awaited {
         return quote! {
             impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::AwaitedFn<#runtime> for #marker {
@@ -188,8 +195,7 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
                     ::acvus_extern::Entry::new(runtime, args, site)
                         .open_awaited::<#args_tuple, (), _>(move |__cx, #opened_tuple, ()| async move {
                             #(#made)*
-                            let __result = #call.await;
-                            __cx.finish(__result)
+                            #awaited_finish
                         })
                 }
             }
@@ -199,9 +205,11 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let finish = match sig.output {
         Output::Borrowed { from, mutable } => {
             let a = format_ident!("__a{}", from);
-            let finish = if mutable { quote!(finish_lent_mut) } else { quote!(finish_lent) };
-            quote!(__cx.#finish(#a, move |__lent| #call))
+            let finish = if mutable { quote!(finish_borrowed_mut) } else { quote!(finish_borrowed) };
+            let out = sig.at_stand_ins(&sig.written_output, runtime);
+            quote!(__cx.#finish::<_, <#out as ::acvus_extern::borrowed::Borrows>::Form>(#a, move |__lent| #call))
         }
+        Output::Never => quote!(match #call {}),
         Output::Value(_) => quote! {
             let __result = #call;
             __cx.finish(__result)

@@ -29,8 +29,28 @@ fn name_of(pair: &Pair) -> &str {
 }
 
 #[extern_fn]
-fn first<R: Runtime, T: Var<kind::Type>>(xs: &[Uniform<R, T>]) -> &Uniform<R, T> {
+fn first<T: Var<kind::Type>>(xs: &[T]) -> &T {
     &xs[0]
+}
+
+#[extern_fn(effect = pure)]
+fn get<T: Var<kind::Type>>(xs: &[T], at: u64) -> Option<&T> {
+    xs.get(at as usize)
+}
+
+#[extern_fn(effect = pure)]
+fn strip<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    text.strip_prefix(prefix)
+}
+
+#[extern_fn(effect = pure)]
+fn halves(text: &str) -> (&str, &str) {
+    text.split_at(text.len() / 2)
+}
+
+#[extern_fn]
+fn fail(message: &str) -> ! {
+    panic!("{message}")
 }
 
 #[extern_fn]
@@ -43,7 +63,7 @@ fn tagged(#[capture] tag: &String, text: &str) -> String {
     format!("{tag}: {text}")
 }
 
-#[extern_fn]
+#[extern_fn(effect = E)]
 fn apply<'c, R: CallsBack, E: Var<kind::Effect>>(
     #[context] cx: &Returning<'c, R>,
     f: Callback<'c, '_, (i64,), i64, E, R>,
@@ -88,6 +108,9 @@ on_both! {
     a_capture_is_lent_to_every_call: calls_tagged;
     a_callback_and_the_context_are_passed: calls_apply;
     an_awaited_function_is_called_through_its_dispatch: calls_measure;
+    an_optional_borrow_names_an_element_or_nothing: calls_get;
+    an_optional_borrow_names_a_range_of_lent_text: calls_strip;
+    a_tuple_of_borrows_names_two_ranges: calls_halves;
 }
 
 /// A variable holding `value`, made as a program makes one: a call's result.
@@ -231,6 +254,50 @@ fn calls_measure<R: Registers<Value = Word>>(mut runtime: R) {
     assert_eq!(read::<_, i64>(&mut frame, length), 7);
 }
 
+fn calls_get<R: Registers<Value = Word>>(mut runtime: R) {
+    runtime.register(get::new()).expect("the path is free");
+    let path = Declared::<R>::path(&get::new(), runtime.interner());
+
+    let mut frame = Frame::new(&runtime);
+    let array = frame.array(&[3i64, 5, 8]);
+    let one = produce(&mut frame, 1u64);
+    let five = produce(&mut frame, 5u64);
+    let present = frame.call_registered(path, &[Pass::Lend(array, Shared), Pass::Give(one)]);
+    let absent = frame.call_registered(path, &[Pass::Lend(array, Shared), Pass::Give(five)]);
+
+    assert_eq!(frame.option_referent::<Word>(present).map(Word::as_i64), Some(5));
+    assert_eq!(frame.option_referent::<Word>(absent).map(Word::as_i64), None);
+}
+
+fn calls_strip<R: Registers<Value = Word>>(mut runtime: R) {
+    runtime.register(strip::new()).expect("the path is free");
+    let path = Declared::<R>::path(&strip::new(), runtime.interner());
+
+    let mut frame = Frame::new(&runtime);
+    let text = produce(&mut frame, String::from("prefixed text"));
+    let prefix = produce(&mut frame, String::from("prefixed "));
+    let other = produce(&mut frame, String::from("other"));
+    let stripped = frame.call_registered(path, &[Pass::Lend(text, Shared), Pass::Lend(prefix, Shared)]);
+    let kept = frame.call_registered(path, &[Pass::Lend(text, Shared), Pass::Lend(other, Shared)]);
+
+    assert_eq!(frame.option_referent::<str>(stripped), Some(String::from("text")));
+    assert_eq!(frame.option_referent::<str>(kept), None);
+}
+
+fn calls_halves<R: Registers<Value = Word>>(mut runtime: R) {
+    runtime.register(halves::new()).expect("the path is free");
+    let path = Declared::<R>::path(&halves::new(), runtime.interner());
+
+    let mut frame = Frame::new(&runtime);
+    let text = produce(&mut frame, String::from("leftright"));
+    let halves = frame.call_registered(path, &[Pass::Lend(text, Shared)]);
+
+    assert_eq!(
+        frame.pair_referents::<str>(halves),
+        (String::from("left"), String::from("right"))
+    );
+}
+
 fn declaration_of<F: Declared<WordRuntime>>(f: F) -> (Interner, Declaration) {
     let names = Interner::new();
     let declaration = f.declaration(&names);
@@ -271,6 +338,7 @@ fn captures_and_the_context_are_no_parameters() {
     assert_eq!(tagged.params, [(names.intern("text"), shared(DeclTy::Str))]);
 
     let (names, apply) = declaration_of(apply::new());
+    assert_eq!(apply.effect, Effect::pure());
     assert_eq!(apply.binders.effects, 1);
     assert_eq!(apply.runs, [0]);
     assert_eq!(
@@ -287,4 +355,31 @@ fn captures_and_the_context_are_no_parameters() {
             (names.intern("n"), DeclTy::Int(IntTy::I64)),
         ]
     );
+}
+
+#[test]
+fn a_borrowed_result_declares_its_references() {
+    let (_, get) = declaration_of(get::new());
+    assert_eq!(get.result, DeclTy::Option(Box::new(shared(DeclTy::Param(0)))));
+
+    let (_, halves) = declaration_of(halves::new());
+    assert_eq!(halves.result, DeclTy::Tuple(vec![shared(DeclTy::Str), shared(DeclTy::Str)]));
+}
+
+#[test]
+fn a_call_that_never_returns_declares_no_value() {
+    let (_, fail) = declaration_of(fail::new());
+    assert_eq!(fail.result, DeclTy::Never);
+}
+
+#[test]
+#[should_panic(expected = "failed on purpose")]
+fn a_call_that_never_returns_traps() {
+    let mut runtime = WordRuntime::default();
+    runtime.register(fail::new()).expect("the path is free");
+    let path = Declared::<WordRuntime>::path(&fail::new(), runtime.interner());
+
+    let mut frame = Frame::new(&runtime);
+    let message = produce(&mut frame, String::from("failed on purpose"));
+    frame.call_registered(path, &[Pass::Lend(message, Shared)]);
 }

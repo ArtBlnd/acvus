@@ -23,9 +23,10 @@ pub trait DeclType {
     fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy;
 }
 
-/// The stand-in for a declaration's N-th type parameter, at which a
-/// declaration is both built and dispatched: its declared type is
-/// `DeclTy::Param(N)`, and its value is `Uniform<R, Nth<N>>`.
+/// The index of a declaration's N-th type parameter. The parameter itself is
+/// instantiated, where the declaration is built and where it is dispatched,
+/// as the uniform value at this index, `Uniform<R, Nth<N>>`, whose declared
+/// type is `DeclTy::Param(N)`.
 pub struct Nth<const N: u32>;
 
 /// The stand-in for the N-th effect variable.
@@ -43,10 +44,12 @@ pub mod kind {
 }
 
 /// A generic parameter of kind `K`: the one bound a handler's generic
-/// parameter carries. Only the stand-ins are one.
+/// parameter carries. Only the stand-ins are one: a type variable's is its
+/// uniform value, so the handler holds, moves and lends a value of it without
+/// knowing its type (runtime contract §1).
 pub trait Var<K> {}
 
-impl<const N: u32> Var<kind::Type> for Nth<N> {}
+impl<R: Runtime, const N: u32> Var<kind::Type> for Uniform<R, Nth<N>> {}
 impl<const N: u32> Var<kind::Effect> for EffectNth<N> {}
 impl<const N: u32> Var<kind::Identity> for IdentityNth<N> {}
 
