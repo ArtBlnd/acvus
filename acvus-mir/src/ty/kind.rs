@@ -80,10 +80,10 @@ pub enum TyKind<V: Phase> {
 /// An object's fields, sorted by name.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ObjectTy<V: Phase> {
-    /// A structural object; its label says who wrote it (`Label`).
+    /// A structural object; its label says who wrote it (`Label`). An
+    /// object a declaration writes is this shape, written elsewhere, so
+    /// closed as written (rfc_extern types §1, types §1).
     Structural(Box<[(Astr, TyId<V>)]>, V::Label),
-    /// A struct a declaration names: extern-defined, opaque (types §1).
-    Declared(QualifiedRef, Box<[(Astr, TyId<V>)]>),
 }
 
 impl<V: Phase> ObjectTy<V> {

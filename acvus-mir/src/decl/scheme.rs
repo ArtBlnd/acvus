@@ -31,6 +31,14 @@ pub struct Scheme {
     pub requires: Box<[Requirement]>,
     /// The facts a call of a declaration without impls reaches.
     pub facts: DeclaredFacts,
+    /// The effect variables of `ty` whose work a call runs before its
+    /// result is taken (extern-fn §2). The call's effect is the join of the
+    /// function type's own effect in `ty` and these: instantiation gives
+    /// the function type a fresh effect variable into which the own effect
+    /// and each of these flow. An effect variable no parameter of `ty`
+    /// gives is pure. `verify` refuses an effect variable a parameter gives
+    /// that is neither here nor in the result.
+    pub runs: Box<[u32]>,
 }
 
 /// The impls of a generic function: the concrete ones in order, then
@@ -51,6 +59,8 @@ pub struct ImplSig {
     pub param_names: Box<[Astr]>,
     pub requires: Box<[Requirement]>,
     pub facts: DeclaredFacts,
+    /// As `Scheme::runs`.
+    pub runs: Box<[u32]>,
 }
 
 /// The generic impl: its type is the generic function's own.
