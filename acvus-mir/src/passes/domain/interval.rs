@@ -1,6 +1,7 @@
 //! The interval domain over the integers: `[lo, hi]` with infinite ends,
 //! bottom the empty interval; widening at loop headers sends a growing end to
-//! infinity (compilation §2: the fixpoint is bounded). Abstract operations
+//! infinity, or, with thresholds, to the nearest threshold past it
+//! (compilation §2: the fixpoint is bounded). Abstract operations
 //! over-approximate the language's (operators §1).
 
 use acvus_ast::Literal;
@@ -53,19 +54,10 @@ impl JoinSemiLattice for Interval {
 
 /// The standard interval widening (Cousot and Cousot, 1977): an end that
 /// `next` moves outward goes to its infinity, so each end changes at most
-/// twice after the first value and every ascending chain is finite.
+/// once after the first value and every ascending chain is finite.
 impl Widen for Interval {
     fn widen(&mut self, next: &Self) -> bool {
-        let (Interval::Range { lo, hi }, Interval::Range { lo: next_lo, hi: next_hi }) = (&*self, next) else {
-            return self.join(next);
-        };
-        let widened = Interval::Range {
-            lo: if next_lo < lo { Bound::NegInfinity } else { *lo },
-            hi: if next_hi > hi { Bound::PosInfinity } else { *hi },
-        };
-        let grew = *self != widened;
-        *self = widened;
-        grew
+        self.widen_to(next, Bound::NegInfinity, Bound::PosInfinity)
     }
 }
 
@@ -292,8 +284,39 @@ impl Interval {
         Interval::between(Bound::Finite(lo), Bound::Finite(hi))
     }
 
-    fn of_width(width: IntTy) -> Interval {
+    /// Every value of `width`.
+    pub(crate) fn of_width(width: IntTy) -> Interval {
         Interval::finite(width.min(), width.max())
+    }
+
+    /// Widening with thresholds (Cousot and Cousot, 1992), the thresholds
+    /// being `least`, `greatest` and the infinities: an end that `next`
+    /// moves outward goes to the nearest threshold at or past `next`'s end.
+    /// Each end changes at most twice after the first value, and at most
+    /// once while `next` lies within `[least, greatest]`, so every ascending
+    /// chain is finite. Returns whether `self` grew.
+    pub(crate) fn widen_to(&mut self, next: &Interval, least: Bound, greatest: Bound) -> bool {
+        let (Interval::Range { lo, hi }, Interval::Range { lo: next_lo, hi: next_hi }) = (&*self, next) else {
+            return self.join(next);
+        };
+        let lo = if next_lo >= lo {
+            *lo
+        } else if *next_lo >= least {
+            least
+        } else {
+            Bound::NegInfinity
+        };
+        let hi = if next_hi <= hi {
+            *hi
+        } else if *next_hi <= greatest {
+            greatest
+        } else {
+            Bound::PosInfinity
+        };
+        let widened = Interval::Range { lo, hi };
+        let grew = *self != widened;
+        *self = widened;
+        grew
     }
 
     /// `[lo, hi]`, or `Empty` where it holds no integer.
@@ -598,6 +621,34 @@ mod tests {
         }
         assert_eq!(fact, range(Bound::NegInfinity, Bound::PosInfinity));
         assert!(rises <= 3, "each end reaches its infinity in one widening step, rose {rises}");
+    }
+
+    #[test]
+    fn widening_to_thresholds_covers_the_join() {
+        let all = samples();
+        for a in &all {
+            for b in &all {
+                let mut widened = a.clone();
+                widened.widen_to(b, Bound::Finite(-128), Bound::Finite(127));
+                assert!(joined(a, b).le(&widened), "{a:?} ∇ {b:?} = {widened:?}");
+            }
+        }
+    }
+
+    /// A growing end within the thresholds jumps to the threshold once; one
+    /// past them goes on to its infinity, so each end changes at most twice.
+    #[test]
+    fn widening_to_thresholds_terminates_on_an_ascending_chain() {
+        let (least, greatest) = (Bound::Finite(-128), Bound::Finite(127));
+        let mut within = Interval::bottom();
+        let within_rises = (0..=127).filter(|n| within.widen_to(&finite(-n, *n), least, greatest)).count();
+        assert_eq!(within, finite(-128, 127));
+        assert!(within_rises <= 3, "each end reaches its threshold in one widening step, rose {within_rises}");
+
+        let mut past = Interval::bottom();
+        let past_rises = (0..1000).filter(|n| past.widen_to(&finite(-n, *n), least, greatest)).count();
+        assert_eq!(past, Interval::full());
+        assert!(past_rises <= 5, "each end reaches its threshold, then its infinity, rose {past_rises}");
     }
 
     #[test]

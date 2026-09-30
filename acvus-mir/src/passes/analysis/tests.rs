@@ -319,6 +319,14 @@ where
     fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&D::Value]) -> D::Value {
         self.domain.top()
     }
+
+    fn top(&self, _value: ValueId) -> D::Value {
+        self.domain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut D::Value, next: &D::Value) -> bool {
+        fact.widen(next)
+    }
 }
 
 #[test]
@@ -616,6 +624,14 @@ impl SparseAnalysis for Ranges<'_> {
             _ => Const::Top,
         }
     }
+
+    fn top(&self, _value: ValueId) -> Const {
+        ConstDomain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut Const, next: &Const) -> bool {
+        fact.widen(next)
+    }
 }
 
 /// ```text
@@ -691,6 +707,14 @@ impl SparseAnalysis for TokenBlind<'_> {
 
     fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&Const]) -> Const {
         Const::Top
+    }
+
+    fn top(&self, _value: ValueId) -> Const {
+        ConstDomain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut Const, next: &Const) -> bool {
+        fact.widen(next)
     }
 }
 

@@ -375,4 +375,12 @@ impl SparseAnalysis for Matches<'_> {
     fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&MatchValue]) -> MatchValue {
         self.domain.top()
     }
+
+    fn top(&self, _value: ValueId) -> MatchValue {
+        self.domain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut MatchValue, next: &MatchValue) -> bool {
+        fact.widen(next)
+    }
 }
