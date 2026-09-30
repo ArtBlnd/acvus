@@ -24,7 +24,7 @@ An extern-defined generic type is stored as one Rust value. Where a type argumen
 - **Guards.** A shared guard, an exclusive guard, and a taken value. The extern side is lent storage only under a guard.
 - **The entry.** Each call has one entry, which the runtime's boundary calls with the call's values (crossing §1).
 - **Views.** A script array's slice view, shared or mutable, is a contract operation.
-- **References.** The runtime makes a reference value from a target, a writable one only from an exclusive borrow of it.
+- **References.** The runtime makes a reference value from a Rust borrow the call holds of storage it lent in that call, whole or any part of it, a writable one only from an exclusive borrow. A borrowed result is such a reference (crossing §4).
 - **Aggregates.** A tuple, an object and a variant are the runtime's associated types. Their bodies are safe traits, bounded `Send + Sync + 'static`, whose parts are owning holders.
 - **Impls.** The runtime makes a value from an impl entry, reads an entry back at a generic function's family and task the caller names, and reads an impl value's task (impls).
 - **Callbacks.** Calling a script closure synchronously and awaited.
