@@ -2,7 +2,7 @@
 
 ## 1. Numbers
 
-The numbers are the integer types of 8 to 64 bits and `f64`. An unsuffixed integer literal defaults as types §5 states. Integer overflow is undefined. Integer division or remainder by zero traps; a later build flag may choose otherwise. `f64` follows IEEE: division by zero gives an infinity, not a trap.
+The numbers are the integer types of 8 to 64 bits and `f64`. An unsuffixed integer literal defaults as types §5 states. Integer overflow is undefined. Arithmetic that checks, wraps, saturates or reports overflow is written as the extern fns that state it, with Rust's meanings. Integer division or remainder by zero traps; a later build flag may choose otherwise. `f64` follows IEEE: division by zero gives an infinity, not a trap.
 
 A string literal is a `&str`, as in Rust.
 
