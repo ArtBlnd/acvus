@@ -15,7 +15,6 @@ pub mod done;
 pub mod guard;
 pub mod impls;
 pub mod runtime;
-pub mod shape;
 
 #[doc(hidden)]
 pub use boundary::seal;

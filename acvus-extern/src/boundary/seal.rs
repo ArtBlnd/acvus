@@ -1,39 +1,9 @@
-//! The seals of the crossing traits whose methods choose the type of a typed
+//! The seal of the crossing trait whose methods choose the type of a typed
 //! read (safety §1). A runtime trusts its own typed reads, so a hand-written
-//! implementation that read a part at a type other than the shape's, or a
-//! loan form that read a result at a type other than the callback's, would be
-//! undefined behaviour reached from safe code. Each seal is an `unsafe` trait
-//! at a hidden path: its implementations are the ones named here and the ones
-//! `shape!` emits, and any other is asserted with an `unsafe` token where it
-//! is written.
-
-/// # Safety
-/// Only `shape!` implements it, for the shape it declares, and the same
-/// expansion implements `Projected` for that shape: `AGGREGATE` is the
-/// shape's aggregate, and each part is read, lent or projected at the type
-/// the shape gives it, in the order of its name's text (compiler: types §2).
-///
-/// A `Projected` written by hand, without the seal, does not compile:
-///
-/// ```compile_fail,E0277
-/// use acvus_extern::runtime::Runtime;
-/// use acvus_extern::shape::{Aggregate, LentParts, LentPartsMut, OwnedParts, Projected};
-///
-/// struct HandWritten;
-///
-/// impl<R: Runtime> Projected<R> for HandWritten {
-///     type Ref<'a> = ();
-///     type Mut<'a> = ();
-///     type Owned = ();
-///
-///     const AGGREGATE: Aggregate = Aggregate::Tuple;
-///
-///     fn project<'c>(_: LentParts<'c, R>) {}
-///     fn project_mut<'c>(_: LentPartsMut<'c, R>) {}
-///     fn owned(_: OwnedParts<R>) {}
-/// }
-/// ```
-pub unsafe trait ShapeViews {}
+//! loan form that read a result at a type other than the callback's would be
+//! undefined behaviour reached from safe code. The seal is an `unsafe` trait
+//! at a hidden path: its implementations are the ones named here, and any
+//! other is asserted with an `unsafe` token where it is written.
 
 /// # Safety
 /// Only this crate implements it, for the loan forms it defines: each form
@@ -64,7 +34,7 @@ pub unsafe trait ShapeViews {}
 /// ```
 pub unsafe trait LoanForms {}
 
-use crate::callback::{Lent, LentMut, Opt, Res, Tup};
+use crate::callback::{Lent, LentMut};
 use crate::runtime::Crosses;
 
 // SAFETY: a crossing type is its own form: it is given and taken at itself.
@@ -73,101 +43,3 @@ unsafe impl<T> LoanForms for T where T: Crosses {}
 unsafe impl<T> LoanForms for Lent<T> where T: ?Sized {}
 // SAFETY: as `Lent`'s, exclusively.
 unsafe impl<T> LoanForms for LentMut<T> where T: ?Sized {}
-// SAFETY: `Opt<F>` is `Option`'s variants, its payload at `F`.
-unsafe impl<F> LoanForms for Opt<F> where F: LoanForms {}
-// SAFETY: `Res<F, G>` is `Result`'s variants, its payloads at `F` and `G`.
-unsafe impl<F, G> LoanForms for Res<F, G>
-where
-    F: LoanForms,
-    G: LoanForms,
-{
-}
-
-/// Tuples of forms up to twelve, the arity the crossing's tuples stop at.
-macro_rules! tuple_forms {
-    ($(($($f:ident),*))+) => {$(
-        // SAFETY: a tuple of forms is a tuple of its parts, each at its form.
-        unsafe impl<$($f),*> LoanForms for Tup<($($f,)*)> where $($f: LoanForms),* {}
-    )+};
-}
-
-tuple_forms! {
-    ()
-    (A)
-    (A, B)
-    (A, B, C)
-    (A, B, C, D)
-    (A, B, C, D, E)
-    (A, B, C, D, E, F)
-    (A, B, C, D, E, F, G)
-    (A, B, C, D, E, F, G, H)
-    (A, B, C, D, E, F, G, H, I)
-    (A, B, C, D, E, F, G, H, I, J)
-    (A, B, C, D, E, F, G, H, I, J, K)
-    (A, B, C, D, E, F, G, H, I, J, K, L)
-}
-
-/// The crossing of an opaque type: given and taken whole at itself, and lent
-/// as a guard. The `Structural` crossing items of the crate's opaque types,
-/// and those the derive emits, are made of these; each needs the entry's
-/// `Settled`, so none is reached outside a call.
-pub mod opaque {
-    use crate::boundary::entry::Settled;
-    use crate::guard::{Guard, GuardMut};
-    use crate::runtime::{Crosses, Runtime};
-
-    /// An opaque part lent shared in a projection.
-    pub type Lent<'c, R, T> = Guard<'c, <R as Runtime>::Shared<'c, T>>;
-    /// An opaque part lent exclusively in a projection.
-    pub type LentMut<'c, R, T> = GuardMut<'c, <R as Runtime>::Exclusive<'c, T>>;
-
-    pub fn give<T: Crosses, R: Runtime>(value: T, rt: &R, at: Settled<'_>) -> R::Value {
-        rt.give(value, at)
-    }
-
-    pub fn take<T: Crosses, R: Runtime>(v: R::Value, rt: &R, at: Settled<'_>) -> T {
-        rt.take(v, at)
-    }
-
-    pub fn lent<'c, T: Crosses + 'c, R: Runtime>(rt: &'c R, place: &'c R::Value, at: Settled<'c>) -> Lent<'c, R, T> {
-        Guard::of_the_entry(rt.shared(place, at))
-    }
-
-    pub fn lent_mut<'c, T: Crosses + 'c, R: Runtime>(
-        rt: &'c R,
-        place: &'c mut R::Value,
-        at: Settled<'c>,
-    ) -> LentMut<'c, R, T> {
-        GuardMut::of_the_entry(rt.exclusive(place, at))
-    }
-}
-
-// SAFETY: this crate's `Projected` for `Option` reads its tag by the order of
-// the variants' names, `None` 0 and `Some` 1, and its payload at `T`.
-unsafe impl<T> ShapeViews for Option<T> {}
-// SAFETY: as for `Option`: `Err` 0 and `Ok` 1, the payloads at `T` and `E`.
-unsafe impl<T, E> ShapeViews for Result<T, E> {}
-
-/// Tuples of parts up to twelve.
-macro_rules! tuple_views {
-    ($(($($p:ident),+))+) => {$(
-        // SAFETY: this crate's `Projected` for a tuple reads each part at its
-        // own type, in order.
-        unsafe impl<$($p),+> ShapeViews for ($($p,)+) {}
-    )+};
-}
-
-tuple_views! {
-    (A)
-    (A, B)
-    (A, B, C)
-    (A, B, C, D)
-    (A, B, C, D, E)
-    (A, B, C, D, E, F)
-    (A, B, C, D, E, F, G)
-    (A, B, C, D, E, F, G, H)
-    (A, B, C, D, E, F, G, H, I)
-    (A, B, C, D, E, F, G, H, I, J)
-    (A, B, C, D, E, F, G, H, I, J, K)
-    (A, B, C, D, E, F, G, H, I, J, K, L)
-}

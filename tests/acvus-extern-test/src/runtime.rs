@@ -13,7 +13,7 @@ use acvus_extern::impls::task::TaskKind;
 use acvus_extern::runtime::{Crosses, Mutability, RefTarget, Runtime};
 use acvus_utils::Interner;
 
-use crate::boundary::{self, Held, Kind, Word, WordObject, WordTuple, WordVariant, scalar_kind};
+use crate::boundary::{self, Held, Kind, Word, scalar_kind};
 
 /// The runtime: its interner, and nothing else; every value's storage is its
 /// own allocation.
@@ -56,34 +56,6 @@ impl Runtime for WordRuntime {
 
     fn shared_str<'a>(&'a self, v: &'a Word, at: Settled<'a>) -> &'a str {
         boundary::text(v, at)
-    }
-
-    fn take_apart(&self, v: Word, at: Settled<'_>) -> (Option<u32>, impl ExactSizeIterator<Item = Word>) {
-        boundary::take_apart(v, at)
-    }
-
-    fn make_tuple(&self, parts: impl ExactSizeIterator<Item = Word>, at: Settled<'_>) -> Word {
-        boundary::make_tuple(parts, at)
-    }
-
-    fn make_object(&self, fields: impl ExactSizeIterator<Item = Word>, at: Settled<'_>) -> Word {
-        boundary::make_object(fields, at)
-    }
-
-    fn make_variant(&self, tag: u32, payload: Option<Word>, at: Settled<'_>) -> Word {
-        boundary::make_variant(tag, payload, at)
-    }
-
-    fn lent_part<'a>(&'a self, v: &'a Word, i: u32, at: Settled<'a>) -> &'a Word {
-        boundary::lent_part(v, i, at)
-    }
-
-    fn lent_parts_mut<'a>(&'a self, v: &'a mut Word, at: Settled<'a>) -> impl ExactSizeIterator<Item = &'a mut Word> {
-        boundary::lent_parts_mut(v, at)
-    }
-
-    fn lent_tag(&self, v: &Word, at: Settled<'_>) -> u32 {
-        boundary::lent_tag(v, at)
     }
 
     fn reference<'a, P: ?Sized>(&'a self, target: RefTarget<'a, P>, _at: Settled<'a>) -> Word {

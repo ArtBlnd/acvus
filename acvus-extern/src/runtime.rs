@@ -60,11 +60,9 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     /// Moves a value of an opaque type out at its settled type, releasing
     /// its storage. It is reached only through `Uniform`'s take, where a
     /// handler needs the value itself; a value only dropped is released and
-    /// never taken (runtime contract §1). A transparent structured type is
-    /// never taken whole: it is taken apart into its parts (crossing §2).
+    /// never taken (runtime contract §1).
     fn take<T: Crosses>(&self, v: Self::Value, at: Settled<'_>) -> T;
-    /// Makes the runtime value of an opaque type at its settled type. A
-    /// transparent structured type is composed from its parts instead.
+    /// Makes the runtime value of an opaque type at its settled type.
     fn give<T: Crosses>(&self, value: T, at: Settled<'_>) -> Self::Value;
 
     /// The guards lend storage from the value's place, so a value held in the
@@ -79,36 +77,6 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
         at: Settled<'a>,
     ) -> Self::ExclusiveSlice<'a, T>;
     fn shared_str<'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedStr<'a>;
-
-    /// An aggregate handed over, taken apart: its own storage released, and
-    /// its parts' values handed over in the type's order, each then held by a
-    /// `Uniform`; a variant's tag with them. A tuple's or an object's layout
-    /// is the backend's (crossing §2), so no Rust value of it exists to take;
-    /// this is the one way to own its parts apart, and only a `Uniform`'s
-    /// conversion into a shape's owned view calls it.
-    fn take_apart(&self, v: Self::Value, at: Settled<'_>) -> (Option<u32>, impl ExactSizeIterator<Item = Self::Value>);
-
-    /// Makes an aggregate at its settled type from its parts' values, which
-    /// it then owns (runtime contract §2, Aggregates).
-    fn make_tuple(&self, parts: impl ExactSizeIterator<Item = Self::Value>, at: Settled<'_>) -> Self::Value;
-    fn make_object(&self, fields: impl ExactSizeIterator<Item = Self::Value>, at: Settled<'_>) -> Self::Value;
-    fn make_variant(&self, tag: u32, payload: Option<Self::Value>, at: Settled<'_>) -> Self::Value;
-
-    /// The place of the `i`-th part of an aggregate the call lent, from the
-    /// aggregate's place: the aggregate still owns the part, and it is read
-    /// only through a guard made from this place, so a projection is a guard
-    /// at each leaf. A variant's payload is its part 0.
-    fn lent_part<'a>(&'a self, v: &'a Self::Value, i: u32, at: Settled<'a>) -> &'a Self::Value;
-    /// The places of every part of an aggregate the call lent exclusively,
-    /// in the type's order, lent together: a mutable projection lends all its
-    /// parts at once, and one exclusive place yields one live exclusive part.
-    fn lent_parts_mut<'a>(
-        &'a self,
-        v: &'a mut Self::Value,
-        at: Settled<'a>,
-    ) -> impl ExactSizeIterator<Item = &'a mut Self::Value>;
-    /// The tag of a variant the call lent, read from its place.
-    fn lent_tag(&self, v: &Self::Value, at: Settled<'_>) -> u32;
 
     /// The reference value made from a part of storage the call lent; a
     /// borrowed result is one (crossing §4).

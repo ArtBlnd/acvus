@@ -332,38 +332,6 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
         self.track(self.inner.shared_str(v, at), Mutability::Shared)
     }
 
-    fn take_apart(&self, v: Self::Value, at: Settled<'_>) -> (Option<u32>, impl ExactSizeIterator<Item = Self::Value>) {
-        self.inner.take_apart(v, at)
-    }
-
-    fn make_tuple(&self, parts: impl ExactSizeIterator<Item = Self::Value>, at: Settled<'_>) -> Self::Value {
-        self.inner.make_tuple(parts, at)
-    }
-
-    fn make_object(&self, fields: impl ExactSizeIterator<Item = Self::Value>, at: Settled<'_>) -> Self::Value {
-        self.inner.make_object(fields, at)
-    }
-
-    fn make_variant(&self, tag: u32, payload: Option<Self::Value>, at: Settled<'_>) -> Self::Value {
-        self.inner.make_variant(tag, payload, at)
-    }
-
-    fn lent_part<'a>(&'a self, v: &'a Self::Value, i: u32, at: Settled<'a>) -> &'a Self::Value {
-        self.inner.lent_part(v, i, at)
-    }
-
-    fn lent_parts_mut<'a>(
-        &'a self,
-        v: &'a mut Self::Value,
-        at: Settled<'a>,
-    ) -> impl ExactSizeIterator<Item = &'a mut Self::Value> {
-        self.inner.lent_parts_mut(v, at)
-    }
-
-    fn lent_tag(&self, v: &Self::Value, at: Settled<'_>) -> u32 {
-        self.inner.lent_tag(v, at)
-    }
-
     fn reference<'a, P: ?Sized>(&'a self, target: RefTarget<'a, P>, at: Settled<'a>) -> Self::Value {
         let (range, access) = match &target {
             RefTarget::Shared(part) => (range_of(*part), Mutability::Shared),

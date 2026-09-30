@@ -5,11 +5,9 @@
 //! A value is a kind and a 64-bit word. A scalar lies in the word's first
 //! bytes. Anything larger lies in an allocation the word points at: a Rust
 //! value or a Rust function's glue in a `Slot` headed by its release and its
-//! canonical type, or an aggregate's body, whose parts are each a `Word` in an
-//! allocation of its own. A reference is a pointer in the word: `Ref` to a
-//! `Word` the run keeps or an aggregate keeps as a part, `Part` to a part of
-//! lent storage, and `WidePart` to an allocation holding the wide pointer of
-//! an unsized part.
+//! canonical type. A reference is a pointer in the word: `Ref` to a `Word` the
+//! run keeps, `Part` to a part of lent storage, and `WidePart` to an
+//! allocation holding the wide pointer of an unsized part.
 //!
 //! Every read at a type takes the entry's `Settled`, the proof that the value
 //! is live at the type the checker settled for its site (safety §3). No read
@@ -24,20 +22,18 @@
 
 use std::any::TypeId;
 use std::mem::{ManuallyDrop, MaybeUninit};
-use std::ptr::{self, NonNull};
+use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::callback::RustCallee;
 use acvus_extern::done::Done;
 use acvus_extern::runtime::{Crosses, RefTarget, Runtime};
-use acvus_extern::seal::{ShapeViews, opaque};
 use acvus_extern::{
     LayoutFact, Release, Releasing, Settled, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
 };
 
 use crate::runtime::WordRuntime;
-use crate::shapes::{Labelled, Maybe, Nested, Record};
 
 const _: () = assert!(
     size_of::<usize>() <= size_of::<u64>(),
@@ -61,9 +57,6 @@ pub(crate) enum Kind {
     Unit,
     Large,
     Closure,
-    Tuple,
-    Object,
-    Variant,
     Ref,
     Part,
     WidePart,
@@ -238,10 +231,6 @@ unsafe fn free(v: Word) {
             // caller's contract makes this its one use.
             unsafe { ((*header).release)(header) }
         }
-        // SAFETY: a body's word points at the body `make_*` boxed.
-        Kind::Tuple => drop(unsafe { Box::from_raw(v.address::<WordTuple>()) }),
-        Kind::Object => drop(unsafe { Box::from_raw(v.address::<WordObject>()) }),
-        Kind::Variant => drop(unsafe { Box::from_raw(v.address::<WordVariant>()) }),
         // SAFETY: `reference` boxed the wide pointer.
         Kind::WidePart => drop(unsafe { Box::from_raw(v.address::<WideBits>()) }),
         Kind::Ref
@@ -413,162 +402,6 @@ where
     Slot::allocate(Kind::Closure, f, TypeId::of::<RustCallee<R>>())
 }
 
-// Aggregates.
-
-/// An aggregate's parts, each a `Word` in an allocation of its own, so that
-/// a part lent in place is named without borrowing the body.
-struct Parts(Box<[NonNull<Word>]>);
-
-// SAFETY: `Parts` owns each allocation it points at, as a `Box<Word>` would,
-// and `Word` is `Send` and `Sync`.
-unsafe impl Send for Parts {}
-// SAFETY: as for `Send`.
-unsafe impl Sync for Parts {}
-
-impl Parts {
-    /// # Safety
-    /// The caller hands over `words`, which it owns: nothing releases them
-    /// but these parts.
-    unsafe fn adopt(words: impl Iterator<Item = Word>) -> Parts {
-        Parts(words.map(|w| NonNull::from(Box::leak(Box::new(w)))).collect())
-    }
-
-    /// Every part, handed over at once; the parts own nothing afterwards.
-    fn hand_over(mut self) -> std::vec::IntoIter<Word> {
-        let parts = std::mem::take(&mut self.0);
-        parts
-            .iter()
-            // SAFETY: `adopt` leaked each box, and taking the parts out of
-            // `self` makes this each one's one reclaim.
-            .map(|part| *unsafe { Box::from_raw(part.as_ptr()) })
-            .collect::<Vec<_>>()
-            .into_iter()
-    }
-
-}
-
-impl Drop for Parts {
-    fn drop(&mut self) {
-        for part in self.0.iter() {
-            // SAFETY: the parts own each value they still hold: `adopt` was
-            // handed it and `hand_over` has not handed it out.
-            unsafe { free(*Box::from_raw(part.as_ptr())) };
-        }
-    }
-}
-
-pub struct WordTuple(Parts);
-
-pub struct WordObject(Parts);
-
-pub struct WordVariant {
-    tag: u32,
-    payload: Parts,
-}
-
-pub(crate) fn make_tuple(parts: impl ExactSizeIterator<Item = Word>, _at: Settled<'_>) -> Word {
-    // SAFETY: under `Settled`, the crossing hands the parts' values over
-    // (runtime contract §2, Aggregates).
-    let parts = unsafe { Parts::adopt(parts) };
-    Word::pointing(Kind::Tuple, Box::into_raw(Box::new(WordTuple(parts))))
-}
-
-pub(crate) fn make_object(fields: impl ExactSizeIterator<Item = Word>, _at: Settled<'_>) -> Word {
-    // SAFETY: as `make_tuple`'s.
-    let fields = unsafe { Parts::adopt(fields) };
-    Word::pointing(Kind::Object, Box::into_raw(Box::new(WordObject(fields))))
-}
-
-pub(crate) fn make_variant(tag: u32, payload: Option<Word>, _at: Settled<'_>) -> Word {
-    // SAFETY: as `make_tuple`'s.
-    let payload = unsafe { Parts::adopt(payload.into_iter()) };
-    Word::pointing(Kind::Variant, Box::into_raw(Box::new(WordVariant { tag, payload })))
-}
-
-/// # Safety
-/// `v` is a live body of kind `kind` boxed as a `B`, and nothing uses it
-/// afterwards.
-unsafe fn unbox<B>(v: Word, kind: Kind) -> B {
-    debug_assert_eq!(v.kind, kind);
-    // SAFETY: the caller's contract.
-    *unsafe { Box::from_raw(v.address::<B>()) }
-}
-
-pub(crate) fn take_apart(v: Word, _at: Settled<'_>) -> (Option<u32>, impl ExactSizeIterator<Item = Word>) {
-    // SAFETY: under `Settled`, `v` is an aggregate its one holder takes apart,
-    // boxed by the kind it carries; the box is freed and its parts handed over.
-    match v.kind {
-        Kind::Tuple => (None, unsafe { unbox::<WordTuple>(v, Kind::Tuple) }.0.hand_over()),
-        Kind::Object => (None, unsafe { unbox::<WordObject>(v, Kind::Object) }.0.hand_over()),
-        Kind::Variant => {
-            let variant = unsafe { unbox::<WordVariant>(v, Kind::Variant) };
-            (Some(variant.tag), variant.payload.hand_over())
-        }
-        kind => panic!("a value of kind {kind:?} is no aggregate to take apart"),
-    }
-}
-
-/// The aggregate a place holds: through a `Ref`, the aggregate it names; a
-/// part of an aggregate holds its aggregate itself.
-///
-/// # Safety
-/// `v` is a live aggregate, or a live `Ref` to one.
-unsafe fn aggregate(v: Word) -> Word {
-    match v.kind {
-        // SAFETY: the caller's contract.
-        Kind::Ref => unsafe { v.address::<Word>().read() },
-        _ => v,
-    }
-}
-
-/// The parts of the aggregate a place holds, each the allocation it lies in.
-///
-/// # Safety
-/// As `aggregate`'s, and the aggregate stays live for `'a`.
-unsafe fn parts_of<'a>(v: Word) -> &'a [NonNull<Word>] {
-    // SAFETY: the caller's contract. The body is only read here.
-    unsafe {
-        let aggregate = aggregate(v);
-        match aggregate.kind {
-            Kind::Tuple => &(*aggregate.address::<WordTuple>()).0.0,
-            Kind::Object => &(*aggregate.address::<WordObject>()).0.0,
-            Kind::Variant => &(*aggregate.address::<WordVariant>()).payload.0,
-            kind => unreachable!("a {kind:?} value has no parts"),
-        }
-    }
-}
-
-/// The allocation the `i`-th part of the aggregate a place holds lies in.
-///
-/// # Safety
-/// As `parts_of`'s, and the aggregate has a part `i`.
-unsafe fn part_of(v: Word, i: u32) -> *mut Word {
-    // SAFETY: the caller's contract.
-    unsafe { parts_of(v)[i as usize].as_ptr() }
-}
-
-pub(crate) fn lent_part<'a>(v: &'a Word, i: u32, _at: Settled<'a>) -> &'a Word {
-    // SAFETY: under `Settled`, `v` is a lent aggregate's place, and each part
-    // lies in an allocation of its own that the aggregate keeps live and in
-    // place while the call lends it (S1); no exclusive lend of the part is
-    // live meanwhile.
-    unsafe { &*part_of(*v, i) }
-}
-
-pub(crate) fn lent_parts_mut<'a>(v: &'a mut Word, _at: Settled<'a>) -> impl ExactSizeIterator<Item = &'a mut Word> {
-    // SAFETY: as `part_of`'s; the aggregate's body is only read here.
-    let parts = unsafe { parts_of(*v) };
-    // SAFETY: as `lent_part`'s, the aggregate lent exclusively, so no other
-    // lend of a part is live meanwhile; each part lies in an allocation of
-    // its own, so the parts lent together are disjoint.
-    parts.iter().map(|part| unsafe { &mut *part.as_ptr() })
-}
-
-pub(crate) fn lent_tag(v: &Word, _at: Settled<'_>) -> u32 {
-    // SAFETY: as `lent_part`'s, for a variant.
-    unsafe { (*aggregate(*v).address::<WordVariant>()).tag }
-}
-
 /// What a reference value `reference` made names, for the loan `'l` it was
 /// made under.
 ///
@@ -650,20 +483,17 @@ pub(crate) fn canon_of(v: Word, _at: Settled<'_>) -> TypeId {
     unsafe { (*v.address::<Header>()).canon }
 }
 
-// SAFETY: `WordRuntime` lends four kinds of storage. A scalar is lent in the
+// SAFETY: `WordRuntime` lends three kinds of storage. A scalar is lent in the
 // word at the place the guard is given, the holder's own: an argument run the
 // run keeps for the call, a `Uniform`, or a variable. A value's slot is
 // allocated once by `Slot::allocate` and never moved; it is freed only by the
-// release of the one holder that owns the value, by `take` moving the value
-// out, or by the drop of the body that holds it, and the checker's loan on a
-// value excludes each of these while it lasts. An aggregate's part lies in an
-// allocation of its own that `Parts::adopt` made and only `Parts::hand_over`
-// or the body's drop reclaims, likewise excluded while the loan lasts. A word
-// the run keeps stays where the run put it: `Held` is boxed by the run, and
-// this runtime moves no place it is given. `WordRuntime` writes none of them
-// after making them except through the `&mut` an exclusive guard is, so each
-// keeps its address and is written only under an exclusive loan until the
-// checker's loan ends.
+// release of the one holder that owns the value or by `take` moving the value
+// out, and the checker's loan on a value excludes each of these while it
+// lasts. A word the run keeps stays where the run put it: `Held` is boxed by
+// the run, and this runtime moves no place it is given. `WordRuntime` writes
+// none of them after making them except through the `&mut` an exclusive guard
+// is, so each keeps its address and is written only under an exclusive loan
+// until the checker's loan ends.
 unsafe impl SignedS1 for WordRuntime {}
 // SAFETY: `reference` keeps the part's own address, in the word or boxed with
 // its metadata, and makes no copy of the part. By S1 the part stays at that
@@ -681,43 +511,6 @@ unsafe impl SignedS2 for WordRuntime {}
 unsafe impl SignedS3 for WordRuntime {}
 
 // The test types' structural facts.
-
-/// The crossing items of an opaque test type, as the derive emits them: given
-/// and taken whole, lent as a guard.
-macro_rules! opaque_crossing {
-    () => {
-        type Lent<'c, R: Runtime>
-            = opaque::Lent<'c, R, Self>
-        where
-            Self: 'c;
-        type LentMut<'c, R: Runtime>
-            = opaque::LentMut<'c, R, Self>
-        where
-            Self: 'c;
-
-        fn give<R: Runtime>(self, rt: &R, at: Settled<'_>) -> R::Value {
-            opaque::give(self, rt, at)
-        }
-
-        fn take<R: Runtime>(v: R::Value, rt: &R, at: Settled<'_>) -> Self {
-            opaque::take(v, rt, at)
-        }
-
-        fn lent<'c, R: Runtime>(rt: &'c R, place: &'c R::Value, at: Settled<'c>) -> Self::Lent<'c, R>
-        where
-            Self: 'c,
-        {
-            opaque::lent(rt, place, at)
-        }
-
-        fn lent_mut<'c, R: Runtime>(rt: &'c R, place: &'c mut R::Value, at: Settled<'c>) -> Self::LentMut<'c, R>
-        where
-            Self: 'c,
-        {
-            opaque::lent_mut(rt, place, at)
-        }
-    };
-}
 
 /// A value that counts its drops, for the crossing's release tests.
 pub struct Tally(pub Arc<AtomicUsize>);
@@ -743,8 +536,6 @@ unsafe impl Structural for Tally {
     type Canon = Tally;
 
     const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
-
-    opaque_crossing!();
 }
 
 // SAFETY: as for `Tally`.
@@ -752,21 +543,7 @@ unsafe impl Structural for Pair {
     type Canon = Pair;
 
     const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
-
-    opaque_crossing!();
 }
-
-// SAFETY: each shape below stands in for `shape!`'s expansion of its
-// declaration, and `shapes` implements `Projected` for it as that expansion
-// does: `AGGREGATE` is its aggregate, and each part is lent, projected or
-// held at the type the declaration gives it, in the order of its name's text.
-unsafe impl ShapeViews for Labelled {}
-// SAFETY: as for `Labelled`.
-unsafe impl ShapeViews for Nested {}
-// SAFETY: as for `Labelled`.
-unsafe impl ShapeViews for Record {}
-// SAFETY: as for `Labelled`.
-unsafe impl ShapeViews for Maybe {}
 
 #[cfg(test)]
 mod tests {
@@ -775,7 +552,7 @@ mod tests {
 
     use acvus_extern::runtime::RefTarget;
 
-    use super::{Kind, Parts, Slot, Word, erase, free, materialize, named_part, reference, target};
+    use super::{Kind, Slot, Word, erase, free, materialize, named_part, reference, target};
 
     #[test]
     fn a_scalar_round_trips_through_the_word() {
@@ -834,33 +611,6 @@ mod tests {
         let moved = unsafe { Slot::<Arc<()>>::take(word.address()) };
         assert_eq!(Arc::strong_count(&alive), 2);
         drop(moved);
-
-        assert_eq!(Arc::strong_count(&alive), 1);
-    }
-
-    #[test]
-    fn parts_handed_over_are_released_by_their_new_owner_only() {
-        let alive = Arc::new(());
-        // SAFETY: the two values are fresh and handed over.
-        let parts = unsafe { Parts::adopt([counted(&alive), counted(&alive)].into_iter()) };
-
-        let handed: Vec<Word> = parts.hand_over().collect();
-        assert_eq!(Arc::strong_count(&alive), 3);
-        for part in handed {
-            // SAFETY: each part handed out is live and released once.
-            unsafe { free(part) };
-        }
-
-        assert_eq!(Arc::strong_count(&alive), 1);
-    }
-
-    #[test]
-    fn parts_never_handed_over_are_released_with_their_body() {
-        let alive = Arc::new(());
-        // SAFETY: the two values are fresh and handed over.
-        let parts = unsafe { Parts::adopt([counted(&alive), counted(&alive)].into_iter()) };
-
-        drop(parts);
 
         assert_eq!(Arc::strong_count(&alive), 1);
     }

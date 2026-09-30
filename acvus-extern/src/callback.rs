@@ -6,8 +6,6 @@ use std::marker::PhantomData;
 
 use crate::boundary::entry::{Args, Entry, Settled};
 use crate::boundary::seal::LoanForms;
-use crate::boundary::signed::Structural;
-use crate::boundary::signed::tags::{ERR, NONE, OK, SOME};
 use crate::boundary::uniform::Uniform;
 use crate::context::{Awaited, Opens, Returning};
 use crate::done::Done;
@@ -32,10 +30,8 @@ impl<A, U, E, R: Runtime> Callback<'_, '_, A, U, E, R> {
 
 /// A type's form over the loan `'l` a returning call lends: the Rust type it is
 /// at `'l`. A crossing type is itself; `Lent<T>` is `&'l T` and `LentMut<T>` is
-/// `&'l mut T`; `Opt`, `Res` and `Tup` build forms from forms, so every result
-/// that borrows what the call lent is written, at any depth. Its methods make
-/// and read values at the form's type, so it is sealed: only this crate
-/// implements it.
+/// `&'l mut T`. Its methods make and read values at the form's type, so it
+/// is sealed: only this crate implements it.
 pub trait LoanForm: LoanForms {
     type At<'l>;
 
@@ -63,20 +59,6 @@ pub trait LoanForm: LoanForms {
 pub struct Lent<T: ?Sized>(PhantomData<fn() -> *const T>);
 /// `&'l mut T`: a part of what the returning call lent, exclusively.
 pub struct LentMut<T: ?Sized>(PhantomData<fn() -> *const T>);
-/// `Option` of a form.
-pub struct Opt<F>(PhantomData<fn() -> F>);
-/// `Result` of two forms.
-pub struct Res<F, G>(PhantomData<fn() -> (F, G)>);
-/// A tuple of forms, `Tup<(F, G)>`.
-pub struct Tup<Fs>(PhantomData<fn() -> Fs>);
-
-/// A variant handed over by a read, taken apart: its tag and its payload,
-/// each part held by a `Uniform` from here on.
-fn variant_parts<R: Runtime>(v: R::Value, rt: &R, at: Settled<'_>) -> (u32, Option<Uniform<R, ()>>) {
-    let (tag, mut payload) = rt.take_apart(v, at);
-    let tag = tag.expect("a variant taken apart gives its tag");
-    (tag, payload.next().map(Uniform::of_the_crossing))
-}
 
 impl<T: Crosses> LoanForm for T {
     type At<'l> = T;
@@ -84,11 +66,11 @@ impl<T: Crosses> LoanForm for T {
     const LENT: Option<Mutability> = None;
 
     fn lend<'l, R: Runtime>(value: T, rt: &'l R, at: Settled<'l>) -> R::Value {
-        Structural::give(value, rt, at)
+        rt.give(value, at)
     }
 
     fn give_moved<'a, R: Runtime>(value: T, rt: &'a R, at: Settled<'a>) -> R::Value {
-        Structural::give(value, rt, at)
+        rt.give(value, at)
     }
 
     fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> T {
@@ -135,70 +117,6 @@ impl<T: ?Sized + 'static> LoanForm for LentMut<T> {
         let target = rt.target_mut(v, at);
         drop(reference);
         target
-    }
-}
-
-impl<F: LoanForm> LoanForm for Opt<F> {
-    type At<'l> = Option<F::At<'l>>;
-
-    const LENT: Option<Mutability> = None;
-
-    fn lend<'l, R: Runtime>(value: Option<F::At<'l>>, rt: &'l R, at: Settled<'l>) -> R::Value {
-        match value {
-            None => rt.make_variant(NONE, None, at),
-            Some(value) => {
-                let payload = F::lend(value, rt, at);
-                rt.make_variant(SOME, Some(payload), at)
-            }
-        }
-    }
-
-    fn give_moved<'a, R: Runtime>(value: Option<F::At<'static>>, rt: &'a R, at: Settled<'a>) -> R::Value {
-        match value {
-            None => rt.make_variant(NONE, None, at),
-            Some(value) => {
-                let payload = F::give_moved(value, rt, at);
-                rt.make_variant(SOME, Some(payload), at)
-            }
-        }
-    }
-
-    fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Option<F::At<'l>> {
-        match variant_parts(v, rt, at) {
-            (NONE, None) => None,
-            (SOME, Some(payload)) => Some(F::read(payload.into_value(), rt, at)),
-            (tag, payload) => unreachable!("an Option has no variant {tag} with payload {}", payload.is_some()),
-        }
-    }
-}
-
-impl<F: LoanForm, G: LoanForm> LoanForm for Res<F, G> {
-    type At<'l> = Result<F::At<'l>, G::At<'l>>;
-
-    const LENT: Option<Mutability> = None;
-
-    fn lend<'l, R: Runtime>(value: Result<F::At<'l>, G::At<'l>>, rt: &'l R, at: Settled<'l>) -> R::Value {
-        let (tag, payload) = match value {
-            Ok(value) => (OK, F::lend(value, rt, at)),
-            Err(error) => (ERR, G::lend(error, rt, at)),
-        };
-        rt.make_variant(tag, Some(payload), at)
-    }
-
-    fn give_moved<'a, R: Runtime>(value: Result<F::At<'static>, G::At<'static>>, rt: &'a R, at: Settled<'a>) -> R::Value {
-        let (tag, payload) = match value {
-            Ok(value) => (OK, F::give_moved(value, rt, at)),
-            Err(error) => (ERR, G::give_moved(error, rt, at)),
-        };
-        rt.make_variant(tag, Some(payload), at)
-    }
-
-    fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Result<F::At<'l>, G::At<'l>> {
-        match variant_parts(v, rt, at) {
-            (OK, Some(payload)) => Ok(F::read(payload.into_value(), rt, at)),
-            (ERR, Some(payload)) => Err(G::read(payload.into_value(), rt, at)),
-            (tag, payload) => unreachable!("a Result has no variant {tag} with payload {}", payload.is_some()),
-        }
     }
 }
 
@@ -250,35 +168,6 @@ macro_rules! forms {
                 let ($($v,)*) = args;
                 let run: [R::Value; $n] = [$($f::give_moved($v, rt, at)),*];
                 run.into_iter()
-            }
-        }
-
-        impl<$($f: LoanForm),*> LoanForm for Tup<($($f,)*)> {
-            type At<'l> = ($($f::At<'l>,)*);
-
-            const LENT: Option<Mutability> = None;
-
-            #[allow(unused_variables)]
-            fn lend<'l, R: Runtime>(value: Self::At<'l>, rt: &'l R, at: Settled<'l>) -> R::Value {
-                let ($($v,)*) = value;
-                let parts: [R::Value; $n] = [$($f::lend($v, rt, at)),*];
-                rt.make_tuple(parts.into_iter(), at)
-            }
-
-            #[allow(unused_variables)]
-            fn give_moved<'a, R: Runtime>(value: Self::At<'static>, rt: &'a R, at: Settled<'a>) -> R::Value {
-                let ($($v,)*) = value;
-                let parts: [R::Value; $n] = [$($f::give_moved($v, rt, at)),*];
-                rt.make_tuple(parts.into_iter(), at)
-            }
-
-            #[allow(unused_variables, unused_mut, clippy::unused_unit)]
-            fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Self::At<'l> {
-                let parts: Vec<Uniform<R, ()>> =
-                    rt.take_apart(v, at).1.map(Uniform::of_the_crossing).collect();
-                assert_eq!(parts.len(), $n, "a tuple read at its form has the form's arity");
-                let mut parts = parts.into_iter();
-                ($($f::read(parts.next().expect("the arity was checked").into_value(), rt, at),)*)
             }
         }
     )+};

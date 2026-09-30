@@ -170,7 +170,7 @@ pub mod mode {
     /// Held by value where the handler writes `Uniform<R, T>`: read in place,
     /// released if dropped, taken only by `into_inner`.
     pub struct ByUniform<T>(PhantomData<fn() -> T>);
-    /// Lent `&T`, `T` not a transparent structured type.
+    /// Lent `&T`.
     pub struct ByRef<T>(PhantomData<fn() -> T>);
     /// Lent `&mut T`.
     pub struct ByMut<T>(PhantomData<fn() -> T>);
@@ -179,9 +179,6 @@ pub mod mode {
     pub struct BySliceMut<T>(PhantomData<fn() -> T>);
     /// A `String` lent as `&str`.
     pub struct ByStr;
-    /// A transparent structured value lent as its projection.
-    pub struct ByProjection<P>(PhantomData<fn() -> P>);
-    pub struct ByProjectionMut<P>(PhantomData<fn() -> P>);
     /// A script closure, its parameters and result loan forms.
     pub struct ByCallback<A, U, E>(PhantomData<fn() -> (A, U, E)>);
     /// A requirement owning its receiver, and one standing at a type.
@@ -198,7 +195,6 @@ use crate::guard::{Guard, GuardMut};
 use crate::impls::receiver::{Reads, Steps};
 use crate::impls::{Family, Instances};
 use crate::runtime::Crosses;
-use crate::shape::{LentParts, LentPartsMut, Projected};
 
 macro_rules! modes {
     ($([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
@@ -245,44 +241,8 @@ modes! {
         |_runtime, v, _at| Callback::of_the_entry(*v);
 }
 
-impl<P> sealed::Sealed for ByProjection<P> {}
-impl<P> sealed::Sealed for ByProjectionMut<P> {}
 impl<F, I> sealed::Sealed for ByInstance<F, I> {}
 impl<F, Ts, L> sealed::Sealed for ByInstanceOf<F, Ts, L> {}
-
-impl<R: Runtime, P: Projected<R>> Mode<R> for ByProjection<P> {
-    type Opened<'c> = P::Ref<'c>
-    where
-        Self: 'c,
-        R: 'c;
-
-    const LENT: Option<Mutability> = SHARED;
-
-    fn open<'c>(runtime: &'c R, v: &'c mut R::Value, at: Settled<'c>) -> P::Ref<'c>
-    where
-        Self: 'c,
-        R: 'c,
-    {
-        P::project(LentParts::of_the_entry(runtime, v, at))
-    }
-}
-
-impl<R: Runtime, P: Projected<R>> Mode<R> for ByProjectionMut<P> {
-    type Opened<'c> = P::Mut<'c>
-    where
-        Self: 'c,
-        R: 'c;
-
-    const LENT: Option<Mutability> = EXCLUSIVE;
-
-    fn open<'c>(runtime: &'c R, v: &'c mut R::Value, at: Settled<'c>) -> P::Mut<'c>
-    where
-        Self: 'c,
-        R: 'c,
-    {
-        P::project_mut(LentPartsMut::of_the_entry(runtime, v, P::AGGREGATE, at))
-    }
-}
 
 impl<R: Instances, F: Family<Receiver = Steps>, I> RequirementMode<R> for ByInstance<F, I> {
     type Opened<'c> = Instance<R, F, I>
