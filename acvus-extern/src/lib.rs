@@ -22,4 +22,4 @@ pub use boundary::instance::{Instance, InstanceOf};
 pub use boundary::loaned::{Loaned, LoanedMut};
 pub use boundary::signed::{SignedS1, SignedS2, SignedS3, Structural, StructuralFacts};
 pub use boundary::stored::LayoutWitness;
-pub use boundary::uniform::Uniform;
+pub use boundary::uniform::{Release, Releasing, Uniform};
