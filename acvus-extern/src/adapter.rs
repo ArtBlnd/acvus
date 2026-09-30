@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::pin::Pin;
 use std::ops::{Deref, DerefMut, Range};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -23,7 +24,9 @@ use crate::callback::{CallArgs, CallsBack, LoanForm};
 use crate::impls::task::TaskKind;
 use crate::boundary::instance::InstanceEntry;
 use crate::impls::{Family, Instances, Task};
-use crate::register::{ExternFn, Refused, Registers};
+use crate::boundary::entry::SiteShape;
+use crate::done::Done;
+use crate::register::{AwaitedFn, ExternFn, Refused, Registers};
 use crate::boundary::uniform::Primitive;
 use crate::runtime::{
     Crosses, Mutability, Opaque, OpaqueKind, OptionKind, PrimitiveKind, RefKind, RefTarget, ResultKind, Runtime,
@@ -48,7 +51,35 @@ pub struct Adapter<X: Runtime> {
     borrows: Mutex<Borrows>,
     /// The functions registered at the adapter, their dispatch monomorphised
     /// at it.
-    registered: HashMap<QualifiedRef, Box<dyn ExternFn<Adapter<X>>>>,
+    registered: HashMap<QualifiedRef, Registered<Adapter<X>>>,
+}
+
+/// A function registered at the adapter: returning, or awaited, whose call's
+/// future the adapter boxes, checking being its purpose rather than speed.
+enum Registered<R: Runtime> {
+    Returning(Box<dyn ExternFn<R>>),
+    Awaited(Box<dyn Boxed<R>>),
+}
+
+/// An awaited function whose call's future is boxed.
+trait Boxed<R: Runtime>: Send + Sync {
+    fn call<'c>(
+        &'c self,
+        runtime: &'c R,
+        args: &'c [R::Value],
+        site: &'c SiteShape<R>,
+    ) -> Pin<Box<dyn Future<Output = Done<R>> + Send + 'c>>;
+}
+
+impl<R: Runtime, F: AwaitedFn<R>> Boxed<R> for F {
+    fn call<'c>(
+        &'c self,
+        runtime: &'c R,
+        args: &'c [R::Value],
+        site: &'c SiteShape<R>,
+    ) -> Pin<Box<dyn Future<Output = Done<R>> + Send + 'c>> {
+        Box::pin(AwaitedFn::call(self, runtime, args, site))
+    }
 }
 
 impl<X: Runtime> Adapter<X> {
@@ -676,20 +707,50 @@ mod tests {
     }
 }
 
+impl<X: Runtime> Adapter<X> {
+    /// Registers `f` at `path`, refused where a function is registered there.
+    fn enter(&mut self, path: QualifiedRef, f: Registered<Adapter<X>>) -> Result<(), Refused> {
+        if self.registered.contains_key(&path) {
+            return Err(Refused::PathTaken(path));
+        }
+        self.registered.insert(path, f);
+        Ok(())
+    }
+}
+
 impl<X: Runtime> Registers for Adapter<X> {
     fn register<F>(&mut self, f: F) -> Result<(), Refused>
     where
         F: ExternFn<Self>,
     {
-        let path = f.path(self.inner.interner());
-        if self.registered.contains_key(&path) {
-            return Err(Refused::PathTaken(path));
-        }
-        self.registered.insert(path, Box::new(f));
-        Ok(())
+        let path = ExternFn::path(&f, self.inner.interner());
+        self.enter(path, Registered::Returning(Box::new(f)))
+    }
+
+    fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
+    where
+        F: AwaitedFn<Self>,
+    {
+        let path = AwaitedFn::path(&f, self.inner.interner());
+        self.enter(path, Registered::Awaited(Box::new(f)))
     }
 
     fn registered(&self, path: QualifiedRef) -> Option<&dyn ExternFn<Self>> {
-        self.registered.get(&path).map(|f| &**f)
+        match self.registered.get(&path)? {
+            Registered::Returning(f) => Some(&**f),
+            Registered::Awaited(_) => None,
+        }
+    }
+
+    fn call_awaited<'c>(
+        &'c self,
+        path: QualifiedRef,
+        args: &'c [Self::Value],
+        site: &'c SiteShape<Self>,
+    ) -> Option<impl Future<Output = Done<Self>> + Send + 'c> {
+        match self.registered.get(&path)? {
+            Registered::Awaited(f) => Some(f.call(self, args, site)),
+            Registered::Returning(_) => None,
+        }
     }
 }

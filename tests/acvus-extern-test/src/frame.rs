@@ -122,6 +122,21 @@ where
         self.keep(done)
     }
 
+    /// Calls the awaited function registered at `path` with the arguments
+    /// `passes` names, and keeps its result in a new variable.
+    pub async fn call_registered_awaited(&mut self, path: QualifiedRef, passes: &[Pass]) -> usize
+    where
+        R: Registers,
+    {
+        let args = self.arguments(passes);
+        let site = Self::site(passes);
+
+        let call = self.runtime.call_awaited(path, &args, &site).expect("a compiled call names a registered function");
+        let done = call.await;
+
+        self.keep(done)
+    }
+
     fn arguments(&mut self, passes: &[Pass]) -> Vec<Word> {
         let mut args = Vec::with_capacity(passes.len());
         for &pass in passes {

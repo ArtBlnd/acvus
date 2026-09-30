@@ -25,10 +25,31 @@ pub trait ExternFn<R: Runtime>: ExternFns + Send + Sync + 'static {
     fn call(&self, runtime: &R, args: &[R::Value], site: &SiteShape<R>) -> Done<R>;
 }
 
+/// An awaited function a runtime can register: its path, and its dispatch at
+/// the runtime `R`, whose call is a future the runtime awaits. The future's
+/// type is the function's own; the runtime registering it is generic over the
+/// function, so how it holds the function and its future is the runtime's
+/// own. Only `#[extern_fn]` implements it (the seal), for an `async fn`.
+pub trait AwaitedFn<R: Runtime>: ExternFns + Send + Sync + 'static {
+    /// The declaration's path, the name a compiled call names it by.
+    fn path(&self, names: &Interner) -> QualifiedRef;
+
+    /// Runs one call: the entry over `args` and `site`, each argument opened
+    /// by its mode before the future is made, the body awaited, and its
+    /// result.
+    fn call<'c>(
+        &'c self,
+        runtime: &'c R,
+        args: &'c [R::Value],
+        site: &'c SiteShape<R>,
+    ) -> impl Future<Output = Done<R>> + Send + 'c;
+}
+
 /// Why a registration is refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refused {
-    /// A function of this path is registered already.
+    /// A function of this path, returning or awaited, is registered
+    /// already.
     PathTaken(QualifiedRef),
 }
 
@@ -39,6 +60,20 @@ pub trait Registers: Runtime {
     where
         F: ExternFn<Self>;
 
-    /// The function registered at `path`.
+    fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
+    where
+        F: AwaitedFn<Self>;
+
+    /// The returning function registered at `path`.
     fn registered(&self, path: QualifiedRef) -> Option<&dyn ExternFn<Self>>;
+
+    /// Calls the awaited function registered at `path`, none being
+    /// registered there as awaited. How the runtime holds the function and
+    /// the future its call makes is its own.
+    fn call_awaited<'c>(
+        &'c self,
+        path: QualifiedRef,
+        args: &'c [Self::Value],
+        site: &'c SiteShape<Self>,
+    ) -> Option<impl Future<Output = Done<Self>> + Send + 'c>;
 }

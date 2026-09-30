@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use acvus_extern::callback::{CallArgs, CallsBack, LoanForm};
 use acvus_extern::{Settled, SiteShape};
 use acvus_extern::runtime::{Crosses, Mutability, Runtime};
-use acvus_extern::register::{ExternFn, Refused, Registers};
+use acvus_extern::done::Done;
+use acvus_extern::register::{AwaitedFn, ExternFn, Refused, Registers};
 use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::{self, Held, Kinds, Word};
@@ -20,7 +21,47 @@ use crate::boundary::{self, Held, Kinds, Word};
 pub struct WordRuntime {
     interner: Interner,
     /// The functions registered at this runtime, by path.
-    registered: HashMap<QualifiedRef, Box<dyn ExternFn<WordRuntime>>>,
+    registered: HashMap<QualifiedRef, Registered<WordRuntime>>,
+}
+
+/// A function registered at the runtime: returning, or awaited, whose call's
+/// future this runtime boxes: its tests await few calls, and a box is the
+/// plainest way to hold a future whose type is each function's own.
+enum Registered<R: Runtime> {
+    Returning(Box<dyn ExternFn<R>>),
+    Awaited(Box<dyn Boxed<R>>),
+}
+
+/// An awaited function whose call's future is boxed.
+trait Boxed<R: Runtime>: Send + Sync {
+    fn call<'c>(
+        &'c self,
+        runtime: &'c R,
+        args: &'c [R::Value],
+        site: &'c SiteShape<R>,
+    ) -> Pin<Box<dyn Future<Output = Done<R>> + Send + 'c>>;
+}
+
+impl<R: Runtime, F: AwaitedFn<R>> Boxed<R> for F {
+    fn call<'c>(
+        &'c self,
+        runtime: &'c R,
+        args: &'c [R::Value],
+        site: &'c SiteShape<R>,
+    ) -> Pin<Box<dyn Future<Output = Done<R>> + Send + 'c>> {
+        Box::pin(AwaitedFn::call(self, runtime, args, site))
+    }
+}
+
+impl WordRuntime {
+    /// Registers `f` at `path`, refused where a function is registered there.
+    fn enter(&mut self, path: QualifiedRef, f: Registered<WordRuntime>) -> Result<(), Refused> {
+        if self.registered.contains_key(&path) {
+            return Err(Refused::PathTaken(path));
+        }
+        self.registered.insert(path, f);
+        Ok(())
+    }
 }
 
 impl Registers for WordRuntime {
@@ -28,16 +69,35 @@ impl Registers for WordRuntime {
     where
         F: ExternFn<Self>,
     {
-        let path = f.path(&self.interner);
-        if self.registered.contains_key(&path) {
-            return Err(Refused::PathTaken(path));
-        }
-        self.registered.insert(path, Box::new(f));
-        Ok(())
+        let path = ExternFn::path(&f, &self.interner);
+        self.enter(path, Registered::Returning(Box::new(f)))
+    }
+
+    fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
+    where
+        F: AwaitedFn<Self>,
+    {
+        let path = AwaitedFn::path(&f, &self.interner);
+        self.enter(path, Registered::Awaited(Box::new(f)))
     }
 
     fn registered(&self, path: QualifiedRef) -> Option<&dyn ExternFn<Self>> {
-        self.registered.get(&path).map(|f| &**f)
+        match self.registered.get(&path)? {
+            Registered::Returning(f) => Some(&**f),
+            Registered::Awaited(_) => None,
+        }
+    }
+
+    fn call_awaited<'c>(
+        &'c self,
+        path: QualifiedRef,
+        args: &'c [Word],
+        site: &'c SiteShape<Self>,
+    ) -> Option<impl Future<Output = Done<Self>> + Send + 'c> {
+        match self.registered.get(&path)? {
+            Registered::Awaited(f) => Some(f.call(self, args, site)),
+            Registered::Returning(_) => None,
+        }
     }
 }
 

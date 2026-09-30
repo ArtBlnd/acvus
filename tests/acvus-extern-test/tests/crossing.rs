@@ -17,7 +17,7 @@ use acvus_extern::context::Returning;
 use acvus_extern::guard::{Guard, GuardMut};
 use acvus_extern::mode::{ByCallback, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use acvus_extern::done::Done;
-use acvus_extern::register::{ExternFn, Refused, Registers};
+use acvus_extern::register::{AwaitedFn, ExternFn, Refused, Registers};
 use acvus_extern::runtime::{Crosses, Mutability, Runtime};
 use acvus_extern::{Entry, SiteShape};
 use acvus_utils::{Interner, QualifiedRef};
@@ -113,6 +113,8 @@ macro_rules! on_both_owned {
 on_both_owned! {
     a_registered_function_is_called_through_its_dispatch: registered_called;
     a_path_registered_twice_is_refused: registered_twice;
+    an_awaited_function_is_registered_and_called_through_its_dispatch: registered_awaited_called;
+    a_path_registered_returning_and_awaited_is_refused: registered_both_ways;
 }
 
 /// `add(a: u64, b: u64) -> u64`, its dispatch written as `#[extern_fn]`
@@ -152,6 +154,71 @@ fn registered_twice<R: Registers<Value = Word>>(mut runtime: R) {
     let path = QualifiedRef::root(runtime.interner().intern("add"));
 
     assert_eq!(runtime.register(Add), Err(Refused::PathTaken(path)));
+}
+
+/// `async fn measure(text: String) -> i64`, its dispatch written as
+/// `#[extern_fn]` writes an awaited one: the entry over the argument run, the
+/// argument opened before the body's future is made, the body awaited.
+struct Measure;
+
+// SAFETY: this stands in for `#[extern_fn]`: `call` opens the argument by the
+// declaration's mode, `String` by value.
+#[allow(unsafe_code)]
+unsafe impl acvus_extern::seal::ExternFns for Measure {}
+
+impl<R: Runtime> AwaitedFn<R> for Measure {
+    fn path(&self, names: &Interner) -> QualifiedRef {
+        QualifiedRef::root(names.intern("measure"))
+    }
+
+    fn call<'c>(
+        &'c self,
+        runtime: &'c R,
+        args: &'c [R::Value],
+        site: &'c SiteShape<R>,
+    ) -> impl Future<Output = Done<R>> + Send + 'c {
+        Entry::new(runtime, args, site).open_awaited::<(ByValue<String>,), (), _>(|cx, (text,), ()| async move {
+            cx.sleep(Duration::from_millis(1)).await;
+            cx.finish(text.len() as i64)
+        })
+    }
+}
+
+fn registered_awaited_called<R: Registers<Value = Word>>(mut runtime: R) {
+    runtime.register_awaited(Measure).expect("the path is free");
+    let path = QualifiedRef::root(runtime.interner().intern("measure"));
+
+    let mut frame = Frame::new(&runtime);
+    let text = produce(&mut frame, String::from("awaited"));
+    let length = executor().block_on(frame.call_registered_awaited(path, &[Pass::Give(text)]));
+
+    assert_eq!(read::<_, i64>(&mut frame, length), 7);
+    assert!(runtime.registered(path).is_none(), "an awaited function is not called returning");
+}
+
+fn registered_both_ways<R: Registers<Value = Word>>(mut runtime: R) {
+    runtime.register(Add).expect("the path is free");
+    let path = QualifiedRef::root(runtime.interner().intern("add"));
+
+    struct AddAwaited;
+    // SAFETY: as `Measure`'s; this one only takes the path `add`.
+    #[allow(unsafe_code)]
+    unsafe impl acvus_extern::seal::ExternFns for AddAwaited {}
+    impl<R: Runtime> AwaitedFn<R> for AddAwaited {
+        fn path(&self, names: &Interner) -> QualifiedRef {
+            QualifiedRef::root(names.intern("add"))
+        }
+        fn call<'c>(
+            &'c self,
+            runtime: &'c R,
+            args: &'c [R::Value],
+            site: &'c SiteShape<R>,
+        ) -> impl Future<Output = Done<R>> + Send + 'c {
+            Entry::new(runtime, args, site).open_awaited::<(), (), _>(|cx, (), ()| async move { cx.finish(()) })
+        }
+    }
+
+    assert_eq!(runtime.register_awaited(AddAwaited), Err(Refused::PathTaken(path)));
 }
 
 /// A variable holding `value`, made as a program makes one: the result of a
