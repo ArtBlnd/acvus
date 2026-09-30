@@ -4,14 +4,15 @@
 //! In a loop the scalar evolution reads, the canonical induction variable is
 //! the `For`'s counter. The pass does two rewrites, each an edit of the loop
 //! composed with the body's value edits:
-//! 1. A header parameter whose evolution is an affine recurrence `{S, +, D}`
-//!    of the loop, read by anything besides its own step, becomes `S + k·D`
-//!    computed in the body from the counter's position `k`, and leaves the join
-//!    (`remove_join`).
+//! 1. A use in the body of a header parameter whose evolution is an affine
+//!    recurrence `{S, +, D}` of the loop, other than its own step, reads
+//!    `S + k·D` made by `expand` from the counter's position `k`. Where no use
+//!    is left but the step, the parameter leaves the join (`remove_join`); a
+//!    use the body does not dominate keeps it.
 //! 2. A value the loop gives its exit, or a value defined in the loop and used
-//!    after it, whose evolution at the exit is computable from the trip count
-//!    (`S + n·D`), is computed after the loop instead (`remove_exit`, or a
-//!    replacement of the uses outside the loop).
+//!    after it, whose evolution at the exit is computable from an exact trip
+//!    count (`S + n·D`), is made by `expand` after the loop instead
+//!    (`remove_exit`, or a replacement of the uses outside the loop).
 //!
 //! A value computed in either rewrite that the run as written did not compute
 //! steers the run only where it is proven within its type by the interval
