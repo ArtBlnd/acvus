@@ -24,6 +24,12 @@ An extern fn cannot make a runtime value from a Rust value. No such path exists 
 
 A handler keeps nothing it was lent past its call. What it wants to keep, it takes by value.
 
+No type parameter of an extern is bounded `'static`, and every value a call lends a handler, a callback included, carries the call's lifetime in its Rust type; a handler that retains one past the call is rejected by Rust's borrow checker. No runtime type identity (`TypeId`, `Any`) is read at the boundary.
+
+*Rejected.* `'static` type parameters with a run-time type check: it permits the retention, and re-checks at run time what the checker settled.
+
+An extern-defined result may retain arguments taken by value past the call. A retained argument may hold loans on places of the calling program, a callback through its captures included. The declaration's flows map each such loan from the argument's lifetime position to a lifetime position of the result; the result holds the mapped loans while it is live, and the checker applies them to the borrowed places for that duration. Taking an argument by value permits retaining it; it does not end the loans it holds.
+
 ## 4. Trust
 
 Every declared fact is trusted and unchecked in a release build. A false one is the author's undefined behaviour (compiler: extern fn).

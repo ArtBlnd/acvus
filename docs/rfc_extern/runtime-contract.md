@@ -10,6 +10,14 @@ A value's representation is not part of the contract. The contract holds even wh
 
 The runtime's value crosses to the extern side as the extern side's own owning holder. A runtime keeps an extern-defined value so that it can lend one: what `&S` points at is the runtime's, and the contract says only that it is a shared reference to an `S`.
 
+A runtime value is `Copy` and has no drop glue. The extern side owns a runtime value only through one owning type, whose `Drop` releases it; a copy of a runtime value owns nothing and releases nothing.
+
+*Rejected.* An explicit release at each holder: a holder that omits it leaks, and two holders of copies release twice.
+
+An extern-defined generic type is stored as one Rust value. Where a type argument is unmarked, its part holds the runtime's uniform value, indexed in handler Rust types by a phantom type parameter so that distinct type parameters remain distinct Rust types. One stored value is therefore read at Rust instantiations that differ only in these indices, which is sound only where those instantiations are layout- and drop-equivalent. Each index is parametric: no projection through it determines the layout of a type that holds it. Drop equivalence follows from E0367. Equal field order at equal size and alignment is argued, since Rust guarantees no layout shared by two instantiations of one `repr(Rust)` type.
+
+*Rejected.* The uniform value unindexed in handler Rust types: two type parameters become one Rust type, and a value of one is accepted by an impl chosen at the other.
+
 ## 2. Operations
 
 - **Typed reads.** Reading a value back at a type is the runtime's operation, and so are its reads at a stored form and its guards. Erasing a Rust value into a runtime value happens only inside the crossing, at the site's settled type (§1).
@@ -45,3 +53,13 @@ Nothing else is signed. Every other fact is a type, a bound, the Rust validity o
 ## 5. What the contract does not state
 
 No word encoding, frame layout or register. No default or vacant value, and no destination filled ahead of its writer. No array type. No spawning of any kind: a handler that wants threads brings its own pool and joins it before it returns.
+
+*Why.* A spawned task that borrows from a run outlives the run when the run is dropped while awaiting, and a scope the handler owns does not bound its tasks, since the handler can `mem::forget` it.
+
+## 6. Cost
+
+- A call reaches its handler by static dispatch. A synchronous call performs no dynamic dispatch and no allocation beyond what its declared types require.
+- Where a call through the boundary is in tail position in its caller, the boundary executes nothing after it, and no address of the caller's frame is live across it.
+- The action at a loan's end is a constant of the lent type. A loan whose end has no action compiles to no code and is not tested at run time.
+
+*Why.* A run-time test at each loan's end, or boundary code after a tail call, costs every call its inlining and its tail call, including calls whose loans need no action.

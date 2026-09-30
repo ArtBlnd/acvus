@@ -39,7 +39,7 @@ The forms of each kind are exactly those listed here, and a declaration states n
 
 ## 4. Flows
 
-A declaration states what a call reaches through its reference arguments (by default, everything they lend), what its result borrows from them, and how a call ends: unstated, returns or traps, or total.
+A declaration states what a call reaches through its reference arguments (by default, everything they lend), what its result borrows from its reference arguments and from the loans its by-value arguments hold, and how a call ends: unstated, returns or traps, or total.
 
 A function value a call gives, as its result or a part of it, has the flows its declared function type states; a declaration states none for such a type, so it has every flow (types §5).
 

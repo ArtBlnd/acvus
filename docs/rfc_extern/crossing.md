@@ -26,3 +26,9 @@ A callback's result borrows only what was lent in place, and no longer than that
 ## 5. Completion
 
 An awaited entry completes only after every callback run it started has no work aloft, including runs whose call future was dropped.
+
+## 6. The host
+
+A host passes a run its inputs and reads its result and its contexts through the crossing a handler call uses, at the types the checker settled; it has no access path of its own. The host's API exposes no runtime value.
+
+*Why.* The handler crossing is sound; a second crossing needs a second proof.
