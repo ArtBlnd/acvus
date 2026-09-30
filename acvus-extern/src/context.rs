@@ -5,7 +5,6 @@
 use std::ops::{Deref, DerefMut};
 
 use crate::boundary::entry::{Settled, SiteShape};
-use crate::boundary::signed::Structural;
 use crate::boundary::uniform::Uniform;
 use crate::callback::{LoanForm, RustFn, RustFns};
 use crate::done::Done;
@@ -56,7 +55,7 @@ impl<'c, R: Runtime> Returning<'c, R> {
     /// Finishes the call with its result, crossed at the site's settled result
     /// type.
     pub fn finish<T: Crosses>(self, value: T) -> Done<R> {
-        Done::of(Structural::give(value, self.runtime, Settled::of_the_entry()))
+        Done::of(Crosses::give(value, self.runtime, Settled::of_the_entry()))
     }
 
     /// Finishes the call with a result that borrows a part of what the call
@@ -99,8 +98,9 @@ impl<'c, R: RustFns> Returning<'c, R> {
 
 impl<'c, R: Runtime> Returning<'c, R> {
     /// Finishes the call with a result at its loan form: a crossing result
-    /// given, a borrowed one made a reference value.
-    pub(crate) fn finish_form<U: LoanForm>(self, result: U::At<'c>) -> Done<R> {
+    /// given, a borrowed one made a reference value while what it borrows is
+    /// still lent for `'s`.
+    pub(crate) fn finish_form<'s, U: LoanForm>(&'s self, result: U::At<'s>) -> Done<R> {
         Done::of(U::lend(result, self.runtime, Settled::of_the_entry()))
     }
 }
@@ -168,7 +168,7 @@ impl<'c, R: Runtime> ResultParts<'c, R> {
 
     /// A part given by value, at its settled type.
     pub fn value<T: Crosses>(&mut self, value: T) {
-        let value = Structural::give(value, self.runtime, Settled::of_the_entry());
+        let value = Crosses::give(value, self.runtime, Settled::of_the_entry());
         self.push(value);
     }
 
@@ -200,7 +200,7 @@ impl<'c, R: Runtime> Awaited<'c, R> {
     }
 
     pub fn finish<T: Crosses>(self, value: T) -> Done<R> {
-        Done::of(Structural::give(value, self.runtime, Settled::of_the_entry()))
+        Done::of(Crosses::give(value, self.runtime, Settled::of_the_entry()))
     }
 
     pub fn sleep(&self, d: std::time::Duration) -> impl Future<Output = ()> + Send {

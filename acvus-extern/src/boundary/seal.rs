@@ -64,8 +64,90 @@ pub unsafe trait ShapeViews {}
 /// ```
 pub unsafe trait LoanForms {}
 
+/// # Safety
+/// Only this crate implements it, for the built-in types, and the derive, for
+/// an extern-defined type it signs, with `Crosses` beside it: an opaque type
+/// is given, taken and lent at itself, and a transparent structured type is
+/// composed, taken apart and projected at each part's own type.
+///
+/// A `Crosses` written by hand, without the seal, does not compile:
+///
+/// ```compile_fail,E0277
+/// use acvus_extern::Settled;
+/// use acvus_extern::runtime::{Crosses, Runtime};
+/// use acvus_extern::{LayoutFact, Structural, StructuralFacts};
+///
+/// struct HandWritten;
+///
+/// unsafe impl Structural for HandWritten {
+///     type Canon = HandWritten;
+///     const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
+/// }
+///
+/// impl Crosses for HandWritten {
+///     type Lent<'c, R: Runtime> = () where Self: 'c;
+///     type LentMut<'c, R: Runtime> = () where Self: 'c;
+///
+///     fn give<R: Runtime>(self, _: &R, _: Settled<'_>) -> R::Value {
+///         unimplemented!()
+///     }
+///     fn take<R: Runtime>(_: R::Value, _: &R, _: Settled<'_>) -> Self {
+///         unimplemented!()
+///     }
+///     fn lent<'c, R: Runtime>(_: &'c R, _: &'c R::Value, _: Settled<'c>) {}
+///     fn lent_mut<'c, R: Runtime>(_: &'c R, _: &'c mut R::Value, _: Settled<'c>) {}
+/// }
+/// ```
+pub unsafe trait Crossing {}
+
+use crate::boundary::uniform::Uniform;
 use crate::callback::{Lent, LentMut, Opt, Res, Tup};
-use crate::runtime::Crosses;
+use crate::runtime::{Crosses, Runtime};
+
+/// The built-in types this crate gives `Crosses`.
+macro_rules! built_in_crossings {
+    ($($t:ty),+ $(,)?) => {$(
+        // SAFETY: `crosses` implements `Crosses` for it, opaque.
+        unsafe impl Crossing for $t {}
+    )+};
+}
+
+built_in_crossings!(i8, i16, i32, i64, u8, u16, u32, u64, f64, bool, char, String, ());
+
+// SAFETY: `crosses` implements `Crosses` for it, opaque.
+unsafe impl<T> Crossing for Vec<T> {}
+// SAFETY: `crosses` implements `Crosses` for it, opaque: the value it holds
+// is given as the Rust value it is.
+unsafe impl<R: Runtime, X> Crossing for Uniform<R, X> {}
+// SAFETY: `crosses` implements `Crosses` for it, transparent: composed and
+// projected at its payload's own type.
+unsafe impl<T> Crossing for Option<T> {}
+// SAFETY: as for `Option`, at each payload's own type.
+unsafe impl<T, E> Crossing for Result<T, E> {}
+
+/// Tuples of parts up to twelve.
+macro_rules! tuple_crossings {
+    ($(($($p:ident),+))+) => {$(
+        // SAFETY: `crosses` implements `Crosses` for it, transparent:
+        // composed and projected at each part's own type, in order.
+        unsafe impl<$($p),+> Crossing for ($($p,)+) {}
+    )+};
+}
+
+tuple_crossings! {
+    (A)
+    (A, B)
+    (A, B, C)
+    (A, B, C, D)
+    (A, B, C, D, E)
+    (A, B, C, D, E, F)
+    (A, B, C, D, E, F, G)
+    (A, B, C, D, E, F, G, H)
+    (A, B, C, D, E, F, G, H, I)
+    (A, B, C, D, E, F, G, H, I, J)
+    (A, B, C, D, E, F, G, H, I, J, K)
+    (A, B, C, D, E, F, G, H, I, J, K, L)
+}
 
 // SAFETY: a crossing type is its own form: it is given and taken at itself.
 unsafe impl<T> LoanForms for T where T: Crosses {}
@@ -108,9 +190,9 @@ tuple_forms! {
 }
 
 /// The crossing of an opaque type: given and taken whole at itself, and lent
-/// as a guard. The `Structural` crossing items of the crate's opaque types,
-/// and those the derive emits, are made of these; each needs the entry's
-/// `Settled`, so none is reached outside a call.
+/// as a guard. The `Crosses` items of the crate's opaque types, and those the
+/// derive emits, are made of these; each needs the entry's `Settled`, so none
+/// is reached outside a call.
 pub mod opaque {
     use crate::boundary::entry::Settled;
     use crate::guard::{Guard, GuardMut};

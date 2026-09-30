@@ -300,6 +300,10 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
     type SharedSlice<'a, T: Crosses + 'a> = Tracked<'a, X::SharedSlice<'a, T>>;
     type ExclusiveSlice<'a, T: Crosses + 'a> = Tracked<'a, X::ExclusiveSlice<'a, T>>;
     type SharedStr<'a> = Tracked<'a, X::SharedStr<'a>>;
+    type PartsMut<'a>
+        = X::PartsMut<'a>
+    where
+        Self: 'a;
 
     fn take<T: Crosses>(&self, v: Self::Value, at: Settled<'_>) -> T {
         self.inner.validate::<T>(&v, at).pass_or_panic();
@@ -363,11 +367,7 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
         self.inner.lent_part(v, i, at)
     }
 
-    fn lent_parts_mut<'a>(
-        &'a self,
-        v: &'a mut Self::Value,
-        at: Settled<'a>,
-    ) -> impl ExactSizeIterator<Item = &'a mut Self::Value> {
+    fn lent_parts_mut<'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::PartsMut<'a> {
         self.inner.lent_parts_mut(v, at)
     }
 

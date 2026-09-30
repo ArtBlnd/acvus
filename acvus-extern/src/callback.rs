@@ -6,8 +6,7 @@ use std::marker::PhantomData;
 
 use crate::boundary::entry::{Args, Entry, Settled};
 use crate::boundary::seal::LoanForms;
-use crate::boundary::signed::Structural;
-use crate::boundary::signed::tags::{ERR, NONE, OK, SOME};
+use crate::crosses::tags::{ERR, NONE, OK, SOME};
 use crate::boundary::uniform::Uniform;
 use crate::context::{Awaited, Opens, Returning};
 use crate::done::Done;
@@ -83,11 +82,11 @@ impl<T: Crosses> LoanForm for T {
     const LENT: Option<Mutability> = None;
 
     fn lend<'l, R: Runtime>(value: T, rt: &'l R, at: Settled<'l>) -> R::Value {
-        Structural::give(value, rt, at)
+        Crosses::give(value, rt, at)
     }
 
     fn give_moved<'a, R: Runtime>(value: T, rt: &'a R, at: Settled<'a>) -> R::Value {
-        Structural::give(value, rt, at)
+        Crosses::give(value, rt, at)
     }
 
     fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> T {
@@ -359,9 +358,12 @@ pub trait CallsBack: Runtime {
 /// finishes the result at `U`, a crossing result given and a borrowed one
 /// made a reference value, so the glue agrees with the function type.
 ///
-/// The body is a handler body, higher-ranked over the call `'c`. Where an
-/// argument's opened form carries `'c`, a closure's signature is not inferred
-/// higher-ranked, so the body is a `fn` item, as the attribute emits it.
+/// The body is a handler body, higher-ranked over the call `'c`. It borrows
+/// its opened arguments for `'s`, and its result may borrow them for as long:
+/// the glue makes the result's value while the arguments still lend, then
+/// drops them, as `Returning::finish_lent` does. Where an argument's opened
+/// form carries `'c`, a closure's signature is not inferred higher-ranked, so
+/// the body is a `fn` item, as the attribute emits it.
 pub struct RustFn<R: Runtime, A, U> {
     callee: RustCallee<R>,
     _type: PhantomData<fn(A) -> U>,
@@ -373,11 +375,15 @@ where
     A: Args<R> + 'static,
     U: LoanForm,
 {
-    pub fn new(body: impl for<'c> Fn(&Returning<'c, R>, A::Opened<'c>) -> U::At<'c> + Send + Sync + 'static) -> Self {
+    pub fn new(
+        body: impl for<'c, 's> Fn(&Returning<'c, R>, &'s mut A::Opened<'c>) -> U::At<'s> + Send + Sync + 'static,
+    ) -> Self {
         let glue = move |entry: Entry<'_, R>| {
-            entry.open::<A, ()>(|cx, args, ()| {
-                let result = body(&cx, args);
-                cx.finish_form::<U>(result)
+            entry.open::<A, ()>(|cx, mut args, ()| {
+                let result = body(&cx, &mut args);
+                let done = cx.finish_form::<U>(result);
+                drop(args);
+                done
             })
         };
         RustFn { callee: RustCallee { glue: Box::new(glue) }, _type: PhantomData }

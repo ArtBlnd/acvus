@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 
 use crate::boundary::entry::Settled;
-use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts, opaque_crossing};
+use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
 use crate::context::Opens;
 use crate::runtime::{Crosses, ObjectBody, Runtime, TupleBody, VariantBody};
 use crate::shape::{Aggregate, OwnedParts, Projected};
@@ -62,7 +62,7 @@ impl<R: Runtime, T: Crosses> Uniform<R, T> {
     }
 }
 
-impl<R: Runtime, T: Structural> Uniform<R, T> {
+impl<R: Runtime, T: Crosses> Uniform<R, T> {
     /// The value moved out at its type: the one place a value is taken, the
     /// runtime's `take` for an opaque type and the owned view for a
     /// transparent one. The take consumes the value's storage, so the
@@ -106,8 +106,7 @@ impl<R: Runtime, X> Drop for Uniform<R, X> {
 // `X` (E0367). `X` is held only as that phantom, no projection through it
 // exists, and nothing over it is interior-mutable. `FACTS` states the index as
 // the one type parameter the checker's flows read; the runtime `R` is not
-// declared to the checker. A `Uniform` held inside a Rust value crosses
-// opaque, at itself.
+// declared to the checker.
 unsafe impl<R, X> Structural for Uniform<R, X>
 where
     R: Runtime,
@@ -118,8 +117,6 @@ where
         layout: LayoutFact::CanonicalOf,
         generics: &[GenericParam::Type],
     };
-
-    opaque_crossing!();
 }
 
 #[cfg(test)]
@@ -212,6 +209,7 @@ mod tests {
         type SharedSlice<'a, T: Crosses + 'a> = NoGuard<[T]>;
         type ExclusiveSlice<'a, T: Crosses + 'a> = NoGuard<[T]>;
         type SharedStr<'a> = NoGuard<str>;
+        type PartsMut<'a> = std::iter::Empty<&'a mut Counted>;
 
         fn take<T: Crosses>(&self, _: Counted, _: Settled<'_>) -> T {
             unreachable!("the release tests read no value")
@@ -259,14 +257,8 @@ mod tests {
         fn lent_part<'a>(&'a self, _: &'a Counted, _: u32, _: Settled<'a>) -> &'a Counted {
             unreachable!("the release tests lend no storage")
         }
-        fn lent_parts_mut<'a>(
-            &'a self,
-            _: &'a mut Counted,
-            _: Settled<'a>,
-        ) -> impl ExactSizeIterator<Item = &'a mut Counted> {
-            unreachable!("the release tests lend no storage");
-            #[allow(unreachable_code)]
-            std::iter::empty()
+        fn lent_parts_mut<'a>(&'a self, _: &'a mut Counted, _: Settled<'a>) -> std::iter::Empty<&'a mut Counted> {
+            unreachable!("the release tests lend no storage")
         }
         fn lent_tag(&self, _: &Counted, _: Settled<'_>) -> u32 {
             unreachable!("the release tests lend no storage")

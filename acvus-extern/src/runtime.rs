@@ -12,17 +12,53 @@ use acvus_utils::Interner;
 
 use crate::boundary::entry::Settled;
 use crate::boundary::signed::{SignedS1, SignedS2, SignedS3, Structural};
+use crate::boundary::seal::Crossing;
 use crate::boundary::uniform::Release;
 
-/// A type a checker-settled site may be read at. It may carry lifetimes; a
-/// value that holds a loan holds it as a `Loaned`, never as a Rust reference.
-/// It is `Send + Sync`, as the runtime value it becomes is. Every `Structural`
-/// type that is `Send + Sync` crosses, by the one implementation below, so no
-/// author implements it (safety §1): an author signs only `Structural`,
-/// through the derive.
-pub trait Crosses: Sized + Send + Sync + Structural {}
+/// A type a checker-settled site may be read at, and how a value of it
+/// crosses. It may carry lifetimes; a value that holds a loan holds it as a
+/// `Loaned`, never as a Rust reference. It is `Send + Sync`, as the runtime
+/// value it becomes is.
+///
+/// A type crosses in one of two forms. An opaque type, which is every
+/// extern-defined type and every scalar, `String`, `Vec` and `Uniform`, is
+/// given and taken whole and lent as a guard. A transparent structured type,
+/// a tuple, an `Option` or a `Result`, is the language's value (crossing §2,
+/// compiler: types §1-§2): it is composed from its parts' values, taken apart
+/// through its owned view, and lent as its projection. Its items choose the
+/// type of every typed read, so it is sealed (safety §1): this crate
+/// implements it for the built-in types, and the derive for an
+/// extern-defined type, as opaque.
+pub trait Crosses: Sized + Send + Sync + Structural + Crossing {
+    /// A part of this type in a shared projection: a guard, or the part's
+    /// own projection.
+    #[doc(hidden)]
+    type Lent<'c, R: Runtime>
+    where
+        Self: 'c;
+    /// A part of this type in a mutable projection.
+    #[doc(hidden)]
+    type LentMut<'c, R: Runtime>
+    where
+        Self: 'c;
 
-impl<T> Crosses for T where T: Structural + Send + Sync {}
+    /// The runtime value of `self`, at its settled type.
+    #[doc(hidden)]
+    fn give<R: Runtime>(self, rt: &R, at: Settled<'_>) -> R::Value;
+    /// The value `v` handed over, at its settled type.
+    #[doc(hidden)]
+    fn take<R: Runtime>(v: R::Value, rt: &R, at: Settled<'_>) -> Self;
+    /// The part at `place`, lent shared.
+    #[doc(hidden)]
+    fn lent<'c, R: Runtime>(rt: &'c R, place: &'c R::Value, at: Settled<'c>) -> Self::Lent<'c, R>
+    where
+        Self: 'c;
+    /// The part at `place`, lent exclusively.
+    #[doc(hidden)]
+    fn lent_mut<'c, R: Runtime>(rt: &'c R, place: &'c mut R::Value, at: Settled<'c>) -> Self::LentMut<'c, R>
+    where
+        Self: 'c;
+}
 
 /// A lend is shared or exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +112,10 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     type ExclusiveSlice<'a, T: Crosses + 'a>: DerefMut<Target = [T]> + Send;
     /// A `String`'s bytes lent as text.
     type SharedStr<'a>: Deref<Target = str> + Send;
+    /// The places of an aggregate's parts, lent together.
+    type PartsMut<'a>: ExactSizeIterator<Item = &'a mut Self::Value>
+    where
+        Self: 'a;
 
     /// Moves a value of an opaque type out at its settled type, releasing
     /// its storage. It is reached only through `Uniform`'s take, where a
@@ -121,11 +161,7 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     /// The places of every part of an aggregate the call lent exclusively,
     /// in the type's order, lent together: a mutable projection lends all its
     /// parts at once, and one exclusive place yields one live exclusive part.
-    fn lent_parts_mut<'a>(
-        &'a self,
-        v: &'a mut Self::Value,
-        at: Settled<'a>,
-    ) -> impl ExactSizeIterator<Item = &'a mut Self::Value>;
+    fn lent_parts_mut<'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::PartsMut<'a>;
     /// The tag of a variant the call lent, read from its place.
     fn lent_tag(&self, v: &Self::Value, at: Settled<'_>) -> u32;
 

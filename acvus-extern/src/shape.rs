@@ -5,7 +5,7 @@
 
 use crate::boundary::entry::Settled;
 use crate::boundary::seal::ShapeViews;
-use crate::boundary::signed::{Structural, tags};
+use crate::crosses::tags;
 use crate::boundary::uniform::Uniform;
 use crate::guard::{Guard, GuardMut};
 use crate::runtime::{Crosses, Runtime};
@@ -60,7 +60,7 @@ pub struct LentParts<'c, R: Runtime> {
 pub struct LentPartsMut<'c, R: Runtime> {
     runtime: &'c R,
     tag: Option<u32>,
-    parts: std::vec::IntoIter<&'c mut R::Value>,
+    parts: R::PartsMut<'c>,
     at: Settled<'c>,
 }
 
@@ -86,7 +86,7 @@ impl<'c, R: Runtime> LentParts<'c, R> {
     }
 
     /// The `i`-th part, lent as its type crosses: a guard, or its projection.
-    pub(crate) fn part<T: Structural + 'c>(&self, i: u32) -> T::Lent<'c, R> {
+    pub(crate) fn part<T: Crosses + 'c>(&self, i: u32) -> T::Lent<'c, R> {
         T::lent(self.runtime, self.place(i), self.at)
     }
 
@@ -100,7 +100,7 @@ impl<'c, R: Runtime> LentPartsMut<'c, R> {
     /// is a variant, read before its parts are lent.
     pub(crate) fn of_the_entry(runtime: &'c R, aggregate: &'c mut R::Value, kind: Aggregate, at: Settled<'c>) -> Self {
         let tag = (kind == Aggregate::Variant).then(|| runtime.lent_tag(aggregate, at));
-        let parts = runtime.lent_parts_mut(aggregate, at).collect::<Vec<_>>().into_iter();
+        let parts = runtime.lent_parts_mut(aggregate, at);
         LentPartsMut { runtime, tag, parts, at }
     }
 
@@ -122,7 +122,7 @@ impl<'c, R: Runtime> LentPartsMut<'c, R> {
     }
 
     /// The next part, lent as its type crosses.
-    pub(crate) fn part<T: Structural + 'c>(&mut self) -> T::LentMut<'c, R> {
+    pub(crate) fn part<T: Crosses + 'c>(&mut self) -> T::LentMut<'c, R> {
         let place = self.next_place();
         T::lent_mut(self.runtime, place, self.at)
     }
@@ -158,7 +158,7 @@ impl<R: Runtime> OwnedParts<R> {
     }
 }
 
-impl<R: Runtime, T: Structural> Projected<R> for Option<T> {
+impl<R: Runtime, T: Crosses> Projected<R> for Option<T> {
     type Ref<'a>
         = Option<T::Lent<'a, R>>
     where
@@ -202,7 +202,7 @@ impl<R: Runtime, T: Structural> Projected<R> for Option<T> {
     }
 }
 
-impl<R: Runtime, T: Structural, E: Structural> Projected<R> for Result<T, E> {
+impl<R: Runtime, T: Crosses, E: Crosses> Projected<R> for Result<T, E> {
     type Ref<'a>
         = Result<T::Lent<'a, R>, E::Lent<'a, R>>
     where
@@ -249,7 +249,7 @@ impl<R: Runtime, T: Structural, E: Structural> Projected<R> for Result<T, E> {
 /// Tuples of parts up to twelve, each part at its place in the tuple.
 macro_rules! tuple_projections {
     ($(($($p:ident $i:literal),+))+) => {$(
-        impl<R: Runtime, $($p: Structural),+> Projected<R> for ($($p,)+) {
+        impl<R: Runtime, $($p: Crosses),+> Projected<R> for ($($p,)+) {
             type Ref<'a>
                 = ($($p::Lent<'a, R>,)+)
             where
