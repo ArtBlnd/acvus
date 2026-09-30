@@ -6,9 +6,11 @@ How values and references cross between a run and an extern fn.
 
 Each call has one entry. The entry opens the call's guards and hands them to the call's body inside a closure, so no guard escapes it and none can be forgotten. Everything after the entry is safe.
 
-## 2. Slices, not arrays
+## 2. Projections
 
-An extern fn receives a program's array only as a slice, shared or mutable, and returns a sequence as a `Vec`. The view of an array as a slice is a contract operation. The registry refuses a declaration carrying an array type, whoever built it.
+A reference to a value of a transparent structured type (compiler: types §1) crosses as its projection: a value of the same structure in which each part that is not itself one of those types is a reference to that part's storage, shared or mutable as the reference is. An extern-defined part is lent as itself. The slice is the array's projection, so an extern fn receives a program's array only as a slice, and returns a sequence as a `Vec`. A projection is a contract operation. Through a mutable projection only its parts are written; an enum's variant, an `Option`'s presence and an object whole change by value.
+
+*Why.* The layout of such a value is the backend's, so no Rust reference to it exists. The registry refuses a declaration carrying an array type, whoever built it.
 
 ## 3. The crossing rule
 

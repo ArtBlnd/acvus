@@ -6,7 +6,7 @@ A type an extern fn defines is extern-defined: an opaque registered type. An obj
 
 A declaration writes an object by its fields and an enum by its name and variants, the language's own shapes (compiler: types §2), closed as written: a value crosses only as the declared shape, and nothing is widened. `Option` and `Result` are the language's primitive types (compiler: types §2).
 
-The extern sees such a value through the runtime's aggregates (runtime-contract §2), reading and building it by field and variant name. No Rust struct or enum stands for it, so a shape a program writes and a shape an extern gives are one kind of value.
+The language type is the shape, structural and closed as written. The extern holds such a value as the Rust views its shape gives: by value, a struct or an enum of owned fields, each crossing by its own type; by reference, its projection (crossing §2). No view is the value's layout, which is the backend's, and no view is a nominal type to the checker, so a shape a program writes and a shape an extern gives are one kind of value.
 
 ## 2. Opaque types
 

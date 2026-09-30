@@ -1,6 +1,6 @@
 # macros
 
-An extern author writes Rust and two macros turn it into declarations and glue: an attribute on a function, and a derive on a type. Nothing else reaches the crossing: the crossing traits are sealed, and only the boundary and the derive implement them. No `macro_rules!` emits a crossing implementation into a user crate.
+An extern author writes Rust and macros turn it into declarations and glue: an attribute on a function, an attribute on a generic function's signature, a derive on a type, and a shape. Nothing else reaches the crossing: the crossing traits are sealed, and only the boundary and the derive implement them. No `macro_rules!` emits a crossing implementation into a user crate.
 
 ## 1. The function attribute
 
@@ -9,7 +9,9 @@ The attribute reads the function's Rust signature and its arguments and emits th
 - A parameter is taken by value, by `&T` or by `&mut T`. A sequence is taken as a slice, `&[T]` or `&mut [T]`, never as an array.
 - A result is a value; a sequence is returned as a `Vec<T>`. A result that borrows borrows only what was lent in place (crossing §4).
 - A closure parameter is a callback, callable any number of times. A callback is called synchronously or awaited (crossing §3).
-- An `async fn` is an extern that suspends. An extern declared heavy runs off the script's thread where the interpreter places it (interpreter: tasks).
+- A declaration has one handler with a returning body, an awaited body, or both. An `async fn` is the awaited body and names its returning body where it has one; the two have one signature. Which body a call runs is the backend's choice (interpreter: tasks), so a handler that runs a callback or calls a required impl has the awaited body: whether the callback or the impl suspends is not the declaration's.
+- The effect states whether a call may be split, and at what cost; the cost is the backend's (compiler: effects §6).
+- A declaration's path is its function's Rust module path, under its type for a function in an `impl` block of an extern-defined type the crate defines. A name the attribute states replaces the function's own only to overload within one module. An impl of a generic function is reached only through its generic function and states no name.
 - Declared facts are written in the attribute (declared facts). A declared fact about a place (compiler: extern fn §3, access and action) is written on the parameter whose storage it speaks of; a relation and a source are written on the function.
 - A closure parameter's function type may hold any loan, so a callback may be any function value the program makes.
 
@@ -17,7 +19,7 @@ The glue it emits contains no `unsafe`.
 
 ## 2. The derive
 
-The derive makes a Rust type an opaque registered type (types §2). It reads the definition and emits exactly the structural facts about it that no stable Rust bound can state (safety §2), and nothing else. It emits no projection types: an opaque type crosses as itself. Neither macro specializes a type argument: a specialization is a whole type a registry names (registry). An object or an enum an extern takes or gives needs no derive: its shape is written in the declaration, and the extern reads and builds it through the runtime's aggregates (types §1).
+The derive makes a Rust type an opaque registered type (types §2). It reads the definition and emits exactly the structural facts about it that no stable Rust bound can state (safety §2), and nothing else. It emits no projection types: an opaque type crosses as itself. Neither macro specializes a type argument: a specialization is a whole type a registry names (registry). An object or an enum an extern takes or gives needs no derive: a shape declares it, giving its structural type and the Rust views it crosses as (types §1).
 
 ## 3. What the macros emit, and what they do not
 
