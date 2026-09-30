@@ -14,7 +14,7 @@ use super::{
 use super::declared::{self, Atom, Subject};
 use super::segments::{Segment, segments};
 use crate::ty::{
-    Declared, EffectTerm, FlowEnd, Holds, LenTerm, LifetimesOf, Mark, MarkTerm, Mutability, ObjectTy,
+    Declared, EffectTerm, FlowEnd, Holds, LenTerm, LifetimesOf, Mark, MarkTerm, Mutability,
     Poly, TyId, TyKind, Types,
 };
 
@@ -891,7 +891,7 @@ fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
         TyKind::Tuple(items, _) => Base::Tuple(items.len()),
         TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
-        TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
+        TyKind::Object { .. } => Base::Object,
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::UserDefined { id, .. } => Base::Named(*id),
@@ -1350,8 +1350,8 @@ fn push_written(types: &Types<Poly>, lifetimes: &dyn LifetimesOf, ty: TyId<Poly>
                 push_written(types, lifetimes, *item, under_mut, out);
             }
         }
-        TyKind::Object(object) => {
-            for (_, field) in object.fields() {
+        TyKind::Object { fields, .. } => {
+            for (_, field) in fields {
                 push_written(types, lifetimes, *field, under_mut, out);
             }
         }

@@ -18,7 +18,7 @@ use acvus_utils::{Interner, QualifiedRef};
 
 use crate::ir::{known_effect, known_len};
 use crate::ty::{
-    Alignment, Calls, Concrete, Effect, FlowEnd, FlowTerm, Flows, Holds, IdentityTerm, ObjectTy, Reissue,
+    Alignment, Calls, Concrete, Effect, FlowEnd, FlowTerm, Flows, Holds, IdentityTerm, Reissue,
     Mark, MarkTerm, SplitCost, Ty, TyKind, Types,
 };
 
@@ -87,7 +87,7 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             write_ty(types, names, *err, out);
             out.push('>');
         }
-        TyKind::Object(ObjectTy::Structural(fields, ())) => write_fields(types, names, fields, out),
+        TyKind::Object { fields, label: () } => write_fields(types, names, fields, out),
         TyKind::Enum { name, variants, label: () } => {
             out.push_str(&qualified(names, *name));
             out.push('{');

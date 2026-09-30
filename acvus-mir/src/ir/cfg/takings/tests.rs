@@ -7,7 +7,7 @@ use acvus_utils::Interner;
 use super::*;
 use crate::ir::cfg::Module;
 use crate::ir::PathSeg;
-use crate::ty::{IntTy, ObjectTy};
+use crate::ty::{IntTy};
 
 struct Fixture {
     module: Module,
@@ -79,7 +79,7 @@ fn an_object_holding_a_mut_ref_is_moved_whole_and_its_mut_ref_field_is_read() {
     let interner = Interner::new();
     let m = interner.intern("m");
     let mut builder = f.module.build_body(false, f.int);
-    let holder = builder.intern(TyKind::Object(ObjectTy::Structural(Box::new([(m, f.string_mut)]), ())));
+    let holder = builder.intern(TyKind::Object { fields: Box::new([(m, f.string_mut)]), label: () });
     let s = builder.slot(f.string, Span::ZERO);
     let text = builder.push(Op::Const { value: Literal::String("a".to_string()) }, f.string, Span::ZERO);
     builder.push_unit(assign(s, text), Span::ZERO);

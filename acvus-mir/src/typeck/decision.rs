@@ -33,7 +33,7 @@ use crate::decl::{Base, Head, ImplSig, Scheme};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, Level, OpenSources, PairAt, RequiredAt, Term};
 use crate::ty::structural::structure;
 use crate::ty::{
-    CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mark, MarkTerm, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, Types,
+    CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mark, MarkTerm, Mutability, Poly, TyId, TyKind, TyVarId, Types,
 };
 
 /// A lang item a form calls (operators §2, §3, §7). `&&`, `||`,
@@ -1599,7 +1599,7 @@ fn poly_base(kind: &TyKind<Poly>) -> Option<Base> {
         TyKind::Tuple(items, _) => Base::Tuple(items.len()),
         TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
-        TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
+        TyKind::Object { .. } => Base::Object,
         TyKind::UserDefined { id, .. } => Base::Named(*id),
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,

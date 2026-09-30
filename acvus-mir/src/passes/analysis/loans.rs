@@ -1077,9 +1077,9 @@ impl Forward<'_> {
                         .collect::<Vec<Part>>()
                 };
                 match (seg, self.types.kind(part.ty)) {
-                    (PathSeg::Field(field), TyKind::Object(object)) => {
-                        let fields = laid(&mut object.fields().iter().map(|(_, ty)| *ty));
-                        let at = object.fields().iter().position(|(name, _)| name == field)?;
+                    (PathSeg::Field(field), TyKind::Object { fields: declared, .. }) => {
+                        let fields = laid(&mut declared.iter().map(|(_, ty)| *ty));
+                        let at = declared.iter().position(|(name, _)| name == field)?;
                         next.extend(fields.into_iter().nth(at));
                     }
                     (PathSeg::Index(index), TyKind::Tuple(items, _)) => {
@@ -1202,8 +1202,8 @@ impl Forward<'_> {
     /// The types `seg` may step to from a value of `ty`.
     fn part_types(&self, ty: Ty, seg: &PathSeg) -> Vec<Ty> {
         match (seg, self.types.kind(ty)) {
-            (PathSeg::Field(field), TyKind::Object(object)) => {
-                object.fields().iter().filter(|(name, _)| name == field).map(|(_, ty)| *ty).collect()
+            (PathSeg::Field(field), TyKind::Object { fields, .. }) => {
+                fields.iter().filter(|(name, _)| name == field).map(|(_, ty)| *ty).collect()
             }
             (PathSeg::Index(index), TyKind::Tuple(items, _)) => items.get(*index).copied().into_iter().collect(),
             (PathSeg::Index(_), TyKind::Array(element, _, _) | TyKind::Slice(element)) => vec![*element],
@@ -1570,15 +1570,14 @@ impl Forward<'_> {
                 panic!("`StringClone` is no `Op::Intrinsic`: `Intrinsic` states no arguments for it")
             }
             Op::MakeObject { fields } => {
-                let TyKind::Object(object) = self.types.kind(ty()) else {
+                let TyKind::Object { fields: declared, .. } = self.types.kind(ty()) else {
                     panic!("an object is made at an object type")
                 };
                 let mut passed: BTreeMap<acvus_utils::Astr, Vec<LoanSet>> = BTreeMap::new();
                 for (name, value) in fields {
                     passed.insert(*name, self.passed(state, *value, site, None, record));
                 }
-                object
-                    .fields()
+                declared
                     .iter()
                     .flat_map(|(name, _)| passed.remove(name).expect("an object is made with every field of its type"))
                     .collect()

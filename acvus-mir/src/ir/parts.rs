@@ -11,7 +11,7 @@
 //! variant (`owned_region`).
 
 use super::{PathSeg, known_len};
-use crate::ty::{Concrete, ObjectTy, Ty, TyKind, Types};
+use crate::ty::{Concrete, Ty, TyKind, Types};
 
 pub(crate) type Path = Vec<PathSeg>;
 
@@ -43,20 +43,19 @@ pub(crate) fn part_ty(types: &Types<Concrete>, ty: Ty, path: &[PathSeg]) -> Ty {
         at = match (types.kind(at), seg) {
             (TyKind::Tuple(items, _), PathSeg::Index(index)) => items[*index],
             (TyKind::Array(element, _, _), PathSeg::Index(_)) => *element,
-            (TyKind::Object(object), PathSeg::Field(field)) => field_ty(object, *field),
+            (TyKind::Object { fields, .. }, PathSeg::Field(field)) => field_ty(fields, *field),
             (kind, seg) => panic!("{seg:?} names no part of {kind:?}; a path names only parts its type has"),
         };
     }
     at
 }
 
-fn field_ty(object: &ObjectTy<Concrete>, field: acvus_utils::Astr) -> Ty {
-    object
-        .fields()
+fn field_ty(fields: &[(acvus_utils::Astr, Ty)], field: acvus_utils::Astr) -> Ty {
+    fields
         .iter()
         .find(|(name, _)| *name == field)
         .map(|(_, ty)| *ty)
-        .unwrap_or_else(|| panic!("{field:?} is no field of {object:?}; a path names only fields its type has"))
+        .unwrap_or_else(|| panic!("{field:?} is no field of {fields:?}; a path names only fields its type has"))
 }
 
 /// The steps from a `ty` to each of its immediate parts.
@@ -73,7 +72,7 @@ fn product_parts(types: &Types<Concrete>, ty: Ty) -> Option<Vec<PathSeg>> {
     match types.kind(ty) {
         TyKind::Tuple(items, _) => Some((0..items.len()).map(PathSeg::Index).collect()),
         TyKind::Array(_, len, _) => Some((0..known_len(len)).map(PathSeg::Index).collect()),
-        TyKind::Object(object) => Some(object.fields().iter().map(|(name, _)| PathSeg::Field(*name)).collect()),
+        TyKind::Object { fields, .. } => Some(fields.iter().map(|(name, _)| PathSeg::Field(*name)).collect()),
         _ => None,
     }
 }

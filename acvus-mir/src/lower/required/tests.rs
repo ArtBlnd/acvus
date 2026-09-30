@@ -839,7 +839,7 @@ fn two_strings(interner: &Interner, t: Tys, builder: &mut Builder<'_>) -> (Ty, T
     let (a, b) = (interner.intern("a"), interner.intern("b"));
     let mut fields = vec![(a, t.string), (b, t.string)];
     fields.sort_by_key(|(name, _)| *name);
-    let record = builder.intern(TyKind::Object(crate::ty::ObjectTy::Structural(fields.into_boxed_slice(), ())));
+    let record = builder.intern(TyKind::Object { fields: fields.into_boxed_slice(), label: () });
     let reads_string = builder.intern(TyKind::Fn {
         params: Box::new([t.string_ref]),
         ret: t.int,

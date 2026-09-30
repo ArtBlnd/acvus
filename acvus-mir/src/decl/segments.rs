@@ -80,8 +80,8 @@ fn push_segments_level(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>,
                 push_segments(poly, decls, *item, out);
             }
         }
-        TyKind::Object(object) => {
-            for (_, field) in object.fields() {
+        TyKind::Object { fields, .. } => {
+            for (_, field) in fields {
                 push_segments(poly, decls, *field, out);
             }
         }

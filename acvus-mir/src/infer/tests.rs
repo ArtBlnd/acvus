@@ -6,7 +6,7 @@ use crate::decl::{
 };
 use crate::ty::{
     Alignment, Calls, CallsTerm, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, IdentityId,
-    IdentityTerm, IntTy, Label, Mutability, ObjectTy, Poly, Reach, Reissue, SplitCost, TyKind, Types,
+    IdentityTerm, IntTy, Label, Mutability, Poly, Reach, Reissue, SplitCost, TyKind, Types,
 };
 
 struct Fixture {
@@ -37,7 +37,7 @@ impl Fixture {
     fn object(&mut self, fields: &[(&str, Term)], label: Label) -> Term {
         let mut fields: Vec<(Astr, Term)> = fields.iter().map(|(name, ty)| (self.name(name), *ty)).collect();
         fields.sort_by_key(|(name, _)| *name);
-        self.kind(TyKind::Object(ObjectTy::Structural(fields.into(), label)))
+        self.kind(TyKind::Object { fields: fields.into(), label })
     }
 
     fn r#enum(&mut self, name: &str, tags: &[&str], label: Label) -> Term {
@@ -84,7 +84,7 @@ impl Fixture {
 
     fn fields_of(&self, term: Term) -> (Vec<Astr>, Label) {
         match self.infer.types().kind(self.infer.shallow(term)) {
-            TyKind::Object(ObjectTy::Structural(fields, label)) => (fields.iter().map(|(name, _)| *name).collect(), *label),
+            TyKind::Object { fields, label } => (fields.iter().map(|(name, _)| *name).collect(), *label),
             other => panic!("not a structural object: {other:?}"),
         }
     }
@@ -788,7 +788,7 @@ fn freeze_follows_variables_and_answers_a_frozen_term_from_the_memo() {
     let expected_int = into.intern(TyKind::Int(IntTy::I64));
     assert_eq!(
         into.kind(items[0]),
-        &TyKind::Object(ObjectTy::Structural(Box::new([(x, expected_int)]), ()))
+        &TyKind::Object { fields: Box::new([(x, expected_int)]), label: () }
     );
     assert_eq!(fx.infer.freeze(&mut into, &mut memo, pair), Ok(frozen));
 }
@@ -840,7 +840,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
     );
     let mut types = Types::<Poly>::new();
     let t = types.intern(TyKind::Var(0));
-    let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(x, t)]), ())));
+    let object = types.intern(TyKind::Object { fields: Box::new([(x, t)]), label: () });
     let option = types.intern(TyKind::Option(t, ()));
     let signature = pure_fn(&mut types, vec![object, t], option);
     let integer = TyVarBound::Integer {
@@ -875,7 +875,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
     };
     assert_eq!(
         fx.infer.types().kind(params[0]),
-        &TyKind::Object(ObjectTy::Structural(Box::new([(x, var)]), Label::Elsewhere))
+        &TyKind::Object { fields: Box::new([(x, var)]), label: Label::Elsewhere }
     );
     assert_eq!(fx.infer.types().kind(ret), &TyKind::Option(var, Label::Elsewhere));
     assert_eq!(
@@ -974,7 +974,7 @@ fn a_product_with_a_part_of_type_never_is_not_never() {
     let tuple = fx.kind(TyKind::Tuple(Box::new([int, never]), Label::Here));
     assert_eq!(fx.infer.types().kind(tuple), &TyKind::Tuple(Box::new([int, never]), Label::Here));
     let object = fx.object(&[("x", int), ("y", never)], Label::Here);
-    assert!(matches!(fx.infer.types().kind(object), TyKind::Object(_)));
+    assert!(matches!(fx.infer.types().kind(object), TyKind::Object { .. }));
 
     let var = fx.infer.fresh(Bound::Any);
     let pair = fx.kind(TyKind::Tuple(Box::new([int, var]), Label::Here));
@@ -1395,7 +1395,7 @@ fn a_declared_type_is_instantiated_opaque() {
     let mut types = Types::new();
     let field = fx.name("age");
     let int = types.intern(TyKind::Int(IntTy::I64));
-    let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(field, int)]), ())));
+    let object = types.intern(TyKind::Object { fields: Box::new([(field, int)]), label: () });
     let decls = Declarations::verify(raw(&fx.names, types, Vec::new(), Vec::new())).expect("verified");
     let term = fx.infer.instantiate_type(&decls, object);
     assert_eq!(fx.fields_of(term), (vec![field], Label::Elsewhere));

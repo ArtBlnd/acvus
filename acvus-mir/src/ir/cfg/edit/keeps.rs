@@ -501,11 +501,11 @@ impl TypeCheck<'_> {
                 self.same(*value, *element, "the element")
             }
             Op::MakeObject { fields } => {
-                let TyKind::Object(object) = self.kind(self.ty(Self::result(inst)?)) else {
+                let TyKind::Object { fields: declared_fields, .. } = self.kind(self.ty(Self::result(inst)?)) else {
                     return Err("the result is not an object".to_string());
                 };
                 for (name, value) in fields {
-                    let Some((_, field)) = object.fields().iter().find(|(declared, _)| declared == name) else {
+                    let Some((_, field)) = declared_fields.iter().find(|(declared, _)| declared == name) else {
                         return Err(format!("the object type has no field {name:?}"));
                     };
                     self.same(*value, *field, "the field")?;
@@ -669,8 +669,8 @@ impl TypeCheck<'_> {
             let mut next = Vec::new();
             for at in reached {
                 match (seg, self.kind(at)) {
-                    (PathSeg::Field(field), TyKind::Object(object)) => {
-                        next.extend(object.fields().iter().filter(|(name, _)| name == field).map(|(_, ty)| *ty))
+                    (PathSeg::Field(field), TyKind::Object { fields, .. }) => {
+                        next.extend(fields.iter().filter(|(name, _)| name == field).map(|(_, ty)| *ty))
                     }
                     (PathSeg::Index(_), TyKind::Array(element, _, _)) => next.push(*element),
                     (PathSeg::Index(index), TyKind::Tuple(elements, _)) => next.extend(elements.get(*index).copied()),
@@ -729,10 +729,10 @@ impl TypeCheck<'_> {
     fn field_path(&self, object: Ty, field: acvus_utils::Astr, rest: &[acvus_utils::Astr]) -> Result<Ty, String> {
         let mut at = object;
         for name in std::iter::once(&field).chain(rest) {
-            let TyKind::Object(fields) = self.kind(at) else {
+            let TyKind::Object { fields, .. } = self.kind(at) else {
                 return Err(format!("{:?} is not an object", self.kind(at)));
             };
-            let Some((_, ty)) = fields.fields().iter().find(|(declared, _)| declared == name) else {
+            let Some((_, ty)) = fields.iter().find(|(declared, _)| declared == name) else {
                 return Err(format!("the object has no field {name:?}"));
             };
             at = *ty;

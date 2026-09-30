@@ -15,7 +15,7 @@ use super::ctxt::{Home, Lcx};
 use super::expr::lower_expr;
 use crate::ir::cfg::Op;
 use crate::ir::{IndexBound, IndexMode, PathSeg, RefTarget, ValueId, is_word};
-use crate::ty::{Mutability, ObjectTy, Ty, TyKind};
+use crate::ty::{Mutability, Ty, TyKind};
 use crate::typeck::Name;
 
 /// A storage and a path under it, holding a `ty`.
@@ -155,7 +155,7 @@ fn part_ty(cx: &Lcx<'_, '_>, object: &Operand, field: acvus_utils::Astr) -> Ty {
         _ => held,
     };
     let fields = match cx.kind(held) {
-        TyKind::Object(ObjectTy::Structural(fields, _)) => fields,
+        TyKind::Object { fields, .. } => fields,
         other => panic!("a field is read of an object, not {other:?}"),
     };
     fields

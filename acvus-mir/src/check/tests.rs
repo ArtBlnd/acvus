@@ -15,7 +15,7 @@ use crate::decl::{ContextDecl, Core, Declarations, DeclaredFacts, LabelledSignat
 use crate::lower::{lower_script, required};
 use crate::passes::analysis::AnalysisManager;
 use crate::ty::{Mark, MarkTerm};
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, ObjectTy, Poly, TyId, TyKind, Types};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Poly, TyId, TyKind, Types};
 use crate::typeck::check_script;
 
 pub(super) struct Fixture {
@@ -61,7 +61,7 @@ impl Fixture {
 
     pub(super) fn object(&mut self, fields: &[(&str, TyId<Poly>)]) -> TyId<Poly> {
         let fields = fields.iter().map(|(name, ty)| (self.name(name), *ty)).collect();
-        self.ty(TyKind::Object(ObjectTy::Structural(fields, ())))
+        self.ty(TyKind::Object { fields, label: () })
     }
 
     /// A pure extern fn `name` of these parameters and result.

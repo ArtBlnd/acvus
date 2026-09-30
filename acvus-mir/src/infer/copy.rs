@@ -13,7 +13,7 @@ use super::cells::{Cells, End as CellEnd, ValuesTerm, VarTerm};
 use super::{FlowId, Infer, Term, VarState};
 use crate::ty::{
     EffectTerm, EffectVarId, FlowTerm, FlowVarId, IdentityId, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm, LenVarId,
-    ObjectTy, TyKind, TyVarId, ValuesVarId,
+    TyKind, TyVarId, ValuesVarId,
 };
 
 /// How many variables of each kind were made so far: one made later has an
@@ -379,10 +379,10 @@ impl Infer {
                 TyKind::Result(ok, self.copy_at(*err, at, memo), *label)
             }
             TyKind::Tuple(items, label) => TyKind::Tuple(items.iter().map(|item| self.copy_at(*item, at, memo)).collect(), *label),
-            TyKind::Object(ObjectTy::Structural(fields, label)) => TyKind::Object(ObjectTy::Structural(
-                fields.iter().map(|(name, field)| (*name, self.copy_at(*field, at, memo))).collect(),
-                *label,
-            )),
+            TyKind::Object { fields, label } => TyKind::Object {
+                fields: fields.iter().map(|(name, field)| (*name, self.copy_at(*field, at, memo))).collect(),
+                label: *label,
+            },
             TyKind::Enum { name, variants, label } => TyKind::Enum {
                 name: *name,
                 variants: variants.iter().map(|(tag, payload)| (*tag, payload.map(|payload| self.copy_at(payload, at, memo)))).collect(),
@@ -417,7 +417,7 @@ fn relabelled(kind: TyKind<InferPhase>) -> TyKind<InferPhase> {
         TyKind::Option(payload, _) => TyKind::Option(payload, Label::Elsewhere),
         TyKind::Result(ok, err, _) => TyKind::Result(ok, err, Label::Elsewhere),
         TyKind::Tuple(items, _) => TyKind::Tuple(items, Label::Elsewhere),
-        TyKind::Object(ObjectTy::Structural(fields, _)) => TyKind::Object(ObjectTy::Structural(fields, Label::Elsewhere)),
+        TyKind::Object { fields, .. } => TyKind::Object { fields, label: Label::Elsewhere },
         TyKind::Enum { name, variants, .. } => TyKind::Enum { name, variants, label: Label::Elsewhere },
         other => other,
     }

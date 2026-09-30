@@ -5,7 +5,7 @@ use super::{End, Infer, Term};
 use crate::decl::{Base, CastTree, Head};
 use super::cells::End as CellEnd;
 use super::Mismatch;
-use crate::ty::{EffectTerm, Infer as InferPhase, LenTerm, Mark, MarkTerm, ObjectTy, Phase, Poly, TyId, TyKind, TyVarId, Types};
+use crate::ty::{EffectTerm, Infer as InferPhase, LenTerm, Mark, MarkTerm, Phase, Poly, TyId, TyKind, TyVarId, Types};
 
 /// What the decisions still pending may do: typeck answers from its
 /// decision graph; B only asks.
@@ -106,8 +106,7 @@ impl Infer {
                 (TyKind::Slice(a), TyKind::Slice(b)) | (TyKind::Option(a, _), TyKind::Option(b, _)) => self.is_written(poly, *a, *b),
                 (TyKind::Result(a_ok, a_err, _), TyKind::Result(b_ok, b_err, _)) => all(&[*a_ok, *a_err], &[*b_ok, *b_err]),
                 (TyKind::Tuple(a, _), TyKind::Tuple(b, _)) => all(a, b),
-                (TyKind::Object(a), TyKind::Object(b)) => {
-                    let (a, b) = (a.fields(), b.fields());
+                (TyKind::Object { fields: a, .. }, TyKind::Object { fields: b, .. }) => {
                     a.len() == b.len() && a.iter().zip(b).all(|((a_name, a), (b_name, b))| a_name == b_name && self.is_written(poly, *a, *b))
                 }
                 (TyKind::Enum { name: a_name, variants: a, .. }, TyKind::Enum { name: b_name, variants: b, .. }) => {
@@ -237,7 +236,7 @@ fn base_of<V: Phase>(kind: &TyKind<V>) -> Base {
         TyKind::Tuple(items, _) => Base::Tuple(items.len()),
         TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
-        TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
+        TyKind::Object { .. } => Base::Object,
         TyKind::UserDefined { id, .. } => Base::Named(*id),
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,

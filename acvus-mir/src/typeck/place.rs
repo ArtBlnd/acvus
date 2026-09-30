@@ -17,7 +17,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::{capturing_binding, note_captures};
 use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
-use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, Reach, TyKind};
+use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, Reach, TyKind};
 
 /// What an expression is read for, passed down and never held: `a[i]`
 /// reaches `as_slice` or `as_slice_mut` by it (operators §3).
@@ -132,10 +132,10 @@ pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, (object, reach): (Term, 
         Some(Head::Base(_)) | None => {}
     }
     record_reach(cx, part, path_of(cx, object, reach));
-    let shape = cx.held(TyKind::Object(ObjectTy::Structural(
-        Box::new([(field, part)]),
-        Label::Here,
-    )));
+    let shape = cx.held(TyKind::Object {
+        fields: Box::new([(field, part)]),
+        label: Label::Here,
+    });
     cx.join(object, shape, reach, span);
 }
 

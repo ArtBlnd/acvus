@@ -24,7 +24,7 @@ use super::body::{BlockData, BlockId, Body, Def, Edge, Inst, InstId, InstList, O
 use super::op::Op;
 use super::order::At;
 use crate::ir::{DebugInfo, IndexBound, OrderEdge, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
-use crate::ty::{Concrete, ObjectTy, Reissue, SplitCost, Ty, TyKind, Types};
+use crate::ty::{Concrete, Reissue, SplitCost, Ty, TyKind, Types};
 
 /// A value that still has uses, removed without a replacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1296,7 +1296,7 @@ impl Body {
 pub(super) fn structural_fields(types: &Types<Concrete>, ty: Ty) -> Option<Vec<(PathSeg, Ty)>> {
     match types.kind(ty) {
         TyKind::Tuple(elements, _) => Some(elements.iter().enumerate().map(|(index, ty)| (PathSeg::Index(index), *ty)).collect()),
-        TyKind::Object(ObjectTy::Structural(fields, _)) => {
+        TyKind::Object { fields, .. } => {
             Some(fields.iter().map(|(name, ty)| (PathSeg::Field(*name), *ty)).collect())
         }
         _ => None,

@@ -20,7 +20,7 @@ use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{FnValue, FnValues, Reach, ValuesVarId, is_transparent};
 use crate::ty::{
     Effect, EffectTerm, Flows, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, Mark, MarkTerm, Mutability,
-    ObjectTy, TyKind, TyVarId,
+    TyKind, TyVarId,
 };
 
 /// What a mismatch holds of each kind of term: the check's own terms while
@@ -1078,7 +1078,9 @@ impl Infer {
                     .collect::<Result<_, _>>()?;
                 TyKind::Tuple(items, either_elsewhere(label_x, label_y))
             }
-            (TyKind::Object(x), TyKind::Object(y)) => TyKind::Object(self.relate_objects(a, b, x, y, how)?),
+            (TyKind::Object { fields: fields_x, label: label_x }, TyKind::Object { fields: fields_y, label: label_y }) => {
+                self.relate_objects(a, b, (fields_x, label_x), (fields_y, label_y), how)?
+            }
             (
                 TyKind::Enum {
                     name: name_a,
@@ -1263,36 +1265,32 @@ impl Infer {
         &mut self,
         a: Term,
         b: Term,
-        x: ObjectTy<InferPhase>,
-        y: ObjectTy<InferPhase>,
+        (fields_a, label_a): (Box<[(Astr, Term)]>, Label),
+        (fields_b, label_b): (Box<[(Astr, Term)]>, Label),
         how: Relation,
-    ) -> Result<ObjectTy<InferPhase>, Mismatch> {
-        match (x, y) {
-            (ObjectTy::Structural(fields_a, label_a), ObjectTy::Structural(fields_b, label_b)) => {
-                let mut fields = Vec::new();
-                for member in members(&fields_a, &fields_b) {
-                    let field = match member {
-                        Member::Both(name, x, y) => (name, self.relate(x, y, Relation::Eq)?),
-                        Member::OnlyA(name, x) => {
-                            Self::may_grow(how.reach_of(Side::B), (a, b), (b, label_b), |object| Mismatch::OpaqueLacksField {
-                                object,
-                                field: name,
-                            })?;
-                            (name, x)
-                        }
-                        Member::OnlyB(name, y) => {
-                            Self::may_grow(how.reach_of(Side::A), (a, b), (a, label_a), |object| Mismatch::OpaqueLacksField {
-                                object,
-                                field: name,
-                            })?;
-                            (name, y)
-                        }
-                    };
-                    fields.push(field);
+    ) -> Result<TyKind<InferPhase>, Mismatch> {
+        let mut fields = Vec::new();
+        for member in members(&fields_a, &fields_b) {
+            let field = match member {
+                Member::Both(name, x, y) => (name, self.relate(x, y, Relation::Eq)?),
+                Member::OnlyA(name, x) => {
+                    Self::may_grow(how.reach_of(Side::B), (a, b), (b, label_b), |object| Mismatch::OpaqueLacksField {
+                        object,
+                        field: name,
+                    })?;
+                    (name, x)
                 }
-                Ok(ObjectTy::Structural(fields.into(), either_elsewhere(label_a, label_b)))
-            }
+                Member::OnlyB(name, y) => {
+                    Self::may_grow(how.reach_of(Side::A), (a, b), (a, label_a), |object| Mismatch::OpaqueLacksField {
+                        object,
+                        field: name,
+                    })?;
+                    (name, y)
+                }
+            };
+            fields.push(field);
         }
+        Ok(TyKind::Object { fields: fields.into(), label: either_elsewhere(label_a, label_b) })
     }
 
     /// Whether `lacking`, labelled `label` and reached by `reach`, may grow

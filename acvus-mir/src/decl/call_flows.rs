@@ -231,8 +231,7 @@ impl SegmentWalk<'_> {
                     self.lay(*decl_item, *item);
                 }
             }
-            (TyKind::Object(decl_object), TyKind::Object(object)) => {
-                let (decl_fields, fields) = (decl_object.fields(), object.fields());
+            (TyKind::Object { fields: decl_fields, .. }, TyKind::Object { fields, .. }) => {
                 assert_eq!(decl_fields.len(), fields.len(), "{DISAGREE}");
                 for ((decl_name, decl_field), (name, field)) in decl_fields.iter().zip(fields.iter()) {
                     assert_eq!(decl_name, name, "{DISAGREE}");

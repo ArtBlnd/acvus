@@ -17,7 +17,7 @@ use crate::ir::{ForSource, SwitchKey};
 use crate::ty::{Mark, MarkTerm};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect as CallEffect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability,
-    ObjectTy, Reissue, TyKind, Types,
+    Reissue, TyKind, Types,
 };
 
 // -- Fixture -------------------------------------------------------------
@@ -77,7 +77,7 @@ fn fixture() -> Fixture {
     let str_ty = types.intern(TyKind::Str);
     let str_ref = types.intern(TyKind::Ref(Mutability::Shared, str_ty));
     let result = types.intern(TyKind::Result(int, bool, ()));
-    let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(interner.intern("x"), int)]), ())));
+    let object = types.intern(TyKind::Object { fields: Box::new([(interner.intern("x"), int)]), label: () });
     let extern_defined = types.intern(TyKind::UserDefined {
         id: QualifiedRef::root(interner.intern("Point")),
         type_args: Box::new([]),

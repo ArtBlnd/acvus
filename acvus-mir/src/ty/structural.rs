@@ -11,7 +11,7 @@ use acvus_utils::Astr;
 use smallvec::SmallVec;
 
 use super::arg::LenTerm;
-use super::kind::{ObjectTy, TyKind};
+use super::kind::TyKind;
 use super::{Phase, TyId, Types};
 
 /// A transparent structured type, by kind, with its parts and who wrote
@@ -60,7 +60,7 @@ where
 {
     match types.kind(ty) {
         TyKind::Tuple(items, label) => Some(Structure::Tuple(items, *label)),
-        TyKind::Object(ObjectTy::Structural(fields, label)) => Some(Structure::Object(fields, *label)),
+        TyKind::Object { fields, label } => Some(Structure::Object(fields, *label)),
         TyKind::Enum { variants, label, .. } => Some(Structure::Enum(variants, *label)),
         TyKind::Array(element, len, label) => Some(Structure::Array { element: *element, len: *len, label: *label }),
         TyKind::Option(payload, label) => Some(Structure::Option(*payload, *label)),
@@ -123,7 +123,7 @@ mod tests {
 
     use super::{PartKey, Structure, structure};
     use crate::ty::{Mark, MarkTerm};
-    use crate::ty::{Concrete, IntTy, LenTerm, Mutability, ObjectTy, Ty, TyKind, Types};
+    use crate::ty::{Concrete, IntTy, LenTerm, Mutability, Ty, TyKind, Types};
 
     fn parts(types: &Types<Concrete>, ty: Ty) -> Vec<Ty> {
         structure(types, ty).expect("a structural type").parts().iter().map(|part| part.ty).collect()
@@ -143,7 +143,7 @@ mod tests {
         let (a, b) = (names.intern("a"), names.intern("b"));
         let mut types = Types::new();
         let (int, bool_ty) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::Bool));
-        let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(b, bool_ty), (a, int)]), ())));
+        let object = types.intern(TyKind::Object { fields: Box::new([(b, bool_ty), (a, int)]), label: () });
         assert_eq!(parts(&types, object), vec![bool_ty, int]);
         let Some(Structure::Object(fields, _)) = structure(&types, object) else {
             panic!("a structural object is an object");

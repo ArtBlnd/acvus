@@ -16,7 +16,7 @@ use super::refusal::{self, RefusalKind, Unimplemented};
 use crate::decl::{Base, Head, Lift, LiftShape, NamedFact, Taking};
 use crate::infer::{Closed, Coerced, Instantiated, RequiredAt, Term};
 use crate::ty::structural::{PartKey, Structure, structure};
-use crate::ty::{Calls, CallsTerm, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, Infer as InferPhase, Label, Mutability, ObjectTy, TyKind, copies_in};
+use crate::ty::{Calls, CallsTerm, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, Infer as InferPhase, Label, Mutability, TyKind, copies_in};
 
 /// A structured value coerced at `site` into `slot`, reached by `reach`
 /// (types §3): its node records the shape and a node per part it keeps,
@@ -225,8 +225,8 @@ pub(super) fn reach_lend(cx: &mut Ctxt<'_>, decision: Reach, function: Qualified
     };
     let kind = match cx.infer.types().kind(structured).clone() {
         TyKind::Tuple(items, _) => TyKind::Tuple(items.iter().map(|item| lent(cx, *item)).collect(), Label::Here),
-        TyKind::Object(ObjectTy::Structural(fields, _)) => {
-            TyKind::Object(ObjectTy::Structural(fields.iter().map(|(name, field)| (*name, lent(cx, *field))).collect(), Label::Here))
+        TyKind::Object { fields, .. } => {
+            TyKind::Object { fields: fields.iter().map(|(name, field)| (*name, lent(cx, *field))).collect(), label: Label::Here }
         }
         TyKind::Enum { name, variants, .. } => TyKind::Enum {
             name,

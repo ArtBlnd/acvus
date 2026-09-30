@@ -20,7 +20,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::Binding;
 use crate::decl::{Base, Head};
 use crate::infer::Term;
-use crate::ty::{EffectTerm, Infer as InferPhase, Label, LenTerm, Mutability, ObjectTy, Reach, TyKind};
+use crate::ty::{EffectTerm, Infer as InferPhase, Label, LenTerm, Mutability, Reach, TyKind};
 
 /// A checked pattern, waiting for its scrutinee's head.
 #[derive(Debug, Clone, PartialEq)]
@@ -339,7 +339,7 @@ fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, (scrutinee, reach): (Te
     let terms: Vec<(Astr, Term)> = fields.iter().map(|(key, _)| (*key, reached_part(cx, least))).collect();
     let mut sorted = terms.clone();
     sorted.sort_by_key(|(name, _)| *name);
-    let object = cx.held(TyKind::Object(ObjectTy::Structural(sorted.into(), Label::Here)));
+    let object = cx.held(TyKind::Object { fields: sorted.into(), label: Label::Here });
     cx.join(scrutinee, object, reach, span);
     for ((_, part), (_, term)) in fields.into_iter().zip(terms) {
         destructure(cx, part, term, lent);

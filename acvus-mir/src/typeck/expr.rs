@@ -11,7 +11,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::{Capturing, capturing_binding, note_captures};
 use super::{call, cast, closure, context, control, method, op, place, scope, stmt, variant};
 use crate::infer::{Bound, Term};
-use crate::ty::{IntTy, LenTerm, Label, Mutability, ObjectTy, TyKind};
+use crate::ty::{IntTy, LenTerm, Label, Mutability, TyKind};
 
 /// The term of `expr`, read for `demand` (operators §3). An `Error` node is
 /// a fresh variable and is not refused again: the parse reported it.
@@ -254,7 +254,7 @@ fn check_object<S: Slot>(cx: &mut Ctxt<'_>, fields: &[ObjectExprField<S>]) -> Te
         .map(|field| (field.key, check_expr(cx, &field.value, Demand::Read)))
         .collect();
     typed.sort_by_key(|(name, _)| *name);
-    cx.held(TyKind::Object(ObjectTy::Structural(typed.into(), Label::Here)))
+    cx.held(TyKind::Object { fields: typed.into(), label: Label::Here })
 }
 
 /// `(a, b)`: a tuple of its parts' own types, and `()` is the unit. `_`

@@ -12,7 +12,7 @@ use super::cells::Shift;
 use super::{Infer, Term, VarState};
 use crate::ty::{
     CallsTerm, EffectTerm, EffectVarId, FlowTerm, FlowVarId, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
-    LenTerm, LenVarId, MarkTerm, MarkVarId, ObjectTy, TyKind, TyVarId, ValuesVarId,
+    LenTerm, LenVarId, MarkTerm, MarkVarId, TyKind, TyVarId, ValuesVarId,
 };
 
 /// How an import moved the other store's terms into this one.
@@ -148,8 +148,8 @@ impl Imported {
             TyKind::Tuple(items, label) => TyKind::Tuple(items.iter().map(|item| self.term(*item)).collect(), *label),
             TyKind::Option(payload, label) => TyKind::Option(self.term(*payload), *label),
             TyKind::Result(ok, err, label) => TyKind::Result(self.term(*ok), self.term(*err), *label),
-            TyKind::Object(ObjectTy::Structural(fields, label)) => {
-                TyKind::Object(ObjectTy::Structural(fields.iter().map(|(name, field)| (*name, self.term(*field))).collect(), *label))
+            TyKind::Object { fields, label } => {
+                TyKind::Object { fields: fields.iter().map(|(name, field)| (*name, self.term(*field))).collect(), label: *label }
             }
             TyKind::Enum { name, variants, label } => TyKind::Enum {
                 name: *name,

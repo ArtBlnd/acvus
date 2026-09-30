@@ -3,7 +3,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ty::{EffectTerm, IdentityTerm, LenTerm, ObjectTy, Poly, TyId, TyKind, Types};
+use crate::ty::{EffectTerm, IdentityTerm, LenTerm, Poly, TyId, TyKind, Types};
 
 /// Whether `impl` is `generic` with each of the generic function's type,
 /// effect, length, identity and mark variables replaced by one choice.
@@ -129,11 +129,10 @@ impl Choice<'_> {
             (TyKind::Result(a_ok, a_err, _), TyKind::Result(b_ok, b_err, _)) => {
                 self.ty(*a_ok, *b_ok) && self.ty(*a_err, *b_err)
             }
-            (TyKind::Object(a), TyKind::Object(b)) => {
-                let (ObjectTy::Structural(_, a_label), ObjectTy::Structural(_, b_label)) = (a, b);
+            (TyKind::Object { fields: a, label: a_label }, TyKind::Object { fields: b, label: b_label }) => {
                 let same_object = a_label == b_label;
                 same_object
-                    && all_pairs(a.fields(), b.fields(), |(a_name, a), (b_name, b)| {
+                    && all_pairs(a, b, |(a_name, a), (b_name, b)| {
                         a_name == b_name && self.ty(*a, *b)
                     })
             }
@@ -219,7 +218,7 @@ impl Choice<'_> {
                 | TyKind::Tuple(.., _)
                 | TyKind::Option(.., _)
                 | TyKind::Result(..)
-                | TyKind::Object(_)
+                | TyKind::Object { .. }
                 | TyKind::Enum { .. }
                 | TyKind::Fn { .. }
                 | TyKind::UserDefined { .. }

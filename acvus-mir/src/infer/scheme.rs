@@ -10,7 +10,7 @@ use super::{Bound, FlowId, Infer, Level, Term};
 use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound, effect_variables, identity_variables};
 use crate::ty::{
     Calls, CallsTerm, Concrete, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityId, IdentityTerm,
-    Infer as InferPhase, Label, LenTerm, LenVarId, Mark, MarkTerm, ObjectTy, Phase, Poly, Ty, TyId, TyKind, Types,
+    Infer as InferPhase, Label, LenTerm, LenVarId, Mark, MarkTerm, Phase, Poly, Ty, TyId, TyKind, Types,
 };
 
 /// A requirement at the use's own terms: an impl of `generic_function` whose
@@ -419,13 +419,13 @@ impl Infer {
             TyKind::Option(inner, _) => TyKind::Option(self.instantiate_ty(at, *inner), Label::Elsewhere),
             TyKind::Result(ok, err, _) => TyKind::Result(self.instantiate_ty(at, *ok), self.instantiate_ty(at, *err), Label::Elsewhere),
             TyKind::Tuple(items, _) => TyKind::Tuple(items.iter().map(|item| self.instantiate_ty(at, *item)).collect(), Label::Elsewhere),
-            TyKind::Object(ObjectTy::Structural(fields, ())) => TyKind::Object(ObjectTy::Structural(
-                fields
+            TyKind::Object { fields, label: () } => TyKind::Object {
+                fields: fields
                     .iter()
                     .map(|(name, field)| (*name, self.instantiate_ty(at, *field)))
                     .collect(),
-                Label::Elsewhere,
-            )),
+                label: Label::Elsewhere,
+            },
             TyKind::Enum { name, variants, .. } => TyKind::Enum {
                 name: *name,
                 variants: variants

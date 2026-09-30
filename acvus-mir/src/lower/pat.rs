@@ -187,8 +187,8 @@ fn part_ty(cx: &Lcx<'_, '_>, whole: Ty, part: Part) -> Ty {
     let tags = cx.decls.core().tags;
     let found = match (cx.kind(whole), part) {
         (TyKind::Tuple(items, _), Part::Tuple(index)) => items.get(index).copied(),
-        (TyKind::Object(object), Part::Field(field)) => {
-            object.fields().iter().find(|(name, _)| *name == field).map(|(_, ty)| *ty)
+        (TyKind::Object { fields, .. }, Part::Field(field)) => {
+            fields.iter().find(|(name, _)| *name == field).map(|(_, ty)| *ty)
         }
         (TyKind::Option(payload, _), Part::Payload(_)) => Some(*payload),
         (TyKind::Result(ok, err, _), Part::Payload(tag)) => Some(if tag == tags.ok { *ok } else { *err }),

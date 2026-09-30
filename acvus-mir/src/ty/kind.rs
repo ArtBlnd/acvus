@@ -31,7 +31,10 @@ pub enum TyKind<V: Phase> {
     Option(TyId<V>, V::Label),
     /// A primitive, closed like an extern enum (types §2).
     Result(TyId<V>, TyId<V>, V::Label),
-    Object(ObjectTy<V>),
+    /// An object's fields, sorted by name; its label says who wrote it
+    /// (`Label`). An object a declaration writes is this shape, written
+    /// elsewhere, so closed as written (rfc_extern types §1, types §1).
+    Object { fields: Box<[(Astr, TyId<V>)]>, label: V::Label },
     /// An enum the program names; its variants sorted by tag (types §2).
     Enum {
         name: QualifiedRef,
@@ -81,23 +84,6 @@ pub enum TyKind<V: Phase> {
     /// program and no declaration does (`InternalType`).
     Closures(Box<[TyId<V>]>),
     Var(V::TyVar),
-}
-
-/// An object's fields, sorted by name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ObjectTy<V: Phase> {
-    /// A structural object; its label says who wrote it (`Label`). An
-    /// object a declaration writes is this shape, written elsewhere, so
-    /// closed as written (rfc_extern types §1, types §1).
-    Structural(Box<[(Astr, TyId<V>)]>, V::Label),
-}
-
-impl<V: Phase> ObjectTy<V> {
-    pub fn fields(&self) -> &[(Astr, TyId<V>)] {
-        match self {
-            ObjectTy::Structural(fields, _) => fields,
-        }
-    }
 }
 
 /// The strongest loan a function value's captures hold, at its one
@@ -186,8 +172,8 @@ impl<V: Phase> TyKind<V> {
                 TyKind::Result(ok, map(*err), *label)
             }
             TyKind::Tuple(items, label) => TyKind::Tuple(items.iter().map(|item| map(*item)).collect(), *label),
-            TyKind::Object(ObjectTy::Structural(fields, label)) => {
-                TyKind::Object(ObjectTy::Structural(fields.iter().map(|(name, field)| (*name, map(*field))).collect(), *label))
+            TyKind::Object { fields, label } => {
+                TyKind::Object { fields: fields.iter().map(|(name, field)| (*name, map(*field))).collect(), label: *label }
             }
             TyKind::Enum { name, variants, label } => TyKind::Enum {
                 name: *name,
@@ -246,7 +232,7 @@ impl<V: Phase> TyKind<V> {
                 on_child(*err);
             }
             TyKind::Tuple(items, _) => items.iter().copied().for_each(on_child),
-            TyKind::Object(object) => object.fields().iter().for_each(|(_, ty)| on_child(*ty)),
+            TyKind::Object { fields, .. } => fields.iter().for_each(|(_, ty)| on_child(*ty)),
             TyKind::Enum { variants, .. } => variants
                 .iter()
                 .filter_map(|(_, payload)| *payload)

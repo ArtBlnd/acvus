@@ -14,7 +14,7 @@ use crate::infer::{Mismatch, ShapeCoercion};
 use crate::ty::structural::PartKey;
 use crate::ty::{IdentityTerm, Mark, MarkTerm};
 use crate::ty::{
-    Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind, Types,
+    Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, Poly, Ty, TyId, TyKind, Types,
 };
 
 struct Fixture {
@@ -695,7 +695,7 @@ fn a_store_into_a_field_grows_the_bindings_object() {
     let names = fx.names.clone();
     let (checked, script) = fx.script("let a; a.x = 1; a.y = true; a");
     checked.admitted();
-    let TyKind::Object(ObjectTy::Structural(fields, ())) = checked.kind(binding(&checked, &script, &names, "a")) else {
+    let TyKind::Object { fields, label: () } = checked.kind(binding(&checked, &script, &names, "a")) else {
         panic!("not a structural object");
     };
     let names: Vec<Astr> = fields.iter().map(|(name, _)| *name).collect();
@@ -711,7 +711,7 @@ fn a_field_an_opaque_object_lacks_is_refused() {
     let mut fx = Fixture::new();
     let age = fx.name("age");
     let i64_ty = fx.int(IntTy::I64);
-    let user = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(age, i64_ty)]), ())));
+    let user = fx.ty(TyKind::Object { fields: Box::new([(age, i64_ty)]), label: () });
     fx.context("user", user);
     let (checked, _) = fx.script("@user.name");
     assert_eq!(checked.refusals(), vec![&RefusalKind::GrowsOpaque]);
@@ -899,7 +899,7 @@ fn an_object_pattern_binds_fields() {
     let mut fx = Fixture::new();
     let name = fx.name("name");
     let bool_ty = fx.ty(TyKind::Bool);
-    let data = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(name, bool_ty)]), ())));
+    let data = fx.ty(TyKind::Object { fields: Box::new([(name, bool_ty)]), label: () });
     fx.context("data", data);
     let (checked, script) = fx.script("if let { name, } = @data { name } else { false }");
     checked.admitted();
@@ -1857,7 +1857,7 @@ fn a_clone_lifts_over_every_transparent_structured_type_nested() {
     let option = fx.ty(TyKind::Option(i64_ty, ()));
     let result = fx.ty(TyKind::Result(string, bool_ty, ()));
     let array = fx.ty(TyKind::Array(option, LenTerm::Known(2), ()));
-    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, array), (b, result)]), ())));
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, array), (b, result)]), label: () });
     let whole = fx.ty(TyKind::Tuple(Box::new([object, color]), ()));
     fx.input("t", whole);
     let (checked, script) = fx.script("$t.clone()");
@@ -1893,7 +1893,7 @@ fn a_clone_of_a_structure_with_a_part_of_no_impl_is_refused() {
     let clone = fx.raw.core.clone;
     let (string, bool_ty) = (fx.ty(TyKind::String), fx.ty(TyKind::Bool));
     let a = fx.name("a");
-    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, string)]), ())));
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, string)]), label: () });
     let option = fx.ty(TyKind::Option(object, ()));
     let whole = fx.ty(TyKind::Tuple(Box::new([bool_ty, option]), ()));
     fx.input("t", whole);
@@ -1941,7 +1941,7 @@ fn an_object_narrows_to_the_fields_a_declarations_parameter_names() {
     let mut fx = Fixture::new();
     let (a, b) = (fx.name("a"), fx.name("b"));
     let (i64_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::Unit));
-    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, i64_ty)]), ())));
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, i64_ty)]), label: () });
     let takes = fx.pure(&[object], unit);
     fx.declare("f", takes, &[]);
     let (checked, script) = fx.script("f({ a: 1, b: true, })");
@@ -1953,7 +1953,7 @@ fn an_object_narrows_to_the_fields_a_declarations_parameter_names() {
         panic!("an object is coerced by its shape");
     };
     assert_eq!(shape, &ShapeCoercion::Narrowed { left: Box::new([b]) });
-    let TyKind::Object(ObjectTy::Structural(fields, ())) = checked.kind(*to) else {
+    let TyKind::Object { fields, label: () } = checked.kind(*to) else {
         panic!("coerced to the parameter's object");
     };
     assert_eq!(fields.iter().map(|(name, _)| *name).collect::<Vec<_>>(), vec![a]);
@@ -1966,7 +1966,7 @@ fn an_object_lacking_a_field_its_parameter_names_is_refused() {
     let mut fx = Fixture::new();
     let (a, b) = (fx.name("a"), fx.name("b"));
     let (i64_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::Unit));
-    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, i64_ty), (b, i64_ty)]), ())));
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, i64_ty), (b, i64_ty)]), label: () });
     let takes = fx.pure(&[object], unit);
     fx.declare("f", takes, &[]);
     let (checked, _) = fx.script("f({ a: 1, })");
@@ -1982,7 +1982,7 @@ fn a_mismatch_of_heads_prints_both_types() {
     let mut fx = Fixture::new();
     let (a, b) = (fx.name("a"), fx.name("b"));
     let (i64_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::Unit));
-    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, i64_ty), (b, i64_ty)]), ())));
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, i64_ty), (b, i64_ty)]), label: () });
     let takes = fx.pure(&[object], unit);
     fx.declare("f", takes, &[]);
     let names = fx.names.clone();
@@ -2070,7 +2070,7 @@ fn a_field_through_a_reference_waits_for_its_objects_type() {
     let mut fx = Fixture::new();
     let a = fx.name("a");
     let bool_ty = fx.ty(TyKind::Bool);
-    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, bool_ty)]), ())));
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, bool_ty)]), label: () });
     fx.context("o", object);
     let (checked, script) = fx.script("let f = |r| -> r.a; f(&@o)");
     checked.admitted();
@@ -2820,7 +2820,7 @@ fn a_meeting_is_decided_by_the_value_written_elsewhere_in_either_order() {
         let mut fx = Fixture::new();
         let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
         let a = fx.name("a");
-        let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, i64_ty)]), ())));
+        let object = fx.ty(TyKind::Object { fields: Box::new([(a, i64_ty)]), label: () });
         let makes = fx.pure(&[], object);
         fx.declare("f", makes, &[]);
         fx.input("c", bool_ty);
@@ -3054,7 +3054,7 @@ fn a_reference_to_a_structure_is_coerced_through_its_target() {
     let mut fx = Fixture::new();
     let (i64_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::Unit));
     let a = fx.name("a");
-    let object = fx.ty(TyKind::Object(ObjectTy::Structural(Box::new([(a, i64_ty)]), ())));
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, i64_ty)]), label: () });
     let shared_object = fx.reference(Mutability::Shared, object);
     let takes = fx.pure(&[shared_object], unit);
     fx.declare("f", takes, &[]);
@@ -3426,7 +3426,7 @@ fn as_ref_lends_each_part_one_level() {
             matches!(checked.kind(ty), TyKind::Tuple(items, ()) if items.len() == 2 && items.iter().all(|item| matches!(checked.kind(*item), TyKind::Ref(Mutability::Shared, _))))
         }),
         ("let p = { a: 1, b: true, }; let r = p.as_ref(); 0", &|checked, ty| {
-            matches!(checked.kind(ty), TyKind::Object(ObjectTy::Structural(fields, ())) if fields.iter().all(|(_, field)| matches!(checked.kind(*field), TyKind::Ref(Mutability::Shared, _))))
+            matches!(checked.kind(ty), TyKind::Object { fields, label: () } if fields.iter().all(|(_, field)| matches!(checked.kind(*field), TyKind::Ref(Mutability::Shared, _))))
         }),
         ("let o = Some(1); let r = o.as_ref(); 0", &|checked, ty| {
             matches!(checked.kind(ty), TyKind::Option(payload, ()) if matches!(checked.kind(*payload), TyKind::Ref(Mutability::Shared, _)))
@@ -3583,7 +3583,7 @@ fn a_field_stored_by_name_grows_the_bindings_object() {
     let names = fx.names.clone();
     let (checked, script) = fx.script("let a = { x: 1, }; a.y = 2; 0");
     checked.admitted();
-    let TyKind::Object(ObjectTy::Structural(fields, ())) = checked.kind(binding(&checked, &script, &names, "a")) else {
+    let TyKind::Object { fields, label: () } = checked.kind(binding(&checked, &script, &names, "a")) else {
         panic!("not a structural object");
     };
     let names: Vec<Astr> = fields.iter().map(|(name, _)| *name).collect();

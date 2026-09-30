@@ -21,7 +21,7 @@ use super::ctxt::Lcx;
 use crate::ir::cfg::{Op, Terminator};
 use crate::ir::{Intrinsic, PathSeg, RefTarget, ValueId, fn_effect, known_len};
 use crate::ty::structural::{PartKey, Structure, structure};
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, LenTerm, Mutability, ObjectTy, Reissue, Ty, TyKind};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, LenTerm, Mutability, Reissue, Ty, TyKind};
 use crate::typeck::Coercion;
 
 /// `value`, a transparent structured value, or where `through` is `Some` a
@@ -164,8 +164,8 @@ fn gathered(cx: &mut Lcx<'_, '_>, through: Mutability, target: Ty) -> Ty {
     let part = |cx: &mut Lcx<'_, '_>, ty: Ty| part_reference(cx, through, ty);
     let kind = match cx.kind(target).clone() {
         TyKind::Tuple(items, ()) => TyKind::Tuple(items.iter().map(|item| part(cx, *item)).collect(), ()),
-        TyKind::Object(ObjectTy::Structural(fields, ())) => {
-            TyKind::Object(ObjectTy::Structural(fields.iter().map(|(name, field)| (*name, part(cx, *field))).collect(), ()))
+        TyKind::Object { fields, label: () } => {
+            TyKind::Object { fields: fields.iter().map(|(name, field)| (*name, part(cx, *field))).collect(), label: () }
         }
         TyKind::Enum { name, variants, label: () } => TyKind::Enum {
             name,

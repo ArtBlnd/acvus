@@ -176,8 +176,8 @@ fn for_each_position_level(
                 for_each_position(types, lifetimes, *item, on_position);
             }
         }
-        TyKind::Object(object) => {
-            for (_, field) in object.fields() {
+        TyKind::Object { fields, .. } => {
+            for (_, field) in fields {
                 for_each_position(types, lifetimes, *field, on_position);
             }
         }

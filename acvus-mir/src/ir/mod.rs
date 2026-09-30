@@ -457,7 +457,7 @@ pub fn is_scalar(kind: &crate::ty::TyKind<Concrete>) -> bool {
         }
         TyKind::String
         | TyKind::Array(..)
-        | TyKind::Object(_)
+        | TyKind::Object { .. }
         | TyKind::Tuple(.., _)
         | TyKind::Option(.., _)
         | TyKind::Result(..)

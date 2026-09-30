@@ -13,7 +13,7 @@ use crate::passes::analysis::{
 };
 use crate::ty::{
     Alignment, Calls, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IdentityId,
-    IdentityTerm, IntTy, Mark, MarkTerm, Mutability, ObjectTy, Reissue, SplitCost, Ty, TyKind, Types,
+    IdentityTerm, IntTy, Mark, MarkTerm, Mutability, Reissue, SplitCost, Ty, TyKind, Types,
 };
 
 struct Fixture {
@@ -34,7 +34,7 @@ fn fixture() -> Fixture {
     let int = types.intern(TyKind::Int(IntTy::I64));
     let bool = types.intern(TyKind::Bool);
     let (a, b) = (names.intern("a"), names.intern("b"));
-    let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(a, int), (b, int)]), ())));
+    let object = types.intern(TyKind::Object { fields: Box::new([(a, int), (b, int)]), label: () });
     let mut_int = types.intern(TyKind::Ref(Mutability::Mut, int));
     let effectful = types.intern(TyKind::Fn {
         params: Box::new([]),

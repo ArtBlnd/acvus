@@ -1967,7 +1967,7 @@ fn a_narrowed_object_is_a_new_object_of_the_parameters_fields() {
     let mut fx = Fixture::new();
     let a = fx.name("a");
     let (int, unit) = (fx.int(), fx.ty(TyKind::Unit));
-    let object = fx.ty(TyKind::Object(crate::ty::ObjectTy::Structural(Box::new([(a, int)]), ())));
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, int)]), label: () });
     let ty = fx.function(&[object], unit, Effect::pure());
     let f = fx.declare("f", ty, 1);
     let lowered = fx.script("f({ a: 1, b: true, })");
@@ -1982,10 +1982,10 @@ fn a_narrowed_object_is_a_new_object_of_the_parameters_fields() {
     let Op::FunctionCall { args, .. } = call.op() else {
         unreachable!("found as a call");
     };
-    let TyKind::Object(narrowed) = lowered.kind_of(body, args[0]) else {
+    let TyKind::Object { fields: narrowed, .. } = lowered.kind_of(body, args[0]) else {
         panic!("`f` receives an object: {}", shown(body));
     };
-    assert_eq!(narrowed.fields().iter().map(|(name, _)| *name).collect::<Vec<_>>(), vec![a], "{}", shown(body));
+    assert_eq!(narrowed.iter().map(|(name, _)| *name).collect::<Vec<_>>(), vec![a], "{}", shown(body));
     let made = insts.iter().find(|inst| inst.result() == Some(args[0])).expect("the argument is made in the body");
     assert!(matches!(made.op(), Op::MakeObject { fields } if fields.len() == 1), "{}", shown(body));
 }
@@ -2065,7 +2065,7 @@ fn a_reference_coerced_through_its_target_gathers_references_to_its_parts() {
     let mut fx = Fixture::new();
     let a = fx.name("a");
     let (int, unit) = (fx.int(), fx.ty(TyKind::Unit));
-    let object = fx.ty(TyKind::Object(crate::ty::ObjectTy::Structural(Box::new([(a, int)]), ())));
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, int)]), label: () });
     let shared = fx.reference(Mutability::Shared, object);
     let ty = fx.function(&[shared], unit, Effect::pure());
     fx.declare("f", ty, 1);
