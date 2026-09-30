@@ -51,7 +51,7 @@ pub enum TyKind<V: Phase> {
     /// An extern-defined type (extern-fn §8).
     UserDefined {
         id: QualifiedRef,
-        type_args: Box<[TypeArg<V>]>,
+        type_args: Box<[TyId<V>]>,
         /// The one effect it carries, apart from its type arguments
         /// (`T<…> with E`), where it declares one: an upper bound on the
         /// work its values hold. The type is covariant in it, as a function
@@ -59,8 +59,13 @@ pub enum TyKind<V: Phase> {
         effect: Option<EffectTerm<V>>,
         /// The one identity it carries, where it declares one (types §3).
         identity: Option<IdentityTerm<V>>,
+        /// `#`: this whole concrete type, a type of its own, never part of
+        /// another type but as what a reference lends or as a function
+        /// type's parameter or result; its one step up is the same type
+        /// unmarked (types §8).
+        marked: bool,
     },
-    Ref(Mutability, TypeArg<V>),
+    Ref(Mutability, TyId<V>),
     /// A closure with code at each of a set of function types over one
     /// environment: what a generalized binding holds once lowered, each a
     /// signature one of its instances has (functions §2). The set is

@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use indexmap::IndexSet;
 use rustc_hash::FxBuildHasher;
 
-pub use arg::{IdentityId, IdentityTerm, LenTerm, TypeArg};
+pub use arg::{IdentityId, IdentityTerm, LenTerm};
 pub use effect::{Contexts, Cost, Effect, EffectTerm, Reissue, SplitCost};
 pub use flow::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Labelled, Source};
 pub use facts::{LifetimesOf, PositionKind, Resolve, copies, copies_alone, copies_in, for_each_position, lent_types, position_kinds, positions};
@@ -35,8 +35,6 @@ pub trait Phase: 'static + Copy + fmt::Debug + Eq + Hash {
     type EffectVar: fmt::Debug + Copy + Eq + Hash;
     type LenVar: fmt::Debug + Copy + Eq + Hash;
     type IdentityVar: fmt::Debug + Copy + Eq + Hash;
-    /// The open `#` of an argument whose mark is not decided yet (types §8).
-    type ReprVar: fmt::Debug + Copy + Eq + Hash;
     type FlowVar: fmt::Debug + Copy + Eq + Hash;
     /// What a function type's `holds` is in this phase: a fixed `Holds`,
     /// or, while solving, a term that copies of one type share.
@@ -63,7 +61,6 @@ impl Phase for Concrete {
     type EffectVar = Infallible;
     type LenVar = Infallible;
     type IdentityVar = Infallible;
-    type ReprVar = Infallible;
     type FlowVar = Infallible;
     type HoldsTerm = Holds;
     type CallsTerm = Calls;
@@ -80,7 +77,6 @@ impl Phase for Poly {
     type EffectVar = u32;
     type LenVar = u32;
     type IdentityVar = u32;
-    type ReprVar = u32;
     type FlowVar = Infallible;
     type HoldsTerm = Holds;
     type CallsTerm = Calls;
@@ -97,7 +93,6 @@ impl Phase for Infer {
     type EffectVar = EffectVarId;
     type LenVar = LenVarId;
     type IdentityVar = IdentityVarId;
-    type ReprVar = ReprVarId;
     type FlowVar = FlowVarId;
     type HoldsTerm = HoldsTerm;
     type CallsTerm = CallsTerm;
@@ -145,8 +140,6 @@ pub struct EffectVarId(pub u32);
 pub struct LenVarId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IdentityVarId(pub u32);
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ReprVarId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FlowVarId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

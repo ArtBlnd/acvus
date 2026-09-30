@@ -186,6 +186,14 @@ pub enum Op {
         src: ValueId,
         to: CastTy,
     },
+    /// The step from a marked extern-defined type `#F<A>` to `F<A>` (types
+    /// §8): the value is unchanged, and a backend holding `#F<A>` in a
+    /// representation of its own takes `F<A>`'s here. Its result's type is
+    /// `src`'s unmarked. A backend treating `#F<A>` as `F<A>` makes it a
+    /// copy.
+    Unmark {
+        src: ValueId,
+    },
 
     // Functions
     /// Load a graph-level function into a value (for passing as argument, storing, etc.)

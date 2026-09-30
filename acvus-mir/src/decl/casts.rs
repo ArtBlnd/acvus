@@ -62,7 +62,18 @@ pub enum Base {
     Object,
     Enum(QualifiedRef),
     Fn,
-    Named(QualifiedRef),
+    /// An extern-defined type, marked `#` or not: two heads, the marked one
+    /// a step below the unmarked (types §8).
+    Named { id: QualifiedRef, marked: bool },
+}
+
+/// One step up the tree (types §3, §8): a declared cast or a view, or the
+/// step from a marked extern-defined type to the same type unmarked, where
+/// a backend takes the unmarked type's representation.
+#[derive(Debug, Clone, Copy)]
+pub enum Step<'t> {
+    Cast(&'t VerifiedExternCast),
+    Unmark,
 }
 
 /// The declared casts and the views (operators §5) as one tree: every head
@@ -76,8 +87,9 @@ pub struct CastTree {
 }
 
 impl CastTree {
-    /// The one step up from `head`, if any.
-    pub fn step_up(&self, head: Head) -> Option<&VerifiedExternCast> {
-        self.up.get(&head)
+    /// The one step up from `head`, if any: a marked head's is `Unmark`,
+    /// which no declared cast shares (types §8).
+    pub fn step_up(&self, head: Head) -> Option<Step<'_>> {
+        todo!("A4: Unmark for a marked Named head, else the declared cast")
     }
 }
