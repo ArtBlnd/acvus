@@ -393,6 +393,7 @@ pub(super) struct Recorded {
     pub types: FxHashMap<AstId, Term>,
     pub reached: FxHashMap<AstId, Chosen>,
     pub callees: FxHashMap<AstId, Term>,
+    pub origins: FxHashMap<AstId, Term>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Term>>,
     pub conversions: FxHashMap<AstId, Converted>,
@@ -770,6 +771,7 @@ fn swap_recorded(cx: &mut Ctxt<'_>, instance: InstanceId) {
     std::mem::swap(&mut out.types, &mut recorded.types);
     std::mem::swap(&mut out.reached, &mut recorded.reached);
     std::mem::swap(&mut out.callees, &mut recorded.callees);
+    std::mem::swap(&mut out.origins, &mut recorded.origins);
     std::mem::swap(&mut out.iteration, &mut recorded.iteration);
     std::mem::swap(&mut out.tries, &mut recorded.tries);
     std::mem::swap(&mut out.conversions, &mut recorded.conversions);

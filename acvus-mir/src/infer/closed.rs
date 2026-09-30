@@ -3,7 +3,8 @@
 
 use super::{End, Infer, Term};
 use crate::decl::{Base, CastTree, Head};
-use crate::ty::{ObjectTy, Phase, Poly, TyId, TyKind, TyVarId, Types};
+use super::cells::End as CellEnd;
+use crate::ty::{Mark, MarkTerm, ObjectTy, Phase, Poly, TyId, TyKind, TyVarId, Types};
 
 /// What the decisions still pending may do: typeck answers from its
 /// decision graph; B only asks.
@@ -43,6 +44,28 @@ impl Infer {
     /// of its cast tree still gains fields or variants.
     pub fn fixed(&self, open: &impl OpenSources, term: Term) -> bool {
         matches!(self.end(term), End::Node { .. }) && !open.may_grow(term)
+    }
+
+    /// Whether `term` holds a mark cell not yet unmarked, as itself or a
+    /// part but behind no reference and in no function type: a use may
+    /// still raise it, and a mark is a member (types §6, §8).
+    pub fn holds_raisable_mark(&self, term: Term) -> bool {
+        acvus_utils::grow(|| {
+            let End::Node { node, .. } = self.end(term) else {
+                return false;
+            };
+            let kind = self.types.kind(node);
+            let own = match kind {
+                TyKind::Ref(..) | TyKind::Fn { .. } => return false,
+                TyKind::UserDefined { marked: marked @ MarkTerm::Var(_), .. } => {
+                    !matches!(self.mark_vars.end(marked), CellEnd::Var { value: Some(Mark::Unmarked), .. })
+                }
+                _ => false,
+            };
+            let mut parts = Vec::new();
+            kind.for_each_child(|part| parts.push(part));
+            own || parts.into_iter().any(|part| self.holds_raisable_mark(part))
+        })
     }
 
     /// The variable a relation rebinds to change `term`'s head: the last

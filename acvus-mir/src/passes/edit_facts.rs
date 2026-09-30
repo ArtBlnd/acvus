@@ -495,6 +495,7 @@ mod tests {
     use crate::ir::cfg::edit::{Asked, CannotDischarge, CannotMove, Discharge, Editor, Motion, NoFacts, Remove, Value};
     use crate::ir::cfg::{Inst, Module, Terminator};
     use crate::ir::{BinOp, Callee, Overflow, RefTarget};
+    use crate::ty::{Mark, MarkTerm};
     use crate::ty::{
         Calls, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue, SplitCost,
         TyKind,
@@ -1150,7 +1151,7 @@ mod tests {
             type_args: Box::new([]),
             effect: None,
             identity: None,
-            marked: false,
+            marked: MarkTerm::Known(Mark::Unmarked),
         });
         let mut_map = types.intern(TyKind::Ref(Mutability::Mut, map_ty));
         let slice = types.intern(TyKind::Slice(int));
@@ -1234,7 +1235,7 @@ mod tests {
             type_args: Box::new([]),
             effect: None,
             identity: None,
-            marked: false,
+            marked: MarkTerm::Known(Mark::Unmarked),
         });
         let mut_map = types.intern(TyKind::Ref(Mutability::Mut, map_ty));
         let slice = types.intern(TyKind::Slice(int));

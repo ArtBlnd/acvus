@@ -14,6 +14,7 @@ use crate::check::{Refusal, check};
 use crate::decl::{ContextDecl, Core, Declarations, DeclaredFacts, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::lower::{lower_script, required};
 use crate::passes::analysis::AnalysisManager;
+use crate::ty::{Mark, MarkTerm};
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, ObjectTy, Poly, TyId, TyKind, Types};
 use crate::typeck::check_script;
 
@@ -114,7 +115,7 @@ impl Fixture {
             type_args: Box::new([int]),
             effect: None,
             identity: None,
-            marked: false,
+            marked: MarkTerm::Known(Mark::Unmarked),
         })
     }
 

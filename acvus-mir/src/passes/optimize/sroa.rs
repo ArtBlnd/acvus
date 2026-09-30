@@ -53,6 +53,7 @@ mod tests {
     use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
     use crate::ir::cfg::{Body, Inst, Op, Terminator};
     use crate::ir::{PathSeg, RefTarget};
+    use crate::ty::{Mark, MarkTerm};
     use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, Types};
 
     struct Fixture {
@@ -76,7 +77,7 @@ mod tests {
             type_args: Box::new([]),
             effect: None,
             identity: None,
-            marked: false,
+            marked: MarkTerm::Known(Mark::Unmarked),
         });
         Fixture { module: Module::new(types), interner, int, pair, ref_pair, declared }
     }

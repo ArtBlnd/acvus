@@ -12,6 +12,7 @@ use super::decision::variables_of;
 use crate::decl::{CastRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::infer::ShapeCoercion;
 use crate::ty::structural::PartKey;
+use crate::ty::{Mark, MarkTerm};
 use crate::ty::{
     Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind, Types,
 };
@@ -39,23 +40,11 @@ impl Checked {
     }
 
     /// The steps of the concrete coercion typeck recorded at `site`.
-    fn coercion_steps(&self, site: AstId) -> &[super::CoercionStep] {
+    fn steps(&self, site: AstId) -> &[super::Conversion<Ty>] {
         match &self.typeck.coercions[&site] {
             super::Coercion::Steps(steps) => steps,
             other => panic!("a concrete value is coerced by steps, not {other:?}"),
         }
-    }
-
-    /// The steps of the concrete coercion typeck recorded at `site`, each
-    /// through a function.
-    fn steps(&self, site: AstId) -> Vec<&super::Conversion<Ty>> {
-        self.coercion_steps(site)
-            .iter()
-            .map(|step| match step {
-                super::CoercionStep::Via(conversion) => conversion,
-                super::CoercionStep::Unmark { .. } => panic!("a step through a function, not {step:?}"),
-            })
-            .collect()
     }
 
     fn admitted(&self) {
@@ -212,7 +201,7 @@ impl Fixture {
             type_args: Box::new([element]),
             effect: None,
             identity: None,
-            marked: false,
+            marked: MarkTerm::Known(Mark::Unmarked),
         })
     }
 
@@ -2005,10 +1994,7 @@ fn a_tuple_part_casts_at_a_declarations_parameter_but_not_where_two_meet_in_a_bo
     let [(PartKey::Index(0), Some(super::Coercion::Steps(steps))), (PartKey::Index(1), None)] = &parts[..] else {
         panic!("the first part is coerced by steps, the second enters as it is: {parts:?}");
     };
-    let [super::CoercionStep::Via(step)] = &steps[..] else {
-        panic!("one step through a function: {steps:?}");
-    };
-    assert_eq!(step.via.declaration, widen);
+    assert_eq!(steps[0].via.declaration, widen);
 
     let (fx, _) = widening();
     let (checked, _) = fx.script("if true { (1u8, true) } else { (2i64, false) }");
@@ -2200,7 +2186,7 @@ fn a_view_step_names_its_impl() {
         type_args: Box::new([]),
         effect: None,
         identity: None,
-        marked: false,
+        marked: MarkTerm::Known(Mark::Unmarked),
     });
     let bool_ty = fx.ty(TyKind::Bool);
     let shared_other = fx.reference(Mutability::Shared, other);

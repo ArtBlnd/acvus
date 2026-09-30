@@ -29,7 +29,7 @@ use super::output::{AsCast, Chosen, Converted, Impl, Iteration, TryExit};
 use super::reach::{self, Candidate, Match, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
-use crate::decl::{Base, Head, ImplSig, Scheme, Step as TreeStep};
+use crate::decl::{Base, Head, ImplSig, Scheme};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
 use crate::ty::structural::structure;
 use crate::ty::{
@@ -231,13 +231,14 @@ impl Decision {
 
     /// The terms this decision may still rebind when it fires: its
     /// outputs, and an `Enter`'s value where the slot is not a structure
-    /// written elsewhere, since a fold links the value to the slot.
+    /// written elsewhere, since a fold links the value to the slot, or
+    /// where the value holds a mark entering may raise (types §6, §8).
     fn grows(&self, infer: &Infer) -> Vec<Term> {
         match self {
             Decision::Enter { value, slot, .. } => {
                 let written_elsewhere =
                     structure(infer.types(), infer.shallow(*slot)).is_some_and(|slot| slot.label() == Label::Elsewhere);
-                match written_elsewhere {
+                match written_elsewhere && !infer.holds_raisable_mark(*value) {
                     true => vec![*slot],
                     false => vec![*value, *slot],
                 }
@@ -1500,11 +1501,8 @@ pub(super) fn chain_up(cx: &Ctxt<'_>, head: Head) -> Vec<Head> {
     let mut chain = vec![head];
     let mut at = head;
     while let Some(step) = cx.decls.casts().step_up(at) {
-        at = match step {
-            TreeStep::Cast(cast) => poly_head(cx.decls.types(), cast.rule().to)
-                .expect("a tree step joins two heads: verify refuses one without (CastWithoutHead)"),
-            TreeStep::Unmark => at.unmarked(),
-        };
+        at = poly_head(cx.decls.types(), step.rule().to)
+            .expect("a tree step joins two heads: verify refuses one without (CastWithoutHead)");
         chain.push(at);
     }
     chain
@@ -1556,7 +1554,7 @@ fn poly_base(kind: &TyKind<Poly>) -> Option<Base> {
         TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
         TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
-        TyKind::UserDefined { id, marked, .. } => Base::Named { id: *id, marked: *marked },
+        TyKind::UserDefined { id, .. } => Base::Named(*id),
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::Ref(..) => panic!("a declared reference's target is never a reference (ReferenceToReference)"),
@@ -1579,7 +1577,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
         result,
         effect,
     } = decision;
-    let Instantiated { ty, requirements, .. } = instantiate(cx, offer, span);
+    let Instantiated { ty, requirements, declared_result, .. } = instantiate(cx, offer, span);
     let TyKind::Fn {
         params,
         ret,
@@ -1627,6 +1625,9 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
             super::effect::join_into(cx, &effect, &declared_effect, span);
             cx.out.reached.insert(site, chosen);
             cx.out.callees.insert(site, ty);
+            if let Some(declared) = declared_result {
+                cx.out.origins.insert(site, declared);
+            }
         }
     }
     settle_bounded(cx, ty, span);
@@ -1748,7 +1749,7 @@ fn instantiate(cx: &mut Ctxt<'_>, offer: Offer, span: Span) -> Instantiated {
     requirements.extend(own.requirements);
     let mut flows = generic.flows;
     flows.extend(own.flows);
-    Instantiated { ty: own.ty, requirements, flows }
+    Instantiated { ty: own.ty, requirements, flows, declared_result: own.declared_result }
 }
 
 /// `scheme` at fresh variables, each flow into its call's effect refused,

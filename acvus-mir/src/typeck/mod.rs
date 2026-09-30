@@ -59,7 +59,7 @@ use crate::ty::{Concrete, Ty, TyKind, Types};
 
 pub use generalize::InstanceId;
 pub use interface::{Interface, Interfaces};
-pub use output::{InstanceDecided, Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Coercion, CoercionStep, Conversion, Impl, Iteration, Name, Own, StructureTree, TryExit, Typeck, UnitCall};
+pub use output::{InstanceDecided, Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Coercion, Conversion, Impl, Iteration, Name, Own, StructureTree, TryExit, Typeck, UnitCall};
 pub use refusal::{Exceeding, Refusal, RefusalKind, Unimplemented};
 
 /// A unit's inputs as a check takes them (graph): open, each a fresh type

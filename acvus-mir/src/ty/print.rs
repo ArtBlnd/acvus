@@ -19,7 +19,7 @@ use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 use crate::ir::{known_effect, known_len};
 use crate::ty::{
     Alignment, Calls, Concrete, Effect, FlowEnd, FlowTerm, Flows, Holds, IdentityTerm, ObjectTy, Reissue,
-    SplitCost, Ty, TyKind, Types,
+    Mark, MarkTerm, SplitCost, Ty, TyKind, Types,
 };
 
 /// `ty` written in the language's notation.
@@ -122,8 +122,10 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             write_bracket(&carried, out);
         }
         TyKind::UserDefined { id, type_args, effect, identity, marked } => {
-            if *marked {
-                out.push('#');
+            match marked {
+                MarkTerm::Known(Mark::Marked) => out.push('#'),
+                MarkTerm::Known(Mark::Unmarked) => {}
+                MarkTerm::Var(var) => match *var {},
             }
             out.push_str(&qualified(names, *id));
             if !type_args.is_empty() {

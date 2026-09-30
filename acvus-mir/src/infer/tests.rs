@@ -187,18 +187,19 @@ fn every_constructor_is_invariant() {
     assert_eq!(fx.infer.eq(a, result), Err(Mismatch::Heads { a, b: result }));
 }
 
-/// types §8: `#F<A>` and `F<A>` are two heads, as two types of different
-/// names are.
+/// types §8: `eq` makes two marks one, as it does two effects, so a
+/// marked one and an unmarked one are not made one.
 #[test]
 fn a_mark_on_one_side_only_is_a_mismatch() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
     let vec = QualifiedRef::root(fx.name("Vec"));
-    let vec_of = |fx: &mut Fixture, marked| {
+    let vec_of = |fx: &mut Fixture, mark| {
+        let marked = crate::ty::MarkTerm::Known(mark);
         fx.kind(TyKind::UserDefined { id: vec, type_args: Box::new([int]), effect: None, identity: None, marked })
     };
-    let (plain, marked) = (vec_of(&mut fx, false), vec_of(&mut fx, true));
-    assert_eq!(fx.infer.eq(plain, marked), Err(Mismatch::Heads { a: plain, b: marked }));
+    let (plain, marked) = (vec_of(&mut fx, crate::ty::Mark::Unmarked), vec_of(&mut fx, crate::ty::Mark::Marked));
+    assert_eq!(fx.infer.eq(plain, marked), Err(Mismatch::Mark { a: plain, b: marked }));
 }
 
 /// types §1: sameness is decided by shape; labels never make two equal
@@ -1308,7 +1309,7 @@ fn identities(names: &Interner, to_string: bool) -> Declarations {
             type_args: Box::new([]),
             effect: None,
             identity: Some(IdentityTerm::Var(0)),
-            marked: false,
+            marked: MarkTerm::Known(Mark::Unmarked),
         })
     };
     let (token_ty, span_ty) = (with_identity(&mut types, token), with_identity(&mut types, span));
@@ -1336,7 +1337,7 @@ impl Fixture {
             type_args: Box::new([]),
             effect: None,
             identity: Some(IdentityTerm::Known(IdentityId::from_raw(identity))),
-            marked: false,
+            marked: MarkTerm::Known(Mark::Unmarked),
         })
     }
 }

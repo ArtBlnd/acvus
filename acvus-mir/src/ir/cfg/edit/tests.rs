@@ -14,6 +14,7 @@ use super::*;
 use crate::ir::cfg::{Aspect, Builder, Inst, OrderUse, Stages, Terminator};
 use crate::ir::{BinOp, Callee, Checked, Overflow, RefTarget, UnaryOp};
 use crate::ir::{ForSource, SwitchKey};
+use crate::ty::{Mark, MarkTerm};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect as CallEffect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability,
     ObjectTy, Reissue, TyKind, Types,
@@ -82,7 +83,7 @@ fn fixture() -> Fixture {
         type_args: Box::new([]),
         effect: None,
         identity: None,
-        marked: false,
+        marked: MarkTerm::Known(Mark::Unmarked),
     });
     Fixture {
         module: Module::new(types),

@@ -13,6 +13,7 @@ use crate::ir::cfg::edit::{DefDominatesUses, Invariant, NeverDiverges, OrderChai
 use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
 use crate::passes::analysis::{Loan, Mode, Storage};
+use crate::ty::{Mark, MarkTerm};
 use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 use crate::typeck::{Inputs, Interfaces, check_script, check_template};
 
@@ -151,7 +152,7 @@ impl Fixture {
             type_args: Box::new([element]),
             effect: None,
             identity: None,
-            marked: false,
+            marked: MarkTerm::Known(Mark::Unmarked),
         })
     }
 
@@ -973,7 +974,7 @@ fn a_declared_conversion_step_is_a_call_of_its_via() {
         type_args: Box::new([]),
         effect: None,
         identity: None,
-        marked: false,
+        marked: MarkTerm::Known(Mark::Unmarked),
     });
     let int = fx.int();
     let via_ty = fx.function(&[int], meters, Effect::pure());
@@ -1015,35 +1016,66 @@ impl Fixture {
         id
     }
 
-    /// `ty`, an extern-defined type, marked.
+    /// `ty`, an unmarked extern-defined type, marked.
     fn marked(&mut self, ty: TyId<Poly>) -> TyId<Poly> {
-        let TyKind::UserDefined { id, type_args, effect, identity, marked: false } = self.raw.types.kind(ty).clone() else {
+        let TyKind::UserDefined { id, type_args, effect, identity, marked: MarkTerm::Known(Mark::Unmarked) } =
+            self.raw.types.kind(ty).clone()
+        else {
             panic!("only an unmarked extern-defined type is marked here");
         };
-        self.ty(TyKind::UserDefined { id, type_args, effect, identity, marked: true })
+        self.ty(TyKind::UserDefined { id, type_args, effect, identity, marked: MarkTerm::Known(Mark::Marked) })
     }
 
     /// `make() -> #Vec<i64>`, the extern fn that gives a marked value, and
-    /// `Vec<i64>` with it.
-    fn makes_marked_vec(&mut self) -> (TyId<Poly>, TyId<Poly>) {
+    /// `Vec<i64>` and `#Vec<i64>` with it.
+    fn makes_marked_vec(&mut self) -> (QualifiedRef, TyId<Poly>, TyId<Poly>) {
         let vec = self.vec_of_ints();
         let marked = self.marked(vec);
         let make = self.function(&[], marked, Effect::pure());
-        self.declare("make", make, 0);
-        (vec, marked)
+        let make = self.declare("make", make, 0);
+        (make, vec, marked)
+    }
+
+    /// `id<T>(T) -> T`, where a type variable stands.
+    fn identity_fn(&mut self) -> QualifiedRef {
+        let t = self.ty(TyKind::Var(0));
+        let ty = self.function(&[t], t, Effect::pure());
+        self.declare_in("generic", "id", ty, 1, 1)
+    }
+
+    /// `source`'s refusals, checked over these declarations.
+    fn refused(self, source: &str) -> Vec<crate::typeck::RefusalKind> {
+        let script: Script = acvus_ast::parse_script(&self.names, source).expect("the test's source parses");
+        let decls = Declarations::verify(self.raw).expect("the test's declarations verify");
+        let mut types = Types::new();
+        let inputs = crate::typeck::fixed_inputs(&decls, &mut types, &self.inputs);
+        let typeck = check_script(&self.names, &decls, &Interfaces::new(), Inputs::Fixed(&inputs), &mut types, &script);
+        typeck.refusals.into_iter().map(|refusal| refusal.kind).collect()
     }
 }
 
-/// The first `Op::Unmark` of the entry, with its operand and its result.
-fn unmark_of(lowered: &Lowered) -> Option<(crate::ir::ValueId, crate::ir::ValueId)> {
+/// Each `Op::Unmark` of the entry, with its operand and its result.
+fn unmarks_of(lowered: &Lowered) -> Vec<(crate::ir::ValueId, crate::ir::ValueId)> {
     lowered
         .entry()
         .blocks()
         .flat_map(|(_, block)| block.insts())
-        .find_map(|inst| match inst.op() {
+        .filter_map(|inst| match inst.op() {
             Op::Unmark { src } => Some((*src, inst.result().expect("an Unmark yields a value"))),
             _ => None,
         })
+        .collect()
+}
+
+/// The results of the entry's calls of `callee`, in order.
+fn results_of(lowered: &Lowered, callee: QualifiedRef) -> Vec<crate::ir::ValueId> {
+    lowered
+        .entry()
+        .blocks()
+        .flat_map(|(_, block)| block.insts())
+        .filter(|inst| matches!(inst.op(), Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == callee))
+        .filter_map(|inst| inst.result())
+        .collect()
 }
 
 /// The arguments of the entry's one call of `callee`.
@@ -1060,47 +1092,116 @@ fn arguments_of(lowered: &Lowered, callee: QualifiedRef) -> Vec<crate::ir::Value
     args.clone()
 }
 
-/// types §6, §8: a call reaches a declaration taking `#F<A>` where one
-/// exists, at the argument's exact type, and no step up is taken.
+/// types §8: a value every use takes marked stays marked: no `Unmark`.
 #[test]
-fn a_call_reaches_the_marked_overload_where_one_exists() {
+fn a_value_every_use_takes_marked_is_not_unmarked() {
     let mut fx = Fixture::new();
-    let (vec, marked) = fx.makes_marked_vec();
+    let (_, _, marked) = fx.makes_marked_vec();
     let int = fx.int();
     let at_marked = fx.function(&[marked], int, Effect::pure());
-    let at_plain = fx.function(&[vec], int, Effect::pure());
     let specialized = fx.declare_in("fast", "size", at_marked, 1, 0);
-    let plain = fx.declare_in("slow", "size", at_plain, 1, 0);
     let lowered = fx.script("size(make())");
     assert_eq!(calls_of(&lowered, specialized), 1, "{}", shown(lowered.entry()));
-    assert_eq!(calls_of(&lowered, plain), 0);
-    assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::Unmark { .. })), 0);
+    assert!(unmarks_of(&lowered).is_empty(), "{}", shown(lowered.entry()));
 }
 
-/// types §3, §8: with no declaration taking `#F<A>`, the argument steps
-/// up to `F<A>`, the step an `Unmark` in the IR.
+/// types §8: a value an unmarked parameter takes is unmarked where it is
+/// given: one `Unmark` right after the call that gives it, whose result
+/// the parameter takes.
 #[test]
-fn a_call_steps_up_to_the_unmarked_declaration_where_no_marked_one_exists() {
+fn a_value_an_unmarked_parameter_takes_is_unmarked_after_its_call() {
     let mut fx = Fixture::new();
-    let (vec, _) = fx.makes_marked_vec();
+    let (make, vec, _) = fx.makes_marked_vec();
     let int = fx.int();
     let at_plain = fx.function(&[vec], int, Effect::pure());
     let plain = fx.declare_in("slow", "size", at_plain, 1, 0);
     let lowered = fx.script("size(make())");
     let body = lowered.entry();
-    let Some((src, unmarked)) = unmark_of(&lowered) else { panic!("an Unmark: {}", shown(body)) };
-    assert!(matches!(lowered.kind_of(body, src), TyKind::UserDefined { marked: true, .. }));
-    assert!(matches!(lowered.kind_of(body, unmarked), TyKind::UserDefined { marked: false, .. }));
+    let [(src, unmarked)] = unmarks_of(&lowered)[..] else { panic!("one Unmark: {}", shown(body)) };
+    assert_eq!(results_of(&lowered, make), vec![src]);
+    assert!(matches!(lowered.kind_of(body, src), TyKind::UserDefined { marked: MarkTerm::Known(Mark::Marked), .. }));
+    assert!(matches!(lowered.kind_of(body, unmarked), TyKind::UserDefined { marked: MarkTerm::Known(Mark::Unmarked), .. }));
     assert_eq!(arguments_of(&lowered, plain), vec![unmarked]);
 }
 
-/// types §3, §8: a declared cast from `F<T>` reaches `#F<A>` only after
-/// its step up to `F<A>`: `#Vec<i64>` entering `Seq<i64>` is unmarked,
-/// then cast by `to_seq`.
+/// types §8: a declaration's type variable never stands for a marked
+/// type, so `id(make())` takes `make()`'s value unmarked.
 #[test]
-fn a_cast_from_a_generic_type_applies_to_a_marked_value_after_its_unmark() {
+fn a_type_variable_standing_for_a_marked_value_raises_it() {
     let mut fx = Fixture::new();
-    let _ = fx.makes_marked_vec();
+    let (make, _, _) = fx.makes_marked_vec();
+    let id = fx.identity_fn();
+    let lowered = fx.script("id(make())");
+    let [(src, unmarked)] = unmarks_of(&lowered)[..] else { panic!("one Unmark: {}", shown(lowered.entry())) };
+    assert_eq!(results_of(&lowered, make), vec![src]);
+    assert_eq!(arguments_of(&lowered, id), vec![unmarked]);
+}
+
+/// types §8: a part of a call's result taken where a type variable stands
+/// raises that part's mark, and the whole result is unmarked after the
+/// call.
+#[test]
+fn a_part_taken_unmarked_unmarks_the_whole_result() {
+    let mut fx = Fixture::new();
+    let (_, _, marked) = fx.makes_marked_vec();
+    let int = fx.int();
+    let pair_ty = fx.ty(TyKind::Tuple(Box::new([marked, int]), ()));
+    let pair_fn = fx.function(&[], pair_ty, Effect::pure());
+    let pair = fx.declare("pair", pair_fn, 0);
+    fx.identity_fn();
+    let lowered = fx.script("match pair() { (x, _) => id(x) }");
+    let body = lowered.entry();
+    let [(src, unmarked)] = unmarks_of(&lowered)[..] else { panic!("one Unmark: {}", shown(body)) };
+    assert_eq!(results_of(&lowered, pair), vec![src]);
+    let TyKind::Tuple(given, _) = lowered.kind_of(body, src) else { panic!("the result as declared is a tuple") };
+    let TyKind::Tuple(taken, _) = lowered.kind_of(body, unmarked) else { panic!("the result taken is a tuple") };
+    let marks = |parts: &[crate::ty::Ty]| match lowered.module.types().kind(parts[0]) {
+        TyKind::UserDefined { marked, .. } => *marked,
+        other => panic!("the first part is `Vec<i64>`, not {other:?}"),
+    };
+    assert_eq!(marks(given), MarkTerm::Known(Mark::Marked));
+    assert_eq!(marks(taken), MarkTerm::Known(Mark::Unmarked));
+    assert_eq!(given[1], taken[1]);
+}
+
+/// types §8: a value a `#` parameter fixes marked is refused where a type
+/// variable would stand for it.
+#[test]
+fn a_value_fixed_marked_is_refused_where_it_would_be_raised() {
+    let mut fx = Fixture::new();
+    let (_, _, marked) = fx.makes_marked_vec();
+    let int = fx.int();
+    let at_marked = fx.function(&[marked], int, Effect::pure());
+    fx.declare_in("fast", "keep", at_marked, 1, 0);
+    fx.identity_fn();
+    let refused = fx.refused("let v = make(); (keep(v), id(v))");
+    assert!(
+        matches!(refused[..], [crate::typeck::RefusalKind::Mismatch(crate::infer::Mismatch::Mark { .. })]),
+        "{refused:?}"
+    );
+}
+
+/// types §8: marks join as effects do: a value meeting an unmarked one is
+/// raised, so both values an `if` joins are unmarked after their calls.
+#[test]
+fn a_value_meeting_an_unmarked_one_is_raised() {
+    let mut fx = Fixture::new();
+    let (make, _, _) = fx.makes_marked_vec();
+    fx.identity_fn();
+    let bool_ty = fx.ty(TyKind::Bool);
+    fx.input("f", bool_ty);
+    let lowered = fx.script("let a = make(); let b = make(); if $f { id(a) } else { b }");
+    let unmarked: Vec<_> = unmarks_of(&lowered).into_iter().map(|(src, _)| src).collect();
+    assert_eq!(unmarked, results_of(&lowered, make), "{}", shown(lowered.entry()));
+}
+
+/// types §3, §8: a declared cast is from an unmarked type, so a marked
+/// value taking it is raised: `#Vec<i64>` entering `Seq<i64>` is unmarked
+/// after its call, then cast by `to_seq`.
+#[test]
+fn a_cast_taken_by_a_marked_value_raises_it() {
+    let mut fx = Fixture::new();
+    let (make, _, _) = fx.makes_marked_vec();
     let (vec_id, seq_id) = (QualifiedRef::root(fx.name("Vec")), QualifiedRef::root(fx.name("Seq")));
     fx.raw.user_types.push(UserTypeDecl {
         id: seq_id,
@@ -1120,16 +1221,10 @@ fn a_cast_from_a_generic_type_applies_to_a_marked_value_after_its_unmark() {
     let take_ty = fx.function(&[seq_int], int, Effect::pure());
     let take = fx.declare_in("seqs", "take", take_ty, 1, 0);
     let lowered = fx.script("take(make())");
-    let body = lowered.entry();
-    let Some((_, unmarked)) = unmark_of(&lowered) else { panic!("an Unmark: {}", shown(body)) };
+    let [(src, unmarked)] = unmarks_of(&lowered)[..] else { panic!("one Unmark: {}", shown(lowered.entry())) };
+    assert_eq!(results_of(&lowered, make), vec![src]);
     assert_eq!(arguments_of(&lowered, to_seq), vec![unmarked]);
-    let cast = body
-        .blocks()
-        .flat_map(|(_, block)| block.insts())
-        .find(|inst| matches!(inst.op(), Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == to_seq))
-        .and_then(|inst| inst.result())
-        .expect("a call of the cast's via");
-    assert_eq!(arguments_of(&lowered, take), vec![cast]);
+    assert_eq!(arguments_of(&lowered, take), results_of(&lowered, to_seq));
 }
 
 // -- D79: comparisons by parts, inputs in lambdas, shared captures of `&mut` ---

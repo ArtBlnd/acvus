@@ -130,6 +130,12 @@ impl<'a> Decided<'a> {
         self.read(|at| at.callees.get(&site).copied(), |run| run.callees.get(&site).copied())
     }
 
+    /// The type the value of the call at `site` is taken at, where its uses
+    /// settled it other than its declared result (types §8).
+    pub fn unmark(&self, site: AstId) -> Option<Ty> {
+        self.read(|at| at.unmarks.get(&site).copied(), |run| run.unmarks.get(&site).copied())
+    }
+
     pub fn coercion(&self, site: AstId) -> Option<&'a Coercion> {
         self.read(|at| at.coercions.get(&site), |run| run.coercions.get(&site))
     }

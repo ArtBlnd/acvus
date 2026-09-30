@@ -6,8 +6,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
 use super::generalize::InstanceId;
-use super::output::{Closure, Coercion, CoercionNode, CoercionStep, Conversion, Entered, InstanceDecided, StructureNode, StructureTree, Typeck};
-use crate::decl::{Base, DeclaredFacts, Head, Scheme, Step as TreeStep, TyVarBound};
+use super::output::{Closure, Coercion, CoercionNode, Conversion, Entered, InstanceDecided, StructureNode, StructureTree, Typeck};
+use crate::decl::{Base, DeclaredFacts, Head, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, ShapeCoercion, Term, Unsettled};
 use crate::ty::structural::PartKey;
 use crate::ty::{
@@ -65,10 +65,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         .map(|(_, scheme)| (scheme.binder, scheme.lambdas.clone().into()))
         .collect();
     let result = freeze(&mut cx, types, &mut memo, result);
-    let callees = std::mem::take(&mut cx.out.callees)
-        .into_iter()
-        .filter_map(|(site, callee)| Some((site, freeze(&mut cx, types, &mut memo, callee)?)))
-        .collect();
+    let (callees, unmarks) = callees(&mut cx, types, &mut memo);
     let body_effect = match cx.out.body_effect.take() {
         Some(effect) => effect_of(&mut cx, effect),
         // A run that calls nothing has no effect to order (effects §1).
@@ -82,6 +79,7 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         reached: std::mem::take(&mut cx.out.reached),
         units: std::mem::take(&mut cx.out.units),
         callees,
+        unmarks,
         iteration: std::mem::take(&mut cx.out.iteration),
         tries,
         coercions,
@@ -316,7 +314,7 @@ fn structured(
     types: &mut Types<Concrete>,
     memo: &mut FreezeMemo,
     nodes: &FxHashMap<AstId, CoercionNode>,
-    steps: &mut FxHashMap<AstId, Box<[CoercionStep]>>,
+    steps: &mut FxHashMap<AstId, Box<[Conversion<Ty>]>>,
     site: AstId,
 ) -> Option<Option<Coercion>> {
     let node = &nodes[&site];
@@ -343,13 +341,13 @@ fn structured(
 /// Two different coercions at one site: every value enters its slot at its
 /// own site, and the sites that two entries share (a branch with no tail
 /// and a missing `else`, both `()`) coerce nothing.
-fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<AstId, Box<[CoercionStep]>> {
-    let mut out: FxHashMap<AstId, Box<[CoercionStep]>> = FxHashMap::default();
-    let mut record = |site: AstId, steps: Vec<CoercionStep>| {
+fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> FxHashMap<AstId, Box<[Conversion<Ty>]>> {
+    let mut out: FxHashMap<AstId, Box<[Conversion<Ty>]>> = FxHashMap::default();
+    let mut record = |site: AstId, steps: Vec<Conversion<Ty>>| {
         if steps.is_empty() {
             return;
         }
-        let steps: Box<[CoercionStep]> = steps.into();
+        let steps: Box<[Conversion<Ty>]> = steps.into();
         if let Some(earlier) = out.get(&site) {
             assert_eq!(earlier, &steps, "one site coerces one way");
             return;
@@ -359,7 +357,7 @@ fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut Freeze
     let mut applied: Vec<(AstId, Vec<Step>)> = std::mem::take(&mut cx.out.conversions)
         .into_iter()
         .map(|(site, converted)| {
-            let step = Step::Via {
+            let step = Step {
                 node: converted.node,
                 via_ty: converted.via_ty,
                 to: converted.to,
@@ -379,24 +377,15 @@ fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut Freeze
     for (site, steps) in applied {
         let mut frozen = Vec::with_capacity(steps.len());
         let mut left_open = false;
-        for step in steps {
-            let step = match step {
-                Step::Via { node, via_ty, to } => {
-                    let via = cx
-                        .out
-                        .reached
-                        .remove(&node)
-                        .expect("a coercion step is recorded in `reached` at its node");
-                    match (freeze(cx, types, memo, via_ty), freeze(cx, types, memo, to)) {
-                        (Some(via_ty), Some(to)) => Some(CoercionStep::Via(Conversion { via, via_ty, to })),
-                        _ => None,
-                    }
-                }
-                Step::Unmark { to } => freeze(cx, types, memo, to).map(|to| CoercionStep::Unmark { to }),
-            };
-            match step {
-                Some(step) => frozen.push(step),
-                None => left_open = true,
+        for Step { node, via_ty, to } in steps {
+            let via = cx
+                .out
+                .reached
+                .remove(&node)
+                .expect("a coercion step is recorded in `reached` at its node");
+            match (freeze(cx, types, memo, via_ty), freeze(cx, types, memo, to)) {
+                (Some(via_ty), Some(to)) => frozen.push(Conversion { via, via_ty, to }),
+                _ => left_open = true,
             }
         }
         if !left_open {
@@ -406,12 +395,12 @@ fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut Freeze
     out
 }
 
-/// One coercion step before its types are frozen: a `via` reached at
-/// `node` (`decision::reach_step`) before its requirements are reached, or
-/// the step from a marked type to the same type unmarked (types §8).
-enum Step {
-    Via { node: AstId, via_ty: Term, to: Term },
-    Unmark { to: Term },
+/// One coercion step, its `via` reached at `node` (`decision::reach_step`),
+/// before its requirements are reached and its types frozen.
+struct Step {
+    node: AstId,
+    via_ty: Term,
+    to: Term,
 }
 
 /// The steps up the cast tree from `value`'s head to `slot`'s, each with
@@ -438,18 +427,6 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
                 "a folded value's slot is up the cast tree from it, and no refusal explains otherwise"
             );
             return None;
-        };
-        let step = match step {
-            TreeStep::Cast(cast) => cast,
-            TreeStep::Unmark => {
-                let reached = match at.head.unmarked() == to.head {
-                    true => slot,
-                    false => cx.infer.unmarked(at.term),
-                };
-                steps.push(Step::Unmark { to: reached });
-                at = cx.closed(reached)?;
-                continue;
-            }
         };
         let rule = step.rule().clone();
         let view_impl = step.view_impl();
@@ -481,7 +458,7 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
             body: &body,
         };
         let via_ty = super::decision::reach_step(cx, step, at.term, reached);
-        steps.push(Step::Via { node, via_ty, to: reached });
+        steps.push(Step { node, via_ty, to: reached });
         at = cx.closed(reached)?;
     }
     Some(steps)
@@ -591,10 +568,7 @@ fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMe
                 })
                 .collect();
             let structure_trees = structure_trees(cx, types, memo);
-            let callees = std::mem::take(&mut cx.out.callees)
-                .into_iter()
-                .filter_map(|(site, callee)| Some((site, freeze(cx, types, memo, callee)?)))
-                .collect();
+            let (callees, unmarks) = callees(cx, types, memo);
             InstanceDecided {
                 binder: Some(binder),
                 use_site: Some(use_site),
@@ -602,6 +576,7 @@ fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMe
                 types: site_types,
                 reached: std::mem::take(&mut cx.out.reached),
                 callees,
+                unmarks,
                 iteration: std::mem::take(&mut cx.out.iteration),
                 tries,
                 coercions,
@@ -613,6 +588,37 @@ fn instances(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMe
         out.insert(id, decided);
     }
     out
+}
+
+/// Each reached call's function type, its result the declared one, and
+/// each call whose uses settled its result otherwise, with the type they
+/// settled: a value given marked and taken unmarked (types §8).
+fn callees(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> (FxHashMap<AstId, Ty>, FxHashMap<AstId, Ty>) {
+    let origins = std::mem::take(&mut cx.out.origins);
+    let mut callees = FxHashMap::default();
+    let mut unmarks = FxHashMap::default();
+    for (site, callee) in std::mem::take(&mut cx.out.callees) {
+        let Some(callee) = freeze(cx, types, memo, callee) else {
+            continue;
+        };
+        let Some(declared) = origins.get(&site).and_then(|declared| freeze(cx, types, memo, *declared)) else {
+            callees.insert(site, callee);
+            continue;
+        };
+        let TyKind::Fn { params, ret: settled, effect, flows, calls, holds, values } = types.kind(callee).clone() else {
+            panic!("a reached call's callee is a function type");
+        };
+        match settled == declared {
+            true => {
+                callees.insert(site, callee);
+            }
+            false => {
+                unmarks.insert(site, settled);
+                callees.insert(site, types.intern(TyKind::Fn { params, ret: declared, effect, flows, calls, holds, values }));
+            }
+        }
+    }
+    (callees, unmarks)
 }
 
 /// Each site a generalized binding's value passes through where it is

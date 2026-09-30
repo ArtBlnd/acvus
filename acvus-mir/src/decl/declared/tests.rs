@@ -4,6 +4,7 @@ use super::*;
 use crate::decl::{
     Core, Declarations, DeclaredFacts, GenericImplSig, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme,
 };
+use crate::ty::{Mark, MarkTerm};
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, TyKind, Types};
 
 struct Fixture {
@@ -167,7 +168,7 @@ fn well_formed_facts_of_every_kind_verify() {
         type_args: Box::new([]),
         effect: None,
         identity: None,
-        marked: false,
+        marked: MarkTerm::Known(Mark::Unmarked),
     });
     f.raw.user_types.push(crate::decl::UserTypeDecl {
         id: QualifiedRef::root(f.interner.intern("Map")),

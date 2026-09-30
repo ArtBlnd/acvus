@@ -80,26 +80,6 @@ pub struct Conversion<T> {
     pub to: T,
 }
 
-/// One step of a coercion's chain up the cast tree, or a declared
-/// conversion (types §3, §7, §8).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CoercionStep {
-    Via(Conversion<Ty>),
-    /// A marked extern-defined type, or a reference to one, to the same
-    /// type unmarked (types §8).
-    Unmark { to: Ty },
-}
-
-impl CoercionStep {
-    /// The type the step reaches.
-    pub fn to(&self) -> Ty {
-        match self {
-            CoercionStep::Via(conversion) => conversion.to,
-            CoercionStep::Unmark { to } => *to,
-        }
-    }
-}
-
 /// A declared conversion applied while checking (types §7): its `via`
 /// reached at `node`, where `reached` records what it chose, and its
 /// function type there.
@@ -227,7 +207,7 @@ pub(super) enum StructureNode {
 /// enters as it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Coercion {
-    Steps(Box<[CoercionStep]>),
+    Steps(Box<[Conversion<Ty>]>),
     /// `through` is `Some` where the value is a reference whose target is
     /// coerced, the result a reference built of references to the kept
     /// parts (ownership §5).
@@ -241,7 +221,7 @@ impl Coercion {
     /// No step: writeback records a coercion of at least one step.
     pub fn to(&self) -> Ty {
         match self {
-            Coercion::Steps(steps) => steps.last().expect("a recorded coercion has a step").to(),
+            Coercion::Steps(steps) => steps.last().expect("a recorded coercion has a step").to,
             Coercion::Structured { to, .. } => *to,
         }
     }
@@ -318,6 +298,10 @@ pub(super) struct Output {
     /// interface was instantiated there, at the site `reached` or `units`
     /// has it.
     pub callees: FxHashMap<AstId, Term>,
+    /// Each reached call whose result as declared holds a mark its value
+    /// starts in a fresh cell of its own, with that declared result
+    /// (types §8).
+    pub origins: FxHashMap<AstId, Term>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Term>>,
     /// Each value converted by a declared conversion (types §7), at its
@@ -354,8 +338,12 @@ pub struct Typeck {
     /// Each call of a unit, at the call's site.
     pub units: FxHashMap<AstId, UnitCall>,
     /// Each reached call's function type at its site, the site `reached`
-    /// or `units` has it at.
+    /// or `units` has it at. A call's result is its declared one.
     pub callees: FxHashMap<AstId, Ty>,
+    /// Each reached call whose uses settled its result at a type other than
+    /// its declared result, which it differs from only in marks raised
+    /// (types §8): the type its value is taken at.
+    pub unmarks: FxHashMap<AstId, Ty>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Ty>>,
     /// Each coercion, at the site of the value coerced.
@@ -404,6 +392,7 @@ pub struct InstanceDecided {
     pub types: FxHashMap<AstId, Ty>,
     pub reached: FxHashMap<AstId, Chosen>,
     pub callees: FxHashMap<AstId, Ty>,
+    pub unmarks: FxHashMap<AstId, Ty>,
     pub iteration: FxHashMap<AstId, Iteration>,
     pub tries: FxHashMap<AstId, TryExit<Ty>>,
     pub coercions: FxHashMap<AstId, Coercion>,

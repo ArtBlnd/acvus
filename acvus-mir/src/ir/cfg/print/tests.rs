@@ -13,7 +13,7 @@ use crate::passes::analysis::{
 };
 use crate::ty::{
     Alignment, Calls, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IdentityId,
-    IdentityTerm, IntTy, Mutability, ObjectTy, Reissue, SplitCost, Ty, TyKind, Types,
+    IdentityTerm, IntTy, Mark, MarkTerm, Mutability, ObjectTy, Reissue, SplitCost, Ty, TyKind, Types,
 };
 
 struct Fixture {
@@ -432,23 +432,23 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
     let everything = function(&[ref_int], ref_int, reading, flows, Calls::Many, Holds::Mut);
     let writing = Effect::new(Reissue::Opaque, true, Contexts::new(), Contexts::from([d]), SplitCost::Unavailable);
     let no_flows = function(&[], int, writing, Flows::none(), Calls::Many, Holds::Shared);
-    let vec = |types: &mut Types<Concrete>, effect: Option<EffectTerm<Concrete>>, identity: Option<IdentityTerm<Concrete>>, marked| {
+    let vec = |types: &mut Types<Concrete>, effect: Option<EffectTerm<Concrete>>, identity: Option<IdentityTerm<Concrete>>, mark| {
         types.intern(TyKind::UserDefined {
             id: QualifiedRef::root(names.intern("Vec")),
             type_args: Box::new([int]),
             effect,
             identity,
-            marked,
+            marked: MarkTerm::Known(mark),
         })
     };
-    let plain_vec = vec(&mut types, None, None, false);
-    let opaque_vec = vec(&mut types, Some(EffectTerm::Known(Effect::opaque())), None, true);
-    let pure_vec = vec(&mut types, Some(EffectTerm::Known(Effect::pure())), None, true);
+    let plain_vec = vec(&mut types, None, None, Mark::Unmarked);
+    let opaque_vec = vec(&mut types, Some(EffectTerm::Known(Effect::opaque())), None, Mark::Marked);
+    let pure_vec = vec(&mut types, Some(EffectTerm::Known(Effect::pure())), None, Mark::Marked);
     let marked_vec = vec(
         &mut types,
         Some(EffectTerm::Known(pure_reading(c))),
         Some(IdentityTerm::Known(IdentityId::from_raw(3))),
-        true,
+        Mark::Marked,
     );
 
     let shown = |ty| crate::ty::print::ty(&types, &names, ty);

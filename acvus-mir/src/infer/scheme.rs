@@ -10,7 +10,7 @@ use super::{Bound, FlowId, Infer, Term};
 use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound, effect_variables};
 use crate::ty::{
     Calls, CallsTerm, Concrete, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityTerm, IdentityVarId,
-    Infer as InferPhase, Label, LenTerm, LenVarId, MarkTerm, ObjectTy, Phase, Poly, Ty, TyId, TyKind, Types,
+    Infer as InferPhase, Label, LenTerm, LenVarId, Mark, MarkTerm, ObjectTy, Phase, Poly, Ty, TyId, TyKind, Types,
 };
 
 /// A requirement at the use's own terms: an impl of `generic_function` whose
@@ -30,6 +30,10 @@ pub struct Instantiated {
     /// The flows into the call's effect this use made (extern-fn §2), each
     /// refused where it would raise a fixed effect, as any flow is.
     pub flows: Vec<FlowId>,
+    /// The result as declared, where it holds a mark the call's result
+    /// starts in a fresh cell of its own (types §8): the call gives its
+    /// value at this type, and takes it at the type its uses settle.
+    pub declared_result: Option<Term>,
 }
 
 /// A variable of a written type: a declaration's positional placeholder,
@@ -154,6 +158,7 @@ impl Infer {
             Some(_) => (self.instantiate_ty(&mut at, scheme.ty), Vec::new()),
             None => self.instantiate_running(&mut at, scheme.ty, &scheme.runs),
         };
+        let (ty, declared_result) = self.with_origin_marks(ty);
         let requirements = scheme
             .requires
             .iter()
@@ -163,7 +168,45 @@ impl Infer {
                 fact: required.fact,
             })
             .collect();
-        Instantiated { ty, requirements, flows }
+        Instantiated { ty, requirements, flows, declared_result }
+    }
+
+    /// The function type `ty` with each mark its result holds as declared
+    /// marked, as itself or a part but behind no reference and in no
+    /// function type, a fresh mark of its own (types §8): the value the
+    /// call gives starts marked, and each use taking it unmarked raises it.
+    /// Its parameters keep theirs, fixing what enters them marked. The
+    /// result as declared is returned beside, where any mark was made
+    /// fresh.
+    fn with_origin_marks(&mut self, ty: Term) -> (Term, Option<Term>) {
+        let TyKind::Fn { params, ret, effect, flows, calls, holds, values } = self.types.kind(ty).clone() else {
+            return (ty, None);
+        };
+        let given = self.fresh_origin_marks(ret);
+        match given == ret {
+            true => (ty, None),
+            false => (self.intern(TyKind::Fn { params, ret: given, effect, flows, calls, holds, values }), Some(ret)),
+        }
+    }
+
+    fn fresh_origin_marks(&mut self, term: Term) -> Term {
+        acvus_utils::grow(|| {
+            let kind = self.types.kind(term).clone();
+            if matches!(kind, TyKind::Ref(..) | TyKind::Fn { .. } | TyKind::Var(_)) {
+                return term;
+            }
+            let mut parts = Vec::new();
+            kind.for_each_child(|part| parts.push(part));
+            let mut given = parts.into_iter().map(|part| self.fresh_origin_marks(part)).collect::<Vec<_>>().into_iter();
+            let mut rebuilt = kind.with_children(&mut |_| given.next().expect("one part given for each part read"));
+            if let TyKind::UserDefined { marked: marked @ MarkTerm::Known(Mark::Marked), .. } = &mut rebuilt {
+                *marked = self.fresh_mark();
+            }
+            match rebuilt == kind {
+                true => term,
+                false => self.intern(rebuilt),
+            }
+        })
     }
 
     /// A declared function type at this use, its effect the call's

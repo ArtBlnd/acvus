@@ -122,6 +122,7 @@ mod tests {
     use acvus_utils::{Interner, QualifiedRef};
 
     use super::{PartKey, Structure, structure};
+    use crate::ty::{Mark, MarkTerm};
     use crate::ty::{Concrete, IntTy, LenTerm, Mutability, ObjectTy, Ty, TyKind, Types};
 
     fn parts(types: &Types<Concrete>, ty: Ty) -> Vec<Ty> {
@@ -197,7 +198,7 @@ mod tests {
             type_args: Box::new([]),
             effect: None,
             identity: None,
-            marked: false,
+            marked: MarkTerm::Known(Mark::Unmarked),
         });
         let reference = types.intern(TyKind::Ref(Mutability::Shared, int));
         let never = types.intern(TyKind::Never);

@@ -14,7 +14,7 @@ use super::{
 use super::declared::{self, Atom, Subject};
 use super::segments::{Segment, segments};
 use crate::ty::{
-    Alignment, Declared, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LenTerm, LifetimesOf, Mutability, ObjectTy,
+    Alignment, Declared, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, Labelled, LenTerm, LifetimesOf, Mark, MarkTerm, Mutability, ObjectTy,
     Poly, TyId, TyKind, Types,
 };
 
@@ -67,7 +67,8 @@ pub enum Refused {
     /// argument, which a marked type never is (types §8).
     MarkedPart { written: Written },
     /// A declared cast or a view from a marked type, or a reference to one:
-    /// a marked type's one step up is the same type unmarked (types §8).
+    /// a cast is taken from the unmarked type, and a marked value taking it
+    /// is raised (types §8).
     CastFromMarked { via: QualifiedRef },
     /// A context's or an entry's declared type holds a type variable. A
     /// context is one value of one fixed type (context §2), and an entry is
@@ -697,7 +698,15 @@ fn refuse_type_variables_in_value_types(
 }
 
 fn is_marked(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
-    matches!(types.kind(ty), TyKind::UserDefined { marked: true, .. })
+    matches!(types.kind(ty), TyKind::UserDefined { marked: MarkTerm::Known(Mark::Marked), .. })
+}
+
+/// Whether `ty` is a marked type or a reference lending one.
+fn is_or_lends_marked(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
+    match types.kind(ty) {
+        TyKind::Ref(_, target) => is_marked(types, *target),
+        _ => is_marked(types, ty),
+    }
 }
 
 fn holds_type_variable(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
@@ -842,7 +851,7 @@ fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
         TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
-        TyKind::UserDefined { id, marked, .. } => Base::Named { id: *id, marked: *marked },
+        TyKind::UserDefined { id, .. } => Base::Named(*id),
         TyKind::Ref(..) => panic!(
             "a reference's target is never a reference (types §4): a rule with such an end is refused as \
              ReferenceToReference and left out of the tree"
@@ -896,7 +905,7 @@ fn cast_tree(
     let mut steps = Vec::new();
     for rule in rules {
         match rule.and_then(|rule| Step::of(types, rule)) {
-            Ok(step) if step.from.is_marked() => refused.push(Refused::CastFromMarked { via: step.rule.rule.via }),
+            Ok(step) if is_or_lends_marked(types, step.rule.rule.from) => refused.push(Refused::CastFromMarked { via: step.rule.rule.via }),
             Ok(step) => steps.push(step),
             Err(refusal) => refused.push(refusal),
         }
@@ -1422,7 +1431,7 @@ mod tests {
 
     use super::*;
     use crate::decl::{
-        DeclaredFacts, EndLabels, GenericImplSig, ImplSig, Impls, LoopMarkers, Outlives, Step as TreeStep, TyVarBound,
+        DeclaredFacts, EndLabels, GenericImplSig, ImplSig, Impls, LoopMarkers, Outlives, TyVarBound,
     };
     use crate::ty::{Calls, Effect, EffectTerm, IntTy, LenTerm};
 
@@ -1483,7 +1492,7 @@ mod tests {
                 type_args: Box::new([]),
                 effect: None,
                 identity: None,
-                marked: false,
+                marked: MarkTerm::Known(Mark::Unmarked),
             })
         }
 
@@ -1778,16 +1787,15 @@ mod tests {
         let to = fixture.user_type(b, 0);
         fixture.cast(from, to, via);
         let decls = fixture.verify().expect("one step up is a tree");
-        let Some(TreeStep::Cast(step)) = decls.casts().step_up(Head::Base(Base::Named { id: a, marked: false })) else {
-            panic!("A steps up by its cast");
-        };
+        let step = decls.casts().step_up(Head::Base(Base::Named(a))).expect("A steps up");
         assert_eq!(step.rule().via, via);
-        assert!(decls.casts().step_up(Head::Base(Base::Named { id: b, marked: false })).is_none());
+        assert!(decls.casts().step_up(Head::Base(Base::Named(b))).is_none());
     }
 
     /// `#A`, the declared extern type `id` of no parameter, marked.
     fn marked(fixture: &mut Fixture, id: QualifiedRef) -> TyId<Poly> {
-        fixture.ty(TyKind::UserDefined { id, type_args: Box::new([]), effect: None, identity: None, marked: true })
+        let marked = MarkTerm::Known(Mark::Marked);
+        fixture.ty(TyKind::UserDefined { id, type_args: Box::new([]), effect: None, identity: None, marked })
     }
 
     /// The extern type `id` of one parameter, `V<T>`, declared.
@@ -1802,36 +1810,26 @@ mod tests {
         });
     }
 
-    fn one_parameter(fixture: &mut Fixture, id: QualifiedRef, arg: TyId<Poly>, marked: bool) -> TyId<Poly> {
+    fn one_parameter(fixture: &mut Fixture, id: QualifiedRef, arg: TyId<Poly>, mark: Mark) -> TyId<Poly> {
+        let marked = MarkTerm::Known(mark);
         fixture.ty(TyKind::UserDefined { id, type_args: Box::new([arg]), effect: None, identity: None, marked })
     }
 
-    /// types §8: a marked head, or a reference to one, steps up to the same
-    /// head unmarked.
-    #[test]
-    fn a_marked_heads_one_step_up_is_the_same_head_unmarked() {
-        let mut fixture = Fixture::new();
-        let a = fixture.name("m", "A");
-        fixture.user_type(a, 0);
-        let decls = fixture.verify().expect("an extern type verifies");
-        let marked_a = Base::Named { id: a, marked: true };
-        assert!(matches!(decls.casts().step_up(Head::Base(marked_a)), Some(TreeStep::Unmark)));
-        assert!(matches!(decls.casts().step_up(Head::Ref(Mutability::Shared, marked_a)), Some(TreeStep::Unmark)));
-        assert_eq!(Head::Base(marked_a).unmarked(), Head::Base(Base::Named { id: a, marked: false }));
-    }
-
     /// types §8: `#A` stands as a binding's type, a parameter's or a
-    /// result's, a function type's included, and as what a reference
-    /// lends.
+    /// result's, a function type's included, as what a reference lends, and
+    /// as a part of a transparent structured type.
     #[test]
-    fn a_marked_type_stands_as_a_binding_a_parameter_a_result_or_a_lent_type() {
+    fn a_marked_type_stands_as_a_binding_a_parameter_a_result_a_lent_type_or_a_part() {
         let mut fixture = Fixture::new();
         let a = fixture.name("m", "A");
         fixture.user_type(a, 0);
         let marked_a = marked(&mut fixture, a);
         let lent = fixture.reference(Mutability::Shared, marked_a);
         let inner = fixture.function(&[marked_a], marked_a);
-        let ty = fixture.function(&[marked_a, lent, inner], marked_a);
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let tuple = fixture.ty(TyKind::Tuple(Box::new([marked_a, int]), ()));
+        let option = fixture.ty(TyKind::Option(marked_a, ()));
+        let ty = fixture.function(&[marked_a, lent, inner, option], tuple);
         let f = fixture.name("m", "f");
         fixture.declare(f, fixture.plain(ty, 0));
         fixture.raw.contexts.push((fixture.name("m", "c"), ContextDecl { ty: marked_a, volatile: false }));
@@ -1845,7 +1843,7 @@ mod tests {
         let v = fixture.name("m", "V");
         declare_one_parameter(&mut fixture, v);
         let t = fixture.ty(TyKind::Var(0));
-        let marked_v = one_parameter(&mut fixture, v, t, true);
+        let marked_v = one_parameter(&mut fixture, v, t, Mark::Marked);
         let int = fixture.ty(TyKind::Int(IntTy::I64));
         let ty = fixture.function(&[marked_v], int);
         let f = fixture.name("m", "f");
@@ -1853,32 +1851,22 @@ mod tests {
         assert_eq!(refusals(fixture), vec![Refused::MarkedOverTypeVariable { written: Written::Function(f) }]);
     }
 
-    /// types §8: no type but a reference and a function type holds a
-    /// marked one: not a tuple, not a type argument, not `Option`.
+    /// types §8: a marked type is never an extern-defined type's argument.
     #[test]
-    fn a_marked_part_is_refused() {
+    fn a_marked_type_argument_is_refused() {
         let mut fixture = Fixture::new();
         let (a, v) = (fixture.name("m", "A"), fixture.name("m", "V"));
         fixture.user_type(a, 0);
         declare_one_parameter(&mut fixture, v);
         let marked_a = marked(&mut fixture, a);
-        let int = fixture.ty(TyKind::Int(IntTy::I64));
-        let tuple = fixture.ty(TyKind::Tuple(Box::new([marked_a, int]), ()));
-        let argument = one_parameter(&mut fixture, v, marked_a, false);
-        let option = fixture.ty(TyKind::Option(marked_a, ()));
-        let contexts = [("in_tuple", tuple), ("in_argument", argument), ("in_option", option)].map(|(name, ty)| {
-            let id = fixture.name("m", name);
-            fixture.raw.contexts.push((id, ContextDecl { ty, volatile: false }));
-            id
-        });
-        assert_eq!(
-            refusals(fixture),
-            contexts.map(|id| Refused::MarkedPart { written: Written::Context(id) }).to_vec()
-        );
+        let argument = one_parameter(&mut fixture, v, marked_a, Mark::Unmarked);
+        let c = fixture.name("m", "c");
+        fixture.raw.contexts.push((c, ContextDecl { ty: argument, volatile: false }));
+        assert_eq!(refusals(fixture), vec![Refused::MarkedPart { written: Written::Context(c) }]);
     }
 
-    /// types §8: a marked head's one step up is the same head unmarked, so
-    /// no declared cast leaves it.
+    /// types §8: a cast is taken from the unmarked type, which a marked
+    /// value taking it is raised to, so none is declared from a marked one.
     #[test]
     fn a_cast_from_a_marked_type_is_refused() {
         let mut fixture = Fixture::new();
@@ -1963,7 +1951,7 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::TwoStepsUp {
-                head: Head::Base(Base::Named { id: a, marked: false }),
+                head: Head::Base(Base::Named(a)),
                 via: [to_b, to_c]
             }]
         );
@@ -1980,7 +1968,7 @@ mod tests {
         let b_ty = fixture.user_type(b, 0);
         fixture.cast(a_ty, b_ty, to_b);
         fixture.cast(b_ty, a_ty, to_a);
-        assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Base(Base::Named { id: a, marked: false }) }]);
+        assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Base(Base::Named(a)) }]);
     }
 
     /// types §3: a cast between two types of one head is a step from that
@@ -2390,13 +2378,15 @@ mod tests {
         fixture.give(core.as_slice, &[as_slice_at_vec]);
         fixture.give(core.as_str, &[as_str_at_string]);
         let decls = fixture.verify().expect("two views from two heads are a tree");
-        let Some(TreeStep::Cast(from_vec)) = decls.casts().step_up(Head::Ref(Mutability::Shared, Base::Named { id: vec, marked: false })) else {
-            panic!("&Vec steps up by its view");
-        };
+        let from_vec = decls
+            .casts()
+            .step_up(Head::Ref(Mutability::Shared, Base::Named(vec)))
+            .expect("&Vec steps up");
         assert_eq!(from_vec.rule().via, core.as_slice);
-        let Some(TreeStep::Cast(from_string)) = decls.casts().step_up(Head::Ref(Mutability::Shared, Base::String)) else {
-            panic!("&String steps up by its view");
-        };
+        let from_string = decls
+            .casts()
+            .step_up(Head::Ref(Mutability::Shared, Base::String))
+            .expect("&String steps up");
         assert_eq!(from_string.rule().via, core.as_str);
         assert!(decls.casts().step_up(Head::Ref(Mutability::Shared, Base::Slice)).is_none());
     }
@@ -2422,7 +2412,7 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::TwoStepsUp {
-                head: Head::Ref(Mutability::Shared, Base::Named { id: vec, marked: false }),
+                head: Head::Ref(Mutability::Shared, Base::Named(vec)),
                 via: [to_other, core.as_slice]
             }]
         );
@@ -2576,7 +2566,7 @@ mod tests {
             type_args: Box::new([]),
             effect: None,
             identity: None,
-            marked: false,
+            marked: MarkTerm::Known(Mark::Unmarked),
         })
     }
 

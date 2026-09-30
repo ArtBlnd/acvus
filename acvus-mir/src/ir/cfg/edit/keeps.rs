@@ -10,7 +10,7 @@ use crate::ir::cfg::body::InstId;
 use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator};
 use crate::ir::{BinOp, Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
 use crate::ty::structural;
-use crate::ty::{CastTy, Concrete, IntTy, Mutability, Ty, TyKind, Types};
+use crate::ty::{CastTy, Concrete, IntTy, Mark, MarkTerm, Mutability, Ty, TyKind, Types};
 
 /// A breach of an invariant: a compiler defect, never a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,17 +167,35 @@ impl TypeCheck<'_> {
         found(expected(self.kind(ty)), || format!("{value:?} is {:?}, not {what}", self.kind(ty)))
     }
 
-    /// Whether `to` is `from` unmarked: a marked extern-defined type, or a
-    /// reference to one, and the same type unmarked (types §8).
-    fn unmarks(&self, from: Ty, to: Ty) -> bool {
-        match (self.kind(from), self.kind(to)) {
-            (
-                TyKind::UserDefined { id, type_args, effect, identity, marked: true },
-                TyKind::UserDefined { id: to_id, type_args: to_args, effect: to_effect, identity: to_identity, marked: false },
-            ) => id == to_id && type_args == to_args && effect == to_effect && identity == to_identity,
-            (TyKind::Ref(held, lent), TyKind::Ref(to_held, to_lent)) => held == to_held && self.unmarks(*lent, *to_lent),
-            _ => false,
+    /// Whether `to` is `from` with marks raised: the same type, each mark
+    /// either the same or marked in `from` and unmarked in `to` (types §8).
+    fn raises_marks(&self, from: Ty, to: Ty) -> bool {
+        if from == to {
+            return true;
         }
+        let (from_kind, to_kind) = (self.kind(from), self.kind(to));
+        let raised = match (from_kind, to_kind) {
+            (TyKind::UserDefined { marked: before, .. }, TyKind::UserDefined { marked: after, .. }) => {
+                before == after || (*before == MarkTerm::Known(Mark::Marked) && *after == MarkTerm::Known(Mark::Unmarked))
+            }
+            _ => true,
+        };
+        let shell = |kind: &TyKind<Concrete>| match kind.with_children(&mut |_| from) {
+            TyKind::UserDefined { id, type_args, effect, identity, .. } => {
+                TyKind::UserDefined { id, type_args, effect, identity, marked: MarkTerm::Known(Mark::Unmarked) }
+            }
+            other => other,
+        };
+        let parts = |kind: &TyKind<Concrete>| {
+            let mut parts = Vec::new();
+            kind.for_each_child(|part| parts.push(part));
+            parts
+        };
+        let (from_parts, to_parts) = (parts(from_kind), parts(to_kind));
+        raised
+            && shell(from_kind) == shell(to_kind)
+            && from_parts.len() == to_parts.len()
+            && from_parts.iter().zip(&to_parts).all(|(from, to)| self.raises_marks(*from, *to))
     }
 
     fn same(&self, value: ValueId, expected: Ty, what: &str) -> Found {
@@ -398,8 +416,9 @@ impl TypeCheck<'_> {
             }
             Op::Unmark { src } => {
                 let result = Self::result(inst)?;
-                found(self.unmarks(self.ty(*src), self.ty(result)), || {
-                    format!("{result:?} is {:?}, not {src:?}'s {:?} unmarked", self.kind(self.ty(result)), self.kind(self.ty(*src)))
+                let (from, to) = (self.ty(*src), self.ty(result));
+                found(from != to && self.raises_marks(from, to), || {
+                    format!("{result:?} is {:?}, not {src:?}'s {:?} with marks raised", self.kind(to), self.kind(from))
                 })
             }
             Op::LoadFunction { .. } => self.is(Self::result(inst)?, |kind| matches!(kind, TyKind::Fn { .. }), "a function"),
