@@ -10,9 +10,11 @@
 //! reaches that place alone (`Loans::through_one`), as does any other
 //! write `Loans` records by name of a whole place, such as a call's write
 //! of a context it sees beyond the program (context §1). A store into part
-//! of a place, or through a reference that reaches several places, kills
-//! nothing, so a place is live wherever those leave it in doubt. The
-//! body's end reads none of its own places.
+//! of a place kills nothing. A store through a reference that may reach
+//! several places reads each of them, since what it replaces there is
+//! dropped at the store, and kills none: after it each still holds a
+//! content that ends at its own end. The body's end reads none of its own
+//! places. `stored` is what a store touches, for every reader.
 //!
 //! `Liveness` answers for values; this answers for what a place holds, which
 //! a slot's or a parameter's own `ValueId` does not follow, since every
@@ -24,10 +26,13 @@
 //! name or through a reference to it alone. A unit is read where a `Take`
 //! of an overlapping path by name reads it, and wherever `Loans` says the
 //! place is read otherwise, since a read through a reference does not
-//! locate its part; a store into a path covering the unit, by name or
-//! through a reference to the place alone, kills it. Beside it, forward,
-//! each unit's presence: a store into a path covering it, by name or
-//! through a reference to the place alone, fills it, and a `Take` that
+//! locate its part, and a store through a reference that may reach several
+//! places reads each unit overlapping what it may reach; a store into a
+//! path covering the unit, by name or through a reference to the place
+//! alone, kills it. Beside it, forward, each unit's presence: a store into
+//! a path covering it, by name or through a reference to the place alone,
+//! fills it, a store that may reach several places leaves each as it was,
+//! and a `Take` that
 //! moves a covering path out of it, by name or through a reference to it
 //! alone, empties it; any other write by name of a whole place fills it. A
 //! slot starts empty, and a by-value parameter's storage, a context and a
@@ -349,7 +354,10 @@ fn units_of(
                     let taken = inst.result().expect("a Take yields a value");
                     (place, parts::owned_region(path), !copies(types, body.ty_of(taken)))
                 }
-                (Op::Assign { value, .. }, Some((place, path))) => {
+                (Op::Assign { value, .. }, _) => {
+                    let Some(Stored::One { place, path }) = stored(loans, inst) else {
+                        continue;
+                    };
                     (place, parts::owned_region(path), !copies(types, body.ty_of(*value)))
                 }
                 (Op::Ref { .. }, Some((place, path))) => (place, path, false),
@@ -358,12 +366,6 @@ fn units_of(
                         continue;
                     };
                     (place, path, true)
-                }
-                (Op::Assign { target: RefTarget::Through(_), value, .. }, None) => {
-                    let Some((place, path)) = stored_through(loans, inst) else {
-                        continue;
-                    };
-                    (place, parts::owned_region(path), !copies(types, body.ty_of(*value)))
                 }
                 _ => continue,
             };
@@ -472,17 +474,23 @@ impl Backward<'_> {
     /// overlapping the path a `Take` names it by, or all of them.
     fn gen_reads(&self, site: Site, by_name: Option<(Storage, &[PathSeg])>, state: &mut Live) {
         for place in self.loans.reads(site).iter().copied() {
-            state.places.insert(place);
-            let Some(units) = self.units.get(&place) else {
-                continue;
-            };
             let read: &[PathSeg] = match by_name {
                 Some((named, path)) if named == place => path,
                 _ => &[],
             };
-            let touched = units.iter().enumerate().filter(|(_, unit)| overlap(unit, read));
-            state.parts.extend(touched.map(|(index, _)| (place, index)));
+            self.gen_read(place, read, state);
         }
+    }
+
+    /// A read of `path` of `place`: the place, and each unit overlapping
+    /// the path.
+    fn gen_read(&self, place: Storage, path: &[PathSeg], state: &mut Live) {
+        state.places.insert(place);
+        let Some(units) = self.units.get(&place) else {
+            return;
+        };
+        let touched = units.iter().enumerate().filter(|(_, unit)| overlap(unit, path));
+        state.parts.extend(touched.map(|(index, _)| (place, index)));
     }
 }
 
@@ -497,13 +505,13 @@ impl DenseAnalysis for Backward<'_> {
 
     fn transfer(&self, inst: &Inst, state: &mut Live) {
         let site = Site::Inst(inst.id());
-        let stored = match (inst.op(), by_name(inst.op())) {
-            (Op::Assign { .. }, Some(stored)) => Some(stored),
-            (Op::Assign { target: RefTarget::Through(_), .. }, None) => stored_through(self.loans, inst),
-            _ => None,
+        let stored = stored(self.loans, inst);
+        let written = match &stored {
+            Some(Stored::One { place, path }) => Some((*place, *path)),
+            Some(Stored::Several(_)) | None => None,
         };
         let whole = whole_writes(self.loans, site).map(|place| (place, &[][..]));
-        for (place, path) in stored.into_iter().chain(whole) {
+        for (place, path) in written.into_iter().chain(whole) {
             self.kill(place, path, state);
         }
         let read_by_name = match (inst.op(), by_name(inst.op())) {
@@ -511,6 +519,11 @@ impl DenseAnalysis for Backward<'_> {
             _ => None,
         };
         self.gen_reads(site, read_by_name, state);
+        if let Some(Stored::Several(places)) = &stored {
+            for (place, path) in places {
+                self.gen_read(*place, path, state);
+            }
+        }
     }
 
     fn transfer_terminator(&self, block: BlockId, terminator: &Terminator, state: &mut Live) {
@@ -571,11 +584,11 @@ impl Widen for PresenceOf {
 }
 
 /// Forward over the units: a slot's start empty, and a parameter's, a
-/// context's and a storage outside the body's full; a store by name, or
-/// through a reference to one place, fills what it covers, as does any
-/// other write by name of a whole place, and a `Take` by name of a path
-/// that does not copy, or one that moves through a reference to one place,
-/// empties what it covers.
+/// context's and a storage outside the body's full; a store into one place
+/// (`Stored::One`) fills what it covers, as does any other write by name of
+/// a whole place, a store that may reach several places changes nothing,
+/// and a `Take` by name of a path that does not copy, or one that moves
+/// through a reference to one place, empties what it covers.
 struct Forward<'f> {
     units: &'f FxHashMap<Storage, Vec<Path>>,
     types: &'f Types<Concrete>,
@@ -590,11 +603,32 @@ fn moved_through<'l>(loans: &'l Loans, inst: &Inst) -> Option<(Storage, &'l [Pat
     Some((place.storage, parts::owned_region(&place.path)))
 }
 
-/// The place, and the path in it, that an `Assign` through a reference
-/// stores into, where it reaches that place alone.
-fn stored_through<'l>(loans: &'l Loans, inst: &Inst) -> Option<(Storage, &'l [PathSeg])> {
-    let place = loans.through_one(Site::Inst(inst.id()), Reach::Write)?;
-    Some((place.storage, place.path.as_slice()))
+/// What a store writes.
+#[derive(Debug, Clone)]
+pub enum Stored<'a> {
+    /// One place and the path in it: named, or reached through a reference
+    /// that reaches that place alone (`Loans::through_one`).
+    One { place: Storage, path: &'a [PathSeg] },
+    /// The places a reference may reach, each a storage and a path from
+    /// its root, where it reaches more than one place, or one that is not
+    /// one place (`Loans::is_one`).
+    Several(Vec<(Storage, &'a [PathSeg])>),
+}
+
+/// What `inst` writes where it is an `Assign`.
+pub fn stored<'a>(loans: &'a Loans, inst: &'a Inst) -> Option<Stored<'a>> {
+    let Op::Assign { target, path, .. } = inst.op() else {
+        return None;
+    };
+    if let Some(place) = Storage::by_name(target) {
+        return Some(Stored::One { place, path });
+    }
+    let site = Site::Inst(inst.id());
+    if let Some(place) = loans.through_one(site, Reach::Write) {
+        return Some(Stored::One { place: place.storage, path: &place.path });
+    }
+    let reached = loans.accesses(site).iter().filter(|access| access.reach == Reach::Write && !access.through.is_empty());
+    Some(Stored::Several(reached.flat_map(|access| &access.places).map(|place| (place.storage, place.path.as_slice())).collect()))
 }
 
 impl Forward<'_> {
@@ -632,8 +666,10 @@ impl DenseAnalysis for Forward<'_> {
             self.set(place, &[], Presence::Present, state);
         }
         match (inst.op(), by_name(inst.op())) {
-            (Op::Assign { .. }, Some((place, path))) => {
-                self.set(place, parts::owned_region(path), Presence::Present, state);
+            (Op::Assign { .. }, _) => {
+                if let Some(Stored::One { place, path }) = stored(self.loans, inst) {
+                    self.set(place, parts::owned_region(path), Presence::Present, state);
+                }
             }
             (Op::Take { .. }, Some((place, path)))
                 if self.units.contains_key(&place)
@@ -644,11 +680,6 @@ impl DenseAnalysis for Forward<'_> {
             (Op::Take { target: RefTarget::Through(_), .. }, None) => {
                 if let Some((place, region)) = moved_through(self.loans, inst) {
                     self.set(place, region, Presence::Absent, state);
-                }
-            }
-            (Op::Assign { target: RefTarget::Through(_), .. }, None) => {
-                if let Some((place, path)) = stored_through(self.loans, inst) {
-                    self.set(place, parts::owned_region(path), Presence::Present, state);
                 }
             }
             _ => {}

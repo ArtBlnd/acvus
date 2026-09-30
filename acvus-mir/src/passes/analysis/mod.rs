@@ -19,7 +19,7 @@ mod values;
 #[cfg(test)]
 mod tests;
 
-pub use content_liveness::{ContentLiveness, Presence};
+pub use content_liveness::{ContentLiveness, Presence, Stored, stored};
 pub use initialization::{Initialization, Written};
 pub use match_facts::MatchFacts;
 pub use dense::{DenseAnalysis, DenseFacts, Direction, solve_dense};
