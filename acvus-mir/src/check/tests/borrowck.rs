@@ -11,7 +11,7 @@ use crate::decl::{EndLabels, LabelledSignature, Lifetime, SegmentLabel};
 use acvus_utils::QualifiedRef;
 
 use crate::decl::UserTypeDecl;
-use crate::ty::{FlowEnd, Mark, MarkTerm, Mutability, TyKind};
+use crate::ty::{FlowEnd, Mark, MarkTerm, Mutability, Poly, TyId, TyKind};
 
 fn conflict(span: Span, earlier: Vec<Span>, later: Vec<Span>, uses: Vec<Span>) -> Refusal {
     Refusal { kind: RefusalKind::LoanConflict { trace: ConflictTrace { earlier, later, uses } }, span }
@@ -269,8 +269,9 @@ fn a_declared_result_without_lifetimes_holds_every_arguments_loan() {
 
 /// An extern `Slot<'a>` holding one lifetime; `make<'a>(x: &'a i64) ->
 /// Slot<'a>`; `read(s: &Slot) -> i64`, stating no lifetimes; and
-/// `store<'a, 'b>(dst: &'b mut Slot<'a>, src: &'<src> i64)`.
-fn declare_slot(fx: &mut Fixture, src: u32) {
+/// `store<'a, 'b>(dst: &'b mut Slot<'a>, src: &'<src> i64)`; the types
+/// `&mut Slot` and `&Slot`.
+fn declare_slot(fx: &mut Fixture, src: u32) -> (TyId<Poly>, TyId<Poly>) {
     let id = QualifiedRef::root(fx.name("Slot"));
     fx.raw.user_types.push(UserTypeDecl {
         id,
@@ -293,6 +294,7 @@ fn declare_slot(fx: &mut Fixture, src: u32) {
     fx.declare_labelled("make", &[shared_int], slot, lifetimes(&[(FlowEnd::Result, &[0]), (FlowEnd::Param(0), &[0])]));
     fx.declare("read", &[shared_slot], int);
     fx.declare_labelled("store", &[mut_slot, shared_int], unit, lifetimes(&[(FlowEnd::Param(0), &[1, 0]), (FlowEnd::Param(1), &[src])]));
+    (mut_slot, shared_slot)
 }
 
 /// ownership §5, `FlowEnd`: `store` with `src: &'a i64` writes `src`'s
@@ -316,6 +318,59 @@ fn a_declared_write_through_a_mut_parameter_moves_no_loan_its_lifetimes_do_not_g
     declare_slot(&mut fx, 2);
     let refusals = fx.refusals("let x = 1; let y = 2; let s = make(&x); store(&mut s, &y); y = 5; read(&s)");
     assert_eq!(refusals, []);
+}
+
+/// `declare_slot`'s, and `put(dst: &mut Slot, src: &Slot)`: with
+/// `labelled`, `put<'a, 'b, 'c>(dst: &'c mut Slot<'a>, src: &'b Slot<'a>)`,
+/// else stating no lifetimes.
+fn declare_put(fx: &mut Fixture, labelled: bool) {
+    let (mut_slot, shared_slot) = declare_slot(fx, 2);
+    let unit = fx.ty(TyKind::Unit);
+    match labelled {
+        true => {
+            let labels = lifetimes(&[(FlowEnd::Param(0), &[2, 0]), (FlowEnd::Param(1), &[1, 0])]);
+            fx.declare_labelled("put", &[mut_slot, shared_slot], unit, labels);
+        }
+        false => {
+            fx.declare("put", &[mut_slot, shared_slot], unit);
+        }
+    }
+}
+
+/// extern-fn §4, ownership §5: `put` writes into `dst`'s `'a` what `src`'s
+/// `'a` position holds, the loan on `y`, and not `src`'s own `'b` loan on
+/// `t`: writing `t` while `s` lives meets nothing.
+#[test]
+fn a_declared_write_takes_only_the_input_positions_its_lifetimes_give() {
+    let mut fx = Fixture::new();
+    declare_put(&mut fx, true);
+    let refusals = fx.refusals("let x = 1; let y = 2; let s = make(&x); let t = make(&y); put(&mut s, &t); t = make(&x); read(&s)");
+    assert_eq!(refusals, []);
+}
+
+/// The same call: the loan on `y` is written into `s`, so writing `y`
+/// while `s` lives is one refusal, at the write.
+#[test]
+fn a_declared_write_takes_the_input_position_its_lifetimes_give() {
+    let mut fx = Fixture::new();
+    declare_put(&mut fx, true);
+    let source = "let x = 1; let y = 2; let s = make(&x); let t = make(&y); put(&mut s, &t); y = 5; read(&s)";
+    let refusals = fx.refusals(source);
+    let (span, _) = one_conflict(&refusals);
+    assert!(covers(span_of(source, "y = 5;", 0), span), "at the write of `y`: {span:?}");
+}
+
+/// extern-fn §4: `put` stating no lifetimes has every flow, so it writes
+/// every loan of `src`, the one on `t` among them, into `s`: writing `t`
+/// while `s` lives is one refusal, at the write.
+#[test]
+fn a_declared_write_without_lifetimes_takes_every_loan_of_its_arguments() {
+    let mut fx = Fixture::new();
+    declare_put(&mut fx, false);
+    let source = "let x = 1; let y = 2; let s = make(&x); let t = make(&y); put(&mut s, &t); t = make(&x); read(&s)";
+    let refusals = fx.refusals(source);
+    let (span, _) = one_conflict(&refusals);
+    assert!(covers(span_of(source, "t = make(&x);", 0), span), "at the write of `t`: {span:?}");
 }
 
 /// extern-fn §1: where a function value is wanted, a lambda calls the

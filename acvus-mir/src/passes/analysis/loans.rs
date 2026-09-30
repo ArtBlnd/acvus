@@ -1903,16 +1903,15 @@ impl Forward<'_> {
 
     /// What a declared function writes by `flows` through each argument, as
     /// `access` allows where one is declared: into a parameter its flows
-    /// name as an output, every loan of each argument it takes from, as a
-    /// function type's flows write.
+    /// name as an output, the loans of the argument positions its flows
+    /// name for any position of that parameter.
     fn declared_writes(&self, flows: &CallFlows, access: Option<&[Touch]>, passed: &[Vec<LoanSet>]) -> Vec<(FlowEnd, LoanSet)> {
         flows
             .into
             .iter()
             .filter(|(to, _)| matches!(to, FlowEnd::Param(_)) && written_by_access(access, to))
             .map(|(to, positions)| {
-                let from: BTreeSet<usize> = positions.iter().flatten().map(|(param, _)| *param).collect();
-                let region = from.into_iter().flat_map(|param| fold(&passed[param])).collect();
+                let region = positions.iter().flatten().flat_map(|(param, at)| passed[*param][*at].iter().cloned()).collect();
                 (*to, region)
             })
             .collect()
