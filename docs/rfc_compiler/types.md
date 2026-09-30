@@ -48,7 +48,7 @@ A declared extern cast from `S` to `T` makes `S` a subtype of `T`. The declared 
 
 An identity is a binding a value's type carries: it never changes, two identities are known to be one or not, and two different identities are never made one. A type carries at most one identity.
 
-Only the compiler makes an identity. A call whose result's type carries an identity its parameters do not give makes a fresh one, one per call site in each instantiation of its body. A declaration may give its result the identity of a parameter, to one value or to several; it never puts two identities into one type. A value carrying an identity made inside a loop, live across that loop's next iteration, keeps it no longer: it takes its nearest ancestor that carries no identity, where there is one, and is refused where there is none.
+Only the compiler makes an identity. A call whose result's type carries an identity its parameters do not give makes a fresh one, one per call site in each instantiation of its body. A declaration may give its result the identity of a parameter, to one value or to several; it never puts two identities into one type. An iteration of a loop is one instantiation of its body, as a call is of a function's: an identity made in it is that iteration's own. A value carrying one, stored where the loop's body did not declare, takes its nearest ancestor that carries no identity, and is refused where there is none. Which of a program's places a body declared is read off the program as written, so this is decided where types are.
 
 Values of one identity keep it where they meet; values of two identities meet at their nearest common ancestor that carries no identity, and where there is none, they do not meet.
 
