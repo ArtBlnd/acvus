@@ -4,4 +4,5 @@
 
 mod extern_fn;
 mod harness;
+mod store_through;
 mod unit_result;
