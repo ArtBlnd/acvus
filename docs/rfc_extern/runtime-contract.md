@@ -38,7 +38,7 @@ Every typed read states its caller's obligation over the checker's typing of the
 
 The extern side reinterprets a part the runtime handed it only by a layout-only cast under a layout witness, and every later typed read of that part goes back to the runtime. A layout witness is made only where the layout identity it proves is signed, at the type (safety §2, L), and nowhere else.
 
-The entry is safe. The axiom enters only where a runtime trusts its own typed reads: such a runtime owes that each value is live at the type the checker settled for the site (safety §3). A runtime that checks its reads owes nothing, so a safe runtime needs no `unsafe` of its own.
+The entry is safe. The axiom enters only where a runtime trusts its own typed reads: such a runtime owes that each value is live at the type the checker settled for the site (safety §3). A runtime that checks its reads owes nothing, so a safe runtime needs no `unsafe` of its own: it implements a safe trait, and the signed facts follow from that trait by one implementation in the extern side's boundary. That implementation holds because no Rust reference to lent storage outlives the guard it came from (limitations §3), so the extern side relies on storage only while a guard lends it.
 
 ## 4. What the runtime signs
 

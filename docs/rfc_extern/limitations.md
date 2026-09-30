@@ -27,7 +27,7 @@ No type parameter of an extern is bounded `'static`, and every value a call lend
 
 *Rejected.* `'static` type parameters with a run-time type check: it permits the retention, and re-checks at run time what the checker settled.
 
-An extern-defined result may retain arguments taken by value past the call. A retained argument may hold loans on places of the calling program, a callback through its captures included. The declaration's flows map each such loan from the argument's lifetime position to a lifetime position of the result; the result holds the mapped loans while it is live, and the checker applies them to the borrowed places for that duration. Taking an argument by value permits retaining it; it does not end the loans it holds.
+An extern-defined result may retain arguments taken by value past the call. A retained argument may hold loans on places of the calling program, a callback through its captures included. The declaration's flows map each such loan from the argument's lifetime position to a lifetime position of the result; the result holds the mapped loans while it is live, and the checker applies them to the borrowed places for that duration. Taking an argument by value permits retaining it; it does not end the loans it holds. A retained loan is held as the runtime's reference value, never as a Rust reference: each use opens it within a call (crossing §1), so no Rust reference to lent storage outlives the guard it came from.
 
 ## 4. Trust
 
