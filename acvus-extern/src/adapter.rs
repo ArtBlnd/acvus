@@ -30,10 +30,6 @@ use crate::runtime::{Crosses, Mutability, RefTarget, Runtime};
 pub trait Validate: Runtime {
     /// Whether `v` is a value of `T`.
     fn validate<T: Crosses>(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
-    /// Whether `v` is a program's array whose elements are values of `T`.
-    fn validate_run<T: Crosses>(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
-    /// Whether `v` is a `String`.
-    fn validate_text(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
     /// Whether `v` is an impl value of the generic function `F` at task `K`.
     fn validate_instance<F: Family, K: TaskKind>(&self, v: &Self::Value, at: Settled<'_>) -> Validity;
     /// Whether `v` is an impl value at all, of whatever generic function and
@@ -294,9 +290,6 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
     type Value = X::Value;
     type Shared<'a, T: Crosses + 'a> = Tracked<'a, X::Shared<'a, T>>;
     type Exclusive<'a, T: Crosses + 'a> = Tracked<'a, X::Exclusive<'a, T>>;
-    type SharedSlice<'a, T: Crosses + 'a> = Tracked<'a, X::SharedSlice<'a, T>>;
-    type ExclusiveSlice<'a, T: Crosses + 'a> = Tracked<'a, X::ExclusiveSlice<'a, T>>;
-    type SharedStr<'a> = Tracked<'a, X::SharedStr<'a>>;
 
     fn take<T: Crosses>(&self, v: Self::Value, at: Settled<'_>) -> T {
         self.inner.validate::<T>(&v, at).pass_or_panic();
@@ -315,21 +308,6 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
     fn exclusive<'a, T: Crosses + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T> {
         self.inner.validate::<T>(v, at).pass_or_panic();
         self.track(self.inner.exclusive(v, at), Mutability::Exclusive)
-    }
-
-    fn shared_slice<'a, T: Crosses + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedSlice<'a, T> {
-        self.inner.validate_run::<T>(v, at).pass_or_panic();
-        self.track(self.inner.shared_slice(v, at), Mutability::Shared)
-    }
-
-    fn exclusive_slice<'a, T: Crosses + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::ExclusiveSlice<'a, T> {
-        self.inner.validate_run::<T>(v, at).pass_or_panic();
-        self.track(self.inner.exclusive_slice(v, at), Mutability::Exclusive)
-    }
-
-    fn shared_str<'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedStr<'a> {
-        self.inner.validate_text(v, at).pass_or_panic();
-        self.track(self.inner.shared_str(v, at), Mutability::Shared)
     }
 
     fn reference<'a, P: ?Sized>(&'a self, target: RefTarget<'a, P>, at: Settled<'a>) -> Self::Value {

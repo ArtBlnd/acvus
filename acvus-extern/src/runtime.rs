@@ -51,11 +51,6 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     /// An exclusive lend of storage; its drop is the loan's end, and what the
     /// drop does is a constant of `T` (K13).
     type Exclusive<'a, T: Crosses + 'a>: DerefMut<Target = T> + Send;
-    /// A program's array lent as a slice.
-    type SharedSlice<'a, T: Crosses + 'a>: Deref<Target = [T]> + Send;
-    type ExclusiveSlice<'a, T: Crosses + 'a>: DerefMut<Target = [T]> + Send;
-    /// A `String`'s bytes lent as text.
-    type SharedStr<'a>: Deref<Target = str> + Send;
 
     /// Moves a value of an opaque type out at its settled type, releasing
     /// its storage. It is reached only through `Uniform`'s take, where a
@@ -65,18 +60,13 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     /// Makes the runtime value of an opaque type at its settled type.
     fn give<T: Crosses>(&self, value: T, at: Settled<'_>) -> Self::Value;
 
-    /// The guards lend storage from the value's place, so a value held in the
-    /// place itself, as a scalar in a word, is lent in place (runtime contract
-    /// §2, Guards).
+    /// The guards lend storage from the value's place. A program's array is
+    /// the runtime's `Vec` of its values and a `String` a Rust `String`, so a
+    /// slice is the lend of a `Vec<Uniform<..>>` and text the lend of a
+    /// `String`, each dereferenced (runtime contract §2, Guards, Views).
     fn shared<'a, T: Crosses + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::Shared<'a, T>;
     fn exclusive<'a, T: Crosses + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T>;
-    fn shared_slice<'a, T: Crosses + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedSlice<'a, T>;
-    fn exclusive_slice<'a, T: Crosses + 'a>(
-        &'a self,
-        v: &'a mut Self::Value,
-        at: Settled<'a>,
-    ) -> Self::ExclusiveSlice<'a, T>;
-    fn shared_str<'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedStr<'a>;
+
 
     /// The reference value made from a part of storage the call lent; a
     /// borrowed result is one (crossing §4).

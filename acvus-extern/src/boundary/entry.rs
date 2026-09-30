@@ -174,10 +174,13 @@ pub mod mode {
     pub struct ByRef<T>(PhantomData<fn() -> T>);
     /// Lent `&mut T`.
     pub struct ByMut<T>(PhantomData<fn() -> T>);
-    /// A program's array lent as `&[T]` or `&mut [T]`.
+    /// A program's array lent as `&[Uniform<R, T>]` or `&mut [Uniform<R, T>]`,
+    /// its argument a reference to the array or to a run of it, read through
+    /// `target`.
     pub struct BySlice<T>(PhantomData<fn() -> T>);
     pub struct BySliceMut<T>(PhantomData<fn() -> T>);
-    /// A `String` lent as `&str`.
+    /// Text lent as `&str`, its argument a reference to a `String` or to a
+    /// range of one, read through `target`.
     pub struct ByStr;
     /// A script closure, its parameters and result loan forms.
     pub struct ByCallback<A, U, E>(PhantomData<fn() -> (A, U, E)>);
@@ -231,12 +234,12 @@ modes! {
         |runtime, v, at| Guard::of_the_entry(runtime.shared(v, at));
     [T: Crosses] ByMut<T> => GuardMut<'c, R::Exclusive<'c, T>>, EXCLUSIVE,
         |runtime, v, at| GuardMut::of_the_entry(runtime.exclusive(v, at));
-    [T: Crosses] BySlice<T> => Guard<'c, R::SharedSlice<'c, T>>, SHARED,
-        |runtime, v, at| Guard::of_the_entry(runtime.shared_slice(v, at));
-    [T: Crosses] BySliceMut<T> => GuardMut<'c, R::ExclusiveSlice<'c, T>>, EXCLUSIVE,
-        |runtime, v, at| GuardMut::of_the_entry(runtime.exclusive_slice(v, at));
-    [] ByStr => Guard<'c, R::SharedStr<'c>>, SHARED,
-        |runtime, v, at| Guard::of_the_entry(runtime.shared_str(v, at));
+    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED,
+        |runtime, v, at| Guard::of_the_entry(runtime.target(*v, at));
+    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, EXCLUSIVE,
+        |runtime, v, at| GuardMut::of_the_entry(runtime.target_mut(*v, at));
+    [] ByStr => Guard<'c, &'c str>, SHARED,
+        |runtime, v, at| Guard::of_the_entry(runtime.target(*v, at));
     [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None,
         |_runtime, v, _at| Callback::of_the_entry(*v);
 }

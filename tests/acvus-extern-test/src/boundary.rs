@@ -340,34 +340,6 @@ pub(crate) fn place_mut<'a, T>(v: &'a mut Word, _at: Settled<'a>) -> &'a mut T {
     unsafe { &mut *target::<T>(ptr::from_mut(v)) }
 }
 
-/// A `String`'s text: a `String` lent whole, or a reference to text.
-pub(crate) fn text<'a>(v: &'a Word, at: Settled<'a>) -> &'a str {
-    match v.kind {
-        // SAFETY: under `Settled`, a `WidePart` read as text was made from a
-        // `str` the call lent, live for `'a`.
-        Kind::WidePart => unsafe { &*wide_target::<str>(*v) },
-        _ => place::<String>(v, at),
-    }
-}
-
-/// A program's array lent as a slice: the array whole, its `Vec` in a slot,
-/// or a reference to a run of it.
-pub(crate) fn run<'a, T>(v: &'a Word, at: Settled<'a>) -> &'a [T] {
-    match v.kind {
-        // SAFETY: as `text`'s, for a run of `T`.
-        Kind::WidePart => unsafe { &*wide_target::<[T]>(*v) },
-        _ => place::<Vec<T>>(v, at),
-    }
-}
-
-pub(crate) fn run_mut<'a, T>(v: &'a mut Word, at: Settled<'a>) -> &'a mut [T] {
-    match v.kind {
-        // SAFETY: as `run`'s, exclusively lent.
-        Kind::WidePart => unsafe { &mut *wide_target::<[T]>(*v) },
-        _ => place_mut::<Vec<T>>(v, at),
-    }
-}
-
 /// A reference value to a part of storage the call lent. It names the part
 /// where it lies; a writable one carries the exclusive borrow's provenance.
 pub(crate) fn reference<P>(target: RefTarget<'_, P>) -> Word
@@ -406,7 +378,7 @@ where
 /// made under.
 ///
 /// # Safety
-/// `v` is a live `Part` or `WidePart` made from a `P`, and the storage it
+/// `v` is a live `Part`, `WidePart` or `Ref` made from a `P`, and the storage it
 /// names is live for `'l`.
 unsafe fn named_part<P>(v: Word) -> *mut P
 where
@@ -425,8 +397,50 @@ where
         }
         // SAFETY: the caller's contract.
         Kind::WidePart => unsafe { wide_target::<P>(v) },
+        // SAFETY: a `Ref` names a live `Word` whose storage holds a `P`, or,
+        // for a wide `P`, a `String` read as `str` or an array, a `Vec` of
+        // words, read as the run of its values.
+        Kind::Ref => unsafe { named_whole::<P>(v.address::<Word>()) },
         kind => unreachable!("a {kind:?} value is no reference value"),
     }
+}
+
+/// What a `Ref` to the value at `place` names at `P`: its storage for a thin
+/// `P`; for a wide one, the text of the `String` or the run of the array's
+/// values it holds.
+///
+/// # Safety
+/// `place` holds a live value of `P`, a `String` read as `str`, or an array
+/// read as the run of its values.
+unsafe fn named_whole<P>(place: *mut Word) -> *mut P
+where
+    P: ?Sized,
+{
+    if size_of::<*mut P>() == size_of::<*mut u8>() {
+        // SAFETY: the caller's contract, for a thin `P`; a thin `*mut P` is
+        // the address alone.
+        let thin = unsafe { target::<u8>(place) };
+        // SAFETY: as above.
+        return unsafe { ptr::from_ref(&thin).cast::<*mut P>().read() };
+    }
+    // SAFETY: the caller's contract: a wide `P` is read from a slot.
+    let slot = unsafe { place.read() };
+    assert_eq!(slot.kind, Kind::Large, "a wide target is read from a slot");
+    // SAFETY: a live `Large` word points at a live slot's header.
+    let canon = unsafe { (*slot.address::<Header>()).canon };
+    let wide: *mut [u8] = if canon == TypeId::of::<String>() {
+        // SAFETY: the slot holds a `String`, whose text is the `str`.
+        let text = unsafe { &mut (*slot.address::<Slot<String>>()).value };
+        ptr::from_mut(text.as_mut_str()) as *mut [u8]
+    } else {
+        // SAFETY: the slot holds an array, a `Vec` of words, whose run is the
+        // slice of its values.
+        let run = unsafe { &mut (*slot.address::<Slot<Vec<Word>>>()).value };
+        ptr::slice_from_raw_parts_mut(run.as_mut_ptr().cast::<u8>(), run.len())
+    };
+    // SAFETY: `str` and `[Word]` share `*mut [u8]`'s metadata, a length in
+    // their own units, and a wide `*mut P` of either is that pair.
+    unsafe { ptr::from_ref(&wide).cast::<*mut P>().read() }
 }
 
 pub(crate) fn referent<'l, P>(v: Word, _at: Settled<'l>) -> &'l P

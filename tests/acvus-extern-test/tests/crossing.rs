@@ -87,6 +87,35 @@ where
     frame.call(&[], |entry| entry.open::<(), ()>(|cx, (), ()| cx.finish(value)))
 }
 
+/// A variable holding a program's array of `values`: a call's result, a
+/// `Vec` of the values it made.
+fn produce_array<R>(frame: &mut Frame<'_, R>, values: &[i64]) -> usize
+where
+    R: Runtime<Value = Word>,
+{
+    frame.call(&[], |entry| {
+        entry.open::<(), ()>(|cx, (), ()| {
+            let array: Vec<Uniform<R, i64>> = values.iter().map(|value| Uniform::new(&cx, *value)).collect();
+            cx.finish(array)
+        })
+    })
+}
+
+/// The values of the array a pass lends, read by a call that takes a slice.
+fn read_array<R>(frame: &mut Frame<'_, R>, pass: Pass) -> Vec<i64>
+where
+    R: Runtime<Value = Word>,
+{
+    let mut read = None;
+    frame.call(&[pass], |entry| {
+        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| {
+            read = Some(run.iter().map(|element| element.get(&cx)).collect());
+            cx.finish(())
+        })
+    });
+    read.expect("the call ran")
+}
+
 /// A variable's value, given to a call that takes it by value.
 fn read<R, T>(frame: &mut Frame<'_, R>, variable: usize) -> T
 where
@@ -300,7 +329,6 @@ fn borrowed_whole<R: Runtime<Value = Word>>(runtime: &R) {
     });
 
     assert_eq!(read_lent(&mut frame, Pass::Same(borrowed, Shared)), "whole");
-    assert_eq!(read_text(&mut frame, Pass::Same(borrowed, Shared)), "whole");
 }
 
 fn borrowed_str_range<R: Runtime<Value = Word>>(runtime: &R) {
@@ -377,38 +405,41 @@ fn borrowed_exclusive<R: Runtime<Value = Word>>(runtime: &R) {
 
 fn lent_as_slice<R: Runtime<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
-    let variable = produce(&mut frame, vec![3i64, 5, 8]);
+    let variable = produce_array(&mut frame, &[3, 5, 8]);
 
     let mut sum = None;
     frame.call(&[Pass::Lend(variable, Shared)], |entry| {
         entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| {
-            sum = Some(run.iter().sum::<i64>());
+            sum = Some(run.iter().map(|element| element.get(&cx)).sum::<i64>());
             cx.finish(())
         })
     });
     frame.call(&[Pass::Lend(variable, Exclusive)], |entry| {
         entry.open::<(BySliceMut<i64>,), ()>(|cx, (mut run,), ()| {
-            run.iter_mut().for_each(|element| *element *= 2);
+            for element in run.iter_mut() {
+                let doubled = element.get(&cx) * 2;
+                element.set(&cx, doubled);
+            }
             cx.finish(())
         })
     });
 
     assert_eq!(sum, Some(16));
-    assert_eq!(read::<_, Vec<i64>>(&mut frame, variable), [6, 10, 16]);
+    assert_eq!(read_array(&mut frame, Pass::Lend(variable, Shared)), [6, 10, 16]);
 }
 
 fn borrowed_slice_element<R: Runtime<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
-    let variable = produce(&mut frame, vec![3i64, 5, 8]);
+    let variable = produce_array(&mut frame, &[3, 5, 8]);
 
     let borrowed = frame.call(&[Pass::Lend(variable, Shared)], |entry| {
-        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| cx.finish_lent(run, |s: &[i64]| &s[1]))
+        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| cx.finish_lent(run, |s: &[Uniform<R, i64>]| &s[1]))
     });
 
     let mut read = None;
     frame.call(&[Pass::Same(borrowed, Shared)], |entry| {
-        entry.open::<(ByRef<i64>,), ()>(|cx, (element,), ()| {
-            read = Some(*element);
+        entry.open::<(ByRef<Uniform<R, i64>>,), ()>(|cx, (element,), ()| {
+            read = Some(element.get(&cx));
             cx.finish(())
         })
     });
@@ -417,20 +448,13 @@ fn borrowed_slice_element<R: Runtime<Value = Word>>(runtime: &R) {
 
 fn borrowed_sub_slice<R: Runtime<Value = Word>>(runtime: &R) {
     let mut frame = Frame::new(runtime);
-    let variable = produce(&mut frame, vec![3i64, 5, 8]);
+    let variable = produce_array(&mut frame, &[3, 5, 8]);
 
     let borrowed = frame.call(&[Pass::Lend(variable, Shared)], |entry| {
-        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| cx.finish_lent(run, |s: &[i64]| &s[1..]))
+        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| cx.finish_lent(run, |s: &[Uniform<R, i64>]| &s[1..]))
     });
 
-    let mut read = None;
-    frame.call(&[Pass::Same(borrowed, Shared)], |entry| {
-        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| {
-            read = Some(run.to_vec());
-            cx.finish(())
-        })
-    });
-    assert_eq!(read, Some(vec![5, 8]));
+    assert_eq!(read_array(&mut frame, Pass::Same(borrowed, Shared)), [5, 8]);
 }
 
 /// The awaited entry's future is `Send` (the user's decision of 2026-10-01).
@@ -567,7 +591,7 @@ fn append_written<R: Runtime>(_: &Returning<'_, R>, (mut text,): (GuardMut<'_, R
     text.push_str(" and written");
 }
 
-fn words_in<R: Runtime>(_: &Returning<'_, R>, (text,): (Guard<'_, R::SharedStr<'_>>,)) -> i64 {
+fn words_in<R: Runtime>(_: &Returning<'_, R>, (text,): (Guard<'_, &str>,)) -> i64 {
     text.split(' ').count() as i64
 }
 

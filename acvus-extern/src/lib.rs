@@ -24,4 +24,4 @@ pub use boundary::instance::{Instance, InstanceEntry, InstanceOf};
 pub use boundary::loaned::{Loaned, LoanedMut};
 pub use boundary::signed::{GenericParam, LayoutFact, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts};
 pub use boundary::stored::LayoutWitness;
-pub use boundary::uniform::{Release, Releasing, Uniform};
+pub use boundary::uniform::{Primitive, Release, Releasing, Uniform};

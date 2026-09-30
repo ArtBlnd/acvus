@@ -26,9 +26,6 @@ impl Runtime for WordRuntime {
     type Value = Word;
     type Shared<'a, T: Crosses + 'a> = &'a T;
     type Exclusive<'a, T: Crosses + 'a> = &'a mut T;
-    type SharedSlice<'a, T: Crosses + 'a> = &'a [T];
-    type ExclusiveSlice<'a, T: Crosses + 'a> = &'a mut [T];
-    type SharedStr<'a> = &'a str;
 
     fn take<T: Crosses>(&self, v: Word, at: Settled<'_>) -> T {
         boundary::take(v, at)
@@ -44,18 +41,6 @@ impl Runtime for WordRuntime {
 
     fn exclusive<'a, T: Crosses + 'a>(&'a self, v: &'a mut Word, at: Settled<'a>) -> &'a mut T {
         boundary::place_mut(v, at)
-    }
-
-    fn shared_slice<'a, T: Crosses + 'a>(&'a self, v: &'a Word, at: Settled<'a>) -> &'a [T] {
-        boundary::run(v, at)
-    }
-
-    fn exclusive_slice<'a, T: Crosses + 'a>(&'a self, v: &'a mut Word, at: Settled<'a>) -> &'a mut [T] {
-        boundary::run_mut(v, at)
-    }
-
-    fn shared_str<'a>(&'a self, v: &'a Word, at: Settled<'a>) -> &'a str {
-        boundary::text(v, at)
     }
 
     fn reference<'a, P: ?Sized>(&'a self, target: RefTarget<'a, P>, _at: Settled<'a>) -> Word {
@@ -200,24 +185,6 @@ impl Validate for WordRuntime {
             Kind::Large => holds::<T>(named, TypeId::of::<T::Canon>(), at),
             kind if kind.is_scalar() && scalar_kind::<T>() == Some(kind) => Validity::Valid,
             kind => read_as::<T>(kind),
-        }
-    }
-
-    fn validate_run<T: Crosses>(&self, v: &Word, at: Settled<'_>) -> Validity {
-        let named = boundary::followed(*v, at);
-        match named.kind() {
-            kind if names_a_part(kind) => Validity::Unknown,
-            Kind::Large => holds::<[T]>(named, TypeId::of::<Vec<T::Canon>>(), at),
-            kind => read_as::<[T]>(kind),
-        }
-    }
-
-    fn validate_text(&self, v: &Word, at: Settled<'_>) -> Validity {
-        let named = boundary::followed(*v, at);
-        match named.kind() {
-            kind if names_a_part(kind) => Validity::Unknown,
-            Kind::Large => holds::<str>(named, TypeId::of::<String>(), at),
-            kind => read_as::<str>(kind),
         }
     }
 

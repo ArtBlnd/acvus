@@ -45,6 +45,12 @@ impl<R: Runtime, X> Uniform<R, X> {
 }
 
 impl<R: Runtime, T: Crosses> Uniform<R, T> {
+    /// A value of `T` made the runtime's by its `give`, owned from here on: an
+    /// element of a sequence a handler returns as `Vec<Uniform<R, T>>`.
+    pub fn new<'c>(cx: &'c impl Opens<'c, R>, value: T) -> Self {
+        Uniform::of_the_crossing(cx.runtime().give(value, Settled::of_the_entry()))
+    }
+
     /// Lends the value in place within the call `cx` belongs to.
     pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> R::Shared<'c, T> {
         cx.runtime().shared(&self.value, Settled::of_the_entry())
@@ -64,6 +70,37 @@ impl<R: Runtime, T: Crosses> Uniform<R, T> {
     /// take consumes the value's storage, so the holder's release is skipped.
     pub(crate) fn take(self, runtime: &R, at: Settled<'_>) -> T {
         runtime.take(self.into_value(), at)
+    }
+}
+
+mod primitive {
+    pub trait Sealed {}
+}
+
+/// A primitive the runtime holds in the value itself: it owns nothing, so it
+/// is read by a copy and written by a replacement, never lent in place.
+pub trait Primitive: Crosses + Copy + primitive::Sealed {}
+
+macro_rules! primitives {
+    ($($t:ty),+ $(,)?) => {$(
+        impl primitive::Sealed for $t {}
+        impl Primitive for $t {}
+    )+};
+}
+
+primitives!(i8, i16, i32, i64, u8, u16, u32, u64, f64, bool, char);
+
+impl<R: Runtime, T: Primitive> Uniform<R, T> {
+    /// The value, read by a copy: the runtime's `take` of the held value's
+    /// copy, which owns nothing to release.
+    pub fn get<'c>(&self, cx: &'c impl Opens<'c, R>) -> T {
+        cx.runtime().take(*self.value, Settled::of_the_entry())
+    }
+
+    /// The value replaced by `value`, made by the runtime's `give`.
+    pub fn set<'c>(&mut self, cx: &'c impl Opens<'c, R>, value: T) {
+        let old = std::mem::replace(&mut *self.value, cx.runtime().give(value, Settled::of_the_entry()));
+        old.release(Releasing { _private: () });
     }
 }
 
@@ -155,9 +192,6 @@ mod tests {
         type Value = Counted;
         type Shared<'a, T: Crosses + 'a> = NoGuard<T>;
         type Exclusive<'a, T: Crosses + 'a> = NoGuard<T>;
-        type SharedSlice<'a, T: Crosses + 'a> = NoGuard<[T]>;
-        type ExclusiveSlice<'a, T: Crosses + 'a> = NoGuard<[T]>;
-        type SharedStr<'a> = NoGuard<str>;
 
         fn take<T: Crosses>(&self, _: Counted, _: Settled<'_>) -> T {
             unreachable!("the release tests read no value")
@@ -169,19 +203,6 @@ mod tests {
             unreachable!("the release tests lend no storage")
         }
         fn exclusive<'a, T: Crosses + 'a>(&'a self, _: &'a mut Counted, _: Settled<'a>) -> NoGuard<T> {
-            unreachable!("the release tests lend no storage")
-        }
-        fn shared_slice<'a, T: Crosses + 'a>(&'a self, _: &'a Counted, _: Settled<'a>) -> NoGuard<[T]> {
-            unreachable!("the release tests lend no storage")
-        }
-        fn exclusive_slice<'a, T: Crosses + 'a>(
-            &'a self,
-            _: &'a mut Counted,
-            _: Settled<'a>,
-        ) -> NoGuard<[T]> {
-            unreachable!("the release tests lend no storage")
-        }
-        fn shared_str<'a>(&'a self, _: &'a Counted, _: Settled<'a>) -> NoGuard<str> {
             unreachable!("the release tests lend no storage")
         }
         fn reference<'a, P: ?Sized>(&'a self, _: RefTarget<'a, P>, _: Settled<'a>) -> Counted {
