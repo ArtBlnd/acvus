@@ -6,7 +6,7 @@ use acvus_utils::{Interner, QualifiedRef};
 
 use super::*;
 use crate::decl::{ContextDecl, Core, Declarations, LoopMarkers, RawDeclarations};
-use crate::ir::cfg::edit::{Invariant, OrderChainWhole};
+use crate::ir::cfg::edit::{DefDominatesUses, Invariant, OrderChainWhole, TypesAgree};
 use crate::ir::cfg::{Builder, OrderUse};
 use crate::ty::{Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, TypeArg};
 
@@ -536,6 +536,63 @@ fn an_overwrite_of_a_volatile_context_takes_its_old_content_out_on_the_chain() {
     assert_eq!(store.before, take.after, "the take stands just before the overwrite on the chain");
     assert_eq!(dropped.order(), None);
     assert_eq!(<OrderChainWhole as Invariant>::check(body, f.module.types()), Ok(()));
+}
+
+/// `tape` is volatile: the then arm takes it out, the else arm leaves it,
+/// and the join overwrites it. The content held on the else path only is
+/// dropped on the split edge from the else arm, its take on the order chain
+/// there, threaded into the token that edge passes on (context §3); the
+/// overwrite stays on the chain and every invariant holds.
+#[test]
+fn a_volatile_context_held_on_one_path_only_at_an_overwrite_is_taken_out_on_the_chain_on_the_edge() {
+    let mut f = fixture();
+    let t = f.t;
+    let (tape, nc) = (f.context("tape"), f.interner.intern("c"));
+    let mut builder = f.module.build_body(true, t.int);
+    let cond = builder.param(nc, t.bool, at(1));
+    builder.context(tape, t.string, true);
+    let [then_block, else_block, join] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(diamond(cond, then_block, else_block, join), at(7));
+    builder.switch_to(then_block);
+    let out = builder.push_effect(take_context(tape), t.string, at(2));
+    builder.push(t.call(t.takes_string, vec![out]), t.int, at(2));
+    builder.terminate(jump(join, Vec::new()), at(8));
+    builder.switch_to(else_block);
+    builder.terminate(jump(join, Vec::new()), at(9));
+    builder.switch_to(join);
+    let last = text(t, &mut builder, at(5));
+    builder.push_effect_unit(assign_context(tape, last), at(5));
+    let n = builder.push(constant(0), t.int, at(6));
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, insert_drops);
+
+    let body = f.module.body(id);
+    let Terminator::Jump { to: middle, .. } = body.block(else_block).terminator() else {
+        panic!("the else arm still jumps")
+    };
+    assert_ne!(*middle, join, "the else edge is split");
+    let split: Vec<_> = body.block(*middle).insts().collect();
+    let [taken_out, dropped] = &split[..] else {
+        panic!("the split edge takes the content out and drops it: {:?}", f.ops(id, *middle))
+    };
+    assert!(is_context_take_of(taken_out.op(), tape));
+    assert!(matches!(dropped.op(), Op::Drop { .. }));
+    let Some(OrderUse::Edge(take)) = taken_out.order() else {
+        panic!("the take out of the volatile context stands on the chain: {:?}", taken_out.order())
+    };
+    assert!(
+        body.block(*middle).terminator().operands().contains(&take.after),
+        "the split edge passes on the token the take yields: {:?}",
+        body.block(*middle).terminator()
+    );
+    let store = body.block(join).insts().find(|inst| matches!(inst.op(), Op::Assign { .. })).expect("the overwrite stays");
+    assert!(store.order().is_some(), "the overwrite stays on the chain");
+    assert_eq!(drops(&f.all_ops(id)), 1);
+    for check in [<OrderChainWhole as Invariant>::check, <TypesAgree as Invariant>::check, <DefDominatesUses as Invariant>::check] {
+        assert_eq!(check(body, f.module.types()), Ok(()));
+    }
 }
 
 /// `tape` is volatile and read twice, each read's content read again by
