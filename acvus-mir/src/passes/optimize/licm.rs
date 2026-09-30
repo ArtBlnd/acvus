@@ -39,7 +39,7 @@ use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Module};
 use crate::ir::ValueId;
 use crate::passes::analysis::{AnalysisManager, Dominators, LoopId, LoopTree};
 use crate::passes::edit_facts::EditFacts;
-use crate::passes::optimize::{BodyTransform, dominator_preorder, union_of};
+use crate::passes::optimize::{BodyTransform, dominator_preorder, inner_first, union_of};
 
 pub struct Licm;
 
@@ -94,14 +94,6 @@ fn make_preheaders(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'
 fn entering_blocks(body: &Body, loops: &LoopTree, of: LoopId, header: BlockId) -> Vec<BlockId> {
     let preds = body.predecessors();
     preds[&header].iter().copied().filter(|pred| !loops.contains(of, *pred)).collect()
-}
-
-/// Every loop, the deepest first.
-fn inner_first(loops: &LoopTree) -> Vec<LoopId> {
-    let depth = |of: LoopId| std::iter::successors(Some(of), |at| loops.parent(*at)).count();
-    let mut ordered: Vec<LoopId> = loops.loops().collect();
-    ordered.sort_by_key(|of| std::cmp::Reverse(depth(*of)));
-    ordered
 }
 
 /// Offers every invariant instruction of `block` a move to the end of
