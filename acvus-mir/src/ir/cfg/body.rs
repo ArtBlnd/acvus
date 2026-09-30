@@ -52,9 +52,8 @@ pub(super) enum Def {
     Param(usize),
     Capture(usize),
     OrderParam,
-    /// A slot, by its place among the body's slots, and the context it
-    /// holds where it is a context's slot (context §3).
-    Slot { index: usize, context: Option<QualifiedRef> },
+    /// A slot, by its place among the body's slots.
+    Slot { index: usize },
     BlockParam(BlockId, usize),
     /// A parameter the Builder adds to a block for the order token, whose
     /// position is fixed at `seal`, after the caller's parameters.
@@ -147,6 +146,8 @@ pub struct Body {
     pub(super) captures: Vec<(Astr, ValueId)>,
     pub(super) order_param: Option<ValueId>,
     pub(super) slots: Vec<ValueId>,
+    /// The contexts the body names, with their types (context §3).
+    pub(super) contexts: Vec<(QualifiedRef, Ty)>,
     /// The span of the binding each slot stores.
     pub(super) slot_spans: FxHashMap<ValueId, Span>,
     /// The span of the binder each parameter and capture names.
@@ -759,16 +760,11 @@ impl Body {
         }
     }
 
-    /// The context `slot` holds, where it is a context's slot, as
-    /// `Builder::context_slot` made it. Cost: O(1).
-    ///
-    /// # Panics
-    /// `slot` is not a slot of this body.
-    pub fn context_of_slot(&self, slot: ValueId) -> Option<QualifiedRef> {
-        match self.def_of(slot) {
-            Def::Slot { context, .. } => context,
-            def => panic!("{slot:?} is defined at {def:?}, not as a slot"),
-        }
+    /// The contexts the body names, each once, with its type, in the order
+    /// it first names them: the storage `RefTarget::Context` names (context
+    /// §3). Cost: O(1).
+    pub fn contexts(&self) -> &[(QualifiedRef, Ty)] {
+        &self.contexts
     }
 
     /// Every value of the body, in no stated order. Cost: O(values).

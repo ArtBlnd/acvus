@@ -112,6 +112,13 @@ pub enum Storage {
     /// What position `position` of the parameter or capture `of` names,
     /// outside the body.
     Outside { of: ValueId, position: usize },
+    /// A context, by its name (context §3). Whole at the body's entry. It is
+    /// seen beyond the program, so accessed whole, at each call whose effect
+    /// may read it (a read) or write it (a write), an opaque call touching
+    /// every context, and read whole at every return: these accesses are
+    /// recorded at those sites as any other, so every reader of accesses
+    /// meets them with no rule of its own (context §1, §3).
+    Context(QualifiedRef),
 }
 
 impl Storage {

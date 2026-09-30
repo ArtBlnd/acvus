@@ -126,25 +126,6 @@ pub enum Op {
         bound: IndexBound,
     },
 
-    /// The boundary's move of a context's whole content out of the page
-    /// (context §1, §3). A context held in a slot is fetched into its slot,
-    /// `into: Some(slot)`, which writes the slot and yields nothing; a
-    /// volatile one, held in no slot, is fetched into the result,
-    /// `into: None`. The program reads, lends, takes and assigns the slot
-    /// as any place; a take of a context that does not copy leaves the slot
-    /// empty until something is written back (context §1).
-    Fetch {
-        context: QualifiedRef,
-        into: Option<ValueId>,
-    },
-    /// The boundary's move of a context's whole content into the page
-    /// (context §1, §3). `Committed::Slot` reads every unit of the slot and
-    /// leaves it empty until the next `Fetch`; whether the context was
-    /// filled again is judged here (`check::moveck`, `NotRefilled`).
-    Commit {
-        context: QualifiedRef,
-        from: Committed,
-    },
     // -- Scalar field access --------------------------------------
     /// Extract a field from a scalar value. 1+ depth via `field` + `rest`.
     FieldGet {
@@ -348,14 +329,6 @@ pub enum Op {
     Drop {
         src: ValueId,
     },
-}
-
-/// What a `Commit` moves into the page: the whole content of the
-/// context's slot, or a volatile context's value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Committed {
-    Slot(ValueId),
-    Value(ValueId),
 }
 
 /// Walks every operand of an `Op`, by shared or by mutable reference: one

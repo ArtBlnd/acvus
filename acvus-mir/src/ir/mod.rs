@@ -214,6 +214,10 @@ pub enum RefTarget {
     Param(ValueId),
     /// The storage a reference value names (RFC-0018).
     Through(ValueId),
+    /// A context, a place outside the body on the host's page, by its name
+    /// (context §3). It aliases no other place. `Take` copies or moves it
+    /// by its type, `Assign` drops what it held, `Ref` lends it in place.
+    Context(QualifiedRef),
 }
 
 /// Target of a function call.
