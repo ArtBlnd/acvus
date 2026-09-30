@@ -1032,6 +1032,39 @@ fn invalidation_drops_exactly_the_analyses_whose_reads_changed() {
     );
 }
 
+/// How many bodies the module has.
+struct BodyCount;
+
+impl ModuleAnalysis for BodyCount {
+    type Facts = usize;
+
+    const READS: &'static [Aspect] = &[Aspect::Instructions];
+
+    fn compute(_am: &mut AnalysisManager<'_>, module: &Module) -> usize {
+        module.body_ids().count()
+    }
+}
+
+/// A module analysis is kept once for the module; an edit of any body
+/// that touches an aspect it reads drops it, and one that does not keeps it.
+#[test]
+fn a_module_analysis_is_kept_once_and_dropped_by_any_bodys_edit_of_what_it_reads() {
+    let mut f = fixture();
+    let [body, other] = identity_bodies(&mut f);
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let first = am.get_of_module::<BodyCount>(&f.module);
+    assert_eq!(*first, 2);
+    assert!(Rc::ptr_eq(&first, &am.get_of_module::<BodyCount>(&f.module)), "the second request returns the kept facts");
+
+    am.invalidate(body, &changed(Aspect::CfgShape));
+    let kept = am.get_of_module::<BodyCount>(&f.module);
+    assert!(Rc::ptr_eq(&first, &kept), "a disjoint aspect keeps it");
+
+    am.invalidate(other, &changed(Aspect::Instructions));
+    assert!(!Rc::ptr_eq(&kept, &am.get_of_module::<BodyCount>(&f.module)), "an edit of any body that it reads drops it");
+}
+
 // -- Dominators, post-dominators, loops --------------------------------------
 
 /// The facts of `A` for `body`, through a manager over no declarations.

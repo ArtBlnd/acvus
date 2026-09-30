@@ -13,7 +13,8 @@
 //!
 //! Form: F1, SSA, in and out.
 //!
-//! Cost: O(bodies + instructions) for the call graph and its components;
+//! Cost: O(bodies + instructions) for the call graph and its components,
+//! read through the manager;
 //! each call site the module holds before the pass is offered at most once,
 //! and an inlining costs the core's O(callee size). The pass is bounded by
 //! the module's call sites.
@@ -37,11 +38,11 @@ pub struct Inline;
 impl ModuleTransform for Inline {
     const NAME: &'static str = "inline";
 
-    fn run(module: &mut Module, _am: &mut AnalysisManager<'_>) -> Vec<(BodyId, Changes)> {
-        let graph = CallGraph::of(module);
+    fn run(module: &mut Module, am: &mut AnalysisManager<'_>) -> Vec<(BodyId, Changes)> {
+        let graph = am.get_of_module::<CallGraph>(module);
         let mut changed = Vec::new();
         for component in graph.components_callees_first() {
-            for body in component {
+            for body in component.iter().copied() {
                 changed.push((body, inline_into(module, body)));
             }
         }

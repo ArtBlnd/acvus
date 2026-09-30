@@ -29,6 +29,8 @@
 //! value analyses, the match facts, the scalar evolution and the callees'
 //! endings), plus the call graph's O(bodies + instructions) once per module.
 
+use std::rc::Rc;
+
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::decl::{Declarations, Ends};
@@ -127,7 +129,8 @@ impl Analysis for Raise {
         let raiser = Raiser {
             module,
             body: module.body(body),
-            component: own_component(module, body),
+            calls: am.get_of_module::<CallGraph>(module),
+            caller: body,
             decls,
             bounds: ValueBounds { intervals: &intervals, affine: &affine, decls, body: module.body(body), types: module.types() },
             matches: &matches,
@@ -156,20 +159,14 @@ impl Analysis for Raise {
     }
 }
 
-/// The bodies in `body`'s own strongly connected component of the call
-/// graph, `body` among them. Cost: the call graph's, O(bodies +
-/// instructions).
-fn own_component(module: &Module, body: BodyId) -> FxHashSet<BodyId> {
-    let component = CallGraph::of(module).components_callees_first().into_iter().find(|component| component.contains(&body));
-    component.expect("every body of the module is in one component of its call graph").into_iter().collect()
-}
-
 /// What an instruction's ending reads: the body, its value facts, the
-/// declarations, and the component whose callees are taken as unknown.
+/// declarations, and the call graph, whose component of `caller` holds the
+/// callees taken as unknown.
 struct Raiser<'a> {
     module: &'a Module,
     body: &'a Body,
-    component: FxHashSet<BodyId>,
+    calls: Rc<CallGraph>,
+    caller: BodyId,
     decls: &'a Declarations,
     bounds: ValueBounds<'a>,
     matches: &'a SparseFacts<MatchDomain>,
@@ -296,7 +293,7 @@ impl Raiser<'_> {
     /// it say, one in this body's own component as unknown.
     fn bodies_ending(&self, am: &mut AnalysisManager<'_>, bodies: &[BodyId]) -> Ending {
         bodies.iter().fold(Ending::CLEAN, |ending, callee| {
-            let callee_ending = match self.component.contains(callee) {
+            let callee_ending = match self.calls.same_component(self.caller, *callee) {
                 true => Ending::UNKNOWN,
                 false => am.get::<Raise>(self.module, *callee).body(),
             };
@@ -464,8 +461,6 @@ fn head_bounds(body: &Body, loops: &LoopTree, evolutions: &Evolutions, of: LoopI
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-
     use acvus_ast::Span;
     use acvus_utils::QualifiedRef;
 

@@ -6,27 +6,43 @@
 //! first, by Tarjan's algorithm, which completes a component only after
 //! every component it reaches.
 //!
-//! Cost: O(bodies + instructions) for the graph, O(bodies + edges) for its
-//! components.
+//! The manager keeps it once per module, as a module analysis: it reads
+//! the bodies' instructions, so an edit of any body's instructions drops it.
+//!
+//! Cost: O(bodies + instructions) for the graph and its components, since
+//! each edge is one instruction's.
 
 use rustc_hash::FxHashMap;
 
-use crate::ir::cfg::{BodyId, Definition, Module, Op};
+use crate::ir::cfg::{Aspect, BodyId, Definition, Module, Op};
 use crate::ir::{Callee, ValueId};
+use crate::passes::analysis::{AnalysisManager, ModuleAnalysis};
 
 /// The module's bodies, by their place among `Module::body_ids`, each with
-/// the bodies it makes closures of or calls through a closure it makes.
+/// the bodies it makes closures of or calls through a closure it makes, and
+/// the graph's strongly connected components, callees first.
 pub(crate) struct CallGraph {
-    bodies: Vec<BodyId>,
-    callees: Vec<Vec<usize>>,
+    components: Vec<Vec<BodyId>>,
+    /// Each body's component, by its index in `components`.
+    component_of: FxHashMap<BodyId, usize>,
+}
+
+impl ModuleAnalysis for CallGraph {
+    type Facts = CallGraph;
+
+    const READS: &'static [Aspect] = &[Aspect::Instructions];
+
+    fn compute(_am: &mut AnalysisManager<'_>, module: &Module) -> CallGraph {
+        CallGraph::of(module)
+    }
 }
 
 impl CallGraph {
     /// Cost: O(bodies + instructions).
-    pub(crate) fn of(module: &Module) -> CallGraph {
+    fn of(module: &Module) -> CallGraph {
         let bodies: Vec<BodyId> = module.body_ids().collect();
         let place: FxHashMap<BodyId, usize> = bodies.iter().enumerate().map(|(at, body)| (*body, at)).collect();
-        let callees = bodies
+        let callees: Vec<Vec<usize>> = bodies
             .iter()
             .map(|caller| {
                 let body = module.body(*caller);
@@ -44,21 +60,46 @@ impl CallGraph {
                 callees
             })
             .collect();
-        CallGraph { bodies, callees }
+        let components = components_callees_first(&bodies, &callees);
+        let component_of = components
+            .iter()
+            .enumerate()
+            .flat_map(|(at, component)| component.iter().map(move |body| (*body, at)))
+            .collect();
+        CallGraph { components, component_of }
     }
 
     /// The strongly connected components, each after every component its
-    /// bodies reach (Tarjan 1972, with an explicit stack). Cost: O(bodies +
-    /// edges).
-    pub(crate) fn components_callees_first(&self) -> Vec<Vec<BodyId>> {
-        let mut tarjan = Tarjan::new(self.callees.len());
-        for root in 0..self.callees.len() {
-            if tarjan.visited[root].is_none() {
-                tarjan.walk_from(root, &self.callees);
-            }
-        }
-        tarjan.components.into_iter().map(|component| component.into_iter().map(|at| self.bodies[at]).collect()).collect()
+    /// bodies reach. Cost: O(1).
+    pub(crate) fn components_callees_first(&self) -> &[Vec<BodyId>] {
+        &self.components
     }
+
+    /// Whether `a` and `b` lie in one strongly connected component. Cost:
+    /// O(1).
+    ///
+    /// # Panics
+    /// Either is a body the graph was not made over: a body built after the
+    /// manager kept the graph, which no edit records, is a compiler defect.
+    pub(crate) fn same_component(&self, a: BodyId, b: BodyId) -> bool {
+        let component = |body: BodyId| {
+            *self.component_of.get(&body).unwrap_or_else(|| panic!("{body:?} was built after the call graph was made"))
+        };
+        component(a) == component(b)
+    }
+}
+
+/// The strongly connected components of `callees` over `bodies`, each after
+/// every component its bodies reach (Tarjan 1972, with an explicit stack).
+/// Cost: O(bodies + edges).
+fn components_callees_first(bodies: &[BodyId], callees: &[Vec<usize>]) -> Vec<Vec<BodyId>> {
+    let mut tarjan = Tarjan::new(callees.len());
+    for root in 0..callees.len() {
+        if tarjan.visited[root].is_none() {
+            tarjan.walk_from(root, callees);
+        }
+    }
+    tarjan.components.into_iter().map(|component| component.into_iter().map(|at| bodies[at]).collect()).collect()
 }
 
 /// Tarjan's walk: each node's visit order and the lowest visit order it
