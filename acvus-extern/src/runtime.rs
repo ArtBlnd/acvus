@@ -82,11 +82,18 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     /// Makes the runtime value of a result at its settled type.
     fn give<T: Crosses>(&self, value: T, at: Settled<'_>) -> Self::Value;
 
-    fn shared<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::Shared<'a, T>;
-    fn exclusive<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T>;
-    fn shared_slice<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::SharedSlice<'a, T>;
-    fn exclusive_slice<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::ExclusiveSlice<'a, T>;
-    fn shared_str<'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::SharedStr<'a>;
+    /// The guards lend storage from the value's place, so a value held in the
+    /// place itself, as a scalar in a word, is lent in place (runtime contract
+    /// §2, Guards).
+    fn shared<'a, T: Crosses + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::Shared<'a, T>;
+    fn exclusive<'a, T: Crosses + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T>;
+    fn shared_slice<'a, T: Crosses + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedSlice<'a, T>;
+    fn exclusive_slice<'a, T: Crosses + 'a>(
+        &'a self,
+        v: &'a mut Self::Value,
+        at: Settled<'a>,
+    ) -> Self::ExclusiveSlice<'a, T>;
+    fn shared_str<'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedStr<'a>;
 
     /// An aggregate taken apart into its parts, each then held by a `Uniform`;
     /// called only by `Uniform`'s conversion into a shape's owned view.

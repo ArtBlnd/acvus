@@ -260,28 +260,28 @@ impl<X: Runtime + Validate> Runtime for Adapter<X> {
         self.inner.give(value, at)
     }
 
-    fn shared<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::Shared<'a, T> {
-        self.inner.validate::<T>(&v, at).pass_or_panic();
+    fn shared<'a, T: Crosses + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::Shared<'a, T> {
+        self.inner.validate::<T>(v, at).pass_or_panic();
         self.track(self.inner.shared(v, at), Mutability::Shared)
     }
 
-    fn exclusive<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T> {
-        self.inner.validate::<T>(&v, at).pass_or_panic();
+    fn exclusive<'a, T: Crosses + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::Exclusive<'a, T> {
+        self.inner.validate::<T>(v, at).pass_or_panic();
         self.track(self.inner.exclusive(v, at), Mutability::Exclusive)
     }
 
-    fn shared_slice<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::SharedSlice<'a, T> {
-        self.inner.validate_run::<T>(&v, at).pass_or_panic();
+    fn shared_slice<'a, T: Crosses + 'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedSlice<'a, T> {
+        self.inner.validate_run::<T>(v, at).pass_or_panic();
         self.track(self.inner.shared_slice(v, at), Mutability::Shared)
     }
 
-    fn exclusive_slice<'a, T: Crosses + 'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::ExclusiveSlice<'a, T> {
-        self.inner.validate_run::<T>(&v, at).pass_or_panic();
+    fn exclusive_slice<'a, T: Crosses + 'a>(&'a self, v: &'a mut Self::Value, at: Settled<'a>) -> Self::ExclusiveSlice<'a, T> {
+        self.inner.validate_run::<T>(v, at).pass_or_panic();
         self.track(self.inner.exclusive_slice(v, at), Mutability::Exclusive)
     }
 
-    fn shared_str<'a>(&'a self, v: Self::Value, at: Settled<'a>) -> Self::SharedStr<'a> {
-        self.inner.validate_text(&v, at).pass_or_panic();
+    fn shared_str<'a>(&'a self, v: &'a Self::Value, at: Settled<'a>) -> Self::SharedStr<'a> {
+        self.inner.validate_text(v, at).pass_or_panic();
         self.track(self.inner.shared_str(v, at), Mutability::Shared)
     }
 

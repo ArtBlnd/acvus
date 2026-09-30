@@ -5,11 +5,13 @@
 //! `Entry::new`, as the runtime's boundary does, and the glue each test writes
 //! by hand opens them with `Entry::open`, as the attribute's glue will.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use acvus_extern::adapter::Adapter;
-use acvus_extern::mode::{ByMut, ByRef, ByStr, ByUniform, ByValue};
+use acvus_extern::mode::{ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use acvus_extern::runtime::{Crosses, Mutability, Runtime};
 use acvus_extern_test::{Frame, Pair, Pass, Tally, Word, WordRuntime};
 
@@ -44,6 +46,7 @@ on_both! {
     a_held_value_only_dropped_is_released_once: held_and_dropped;
     a_held_value_taken_is_released_by_its_new_owner_once: held_and_taken;
     a_held_value_is_read_and_written_in_place: held_opened_in_place;
+    a_held_scalar_is_read_and_written_in_its_word: held_scalar_in_place;
     a_value_never_passed_is_released_by_the_run_once: never_passed;
     a_shared_lend_reads_the_variable_in_place: lent_shared;
     an_exclusive_lend_writes_the_variable_in_place: lent_exclusive;
@@ -55,6 +58,14 @@ on_both! {
     a_borrowed_result_names_a_field: borrowed_field;
     a_borrowed_result_names_an_element_the_lent_value_owns: borrowed_element;
     a_writable_borrowed_result_writes_the_lent_value: borrowed_exclusive;
+    a_returned_vec_is_lent_as_a_slice: lent_as_slice;
+    a_borrowed_result_names_an_element_of_a_lent_slice: borrowed_slice_element;
+    a_borrowed_result_names_a_run_of_a_lent_slice: borrowed_sub_slice;
+    an_awaited_body_takes_its_argument_and_finishes_after_a_wait: awaited_by_value;
+    an_awaited_body_reads_its_lend_before_a_wait: awaited_lent;
+    a_projection_result_composes_its_leaves_into_a_tuple: projection_tuple;
+    a_projection_result_composes_a_lent_payload_into_a_variant: projection_variant;
+    a_projection_result_left_in_pieces_panics_and_releases_them_once: projection_uncomposed;
 }
 
 /// A variable holding `value`, made as a program makes one: the result of a
@@ -197,6 +208,23 @@ fn held_opened_in_place<R: Runtime<Value = Word>>(runtime: &R) {
     assert_eq!(read, Some((4, String::from("held and written"))));
 }
 
+fn held_scalar_in_place<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let variable = produce(&mut frame, 5i64);
+
+    let mut read = None;
+    frame.call(&[Pass::Give(variable)], |entry| {
+        entry.open::<(ByUniform<i64>,), ()>(|cx, (mut held,), ()| {
+            let before = *held.open(&cx);
+            *held.open_mut(&cx) = 9;
+            read = Some((before, held.into_inner(&cx)));
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read, Some((5, 9)));
+}
+
 fn never_passed<R: Runtime<Value = Word>>(runtime: &R) {
     let (value, drops) = tally();
     let mut frame = Frame::new(runtime);
@@ -336,6 +364,163 @@ fn borrowed_exclusive<R: Runtime<Value = Word>>(runtime: &R) {
     });
 
     assert_eq!(read::<_, String>(&mut frame, variable), "borrowed and written");
+}
+
+fn lent_as_slice<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let variable = produce(&mut frame, vec![3i64, 5, 8]);
+
+    let mut sum = None;
+    frame.call(&[Pass::Lend(variable, Shared)], |entry| {
+        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| {
+            sum = Some(run.iter().sum::<i64>());
+            cx.finish(())
+        })
+    });
+    frame.call(&[Pass::Lend(variable, Exclusive)], |entry| {
+        entry.open::<(BySliceMut<i64>,), ()>(|cx, (mut run,), ()| {
+            run.iter_mut().for_each(|element| *element *= 2);
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(sum, Some(16));
+    assert_eq!(read::<_, Vec<i64>>(&mut frame, variable), [6, 10, 16]);
+}
+
+fn borrowed_slice_element<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let variable = produce(&mut frame, vec![3i64, 5, 8]);
+
+    let borrowed = frame.call(&[Pass::Lend(variable, Shared)], |entry| {
+        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| cx.finish_lent(run, |s: &[i64]| &s[1]))
+    });
+
+    let mut read = None;
+    frame.call(&[Pass::Same(borrowed, Shared)], |entry| {
+        entry.open::<(ByRef<i64>,), ()>(|cx, (element,), ()| {
+            read = Some(*element);
+            cx.finish(())
+        })
+    });
+    assert_eq!(read, Some(5));
+}
+
+fn borrowed_sub_slice<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let variable = produce(&mut frame, vec![3i64, 5, 8]);
+
+    let borrowed = frame.call(&[Pass::Lend(variable, Shared)], |entry| {
+        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| cx.finish_lent(run, |s: &[i64]| &s[1..]))
+    });
+
+    let mut read = None;
+    frame.call(&[Pass::Same(borrowed, Shared)], |entry| {
+        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| {
+            read = Some(run.to_vec());
+            cx.finish(())
+        })
+    });
+    assert_eq!(read, Some(vec![5, 8]));
+}
+
+/// The awaited entry's future is `Send` (the user's decision of 2026-10-01).
+fn sent<F: Future + Send>(future: F) -> F {
+    future
+}
+
+fn executor() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor")
+}
+
+fn awaited_by_value<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let text = produce(&mut frame, String::from("awaited"));
+
+    let length = executor().block_on(frame.call_awaited(&[Pass::Give(text)], async |entry| {
+        let body = entry.open_awaited::<(ByValue<String>,), (), _>(|cx, (text,), ()| async move {
+            cx.sleep(Duration::from_millis(1)).await;
+            cx.finish(text.len() as i64)
+        });
+        sent(body).await
+    }));
+
+    assert_eq!(read::<_, i64>(&mut frame, length), 7);
+}
+
+fn awaited_lent<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let text = produce(&mut frame, String::from("held across"));
+
+    let length = executor().block_on(frame.call_awaited(&[Pass::Lend(text, Shared)], async |entry| {
+        let body = entry.open_awaited::<(ByRef<String>,), (), _>(|cx, (lent,), ()| {
+            let length = lent.len() as i64;
+            drop(lent);
+            async move {
+                cx.sleep(Duration::from_millis(1)).await;
+                cx.finish(length)
+            }
+        });
+        sent(body).await
+    }));
+
+    assert_eq!(read::<_, i64>(&mut frame, length), 11);
+    assert_eq!(read::<_, String>(&mut frame, text), "held across");
+}
+
+fn projection_tuple<R: Runtime<Value = Word>>(runtime: &R) {
+    let (value, drops) = tally();
+    let mut frame = Frame::new(runtime);
+    let text = produce(&mut frame, String::from("leaf"));
+
+    frame.call(&[Pass::Lend(text, Shared)], |entry| {
+        entry.open::<(ByRef<String>,), ()>(|cx, (lent,), ()| {
+            cx.finish_projection(|result| {
+                result.lent(lent, |s: &String| s.as_str());
+                result.value(value);
+                result.tuple(2);
+            })
+        })
+    });
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(frame);
+
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+fn projection_variant<R: Runtime<Value = Word>>(runtime: &R) {
+    let mut frame = Frame::new(runtime);
+    let text = produce(&mut frame, String::from("payload"));
+
+    frame.call(&[Pass::Lend(text, Shared)], |entry| {
+        entry.open::<(ByRef<String>,), ()>(|cx, (lent,), ()| {
+            cx.finish_projection(|result| {
+                result.lent(lent, |s: &String| s);
+                result.variant(1, true);
+            })
+        })
+    });
+
+    assert_eq!(read::<_, String>(&mut frame, text), "payload");
+}
+
+fn projection_uncomposed<R: Runtime<Value = Word>>(runtime: &R) {
+    let (value, drops) = tally();
+    let mut frame = Frame::new(runtime);
+
+    let unwound = catch_unwind(AssertUnwindSafe(|| {
+        frame.call(&[], |entry| {
+            entry.open::<(), ()>(|cx, (), ()| {
+                cx.finish_projection(|result| {
+                    result.value(value);
+                    result.value(1i64);
+                })
+            })
+        })
+    }));
+
+    assert!(unwound.is_err());
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 // Breaches the adapter's tracking covers. Under `WordRuntime` alone each is

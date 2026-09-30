@@ -190,34 +190,25 @@ where
     }
 }
 
-/// Where the `P` a value lends lies: a `Large` value's own slot; through a
-/// `Ref`, the word or the slot of the value it names; through a `Part`, its
-/// address.
-///
-/// A scalar held by value has no storage apart from the word, which the
-/// contract passes by copy, so it cannot be lent in place.
+/// Where the `P` the value at `place` lends lies: a scalar's own word; a
+/// value's slot; through a `Ref`, the word or the slot of the value it names;
+/// through a `Part`, its address.
 ///
 /// # Safety
-/// `v` is live, and the storage it names is live and holds a `P`.
-unsafe fn target<P>(v: Word) -> *mut P {
+/// `place` holds a live value, and the storage it names is live and holds a
+/// `P`.
+unsafe fn target<P>(place: *mut Word) -> *mut P {
+    // SAFETY: the caller's contract.
+    let v = unsafe { place.read() };
     match v.kind {
+        // SAFETY: as above; the scalar lies in the word's first bytes.
+        kind if kind.is_scalar() => unsafe { (&raw mut (*place).word).cast::<P>() },
         // SAFETY: a live `Large` word points at a live `Slot<P>`.
         Kind::Large => unsafe { &raw mut (*v.address::<Slot<P>>()).value },
-        Kind::Ref => {
-            let slot = v.address::<Word>();
-            // SAFETY: a `Ref` names a live `Word`.
-            let named = unsafe { slot.read() };
-            match named.kind {
-                // SAFETY: as above; the scalar lies in the word's first bytes.
-                kind if kind.is_scalar() => unsafe { (&raw mut (*slot).word).cast::<P>() },
-                // SAFETY: the named value holds a `P`, so its word points at a
-                // live `Slot<P>`.
-                Kind::Large => unsafe { &raw mut (*named.address::<Slot<P>>()).value },
-                kind => unreachable!("a reference to a {kind:?} value names no storage of a Rust type"),
-            }
-        }
+        // SAFETY: a `Ref` names a live `Word` holding a `P`.
+        Kind::Ref => unsafe { target(v.address::<Word>()) },
         Kind::Part => v.address::<P>(),
-        kind => unreachable!("a {kind:?} value held by value names no storage to lend"),
+        kind => unreachable!("a {kind:?} value names no storage of a Rust type"),
     }
 }
 
@@ -327,42 +318,42 @@ where
     unsafe { materialize(v) }
 }
 
-pub(crate) fn place<'a, T>(v: Word, _at: Settled<'a>) -> &'a T {
-    // SAFETY: under `Settled`, `v` is lent storage holding a `T` for `'a`,
-    // and no exclusive lend of it is live meanwhile.
-    unsafe { &*target::<T>(v) }
+pub(crate) fn place<'a, T>(v: &'a Word, _at: Settled<'a>) -> &'a T {
+    // SAFETY: under `Settled`, `v` lends storage holding a `T` for `'a`, and
+    // no exclusive lend of it is live meanwhile.
+    unsafe { &*target::<T>(ptr::from_ref(v).cast_mut()) }
 }
 
-pub(crate) fn place_mut<'a, T>(v: Word, _at: Settled<'a>) -> &'a mut T {
-    // SAFETY: under `Settled`, `v` is exclusively lent storage holding a `T`
-    // for `'a`, and no other lend of it is live meanwhile.
-    unsafe { &mut *target::<T>(v) }
+pub(crate) fn place_mut<'a, T>(v: &'a mut Word, _at: Settled<'a>) -> &'a mut T {
+    // SAFETY: under `Settled`, `v` lends storage holding a `T` exclusively for
+    // `'a`, and no other lend of it is live meanwhile.
+    unsafe { &mut *target::<T>(ptr::from_mut(v)) }
 }
 
 /// A `String`'s text: a `String` lent whole, or a reference to text.
-pub(crate) fn text<'a>(v: Word, at: Settled<'a>) -> &'a str {
+pub(crate) fn text<'a>(v: &'a Word, at: Settled<'a>) -> &'a str {
     match v.kind {
         // SAFETY: under `Settled`, a `WidePart` read as text was made from a
         // `str` the call lent, live for `'a`.
-        Kind::WidePart => unsafe { &*wide_target::<str>(v) },
+        Kind::WidePart => unsafe { &*wide_target::<str>(*v) },
         _ => place::<String>(v, at),
     }
 }
 
 /// A program's array lent as a slice: the array whole, its `Vec` in a slot,
 /// or a reference to a run of it.
-pub(crate) fn run<'a, T>(v: Word, at: Settled<'a>) -> &'a [T] {
+pub(crate) fn run<'a, T>(v: &'a Word, at: Settled<'a>) -> &'a [T] {
     match v.kind {
         // SAFETY: as `text`'s, for a run of `T`.
-        Kind::WidePart => unsafe { &*wide_target::<[T]>(v) },
+        Kind::WidePart => unsafe { &*wide_target::<[T]>(*v) },
         _ => place::<Vec<T>>(v, at),
     }
 }
 
-pub(crate) fn run_mut<'a, T>(v: Word, at: Settled<'a>) -> &'a mut [T] {
+pub(crate) fn run_mut<'a, T>(v: &'a mut Word, at: Settled<'a>) -> &'a mut [T] {
     match v.kind {
         // SAFETY: as `run`'s, exclusively lent.
-        Kind::WidePart => unsafe { &mut *wide_target::<[T]>(v) },
+        Kind::WidePart => unsafe { &mut *wide_target::<[T]>(*v) },
         _ => place_mut::<Vec<T>>(v, at),
     }
 }
@@ -571,18 +562,20 @@ pub(crate) fn canon_of(v: Word, _at: Settled<'_>) -> TypeId {
     unsafe { (*v.address::<Header>()).canon }
 }
 
-// SAFETY: `WordRuntime` lends three kinds of storage. A value's slot is
+// SAFETY: `WordRuntime` lends four kinds of storage. A scalar is lent in the
+// word at the place the guard is given, the holder's own: an argument run the
+// run keeps for the call, a `Uniform`, or a variable. A value's slot is
 // allocated once by `Slot::allocate` and never moved; it is freed only by the
 // release of the one holder that owns the value, by `take` moving the value
 // out, or by the drop of the body that holds it, and the checker's loan on a
 // value excludes each of these while it lasts. An aggregate's part lies in an
 // allocation of its own that `Parts::adopt` made and only `Parts::hand_over`
 // or the body's drop reclaims, likewise excluded while the loan lasts. A word
-// the run keeps stays where the run put it: `Held` is boxed by the run and
-// this runtime moves none. `WordRuntime` writes none of them after making
-// them except through the `&mut` an exclusive guard is, so each keeps its
-// address and is written only under an exclusive loan until the checker's
-// loan ends.
+// the run keeps stays where the run put it: `Held` is boxed by the run, and
+// this runtime moves no place it is given. `WordRuntime` writes none of them
+// after making them except through the `&mut` an exclusive guard is, so each
+// keeps its address and is written only under an exclusive loan until the
+// checker's loan ends.
 unsafe impl SignedS1 for WordRuntime {}
 // SAFETY: `reference` keeps the part's own address, in the word or boxed with
 // its metadata, and makes no copy of the part. By S1 the part stays at that
@@ -730,11 +723,11 @@ mod tests {
     #[test]
     fn a_write_through_a_lent_scalar_lands_in_the_word_it_names() {
         let mut kept = erase(5i16);
-        let lent = Word::pointing(Kind::Ref, &raw mut kept);
+        let mut lent = Word::pointing(Kind::Ref, &raw mut kept);
 
         // SAFETY: `lent` names `kept`, a live `i16`, and nothing else uses
         // `kept` while the write lasts.
-        unsafe { *target::<i16>(lent) = -300 };
+        unsafe { *target::<i16>(&raw mut lent) = -300 };
 
         // SAFETY: `kept` holds an `i16`, read once.
         assert_eq!(unsafe { materialize::<i16>(kept) }, -300);
@@ -743,10 +736,10 @@ mod tests {
     #[test]
     fn a_write_through_a_lent_allocation_lands_in_its_slot() {
         let mut kept = erase(String::from("lent"));
-        let lent = Word::pointing(Kind::Ref, &raw mut kept);
+        let mut lent = Word::pointing(Kind::Ref, &raw mut kept);
 
         // SAFETY: as for the scalar, for a `String` in a slot.
-        unsafe { (*target::<String>(lent)).push_str(" and written") };
+        unsafe { (*target::<String>(&raw mut lent)).push_str(" and written") };
 
         // SAFETY: `kept` holds a `String`, read once.
         assert_eq!(unsafe { materialize::<String>(kept) }, "lent and written");

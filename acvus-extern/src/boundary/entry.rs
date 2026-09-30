@@ -42,7 +42,7 @@ impl<R: Runtime> SiteShape<R> {
 /// (performance: facts in types).
 pub struct Entry<'c, R: Runtime> {
     runtime: &'c R,
-    args: &'c [R::Value],
+    args: &'c mut [R::Value],
     site: &'c SiteShape<R>,
 }
 
@@ -50,7 +50,7 @@ impl<'c, R: Runtime> Entry<'c, R> {
     /// The entry of one call. It is safe: the checker's decision is trusted
     /// only by the runtime's own typed reads (safety §3), and only the runtime
     /// holds values to pass here, since the host sees none (crossing §6).
-    pub fn new(runtime: &'c R, args: &'c [R::Value], site: &'c SiteShape<R>) -> Self {
+    pub fn new(runtime: &'c R, args: &'c mut [R::Value], site: &'c SiteShape<R>) -> Self {
         Entry { runtime, args, site }
     }
 
@@ -67,20 +67,22 @@ impl<'c, R: Runtime> Entry<'c, R> {
         body(Returning::of_the_entry(self.runtime, self.site), args, requirements)
     }
 
-    pub fn open_awaited<A, Q>(
+    /// Opens the arguments and the requirements as `open` does, and runs the
+    /// awaited body. The arguments are opened before the body's future is
+    /// made, so the future holds them and nothing else of the entry.
+    pub fn open_awaited<A, Q, Fut>(
         self,
-        body: impl AsyncFnOnce(Awaited<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Done<R>,
+        body: impl FnOnce(Awaited<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Fut,
     ) -> impl Future<Output = Done<R>> + Send + 'c
     where
         A: Args<R> + 'c,
         Q: Requires<R> + 'c,
+        Fut: Future<Output = Done<R>> + Send + 'c,
     {
-        async {
-            todo!(
-                "structural gap: an AsyncFnOnce body's call future cannot be bounded Send on stable Rust, \
-                 so this Send future cannot await it"
-            )
-        }
+        let at = Settled::of_the_entry();
+        let args = A::open(self.runtime, self.args, &self.site.lent, at);
+        let requirements = Q::open(self.runtime, &self.site.impls, at);
+        body(Awaited::of_the_entry(self.runtime, self.site), args, requirements)
     }
 }
 
@@ -101,7 +103,7 @@ pub trait Mode<R: Runtime>: sealed::Sealed {
     const LENT: Option<Mutability>;
 
     #[doc(hidden)]
-    fn open<'c>(runtime: &'c R, v: R::Value, at: Settled<'c>) -> Self::Opened<'c>
+    fn open<'c>(runtime: &'c R, v: &'c mut R::Value, at: Settled<'c>) -> Self::Opened<'c>
     where
         Self: 'c,
         R: 'c;
@@ -132,7 +134,12 @@ pub trait Args<R: Runtime>: sealed::Sealed {
 
     /// Each argument opened by its position's mode.
     #[doc(hidden)]
-    fn open<'c>(runtime: &'c R, args: &'c [R::Value], lent: &[Option<Mutability>], at: Settled<'c>) -> Self::Opened<'c>
+    fn open<'c>(
+        runtime: &'c R,
+        args: &'c mut [R::Value],
+        lent: &[Option<Mutability>],
+        at: Settled<'c>,
+    ) -> Self::Opened<'c>
     where
         Self: 'c,
         R: 'c;
@@ -191,7 +198,7 @@ use crate::guard::{Guard, GuardMut};
 use crate::impls::receiver::{Reads, Steps};
 use crate::impls::{Family, Instances};
 use crate::runtime::Crosses;
-use crate::shape::Projected;
+use crate::shape::{LentParts, LentPartsMut, Projected};
 
 macro_rules! modes {
     ($([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
@@ -205,7 +212,7 @@ macro_rules! modes {
 
             const LENT: Option<Mutability> = $lent;
 
-            fn open<'c>($runtime: &'c R, $v: R::Value, $at: Settled<'c>) -> Self::Opened<'c>
+            fn open<'c>($runtime: &'c R, $v: &'c mut R::Value, $at: Settled<'c>) -> Self::Opened<'c>
             where
                 Self: 'c,
                 R: 'c,
@@ -221,9 +228,9 @@ const EXCLUSIVE: Option<Mutability> = Some(Mutability::Exclusive);
 
 modes! {
     [T: Crosses] ByValue<T> => T, None,
-        |runtime, v, at| Uniform::<R, T>::of_the_crossing(v).take(runtime, at);
+        |runtime, v, at| Uniform::<R, T>::of_the_crossing(*v).take(runtime, at);
     [T] ByUniform<T> => Uniform<R, T>, None,
-        |_runtime, v, _at| Uniform::of_the_crossing(v);
+        |_runtime, v, _at| Uniform::of_the_crossing(*v);
     [T: Crosses] ByRef<T> => Guard<'c, R::Shared<'c, T>>, SHARED,
         |runtime, v, at| Guard::of_the_entry(runtime.shared(v, at));
     [T: Crosses] ByMut<T> => GuardMut<'c, R::Exclusive<'c, T>>, EXCLUSIVE,
@@ -235,7 +242,7 @@ modes! {
     [] ByStr => Guard<'c, R::SharedStr<'c>>, SHARED,
         |runtime, v, at| Guard::of_the_entry(runtime.shared_str(v, at));
     [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None,
-        |_runtime, v, _at| Callback::of_the_entry(v);
+        |_runtime, v, _at| Callback::of_the_entry(*v);
 }
 
 impl<P> sealed::Sealed for ByProjection<P> {}
@@ -243,9 +250,6 @@ impl<P> sealed::Sealed for ByProjectionMut<P> {}
 impl<F, I> sealed::Sealed for ByInstance<F, I> {}
 impl<F, Ts, L> sealed::Sealed for ByInstanceOf<F, Ts, L> {}
 
-/// The projection modes wait on a structural decision: `Projected` names its
-/// views but gives no way to build one, and a guard at each leaf is made only
-/// here, so neither `shape!` in another crate nor this module can compose one.
 impl<R: Runtime, P: Projected<R>> Mode<R> for ByProjection<P> {
     type Opened<'c> = P::Ref<'c>
     where
@@ -254,12 +258,12 @@ impl<R: Runtime, P: Projected<R>> Mode<R> for ByProjection<P> {
 
     const LENT: Option<Mutability> = SHARED;
 
-    fn open<'c>(_runtime: &'c R, _v: R::Value, _at: Settled<'c>) -> P::Ref<'c>
+    fn open<'c>(runtime: &'c R, v: &'c mut R::Value, at: Settled<'c>) -> P::Ref<'c>
     where
         Self: 'c,
         R: 'c,
     {
-        todo!("structural gap: Projected gives no way to build its projection")
+        P::project(LentParts::of_the_entry(runtime, v, at))
     }
 }
 
@@ -271,12 +275,12 @@ impl<R: Runtime, P: Projected<R>> Mode<R> for ByProjectionMut<P> {
 
     const LENT: Option<Mutability> = EXCLUSIVE;
 
-    fn open<'c>(_runtime: &'c R, _v: R::Value, _at: Settled<'c>) -> P::Mut<'c>
+    fn open<'c>(runtime: &'c R, v: &'c mut R::Value, at: Settled<'c>) -> P::Mut<'c>
     where
         Self: 'c,
         R: 'c,
     {
-        todo!("structural gap: Projected gives no way to build its projection")
+        P::project_mut(LentPartsMut::of_the_entry(runtime, v, at))
     }
 }
 
@@ -325,7 +329,7 @@ macro_rules! tuples {
             #[allow(unused_variables, clippy::unused_unit)]
             fn open<'c>(
                 runtime: &'c R,
-                args: &'c [R::Value],
+                args: &'c mut [R::Value],
                 lent: &[Option<Mutability>],
                 at: Settled<'c>,
             ) -> Self::Opened<'c>
@@ -333,10 +337,10 @@ macro_rules! tuples {
                 Self: 'c,
                 R: 'c,
             {
-                let run: &Self::Run = args.try_into().expect("a call passes one value per parameter");
+                let run: &'c mut Self::Run = args.try_into().expect("a call passes one value per parameter");
                 let modes: [Option<Mutability>; $n] = [$($m::LENT),*];
                 debug_assert_eq!(lent, modes, "the site passes each argument as its parameter's mode opens it");
-                let [$($v),*] = *run;
+                let [$($v),*] = run;
                 ($($m::open(runtime, $v, at),)*)
             }
         }

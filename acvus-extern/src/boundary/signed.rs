@@ -151,6 +151,9 @@ macro_rules! canonical_over_parts {
 
 canonical_over_parts!(<T> Option<T> => Option<T::Canon>);
 canonical_over_parts!(<T, E> Result<T, E> => Result<T::Canon, E::Canon>);
+// A sequence leaves as a `Vec` (limitations §1): a runtime gives it at the
+// settled array type.
+canonical_over_parts!(<T> Vec<T> => Vec<T::Canon>);
 
 /// Tuples up to twelve parts, the arity the standard library's own tuple
 /// impls stop at.

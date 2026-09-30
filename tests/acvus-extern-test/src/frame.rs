@@ -51,6 +51,25 @@ where
     /// Calls `glue` with the arguments `passes` names, and keeps its result
     /// in a new variable, whose index it returns.
     pub fn call(&mut self, passes: &[Pass], glue: impl FnOnce(Entry<'_, R>) -> Done<R>) -> usize {
+        let mut args = self.arguments(passes);
+        let site = Self::site(passes);
+
+        let done = glue(Entry::new(self.runtime, &mut args, &site));
+
+        self.keep(done)
+    }
+
+    /// As `call`, for a glue whose body is awaited.
+    pub async fn call_awaited(&mut self, passes: &[Pass], glue: impl AsyncFnOnce(Entry<'_, R>) -> Done<R>) -> usize {
+        let mut args = self.arguments(passes);
+        let site = Self::site(passes);
+
+        let done = glue(Entry::new(self.runtime, &mut args, &site)).await;
+
+        self.keep(done)
+    }
+
+    fn arguments(&mut self, passes: &[Pass]) -> Vec<Word> {
         let mut args = Vec::with_capacity(passes.len());
         for &pass in passes {
             let arg = match pass {
@@ -60,10 +79,14 @@ where
             };
             args.push(arg);
         }
-        let site = SiteShape::new(passes.iter().map(|p| p.lent()).collect(), Box::new([]));
+        args
+    }
 
-        let done = glue(Entry::new(self.runtime, &args, &site));
+    fn site(passes: &[Pass]) -> SiteShape<R> {
+        SiteShape::new(passes.iter().map(|p| p.lent()).collect(), Box::new([]))
+    }
 
+    fn keep(&mut self, done: Done<R>) -> usize {
         self.variables.push(Some(Box::new(Held::of_the_result(done))));
         self.variables.len() - 1
     }

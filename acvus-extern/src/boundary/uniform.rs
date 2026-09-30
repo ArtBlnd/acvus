@@ -38,16 +38,21 @@ impl<R: Runtime, X> Uniform<R, X> {
     pub(crate) fn of_the_crossing(value: R::Value) -> Self {
         Uniform { value: ManuallyDrop::new(value), _index: PhantomData }
     }
+
+    /// The value handed on to its next owner, unreleased.
+    pub(crate) fn into_value(self) -> R::Value {
+        *ManuallyDrop::new(self).value
+    }
 }
 
 impl<R: Runtime, T: Crosses> Uniform<R, T> {
     /// Lends the value in place within the call `cx` belongs to.
     pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> R::Shared<'c, T> {
-        cx.runtime().shared(*self.value, Settled::of_the_entry())
+        cx.runtime().shared(&self.value, Settled::of_the_entry())
     }
 
     pub fn open_mut<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> R::Exclusive<'c, T> {
-        cx.runtime().exclusive(*self.value, Settled::of_the_entry())
+        cx.runtime().exclusive(&mut self.value, Settled::of_the_entry())
     }
 
     /// The value itself: the one place the runtime's `take` is called. A
@@ -69,8 +74,8 @@ impl<R: Runtime, S: Projected<R>> Uniform<R, S> {
     /// held by its own `Uniform`.
     pub fn into_view<'c>(self, cx: &'c impl Opens<'c, R>) -> S::Owned {
         todo!(
-            "structural gap: Projected names S::Owned but no way to build it from the parts, nor which of \
-             take_tuple, take_object or take_variant S is taken apart by"
+            "structural gap: nothing says whether S is taken apart by take_tuple, take_object or \
+             take_variant before S::owned is given its parts"
         )
     }
 }
@@ -198,23 +203,23 @@ mod tests {
         fn give<T: Crosses>(&self, _: T, _: Settled<'_>) -> Counted {
             unreachable!("the release tests make no value")
         }
-        fn shared<'a, T: Crosses + 'a>(&'a self, _: Counted, _: Settled<'a>) -> NoGuard<T> {
+        fn shared<'a, T: Crosses + 'a>(&'a self, _: &'a Counted, _: Settled<'a>) -> NoGuard<T> {
             unreachable!("the release tests lend no storage")
         }
-        fn exclusive<'a, T: Crosses + 'a>(&'a self, _: Counted, _: Settled<'a>) -> NoGuard<T> {
+        fn exclusive<'a, T: Crosses + 'a>(&'a self, _: &'a mut Counted, _: Settled<'a>) -> NoGuard<T> {
             unreachable!("the release tests lend no storage")
         }
-        fn shared_slice<'a, T: Crosses + 'a>(&'a self, _: Counted, _: Settled<'a>) -> NoGuard<[T]> {
+        fn shared_slice<'a, T: Crosses + 'a>(&'a self, _: &'a Counted, _: Settled<'a>) -> NoGuard<[T]> {
             unreachable!("the release tests lend no storage")
         }
         fn exclusive_slice<'a, T: Crosses + 'a>(
             &'a self,
-            _: Counted,
+            _: &'a mut Counted,
             _: Settled<'a>,
         ) -> NoGuard<[T]> {
             unreachable!("the release tests lend no storage")
         }
-        fn shared_str<'a>(&'a self, _: Counted, _: Settled<'a>) -> NoGuard<str> {
+        fn shared_str<'a>(&'a self, _: &'a Counted, _: Settled<'a>) -> NoGuard<str> {
             unreachable!("the release tests lend no storage")
         }
         fn take_tuple(&self, _: Counted, _: Settled<'_>) -> NoBody {

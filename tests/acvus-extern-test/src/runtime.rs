@@ -43,23 +43,23 @@ impl Runtime for WordRuntime {
         boundary::erase(value)
     }
 
-    fn shared<'a, T: Crosses + 'a>(&'a self, v: Word, at: Settled<'a>) -> &'a T {
+    fn shared<'a, T: Crosses + 'a>(&'a self, v: &'a Word, at: Settled<'a>) -> &'a T {
         boundary::place(v, at)
     }
 
-    fn exclusive<'a, T: Crosses + 'a>(&'a self, v: Word, at: Settled<'a>) -> &'a mut T {
+    fn exclusive<'a, T: Crosses + 'a>(&'a self, v: &'a mut Word, at: Settled<'a>) -> &'a mut T {
         boundary::place_mut(v, at)
     }
 
-    fn shared_slice<'a, T: Crosses + 'a>(&'a self, v: Word, at: Settled<'a>) -> &'a [T] {
+    fn shared_slice<'a, T: Crosses + 'a>(&'a self, v: &'a Word, at: Settled<'a>) -> &'a [T] {
         boundary::run(v, at)
     }
 
-    fn exclusive_slice<'a, T: Crosses + 'a>(&'a self, v: Word, at: Settled<'a>) -> &'a mut [T] {
+    fn exclusive_slice<'a, T: Crosses + 'a>(&'a self, v: &'a mut Word, at: Settled<'a>) -> &'a mut [T] {
         boundary::run_mut(v, at)
     }
 
-    fn shared_str<'a>(&'a self, v: Word, at: Settled<'a>) -> &'a str {
+    fn shared_str<'a>(&'a self, v: &'a Word, at: Settled<'a>) -> &'a str {
         boundary::text(v, at)
     }
 

@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use crate::boundary::entry::{Entry, Settled};
 use crate::done::Done;
 use crate::context::{Awaited, Opens, Returning};
-use crate::runtime::{Crosses, Runtime};
+use crate::runtime::{Crosses, RefTarget, Runtime, TupleBody, VariantBody};
 
 /// A callback of function type `Fn(A) -> U` at effect `E`, lent to the call
 /// `'c` (limitations §3: it carries the call's lifetime, so no handler keeps
@@ -32,6 +32,17 @@ impl<A, U, E, R: Runtime> Callback<'_, '_, A, U, E, R> {
 /// that borrows what the call lent is written, at any depth.
 pub trait LoanForm {
     type At<'l>;
+
+    /// The value a returning call's argument crosses as: a reference value to
+    /// a lent leaf, a given value for a crossing leaf.
+    #[doc(hidden)]
+    fn lend<'l, R: Runtime>(value: Self::At<'l>, rt: &'l R, at: Settled<'l>) -> R::Value;
+    /// The value an awaited call's argument crosses as.
+    #[doc(hidden)]
+    fn give_moved<'a, R: Runtime>(value: Self::At<'static>, rt: &'a R, at: Settled<'a>) -> R::Value;
+    /// A returning call's result read back at its form.
+    #[doc(hidden)]
+    fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Self::At<'l>;
 }
 
 /// `&'l T`: a part of what the returning call lent, shared.
@@ -45,24 +56,122 @@ pub struct Res<F, G>(PhantomData<fn() -> (F, G)>);
 /// A tuple of forms, `Tup<(F, G)>`.
 pub struct Tup<Fs>(PhantomData<fn() -> Fs>);
 
+/// `Option`'s and `Result`'s tags: their variants' places in the order of
+/// their names' text (compiler: types §2).
+const NONE: u32 = 0;
+const SOME: u32 = 1;
+const ERR: u32 = 0;
+const OK: u32 = 1;
+
 impl<T: Crosses> LoanForm for T {
     type At<'l> = T;
+
+    fn lend<'l, R: Runtime>(value: T, rt: &'l R, at: Settled<'l>) -> R::Value {
+        rt.give(value, at)
+    }
+
+    fn give_moved<'a, R: Runtime>(value: T, rt: &'a R, at: Settled<'a>) -> R::Value {
+        rt.give(value, at)
+    }
+
+    fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> T {
+        rt.take(v, at)
+    }
 }
 
 impl<T: ?Sized + 'static> LoanForm for Lent<T> {
     type At<'l> = &'l T;
+
+    fn lend<'l, R: Runtime>(value: &'l T, rt: &'l R, at: Settled<'l>) -> R::Value {
+        rt.reference(RefTarget::Shared(value), at)
+    }
+
+    fn give_moved<'a, R: Runtime>(value: &'static T, rt: &'a R, at: Settled<'a>) -> R::Value {
+        rt.reference(RefTarget::Shared(value), at)
+    }
+
+    fn read<'l, R: Runtime>(_v: R::Value, _rt: &'l R, _at: Settled<'l>) -> &'l T {
+        todo!(
+            "structural gap: no runtime operation reads a reference value as the &'l T it names; \
+             shared lends from the value's place, and the result value is a local of this read"
+        )
+    }
 }
 
 impl<T: ?Sized + 'static> LoanForm for LentMut<T> {
     type At<'l> = &'l mut T;
+
+    fn lend<'l, R: Runtime>(value: &'l mut T, rt: &'l R, at: Settled<'l>) -> R::Value {
+        rt.reference(RefTarget::Exclusive(value), at)
+    }
+
+    fn give_moved<'a, R: Runtime>(value: &'static mut T, rt: &'a R, at: Settled<'a>) -> R::Value {
+        rt.reference(RefTarget::Exclusive(value), at)
+    }
+
+    fn read<'l, R: Runtime>(_v: R::Value, _rt: &'l R, _at: Settled<'l>) -> &'l mut T {
+        todo!("structural gap: as Lent's read")
+    }
 }
 
 impl<F: LoanForm> LoanForm for Opt<F> {
     type At<'l> = Option<F::At<'l>>;
+
+    fn lend<'l, R: Runtime>(value: Option<F::At<'l>>, rt: &'l R, at: Settled<'l>) -> R::Value {
+        match value {
+            None => rt.make_variant(NONE, None, at),
+            Some(value) => {
+                let payload = F::lend(value, rt, at);
+                rt.make_variant(SOME, Some(payload), at)
+            }
+        }
+    }
+
+    fn give_moved<'a, R: Runtime>(value: Option<F::At<'static>>, rt: &'a R, at: Settled<'a>) -> R::Value {
+        match value {
+            None => rt.make_variant(NONE, None, at),
+            Some(value) => {
+                let payload = F::give_moved(value, rt, at);
+                rt.make_variant(SOME, Some(payload), at)
+            }
+        }
+    }
+
+    fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Option<F::At<'l>> {
+        match rt.take_variant(v, at).into_payload() {
+            (NONE, None) => None,
+            (SOME, Some(payload)) => Some(F::read(payload, rt, at)),
+            (tag, payload) => unreachable!("an Option has no variant {tag} with payload {}", payload.is_some()),
+        }
+    }
 }
 
 impl<F: LoanForm, G: LoanForm> LoanForm for Res<F, G> {
     type At<'l> = Result<F::At<'l>, G::At<'l>>;
+
+    fn lend<'l, R: Runtime>(value: Result<F::At<'l>, G::At<'l>>, rt: &'l R, at: Settled<'l>) -> R::Value {
+        let (tag, payload) = match value {
+            Ok(value) => (OK, F::lend(value, rt, at)),
+            Err(error) => (ERR, G::lend(error, rt, at)),
+        };
+        rt.make_variant(tag, Some(payload), at)
+    }
+
+    fn give_moved<'a, R: Runtime>(value: Result<F::At<'static>, G::At<'static>>, rt: &'a R, at: Settled<'a>) -> R::Value {
+        let (tag, payload) = match value {
+            Ok(value) => (OK, F::give_moved(value, rt, at)),
+            Err(error) => (ERR, G::give_moved(error, rt, at)),
+        };
+        rt.make_variant(tag, Some(payload), at)
+    }
+
+    fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Result<F::At<'l>, G::At<'l>> {
+        match rt.take_variant(v, at).into_payload() {
+            (OK, Some(payload)) => Ok(F::read(payload, rt, at)),
+            (ERR, Some(payload)) => Err(G::read(payload, rt, at)),
+            (tag, payload) => unreachable!("a Result has no variant {tag} with payload {}", payload.is_some()),
+        }
+    }
 }
 
 mod sealed {
@@ -75,38 +184,80 @@ mod sealed {
 pub trait CallArgs<R: Runtime>: sealed::Sealed {
     type Lent<'l>;
     type Moved;
+
+    /// The argument run of a returning call, one value per parameter.
+    #[doc(hidden)]
+    fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>;
+    /// The argument run of an awaited call.
+    #[doc(hidden)]
+    fn move_run<'a>(args: Self::Moved, rt: &'a R, at: Settled<'a>) -> impl ExactSizeIterator<Item = R::Value>;
 }
 
 /// Tuples of loan forms up to twelve, the arity the crossing's tuples stop at.
 macro_rules! forms {
-    ($(($($f:ident),*))+) => {$(
+    ($($n:literal ($($f:ident $v:ident),*))+) => {$(
         impl<$($f: LoanForm),*> sealed::Sealed for ($($f,)*) {}
 
         impl<R: Runtime, $($f: LoanForm),*> CallArgs<R> for ($($f,)*) {
             type Lent<'l> = ($($f::At<'l>,)*);
             type Moved = ($($f::At<'static>,)*);
+
+            #[allow(unused_variables)]
+            fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value> {
+                let ($($v,)*) = args;
+                let run: [R::Value; $n] = [$($f::lend($v, rt, at)),*];
+                run.into_iter()
+            }
+
+            #[allow(unused_variables)]
+            fn move_run<'a>(args: Self::Moved, rt: &'a R, at: Settled<'a>) -> impl ExactSizeIterator<Item = R::Value> {
+                let ($($v,)*) = args;
+                let run: [R::Value; $n] = [$($f::give_moved($v, rt, at)),*];
+                run.into_iter()
+            }
         }
 
         impl<$($f: LoanForm),*> LoanForm for Tup<($($f,)*)> {
             type At<'l> = ($($f::At<'l>,)*);
+
+            #[allow(unused_variables)]
+            fn lend<'l, R: Runtime>(value: Self::At<'l>, rt: &'l R, at: Settled<'l>) -> R::Value {
+                let ($($v,)*) = value;
+                let parts: [R::Value; $n] = [$($f::lend($v, rt, at)),*];
+                rt.make_tuple(parts.into_iter(), at)
+            }
+
+            #[allow(unused_variables)]
+            fn give_moved<'a, R: Runtime>(value: Self::At<'static>, rt: &'a R, at: Settled<'a>) -> R::Value {
+                let ($($v,)*) = value;
+                let parts: [R::Value; $n] = [$($f::give_moved($v, rt, at)),*];
+                rt.make_tuple(parts.into_iter(), at)
+            }
+
+            #[allow(unused_variables, unused_mut, clippy::unused_unit)]
+            fn read<'l, R: Runtime>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Self::At<'l> {
+                let mut parts = rt.take_tuple(v, at).into_parts();
+                assert_eq!(parts.len(), $n, "a tuple read at its form has the form's arity");
+                ($($f::read(parts.next().expect("the arity was checked"), rt, at),)*)
+            }
         }
     )+};
 }
 
 forms! {
-    ()
-    (A)
-    (A, B)
-    (A, B, C)
-    (A, B, C, D)
-    (A, B, C, D, E)
-    (A, B, C, D, E, F)
-    (A, B, C, D, E, F, G)
-    (A, B, C, D, E, F, G, H)
-    (A, B, C, D, E, F, G, H, I)
-    (A, B, C, D, E, F, G, H, I, J)
-    (A, B, C, D, E, F, G, H, I, J, K)
-    (A, B, C, D, E, F, G, H, I, J, K, L)
+    0 ()
+    1 (A a)
+    2 (A a, B b)
+    3 (A a, B b, C c)
+    4 (A a, B b, C c, D d)
+    5 (A a, B b, C c, D d, E e)
+    6 (A a, B b, C c, D d, E e, F f)
+    7 (A a, B b, C c, D d, E e, F f, G g)
+    8 (A a, B b, C c, D d, E e, F f, G g, H h)
+    9 (A a, B b, C c, D d, E e, F f, G g, H h, I i)
+    10 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j)
+    11 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k)
+    12 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k, L l)
 }
 
 impl<'c, 'a, A, U, E, R> Callback<'c, 'a, A, U, E, R>
@@ -157,6 +308,13 @@ pub trait CallsBack: Runtime {
 /// one, from a handler's glue.
 pub struct RustFn<R: Runtime> {
     call: fn(Entry<'_, R>) -> Done<R>,
+}
+
+impl<R: Runtime> RustFn<R> {
+    /// A call of the function, through the entry its caller made.
+    pub fn call(&self, entry: Entry<'_, R>) -> Done<R> {
+        (self.call)(entry)
+    }
 }
 
 /// Making a script function value from a Rust function. `R` is the runtime the
