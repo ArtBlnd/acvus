@@ -16,8 +16,7 @@ An extern fn cannot make a runtime value from a Rust value. No such path exists 
 ## 2. Calls
 
 - A callback is callable any number of times. An extern cannot ask for a callback that is called once.
-- A callback's result borrows only what was lent to it in place, and no longer than that loan.
-- Every `&mut` an awaited callback receives crosses by move. Writable storage lent to an awaited callback hands over its access, which comes back only with the call's result.
+- An awaited call of a callback takes its arguments by move; only a returning call lends the handler's storage, and its result borrows only what it lent, no longer than that loan.
 - An extern that wants threads brings its own pool and joins it before it returns. The contract spawns nothing.
 
 ## 3. Keeping

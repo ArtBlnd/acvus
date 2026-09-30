@@ -16,14 +16,16 @@ A reference to a value of a transparent structured type (compiler: types §1) cr
 
 A reference crosses only when three facts hold of its storage: it is live for the whole call, it is whole, and it is excluded from every other access. Where one does not hold, the crossing remedies it: the value moves, the value is copied, or the access itself is handed over.
 
-- An awaited callback receives, at every by-reference position, only a reference the boundary builds from storage the run keeps: an in-place lend of storage the run keeps alive, a per-call move into the callback's frame, or a value kept until the run's last work. Otherwise it receives the value by move.
-- Every `&mut` a callback receives while awaited crosses by move: the handler's storage moves into the callback run and moves back when the callback returns and its work has ended.
-- A handler that lends writable storage to an awaited callback hands over the access itself, and gets it back only with the call's result. Dropping the call drops it.
-- A synchronous call keeps plain references; it hands no work to an executor.
+- An awaited call of a callback takes its arguments by move. A handler lends none of its storage to it, shared or mutable. Each argument is placed in the callback run's frame, and a by-reference parameter of the callback is a reference to it there.
+- A returning call of a callback takes plain references; it hands no work to an executor.
+
+*Why.* Rust has no asynchronous drop: a call future dropped while it awaits cannot wait for the callback run's work still aloft, which would then read or write storage the handler has released or reused.
+
+*Rejected.* A move made by the boundary behind a reference parameter: the declaration would not show it. Tracking in the glue whether a dropped call finished: it can only turn the violation into death, at a state and a check per call. Lending from storage the run keeps: a second mechanism for what a move already gives.
 
 ## 4. Results
 
-A callback's result borrows only what was lent in place, and no longer than that loan. The bound is a type.
+The result of a returning call of a callback borrows only what that call lent, and no longer than that loan; the result of an awaited call borrows nothing the handler holds. The bound is a type.
 
 ## 5. Completion
 
