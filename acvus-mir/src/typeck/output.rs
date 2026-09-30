@@ -76,9 +76,15 @@ pub enum TryExit<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conversion<T> {
     pub via: Chosen,
-    /// `via`'s function type, instantiated at this coercion's two ends.
+    /// `via`'s function type, instantiated at this coercion's two ends,
+    /// its result the declared one.
     pub via_ty: T,
     pub to: T,
+    /// The type `via`'s result is taken at where its uses settled it other
+    /// than declared: a value given marked and taken unmarked (types §8).
+    pub unmark: Option<T>,
+    /// Which of a `#` pair `via` is (types §8).
+    pub member: PairMember,
 }
 
 /// A declared conversion applied while checking (types §7): its `via`
@@ -172,8 +178,10 @@ pub struct Closure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StructureTree {
     Parts(Box<[(PartKey, StructureTree)]>),
-    /// The impl reached, and its function type as instantiated there.
-    Reached { chosen: Chosen, callee: Ty },
+    /// The impl reached, its function type as instantiated there with its
+    /// declared result, the type its uses settled that result at where it
+    /// differs, and which of a `#` pair it is (types §8).
+    Reached { chosen: Chosen, callee: Ty, unmark: Option<Ty>, member: PairMember },
     /// The language's own answer, where no impl is reached.
     Own(Own),
 }

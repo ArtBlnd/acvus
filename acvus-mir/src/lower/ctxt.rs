@@ -209,12 +209,8 @@ impl<'a, 'm> Lcx<'a, 'm> {
         }
     }
 
-    pub fn callee(&self, chosen: &Chosen) -> Callee {
-        self.callee_as(chosen, PairMember::Uniform)
-    }
-
     /// The call of `chosen` as `member` of its `#` pair (types §8).
-    pub fn callee_as(&self, chosen: &Chosen, member: PairMember) -> Callee {
+    pub fn callee(&self, chosen: &Chosen, member: PairMember) -> Callee {
         Callee::Extern {
             id: chosen.declaration,
             r#impl: self.impl_index(chosen),

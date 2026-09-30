@@ -540,6 +540,9 @@ impl Infer {
         };
         let rule = conversion.rule();
         let (pattern_from, pattern_to) = self.instantiate_ends(decls.types(), rule.from, rule.to);
+        // A via gives its result as a call does: a mark written marked there
+        // starts fresh, raised by the uses that take it unmarked (types §8).
+        let pattern_to = self.fresh_origin_marks(pattern_to);
         self.relate(pattern_from, value.term, Relation::Eq)?;
         let mismatch = Mismatch::Heads {
             a: value.term,
@@ -565,7 +568,7 @@ impl Infer {
         match holder {
             Some((var, _)) => self.rebind(var, made),
             None => self.relate(slot_node, made, Relation::Eq).map(drop).map_err(|failed| match failed {
-                effects @ Mismatch::Effects { .. } => effects,
+                kept @ (Mismatch::Effects { .. } | Mismatch::Mark { .. }) => kept,
                 _ => mismatch,
             }),
         }
@@ -623,6 +626,9 @@ impl Infer {
                 .expect("climb: the target is up the tree from the start");
             let rule = step.rule();
             let (pattern_from, pattern_to) = self.instantiate_ends(decls.types(), rule.from, rule.to);
+        // A via gives its result as a call does: a mark written marked there
+        // starts fresh, raised by the uses that take it unmarked (types §8).
+        let pattern_to = self.fresh_origin_marks(pattern_to);
             self.raise_mark(at)?;
             self.relate(pattern_from, at, Relation::Eq)?;
             (at, head) = (pattern_to, poly_head(decls.types(), rule.to));

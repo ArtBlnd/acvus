@@ -17,12 +17,12 @@ use super::coerce::{ArrayMap, Variant, array_map, by_variant};
 use super::control::diamond;
 use super::ctxt::Lcx;
 use super::place::view_array;
-use crate::decl::{Lift, LiftShape, Taking};
+use crate::decl::{Lift, LiftShape, PairMember, Taking};
 use crate::ir::cfg::{BlockId, Op, Stages, Terminator};
 use crate::ir::{ExitTrip, ForSource, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId, fn_effect, known_len};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{Effect, IntTy, Mutability, Ty, TyKind};
-use crate::typeck::{Own, StructureTree};
+use crate::typeck::{Chosen, Own, StructureTree};
 
 /// What a comparison asks of its operands (operators §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,9 +197,8 @@ pub(super) fn compare<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, op: BinOp, lef
 /// `a` against `b`, the operands of a node of type `ty`.
 fn compared(cx: &mut Lcx<'_, '_>, tree: &StructureTree, asked: Asked, ty: Ty, a: ValueId, b: ValueId, span: Span) -> ValueId {
     let trees = match tree {
-        StructureTree::Reached { chosen, callee } => {
-            let called = cx.callee(chosen);
-            return issue(cx, called, *callee, vec![a, b], span);
+        StructureTree::Reached { chosen, callee, unmark, member } => {
+            return reached_part(cx, chosen, *member, (*callee, *unmark), vec![a, b], span);
         }
         StructureTree::Parts(trees) => trees,
         StructureTree::Own(own) => unreachable!("the language answers only `clone` and `default` itself, no comparison ({own:?})"),
@@ -482,9 +481,8 @@ pub(super) fn lifted(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span
 /// `tree`, taking `args` as `lift` takes them.
 fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty, args: &[ValueId], span: Span) -> ValueId {
     let trees = match tree {
-        StructureTree::Reached { chosen, callee } => {
-            let called = cx.callee(chosen);
-            return issue(cx, called, *callee, args.to_vec(), span);
+        StructureTree::Reached { chosen, callee, unmark, member } => {
+            return reached_part(cx, chosen, *member, (*callee, *unmark), args.to_vec(), span);
         }
         StructureTree::Parts(trees) => trees,
         StructureTree::Own(Own::Copy) => {
@@ -561,6 +559,17 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
         }
         Shape::Option(_) | Shape::Result { .. } | Shape::Enum(_) => unreachable!("a variant type is rebuilt by its variant above"),
         Shape::Ref(_) | Shape::Never => panic!("a lift answers only at a transparent structured type, not {ty:?}"),
+    }
+}
+
+/// The call of the impl a part node reached, as `member` of its `#` pair,
+/// its value taken at `unmark` where its uses settled it so (types §8).
+fn reached_part(cx: &mut Lcx<'_, '_>, chosen: &Chosen, member: PairMember, (callee, unmark): (Ty, Option<Ty>), args: Vec<ValueId>, span: Span) -> ValueId {
+    let called = cx.callee(chosen, member);
+    let given = issue(cx, called, callee, args, span);
+    match unmark {
+        Some(taken) => cx.builder.push(Op::Unmark { src: given }, taken, span),
+        None => given,
     }
 }
 

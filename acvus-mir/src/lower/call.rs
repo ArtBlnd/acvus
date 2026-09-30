@@ -52,8 +52,12 @@ pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, 
                 cx.builder.push(op, step.to, span)
             }
             false => {
-                let callee = cx.callee(&step.via);
-                issue(cx, callee, step.via_ty, vec![at], span)
+                let callee = cx.callee(&step.via, step.member);
+                let given = issue(cx, callee, step.via_ty, vec![at], span);
+                match step.unmark {
+                    Some(taken) => cx.builder.push(Op::Unmark { src: given }, taken, span),
+                    None => given,
+                }
             }
         };
     }
@@ -84,7 +88,7 @@ pub(super) fn call_reached(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>
         return super::part_tree::lifted(cx, site, args, span);
     }
     let member = cx.decided.pair(site).unwrap_or(PairMember::Uniform);
-    let callee = cx.callee_as(cx.reached(site), member);
+    let callee = cx.callee(cx.reached(site), member);
     let callee_ty = cx
         .decided
         .callee(site)

@@ -1654,6 +1654,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
             cx.out.structures.insert(site, super::output::StructureNode::Reached);
             cx.out.reached.insert(site, chosen);
             cx.out.callees.insert(site, ty);
+            record_origin(cx, site, declared_result, pair.as_ref());
         }
         _ => {
             for ((arg_site, arg), param) in args.iter().zip(params.iter()) {
@@ -1663,12 +1664,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
             super::effect::join_into(cx, &effect, &declared_effect, span);
             cx.out.reached.insert(site, chosen);
             cx.out.callees.insert(site, ty);
-            if let Some(declared) = declared_result {
-                cx.out.origins.insert(site, declared);
-            }
-            if let Some(pair) = &pair {
-                cx.out.pairs.insert(site, pair.mark);
-            }
+            record_origin(cx, site, declared_result, pair.as_ref());
         }
     }
     settle_bounded(cx, ty, span);
@@ -1724,15 +1720,19 @@ pub(super) fn reach_step(cx: &mut Ctxt<'_>, step: Step<'_>, from: Term, to: Term
             ty: scheme.ty,
         },
     };
-    let Instantiated { ty, requirements, .. } = instantiate(cx, offer, span);
+    let Instantiated { ty, requirements, declared_result, pair, .. } = instantiate(cx, offer, span);
     let TyKind::Fn { params, ret, effect, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
         panic!("a step's `via` is a function type (ViaNotItsFunction, NotAFunction)");
     };
+    record_origin(cx, node, declared_result, pair.as_ref());
     let [param] = &params[..] else {
         panic!("a step's `via` takes one parameter (ViaNotItsFunction, operators §2)");
     };
     cx.eq(*param, from, span);
-    cx.eq(ret, to, span);
+    // The via's result is `to` as declared, and gives its value as a call
+    // does: its marks meet `to`'s as marks join, so a result given marked
+    // and taken unmarked is raised, not refused (types §8).
+    cx.join(to, ret, crate::ty::Reach::Named, span);
     super::effect::flows_into(cx, &effect, body, span);
     cx.out.reached.insert(
         node,
@@ -1805,6 +1805,18 @@ pub(super) fn instantiate_scheme(cx: &mut Ctxt<'_>, scheme: &Scheme, span: Span)
         cx.decisions.push(Decision::StartMark { span, positions: positions.into(), mark, specialized });
     }
     instantiated
+}
+
+/// A call reached at `site` whose result as declared holds a mark its value
+/// starts fresh, and the mark a `#` pair's positions share there
+/// (types §8), each recorded where the call has one.
+fn record_origin(cx: &mut Ctxt<'_>, site: AstId, declared_result: Option<Term>, pair: Option<&PairAt>) {
+    if let Some(declared) = declared_result {
+        cx.out.origins.insert(site, declared);
+    }
+    if let Some(pair) = pair {
+        cx.out.pairs.insert(site, pair.mark);
+    }
 }
 
 /// A concrete impl as a scheme of its own, each of its type variables at

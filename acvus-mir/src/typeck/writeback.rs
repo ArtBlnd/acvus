@@ -388,8 +388,15 @@ fn conversions(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut Freeze
                 .reached
                 .remove(&node)
                 .expect("a coercion step is recorded in `reached` at its node");
-            match (freeze(cx, types, memo, via_ty), freeze(cx, types, memo, to)) {
-                (Some(via_ty), Some(to)) => frozen.push(Conversion { via, via_ty, to }),
+            let (declared, pair) = (cx.out.origins.remove(&node), cx.out.pairs.remove(&node));
+            match (settled_call(cx, types, memo, via_ty, declared, pair), freeze(cx, types, memo, to)) {
+                (Some(call), Some(to)) => frozen.push(Conversion {
+                    via,
+                    via_ty: call.callee,
+                    to,
+                    unmark: call.unmark,
+                    member: call.member.unwrap_or(PairMember::Uniform),
+                }),
                 _ => left_open = true,
             }
         }
@@ -449,6 +456,7 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
                     specialized: Box::new([]),
                 };
                 let above = super::decision::instantiate_scheme(cx, &scheme, span).ty;
+                let above = cx.infer.fresh_origin_marks(above);
                 if let Err(mismatch) = cx.infer.enter(cx.decls, at.term, at, above, crate::ty::Reach::Named) {
                     panic!("a step the tree admits takes its value up: {mismatch:?}");
                 }
@@ -523,8 +531,14 @@ impl Trees<'_> {
             StructureNode::Reached => {
                 let chosen = cx.out.reached.remove(&node);
                 let callee = cx.out.callees.remove(&node);
-                let callee = freeze(cx, types, memo, callee?)?;
-                Some(StructureTree::Reached { chosen: chosen?, callee })
+                let (declared, pair) = (cx.out.origins.remove(&node), cx.out.pairs.remove(&node));
+                let call = settled_call(cx, types, memo, callee?, declared, pair)?;
+                Some(StructureTree::Reached {
+                    chosen: chosen?,
+                    callee: call.callee,
+                    unmark: call.unmark,
+                    member: call.member.unwrap_or(PairMember::Uniform),
+                })
             }
         }
     }
