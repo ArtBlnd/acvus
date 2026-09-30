@@ -4,7 +4,7 @@ use super::*;
 use crate::decl::{
     Core, Declarations, DeclaredFacts, GenericImplSig, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme,
 };
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, TyKind, TypeArg, Types};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, TyKind, Types};
 
 struct Fixture {
     interner: Interner,
@@ -45,7 +45,7 @@ impl Fixture {
     }
 
     fn reference(&mut self, mutability: Mutability, lent: TyId<Poly>) -> TyId<Poly> {
-        self.ty(TyKind::Ref(mutability, TypeArg::Uniform(lent)))
+        self.ty(TyKind::Ref(mutability, lent))
     }
 
     fn function(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>) -> TyId<Poly> {
@@ -167,6 +167,7 @@ fn well_formed_facts_of_every_kind_verify() {
         type_args: Box::new([]),
         effect: None,
         identity: None,
+        marked: false,
     });
     f.raw.user_types.push(crate::decl::UserTypeDecl {
         id: QualifiedRef::root(f.interner.intern("Map")),

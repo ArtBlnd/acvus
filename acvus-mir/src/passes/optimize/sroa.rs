@@ -53,7 +53,7 @@ mod tests {
     use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
     use crate::ir::cfg::{Body, Inst, Op, Terminator};
     use crate::ir::{PathSeg, RefTarget};
-    use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, TypeArg, Types};
+    use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, Types};
 
     struct Fixture {
         module: Module,
@@ -70,12 +70,13 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let int = types.intern(TyKind::Int(IntTy::I64));
         let pair = types.intern(TyKind::Tuple(Box::new([int, int]), ()));
-        let ref_pair = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(pair)));
+        let ref_pair = types.intern(TyKind::Ref(Mutability::Shared, pair));
         let declared = types.intern(TyKind::UserDefined {
             id: QualifiedRef::root(interner.intern("Point")),
             type_args: Box::new([]),
             effect: None,
             identity: None,
+            marked: false,
         });
         Fixture { module: Module::new(types), interner, int, pair, ref_pair, declared }
     }

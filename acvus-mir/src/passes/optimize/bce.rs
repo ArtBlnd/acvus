@@ -74,7 +74,7 @@ mod tests {
     use crate::ir::cfg::{BlockId, Inst, Stages, Terminator};
     use crate::ir::{Callee, Checked, ExitTrip, ExternImpl, ForSource, IndexMode, RefTarget, ValueId};
     use crate::ty::{
-        Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, Poly, Ty, TyKind, TypeArg,
+        Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, Poly, Ty, TyKind,
         Types,
     };
 
@@ -103,7 +103,7 @@ mod tests {
         let poly_int = poly.intern(TyKind::Int(IntTy::I64));
         let poly_index = poly.intern(TyKind::Int(IntTy::U64));
         let poly_slice = poly.intern(TyKind::Slice(poly_int));
-        let poly_ref = poly.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(poly_slice)));
+        let poly_ref = poly.intern(TyKind::Ref(Mutability::Shared, poly_slice));
         let declared = poly.intern(TyKind::Fn {
             params: Box::new([poly_index]),
             ret: poly_ref,
@@ -157,7 +157,7 @@ mod tests {
         let int = types.intern(TyKind::Int(IntTy::I64));
         let index = types.intern(TyKind::Int(IntTy::U64));
         let slice = types.intern(TyKind::Slice(int));
-        let slice_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice)));
+        let slice_ref = types.intern(TyKind::Ref(Mutability::Shared, slice));
         let make_ty = types.intern(TyKind::Fn {
             params: Box::new([index]),
             ret: slice_ref,
@@ -168,7 +168,7 @@ mod tests {
             values: (),
         });
         let array = types.intern(TyKind::Array(int, LenTerm::Known(4), ()));
-        let array_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array)));
+        let array_ref = types.intern(TyKind::Ref(Mutability::Shared, array));
         Fixture { module: Module::new(types), decls, make, as_slice, int, index, slice_ref, make_ty, array, array_ref }
     }
 

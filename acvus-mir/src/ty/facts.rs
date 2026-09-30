@@ -143,9 +143,9 @@ fn for_each_position_level(
         | TyKind::Str => {}
         TyKind::Ref(mutability, target) => {
             let mut width = 0;
-            for_each_position(types, lifetimes, target.ty(), &mut |_, _| width += 1);
+            for_each_position(types, lifetimes, *target, &mut |_, _| width += 1);
             on_position(PositionKind::Ref(*mutability, width), ty);
-            for_each_position(types, lifetimes, target.ty(), on_position);
+            for_each_position(types, lifetimes, *target, on_position);
         }
         TyKind::Fn { holds, .. } => on_position(PositionKind::Captures(*holds), ty),
         // One environment, whichever signature it is called at: what its
@@ -191,7 +191,7 @@ fn for_each_position_level(
                 on_position(PositionKind::Lifetime, ty);
             }
             for arg in type_args.iter() {
-                for_each_position(types, lifetimes, arg.ty(), on_position);
+                for_each_position(types, lifetimes, *arg, on_position);
             }
         }
         TyKind::Var(var) => match *var {},
@@ -218,7 +218,7 @@ pub fn lent_types(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty)
     let mut lent = Vec::new();
     for_each_position(types, lifetimes, ty, &mut |_, of| {
         lent.push(match types.kind(of) {
-            TyKind::Ref(_, target) => Some(target.ty()),
+            TyKind::Ref(_, target) => Some(*target),
             _ => None,
         })
     });

@@ -13,7 +13,7 @@ use crate::passes::analysis::{
 };
 use crate::ty::{
     Alignment, Calls, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IdentityId,
-    IdentityTerm, IntTy, Mutability, ObjectTy, Reissue, SplitCost, Ty, TyKind, TypeArg, Types,
+    IdentityTerm, IntTy, Mutability, ObjectTy, Reissue, SplitCost, Ty, TyKind, Types,
 };
 
 struct Fixture {
@@ -35,7 +35,7 @@ fn fixture() -> Fixture {
     let bool = types.intern(TyKind::Bool);
     let (a, b) = (names.intern("a"), names.intern("b"));
     let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(a, int), (b, int)]), ())));
-    let mut_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+    let mut_int = types.intern(TyKind::Ref(Mutability::Mut, int));
     let effectful = types.intern(TyKind::Fn {
         params: Box::new([]),
         ret: int,
@@ -409,7 +409,7 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
     let names = Interner::new();
     let mut types = Types::<Concrete>::new();
     let int = types.intern(TyKind::Int(IntTy::I64));
-    let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+    let ref_int = types.intern(TyKind::Ref(Mutability::Shared, int));
     let (c, d) = (QualifiedRef::root(names.intern("c")), QualifiedRef::root(names.intern("d")));
     let mut function = |params: &[Ty], ret: Ty, effect: Effect, flows: Flows, calls: Calls, holds: Holds| {
         types.intern(TyKind::Fn {
@@ -432,21 +432,23 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
     let everything = function(&[ref_int], ref_int, reading, flows, Calls::Many, Holds::Mut);
     let writing = Effect::new(Reissue::Opaque, true, Contexts::new(), Contexts::from([d]), SplitCost::Unavailable);
     let no_flows = function(&[], int, writing, Flows::none(), Calls::Many, Holds::Shared);
-    let vec = |types: &mut Types<Concrete>, effect: Option<EffectTerm<Concrete>>, identity: Option<IdentityTerm<Concrete>>| {
+    let vec = |types: &mut Types<Concrete>, effect: Option<EffectTerm<Concrete>>, identity: Option<IdentityTerm<Concrete>>, marked| {
         types.intern(TyKind::UserDefined {
             id: QualifiedRef::root(names.intern("Vec")),
-            type_args: Box::new([TypeArg::Specialized(int)]),
+            type_args: Box::new([int]),
             effect,
             identity,
+            marked,
         })
     };
-    let plain_vec = vec(&mut types, None, None);
-    let opaque_vec = vec(&mut types, Some(EffectTerm::Known(Effect::opaque())), None);
-    let pure_vec = vec(&mut types, Some(EffectTerm::Known(Effect::pure())), None);
+    let plain_vec = vec(&mut types, None, None, false);
+    let opaque_vec = vec(&mut types, Some(EffectTerm::Known(Effect::opaque())), None, true);
+    let pure_vec = vec(&mut types, Some(EffectTerm::Known(Effect::pure())), None, true);
     let marked_vec = vec(
         &mut types,
         Some(EffectTerm::Known(pure_reading(c))),
         Some(IdentityTerm::Known(IdentityId::from_raw(3))),
+        true,
     );
 
     let shown = |ty| crate::ty::print::ty(&types, &names, ty);
@@ -457,10 +459,10 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
         "fn(&i64) -> &i64 [idempotent, commutative, reads=[@c], split=3, flows=[p0->ret, cap->ret:any], holds=mut]"
     );
     assert_eq!(shown(no_flows), "fn() -> i64 [writes=[@d], flows=[], holds=shared]");
-    assert_eq!(shown(plain_vec), "Vec<#i64>");
-    assert_eq!(shown(opaque_vec), "Vec<#i64> with opaque");
-    assert_eq!(shown(pure_vec), "Vec<#i64> with pure");
-    assert_eq!(shown(marked_vec), "Vec<#i64> with (pure, reads=[@c]) [id0=3]");
+    assert_eq!(shown(plain_vec), "Vec<i64>");
+    assert_eq!(shown(opaque_vec), "#Vec<i64> with opaque");
+    assert_eq!(shown(pure_vec), "#Vec<i64> with pure");
+    assert_eq!(shown(marked_vec), "#Vec<i64> with (pure, reads=[@c]) [id0=3]");
 }
 
 fn pure_reading(context: QualifiedRef) -> Effect {
@@ -475,9 +477,9 @@ fn an_extern_call_prints_its_impl_where_its_function_has_impls() {
     let mut f = fixture();
     let (int, bool) = (f.int, f.bool);
     let array = f.module.types.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2), ()));
-    let array_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array)));
+    let array_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, array));
     let slice = f.module.types.intern(TyKind::Slice(int));
-    let slice_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice)));
+    let slice_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, slice));
     let pure = |types: &mut Types<Concrete>, params: &[Ty], ret: Ty| {
         types.intern(TyKind::Fn {
             params: params.into(),

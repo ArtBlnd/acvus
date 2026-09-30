@@ -212,6 +212,7 @@ enum Shape {
     Binary(BinOp),
     Unary(UnaryOp),
     Cast(CastTy),
+    Unmark,
     LoadFunction(QualifiedRef),
     Call { callee: CalleeKey, callee_ty: Ty },
     ArrayBegin(usize),
@@ -319,6 +320,7 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
         Op::BinOp { op, .. } => Shape::Binary(*op),
         Op::UnaryOp { op, .. } => Shape::Unary(*op),
         Op::Cast { to, .. } => Shape::Cast(*to),
+        Op::Unmark { .. } => Shape::Unmark,
         Op::LoadFunction { id } => Shape::LoadFunction(*id),
         Op::FunctionCall { callee, callee_ty, .. } => {
             let Some(effect) = fn_effect(types, *callee_ty) else {

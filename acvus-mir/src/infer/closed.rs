@@ -62,7 +62,7 @@ impl Infer {
     pub(crate) fn head_variables(&self, term: Term) -> impl Iterator<Item = TyVarId> {
         let target = match self.end(term) {
             End::Node { node, .. } => match self.types.kind(node) {
-                TyKind::Ref(_, target) => self.last_variable(target.ty()),
+                TyKind::Ref(_, target) => self.last_variable(*target),
                 _ => None,
             },
             End::Unbound(..) => None,
@@ -81,13 +81,33 @@ impl Infer {
     pub(super) fn head_of(&self, node: Term) -> Option<Head> {
         match self.types.kind(node) {
             TyKind::Ref(mutability, target) => {
-                let End::Node { node: target, .. } = self.end(target.ty()) else {
+                let End::Node { node: target, .. } = self.end(*target) else {
                     return None;
                 };
                 Some(Head::Ref(*mutability, base_of(self.types.kind(target))))
             }
             kind => Some(Head::Base(base_of(kind))),
         }
+    }
+
+    /// The type one `Step::Unmark` above `term`, a marked extern-defined
+    /// type or a reference to one: the same type unmarked (types §8).
+    ///
+    /// # Panics
+    /// `term`'s head is not marked: callers step up by `Unmark` only from a
+    /// marked head, which `head_of` read at a node.
+    pub(crate) fn unmarked(&mut self, term: Term) -> Term {
+        let End::Node { node, .. } = self.end(term) else {
+            panic!("a marked head is read at a node")
+        };
+        let kind = match self.types.kind(node).clone() {
+            TyKind::UserDefined { id, type_args, effect, identity, marked: true } => {
+                TyKind::UserDefined { id, type_args, effect, identity, marked: false }
+            }
+            TyKind::Ref(mutability, target) => TyKind::Ref(mutability, self.unmarked(target)),
+            unmarked => panic!("only a marked head steps up by Unmark, not {unmarked:?}"),
+        };
+        self.intern(kind)
     }
 }
 
@@ -98,7 +118,7 @@ impl Infer {
 /// `ReferenceToReference`).
 pub(super) fn poly_head(types: &Types<Poly>, ty: TyId<Poly>) -> Head {
     match types.kind(ty) {
-        TyKind::Ref(mutability, target) => Head::Ref(*mutability, base_of(types.kind(target.ty()))),
+        TyKind::Ref(mutability, target) => Head::Ref(*mutability, base_of(types.kind(*target))),
         kind => Head::Base(base_of(kind)),
     }
 }
@@ -119,7 +139,7 @@ fn base_of<V: Phase>(kind: &TyKind<V>) -> Base {
         TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
         TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
-        TyKind::UserDefined { id, .. } => Base::Named(*id),
+        TyKind::UserDefined { id, marked, .. } => Base::Named { id: *id, marked: *marked },
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::Ref(..) => panic!(

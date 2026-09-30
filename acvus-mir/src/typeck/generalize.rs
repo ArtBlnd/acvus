@@ -176,7 +176,6 @@ impl Moving<'_> {
             effects: vars.effects.iter().map(|var| terms.effect_var(*var)).collect(),
             lengths: vars.lengths.iter().map(|var| terms.length_var(*var)).collect(),
             identities: vars.identities.iter().map(|var| terms.identity_var(*var)).collect(),
-            marks: vars.marks.iter().map(|var| terms.mark_var(*var)).collect(),
             values: vars.values.iter().map(|var| terms.values_var(*var)).collect(),
         }
     }
@@ -188,7 +187,6 @@ impl Moving<'_> {
             effects: at.effects.iter().map(|(var, copy)| (terms.effect_var(*var), terms.effect_var(*copy))).collect(),
             lengths: at.lengths.iter().map(|(var, copy)| (terms.length_var(*var), terms.length_var(*copy))).collect(),
             identities: at.identities.iter().map(|(var, copy)| (terms.identity_var(*var), terms.identity_var(*copy))).collect(),
-            marks: at.marks.iter().map(|(var, copy)| (terms.mark_var(*var), terms.mark_var(*copy))).collect(),
             values: at.values.iter().map(|(var, copy)| (terms.values_var(*var), terms.values_var(*copy))).collect(),
         }
     }
@@ -320,7 +318,6 @@ impl Canonicalizing<'_> {
             effects: sorted(vars.effects.iter().map(|var| terms.effect_var(*var)), |var| var.0),
             lengths: sorted(vars.lengths.iter().map(|var| terms.length_var(*var)), |var| var.0),
             identities: sorted(vars.identities.iter().map(|var| terms.identity_var(*var)), |var| var.0),
-            marks: sorted(vars.marks.iter().map(|var| terms.mark_var(*var)), |var| var.0),
             values: sorted(vars.values.iter().map(|var| terms.values_var(*var)), |var| var.0),
         }
     }
@@ -332,7 +329,6 @@ impl Canonicalizing<'_> {
             effects: at.effects.iter().map(|(var, copy)| (terms.effect_var(*var), terms.effect_var(*copy))).collect(),
             lengths: at.lengths.iter().map(|(var, copy)| (terms.length_var(*var), terms.length_var(*copy))).collect(),
             identities: at.identities.iter().map(|(var, copy)| (terms.identity_var(*var), terms.identity_var(*copy))).collect(),
-            marks: at.marks.iter().map(|(var, copy)| (terms.mark_var(*var), terms.mark_var(*copy))).collect(),
             values: at.values.iter().map(|(var, copy)| (terms.values_var(*var), terms.values_var(*copy))).collect(),
         }
     }
@@ -600,7 +596,6 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
         effects: sorted(reached.effects.iter().copied().filter(|var| own.made(|marks| marks.effects, var.0) && !held.effects.contains(var)), |var| var.0),
         lengths: sorted(reached.lengths.iter().copied().filter(|var| cx.infer.is_open_length(*var) && own.made(|marks| marks.lengths, var.0) && !held.lengths.contains(var)), |var| var.0),
         identities: sorted(reached.identities.iter().copied().filter(|var| cx.infer.is_open_identity(*var) && own.made(|marks| marks.identities, var.0) && !held.identities.contains(var)), |var| var.0),
-        marks: sorted(reached.marks.iter().copied().filter(|var| cx.infer.is_open_mark(*var) && own.made(|marks| marks.marks, var.0) && !held.marks.contains(var)), |var| var.0),
         values: sorted(reached.values.iter().copied().filter(|var| own.made(|marks| marks.values, var.0) && !held.values.contains(var)), |var| var.0),
     };
 
@@ -624,7 +619,6 @@ fn settle_unit(cx: &mut Ctxt<'_>, id: SchemeId, term: Term) {
         effects: sorted(reached.effects.iter().copied(), |var| var.0),
         lengths: sorted(reached.lengths.iter().copied().filter(|var| cx.infer.is_open_length(*var)), |var| var.0),
         identities: sorted(reached.identities.iter().copied().filter(|var| cx.infer.is_open_identity(*var)), |var| var.0),
-        marks: sorted(reached.marks.iter().copied().filter(|var| cx.infer.is_open_mark(*var)), |var| var.0),
         values: sorted(reached.values.iter().copied(), |var| var.0),
     };
     let requirements = split_requirements(cx, owned, &generalized);
@@ -641,7 +635,6 @@ fn split_requirements(cx: &mut Ctxt<'_>, owned: Vec<(Decision, Option<AstId>)>, 
             || reads.effects.iter().any(|var| generalized.effects.contains(var))
             || reads.lengths.iter().any(|var| generalized.lengths.contains(var))
             || reads.identities.iter().any(|var| generalized.identities.contains(var))
-            || reads.marks.iter().any(|var| generalized.marks.contains(var))
             || reads.values.iter().any(|var| generalized.values.contains(var));
         match generalizes {
             true => requirements.push(decision),
@@ -698,7 +691,6 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
                             effects: of.at.effects.iter().map(|(var, copy)| (*var, at.effects.get(copy).copied().unwrap_or(*copy))).collect(),
                             lengths: of.at.lengths.iter().map(|(var, copy)| (*var, at.lengths.get(copy).copied().unwrap_or(*copy))).collect(),
                             identities: of.at.identities.iter().map(|(var, copy)| (*var, at.identities.get(copy).copied().unwrap_or(*copy))).collect(),
-                            marks: of.at.marks.iter().map(|(var, copy)| (*var, at.marks.get(copy).copied().unwrap_or(*copy))).collect(),
                             values: of.at.values.iter().map(|(var, copy)| (*var, at.values.get(copy).copied().unwrap_or(*copy))).collect(),
                         };
                         let child = new_instance(cx, Instance { within: Some(instance), at: child_at, recorded: Recorded::default(), template, ..of });

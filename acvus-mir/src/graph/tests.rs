@@ -8,7 +8,7 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 use super::{Graph, Refusal, Source, Stop, Unit};
 use crate::decl::{Core, Declarations, EntryDecl, ImplSig, Impls, LoopMarkers, RawDeclarations};
 use crate::passes::pipeline::Level;
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
 struct Fixture {
     names: Interner,
@@ -41,7 +41,7 @@ impl Fixture {
             .into_iter()
             .map(|width| {
                 let w = fx.raw.types.intern(TyKind::Int(width));
-                let shared = fx.raw.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(w)));
+                let shared = fx.raw.types.intern(TyKind::Ref(Mutability::Shared, w));
                 let ty = fx.pure(&[shared, shared], w);
                 ImplSig { ty, bounds: Box::new([]), param_names: Box::new([fx.names.intern("p0"), fx.names.intern("p1")]), requires: Box::new([]), facts: Default::default(), runs: Box::new([]) }
             })

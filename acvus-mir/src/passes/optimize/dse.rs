@@ -58,7 +58,7 @@ mod tests {
     use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
     use crate::ir::cfg::{Inst, Terminator};
     use crate::ir::{RefTarget, ValueId};
-    use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, TypeArg, Types};
+    use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, Types};
 
     struct Fixture {
         module: Module,
@@ -70,7 +70,7 @@ mod tests {
     fn fixture() -> Fixture {
         let mut types = Types::<Concrete>::new();
         let int = types.intern(TyKind::Int(IntTy::I64));
-        let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+        let ref_int = types.intern(TyKind::Ref(Mutability::Shared, int));
         Fixture { module: Module::new(types), interner: Interner::new(), int, ref_int }
     }
 

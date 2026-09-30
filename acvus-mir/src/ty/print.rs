@@ -19,7 +19,7 @@ use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 use crate::ir::{known_effect, known_len};
 use crate::ty::{
     Alignment, Calls, Concrete, Effect, FlowEnd, FlowTerm, Flows, Holds, IdentityTerm, ObjectTy, Reissue,
-    SplitCost, Ty, TyKind, TypeArg, Types,
+    SplitCost, Ty, TyKind, Types,
 };
 
 /// `ty` written in the language's notation.
@@ -121,16 +121,14 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             }
             write_bracket(&carried, out);
         }
-        TyKind::UserDefined { id, type_args, effect, identity } => {
+        TyKind::UserDefined { id, type_args, effect, identity, marked } => {
+            if *marked {
+                out.push('#');
+            }
             out.push_str(&qualified(names, *id));
             if !type_args.is_empty() {
                 out.push('<');
-                for (index, arg) in type_args.iter().enumerate() {
-                    if index > 0 {
-                        out.push_str(", ");
-                    }
-                    write_arg(types, names, arg, out);
-                }
+                write_list(types, names, type_args, out);
                 out.push('>');
             }
             if let Some(effect) = effect {
@@ -152,7 +150,7 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             if *mutability == crate::ty::Mutability::Mut {
                 out.push_str("mut ");
             }
-            write_arg(types, names, target, out);
+            write_ty(types, names, *target, out);
         }
         TyKind::Closures(signatures) => {
             out.push_str("Closures<");
@@ -183,18 +181,6 @@ fn write_fields(types: &Types<Concrete>, names: &Interner, fields: &[(acvus_util
         write_ty(types, names, *field, out);
     }
     out.push('}');
-}
-
-/// A type argument, `#τ` where it is marked specializable (types §8).
-fn write_arg(types: &Types<Concrete>, names: &Interner, arg: &TypeArg<Concrete>, out: &mut String) {
-    match arg {
-        TypeArg::Uniform(ty) => write_ty(types, names, *ty, out),
-        TypeArg::Specialized(ty) => {
-            out.push('#');
-            write_ty(types, names, *ty, out);
-        }
-        TypeArg::Open(var, _) => match *var {},
-    }
 }
 
 /// ` [a, b]`, or nothing for no term.

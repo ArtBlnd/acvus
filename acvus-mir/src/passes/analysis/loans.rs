@@ -1003,7 +1003,7 @@ impl Forward<'_> {
     /// `ty` is not a reference.
     fn lent(&self, ty: Ty) -> Ty {
         match self.types.kind(ty) {
-            TyKind::Ref(_, lent) => lent.ty(),
+            TyKind::Ref(_, lent) => *lent,
             other => panic!("a reference is read through, not {other:?}"),
         }
     }
@@ -1615,6 +1615,7 @@ impl Forward<'_> {
                 std::iter::once(held).chain(result).collect()
             }
             Op::TakeEffect { src } => self.value(state, *src)[1..].to_vec(),
+            Op::Unmark { src } => self.passed(state, *src, site, None, record),
         })
     }
 
@@ -1825,7 +1826,7 @@ impl Forward<'_> {
         let TyKind::Ref(mutability, lent) = self.types.kind(self.body.ty_of(array)) else {
             return passed;
         };
-        let element_ty = match self.types.kind(lent.ty()) {
+        let element_ty = match self.types.kind(*lent) {
             TyKind::Array(element, _, _) | TyKind::Slice(element) => *element,
             other => panic!("`ArrayMap` maps arrays or references to them, not {other:?}"),
         };
@@ -2068,6 +2069,7 @@ impl Forward<'_> {
             | Op::Check { .. }
             | Op::CheckSteps { .. }
             | Op::Cast { .. }
+            | Op::Unmark { .. }
             | Op::LoadFunction { .. }
             | Op::TakeEffect { .. }
             | Op::Merge { .. }

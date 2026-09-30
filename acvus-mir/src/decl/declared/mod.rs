@@ -154,7 +154,7 @@ impl<'a> Stated<'a> {
     /// How `ty` lends and what, where it is a reference.
     fn lent(&self, types: &Types<Poly>, ty: TyId<Poly>) -> Option<(Mutability, TyId<Poly>)> {
         match types.kind(ty) {
-            TyKind::Ref(mutability, lent) => Some((*mutability, lent.ty())),
+            TyKind::Ref(mutability, lent) => Some((*mutability, *lent)),
             _ => None,
         }
     }
@@ -230,7 +230,7 @@ impl<'a> Stated<'a> {
             return false;
         };
         let shared = |ty| match types.kind(ty) {
-            TyKind::Ref(Mutability::Shared, lent) => Some(lent.ty()),
+            TyKind::Ref(Mutability::Shared, lent) => Some(*lent),
             _ => None,
         };
         matches!((shared(a), shared(b)), (Some(a), Some(b)) if a == b) && self.is_integer(types, self.ret)

@@ -21,13 +21,13 @@ mod tests;
 
 use crate::ty::{
     Calls, CallsTerm, Effect, CallsVarId, EffectTerm, EffectVarId, FlowTerm, FlowVarId, Holds, HoldsTerm, HoldsVarId,
-    IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId, ReprVarId, TyId, TyKind, TyVarId,
+    IdentityTerm, IdentityVarId, Infer as InferPhase, IntTy, LenTerm, LenVarId, TyId, TyKind, TyVarId,
     Types, FnValues, ValuesVarId,
 };
 
 use rustc_hash::FxHashSet;
 
-use cells::{Cells, End as CellEnd, FlowRefused, MarkTerm, ValuesTerm};
+use cells::{Cells, End as CellEnd, FlowRefused, ValuesTerm};
 
 pub use cells::{Exceeds, FlowId};
 pub use canonical::{Canonical, CanonicalTable, VarStates};
@@ -59,13 +59,6 @@ pub enum Bound {
     Settled,
 }
 
-/// What an open `#` settles to (types §8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mark {
-    Uniform,
-    Specialized,
-}
-
 /// The solving state of one checked unit.
 pub struct Infer {
     types: Types<InferPhase>,
@@ -76,7 +69,6 @@ pub struct Infer {
     effect_vars: Cells<EffectTerm<InferPhase>>,
     len_vars: Cells<LenTerm<InferPhase>>,
     identity_vars: Cells<IdentityTerm<InferPhase>>,
-    repr_vars: Cells<MarkTerm>,
     flow_vars: Cells<FlowTerm<InferPhase>>,
     holds_vars: Cells<HoldsTerm>,
     calls_vars: Cells<CallsTerm>,
@@ -111,7 +103,6 @@ impl Infer {
             effect_vars: Cells::new(),
             len_vars: Cells::new(),
             identity_vars: Cells::new(),
-            repr_vars: Cells::new(),
             flow_vars: Cells::new(),
             holds_vars: Cells::new(),
             calls_vars: Cells::new(),
@@ -137,7 +128,7 @@ impl Infer {
     /// already holds to types §4.
     pub fn intern(&mut self, kind: TyKind<InferPhase>) -> Term {
         if let TyKind::Ref(_, target) = &kind {
-            match self.end(target.ty()) {
+            match self.end(*target) {
                 End::Unbound(var, _) => {
                     self.reference_targets.insert(var);
                 }
@@ -166,10 +157,6 @@ impl Infer {
 
     pub fn fresh_identity(&mut self) -> IdentityVarId {
         self.identity_vars.fresh("Infer::fresh_identity: u32::MAX variables")
-    }
-
-    pub fn fresh_repr(&mut self) -> ReprVarId {
-        self.repr_vars.fresh("Infer::fresh_repr: u32::MAX variables")
     }
 
     pub fn fresh_flow(&mut self) -> FlowVarId {
@@ -337,15 +324,13 @@ impl Infer {
         End::Node { holder, node: at }
     }
 
-    /// types §5: an effect nothing constrains is opaque, and an argument
-    /// whose `#` nothing decides is not specialized. Every such variable
-    /// still open takes its default; whether any did. Solving calls this
-    /// only at a stall.
-    pub fn default_effects_and_marks(&mut self) -> bool {
+    /// types §5: an effect nothing constrains is opaque. Every such
+    /// variable still open takes its default; whether any did. Solving
+    /// calls this only at a stall.
+    pub fn default_effects(&mut self) -> bool {
         let effects = self.effect_vars.default_unbound(&crate::ty::Effect::opaque());
         self.propagate_effects();
-        let marks = self.repr_vars.default_unbound(&Mark::Uniform);
-        effects || marks
+        effects
     }
 
     /// types §5: a function type's flows nothing decides state every flow,

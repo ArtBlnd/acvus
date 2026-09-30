@@ -112,7 +112,7 @@ impl SegmentWalk<'_> {
             (TyKind::Fn { .. }, TyKind::Fn { .. }) => self.cover(1),
             (TyKind::Ref(_, decl_target), TyKind::Ref(_, target)) => {
                 self.cover(1);
-                self.lay(decl_target.ty(), target.ty());
+                self.lay(*decl_target, *target);
             }
             (
                 TyKind::UserDefined {
@@ -128,7 +128,7 @@ impl SegmentWalk<'_> {
                     self.cover(1);
                 }
                 for (decl_arg, arg) in decl_args.iter().zip(type_args.iter()) {
-                    self.lay(decl_arg.ty(), arg.ty());
+                    self.lay(*decl_arg, *arg);
                 }
             }
             (

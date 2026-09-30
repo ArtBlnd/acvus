@@ -140,7 +140,7 @@ pub(super) fn lower_literal(cx: &mut Lcx<'_, '_>, site: AstId, literal: &Literal
             let TyKind::Ref(_, array) = cx.kind(ty) else {
                 panic!("a byte string is a reference to an array of its bytes")
             };
-            let array = array.ty();
+            let array = *array;
             let bytes = cx.constant(literal.clone(), array, span);
             lend(cx, Operand::Value(bytes), Mutability::Shared, span)
         }

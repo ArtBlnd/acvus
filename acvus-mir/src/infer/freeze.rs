@@ -2,11 +2,11 @@
 
 use rustc_hash::FxHashMap;
 
-use super::cells::{Cells, End as CellEnd, MarkTerm, VarTerm};
-use super::{Infer, Mark, Term, VarState};
+use super::cells::{Cells, End as CellEnd, VarTerm};
+use super::{Infer, Term, VarState};
 use crate::ty::{
     Concrete, EffectTerm, FlowTerm, IdentityTerm, Infer as InferPhase, LenTerm, ObjectTy, Ty,
-    TyKind, TyVarId, TypeArg, Types,
+    TyKind, TyVarId, Types,
 };
 
 /// Each term already frozen, so a shared subterm freezes once.
@@ -23,7 +23,6 @@ pub enum Unsettled {
     Effect(crate::ty::EffectVarId),
     Len(crate::ty::LenVarId),
     Identity(crate::ty::IdentityVarId),
-    Mark(crate::ty::ReprVarId),
     Flow(crate::ty::FlowVarId),
     Holds(crate::ty::HoldsVarId),
     Calls(crate::ty::CallsVarId),
@@ -121,12 +120,10 @@ impl Infer {
                 type_args,
                 effect,
                 identity,
+                marked,
             } => TyKind::UserDefined {
                 id: *id,
-                type_args: type_args
-                    .iter()
-                    .map(|arg| self.freeze_type_arg(arg, &mut freeze))
-                    .collect::<Result<_, _>>()?,
+                type_args: type_args.iter().map(|arg| freeze(*arg)).collect::<Result<_, _>>()?,
                 effect: effect
                     .as_ref()
                     .map(|effect| Ok(EffectTerm::Known(self.settled(&self.effect_vars, effect)?)))
@@ -135,26 +132,10 @@ impl Infer {
                     .as_ref()
                     .map(|identity| Ok(IdentityTerm::Known(self.settled(&self.identity_vars, identity)?)))
                     .transpose()?,
+                marked: *marked,
             },
-            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, self.freeze_type_arg(target, &mut freeze)?),
+            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, freeze(*target)?),
             TyKind::Var(_) => unreachable!("freeze_kind: freeze_level follows a variable before reading its kind"),
-        })
-    }
-
-    fn freeze_type_arg(
-        &self,
-        arg: &TypeArg<InferPhase>,
-        freeze: &mut impl FnMut(Term) -> Result<Ty, Unsettled>,
-    ) -> Result<TypeArg<Concrete>, Unsettled> {
-        let mark = match arg {
-            TypeArg::Uniform(_) => Mark::Uniform,
-            TypeArg::Specialized(_) => Mark::Specialized,
-            TypeArg::Open(var, _) => self.settled(&self.repr_vars, &MarkTerm::Var(*var))?,
-        };
-        let ty = freeze(arg.ty())?;
-        Ok(match mark {
-            Mark::Uniform => TypeArg::Uniform(ty),
-            Mark::Specialized => TypeArg::Specialized(ty),
         })
     }
 

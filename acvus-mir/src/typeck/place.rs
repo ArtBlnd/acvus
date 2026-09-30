@@ -17,7 +17,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::{capturing_binding, note_captures};
 use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
-use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, Reach, TyKind, TypeArg};
+use crate::ty::{EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, Reach, TyKind};
 
 /// What an expression is read for, passed down and never held: `a[i]`
 /// reaches `as_slice` or `as_slice_mut` by it (operators §3).
@@ -213,7 +213,7 @@ pub(super) fn fire_index(
         return;
     }
     let slice = cx.node(TyKind::Slice(element));
-    let lent_slice = cx.held(TyKind::Ref(mutability, TypeArg::Uniform(slice)));
+    let lent_slice = cx.held(TyKind::Ref(mutability, slice));
     let lent = cx.lend(container.term, mutability, span);
     let callee = Callee::Core(CoreSig::AsSlice(mutability));
     let reached = reach_in(cx, body, callee_site, callee, vec![(callee_site, lent)], span);
@@ -238,12 +238,12 @@ pub(super) fn fire_lend(cx: &mut Ctxt<'_>, span: Span, value: Option<Closed>, le
         (Lent::Borrow(mutability), Some(held)) => {
             if !held.reaches(mutability) {
                 let wanted = cx.fresh();
-                let wanted = cx.node(TyKind::Ref(mutability, TypeArg::Uniform(wanted)));
+                let wanted = cx.node(TyKind::Ref(mutability, wanted));
                 cx.eq(target, wanted, span);
             }
             reborrow(cx, target, held, mutability)
         }
-        (Lent::Borrow(mutability) | Lent::Bind(mutability), None) => cx.node(TyKind::Ref(mutability, TypeArg::Uniform(target))),
+        (Lent::Borrow(mutability) | Lent::Bind(mutability), None) => cx.node(TyKind::Ref(mutability, target)),
         (Lent::Bind(least), Some(held)) => reborrow(cx, target, held, held.least(least)),
         (Lent::Read, Some(held)) => match cx.out.through.get(&target).copied() {
             Some(least) => reborrow(cx, target, held, held.least(least)),
@@ -262,7 +262,7 @@ fn reborrow(cx: &mut Ctxt<'_>, reference: Term, held: Mutability, mutability: Mu
         true => reference,
         false => {
             let inner = cx.referent(reference);
-            cx.node(TyKind::Ref(mutability, TypeArg::Uniform(inner)))
+            cx.node(TyKind::Ref(mutability, inner))
         }
     }
 }

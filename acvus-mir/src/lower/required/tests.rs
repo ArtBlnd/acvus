@@ -8,7 +8,7 @@ use super::*;
 use crate::decl::{ContextDecl, Core, Declarations, LoopMarkers, RawDeclarations};
 use crate::ir::cfg::edit::{DefDominatesUses, Invariant, OrderChainWhole, TypesAgree};
 use crate::ir::cfg::{Builder, OrderUse};
-use crate::ty::{Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, TypeArg};
+use crate::ty::{Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy};
 
 struct Fixture {
     module: Module,
@@ -45,7 +45,7 @@ fn fixture() -> Fixture {
     let int = types.intern(TyKind::Int(IntTy::I64));
     let bool = types.intern(TyKind::Bool);
     let string = types.intern(TyKind::String);
-    let string_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string)));
+    let string_ref = types.intern(TyKind::Ref(Mutability::Shared, string));
     let mut function = |params: &[Ty]| {
         types.intern(TyKind::Fn {
             params: params.into(),

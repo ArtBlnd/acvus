@@ -14,7 +14,7 @@ use crate::check::{Refusal, check};
 use crate::decl::{ContextDecl, Core, Declarations, DeclaredFacts, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
 use crate::lower::{lower_script, required};
 use crate::passes::analysis::AnalysisManager;
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, ObjectTy, Poly, TyId, TyKind, TypeArg, Types};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, ObjectTy, Poly, TyId, TyKind, Types};
 use crate::typeck::check_script;
 
 pub(super) struct Fixture {
@@ -111,9 +111,10 @@ impl Fixture {
         let int = self.int();
         self.ty(TyKind::UserDefined {
             id,
-            type_args: Box::new([TypeArg::Uniform(int)]),
+            type_args: Box::new([int]),
             effect: None,
             identity: None,
+            marked: false,
         })
     }
 

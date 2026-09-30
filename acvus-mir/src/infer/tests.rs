@@ -6,7 +6,7 @@ use crate::decl::{
 };
 use crate::ty::{
     Alignment, Calls, CallsTerm, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, IdentityId,
-    IdentityTerm, IntTy, Label, Mutability, ObjectTy, Poly, Reach, Reissue, SplitCost, TyKind, TypeArg, Types,
+    IdentityTerm, IntTy, Label, Mutability, ObjectTy, Poly, Reach, Reissue, SplitCost, TyKind, Types,
 };
 
 struct Fixture {
@@ -150,9 +150,9 @@ fn eq_refuses_a_variable_that_would_contain_itself() {
 fn a_variable_under_a_reference_is_not_bound_to_a_reference() {
     let mut fx = Fixture::new();
     let var = fx.infer.fresh(Bound::Any);
-    fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(var)));
+    fx.kind(TyKind::Ref(Mutability::Shared, var));
     let int = fx.int(IntTy::I64);
-    let reference = fx.kind(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+    let reference = fx.kind(TyKind::Ref(Mutability::Mut, int));
     assert_eq!(
         fx.infer.eq(var, reference),
         Err(Mismatch::ReferenceToReference { target: reference })
@@ -165,10 +165,10 @@ fn a_variable_under_a_reference_is_not_bound_to_a_reference() {
 fn a_variable_linked_to_a_references_target_is_not_bound_to_a_reference() {
     let mut fx = Fixture::new();
     let (target, other) = (fx.infer.fresh(Bound::Any), fx.infer.fresh(Bound::Any));
-    fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(target)));
+    fx.kind(TyKind::Ref(Mutability::Shared, target));
     fx.infer.eq(target, other).expect("two unbound variables link");
     let int = fx.int(IntTy::I64);
-    let reference = fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+    let reference = fx.kind(TyKind::Ref(Mutability::Shared, int));
     assert_eq!(
         fx.infer.eq(other, reference),
         Err(Mismatch::ReferenceToReference { target: reference })
@@ -187,30 +187,18 @@ fn every_constructor_is_invariant() {
     assert_eq!(fx.infer.eq(a, result), Err(Mismatch::Heads { a, b: result }));
 }
 
-/// types §8: `#τ` and `τ` are different types.
+/// types §8: `#F<A>` and `F<A>` are two heads, as two types of different
+/// names are.
 #[test]
 fn a_mark_on_one_side_only_is_a_mismatch() {
     let mut fx = Fixture::new();
     let int = fx.int(IntTy::I64);
-    let plain = fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
-    let marked = fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Specialized(int)));
-    assert_eq!(fx.infer.eq(plain, marked), Err(Mismatch::Mark { a: plain, b: marked }));
-}
-
-/// types §8: an open `#` is bound by `eq`.
-#[test]
-fn eq_binds_an_open_mark() {
-    let mut fx = Fixture::new();
-    let int = fx.int(IntTy::I64);
-    let mark = fx.infer.fresh_repr();
-    let open = fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Open(mark, int)));
-    let marked = fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Specialized(int)));
-    fx.infer.eq(open, marked).unwrap();
-    let (types, frozen) = fx.freeze(open);
-    assert!(matches!(
-        types.kind(frozen),
-        TyKind::Ref(Mutability::Shared, TypeArg::Specialized(_))
-    ));
+    let vec = QualifiedRef::root(fx.name("Vec"));
+    let vec_of = |fx: &mut Fixture, marked| {
+        fx.kind(TyKind::UserDefined { id: vec, type_args: Box::new([int]), effect: None, identity: None, marked })
+    };
+    let (plain, marked) = (vec_of(&mut fx, false), vec_of(&mut fx, true));
+    assert_eq!(fx.infer.eq(plain, marked), Err(Mismatch::Heads { a: plain, b: marked }));
 }
 
 /// types §1: sameness is decided by shape; labels never make two equal
@@ -1320,6 +1308,7 @@ fn identities(names: &Interner, to_string: bool) -> Declarations {
             type_args: Box::new([]),
             effect: None,
             identity: Some(IdentityTerm::Var(0)),
+            marked: false,
         })
     };
     let (token_ty, span_ty) = (with_identity(&mut types, token), with_identity(&mut types, span));
@@ -1347,6 +1336,7 @@ impl Fixture {
             type_args: Box::new([]),
             effect: None,
             identity: Some(IdentityTerm::Known(IdentityId::from_raw(identity))),
+            marked: false,
         })
     }
 }
@@ -1405,18 +1395,14 @@ fn a_declared_type_is_instantiated_opaque() {
     assert_eq!(fx.fields_of(term), (vec![field], Label::Elsewhere));
 }
 
-/// types §5: an effect nothing constrains is opaque, and an argument whose
-/// `#` nothing decides is not specialized.
+/// types §5: an effect nothing constrains is opaque.
 #[test]
-fn open_effects_and_marks_take_their_defaults() {
+fn open_effects_take_their_default() {
     let mut fx = Fixture::new();
     let effect = EffectTerm::Var(fx.infer.fresh_effect());
     let function = fx.function(effect, Flows::none(), Calls::Many, Holds::Nothing);
-    let mark = fx.infer.fresh_repr();
-    let unit = fx.kind(TyKind::Unit);
-    let open = fx.kind(TyKind::Ref(Mutability::Shared, TypeArg::Open(mark, unit)));
-    assert!(fx.infer.default_effects_and_marks());
-    assert!(!fx.infer.default_effects_and_marks(), "each default applies once");
+    assert!(fx.infer.default_effects());
+    assert!(!fx.infer.default_effects(), "each default applies once");
     let (types, frozen) = fx.freeze(function);
     let TyKind::Fn {
         effect: EffectTerm::Known(settled),
@@ -1426,8 +1412,6 @@ fn open_effects_and_marks_take_their_defaults() {
         panic!("a function of a known effect");
     };
     assert_eq!(settled, &Effect::opaque());
-    let (types, frozen) = fx.freeze(open);
-    assert!(matches!(types.kind(frozen), TyKind::Ref(_, TypeArg::Uniform(_))));
 }
 
 /// D94, effects §1: a refusal belongs to its flow. `a` flows into `into`,

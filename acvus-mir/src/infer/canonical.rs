@@ -7,11 +7,11 @@
 
 use rustc_hash::FxHashMap;
 
-use super::cells::{Cells, End as CellEnd, MarkTerm, ValuesTerm, VarTerm};
+use super::cells::{Cells, End as CellEnd, ValuesTerm, VarTerm};
 use super::{Bound, Infer, Term};
 use crate::ty::{
     CallsTerm, EffectTerm, EffectVarId, FlowTerm, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
-    LenTerm, LenVarId, ReprVarId, TyKind, TyVarId, TypeArg, Types, ValuesVarId,
+    LenTerm, LenVarId, TyKind, TyVarId, Types, ValuesVarId,
 };
 
 /// The table both sides' copies are interned in, so that two copies are
@@ -41,7 +41,6 @@ pub struct Canonical<'c> {
     effects: Renumbered<EffectTerm<InferPhase>>,
     lengths: Renumbered<LenTerm<InferPhase>>,
     identities: Renumbered<IdentityTerm<InferPhase>>,
-    marks: Renumbered<MarkTerm>,
     flows: Renumbered<FlowTerm<InferPhase>>,
     holds: Renumbered<HoldsTerm>,
     calls: Renumbered<CallsTerm>,
@@ -59,7 +58,6 @@ pub struct VarStates {
     effects: Vec<CellState<crate::ty::Effect>>,
     lengths: Vec<CellState<usize>>,
     identities: Vec<CellState<crate::ty::IdentityId>>,
-    marks: Vec<CellState<super::Mark>>,
     flows: Vec<CellState<crate::ty::Flows>>,
     holds: Vec<CellState<crate::ty::Holds>>,
     calls: Vec<CellState<crate::ty::Calls>>,
@@ -132,7 +130,6 @@ impl<'c> Canonical<'c> {
             effects: Renumbered::new(),
             lengths: Renumbered::new(),
             identities: Renumbered::new(),
-            marks: Renumbered::new(),
             flows: Renumbered::new(),
             holds: Renumbered::new(),
             calls: Renumbered::new(),
@@ -142,7 +139,6 @@ impl<'c> Canonical<'c> {
                 effects: Vec::new(),
                 lengths: Vec::new(),
                 identities: Vec::new(),
-                marks: Vec::new(),
                 flows: Vec::new(),
                 holds: Vec::new(),
                 calls: Vec::new(),
@@ -192,22 +188,15 @@ impl<'c> Canonical<'c> {
                 holds: self.holds.term(&from.holds_vars, &holds, &mut self.states.holds),
                 values: self.values_var(values),
             },
-            TyKind::UserDefined { id, type_args, effect, identity } => TyKind::UserDefined {
+            TyKind::UserDefined { id, type_args, effect, identity, marked } => TyKind::UserDefined {
                 id,
-                type_args: type_args.iter().map(|arg| self.arg(*arg)).collect(),
+                type_args,
                 effect: effect.as_ref().map(|effect| self.effect(effect)),
                 identity: identity
                     .as_ref()
                     .map(|identity| self.identities.term(&from.identity_vars, identity, &mut self.states.identities)),
+                marked,
             },
-            TyKind::Ref(mutability, target) => TyKind::Ref(mutability, self.arg(target)),
-            other => other,
-        }
-    }
-
-    fn arg(&mut self, arg: TypeArg<InferPhase>) -> TypeArg<InferPhase> {
-        match arg {
-            TypeArg::Open(mark, ty) => TypeArg::Open(self.mark_var(mark), ty),
             other => other,
         }
     }
@@ -239,10 +228,6 @@ impl<'c> Canonical<'c> {
 
     pub fn identity_var(&mut self, var: IdentityVarId) -> IdentityVarId {
         cell_var(&mut self.identities, &self.from.identity_vars, var, &mut self.states.identities)
-    }
-
-    pub fn mark_var(&mut self, var: ReprVarId) -> ReprVarId {
-        cell_var(&mut self.marks, &self.from.repr_vars, var, &mut self.states.marks)
     }
 
     pub fn values_var(&mut self, var: ValuesVarId) -> ValuesVarId {

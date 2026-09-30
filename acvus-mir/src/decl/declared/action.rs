@@ -9,7 +9,7 @@ use super::{Place, Stated};
 use crate::decl::Refused;
 use crate::decl::Scheme;
 use crate::decl::impl_fit::is_impl_of;
-use crate::ty::{Mutability, Poly, TyId, TyKind, TypeArg, Types};
+use crate::ty::{Mutability, Poly, TyId, TyKind, Types};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -74,7 +74,7 @@ fn refuse_ill_formed_update(
     };
     let state = match stated.held_at(types, &update.place) {
         Some(held) => {
-            let lent_mut = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(held)));
+            let lent_mut = types.intern(TyKind::Ref(Mutability::Mut, held));
             let unit = types.intern(TyKind::Unit);
             if !fits(types, combine, &[lent_mut, held], unit) {
                 refused.push(Refused::CombineDoesNotFit { declared, combine: update.combine });
@@ -126,7 +126,7 @@ fn combine_state(types: &Types<Poly>, ty: TyId<Poly>) -> Option<TyId<Poly>> {
     let TyKind::Ref(Mutability::Mut, lent) = types.kind(first) else {
         return None;
     };
-    (lent.ty() == second && matches!(types.kind(*ret), TyKind::Unit)).then_some(second)
+    (*lent == second && matches!(types.kind(*ret), TyKind::Unit)).then_some(second)
 }
 
 /// Whether the declared function type `general` is `fn(params) -> ret` at

@@ -16,7 +16,7 @@ use crate::passes::analysis::AnalysisManager;
 use crate::passes::optimize::{BodyTransform, ModuleTransform};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue, SplitCost, Ty,
-    TyKind, TypeArg, Types,
+    TyKind, Types,
 };
 
 pub(in crate::passes) struct Fixture {
@@ -60,8 +60,8 @@ impl Fixture {
         let i8 = types.intern(TyKind::Int(IntTy::I8));
         let bool = types.intern(TyKind::Bool);
         let string = types.intern(TyKind::String);
-        let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
-        let mut_ref_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+        let ref_int = types.intern(TyKind::Ref(Mutability::Shared, int));
+        let mut_ref_int = types.intern(TyKind::Ref(Mutability::Mut, int));
         let mut call_ty = |params: &[Ty], effect: Effect| {
             types.intern(TyKind::Fn {
                 params: params.into(),

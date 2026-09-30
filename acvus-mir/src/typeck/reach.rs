@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(reach(&candidates(&rows), &[vec![PAIR]], None), Ok(0));
         assert_eq!(reach(&candidates(&rows), &[vec![shared_pair]], None), Err(NoReach::None));
         let names = Interner::new();
-        let named = Head::Base(Base::Named(QualifiedRef::root(names.intern("S"))));
+        let named = Head::Base(Base::Named { id: QualifiedRef::root(names.intern("S")), marked: false });
         assert_eq!(reach(&candidates(&rows), &[vec![named]], None), Err(NoReach::None));
     }
 

@@ -11,7 +11,7 @@ use acvus_utils::Astr;
 use crate::decl::Declarations;
 use crate::ir::cfg::{BlockId, Builder, Op, Terminator};
 use crate::ir::{Callee, Chosen as IrChosen, ExternImpl, ValueId};
-use crate::ty::{Effect, IntTy, Mutability, Reissue, Ty, TyKind, TypeArg};
+use crate::ty::{Effect, IntTy, Mutability, Reissue, Ty, TyKind};
 use crate::typeck::{Chosen, Impl, Typeck};
 
 /// Where `break` and `continue` go: the innermost loop's exit and header
@@ -108,7 +108,7 @@ impl<'a, 'm> Lcx<'a, 'm> {
     }
 
     pub fn ref_ty(&mut self, mutability: Mutability, target: Ty) -> Ty {
-        self.builder.intern(TyKind::Ref(mutability, TypeArg::Uniform(target)))
+        self.builder.intern(TyKind::Ref(mutability, target))
     }
 
     pub fn constant(&mut self, value: Literal, ty: Ty, span: Span) -> ValueId {

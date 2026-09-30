@@ -1,13 +1,13 @@
 //! The harness itself: a case admitted prints its modules, a refused one
 //! its refusals, and each is one snapshot.
 
-use acvus_mir::ty::{IntTy, Mutability, TyKind, TypeArg};
+use acvus_mir::ty::{IntTy, Mutability, TyKind};
 use acvus_mir_test::{At, Case, Level};
 
 /// `core::add` at `i64`, `(&i64, &i64) -> i64`.
 fn with_add(case: &mut Case) {
     let int = case.ty(TyKind::Int(IntTy::I64));
-    let shared = case.ty(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+    let shared = case.ty(TyKind::Ref(Mutability::Shared, int));
     let add = case.function(&[shared, shared], int, acvus_mir::ty::Effect::pure());
     let item = case.core().add;
     case.lang_impls(item, &[add]);

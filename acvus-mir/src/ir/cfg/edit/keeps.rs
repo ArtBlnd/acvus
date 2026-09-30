@@ -167,6 +167,19 @@ impl TypeCheck<'_> {
         found(expected(self.kind(ty)), || format!("{value:?} is {:?}, not {what}", self.kind(ty)))
     }
 
+    /// Whether `to` is `from` unmarked: a marked extern-defined type, or a
+    /// reference to one, and the same type unmarked (types §8).
+    fn unmarks(&self, from: Ty, to: Ty) -> bool {
+        match (self.kind(from), self.kind(to)) {
+            (
+                TyKind::UserDefined { id, type_args, effect, identity, marked: true },
+                TyKind::UserDefined { id: to_id, type_args: to_args, effect: to_effect, identity: to_identity, marked: false },
+            ) => id == to_id && type_args == to_args && effect == to_effect && identity == to_identity,
+            (TyKind::Ref(held, lent), TyKind::Ref(to_held, to_lent)) => held == to_held && self.unmarks(*lent, *to_lent),
+            _ => false,
+        }
+    }
+
     fn same(&self, value: ValueId, expected: Ty, what: &str) -> Found {
         let ty = self.ty(value);
         found(ty == expected, || {
@@ -191,7 +204,7 @@ impl TypeCheck<'_> {
             value,
             |kind| match kind {
                 TyKind::String => true,
-                TyKind::Ref(_, lent) => matches!(self.kind(lent.ty()), TyKind::String | TyKind::Str),
+                TyKind::Ref(_, lent) => matches!(self.kind(*lent), TyKind::String | TyKind::Str),
                 _ => false,
             },
             "String, &String or &str",
@@ -201,7 +214,7 @@ impl TypeCheck<'_> {
     fn is_lent_text(&self, value: ValueId) -> Found {
         self.is(
             value,
-            |kind| matches!(kind, TyKind::Ref(_, lent) if matches!(self.kind(lent.ty()), TyKind::String | TyKind::Str)),
+            |kind| matches!(kind, TyKind::Ref(_, lent) if matches!(self.kind(*lent), TyKind::String | TyKind::Str)),
             "&String or &str",
         )
     }
@@ -241,7 +254,7 @@ impl TypeCheck<'_> {
             }
             Op::ConstStr { .. } => self.is(
                 Self::result(inst)?,
-                |kind| matches!(kind, TyKind::Ref(Mutability::Shared, lent) if matches!(self.kind(lent.ty()), TyKind::Str)),
+                |kind| matches!(kind, TyKind::Ref(Mutability::Shared, lent) if matches!(self.kind(*lent), TyKind::Str)),
                 "&str",
             ),
             Op::StringConcat { parts } => {
@@ -251,7 +264,7 @@ impl TypeCheck<'_> {
             Op::StringAppend { target, part } => {
                 self.is(
                     *target,
-                    |kind| matches!(kind, TyKind::Ref(Mutability::Mut, lent) if matches!(self.kind(lent.ty()), TyKind::String)),
+                    |kind| matches!(kind, TyKind::Ref(Mutability::Mut, lent) if matches!(self.kind(*lent), TyKind::String)),
                     "&mut String",
                 )?;
                 self.is_text(*part)
@@ -267,7 +280,7 @@ impl TypeCheck<'_> {
                     *src,
                     |kind| match kind {
                         TyKind::String => true,
-                        TyKind::Ref(_, lent) => matches!(self.kind(lent.ty()), TyKind::String),
+                        TyKind::Ref(_, lent) => matches!(self.kind(*lent), TyKind::String),
                         _ => false,
                     },
                     "String or &String",
@@ -279,7 +292,7 @@ impl TypeCheck<'_> {
                     return Err(format!("{result:?} is not a reference"));
                 };
                 found(made == mutability, || format!("{result:?} is not a {mutability:?} reference"))?;
-                let lent = lent.ty();
+                let lent = *lent;
                 let places = self.place(target, path)?;
                 found(places.contains(&lent), || format!("{result:?} lends another type than the place holds"))
             }
@@ -290,7 +303,7 @@ impl TypeCheck<'_> {
                 self.is(
                     Self::result(inst)?,
                     |kind| matches!(kind, TyKind::Ref(made, lent)
-                        if made == mutability && matches!(self.kind(lent.ty()), TyKind::Slice(_) | TyKind::Str)),
+                        if made == mutability && matches!(self.kind(*lent), TyKind::Slice(_) | TyKind::Str)),
                     "a slice reference of the stated mutability",
                 )
             }
@@ -303,8 +316,8 @@ impl TypeCheck<'_> {
                     return Err(format!("{src:?} is not a reference"));
                 };
                 found(held == mutability, || format!("{src:?} is not a {mutability:?} reference"))?;
-                let TyKind::Array(element, _, _) = self.kind(lent.ty()) else {
-                    return Err(format!("{src:?} lends {:?}, not an array", self.kind(lent.ty())));
+                let TyKind::Array(element, _, _) = self.kind(*lent) else {
+                    return Err(format!("{src:?} lends {:?}, not an array", self.kind(*lent)));
                 };
                 let (made, viewed) = self.slice(Self::result(inst)?)?;
                 found(made == *mutability && viewed == *element, || {
@@ -319,7 +332,7 @@ impl TypeCheck<'_> {
                     IndexMode::Copy => self.same(result, element, "the element"),
                     IndexMode::Ref => self.is(
                         result,
-                        |kind| matches!(kind, TyKind::Ref(made, lent) if *made == held && lent.ty() == element),
+                        |kind| matches!(kind, TyKind::Ref(made, lent) if *made == held && *lent == element),
                         "a reference to the element at the slice's mutability",
                     ),
                 }
@@ -382,6 +395,12 @@ impl TypeCheck<'_> {
             Op::Cast { src, to } => {
                 self.is(*src, |kind| CastTy::of_kind(kind).is_some(), "an integer width, f64, char or bool")?;
                 self.is(Self::result(inst)?, |kind| CastTy::of_kind(kind) == Some(*to), "the cast's target")
+            }
+            Op::Unmark { src } => {
+                let result = Self::result(inst)?;
+                found(self.unmarks(self.ty(*src), self.ty(result)), || {
+                    format!("{result:?} is {:?}, not {src:?}'s {:?} unmarked", self.kind(self.ty(result)), self.kind(self.ty(*src)))
+                })
             }
             Op::LoadFunction { .. } => self.is(Self::result(inst)?, |kind| matches!(kind, TyKind::Fn { .. }), "a function"),
             // One body at a function type, or one per signature, in order,
@@ -541,13 +560,13 @@ impl TypeCheck<'_> {
                     return Err(format!("{result:?} is not a reference"));
                 };
                 let types = self.types;
-                let (Some(gathered), Some(whole)) = (structural::structure(types, self.ty(*structure)), structural::structure(types, target.ty())) else {
+                let (Some(gathered), Some(whole)) = (structural::structure(types, self.ty(*structure)), structural::structure(types, *target)) else {
                     return Err(format!("{structure:?} and {result:?}'s target are not both transparent structured types"));
                 };
                 let (gathered, whole) = (gathered.parts(), whole.parts());
                 found(gathered.len() == whole.len(), || format!("{structure:?} does not have the parts of {result:?}'s target"))?;
                 for (part, of) in gathered.iter().zip(whole.iter()) {
-                    let lends = matches!(self.kind(part.ty), TyKind::Ref(made, lent) if made == mutability && lent.ty() == of.ty);
+                    let lends = matches!(self.kind(part.ty), TyKind::Ref(made, lent) if made == mutability && *lent == of.ty);
                     found(part.key == of.key && lends, || format!("{structure:?}'s part {:?} is not a {mutability:?} reference to the target's", part.key))?;
                 }
                 Ok(())
@@ -567,7 +586,7 @@ impl TypeCheck<'_> {
                 for (array, param) in arrays.iter().zip(params.iter()) {
                     let (element, array_len, lent) = match self.kind(self.ty(*array)) {
                         TyKind::Array(element, len, _) => (*element, known_len(len), None),
-                        TyKind::Ref(mutability, target) => match self.kind(target.ty()) {
+                        TyKind::Ref(mutability, target) => match self.kind(*target) {
                             TyKind::Array(element, len, _) => (*element, known_len(len), Some(*mutability)),
                             other => return Err(format!("{array:?} lends {other:?}, not an array")),
                         },
@@ -584,10 +603,10 @@ impl TypeCheck<'_> {
                                 (Mutability::Mut, Mutability::Mut) => Mutability::Mut,
                                 _ => Mutability::Shared,
                             };
-                            matches!(self.kind(*param), TyKind::Ref(made, taken) if *made == weaker && taken.ty() == target.ty())
+                            matches!(self.kind(*param), TyKind::Ref(made, taken) if *made == weaker && *taken == *target)
                         }
                         (Some(mutability), _) => {
-                            matches!(self.kind(*param), TyKind::Ref(made, taken) if *made == mutability && taken.ty() == element)
+                            matches!(self.kind(*param), TyKind::Ref(made, taken) if *made == mutability && *taken == element)
                         }
                     };
                     found(takes, || format!("{f:?} does not take the element of {array:?}"))?;
@@ -608,7 +627,7 @@ impl TypeCheck<'_> {
     /// The `&[T]` or `&mut [T]` `slice` is: its mutability and `T`.
     fn slice(&self, slice: ValueId) -> Result<(Mutability, Ty), String> {
         match self.kind(self.ty(slice)) {
-            TyKind::Ref(held, lent) => match self.kind(lent.ty()) {
+            TyKind::Ref(held, lent) => match self.kind(*lent) {
                 TyKind::Slice(element) => Ok((*held, *element)),
                 other => Err(format!("{slice:?} lends {other:?}, not a slice")),
             },
@@ -622,7 +641,7 @@ impl TypeCheck<'_> {
         let root = match target {
             RefTarget::Var(storage) | RefTarget::Param(storage) => self.ty(*storage),
             RefTarget::Through(reference) => match self.kind(self.ty(*reference)) {
-                TyKind::Ref(_, lent) => lent.ty(),
+                TyKind::Ref(_, lent) => *lent,
                 other => return Err(format!("{reference:?} is {other:?}, not a reference")),
             },
             RefTarget::Context(context) => self.context(*context)?,
@@ -717,7 +736,7 @@ impl TypeCheck<'_> {
             }
             Terminator::Switch { tag, arms, .. } => {
                 let scrutinee = match self.kind(self.ty(*tag)) {
-                    TyKind::Ref(_, lent) => lent.ty(),
+                    TyKind::Ref(_, lent) => *lent,
                     _ => self.ty(*tag),
                 };
                 for (key, _, _) in arms {
@@ -797,7 +816,7 @@ impl TypeCheck<'_> {
             Element::Held(element) => self.same(*first, element, "the element")?,
             Element::Lent(mutability, element) => self.is(
                 *first,
-                |kind| matches!(kind, TyKind::Ref(made, lent) if *made == mutability && lent.ty() == element),
+                |kind| matches!(kind, TyKind::Ref(made, lent) if *made == mutability && *lent == element),
                 "a reference to the element",
             )?,
         }

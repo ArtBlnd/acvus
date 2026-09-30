@@ -497,7 +497,7 @@ mod tests {
     use crate::ir::{BinOp, Callee, Overflow, RefTarget};
     use crate::ty::{
         Calls, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue, SplitCost,
-        TyKind, TypeArg,
+        TyKind,
     };
 
     struct Fixture {
@@ -536,7 +536,7 @@ mod tests {
         let commuting = call_ty(opaque_effect(true, SplitCost::Unavailable));
         let commuting_splittable = call_ty(opaque_effect(true, SplitCost::WithCost(Cost::stated(1))));
         let opaque = call_ty(Effect::opaque());
-        let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+        let ref_int = types.intern(TyKind::Ref(Mutability::Shared, int));
         Fixture {
             module: Module::new(types),
             interner: Interner::new(),
@@ -1150,11 +1150,12 @@ mod tests {
             type_args: Box::new([]),
             effect: None,
             identity: None,
+            marked: false,
         });
-        let mut_map = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(map_ty)));
+        let mut_map = types.intern(TyKind::Ref(Mutability::Mut, map_ty));
         let slice = types.intern(TyKind::Slice(int));
-        let mut_slice = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(slice)));
-        let mut_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+        let mut_slice = types.intern(TyKind::Ref(Mutability::Mut, slice));
+        let mut_int = types.intern(TyKind::Ref(Mutability::Mut, int));
         let mut declare = |id: QualifiedRef, params: &[crate::ty::TyId<crate::ty::Poly>], ret, touches: Option<Vec<Touch>>| {
             let ty = types.intern(TyKind::Fn {
                 params: params.into(),
@@ -1233,11 +1234,12 @@ mod tests {
             type_args: Box::new([]),
             effect: None,
             identity: None,
+            marked: false,
         });
-        let mut_map = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(map_ty)));
+        let mut_map = types.intern(TyKind::Ref(Mutability::Mut, map_ty));
         let slice = types.intern(TyKind::Slice(int));
-        let mut_slice = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(slice)));
-        let mut_int = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+        let mut_slice = types.intern(TyKind::Ref(Mutability::Mut, slice));
+        let mut_int = types.intern(TyKind::Ref(Mutability::Mut, int));
         let mut callee_ty = |params: &[Ty], ret| {
             types.intern(TyKind::Fn {
                 params: params.into(),

@@ -4,7 +4,7 @@
 
 use super::{Fixture, covers, span_of};
 use crate::check::{Refusal, RefusalKind};
-use crate::ty::{Mutability, TyKind, TypeArg};
+use crate::ty::{Mutability, TyKind};
 
 /// ownership §4's example: on the one path that reaches the whole use,
 /// every field of the binding's type is written before it.
@@ -119,7 +119,7 @@ fn a_string_used_twice_is_cloned_before_its_last_use() {
 fn a_mut_reference_used_twice_is_reborrowed_not_moved() {
     let mut fx = Fixture::new();
     let (vec, int) = (fx.vecs(), fx.int());
-    let lent = fx.ty(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(vec)));
+    let lent = fx.ty(TyKind::Ref(Mutability::Mut, vec));
     fx.declare("touch", &[lent], int);
     let refusals = fx.refusals("let v = make(); let r = &mut v; touch(r); touch(r)");
     assert_eq!(refusals, []);

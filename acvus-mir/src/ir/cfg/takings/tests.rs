@@ -7,7 +7,7 @@ use acvus_utils::Interner;
 use super::*;
 use crate::ir::cfg::Module;
 use crate::ir::PathSeg;
-use crate::ty::{IntTy, ObjectTy, TypeArg};
+use crate::ty::{IntTy, ObjectTy};
 
 struct Fixture {
     module: Module,
@@ -21,7 +21,7 @@ fn fixture() -> Fixture {
     let mut types = Types::<Concrete>::new();
     let int = types.intern(TyKind::Int(IntTy::I64));
     let string = types.intern(TyKind::String);
-    let string_mut = types.intern(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(string)));
+    let string_mut = types.intern(TyKind::Ref(Mutability::Mut, string));
     Fixture { module: Module::new(types), int, string, string_mut }
 }
 

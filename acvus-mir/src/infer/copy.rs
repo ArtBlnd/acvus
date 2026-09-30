@@ -1,6 +1,6 @@
 //! A term's variables, read and copied: what generalizing a binding's type
 //! and instantiating it at a use need (functions §2). Every kind a type
-//! states is generalized: types, lengths, identities, `#` marks, effects
+//! states is generalized: types, lengths, identities, effects
 //! with the flows among them, and which function values a function type
 //! may be. What a function value's captures
 //! hold, how often it may be called and its flows are decided where it is
@@ -8,11 +8,11 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::cells::{Cells, End as CellEnd, MarkTerm, ValuesTerm, VarTerm};
+use super::cells::{Cells, End as CellEnd, ValuesTerm, VarTerm};
 use super::{FlowId, Infer, Term, VarState};
 use crate::ty::{
     EffectTerm, EffectVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy,
-    ReprVarId, TyKind, TyVarId, TypeArg, ValuesVarId,
+    TyKind, TyVarId, ValuesVarId,
 };
 
 /// How many variables of each kind were made so far: one made later has an
@@ -23,7 +23,6 @@ pub struct VarMarks {
     pub effects: u32,
     pub lengths: u32,
     pub identities: u32,
-    pub marks: u32,
     pub values: u32,
 }
 
@@ -36,7 +35,6 @@ pub struct Reached {
     pub effects: FxHashSet<EffectVarId>,
     pub lengths: FxHashSet<LenVarId>,
     pub identities: FxHashSet<IdentityVarId>,
-    pub marks: FxHashSet<ReprVarId>,
     pub values: FxHashSet<ValuesVarId>,
 }
 
@@ -47,7 +45,6 @@ pub struct VarsOf {
     pub effects: Box<[EffectVarId]>,
     pub lengths: Box<[LenVarId]>,
     pub identities: Box<[IdentityVarId]>,
-    pub marks: Box<[ReprVarId]>,
     pub values: Box<[ValuesVarId]>,
 }
 
@@ -58,7 +55,6 @@ pub struct AtInstance {
     pub effects: FxHashMap<EffectVarId, EffectVarId>,
     pub lengths: FxHashMap<LenVarId, LenVarId>,
     pub identities: FxHashMap<IdentityVarId, IdentityVarId>,
-    pub marks: FxHashMap<ReprVarId, ReprVarId>,
     pub values: FxHashMap<ValuesVarId, ValuesVarId>,
 }
 
@@ -76,7 +72,6 @@ impl Infer {
             effects: self.effect_vars.count(),
             lengths: self.len_vars.count(),
             identities: self.identity_vars.count(),
-            marks: self.repr_vars.count(),
             values: self.values_vars.count(),
         }
     }
@@ -91,7 +86,7 @@ impl Infer {
         matches!(self.ty_vars[var.0 as usize], VarState::Unbound(_))
     }
 
-    /// Whether a length, identity or mark variable is unbound: the end of
+    /// Whether a length or identity variable is unbound: the end of
     /// its chain with no value.
     pub fn is_open_length(&self, var: LenVarId) -> bool {
         self.len_vars.unbound_end(&LenTerm::Var(var)) == Some(var)
@@ -99,10 +94,6 @@ impl Infer {
 
     pub fn is_open_identity(&self, var: IdentityVarId) -> bool {
         self.identity_vars.unbound_end(&IdentityTerm::Var(var)) == Some(var)
-    }
-
-    pub fn is_open_mark(&self, var: ReprVarId) -> bool {
-        self.repr_vars.unbound_end(&MarkTerm::Var(var)) == Some(var)
     }
 
     /// The variables of every kind `types` and `effects` reach.
@@ -130,20 +121,14 @@ impl Infer {
                     reach_cell(&self.effect_vars, effect, &mut reached.effects);
                     reach_cell(&self.values_vars, &ValuesTerm::Var(*values), &mut reached.values);
                 }
-                TyKind::UserDefined { type_args, effect, identity, .. } => {
+                TyKind::UserDefined { effect, identity, .. } => {
                     if let Some(effect) = effect {
                         reach_cell(&self.effect_vars, effect, &mut reached.effects);
                     }
                     if let Some(identity) = identity {
                         reach_cell(&self.identity_vars, identity, &mut reached.identities);
                     }
-                    for arg in type_args.iter() {
-                        if let TypeArg::Open(mark, _) = arg {
-                            reach_cell(&self.repr_vars, &MarkTerm::Var(*mark), &mut reached.marks);
-                        }
-                    }
                 }
-                TyKind::Ref(_, TypeArg::Open(mark, _)) => reach_cell(&self.repr_vars, &MarkTerm::Var(*mark), &mut reached.marks),
                 _ => {}
             }
             kind.for_each_child(|child| stack.push(child));
@@ -152,8 +137,8 @@ impl Infer {
     }
 
     /// Fresh variables of every kind for `vars` at a new instance: a type
-    /// variable of the same bound (types §5), an open length, identity or
-    /// mark, an effect in the same state, with every flow out of or into
+    /// variable of the same bound (types §5), an open length or identity,
+    /// an effect in the same state, with every flow out of or into
     /// one of the effects copied onto its copy, so that an instance's
     /// effect rises only by its own flows (effects §1), and the function
     /// values a function type may be as they are, which a use then grows as
@@ -174,10 +159,6 @@ impl Infer {
         for var in vars.identities.iter() {
             let fresh = self.fresh_identity();
             at.identities.insert(*var, fresh);
-        }
-        for var in vars.marks.iter() {
-            let fresh = self.fresh_repr();
-            at.marks.insert(*var, fresh);
         }
         let copies = self.values_vars.duplicate(&vars.values, "Infer::instance_at: u32::MAX values variables");
         at.values.extend(vars.values.iter().copied().zip(copies));
@@ -225,13 +206,6 @@ impl Infer {
         }
     }
 
-    fn copy_mark(&self, mark: ReprVarId, at: &AtInstance) -> ReprVarId {
-        match self.repr_vars.end(&MarkTerm::Var(mark)) {
-            CellEnd::Var { var, .. } if at.marks.contains_key(&var) => at.marks[&var],
-            _ => mark,
-        }
-    }
-
     /// `term` at an instance: each generalized variable of every kind its
     /// copy there, bound variables followed. A node holding none of them is
     /// `term` itself; every node rebuilt around one is written elsewhere,
@@ -268,11 +242,6 @@ impl Infer {
     }
 
     fn copy_kind(&mut self, kind: &TyKind<InferPhase>, at: &AtInstance, memo: &mut FxHashMap<Term, Term>) -> TyKind<InferPhase> {
-        let copy_arg = |infer: &mut Infer, arg: &TypeArg<InferPhase>, memo: &mut FxHashMap<Term, Term>| match arg {
-            TypeArg::Uniform(ty) => TypeArg::Uniform(infer.copy_at(*ty, at, memo)),
-            TypeArg::Specialized(ty) => TypeArg::Specialized(infer.copy_at(*ty, at, memo)),
-            TypeArg::Open(mark, ty) => TypeArg::Open(infer.copy_mark(*mark, at), infer.copy_at(*ty, at, memo)),
-        };
         match kind {
             TyKind::Handle(inner) => TyKind::Handle(self.copy_at(*inner, at, memo)),
             TyKind::Array(element, len, label) => TyKind::Array(self.copy_at(*element, at, memo), self.copy_len(len, at), *label),
@@ -301,13 +270,14 @@ impl Infer {
                 holds: *holds,
                 values: self.copy_values(*values, at),
             },
-            TyKind::UserDefined { id, type_args, effect, identity } => TyKind::UserDefined {
+            TyKind::UserDefined { id, type_args, effect, identity, marked } => TyKind::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|arg| copy_arg(self, arg, memo)).collect(),
+                type_args: type_args.iter().map(|arg| self.copy_at(*arg, at, memo)).collect(),
                 effect: effect.as_ref().map(|effect| self.copy_effect(effect, at)),
                 identity: identity.as_ref().map(|identity| self.copy_identity(identity, at)),
+                marked: *marked,
             },
-            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, copy_arg(self, target, memo)),
+            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, self.copy_at(*target, at, memo)),
             leaf => leaf.clone(),
         }
     }

@@ -13,8 +13,7 @@ use crate::decl::{CastRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, L
 use crate::infer::ShapeCoercion;
 use crate::ty::structural::PartKey;
 use crate::ty::{
-    Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind,
-    TypeArg, Types,
+    Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, ObjectTy, Poly, Ty, TyId, TyKind, Types,
 };
 
 struct Fixture {
@@ -40,11 +39,23 @@ impl Checked {
     }
 
     /// The steps of the concrete coercion typeck recorded at `site`.
-    fn steps(&self, site: AstId) -> &[super::Conversion<Ty>] {
+    fn coercion_steps(&self, site: AstId) -> &[super::CoercionStep] {
         match &self.typeck.coercions[&site] {
             super::Coercion::Steps(steps) => steps,
             other => panic!("a concrete value is coerced by steps, not {other:?}"),
         }
+    }
+
+    /// The steps of the concrete coercion typeck recorded at `site`, each
+    /// through a function.
+    fn steps(&self, site: AstId) -> Vec<&super::Conversion<Ty>> {
+        self.coercion_steps(site)
+            .iter()
+            .map(|step| match step {
+                super::CoercionStep::Via(conversion) => conversion,
+                super::CoercionStep::Unmark { .. } => panic!("a step through a function, not {step:?}"),
+            })
+            .collect()
     }
 
     fn admitted(&self) {
@@ -96,7 +107,7 @@ impl Fixture {
     }
 
     fn reference(&mut self, mutability: Mutability, target: TyId<Poly>) -> TyId<Poly> {
-        self.ty(TyKind::Ref(mutability, TypeArg::Uniform(target)))
+        self.ty(TyKind::Ref(mutability, target))
     }
 
     fn function(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>, effect: EffectTerm<Poly>) -> TyId<Poly> {
@@ -198,9 +209,10 @@ impl Fixture {
     fn vec_of(&mut self, vec_id: QualifiedRef, element: TyId<Poly>) -> TyId<Poly> {
         self.ty(TyKind::UserDefined {
             id: vec_id,
-            type_args: Box::new([TypeArg::Uniform(element)]),
+            type_args: Box::new([element]),
             effect: None,
             identity: None,
+            marked: false,
         })
     }
 
@@ -567,7 +579,7 @@ fn read_of_x(source: &str, slice: Option<Mutability>) -> (Checked, Ty) {
 }
 
 fn is_ref_to_i64(checked: &Checked, ty: Ty, mutability: Mutability) -> bool {
-    matches!(checked.kind(ty), TyKind::Ref(made, target) if *made == mutability && is_int(checked, target.ty(), IntTy::I64))
+    matches!(checked.kind(ty), TyKind::Ref(made, target) if *made == mutability && is_int(checked, *target, IntTy::I64))
 }
 
 /// D108 rule 1: a `&mut` element read through a shared slice is a shared
@@ -793,7 +805,7 @@ fn an_array_iterates_by_reference_through_a_reference_and_by_value_itself() {
     let TyKind::Ref(Mutability::Shared, element) = checked.kind(checked.typeck.types[&binder.id]) else {
         panic!("not a shared reference");
     };
-    assert!(is_int(&checked, element.ty(), IntTy::I64));
+    assert!(is_int(&checked, *element, IntTy::I64));
     let Stmt::For { id, binder, .. } = &script.stmts[1] else {
         panic!("not a for");
     };
@@ -1744,7 +1756,7 @@ fn a_view_coercion_is_recorded_at_the_argument() {
     let TyKind::Ref(Mutability::Shared, viewed) = checked.kind(steps[0].to) else {
         panic!("a view is a reference");
     };
-    assert!(matches!(checked.kind(viewed.ty()), TyKind::Slice(_)));
+    assert!(matches!(checked.kind(*viewed), TyKind::Slice(_)));
 }
 
 // Comparisons (operators §4)
@@ -1993,7 +2005,10 @@ fn a_tuple_part_casts_at_a_declarations_parameter_but_not_where_two_meet_in_a_bo
     let [(PartKey::Index(0), Some(super::Coercion::Steps(steps))), (PartKey::Index(1), None)] = &parts[..] else {
         panic!("the first part is coerced by steps, the second enters as it is: {parts:?}");
     };
-    assert_eq!(steps[0].via.declaration, widen);
+    let [super::CoercionStep::Via(step)] = &steps[..] else {
+        panic!("one step through a function: {steps:?}");
+    };
+    assert_eq!(step.via.declaration, widen);
 
     let (fx, _) = widening();
     let (checked, _) = fx.script("if true { (1u8, true) } else { (2i64, false) }");
@@ -2027,7 +2042,7 @@ fn a_pattern_through_a_reference_binds_references() {
     let TyKind::Ref(Mutability::Shared, target) = checked.kind(binding(&checked, &script, &names, "r")) else {
         panic!("a binding through a `&` is a `&`");
     };
-    assert!(is_int(&checked, target.ty(), IntTy::U8));
+    assert!(is_int(&checked, *target, IntTy::U8));
 }
 
 /// operators §3: an index is decided by its container's type, known here
@@ -2185,6 +2200,7 @@ fn a_view_step_names_its_impl() {
         type_args: Box::new([]),
         effect: None,
         identity: None,
+        marked: false,
     });
     let bool_ty = fx.ty(TyKind::Bool);
     let shared_other = fx.reference(Mutability::Shared, other);
@@ -2282,7 +2298,7 @@ fn a_binder_through_a_reference_has_the_bindings_type() {
     let TyKind::Ref(Mutability::Shared, target) = checked.kind(checked.typeck.types[&x.id()]) else {
         panic!("a binder through a `&` has a `&` type");
     };
-    assert!(is_int(&checked, target.ty(), IntTy::U8));
+    assert!(is_int(&checked, *target, IntTy::U8));
 }
 
 /// operators §3: an index is a `u64`, as Rust's `usize`.
@@ -2466,7 +2482,7 @@ fn a_comparison_part_names_its_callee_type() {
         let TyKind::Ref(Mutability::Shared, target) = checked.kind(params[0]) else {
             panic!("`eq` takes its operands by `&`");
         };
-        assert!(is_int(&checked, target.ty(), IntTy::I64));
+        assert!(is_int(&checked, *target, IntTy::I64));
         assert_eq!(checked.kind(*ret), &TyKind::Bool);
     }
 }
@@ -3310,7 +3326,7 @@ fn as_ref_lends_each_part_one_level() {
         }),
         ("let p = ((1, true), 2); let r = p.as_ref(); 0", &|checked, ty| {
             let TyKind::Tuple(items, ()) = checked.kind(ty) else { return false };
-            matches!(checked.kind(items[0]), TyKind::Ref(Mutability::Shared, inner) if matches!(checked.kind(inner.ty()), TyKind::Tuple(..)))
+            matches!(checked.kind(items[0]), TyKind::Ref(Mutability::Shared, inner) if matches!(checked.kind(*inner), TyKind::Tuple(..)))
         }),
     ];
     for (source, fits) in cases {
@@ -3345,7 +3361,7 @@ fn as_mut_lends_mut_and_a_mut_part_under_as_ref_reads_shared() {
     let TyKind::Ref(Mutability::Shared, target) = checked.kind(items[0]) else {
         panic!("the `&mut` part is reborrowed shared: {:?}", checked.kind(items[0]));
     };
-    assert!(is_int(&checked, target.ty(), IntTy::I64));
+    assert!(is_int(&checked, *target, IntTy::I64));
 }
 
 /// operators §2: `as_mut` through a `&` lends no `&mut`, and a value that
@@ -3379,7 +3395,7 @@ fn a_lend_of_an_array_of_references_reborrows_each_at_the_weaker_mutability() {
         let TyKind::Ref(Mutability::Shared, target) = checked.kind(*element) else {
             panic!("{source}: each element a `&`, not {:?}", checked.kind(*element));
         };
-        assert!(is_int(&checked, target.ty(), IntTy::I64), "{source}");
+        assert!(is_int(&checked, *target, IntTy::I64), "{source}");
     }
 }
 

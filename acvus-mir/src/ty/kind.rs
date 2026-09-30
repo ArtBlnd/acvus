@@ -1,6 +1,6 @@
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::arg::{IdentityTerm, LenTerm, TypeArg};
+use super::arg::{IdentityTerm, LenTerm};
 use super::effect::EffectTerm;
 use super::flow::FlowTerm;
 use super::num::IntTy;
@@ -175,11 +175,6 @@ impl<V: Phase> TyKind<V> {
     /// This shape with each type id it holds directly replaced by `map`'s,
     /// everything else as it is.
     pub fn with_children(&self, map: &mut impl FnMut(TyId<V>) -> TyId<V>) -> TyKind<V> {
-        let arg = |arg: &TypeArg<V>, map: &mut dyn FnMut(TyId<V>) -> TyId<V>| match arg {
-            TypeArg::Uniform(ty) => TypeArg::Uniform(map(*ty)),
-            TypeArg::Specialized(ty) => TypeArg::Specialized(map(*ty)),
-            TypeArg::Open(mark, ty) => TypeArg::Open(*mark, map(*ty)),
-        };
         match self {
             TyKind::Handle(inner) => TyKind::Handle(map(*inner)),
             TyKind::Array(element, len, label) => TyKind::Array(map(*element), *len, *label),
@@ -207,13 +202,14 @@ impl<V: Phase> TyKind<V> {
                 holds: *holds,
                 values: values.clone(),
             },
-            TyKind::UserDefined { id, type_args, effect, identity } => TyKind::UserDefined {
+            TyKind::UserDefined { id, type_args, effect, identity, marked } => TyKind::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|type_arg| arg(type_arg, map)).collect(),
+                type_args: type_args.iter().map(|type_arg| map(*type_arg)).collect(),
                 effect: effect.clone(),
                 identity: *identity,
+                marked: *marked,
             },
-            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, arg(target, map)),
+            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, map(*target)),
             TyKind::Closures(signatures) => TyKind::Closures(signatures.iter().map(|signature| map(*signature)).collect()),
             leaf @ (TyKind::Int(_)
             | TyKind::Float
@@ -258,10 +254,8 @@ impl<V: Phase> TyKind<V> {
                 params.iter().copied().for_each(&mut on_child);
                 on_child(*ret);
             }
-            TyKind::UserDefined { type_args, .. } => {
-                type_args.iter().for_each(|arg| on_child(arg.ty()));
-            }
-            TyKind::Ref(_, target) => on_child(target.ty()),
+            TyKind::UserDefined { type_args, .. } => type_args.iter().copied().for_each(on_child),
+            TyKind::Ref(_, target) => on_child(*target),
             TyKind::Closures(signatures) => signatures.iter().copied().for_each(on_child),
         }
     }

@@ -10,7 +10,7 @@ use super::{Bound, FlowId, Infer, Term};
 use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound, effect_variables};
 use crate::ty::{
     Calls, CallsTerm, Concrete, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityTerm, IdentityVarId,
-    Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy, Phase, Poly, ReprVarId, Ty, TyId, TyKind, TypeArg, Types,
+    Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy, Phase, Poly, Ty, TyId, TyKind, Types,
 };
 
 /// A requirement at the use's own terms: an impl of `generic_function` whose
@@ -58,7 +58,6 @@ pub(super) trait Instantiable:
         EffectVar: Placeholder,
         LenVar: Placeholder,
         IdentityVar: Placeholder,
-        ReprVar: Placeholder,
         FlowVar = Infallible,
         HoldsTerm = Holds,
         CallsTerm = Calls,
@@ -105,7 +104,6 @@ where
     effect_vars: FxHashMap<u32, EffectTerm<InferPhase>>,
     len_vars: FxHashMap<u32, LenVarId>,
     identity_vars: FxHashMap<u32, IdentityVarId>,
-    repr_vars: FxHashMap<u32, ReprVarId>,
 }
 
 impl<'a, V> AtUse<'a, V>
@@ -121,7 +119,6 @@ where
             effect_vars: FxHashMap::default(),
             len_vars: FxHashMap::default(),
             identity_vars: FxHashMap::default(),
-            repr_vars: FxHashMap::default(),
         }
     }
 }
@@ -308,9 +305,10 @@ impl Infer {
                 type_args,
                 effect,
                 identity,
+                marked,
             } => TyKind::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(|arg| self.type_arg_at(at, arg)).collect(),
+                type_args: type_args.iter().map(|arg| self.instantiate_ty(at, *arg)).collect(),
                 effect: effect.as_ref().map(|effect| self.effect_at(at, effect)),
                 identity: identity.map(|identity| match identity {
                     IdentityTerm::Known(id) => IdentityTerm::Known(id),
@@ -318,8 +316,9 @@ impl Infer {
                         IdentityTerm::Var(*at.identity_vars.entry(index.index()).or_insert_with(|| self.fresh_identity()))
                     }
                 }),
+                marked: *marked,
             },
-            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, self.type_arg_at(at, target)),
+            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, self.instantiate_ty(at, *target)),
         };
         let term = self.intern(kind);
         at.built.insert(ty, term);
@@ -362,20 +361,6 @@ impl Infer {
                 .entry(index.index())
                 .or_insert_with(|| EffectTerm::Var(self.fresh_effect()))
                 .clone(),
-        }
-    }
-
-    fn type_arg_at<V>(&mut self, at: &mut AtUse<'_, V>, arg: &TypeArg<V>) -> TypeArg<InferPhase>
-    where
-        V: Instantiable,
-    {
-        match arg {
-            TypeArg::Uniform(ty) => TypeArg::Uniform(self.instantiate_ty(at, *ty)),
-            TypeArg::Specialized(ty) => TypeArg::Specialized(self.instantiate_ty(at, *ty)),
-            TypeArg::Open(index, ty) => {
-                let mark = *at.repr_vars.entry(index.index()).or_insert_with(|| self.fresh_repr());
-                TypeArg::Open(mark, self.instantiate_ty(at, *ty))
-            }
         }
     }
 }

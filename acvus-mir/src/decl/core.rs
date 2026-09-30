@@ -10,7 +10,7 @@
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{DeclaredFacts, Scheme, TyVarBound};
-use crate::ty::{Calls, CastTy, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
+use crate::ty::{Calls, CastTy, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
 /// The names of `core`'s generic functions: the lang items (operators §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,7 +202,7 @@ impl Table<'_> {
     }
 
     fn reference(&mut self, mutability: Mutability, target: TyId<Poly>) -> TyId<Poly> {
-        self.types.intern(TyKind::Ref(mutability, TypeArg::Uniform(target)))
+        self.types.intern(TyKind::Ref(mutability, target))
     }
 
     fn scheme(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>, names: &[Astr], variables: usize) -> Scheme {
@@ -373,7 +373,7 @@ mod tests {
         let functions = core.generic_functions(&mut types);
         let mut at = |kind: TyKind<Poly>| types.intern(kind);
         let (t, second) = (at(TyKind::Var(0)), at(TyKind::Var(1)));
-        let reference = |mutability, target| TyKind::Ref(mutability, TypeArg::Uniform(target));
+        let reference = |mutability, target| TyKind::Ref(mutability, target);
         let shared = |target| reference(Mutability::Shared, target);
         let string = at(TyKind::String);
         let slice = at(TyKind::Slice(second));

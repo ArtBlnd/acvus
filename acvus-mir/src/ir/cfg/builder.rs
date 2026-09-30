@@ -146,7 +146,7 @@ impl<'m> Builder<'m> {
     pub fn intern(&mut self, kind: TyKind<Concrete>) -> Ty {
         if let TyKind::Ref(_, target) = &kind {
             assert!(
-                !matches!(self.module.types.kind(target.ty()), TyKind::Ref(..)),
+                !matches!(self.module.types.kind(*target), TyKind::Ref(..)),
                 "a reference's target is never a reference (types §4): {kind:?}"
             );
         }

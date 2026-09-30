@@ -41,7 +41,7 @@ use super::order::At;
 use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, OrderUse, Rewriter, Site, Terminator};
 use crate::ir::parts;
 use crate::ir::{Callee, IndexBound, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
-use crate::ty::{Concrete, Mutability, Reissue, SplitCost, Ty, TyKind, TypeArg, Types};
+use crate::ty::{Concrete, Mutability, Reissue, SplitCost, Ty, TyKind, Types};
 use reach::{BlockPoint, Direction, PointKey, Reached};
 
 /// An instruction of the body being edited, by its identity, which no edit
@@ -1482,7 +1482,7 @@ where
         }
         let at = At::Before(take.id);
         let shifts = self.edit(|rewriter| {
-            let lent = rewriter.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(string)));
+            let lent = rewriter.intern(TyKind::Ref(Mutability::Shared, string));
             let reference = insert_place_op(rewriter, at, Op::Ref { target, path, mutability: Mutability::Shared }, lent, span);
             let clone = rewriter.insert(at, Op::StringClone { src: reference }, string, span);
             rewriter.replace_all_uses(read, clone);

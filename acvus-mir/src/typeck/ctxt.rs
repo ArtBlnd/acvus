@@ -175,7 +175,7 @@ impl<'d> Ctxt<'d> {
     /// `reference` is not a reference: callers ask `closed` first.
     pub fn referent(&self, reference: Term) -> Term {
         match self.infer.types().kind(self.infer.shallow(reference)) {
-            TyKind::Ref(_, target) => target.ty(),
+            TyKind::Ref(_, target) => *target,
             other => panic!("referent: a term closed as a reference is a reference, not {other:?}"),
         }
     }

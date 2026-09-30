@@ -7,7 +7,7 @@ use acvus_ast::Span;
 
 use super::{Fixture, covers, span_of};
 use crate::check::{ConflictTrace, Refusal, RefusalKind};
-use crate::ty::{Mutability, TyKind, TypeArg};
+use crate::ty::{Mutability, TyKind};
 
 fn conflict(span: Span, earlier: Vec<Span>, later: Vec<Span>, uses: Vec<Span>) -> Refusal {
     Refusal { kind: RefusalKind::LoanConflict { trace: ConflictTrace { earlier, later, uses } }, span }
@@ -69,7 +69,7 @@ fn a_write_of_a_field_a_live_loan_lends_is_refused() {
 fn one_mut_reference_passed_twice_to_one_call_is_refused() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let mut_int = fx.ty(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(int)));
+    let mut_int = fx.ty(TyKind::Ref(Mutability::Mut, int));
     fx.declare("f", &[mut_int, mut_int], int);
     let source = "let x = 1; let r = &mut x; f(r, r)";
     let refusals = fx.refusals(source);
@@ -87,8 +87,8 @@ fn a_mut_receiver_and_a_shared_use_among_the_other_arguments_is_admitted() {
     let vec = fx.vecs();
     let int = fx.int();
     let unit = fx.ty(TyKind::Unit);
-    let shared_vec = fx.ty(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(vec)));
-    let mut_vec = fx.ty(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(vec)));
+    let shared_vec = fx.ty(TyKind::Ref(Mutability::Shared, vec));
+    let mut_vec = fx.ty(TyKind::Ref(Mutability::Mut, vec));
     fx.declare("len", &[shared_vec], int);
     fx.declare("push", &[mut_vec, int], unit);
     let refusals = fx.refusals("let v = make(); v.push(v.len()); consume(v)");
@@ -186,7 +186,7 @@ fn a_mut_lend_of_a_context_live_across_a_call_touching_it_is_refused() {
     let mut fx = Fixture::new();
     let (vec, int) = (fx.vec_of_ints(), fx.int());
     fx.context("c", vec);
-    let vec_mut = fx.ty(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(vec)));
+    let vec_mut = fx.ty(TyKind::Ref(Mutability::Mut, vec));
     fx.declare("push", &[vec_mut], int);
     fx.declare_with_effect("touch", &[], int, crate::ty::Effect::opaque());
     let source = "let r = &mut @c; touch(); push(r)";
@@ -201,7 +201,7 @@ fn a_mut_lend_of_a_context_dead_before_a_call_touching_it_is_admitted() {
     let mut fx = Fixture::new();
     let (vec, int) = (fx.vec_of_ints(), fx.int());
     fx.context("c", vec);
-    let vec_mut = fx.ty(TyKind::Ref(Mutability::Mut, TypeArg::Uniform(vec)));
+    let vec_mut = fx.ty(TyKind::Ref(Mutability::Mut, vec));
     fx.declare("push", &[vec_mut], int);
     fx.declare_with_effect("touch", &[], int, crate::ty::Effect::opaque());
     let refusals = fx.refusals("let r = &mut @c; push(r); touch()");

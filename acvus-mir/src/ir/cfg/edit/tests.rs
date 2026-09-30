@@ -16,7 +16,7 @@ use crate::ir::{BinOp, Callee, Checked, Overflow, RefTarget, UnaryOp};
 use crate::ir::{ForSource, SwitchKey};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect as CallEffect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability,
-    ObjectTy, Reissue, TyKind, TypeArg, Types,
+    ObjectTy, Reissue, TyKind, Types,
 };
 
 // -- Fixture -------------------------------------------------------------
@@ -74,7 +74,7 @@ fn fixture() -> Fixture {
     let idempotent =
         call_ty(CallEffect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable));
     let str_ty = types.intern(TyKind::Str);
-    let str_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)));
+    let str_ref = types.intern(TyKind::Ref(Mutability::Shared, str_ty));
     let result = types.intern(TyKind::Result(int, bool, ()));
     let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(interner.intern("x"), int)]), ())));
     let extern_defined = types.intern(TyKind::UserDefined {
@@ -82,6 +82,7 @@ fn fixture() -> Fixture {
         type_args: Box::new([]),
         effect: None,
         identity: None,
+        marked: false,
     });
     Fixture {
         module: Module::new(types),
@@ -1404,7 +1405,7 @@ fn viewing(f: &mut Fixture, mutability: Mutability, viewed: Ty) -> BodyId {
     let (na, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, f.int);
     let array = builder.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2), ()));
-    let lent = builder.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array)));
+    let lent = builder.intern(TyKind::Ref(Mutability::Shared, array));
     let a = builder.param(na, lent, acvus_ast::Span::ZERO);
     builder.push(Op::ArrayView { src: a, mutability }, viewed, at(1));
     let zero = builder.push(Op::Const { value: Literal::Int(0) }, int, at(2));
@@ -1418,7 +1419,7 @@ fn types_agree_checks_an_array_view_against_the_array_it_views() {
     let (int, bool) = (f.int, f.bool);
     let slice_of = |f: &mut Fixture, element: Ty, mutability: Mutability| {
         let slice = f.module_types_intern(TyKind::Slice(element));
-        f.module_types_intern(TyKind::Ref(mutability, TypeArg::Uniform(slice)))
+        f.module_types_intern(TyKind::Ref(mutability, slice))
     };
     let shared_ints = slice_of(&mut f, int, Mutability::Shared);
     let good = viewing(&mut f, Mutability::Shared, shared_ints);
@@ -1474,7 +1475,7 @@ fn types_agree_checks_a_slice_length() {
     let mut f = fixture();
     let int = f.int;
     let slice = f.module_types_intern(TyKind::Slice(int));
-    let slice_ref = f.module_types_intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice)));
+    let slice_ref = f.module_types_intern(TyKind::Ref(Mutability::Shared, slice));
     let u64_ty = f.module_types_intern(TyKind::Int(IntTy::U64));
     let good = measuring(&mut f, slice_ref, u64_ty);
     assert_eq!(types_agree(&f, good), Ok(()));
@@ -2058,7 +2059,7 @@ fn split_slot_gives_each_field_of_a_tuple_its_own_slot() {
     let mut f = fixture();
     let (name, int) = (f.name("a"), f.int);
     let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int]), ()));
-    let int_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+    let int_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, int));
     let mut builder = f.build(false, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let s = builder.slot(pair, at(0));
@@ -2559,7 +2560,7 @@ fn discharge_of_a_checked_index_proves_its_bound_and_keeps_the_index() {
     let (ns, ni, int) = (f.name("s"), f.name("i"), f.int);
     let u64_ty = f.module.types.intern(TyKind::Int(IntTy::U64));
     let slice = f.module.types.intern(TyKind::Slice(int));
-    let slice_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(slice)));
+    let slice_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, slice));
     let mut builder = f.build(false, int);
     let s = builder.param(ns, slice_ref, acvus_ast::Span::ZERO);
     let i = builder.param(ni, u64_ty, acvus_ast::Span::ZERO);

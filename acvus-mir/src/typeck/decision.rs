@@ -29,11 +29,11 @@ use super::output::{AsCast, Chosen, Converted, Impl, Iteration, TryExit};
 use super::reach::{self, Candidate, Match, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
-use crate::decl::{Base, Head, ImplSig, Scheme};
+use crate::decl::{Base, Head, ImplSig, Scheme, Step as TreeStep};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, OpenSources, RequiredAt, Term};
 use crate::ty::structural::structure;
 use crate::ty::{
-    CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, TypeArg, Types,
+    CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mutability, ObjectTy, Poly, TyId, TyKind, TyVarId, Types,
 };
 
 /// A lang item a form calls (operators §2, §3, §7). `&&`, `||`,
@@ -543,19 +543,19 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
     }
 }
 
-/// The stall step of types §5 for what is not a type: effects, marks, flow
-/// sets, and function types' holds and calls; whether any took its
+/// The stall step of types §5 for what is not a type: effects, flow sets,
+/// and function types' holds and calls; whether any took its
 /// default. A lambda's flow set is its claim's (`writeback::claim_flows`),
 /// made once its type is solved, and its holds and calls are what settling
 /// its captures finds (`closure::settle_captures`), after the fixpoint; no
 /// default takes them (D84).
 fn default_non_type_terms(cx: &mut Ctxt<'_>) -> bool {
-    let effects_and_marks = cx.infer.default_effects_and_marks();
+    let effects = cx.infer.default_effects();
     let claimed = super::writeback::lambda_flows(cx);
     let flows = cx.infer.default_unclaimed_flows(&claimed);
     let settled_later: Vec<_> = cx.out.lambdas.iter().map(|lambda| (lambda.holds, lambda.calls)).collect();
     let holds_and_calls = cx.infer.default_unsettled_holds_and_calls(&settled_later);
-    effects_and_marks || flows || holds_and_calls
+    effects || flows || holds_and_calls
 }
 
 /// Whether an index at `callee_site` is still to be decided.
@@ -1048,7 +1048,7 @@ fn fire_iterate(
         Head::Ref(mutability, _) => {
             let element = cx.fresh();
             let slice = cx.node(TyKind::Slice(element));
-            let lent_slice = cx.held(TyKind::Ref(mutability, TypeArg::Uniform(slice)));
+            let lent_slice = cx.held(TyKind::Ref(mutability, slice));
             let callee = Callee::Core(CoreSig::AsSlice(mutability));
             let reached = super::call::reach_in(cx, body, callee_site, callee, vec![(site, head.term)], span);
             cx.eq(reached, lent_slice, span);
@@ -1500,8 +1500,11 @@ pub(super) fn chain_up(cx: &Ctxt<'_>, head: Head) -> Vec<Head> {
     let mut chain = vec![head];
     let mut at = head;
     while let Some(step) = cx.decls.casts().step_up(at) {
-        at = poly_head(cx.decls.types(), step.rule().to)
-            .expect("a tree step joins two heads: verify refuses one without (CastWithoutHead)");
+        at = match step {
+            TreeStep::Cast(cast) => poly_head(cx.decls.types(), cast.rule().to)
+                .expect("a tree step joins two heads: verify refuses one without (CastWithoutHead)"),
+            TreeStep::Unmark => at.unmarked(),
+        };
         chain.push(at);
     }
     chain
@@ -1531,7 +1534,7 @@ pub(super) fn param_head_at(types: &Types<Poly>, params: &[TyId<Poly>], path: &[
 /// (`InternalType`, `ReferenceToReference`).
 pub(super) fn poly_head(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Head> {
     match types.kind(ty) {
-        TyKind::Ref(mutability, target) => poly_base(types.kind(target.ty())).map(|base| Head::Ref(*mutability, base)),
+        TyKind::Ref(mutability, target) => poly_base(types.kind(*target)).map(|base| Head::Ref(*mutability, base)),
         kind => poly_base(kind).map(Head::Base),
     }
 }
@@ -1553,7 +1556,7 @@ fn poly_base(kind: &TyKind<Poly>) -> Option<Base> {
         TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
         TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
-        TyKind::UserDefined { id, .. } => Base::Named(*id),
+        TyKind::UserDefined { id, marked, .. } => Base::Named { id: *id, marked: *marked },
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::Ref(..) => panic!("a declared reference's target is never a reference (ReferenceToReference)"),

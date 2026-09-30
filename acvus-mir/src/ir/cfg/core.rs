@@ -67,7 +67,7 @@ impl Body {
     pub(super) fn make_value(&mut self, types: &Types<Concrete>, ty: Ty, def: Def) -> ValueId {
         match types.kind(ty) {
             TyKind::Ref(_, target) => assert!(
-                !matches!(types.kind(target.ty()), TyKind::Ref(..)),
+                !matches!(types.kind(*target), TyKind::Ref(..)),
                 "a reference's target is never a reference (types §4): {ty:?}"
             ),
             TyKind::Order => panic!(

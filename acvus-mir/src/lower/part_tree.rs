@@ -65,7 +65,7 @@ fn shape(cx: &Lcx<'_, '_>, ty: Ty) -> Shape {
         Some(Structure::Option(payload, _)) => Shape::Option(payload),
         Some(Structure::Result { ok, err, .. }) => Shape::Result { ok, err },
         None => match cx.kind(ty) {
-            TyKind::Ref(_, target) => Shape::Ref(target.ty()),
+            TyKind::Ref(_, target) => Shape::Ref(*target),
             TyKind::Never => Shape::Never,
             other => panic!("typeck records parts only at a structured type, a reference or `!`, not {other:?}"),
         },
@@ -133,7 +133,7 @@ fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span)
     let path = vec![part.seg];
     match cx.kind(part.ty) {
         TyKind::Ref(made, referent) => {
-            let (made, referent) = (*made, referent.ty());
+            let (made, referent) = (*made, *referent);
             let taken = cx.builder.push(Op::Take { target, path, taken_out: false }, part.ty, span);
             super::place::reborrow(cx, taken, made, referent, Mutability::Shared, span)
         }
@@ -150,7 +150,7 @@ fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span)
 fn element_operand(cx: &mut Lcx<'_, '_>, elements: ValueId, at: ValueId, element: Ty, span: Span) -> ValueId {
     match cx.kind(element) {
         TyKind::Ref(made, referent) => {
-            let (made, referent) = (*made, referent.ty());
+            let (made, referent) = (*made, *referent);
             let op = Op::Index { slice: elements, index: at, mode: IndexMode::Copy, bound: IndexBound::Checked };
             let taken = cx.builder.push(op, element, span);
             super::place::reborrow(cx, taken, made, referent, Mutability::Shared, span)
@@ -461,7 +461,7 @@ pub(super) fn lifted(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span
         None => ret,
         Some(Taking::Value) => params[0],
         Some(Taking::Ref(_)) => match cx.kind(params[0]) {
-            TyKind::Ref(_, target) => target.ty(),
+            TyKind::Ref(_, target) => *target,
             other => panic!("a parameter that takes the lift's variable by reference is a reference, not {other:?}"),
         },
     };

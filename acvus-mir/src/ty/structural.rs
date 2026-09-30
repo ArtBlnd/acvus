@@ -122,7 +122,7 @@ mod tests {
     use acvus_utils::{Interner, QualifiedRef};
 
     use super::{PartKey, Structure, structure};
-    use crate::ty::{Concrete, IntTy, LenTerm, Mutability, ObjectTy, Ty, TyKind, TypeArg, Types};
+    use crate::ty::{Concrete, IntTy, LenTerm, Mutability, ObjectTy, Ty, TyKind, Types};
 
     fn parts(types: &Types<Concrete>, ty: Ty) -> Vec<Ty> {
         structure(types, ty).expect("a structural type").parts().iter().map(|part| part.ty).collect()
@@ -197,8 +197,9 @@ mod tests {
             type_args: Box::new([]),
             effect: None,
             identity: None,
+            marked: false,
         });
-        let reference = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+        let reference = types.intern(TyKind::Ref(Mutability::Shared, int));
         let never = types.intern(TyKind::Never);
         let string = types.intern(TyKind::String);
         for ty in [declared, reference, never, string, int] {

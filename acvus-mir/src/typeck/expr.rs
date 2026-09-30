@@ -11,7 +11,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::{Capturing, capturing_binding, note_captures};
 use super::{call, cast, closure, context, control, method, op, place, scope, stmt, variant};
 use crate::infer::{Bound, Term};
-use crate::ty::{IntTy, LenTerm, Label, Mutability, ObjectTy, TyKind, TypeArg};
+use crate::ty::{IntTy, LenTerm, Label, Mutability, ObjectTy, TyKind};
 
 /// The term of `expr`, read for `demand` (operators §3). An `Error` node is
 /// a fresh variable and is not refused again: the parse reported it.
@@ -213,7 +213,7 @@ pub(super) fn check_literal(cx: &mut Ctxt<'_>, literal: &Literal, span: Span) ->
         Literal::Bytes(bytes) => {
             let byte = cx.node(TyKind::Int(IntTy::U8));
             let array = cx.node(TyKind::Array(byte, LenTerm::Known(bytes.len()), Label::Here));
-            cx.node(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(array)))
+            cx.node(TyKind::Ref(Mutability::Shared, array))
         }
         Literal::List(items) => {
             let element = cx.fresh();
@@ -229,7 +229,7 @@ pub(super) fn check_literal(cx: &mut Ctxt<'_>, literal: &Literal, span: Span) ->
 /// A string literal is a `&str`, as in Rust (operators §1).
 fn string_literal(cx: &mut Ctxt<'_>) -> Term {
     let str_ty = cx.node(TyKind::Str);
-    cx.node(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)))
+    cx.node(TyKind::Ref(Mutability::Shared, str_ty))
 }
 
 /// `[a, b]`: every element enters the one element slot (types §3). A `..`

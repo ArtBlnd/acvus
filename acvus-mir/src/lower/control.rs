@@ -277,9 +277,9 @@ fn traversal<S: Slot>(
             let TyKind::Ref(_, lent) = cx.kind(element) else {
                 panic!("a `for` by reference binds a reference to each element")
             };
-            let item = lent.ty();
+            let item = *lent;
             let slice = match cx.kind(cx.value_ty(reference)) {
-                TyKind::Ref(_, target) => match cx.kind(target.ty()) {
+                TyKind::Ref(_, target) => match cx.kind(*target) {
                     TyKind::Array(..) => view_array(cx, reference, mutability, item, span),
                     TyKind::Slice(_) => reference,
                     _ => {

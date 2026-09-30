@@ -11,16 +11,16 @@ use std::cmp::Ordering;
 
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::cells::{End as CellEnd, Exceeds, MarkTerm, Unequal, ValuesTerm};
-use super::{End, Infer, Mark, Term, VarState};
+use super::cells::{End as CellEnd, Exceeds, Unequal, ValuesTerm};
+use super::{End, Infer, Term, VarState};
 use super::closed::poly_head;
 use super::Closed;
-use crate::decl::{Base, Declarations, Head, VerifiedConversion};
+use crate::decl::{Base, Declarations, Head, Step, VerifiedConversion};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{FnValue, FnValues, Reach, ValuesVarId, is_transparent};
 use crate::ty::{
     Effect, EffectTerm, Flows, IdentityTerm, Infer as InferPhase, Label, Mutability, ObjectTy,
-    TyKind, TyVarId, TypeArg,
+    TyKind, TyVarId,
 };
 
 /// Why two terms do not relate: B's refusals (refusals).
@@ -44,8 +44,6 @@ pub enum Mismatch {
     Conversions { candidates: Box<[QualifiedRef]> },
     /// A reference whose target would be a reference (types §4).
     ReferenceToReference { target: Term },
-    /// `#` on one side only (types §8).
-    Mark { a: Term, b: Term },
     /// Two function types whose effects differ, or whose effect one side
     /// fixed and the other would grow past (types §2, D94): the two effect
     /// terms, and what each is.
@@ -75,7 +73,6 @@ impl Mismatch {
             Mismatch::Bound { .. } => "Bound",
             Mismatch::Conversions { .. } => "Conversions",
             Mismatch::ReferenceToReference { .. } => "ReferenceToReference",
-            Mismatch::Mark { .. } => "Mark",
             Mismatch::Effects { .. } => "Effects",
             Mismatch::NotOneOf { .. } => "NotOneOf",
             Mismatch::Values { .. } => "Values",
@@ -205,7 +202,10 @@ fn heads_up(decls: &Declarations, head: Head) -> Vec<Head> {
     let mut heads = vec![head];
     let mut at = head;
     while let Some(step) = decls.casts().step_up(at) {
-        at = poly_head(decls.types(), step.rule().to);
+        at = match step {
+            Step::Cast(cast) => poly_head(decls.types(), cast.rule().to),
+            Step::Unmark => at.unmarked(),
+        };
         heads.push(at);
     }
     heads
@@ -215,7 +215,7 @@ fn heads_up(decls: &Declarations, head: Head) -> Vec<Head> {
 /// a reference's target, is an extern-defined type that carries one.
 fn carries_identity(decls: &Declarations, head: Head) -> bool {
     match head {
-        Head::Base(Base::Named(id)) | Head::Ref(_, Base::Named(id)) => {
+        Head::Base(Base::Named { id, .. }) | Head::Ref(_, Base::Named { id, .. }) => {
             decls.user_type(id).is_some_and(|declared| declared.carries_identity)
         }
         Head::Base(_) | Head::Ref(..) => false,
@@ -227,14 +227,6 @@ fn either_elsewhere(a: Label, b: Label) -> Label {
     match (a, b) {
         (Label::Here, Label::Here) => Label::Here,
         (Label::Elsewhere, _) | (_, Label::Elsewhere) => Label::Elsewhere,
-    }
-}
-
-fn mark_term(arg: &TypeArg<InferPhase>) -> MarkTerm {
-    match arg {
-        TypeArg::Uniform(_) => MarkTerm::Known(Mark::Uniform),
-        TypeArg::Specialized(_) => MarkTerm::Known(Mark::Specialized),
-        TypeArg::Open(var, _) => MarkTerm::Var(*var),
     }
 }
 
@@ -472,7 +464,7 @@ impl Infer {
         };
         let reaches = *held == Mutability::Mut || *through == Mutability::Shared;
         let (End::Node { node: value_target, .. }, End::Node { node: slot_target, .. }) =
-            (self.end(value_target.ty()), self.end(slot_target.ty()))
+            (self.end(*value_target), self.end(*slot_target))
         else {
             return None;
         };
@@ -518,7 +510,7 @@ impl Infer {
         let kind = match reborrowed {
             Some((Mutability::Mut, target)) if through == Mutability::Mut => TyKind::Ref(Mutability::Mut, target),
             Some((_, target)) => TyKind::Ref(Mutability::Shared, target),
-            None => TyKind::Ref(through, TypeArg::Uniform(part)),
+            None => TyKind::Ref(through, part),
         };
         self.intern(kind)
     }
@@ -605,7 +597,7 @@ impl Infer {
     fn identity_of(&self, node: Term) -> Option<IdentityTerm<InferPhase>> {
         match self.types.kind(node) {
             TyKind::UserDefined { identity, .. } => *identity,
-            TyKind::Ref(_, target) => match self.end(target.ty()) {
+            TyKind::Ref(_, target) => match self.end(*target) {
                 End::Node { node, .. } => self.identity_of(node),
                 End::Unbound(..) => None,
             },
@@ -614,8 +606,9 @@ impl Infer {
     }
 
     /// `node`, of head `from`, stepped up the tree to `to` through each
-    /// step's cast: the cast's `from` pattern is made one with the type
-    /// reached, and its `to` pattern is the type above.
+    /// step: a cast's `from` pattern is made one with the type reached, and
+    /// its `to` pattern is the type above; above a marked type is the same
+    /// type unmarked (types §8).
     ///
     /// # Panics
     /// `to` is not up from `from`: callers climb to a common ancestor.
@@ -626,11 +619,15 @@ impl Infer {
                 .casts()
                 .step_up(head)
                 .expect("climb: the target is up the tree from the start");
-            let rule = step.rule();
-            let (pattern_from, pattern_to) = self.instantiate_ends(decls.types(), rule.from, rule.to);
-            self.relate(pattern_from, at, Relation::Eq)?;
-            at = pattern_to;
-            head = poly_head(decls.types(), step.rule().to);
+            (at, head) = match step {
+                Step::Cast(cast) => {
+                    let rule = cast.rule();
+                    let (pattern_from, pattern_to) = self.instantiate_ends(decls.types(), rule.from, rule.to);
+                    self.relate(pattern_from, at, Relation::Eq)?;
+                    (pattern_to, poly_head(decls.types(), rule.to))
+                }
+                Step::Unmark => (self.unmarked(at), head.unmarked()),
+            };
         }
         Ok(at)
     }
@@ -928,15 +925,18 @@ impl Infer {
                     type_args: type_args_a,
                     effect: effect_a,
                     identity: identity_a,
+                    marked: marked_a,
                 },
                 TyKind::UserDefined {
                     id: id_b,
                     type_args: type_args_b,
                     effect: effect_b,
                     identity: identity_b,
+                    marked: marked_b,
                 },
             ) => {
                 if id_a != id_b
+                    || marked_a != marked_b
                     || type_args_a.len() != type_args_b.len()
                     || effect_a.is_some() != effect_b.is_some()
                     || identity_a.is_some() != identity_b.is_some()
@@ -946,7 +946,7 @@ impl Infer {
                 let type_args = type_args_a
                     .iter()
                     .zip(type_args_b.iter())
-                    .map(|(x, y)| self.relate_type_arg(a, b, x, y))
+                    .map(|(x, y)| self.relate(*x, *y, Relation::Eq))
                     .collect::<Result<_, _>>()?;
                 let effect = effect_a
                     .zip(effect_b)
@@ -970,13 +970,14 @@ impl Infer {
                     type_args,
                     effect,
                     identity,
+                    marked: marked_a,
                 }
             }
             (TyKind::Ref(mutability_a, x), TyKind::Ref(mutability_b, y)) => {
                 if mutability_a != mutability_b {
                     return Err(heads);
                 }
-                TyKind::Ref(mutability_a, self.relate_type_arg(a, b, &x, &y)?)
+                TyKind::Ref(mutability_a, self.relate(x, y, Relation::Eq)?)
             }
             (TyKind::Var(_), _) | (_, TyKind::Var(_)) => {
                 unreachable!("relate_nodes: an end is never a variable")
@@ -1146,26 +1147,5 @@ impl Infer {
             variants.push(variant);
         }
         Ok(variants.into())
-    }
-
-    fn relate_type_arg(
-        &mut self,
-        a: Term,
-        b: Term,
-        x: &TypeArg<InferPhase>,
-        y: &TypeArg<InferPhase>,
-    ) -> Result<TypeArg<InferPhase>, Mismatch> {
-        let mark = self
-            .repr_vars
-            .unify(&mark_term(x), &mark_term(y))
-            .map_err(|Unequal| Mismatch::Mark { a, b })?;
-        let ty = self.relate(x.ty(), y.ty(), Relation::Eq)?;
-        Ok(match self.repr_vars.end(&mark) {
-            CellEnd::Known(Mark::Uniform) | CellEnd::Var { value: Some(Mark::Uniform), .. } => TypeArg::Uniform(ty),
-            CellEnd::Known(Mark::Specialized) | CellEnd::Var { value: Some(Mark::Specialized), .. } => {
-                TypeArg::Specialized(ty)
-            }
-            CellEnd::Var { var, value: None } => TypeArg::Open(var, ty),
-        })
     }
 }

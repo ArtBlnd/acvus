@@ -22,7 +22,7 @@ use crate::ir::cfg::{Op, Terminator};
 use crate::ir::{Intrinsic, PathSeg, RefTarget, ValueId, fn_effect, known_len};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, LenTerm, Mutability, ObjectTy, Reissue, Ty, TyKind};
-use crate::typeck::Coercion;
+use crate::typeck::{Coercion, CoercionStep};
 
 /// `value`, a transparent structured value, or where `through` is `Some` a
 /// reference of that mutability to one, coerced into a value of `to`, each
@@ -140,7 +140,7 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> ValueId {
 /// The target type of the reference type `ty`.
 fn referent(cx: &Lcx<'_, '_>, ty: Ty) -> Ty {
     match cx.kind(ty) {
-        TyKind::Ref(_, target) => target.ty(),
+        TyKind::Ref(_, target) => *target,
         other => panic!("a coercion through a reference coerces a reference, not {other:?}"),
     }
 }
@@ -308,9 +308,12 @@ impl Coerced<'_> {
 /// The effect of `coercion`: every step's function's, joined.
 fn coercion_effect(cx: &Lcx<'_, '_>, coercion: &Coercion) -> Effect {
     match coercion {
-        Coercion::Steps(steps) => steps.iter().fold(Effect::pure(), |joined, step| {
-            let effect = fn_effect(cx.builder.types(), step.via_ty).expect("a step's function type has an effect");
-            joined.join(effect)
+        Coercion::Steps(steps) => steps.iter().fold(Effect::pure(), |joined, step| match step {
+            CoercionStep::Via(step) => {
+                let effect = fn_effect(cx.builder.types(), step.via_ty).expect("a step's function type has an effect");
+                joined.join(effect)
+            }
+            CoercionStep::Unmark { .. } => joined,
         }),
         Coercion::Structured { parts, .. } => parts
             .iter()

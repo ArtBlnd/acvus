@@ -12,7 +12,7 @@ use super::cells::Shift;
 use super::{Infer, Term, VarState};
 use crate::ty::{
     CallsTerm, EffectTerm, EffectVarId, FlowTerm, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
-    LenTerm, LenVarId, ObjectTy, ReprVarId, TyKind, TyVarId, TypeArg, ValuesVarId,
+    LenTerm, LenVarId, ObjectTy, TyKind, TyVarId, ValuesVarId,
 };
 
 /// How an import moved the other store's terms into this one.
@@ -24,7 +24,6 @@ pub struct Imported {
     effects: Shift,
     lengths: Shift,
     identities: Shift,
-    marks: Shift,
     flows: Shift,
     holds: Shift,
     calls: Shift,
@@ -41,7 +40,6 @@ impl Infer {
             effects: self.effect_vars.import(&from.effect_vars),
             lengths: self.len_vars.import(&from.len_vars),
             identities: self.identity_vars.import(&from.identity_vars),
-            marks: self.repr_vars.import(&from.repr_vars),
             flows: self.flow_vars.import(&from.flow_vars),
             holds: self.holds_vars.import(&from.holds_vars),
             calls: self.calls_vars.import(&from.calls_vars),
@@ -94,21 +92,12 @@ impl Imported {
         IdentityVarId(var.0 + self.identities.vars)
     }
 
-    pub fn mark_var(&self, var: ReprVarId) -> ReprVarId {
-        ReprVarId(var.0 + self.marks.vars)
-    }
-
     pub fn values_var(&self, var: ValuesVarId) -> ValuesVarId {
         ValuesVarId(var.0 + self.values.vars)
     }
 
     /// The other store's `kind` with its parts and variables moved here.
     fn kind(&self, kind: &TyKind<InferPhase>) -> TyKind<InferPhase> {
-        let arg = |arg: &TypeArg<InferPhase>| match arg {
-            TypeArg::Uniform(ty) => TypeArg::Uniform(self.term(*ty)),
-            TypeArg::Specialized(ty) => TypeArg::Specialized(self.term(*ty)),
-            TypeArg::Open(mark, ty) => TypeArg::Open(self.mark_var(*mark), self.term(*ty)),
-        };
         match kind {
             TyKind::Var(var) => TyKind::Var(self.ty_var(*var)),
             TyKind::Handle(inner) => TyKind::Handle(self.term(*inner)),
@@ -150,16 +139,17 @@ impl Imported {
                 },
                 values: self.values_var(*values),
             },
-            TyKind::UserDefined { id, type_args, effect, identity } => TyKind::UserDefined {
+            TyKind::UserDefined { id, type_args, effect, identity, marked } => TyKind::UserDefined {
                 id: *id,
-                type_args: type_args.iter().map(arg).collect(),
+                type_args: type_args.iter().map(|arg| self.term(*arg)).collect(),
                 effect: effect.as_ref().map(|effect| self.effect(effect)),
                 identity: identity.map(|identity| match identity {
                     IdentityTerm::Known(known) => IdentityTerm::Known(known),
                     IdentityTerm::Var(var) => IdentityTerm::Var(self.identity_var(var)),
                 }),
+                marked: *marked,
             },
-            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, arg(target)),
+            TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, self.term(*target)),
             TyKind::Closures(signatures) => TyKind::Closures(signatures.iter().map(|signature| self.term(*signature)).collect()),
             leaf @ (TyKind::Int(_)
             | TyKind::Float

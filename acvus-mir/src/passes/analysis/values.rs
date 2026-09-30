@@ -99,7 +99,7 @@ impl OperandTypes<'_> {
     /// run changes while it exists.
     fn is_slice(&self, value: ValueId) -> bool {
         match self.types.kind(self.body.ty_of(value)) {
-            TyKind::Ref(_, lent) => matches!(self.types.kind(lent.ty()), TyKind::Slice(_)),
+            TyKind::Ref(_, lent) => matches!(self.types.kind(*lent), TyKind::Slice(_)),
             _ => false,
         }
     }
@@ -576,7 +576,7 @@ impl ValueBounds<'_> {
         let TyKind::Ref(_, lent) = self.types.kind(self.body.ty_of(*container)) else {
             panic!("an AsSlice's container {container:?} is a reference")
         };
-        match self.types.kind(lent.ty()) {
+        match self.types.kind(*lent) {
             TyKind::Array(_, len, _) => Some(i128::try_from(known_len(len)).expect("an array's length fits an i128")),
             _ => None,
         }

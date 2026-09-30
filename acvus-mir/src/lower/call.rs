@@ -6,7 +6,9 @@
 //! language's own (operators §2); a comparison and `.clone()` follow
 //! typeck's part tree (`part_tree`). A coercion is each step of its chain in
 //! order: a view through its impl as an `AsSlice` (operators §5), a
-//! declared cast or conversion as a call of its `via` (types §3, §7). An
+//! declared cast or conversion as a call of its `via` (types §3, §7), the
+//! step from a marked type to the same type unmarked as an `Unmark`
+//! (types §8). An
 //! effectful call goes through `push_effect`, bracketed by the contexts its
 //! effect touches (context §3).
 
@@ -19,7 +21,7 @@ use super::place::{lend, operand};
 use crate::ir::cfg::Op;
 use crate::ir::{Callee, UnaryOp, ValueId, fn_effect};
 use crate::ty::{Mutability, Reissue, Ty, TyKind};
-use crate::typeck::{Adjustment, Coercion, Impl};
+use crate::typeck::{Adjustment, Coercion, CoercionStep, Impl};
 
 /// `value`, written at `site`, coerced as typeck recorded there.
 pub(super) fn convert(cx: &mut Lcx<'_, '_>, site: AstId, value: ValueId, span: Span) -> ValueId {
@@ -40,6 +42,13 @@ pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, 
     let views = [core.as_slice, core.as_slice_mut, core.as_str];
     let mut at = value;
     for step in steps.iter() {
+        let step = match step {
+            CoercionStep::Via(step) => step,
+            CoercionStep::Unmark { to } => {
+                at = cx.builder.push(Op::Unmark { src: at }, *to, span);
+                continue;
+            }
+        };
         at = match views.contains(&step.via.declaration) {
             true => {
                 let TyKind::Ref(mutability, _) = cx.kind(step.to) else {

@@ -1,4 +1,4 @@
-use super::{Phase, TyId};
+use super::Phase;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LenTerm<V: Phase> {

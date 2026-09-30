@@ -368,6 +368,7 @@ macro_rules! walk_operands {
             }
             Op::StringClone { src }
             | Op::Cast { src, .. }
+            | Op::Unmark { src }
             | Op::TakeEffect { src }
             | Op::TestLiteral { src, .. }
             | Op::TestObjectKey { src, .. }
@@ -490,6 +491,7 @@ impl Op {
             | Op::BinOp { .. }
             | Op::UnaryOp { .. }
             | Op::Cast { .. }
+            | Op::Unmark { .. }
             | Op::LoadFunction { .. }
             | Op::FunctionCall { .. }
             | Op::Spawn { .. }
@@ -562,6 +564,7 @@ impl Op {
             | Op::FieldGet { .. }
             | Op::FieldSet { .. }
             | Op::Cast { .. }
+            | Op::Unmark { .. }
             | Op::LoadFunction { .. }
             | Op::FunctionCall { .. }
             | Op::Spawn { .. }

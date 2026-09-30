@@ -13,7 +13,7 @@ use crate::ir::cfg::edit::{DefDominatesUses, Invariant, NeverDiverges, OrderChai
 use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
 use crate::passes::analysis::{Loan, Mode, Storage};
-use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, TypeArg, Types};
+use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 use crate::typeck::{Inputs, Interfaces, check_script, check_template};
 
 struct Fixture {
@@ -58,7 +58,7 @@ impl Fixture {
     }
 
     fn reference(&mut self, mutability: Mutability, target: TyId<Poly>) -> TyId<Poly> {
-        self.ty(TyKind::Ref(mutability, TypeArg::Uniform(target)))
+        self.ty(TyKind::Ref(mutability, target))
     }
 
     fn function(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>, effect: Effect) -> TyId<Poly> {
@@ -148,9 +148,10 @@ impl Fixture {
     fn vec(&mut self, vec_id: QualifiedRef, element: TyId<Poly>) -> TyId<Poly> {
         self.ty(TyKind::UserDefined {
             id: vec_id,
-            type_args: Box::new([TypeArg::Uniform(element)]),
+            type_args: Box::new([element]),
             effect: None,
             identity: None,
+            marked: false,
         })
     }
 
@@ -972,6 +973,7 @@ fn a_declared_conversion_step_is_a_call_of_its_via() {
         type_args: Box::new([]),
         effect: None,
         identity: None,
+        marked: false,
     });
     let int = fx.int();
     let via_ty = fx.function(&[int], meters, Effect::pure());

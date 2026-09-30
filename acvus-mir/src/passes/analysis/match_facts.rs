@@ -214,7 +214,7 @@ impl<'m> Matches<'m> {
     fn variants(&self, value: ValueId) -> BTreeSet<Astr> {
         let types = self.operand_types.types;
         let tagged = match self.kind(value) {
-            TyKind::Ref(_, target) => types.kind(target.ty()),
+            TyKind::Ref(_, target) => types.kind(*target),
             other => other,
         };
         match tagged {

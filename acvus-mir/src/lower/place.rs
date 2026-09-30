@@ -92,7 +92,7 @@ pub(super) fn input_ty(cx: &Lcx<'_, '_>, name: acvus_utils::Astr) -> Ty {
     match home {
         Home::Slot(slot) => cx.value_ty(slot),
         Home::Through(reference) => match cx.kind(cx.value_ty(reference)) {
-            TyKind::Ref(_, target) => target.ty(),
+            TyKind::Ref(_, target) => *target,
             other => panic!("an input captured by reference is reached through a reference, not {other:?}"),
         },
     }
@@ -121,7 +121,7 @@ fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, ty:
     match object {
         Operand::Place(place) if is_ref(cx, place.ty) => {
             let TyKind::Ref(made, target) = cx.kind(place.ty) else { unreachable!("matched as a reference") };
-            let (made, target) = (*made, target.ty());
+            let (made, target) = (*made, *target);
             let least = match place.target {
                 RefTarget::Through(through) => match cx.kind(cx.value_ty(through)) {
                     TyKind::Ref(path, _) => made.least(*path),
@@ -151,7 +151,7 @@ fn part_ty(cx: &Lcx<'_, '_>, object: &Operand, field: acvus_utils::Astr) -> Ty {
         Operand::Value(value) => cx.value_ty(*value),
     };
     let held = match cx.kind(held) {
-        TyKind::Ref(_, target) => target.ty(),
+        TyKind::Ref(_, target) => *target,
         _ => held,
     };
     let fields = match cx.kind(held) {
@@ -173,14 +173,14 @@ pub(super) fn element_of<S: Slot>(cx: &Lcx<'_, '_>, container: &Expr<S>, callee_
     let sequence = match sequence(cx, held) {
         Sequence::Array => held,
         Sequence::ArrayReference | Sequence::Slice => match cx.kind(held) {
-            TyKind::Ref(_, target) => target.ty(),
+            TyKind::Ref(_, target) => *target,
             other => panic!("a reference to a sequence is a reference, not {other:?}"),
         },
         Sequence::Container => {
             let callee = cx.decided.callee(callee_site).expect("typeck records the `as_slice` it reached for an index");
             let TyKind::Fn { ret, .. } = cx.kind(callee) else { panic!("a reached callee is a function") };
             match cx.kind(*ret) {
-                TyKind::Ref(_, slice) => slice.ty(),
+                TyKind::Ref(_, slice) => *slice,
                 other => panic!("`as_slice` gives a reference to a slice, not {other:?}"),
             }
         }
@@ -201,7 +201,7 @@ pub(super) fn read_as(cx: &mut Lcx<'_, '_>, value: ValueId, ty: Ty, span: Span) 
     }
     match (cx.kind(held), cx.kind(ty)) {
         (TyKind::Ref(made, target), TyKind::Ref(wanted, _)) => {
-            let (made, target, wanted) = (*made, target.ty(), *wanted);
+            let (made, target, wanted) = (*made, *target, *wanted);
             reborrow(cx, value, made, target, wanted, span)
         }
         _ => panic!("a read differs from its place only as a weaker reborrow of a reference"),
@@ -232,7 +232,7 @@ pub(super) fn lend(cx: &mut Lcx<'_, '_>, operand: Operand, mutability: Mutabilit
         Operand::Value(value) => cx.value_ty(*value),
     };
     if let TyKind::Ref(made, target) = cx.kind(held) {
-        let (made, target) = (*made, target.ty());
+        let (made, target) = (*made, *target);
         let reference = read(cx, operand, span);
         return reborrow(cx, reference, made, target, mutability, span);
     }
@@ -355,7 +355,7 @@ enum Sequence {
 fn sequence(cx: &Lcx<'_, '_>, held: Ty) -> Sequence {
     match cx.kind(held) {
         TyKind::Array(..) => Sequence::Array,
-        TyKind::Ref(_, target) => match cx.kind(target.ty()) {
+        TyKind::Ref(_, target) => match cx.kind(*target) {
             TyKind::Array(..) => Sequence::ArrayReference,
             TyKind::Slice(_) => Sequence::Slice,
             _ => Sequence::Container,
@@ -413,7 +413,7 @@ fn as_mutability(cx: &mut Lcx<'_, '_>, reference: ValueId, mutability: Mutabilit
     let TyKind::Ref(made, target) = cx.kind(cx.value_ty(reference)) else {
         panic!("a reference-typed value is a reference")
     };
-    let (made, target) = (*made, target.ty());
+    let (made, target) = (*made, *target);
     reborrow(cx, reference, made, target, mutability, span)
 }
 
@@ -482,6 +482,6 @@ pub(super) fn lower_deref_store<S: Slot>(cx: &mut Lcx<'_, '_>, target: &Expr<S>,
     let TyKind::Ref(_, referent) = cx.kind(cx.value_ty(reference)) else {
         panic!("typeck admits `*r = v` only where `r` is a `&mut`")
     };
-    let ty = referent.ty();
+    let ty = *referent;
     assign(cx, Place { target: RefTarget::Through(reference), path: Vec::new(), ty }, stored, span);
 }

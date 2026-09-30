@@ -13,7 +13,7 @@ use crate::lower::lower_script;
 use crate::lower::required::clone_strings;
 use crate::passes::analysis::{AnalysisManager, Loans};
 use crate::ty::{
-    Alignment, Calls, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, Mutability, TyKind, TypeArg, Types,
+    Alignment, Calls, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, Mutability, TyKind, Types,
 };
 use crate::typeck::check_script;
 
@@ -166,7 +166,7 @@ fn lambda_returning_its_parameter(flows: Flows) -> Vec<crate::check::Refusal> {
     let names = Interner::new();
     let mut types = Types::new();
     let int = types.intern(TyKind::Int(IntTy::I64));
-    let ref_int = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+    let ref_int = types.intern(TyKind::Ref(Mutability::Shared, int));
     let signature = types.intern(TyKind::Fn {
         params: Box::new([ref_int]),
         ret: ref_int,

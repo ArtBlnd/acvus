@@ -136,7 +136,7 @@ pub(super) fn fire_compare(
         Some(structure) => Some(structure.parts().iter().map(|part| (part.key, part.ty)).collect()),
         None => match types.kind(operand.term) {
             TyKind::Ref(_, target) => {
-                let compare = Decision::Compare { node, span, sig, operand: target.ty(), body: body.clone() };
+                let compare = Decision::Compare { node, span, sig, operand: *target, body: body.clone() };
                 super::decision::decide(cx, compare);
                 return;
             }

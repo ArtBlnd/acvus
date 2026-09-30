@@ -59,12 +59,12 @@ fn push_segments_level(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>,
         TyKind::Var(var) => out.push(Segment::TypeVar(*var)),
         TyKind::Ref(_, target) => {
             out.push(Segment::Reference);
-            push_segments(poly, decls, target.ty(), out);
+            push_segments(poly, decls, *target, out);
         }
         TyKind::UserDefined { id, type_args, .. } => {
             out.extend(std::iter::repeat_n(Segment::Lifetime, decls.lifetimes_of(*id)));
             for arg in type_args {
-                push_segments(poly, decls, arg.ty(), out);
+                push_segments(poly, decls, *arg, out);
             }
         }
         TyKind::Array(element, _, _) | TyKind::Slice(element) | TyKind::Option(element, _) => {

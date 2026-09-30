@@ -78,7 +78,7 @@ fn taking(types: &Types<Poly>, param: TyId<Poly>, var: u32) -> Option<Taking> {
     let is_var = |ty: TyId<Poly>| matches!(types.kind(ty), TyKind::Var(at) if *at == var);
     match types.kind(param) {
         _ if is_var(param) => Some(Taking::Value),
-        TyKind::Ref(mutability, target) if is_var(target.ty()) => Some(Taking::Ref(*mutability)),
+        TyKind::Ref(mutability, target) if is_var(*target) => Some(Taking::Ref(*mutability)),
         _ => None,
     }
 }

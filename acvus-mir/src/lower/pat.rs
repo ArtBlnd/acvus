@@ -86,7 +86,7 @@ fn through(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> Matched {
     let TyKind::Ref(held, target) = cx.kind(matched.ty()) else {
         return matched.clone();
     };
-    let (held, target) = (*held, target.ty());
+    let (held, target) = (*held, *target);
     let (reference, lent) = match matched {
         Matched::Value { value, .. } => (*value, held),
         Matched::Held { place, slot_ty } => (held_reference(cx, place, *slot_ty, held, span), held),
@@ -466,7 +466,7 @@ struct SwitchPlan {
 /// default; `None` for any other.
 fn switch_plan<S: Slot>(cx: &Lcx<'_, '_>, scrutinee: Ty, arms: &[MatchExprArm<S>]) -> Option<SwitchPlan> {
     let tested = match cx.kind(scrutinee) {
-        TyKind::Ref(_, target) => target.ty(),
+        TyKind::Ref(_, target) => *target,
         _ => scrutinee,
     };
     let tagged = matches!(cx.kind(tested), TyKind::Option(.., _) | TyKind::Result(..) | TyKind::Enum { .. });

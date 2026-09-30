@@ -8,7 +8,7 @@ use super::*;
 use crate::ir::{BinOp, Callee, OrderEdge, Overflow, RefTarget, SwitchKey, UnaryOp, ValueId};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue,
-    SplitCost, Ty, TyKind, TypeArg, Types,
+    SplitCost, Ty, TyKind, Types,
 };
 
 struct Fixture {
@@ -159,8 +159,8 @@ fn every_value_is_born_typed() {
 fn a_reference_to_a_reference_is_refused() {
     let mut f = fixture();
     let (name, int) = (f.name("r"), f.int);
-    let inner = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
-    let outer = f.module.types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(inner)));
+    let inner = f.module.types.intern(TyKind::Ref(Mutability::Shared, int));
+    let outer = f.module.types.intern(TyKind::Ref(Mutability::Shared, inner));
     build(&mut f.module, false, f.int).param(name, outer, acvus_ast::Span::ZERO);
 }
 
@@ -689,8 +689,8 @@ fn intern_refuses_a_reference_to_a_reference() {
     let mut f = fixture();
     let int = f.int;
     let mut builder = build(&mut f.module, false, f.int);
-    let inner = builder.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
-    builder.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(inner)));
+    let inner = builder.intern(TyKind::Ref(Mutability::Shared, int));
+    builder.intern(TyKind::Ref(Mutability::Shared, inner));
 }
 
 // -- 5. Spawn and TakeEffect are made only together (effects §6) ---------

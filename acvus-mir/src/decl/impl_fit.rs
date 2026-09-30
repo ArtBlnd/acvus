@@ -3,7 +3,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::ty::{EffectTerm, IdentityTerm, LenTerm, ObjectTy, Poly, TyId, TyKind, TypeArg, Types};
+use crate::ty::{EffectTerm, IdentityTerm, LenTerm, ObjectTy, Poly, TyId, TyKind, Types};
 
 /// Whether `impl` is `generic` with each of the generic function's type,
 /// effect, length, identity and mark variables replaced by one choice.
@@ -19,7 +19,6 @@ pub(super) fn is_impl_of(types: &Types<Poly>, generic: TyId<Poly>, r#impl: TyId<
         effects: FxHashMap::default(),
         lens: FxHashMap::default(),
         identities: FxHashMap::default(),
-        marks: FxHashMap::default(),
         matched: FxHashSet::default(),
     };
     match (types.kind(generic), types.kind(r#impl)) {
@@ -57,15 +56,6 @@ pub(super) fn is_impl_of(types: &Types<Poly>, generic: TyId<Poly>, r#impl: TyId<
     }
 }
 
-/// The mark an argument carries, as a generic function's mark variable is
-/// chosen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mark {
-    Uniform,
-    Specialized,
-    Open(u32),
-}
-
 /// One choice of the generic function's variables, fixed as matching finds them.
 struct Choice<'t> {
     types: &'t Types<Poly>,
@@ -73,7 +63,6 @@ struct Choice<'t> {
     effects: FxHashMap<u32, EffectTerm<Poly>>,
     lens: FxHashMap<u32, LenTerm<Poly>>,
     identities: FxHashMap<u32, IdentityTerm<Poly>>,
-    marks: FxHashMap<u32, Mark>,
     /// Pairs already matched. A choice only grows, so a pair that matched
     /// once matches again, and a type read as a tree is matched once per
     /// shared part.
@@ -204,21 +193,24 @@ impl Choice<'_> {
                     type_args: a_types,
                     effect: a_effect,
                     identity: a_identity,
+                    marked: a_marked,
                 },
                 TyKind::UserDefined {
                     id: b_id,
                     type_args: b_types,
                     effect: b_effect,
                     identity: b_identity,
+                    marked: b_marked,
                 },
             ) => {
                 a_id == b_id
-                    && all_pairs(a_types, b_types, |a, b| self.type_arg(a, b))
+                    && a_marked == b_marked
+                    && all_pairs(a_types, b_types, |a, b| self.ty(*a, *b))
                     && all_pairs(a_effect.as_slice(), b_effect.as_slice(), |a, b| self.effect(a, b))
                     && all_pairs(a_identity.as_slice(), b_identity.as_slice(), |a, b| self.identity(a, b))
             }
             (TyKind::Ref(a_mutability, a), TyKind::Ref(b_mutability, b)) => {
-                a_mutability == b_mutability && self.type_arg(a, b)
+                a_mutability == b_mutability && self.ty(*a, *b)
             }
             (
                 TyKind::Handle(_)
@@ -235,20 +227,6 @@ impl Choice<'_> {
                 _,
             ) => false,
         }
-    }
-
-    fn type_arg(&mut self, generic: &TypeArg<Poly>, r#impl: &TypeArg<Poly>) -> bool {
-        let mark = match r#impl {
-            TypeArg::Uniform(_) => Mark::Uniform,
-            TypeArg::Specialized(_) => Mark::Specialized,
-            TypeArg::Open(var, _) => Mark::Open(*var),
-        };
-        let marks_fit = match generic {
-            TypeArg::Open(var, _) => choose(&mut self.marks, *var, mark),
-            TypeArg::Uniform(_) => mark == Mark::Uniform,
-            TypeArg::Specialized(_) => mark == Mark::Specialized,
-        };
-        marks_fit && self.ty(generic.ty(), r#impl.ty())
     }
 
     fn effect(&mut self, generic: &EffectTerm<Poly>, r#impl: &EffectTerm<Poly>) -> bool {

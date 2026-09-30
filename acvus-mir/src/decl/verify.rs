@@ -59,6 +59,16 @@ pub enum Refused {
     /// A declared type holds a reference whose target is a reference
     /// (types §4).
     ReferenceToReference { written: Written },
+    /// A declared type holds a marked extern-defined type with a type
+    /// variable in it: only a whole concrete type carries `#` (types §8).
+    MarkedOverTypeVariable { written: Written },
+    /// A declared type holds a marked type as a part of another type other
+    /// than as what a reference lends or as a function type's parameter or
+    /// result: no other type holds a marked one (types §8).
+    MarkedPart { written: Written },
+    /// A declared cast or a view from a marked type, or a reference to one:
+    /// a marked type's one step up is the same type unmarked (types §8).
+    CastFromMarked { via: QualifiedRef },
     /// A context's or an entry's declared type holds a type variable. A
     /// context is one value of one fixed type (context §2), and an entry is
     /// instantiated at the types the host declares for it (programs), so no
@@ -651,6 +661,14 @@ fn refuse_unwritable_types(
                 refused.push(refusal);
             }
         }
+        let marked_over_variable = terms.marked_over_variable.then_some(Refused::MarkedOverTypeVariable { written });
+        let marked_part = terms.marked_part.then_some(Refused::MarkedPart { written });
+        for refusal in marked_over_variable.into_iter().chain(marked_part) {
+            if !reported.contains(&refusal) {
+                reported.push(refusal.clone());
+                refused.push(refusal);
+            }
+        }
     }
     unreadable
 }
@@ -678,6 +696,10 @@ fn refuse_type_variables_in_value_types(
     }
 }
 
+fn is_marked(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
+    matches!(types.kind(ty), TyKind::UserDefined { marked: true, .. })
+}
+
 fn holds_type_variable(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
     let mut seen = FxHashSet::default();
     let mut stack = vec![ty];
@@ -694,14 +716,17 @@ fn holds_type_variable(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
 }
 
 /// What a type term names: every extern-defined type, each once, whether
-/// it holds a type only the IR writes, and whether it holds a reference to
-/// a reference.
+/// it holds a type only the IR writes, whether it holds a reference to a
+/// reference, and whether it holds a marked type over a type variable or
+/// as a part no marked type may be (types §8).
 #[derive(Default)]
 struct TypeTerms {
     seen: FxHashSet<TyId<Poly>>,
     named: Vec<QualifiedRef>,
     internal: bool,
     reference_to_reference: bool,
+    marked_over_variable: bool,
+    marked_part: bool,
 }
 
 impl TypeTerms {
@@ -714,12 +739,19 @@ impl TypeTerms {
             match kind {
                 TyKind::UserDefined { id, .. } if !self.named.contains(id) => self.named.push(*id),
                 TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) => self.internal = true,
-                TyKind::Ref(_, target) if matches!(types.kind(target.ty()), TyKind::Ref(..)) => {
+                TyKind::Ref(_, target) if matches!(types.kind(*target), TyKind::Ref(..)) => {
                     self.reference_to_reference = true
                 }
                 _ => {}
             }
-            kind.for_each_child(|child| self.read(types, child));
+            if is_marked(types, ty) && holds_type_variable(types, ty) {
+                self.marked_over_variable = true;
+            }
+            let holds_marked = matches!(kind, TyKind::Ref(..) | TyKind::Fn { .. });
+            kind.for_each_child(|child| {
+                self.marked_part |= !holds_marked && is_marked(types, child);
+                self.read(types, child)
+            });
         })
     }
 }
@@ -756,7 +788,7 @@ fn refuse_misfit_impls(
 /// reference to one of those.
 fn head(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Head> {
     match types.kind(ty) {
-        TyKind::Ref(mutability, target) => Some(Head::Ref(*mutability, base(types, target.ty())?)),
+        TyKind::Ref(mutability, target) => Some(Head::Ref(*mutability, base(types, *target)?)),
         _ => Some(Head::Base(base(types, ty)?)),
     }
 }
@@ -782,7 +814,7 @@ fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
         TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
-        TyKind::UserDefined { id, .. } => Base::Named(*id),
+        TyKind::UserDefined { id, marked, .. } => Base::Named { id: *id, marked: *marked },
         TyKind::Ref(..) => panic!(
             "a reference's target is never a reference (types §4): a rule with such an end is refused as \
              ReferenceToReference and left out of the tree"
@@ -836,6 +868,7 @@ fn cast_tree(
     let mut steps = Vec::new();
     for rule in rules {
         match rule.and_then(|rule| Step::of(types, rule)) {
+            Ok(step) if step.from.is_marked() => refused.push(Refused::CastFromMarked { via: step.rule.rule.via }),
             Ok(step) => steps.push(step),
             Err(refusal) => refused.push(refusal),
         }
@@ -893,7 +926,7 @@ fn refuse_vias_not_their_functions(
 /// (types §4).
 fn ends_in_reference_to_reference(types: &Types<Poly>, ends: [TyId<Poly>; 2]) -> bool {
     ends.into_iter().any(|end| match types.kind(end) {
-        TyKind::Ref(_, target) => matches!(types.kind(target.ty()), TyKind::Ref(..)),
+        TyKind::Ref(_, target) => matches!(types.kind(*target), TyKind::Ref(..)),
         _ => false,
     })
 }
@@ -1322,12 +1355,12 @@ fn push_written(types: &Types<Poly>, lifetimes: &dyn LifetimesOf, ty: TyId<Poly>
         TyKind::Var(_) => out.push(under_mut),
         TyKind::Ref(mutability, target) => {
             out.push(under_mut);
-            push_written(types, lifetimes, target.ty(), under_mut || *mutability == Mutability::Mut, out);
+            push_written(types, lifetimes, *target, under_mut || *mutability == Mutability::Mut, out);
         }
         TyKind::UserDefined { id, type_args, .. } => {
             out.extend(std::iter::repeat_n(under_mut, lifetimes.lifetimes_of(*id)));
             for arg in type_args {
-                push_written(types, lifetimes, arg.ty(), under_mut, out);
+                push_written(types, lifetimes, *arg, under_mut, out);
             }
         }
         TyKind::Array(element, _, _) | TyKind::Slice(element) | TyKind::Option(element, _) => {
@@ -1361,9 +1394,9 @@ mod tests {
 
     use super::*;
     use crate::decl::{
-        DeclaredFacts, EndLabels, GenericImplSig, ImplSig, Impls, LoopMarkers, Outlives, TyVarBound,
+        DeclaredFacts, EndLabels, GenericImplSig, ImplSig, Impls, LoopMarkers, Outlives, Step as TreeStep, TyVarBound,
     };
-    use crate::ty::{Calls, Effect, EffectTerm, IntTy, LenTerm, TypeArg};
+    use crate::ty::{Calls, Effect, EffectTerm, IntTy, LenTerm};
 
     struct Fixture {
         interner: Interner,
@@ -1400,7 +1433,7 @@ mod tests {
         }
 
         fn reference(&mut self, mutability: Mutability, target: TyId<Poly>) -> TyId<Poly> {
-            self.ty(TyKind::Ref(mutability, TypeArg::Uniform(target)))
+            self.ty(TyKind::Ref(mutability, target))
         }
 
         fn shared_str(&mut self) -> TyId<Poly> {
@@ -1422,6 +1455,7 @@ mod tests {
                 type_args: Box::new([]),
                 effect: None,
                 identity: None,
+                marked: false,
             })
         }
 
@@ -1716,9 +1750,11 @@ mod tests {
         let to = fixture.user_type(b, 0);
         fixture.cast(from, to, via);
         let decls = fixture.verify().expect("one step up is a tree");
-        let step = decls.casts().step_up(Head::Base(Base::Named(a))).expect("A steps up");
+        let Some(TreeStep::Cast(step)) = decls.casts().step_up(Head::Base(Base::Named { id: a, marked: false })) else {
+            panic!("A steps up by its cast");
+        };
         assert_eq!(step.rule().via, via);
-        assert!(decls.casts().step_up(Head::Base(Base::Named(b))).is_none());
+        assert!(decls.casts().step_up(Head::Base(Base::Named { id: b, marked: false })).is_none());
     }
 
     /// types §3, §7: a cast or a conversion is performed by its `via`, so
@@ -1794,7 +1830,7 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::TwoStepsUp {
-                head: Head::Base(Base::Named(a)),
+                head: Head::Base(Base::Named { id: a, marked: false }),
                 via: [to_b, to_c]
             }]
         );
@@ -1811,7 +1847,7 @@ mod tests {
         let b_ty = fixture.user_type(b, 0);
         fixture.cast(a_ty, b_ty, to_b);
         fixture.cast(b_ty, a_ty, to_a);
-        assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Base(Base::Named(a)) }]);
+        assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Base(Base::Named { id: a, marked: false }) }]);
     }
 
     /// types §3: a cast between two types of one head is a step from that
@@ -2221,15 +2257,13 @@ mod tests {
         fixture.give(core.as_slice, &[as_slice_at_vec]);
         fixture.give(core.as_str, &[as_str_at_string]);
         let decls = fixture.verify().expect("two views from two heads are a tree");
-        let from_vec = decls
-            .casts()
-            .step_up(Head::Ref(Mutability::Shared, Base::Named(vec)))
-            .expect("&Vec steps up");
+        let Some(TreeStep::Cast(from_vec)) = decls.casts().step_up(Head::Ref(Mutability::Shared, Base::Named { id: vec, marked: false })) else {
+            panic!("&Vec steps up by its view");
+        };
         assert_eq!(from_vec.rule().via, core.as_slice);
-        let from_string = decls
-            .casts()
-            .step_up(Head::Ref(Mutability::Shared, Base::String))
-            .expect("&String steps up");
+        let Some(TreeStep::Cast(from_string)) = decls.casts().step_up(Head::Ref(Mutability::Shared, Base::String)) else {
+            panic!("&String steps up by its view");
+        };
         assert_eq!(from_string.rule().via, core.as_str);
         assert!(decls.casts().step_up(Head::Ref(Mutability::Shared, Base::Slice)).is_none());
     }
@@ -2255,7 +2289,7 @@ mod tests {
         assert_eq!(
             refusals(fixture),
             vec![Refused::TwoStepsUp {
-                head: Head::Ref(Mutability::Shared, Base::Named(vec)),
+                head: Head::Ref(Mutability::Shared, Base::Named { id: vec, marked: false }),
                 via: [to_other, core.as_slice]
             }]
         );
@@ -2409,6 +2443,7 @@ mod tests {
             type_args: Box::new([]),
             effect: None,
             identity: None,
+            marked: false,
         })
     }
 
@@ -3071,7 +3106,7 @@ mod tests {
         let mut fixture = Fixture::new();
         let core = fixture.raw.core;
         let int = fixture.ty(TyKind::Int(IntTy::I64));
-        let shared = fixture.ty(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
+        let shared = fixture.ty(TyKind::Ref(Mutability::Shared, int));
         let ty = fixture.function(&[shared], shared);
         fixture.give(core.as_ref, &[ty]);
         assert_eq!(refusals(fixture), vec![Refused::TakesNoImpls { id: core.as_ref }]);
