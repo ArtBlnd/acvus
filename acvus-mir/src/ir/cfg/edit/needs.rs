@@ -86,7 +86,7 @@ pub trait OrderFacts: Facts {
 /// analysis proves, which lets it go (D55, general capability G1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unobserved {
-    /// A check never fires on any run that reaches it.
+    /// A checked bound never fires on any run that reaches it.
     NeverFires,
     /// A store whose value no read reaches.
     NeverRead,

@@ -45,7 +45,7 @@ mod tests {
     use super::*;
     use crate::ir::RefTarget;
     use crate::ir::cfg::{Op, Stages, Terminator};
-    use crate::passes::optimize::tests::{Fixture, assign, assert_whole, int_const, jump, ret, take, wrapping_add};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, assign, int_const, jump, ret, take};
     use crate::ty::Mutability;
 
     /// `x = 1; if c { x = 2 }; while c { x = x + 1 }; return x`, with `x` a
@@ -81,7 +81,7 @@ mod tests {
         builder.switch_to(loop_body);
         let read = builder.push(take(x), int, Span::ZERO);
         let step = builder.push(int_const(1), int, Span::ZERO);
-        let next = builder.push(wrapping_add(read, step), int, Span::ZERO);
+        let next = builder.push(add(read, step), int, Span::ZERO);
         builder.push_unit(assign(x, next), Span::ZERO);
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(exit);

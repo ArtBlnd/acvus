@@ -339,7 +339,7 @@ mod tests {
 
     use super::*;
     use crate::ir::cfg::{Inst, Terminator};
-    use crate::passes::optimize::tests::{Fixture, assert_whole, direct_call, int_const, ret, wrapping_add};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, direct_call, int_const, ret};
     use crate::ty::Ty;
 
     /// A body `two_calls` built, and the results of its two calls.
@@ -360,15 +360,15 @@ mod tests {
         let (int, name) = (f.int, f.name("f"));
         let mut builder = f.module.build_body(true, int);
         let a = builder.push(int_const(1), int, Span::ZERO);
-        let b = builder.push(wrapping_add(a, a), int, Span::ZERO);
-        let c = builder.push(wrapping_add(b, b), int, Span::ZERO);
-        let d = builder.push(wrapping_add(c, c), int, Span::ZERO);
+        let b = builder.push(add(a, a), int, Span::ZERO);
+        let c = builder.push(add(b, b), int, Span::ZERO);
+        let d = builder.push(add(c, c), int, Span::ZERO);
         let p = builder.push_effect(direct_call(name, with_argument, vec![d]), int, Span::ZERO);
         let q = builder.push_effect(direct_call(name, without, Vec::new()), int, Span::ZERO);
-        let r = builder.push(wrapping_add(q, q), int, Span::ZERO);
-        let s = builder.push(wrapping_add(r, r), int, Span::ZERO);
-        let u = builder.push(wrapping_add(s, s), int, Span::ZERO);
-        let v = builder.push(wrapping_add(u, p), int, Span::ZERO);
+        let r = builder.push(add(q, q), int, Span::ZERO);
+        let s = builder.push(add(r, r), int, Span::ZERO);
+        let u = builder.push(add(s, s), int, Span::ZERO);
+        let v = builder.push(add(u, p), int, Span::ZERO);
         builder.terminate(ret(v), acvus_ast::Span::ZERO);
         Built { id: builder.seal().expect("the body has no open state"), p, q }
     }
@@ -422,7 +422,7 @@ mod tests {
         let mut builder = f.module.build_body(true, int);
         let p = builder.push_effect(direct_call(name, commuting, Vec::new()), int, Span::ZERO);
         let q = builder.push_effect(direct_call(name, commuting, Vec::new()), int, Span::ZERO);
-        let sum = builder.push(wrapping_add(p, q), int, Span::ZERO);
+        let sum = builder.push(add(p, q), int, Span::ZERO);
         builder.terminate(ret(sum), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let before = f.snapshot(id);

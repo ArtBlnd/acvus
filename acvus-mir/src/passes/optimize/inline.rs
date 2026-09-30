@@ -233,7 +233,7 @@ mod tests {
 
     use super::*;
     use crate::ir::cfg::{Aspect, Inst, OrderUse, Terminator};
-    use crate::passes::optimize::tests::{Fixture, assert_whole, direct_call, ret, wrapping_add};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, direct_call, ret};
 
     fn calls(f: &Fixture, body: BodyId) -> usize {
         let insts = f.module.body(body).blocks().flat_map(|(_, block)| block.insts());
@@ -254,7 +254,7 @@ mod tests {
         let (int, closure_ty, na, nx) = (f.int, f.pure_unary, f.name("a"), f.name("x"));
         let mut builder = f.module.build_body(false, int);
         let x = builder.param(nx, int, acvus_ast::Span::ZERO);
-        let doubled = builder.push(wrapping_add(x, x), int, Span::ZERO);
+        let doubled = builder.push(add(x, x), int, Span::ZERO);
         builder.terminate(ret(doubled), acvus_ast::Span::ZERO);
         let callee = builder.seal().expect("the callee has no open state");
         let mut builder = f.module.build_body(false, int);
@@ -311,7 +311,7 @@ mod tests {
         let mut builder = f.module.build_body(true, int);
         let x = builder.param(nx, int, acvus_ast::Span::ZERO);
         let g = builder.push_effect(direct_call(ng, opaque, Vec::new()), int, Span::ZERO);
-        let doubled = builder.push(wrapping_add(x, x), int, Span::ZERO);
+        let doubled = builder.push(add(x, x), int, Span::ZERO);
         builder.terminate(ret(doubled), acvus_ast::Span::ZERO);
         let callee = builder.seal().expect("the callee has no open state");
         let mut builder = f.module.build_body(true, int);

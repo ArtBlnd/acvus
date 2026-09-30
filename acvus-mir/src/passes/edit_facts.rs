@@ -27,13 +27,12 @@ use crate::ir::cfg::edit::{
     Asked, ContentFacts, DischargeFacts, DominanceFacts, Facts, InstRef, LoanFacts, OrderFacts, Position, Unobserved,
 };
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Definition, InstId, Op, Site, Terminator};
-use crate::ir::{Checked, IndexBound, Intrinsic, PathSeg, RefTarget, ValueId, fn_effect};
+use crate::ir::{IndexBound, Intrinsic, PathSeg, RefTarget, ValueId, fn_effect};
 use crate::passes::analysis::{
     AffineValues, Analysis, AnalysisManager, ContentLiveness, Dominators, Escapes, IntervalValues, LoopTree, Loans,
     Point, PostDominators, Storage, TouchedPlace, ValueBounds,
 };
-use crate::passes::domain::{Bound, Interval, JoinSemiLattice};
-use crate::ty::{CastTy, Concrete, Ty, Types, positions};
+use crate::ty::{Concrete, Ty, Types, positions};
 
 pub struct EditFacts<'a, 'd> {
     am: &'a mut AnalysisManager<'d>,
@@ -277,7 +276,7 @@ impl DischargeFacts for EditFacts<'_, '_> {
         let types = asked.module().types();
         let decls = self.am.decls();
         let bounds = ValueBounds { intervals: &intervals, affine: &affine, decls, body, types };
-        let proven = Proven { body, types, loans: &loans, bounds };
+        let proven = Proven { body, loans: &loans, bounds };
         let fact = proven.unobserved(inst.id());
         self.unobserved.insert(inst.id(), fact);
         fact
@@ -324,15 +323,14 @@ fn point(at: Position) -> Point {
 /// What the facts prove an instruction of `body` unobservable from.
 struct Proven<'f> {
     body: &'f Body,
-    types: &'f Types<Concrete>,
     loans: &'f Loans,
     bounds: ValueBounds<'f>,
 }
 
 impl Proven<'_> {
     /// Whether a fact proves `inst` unobservable (D55, G1):
-    /// - a check whose condition the intervals show holds on every run
-    ///   that reaches it;
+    /// - an index bound whose check the intervals and combinations show
+    ///   holds on every run that reaches it;
     /// - a store whose storage no read reaches before a write replaces it
     ///   or the body ends, per the loans. A store on the order chain, a
     ///   volatile context's, is an effect and never proven: nothing merges
@@ -343,8 +341,6 @@ impl Proven<'_> {
     fn unobserved(&self, inst: InstId) -> Option<Unobserved> {
         let record = self.body.inst(inst);
         match record.op() {
-            Op::Check { op, left, right } => self.check_holds(*op, *left, *right).then_some(Unobserved::NeverFires),
-            Op::CheckSteps { from, step, count } => self.steps_hold(*from, *step, *count).then_some(Unobserved::NeverFires),
             Op::Index { slice, index, bound: IndexBound::Checked, .. }
             | Op::IndexSet { slice, index, bound: IndexBound::Checked, .. } => {
                 self.bounds.index_in_bounds(*slice, *index).then_some(Unobserved::NeverFires)
@@ -356,36 +352,6 @@ impl Proven<'_> {
         }
     }
 
-    /// Whether `left op right`, over the integers, fits the width the two
-    /// share on every run that reaches the check.
-    fn check_holds(&self, op: Checked, left: ValueId, right: ValueId) -> bool {
-        let (left_at, right_at) = (self.bounds.value_interval(left), self.bounds.value_interval(right));
-        let exact = match op {
-            Checked::Add => left_at.sum(&right_at),
-            Checked::Sub => left_at.difference(&right_at),
-            Checked::Mul => left_at.product(&right_at),
-        };
-        exact.le(&self.width_of(left))
-    }
-
-    /// Whether `from + count·step`, over the integers, fits the width `from`
-    /// and `step` share on every run that reaches the check; the value is
-    /// monotone in the steps, so every step fits where the last one does.
-    fn steps_hold(&self, from: ValueId, step: ValueId, count: ValueId) -> bool {
-        let [from_at, step_at, count_at] = [from, step, count].map(|value| self.bounds.value_interval(value));
-        from_at.sum(&count_at.product(&step_at)).le(&self.width_of(from))
-    }
-
-    /// Every integer of `value`'s width.
-    ///
-    /// # Panics
-    /// `value` is not of an integer type: a check's operands are.
-    fn width_of(&self, value: ValueId) -> Interval {
-        match CastTy::of_kind(self.types.kind(self.body.ty_of(value))) {
-            Some(CastTy::Int(width)) => Interval::Range { lo: Bound::Finite(width.min()), hi: Bound::Finite(width.max()) },
-            other => panic!("a check's operand {value:?} is of an integer type, not {other:?}"),
-        }
-    }
 }
 
 /// The storage and path an `Assign` names by name: a slot, a by-value
@@ -494,7 +460,7 @@ mod tests {
     use crate::decl::{ContextDecl, Core, Declarations, LoopMarkers, RawDeclarations};
     use crate::ir::cfg::edit::{Asked, CannotDischarge, CannotMove, Discharge, Editor, Motion, NoFacts, Remove, Value};
     use crate::ir::cfg::{Inst, Module, Terminator};
-    use crate::ir::{BinOp, Callee, Overflow, RefTarget};
+    use crate::ir::{BinOp, Callee, RefTarget};
     use crate::ty::{Mark, MarkTerm};
     use crate::ty::{
         Calls, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue, SplitCost,
@@ -576,7 +542,7 @@ mod tests {
     }
 
     fn add(left: ValueId, right: ValueId) -> Op {
-        Op::BinOp { op: BinOp::Add(Overflow::Trap), left, right }
+        Op::BinOp { op: BinOp::Add, left, right }
     }
 
     fn call(f: &Fixture, callee_ty: Ty) -> Op {
@@ -951,7 +917,7 @@ mod tests {
     }
 
     /// ```text
-    /// one = 1; s = one; s = one; t = s; check(one + one); return t
+    /// one = 1; s = one; s = one; t = s; return t
     /// ```
     /// with `s` a slot: the first store is replaced before any read, and the
     /// second is read.
@@ -965,11 +931,10 @@ mod tests {
         builder.push_unit(assign(s, one), Span::ZERO);
         builder.push_unit(assign(s, one), Span::ZERO);
         let t = builder.push(take(s), int, Span::ZERO);
-        builder.push_unit(Op::Check { op: crate::ir::Checked::Add, left: one, right: one }, Span::ZERO);
         builder.terminate(Terminator::Return { value: t, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
-        let [_, first, second, _, check] = inst_refs(&mut f.module, id)[..] else {
-            panic!("the body has five instructions")
+        let [_, first, second, _] = inst_refs(&mut f.module, id)[..] else {
+            panic!("the body has four instructions")
         };
         let decls = declarations(&f.interner);
         let mut am = AnalysisManager::new(&decls);
@@ -977,7 +942,6 @@ mod tests {
 
         assert_eq!(facts.discharged(Asked::new(&f.module, id), first), Some(Unobserved::NeverRead));
         assert_eq!(facts.discharged(Asked::new(&f.module, id), second), None, "the load of s reads it");
-        assert_eq!(facts.discharged(Asked::new(&f.module, id), check), Some(Unobserved::NeverFires), "1 + 1 fits an i64");
     }
 
     /// `s = 1; if c { t = s } else {}; return 0`: the store is read on one

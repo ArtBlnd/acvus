@@ -371,7 +371,7 @@ impl TypeCheck<'_> {
                 self.same(*value, at, "the field")?;
                 self.same(Self::result(inst)?, object_ty, "the object")
             }
-            Op::BinOp { op: BinOp::Shl(_) | BinOp::Shr(_), left, right } => {
+            Op::BinOp { op: BinOp::Shl | BinOp::Shr, left, right } => {
                 self.is_int(*left)?;
                 self.is_int(*right)?;
                 self.same(Self::result(inst)?, self.ty(*left), "the shifted value")
@@ -398,17 +398,8 @@ impl TypeCheck<'_> {
                         self.is_bool(*operand)?;
                         self.is_bool(result)
                     }
-                    UnaryOp::Neg(_) => self.same(result, self.ty(*operand), "the operand"),
+                    UnaryOp::Neg => self.same(result, self.ty(*operand), "the operand"),
                 }
-            }
-            Op::Check { left, right, .. } => {
-                self.is_int(*left)?;
-                self.same(*right, self.ty(*left), "the left operand")
-            }
-            Op::CheckSteps { from, step, count } => {
-                self.is_int(*from)?;
-                self.same(*step, self.ty(*from), "the start")?;
-                self.is_u64(*count)
             }
             Op::Cast { src, to } => {
                 self.is(*src, |kind| CastTy::of_kind(kind).is_some(), "an integer width, f64, char or bool")?;

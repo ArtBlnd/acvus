@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 use acvus_ast::Span;
 
 use crate::ir::cfg::{BodyId, Module, Op, Stages, Terminator};
-use crate::ir::{BinOp, Checked, Overflow, RefTarget, ValueId};
+use crate::ir::{BinOp, RefTarget, ValueId};
 use crate::passes::analysis::AnalysisManager;
-use crate::passes::optimize::tests::{Fixture, assign, declarations, int_const, jump, ret, take, wrapping_add};
+use crate::passes::optimize::tests::{Fixture, add, assign, declarations, int_const, jump, ret, take};
 use crate::passes::optimize::{
     Bce, BodyTransform, Commute, Dce, Dse, Gvn, Licm, Mem2Reg, Reborrow, Schedule, Sccp, SimplifyCfg, Sink, SplitCalls, Sroa,
 };
@@ -43,8 +43,8 @@ enum Shape {
 
 const SHAPES: [Shape; 3] = [Shape::StraightLine, Shape::NestedLoops, Shape::Diamonds];
 
-fn wrapping_mul(left: ValueId, right: ValueId) -> Op {
-    Op::BinOp { op: BinOp::Mul(Overflow::Wrap), left, right }
+fn mul(left: ValueId, right: ValueId) -> Op {
+    Op::BinOp { op: BinOp::Mul, left, right }
 }
 
 /// Builds `shape` with about `size` instructions as the module's only body.
@@ -70,24 +70,23 @@ fn build(f: &mut Fixture, shape: Shape, size: usize) -> BodyId {
             Shape::StraightLine => {
                 let k1 = builder.push(int_const(3), int, Span::ZERO);
                 let k2 = builder.push(int_const(4), int, Span::ZERO);
-                let folded = builder.push(wrapping_add(k1, k2), int, Span::ZERO);
-                let t = builder.push(wrapping_add(p, p), int, Span::ZERO);
-                let u = builder.push(wrapping_add(p, p), int, Span::ZERO);
-                builder.push(wrapping_mul(t, u), int, Span::ZERO);
+                let folded = builder.push(add(k1, k2), int, Span::ZERO);
+                let t = builder.push(add(p, p), int, Span::ZERO);
+                let u = builder.push(add(p, p), int, Span::ZERO);
+                builder.push(mul(t, u), int, Span::ZERO);
                 builder.push_unit(assign(s, t), Span::ZERO);
                 let read = builder.push(take(s), int, Span::ZERO);
                 builder.push_unit(assign(escaping, t), Span::ZERO);
                 builder.push_unit(assign(escaping, u), Span::ZERO);
                 let kept = builder.push(take(escaping), int, Span::ZERO);
-                builder.push_unit(Op::Check { op: Checked::Add, left: k1, right: k2 }, Span::ZERO);
                 let called = builder.push_effect(commuting.clone(), int, Span::ZERO);
                 builder.push_effect(commuting.clone(), int, Span::ZERO);
                 let started = builder.push_effect(splittable.clone(), int, Span::ZERO);
-                let sum = builder.push(wrapping_add(read, folded), int, Span::ZERO);
-                let sum = builder.push(wrapping_add(sum, kept), int, Span::ZERO);
-                let sum = builder.push(wrapping_add(sum, called), int, Span::ZERO);
-                let sum = builder.push(wrapping_add(sum, started), int, Span::ZERO);
-                acc = builder.push(wrapping_add(acc, sum), int, Span::ZERO);
+                let sum = builder.push(add(read, folded), int, Span::ZERO);
+                let sum = builder.push(add(sum, kept), int, Span::ZERO);
+                let sum = builder.push(add(sum, called), int, Span::ZERO);
+                let sum = builder.push(add(sum, started), int, Span::ZERO);
+                acc = builder.push(add(acc, sum), int, Span::ZERO);
                 made += 20;
             }
             Shape::NestedLoops => {
@@ -100,12 +99,12 @@ fn build(f: &mut Fixture, shape: Shape, size: usize) -> BodyId {
                     let stages = Stages::lowered(bodies[depth]);
                     builder.terminate(Terminator::While { cond: c, stages, exit: exits[depth], exit_args: Vec::new() }, Span::ZERO);
                     builder.switch_to(bodies[depth]);
-                    let invariant = builder.push(wrapping_add(p, p), int, Span::ZERO);
-                    let scaled = builder.push(wrapping_mul(invariant, p), int, Span::ZERO);
-                    let again = builder.push(wrapping_add(p, p), int, Span::ZERO);
+                    let invariant = builder.push(add(p, p), int, Span::ZERO);
+                    let scaled = builder.push(mul(invariant, p), int, Span::ZERO);
+                    let again = builder.push(add(p, p), int, Span::ZERO);
                     let current = builder.push(take(acc_slot), int, Span::ZERO);
-                    let next = builder.push(wrapping_add(current, scaled), int, Span::ZERO);
-                    let next = builder.push(wrapping_add(next, again), int, Span::ZERO);
+                    let next = builder.push(add(current, scaled), int, Span::ZERO);
+                    let next = builder.push(add(next, again), int, Span::ZERO);
                     builder.push_unit(assign(acc_slot, next), Span::ZERO);
                     builder.push_effect(commuting.clone(), int, Span::ZERO);
                     match depth {
@@ -121,7 +120,7 @@ fn build(f: &mut Fixture, shape: Shape, size: usize) -> BodyId {
                 made += 24;
             }
             Shape::Diamonds => {
-                let t = builder.push(wrapping_add(p, p), int, Span::ZERO);
+                let t = builder.push(add(p, p), int, Span::ZERO);
                 let [then_block, else_block] = [(); 2].map(|()| builder.new_block(&[]));
                 let join = builder.new_block(&[int]);
                 builder.terminate(
@@ -129,27 +128,27 @@ fn build(f: &mut Fixture, shape: Shape, size: usize) -> BodyId {
                     Span::ZERO,
                 );
                 builder.switch_to(then_block);
-                let again = builder.push(wrapping_add(p, p), int, Span::ZERO);
-                let a = builder.push(wrapping_add(t, again), int, Span::ZERO);
+                let again = builder.push(add(p, p), int, Span::ZERO);
+                let a = builder.push(add(t, again), int, Span::ZERO);
                 builder.push_effect(commuting.clone(), int, Span::ZERO);
                 builder.terminate(Terminator::Jump { to: join, args: vec![a] }, Span::ZERO);
                 builder.switch_to(else_block);
-                let b = builder.push(wrapping_mul(t, p), int, Span::ZERO);
-                builder.push(wrapping_mul(b, b), int, Span::ZERO);
+                let b = builder.push(mul(t, p), int, Span::ZERO);
+                builder.push(mul(b, b), int, Span::ZERO);
                 builder.terminate(Terminator::Jump { to: join, args: vec![b] }, Span::ZERO);
                 builder.switch_to(join);
                 let joined = builder.block_params(join)[0];
                 builder.push_unit(assign(s, joined), Span::ZERO);
                 let read = builder.push(take(s), int, Span::ZERO);
-                acc = builder.push(wrapping_add(acc, read), int, Span::ZERO);
+                acc = builder.push(add(acc, read), int, Span::ZERO);
                 made += 9;
             }
         }
     }
     let through = builder.push(Op::Take { target: RefTarget::Through(reference), path: Vec::new(), taken_out: false }, int, Span::ZERO);
     let carried = builder.push(take(acc_slot), int, Span::ZERO);
-    let last = builder.push(wrapping_add(acc, through), int, Span::ZERO);
-    let last = builder.push(wrapping_add(last, carried), int, Span::ZERO);
+    let last = builder.push(add(acc, through), int, Span::ZERO);
+    let last = builder.push(add(last, carried), int, Span::ZERO);
     builder.terminate(ret(last), Span::ZERO);
     builder.seal().expect("the body has no open state")
 }

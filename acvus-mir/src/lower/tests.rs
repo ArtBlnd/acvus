@@ -924,7 +924,7 @@ fn a_shift_amount_keeps_its_own_width() {
         .blocks()
         .flat_map(|(_, block)| block.insts())
         .find_map(|inst| match inst.op() {
-            Op::BinOp { op: crate::ir::BinOp::Shl(_), left, right } => Some((*left, *right)),
+            Op::BinOp { op: crate::ir::BinOp::Shl, left, right } => Some((*left, *right)),
             _ => None,
         });
     let Some((value, amount)) = shift else { panic!("a Shl: {}", shown(body)) };

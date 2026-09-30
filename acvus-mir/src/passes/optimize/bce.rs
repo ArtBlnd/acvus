@@ -1,20 +1,18 @@
 //! Bounds-check elimination, scope `Discharge`. SSA form in (F1), the same
 //! form out.
 //!
-//! Algorithm: every check, in block order, is offered to `discharge` (G1):
-//! the bound of a checked `Index` or `IndexSet`, a `Check` and a
-//! `CheckSteps`. `EditFacts` proves one `NeverFires` from `ValueBounds`, the
-//! reduced product of `IntervalValues` and `AffineValues`, whose calls read
-//! the declared Relations of their impls (extern-fn §3): a bound where the
-//! index is never negative and lies below the slice's length, by their
-//! intervals or by the length less the index as a combination, and a check
-//! where the exact result of its operation fits the operands' width. So
-//! `i < len(s)` holds for a `For` counter below `len(s)` whatever the
-//! length is (D66, D83). A checked bound becomes proven and stays where it
-//! is; a check goes.
+//! Algorithm: every checked bound, of an `Index` or an `IndexSet`, in block
+//! order, is offered to `discharge` (G1). `EditFacts` proves one
+//! `NeverFires` from `ValueBounds`, the reduced product of
+//! `IntervalValues` and `AffineValues`, whose calls read the declared
+//! Relations of their impls (extern-fn §3): a bound where the index is
+//! never negative and lies below the slice's length, by their intervals or
+//! by the length less the index as a combination. So `i < len(s)` holds
+//! for a `For` counter below `len(s)` whatever the length is (D66, D83). A
+//! checked bound becomes proven, and its instruction stays where it is.
 //!
-//! Cost: O(checks) discharges; each is judged alone, O(the symbols of the
-//! index's combination · the relations of a slice's impl), on
+//! Cost: O(checked bounds) discharges; each is judged alone, O(the symbols
+//! of the index's combination · the relations of a slice's impl), on
 //! `IntervalValues` and `AffineValues`, O(uses × widened height), and
 //! `Loans`, which a discharge before it made stale and the judgement
 //! computes again.
@@ -55,10 +53,7 @@ impl BodyTransform for Bce {
 fn is_check(body: &Body, inst: InstRef) -> bool {
     matches!(
         body.inst(inst.id()).op(),
-        Op::Check { .. }
-            | Op::CheckSteps { .. }
-            | Op::Index { bound: IndexBound::Checked, .. }
-            | Op::IndexSet { bound: IndexBound::Checked, .. }
+        Op::Index { bound: IndexBound::Checked, .. } | Op::IndexSet { bound: IndexBound::Checked, .. }
     )
 }
 
@@ -72,7 +67,7 @@ mod tests {
     use crate::decl::{Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
     use crate::decl::Declarations;
     use crate::ir::cfg::{BlockId, Inst, Stages, Terminator};
-    use crate::ir::{Callee, Checked, ExitTrip, ExternImpl, ForSource, IndexMode, RefTarget, ValueId};
+    use crate::ir::{Callee, ExitTrip, ExternImpl, ForSource, IndexMode, RefTarget, ValueId};
     use crate::ty::{
         Calls, Concrete, Effect, EffectTerm, FlowTerm, Holds, IntTy, LenTerm, Mutability, Poly, Ty, TyKind,
         Types,
@@ -245,7 +240,7 @@ mod tests {
                 let s = builder.param(interner.intern("s"), slice_ref, Span::ZERO);
                 let len = builder.push(Op::SliceLen { src: s }, index, Span::ZERO);
                 let one = builder.push(constant(1), index, Span::ZERO);
-                let add = Op::BinOp { op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap), left: len, right: one };
+                let add = Op::BinOp { op: crate::ir::BinOp::Add, left: len, right: one };
                 (s, builder.push(add, index, Span::ZERO))
             }
             SymbolicEnd::DeclaredLen => {
@@ -418,34 +413,6 @@ mod tests {
         run(&mut f, id);
 
         assert_eq!(index_bound(f.module.body(id)), IndexBound::Checked, "i may be 4, and the array holds 4");
-    }
-
-    /// `one = 1; two = 2; check one + two; check x + one; return x`, with
-    /// `x` a parameter: the first check never fires, the second may.
-    #[test]
-    fn a_check_proven_never_to_fire_goes() {
-        let mut f = fixture();
-        let int = f.int;
-        let name = Interner::new().intern("x");
-        let mut builder = f.module.build_body(false, int);
-        let x = builder.param(name, int, acvus_ast::Span::ZERO);
-        let one = builder.push(constant(1), int, Span::ZERO);
-        let two = builder.push(constant(2), int, Span::ZERO);
-        builder.push_unit(Op::Check { op: Checked::Add, left: one, right: two }, Span::ZERO);
-        builder.push_unit(Op::Check { op: Checked::Add, left: x, right: one }, Span::ZERO);
-        builder.terminate(ret(x), acvus_ast::Span::ZERO);
-        let id = builder.seal().expect("the body has no open state");
-
-        run(&mut f, id);
-
-        let checked: Vec<ValueId> = ops(f.module.body(id))
-            .into_iter()
-            .filter_map(|op| match op {
-                Op::Check { left, .. } => Some(*left),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(checked, vec![x], "only the check of x + 1 stays");
     }
 
     /// A discharged bound changes only the bound: every instruction and

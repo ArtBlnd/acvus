@@ -114,7 +114,7 @@ mod tests {
     use super::*;
     use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
     use crate::ir::cfg::{Aspect, Inst, Op};
-    use crate::ir::{BinOp, Overflow, ValueId};
+    use crate::ir::{BinOp, ValueId};
     use crate::ty::{Concrete, IntTy, Ty, TyKind, Types};
 
     struct Fixture {
@@ -192,7 +192,7 @@ mod tests {
         builder.terminate(jump(c, vec![q]), acvus_ast::Span::ZERO);
         builder.switch_to(c);
         let r = builder.block_params(c)[0];
-        let y = builder.push(Op::BinOp { op: BinOp::Add(Overflow::Trap), left: r, right: r }, int, Span::ZERO);
+        let y = builder.push(Op::BinOp { op: BinOp::Add, left: r, right: r }, int, Span::ZERO);
         builder.terminate(ret(y), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 

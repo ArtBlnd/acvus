@@ -17,7 +17,7 @@ use std::cmp::Ordering;
 
 use acvus_ast::Literal;
 
-use crate::ir::{BinOp, Overflow, UnaryOp};
+use crate::ir::{BinOp, UnaryOp};
 use crate::ty::CastTy;
 
 /// The lattice every engine runs over. `join` returns whether `self` grew,
@@ -136,13 +136,13 @@ enum Comparison {
 
 #[derive(Debug, Clone, Copy)]
 enum Arithmetic {
-    Add(Overflow),
-    Sub(Overflow),
-    Mul(Overflow),
+    Add,
+    Sub,
+    Mul,
     Div,
     Mod,
-    Shl(Overflow),
-    Shr(Overflow),
+    Shl,
+    Shr,
     BitAnd,
     BitOr,
     Xor,
@@ -161,13 +161,13 @@ impl Operation {
             BinOp::Gt => Operation::Compare(Comparison::Gt),
             BinOp::Lte => Operation::Compare(Comparison::Lte),
             BinOp::Gte => Operation::Compare(Comparison::Gte),
-            BinOp::Add(overflow) => Operation::Compute(Arithmetic::Add(overflow)),
-            BinOp::Sub(overflow) => Operation::Compute(Arithmetic::Sub(overflow)),
-            BinOp::Mul(overflow) => Operation::Compute(Arithmetic::Mul(overflow)),
+            BinOp::Add => Operation::Compute(Arithmetic::Add),
+            BinOp::Sub => Operation::Compute(Arithmetic::Sub),
+            BinOp::Mul => Operation::Compute(Arithmetic::Mul),
             BinOp::Div => Operation::Compute(Arithmetic::Div),
             BinOp::Mod => Operation::Compute(Arithmetic::Mod),
-            BinOp::Shl(overflow) => Operation::Compute(Arithmetic::Shl(overflow)),
-            BinOp::Shr(overflow) => Operation::Compute(Arithmetic::Shr(overflow)),
+            BinOp::Shl => Operation::Compute(Arithmetic::Shl),
+            BinOp::Shr => Operation::Compute(Arithmetic::Shr),
             BinOp::BitAnd => Operation::Compute(Arithmetic::BitAnd),
             BinOp::BitOr => Operation::Compute(Arithmetic::BitOr),
             BinOp::Xor => Operation::Compute(Arithmetic::Xor),

@@ -1481,7 +1481,7 @@ impl Forward<'_> {
                 self.read_through_if_reference(state, *src, site, record);
                 return none();
             }
-            Op::Check { .. } | Op::CheckSteps { .. } | Op::Drop { .. } => return None,
+            Op::Drop { .. } => return None,
             Op::StringAppend { target, .. } => {
                 let place = self.place_through(state, *target, &[]);
                 record.through(site, Reach::Write, &place, self.own(state, *target));
@@ -2068,8 +2068,6 @@ impl Forward<'_> {
             | Op::FieldSet { .. }
             | Op::BinOp { .. }
             | Op::UnaryOp { .. }
-            | Op::Check { .. }
-            | Op::CheckSteps { .. }
             | Op::Cast { .. }
             | Op::Unmark { .. }
             | Op::TakeEffect { .. }

@@ -5,7 +5,7 @@ use acvus_ast::{Literal, Span};
 use acvus_utils::{Interner, QualifiedRef};
 
 use super::*;
-use crate::ir::{BinOp, Callee, OrderEdge, Overflow, RefTarget, SwitchKey, UnaryOp, ValueId};
+use crate::ir::{BinOp, Callee, OrderEdge, RefTarget, SwitchKey, UnaryOp, ValueId};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability, Reissue,
     SplitCost, Ty, TyKind, Types,
@@ -94,11 +94,11 @@ fn diamond(cond: ValueId, then_to: BlockId, else_to: BlockId, join: BlockId) -> 
 }
 
 fn add(left: ValueId, right: ValueId) -> Op {
-    Op::BinOp { op: BinOp::Add(Overflow::Trap), left, right }
+    Op::BinOp { op: BinOp::Add, left, right }
 }
 
 fn neg(operand: ValueId) -> Op {
-    Op::UnaryOp { op: UnaryOp::Neg(Overflow::Trap), operand }
+    Op::UnaryOp { op: UnaryOp::Neg, operand }
 }
 
 fn result_of(inst: &Inst) -> ValueId {

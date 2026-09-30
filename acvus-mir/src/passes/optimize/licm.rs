@@ -143,7 +143,7 @@ mod tests {
     use super::*;
     use crate::ir::RefTarget;
     use crate::ir::cfg::{Builder, Op, Stages, Terminator};
-    use crate::passes::optimize::tests::{Fixture, assert_whole, int_const, jump, ret, trapping_add, wrapping_add};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, int_const, jump, ret, trapping_div};
     use crate::ty::Mutability;
 
     /// The values defined before the loop that the instruction under test
@@ -232,7 +232,7 @@ mod tests {
         let mut f = Fixture::new();
         let int = f.int;
         let Looped { id, loop_body, under_test: sum } =
-            loop_around(&mut f, |builder, outside| builder.push(wrapping_add(outside.a, outside.b), int, Span::ZERO));
+            loop_around(&mut f, |builder, outside| builder.push(add(outside.a, outside.b), int, Span::ZERO));
         let entry = f.module.body(id).entry();
 
         let changes = f.run::<Licm>(id);
@@ -256,7 +256,7 @@ mod tests {
         let mut f = Fixture::new();
         let int = f.int;
         let Looped { id, loop_body, under_test: sum } =
-            loop_around(&mut f, |builder, outside| builder.push(trapping_add(outside.a, outside.b), int, Span::ZERO));
+            loop_around(&mut f, |builder, outside| builder.push(trapping_div(outside.a, outside.b), int, Span::ZERO));
 
         f.run::<Licm>(id);
 
@@ -368,7 +368,7 @@ mod tests {
         builder.switch_to(header);
         builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
-        let sum = builder.push(wrapping_add(a, b), int, Span::ZERO);
+        let sum = builder.push(add(a, b), int, Span::ZERO);
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(exit);
         builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -401,7 +401,7 @@ mod tests {
                 int,
                 Span::ZERO,
             );
-            let next = builder.push(wrapping_add(loaded, a), int, Span::ZERO);
+            let next = builder.push(add(loaded, a), int, Span::ZERO);
             builder.push_unit(
                 Op::Assign { target: RefTarget::Through(x), path: Vec::new(), value: next, restores: false },
                 Span::ZERO,

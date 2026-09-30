@@ -592,7 +592,7 @@ mod tests {
     use crate::decl::declared::{Comparison, Relation, Term};
     use crate::decl::{Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
     use crate::ir::cfg::Stages;
-    use crate::ir::{BinOp, ExitTrip, Overflow};
+    use crate::ir::{BinOp, ExitTrip};
     use crate::passes::domain::Bound;
     use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Poly, Ty, TyId, TyKind};
 
@@ -667,10 +667,10 @@ mod tests {
         let a = builder.param(name, int, acvus_ast::Span::ZERO);
         let x = builder.push(constant(2), int, Span::ZERO);
         let y = builder.push(constant(3), int, Span::ZERO);
-        let z = builder.push(binary(BinOp::Add(Overflow::Trap), x, y), int, Span::ZERO);
-        let w = builder.push(binary(BinOp::Mul(Overflow::Trap), z, a), int, Span::ZERO);
+        let z = builder.push(binary(BinOp::Add, x, y), int, Span::ZERO);
+        let w = builder.push(binary(BinOp::Mul, z, a), int, Span::ZERO);
         let b = builder.push(constant(100), byte, Span::ZERO);
-        let o = builder.push(binary(BinOp::Add(Overflow::Trap), b, b), byte, Span::ZERO);
+        let o = builder.push(binary(BinOp::Add, b, b), byte, Span::ZERO);
         let r = builder.push(Op::Cast { src: z, to: CastTy::Int(IntTy::I8) }, byte, Span::ZERO);
         builder.terminate(ret(w), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
@@ -798,7 +798,7 @@ mod tests {
         }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let one = builder.push(constant(1), int, Span::ZERO);
-        let s1 = builder.push(binary(BinOp::Add(Overflow::Trap), s, one), int, Span::ZERO);
+        let s1 = builder.push(binary(BinOp::Add, s, one), int, Span::ZERO);
         builder.terminate(jump(header, vec![s1]), acvus_ast::Span::ZERO);
         builder.switch_to(exit);
         builder.terminate(ret(trip), acvus_ast::Span::ZERO);
@@ -957,7 +957,7 @@ mod tests {
             args: vec![a],
         };
         let r = builder.push(call, int, Span::ZERO);
-        let d = builder.push(binary(BinOp::Sub(Overflow::Trap), r, a), int, Span::ZERO);
+        let d = builder.push(binary(BinOp::Sub, r, a), int, Span::ZERO);
         builder.terminate(ret(d), Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 

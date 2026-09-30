@@ -12,7 +12,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::dominators::{DefPoint, Dominators, def_points};
 use super::*;
 use crate::ir::cfg::{Aspect, Builder, Inst, OrderUse, Stages, Terminator};
-use crate::ir::{BinOp, Callee, Checked, Overflow, RefTarget, UnaryOp};
+use crate::ir::{BinOp, Callee, RefTarget, UnaryOp};
 use crate::ir::{ForSource, SwitchKey};
 use crate::ty::{Mark, MarkTerm};
 use crate::ty::{
@@ -146,15 +146,16 @@ fn diamond(cond: ValueId, then_to: BlockId, else_to: BlockId, join: BlockId) -> 
 }
 
 fn add(left: ValueId, right: ValueId) -> Op {
-    Op::BinOp { op: BinOp::Add(Overflow::Trap), left, right }
+    Op::BinOp { op: BinOp::Add, left, right }
 }
 
 fn neg(operand: ValueId) -> Op {
-    Op::UnaryOp { op: UnaryOp::Neg(Overflow::Trap), operand }
+    Op::UnaryOp { op: UnaryOp::Neg, operand }
 }
 
-fn check_add(left: ValueId, right: ValueId) -> Op {
-    Op::Check { op: Checked::Add, left, right }
+/// `left / right`, which traps where `right` is zero (operators §1).
+fn div(left: ValueId, right: ValueId) -> Op {
+    Op::BinOp { op: BinOp::Div, left, right }
 }
 
 fn int_const(value: i128) -> Op {
@@ -390,7 +391,7 @@ fn straight_line(f: &mut Fixture) -> (BodyId, [ValueId; 4]) {
     (builder.seal().expect("the body has no open state"), [a, x, y, z])
 }
 
-/// An ordered body of one block: `r1 = f(); r2 = g(); check(a + a); return a`.
+/// An ordered body of one block: `r1 = f(); r2 = g(); q = a / a; return a`.
 fn two_calls(f: &mut Fixture, callee: Ty) -> (BodyId, ValueId) {
     let (name, int) = (f.name("a"), f.int);
     let (first, second) = (f.call(callee), f.call(callee));
@@ -398,7 +399,7 @@ fn two_calls(f: &mut Fixture, callee: Ty) -> (BodyId, ValueId) {
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
     builder.push_effect(first, int, at(1));
     builder.push_effect(second, int, at(2));
-    builder.push_unit(check_add(a, a), at(3));
+    builder.push(div(a, a), int, at(3));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     (builder.seal().expect("the body has no open state"), a)
 }
@@ -554,13 +555,13 @@ fn remove_refuses_an_opaque_call_and_a_call_that_writes() {
 }
 
 #[test]
-fn remove_refuses_a_check_a_store_and_an_idempotent_call() {
+fn remove_refuses_a_trap_a_store_and_an_idempotent_call() {
     let mut f = fixture();
     let (name, int, idempotent) = (f.name("a"), f.int, f.call(f.idempotent));
     let mut builder = f.build(true, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let x = builder.slot(int, at(0));
-    builder.push_unit(check_add(a, a), at(1));
+    builder.push(div(a, a), int, at(1));
     builder.push_unit(Op::Assign { target: RefTarget::Var(x), path: Vec::new(), value: a, restores: false }, at(2));
     builder.push_effect(idempotent, int, at(3));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -792,7 +793,7 @@ fn move_to_moves_an_instruction_whose_operands_dominate_its_new_place() {
     let mut editor = Editor::<Motion>::new(&mut f.module, id, &mut facts);
     assert_eq!(editor.move_to(inst_ref(editor.body(), entry, 2), Position::Before(inst_ref(editor.body(), entry, 0))), Ok(()));
     editor.finish();
-    assert!(matches!(f.insts(id, entry)[0].op(), Op::Check { left, .. } if *left == a));
+    assert!(matches!(f.insts(id, entry)[0].op(), Op::BinOp { op: BinOp::Div, left, .. } if *left == a));
 }
 
 #[test]
@@ -802,7 +803,7 @@ fn move_to_refuses_a_place_an_operand_does_not_dominate() {
     let mut builder = f.build(false, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let x = builder.push(add(a, a), int, at(1));
-    builder.push_unit(check_add(x, a), at(2));
+    builder.push(div(x, a), int, at(2));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let entry = entry_of(&f, id);
@@ -910,7 +911,7 @@ fn hoisting_a_pure_value_that_never_traps_out_of_a_loop_succeeds() {
 #[test]
 fn hoisting_a_trapping_value_out_of_a_loop_is_refused() {
     let mut f = fixture();
-    let (id, loop_body) = loop_computing(&mut f, add);
+    let (id, loop_body) = loop_computing(&mut f, div);
     let entry = entry_of(&f, id);
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
@@ -928,7 +929,7 @@ fn a_split_calls_start_and_taking_move_while_their_tokens_still_dominate() {
     let mut builder = f.build(true, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
     builder.push_effect(call, int, at(1));
-    builder.push_unit(check_add(a, a), at(2));
+    builder.push(div(a, a), int, at(2));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let entry = entry_of(&f, id);
@@ -943,7 +944,7 @@ fn a_split_calls_start_and_taking_move_while_their_tokens_still_dominate() {
     assert_eq!(editor.move_to(inst_ref(editor.body(), entry, 0), Position::Before(inst_ref(editor.body(), entry, 2))), Ok(()));
     editor.finish();
     let ops: Vec<&Op> = f.insts(id, entry).into_iter().map(Inst::op).collect();
-    assert!(matches!(ops[..], [Op::Check { .. }, Op::Spawn { .. }, Op::TakeEffect { .. }]), "{ops:?}");
+    assert!(matches!(ops[..], [Op::BinOp { op: BinOp::Div, .. }, Op::Spawn { .. }, Op::TakeEffect { .. }]), "{ops:?}");
 }
 
 // -- split_call --------------------------------------------------------------
@@ -1441,7 +1442,7 @@ fn shifting(f: &mut Fixture, amount: Ty, result: Ty) -> BodyId {
     let byte = builder.intern(TyKind::Int(IntTy::U8));
     let a = builder.param(na, byte, at(0));
     let n = builder.param(nn, amount, at(0));
-    builder.push(Op::BinOp { op: BinOp::Shl(Overflow::Trap), left: a, right: n }, result, at(1));
+    builder.push(Op::BinOp { op: BinOp::Shl, left: a, right: n }, result, at(1));
     let zero = builder.push(Op::Const { value: Literal::Int(0) }, int, at(2));
     builder.terminate(ret(zero), Span::ZERO);
     builder.seal().expect("the body has no open state")
@@ -1992,13 +1993,12 @@ fn swap_refuses_a_call_that_reads_the_others_result() {
 
 // -- G1: discharge -------------------------------------------------------------
 
-/// `check(a + a); s = a; s = a; return a`, with `s` a slot.
+/// `s = a; s = a; return a`, with `s` a slot.
 fn dischargeable(f: &mut Fixture) -> BodyId {
     let (name, int) = (f.name("a"), f.int);
     let mut builder = f.build(true, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let s = builder.slot(int, at(0));
-    builder.push_unit(check_add(a, a), at(1));
     builder.push_unit(assign(s, a), at(2));
     builder.push_unit(assign(s, a), at(3));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -2006,17 +2006,16 @@ fn dischargeable(f: &mut Fixture) -> BodyId {
 }
 
 #[test]
-fn discharge_removes_a_check_and_dead_stores() {
+fn discharge_removes_dead_stores() {
     let mut f = fixture();
     let id = dischargeable(&mut f);
     let entry = entry_of(&f, id);
     let mut facts = TestFacts::of(&f.module, id);
-    let facts_of = [Unobserved::NeverFires, Unobserved::NeverRead, Unobserved::NeverRead];
-    for (index, fact) in facts_of.into_iter().enumerate() {
-        facts.unobserved.insert(inst_ref(f.body(id), entry, index), fact);
+    for index in 0..2 {
+        facts.unobserved.insert(inst_ref(f.body(id), entry, index), Unobserved::NeverRead);
     }
     let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
-    for index in (0..3).rev() {
+    for index in (0..2).rev() {
         assert_eq!(editor.discharge(inst_ref(editor.body(), entry, index)), Ok(()), "instruction {index}");
     }
     let changes = editor.finish();
@@ -2031,19 +2030,17 @@ fn discharge_refuses_without_a_fact_and_with_the_wrong_fact() {
     let entry = entry_of(&f, id);
     let before = snapshot(f.body(id));
     let mut facts = TestFacts::of(&f.module, id);
-    facts.unobserved.insert(inst_ref(f.body(id), entry, 0), Unobserved::NeverRead);
-    facts.unobserved.insert(inst_ref(f.body(id), entry, 1), Unobserved::NeverFires);
+    facts.unobserved.insert(inst_ref(f.body(id), entry, 0), Unobserved::NeverFires);
     let mut editor = Editor::<Discharge>::new(&mut f.module, id, &mut facts);
-    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 0)), Err(CannotDischarge::WrongFact), "a check needs NeverFires");
-    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 1)), Err(CannotDischarge::WrongFact), "a store needs NeverRead");
-    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 2)), Err(CannotDischarge::NotProven));
+    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 0)), Err(CannotDischarge::WrongFact), "a store needs NeverRead");
+    assert_eq!(editor.discharge(inst_ref(editor.body(), entry, 1)), Err(CannotDischarge::NotProven));
     editor.finish();
     assert_eq!(snapshot(f.body(id)), before);
     assert!(facts.refreshed.is_empty());
 }
 
 #[test]
-#[should_panic(expected = "discharge removes a check or a store")]
+#[should_panic(expected = "discharge proves a checked bound or removes a store")]
 fn discharging_another_kind_is_a_callers_defect() {
     let mut f = fixture();
     let (id, _) = straight_line(&mut f);

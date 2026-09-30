@@ -12,7 +12,7 @@ use super::*;
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Edge, Inst, Module, Op, Stages, Terminator};
 use crate::ir::cfg::Site;
-use crate::ir::{BinOp, Callee, ExitTrip, ForSource, Overflow, PathSeg, RefTarget, UnaryOp, ValueId};
+use crate::ir::{BinOp, Callee, ExitTrip, ForSource, PathSeg, RefTarget, UnaryOp, ValueId};
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
 use crate::ty::{
     Alignment, Calls, CastTy, Contexts, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability,
@@ -70,7 +70,7 @@ fn binary(op: BinOp, left: ValueId, right: ValueId) -> Op {
 }
 
 fn add(left: ValueId, right: ValueId) -> Op {
-    binary(BinOp::Add(Overflow::Trap), left, right)
+    binary(BinOp::Add, left, right)
 }
 
 fn jump(to: BlockId, args: Vec<ValueId>) -> Terminator {
@@ -202,7 +202,7 @@ impl ValueDomain for ConstDomain {
     fn binary(&self, op: BinOp, _ty: CastTy, left: &Const, right: &Const) -> Const {
         match (op, left, right) {
             (_, Const::Bottom, _) | (_, _, Const::Bottom) => Const::Bottom,
-            (BinOp::Add(_), Const::Int(a), Const::Int(b)) => a.checked_add(*b).map_or(Const::Top, Const::Int),
+            (BinOp::Add, Const::Int(a), Const::Int(b)) => a.checked_add(*b).map_or(Const::Top, Const::Int),
             (BinOp::Lt, Const::Int(a), Const::Int(b)) => Const::Bool(a < b),
             _ => Const::Top,
         }
@@ -212,7 +212,7 @@ impl ValueDomain for ConstDomain {
         match (op, operand) {
             (_, Const::Bottom) => Const::Bottom,
             (UnaryOp::Not, Const::Bool(b)) => Const::Bool(!b),
-            (UnaryOp::Neg(_), Const::Int(n)) => n.checked_neg().map_or(Const::Top, Const::Int),
+            (UnaryOp::Neg, Const::Int(n)) => n.checked_neg().map_or(Const::Top, Const::Int),
             _ => Const::Top,
         }
     }
@@ -544,7 +544,7 @@ impl ValueDomain for BoundDomain {
     fn binary(&self, op: BinOp, _ty: CastTy, left: &Bound, right: &Bound) -> Bound {
         match (op, left, right) {
             (_, Bound::Bottom, _) | (_, _, Bound::Bottom) => Bound::Bottom,
-            (BinOp::Add(_), Bound::AtMost(a), Bound::AtMost(b)) => {
+            (BinOp::Add, Bound::AtMost(a), Bound::AtMost(b)) => {
                 a.checked_add(*b).map_or(Bound::Unbounded, Bound::AtMost)
             }
             _ => Bound::Unbounded,

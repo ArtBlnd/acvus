@@ -1140,10 +1140,9 @@ where
     S::Needs<'m>: DischargeFacts,
 {
     /// G1: discharges what the core would keep, on the fact that proves it
-    /// unobservable: a check on `NeverFires`, a store (`Assign`) on
-    /// `NeverRead`. A `Check` or `CheckSteps` is removed; an `Index` or
-    /// `IndexSet` whose bound is checked keeps its place, and its bound
-    /// becomes proven; a store is removed. The body is unchanged on a
+    /// unobservable: a checked bound on `NeverFires`, a store (`Assign`) on
+    /// `NeverRead`. An `Index` or `IndexSet` whose bound is checked keeps
+    /// its place, and its bound becomes proven; a store is removed. The body is unchanged on a
     /// refusal.
     ///
     /// # Panics
@@ -1155,10 +1154,9 @@ where
             Op::Index { bound: IndexBound::Checked, .. } | Op::IndexSet { bound: IndexBound::Checked, .. }
         );
         let needed = match self.inst(inst).op() {
-            Op::Check { .. } | Op::CheckSteps { .. } => Unobserved::NeverFires,
             _ if checked_bound => Unobserved::NeverFires,
             Op::Assign { .. } => Unobserved::NeverRead,
-            other => panic!("discharge removes a check or a store, not {other:?}"),
+            other => panic!("discharge proves a checked bound or removes a store, not {other:?}"),
         };
         let asked = Asked::new(self.module, self.body);
         match self.needs.discharged(asked, inst) {

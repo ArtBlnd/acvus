@@ -135,8 +135,8 @@ fn fold(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{BinOp, Overflow};
-    use crate::passes::optimize::tests::{Fixture, assert_whole, bool_const, int_const, ret, trapping_add};
+    use crate::ir::{BinOp};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, bool_const, int_const, ret};
 
     /// `a = 1; b = 2; c = a + b; d = c * c; return d`: `d` is 9.
     #[test]
@@ -146,8 +146,8 @@ mod tests {
         let mut builder = f.module.build_body(false, int);
         let a = builder.push(int_const(1), int, Span::ZERO);
         let b = builder.push(int_const(2), int, Span::ZERO);
-        let c = builder.push(trapping_add(a, b), int, Span::ZERO);
-        let d = builder.push(Op::BinOp { op: BinOp::Mul(Overflow::Trap), left: c, right: c }, int, Span::ZERO);
+        let c = builder.push(add(a, b), int, Span::ZERO);
+        let d = builder.push(Op::BinOp { op: BinOp::Mul, left: c, right: c }, int, Span::ZERO);
         builder.terminate(ret(d), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
@@ -272,15 +272,15 @@ mod tests {
         assert_whole(&f.module, id);
     }
 
-    /// `a = 100i8; b = a + a; return b`: the addition traps, so it is no
-    /// constant and stays.
+    /// `a = 100i8; b = a + a; return b`: the addition overflows, which is
+    /// undefined, so it is no constant and stays.
     #[test]
-    fn a_trapping_addition_is_not_folded() {
+    fn an_overflowing_addition_is_not_folded() {
         let mut f = Fixture::new();
         let i8 = f.i8;
         let mut builder = f.module.build_body(false, i8);
         let a = builder.push(int_const(100), i8, Span::ZERO);
-        let b = builder.push(trapping_add(a, a), i8, Span::ZERO);
+        let b = builder.push(add(a, a), i8, Span::ZERO);
         builder.terminate(ret(b), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let before = f.snapshot(id);

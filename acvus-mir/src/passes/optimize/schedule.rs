@@ -213,7 +213,7 @@ mod tests {
 
     use super::*;
     use crate::ir::cfg::{Inst, OrderUse};
-    use crate::passes::optimize::tests::{Fixture, assert_whole, int_const, ret, wrapping_add};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, int_const, ret};
 
     /// ```text
     /// a = 1; x = f(); b = 2; c = b + b; d = c + c; y = f();
@@ -229,12 +229,12 @@ mod tests {
         let a = builder.push(int_const(1), int, Span::ZERO);
         let x = builder.push_effect(opaque_call.clone(), int, Span::ZERO);
         let b = builder.push(int_const(2), int, Span::ZERO);
-        let c = builder.push(wrapping_add(b, b), int, Span::ZERO);
-        let d = builder.push(wrapping_add(c, c), int, Span::ZERO);
+        let c = builder.push(add(b, b), int, Span::ZERO);
+        let d = builder.push(add(c, c), int, Span::ZERO);
         let y = builder.push_effect(opaque_call, int, Span::ZERO);
-        let e = builder.push(wrapping_add(d, a), int, Span::ZERO);
-        let g = builder.push(wrapping_add(e, x), int, Span::ZERO);
-        let h = builder.push(wrapping_add(g, y), int, Span::ZERO);
+        let e = builder.push(add(d, a), int, Span::ZERO);
+        let g = builder.push(add(e, x), int, Span::ZERO);
+        let h = builder.push(add(g, y), int, Span::ZERO);
         builder.terminate(ret(h), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();
