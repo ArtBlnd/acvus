@@ -49,7 +49,7 @@ A generic function is a name with a polymorphic type and no body. A declaration 
 
 ## 7. Conversions
 
-A declaration may be a cast from its parameter's type to its result's type, which is a step up in the order of types §3, or a conversion, which is no part of that order; a type may have several conversions (types §7).
+A declaration may be a cast from its parameter's type to its result's type, which is a step up in the tree of types §3, or a conversion, which is no part of that tree; a type may have several conversions (types §7).
 
 ## 8. Types an extern fn defines
 
