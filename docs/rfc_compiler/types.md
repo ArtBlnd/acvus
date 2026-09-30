@@ -68,7 +68,7 @@ The coercion makes a value of the slot's type. No type becomes a subtype of anot
 
 ## 5. Defaults
 
-Defaults apply only where nothing more can be decided. A type variable nothing constrains is `!`, an effect nothing constrains is opaque, a function type's flows nothing decides state every flow (as a declaration's default does, extern fn §4), a function value's loans nothing decides are none and how often it may be called is many (functions §3), and an argument whose `#` nothing decides is not specialized. A variable a bound constrains and no use answers is refused. An unsuffixed integer literal is `i64` where no use decides its width.
+Defaults apply only where nothing more can be decided. A type variable nothing constrains is `!`, an effect nothing constrains is opaque, a function type's flows nothing decides state every flow (as a declaration's default does, extern fn §4), a function value's loans nothing decides are none and how often it may be called is many (functions §3), and a type whose `#` nothing decides is not specialized. A variable a bound constrains and no use answers is refused. An unsuffixed integer literal is `i64` where no use decides its width.
 
 ## 6. Deciding by type
 
@@ -86,4 +86,4 @@ Where a value's type is not the type its slot asks for and no subtyping relates 
 
 ## 8. Specialization
 
-A type argument may carry `#`, the mark that it can always be specialized; an argument without it is never specialized. `#τ` and `τ` are different types, and `#τ` is below `τ`, apart from the tree of §3: each type argument is ordered on its own, marked below unmarked, so a type whose arguments carry `#` is below the same type with any of them unmarked, and a value of `F<#τ>` is one of `F<τ>` unchanged, never the reverse. Where values meet, their constructors meet in the tree of §3, and each type argument then takes the higher of its marks. A cast applies to the type its pattern writes, marks included: `F<#A>` is not `F<T>`, so a value of `F<#A>` reaches a cast from `F<T>` only after stepping up to `F<A>`, and the cast gives what its result's pattern writes. `#` stands only at the root of a type argument: `T<#(X, Y)>` is a type, `T<(X, #Y)>` is not.
+An extern-defined type may carry `#`, the mark that it can always be specialized, at its root: `#F<A>` is a type of its own, as distinct from `F<A>` as two types of different names, optimized whole and never part of another type. It is written in a declaration's signature as any type is, and stands only as the type of a binding, of a parameter or a result, a function type's included, or as what a reference lends. No other type carries `#`, and no other type holds a marked one: `Vec<#F<A>>`, `F<#A>`, a tuple, an object or an enum with a marked part, and a marked tuple, object or enum are not types. Its one step up in the tree of §3 is `F<A>`: a value of `#F<A>` is one of `F<A>` unchanged, never the reverse, and a cast from `F<T>` reaches it only after that step.
