@@ -1,6 +1,5 @@
 //! The facts no type can carry (runtime contract §4, safety §2).
 
-use crate::runtime::Crosses;
 
 /// S1: storage a shared guard lends keeps its address, and is written only
 /// under an exclusive loan, until the checker's loan ends, after the guard
