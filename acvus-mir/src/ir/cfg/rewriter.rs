@@ -5,7 +5,7 @@ use acvus_ast::Span;
 use smallvec::SmallVec;
 
 use super::aspect::{Aspect, Changes};
-use super::body::{BlockId, Body, BodyId, Def, Inst, InstId, Module, Site};
+use super::body::{BlockId, Body, BodyId, Def, Head, Inst, InstId, Module, Rebind, Site};
 use super::core::{InstShift, StillUsed};
 use super::op::Op;
 use super::order::At;
@@ -104,7 +104,7 @@ impl<'m> Rewriter<'m> {
         }
     }
 
-    /// Every edge into `from`, every `Diamond` join and loop stage and exit
+    /// Every edge into `from`, every `Diamond` join and loop body and exit
     /// naming it, and the entry if it is `from`, name `to` instead; `from`'s
     /// parameters agree with `to`'s, so every edge still agrees with its
     /// target. Cost: O(the body's terminators).
@@ -179,6 +179,32 @@ impl<'m> Rewriter<'m> {
             self.changes.record(aspect);
         }
         shifts
+    }
+
+    /// The loop ending `header` takes `head`, and the parameters the old
+    /// head supplied give way as `rebind` names. Cost:
+    /// `Body::set_loop_head`'s.
+    ///
+    /// # Panics
+    /// As `Body::set_loop_head`.
+    pub fn set_loop_head(&mut self, header: BlockId, head: Head, rebind: &[Rebind]) -> Vec<ValueId> {
+        let module = &mut *self.module;
+        let made = module.bodies[self.body.0 as usize].set_loop_head(&mut module.types, header, head, rebind);
+        self.changes.record(Aspect::CfgShape);
+        self.changes.record(Aspect::Instructions);
+        made
+    }
+
+    /// A new last parameter of `block`, filled on each named edge. Cost:
+    /// `Body::add_block_param`'s.
+    ///
+    /// # Panics
+    /// As `Body::add_block_param`.
+    pub fn add_block_param(&mut self, block: BlockId, ty: Ty, incoming: &[(BlockId, usize, ValueId)]) -> ValueId {
+        let module = &mut *self.module;
+        let param = module.bodies[self.body.0 as usize].add_block_param(&module.types, block, ty, incoming);
+        self.changes.record(Aspect::Instructions);
+        param
     }
 
     /// `block`'s two-way branch becomes a jump into one arm. Cost:

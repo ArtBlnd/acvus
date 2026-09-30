@@ -39,7 +39,7 @@ use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Module};
 use crate::ir::ValueId;
 use crate::passes::analysis::{AnalysisManager, Dominators, LoopId, LoopTree};
 use crate::passes::edit_facts::EditFacts;
-use crate::passes::optimize::{BodyTransform, dominator_preorder, union_of};
+use crate::passes::optimize::{BodyTransform, dominator_preorder, inner_first, union_of};
 
 pub struct Licm;
 
@@ -96,14 +96,6 @@ fn entering_blocks(body: &Body, loops: &LoopTree, of: LoopId, header: BlockId) -
     preds[&header].iter().copied().filter(|pred| !loops.contains(of, *pred)).collect()
 }
 
-/// Every loop, the deepest first.
-fn inner_first(loops: &LoopTree) -> Vec<LoopId> {
-    let depth = |of: LoopId| std::iter::successors(Some(of), |at| loops.parent(*at)).count();
-    let mut ordered: Vec<LoopId> = loops.loops().collect();
-    ordered.sort_by_key(|of| std::cmp::Reverse(depth(*of)));
-    ordered
-}
-
 /// Offers every invariant instruction of `block` a move to the end of
 /// `preheader`, in the block's order. A move only takes an instruction out
 /// of `block`, so the instructions it held when the walk began are the ones
@@ -142,8 +134,8 @@ mod tests {
 
     use super::*;
     use crate::ir::RefTarget;
-    use crate::ir::cfg::{Builder, Op, Stages, Terminator};
-    use crate::passes::optimize::tests::{Fixture, assert_whole, int_const, jump, ret, trapping_add, wrapping_add};
+    use crate::ir::cfg::{Builder, Op, Terminator};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, int_const, jump, ret, trapping_div};
     use crate::ty::Mutability;
 
     /// The values defined before the loop that the instruction under test
@@ -199,7 +191,7 @@ mod tests {
             else_args: Vec::new(),
         }, acvus_ast::Span::ZERO);
         builder.switch_to(header);
-        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+        builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
         let under_test = inside(&mut builder, &Outside { a, b, x, text });
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
@@ -217,7 +209,7 @@ mod tests {
         let header = body
             .blocks()
             .find_map(|(block, record)| match record.terminator() {
-                Terminator::While { stages, .. } if stages.body() == loop_body => Some(block),
+                Terminator::While { body, .. } if *body == loop_body => Some(block),
                 _ => None,
             })
             .expect("the loop keeps its header");
@@ -232,7 +224,7 @@ mod tests {
         let mut f = Fixture::new();
         let int = f.int;
         let Looped { id, loop_body, under_test: sum } =
-            loop_around(&mut f, |builder, outside| builder.push(wrapping_add(outside.a, outside.b), int, Span::ZERO));
+            loop_around(&mut f, |builder, outside| builder.push(add(outside.a, outside.b), int, Span::ZERO));
         let entry = f.module.body(id).entry();
 
         let changes = f.run::<Licm>(id);
@@ -256,7 +248,7 @@ mod tests {
         let mut f = Fixture::new();
         let int = f.int;
         let Looped { id, loop_body, under_test: sum } =
-            loop_around(&mut f, |builder, outside| builder.push(trapping_add(outside.a, outside.b), int, Span::ZERO));
+            loop_around(&mut f, |builder, outside| builder.push(trapping_div(outside.a, outside.b), int, Span::ZERO));
 
         f.run::<Licm>(id);
 
@@ -366,9 +358,9 @@ mod tests {
         builder.switch_to(right);
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(header);
-        builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+        builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
         builder.switch_to(loop_body);
-        let sum = builder.push(wrapping_add(a, b), int, Span::ZERO);
+        let sum = builder.push(add(a, b), int, Span::ZERO);
         builder.terminate(jump(header), acvus_ast::Span::ZERO);
         builder.switch_to(exit);
         builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -401,7 +393,7 @@ mod tests {
                 int,
                 Span::ZERO,
             );
-            let next = builder.push(wrapping_add(loaded, a), int, Span::ZERO);
+            let next = builder.push(add(loaded, a), int, Span::ZERO);
             builder.push_unit(
                 Op::Assign { target: RefTarget::Through(x), path: Vec::new(), value: next, restores: false },
                 Span::ZERO,

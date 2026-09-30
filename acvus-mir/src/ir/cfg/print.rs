@@ -9,8 +9,7 @@
 //!   each with its name and type, and its result type.
 //! - `spans`: each instruction's and slot's span, `@start..end`.
 //! - `order`: the order tokens each instruction consumes and yields.
-//! - `structure`: a `Diamond`'s and a `Switch`'s join, a loop's stages and
-//!   exit.
+//! - `structure`: a `Diamond`'s and a `Switch`'s join.
 //! - `origins`: each value's `ValOrigin`.
 //! - `canonical`: values, blocks and instructions renumbered in the order
 //!   they print, blocks in reverse postorder from the entry, blocks no path
@@ -35,7 +34,7 @@ use rustc_hash::FxHashMap;
 
 use super::{Block, BlockId, Body, BodyId, Definition, InstId, Module, Op, OrderUse, Terminator};
 use crate::decl::PairMember;
-use crate::ir::{BinOp, Callee, Checked, ExitTrip, ForSource, IndexBound, IndexMode, Intrinsic, Overflow, PathSeg, RefTarget, SwitchKey, UnaryOp, ValOrigin, ValueId};
+use crate::ir::{BinOp, Callee, ForSource, IndexBound, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValOrigin, ValueId};
 use crate::ty::{self, Mutability, Ty};
 
 /// The items a print shows beyond blocks, instructions, terminators and
@@ -490,8 +489,6 @@ impl Printer<'_> {
             ),
             Op::BinOp { op, left, right } => format!("{} {}", bin_op(*op), self.values(&[*left, *right])),
             Op::UnaryOp { op, operand } => format!("{} {}", unary_op(*op), self.value(*operand)),
-            Op::Check { op, left, right } => format!("Check({}) {}", checked(*op), self.values(&[*left, *right])),
-            Op::CheckSteps { from, step, count } => format!("CheckSteps {}", self.values(&[*from, *step, *count])),
             Op::Cast { src, to } => format!("Cast({}) {}", to.name(), self.value(*src)),
             Op::Unmark { src } => format!("Unmark {}", self.value(*src)),
             Op::FunctionCall { callee, callee_ty: _, args } => format!("Call {}({})", self.callee(callee), self.values(args)),
@@ -568,30 +565,11 @@ impl Printer<'_> {
                 }
                 text
             }
-            Terminator::For { source, stages, exit, exit_trip, exit_args } => {
-                let mut text = format!(
-                    "For({}) {} ? {} : {}",
-                    exit_trip_name(*exit_trip),
-                    self.for_source(source),
-                    self.target(stages.body(), &[]),
-                    self.target(*exit, exit_args)
-                );
-                if self.view.structure {
-                    text.push_str(&self.stages(stages));
-                }
-                text
+            Terminator::For { source, body, body_args, exit, exit_args } => {
+                format!("For {} ? {} : {}", self.for_source(source), self.target(*body, body_args), self.target(*exit, exit_args))
             }
-            Terminator::While { cond, stages, exit, exit_args } => {
-                let mut text = format!(
-                    "While {} ? {} : {}",
-                    self.value(*cond),
-                    self.target(stages.body(), &[]),
-                    self.target(*exit, exit_args)
-                );
-                if self.view.structure {
-                    text.push_str(&self.stages(stages));
-                }
-                text
+            Terminator::While { cond, body, body_args, exit, exit_args } => {
+                format!("While {} ? {} : {}", self.value(*cond), self.target(*body, body_args), self.target(*exit, exit_args))
             }
             Terminator::Return { value, order, span: _ } => {
                 let mut text = format!("Return {}", self.value(*value));
@@ -603,12 +581,6 @@ impl Printer<'_> {
             Terminator::Diverge => "Diverge".to_string(),
             Terminator::NoArmMatched { span: _ } => "NoArmMatched".to_string(),
         }
-    }
-
-    /// ` [b1, b4]`: every stage entry of a loop, the body first.
-    fn stages(&self, stages: &super::Stages) -> String {
-        let entries: Vec<String> = stages.entries().map(|entry| self.block_name(entry)).collect();
-        format!(" [{}]", entries.join(", "))
     }
 
     fn for_source(&self, source: &ForSource) -> String {
@@ -720,50 +692,35 @@ fn literal(value: &Literal) -> String {
     }
 }
 
-fn overflow(overflow: Overflow) -> &'static str {
-    match overflow {
-        Overflow::Trap => "Trap",
-        Overflow::Wrap => "Wrap",
+fn bin_op(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "Add",
+        BinOp::Sub => "Sub",
+        BinOp::Mul => "Mul",
+        BinOp::Shl => "Shl",
+        BinOp::Shr => "Shr",
+        BinOp::Div => "Div",
+        BinOp::Eq => "Eq",
+        BinOp::Neq => "Neq",
+        BinOp::Lt => "Lt",
+        BinOp::Gt => "Gt",
+        BinOp::Lte => "Lte",
+        BinOp::Gte => "Gte",
+        BinOp::And => "And",
+        BinOp::Or => "Or",
+        BinOp::Xor => "Xor",
+        BinOp::BitAnd => "BitAnd",
+        BinOp::BitOr => "BitOr",
+        BinOp::Mod => "Mod",
+        BinOp::Min => "Min",
+        BinOp::Max => "Max",
     }
 }
 
-fn bin_op(op: BinOp) -> String {
+fn unary_op(op: UnaryOp) -> &'static str {
     match op {
-        BinOp::Add(o) => format!("Add({})", overflow(o)),
-        BinOp::Sub(o) => format!("Sub({})", overflow(o)),
-        BinOp::Mul(o) => format!("Mul({})", overflow(o)),
-        BinOp::Shl(o) => format!("Shl({})", overflow(o)),
-        BinOp::Shr(o) => format!("Shr({})", overflow(o)),
-        BinOp::Div => "Div".to_string(),
-        BinOp::Eq => "Eq".to_string(),
-        BinOp::Neq => "Neq".to_string(),
-        BinOp::Lt => "Lt".to_string(),
-        BinOp::Gt => "Gt".to_string(),
-        BinOp::Lte => "Lte".to_string(),
-        BinOp::Gte => "Gte".to_string(),
-        BinOp::And => "And".to_string(),
-        BinOp::Or => "Or".to_string(),
-        BinOp::Xor => "Xor".to_string(),
-        BinOp::BitAnd => "BitAnd".to_string(),
-        BinOp::BitOr => "BitOr".to_string(),
-        BinOp::Mod => "Mod".to_string(),
-        BinOp::Min => "Min".to_string(),
-        BinOp::Max => "Max".to_string(),
-    }
-}
-
-fn unary_op(op: UnaryOp) -> String {
-    match op {
-        UnaryOp::Neg(o) => format!("Neg({})", overflow(o)),
-        UnaryOp::Not => "Not".to_string(),
-    }
-}
-
-fn checked(op: Checked) -> &'static str {
-    match op {
-        Checked::Add => "Add",
-        Checked::Sub => "Sub",
-        Checked::Mul => "Mul",
+        UnaryOp::Neg => "Neg",
+        UnaryOp::Not => "Not",
     }
 }
 
@@ -778,13 +735,6 @@ fn index_bound(bound: IndexBound) -> &'static str {
     match bound {
         IndexBound::Checked => "Checked",
         IndexBound::Proven => "Proven",
-    }
-}
-
-fn exit_trip_name(trip: ExitTrip) -> &'static str {
-    match trip {
-        ExitTrip::Absent => "Absent",
-        ExitTrip::Defined => "Defined",
     }
 }
 

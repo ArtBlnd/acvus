@@ -66,11 +66,11 @@ mod tests {
 
     use super::*;
     use crate::ir::cfg::Op;
-    use crate::passes::optimize::tests::{Fixture, assert_whole, assign, int_const, ret, trapping_add, wrapping_add};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, assign, int_const, ret, trapping_div};
 
     /// ```text
-    /// a = 1; b = a + a (wrapping); c = b + a (wrapping)   dead chain
-    /// d = a + a (trapping)                                 unused, traps
+    /// a = 1; b = a + a; c = b + a                         dead chain
+    /// d = a / a                                            unused, may trap
     /// x = a                                                a store
     /// e = f()                                              unused, opaque
     /// return a
@@ -82,9 +82,9 @@ mod tests {
         let mut builder = f.module.build_body(true, int);
         let x = builder.slot(int, Span::ZERO);
         let a = builder.push(int_const(1), int, Span::ZERO);
-        let b = builder.push(wrapping_add(a, a), int, Span::ZERO);
-        builder.push(wrapping_add(b, a), int, Span::ZERO);
-        builder.push(trapping_add(a, a), int, Span::ZERO);
+        let b = builder.push(add(a, a), int, Span::ZERO);
+        builder.push(add(b, a), int, Span::ZERO);
+        builder.push(trapping_div(a, a), int, Span::ZERO);
         builder.push_unit(assign(x, a), Span::ZERO);
         builder.push_effect(opaque_call, int, Span::ZERO);
         builder.terminate(ret(a), acvus_ast::Span::ZERO);
@@ -96,7 +96,7 @@ mod tests {
         let ops = f.ops(id, entry);
         assert_eq!(ops.len(), 4, "{ops:?}");
         assert!(matches!(ops[0], Op::Const { .. }), "the constant is returned");
-        assert!(matches!(ops[1], Op::BinOp { left, right, .. } if *left == a && *right == a), "the trapping add stays");
+        assert!(matches!(ops[1], Op::BinOp { left, right, .. } if *left == a && *right == a), "the trapping division stays");
         assert!(matches!(ops[2], Op::Assign { .. }), "the store stays");
         assert!(matches!(ops[3], Op::FunctionCall { .. }), "the opaque call stays");
         assert!(changes.touched(crate::ir::cfg::Aspect::Instructions));

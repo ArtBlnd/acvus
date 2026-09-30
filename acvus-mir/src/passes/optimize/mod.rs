@@ -11,9 +11,12 @@ mod bce;
 mod commute;
 mod dce;
 mod dse;
+mod expand;
 mod gvn;
 mod inline;
+mod iv_canon;
 mod licm;
+mod loop_deletion;
 mod mem2reg;
 mod reborrow;
 mod schedule;
@@ -22,6 +25,7 @@ mod simplify_cfg;
 mod sink;
 mod split_calls;
 mod sroa;
+mod while_to_for;
 #[cfg(test)]
 pub(in crate::passes) mod tests;
 
@@ -31,7 +35,9 @@ pub use dce::Dce;
 pub use dse::Dse;
 pub use gvn::Gvn;
 pub use inline::Inline;
+pub use iv_canon::IvCanon;
 pub use licm::Licm;
+pub use loop_deletion::LoopDeletion;
 pub use mem2reg::Mem2Reg;
 pub use reborrow::Reborrow;
 pub use schedule::Schedule;
@@ -40,9 +46,10 @@ pub use simplify_cfg::SimplifyCfg;
 pub use sink::Sink;
 pub use split_calls::SplitCalls;
 pub use sroa::Sroa;
+pub use while_to_for::WhileToFor;
 
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Module};
-use crate::passes::analysis::{AnalysisManager, Dominators};
+use crate::passes::analysis::{AnalysisManager, Dominators, LoopId, LoopTree};
 
 /// A transform over one body (passes-pipeline §1).
 pub trait BodyTransform {
@@ -101,4 +108,12 @@ fn nearest_common_dominator(dominators: &Dominators, a: BlockId, b: BlockId) -> 
         common = dominators.idom(common).expect("the entry dominates every block it reaches");
     }
     Some(common)
+}
+
+/// Every loop, the deepest first.
+fn inner_first(loops: &LoopTree) -> Vec<LoopId> {
+    let depth = |of: LoopId| std::iter::successors(Some(of), |at| loops.parent(*at)).count();
+    let mut ordered: Vec<LoopId> = loops.loops().collect();
+    ordered.sort_by_key(|of| std::cmp::Reverse(depth(*of)));
+    ordered
 }

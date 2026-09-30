@@ -11,7 +11,7 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
 use crate::ir::cfg::edit::{DefDominatesUses, Invariants, OrderChainWhole, StructureKept, TypesAgree};
 use crate::ir::cfg::{BlockId, BodyId, Changes, Module, Op, Terminator};
-use crate::ir::{BinOp, Callee, Overflow, RefTarget, ValueId};
+use crate::ir::{BinOp, Callee, RefTarget, ValueId};
 use crate::passes::analysis::AnalysisManager;
 use crate::passes::optimize::{BodyTransform, ModuleTransform};
 use crate::ty::{
@@ -194,12 +194,13 @@ pub(in crate::passes) fn bool_const(value: bool) -> Op {
     Op::Const { value: Literal::Bool(value) }
 }
 
-pub(in crate::passes) fn trapping_add(left: ValueId, right: ValueId) -> Op {
-    Op::BinOp { op: BinOp::Add(Overflow::Trap), left, right }
+/// `left / right`, which traps where `right` is zero (operators §1).
+pub(in crate::passes) fn trapping_div(left: ValueId, right: ValueId) -> Op {
+    Op::BinOp { op: BinOp::Div, left, right }
 }
 
-pub(in crate::passes) fn wrapping_add(left: ValueId, right: ValueId) -> Op {
-    Op::BinOp { op: BinOp::Add(Overflow::Wrap), left, right }
+pub(in crate::passes) fn add(left: ValueId, right: ValueId) -> Op {
+    Op::BinOp { op: BinOp::Add, left, right }
 }
 
 pub(in crate::passes) fn take(slot: ValueId) -> Op {

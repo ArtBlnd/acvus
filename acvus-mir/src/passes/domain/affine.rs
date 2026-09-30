@@ -1,19 +1,19 @@
 //! The affine domain (D83): a value is known as an affine combination of
-//! symbolic atoms with integer coefficients, `c₁·a₁ + … + cₙ·aₙ + k`, equal
-//! to it on every run that defines it; `top` where no combination is known,
-//! `bottom` where no run defines it. Two different combinations join to
-//! `top`, so the lattice has height three and its widening is its join.
+//! symbolic atoms with integer coefficients, `c₁·a₁ + … + cₙ·aₙ + k`, an
+//! element of the value ring of degree at most one, equal to it on every run
+//! that defines it; `top` where no combination is known, `bottom` where no
+//! run defines it. Two different combinations join to `top`, so the lattice
+//! has height three and its widening is its join.
 //!
 //! It is the one reader of declared Relations (extern-fn §3, D82): each is
 //! read as an affine constraint over a call's atoms and solved for the atom
 //! a reader asks about.
 
-use std::collections::BTreeMap;
-
 use acvus_ast::Literal;
 
 use crate::decl::declared::{Atom, Comparison, Relation, Term};
-use crate::ir::{BinOp, Overflow, UnaryOp, ValueId};
+use crate::ir::{BinOp, UnaryOp, ValueId};
+use crate::passes::domain::ring::{Monomial, Polynomial};
 use crate::passes::domain::{Arithmetic, JoinSemiLattice, Operation, Scalar, ValueDomain, Widen, not_an_operation};
 use crate::ty::{CastTy, IntTy};
 
@@ -31,15 +31,16 @@ pub enum Symbol {
     Remaining(ValueId),
 }
 
-/// `Σ coefficient·atom + constant` over the integers, with no zero
-/// coefficient, so equal combinations are equal values of this type.
+/// `Σ coefficient·atom + constant` over the integers: an element of the
+/// value ring of degree at most one, held in the ring's normal form, so equal
+/// combinations are equal values of this type. Like every element of the
+/// ring, it holds at most `MAX_TERMS` terms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Combination<A>
 where
     A: Ord,
 {
-    constant: i128,
-    terms: BTreeMap<A, i128>,
+    polynomial: Polynomial<A>,
 }
 
 impl<A> Combination<A>
@@ -47,78 +48,71 @@ where
     A: Ord + Clone,
 {
     pub fn constant(constant: i128) -> Self {
-        Combination { constant, terms: BTreeMap::new() }
+        Combination { polynomial: Polynomial::constant(constant) }
     }
 
     pub fn atom(atom: A) -> Self {
-        Combination { constant: 0, terms: BTreeMap::from([(atom, 1)]) }
+        Combination { polynomial: Polynomial::atom(atom) }
     }
 
     /// The constant alone, where the combination has no atom.
     pub fn as_constant(&self) -> Option<i128> {
-        self.terms.is_empty().then_some(self.constant)
+        self.polynomial.as_constant()
     }
 
     pub fn constant_term(&self) -> i128 {
-        self.constant
+        self.polynomial.coefficient(&Monomial::unit())
     }
 
-    /// Each atom with its coefficient, none of them zero.
+    /// Each atom with its coefficient, none of them zero. A term of degree
+    /// one has exactly one factor; the constant term has none.
     pub fn terms(&self) -> impl Iterator<Item = (&A, i128)> {
-        self.terms.iter().map(|(atom, coefficient)| (atom, *coefficient))
+        self.polynomial.terms().filter_map(|(monomial, coefficient)| {
+            let (atom, _) = monomial.factors().next()?;
+            Some((atom, coefficient))
+        })
     }
 
     pub fn coefficient(&self, atom: &A) -> i128 {
-        self.terms.get(atom).copied().unwrap_or(0)
+        self.polynomial.coefficient(&Monomial::atom(atom.clone()))
     }
 
     /// `self + other`; `None` where a coefficient or the constant leaves
-    /// `i128`.
+    /// `i128`, or the sum is past `MAX_TERMS`.
     pub fn checked_add(&self, other: &Self) -> Option<Self> {
-        let mut sum = self.clone();
-        sum.constant = sum.constant.checked_add(other.constant)?;
-        for (atom, coefficient) in &other.terms {
-            let next = sum.coefficient(atom).checked_add(*coefficient)?;
-            match next {
-                0 => sum.terms.remove(atom),
-                next => sum.terms.insert(atom.clone(), next),
-            };
-        }
-        Some(sum)
+        Some(Combination::of_degree_one(self.polynomial.checked_add(&other.polynomial)?))
     }
 
     /// `factor · self`; `None` where a coefficient or the constant leaves
     /// `i128`.
     pub fn checked_scale(&self, factor: i128) -> Option<Self> {
-        if factor == 0 {
-            return Some(Combination::constant(0));
-        }
-        let terms = self
-            .terms
-            .iter()
-            .map(|(atom, coefficient)| Some((atom.clone(), coefficient.checked_mul(factor)?)))
-            .collect::<Option<BTreeMap<A, i128>>>()?;
-        Some(Combination { constant: self.constant.checked_mul(factor)?, terms })
+        Some(Combination::of_degree_one(self.polynomial.checked_scale(factor)?))
     }
 
     /// `self - other`.
     pub fn checked_sub(&self, other: &Self) -> Option<Self> {
-        self.checked_add(&other.checked_scale(-1)?)
+        Some(Combination::of_degree_one(self.polynomial.checked_sub(&other.polynomial)?))
     }
 
     /// The combination with each atom replaced by the combination `by`
-    /// gives it; `None` where `by` gives none for an atom, or arithmetic
-    /// leaves `i128`.
+    /// gives it; `None` where `by` gives none for an atom, arithmetic
+    /// leaves `i128`, or the result is past `MAX_TERMS`.
     pub fn substitute<B, F>(&self, mut by: F) -> Option<Combination<B>>
     where
         B: Ord + Clone,
         F: FnMut(&A) -> Option<Combination<B>>,
     {
-        let mut out = Combination::constant(self.constant);
-        for (atom, coefficient) in &self.terms {
-            out = out.checked_add(&by(atom)?.checked_scale(*coefficient)?)?;
-        }
-        Some(out)
+        let substituted = self.polynomial.substitute(|atom| Some(by(atom)?.polynomial))?;
+        Some(Combination::of_degree_one(substituted))
+    }
+
+    /// # Panics
+    /// `polynomial` has degree past one. Sums, multiples and substitutions
+    /// of combinations by combinations keep degree one, so a caller that
+    /// passes more has a defect.
+    fn of_degree_one(polynomial: Polynomial<A>) -> Self {
+        assert!(polynomial.degree() <= 1, "a combination of degree {}", polynomial.degree());
+        Combination { polynomial }
     }
 }
 
@@ -167,19 +161,25 @@ impl Affine {
         Affine::Exactly(Combination::constant(n))
     }
 
-    /// An exact integer result at `width`: a trapping operation passes only
-    /// a result that fits, so one that never fits leaves no value; a
-    /// wrapping one keeps its exact result only where it is a constant that
-    /// fits, since a combination may wrap.
-    fn at_width(exact: Option<Combination<Symbol>>, overflow: Overflow, width: IntTy) -> Affine {
+    /// An exact integer result at `width`. Overflow is undefined, so a
+    /// run with a meaning passes only a result that fits: one that never
+    /// fits leaves no value, and a combination stays exact.
+    fn at_width(exact: Option<Combination<Symbol>>, width: IntTy) -> Affine {
         let Some(exact) = exact else {
             return Affine::Top;
         };
-        match (exact.as_constant(), overflow) {
-            (Some(n), Overflow::Trap) if !width.holds(n) => Affine::Bottom,
-            (Some(n), Overflow::Wrap) if !width.holds(n) => Affine::Top,
-            (Some(_), _) | (None, Overflow::Trap) => Affine::Exactly(exact),
-            (None, Overflow::Wrap) => Affine::Top,
+        match exact.as_constant() {
+            Some(n) if !width.holds(n) => Affine::Bottom,
+            Some(_) | None => Affine::Exactly(exact),
+        }
+    }
+
+    /// A cast's result at `width`: a constant that fits is kept, and any
+    /// other value may have bits discarded, as Rust's `as` does.
+    fn cast_to_width(exact: &Combination<Symbol>, width: IntTy) -> Affine {
+        match exact.as_constant() {
+            Some(n) if width.holds(n) => Affine::Exactly(exact.clone()),
+            Some(_) | None => Affine::Top,
         }
     }
 }
@@ -214,21 +214,21 @@ impl ValueDomain for AffineDomain {
             (Affine::Exactly(left), Affine::Exactly(right)) => (left, right),
         };
         match arithmetic {
-            Arithmetic::Add(overflow) => Affine::at_width(left.checked_add(right), overflow, width),
-            Arithmetic::Sub(overflow) => Affine::at_width(left.checked_sub(right), overflow, width),
-            Arithmetic::Mul(overflow) => {
+            Arithmetic::Add => Affine::at_width(left.checked_add(right), width),
+            Arithmetic::Sub => Affine::at_width(left.checked_sub(right), width),
+            Arithmetic::Mul => {
                 let product = match (left.as_constant(), right.as_constant()) {
                     (Some(factor), _) => right.checked_scale(factor),
                     (None, Some(factor)) => left.checked_scale(factor),
                     (None, None) => return Affine::Top,
                 };
-                Affine::at_width(product, overflow, width)
+                Affine::at_width(product, width)
             }
             Arithmetic::And | Arithmetic::Or => not_an_operation(op, ty),
             Arithmetic::Div
             | Arithmetic::Mod
-            | Arithmetic::Shl(_)
-            | Arithmetic::Shr(_)
+            | Arithmetic::Shl
+            | Arithmetic::Shr
             | Arithmetic::BitAnd
             | Arithmetic::BitOr
             | Arithmetic::Xor
@@ -239,25 +239,21 @@ impl ValueDomain for AffineDomain {
 
     fn unary(&self, op: UnaryOp, ty: CastTy, operand: &Affine) -> Affine {
         match (op, ty) {
-            (UnaryOp::Neg(overflow), CastTy::Int(width)) if width.signed() => match operand {
+            (UnaryOp::Neg, CastTy::Int(width)) if width.signed() => match operand {
                 Affine::Bottom => Affine::Bottom,
                 Affine::Top => Affine::Top,
-                Affine::Exactly(operand) => Affine::at_width(operand.checked_scale(-1), overflow, width),
+                Affine::Exactly(operand) => Affine::at_width(operand.checked_scale(-1), width),
             },
-            (UnaryOp::Neg(_), CastTy::F64) | (UnaryOp::Not, CastTy::Bool) => Affine::Top,
+            (UnaryOp::Neg, CastTy::F64) | (UnaryOp::Not, CastTy::Bool) => Affine::Top,
             _ => not_an_operation(op, ty),
         }
     }
 
-    /// A cast keeps a constant that fits the target width; any other
-    /// value may wrap.
     fn cast(&self, from: CastTy, to: CastTy, operand: &Affine) -> Affine {
         assert!(from.admits(to), "`{} as {}` is not a cast the language admits", from.name(), to.name());
         match (from, to, operand) {
             (_, _, Affine::Bottom) => Affine::Bottom,
-            (CastTy::Int(_), CastTy::Int(width), Affine::Exactly(exact)) => {
-                Affine::at_width(Some(exact.clone()), Overflow::Wrap, width)
-            }
+            (CastTy::Int(_), CastTy::Int(width), Affine::Exactly(exact)) => Affine::cast_to_width(exact, width),
             _ => Affine::Top,
         }
     }
@@ -446,19 +442,15 @@ mod tests {
     }
 
     /// The language's `x op y` at `width`, by Rust's own operations at a
-    /// width of eight bits; `None` is a trap.
+    /// width of eight bits; `None` is a trap or an overflow.
     fn concrete(op: BinOp, width: IntTy, x: i128, y: i128) -> Option<i128> {
-        use Overflow::{Trap, Wrap};
         macro_rules! at {
             ($t:ty) => {{
                 let (x, y) = (x as $t, y as $t);
                 let result: Option<$t> = match op {
-                    BinOp::Add(Trap) => x.checked_add(y),
-                    BinOp::Add(Wrap) => Some(x.wrapping_add(y)),
-                    BinOp::Sub(Trap) => x.checked_sub(y),
-                    BinOp::Sub(Wrap) => Some(x.wrapping_sub(y)),
-                    BinOp::Mul(Trap) => x.checked_mul(y),
-                    BinOp::Mul(Wrap) => Some(x.wrapping_mul(y)),
+                    BinOp::Add => x.checked_add(y),
+                    BinOp::Sub => x.checked_sub(y),
+                    BinOp::Mul => x.checked_mul(y),
                     BinOp::Div => x.checked_div(y),
                     BinOp::Mod => x.checked_rem(y),
                     BinOp::Min => Some(x.min(y)),
@@ -480,14 +472,10 @@ mod tests {
     /// result's value there, and a result it never computes is `bottom`.
     #[test]
     fn binary_operations_over_approximate_the_language_at_eight_bits() {
-        use Overflow::{Trap, Wrap};
         let ops = [
-            BinOp::Add(Trap),
-            BinOp::Add(Wrap),
-            BinOp::Sub(Trap),
-            BinOp::Sub(Wrap),
-            BinOp::Mul(Trap),
-            BinOp::Mul(Wrap),
+            BinOp::Add,
+            BinOp::Sub,
+            BinOp::Mul,
             BinOp::Div,
             BinOp::Mod,
             BinOp::Min,
@@ -528,7 +516,7 @@ mod tests {
         let i8_ty = CastTy::Int(IntTy::I8);
         let u8_ty = CastTy::Int(IntTy::U8);
         for operand in samples().iter().filter(|sample| **sample != Affine::Bottom) {
-            let negated = AffineDomain.unary(UnaryOp::Neg(Overflow::Trap), i8_ty, operand);
+            let negated = AffineDomain.unary(UnaryOp::Neg, i8_ty, operand);
             let cast = AffineDomain.cast(i8_ty, u8_ty, operand);
             for a in -128..=127 {
                 for b in [-3, 0, 9] {
@@ -546,14 +534,13 @@ mod tests {
     }
 
     #[test]
-    fn a_trapping_constant_past_its_width_leaves_no_value_and_a_combination_stays_exact() {
+    fn an_overflowing_constant_leaves_no_value_and_a_combination_stays_exact() {
         let i8_ty = CastTy::Int(IntTy::I8);
-        let add = BinOp::Add(Overflow::Trap);
+        let add = BinOp::Add;
         assert_eq!(AffineDomain.binary(add, i8_ty, &exactly(100, &[]), &exactly(100, &[])), Affine::Bottom);
-        assert_eq!(AffineDomain.binary(BinOp::Add(Overflow::Wrap), i8_ty, &exactly(100, &[]), &exactly(100, &[])), Affine::Top);
         assert_eq!(AffineDomain.binary(add, i8_ty, &exactly(3, &[(0, 2)]), &exactly(-1, &[(1, 1)])), exactly(2, &[(0, 2), (1, 1)]));
-        assert_eq!(AffineDomain.binary(BinOp::Sub(Overflow::Trap), i8_ty, &exactly(0, &[(0, 1)]), &exactly(0, &[(0, 1)])), exactly(0, &[]));
-        assert_eq!(AffineDomain.binary(BinOp::Mul(Overflow::Trap), i8_ty, &exactly(0, &[(0, 1)]), &exactly(0, &[(1, 1)])), Affine::Top);
+        assert_eq!(AffineDomain.binary(BinOp::Sub, i8_ty, &exactly(0, &[(0, 1)]), &exactly(0, &[(0, 1)])), exactly(0, &[]));
+        assert_eq!(AffineDomain.binary(BinOp::Mul, i8_ty, &exactly(0, &[(0, 1)]), &exactly(0, &[(1, 1)])), Affine::Top);
     }
 
     // -- Declared relations --------------------------------------------------

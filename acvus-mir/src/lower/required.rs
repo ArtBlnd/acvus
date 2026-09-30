@@ -142,11 +142,11 @@ fn edge_arg_offsets(terminator: &Terminator) -> SmallVec<[usize; 2]> {
             }
             offsets
         }
-        Terminator::For { source, .. } => {
-            let exit = source.uses().len();
-            smallvec::smallvec![exit, exit]
+        Terminator::For { source, body_args, .. } => {
+            let body = source.uses().len();
+            smallvec::smallvec![body, body + body_args.len()]
         }
-        Terminator::While { .. } => smallvec::smallvec![1, 1],
+        Terminator::While { body_args, .. } => smallvec::smallvec![1, 1 + body_args.len()],
         Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => SmallVec::new(),
     }
 }

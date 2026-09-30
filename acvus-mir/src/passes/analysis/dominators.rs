@@ -12,7 +12,7 @@
 use smallvec::SmallVec;
 
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, InstId, Module};
-use crate::passes::analysis::{Analysis, AnalysisManager};
+use crate::passes::analysis::{Analysis, Queries};
 
 /// A place in a block: before one of its instructions, or at its end, after
 /// every instruction and before the terminator.
@@ -110,7 +110,7 @@ impl Analysis for Dominators {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape];
 
-    fn compute(_: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Dominators {
+    fn compute(_: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Dominators {
         let body = module.body(body);
         let graph = Graph::of(body);
         let tree = DomTree::of(body.entry().index(), &graph.successors, &graph.predecessors);

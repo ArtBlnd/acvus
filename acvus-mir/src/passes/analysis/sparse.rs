@@ -23,7 +23,7 @@ use smallvec::SmallVec;
 
 use crate::ir::cfg::{BlockId, Body, Inst, InstId, Site, Terminator};
 use crate::ir::ValueId;
-use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
+use crate::passes::domain::{JoinSemiLattice, ValueDomain};
 
 /// Which successors of a terminator may run, read from the facts of its
 /// operands (conditional propagation, Wegman-Zadeck): only edges that may
@@ -37,8 +37,6 @@ pub enum Executable {
 /// that is not a value operation maps to it (calls read declared facts only).
 pub trait SparseAnalysis {
     type Domain: ValueDomain;
-
-    fn domain(&self) -> &Self::Domain;
 
     /// The fact of an instruction's result from its operands' facts, in the
     /// order the instruction lists its operands, order tokens left out.
@@ -58,8 +56,8 @@ pub trait SparseAnalysis {
 
     /// The fact of the parameter of `to` that `terminator` fills itself on
     /// its executable edge into `to`: the `index`th of the leading
-    /// parameters that edge supplies, such as a `For`'s counter and element
-    /// or its exit's trip count. `operands` are the facts of the
+    /// parameters that edge supplies, a `For`'s counter and element.
+    /// `operands` are the facts of the
     /// terminator's operands, order tokens left out.
     fn supplied(
         &self,
@@ -68,6 +66,20 @@ pub trait SparseAnalysis {
         index: usize,
         operands: &[&<Self::Domain as ValueDomain>::Value],
     ) -> <Self::Domain as ValueDomain>::Value;
+
+    /// The fact of `value` where nothing in the body bounds it: a value
+    /// from outside the body.
+    fn top(&self, value: ValueId) -> <Self::Domain as ValueDomain>::Value;
+
+    /// Widens `fact`, `value`'s fact at a loop header, by `next`; whether
+    /// `fact` rose. It covers the join of the two, and every ascending
+    /// chain of one value's facts it makes is finite.
+    fn widen(
+        &self,
+        value: ValueId,
+        fact: &mut <Self::Domain as ValueDomain>::Value,
+        next: &<Self::Domain as ValueDomain>::Value,
+    ) -> bool;
 }
 
 pub struct SparseFacts<D>
@@ -96,8 +108,8 @@ where
 
 /// Every value's fact over the blocks the entry reaches through executable
 /// edges. A value those blocks never define keeps `bottom`; the body's
-/// parameters, captures and slots hold `top`, since they come from outside
-/// the body.
+/// parameters, captures and slots hold the analysis's `top` of each, since
+/// they come from outside the body.
 pub fn solve_sparse<A>(analysis: &A, body: &Body) -> SparseFacts<A::Domain>
 where
     A: SparseAnalysis,
@@ -146,7 +158,7 @@ where
             .chain(body.slots().iter().copied())
             .filter(|value| !is_token(value));
         for value in outside {
-            facts.insert(value, analysis.domain().top());
+            facts.insert(value, analysis.top(value));
         }
         Solver {
             analysis,
@@ -217,14 +229,16 @@ where
             .collect()
     }
 
-    /// Joins `next` into `value`'s fact, or widens it by `next`, and queues
-    /// `value`'s users when the fact rose.
+    /// Joins `next` into `value`'s fact, or widens it by `next` as the
+    /// analysis widens `value`, and queues `value`'s users when the fact
+    /// rose.
     fn rise(&mut self, value: ValueId, next: &Value<A>, widen: bool) {
+        let analysis = self.analysis;
         let fact = self
             .facts
             .get_mut(&value)
             .expect("the solver holds a fact for every value of its body but tokens");
-        let rose = if widen { fact.widen(next) } else { fact.join(next) };
+        let rose = if widen { analysis.widen(value, fact, next) } else { fact.join(next) };
         if rose {
             self.risen.push(value);
         }

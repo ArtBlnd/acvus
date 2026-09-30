@@ -16,8 +16,8 @@ use super::expr::lower_expr;
 use super::pat::{Matched, bind, test};
 use super::place::{Place, assign, view_array};
 use super::stmt::{lower_body, lower_stmts};
-use crate::ir::cfg::{Op, Stages, Terminator};
-use crate::ir::{ExitTrip, ForSource, RefTarget, ValueId};
+use crate::ir::cfg::{Op, Terminator};
+use crate::ir::{ForSource, RefTarget, ValueId};
 use crate::ty::{Mutability, Ty, TyKind};
 use crate::typeck::{Iteration, TryExit};
 
@@ -161,7 +161,7 @@ pub(super) fn lower_while<S: Slot>(cx: &mut Lcx<'_, '_>, cond: &Expr<S>, body: &
     let cond = lower_expr(cx, cond);
     let body_block = cx.builder.new_block(&[]);
     let exit = cx.builder.new_block(&[]);
-    let terminator = Terminator::While { cond, stages: Stages::lowered(body_block), exit, exit_args: Vec::new() };
+    let terminator = Terminator::While { cond, body: body_block, body_args: Vec::new(), exit, exit_args: Vec::new() };
     cx.builder.terminate(terminator, span);
     cx.builder.switch_to(body_block);
     cx.reachable = live;
@@ -192,7 +192,7 @@ pub(super) fn lower_while_let<S: Slot>(
     };
     let body_block = cx.builder.new_block(&[]);
     let exit = cx.builder.new_block(&[]);
-    let terminator = Terminator::While { cond, stages: Stages::lowered(body_block), exit, exit_args: Vec::new() };
+    let terminator = Terminator::While { cond, body: body_block, body_args: Vec::new(), exit, exit_args: Vec::new() };
     cx.builder.terminate(terminator, span);
     cx.builder.switch_to(body_block);
     cx.reachable = live;
@@ -230,9 +230,9 @@ pub(super) fn lower_for<S: Slot>(
     let exit = cx.builder.new_block(&[]);
     let terminator = Terminator::For {
         source: traversal.source,
-        stages: Stages::lowered(body_block),
+        body: body_block,
+        body_args: Vec::new(),
         exit,
-        exit_trip: ExitTrip::Absent,
         exit_args: Vec::new(),
     };
     cx.builder.terminate(terminator, span);

@@ -7,8 +7,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::dominators::{Dominators, def_points};
 use crate::ir::cfg::body::InstId;
-use crate::ir::cfg::{BlockId, Body, Inst, Op, OrderUse, Site, Terminator};
-use crate::ir::{BinOp, Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
+use crate::ir::cfg::{BlockId, Body, Head, Inst, Op, OrderUse, Site, Terminator};
+use crate::ir::{BinOp, Callee, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
 use crate::ty::structural;
 use crate::ty::{CastTy, Concrete, IntTy, Mark, MarkTerm, Mutability, Ty, TyKind, Types};
 
@@ -72,7 +72,7 @@ macro_rules! invariant {
 invariant!(TypesAgree, types_agree, "Every operand's type is what its instruction takes, and every edge's arguments agree with its target's parameters.");
 invariant!(DefDominatesUses, def_dominates_uses, "Every value's definition dominates each of its uses.");
 invariant!(OrderChainWhole, order_chain_whole, "Every effectful instruction consumes exactly one live token, and every token but a Merge's reaches the body's return (effects §2-3); a Merge nothing consumes orders nothing and is a dead value (D65). A place operation on a volatile context stands on the chain, and one on a context that is not volatile does not (context §3).");
-invariant!(StructureKept, structure_kept, "Every `Diamond`'s and `Switch`'s join and every loop's stages and exit are blocks of the body (D45, D57).");
+invariant!(StructureKept, structure_kept, "Every `Diamond`'s and `Switch`'s join and every loop's body and exit are blocks of the body (D45, D57).");
 invariant!(NeverDiverges, never_diverges, "In every block the entry reaches, an instruction yielding `!` is the block's last, and the block ends in `Diverge`: no value of type `!` exists, so no run goes past one (types §4, control-flow).");
 invariant!(SplitTakenOnce, split_taken_once, "Every start of a split call is taken exactly once on every path from it (effects §6).");
 
@@ -371,7 +371,7 @@ impl TypeCheck<'_> {
                 self.same(*value, at, "the field")?;
                 self.same(Self::result(inst)?, object_ty, "the object")
             }
-            Op::BinOp { op: BinOp::Shl(_) | BinOp::Shr(_), left, right } => {
+            Op::BinOp { op: BinOp::Shl | BinOp::Shr, left, right } => {
                 self.is_int(*left)?;
                 self.is_int(*right)?;
                 self.same(Self::result(inst)?, self.ty(*left), "the shifted value")
@@ -398,17 +398,8 @@ impl TypeCheck<'_> {
                         self.is_bool(*operand)?;
                         self.is_bool(result)
                     }
-                    UnaryOp::Neg(_) => self.same(result, self.ty(*operand), "the operand"),
+                    UnaryOp::Neg => self.same(result, self.ty(*operand), "the operand"),
                 }
-            }
-            Op::Check { left, right, .. } => {
-                self.is_int(*left)?;
-                self.same(*right, self.ty(*left), "the left operand")
-            }
-            Op::CheckSteps { from, step, count } => {
-                self.is_int(*from)?;
-                self.same(*step, self.ty(*from), "the start")?;
-                self.is_u64(*count)
             }
             Op::Cast { src, to } => {
                 self.is(*src, |kind| CastTy::of_kind(kind).is_some(), "an integer width, f64, char or bool")?;
@@ -743,9 +734,7 @@ impl TypeCheck<'_> {
     fn terminator(&self, block: BlockId, terminator: &Terminator) -> Found {
         let at = |detail: String| format!("{block:?}'s terminator: {detail}");
         match terminator {
-            Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } | Terminator::While { cond, .. } => {
-                self.is_bool(*cond).map_err(at)?
-            }
+            Terminator::JumpIf { cond, .. } | Terminator::Diamond { cond, .. } => self.is_bool(*cond).map_err(at)?,
             Terminator::Return { value, order, .. } => {
                 self.same(*value, self.body.ret(), "the body's result type").map_err(at)?;
                 if let Some(order) = order {
@@ -761,11 +750,9 @@ impl TypeCheck<'_> {
                     self.key_fits(key, scrutinee).map_err(at)?;
                 }
             }
-            Terminator::For { source, stages, exit, exit_trip, .. } => {
-                self.loop_source(source, stages.body()).map_err(at)?;
-                if let Some(trip) = exit_trip.trip_param(self.body.block(*exit).params()) {
-                    self.is_u64(trip).map_err(at)?;
-                }
+            Terminator::For { .. } | Terminator::While { .. } => {
+                let parts = terminator.as_loop().expect("a For or a While is a loop terminator");
+                self.loop_head(parts.head, parts.body).map_err(at)?;
             }
             Terminator::Jump { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}
         }
@@ -803,53 +790,20 @@ impl TypeCheck<'_> {
         found(fits, || format!("the key {key:?} names no value of {:?}", self.kind(scrutinee)))
     }
 
-    /// A `For`'s source against what it hands its body: the element, and
-    /// the counter where the source is a slice or an array.
-    fn loop_source(&self, source: &ForSource, body: BlockId) -> Found {
-        let params = self.body.block(body).params();
-        let (element, counted) = match source {
-            ForSource::Slice(slice) | ForSource::SliceMut(slice) => {
-                let wanted = match source {
-                    ForSource::SliceMut(_) => Mutability::Mut,
-                    _ => Mutability::Shared,
-                };
-                let (held, element) = self.slice(*slice)?;
-                found(held == wanted, || format!("{slice:?} is not a {wanted:?} slice reference"))?;
-                (Element::Lent(wanted, element), true)
-            }
-            ForSource::Array(array) => match self.kind(self.ty(*array)) {
-                TyKind::Array(element, _, _) => (Element::Held(*element), true),
-                other => return Err(format!("{array:?} is {other:?}, not an array")),
-            },
-            ForSource::Range { at, hi } => {
-                self.is_int(*at)?;
-                self.same(*hi, self.ty(*at), "the range's start")?;
-                (Element::Held(self.ty(*at)), false)
-            }
-        };
-        let [first, rest @ ..] = params else {
-            return Err(format!("the loop body {body:?} takes no element"));
-        };
-        match element {
-            Element::Held(element) => self.same(*first, element, "the element")?,
-            Element::Lent(mutability, element) => self.is(
-                *first,
-                |kind| matches!(kind, TyKind::Ref(made, lent) if *made == mutability && *lent == element),
-                "a reference to the element",
-            )?,
+    /// A loop's head against what it hands its body: its operands are of
+    /// types it takes, and the body's leading parameters are of the types
+    /// it supplies (`Head::supplied_kinds`). How many there are, and the
+    /// body arguments after them, are the edge's check.
+    fn loop_head(&self, head: Head, body: BlockId) -> Found {
+        let supplied = head.supplied_kinds(|value| self.ty(value), self.types).map_err(|unfit| {
+            format!("{:?} is {:?}, which {head:?} does not take", unfit.operand, self.kind(self.ty(unfit.operand)))
+        })?;
+        for (param, kind) in self.body.block(body).params().iter().zip(&supplied) {
+            let ty = self.ty(*param);
+            found(self.kind(ty) == kind, || format!("{param:?} is {:?}, and {head:?} supplies {kind:?}", self.kind(ty)))?;
         }
-        match (counted, rest) {
-            (true, [counter, ..]) => self.is_u64(*counter),
-            (true, []) => Err(format!("the loop body {body:?} takes no counter")),
-            (false, _) => Ok(()),
-        }
+        Ok(())
     }
-}
-
-/// What a loop hands its body each iteration.
-enum Element {
-    Held(Ty),
-    Lent(Mutability, Ty),
 }
 
 // -- DefDominatesUses --------------------------------------------------------
@@ -1117,9 +1071,9 @@ fn structure_kept(body: &Body, _: &Types<Concrete>) -> Found {
             Terminator::Switch { join, .. } => {
                 found(is_block(*join), || format!("{id:?}'s Switch joins at {join:?}, which is not a block"))?
             }
-            Terminator::For { stages, exit, .. } | Terminator::While { stages, exit, .. } => {
-                for stage in stages.entries().chain(std::iter::once(*exit)) {
-                    found(is_block(stage), || format!("{id:?}'s loop names {stage:?}, which is not a block"))?;
+            Terminator::For { body, exit, .. } | Terminator::While { body, exit, .. } => {
+                for named in [*body, *exit] {
+                    found(is_block(named), || format!("{id:?}'s loop names {named:?}, which is not a block"))?;
                 }
             }
             Terminator::Jump { .. } | Terminator::JumpIf { .. } | Terminator::Return { .. } | Terminator::Diverge | Terminator::NoArmMatched { .. } => {}

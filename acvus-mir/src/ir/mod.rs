@@ -6,7 +6,7 @@ pub(crate) mod parts;
 
 use acvus_utils::QualifiedRef;
 use crate::decl::PairMember;
-use crate::ty::{Concrete, Ty, Types};
+use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, Types};
 
 /// An operation of the language no single op states, each read by
 /// `Op::Intrinsic` over the arguments its doc lists. A backend that runs
@@ -34,28 +34,6 @@ pub enum Intrinsic {
 
 acvus_utils::declare_local_id!(pub ValueId);
 
-/// What an integer `+`, `-`, `*`, `<<`, `>>` or negation does where its
-/// exact result does not fit its width, or where a shift's amount is the
-/// width or more (RFC-0037 rule 3).
-///
-/// It is a required field of each operation that has the question, and of
-/// no other, so a match on one of them names which kind it handles, and a
-/// pass reads the kind here rather than working out where the operation
-/// came from. At `f64` the question does not arise: both kinds are the IEEE
-/// operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Overflow {
-    /// The source's operation. The program means nothing where it
-    /// overflows, and a run that reaches such an overflow ends there with
-    /// Rust's text. Only the lowering writes it; a pass that rewrites an
-    /// operation into an equal one keeps it, and no pass writes it anew.
-    Trap,
-    /// An operation a pass writes, which the program never asked for: the
-    /// result modulo `2^width`, and a shift's amount modulo the width, as
-    /// Rust's `wrapping_*`.
-    Wrap,
-}
-
 /// A binary operation of the MIR: the source's operators, and `Min` and
 /// `Max`, which no source expression lowers to and only a pass writes.
 /// `BitOr` is written by no source either, since bitwise or has no
@@ -65,13 +43,18 @@ pub enum Overflow {
 /// It is its own enum, and not `acvus_ast::BinOp`, so that the parser
 /// cannot write `Min` or `Max`: the parser's type has no such variant, and
 /// the lowering reaches this enum through `From<acvus_ast::BinOp>`, which
-/// yields neither. The same conversion is where a source operator becomes
-/// an [`Overflow::Trap`] operation, the one kind the source writes.
+/// yields neither.
+///
+/// Integer overflow is undefined (operators §1-2, undefined behaviour §2):
+/// a `+`, `-` or `*` whose exact result does not fit its width, a `/` or
+/// `%` whose quotient does not, and a shift whose amount is negative or at
+/// least the width. Such an operation neither traps nor wraps, so no pass
+/// computes one past its width. A `/` or `%` by zero traps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
-    Add(Overflow),
-    Sub(Overflow),
-    Mul(Overflow),
+    Add,
+    Sub,
+    Mul,
     Div,
     Eq,
     Neq,
@@ -84,12 +67,11 @@ pub enum BinOp {
     Xor,
     BitAnd,
     BitOr,
-    /// `value << amount`. The amount is an integer of any width, its own;
-    /// a trapping shift traps where the amount is negative or at least the
-    /// value's width (Rust's `u8 << i64` included).
-    Shl(Overflow),
-    /// `value >> amount`, its amount and trap as `Shl`'s.
-    Shr(Overflow),
+    /// `value << amount`, the bits shifted past the width discarded, as
+    /// Rust's `<<`. The amount is an integer of any width, its own.
+    Shl,
+    /// `value >> amount`, its amount as `Shl`'s.
+    Shr,
     Mod,
     /// The lesser of two integers of one width, compared at that width's
     /// signedness. Total at every width: it neither wraps nor traps.
@@ -99,19 +81,19 @@ pub enum BinOp {
 }
 
 impl BinOp {
-    /// Whether the operation on two integers can end the run: a trapping
-    /// `+`, `-`, `*` or shift, and `/` and `%` (RFC-0037 rules 2 and 3).
-    /// Such an operation moves only onto exactly the paths it ran on
-    /// (RFC-0048 rule 8). On any other operand type no operation traps.
+    /// Whether the operation on two integers can end the run: `/` and `%`,
+    /// which trap on a zero divisor (operators §1). Such an operation moves
+    /// only onto exactly the paths it ran on (RFC-0048 rule 8). On any other
+    /// operand type no operation traps.
     pub fn can_trap_on_integers(self) -> bool {
         match self {
-            BinOp::Add(overflow)
-            | BinOp::Sub(overflow)
-            | BinOp::Mul(overflow)
-            | BinOp::Shl(overflow)
-            | BinOp::Shr(overflow) => overflow == Overflow::Trap,
             BinOp::Div | BinOp::Mod => true,
-            BinOp::Eq
+            BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::Eq
             | BinOp::Neq
             | BinOp::Lt
             | BinOp::Gt
@@ -131,9 +113,9 @@ impl BinOp {
 impl From<acvus_ast::BinOp> for BinOp {
     fn from(op: acvus_ast::BinOp) -> BinOp {
         match op {
-            acvus_ast::BinOp::Add => BinOp::Add(Overflow::Trap),
-            acvus_ast::BinOp::Sub => BinOp::Sub(Overflow::Trap),
-            acvus_ast::BinOp::Mul => BinOp::Mul(Overflow::Trap),
+            acvus_ast::BinOp::Add => BinOp::Add,
+            acvus_ast::BinOp::Sub => BinOp::Sub,
+            acvus_ast::BinOp::Mul => BinOp::Mul,
             acvus_ast::BinOp::Div => BinOp::Div,
             acvus_ast::BinOp::Eq => BinOp::Eq,
             acvus_ast::BinOp::Neq => BinOp::Neq,
@@ -145,31 +127,22 @@ impl From<acvus_ast::BinOp> for BinOp {
             acvus_ast::BinOp::Or => BinOp::Or,
             acvus_ast::BinOp::Xor => BinOp::Xor,
             acvus_ast::BinOp::BitAnd => BinOp::BitAnd,
-            acvus_ast::BinOp::Shl => BinOp::Shl(Overflow::Trap),
-            acvus_ast::BinOp::Shr => BinOp::Shr(Overflow::Trap),
+            acvus_ast::BinOp::Shl => BinOp::Shl,
+            acvus_ast::BinOp::Shr => BinOp::Shr,
             acvus_ast::BinOp::Mod => BinOp::Mod,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Checked {
-    Add,
-    Sub,
-    Mul,
-}
-
 /// A one-operand operation of the MIR.
 ///
-/// It is its own enum, and not `acvus_ast::UnaryOp`, for the reason
-/// [`BinOp`] is: negation carries its [`Overflow`], which the parser does
-/// not know, and a dereference is a `Take` in the MIR (RFC-0018), so the
-/// enum has no variant for it.
+/// It is its own enum, and not `acvus_ast::UnaryOp`, because a dereference
+/// is a `Take` in the MIR (RFC-0018), so the enum has no variant for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
-    /// `-x`: a signed integer or `f64`. A trapping negation of the width's
-    /// minimum ends the run.
-    Neg(Overflow),
+    /// `-x`: a signed integer or `f64`. The negation of the width's minimum
+    /// overflows, which is undefined, as [`BinOp`] states.
+    Neg,
     /// `!b` on a `Bool`.
     Not,
 }
@@ -349,42 +322,60 @@ impl ForSource {
             Self::Slice(_) | Self::SliceMut(_) | Self::Array(_) => 1,
         }
     }
+
+    /// The types of the body parameters this source supplies, in order:
+    /// the element, then the `u64` counter where the source is a slice or
+    /// an array. Refused at the first operand whose type this source does
+    /// not traverse. The types are kinds of the one table `types`, so a
+    /// parameter has the supplied type exactly where its type's kind is
+    /// the one returned. Cost: O(the element's kind).
+    pub fn supplied_kinds(
+        &self,
+        ty_of: impl Fn(ValueId) -> Ty,
+        types: &Types<Concrete>,
+    ) -> Result<smallvec::SmallVec<[TyKind<Concrete>; 2]>, UnfitOperand> {
+        let unfit = |operand: ValueId| UnfitOperand { operand };
+        let element = match *self {
+            Self::Range { at, hi } => {
+                let at_ty = ty_of(at);
+                if !matches!(types.kind(at_ty), TyKind::Int(_)) {
+                    return Err(unfit(at));
+                }
+                if ty_of(hi) != at_ty {
+                    return Err(unfit(hi));
+                }
+                return Ok(smallvec::smallvec![types.kind(at_ty).clone()]);
+            }
+            Self::Slice(slice) | Self::SliceMut(slice) => {
+                let wanted = match self {
+                    Self::SliceMut(_) => Mutability::Mut,
+                    _ => Mutability::Shared,
+                };
+                let TyKind::Ref(held, lent) = types.kind(ty_of(slice)) else {
+                    return Err(unfit(slice));
+                };
+                let TyKind::Slice(element) = types.kind(*lent) else {
+                    return Err(unfit(slice));
+                };
+                if *held != wanted {
+                    return Err(unfit(slice));
+                }
+                TyKind::Ref(wanted, *element)
+            }
+            Self::Array(array) => match types.kind(ty_of(array)) {
+                TyKind::Array(element, _, _) => types.kind(*element).clone(),
+                _ => return Err(unfit(array)),
+            },
+        };
+        Ok(smallvec::smallvec![element, TyKind::Int(IntTy::U64)])
+    }
 }
 
-/// Whether a `for`'s exit edge defines the loop's trip count (RFC-0057
-/// rule 9). Where it does, the terminator fills the exit block's leading
-/// parameter with it, as it fills the body block's leading parameters, and
-/// `exit_args` are the carried values that follow. A pass sets it where it
-/// reads the count, and nothing else does, so a loop no pass asked about
-/// keeps the exit edge it was lowered with.
+/// An operand of a loop's head whose type is not one the head traverses
+/// or tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExitTrip {
-    /// The exit block's parameters are `exit_args`, one for one.
-    Absent,
-    /// The exit block's first parameter is the number of times the body
-    /// ran, a `u64`: `max(hi − at, 0)` for a range and the source's length
-    /// for a slice or an array.
-    Defined,
-}
-
-impl ExitTrip {
-    /// How many of the exit block's leading parameters the terminator
-    /// fills itself; the carried values follow them.
-    pub fn supplied_params(self) -> usize {
-        match self {
-            Self::Absent => 0,
-            Self::Defined => 1,
-        }
-    }
-
-    /// The exit block's parameter that holds the trip count, where the edge
-    /// defines one.
-    pub fn trip_param(self, exit_params: &[ValueId]) -> Option<ValueId> {
-        match self {
-            Self::Absent => None,
-            Self::Defined => exit_params.first().copied(),
-        }
-    }
+pub struct UnfitOperand {
+    pub operand: ValueId,
 }
 
 /// The `Order` a call waits for and the `Order` it yields (RFC-0007).

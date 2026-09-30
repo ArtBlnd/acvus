@@ -12,18 +12,27 @@
 //!   included. A `src` that is a reference has tags `Any`.
 //! - Every other: top.
 //!
+//! A value's top and its widening at a loop header are `IntervalValues`'
+//! for the interval: an integer value's interval lies within its type's
+//! range, and a growing end widens to its type's bound.
+//!
 //! Which successors run (`executable`):
 //! - `Diamond`, `JumpIf`: by the condition's constant, as `ConstantValues`.
-//! - `Switch` on `Tag` keys: the set is the tag value's tags, `Any` read as
-//!   every variant of its type, a reference's target's where the tag value
-//!   is a reference. An arm runs where its key is in the set; `default`
-//!   where the set holds a tag no key names.
-//! - `Switch` on `Bool` keys: by the constant; `default` where a `bool` value
-//!   the constant allows has no key.
-//! - `Switch` on `Int` or `Char` keys: by the interval; `default` where the
-//!   interval holds a value no key names.
+//! - `Switch`: by the fact of the value it switches on, which is its tag
+//!   value, or that value's target where the tag value is a reference. The
+//!   analysis tracks no storage's contents, so a target's fact is the top
+//!   of its type, an integer's interval its type's range (undefined
+//!   behaviour §2).
+//!   - On `Tag` keys: the set is the value's tags, `Any` read as every
+//!     variant of its type. An arm runs where its key is in the set;
+//!     `default` where the set holds a tag no key names.
+//!   - On `Bool` keys: by the constant; `default` where a `bool` value the
+//!     constant allows has no key.
+//!   - On `Int` or `Char` keys: by the interval; `default` where the
+//!     interval holds a value no key names.
 //! - Every other terminator: all its successors.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use acvus_ast::Literal;
@@ -35,7 +44,7 @@ use super::values::OperandTypes;
 use crate::decl::{Declarations, Tags as PrimitiveTags};
 use crate::ir::cfg::{BlockId, BodyId, Inst, Module, Op, Terminator};
 use crate::ir::{BinOp, SwitchKey, UnaryOp, ValueId};
-use crate::passes::analysis::{Analysis, AnalysisManager, Executable, SparseAnalysis, SparseFacts, solve_sparse};
+use crate::passes::analysis::{Analysis, Executable, Queries, SparseAnalysis, SparseFacts, solve_sparse};
 use crate::passes::domain::{
     Bound, Constant, ConstantDomain, Interval, IntervalDomain, JoinSemiLattice, Tags, TagsDomain, ValueDomain, Widen,
 };
@@ -138,8 +147,8 @@ impl Analysis for MatchFacts {
         crate::ir::cfg::Aspect::Types,
     ];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Self::Facts {
-        solve_sparse(&Matches::new(module, body, am.decls()), module.body(body))
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Self::Facts {
+        solve_sparse(&Matches::new(module, body, queries.decls()), module.body(body))
     }
 }
 
@@ -236,8 +245,21 @@ impl<'m> Matches<'m> {
         }
     }
 
+    /// The fact of the value a `Switch` on `tag` switches on: the tag
+    /// value's own, or, where it is a reference, the top of its target's
+    /// type.
+    fn switched<'f>(&self, tag: ValueId, fact: &'f MatchValue) -> Cow<'f, MatchValue> {
+        match self.kind(tag) {
+            TyKind::Ref(_, target) => {
+                Cow::Owned(MatchValue { interval: self.operand_types.interval_top_of(*target), ..self.domain.top() })
+            }
+            _ => Cow::Borrowed(fact),
+        }
+    }
+
     fn switch(&self, tag: ValueId, arms: &[(SwitchKey, BlockId, Vec<ValueId>)], default: Option<BlockId>, fact: &MatchValue) -> Executable {
         let keys: Vec<SwitchKey> = arms.iter().map(|(key, _, _)| *key).collect();
+        let fact = self.switched(tag, fact);
         let chosen = match keys.first() {
             Some(SwitchKey::Tag(_)) => self.tag_choice(tag, &keys, &fact.tags),
             Some(SwitchKey::Bool(_)) => bool_choice(&keys, &fact.constant),
@@ -335,21 +357,18 @@ fn branch(condition: &Constant, on_true: BlockId, on_false: BlockId) -> Executab
 impl SparseAnalysis for Matches<'_> {
     type Domain = MatchDomain;
 
-    fn domain(&self) -> &MatchDomain {
-        &self.domain
-    }
-
     fn transfer(&self, inst: &Inst, operands: &[&MatchValue]) -> MatchValue {
         if let Some(value) = self.operand_types.value_operation(&self.domain, inst, operands) {
             return value;
         }
+        let result = inst.result().expect("the engine evaluates an instruction that yields a value");
         match (inst.op(), operands) {
-            (Op::MakeVariant { tag, .. }, _) => MatchValue { tags: Tags::Of(BTreeSet::from([*tag])), ..self.domain.top() },
+            (Op::MakeVariant { tag, .. }, _) => MatchValue { tags: Tags::Of(BTreeSet::from([*tag])), ..self.top(result) },
             (Op::TestVariant { src, tag }, [src_fact]) => {
-                MatchValue { constant: self.tested(*src, *tag, &src_fact.tags), ..self.domain.top() }
+                MatchValue { constant: self.tested(*src, *tag, &src_fact.tags), ..self.top(result) }
             }
             (Op::TestVariant { .. }, _) => panic!("a TestVariant is handed {} operand facts, not one", operands.len()),
-            _ => self.domain.top(),
+            _ => self.top(result),
         }
     }
 
@@ -370,9 +389,23 @@ impl SparseAnalysis for Matches<'_> {
         }
     }
 
-    /// What a terminator fills itself, a `For`'s counter, element or trip
-    /// count, is no instruction the tables name: top.
-    fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&MatchValue]) -> MatchValue {
-        self.domain.top()
+    /// What a terminator fills itself, a `For`'s counter or element, is no
+    /// instruction the tables name: its top.
+    fn supplied(&self, _terminator: &Terminator, to: BlockId, index: usize, _operands: &[&MatchValue]) -> MatchValue {
+        self.top(self.operand_types.body.block(to).params()[index])
+    }
+
+    /// Each component's top, the interval's by `IntervalValues`' rule.
+    fn top(&self, value: ValueId) -> MatchValue {
+        MatchValue { interval: self.operand_types.interval_top(value), ..self.domain.top() }
+    }
+
+    /// Each component widens by its own domain, the interval by
+    /// `IntervalValues`' rule.
+    fn widen(&self, value: ValueId, fact: &mut MatchValue, next: &MatchValue) -> bool {
+        let tags = fact.tags.widen(&next.tags);
+        let constant = fact.constant.widen(&next.constant);
+        let interval = self.operand_types.widen_interval(value, &mut fact.interval, &next.interval);
+        tags || constant || interval
     }
 }

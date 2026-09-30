@@ -1,13 +1,14 @@
+use std::rc::Rc;
+
 use acvus_ast::{Literal, Span};
 
 use super::*;
 use crate::ir::cfg::edit::{Editor, Position, Value};
-use crate::ir::cfg::{BlockId, Body, Definition, Stages, Terminator};
-use crate::ir::{BinOp, Overflow, ValueId};
+use crate::ir::cfg::{BlockId, Body, Definition, Terminator};
+use crate::ir::{BinOp, ValueId};
+use crate::passes::analysis::{CallGraph, Raise};
 use crate::passes::edit_facts::EditFacts;
-use crate::passes::optimize::tests::{
-    Fixture, assign, bool_const, declarations, int_const, jump, ret, take, trapping_add, wrapping_add,
-};
+use crate::passes::optimize::tests::{Fixture, add, assign, bool_const, declarations, int_const, jump, ret, take, trapping_div};
 
 /// ```text
 /// fn(n, c):
@@ -38,23 +39,23 @@ fn sample(f: &mut Fixture) -> Sample {
     builder.push_unit(assign(acc, zero), Span::ZERO);
     let a = builder.push(take(x), int, Span::ZERO);
     let two = builder.push(int_const(2), int, Span::ZERO);
-    let b = builder.push(wrapping_add(a, two), int, Span::ZERO);
-    builder.push(Op::BinOp { op: BinOp::Mul(Overflow::Wrap), left: n, right: n }, int, Span::ZERO);
+    let b = builder.push(add(a, two), int, Span::ZERO);
+    builder.push(Op::BinOp { op: BinOp::Mul, left: n, right: n }, int, Span::ZERO);
     let [header, loop_body, exit] = [(); 3].map(|()| builder.new_block(&[]));
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
-    let t1 = builder.push(wrapping_add(n, n), int, Span::ZERO);
-    let t2 = builder.push(wrapping_add(n, n), int, Span::ZERO);
-    let u = builder.push(wrapping_add(t1, t2), int, Span::ZERO);
+    let t1 = builder.push(add(n, n), int, Span::ZERO);
+    let t2 = builder.push(add(n, n), int, Span::ZERO);
+    let u = builder.push(add(t1, t2), int, Span::ZERO);
     let current = builder.push(take(acc), int, Span::ZERO);
-    let next = builder.push(wrapping_add(current, u), int, Span::ZERO);
+    let next = builder.push(add(current, u), int, Span::ZERO);
     builder.push_unit(assign(acc, next), Span::ZERO);
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(exit);
     let last = builder.push(take(acc), int, Span::ZERO);
-    let result = builder.push(wrapping_add(last, b), int, Span::ZERO);
+    let result = builder.push(add(last, b), int, Span::ZERO);
     builder.terminate(ret(result), acvus_ast::Span::ZERO);
     let body = builder.seal().expect("the body has no open state");
     Sample { body, n }
@@ -109,8 +110,8 @@ fn the_full_level_reaches_the_expected_form() {
 
     let body = f.module.body(id);
     assert!(body.slots().is_empty(), "{}", f.snapshot(id));
-    let Some((header, cond_stage, exit)) = body.blocks().find_map(|(block, record)| match record.terminator() {
-        Terminator::While { stages, exit, .. } => Some((block, stages.body(), *exit)),
+    let Some((header, loop_body, exit)) = body.blocks().find_map(|(block, record)| match record.terminator() {
+        Terminator::While { body, exit, .. } => Some((block, *body, *exit)),
         _ => None,
     }) else {
         panic!("the loop stays:\n{}", f.snapshot(id))
@@ -120,11 +121,11 @@ fn the_full_level_reaches_the_expected_form() {
     };
     let ops = |block: BlockId| -> Vec<&Op> { body.block(block).insts().map(|inst| inst.op()).collect() };
 
-    let [Op::BinOp { op: BinOp::Add(Overflow::Wrap), left, right: u }] = ops(cond_stage)[..] else {
+    let [Op::BinOp { op: BinOp::Add, left, right: u }] = ops(loop_body)[..] else {
         panic!("the loop body is one addition:\n{}", f.snapshot(id))
     };
     assert_eq!(left, acc);
-    let Op::BinOp { op: BinOp::Add(Overflow::Wrap), left: t1, right: t1_again } = defining_op(body, *u) else {
+    let Op::BinOp { op: BinOp::Add, left: t1, right: t1_again } = defining_op(body, *u) else {
         panic!("u is t1 + t1:\n{}", f.snapshot(id))
     };
     assert_eq!(t1, t1_again, "t2 is t1:\n{}", f.snapshot(id));
@@ -134,7 +135,7 @@ fn the_full_level_reaches_the_expected_form() {
         assert_eq!(body.block_of(inst), body.entry(), "{hoisted:?} is hoisted into the preheader:\n{}", f.snapshot(id));
     }
 
-    let [Op::Const { .. }, Op::BinOp { op: BinOp::Add(Overflow::Wrap), left, right: three }] = ops(exit)[..] else {
+    let [Op::Const { .. }, Op::BinOp { op: BinOp::Add, left, right: three }] = ops(exit)[..] else {
         panic!("the exit is a constant and one addition:\n{}", f.snapshot(id))
     };
     assert_eq!(left, acc);
@@ -179,7 +180,7 @@ fn the_scalar_fixpoint_cascades_and_lowers_its_measure_each_round() {
     builder.terminate(Terminator::Jump { to: join, args: vec![six] }, acvus_ast::Span::ZERO);
     builder.switch_to(join);
     let one = builder.push(int_const(1), int, Span::ZERO);
-    let sum = builder.push(wrapping_add(p, one), int, Span::ZERO);
+    let sum = builder.push(add(p, one), int, Span::ZERO);
     builder.terminate(ret(sum), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
     let decls = declarations(&f.interner);
@@ -210,7 +211,7 @@ impl BodyTransform for AddsAnUnreadSum {
         let (entry, ty) = (module.body(body).entry(), module.body(body).ty_of(n));
         let mut facts = EditFacts::new(am, body);
         let mut editor = Editor::<Value>::new(module, body, &mut facts);
-        editor.insert(Position::End(entry), wrapping_add(n, n), ty, Span::ZERO);
+        editor.insert(Position::End(entry), add(n, n), ty, Span::ZERO);
         editor.finish()
     }
 }
@@ -255,8 +256,8 @@ fn a_step_that_requires_ssa_refuses_a_promotable_slot() {
 }
 
 /// ```text
-/// if d { n + n } else { n + 1 }     both trap, so neither is hoisted
-/// while c { n + n }                 traps, so it stays in the loop
+/// if d { n / n } else { n / 1 }     both may trap, so neither is hoisted
+/// while c { n / n }                 may trap, so it stays in the loop
 /// return 0
 /// ```
 /// The loop is entered from both arms, and `licm` gives it a preheader it
@@ -280,18 +281,18 @@ fn a_loop_keeps_its_empty_preheader_into_p7() {
         join,
     }, acvus_ast::Span::ZERO);
     builder.switch_to(then_block);
-    builder.push(trapping_add(n, n), int, Span::ZERO);
+    builder.push(trapping_div(n, n), int, Span::ZERO);
     builder.terminate(jump(join), acvus_ast::Span::ZERO);
     builder.switch_to(else_block);
     let one = builder.push(int_const(1), int, Span::ZERO);
-    builder.push(trapping_add(n, one), int, Span::ZERO);
+    builder.push(trapping_div(n, one), int, Span::ZERO);
     builder.terminate(jump(join), acvus_ast::Span::ZERO);
     builder.switch_to(join);
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(header);
-    builder.terminate(Terminator::While { cond: c, stages: Stages::lowered(loop_body), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
+    builder.terminate(Terminator::While { cond: c, body: loop_body, body_args: Vec::new(), exit, exit_args: Vec::new() }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
-    builder.push(trapping_add(n, n), int, Span::ZERO);
+    builder.push(trapping_div(n, n), int, Span::ZERO);
     builder.terminate(jump(header), acvus_ast::Span::ZERO);
     builder.switch_to(exit);
     let zero = builder.push(int_const(0), int, Span::ZERO);
@@ -306,4 +307,50 @@ fn a_loop_keeps_its_empty_preheader_into_p7() {
     let [of] = loops.loops().collect::<Vec<_>>()[..] else { panic!("one loop stays:\n{}", f.snapshot(id)) };
     let Some(preheader) = loops.preheader(of) else { panic!("the loop has a preheader:\n{}", f.snapshot(id)) };
     assert!(f.module.body(id).block(preheader).insts().is_empty(), "nothing is hoisted:\n{}", f.snapshot(id));
+}
+
+/// Seals a new body `|n| n`, over the parameter of the body it runs on,
+/// and edits none.
+struct SealsABody;
+
+impl BodyTransform for SealsABody {
+    const NAME: &'static str = "seals_a_body";
+
+    fn run(module: &mut Module, body: BodyId, _am: &mut AnalysisManager<'_>) -> Changes {
+        let (name, param) = module.body(body).params()[0];
+        let (ret_ty, param_ty) = (module.body(body).ret(), module.body(body).ty_of(param));
+        let mut builder = module.build_body(false, ret_ty);
+        let n = builder.param(name, param_ty, Span::ZERO);
+        builder.terminate(ret(n), Span::ZERO);
+        builder.seal().expect("the body has no open state");
+        Changes::default()
+    }
+}
+
+impl Requires for SealsABody {
+    const FORM: Form = Form::Lowered;
+}
+
+/// A body transform that seals a body drops the kept call graph, which
+/// ranges over every body, and `Raise`, which read it, though it records
+/// no edit of its own body.
+#[test]
+fn a_body_a_step_seals_drops_the_module_analyses_and_their_readers() {
+    let mut f = Fixture::new();
+    let (int, nn) = (f.int, f.name("n"));
+    let mut builder = f.module.build_body(false, int);
+    let n = builder.param(nn, int, Span::ZERO);
+    builder.terminate(ret(n), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    let decls = declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let graph = am.get_of_module::<CallGraph>(&f.module);
+    let endings = am.get::<Raise>(&f.module, id);
+
+    step::<SealsABody>(&mut f.module, id, &mut am);
+
+    assert_eq!(f.module.body_ids().count(), 2);
+    assert!(f.module.take_body_set_change().is_none(), "the step drained the record");
+    assert!(!Rc::ptr_eq(&graph, &am.get_of_module::<CallGraph>(&f.module)), "the call graph was dropped");
+    assert!(!Rc::ptr_eq(&endings, &am.get::<Raise>(&f.module, id)), "Raise read the call graph, so it was dropped with it");
 }

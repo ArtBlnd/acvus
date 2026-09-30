@@ -114,7 +114,7 @@ mod tests {
 
     use super::*;
     use crate::ir::cfg::Terminator;
-    use crate::passes::optimize::tests::{Fixture, assert_whole, int_const, ret, wrapping_add};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, int_const, ret};
 
     /// ```text
     /// entry: a = 1; b = a + a; if c { then } else { else } join
@@ -129,7 +129,7 @@ mod tests {
         let mut builder = f.module.build_body(false, int);
         let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
         let a = builder.push(int_const(1), int, Span::ZERO);
-        let b = builder.push(wrapping_add(a, a), int, Span::ZERO);
+        let b = builder.push(add(a, a), int, Span::ZERO);
         let [then_block, else_block] = [(); 2].map(|()| builder.new_block(&[]));
         let join = builder.new_block(&[int]);
         builder.terminate(Terminator::Diamond {
@@ -141,7 +141,7 @@ mod tests {
             join,
         }, acvus_ast::Span::ZERO);
         builder.switch_to(then_block);
-        let u = builder.push(wrapping_add(b, a), int, Span::ZERO);
+        let u = builder.push(add(b, a), int, Span::ZERO);
         builder.terminate(Terminator::Jump { to: join, args: vec![u] }, acvus_ast::Span::ZERO);
         builder.switch_to(else_block);
         builder.terminate(Terminator::Jump { to: join, args: vec![a] }, acvus_ast::Span::ZERO);

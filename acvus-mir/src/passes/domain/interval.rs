@@ -1,11 +1,12 @@
 //! The interval domain over the integers: `[lo, hi]` with infinite ends,
 //! bottom the empty interval; widening at loop headers sends a growing end to
-//! infinity (compilation §2: the fixpoint is bounded). Abstract operations
+//! infinity, or, with thresholds, to the nearest threshold past it
+//! (compilation §2: the fixpoint is bounded). Abstract operations
 //! over-approximate the language's (operators §1).
 
 use acvus_ast::Literal;
 
-use crate::ir::{BinOp, Overflow, UnaryOp};
+use crate::ir::{BinOp, UnaryOp};
 use crate::passes::domain::{Arithmetic, JoinSemiLattice, Operation, Scalar, ValueDomain, Widen, not_an_operation};
 use crate::ty::{CastTy, IntTy};
 
@@ -53,19 +54,10 @@ impl JoinSemiLattice for Interval {
 
 /// The standard interval widening (Cousot and Cousot, 1977): an end that
 /// `next` moves outward goes to its infinity, so each end changes at most
-/// twice after the first value and every ascending chain is finite.
+/// once after the first value and every ascending chain is finite.
 impl Widen for Interval {
     fn widen(&mut self, next: &Self) -> bool {
-        let (Interval::Range { lo, hi }, Interval::Range { lo: next_lo, hi: next_hi }) = (&*self, next) else {
-            return self.join(next);
-        };
-        let widened = Interval::Range {
-            lo: if next_lo < lo { Bound::NegInfinity } else { *lo },
-            hi: if next_hi > hi { Bound::PosInfinity } else { *hi },
-        };
-        let grew = *self != widened;
-        *self = widened;
-        grew
+        self.widen_to(next, Bound::NegInfinity, Bound::PosInfinity)
     }
 }
 
@@ -98,20 +90,20 @@ impl ValueDomain for IntervalDomain {
         }
         let range = Interval::of_width(width);
         match arithmetic {
-            Arithmetic::Add(overflow) => at_width(left.sum(right), overflow, width),
-            Arithmetic::Sub(overflow) => at_width(left.difference(right), overflow, width),
-            Arithmetic::Mul(overflow) => at_width(left.product(right), overflow, width),
+            Arithmetic::Add => left.sum(right).meet(&range),
+            Arithmetic::Sub => left.difference(right).meet(&range),
+            Arithmetic::Mul => left.product(right).meet(&range),
             Arithmetic::Div => left.quotient(right).meet(&range),
             Arithmetic::Mod => left.remainder(right).meet(&range),
-            Arithmetic::Shl(overflow) => {
-                let amount = shift_amount(right, overflow, width);
+            Arithmetic::Shl => {
+                let amount = shift_amount(right, width);
                 let shifted = amount.bounds().map_or(Interval::Empty, |(lo, hi)| {
                     left.product(&Interval::Range { lo: power_of_two(lo), hi: power_of_two(hi) })
                 });
-                at_width(shifted, Overflow::Wrap, width)
+                truncated_to_width(shifted, width)
             }
-            Arithmetic::Shr(overflow) => {
-                let amount = shift_amount(right, overflow, width);
+            Arithmetic::Shr => {
+                let amount = shift_amount(right, width);
                 left.shifted_right(&amount).meet(&range)
             }
             Arithmetic::BitAnd => left.bit_and(right, width).meet(&range),
@@ -124,10 +116,10 @@ impl ValueDomain for IntervalDomain {
 
     fn unary(&self, op: UnaryOp, ty: CastTy, operand: &Interval) -> Interval {
         match (op, ty) {
-            (UnaryOp::Neg(overflow), CastTy::Int(width)) if width.signed() => {
-                at_width(Interval::exactly(0).difference(operand), overflow, width)
+            (UnaryOp::Neg, CastTy::Int(width)) if width.signed() => {
+                Interval::exactly(0).difference(operand).meet(&Interval::of_width(width))
             }
-            (UnaryOp::Neg(_), CastTy::F64) | (UnaryOp::Not, CastTy::Bool) => Interval::full(),
+            (UnaryOp::Neg, CastTy::F64) | (UnaryOp::Not, CastTy::Bool) => Interval::full(),
             _ => not_an_operation(op, ty),
         }
     }
@@ -138,36 +130,27 @@ impl ValueDomain for IntervalDomain {
             return Interval::full();
         };
         match from {
-            CastTy::Int(_) => at_width(operand.clone(), Overflow::Wrap, width),
+            CastTy::Int(_) => truncated_to_width(operand.clone(), width),
             CastTy::Bool => Interval::finite(0, 1),
-            CastTy::Char => at_width(Interval::finite(0, i128::from(u32::from(char::MAX))), Overflow::Wrap, width),
+            CastTy::Char => truncated_to_width(Interval::finite(0, i128::from(u32::from(char::MAX))), width),
             CastTy::F64 => Interval::of_width(width),
         }
     }
 }
 
-/// The result at `width` of an operation whose exact result lies in
-/// `exact`. A trapping operation's result is the part that fits, since no
-/// run passes it with any other (operators §1); a wrapping one's is `exact`
-/// where it fits and the whole width where it may wrap.
-fn at_width(exact: Interval, overflow: Overflow, width: IntTy) -> Interval {
+/// The result at `width` of a cast or a left shift whose exact result lies
+/// in `exact`: both discard the bits past the width, as Rust's `as` and
+/// `<<` do, so the result is `exact` where it fits and the whole width
+/// where bits may be discarded.
+fn truncated_to_width(exact: Interval, width: IntTy) -> Interval {
     let range = Interval::of_width(width);
-    match overflow {
-        Overflow::Trap => exact.meet(&range),
-        Overflow::Wrap if exact.le(&range) => exact,
-        Overflow::Wrap => range,
-    }
+    if exact.le(&range) { exact } else { range }
 }
 
-/// The amounts a shift runs with: a trapping shift's are the ones below
-/// the width, a wrapping shift's are taken modulo the width.
-fn shift_amount(amount: &Interval, overflow: Overflow, width: IntTy) -> Interval {
-    let amounts = Interval::finite(0, i128::from(width.bits()) - 1);
-    match overflow {
-        Overflow::Trap => amount.meet(&amounts),
-        Overflow::Wrap if amount.le(&amounts) => amount.clone(),
-        Overflow::Wrap => amounts,
-    }
+/// The amounts a shift runs with: the ones below the width, since any
+/// other overflows (operators §2).
+fn shift_amount(amount: &Interval, width: IntTy) -> Interval {
+    amount.meet(&Interval::finite(0, i128::from(width.bits()) - 1))
 }
 
 /// `2^amount` for an amount below 64.
@@ -301,8 +284,39 @@ impl Interval {
         Interval::between(Bound::Finite(lo), Bound::Finite(hi))
     }
 
-    fn of_width(width: IntTy) -> Interval {
+    /// Every value of `width`.
+    pub(crate) fn of_width(width: IntTy) -> Interval {
         Interval::finite(width.min(), width.max())
+    }
+
+    /// Widening with thresholds (Cousot and Cousot, 1992), the thresholds
+    /// being `least`, `greatest` and the infinities: an end that `next`
+    /// moves outward goes to the nearest threshold at or past `next`'s end.
+    /// Each end changes at most twice after the first value, and at most
+    /// once while `next` lies within `[least, greatest]`, so every ascending
+    /// chain is finite. Returns whether `self` grew.
+    pub(crate) fn widen_to(&mut self, next: &Interval, least: Bound, greatest: Bound) -> bool {
+        let (Interval::Range { lo, hi }, Interval::Range { lo: next_lo, hi: next_hi }) = (&*self, next) else {
+            return self.join(next);
+        };
+        let lo = if next_lo >= lo {
+            *lo
+        } else if *next_lo >= least {
+            least
+        } else {
+            Bound::NegInfinity
+        };
+        let hi = if next_hi <= hi {
+            *hi
+        } else if *next_hi <= greatest {
+            greatest
+        } else {
+            Bound::PosInfinity
+        };
+        let widened = Interval::Range { lo, hi };
+        let grew = *self != widened;
+        *self = widened;
+        grew
     }
 
     /// `[lo, hi]`, or `Empty` where it holds no integer.
@@ -508,14 +522,14 @@ mod tests {
     }
 
     /// D79: a shift's amount keeps its own width: an amount of a wider type
-    /// at or past the value's width leaves a trapping shift no value.
+    /// at or past the value's width overflows, which leaves no value.
     #[test]
     fn a_shift_amount_past_the_width_of_a_wider_type_leaves_no_value() {
         let u8_ty = CastTy::Int(IntTy::U8);
         let wide = Interval::exactly(1i128 << 40);
         let one = Interval::exactly(1);
-        assert_eq!(IntervalDomain.binary(BinOp::Shl(Overflow::Trap), u8_ty, &one, &wide), Interval::Empty);
-        assert_eq!(IntervalDomain.binary(BinOp::Shl(Overflow::Trap), u8_ty, &one, &Interval::exactly(3)), Interval::exactly(8));
+        assert_eq!(IntervalDomain.binary(BinOp::Shl, u8_ty, &one, &wide), Interval::Empty);
+        assert_eq!(IntervalDomain.binary(BinOp::Shl, u8_ty, &one, &Interval::exactly(3)), Interval::exactly(8));
     }
 
     fn finite(lo: i128, hi: i128) -> Interval {
@@ -610,6 +624,34 @@ mod tests {
     }
 
     #[test]
+    fn widening_to_thresholds_covers_the_join() {
+        let all = samples();
+        for a in &all {
+            for b in &all {
+                let mut widened = a.clone();
+                widened.widen_to(b, Bound::Finite(-128), Bound::Finite(127));
+                assert!(joined(a, b).le(&widened), "{a:?} ∇ {b:?} = {widened:?}");
+            }
+        }
+    }
+
+    /// A growing end within the thresholds jumps to the threshold once; one
+    /// past them goes on to its infinity, so each end changes at most twice.
+    #[test]
+    fn widening_to_thresholds_terminates_on_an_ascending_chain() {
+        let (least, greatest) = (Bound::Finite(-128), Bound::Finite(127));
+        let mut within = Interval::bottom();
+        let within_rises = (0..=127).filter(|n| within.widen_to(&finite(-n, *n), least, greatest)).count();
+        assert_eq!(within, finite(-128, 127));
+        assert!(within_rises <= 3, "each end reaches its threshold in one widening step, rose {within_rises}");
+
+        let mut past = Interval::bottom();
+        let past_rises = (0..1000).filter(|n| past.widen_to(&finite(-n, *n), least, greatest)).count();
+        assert_eq!(past, Interval::full());
+        assert!(past_rises <= 5, "each end reaches its threshold, then its infinity, rose {past_rises}");
+    }
+
+    #[test]
     fn widening_keeps_a_stable_end() {
         let mut fact = finite(0, 1);
         fact.widen(&finite(0, 2));
@@ -618,7 +660,7 @@ mod tests {
 
     // -- Value operations over-approximate the language's ------------------
 
-    use crate::ir::{BinOp, Overflow, UnaryOp};
+    use crate::ir::{BinOp, UnaryOp};
     use crate::ty::{CastTy, IntTy};
 
     fn contains(interval: &Interval, n: i128) -> bool {
@@ -634,26 +676,20 @@ mod tests {
     }
 
     /// The language's `a op b` at `width`, by Rust's own operations at a
-    /// width of eight bits; `None` is a trap.
+    /// width of eight bits; `None` is a trap or an overflow.
     fn concrete(op: BinOp, width: IntTy, a: i128, b: i128) -> Option<i128> {
-        use Overflow::{Trap, Wrap};
         macro_rules! at {
             ($t:ty) => {{
                 let (a, b) = (a as $t, b as $t);
                 let amount = u32::try_from(b).ok();
                 let result: Option<$t> = match op {
-                    BinOp::Add(Trap) => a.checked_add(b),
-                    BinOp::Add(Wrap) => Some(a.wrapping_add(b)),
-                    BinOp::Sub(Trap) => a.checked_sub(b),
-                    BinOp::Sub(Wrap) => Some(a.wrapping_sub(b)),
-                    BinOp::Mul(Trap) => a.checked_mul(b),
-                    BinOp::Mul(Wrap) => Some(a.wrapping_mul(b)),
+                    BinOp::Add => a.checked_add(b),
+                    BinOp::Sub => a.checked_sub(b),
+                    BinOp::Mul => a.checked_mul(b),
                     BinOp::Div => a.checked_div(b),
                     BinOp::Mod => a.checked_rem(b),
-                    BinOp::Shl(Trap) => amount.and_then(|amount| a.checked_shl(amount)),
-                    BinOp::Shl(Wrap) => Some(a.wrapping_shl(b as u32)),
-                    BinOp::Shr(Trap) => amount.and_then(|amount| a.checked_shr(amount)),
-                    BinOp::Shr(Wrap) => Some(a.wrapping_shr(b as u32)),
+                    BinOp::Shl => amount.and_then(|amount| a.checked_shl(amount)),
+                    BinOp::Shr => amount.and_then(|amount| a.checked_shr(amount)),
                     BinOp::BitAnd => Some(a & b),
                     BinOp::BitOr => Some(a | b),
                     BinOp::Xor => Some(a ^ b),
@@ -690,20 +726,14 @@ mod tests {
 
     #[test]
     fn integer_operations_over_approximate_the_language_at_eight_bits() {
-        use Overflow::{Trap, Wrap};
         let ops = [
-            BinOp::Add(Trap),
-            BinOp::Add(Wrap),
-            BinOp::Sub(Trap),
-            BinOp::Sub(Wrap),
-            BinOp::Mul(Trap),
-            BinOp::Mul(Wrap),
+            BinOp::Add,
+            BinOp::Sub,
+            BinOp::Mul,
             BinOp::Div,
             BinOp::Mod,
-            BinOp::Shl(Trap),
-            BinOp::Shl(Wrap),
-            BinOp::Shr(Trap),
-            BinOp::Shr(Wrap),
+            BinOp::Shl,
+            BinOp::Shr,
             BinOp::BitAnd,
             BinOp::BitOr,
             BinOp::Xor,
@@ -734,45 +764,35 @@ mod tests {
 
     #[test]
     fn negation_over_approximates_the_language_at_eight_bits() {
-        for overflow in [Overflow::Trap, Overflow::Wrap] {
-            for a in &operands() {
-                let abstract_result = IntervalDomain.unary(UnaryOp::Neg(overflow), CastTy::Int(IntTy::I8), a);
-                for x in members(a, IntTy::I8) {
-                    let x = x as i8;
-                    let value = match overflow {
-                        Overflow::Trap => x.checked_neg(),
-                        Overflow::Wrap => Some(x.wrapping_neg()),
-                    };
-                    if let Some(value) = value {
-                        assert!(contains(&abstract_result, i128::from(value)), "-{x} outside {abstract_result:?}");
-                    }
+        for a in &operands() {
+            let abstract_result = IntervalDomain.unary(UnaryOp::Neg, CastTy::Int(IntTy::I8), a);
+            for x in members(a, IntTy::I8) {
+                let x = x as i8;
+                if let Some(value) = x.checked_neg() {
+                    assert!(contains(&abstract_result, i128::from(value)), "-{x} outside {abstract_result:?}");
                 }
             }
         }
     }
 
     #[test]
-    fn a_trapping_result_is_clamped_to_its_width_and_a_wrapping_one_widens_to_it() {
+    fn an_overflowing_result_is_clamped_to_its_width() {
         let i8_ty = CastTy::Int(IntTy::I8);
         let u64_ty = CastTy::Int(IntTy::U64);
         let max = i128::from(u64::MAX);
-        let add_trap = BinOp::Add(Overflow::Trap);
-        let add_wrap = BinOp::Add(Overflow::Wrap);
-        assert_eq!(IntervalDomain.binary(add_trap, i8_ty, &finite(100, 120), &finite(10, 20)), finite(110, 127));
-        assert_eq!(IntervalDomain.binary(add_wrap, i8_ty, &finite(100, 120), &finite(10, 20)), finite(-128, 127));
-        assert_eq!(IntervalDomain.binary(add_wrap, i8_ty, &finite(1, 2), &finite(10, 20)), finite(11, 22));
-        assert_eq!(IntervalDomain.binary(add_trap, u64_ty, &finite(max - 1, max), &finite(0, 5)), finite(max - 1, max));
-        assert_eq!(IntervalDomain.binary(add_wrap, u64_ty, &finite(max - 1, max), &finite(0, 5)), finite(0, max));
+        assert_eq!(IntervalDomain.binary(BinOp::Add, i8_ty, &finite(100, 120), &finite(10, 20)), finite(110, 127));
+        assert_eq!(IntervalDomain.binary(BinOp::Add, i8_ty, &finite(1, 2), &finite(10, 20)), finite(11, 22));
+        assert_eq!(IntervalDomain.binary(BinOp::Add, u64_ty, &finite(max - 1, max), &finite(0, 5)), finite(max - 1, max));
         assert_eq!(
-            IntervalDomain.binary(BinOp::Mul(Overflow::Trap), u64_ty, &finite(max, max), &finite(max, max)),
+            IntervalDomain.binary(BinOp::Mul, u64_ty, &finite(max, max), &finite(max, max)),
             Interval::Empty,
-            "every run traps, so no value passes"
+            "every run overflows, so no value passes"
         );
         assert_eq!(IntervalDomain.binary(BinOp::Div, i8_ty, &finite(-5, 5), &finite(0, 0)), Interval::Empty);
         assert_eq!(IntervalDomain.binary(BinOp::Div, i8_ty, &finite(-128, -128), &finite(-1, -1)), Interval::Empty);
-        assert_eq!(IntervalDomain.binary(BinOp::Shl(Overflow::Trap), u64_ty, &finite(1, 1), &finite(64, 70)), Interval::Empty);
+        assert_eq!(IntervalDomain.binary(BinOp::Shl, u64_ty, &finite(1, 1), &finite(64, 70)), Interval::Empty);
         assert_eq!(
-            IntervalDomain.binary(BinOp::Shr(Overflow::Trap), u64_ty, &finite(max, max), &finite(63, 63)),
+            IntervalDomain.binary(BinOp::Shr, u64_ty, &finite(max, max), &finite(63, 63)),
             finite(1, 1)
         );
     }
@@ -782,7 +802,7 @@ mod tests {
         let top = IntervalDomain.top();
         let i8_ty = CastTy::Int(IntTy::I8);
         assert_eq!(IntervalDomain.binary(BinOp::Lt, i8_ty, &finite(0, 1), &finite(5, 6)), top);
-        assert_eq!(IntervalDomain.binary(BinOp::Add(Overflow::Trap), CastTy::F64, &top, &top), top);
+        assert_eq!(IntervalDomain.binary(BinOp::Add, CastTy::F64, &top, &top), top);
         assert_eq!(IntervalDomain.constant(&acvus_ast::Literal::Float(1.5), CastTy::F64), top);
         assert_eq!(IntervalDomain.constant(&acvus_ast::Literal::Int(-7), i8_ty), finite(-7, -7));
     }

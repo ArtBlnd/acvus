@@ -2,7 +2,7 @@ use acvus_utils::{Interner, QualifiedRef};
 
 use super::*;
 use crate::decl::{
-    Core, Declarations, DeclaredFacts, GenericImplSig, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme,
+    Core, Declarations, DeclaredFacts, Ends, GenericImplSig, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme,
 };
 use crate::ty::{Mark, MarkTerm};
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Mutability, TyKind, Types};
@@ -148,6 +148,10 @@ fn sources(sources: Vec<Source>) -> DeclaredFacts {
 fn relates(left: Atom, right: Term) -> DeclaredFacts {
     let relation = Relation { left: Term::Atom(left), comparison: Comparison::Le, right };
     DeclaredFacts { relations: Box::new([relation]), ..DeclaredFacts::default() }
+}
+
+fn ending(ends: Ends) -> DeclaredFacts {
+    DeclaredFacts { ends, ..DeclaredFacts::default() }
 }
 
 fn own(f: QualifiedRef) -> Declared {
@@ -726,4 +730,34 @@ fn a_stream_of_a_form_that_makes_no_stream_from_another_is_refused() {
             Refused::StreamOfNoStreamMadeFromAnother { declared: own(h) },
         ]
     );
+}
+
+/// extern-fn §4: a declaration that states nothing of how a call ends
+/// leaves it unstated.
+#[test]
+fn how_a_call_ends_is_unstated_by_default() {
+    assert_eq!(DeclaredFacts::default().ends, Ends::Unstated);
+    let mut f = Fixture::new();
+    let int = f.int();
+    let g = f.declare("g", &[int], int, DeclaredFacts::default());
+    assert_eq!(f.verified().call_facts(g, None).ends, Ends::Unstated);
+}
+
+/// extern-fn §4: how a call's own code ends, stated on a declaration or
+/// on its impl, is kept through `verify`, on a call given a closure
+/// argument as on any other.
+#[test]
+fn a_stated_ending_is_kept_through_verify() {
+    let mut f = Fixture::new();
+    let int = f.int();
+    let returns = f.declare("returns", &[int], int, ending(Ends::Returns));
+    let total = f.declare("total", &[int, int], int, ending(Ends::Total));
+    let by_impl = f.declare_generic("by_impl", &[int], int, ending(Ends::Total));
+    let callback = f.function(&[int], int);
+    let calls_back = f.declare("calls_back", &[callback], int, ending(Ends::Total));
+    let decls = f.verified();
+    assert_eq!(decls.call_facts(returns, None).ends, Ends::Returns);
+    assert_eq!(decls.call_facts(total, None).ends, Ends::Total);
+    assert_eq!(decls.call_facts(by_impl, Some(0)).ends, Ends::Total);
+    assert_eq!(decls.call_facts(calls_back, None).ends, Ends::Total);
 }

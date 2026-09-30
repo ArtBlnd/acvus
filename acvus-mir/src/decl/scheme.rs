@@ -90,8 +90,8 @@ pub struct GenericImplSig {
 }
 
 /// What a declaration states beyond its signature, trusted absolutely
-/// (extern-fn §3-4): the declared facts in their four kinds, and its
-/// lifetimes.
+/// (extern-fn §3-4): the declared facts in their four kinds, its
+/// lifetimes, and how a call ends.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DeclaredFacts {
     pub access: Box<[Access]>,
@@ -102,6 +102,24 @@ pub struct DeclaredFacts {
     /// declaration reads (`call_flows`). `None`: the flows are every input
     /// to every output (extern-fn §4).
     pub lifetimes: Option<LabelledSignature>,
+    pub ends: Ends,
+}
+
+/// How the call's own code ends, for every call of a declaration
+/// (extern-fn §4). Work the call runs, a closure argument or work a value
+/// it is given holds, ends and traps as that work does, so a call returns
+/// where its own code returns and that work does, and is total where both
+/// are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Ends {
+    /// Nothing is stated: the call's own code may return, trap, or never
+    /// end.
+    #[default]
+    Unstated,
+    /// The call's own code returns or traps.
+    Returns,
+    /// The call's own code returns a value and never traps.
+    Total,
 }
 
 impl DeclaredFacts {

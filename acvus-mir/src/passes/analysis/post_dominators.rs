@@ -14,7 +14,7 @@ use smallvec::SmallVec;
 
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Module, Terminator};
 use crate::passes::analysis::dominators::{DomTree, Graph};
-use crate::passes::analysis::{Analysis, AnalysisManager, Point};
+use crate::passes::analysis::{Analysis, Point, Queries};
 
 pub struct PostDominators {
     /// Over the blocks, by index, and the virtual exit after them.
@@ -67,7 +67,7 @@ impl Analysis for PostDominators {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape];
 
-    fn compute(_: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> PostDominators {
+    fn compute(_: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> PostDominators {
         let body = module.body(body);
         let Graph { blocks, successors, predecessors } = Graph::of(body);
         let exit = blocks.len();

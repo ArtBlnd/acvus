@@ -18,8 +18,8 @@ use super::control::diamond;
 use super::ctxt::Lcx;
 use super::place::view_array;
 use crate::decl::{Lift, LiftShape, PairMember, Taking};
-use crate::ir::cfg::{BlockId, Op, Stages, Terminator};
-use crate::ir::{ExitTrip, ForSource, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId, fn_effect, known_len};
+use crate::ir::cfg::{BlockId, Op, Terminator};
+use crate::ir::{ForSource, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId, fn_effect, known_len};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{Effect, IntTy, Mutability, Ty, TyKind};
 use crate::typeck::{Chosen, Own, StructureTree};
@@ -365,9 +365,9 @@ fn indices(
     let exit = cx.builder.new_block(&[exit_ty]);
     let terminator = Terminator::For {
         source: ForSource::Range { at: from, hi: to },
-        stages: Stages::lowered(body_block),
+        body: body_block,
+        body_args: Vec::new(),
         exit,
-        exit_trip: ExitTrip::Absent,
         exit_args: vec![at_end],
     };
     cx.builder.terminate(terminator, span);

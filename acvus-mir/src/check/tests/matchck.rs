@@ -7,7 +7,7 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 use crate::check::{RefusalKind, check};
 use crate::decl::{Core, Declarations, DeclaredFacts, LoopMarkers, RawDeclarations, Scheme};
 use crate::lower::lower_script;
-use crate::passes::analysis::AnalysisManager;
+use crate::passes::analysis::{AnalysisManager, MatchFacts, assert_intervals_within_types};
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Poly, TyId, TyKind, Types};
 use crate::typeck::check_script;
 
@@ -81,6 +81,10 @@ impl Fixture {
         assert!(typeck.refusals.is_empty(), "typeck refused {source}: {:?}", typeck.refusals);
         let module = lower_script(&decls, &typeck, types, &script);
         let mut am = AnalysisManager::new(&decls);
+        for body in module.body_ids() {
+            let matches = am.get::<MatchFacts>(&module, body);
+            assert_intervals_within_types(&module, body, |value| matches.of(value).interval.clone());
+        }
         check(&module, &mut am)
             .into_iter()
             .map(|refusal| (refusal.kind, source[refusal.span.start..refusal.span.end].to_string()))
@@ -166,6 +170,31 @@ fn a_scrutinee_of_type_never_is_not_refused() {
     let never = fx.ty(TyKind::Never);
     fx.nullary("abort", never);
     admitted(fx, "match abort() { 0 => 1, }");
+}
+
+/// A `match` on the `u8` input `$b`, one arm per value in `values`.
+fn u8_match(values: impl Iterator<Item = u8>) -> String {
+    let arms: String = values.map(|value| format!("{value} => {value}, ")).collect();
+    format!("match $b {{ {arms}}}")
+}
+
+/// patterns §1, §3: a `u8` holds exactly the values 0 to 255, as in Rust,
+/// so arms naming all 256 of them cover it with no `_`.
+#[test]
+fn a_u8_match_naming_every_value_is_admitted() {
+    let mut fx = Fixture::new();
+    let byte = fx.ty(TyKind::Int(IntTy::U8));
+    fx.input("b", byte);
+    admitted(fx, &u8_match(0..=u8::MAX));
+}
+
+/// patterns §3: the same match with 255 left unnamed and no `_`.
+#[test]
+fn a_u8_match_leaving_one_value_is_refused() {
+    let mut fx = Fixture::new();
+    let byte = fx.ty(TyKind::Int(IntTy::U8));
+    fx.input("b", byte);
+    refused_at_the_match(fx, &u8_match(0..u8::MAX));
 }
 
 /// patterns §3: `_` answers whatever the other arms leave.

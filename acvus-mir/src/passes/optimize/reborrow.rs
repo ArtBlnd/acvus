@@ -79,7 +79,7 @@ mod tests {
         let t = builder.push(reborrow_of(m, Mutability::Mut), mut_ref_int, Span::ZERO);
         let a = builder.push(read_through(s), int, Span::ZERO);
         let b = builder.push(read_through(t), int, Span::ZERO);
-        let sum = builder.push(crate::passes::optimize::tests::wrapping_add(a, b), int, Span::ZERO);
+        let sum = builder.push(crate::passes::optimize::tests::add(a, b), int, Span::ZERO);
         builder.terminate(Terminator::Return { value: sum, order: None, span: Span::ZERO }, Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();

@@ -23,7 +23,7 @@ use super::expr::lower_expr;
 use super::place::{Operand, Place, assign, lend, read};
 use super::stmt::lower_body;
 use crate::ir::cfg::{BlockId, Op, Terminator};
-use crate::ir::{BinOp, IndexBound, IndexMode, Overflow, PathSeg, RefTarget, SwitchKey, ValueId, known_len};
+use crate::ir::{BinOp, IndexBound, IndexMode, PathSeg, RefTarget, SwitchKey, ValueId, known_len};
 use crate::ty::{Mutability, Ty, TyKind};
 
 /// What a pattern is matched against: a reference value; a place the match
@@ -160,7 +160,7 @@ fn element(cx: &mut Lcx<'_, '_>, matched: &Matched, at: ListAt, span: Span) -> M
         ListAt::SliceTail { back } => {
             let len = cx.builder.push(Op::SliceLen { src: slice }, u64_ty, span);
             let back = cx.constant(Literal::Int(back as i128), u64_ty, span);
-            let op = Op::BinOp { op: BinOp::Sub(Overflow::Trap), left: len, right: back };
+            let op = Op::BinOp { op: BinOp::Sub, left: len, right: back };
             cx.builder.push(op, u64_ty, span)
         }
         ListAt::SliceHead(front) | ListAt::Array(front) => cx.constant(Literal::Int(front as i128), u64_ty, span),

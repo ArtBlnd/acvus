@@ -50,7 +50,7 @@ use crate::ir::cfg::takings::{Taken, place_taking};
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Edge, Inst, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, is_cut_of, overlap};
 use crate::ir::{PathSeg, RefTarget, ValueId};
-use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Loans, Mode, Reach, Storage, solve_dense};
+use crate::passes::analysis::{Analysis, DenseAnalysis, Direction, Loans, Mode, Queries, Reach, Storage, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::{Concrete, Ty, Types, lent_types};
 
@@ -132,10 +132,10 @@ impl Analysis for Initialization {
 
     const READS: &'static [Aspect] = &[Aspect::Instructions, Aspect::CfgShape, Aspect::Storage, Aspect::Types];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Self::Facts {
-        let loans = am.get::<Loans>(module, body);
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Self::Facts {
+        let loans = queries.get::<Loans>(module, body);
         let body = module.body(body);
-        let units = units_of(body, module.types(), am.decls(), &loans);
+        let units = units_of(body, module.types(), queries.decls(), &loans);
         let forward = Forward { units: &units, types: module.types(), body, loans: &loans };
         let facts = solve_dense(&forward, body);
         let mut before = FxHashMap::default();

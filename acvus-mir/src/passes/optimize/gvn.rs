@@ -365,8 +365,6 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
         | Op::Spawn { .. }
         | Op::TakeEffect { .. }
         | Op::Merge { .. }
-        | Op::Check { .. }
-        | Op::CheckSteps { .. }
         | Op::Drop { .. } => return None,
     })
 }
@@ -377,8 +375,8 @@ fn commutes(op: BinOp, operand: &TyKind<Concrete>) -> bool {
     match operand {
         TyKind::Int(_) => matches!(
             op,
-            BinOp::Add(_)
-                | BinOp::Mul(_)
+            BinOp::Add
+                | BinOp::Mul
                 | BinOp::Eq
                 | BinOp::Neq
                 | BinOp::BitAnd
@@ -416,12 +414,11 @@ mod tests {
     use acvus_utils::LocalIdOps;
 
     use super::*;
-    use crate::ir::Overflow;
-    use crate::ir::cfg::Terminator;
-    use crate::passes::optimize::tests::{Fixture, assert_whole, ret, wrapping_add};
+        use crate::ir::cfg::Terminator;
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, ret};
 
     fn sub(left: ValueId, right: ValueId) -> Op {
-        Op::BinOp { op: BinOp::Sub(Overflow::Wrap), left, right }
+        Op::BinOp { op: BinOp::Sub, left, right }
     }
 
     /// ```text
@@ -439,7 +436,7 @@ mod tests {
         let x = builder.param(nx, int, acvus_ast::Span::ZERO);
         let y = builder.param(ny, int, acvus_ast::Span::ZERO);
         let c = builder.param(nc, bool, acvus_ast::Span::ZERO);
-        let s = builder.push(wrapping_add(x, y), int, Span::ZERO);
+        let s = builder.push(add(x, y), int, Span::ZERO);
         let [then_block, else_block] = [(); 2].map(|()| builder.new_block(&[]));
         let join = builder.new_block(&[int]);
         builder.terminate(Terminator::Diamond {
@@ -451,7 +448,7 @@ mod tests {
             join,
         }, acvus_ast::Span::ZERO);
         builder.switch_to(then_block);
-        let t = builder.push(wrapping_add(x, y), int, Span::ZERO);
+        let t = builder.push(add(x, y), int, Span::ZERO);
         builder.terminate(Terminator::Jump { to: join, args: vec![t] }, acvus_ast::Span::ZERO);
         builder.switch_to(else_block);
         builder.terminate(Terminator::Jump { to: join, args: vec![s] }, acvus_ast::Span::ZERO);
@@ -480,8 +477,8 @@ mod tests {
         let mut builder = f.module.build_body(false, tuple);
         let x = builder.param(nx, int, acvus_ast::Span::ZERO);
         let y = builder.param(ny, int, acvus_ast::Span::ZERO);
-        let a = builder.push(wrapping_add(x, y), int, Span::ZERO);
-        let b = builder.push(wrapping_add(y, x), int, Span::ZERO);
+        let a = builder.push(add(x, y), int, Span::ZERO);
+        let b = builder.push(add(y, x), int, Span::ZERO);
         let c = builder.push(sub(x, y), int, Span::ZERO);
         let d = builder.push(sub(y, x), int, Span::ZERO);
         let all = builder.push(Op::MakeTuple { elements: vec![a, b, c, d] }, tuple, Span::ZERO);

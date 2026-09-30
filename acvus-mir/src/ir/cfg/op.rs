@@ -7,8 +7,7 @@ use acvus_utils::Astr;
 
 use super::BodyId;
 use crate::ir::{
-    BinOp, Callee, Checked, ExternImpl, IndexBound, IndexMode, Overflow, PathSeg, RefTarget,
-    UnaryOp, ValueId,
+    BinOp, Callee, ExternImpl, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId,
 };
 use crate::ty::{CastTy, Concrete, Mutability, Ty, Types, copies};
 
@@ -150,28 +149,6 @@ pub enum Op {
     UnaryOp {
         op: UnaryOp,
         operand: ValueId,
-    },
-    /// Ends the run with `op`'s trap where `left op right` does not fit the
-    /// operands' width. A pass that rewrites a trapping operation's value
-    /// into a computation that wraps writes one at the operation's place, so
-    /// the operation's trap stays where it was (RFC-0037 rule 3).
-    Check {
-        op: Checked,
-        left: ValueId,
-        right: ValueId,
-    },
-    /// Ends the run with `+`'s trap where `from + count·step`, over the
-    /// integers, does not fit the width `from` and `step` share; `count` is
-    /// a `u64`. It is, once, the `Check { op: Add }` of a value that starts
-    /// at `from` and advances by `step` on each of `count` iterations: that
-    /// value is monotone, so every step fits exactly where the last one
-    /// does. The removal of a loop whose only work was such checks writes
-    /// it at the loop's place, so their trap stays on exactly the runs that
-    /// had it (RFC-0088 rule 8).
-    CheckSteps {
-        from: ValueId,
-        step: ValueId,
-        count: ValueId,
     },
     /// `src as to` (RFC-0049), total, with Rust's `as` values.
     ///
@@ -391,16 +368,11 @@ macro_rules! walk_operands {
                 $on(object);
                 $on(value);
             }
-            Op::BinOp { left, right, .. } | Op::Check { left, right, .. } => {
+            Op::BinOp { left, right, .. } => {
                 $on(left);
                 $on(right);
             }
             Op::UnaryOp { operand, .. } => $on(operand),
-            Op::CheckSteps { from, step, count } => {
-                $on(from);
-                $on(step);
-                $on(count);
-            }
             Op::FunctionCall { callee, args, .. } | Op::Spawn { callee, args, .. } => {
                 on_callee(callee, $on);
                 args.into_iter().for_each(|v| $on(v));
@@ -461,14 +433,12 @@ impl Op {
     }
 
     /// Whether the operation yields a value; the ones that do not only
-    /// write or check.
+    /// write.
     pub fn has_result(&self) -> bool {
         match self {
             Op::StringAppend { .. }
             | Op::Assign { .. }
             | Op::IndexSet { .. }
-            | Op::Check { .. }
-            | Op::CheckSteps { .. }
             | Op::Drop { .. } => false,
             Op::Const { .. }
             | Op::ConstStr { .. }
@@ -539,9 +509,8 @@ impl Op {
     /// never traps.
     pub fn may_trap(&self) -> bool {
         match self {
-            Op::Check { .. } | Op::CheckSteps { .. } | Op::UnwrapVariant { .. } => true,
+            Op::UnwrapVariant { .. } => true,
             Op::BinOp { op, .. } => op.can_trap_on_integers(),
-            Op::UnaryOp { op, .. } => matches!(op, UnaryOp::Neg(Overflow::Trap)),
             Op::Index { bound, .. } | Op::IndexSet { bound, .. } => *bound == IndexBound::Checked,
             Op::Const { .. }
             | Op::ConstStr { .. }
@@ -556,6 +525,7 @@ impl Op {
             | Op::ArrayView { .. }
             | Op::FieldGet { .. }
             | Op::FieldSet { .. }
+            | Op::UnaryOp { .. }
             | Op::Cast { .. }
             | Op::Unmark { .. }
             | Op::FunctionCall { .. }

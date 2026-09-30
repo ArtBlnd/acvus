@@ -12,7 +12,7 @@ use rustc_hash::FxHashMap;
 
 use crate::ir::cfg::{Aspect, Body, BodyId, Module, Op, Site};
 use crate::ir::{RefTarget, ValueId};
-use crate::passes::analysis::{Analysis, AnalysisManager};
+use crate::passes::analysis::{Analysis, Queries};
 
 pub struct Escapes {
     first: FxHashMap<ValueId, Option<Site>>,
@@ -33,7 +33,7 @@ impl Analysis for Escapes {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape, Aspect::Instructions, Aspect::Storage];
 
-    fn compute(_: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Escapes {
+    fn compute(_: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Escapes {
         let body = module.body(body);
         let first = body.slots().iter().map(|slot| (*slot, first_escape(body, *slot))).collect();
         Escapes { first }

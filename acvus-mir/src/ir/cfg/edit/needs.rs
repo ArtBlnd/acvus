@@ -5,7 +5,7 @@
 //! until the next one (D47).
 
 use super::{InstRef, Position};
-use crate::ir::cfg::{Body, BodyId, Changes, Module, Site};
+use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Module, Site};
 use crate::ir::{PathSeg, RefTarget, ValueId};
 
 /// The body a query asks about, in the module that holds it, as it stands
@@ -63,6 +63,12 @@ pub trait DominanceFacts: Facts {
     fn control_equivalent(&mut self, asked: Asked<'_>, a: Position, b: Position) -> bool;
 }
 
+pub trait LoopFacts: Facts {
+    /// The preheader of the loop `header` heads (F2): the one predecessor
+    /// of `header` outside that loop, where it has no other successor.
+    fn preheader(&mut self, asked: Asked<'_>, header: BlockId) -> Option<BlockId>;
+}
+
 pub trait LoanFacts: Facts {
     /// Whether `write` writes storage that `inst`'s operands or result name
     /// (ownership §5).
@@ -86,7 +92,7 @@ pub trait OrderFacts: Facts {
 /// analysis proves, which lets it go (D55, general capability G1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unobserved {
-    /// A check never fires on any run that reaches it.
+    /// A checked bound never fires on any run that reaches it.
     NeverFires,
     /// A store whose value no read reaches.
     NeverRead,

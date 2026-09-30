@@ -149,7 +149,7 @@ mod tests {
         let t = builder.push(take_at(p, vec![PathSeg::Index(0)]), int, Span::ZERO);
         let u = builder.push(take_at(p, vec![PathSeg::Index(1)]), int, Span::ZERO);
         let v = builder.push(
-            Op::BinOp { op: crate::ir::BinOp::Add(crate::ir::Overflow::Trap), left: t, right: u },
+            Op::BinOp { op: crate::ir::BinOp::Add, left: t, right: u },
             int,
             Span::ZERO,
         );

@@ -10,9 +10,9 @@ use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 
 use super::*;
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
-use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Edge, Inst, Module, Op, Stages, Terminator};
+use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Edge, Inst, Module, Op, Terminator};
 use crate::ir::cfg::Site;
-use crate::ir::{BinOp, Callee, ExitTrip, ForSource, Overflow, PathSeg, RefTarget, UnaryOp, ValueId};
+use crate::ir::{BinOp, Callee, ForSource, PathSeg, RefTarget, UnaryOp, ValueId};
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
 use crate::ty::{
     Alignment, Calls, CastTy, Contexts, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability,
@@ -70,7 +70,7 @@ fn binary(op: BinOp, left: ValueId, right: ValueId) -> Op {
 }
 
 fn add(left: ValueId, right: ValueId) -> Op {
-    binary(BinOp::Add(Overflow::Trap), left, right)
+    binary(BinOp::Add, left, right)
 }
 
 fn jump(to: BlockId, args: Vec<ValueId>) -> Terminator {
@@ -86,7 +86,7 @@ fn diamond(cond: ValueId, then_to: BlockId, else_to: BlockId, join: BlockId) -> 
 }
 
 fn while_loop(cond: ValueId, body: BlockId, exit: BlockId) -> Terminator {
-    Terminator::While { cond, stages: Stages::lowered(body), exit, exit_args: Vec::new() }
+    Terminator::While { cond, body: body, body_args: Vec::new(), exit, exit_args: Vec::new() }
 }
 
 fn empty_declarations(interner: &Interner) -> Declarations {
@@ -202,7 +202,7 @@ impl ValueDomain for ConstDomain {
     fn binary(&self, op: BinOp, _ty: CastTy, left: &Const, right: &Const) -> Const {
         match (op, left, right) {
             (_, Const::Bottom, _) | (_, _, Const::Bottom) => Const::Bottom,
-            (BinOp::Add(_), Const::Int(a), Const::Int(b)) => a.checked_add(*b).map_or(Const::Top, Const::Int),
+            (BinOp::Add, Const::Int(a), Const::Int(b)) => a.checked_add(*b).map_or(Const::Top, Const::Int),
             (BinOp::Lt, Const::Int(a), Const::Int(b)) => Const::Bool(a < b),
             _ => Const::Top,
         }
@@ -212,7 +212,7 @@ impl ValueDomain for ConstDomain {
         match (op, operand) {
             (_, Const::Bottom) => Const::Bottom,
             (UnaryOp::Not, Const::Bool(b)) => Const::Bool(!b),
-            (UnaryOp::Neg(_), Const::Int(n)) => n.checked_neg().map_or(Const::Top, Const::Int),
+            (UnaryOp::Neg, Const::Int(n)) => n.checked_neg().map_or(Const::Top, Const::Int),
             _ => Const::Top,
         }
     }
@@ -287,10 +287,6 @@ where
 {
     type Domain = D;
 
-    fn domain(&self) -> &D {
-        &self.domain
-    }
-
     fn transfer(&self, inst: &Inst, operands: &[&D::Value]) -> D::Value {
         match (inst.op(), operands) {
             (Op::Const { value }, []) => {
@@ -310,7 +306,7 @@ where
             Terminator::JumpIf { then_to, else_to, .. } | Terminator::Diamond { then_to, else_to, .. } => {
                 branch(operands[0], *then_to, *else_to)
             }
-            Terminator::While { stages, exit, .. } => branch(operands[0], stages.body(), *exit),
+            Terminator::While { body, exit, .. } => branch(operands[0], *body, *exit),
             _ => Executable::All,
         }
     }
@@ -318,6 +314,14 @@ where
     /// It knows nothing of what a terminator supplies.
     fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&D::Value]) -> D::Value {
         self.domain.top()
+    }
+
+    fn top(&self, _value: ValueId) -> D::Value {
+        self.domain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut D::Value, next: &D::Value) -> bool {
+        fact.widen(next)
     }
 }
 
@@ -544,7 +548,7 @@ impl ValueDomain for BoundDomain {
     fn binary(&self, op: BinOp, _ty: CastTy, left: &Bound, right: &Bound) -> Bound {
         match (op, left, right) {
             (_, Bound::Bottom, _) | (_, _, Bound::Bottom) => Bound::Bottom,
-            (BinOp::Add(_), Bound::AtMost(a), Bound::AtMost(b)) => {
+            (BinOp::Add, Bound::AtMost(a), Bound::AtMost(b)) => {
                 a.checked_add(*b).map_or(Bound::Unbounded, Bound::AtMost)
             }
             _ => Bound::Unbounded,
@@ -586,16 +590,11 @@ fn sparse_ends_on_an_infinite_domain_by_widening_at_the_header() {
 // -- What a terminator supplies ---------------------------------------------
 
 /// Constants, and a `For` over `at..hi` whose bounds are known: its counter
-/// on the body edge is `at` where the range holds one value, and its trip
-/// count on the exit edge is `hi - at` where that is not negative.
+/// on the body edge is `at` where the range holds one value.
 struct Ranges<'m>(Scalars<'m>);
 
 impl SparseAnalysis for Ranges<'_> {
     type Domain = ConstDomain;
-
-    fn domain(&self) -> &ConstDomain {
-        &ConstDomain
-    }
 
     fn transfer(&self, inst: &Inst, operands: &[&Const]) -> Const {
         Propagate { domain: ConstDomain, scalars: self.0 }.transfer(inst, operands)
@@ -606,25 +605,32 @@ impl SparseAnalysis for Ranges<'_> {
     }
 
     fn supplied(&self, terminator: &Terminator, to: BlockId, index: usize, operands: &[&Const]) -> Const {
-        let Terminator::For { source: ForSource::Range { .. }, stages, exit, .. } = terminator else {
+        let Terminator::For { source: ForSource::Range { .. }, body, .. } = terminator else {
             return Const::Top;
         };
         let [Const::Int(at), Const::Int(hi), ..] = operands else {
             return Const::Top;
         };
         match (to, index) {
-            (to, 0) if to == stages.body() && *hi == at + 1 => Const::Int(*at),
-            (to, 0) if to == *exit && hi >= at => Const::Int(hi - at),
+            (to, 0) if to == *body && *hi == at + 1 => Const::Int(*at),
             _ => Const::Top,
         }
+    }
+
+    fn top(&self, _value: ValueId) -> Const {
+        ConstDomain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut Const, next: &Const) -> bool {
+        fact.widen(next)
     }
 }
 
 /// ```text
 /// entry:  at = 3; hi = 4; jump header
-/// header: for counter in at..hi { body } else exit(trip)
+/// header: for counter in at..hi { body } else exit
 /// body(counter): one = 1; x = counter + one; jump header
-/// exit(trip): return trip
+/// exit: return at
 /// ```
 #[test]
 fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
@@ -635,15 +641,15 @@ fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
     let hi = builder.push(constant(4), int, Span::ZERO);
     let header = builder.new_block(&[]);
     let loop_body = builder.new_block(&[int]);
-    let exit = builder.new_block(&[int]);
-    let (counter, trip) = (builder.block_params(loop_body)[0], builder.block_params(exit)[0]);
+    let exit = builder.new_block(&[]);
+    let counter = builder.block_params(loop_body)[0];
     builder.terminate(jump(header, Vec::new()), acvus_ast::Span::ZERO);
     builder.switch_to(header);
     builder.terminate(Terminator::For {
         source: ForSource::Range { at, hi },
-        stages: Stages::lowered(loop_body),
+        body: loop_body,
+        body_args: Vec::new(),
         exit,
-        exit_trip: ExitTrip::Defined,
         exit_args: Vec::new(),
     }, acvus_ast::Span::ZERO);
     builder.switch_to(loop_body);
@@ -651,17 +657,15 @@ fn sparse_takes_a_for_loops_supplied_parameters_from_the_analysis() {
     let x = builder.push(add(counter, one), int, Span::ZERO);
     builder.terminate(jump(header, Vec::new()), acvus_ast::Span::ZERO);
     builder.switch_to(exit);
-    builder.terminate(ret(trip), acvus_ast::Span::ZERO);
+    builder.terminate(ret(at), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
     let facts = solve_sparse(&Ranges(Scalars::of(&f.module, id)), f.module.body(id));
     assert_eq!(*facts.of(counter), Const::Int(3));
     assert_eq!(*facts.of(x), Const::Int(4));
-    assert_eq!(*facts.of(trip), Const::Int(1));
 
     let unknowing = solve_sparse(&Propagate { domain: ConstDomain, scalars: Scalars::of(&f.module, id) }, f.module.body(id));
     assert_eq!(*unknowing.of(counter), Const::Top, "an analysis that knows nothing states top");
-    assert_eq!(*unknowing.of(trip), Const::Top);
 }
 
 // -- Order tokens ------------------------------------------------------------
@@ -673,10 +677,6 @@ struct TokenBlind<'m>(Scalars<'m>);
 
 impl SparseAnalysis for TokenBlind<'_> {
     type Domain = ConstDomain;
-
-    fn domain(&self) -> &ConstDomain {
-        &ConstDomain
-    }
 
     fn transfer(&self, inst: &Inst, operands: &[&Const]) -> Const {
         match inst.op() {
@@ -696,6 +696,14 @@ impl SparseAnalysis for TokenBlind<'_> {
 
     fn supplied(&self, _terminator: &Terminator, _to: BlockId, _index: usize, _operands: &[&Const]) -> Const {
         Const::Top
+    }
+
+    fn top(&self, _value: ValueId) -> Const {
+        ConstDomain.top()
+    }
+
+    fn widen(&self, _value: ValueId, fact: &mut Const, next: &Const) -> bool {
+        fact.widen(next)
     }
 }
 
@@ -915,7 +923,7 @@ impl Analysis for BlockCount {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape];
 
-    fn compute(_am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> usize {
+    fn compute(_queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> usize {
         module.body(body).blocks().count()
     }
 }
@@ -933,8 +941,8 @@ impl Analysis for Size {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape, Aspect::Instructions];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> SizeFacts {
-        let blocks = am.get::<BlockCount>(module, body);
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> SizeFacts {
+        let blocks = queries.get::<BlockCount>(module, body);
         let insts = module.body(body).blocks().map(|(_, block)| block.insts().len()).sum();
         SizeFacts { blocks, insts }
     }
@@ -948,8 +956,8 @@ impl Analysis for Narcissus {
 
     const READS: &'static [Aspect] = &[];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) {
-        am.get::<Echo>(module, body);
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) {
+        queries.get::<Echo>(module, body);
     }
 }
 
@@ -960,8 +968,8 @@ impl Analysis for Echo {
 
     const READS: &'static [Aspect] = &[];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) {
-        am.get::<Narcissus>(module, body);
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) {
+        queries.get::<Narcissus>(module, body);
     }
 }
 
@@ -1030,6 +1038,212 @@ fn invalidation_drops_exactly_the_analyses_whose_reads_changed() {
         Rc::ptr_eq(&other_blocks, &am.get::<BlockCount>(&f.module, other)),
         "another body's analyses are kept"
     );
+}
+
+/// How many instructions the module's bodies hold.
+struct InstCount;
+
+impl ModuleAnalysis for InstCount {
+    type Facts = usize;
+
+    const READS: &'static [Aspect] = &[Aspect::Instructions];
+
+    fn compute(_queries: &mut Queries<'_, '_>, module: &Module) -> usize {
+        module.body_ids().map(|body| module.body(body).blocks().map(|(_, block)| block.insts().len()).sum::<usize>()).sum()
+    }
+}
+
+/// A module analysis is kept once for the module; an edit of any body
+/// that touches an aspect it reads drops it, and one that does not keeps it.
+#[test]
+fn a_module_analysis_is_kept_once_and_dropped_by_any_bodys_edit_of_what_it_reads() {
+    let mut f = fixture();
+    let [body, other] = identity_bodies(&mut f);
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let first = am.get_of_module::<InstCount>(&f.module);
+    assert_eq!(*first, 0);
+    assert!(Rc::ptr_eq(&first, &am.get_of_module::<InstCount>(&f.module)), "the second request returns the kept facts");
+
+    am.invalidate(body, &changed(Aspect::CfgShape));
+    let kept = am.get_of_module::<InstCount>(&f.module);
+    assert!(Rc::ptr_eq(&first, &kept), "a disjoint aspect keeps it");
+
+    am.invalidate(other, &changed(Aspect::Instructions));
+    assert!(!Rc::ptr_eq(&kept, &am.get_of_module::<InstCount>(&f.module)), "an edit of any body that it reads drops it");
+}
+
+/// How many bodies the module has: it reads no aspect of any body, only
+/// the body set.
+struct BodyCount;
+
+impl ModuleAnalysis for BodyCount {
+    type Facts = usize;
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(_queries: &mut Queries<'_, '_>, module: &Module) -> usize {
+        module.body_ids().count()
+    }
+}
+
+/// The module's body count, read through the manager; nothing of its own
+/// body.
+struct CountedBodies;
+
+impl Analysis for CountedBodies {
+    type Facts = Rc<usize>;
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, _body: BodyId) -> Rc<usize> {
+        queries.get_of_module::<BodyCount>(module)
+    }
+}
+
+/// The block count of the module's first body, read through the manager;
+/// nothing of its own body.
+struct FirstBodysBlocks;
+
+impl Analysis for FirstBodysBlocks {
+    type Facts = Rc<usize>;
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, _body: BodyId) -> Rc<usize> {
+        let first = module.body_ids().next().expect("the module has a body");
+        queries.get::<BlockCount>(module, first)
+    }
+}
+
+/// `FirstBodysBlocks` of its own body, read through the manager: two hops
+/// from the first body's `BlockCount`.
+struct FirstBodysBlocksAgain;
+
+impl Analysis for FirstBodysBlocksAgain {
+    type Facts = Rc<Rc<usize>>;
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Rc<Rc<usize>> {
+        queries.get::<FirstBodysBlocks>(module, body)
+    }
+}
+
+/// The module's instruction count, read through the manager; nothing of
+/// its own body.
+struct CountedInsts;
+
+impl Analysis for CountedInsts {
+    type Facts = Rc<usize>;
+
+    const READS: &'static [Aspect] = &[];
+
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, _body: BodyId) -> Rc<usize> {
+        queries.get_of_module::<InstCount>(module)
+    }
+}
+
+/// Every aspect an edit may touch.
+fn every_aspect() -> Changes {
+    let mut changes = Changes::default();
+    for aspect in [Aspect::CfgShape, Aspect::Instructions, Aspect::Types, Aspect::Storage, Aspect::OrderTokens] {
+        changes.record(aspect);
+    }
+    changes
+}
+
+/// A body analysis that read another body's analysis is dropped by an edit
+/// of that body in an aspect the read analysis reads, and kept by one in
+/// no such aspect; an analysis of the reading body that read nothing of
+/// the edited one is kept.
+#[test]
+fn a_body_analysis_is_dropped_with_another_bodys_analysis_it_read() {
+    let mut f = fixture();
+    let [first, second] = identity_bodies(&mut f);
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let reads_first = am.get::<FirstBodysBlocks>(&f.module, second);
+    let own_blocks = am.get::<BlockCount>(&f.module, second);
+
+    am.invalidate(first, &changed(Aspect::Instructions));
+    let kept = am.get::<FirstBodysBlocks>(&f.module, second);
+    assert!(Rc::ptr_eq(&reads_first, &kept), "BlockCount of the first body reads no instruction, so it and its reader are kept");
+
+    am.invalidate(first, &changed(Aspect::CfgShape));
+    assert!(!Rc::ptr_eq(&kept, &am.get::<FirstBodysBlocks>(&f.module, second)), "the read BlockCount was dropped, so its reader is");
+    assert!(Rc::ptr_eq(&own_blocks, &am.get::<BlockCount>(&f.module, second)), "an analysis that read nothing of the first body is kept");
+}
+
+/// Dropping reaches a reader two reads away.
+#[test]
+fn a_drop_reaches_every_reader_transitively() {
+    let mut f = fixture();
+    let [first, second] = identity_bodies(&mut f);
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let two_hops = am.get::<FirstBodysBlocksAgain>(&f.module, second);
+
+    am.invalidate(first, &changed(Aspect::Types));
+    let kept = am.get::<FirstBodysBlocksAgain>(&f.module, second);
+    assert!(Rc::ptr_eq(&two_hops, &kept), "nothing it reads, directly or through others, reads types");
+
+    am.invalidate(first, &changed(Aspect::CfgShape));
+    assert!(!Rc::ptr_eq(&kept, &am.get::<FirstBodysBlocksAgain>(&f.module, second)), "BlockCount, two reads away, was dropped");
+}
+
+/// A body analysis that read a module analysis is dropped with it, by an
+/// edit of a body the reader is not of.
+#[test]
+fn a_body_analysis_is_dropped_with_a_module_analysis_it_read() {
+    let mut f = fixture();
+    let [body, other] = identity_bodies(&mut f);
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let reader = am.get::<CountedInsts>(&f.module, body);
+    let own_blocks = am.get::<BlockCount>(&f.module, body);
+
+    am.invalidate(other, &changed(Aspect::CfgShape));
+    let kept = am.get::<CountedInsts>(&f.module, body);
+    assert!(Rc::ptr_eq(&reader, &kept), "InstCount reads no CFG shape, so it and its reader are kept");
+
+    am.invalidate(other, &changed(Aspect::Instructions));
+    assert!(!Rc::ptr_eq(&kept, &am.get::<CountedInsts>(&f.module, body)), "InstCount was dropped, so its reader is");
+    assert!(Rc::ptr_eq(&own_blocks, &am.get::<BlockCount>(&f.module, body)), "an analysis that read no module analysis is kept");
+}
+
+/// A module analysis ranges over the body set: no edit of a body drops
+/// one that reads no aspect, and a body added drops it and its readers,
+/// while an analysis of a body that read no module analysis is kept.
+#[test]
+fn a_body_added_drops_the_module_analyses_and_their_readers() {
+    let mut f = fixture();
+    let [body, other] = identity_bodies(&mut f);
+    f.module.take_body_set_change();
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    let count = am.get_of_module::<BodyCount>(&f.module);
+    let reader = am.get::<CountedBodies>(&f.module, body);
+    let own_blocks = am.get::<BlockCount>(&f.module, body);
+    assert_eq!(*count, 2);
+
+    am.invalidate(body, &every_aspect());
+    am.invalidate(other, &every_aspect());
+    assert!(Rc::ptr_eq(&count, &am.get_of_module::<BodyCount>(&f.module)), "no edit of a body changes the body set");
+    assert!(Rc::ptr_eq(&reader, &am.get::<CountedBodies>(&f.module, body)));
+    assert!(f.module.take_body_set_change().is_none(), "no seal since the record was taken");
+    let own_blocks_after_edits = am.get::<BlockCount>(&f.module, body);
+    assert!(!Rc::ptr_eq(&own_blocks, &own_blocks_after_edits), "the edit of its CFG shape dropped it");
+
+    let [_added] = identity_bodies(&mut f);
+    let change = f.module.take_body_set_change().expect("the seal recorded that the body set changed");
+    am.invalidate_body_set(change);
+    let recounted = am.get_of_module::<BodyCount>(&f.module);
+    assert_eq!(*recounted, 3, "the module analysis was dropped and ranges over the added body");
+    let reread = am.get::<CountedBodies>(&f.module, body);
+    assert!(!Rc::ptr_eq(&reader, &reread), "its reader was dropped with it");
+    assert!(Rc::ptr_eq(&*reread, &recounted), "the reader reads the recount");
+    assert!(Rc::ptr_eq(&own_blocks_after_edits, &am.get::<BlockCount>(&f.module, body)), "an analysis that read no module analysis is kept");
 }
 
 // -- Dominators, post-dominators, loops --------------------------------------
@@ -2022,4 +2236,414 @@ fn a_slot_passed_to_a_call_escapes_at_the_call() {
     let id = builder.seal().expect("the body has no open state");
 
     assert_eq!(f.facts::<Escapes>(id).escape(x), Some(site_at(&f.module, id, entry, 2)));
+}
+
+
+// -- Scalar evolution ---------------------------------------------------------
+
+use crate::ir::cfg::Builder;
+use crate::passes::domain::{Polynomial, Symbol};
+
+fn evolutions(f: &Fixture, body: BodyId) -> (Rc<LoopTree>, Rc<Evolutions>) {
+    let decls = empty_declarations(&f.interner);
+    let mut am = AnalysisManager::new(&decls);
+    (am.get::<LoopTree>(&f.module, body), am.get::<ScalarEvolution>(&f.module, body))
+}
+
+fn atom(value: ValueId) -> Polynomial<Symbol> {
+    Polynomial::atom(Symbol::Value(value))
+}
+
+fn invariant(polynomial: Polynomial<Symbol>) -> Evolution {
+    Evolution::Invariant(polynomial)
+}
+
+fn number(n: i128) -> Evolution {
+    Evolution::Invariant(Polynomial::constant(n))
+}
+
+fn recurrence(over: LoopId, start: Evolution, step: Polynomial<Symbol>) -> Evolution {
+    Evolution::Recurrence(Rc::new(Recurrence { over, start, step }))
+}
+
+fn mul(left: ValueId, right: ValueId) -> Op {
+    binary(BinOp::Mul, left, right)
+}
+
+fn range_for(at: ValueId, hi: ValueId, body: BlockId, exit: BlockId) -> Terminator {
+    Terminator::For {
+        source: ForSource::Range { at, hi },
+        body: body,
+        body_args: Vec::new(),
+        exit,
+        exit_args: Vec::new(),
+    }
+}
+
+/// A call of a pure callee of no parameters returning an `int`.
+fn pure_call(f: &mut Fixture) -> Op {
+    let int = f.int;
+    let callee_ty = f.module.types_mut().intern(TyKind::Fn {
+        params: Box::new([]),
+        ret: int,
+        effect: EffectTerm::Known(Effect::pure()),
+        flows: FlowTerm::Known(Flows::none()),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+        values: (),
+    });
+    Op::FunctionCall { callee: Callee::Direct(QualifiedRef::root(f.interner.intern("f"))), callee_ty, args: Vec::new() }
+}
+
+/// The parameters and the counter a `RangeFor`'s parts are built over.
+#[derive(Clone, Copy)]
+struct RangeValues {
+    a: ValueId,
+    n: ValueId,
+    counter: ValueId,
+}
+
+struct RangeFor<T> {
+    id: BodyId,
+    header: BlockId,
+    values: RangeValues,
+    inside: T,
+}
+
+/// A range `For` over two integer parameters `a` and `n`:
+///
+/// ```text
+/// entry(a, n): <before>; jump header
+/// header:      for c in at..hi { body } else exit
+/// body(c):     <inside>; jump header
+/// exit:        return a
+/// ```
+///
+/// `before` pushes into the entry and gives the range's two ends.
+fn range_for_body<B, I, T>(f: &mut Fixture, before: B, inside: I) -> RangeFor<T>
+where
+    B: FnOnce(&mut Builder<'_>, ValueId, ValueId) -> (ValueId, ValueId),
+    I: FnOnce(&mut Builder<'_>, RangeValues) -> T,
+{
+    let (na, nn, int) = (f.interner.intern("a"), f.interner.intern("n"), f.int);
+    let mut builder = f.module.build_body(false, int);
+    let a = builder.param(na, int, Span::ZERO);
+    let n = builder.param(nn, int, Span::ZERO);
+    let (at, hi) = before(&mut builder, a, n);
+    let header = builder.new_block(&[]);
+    let loop_body = builder.new_block(&[int]);
+    let exit = builder.new_block(&[]);
+    let counter = builder.block_params(loop_body)[0];
+    let values = RangeValues { a, n, counter };
+    builder.terminate(jump(header, Vec::new()), Span::ZERO);
+    builder.switch_to(header);
+    builder.terminate(range_for(at, hi, loop_body, exit), Span::ZERO);
+    builder.switch_to(loop_body);
+    let inside = inside(&mut builder, values);
+    builder.terminate(jump(header, Vec::new()), Span::ZERO);
+    builder.switch_to(exit);
+    builder.terminate(ret(a), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    RangeFor { id, header, values, inside }
+}
+
+/// `at = 0`, `hi = n`.
+fn from_zero_to_n(int: Ty) -> impl FnOnce(&mut Builder<'_>, ValueId, ValueId) -> (ValueId, ValueId) {
+    move |builder, _, n| (builder.push(constant(0), int, Span::ZERO), n)
+}
+
+/// `for c in a..a+5`: the counter is `{a, +, 1}`, and the loop runs exactly
+/// five times, the ring cancelling `a`.
+#[test]
+fn a_range_fors_counter_rises_by_one_from_its_start_and_it_runs_hi_less_at_times() {
+    let mut f = fixture();
+    let int = f.int;
+    let lp = range_for_body(
+        &mut f,
+        |builder, a, _| {
+            let five = builder.push(constant(5), int, Span::ZERO);
+            (a, builder.push(add(a, five), int, Span::ZERO))
+        },
+        |_, _| (),
+    );
+    let (loops, scev) = evolutions(&f, lp.id);
+    let over = loops.innermost(lp.header).expect("the header heads a loop");
+
+    assert_eq!(*scev.of(lp.values.counter), recurrence(over, invariant(atom(lp.values.a)), Polynomial::constant(1)));
+    assert_eq!(scev.trip_count(over), Some(&TripCount::Exact(number(5))));
+}
+
+/// `for c in a..n` over two parameters: `n - a` may be negative, and
+/// `max(n - a, 0)` is no element of the ring, so no count is named.
+#[test]
+fn a_range_whose_length_may_be_negative_names_no_trip_count() {
+    let mut f = fixture();
+    let lp = range_for_body(&mut f, |_, a, n| (a, n), |_, _| ());
+    let (loops, scev) = evolutions(&f, lp.id);
+    let over = loops.innermost(lp.header).expect("the header heads a loop");
+
+    assert_eq!(*scev.of(lp.values.counter), recurrence(over, invariant(atom(lp.values.a)), Polynomial::constant(1)));
+    assert_eq!(scev.trip_count(over), None);
+}
+
+/// `for c in 0..n { t = c * 4; x = t + a }`: `t` is `{0, +, 4}` and `x` is
+/// `{a, +, 4}`.
+#[test]
+fn a_derived_induction_scales_and_shifts_the_counter() {
+    let mut f = fixture();
+    let int = f.int;
+    let lp = range_for_body(&mut f, from_zero_to_n(int), |builder, values| {
+        let four = builder.push(constant(4), int, Span::ZERO);
+        let scaled = builder.push(mul(values.counter, four), int, Span::ZERO);
+        (scaled, builder.push(add(scaled, values.a), int, Span::ZERO))
+    });
+    let (loops, scev) = evolutions(&f, lp.id);
+    let over = loops.innermost(lp.header).expect("the header heads a loop");
+    let (scaled, shifted) = lp.inside;
+
+    assert_eq!(*scev.of(scaled), recurrence(over, number(0), Polynomial::constant(4)));
+    assert_eq!(*scev.of(shifted), recurrence(over, invariant(atom(lp.values.a)), Polynomial::constant(4)));
+}
+
+/// `for c in 0..n { sq = c * c; cn = c * n }`: `c · c` is of the second
+/// degree in the loop, and `c · n` scales `c` by an invariant.
+#[test]
+fn a_product_of_two_recurrences_of_one_loop_is_unknown() {
+    let mut f = fixture();
+    let int = f.int;
+    let lp = range_for_body(&mut f, from_zero_to_n(int), |builder, values| {
+        let square = builder.push(mul(values.counter, values.counter), int, Span::ZERO);
+        (square, builder.push(mul(values.counter, values.n), int, Span::ZERO))
+    });
+    let (loops, scev) = evolutions(&f, lp.id);
+    let over = loops.innermost(lp.header).expect("the header heads a loop");
+    let (square, scaled) = lp.inside;
+
+    assert_eq!(*scev.of(square), Evolution::Unknown);
+    assert_eq!(*scev.of(scaled), recurrence(over, number(0), atom(lp.values.n)));
+}
+
+/// `r0 = f(); for c in 0..n { r = f(); s = r + c }`: a call outside every
+/// loop is one value on every run, its own atom; one inside a loop may
+/// differ on every iteration, and so may what is made from it.
+#[test]
+fn a_call_in_a_loop_is_unknown_and_one_outside_every_loop_is_its_own_atom() {
+    let mut f = fixture();
+    let int = f.int;
+    let call = pure_call(&mut f);
+    let outside_call = call.clone();
+    let mut outside = None;
+    let lp = range_for_body(
+        &mut f,
+        |builder, _, n| {
+            outside = Some(builder.push(outside_call, int, Span::ZERO));
+            (builder.push(constant(0), int, Span::ZERO), n)
+        },
+        |builder, values| {
+            let result = builder.push(call, int, Span::ZERO);
+            (result, builder.push(add(result, values.counter), int, Span::ZERO))
+        },
+    );
+    let outside = outside.expect("the entry made its call");
+    let (_, scev) = evolutions(&f, lp.id);
+    let (result, sum) = lp.inside;
+
+    assert_eq!(*scev.of(outside), invariant(atom(outside)));
+    assert_eq!(*scev.of(result), Evolution::Unknown);
+    assert_eq!(*scev.of(sum), Evolution::Unknown);
+}
+
+/// ```text
+/// entry(h, w):     zero = 0; jump outer
+/// outer:           for row in zero..h { outer_body } else exit
+/// outer_body(row): r = f(); jump inner
+/// inner:           for col in zero..w { inner_body } else outer_latch
+/// inner_body(col): t = row * w; idx = t + col; wide = w + w; cross = row * col; jump inner
+/// outer_latch:     jump outer
+/// exit:            return zero
+/// ```
+struct NestedFor {
+    id: BodyId,
+    outer: BlockId,
+    inner: BlockId,
+    w: ValueId,
+    row: ValueId,
+    col: ValueId,
+    r: ValueId,
+    t: ValueId,
+    idx: ValueId,
+    wide: ValueId,
+    cross: ValueId,
+}
+
+fn nested_for(f: &mut Fixture) -> NestedFor {
+    let call = pure_call(f);
+    let (nh, nw, int) = (f.interner.intern("h"), f.interner.intern("w"), f.int);
+    let mut builder = f.module.build_body(false, int);
+    let h = builder.param(nh, int, Span::ZERO);
+    let w = builder.param(nw, int, Span::ZERO);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    let outer = builder.new_block(&[]);
+    let outer_body = builder.new_block(&[int]);
+    let inner = builder.new_block(&[]);
+    let inner_body = builder.new_block(&[int]);
+    let [outer_latch, exit] = [(); 2].map(|()| builder.new_block(&[]));
+    let (row, col) = (builder.block_params(outer_body)[0], builder.block_params(inner_body)[0]);
+    builder.terminate(jump(outer, Vec::new()), Span::ZERO);
+    builder.switch_to(outer);
+    builder.terminate(range_for(zero, h, outer_body, exit), Span::ZERO);
+    builder.switch_to(outer_body);
+    let r = builder.push(call, int, Span::ZERO);
+    builder.terminate(jump(inner, Vec::new()), Span::ZERO);
+    builder.switch_to(inner);
+    builder.terminate(range_for(zero, w, inner_body, outer_latch), Span::ZERO);
+    builder.switch_to(inner_body);
+    let t = builder.push(mul(row, w), int, Span::ZERO);
+    let idx = builder.push(add(t, col), int, Span::ZERO);
+    let wide = builder.push(add(w, w), int, Span::ZERO);
+    let cross = builder.push(mul(row, col), int, Span::ZERO);
+    builder.terminate(jump(inner, Vec::new()), Span::ZERO);
+    builder.switch_to(outer_latch);
+    builder.terminate(jump(outer, Vec::new()), Span::ZERO);
+    builder.switch_to(exit);
+    builder.terminate(ret(zero), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    NestedFor { id, outer, inner, w, row, col, r, t, idx, wide, cross }
+}
+
+/// `idx = row * w + col` is a recurrence of the inner loop by one, from
+/// a start that is the outer loop's recurrence `{0, +, w}`.
+#[test]
+fn a_nested_index_is_a_recurrence_of_the_inner_loop_starting_at_one_of_the_outer() {
+    let mut f = fixture();
+    let n = nested_for(&mut f);
+    let (loops, scev) = evolutions(&f, n.id);
+    let outer = loops.innermost(n.outer).expect("the outer header heads a loop");
+    let inner = loops.innermost(n.inner).expect("the inner header heads a loop");
+
+    assert_eq!(*scev.of(n.row), recurrence(outer, number(0), Polynomial::constant(1)));
+    assert_eq!(*scev.of(n.col), recurrence(inner, number(0), Polynomial::constant(1)));
+    assert_eq!(*scev.of(n.t), recurrence(outer, number(0), atom(n.w)));
+    assert_eq!(*scev.of(n.idx), recurrence(inner, recurrence(outer, number(0), atom(n.w)), Polynomial::constant(1)));
+    assert_eq!(*scev.of(n.wide), invariant(atom(n.w).checked_scale(2).expect("2w is an element")));
+}
+
+/// `row * col` would step the inner loop by the outer recurrence `row`: a
+/// product of induction variables, whose step is no element of the ring.
+#[test]
+fn a_product_of_recurrences_of_two_nested_loops_is_unknown() {
+    let mut f = fixture();
+    let n = nested_for(&mut f);
+    let (_, scev) = evolutions(&f, n.id);
+
+    assert_eq!(*scev.of(n.cross), Evolution::Unknown);
+}
+
+/// A value is invariant in a loop exactly where no iteration of that loop
+/// changes it: the outer counter and a call of the outer body are invariant
+/// in the inner loop only; the inner counter and the index in neither; `2w`
+/// in both.
+#[test]
+fn invariance_follows_the_loop_nest() {
+    let mut f = fixture();
+    let n = nested_for(&mut f);
+    let (loops, scev) = evolutions(&f, n.id);
+    let outer = loops.innermost(n.outer).expect("the outer header heads a loop");
+    let inner = loops.innermost(n.inner).expect("the inner header heads a loop");
+
+    let invariance = |value: ValueId| (scev.is_invariant(value, outer), scev.is_invariant(value, inner));
+    assert_eq!(invariance(n.row), (false, true));
+    assert_eq!(invariance(n.t), (false, true));
+    assert_eq!(invariance(n.r), (false, true));
+    assert_eq!(invariance(n.col), (false, false));
+    assert_eq!(invariance(n.idx), (false, false));
+    assert_eq!(invariance(n.wide), (true, true));
+    assert_eq!(invariance(n.w), (true, true));
+}
+
+/// ```text
+/// entry(x):   zero = 0; j = max(x, zero); bound = j + j; jump header(zero)
+/// header(i):  c = i < bound; while c { body } else exit
+/// body:       two = 2; i2 = i + two; jump header(i2)
+///             or, left early: stop = i2 == x; jumpif stop early else header(i2)
+/// exit:       after = i + zero; return after
+/// early:      return i2
+/// ```
+struct StepByTwo {
+    id: BodyId,
+    header: BlockId,
+    i: ValueId,
+    j: ValueId,
+    after: ValueId,
+}
+
+fn step_by_two(f: &mut Fixture, left_early: bool) -> StepByTwo {
+    let (nx, int, bool) = (f.interner.intern("x"), f.int, f.bool);
+    let mut builder = f.module.build_body(false, int);
+    let x = builder.param(nx, int, Span::ZERO);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    let j = builder.push(binary(BinOp::Max, x, zero), int, Span::ZERO);
+    let bound = builder.push(add(j, j), int, Span::ZERO);
+    let header = builder.new_block(&[int]);
+    let i = builder.block_params(header)[0];
+    let [loop_body, exit, early] = [(); 3].map(|()| builder.new_block(&[]));
+    builder.terminate(jump(header, vec![zero]), Span::ZERO);
+    builder.switch_to(header);
+    let c = builder.push(binary(BinOp::Lt, i, bound), bool, Span::ZERO);
+    builder.terminate(while_loop(c, loop_body, exit), Span::ZERO);
+    builder.switch_to(loop_body);
+    let two = builder.push(constant(2), int, Span::ZERO);
+    let i2 = builder.push(add(i, two), int, Span::ZERO);
+    match left_early {
+        true => {
+            let stop = builder.push(binary(BinOp::Eq, i2, x), bool, Span::ZERO);
+            let leave = Terminator::JumpIf { cond: stop, then_to: early, then_args: Vec::new(), else_to: header, else_args: vec![i2] };
+            builder.terminate(leave, Span::ZERO);
+        }
+        false => builder.terminate(jump(header, vec![i2]), Span::ZERO),
+    }
+    builder.switch_to(exit);
+    let after = builder.push(add(i, zero), int, Span::ZERO);
+    builder.terminate(ret(after), Span::ZERO);
+    builder.switch_to(early);
+    builder.terminate(ret(i2), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+    StepByTwo { id, header, i, j, after }
+}
+
+/// `i` is `{0, +, 2}`, and `i < 2j` with `j ≥ 0` by the interval domain
+/// stops after exactly `2j / 2 = j` iterations.
+#[test]
+fn a_while_stepping_by_two_below_a_bound_it_divides_runs_the_quotient() {
+    let mut f = fixture();
+    let lp = step_by_two(&mut f, false);
+    let (loops, scev) = evolutions(&f, lp.id);
+    let over = loops.innermost(lp.header).expect("the header heads a loop");
+
+    assert_eq!(*scev.of(lp.i), recurrence(over, number(0), Polynomial::constant(2)));
+    assert_eq!(scev.trip_count(over), Some(&TripCount::Exact(invariant(atom(lp.j)))));
+}
+
+/// `i` read after the loop is left is its last value, no longer the
+/// recurrence it is inside the loop, so `i + 0` there is not built from that
+/// recurrence: outside every loop it is one value, its own atom.
+#[test]
+fn a_recurrence_read_after_its_loop_is_left_is_not_built_on() {
+    let mut f = fixture();
+    let lp = step_by_two(&mut f, false);
+    let (_, scev) = evolutions(&f, lp.id);
+
+    assert_eq!(*scev.of(lp.after), invariant(atom(lp.after)));
+}
+
+/// The same loop with a second exit from its body runs at most `j` times.
+#[test]
+fn a_while_left_early_runs_at_most_its_count() {
+    let mut f = fixture();
+    let lp = step_by_two(&mut f, true);
+    let (loops, scev) = evolutions(&f, lp.id);
+    let over = loops.innermost(lp.header).expect("the header heads a loop");
+
+    assert_eq!(*scev.of(lp.i), recurrence(over, number(0), Polynomial::constant(2)));
+    assert_eq!(scev.trip_count(over), Some(&TripCount::AtMost(invariant(atom(lp.j)))));
 }

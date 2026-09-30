@@ -24,7 +24,7 @@
 
 use crate::ir::cfg::{Aspect, BlockId, BodyId, Module};
 use crate::passes::analysis::dominators::Graph;
-use crate::passes::analysis::{Analysis, AnalysisManager, Dominators};
+use crate::passes::analysis::{Analysis, Dominators, Queries};
 
 /// A loop of a `LoopTree`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -93,6 +93,17 @@ impl LoopTree {
         self.loops[of.0].preheader
     }
 
+    /// The preheader of the loop `header` heads, as `preheader` states it.
+    /// A block no back edge enters heads no natural loop, so each of its
+    /// predecessors is outside the loop it heads. Cost: O(the header's
+    /// predecessors).
+    pub fn preheader_of(&self, header: BlockId) -> Option<BlockId> {
+        match self.innermost(header).filter(|of| self.header(*of) == header) {
+            Some(of) => self.preheader(of),
+            None => entering_block(&self.graph, header.index(), |_| false),
+        }
+    }
+
     /// The innermost loop that holds `block`. Cost: O(1).
     pub fn innermost(&self, block: BlockId) -> Option<LoopId> {
         self.innermost[block.index()]
@@ -134,8 +145,8 @@ impl Analysis for LoopTree {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> LoopTree {
-        let dominators = am.get::<Dominators>(module, body);
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> LoopTree {
+        let dominators = queries.get::<Dominators>(module, body);
         let graph = Graph::of(module.body(body));
         let count = graph.blocks.len();
         let reached = |node: usize| dominators.reachable(graph.blocks[node]);
@@ -305,8 +316,13 @@ impl UnionFind {
 /// successor. Cost: O(the header's predecessors).
 fn preheader(tree: &LoopTree, of: LoopId) -> Option<BlockId> {
     let graph = &tree.graph;
-    let header = tree.loops[of.0].header.index();
-    let mut outside = graph.predecessors[header].iter().copied().filter(|pred| !tree.contains(of, graph.blocks[*pred]));
+    entering_block(graph, tree.loops[of.0].header.index(), |pred| tree.contains(of, graph.blocks[pred]))
+}
+
+/// The one predecessor of `header` that `inside` does not hold, where it
+/// has no successor but `header`. Cost: O(the header's predecessors).
+fn entering_block(graph: &Graph, header: usize, inside: impl Fn(usize) -> bool) -> Option<BlockId> {
+    let mut outside = graph.predecessors[header].iter().copied().filter(|pred| !inside(*pred));
     let (Some(only), None) = (outside.next(), outside.next()) else {
         return None;
     };

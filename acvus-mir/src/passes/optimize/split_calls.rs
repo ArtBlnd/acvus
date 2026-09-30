@@ -243,7 +243,7 @@ mod tests {
     use acvus_ast::Span;
 
     use super::*;
-    use crate::passes::optimize::tests::{Fixture, assert_whole, direct_call, int_const, ret, wrapping_add};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, direct_call, int_const, ret};
 
     /// ```text
     /// a = 1; b = a + a; r = S(); c = 5; d = c + c; s = r + d; return s + b
@@ -255,12 +255,12 @@ mod tests {
         let (int, splittable, name) = (f.int, f.splittable, f.name("f"));
         let mut builder = f.module.build_body(true, int);
         let a = builder.push(int_const(1), int, Span::ZERO);
-        let b = builder.push(wrapping_add(a, a), int, Span::ZERO);
+        let b = builder.push(add(a, a), int, Span::ZERO);
         let r = builder.push_effect(direct_call(name, splittable, Vec::new()), int, Span::ZERO);
         let c = builder.push(int_const(5), int, Span::ZERO);
-        let d = builder.push(wrapping_add(c, c), int, Span::ZERO);
-        let s = builder.push(wrapping_add(r, d), int, Span::ZERO);
-        let t = builder.push(wrapping_add(s, b), int, Span::ZERO);
+        let d = builder.push(add(c, c), int, Span::ZERO);
+        let s = builder.push(add(r, d), int, Span::ZERO);
+        let t = builder.push(add(s, b), int, Span::ZERO);
         builder.terminate(ret(t), acvus_ast::Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
         let entry = f.module.body(id).entry();

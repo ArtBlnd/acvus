@@ -103,7 +103,7 @@ use crate::ir::parts::{Path, covers, overlap};
 use acvus_utils::QualifiedRef;
 
 use crate::ir::{Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, ValueId, fn_effect};
-use crate::passes::analysis::{Analysis, AnalysisManager, DenseAnalysis, Direction, Dominators, solve_dense};
+use crate::passes::analysis::{Analysis, DenseAnalysis, Direction, Dominators, Queries, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::structural::{PartKey, structure};
 use crate::ty::{
@@ -478,9 +478,9 @@ impl Analysis for Loans {
 
     const READS: &'static [Aspect] = &[Aspect::CfgShape, Aspect::Instructions, Aspect::Storage, Aspect::Types];
 
-    fn compute(am: &mut AnalysisManager<'_>, module: &Module, body: BodyId) -> Loans {
-        let reachable = am.get::<Dominators>(module, body);
-        let decls = am.decls();
+    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Loans {
+        let reachable = queries.get::<Dominators>(module, body);
+        let decls = queries.decls();
         let body = module.body(body);
         let forward = Forward::new(body, module.types(), decls);
         let facts = solve_dense(&forward, body);
@@ -1481,7 +1481,7 @@ impl Forward<'_> {
                 self.read_through_if_reference(state, *src, site, record);
                 return none();
             }
-            Op::Check { .. } | Op::CheckSteps { .. } | Op::Drop { .. } => return None,
+            Op::Drop { .. } => return None,
             Op::StringAppend { target, .. } => {
                 let place = self.place_through(state, *target, &[]);
                 record.through(site, Reach::Write, &place, self.own(state, *target));
@@ -2068,8 +2068,6 @@ impl Forward<'_> {
             | Op::FieldSet { .. }
             | Op::BinOp { .. }
             | Op::UnaryOp { .. }
-            | Op::Check { .. }
-            | Op::CheckSteps { .. }
             | Op::Cast { .. }
             | Op::Unmark { .. }
             | Op::TakeEffect { .. }
@@ -2109,12 +2107,12 @@ impl Forward<'_> {
 
     /// A `For` fills its body's leading parameters: a slice's element is a
     /// reborrow of what the source lends, made at the `For`, an array's is
-    /// moved out of it, and the counter holds none; an exit's trip count
-    /// holds none. A `Return` passes its value out by value.
+    /// moved out of it, and the counter holds none. A `Return` passes its
+    /// value out by value.
     fn step_terminator(&self, block: BlockId, terminator: &Terminator, state: &mut State, record: &mut Record) {
         let site = Site::Term(block);
-        let (source, stages, exit, exit_trip) = match terminator {
-            Terminator::For { source, stages, exit, exit_trip, .. } => (source, stages, exit, exit_trip),
+        let (source, body) = match terminator {
+            Terminator::For { source, body, .. } => (source, body),
             Terminator::Return { value, .. } => {
                 self.passed(state, *value, site, None, record);
                 self.page_of_terminator(terminator).record(site, record);
@@ -2122,7 +2120,7 @@ impl Forward<'_> {
             }
             _ => return,
         };
-        let params = self.body.block(stages.body()).params();
+        let params = self.body.block(*body).params();
         let element = match source {
             ForSource::Slice(slice) => Some(self.reborrow(state, *slice, Mode::Shared, site, record)),
             ForSource::SliceMut(slice) => Some(self.reborrow(state, *slice, Mode::Exclusive, site, record)),
@@ -2138,9 +2136,6 @@ impl Forward<'_> {
                 .find(|param| *param != counter)
                 .expect("a traversal supplies its element beside its counter");
             self.define(state, element_param, element);
-        }
-        if let Some(trip) = exit_trip.trip_param(self.body.block(*exit).params()) {
-            self.define(state, trip, empty(self.width(self.body.ty_of(trip))));
         }
     }
 

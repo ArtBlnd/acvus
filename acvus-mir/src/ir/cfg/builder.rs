@@ -14,7 +14,7 @@ use acvus_ast::Span;
 use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 
-use super::body::{BlockData, BlockId, Body, BodyContext, BodyId, Def, Inst, InstList, Module, OrderUse, Terminator};
+use super::body::{BlockData, BlockId, Body, BodyContext, BodyId, BodySetChanged, Def, Inst, InstList, Module, OrderUse, Terminator};
 use super::order::At;
 use super::op::Op;
 use crate::ir::{OrderEdge, ValueId, fn_effect};
@@ -482,8 +482,8 @@ impl<'m> Builder<'m> {
                     self.order_mut().leaving.insert((at, position), gathered);
                 }
             }
-            if let Terminator::For { stages, .. } | Terminator::While { stages, .. } = &terminator {
-                self.order_mut().loop_entries.insert(stages.body(), at);
+            if let Terminator::For { body, .. } | Terminator::While { body, .. } = &terminator {
+                self.order_mut().loop_entries.insert(*body, at);
             }
         }
         if let Terminator::Return { order, .. } = &mut terminator {
@@ -542,7 +542,8 @@ impl<'m> Builder<'m> {
         self.write_order(OrderVar::Token, at, gathered);
     }
 
-    /// Checks that no open state is left and adds the body to the module.
+    /// Checks that no open state is left, adds the body to the module and
+    /// records that the module's body set changed.
     /// It reports an open `anyorder` scope first, then the first block, by
     /// id, left without its terminator or reserved and never made. In an
     /// ordered body it then completes the order token's parameters and
@@ -583,6 +584,7 @@ impl<'m> Builder<'m> {
         let Builder { module, body, .. } = self;
         let id = BodyId(u32::try_from(module.bodies.len()).expect("a module holds at most u32::MAX bodies"));
         module.bodies.push(body);
+        module.body_set_change = Some(BodySetChanged::record());
         Ok(id)
     }
 

@@ -14,6 +14,7 @@
 mod cursor;
 mod dominators;
 mod keeps;
+mod loops;
 mod needs;
 mod reach;
 mod scopes;
@@ -21,14 +22,16 @@ mod scopes;
 mod tests;
 
 pub use cursor::Cursor;
+pub use loops::CannotEditLoop;
+pub use super::body::{Head, Rebind};
 pub use keeps::{
     DefDominatesUses, Invariant, Invariants, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation,
 };
-pub use needs::{Asked, ContentFacts, DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, NoFacts, OrderFacts};
+pub use needs::{Asked, ContentFacts, DischargeFacts, Unobserved, DominanceFacts, Facts, LoanFacts, LoopFacts, NoFacts, OrderFacts};
 pub use scopes::{
     MotionFacts, Cfg, EditsCfg, EditsLoops, EditsOrder, Effect, Loop, Motion, MovesInsts, PromotesStorage, Remove, RemovesInsts,
     ReplacesValues, Sccp, Scope, Storage, Value, Discharge, Discharges, Drops, Inline, Inlines, InsertsDrops, Clones,
-    ClonesReads, DropFacts,
+    ClonesReads, DropFacts, LoopEditFacts,
 };
 
 use acvus_ast::Span;
@@ -150,7 +153,7 @@ struct ShapeIndex {
 }
 
 impl ShapeIndex {
-    /// Cost: O(blocks + edges + stages).
+    /// Cost: O(blocks + edges).
     fn of(body: &Body) -> ShapeIndex {
         ShapeIndex { predecessors: body.predecessors(), structural: body.structural_blocks() }
     }
@@ -469,7 +472,7 @@ where
     /// calls, starts or takes a call whose callee's reissue is not pure or
     /// that writes a context. `Idempotent` is safe to repeat, not to skip,
     /// and `Opaque` never vanishes.
-    fn has_effect(&self, inst: &Inst) -> bool {
+    pub fn has_effect(&self, inst: &Inst) -> bool {
         if inst.order().is_some() {
             return true;
         }
@@ -499,7 +502,7 @@ where
 {
     /// Every edge into `from` goes to `to`, with its arguments; structure
     /// follows (core rule 6), so a `Diamond`'s or a `Switch`'s join or a
-    /// loop's stage or exit that is `from` becomes `to`. Refused as `Entry`
+    /// loop's body or exit that is `from` becomes `to`. Refused as `Entry`
     /// where `from` is the entry, which no edge enters; as `ParamsDisagree`
     /// where the two blocks' parameters differ in count or type; and as
     /// `ParamsUsedBeyond` at the first use, in block order, of a parameter
@@ -552,7 +555,7 @@ where
     }
 
     /// Removes blocks no edge reaches. A block a surviving `Diamond` or
-    /// `Switch` names as its join, or a surviving loop as a stage or its
+    /// `Switch` names as its join, or a surviving loop as its body or its
     /// exit, stays, as does every block such a block reaches or takes a
     /// value from, so the body stays whole.
     pub fn prune(&mut self) {
@@ -730,8 +733,7 @@ where
     }
 }
 
-// `EditsLoops`' operations are defined with the loop design (compilation
-// §4), after optimize's design; none exists yet.
+// `EditsLoops`' operations are the loop edits in `loops`.
 
 /// An edit made on the body directly, checked and refreshed as any edit is,
 /// for tests that provoke what no operation of the editor does.
@@ -867,7 +869,7 @@ pub enum CannotRemoveParam {
 pub enum CannotMerge {
     /// It has other predecessors, or its predecessor other successors.
     NotStraight,
-    /// It is a `Diamond`'s join or a loop's stage or exit (D45).
+    /// It is a `Diamond`'s join or a loop's body or exit (D45).
     Structural,
 }
 
@@ -1034,11 +1036,7 @@ where
         if body.use_count(param) > 0 {
             return Err(CannotRemoveParam::StillUsed);
         }
-        let supplied = body
-            .blocks()
-            .flat_map(|(_, from)| from.terminator().edges())
-            .any(|edge| edge.to == block && index < edge.supplied);
-        if supplied {
+        if supplied_by_an_edge(body, block, index) {
             return Err(CannotRemoveParam::Supplied);
         }
         self.edit(|rewriter| rewriter.remove(param))
@@ -1048,7 +1046,7 @@ where
 
     /// G2: `block` joins its sole predecessor, which enters it by a `Jump`,
     /// its only edge. Refused where `block` is a `Diamond`'s or a `Switch`'s
-    /// join, or a loop's stage or exit, which never merge away (D45, D57);
+    /// join, or a loop's body or exit, which never merge away (D45, D57);
     /// and where another block or the body's start enters it, or its
     /// predecessor ends otherwise than in that jump.
     pub fn merge_into_predecessor(&mut self, block: BlockId) -> Result<(), CannotMerge> {
@@ -1072,6 +1070,14 @@ where
         self.walk.settle(body);
         Ok(())
     }
+}
+
+/// Whether an edge into `block` fills its parameter at `index` itself, as a
+/// loop's edge into its body does. Cost: O(the body's edges).
+fn supplied_by_an_edge(body: &Body, block: BlockId, index: usize) -> bool {
+    body.blocks()
+        .flat_map(|(_, from)| from.terminator().edges())
+        .any(|edge| edge.to == block && index < edge.supplied)
 }
 
 /// Every operand of the instruction or terminator at `site`.
@@ -1140,10 +1146,9 @@ where
     S::Needs<'m>: DischargeFacts,
 {
     /// G1: discharges what the core would keep, on the fact that proves it
-    /// unobservable: a check on `NeverFires`, a store (`Assign`) on
-    /// `NeverRead`. A `Check` or `CheckSteps` is removed; an `Index` or
-    /// `IndexSet` whose bound is checked keeps its place, and its bound
-    /// becomes proven; a store is removed. The body is unchanged on a
+    /// unobservable: a checked bound on `NeverFires`, a store (`Assign`) on
+    /// `NeverRead`. An `Index` or `IndexSet` whose bound is checked keeps
+    /// its place, and its bound becomes proven; a store is removed. The body is unchanged on a
     /// refusal.
     ///
     /// # Panics
@@ -1155,10 +1160,9 @@ where
             Op::Index { bound: IndexBound::Checked, .. } | Op::IndexSet { bound: IndexBound::Checked, .. }
         );
         let needed = match self.inst(inst).op() {
-            Op::Check { .. } | Op::CheckSteps { .. } => Unobserved::NeverFires,
             _ if checked_bound => Unobserved::NeverFires,
             Op::Assign { .. } => Unobserved::NeverRead,
-            other => panic!("discharge removes a check or a store, not {other:?}"),
+            other => panic!("discharge proves a checked bound or removes a store, not {other:?}"),
         };
         let asked = Asked::new(self.module, self.body);
         match self.needs.discharged(asked, inst) {

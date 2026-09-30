@@ -144,11 +144,10 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
             let object = if copying(*object) { read(*object) } else { taken(*object, Taken::PartMoved) };
             operands.extend([object, passed(*value)]);
         }
-        Op::BinOp { left, right, .. } | Op::Check { left, right, .. } => operands.extend([read(*left), read(*right)]),
+        Op::BinOp { left, right, .. } => operands.extend([read(*left), read(*right)]),
         Op::UnaryOp { operand, .. } => operands.push(read(*operand)),
         Op::Cast { src, .. } => operands.push(read(*src)),
         Op::Unmark { src } => operands.push(passed(*src)),
-        Op::CheckSteps { from, step, count } => operands.extend([read(*from), read(*step), read(*count)]),
         Op::FunctionCall { callee: called, args, .. } | Op::Spawn { callee: called, args, .. } => {
             operands.extend(callee(called));
             operands.extend(args.iter().map(|arg| passed(*arg)));

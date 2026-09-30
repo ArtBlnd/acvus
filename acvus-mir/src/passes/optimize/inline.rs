@@ -1,12 +1,6 @@
-//! Inlining (`Editor<Inline>::inline`, S2) over the module's call graph.
-//!
-//! The call graph's nodes are the module's bodies. A body has an edge to
-//! every body it makes a closure of, and to the body of every closure it
-//! calls whose callee is a `MakeClosure` result it holds; the second kind
-//! is always among the first, since such a callee is made in the calling
-//! body. The strongly connected components are visited callees first, by
-//! Tarjan's algorithm, which completes a component only after every
-//! component it reaches.
+//! Inlining (`Editor<Inline>::inline`, S2) over the module's call graph
+//! (`analysis::CallGraph`), whose strongly connected components are visited
+//! callees first.
 //!
 //! In each body, every call site the body holds when its visit begins is
 //! offered to `inline` once. The editor refuses a call whose callee is not
@@ -19,7 +13,8 @@
 //!
 //! Form: F1, SSA, in and out.
 //!
-//! Cost: O(bodies + instructions) for the call graph and its components;
+//! Cost: O(bodies + instructions) for the call graph and its components,
+//! read through the manager;
 //! each call site the module holds before the pass is offered at most once,
 //! and an inlining costs the core's O(callee size). The pass is bounded by
 //! the module's call sites.
@@ -30,12 +25,12 @@
 //! the call's (effects §3), and each return of the callee goes to what
 //! followed the call with its value. Every copied value keeps its type.
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 
 use crate::ir::cfg::edit::{CannotInline, Editor, Inline as InlineScope, NoFacts};
-use crate::ir::cfg::{BodyId, Changes, Definition, Module, Op};
-use crate::ir::{Callee, ValueId};
-use crate::passes::analysis::AnalysisManager;
+use crate::ir::cfg::{BodyId, Changes, Module, Op};
+use crate::ir::ValueId;
+use crate::passes::analysis::{AnalysisManager, CallGraph};
 use crate::passes::optimize::ModuleTransform;
 
 pub struct Inline;
@@ -43,11 +38,11 @@ pub struct Inline;
 impl ModuleTransform for Inline {
     const NAME: &'static str = "inline";
 
-    fn run(module: &mut Module, _am: &mut AnalysisManager<'_>) -> Vec<(BodyId, Changes)> {
-        let graph = CallGraph::of(module);
+    fn run(module: &mut Module, am: &mut AnalysisManager<'_>) -> Vec<(BodyId, Changes)> {
+        let graph = am.get_of_module::<CallGraph>(module);
         let mut changed = Vec::new();
         for component in graph.components_callees_first() {
-            for body in component {
+            for body in component.iter().copied() {
                 changed.push((body, inline_into(module, body)));
             }
         }
@@ -86,154 +81,14 @@ fn inline_into(module: &mut Module, body: BodyId) -> Changes {
     editor.finish()
 }
 
-/// The module's bodies, by their place among `Module::body_ids`, each with
-/// the bodies it makes closures of or calls through a closure it makes.
-struct CallGraph {
-    bodies: Vec<BodyId>,
-    callees: Vec<Vec<usize>>,
-}
-
-impl CallGraph {
-    /// Cost: O(bodies + instructions).
-    fn of(module: &Module) -> CallGraph {
-        let bodies: Vec<BodyId> = module.body_ids().collect();
-        let place: FxHashMap<BodyId, usize> = bodies.iter().enumerate().map(|(at, body)| (*body, at)).collect();
-        let callees = bodies
-            .iter()
-            .map(|caller| {
-                let body = module.body(*caller);
-                let mut callees: Vec<usize> = Vec::new();
-                for inst in body.blocks().flat_map(|(_, block)| block.insts()) {
-                    let made: Vec<BodyId> = match inst.op() {
-                        Op::MakeClosure { bodies, .. } => bodies.clone(),
-                        Op::FunctionCall { callee: Callee::Indirect(function), .. } => closure_body(module, *caller, *function).into_iter().collect(),
-                        _ => Vec::new(),
-                    };
-                    callees.extend(made.iter().map(|callee| place[callee]));
-                }
-                callees.sort_unstable();
-                callees.dedup();
-                callees
-            })
-            .collect();
-        CallGraph { bodies, callees }
-    }
-
-    /// The strongly connected components, each after every component its
-    /// bodies reach (Tarjan 1972, with an explicit stack). Cost: O(bodies +
-    /// edges).
-    fn components_callees_first(&self) -> Vec<Vec<BodyId>> {
-        let mut tarjan = Tarjan::new(self.callees.len());
-        for root in 0..self.callees.len() {
-            if tarjan.visited[root].is_none() {
-                tarjan.walk_from(root, &self.callees);
-            }
-        }
-        tarjan.components.into_iter().map(|component| component.into_iter().map(|at| self.bodies[at]).collect()).collect()
-    }
-}
-
-/// Tarjan's walk: each node's visit order and the lowest visit order it
-/// reaches on the stack, and the components completed so far.
-struct Tarjan {
-    visited: Vec<Option<usize>>,
-    low: Vec<usize>,
-    on_stack: Vec<bool>,
-    stack: Vec<usize>,
-    next: usize,
-    components: Vec<Vec<usize>>,
-}
-
-/// A node on the walk, and the index of its next edge to follow.
-struct Frame {
-    node: usize,
-    next_edge: usize,
-}
-
-impl Tarjan {
-    fn new(count: usize) -> Tarjan {
-        Tarjan {
-            visited: vec![None; count],
-            low: vec![0; count],
-            on_stack: vec![false; count],
-            stack: Vec::new(),
-            next: 0,
-            components: Vec::new(),
-        }
-    }
-
-    fn enter(&mut self, node: usize) -> Frame {
-        self.visited[node] = Some(self.next);
-        self.low[node] = self.next;
-        self.next += 1;
-        self.stack.push(node);
-        self.on_stack[node] = true;
-        Frame { node, next_edge: 0 }
-    }
-
-    fn walk_from(&mut self, root: usize, edges: &[Vec<usize>]) {
-        let mut walk = vec![self.enter(root)];
-        while let Some(frame) = walk.last_mut() {
-            let node = frame.node;
-            if let Some(callee) = edges[node].get(frame.next_edge).copied() {
-                frame.next_edge += 1;
-                match self.visited[callee] {
-                    None => {
-                        let entered = self.enter(callee);
-                        walk.push(entered);
-                    }
-                    Some(order) if self.on_stack[callee] => self.low[node] = self.low[node].min(order),
-                    Some(_) => {}
-                }
-                continue;
-            }
-            walk.pop();
-            if let Some(caller) = walk.last() {
-                self.low[caller.node] = self.low[caller.node].min(self.low[node]);
-            }
-            if self.visited[node] == Some(self.low[node]) {
-                self.complete(node);
-            }
-        }
-    }
-
-    /// Pops the component whose root is `root`.
-    fn complete(&mut self, root: usize) {
-        let mut component = Vec::new();
-        loop {
-            let member = self.stack.pop().expect("a component's root is on the stack below its members");
-            self.on_stack[member] = false;
-            component.push(member);
-            if member == root {
-                break;
-            }
-        }
-        self.components.push(component);
-    }
-}
-
-/// The body of the closure `function` is, where `caller` makes it.
-fn closure_body(module: &Module, caller: BodyId, function: ValueId) -> Option<BodyId> {
-    let body = module.body(caller);
-    let Definition::Inst(made) = body.definition(function) else {
-        return None;
-    };
-    match body.inst(made).op() {
-        Op::MakeClosure { bodies, .. } => match bodies[..] {
-            [one] => Some(one),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use acvus_ast::Span;
 
     use super::*;
+    use crate::ir::Callee;
     use crate::ir::cfg::{Aspect, Inst, OrderUse, Terminator};
-    use crate::passes::optimize::tests::{Fixture, assert_whole, direct_call, ret, wrapping_add};
+    use crate::passes::optimize::tests::{Fixture, add, assert_whole, direct_call, ret};
 
     fn calls(f: &Fixture, body: BodyId) -> usize {
         let insts = f.module.body(body).blocks().flat_map(|(_, block)| block.insts());
@@ -254,7 +109,7 @@ mod tests {
         let (int, closure_ty, na, nx) = (f.int, f.pure_unary, f.name("a"), f.name("x"));
         let mut builder = f.module.build_body(false, int);
         let x = builder.param(nx, int, acvus_ast::Span::ZERO);
-        let doubled = builder.push(wrapping_add(x, x), int, Span::ZERO);
+        let doubled = builder.push(add(x, x), int, Span::ZERO);
         builder.terminate(ret(doubled), acvus_ast::Span::ZERO);
         let callee = builder.seal().expect("the callee has no open state");
         let mut builder = f.module.build_body(false, int);
@@ -311,7 +166,7 @@ mod tests {
         let mut builder = f.module.build_body(true, int);
         let x = builder.param(nx, int, acvus_ast::Span::ZERO);
         let g = builder.push_effect(direct_call(ng, opaque, Vec::new()), int, Span::ZERO);
-        let doubled = builder.push(wrapping_add(x, x), int, Span::ZERO);
+        let doubled = builder.push(add(x, x), int, Span::ZERO);
         builder.terminate(ret(doubled), acvus_ast::Span::ZERO);
         let callee = builder.seal().expect("the callee has no open state");
         let mut builder = f.module.build_body(true, int);

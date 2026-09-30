@@ -13,8 +13,8 @@ use crate::ir::cfg::edit::{
 use crate::ir::cfg::{BodyId, Changes, Module, Op};
 use crate::passes::analysis::{AnalysisManager, Escapes, LoopTree};
 use crate::passes::optimize::{
-    Bce, BodyTransform, Commute, Dce, Dse, Gvn, Inline, Licm, Mem2Reg, ModuleTransform, Reborrow, Schedule, Sccp,
-    SimplifyCfg, Sink, SplitCalls, Sroa, union_of,
+    Bce, BodyTransform, Commute, Dce, Dse, Gvn, Inline, IvCanon, Licm, LoopDeletion, Mem2Reg, ModuleTransform,
+    Reborrow, Schedule, Sccp, SimplifyCfg, Sink, SplitCalls, Sroa, WhileToFor, union_of,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +46,7 @@ fn optimize_fully(module: &mut Module, am: &mut AnalysisManager<'_>) {
         storage(module, body, am);
         proofs(module, body, am);
         motion(module, body, am);
+        loops(module, body, am);
         effects(module, body, am);
     }
 }
@@ -81,14 +82,29 @@ fn proofs(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
 }
 
 /// P6. `licm` runs last because it makes every loop's preheader, and
-/// `simplify_cfg`, which P3* runs, bypasses a preheader left empty; P7
-/// edits no block, so F2 holds from here into P7 (D73). The loop group,
-/// planned with the user (compilation §4), is reserved after it; nothing
-/// runs there yet.
+/// `simplify_cfg`, which P3* runs, bypasses a preheader left empty; the loop
+/// group and P7 keep F2, so it holds from here into P7 (D73).
 fn motion(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
     step::<Sink>(module, body, am);
     scalar_fixpoint(module, body, am, scalar_round);
     step::<Licm>(module, body, am);
+}
+
+/// The loop group (compilation §4), in the order of the standard loop
+/// pipeline: promotion to a counted loop, induction-variable simplification,
+/// then deletion. Strength reduction is not built: it adds a join, which
+/// compilation §4 asks a transformation not to do, and gains nothing in the
+/// interpreter, where a multiplication costs what an addition does; it is for
+/// a loop that cannot run in parallel anyway, and comes when one needs it.
+/// `bce` runs again since a promoted loop's counter proves indices; `dce`
+/// removes what the rewrites left unread. None edits a block's preheader away,
+/// so F2 holds.
+fn loops(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
+    step::<WhileToFor>(module, body, am);
+    step::<IvCanon>(module, body, am);
+    step::<LoopDeletion>(module, body, am);
+    step::<Bce>(module, body, am);
+    step::<Dce>(module, body, am);
 }
 
 /// P7. Nothing after `schedule` moves an instruction.
@@ -155,6 +171,15 @@ impl Requires for Licm {
 impl Requires for Sink {
     const FORM: Form = Form::Ssa;
 }
+impl Requires for WhileToFor {
+    const FORM: Form = Form::LoopsCanonical;
+}
+impl Requires for IvCanon {
+    const FORM: Form = Form::LoopsCanonical;
+}
+impl Requires for LoopDeletion {
+    const FORM: Form = Form::LoopsCanonical;
+}
 impl Requires for Commute {
     const FORM: Form = Form::LoopsCanonical;
 }
@@ -172,7 +197,9 @@ const CHECKED: bool = cfg!(any(debug_assertions, test));
 type Kept = (((TypesAgree, DefDominatesUses, OrderChainWhole, StructureKept), NeverDiverges), SplitTakenOnce);
 
 /// Runs `T` over `body` with its required form asserted before, and the
-/// analyses it made stale dropped and the IR's invariants checked after.
+/// analyses it made stale dropped and the IR's invariants checked after. A
+/// body a seal added drops the module analyses, which range over every
+/// body.
 fn step<T>(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes
 where
     T: BodyTransform + Requires,
@@ -181,6 +208,9 @@ where
         assert_form(module, body, am, T::FORM, T::NAME);
     }
     let changes = T::run(module, body, am);
+    if let Some(body_set_change) = module.take_body_set_change() {
+        am.invalidate_body_set(body_set_change);
+    }
     am.invalidate(body, &changes);
     if CHECKED {
         assert_kept(module, body, T::NAME);
@@ -189,7 +219,8 @@ where
 }
 
 /// `step` for a transform over the module; every body is asserted in its
-/// form before, and every body it changed is checked after.
+/// form before, and every body it changed is checked after. A body a seal
+/// added drops the module analyses, which range over every body.
 fn module_step<T>(module: &mut Module, am: &mut AnalysisManager<'_>) -> Vec<(BodyId, Changes)>
 where
     T: ModuleTransform + Requires,
@@ -201,6 +232,9 @@ where
         }
     }
     let changed = T::run(module, am);
+    if let Some(body_set_change) = module.take_body_set_change() {
+        am.invalidate_body_set(body_set_change);
+    }
     for (body, changes) in &changed {
         am.invalidate(*body, changes);
         if CHECKED && recorded_any(changes) {
