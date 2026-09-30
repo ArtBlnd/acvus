@@ -88,13 +88,6 @@ impl Infer {
                     .collect::<Result<_, _>>()?,
                 (),
             )),
-            TyKind::Object(ObjectTy::Declared(id, fields)) => TyKind::Object(ObjectTy::Declared(
-                *id,
-                fields
-                    .iter()
-                    .map(|(name, field)| Ok((*name, freeze(*field)?)))
-                    .collect::<Result<_, _>>()?,
-            )),
             TyKind::Enum { name, variants, .. } => TyKind::Enum {
                 name: *name,
                 variants: variants

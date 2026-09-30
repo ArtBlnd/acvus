@@ -105,9 +105,9 @@ fn past(cx: &Ctxt<'_>, from: Term, reach: Reach, mutability: Mutability) -> Muta
 }
 
 /// A field read fired, of an object reached by `reach`: through a
-/// reference to its target, reached through it, as Rust auto-derefs; of a
-/// declared struct, the field it has; of `!`, `!`; of any other object,
-/// the field it grows to have where transparent at `reach` (types §1-2).
+/// reference to its target, reached through it, as Rust auto-derefs; of
+/// `!`, `!`; of an object, the field it has or grows to have where
+/// transparent at `reach` (types §1-2).
 /// The part is reached as its object was, or through the reference. `head`
 /// is `None` where the object's use decides it at a stall, which makes it
 /// an object and never a reference.
@@ -132,20 +132,6 @@ pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, (object, reach): (Term, 
         Some(Head::Base(_)) | None => {}
     }
     record_reach(cx, part, path_of(cx, object, reach));
-    let declared = match head {
-        Some(_) => match cx.infer.types().kind(cx.infer.shallow(object)) {
-            TyKind::Object(ObjectTy::Declared(_, fields)) => Some(fields.clone()),
-            _ => None,
-        },
-        None => None,
-    };
-    if let Some(fields) = declared {
-        match fields.iter().find(|(name, _)| *name == field) {
-            Some((_, declared_part)) => cx.eq(part, *declared_part, span),
-            None => refusal::push(cx, RefusalKind::GrowsOpaque, span),
-        }
-        return;
-    }
     let shape = cx.held(TyKind::Object(ObjectTy::Structural(
         Box::new([(field, part)]),
         Label::Here,

@@ -1037,23 +1037,6 @@ impl Infer {
                 }
                 Ok(ObjectTy::Structural(fields.into(), either_elsewhere(label_a, label_b)))
             }
-            (ObjectTy::Declared(id_a, fields_a), ObjectTy::Declared(id_b, fields_b)) => {
-                if id_a != id_b
-                    || fields_a.len() != fields_b.len()
-                    || fields_a.iter().zip(fields_b.iter()).any(|(x, y)| x.0 != y.0)
-                {
-                    return Err(Mismatch::Heads { a, b });
-                }
-                let fields = fields_a
-                    .iter()
-                    .zip(fields_b.iter())
-                    .map(|((name, x), (_, y))| Ok((*name, self.relate(*x, *y, Relation::Eq)?)))
-                    .collect::<Result<_, Mismatch>>()?;
-                Ok(ObjectTy::Declared(id_a, fields))
-            }
-            (ObjectTy::Structural(..), ObjectTy::Declared(..)) | (ObjectTy::Declared(..), ObjectTy::Structural(..)) => {
-                Err(Mismatch::Heads { a, b })
-            }
         }
     }
 

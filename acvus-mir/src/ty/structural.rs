@@ -76,7 +76,6 @@ where
         | TyKind::Handle(_)
         | TyKind::Slice(_)
         | TyKind::Str
-        | TyKind::Object(ObjectTy::Declared(..))
         | TyKind::Fn { .. }
         | TyKind::Closures(_)
         | TyKind::UserDefined { .. }
@@ -186,15 +185,19 @@ mod tests {
         assert_eq!(parts(&types, r#enum), vec![int]);
     }
 
-    /// types §1: a declared struct is opaque, so it has no parts; nor has a
-    /// reference, `!` or a primitive.
+    /// types §1: an extern-defined type is opaque, so it has no parts; nor
+    /// has a reference, `!` or a primitive.
     #[test]
-    fn a_declared_struct_a_reference_and_a_primitive_are_not_structural() {
+    fn an_extern_defined_type_a_reference_and_a_primitive_are_not_structural() {
         let names = Interner::new();
-        let a = names.intern("a");
         let mut types = Types::<Concrete>::new();
         let int = types.intern(TyKind::Int(IntTy::I64));
-        let declared = types.intern(TyKind::Object(ObjectTy::Declared(QualifiedRef::root(names.intern("S")), Box::new([(a, int)]))));
+        let declared = types.intern(TyKind::UserDefined {
+            id: QualifiedRef::root(names.intern("S")),
+            type_args: Box::new([]),
+            effect: None,
+            identity: None,
+        });
         let reference = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(int)));
         let never = types.intern(TyKind::Never);
         let string = types.intern(TyKind::String);

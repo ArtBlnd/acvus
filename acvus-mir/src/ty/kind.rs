@@ -89,7 +89,7 @@ pub enum ObjectTy<V: Phase> {
 impl<V: Phase> ObjectTy<V> {
     pub fn fields(&self) -> &[(Astr, TyId<V>)] {
         match self {
-            ObjectTy::Structural(fields, _) | ObjectTy::Declared(_, fields) => fields,
+            ObjectTy::Structural(fields, _) => fields,
         }
     }
 }
@@ -187,9 +187,6 @@ impl<V: Phase> TyKind<V> {
             TyKind::Tuple(items, label) => TyKind::Tuple(items.iter().map(|item| map(*item)).collect(), *label),
             TyKind::Object(ObjectTy::Structural(fields, label)) => {
                 TyKind::Object(ObjectTy::Structural(fields.iter().map(|(name, field)| (*name, map(*field))).collect(), *label))
-            }
-            TyKind::Object(ObjectTy::Declared(id, fields)) => {
-                TyKind::Object(ObjectTy::Declared(*id, fields.iter().map(|(name, field)| (*name, map(*field))).collect()))
             }
             TyKind::Enum { name, variants, label } => TyKind::Enum {
                 name: *name,

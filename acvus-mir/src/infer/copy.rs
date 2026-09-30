@@ -287,10 +287,6 @@ impl Infer {
                 fields.iter().map(|(name, field)| (*name, self.copy_at(*field, at, memo))).collect(),
                 *label,
             )),
-            TyKind::Object(ObjectTy::Declared(id, fields)) => TyKind::Object(ObjectTy::Declared(
-                *id,
-                fields.iter().map(|(name, field)| (*name, self.copy_at(*field, at, memo))).collect(),
-            )),
             TyKind::Enum { name, variants, label } => TyKind::Enum {
                 name: *name,
                 variants: variants.iter().map(|(tag, payload)| (*tag, payload.map(|payload| self.copy_at(payload, at, memo)))).collect(),

@@ -127,9 +127,6 @@ impl Imported {
             TyKind::Object(ObjectTy::Structural(fields, label)) => {
                 TyKind::Object(ObjectTy::Structural(fields.iter().map(|(name, field)| (*name, self.term(*field))).collect(), *label))
             }
-            TyKind::Object(ObjectTy::Declared(id, fields)) => {
-                TyKind::Object(ObjectTy::Declared(*id, fields.iter().map(|(name, field)| (*name, self.term(*field))).collect()))
-            }
             TyKind::Enum { name, variants, label } => TyKind::Enum {
                 name: *name,
                 variants: variants.iter().map(|(tag, payload)| (*tag, payload.map(|payload| self.term(payload)))).collect(),

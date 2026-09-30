@@ -141,12 +141,8 @@ impl Choice<'_> {
                 self.ty(*a_ok, *b_ok) && self.ty(*a_err, *b_err)
             }
             (TyKind::Object(a), TyKind::Object(b)) => {
-                let same_object = match (a, b) {
-                    (ObjectTy::Structural(_, a_label), ObjectTy::Structural(_, b_label)) => a_label == b_label,
-                    (ObjectTy::Declared(a_id, _), ObjectTy::Declared(b_id, _)) => a_id == b_id,
-                    (ObjectTy::Structural(..), ObjectTy::Declared(..))
-                    | (ObjectTy::Declared(..), ObjectTy::Structural(..)) => false,
-                };
+                let (ObjectTy::Structural(_, a_label), ObjectTy::Structural(_, b_label)) = (a, b);
+                let same_object = a_label == b_label;
                 same_object
                     && all_pairs(a.fields(), b.fields(), |(a_name, a), (b_name, b)| {
                         a_name == b_name && self.ty(*a, *b)

@@ -53,7 +53,7 @@ mod tests {
     use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
     use crate::ir::cfg::{Body, Inst, Op, Terminator};
     use crate::ir::{PathSeg, RefTarget};
-    use crate::ty::{Concrete, IntTy, Mutability, ObjectTy, Ty, TyKind, TypeArg, Types};
+    use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, TypeArg, Types};
 
     struct Fixture {
         module: Module,
@@ -61,7 +61,7 @@ mod tests {
         int: Ty,
         pair: Ty,
         ref_pair: Ty,
-        /// A struct a declaration names, with one `i64` field `a`.
+        /// An extern-defined type.
         declared: Ty,
     }
 
@@ -71,10 +71,12 @@ mod tests {
         let int = types.intern(TyKind::Int(IntTy::I64));
         let pair = types.intern(TyKind::Tuple(Box::new([int, int]), ()));
         let ref_pair = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(pair)));
-        let declared = types.intern(TyKind::Object(ObjectTy::Declared(
-            QualifiedRef::root(interner.intern("Point")),
-            Box::new([(interner.intern("a"), int)]),
-        )));
+        let declared = types.intern(TyKind::UserDefined {
+            id: QualifiedRef::root(interner.intern("Point")),
+            type_args: Box::new([]),
+            effect: None,
+            identity: None,
+        });
         Fixture { module: Module::new(types), interner, int, pair, ref_pair, declared }
     }
 
@@ -169,8 +171,8 @@ mod tests {
         assert!(changes.touched(crate::ir::cfg::Aspect::Storage));
     }
 
-    /// `d.a = 1; t = d.a; return t`, with `d` a slot of a declared struct:
-    /// an extern-defined type is never split (compilation §3).
+    /// `d.a = 1; t = d.a; return t`, with `d` a slot of an extern-defined
+    /// type: an extern-defined type is never split (compilation §3).
     #[test]
     fn an_extern_defined_types_slot_is_refused() {
         let mut f = fixture();

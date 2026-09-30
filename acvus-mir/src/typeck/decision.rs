@@ -1553,7 +1553,7 @@ fn poly_base(kind: &TyKind<Poly>) -> Option<Base> {
         TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
         TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
-        TyKind::Object(ObjectTy::Declared(id, _)) | TyKind::UserDefined { id, .. } => Base::Named(*id),
+        TyKind::UserDefined { id, .. } => Base::Named(*id),
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::Ref(..) => panic!("a declared reference's target is never a reference (ReferenceToReference)"),

@@ -710,7 +710,6 @@ fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
         TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
         TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
-        TyKind::Object(ObjectTy::Declared(id, _)) => Base::Named(*id),
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::UserDefined { id, .. } => Base::Named(*id),

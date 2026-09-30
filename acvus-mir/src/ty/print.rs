@@ -88,10 +88,6 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             out.push('>');
         }
         TyKind::Object(ObjectTy::Structural(fields, ())) => write_fields(types, names, fields, out),
-        TyKind::Object(ObjectTy::Declared(name, fields)) => {
-            out.push_str(&qualified(names, *name));
-            write_fields(types, names, fields, out);
-        }
         TyKind::Enum { name, variants, label: () } => {
             out.push_str(&qualified(names, *name));
             out.push('{');

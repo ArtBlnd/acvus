@@ -5,7 +5,7 @@
 use std::ops::Range;
 
 use crate::decl::Declarations;
-use crate::ty::{Concrete, Declared, FlowEnd, LifetimesOf, ObjectTy, Poly, Ty, TyId, TyKind, Types, positions};
+use crate::ty::{Concrete, Declared, FlowEnd, LifetimesOf, Poly, Ty, TyId, TyKind, Types, positions};
 
 impl Declared {
     /// The declared type of the end `end` of this signature, in the
@@ -147,16 +147,6 @@ impl SegmentWalk<'_> {
                 }
             }
             (TyKind::Object(decl_object), TyKind::Object(object)) => {
-                assert!(
-                    matches!(
-                        (decl_object, object),
-                        (ObjectTy::Structural(..), ObjectTy::Structural(..))
-                    ) || matches!(
-                        (decl_object, object),
-                        (ObjectTy::Declared(decl_id, _), ObjectTy::Declared(id, _)) if decl_id == id
-                    ),
-                    "{DISAGREE}"
-                );
                 let (decl_fields, fields) = (decl_object.fields(), object.fields());
                 assert_eq!(decl_fields.len(), fields.len(), "{DISAGREE}");
                 for ((decl_name, decl_field), (name, field)) in decl_fields.iter().zip(fields.iter()) {

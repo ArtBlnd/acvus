@@ -331,23 +331,10 @@ fn bound_value(cx: &mut Ctxt<'_>, part: Term, lent: Option<Mutability>, span: Sp
     }
 }
 
-/// `{ f: p, .. }`: a declared struct must have each field; any other
-/// object grows by them where transparent (types §1-2). The scrutinee's
-/// head is known here, so whether it is declared is read off it.
+/// `{ f: p, .. }`: the object grows by each field where transparent
+/// (types §1-2); one a declaration wrote is written elsewhere, so it must
+/// have each field.
 fn object(cx: &mut Ctxt<'_>, fields: Vec<(Astr, Shape)>, (scrutinee, reach): (Term, Reach), lent: Option<Mutability>, span: Span) {
-    let declared = match cx.infer.types().kind(cx.infer.shallow(scrutinee)) {
-        TyKind::Object(ObjectTy::Declared(_, declared)) => Some(declared.clone()),
-        _ => None,
-    };
-    if let Some(declared) = declared {
-        for (key, part) in fields {
-            match declared.iter().find(|(name, _)| *name == key) {
-                Some((_, term)) => destructure(cx, part, *term, lent),
-                None => refusal::push(cx, RefusalKind::GrowsOpaque, part.span),
-            }
-        }
-        return;
-    }
     let least = lent.or_else(|| super::place::path_of(cx, scrutinee, reach));
     let terms: Vec<(Astr, Term)> = fields.iter().map(|(key, _)| (*key, reached_part(cx, least))).collect();
     let mut sorted = terms.clone();

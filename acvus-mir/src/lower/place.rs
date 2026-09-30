@@ -155,7 +155,7 @@ fn part_ty(cx: &Lcx<'_, '_>, object: &Operand, field: acvus_utils::Astr) -> Ty {
         _ => held,
     };
     let fields = match cx.kind(held) {
-        TyKind::Object(ObjectTy::Structural(fields, _) | ObjectTy::Declared(_, fields)) => fields,
+        TyKind::Object(ObjectTy::Structural(fields, _)) => fields,
         other => panic!("a field is read of an object, not {other:?}"),
     };
     fields

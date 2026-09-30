@@ -233,13 +233,6 @@ impl Infer {
                     .collect(),
                 Label::Elsewhere,
             )),
-            TyKind::Object(ObjectTy::Declared(id, fields)) => TyKind::Object(ObjectTy::Declared(
-                *id,
-                fields
-                    .iter()
-                    .map(|(name, field)| (*name, self.instantiate_ty(at, *field)))
-                    .collect(),
-            )),
             TyKind::Enum { name, variants, .. } => TyKind::Enum {
                 name: *name,
                 variants: variants

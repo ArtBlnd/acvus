@@ -119,7 +119,7 @@ fn base_of<V: Phase>(kind: &TyKind<V>) -> Base {
         TyKind::Option(.., _) => Base::Option,
         TyKind::Result(..) => Base::Result,
         TyKind::Object(ObjectTy::Structural(..)) => Base::Object,
-        TyKind::Object(ObjectTy::Declared(id, _)) | TyKind::UserDefined { id, .. } => Base::Named(*id),
+        TyKind::UserDefined { id, .. } => Base::Named(*id),
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::Ref(..) => panic!(

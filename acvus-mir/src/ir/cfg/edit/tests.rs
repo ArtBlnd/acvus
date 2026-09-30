@@ -42,8 +42,10 @@ struct Fixture {
     str_ref: Ty,
     /// `Result<i64, bool>`.
     result: Ty,
-    /// A declared struct with one field `x: i64`.
+    /// An object with one field `x: i64`.
     object: Ty,
+    /// An extern-defined type.
+    extern_defined: Ty,
 }
 
 fn fixture() -> Fixture {
@@ -74,8 +76,13 @@ fn fixture() -> Fixture {
     let str_ty = types.intern(TyKind::Str);
     let str_ref = types.intern(TyKind::Ref(Mutability::Shared, TypeArg::Uniform(str_ty)));
     let result = types.intern(TyKind::Result(int, bool, ()));
-    let point = QualifiedRef::root(interner.intern("Point"));
-    let object = types.intern(TyKind::Object(ObjectTy::Declared(point, Box::new([(interner.intern("x"), int)]))));
+    let object = types.intern(TyKind::Object(ObjectTy::Structural(Box::new([(interner.intern("x"), int)]), ())));
+    let extern_defined = types.intern(TyKind::UserDefined {
+        id: QualifiedRef::root(interner.intern("Point")),
+        type_args: Box::new([]),
+        effect: None,
+        identity: None,
+    });
     Fixture {
         module: Module::new(types),
         interner,
@@ -90,6 +97,7 @@ fn fixture() -> Fixture {
         str_ref,
         result,
         object,
+        extern_defined,
     }
 }
 
@@ -2085,12 +2093,12 @@ fn split_slot_gives_each_field_of_a_tuple_its_own_slot() {
 #[test]
 fn split_slot_refuses_a_type_that_is_not_structural_and_a_use_of_the_whole() {
     let mut f = fixture();
-    let (name, int, object) = (f.name("a"), f.int, f.object);
+    let (name, int, extern_defined) = (f.name("a"), f.int, f.extern_defined);
     let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int]), ()));
     let mut builder = f.build(false, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let scalar = builder.slot(int, at(0));
-    let declared = builder.slot(object, at(0));
+    let declared = builder.slot(extern_defined, at(0));
     let whole = builder.slot(pair, at(0));
     builder.push_unit(
         Op::Assign { target: RefTarget::Var(whole), path: vec![crate::ir::PathSeg::Index(0)], value: a, restores: false },
