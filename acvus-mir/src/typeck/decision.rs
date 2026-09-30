@@ -559,13 +559,14 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
 
 /// The stall step of types §5 for what is not a type: effects, flow sets,
 /// and function types' holds and calls; whether any took its
-/// default. A lambda's flow set is its claim's (`writeback::claim_flows`),
-/// made once its type is solved, and its holds and calls are what settling
+/// default. A function value's flow set, at each of its instances, is its
+/// claim's (`writeback::claim_flows`), made once that instance's type is
+/// solved; a lambda's holds and calls are what settling
 /// its captures finds (`closure::settle_captures`), after the fixpoint; no
 /// default takes them (D84).
 fn default_non_type_terms(cx: &mut Ctxt<'_>) -> bool {
     let effects = cx.infer.default_effects();
-    let claimed = super::writeback::lambda_flows(cx);
+    let claimed = super::writeback::claimed_flows(cx);
     let flows = cx.infer.default_unclaimed_flows(&claimed);
     let settled_later: Vec<_> = cx.out.lambdas.iter().map(|lambda| (lambda.holds, lambda.calls)).collect();
     let holds_and_calls = cx.infer.default_unsettled_holds_and_calls(&settled_later);

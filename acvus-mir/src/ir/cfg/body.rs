@@ -30,12 +30,16 @@ impl BlockId {
 
 /// A compiled module: its bodies and the one table every type of the module
 /// is an id of. The module's result type is its entry body's; a run's result
-/// holds no positions (ownership §5), so the module states no flows, and a
-/// closure's flows are on its function type.
+/// holds no positions (ownership §5), so the module states no flows. A
+/// closure's flows are on its function type, and a unit's instantiation
+/// body's on the function type its callers claimed it at (graph).
 pub struct Module {
     pub(super) bodies: Vec<Body>,
     pub(super) entry: Option<BodyId>,
     pub(super) types: Types<Concrete>,
+    /// Each unit instantiation body a call claimed, with the function type
+    /// the call claimed it at.
+    pub(super) claimed: FxHashMap<BodyId, Ty>,
 }
 
 /// What a value is: its type, where it is defined, and whether it is an
@@ -609,7 +613,7 @@ impl Module {
     ///
     /// Cost: O(1).
     pub fn new(types: Types<Concrete>) -> Module {
-        Module { bodies: Vec::new(), entry: None, types }
+        Module { bodies: Vec::new(), entry: None, types, claimed: FxHashMap::default() }
     }
 
     /// A Builder for a new body of this module, whose every return yields
@@ -640,6 +644,23 @@ impl Module {
     pub fn set_entry(&mut self, body: BodyId) {
         self.assert_body(body);
         self.entry = Some(body);
+    }
+
+    /// `body` claimed at `signature`, the function type a call of the unit
+    /// instantiation it is claims it at (graph, ownership §5).
+    ///
+    /// # Panics
+    /// `body` is not a body of this module, or was claimed at another
+    /// function type: a claim is decided by the instantiation's types alone.
+    pub fn claim(&mut self, body: BodyId, signature: Ty) {
+        self.assert_body(body);
+        let claimed = *self.claimed.entry(body).or_insert(signature);
+        assert_eq!(claimed, signature, "{body:?} is claimed at one function type");
+    }
+
+    /// The function type `body` was claimed at, where a call claimed it.
+    pub fn claimed(&self, body: BodyId) -> Option<Ty> {
+        self.claimed.get(&body).copied()
     }
 
     pub fn body(&self, id: BodyId) -> &Body {

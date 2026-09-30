@@ -1,5 +1,5 @@
-//! Every term to its concrete type, once (compilation); the lambdas' claimed
-//! flows into their function types.
+//! Every term to its concrete type, once (compilation); the function
+//! values' claimed flows into their function types.
 
 use acvus_ast::AstId;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -17,14 +17,8 @@ use crate::ty::{
 
 /// Freezes every decision, `result` being the run's result term.
 pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term) -> Typeck {
-    let lambdas: Vec<Term> = cx
-        .out
-        .closures
-        .keys()
-        .filter_map(|lambda| cx.out.types.get(lambda).copied())
-        .collect();
-    for lambda in lambdas {
-        claim_flows(&mut cx, lambda);
+    for function in claimed(&mut cx) {
+        claim_flows(&mut cx, function);
     }
 
     // A pair's mark whose positions were never known, which some refusal
@@ -123,17 +117,42 @@ fn freeze(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo,
     }
 }
 
-/// Each lambda's flow set, which its claim decides and no default does.
-pub(super) fn lambda_flows(cx: &Ctxt<'_>) -> Vec<FlowTerm<InferPhase>> {
-    cx.out
-        .closures
-        .keys()
-        .filter_map(|lambda| cx.out.types.get(lambda))
-        .filter_map(|term| match cx.infer.types().kind(cx.infer.shallow(*term)) {
+/// Each claimed flow set, which its claim decides and no default does.
+pub(super) fn claimed_flows(cx: &mut Ctxt<'_>) -> Vec<FlowTerm<InferPhase>> {
+    claimed(cx)
+        .into_iter()
+        .filter_map(|term| match cx.infer.types().kind(cx.infer.shallow(term)) {
             TyKind::Fn { flows, .. } => Some(flows.clone()),
             _ => None,
         })
         .collect()
+}
+
+/// The function type of each function value this check claims flows for,
+/// at each instance of it (ownership §5): each lambda's where it is
+/// written, and at each instance of a binding it is written inside; and
+/// each unit's at each instance this check made of it. An instance's flows
+/// are its own (functions §2), so each is claimed at its own types.
+fn claimed(cx: &mut Ctxt<'_>) -> Vec<Term> {
+    let mut claimed: Vec<Term> = cx.out.closures.keys().filter_map(|lambda| cx.out.types.get(lambda).copied()).collect();
+    for at in 0..cx.out.instances.len() {
+        let id = InstanceId(u32::try_from(at).expect("u32 instances"));
+        if cx.out.foreign_instances.contains(&id) {
+            continue;
+        }
+        let (sites, vars) = super::generalize::instance_sites(cx, id);
+        let scheme = &cx.out.schemes[cx.out.instances[at].scheme.0 as usize];
+        let unit = (scheme.value == super::generalize::SchemeValue::Unit).then_some(scheme.term);
+        let functions: Vec<Term> = sites
+            .iter()
+            .filter(|site| cx.out.closures.contains_key(site))
+            .filter_map(|site| cx.out.types.get(site).copied())
+            .chain(unit)
+            .collect();
+        let mut copies = FxHashMap::default();
+        claimed.extend(functions.into_iter().map(|function| cx.infer.copy_at(function, &vars, &mut copies)));
+    }
+    claimed
 }
 
 /// `flows` set to `to`.
@@ -181,22 +200,22 @@ fn effect_of(cx: &mut Ctxt<'_>, effect: EffectTerm<InferPhase>) -> Effect {
     }
 }
 
-/// A lambda's flows, claimed at the type level (ownership §5): every
-/// output it has takes from every input it has, flow-insensitively. Where
-/// a slot it entered fixed its flows already, those stand, and the borrow
-/// check verifies the lambda against them.
-fn claim_flows(cx: &mut Ctxt<'_>, lambda: Term) {
+/// A lambda's or a unit's flows, claimed at the type level (ownership §5):
+/// every output it has takes from every input it has, flow-insensitively.
+/// Where a slot it entered fixed its flows already, those stand, and the
+/// borrow check verifies its body against them.
+fn claim_flows(cx: &mut Ctxt<'_>, function: Term) {
     let TyKind::Fn {
         params,
         ret,
         flows,
         holds,
         ..
-    } = cx.infer.types().kind(cx.infer.shallow(lambda)).clone()
+    } = cx.infer.types().kind(cx.infer.shallow(function)).clone()
     else {
         assert!(
             !cx.out.refusals.is_empty(),
-            "a lambda's term is a function type unless a refused relation left it otherwise"
+            "a function value's term is a function type unless a refused relation left it otherwise"
         );
         return;
     };

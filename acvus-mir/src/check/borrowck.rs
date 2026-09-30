@@ -28,9 +28,10 @@
 //! by-value parameter's, or on a context, which no flow of the body's
 //! function type names, that the result or an outside storage's content
 //! holds refuses it `LoanOutlivesBody`, naming where the loan was made. In a
-//! lambda's body, every loan an output end holds from another input end is
-//! covered by a flow its claimed function type states, a lambda's flows
-//! being what its body does; a breach is the compiler's, and panics.
+//! lambda's body, or a unit instantiation's a call claimed, every loan an
+//! output end holds from another input end is covered by a flow its claimed
+//! function type states, its flows being what its body does; a breach is
+//! the compiler's, and panics.
 
 use acvus_ast::Span;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -61,24 +62,24 @@ pub(super) fn check(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'
             out.push(refusal);
         }
     }
-    hold_lambda_flows(module, body_id, am);
+    hold_claimed_flows(module, body_id, am);
 }
 
-/// A lambda's flows are what its body does (ownership §5): at every
-/// `Return`, each loan an output end holds that came from another input end
-/// is covered by a flow its claimed function type states from that input
-/// into that output.
+/// A lambda's or a unit's flows are what its body does (ownership §5): at
+/// every `Return`, each loan an output end holds that came from another
+/// input end is covered by a flow its claimed function type states from
+/// that input into that output.
 ///
 /// # Panics
 /// A loan no claimed flow covers: the user wrote no flows, so the claim
 /// typeck made is the compiler's, and a breach is its defect, not a
 /// refusal.
-fn hold_lambda_flows(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>) {
+fn hold_claimed_flows(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>) {
     let Some(signature) = claimed_signature(module, body_id) else {
         return;
     };
     let TyKind::Fn { params, flows, .. } = module.types().kind(signature) else {
-        panic!("a lambda's signature is a function type")
+        panic!("a claimed signature is a function type")
     };
     let (flows, arity) = (flows.get(), params.len());
     let loans = am.get::<Loans>(module, body_id);
@@ -107,7 +108,7 @@ fn hold_lambda_flows(module: &Module, body_id: BodyId, am: &mut AnalysisManager<
                 let covered = from == to || flows.into_end(to, arity).iter().any(|source| source.from == from);
                 assert!(
                     covered,
-                    "lambda body {body_id:?} breaks its claimed flows: at the return of {id:?}, {to:?} holds {loan:?} from \
+                    "body {body_id:?} breaks its claimed flows: at the return of {id:?}, {to:?} holds {loan:?} from \
                      {from:?}, and {flows:?} of {signature:?} state no flow from {from:?} into {to:?}"
                 );
             }
@@ -115,10 +116,14 @@ fn hold_lambda_flows(module: &Module, body_id: BodyId, am: &mut AnalysisManager<
     }
 }
 
-/// The function type the `MakeClosure` that names `body_id` pairs it with,
-/// where one does: its `Fn` type, or the signature of its `Closures` type at
-/// the body's place among its bodies.
+/// The function type `body_id` is claimed at, where one claims it: the one
+/// a unit call claimed its instantiation at, or the one the `MakeClosure`
+/// that names it pairs it with, its `Fn` type or the signature of its
+/// `Closures` type at the body's place among its bodies.
 fn claimed_signature(module: &Module, body_id: BodyId) -> Option<Ty> {
+    if let Some(signature) = module.claimed(body_id) {
+        return Some(signature);
+    }
     for owner in module.body_ids() {
         let body = module.body(owner);
         for (_, block) in body.blocks() {

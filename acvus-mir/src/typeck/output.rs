@@ -281,6 +281,9 @@ pub(super) struct Output {
     pub foreign: rustc_hash::FxHashSet<super::generalize::SchemeId>,
     /// Each instance of one, by `InstanceId`.
     pub instances: Vec<super::generalize::Instance>,
+    /// Every instance an import brought in: another check's, whose flows
+    /// that check claims.
+    pub foreign_instances: rustc_hash::FxHashSet<super::generalize::InstanceId>,
     /// The instance whose requirement is firing, where one is: what fires
     /// records at the lambda body's sites within it.
     pub firing_in: Option<super::generalize::InstanceId>,

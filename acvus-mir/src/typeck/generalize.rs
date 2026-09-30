@@ -130,7 +130,9 @@ pub(super) fn import(cx: &mut Ctxt<'_>, unit: acvus_utils::QualifiedRef) -> Sche
     let scheme = moving.scheme(&interface.scheme.scheme);
     let first = cx.out.schemes.len();
     cx.out.schemes.extend(schemes);
+    let first_instance = cx.out.instances.len();
     cx.out.instances.extend(instances);
+    cx.out.foreign_instances.extend((first_instance..cx.out.instances.len()).map(|at| InstanceId(u32::try_from(at).expect("u32 instances"))));
     let id = SchemeId(u32::try_from(cx.out.schemes.len()).expect("u32 schemes"));
     cx.out.schemes.push(scheme);
     cx.out.foreign.extend((first..cx.out.schemes.len()).map(|at| SchemeId(u32::try_from(at).expect("u32 schemes"))));
@@ -176,6 +178,7 @@ impl Moving<'_> {
             effects: vars.effects.iter().map(|var| terms.effect_var(*var)).collect(),
             lengths: vars.lengths.iter().map(|var| terms.length_var(*var)).collect(),
             identities: vars.identities.iter().map(|var| terms.identity_var(*var)).collect(),
+            flows: vars.flows.iter().map(|var| terms.flow_var(*var)).collect(),
             values: vars.values.iter().map(|var| terms.values_var(*var)).collect(),
         }
     }
@@ -187,6 +190,7 @@ impl Moving<'_> {
             effects: at.effects.iter().map(|(var, copy)| (terms.effect_var(*var), terms.effect_var(*copy))).collect(),
             lengths: at.lengths.iter().map(|(var, copy)| (terms.length_var(*var), terms.length_var(*copy))).collect(),
             identities: at.identities.iter().map(|(var, copy)| (terms.identity_var(*var), terms.identity_var(*copy))).collect(),
+            flows: at.flows.iter().map(|(var, copy)| (terms.flow_var(*var), terms.flow_var(*copy))).collect(),
             values: at.values.iter().map(|(var, copy)| (terms.values_var(*var), terms.values_var(*copy))).collect(),
         }
     }
@@ -318,6 +322,7 @@ impl Canonicalizing<'_> {
             effects: sorted(vars.effects.iter().map(|var| terms.effect_var(*var)), |var| var.0),
             lengths: sorted(vars.lengths.iter().map(|var| terms.length_var(*var)), |var| var.0),
             identities: sorted(vars.identities.iter().map(|var| terms.identity_var(*var)), |var| var.0),
+            flows: sorted(vars.flows.iter().map(|var| terms.flow_var(*var)), |var| var.0),
             values: sorted(vars.values.iter().map(|var| terms.values_var(*var)), |var| var.0),
         }
     }
@@ -329,6 +334,7 @@ impl Canonicalizing<'_> {
             effects: at.effects.iter().map(|(var, copy)| (terms.effect_var(*var), terms.effect_var(*copy))).collect(),
             lengths: at.lengths.iter().map(|(var, copy)| (terms.length_var(*var), terms.length_var(*copy))).collect(),
             identities: at.identities.iter().map(|(var, copy)| (terms.identity_var(*var), terms.identity_var(*copy))).collect(),
+            flows: at.flows.iter().map(|(var, copy)| (terms.flow_var(*var), terms.flow_var(*copy))).collect(),
             values: at.values.iter().map(|(var, copy)| (terms.values_var(*var), terms.values_var(*copy))).collect(),
         }
     }
@@ -361,8 +367,9 @@ impl MapTerms for Canonicalizing<'_> {
 }
 
 /// The generalized variables, by kind: every kind a type states
-/// (functions §2). What a function value's captures hold, how often it
-/// may be called and its flows are decided where it is written, not per
+/// (functions §2), a function type's flows among them, each instance
+/// claiming its own (ownership §5). What a function value's captures hold
+/// and how often it may be called are decided where it is written, not per
 /// instance.
 pub(super) type Generalized = VarsOf;
 
@@ -598,6 +605,7 @@ fn settle(cx: &mut Ctxt<'_>, id: SchemeId) {
         effects: sorted(reached.effects.iter().copied().filter(|var| own.made(|marks| marks.effects, var.0) && !held.effects.contains(var)), |var| var.0),
         lengths: sorted(reached.lengths.iter().copied().filter(|var| cx.infer.is_open_length(*var) && own.made(|marks| marks.lengths, var.0) && !held.lengths.contains(var)), |var| var.0),
         identities: sorted(reached.identities.iter().copied().filter(|var| cx.infer.is_open_identity(*var) && own.made(|marks| marks.identities, var.0) && !held.identities.contains(var)), |var| var.0),
+        flows: sorted(reached.flows.iter().copied().filter(|var| own.made(|marks| marks.flows, var.0) && !held.flows.contains(var)), |var| var.0),
         values: sorted(reached.values.iter().copied().filter(|var| own.made(|marks| marks.values, var.0) && !held.values.contains(var)), |var| var.0),
     };
 
@@ -621,6 +629,7 @@ fn settle_unit(cx: &mut Ctxt<'_>, id: SchemeId, term: Term) {
         effects: sorted(reached.effects.iter().copied(), |var| var.0),
         lengths: sorted(reached.lengths.iter().copied().filter(|var| cx.infer.is_open_length(*var)), |var| var.0),
         identities: sorted(reached.identities.iter().copied().filter(|var| cx.infer.is_open_identity(*var)), |var| var.0),
+        flows: sorted(reached.flows.iter().copied(), |var| var.0),
         values: sorted(reached.values.iter().copied(), |var| var.0),
     };
     let requirements = split_requirements(cx, owned, &generalized);
@@ -637,6 +646,7 @@ fn split_requirements(cx: &mut Ctxt<'_>, owned: Vec<(Decision, Option<AstId>)>, 
             || reads.effects.iter().any(|var| generalized.effects.contains(var))
             || reads.lengths.iter().any(|var| generalized.lengths.contains(var))
             || reads.identities.iter().any(|var| generalized.identities.contains(var))
+            || reads.flows.iter().any(|var| generalized.flows.contains(var))
             || reads.values.iter().any(|var| generalized.values.contains(var));
         match generalizes {
             true => requirements.push(decision),
@@ -693,6 +703,7 @@ pub(super) fn fire_instantiate(cx: &mut Ctxt<'_>, scheme: SchemeId, use_site: As
                             effects: of.at.effects.iter().map(|(var, copy)| (*var, at.effects.get(copy).copied().unwrap_or(*copy))).collect(),
                             lengths: of.at.lengths.iter().map(|(var, copy)| (*var, at.lengths.get(copy).copied().unwrap_or(*copy))).collect(),
                             identities: of.at.identities.iter().map(|(var, copy)| (*var, at.identities.get(copy).copied().unwrap_or(*copy))).collect(),
+                            flows: of.at.flows.iter().map(|(var, copy)| (*var, at.flows.get(copy).copied().unwrap_or(*copy))).collect(),
                             values: of.at.values.iter().map(|(var, copy)| (*var, at.values.get(copy).copied().unwrap_or(*copy))).collect(),
                         };
                         let child = new_instance(cx, Instance { within: Some(instance), at: child_at, recorded: Recorded::default(), template, ..of });

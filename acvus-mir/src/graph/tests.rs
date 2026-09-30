@@ -286,3 +286,48 @@ fn a_refused_unit_is_always_checked_again() {
     assert!(graph.compile(Stop::Optimized(Level::Full)).is_err());
     assert_eq!(graph.work().checked, vec![bad]);
 }
+
+/// ownership §5: a unit's result holds no loan, so a call of one reading
+/// through its parameter claims no flow into its result, and the caller's
+/// loan ends with the call: a write after it is admitted.
+#[test]
+fn a_units_result_takes_no_loan_from_its_arguments() {
+    let mut fx = Fixture::new();
+    fx.script(&["lib"], "read", "*$x");
+    let main = fx.script(&["app"], "main", "let a = 1; let v = lib::read(x: &a); a = 2; v");
+    fx.entry(main, &[], None);
+    let mut graph = fx.graph();
+    if let Err(refused) = graph.compile(Stop::Required) {
+        panic!("refused: {refused:?}");
+    }
+}
+
+/// graph, ownership §5: a unit's instantiation a call asks for is claimed
+/// at the call's function type, which borrowck verifies its body against;
+/// one only an entry asks for is claimed at none.
+#[test]
+fn a_units_instantiation_is_claimed_at_its_calls_function_type() {
+    let mut fx = Fixture::new();
+    let put = fx.script(&["lib"], "put", "{ let x = $r; *$m = 0; 0 }");
+    let main = fx.script(&["app"], "main", "let a = 1; let c = 2; lib::put(m: &mut a, r: &c); a");
+    fx.entry(main, &[], None);
+    let mut graph = fx.graph();
+    let compiled = graph.compile(Stop::Required).unwrap_or_else(|refused| panic!("refused: {refused:?}"));
+    let claimed = |unit: QualifiedRef| {
+        let (_, module) = compiled.modules.iter().find(|(name, _)| *name == unit).expect("the unit's module");
+        let [(_, body)] = module.instantiations[..] else {
+            panic!("one instantiation of {unit:?}");
+        };
+        module.module.claimed(body).map(|signature| match module.module.types().kind(signature) {
+            TyKind::Fn { flows, .. } => flows.clone(),
+            other => panic!("a claimed signature is a function type, not {other:?}"),
+        })
+    };
+    let into_m_from_r = crate::ty::Flows::of([crate::ty::Flow {
+        to: crate::ty::FlowEnd::Param(0),
+        from: crate::ty::FlowEnd::Param(1),
+        alignment: crate::ty::Alignment::Any,
+    }]);
+    assert_eq!(claimed(put), Some(FlowTerm::Known(into_m_from_r)));
+    assert_eq!(claimed(main), None);
+}

@@ -33,7 +33,9 @@
 //!   (`typeck::Inputs::Fixed`), then lowered, taken through the required
 //!   steps and the checks, and optimized: one body. The instantiations are
 //!   gathered from the entries down: each body's calls of another unit ask
-//!   for that unit's instantiation at the call's types.
+//!   for that unit's instantiation at the call's types, claimed at the
+//!   call's function type, whose flows the body is verified against
+//!   (ownership §5).
 //! - One source, one `Module`: every body of a unit's instantiations.
 //! - Inline, per module, after every instantiation is compiled: a call of
 //!   another unit's instantiation may be replaced by that body, its types
@@ -131,12 +133,12 @@ struct Checked {
 
 /// A unit's last module: the revisions it was compiled from and how far,
 /// the instantiations it holds, and each call of another unit its bodies
-/// make, the callee's parameter types in this module's table.
+/// make, the callee's function type in this module's table.
 struct Built {
     read: (u64, Vec<(QualifiedRef, u64)>),
     stop: Stop,
     module: UnitModule,
-    asks: Vec<(QualifiedRef, Box<[Ty]>)>,
+    asks: Vec<(QualifiedRef, Ty)>,
 }
 
 /// A unit's interface this compile, kept in `Interfaces` while the compile
@@ -418,11 +420,39 @@ struct Building<'g> {
     refused: Vec<Refused>,
 }
 
-/// The instantiations asked of a unit this compile, each by its types in
-/// the table of `into`.
+/// The instantiations asked of a unit this compile, each in the table of
+/// `into`.
 struct Asked {
     into: Into,
-    types: Vec<Box<[Ty]>>,
+    instantiations: Vec<AskedAt>,
+}
+
+/// One instantiation asked: its parameters' types, and the function type a
+/// call of it claims it at, where a call asked it; an entry claims none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AskedAt {
+    params: Box<[Ty]>,
+    claimed: Option<Ty>,
+}
+
+impl Asked {
+    /// `at` asked too: an instantiation at its types once, claimed where
+    /// any ask of it claims it.
+    ///
+    /// # Panics
+    /// Two asks claim one instantiation at two function types: a claim is
+    /// decided by the instantiation's types alone.
+    fn add(&mut self, at: AskedAt) {
+        let Some(asked) = self.instantiations.iter_mut().find(|asked| asked.params == at.params) else {
+            self.instantiations.push(at);
+            return;
+        };
+        match (asked.claimed, at.claimed) {
+            (Some(claimed), Some(claims)) => assert_eq!(claimed, claims, "one instantiation is claimed at one function type"),
+            (None, claims) => asked.claimed = claims,
+            (Some(_), None) => {}
+        }
+    }
 }
 
 /// A host-declared entry that fits its unit, with its inputs' declared
@@ -456,11 +486,9 @@ impl<'g> Building<'g> {
         let declared = self.declared();
         for Declared { entry, params } in &declared {
             let asked = self.asked(entry.function);
-            let types: Box<[Ty]> =
+            let params: Box<[Ty]> =
                 params.iter().map(|declared| crate::typeck::declared_concrete(&graph.declarations, asked.into.types_mut(), *declared)).collect();
-            if !asked.types.contains(&types) {
-                asked.types.push(types);
-            }
+            asked.add(AskedAt { params, claimed: None });
         }
         for unit in order.iter().rev() {
             let Some(asked) = self.asked.remove(unit) else {
@@ -527,18 +555,22 @@ impl<'g> Building<'g> {
                 Some(built) => Into::Last(built),
                 None => Into::New(UnitModule::empty()),
             };
-            Asked { into, types: Vec::new() }
+            Asked { into, instantiations: Vec::new() }
         })
     }
 
-    /// `unit` asked for its instantiation at `types`, of the table `from`.
-    fn ask(&mut self, unit: QualifiedRef, from: &Types<Concrete>, types: &[Ty]) {
+    /// `unit` asked for its instantiation by a call of function type
+    /// `signature`, of the table `from`: at its parameters' types, claimed
+    /// at it.
+    fn ask(&mut self, unit: QualifiedRef, from: &Types<Concrete>, signature: Ty) {
         let asked = self.asked(unit);
         let into = asked.into.types_mut();
-        let types: Box<[Ty]> = types.iter().map(|ty| into.transplant(from, *ty)).collect();
-        if !asked.types.contains(&types) {
-            asked.types.push(types);
-        }
+        let claimed = into.transplant(from, signature);
+        let TyKind::Fn { params, .. } = into.kind(claimed) else {
+            panic!("a unit call's callee is a function type");
+        };
+        let params = params.clone();
+        asked.add(AskedAt { params, claimed: Some(claimed) });
     }
 
     /// `unit`'s module: its last, where it was compiled from `read` up to
@@ -547,17 +579,25 @@ impl<'g> Building<'g> {
     fn module(&mut self, unit: QualifiedRef, asked: Asked, read: &(u64, Vec<(QualifiedRef, u64)>)) {
         let refused = self.refused.len();
         let built = match asked.into {
-            Into::Last(last) if last.read == *read && last.stop == self.stop && holds_exactly(&last.module, &asked.types) => last,
+            Into::Last(last) if last.read == *read && last.stop == self.stop && holds_exactly(&last.module, &asked.instantiations) => last,
             Into::Last(last) => {
                 let mut module = UnitModule::empty();
                 let from = last.module.module.types();
-                let types = asked.types.iter().map(|types| types.iter().map(|ty| module.module.types_mut().transplant(from, *ty)).collect()).collect();
+                let into = module.module.types_mut();
+                let types = asked
+                    .instantiations
+                    .iter()
+                    .map(|at| AskedAt {
+                        params: at.params.iter().map(|ty| into.transplant(from, *ty)).collect(),
+                        claimed: at.claimed.map(|signature| into.transplant(from, signature)),
+                    })
+                    .collect();
                 self.rebuild(unit, module, types, read)
             }
-            Into::New(module) => self.rebuild(unit, module, asked.types, read),
+            Into::New(module) => self.rebuild(unit, module, asked.instantiations, read),
         };
-        for (callee, types) in &built.asks {
-            self.ask(*callee, built.module.module.types(), types);
+        for (callee, signature) in &built.asks {
+            self.ask(*callee, built.module.module.types(), *signature);
         }
         if self.refused.len() == refused {
             self.built.insert(unit, built);
@@ -567,14 +607,14 @@ impl<'g> Building<'g> {
     /// `unit`'s module made anew: its body at each of `asked`, checked with
     /// its inputs fixed and lowered; then through the required steps, the
     /// checks and the pipeline, as far as this compile's stop.
-    fn rebuild(&mut self, unit: QualifiedRef, mut module: UnitModule, asked: Vec<Box<[Ty]>>, read: &(u64, Vec<(QualifiedRef, u64)>)) -> Built {
+    fn rebuild(&mut self, unit: QualifiedRef, mut module: UnitModule, asked: Vec<AskedAt>, read: &(u64, Vec<(QualifiedRef, u64)>)) -> Built {
         let graph = self.graph;
         let interfaces = self.interfaces;
         self.rebuilt.push(unit);
         let interface = interfaces.get(unit).expect("an instantiated unit has an interface");
         let source = &graph.units[&unit];
         let mut asks = Vec::new();
-        for types in asked {
+        for AskedAt { params: types, claimed } in asked {
             let fixed: Vec<(Astr, Ty)> = interface.params.iter().copied().zip(types.iter().copied()).collect();
             let typeck = graph.check(source, interfaces, Inputs::Fixed(&fixed), module.module.types_mut());
             if !typeck.refusals.is_empty() {
@@ -586,14 +626,14 @@ impl<'g> Building<'g> {
                 Source::Script(script) => crate::lower::lower_script_into(&graph.declarations, &typeck, &mut module.module, script),
                 Source::Template(template) => crate::lower::lower_template_into(&graph.declarations, &typeck, &mut module.module, template),
             };
+            if let Some(signature) = claimed {
+                module.module.claim(body, signature);
+            }
             module.instantiations.push((types, body));
             let mut calls: Vec<(acvus_ast::AstId, QualifiedRef)> = typeck.units.iter().map(|(site, call)| (*site, call.unit)).collect();
             calls.sort_by_key(|(site, _)| *site);
             for (site, callee) in calls {
-                let TyKind::Fn { params, .. } = module.module.types().kind(typeck.callees[&site]) else {
-                    panic!("a unit call's callee is a function type");
-                };
-                asks.push((callee, params.clone()));
+                asks.push((callee, typeck.callees[&site]));
             }
         }
         if self.stop != Stop::Lowered {
@@ -615,8 +655,11 @@ impl<'g> Building<'g> {
     }
 }
 
-/// Whether `module` holds an instantiation at each of `types`, distinct,
-/// and at no others.
-fn holds_exactly(module: &UnitModule, types: &[Box<[Ty]>]) -> bool {
-    module.instantiations.len() == types.len() && types.iter().all(|types| module.instantiations.iter().any(|(at, _)| at == types))
+/// Whether `module` holds an instantiation at each of `asked`, distinct,
+/// claimed as asked, and at no others.
+fn holds_exactly(module: &UnitModule, asked: &[AskedAt]) -> bool {
+    module.instantiations.len() == asked.len()
+        && asked.iter().all(|at| {
+            module.instantiations.iter().any(|(params, body)| *params == at.params && module.module.claimed(*body) == at.claimed)
+        })
 }

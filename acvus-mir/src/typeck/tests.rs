@@ -3286,6 +3286,72 @@ fn each_instance_has_its_own_effect() {
     assert_eq!(reissues, vec![crate::ty::Reissue::Pure, crate::ty::Reissue::Opaque]);
 }
 
+/// The flows a function type of `kind` states.
+fn flows_of(kind: &TyKind<Concrete>) -> crate::ty::Flows {
+    match kind {
+        TyKind::Fn { flows: FlowTerm::Known(flows), .. } => flows.clone(),
+        other => panic!("a function type of known flows, not {other:?}"),
+    }
+}
+
+/// The one flow of a function returning what its first parameter holds.
+fn result_from_first_param() -> crate::ty::Flows {
+    crate::ty::Flows::of([crate::ty::Flow { to: crate::ty::FlowEnd::Result, from: crate::ty::FlowEnd::Param(0), alignment: crate::ty::Alignment::Any }])
+}
+
+/// functions §2, ownership §5: a function type's flows are generalized, so
+/// each instance of a lambda claims its own at its own types: at a
+/// reference its result takes from its parameter, at a value it has no
+/// flow.
+#[test]
+fn each_instance_of_a_lambda_claims_its_own_flows() {
+    let (checked, script) = Fixture::new().script("let id = |x| -> x; let a = 1; let p = id(&a); let q = id(1); 0");
+    checked.admitted();
+    let Stmt::LetBind { expr, .. } = &script.stmts[0] else {
+        panic!("not a let");
+    };
+    let mut claimed: Vec<(bool, crate::ty::Flows)> = checked
+        .typeck
+        .instances
+        .values()
+        .map(|instance| {
+            let signature = checked.kind(instance.types[&expr.id()]);
+            let TyKind::Fn { params, .. } = signature else {
+                panic!("the lambda is a function at each instance, not {signature:?}");
+            };
+            (matches!(checked.kind(params[0]), TyKind::Ref(..)), flows_of(signature))
+        })
+        .collect();
+    claimed.sort_by_key(|(reference, _)| *reference);
+    assert_eq!(claimed, vec![(false, crate::ty::Flows::none()), (true, result_from_first_param())]);
+}
+
+/// graph, ownership §5: a unit is generalized as a let-bound function
+/// value is, its flows among what it generalizes, so each call claims its
+/// own at its own types. A unit's result holds no loan (a run's result),
+/// so its only output is its `&mut` parameter, which the claim, flow
+/// insensitive, has take from every other input holding a position: from
+/// the other parameter at a reference, from nothing at a value.
+#[test]
+fn each_call_of_a_unit_claims_its_own_flows() {
+    let source = "let a = 1; let c = 2; let p = lib::put(m: &mut a, r: &c); let d = 3; let q = lib::put(m: &mut d, r: 4); 0";
+    let (checked, script, _) = Fixture::new().script_with_units(&[(&["lib"], "put", "{ let x = $r; *$m = 0; 0 }")], source);
+    checked.admitted();
+    let callee = |at: usize| {
+        let Stmt::LetBind { expr, .. } = &script.stmts[at] else {
+            panic!("not a let");
+        };
+        checked.kind(checked.typeck.callees[&expr.id()]).clone()
+    };
+    let into_m_from_r = crate::ty::Flows::of([crate::ty::Flow {
+        to: crate::ty::FlowEnd::Param(0),
+        from: crate::ty::FlowEnd::Param(1),
+        alignment: crate::ty::Alignment::Any,
+    }]);
+    assert_eq!(flows_of(&callee(2)), into_m_from_r);
+    assert_eq!(flows_of(&callee(4)), crate::ty::Flows::none());
+}
+
 /// functions §2: one rule for every use, so a binding used once is one
 /// instance.
 #[test]

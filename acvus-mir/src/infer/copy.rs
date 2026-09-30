@@ -1,18 +1,19 @@
 //! A term's variables, read and copied: what generalizing a binding's type
 //! and instantiating it at a use need (functions §2). Every kind a type
 //! states is generalized: types, lengths, identities, effects
-//! with the flows among them, and which function values a function type
-//! may be. What a function value's captures
-//! hold, how often it may be called and its flows are decided where it is
-//! written, and are not copied.
+//! with the flows among them, a function type's flows, and which function
+//! values a function type may be. A function value's flows are what its
+//! body does at its instance's types (ownership §5), so each instance has
+//! its own. What its captures hold and how often it may be called are
+//! decided where it is written, and are not copied.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::cells::{Cells, End as CellEnd, ValuesTerm, VarTerm};
 use super::{FlowId, Infer, Term, VarState};
 use crate::ty::{
-    EffectTerm, EffectVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy,
-    TyKind, TyVarId, ValuesVarId,
+    EffectTerm, EffectVarId, FlowTerm, FlowVarId, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, LenTerm, LenVarId,
+    ObjectTy, TyKind, TyVarId, ValuesVarId,
 };
 
 /// How many variables of each kind were made so far: one made later has an
@@ -23,6 +24,7 @@ pub struct VarMarks {
     pub effects: u32,
     pub lengths: u32,
     pub identities: u32,
+    pub flows: u32,
     pub values: u32,
 }
 
@@ -35,6 +37,7 @@ pub struct Reached {
     pub effects: FxHashSet<EffectVarId>,
     pub lengths: FxHashSet<LenVarId>,
     pub identities: FxHashSet<IdentityVarId>,
+    pub flows: FxHashSet<FlowVarId>,
     pub values: FxHashSet<ValuesVarId>,
 }
 
@@ -45,6 +48,7 @@ pub struct VarsOf {
     pub effects: Box<[EffectVarId]>,
     pub lengths: Box<[LenVarId]>,
     pub identities: Box<[IdentityVarId]>,
+    pub flows: Box<[FlowVarId]>,
     pub values: Box<[ValuesVarId]>,
 }
 
@@ -55,6 +59,7 @@ pub struct AtInstance {
     pub effects: FxHashMap<EffectVarId, EffectVarId>,
     pub lengths: FxHashMap<LenVarId, LenVarId>,
     pub identities: FxHashMap<IdentityVarId, IdentityVarId>,
+    pub flows: FxHashMap<FlowVarId, FlowVarId>,
     pub values: FxHashMap<ValuesVarId, ValuesVarId>,
 }
 
@@ -72,6 +77,7 @@ impl Infer {
             effects: self.effect_vars.count(),
             lengths: self.len_vars.count(),
             identities: self.identity_vars.count(),
+            flows: self.flow_vars.count(),
             values: self.values_vars.count(),
         }
     }
@@ -117,8 +123,9 @@ impl Infer {
                     }
                 }
                 TyKind::Array(_, len, _) => reach_cell(&self.len_vars, len, &mut reached.lengths),
-                TyKind::Fn { effect, values, .. } => {
+                TyKind::Fn { effect, flows, values, .. } => {
                     reach_cell(&self.effect_vars, effect, &mut reached.effects);
+                    reach_cell(&self.flow_vars, flows, &mut reached.flows);
                     reach_cell(&self.values_vars, &ValuesTerm::Var(*values), &mut reached.values);
                 }
                 TyKind::UserDefined { effect, identity, .. } => {
@@ -142,7 +149,8 @@ impl Infer {
     /// one of the effects copied onto its copy, so that an instance's
     /// effect rises only by its own flows (effects §1), and the function
     /// values a function type may be as they are, which a use then grows as
-    /// its own and not the binding's (types §1-2).
+    /// its own and not the binding's (types §1-2). A flow set is copied in
+    /// its state, so an instance's claim is its own (ownership §5).
     pub fn instance_at(&mut self, vars: &VarsOf) -> (AtInstance, Vec<CopiedFlow>) {
         let mut at = AtInstance::default();
         for var in vars.types.iter() {
@@ -165,6 +173,8 @@ impl Infer {
             let fresh = self.fresh_identity();
             at.identities.insert(*var, fresh);
         }
+        let copies = self.flow_vars.duplicate(&vars.flows, "Infer::instance_at: u32::MAX flow variables");
+        at.flows.extend(vars.flows.iter().copied().zip(copies));
         let copies = self.values_vars.duplicate(&vars.values, "Infer::instance_at: u32::MAX values variables");
         at.values.extend(vars.values.iter().copied().zip(copies));
         let copies = self.effect_vars.duplicate(&vars.effects, "Infer::instance_at: u32::MAX effect variables");
@@ -200,6 +210,14 @@ impl Infer {
         match self.identity_vars.end(identity) {
             CellEnd::Var { var, .. } if at.identities.contains_key(&var) => IdentityTerm::Var(at.identities[&var]),
             _ => *identity,
+        }
+    }
+
+    /// `flows` at an instance: a generalized variable its copy.
+    pub fn copy_flows(&self, flows: &FlowTerm<InferPhase>, at: &AtInstance) -> FlowTerm<InferPhase> {
+        match self.flow_vars.end(flows) {
+            CellEnd::Var { var, .. } if at.flows.contains_key(&var) => FlowTerm::Var(at.flows[&var]),
+            _ => flows.clone(),
         }
     }
 
@@ -270,7 +288,7 @@ impl Infer {
                 params: params.iter().map(|param| self.copy_at(*param, at, memo)).collect(),
                 ret: self.copy_at(*ret, at, memo),
                 effect: self.copy_effect(effect, at),
-                flows: flows.clone(),
+                flows: self.copy_flows(flows, at),
                 calls: *calls,
                 holds: *holds,
                 values: self.copy_values(*values, at),

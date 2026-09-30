@@ -159,10 +159,19 @@ fn a_write_after_the_loans_holder_is_dead_is_admitted() {
 }
 
 
-/// A module whose entry makes a closure of a body that returns its
-/// parameter, at `fn(&i64) -> &i64` claiming `flows`; what `check` refuses
-/// of it.
-fn lambda_returning_its_parameter(flows: Flows) -> Vec<crate::check::Refusal> {
+/// How a body returning its parameter is claimed at its function type.
+#[derive(Clone, Copy)]
+enum ClaimedBy {
+    /// A closure the entry makes of it.
+    Closure,
+    /// A unit call of its instantiation (graph).
+    UnitCall,
+}
+
+/// A module holding a body that returns its parameter, at
+/// `fn(&i64) -> &i64` claiming `flows` as `by` claims it; what `check`
+/// refuses of it.
+fn body_returning_its_parameter(by: ClaimedBy, flows: Flows) -> Vec<crate::check::Refusal> {
     let names = Interner::new();
     let mut types = Types::new();
     let int = types.intern(TyKind::Int(IntTy::I64));
@@ -181,11 +190,19 @@ fn lambda_returning_its_parameter(flows: Flows) -> Vec<crate::check::Refusal> {
     let p = lambda.param(names.intern("p"), ref_int, Span::ZERO);
     lambda.terminate(Terminator::Return { value: p, order: None, span: Span::ZERO }, Span::ZERO);
     let lambda = lambda.seal().expect("the lambda has no open state");
-    let mut entry = module.build_body(false, signature);
-    let closure = entry.push(Op::MakeClosure { bodies: vec![lambda], captures: Vec::new() }, signature, Span::ZERO);
-    entry.terminate(Terminator::Return { value: closure, order: None, span: Span::ZERO }, Span::ZERO);
-    let entry = entry.seal().expect("the entry has no open state");
-    module.set_entry(entry);
+    match by {
+        ClaimedBy::Closure => {
+            let mut entry = module.build_body(false, signature);
+            let closure = entry.push(Op::MakeClosure { bodies: vec![lambda], captures: Vec::new() }, signature, Span::ZERO);
+            entry.terminate(Terminator::Return { value: closure, order: None, span: Span::ZERO }, Span::ZERO);
+            let entry = entry.seal().expect("the entry has no open state");
+            module.set_entry(entry);
+        }
+        ClaimedBy::UnitCall => {
+            module.claim(lambda, signature);
+            module.set_entry(lambda);
+        }
+    }
     let raw = RawDeclarations {
         types: Types::new(),
         functions: Vec::new(),
@@ -208,12 +225,67 @@ fn lambda_returning_its_parameter(flows: Flows) -> Vec<crate::check::Refusal> {
 #[test]
 fn a_lambda_body_within_its_claimed_flows_holds() {
     let flows = Flows::of([Flow { to: FlowEnd::Result, from: FlowEnd::Param(0), alignment: Alignment::Any }]);
-    assert_eq!(lambda_returning_its_parameter(flows), []);
+    assert_eq!(body_returning_its_parameter(ClaimedBy::Closure, flows), []);
 }
 
 /// A claim that states no flow the body makes is the compiler's defect.
 #[test]
 #[should_panic(expected = "breaks its claimed flows")]
 fn a_lambda_body_outside_its_claimed_flows_is_a_defect() {
-    lambda_returning_its_parameter(Flows::none());
+    body_returning_its_parameter(ClaimedBy::Closure, Flows::none());
+}
+
+/// A unit instantiation's body a call claimed is verified against that
+/// claim as a lambda's is.
+#[test]
+fn a_unit_body_within_its_claimed_flows_holds() {
+    let flows = Flows::of([Flow { to: FlowEnd::Result, from: FlowEnd::Param(0), alignment: Alignment::Any }]);
+    assert_eq!(body_returning_its_parameter(ClaimedBy::UnitCall, flows), []);
+}
+
+/// A unit call's claim that states no flow the body makes is the
+/// compiler's defect too.
+#[test]
+#[should_panic(expected = "breaks its claimed flows")]
+fn a_unit_body_outside_its_claimed_flows_is_a_defect() {
+    body_returning_its_parameter(ClaimedBy::UnitCall, Flows::none());
+}
+
+/// What the required steps and the checks refuse of `source`, a script
+/// typeck admits.
+fn required(source: &str) -> Vec<crate::check::Refusal> {
+    let names = Interner::new();
+    let raw = RawDeclarations {
+        types: Types::new(),
+        functions: Vec::new(),
+        lang_impls: Vec::new(),
+        user_types: Vec::new(),
+        casts: Vec::new(),
+        conversions: Vec::new(),
+        contexts: Vec::new(),
+        entries: Vec::new(),
+        loop_markers: LoopMarkers::default(),
+        core: Core::of(&names),
+    };
+    let script: Script = acvus_ast::parse_script(&names, source).expect("the test's source parses");
+    let decls = Declarations::verify(raw).expect("the test's declarations verify");
+    let mut types = Types::new();
+    let typeck = check_script(&names, &decls, &crate::typeck::Interfaces::new(), crate::typeck::Inputs::Fixed(&[]), &mut types, &script);
+    assert!(typeck.refusals.is_empty(), "typeck refused {source:?}: {:?}", typeck.refusals);
+    let mut module: Module = lower_script(&decls, &typeck, types, &script);
+    let mut am = AnalysisManager::new(&decls);
+    crate::lower::required::run(&mut module, &mut am).err().unwrap_or_default()
+}
+
+/// ownership §5, functions §2: a generic lambda's instance at a reference
+/// claims its own flows, so the loan its argument makes flows into its
+/// result, and a write while the result lives is refused; the body of
+/// that instance keeps its claim.
+#[test]
+fn a_generic_lambdas_instance_at_a_reference_carries_its_arguments_loan() {
+    let source = "let id = |x| -> x; let a = 1; let r = id(&a); a = 2; *r";
+    let found = Found::of(source);
+    assert_eq!(found.texts().iter().map(|(at, ..)| *at).collect::<Vec<_>>(), ["a = 2;"], "{:?}", found.conflicts);
+    let refused = required(source);
+    assert!(matches!(refused[..], [crate::check::Refusal { kind: crate::check::RefusalKind::LoanConflict { .. }, .. }]), "{refused:?}");
 }

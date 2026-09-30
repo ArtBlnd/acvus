@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 use super::cells::{Cells, End as CellEnd, ValuesTerm, VarTerm};
 use super::{Bound, Infer, Term};
 use crate::ty::{
-    CallsTerm, EffectTerm, EffectVarId, FlowTerm, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
+    CallsTerm, EffectTerm, EffectVarId, FlowTerm, FlowVarId, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
     LenTerm, LenVarId, MarkTerm, TyKind, TyVarId, Types, ValuesVarId,
 };
 
@@ -237,6 +237,10 @@ impl<'c> Canonical<'c> {
 
     pub fn identity_var(&mut self, var: IdentityVarId) -> IdentityVarId {
         cell_var(&mut self.identities, &self.from.identity_vars, var, &mut self.states.identities)
+    }
+
+    pub fn flow_var(&mut self, var: FlowVarId) -> FlowVarId {
+        cell_var(&mut self.flows, &self.from.flow_vars, var, &mut self.states.flows)
     }
 
     pub fn values_var(&mut self, var: ValuesVarId) -> ValuesVarId {

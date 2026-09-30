@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 use super::cells::Shift;
 use super::{Infer, Term, VarState};
 use crate::ty::{
-    CallsTerm, EffectTerm, EffectVarId, FlowTerm, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
+    CallsTerm, EffectTerm, EffectVarId, FlowTerm, FlowVarId, HoldsTerm, IdentityTerm, IdentityVarId, Infer as InferPhase,
     LenTerm, LenVarId, MarkTerm, MarkVarId, ObjectTy, TyKind, TyVarId, ValuesVarId,
 };
 
@@ -102,6 +102,10 @@ impl Imported {
         }
     }
 
+    pub fn flow_var(&self, var: FlowVarId) -> FlowVarId {
+        FlowVarId(var.0 + self.flows.vars)
+    }
+
     pub fn values_var(&self, var: ValuesVarId) -> ValuesVarId {
         ValuesVarId(var.0 + self.values.vars)
     }
@@ -137,7 +141,7 @@ impl Imported {
                 effect: self.effect(effect),
                 flows: match flows {
                     FlowTerm::Known(known) => FlowTerm::Known(known.clone()),
-                    FlowTerm::Var(var) => FlowTerm::Var(crate::ty::FlowVarId(var.0 + self.flows.vars)),
+                    FlowTerm::Var(var) => FlowTerm::Var(self.flow_var(*var)),
                 },
                 calls: match calls {
                     CallsTerm::Known(known) => CallsTerm::Known(*known),
