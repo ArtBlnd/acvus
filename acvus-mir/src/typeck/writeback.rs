@@ -442,8 +442,9 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
                     impls: None,
                     requires: Box::new([]),
                     facts: DeclaredFacts::default(),
+                    runs: Box::new([]),
                 };
-                let above = cx.infer.instantiate(cx.decls, &scheme).ty;
+                let above = super::decision::instantiate_scheme(cx, &scheme, span).ty;
                 if let Err(mismatch) = cx.infer.enter(cx.decls, at.term, at, above, crate::ty::Reach::Named) {
                     panic!("a step the tree admits takes its value up: {mismatch:?}");
                 }

@@ -80,7 +80,7 @@ impl Fixture {
     /// A plain extern fn `name` of type `ty`, with no type variable.
     fn declare(&mut self, name: &str, ty: TyId<Poly>, arity: usize) -> QualifiedRef {
         let id = QualifiedRef::root(self.name(name));
-        let scheme = Scheme { ty, param_names: self.param_names(arity), bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default() };
+        let scheme = Scheme { ty, param_names: self.param_names(arity), bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]) };
         self.raw.functions.push((id, scheme));
         id
     }
@@ -115,6 +115,7 @@ impl Fixture {
                 }),
                 requires: Box::new([]),
                 facts: Default::default(),
+                runs: Box::new([]),
             })
             .collect();
         self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
@@ -1614,7 +1615,7 @@ fn a_lifted_eq_asks_each_parts_impl_in_order() {
     let at_int = fx.function(&[shared, shared], bool_ty, Effect::pure());
     let eq = fx.raw.core.eq;
     let facts = DeclaredFacts { access: Box::new([crate::decl::declared::Access::Equivalence]), ..Default::default() };
-    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts }]);
+    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts, runs: Box::new([]) }]);
     fx.raw.lang_impls.push((eq, Impls { concrete, generic: None }));
     let pair = fx.ty(TyKind::Tuple(Box::new([int, int]), ()));
     fx.input("t", pair);
@@ -1742,7 +1743,7 @@ fn an_array_rebuilt_from_no_argument_or_several_is_one_map() {
     let generic = fx.function(&[shared_t, shared_t], t, Effect::pure());
     let at_int = fx.function(&[shared_int, shared_int], int, Effect::pure());
     let id = QualifiedRef::root(fx.name("pick"));
-    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts: DeclaredFacts::default() }]);
+    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]) }]);
     let scheme = Scheme {
         ty: generic,
         param_names: fx.param_names(2),
@@ -1750,6 +1751,7 @@ fn an_array_rebuilt_from_no_argument_or_several_is_one_map() {
         impls: Some(Impls { concrete, generic: None }),
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
+        runs: Box::new([]),
     };
     fx.raw.functions.push((id, scheme));
     let lowered = fx.script("let a = [1, 2]; let b = [3, 4]; let c = pick(&a, &b); 0");

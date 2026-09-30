@@ -66,7 +66,7 @@ impl Fixture {
         });
         let id = QualifiedRef::root(self.names.intern(name));
         let scheme =
-            Scheme { ty, param_names: Box::new([]), bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default() };
+            Scheme { ty, param_names: Box::new([]), bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]) };
         self.raw.functions.push((id, scheme));
     }
 

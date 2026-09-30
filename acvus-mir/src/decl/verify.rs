@@ -9,6 +9,7 @@ use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::impl_fit::is_impl_of;
 use super::{
     CastRule, ContextDecl, Core, Declarations, EntryDecl, Impls, RawDeclarations, Requirement, Scheme, TyVarBound, UserTypeDecl,
+    effect_variables,
 };
 use super::declared::{self, Atom, Subject};
 use super::segments::{Segment, segments};
@@ -72,6 +73,17 @@ pub enum Refused {
     /// of its type variables exactly one bound (extern-fn §1: a type
     /// parameter carries one bound).
     BoundsDoNotFit { function: QualifiedRef },
+    /// An effect variable a parameter gives that the call neither runs nor
+    /// gives in its result: the work it names would run where no effect
+    /// records it (extern-fn §2).
+    EffectUnrecorded { declared: Declared, var: u32 },
+    /// A `runs` entry that is no effect variable of its signature
+    /// (extern-fn §2).
+    RunsNoEffectVariable { declared: Declared, var: u32 },
+    /// A requirement whose pattern names a type variable that is not one of
+    /// its declaration's own: a declaration requires impls at its own type
+    /// variables (extern-fn §6).
+    RequirementForeignVariable { declaration: QualifiedRef, generic_function: QualifiedRef },
     /// A scheme or an impl whose type is not a function type: an extern fn
     /// is a function (extern-fn §1).
     NotAFunction { function: QualifiedRef },
@@ -186,6 +198,8 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     refuse_array_types(&types, &functions, &mut refused);
     refuse_unending_requirements(&types, &functions, &mut refused);
     refuse_unfit_bounds(&types, &functions, &mut refused);
+    refuse_unrecorded_effects(&types, &functions, &mut refused);
+    refuse_foreign_requirements(&types, &functions, &mut refused);
     refuse_unfit_signatures(&types, &functions, &mut refused);
     let declared_order = first_of_each(functions.iter().map(|(id, _)| *id));
     let overloads = overloads(&declared_order);
@@ -386,6 +400,62 @@ fn one_bound_per_variable(types: &Types<Poly>, ty: TyId<Poly>, bounds: &[TyVarBo
         && variables
             .iter()
             .all(|var| usize::try_from(*var).is_ok_and(|at| at < bounded))
+}
+
+/// extern-fn §2: a call's effect is its own joined with the effect
+/// variables of the work it runs, `runs`, each an effect variable of its
+/// signature; an effect variable a parameter gives is run, or given in the
+/// result, or both. A signature that is no function type is refused as
+/// `NotAFunction` alone.
+fn refuse_unrecorded_effects(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
+    for (function, scheme) in functions {
+        let own = (Declared { function: *function, r#impl: None }, scheme.ty, &scheme.runs[..]);
+        let concrete = scheme.impls.iter().flat_map(|impls| impls.concrete.iter().enumerate()).map(|(at, r#impl)| {
+            (Declared { function: *function, r#impl: Some(at) }, r#impl.ty, &r#impl.runs[..])
+        });
+        for (declared, ty, runs) in std::iter::once(own).chain(concrete) {
+            let TyKind::Fn { params, ret, .. } = types.kind(ty) else {
+                continue;
+            };
+            let of_signature = effect_variables(types, [ty]);
+            for var in runs.iter().filter(|var| !of_signature.contains(var)) {
+                refused.push(Refused::RunsNoEffectVariable { declared, var: *var });
+            }
+            let returned = effect_variables(types, [*ret]);
+            let mut unrecorded: Vec<u32> = effect_variables(types, params.iter().copied())
+                .into_iter()
+                .filter(|var| !runs.contains(var) && !returned.contains(var))
+                .collect();
+            unrecorded.sort_unstable();
+            for var in unrecorded {
+                refused.push(Refused::EffectUnrecorded { declared, var });
+            }
+        }
+    }
+}
+
+/// extern-fn §6: a declaration requires impls at its own type variables,
+/// and so does each of its concrete impls at the impl's.
+fn refuse_foreign_requirements(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
+    for (declaration, scheme) in functions {
+        let concrete = scheme.impls.iter().flat_map(|impls| impls.concrete.iter());
+        let signatures = std::iter::once((scheme.ty, &scheme.requires[..]))
+            .chain(concrete.map(|r#impl| (r#impl.ty, &r#impl.requires[..])));
+        for (ty, requires) in signatures {
+            let mut own = FxHashSet::default();
+            type_variables(types, ty, &mut FxHashSet::default(), &mut own);
+            for requirement in requires {
+                let mut named = FxHashSet::default();
+                type_variables(types, requirement.pattern, &mut FxHashSet::default(), &mut named);
+                if !named.is_subset(&own) {
+                    refused.push(Refused::RequirementForeignVariable {
+                        declaration: *declaration,
+                        generic_function: requirement.generic_function,
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// extern-fn §1: an extern fn is a function, so its signature and each of
@@ -1387,6 +1457,7 @@ mod tests {
                 impls: None,
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
+                runs: Box::new([]),
             }
         }
 
@@ -1439,6 +1510,7 @@ mod tests {
                 param_names: self.param_names(ty),
                 requires,
                 facts: DeclaredFacts::default(),
+                runs: Box::new([]),
             }
         }
 
@@ -2088,6 +2160,7 @@ mod tests {
                             lifetimes: Some(lifetimes),
                             ..DeclaredFacts::default()
                         },
+                        runs: Box::new([]),
                     }]),
                     generic: None,
                 }),
@@ -2834,6 +2907,89 @@ mod tests {
         let ty = fixture.function(&[t, u], t);
         fixture.declare(f, fixture.plain(ty, 2));
         assert!(fixture.verify().is_ok());
+    }
+
+    /// `fn() -> i64` whose effect is the effect variable `var`.
+    fn worker(fixture: &mut Fixture, var: u32) -> TyId<Poly> {
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        fixture.ty(TyKind::Fn {
+            params: Box::new([]),
+            ret: int,
+            effect: EffectTerm::Var(var),
+            flows: FlowTerm::Known(Flows::none()),
+            calls: Calls::Many,
+            holds: Holds::Nothing,
+            values: (),
+        })
+    }
+
+    /// extern-fn §2: an effect variable a parameter gives is run, given in
+    /// the result, or both. `fn(fn() with E0) -> i64` running nothing is
+    /// refused; running `E0` it is taken in, and so is
+    /// `fn(fn() with E0) -> fn() with E0`, which gives it in its result.
+    #[test]
+    fn an_effect_variable_a_parameter_gives_is_run_or_returned() {
+        for (returned, runs, refused) in [(false, vec![], true), (false, vec![0], false), (true, vec![], false)] {
+            let mut fixture = Fixture::new();
+            let f = fixture.name("m", "f");
+            let given = worker(&mut fixture, 0);
+            let ret = match returned {
+                true => given,
+                false => fixture.ty(TyKind::Int(IntTy::I64)),
+            };
+            let ty = fixture.function(&[given], ret);
+            let scheme = Scheme { runs: runs.into(), ..fixture.plain(ty, 0) };
+            fixture.declare(f, scheme);
+            match refused {
+                true => assert_eq!(
+                    refusals(fixture),
+                    vec![Refused::EffectUnrecorded { declared: Declared { function: f, r#impl: None }, var: 0 }]
+                ),
+                false => assert!(fixture.verify().is_ok()),
+            }
+        }
+    }
+
+    /// extern-fn §2: what a call runs is an effect variable of its
+    /// signature, the declaration's own and each impl's alike.
+    #[test]
+    fn a_runs_entry_that_is_no_effect_variable_is_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let t = fixture.ty(TyKind::Var(0));
+        let own_ty = fixture.function(&[t], t);
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let impl_ty = fixture.function(&[int], int);
+        let r#impl = ImplSig { runs: Box::new([2]), ..fixture.r#impl(impl_ty, Box::new([])) };
+        let scheme = Scheme {
+            runs: Box::new([1]),
+            impls: Some(Impls { concrete: Box::new([r#impl]), generic: None }),
+            ..fixture.plain(own_ty, 1)
+        };
+        fixture.declare(f, scheme);
+        assert_eq!(
+            refusals(fixture),
+            vec![
+                Refused::RunsNoEffectVariable { declared: Declared { function: f, r#impl: None }, var: 1 },
+                Refused::RunsNoEffectVariable { declared: Declared { function: f, r#impl: Some(0) }, var: 2 },
+            ]
+        );
+    }
+
+    /// extern-fn §6: a declaration requires impls at its own type
+    /// variables. `fn(T0) -> T0` requiring an impl at `T1` is refused.
+    #[test]
+    fn a_requirement_at_a_foreign_type_variable_is_refused() {
+        let mut fixture = Fixture::new();
+        let (f, g) = (fixture.name("m", "f"), fixture.name("m", "g"));
+        let (t, u) = (fixture.ty(TyKind::Var(0)), fixture.ty(TyKind::Var(1)));
+        let own_ty = fixture.function(&[t], t);
+        let requires = Box::new([Requirement { generic_function: g, pattern: u, fact: None }]);
+        fixture.declare(f, Scheme { requires, ..fixture.plain(own_ty, 1) });
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::RequirementForeignVariable { declaration: f, generic_function: g }]
+        );
     }
 
     /// extern-fn §1, §6: a concrete impl bounds its own type variables as a

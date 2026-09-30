@@ -86,6 +86,7 @@ impl Fixture {
             impls,
             requires: Box::new([]),
             facts,
+            runs: Box::new([]),
         }
     }
 
@@ -101,7 +102,7 @@ impl Fixture {
         let shared = self.reference(Mutability::Shared, int);
         let bool_ty = self.ty(TyKind::Bool);
         let ty = self.function(&[shared, shared], bool_ty);
-        let r#impl = ImplSig { ty, bounds: Box::new([]), param_names: self.param_names(2), requires: Box::new([]), facts };
+        let r#impl = ImplSig { ty, bounds: Box::new([]), param_names: self.param_names(2), requires: Box::new([]), facts, runs: Box::new([]) };
         let eq = self.raw.core.eq;
         self.raw.lang_impls.push((eq, Impls { concrete: Box::new([r#impl]), generic: None }));
     }
@@ -397,6 +398,7 @@ fn a_relation_reads_a_concrete_impls_own_bounds() {
             param_names: f.param_names(1),
             requires: Box::new([]),
             facts: relates(Atom::Result, Term::Atom(Atom::Arg(0))),
+            runs: Box::new([]),
         };
         let scheme = Scheme {
             ty,
@@ -405,6 +407,7 @@ fn a_relation_reads_a_concrete_impls_own_bounds() {
             impls: Some(Impls { concrete: Box::new([r#impl]), generic: None }),
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
+            runs: Box::new([]),
         };
         let g = f.push("g", scheme);
         let at_impl = Declared { function: g, r#impl: Some(0) };

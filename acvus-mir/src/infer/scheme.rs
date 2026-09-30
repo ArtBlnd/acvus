@@ -6,10 +6,10 @@ use std::convert::Infallible;
 use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
-use super::{Bound, Infer, Term};
-use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound};
+use super::{Bound, FlowId, Infer, Term};
+use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound, effect_variables};
 use crate::ty::{
-    Calls, CallsTerm, Concrete, EffectTerm, EffectVarId, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityTerm, IdentityVarId,
+    Calls, CallsTerm, Concrete, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityTerm, IdentityVarId,
     Infer as InferPhase, Label, LenTerm, LenVarId, ObjectTy, Phase, Poly, ReprVarId, Ty, TyId, TyKind, TypeArg, Types,
 };
 
@@ -27,6 +27,9 @@ pub struct Instantiated {
     /// The function type at this use.
     pub ty: Term,
     pub requirements: Vec<RequiredAt>,
+    /// The flows into the call's effect this use made (extern-fn §2), each
+    /// refused where it would raise a fixed effect, as any flow is.
+    pub flows: Vec<FlowId>,
 }
 
 /// A variable of a written type: a declaration's positional placeholder,
@@ -99,7 +102,7 @@ where
     placeholders: Placeholders,
     built: FxHashMap<TyId<V>, Term>,
     ty_vars: FxHashMap<u32, Term>,
-    effect_vars: FxHashMap<u32, EffectVarId>,
+    effect_vars: FxHashMap<u32, EffectTerm<InferPhase>>,
     len_vars: FxHashMap<u32, LenVarId>,
     identity_vars: FxHashMap<u32, IdentityVarId>,
     repr_vars: FxHashMap<u32, ReprVarId>,
@@ -138,7 +141,14 @@ impl Infer {
         let mut at = AtUse::new(poly, Placeholders::Declared);
         let vars: Vec<Term> = scheme.bounds.iter().map(|declared| self.fresh(bound_of(declared))).collect();
         at.ty_vars.extend((0u32..).zip(vars));
-        let ty = self.instantiate_ty(&mut at, scheme.ty);
+        let (ty, flows) = match scheme.impls {
+            // A generic function's call reaches one of its impls, and the
+            // impl's own signature states the work the call runs
+            // (extern-fn §6), so the generic function's effect is the one
+            // its impl's instantiation makes, related to it by the caller.
+            Some(_) => (self.instantiate_ty(&mut at, scheme.ty), Vec::new()),
+            None => self.instantiate_running(&mut at, scheme.ty, &scheme.runs),
+        };
         let requirements = scheme
             .requires
             .iter()
@@ -148,7 +158,39 @@ impl Infer {
                 fact: required.fact,
             })
             .collect();
-        Instantiated { ty, requirements }
+        Instantiated { ty, requirements, flows }
+    }
+
+    /// A declared function type at this use, its effect the call's
+    /// (extern-fn §2): a fresh effect into which the type's own effect and
+    /// each effect variable of `runs` flow. An effect variable no parameter
+    /// gives names no work, and is pure. A type that is no function type
+    /// is no call's, and is instantiated as it is written.
+    fn instantiate_running(&mut self, at: &mut AtUse<'_, Poly>, ty: TyId<Poly>, runs: &[u32]) -> (Term, Vec<FlowId>) {
+        let written = at.written;
+        let TyKind::Fn { params, .. } = written.kind(ty) else {
+            return (self.instantiate_ty(at, ty), Vec::new());
+        };
+        let given = effect_variables(written, params.iter().copied());
+        for var in effect_variables(written, [ty]).difference(&given) {
+            at.effect_vars.insert(*var, EffectTerm::Known(Effect::pure()));
+        }
+        let instantiated = self.instantiate_ty(at, ty);
+        let TyKind::Fn { params, ret, effect: own, flows, calls, holds, values } = self.types.kind(instantiated).clone() else {
+            unreachable!("instantiate_running: a function type instantiates as a function type")
+        };
+        let call = EffectTerm::Var(self.fresh_effect());
+        let mut flows_in = vec![self.flows_into(&own, &call)];
+        for var in runs {
+            let ran = at
+                .effect_vars
+                .get(var)
+                .cloned()
+                .expect("verify refuses a `runs` entry that is no effect variable of its signature (RunsNoEffectVariable)");
+            flows_in.push(self.flows_into(&ran, &call));
+        }
+        let ty = self.intern(TyKind::Fn { params, ret, effect: call, flows, calls, holds, values });
+        (ty, flows_in)
     }
 
     /// A declared type that is not a function's, such as a context's or an
@@ -315,9 +357,11 @@ impl Infer {
     {
         match effect {
             EffectTerm::Known(effect) => EffectTerm::Known(effect.clone()),
-            EffectTerm::Var(index) => {
-                EffectTerm::Var(*at.effect_vars.entry(index.index()).or_insert_with(|| self.fresh_effect()))
-            }
+            EffectTerm::Var(index) => at
+                .effect_vars
+                .entry(index.index())
+                .or_insert_with(|| EffectTerm::Var(self.fresh_effect()))
+                .clone(),
         }
     }
 

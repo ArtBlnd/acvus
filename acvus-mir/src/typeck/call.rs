@@ -300,7 +300,7 @@ pub(super) fn declaration_value(cx: &mut Ctxt<'_>, site: AstId, declaration: Qua
             return cx.fresh();
         }
     };
-    let instantiated = cx.infer.instantiate(cx.decls, scheme);
+    let instantiated = decision::instantiate_scheme(cx, scheme, span);
     let value = as_value(cx, instantiated.ty, declaration);
     cx.out.names.insert(site, Name::Declaration(declaration));
     cx.out.reached.insert(

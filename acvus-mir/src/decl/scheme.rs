@@ -1,9 +1,10 @@
 use acvus_utils::{Astr, QualifiedRef};
+use rustc_hash::FxHashSet;
 
 use super::TyVarBound;
 use super::declared::{Access, Action, NamedFact, Relation, Source};
 use super::labels::LabelledSignature;
-use crate::ty::{Poly, TyId};
+use crate::ty::{EffectTerm, Poly, TyId, TyKind, Types};
 
 /// An extern fn's declaration (extern-fn): its signature, a function type
 /// whose effect carries its split (effects §6), the bound of each type
@@ -100,4 +101,28 @@ pub struct Requirement {
     pub generic_function: QualifiedRef,
     pub pattern: TyId<Poly>,
     pub fact: Option<NamedFact>,
+}
+
+/// Every effect variable `tys` mention: a function type's effect and an
+/// extern-defined type's, at any depth.
+pub(crate) fn effect_variables(types: &Types<Poly>, tys: impl IntoIterator<Item = TyId<Poly>>) -> FxHashSet<u32> {
+    let mut variables = FxHashSet::default();
+    let mut seen = FxHashSet::default();
+    let mut stack: Vec<TyId<Poly>> = tys.into_iter().collect();
+    while let Some(at) = stack.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        let kind = types.kind(at);
+        let effect = match kind {
+            TyKind::Fn { effect, .. } => Some(effect),
+            TyKind::UserDefined { effect, .. } => effect.as_ref(),
+            _ => None,
+        };
+        if let Some(EffectTerm::Var(var)) = effect {
+            variables.insert(*var);
+        }
+        kind.for_each_child(|child| stack.push(child));
+    }
+    variables
 }

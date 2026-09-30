@@ -128,6 +128,7 @@ mod tests {
             }),
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
+            runs: Box::new([]),
         };
         let as_slice_scheme = Scheme {
             ty: declared,
@@ -136,6 +137,7 @@ mod tests {
             impls: None,
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
+            runs: Box::new([]),
         };
         let decls = Declarations::verify(RawDeclarations {
             types: poly,

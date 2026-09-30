@@ -1174,6 +1174,7 @@ mod tests {
                 impls: Some(Impls { concrete: Box::new([]), generic: Some(GenericImplSig { facts }) }),
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
+                runs: Box::new([]),
             };
             (id, scheme)
         };

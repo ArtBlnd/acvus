@@ -869,6 +869,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
             fact: None,
         }]),
         facts: DeclaredFacts::default(),
+        runs: Box::new([]),
     };
     let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");
     let scheme = decls.scheme(f).expect("declared");
@@ -926,6 +927,7 @@ fn a_head_with_a_step_up_is_closed_only_when_nothing_may_change_it() {
         impls: None,
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
+        runs: Box::new([]),
     };
     let cast = CastRule {
         from: i32_,
@@ -1083,6 +1085,7 @@ fn with_casts_and_conversions(
                 impls: None,
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
+                runs: Box::new([]),
             },
         ));
         via
@@ -1445,4 +1448,105 @@ fn a_flow_whose_source_is_queued_twice_is_refused_once() {
     let flows: Vec<FlowId> = refused.iter().map(|refusal| refusal.flow).collect();
     assert_eq!(flows, vec![flow]);
     assert_eq!(refused[0].exceeds, Exceeds { fixed: Effect::pure(), needs: Effect::opaque() });
+}
+
+/// extern-fn §2: an effect variable no parameter gives names no work, and
+/// is pure: `fn() -> fn() -> i64 with E0` gives a result whose effect is
+/// the pure effect at every use.
+#[test]
+fn an_effect_variable_no_parameter_gives_is_pure() {
+    let mut fx = Fixture::new();
+    let f = QualifiedRef::root(fx.name("f"));
+    let mut types = Types::<Poly>::new();
+    let int = types.intern(TyKind::Int(IntTy::I64));
+    let worker = types.intern(TyKind::Fn {
+        params: Box::new([]),
+        ret: int,
+        effect: EffectTerm::Var(0),
+        flows: FlowTerm::Known(Flows::Every),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+        values: (),
+    });
+    let signature = pure_fn(&mut types, vec![], worker);
+    let scheme = Scheme {
+        ty: signature,
+        param_names: Box::new([]),
+        bounds: Box::new([]),
+        impls: None,
+        requires: Box::new([]),
+        facts: DeclaredFacts::default(),
+        runs: Box::new([]),
+    };
+    let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");
+
+    let used = fx.infer.instantiate(&decls, decls.scheme(f).expect("declared"));
+
+    let TyKind::Fn { ret, .. } = fx.infer.types().kind(used.ty).clone() else {
+        panic!("a function type")
+    };
+    let TyKind::Fn { effect, .. } = fx.infer.types().kind(ret) else {
+        panic!("the result is a function type")
+    };
+    assert_eq!(effect, &EffectTerm::Known(Effect::pure()));
+}
+
+/// extern-fn §2: a call's effect is its declaration's own joined with the
+/// effect of the work it runs. `fn(fn() -> i64 with E0) -> i64`, reading
+/// `@c` and running `E0`, is at first its own effect, and once its
+/// argument's effect is idempotent, the join of the two.
+#[test]
+fn a_calls_effect_is_its_own_joined_with_what_it_runs() {
+    let mut fx = Fixture::new();
+    let (f, c) = (QualifiedRef::root(fx.name("f")), QualifiedRef::root(fx.name("c")));
+    let own = Effect::new(Reissue::Pure, true, Contexts::from([c]), Contexts::new(), SplitCost::Unavailable);
+    let ran = Effect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable);
+    let mut types = Types::<Poly>::new();
+    let int = types.intern(TyKind::Int(IntTy::I64));
+    let worker = types.intern(TyKind::Fn {
+        params: Box::new([]),
+        ret: int,
+        effect: EffectTerm::Var(0),
+        flows: FlowTerm::Known(Flows::Every),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+        values: (),
+    });
+    let signature = types.intern(TyKind::Fn {
+        params: Box::new([worker]),
+        ret: int,
+        effect: EffectTerm::Known(own.clone()),
+        flows: FlowTerm::Known(Flows::Every),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+        values: (),
+    });
+    let a = fx.name("a");
+    let scheme = Scheme {
+        ty: signature,
+        param_names: Box::new([a]),
+        bounds: Box::new([]),
+        impls: None,
+        requires: Box::new([]),
+        facts: DeclaredFacts::default(),
+        runs: Box::new([0]),
+    };
+    let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");
+
+    let used = fx.infer.instantiate(&decls, decls.scheme(f).expect("declared"));
+
+    let TyKind::Fn { params, effect: call, .. } = fx.infer.types().kind(used.ty).clone() else {
+        panic!("a function type")
+    };
+    let TyKind::Fn { effect: argument, .. } = fx.infer.types().kind(params[0]).clone() else {
+        panic!("the parameter is a function type")
+    };
+    let value = |fx: &Fixture| match fx.infer.effect_vars.end(&call) {
+        super::cells::End::Var { value, .. } => value,
+        super::cells::End::Known(known) => Some(known),
+    };
+    assert_eq!(value(&fx), Some(own.clone()), "the call's effect is its own before its argument's rises");
+    fx.infer.join_effects(&argument, &EffectTerm::Known(ran.clone())).expect("the argument's effect is fixed by no `eq`");
+    assert_eq!(value(&fx), Some(own.join(&ran)));
+    assert_eq!(used.flows.len(), 2, "one flow from its own effect, one from what it runs");
 }

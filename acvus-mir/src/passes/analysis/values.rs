@@ -863,6 +863,7 @@ mod tests {
             }),
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
+            runs: Box::new([]),
         };
         let decls = declarations(&interner, vec![(id_f, scheme)], poly);
 
@@ -930,6 +931,7 @@ mod tests {
             }),
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
+            runs: Box::new([]),
         };
         let decls = declarations(&interner, vec![(succ, scheme)], poly);
 

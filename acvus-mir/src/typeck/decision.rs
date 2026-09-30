@@ -1576,7 +1576,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
         result,
         effect,
     } = decision;
-    let Instantiated { ty, requirements } = instantiate(cx, offer, span);
+    let Instantiated { ty, requirements, .. } = instantiate(cx, offer, span);
     let TyKind::Fn {
         params,
         ret,
@@ -1679,7 +1679,7 @@ pub(super) fn reach_step(cx: &mut Ctxt<'_>, step: Step<'_>, from: Term, to: Term
             ty: scheme.ty,
         },
     };
-    let Instantiated { ty, requirements } = instantiate(cx, offer, span);
+    let Instantiated { ty, requirements, .. } = instantiate(cx, offer, span);
     let TyKind::Fn { params, ret, effect, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
         panic!("a step's `via` is a function type (ViaNotItsFunction, NotAFunction)");
     };
@@ -1734,16 +1734,28 @@ fn instantiate(cx: &mut Ctxt<'_>, offer: Offer, span: Span) -> Instantiated {
         .decls
         .scheme(offer.declaration)
         .expect("an offer names a declared function");
-    let generic = cx.infer.instantiate(cx.decls, scheme);
+    let generic = instantiate_scheme(cx, scheme, span);
     let Some(Impl::Concrete(at)) = offer.r#impl else {
         return generic;
     };
     let sig = &scheme.impls.as_ref().expect("a concrete impl's scheme has impls").concrete[at];
-    let own = cx.infer.instantiate(cx.decls, &impl_scheme(sig));
+    let own = instantiate_scheme(cx, &impl_scheme(sig), span);
     cx.eq(generic.ty, own.ty, span);
     let mut requirements = generic.requirements;
     requirements.extend(own.requirements);
-    Instantiated { ty: own.ty, requirements }
+    let mut flows = generic.flows;
+    flows.extend(own.flows);
+    Instantiated { ty: own.ty, requirements, flows }
+}
+
+/// `scheme` at fresh variables, each flow into its call's effect refused,
+/// where it is, at `span` (extern-fn §2).
+pub(super) fn instantiate_scheme(cx: &mut Ctxt<'_>, scheme: &Scheme, span: Span) -> Instantiated {
+    let instantiated = cx.infer.instantiate(cx.decls, scheme);
+    for flow in &instantiated.flows {
+        cx.out.effect_flows.insert(*flow, span);
+    }
+    instantiated
 }
 
 /// A concrete impl as a scheme of its own, each of its type variables at
@@ -1757,6 +1769,7 @@ fn impl_scheme(sig: &ImplSig) -> Scheme {
         impls: None,
         requires: sig.requires.clone(),
         facts: sig.facts.clone(),
+        runs: sig.runs.clone(),
     }
 }
 

@@ -364,7 +364,7 @@ fn reach_structural(cx: &mut Ctxt<'_>, decision: Reach, function: QualifiedRef, 
         refusal::push(cx, RefusalKind::Unimplemented { feature }, span);
         return None;
     }
-    let Instantiated { ty, requirements } = at_type(cx, function, shape, at, span)?;
+    let Instantiated { ty, requirements, .. } = at_type(cx, function, shape, at, span)?;
     let TyKind::Fn { params, ret, effect: own_effect, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
         panic!("an instantiated signature is a function type (NotAFunction)");
     };
@@ -428,7 +428,7 @@ fn reach_part(cx: &mut Ctxt<'_>, reach: PartReach<'_>) {
 /// variable by reference (types §4).
 fn at_type(cx: &mut Ctxt<'_>, function: QualifiedRef, shape: &LiftShape, ty: Term, span: Span) -> Option<Instantiated> {
     let scheme = cx.decls.scheme(function).expect("a lifted function is declared");
-    let instantiated = cx.infer.instantiate(cx.decls, scheme);
+    let instantiated = super::decision::instantiate_scheme(cx, scheme, span);
     let TyKind::Fn { params, ret, .. } = cx.infer.types().kind(cx.infer.shallow(instantiated.ty)).clone() else {
         panic!("an instantiated signature is a function type (NotAFunction)");
     };
