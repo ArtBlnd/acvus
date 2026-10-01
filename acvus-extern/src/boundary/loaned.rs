@@ -74,14 +74,14 @@ impl<T: Crosses<R>, R: Runtime> LoanedMut<'_, T, R> {
 // SAFETY: a loan is one `R::Value` and phantoms at every `'a` and `T`, so it and
 // its canonical form, the same loan at `'static` over `T`'s canonical form,
 // have one size, alignment, field offset and release (none: the value is
-// `Copy`). It reaches `T` only as a phantom, and nothing in it is
+// `Copy`); its lifetime makes it another type than its canonical form. It reaches `T` only as a phantom, and nothing in it is
 // interior-mutable. `FACTS` states its lifetime and its type parameter, as the
 // checker's flows read them; the runtime `R` is not declared to the checker.
 unsafe impl<'a, T: Structural, R: Runtime> Structural for Loaned<'a, T, R> {
     type Canon = Loaned<'static, T::Canon, R>;
 
     const FACTS: StructuralFacts = StructuralFacts {
-        layout: LayoutFact::of_parts(&[T::FACTS.layout]),
+        layout: LayoutFact::CanonicalOf,
         generics: &[GenericParam::Lifetime, GenericParam::Type],
     };
 }
@@ -91,7 +91,7 @@ unsafe impl<'a, T: Structural, R: Runtime> Structural for LoanedMut<'a, T, R> {
     type Canon = LoanedMut<'static, T::Canon, R>;
 
     const FACTS: StructuralFacts = StructuralFacts {
-        layout: LayoutFact::of_parts(&[T::FACTS.layout]),
+        layout: LayoutFact::CanonicalOf,
         generics: &[GenericParam::Lifetime, GenericParam::Type],
     };
 }

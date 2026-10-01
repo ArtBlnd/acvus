@@ -147,6 +147,20 @@ canonical_over_parts!(<T, E> Result<T, E> => Result<T::Canon, E::Canon>);
 // A sequence leaves as a `Vec` (limitations §1): a runtime gives it at the
 // settled array type.
 canonical_over_parts!(<T> Vec<T> => Vec<T::Canon>);
+canonical_over_parts!(<T> Box<T> => Box<T::Canon>);
+
+// SAFETY: `PhantomData<T>` is of size 0 and alignment 1 at every `T`, has no
+// field and no release, and holds `T` only as a marker, through which nothing
+// is reached or written. `FACTS` lists its one type parameter, and the layout
+// fact is the part's, as for any constructor over a part.
+unsafe impl<T: Structural> Structural for std::marker::PhantomData<T> {
+    type Canon = std::marker::PhantomData<T::Canon>;
+
+    const FACTS: StructuralFacts = StructuralFacts {
+        layout: LayoutFact::of_parts(&[T::FACTS.layout]),
+        generics: &[GenericParam::Type],
+    };
+}
 
 /// Each tuple, its own canonical form over its parts'.
 macro_rules! tuple_canonical {
