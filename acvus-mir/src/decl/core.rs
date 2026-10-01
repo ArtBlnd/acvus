@@ -26,6 +26,9 @@ pub struct Core {
     pub as_slice: QualifiedRef,
     pub as_slice_mut: QualifiedRef,
     pub as_str: QualifiedRef,
+    /// `len`: a sequence's length, the length of the slice its `as_slice`
+    /// gives (operators §3), given no impls.
+    pub len: QualifiedRef,
     pub display: QualifiedRef,
     pub clone: QualifiedRef,
     pub unwrap: QualifiedRef,
@@ -77,6 +80,7 @@ impl Core {
             as_slice: name("as_slice"),
             as_slice_mut: name("as_slice_mut"),
             as_str: name("as_str"),
+            len: name("len"),
             display: name("display"),
             clone: name("clone"),
             unwrap: name("unwrap"),
@@ -127,6 +131,7 @@ impl Core {
             (self.as_slice, table.view_of_slice(Mutability::Shared)),
             (self.as_slice_mut, table.view_of_slice(Mutability::Mut)),
             (self.as_str, table.view_of_str()),
+            (self.len, table.length()),
             (self.unwrap, table.unwrap()),
             (self.default, table.default()),
             (self.as_ref, table.lend(Mutability::Shared)),
@@ -163,6 +168,7 @@ impl Core {
             self.as_slice,
             self.as_slice_mut,
             self.as_str,
+            self.len,
             self.display,
             self.clone,
             self.unwrap,
@@ -176,7 +182,7 @@ impl Core {
     /// Whether `function` is a lang item whose meaning is the language's
     /// own, which no declaration gives impls (operators §2).
     pub(super) fn takes_no_impls(&self, function: QualifiedRef) -> bool {
-        [self.as_ref, self.as_mut].contains(&function)
+        [self.as_ref, self.as_mut, self.len].contains(&function)
     }
 
     /// The mutability `function` lends a structure's parts at, where it is
@@ -279,6 +285,15 @@ impl Table<'_> {
         let lent_slice = self.reference(mutability, slice);
         let names = [self.names.receiver];
         self.scheme(&[lent_c], lent_slice, &names, 2)
+    }
+
+    /// `len<C>(&C) -> u64`.
+    fn length(&mut self) -> Scheme {
+        let c = self.var(0);
+        let shared_c = self.reference(Mutability::Shared, c);
+        let u64_ty = self.types.intern(TyKind::Int(IntTy::U64));
+        let names = [self.names.receiver];
+        self.scheme(&[shared_c], u64_ty, &names, 1)
     }
 
     /// `as_str<S>(&S) -> &str`.
@@ -458,6 +473,15 @@ mod tests {
                 Expected {
                     params: vec![shared(t)],
                     ret: shared(str_ty),
+                    names: vec!["self"],
+                    variables: 1,
+                },
+            ),
+            (
+                core.len,
+                Expected {
+                    params: vec![shared(t)],
+                    ret: TyKind::Int(IntTy::U64),
                     names: vec!["self"],
                     variables: 1,
                 },

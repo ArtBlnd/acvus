@@ -2305,8 +2305,9 @@ mod tests {
         fixture.declare(b_len, fixture.plain(ty, 0));
         let len = fixture.interner.intern("len");
         let other = fixture.interner.intern("other");
+        let core_len = fixture.raw.core.len;
         let decls = fixture.verify().expect("nothing to refuse");
-        assert_eq!(decls.overloads(len), &[a_len, b_len]);
+        assert_eq!(decls.overloads(len), &[core_len, a_len, b_len]);
         assert_eq!(decls.overloads(other), &[] as &[QualifiedRef]);
     }
 
