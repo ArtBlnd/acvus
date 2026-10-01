@@ -36,7 +36,7 @@ use acvus_extern::runtime::{
     Crosses, Opaque, OpaqueKind, OptionKind, PrimitiveKind, RefKind, RefTarget, Referent, ResultKind, Runtime,
     StringKind, TupleKind,
 };
-use acvus_extern::seal::{Crossings, Referents};
+use acvus_extern::seal::Crossing;
 use acvus_extern::{
     LayoutFact, Primitive, Release, Releasing, Settled, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
 };
@@ -833,11 +833,10 @@ unsafe impl Structural for Number {
 macro_rules! opaque {
     ($($t:ty),+ $(,)?) => {$(
         // SAFETY: this stands in for the derive: the crossing below gives,
-        // takes and lends the type as an opaque value, at itself.
-        unsafe impl Crossings for $t {}
-        // SAFETY: as for `Crossings`: a reference to the type is read back at
-        // it by its opaque kind's `shared_ref`.
-        unsafe impl Referents for $t {}
+        // takes and lends the type as an opaque value, at itself, and a
+        // reference to it is read back at it by its opaque kind's
+        // `shared_ref`.
+        unsafe impl Crossing for $t {}
 
         impl Referent for $t {}
         impl Opaque for $t {}

@@ -18,7 +18,7 @@ use std::time::Duration;
 use acvus_utils::Interner;
 
 use crate::boundary::entry::Settled;
-use crate::boundary::seal::{Crossings, Referents};
+use crate::boundary::seal::Crossing;
 use crate::boundary::signed::{SignedS1, SignedS2, SignedS3, Structural};
 use crate::boundary::uniform::{Primitive, Release};
 
@@ -58,7 +58,7 @@ use crate::boundary::uniform::{Primitive, Release};
 ///     cx.finish(vec![1i64])
 /// }
 /// ```
-pub trait Crosses<R: Runtime>: Sized + Send + Sync + Crossings {
+pub trait Crosses<R: Runtime>: Sized + Send + Sync + Crossing {
     type Open<'a>: Deref
     where
         Self: 'a,
@@ -89,7 +89,7 @@ pub trait Crosses<R: Runtime>: Sized + Send + Sync + Crossings {
 
 /// An extern type, held by the runtime as the Rust value itself. Only the
 /// derive declares one.
-pub trait Opaque: Send + Sync + Structural + Crossings + Referent {}
+pub trait Opaque: Send + Sync + Structural + Crossing + Referent {}
 
 /// What a reference value is made to from Rust storage: storage whose Rust
 /// type is the type the reference is read back at. A type the runtime holds as
@@ -98,7 +98,7 @@ pub trait Opaque: Send + Sync + Structural + Crossings + Referent {}
 /// runtime holds in its own representation, are not, so no Rust storage of
 /// one is lent as a reference. Sealed: only this crate and the derive declare
 /// one.
-pub trait Referent: Referents {}
+pub trait Referent: Crossing {}
 
 /// A lend is shared or exclusive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

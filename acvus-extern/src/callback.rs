@@ -5,10 +5,10 @@
 use std::marker::PhantomData;
 
 use crate::boundary::entry::Settled;
-use crate::boundary::seal::LoanForms;
+use crate::boundary::seal::Crossing;
 use crate::boundary::uniform::Uniform;
 use crate::context::{Awaited, Opens, Returning};
-use crate::runtime::{Crosses, Mutability, RefKind, RefTarget, Referent, Runtime};
+use crate::runtime::{Crosses, Mutability, Opaque, RefKind, RefTarget, Referent, Runtime};
 
 /// A callback of function type `Fn(A) -> U` at effect `E`, lent to the call
 /// `'c` (limitations §3: it carries the call's lifetime, so no handler keeps
@@ -31,7 +31,7 @@ impl<A, U, E, R: Runtime> Callback<'_, '_, A, U, E, R> {
 /// at `'l`. A crossing type is itself; `Lent<T>` is `&'l T` and `LentMut<T>` is
 /// `&'l mut T`. Its methods make and read values at the form's type, so it
 /// is sealed: only this crate implements it.
-pub trait LoanForm<R: Runtime>: LoanForms {
+pub trait LoanForm<R: Runtime>: Crossing {
     type At<'l>
     where
         Self: 'l;
@@ -62,28 +62,61 @@ pub struct Lent<T: ?Sized>(PhantomData<fn() -> *const T>);
 /// `&'l mut T`: a part of what the returning call lent, exclusively.
 pub struct LentMut<T: ?Sized>(PhantomData<fn() -> *const T>);
 
-impl<R: Runtime, T: Crosses<R>> LoanForm<R> for T {
-    type At<'l>
-        = T
-    where
-        Self: 'l;
+/// A value that crosses is its own loan form: given to the call, and taken
+/// back from it.
+macro_rules! given {
+    ($([$($g:tt)*] $t:ty;)+) => {$(
+        impl<R: Runtime, $($g)*> LoanForm<R> for $t
+        where
+            $t: Crosses<R>,
+        {
+            type At<'l>
+                = $t
+            where
+                Self: 'l;
 
-    const LENT: Option<Mutability> = None;
+            const LENT: Option<Mutability> = None;
 
-    fn lend<'l>(value: T, rt: &'l R, at: Settled<'l>) -> R::Value
-    where
-        Self: 'l,
-    {
-        value.give(rt, at)
-    }
+            fn lend<'l>(value: $t, rt: &'l R, at: Settled<'l>) -> R::Value
+            where
+                Self: 'l,
+            {
+                value.give(rt, at)
+            }
 
-    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> T
-    where
-        Self: 'l,
-    {
-        T::take(rt, v, at)
-    }
+            fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> $t
+            where
+                Self: 'l,
+            {
+                <$t as Crosses<R>>::take(rt, v, at)
+            }
+        }
+    )+};
 }
+
+given! {
+    [T: Opaque] T;
+    [] String;
+    [T] Option<T>;
+    [T, E] Result<T, E>;
+    [X] Uniform<R, X>;
+}
+
+macro_rules! given_primitives {
+    ($($t:ty => $decl:expr),+ $(,)?) => {
+        given! { $([] $t;)+ }
+    };
+}
+
+primitives!(given_primitives);
+
+macro_rules! given_tuples {
+    ($($n:literal ($($p:ident $v:ident $i:tt),+))+) => {
+        given! { $([$($p),+] ($($p,)+);)+ }
+    };
+}
+
+tuples!(given_tuples);
 
 impl<R: Runtime, T: ?Sized + Referent> LoanForm<R> for Lent<T> {
     type At<'l>
@@ -137,14 +170,10 @@ impl<R: Runtime, T: ?Sized + Referent> LoanForm<R> for LentMut<T> {
     }
 }
 
-mod sealed {
-    pub trait Sealed {}
-}
-
 /// A callback's parameters, a tuple of loan forms: lent together for `'l` to a
 /// returning call, or, where every one is a crossing type, moved into an
 /// awaited one.
-pub trait CallArgs<R: Runtime>: sealed::Sealed {
+pub trait CallArgs<R: Runtime>: Crossing {
     type Lent<'l>
     where
         Self: 'l;
@@ -169,11 +198,10 @@ pub trait MovedArgs<R: Runtime>: CallArgs<R> {
     fn move_run<'a>(args: Self::Moved, rt: &'a R, at: Settled<'a>) -> impl ExactSizeIterator<Item = R::Value>;
 }
 
-/// Tuples of loan forms up to twelve, the arity the crossing's tuples stop at.
+/// A callback's parameters of each arity: none, and each tuple of loan
+/// forms.
 macro_rules! forms {
-    ($($n:literal ($($f:ident $v:ident),*))+) => {$(
-        impl<$($f),*> sealed::Sealed for ($($f,)*) {}
-
+    ($($n:literal ($($f:ident $v:ident $i:tt),*))+) => {$(
         impl<R: Runtime, $($f: LoanForm<R>),*> CallArgs<R> for ($($f,)*) {
             type Lent<'l>
                 = ($($f::At<'l>,)*)
@@ -197,7 +225,7 @@ macro_rules! forms {
 
         }
 
-        impl<R: Runtime, $($f: Crosses<R>),*> MovedArgs<R> for ($($f,)*) {
+        impl<R: Runtime, $($f: Crosses<R> + LoanForm<R>),*> MovedArgs<R> for ($($f,)*) {
             type Moved = ($($f,)*);
 
             #[allow(unused_variables)]
@@ -210,21 +238,8 @@ macro_rules! forms {
     )+};
 }
 
-forms! {
-    0 ()
-    1 (A a)
-    2 (A a, B b)
-    3 (A a, B b, C c)
-    4 (A a, B b, C c, D d)
-    5 (A a, B b, C c, D d, E e)
-    6 (A a, B b, C c, D d, E e, F f)
-    7 (A a, B b, C c, D d, E e, F f, G g)
-    8 (A a, B b, C c, D d, E e, F f, G g, H h)
-    9 (A a, B b, C c, D d, E e, F f, G g, H h, I i)
-    10 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j)
-    11 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k)
-    12 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k, L l)
-}
+forms! { 0 () }
+tuples!(forms);
 
 impl<'c, 'a, A, U, E, R> Callback<'c, 'a, A, U, E, R>
 where

@@ -7,6 +7,9 @@
 
 #![deny(unsafe_code)]
 
+#[macro_use]
+mod lists;
+
 mod boundary;
 pub mod adapter;
 pub mod borrowed;

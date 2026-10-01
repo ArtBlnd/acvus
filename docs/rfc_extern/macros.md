@@ -23,7 +23,7 @@ The derive makes a Rust type an opaque registered type (types §2). It reads the
 
 ## 3. What the macros emit, and what they do not
 
-The macros' output is safe code plus the derive's structural signed implementations. A source scan counts production `unsafe` with generated items included; the count is those structural implementations.
+The macros' output is safe code plus the derive's structural signed implementations and the seal of what each macro implements: one seal per meaning, a type's crossing (the derive's) and a declaration's dispatch (the attribute's). A source scan counts production `unsafe` with generated items included; the count is those structural implementations and those seals.
 
 ## 4. Crossing is selected by types
 

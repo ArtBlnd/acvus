@@ -98,9 +98,9 @@ impl<'s, R: Runtime, B: Borrows<'s, R>, C: Borrows<'s, R>> Borrows<'s, R> for Re
     }
 }
 
-/// Tuples up to twelve parts, the arity the crossing's tuples stop at.
-macro_rules! tuples {
-    ($(($($b:ident $v:ident),+))+) => {$(
+/// A tuple of borrowed results, made by its kind over its parts.
+macro_rules! tuple_borrows {
+    ($($n:literal ($($b:ident $v:ident $i:tt),+))+) => {$(
         impl<'s, R: Runtime, $($b: Borrows<'s, R>),+> Borrows<'s, R> for ($($b,)+) {
             fn made(self, sink: &Sink<'s, R>) -> Made<'s, R> {
                 let ($($v,)+) = self;
@@ -110,17 +110,4 @@ macro_rules! tuples {
     )+};
 }
 
-tuples! {
-    (A a)
-    (A a, B b)
-    (A a, B b, C c)
-    (A a, B b, C c, D d)
-    (A a, B b, C c, D d, E e)
-    (A a, B b, C c, D d, E e, F f)
-    (A a, B b, C c, D d, E e, F f, G g)
-    (A a, B b, C c, D d, E e, F f, G g, H h)
-    (A a, B b, C c, D d, E e, F f, G g, H h, I i)
-    (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j)
-    (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k)
-    (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k, L l)
-}
+tuples!(tuple_borrows);

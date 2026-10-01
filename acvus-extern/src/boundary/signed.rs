@@ -97,21 +97,14 @@ macro_rules! own_canonical {
     )+};
 }
 
-own_canonical!(
-    i8,
-    i16,
-    i32,
-    i64,
-    u8,
-    u16,
-    u32,
-    u64,
-    f64,
-    bool,
-    char,
-    String,
-    ()
-);
+macro_rules! own_canonical_primitives {
+    ($($t:ty => $decl:expr),+ $(,)?) => {
+        own_canonical!($($t),+);
+    };
+}
+
+primitives!(own_canonical_primitives);
+own_canonical!(String);
 
 /// A generic list entry per type parameter of a constructor.
 macro_rules! type_param {
@@ -155,25 +148,11 @@ canonical_over_parts!(<T, E> Result<T, E> => Result<T::Canon, E::Canon>);
 // settled array type.
 canonical_over_parts!(<T> Vec<T> => Vec<T::Canon>);
 
-/// Tuples up to twelve parts, the arity the standard library's own tuple
-/// impls stop at.
+/// Each tuple, its own canonical form over its parts'.
 macro_rules! tuple_canonical {
-    ($(($($p:ident),+))+) => {$(
+    ($($n:literal ($($p:ident $v:ident $i:tt),+))+) => {$(
         canonical_over_parts!(<$($p),+> ($($p,)+) => ($($p::Canon,)+));
     )+};
 }
 
-tuple_canonical! {
-    (A)
-    (A, B)
-    (A, B, C)
-    (A, B, C, D)
-    (A, B, C, D, E)
-    (A, B, C, D, E, F)
-    (A, B, C, D, E, F, G)
-    (A, B, C, D, E, F, G, H)
-    (A, B, C, D, E, F, G, H, I)
-    (A, B, C, D, E, F, G, H, I, J)
-    (A, B, C, D, E, F, G, H, I, J, K)
-    (A, B, C, D, E, F, G, H, I, J, K, L)
-}
+tuples!(tuple_canonical);

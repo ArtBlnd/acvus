@@ -2,7 +2,7 @@
 
 ## 1. No unsafe for the author
 
-The crossing traits are sealed. The boundary and the derive implement them; an author implements none. The extern side's `unsafe` is the boundary's layout casts, each under a witness, and the structural signed implementations; the entry is safe.
+The crossing traits are sealed. The boundary and the macros implement them; an author implements none. A seal is an `unsafe` trait, one per meaning: a type's crossing, which the boundary and the derive implement, and a declaration's dispatch, which the attribute implements. Every trait of one meaning is sealed by that one seal. The extern side's `unsafe` is the boundary's layout casts, each under a witness, and the structural signed implementations; the entry is safe.
 
 The boundary is one set of modules in the extern crate, and it is the only place `unsafe` is written: every other module of every crate forbids it. Each fact the boundary's `unsafe` relies on is established at exactly one place in it, and everything else consumes it through a type; changing the assumption there changes, or breaks at compile time, every dependent.
 

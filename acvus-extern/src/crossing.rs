@@ -26,8 +26,8 @@ impl<V> DerefMut for Parted<V> {
     }
 }
 
-macro_rules! primitives {
-    ($($t:ty),+ $(,)?) => {$(
+macro_rules! primitive_crossings {
+    ($($t:ty => $decl:expr),+ $(,)?) => {$(
         impl Referent for $t {}
 
         impl<R: Runtime> Crosses<R> for $t {
@@ -73,7 +73,7 @@ macro_rules! primitives {
     )+};
 }
 
-primitives!(i8, i16, i32, i64, u8, u16, u32, u64, f64, bool, char, ());
+primitives!(primitive_crossings);
 
 impl Referent for String {}
 impl Referent for str {}
@@ -273,8 +273,8 @@ impl<R: Runtime, X> Crosses<R> for Uniform<R, X> {
     }
 }
 
-macro_rules! tuples {
-    ($($n:literal ($($p:ident $v:ident),+))+) => {$(
+macro_rules! tuple_crossings {
+    ($($n:literal ($($p:ident $v:ident $i:tt),+))+) => {$(
         impl<R: Runtime, $($p: Crosses<R>),+> Crosses<R> for ($($p,)+) {
             type Open<'a>
                 = Parted<($(&'a Uniform<R, $p>,)+)>
@@ -330,17 +330,4 @@ macro_rules! tuples {
     )+};
 }
 
-tuples! {
-    1 (A a)
-    2 (A a, B b)
-    3 (A a, B b, C c)
-    4 (A a, B b, C c, D d)
-    5 (A a, B b, C c, D d, E e)
-    6 (A a, B b, C c, D d, E e, F f)
-    7 (A a, B b, C c, D d, E e, F f, G g)
-    8 (A a, B b, C c, D d, E e, F f, G g, H h)
-    9 (A a, B b, C c, D d, E e, F f, G g, H h, I i)
-    10 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j)
-    11 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k)
-    12 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k, L l)
-}
+tuples!(tuple_crossings);

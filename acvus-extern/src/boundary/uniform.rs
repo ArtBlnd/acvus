@@ -4,6 +4,7 @@
 use std::marker::PhantomData;
 
 use crate::boundary::entry::Settled;
+use crate::boundary::seal::Crossing;
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
 use crate::context::Opens;
 use crate::runtime::{Crosses, PrimitiveKind, Runtime};
@@ -79,22 +80,17 @@ impl<R: Runtime, T: Crosses<R>> Uniform<R, T> {
     }
 }
 
-mod primitive {
-    pub trait Sealed {}
-}
-
 /// A primitive: it owns nothing, so it is read by a copy and written by a
 /// replacement.
-pub trait Primitive: Copy + Send + Sync + primitive::Sealed + 'static {}
+pub trait Primitive: Copy + Send + Sync + Crossing + 'static {}
 
-macro_rules! primitives {
-    ($($t:ty),+ $(,)?) => {$(
-        impl primitive::Sealed for $t {}
+macro_rules! primitive {
+    ($($t:ty => $decl:expr),+ $(,)?) => {$(
         impl Primitive for $t {}
     )+};
 }
 
-primitives!(i8, i16, i32, i64, u8, u16, u32, u64, f64, bool, char, ());
+primitives!(primitive);
 
 impl<R: Runtime, T: Primitive> Uniform<R, T> {
     /// The value, read by a copy: the runtime's take of the held value's

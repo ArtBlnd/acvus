@@ -101,19 +101,15 @@ macro_rules! by_value {
     )+};
 }
 
+macro_rules! by_value_primitives {
+    ($($t:ty => $decl:expr),+ $(,)?) => {
+        by_value! { $([] $t => |_| $decl;)+ }
+    };
+}
+
+primitives!(by_value_primitives);
+
 by_value! {
-    [] i8 => |_| DeclTy::Int(IntTy::I8);
-    [] i16 => |_| DeclTy::Int(IntTy::I16);
-    [] i32 => |_| DeclTy::Int(IntTy::I32);
-    [] i64 => |_| DeclTy::Int(IntTy::I64);
-    [] u8 => |_| DeclTy::Int(IntTy::U8);
-    [] u16 => |_| DeclTy::Int(IntTy::U16);
-    [] u32 => |_| DeclTy::Int(IntTy::U32);
-    [] u64 => |_| DeclTy::Int(IntTy::U64);
-    [] f64 => |_| DeclTy::F64;
-    [] bool => |_| DeclTy::Bool;
-    [] char => |_| DeclTy::Char;
-    [] () => |_| DeclTy::Unit;
     [] String => |_| DeclTy::String;
     [T: DeclType] Option<T> => |cx| DeclTy::Option(Box::new(T::decl_ty(cx)));
     [T: DeclType, E: DeclType] Result<T, E> => |cx| DeclTy::Result(Box::new(T::decl_ty(cx)), Box::new(E::decl_ty(cx)));
@@ -140,9 +136,9 @@ impl<R: Runtime, X: DeclType> ParamMode for Uniform<R, X> {
     }
 }
 
-/// Tuples up to twelve parts, the arity the crossing's tuples stop at.
-macro_rules! tuples {
-    ($(($($p:ident),+))+) => {$(
+/// Each tuple: its parts' declared types, and a value of it taken by value.
+macro_rules! decl_tuples {
+    ($($n:literal ($($p:ident $v:ident $i:tt),+))+) => {$(
         impl<$($p: DeclType),+> DeclParts for ($($p,)+) {
             fn decl_parts(cx: &mut DeclCx<'_>) -> Vec<DeclTy> {
                 vec![$($p::decl_ty(cx)),+]
@@ -155,26 +151,7 @@ macro_rules! tuples {
     )+};
 }
 
-impl DeclParts for () {
-    fn decl_parts(_: &mut DeclCx<'_>) -> Vec<DeclTy> {
-        Vec::new()
-    }
-}
-
-tuples! {
-    (A)
-    (A, B)
-    (A, B, C)
-    (A, B, C, D)
-    (A, B, C, D, E)
-    (A, B, C, D, E, F)
-    (A, B, C, D, E, F, G)
-    (A, B, C, D, E, F, G, H)
-    (A, B, C, D, E, F, G, H, I)
-    (A, B, C, D, E, F, G, H, I, J)
-    (A, B, C, D, E, F, G, H, I, J, K)
-    (A, B, C, D, E, F, G, H, I, J, K, L)
-}
+tuples!(decl_tuples);
 
 impl DeclType for str {
     fn decl_ty(_: &mut DeclCx<'_>) -> DeclTy {

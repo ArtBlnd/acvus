@@ -8,6 +8,7 @@ use crate::boundary::entry::{Settled, SiteShape};
 use crate::done::Done;
 use crate::guard::{Guard, GuardMut};
 use crate::borrowed::{Made, Sink};
+use crate::boundary::seal::Crossing;
 use crate::runtime::{Crosses, RefKind, RefTarget, Referent, Runtime};
 
 pub struct Returning<'c, R: Runtime> {
@@ -20,19 +21,13 @@ pub struct Awaited<'c, R: Runtime> {
     site: &'c SiteShape<R>,
 }
 
-mod sealed {
-    pub trait Sealed {}
-}
-
 /// A context a retained loan may be opened in: either body's.
-pub trait Opens<'c, R: Runtime>: sealed::Sealed {
+pub trait Opens<'c, R: Runtime>: Crossing {
     /// The runtime the call runs at.
     #[doc(hidden)]
     fn runtime(&self) -> &'c R;
 }
 
-impl<R: Runtime> sealed::Sealed for Returning<'_, R> {}
-impl<R: Runtime> sealed::Sealed for Awaited<'_, R> {}
 
 impl<'c, R: Runtime> Opens<'c, R> for Returning<'c, R> {
     fn runtime(&self) -> &'c R {

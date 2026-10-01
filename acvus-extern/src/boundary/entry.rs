@@ -87,13 +87,9 @@ impl<'c, R: Runtime> Entry<'c, R> {
     }
 }
 
-mod sealed {
-    pub trait Sealed {}
-}
-
 /// A parameter's mode, chosen by its Rust type (macros §4): how the entry
 /// opens its argument.
-pub trait Mode<R: Runtime>: sealed::Sealed {
+pub trait Mode<R: Runtime>: Crossing {
     type Opened<'c>
     where
         Self: 'c,
@@ -128,7 +124,7 @@ pub trait Mode<R: Runtime>: sealed::Sealed {
 }
 
 /// A requirement's mode: how the entry opens the impl the site chose.
-pub trait RequirementMode<R: Runtime>: sealed::Sealed {
+pub trait RequirementMode<R: Runtime>: Crossing {
     type Opened<'c>
     where
         Self: 'c,
@@ -143,7 +139,7 @@ pub trait RequirementMode<R: Runtime>: sealed::Sealed {
 
 /// The argument parameters of a handler, a tuple of modes, one position each.
 /// `Run` is the call's argument run at that arity, `[R::Value; N]`.
-pub trait Args<R: Runtime>: sealed::Sealed {
+pub trait Args<R: Runtime>: Crossing {
     type Run;
     type Opened<'c>
     where
@@ -164,7 +160,7 @@ pub trait Args<R: Runtime>: sealed::Sealed {
 }
 
 /// The requirement parameters of a handler, a tuple of requirement modes.
-pub trait Requires<R: Runtime>: sealed::Sealed {
+pub trait Requires<R: Runtime>: Crossing {
     type Opened<'c>
     where
         Self: 'c,
@@ -215,6 +211,7 @@ use crate::callback::Callback;
 use crate::guard::{Guard, GuardMut};
 use crate::impls::receiver::{Reads, Steps};
 use crate::impls::{Family, Instances};
+use crate::boundary::seal::Crossing;
 use crate::runtime::{Crosses, RefKind};
 
 /// How a mode's opened value becomes the handler's argument: moved on, or
@@ -236,8 +233,6 @@ macro_rules! pass {
 
 macro_rules! modes {
     ($([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, $passed:ident, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
-        impl<$($g)*> sealed::Sealed for $m {}
-
         impl<R: Runtime, $($g)*> Mode<R> for $m {
             type Opened<'c> = $opened
             where
@@ -289,8 +284,6 @@ modes! {
         |_runtime, v, _at| Callback::of_the_entry(*v);
 }
 
-impl<T> sealed::Sealed for ByValue<T> {}
-
 impl<R: Runtime, T: Crosses<R>> Mode<R> for ByValue<T> {
     type Opened<'c>
         = T
@@ -324,8 +317,6 @@ impl<R: Runtime, T: Crosses<R>> Mode<R> for ByValue<T> {
         opened
     }
 }
-
-impl<T> sealed::Sealed for ByRef<T> {}
 
 impl<R: Runtime, T: Crosses<R>> Mode<R> for ByRef<T> {
     type Opened<'c>
@@ -361,8 +352,6 @@ impl<R: Runtime, T: Crosses<R>> Mode<R> for ByRef<T> {
     }
 }
 
-impl<T> sealed::Sealed for ByMut<T> {}
-
 impl<R: Runtime, T: Crosses<R>> Mode<R> for ByMut<T> {
     type Opened<'c>
         = GuardMut<'c, T::OpenMut<'c>>
@@ -397,8 +386,6 @@ impl<R: Runtime, T: Crosses<R>> Mode<R> for ByMut<T> {
     }
 }
 
-impl<F, I> sealed::Sealed for ByInstance<F, I> {}
-impl<F, Ts, L> sealed::Sealed for ByInstanceOf<F, Ts, L> {}
 
 impl<R: Instances, F: Family<Receiver = Steps>, I> RequirementMode<R> for ByInstance<F, I> {
     type Opened<'c> = Instance<R, F, I>
@@ -430,11 +417,10 @@ impl<R: Instances, F: Family<Receiver = Reads>, Ts, L> RequirementMode<R> for By
     }
 }
 
-/// Tuples of modes up to twelve, the arity the crossing's tuples stop at.
-macro_rules! tuples {
-    ($($n:literal ($($m:ident $v:ident),*))+) => {$(
-        impl<$($m),*> sealed::Sealed for ($($m,)*) {}
-
+/// The argument and requirement parameters of each arity: none, and each
+/// tuple of modes.
+macro_rules! mode_tuples {
+    ($($n:literal ($($m:ident $v:ident $i:tt),*))+) => {$(
         impl<R: Runtime, $($m: Mode<R>),*> Args<R> for ($($m,)*) {
             type Run = [R::Value; $n];
             type Opened<'c> = ($($m::Opened<'c>,)*)
@@ -481,18 +467,5 @@ macro_rules! tuples {
     )+};
 }
 
-tuples! {
-    0 ()
-    1 (A a)
-    2 (A a, B b)
-    3 (A a, B b, C c)
-    4 (A a, B b, C c, D d)
-    5 (A a, B b, C c, D d, E e)
-    6 (A a, B b, C c, D d, E e, F f)
-    7 (A a, B b, C c, D d, E e, F f, G g)
-    8 (A a, B b, C c, D d, E e, F f, G g, H h)
-    9 (A a, B b, C c, D d, E e, F f, G g, H h, I i)
-    10 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j)
-    11 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k)
-    12 (A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k, L l)
-}
+mode_tuples! { 0 () }
+tuples!(mode_tuples);

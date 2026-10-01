@@ -1,15 +1,28 @@
-//! The seal of the crossing trait whose methods choose the type of a typed
-//! read (safety §1). A runtime trusts its own typed reads, so a hand-written
-//! loan form that read a result at a type other than the callback's would be
-//! undefined behaviour reached from safe code. The seal is an `unsafe` trait
-//! at a hidden path: its implementations are the ones named here, and any
-//! other is asserted with an `unsafe` token where it is written.
+//! The seals (safety §1): one `unsafe` trait per meaning, at a hidden path.
+//! Its implementations are the ones written here and by the macros; any other
+//! is asserted with an `unsafe` token where it is written.
 
-/// # Safety
-/// Only this crate implements it, for the loan forms it defines: each form
-/// lends, moves and reads a value at the type its `At` names.
+use crate::boundary::entry::mode::{
+    ByCallback, ByInstance, ByInstanceOf, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue,
+};
+use crate::boundary::uniform::Uniform;
+use crate::callback::{Lent, LentMut};
+use crate::context::{Awaited, Returning};
+use crate::runtime::Runtime;
+
+/// The seal of a type's crossing: every trait that gives, takes, lends or
+/// reads a value at a type (`Crosses`, `Opaque`, `Referent`, `Primitive`,
+/// `LoanForm`, a mode, the argument tuples, a context a loan opens in). A
+/// runtime trusts its own typed reads, so a crossing written by hand could
+/// read a value at a type it is not.
 ///
-/// A `LoanForm` written by hand, without the seal, does not compile:
+/// # Safety
+/// Only this crate implements it, for the language's types and its own
+/// crossing's, and the derive, for the extern type it declares: each gives,
+/// takes, lends and reads a value by its own kind's operations, at itself, and
+/// its parts only by their own crossings.
+///
+/// A crossing written by hand, without the seal, does not compile:
 ///
 /// ```compile_fail,E0277
 /// use acvus_extern::Settled;
@@ -26,92 +39,63 @@
 ///     fn lend<'l>(_: (), _: &'l R, _: Settled<'l>) -> R::Value {
 ///         unimplemented!()
 ///     }
-///     fn give_moved<'a>(_: (), _: &'a R, _: Settled<'a>) -> R::Value {
-///         unimplemented!()
-///     }
 ///     fn read<'l>(_: R::Value, _: &'l R, _: Settled<'l>) {}
 /// }
 /// ```
-pub unsafe trait LoanForms {}
+pub unsafe trait Crossing {}
 
-use crate::boundary::uniform::Uniform;
-use crate::callback::{Lent, LentMut};
-use crate::runtime::Runtime;
-
-// SAFETY: a crossing type is its own form: it is given and taken at itself.
-unsafe impl<T> LoanForms for T where T: Crossings {}
-// SAFETY: `Lent<T>` lends, moves and reads a reference to a `T`.
-unsafe impl<T> LoanForms for Lent<T> where T: ?Sized {}
-// SAFETY: as `Lent`'s, exclusively.
-unsafe impl<T> LoanForms for LentMut<T> where T: ?Sized {}
-
-/// The seal of `Crosses` and `Opaque`: a crossing makes and takes values with
-/// the runtime's operations, which read at the type they are asked for, so a
-/// crossing written by hand could read a value at a type it is not.
-///
-/// # Safety
-/// Only this crate implements it, for the language's types, and the derive,
-/// for the extern type it declares: each crossing gives and takes a value by
-/// its own kind's operations, at itself, and its parts only by their own
-/// crossings.
-pub unsafe trait Crossings {}
-
-macro_rules! crossings {
+macro_rules! crossing {
     ($([$($g:tt)*] $t:ty;)+) => {$(
-        // SAFETY: this crate's crossing of the type, in `crate::crossing`.
-        unsafe impl<$($g)*> Crossings for $t {}
+        // SAFETY: this crate's crossing of the type.
+        unsafe impl<$($g)*> Crossing for $t {}
     )+};
 }
 
-crossings! {
-    [] i8; [] i16; [] i32; [] i64; [] u8; [] u16; [] u32; [] u64; [] f64; [] bool; [] char; [] ();
+crossing! {
     [] String;
+    [] str;
     [T] Option<T>;
     [T, E] Result<T, E>;
     [R: Runtime, X] Uniform<R, X>;
-    [A] (A,);
-    [A, B] (A, B);
-    [A, B, C] (A, B, C);
-    [A, B, C, D] (A, B, C, D);
-    [A, B, C, D, E] (A, B, C, D, E);
-    [A, B, C, D, E, F] (A, B, C, D, E, F);
-    [A, B, C, D, E, F, G] (A, B, C, D, E, F, G);
-    [A, B, C, D, E, F, G, H] (A, B, C, D, E, F, G, H);
-    [A, B, C, D, E, F, G, H, I] (A, B, C, D, E, F, G, H, I);
-    [A, B, C, D, E, F, G, H, I, J] (A, B, C, D, E, F, G, H, I, J);
-    [A, B, C, D, E, F, G, H, I, J, K] (A, B, C, D, E, F, G, H, I, J, K);
-    [A, B, C, D, E, F, G, H, I, J, K, L] (A, B, C, D, E, F, G, H, I, J, K, L);
-}
-
-/// The seal of `Referent`: a reference value made to a referent is read back
-/// at it by its type's crossing, so a referent declared by hand could be read
-/// at a type its storage is not.
-///
-/// # Safety
-/// Only this crate implements it, for the types the runtime holds as
-/// themselves (primitives, `String`), text, a type variable's value and a run
-/// of them, and the derive, for the extern type it declares.
-pub unsafe trait Referents {}
-
-macro_rules! referents {
-    ($([$($g:tt)*] $t:ty;)+) => {$(
-        // SAFETY: storage of this type is read back at it: a primitive and a
-        // `String` by their kind's `shared_ref`, text by `target`, a type
-        // variable's value and a run of them as the class values they are.
-        unsafe impl<$($g)*> Referents for $t {}
-    )+};
-}
-
-referents! {
-    [] i8; [] i16; [] i32; [] i64; [] u8; [] u16; [] u32; [] u64; [] f64; [] bool; [] char; [] ();
-    [] String;
-    [] str;
-    [R: Runtime, X] Uniform<R, X>;
     [R: Runtime, X] [Uniform<R, X>];
+    [T: ?Sized] Lent<T>;
+    [T: ?Sized] LentMut<T>;
+    [T] ByValue<T>;
+    [T] ByUniform<T>;
+    [T] ByRef<T>;
+    [T] ByMut<T>;
+    [T] BySlice<T>;
+    [T] BySliceMut<T>;
+    [] ByStr;
+    [A, U, E] ByCallback<A, U, E>;
+    [F, I] ByInstance<F, I>;
+    [F, Ts, L] ByInstanceOf<F, Ts, L>;
+    [R: Runtime] Returning<'_, R>;
+    [R: Runtime] Awaited<'_, R>;
 }
 
+macro_rules! crossing_primitives {
+    ($($t:ty => $decl:expr),+ $(,)?) => {
+        crossing! { $([] $t;)+ }
+    };
+}
+
+primitives!(crossing_primitives);
+
+macro_rules! crossing_tuples {
+    ($($n:literal ($($p:ident $v:ident $i:tt),+))+) => {
+        crossing! { $([$($p),+] ($($p,)+);)+ }
+    };
+}
+
+tuples!(crossing_tuples);
+
+/// The seal of a declaration's dispatch (`ExternFn`, `AwaitedFn`,
+/// `Declared`).
+///
 /// # Safety
 /// Only `#[extern_fn]` implements it, for the function it declares: the
 /// dispatch opens each argument by the mode of the declaration's parameter at
-/// that position, at the parameter's own type.
+/// that position, at the parameter's own type, and the declaration states that
+/// parameter's type.
 pub unsafe trait ExternFns {}
