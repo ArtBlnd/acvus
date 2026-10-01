@@ -29,18 +29,13 @@
 use std::any::TypeId;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ptr;
-use std::sync::{Arc, Mutex, PoisonError};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use acvus_extern::done::Done;
 use acvus_extern::runtime::{
-    Crosses, Opaque, OpaqueKind, OptionKind, PrimitiveKind, RefKind, RefTarget, Referent, ResultKind, Runtime,
-    StringKind, TupleKind,
+    Opaque, OpaqueKind, OptionKind, PrimitiveKind, RefKind, RefTarget, ResultKind, StringKind, TupleKind,
 };
-use acvus_extern::seal::Crossing;
-use acvus_extern::{
-    LayoutFact, Primitive, Release, Releasing, Settled, SiteShape, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
-};
+use acvus_extern::{Primitive, Release, Releasing, Settled, SiteShape, SignedS1, SignedS2, SignedS3};
 
 use crate::runtime::WordRuntime;
 
