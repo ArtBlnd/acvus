@@ -4,12 +4,10 @@
 //!
 //! The frame is where the checker's decisions come in, so it trusts its
 //! caller as a run trusts the checker: each `Pass` is how the call site passes
-//! that argument, and it must be what the handler's parameter mode opens. A
-//! debug build's entry asserts that they agree.
+//! that argument, and it must be what the handler's parameter mode opens.
 
 use acvus_extern::done::Done;
 use acvus_extern::register::{AwaitedFn, ExternFn};
-use acvus_extern::runtime::Mutability;
 use acvus_extern::{Entry, Primitive, SiteShape};
 
 use crate::boundary::{Held, Word};
@@ -21,22 +19,13 @@ pub enum Pass {
     /// The variable's value, handed over: the call owns it from here on.
     Give(usize),
     /// The variable lent in place.
-    Lend(usize, Mutability),
+    Lend(usize),
     /// The variable's value, a reference, passed to a call that reads what it
     /// names; the variable still owns it.
-    Same(usize, Mutability),
+    Same(usize),
     /// The variable's value, a function, passed to a call that calls it; the
     /// variable still owns it.
     Function(usize),
-}
-
-impl Pass {
-    fn lent(self) -> Option<Mutability> {
-        match self {
-            Pass::Give(_) | Pass::Function(_) => None,
-            Pass::Lend(_, m) | Pass::Same(_, m) => Some(m),
-        }
-    }
 }
 
 /// A frame's variables, each boxed so that a lent one keeps its address.
@@ -54,7 +43,7 @@ impl<'r> Frame<'r> {
     /// in a new variable, whose index it returns.
     pub fn call(&mut self, passes: &[Pass], glue: impl FnOnce(Entry<'_, WordRuntime>) -> Done<WordRuntime>) -> usize {
         let args = self.arguments(passes);
-        let site = Self::site(passes);
+        let site = Self::site();
 
         let done = glue(Entry::new(self.runtime, &args, &site));
 
@@ -64,7 +53,7 @@ impl<'r> Frame<'r> {
     /// As `call`, for a glue whose body is awaited.
     pub async fn call_awaited(&mut self, passes: &[Pass], glue: impl AsyncFnOnce(Entry<'_, WordRuntime>) -> Done<WordRuntime>) -> usize {
         let args = self.arguments(passes);
-        let site = Self::site(passes);
+        let site = Self::site();
 
         let done = glue(Entry::new(self.runtime, &args, &site)).await;
 
@@ -76,7 +65,7 @@ impl<'r> Frame<'r> {
     /// keeps its result in a new variable, whose index it returns.
     pub fn call_function(&mut self, function: usize, passes: &[Pass]) -> usize {
         let args = self.arguments(passes);
-        let site = Self::site(passes);
+        let site = Self::site();
 
         let callee = self.variables[function].as_deref().expect("a function given away is not called");
         let done = callee.function().call(self.runtime, &args, &site);
@@ -107,7 +96,7 @@ impl<'r> Frame<'r> {
     /// arguments `passes` names, and keeps its result in a new variable.
     pub async fn call_dispatch_awaited(&mut self, f: &impl AwaitedFn<WordRuntime>, passes: &[Pass]) -> usize {
         let args = self.arguments(passes);
-        let site = Self::site(passes);
+        let site = Self::site();
 
         let done = f.call(self.runtime, &args, &site).await;
 
@@ -136,16 +125,16 @@ impl<'r> Frame<'r> {
         for &pass in passes {
             let arg = match pass {
                 Pass::Give(i) => self.variables[i].take().expect("a variable is given once").hand_over(),
-                Pass::Lend(i, _) => self.variable(i).lend(),
-                Pass::Same(i, _) | Pass::Function(i) => self.variable(i).same(),
+                Pass::Lend(i) => self.variable(i).lend(),
+                Pass::Same(i) | Pass::Function(i) => self.variable(i).same(),
             };
             args.push(arg);
         }
         args
     }
 
-    fn site(passes: &[Pass]) -> SiteShape<WordRuntime> {
-        SiteShape::new(passes.iter().map(|p| p.lent()).collect(), Box::new([]))
+    fn site() -> SiteShape<WordRuntime> {
+        SiteShape::new(Box::new([]))
     }
 
     fn keep(&mut self, done: Done<WordRuntime>) -> usize {

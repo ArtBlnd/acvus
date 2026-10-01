@@ -181,7 +181,7 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         let name = &p.name;
         match &p.role {
             Role::Capture { .. } => quote!(&self.#name),
-            Role::Context => quote!(&__cx),
+            Role::Context => quote!(__context),
             Role::Argument if Some(i) == lent => quote!(__lent),
             Role::Argument => {
                 let a = format_ident!("__a{}", i);
@@ -189,6 +189,10 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
             }
         }
     });
+    // The context the body is given, where it takes one: borrowed from the
+    // body's own, or, finishing with a borrow, the one the finish lends.
+    let takes_context = sig.params.iter().any(|p| matches!(p.role, Role::Context));
+    let context = takes_context.then(|| quote!(let __context = &__cx;));
     let function = &sig.ident;
     let type_args = sig.type_args(runtime);
     let call = quote!(#function #type_args(#(#call_args),*));
@@ -199,8 +203,12 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let opened_tuple = quote!((#(#opened,)*));
 
     let awaited_finish = match sig.output {
-        Output::Never => quote!(match #call.await {}),
+        Output::Never => quote! {
+            #context
+            match #call.await {}
+        },
         Output::Value | Output::Borrowed { .. } => quote! {
+            #context
             let __result = #call.await;
             __cx.finish(__result)
         },
@@ -228,14 +236,19 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         Output::Borrowed { from, mutable } => {
             let a = format_ident!("__a{}", from);
             let finish = if mutable { quote!(finish_borrowed_mut) } else { quote!(finish_borrowed) };
+            let context = if takes_context { quote!(__context) } else { quote!(_) };
             quote! {
-                __cx.#finish(#a, move |__lent, __sink| {
+                __cx.#finish(#a, move |#context, __lent, __sink| {
                     ::acvus_extern::borrowed::Borrows::made(#call, &__sink)
                 })
             }
         }
-        Output::Never => quote!(match #call {}),
+        Output::Never => quote! {
+            #context
+            match #call {}
+        },
         Output::Value => quote! {
+            #context
             let __result = #call;
             __cx.finish(__result)
         },

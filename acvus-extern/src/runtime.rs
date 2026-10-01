@@ -99,13 +99,6 @@ pub trait Opaque: Send + Sync + Structural + Crossing + Referent {}
 /// one.
 pub trait Referent: Crossing {}
 
-/// A lend is shared or exclusive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mutability {
-    Shared,
-    Exclusive,
-}
-
 /// What a reference value is made from: a part of storage the call lent,
 /// borrowed from the guard that lends it (`context::Returning::finish_lent`);
 /// a writable one only from an exclusive guard. The part is the whole lent

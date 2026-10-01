@@ -96,12 +96,6 @@ impl Sig {
             ReturnType::Default => syn::parse_quote!(()),
         };
         let awaited = sig.asyncness.is_some();
-        if matches!(output, Output::Borrowed { .. }) && params.iter().any(|p| matches!(p.role, Role::Context)) {
-            return Err(syn::Error::new(
-                sig.output.span(),
-                "a body finishing with a borrow takes no context: finishing it consumes the context",
-            ));
-        }
         if awaited && matches!(output, Output::Borrowed { .. }) {
             return Err(syn::Error::new(
                 sig.output.span(),

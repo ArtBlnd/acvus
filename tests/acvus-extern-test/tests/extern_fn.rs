@@ -3,7 +3,7 @@
 
 use acvus_extern::Uniform;
 use acvus_extern::callback::{Callback, CallsBack};
-use acvus_extern::context::Awaited;
+use acvus_extern::context::{Awaited, Returning};
 use acvus_extern::decl::{DeclTy, Declaration, Var, kind};
 use acvus_extern::done::Done;
 use acvus_extern::extern_fn;
@@ -41,6 +41,11 @@ fn fail(message: &str) -> ! {
 }
 
 #[extern_fn(effect = pure)]
+fn first_positive<'a, R: Runtime>(#[context] cx: &Returning<'_, R>, xs: &'a [Uniform<R, i64>]) -> Option<&'a Uniform<R, i64>> {
+    xs.iter().find(|x| x.get(cx) > 0)
+}
+
+#[extern_fn(effect = pure)]
 fn tagged(#[capture] tag: &String, text: &str) -> String {
     format!("{tag}: {text}")
 }
@@ -48,7 +53,7 @@ fn tagged(#[capture] tag: &String, text: &str) -> String {
 #[extern_fn(effect = E)]
 async fn apply<'c, R: CallsBack, E: Var<kind::Effect>>(
     #[context] cx: &Awaited<'c, R>,
-    f: Callback<'c, '_, (i64,), i64, E, R>,
+    f: Callback<'c, (i64,), i64, E, R>,
     n: i64,
 ) -> i64 {
     f.call_await(cx, (n,)).await + 1
@@ -180,6 +185,10 @@ fn a_borrowed_result_declares_its_references() {
 
     let (_, halves) = declaration_of(halves::new());
     assert_eq!(halves.result, DeclTy::Tuple(vec![shared(DeclTy::Str), shared(DeclTy::Str)]));
+
+    let (names, first_positive) = declaration_of(first_positive::new());
+    assert_eq!(first_positive.params, [(names.intern("xs"), shared(DeclTy::Slice(Box::new(DeclTy::Int(IntTy::I64)))))]);
+    assert_eq!(first_positive.result, DeclTy::Option(Box::new(shared(DeclTy::Int(IntTy::I64)))));
 }
 
 #[test]

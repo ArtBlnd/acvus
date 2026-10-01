@@ -362,7 +362,7 @@ impl<T: ?Sized + DeclType> DeclType for LentMut<T> {
 }
 
 /// A callback whose effect is the declaration's N-th effect variable.
-impl<A, U, R, const N: u32> DeclType for Callback<'_, '_, A, U, EffectNth<N>, R>
+impl<A, U, R, const N: u32> DeclType for Callback<'_, A, U, EffectNth<N>, R>
 where
     A: DeclParts,
     U: DeclType,
@@ -373,7 +373,7 @@ where
     }
 }
 
-impl<A, U, R, const N: u32> ParamMode for Callback<'_, '_, A, U, EffectNth<N>, R>
+impl<A, U, R, const N: u32> ParamMode for Callback<'_, A, U, EffectNth<N>, R>
 where
     A: DeclParts,
     U: DeclType,

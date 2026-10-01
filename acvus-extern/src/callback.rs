@@ -8,20 +8,19 @@ use crate::boundary::entry::Settled;
 use crate::boundary::seal::Crossing;
 use crate::boundary::uniform::Uniform;
 use crate::context::{Awaited, Opens, Returning};
-use crate::runtime::{Crosses, Mutability, Opaque, RefKind, RefTarget, Referent, Runtime};
+use crate::runtime::{Crosses, Opaque, RefKind, RefTarget, Referent, Runtime};
 
 /// A callback of function type `Fn(A) -> U` at effect `E`, lent to the call
 /// `'c` (limitations §3: it carries the call's lifetime, so no handler keeps
-/// it); `'a` is the loans its captures hold. Only the entry makes one. `A` and
-/// `U` are loan forms: a returning call lends its arguments for `'l` and its
+/// it). Only the entry makes one. `A` and `U` are loan forms: a returning call lends its arguments for `'l` and its
 /// result may borrow what it lent, no longer (crossing §4); an awaited call
 /// moves its arguments and its result borrows nothing.
-pub struct Callback<'c, 'a, A, U, E, R: Runtime> {
+pub struct Callback<'c, A, U, E, R: Runtime> {
     closure: R::Value,
-    _at: PhantomData<(fn(&'c ()) -> &'c (), &'a (), fn(A) -> U, E)>,
+    _at: PhantomData<(fn(&'c ()) -> &'c (), fn(A) -> U, E)>,
 }
 
-impl<A, U, E, R: Runtime> Callback<'_, '_, A, U, E, R> {
+impl<A, U, E, R: Runtime> Callback<'_, A, U, E, R> {
     pub(crate) fn of_the_entry(closure: R::Value) -> Self {
         Callback { closure, _at: PhantomData }
     }
@@ -36,18 +35,17 @@ pub trait LoanForm<R: Runtime>: Crossing {
     where
         Self: 'l;
 
-    /// How a returning call passes the value `lend` makes: lent where it is a
-    /// reference value, by value where it is given.
-    #[doc(hidden)]
-    const LENT: Option<Mutability>;
-
-    /// The value a returning call's argument, or a Rust function's result,
-    /// crosses as: a reference value to a lent leaf, a given value for a
-    /// crossing leaf.
+    /// The value a returning call's argument crosses as: a reference value to
+    /// a lent leaf, a given value for a crossing leaf.
     #[doc(hidden)]
     fn lend<'l>(value: Self::At<'l>, rt: &'l R, at: Settled<'l>) -> R::Value
     where
         Self: 'l;
+    /// What is left of the argument `lend` made once the call has returned: a
+    /// given value is the callee's, and nothing is left; a reference value is
+    /// the caller's, and is released.
+    #[doc(hidden)]
+    fn returned(v: R::Value);
     /// A returning call's result read back at its form. The result is handed
     /// over, so the read owns it: a reference value is released once its
     /// target is read, and a value is taken.
@@ -75,14 +73,14 @@ macro_rules! given {
             where
                 Self: 'l;
 
-            const LENT: Option<Mutability> = None;
-
             fn lend<'l>(value: $t, rt: &'l R, at: Settled<'l>) -> R::Value
             where
                 Self: 'l,
             {
                 value.give(rt, at)
             }
+
+            fn returned(_v: R::Value) {}
 
             fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> $t
             where
@@ -124,13 +122,15 @@ impl<R: Runtime, T: ?Sized + Referent> LoanForm<R> for Lent<T> {
     where
         Self: 'l;
 
-    const LENT: Option<Mutability> = Some(Mutability::Shared);
-
     fn lend<'l>(value: &'l T, rt: &'l R, at: Settled<'l>) -> R::Value
     where
         Self: 'l,
     {
         <R::Ref as RefKind<R>>::reference(rt, RefTarget::Shared(value), at)
+    }
+
+    fn returned(v: R::Value) {
+        drop(Uniform::<R, ()>::of_the_crossing(v));
     }
 
     fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l T
@@ -150,13 +150,15 @@ impl<R: Runtime, T: ?Sized + Referent> LoanForm<R> for LentMut<T> {
     where
         Self: 'l;
 
-    const LENT: Option<Mutability> = Some(Mutability::Exclusive);
-
     fn lend<'l>(value: &'l mut T, rt: &'l R, at: Settled<'l>) -> R::Value
     where
         Self: 'l,
     {
         <R::Ref as RefKind<R>>::reference(rt, RefTarget::Exclusive(value), at)
+    }
+
+    fn returned(v: R::Value) {
+        drop(Uniform::<R, ()>::of_the_crossing(v));
     }
 
     fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l mut T
@@ -178,14 +180,17 @@ pub trait CallArgs<R: Runtime>: Crossing {
     where
         Self: 'l;
 
-    /// The argument run of a returning call, one value per parameter.
+    /// A returning call: `call` made with the argument run, one value per
+    /// parameter, and what it leaves of each released once it has returned.
     #[doc(hidden)]
-    fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>
+    fn lend_call<'l>(
+        args: Self::Lent<'l>,
+        rt: &'l R,
+        at: Settled<'l>,
+        call: impl FnOnce(&[R::Value]) -> R::Value,
+    ) -> R::Value
     where
         Self: 'l;
-    /// How a returning call passes each value of its run.
-    #[doc(hidden)]
-    fn lent() -> impl ExactSizeIterator<Item = Option<Mutability>>;
 }
 
 /// A callback's parameters an awaited call is given: each a crossing type,
@@ -208,21 +213,23 @@ macro_rules! forms {
             where
                 Self: 'l;
 
-            fn lent() -> impl ExactSizeIterator<Item = Option<Mutability>> {
-                let lent: [Option<Mutability>; $n] = [$($f::LENT),*];
-                lent.into_iter()
-            }
-
             #[allow(unused_variables)]
-            fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>
+            fn lend_call<'l>(
+                args: Self::Lent<'l>,
+                rt: &'l R,
+                at: Settled<'l>,
+                call: impl FnOnce(&[R::Value]) -> R::Value,
+            ) -> R::Value
             where
                 Self: 'l,
             {
                 let ($($v,)*) = args;
                 let run: [R::Value; $n] = [$($f::lend($v, rt, at)),*];
-                run.into_iter()
+                let result = call(&run);
+                let [$($v),*] = run;
+                $($f::returned($v);)*
+                result
             }
-
         }
 
         impl<R: Runtime, $($f: Crosses<R> + LoanForm<R>),*> MovedArgs<R> for ($($f,)*) {
@@ -241,7 +248,7 @@ macro_rules! forms {
 forms! { 0 () }
 tuples!(forms);
 
-impl<'c, 'a, A, U, E, R> Callback<'c, 'a, A, U, E, R>
+impl<'c, A, U, E, R> Callback<'c, A, U, E, R>
 where
     A: CallArgs<R>,
     U: LoanForm<R>,
@@ -259,7 +266,7 @@ where
     }
 }
 
-impl<'c, 'a, A, U, E, R> Callback<'c, 'a, A, U, E, R>
+impl<'c, A, U, E, R> Callback<'c, A, U, E, R>
 where
     A: MovedArgs<R>,
     U: Crosses<R>,

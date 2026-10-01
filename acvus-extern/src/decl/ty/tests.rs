@@ -71,7 +71,7 @@ fn a_reference_is_a_ref_to_its_target() {
 #[test]
 fn a_callback_is_a_function_type_at_its_effect_variable() {
     assert_eq!(
-        decl::<Callback<'_, '_, (Lent<str>, i64), bool, EffectNth<2>, Stub>>(),
+        decl::<Callback<'_, (Lent<str>, i64), bool, EffectNth<2>, Stub>>(),
         DeclTy::Fn {
             params: vec![shared(DeclTy::Str), DeclTy::Int(IntTy::I64)],
             result: Box::new(DeclTy::Bool),
@@ -89,6 +89,6 @@ fn a_parameters_type_picks_its_mode() {
     mode_of::<&[Uniform<Stub, Nth<0>>], BySlice<Nth<0>>>(PhantomData);
     mode_of::<&mut [Uniform<Stub, u8>], BySliceMut<u8>>(PhantomData);
     mode_of::<&str, ByStr>(PhantomData);
-    mode_of::<Callback<'_, '_, (i64,), i64, EffectNth<0>, Stub>, ByCallback<(i64,), i64, EffectNth<0>>>(PhantomData);
+    mode_of::<Callback<'_, (i64,), i64, EffectNth<0>, Stub>, ByCallback<(i64,), i64, EffectNth<0>>>(PhantomData);
     assert_eq!(param::<&str>(), ParamDecl::Argument(shared(DeclTy::Str)));
 }

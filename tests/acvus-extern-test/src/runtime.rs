@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use acvus_extern::callback::{CallArgs, CallsBack, LoanForm, MovedArgs};
 use acvus_extern::{Settled, SiteShape};
-use acvus_extern::runtime::{Crosses, Mutability, Runtime};
+use acvus_extern::runtime::{Crosses, Runtime};
 use acvus_extern::register::{AwaitedFn, Declared, ExternFn, Refused, Registers};
 use acvus_utils::{Interner, QualifiedRef};
 
@@ -74,8 +74,7 @@ impl CallsBack for WordRuntime {
         A: CallArgs<Self> + 'l,
         U: LoanForm<Self> + 'l,
     {
-        let run = A::lend_run(args, self, at).map(Held::kept).collect();
-        let result = call_closure(self, closure, run, A::lent().collect(), at);
+        let result = A::lend_call(args, self, at, |run| call_closure(self, closure, run, at));
         U::read(result, self, at)
     }
 
@@ -90,42 +89,19 @@ impl CallsBack for WordRuntime {
         U: Crosses<Self>,
     {
         let run: Vec<Held> = A::move_run(args, self, at).map(Held::kept).collect();
-        let lent: Box<[Option<Mutability>]> = A::lent().collect();
         async move {
-            let result = call_closure(self, closure, run, lent, at);
+            let run: Vec<Word> = run.into_iter().map(Held::hand_over).collect();
+            let result = call_closure(self, closure, &run, at);
             U::take(self, result, at)
         }
     }
 }
 
-/// Calls the Rust function `closure` is with the argument run `run`, each
-/// passed as `lent` says, and gives its result. A value given is the callee's
-/// from here on; a reference value lent is the caller's, released after the
-/// call.
-fn call_closure<'a>(
-    rt: &'a WordRuntime,
-    closure: Word,
-    run: Vec<Held>,
-    lent: Box<[Option<Mutability>]>,
-    at: Settled<'a>,
-) -> Word {
-    let mut values = Vec::with_capacity(run.len());
-    let mut references = Vec::new();
-    for (held, passed) in run.into_iter().zip(&lent) {
-        match passed {
-            Some(_) => {
-                values.push(held.same());
-                references.push(held);
-            }
-            None => values.push(held.hand_over()),
-        }
-    }
-    let site = SiteShape::new(lent, Box::new([]));
-
-    let done = boundary::callee(closure, at).call(rt, &values, &site);
-
-    drop(references);
-    done.into_value()
+/// Calls the Rust function `closure` is with the argument run `run`, and
+/// gives its result.
+fn call_closure<'a>(rt: &'a WordRuntime, closure: Word, run: &[Word], at: Settled<'a>) -> Word {
+    let site = SiteShape::new(Box::new([]));
+    boundary::callee(closure, at).call(rt, run, &site).into_value()
 }
 
 

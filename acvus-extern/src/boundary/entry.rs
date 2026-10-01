@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 
 use crate::context::{Awaited, Returning};
 use crate::done::Done;
-use crate::runtime::{Mutability, Runtime};
+use crate::runtime::Runtime;
 
 /// Proof that a read or a result is the crossing's, at the type the checker
 /// settled for the site of the call `'c`. Only the entry, and what it opens,
@@ -23,17 +23,16 @@ impl Settled<'_> {
     }
 }
 
-/// One call site as the checker settled it: how each argument position is
-/// passed, and the impl values chosen for the handler's requirements, in the
-/// handler's order (impls §3). The runtime builds it once, at preparation.
+/// One call site as the checker settled it: the impl values chosen for the
+/// handler's requirements, in the handler's order (impls §3). The runtime
+/// builds it once, at preparation.
 pub struct SiteShape<R: Runtime> {
-    lent: Box<[Option<Mutability>]>,
     impls: Box<[R::Value]>,
 }
 
 impl<R: Runtime> SiteShape<R> {
-    pub fn new(lent: Box<[Option<Mutability>]>, impls: Box<[R::Value]>) -> Self {
-        SiteShape { lent, impls }
+    pub fn new(impls: Box<[R::Value]>) -> Self {
+        SiteShape { impls }
     }
 }
 
@@ -62,7 +61,7 @@ impl<'c, R: Runtime> Entry<'c, R> {
         Q: Requires<R> + 'c,
     {
         let at = Settled::of_the_entry();
-        let args = A::open(self.runtime, self.args, &self.site.lent, at);
+        let args = A::open(self.runtime, self.args, at);
         let requirements = Q::open(self.runtime, &self.site.impls, at);
         body(Returning::of_the_entry(self.runtime, self.site), args, requirements)
     }
@@ -80,7 +79,7 @@ impl<'c, R: Runtime> Entry<'c, R> {
         Fut: Future<Output = Done<R>> + Send + 'c,
     {
         let at = Settled::of_the_entry();
-        let args = A::open(self.runtime, self.args, &self.site.lent, at);
+        let args = A::open(self.runtime, self.args, at);
         let requirements = Q::open(self.runtime, &self.site.impls, at);
         body(Awaited::of_the_entry(self.runtime, self.site), args, requirements)
     }
@@ -93,10 +92,6 @@ pub trait Mode<R: Runtime>: Crossing {
     where
         Self: 'c,
         R: 'c;
-
-    /// How the checker passes the argument this mode opens.
-    #[doc(hidden)]
-    const LENT: Option<Mutability>;
 
     /// Whether the handler may call through the argument, which only an
     /// awaited body may (macros §1): a callback.
@@ -155,7 +150,6 @@ pub trait Args<R: Runtime>: Crossing {
     fn open<'c>(
         runtime: &'c R,
         args: &'c [R::Value],
-        lent: &[Option<Mutability>],
         at: Settled<'c>,
     ) -> Self::Opened<'c>
     where
@@ -230,14 +224,12 @@ macro_rules! pass {
 }
 
 macro_rules! modes {
-    ($r:ident; $([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, $calls:expr, $arg:ty, $passed:ident, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
+    ($r:ident; $([$($g:tt)*] $m:ty => $opened:ty, $calls:expr, $arg:ty, $passed:ident, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
         impl<$r: Runtime, $($g)*> Mode<$r> for $m {
             type Opened<'c> = $opened
             where
                 Self: 'c,
                 $r: 'c;
-
-            const LENT: Option<Mutability> = $lent;
 
             const CALLS: bool = $calls;
 
@@ -266,32 +258,25 @@ macro_rules! modes {
     )+};
 }
 
-const SHARED: Option<Mutability> = Some(Mutability::Shared);
-const EXCLUSIVE: Option<Mutability> = Some(Mutability::Exclusive);
-
 modes! {
     R;
-    [T: Crosses<R>] ByValue<T> => T, None, false, T, moved,
+    [T: Crosses<R>] ByValue<T> => T, false, T, moved,
         |runtime, v, at| T::take(runtime, *v, at);
-    [T: Crosses<R>] ByRef<T> => Guard<'c, T::Open<'c>>, SHARED, false, T::Open<'c>, viewed,
+    [T: Crosses<R>] ByRef<T> => Guard<'c, T::Open<'c>>, false, T::Open<'c>, viewed,
         |runtime, v, at| Guard::of_the_entry(T::open_ref(runtime, *v, at));
-    [T: Crosses<R>] ByMut<T> => GuardMut<'c, T::OpenMut<'c>>, EXCLUSIVE, false, T::OpenMut<'c>, viewed,
+    [T: Crosses<R>] ByMut<T> => GuardMut<'c, T::OpenMut<'c>>, false, T::OpenMut<'c>, viewed,
         |runtime, v, at| GuardMut::of_the_entry(T::open_ref_mut(runtime, *v, at));
-    [T] ByUniform<T> => Uniform<R, T>, None, false, Uniform<R, T>, moved,
+    [T] ByUniform<T> => Uniform<R, T>, false, Uniform<R, T>, moved,
         |_runtime, v, _at| Uniform::of_the_crossing(*v);
-    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED, false, &'c [Uniform<R, T>], viewed,
+    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, false, &'c [Uniform<R, T>], viewed,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
-    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, EXCLUSIVE, false, &'c mut [Uniform<R, T>], viewed,
+    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, false, &'c mut [Uniform<R, T>], viewed,
         |runtime, v, at| GuardMut::of_the_entry(<R::Ref as RefKind<R>>::target_mut(runtime, *v, at));
-    [] ByStr => Guard<'c, &'c str>, SHARED, false, &'c str, viewed,
+    [] ByStr => Guard<'c, &'c str>, false, &'c str, viewed,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
-    [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None, true, Callback<'c, 'c, A, U, E, R>, moved,
+    [A, U, E] ByCallback<A, U, E> => Callback<'c, A, U, E, R>, true, Callback<'c, A, U, E, R>, moved,
         |_runtime, v, _at| Callback::of_the_entry(*v);
 }
-
-
-
-
 
 impl<R: Instances, F: Family<Receiver = Steps>, I> RequirementMode<R> for ByInstance<F, I> {
     type Opened<'c> = Instance<R, F, I>
@@ -339,7 +324,6 @@ macro_rules! mode_tuples {
             fn open<'c>(
                 runtime: &'c R,
                 args: &'c [R::Value],
-                lent: &[Option<Mutability>],
                 at: Settled<'c>,
             ) -> Self::Opened<'c>
             where
@@ -347,8 +331,6 @@ macro_rules! mode_tuples {
                 R: 'c,
             {
                 let run: &'c Self::Run = args.try_into().expect("a call passes one value per parameter");
-                let modes: [Option<Mutability>; $n] = [$($m::LENT),*];
-                debug_assert_eq!(lent, modes, "the site passes each argument as its parameter's mode opens it");
                 let [$($v),*] = run;
                 ($($m::open(runtime, $v, at),)*)
             }
