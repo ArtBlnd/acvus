@@ -39,13 +39,13 @@ fn session<T: Var<kind::Type>, E: Var<kind::Effect>, I: Var<kind::Identity>>() -
 
 /// The parts of `text` between each `sep`, each held at its own type.
 #[extern_fn(effect = pure)]
-fn split<R: Runtime>(#[context] cx: &Executor<'_, R>, text: &str, sep: &str) -> Vec<Uniform<R, String>> {
+fn split<R: Runtime>(#[executor] cx: &Executor<'_, R>, text: &str, sep: &str) -> Vec<Uniform<R, String>> {
     text.split(sep).map(|part| Uniform::new(cx, String::from(part))).collect()
 }
 
 /// The part at `at` of a sequence `split` gave.
 #[extern_fn(effect = pure)]
-fn part<R: Runtime>(#[context] cx: &Executor<'_, R>, parts: &Vec<Uniform<R, String>>, at: u64) -> String {
+fn part<R: Runtime>(#[executor] cx: &Executor<'_, R>, parts: &Vec<Uniform<R, String>>, at: u64) -> String {
     parts[at as usize].open(cx).clone()
 }
 

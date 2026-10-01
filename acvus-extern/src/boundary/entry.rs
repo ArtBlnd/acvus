@@ -1,6 +1,6 @@
 //! The one door of one call (crossing §1): it reads every argument at the
 //! site's settled type, opens it by its mode, and hands the body its
-//! arguments and its context inside a closure (G1, G9, G10).
+//! arguments and its executor inside a closure (G1, G9, G10).
 
 use std::marker::PhantomData;
 

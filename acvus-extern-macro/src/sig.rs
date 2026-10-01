@@ -2,7 +2,7 @@
 //! parameters by kind, its parameters by role, and how its result is made.
 //! How a type crosses is never read here (macros §4); only where the
 //! signature's own syntax is the fact: which parameter is a capture or the
-//! context, which generic parameter is the runtime or a variable of which
+//! executor, which generic parameter is the runtime or a variable of which
 //! kind, and the lifetime names each end writes (`lifetimes`).
 
 use proc_macro2::Span;
@@ -49,9 +49,9 @@ pub enum Role {
     /// A capture the marker holds, lent to every call: `#[capture] name: &T`
     /// holds a `T`.
     Capture { held: Box<Type> },
-    /// The body's executor: `#[context] cx: &Executor<'_, R>`, for either
+    /// The body's executor: `#[executor] cx: &Executor<'_, R>`, for either
     /// body.
-    Context,
+    Executor,
 }
 
 pub struct Param {
@@ -296,8 +296,8 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
             }
             let which = if attr.path().is_ident("capture") {
                 Some("capture")
-            } else if attr.path().is_ident("context") {
-                Some("context")
+            } else if attr.path().is_ident("executor") {
+                Some("executor")
             } else {
                 None
             };
@@ -311,7 +311,7 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
         });
         if let Some((which, span, twice)) = marked {
             if twice {
-                return Err(syn::Error::new(span, "a parameter is a capture or the context, not both"));
+                return Err(syn::Error::new(span, "a parameter is a capture or the executor, not both"));
             }
             role = match which {
                 "capture" => {
@@ -325,18 +325,18 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
                     Statics.visit_type_mut(&mut held);
                     Role::Capture { held: Box::new(held) }
                 }
-                _ => Role::Context,
+                _ => Role::Executor,
             };
         }
         if let (Some(attr), false) = (place_facts.first(), matches!(role, Role::Argument)) {
-            return Err(syn::Error::new(attr.span(), "a fact of a place is of an argument's; a capture and the context are none"));
+            return Err(syn::Error::new(attr.span(), "a fact of a place is of an argument's; a capture and the executor are none"));
         }
         let place = facts::PlaceFacts::read(&place_facts)?;
         let names = lifetimes::param(&typed.ty, &mut elided);
         params.push(Param { name, ty: (*typed.ty).clone(), role, names, place });
     }
-    if params.iter().filter(|p| matches!(p.role, Role::Context)).count() > 1 {
-        return Err(syn::Error::new(sig.inputs.span(), "an extern fn takes its context once"));
+    if params.iter().filter(|p| matches!(p.role, Role::Executor)).count() > 1 {
+        return Err(syn::Error::new(sig.inputs.span(), "an extern fn takes its executor once"));
     }
     Ok(params)
 }

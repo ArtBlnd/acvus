@@ -8,7 +8,7 @@
 //! `len(..)` of an argument or of `result`, `old(..)` of an argument or of
 //! its `len(..)`, sums and differences, and a constant's multiples. An
 //! argument is named as the function names it, and numbered as a call's
-//! arguments are: a capture and the context are no argument.
+//! arguments are: a capture and the executor are no argument.
 //!
 //! A fact of a place is written on the argument whose storage it speaks of
 //! (rfc_extern macros §1): `#[touch(mode)]`, the mode `read`, `view`,
@@ -170,7 +170,7 @@ fn subject(term: &Expr, arguments: &[&Ident]) -> syn::Result<Option<Subject>> {
         (true, Some(_)) => Err(refused(term, "`result` names the result in a relation, and an argument of that name is ambiguous")),
         (true, None) => Ok(Some(Subject::Result)),
         (false, Some(at)) => Ok(Some(Subject::Arg(at))),
-        (false, None) => Err(refused(term, "a relation speaks of the call's arguments; a capture and the context are none")),
+        (false, None) => Err(refused(term, "a relation speaks of the call's arguments; a capture and the executor are none")),
     }
 }
 
@@ -461,7 +461,7 @@ fn number(name: &Ident, arguments: &[&Ident]) -> syn::Result<usize> {
     arguments
         .iter()
         .position(|argument| *argument == name)
-        .ok_or_else(|| refused(name, "a fact of a place names the call's arguments; a capture and the context are none"))
+        .ok_or_else(|| refused(name, "a fact of a place names the call's arguments; a capture and the executor are none"))
 }
 
 /// The place of the argument `param`, whole or the element written.

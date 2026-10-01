@@ -2,7 +2,7 @@
 
 use crate::runtime::Runtime;
 
-/// The result of one call: the runtime value its context made at the site's
+/// The result of one call: the runtime value its executor made at the site's
 /// settled result type, a borrowed result's of the reference values it is
 /// made of.
 pub struct Done<R: Runtime> {

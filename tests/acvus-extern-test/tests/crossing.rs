@@ -694,13 +694,13 @@ fn an_awaited_callback_takes_its_arguments_by_move() {
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
-/// The length of a `String` held by value, taken through the body's context.
+/// The length of a `String` held by value, taken through the body's executor.
 fn held_length<R: Runtime>(cx: &Executor<'_, R>, (held,): (Uniform<R, String>,)) -> i64 {
     held.into_inner(cx).len() as i64
 }
 
 #[test]
-fn a_function_body_reads_its_held_argument_through_its_context() {
+fn a_function_body_reads_its_held_argument_through_its_executor() {
     let runtime = WordRuntime::default();
     let mut frame = Frame::new(&runtime);
     let function = frame.function(dispatch::<(ByUniform<String>,), _>(held_length::<WordRuntime>));

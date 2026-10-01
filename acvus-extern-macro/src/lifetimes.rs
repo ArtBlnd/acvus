@@ -55,7 +55,7 @@ pub fn param(ty: &Type, elided: &mut Elided) -> Names {
 
 /// The names the result writes, each elided one the one lifetime the inputs
 /// name (`inputs`, every parameter's), as Rust elides it. The result names
-/// only what an argument (`arguments`) names: a capture and the context lend
+/// only what an argument (`arguments`) names: a capture and the executor lend
 /// it nothing.
 pub fn result(output: &ReturnType, inputs: &[&Names], arguments: &[&Names]) -> syn::Result<Names> {
     let ReturnType::Type(_, ty) = output else {
@@ -77,7 +77,7 @@ pub fn result(output: &ReturnType, inputs: &[&Names], arguments: &[&Names]) -> s
     if let Some(name) = result.all().find(|name| !lent.contains(name)) {
         return Err(syn::Error::new(
             ty.span(),
-            format!("the result borrows only what an argument lends; {name} is a capture's or the context's alone"),
+            format!("the result borrows only what an argument lends; {name} is a capture's or the executor's alone"),
         ));
     }
     Ok(result)

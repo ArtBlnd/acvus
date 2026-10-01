@@ -43,7 +43,7 @@ fn fail(message: &str) -> ! {
 }
 
 #[extern_fn(effect = pure)]
-fn first_positive<'a, R: Runtime>(#[context] cx: &Executor<'_, R>, xs: &'a [Uniform<R, i64>]) -> Option<&'a Uniform<R, i64>> {
+fn first_positive<'a, R: Runtime>(#[executor] cx: &Executor<'_, R>, xs: &'a [Uniform<R, i64>]) -> Option<&'a Uniform<R, i64>> {
     xs.iter().find(|x| x.get(cx) > 0)
 }
 
@@ -54,7 +54,7 @@ fn tagged(#[capture] tag: &String, text: &str) -> String {
 
 #[extern_fn(effect = E)]
 async fn apply<'f, R: CallsBack, E: Var<kind::Effect>>(
-    #[context] cx: &Executor<'_, R>,
+    #[executor] cx: &Executor<'_, R>,
     f: Uniform<R, Callable<'f, (i64,), i64, E>>,
     n: i64,
 ) -> i64 {
@@ -63,7 +63,7 @@ async fn apply<'f, R: CallsBack, E: Var<kind::Effect>>(
 
 #[extern_fn(effect = E, sync = twice_now)]
 async fn twice<'f, R: CallsBack, E: Var<kind::Effect>>(
-    #[context] cx: &Executor<'_, R>,
+    #[executor] cx: &Executor<'_, R>,
     f: &Uniform<R, Callable<'f, (i64,), i64, E>>,
     n: i64,
 ) -> i64 {
@@ -104,7 +104,7 @@ fn read<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
 }
 
 #[test]
-fn a_callback_and_the_context_are_passed() {
+fn a_callback_and_the_executor_are_passed() {
     let runtime = WordRuntime::default();
     let mut frame = Frame::new(&runtime);
     let double = frame.function(Doubled);
@@ -226,7 +226,7 @@ fn a_generic_declaration_is_at_its_parameters() {
 }
 
 #[test]
-fn captures_and_the_context_are_no_parameters() {
+fn captures_and_the_executor_are_no_parameters() {
     let (names, tagged) = declaration_of(tagged::with(String::new()));
     assert_eq!(tagged.params, [(names.intern("text"), shared(DeclTy::Str))]);
 
@@ -324,7 +324,7 @@ fn cursor<'a, R: Runtime>(over: Loaned<'a, Pair, R>) -> Cursor<'a, R> {
 /// The name of the pair a cursor keeps a loan on, read through the loan
 /// within this call.
 #[extern_fn(effect = pure)]
-fn name_under<'a, R: Runtime>(#[context] cx: &Executor<'a, R>, c: &Cursor<'a, R>) -> String {
+fn name_under<'a, R: Runtime>(#[executor] cx: &Executor<'a, R>, c: &Cursor<'a, R>) -> String {
     c.over.open(cx).name.clone()
 }
 
@@ -365,7 +365,7 @@ fn both<'a, 'b>(a: &'a str, b: &'b str) -> (&'a str, &'b str) {
 /// The name of the pair a cursor keeps a loan on, borrowed through that loan:
 /// the result holds the cursor's loan, not the borrow of the cursor.
 #[extern_fn(effect = pure)]
-fn name_through<'a, R: Runtime>(#[context] cx: &Executor<'a, R>, c: &Cursor<'a, R>) -> &'a str {
+fn name_through<'a, R: Runtime>(#[executor] cx: &Executor<'a, R>, c: &Cursor<'a, R>) -> &'a str {
     c.over.open(cx).name.as_str()
 }
 

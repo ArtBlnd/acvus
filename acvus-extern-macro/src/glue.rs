@@ -237,7 +237,7 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
             let name = &p.name;
             match &p.role {
                 Role::Capture { .. } => quote!(&self.#name),
-                Role::Context => quote!(__context),
+                Role::Executor => quote!(__executor),
                 Role::Argument => {
                     let a = format_ident!("__a{}", i);
                     quote!(#a)
@@ -247,8 +247,8 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
         .collect();
     // The executor the body is given, where it takes one, borrowed from the
     // body's own.
-    let takes_context = sig.params.iter().any(|p| matches!(p.role, Role::Context));
-    let context = takes_context.then(|| quote!(let __context = &__cx;));
+    let takes_executor = sig.params.iter().any(|p| matches!(p.role, Role::Executor));
+    let executor = takes_executor.then(|| quote!(let __executor = &__cx;));
     let type_args = sig.type_args(runtime);
     let function = &sig.ident;
     let call_of = |body: TokenStream| quote!(#body #type_args(#(#call_args),*));
@@ -264,16 +264,16 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
     let returning = |call: TokenStream| {
         let finish = match sig.output {
             Output::Borrowed => quote! {
-                #context
+                #executor
                 let __result = #call;
                 __cx.finish_borrowed(__result)
             },
             Output::Never => quote! {
-                #context
+                #executor
                 match #call {}
             },
             Output::Value => quote! {
-                #context
+                #executor
                 let __result = #call;
                 __cx.finish(__result)
             },
@@ -300,11 +300,11 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
     let call = call_of(quote!(#function));
     let awaited_finish = match sig.output {
         Output::Never => quote! {
-            #context
+            #executor
             match #call.await {}
         },
         Output::Value | Output::Borrowed => quote! {
-            #context
+            #executor
             let __result = #call.await;
             __cx.finish(__result)
         },
