@@ -167,7 +167,8 @@ fn shared(target: DeclTy) -> DeclTy {
 fn a_declaration_is_read_off_the_signature() {
     let (names, add) = declaration_of(add::new());
 
-    assert_eq!(add.path, acvus_extern::decl::path(&names, "extern_fn", "add"));
+    let module = names.namespace(&[names.intern("extern_fn")]);
+    assert_eq!(add.path, acvus_utils::QualifiedRef::qualified(module, names.intern("add")));
     assert_eq!(
         add.params,
         [(names.intern("a"), DeclTy::Int(IntTy::U64)), (names.intern("b"), DeclTy::Int(IntTy::U64))]

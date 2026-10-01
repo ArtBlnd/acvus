@@ -110,19 +110,15 @@ pub trait Mode<R: Runtime>: Crossing {
         R: 'c;
 
     /// The Rust argument the handler's parameter takes, borrowed for `'h`.
-    type Arg<'h, 'c>
+    type Arg<'c>
     where
-        'c: 'h,
         Self: 'c,
         R: 'c;
 
     /// The handler's argument made from what the entry opened: a value moved
-    /// on, or a lent one kept in `keep` for the call and borrowed from it.
-    /// The glue holds one `keep` per parameter, so a synchronous and an
-    /// awaited body pass arguments alike.
-    fn arg<'h, 'c>(opened: Self::Opened<'c>, keep: &'h mut Option<Self::Opened<'c>>) -> Self::Arg<'h, 'c>
+    /// on, or the projection a guard holds moved out of it.
+    fn arg<'c>(opened: Self::Opened<'c>) -> Self::Arg<'c>
     where
-        'c: 'h,
         Self: 'c,
         R: 'c;
 }
@@ -222,20 +218,15 @@ use crate::impls::{Family, Instances};
 use crate::boundary::seal::Crossing;
 use crate::runtime::{Crosses, RefKind};
 
-/// How a mode's opened value becomes the handler's argument: moved on, the
-/// view a guard holds moved out of it, or a pointer guard kept for the call
-/// and its target borrowed.
+/// How a mode's opened value becomes the handler's argument: moved on, or the
+/// projection a guard holds moved out of it.
 macro_rules! pass {
-    (moved, $opened:ident, $keep:ident) => {{
-        let _ = $keep;
+    (moved, $opened:ident) => {
         $opened
-    }};
-    (viewed, $opened:ident, $keep:ident) => {{
-        let _ = $keep;
+    };
+    (viewed, $opened:ident) => {
         $opened.into_inner()
-    }};
-    (kept, $opened:ident, $keep:ident) => { &**$keep.insert($opened) };
-    (kept_mut, $opened:ident, $keep:ident) => { &mut **$keep.insert($opened) };
+    };
 }
 
 macro_rules! modes {
@@ -258,20 +249,18 @@ macro_rules! modes {
                 $open
             }
 
-            type Arg<'h, 'c>
+            type Arg<'c>
                 = $arg
             where
-                'c: 'h,
                 Self: 'c,
                 $r: 'c;
 
-            fn arg<'h, 'c>(opened: Self::Opened<'c>, keep: &'h mut Option<Self::Opened<'c>>) -> Self::Arg<'h, 'c>
+            fn arg<'c>(opened: Self::Opened<'c>) -> Self::Arg<'c>
             where
-                'c: 'h,
                 Self: 'c,
                 $r: 'c,
             {
-                pass!($passed, opened, keep)
+                pass!($passed, opened)
             }
         }
     )+};
@@ -290,11 +279,11 @@ modes! {
         |runtime, v, at| GuardMut::of_the_entry(T::open_ref_mut(runtime, *v, at));
     [T] ByUniform<T> => Uniform<R, T>, None, false, Uniform<R, T>, moved,
         |_runtime, v, _at| Uniform::of_the_crossing(*v);
-    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED, false, &'h [Uniform<R, T>], kept,
+    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED, false, &'c [Uniform<R, T>], viewed,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
-    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, EXCLUSIVE, false, &'h mut [Uniform<R, T>], kept_mut,
+    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, EXCLUSIVE, false, &'c mut [Uniform<R, T>], viewed,
         |runtime, v, at| GuardMut::of_the_entry(<R::Ref as RefKind<R>>::target_mut(runtime, *v, at));
-    [] ByStr => Guard<'c, &'c str>, SHARED, false, &'h str, kept,
+    [] ByStr => Guard<'c, &'c str>, SHARED, false, &'c str, viewed,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
     [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None, true, Callback<'c, 'c, A, U, E, R>, moved,
         |_runtime, v, _at| Callback::of_the_entry(*v);

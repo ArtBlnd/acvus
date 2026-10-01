@@ -843,7 +843,14 @@ macro_rules! opaque {
         impl acvus_extern::decl::DeclType for $t {
             fn decl_ty(cx: &mut acvus_extern::decl::DeclCx<'_>) -> acvus_extern::decl::DeclTy {
                 acvus_extern::decl::DeclTy::Extern {
-                    name: acvus_extern::decl::path(cx.names, ::core::module_path!(), stringify!($t)),
+                    name: {
+                        let module: Vec<_> =
+                            ::core::module_path!().split("::").map(|segment| cx.names.intern(segment)).collect();
+                        acvus_extern::decl::QualifiedRef::qualified(
+                            cx.names.namespace(&module),
+                            cx.names.intern(stringify!($t)),
+                        )
+                    },
                     args: Vec::new(),
                     effect: None,
                     identity: None,

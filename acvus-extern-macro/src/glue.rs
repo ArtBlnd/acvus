@@ -80,19 +80,32 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
 
 fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let name = attr.name.clone().unwrap_or_else(|| LitStr::new(&marker.to_string(), marker.span()));
-    // A call whose effect is an effect variable's states nothing of its own:
-    // its effect is the work it runs, which every effect variable is taken to
-    // be (`decl::declaration`).
+    // The call's own effect. Unstated, it is opaque, the effect that is
+    // always sound; a call whose effect is an effect variable's states
+    // nothing of its own beyond the work it runs (compiler: extern fn §2).
     let effect = match attr.effect.clone().unwrap_or(Effect::Opaque) {
-        Effect::Pure | Effect::Var(_) => quote!(Pure),
-        Effect::Idempotent => quote!(Idempotent),
-        Effect::Opaque => quote!(Opaque),
+        Effect::Pure | Effect::Var(_) => quote!(::acvus_extern::decl::Effect::pure()),
+        Effect::Opaque => quote!(::acvus_extern::decl::Effect::opaque()),
+        Effect::Idempotent => quote! {
+            ::acvus_extern::decl::Effect::new(
+                ::acvus_extern::decl::Reissue::Idempotent,
+                false,
+                ::acvus_extern::decl::Contexts::new(),
+                ::acvus_extern::decl::Contexts::new(),
+                ::acvus_extern::decl::SplitCost::Unavailable,
+            )
+        },
     };
     let [types, effects, identities] = sig.counts;
+    let types = types as usize;
     let params = sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| {
         let name = LitStr::new(&p.name.to_string(), p.name.span());
         let ty = sig.at_stand_ins(&p.ty, runtime);
-        quote!((#name, <#ty as ::acvus_extern::decl::ParamMode>::decl(&mut __cx)))
+        quote! {{
+            let ::acvus_extern::decl::ParamDecl::Argument(ty) =
+                <#ty as ::acvus_extern::decl::ParamMode>::decl(&mut __cx);
+            (names.intern(#name), ty)
+        }}
     });
     let result = match &sig.output {
         Output::Never => quote!(::acvus_extern::decl::DeclTy::Never),
@@ -103,22 +116,33 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     };
     quote! {
         impl<#runtime: ::acvus_extern::runtime::Runtime> ::acvus_extern::register::Declared<#runtime> for #marker {
+            /// The function's Rust module path and its name (macros §1).
             fn path(&self, names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::QualifiedRef {
-                ::acvus_extern::decl::path(names, ::core::module_path!(), #name)
+                let module: ::std::vec::Vec<_> =
+                    ::core::module_path!().split("::").map(|segment| names.intern(segment)).collect();
+                ::acvus_extern::decl::QualifiedRef::qualified(names.namespace(&module), names.intern(#name))
             }
 
             fn declaration(&self, names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::Declaration {
                 let mut __cx = ::acvus_extern::decl::DeclCx { names };
-                let params = ::std::vec![#(#params),*];
-                let result = #result;
-                ::acvus_extern::decl::declaration(
-                    names,
-                    <Self as ::acvus_extern::register::Declared<#runtime>>::path(self, names),
-                    [#types, #effects, #identities],
-                    params,
-                    result,
-                    ::acvus_extern::decl::Stated::#effect,
-                )
+                ::acvus_extern::decl::Declaration {
+                    path: <Self as ::acvus_extern::register::Declared<#runtime>>::path(self, names),
+                    binders: ::acvus_extern::decl::Binders {
+                        types: ::std::vec![::acvus_extern::decl::TyVarBound::Any; #types],
+                        effects: #effects,
+                        identities: #identities,
+                    },
+                    params: ::std::vec![#(#params),*],
+                    result: #result,
+                    effect: #effect,
+                    // Every effect variable is taken to be run by the call,
+                    // the bound that is always sound: a call may run each
+                    // closure it is given.
+                    runs: (0..#effects).collect(),
+                    facts: ::acvus_extern::decl::DeclaredFacts::default(),
+                    requires: ::std::vec::Vec::new(),
+                    role: ::acvus_extern::decl::Role::Function,
+                }
             }
         }
     }
@@ -142,17 +166,15 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         Output::Value | Output::Never => None,
     };
 
-    // Each argument but the lent one is made by its mode, kept where lent, in
-    // the order the parameters are written.
+    // Each argument but the lent one is made by its mode, in the order the
+    // parameters are written.
     let mut made = Vec::new();
     for ((i, a, _), mode) in arguments.iter().zip(&modes) {
         if Some(*i) == lent {
             continue;
         }
-        let keep = format_ident!("__k{}", i);
         made.push(quote! {
-            let mut #keep = ::core::option::Option::None;
-            let #a = <#mode as ::acvus_extern::Mode<#runtime>>::arg(#a, &mut #keep);
+            let #a = <#mode as ::acvus_extern::Mode<#runtime>>::arg(#a);
         });
     }
     let call_args = sig.params.iter().enumerate().map(|(i, p)| {
