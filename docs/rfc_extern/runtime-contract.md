@@ -6,7 +6,9 @@ The runtime contract is the seam between extern fns and whatever runs them. Ever
 
 A value's representation is not part of the contract. The contract holds whatever a runtime's value is, a trivial enum of any size included. The extern side reaches values only through the contract's operations, generic over the runtime and dispatched statically, so a runtime pays nothing for the generality.
 
-**Nothing anywhere makes a runtime value from a Rust value.** No function, trait or conversion turns a `T` into a `Value`. A value of the runtime exists only where the crossing made it, at the type the checker settled for that site. The reason is variance: a path from `T` to `Value` makes `fn(Value)` usable as `fn(T)`, and a function parameter is contravariant, so a function written for one type would be called with a value made from another. That is undefined behaviour, and no bound or `unsafe` marker on the path prevents it; the path does not exist.
+**Nothing anywhere erases a Rust value into a runtime value.** No function, trait or conversion turns a `T` into a `Value`. A value of the runtime exists only where a crossing made it: at the type the checker settled for a site, or held at its own type. The reason is variance: a path from `T` to `Value` makes `fn(Value)` usable as `fn(T)`, and a function parameter is contravariant, so a function written for one type would be called with a value made from another. That is undefined behaviour, and no bound or `unsafe` marker on the path prevents it; the path does not exist.
+
+A Rust value of a type that crosses may be held, within a call, in the owning holder indexed by its own type: its type's crossing makes the runtime's value of it, and the holder keeps the type. The value is read and given only at that type, and leaves where a declaration states that type, so it is never erased. A type variable's index is no type that crosses, so no Rust value is held at one.
 
 The runtime's value crosses to the extern side as the extern side's own owning holder. A runtime keeps an extern-defined value so that it can lend one: what `&S` points at is the runtime's, and the contract says only that it is a shared reference to an `S`.
 
@@ -20,7 +22,7 @@ An extern-defined generic type is stored as one Rust value. Where a type argumen
 
 ## 2. Operations
 
-- **Typed reads.** Reading a value back at a type is the runtime's operation, and so are its reads at a stored form and its guards. Erasing a Rust value into a runtime value happens only inside the crossing, at the site's settled type (§1).
+- **Typed reads.** Reading a value back at a type is the runtime's operation, and so are its reads at a stored form and its guards. A Rust value becomes a runtime value only inside a crossing, at the site's settled type or held at its own (§1).
 - **Guards.** A shared guard, an exclusive guard, and a taken value. The extern side is lent storage only under a guard.
 - **The entry.** Each call has one entry, which the runtime's boundary calls with the call's values (crossing §1).
 - **Views.** A script array's slice view, shared or mutable, is a contract operation.

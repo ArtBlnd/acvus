@@ -58,6 +58,26 @@ impl<R: Runtime, X> Uniform<R, X> {
 }
 
 impl<R: Runtime, T: Crosses<R>> Uniform<R, T> {
+    /// `value` held at its own type, within the call `cx` belongs to: its
+    /// crossing makes the runtime's value of it, and the holder keeps `T`,
+    /// so it is read and given only at `T` and never erased (runtime contract
+    /// §1). A type variable's index crosses at no type, so no Rust value is
+    /// held at one:
+    ///
+    /// ```compile_fail,E0277
+    /// use acvus_extern::Uniform;
+    /// use acvus_extern::context::Returning;
+    /// use acvus_extern::decl::Nth;
+    /// use acvus_extern::runtime::Runtime;
+    ///
+    /// fn erase<R: Runtime>(cx: &Returning<'_, R>) -> Uniform<R, Nth<0>> {
+    ///     Uniform::new(cx, Nth::<0>)
+    /// }
+    /// ```
+    pub fn new<'c>(cx: &'c impl Opens<'c, R>, value: T) -> Self {
+        Uniform::of_the_crossing(value.give(cx.runtime(), Settled::of_the_entry()))
+    }
+
     /// Lends the value in place within the call `cx` belongs to, as `T`'s
     /// view.
     pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> T::Open<'c> {

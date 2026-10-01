@@ -2,9 +2,9 @@
 
 What an extern fn cannot do, and what it cannot rely on.
 
-## 0. No value from a Rust value
+## 0. No erased value from a Rust value
 
-An extern fn cannot make a runtime value from a Rust value. No such path exists anywhere (runtime contract §1).
+An extern fn cannot erase a Rust value into a runtime value. No such path exists anywhere (runtime contract §1). It may hold a Rust value of a type that crosses at that type, and the value stays of it.
 
 ## 1. Types
 

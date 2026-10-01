@@ -205,6 +205,37 @@ fn a_held_value_is_read_and_written_in_place() {
 }
 
 #[test]
+fn a_rust_value_held_at_its_type_leaves_at_it() {
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+
+    let held = frame.call([], |entry| {
+        entry.open::<(), ()>(|cx, (), ()| {
+            let held = Uniform::new(&cx, String::from("held"));
+            cx.finish(Some(held))
+        })
+    });
+
+    assert_eq!(read::<Option<String>>(&mut frame, held), Some(String::from("held")));
+}
+
+#[test]
+fn a_rust_value_held_and_dropped_is_released_once() {
+    let runtime = WordRuntime::default();
+    let (value, drops) = tally();
+    let mut frame = Frame::new(&runtime);
+
+    frame.call([], |entry| {
+        entry.open::<(), ()>(|cx, (), ()| {
+            drop(Uniform::new(&cx, value));
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn a_held_primitive_is_read_and_written_by_a_copy() {
     let runtime = WordRuntime::default();
     let mut frame = Frame::new(&runtime);

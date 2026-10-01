@@ -3,7 +3,8 @@
 //!
 //! No operation here takes a Rust value and returns a runtime value, or reads a
 //! runtime value, except under a `Settled`, which only an entry makes: a value
-//! is made and read only by the crossing, at the type the checker settled.
+//! is made and read only by a crossing, at the type the checker settled or
+//! held at its own type (`Uniform::new`), never erased.
 //!
 //! The runtime makes, takes and lends values by kind
 //! (`OpaqueKind`, `PrimitiveKind`, `StringKind`, `OptionKind`, `ResultKind`,
