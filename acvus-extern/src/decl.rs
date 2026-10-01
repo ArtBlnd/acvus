@@ -9,6 +9,7 @@
 //! stand-ins: `Nth<N>` for the N-th type parameter, `EffectNth<N>` and
 //! `IdentityNth<N>`.
 
+pub mod poly;
 pub mod ty;
 
 use acvus_mir::decl::NamedFact;

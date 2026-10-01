@@ -2,7 +2,6 @@
 //! label, and what a call of it lays over its concrete positions
 //! (`call_flows`).
 
-use super::Declarations;
 use crate::ty::{LifetimesOf, Poly, TyId, TyKind, Types};
 
 /// One segment of a declared type, in the order `segments` reads them
@@ -35,17 +34,17 @@ impl Segment {
 ///
 /// # Panics
 /// `ty` holds a `Handle` or an `Order`, which no declaration writes.
-pub fn segments(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>) -> Vec<Segment> {
+pub fn segments(poly: &Types<Poly>, lifetimes: &impl LifetimesOf, ty: TyId<Poly>) -> Vec<Segment> {
     let mut out = Vec::new();
-    push_segments(poly, decls, ty, &mut out);
+    push_segments(poly, lifetimes, ty, &mut out);
     out
 }
 
-fn push_segments(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>, out: &mut Vec<Segment>) {
-    acvus_utils::grow(|| push_segments_level(poly, decls, ty, out))
+fn push_segments(poly: &Types<Poly>, lifetimes: &impl LifetimesOf, ty: TyId<Poly>, out: &mut Vec<Segment>) {
+    acvus_utils::grow(|| push_segments_level(poly, lifetimes, ty, out))
 }
 
-fn push_segments_level(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>, out: &mut Vec<Segment>) {
+fn push_segments_level(poly: &Types<Poly>, lifetimes: &impl LifetimesOf, ty: TyId<Poly>, out: &mut Vec<Segment>) {
     match poly.kind(ty) {
         TyKind::Int(_)
         | TyKind::Float
@@ -60,34 +59,34 @@ fn push_segments_level(poly: &Types<Poly>, decls: &Declarations, ty: TyId<Poly>,
         TyKind::Var(var) => out.push(Segment::TypeVar(*var)),
         TyKind::Ref(_, target) => {
             out.push(Segment::Reference);
-            push_segments(poly, decls, *target, out);
+            push_segments(poly, lifetimes, *target, out);
         }
         TyKind::UserDefined { id, type_args, .. } => {
-            out.extend(std::iter::repeat_n(Segment::Lifetime, decls.lifetimes_of(*id)));
+            out.extend(std::iter::repeat_n(Segment::Lifetime, lifetimes.lifetimes_of(*id)));
             for arg in type_args {
-                push_segments(poly, decls, *arg, out);
+                push_segments(poly, lifetimes, *arg, out);
             }
         }
         TyKind::Array(element, _, _) | TyKind::Slice(element) | TyKind::Option(element, _) => {
-            push_segments(poly, decls, *element, out)
+            push_segments(poly, lifetimes, *element, out)
         }
         TyKind::Result(ok, err, _) => {
-            push_segments(poly, decls, *ok, out);
-            push_segments(poly, decls, *err, out);
+            push_segments(poly, lifetimes, *ok, out);
+            push_segments(poly, lifetimes, *err, out);
         }
         TyKind::Tuple(items, _) => {
             for item in items {
-                push_segments(poly, decls, *item, out);
+                push_segments(poly, lifetimes, *item, out);
             }
         }
         TyKind::Object { fields, .. } => {
             for (_, field) in fields {
-                push_segments(poly, decls, *field, out);
+                push_segments(poly, lifetimes, *field, out);
             }
         }
         TyKind::Enum { variants, .. } => {
             for payload in variants.iter().filter_map(|(_, payload)| *payload) {
-                push_segments(poly, decls, payload, out);
+                push_segments(poly, lifetimes, payload, out);
             }
         }
     }
