@@ -309,6 +309,69 @@ fn a_kept_loan_is_the_results_and_the_arguments_one_label() {
     assert_eq!(result, over);
 }
 
+/// A result borrowing from two arguments, each part the loan its lifetime
+/// names.
+#[extern_fn(effect = pure)]
+fn both<'a, 'b>(a: &'a str, b: &'b str) -> (&'a str, &'b str) {
+    (a, b)
+}
+
+/// The name of the pair a cursor keeps a loan on, borrowed through that loan:
+/// the result holds the cursor's loan, not the borrow of the cursor.
+#[extern_fn(effect = pure)]
+fn name_through<'a, R: Runtime>(#[context] cx: &Returning<'a, R>, c: &Cursor<'a, R>) -> &'a str {
+    c.over.open(cx).name.as_str()
+}
+
+#[test]
+fn a_result_borrows_from_each_argument_its_lifetimes_name() {
+    let (_, both) = declaration_of(both::new());
+    let a = labels(&both, FlowEnd::Param(0));
+    let b = labels(&both, FlowEnd::Param(1));
+    assert_eq!(labels(&both, FlowEnd::Result), [a[0], b[0]]);
+
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let left = produce(&mut frame, String::from("left"));
+    let right = produce(&mut frame, String::from("right"));
+    let pick = frame.function(both::new());
+
+    let pair = frame.call_function(pick, [Pass::Lend(left), Pass::Lend(right)]);
+
+    assert_eq!(frame.pair_referents::<str>(pair), (String::from("left"), String::from("right")));
+}
+
+#[test]
+fn a_result_borrows_through_a_kept_loan() {
+    let (_, through) = declaration_of(name_through::new());
+    let cursor = labels(&through, FlowEnd::Param(0));
+    assert_eq!(labels(&through, FlowEnd::Result), [cursor[1]]);
+    assert_ne!(cursor[0], cursor[1]);
+
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let held = produce(&mut frame, pair("held"));
+    let make = frame.function(cursor::new());
+    let name = frame.function(name_through::new());
+
+    let kept = frame.call_function(make, [Pass::Lend(held)]);
+    let named = frame.call_function(name, [Pass::Lend(kept)]);
+
+    assert_eq!(read_text(&mut frame, named), "held");
+}
+
+/// The text a reference value names, read by a call that takes `&str`.
+fn read_text(frame: &mut Frame<'_>, variable: usize) -> String {
+    let mut read = None;
+    frame.call([Pass::Same(variable)], |entry| {
+        entry.open::<(acvus_extern::mode::ByStr,), ()>(|cx, (text,), ()| {
+            read = Some(String::from(&*text));
+            cx.finish(())
+        })
+    });
+    read.expect("the call ran")
+}
+
 #[test]
 fn a_call_that_never_returns_declares_no_value() {
     let (_, fail) = declaration_of(fail::new());

@@ -2,12 +2,9 @@
 //! how it finishes. A returning body calls callbacks and impls returning; an
 //! awaited body calls them either way.
 
-use std::ops::{Deref, DerefMut};
-
 use crate::boundary::entry::Settled;
 use crate::done::Done;
-use crate::guard::{Guard, GuardMut};
-use crate::borrowed::{Made, Sink};
+use crate::borrowed::{Borrows, Sink};
 use crate::boundary::seal::Crossing;
 use crate::runtime::{Crosses, Runtime};
 
@@ -50,38 +47,16 @@ impl<'c, R: Runtime> Returning<'c, R> {
         Done::of(value.give(self.runtime, Settled::of_the_entry()))
     }
 
-    /// Finishes the call with a result borrowing parts of what the call lent
-    /// through `guard`: `part`, given the context, reads the guard's target
-    /// and makes the result through the `Sink`, each reference a reference
-    /// value made while the guard still lends it (`borrowed`).
-    pub fn finish_borrowed<G>(
-        self,
-        guard: Guard<'c, G>,
-        part: impl for<'s> FnOnce(&'s Self, &'s G::Target, Sink<'s, R>) -> Made<'s, R>,
-    ) -> Done<R>
+    /// Finishes the call with a result that borrows: each reference in it a
+    /// reference value made from it, at a lifetime within this call (runtime
+    /// contract §2, References). Which loan each holds, an argument's lent in
+    /// place or one a carrier holds, the declaration's lifetimes say.
+    pub fn finish_borrowed<'s>(self, result: impl Borrows<'s, R>) -> Done<R>
     where
-        G: Deref,
+        'c: 's,
     {
         let sink = Sink::of_the_finish(self.runtime, Settled::of_the_entry());
-        let value = part(&self, &*guard, sink).into_value();
-        drop(guard);
-        Done::of(value)
-    }
-
-    /// As `finish_borrowed`, through an exclusive guard.
-    pub fn finish_borrowed_mut<G>(
-        self,
-        guard: GuardMut<'c, G>,
-        part: impl for<'s> FnOnce(&'s Self, &'s mut G::Target, Sink<'s, R>) -> Made<'s, R>,
-    ) -> Done<R>
-    where
-        G: DerefMut,
-    {
-        let mut guard = guard;
-        let sink = Sink::of_the_finish(self.runtime, Settled::of_the_entry());
-        let value = part(&self, &mut *guard, sink).into_value();
-        drop(guard);
-        Done::of(value)
+        Done::of(result.made(&sink).into_value())
     }
 }
 

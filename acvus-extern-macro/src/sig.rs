@@ -5,8 +5,6 @@
 //! context, which generic parameter is the runtime or a variable of which
 //! kind, and the lifetime names each end writes (`lifetimes`).
 
-use std::collections::BTreeSet;
-
 use proc_macro2::Span;
 use quote::quote;
 use syn::spanned::Spanned;
@@ -67,9 +65,9 @@ pub struct Param {
 pub enum Output {
     /// A value that crosses: the result as written.
     Value,
-    /// A value whose every leaf is a reference to a part of what the argument
-    /// at `from` lent, shared or exclusively as `mutable` says (crossing §4).
-    Borrowed { from: usize, mutable: bool },
+    /// A value whose every leaf is a reference, each holding a loan the result's
+    /// lifetimes name (runtime contract §2, References).
+    Borrowed,
     /// No value: the call never returns.
     Never,
 }
@@ -105,13 +103,13 @@ impl Sig {
             params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.names).collect();
         let result_names = lifetimes::result(&sig.output, &inputs, &arguments)?;
         let written = lifetimes::written(sig);
-        let output = output(&sig.output, &params, &result_names)?;
+        let output = output(&sig.output);
         let written_output = match &sig.output {
             ReturnType::Type(_, ty) => (**ty).clone(),
             ReturnType::Default => syn::parse_quote!(()),
         };
         let awaited = sig.asyncness.is_some();
-        if awaited && matches!(output, Output::Borrowed { .. }) {
+        if awaited && matches!(output, Output::Borrowed) {
             return Err(syn::Error::new(
                 sig.output.span(),
                 "an awaited body's result borrows nothing: it moves its arguments (crossing §3-§4)",
@@ -329,41 +327,31 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
     Ok(params)
 }
 
-fn output(output: &ReturnType, params: &[Param], result: &Names) -> syn::Result<Output> {
+fn output(output: &ReturnType) -> Output {
     let ReturnType::Type(_, ty) = output else {
-        return Ok(Output::Value);
+        return Output::Value;
     };
     if let Type::Never(_) = &**ty {
-        return Ok(Output::Never);
+        return Output::Never;
     }
-    let named: BTreeSet<&String> = result.all().collect();
-    if named.is_empty() {
-        return Ok(Output::Value);
+    match holds_reference(ty) {
+        true => Output::Borrowed,
+        false => Output::Value,
     }
-    let refused = || {
-        syn::Error::new(
-            ty.span(),
-            "a result that borrows borrows only from the one lent parameter its lifetime names, \
-             every reference in it at that lifetime (crossing §4)",
-        )
-    };
-    // A result borrows what a lent argument's guard lends where it names the
-    // lifetime that argument's `&` is written at. Naming only what a carrier
-    // holds, it is a value, its loans the declaration's flows.
-    let lenders: Vec<(usize, &Param)> = params
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| matches!(p.role, Role::Argument))
-        .filter(|(_, p)| p.names.outer.as_ref().is_some_and(|outer| named.contains(outer)))
-        .collect();
-    if lenders.is_empty() {
-        return Ok(Output::Value);
+}
+
+/// Whether `ty` holds a reference, a leaf the finish makes a reference value
+/// of. A result holding what a carrier holds and no reference is a value.
+fn holds_reference(ty: &Type) -> bool {
+    struct Finds(bool);
+    impl<'a> syn::visit::Visit<'a> for Finds {
+        fn visit_type_reference(&mut self, _: &'a TypeReference) {
+            self.0 = true;
+        }
     }
-    let ([(from, lender)], 1) = (lenders.as_slice(), named.len()) else {
-        return Err(refused());
-    };
-    let mutable = matches!(&lender.ty, Type::Reference(reference) if reference.mutability.is_some());
-    Ok(Output::Borrowed { from: *from, mutable })
+    let mut finds = Finds(false);
+    syn::visit::Visit::visit_type(&mut finds, ty);
+    finds.0
 }
 
 /// The runtime named `runtime`, each variable its stand-in, each lifetime

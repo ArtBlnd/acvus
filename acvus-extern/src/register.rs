@@ -58,13 +58,6 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// fn f(#[capture] tag: String, a: i64) -> i64 { a }
 /// ```
 ///
-/// A result that borrows from more than one lent parameter:
-///
-/// ```compile_fail
-/// #[acvus_extern::extern_fn]
-/// fn f<'a, 'b>(a: &'a str, b: &'b str) -> (&'a str, &'b str) { (a, b) }
-/// ```
-///
 /// An effect that is neither a level nor one of the function's effect
 /// variables:
 ///

@@ -326,7 +326,7 @@ fn a_borrowed_result_names_the_whole_lent_value() {
     let variable = produce(&mut frame, pair("whole"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(lent, |_, p: &Pair, sink| sink.lent(p)))
+        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(&*lent))
     });
 
     assert_eq!(read_name(&mut frame, Pass::Same(borrowed)), "whole");
@@ -339,7 +339,7 @@ fn a_borrowed_result_names_a_range_of_lent_text() {
     let variable = produce(&mut frame, String::from("a range"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(ByStr,), ()>(|cx, (text,), ()| cx.finish_borrowed(text, |_, s: &str, sink| sink.lent(&s[2..5])))
+        entry.open::<(ByStr,), ()>(|cx, (text,), ()| cx.finish_borrowed(&text[2..5]))
     });
 
     assert_eq!(read_text(&mut frame, Pass::Same(borrowed)), "ran");
@@ -352,7 +352,7 @@ fn a_borrowed_result_names_a_strings_text() {
     let variable = produce(&mut frame, pair("owned text"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(lent, |_, p: &Pair, sink| sink.lent(p.name.as_str())))
+        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(lent.name.as_str()))
     });
 
     assert_eq!(read_text(&mut frame, Pass::Same(borrowed)), "owned text");
@@ -381,7 +381,7 @@ fn a_borrowed_result_names_a_field() {
     let variable = produce(&mut frame, pair("field"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(lent, |_, p: &Pair, sink| sink.lent(&p.lead)))
+        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(&lent.lead))
     });
 
     assert_eq!(read_number(&mut frame, Pass::Same(borrowed)), Number(2));
@@ -394,7 +394,7 @@ fn a_borrowed_result_names_an_element_the_lent_value_owns() {
     let variable = produce(&mut frame, pair("element"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(lent, |_, p: &Pair, sink| sink.lent(&p.items[1])))
+        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(&lent.items[1]))
     });
 
     assert_eq!(read_number(&mut frame, Pass::Same(borrowed)), Number(5));
@@ -407,7 +407,7 @@ fn a_writable_borrowed_result_writes_the_lent_value() {
     let variable = produce(&mut frame, pair("borrowed"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(ByMut<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed_mut(lent, |_, p: &mut Pair, sink| sink.lent_mut(p)))
+        entry.open::<(ByMut<Pair>,), ()>(|cx, (mut lent,), ()| cx.finish_borrowed(&mut *lent))
     });
     frame.call([Pass::Same(borrowed)], |entry| {
         entry.open::<(ByMut<Pair>,), ()>(|cx, (mut target,), ()| {
@@ -453,7 +453,7 @@ fn a_borrowed_result_names_a_run_of_a_lent_slice() {
     let variable = frame.array(&[3i64, 5, 8]);
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| cx.finish_borrowed(run, |_, s: &[Uniform<WordRuntime, i64>], sink| sink.lent(&s[1..])))
+        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| cx.finish_borrowed(&run[1..]))
     });
 
     assert_eq!(read_array(&mut frame, Pass::Same(borrowed)), [5, 8]);

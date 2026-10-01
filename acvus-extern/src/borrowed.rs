@@ -1,19 +1,17 @@
-//! A result that borrows (crossing §4): a value of a transparent structure
-//! (`Option`, `Result`, a tuple) whose every leaf is a reference to a part of
-//! what the call lent. It is made under the guard's borrow `'s`, while the
-//! guard still lends: the body turns each reference into a reference value
-//! through the `Sink` the finish hands it, and gives back what it `Made`.
-//! Neither can be had outside that borrow, so a result is finished only from
-//! the guard (K16). No part's type is required to outlive anything but the
-//! borrow its reference is at: a type variable's value is no `'static` type
-//! (limitations §3).
+//! A result that borrows (runtime contract §2, References): a value of a
+//! transparent structure (`Option`, `Result`, a tuple) whose every leaf is a
+//! reference, each made a reference value at the finish. Which loan each holds
+//! the declaration's lifetimes say; its lifetime, within the call, is the
+//! bound, which Rust checks against the signature they are read from. No
+//! part's type is required to outlive anything but the borrow its reference
+//! is at: a type variable's value is no `'static` type (limitations §3).
 
 use std::marker::PhantomData;
 
 use crate::boundary::entry::Settled;
 use crate::runtime::{OptionKind, RefKind, RefTarget, Referent, ResultKind, Runtime, TupleKind};
 
-/// A result's value made under the guard's borrow `'s`.
+/// A borrowed result's value made at `'s`.
 pub struct Made<'s, R: Runtime> {
     value: R::Value,
     _borrow: PhantomData<fn(&'s ()) -> &'s ()>,
@@ -25,9 +23,9 @@ impl<R: Runtime> Made<'_, R> {
     }
 }
 
-/// What makes a borrowed result's leaves under the guard's borrow `'s`: a
-/// reference value from each part. A structure over them is made by
-/// `Borrows`.
+/// What makes a borrowed result's leaves at `'s`: a reference value from each
+/// part. A structure over them is made by `Borrows`. Only the finish makes
+/// one.
 pub struct Sink<'s, R: Runtime> {
     runtime: &'s R,
     at: Settled<'s>,
@@ -43,20 +41,20 @@ impl<'s, R: Runtime> Sink<'s, R> {
     }
 
     /// A shared reference to `part`.
-    pub fn lent<P: ?Sized + Referent>(&self, part: &'s P) -> Made<'s, R> {
+    pub(crate) fn lent<P: ?Sized + Referent>(&self, part: &'s P) -> Made<'s, R> {
         self.made(<R::Ref as RefKind<R>>::reference(self.runtime, RefTarget::Shared(part), self.at))
     }
 
     /// An exclusive reference to `part`.
-    pub fn lent_mut<P: ?Sized + Referent>(&self, part: &'s mut P) -> Made<'s, R> {
+    pub(crate) fn lent_mut<P: ?Sized + Referent>(&self, part: &'s mut P) -> Made<'s, R> {
         self.made(<R::Ref as RefKind<R>>::reference(self.runtime, RefTarget::Exclusive(part), self.at))
     }
 }
 
-/// A borrowed result at the guard's borrow `'s`, read off its type: a
-/// reference is lent, and a structure of borrowed results is made by its kind
-/// over its parts.
+/// A borrowed result at `'s`, read off its type: a reference is lent, and a
+/// structure of borrowed results is made by its kind over its parts.
 pub trait Borrows<'s, R: Runtime> {
+    #[doc(hidden)]
     fn made(self, sink: &Sink<'s, R>) -> Made<'s, R>;
 }
 

@@ -101,11 +101,11 @@ pub trait Opaque: Send + Sync + Structural + Crossing + Referent {}
 /// one.
 pub trait Referent: Crossing {}
 
-/// What a reference value is made from: a part of storage the call lent,
-/// borrowed from the guard that lends it (`context::Returning::finish_borrowed`);
-/// a writable one only from an exclusive guard. The part is the whole lent
-/// value, a range or an element of it, a field, or storage the lent value
-/// owns, such as a `String`'s text (runtime contract §2, References).
+/// What a reference value is made from: a Rust borrow, at a lifetime within
+/// the call, of storage that lives until the loan it is labelled with ends
+/// (`context::Returning::finish_borrowed`); a writable one only from an
+/// exclusive borrow. The storage is what an argument lent, whole or any part
+/// of it, or what a kept loan holds (runtime contract §2, References).
 pub enum RefTarget<'a, P: ?Sized> {
     Shared(&'a P),
     Exclusive(&'a mut P),

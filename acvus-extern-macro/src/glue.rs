@@ -106,7 +106,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     });
     let result = match &sig.output {
         Output::Never => quote!(::acvus_extern::decl::DeclTy::Never),
-        Output::Value | Output::Borrowed { .. } => {
+        Output::Value | Output::Borrowed => {
             let ty = sig.at_stand_ins(&sig.written_output, runtime);
             quote!(<#ty as ::acvus_extern::decl::DeclType>::decl_ty(names))
         }
@@ -199,18 +199,10 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         .map(|(_, _, ty)| quote!(<#ty as ::acvus_extern::decl::ParamMode>::Mode))
         .collect();
     let opened = arguments.iter().map(|(_, a, _)| a);
-    let lent = match sig.output {
-        Output::Borrowed { from, .. } => Some(from),
-        Output::Value | Output::Never => None,
-    };
-
-    // Each argument but the lent one is made by its mode, in the order the
-    // parameters are written.
+    // Each argument is made by its mode, in the order the parameters are
+    // written.
     let mut made = Vec::new();
-    for ((i, a, _), mode) in arguments.iter().zip(&modes) {
-        if Some(*i) == lent {
-            continue;
-        }
+    for ((_, a, _), mode) in arguments.iter().zip(&modes) {
         made.push(quote! {
             let #a = <#mode as ::acvus_extern::Mode<#runtime>>::arg(#a);
         });
@@ -220,15 +212,14 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         match &p.role {
             Role::Capture { .. } => quote!(&self.#name),
             Role::Context => quote!(__context),
-            Role::Argument if Some(i) == lent => quote!(__lent),
             Role::Argument => {
                 let a = format_ident!("__a{}", i);
                 quote!(#a)
             }
         }
     });
-    // The context the body is given, where it takes one: borrowed from the
-    // body's own, or, finishing with a borrow, the one the finish lends.
+    // The context the body is given, where it takes one, borrowed from the
+    // body's own.
     let takes_context = sig.params.iter().any(|p| matches!(p.role, Role::Context));
     let context = takes_context.then(|| quote!(let __context = &__cx;));
     let function = &sig.ident;
@@ -248,7 +239,7 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
             #context
             match #call.await {}
         },
-        Output::Value | Output::Borrowed { .. } => quote! {
+        Output::Value | Output::Borrowed => quote! {
             #context
             let __result = #call.await;
             __cx.finish(__result)
@@ -274,16 +265,11 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     }
 
     let finish = match sig.output {
-        Output::Borrowed { from, mutable } => {
-            let a = format_ident!("__a{}", from);
-            let finish = if mutable { quote!(finish_borrowed_mut) } else { quote!(finish_borrowed) };
-            let context = if takes_context { quote!(__context) } else { quote!(_) };
-            quote! {
-                __cx.#finish(#a, move |#context, __lent, __sink| {
-                    ::acvus_extern::borrowed::Borrows::made(#call, &__sink)
-                })
-            }
-        }
+        Output::Borrowed => quote! {
+            #context
+            let __result = #call;
+            __cx.finish_borrowed(__result)
+        },
         Output::Never => quote! {
             #context
             match #call {}
