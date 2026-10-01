@@ -1,9 +1,7 @@
-//! `#[extern_fn]`: each function declared by the attribute is registered at
-//! `WordRuntime` and at `Adapter<WordRuntime>`, called through its dispatch
-//! as a compiled call is, and its declaration read back.
+//! `#[extern_fn]`: each function declared by the attribute is called through
+//! its dispatch on `WordRuntime`, and its declaration read back.
 
 use acvus_extern::Uniform;
-use acvus_extern::adapter::Adapter;
 use acvus_extern::callback::{Callback, CallsBack};
 use acvus_extern::context::Awaited;
 use acvus_extern::decl::{DeclTy, Declaration, Var, kind};
@@ -61,7 +59,7 @@ async fn measure(text: String) -> i64 {
     text.len() as i64
 }
 
-/// Runs `case` on a `WordRuntime` and on an adapter over one.
+/// Runs `case` on a `WordRuntime`.
 macro_rules! on_both {
     ($($name:ident: $case:ident;)+) => {
         mod on_word_runtime {
@@ -69,15 +67,6 @@ macro_rules! on_both {
                 #[test]
                 fn $name() {
                     super::$case(super::WordRuntime::default());
-                }
-            )+
-        }
-
-        mod on_adapter {
-            $(
-                #[test]
-                fn $name() {
-                    super::$case(super::Adapter::new(super::WordRuntime::default()));
                 }
             )+
         }

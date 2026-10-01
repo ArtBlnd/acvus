@@ -255,7 +255,7 @@ where
         U: 'l,
     {
         let runtime = cx.runtime();
-        runtime.call_now::<R, A, U>(runtime, self.closure, args, Settled::of_the_entry())
+        runtime.call_now::<A, U>(self.closure, args, Settled::of_the_entry())
     }
 }
 
@@ -269,33 +269,26 @@ where
     /// (crossing §3-§4).
     pub fn call_await(&self, cx: &Awaited<'c, R>, args: A::Moved) -> impl Future<Output = U> + Send {
         let runtime = cx.runtime();
-        runtime.call_later::<R, A, U>(runtime, self.closure, args, Settled::of_the_entry())
+        runtime.call_later::<A, U>(self.closure, args, Settled::of_the_entry())
     }
 }
 
-/// Calling a script closure, returning or awaited (runtime contract §2). `rt`
-/// is the runtime the call runs at, the runtime itself or the adapter over it
-/// (K15), whose values are the runtime's: the arguments are made at it, and
-/// the callee's entry is opened at it.
+/// Calling a script closure, returning or awaited (runtime contract §2): the
+/// arguments are made at the runtime, and the callee's entry is opened at it.
 pub trait CallsBack: Runtime {
-    fn call_now<'l, R, A, U>(&self, rt: &'l R, closure: Self::Value, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
+    fn call_now<'l, A, U>(&'l self, closure: Self::Value, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
     where
-        R: Runtime<Value = Self::Value>,
-        A: CallArgs<R>,
-        U: LoanForm<R>,
-        A: 'l,
-        U: 'l;
-    fn call_later<'a, R, A, U>(
-        &self,
-        rt: &'a R,
+        A: CallArgs<Self> + 'l,
+        U: LoanForm<Self> + 'l;
+    fn call_later<'a, A, U>(
+        &'a self,
         closure: Self::Value,
         args: A::Moved,
         at: Settled<'a>,
     ) -> impl Future<Output = U> + Send
     where
-        R: Runtime<Value = Self::Value>,
-        A: MovedArgs<R>,
-        U: Crosses<R>;
+        A: MovedArgs<Self>,
+        U: Crosses<Self>;
 }
 
 

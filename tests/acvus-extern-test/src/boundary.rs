@@ -621,12 +621,6 @@ impl OpaqueKind<WordRuntime> for Kinds {
     fn exclusive<'a, T: Opaque + 'a>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> &'a mut T {
         place_mut(place, at)
     }
-    fn shared_ref<'a, T: Opaque + 'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a T {
-        referent(reference, at)
-    }
-    fn exclusive_ref<'a, T: Opaque + 'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a mut T {
-        referent_mut(reference, at)
-    }
 }
 
 impl PrimitiveKind<WordRuntime> for Kinds {
@@ -643,12 +637,6 @@ impl PrimitiveKind<WordRuntime> for Kinds {
     fn exclusive<'a, P: Primitive>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> &'a mut P {
         place_mut(place, at)
     }
-    fn shared_ref<'a, P: Primitive>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a P {
-        referent(reference, at)
-    }
-    fn exclusive_ref<'a, P: Primitive>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a mut P {
-        referent_mut(reference, at)
-    }
 }
 
 impl StringKind<WordRuntime> for Kinds {
@@ -664,12 +652,6 @@ impl StringKind<WordRuntime> for Kinds {
     }
     fn exclusive<'a>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> &'a mut String {
         place_mut(place, at)
-    }
-    fn shared_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a String {
-        referent(reference, at)
-    }
-    fn exclusive_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a mut String {
-        referent_mut(reference, at)
     }
 }
 
@@ -827,9 +809,8 @@ unsafe impl Structural for Number {
 macro_rules! opaque {
     ($($t:ty),+ $(,)?) => {$(
         // SAFETY: this stands in for the derive: the crossing below gives,
-        // takes and lends the type as an opaque value, at itself, and a
-        // reference to it is read back at it by its opaque kind's
-        // `shared_ref`.
+        // takes and lends the type as an opaque value, at itself, and reads a
+        // reference to it back at it.
         unsafe impl Crossing for $t {}
 
         impl Referent for $t {}
@@ -889,14 +870,14 @@ macro_rules! opaque {
             where
                 Self: 'a,
             {
-                <R::Opaque as OpaqueKind<R>>::shared_ref(rt, reference, at)
+                <R::Ref as acvus_extern::runtime::RefKind<R>>::target(rt, reference, at)
             }
 
             fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
             where
                 Self: 'a,
             {
-                <R::Opaque as OpaqueKind<R>>::exclusive_ref(rt, reference, at)
+                <R::Ref as acvus_extern::runtime::RefKind<R>>::target_mut(rt, reference, at)
             }
         }
     )+};

@@ -37,9 +37,7 @@ Every typed read states its caller's obligation over the checker's typing of the
 
 The extern side reinterprets a part the runtime handed it only by a layout-only cast under a layout witness, and every later typed read of that part goes back to the runtime. A layout witness is made only where the layout identity it proves is signed, at the type (safety §2, L), and nowhere else.
 
-The entry is safe. Every runtime that implements the contract trusts its own typed reads, and owes that each value is live at the type the checker settled for the site (safety §3). A checking runtime is no second implementation. For every runtime X, the adapter over X implements the contract with X's representation and X's operations; it tracks the guards, loans and reads those operations make, and turns a breach of the checker's typing or of S1-S3 it detects into a panic where X would have undefined behaviour. Its detection is partial: no model it tracks is known to cover every breach, so it catches what its tracking covers, may refuse what its tracking cannot yet tell apart from a breach, and grows toward both. X's own operations are unchanged under it. The host chooses whether to run X or the adapter over X, and the extern side, written against the contract alone, cannot tell which. The adapter's tracking holds because no Rust reference to lent storage outlives the guard it came from (limitations §3), so the extern side relies on storage only while a guard lends it.
-
-*Rejected.* A checking runtime that implements the contract over a storage of its own: it represents less than the runtime it checks, and each thing it cannot represent becomes a restriction on the contract.
+The entry is safe. Every runtime that implements the contract trusts its own typed reads, and owes that each value is live at the type the checker settled for the site (safety §3).
 
 ## 4. What the runtime signs
 

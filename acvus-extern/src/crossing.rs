@@ -35,14 +35,14 @@ macro_rules! held_as_itself {
         where
             Self: 'a,
         {
-            <R::$kind as $kind_trait<R>>::shared_ref(rt, reference, at)
+            <R::Ref as RefKind<R>>::target(rt, reference, at)
         }
 
         fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut $t
         where
             Self: 'a,
         {
-            <R::$kind as $kind_trait<R>>::exclusive_ref(rt, reference, at)
+            <R::Ref as RefKind<R>>::target_mut(rt, reference, at)
         }
     };
 }

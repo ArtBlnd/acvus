@@ -12,11 +12,9 @@
 //! - `signed`: the facts no type can carry, signed by a runtime or a derive.
 //! - `seal`: the crossing trait whose methods choose a typed read's type is
 //!   implemented only here (safety §1).
-//! - `adapter`: the adapter's signatures of S1-S3, X's carried over (K15).
 
 #![allow(unsafe_code)]
 
-pub(crate) mod adapter;
 pub(crate) mod entry;
 pub(crate) mod instance;
 pub(crate) mod loaned;

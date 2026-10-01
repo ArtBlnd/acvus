@@ -66,18 +66,14 @@ pub trait Family: 'static {
 }
 
 /// Making a value from an impl entry and reading an entry back (runtime
-/// contract §2). An entry's glue is typed at the runtime the call runs at,
-/// `R`: the runtime itself, or the adapter over it (K15), whose values are the
-/// runtime's. So the operations are generic over `R` with the runtime's values.
+/// contract §2).
 pub trait Instances: Runtime {
-    fn instance<R, F, K>(&self, entry: InstanceEntry<R, F, K>) -> Self::Value
+    fn instance<F, K>(&self, entry: InstanceEntry<Self, F, K>) -> Self::Value
     where
-        R: Runtime<Value = Self::Value>,
         F: Family,
         K: TaskKind;
-    fn entry<R, F, K>(&self, v: Self::Value, at: Settled<'_>) -> &InstanceEntry<R, F, K>
+    fn entry<F, K>(&self, v: Self::Value, at: Settled<'_>) -> &InstanceEntry<Self, F, K>
     where
-        R: Runtime<Value = Self::Value>,
         F: Family,
         K: TaskKind;
     fn task_of(&self, v: Self::Value, at: Settled<'_>) -> Task;

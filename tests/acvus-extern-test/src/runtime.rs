@@ -115,36 +115,31 @@ impl Runtime for WordRuntime {
 }
 
 impl CallsBack for WordRuntime {
-    fn call_now<'l, R, A, U>(&self, rt: &'l R, closure: Word, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
+    fn call_now<'l, A, U>(&'l self, closure: Word, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
     where
-        R: Runtime<Value = Word>,
-        A: CallArgs<R>,
-        U: LoanForm<R>,
-        A: 'l,
-        U: 'l,
+        A: CallArgs<Self> + 'l,
+        U: LoanForm<Self> + 'l,
     {
-        let run = A::lend_run(args, rt, at).map(Held::kept).collect();
-        let result = call_closure(rt, closure, run, A::lent().collect(), at);
-        U::read(result, rt, at)
+        let run = A::lend_run(args, self, at).map(Held::kept).collect();
+        let result = call_closure(self, closure, run, A::lent().collect(), at);
+        U::read(result, self, at)
     }
 
-    fn call_later<'a, R, A, U>(
-        &self,
-        rt: &'a R,
+    fn call_later<'a, A, U>(
+        &'a self,
         closure: Word,
         args: A::Moved,
         at: Settled<'a>,
     ) -> impl Future<Output = U> + Send
     where
-        R: Runtime<Value = Word>,
-        A: MovedArgs<R>,
-        U: Crosses<R>,
+        A: MovedArgs<Self>,
+        U: Crosses<Self>,
     {
-        let run: Vec<Held> = A::move_run(args, rt, at).map(Held::kept).collect();
+        let run: Vec<Held> = A::move_run(args, self, at).map(Held::kept).collect();
         let lent: Box<[Option<Mutability>]> = A::lent().collect();
         async move {
-            let result = call_closure(rt, closure, run, lent, at);
-            U::take(rt, result, at)
+            let result = call_closure(self, closure, run, lent, at);
+            U::take(self, result, at)
         }
     }
 }

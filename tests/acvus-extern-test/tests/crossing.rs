@@ -1,5 +1,4 @@
-//! The crossing's tests, each run on `WordRuntime` and on
-//! `Adapter<WordRuntime>` with the same expected result (structure B-adapter).
+//! The crossing's tests, each run on `WordRuntime`.
 //!
 //! A `Frame` stands in for the run: it passes its variables through
 //! `Entry::new`, as the runtime's boundary does, and the glue each test writes
@@ -10,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use acvus_extern::adapter::Adapter;
 use acvus_extern::Uniform;
 use acvus_extern::callback::{CallsBack, Lent, LentMut};
 use acvus_extern::context::Returning;
@@ -25,7 +23,7 @@ use acvus_extern_test::{Frame, Number, Pair, Pass, Tally, Word, WordRuntime};
 
 use Mutability::{Exclusive, Shared};
 
-/// Runs `case` on `WordRuntime` and on the adapter over it.
+/// Runs `case` on `WordRuntime`.
 macro_rules! on_both {
     ($($name:ident: $case:ident;)+) => {
         mod on_word_runtime {
@@ -33,15 +31,6 @@ macro_rules! on_both {
                 #[test]
                 fn $name() {
                     super::$case(&super::WordRuntime::default());
-                }
-            )+
-        }
-
-        mod on_adapter {
-            $(
-                #[test]
-                fn $name() {
-                    super::$case(&super::Adapter::new(super::WordRuntime::default()));
                 }
             )+
         }
@@ -86,8 +75,8 @@ on_both! {
     a_held_tuple_is_opened_as_its_parts: tuple_opened_as_its_parts;
 }
 
-/// Runs `case` on a `WordRuntime` and on an adapter over one, each owned, so
-/// the case may register functions with it.
+/// Runs `case` on a `WordRuntime` it owns, so the case may register
+/// functions with it.
 macro_rules! on_both_owned {
     ($($name:ident: $case:ident;)+) => {
         mod owned_on_word_runtime {
@@ -95,15 +84,6 @@ macro_rules! on_both_owned {
                 #[test]
                 fn $name() {
                     super::$case(super::WordRuntime::default());
-                }
-            )+
-        }
-
-        mod owned_on_adapter {
-            $(
-                #[test]
-                fn $name() {
-                    super::$case(super::Adapter::new(super::WordRuntime::default()));
                 }
             )+
         }
@@ -838,20 +818,4 @@ fn tuple_opened_as_its_parts<R: Runtime<Value = Word>>(runtime: &R) {
     });
 
     assert_eq!(read, Some((8, String::from("held and written"))));
-}
-
-// Breaches the adapter's tracking covers. Under `WordRuntime` alone each is
-// undefined behaviour, so they run on the adapter only.
-
-#[test]
-#[ignore = "a kind lends its storage as a plain reference, which the adapter does not see end: its detection is partial (runtime contract §3)"]
-#[should_panic(expected = "overlaps a live Exclusive lend")]
-fn the_adapter_refuses_a_shared_lend_over_a_live_exclusive_one() {
-    let runtime = Adapter::new(WordRuntime::default());
-    let mut frame = Frame::new(&runtime);
-    let variable = produce(&mut frame, pair("twice"));
-
-    frame.call(&[Pass::Lend(variable, Exclusive), Pass::Lend(variable, Shared)], |entry| {
-        entry.open::<(ByMut<Pair>, ByRef<Pair>), ()>(|cx, _, ()| cx.finish(()))
-    });
 }

@@ -141,9 +141,6 @@ pub trait OpaqueKind<R: Runtime> {
 
     fn shared<'a, T: Opaque + 'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a T;
     fn exclusive<'a, T: Opaque + 'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut T;
-    /// The `T` a reference value names, lent.
-    fn shared_ref<'a, T: Opaque + 'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a T;
-    fn exclusive_ref<'a, T: Opaque + 'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut T;
 }
 
 /// A primitive's value, the primitive in the runtime's own representation.
@@ -154,8 +151,6 @@ pub trait PrimitiveKind<R: Runtime> {
 
     fn shared<'a, P: Primitive>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a P;
     fn exclusive<'a, P: Primitive>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut P;
-    fn shared_ref<'a, P: Primitive>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a P;
-    fn exclusive_ref<'a, P: Primitive>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut P;
 }
 
 /// Text, a Rust `String`.
@@ -166,8 +161,6 @@ pub trait StringKind<R: Runtime> {
 
     fn shared<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a String;
     fn exclusive<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut String;
-    fn shared_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a String;
-    fn exclusive_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut String;
 }
 
 /// An option over its part's value. Its release releases the part. Lent, it

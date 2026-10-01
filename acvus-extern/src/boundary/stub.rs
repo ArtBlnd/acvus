@@ -73,12 +73,6 @@ impl OpaqueKind<Stub> for NoKind {
     fn exclusive<'a, T: Opaque + 'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> &'a mut T {
         unreachable!()
     }
-    fn shared_ref<'a, T: Opaque + 'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a T {
-        unreachable!()
-    }
-    fn exclusive_ref<'a, T: Opaque + 'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a mut T {
-        unreachable!()
-    }
 }
 
 impl PrimitiveKind<Stub> for NoKind {
@@ -95,12 +89,6 @@ impl PrimitiveKind<Stub> for NoKind {
     fn exclusive<'a, P: Primitive>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> &'a mut P {
         unreachable!()
     }
-    fn shared_ref<'a, P: Primitive>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a P {
-        unreachable!()
-    }
-    fn exclusive_ref<'a, P: Primitive>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a mut P {
-        unreachable!()
-    }
 }
 
 impl StringKind<Stub> for NoKind {
@@ -115,12 +103,6 @@ impl StringKind<Stub> for NoKind {
         unreachable!()
     }
     fn exclusive<'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> &'a mut String {
-        unreachable!()
-    }
-    fn shared_ref<'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a String {
-        unreachable!()
-    }
-    fn exclusive_ref<'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a mut String {
         unreachable!()
     }
 }

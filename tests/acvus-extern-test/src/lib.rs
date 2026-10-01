@@ -1,6 +1,6 @@
-//! `WordRuntime`, a trusting runtime for the crossing's tests (runtime
-//! contract §3): the contract's only kind of implementation, run as it is and
-//! under `acvus_extern::adapter::Adapter`. It stands in for the interpreter
+//! `WordRuntime`, a runtime for the crossing's tests (runtime contract §3),
+//! trusting its own typed reads as every runtime does. It stands in for the
+//! interpreter
 //! until the interpreter is ported, and keeps the interpreter's representation
 //! on master (`acvus-interpreter/src/value.rs`, `acvus-extern/src/repr.rs`): a
 //! value is a kind and a 64-bit word; a scalar lies in the word, and anything
