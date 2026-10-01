@@ -13,7 +13,8 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::{BinOp, Expr, ExprCall, Ident, Lit, UnOp};
+use syn::parse::ParseStream;
+use syn::{Attribute, BinOp, Expr, ExprCall, Ident, Lit, Path, Token, UnOp, parenthesized};
 
 use crate::attr::Ends;
 
@@ -181,4 +182,196 @@ fn constant(term: &Expr) -> syn::Result<i128> {
 
 fn refused(at: &impl Spanned, message: &str) -> syn::Error {
     syn::Error::new(at.span(), message)
+}
+
+/// The facts written on one argument about its place.
+#[derive(Default)]
+pub struct PlaceFacts {
+    pub touches: Vec<Touch>,
+    pub gives: Vec<Gives>,
+}
+
+/// `#[touch(mode, element)]`.
+pub struct Touch {
+    pub mode: Mode,
+    pub element: Option<Element>,
+}
+
+/// How a call touches a place.
+pub enum Mode {
+    Read,
+    View,
+    ViewMut,
+    /// An absent entry becomes the argument `default`, and a `&mut` to it
+    /// is given.
+    Open { default: Ident },
+    /// The place holds the argument named.
+    Store(Ident),
+    /// The place is emptied.
+    Emptied,
+}
+
+/// One element of a place: the entry at a key argument, or the element at
+/// an index argument.
+pub enum Element {
+    Key(Ident),
+    Index(Ident),
+}
+
+/// `#[gives(element, through = f)]`: the result is what the place held when
+/// the call began, or the declared function `f` of it.
+pub struct Gives {
+    pub element: Option<Element>,
+    pub through: Option<Path>,
+}
+
+impl PlaceFacts {
+    /// The facts `attrs` write, each a `#[touch(..)]` or a `#[gives(..)]`.
+    pub fn read(attrs: &[Attribute]) -> syn::Result<PlaceFacts> {
+        let mut facts = PlaceFacts::default();
+        for attr in attrs {
+            if attr.path().is_ident("touch") {
+                facts.touches.push(attr.parse_args_with(touch)?);
+            } else if matches!(attr.meta, syn::Meta::Path(_)) {
+                facts.gives.push(Gives { element: None, through: None });
+            } else {
+                facts.gives.push(attr.parse_args_with(gives)?);
+            }
+        }
+        Ok(facts)
+    }
+}
+
+fn touch(input: ParseStream<'_>) -> syn::Result<Touch> {
+    let word: Ident = input.parse()?;
+    let mode = match word.to_string().as_str() {
+        "read" => Mode::Read,
+        "view" => Mode::View,
+        "view_mut" => Mode::ViewMut,
+        "open" => {
+            let content;
+            parenthesized!(content in input);
+            let key: Ident = content.parse()?;
+            if key != "default" {
+                return Err(refused(&key, "`open` is `open(default = d)`"));
+            }
+            content.parse::<Token![=]>()?;
+            Mode::Open { default: content.parse()? }
+        }
+        "store" => {
+            let content;
+            parenthesized!(content in input);
+            let stored: Ident = content.parse()?;
+            match stored == "empty" {
+                true => Mode::Emptied,
+                false => Mode::Store(stored),
+            }
+        }
+        _ => {
+            return Err(refused(&word, "a touch is `read`, `view`, `view_mut`, `open(default = d)`, `store(v)` or `store(empty)`"));
+        }
+    };
+    let element = match input.is_empty() {
+        true => None,
+        false => {
+            input.parse::<Token![,]>()?;
+            Some(element(input)?)
+        }
+    };
+    Ok(Touch { mode, element })
+}
+
+fn gives(input: ParseStream<'_>) -> syn::Result<Gives> {
+    let mut gives = Gives { element: None, through: None };
+    while !input.is_empty() {
+        if input.peek(Ident) && input.fork().parse::<Ident>().is_ok_and(|word| word == "through") {
+            input.parse::<Ident>()?;
+            input.parse::<Token![=]>()?;
+            gives.through = Some(input.parse()?);
+        } else {
+            gives.element = Some(element(input)?);
+        }
+        if !input.is_empty() {
+            input.parse::<Token![,]>()?;
+        }
+    }
+    Ok(gives)
+}
+
+/// `key = k` or `index = i`.
+fn element(input: ParseStream<'_>) -> syn::Result<Element> {
+    let word: Ident = input.parse()?;
+    input.parse::<Token![=]>()?;
+    let named: Ident = input.parse()?;
+    match word.to_string().as_str() {
+        "key" => Ok(Element::Key(named)),
+        "index" => Ok(Element::Index(named)),
+        _ => Err(refused(&word, "an element is `key = k` or `index = i`")),
+    }
+}
+
+/// The call's access as the compiler holds it: every touch written, as one
+/// whole, where any is, and each place given. `places` are each argument's
+/// facts, in order; `runtime` the runtime a path of another declaration is
+/// read at.
+pub fn access(places: &[&PlaceFacts], arguments: &[&Ident], runtime: &Ident) -> syn::Result<Vec<TokenStream>> {
+    let number = |name: &Ident| -> syn::Result<usize> {
+        arguments
+            .iter()
+            .position(|argument| *argument == name)
+            .ok_or_else(|| refused(name, "a fact of a place names the call's arguments; a capture and the context are none"))
+    };
+    let place = |param: usize, element: &Option<Element>| -> syn::Result<TokenStream> {
+        let element = match element {
+            None => quote!(::core::option::Option::None),
+            Some(Element::Key(key)) => {
+                let at = number(key)?;
+                quote!(::core::option::Option::Some(::acvus_extern::decl::Element::Key(#at)))
+            }
+            Some(Element::Index(index)) => {
+                let at = number(index)?;
+                quote!(::core::option::Option::Some(::acvus_extern::decl::Element::Index(#at)))
+            }
+        };
+        Ok(quote!(::acvus_extern::decl::Place { param: #param, element: #element }))
+    };
+
+    let mut touches = Vec::new();
+    let mut given = Vec::new();
+    for (param, facts) in places.iter().enumerate() {
+        for touch in &facts.touches {
+            let at = place(param, &touch.element)?;
+            let mode = match &touch.mode {
+                Mode::Read => quote!(::acvus_extern::decl::Mode::Read),
+                Mode::View => quote!(::acvus_extern::decl::Mode::View(::acvus_extern::decl::Mutability::Shared)),
+                Mode::ViewMut => quote!(::acvus_extern::decl::Mode::View(::acvus_extern::decl::Mutability::Mut)),
+                Mode::Open { default } => {
+                    let default = number(default)?;
+                    quote!(::acvus_extern::decl::Mode::Open { default: #default })
+                }
+                Mode::Store(value) => {
+                    let value = number(value)?;
+                    quote!(::acvus_extern::decl::Mode::Store(::acvus_extern::decl::Stored::Value(#value)))
+                }
+                Mode::Emptied => quote!(::acvus_extern::decl::Mode::Store(::acvus_extern::decl::Stored::Emptied)),
+            };
+            touches.push(quote!(::acvus_extern::decl::Touch { place: #at, mode: #mode }));
+        }
+        for gives in &facts.gives {
+            let at = place(param, &gives.element)?;
+            let through = match &gives.through {
+                None => quote!(::core::option::Option::None),
+                Some(path) => quote! {
+                    ::core::option::Option::Some(<#path as ::acvus_extern::register::Declared<#runtime>>::path(names))
+                },
+            };
+            given.push(quote!(::acvus_extern::decl::Access::Gives { place: #at, through: #through }));
+        }
+    }
+    let mut access = Vec::new();
+    if !touches.is_empty() {
+        access.push(quote!(::acvus_extern::decl::Access::Touches(::std::boxed::Box::new([#(#touches),*]))));
+    }
+    access.extend(given);
+    Ok(access)
 }

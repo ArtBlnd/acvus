@@ -14,6 +14,7 @@ use syn::{
     TypeParamBound, TypeReference, WherePredicate,
 };
 
+use crate::facts;
 use crate::lifetimes::{self, Bound, Names};
 
 /// The kinds a generic parameter may be (compiler: extern fn §1-§2).
@@ -59,6 +60,8 @@ pub struct Param {
     pub role: Role,
     /// The lifetime names its type writes.
     pub names: Names,
+    /// The facts written on it about its place (compiler: extern fn §3).
+    pub place: facts::PlaceFacts,
 }
 
 /// How the result is made.
@@ -283,7 +286,14 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
         let name = pat.ident.clone();
         let mut role = Role::Argument;
         let mut marked = None;
+        // The facts written on the parameter about its place, read once its
+        // role is known.
+        let mut place_facts = Vec::new();
         typed.attrs.retain(|attr| {
+            if attr.path().is_ident("touch") || attr.path().is_ident("gives") {
+                place_facts.push(attr.clone());
+                return false;
+            }
             let which = if attr.path().is_ident("capture") {
                 Some("capture")
             } else if attr.path().is_ident("context") {
@@ -318,8 +328,12 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
                 _ => Role::Context,
             };
         }
+        if let (Some(attr), false) = (place_facts.first(), matches!(role, Role::Argument)) {
+            return Err(syn::Error::new(attr.span(), "a fact of a place is of an argument's; a capture and the context are none"));
+        }
+        let place = facts::PlaceFacts::read(&place_facts)?;
         let names = lifetimes::param(&typed.ty, &mut elided);
-        params.push(Param { name, ty: (*typed.ty).clone(), role, names });
+        params.push(Param { name, ty: (*typed.ty).clone(), role, names, place });
     }
     if params.iter().filter(|p| matches!(p.role, Role::Context)).count() > 1 {
         return Err(syn::Error::new(sig.inputs.span(), "an extern fn takes its context once"));

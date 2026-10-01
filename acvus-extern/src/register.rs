@@ -112,6 +112,25 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// fn f(n: u64) -> u64 { n }
 /// ```
 ///
+/// A fact of a place on what is no argument, or naming what is none:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn]
+/// fn f(#[capture] #[touch(read)] tag: &String, n: u64) -> u64 { n }
+/// ```
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn]
+/// fn f(#[touch(store(nothing))] text: &mut String, n: u64) -> u64 { n }
+/// ```
+///
+/// A touch that is no mode the compiler knows:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn]
+/// fn f(#[touch(write)] text: &mut String) {}
+/// ```
+///
 /// An awaited body whose result borrows:
 ///
 /// ```compile_fail

@@ -11,7 +11,7 @@ use acvus_extern::mode::ByValue;
 use acvus_extern::register::Declared;
 use acvus_extern::runtime::{Crosses, Runtime};
 use acvus_extern::Loaned;
-use acvus_extern_test::{Cursor, Frame, Pair, Pass, WordRuntime};
+use acvus_extern_test::{Cursor, Frame, Pair, Pass, Stack, WordRuntime};
 use acvus_mir::decl::SegmentLabel;
 use acvus_mir::ty::{Effect, FlowEnd, IntTy};
 use acvus_utils::Interner;
@@ -404,6 +404,64 @@ fn the_facts_written_are_stated_as_the_compilers_forms() {
     let (_, add) = declaration_of(add::new());
     assert_eq!(add.facts.ends, Ends::Unstated);
     assert!(add.facts.relations.is_empty());
+}
+
+/// How many elements a stack holds, read whole.
+#[extern_fn(effect = pure)]
+fn depth<T: Var<kind::Type>>(#[touch(read)] s: &Stack<T>) -> u64 {
+    s.items.len() as u64
+}
+
+/// The element at `at` replaced by `x`, the one it held given back.
+#[extern_fn(effect = pure)]
+fn put<T: Var<kind::Type>>(
+    #[touch(store(x), index = at)]
+    #[gives(index = at)]
+    s: &mut Stack<T>,
+    at: u64,
+    x: T,
+) -> T {
+    std::mem::replace(&mut s.items[at as usize], x)
+}
+
+/// A stack emptied, its depth before given back through `depth`.
+#[extern_fn(effect = pure)]
+fn clear<T: Var<kind::Type>>(#[touch(store(empty))] #[gives(through = depth)] s: &mut Stack<T>) -> u64 {
+    let depth = s.items.len() as u64;
+    s.items.clear();
+    depth
+}
+
+#[test]
+fn the_facts_of_a_place_are_stated_on_its_argument() {
+    use acvus_extern::decl::{Access, Element, Mode, Place, Stored, Touch};
+
+    let (_, depth_decl) = declaration_of(depth::new());
+    let whole = Place { param: 0, element: None };
+    assert_eq!(*depth_decl.facts.access, [Access::Touches(Box::new([Touch { place: whole, mode: Mode::Read }]))]);
+
+    let (_, put) = declaration_of(put::new());
+    let at = Place { param: 0, element: Some(Element::Index(1)) };
+    assert_eq!(
+        *put.facts.access,
+        [
+            Access::Touches(Box::new([Touch { place: at, mode: Mode::Store(Stored::Value(2)) }])),
+            Access::Gives { place: at, through: None },
+        ]
+    );
+
+    let (names, clear) = declaration_of(clear::new());
+    let depth_path = <depth as Declared<WordRuntime>>::path(&names);
+    assert_eq!(
+        *clear.facts.access,
+        [
+            Access::Touches(Box::new([Touch { place: whole, mode: Mode::Store(Stored::Emptied) }])),
+            Access::Gives { place: whole, through: Some(depth_path) },
+        ]
+    );
+
+    let (_, add) = declaration_of(add::new());
+    assert!(add.facts.access.is_empty());
 }
 
 #[test]
