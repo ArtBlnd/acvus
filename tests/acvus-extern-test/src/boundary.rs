@@ -7,7 +7,9 @@
 //! value or a Rust function's glue in a `Slot` headed by its release and its
 //! canonical type. A reference is a pointer in the word: `Ref` to a `Word` the
 //! run keeps, `Part` to a part of lent storage, and `WidePart` to an
-//! allocation holding the wide pointer of an unsized part.
+//! allocation holding the wide pointer of an unsized part. A reference value
+//! owns nothing (S2): the allocation a `WidePart` points at is the runtime's,
+//! kept until the runtime drops.
 //!
 //! An opaque value, text, an option, a result and a tuple each lie in a slot:
 //! the Rust value itself, and a part of an option, a result or a tuple as a
@@ -27,7 +29,7 @@
 use std::any::TypeId;
 use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use acvus_extern::register::ExternFn;
@@ -234,6 +236,37 @@ unsafe fn target<P>(place: *mut Word) -> *mut P {
 /// The wide pointer a `WidePart` holds.
 type WideBits = MaybeUninit<[usize; 2]>;
 
+/// The allocations `reference` made for wide pointers, freed when the runtime
+/// drops: a reference value owns nothing, so no holder of one frees it, and a
+/// copy of it may be read until the runtime is gone.
+#[derive(Default)]
+pub(crate) struct WideParts(Mutex<Vec<WidePart>>);
+
+/// One allocation `reference` boxed.
+struct WidePart(*mut WideBits);
+
+// SAFETY: the pointer is a `Box`'s, which `WideParts` alone frees; the bits
+// it holds are an address and a length, readable from any thread.
+unsafe impl Send for WidePart {}
+
+impl WideParts {
+    fn keep(&self, bits: *mut WideBits) {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).push(WidePart(bits));
+    }
+}
+
+impl Drop for WideParts {
+    fn drop(&mut self) {
+        let parts = self.0.get_mut().unwrap_or_else(PoisonError::into_inner);
+        for part in parts.drain(..) {
+            // SAFETY: `reference` made the pointer by `Box::into_raw`, and
+            // `keep` took it once; the runtime is dropping, so no reference
+            // value naming it is read again.
+            drop(unsafe { Box::from_raw(part.0) });
+        }
+    }
+}
+
 /// # Safety
 /// `v` is a live `WidePart` made from a `*mut P`.
 unsafe fn wide_target<P>(v: Word) -> *mut P
@@ -255,9 +288,10 @@ unsafe fn free(v: Word) {
             // caller's contract makes this its one use.
             unsafe { ((*header).release)(header) }
         }
-        // SAFETY: `reference` boxed the wide pointer.
-        Kind::WidePart => drop(unsafe { Box::from_raw(v.address::<WideBits>()) }),
-        Kind::Ref
+        // A reference value owns nothing; a wide pointer's allocation is the
+        // runtime's (`WideParts`).
+        Kind::WidePart
+        | Kind::Ref
         | Kind::Part
         | Kind::I8
         | Kind::I16
@@ -464,8 +498,9 @@ pub(crate) fn place_mut<'a, T>(v: &'a mut Word, _at: Settled<'a>) -> &'a mut T {
 }
 
 /// A reference value to a part of storage the call lent. It names the part
-/// where it lies; a writable one carries the exclusive borrow's provenance.
-pub(crate) fn reference<P>(target: RefTarget<'_, P>) -> Word
+/// where it lies; a writable one carries the exclusive borrow's provenance. A
+/// wide pointer is boxed, and the box kept in `wide`.
+pub(crate) fn reference<P>(wide: &WideParts, target: RefTarget<'_, P>) -> Word
 where
     P: ?Sized,
 {
@@ -486,6 +521,7 @@ where
     // SAFETY: the allocation is fresh, and a `*mut P` fits it at its
     // alignment by the assertion above.
     unsafe { bits.cast::<*mut P>().write(part) };
+    wide.keep(bits);
     Word::pointing(Kind::WidePart, bits)
 }
 
@@ -704,8 +740,8 @@ impl TupleKind<WordRuntime> for Kinds {
 }
 
 impl RefKind<WordRuntime> for Kinds {
-    fn reference<'a, P: ?Sized>(_: &'a WordRuntime, target: RefTarget<'a, P>, _: Settled<'a>) -> Word {
-        reference(target)
+    fn reference<'a, P: ?Sized>(rt: &'a WordRuntime, target: RefTarget<'a, P>, _: Settled<'a>) -> Word {
+        reference(&rt.wide, target)
     }
     fn target<'l, P: ?Sized>(_: &'l WordRuntime, v: Word, at: Settled<'l>) -> &'l P {
         referent(v, at)
@@ -877,7 +913,7 @@ mod tests {
 
     use acvus_extern::runtime::RefTarget;
 
-    use super::{Kind, Slot, Word, free, named_part, read_scalar, reference, scalar, slotted, target, unslotted};
+    use super::{Kind, Slot, WideParts, Word, free, named_part, read_scalar, reference, scalar, slotted, target, unslotted};
 
     #[test]
     fn a_scalar_round_trips_through_the_word() {
@@ -969,7 +1005,7 @@ mod tests {
     fn a_reference_value_reads_back_the_thin_target_it_was_made_from() {
         let lent = String::from("thin");
 
-        let v = reference(RefTarget::Shared(&lent));
+        let v = reference(&WideParts::default(), RefTarget::Shared(&lent));
 
         assert_eq!(v.kind(), Kind::Part);
         // SAFETY: `v` was made from `&lent`, which is live and shared.
@@ -981,17 +1017,15 @@ mod tests {
         let text = String::from("a wide target");
         let run = [3i64, 5, 8];
 
-        let text_v = reference(RefTarget::Shared(&text[2..6]));
-        let run_v = reference(RefTarget::Shared(&run[1..]));
+        let wide = WideParts::default();
+        let text_v = reference(&wide, RefTarget::Shared(&text[2..6]));
+        let run_v = reference(&wide, RefTarget::Shared(&run[1..]));
 
         assert_eq!((text_v.kind(), run_v.kind()), (Kind::WidePart, Kind::WidePart));
-        // SAFETY: each value was made from a live shared borrow of its type,
-        // and is released once after its read.
+        // SAFETY: each value was made from a live shared borrow of its type.
         unsafe {
             assert_eq!(&*named_part::<str>(text_v), "wide");
             assert_eq!(&*named_part::<[i64]>(run_v), &[5, 8]);
-            free(text_v);
-            free(run_v);
         }
     }
 
@@ -999,13 +1033,11 @@ mod tests {
     fn a_write_through_a_writable_reference_value_lands_in_its_target() {
         let mut run = [3i64, 5, 8];
 
-        let v = reference(RefTarget::Exclusive(&mut run[..2]));
+        let wide = WideParts::default();
+        let v = reference(&wide, RefTarget::Exclusive(&mut run[..2]));
         // SAFETY: `v` was made from the exclusive borrow above, which nothing
-        // else uses until the write ends, and is released once.
-        unsafe {
-            (*named_part::<[i64]>(v))[1] = -5;
-            free(v);
-        }
+        // else uses until the write ends.
+        unsafe { (*named_part::<[i64]>(v))[1] = -5 };
 
         assert_eq!(run, [3, -5, 8]);
     }

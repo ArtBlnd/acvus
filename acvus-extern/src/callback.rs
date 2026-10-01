@@ -41,14 +41,8 @@ pub trait LoanForm<R: Runtime>: Crossing {
     fn lend<'l>(value: Self::At<'l>, rt: &'l R, at: Settled<'l>) -> R::Value
     where
         Self: 'l;
-    /// What is left of the argument `lend` made once the call has returned: a
-    /// given value is the callee's, and nothing is left; a reference value is
-    /// the caller's, and is released.
-    #[doc(hidden)]
-    fn returned(v: R::Value);
-    /// A returning call's result read back at its form. The result is handed
-    /// over, so the read owns it: a reference value is released once its
-    /// target is read, and a value is taken.
+    /// A returning call's result read back at its form: a reference value's
+    /// target, or the value taken.
     #[doc(hidden)]
     fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Self::At<'l>
     where
@@ -79,8 +73,6 @@ macro_rules! given {
             {
                 value.give(rt, at)
             }
-
-            fn returned(_v: R::Value) {}
 
             fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> $t
             where
@@ -129,18 +121,11 @@ impl<R: Runtime, T: ?Sized + Referent> LoanForm<R> for Lent<T> {
         <R::Ref as RefKind<R>>::reference(rt, RefTarget::Shared(value), at)
     }
 
-    fn returned(v: R::Value) {
-        drop(Uniform::<R, ()>::of_the_crossing(v));
-    }
-
     fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l T
     where
         Self: 'l,
     {
-        let reference = Uniform::<R, ()>::of_the_crossing(v);
-        let target = <R::Ref as RefKind<R>>::target(rt, v, at);
-        drop(reference);
-        target
+        <R::Ref as RefKind<R>>::target(rt, v, at)
     }
 }
 
@@ -157,18 +142,11 @@ impl<R: Runtime, T: ?Sized + Referent> LoanForm<R> for LentMut<T> {
         <R::Ref as RefKind<R>>::reference(rt, RefTarget::Exclusive(value), at)
     }
 
-    fn returned(v: R::Value) {
-        drop(Uniform::<R, ()>::of_the_crossing(v));
-    }
-
     fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l mut T
     where
         Self: 'l,
     {
-        let reference = Uniform::<R, ()>::of_the_crossing(v);
-        let target = <R::Ref as RefKind<R>>::target_mut(rt, v, at);
-        drop(reference);
-        target
+        <R::Ref as RefKind<R>>::target_mut(rt, v, at)
     }
 }
 
@@ -180,15 +158,9 @@ pub trait CallArgs<R: Runtime>: Crossing {
     where
         Self: 'l;
 
-    /// A returning call: `call` made with the argument run, one value per
-    /// parameter, and what it leaves of each released once it has returned.
+    /// The argument run of a returning call, one value per parameter.
     #[doc(hidden)]
-    fn lend_call<'l>(
-        args: Self::Lent<'l>,
-        rt: &'l R,
-        at: Settled<'l>,
-        call: impl FnOnce(&[R::Value]) -> R::Value,
-    ) -> R::Value
+    fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>
     where
         Self: 'l;
 }
@@ -214,21 +186,13 @@ macro_rules! forms {
                 Self: 'l;
 
             #[allow(unused_variables)]
-            fn lend_call<'l>(
-                args: Self::Lent<'l>,
-                rt: &'l R,
-                at: Settled<'l>,
-                call: impl FnOnce(&[R::Value]) -> R::Value,
-            ) -> R::Value
+            fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>
             where
                 Self: 'l,
             {
                 let ($($v,)*) = args;
                 let run: [R::Value; $n] = [$($f::lend($v, rt, at)),*];
-                let result = call(&run);
-                let [$($v),*] = run;
-                $($f::returned($v);)*
-                result
+                run.into_iter()
             }
         }
 

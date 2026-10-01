@@ -13,13 +13,15 @@ use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::{self, Held, Kinds, Word};
 
-/// The runtime: its interner and the paths registered at it; every value's
-/// storage is its own allocation. It runs no compiled program, so it keeps no
-/// registered function: the tests call a function through its dispatch.
+/// The runtime: its interner, the paths registered at it, and the wide
+/// pointers its reference values hold; every value's storage is its own
+/// allocation. It runs no compiled program, so it keeps no registered
+/// function: the tests call a function through its dispatch.
 #[derive(Default)]
 pub struct WordRuntime {
     interner: Interner,
     registered: HashSet<QualifiedRef>,
+    pub(crate) wide: boundary::WideParts,
 }
 
 impl WordRuntime {
@@ -74,7 +76,8 @@ impl CallsBack for WordRuntime {
         A: CallArgs<Self> + 'l,
         U: LoanForm<Self> + 'l,
     {
-        let result = A::lend_call(args, self, at, |run| call_closure(self, closure, run, at));
+        let run: Vec<Word> = A::lend_run(args, self, at).collect();
+        let result = call_closure(self, closure, &run, at);
         U::read(result, self, at)
     }
 
