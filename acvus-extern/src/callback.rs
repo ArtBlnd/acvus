@@ -1,29 +1,30 @@
-//! A script closure an extern calls (crossing §3-§4): a returning call lends
+//! A function value an extern calls (crossing §3-§4): a returning call lends
 //! references and its result borrows only what it lent; an awaited call takes
 //! its arguments by move and lends none of the handler's storage (K3).
+//!
+//! A function value is held as any value is, in the owning holder indexed by
+//! its function type, `Uniform<R, Callable<'f, A, U, E>>`: taken by value it is
+//! the handler's, released by its drop and kept only where a result holds it;
+//! lent, it is `&Uniform<R, Callable<..>>`. Only an awaited body calls one
+//! (macros §1), so a call takes the awaited body's context.
 
 use std::marker::PhantomData;
 
 use crate::boundary::entry::Settled;
 use crate::boundary::seal::Crossing;
 use crate::boundary::uniform::Uniform;
-use crate::context::{Awaited, Opens, Returning};
+use crate::context::{Awaited, Opens};
 use crate::runtime::{Crosses, Opaque, RefKind, RefTarget, Referent, Runtime};
 
-/// A callback of function type `Fn(A) -> U` at effect `E`, lent to the call
-/// `'c` (limitations §3: it carries the call's lifetime, so no handler keeps
-/// it). Only the entry makes one. `A` and `U` are loan forms: a returning call lends its arguments for `'l` and its
-/// result may borrow what it lent, no longer (crossing §4); an awaited call
-/// moves its arguments and its result borrows nothing.
-pub struct Callback<'c, A, U, E, R: Runtime> {
-    closure: R::Value,
-    _at: PhantomData<(fn(&'c ()) -> &'c (), fn(A) -> U, E)>,
-}
-
-impl<A, U, E, R: Runtime> Callback<'_, A, U, E, R> {
-    pub(crate) fn of_the_entry(closure: R::Value) -> Self {
-        Callback { closure, _at: PhantomData }
-    }
+/// The function type `Fn(A) -> U` at effect `E`, whose values hold the loans
+/// `'f` their captures hold (compiler: ownership §5): an index only, as a type
+/// variable's is, so no Rust value of it exists and nothing is held at it from
+/// Rust. `A` and `U` are loan forms: a returning call lends its arguments for
+/// `'l` and its result may borrow what it lent, no longer (crossing §4); an
+/// awaited call moves its arguments and its result borrows nothing. `E` is
+/// one of the declaration's effect variables (types §2).
+pub struct Callable<'f, A, U, E> {
+    _never: PhantomData<(&'f (), fn(A) -> U, E)>,
 }
 
 /// A type's form over the loan `'l` a returning call lends: the Rust type it is
@@ -212,39 +213,40 @@ macro_rules! forms {
 forms! { 0 () }
 tuples!(forms);
 
-impl<'c, A, U, E, R> Callback<'c, A, U, E, R>
-where
-    A: CallArgs<R>,
-    U: LoanForm<R>,
-    R: CallsBack,
-{
+impl<A, U, E, R: CallsBack> Uniform<R, Callable<'_, A, U, E>> {
     /// A returning call: the arguments lent for `'l`, the result borrowing at
-    /// most what they lend.
-    pub fn call<'l>(&'l self, cx: &'l Returning<'c, R>, args: A::Lent<'l>) -> U::At<'l>
+    /// most what they lend. Only an awaited body calls a function value, so
+    /// a returning body cannot:
+    ///
+    /// ```compile_fail,E0308
+    /// use acvus_extern::Uniform;
+    /// use acvus_extern::callback::{Callable, CallsBack};
+    /// use acvus_extern::context::Returning;
+    ///
+    /// fn call<R: CallsBack>(cx: &Returning<'_, R>, f: &Uniform<R, Callable<'_, (i64,), i64, ()>>) -> i64 {
+    ///     f.call(cx, (1,))
+    /// }
+    /// ```
+    pub fn call<'l>(&'l self, cx: &'l Awaited<'_, R>, args: <A as CallArgs<R>>::Lent<'l>) -> U::At<'l>
     where
-        A: 'l,
-        U: 'l,
+        A: CallArgs<R> + 'l,
+        U: LoanForm<R> + 'l,
     {
-        let runtime = cx.runtime();
-        runtime.call_now::<A, U>(self.closure, args, Settled::of_the_entry())
+        cx.runtime().call_now::<A, U>(self.value(), args, Settled::of_the_entry())
     }
-}
 
-impl<'c, A, U, E, R> Callback<'c, A, U, E, R>
-where
-    A: MovedArgs<R>,
-    U: Crosses<R>,
-    R: CallsBack,
-{
     /// An awaited call: the arguments moved, the result borrowing nothing
     /// (crossing §3-§4).
-    pub fn call_await(&self, cx: &Awaited<'c, R>, args: A::Moved) -> impl Future<Output = U> + Send {
-        let runtime = cx.runtime();
-        runtime.call_later::<A, U>(self.closure, args, Settled::of_the_entry())
+    pub fn call_await<'a>(&'a self, cx: &'a Awaited<'_, R>, args: A::Moved) -> impl Future<Output = U> + Send + 'a
+    where
+        A: MovedArgs<R>,
+        U: Crosses<R>,
+    {
+        cx.runtime().call_later::<A, U>(self.value(), args, Settled::of_the_entry())
     }
 }
 
-/// Calling a script closure, returning or awaited (runtime contract §2): the
+/// Calling a function value, returning or awaited (runtime contract §2): the
 /// arguments are made at the runtime, and the callee's entry is opened at it.
 pub trait CallsBack: Runtime {
     fn call_now<'l, A, U>(&'l self, closure: Self::Value, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>

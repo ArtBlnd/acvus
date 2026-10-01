@@ -5,9 +5,9 @@
 use acvus_mir::ty::IntTy;
 use acvus_utils::Interner;
 
-use crate::boundary::entry::mode::{ByCallback, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
+use crate::boundary::entry::mode::{ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use crate::boundary::uniform::Uniform;
-use crate::callback::{Callback, Lent, LentMut};
+use crate::callback::{Callable, Lent, LentMut};
 use crate::decl::{DeclEffect, DeclTy};
 use crate::runtime::Runtime;
 
@@ -50,7 +50,8 @@ impl<const N: u32> Var<kind::Identity> for IdentityNth<N> {}
 
 /// A handler parameter's Rust type picks the mode the entry opens it by
 /// (macros §2): a value, a type variable's `Uniform`, `&T`, `&mut T`, a slice
-/// of `Uniform`s, `&str`, or a `Callback`.
+/// of `Uniform`s, or `&str`. A function value is a `Uniform` at its
+/// `Callable` type, taken or lent as any held value is.
 pub trait ParamMode {
     /// The mode, as `crate::mode` names it.
     type Mode;
@@ -351,28 +352,16 @@ impl<T: ?Sized + DeclType> DeclType for LentMut<T> {
     }
 }
 
-/// A callback whose effect is the declaration's N-th effect variable.
-impl<A, U, R, const N: u32> DeclType for Callback<'_, A, U, EffectNth<N>, R>
+/// A function type whose effect is the declaration's N-th effect variable
+/// (types §2). Its values are held as `Uniform<R, Callable<..>>`, taken by
+/// value or lent as any held value is.
+impl<A, U, const N: u32> DeclType for Callable<'_, A, U, EffectNth<N>>
 where
     A: DeclParts,
     U: DeclType,
-    R: Runtime,
 {
     fn decl_ty(names: &Interner) -> DeclTy {
         DeclTy::Fn { params: A::decl_parts(names), result: Box::new(U::decl_ty(names)), effect: DeclEffect::Var(N) }
-    }
-}
-
-impl<A, U, R, const N: u32> ParamMode for Callback<'_, A, U, EffectNth<N>, R>
-where
-    A: DeclParts,
-    U: DeclType,
-    R: Runtime,
-{
-    type Mode = ByCallback<A, U, EffectNth<N>>;
-
-    fn decl(names: &Interner) -> DeclTy {
-        <Self as DeclType>::decl_ty(names)
     }
 }
 

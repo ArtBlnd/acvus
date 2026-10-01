@@ -602,6 +602,29 @@ where
     unsafe { ptr::from_ref(&wide).cast::<*mut P>().read() }
 }
 
+/// The value a reference value names where the runtime holds its target as a
+/// value of its own: a `Ref` names a variable's word, and a `Part` a word in
+/// lent storage (a type variable's value, an element of an array's run).
+fn named_value(v: Word) -> *mut Word {
+    match v.kind {
+        Kind::Ref | Kind::Part => v.address::<Word>(),
+        kind => unreachable!("a {kind:?} value names no value of the runtime's"),
+    }
+}
+
+pub(crate) fn named_word<'l>(v: Word, _at: Settled<'l>) -> &'l Word {
+    // SAFETY: under `Settled`, `v` is a reference value to a value the runtime
+    // holds as its own, which names that value's word until the loan `'l`
+    // ends (S2), and no exclusive lend of it is live meanwhile.
+    unsafe { &*named_value(v) }
+}
+
+pub(crate) fn named_word_mut<'l>(v: Word, _at: Settled<'l>) -> &'l mut Word {
+    // SAFETY: as `named_word`'s, for a writable reference value made from an
+    // exclusive borrow, whose provenance it carries.
+    unsafe { &mut *named_value(v) }
+}
+
 pub(crate) fn referent<'l, P>(v: Word, _at: Settled<'l>) -> &'l P
 where
     P: ?Sized,
@@ -692,12 +715,6 @@ impl OptionKind<WordRuntime> for Kinds {
     fn exclusive<'a>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> Option<&'a mut Word> {
         place_mut::<Option<Held>>(place, at).as_mut().map(|part| &mut part.0)
     }
-    fn shared_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> Option<&'a Word> {
-        referent::<Option<Held>>(reference, at).as_ref().map(|part| &part.0)
-    }
-    fn exclusive_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> Option<&'a mut Word> {
-        referent_mut::<Option<Held>>(reference, at).as_mut().map(|part| &mut part.0)
-    }
 }
 
 impl ResultKind<WordRuntime> for Kinds {
@@ -712,12 +729,6 @@ impl ResultKind<WordRuntime> for Kinds {
     }
     fn exclusive<'a>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> Result<&'a mut Word, &'a mut Word> {
         place_mut::<Result<Held, Held>>(place, at).as_mut().map(|part| &mut part.0).map_err(|part| &mut part.0)
-    }
-    fn shared_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> Result<&'a Word, &'a Word> {
-        referent::<Result<Held, Held>>(reference, at).as_ref().map(|part| &part.0).map_err(|part| &part.0)
-    }
-    fn exclusive_ref<'a>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> Result<&'a mut Word, &'a mut Word> {
-        referent_mut::<Result<Held, Held>>(reference, at).as_mut().map(|part| &mut part.0).map_err(|part| &mut part.0)
     }
 }
 
@@ -734,12 +745,6 @@ impl TupleKind<WordRuntime> for Kinds {
     fn exclusive<'a, const N: usize>(_: &'a WordRuntime, place: &'a mut Word, at: Settled<'a>) -> &'a mut [Word; N] {
         parts_mut(place_mut(place, at))
     }
-    fn shared_ref<'a, const N: usize>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a [Word; N] {
-        parts(referent(reference, at))
-    }
-    fn exclusive_ref<'a, const N: usize>(_: &'a WordRuntime, reference: Word, at: Settled<'a>) -> &'a mut [Word; N] {
-        parts_mut(referent_mut(reference, at))
-    }
 }
 
 impl RefKind<WordRuntime> for Kinds {
@@ -751,6 +756,12 @@ impl RefKind<WordRuntime> for Kinds {
     }
     fn target_mut<'l, P: ?Sized>(_: &'l WordRuntime, v: Word, at: Settled<'l>) -> &'l mut P {
         referent_mut(v, at)
+    }
+    fn place<'l>(_: &'l WordRuntime, v: Word, at: Settled<'l>) -> &'l Word {
+        named_word(v, at)
+    }
+    fn place_mut<'l>(_: &'l WordRuntime, v: Word, at: Settled<'l>) -> &'l mut Word {
+        named_word_mut(v, at)
     }
 }
 

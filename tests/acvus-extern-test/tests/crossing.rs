@@ -10,10 +10,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use acvus_extern::Uniform;
-use acvus_extern::callback::{Lent, LentMut};
+use acvus_extern::callback::{Callable, Lent, LentMut};
 use acvus_extern::context::Returning;
 use acvus_extern::guard::{Guard, GuardMut};
-use acvus_extern::mode::{ByCallback, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
+use acvus_extern::mode::{ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use acvus_extern::done::Done;
 use acvus_extern::register::{Declared, ExternFn, Refused, Registers};
 use acvus_extern::runtime::{Crosses, Runtime};
@@ -217,6 +217,23 @@ fn a_rust_value_held_at_its_type_leaves_at_it() {
     });
 
     assert_eq!(read::<Option<String>>(&mut frame, held), Some(String::from("held")));
+}
+
+#[test]
+fn a_reference_to_a_variable_opens_as_the_value_it_holds() {
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let variable = produce(&mut frame, String::from("held"));
+
+    let mut read = None;
+    frame.call([Pass::Lend(variable)], |entry| {
+        entry.open::<(ByRef<Uniform<WordRuntime, String>>,), ()>(|cx, (held,), ()| {
+            read = Some(held.open(&cx).clone());
+            cx.finish(())
+        })
+    });
+
+    assert_eq!(read.as_deref(), Some("held"));
 }
 
 #[test]
@@ -587,13 +604,16 @@ fn a_callback_is_lent_a_part_of_the_handlers_storage() {
     let function = frame.function(dispatch::<(ByStr,), _>(length_of::<WordRuntime>));
     let text = produce(&mut frame, String::from("lent to a callback"));
 
-    let called = frame.call([Pass::Lend(text), Pass::Function(function)], |entry| {
-        entry.open::<(ByStr, ByCallback<(Lent<str>,), i64, ()>), ()>(|cx, (text, callback), ()| {
-            let first = callback.call(&cx, (&*text,));
-            let second = callback.call(&cx, (&*text,));
-            cx.finish(first + second)
-        })
-    });
+    let called = executor().block_on(frame.call_awaited([Pass::Lend(text), Pass::Lend(function)], async |entry| {
+        let body = entry.open_awaited::<(ByStr, ByRef<Uniform<WordRuntime, Callable<'_, (Lent<str>,), i64, ()>>>), (), _>(
+            |cx, (text, callback), ()| async move {
+                let first = callback.call(&cx, (&*text,));
+                let second = callback.call(&cx, (&*text,));
+                cx.finish(first + second)
+            },
+        );
+        sent(body).await
+    }));
 
     assert_eq!(read::<i64>(&mut frame, called), 36);
     assert_eq!(read::<String>(&mut frame, text), "lent to a callback");
@@ -616,12 +636,15 @@ fn a_callback_writes_through_a_part_lent_exclusively() {
     let append = frame.function(dispatch::<(ByMut<Pair>,), _>(append_written::<WordRuntime>));
     let lent = produce(&mut frame, pair("lent"));
 
-    frame.call([Pass::Lend(lent), Pass::Function(append)], |entry| {
-        entry.open::<(ByMut<Pair>, ByCallback<(LentMut<Pair>,), (), ()>), ()>(|cx, (mut lent, callback), ()| {
-            callback.call(&cx, (&mut *lent,));
-            cx.finish(())
-        })
-    });
+    executor().block_on(frame.call_awaited([Pass::Lend(lent), Pass::Lend(append)], async |entry| {
+        let body = entry.open_awaited::<(ByMut<Pair>, ByRef<Uniform<WordRuntime, Callable<'_, (LentMut<Pair>,), (), ()>>>), (), _>(
+            |cx, (mut lent, callback), ()| async move {
+                callback.call(&cx, (&mut *lent,));
+                cx.finish(())
+            },
+        );
+        sent(body).await
+    }));
 
     assert_eq!(read::<Pair>(&mut frame, lent).name, "lent and written");
 }
@@ -633,12 +656,15 @@ fn a_callback_is_lent_text() {
     let count = frame.function(dispatch::<(ByStr,), _>(words_in::<WordRuntime>));
     let text = produce(&mut frame, String::from("three short words and more"));
 
-    let called = frame.call([Pass::Lend(text), Pass::Function(count)], |entry| {
-        entry.open::<(ByStr, ByCallback<(Lent<str>,), i64, ()>), ()>(|cx, (text, callback), ()| {
-            let words = callback.call(&cx, (&text[..17],));
-            cx.finish(words)
-        })
-    });
+    let called = executor().block_on(frame.call_awaited([Pass::Lend(text), Pass::Lend(count)], async |entry| {
+        let body = entry.open_awaited::<(ByStr, ByRef<Uniform<WordRuntime, Callable<'_, (Lent<str>,), i64, ()>>>), (), _>(
+            |cx, (text, callback), ()| async move {
+                let words = callback.call(&cx, (&text[..17],));
+                cx.finish(words)
+            },
+        );
+        sent(body).await
+    }));
 
     assert_eq!(read::<i64>(&mut frame, called), 3);
 }
@@ -657,8 +683,8 @@ fn an_awaited_callback_takes_its_arguments_by_move() {
     let mut frame = Frame::new(&runtime);
     let consume = frame.function(dispatch::<(ByValue<String>, ByUniform<Tally>), _>(length_and_drop::<WordRuntime>));
 
-    let called = executor().block_on(frame.call_awaited([Pass::Function(consume)], async |entry| {
-        let body = entry.open_awaited::<(ByCallback<(String, Tally), i64, ()>,), (), _>(|cx, (callback,), ()| async move {
+    let called = executor().block_on(frame.call_awaited([Pass::Give(consume)], async |entry| {
+        let body = entry.open_awaited::<(ByUniform<Callable<'_, (String, Tally), i64, ()>>,), (), _>(|cx, (callback,), ()| async move {
             cx.sleep(Duration::from_millis(1)).await;
             let length = callback.call_await(&cx, (String::from("moved"), value)).await;
             cx.finish(length)

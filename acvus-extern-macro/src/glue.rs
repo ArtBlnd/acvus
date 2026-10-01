@@ -259,12 +259,6 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
                 args: [<#runtime as ::acvus_extern::runtime::Runtime>::Value; #arity],
                 site: &::acvus_extern::SiteShape<#runtime, #requirements>,
             ) -> ::acvus_extern::done::Done<#runtime> {
-                const {
-                    ::core::assert!(
-                        !<#args_tuple as ::acvus_extern::Args<#runtime, #arity>>::CALLS,
-                        "an extern fn that runs a callback has an awaited body (macros §1): declare it `async fn`",
-                    )
-                };
                 ::acvus_extern::Entry::new(runtime, args, site).open::<#args_tuple, ()>(|__cx, #opened_tuple, ()| {
                     #(#made)*
                     #finish

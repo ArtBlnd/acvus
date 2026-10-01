@@ -93,11 +93,6 @@ pub trait Mode<R: Runtime>: Crossing {
         Self: 'c,
         R: 'c;
 
-    /// Whether the handler may call through the argument, which only an
-    /// awaited body may (macros §1): a callback.
-    #[doc(hidden)]
-    const CALLS: bool;
-
     #[doc(hidden)]
     fn open<'c>(runtime: &'c R, v: R::Value, at: Settled<'c>) -> Self::Opened<'c>
     where
@@ -135,9 +130,6 @@ pub trait RequirementMode<R: Runtime>: Crossing {
 /// The argument parameters of a handler, a tuple of `N` modes, one position
 /// each, opened from the call's argument run `[R::Value; N]`.
 pub trait Args<R: Runtime, const N: usize>: Crossing {
-    /// Whether any argument is one the handler may call through, which
-    /// only an awaited body may (macros §1).
-    const CALLS: bool;
     type Opened<'c>
     where
         Self: 'c,
@@ -188,8 +180,6 @@ pub mod mode {
     /// Text lent as `&str`, its argument a reference to a `String` or to a
     /// range of one, read through `target`.
     pub struct ByStr;
-    /// A script closure, its parameters and result loan forms.
-    pub struct ByCallback<A, U, E>(PhantomData<fn() -> (A, U, E)>);
     /// A requirement owning its receiver, and one standing at a type.
     pub struct ByInstance<F, I>(PhantomData<fn() -> (F, I)>);
     pub struct ByInstanceOf<F, Ts, L>(PhantomData<fn() -> (F, Ts, L)>);
@@ -199,7 +189,6 @@ use mode::*;
 
 use crate::boundary::instance::{Instance, InstanceOf};
 use crate::boundary::uniform::Uniform;
-use crate::callback::Callback;
 use crate::guard::{Guard, GuardMut};
 use crate::impls::receiver::{Reads, Steps};
 use crate::impls::{Family, Instances};
@@ -218,14 +207,12 @@ macro_rules! pass {
 }
 
 macro_rules! modes {
-    ($r:ident; $([$($g:tt)*] $m:ty => $opened:ty, $calls:expr, $arg:ty, $passed:ident, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
+    ($r:ident; $([$($g:tt)*] $m:ty => $opened:ty, $arg:ty, $passed:ident, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
         impl<$r: Runtime, $($g)*> Mode<$r> for $m {
             type Opened<'c> = $opened
             where
                 Self: 'c,
                 $r: 'c;
-
-            const CALLS: bool = $calls;
 
             fn open<'c>($runtime: &'c $r, $v: $r::Value, $at: Settled<'c>) -> Self::Opened<'c>
             where
@@ -254,22 +241,20 @@ macro_rules! modes {
 
 modes! {
     R;
-    [T: Crosses<R>] ByValue<T> => T, false, T, moved,
+    [T: Crosses<R>] ByValue<T> => T, T, moved,
         |runtime, v, at| T::take(runtime, v, at);
-    [T: Crosses<R>] ByRef<T> => Guard<'c, T::Open<'c>>, false, T::Open<'c>, viewed,
+    [T: Crosses<R>] ByRef<T> => Guard<'c, T::Open<'c>>, T::Open<'c>, viewed,
         |runtime, v, at| Guard::of_the_entry(T::open_ref(runtime, v, at));
-    [T: Crosses<R>] ByMut<T> => GuardMut<'c, T::OpenMut<'c>>, false, T::OpenMut<'c>, viewed,
+    [T: Crosses<R>] ByMut<T> => GuardMut<'c, T::OpenMut<'c>>, T::OpenMut<'c>, viewed,
         |runtime, v, at| GuardMut::of_the_entry(T::open_ref_mut(runtime, v, at));
-    [T] ByUniform<T> => Uniform<R, T>, false, Uniform<R, T>, moved,
+    [T] ByUniform<T> => Uniform<R, T>, Uniform<R, T>, moved,
         |_runtime, v, _at| Uniform::of_the_crossing(v);
-    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, false, &'c [Uniform<R, T>], viewed,
+    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, &'c [Uniform<R, T>], viewed,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, v, at));
-    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, false, &'c mut [Uniform<R, T>], viewed,
+    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, &'c mut [Uniform<R, T>], viewed,
         |runtime, v, at| GuardMut::of_the_entry(<R::Ref as RefKind<R>>::target_mut(runtime, v, at));
-    [] ByStr => Guard<'c, &'c str>, false, &'c str, viewed,
+    [] ByStr => Guard<'c, &'c str>, &'c str, viewed,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, v, at));
-    [A, U, E] ByCallback<A, U, E> => Callback<'c, A, U, E, R>, true, Callback<'c, A, U, E, R>, moved,
-        |_runtime, v, _at| Callback::of_the_entry(v);
 }
 
 impl<R: Instances, F: Family<Receiver = Steps>, I> RequirementMode<R> for ByInstance<F, I> {
@@ -307,7 +292,6 @@ impl<R: Instances, F: Family<Receiver = Reads>, Ts, L> RequirementMode<R> for By
 macro_rules! mode_tuples {
     ($($n:literal ($($m:ident $v:ident $i:tt),*))+) => {$(
         impl<R: Runtime, $($m: Mode<R>),*> Args<R, $n> for ($($m,)*) {
-            const CALLS: bool = false $(|| $m::CALLS)*;
             type Opened<'c> = ($($m::Opened<'c>,)*)
             where
                 Self: 'c,

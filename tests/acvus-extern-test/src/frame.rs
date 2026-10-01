@@ -23,9 +23,6 @@ pub enum Pass {
     /// The variable's value, a reference, passed to a call that reads what it
     /// names; the variable still owns it.
     Same(usize),
-    /// The variable's value, a function, passed to a call that calls it; the
-    /// variable still owns it.
-    Function(usize),
 }
 
 /// A frame's variables, each boxed so that a lent one keeps its address.
@@ -142,7 +139,7 @@ impl<'r> Frame<'r> {
         passes.map(|pass| match pass {
             Pass::Give(i) => self.variables[i].take().expect("a variable is given once").hand_over(),
             Pass::Lend(i) => self.variable(i).lend(),
-            Pass::Same(i) | Pass::Function(i) => self.variable(i).same(),
+            Pass::Same(i) => self.variable(i).same(),
         })
     }
 

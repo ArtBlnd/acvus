@@ -162,9 +162,6 @@ pub trait OptionKind<R: Runtime> {
     fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Option<R::Value>;
     fn shared<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Option<&'a R::Value>;
     fn exclusive<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Option<&'a mut R::Value>;
-    /// The option a reference value names, lent.
-    fn shared_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Option<&'a R::Value>;
-    fn exclusive_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Option<&'a mut R::Value>;
 }
 
 /// A result over its ok part's or its error part's value.
@@ -177,12 +174,6 @@ pub trait ResultKind<R: Runtime> {
         place: &'a mut R::Value,
         at: Settled<'a>,
     ) -> Result<&'a mut R::Value, &'a mut R::Value>;
-    fn shared_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Result<&'a R::Value, &'a R::Value>;
-    fn exclusive_ref<'a>(
-        rt: &'a R,
-        reference: R::Value,
-        at: Settled<'a>,
-    ) -> Result<&'a mut R::Value, &'a mut R::Value>;
 }
 
 /// A tuple over its `N` parts' values.
@@ -191,8 +182,6 @@ pub trait TupleKind<R: Runtime> {
     fn take<const N: usize>(rt: &R, v: R::Value, at: Settled<'_>) -> [R::Value; N];
     fn shared<'a, const N: usize>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a [R::Value; N];
     fn exclusive<'a, const N: usize>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut [R::Value; N];
-    fn shared_ref<'a, const N: usize>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a [R::Value; N];
-    fn exclusive_ref<'a, const N: usize>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut [R::Value; N];
 }
 
 /// A reference value, naming storage the call lent.
@@ -205,4 +194,11 @@ pub trait RefKind<R: Runtime> {
     /// contract §2, Typed reads).
     fn target<'l, P: ?Sized>(rt: &'l R, v: R::Value, at: Settled<'l>) -> &'l P;
     fn target_mut<'l, P: ?Sized>(rt: &'l R, v: R::Value, at: Settled<'l>) -> &'l mut P;
+    /// The runtime's value a reference value names, where its target is
+    /// held in the runtime's own representation (an option, a result, a
+    /// tuple, a type variable's value, a function value), read back as that
+    /// value's place for the loan `'l`, as `target` reads storage of a Rust
+    /// type.
+    fn place<'l>(rt: &'l R, v: R::Value, at: Settled<'l>) -> &'l R::Value;
+    fn place_mut<'l>(rt: &'l R, v: R::Value, at: Settled<'l>) -> &'l mut R::Value;
 }

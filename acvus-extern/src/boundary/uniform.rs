@@ -45,6 +45,12 @@ impl<R: Runtime, X> Uniform<R, X> {
         value
     }
 
+    /// The value, still owned here, handed to the runtime for an operation
+    /// that reads it at `X`.
+    pub(crate) fn value(&self) -> R::Value {
+        self.value
+    }
+
     /// The value in `place` seen as a `Uniform` at `X`, borrowed.
     pub(crate) fn at_place(place: &R::Value) -> &Self {
         // SAFETY: `Uniform` is `repr(transparent)` over the runtime value.

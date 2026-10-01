@@ -120,12 +120,6 @@ impl OptionKind<Stub> for NoKind {
     fn exclusive<'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> Option<&'a mut Counted> {
         unreachable!()
     }
-    fn shared_ref<'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> Option<&'a Counted> {
-        unreachable!()
-    }
-    fn exclusive_ref<'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> Option<&'a mut Counted> {
-        unreachable!()
-    }
 }
 
 impl ResultKind<Stub> for NoKind {
@@ -139,12 +133,6 @@ impl ResultKind<Stub> for NoKind {
         unreachable!()
     }
     fn exclusive<'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> Result<&'a mut Counted, &'a mut Counted> {
-        unreachable!()
-    }
-    fn shared_ref<'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> Result<&'a Counted, &'a Counted> {
-        unreachable!()
-    }
-    fn exclusive_ref<'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> Result<&'a mut Counted, &'a mut Counted> {
         unreachable!()
     }
 }
@@ -162,12 +150,6 @@ impl TupleKind<Stub> for NoKind {
     fn exclusive<'a, const N: usize>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> &'a mut [Counted; N] {
         unreachable!()
     }
-    fn shared_ref<'a, const N: usize>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a [Counted; N] {
-        unreachable!()
-    }
-    fn exclusive_ref<'a, const N: usize>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a mut [Counted; N] {
-        unreachable!()
-    }
 }
 
 impl RefKind<Stub> for NoKind {
@@ -178,6 +160,12 @@ impl RefKind<Stub> for NoKind {
         unreachable!()
     }
     fn target_mut<'l, P: ?Sized>(_: &'l Stub, _: Counted, _: Settled<'l>) -> &'l mut P {
+        unreachable!()
+    }
+    fn place<'l>(_: &'l Stub, _: Counted, _: Settled<'l>) -> &'l Counted {
+        unreachable!()
+    }
+    fn place_mut<'l>(_: &'l Stub, _: Counted, _: Settled<'l>) -> &'l mut Counted {
         unreachable!()
     }
 }

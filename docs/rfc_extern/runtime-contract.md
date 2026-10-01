@@ -26,10 +26,10 @@ An extern-defined generic type is stored as one Rust value. Where a type argumen
 - **Guards.** A shared guard, an exclusive guard, and a taken value. The extern side is lent storage only under a guard.
 - **The entry.** Each call has one entry, which the runtime's boundary calls with the call's values (crossing §1).
 - **Views.** A script array's slice view, shared or mutable, is a contract operation.
-- **References.** The runtime makes a reference value from a Rust borrow the call holds of storage it lent in that call, whole or any part of it, a writable one only from an exclusive borrow. A borrowed result is such a reference (crossing §4).
+- **References.** The runtime makes a reference value from a Rust borrow the call holds of storage it lent in that call, whole or any part of it, a writable one only from an exclusive borrow. A borrowed result is such a reference (crossing §4). A reference value is read back at its target: storage of a Rust type, or a value the runtime holds in its own representation, read as that value.
 - **Kinds.** The runtime makes, takes and lends values by kind: an extern-defined value, a primitive, text, an option, a result, a tuple, and a reference. Each kind is the runtime's own associated type, so each runtime implements it for its own representation. A kind's value is made from its parts' values and taken apart into them; a held value's storage and the storage a reference names are lent in place, an option's, a result's and a tuple's as their parts', so a projection is a guard at each leaf (crossing §2). A type's crossing composes its kind's operations over its parts' crossings; the runtime sees no type's structure beyond its kind's.
 - **Impls.** The runtime makes a value from an impl entry, reads an entry back at a generic function's family and task the caller names, and reads an impl value's task (impls).
-- **Callbacks.** Calling a script closure synchronously and awaited.
+- **Callbacks.** Calling a function value synchronously and awaited. A function value is held as any value is, in the owning holder indexed by its function type: taken by value it is the handler's, released by its drop and kept only where a result holds it; lent, it is a reference to it. Whatever made it, a script or later a Rust function, is not the caller's to know.
 - **Names.** The extern side interns a name in the interner the contract returns; a runtime maps no name itself.
 - **Time.** `sleep`.
 

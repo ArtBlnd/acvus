@@ -2,7 +2,7 @@
 //! its dispatch on `WordRuntime`, and its declaration read back.
 
 use acvus_extern::Uniform;
-use acvus_extern::callback::{Callback, CallsBack};
+use acvus_extern::callback::{Callable, CallsBack};
 use acvus_extern::context::{Awaited, Returning};
 use acvus_extern::decl::{DeclTy, Declaration, Var, kind};
 use acvus_extern::done::Done;
@@ -51,12 +51,22 @@ fn tagged(#[capture] tag: &String, text: &str) -> String {
 }
 
 #[extern_fn(effect = E)]
-async fn apply<'c, R: CallsBack, E: Var<kind::Effect>>(
-    #[context] cx: &Awaited<'c, R>,
-    f: Callback<'c, (i64,), i64, E, R>,
+async fn apply<'f, R: CallsBack, E: Var<kind::Effect>>(
+    #[context] cx: &Awaited<'_, R>,
+    f: Uniform<R, Callable<'f, (i64,), i64, E>>,
     n: i64,
 ) -> i64 {
     f.call_await(cx, (n,)).await + 1
+}
+
+#[extern_fn(effect = E)]
+async fn twice<'f, R: CallsBack, E: Var<kind::Effect>>(
+    #[context] cx: &Awaited<'_, R>,
+    f: &Uniform<R, Callable<'f, (i64,), i64, E>>,
+    n: i64,
+) -> i64 {
+    let once = f.call_await(cx, (n,)).await;
+    f.call_await(cx, (once,)).await
 }
 
 #[extern_fn(effect = idempotent)]
@@ -88,9 +98,25 @@ fn a_callback_and_the_context_are_passed() {
     let double = frame.function(Doubled);
     let n = produce(&mut frame, 20i64);
     let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
-    let applied = executor.block_on(frame.call_dispatch_awaited(&apply::new(), [Pass::Function(double), Pass::Give(n)]));
+    let applied = executor.block_on(frame.call_dispatch_awaited(&apply::new(), [Pass::Give(double), Pass::Give(n)]));
 
     assert_eq!(read::<i64>(&mut frame, applied), 41);
+}
+
+#[test]
+fn a_lent_function_is_called_and_stays_the_callers() {
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let double = frame.function(Doubled);
+    let n = produce(&mut frame, 5i64);
+    let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
+
+    let first = executor.block_on(frame.call_dispatch_awaited(&twice::new(), [Pass::Lend(double), Pass::Give(n)]));
+    let m = produce(&mut frame, 1i64);
+    let second = executor.block_on(frame.call_dispatch_awaited(&twice::new(), [Pass::Lend(double), Pass::Give(m)]));
+
+    assert_eq!(read::<i64>(&mut frame, first), 20);
+    assert_eq!(read::<i64>(&mut frame, second), 4);
 }
 
 /// A function value that doubles its argument, as a program's lambda would.
@@ -175,6 +201,19 @@ fn captures_and_the_context_are_no_parameters() {
             ),
             (names.intern("n"), DeclTy::Int(IntTy::I64)),
         ]
+    );
+
+    let (names, twice) = declaration_of(twice::new());
+    assert_eq!(
+        twice.params[0],
+        (
+            names.intern("f"),
+            shared(DeclTy::Fn {
+                params: vec![DeclTy::Int(IntTy::I64)],
+                result: Box::new(DeclTy::Int(IntTy::I64)),
+                effect: acvus_extern::decl::DeclEffect::Var(0),
+            })
+        )
     );
 }
 

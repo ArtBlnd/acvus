@@ -4,10 +4,10 @@ use acvus_mir::ty::IntTy;
 use acvus_utils::Interner;
 
 use super::{DeclType, EffectNth, Nth, ParamMode};
-use crate::boundary::entry::mode::{ByCallback, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
+use crate::boundary::entry::mode::{ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use crate::boundary::stub::Stub;
 use crate::boundary::uniform::Uniform;
-use crate::callback::{Callback, Lent};
+use crate::callback::{Callable, Lent};
 use crate::decl::{DeclEffect, DeclTy};
 
 fn decl<T: DeclType + ?Sized>() -> DeclTy {
@@ -69,9 +69,9 @@ fn a_reference_is_a_ref_to_its_target() {
 }
 
 #[test]
-fn a_callback_is_a_function_type_at_its_effect_variable() {
+fn a_function_value_is_a_function_type_at_its_effect_variable() {
     assert_eq!(
-        decl::<Callback<'_, (Lent<str>, i64), bool, EffectNth<2>, Stub>>(),
+        decl::<Uniform<Stub, Callable<'_, (Lent<str>, i64), bool, EffectNth<2>>>>(),
         DeclTy::Fn {
             params: vec![shared(DeclTy::Str), DeclTy::Int(IntTy::I64)],
             result: Box::new(DeclTy::Bool),
@@ -89,6 +89,11 @@ fn a_parameters_type_picks_its_mode() {
     mode_of::<&[Uniform<Stub, Nth<0>>], BySlice<Nth<0>>>(PhantomData);
     mode_of::<&mut [Uniform<Stub, u8>], BySliceMut<u8>>(PhantomData);
     mode_of::<&str, ByStr>(PhantomData);
-    mode_of::<Callback<'_, (i64,), i64, EffectNth<0>, Stub>, ByCallback<(i64,), i64, EffectNth<0>>>(PhantomData);
+    mode_of::<Uniform<Stub, Callable<'_, (i64,), i64, EffectNth<0>>>, ByUniform<Callable<'_, (i64,), i64, EffectNth<0>>>>(
+        PhantomData,
+    );
+    mode_of::<&Uniform<Stub, Callable<'_, (i64,), i64, EffectNth<0>>>, ByRef<Uniform<Stub, Callable<'_, (i64,), i64, EffectNth<0>>>>>(
+        PhantomData,
+    );
     assert_eq!(param::<&str>(), shared(DeclTy::Str));
 }

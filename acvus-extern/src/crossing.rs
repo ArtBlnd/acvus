@@ -120,14 +120,15 @@ impl<R: Runtime, T: Crosses<R>> Crosses<R> for Option<T> {
     where
         T: 'a,
     {
-        <R::Option as OptionKind<R>>::shared_ref(rt, reference, at).map(|part| T::open(rt, part, at))
+        <R::Option as OptionKind<R>>::shared(rt, <R::Ref as RefKind<R>>::place(rt, reference, at), at).map(|part| T::open(rt, part, at))
     }
 
     fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
     where
         T: 'a,
     {
-        <R::Option as OptionKind<R>>::exclusive_ref(rt, reference, at).map(|part| T::open_mut(rt, part, at))
+        let place = <R::Ref as RefKind<R>>::place_mut(rt, reference, at);
+        <R::Option as OptionKind<R>>::exclusive(rt, place, at).map(|part| T::open_mut(rt, part, at))
     }
 }
 
@@ -170,7 +171,7 @@ impl<R: Runtime, T: Crosses<R>, E: Crosses<R>> Crosses<R> for Result<T, E> {
     where
         Self: 'a,
     {
-        let parts = <R::Result as ResultKind<R>>::shared_ref(rt, reference, at);
+        let parts = <R::Result as ResultKind<R>>::shared(rt, <R::Ref as RefKind<R>>::place(rt, reference, at), at);
         parts.map(|part| T::open(rt, part, at)).map_err(|part| E::open(rt, part, at))
     }
 
@@ -178,7 +179,7 @@ impl<R: Runtime, T: Crosses<R>, E: Crosses<R>> Crosses<R> for Result<T, E> {
     where
         Self: 'a,
     {
-        let parts = <R::Result as ResultKind<R>>::exclusive_ref(rt, reference, at);
+        let parts = <R::Result as ResultKind<R>>::exclusive(rt, <R::Ref as RefKind<R>>::place_mut(rt, reference, at), at);
         parts.map(|part| T::open_mut(rt, part, at)).map_err(|part| E::open_mut(rt, part, at))
     }
 }
@@ -221,14 +222,14 @@ impl<R: Runtime, X> Crosses<R> for Uniform<R, X> {
     where
         X: 'a,
     {
-        <R::Ref as RefKind<R>>::target(rt, reference, at)
+        Uniform::at_place(<R::Ref as RefKind<R>>::place(rt, reference, at))
     }
 
     fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
     where
         X: 'a,
     {
-        <R::Ref as RefKind<R>>::target_mut(rt, reference, at)
+        Uniform::at_place_mut(<R::Ref as RefKind<R>>::place_mut(rt, reference, at))
     }
 }
 
@@ -275,7 +276,8 @@ macro_rules! tuple_crossings {
             where
                 Self: 'a,
             {
-                let [$($v),+] = <R::Tuple as TupleKind<R>>::shared_ref::<$n>(rt, reference, at);
+                let place = <R::Ref as RefKind<R>>::place(rt, reference, at);
+                let [$($v),+] = <R::Tuple as TupleKind<R>>::shared::<$n>(rt, place, at);
                 ($($p::open(rt, $v, at),)+)
             }
 
@@ -283,7 +285,8 @@ macro_rules! tuple_crossings {
             where
                 Self: 'a,
             {
-                let [$($v),+] = <R::Tuple as TupleKind<R>>::exclusive_ref::<$n>(rt, reference, at);
+                let place = <R::Ref as RefKind<R>>::place_mut(rt, reference, at);
+                let [$($v),+] = <R::Tuple as TupleKind<R>>::exclusive::<$n>(rt, place, at);
                 ($($p::open_mut(rt, $v, at),)+)
             }
         }
