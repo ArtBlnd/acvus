@@ -737,13 +737,6 @@ impl<X: Runtime> Registers for Adapter<X> {
         self.enter(path, Registered::Awaited(Box::new(f)))
     }
 
-    fn registered(&self, path: QualifiedRef) -> Option<&dyn ExternFn<Self>> {
-        match self.registered.get(&path)? {
-            Registered::Returning(f) => Some(&**f),
-            Registered::Awaited(_) => None,
-        }
-    }
-
     fn call_awaited<'c>(
         &'c self,
         path: QualifiedRef,

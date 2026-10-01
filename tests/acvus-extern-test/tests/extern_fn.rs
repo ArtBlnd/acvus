@@ -9,23 +9,17 @@ use acvus_extern::context::Awaited;
 use acvus_extern::decl::{DeclTy, Declaration, Var, kind};
 use acvus_extern::done::Done;
 use acvus_extern::extern_fn;
-use acvus_extern::mode::{ByRef, ByStr, ByValue};
+use acvus_extern::mode::ByValue;
 use acvus_extern::register::{Declared, Registers};
-use acvus_extern::runtime::{Crosses, Mutability, Runtime};
-use acvus_extern_test::{Frame, Number, Pair, Pass, Word, WordRuntime};
+use acvus_extern::runtime::{Crosses, Runtime};
+use acvus_extern_test::{Frame, Pass, Word, WordRuntime};
 use acvus_mir::ty::{Effect, IntTy};
 use acvus_utils::Interner;
 
-use Mutability::{Exclusive, Shared};
 
 #[extern_fn(effect = pure)]
 fn add(a: u64, b: u64) -> u64 {
     a + b
-}
-
-#[extern_fn(effect = pure)]
-fn name_of(pair: &Pair) -> &str {
-    &pair.name
 }
 
 #[extern_fn]
@@ -39,11 +33,6 @@ fn get<T: Var<kind::Type>>(xs: &[T], at: u64) -> Option<&T> {
 }
 
 #[extern_fn(effect = pure)]
-fn strip<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-    text.strip_prefix(prefix)
-}
-
-#[extern_fn(effect = pure)]
 fn halves(text: &str) -> (&str, &str) {
     text.split_at(text.len() / 2)
 }
@@ -51,11 +40,6 @@ fn halves(text: &str) -> (&str, &str) {
 #[extern_fn]
 fn fail(message: &str) -> ! {
     panic!("{message}")
-}
-
-#[extern_fn]
-fn push(text: &mut String, more: &str) {
-    text.push_str(more);
 }
 
 #[extern_fn(effect = pure)]
@@ -101,16 +85,8 @@ macro_rules! on_both {
 }
 
 on_both! {
-    a_function_by_value_is_called_through_its_dispatch: calls_add;
-    a_borrowed_result_names_a_part_of_its_lent_argument: calls_name_of;
-    a_generic_function_is_dispatched_at_its_stand_in: calls_first;
-    lent_arguments_are_written_and_read: calls_push;
-    a_capture_is_lent_to_every_call: calls_tagged;
     a_callback_and_the_context_are_passed: calls_apply;
     an_awaited_function_is_called_through_its_dispatch: calls_measure;
-    an_optional_borrow_names_an_element_or_nothing: calls_get;
-    an_optional_borrow_names_a_range_of_lent_text: calls_strip;
-    a_tuple_of_borrows_names_two_ranges: calls_halves;
 }
 
 /// A variable holding `value`, made as a program makes one: a call's result.
@@ -136,84 +112,6 @@ where
         })
     });
     read.expect("the call ran")
-}
-
-/// The text a reference value names.
-fn read_text<R: Runtime<Value = Word>>(frame: &mut Frame<'_, R>, reference: usize) -> String {
-    let mut read = None;
-    frame.call(&[Pass::Same(reference, Shared)], |entry| {
-        entry.open::<(ByStr,), ()>(|cx, (text,), ()| {
-            read = Some(String::from(&*text));
-            cx.finish(())
-        })
-    });
-    read.expect("the call ran")
-}
-
-fn calls_add<R: Registers<Value = Word>>(mut runtime: R) {
-    runtime.register(add::new()).expect("the path is free");
-    let path = Declared::<R>::path(&add::new(), runtime.interner());
-
-    let mut frame = Frame::new(&runtime);
-    let a = produce(&mut frame, 2u64);
-    let b = produce(&mut frame, 3u64);
-    let sum = frame.call_registered(path, &[Pass::Give(a), Pass::Give(b)]);
-
-    assert_eq!(read::<_, u64>(&mut frame, sum), 5);
-}
-
-fn calls_name_of<R: Registers<Value = Word>>(mut runtime: R) {
-    runtime.register(name_of::new()).expect("the path is free");
-    let path = Declared::<R>::path(&name_of::new(), runtime.interner());
-
-    let mut frame = Frame::new(&runtime);
-    let pair = produce(&mut frame, Pair { name: String::from("named"), lead: Number(1), items: Vec::new() });
-    let name = frame.call_registered(path, &[Pass::Lend(pair, Shared)]);
-
-    assert_eq!(read_text(&mut frame, name), "named");
-}
-
-fn calls_first<R: Registers<Value = Word>>(mut runtime: R) {
-    runtime.register(first::new()).expect("the path is free");
-    let path = Declared::<R>::path(&first::new(), runtime.interner());
-
-    let mut frame = Frame::new(&runtime);
-    let array = frame.array(&[3i64, 5, 8]);
-    let element = frame.call_registered(path, &[Pass::Lend(array, Shared)]);
-
-    let mut read = None;
-    frame.call(&[Pass::Same(element, Shared)], |entry| {
-        entry.open::<(ByRef<Uniform<R, i64>>,), ()>(|cx, (element,), ()| {
-            read = Some(element.get(&cx));
-            cx.finish(())
-        })
-    });
-    assert_eq!(read, Some(3));
-}
-
-fn calls_push<R: Registers<Value = Word>>(mut runtime: R) {
-    runtime.register(push::new()).expect("the path is free");
-    let path = Declared::<R>::path(&push::new(), runtime.interner());
-
-    let mut frame = Frame::new(&runtime);
-    let text = produce(&mut frame, String::from("lent"));
-    let more = produce(&mut frame, String::from(" and written"));
-    frame.call_registered(path, &[Pass::Lend(text, Exclusive), Pass::Lend(more, Shared)]);
-
-    assert_eq!(read::<_, String>(&mut frame, text), "lent and written");
-}
-
-fn calls_tagged<R: Registers<Value = Word>>(mut runtime: R) {
-    runtime.register(tagged::with(String::from("tag"))).expect("the path is free");
-    let path = Declared::<R>::path(&tagged::with(String::new()), runtime.interner());
-
-    let mut frame = Frame::new(&runtime);
-    let text = produce(&mut frame, String::from("text"));
-    let first = frame.call_registered(path, &[Pass::Lend(text, Shared)]);
-    let second = frame.call_registered(path, &[Pass::Lend(text, Shared)]);
-
-    assert_eq!(read::<_, String>(&mut frame, first), "tag: text");
-    assert_eq!(read::<_, String>(&mut frame, second), "tag: text");
 }
 
 fn calls_apply<R: Registers<Value = Word> + CallsBack>(mut runtime: R) {
@@ -253,50 +151,6 @@ fn calls_measure<R: Registers<Value = Word>>(mut runtime: R) {
     let length = executor.block_on(frame.call_registered_awaited(path, &[Pass::Give(text)]));
 
     assert_eq!(read::<_, i64>(&mut frame, length), 7);
-}
-
-fn calls_get<R: Registers<Value = Word>>(mut runtime: R) {
-    runtime.register(get::new()).expect("the path is free");
-    let path = Declared::<R>::path(&get::new(), runtime.interner());
-
-    let mut frame = Frame::new(&runtime);
-    let array = frame.array(&[3i64, 5, 8]);
-    let one = produce(&mut frame, 1u64);
-    let five = produce(&mut frame, 5u64);
-    let present = frame.call_registered(path, &[Pass::Lend(array, Shared), Pass::Give(one)]);
-    let absent = frame.call_registered(path, &[Pass::Lend(array, Shared), Pass::Give(five)]);
-
-    assert_eq!(frame.option_referent::<Word>(present).map(Word::as_i64), Some(5));
-    assert_eq!(frame.option_referent::<Word>(absent).map(Word::as_i64), None);
-}
-
-fn calls_strip<R: Registers<Value = Word>>(mut runtime: R) {
-    runtime.register(strip::new()).expect("the path is free");
-    let path = Declared::<R>::path(&strip::new(), runtime.interner());
-
-    let mut frame = Frame::new(&runtime);
-    let text = produce(&mut frame, String::from("prefixed text"));
-    let prefix = produce(&mut frame, String::from("prefixed "));
-    let other = produce(&mut frame, String::from("other"));
-    let stripped = frame.call_registered(path, &[Pass::Lend(text, Shared), Pass::Lend(prefix, Shared)]);
-    let kept = frame.call_registered(path, &[Pass::Lend(text, Shared), Pass::Lend(other, Shared)]);
-
-    assert_eq!(frame.option_referent::<str>(stripped), Some(String::from("text")));
-    assert_eq!(frame.option_referent::<str>(kept), None);
-}
-
-fn calls_halves<R: Registers<Value = Word>>(mut runtime: R) {
-    runtime.register(halves::new()).expect("the path is free");
-    let path = Declared::<R>::path(&halves::new(), runtime.interner());
-
-    let mut frame = Frame::new(&runtime);
-    let text = produce(&mut frame, String::from("leftright"));
-    let halves = frame.call_registered(path, &[Pass::Lend(text, Shared)]);
-
-    assert_eq!(
-        frame.pair_referents::<str>(halves),
-        (String::from("left"), String::from("right"))
-    );
 }
 
 fn declaration_of<F: Declared<WordRuntime>>(f: F) -> (Interner, Declaration) {
@@ -371,18 +225,6 @@ fn a_borrowed_result_declares_its_references() {
 fn a_call_that_never_returns_declares_no_value() {
     let (_, fail) = declaration_of(fail::new());
     assert_eq!(fail.result, DeclTy::Never);
-}
-
-#[test]
-#[should_panic(expected = "failed on purpose")]
-fn a_call_that_never_returns_traps() {
-    let mut runtime = WordRuntime::default();
-    runtime.register(fail::new()).expect("the path is free");
-    let path = Declared::<WordRuntime>::path(&fail::new(), runtime.interner());
-
-    let mut frame = Frame::new(&runtime);
-    let message = produce(&mut frame, String::from("failed on purpose"));
-    frame.call_registered(path, &[Pass::Lend(message, Shared)]);
 }
 
 /// A borrowed result's parts need outlive only the borrow they are made

@@ -118,8 +118,6 @@ pub trait Registers: Runtime {
     where
         F: AwaitedFn<Self> + Declared<Self>;
 
-    /// The returning function registered at `path`.
-    fn registered(&self, path: QualifiedRef) -> Option<&dyn ExternFn<Self>>;
 
     /// Calls the awaited function registered at `path`, none being
     /// registered there as awaited. How the runtime holds the function and

@@ -111,7 +111,6 @@ macro_rules! on_both_owned {
 }
 
 on_both_owned! {
-    a_registered_function_is_called_through_its_dispatch: registered_called;
     a_path_registered_twice_is_refused: registered_twice;
     an_awaited_function_is_registered_and_called_through_its_dispatch: registered_awaited_called;
     a_path_registered_returning_and_awaited_is_refused: registered_both_ways;
@@ -125,18 +124,6 @@ fn add(a: u64, b: u64) -> u64 {
 /// The path `add` is registered at.
 fn add_path<R: Runtime>(runtime: &R) -> QualifiedRef {
     Declared::<R>::path(&add::new(), runtime.interner())
-}
-
-fn registered_called<R: Registers<Value = Word>>(mut runtime: R) {
-    runtime.register(add::new()).expect("the path is free");
-    let path = add_path(&runtime);
-
-    let mut frame = Frame::new(&runtime);
-    let a = produce(&mut frame, 2u64);
-    let b = produce(&mut frame, 3u64);
-    let sum = frame.call_registered(path, &[Pass::Give(a), Pass::Give(b)]);
-
-    assert_eq!(read::<_, u64>(&mut frame, sum), 5);
 }
 
 fn registered_twice<R: Registers<Value = Word>>(mut runtime: R) {
@@ -160,7 +147,6 @@ fn registered_awaited_called<R: Registers<Value = Word>>(mut runtime: R) {
     let length = executor().block_on(frame.call_registered_awaited(path, &[Pass::Give(text)]));
 
     assert_eq!(read::<_, i64>(&mut frame, length), 7);
-    assert!(runtime.registered(path).is_none(), "an awaited function is not called returning");
 }
 
 /// An awaited function declared at the path `add` names.

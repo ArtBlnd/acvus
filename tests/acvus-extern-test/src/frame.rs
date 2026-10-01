@@ -106,22 +106,6 @@ where
         self.variables.len() - 1
     }
 
-    /// Calls the function registered at `path` with the arguments `passes`
-    /// names, as a compiled call does once its path is resolved, and keeps
-    /// its result in a new variable, whose index it returns.
-    pub fn call_registered(&mut self, path: QualifiedRef, passes: &[Pass]) -> usize
-    where
-        R: Registers,
-    {
-        let args = self.arguments(passes);
-        let site = Self::site(passes);
-
-        let f = self.runtime.registered(path).expect("a compiled call names a registered function");
-        let done = f.call(self.runtime, &args, &site);
-
-        self.keep(done)
-    }
-
     /// Calls the awaited function registered at `path` with the arguments
     /// `passes` names, and keeps its result in a new variable.
     pub async fn call_registered_awaited(&mut self, path: QualifiedRef, passes: &[Pass]) -> usize
