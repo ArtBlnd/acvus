@@ -25,8 +25,9 @@ impl<R: Runtime> Made<'_, R> {
     }
 }
 
-/// What makes a borrowed result's values under the guard's borrow `'s`: a
-/// reference value from each part, each structure by its kind.
+/// What makes a borrowed result's leaves under the guard's borrow `'s`: a
+/// reference value from each part. A structure over them is made by
+/// `Borrows`.
 pub struct Sink<'s, R: Runtime> {
     runtime: &'s R,
     at: Settled<'s>,
@@ -49,19 +50,6 @@ impl<'s, R: Runtime> Sink<'s, R> {
     /// An exclusive reference to `part`.
     pub fn lent_mut<P: ?Sized + Referent>(&self, part: &'s mut P) -> Made<'s, R> {
         self.made(<R::Ref as RefKind<R>>::reference(self.runtime, RefTarget::Exclusive(part), self.at))
-    }
-
-    pub fn option(&self, part: Option<Made<'s, R>>) -> Made<'s, R> {
-        self.made(<R::Option as OptionKind<R>>::give(self.runtime, part.map(Made::into_value), self.at))
-    }
-
-    pub fn result(&self, part: Result<Made<'s, R>, Made<'s, R>>) -> Made<'s, R> {
-        let part = part.map(Made::into_value).map_err(Made::into_value);
-        self.made(<R::Result as ResultKind<R>>::give(self.runtime, part, self.at))
-    }
-
-    pub fn tuple<const N: usize>(&self, parts: [Made<'s, R>; N]) -> Made<'s, R> {
-        self.made(<R::Tuple as TupleKind<R>>::give(self.runtime, parts.map(Made::into_value), self.at))
     }
 }
 
@@ -86,15 +74,15 @@ impl<'s, R: Runtime, P: ?Sized + Referent + 's> Borrows<'s, R> for &'s mut P {
 
 impl<'s, R: Runtime, B: Borrows<'s, R>> Borrows<'s, R> for Option<B> {
     fn made(self, sink: &Sink<'s, R>) -> Made<'s, R> {
-        let part = self.map(|part| part.made(sink));
-        sink.option(part)
+        let part = self.map(|part| part.made(sink).into_value());
+        sink.made(<R::Option as OptionKind<R>>::give(sink.runtime, part, sink.at))
     }
 }
 
 impl<'s, R: Runtime, B: Borrows<'s, R>, C: Borrows<'s, R>> Borrows<'s, R> for Result<B, C> {
     fn made(self, sink: &Sink<'s, R>) -> Made<'s, R> {
-        let part = self.map(|part| part.made(sink)).map_err(|part| part.made(sink));
-        sink.result(part)
+        let part = self.map(|part| part.made(sink).into_value()).map_err(|part| part.made(sink).into_value());
+        sink.made(<R::Result as ResultKind<R>>::give(sink.runtime, part, sink.at))
     }
 }
 
@@ -104,7 +92,8 @@ macro_rules! tuple_borrows {
         impl<'s, R: Runtime, $($b: Borrows<'s, R>),+> Borrows<'s, R> for ($($b,)+) {
             fn made(self, sink: &Sink<'s, R>) -> Made<'s, R> {
                 let ($($v,)+) = self;
-                sink.tuple([$($v.made(sink)),+])
+                let parts = [$($v.made(sink).into_value()),+];
+                sink.made(<R::Tuple as TupleKind<R>>::give::<$n>(sink.runtime, parts, sink.at))
             }
         }
     )+};
