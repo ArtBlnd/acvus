@@ -6,7 +6,7 @@ use acvus_extern::decl::{DeclTy, Declaration, Var, kind};
 use acvus_extern::extern_fn;
 use acvus_extern::mode::ByValue;
 use acvus_extern::register::Declared;
-use acvus_extern::context::Returning;
+use acvus_extern::executor::Executor;
 use acvus_extern::runtime::{Crosses, Runtime};
 use acvus_extern::{GenericParam, LayoutFact, Structural, Uniform};
 use acvus_extern_test::{Cursor, Frame, Pair, Pass, Session, Stack, Word, WordRuntime};
@@ -39,13 +39,13 @@ fn session<T: Var<kind::Type>, E: Var<kind::Effect>, I: Var<kind::Identity>>() -
 
 /// The parts of `text` between each `sep`, each held at its own type.
 #[extern_fn(effect = pure)]
-fn split<R: Runtime>(#[context] cx: &Returning<'_, R>, text: &str, sep: &str) -> Vec<Uniform<R, String>> {
+fn split<R: Runtime>(#[context] cx: &Executor<'_, R>, text: &str, sep: &str) -> Vec<Uniform<R, String>> {
     text.split(sep).map(|part| Uniform::new(cx, String::from(part))).collect()
 }
 
 /// The part at `at` of a sequence `split` gave.
 #[extern_fn(effect = pure)]
-fn part<R: Runtime>(#[context] cx: &Returning<'_, R>, parts: &Vec<Uniform<R, String>>, at: u64) -> String {
+fn part<R: Runtime>(#[context] cx: &Executor<'_, R>, parts: &Vec<Uniform<R, String>>, at: u64) -> String {
     parts[at as usize].open(cx).clone()
 }
 

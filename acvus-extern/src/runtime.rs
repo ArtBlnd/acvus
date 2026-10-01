@@ -40,23 +40,23 @@ use crate::boundary::uniform::{Primitive, Release};
 /// runtime's uniform values, `Vec<Uniform<R, X>>`:
 ///
 /// ```compile_fail,E0277
-/// use acvus_extern::context::Returning;
+/// use acvus_extern::executor::Executor;
 /// use acvus_extern::done::Done;
 /// use acvus_extern::runtime::Runtime;
 ///
 /// struct Undeclared;
 ///
-/// fn finish<R: Runtime>(cx: Returning<'_, R>) -> Done<R> {
+/// fn finish<R: Runtime>(cx: Executor<'_, R>) -> Done<R> {
 ///     cx.finish(Undeclared)
 /// }
 /// ```
 ///
 /// ```compile_fail,E0277
-/// use acvus_extern::context::Returning;
+/// use acvus_extern::executor::Executor;
 /// use acvus_extern::done::Done;
 /// use acvus_extern::runtime::Runtime;
 ///
-/// fn finish<R: Runtime>(cx: Returning<'_, R>) -> Done<R> {
+/// fn finish<R: Runtime>(cx: Executor<'_, R>) -> Done<R> {
 ///     cx.finish(vec![1i64])
 /// }
 /// ```
@@ -128,7 +128,7 @@ pub trait Referent: Crossing {}
 
 /// What a reference value is made from: a Rust borrow, at a lifetime within
 /// the call, of storage that lives until the loan it is labelled with ends
-/// (`context::Returning::finish_borrowed`); a writable one only from an
+/// (`executor::Executor::finish_borrowed`); a writable one only from an
 /// exclusive borrow. The storage is what an argument lent, whole or any part
 /// of it, or what a kept loan holds (runtime contract §2, References).
 pub enum RefTarget<'a, P: ?Sized> {

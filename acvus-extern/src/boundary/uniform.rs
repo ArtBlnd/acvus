@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use crate::boundary::entry::Settled;
 use crate::boundary::seal::Crossing;
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
-use crate::context::Opens;
+use crate::executor::Executor;
 use crate::runtime::{Crosses, PrimitiveKind, Runtime};
 
 /// The permission to release one value, made only by an owning holder's drop.
@@ -72,31 +72,31 @@ impl<R: Runtime, T: Crosses<R>> Uniform<R, T> {
     ///
     /// ```compile_fail,E0277
     /// use acvus_extern::Uniform;
-    /// use acvus_extern::context::Returning;
+    /// use acvus_extern::executor::Executor;
     /// use acvus_extern::decl::Nth;
     /// use acvus_extern::runtime::Runtime;
     ///
-    /// fn erase<R: Runtime>(cx: &Returning<'_, R>) -> Uniform<R, Nth<0>> {
+    /// fn erase<R: Runtime>(cx: &Executor<'_, R>) -> Uniform<R, Nth<0>> {
     ///     Uniform::new(cx, Nth::<0>)
     /// }
     /// ```
-    pub fn new<'c>(cx: &impl Opens<'c, R>, value: T) -> Self {
+    pub fn new<'c>(cx: &Executor<'c, R>, value: T) -> Self {
         Uniform::of_the_crossing(value.give(cx.runtime(), Settled::of_the_entry()))
     }
 
     /// Lends the value in place within the call `cx` belongs to, as `T`'s
     /// view.
-    pub fn open<'s>(&'s self, cx: &impl Opens<'s, R>) -> T::Open<'s> {
+    pub fn open<'s>(&'s self, cx: &Executor<'s, R>) -> T::Open<'s> {
         T::open(cx.runtime(), &self.value, Settled::of_the_entry())
     }
 
-    pub fn open_mut<'s>(&'s mut self, cx: &impl Opens<'s, R>) -> T::OpenMut<'s> {
+    pub fn open_mut<'s>(&'s mut self, cx: &Executor<'s, R>) -> T::OpenMut<'s> {
         T::open_mut(cx.runtime(), &mut self.value, Settled::of_the_entry())
     }
 
     /// The value itself. A `Uniform` only dropped is released and never
     /// taken.
-    pub fn into_inner<'c>(self, cx: &impl Opens<'c, R>) -> T {
+    pub fn into_inner<'c>(self, cx: &Executor<'c, R>) -> T {
         T::take(cx.runtime(), self.into_value(), Settled::of_the_entry())
     }
 }
@@ -116,12 +116,12 @@ primitives!(primitive);
 impl<R: Runtime, T: Primitive> Uniform<R, T> {
     /// The value, read by a copy: the runtime's take of the held value's
     /// copy, which owns nothing to release.
-    pub fn get<'c>(&self, cx: &impl Opens<'c, R>) -> T {
+    pub fn get<'c>(&self, cx: &Executor<'c, R>) -> T {
         <R::Primitive as PrimitiveKind<R>>::take(cx.runtime(), self.value, Settled::of_the_entry())
     }
 
     /// The value replaced by `value`, made by the runtime.
-    pub fn set<'c>(&mut self, cx: &impl Opens<'c, R>, value: T) {
+    pub fn set<'c>(&mut self, cx: &Executor<'c, R>, value: T) {
         let made = <R::Primitive as PrimitiveKind<R>>::give(cx.runtime(), value, Settled::of_the_entry());
         std::mem::replace(&mut self.value, made).release(Releasing { _private: () });
     }

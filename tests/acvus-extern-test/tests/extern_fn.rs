@@ -3,7 +3,7 @@
 
 use acvus_extern::Uniform;
 use acvus_extern::callback::{Callable, CallsBack};
-use acvus_extern::context::{Awaited, Returning};
+use acvus_extern::executor::Executor;
 use acvus_extern::decl::{Contexts, DeclTy, Declaration, Reissue, SplitCost, Var, kind};
 use acvus_extern::done::Done;
 use acvus_extern::extern_fn;
@@ -43,7 +43,7 @@ fn fail(message: &str) -> ! {
 }
 
 #[extern_fn(effect = pure)]
-fn first_positive<'a, R: Runtime>(#[context] cx: &Returning<'_, R>, xs: &'a [Uniform<R, i64>]) -> Option<&'a Uniform<R, i64>> {
+fn first_positive<'a, R: Runtime>(#[context] cx: &Executor<'_, R>, xs: &'a [Uniform<R, i64>]) -> Option<&'a Uniform<R, i64>> {
     xs.iter().find(|x| x.get(cx) > 0)
 }
 
@@ -54,7 +54,7 @@ fn tagged(#[capture] tag: &String, text: &str) -> String {
 
 #[extern_fn(effect = E)]
 async fn apply<'f, R: CallsBack, E: Var<kind::Effect>>(
-    #[context] cx: &Awaited<'_, R>,
+    #[context] cx: &Executor<'_, R>,
     f: Uniform<R, Callable<'f, (i64,), i64, E>>,
     n: i64,
 ) -> i64 {
@@ -63,7 +63,7 @@ async fn apply<'f, R: CallsBack, E: Var<kind::Effect>>(
 
 #[extern_fn(effect = E)]
 async fn twice<'f, R: CallsBack, E: Var<kind::Effect>>(
-    #[context] cx: &Awaited<'_, R>,
+    #[context] cx: &Executor<'_, R>,
     f: &Uniform<R, Callable<'f, (i64,), i64, E>>,
     n: i64,
 ) -> i64 {
@@ -285,7 +285,7 @@ fn cursor<'a, R: Runtime>(over: Loaned<'a, Pair, R>) -> Cursor<'a, R> {
 /// The name of the pair a cursor keeps a loan on, read through the loan
 /// within this call.
 #[extern_fn(effect = pure)]
-fn name_under<'a, R: Runtime>(#[context] cx: &Returning<'a, R>, c: &Cursor<'a, R>) -> String {
+fn name_under<'a, R: Runtime>(#[context] cx: &Executor<'a, R>, c: &Cursor<'a, R>) -> String {
     c.over.open(cx).name.clone()
 }
 
@@ -326,7 +326,7 @@ fn both<'a, 'b>(a: &'a str, b: &'b str) -> (&'a str, &'b str) {
 /// The name of the pair a cursor keeps a loan on, borrowed through that loan:
 /// the result holds the cursor's loan, not the borrow of the cursor.
 #[extern_fn(effect = pure)]
-fn name_through<'a, R: Runtime>(#[context] cx: &Returning<'a, R>, c: &Cursor<'a, R>) -> &'a str {
+fn name_through<'a, R: Runtime>(#[context] cx: &Executor<'a, R>, c: &Cursor<'a, R>) -> &'a str {
     c.over.open(cx).name.as_str()
 }
 

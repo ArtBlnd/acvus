@@ -49,8 +49,8 @@ pub enum Role {
     /// A capture the marker holds, lent to every call: `#[capture] name: &T`
     /// holds a `T`.
     Capture { held: Box<Type> },
-    /// The body's context: `#[context] cx: &Returning<'_, R>`, or
-    /// `&Awaited<'_, R>` for an awaited body.
+    /// The body's executor: `#[context] cx: &Executor<'_, R>`, for either
+    /// body.
     Context,
 }
 

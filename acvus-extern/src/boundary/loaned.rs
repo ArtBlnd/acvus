@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 
 use crate::boundary::entry::Settled;
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
-use crate::context::Opens;
+use crate::executor::Executor;
 use crate::runtime::{Crosses, Runtime};
 
 /// A shared loan on storage of type `T`, retained as a reference value. `'a`
@@ -39,31 +39,31 @@ impl<T, R: Runtime> LoanedMut<'_, T, R> {
 }
 
 impl<'a, T: Crosses<R> + 'a, R: Runtime> Loaned<'a, T, R> {
-    /// Opens the loan as `T`'s view, for no longer than the call the context
-    /// is of: the runtime is borrowed for the view through the context. A
-    /// context at `'a`, `'a` lying in its call, gives the view for as long as
+    /// Opens the loan as `T`'s view, for no longer than the call the executor
+    /// is of: the runtime is borrowed for the view through the executor. An
+    /// executor at `'a`, `'a` lying in its call, gives the view for as long as
     /// the loan; another, for less. A shared loan's views may be held
-    /// together. A view at the loan's lifetime is had only through a context
+    /// together. A view at the loan's lifetime is had only through an executor
     /// at it:
     ///
     /// ```compile_fail,E0621
     /// use acvus_extern::Loaned;
-    /// use acvus_extern::context::Returning;
+    /// use acvus_extern::executor::Executor;
     /// use acvus_extern::runtime::Runtime;
     ///
-    /// fn text<'a, R: Runtime>(cx: &Returning<'_, R>, text: &Loaned<'a, String, R>) -> &'a String {
+    /// fn text<'a, R: Runtime>(cx: &Executor<'_, R>, text: &Loaned<'a, String, R>) -> &'a String {
     ///     text.open(cx)
     /// }
     /// ```
-    pub fn open(&self, cx: &impl Opens<'a, R>) -> T::Open<'a> {
+    pub fn open(&self, cx: &Executor<'a, R>) -> T::Open<'a> {
         T::open_ref(cx.runtime(), self.reference, Settled::of_the_entry())
     }
 }
 
 impl<T: Crosses<R>, R: Runtime> LoanedMut<'_, T, R> {
     /// Opens the loan as `T`'s exclusive view for as long as `self` is
-    /// borrowed, within the call the context is of.
-    pub fn open<'s>(&'s mut self, cx: &impl Opens<'s, R>) -> T::OpenMut<'s>
+    /// borrowed, within the call the executor is of.
+    pub fn open<'s>(&'s mut self, cx: &Executor<'s, R>) -> T::OpenMut<'s>
     where
         T: 's,
     {

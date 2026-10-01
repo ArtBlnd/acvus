@@ -4,14 +4,14 @@
 
 use std::marker::PhantomData;
 
-use crate::context::{Awaited, Returning};
+use crate::executor::Executor;
 use crate::done::Done;
 use crate::runtime::Runtime;
 
 /// Proof that a read or a result is the crossing's, at the type the checker
 /// settled for the site of the call: only this crate makes one, within a
 /// call. It bounds no lifetime: what a read lends is bounded by the runtime's
-/// borrow, which the call's context gives (`Opens`).
+/// borrow, which the call's executor gives.
 #[derive(Clone, Copy)]
 pub struct Settled<'c> {
     _call: PhantomData<fn(&'c ()) -> &'c ()>,
@@ -55,7 +55,7 @@ impl<'c, R: Runtime, const N: usize, const M: usize> Entry<'c, R, N, M> {
 
     /// Opens the arguments `A`, one per position, and the requirements `Q`,
     /// from the site's impls, and runs the returning body.
-    pub fn open<A, Q>(self, body: impl FnOnce(Returning<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Done<R>) -> Done<R>
+    pub fn open<A, Q>(self, body: impl FnOnce(Executor<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Done<R>) -> Done<R>
     where
         A: Args<R, N> + 'c,
         Q: Requires<R, M> + 'c,
@@ -63,7 +63,7 @@ impl<'c, R: Runtime, const N: usize, const M: usize> Entry<'c, R, N, M> {
         let at = Settled::of_the_entry();
         let args = A::open(self.runtime, self.args, at);
         let requirements = Q::open(self.runtime, self.site.impls, at);
-        body(Returning::of_the_entry(self.runtime), args, requirements)
+        body(Executor::of_the_entry(self.runtime), args, requirements)
     }
 
     /// Opens the arguments and the requirements as `open` does, and runs the
@@ -71,7 +71,7 @@ impl<'c, R: Runtime, const N: usize, const M: usize> Entry<'c, R, N, M> {
     /// made, so the future holds them and nothing else of the entry.
     pub fn open_awaited<A, Q, Fut>(
         self,
-        body: impl FnOnce(Awaited<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Fut,
+        body: impl FnOnce(Executor<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Fut,
     ) -> impl Future<Output = Done<R>> + Send + 'c
     where
         A: Args<R, N> + 'c,
@@ -81,7 +81,7 @@ impl<'c, R: Runtime, const N: usize, const M: usize> Entry<'c, R, N, M> {
         let at = Settled::of_the_entry();
         let args = A::open(self.runtime, self.args, at);
         let requirements = Q::open(self.runtime, self.site.impls, at);
-        body(Awaited::of_the_entry(self.runtime), args, requirements)
+        body(Executor::of_the_entry(self.runtime), args, requirements)
     }
 }
 

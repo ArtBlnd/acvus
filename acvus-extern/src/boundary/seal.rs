@@ -7,14 +7,13 @@ use crate::boundary::entry::mode::{
 };
 use crate::boundary::uniform::Uniform;
 use crate::callback::{Lent, LentMut};
-use crate::context::{Awaited, Returning};
 use crate::runtime::Runtime;
 
 /// The seal of a type's crossing: every trait that gives, takes, lends or
 /// reads a value at a type (`Crosses`, `Opaque`, `Referent`, `Primitive`,
-/// `LoanForm`, a mode, the argument tuples, a context a loan opens in). A
-/// runtime trusts its own typed reads, so a crossing written by hand could
-/// read a value at a type it is not.
+/// `LoanForm`, a mode, the argument tuples). A runtime trusts its own typed
+/// reads, so a crossing written by hand could read a value at a type it is
+/// not.
 ///
 /// # Safety
 /// Only this crate implements it, for the language's types and its own
@@ -70,8 +69,6 @@ crossing! {
     [] ByStr;
     [T] ByLoaned<T>;
     [T] ByLoanedMut<T>;
-    [R: Runtime] Returning<'_, R>;
-    [R: Runtime] Awaited<'_, R>;
 }
 
 macro_rules! crossing_primitives {

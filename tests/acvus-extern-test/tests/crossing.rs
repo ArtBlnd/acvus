@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use acvus_extern::Uniform;
 use acvus_extern::callback::{Callable, Lent, LentMut};
-use acvus_extern::context::Returning;
+use acvus_extern::executor::Executor;
 use acvus_extern::mode::{ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use acvus_extern::done::Done;
 use acvus_extern::register::{Declared, ExternFn, Refused, Registers};
@@ -546,7 +546,7 @@ where
     R: Runtime,
     A: acvus_extern::Args<R, N> + 'static,
     U: Crosses<R>,
-    F: for<'c> Fn(&Returning<'c, R>, A::Opened<'c>) -> U + Send + Sync + 'static,
+    F: for<'c> Fn(&Executor<'c, R>, A::Opened<'c>) -> U + Send + Sync + 'static,
 {
     fn call(&self, runtime: &R, args: [R::Value; N], site: &SiteShape<R, 0>) -> Done<R> {
         Entry::new(runtime, args, site).open::<A, ()>(|cx, args, ()| {
@@ -557,7 +557,7 @@ where
 }
 
 /// The length of text lent to it.
-fn length_of<R: Runtime>(_: &Returning<'_, R>, (text,): (&str,)) -> i64 {
+fn length_of<R: Runtime>(_: &Executor<'_, R>, (text,): (&str,)) -> i64 {
     text.len() as i64
 }
 
@@ -582,7 +582,7 @@ fn a_function_value_releases_what_it_captures_once() {
     let runtime = WordRuntime::default();
     let (captured, drops) = tally();
     let mut frame = Frame::new(&runtime);
-    let function = frame.function(dispatch::<(ByValue<i64>,), _>(move |_: &Returning<'_, WordRuntime>, (n,): (i64,)| {
+    let function = frame.function(dispatch::<(ByValue<i64>,), _>(move |_: &Executor<'_, WordRuntime>, (n,): (i64,)| {
         n + Arc::strong_count(&captured.0) as i64
     }));
 
@@ -619,11 +619,11 @@ fn a_callback_is_lent_a_part_of_the_handlers_storage() {
 
 /// Appends to the name of a `Pair` lent exclusively, in the view its crossing
 /// opens.
-fn append_written<'c, R: Runtime>(_: &Returning<'c, R>, (lent,): (<Pair as Crosses<R>>::OpenMut<'c>,)) {
+fn append_written<'c, R: Runtime>(_: &Executor<'c, R>, (lent,): (<Pair as Crosses<R>>::OpenMut<'c>,)) {
     lent.name.push_str(" and written");
 }
 
-fn words_in<R: Runtime>(_: &Returning<'_, R>, (text,): (&str,)) -> i64 {
+fn words_in<R: Runtime>(_: &Executor<'_, R>, (text,): (&str,)) -> i64 {
     text.split(' ').count() as i64
 }
 
@@ -669,7 +669,7 @@ fn a_callback_is_lent_text() {
 
 /// The length of a `String` taken by value; the `Tally` held beside it is
 /// dropped unread.
-fn length_and_drop<R: Runtime>(_: &Returning<'_, R>, (text, tally): (String, Uniform<R, Tally>)) -> i64 {
+fn length_and_drop<R: Runtime>(_: &Executor<'_, R>, (text, tally): (String, Uniform<R, Tally>)) -> i64 {
     drop(tally);
     text.len() as i64
 }
@@ -695,7 +695,7 @@ fn an_awaited_callback_takes_its_arguments_by_move() {
 }
 
 /// The length of a `String` held by value, taken through the body's context.
-fn held_length<R: Runtime>(cx: &Returning<'_, R>, (held,): (Uniform<R, String>,)) -> i64 {
+fn held_length<R: Runtime>(cx: &Executor<'_, R>, (held,): (Uniform<R, String>,)) -> i64 {
     held.into_inner(cx).len() as i64
 }
 

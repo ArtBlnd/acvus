@@ -76,21 +76,21 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// A result whose lifetime is the context's alone:
 ///
 /// ```compile_fail
-/// use acvus_extern::context::Returning;
+/// use acvus_extern::executor::Executor;
 /// use acvus_extern::runtime::Runtime;
 ///
 /// #[acvus_extern::extern_fn]
-/// fn f<'c, R: Runtime>(#[context] cx: &'c Returning<'c, R>, n: i64) -> &'c str { "" }
+/// fn f<'c, R: Runtime>(#[context] cx: &'c Executor<'c, R>, n: i64) -> &'c str { "" }
 /// ```
 ///
 /// A relation speaking of what is no argument, the context or a capture:
 ///
 /// ```compile_fail
-/// use acvus_extern::context::Returning;
+/// use acvus_extern::executor::Executor;
 /// use acvus_extern::runtime::Runtime;
 ///
 /// #[acvus_extern::extern_fn(relation(result <= cx))]
-/// fn f<R: Runtime>(#[context] cx: &Returning<'_, R>, n: u64) -> u64 { n }
+/// fn f<R: Runtime>(#[context] cx: &Executor<'_, R>, n: u64) -> u64 { n }
 /// ```
 ///
 /// A relation that is no `=`, `<=` or `<`, or a term no affine one:

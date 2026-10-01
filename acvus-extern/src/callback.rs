@@ -5,15 +5,15 @@
 //! A function value is held as any value is, in the owning holder indexed by
 //! its function type, `Uniform<R, Callable<'f, A, U, E>>`: taken by value it is
 //! the handler's, released by its drop and kept only where a result holds it;
-//! lent, it is `&Uniform<R, Callable<..>>`. Only an awaited body calls one
-//! (macros §1), so a call takes the awaited body's context.
+//! lent, it is `&Uniform<R, Callable<..>>`. Either body calls one, either
+//! way, through its executor (macros §1).
 
 use std::marker::PhantomData;
 
 use crate::boundary::entry::Settled;
 use crate::boundary::seal::Crossing;
 use crate::boundary::uniform::Uniform;
-use crate::context::{Awaited, Opens};
+use crate::executor::Executor;
 use crate::runtime::{Crosses, Opaque, RefKind, RefTarget, Referent, Runtime};
 
 /// The function type `Fn(A) -> U` at effect `E`, whose values hold the loans
@@ -215,19 +215,9 @@ tuples!(forms);
 
 impl<A, U, E, R: CallsBack> Uniform<R, Callable<'_, A, U, E>> {
     /// A returning call: the arguments lent for `'l`, the result borrowing at
-    /// most what they lend. Only an awaited body calls a function value, so
-    /// a returning body cannot:
-    ///
-    /// ```compile_fail,E0308
-    /// use acvus_extern::Uniform;
-    /// use acvus_extern::callback::{Callable, CallsBack};
-    /// use acvus_extern::context::Returning;
-    ///
-    /// fn call<R: CallsBack>(cx: &Returning<'_, R>, f: &Uniform<R, Callable<'_, (i64,), i64, ()>>) -> i64 {
-    ///     f.call(cx, (1,))
-    /// }
-    /// ```
-    pub fn call<'l>(&'l self, cx: &'l Awaited<'_, R>, args: <A as CallArgs<R>>::Lent<'l>) -> U::At<'l>
+    /// most what they lend. A function value that may suspend is driven to
+    /// its end here (runtime contract §2, Callbacks).
+    pub fn call<'l>(&'l self, cx: &'l Executor<'_, R>, args: <A as CallArgs<R>>::Lent<'l>) -> U::At<'l>
     where
         A: CallArgs<R> + 'l,
         U: LoanForm<R> + 'l,
@@ -237,7 +227,7 @@ impl<A, U, E, R: CallsBack> Uniform<R, Callable<'_, A, U, E>> {
 
     /// An awaited call: the arguments moved, the result borrowing nothing
     /// (crossing §3-§4).
-    pub fn call_await<'a>(&'a self, cx: &'a Awaited<'_, R>, args: A::Moved) -> impl Future<Output = U> + Send + 'a
+    pub fn call_await<'a>(&'a self, cx: &'a Executor<'_, R>, args: A::Moved) -> impl Future<Output = U> + Send + 'a
     where
         A: MovedArgs<R>,
         U: Crosses<R>,
@@ -249,6 +239,8 @@ impl<A, U, E, R: CallsBack> Uniform<R, Callable<'_, A, U, E>> {
 /// Calling a function value, returning or awaited (runtime contract §2): the
 /// arguments are made at the runtime, and the callee's entry is opened at it.
 pub trait CallsBack: Runtime {
+    /// A returning call, which drives a function value that may suspend to
+    /// its end where it is called.
     fn call_now<'l, A, U>(&'l self, closure: Self::Value, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
     where
         A: CallArgs<Self> + 'l,
