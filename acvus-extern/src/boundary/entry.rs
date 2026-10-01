@@ -24,14 +24,14 @@ impl Settled<'_> {
 }
 
 /// One call site as the checker settled it: the impl values chosen for the
-/// handler's requirements, in the handler's order (impls §3). The runtime
-/// builds it once, at preparation.
-pub struct SiteShape<R: Runtime> {
-    impls: Box<[R::Value]>,
+/// handler's `M` requirements, in the handler's order (impls §3), a value of
+/// static size. The runtime builds it once, at preparation.
+pub struct SiteShape<R: Runtime, const M: usize> {
+    impls: [R::Value; M],
 }
 
-impl<R: Runtime> SiteShape<R> {
-    pub fn new(impls: Box<[R::Value]>) -> Self {
+impl<R: Runtime, const M: usize> SiteShape<R, M> {
+    pub fn new(impls: [R::Value; M]) -> Self {
         SiteShape { impls }
     }
 }
@@ -39,17 +39,17 @@ impl<R: Runtime> SiteShape<R> {
 /// One call's door. Its arguments are the run of the call's `N` argument
 /// positions, a value of static size, so the entry opens it without a
 /// compare and a call inlined into its caller keeps it in registers.
-pub struct Entry<'c, R: Runtime, const N: usize> {
+pub struct Entry<'c, R: Runtime, const N: usize, const M: usize> {
     runtime: &'c R,
     args: [R::Value; N],
-    site: &'c SiteShape<R>,
+    site: &'c SiteShape<R, M>,
 }
 
-impl<'c, R: Runtime, const N: usize> Entry<'c, R, N> {
+impl<'c, R: Runtime, const N: usize, const M: usize> Entry<'c, R, N, M> {
     /// The entry of one call. It is safe: the checker's decision is trusted
     /// only by the runtime's own typed reads (safety §3), and only the runtime
     /// holds values to pass here, since the host sees none (crossing §6).
-    pub fn new(runtime: &'c R, args: [R::Value; N], site: &'c SiteShape<R>) -> Self {
+    pub fn new(runtime: &'c R, args: [R::Value; N], site: &'c SiteShape<R, M>) -> Self {
         Entry { runtime, args, site }
     }
 
@@ -58,12 +58,12 @@ impl<'c, R: Runtime, const N: usize> Entry<'c, R, N> {
     pub fn open<A, Q>(self, body: impl FnOnce(Returning<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Done<R>) -> Done<R>
     where
         A: Args<R, N> + 'c,
-        Q: Requires<R> + 'c,
+        Q: Requires<R, M> + 'c,
     {
         let at = Settled::of_the_entry();
         let args = A::open(self.runtime, self.args, at);
-        let requirements = Q::open(self.runtime, &self.site.impls, at);
-        body(Returning::of_the_entry(self.runtime, self.site), args, requirements)
+        let requirements = Q::open(self.runtime, self.site.impls, at);
+        body(Returning::of_the_entry(self.runtime), args, requirements)
     }
 
     /// Opens the arguments and the requirements as `open` does, and runs the
@@ -75,13 +75,13 @@ impl<'c, R: Runtime, const N: usize> Entry<'c, R, N> {
     ) -> impl Future<Output = Done<R>> + Send + 'c
     where
         A: Args<R, N> + 'c,
-        Q: Requires<R> + 'c,
+        Q: Requires<R, M> + 'c,
         Fut: Future<Output = Done<R>> + Send + 'c,
     {
         let at = Settled::of_the_entry();
         let args = A::open(self.runtime, self.args, at);
-        let requirements = Q::open(self.runtime, &self.site.impls, at);
-        body(Awaited::of_the_entry(self.runtime, self.site), args, requirements)
+        let requirements = Q::open(self.runtime, self.site.impls, at);
+        body(Awaited::of_the_entry(self.runtime), args, requirements)
     }
 }
 
@@ -152,7 +152,7 @@ pub trait Args<R: Runtime, const N: usize>: Crossing {
 }
 
 /// The requirement parameters of a handler, a tuple of requirement modes.
-pub trait Requires<R: Runtime>: Crossing {
+pub trait Requires<R: Runtime, const M: usize>: Crossing {
     type Opened<'c>
     where
         Self: 'c,
@@ -160,7 +160,7 @@ pub trait Requires<R: Runtime>: Crossing {
 
     /// Each impl the site chose opened by its requirement's mode.
     #[doc(hidden)]
-    fn open<'c>(runtime: &'c R, impls: &'c [R::Value], at: Settled<'c>) -> Self::Opened<'c>
+    fn open<'c>(runtime: &'c R, impls: [R::Value; M], at: Settled<'c>) -> Self::Opened<'c>
     where
         Self: 'c,
         R: 'c;
@@ -324,20 +324,19 @@ macro_rules! mode_tuples {
             }
         }
 
-        impl<R: Runtime, $($m: RequirementMode<R>),*> Requires<R> for ($($m,)*) {
+        impl<R: Runtime, $($m: RequirementMode<R>),*> Requires<R, $n> for ($($m,)*) {
             type Opened<'c> = ($($m::Opened<'c>,)*)
             where
                 Self: 'c,
                 R: 'c;
 
             #[allow(unused_variables, clippy::unused_unit)]
-            fn open<'c>(runtime: &'c R, impls: &'c [R::Value], at: Settled<'c>) -> Self::Opened<'c>
+            fn open<'c>(runtime: &'c R, impls: [R::Value; $n], at: Settled<'c>) -> Self::Opened<'c>
             where
                 Self: 'c,
                 R: 'c,
             {
-                let run: &[R::Value; $n] = impls.try_into().expect("a site chooses one impl per requirement");
-                let [$($v),*] = *run;
+                let [$($v),*] = impls;
                 ($($m::open(runtime, $v, at),)*)
             }
         }

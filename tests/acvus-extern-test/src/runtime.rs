@@ -35,16 +35,16 @@ impl WordRuntime {
 }
 
 impl Registers for WordRuntime {
-    fn register<F, const N: usize>(&mut self, f: F) -> Result<(), Refused>
+    fn register<F, const N: usize, const M: usize>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: ExternFn<Self, N> + Declared<Self>,
+        F: ExternFn<Self, N, M> + Declared<Self>,
     {
         self.enter(Declared::path(&f, &self.interner))
     }
 
-    fn register_awaited<F, const N: usize>(&mut self, f: F) -> Result<(), Refused>
+    fn register_awaited<F, const N: usize, const M: usize>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: AwaitedFn<Self, N> + Declared<Self>,
+        F: AwaitedFn<Self, N, M> + Declared<Self>,
     {
         self.enter(Declared::path(&f, &self.interner))
     }
@@ -103,7 +103,7 @@ impl CallsBack for WordRuntime {
 /// Calls the Rust function `closure` is with the argument run `run`, and
 /// gives its result.
 fn call_closure<'a>(rt: &'a WordRuntime, closure: Word, run: &[Word], at: Settled<'a>) -> Word {
-    let site = SiteShape::new(Box::new([]));
+    let site = SiteShape::new([]);
     boundary::callee(closure, at)(rt, run, &site).into_value()
 }
 

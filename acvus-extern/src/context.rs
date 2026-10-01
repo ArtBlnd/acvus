@@ -4,7 +4,7 @@
 
 use std::ops::{Deref, DerefMut};
 
-use crate::boundary::entry::{Settled, SiteShape};
+use crate::boundary::entry::Settled;
 use crate::done::Done;
 use crate::guard::{Guard, GuardMut};
 use crate::borrowed::{Made, Sink};
@@ -13,12 +13,10 @@ use crate::runtime::{Crosses, Runtime};
 
 pub struct Returning<'c, R: Runtime> {
     runtime: &'c R,
-    site: &'c SiteShape<R>,
 }
 
 pub struct Awaited<'c, R: Runtime> {
     runtime: &'c R,
-    site: &'c SiteShape<R>,
 }
 
 /// A context a retained loan may be opened in: either body's.
@@ -42,8 +40,8 @@ impl<'c, R: Runtime> Opens<'c, R> for Awaited<'c, R> {
 }
 
 impl<'c, R: Runtime> Returning<'c, R> {
-    pub(crate) fn of_the_entry(runtime: &'c R, site: &'c SiteShape<R>) -> Self {
-        Returning { runtime, site }
+    pub(crate) fn of_the_entry(runtime: &'c R) -> Self {
+        Returning { runtime }
     }
 
     /// Finishes the call with its result, crossed at the site's settled result
@@ -88,8 +86,8 @@ impl<'c, R: Runtime> Returning<'c, R> {
 }
 
 impl<'c, R: Runtime> Awaited<'c, R> {
-    pub(crate) fn of_the_entry(runtime: &'c R, site: &'c SiteShape<R>) -> Self {
-        Awaited { runtime, site }
+    pub(crate) fn of_the_entry(runtime: &'c R) -> Self {
+        Awaited { runtime }
     }
 
     pub fn finish<T: Crosses<R>>(self, value: T) -> Done<R> {

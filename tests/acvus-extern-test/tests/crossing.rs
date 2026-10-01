@@ -495,14 +495,14 @@ fn dispatch<A, F>(f: F) -> Dispatch<A, F> {
 #[allow(unsafe_code)]
 unsafe impl<A, F> acvus_extern::seal::ExternFns for Dispatch<A, F> {}
 
-impl<R, A, U, F, const N: usize> ExternFn<R, N> for Dispatch<A, F>
+impl<R, A, U, F, const N: usize> ExternFn<R, N, 0> for Dispatch<A, F>
 where
     R: Runtime,
     A: acvus_extern::Args<R, N> + 'static,
     U: Crosses<R>,
     F: for<'c> Fn(&Returning<'c, R>, A::Opened<'c>) -> U + Send + Sync + 'static,
 {
-    fn call(&self, runtime: &R, args: [R::Value; N], site: &SiteShape<R>) -> Done<R> {
+    fn call(&self, runtime: &R, args: [R::Value; N], site: &SiteShape<R, 0>) -> Done<R> {
         Entry::new(runtime, args, site).open::<A, ()>(|cx, args, ()| {
             let result = (self.f)(&cx, args);
             cx.finish(result)

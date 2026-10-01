@@ -101,8 +101,8 @@ struct Doubled;
 #[allow(unsafe_code)]
 unsafe impl acvus_extern::seal::ExternFns for Doubled {}
 
-impl<R: Runtime> acvus_extern::register::ExternFn<R, 1> for Doubled {
-    fn call(&self, runtime: &R, args: [R::Value; 1], site: &acvus_extern::SiteShape<R>) -> Done<R> {
+impl<R: Runtime> acvus_extern::register::ExternFn<R, 1, 0> for Doubled {
+    fn call(&self, runtime: &R, args: [R::Value; 1], site: &acvus_extern::SiteShape<R, 0>) -> Done<R> {
         acvus_extern::Entry::new(runtime, args, site).open::<(ByValue<i64>,), ()>(|cx, (n,), ()| cx.finish(n * 2))
     }
 }

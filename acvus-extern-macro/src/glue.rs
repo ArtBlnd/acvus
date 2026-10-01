@@ -201,6 +201,8 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let bounds = quote!(#(+ #bounds)*);
     let args_tuple = quote!((#(#modes,)*));
     let arity = arguments.len();
+    // The attribute states no requirement yet: a site chooses no impl.
+    let requirements = 0usize;
     let opened_tuple = quote!((#(#opened,)*));
 
     let awaited_finish = match sig.output {
@@ -216,12 +218,12 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     };
     if sig.awaited {
         return quote! {
-            impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::AwaitedFn<#runtime, #arity> for #marker {
+            impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::AwaitedFn<#runtime, #arity, #requirements> for #marker {
                 fn call<'c>(
                     &'c self,
                     runtime: &'c #runtime,
                     args: [<#runtime as ::acvus_extern::runtime::Runtime>::Value; #arity],
-                    site: &'c ::acvus_extern::SiteShape<#runtime>,
+                    site: &'c ::acvus_extern::SiteShape<#runtime, #requirements>,
                 ) -> impl ::core::future::Future<Output = ::acvus_extern::done::Done<#runtime>> + ::core::marker::Send + 'c {
                     ::acvus_extern::Entry::new(runtime, args, site)
                         .open_awaited::<#args_tuple, (), _>(move |__cx, #opened_tuple, ()| async move {
@@ -255,12 +257,12 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         },
     };
     quote! {
-        impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::ExternFn<#runtime, #arity> for #marker {
+        impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::ExternFn<#runtime, #arity, #requirements> for #marker {
             fn call(
                 &self,
                 runtime: &#runtime,
                 args: [<#runtime as ::acvus_extern::runtime::Runtime>::Value; #arity],
-                site: &::acvus_extern::SiteShape<#runtime>,
+                site: &::acvus_extern::SiteShape<#runtime, #requirements>,
             ) -> ::acvus_extern::done::Done<#runtime> {
                 const {
                     ::core::assert!(

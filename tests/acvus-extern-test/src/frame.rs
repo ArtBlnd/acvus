@@ -44,7 +44,7 @@ impl<'r> Frame<'r> {
     pub fn call<const N: usize>(
         &mut self,
         passes: [Pass; N],
-        glue: impl FnOnce(Entry<'_, WordRuntime, N>) -> Done<WordRuntime>,
+        glue: impl FnOnce(Entry<'_, WordRuntime, N, 0>) -> Done<WordRuntime>,
     ) -> usize {
         let args = self.arguments(passes);
         let site = Self::site();
@@ -58,7 +58,7 @@ impl<'r> Frame<'r> {
     pub async fn call_awaited<const N: usize>(
         &mut self,
         passes: [Pass; N],
-        glue: impl AsyncFnOnce(Entry<'_, WordRuntime, N>) -> Done<WordRuntime>,
+        glue: impl AsyncFnOnce(Entry<'_, WordRuntime, N, 0>) -> Done<WordRuntime>,
     ) -> usize {
         let args = self.arguments(passes);
         let site = Self::site();
@@ -87,7 +87,7 @@ impl<'r> Frame<'r> {
     /// runtime, holding every function value at one Rust type, reads back.
     pub fn function<F, const N: usize>(&mut self, f: F) -> usize
     where
-        F: ExternFn<WordRuntime, N>,
+        F: ExternFn<WordRuntime, N, 0>,
     {
         let value = crate::boundary::closure(Box::new(move |runtime, run: &[Word], site| {
             f.call(runtime, run.try_into().expect("a function value is called at its own arity"), site)
@@ -111,7 +111,7 @@ impl<'r> Frame<'r> {
     /// arguments `passes` names, and keeps its result in a new variable.
     pub async fn call_dispatch_awaited<F, const N: usize>(&mut self, f: &F, passes: [Pass; N]) -> usize
     where
-        F: AwaitedFn<WordRuntime, N>,
+        F: AwaitedFn<WordRuntime, N, 0>,
     {
         let args = self.arguments(passes);
         let site = Self::site();
@@ -146,8 +146,8 @@ impl<'r> Frame<'r> {
         })
     }
 
-    fn site() -> SiteShape<WordRuntime> {
-        SiteShape::new(Box::new([]))
+    fn site() -> SiteShape<WordRuntime, 0> {
+        SiteShape::new([])
     }
 
     fn keep(&mut self, done: Done<WordRuntime>) -> usize {

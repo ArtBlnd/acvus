@@ -526,7 +526,7 @@ where
 
 /// A function value as this runtime holds it: its dispatch, called with an
 /// argument run.
-pub(crate) type Callee = dyn Fn(&WordRuntime, &[Word], &SiteShape<WordRuntime>) -> Done<WordRuntime> + Send + Sync;
+pub(crate) type Callee = dyn Fn(&WordRuntime, &[Word], &SiteShape<WordRuntime, 0>) -> Done<WordRuntime> + Send + Sync;
 
 /// A script function value, a function's dispatch.
 pub(crate) fn closure(f: Box<Callee>) -> Word {
