@@ -1,6 +1,6 @@
 //! The attribute's own arguments: `#[extern_fn(name = "..", effect = ..,
-//! ends = .., relation(..), combine(..))]`. Every key is known; any other is
-//! refused.
+//! ends = .., sync = .., relation(..), combine(..))]`. Every key is known;
+//! any other is refused.
 
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
@@ -31,6 +31,9 @@ pub struct ExternFnAttr {
     /// That the function is a combine, with its laws (compiler: extern fn
     /// §3, Action): an associative operation, `combine` stating that much.
     pub combine: Option<Combine>,
+    /// An awaited body's returning body, a function of its signature
+    /// (macros §1).
+    pub sync: Option<Path>,
 }
 
 /// A combine's laws as written: its identity and its absorbing element, each
@@ -115,6 +118,13 @@ impl Parse for ExternFnAttr {
                         return Err(twice());
                     }
                 }
+                "sync" if input.peek(Token![=]) => {
+                    input.parse::<Token![=]>()?;
+                    let body: Path = input.parse()?;
+                    if attr.sync.replace(body).is_some() {
+                        return Err(twice());
+                    }
+                }
                 "ends" if input.peek(Token![=]) => {
                     input.parse::<Token![=]>()?;
                     let value: Ident = input.parse()?;
@@ -130,7 +140,7 @@ impl Parse for ExternFnAttr {
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "`#[extern_fn]` knows `name = \"..\"`, `effect = ..`, `ends = ..`, `relation(..)` and `combine(..)`, and nothing else",
+                        "`#[extern_fn]` knows `name = \"..\"`, `effect = ..`, `ends = ..`, `sync = ..`, `relation(..)` and `combine(..)`, and nothing else",
                     ));
                 }
             }

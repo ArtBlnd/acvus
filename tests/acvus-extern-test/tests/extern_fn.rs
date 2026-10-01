@@ -8,7 +8,7 @@ use acvus_extern::decl::{Contexts, DeclTy, Declaration, Reissue, SplitCost, Var,
 use acvus_extern::done::Done;
 use acvus_extern::extern_fn;
 use acvus_extern::mode::ByValue;
-use acvus_extern::register::Declared;
+use acvus_extern::register::{Declared, Refused, Registers};
 use acvus_extern::runtime::{Crosses, Runtime};
 use acvus_extern::Loaned;
 use acvus_extern_test::{Cursor, Frame, Pair, Pass, Stack, WordRuntime};
@@ -61,7 +61,7 @@ async fn apply<'f, R: CallsBack, E: Var<kind::Effect>>(
     f.call_await(cx, (n,)).await + 1
 }
 
-#[extern_fn(effect = E)]
+#[extern_fn(effect = E, sync = twice_now)]
 async fn twice<'f, R: CallsBack, E: Var<kind::Effect>>(
     #[context] cx: &Executor<'_, R>,
     f: &Uniform<R, Callable<'f, (i64,), i64, E>>,
@@ -69,6 +69,16 @@ async fn twice<'f, R: CallsBack, E: Var<kind::Effect>>(
 ) -> i64 {
     let once = f.call_await(cx, (n,)).await;
     f.call_await(cx, (once,)).await
+}
+
+/// `twice`'s returning body: the callback called synchronously.
+fn twice_now<'f, R: CallsBack, E: Var<kind::Effect>>(
+    cx: &Executor<'_, R>,
+    f: &Uniform<R, Callable<'f, (i64,), i64, E>>,
+    n: i64,
+) -> i64 {
+    let once = f.call(cx, (n,));
+    f.call(cx, (once,))
 }
 
 #[extern_fn(effect = idempotent)]
@@ -119,6 +129,35 @@ fn a_lent_function_is_called_and_stays_the_callers() {
 
     assert_eq!(read::<i64>(&mut frame, first), 20);
     assert_eq!(read::<i64>(&mut frame, second), 4);
+}
+
+#[test]
+fn a_pair_runs_either_body_on_one_signature() {
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let double = frame.function(Doubled);
+    let n = produce(&mut frame, 5i64);
+    let returned = frame.call_dispatch(&twice::new(), [Pass::Lend(double), Pass::Give(n)]);
+    let m = produce(&mut frame, 5i64);
+    let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
+    let awaited = executor.block_on(frame.call_dispatch_awaited(&twice::new(), [Pass::Lend(double), Pass::Give(m)]));
+
+    assert_eq!(read::<i64>(&mut frame, returned), 20);
+    assert_eq!(read::<i64>(&mut frame, awaited), 20);
+}
+
+#[test]
+fn a_pair_has_an_awaited_body_and_does_not_suspend() {
+    let (_, twice) = declaration_of(twice::new());
+    assert!(twice.awaits);
+    assert!(!twice.effect.suspends());
+}
+
+#[test]
+fn a_pair_is_registered_once() {
+    let mut runtime = WordRuntime::default();
+    runtime.register_pair(twice::new()).expect("a free path");
+    assert!(matches!(runtime.register_pair(twice::new()), Err(Refused::PathTaken(_))));
 }
 
 /// A function value that doubles its argument, as a program's lambda would.

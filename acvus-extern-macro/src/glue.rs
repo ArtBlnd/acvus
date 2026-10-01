@@ -22,6 +22,11 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
             "an effect is `pure`, `idempotent`, `opaque`, or one of the function's `Var<kind::Effect>` parameters",
         ));
     }
+    if let Some(body) = &attr.sync
+        && !sig.awaited
+    {
+        return Err(syn::Error::new_spanned(body, "`sync` names an `async fn`'s returning body; this function is one"));
+    }
     let marker = func.sig.ident.clone();
     let vis = &func.vis;
     let runtime = format_ident!("__R");
@@ -55,7 +60,7 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
     };
 
     let declared = declared(&attr, &sig, &marker, &runtime)?;
-    let dispatch = dispatch(&sig, &marker, &runtime);
+    let dispatch = dispatch(&sig, attr.sync.as_ref(), &marker, &runtime);
 
     Ok(quote! {
         #func
@@ -93,6 +98,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
         Effect::Opaque => (quote!(Opaque), false),
     };
     let awaits = sig.awaited;
+    let suspends = sig.awaited && attr.sync.is_none();
     let effect = quote! {
         ::acvus_extern::decl::Effect::new(
             ::acvus_extern::decl::Reissue::#reissue,
@@ -100,7 +106,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
             ::acvus_extern::decl::Contexts::new(),
             ::acvus_extern::decl::Contexts::new(),
             ::acvus_extern::decl::SplitCost::Unavailable,
-            #awaits,
+            #suspends,
         )
     };
     let [types, effects, identities] = sig.counts;
@@ -207,7 +213,10 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     })
 }
 
-fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
+/// The dispatch of each body the function has: an awaited body's, with its
+/// returning body's where `sync` names one, or a returning body's. Both open
+/// one signature's arguments and call a function of it.
+fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident) -> TokenStream {
     let arguments: Vec<(usize, Ident, syn::Type)> = sig
         .params
         .iter()
@@ -220,24 +229,29 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         .map(|(_, _, ty)| quote!(<#ty as ::acvus_extern::decl::ParamMode>::Mode))
         .collect();
     let opened = arguments.iter().map(|(_, a, _)| a);
-    let call_args = sig.params.iter().enumerate().map(|(i, p)| {
-        let name = &p.name;
-        match &p.role {
-            Role::Capture { .. } => quote!(&self.#name),
-            Role::Context => quote!(__context),
-            Role::Argument => {
-                let a = format_ident!("__a{}", i);
-                quote!(#a)
+    let call_args: Vec<TokenStream> = sig
+        .params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let name = &p.name;
+            match &p.role {
+                Role::Capture { .. } => quote!(&self.#name),
+                Role::Context => quote!(__context),
+                Role::Argument => {
+                    let a = format_ident!("__a{}", i);
+                    quote!(#a)
+                }
             }
-        }
-    });
-    // The context the body is given, where it takes one, borrowed from the
+        })
+        .collect();
+    // The executor the body is given, where it takes one, borrowed from the
     // body's own.
     let takes_context = sig.params.iter().any(|p| matches!(p.role, Role::Context));
     let context = takes_context.then(|| quote!(let __context = &__cx;));
-    let function = &sig.ident;
     let type_args = sig.type_args(runtime);
-    let call = quote!(#function #type_args(#(#call_args),*));
+    let function = &sig.ident;
+    let call_of = |body: TokenStream| quote!(#body #type_args(#(#call_args),*));
 
     let bounds = sig.runtime_bounds();
     let bounds = quote!(#(+ #bounds)*);
@@ -247,6 +261,43 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let requirements = 0usize;
     let opened_tuple = quote!((#(#opened,)*));
 
+    let returning = |call: TokenStream| {
+        let finish = match sig.output {
+            Output::Borrowed => quote! {
+                #context
+                let __result = #call;
+                __cx.finish_borrowed(__result)
+            },
+            Output::Never => quote! {
+                #context
+                match #call {}
+            },
+            Output::Value => quote! {
+                #context
+                let __result = #call;
+                __cx.finish(__result)
+            },
+        };
+        quote! {
+            impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::ExternFn<#runtime, #arity, #requirements> for #marker {
+                fn call(
+                    &self,
+                    runtime: &#runtime,
+                    args: [<#runtime as ::acvus_extern::runtime::Runtime>::Value; #arity],
+                    site: &::acvus_extern::SiteShape<#runtime, #requirements>,
+                ) -> ::acvus_extern::done::Done<#runtime> {
+                    ::acvus_extern::Entry::new(runtime, args, site).open::<#args_tuple, ()>(|__cx, #opened_tuple, ()| {
+                        #finish
+                    })
+                }
+            }
+        }
+    };
+    if !sig.awaited {
+        return returning(call_of(quote!(#function)));
+    }
+
+    let call = call_of(quote!(#function));
     let awaited_finish = match sig.output {
         Output::Never => quote! {
             #context
@@ -258,52 +309,22 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
             __cx.finish(__result)
         },
     };
-    if sig.awaited {
-        return quote! {
-            impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::AwaitedFn<#runtime, #arity, #requirements> for #marker {
-                fn call<'c>(
-                    &'c self,
-                    runtime: &'c #runtime,
-                    args: [<#runtime as ::acvus_extern::runtime::Runtime>::Value; #arity],
-                    site: &'c ::acvus_extern::SiteShape<#runtime, #requirements>,
-                ) -> impl ::core::future::Future<Output = ::acvus_extern::done::Done<#runtime>> + ::core::marker::Send + 'c {
-                    ::acvus_extern::Entry::new(runtime, args, site)
-                        .open_awaited::<#args_tuple, (), _>(move |__cx, #opened_tuple, ()| async move {
-                            #awaited_finish
-                        })
-                }
-            }
-        };
-    }
-
-    let finish = match sig.output {
-        Output::Borrowed => quote! {
-            #context
-            let __result = #call;
-            __cx.finish_borrowed(__result)
-        },
-        Output::Never => quote! {
-            #context
-            match #call {}
-        },
-        Output::Value => quote! {
-            #context
-            let __result = #call;
-            __cx.finish(__result)
-        },
-    };
+    let returning = sync.map(|body| returning(call_of(quote!(#body))));
     quote! {
-        impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::ExternFn<#runtime, #arity, #requirements> for #marker {
-            fn call(
-                &self,
-                runtime: &#runtime,
+        impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::AwaitedFn<#runtime, #arity, #requirements> for #marker {
+            fn call<'c>(
+                &'c self,
+                runtime: &'c #runtime,
                 args: [<#runtime as ::acvus_extern::runtime::Runtime>::Value; #arity],
-                site: &::acvus_extern::SiteShape<#runtime, #requirements>,
-            ) -> ::acvus_extern::done::Done<#runtime> {
-                ::acvus_extern::Entry::new(runtime, args, site).open::<#args_tuple, ()>(|__cx, #opened_tuple, ()| {
-                    #finish
-                })
+                site: &'c ::acvus_extern::SiteShape<#runtime, #requirements>,
+            ) -> impl ::core::future::Future<Output = ::acvus_extern::done::Done<#runtime>> + ::core::marker::Send + 'c {
+                ::acvus_extern::Entry::new(runtime, args, site)
+                    .open_awaited::<#args_tuple, (), _>(move |__cx, #opened_tuple, ()| async move {
+                        #awaited_finish
+                    })
             }
         }
+
+        #returning
     }
 }

@@ -48,6 +48,13 @@ impl Registers for WordRuntime {
     {
         self.enter(<F as Declared<Self>>::path(&self.interner))
     }
+
+    fn register_pair<F, const N: usize, const M: usize>(&mut self, _f: F) -> Result<(), Refused>
+    where
+        F: ExternFn<Self, N, M> + AwaitedFn<Self, N, M> + Declared<Self>,
+    {
+        self.enter(<F as Declared<Self>>::path(&self.interner))
+    }
 }
 
 impl Runtime for WordRuntime {

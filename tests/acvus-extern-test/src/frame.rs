@@ -104,8 +104,21 @@ impl<'r> Frame<'r> {
         self.variables.len() - 1
     }
 
-    /// Calls the awaited function `f` through its dispatch with the
+    /// Calls the returning function `f` through its dispatch with the
     /// arguments `passes` names, and keeps its result in a new variable.
+    pub fn call_dispatch<F, const N: usize>(&mut self, f: &F, passes: [Pass; N]) -> usize
+    where
+        F: ExternFn<WordRuntime, N, 0>,
+    {
+        let args = self.arguments(passes);
+        let site = Self::site();
+
+        let done = f.call(self.runtime, args, &site);
+
+        self.keep(done)
+    }
+
+    /// As `call_dispatch`, for an awaited function.
     pub async fn call_dispatch_awaited<F, const N: usize>(&mut self, f: &F, passes: [Pass; N]) -> usize
     where
         F: AwaitedFn<WordRuntime, N, 0>,

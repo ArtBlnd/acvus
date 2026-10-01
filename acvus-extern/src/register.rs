@@ -105,6 +105,15 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// fn f(n: u64) -> u64 { n * n }
 /// ```
 ///
+/// A returning body named for a function that is one itself:
+///
+/// ```compile_fail
+/// fn g(n: u64) -> u64 { n }
+///
+/// #[acvus_extern::extern_fn(sync = g)]
+/// fn f(n: u64) -> u64 { n }
+/// ```
+///
 /// An ending that is neither `returns` nor `total`:
 ///
 /// ```compile_fail
@@ -195,4 +204,11 @@ pub trait Registers: Runtime {
     fn register_awaited<F, const N: usize, const M: usize>(&mut self, f: F) -> Result<(), Refused>
     where
         F: AwaitedFn<Self, N, M> + Declared<Self>;
+
+    /// Registers a function with both bodies (macros §1): which one a call
+    /// runs is the runtime's choice, the returning one wherever the call's
+    /// effect does not suspend.
+    fn register_pair<F, const N: usize, const M: usize>(&mut self, f: F) -> Result<(), Refused>
+    where
+        F: ExternFn<Self, N, M> + AwaitedFn<Self, N, M> + Declared<Self>;
 }

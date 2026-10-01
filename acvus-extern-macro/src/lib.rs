@@ -4,7 +4,8 @@
 //!   kept as written; beside it, in the type namespace under its name, the
 //!   attribute emits the function's marker, which a runtime registers: the
 //!   captures it holds, its dispatch (`ExternFn`, or `AwaitedFn` for an
-//!   `async fn`), and its declaration (`Declared`).
+//!   `async fn`, and both where `sync` names its returning body), and its
+//!   declaration (`Declared`).
 
 use proc_macro::TokenStream;
 use syn::{ItemFn, parse_macro_input};
