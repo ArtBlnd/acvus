@@ -18,7 +18,8 @@ use acvus_mir::ty::IntTy;
 use acvus_utils::Astr;
 
 pub use acvus_mir::decl::declared::{
-    Access, Atom, Before, Comparison, Element, Mode, Place, Relation, Stored, Subject, Term, Touch,
+    Access, Action, Atom, Before, Combine, Comparison, Element, Mode, Place, Relation, Stored, Subject, Term, Touch,
+    Update,
 };
 pub use acvus_mir::ty::Mutability;
 pub use acvus_mir::decl::{DeclaredFacts, Ends, TyVarBound};

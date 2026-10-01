@@ -290,7 +290,7 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
         // role is known.
         let mut place_facts = Vec::new();
         typed.attrs.retain(|attr| {
-            if attr.path().is_ident("touch") || attr.path().is_ident("gives") {
+            if ["touch", "gives", "update", "inverse_of"].iter().any(|fact| attr.path().is_ident(fact)) {
                 place_facts.push(attr.clone());
                 return false;
             }

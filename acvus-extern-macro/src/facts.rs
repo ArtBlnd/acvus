@@ -9,6 +9,22 @@
 //! its `len(..)`, sums and differences, and a constant's multiples. An
 //! argument is named as the function names it, and numbered as a call's
 //! arguments are: a capture and the context are no argument.
+//!
+//! A fact of a place is written on the argument whose storage it speaks of
+//! (rfc_extern macros §1): `#[touch(mode)]`, the mode `read`, `view`,
+//! `view_mut`, `open(default = d)`, `store(v)` or `store(empty)`, and
+//! `#[gives]`, `#[gives(through = f)]`, each of the argument's storage whole,
+//! or of one element of it, `key = k` or `index = i`. The touches written
+//! anywhere in a signature are the call's access, the whole of it: a call
+//! touches no place its access does not state (compiler: extern fn §3), so
+//! once one is written, a place left out is one the call does not touch.
+//!
+//! An action is written on the function, `combine(identity = f, commutative,
+//! absorbing = g)`, that it is an associative operation, `combine` alone
+//! stating that much; and on an argument, `#[update(combine = f)]`, that the
+//! call's update of its place is `f`'s, and `#[inverse_of(f)]`, that it undoes
+//! `f`'s update of the same place, each of the storage whole or of one
+//! element. Another declaration is named by its Rust path, its marker's.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -189,6 +205,15 @@ fn refused(at: &impl Spanned, message: &str) -> syn::Error {
 pub struct PlaceFacts {
     pub touches: Vec<Touch>,
     pub gives: Vec<Gives>,
+    pub updates: Vec<Acting>,
+    pub inverses: Vec<Acting>,
+}
+
+/// `#[update(combine = f, element)]` or `#[inverse_of(f, element)]`: an
+/// action at the place, by another declaration.
+pub struct Acting {
+    pub by: Path,
+    pub element: Option<Element>,
 }
 
 /// `#[touch(mode, element)]`.
@@ -232,6 +257,10 @@ impl PlaceFacts {
         for attr in attrs {
             if attr.path().is_ident("touch") {
                 facts.touches.push(attr.parse_args_with(touch)?);
+            } else if attr.path().is_ident("update") {
+                facts.updates.push(attr.parse_args_with(|input: ParseStream<'_>| acting(input, Some("combine")))?);
+            } else if attr.path().is_ident("inverse_of") {
+                facts.inverses.push(attr.parse_args_with(|input: ParseStream<'_>| acting(input, None))?);
             } else if matches!(attr.meta, syn::Meta::Path(_)) {
                 facts.gives.push(Gives { element: None, through: None });
             } else {
@@ -298,6 +327,27 @@ fn gives(input: ParseStream<'_>) -> syn::Result<Gives> {
     Ok(gives)
 }
 
+/// The declaration an action names, `combine = f` where `key` is written or
+/// `f` alone where it is none, then an element where one is written.
+fn acting(input: ParseStream<'_>, key: Option<&str>) -> syn::Result<Acting> {
+    if let Some(key) = key {
+        let word: Ident = input.parse()?;
+        if word != key {
+            return Err(refused(&word, &format!("an update names its `{key} = f`")));
+        }
+        input.parse::<Token![=]>()?;
+    }
+    let by: Path = input.parse()?;
+    let element = match input.is_empty() {
+        true => None,
+        false => {
+            input.parse::<Token![,]>()?;
+            Some(element(input)?)
+        }
+    };
+    Ok(Acting { by, element })
+}
+
 /// `key = k` or `index = i`.
 fn element(input: ParseStream<'_>) -> syn::Result<Element> {
     let word: Ident = input.parse()?;
@@ -315,26 +365,8 @@ fn element(input: ParseStream<'_>) -> syn::Result<Element> {
 /// facts, in order; `runtime` the runtime a path of another declaration is
 /// read at.
 pub fn access(places: &[&PlaceFacts], arguments: &[&Ident], runtime: &Ident) -> syn::Result<Vec<TokenStream>> {
-    let number = |name: &Ident| -> syn::Result<usize> {
-        arguments
-            .iter()
-            .position(|argument| *argument == name)
-            .ok_or_else(|| refused(name, "a fact of a place names the call's arguments; a capture and the context are none"))
-    };
-    let place = |param: usize, element: &Option<Element>| -> syn::Result<TokenStream> {
-        let element = match element {
-            None => quote!(::core::option::Option::None),
-            Some(Element::Key(key)) => {
-                let at = number(key)?;
-                quote!(::core::option::Option::Some(::acvus_extern::decl::Element::Key(#at)))
-            }
-            Some(Element::Index(index)) => {
-                let at = number(index)?;
-                quote!(::core::option::Option::Some(::acvus_extern::decl::Element::Index(#at)))
-            }
-        };
-        Ok(quote!(::acvus_extern::decl::Place { param: #param, element: #element }))
-    };
+    let number = |name: &Ident| number(name, arguments);
+    let place = |param: usize, element: &Option<Element>| place(param, element, arguments);
 
     let mut touches = Vec::new();
     let mut given = Vec::new();
@@ -374,4 +406,76 @@ pub fn access(places: &[&PlaceFacts], arguments: &[&Ident], runtime: &Ident) -> 
     }
     access.extend(given);
     Ok(access)
+}
+
+/// The function's and its arguments' actions as the compiler holds them:
+/// the combine the function is, where it is one, then each update and each
+/// inverse written on an argument. Another declaration is read as its path at
+/// `runtime`.
+pub fn actions(
+    combine: Option<&crate::attr::Combine>,
+    places: &[&PlaceFacts],
+    arguments: &[&Ident],
+    runtime: &Ident,
+) -> syn::Result<Vec<TokenStream>> {
+    let path_of = |path: &Path| quote!(<#path as ::acvus_extern::register::Declared<#runtime>>::path(names));
+    let optional = |path: &Option<Path>| match path {
+        Some(path) => {
+            let path = path_of(path);
+            quote!(::core::option::Option::Some(#path))
+        }
+        None => quote!(::core::option::Option::None),
+    };
+    let mut actions = Vec::new();
+    if let Some(combine) = combine {
+        let identity = optional(&combine.identity);
+        let absorbing = optional(&combine.absorbing);
+        let commutative = combine.commutative;
+        actions.push(quote! {
+            ::acvus_extern::decl::Action::Combine(::acvus_extern::decl::Combine {
+                identity: #identity,
+                commutative: #commutative,
+                absorbing: #absorbing,
+            })
+        });
+    }
+    for (param, facts) in places.iter().enumerate() {
+        for update in &facts.updates {
+            let place = place(param, &update.element, arguments)?;
+            let combine = path_of(&update.by);
+            actions.push(quote! {
+                ::acvus_extern::decl::Action::Update(::acvus_extern::decl::Update { place: #place, combine: #combine })
+            });
+        }
+        for inverse in &facts.inverses {
+            let place = place(param, &inverse.element, arguments)?;
+            let other = path_of(&inverse.by);
+            actions.push(quote!(::acvus_extern::decl::Action::InverseOf { place: #place, other: #other }));
+        }
+    }
+    Ok(actions)
+}
+
+/// An argument's number, by its name.
+fn number(name: &Ident, arguments: &[&Ident]) -> syn::Result<usize> {
+    arguments
+        .iter()
+        .position(|argument| *argument == name)
+        .ok_or_else(|| refused(name, "a fact of a place names the call's arguments; a capture and the context are none"))
+}
+
+/// The place of the argument `param`, whole or the element written.
+fn place(param: usize, element: &Option<Element>, arguments: &[&Ident]) -> syn::Result<TokenStream> {
+    let element = match element {
+        None => quote!(::core::option::Option::None),
+        Some(Element::Key(key)) => {
+            let at = number(key, arguments)?;
+            quote!(::core::option::Option::Some(::acvus_extern::decl::Element::Key(#at)))
+        }
+        Some(Element::Index(index)) => {
+            let at = number(index, arguments)?;
+            quote!(::core::option::Option::Some(::acvus_extern::decl::Element::Index(#at)))
+        }
+    };
+    Ok(quote!(::acvus_extern::decl::Place { param: #param, element: #element }))
 }

@@ -131,6 +131,19 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// fn f(#[touch(write)] text: &mut String) {}
 /// ```
 ///
+/// A combine's law the compiler does not know, and an update naming no
+/// combine:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn(combine(idempotent))]
+/// fn f(a: i64, b: i64) -> i64 { a.max(b) }
+/// ```
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn]
+/// fn g(#[update(f)] counter: &mut i64, by: i64) {}
+/// ```
+///
 /// An awaited body whose result borrows:
 ///
 /// ```compile_fail

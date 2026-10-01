@@ -1,9 +1,10 @@
 //! The attribute's own arguments: `#[extern_fn(name = "..", effect = ..,
-//! ends = .., relation(..))]`. Every key is known; any other is refused.
+//! ends = .., relation(..), combine(..))]`. Every key is known; any other is
+//! refused.
 
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Expr, Ident, LitStr, Token, parenthesized};
+use syn::{Expr, Ident, LitStr, Path, Token, parenthesized, token};
 
 /// A call's effect as stated (compiler: extern fn §2): a level, or one of
 /// the function's effect variables, the effect of the work it runs.
@@ -27,6 +28,18 @@ pub struct ExternFnAttr {
     pub ends: Option<Ends>,
     /// The relations stated, each as written (compiler: extern fn §3).
     pub relations: Vec<Expr>,
+    /// That the function is a combine, with its laws (compiler: extern fn
+    /// §3, Action): an associative operation, `combine` stating that much.
+    pub combine: Option<Combine>,
+}
+
+/// A combine's laws as written: its identity and its absorbing element, each
+/// another declaration, and whether it commutes.
+#[derive(Default)]
+pub struct Combine {
+    pub identity: Option<Path>,
+    pub commutative: bool,
+    pub absorbing: Option<Path>,
 }
 
 /// How a call's own code ends.
@@ -48,6 +61,39 @@ impl Parse for ExternFnAttr {
                     parenthesized!(content in input);
                     let relations: Punctuated<Expr, Token![,]> = content.parse_terminated(Expr::parse, Token![,])?;
                     attr.relations.extend(relations);
+                }
+                "combine" => {
+                    let mut combine = Combine::default();
+                    if input.peek(token::Paren) {
+                        let content;
+                        parenthesized!(content in input);
+                        while !content.is_empty() {
+                            let law: Ident = content.parse()?;
+                            match law.to_string().as_str() {
+                                "identity" => {
+                                    content.parse::<Token![=]>()?;
+                                    combine.identity = Some(content.parse()?);
+                                }
+                                "absorbing" => {
+                                    content.parse::<Token![=]>()?;
+                                    combine.absorbing = Some(content.parse()?);
+                                }
+                                "commutative" => combine.commutative = true,
+                                _ => {
+                                    return Err(syn::Error::new(
+                                        law.span(),
+                                        "a combine states `identity = f`, `commutative` and `absorbing = f`",
+                                    ));
+                                }
+                            }
+                            if !content.is_empty() {
+                                content.parse::<Token![,]>()?;
+                            }
+                        }
+                    }
+                    if attr.combine.replace(combine).is_some() {
+                        return Err(twice());
+                    }
                 }
                 "name" if input.peek(Token![=]) => {
                     input.parse::<Token![=]>()?;
@@ -84,7 +130,7 @@ impl Parse for ExternFnAttr {
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "`#[extern_fn]` knows `name = \"..\"`, `effect = ..`, `ends = ..` and `relation(..)`, and nothing else",
+                        "`#[extern_fn]` knows `name = \"..\"`, `effect = ..`, `ends = ..`, `relation(..)` and `combine(..)`, and nothing else",
                     ));
                 }
             }

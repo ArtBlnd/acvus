@@ -153,6 +153,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     let places: Vec<&facts::PlaceFacts> =
         sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.place).collect();
     let access = facts::access(&places, &argument_names, runtime)?;
+    let action = facts::actions(attr.combine.as_ref(), &places, &argument_names, runtime)?;
     let written = sig.written.iter().map(|bound| {
         let (longer, shorter) = (&bound.longer, &bound.shorter);
         quote!(::acvus_extern::decl::Written { longer: #longer, shorter: #shorter })
@@ -187,6 +188,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
                             &[#(#written),*],
                         )),
                         access: ::std::boxed::Box::new([#(#access),*]),
+                        action: ::std::boxed::Box::new([#(#action),*]),
                         ends: #ending,
                         relations: ::std::boxed::Box::new([#(#relations),*]),
                         ..::acvus_extern::decl::DeclaredFacts::default()

@@ -464,6 +464,56 @@ fn the_facts_of_a_place_are_stated_on_its_argument() {
     assert!(add.facts.access.is_empty());
 }
 
+#[extern_fn(effect = pure)]
+fn zero() -> i64 {
+    0
+}
+
+/// Addition into a counter: a combine, commutative, `zero` its identity.
+#[extern_fn(effect = pure, combine(identity = zero, commutative))]
+fn add_into(acc: &mut i64, by: i64) {
+    *acc += by
+}
+
+/// A counter raised by `by`: its update is `add_into`'s.
+#[extern_fn(effect = pure)]
+fn bump(#[update(combine = add_into)] counter: &mut i64, by: i64) {
+    *counter += by
+}
+
+/// A counter lowered by `by`: it undoes `bump`'s update.
+#[extern_fn(effect = pure)]
+fn unbump(#[inverse_of(bump)] counter: &mut i64, by: i64) {
+    *counter -= by
+}
+
+/// Concatenation: a combine and no more stated.
+#[extern_fn(effect = pure, combine)]
+fn concat(a: String, b: String) -> String {
+    a + &b
+}
+
+#[test]
+fn the_actions_written_are_stated_as_the_compilers_forms() {
+    use acvus_extern::decl::{Action, Combine, Place, Update};
+
+    let (names, add_into) = declaration_of(add_into::new());
+    let zero = <zero as Declared<WordRuntime>>::path(&names);
+    assert_eq!(*add_into.facts.action, [Action::Combine(Combine { identity: Some(zero), commutative: true, absorbing: None })]);
+
+    let whole = Place { param: 0, element: None };
+    let (names, bump) = declaration_of(bump::new());
+    let add_into = <add_into as Declared<WordRuntime>>::path(&names);
+    assert_eq!(*bump.facts.action, [Action::Update(Update { place: whole, combine: add_into })]);
+
+    let (names, unbump) = declaration_of(unbump::new());
+    let bump = <bump as Declared<WordRuntime>>::path(&names);
+    assert_eq!(*unbump.facts.action, [Action::InverseOf { place: whole, other: bump }]);
+
+    let (_, concat) = declaration_of(concat::new());
+    assert_eq!(*concat.facts.action, [Action::Combine(Combine { identity: None, commutative: false, absorbing: None })]);
+}
+
 #[test]
 fn a_call_that_never_returns_declares_no_value() {
     let (_, fail) = declaration_of(fail::new());
