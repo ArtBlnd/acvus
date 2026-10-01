@@ -86,7 +86,8 @@ impl<'c, R: Runtime, const N: usize, const M: usize> Entry<'c, R, N, M> {
 }
 
 /// A parameter's mode, chosen by its Rust type (macros §4): how the entry
-/// opens its argument.
+/// opens its argument as the Rust argument the handler's parameter takes,
+/// within the call `'c`.
 pub trait Mode<R: Runtime>: Crossing {
     type Opened<'c>
     where
@@ -95,19 +96,6 @@ pub trait Mode<R: Runtime>: Crossing {
 
     #[doc(hidden)]
     fn open<'c>(runtime: &'c R, v: R::Value, at: Settled<'c>) -> Self::Opened<'c>
-    where
-        Self: 'c,
-        R: 'c;
-
-    /// The Rust argument the handler's parameter takes.
-    type Arg<'c>
-    where
-        Self: 'c,
-        R: 'c;
-
-    /// The handler's argument made from what the entry opened: a value moved
-    /// on, or the projection a guard holds moved out of it.
-    fn arg<'c>(opened: Self::Opened<'c>) -> Self::Arg<'c>
     where
         Self: 'c,
         R: 'c;
@@ -195,25 +183,13 @@ use mode::*;
 use crate::boundary::instance::{Instance, InstanceOf};
 use crate::boundary::loaned::{Loaned, LoanedMut};
 use crate::boundary::uniform::Uniform;
-use crate::guard::{Guard, GuardMut};
 use crate::impls::receiver::{Reads, Steps};
 use crate::impls::{Family, Instances};
 use crate::boundary::seal::Crossing;
 use crate::runtime::{Crosses, RefKind};
 
-/// How a mode's opened value becomes the handler's argument: moved on, or the
-/// projection a guard holds moved out of it.
-macro_rules! pass {
-    (moved, $opened:ident) => {
-        $opened
-    };
-    (viewed, $opened:ident) => {
-        $opened.into_inner()
-    };
-}
-
 macro_rules! modes {
-    ($r:ident; $([$($g:tt)*] $m:ty => $opened:ty, $arg:ty, $passed:ident, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
+    ($r:ident; $([$($g:tt)*] $m:ty => $opened:ty, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
         impl<$r: Runtime, $($g)*> Mode<$r> for $m {
             type Opened<'c> = $opened
             where
@@ -227,43 +203,29 @@ macro_rules! modes {
             {
                 $open
             }
-
-            type Arg<'c>
-                = $arg
-            where
-                Self: 'c,
-                $r: 'c;
-
-            fn arg<'c>(opened: Self::Opened<'c>) -> Self::Arg<'c>
-            where
-                Self: 'c,
-                $r: 'c,
-            {
-                pass!($passed, opened)
-            }
         }
     )+};
 }
 
 modes! {
     R;
-    [T: Crosses<R>] ByValue<T> => T, T, moved,
+    [T: Crosses<R>] ByValue<T> => T,
         |runtime, v, at| T::take(runtime, v, at);
-    [T: Crosses<R>] ByRef<T> => Guard<'c, T::Open<'c>>, T::Open<'c>, viewed,
-        |runtime, v, at| Guard::of_the_entry(T::open_ref(runtime, v, at));
-    [T: Crosses<R>] ByMut<T> => GuardMut<'c, T::OpenMut<'c>>, T::OpenMut<'c>, viewed,
-        |runtime, v, at| GuardMut::of_the_entry(T::open_ref_mut(runtime, v, at));
-    [T] ByUniform<T> => Uniform<R, T>, Uniform<R, T>, moved,
+    [T: Crosses<R>] ByRef<T> => T::Open<'c>,
+        |runtime, v, at| T::open_ref(runtime, v, at);
+    [T: Crosses<R>] ByMut<T> => T::OpenMut<'c>,
+        |runtime, v, at| T::open_ref_mut(runtime, v, at);
+    [T] ByUniform<T> => Uniform<R, T>,
         |_runtime, v, _at| Uniform::of_the_crossing(v);
-    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, &'c [Uniform<R, T>], viewed,
-        |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, v, at));
-    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, &'c mut [Uniform<R, T>], viewed,
-        |runtime, v, at| GuardMut::of_the_entry(<R::Ref as RefKind<R>>::target_mut(runtime, v, at));
-    [] ByStr => Guard<'c, &'c str>, &'c str, viewed,
-        |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, v, at));
-    [T] ByLoaned<T> => Loaned<'c, T, R>, Loaned<'c, T, R>, moved,
+    [T] BySlice<T> => &'c [Uniform<R, T>],
+        |runtime, v, at| <R::Ref as RefKind<R>>::target(runtime, v, at);
+    [T] BySliceMut<T> => &'c mut [Uniform<R, T>],
+        |runtime, v, at| <R::Ref as RefKind<R>>::target_mut(runtime, v, at);
+    [] ByStr => &'c str,
+        |runtime, v, at| <R::Ref as RefKind<R>>::target(runtime, v, at);
+    [T] ByLoaned<T> => Loaned<'c, T, R>,
         |_runtime, v, _at| Loaned::of_the_entry(v);
-    [T] ByLoanedMut<T> => LoanedMut<'c, T, R>, LoanedMut<'c, T, R>, moved,
+    [T] ByLoanedMut<T> => LoanedMut<'c, T, R>,
         |_runtime, v, _at| LoanedMut::of_the_entry(v);
 }
 

@@ -12,7 +12,6 @@ use std::time::Duration;
 use acvus_extern::Uniform;
 use acvus_extern::callback::{Callable, Lent, LentMut};
 use acvus_extern::context::Returning;
-use acvus_extern::guard::{Guard, GuardMut};
 use acvus_extern::mode::{ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use acvus_extern::done::Done;
 use acvus_extern::register::{Declared, ExternFn, Refused, Registers};
@@ -301,7 +300,7 @@ fn an_exclusive_lend_writes_the_variable_in_place() {
     let variable = produce(&mut frame, pair("lent"));
 
     frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(ByMut<Pair>,), ()>(|cx, (mut lent,), ()| {
+        entry.open::<(ByMut<Pair>,), ()>(|cx, (lent,), ()| {
             lent.name.push_str(" and written");
             cx.finish(())
         })
@@ -407,10 +406,10 @@ fn a_writable_borrowed_result_writes_the_lent_value() {
     let variable = produce(&mut frame, pair("borrowed"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(ByMut<Pair>,), ()>(|cx, (mut lent,), ()| cx.finish_borrowed(&mut *lent))
+        entry.open::<(ByMut<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(&mut *lent))
     });
     frame.call([Pass::Same(borrowed)], |entry| {
-        entry.open::<(ByMut<Pair>,), ()>(|cx, (mut target,), ()| {
+        entry.open::<(ByMut<Pair>,), ()>(|cx, (target,), ()| {
             target.name.push_str(" and written");
             cx.finish(())
         })
@@ -433,7 +432,7 @@ fn an_array_is_lent_as_a_slice() {
         })
     });
     frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(BySliceMut<i64>,), ()>(|cx, (mut run,), ()| {
+        entry.open::<(BySliceMut<i64>,), ()>(|cx, (run,), ()| {
             for element in run.iter_mut() {
                 let doubled = element.get(&cx) * 2;
                 element.set(&cx, doubled);
@@ -494,7 +493,6 @@ fn an_awaited_body_reads_its_lend_before_a_wait() {
     let length = executor().block_on(frame.call_awaited([Pass::Lend(text)], async |entry| {
         let body = entry.open_awaited::<(ByRef<Pair>,), (), _>(|cx, (lent,), ()| {
             let length = lent.name.len() as i64;
-            drop(lent);
             async move {
                 cx.sleep(Duration::from_millis(1)).await;
                 cx.finish(length)
@@ -559,7 +557,7 @@ where
 }
 
 /// The length of text lent to it.
-fn length_of<R: Runtime>(_: &Returning<'_, R>, (text,): (Guard<'_, &str>,)) -> i64 {
+fn length_of<R: Runtime>(_: &Returning<'_, R>, (text,): (&str,)) -> i64 {
     text.len() as i64
 }
 
@@ -621,11 +619,11 @@ fn a_callback_is_lent_a_part_of_the_handlers_storage() {
 
 /// Appends to the name of a `Pair` lent exclusively, in the view its crossing
 /// opens.
-fn append_written<'c, R: Runtime>(_: &Returning<'c, R>, (mut lent,): (GuardMut<'c, <Pair as Crosses<R>>::OpenMut<'c>>,)) {
+fn append_written<'c, R: Runtime>(_: &Returning<'c, R>, (lent,): (<Pair as Crosses<R>>::OpenMut<'c>,)) {
     lent.name.push_str(" and written");
 }
 
-fn words_in<R: Runtime>(_: &Returning<'_, R>, (text,): (Guard<'_, &str>,)) -> i64 {
+fn words_in<R: Runtime>(_: &Returning<'_, R>, (text,): (&str,)) -> i64 {
     text.split(' ').count() as i64
 }
 
@@ -638,7 +636,7 @@ fn a_callback_writes_through_a_part_lent_exclusively() {
 
     executor().block_on(frame.call_awaited([Pass::Lend(lent), Pass::Lend(append)], async |entry| {
         let body = entry.open_awaited::<(ByMut<Pair>, ByRef<Uniform<WordRuntime, Callable<'_, (LentMut<Pair>,), (), ()>>>), (), _>(
-            |cx, (mut lent, callback), ()| async move {
+            |cx, (lent, callback), ()| async move {
                 callback.call(&cx, (&mut *lent,));
                 cx.finish(())
             },
@@ -771,7 +769,7 @@ fn a_string_lent_exclusively_is_written_in_place() {
     let variable = produce(&mut frame, String::from("lent"));
 
     frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(ByMut<String>,), ()>(|cx, (mut lent,), ()| {
+        entry.open::<(ByMut<String>,), ()>(|cx, (lent,), ()| {
             lent.push_str(" and written");
             cx.finish(())
         })
@@ -788,7 +786,7 @@ fn a_primitive_lent_exclusively_is_written_in_place() {
 
     let mut before = None;
     frame.call([Pass::Lend(variable)], |entry| {
-        entry.open::<(ByMut<i16>,), ()>(|cx, (mut lent,), ()| {
+        entry.open::<(ByMut<i16>,), ()>(|cx, (lent,), ()| {
             before = Some(*lent);
             *lent = -300;
             cx.finish(())

@@ -199,14 +199,6 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         .map(|(_, _, ty)| quote!(<#ty as ::acvus_extern::decl::ParamMode>::Mode))
         .collect();
     let opened = arguments.iter().map(|(_, a, _)| a);
-    // Each argument is made by its mode, in the order the parameters are
-    // written.
-    let mut made = Vec::new();
-    for ((_, a, _), mode) in arguments.iter().zip(&modes) {
-        made.push(quote! {
-            let #a = <#mode as ::acvus_extern::Mode<#runtime>>::arg(#a);
-        });
-    }
     let call_args = sig.params.iter().enumerate().map(|(i, p)| {
         let name = &p.name;
         match &p.role {
@@ -256,7 +248,6 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
                 ) -> impl ::core::future::Future<Output = ::acvus_extern::done::Done<#runtime>> + ::core::marker::Send + 'c {
                     ::acvus_extern::Entry::new(runtime, args, site)
                         .open_awaited::<#args_tuple, (), _>(move |__cx, #opened_tuple, ()| async move {
-                            #(#made)*
                             #awaited_finish
                         })
                 }
@@ -289,7 +280,6 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
                 site: &::acvus_extern::SiteShape<#runtime, #requirements>,
             ) -> ::acvus_extern::done::Done<#runtime> {
                 ::acvus_extern::Entry::new(runtime, args, site).open::<#args_tuple, ()>(|__cx, #opened_tuple, ()| {
-                    #(#made)*
                     #finish
                 })
             }

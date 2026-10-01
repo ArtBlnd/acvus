@@ -17,7 +17,6 @@ pub mod context;
 pub mod decl;
 mod crossing;
 pub mod done;
-pub mod guard;
 pub mod impls;
 pub mod register;
 pub mod runtime;
