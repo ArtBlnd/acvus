@@ -7,7 +7,7 @@ An extern author writes Rust and macros turn it into declarations and glue: an a
 The attribute reads the function's Rust signature and its arguments and emits the declaration (compiler: extern fn) and the glue.
 
 - A parameter is taken by value, by `&T` or by `&mut T`. A sequence is taken as a slice, `&[T]` or `&mut [T]`, never as an array.
-- A result is a value; a sequence is returned as a `Vec<T>`. A result that borrows borrows only what was lent in place (crossing §4).
+- A result is a value; a sequence is returned as a `Vec<T>`. A result that borrows borrows only what an argument lends, in place or through a loan it holds, and no longer than that loan; its lifetimes say which (compiler: extern fn §4).
 - A closure parameter is a callback, callable any number of times. A callback is called synchronously or awaited (crossing §3).
 - A declaration has one handler with a returning body, an awaited body, or both. An `async fn` is the awaited body and names its returning body where it has one; the two have one signature. Which body a call runs is the backend's choice (interpreter: tasks), so a handler that runs a callback or calls a required impl has the awaited body: whether the callback or the impl suspends is not the declaration's. An awaited body's future is `Send`, since a task may move between threads.
 - The effect states whether a call may be split, and at what cost; the cost is the backend's (compiler: effects §6).
