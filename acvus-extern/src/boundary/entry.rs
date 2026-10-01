@@ -173,18 +173,12 @@ pub mod mode {
     /// (limitations §3).
     pub struct ByLoaned<T>(PhantomData<fn() -> T>);
     pub struct ByLoanedMut<T>(PhantomData<fn() -> T>);
-    /// A requirement owning its receiver, and one standing at a type.
-    pub struct ByInstance<F, I>(PhantomData<fn() -> (F, I)>);
-    pub struct ByInstanceOf<F, Ts, L>(PhantomData<fn() -> (F, Ts, L)>);
 }
 
 use mode::*;
 
-use crate::boundary::instance::{Instance, InstanceOf};
 use crate::boundary::loaned::{Loaned, LoanedMut};
 use crate::boundary::uniform::Uniform;
-use crate::impls::receiver::{Reads, Steps};
-use crate::impls::{Family, Instances};
 use crate::boundary::seal::Crossing;
 use crate::runtime::{Crosses, RefKind};
 
@@ -227,36 +221,6 @@ modes! {
         |_runtime, v, _at| Loaned::of_the_entry(v);
     [T] ByLoanedMut<T> => LoanedMut<'c, T, R>,
         |_runtime, v, _at| LoanedMut::of_the_entry(v);
-}
-
-impl<R: Instances, F: Family<Receiver = Steps>, I> RequirementMode<R> for ByInstance<F, I> {
-    type Opened<'c> = Instance<R, F, I>
-    where
-        Self: 'c,
-        R: 'c;
-
-    fn open<'c>(_runtime: &'c R, _impl_value: R::Value, _at: Settled<'c>) -> Instance<R, F, I>
-    where
-        Self: 'c,
-        R: 'c,
-    {
-        todo!("the impl cut: an Instance pairs the impl with the receiver it was chosen for")
-    }
-}
-
-impl<R: Instances, F: Family<Receiver = Reads>, Ts, L> RequirementMode<R> for ByInstanceOf<F, Ts, L> {
-    type Opened<'c> = InstanceOf<R, F, Ts, L>
-    where
-        Self: 'c,
-        R: 'c;
-
-    fn open<'c>(_runtime: &'c R, impl_value: R::Value, _at: Settled<'c>) -> InstanceOf<R, F, Ts, L>
-    where
-        Self: 'c,
-        R: 'c,
-    {
-        InstanceOf::of_the_entry(impl_value)
-    }
 }
 
 /// The argument and requirement parameters of each arity: none, and each

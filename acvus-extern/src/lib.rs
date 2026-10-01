@@ -17,7 +17,6 @@ pub mod context;
 pub mod decl;
 mod crossing;
 pub mod done;
-pub mod impls;
 pub mod register;
 pub mod runtime;
 
@@ -27,7 +26,6 @@ pub use boundary::seal;
 pub use acvus_extern_macro::{Opaque, extern_fn};
 
 pub use boundary::entry::{Args, Entry, Mode, Settled, SiteShape, mode};
-pub use boundary::instance::{Instance, InstanceEntry, InstanceOf};
 pub use boundary::loaned::{Loaned, LoanedMut};
 pub use boundary::signed::{GenericParam, LayoutFact, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts};
 pub use boundary::stored::LayoutWitness;

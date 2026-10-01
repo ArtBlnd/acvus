@@ -7,8 +7,6 @@
 //! - `stored`: a type and its canonical form are one layout (G5).
 //! - `loaned`: a retained loan is opened only within a call, at the type it
 //!   was lent at (K12).
-//! - `instance`: an impl value reaches only the receiver it was chosen for
-//!   (G6, K14).
 //! - `signed`: the facts no type can carry, signed by a runtime or a derive.
 //! - `seal`: the crossing trait whose methods choose a typed read's type is
 //!   implemented only here (safety §1).
@@ -16,7 +14,6 @@
 #![allow(unsafe_code)]
 
 pub(crate) mod entry;
-pub(crate) mod instance;
 pub(crate) mod loaned;
 pub mod seal;
 pub(crate) mod signed;
