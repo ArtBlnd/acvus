@@ -34,4 +34,3 @@ pub use boundary::loaned::{Loaned, LoanedMut};
 pub use boundary::signed::{GenericParam, LayoutFact, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts};
 pub use boundary::stored::LayoutWitness;
 pub use boundary::uniform::{Primitive, Release, Releasing, Uniform};
-pub use crossing::Parted;

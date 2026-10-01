@@ -1,29 +1,50 @@
 //! The language's types' crossings (runtime contract §1): each is its type's
 //! own, composed of its kind's operations over its parts' crossings. An extern
 //! type's crossing is the derive's.
-
-use std::ops::{Deref, DerefMut};
+//!
+//! A value lent, held or named by a reference, is opened as its projection
+//! (crossing §2): a reference to a type the runtime holds as itself, and of an
+//! option, a result or a tuple the same structure over its parts' projections.
 
 use crate::boundary::entry::Settled;
 use crate::boundary::uniform::Uniform;
 use crate::runtime::{Crosses, OptionKind, PrimitiveKind, RefKind, Referent, ResultKind, Runtime, StringKind, TupleKind};
 
-/// A view of parts, lent: an option's, a result's or a tuple's parts as
-/// `Uniform`s, the view dereferencing to them.
-pub struct Parted<V>(V);
+/// A type the runtime holds as itself: opened as a reference to it by its
+/// kind.
+macro_rules! held_as_itself {
+    ($t:ty, $kind:ident, $kind_trait:ident) => {
+        type Open<'a> = &'a $t;
+        type OpenMut<'a> = &'a mut $t;
 
-impl<V> Deref for Parted<V> {
-    type Target = V;
+        fn open<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a $t
+        where
+            Self: 'a,
+        {
+            <R::$kind as $kind_trait<R>>::shared(rt, place, at)
+        }
 
-    fn deref(&self) -> &V {
-        &self.0
-    }
-}
+        fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut $t
+        where
+            Self: 'a,
+        {
+            <R::$kind as $kind_trait<R>>::exclusive(rt, place, at)
+        }
 
-impl<V> DerefMut for Parted<V> {
-    fn deref_mut(&mut self) -> &mut V {
-        &mut self.0
-    }
+        fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a $t
+        where
+            Self: 'a,
+        {
+            <R::$kind as $kind_trait<R>>::shared_ref(rt, reference, at)
+        }
+
+        fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut $t
+        where
+            Self: 'a,
+        {
+            <R::$kind as $kind_trait<R>>::exclusive_ref(rt, reference, at)
+        }
+    };
 }
 
 macro_rules! primitive_crossings {
@@ -31,8 +52,7 @@ macro_rules! primitive_crossings {
         impl Referent for $t {}
 
         impl<R: Runtime> Crosses<R> for $t {
-            type Open<'a> = <R::Primitive as PrimitiveKind<R>>::Shared<'a, $t>;
-            type OpenMut<'a> = <R::Primitive as PrimitiveKind<R>>::Exclusive<'a, $t>;
+            held_as_itself!($t, Primitive, PrimitiveKind);
 
             fn give(self, rt: &R, at: Settled<'_>) -> R::Value {
                 <R::Primitive as PrimitiveKind<R>>::give(rt, self, at)
@@ -40,34 +60,6 @@ macro_rules! primitive_crossings {
 
             fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self {
                 <R::Primitive as PrimitiveKind<R>>::take(rt, v, at)
-            }
-
-            fn open<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Open<'a>
-            where
-                Self: 'a,
-            {
-                <R::Primitive as PrimitiveKind<R>>::shared(rt, place, at)
-            }
-
-            fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
-            where
-                Self: 'a,
-            {
-                <R::Primitive as PrimitiveKind<R>>::exclusive(rt, place, at)
-            }
-
-            fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Open<'a>
-            where
-                Self: 'a,
-            {
-                <R::Primitive as PrimitiveKind<R>>::shared_ref(rt, reference, at)
-            }
-
-            fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
-            where
-                Self: 'a,
-            {
-                <R::Primitive as PrimitiveKind<R>>::exclusive_ref(rt, reference, at)
             }
         }
     )+};
@@ -81,8 +73,7 @@ impl<R: Runtime, X> Referent for Uniform<R, X> {}
 impl<R: Runtime, X> Referent for [Uniform<R, X>] {}
 
 impl<R: Runtime> Crosses<R> for String {
-    type Open<'a> = <R::String as StringKind<R>>::Shared<'a>;
-    type OpenMut<'a> = <R::String as StringKind<R>>::Exclusive<'a>;
+    held_as_itself!(String, String, StringKind);
 
     fn give(self, rt: &R, at: Settled<'_>) -> R::Value {
         <R::String as StringKind<R>>::give(rt, self, at)
@@ -91,43 +82,15 @@ impl<R: Runtime> Crosses<R> for String {
     fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self {
         <R::String as StringKind<R>>::take(rt, v, at)
     }
-
-    fn open<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Open<'a>
-            where
-                Self: 'a,
-            {
-        <R::String as StringKind<R>>::shared(rt, place, at)
-    }
-
-    fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
-            where
-                Self: 'a,
-            {
-        <R::String as StringKind<R>>::exclusive(rt, place, at)
-    }
-
-    fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Open<'a>
-            where
-                Self: 'a,
-            {
-        <R::String as StringKind<R>>::shared_ref(rt, reference, at)
-    }
-
-    fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
-            where
-                Self: 'a,
-            {
-        <R::String as StringKind<R>>::exclusive_ref(rt, reference, at)
-    }
 }
 
 impl<R: Runtime, T: Crosses<R>> Crosses<R> for Option<T> {
     type Open<'a>
-        = Parted<Option<&'a Uniform<R, T>>>
+        = Option<T::Open<'a>>
     where
         T: 'a;
     type OpenMut<'a>
-        = Parted<Option<&'a mut Uniform<R, T>>>
+        = Option<T::OpenMut<'a>>
     where
         T: 'a;
 
@@ -143,42 +106,40 @@ impl<R: Runtime, T: Crosses<R>> Crosses<R> for Option<T> {
     where
         T: 'a,
     {
-        Parted(<R::Option as OptionKind<R>>::shared(rt, place, at).map(Uniform::at_place))
+        <R::Option as OptionKind<R>>::shared(rt, place, at).map(|part| T::open(rt, part, at))
     }
 
     fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
     where
         T: 'a,
     {
-        Parted(<R::Option as OptionKind<R>>::exclusive(rt, place, at).map(Uniform::at_place_mut))
+        <R::Option as OptionKind<R>>::exclusive(rt, place, at).map(|part| T::open_mut(rt, part, at))
     }
 
     fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Open<'a>
     where
         T: 'a,
     {
-        Parted(<R::Option as OptionKind<R>>::shared_ref(rt, reference, at).map(Uniform::at_place))
+        <R::Option as OptionKind<R>>::shared_ref(rt, reference, at).map(|part| T::open(rt, part, at))
     }
 
     fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
     where
         T: 'a,
     {
-        Parted(<R::Option as OptionKind<R>>::exclusive_ref(rt, reference, at).map(Uniform::at_place_mut))
+        <R::Option as OptionKind<R>>::exclusive_ref(rt, reference, at).map(|part| T::open_mut(rt, part, at))
     }
 }
 
 impl<R: Runtime, T: Crosses<R>, E: Crosses<R>> Crosses<R> for Result<T, E> {
     type Open<'a>
-        = Parted<Result<&'a Uniform<R, T>, &'a Uniform<R, E>>>
+        = Result<T::Open<'a>, E::Open<'a>>
     where
-        T: 'a,
-        E: 'a;
+        Self: 'a;
     type OpenMut<'a>
-        = Parted<Result<&'a mut Uniform<R, T>, &'a mut Uniform<R, E>>>
+        = Result<T::OpenMut<'a>, E::OpenMut<'a>>
     where
-        T: 'a,
-        E: 'a;
+        Self: 'a;
 
     fn give(self, rt: &R, at: Settled<'_>) -> R::Value {
         let parts = self.map(|v| v.give(rt, at)).map_err(|e| e.give(rt, at));
@@ -186,9 +147,7 @@ impl<R: Runtime, T: Crosses<R>, E: Crosses<R>> Crosses<R> for Result<T, E> {
     }
 
     fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self {
-        <R::Result as ResultKind<R>>::take(rt, v, at)
-            .map(|v| T::take(rt, v, at))
-            .map_err(|e| E::take(rt, e, at))
+        <R::Result as ResultKind<R>>::take(rt, v, at).map(|v| T::take(rt, v, at)).map_err(|e| E::take(rt, e, at))
     }
 
     fn open<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Open<'a>
@@ -196,7 +155,7 @@ impl<R: Runtime, T: Crosses<R>, E: Crosses<R>> Crosses<R> for Result<T, E> {
         Self: 'a,
     {
         let parts = <R::Result as ResultKind<R>>::shared(rt, place, at);
-        Parted(parts.map(Uniform::at_place).map_err(Uniform::at_place))
+        parts.map(|part| T::open(rt, part, at)).map_err(|part| E::open(rt, part, at))
     }
 
     fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
@@ -204,7 +163,7 @@ impl<R: Runtime, T: Crosses<R>, E: Crosses<R>> Crosses<R> for Result<T, E> {
         Self: 'a,
     {
         let parts = <R::Result as ResultKind<R>>::exclusive(rt, place, at);
-        Parted(parts.map(Uniform::at_place_mut).map_err(Uniform::at_place_mut))
+        parts.map(|part| T::open_mut(rt, part, at)).map_err(|part| E::open_mut(rt, part, at))
     }
 
     fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Open<'a>
@@ -212,7 +171,7 @@ impl<R: Runtime, T: Crosses<R>, E: Crosses<R>> Crosses<R> for Result<T, E> {
         Self: 'a,
     {
         let parts = <R::Result as ResultKind<R>>::shared_ref(rt, reference, at);
-        Parted(parts.map(Uniform::at_place).map_err(Uniform::at_place))
+        parts.map(|part| T::open(rt, part, at)).map_err(|part| E::open(rt, part, at))
     }
 
     fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
@@ -220,7 +179,7 @@ impl<R: Runtime, T: Crosses<R>, E: Crosses<R>> Crosses<R> for Result<T, E> {
         Self: 'a,
     {
         let parts = <R::Result as ResultKind<R>>::exclusive_ref(rt, reference, at);
-        Parted(parts.map(Uniform::at_place_mut).map_err(Uniform::at_place_mut))
+        parts.map(|part| T::open_mut(rt, part, at)).map_err(|part| E::open_mut(rt, part, at))
     }
 }
 
@@ -273,15 +232,16 @@ impl<R: Runtime, X> Crosses<R> for Uniform<R, X> {
     }
 }
 
+/// A tuple, made, taken and projected by its kind over its parts' crossings.
 macro_rules! tuple_crossings {
     ($($n:literal ($($p:ident $v:ident $i:tt),+))+) => {$(
         impl<R: Runtime, $($p: Crosses<R>),+> Crosses<R> for ($($p,)+) {
             type Open<'a>
-                = Parted<($(&'a Uniform<R, $p>,)+)>
+                = ($($p::Open<'a>,)+)
             where
                 Self: 'a;
             type OpenMut<'a>
-                = Parted<($(&'a mut Uniform<R, $p>,)+)>
+                = ($($p::OpenMut<'a>,)+)
             where
                 Self: 'a;
 
@@ -300,7 +260,7 @@ macro_rules! tuple_crossings {
                 Self: 'a,
             {
                 let [$($v),+] = <R::Tuple as TupleKind<R>>::shared::<$n>(rt, place, at);
-                Parted(($(Uniform::at_place($v),)+))
+                ($($p::open(rt, $v, at),)+)
             }
 
             fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
@@ -308,7 +268,7 @@ macro_rules! tuple_crossings {
                 Self: 'a,
             {
                 let [$($v),+] = <R::Tuple as TupleKind<R>>::exclusive::<$n>(rt, place, at);
-                Parted(($(Uniform::at_place_mut($v),)+))
+                ($($p::open_mut(rt, $v, at),)+)
             }
 
             fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Open<'a>
@@ -316,7 +276,7 @@ macro_rules! tuple_crossings {
                 Self: 'a,
             {
                 let [$($v),+] = <R::Tuple as TupleKind<R>>::shared_ref::<$n>(rt, reference, at);
-                Parted(($(Uniform::at_place($v),)+))
+                ($($p::open(rt, $v, at),)+)
             }
 
             fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
@@ -324,7 +284,7 @@ macro_rules! tuple_crossings {
                 Self: 'a,
             {
                 let [$($v),+] = <R::Tuple as TupleKind<R>>::exclusive_ref::<$n>(rt, reference, at);
-                Parted(($(Uniform::at_place_mut($v),)+))
+                ($($p::open_mut(rt, $v, at),)+)
             }
         }
     )+};

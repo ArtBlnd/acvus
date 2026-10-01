@@ -12,7 +12,6 @@
 //! (`Crosses`) is its own: it composes its kind's operations over its parts'
 //! crossings, and the runtime never sees a type's structure, only the kind's.
 
-use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 use acvus_utils::Interner;
@@ -59,11 +58,11 @@ use crate::boundary::uniform::{Primitive, Release};
 /// }
 /// ```
 pub trait Crosses<R: Runtime>: Sized + Send + Sync + Crossing {
-    type Open<'a>: Deref
+    type Open<'a>
     where
         Self: 'a,
         R: 'a;
-    type OpenMut<'a>: DerefMut
+    type OpenMut<'a>
     where
         Self: 'a,
         R: 'a;
@@ -132,62 +131,43 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     fn sleep(&self, d: Duration) -> impl Future<Output = ()> + Send;
 }
 
-/// An extern type's value, holding the Rust value itself. A guard lends
-/// its storage; every guard is `Send`, as what it lends is, so an awaited body
-/// holds one across a wait (macros §1), and its drop is the lend's end (K13).
+/// An extern type's value, holding the Rust value itself, whose storage is lent
+/// as a reference to it.
 pub trait OpaqueKind<R: Runtime> {
-    type Shared<'a, T: Opaque + 'a>: Deref<Target = T> + Send
-    where
-        R: 'a;
-    type Exclusive<'a, T: Opaque + 'a>: DerefMut<Target = T> + Send
-    where
-        R: 'a;
 
     fn give<T: Opaque>(rt: &R, value: T, at: Settled<'_>) -> R::Value;
     /// Moves the value out, releasing its storage.
     fn take<T: Opaque>(rt: &R, v: R::Value, at: Settled<'_>) -> T;
 
-    fn shared<'a, T: Opaque + 'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Shared<'a, T>;
-    fn exclusive<'a, T: Opaque + 'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::Exclusive<'a, T>;
+    fn shared<'a, T: Opaque + 'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a T;
+    fn exclusive<'a, T: Opaque + 'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut T;
     /// The `T` a reference value names, lent.
-    fn shared_ref<'a, T: Opaque + 'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Shared<'a, T>;
-    fn exclusive_ref<'a, T: Opaque + 'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Exclusive<'a, T>;
+    fn shared_ref<'a, T: Opaque + 'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a T;
+    fn exclusive_ref<'a, T: Opaque + 'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut T;
 }
 
 /// A primitive's value, the primitive in the runtime's own representation.
 pub trait PrimitiveKind<R: Runtime> {
-    type Shared<'a, P: Primitive>: Deref<Target = P> + Send
-    where
-        R: 'a;
-    type Exclusive<'a, P: Primitive>: DerefMut<Target = P> + Send
-    where
-        R: 'a;
 
     fn give<P: Primitive>(rt: &R, value: P, at: Settled<'_>) -> R::Value;
     fn take<P: Primitive>(rt: &R, v: R::Value, at: Settled<'_>) -> P;
 
-    fn shared<'a, P: Primitive>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Shared<'a, P>;
-    fn exclusive<'a, P: Primitive>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::Exclusive<'a, P>;
-    fn shared_ref<'a, P: Primitive>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Shared<'a, P>;
-    fn exclusive_ref<'a, P: Primitive>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Exclusive<'a, P>;
+    fn shared<'a, P: Primitive>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a P;
+    fn exclusive<'a, P: Primitive>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut P;
+    fn shared_ref<'a, P: Primitive>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a P;
+    fn exclusive_ref<'a, P: Primitive>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut P;
 }
 
 /// Text, a Rust `String`.
 pub trait StringKind<R: Runtime> {
-    type Shared<'a>: Deref<Target = String> + Send
-    where
-        R: 'a;
-    type Exclusive<'a>: DerefMut<Target = String> + Send
-    where
-        R: 'a;
 
     fn give(rt: &R, value: String, at: Settled<'_>) -> R::Value;
     fn take(rt: &R, v: R::Value, at: Settled<'_>) -> String;
 
-    fn shared<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Shared<'a>;
-    fn exclusive<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::Exclusive<'a>;
-    fn shared_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Shared<'a>;
-    fn exclusive_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Exclusive<'a>;
+    fn shared<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a String;
+    fn exclusive<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut String;
+    fn shared_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a String;
+    fn exclusive_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut String;
 }
 
 /// An option over its part's value. Its release releases the part. Lent, it

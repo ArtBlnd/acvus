@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::ops::{Deref, DerefMut, Range};
+use std::ops::Range;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -89,18 +89,6 @@ impl<X: Runtime> Adapter<X> {
 
     pub fn inner(&self) -> &X {
         &self.inner
-    }
-
-    /// Tracks `guard` as a lend of the storage its target occupies.
-    fn track<'a, G>(&'a self, guard: G, access: Mutability) -> Tracked<'a, G>
-    where
-        G: Deref,
-    {
-        let lent = lock(&self.borrows).lend(range_of(&*guard), access);
-        match lent {
-            Ok(tag) => Tracked { inner: guard, tag, borrows: &self.borrows },
-            Err(breach) => breach.detected(),
-        }
     }
 }
 
@@ -265,32 +253,6 @@ impl Borrows {
     }
 }
 
-/// A guard of X, tracked while it lends.
-pub struct Tracked<'a, G> {
-    inner: G,
-    tag: Tag,
-    borrows: &'a Mutex<Borrows>,
-}
-
-impl<G: Deref> Deref for Tracked<'_, G> {
-    type Target = G::Target;
-
-    fn deref(&self) -> &G::Target {
-        &self.inner
-    }
-}
-
-impl<G: DerefMut> DerefMut for Tracked<'_, G> {
-    fn deref_mut(&mut self) -> &mut G::Target {
-        &mut self.inner
-    }
-}
-
-impl<G> Drop for Tracked<'_, G> {
-    fn drop(&mut self) {
-        lock(self.borrows).end(self.tag);
-    }
-}
 
 impl<X: Runtime> Runtime for Adapter<X> {
     type Value = X::Value;
@@ -318,8 +280,6 @@ impl<X: Runtime> Runtime for Adapter<X> {
 pub struct Adapted<K>(PhantomData<fn() -> K>);
 
 impl<X: Runtime, K: OpaqueKind<X>> OpaqueKind<Adapter<X>> for Adapted<K> {
-    type Shared<'a, T: Opaque + 'a> = Tracked<'a, K::Shared<'a, T>>;
-    type Exclusive<'a, T: Opaque + 'a> = Tracked<'a, K::Exclusive<'a, T>>;
 
     fn give<T: Opaque>(rt: &Adapter<X>, value: T, at: Settled<'_>) -> X::Value {
         K::give(&rt.inner, value, at)
@@ -329,34 +289,32 @@ impl<X: Runtime, K: OpaqueKind<X>> OpaqueKind<Adapter<X>> for Adapted<K> {
         K::take(&rt.inner, v, at)
     }
 
-    fn shared<'a, T: Opaque + 'a>(rt: &'a Adapter<X>, place: &'a X::Value, at: Settled<'a>) -> Self::Shared<'a, T> {
-        rt.track(K::shared(&rt.inner, place, at), Mutability::Shared)
+    fn shared<'a, T: Opaque + 'a>(rt: &'a Adapter<X>, place: &'a X::Value, at: Settled<'a>) -> &'a T {
+        K::shared(&rt.inner, place, at)
     }
 
     fn exclusive<'a, T: Opaque + 'a>(
         rt: &'a Adapter<X>,
         place: &'a mut X::Value,
         at: Settled<'a>,
-    ) -> Self::Exclusive<'a, T> {
-        rt.track(K::exclusive(&rt.inner, place, at), Mutability::Exclusive)
+    ) -> &'a mut T {
+        K::exclusive(&rt.inner, place, at)
     }
 
-    fn shared_ref<'a, T: Opaque + 'a>(rt: &'a Adapter<X>, reference: X::Value, at: Settled<'a>) -> Self::Shared<'a, T> {
-        rt.track(K::shared_ref(&rt.inner, reference, at), Mutability::Shared)
+    fn shared_ref<'a, T: Opaque + 'a>(rt: &'a Adapter<X>, reference: X::Value, at: Settled<'a>) -> &'a T {
+        K::shared_ref(&rt.inner, reference, at)
     }
 
     fn exclusive_ref<'a, T: Opaque + 'a>(
         rt: &'a Adapter<X>,
         reference: X::Value,
         at: Settled<'a>,
-    ) -> Self::Exclusive<'a, T> {
-        rt.track(K::exclusive_ref(&rt.inner, reference, at), Mutability::Exclusive)
+    ) -> &'a mut T {
+        K::exclusive_ref(&rt.inner, reference, at)
     }
 }
 
 impl<X: Runtime, K: PrimitiveKind<X>> PrimitiveKind<Adapter<X>> for Adapted<K> {
-    type Shared<'a, P: Primitive> = Tracked<'a, K::Shared<'a, P>>;
-    type Exclusive<'a, P: Primitive> = Tracked<'a, K::Exclusive<'a, P>>;
 
     fn give<P: Primitive>(rt: &Adapter<X>, value: P, at: Settled<'_>) -> X::Value {
         K::give(&rt.inner, value, at)
@@ -366,30 +324,28 @@ impl<X: Runtime, K: PrimitiveKind<X>> PrimitiveKind<Adapter<X>> for Adapted<K> {
         K::take(&rt.inner, v, at)
     }
 
-    fn shared<'a, P: Primitive>(rt: &'a Adapter<X>, place: &'a X::Value, at: Settled<'a>) -> Self::Shared<'a, P> {
-        rt.track(K::shared(&rt.inner, place, at), Mutability::Shared)
+    fn shared<'a, P: Primitive>(rt: &'a Adapter<X>, place: &'a X::Value, at: Settled<'a>) -> &'a P {
+        K::shared(&rt.inner, place, at)
     }
 
-    fn exclusive<'a, P: Primitive>(rt: &'a Adapter<X>, place: &'a mut X::Value, at: Settled<'a>) -> Self::Exclusive<'a, P> {
-        rt.track(K::exclusive(&rt.inner, place, at), Mutability::Exclusive)
+    fn exclusive<'a, P: Primitive>(rt: &'a Adapter<X>, place: &'a mut X::Value, at: Settled<'a>) -> &'a mut P {
+        K::exclusive(&rt.inner, place, at)
     }
 
-    fn shared_ref<'a, P: Primitive>(rt: &'a Adapter<X>, reference: X::Value, at: Settled<'a>) -> Self::Shared<'a, P> {
-        rt.track(K::shared_ref(&rt.inner, reference, at), Mutability::Shared)
+    fn shared_ref<'a, P: Primitive>(rt: &'a Adapter<X>, reference: X::Value, at: Settled<'a>) -> &'a P {
+        K::shared_ref(&rt.inner, reference, at)
     }
 
     fn exclusive_ref<'a, P: Primitive>(
         rt: &'a Adapter<X>,
         reference: X::Value,
         at: Settled<'a>,
-    ) -> Self::Exclusive<'a, P> {
-        rt.track(K::exclusive_ref(&rt.inner, reference, at), Mutability::Exclusive)
+    ) -> &'a mut P {
+        K::exclusive_ref(&rt.inner, reference, at)
     }
 }
 
 impl<X: Runtime, K: StringKind<X>> StringKind<Adapter<X>> for Adapted<K> {
-    type Shared<'a> = Tracked<'a, K::Shared<'a>>;
-    type Exclusive<'a> = Tracked<'a, K::Exclusive<'a>>;
 
     fn give(rt: &Adapter<X>, value: String, at: Settled<'_>) -> X::Value {
         K::give(&rt.inner, value, at)
@@ -399,20 +355,20 @@ impl<X: Runtime, K: StringKind<X>> StringKind<Adapter<X>> for Adapted<K> {
         K::take(&rt.inner, v, at)
     }
 
-    fn shared<'a>(rt: &'a Adapter<X>, place: &'a X::Value, at: Settled<'a>) -> Self::Shared<'a> {
-        rt.track(K::shared(&rt.inner, place, at), Mutability::Shared)
+    fn shared<'a>(rt: &'a Adapter<X>, place: &'a X::Value, at: Settled<'a>) -> &'a String {
+        K::shared(&rt.inner, place, at)
     }
 
-    fn exclusive<'a>(rt: &'a Adapter<X>, place: &'a mut X::Value, at: Settled<'a>) -> Self::Exclusive<'a> {
-        rt.track(K::exclusive(&rt.inner, place, at), Mutability::Exclusive)
+    fn exclusive<'a>(rt: &'a Adapter<X>, place: &'a mut X::Value, at: Settled<'a>) -> &'a mut String {
+        K::exclusive(&rt.inner, place, at)
     }
 
-    fn shared_ref<'a>(rt: &'a Adapter<X>, reference: X::Value, at: Settled<'a>) -> Self::Shared<'a> {
-        rt.track(K::shared_ref(&rt.inner, reference, at), Mutability::Shared)
+    fn shared_ref<'a>(rt: &'a Adapter<X>, reference: X::Value, at: Settled<'a>) -> &'a String {
+        K::shared_ref(&rt.inner, reference, at)
     }
 
-    fn exclusive_ref<'a>(rt: &'a Adapter<X>, reference: X::Value, at: Settled<'a>) -> Self::Exclusive<'a> {
-        rt.track(K::exclusive_ref(&rt.inner, reference, at), Mutability::Exclusive)
+    fn exclusive_ref<'a>(rt: &'a Adapter<X>, reference: X::Value, at: Settled<'a>) -> &'a mut String {
+        K::exclusive_ref(&rt.inner, reference, at)
     }
 }
 

@@ -16,7 +16,7 @@ use acvus_mir::ty::{Contexts, Effect, IntTy, Reissue, SplitCost};
 use acvus_utils::Astr;
 
 pub use acvus_utils::{Interner, QualifiedRef};
-pub use ty::{DeclCx, DeclType, EffectNth, IdentityNth, Nth, ParamDecl, ParamMode, Var, kind};
+pub use ty::{DeclCx, DeclType, EffectNth, IdentityNth, Nth, ParamDecl, ParamMode, Part, Passed, Var, kind, part};
 
 /// A declared type (compiler: extern fn §1, §8; types §1-§3).
 #[derive(Debug, Clone, PartialEq, Eq)]

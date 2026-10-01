@@ -608,8 +608,6 @@ where
 pub struct Kinds;
 
 impl OpaqueKind<WordRuntime> for Kinds {
-    type Shared<'a, T: Opaque + 'a> = &'a T;
-    type Exclusive<'a, T: Opaque + 'a> = &'a mut T;
 
     fn give<T: Opaque>(_: &WordRuntime, value: T, _: Settled<'_>) -> Word {
         give_opaque(value)
@@ -632,8 +630,6 @@ impl OpaqueKind<WordRuntime> for Kinds {
 }
 
 impl PrimitiveKind<WordRuntime> for Kinds {
-    type Shared<'a, P: Primitive> = &'a P;
-    type Exclusive<'a, P: Primitive> = &'a mut P;
 
     fn give<P: Primitive>(_: &WordRuntime, value: P, _: Settled<'_>) -> Word {
         scalar(value)
@@ -656,8 +652,6 @@ impl PrimitiveKind<WordRuntime> for Kinds {
 }
 
 impl StringKind<WordRuntime> for Kinds {
-    type Shared<'a> = &'a String;
-    type Exclusive<'a> = &'a mut String;
 
     fn give(_: &WordRuntime, value: String, _: Settled<'_>) -> Word {
         give_string(value)
@@ -841,6 +835,11 @@ macro_rules! opaque {
         impl Referent for $t {}
         impl Opaque for $t {}
 
+        impl acvus_extern::decl::Part for $t {
+            type Class = acvus_extern::decl::part::Value;
+            type Of = $t;
+        }
+
         impl acvus_extern::decl::DeclType for $t {
             fn decl_ty(cx: &mut acvus_extern::decl::DeclCx<'_>) -> acvus_extern::decl::DeclTy {
                 acvus_extern::decl::DeclTy::Extern {
@@ -854,8 +853,8 @@ macro_rules! opaque {
         }
 
         impl<R: Runtime> Crosses<R> for $t {
-            type Open<'a> = <R::Opaque as OpaqueKind<R>>::Shared<'a, $t>;
-            type OpenMut<'a> = <R::Opaque as OpaqueKind<R>>::Exclusive<'a, $t>;
+            type Open<'a> = &'a $t;
+            type OpenMut<'a> = &'a mut $t;
 
             fn give(self, rt: &R, at: Settled<'_>) -> R::Value {
                 <R::Opaque as OpaqueKind<R>>::give(rt, self, at)

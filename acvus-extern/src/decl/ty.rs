@@ -111,8 +111,134 @@ primitives!(by_value_primitives);
 
 by_value! {
     [] String => |_| DeclTy::String;
-    [T: DeclType] Option<T> => |cx| DeclTy::Option(Box::new(T::decl_ty(cx)));
-    [T: DeclType, E: DeclType] Result<T, E> => |cx| DeclTy::Result(Box::new(T::decl_ty(cx)), Box::new(E::decl_ty(cx)));
+}
+
+impl<T: DeclType> DeclType for Option<T> {
+    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
+        DeclTy::Option(Box::new(T::decl_ty(cx)))
+    }
+}
+
+impl<T: DeclType, E: DeclType> DeclType for Result<T, E> {
+    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
+        DeclTy::Result(Box::new(T::decl_ty(cx)), Box::new(E::decl_ty(cx)))
+    }
+}
+
+/// A part of an option, a result or a tuple a parameter is written with: a
+/// value, taken with the whole by value, or a reference, the whole lent and
+/// opened as its projection (crossing §2). `Of` is what the part is a part
+/// of the lent value as.
+pub trait Part {
+    type Class;
+    type Of: DeclType;
+}
+
+/// The classes a part is of.
+pub mod part {
+    /// A value.
+    pub enum Value {}
+    /// A shared reference.
+    pub enum Shared {}
+    /// An exclusive reference.
+    pub enum Exclusive {}
+}
+
+/// How a parameter whose parts are of a class is passed: by value, or lent
+/// whole and opened as its projection.
+pub trait Passed<T> {
+    type Mode<R: Runtime>;
+    fn decl(cx: &mut DeclCx<'_>) -> DeclTy;
+}
+
+impl<T: DeclType> Passed<T> for part::Value {
+    type Mode<R: Runtime> = ByValue<T>;
+
+    fn decl(cx: &mut DeclCx<'_>) -> DeclTy {
+        T::decl_ty(cx)
+    }
+}
+
+impl<T: DeclType> Passed<T> for part::Shared {
+    type Mode<R: Runtime> = ByRef<T>;
+
+    fn decl(cx: &mut DeclCx<'_>) -> DeclTy {
+        DeclTy::Ref { mutable: false, target: Box::new(T::decl_ty(cx)) }
+    }
+}
+
+impl<T: DeclType> Passed<T> for part::Exclusive {
+    type Mode<R: Runtime> = ByMut<T>;
+
+    fn decl(cx: &mut DeclCx<'_>) -> DeclTy {
+        DeclTy::Ref { mutable: true, target: Box::new(T::decl_ty(cx)) }
+    }
+}
+
+impl<P: DeclType> Part for &P {
+    type Class = part::Shared;
+    type Of = P;
+}
+
+impl<P: DeclType> Part for &mut P {
+    type Class = part::Exclusive;
+    type Of = P;
+}
+
+macro_rules! value_parts {
+    ($([$($g:tt)*] $t:ty;)+) => {$(
+        impl<$($g)*> Part for $t {
+            type Class = part::Value;
+            type Of = $t;
+        }
+    )+};
+}
+
+value_parts! {
+    [] String;
+    [R: Runtime, X: DeclType] Uniform<R, X>;
+}
+
+macro_rules! primitive_parts {
+    ($($t:ty => $decl:expr),+ $(,)?) => {
+        value_parts! { $([] $t;)+ }
+    };
+}
+
+primitives!(primitive_parts);
+
+impl<X: Part> Part for Option<X> {
+    type Class = X::Class;
+    type Of = Option<X::Of>;
+}
+
+impl<X: Part, E: Part<Class = X::Class>> Part for Result<X, E> {
+    type Class = X::Class;
+    type Of = Result<X::Of, E::Of>;
+}
+
+/// An option, a result or a tuple as a parameter: by value where its parts are
+/// values, lent and projected where they are references.
+impl<X: Part> ParamMode for Option<X>
+where
+    X::Class: Passed<Option<X::Of>>,
+{
+    type Mode<R: Runtime> = <X::Class as Passed<Option<X::Of>>>::Mode<R>;
+
+    fn decl(cx: &mut DeclCx<'_>) -> ParamDecl {
+        ParamDecl::Argument(<X::Class as Passed<Option<X::Of>>>::decl(cx))
+    }
+}
+
+impl<X: Part, E: Part<Class = X::Class>> ParamMode for Result<X, E>
+where
+    X::Class: Passed<Result<X::Of, E::Of>>,
+{
+    type Mode<R: Runtime> = <X::Class as Passed<Result<X::Of, E::Of>>>::Mode<R>;
+
+    fn decl(cx: &mut DeclCx<'_>) -> ParamDecl {
+        ParamDecl::Argument(<X::Class as Passed<Result<X::Of, E::Of>>>::decl(cx))
+    }
 }
 
 impl<const N: u32> DeclType for Nth<N> {
@@ -145,8 +271,30 @@ macro_rules! decl_tuples {
             }
         }
 
-        by_value! {
-            [$($p: DeclType),+] ($($p,)+) => |cx| DeclTy::Tuple(<Self as DeclParts>::decl_parts(cx));
+        impl<$($p: DeclType),+> DeclType for ($($p,)+) {
+            fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
+                DeclTy::Tuple(<Self as DeclParts>::decl_parts(cx))
+            }
+        }
+
+        impl<Class, $($p: Part<Class = Class>),+> Part for ($($p,)+)
+        where
+            ($($p::Of,)+): DeclType,
+        {
+            type Class = Class;
+            type Of = ($($p::Of,)+);
+        }
+
+        impl<Class, $($p: Part<Class = Class>),+> ParamMode for ($($p,)+)
+        where
+            ($($p::Of,)+): DeclType,
+            Class: Passed<($($p::Of,)+)>,
+        {
+            type Mode<R: Runtime> = <Class as Passed<($($p::Of,)+)>>::Mode<R>;
+
+            fn decl(cx: &mut DeclCx<'_>) -> ParamDecl {
+                ParamDecl::Argument(<Class as Passed<($($p::Of,)+)>>::decl(cx))
+            }
         }
     )+};
 }

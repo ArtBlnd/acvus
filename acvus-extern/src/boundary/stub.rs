@@ -2,8 +2,6 @@
 //! release, which it counts. Every kind is `NoKind`, reached by no
 //! test.
 
-use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -41,21 +39,6 @@ unsafe impl SignedS3 for Stub {}
 
 pub(crate) enum NoKind {}
 
-pub(crate) struct NoGuard<T: ?Sized>(PhantomData<fn() -> Box<T>>);
-
-impl<T: ?Sized> Deref for NoGuard<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        unreachable!("the stub lends no storage")
-    }
-}
-
-impl<T: ?Sized> DerefMut for NoGuard<T> {
-    fn deref_mut(&mut self) -> &mut T {
-        unreachable!("the stub lends no storage")
-    }
-}
-
 impl Runtime for Stub {
     type Value = Counted;
 
@@ -77,8 +60,6 @@ impl Runtime for Stub {
 }
 
 impl OpaqueKind<Stub> for NoKind {
-    type Shared<'a, T: Opaque + 'a> = NoGuard<T>;
-    type Exclusive<'a, T: Opaque + 'a> = NoGuard<T>;
 
     fn give<T: Opaque>(_: &Stub, _: T, _: Settled<'_>) -> Counted {
         unreachable!()
@@ -86,23 +67,21 @@ impl OpaqueKind<Stub> for NoKind {
     fn take<T: Opaque>(_: &Stub, _: Counted, _: Settled<'_>) -> T {
         unreachable!()
     }
-    fn shared<'a, T: Opaque + 'a>(_: &'a Stub, _: &'a Counted, _: Settled<'a>) -> NoGuard<T> {
+    fn shared<'a, T: Opaque + 'a>(_: &'a Stub, _: &'a Counted, _: Settled<'a>) -> &'a T {
         unreachable!()
     }
-    fn exclusive<'a, T: Opaque + 'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> NoGuard<T> {
+    fn exclusive<'a, T: Opaque + 'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> &'a mut T {
         unreachable!()
     }
-    fn shared_ref<'a, T: Opaque + 'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> NoGuard<T> {
+    fn shared_ref<'a, T: Opaque + 'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a T {
         unreachable!()
     }
-    fn exclusive_ref<'a, T: Opaque + 'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> NoGuard<T> {
+    fn exclusive_ref<'a, T: Opaque + 'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a mut T {
         unreachable!()
     }
 }
 
 impl PrimitiveKind<Stub> for NoKind {
-    type Shared<'a, P: Primitive> = NoGuard<P>;
-    type Exclusive<'a, P: Primitive> = NoGuard<P>;
 
     fn give<P: Primitive>(_: &Stub, _: P, _: Settled<'_>) -> Counted {
         unreachable!()
@@ -110,23 +89,21 @@ impl PrimitiveKind<Stub> for NoKind {
     fn take<P: Primitive>(_: &Stub, _: Counted, _: Settled<'_>) -> P {
         unreachable!()
     }
-    fn shared<'a, P: Primitive>(_: &'a Stub, _: &'a Counted, _: Settled<'a>) -> NoGuard<P> {
+    fn shared<'a, P: Primitive>(_: &'a Stub, _: &'a Counted, _: Settled<'a>) -> &'a P {
         unreachable!()
     }
-    fn exclusive<'a, P: Primitive>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> NoGuard<P> {
+    fn exclusive<'a, P: Primitive>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> &'a mut P {
         unreachable!()
     }
-    fn shared_ref<'a, P: Primitive>(_: &'a Stub, _: Counted, _: Settled<'a>) -> NoGuard<P> {
+    fn shared_ref<'a, P: Primitive>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a P {
         unreachable!()
     }
-    fn exclusive_ref<'a, P: Primitive>(_: &'a Stub, _: Counted, _: Settled<'a>) -> NoGuard<P> {
+    fn exclusive_ref<'a, P: Primitive>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a mut P {
         unreachable!()
     }
 }
 
 impl StringKind<Stub> for NoKind {
-    type Shared<'a> = NoGuard<String>;
-    type Exclusive<'a> = NoGuard<String>;
 
     fn give(_: &Stub, _: String, _: Settled<'_>) -> Counted {
         unreachable!()
@@ -134,16 +111,16 @@ impl StringKind<Stub> for NoKind {
     fn take(_: &Stub, _: Counted, _: Settled<'_>) -> String {
         unreachable!()
     }
-    fn shared<'a>(_: &'a Stub, _: &'a Counted, _: Settled<'a>) -> NoGuard<String> {
+    fn shared<'a>(_: &'a Stub, _: &'a Counted, _: Settled<'a>) -> &'a String {
         unreachable!()
     }
-    fn exclusive<'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> NoGuard<String> {
+    fn exclusive<'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> &'a mut String {
         unreachable!()
     }
-    fn shared_ref<'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> NoGuard<String> {
+    fn shared_ref<'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a String {
         unreachable!()
     }
-    fn exclusive_ref<'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> NoGuard<String> {
+    fn exclusive_ref<'a>(_: &'a Stub, _: Counted, _: Settled<'a>) -> &'a mut String {
         unreachable!()
     }
 }
