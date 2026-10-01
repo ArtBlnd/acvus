@@ -10,7 +10,8 @@ use acvus_extern::extern_fn;
 use acvus_extern::mode::ByValue;
 use acvus_extern::register::Declared;
 use acvus_extern::runtime::{Crosses, Runtime};
-use acvus_extern_test::{Frame, Pass, WordRuntime};
+use acvus_extern::Loaned;
+use acvus_extern_test::{Cursor, Frame, Pair, Pass, WordRuntime};
 use acvus_mir::decl::SegmentLabel;
 use acvus_mir::ty::{Effect, FlowEnd, IntTy};
 use acvus_utils::Interner;
@@ -266,6 +267,46 @@ fn a_function_value_lent_is_a_reference_and_one_position() {
     let outlives = &twice.facts.lifetimes.as_ref().expect("stated").outlives;
     let [order] = &**outlives else { panic!("what the function value holds outlives the loan of it: {outlives:?}") };
     assert_eq!((SegmentLabel::Lifetime(order.longer), SegmentLabel::Lifetime(order.shorter)), (f[1], f[0]));
+}
+
+/// A cursor over the pair an argument lends: the result keeps the loan.
+#[extern_fn(effect = pure)]
+fn cursor<'a, R: Runtime>(over: Loaned<'a, Pair, R>) -> Cursor<'a, R> {
+    Cursor { over, at: 0 }
+}
+
+/// The name of the pair a cursor keeps a loan on, read through the loan
+/// within this call.
+#[extern_fn(effect = pure)]
+fn name_under<'a, R: Runtime>(#[context] cx: &Returning<'a, R>, c: &Cursor<'a, R>) -> String {
+    c.over.open(cx).name.clone()
+}
+
+fn pair(name: &str) -> Pair {
+    Pair { name: String::from(name), lead: acvus_extern_test::Number(1), items: Vec::new() }
+}
+
+#[test]
+fn a_result_keeps_a_loan_an_argument_lent_and_a_later_call_reads_through_it() {
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let held = produce(&mut frame, pair("held"));
+    let make = frame.function(cursor::new());
+    let name = frame.function(name_under::new());
+
+    let kept = frame.call_function(make, [Pass::Lend(held)]);
+    let named = frame.call_function(name, [Pass::Lend(kept)]);
+
+    assert_eq!(read::<String>(&mut frame, named), "held");
+}
+
+#[test]
+fn a_kept_loan_is_the_results_and_the_arguments_one_label() {
+    let (_, cursor) = declaration_of(cursor::new());
+    let over = labels(&cursor, FlowEnd::Param(0));
+    let result = labels(&cursor, FlowEnd::Result);
+    assert!(matches!(&cursor.params[0].1, DeclTy::Ref { mutable: false, target } if matches!(**target, DeclTy::Extern { .. })));
+    assert_eq!(result, over);
 }
 
 #[test]

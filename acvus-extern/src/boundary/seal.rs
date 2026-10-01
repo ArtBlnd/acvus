@@ -3,7 +3,7 @@
 //! is asserted with an `unsafe` token where it is written.
 
 use crate::boundary::entry::mode::{
-    ByInstance, ByInstanceOf, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue,
+    ByInstance, ByInstanceOf, ByLoaned, ByLoanedMut, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue,
 };
 use crate::boundary::uniform::Uniform;
 use crate::callback::{Lent, LentMut};
@@ -67,6 +67,8 @@ crossing! {
     [T] BySlice<T>;
     [T] BySliceMut<T>;
     [] ByStr;
+    [T] ByLoaned<T>;
+    [T] ByLoanedMut<T>;
     [F, I] ByInstance<F, I>;
     [F, Ts, L] ByInstanceOf<F, Ts, L>;
     [R: Runtime] Returning<'_, R>;

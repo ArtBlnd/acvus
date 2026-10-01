@@ -15,6 +15,6 @@ mod boundary;
 mod frame;
 mod runtime;
 
-pub use boundary::{Held, Number, Pair, Tally, Word};
+pub use boundary::{Cursor, Held, Number, Pair, Tally, Word};
 pub use frame::{Frame, Pass};
 pub use runtime::WordRuntime;

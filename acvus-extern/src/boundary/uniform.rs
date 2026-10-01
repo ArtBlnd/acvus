@@ -80,23 +80,23 @@ impl<R: Runtime, T: Crosses<R>> Uniform<R, T> {
     ///     Uniform::new(cx, Nth::<0>)
     /// }
     /// ```
-    pub fn new<'c>(cx: &'c impl Opens<'c, R>, value: T) -> Self {
+    pub fn new<'c>(cx: &impl Opens<'c, R>, value: T) -> Self {
         Uniform::of_the_crossing(value.give(cx.runtime(), Settled::of_the_entry()))
     }
 
     /// Lends the value in place within the call `cx` belongs to, as `T`'s
     /// view.
-    pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> T::Open<'c> {
+    pub fn open<'s>(&'s self, cx: &impl Opens<'s, R>) -> T::Open<'s> {
         T::open(cx.runtime(), &self.value, Settled::of_the_entry())
     }
 
-    pub fn open_mut<'c>(&'c mut self, cx: &'c impl Opens<'c, R>) -> T::OpenMut<'c> {
+    pub fn open_mut<'s>(&'s mut self, cx: &impl Opens<'s, R>) -> T::OpenMut<'s> {
         T::open_mut(cx.runtime(), &mut self.value, Settled::of_the_entry())
     }
 
     /// The value itself. A `Uniform` only dropped is released and never
     /// taken.
-    pub fn into_inner<'c>(self, cx: &'c impl Opens<'c, R>) -> T {
+    pub fn into_inner<'c>(self, cx: &impl Opens<'c, R>) -> T {
         T::take(cx.runtime(), self.into_value(), Settled::of_the_entry())
     }
 }
@@ -116,12 +116,12 @@ primitives!(primitive);
 impl<R: Runtime, T: Primitive> Uniform<R, T> {
     /// The value, read by a copy: the runtime's take of the held value's
     /// copy, which owns nothing to release.
-    pub fn get<'c>(&self, cx: &'c impl Opens<'c, R>) -> T {
+    pub fn get<'c>(&self, cx: &impl Opens<'c, R>) -> T {
         <R::Primitive as PrimitiveKind<R>>::take(cx.runtime(), self.value, Settled::of_the_entry())
     }
 
     /// The value replaced by `value`, made by the runtime.
-    pub fn set<'c>(&mut self, cx: &'c impl Opens<'c, R>, value: T) {
+    pub fn set<'c>(&mut self, cx: &impl Opens<'c, R>, value: T) {
         let made = <R::Primitive as PrimitiveKind<R>>::give(cx.runtime(), value, Settled::of_the_entry());
         std::mem::replace(&mut self.value, made).release(Releasing { _private: () });
     }

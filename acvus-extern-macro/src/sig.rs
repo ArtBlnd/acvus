@@ -347,12 +347,18 @@ fn output(output: &ReturnType, params: &[Param], result: &Names) -> syn::Result<
              every reference in it at that lifetime (crossing §4)",
         )
     };
+    // A result borrows what a lent argument's guard lends where it names the
+    // lifetime that argument's `&` is written at. Naming only what a carrier
+    // holds, it is a value, its loans the declaration's flows.
     let lenders: Vec<(usize, &Param)> = params
         .iter()
         .enumerate()
         .filter(|(_, p)| matches!(p.role, Role::Argument))
         .filter(|(_, p)| p.names.outer.as_ref().is_some_and(|outer| named.contains(outer)))
         .collect();
+    if lenders.is_empty() {
+        return Ok(Output::Value);
+    }
     let ([(from, lender)], 1) = (lenders.as_slice(), named.len()) else {
         return Err(refused());
     };

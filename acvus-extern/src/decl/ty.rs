@@ -5,7 +5,8 @@
 use acvus_mir::ty::IntTy;
 use acvus_utils::Interner;
 
-use crate::boundary::entry::mode::{ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
+use crate::boundary::entry::mode::{ByLoaned, ByLoanedMut, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
+use crate::boundary::loaned::{Loaned, LoanedMut};
 use crate::boundary::uniform::Uniform;
 use crate::callback::{Callable, Lent, LentMut};
 use crate::decl::{DeclEffect, DeclTy};
@@ -348,6 +349,24 @@ impl<T: ?Sized + DeclType> DeclType for Lent<T> {
 
 impl<T: ?Sized + DeclType> DeclType for LentMut<T> {
     fn decl_ty(names: &Interner) -> DeclTy {
+        DeclTy::Ref { mutable: true, target: Box::new(T::decl_ty(names)) }
+    }
+}
+
+/// A carrier: the reference the argument passes, kept as it is for a result
+/// to hold (limitations §3), declared as that reference.
+impl<T: DeclType, R: Runtime> ParamMode for Loaned<'_, T, R> {
+    type Mode = ByLoaned<T>;
+
+    fn decl(names: &Interner) -> DeclTy {
+        DeclTy::Ref { mutable: false, target: Box::new(T::decl_ty(names)) }
+    }
+}
+
+impl<T: DeclType, R: Runtime> ParamMode for LoanedMut<'_, T, R> {
+    type Mode = ByLoanedMut<T>;
+
+    fn decl(names: &Interner) -> DeclTy {
         DeclTy::Ref { mutable: true, target: Box::new(T::decl_ty(names)) }
     }
 }

@@ -920,6 +920,105 @@ macro_rules! opaque {
 
 opaque!(Tally, Pair, Number);
 
+/// An extern-defined type that keeps a loan on a `Pair` an argument lent: the
+/// carrier a result holds the loan in (limitations §3), its lifetime the
+/// loan's. Its crossing is written here as the derive writes one for a type
+/// with a lifetime.
+pub struct Cursor<'a, R: Runtime> {
+    pub over: acvus_extern::Loaned<'a, Pair, R>,
+    pub at: usize,
+}
+
+// SAFETY: as for `Tally`; `Cursor` holds a loan and a count, and its canonical
+// form is itself at `'static`, one layout and release at every lifetime. Its
+// one lifetime is the loan's, and it has no type parameter the checker reads.
+unsafe impl<'a, R: Runtime> Structural for Cursor<'a, R> {
+    type Canon = Cursor<'static, R>;
+
+    const FACTS: StructuralFacts =
+        StructuralFacts { layout: LayoutFact::CanonicalOf, generics: &[acvus_extern::GenericParam::Lifetime] };
+}
+
+// SAFETY: the crossing below gives, takes and lends a `Cursor` as an opaque
+// value, at itself, as `opaque!` writes it for a type with no lifetime.
+unsafe impl<R: Runtime> Crossing for Cursor<'_, R> {}
+
+impl<R: Runtime> Referent for Cursor<'_, R> {}
+impl<R: Runtime> Opaque for Cursor<'_, R> {}
+
+impl<R: Runtime> acvus_extern::decl::Part for Cursor<'_, R> {
+    type Class = acvus_extern::decl::part::Value;
+    type Of = Self;
+}
+
+impl<R: Runtime> acvus_extern::decl::DeclType for Cursor<'_, R> {
+    fn decl_ty(names: &acvus_extern::decl::Interner) -> acvus_extern::decl::DeclTy {
+        let module: Vec<_> = ::core::module_path!().split("::").map(|segment| names.intern(segment)).collect();
+        acvus_extern::decl::DeclTy::Extern {
+            name: acvus_extern::decl::QualifiedRef::qualified(names.namespace(&module), names.intern("Cursor")),
+            args: Vec::new(),
+            effect: None,
+            identity: None,
+            lifetimes: 1,
+        }
+    }
+}
+
+impl<'a, R: Runtime> acvus_extern::decl::ParamMode for Cursor<'a, R> {
+    type Mode = acvus_extern::mode::ByValue<Self>;
+
+    fn decl(names: &acvus_extern::decl::Interner) -> acvus_extern::decl::DeclTy {
+        <Self as acvus_extern::decl::DeclType>::decl_ty(names)
+    }
+}
+
+impl<'l, R: Runtime> Crosses<R> for Cursor<'l, R> {
+    type Open<'a>
+        = &'a Cursor<'l, R>
+    where
+        Self: 'a;
+    type OpenMut<'a>
+        = &'a mut Cursor<'l, R>
+    where
+        Self: 'a;
+
+    fn give(self, rt: &R, at: Settled<'_>) -> R::Value {
+        <R::Opaque as OpaqueKind<R>>::give(rt, self, at)
+    }
+
+    fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self {
+        <R::Opaque as OpaqueKind<R>>::take(rt, v, at)
+    }
+
+    fn open<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Open<'a>
+    where
+        Self: 'a,
+    {
+        <R::Opaque as OpaqueKind<R>>::shared(rt, place, at)
+    }
+
+    fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
+    where
+        Self: 'a,
+    {
+        <R::Opaque as OpaqueKind<R>>::exclusive(rt, place, at)
+    }
+
+    fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Open<'a>
+    where
+        Self: 'a,
+    {
+        <R::Ref as RefKind<R>>::target(rt, reference, at)
+    }
+
+    fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
+    where
+        Self: 'a,
+    {
+        <R::Ref as RefKind<R>>::target_mut(rt, reference, at)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;

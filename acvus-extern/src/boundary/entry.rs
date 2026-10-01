@@ -180,6 +180,11 @@ pub mod mode {
     /// Text lent as `&str`, its argument a reference to a `String` or to a
     /// range of one, read through `target`.
     pub struct ByStr;
+    /// A reference kept as it is, a carrier: `Loaned<'a, T, R>` for `&T`,
+    /// `LoanedMut<'a, T, R>` for `&mut T`, for a result to hold the loan
+    /// (limitations §3).
+    pub struct ByLoaned<T>(PhantomData<fn() -> T>);
+    pub struct ByLoanedMut<T>(PhantomData<fn() -> T>);
     /// A requirement owning its receiver, and one standing at a type.
     pub struct ByInstance<F, I>(PhantomData<fn() -> (F, I)>);
     pub struct ByInstanceOf<F, Ts, L>(PhantomData<fn() -> (F, Ts, L)>);
@@ -188,6 +193,7 @@ pub mod mode {
 use mode::*;
 
 use crate::boundary::instance::{Instance, InstanceOf};
+use crate::boundary::loaned::{Loaned, LoanedMut};
 use crate::boundary::uniform::Uniform;
 use crate::guard::{Guard, GuardMut};
 use crate::impls::receiver::{Reads, Steps};
@@ -255,6 +261,10 @@ modes! {
         |runtime, v, at| GuardMut::of_the_entry(<R::Ref as RefKind<R>>::target_mut(runtime, v, at));
     [] ByStr => Guard<'c, &'c str>, &'c str, viewed,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, v, at));
+    [T] ByLoaned<T> => Loaned<'c, T, R>, Loaned<'c, T, R>, moved,
+        |_runtime, v, _at| Loaned::of_the_entry(v);
+    [T] ByLoanedMut<T> => LoanedMut<'c, T, R>, LoanedMut<'c, T, R>, moved,
+        |_runtime, v, _at| LoanedMut::of_the_entry(v);
 }
 
 impl<R: Instances, F: Family<Receiver = Steps>, I> RequirementMode<R> for ByInstance<F, I> {
