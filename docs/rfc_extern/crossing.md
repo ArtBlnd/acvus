@@ -8,7 +8,7 @@ Each call has one entry. The entry opens the call's guards and hands them to the
 
 ## 2. Projections
 
-A reference to a value of a transparent structured type (compiler: types §1) crosses as its projection: a value of the same structure in which each part that is not itself one of those types is a reference to that part's storage, shared or mutable as the reference is. An extern-defined part is lent as itself. The slice is the array's projection, so an extern fn receives a program's array only as a slice, and returns a sequence as a `Vec`. A projection is a contract operation. Through a mutable projection only its parts are written; an enum's variant, an `Option`'s presence and an object whole change by value.
+A reference to a value of a transparent structured type (compiler: types §1) crosses as its projection: a value of the same structure in which each part that is not itself one of those types is a reference to that part's storage, shared or mutable as the reference is. An extern-defined part is lent as itself. The slice is the array's projection, so an extern fn receives a program's array only as a slice, and returns a sequence as a `Vec`. That `Vec` is a sequence (compiler: operators §3) of its element type: each element is the runtime's uniform value at that type, which the crossing holds and gives back as one value of it, one to one. A projection is a contract operation. Through a mutable projection only its parts are written; an enum's variant, an `Option`'s presence and an object whole change by value.
 
 *Why.* The layout of such a value is the backend's, so no Rust reference to it exists. The registry refuses a declaration carrying an array type, whoever built it.
 

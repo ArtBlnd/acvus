@@ -27,7 +27,15 @@ The lang items are Rust's, but for two:
 
 ## 3. Slices
 
+A value is a sequence of atom `X` when its parts have positions in a total order of their own, and each part corresponds one to one with a value of `X`, so that its parts in that order are a slice of `X`. An array and a slice are sequences of their elements. A type whose positions have no order of their own is no sequence, an `Option` among them; nor is text, whose atom is a measure's (its bytes, its characters or more), nor a map, whose order and atom a measure chooses (its keys, its values, its entries).
+
+A type gives `core::as_slice` and `core::as_slice_mut` only where it is a sequence, and each gives that slice. What such an impl states is trusted, as a declared fact is (extern fn §3): an impl that gives another slice is its declarer's error.
+
 `a[i]` reaches an element through its container's `core::as_slice`, or `core::as_slice_mut` where the place is written or lent mutably. A `for` over `&v` or `&mut v` reaches its elements through the same impl. Any type that gives these impls is indexed and iterated as a slice. An index is a `u64`, as Rust's `usize`. An index outside its container traps.
+
+A sequence's length, `core::len`, is the length of that slice. No other value has a length.
+
+*Rejected.* A length a type declares for itself, or a slice of a view a measure chooses: either picks one order and one atom among several, and is not the type's own.
 
 ## 4. Equality and ordering
 
