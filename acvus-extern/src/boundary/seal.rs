@@ -58,6 +58,7 @@ crossing! {
     [T, E] Result<T, E>;
     [R: Runtime, X] Uniform<R, X>;
     [R: Runtime, X] [Uniform<R, X>];
+    [R: Runtime, X] Vec<Uniform<R, X>>;
     [T: ?Sized] Lent<T>;
     [T: ?Sized] LentMut<T>;
     [T] ByValue<T>;

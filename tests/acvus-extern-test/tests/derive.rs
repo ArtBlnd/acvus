@@ -6,7 +6,8 @@ use acvus_extern::decl::{DeclTy, Declaration, Var, kind};
 use acvus_extern::extern_fn;
 use acvus_extern::mode::ByValue;
 use acvus_extern::register::Declared;
-use acvus_extern::runtime::Crosses;
+use acvus_extern::context::Returning;
+use acvus_extern::runtime::{Crosses, Runtime};
 use acvus_extern::{GenericParam, LayoutFact, Structural, Uniform};
 use acvus_extern_test::{Cursor, Frame, Pair, Pass, Session, Stack, Word, WordRuntime};
 use acvus_utils::Interner;
@@ -34,6 +35,18 @@ fn peek<T: Var<kind::Type>>(s: &Stack<T>) -> Option<&T> {
 #[extern_fn]
 fn session<T: Var<kind::Type>, E: Var<kind::Effect>, I: Var<kind::Identity>>() -> Session<T, E, I> {
     Session { pending: Vec::new(), at: std::marker::PhantomData }
+}
+
+/// The parts of `text` between each `sep`, each held at its own type.
+#[extern_fn(effect = pure)]
+fn split<R: Runtime>(#[context] cx: &Returning<'_, R>, text: &str, sep: &str) -> Vec<Uniform<R, String>> {
+    text.split(sep).map(|part| Uniform::new(cx, String::from(part))).collect()
+}
+
+/// The part at `at` of a sequence `split` gave.
+#[extern_fn(effect = pure)]
+fn part<R: Runtime>(#[context] cx: &Returning<'_, R>, parts: &Vec<Uniform<R, String>>, at: u64) -> String {
+    parts[at as usize].open(cx).clone()
 }
 
 fn produce<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
@@ -69,6 +82,29 @@ fn a_generic_type_holds_its_variables_values() {
 
     assert_eq!(peeked, Some(8));
     assert_eq!(read::<Option<i64>>(&mut frame, popped), Some(8));
+}
+
+#[test]
+fn a_sequence_is_given_as_a_vec_of_uniform_values() {
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let (split, part) = (frame.function(split::new()), frame.function(part::new()));
+    let text = produce(&mut frame, String::from("a,bc,d"));
+    let sep = produce(&mut frame, String::from(","));
+
+    let parts = frame.call_function(split, [Pass::Lend(text), Pass::Lend(sep)]);
+    let at = produce(&mut frame, 1u64);
+    let second = frame.call_function(part, [Pass::Lend(parts), Pass::Give(at)]);
+
+    assert_eq!(read::<String>(&mut frame, second), "bc");
+    assert_eq!(read::<Vec<Uniform<WordRuntime, String>>>(&mut frame, parts).len(), 3);
+
+    let (names, split) = declaration_of(split::new());
+    let vec = acvus_utils::QualifiedRef::qualified(names.namespace(&[names.intern("acvus_extern")]), names.intern("Vec"));
+    assert_eq!(
+        split.result,
+        DeclTy::Extern { name: vec, args: vec![DeclTy::String], effect: None, identity: None, lifetimes: 0 }
+    );
 }
 
 fn declaration_of<F: Declared<WordRuntime>>(f: F) -> (Interner, Declaration) {

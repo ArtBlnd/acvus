@@ -35,8 +35,9 @@ use crate::boundary::uniform::{Primitive, Release};
 /// A type that crosses may carry lifetimes; a value that holds a loan holds it
 /// as a `Loaned`, never as a Rust reference.
 ///
-/// A type neither declares does not cross, nor does a sequence, which is the
-/// runtime's own and is lent as a slice:
+/// A type neither declares does not cross, nor does a sequence of a Rust
+/// element type: a sequence is lent as a slice and given as a `Vec` of the
+/// runtime's uniform values, `Vec<Uniform<R, X>>`:
 ///
 /// ```compile_fail,E0277
 /// use acvus_extern::context::Returning;

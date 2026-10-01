@@ -8,7 +8,7 @@
 
 use crate::boundary::entry::Settled;
 use crate::boundary::uniform::Uniform;
-use crate::runtime::{Crosses, OptionKind, PrimitiveKind, RefKind, Referent, ResultKind, Runtime, StringKind, TupleKind};
+use crate::runtime::{Crosses, Opaque, OpaqueKind, OptionKind, PrimitiveKind, RefKind, Referent, ResultKind, Runtime, StringKind, TupleKind};
 
 /// A type the runtime holds as itself: opened as a reference to it by its
 /// kind.
@@ -294,3 +294,58 @@ macro_rules! tuple_crossings {
 }
 
 tuples!(tuple_crossings);
+
+/// A sequence a call gives, a `Vec` of the runtime's uniform values at its
+/// element type (limitations §1): an extern-defined opaque type this crate
+/// declares, held by the runtime as the Rust `Vec` itself, as the derive
+/// declares one. A sequence of another Rust element type does not cross, so
+/// a sequence has one representation (runtime contract §1).
+impl<R: Runtime, X> Referent for Vec<Uniform<R, X>> {}
+impl<R: Runtime, X> Opaque for Vec<Uniform<R, X>> {}
+
+impl<R: Runtime, X> Crosses<R> for Vec<Uniform<R, X>> {
+    type Open<'a>
+        = &'a Self
+    where
+        Self: 'a;
+    type OpenMut<'a>
+        = &'a mut Self
+    where
+        Self: 'a;
+
+    fn open<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a Self
+    where
+        Self: 'a,
+    {
+        <R::Opaque as OpaqueKind<R>>::shared(rt, place, at)
+    }
+
+    fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut Self
+    where
+        Self: 'a,
+    {
+        <R::Opaque as OpaqueKind<R>>::exclusive(rt, place, at)
+    }
+
+    fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a Self
+    where
+        Self: 'a,
+    {
+        <R::Ref as RefKind<R>>::target(rt, reference, at)
+    }
+
+    fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> &'a mut Self
+    where
+        Self: 'a,
+    {
+        <R::Ref as RefKind<R>>::target_mut(rt, reference, at)
+    }
+
+    fn give(self, rt: &R, at: Settled<'_>) -> R::Value {
+        <R::Opaque as OpaqueKind<R>>::give(rt, self, at)
+    }
+
+    fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self {
+        <R::Opaque as OpaqueKind<R>>::take(rt, v, at)
+    }
+}

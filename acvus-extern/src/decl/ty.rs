@@ -3,7 +3,7 @@
 //! meaning.
 
 use acvus_mir::ty::IntTy;
-use acvus_utils::Interner;
+use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::entry::mode::{ByLoaned, ByLoanedMut, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use crate::boundary::loaned::{Loaned, LoanedMut};
@@ -350,6 +350,33 @@ impl<T: ?Sized + DeclType> DeclType for Lent<T> {
 impl<T: ?Sized + DeclType> DeclType for LentMut<T> {
     fn decl_ty(names: &Interner) -> DeclTy {
         DeclTy::Ref { mutable: true, target: Box::new(T::decl_ty(names)) }
+    }
+}
+
+/// A sequence a call gives, the extern-defined `acvus_extern::Vec` at its
+/// element's declared type, taken by value as any extern-defined type is.
+impl<R: Runtime, X: DeclType> DeclType for Vec<Uniform<R, X>> {
+    fn decl_ty(names: &Interner) -> DeclTy {
+        DeclTy::Extern {
+            name: QualifiedRef::qualified(names.namespace(&[names.intern("acvus_extern")]), names.intern("Vec")),
+            args: vec![X::decl_ty(names)],
+            effect: None,
+            identity: None,
+            lifetimes: 0,
+        }
+    }
+}
+
+impl<R: Runtime, X: DeclType> Part for Vec<Uniform<R, X>> {
+    type Class = part::Value;
+    type Of = Self;
+}
+
+impl<R: Runtime, X: DeclType> ParamMode for Vec<Uniform<R, X>> {
+    type Mode = ByValue<Self>;
+
+    fn decl(names: &Interner) -> DeclTy {
+        <Self as DeclType>::decl_ty(names)
     }
 }
 
