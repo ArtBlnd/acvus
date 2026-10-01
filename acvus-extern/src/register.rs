@@ -17,10 +17,14 @@ use crate::runtime::Runtime;
 /// function value's. Only `#[extern_fn]` implements it (the seal); a dispatch
 /// written by hand could open an argument at another type than the
 /// declaration's.
-pub trait ExternFn<R: Runtime>: ExternFns + Send + Sync + 'static {
+///
+/// `N` is its arity: a call's argument run is `[R::Value; N]`, of static
+/// size, so a runtime that builds a call's operation at `F` and `N` passes it
+/// without a length and a compare.
+pub trait ExternFn<R: Runtime, const N: usize>: ExternFns + Send + Sync + 'static {
     /// Runs one call: the entry over `args` and `site`, each argument opened
     /// by its mode, the body, and its result.
-    fn call(&self, runtime: &R, args: &[R::Value], site: &SiteShape<R>) -> Done<R>;
+    fn call(&self, runtime: &R, args: [R::Value; N], site: &SiteShape<R>) -> Done<R>;
 }
 
 /// A function a registry declares: its path and what the compiler knows of
@@ -87,14 +91,14 @@ pub trait Declared<R: Runtime> {
 /// type is the function's own; the runtime registering it is generic over the
 /// function, so how it holds the function and its future is the runtime's
 /// own. Only `#[extern_fn]` implements it (the seal), for an `async fn`.
-pub trait AwaitedFn<R: Runtime>: ExternFns + Send + Sync + 'static {
+pub trait AwaitedFn<R: Runtime, const N: usize>: ExternFns + Send + Sync + 'static {
     /// Runs one call: the entry over `args` and `site`, each argument opened
     /// by its mode before the future is made, the body awaited, and its
     /// result.
     fn call<'c>(
         &'c self,
         runtime: &'c R,
-        args: &'c [R::Value],
+        args: [R::Value; N],
         site: &'c SiteShape<R>,
     ) -> impl Future<Output = Done<R>> + Send + 'c;
 }
@@ -110,11 +114,11 @@ pub enum Refused {
 /// A runtime that registers functions, each at once, and resolves a compiled
 /// call's path to the registered function once, when it prepares the call.
 pub trait Registers: Runtime {
-    fn register<F>(&mut self, f: F) -> Result<(), Refused>
+    fn register<F, const N: usize>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: ExternFn<Self> + Declared<Self>;
+        F: ExternFn<Self, N> + Declared<Self>;
 
-    fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
+    fn register_awaited<F, const N: usize>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: AwaitedFn<Self> + Declared<Self>;
+        F: AwaitedFn<Self, N> + Declared<Self>;
 }

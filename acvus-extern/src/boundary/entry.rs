@@ -36,20 +36,20 @@ impl<R: Runtime> SiteShape<R> {
     }
 }
 
-/// One call's door. Its arguments are the run of the call's argument
-/// positions, a type (`Args::Run`), so the entry indexes it without a compare
-/// (performance: facts in types).
-pub struct Entry<'c, R: Runtime> {
+/// One call's door. Its arguments are the run of the call's `N` argument
+/// positions, a value of static size, so the entry opens it without a
+/// compare and a call inlined into its caller keeps it in registers.
+pub struct Entry<'c, R: Runtime, const N: usize> {
     runtime: &'c R,
-    args: &'c [R::Value],
+    args: [R::Value; N],
     site: &'c SiteShape<R>,
 }
 
-impl<'c, R: Runtime> Entry<'c, R> {
+impl<'c, R: Runtime, const N: usize> Entry<'c, R, N> {
     /// The entry of one call. It is safe: the checker's decision is trusted
     /// only by the runtime's own typed reads (safety §3), and only the runtime
     /// holds values to pass here, since the host sees none (crossing §6).
-    pub fn new(runtime: &'c R, args: &'c [R::Value], site: &'c SiteShape<R>) -> Self {
+    pub fn new(runtime: &'c R, args: [R::Value; N], site: &'c SiteShape<R>) -> Self {
         Entry { runtime, args, site }
     }
 
@@ -57,7 +57,7 @@ impl<'c, R: Runtime> Entry<'c, R> {
     /// from the site's impls, and runs the returning body.
     pub fn open<A, Q>(self, body: impl FnOnce(Returning<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Done<R>) -> Done<R>
     where
-        A: Args<R> + 'c,
+        A: Args<R, N> + 'c,
         Q: Requires<R> + 'c,
     {
         let at = Settled::of_the_entry();
@@ -74,7 +74,7 @@ impl<'c, R: Runtime> Entry<'c, R> {
         body: impl FnOnce(Awaited<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Fut,
     ) -> impl Future<Output = Done<R>> + Send + 'c
     where
-        A: Args<R> + 'c,
+        A: Args<R, N> + 'c,
         Q: Requires<R> + 'c,
         Fut: Future<Output = Done<R>> + Send + 'c,
     {
@@ -99,7 +99,7 @@ pub trait Mode<R: Runtime>: Crossing {
     const CALLS: bool;
 
     #[doc(hidden)]
-    fn open<'c>(runtime: &'c R, v: &'c R::Value, at: Settled<'c>) -> Self::Opened<'c>
+    fn open<'c>(runtime: &'c R, v: R::Value, at: Settled<'c>) -> Self::Opened<'c>
     where
         Self: 'c,
         R: 'c;
@@ -132,11 +132,9 @@ pub trait RequirementMode<R: Runtime>: Crossing {
         R: 'c;
 }
 
-/// The argument parameters of a handler, a tuple of modes, one position each.
-/// `Run` is the call's argument run at that arity, `[R::Value; N]`.
-pub trait Args<R: Runtime>: Crossing {
-    type Run;
-
+/// The argument parameters of a handler, a tuple of `N` modes, one position
+/// each, opened from the call's argument run `[R::Value; N]`.
+pub trait Args<R: Runtime, const N: usize>: Crossing {
     /// Whether any argument is one the handler may call through, which
     /// only an awaited body may (macros §1).
     const CALLS: bool;
@@ -147,11 +145,7 @@ pub trait Args<R: Runtime>: Crossing {
 
     /// Each argument opened by its position's mode.
     #[doc(hidden)]
-    fn open<'c>(
-        runtime: &'c R,
-        args: &'c [R::Value],
-        at: Settled<'c>,
-    ) -> Self::Opened<'c>
+    fn open<'c>(runtime: &'c R, args: [R::Value; N], at: Settled<'c>) -> Self::Opened<'c>
     where
         Self: 'c,
         R: 'c;
@@ -233,7 +227,7 @@ macro_rules! modes {
 
             const CALLS: bool = $calls;
 
-            fn open<'c>($runtime: &'c $r, $v: &'c $r::Value, $at: Settled<'c>) -> Self::Opened<'c>
+            fn open<'c>($runtime: &'c $r, $v: $r::Value, $at: Settled<'c>) -> Self::Opened<'c>
             where
                 Self: 'c,
                 $r: 'c,
@@ -261,21 +255,21 @@ macro_rules! modes {
 modes! {
     R;
     [T: Crosses<R>] ByValue<T> => T, false, T, moved,
-        |runtime, v, at| T::take(runtime, *v, at);
+        |runtime, v, at| T::take(runtime, v, at);
     [T: Crosses<R>] ByRef<T> => Guard<'c, T::Open<'c>>, false, T::Open<'c>, viewed,
-        |runtime, v, at| Guard::of_the_entry(T::open_ref(runtime, *v, at));
+        |runtime, v, at| Guard::of_the_entry(T::open_ref(runtime, v, at));
     [T: Crosses<R>] ByMut<T> => GuardMut<'c, T::OpenMut<'c>>, false, T::OpenMut<'c>, viewed,
-        |runtime, v, at| GuardMut::of_the_entry(T::open_ref_mut(runtime, *v, at));
+        |runtime, v, at| GuardMut::of_the_entry(T::open_ref_mut(runtime, v, at));
     [T] ByUniform<T> => Uniform<R, T>, false, Uniform<R, T>, moved,
-        |_runtime, v, _at| Uniform::of_the_crossing(*v);
+        |_runtime, v, _at| Uniform::of_the_crossing(v);
     [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, false, &'c [Uniform<R, T>], viewed,
-        |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
+        |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, v, at));
     [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, false, &'c mut [Uniform<R, T>], viewed,
-        |runtime, v, at| GuardMut::of_the_entry(<R::Ref as RefKind<R>>::target_mut(runtime, *v, at));
+        |runtime, v, at| GuardMut::of_the_entry(<R::Ref as RefKind<R>>::target_mut(runtime, v, at));
     [] ByStr => Guard<'c, &'c str>, false, &'c str, viewed,
-        |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
+        |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, v, at));
     [A, U, E] ByCallback<A, U, E> => Callback<'c, A, U, E, R>, true, Callback<'c, A, U, E, R>, moved,
-        |_runtime, v, _at| Callback::of_the_entry(*v);
+        |_runtime, v, _at| Callback::of_the_entry(v);
 }
 
 impl<R: Instances, F: Family<Receiver = Steps>, I> RequirementMode<R> for ByInstance<F, I> {
@@ -312,8 +306,7 @@ impl<R: Instances, F: Family<Receiver = Reads>, Ts, L> RequirementMode<R> for By
 /// tuple of modes.
 macro_rules! mode_tuples {
     ($($n:literal ($($m:ident $v:ident $i:tt),*))+) => {$(
-        impl<R: Runtime, $($m: Mode<R>),*> Args<R> for ($($m,)*) {
-            type Run = [R::Value; $n];
+        impl<R: Runtime, $($m: Mode<R>),*> Args<R, $n> for ($($m,)*) {
             const CALLS: bool = false $(|| $m::CALLS)*;
             type Opened<'c> = ($($m::Opened<'c>,)*)
             where
@@ -321,17 +314,12 @@ macro_rules! mode_tuples {
                 R: 'c;
 
             #[allow(unused_variables, clippy::unused_unit)]
-            fn open<'c>(
-                runtime: &'c R,
-                args: &'c [R::Value],
-                at: Settled<'c>,
-            ) -> Self::Opened<'c>
+            fn open<'c>(runtime: &'c R, args: [R::Value; $n], at: Settled<'c>) -> Self::Opened<'c>
             where
                 Self: 'c,
                 R: 'c,
             {
-                let run: &'c Self::Run = args.try_into().expect("a call passes one value per parameter");
-                let [$($v),*] = run;
+                let [$($v),*] = args;
                 ($($m::open(runtime, $v, at),)*)
             }
         }

@@ -66,13 +66,13 @@ async fn measure(text: String) -> i64 {
 
 /// A variable holding `value`, made as a program makes one: a call's result.
 fn produce<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
-    frame.call(&[], |entry| entry.open::<(), ()>(|cx, (), ()| cx.finish(value)))
+    frame.call([], |entry| entry.open::<(), ()>(|cx, (), ()| cx.finish(value)))
 }
 
 /// A variable's value, given to a call that takes it by value.
 fn read<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
     let mut read = None;
-    frame.call(&[Pass::Give(variable)], |entry| {
+    frame.call([Pass::Give(variable)], |entry| {
         entry.open::<(ByValue<T>,), ()>(|cx, (value,), ()| {
             read = Some(value);
             cx.finish(())
@@ -88,7 +88,7 @@ fn a_callback_and_the_context_are_passed() {
     let double = frame.function(Doubled);
     let n = produce(&mut frame, 20i64);
     let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
-    let applied = executor.block_on(frame.call_dispatch_awaited(&apply::new(), &[Pass::Function(double), Pass::Give(n)]));
+    let applied = executor.block_on(frame.call_dispatch_awaited(&apply::new(), [Pass::Function(double), Pass::Give(n)]));
 
     assert_eq!(read::<i64>(&mut frame, applied), 41);
 }
@@ -101,8 +101,8 @@ struct Doubled;
 #[allow(unsafe_code)]
 unsafe impl acvus_extern::seal::ExternFns for Doubled {}
 
-impl<R: Runtime> acvus_extern::register::ExternFn<R> for Doubled {
-    fn call(&self, runtime: &R, args: &[R::Value], site: &acvus_extern::SiteShape<R>) -> Done<R> {
+impl<R: Runtime> acvus_extern::register::ExternFn<R, 1> for Doubled {
+    fn call(&self, runtime: &R, args: [R::Value; 1], site: &acvus_extern::SiteShape<R>) -> Done<R> {
         acvus_extern::Entry::new(runtime, args, site).open::<(ByValue<i64>,), ()>(|cx, (n,), ()| cx.finish(n * 2))
     }
 }
@@ -113,7 +113,7 @@ fn an_awaited_function_is_called_through_its_dispatch() {
     let mut frame = Frame::new(&runtime);
     let text = produce(&mut frame, String::from("awaited"));
     let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
-    let length = executor.block_on(frame.call_dispatch_awaited(&measure::new(), &[Pass::Give(text)]));
+    let length = executor.block_on(frame.call_dispatch_awaited(&measure::new(), [Pass::Give(text)]));
 
     assert_eq!(read::<i64>(&mut frame, length), 7);
 }

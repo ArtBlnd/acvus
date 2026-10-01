@@ -32,7 +32,6 @@ use std::ptr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_extern::register::ExternFn;
 use acvus_extern::done::Done;
 use acvus_extern::runtime::{
     Crosses, Opaque, OpaqueKind, OptionKind, PrimitiveKind, RefKind, RefTarget, Referent, ResultKind, Runtime,
@@ -40,7 +39,7 @@ use acvus_extern::runtime::{
 };
 use acvus_extern::seal::Crossing;
 use acvus_extern::{
-    LayoutFact, Primitive, Release, Releasing, Settled, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
+    LayoutFact, Primitive, Release, Releasing, Settled, SiteShape, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts,
 };
 
 use crate::runtime::WordRuntime;
@@ -382,12 +381,12 @@ impl Held {
 
     /// The function this value is. The run calls a function value it holds
     /// as it passes arguments: trusting that the checker typed it a function.
-    pub(crate) fn function(&self) -> &dyn ExternFn<WordRuntime> {
+    pub(crate) fn function(&self) -> &Callee {
         assert_eq!(self.0.kind, Kind::Closure, "a call of a value that is no function");
         // SAFETY: a `Closure` word points at a live slot `closure` made from a
         // boxed function, and the slot lives as long as this holder owns the
         // value.
-        unsafe { &*(*self.0.address::<Slot<Box<dyn ExternFn<WordRuntime>>>>()).value }
+        unsafe { &*(*self.0.address::<Slot<Box<Callee>>>()).value }
     }
 }
 
@@ -525,9 +524,13 @@ where
     Word::pointing(Kind::WidePart, bits)
 }
 
+/// A function value as this runtime holds it: its dispatch, called with an
+/// argument run.
+pub(crate) type Callee = dyn Fn(&WordRuntime, &[Word], &SiteShape<WordRuntime>) -> Done<WordRuntime> + Send + Sync;
+
 /// A script function value, a function's dispatch.
-pub(crate) fn closure(f: Box<dyn ExternFn<WordRuntime>>) -> Word {
-    Slot::allocate(Kind::Closure, f, TypeId::of::<Box<dyn ExternFn<WordRuntime>>>())
+pub(crate) fn closure(f: Box<Callee>) -> Word {
+    Slot::allocate(Kind::Closure, f, TypeId::of::<Box<Callee>>())
 }
 
 /// What a reference value `reference` made names, for the loan `'l` it was
@@ -619,10 +622,10 @@ where
 }
 
 /// The Rust function a closure value is.
-pub(crate) fn callee<'a>(v: Word, _at: Settled<'a>) -> &'a dyn ExternFn<WordRuntime> {
+pub(crate) fn callee<'a>(v: Word, _at: Settled<'a>) -> &'a Callee {
     // SAFETY: under `Settled`, `v` is a closure the call is lent, a slot
     // `closure` made from a boxed function, live for the call.
-    unsafe { &*(*v.address::<Slot<Box<dyn ExternFn<WordRuntime>>>>()).value }
+    unsafe { &*(*v.address::<Slot<Box<Callee>>>()).value }
 }
 
 /// `WordRuntime`'s kinds, over the typed reads above.

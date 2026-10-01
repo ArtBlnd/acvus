@@ -35,16 +35,16 @@ impl WordRuntime {
 }
 
 impl Registers for WordRuntime {
-    fn register<F>(&mut self, f: F) -> Result<(), Refused>
+    fn register<F, const N: usize>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: ExternFn<Self> + Declared<Self>,
+        F: ExternFn<Self, N> + Declared<Self>,
     {
         self.enter(Declared::path(&f, &self.interner))
     }
 
-    fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
+    fn register_awaited<F, const N: usize>(&mut self, f: F) -> Result<(), Refused>
     where
-        F: AwaitedFn<Self> + Declared<Self>,
+        F: AwaitedFn<Self, N> + Declared<Self>,
     {
         self.enter(Declared::path(&f, &self.interner))
     }
@@ -104,7 +104,7 @@ impl CallsBack for WordRuntime {
 /// gives its result.
 fn call_closure<'a>(rt: &'a WordRuntime, closure: Word, run: &[Word], at: Settled<'a>) -> Word {
     let site = SiteShape::new(Box::new([]));
-    boundary::callee(closure, at).call(rt, run, &site).into_value()
+    boundary::callee(closure, at)(rt, run, &site).into_value()
 }
 
 

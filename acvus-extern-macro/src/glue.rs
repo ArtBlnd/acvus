@@ -200,6 +200,7 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let bounds = sig.runtime_bounds();
     let bounds = quote!(#(+ #bounds)*);
     let args_tuple = quote!((#(#modes,)*));
+    let arity = arguments.len();
     let opened_tuple = quote!((#(#opened,)*));
 
     let awaited_finish = match sig.output {
@@ -215,11 +216,11 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     };
     if sig.awaited {
         return quote! {
-            impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::AwaitedFn<#runtime> for #marker {
+            impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::AwaitedFn<#runtime, #arity> for #marker {
                 fn call<'c>(
                     &'c self,
                     runtime: &'c #runtime,
-                    args: &'c [<#runtime as ::acvus_extern::runtime::Runtime>::Value],
+                    args: [<#runtime as ::acvus_extern::runtime::Runtime>::Value; #arity],
                     site: &'c ::acvus_extern::SiteShape<#runtime>,
                 ) -> impl ::core::future::Future<Output = ::acvus_extern::done::Done<#runtime>> + ::core::marker::Send + 'c {
                     ::acvus_extern::Entry::new(runtime, args, site)
@@ -254,16 +255,16 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         },
     };
     quote! {
-        impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::ExternFn<#runtime> for #marker {
+        impl<#runtime: ::acvus_extern::runtime::Runtime #bounds> ::acvus_extern::register::ExternFn<#runtime, #arity> for #marker {
             fn call(
                 &self,
                 runtime: &#runtime,
-                args: &[<#runtime as ::acvus_extern::runtime::Runtime>::Value],
+                args: [<#runtime as ::acvus_extern::runtime::Runtime>::Value; #arity],
                 site: &::acvus_extern::SiteShape<#runtime>,
             ) -> ::acvus_extern::done::Done<#runtime> {
                 const {
                     ::core::assert!(
-                        !<#args_tuple as ::acvus_extern::Args<#runtime>>::CALLS,
+                        !<#args_tuple as ::acvus_extern::Args<#runtime, #arity>>::CALLS,
                         "an extern fn that runs a callback has an awaited body (macros §1): declare it `async fn`",
                     )
                 };

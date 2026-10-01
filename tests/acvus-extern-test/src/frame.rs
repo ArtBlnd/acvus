@@ -41,21 +41,29 @@ impl<'r> Frame<'r> {
 
     /// Calls `glue` with the arguments `passes` names, and keeps its result
     /// in a new variable, whose index it returns.
-    pub fn call(&mut self, passes: &[Pass], glue: impl FnOnce(Entry<'_, WordRuntime>) -> Done<WordRuntime>) -> usize {
+    pub fn call<const N: usize>(
+        &mut self,
+        passes: [Pass; N],
+        glue: impl FnOnce(Entry<'_, WordRuntime, N>) -> Done<WordRuntime>,
+    ) -> usize {
         let args = self.arguments(passes);
         let site = Self::site();
 
-        let done = glue(Entry::new(self.runtime, &args, &site));
+        let done = glue(Entry::new(self.runtime, args, &site));
 
         self.keep(done)
     }
 
     /// As `call`, for a glue whose body is awaited.
-    pub async fn call_awaited(&mut self, passes: &[Pass], glue: impl AsyncFnOnce(Entry<'_, WordRuntime>) -> Done<WordRuntime>) -> usize {
+    pub async fn call_awaited<const N: usize>(
+        &mut self,
+        passes: [Pass; N],
+        glue: impl AsyncFnOnce(Entry<'_, WordRuntime, N>) -> Done<WordRuntime>,
+    ) -> usize {
         let args = self.arguments(passes);
         let site = Self::site();
 
-        let done = glue(Entry::new(self.runtime, &args, &site)).await;
+        let done = glue(Entry::new(self.runtime, args, &site)).await;
 
         self.keep(done)
     }
@@ -63,20 +71,27 @@ impl<'r> Frame<'r> {
     /// Calls the Rust function the variable `function` holds with the
     /// arguments `passes` names, as a script calls a function value, and
     /// keeps its result in a new variable, whose index it returns.
-    pub fn call_function(&mut self, function: usize, passes: &[Pass]) -> usize {
+    pub fn call_function<const N: usize>(&mut self, function: usize, passes: [Pass; N]) -> usize {
         let args = self.arguments(passes);
         let site = Self::site();
 
         let callee = self.variables[function].as_deref().expect("a function given away is not called");
-        let done = callee.function().call(self.runtime, &args, &site);
+        let done = callee.function()(self.runtime, &args, &site);
 
         self.keep(done)
     }
 
     /// A variable holding a script function value, the function `f`: the
-    /// run's own way to make one, as a program makes a lambda.
-    pub fn function(&mut self, f: impl ExternFn<WordRuntime>) -> usize {
-        let value = crate::boundary::closure(Box::new(f));
+    /// run's own way to make one, as a program makes a lambda. A function
+    /// value is called with a run of the arity its type says, which this
+    /// runtime, holding every function value at one Rust type, reads back.
+    pub fn function<F, const N: usize>(&mut self, f: F) -> usize
+    where
+        F: ExternFn<WordRuntime, N>,
+    {
+        let value = crate::boundary::closure(Box::new(move |runtime, run: &[Word], site| {
+            f.call(runtime, run.try_into().expect("a function value is called at its own arity"), site)
+        }));
         self.variables.push(Some(Box::new(Held::kept(value))));
         self.variables.len() - 1
     }
@@ -94,11 +109,14 @@ impl<'r> Frame<'r> {
 
     /// Calls the awaited function `f` through its dispatch with the
     /// arguments `passes` names, and keeps its result in a new variable.
-    pub async fn call_dispatch_awaited(&mut self, f: &impl AwaitedFn<WordRuntime>, passes: &[Pass]) -> usize {
+    pub async fn call_dispatch_awaited<F, const N: usize>(&mut self, f: &F, passes: [Pass; N]) -> usize
+    where
+        F: AwaitedFn<WordRuntime, N>,
+    {
         let args = self.arguments(passes);
         let site = Self::site();
 
-        let done = f.call(self.runtime, &args, &site).await;
+        let done = f.call(self.runtime, args, &site).await;
 
         self.keep(done)
     }
@@ -120,17 +138,12 @@ impl<'r> Frame<'r> {
         self.variables[variable].as_deref().expect("a variable given away is not read").pair_referents::<P>()
     }
 
-    fn arguments(&mut self, passes: &[Pass]) -> Vec<Word> {
-        let mut args = Vec::with_capacity(passes.len());
-        for &pass in passes {
-            let arg = match pass {
-                Pass::Give(i) => self.variables[i].take().expect("a variable is given once").hand_over(),
-                Pass::Lend(i) => self.variable(i).lend(),
-                Pass::Same(i) | Pass::Function(i) => self.variable(i).same(),
-            };
-            args.push(arg);
-        }
-        args
+    fn arguments<const N: usize>(&mut self, passes: [Pass; N]) -> [Word; N] {
+        passes.map(|pass| match pass {
+            Pass::Give(i) => self.variables[i].take().expect("a variable is given once").hand_over(),
+            Pass::Lend(i) => self.variable(i).lend(),
+            Pass::Same(i) | Pass::Function(i) => self.variable(i).same(),
+        })
     }
 
     fn site() -> SiteShape<WordRuntime> {
