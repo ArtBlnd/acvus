@@ -36,7 +36,7 @@ impl LayoutFact {
     /// The fact of a constructor whose canonical form is the same constructor
     /// over its parts' canonical forms: it is its own canonical form exactly
     /// when every part is.
-    pub(crate) const fn of_parts(parts: &[LayoutFact]) -> LayoutFact {
+    pub const fn of_parts(parts: &[LayoutFact]) -> LayoutFact {
         let mut i = 0;
         while i < parts.len() {
             if let LayoutFact::CanonicalOf = parts[i] {

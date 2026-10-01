@@ -12,7 +12,19 @@ use syn::{ItemFn, parse_macro_input};
 mod attr;
 mod glue;
 mod lifetimes;
+mod opaque;
 mod sig;
+
+/// An extern-defined opaque type (rfc_extern macros §2, types §2): its
+/// crossing, its declared type and its structural facts.
+#[proc_macro_derive(Opaque)]
+pub fn derive_opaque(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as syn::DeriveInput);
+    match opaque::derive(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
 
 #[proc_macro_attribute]
 pub fn extern_fn(attr: TokenStream, item: TokenStream) -> TokenStream {

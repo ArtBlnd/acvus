@@ -89,7 +89,31 @@ pub trait Crosses<R: Runtime>: Sized + Send + Sync + Crossing {
 }
 
 /// An extern type, held by the runtime as the Rust value itself. Only the
-/// derive declares one.
+/// derive declares one, `#[derive(Opaque)]`, reading the definition: a field
+/// naming a parameter is `Structural`, so one holding it under interior
+/// mutability, or a Rust reference a loan would be kept as, is refused:
+///
+/// ```compile_fail,E0277
+/// #[derive(acvus_extern::Opaque)]
+/// pub struct Interior<T> { cell: std::cell::Cell<T> }
+/// ```
+///
+/// ```compile_fail,E0277
+/// #[derive(acvus_extern::Opaque)]
+/// pub struct Borrowing<'a> { text: &'a str }
+/// ```
+///
+/// A type parameter is unbounded, parametric, and no parameter is a const:
+///
+/// ```compile_fail
+/// #[derive(acvus_extern::Opaque)]
+/// pub struct Bounded<T: Clone> { item: T }
+/// ```
+///
+/// ```compile_fail
+/// #[derive(acvus_extern::Opaque)]
+/// pub struct Fixed<const N: usize> { items: [u8; N] }
+/// ```
 pub trait Opaque: Send + Sync + Structural + Crossing + Referent {}
 
 /// What a reference value is made to from Rust storage: storage whose Rust

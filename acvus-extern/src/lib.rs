@@ -24,7 +24,7 @@ pub mod runtime;
 #[doc(hidden)]
 pub use boundary::seal;
 
-pub use acvus_extern_macro::extern_fn;
+pub use acvus_extern_macro::{Opaque, extern_fn};
 
 pub use boundary::entry::{Args, Entry, Mode, Settled, SiteShape, mode};
 pub use boundary::instance::{Instance, InstanceEntry, InstanceOf};

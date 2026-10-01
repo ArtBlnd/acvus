@@ -14,7 +14,9 @@
 mod boundary;
 mod frame;
 mod runtime;
+mod types;
 
-pub use boundary::{Cursor, Held, Number, Pair, Tally, Word};
+pub use boundary::{Held, Word};
+pub use types::{Cursor, Number, Pair, Session, Stack, Tally};
 pub use frame::{Frame, Pass};
 pub use runtime::WordRuntime;
