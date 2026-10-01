@@ -51,7 +51,7 @@ Several declarations may share a name. A call reaches the one its arguments' typ
 
 ## 6. Generic functions and impls
 
-A generic function is a name with a polymorphic type and no body. A declaration may be an impl of one, choosing some of its type variables. A declaration may require impls of generic functions at its own type variables, and may name a declared fact (§3) such an impl must state. A required impl's types are smaller than the declaration's own, so requirements end.
+A generic function is a name with a signature and no body, so it states nothing a body states: no effect, no declared fact, no requirement. A declaration may be an impl of one; its signature is the generic function's at a choice of its type variables. A call of a generic function is a call of the impl it reaches. A declaration may require impls of generic functions at its own type variables, and may name a declared fact (§3) such an impl must state. A required impl's types are smaller than the declaration's own, so requirements end.
 
 ## 7. Conversions
 
