@@ -5,7 +5,7 @@
 use acvus_extern::Uniform;
 use acvus_extern::adapter::Adapter;
 use acvus_extern::callback::{Callback, CallsBack};
-use acvus_extern::context::Returning;
+use acvus_extern::context::Awaited;
 use acvus_extern::decl::{DeclTy, Declaration, Var, kind};
 use acvus_extern::done::Done;
 use acvus_extern::extern_fn;
@@ -64,12 +64,12 @@ fn tagged(#[capture] tag: &String, text: &str) -> String {
 }
 
 #[extern_fn(effect = E)]
-fn apply<'c, R: CallsBack, E: Var<kind::Effect>>(
-    #[context] cx: &Returning<'c, R>,
+async fn apply<'c, R: CallsBack, E: Var<kind::Effect>>(
+    #[context] cx: &Awaited<'c, R>,
     f: Callback<'c, '_, (i64,), i64, E, R>,
     n: i64,
 ) -> i64 {
-    f.call(cx, (n,)) + 1
+    f.call_await(cx, (n,)).await + 1
 }
 
 #[extern_fn(effect = idempotent)]
@@ -217,13 +217,14 @@ fn calls_tagged<R: Registers<Value = Word>>(mut runtime: R) {
 }
 
 fn calls_apply<R: Registers<Value = Word> + CallsBack>(mut runtime: R) {
-    runtime.register(apply::new()).expect("the path is free");
+    runtime.register_awaited(apply::new()).expect("the path is free");
     let path = Declared::<R>::path(&apply::new(), runtime.interner());
 
     let mut frame = Frame::new(&runtime);
     let double = frame.function(Doubled);
     let n = produce(&mut frame, 20i64);
-    let applied = frame.call_registered(path, &[Pass::Function(double), Pass::Give(n)]);
+    let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
+    let applied = executor.block_on(frame.call_registered_awaited(path, &[Pass::Function(double), Pass::Give(n)]));
 
     assert_eq!(read::<_, i64>(&mut frame, applied), 41);
 }

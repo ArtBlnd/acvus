@@ -391,7 +391,7 @@ fn borrowed_whole<R: Runtime<Value = Word>>(runtime: &R) {
     let variable = produce(&mut frame, pair("whole"));
 
     let borrowed = frame.call(&[Pass::Lend(variable, Shared)], |entry| {
-        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_lent(lent, |p: &Pair| p))
+        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(lent, |p: &Pair, sink| sink.lent(p)))
     });
 
     assert_eq!(read_name(&mut frame, Pass::Same(borrowed, Shared)), "whole");
@@ -402,7 +402,7 @@ fn borrowed_str_range<R: Runtime<Value = Word>>(runtime: &R) {
     let variable = produce(&mut frame, String::from("a range"));
 
     let borrowed = frame.call(&[Pass::Lend(variable, Shared)], |entry| {
-        entry.open::<(ByStr,), ()>(|cx, (text,), ()| cx.finish_lent(text, |s: &str| &s[2..5]))
+        entry.open::<(ByStr,), ()>(|cx, (text,), ()| cx.finish_borrowed(text, |s: &str, sink| sink.lent(&s[2..5])))
     });
 
     assert_eq!(read_text(&mut frame, Pass::Same(borrowed, Shared)), "ran");
@@ -413,7 +413,7 @@ fn borrowed_text<R: Runtime<Value = Word>>(runtime: &R) {
     let variable = produce(&mut frame, pair("owned text"));
 
     let borrowed = frame.call(&[Pass::Lend(variable, Shared)], |entry| {
-        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_lent(lent, |p: &Pair| p.name.as_str()))
+        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(lent, |p: &Pair, sink| sink.lent(p.name.as_str())))
     });
 
     assert_eq!(read_text(&mut frame, Pass::Same(borrowed, Shared)), "owned text");
@@ -443,7 +443,7 @@ fn borrowed_field<R: Runtime<Value = Word>>(runtime: &R) {
     let variable = produce(&mut frame, pair("field"));
 
     let borrowed = frame.call(&[Pass::Lend(variable, Shared)], |entry| {
-        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_lent(lent, |p: &Pair| &p.lead))
+        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(lent, |p: &Pair, sink| sink.lent(&p.lead)))
     });
 
     assert_eq!(read_number(&mut frame, Pass::Same(borrowed, Shared)), Number(2));
@@ -454,7 +454,7 @@ fn borrowed_element<R: Runtime<Value = Word>>(runtime: &R) {
     let variable = produce(&mut frame, pair("element"));
 
     let borrowed = frame.call(&[Pass::Lend(variable, Shared)], |entry| {
-        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_lent(lent, |p: &Pair| &p.items[1]))
+        entry.open::<(ByRef<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed(lent, |p: &Pair, sink| sink.lent(&p.items[1])))
     });
 
     assert_eq!(read_number(&mut frame, Pass::Same(borrowed, Shared)), Number(5));
@@ -465,7 +465,7 @@ fn borrowed_exclusive<R: Runtime<Value = Word>>(runtime: &R) {
     let variable = produce(&mut frame, pair("borrowed"));
 
     let borrowed = frame.call(&[Pass::Lend(variable, Exclusive)], |entry| {
-        entry.open::<(ByMut<Pair>,), ()>(|cx, (lent,), ()| cx.finish_lent_mut(lent, |p: &mut Pair| p))
+        entry.open::<(ByMut<Pair>,), ()>(|cx, (lent,), ()| cx.finish_borrowed_mut(lent, |p: &mut Pair, sink| sink.lent_mut(p)))
     });
     frame.call(&[Pass::Same(borrowed, Exclusive)], |entry| {
         entry.open::<(ByMut<Pair>,), ()>(|cx, (mut target,), ()| {
@@ -507,7 +507,7 @@ fn borrowed_sub_slice<R: Runtime<Value = Word>>(runtime: &R) {
     let variable = frame.array(&[3i64, 5, 8]);
 
     let borrowed = frame.call(&[Pass::Lend(variable, Shared)], |entry| {
-        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| cx.finish_lent(run, |s: &[Uniform<R, i64>]| &s[1..]))
+        entry.open::<(BySlice<i64>,), ()>(|cx, (run,), ()| cx.finish_borrowed(run, |s: &[Uniform<R, i64>], sink| sink.lent(&s[1..])))
     });
 
     assert_eq!(read_array(&mut frame, Pass::Same(borrowed, Shared)), [5, 8]);

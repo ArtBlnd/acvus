@@ -58,11 +58,6 @@ impl<R: Runtime, X> Uniform<R, X> {
 }
 
 impl<R: Runtime, T: Crosses<R>> Uniform<R, T> {
-    /// A value of `T` made the runtime's by its crossing, owned from here on.
-    pub fn new<'c>(cx: &'c impl Opens<'c, R>, value: T) -> Self {
-        Uniform::of_the_crossing(value.give(cx.runtime(), Settled::of_the_entry()))
-    }
-
     /// Lends the value in place within the call `cx` belongs to, as `T`'s
     /// view.
     pub fn open<'c>(&'c self, cx: &'c impl Opens<'c, R>) -> T::Open<'c> {

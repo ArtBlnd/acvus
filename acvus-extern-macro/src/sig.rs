@@ -60,8 +60,8 @@ pub struct Param {
 
 /// How the result is made.
 pub enum Output {
-    /// A value that crosses.
-    Value(Box<Type>),
+    /// A value that crosses: the result as written.
+    Value,
     /// A value whose every leaf is a reference to a part of what the argument
     /// at `from` lent, shared or exclusively as `mutable` says (crossing §4).
     Borrowed { from: usize, mutable: bool },
@@ -310,13 +310,13 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
 
 fn output(output: &ReturnType, params: &[Param]) -> syn::Result<Output> {
     let ReturnType::Type(_, ty) = output else {
-        return Ok(Output::Value(Box::new(syn::parse_quote!(()))));
+        return Ok(Output::Value);
     };
     if let Type::Never(_) = &**ty {
         return Ok(Output::Never);
     }
     if !borrows(ty) {
-        return Ok(Output::Value(ty.clone()));
+        return Ok(Output::Value);
     }
     let refused = || {
         syn::Error::new(

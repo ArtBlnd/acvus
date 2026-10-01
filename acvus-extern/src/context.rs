@@ -9,7 +9,7 @@ use crate::done::Done;
 use crate::guard::{Guard, GuardMut};
 use crate::borrowed::{Made, Sink};
 use crate::boundary::seal::Crossing;
-use crate::runtime::{Crosses, RefKind, RefTarget, Referent, Runtime};
+use crate::runtime::{Crosses, Runtime};
 
 pub struct Returning<'c, R: Runtime> {
     runtime: &'c R,
@@ -50,36 +50,6 @@ impl<'c, R: Runtime> Returning<'c, R> {
     /// type.
     pub fn finish<T: Crosses<R>>(self, value: T) -> Done<R> {
         Done::of(value.give(self.runtime, Settled::of_the_entry()))
-    }
-
-    /// Finishes the call with a result that borrows a part of what the call
-    /// lent: `part` picks it from the guard's target, and the reference value
-    /// is made while the guard still lends it (S2 names the target, or its
-    /// written-back copy, after the guard drops).
-    pub fn finish_lent<G, P>(self, guard: Guard<'c, G>, part: impl for<'s> FnOnce(&'s G::Target) -> &'s P) -> Done<R>
-    where
-        G: Deref,
-        P: ?Sized + Referent,
-    {
-        let value = <R::Ref as RefKind<R>>::reference(self.runtime, RefTarget::Shared(part(&*guard)), Settled::of_the_entry());
-        drop(guard);
-        Done::of(value)
-    }
-
-    pub fn finish_lent_mut<G, P>(
-        self,
-        guard: GuardMut<'c, G>,
-        part: impl for<'s> FnOnce(&'s mut G::Target) -> &'s mut P,
-    ) -> Done<R>
-    where
-        G: DerefMut,
-        P: ?Sized + Referent,
-    {
-        let mut guard = guard;
-        let value =
-            <R::Ref as RefKind<R>>::reference(self.runtime, RefTarget::Exclusive(part(&mut *guard)), Settled::of_the_entry());
-        drop(guard);
-        Done::of(value)
     }
 
     /// Finishes the call with a result borrowing parts of what the call lent

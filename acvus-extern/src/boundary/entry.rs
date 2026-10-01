@@ -3,7 +3,6 @@
 //! arguments and its context inside a closure (G1, G9, G10).
 
 use std::marker::PhantomData;
-use std::ops::Deref;
 
 use crate::context::{Awaited, Returning};
 use crate::done::Done;
@@ -99,6 +98,11 @@ pub trait Mode<R: Runtime>: Crossing {
     #[doc(hidden)]
     const LENT: Option<Mutability>;
 
+    /// Whether the handler may call through the argument, which only an
+    /// awaited body may (macros §1): a callback.
+    #[doc(hidden)]
+    const CALLS: bool;
+
     #[doc(hidden)]
     fn open<'c>(runtime: &'c R, v: &'c R::Value, at: Settled<'c>) -> Self::Opened<'c>
     where
@@ -141,6 +145,10 @@ pub trait RequirementMode<R: Runtime>: Crossing {
 /// `Run` is the call's argument run at that arity, `[R::Value; N]`.
 pub trait Args<R: Runtime>: Crossing {
     type Run;
+
+    /// Whether any argument is one the handler may call through, which
+    /// only an awaited body may (macros §1).
+    const CALLS: bool;
     type Opened<'c>
     where
         Self: 'c,
@@ -232,19 +240,21 @@ macro_rules! pass {
 }
 
 macro_rules! modes {
-    ($([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, $passed:ident, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
-        impl<R: Runtime, $($g)*> Mode<R> for $m {
+    ($r:ident; $([$($g:tt)*] $m:ty => $opened:ty, $lent:expr, $calls:expr, $passed:ident, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
+        impl<$r: Runtime, $($g)*> Mode<$r> for $m {
             type Opened<'c> = $opened
             where
                 Self: 'c,
-                R: 'c;
+                $r: 'c;
 
             const LENT: Option<Mutability> = $lent;
 
-            fn open<'c>($runtime: &'c R, $v: &'c R::Value, $at: Settled<'c>) -> Self::Opened<'c>
+            const CALLS: bool = $calls;
+
+            fn open<'c>($runtime: &'c $r, $v: &'c $r::Value, $at: Settled<'c>) -> Self::Opened<'c>
             where
                 Self: 'c,
-                R: 'c,
+                $r: 'c,
             {
                 $open
             }
@@ -254,13 +264,13 @@ macro_rules! modes {
             where
                 'c: 'h,
                 Self: 'c,
-                R: 'c;
+                $r: 'c;
 
             fn arg<'h, 'c>(opened: Self::Opened<'c>, keep: &'h mut Option<Self::Opened<'c>>) -> Self::Arg<'h, 'c>
             where
                 'c: 'h,
                 Self: 'c,
-                R: 'c,
+                $r: 'c,
             {
                 pass!($passed, opened, keep)
             }
@@ -272,119 +282,27 @@ const SHARED: Option<Mutability> = Some(Mutability::Shared);
 const EXCLUSIVE: Option<Mutability> = Some(Mutability::Exclusive);
 
 modes! {
-    [T] ByUniform<T> => Uniform<R, T>, None, moved,
+    R;
+    [T: Crosses<R>] ByValue<T> => T, None, false, moved,
+        |runtime, v, at| T::take(runtime, *v, at);
+    [T: Crosses<R>] ByRef<T> => Guard<'c, T::Open<'c>>, SHARED, false, kept,
+        |runtime, v, at| Guard::of_the_entry(T::open_ref(runtime, *v, at));
+    [T: Crosses<R>] ByMut<T> => GuardMut<'c, T::OpenMut<'c>>, EXCLUSIVE, false, kept_mut,
+        |runtime, v, at| GuardMut::of_the_entry(T::open_ref_mut(runtime, *v, at));
+    [T] ByUniform<T> => Uniform<R, T>, None, false, moved,
         |_runtime, v, _at| Uniform::of_the_crossing(*v);
-    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED, kept,
+    [T] BySlice<T> => Guard<'c, &'c [Uniform<R, T>]>, SHARED, false, kept,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
-    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, EXCLUSIVE, kept_mut,
+    [T] BySliceMut<T> => GuardMut<'c, &'c mut [Uniform<R, T>]>, EXCLUSIVE, false, kept_mut,
         |runtime, v, at| GuardMut::of_the_entry(<R::Ref as RefKind<R>>::target_mut(runtime, *v, at));
-    [] ByStr => Guard<'c, &'c str>, SHARED, kept,
+    [] ByStr => Guard<'c, &'c str>, SHARED, false, kept,
         |runtime, v, at| Guard::of_the_entry(<R::Ref as RefKind<R>>::target(runtime, *v, at));
-    [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None, moved,
+    [A, U, E] ByCallback<A, U, E> => Callback<'c, 'c, A, U, E, R>, None, true, moved,
         |_runtime, v, _at| Callback::of_the_entry(*v);
 }
 
-impl<R: Runtime, T: Crosses<R>> Mode<R> for ByValue<T> {
-    type Opened<'c>
-        = T
-    where
-        Self: 'c,
-        R: 'c;
 
-    const LENT: Option<Mutability> = None;
 
-    fn open<'c>(runtime: &'c R, v: &'c R::Value, at: Settled<'c>) -> T
-    where
-        Self: 'c,
-        R: 'c,
-    {
-        T::take(runtime, *v, at)
-    }
-
-    type Arg<'h, 'c>
-        = T
-    where
-        'c: 'h,
-        Self: 'c,
-        R: 'c;
-
-    fn arg<'h, 'c>(opened: T, _keep: &'h mut Option<T>) -> T
-    where
-        'c: 'h,
-        Self: 'c,
-        R: 'c,
-    {
-        opened
-    }
-}
-
-impl<R: Runtime, T: Crosses<R>> Mode<R> for ByRef<T> {
-    type Opened<'c>
-        = Guard<'c, T::Open<'c>>
-    where
-        Self: 'c,
-        R: 'c;
-
-    const LENT: Option<Mutability> = SHARED;
-
-    fn open<'c>(runtime: &'c R, v: &'c R::Value, at: Settled<'c>) -> Self::Opened<'c>
-    where
-        Self: 'c,
-        R: 'c,
-    {
-        Guard::of_the_entry(T::open_ref(runtime, *v, at))
-    }
-
-    type Arg<'h, 'c>
-        = &'h <T::Open<'c> as Deref>::Target
-    where
-        'c: 'h,
-        Self: 'c,
-        R: 'c;
-
-    fn arg<'h, 'c>(opened: Self::Opened<'c>, keep: &'h mut Option<Self::Opened<'c>>) -> Self::Arg<'h, 'c>
-    where
-        'c: 'h,
-        Self: 'c,
-        R: 'c,
-    {
-        &**keep.insert(opened)
-    }
-}
-
-impl<R: Runtime, T: Crosses<R>> Mode<R> for ByMut<T> {
-    type Opened<'c>
-        = GuardMut<'c, T::OpenMut<'c>>
-    where
-        Self: 'c,
-        R: 'c;
-
-    const LENT: Option<Mutability> = EXCLUSIVE;
-
-    fn open<'c>(runtime: &'c R, v: &'c R::Value, at: Settled<'c>) -> Self::Opened<'c>
-    where
-        Self: 'c,
-        R: 'c,
-    {
-        GuardMut::of_the_entry(T::open_ref_mut(runtime, *v, at))
-    }
-
-    type Arg<'h, 'c>
-        = &'h mut <T::OpenMut<'c> as Deref>::Target
-    where
-        'c: 'h,
-        Self: 'c,
-        R: 'c;
-
-    fn arg<'h, 'c>(opened: Self::Opened<'c>, keep: &'h mut Option<Self::Opened<'c>>) -> Self::Arg<'h, 'c>
-    where
-        'c: 'h,
-        Self: 'c,
-        R: 'c,
-    {
-        &mut **keep.insert(opened)
-    }
-}
 
 
 impl<R: Instances, F: Family<Receiver = Steps>, I> RequirementMode<R> for ByInstance<F, I> {
@@ -423,6 +341,7 @@ macro_rules! mode_tuples {
     ($($n:literal ($($m:ident $v:ident $i:tt),*))+) => {$(
         impl<R: Runtime, $($m: Mode<R>),*> Args<R> for ($($m,)*) {
             type Run = [R::Value; $n];
+            const CALLS: bool = false $(|| $m::CALLS)*;
             type Opened<'c> = ($($m::Opened<'c>,)*)
             where
                 Self: 'c,

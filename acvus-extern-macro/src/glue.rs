@@ -96,7 +96,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     });
     let result = match &sig.output {
         Output::Never => quote!(::acvus_extern::decl::DeclTy::Never),
-        Output::Value(_) | Output::Borrowed { .. } => {
+        Output::Value | Output::Borrowed { .. } => {
             let ty = sig.at_stand_ins(&sig.written_output, runtime);
             quote!(<#ty as ::acvus_extern::decl::DeclType>::decl_ty(&mut __cx))
         }
@@ -139,7 +139,7 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
     let opened = arguments.iter().map(|(_, a, _)| a);
     let lent = match sig.output {
         Output::Borrowed { from, .. } => Some(from),
-        Output::Value(_) | Output::Never => None,
+        Output::Value | Output::Never => None,
     };
 
     // Each argument but the lent one is made by its mode, kept where lent, in
@@ -178,7 +178,7 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
 
     let awaited_finish = match sig.output {
         Output::Never => quote!(match #call.await {}),
-        Output::Value(_) | Output::Borrowed { .. } => quote! {
+        Output::Value | Output::Borrowed { .. } => quote! {
             let __result = #call.await;
             __cx.finish(__result)
         },
@@ -213,7 +213,7 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
             }
         }
         Output::Never => quote!(match #call {}),
-        Output::Value(_) => quote! {
+        Output::Value => quote! {
             let __result = #call;
             __cx.finish(__result)
         },
@@ -226,6 +226,12 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
                 args: &[<#runtime as ::acvus_extern::runtime::Runtime>::Value],
                 site: &::acvus_extern::SiteShape<#runtime>,
             ) -> ::acvus_extern::done::Done<#runtime> {
+                const {
+                    ::core::assert!(
+                        !<#args_tuple as ::acvus_extern::Args<#runtime>>::CALLS,
+                        "an extern fn that runs a callback has an awaited body (macros §1): declare it `async fn`",
+                    )
+                };
                 ::acvus_extern::Entry::new(runtime, args, site).open::<#args_tuple, ()>(|__cx, #opened_tuple, ()| {
                     #(#made)*
                     #finish
