@@ -3,17 +3,20 @@
 //! How a type crosses is never read here (macros §4); only where the
 //! signature's own syntax is the fact: which parameter is a capture or the
 //! context, which generic parameter is the runtime or a variable of which
-//! kind, and which lent parameter a borrowed result's lifetime names.
+//! kind, and the lifetime names each end writes (`lifetimes`).
+
+use std::collections::BTreeSet;
 
 use proc_macro2::Span;
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::visit::Visit;
 use syn::visit_mut::VisitMut;
 use syn::{
     FnArg, GenericArgument, GenericParam, Ident, ItemFn, Lifetime, Pat, PathArguments, ReturnType, Signature, Type,
     TypeParamBound, TypeReference, WherePredicate,
 };
+
+use crate::lifetimes::{self, Bound, Names};
 
 /// The kinds a generic parameter may be (compiler: extern fn §1-§2).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -56,6 +59,8 @@ pub struct Param {
     pub name: Ident,
     pub ty: Type,
     pub role: Role,
+    /// The lifetime names its type writes.
+    pub names: Names,
 }
 
 /// How the result is made.
@@ -79,6 +84,10 @@ pub struct Sig {
     pub counts: [u32; 3],
     pub params: Vec<Param>,
     pub output: Output,
+    /// The lifetime names the result writes.
+    pub result_names: Names,
+    /// The bounds written between lifetimes.
+    pub written: Vec<Bound>,
     pub awaited: bool,
 }
 
@@ -89,8 +98,14 @@ impl Sig {
         let sig = &mut func.sig;
         refuse_unsupported(sig)?;
         let (generics, counts) = generics(sig)?;
+        lifetimes::refuse_static(sig)?;
         let params = params(sig)?;
-        let output = output(&sig.output, &params)?;
+        let inputs: Vec<&Names> = params.iter().map(|p| &p.names).collect();
+        let arguments: Vec<&Names> =
+            params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.names).collect();
+        let result_names = lifetimes::result(&sig.output, &inputs, &arguments)?;
+        let written = lifetimes::written(sig);
+        let output = output(&sig.output, &params, &result_names)?;
         let written_output = match &sig.output {
             ReturnType::Type(_, ty) => (**ty).clone(),
             ReturnType::Default => syn::parse_quote!(()),
@@ -102,7 +117,17 @@ impl Sig {
                 "an awaited body's result borrows nothing: it moves its arguments (crossing §3-§4)",
             ));
         }
-        Ok(Sig { ident: sig.ident.clone(), written_output, generics, counts, params, output, awaited })
+        Ok(Sig {
+            ident: sig.ident.clone(),
+            written_output,
+            generics,
+            counts,
+            params,
+            output,
+            result_names,
+            written,
+            awaited,
+        })
     }
 
     /// `ty` as the dispatch and the declaration name it: the runtime as
@@ -249,6 +274,7 @@ fn var_kind(bound: &TypeParamBound) -> Option<Kind> {
 
 fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
     let mut params = Vec::new();
+    let mut elided = lifetimes::Elided::new();
     for input in &mut sig.inputs {
         let FnArg::Typed(typed) = input else {
             return Err(syn::Error::new(input.span(), "an extern fn takes no `self`"));
@@ -294,7 +320,8 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
                 _ => Role::Context,
             };
         }
-        params.push(Param { name, ty: (*typed.ty).clone(), role });
+        let names = lifetimes::param(&typed.ty, &mut elided);
+        params.push(Param { name, ty: (*typed.ty).clone(), role, names });
     }
     if params.iter().filter(|p| matches!(p.role, Role::Context)).count() > 1 {
         return Err(syn::Error::new(sig.inputs.span(), "an extern fn takes its context once"));
@@ -302,14 +329,15 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
     Ok(params)
 }
 
-fn output(output: &ReturnType, params: &[Param]) -> syn::Result<Output> {
+fn output(output: &ReturnType, params: &[Param], result: &Names) -> syn::Result<Output> {
     let ReturnType::Type(_, ty) = output else {
         return Ok(Output::Value);
     };
     if let Type::Never(_) = &**ty {
         return Ok(Output::Never);
     }
-    if !borrows(ty) {
+    let named: BTreeSet<&String> = result.all().collect();
+    if named.is_empty() {
         return Ok(Output::Value);
     }
     let refused = || {
@@ -319,72 +347,17 @@ fn output(output: &ReturnType, params: &[Param]) -> syn::Result<Output> {
              every reference in it at that lifetime (crossing §4)",
         )
     };
-    let lent: Vec<(usize, &TypeReference)> = params
+    let lenders: Vec<(usize, &Param)> = params
         .iter()
         .enumerate()
         .filter(|(_, p)| matches!(p.role, Role::Argument))
-        .filter_map(|(i, p)| match &p.ty {
-            Type::Reference(r) => Some((i, r)),
-            _ => None,
-        })
+        .filter(|(_, p)| p.names.outer.as_ref().is_some_and(|outer| named.contains(outer)))
         .collect();
-    let lifetimes = result_lifetimes(ty);
-    let from: Vec<&(usize, &TypeReference)> = match lifetimes.as_slice() {
-        [] => lent.iter().collect(),
-        [only] => lent.iter().filter(|(_, r)| r.lifetime.as_ref() == Some(only)).collect(),
-        _ => return Err(refused()),
-    };
-    let [(from, lender)] = from.as_slice() else {
+    let ([(from, lender)], 1) = (lenders.as_slice(), named.len()) else {
         return Err(refused());
     };
-    Ok(Output::Borrowed { from: *from, mutable: lender.mutability.is_some() })
-}
-
-/// The lifetimes a result's references are written at, each once; an
-/// elided one is none. A result mixing an elided reference and a named one is
-/// refused by leaving two entries.
-fn result_lifetimes(ty: &Type) -> Vec<Lifetime> {
-    struct Lifetimes(Vec<Lifetime>, bool);
-    impl<'a> Visit<'a> for Lifetimes {
-        fn visit_type_reference(&mut self, r: &'a TypeReference) {
-            match &r.lifetime {
-                Some(l) if l.ident != "_" => {
-                    if !self.0.contains(l) {
-                        self.0.push(l.clone());
-                    }
-                }
-                _ => self.1 = true,
-            }
-            syn::visit::visit_type(self, &r.elem);
-        }
-        fn visit_lifetime(&mut self, l: &'a Lifetime) {
-            if !self.0.contains(l) {
-                self.0.push(l.clone());
-            }
-        }
-    }
-    let mut found = Lifetimes(Vec::new(), false);
-    found.visit_type(ty);
-    if found.1 && !found.0.is_empty() {
-        found.0.push(Lifetime::new("'_", Span::call_site()));
-    }
-    found.0
-}
-
-/// Whether `ty` holds a reference or names a lifetime.
-fn borrows(ty: &Type) -> bool {
-    struct Finds(bool);
-    impl<'a> Visit<'a> for Finds {
-        fn visit_type_reference(&mut self, _: &'a TypeReference) {
-            self.0 = true;
-        }
-        fn visit_lifetime(&mut self, _: &'a Lifetime) {
-            self.0 = true;
-        }
-    }
-    let mut finds = Finds(false);
-    finds.visit_type(ty);
-    finds.0
+    let mutable = matches!(&lender.ty, Type::Reference(reference) if reference.mutability.is_some());
+    Ok(Output::Borrowed { from: *from, mutable })
 }
 
 /// The runtime named `runtime`, each variable its stand-in, each lifetime

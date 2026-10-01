@@ -73,6 +73,23 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// fn f(a: i64) -> i64 { a }
 /// ```
 ///
+/// `'static`, which names no loan a call is tracked by:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn]
+/// fn f(text: &'static str) -> usize { text.len() }
+/// ```
+///
+/// A result whose lifetime is the context's alone:
+///
+/// ```compile_fail
+/// use acvus_extern::context::Returning;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::extern_fn]
+/// fn f<'c, R: Runtime>(#[context] cx: &'c Returning<'c, R>, n: i64) -> &'c str { "" }
+/// ```
+///
 /// An awaited body whose result borrows:
 ///
 /// ```compile_fail

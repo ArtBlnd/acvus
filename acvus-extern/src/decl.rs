@@ -9,6 +9,7 @@
 //! stand-ins: `Nth<N>` for the N-th type parameter, `EffectNth<N>` and
 //! `IdentityNth<N>`.
 
+pub mod labels;
 pub mod poly;
 pub mod ty;
 
@@ -20,6 +21,7 @@ pub use acvus_mir::decl::{DeclaredFacts, TyVarBound};
 pub use acvus_mir::ty::{Contexts, Effect, Reissue, SplitCost};
 
 pub use acvus_utils::{Interner, QualifiedRef};
+pub use labels::{At, EndNames, Written, labelled};
 pub use ty::{DeclType, EffectNth, IdentityNth, Nth, ParamMode, Part, Passed, Var, kind, part};
 
 /// A declared type (compiler: extern fn §1, §8; types §1-§3).

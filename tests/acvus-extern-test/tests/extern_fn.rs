@@ -11,7 +11,8 @@ use acvus_extern::mode::ByValue;
 use acvus_extern::register::Declared;
 use acvus_extern::runtime::{Crosses, Runtime};
 use acvus_extern_test::{Frame, Pass, WordRuntime};
-use acvus_mir::ty::{Effect, IntTy};
+use acvus_mir::decl::SegmentLabel;
+use acvus_mir::ty::{Effect, FlowEnd, IntTy};
 use acvus_utils::Interner;
 
 
@@ -228,6 +229,43 @@ fn a_borrowed_result_declares_its_references() {
     let (names, first_positive) = declaration_of(first_positive::new());
     assert_eq!(first_positive.params, [(names.intern("xs"), shared(DeclTy::Slice(Box::new(DeclTy::Int(IntTy::I64)))))]);
     assert_eq!(first_positive.result, DeclTy::Option(Box::new(shared(DeclTy::Int(IntTy::I64)))));
+}
+
+/// The labels a declaration states of one end.
+fn labels(declaration: &Declaration, end: FlowEnd) -> Vec<SegmentLabel> {
+    let signature = declaration.facts.lifetimes.as_ref().expect("a declaration states its lifetimes");
+    signature.ends.iter().find(|labelled| labelled.end == end).expect("every end is labelled").labels.to_vec()
+}
+
+#[extern_fn(effect = pure)]
+fn pick<'m, 'k, T: Var<kind::Type>>(from: &'m [T], at: &'k u64) -> Option<&'m T> {
+    from.get(*at as usize)
+}
+
+#[test]
+fn a_borrowed_result_takes_the_loan_its_lifetime_names() {
+    let (_, first) = declaration_of(first::new());
+    let xs = labels(&first, FlowEnd::Param(0));
+    assert_eq!(labels(&first, FlowEnd::Result), xs);
+    assert_eq!(xs[1], SegmentLabel::TypeVar(0));
+
+    let (_, pick) = declaration_of(pick::new());
+    let from = labels(&pick, FlowEnd::Param(0));
+    let at = labels(&pick, FlowEnd::Param(1));
+    let result = labels(&pick, FlowEnd::Result);
+    assert_eq!(result[0], from[0]);
+    assert_ne!(result[0], at[0]);
+}
+
+#[test]
+fn a_function_value_lent_is_a_reference_and_one_position() {
+    let (_, twice) = declaration_of(twice::new());
+    let f = labels(&twice, FlowEnd::Param(0));
+    assert_eq!(f.len(), 2);
+    assert_ne!(f[0], f[1]);
+    let outlives = &twice.facts.lifetimes.as_ref().expect("stated").outlives;
+    let [order] = &**outlives else { panic!("what the function value holds outlives the loan of it: {outlives:?}") };
+    assert_eq!((SegmentLabel::Lifetime(order.longer), SegmentLabel::Lifetime(order.shorter)), (f[1], f[0]));
 }
 
 #[test]

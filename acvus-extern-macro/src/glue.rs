@@ -8,6 +8,7 @@ use quote::{format_ident, quote};
 use syn::{Ident, ItemFn, LitStr};
 
 use crate::attr::{Effect, ExternFnAttr};
+use crate::lifetimes::Names;
 use crate::sig::{Output, Role, Sig};
 
 pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStream> {
@@ -110,6 +111,42 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
             quote!(<#ty as ::acvus_extern::decl::DeclType>::decl_ty(names))
         }
     };
+    // Each end with the lifetime names it writes, read by the declaration's
+    // labels (ownership §5, extern-fn §4).
+    let names = |names: &Names| {
+        let outer = match &names.outer {
+            Some(outer) => quote!(::core::option::Option::Some(#outer)),
+            None => quote!(::core::option::Option::None),
+        };
+        let inner = &names.inner;
+        (outer, quote!(&[#(#inner),*]))
+    };
+    let mut ends: Vec<TokenStream> = sig
+        .params
+        .iter()
+        .filter(|p| matches!(p.role, Role::Argument))
+        .enumerate()
+        .map(|(at, p)| {
+            let ty = sig.at_stand_ins(&p.ty, runtime);
+            let (outer, inner) = names(&p.names);
+            quote! {
+                ::acvus_extern::decl::EndNames {
+                    at: ::acvus_extern::decl::At::Param(#at),
+                    ty: <#ty as ::acvus_extern::decl::ParamMode>::decl(names),
+                    outer: #outer,
+                    inner: #inner,
+                }
+            }
+        })
+        .collect();
+    let (outer, inner) = names(&sig.result_names);
+    ends.push(quote! {
+        ::acvus_extern::decl::EndNames { at: ::acvus_extern::decl::At::Result, ty: #result, outer: #outer, inner: #inner }
+    });
+    let written = sig.written.iter().map(|bound| {
+        let (longer, shorter) = (&bound.longer, &bound.shorter);
+        quote!(::acvus_extern::decl::Written { longer: #longer, shorter: #shorter })
+    });
     quote! {
         impl<#runtime: ::acvus_extern::runtime::Runtime> ::acvus_extern::register::Declared<#runtime> for #marker {
             /// The function's Rust module path and its name (macros §1).
@@ -134,7 +171,13 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
                     // the bound that is always sound: a call may run each
                     // closure it is given.
                     runs: (0..#effects).collect(),
-                    facts: ::acvus_extern::decl::DeclaredFacts::default(),
+                    facts: ::acvus_extern::decl::DeclaredFacts {
+                        lifetimes: ::core::option::Option::Some(::acvus_extern::decl::labelled(
+                            &[#(#ends),*],
+                            &[#(#written),*],
+                        )),
+                        ..::acvus_extern::decl::DeclaredFacts::default()
+                    },
                     requires: ::std::vec::Vec::new(),
                     role: ::acvus_extern::decl::Role::Function,
                 }

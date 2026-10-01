@@ -11,6 +11,7 @@ use syn::{ItemFn, parse_macro_input};
 
 mod attr;
 mod glue;
+mod lifetimes;
 mod sig;
 
 #[proc_macro_attribute]
