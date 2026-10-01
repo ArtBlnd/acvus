@@ -9,9 +9,9 @@ use crate::done::Done;
 use crate::runtime::Runtime;
 
 /// Proof that a read or a result is the crossing's, at the type the checker
-/// settled for the site of the call `'c`. Only the entry, and what it opens,
-/// make one. `'c` is invariant, so it brands the call: a guard opened under
-/// it, and a part borrowed from that guard, belong to this call alone.
+/// settled for the site of the call: only this crate makes one, within a
+/// call. It bounds no lifetime: what a read lends is bounded by the runtime's
+/// borrow, which the call's context gives (`Opens`).
 #[derive(Clone, Copy)]
 pub struct Settled<'c> {
     _call: PhantomData<fn(&'c ()) -> &'c ()>,

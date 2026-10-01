@@ -3,7 +3,8 @@
 use crate::runtime::Runtime;
 
 /// The result of one call: the runtime value its context made at the site's
-/// settled result type, or a reference made from the guard a result borrows.
+/// settled result type, a borrowed result's of the reference values it is
+/// made of.
 pub struct Done<R: Runtime> {
     value: R::Value,
 }
