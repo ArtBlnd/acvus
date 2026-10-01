@@ -10,6 +10,7 @@ use proc_macro::TokenStream;
 use syn::{ItemFn, parse_macro_input};
 
 mod attr;
+mod facts;
 mod glue;
 mod lifetimes;
 mod opaque;

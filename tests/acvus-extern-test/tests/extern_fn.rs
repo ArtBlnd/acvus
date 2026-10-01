@@ -372,6 +372,40 @@ fn read_text(frame: &mut Frame<'_>, variable: usize) -> String {
     read.expect("the call ran")
 }
 
+/// A count stated to the compiler: how it ends and how its result relates to
+/// its arguments.
+#[extern_fn(effect = pure, ends = total, relation(result <= len(text) + n, old(len(text)) = 2 * len(text) - 1))]
+fn bounded(text: &str, n: u64) -> u64 {
+    text.len() as u64 + n
+}
+
+#[test]
+fn the_facts_written_are_stated_as_the_compilers_forms() {
+    use acvus_extern::decl::{Atom, Before, Comparison, Ends, Relation, Subject, Term};
+
+    let (_, bounded) = declaration_of(bounded::new());
+    assert_eq!(bounded.facts.ends, Ends::Total);
+    let atom = |atom| Box::new(Term::Atom(atom));
+    assert_eq!(
+        *bounded.facts.relations,
+        [
+            Relation {
+                left: Term::Atom(Atom::Result),
+                comparison: Comparison::Le,
+                right: Term::Add(atom(Atom::Len(Subject::Arg(0))), atom(Atom::Arg(1))),
+            },
+            Relation {
+                left: Term::Atom(Atom::Old(Before::Len(0))),
+                comparison: Comparison::Eq,
+                right: Term::Sub(Box::new(Term::Scale(2, atom(Atom::Len(Subject::Arg(0))))), Box::new(Term::Const(1))),
+            },
+        ]
+    );
+    let (_, add) = declaration_of(add::new());
+    assert_eq!(add.facts.ends, Ends::Unstated);
+    assert!(add.facts.relations.is_empty());
+}
+
 #[test]
 fn a_call_that_never_returns_declares_no_value() {
     let (_, fail) = declaration_of(fail::new());

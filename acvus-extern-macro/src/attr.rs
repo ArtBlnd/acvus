@@ -1,8 +1,9 @@
-//! The attribute's own arguments: `#[extern_fn(name = "..", effect = ..)]`.
-//! Every key is known; any other is refused.
+//! The attribute's own arguments: `#[extern_fn(name = "..", effect = ..,
+//! ends = .., relation(..))]`. Every key is known; any other is refused.
 
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, LitStr, Token};
+use syn::punctuated::Punctuated;
+use syn::{Expr, Ident, LitStr, Token, parenthesized};
 
 /// A call's effect as stated (compiler: extern fn §2): a level, or one of
 /// the function's effect variables, the effect of the work it runs.
@@ -21,6 +22,18 @@ pub struct ExternFnAttr {
     pub name: Option<LitStr>,
     /// Unstated, the effect is opaque, which is always sound.
     pub effect: Option<Effect>,
+    /// How a call's own code ends (compiler: extern fn §4); unstated where
+    /// none is written.
+    pub ends: Option<Ends>,
+    /// The relations stated, each as written (compiler: extern fn §3).
+    pub relations: Vec<Expr>,
+}
+
+/// How a call's own code ends.
+#[derive(Clone, Copy)]
+pub enum Ends {
+    Returns,
+    Total,
 }
 
 impl Parse for ExternFnAttr {
@@ -28,22 +41,23 @@ impl Parse for ExternFnAttr {
         let mut attr = ExternFnAttr::default();
         while !input.is_empty() {
             let key: Ident = input.parse()?;
-            let known = matches!(key.to_string().as_str(), "name" | "effect");
-            if !known || !input.peek(Token![=]) {
-                return Err(syn::Error::new(
-                    key.span(),
-                    "`#[extern_fn]` knows `name = \"..\"` and `effect = ..`, and nothing else",
-                ));
-            }
-            input.parse::<Token![=]>()?;
+            let twice = || syn::Error::new(key.span(), format!("`{key}` is stated twice"));
             match key.to_string().as_str() {
-                "name" => {
+                "relation" => {
+                    let content;
+                    parenthesized!(content in input);
+                    let relations: Punctuated<Expr, Token![,]> = content.parse_terminated(Expr::parse, Token![,])?;
+                    attr.relations.extend(relations);
+                }
+                "name" if input.peek(Token![=]) => {
+                    input.parse::<Token![=]>()?;
                     let name: LitStr = input.parse()?;
                     if attr.name.replace(name).is_some() {
-                        return Err(syn::Error::new(key.span(), "`name` is stated twice"));
+                        return Err(twice());
                     }
                 }
-                "effect" => {
+                "effect" if input.peek(Token![=]) => {
+                    input.parse::<Token![=]>()?;
                     let value: Ident = input.parse()?;
                     let effect = match value.to_string().as_str() {
                         "pure" => Effect::Pure,
@@ -52,10 +66,27 @@ impl Parse for ExternFnAttr {
                         _ => Effect::Var(value),
                     };
                     if attr.effect.replace(effect).is_some() {
-                        return Err(syn::Error::new(key.span(), "`effect` is stated twice"));
+                        return Err(twice());
                     }
                 }
-                _ => unreachable!("the key is known"),
+                "ends" if input.peek(Token![=]) => {
+                    input.parse::<Token![=]>()?;
+                    let value: Ident = input.parse()?;
+                    let ends = match value.to_string().as_str() {
+                        "returns" => Ends::Returns,
+                        "total" => Ends::Total,
+                        _ => return Err(syn::Error::new(value.span(), "a call ends `returns` or `total`")),
+                    };
+                    if attr.ends.replace(ends).is_some() {
+                        return Err(twice());
+                    }
+                }
+                _ => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "`#[extern_fn]` knows `name = \"..\"`, `effect = ..`, `ends = ..` and `relation(..)`, and nothing else",
+                    ));
+                }
             }
             if !input.is_empty() {
                 input.parse::<Token![,]>()?;

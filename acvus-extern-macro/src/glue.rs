@@ -8,6 +8,7 @@ use quote::{format_ident, quote};
 use syn::{Ident, ItemFn, LitStr};
 
 use crate::attr::{Effect, ExternFnAttr};
+use crate::facts;
 use crate::lifetimes::Names;
 use crate::sig::{Output, Role, Sig};
 
@@ -53,7 +54,7 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
         }
     };
 
-    let declared = declared(&attr, &sig, &marker, &runtime);
+    let declared = declared(&attr, &sig, &marker, &runtime)?;
     let dispatch = dispatch(&sig, &marker, &runtime);
 
     Ok(quote! {
@@ -79,7 +80,7 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
     })
 }
 
-fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
+fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> syn::Result<TokenStream> {
     let name = attr.name.clone().unwrap_or_else(|| LitStr::new(&marker.to_string(), marker.span()));
     // The call's own effect. Unstated, it is opaque, the effect that is
     // always sound; a call whose effect is an effect variable's states
@@ -143,11 +144,17 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     ends.push(quote! {
         ::acvus_extern::decl::EndNames { at: ::acvus_extern::decl::At::Result, ty: #result, outer: #outer, inner: #inner }
     });
+    // The facts the attribute states (compiler: extern fn §3-§4), each of
+    // the arguments by their names.
+    let argument_names: Vec<&Ident> =
+        sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.name).collect();
+    let ending = facts::ends(attr.ends);
+    let relations = facts::relations(&attr.relations, &argument_names)?;
     let written = sig.written.iter().map(|bound| {
         let (longer, shorter) = (&bound.longer, &bound.shorter);
         quote!(::acvus_extern::decl::Written { longer: #longer, shorter: #shorter })
     });
-    quote! {
+    Ok(quote! {
         impl<#runtime: ::acvus_extern::runtime::Runtime> ::acvus_extern::register::Declared<#runtime> for #marker {
             /// The function's Rust module path and its name (macros §1).
             fn path(&self, names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::QualifiedRef {
@@ -176,6 +183,8 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
                             &[#(#ends),*],
                             &[#(#written),*],
                         )),
+                        ends: #ending,
+                        relations: ::std::boxed::Box::new([#(#relations),*]),
                         ..::acvus_extern::decl::DeclaredFacts::default()
                     },
                     requires: ::std::vec::Vec::new(),
@@ -183,7 +192,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
                 }
             }
         }
-    }
+    })
 }
 
 fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {

@@ -83,6 +83,35 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// fn f<'c, R: Runtime>(#[context] cx: &'c Returning<'c, R>, n: i64) -> &'c str { "" }
 /// ```
 ///
+/// A relation speaking of what is no argument, the context or a capture:
+///
+/// ```compile_fail
+/// use acvus_extern::context::Returning;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::extern_fn(relation(result <= cx))]
+/// fn f<R: Runtime>(#[context] cx: &Returning<'_, R>, n: u64) -> u64 { n }
+/// ```
+///
+/// A relation that is no `=`, `<=` or `<`, or a term no affine one:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn(relation(result >= n))]
+/// fn f(n: u64) -> u64 { n }
+/// ```
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn(relation(result = n * n))]
+/// fn f(n: u64) -> u64 { n * n }
+/// ```
+///
+/// An ending that is neither `returns` nor `total`:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn(ends = forever)]
+/// fn f(n: u64) -> u64 { n }
+/// ```
+///
 /// An awaited body whose result borrows:
 ///
 /// ```compile_fail

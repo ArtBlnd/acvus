@@ -17,7 +17,8 @@ use acvus_mir::decl::NamedFact;
 use acvus_mir::ty::IntTy;
 use acvus_utils::Astr;
 
-pub use acvus_mir::decl::{DeclaredFacts, TyVarBound};
+pub use acvus_mir::decl::declared::{Atom, Before, Comparison, Relation, Subject, Term};
+pub use acvus_mir::decl::{DeclaredFacts, Ends, TyVarBound};
 pub use acvus_mir::ty::{Contexts, Effect, Reissue, SplitCost};
 
 pub use acvus_utils::{Interner, QualifiedRef};
