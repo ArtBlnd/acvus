@@ -4,7 +4,7 @@
 use acvus_extern::Uniform;
 use acvus_extern::callback::{Callable, CallsBack};
 use acvus_extern::context::{Awaited, Returning};
-use acvus_extern::decl::{DeclTy, Declaration, Var, kind};
+use acvus_extern::decl::{Contexts, DeclTy, Declaration, Reissue, SplitCost, Var, kind};
 use acvus_extern::done::Done;
 use acvus_extern::extern_fn;
 use acvus_extern::mode::ByValue;
@@ -178,7 +178,12 @@ fn a_generic_declaration_is_at_its_parameters() {
     assert_eq!(first.binders.types.len(), 1);
     assert_eq!(first.params, [(names.intern("xs"), shared(DeclTy::Slice(Box::new(DeclTy::Param(0)))))]);
     assert_eq!(first.result, shared(DeclTy::Param(0)));
-    assert_eq!(first.effect, Effect::opaque());
+    // Unstated, its reissue is opaque; a returning body does not suspend.
+    assert_eq!(
+        first.effect,
+        Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable, false)
+    );
+    assert!(!first.awaits);
 }
 
 #[test]
@@ -187,7 +192,9 @@ fn captures_and_the_context_are_no_parameters() {
     assert_eq!(tagged.params, [(names.intern("text"), shared(DeclTy::Str))]);
 
     let (names, apply) = declaration_of(apply::new());
-    assert_eq!(apply.effect, Effect::pure());
+    // An awaited body with no returning one suspends.
+    assert_eq!(apply.effect, Effect::new(Reissue::Pure, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable, true));
+    assert!(apply.awaits);
     assert_eq!(apply.binders.effects, 1);
     assert_eq!(apply.runs, [0]);
     assert_eq!(

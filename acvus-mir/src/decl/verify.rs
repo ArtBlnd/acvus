@@ -1467,6 +1467,7 @@ mod tests {
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
+                awaits: false,
                 specialized: Box::new([]),
             }
         }
@@ -1493,6 +1494,7 @@ mod tests {
                             lifetimes: Some(lifetimes.clone()),
                             ..DeclaredFacts::default()
                         },
+                        awaits: false,
                     }),
                 }),
                 ..self.plain(ty, variables)
@@ -1521,6 +1523,7 @@ mod tests {
                 requires,
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
+                awaits: false,
                 specialized: Box::new([]),
             }
         }
@@ -2269,6 +2272,7 @@ mod tests {
                             ..DeclaredFacts::default()
                         },
                         runs: Box::new([]),
+                        awaits: false,
                         specialized: Box::new([]),
                     }]),
                     generic: None,

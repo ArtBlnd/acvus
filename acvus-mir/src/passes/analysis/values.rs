@@ -906,11 +906,13 @@ mod tests {
                 concrete: Box::new([]),
                 generic: Some(GenericImplSig {
                     facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() },
+                    awaits: false,
                 }),
             }),
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         let decls = declarations(&interner, vec![(id_f, scheme)], poly);
@@ -975,11 +977,13 @@ mod tests {
                 concrete: Box::new([]),
                 generic: Some(GenericImplSig {
                     facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() },
+                    awaits: false,
                 }),
             }),
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         let decls = declarations(&interner, vec![(succ, scheme)], poly);

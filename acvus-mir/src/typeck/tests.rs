@@ -142,6 +142,7 @@ impl Fixture {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         self.raw.functions.push((id, scheme));
@@ -166,6 +167,7 @@ impl Fixture {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         self.raw.functions.push((id, scheme));
@@ -223,6 +225,7 @@ impl Fixture {
                 requires: Box::new([]),
                 facts: Default::default(),
                 runs: Box::new([]),
+                awaits: false,
                 specialized: Box::new([]),
             })
             .collect();
@@ -240,6 +243,7 @@ impl Fixture {
                 requires: Box::new([]),
                 facts: facts.clone(),
                 runs: Box::new([]),
+                awaits: false,
                 specialized: Box::new([]),
             })
             .collect();
@@ -938,6 +942,7 @@ fn a_call_reaches_the_overload_its_argument_decides() {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         fx.raw.functions.push((id, scheme));
@@ -1163,6 +1168,7 @@ fn a_call_two_declarations_answer_is_refused() {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         fx.raw.functions.push((id, scheme));
@@ -1597,8 +1603,8 @@ fn a_function_value_a_call_gives_whose_effect_does_not_fit_is_a_mismatch_of_effe
 }
 
 /// A refusal states the effects that did not meet, each as the type printer
-/// writes an effect, frozen at writeback: the declared slot's `pure` and
-/// the call's result's `opaque`.
+/// writes an effect, frozen at writeback: the declared slot's
+/// `(pure, no_suspend)` and the call's result's `opaque`.
 #[test]
 fn a_mismatch_of_effects_prints_both_effects() {
     let mut fx = Fixture::new();
@@ -1613,9 +1619,11 @@ fn a_mismatch_of_effects_prints_both_effects() {
         panic!("one refusal: {:?}", checked.refusals());
     };
     let written = refusal.kind.written(&names);
-    let mut effects: Vec<&str> = written.strip_prefix("Mismatch Effects ").unwrap_or_else(|| panic!("{written}")).split(' ').collect();
-    effects.sort_unstable();
-    assert_eq!(effects, ["opaque", "pure"], "{written}");
+    let shown = written.strip_prefix("Mismatch Effects ").unwrap_or_else(|| panic!("{written}"));
+    assert!(
+        shown == "(pure, no_suspend) opaque" || shown == "opaque (pure, no_suspend)",
+        "{written}"
+    );
 }
 
 /// `apply`, a pure `core::add` at `i64`, and `touch(i64) -> i64`, opaque.
@@ -2418,6 +2426,7 @@ fn a_view_steps_requirements_are_reached() {
         }]),
         facts: Default::default(),
         runs: Box::new([]),
+        awaits: false,
         specialized: Box::new([]),
     };
     fx.raw.lang_impls.push((as_slice, Impls { concrete: Box::new([view]), generic: None }));
@@ -2462,7 +2471,7 @@ fn a_pattern_never_binds_a_function_into_a_context() {
 #[test]
 fn a_coercions_effect_joins_its_bodys() {
     use crate::ty::{Contexts, Effect, Reissue, SplitCost};
-    let idempotent = || EffectTerm::Known(Effect::new(Reissue::Idempotent, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable));
+    let idempotent = || EffectTerm::Known(Effect::new(Reissue::Idempotent, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable, false));
 
     let mut fx = Fixture::new();
     let (u8_ty, i64_ty) = (fx.int(IntTy::U8), fx.int(IntTy::I64));
@@ -2779,7 +2788,7 @@ fn an_unclaimed_flow_set_takes_every_flow_at_a_stall() {
 fn generic_with_impl(fx: &mut Fixture, name: &str, generic: TyId<Poly>, at: TyId<Poly>, facts: DeclaredFacts) -> QualifiedRef {
     let id = QualifiedRef::root(fx.name(name));
     let arity = fx.arity(generic);
-    let concrete = Box::new([ImplSig { ty: at, bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at])].into(), param_names: fx.param_names(arity), requires: Box::new([]), facts, runs: Box::new([]), specialized: Box::new([]) }]);
+    let concrete = Box::new([ImplSig { ty: at, bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at])].into(), param_names: fx.param_names(arity), requires: Box::new([]), facts, runs: Box::new([]), specialized: Box::new([]), awaits: false }]);
     let scheme = Scheme {
         ty: generic,
         param_names: fx.param_names(arity),
@@ -2788,6 +2797,7 @@ fn generic_with_impl(fx: &mut Fixture, name: &str, generic: TyId<Poly>, at: TyId
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
+        awaits: false,
         specialized: Box::new([]),
     };
     fx.raw.functions.push((id, scheme));
@@ -2875,6 +2885,7 @@ fn a_concrete_impl_is_instantiated_at_its_own_bounds() {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         let scheme = Scheme {
@@ -2885,6 +2896,7 @@ fn a_concrete_impl_is_instantiated_at_its_own_bounds() {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         fx.raw.functions.push((id, scheme));
@@ -2985,6 +2997,7 @@ fn a_requirement_a_lift_would_answer_is_refused_as_unimplemented() {
         requires: Box::new([crate::decl::Requirement { generic_function: clone, pattern: clones_e, fact: None }]),
         facts: Default::default(),
         runs: Box::new([]),
+        awaits: false,
         specialized: Box::new([]),
     };
     fx.raw.lang_impls.push((as_slice, Impls { concrete: Box::new([view]), generic: None }));

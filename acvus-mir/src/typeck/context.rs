@@ -47,8 +47,8 @@ pub(super) fn check_context_ref(cx: &mut Ctxt<'_>, site: AstId, context: Qualifi
 /// effect is (effects §1): among the effect's reads where it is loaded,
 /// and its writes where it is committed (context §3). What a load or a
 /// commit does beyond the program is unknown to the language, as a
-/// syscall's is (context §3), so it is opaque, which is always sound
-/// (extern-fn §2).
+/// syscall's is (context §3), so its reissue is opaque, which is always
+/// sound (extern-fn §2). A load or a commit does not suspend.
 pub(super) fn note_access(cx: &mut Ctxt<'_>, context: QualifiedRef, access: Access, span: Span) {
     let touched = Contexts::from([context]);
     let (reads, writes) = match access {
@@ -56,7 +56,7 @@ pub(super) fn note_access(cx: &mut Ctxt<'_>, context: QualifiedRef, access: Acce
         Access::Write => (Contexts::new(), touched),
         Access::ReadWrite => (touched.clone(), touched),
     };
-    let effect = Effect::new(Reissue::Opaque, false, reads, writes, SplitCost::Unavailable);
+    let effect = Effect::new(Reissue::Opaque, false, reads, writes, SplitCost::Unavailable, false);
     super::effect::note_call_effect(cx, &EffectTerm::Known(effect), span);
 }
 

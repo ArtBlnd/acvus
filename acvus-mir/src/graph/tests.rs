@@ -43,7 +43,7 @@ impl Fixture {
                 let w = fx.raw.types.intern(TyKind::Int(width));
                 let shared = fx.raw.types.intern(TyKind::Ref(Mutability::Shared, w));
                 let ty = fx.pure(&[shared, shared], w);
-                ImplSig { ty, bounds: Box::new([]), param_names: Box::new([fx.names.intern("p0"), fx.names.intern("p1")]), requires: Box::new([]), facts: Default::default(), runs: Box::new([]), specialized: Box::new([]) }
+                ImplSig { ty, bounds: Box::new([]), param_names: Box::new([fx.names.intern("p0"), fx.names.intern("p1")]), requires: Box::new([]), facts: Default::default(), runs: Box::new([]), specialized: Box::new([]), awaits: false }
             })
             .collect();
         let add = fx.raw.core.add;

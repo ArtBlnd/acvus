@@ -73,10 +73,10 @@ impl Fixture {
                 values: (),
             })
         };
-        let pure_effect = Effect::new(Reissue::Pure, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable);
-        let commuting_effect = Effect::new(Reissue::Opaque, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable);
+        let pure_effect = Effect::new(Reissue::Pure, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable, false);
+        let commuting_effect = Effect::new(Reissue::Opaque, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable, false);
         let splittable_effect =
-            Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), SplitCost::WithCost(Cost::stated(1)));
+            Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), SplitCost::WithCost(Cost::stated(1)), false);
         let pure = call_ty(&[], pure_effect.clone());
         let opaque = call_ty(&[], Effect::opaque());
         let pure_unary = call_ty(&[int], pure_effect);

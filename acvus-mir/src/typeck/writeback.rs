@@ -473,6 +473,7 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
                     requires: Box::new([]),
                     facts: DeclaredFacts::default(),
                     runs: Box::new([]),
+                    awaits: false,
                     specialized: Box::new([]),
                 };
                 let above = super::decision::instantiate_scheme(cx, &scheme, span).ty;

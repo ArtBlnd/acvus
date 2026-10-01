@@ -424,13 +424,13 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
     };
     let defaults = function(&[int], int, Effect::opaque(), Flows::Every, Calls::Many, Holds::Nothing);
     let pure_once = function(&[int], int, Effect::pure(), Flows::Every, Calls::Once, Holds::Nothing);
-    let reading = Effect::new(Reissue::Idempotent, true, Contexts::from([c]), Contexts::new(), SplitCost::WithCost(Cost::stated(3)));
+    let reading = Effect::new(Reissue::Idempotent, true, Contexts::from([c]), Contexts::new(), SplitCost::WithCost(Cost::stated(3)), false);
     let flows = Flows::of([
         Flow { to: FlowEnd::Result, from: FlowEnd::Captures, alignment: Alignment::Any },
         Flow { to: FlowEnd::Result, from: FlowEnd::Param(0), alignment: Alignment::Aligned },
     ]);
     let everything = function(&[ref_int], ref_int, reading, flows, Calls::Many, Holds::Mut);
-    let writing = Effect::new(Reissue::Opaque, true, Contexts::new(), Contexts::from([d]), SplitCost::Unavailable);
+    let writing = Effect::new(Reissue::Opaque, true, Contexts::new(), Contexts::from([d]), SplitCost::Unavailable, false);
     let no_flows = function(&[], int, writing, Flows::none(), Calls::Many, Holds::Shared);
     let vec = |types: &mut Types<Concrete>, effect: Option<EffectTerm<Concrete>>, identity: Option<IdentityTerm<Concrete>>, mark| {
         types.intern(TyKind::UserDefined {
@@ -454,20 +454,20 @@ fn a_type_prints_what_differs_from_its_defaults_in_a_bracket() {
 
     let shown = |ty| crate::ty::print::ty(&types, &names, ty);
     assert_eq!(shown(defaults), "fn(i64) -> i64");
-    assert_eq!(shown(pure_once), "fn(i64) -> i64 [pure, calls=once]");
+    assert_eq!(shown(pure_once), "fn(i64) -> i64 [pure, no_suspend, calls=once]");
     assert_eq!(
         shown(everything),
-        "fn(&i64) -> &i64 [idempotent, commutative, reads=[@c], split=3, flows=[p0->ret, cap->ret:any], holds=mut]"
+        "fn(&i64) -> &i64 [idempotent, commutative, reads=[@c], split=3, no_suspend, flows=[p0->ret, cap->ret:any], holds=mut]"
     );
-    assert_eq!(shown(no_flows), "fn() -> i64 [writes=[@d], flows=[], holds=shared]");
+    assert_eq!(shown(no_flows), "fn() -> i64 [writes=[@d], no_suspend, flows=[], holds=shared]");
     assert_eq!(shown(plain_vec), "Vec<i64>");
     assert_eq!(shown(opaque_vec), "#Vec<i64> with opaque");
-    assert_eq!(shown(pure_vec), "#Vec<i64> with pure");
-    assert_eq!(shown(marked_vec), format!("#Vec<i64> with (pure, reads=[@c]) [id0={}]", identity.index()));
+    assert_eq!(shown(pure_vec), "#Vec<i64> with (pure, no_suspend)");
+    assert_eq!(shown(marked_vec), format!("#Vec<i64> with (pure, reads=[@c], no_suspend) [id0={}]", identity.index()));
 }
 
 fn pure_reading(context: QualifiedRef) -> Effect {
-    Effect::new(Reissue::Pure, true, Contexts::from([context]), Contexts::new(), SplitCost::Unavailable)
+    Effect::new(Reissue::Pure, true, Contexts::from([context]), Contexts::new(), SplitCost::Unavailable, false)
 }
 
 /// An extern call prints its impl, `#n`, where the function has impls and

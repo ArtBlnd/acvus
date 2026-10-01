@@ -60,7 +60,8 @@ impl SplitCost {
 
 /// The effect of a call (effects, extern-fn §2). A pure call that writes
 /// nothing commutes, and a call that writes a context never commutes; every
-/// constructor keeps both.
+/// constructor keeps both. A call that may suspend waits on the backend
+/// before its result is taken.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Effect {
     reissue: Reissue,
@@ -68,26 +69,35 @@ pub struct Effect {
     reads: Contexts,
     writes: Contexts,
     split: SplitCost,
+    suspends: bool,
 }
 
 impl Effect {
-    pub fn new(reissue: Reissue, commutes: bool, reads: Contexts, writes: Contexts, split: SplitCost) -> Effect {
+    pub fn new(
+        reissue: Reissue,
+        commutes: bool,
+        reads: Contexts,
+        writes: Contexts,
+        split: SplitCost,
+        suspends: bool,
+    ) -> Effect {
         Effect {
             reissue,
             commutes: (commutes || reissue == Reissue::Pure) && writes.is_empty(),
             reads,
             writes,
             split,
+            suspends,
         }
     }
 
-    /// The effect that is always sound (effects).
+    /// The effect that is always sound (effects): it may suspend.
     pub fn opaque() -> Effect {
-        Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable)
+        Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable, true)
     }
 
     pub fn pure() -> Effect {
-        Effect::new(Reissue::Pure, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable)
+        Effect::new(Reissue::Pure, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable, false)
     }
 
     pub fn reissue(&self) -> Reissue {
@@ -110,6 +120,10 @@ impl Effect {
         self.split
     }
 
+    pub fn suspends(&self) -> bool {
+        self.suspends
+    }
+
     /// The least effect above both (types §2).
     pub fn join(&self, other: &Effect) -> Effect {
         Effect::new(
@@ -118,17 +132,20 @@ impl Effect {
             self.reads.union(&other.reads).copied().collect(),
             self.writes.union(&other.writes).copied().collect(),
             self.split.join(other.split),
+            self.suspends || other.suspends,
         )
     }
 
     /// Whether `self` is no more than `other` on the chain, commutes where
-    /// `other` does, and splits no differently. The context sets are not
+    /// `other` does, splits no differently, and suspends only where `other`
+    /// does. The context sets are not
     /// part of this order: a bound on an effect bounds its level, and the
     /// sets only accumulate through `join`; `touches_at_most` orders them.
     pub fn at_most(&self, other: &Effect) -> bool {
         self.reissue <= other.reissue
             && (self.commutes || !other.commutes)
             && self.split.at_most(other.split)
+            && (!self.suspends || other.suspends)
     }
 
     /// Whether `self` touches no context `other` does not.

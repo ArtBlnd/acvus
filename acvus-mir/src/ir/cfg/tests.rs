@@ -41,7 +41,7 @@ fn fixture() -> Fixture {
             values: (),
         })
     };
-    let opaque = |split| Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), split);
+    let opaque = |split| Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), split, false);
     let splittable = call_ty(opaque(SplitCost::WithCost(Cost::stated(1))));
     let whole = call_ty(opaque(SplitCost::Unavailable));
     let pure = call_ty(Effect::pure());

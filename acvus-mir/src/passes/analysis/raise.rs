@@ -508,6 +508,7 @@ mod tests {
             requires: Box::new([]),
             facts: DeclaredFacts { ends: Ends::Total, ..DeclaredFacts::default() },
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         let decls = Declarations::verify(RawDeclarations {

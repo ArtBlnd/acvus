@@ -313,7 +313,7 @@ fn lends(
                 }
                 Root::Context(context) => {
                     let touched = Contexts::from([*context]);
-                    let effect = Effect::new(Reissue::Opaque, false, touched.clone(), touched, SplitCost::Unavailable);
+                    let effect = Effect::new(Reissue::Opaque, false, touched.clone(), touched, SplitCost::Unavailable, false);
                     super::effect::flows_into(cx, &EffectTerm::Known(effect), body, span);
                 }
             }

@@ -82,7 +82,7 @@ impl Fixture {
         });
         let id = QualifiedRef::root(self.name(name));
         let param_names = (0..params.len()).map(|at| self.name(&format!("p{at}"))).collect();
-        let scheme = Scheme { ty, param_names, bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]) };
+        let scheme = Scheme { ty, param_names, bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]), awaits: false };
         self.raw.functions.push((id, scheme));
         id
     }

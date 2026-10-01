@@ -115,6 +115,9 @@ pub struct Declaration {
     /// The effect variables whose work the call runs before its result is
     /// taken.
     pub runs: Vec<u32>,
+    /// Whether the declaration has a body that may suspend, its awaited
+    /// body (extern fn §2).
+    pub awaits: bool,
     /// The declared facts, the lifetimes and how a call ends (extern fn
     /// §3-§4), as the compiler holds them.
     pub facts: DeclaredFacts,

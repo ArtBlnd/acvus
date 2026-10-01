@@ -1839,6 +1839,7 @@ fn impl_scheme(sig: &ImplSig) -> Scheme {
         requires: sig.requires.clone(),
         facts: sig.facts.clone(),
         runs: sig.runs.clone(),
+        awaits: sig.awaits,
         specialized: sig.specialized.clone(),
     }
 }

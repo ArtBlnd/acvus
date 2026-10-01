@@ -67,13 +67,13 @@ fn fixture() -> Fixture {
     };
     let split = SplitCost::WithCost(Cost::stated(1));
     let opaque = call_ty(CallEffect::opaque());
-    let splittable = call_ty(CallEffect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), split));
+    let splittable = call_ty(CallEffect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), split, false));
     let pure = call_ty(CallEffect::pure());
-    let pure_splittable = call_ty(CallEffect::new(Reissue::Pure, true, Contexts::new(), Contexts::new(), split));
+    let pure_splittable = call_ty(CallEffect::new(Reissue::Pure, true, Contexts::new(), Contexts::new(), split, false));
     let written = Contexts::from([QualifiedRef::root(interner.intern("page"))]);
-    let pure_writing = call_ty(CallEffect::new(Reissue::Pure, false, Contexts::new(), written, SplitCost::Unavailable));
+    let pure_writing = call_ty(CallEffect::new(Reissue::Pure, false, Contexts::new(), written, SplitCost::Unavailable, false));
     let idempotent =
-        call_ty(CallEffect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable));
+        call_ty(CallEffect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable, false));
     let str_ty = types.intern(TyKind::Str);
     let str_ref = types.intern(TyKind::Ref(Mutability::Shared, str_ty));
     let result = types.intern(TyKind::Result(int, bool, ()));

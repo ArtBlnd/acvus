@@ -195,7 +195,8 @@ fn write_bracket(terms: &[String], out: &mut String) {
 /// The terms by which `effect` differs from the opaque effect (types §5):
 /// its reissue, `commutative` where a call that is not pure commutes (a
 /// pure one commutes exactly where it writes nothing, which `writes`
-/// already shows), the contexts it reads and writes, and its split cost.
+/// already shows), the contexts it reads and writes, its split cost, and
+/// `no_suspend` where it does not suspend.
 fn effect_terms(names: &Interner, effect: &Effect) -> Vec<String> {
     let mut terms = Vec::new();
     match effect.reissue() {
@@ -218,6 +219,9 @@ fn effect_terms(names: &Interner, effect: &Effect) -> Vec<String> {
     match effect.split() {
         SplitCost::Unavailable => {}
         SplitCost::WithCost(cost) => terms.push(format!("split={}", cost.for_backend())),
+    }
+    if !effect.suspends() {
+        terms.push("no_suspend".to_string());
     }
     terms
 }

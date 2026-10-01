@@ -118,6 +118,7 @@ fn effect(reissue: Reissue, reads: &[QualifiedRef], split: SplitCost) -> Effect 
         reads.iter().copied().collect(),
         Contexts::new(),
         split,
+        false,
     )
 }
 
@@ -859,6 +860,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
         }]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
+        awaits: false,
         specialized: Box::new([]),
     };
     let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");
@@ -918,6 +920,7 @@ fn a_head_with_a_step_up_is_closed_only_when_nothing_may_change_it() {
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
+        awaits: false,
         specialized: Box::new([]),
     };
     let cast = CastRule {
@@ -1077,6 +1080,7 @@ fn with_casts_and_conversions(
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
+                awaits: false,
                 specialized: Box::new([]),
             },
         ));
@@ -1467,6 +1471,7 @@ fn an_effect_variable_no_parameter_gives_is_pure() {
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
+        awaits: false,
         specialized: Box::new([]),
     };
     let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");
@@ -1490,8 +1495,8 @@ fn an_effect_variable_no_parameter_gives_is_pure() {
 fn a_calls_effect_is_its_own_joined_with_what_it_runs() {
     let mut fx = Fixture::new();
     let (f, c) = (QualifiedRef::root(fx.name("f")), QualifiedRef::root(fx.name("c")));
-    let own = Effect::new(Reissue::Pure, true, Contexts::from([c]), Contexts::new(), SplitCost::Unavailable);
-    let ran = Effect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable);
+    let own = Effect::new(Reissue::Pure, true, Contexts::from([c]), Contexts::new(), SplitCost::Unavailable, false);
+    let ran = Effect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable, false);
     let mut types = Types::<Poly>::new();
     let int = types.intern(TyKind::Int(IntTy::I64));
     let worker = types.intern(TyKind::Fn {
@@ -1521,6 +1526,7 @@ fn a_calls_effect_is_its_own_joined_with_what_it_runs() {
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([0]),
+        awaits: false,
         specialized: Box::new([]),
     };
     let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");

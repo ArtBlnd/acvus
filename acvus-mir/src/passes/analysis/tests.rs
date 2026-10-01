@@ -37,7 +37,7 @@ fn fixture() -> Fixture {
     let int = types.intern(TyKind::Int(IntTy::I64));
     let bool = types.intern(TyKind::Bool);
     let order = types.intern(TyKind::Order);
-    let effect = Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable);
+    let effect = Effect::new(Reissue::Opaque, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable, false);
     let effectful = types.intern(TyKind::Fn {
         params: Box::new([]),
         ret: int,

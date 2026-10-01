@@ -229,6 +229,7 @@ impl Table<'_> {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         }
     }

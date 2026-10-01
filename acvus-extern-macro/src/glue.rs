@@ -82,21 +82,26 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
 
 fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> syn::Result<TokenStream> {
     let name = attr.name.clone().unwrap_or_else(|| LitStr::new(&marker.to_string(), marker.span()));
-    // The call's own effect. Unstated, it is opaque, the effect that is
+    // The call's own effect. Unstated, its reissue is opaque, which is
     // always sound; a call whose effect is an effect variable's states
-    // nothing of its own beyond the work it runs (compiler: extern fn §2).
-    let effect = match attr.effect.clone().unwrap_or(Effect::Opaque) {
-        Effect::Pure | Effect::Var(_) => quote!(::acvus_extern::decl::Effect::pure()),
-        Effect::Opaque => quote!(::acvus_extern::decl::Effect::opaque()),
-        Effect::Idempotent => quote! {
-            ::acvus_extern::decl::Effect::new(
-                ::acvus_extern::decl::Reissue::Idempotent,
-                false,
-                ::acvus_extern::decl::Contexts::new(),
-                ::acvus_extern::decl::Contexts::new(),
-                ::acvus_extern::decl::SplitCost::Unavailable,
-            )
-        },
+    // nothing of its own beyond the work it runs. It suspends where the
+    // declaration has an awaited body and no returning one (compiler:
+    // extern fn §2).
+    let (reissue, commutes) = match attr.effect.clone().unwrap_or(Effect::Opaque) {
+        Effect::Pure | Effect::Var(_) => (quote!(Pure), true),
+        Effect::Idempotent => (quote!(Idempotent), false),
+        Effect::Opaque => (quote!(Opaque), false),
+    };
+    let awaits = sig.awaited;
+    let effect = quote! {
+        ::acvus_extern::decl::Effect::new(
+            ::acvus_extern::decl::Reissue::#reissue,
+            #commutes,
+            ::acvus_extern::decl::Contexts::new(),
+            ::acvus_extern::decl::Contexts::new(),
+            ::acvus_extern::decl::SplitCost::Unavailable,
+            #awaits,
+        )
     };
     let [types, effects, identities] = sig.counts;
     let types = types as usize;
@@ -182,6 +187,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
                     // the bound that is always sound: a call may run each
                     // closure it is given.
                     runs: (0..#effects).collect(),
+                    awaits: #awaits,
                     facts: ::acvus_extern::decl::DeclaredFacts {
                         lifetimes: ::core::option::Option::Some(::acvus_extern::decl::labelled(
                             &[#(#ends),*],

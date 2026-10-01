@@ -506,7 +506,7 @@ mod tests {
             })
         };
         let opaque_effect = |commutes: bool, split: SplitCost| {
-            Effect::new(Reissue::Opaque, commutes, Contexts::new(), Contexts::new(), split)
+            Effect::new(Reissue::Opaque, commutes, Contexts::new(), Contexts::new(), split, false)
         };
         let commuting = call_ty(opaque_effect(true, SplitCost::Unavailable));
         let commuting_splittable = call_ty(opaque_effect(true, SplitCost::WithCost(Cost::stated(1))));
@@ -1146,10 +1146,11 @@ mod tests {
                 ty,
                 param_names: (0..params.len()).map(|at| interner.intern(&format!("p{at}"))).collect(),
                 bounds: Box::new([]),
-                impls: Some(Impls { concrete: Box::new([]), generic: Some(GenericImplSig { facts }) }),
+                impls: Some(Impls { concrete: Box::new([]), generic: Some(GenericImplSig { facts, awaits: false }) }),
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
+                awaits: false,
                 specialized: Box::new([]),
             };
             (id, scheme)

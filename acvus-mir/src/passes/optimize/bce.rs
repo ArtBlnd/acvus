@@ -119,11 +119,12 @@ mod tests {
             bounds: Box::new([]),
             impls: Some(Impls {
                 concrete: Box::new([]),
-                generic: Some(GenericImplSig { facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() } }),
+                generic: Some(GenericImplSig { facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() }, awaits: false }),
             }),
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         let as_slice_scheme = Scheme {
@@ -134,6 +135,7 @@ mod tests {
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
+            awaits: false,
             specialized: Box::new([]),
         };
         let decls = Declarations::verify(RawDeclarations {

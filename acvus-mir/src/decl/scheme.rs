@@ -40,6 +40,10 @@ pub struct Scheme {
     /// gives is pure. `verify` refuses an effect variable a parameter gives
     /// that is neither here nor in the result.
     pub runs: Box<[u32]>,
+    /// Whether the declaration has a body that may suspend (extern-fn §2):
+    /// a call of one that has none is refused where its effect suspends.
+    /// A generic function's is its impls', each stating its own.
+    pub awaits: bool,
     /// The whole concrete types a registry named and made this declaration
     /// concrete at once more (types §8, rfc_extern registry): the uniform
     /// declaration and its `#` counterparts are this one declaration. At a
@@ -79,6 +83,8 @@ pub struct ImplSig {
     pub facts: DeclaredFacts,
     /// As `Scheme::runs`.
     pub runs: Box<[u32]>,
+    /// As `Scheme::awaits`.
+    pub awaits: bool,
     /// As `Scheme::specialized`.
     pub specialized: Box<[TyId<Poly>]>,
 }
@@ -87,6 +93,8 @@ pub struct ImplSig {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GenericImplSig {
     pub facts: DeclaredFacts,
+    /// As `Scheme::awaits`.
+    pub awaits: bool,
 }
 
 /// What a declaration states beyond its signature, trusted absolutely
