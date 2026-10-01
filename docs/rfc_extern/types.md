@@ -12,6 +12,8 @@ The language type is the shape, structural and closed as written. The extern hol
 
 An opaque registered type is known only by its name and the extern fns that take or give it. A type that must be told apart from others of its shape, or that carries an identity, an effect or lifetimes, is opaque (compiler: types §3, extern fn §8).
 
+An effect is a function's. A type carries one only from the work its values hold, and that work is a function value a declaration was given: the type is tainted by that function's effect, which is one of the declaration's effect variables, and the declaration states its own effect as that variable where it runs the work. So a type's effect is always an effect variable; no type is written with a stated effect.
+
 ## 3. Conversions
 
 A declared conversion may name any extern-defined type on either side. It is the one way a program's value meets an extern-defined type, and the declared casts give the subtyping of compiler: types §3.
