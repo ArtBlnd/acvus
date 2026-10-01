@@ -6,11 +6,13 @@ A generic function is a name with a polymorphic type and no body, with one synch
 
 ## 2. Impls
 
-An impl entry is typed by its generic function's family and its task. The family is a nominal marker per generic function with no marker arguments, so one family serves every impl and every requirer. The entry holds the glue as a function pointer already typed at the family's function type for its task, and the required impls' values. Only the boundary constructs one.
+An impl is a declaration that states the generic function it is an impl of. Its family is a nominal marker per generic function with no marker arguments, so one family serves every impl and every requirer; the family names the generic function, how it takes its receiver, and its function type at the requirer's type arguments.
 
-There is one generic impl entry: one generic item, monomorphised per family, task and handler. At registration it gives a builder whose type does not mention the family; preparation calls it, and the runtime makes a value from the typed entry.
+An impl's value is a function value: the impl's dispatch, with the values of the impls it requires itself as its captures, each fixed where the requirer's site chose it. Its call is a function value's call (runtime contract §2, Callbacks). The runtime makes the value from the registered impl; how is its own.
 
 An impl is reached only through its generic function.
+
+*Rejected.* An impl entry of its own kind, read back by a family and a task, beside the function value: a second calling mechanism for what a function value's call already is, and a count of required impls carried at run time where each impl's is fixed.
 
 ## 3. Requirements
 
@@ -20,4 +22,4 @@ A requirement is held in one of two forms, decided by how the generic function t
 
 *Rejected.* The receiver and a handle side by side at one Rust type.
 
-A requirer holds a typed handle over a value. At the call, the runtime reads the entry back at the requirer's family and task, a typed read like any other: a synchronous requirement reads at the returning task, an awaited one first reads the value's task. The result returns through the runtime's typed read at the requirer's type. No value is taken at a type other than the one it was made at, except by the runtime's own reads, so making a handle is safe.
+A requirer holds a typed handle over a value, and calls it as a function value is called. A returning body calls it returning, which it runs only where the checker settled that every impl it calls has a returning body (macros §1); an awaited body calls it awaited, and which body of the impl then runs is the runtime's to choose from the value: its returning body where it has one, which is faster, its awaited body otherwise. The result returns through the runtime's typed read at the requirer's type. No value is taken at a type other than the one it was made at, except by the runtime's own reads, so making a handle is safe.
