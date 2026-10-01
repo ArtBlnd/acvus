@@ -113,8 +113,6 @@ impl Sig {
         ty
     }
 
-    /// The function's type arguments at the stand-ins, in order, for a
-    /// turbofish; none where it has no generic type parameter.
     /// Whether `ident` is one of the function's effect variables.
     pub fn names_effect_variable(&self, ident: &Ident) -> bool {
         self.generics
@@ -134,6 +132,8 @@ impl Sig {
             .unwrap_or_default()
     }
 
+    /// The function's type arguments at the stand-ins, in order, for a
+    /// turbofish; none where it has no generic type parameter.
     pub fn type_args(&self, runtime: &Ident) -> Option<proc_macro2::TokenStream> {
         if self.generics.is_empty() {
             return None;

@@ -25,10 +25,11 @@ use crate::boundary::uniform::{Primitive, Release};
 /// extern type the derive declares. Each crossing is its type's own and is
 /// sealed: this crate writes the language's, and the derive an extern type's.
 ///
-/// `give` makes the runtime's value of `self` and `take` moves one back out. `open` lends a held value's place as the type's view, and
-/// `open_ref` the storage a reference value names; the view is the type's own
-/// (`&T` through the kind's guard for a type the runtime holds as itself, the
-/// parts as `Uniform`s for an option, a result or a tuple).
+/// `give` makes the runtime's value of `self` and `take` moves one back out.
+/// `open` lends a held value's place as the type's projection, and
+/// `open_ref` the storage a reference value names: `&T` for a type the
+/// runtime holds as itself, and for an option, a result or a tuple the same
+/// structure over its parts' projections (crossing §2).
 ///
 /// A type that crosses may carry lifetimes; a value that holds a loan holds it
 /// as a `Loaned`, never as a Rust reference.
@@ -100,7 +101,7 @@ pub trait Opaque: Send + Sync + Structural + Crossing + Referent {}
 pub trait Referent: Crossing {}
 
 /// What a reference value is made from: a part of storage the call lent,
-/// borrowed from the guard that lends it (`context::Returning::finish_lent`);
+/// borrowed from the guard that lends it (`context::Returning::finish_borrowed`);
 /// a writable one only from an exclusive guard. The part is the whole lent
 /// value, a range or an element of it, a field, or storage the lent value
 /// owns, such as a `String`'s text (runtime contract §2, References).
@@ -127,7 +128,6 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
 /// An extern type's value, holding the Rust value itself, whose storage is lent
 /// as a reference to it.
 pub trait OpaqueKind<R: Runtime> {
-
     fn give<T: Opaque>(rt: &R, value: T, at: Settled<'_>) -> R::Value;
     /// Moves the value out, releasing its storage.
     fn take<T: Opaque>(rt: &R, v: R::Value, at: Settled<'_>) -> T;
@@ -138,7 +138,6 @@ pub trait OpaqueKind<R: Runtime> {
 
 /// A primitive's value, the primitive in the runtime's own representation.
 pub trait PrimitiveKind<R: Runtime> {
-
     fn give<P: Primitive>(rt: &R, value: P, at: Settled<'_>) -> R::Value;
     fn take<P: Primitive>(rt: &R, v: R::Value, at: Settled<'_>) -> P;
 
@@ -148,7 +147,6 @@ pub trait PrimitiveKind<R: Runtime> {
 
 /// Text, a Rust `String`.
 pub trait StringKind<R: Runtime> {
-
     fn give(rt: &R, value: String, at: Settled<'_>) -> R::Value;
     fn take(rt: &R, v: R::Value, at: Settled<'_>) -> String;
 

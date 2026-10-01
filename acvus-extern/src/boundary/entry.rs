@@ -104,7 +104,7 @@ pub trait Mode<R: Runtime>: Crossing {
         Self: 'c,
         R: 'c;
 
-    /// The Rust argument the handler's parameter takes, borrowed for `'h`.
+    /// The Rust argument the handler's parameter takes.
     type Arg<'c>
     where
         Self: 'c,

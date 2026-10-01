@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use acvus_mir::ty::IntTy;
 use acvus_utils::Interner;
 
-use super::{DeclCx, DeclType, EffectNth, Nth, ParamDecl, ParamMode};
+use super::{DeclType, EffectNth, Nth, ParamMode};
 use crate::boundary::entry::mode::{ByCallback, ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use crate::boundary::stub::Stub;
 use crate::boundary::uniform::Uniform;
@@ -12,18 +12,18 @@ use crate::decl::{DeclEffect, DeclTy};
 
 fn decl<T: DeclType + ?Sized>() -> DeclTy {
     let names = Interner::new();
-    T::decl_ty(&mut DeclCx { names: &names })
+    T::decl_ty(&names)
 }
 
-fn param<T: ParamMode>() -> ParamDecl {
+fn param<T: ParamMode>() -> DeclTy {
     let names = Interner::new();
-    T::decl(&mut DeclCx { names: &names })
+    T::decl(&names)
 }
 
-/// Compiles only where `M` is `P`'s mode at the runtime.
+/// Compiles only where `M` is `P`'s mode.
 fn mode_of<P: ParamMode, M>(_: PhantomData<M>)
 where
-    P::Mode<Stub>: Is<M>,
+    P::Mode: Is<M>,
 {
 }
 
@@ -90,5 +90,5 @@ fn a_parameters_type_picks_its_mode() {
     mode_of::<&mut [Uniform<Stub, u8>], BySliceMut<u8>>(PhantomData);
     mode_of::<&str, ByStr>(PhantomData);
     mode_of::<Callback<'_, (i64,), i64, EffectNth<0>, Stub>, ByCallback<(i64,), i64, EffectNth<0>>>(PhantomData);
-    assert_eq!(param::<&str>(), ParamDecl::Argument(shared(DeclTy::Str)));
+    assert_eq!(param::<&str>(), shared(DeclTy::Str));
 }

@@ -101,17 +101,13 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     let params = sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| {
         let name = LitStr::new(&p.name.to_string(), p.name.span());
         let ty = sig.at_stand_ins(&p.ty, runtime);
-        quote! {{
-            let ::acvus_extern::decl::ParamDecl::Argument(ty) =
-                <#ty as ::acvus_extern::decl::ParamMode>::decl(&mut __cx);
-            (names.intern(#name), ty)
-        }}
+        quote!((names.intern(#name), <#ty as ::acvus_extern::decl::ParamMode>::decl(names)))
     });
     let result = match &sig.output {
         Output::Never => quote!(::acvus_extern::decl::DeclTy::Never),
         Output::Value | Output::Borrowed { .. } => {
             let ty = sig.at_stand_ins(&sig.written_output, runtime);
-            quote!(<#ty as ::acvus_extern::decl::DeclType>::decl_ty(&mut __cx))
+            quote!(<#ty as ::acvus_extern::decl::DeclType>::decl_ty(names))
         }
     };
     quote! {
@@ -124,7 +120,6 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
             }
 
             fn declaration(&self, names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::Declaration {
-                let mut __cx = ::acvus_extern::decl::DeclCx { names };
                 ::acvus_extern::decl::Declaration {
                     path: <Self as ::acvus_extern::register::Declared<#runtime>>::path(self, names),
                     binders: ::acvus_extern::decl::Binders {
@@ -158,7 +153,7 @@ fn dispatch(sig: &Sig, marker: &Ident, runtime: &Ident) -> TokenStream {
         .collect();
     let modes: Vec<TokenStream> = arguments
         .iter()
-        .map(|(_, _, ty)| quote!(<#ty as ::acvus_extern::decl::ParamMode>::Mode<#runtime>))
+        .map(|(_, _, ty)| quote!(<#ty as ::acvus_extern::decl::ParamMode>::Mode))
         .collect();
     let opened = arguments.iter().map(|(_, a, _)| a);
     let lent = match sig.output {

@@ -11,16 +11,11 @@ use crate::callback::{Callback, Lent, LentMut};
 use crate::decl::{DeclEffect, DeclTy};
 use crate::runtime::Runtime;
 
-/// Names a declared type needs, interned.
-pub struct DeclCx<'i> {
-    pub names: &'i Interner,
-}
-
 /// A Rust type's declared type. Implemented by this crate for the language's
 /// own types and the crossing's (`Uniform`, a stand-in, a reference, a
 /// callback), and by the derive for an extern-defined type.
 pub trait DeclType {
-    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy;
+    fn decl_ty(names: &Interner) -> DeclTy;
 }
 
 /// The index of a declaration's N-th type parameter. The parameter itself is
@@ -57,26 +52,21 @@ impl<const N: u32> Var<kind::Identity> for IdentityNth<N> {}
 /// (macros §2): a value, a type variable's `Uniform`, `&T`, `&mut T`, a slice
 /// of `Uniform`s, `&str`, or a `Callback`.
 pub trait ParamMode {
-    /// The mode, as `crate::mode` names it, at a runtime `R`.
-    type Mode<R: Runtime>;
-    /// What the parameter is in the declaration.
-    fn decl(cx: &mut DeclCx<'_>) -> ParamDecl;
-}
-
-/// What a handler's parameter is in its declaration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParamDecl {
-    /// A declared parameter of this type, taking an argument position.
-    Argument(DeclTy),
+    /// The mode, as `crate::mode` names it.
+    type Mode;
+    /// The parameter's declared type.
+    fn decl(names: &Interner) -> DeclTy;
 }
 
 mod parts {
-    use super::{DeclCx, DeclTy};
+    use acvus_utils::Interner;
+
+    use super::DeclTy;
 
     /// A tuple's parts, each a declared type, in order: a tuple's own, or a
     /// callback's parameters.
     pub trait DeclParts {
-        fn decl_parts(cx: &mut DeclCx<'_>) -> Vec<DeclTy>;
+        fn decl_parts(names: &Interner) -> Vec<DeclTy>;
     }
 }
 
@@ -84,18 +74,18 @@ use parts::DeclParts;
 
 /// The language's own types taken by value, each its declared type.
 macro_rules! by_value {
-    ($([$($g:tt)*] $ty:ty => |$cx:pat_param| $decl:expr;)+) => {$(
+    ($([$($g:tt)*] $ty:ty => $decl:expr;)+) => {$(
         impl<$($g)*> DeclType for $ty {
-            fn decl_ty($cx: &mut DeclCx<'_>) -> DeclTy {
+            fn decl_ty(_: &Interner) -> DeclTy {
                 $decl
             }
         }
 
         impl<$($g)*> ParamMode for $ty {
-            type Mode<Rt: Runtime> = ByValue<Self>;
+            type Mode = ByValue<Self>;
 
-            fn decl(cx: &mut DeclCx<'_>) -> ParamDecl {
-                ParamDecl::Argument(<Self as DeclType>::decl_ty(cx))
+            fn decl(names: &Interner) -> DeclTy {
+                <Self as DeclType>::decl_ty(names)
             }
         }
     )+};
@@ -103,25 +93,25 @@ macro_rules! by_value {
 
 macro_rules! by_value_primitives {
     ($($t:ty => $decl:expr),+ $(,)?) => {
-        by_value! { $([] $t => |_| $decl;)+ }
+        by_value! { $([] $t => $decl;)+ }
     };
 }
 
 primitives!(by_value_primitives);
 
 by_value! {
-    [] String => |_| DeclTy::String;
+    [] String => DeclTy::String;
 }
 
 impl<T: DeclType> DeclType for Option<T> {
-    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
-        DeclTy::Option(Box::new(T::decl_ty(cx)))
+    fn decl_ty(names: &Interner) -> DeclTy {
+        DeclTy::Option(Box::new(T::decl_ty(names)))
     }
 }
 
 impl<T: DeclType, E: DeclType> DeclType for Result<T, E> {
-    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
-        DeclTy::Result(Box::new(T::decl_ty(cx)), Box::new(E::decl_ty(cx)))
+    fn decl_ty(names: &Interner) -> DeclTy {
+        DeclTy::Result(Box::new(T::decl_ty(names)), Box::new(E::decl_ty(names)))
     }
 }
 
@@ -147,31 +137,31 @@ pub mod part {
 /// How a parameter whose parts are of a class is passed: by value, or lent
 /// whole and opened as its projection.
 pub trait Passed<T> {
-    type Mode<R: Runtime>;
-    fn decl(cx: &mut DeclCx<'_>) -> DeclTy;
+    type Mode;
+    fn decl(names: &Interner) -> DeclTy;
 }
 
 impl<T: DeclType> Passed<T> for part::Value {
-    type Mode<R: Runtime> = ByValue<T>;
+    type Mode = ByValue<T>;
 
-    fn decl(cx: &mut DeclCx<'_>) -> DeclTy {
-        T::decl_ty(cx)
+    fn decl(names: &Interner) -> DeclTy {
+        T::decl_ty(names)
     }
 }
 
 impl<T: DeclType> Passed<T> for part::Shared {
-    type Mode<R: Runtime> = ByRef<T>;
+    type Mode = ByRef<T>;
 
-    fn decl(cx: &mut DeclCx<'_>) -> DeclTy {
-        DeclTy::Ref { mutable: false, target: Box::new(T::decl_ty(cx)) }
+    fn decl(names: &Interner) -> DeclTy {
+        DeclTy::Ref { mutable: false, target: Box::new(T::decl_ty(names)) }
     }
 }
 
 impl<T: DeclType> Passed<T> for part::Exclusive {
-    type Mode<R: Runtime> = ByMut<T>;
+    type Mode = ByMut<T>;
 
-    fn decl(cx: &mut DeclCx<'_>) -> DeclTy {
-        DeclTy::Ref { mutable: true, target: Box::new(T::decl_ty(cx)) }
+    fn decl(names: &Interner) -> DeclTy {
+        DeclTy::Ref { mutable: true, target: Box::new(T::decl_ty(names)) }
     }
 }
 
@@ -223,10 +213,10 @@ impl<X: Part> ParamMode for Option<X>
 where
     X::Class: Passed<Option<X::Of>>,
 {
-    type Mode<R: Runtime> = <X::Class as Passed<Option<X::Of>>>::Mode<R>;
+    type Mode = <X::Class as Passed<Option<X::Of>>>::Mode;
 
-    fn decl(cx: &mut DeclCx<'_>) -> ParamDecl {
-        ParamDecl::Argument(<X::Class as Passed<Option<X::Of>>>::decl(cx))
+    fn decl(names: &Interner) -> DeclTy {
+        <X::Class as Passed<Option<X::Of>>>::decl(names)
     }
 }
 
@@ -234,31 +224,31 @@ impl<X: Part, E: Part<Class = X::Class>> ParamMode for Result<X, E>
 where
     X::Class: Passed<Result<X::Of, E::Of>>,
 {
-    type Mode<R: Runtime> = <X::Class as Passed<Result<X::Of, E::Of>>>::Mode<R>;
+    type Mode = <X::Class as Passed<Result<X::Of, E::Of>>>::Mode;
 
-    fn decl(cx: &mut DeclCx<'_>) -> ParamDecl {
-        ParamDecl::Argument(<X::Class as Passed<Result<X::Of, E::Of>>>::decl(cx))
+    fn decl(names: &Interner) -> DeclTy {
+        <X::Class as Passed<Result<X::Of, E::Of>>>::decl(names)
     }
 }
 
 impl<const N: u32> DeclType for Nth<N> {
-    fn decl_ty(_: &mut DeclCx<'_>) -> DeclTy {
+    fn decl_ty(_: &Interner) -> DeclTy {
         DeclTy::Param(N)
     }
 }
 
 /// A value at `X`, held: a type variable's value where `X` is a stand-in.
 impl<R: Runtime, X: DeclType> DeclType for Uniform<R, X> {
-    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
-        X::decl_ty(cx)
+    fn decl_ty(names: &Interner) -> DeclTy {
+        X::decl_ty(names)
     }
 }
 
 impl<R: Runtime, X: DeclType> ParamMode for Uniform<R, X> {
-    type Mode<Rt: Runtime> = ByUniform<X>;
+    type Mode = ByUniform<X>;
 
-    fn decl(cx: &mut DeclCx<'_>) -> ParamDecl {
-        ParamDecl::Argument(X::decl_ty(cx))
+    fn decl(names: &Interner) -> DeclTy {
+        X::decl_ty(names)
     }
 }
 
@@ -266,14 +256,14 @@ impl<R: Runtime, X: DeclType> ParamMode for Uniform<R, X> {
 macro_rules! decl_tuples {
     ($($n:literal ($($p:ident $v:ident $i:tt),+))+) => {$(
         impl<$($p: DeclType),+> DeclParts for ($($p,)+) {
-            fn decl_parts(cx: &mut DeclCx<'_>) -> Vec<DeclTy> {
-                vec![$($p::decl_ty(cx)),+]
+            fn decl_parts(names: &Interner) -> Vec<DeclTy> {
+                vec![$($p::decl_ty(names)),+]
             }
         }
 
         impl<$($p: DeclType),+> DeclType for ($($p,)+) {
-            fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
-                DeclTy::Tuple(<Self as DeclParts>::decl_parts(cx))
+            fn decl_ty(names: &Interner) -> DeclTy {
+                DeclTy::Tuple(<Self as DeclParts>::decl_parts(names))
             }
         }
 
@@ -290,10 +280,10 @@ macro_rules! decl_tuples {
             ($($p::Of,)+): DeclType,
             Class: Passed<($($p::Of,)+)>,
         {
-            type Mode<R: Runtime> = <Class as Passed<($($p::Of,)+)>>::Mode<R>;
+            type Mode = <Class as Passed<($($p::Of,)+)>>::Mode;
 
-            fn decl(cx: &mut DeclCx<'_>) -> ParamDecl {
-                ParamDecl::Argument(<Class as Passed<($($p::Of,)+)>>::decl(cx))
+            fn decl(names: &Interner) -> DeclTy {
+                <Class as Passed<($($p::Of,)+)>>::decl(names)
             }
         }
     )+};
@@ -302,28 +292,28 @@ macro_rules! decl_tuples {
 tuples!(decl_tuples);
 
 impl DeclType for str {
-    fn decl_ty(_: &mut DeclCx<'_>) -> DeclTy {
+    fn decl_ty(_: &Interner) -> DeclTy {
         DeclTy::Str
     }
 }
 
 impl<R: Runtime, X: DeclType> DeclType for [Uniform<R, X>] {
-    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
-        DeclTy::Slice(Box::new(X::decl_ty(cx)))
+    fn decl_ty(names: &Interner) -> DeclTy {
+        DeclTy::Slice(Box::new(X::decl_ty(names)))
     }
 }
 
 /// A reference: a `Ref` to its target, as a parameter, a callback's lent
 /// parameter, or a result that borrows what a parameter lent.
 impl<T: ?Sized + DeclType> DeclType for &T {
-    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
-        DeclTy::Ref { mutable: false, target: Box::new(T::decl_ty(cx)) }
+    fn decl_ty(names: &Interner) -> DeclTy {
+        DeclTy::Ref { mutable: false, target: Box::new(T::decl_ty(names)) }
     }
 }
 
 impl<T: ?Sized + DeclType> DeclType for &mut T {
-    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
-        DeclTy::Ref { mutable: true, target: Box::new(T::decl_ty(cx)) }
+    fn decl_ty(names: &Interner) -> DeclTy {
+        DeclTy::Ref { mutable: true, target: Box::new(T::decl_ty(names)) }
     }
 }
 
@@ -331,10 +321,10 @@ impl<T: ?Sized + DeclType> DeclType for &mut T {
 macro_rules! lent {
     ($([$($g:tt)*] $ty:ty => $mode:ty;)+) => {$(
         impl<$($g)*> ParamMode for $ty {
-            type Mode<Rt: Runtime> = $mode;
+            type Mode = $mode;
 
-            fn decl(cx: &mut DeclCx<'_>) -> ParamDecl {
-                ParamDecl::Argument(<Self as DeclType>::decl_ty(cx))
+            fn decl(names: &Interner) -> DeclTy {
+                <Self as DeclType>::decl_ty(names)
             }
         }
     )+};
@@ -350,14 +340,14 @@ lent! {
 
 /// A callback's lent parameter is a reference to its target.
 impl<T: ?Sized + DeclType> DeclType for Lent<T> {
-    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
-        DeclTy::Ref { mutable: false, target: Box::new(T::decl_ty(cx)) }
+    fn decl_ty(names: &Interner) -> DeclTy {
+        DeclTy::Ref { mutable: false, target: Box::new(T::decl_ty(names)) }
     }
 }
 
 impl<T: ?Sized + DeclType> DeclType for LentMut<T> {
-    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
-        DeclTy::Ref { mutable: true, target: Box::new(T::decl_ty(cx)) }
+    fn decl_ty(names: &Interner) -> DeclTy {
+        DeclTy::Ref { mutable: true, target: Box::new(T::decl_ty(names)) }
     }
 }
 
@@ -368,8 +358,8 @@ where
     U: DeclType,
     R: Runtime,
 {
-    fn decl_ty(cx: &mut DeclCx<'_>) -> DeclTy {
-        DeclTy::Fn { params: A::decl_parts(cx), result: Box::new(U::decl_ty(cx)), effect: DeclEffect::Var(N) }
+    fn decl_ty(names: &Interner) -> DeclTy {
+        DeclTy::Fn { params: A::decl_parts(names), result: Box::new(U::decl_ty(names)), effect: DeclEffect::Var(N) }
     }
 }
 
@@ -379,10 +369,10 @@ where
     U: DeclType,
     R: Runtime,
 {
-    type Mode<Rt: Runtime> = ByCallback<A, U, EffectNth<N>>;
+    type Mode = ByCallback<A, U, EffectNth<N>>;
 
-    fn decl(cx: &mut DeclCx<'_>) -> ParamDecl {
-        ParamDecl::Argument(<Self as DeclType>::decl_ty(cx))
+    fn decl(names: &Interner) -> DeclTy {
+        <Self as DeclType>::decl_ty(names)
     }
 }
 
