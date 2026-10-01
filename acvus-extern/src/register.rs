@@ -119,8 +119,10 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// async fn f(text: &str) -> &str { text }
 /// ```
 pub trait Declared<R: Runtime> {
-    /// The declaration's path, the name a compiled call names it by.
-    fn path(&self, names: &Interner) -> QualifiedRef;
+    /// The declaration's path, the name a compiled call names it by: the
+    /// function's own, whatever it captures, so another declaration names it
+    /// without a value of it.
+    fn path(names: &Interner) -> QualifiedRef;
 
     /// What the compiler knows of the function.
     fn declaration(&self, names: &Interner) -> Declaration;

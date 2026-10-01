@@ -29,7 +29,7 @@ fn add(a: u64, b: u64) -> u64 {
 
 /// The path `add` is registered at.
 fn add_path(runtime: &WordRuntime) -> QualifiedRef {
-    Declared::<WordRuntime>::path(&add::new(), runtime.interner())
+    <add as Declared<WordRuntime>>::path(runtime.interner())
 }
 
 #[test]

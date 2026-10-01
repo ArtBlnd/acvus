@@ -35,18 +35,18 @@ impl WordRuntime {
 }
 
 impl Registers for WordRuntime {
-    fn register<F, const N: usize, const M: usize>(&mut self, f: F) -> Result<(), Refused>
+    fn register<F, const N: usize, const M: usize>(&mut self, _f: F) -> Result<(), Refused>
     where
         F: ExternFn<Self, N, M> + Declared<Self>,
     {
-        self.enter(Declared::path(&f, &self.interner))
+        self.enter(<F as Declared<Self>>::path(&self.interner))
     }
 
-    fn register_awaited<F, const N: usize, const M: usize>(&mut self, f: F) -> Result<(), Refused>
+    fn register_awaited<F, const N: usize, const M: usize>(&mut self, _f: F) -> Result<(), Refused>
     where
         F: AwaitedFn<Self, N, M> + Declared<Self>,
     {
-        self.enter(Declared::path(&f, &self.interner))
+        self.enter(<F as Declared<Self>>::path(&self.interner))
     }
 }
 

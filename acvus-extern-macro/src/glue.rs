@@ -157,7 +157,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     Ok(quote! {
         impl<#runtime: ::acvus_extern::runtime::Runtime> ::acvus_extern::register::Declared<#runtime> for #marker {
             /// The function's Rust module path and its name (macros §1).
-            fn path(&self, names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::QualifiedRef {
+            fn path(names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::QualifiedRef {
                 let module: ::std::vec::Vec<_> =
                     ::core::module_path!().split("::").map(|segment| names.intern(segment)).collect();
                 ::acvus_extern::decl::QualifiedRef::qualified(names.namespace(&module), names.intern(#name))
@@ -165,7 +165,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
 
             fn declaration(&self, names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::Declaration {
                 ::acvus_extern::decl::Declaration {
-                    path: <Self as ::acvus_extern::register::Declared<#runtime>>::path(self, names),
+                    path: <Self as ::acvus_extern::register::Declared<#runtime>>::path(names),
                     binders: ::acvus_extern::decl::Binders {
                         types: ::std::vec![::acvus_extern::decl::TyVarBound::Any; #types],
                         effects: #effects,
