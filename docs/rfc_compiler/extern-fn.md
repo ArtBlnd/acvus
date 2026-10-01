@@ -18,7 +18,9 @@ An extern fn is called, never taken as a value: a program names it only to call 
 
 ## 2. Effect
 
-A call's effect states whether reissuing it is pure, idempotent or opaque, an order in which each is below the next, so a join takes the greater; whether it commutes with other calls; whether it may be split, and at what cost (effects §6); and which contexts it reads and writes. An opaque effect is always sound (effects).
+A call's effect states whether reissuing it is pure, idempotent or opaque, an order in which each is below the next, so a join takes the greater; whether it commutes with other calls; whether it may be split, and at what cost (effects §6); which contexts it reads and writes; and whether it may suspend, waiting on the backend before its result is taken. A join suspends where either side does. An opaque effect is always sound (effects).
+
+A declaration states whether it has a body that may suspend. A call whose effect suspends is refused where its declaration has none: nothing could run it.
 
 A declaration may name effect variables, as it names type variables. A function type it writes carries an effect, and an extern-defined type may carry an effect (§8).
 
