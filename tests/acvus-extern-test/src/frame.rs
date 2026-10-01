@@ -8,12 +8,12 @@
 //! debug build's entry asserts that they agree.
 
 use acvus_extern::done::Done;
-use acvus_extern::register::{ExternFn, Registers};
-use acvus_extern::runtime::{Mutability, Runtime};
-use acvus_utils::QualifiedRef;
+use acvus_extern::register::{AwaitedFn, ExternFn};
+use acvus_extern::runtime::Mutability;
 use acvus_extern::{Entry, Primitive, SiteShape};
 
 use crate::boundary::{Held, Word};
+use crate::runtime::WordRuntime;
 
 /// How one argument is passed.
 #[derive(Debug, Clone, Copy)]
@@ -40,22 +40,19 @@ impl Pass {
 }
 
 /// A frame's variables, each boxed so that a lent one keeps its address.
-pub struct Frame<'r, R> {
-    runtime: &'r R,
+pub struct Frame<'r> {
+    runtime: &'r WordRuntime,
     variables: Vec<Option<Box<Held>>>,
 }
 
-impl<'r, R> Frame<'r, R>
-where
-    R: Runtime<Value = Word>,
-{
-    pub fn new(runtime: &'r R) -> Self {
+impl<'r> Frame<'r> {
+    pub fn new(runtime: &'r WordRuntime) -> Self {
         Frame { runtime, variables: Vec::new() }
     }
 
     /// Calls `glue` with the arguments `passes` names, and keeps its result
     /// in a new variable, whose index it returns.
-    pub fn call(&mut self, passes: &[Pass], glue: impl FnOnce(Entry<'_, R>) -> Done<R>) -> usize {
+    pub fn call(&mut self, passes: &[Pass], glue: impl FnOnce(Entry<'_, WordRuntime>) -> Done<WordRuntime>) -> usize {
         let args = self.arguments(passes);
         let site = Self::site(passes);
 
@@ -65,7 +62,7 @@ where
     }
 
     /// As `call`, for a glue whose body is awaited.
-    pub async fn call_awaited(&mut self, passes: &[Pass], glue: impl AsyncFnOnce(Entry<'_, R>) -> Done<R>) -> usize {
+    pub async fn call_awaited(&mut self, passes: &[Pass], glue: impl AsyncFnOnce(Entry<'_, WordRuntime>) -> Done<WordRuntime>) -> usize {
         let args = self.arguments(passes);
         let site = Self::site(passes);
 
@@ -82,15 +79,15 @@ where
         let site = Self::site(passes);
 
         let callee = self.variables[function].as_deref().expect("a function given away is not called");
-        let done = callee.function::<R>().call(self.runtime, &args, &site);
+        let done = callee.function().call(self.runtime, &args, &site);
 
         self.keep(done)
     }
 
     /// A variable holding a script function value, the function `f`: the
     /// run's own way to make one, as a program makes a lambda.
-    pub fn function(&mut self, f: impl ExternFn<R>) -> usize {
-        let value = crate::boundary::closure::<R>(Box::new(f));
+    pub fn function(&mut self, f: impl ExternFn<WordRuntime>) -> usize {
+        let value = crate::boundary::closure(Box::new(f));
         self.variables.push(Some(Box::new(Held::kept(value))));
         self.variables.len() - 1
     }
@@ -106,17 +103,13 @@ where
         self.variables.len() - 1
     }
 
-    /// Calls the awaited function registered at `path` with the arguments
-    /// `passes` names, and keeps its result in a new variable.
-    pub async fn call_registered_awaited(&mut self, path: QualifiedRef, passes: &[Pass]) -> usize
-    where
-        R: Registers,
-    {
+    /// Calls the awaited function `f` through its dispatch with the
+    /// arguments `passes` names, and keeps its result in a new variable.
+    pub async fn call_dispatch_awaited(&mut self, f: &impl AwaitedFn<WordRuntime>, passes: &[Pass]) -> usize {
         let args = self.arguments(passes);
         let site = Self::site(passes);
 
-        let call = self.runtime.call_awaited(path, &args, &site).expect("a compiled call names a registered function");
-        let done = call.await;
+        let done = f.call(self.runtime, &args, &site).await;
 
         self.keep(done)
     }
@@ -151,11 +144,11 @@ where
         args
     }
 
-    fn site(passes: &[Pass]) -> SiteShape<R> {
+    fn site(passes: &[Pass]) -> SiteShape<WordRuntime> {
         SiteShape::new(passes.iter().map(|p| p.lent()).collect(), Box::new([]))
     }
 
-    fn keep(&mut self, done: Done<R>) -> usize {
+    fn keep(&mut self, done: Done<WordRuntime>) -> usize {
         self.variables.push(Some(Box::new(Held::of_the_result(done))));
         self.variables.len() - 1
     }

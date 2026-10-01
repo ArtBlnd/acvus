@@ -117,15 +117,4 @@ pub trait Registers: Runtime {
     fn register_awaited<F>(&mut self, f: F) -> Result<(), Refused>
     where
         F: AwaitedFn<Self> + Declared<Self>;
-
-
-    /// Calls the awaited function registered at `path`, none being
-    /// registered there as awaited. How the runtime holds the function and
-    /// the future its call makes is its own.
-    fn call_awaited<'c>(
-        &'c self,
-        path: QualifiedRef,
-        args: &'c [Self::Value],
-        site: &'c SiteShape<Self>,
-    ) -> Option<impl Future<Output = Done<Self>> + Send + 'c>;
 }

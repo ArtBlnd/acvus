@@ -290,10 +290,7 @@ pub struct Held(Word);
 
 impl Held {
     /// The result of a call, which the runtime owns from here on.
-    pub fn of_the_result<R>(done: Done<R>) -> Held
-    where
-        R: Runtime<Value = Word>,
-    {
+    pub fn of_the_result(done: Done<WordRuntime>) -> Held {
         Held(done.into_value())
     }
 
@@ -349,18 +346,14 @@ impl Held {
         unsafe { ((*named_part::<P>(left.0)).to_owned(), (*named_part::<P>(right.0)).to_owned()) }
     }
 
-    /// The function this value is, made at the runtime `R`. The run calls a
-    /// function value it holds as it passes arguments: trusting that the
-    /// checker typed it a function, and that the host runs one runtime.
-    pub(crate) fn function<R>(&self) -> &dyn ExternFn<R>
-    where
-        R: Runtime,
-    {
+    /// The function this value is. The run calls a function value it holds
+    /// as it passes arguments: trusting that the checker typed it a function.
+    pub(crate) fn function(&self) -> &dyn ExternFn<WordRuntime> {
         assert_eq!(self.0.kind, Kind::Closure, "a call of a value that is no function");
         // SAFETY: a `Closure` word points at a live slot `closure` made from a
-        // boxed function at the one runtime the run uses, and the slot lives
-        // as long as this holder owns the value.
-        unsafe { &*(*self.0.address::<Slot<Box<dyn ExternFn<R>>>>()).value }
+        // boxed function, and the slot lives as long as this holder owns the
+        // value.
+        unsafe { &*(*self.0.address::<Slot<Box<dyn ExternFn<WordRuntime>>>>()).value }
     }
 }
 
@@ -496,12 +489,9 @@ where
     Word::pointing(Kind::WidePart, bits)
 }
 
-/// A script function value, a function's dispatch at the runtime `R`.
-pub(crate) fn closure<R>(f: Box<dyn ExternFn<R>>) -> Word
-where
-    R: Runtime,
-{
-    Slot::allocate(Kind::Closure, f, TypeId::of::<Box<dyn ExternFn<R>>>())
+/// A script function value, a function's dispatch.
+pub(crate) fn closure(f: Box<dyn ExternFn<WordRuntime>>) -> Word {
+    Slot::allocate(Kind::Closure, f, TypeId::of::<Box<dyn ExternFn<WordRuntime>>>())
 }
 
 /// What a reference value `reference` made names, for the loan `'l` it was
@@ -592,17 +582,12 @@ where
     unsafe { &mut *named_part::<P>(v) }
 }
 
-/// The Rust function a closure value is, made at the runtime `R`.
-pub(crate) fn callee<'a, R>(v: Word, _at: Settled<'a>) -> &'a dyn ExternFn<R>
-where
-    R: Runtime,
-{
+/// The Rust function a closure value is.
+pub(crate) fn callee<'a>(v: Word, _at: Settled<'a>) -> &'a dyn ExternFn<WordRuntime> {
     // SAFETY: under `Settled`, `v` is a closure the call is lent, a slot
-    // `closure` made from a `RustCallee<R>` at the runtime the call runs at,
-    // live for the call.
-    unsafe { &*(*v.address::<Slot<Box<dyn ExternFn<R>>>>()).value }
+    // `closure` made from a boxed function, live for the call.
+    unsafe { &*(*v.address::<Slot<Box<dyn ExternFn<WordRuntime>>>>()).value }
 }
-
 
 /// `WordRuntime`'s kinds, over the typed reads above.
 pub struct Kinds;

@@ -8,9 +8,9 @@ use acvus_extern::decl::{DeclTy, Declaration, Var, kind};
 use acvus_extern::done::Done;
 use acvus_extern::extern_fn;
 use acvus_extern::mode::ByValue;
-use acvus_extern::register::{Declared, Registers};
+use acvus_extern::register::Declared;
 use acvus_extern::runtime::{Crosses, Runtime};
-use acvus_extern_test::{Frame, Pass, Word, WordRuntime};
+use acvus_extern_test::{Frame, Pass, WordRuntime};
 use acvus_mir::ty::{Effect, IntTy};
 use acvus_utils::Interner;
 
@@ -59,40 +59,13 @@ async fn measure(text: String) -> i64 {
     text.len() as i64
 }
 
-/// Runs `case` on a `WordRuntime`.
-macro_rules! on_both {
-    ($($name:ident: $case:ident;)+) => {
-        mod on_word_runtime {
-            $(
-                #[test]
-                fn $name() {
-                    super::$case(super::WordRuntime::default());
-                }
-            )+
-        }
-    };
-}
-
-on_both! {
-    a_callback_and_the_context_are_passed: calls_apply;
-    an_awaited_function_is_called_through_its_dispatch: calls_measure;
-}
-
 /// A variable holding `value`, made as a program makes one: a call's result.
-fn produce<R, T>(frame: &mut Frame<'_, R>, value: T) -> usize
-where
-    R: Runtime<Value = Word>,
-    T: Crosses<R>,
-{
+fn produce<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
     frame.call(&[], |entry| entry.open::<(), ()>(|cx, (), ()| cx.finish(value)))
 }
 
 /// A variable's value, given to a call that takes it by value.
-fn read<R, T>(frame: &mut Frame<'_, R>, variable: usize) -> T
-where
-    R: Runtime<Value = Word>,
-    T: Crosses<R>,
-{
+fn read<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
     let mut read = None;
     frame.call(&[Pass::Give(variable)], |entry| {
         entry.open::<(ByValue<T>,), ()>(|cx, (value,), ()| {
@@ -103,17 +76,16 @@ where
     read.expect("the call ran")
 }
 
-fn calls_apply<R: Registers<Value = Word> + CallsBack>(mut runtime: R) {
-    runtime.register_awaited(apply::new()).expect("the path is free");
-    let path = Declared::<R>::path(&apply::new(), runtime.interner());
-
+#[test]
+fn a_callback_and_the_context_are_passed() {
+    let runtime = WordRuntime::default();
     let mut frame = Frame::new(&runtime);
     let double = frame.function(Doubled);
     let n = produce(&mut frame, 20i64);
     let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
-    let applied = executor.block_on(frame.call_registered_awaited(path, &[Pass::Function(double), Pass::Give(n)]));
+    let applied = executor.block_on(frame.call_dispatch_awaited(&apply::new(), &[Pass::Function(double), Pass::Give(n)]));
 
-    assert_eq!(read::<_, i64>(&mut frame, applied), 41);
+    assert_eq!(read::<i64>(&mut frame, applied), 41);
 }
 
 /// A function value that doubles its argument, as a program's lambda would.
@@ -130,16 +102,15 @@ impl<R: Runtime> acvus_extern::register::ExternFn<R> for Doubled {
     }
 }
 
-fn calls_measure<R: Registers<Value = Word>>(mut runtime: R) {
-    runtime.register_awaited(measure::new()).expect("the path is free");
-    let path = Declared::<R>::path(&measure::new(), runtime.interner());
-
+#[test]
+fn an_awaited_function_is_called_through_its_dispatch() {
+    let runtime = WordRuntime::default();
     let mut frame = Frame::new(&runtime);
     let text = produce(&mut frame, String::from("awaited"));
     let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
-    let length = executor.block_on(frame.call_registered_awaited(path, &[Pass::Give(text)]));
+    let length = executor.block_on(frame.call_dispatch_awaited(&measure::new(), &[Pass::Give(text)]));
 
-    assert_eq!(read::<_, i64>(&mut frame, length), 7);
+    assert_eq!(read::<i64>(&mut frame, length), 7);
 }
 
 fn declaration_of<F: Declared<WordRuntime>>(f: F) -> (Interner, Declaration) {
