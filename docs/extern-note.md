@@ -52,6 +52,8 @@ The unsafe kinds' implementations sit on `Stores`, which every runtime implement
 
 A value that holds a loan is kept in a `Boxed` with its type, its lifetimes included, erased. An entry opens it again at one named lifetime of its own, `'call`, that every loan of the call takes: never `'static`, and never a lifetime the code around it can stretch, so the body, checked against its own signature's lifetimes, only narrows what it holds, and the loans' life is the flows' premise.
 
+A declaration mirrors the Rust types as written. `Uniform<R, X>` stands for `X`'s acvus type, held uniformly; a whole concrete extern-defined type written natively is marked `#`, and one that holds a `Uniform` or a variable anywhere is not. So an impl or an overload written with `Uniform` is the one generic code reaches, and one written natively is its `#` counterpart, which the compiler picks between (types §8). A body that awaits declares `awaits` and an effect that suspends; the compiler is left as it is.
+
 `Registry: Runtime` is a runtime that registers extern fns. An extern fn reaches it as a type implementing `ExternFn`, which states its own declaration and whose fixed parameter shape is an associated type: its `N` arguments are `Self::Args`, a `[Value; N]`, which `call` takes; the registry gives the declarations to the compiler. Because the runtime receives each extern fn as a type rather than as an erased function, it can build specialized operations around one: a natural closed loop with its `next` inlined differs greatly from one that calls through an erased function. The macros are what implement `ExternFn`.
 
 ## Kinds
