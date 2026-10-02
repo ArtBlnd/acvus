@@ -1,5 +1,8 @@
-//! The safe kinds. Each is a runtime's associated type, implementable without
-//! `unsafe`; a misuse a safe runtime detects inside one panics.
+//! The kinds, each a runtime's associated type. A safe kind is implementable
+//! without `unsafe`, and a misuse a safe runtime detects inside one panics.
+//! An unsafe kind, Opaque or Ref, reads a value back on the compiler's
+//! premise; the extern crate provides one implementation of each over
+//! `Stores`.
 //!
 //! A value is given to the runtime by `make` and taken back whole by `take`,
 //! which ends the runtime's hold of it. A view is lent in continuation-passing
@@ -86,6 +89,41 @@ where
 {
     fn make(rt: &R, tag: usize, payload: R::Value) -> R::Value;
     fn take<E>(rt: &R, value: R::Value, variants: &[fn(&R, R::Value) -> E]) -> E;
+}
+
+/// The kind of an extern-defined type: a value of any Rust type `X`, held
+/// with its type erased. `X` needs no `'static`, so a value holding a loan is
+/// held as it is; it is `Send + Sync`, so a spawn may carry it.
+pub trait OpaqueKind<R>
+where
+    R: Runtime,
+{
+    fn make<X>(rt: &R, value: X) -> R::Value
+    where
+        X: Send + Sync;
+    fn take<X>(rt: &R, value: R::Value) -> X;
+    fn view<X, O>(rt: &R, value: &R::Value, lent: impl FnOnce(&X) -> O) -> O;
+    fn view_mut<X, O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut X) -> O) -> O;
+}
+
+/// The kind of `Ref`: a reference value, made from a Rust reference into
+/// Rust memory and read back as one only within a view.
+pub trait RefKind<R>
+where
+    R: Runtime,
+{
+    fn make<X>(rt: &R, reference: &X) -> R::Value
+    where
+        X: ?Sized;
+    fn make_mut<X>(rt: &R, reference: &mut X) -> R::Value
+    where
+        X: ?Sized;
+    fn view<X, O>(rt: &R, value: &R::Value, lent: impl FnOnce(&X) -> O) -> O
+    where
+        X: ?Sized;
+    fn view_mut<X, O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut X) -> O) -> O
+    where
+        X: ?Sized;
 }
 
 /// The kind of `Fn` and `Closures`: a function value, whether it runs on an

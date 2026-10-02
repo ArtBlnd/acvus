@@ -1,7 +1,8 @@
 //! A runtime that runs extern fns and nothing else. It holds every value in a
 //! slot it checks on each access, so a misuse panics, and it writes no
-//! `unsafe`: it is the evidence that the safe kinds are implementable
-//! without it.
+//! `unsafe`: it is the evidence that the safe kinds and `Stores` are
+//! implementable without it. Its unsafe kinds are the ones the extern crate
+//! provides.
 //!
 //! Its slots are thread-local because `Runtime::release` takes no runtime.
 
@@ -12,8 +13,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use acvus_extern::{
-    Arguments, EnumKind, ExternFn, FnKind, ObjectKind, OptionKind, Registry, ResultKind, Runtime, ScalarKind, StringKind,
-    TupleKind,
+    Arguments, Boxed, EnumKind, ExternFn, FnKind, ObjectKind, OptionKind, Registry, ResultKind, Runtime, ScalarKind,
+    Stores, StoredOpaque, StoredRef, StringKind, TupleKind, Words,
 };
 use acvus_mir::decl::Scheme;
 use acvus_mir::ty::{Poly, Types};
@@ -44,6 +45,8 @@ enum Held {
     Result(RefCell<Result<Value, Value>>),
     Enum { tag: usize, payload: Value },
     Fn(Body),
+    Boxed(RefCell<Boxed>),
+    Words(Words),
 }
 
 #[derive(Default)]
@@ -57,8 +60,14 @@ thread_local! {
 }
 
 fn hold(held: Held) -> Value {
+    hold_shared(Rc::new(held))
+}
+
+/// Holds `held` in a slot of its own; a value shared by `Runtime::share`
+/// holds the same `Rc` in two slots.
+fn hold_shared(held: Rc<Held>) -> Value {
     SLOTS.with_borrow_mut(|slots| {
-        let held = Some(Rc::new(held));
+        let held = Some(held);
         match slots.free.pop() {
             Some(at) => {
                 slots.held[at] = held;
@@ -78,15 +87,20 @@ fn lend(value: Value) -> Rc<Held> {
     SLOTS.with_borrow(|slots| slots.held[value.0].clone()).expect("safe runtime: a released value is used")
 }
 
-/// Ends the value's slot and gives back what it held.
-fn unhold(value: Value) -> Held {
+/// Ends the value's slot and gives back its share of what the slot held.
+fn unslot(value: Value) -> Rc<Held> {
     let held = SLOTS.with_borrow_mut(|slots| {
         let held = slots.held[value.0].take();
         slots.free.push(value.0);
         held
     });
-    let held = held.expect("safe runtime: a released value is released or taken again");
-    Rc::into_inner(held).expect("safe runtime: a value is released or taken while it is lent")
+    held.expect("safe runtime: a released value is released or taken again")
+}
+
+/// Ends the value's slot and gives back what it held, which no other slot or
+/// view may share: taking a value moves it out whole.
+fn unhold(value: Value) -> Held {
+    Rc::into_inner(unslot(value)).expect("safe runtime: a value is taken while it is lent or shared")
 }
 
 /// The number of values held, so that a test can show none is leaked.
@@ -157,9 +171,22 @@ impl Runtime for Safe {
     type Result = SafeResult;
     type Enum = SafeEnum;
     type Fn = SafeFn;
+    type Opaque = StoredOpaque;
+    type Ref = StoredRef;
+
+    fn share(&self, value: &Value) -> Value {
+        let held = lend(*value);
+        match &*held {
+            Held::Boxed(boxed) => hold(Held::Boxed(RefCell::new(boxed.borrow().share()))),
+            _ => hold_shared(held),
+        }
+    }
 
     fn release(value: Value) {
-        match unhold(value) {
+        let Some(held) = Rc::into_inner(unslot(value)) else {
+            return;
+        };
+        match held {
             Held::Tuple(parts) => {
                 for part in parts.into_inner() {
                     Safe::release(part);
@@ -192,7 +219,51 @@ impl Runtime for Safe {
             | Held::Char(_)
             | Held::Unit(_)
             | Held::String(_)
-            | Held::Fn(_) => {}
+            | Held::Fn(_)
+            | Held::Boxed(_)
+            | Held::Words(_) => {}
+        }
+    }
+}
+
+impl Stores for Safe {
+    fn hold(&self, boxed: Boxed) -> Value {
+        hold(Held::Boxed(RefCell::new(boxed)))
+    }
+
+    fn lend<O>(&self, value: &Value, lent: impl FnOnce(&Boxed) -> O) -> O {
+        match &*lend(*value) {
+            Held::Boxed(boxed) => lent(&boxed.borrow()),
+            _ => mismatch("an opaque value"),
+        }
+    }
+
+    fn lend_mut<O>(&self, value: &mut Value, lent: impl FnOnce(&mut Boxed) -> O) -> O {
+        match &*lend(*value) {
+            Held::Boxed(boxed) => lent(&mut boxed.borrow_mut()),
+            _ => mismatch("an opaque value"),
+        }
+    }
+
+    fn unhold(&self, value: Value) -> Boxed {
+        match unhold(value) {
+            Held::Boxed(boxed) => {
+                let boxed = boxed.into_inner();
+                assert!(boxed.is_unique(), "safe runtime: an opaque value is taken while another owner shares it");
+                boxed
+            }
+            _ => mismatch("an opaque value"),
+        }
+    }
+
+    fn hold_words(&self, words: Words) -> Value {
+        hold(Held::Words(words))
+    }
+
+    fn words(&self, value: &Value) -> Words {
+        match &*lend(*value) {
+            Held::Words(words) => *words,
+            _ => mismatch("a reference"),
         }
     }
 }
