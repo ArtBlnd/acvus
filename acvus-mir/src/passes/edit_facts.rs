@@ -533,7 +533,7 @@ mod tests {
         Declarations::verify(RawDeclarations {
             types,
             functions: Vec::new(),
-            lang_impls: Vec::new(),
+            generic_functions: Vec::new(),
             user_types: Vec::new(),
             casts: Vec::new(),
             conversions: Vec::new(),
@@ -1109,9 +1109,14 @@ mod tests {
         opaque: QualifiedRef,
     }
 
+    /// The impl at `at` of `generic`, a declaration of its own named `generic#at`.
+    fn impl_id(interner: &Interner, generic: QualifiedRef, at: usize) -> QualifiedRef {
+        QualifiedRef::qualified(generic.namespace, interner.intern(&format!("{}#{at}", interner.resolve(generic.name))))
+    }
+
     fn access_declarations(interner: &Interner) -> AccessDecls {
         use crate::decl::declared::{Access, Element, Mode, Place, Stored, Touch};
-        use crate::decl::{DeclaredFacts, GenericImplSig, Impls, Scheme, UserTypeDecl};
+        use crate::decl::{DeclaredFacts, GenericFunction, ImplKind, ImplOf, Scheme, UserTypeDecl};
 
         let name = |name: &str| QualifiedRef::root(interner.intern(name));
         let map = name("Map");
@@ -1142,32 +1147,35 @@ mod tests {
             });
             let access = touches.map(|touches| Access::Touches(touches.into())).into_iter().collect();
             let facts = DeclaredFacts { access, ..DeclaredFacts::default() };
+            let param_names: Box<[acvus_utils::Astr]> = (0..params.len()).map(|at| interner.intern(&format!("p{at}"))).collect();
+            let generic = GenericFunction { ty, param_names: param_names.clone(), bounds: Box::new([]), specialized: Box::new([]) };
             let scheme = Scheme {
                 ty,
-                param_names: (0..params.len()).map(|at| interner.intern(&format!("p{at}"))).collect(),
+                param_names,
                 bounds: Box::new([]),
-                impls: Some(Impls { concrete: Box::new([]), generic: Some(GenericImplSig { facts, awaits: false }) }),
+                impl_of: Some(ImplOf { generic_function: id, kind: ImplKind::Generic }),
                 requires: Box::new([]),
-                facts: DeclaredFacts::default(),
+                facts,
                 runs: Box::new([]),
                 awaits: false,
                 specialized: Box::new([]),
             };
-            (id, scheme)
+            ((id, generic), (impl_id(interner, id, 0), scheme))
         };
         let at = |element: Element| Place { param: 0, element: Some(element) };
         let (put, lookup, set, peek, opaque) = (name("put"), name("lookup"), name("set"), name("peek"), name("opaque"));
-        let functions = vec![
+        let declared = [
             declare(put, &[mut_map, int, int], unit, Some(vec![Touch { place: at(Element::Key(1)), mode: Mode::Store(Stored::Value(2)) }])),
             declare(lookup, &[mut_map, int], int, Some(vec![Touch { place: at(Element::Key(1)), mode: Mode::Read }])),
             declare(set, &[mut_slice, mut_int, index, int], unit, Some(vec![Touch { place: at(Element::Index(2)), mode: Mode::Store(Stored::Value(3)) }])),
             declare(peek, &[mut_slice, index], int, Some(vec![Touch { place: at(Element::Index(1)), mode: Mode::Read }])),
             declare(opaque, &[mut_slice, mut_int, index], unit, None),
         ];
+        let (generic_functions, functions): (Vec<_>, Vec<_>) = declared.into_iter().unzip();
         let decls = Declarations::verify(RawDeclarations {
             types,
             functions,
-            lang_impls: Vec::new(),
+            generic_functions,
             user_types: vec![UserTypeDecl {
                 id: map,
                 type_params: Box::new([]),
@@ -1243,7 +1251,7 @@ mod tests {
         let v = builder.push(constant(5), int, Span::ZERO);
         let k1 = builder.push(constant(1), int, Span::ZERO);
         let k2 = builder.push(constant(2), int, Span::ZERO);
-        let call = |id, callee_ty, args| Op::FunctionCall { callee: Callee::Extern { id, r#impl: Some(0), required: Vec::new(), member: crate::decl::PairMember::Uniform }, callee_ty, args };
+        let call = |id, callee_ty, args| Op::FunctionCall { callee: Callee::Extern { id: impl_id(&interner, id, 0), required: Vec::new(), member: crate::decl::PairMember::Uniform }, callee_ty, args };
         builder.push(call(a.put, put_ty, vec![m, k1, v]), unit, Span::ZERO);
         builder.push(call(a.lookup, lookup_ty, vec![m, k1]), int, Span::ZERO);
         builder.push(call(a.lookup, lookup_ty, vec![m, k2]), int, Span::ZERO);

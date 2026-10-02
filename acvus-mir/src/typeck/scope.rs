@@ -317,7 +317,7 @@ pub(super) fn check_ident(
     }
     let names_a_declaration = match name.namespace.is_root() {
         true => !cx.decls.overloads(name.name).is_empty(),
-        false => cx.decls.scheme(name).is_some(),
+        false => cx.decls.names_a_function(name),
     };
     match names_a_declaration {
         true => super::call::declaration_value(cx, name, span),

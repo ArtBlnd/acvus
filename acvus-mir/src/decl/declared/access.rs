@@ -1,9 +1,8 @@
 //! Access (extern-fn §3): which places a call touches, and how.
 
 use acvus_utils::QualifiedRef;
-use rustc_hash::FxHashMap;
 
-use super::{Element, Place, Stated, fits, fits_part};
+use super::{Element, Functions, Place, Stated, fits, fits_part};
 use crate::decl::{Refused, Scheme};
 use crate::ty::{EffectTerm, Mutability, Poly, Reissue, TyKind, Types};
 
@@ -68,7 +67,7 @@ impl Mode {
 pub(super) fn refuse_ill_formed(
     stated: &Stated<'_>,
     access: &[Access],
-    functions: &FxHashMap<QualifiedRef, Scheme>,
+    functions: &Functions<'_>,
     types: &mut Types<Poly>,
     refused: &mut Vec<Refused>,
 ) {
@@ -86,7 +85,7 @@ pub(super) fn refuse_ill_formed(
                     refuse_ill_formed_touch(stated, types, touch, refused);
                 }
             }
-            Access::Equivalence if stated.declared.function != stated.core.eq => {
+            Access::Equivalence if stated.impl_of != Some(stated.core.eq) => {
                 refused.push(Refused::EquivalenceNotOnEq { declared });
             }
             Access::Equivalence => {}
@@ -103,7 +102,7 @@ fn refuse_ill_formed_gives(
     stated: &Stated<'_>,
     place: &Place,
     through: Option<QualifiedRef>,
-    functions: &FxHashMap<QualifiedRef, Scheme>,
+    functions: &Functions<'_>,
     types: &mut Types<Poly>,
     refused: &mut Vec<Refused>,
 ) {
@@ -118,11 +117,10 @@ fn refuse_ill_formed_gives(
         }
         return;
     };
-    let Some(through_scheme) = functions.get(&through) else {
+    let Some(ty) = functions.ty(through) else {
         refused.push(Refused::GivesThroughDoesNotFit { declared, through });
         return;
     };
-    let ty = through_scheme.ty;
     let fitting = match held {
         Some(held) => {
             let lent = types.intern(TyKind::Ref(Mutability::Shared, held));
@@ -140,7 +138,9 @@ fn refuse_ill_formed_gives(
     if !fitting {
         refused.push(Refused::GivesThroughDoesNotFit { declared, through });
     }
-    if !is_declared_pure(types, through_scheme) {
+    // A generic function states no effect, so it is declared pure only
+    // where it is a declaration (extern-fn §6).
+    if !functions.declaration(through).is_some_and(|scheme| is_declared_pure(types, scheme)) {
         refused.push(Refused::GivesThroughNotPure { declared, through });
     }
 }

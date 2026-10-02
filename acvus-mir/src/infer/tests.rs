@@ -812,7 +812,7 @@ fn pure_fn(types: &mut Types<Poly>, params: Vec<crate::ty::TyId<Poly>>, ret: cra
 
 fn raw(names: &Interner, types: Types<Poly>, functions: Vec<(QualifiedRef, Scheme)>, casts: Vec<CastRule>) -> RawDeclarations {
     RawDeclarations {
-        lang_impls: Vec::new(),
+        generic_functions: Vec::new(),
         types,
         functions,
         user_types: Vec::new(),
@@ -852,7 +852,7 @@ fn instantiate_builds_opaque_nodes_at_fresh_variables() {
         ty: signature,
         param_names: Box::new([a, b]),
         bounds: Box::new([integer]),
-        impls: None,
+        impl_of: None,
         requires: Box::new([Requirement {
             generic_function: shared,
             pattern: t,
@@ -916,7 +916,7 @@ fn a_head_with_a_step_up_is_closed_only_when_nothing_may_change_it() {
         ty: signature,
         param_names: Box::new([v]),
         bounds: Box::new([]),
-        impls: None,
+        impl_of: None,
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
@@ -1076,7 +1076,7 @@ fn with_casts_and_conversions(
                 ty,
                 param_names: Box::new([v]),
                 bounds: Box::new([]),
-                impls: None,
+                impl_of: None,
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
@@ -1467,7 +1467,7 @@ fn an_effect_variable_no_parameter_gives_is_pure() {
         ty: signature,
         param_names: Box::new([]),
         bounds: Box::new([]),
-        impls: None,
+        impl_of: None,
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
@@ -1522,7 +1522,7 @@ fn a_calls_effect_is_its_own_joined_with_what_it_runs() {
         ty: signature,
         param_names: Box::new([a]),
         bounds: Box::new([]),
-        impls: None,
+        impl_of: None,
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([0]),

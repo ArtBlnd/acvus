@@ -9,7 +9,7 @@
 
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
-use super::{DeclaredFacts, Scheme, TyVarBound};
+use super::{GenericFunction, TyVarBound};
 use crate::ty::{Calls, CastTy, EffectTerm, FlowTerm, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
 /// The names of `core`'s generic functions: the lang items (operators §2).
@@ -115,10 +115,10 @@ impl Core {
     /// something only through its impls (operators §2), so each one's
     /// effect is a variable its impls choose. Its flows are what `verify`
     /// writes for a signature stating no lifetimes (extern-fn §4).
-    pub(super) fn generic_functions(&self, types: &mut Types<Poly>) -> Vec<(QualifiedRef, Scheme)> {
+    pub(super) fn generic_functions(&self, types: &mut Types<Poly>) -> Vec<(QualifiedRef, GenericFunction)> {
         let mut table = Table { types, names: self.params };
         let arithmetic = [self.add, self.sub, self.mul, self.div, self.rem];
-        let mut functions: Vec<(QualifiedRef, Scheme)> = arithmetic
+        let mut functions: Vec<(QualifiedRef, GenericFunction)> = arithmetic
             .into_iter()
             .map(|item| (item, table.binary_to_chosen()))
             .collect();
@@ -211,7 +211,7 @@ impl Table<'_> {
         self.types.intern(TyKind::Ref(mutability, target))
     }
 
-    fn scheme(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>, names: &[Astr], variables: usize) -> Scheme {
+    fn scheme(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>, names: &[Astr], variables: usize) -> GenericFunction {
         let ty = self.types.intern(TyKind::Fn {
             params: params.into(),
             ret,
@@ -221,21 +221,16 @@ impl Table<'_> {
             holds: Holds::Nothing,
             values: (),
         });
-        Scheme {
+        GenericFunction {
             ty,
             param_names: names.into(),
             bounds: vec![TyVarBound::Any; variables].into(),
-            impls: None,
-            requires: Box::new([]),
-            facts: DeclaredFacts::default(),
-            runs: Box::new([]),
-            awaits: false,
             specialized: Box::new([]),
         }
     }
 
     /// `add`, `sub`, `mul`, `div`, `rem`: `<T, O>(&T, &T) -> O`.
-    fn binary_to_chosen(&mut self) -> Scheme {
+    fn binary_to_chosen(&mut self) -> GenericFunction {
         let (t, o) = (self.var(0), self.var(1));
         let shared_t = self.reference(Mutability::Shared, t);
         let names = [self.names.receiver, self.names.rhs];
@@ -243,7 +238,7 @@ impl Table<'_> {
     }
 
     /// `clone<T>(&T) -> T`.
-    fn clone(&mut self) -> Scheme {
+    fn clone(&mut self) -> GenericFunction {
         let t = self.var(0);
         let shared_t = self.reference(Mutability::Shared, t);
         let names = [self.names.receiver];
@@ -251,7 +246,7 @@ impl Table<'_> {
     }
 
     /// `eq<T>(&T, &T) -> bool`, `cmp<T>(&T, &T) -> i64`.
-    fn compare(&mut self, answer: TyKind<Poly>) -> Scheme {
+    fn compare(&mut self, answer: TyKind<Poly>) -> GenericFunction {
         let t = self.var(0);
         let shared_t = self.reference(Mutability::Shared, t);
         let answer = self.types.intern(answer);
@@ -260,7 +255,7 @@ impl Table<'_> {
     }
 
     /// `neg<T, O>(&T) -> O`.
-    fn neg(&mut self) -> Scheme {
+    fn neg(&mut self) -> GenericFunction {
         let (t, o) = (self.var(0), self.var(1));
         let shared_t = self.reference(Mutability::Shared, t);
         let names = [self.names.receiver];
@@ -268,7 +263,7 @@ impl Table<'_> {
     }
 
     /// `display<T>(&T, out: &mut String)`.
-    fn display(&mut self) -> Scheme {
+    fn display(&mut self) -> GenericFunction {
         let t = self.var(0);
         let shared_t = self.reference(Mutability::Shared, t);
         let string = self.types.intern(TyKind::String);
@@ -279,7 +274,7 @@ impl Table<'_> {
     }
 
     /// `as_slice<C, T>(&C) -> &[T]`, `as_slice_mut<C, T>(&mut C) -> &mut [T]`.
-    fn view_of_slice(&mut self, mutability: Mutability) -> Scheme {
+    fn view_of_slice(&mut self, mutability: Mutability) -> GenericFunction {
         let (c, t) = (self.var(0), self.var(1));
         let lent_c = self.reference(mutability, c);
         let slice = self.types.intern(TyKind::Slice(t));
@@ -289,7 +284,7 @@ impl Table<'_> {
     }
 
     /// `len<C>(&C) -> u64`.
-    fn length(&mut self) -> Scheme {
+    fn length(&mut self) -> GenericFunction {
         let c = self.var(0);
         let shared_c = self.reference(Mutability::Shared, c);
         let u64_ty = self.types.intern(TyKind::Int(IntTy::U64));
@@ -298,7 +293,7 @@ impl Table<'_> {
     }
 
     /// `as_str<S>(&S) -> &str`.
-    fn view_of_str(&mut self) -> Scheme {
+    fn view_of_str(&mut self) -> GenericFunction {
         let s = self.var(0);
         let shared_s = self.reference(Mutability::Shared, s);
         let str_ty = self.types.intern(TyKind::Str);
@@ -308,7 +303,7 @@ impl Table<'_> {
     }
 
     /// `unwrap<W, T>(W) -> T`.
-    fn unwrap(&mut self) -> Scheme {
+    fn unwrap(&mut self) -> GenericFunction {
         let (w, t) = (self.var(0), self.var(1));
         let names = [self.names.receiver];
         self.scheme(&[w], t, &names, 2)
@@ -317,7 +312,7 @@ impl Table<'_> {
     /// `as_ref<S, T>(&S) -> T`, `as_mut<S, T>(&mut S) -> T`: `T` is `S`
     /// with each part lent, which no signature states, so the language
     /// answers it at the call (operators §2).
-    fn lend(&mut self, mutability: Mutability) -> Scheme {
+    fn lend(&mut self, mutability: Mutability) -> GenericFunction {
         let (s, t) = (self.var(0), self.var(1));
         let lent_s = self.reference(mutability, s);
         let names = [self.names.receiver];
@@ -325,7 +320,7 @@ impl Table<'_> {
     }
 
     /// `default<T>() -> T`.
-    fn default(&mut self) -> Scheme {
+    fn default(&mut self) -> GenericFunction {
         let t = self.var(0);
         self.scheme(&[], t, &[], 1)
     }
@@ -345,7 +340,7 @@ mod tests {
         variables: usize,
     }
 
-    fn check(types: &Types<Poly>, interner: &Interner, scheme: &Scheme, expected: Expected) {
+    fn check(types: &Types<Poly>, interner: &Interner, scheme: &GenericFunction, expected: Expected) {
         let TyKind::Fn {
             params,
             ret,
@@ -365,7 +360,6 @@ mod tests {
         let names: Vec<Astr> = expected.names.iter().map(|name| interner.intern(name)).collect();
         assert_eq!(&scheme.param_names[..], &names[..]);
         assert_eq!(&scheme.bounds[..], &vec![TyVarBound::Any; expected.variables][..]);
-        assert!(scheme.impls.is_none() && scheme.requires.is_empty());
     }
 
     /// operators §5: `as` names the numbers, `bool` and `char`, and nothing

@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{Graph, Refusal, Source, Stop, Unit};
-use crate::decl::{Core, Declarations, EntryDecl, ImplSig, Impls, LoopMarkers, RawDeclarations};
+use crate::decl::{Core, Declarations, EntryDecl, ImplKind, ImplOf, LoopMarkers, RawDeclarations, Scheme};
 use crate::passes::pipeline::Level;
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
@@ -23,7 +23,7 @@ impl Fixture {
         let core = Core::of(&names);
         let mut fx = Fixture {
             raw: RawDeclarations {
-                lang_impls: Vec::new(),
+                generic_functions: Vec::new(),
                 types: Types::new(),
                 functions: Vec::new(),
                 user_types: Vec::new(),
@@ -37,17 +37,30 @@ impl Fixture {
             names,
             units: Vec::new(),
         };
-        let concrete = [IntTy::U8, IntTy::I64]
+        let add = fx.raw.core.add;
+        let impls: Vec<_> = [IntTy::U8, IntTy::I64]
             .into_iter()
-            .map(|width| {
+            .enumerate()
+            .map(|(at, width)| {
                 let w = fx.raw.types.intern(TyKind::Int(width));
                 let shared = fx.raw.types.intern(TyKind::Ref(Mutability::Shared, w));
                 let ty = fx.pure(&[shared, shared], w);
-                ImplSig { ty, bounds: Box::new([]), param_names: Box::new([fx.names.intern("p0"), fx.names.intern("p1")]), requires: Box::new([]), facts: Default::default(), runs: Box::new([]), specialized: Box::new([]), awaits: false }
+                let id = QualifiedRef::qualified(add.namespace, fx.names.intern(&format!("{}#{at}", fx.names.resolve(add.name))));
+                let scheme = Scheme {
+                    ty,
+                    bounds: Box::new([]),
+                    param_names: Box::new([fx.names.intern("p0"), fx.names.intern("p1")]),
+                    impl_of: Some(ImplOf { generic_function: add, kind: ImplKind::Concrete }),
+                    requires: Box::new([]),
+                    facts: Default::default(),
+                    runs: Box::new([]),
+                    specialized: Box::new([]),
+                    awaits: false,
+                };
+                (id, scheme)
             })
             .collect();
-        let add = fx.raw.core.add;
-        fx.raw.lang_impls.push((add, Impls { concrete, generic: None }));
+        fx.raw.functions.extend(impls);
         fx
     }
 

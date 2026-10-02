@@ -469,7 +469,7 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
                     ty: rule.to,
                     param_names: Box::new([]),
                     bounds: vec![TyVarBound::Any; super::decision::variables_of(cx.decls.types(), &[rule.to])].into(),
-                    impls: None,
+                    impl_of: None,
                     requires: Box::new([]),
                     facts: DeclaredFacts::default(),
                     runs: Box::new([]),

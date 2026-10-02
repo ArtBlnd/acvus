@@ -237,8 +237,8 @@ impl Raiser<'_> {
     /// other callee's is unknown.
     fn call(&self, queries: &mut Queries<'_, '_>, callee: &Callee, args: &[ValueId], works: &mut FxHashMap<Ty, bool>) -> Ending {
         match callee {
-            Callee::Extern { id, r#impl, required, .. } => {
-                let own = Ending::declared(self.decls.call_facts(*id, *r#impl).ends);
+            Callee::Extern { id, required, .. } => {
+                let own = Ending::declared(self.decls.call_facts(*id).ends);
                 let with_required = required.iter().fold(own, |ending, chosen| ending.and(self.chosen(chosen)));
                 args.iter().fold(with_required, |ending, arg| ending.and(self.work_given(queries, *arg, works)))
             }
@@ -253,7 +253,7 @@ impl Raiser<'_> {
     /// The declared ending of a chosen impl and of those chosen for its own
     /// requirements.
     fn chosen(&self, chosen: &Chosen) -> Ending {
-        let own = Ending::declared(self.decls.call_facts(chosen.generic_function, Some(chosen.r#impl)).ends);
+        let own = Ending::declared(self.decls.call_facts(chosen.function).ends);
         chosen.required.iter().fold(own, |ending, required| ending.and(self.chosen(required)))
     }
 
@@ -504,7 +504,7 @@ mod tests {
             ty,
             param_names: Box::new([f.name("f")]),
             bounds: Box::new([]),
-            impls: None,
+            impl_of: None,
             requires: Box::new([]),
             facts: DeclaredFacts { ends: Ends::Total, ..DeclaredFacts::default() },
             runs: Box::new([]),
@@ -514,7 +514,7 @@ mod tests {
         let decls = Declarations::verify(RawDeclarations {
             types,
             functions: vec![(id, scheme)],
-            lang_impls: Vec::new(),
+            generic_functions: Vec::new(),
             user_types: Vec::new(),
             casts: Vec::new(),
             conversions: Vec::new(),
@@ -740,7 +740,7 @@ mod tests {
         builder.param(na, int, Span::ZERO);
         let closure = builder.push(closure(vec![callee]), closure_ty, Span::ZERO);
         let call = Op::FunctionCall {
-            callee: Callee::Extern { id: apply.id, r#impl: None, required: Vec::new(), member: PairMember::Uniform },
+            callee: Callee::Extern { id: apply.id, required: Vec::new(), member: PairMember::Uniform },
             callee_ty: apply.callee_ty,
             args: vec![closure],
         };

@@ -3,11 +3,9 @@
 //! declared.
 
 use acvus_utils::QualifiedRef;
-use rustc_hash::FxHashMap;
 
-use super::{Place, Stated, fits};
+use super::{Functions, Place, Stated, fits};
 use crate::decl::Refused;
-use crate::decl::Scheme;
 use crate::ty::{Mutability, Poly, TyId, TyKind, Types};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +49,7 @@ pub struct Update {
 pub(super) fn refuse_ill_formed(
     stated: &Stated<'_>,
     actions: &[Action],
-    functions: &FxHashMap<QualifiedRef, Scheme>,
+    functions: &Functions<'_>,
     types: &mut Types<Poly>,
     refused: &mut Vec<Refused>,
 ) {
@@ -72,7 +70,7 @@ pub(super) fn refuse_ill_formed(
 fn refuse_ill_formed_update(
     stated: &Stated<'_>,
     update: &Update,
-    functions: &FxHashMap<QualifiedRef, Scheme>,
+    functions: &Functions<'_>,
     types: &mut Types<Poly>,
     refused: &mut Vec<Refused>,
 ) {
@@ -80,23 +78,27 @@ fn refuse_ill_formed_update(
     if !stated.place_well_formed(types, &update.place, true, refused) {
         return;
     }
-    let Some(combine) = functions.get(&update.combine).filter(|scheme| states_combine(scheme)) else {
+    let Some(combine) = functions.ty(update.combine).filter(|_| states_combine(functions, update.combine)) else {
         refused.push(Refused::UpdateByNoCombine { declared, combine: update.combine });
         return;
     };
     if let Some(held) = stated.held_at(types, &update.place) {
         let lent_mut = types.intern(TyKind::Ref(Mutability::Mut, held));
         let unit = types.intern(TyKind::Unit);
-        let fitting = fits(types, combine.ty, &[lent_mut, held], unit) || fits(types, combine.ty, &[held, held], held);
+        let fitting = fits(types, combine, &[lent_mut, held], unit) || fits(types, combine, &[held, held], held);
         if !fitting {
             refused.push(Refused::CombineDoesNotFit { declared, combine: update.combine });
         }
     }
 }
 
-/// Whether `scheme` or one of its impls is declared a combine.
-fn states_combine(scheme: &Scheme) -> bool {
-    super::stated_facts(scheme).any(|facts| facts.action.iter().any(|action| matches!(action, Action::Combine(_))))
+/// Whether `function`, or one of its impls where it is a generic function,
+/// is declared a combine.
+fn states_combine(functions: &Functions<'_>, function: QualifiedRef) -> bool {
+    functions
+        .stated_facts(function)
+        .into_iter()
+        .any(|facts| facts.action.iter().any(|action| matches!(action, Action::Combine(_))))
 }
 
 /// A combine is an operation on one `S`, value shaped or update shaped,
@@ -105,7 +107,7 @@ fn states_combine(scheme: &Scheme) -> bool {
 fn refuse_ill_formed_combine(
     stated: &Stated<'_>,
     combine: &Combine,
-    functions: &FxHashMap<QualifiedRef, Scheme>,
+    functions: &Functions<'_>,
     types: &mut Types<Poly>,
     refused: &mut Vec<Refused>,
 ) {
@@ -115,7 +117,7 @@ fn refuse_ill_formed_combine(
         return;
     };
     let mut is_element = |element: QualifiedRef| {
-        let element_ty = functions.get(&element).map(|scheme| scheme.ty);
+        let element_ty = functions.ty(element);
         element_ty.is_some_and(|ty| fits(types, ty, &[], state))
     };
     if let Some(identity) = combine.identity
@@ -136,17 +138,15 @@ fn refuse_ill_formed_inverse(
     stated: &Stated<'_>,
     place: &Place,
     other: QualifiedRef,
-    functions: &FxHashMap<QualifiedRef, Scheme>,
+    functions: &Functions<'_>,
     types: &Types<Poly>,
     refused: &mut Vec<Refused>,
 ) {
     if !stated.place_well_formed(types, place, true, refused) {
         return;
     }
-    let updates_the_place = functions.get(&other).is_some_and(|scheme| {
-        super::stated_facts(scheme).any(|facts| {
-            facts.action.iter().any(|action| matches!(action, Action::Update(update) if update.place == *place))
-        })
+    let updates_the_place = functions.stated_facts(other).into_iter().any(|facts| {
+        facts.action.iter().any(|action| matches!(action, Action::Update(update) if update.place == *place))
     });
     if !updates_the_place {
         refused.push(Refused::InverseNotAnUpdateAtThePlace { declared: stated.declared, inverse: other });

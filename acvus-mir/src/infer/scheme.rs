@@ -7,7 +7,7 @@ use acvus_utils::QualifiedRef;
 use rustc_hash::FxHashMap;
 
 use super::{Bound, FlowId, Infer, Level, Term};
-use crate::decl::{Declarations, NamedFact, Scheme, TyVarBound, effect_variables, identity_variables};
+use crate::decl::{Declarations, GenericFunction, NamedFact, Requirement, Scheme, TyVarBound, effect_variables, identity_variables};
 use crate::ty::{
     Calls, CallsTerm, Concrete, Effect, EffectTerm, FlowTerm, Flows, FnValues, Holds, HoldsTerm, IdentityId, IdentityTerm,
     Infer as InferPhase, Label, LenTerm, LenVarId, Mark, MarkTerm, Phase, Poly, Ty, TyId, TyKind, Types,
@@ -20,6 +20,14 @@ pub struct RequiredAt {
     pub generic_function: QualifiedRef,
     pub pattern: Term,
     pub fact: Option<NamedFact>,
+}
+
+/// What a use instantiates of a declaration or a generic function.
+struct Signature<'s> {
+    ty: TyId<Poly>,
+    bounds: &'s [TyVarBound],
+    specialized: &'s [TyId<Poly>],
+    requires: &'s [Requirement],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -153,8 +161,26 @@ impl Infer {
     /// `scheme`, whose types are in `poly`, at fresh variables, as
     /// `instantiate` makes a declaration's.
     pub fn instantiate_in(&mut self, poly: &Types<Poly>, scheme: &Scheme) -> Instantiated {
+        let signature = Signature { ty: scheme.ty, bounds: &scheme.bounds, specialized: &scheme.specialized, requires: &scheme.requires };
+        self.instantiate_signature(poly, signature, Some(&scheme.runs))
+    }
+
+    /// `generic`'s signature at fresh variables, as `instantiate` makes a
+    /// declaration's. A generic function's call reaches one of its impls,
+    /// and the impl's own signature states the work the call runs
+    /// (extern-fn §6), so the generic function's effect is the one its
+    /// impl's instantiation makes, related to it by the caller.
+    pub fn instantiate_generic(&mut self, decls: &Declarations, generic: &GenericFunction) -> Instantiated {
+        let signature = Signature { ty: generic.ty, bounds: &generic.bounds, specialized: &generic.specialized, requires: &[] };
+        self.instantiate_signature(decls.types(), signature, None)
+    }
+
+    /// `signature` at fresh variables: where `runs` is given, a call's,
+    /// whose effect is a fresh variable its own effect and each of `runs`
+    /// flow into.
+    fn instantiate_signature(&mut self, poly: &Types<Poly>, signature: Signature<'_>, runs: Option<&[u32]>) -> Instantiated {
         let mut at = AtUse::new(poly, Placeholders::Declared);
-        let vars: Vec<Term> = scheme.bounds.iter().map(|declared| self.fresh(bound_of(declared))).collect();
+        let vars: Vec<Term> = signature.bounds.iter().map(|declared| self.fresh(bound_of(declared))).collect();
         // A declaration's type variable never stands for a marked type
         // (types §8): each is kept unmarked for as long as it is solved.
         for var in &vars {
@@ -163,18 +189,14 @@ impl Infer {
             }
         }
         at.ty_vars.extend((0u32..).zip(vars));
-        self.mint_result_identities(&mut at, scheme.ty);
-        let (ty, flows) = match scheme.impls {
-            // A generic function's call reaches one of its impls, and the
-            // impl's own signature states the work the call runs
-            // (extern-fn §6), so the generic function's effect is the one
-            // its impl's instantiation makes, related to it by the caller.
-            Some(_) => (self.instantiate_ty(&mut at, scheme.ty), Vec::new()),
-            None => self.instantiate_running(&mut at, scheme.ty, &scheme.runs),
+        self.mint_result_identities(&mut at, signature.ty);
+        let (ty, flows) = match runs {
+            Some(runs) => self.instantiate_running(&mut at, signature.ty, runs),
+            None => (self.instantiate_ty(&mut at, signature.ty), Vec::new()),
         };
-        let (ty, pair) = self.with_pair_mark(poly, ty, &scheme.specialized);
+        let (ty, pair) = self.with_pair_mark(poly, ty, signature.specialized);
         let (ty, declared_result) = self.with_origin_marks(ty);
-        let requirements = scheme
+        let requirements = signature
             .requires
             .iter()
             .map(|required| RequiredAt {

@@ -29,7 +29,7 @@ impl Found {
         let raw = RawDeclarations {
             types: Types::new(),
             functions: Vec::new(),
-            lang_impls: Vec::new(),
+            generic_functions: Vec::new(),
             user_types: Vec::new(),
             casts: Vec::new(),
             conversions: Vec::new(),
@@ -206,7 +206,7 @@ fn body_returning_its_parameter(by: ClaimedBy, flows: Flows) -> Vec<crate::check
     let raw = RawDeclarations {
         types: Types::new(),
         functions: Vec::new(),
-        lang_impls: Vec::new(),
+        generic_functions: Vec::new(),
         user_types: Vec::new(),
         casts: Vec::new(),
         conversions: Vec::new(),
@@ -258,7 +258,7 @@ fn required(source: &str) -> Vec<crate::check::Refusal> {
     let raw = RawDeclarations {
         types: Types::new(),
         functions: Vec::new(),
-        lang_impls: Vec::new(),
+        generic_functions: Vec::new(),
         user_types: Vec::new(),
         casts: Vec::new(),
         conversions: Vec::new(),

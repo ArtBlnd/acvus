@@ -202,7 +202,7 @@ enum Shape {
     StringConcat,
     StringEq,
     StringClone,
-    AsSlice { mutability: Mutability, id: QualifiedRef, r#impl: Option<usize> },
+    AsSlice { mutability: Mutability, r#impl: QualifiedRef },
     ArrayView(Mutability),
     SliceLen,
     /// An `Index`: whether it yields the element itself, and whether it
@@ -236,7 +236,7 @@ enum Shape {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum CalleeKey {
     Direct(QualifiedRef),
-    Extern { id: QualifiedRef, r#impl: Option<usize>, required: Vec<Chosen>, member: PairMember },
+    Extern { id: QualifiedRef, required: Vec<Chosen>, member: PairMember },
     Indirect,
 }
 
@@ -300,9 +300,7 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
         Op::StringConcat { .. } => Shape::StringConcat,
         Op::StringEq { .. } => Shape::StringEq,
         Op::StringClone { .. } => Shape::StringClone,
-        Op::AsSlice { mutability, r#impl, .. } => {
-            Shape::AsSlice { mutability: *mutability, id: r#impl.id, r#impl: r#impl.r#impl }
-        }
+        Op::AsSlice { mutability, r#impl, .. } => Shape::AsSlice { mutability: *mutability, r#impl: *r#impl },
         Op::ArrayView { mutability, .. } => Shape::ArrayView(*mutability),
         Op::SliceLen { .. } => Shape::SliceLen,
         Op::Index { mode, bound, .. } => Shape::Index {
@@ -330,8 +328,8 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
             }
             let callee = match callee {
                 Callee::Direct(id) => CalleeKey::Direct(*id),
-                Callee::Extern { id, r#impl, required, member } => {
-                    CalleeKey::Extern { id: *id, r#impl: *r#impl, required: required.clone(), member: *member }
+                Callee::Extern { id, required, member } => {
+                    CalleeKey::Extern { id: *id, required: required.clone(), member: *member }
                 }
                 Callee::Indirect(_) => CalleeKey::Indirect,
             };

@@ -2,7 +2,7 @@ use acvus_utils::{Interner, QualifiedRef};
 
 use super::*;
 use crate::decl::{
-    Core, Declarations, DeclaredFacts, Ends, GenericImplSig, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme,
+    Core, Declarations, DeclaredFacts, Ends, GenericFunction, ImplKind, ImplOf, LoopMarkers, RawDeclarations, Scheme,
 };
 use crate::ty::{Mark, MarkTerm};
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Mutability, TyKind, Types};
@@ -21,7 +21,7 @@ impl Fixture {
             raw: RawDeclarations {
                 types: Types::new(),
                 functions: Vec::new(),
-                lang_impls: Vec::new(),
+                generic_functions: Vec::new(),
                 user_types: Vec::new(),
                 casts: Vec::new(),
                 conversions: Vec::new(),
@@ -71,20 +71,33 @@ impl Fixture {
         self.push(name, scheme)
     }
 
-    /// `name`, of type `fn(params) -> ret`, whose one impl, the generic
-    /// one, states `facts`.
+    /// The generic function `name`, of type `fn(params) -> ret`, with one
+    /// impl, the generic one, `name#0`, stating `facts`. The result is the
+    /// impl.
     fn declare_generic(&mut self, name: &str, params: &[TyId<Poly>], ret: TyId<Poly>, facts: DeclaredFacts) -> QualifiedRef {
-        let impls = Impls { concrete: Box::new([]), generic: Some(GenericImplSig { facts, awaits: false }) };
-        let scheme = self.scheme(params, ret, Some(impls), DeclaredFacts::default());
-        self.push(name, scheme)
+        let generic = self.generic_function(params, ret);
+        let id = QualifiedRef::root(self.interner.intern(name));
+        self.raw.generic_functions.push((id, generic));
+        let impl_of = ImplOf { generic_function: id, kind: ImplKind::Generic };
+        let scheme = self.scheme(params, ret, Some(impl_of), facts);
+        self.push_impl(id, 0, scheme)
     }
 
-    fn scheme(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>, impls: Option<Impls>, facts: DeclaredFacts) -> Scheme {
+    fn generic_function(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>) -> GenericFunction {
+        GenericFunction {
+            ty: self.function(params, ret),
+            param_names: self.param_names(params.len()),
+            bounds: Box::new([]),
+            specialized: Box::new([]),
+        }
+    }
+
+    fn scheme(&mut self, params: &[TyId<Poly>], ret: TyId<Poly>, impl_of: Option<ImplOf>, facts: DeclaredFacts) -> Scheme {
         Scheme {
             ty: self.function(params, ret),
             param_names: self.param_names(params.len()),
             bounds: Box::new([]),
-            impls,
+            impl_of,
             requires: Box::new([]),
             facts,
             runs: Box::new([]),
@@ -99,15 +112,32 @@ impl Fixture {
         id
     }
 
+    /// The impl at `at` of `generic`, a declaration of its own named `generic#at`.
+    fn push_impl(&mut self, generic: QualifiedRef, at: usize, scheme: Scheme) -> QualifiedRef {
+        let id = QualifiedRef::qualified(generic.namespace, self.interner.intern(&format!("{}#{at}", self.interner.resolve(generic.name))));
+        self.raw.functions.push((id, scheme));
+        id
+    }
+
     /// Gives `eq` the impl `fn(&i64, &i64) -> bool` stating `facts`.
     fn give_eq(&mut self, facts: DeclaredFacts) {
         let int = self.int();
         let shared = self.reference(Mutability::Shared, int);
         let bool_ty = self.ty(TyKind::Bool);
         let ty = self.function(&[shared, shared], bool_ty);
-        let r#impl = ImplSig { ty, bounds: Box::new([]), param_names: self.param_names(2), requires: Box::new([]), facts, runs: Box::new([]), specialized: Box::new([]), awaits: false };
         let eq = self.raw.core.eq;
-        self.raw.lang_impls.push((eq, Impls { concrete: Box::new([r#impl]), generic: None }));
+        let scheme = Scheme {
+            ty,
+            bounds: Box::new([]),
+            param_names: self.param_names(2),
+            impl_of: Some(ImplOf { generic_function: eq, kind: ImplKind::Concrete }),
+            requires: Box::new([]),
+            facts,
+            runs: Box::new([]),
+            specialized: Box::new([]),
+            awaits: false,
+        };
+        self.push_impl(eq, 0, scheme);
     }
 
     fn refusals(self) -> Vec<Refused> {
@@ -156,7 +186,7 @@ fn ending(ends: Ends) -> DeclaredFacts {
 }
 
 fn own(f: QualifiedRef) -> Declared {
-    Declared { function: f, r#impl: None }
+    Declared { function: f }
 }
 
 /// One form of each kind, well formed: a store into a map's entry and a
@@ -401,29 +431,21 @@ fn a_relation_reads_a_concrete_impls_own_bounds() {
         let mut f = Fixture::new();
         let (var, int) = (f.ty(TyKind::Var(0)), f.int());
         let ty = f.function(&[var], int);
-        let r#impl = ImplSig {
+        let g = QualifiedRef::root(f.interner.intern("g"));
+        let at_impl = Scheme {
             ty,
             bounds: Box::new([bound]),
             param_names: f.param_names(1),
+            impl_of: Some(ImplOf { generic_function: g, kind: ImplKind::Concrete }),
             requires: Box::new([]),
             facts: relates(Atom::Result, Term::Atom(Atom::Arg(0))),
             runs: Box::new([]),
             awaits: false,
             specialized: Box::new([]),
         };
-        let scheme = Scheme {
-            ty,
-            param_names: f.param_names(1),
-            bounds: Box::new([TyVarBound::Any]),
-            impls: Some(Impls { concrete: Box::new([r#impl]), generic: None }),
-            requires: Box::new([]),
-            facts: DeclaredFacts::default(),
-            runs: Box::new([]),
-            awaits: false,
-            specialized: Box::new([]),
-        };
-        let g = f.push("g", scheme);
-        let at_impl = Declared { function: g, r#impl: Some(0) };
+        let function = GenericFunction { ty, param_names: f.param_names(1), bounds: Box::new([TyVarBound::Any]), specialized: Box::new([]) };
+        f.raw.generic_functions.push((g, function));
+        let at_impl = Declared { function: f.push_impl(g, 0, at_impl) };
         let expected = match refused {
             true => vec![Refused::RelationOverNonInteger { declared: at_impl, atom: Atom::Arg(0) }],
             false => Vec::new(),
@@ -462,7 +484,7 @@ fn a_declaration_without_impls_states_its_own_facts() {
     let read = touches(&[Touch { place: whole(0), mode: Mode::Read }]);
     let g = f.declare("g", &[shared_int], int, read.clone());
     let decls = f.verified();
-    assert_eq!(decls.call_facts(g, None), &read);
+    assert_eq!(decls.call_facts(g), &read);
 }
 
 /// `verify` checks the facts an impl states, the generic impl's at its
@@ -473,20 +495,6 @@ fn an_ill_formed_fact_on_a_generic_impl_is_refused() {
     let int = f.int();
     let g = f.declare_generic("g", &[int], int, touches(&[Touch { place: whole(0), mode: Mode::Read }]));
     assert_eq!(f.refusals(), vec![Refused::PlaceNotLent { declared: own(g), param: 0 }]);
-}
-
-/// A call of a declaration with impls reaches one of its impls, so facts
-/// stated on the declaration itself would be read by no call.
-#[test]
-fn facts_on_a_declaration_with_impls_are_refused() {
-    let mut f = Fixture::new();
-    let int = f.int();
-    let shared_int = f.reference(Mutability::Shared, int);
-    let read = touches(&[Touch { place: whole(0), mode: Mode::Read }]);
-    let impls = Impls { concrete: Box::new([]), generic: Some(GenericImplSig::default()) };
-    let scheme = f.scheme(&[shared_int], int, Some(impls), read);
-    let g = f.push("g", scheme);
-    assert_eq!(f.refusals(), vec![Refused::FactsBesideImpls { function: g }]);
 }
 
 /// extern-fn §3: a call that stores into a place may give back what it
@@ -743,7 +751,7 @@ fn how_a_call_ends_is_unstated_by_default() {
     let mut f = Fixture::new();
     let int = f.int();
     let g = f.declare("g", &[int], int, DeclaredFacts::default());
-    assert_eq!(f.verified().call_facts(g, None).ends, Ends::Unstated);
+    assert_eq!(f.verified().call_facts(g).ends, Ends::Unstated);
 }
 
 /// extern-fn §4: how a call's own code ends, stated on a declaration or
@@ -759,8 +767,8 @@ fn a_stated_ending_is_kept_through_verify() {
     let callback = f.function(&[int], int);
     let calls_back = f.declare("calls_back", &[callback], int, ending(Ends::Total));
     let decls = f.verified();
-    assert_eq!(decls.call_facts(returns, None).ends, Ends::Returns);
-    assert_eq!(decls.call_facts(total, None).ends, Ends::Total);
-    assert_eq!(decls.call_facts(by_impl, Some(0)).ends, Ends::Total);
-    assert_eq!(decls.call_facts(calls_back, None).ends, Ends::Total);
+    assert_eq!(decls.call_facts(returns).ends, Ends::Returns);
+    assert_eq!(decls.call_facts(total).ends, Ends::Total);
+    assert_eq!(decls.call_facts(by_impl).ends, Ends::Total);
+    assert_eq!(decls.call_facts(calls_back).ends, Ends::Total);
 }

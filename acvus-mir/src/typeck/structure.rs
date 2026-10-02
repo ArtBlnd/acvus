@@ -104,8 +104,8 @@ pub(super) fn reach_own(cx: &mut Ctxt<'_>, decision: Reach, at: OwnAt) -> Result
 /// the concrete impls, at the generic function's own signature.
 pub(super) fn lifted_offer(cx: &Ctxt<'_>, callee: &Callee, arity: usize) -> Option<Offer> {
     let CalleeLift { function, .. } = lift_of_callee(cx, callee, arity)?;
-    let scheme = cx.decls.scheme(function).expect("a lifted function is declared");
-    Some(Offer { declaration: function, r#impl: Some(Impl::Structural), ty: scheme.ty })
+    let (generic, _) = cx.decls.generic_function(function).expect("a lifted function is a generic function");
+    Some(Offer { declaration: function, r#impl: Some(Impl::Structural), ty: generic.ty })
 }
 
 /// Whether the type `decision`'s callee's lift stands at is not known yet:
@@ -428,8 +428,8 @@ fn reach_part(cx: &mut Ctxt<'_>, reach: PartReach<'_>) {
 /// there, which is refused: a reference where a parameter takes the
 /// variable by reference (types §4).
 fn at_type(cx: &mut Ctxt<'_>, function: QualifiedRef, shape: &LiftShape, ty: Term, span: Span) -> Option<Instantiated> {
-    let scheme = cx.decls.scheme(function).expect("a lifted function is declared");
-    let instantiated = super::decision::instantiate_scheme(cx, scheme, span);
+    let (generic, _) = cx.decls.generic_function(function).expect("a lifted function is a generic function");
+    let instantiated = super::decision::instantiate_generic(cx, generic, span);
     let TyKind::Fn { params, ret, .. } = cx.infer.types().kind(cx.infer.shallow(instantiated.ty)).clone() else {
         panic!("an instantiated signature is a function type (NotAFunction)");
     };

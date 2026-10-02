@@ -11,7 +11,7 @@ use acvus_ast::Literal;
 use crate::decl::Declarations;
 use crate::decl::declared::{Atom, Before, Subject};
 use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Definition, Inst, Module, Op, Terminator};
-use crate::ir::{Callee, ExternImpl, ForSource, SwitchKey, ValueId, known_len};
+use crate::ir::{Callee, ForSource, SwitchKey, ValueId, known_len};
 use crate::passes::analysis::{Analysis, Executable, Queries, SparseAnalysis, SparseFacts, solve_sparse};
 use crate::passes::domain::{
     Affine, AffineDomain, Bound, Combination, Constant, ConstantDomain, Interval, IntervalDomain, Limit, Symbol, ValueDomain,
@@ -253,10 +253,10 @@ impl SparseAnalysis for Intervals<'_> {
         }
         let result = inst.result().expect("the engine evaluates an instruction that yields a value");
         match inst.op() {
-            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. } if self.operand_types.is_integer(result) =>
+            Op::FunctionCall { callee: Callee::Extern { id, .. }, args, .. } if self.operand_types.is_integer(result) =>
             {
                 assert_eq!(args.len(), operands.len(), "an extern call's operands are its arguments");
-                let relations = &self.decls.call_facts(*id, *r#impl).relations;
+                let relations = &self.decls.call_facts(*id).relations;
                 let arg_interval = |atom: &Atom| declared_atom_interval(&self.operand_types, args, operands, atom);
                 bounds_on(relations, Atom::Result)
                     .iter()
@@ -358,7 +358,6 @@ impl Affines<'_> {
         &self,
         inst: &Inst,
         id: acvus_utils::QualifiedRef,
-        r#impl: Option<usize>,
         args: &[ValueId],
         named: &[Option<Combination<Symbol>>],
     ) -> Affine {
@@ -366,7 +365,7 @@ impl Affines<'_> {
         if !inst.result().is_some_and(|result| types.is_integer(result)) {
             return Affine::Top;
         }
-        let relations = &self.decls.call_facts(id, r#impl).relations;
+        let relations = &self.decls.call_facts(id).relations;
         let atom = |atom: &Atom| match atom {
             Atom::Arg(at) if types.is_integer(args[*at]) => named[*at].clone(),
             Atom::Len(Subject::Arg(at)) if types.is_slice(args[*at]) => Some(Combination::atom(Symbol::Len(args[*at]))),
@@ -398,9 +397,7 @@ impl SparseAnalysis for Affines<'_> {
         }
         match inst.op() {
             Op::SliceLen { src } => Affine::Exactly(Combination::atom(Symbol::Len(*src))),
-            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. } => {
-                self.declared_result(inst, *id, *r#impl, args, &named)
-            }
+            Op::FunctionCall { callee: Callee::Extern { id, .. }, args, .. } => self.declared_result(inst, *id, args, &named),
             _ => Affine::Top,
         }
     }
@@ -458,10 +455,10 @@ pub(in crate::passes) struct ValueBounds<'f> {
     pub types: &'f Types<Concrete>,
 }
 
-/// The extern impl that made a slice, and its arguments: a call's, or an
+/// The declaration that made a slice, and its arguments: a call's, or an
 /// `AsSlice`'s, whose one argument is its container.
 struct MadeBy<'b> {
-    r#impl: ExternImpl,
+    function: acvus_utils::QualifiedRef,
     args: &'b [ValueId],
 }
 
@@ -525,10 +522,8 @@ impl ValueBounds<'_> {
             return None;
         };
         match self.body.inst(made).op() {
-            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, args, .. } => {
-                Some(MadeBy { r#impl: ExternImpl { id: *id, r#impl: *r#impl }, args })
-            }
-            Op::AsSlice { container, r#impl, .. } => Some(MadeBy { r#impl: *r#impl, args: std::slice::from_ref(container) }),
+            Op::FunctionCall { callee: Callee::Extern { id, .. }, args, .. } => Some(MadeBy { function: *id, args }),
+            Op::AsSlice { container, r#impl, .. } => Some(MadeBy { function: *r#impl, args: std::slice::from_ref(container) }),
             _ => None,
         }
     }
@@ -536,7 +531,7 @@ impl ValueBounds<'_> {
     /// The limits its maker's declared Relations put on a slice's length,
     /// over its maker's arguments.
     fn declared_len_limits(&self, made_by: &MadeBy<'_>) -> Vec<Limit<Atom>> {
-        let facts = self.decls.call_facts(made_by.r#impl.id, made_by.r#impl.r#impl);
+        let facts = self.decls.call_facts(made_by.function);
         bounds_on(&facts.relations, Atom::Len(Subject::Result))
     }
 
@@ -630,7 +625,7 @@ mod tests {
     use super::*;
     use crate::passes::analysis::AnalysisManager;
     use crate::decl::declared::{Comparison, Relation, Term};
-    use crate::decl::{Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
+    use crate::decl::{Core, DeclaredFacts, GenericFunction, ImplKind, ImplOf, LoopMarkers, RawDeclarations, Scheme};
     use crate::ir::BinOp;
     use crate::passes::domain::{Bound, JoinSemiLattice};
     use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, IntTy, Poly, Ty, TyId, TyKind};
@@ -651,11 +646,21 @@ mod tests {
         Fixture { module: Module::new(types), interner: Interner::new(), int, byte, bool }
     }
 
-    fn declarations(interner: &Interner, functions: Vec<(QualifiedRef, Scheme)>, types: Types<Poly>) -> Declarations {
+    /// The impl at `at` of `generic`, a declaration of its own named `generic#at`.
+    fn impl_id(interner: &Interner, generic: QualifiedRef, at: usize) -> QualifiedRef {
+        QualifiedRef::qualified(generic.namespace, interner.intern(&format!("{}#{at}", interner.resolve(generic.name))))
+    }
+
+    fn declarations(
+        interner: &Interner,
+        functions: Vec<(QualifiedRef, Scheme)>,
+        generic_functions: Vec<(QualifiedRef, GenericFunction)>,
+        types: Types<Poly>,
+    ) -> Declarations {
         Declarations::verify(RawDeclarations {
             types,
             functions,
-            lang_impls: Vec::new(),
+            generic_functions,
             user_types: Vec::new(),
             casts: Vec::new(),
             conversions: Vec::new(),
@@ -710,7 +715,7 @@ mod tests {
     #[test]
     fn a_straight_line_folds() {
         let mut f = fixture();
-        let decls = declarations(&f.interner, Vec::new(), Types::new());
+        let decls = declarations(&f.interner, Vec::new(), Vec::new(), Types::new());
         let (name, int, byte) = (f.interner.intern("a"), f.int, f.byte);
         let mut builder = f.module.build_body(false, int);
         let a = builder.param(name, int, acvus_ast::Span::ZERO);
@@ -742,7 +747,7 @@ mod tests {
     #[test]
     fn a_diamond_on_a_known_condition_runs_one_arm() {
         let mut f = fixture();
-        let decls = declarations(&f.interner, Vec::new(), Types::new());
+        let decls = declarations(&f.interner, Vec::new(), Vec::new(), Types::new());
         let (int, bool) = (f.int, f.bool);
         let mut builder = f.module.build_body(false, int);
         let one = builder.push(constant(1), int, Span::ZERO);
@@ -783,7 +788,7 @@ mod tests {
     #[test]
     fn a_switch_on_a_known_key_runs_one_arm() {
         let mut f = fixture();
-        let decls = declarations(&f.interner, Vec::new(), Types::new());
+        let decls = declarations(&f.interner, Vec::new(), Vec::new(), Types::new());
         let int = f.int;
         let mut builder = f.module.build_body(false, int);
         let k = builder.push(constant(2), int, Span::ZERO);
@@ -825,7 +830,7 @@ mod tests {
     #[test]
     fn a_loop_counter_comes_from_the_for_and_a_carried_value_widens() {
         let mut f = fixture();
-        let decls = declarations(&f.interner, Vec::new(), Types::new());
+        let decls = declarations(&f.interner, Vec::new(), Vec::new(), Types::new());
         let int = f.int;
         let mut builder = f.module.build_body(false, int);
         let at = builder.push(constant(0), int, Span::ZERO);
@@ -898,24 +903,25 @@ mod tests {
             Relation { left: Term::Const(0), comparison: Comparison::Le, right: Term::Atom(Atom::Result) },
             Relation { left: Term::Atom(Atom::Result), comparison: Comparison::Lt, right: Term::Atom(Atom::Arg(0)) },
         ];
+        let generic = GenericFunction {
+            ty: declared,
+            param_names: Box::new([interner.intern("p0")]),
+            bounds: Box::new([]),
+            specialized: Box::new([]),
+        };
+        let at_impl = impl_id(&interner, id_f, 0);
         let scheme = Scheme {
             ty: declared,
             param_names: Box::new([interner.intern("p0")]),
             bounds: Box::new([]),
-            impls: Some(Impls {
-                concrete: Box::new([]),
-                generic: Some(GenericImplSig {
-                    facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() },
-                    awaits: false,
-                }),
-            }),
+            impl_of: Some(ImplOf { generic_function: id_f, kind: ImplKind::Generic }),
             requires: Box::new([]),
-            facts: DeclaredFacts::default(),
+            facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() },
             runs: Box::new([]),
             awaits: false,
             specialized: Box::new([]),
         };
-        let decls = declarations(&interner, vec![(id_f, scheme)], poly);
+        let decls = declarations(&interner, vec![(at_impl, scheme)], vec![(id_f, generic)], poly);
 
         let mut types = Types::new();
         let int = types.intern(TyKind::Int(IntTy::I64));
@@ -932,7 +938,7 @@ mod tests {
         let mut builder = module.build_body(false, int);
         let x = builder.push(constant(7), int, Span::ZERO);
         let call = Op::FunctionCall {
-            callee: Callee::Extern { id: id_f, r#impl: Some(0), required: Vec::new(), member: crate::decl::PairMember::Uniform },
+            callee: Callee::Extern { id: at_impl, required: Vec::new(), member: crate::decl::PairMember::Uniform },
             callee_ty,
             args: vec![x],
         };
@@ -969,24 +975,25 @@ mod tests {
         });
         let plus_one = Term::Add(Box::new(Term::Atom(Atom::Arg(0))), Box::new(Term::Const(1)));
         let relations = vec![Relation { left: Term::Atom(Atom::Result), comparison: Comparison::Eq, right: plus_one }];
+        let generic = GenericFunction {
+            ty: declared,
+            param_names: Box::new([interner.intern("p0")]),
+            bounds: Box::new([]),
+            specialized: Box::new([]),
+        };
+        let at_impl = impl_id(&interner, succ, 0);
         let scheme = Scheme {
             ty: declared,
             param_names: Box::new([interner.intern("p0")]),
             bounds: Box::new([]),
-            impls: Some(Impls {
-                concrete: Box::new([]),
-                generic: Some(GenericImplSig {
-                    facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() },
-                    awaits: false,
-                }),
-            }),
+            impl_of: Some(ImplOf { generic_function: succ, kind: ImplKind::Generic }),
             requires: Box::new([]),
-            facts: DeclaredFacts::default(),
+            facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() },
             runs: Box::new([]),
             awaits: false,
             specialized: Box::new([]),
         };
-        let decls = declarations(&interner, vec![(succ, scheme)], poly);
+        let decls = declarations(&interner, vec![(at_impl, scheme)], vec![(succ, generic)], poly);
 
         let mut types = Types::new();
         let int = types.intern(TyKind::Int(IntTy::I64));
@@ -1003,7 +1010,7 @@ mod tests {
         let mut builder = module.build_body(false, int);
         let a = builder.param(interner.intern("a"), int, Span::ZERO);
         let call = Op::FunctionCall {
-            callee: Callee::Extern { id: succ, r#impl: Some(0), required: Vec::new(), member: crate::decl::PairMember::Uniform },
+            callee: Callee::Extern { id: at_impl, required: Vec::new(), member: crate::decl::PairMember::Uniform },
             callee_ty,
             args: vec![a],
         };
@@ -1025,7 +1032,7 @@ mod tests {
     #[test]
     fn a_body_parameter_lies_in_its_type() {
         let mut f = fixture();
-        let decls = declarations(&f.interner, Vec::new(), Types::new());
+        let decls = declarations(&f.interner, Vec::new(), Vec::new(), Types::new());
         let (name, byte) = (f.interner.intern("a"), f.byte);
         let mut builder = f.module.build_body(false, byte);
         let a = builder.param(name, byte, Span::ZERO);
@@ -1050,7 +1057,7 @@ mod tests {
     #[test]
     fn an_arrays_counter_and_element_lie_in_their_types() {
         let mut f = fixture();
-        let decls = declarations(&f.interner, Vec::new(), Types::new());
+        let decls = declarations(&f.interner, Vec::new(), Vec::new(), Types::new());
         let (name, byte) = (f.interner.intern("xs"), f.byte);
         let array = f.module.types_mut().intern(TyKind::Array(byte, crate::ty::LenTerm::Known(3), ()));
         let count = f.module.types_mut().intern(TyKind::Int(IntTy::U64));

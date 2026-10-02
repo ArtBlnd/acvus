@@ -42,12 +42,11 @@ pub enum Alignment {
     Any,
 }
 
-/// An extern fn's declared signature: the scheme's own, or one concrete
-/// impl's.
+/// An extern fn's declared signature, a declaration's own: an impl is a
+/// declaration of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Declared {
     pub function: QualifiedRef,
-    pub r#impl: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

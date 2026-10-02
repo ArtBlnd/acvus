@@ -11,7 +11,7 @@ use crate::ty::{Concrete, Declared, FlowEnd, LifetimesOf, Poly, Ty, TyId, TyKind
 
 use super::labels::SegmentLabel;
 use super::segments::{Segment, segments};
-use super::verify::{FittedEnd, declared_signatures, fitted_ends, outlives_closure};
+use super::verify::{FittedEnd, fitted_ends, outlives_closure};
 use super::Declarations;
 
 /// For each output end of a call (its result, and each parameter through
@@ -41,11 +41,8 @@ pub fn call_flows(decls: &Declarations, declared: Declared, types: &Types<Concre
     let scheme = decls
         .scheme(declared.function)
         .unwrap_or_else(|| panic!("a call names {:?}, which is declared", declared.function));
-    let signature = declared_signatures(declared.function, scheme)
-        .find(|signature| signature.declared == declared)
-        .unwrap_or_else(|| panic!("{declared:?} is a signature its declaration states"));
-    let labelled = signature.lifetimes?;
-    let TyKind::Fn { params: declared_params, ret: declared_ret, .. } = decls.types().kind(signature.ty) else {
+    let labelled = scheme.facts.lifetimes.as_ref()?;
+    let TyKind::Fn { params: declared_params, ret: declared_ret, .. } = decls.types().kind(scheme.ty) else {
         panic!("a declared signature with lifetimes is a function type: verify refuses one that is not (LabelsDoNotFit)")
     };
     assert_eq!(declared_params.len(), params.len(), "a call passes one argument per parameter of its declaration");

@@ -286,7 +286,7 @@ fn traversal<S: Slot>(
                         let chosen = cx.reached(callee_site);
                         let slice = cx.builder.intern(TyKind::Slice(item));
                         let ty = cx.ref_ty(mutability, slice);
-                        let op = Op::AsSlice { container: reference, mutability, r#impl: cx.extern_impl(chosen) };
+                        let op = Op::AsSlice { container: reference, mutability, r#impl: cx.reached_function(chosen) };
                         cx.builder.push(op, ty, span)
                     }
                 },

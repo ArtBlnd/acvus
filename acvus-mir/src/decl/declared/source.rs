@@ -3,11 +3,10 @@
 
 use acvus_utils::QualifiedRef;
 
-use rustc_hash::FxHashMap;
 
 use super::relation::{Comparison, Term, refuse_ill_formed_term};
-use super::{Stated, fits, fits_part, step_state};
-use crate::decl::{Refused, Scheme};
+use super::{Functions, Stated, fits, fits_part, step_state};
+use crate::decl::Refused;
 use crate::ty::{Poly, TyId, TyKind, Types};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +59,7 @@ pub enum Step {
 pub(super) fn refuse_ill_formed(
     stated: &Stated<'_>,
     sources: &[Source],
-    functions: &FxHashMap<QualifiedRef, Scheme>,
+    functions: &Functions<'_>,
     types: &mut Types<Poly>,
     refused: &mut Vec<Refused>,
 ) {
@@ -77,7 +76,7 @@ pub(super) fn refuse_ill_formed(
 fn refuse_ill_formed_form(
     stated: &Stated<'_>,
     source: &Source,
-    functions: &FxHashMap<QualifiedRef, Scheme>,
+    functions: &Functions<'_>,
     types: &mut Types<Poly>,
     refused: &mut Vec<Refused>,
 ) {
@@ -103,7 +102,7 @@ fn refuse_ill_formed_form(
 fn refuse_ill_formed_stream(
     stated: &Stated<'_>,
     stream: &Stream,
-    functions: &FxHashMap<QualifiedRef, Scheme>,
+    functions: &Functions<'_>,
     types: &mut Types<Poly>,
     refused: &mut Vec<Refused>,
 ) {
@@ -135,12 +134,12 @@ fn refuse_ill_formed_consume(
     init: Step,
     update: Step,
     finish: Option<QualifiedRef>,
-    functions: &FxHashMap<QualifiedRef, Scheme>,
+    functions: &Functions<'_>,
     types: &mut Types<Poly>,
     refused: &mut Vec<Refused>,
 ) {
     let declared = stated.declared;
-    let declared_ty = |function: QualifiedRef| functions.get(&function).map(|scheme| scheme.ty);
+    let declared_ty = |function: QualifiedRef| functions.ty(function);
     let init_param = match init {
         Step::Param(param) => match stated.param(param, refused) {
             Some(ty) => Some(ty),

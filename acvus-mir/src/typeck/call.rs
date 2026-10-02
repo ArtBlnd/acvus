@@ -185,7 +185,7 @@ fn qualified_call<S: Slot>(
     args: &[&Expr<S>],
     span: Span,
 ) -> Term {
-    if cx.decls.scheme(name).is_some() {
+    if cx.decls.names_a_function(name) {
         cx.out.names.insert(name_site, Name::Declaration(name));
         let args = check_args(cx, args);
         return reach_call(cx, site, Callee::Declaration(name), args, span);

@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::hash::Hash;
 
 use acvus_utils::{Astr, QualifiedRef};
@@ -8,8 +9,8 @@ use super::conversions::{ConversionRule, VerifiedConversion};
 use super::labels::{LabelledSignature, Lifetime, SegmentLabel};
 use super::impl_fit::is_impl_of;
 use super::{
-    CastRule, ContextDecl, Core, Declarations, EntryDecl, Impls, RawDeclarations, Requirement, Scheme, TyVarBound, UserTypeDecl,
-    effect_variables,
+    CastRule, ContextDecl, Core, Declarations, EntryDecl, GenericFunction, ImplKind, ImplOf, Impls, RawDeclarations, Requirement,
+    Scheme, TyVarBound, UserTypeDecl, effect_variables,
 };
 use super::declared::{self, Atom, Subject};
 use super::segments::{Segment, segments};
@@ -103,13 +104,16 @@ pub enum Refused {
     /// A generic function declared under a lang item's name: the compiler
     /// builds every lang item's generic function itself (operators §2).
     CoreGenericFunction { id: QualifiedRef },
-    /// Impls given to a name that takes none: one that is no lang item, or a
-    /// lang item whose meaning is the language's own, `as_ref` and `as_mut`
-    /// (operators §2).
+    /// An impl of a lang item whose meaning is the language's own, which
+    /// takes none (operators §2).
     TakesNoImpls { id: QualifiedRef },
-    /// Facts stated on a declaration that has impls: a call reaches one of
-    /// its impls, whose facts are the call's (`Scheme`).
-    FactsBesideImpls { function: QualifiedRef },
+    /// A declaration stating it is an impl of what is no generic function
+    /// (extern-fn §6).
+    ImplOfNoGenericFunction { function: QualifiedRef, generic_function: QualifiedRef },
+    /// A second generic impl of one generic function: reach takes its
+    /// generic impl only where no concrete one answers, so it has at most
+    /// one.
+    TwoGenericImpls { generic_function: QualifiedRef },
     /// A declared fact names a parameter its signature does not have: a
     /// parameter is numbered as a call's arguments are (extern-fn §3).
     FactNamesNoParameter { declared: Declared, param: usize },
@@ -217,7 +221,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     let RawDeclarations {
         mut types,
         functions,
-        lang_impls,
+        generic_functions,
         user_types,
         casts,
         conversions,
@@ -228,12 +232,13 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     } = raw;
     let mut refused = Vec::new();
 
-    let functions = with_lang_items(&mut types, &core, functions, lang_impls, &mut refused);
+    let (functions, generic_functions) = with_lang_items(&mut types, &core, functions, generic_functions, &mut refused);
     let user_types = extern_types(user_types, &mut refused);
     let unreadable = refuse_unwritable_types(
         &types,
         DeclaredTypes {
             functions: &functions,
+            generic_functions: &generic_functions,
             user_types: &user_types,
             casts: &casts,
             conversions: &conversions,
@@ -243,25 +248,47 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         &mut refused,
     );
     refuse_type_variables_in_value_types(&types, &contexts, &entries, &mut refused);
-    refuse_array_types(&types, &functions, &mut refused);
+    refuse_array_types(&types, &functions, &generic_functions, &mut refused);
     refuse_unending_requirements(&types, &functions, &mut refused);
-    refuse_unfit_bounds(&types, &functions, &mut refused);
+    refuse_unfit_bounds(&types, &functions, &generic_functions, &mut refused);
     refuse_unrecorded_effects(&types, &functions, &mut refused);
     refuse_foreign_requirements(&types, &functions, &mut refused);
-    refuse_unfit_signatures(&types, &functions, &mut refused);
-    let declared_order = first_of_each(functions.iter().map(|(id, _)| *id));
-    let overloads = overloads(&declared_order);
-    let functions = first_stands(functions, &mut refused, |id| Refused::DuplicateFunction { id });
-    let contexts = first_stands(contexts, &mut refused, |id| Refused::DuplicateContext { id });
-    let misfits = refuse_misfit_impls(&types, &declared_order, &functions, &mut refused);
-    declared::refuse_ill_formed(&mut types, &core, &functions, &declared_order, &mut refused);
-    refuse_vias_not_their_functions(&types, &functions, &casts, &conversions, &mut refused);
-    let casts = cast_tree(&types, &casts, &functions, &misfits, &core, &mut refused);
-    let conversions = conversions_by_head(&types, conversions, &mut refused);
-    let lifts = functions
+    refuse_unfit_signatures(&types, &functions, &generic_functions, &mut refused);
+    let generic_order = first_of_each(generic_functions.iter().map(|(id, _)| *id));
+    let mut generic_functions = first_stands(generic_functions, &mut refused, |id| Refused::DuplicateFunction { id });
+    let function_order = first_of_each(functions.iter().map(|(id, _)| *id));
+    let mut functions = first_stands(functions, &mut refused, |id| Refused::DuplicateFunction { id });
+    // A function and a generic function under one name: neither stands, as
+    // nothing orders one before the other.
+    for id in &function_order {
+        if generic_functions.contains_key(id) {
+            functions.remove(id);
+            generic_functions.remove(id);
+            refused.push(Refused::DuplicateFunction { id: *id });
+        }
+    }
+    let function_order: Vec<QualifiedRef> = function_order.into_iter().filter(|id| functions.contains_key(id)).collect();
+    let generic_order: Vec<QualifiedRef> = generic_order.into_iter().filter(|id| generic_functions.contains_key(id)).collect();
+    // A bare name reaches a generic function or a declaration that is no
+    // impl: an impl is reached only through its generic function
+    // (extern-fn §6).
+    let reachable = generic_order
         .iter()
-        .filter(|(_, scheme)| scheme.impls.is_some())
-        .filter_map(|(id, scheme)| super::lift::lift_of(&types, scheme).map(|lift| (*id, lift)))
+        .copied()
+        .chain(function_order.iter().copied().filter(|id| functions.get(id).is_some_and(|scheme| scheme.impl_of.is_none())));
+    let overloads = overloads(&first_of_each(reachable));
+    let contexts = first_stands(contexts, &mut refused, |id| Refused::DuplicateContext { id });
+    let impls = impls_of(&function_order, &functions, &generic_functions, &core, &mut refused);
+    assert_generic_impls_are_their_signatures(&types, &generic_functions, &impls, &functions);
+    let misfits = refuse_misfit_impls(&types, &generic_order, &generic_functions, &impls, &functions, &mut refused);
+    let known = declared::Functions::new(&functions, &generic_functions, &impls);
+    declared::refuse_ill_formed(&mut types, &core, &known, &function_order, &mut refused);
+    refuse_vias_not_their_functions(&types, &functions, &casts, &conversions, &mut refused);
+    let casts = cast_tree(&types, &casts, &functions, &impls, &misfits, &core, &mut refused);
+    let conversions = conversions_by_head(&types, conversions, &mut refused);
+    let lifts = generic_functions
+        .iter()
+        .filter_map(|(id, generic)| super::lift::lift_of(&types, generic).map(|lift| (*id, lift)))
         .collect();
 
     let context_identities = contexts
@@ -269,9 +296,15 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         .flat_map(|(id, declared)| super::identity_variables(&types, [declared.ty]).into_iter().map(|placeholder| ((*id, placeholder), crate::ty::IdentityId::alloc())))
         .collect();
 
+    let mut impls = impls;
+    let generic_functions = generic_functions
+        .into_iter()
+        .map(|(id, generic)| (id, (generic, impls.remove(&id).unwrap_or_default())))
+        .collect();
     let decls = Declarations {
         types,
         functions,
+        generic_functions,
         overloads,
         user_types,
         casts,
@@ -283,7 +316,7 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
         loop_markers,
         core,
     };
-    let lifetimes_readable: Vec<QualifiedRef> = declared_order
+    let lifetimes_readable: Vec<QualifiedRef> = function_order
         .into_iter()
         .filter(|id| !unreadable.contains(id))
         .collect();
@@ -295,46 +328,79 @@ pub(super) fn verify(raw: RawDeclarations) -> Result<Declarations, Vec<Refused>>
     }
 }
 
-/// The declared functions with every lang item's generic function, built by
-/// the compiler from operators §2's table and given the impls declared for
-/// it, in front. A function declared under a lang item's name, and impls
-/// given to a name that is no lang item, are refused and left out; a lang
-/// item given impls twice keeps the first, as a function declared twice
-/// does.
+/// Every lang item's generic function, built by the compiler from
+/// operators §2's table, in front of the declared generic functions. A
+/// function or a generic function declared under a lang item's name is
+/// refused and left out.
 fn with_lang_items(
     types: &mut Types<Poly>,
     core: &Core,
     functions: Vec<(QualifiedRef, Scheme)>,
-    lang_impls: Vec<(QualifiedRef, Impls)>,
+    generic_functions: Vec<(QualifiedRef, GenericFunction)>,
     refused: &mut Vec<Refused>,
-) -> Vec<(QualifiedRef, Scheme)> {
-    let mut given: FxHashMap<QualifiedRef, Impls> = FxHashMap::default();
-    for (id, impls) in lang_impls {
-        if !core.names(id) || core.takes_no_impls(id) {
-            refused.push(Refused::TakesNoImpls { id });
-        } else if given.contains_key(&id) {
-            refused.push(Refused::DuplicateFunction { id });
-        } else {
-            given.insert(id, impls);
-        }
-    }
-    let mut all: Vec<(QualifiedRef, Scheme)> = core
-        .generic_functions(types)
-        .into_iter()
-        .map(|(id, scheme)| {
-            // A lang item is a generic function: given no impls, it has
-            // none, and no call reaches it (operators §2).
-            let impls = given.remove(&id).unwrap_or_default();
-            (id, Scheme { impls: Some(impls), ..scheme })
-        })
-        .collect();
-    for (id, scheme) in functions {
+) -> (Vec<(QualifiedRef, Scheme)>, Vec<(QualifiedRef, GenericFunction)>) {
+    let functions = not_under_core_names(core, functions, refused);
+    let declared = not_under_core_names(core, generic_functions, refused);
+    let all = core.generic_functions(types).into_iter().chain(declared).collect();
+    (functions, all)
+}
+
+/// `declared` without what is declared under a lang item's name, which is
+/// refused.
+fn not_under_core_names<D>(core: &Core, declared: Vec<(QualifiedRef, D)>, refused: &mut Vec<Refused>) -> Vec<(QualifiedRef, D)> {
+    let mut kept = Vec::new();
+    for (id, declaration) in declared {
         match core.names(id) {
             true => refused.push(Refused::CoreGenericFunction { id }),
-            false => all.push((id, scheme)),
+            false => kept.push((id, declaration)),
         }
     }
-    all
+    kept
+}
+
+/// Each generic function's impls: every declaration that states it is one,
+/// the concrete ones in declaration order. An impl of what is no generic
+/// function is refused, as is an impl of a lang item that takes none, and
+/// a second generic impl of one generic function.
+fn impls_of(
+    function_order: &[QualifiedRef],
+    functions: &FxHashMap<QualifiedRef, Scheme>,
+    generic_functions: &FxHashMap<QualifiedRef, GenericFunction>,
+    core: &Core,
+    refused: &mut Vec<Refused>,
+) -> FxHashMap<QualifiedRef, Impls> {
+    let mut concrete: FxHashMap<QualifiedRef, Vec<QualifiedRef>> = FxHashMap::default();
+    let mut generic: FxHashMap<QualifiedRef, QualifiedRef> = FxHashMap::default();
+    for function in function_order {
+        let Some(ImplOf { generic_function, kind }) = functions.get(function).and_then(|scheme| scheme.impl_of) else {
+            continue;
+        };
+        if !generic_functions.contains_key(&generic_function) {
+            refused.push(Refused::ImplOfNoGenericFunction { function: *function, generic_function });
+            continue;
+        }
+        if core.takes_no_impls(generic_function) {
+            refused.push(Refused::TakesNoImpls { id: generic_function });
+            continue;
+        }
+        match kind {
+            ImplKind::Concrete => concrete.entry(generic_function).or_default().push(*function),
+            ImplKind::Generic => match generic.entry(generic_function) {
+                Entry::Occupied(_) => refused.push(Refused::TwoGenericImpls { generic_function }),
+                Entry::Vacant(vacant) => {
+                    vacant.insert(*function);
+                }
+            },
+        }
+    }
+    let mut impls: FxHashMap<QualifiedRef, Impls> = concrete
+        .into_iter()
+        .map(|(id, concrete)| (id, Impls { concrete: concrete.into(), generic: None }))
+        .collect();
+    for (id, function) in generic {
+        impls.entry(id).or_default().generic = Some(function);
+    }
+    impls
 }
 
 /// Each entry by its key. The first entry of a key stands; every later
@@ -393,22 +459,18 @@ fn overloads(declared_order: &[QualifiedRef]) -> FxHashMap<Astr, Box<[QualifiedR
         .collect()
 }
 
-/// Every type a declaration's signature is written at: the scheme's own,
-/// then each concrete impl's.
-fn signature_types(scheme: &Scheme) -> impl Iterator<Item = TyId<Poly>> + '_ {
-    std::iter::once(scheme.ty).chain(
-        scheme
-            .impls
-            .iter()
-            .flat_map(|impls| impls.concrete.iter().map(|r#impl| r#impl.ty)),
-    )
-}
-
-/// extern-fn §1: no declaration carries an array type.
-fn refuse_array_types(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
+/// extern-fn §1: no declaration carries an array type, and no generic
+/// function's signature does.
+fn refuse_array_types(
+    types: &Types<Poly>,
+    functions: &[(QualifiedRef, Scheme)],
+    generic_functions: &[(QualifiedRef, GenericFunction)],
+    refused: &mut Vec<Refused>,
+) {
     let mut seen = FxHashSet::default();
-    for (id, scheme) in functions {
-        if signature_types(scheme).any(|ty| holds_array(types, ty, &mut seen)) {
+    let signatures = functions.iter().map(|(id, scheme)| (id, scheme.ty)).chain(generic_functions.iter().map(|(id, generic)| (id, generic.ty)));
+    for (id, ty) in signatures {
+        if holds_array(types, ty, &mut seen) {
             refused.push(Refused::ArrayType { declaration: *id });
         }
     }
@@ -431,16 +493,20 @@ fn holds_array(types: &Types<Poly>, ty: TyId<Poly>, clear: &mut FxHashSet<TyId<P
     })
 }
 
-/// extern-fn §1: a type parameter carries one bound. A scheme's type
-/// variables are `0..n` for its `n` bounds, each one mentioned by its type,
-/// and so are each of its concrete impls' by the impl's own bounds.
-fn refuse_unfit_bounds(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
-    for (function, scheme) in functions {
-        let concrete = scheme.impls.iter().flat_map(|impls| impls.concrete.iter());
-        let fit = std::iter::once((scheme.ty, &scheme.bounds[..]))
-            .chain(concrete.map(|r#impl| (r#impl.ty, &r#impl.bounds[..])))
-            .all(|(ty, bounds)| one_bound_per_variable(types, ty, bounds));
-        if !fit {
+/// extern-fn §1: a type parameter carries one bound. A signature's type
+/// variables are `0..n` for its `n` bounds, each one mentioned by its type.
+fn refuse_unfit_bounds(
+    types: &Types<Poly>,
+    functions: &[(QualifiedRef, Scheme)],
+    generic_functions: &[(QualifiedRef, GenericFunction)],
+    refused: &mut Vec<Refused>,
+) {
+    let signatures = functions
+        .iter()
+        .map(|(id, scheme)| (id, scheme.ty, &scheme.bounds[..]))
+        .chain(generic_functions.iter().map(|(id, generic)| (id, generic.ty, &generic.bounds[..])));
+    for (function, ty, bounds) in signatures {
+        if !one_bound_per_variable(types, ty, bounds) {
             refused.push(Refused::BoundsDoNotFit { function: *function });
         }
     }
@@ -463,83 +529,64 @@ fn one_bound_per_variable(types: &Types<Poly>, ty: TyId<Poly>, bounds: &[TyVarBo
 /// `NotAFunction` alone.
 fn refuse_unrecorded_effects(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
     for (function, scheme) in functions {
-        let own = (Declared { function: *function, r#impl: None }, scheme.ty, &scheme.runs[..]);
-        let concrete = scheme.impls.iter().flat_map(|impls| impls.concrete.iter().enumerate()).map(|(at, r#impl)| {
-            (Declared { function: *function, r#impl: Some(at) }, r#impl.ty, &r#impl.runs[..])
-        });
-        for (declared, ty, runs) in std::iter::once(own).chain(concrete) {
-            let TyKind::Fn { params, ret, .. } = types.kind(ty) else {
-                continue;
-            };
-            let of_signature = effect_variables(types, [ty]);
-            for var in runs.iter().filter(|var| !of_signature.contains(var)) {
-                refused.push(Refused::RunsNoEffectVariable { declared, var: *var });
-            }
-            let returned = effect_variables(types, [*ret]);
-            let mut unrecorded: Vec<u32> = effect_variables(types, params.iter().copied())
-                .into_iter()
-                .filter(|var| !runs.contains(var) && !returned.contains(var))
-                .collect();
-            unrecorded.sort_unstable();
-            for var in unrecorded {
-                refused.push(Refused::EffectUnrecorded { declared, var });
-            }
-        }
-    }
-}
-
-/// extern-fn §6: a declaration requires impls at its own type variables,
-/// and so does each of its concrete impls at the impl's.
-fn refuse_foreign_requirements(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
-    for (declaration, scheme) in functions {
-        let concrete = scheme.impls.iter().flat_map(|impls| impls.concrete.iter());
-        let signatures = std::iter::once((scheme.ty, &scheme.requires[..]))
-            .chain(concrete.map(|r#impl| (r#impl.ty, &r#impl.requires[..])));
-        for (ty, requires) in signatures {
-            let mut own = FxHashSet::default();
-            type_variables(types, ty, &mut FxHashSet::default(), &mut own);
-            for requirement in requires {
-                let mut named = FxHashSet::default();
-                type_variables(types, requirement.pattern, &mut FxHashSet::default(), &mut named);
-                if !named.is_subset(&own) {
-                    refused.push(Refused::RequirementForeignVariable {
-                        declaration: *declaration,
-                        generic_function: requirement.generic_function,
-                    });
-                }
-            }
-        }
-    }
-}
-
-/// extern-fn §1: an extern fn is a function, so its signature and each of
-/// its impls' is a function type; and it names its parameters, one name
-/// per parameter of that function type. A declaration with a signature of
-/// another type is refused as `NotAFunction` alone, since it has no
-/// parameters to name.
-fn refuse_unfit_signatures(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
-    for (function, scheme) in functions {
-        let concrete = scheme.impls.iter().flat_map(|impls| impls.concrete.iter());
-        let signatures: Vec<(TyId<Poly>, &[Astr])> = std::iter::once((scheme.ty, &scheme.param_names[..]))
-            .chain(concrete.map(|r#impl| (r#impl.ty, &r#impl.param_names[..])))
-            .collect();
-        let arities: Option<Vec<usize>> = signatures
-            .iter()
-            .map(|(ty, _)| match types.kind(*ty) {
-                TyKind::Fn { params, .. } => Some(params.len()),
-                _ => None,
-            })
-            .collect();
-        let Some(arities) = arities else {
-            refused.push(Refused::NotAFunction { function: *function });
+        let declared = Declared { function: *function };
+        let TyKind::Fn { params, ret, .. } = types.kind(scheme.ty) else {
             continue;
         };
-        let names_fit = arities
-            .iter()
-            .zip(&signatures)
-            .all(|(arity, (_, names))| *arity == names.len());
-        if !names_fit {
-            refused.push(Refused::ParamNamesDoNotFit { function: *function });
+        let of_signature = effect_variables(types, [scheme.ty]);
+        for var in scheme.runs.iter().filter(|var| !of_signature.contains(var)) {
+            refused.push(Refused::RunsNoEffectVariable { declared, var: *var });
+        }
+        let returned = effect_variables(types, [*ret]);
+        let mut unrecorded: Vec<u32> = effect_variables(types, params.iter().copied())
+            .into_iter()
+            .filter(|var| !scheme.runs.contains(var) && !returned.contains(var))
+            .collect();
+        unrecorded.sort_unstable();
+        for var in unrecorded {
+            refused.push(Refused::EffectUnrecorded { declared, var });
+        }
+    }
+}
+
+/// extern-fn §6: a declaration requires impls at its own type variables.
+fn refuse_foreign_requirements(types: &Types<Poly>, functions: &[(QualifiedRef, Scheme)], refused: &mut Vec<Refused>) {
+    for (declaration, scheme) in functions {
+        let mut own = FxHashSet::default();
+        type_variables(types, scheme.ty, &mut FxHashSet::default(), &mut own);
+        for requirement in &scheme.requires {
+            let mut named = FxHashSet::default();
+            type_variables(types, requirement.pattern, &mut FxHashSet::default(), &mut named);
+            if !named.is_subset(&own) {
+                refused.push(Refused::RequirementForeignVariable {
+                    declaration: *declaration,
+                    generic_function: requirement.generic_function,
+                });
+            }
+        }
+    }
+}
+
+/// extern-fn §1: an extern fn is a function, so its signature, and a
+/// generic function's, is a function type; and it names its parameters,
+/// one name per parameter of that function type. A signature of another
+/// type is refused as `NotAFunction` alone, since it has no parameters to
+/// name.
+fn refuse_unfit_signatures(
+    types: &Types<Poly>,
+    functions: &[(QualifiedRef, Scheme)],
+    generic_functions: &[(QualifiedRef, GenericFunction)],
+    refused: &mut Vec<Refused>,
+) {
+    let signatures = functions
+        .iter()
+        .map(|(id, scheme)| (id, scheme.ty, &scheme.param_names[..]))
+        .chain(generic_functions.iter().map(|(id, generic)| (id, generic.ty, &generic.param_names[..])));
+    for (function, ty, names) in signatures {
+        match types.kind(ty) {
+            TyKind::Fn { params, .. } if params.len() == names.len() => {}
+            TyKind::Fn { .. } => refused.push(Refused::ParamNamesDoNotFit { function: *function }),
+            _ => refused.push(Refused::NotAFunction { function: *function }),
         }
     }
 }
@@ -576,9 +623,6 @@ fn refuse_unending_requirements(
     };
     for (id, scheme) in functions {
         sizes.refuse_not_smaller(*id, scheme.ty, &scheme.requires, refused);
-        for r#impl in scheme.impls.iter().flat_map(|impls| impls.concrete.iter()) {
-            sizes.refuse_not_smaller(*id, r#impl.ty, &r#impl.requires, refused);
-        }
     }
 }
 
@@ -628,6 +672,7 @@ impl TreeSizes<'_> {
 /// Every type the declarations write, by what writes it.
 struct DeclaredTypes<'d> {
     functions: &'d [(QualifiedRef, Scheme)],
+    generic_functions: &'d [(QualifiedRef, GenericFunction)],
     user_types: &'d FxHashMap<QualifiedRef, UserTypeDecl>,
     casts: &'d [CastRule],
     conversions: &'d [ConversionRule],
@@ -635,17 +680,10 @@ struct DeclaredTypes<'d> {
     entries: &'d [EntryDecl],
 }
 
-/// Every type a scheme writes: its signature, its impls' and every
-/// requirement's pattern.
+/// Every type a scheme writes: its signature and every requirement's
+/// pattern.
 fn scheme_types(scheme: &Scheme) -> impl Iterator<Item = TyId<Poly>> + '_ {
-    let concrete = scheme.impls.iter().flat_map(|impls| impls.concrete.iter());
-    signature_types(scheme)
-        .chain(scheme.requires.iter().map(|requirement| requirement.pattern))
-        .chain(
-            concrete
-                .flat_map(|r#impl| r#impl.requires.iter())
-                .map(|requirement| requirement.pattern),
-        )
+    std::iter::once(scheme.ty).chain(scheme.requires.iter().map(|requirement| requirement.pattern))
 }
 
 /// Every type the declarations write, each with where it is written.
@@ -653,7 +691,8 @@ fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Writ
     let functions = declared
         .functions
         .iter()
-        .flat_map(|(id, scheme)| scheme_types(scheme).map(|ty| (Written::Function(*id), ty)));
+        .flat_map(|(id, scheme)| scheme_types(scheme).map(|ty| (Written::Function(*id), ty)))
+        .chain(declared.generic_functions.iter().map(|(id, generic)| (Written::Function(*id), generic.ty)));
     let casts = declared
         .casts
         .iter()
@@ -841,17 +880,19 @@ impl TypeTerms {
 /// by function and impl.
 fn refuse_misfit_impls(
     types: &Types<Poly>,
-    declared_order: &[QualifiedRef],
+    generic_order: &[QualifiedRef],
+    generic_functions: &FxHashMap<QualifiedRef, GenericFunction>,
+    impls: &FxHashMap<QualifiedRef, Impls>,
     functions: &FxHashMap<QualifiedRef, Scheme>,
     refused: &mut Vec<Refused>,
 ) -> FxHashSet<(QualifiedRef, usize)> {
     let mut misfits = FxHashSet::default();
-    for generic_function in declared_order {
-        let Some(scheme) = functions.get(generic_function) else {
+    for generic_function in generic_order {
+        let (Some(generic), Some(impls)) = (generic_functions.get(generic_function), impls.get(generic_function)) else {
             continue;
         };
-        for (r#impl, sig) in scheme.impls.iter().flat_map(|impls| impls.concrete.iter().enumerate()) {
-            if !is_impl_of(types, scheme.ty, sig.ty) {
+        for (r#impl, sig) in impls.concrete.iter().enumerate().filter_map(|(at, id)| functions.get(id).map(|sig| (at, sig))) {
+            if !is_impl_of(types, generic.ty, sig.ty) {
                 misfits.insert((*generic_function, r#impl));
                 refused.push(Refused::ImplNotOfGenericFunction {
                     generic_function: *generic_function,
@@ -861,6 +902,41 @@ fn refuse_misfit_impls(
         }
     }
     misfits
+}
+
+/// A generic impl's signature is its generic function's, the choice of no
+/// variable (extern-fn §6): its function type is the same but for its
+/// effect, which is the impl's own, and so are its bounds and parameter
+/// names.
+///
+/// # Panics
+/// A generic impl's signature is another: whoever built the declarations,
+/// the compiler for a lang item or an extern fn's attribute for its own,
+/// built a generic impl that is none.
+fn assert_generic_impls_are_their_signatures(
+    types: &Types<Poly>,
+    generic_functions: &FxHashMap<QualifiedRef, GenericFunction>,
+    impls: &FxHashMap<QualifiedRef, Impls>,
+    functions: &FxHashMap<QualifiedRef, Scheme>,
+) {
+    let but_effect = |ty: TyId<Poly>| match types.kind(ty) {
+        TyKind::Fn { params, ret, flows, calls, holds, .. } => Some((params, ret, flows, calls, holds)),
+        _ => None,
+    };
+    for (id, impls) in impls {
+        let (Some(r#impl), Some(generic)) = (impls.generic, generic_functions.get(id)) else {
+            continue;
+        };
+        let Some(scheme) = functions.get(&r#impl) else {
+            continue;
+        };
+        assert!(
+            but_effect(scheme.ty) == but_effect(generic.ty)
+                && scheme.bounds == generic.bounds
+                && scheme.param_names == generic.param_names,
+            "the generic impl {impl:?} of {id:?} is not its generic function's signature: the declarations were built wrong"
+        );
+    }
 }
 
 /// The head a tree step joins at `ty` (types §3), or `None` where there
@@ -933,13 +1009,14 @@ fn cast_tree(
     types: &Types<Poly>,
     casts: &[CastRule],
     functions: &FxHashMap<QualifiedRef, Scheme>,
+    impls: &FxHashMap<QualifiedRef, Impls>,
     misfits: &FxHashSet<(QualifiedRef, usize)>,
     core: &Core,
     refused: &mut Vec<Refused>,
 ) -> CastTree {
     let declared = casts.iter().cloned().map(|rule| Ok(TreeRule { rule, view_impl: None }));
     let rules = declared
-        .chain(view_rules(types, functions, misfits, core))
+        .chain(view_rules(types, functions, impls, misfits, core))
         .filter(|rule| {
             !rule
                 .as_ref()
@@ -978,7 +1055,8 @@ fn cast_tree(
 /// types §3, §7: a declared cast or conversion is performed by its `via`,
 /// so the `via` is a declared function of type `fn(from) -> to` at the
 /// rule's own ends. A rule is declared for one pair of types, so its `via`
-/// is exactly one function, a function with no impls.
+/// is exactly one function: no generic function, and no impl, which is
+/// reached only through its generic function.
 fn refuse_vias_not_their_functions(
     types: &Types<Poly>,
     functions: &FxHashMap<QualifiedRef, Scheme>,
@@ -992,7 +1070,7 @@ fn refuse_vias_not_their_functions(
         .map(|rule| (Written::Conversion(rule.via), rule.via, rule.from, rule.to));
     for (written, via, from, to) in casts.chain(conversions) {
         let performs = functions.get(&via).is_some_and(|scheme| match types.kind(scheme.ty) {
-            TyKind::Fn { params, ret, .. } => scheme.impls.is_none() && params[..] == [from] && *ret == to,
+            TyKind::Fn { params, ret, .. } => scheme.impl_of.is_none() && params[..] == [from] && *ret == to,
             _ => false,
         });
         if !performs {
@@ -1049,19 +1127,21 @@ fn conversions_by_head(
 fn view_rules(
     types: &Types<Poly>,
     functions: &FxHashMap<QualifiedRef, Scheme>,
+    impls: &FxHashMap<QualifiedRef, Impls>,
     misfits: &FxHashSet<(QualifiedRef, usize)>,
     core: &Core,
 ) -> Vec<Result<TreeRule, Refused>> {
     let mut rules = Vec::new();
     for via in [core.as_slice, core.as_slice_mut, core.as_str] {
-        let Some(impls) = functions.get(&via).and_then(|scheme| scheme.impls.as_ref()) else {
+        let Some(impls) = impls.get(&via) else {
             continue;
         };
         let fitting = impls
             .concrete
             .iter()
             .enumerate()
-            .filter(|(at, _)| !misfits.contains(&(via, *at)));
+            .filter(|(at, _)| !misfits.contains(&(via, *at)))
+            .filter_map(|(at, id)| functions.get(id).map(|r#impl| (at, r#impl)));
         for (at, r#impl) in fitting {
             let TyKind::Fn { params, ret, .. } = types.kind(r#impl.ty) else {
                 panic!("a fitting view impl is a function type, as the compiler builds each view (operators §2)")
@@ -1119,61 +1199,19 @@ fn refuse_unfit_lifetimes(decls: &Declarations, declared_order: &[QualifiedRef],
         let Some(scheme) = decls.functions.get(function) else {
             continue;
         };
-        for signature in declared_signatures(*function, scheme) {
-            let Some(lifetimes) = signature.lifetimes else {
-                continue;
-            };
-            let fits = match decls.types.kind(signature.ty) {
-                TyKind::Fn { params, ret, .. } => fitted_ends(decls, params, *ret, lifetimes)
-                    .and_then(|ends| outlives_closure(lifetimes, &ends))
-                    .is_ok(),
-                _ => false,
-            };
-            if !fits {
-                refused.push(Refused::LabelsDoNotFit { declaration: *function });
-            }
+        let Some(lifetimes) = &scheme.facts.lifetimes else {
+            continue;
+        };
+        let fits = match decls.types.kind(scheme.ty) {
+            TyKind::Fn { params, ret, .. } => fitted_ends(decls, params, *ret, lifetimes)
+                .and_then(|ends| outlives_closure(lifetimes, &ends))
+                .is_ok(),
+            _ => false,
+        };
+        if !fits {
+            refused.push(Refused::LabelsDoNotFit { declaration: *function });
         }
     }
-}
-
-/// One signature a declaration states, with the lifetimes stated for it.
-pub(super) struct DeclaredSignature<'s> {
-    pub(super) declared: Declared,
-    pub(super) ty: TyId<Poly>,
-    pub(super) lifetimes: Option<&'s LabelledSignature>,
-}
-
-/// The scheme's own signature, whose lifetimes are its own where it has no
-/// impls and its generic impl's where it has them, then each concrete
-/// impl's.
-pub(super) fn declared_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator<Item = DeclaredSignature<'_>> {
-    let own_lifetimes = match &scheme.impls {
-        None => scheme.facts.lifetimes.as_ref(),
-        Some(impls) => impls.generic.as_ref().and_then(|generic| generic.facts.lifetimes.as_ref()),
-    };
-    let own = DeclaredSignature {
-        declared: Declared {
-            function,
-            r#impl: None,
-        },
-        ty: scheme.ty,
-        lifetimes: own_lifetimes,
-    };
-    let concrete = scheme.impls.iter().flat_map(move |impls| {
-        impls
-            .concrete
-            .iter()
-            .enumerate()
-            .map(move |(at, r#impl)| DeclaredSignature {
-                declared: Declared {
-                    function,
-                    r#impl: Some(at),
-                },
-                ty: r#impl.ty,
-                lifetimes: r#impl.facts.lifetimes.as_ref(),
-            })
-    });
-    std::iter::once(own).chain(concrete)
 }
 
 pub(super) struct LabelsDoNotFit;
@@ -1369,7 +1407,7 @@ mod tests {
 
     use super::*;
     use crate::decl::{
-        CallFlows, DeclaredFacts, EndLabels, GenericImplSig, ImplSig, Impls, LoopMarkers, Outlives, TyVarBound, call_flows,
+        CallFlows, DeclaredFacts, EndLabels, GenericFunction, ImplKind, ImplOf, LoopMarkers, Outlives, TyVarBound, call_flows,
         declared_fn_flows,
     };
     use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, IntTy, LenTerm, Ty};
@@ -1386,7 +1424,7 @@ mod tests {
             Fixture {
                 interner,
                 raw: RawDeclarations {
-                    lang_impls: Vec::new(),
+                    generic_functions: Vec::new(),
                     types: Types::new(),
                     functions: Vec::new(),
                     user_types: Vec::new(),
@@ -1463,7 +1501,7 @@ mod tests {
                 ty,
                 param_names: self.param_names(ty),
                 bounds: vec![TyVarBound::Any; variables].into(),
-                impls: None,
+                impl_of: None,
                 requires: Box::new([]),
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
@@ -1483,48 +1521,63 @@ mod tests {
             }
         }
 
-        /// A scheme at `ty` whose one impl, the generic one, states
-        /// `lifetimes`.
-        fn labelled_generic(&self, ty: TyId<Poly>, variables: usize, lifetimes: LabelledSignature) -> Scheme {
-            Scheme {
-                impls: Some(Impls {
-                    concrete: Box::new([]),
-                    generic: Some(GenericImplSig {
-                        facts: DeclaredFacts {
-                            lifetimes: Some(lifetimes.clone()),
-                            ..DeclaredFacts::default()
-                        },
-                        awaits: false,
-                    }),
-                }),
+        /// The generic function `id` at `ty` whose one impl, the generic
+        /// one, states `lifetimes`.
+        fn labelled_generic(&mut self, id: QualifiedRef, ty: TyId<Poly>, variables: usize, lifetimes: LabelledSignature) {
+            let generic_impl = Scheme {
+                impl_of: Some(ImplOf { generic_function: id, kind: ImplKind::Generic }),
+                facts: DeclaredFacts {
+                    lifetimes: Some(lifetimes),
+                    ..DeclaredFacts::default()
+                },
                 ..self.plain(ty, variables)
-            }
+            };
+            self.declare_impls(id, ty, variables, vec![generic_impl]);
         }
 
-        /// A scheme whose concrete impls are `tys`.
-        fn with_impls(&self, own_ty: TyId<Poly>, variables: usize, tys: &[TyId<Poly>]) -> Scheme {
-            Scheme {
-                impls: Some(Impls {
-                    concrete: tys.iter().map(|ty| self.r#impl(*ty, Box::new([]))).collect(),
-                    generic: None,
-                }),
-                ..self.plain(own_ty, variables)
-            }
+        /// The generic function `id` whose concrete impls are `tys`.
+        fn with_impls(&mut self, id: QualifiedRef, own_ty: TyId<Poly>, variables: usize, tys: &[TyId<Poly>]) {
+            let impls = tys.iter().map(|ty| self.r#impl(id, *ty, Box::new([]))).collect();
+            self.declare_impls(id, own_ty, variables, impls);
         }
 
-        /// A concrete impl at `ty` stating no fact.
-        fn r#impl(&self, ty: TyId<Poly>, requires: Box<[Requirement]>) -> ImplSig {
+        /// The impl at `at` of `generic`, a declaration of its own named
+        /// `generic#at`.
+        fn impl_id(&self, generic: QualifiedRef, at: usize) -> QualifiedRef {
+            QualifiedRef::qualified(generic.namespace, self.interner.intern(&format!("{}#{at}", self.interner.resolve(generic.name))))
+        }
+
+        /// A concrete impl of `generic_function` at `ty` stating no fact.
+        fn r#impl(&self, generic_function: QualifiedRef, ty: TyId<Poly>, requires: Box<[Requirement]>) -> Scheme {
             let mut variables = FxHashSet::default();
             super::type_variables(&self.raw.types, ty, &mut FxHashSet::default(), &mut variables);
-            ImplSig {
+            Scheme {
                 ty,
                 bounds: vec![TyVarBound::Any; variables.len()].into(),
                 param_names: self.param_names(ty),
+                impl_of: Some(ImplOf { generic_function, kind: ImplKind::Concrete }),
                 requires,
                 facts: DeclaredFacts::default(),
                 runs: Box::new([]),
                 awaits: false,
                 specialized: Box::new([]),
+            }
+        }
+
+        /// The generic function `id` at `own_ty`, whose type variables are
+        /// `0..variables`, each bounded by any type, and its `impls`, each
+        /// a declaration of its own at the impl id of its position.
+        fn declare_impls(&mut self, id: QualifiedRef, own_ty: TyId<Poly>, variables: usize, impls: Vec<Scheme>) {
+            let generic = GenericFunction {
+                ty: own_ty,
+                param_names: self.param_names(own_ty),
+                bounds: vec![TyVarBound::Any; variables].into(),
+                specialized: Box::new([]),
+            };
+            self.raw.generic_functions.push((id, generic));
+            for (at, scheme) in impls.into_iter().enumerate() {
+                let impl_id = self.impl_id(id, at);
+                self.raw.functions.push((impl_id, scheme));
             }
         }
 
@@ -1535,11 +1588,11 @@ mod tests {
         /// Gives the lang item `item` the concrete impls `tys`, stating no
         /// fact.
         fn give(&mut self, item: QualifiedRef, tys: &[TyId<Poly>]) {
-            let impls = Impls {
-                concrete: tys.iter().map(|ty| self.r#impl(*ty, Box::new([]))).collect(),
-                generic: None,
-            };
-            self.raw.lang_impls.push((item, impls));
+            for (at, ty) in tys.iter().enumerate() {
+                let impl_id = self.impl_id(item, at);
+                let scheme = self.r#impl(item, *ty, Box::new([]));
+                self.raw.functions.push((impl_id, scheme));
+            }
         }
 
         fn verify(self) -> Result<Declarations, Vec<Refused>> {
@@ -1599,10 +1652,7 @@ mod tests {
     }
 
     fn own(function: QualifiedRef) -> Declared {
-        Declared {
-            function,
-            r#impl: None,
-        }
+        Declared { function }
     }
 
     /// Flows into `to`, one list of `(parameter, position)` per position of
@@ -1686,17 +1736,10 @@ mod tests {
         let int = fixture.ty(TyKind::Int(IntTy::I64));
         let array = fixture.ty(TyKind::Array(int, LenTerm::Var(0), ()));
         let impl_ty = fixture.function(&[array], unit);
-        fixture.declare(
-            f,
-            Scheme {
-                impls: Some(Impls {
-                    concrete: Box::new([fixture.r#impl(impl_ty, Box::new([]))]),
-                    generic: None,
-                }),
-                ..fixture.plain(own_ty, 1)
-            },
-        );
-        assert_eq!(refusals(fixture), vec![Refused::ArrayType { declaration: f }]);
+        let at_f = fixture.r#impl(f, impl_ty, Box::new([]));
+        fixture.declare_impls(f, own_ty, 1, vec![at_f]);
+        let declaration = fixture.impl_id(f, 0);
+        assert_eq!(refusals(fixture), vec![Refused::ArrayType { declaration }]);
     }
 
     /// An extern type is the single source of its parameters (extern-fn §8),
@@ -1854,8 +1897,7 @@ mod tests {
         let (i32_, i64_) = (fixture.ty(TyKind::Int(IntTy::I32)), fixture.ty(TyKind::Int(IntTy::I64)));
         let widen = fixture.name("m", "widen");
         let ty = fixture.function(&[i32_], i64_);
-        let scheme = fixture.with_impls(ty, 0, &[ty]);
-        fixture.declare(widen, scheme);
+        fixture.with_impls(widen, ty, 0, &[ty]);
         fixture.raw.casts.push(CastRule {
             from: i32_,
             to: i64_,
@@ -1987,16 +2029,8 @@ mod tests {
         let outer = fixture.ty(TyKind::Option(inner, ()));
         let impl_ty = fixture.function(&[outer], unit);
         let pattern = fixture.ty(TyKind::Tuple(Box::new([int, int, int]), ()));
-        fixture.declare(
-            f,
-            Scheme {
-                impls: Some(Impls {
-                    concrete: Box::new([fixture.r#impl(impl_ty, requiring(shared, pattern))]),
-                    generic: None,
-                }),
-                ..fixture.plain(own_ty, 1)
-            },
-        );
+        let at_f = fixture.r#impl(f, impl_ty, requiring(shared, pattern));
+        fixture.declare_impls(f, own_ty, 1, vec![at_f]);
         assert!(fixture.verify().is_ok());
     }
 
@@ -2043,16 +2077,16 @@ mod tests {
             ],
             &[],
         );
-        fixture.declare(f, fixture.labelled_generic(ty, 0, lifetimes.clone()));
+        fixture.labelled_generic(f, ty, 0, lifetimes.clone());
+        let generic_impl = fixture.impl_id(f, 0);
         let decls = fixture.verify().expect("the labels fit");
         let mut types = Types::new();
         let s = concrete_shared_str(&mut types);
         assert_eq!(
-            call_flows(&decls, own(f), &types, &[s, s], s),
+            call_flows(&decls, own(generic_impl), &types, &[s, s], s),
             Some(CallFlows { into: vec![into(FlowEnd::Result, &[&[(0, 0)]])] })
         );
-        let scheme = decls.scheme(f).expect("declared");
-        let generic = scheme.impls.as_ref().and_then(|impls| impls.generic.as_ref()).expect("a generic impl");
+        let generic = decls.scheme(generic_impl).expect("a generic impl");
         assert_eq!(generic.facts.lifetimes, Some(lifetimes));
     }
 
@@ -2244,8 +2278,7 @@ mod tests {
     }
 
     /// extern-fn §4: an impl's lifetimes are read at a call of that impl,
-    /// and stay on it after intake; the scheme's own signature, with no
-    /// generic impl to state lifetimes, has every flow.
+    /// and stay on it after intake.
     #[test]
     fn an_impls_lifetimes_are_read_at_a_call_of_the_impl() {
         let mut fixture = Fixture::new();
@@ -2258,38 +2291,27 @@ mod tests {
             vec![end(FlowEnd::Result, &[lt(0)]), end(FlowEnd::Param(0), &[lt(0)])],
             &[],
         );
-        fixture.declare(
-            f,
-            Scheme {
-                impls: Some(Impls {
-                    concrete: Box::new([ImplSig {
-                        ty: impl_ty,
-                        bounds: Box::new([]),
-                        param_names: fixture.param_names(impl_ty),
-                        requires: Box::new([]),
-                        facts: DeclaredFacts {
-                            lifetimes: Some(lifetimes.clone()),
-                            ..DeclaredFacts::default()
-                        },
-                        runs: Box::new([]),
-                        awaits: false,
-                        specialized: Box::new([]),
-                    }]),
-                    generic: None,
-                }),
-                ..fixture.plain(own_ty, 1)
+        let at_f = Scheme {
+            ty: impl_ty,
+            bounds: Box::new([]),
+            param_names: fixture.param_names(impl_ty),
+            impl_of: Some(ImplOf { generic_function: f, kind: ImplKind::Concrete }),
+            requires: Box::new([]),
+            facts: DeclaredFacts {
+                lifetimes: Some(lifetimes.clone()),
+                ..DeclaredFacts::default()
             },
-        );
-        let decls = fixture.verify().expect("the labels fit");
-        let scheme = decls.scheme(f).expect("declared");
-        let r#impl = &scheme.impls.as_ref().expect("impls").concrete[0];
-        let at_impl = Declared {
-            function: f,
-            r#impl: Some(0),
+            runs: Box::new([]),
+            awaits: false,
+            specialized: Box::new([]),
         };
+        fixture.declare_impls(f, own_ty, 1, vec![at_f]);
+        let impl_at = fixture.impl_id(f, 0);
+        let decls = fixture.verify().expect("the labels fit");
+        let r#impl = decls.scheme(impl_at).expect("declared");
+        let at_impl = Declared { function: impl_at };
         let mut types = Types::new();
         let s = concrete_shared_str(&mut types);
-        assert_eq!(call_flows(&decls, own(f), &types, &[s], s), None);
         assert_eq!(
             call_flows(&decls, at_impl, &types, &[s], s),
             Some(CallFlows { into: vec![into(FlowEnd::Result, &[&[(0, 0)]])] })
@@ -2638,7 +2660,7 @@ mod tests {
         let (int, string) = (fixture.ty(TyKind::Int(IntTy::I64)), fixture.ty(TyKind::String));
         let fits = fixture.function(&[int], int);
         let misfit = fixture.function(&[int], string);
-        fixture.declare(f, fixture.with_impls(own_ty, 1, &[fits, misfit]));
+        fixture.with_impls(f, own_ty, 1, &[fits, misfit]);
         assert_eq!(
             refusals(fixture),
             vec![Refused::ImplNotOfGenericFunction {
@@ -2665,7 +2687,7 @@ mod tests {
         let fits = fixture.function(&[int_ref], int_ref);
         let wrong_mutability = fixture.function(&[int_ref], int_mut);
         let wrong_constructor = fixture.function(&[option], int_ref);
-        fixture.declare(f, fixture.with_impls(own_ty, 1, &[fits, wrong_mutability, wrong_constructor]));
+        fixture.with_impls(f, own_ty, 1, &[fits, wrong_mutability, wrong_constructor]);
         assert_eq!(
             refusals(fixture),
             vec![
@@ -2730,13 +2752,24 @@ mod tests {
     fn a_generic_view_is_refused() {
         let mut fixture = Fixture::new();
         let core = fixture.raw.core;
-        fixture.raw.lang_impls.push((
-            core.as_slice,
-            Impls {
-                concrete: Box::new([]),
-                generic: Some(GenericImplSig::default()),
-            },
-        ));
+        let (_, generic) = core
+            .generic_functions(&mut fixture.raw.types)
+            .into_iter()
+            .find(|(id, _)| *id == core.as_slice)
+            .expect("the compiler builds `as_slice`");
+        let generic_impl = Scheme {
+            ty: generic.ty,
+            param_names: generic.param_names,
+            bounds: generic.bounds,
+            impl_of: Some(ImplOf { generic_function: core.as_slice, kind: ImplKind::Generic }),
+            requires: Box::new([]),
+            facts: DeclaredFacts::default(),
+            runs: Box::new([]),
+            awaits: false,
+            specialized: Box::new([]),
+        };
+        let at = fixture.impl_id(core.as_slice, 0);
+        fixture.raw.functions.push((at, generic_impl));
         assert_eq!(refusals(fixture), vec![Refused::CastWithoutHead { via: core.as_slice }]);
     }
 
@@ -2935,11 +2968,12 @@ mod tests {
             fixture.ty(TyKind::Unit),
         );
         let own_ty = fixture.function(&[var], unit);
-        fixture.declare(f, fixture.with_impls(own_ty, 1, &[int]));
+        fixture.with_impls(f, own_ty, 1, &[int]);
+        let function = fixture.impl_id(f, 0);
         assert_eq!(
             refusals(fixture),
             vec![
-                Refused::NotAFunction { function: f },
+                Refused::NotAFunction { function },
                 Refused::ImplNotOfGenericFunction {
                     generic_function: f,
                     r#impl: 0
@@ -2961,20 +2995,13 @@ mod tests {
         );
         let own_ty = fixture.function(&[var], unit);
         let impl_ty = fixture.function(&[int], unit);
-        fixture.declare(
-            f,
-            Scheme {
-                impls: Some(Impls {
-                    concrete: Box::new([ImplSig {
-                        param_names: Box::new([]),
-                        ..fixture.r#impl(impl_ty, Box::new([]))
-                    }]),
-                    generic: None,
-                }),
-                ..fixture.plain(own_ty, 1)
-            },
-        );
-        assert_eq!(refusals(fixture), vec![Refused::ParamNamesDoNotFit { function: f }]);
+        let at_f = Scheme {
+            param_names: Box::new([]),
+            ..fixture.r#impl(f, impl_ty, Box::new([]))
+        };
+        fixture.declare_impls(f, own_ty, 1, vec![at_f]);
+        let function = fixture.impl_id(f, 0);
+        assert_eq!(refusals(fixture), vec![Refused::ParamNamesDoNotFit { function }]);
     }
 
     /// extern-fn §1: a type parameter carries one bound. `fn(T, U) -> T`
@@ -3060,15 +3087,15 @@ mod tests {
             match refused {
                 true => assert_eq!(
                     refusals(fixture),
-                    vec![Refused::EffectUnrecorded { declared: Declared { function: f, r#impl: None }, var: 0 }]
+                    vec![Refused::EffectUnrecorded { declared: Declared { function: f }, var: 0 }]
                 ),
                 false => assert!(fixture.verify().is_ok()),
             }
         }
     }
 
-    /// extern-fn §2: what a call runs is an effect variable of its
-    /// signature, the declaration's own and each impl's alike.
+    /// extern-fn §2: a `runs` entry is an effect variable of the
+    /// declaration's own signature, an impl's alike.
     #[test]
     fn a_runs_entry_that_is_no_effect_variable_is_refused() {
         let mut fixture = Fixture::new();
@@ -3077,19 +3104,15 @@ mod tests {
         let own_ty = fixture.function(&[t], t);
         let int = fixture.ty(TyKind::Int(IntTy::I64));
         let impl_ty = fixture.function(&[int], int);
-        let r#impl = ImplSig { runs: Box::new([2]), ..fixture.r#impl(impl_ty, Box::new([])) };
-        let scheme = Scheme {
-            runs: Box::new([1]),
-            impls: Some(Impls { concrete: Box::new([r#impl]), generic: None }),
-            ..fixture.plain(own_ty, 1)
+        let at_f = Scheme {
+            runs: Box::new([2]),
+            ..fixture.r#impl(f, impl_ty, Box::new([]))
         };
-        fixture.declare(f, scheme);
+        fixture.declare_impls(f, own_ty, 1, vec![at_f]);
+        let function = fixture.impl_id(f, 0);
         assert_eq!(
             refusals(fixture),
-            vec![
-                Refused::RunsNoEffectVariable { declared: Declared { function: f, r#impl: None }, var: 1 },
-                Refused::RunsNoEffectVariable { declared: Declared { function: f, r#impl: Some(0) }, var: 2 },
-            ]
+            vec![Refused::RunsNoEffectVariable { declared: Declared { function }, var: 2 }]
         );
     }
 
@@ -3120,22 +3143,19 @@ mod tests {
             let f = fixture.name("m", "f");
             let t = fixture.ty(TyKind::Var(0));
             let ty = fixture.function(&[t], t);
-            let r#impl = ImplSig {
+            let at_f = Scheme {
                 bounds: vec![TyVarBound::Settled; bounds].into(),
-                ..fixture.r#impl(ty, Box::new([]))
+                ..fixture.r#impl(f, ty, Box::new([]))
             };
-            let scheme = Scheme {
-                impls: Some(Impls { concrete: Box::new([r#impl]), generic: None }),
-                ..fixture.plain(ty, 1)
-            };
-            fixture.declare(f, scheme);
+            fixture.declare_impls(f, ty, 1, vec![at_f]);
+            let impl_at = fixture.impl_id(f, 0);
             match fit {
                 true => {
                     let decls = fixture.verify().expect("an impl with one bound per variable verifies");
-                    let impls = decls.scheme(f).and_then(|scheme| scheme.impls.as_ref()).expect("f has impls");
-                    assert_eq!(&impls.concrete[0].bounds[..], &[TyVarBound::Settled][..]);
+                    let r#impl = decls.scheme(impl_at).expect("the impl is declared");
+                    assert_eq!(&r#impl.bounds[..], &[TyVarBound::Settled][..]);
                 }
-                false => assert_eq!(refusals(fixture), vec![Refused::BoundsDoNotFit { function: f }]),
+                false => assert_eq!(refusals(fixture), vec![Refused::BoundsDoNotFit { function: impl_at }]),
             }
         }
     }
@@ -3169,15 +3189,16 @@ mod tests {
         assert_eq!(refusals(fixture), vec![Refused::CoreGenericFunction { id: core.clone }]);
     }
 
-    /// operators §2: impls are given only to a lang item.
+    /// extern-fn §6: an impl is of a generic function.
     #[test]
-    fn impls_of_a_name_that_is_no_lang_item_are_refused() {
+    fn an_impl_of_what_is_no_generic_function_is_refused() {
         let mut fixture = Fixture::new();
         let id = fixture.name("m", "f");
         let int = fixture.ty(TyKind::Int(IntTy::I64));
         let ty = fixture.function(&[int], int);
         fixture.give(id, &[ty]);
-        assert_eq!(refusals(fixture), vec![Refused::TakesNoImpls { id }]);
+        let function = fixture.impl_id(id, 0);
+        assert_eq!(refusals(fixture), vec![Refused::ImplOfNoGenericFunction { function, generic_function: id }]);
     }
 
     /// operators §2: `as_ref` and `as_mut` mean what the language says, and
@@ -3209,16 +3230,73 @@ mod tests {
         let core = fixture.raw.core;
         let not_a_function = fixture.ty(TyKind::Int(IntTy::I64));
         fixture.give(core.as_slice, &[not_a_function]);
+        let function = fixture.impl_id(core.as_slice, 0);
         assert_eq!(
             refusals(fixture),
             vec![
-                Refused::NotAFunction { function: core.as_slice },
+                Refused::NotAFunction { function },
                 Refused::ImplNotOfGenericFunction {
                     generic_function: core.as_slice,
                     r#impl: 0
                 },
             ]
         );
+    }
+
+    /// extern-fn §6: reach takes a generic impl only where no concrete one
+    /// answers, so a generic function has at most one.
+    #[test]
+    fn two_generic_impls_of_one_generic_function_are_refused() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let t = fixture.ty(TyKind::Var(0));
+        let ty = fixture.function(&[t], t);
+        let generic_impl = |fixture: &Fixture| Scheme {
+            impl_of: Some(ImplOf { generic_function: f, kind: ImplKind::Generic }),
+            ..fixture.plain(ty, 1)
+        };
+        let impls = vec![generic_impl(&fixture), generic_impl(&fixture)];
+        fixture.declare_impls(f, ty, 1, impls);
+        let refused = refusals(fixture);
+        assert!(refused.contains(&Refused::TwoGenericImpls { generic_function: f }));
+        assert_eq!(
+            refused.iter().filter(|refusal| matches!(refusal, Refused::TwoGenericImpls { .. })).count(),
+            1
+        );
+    }
+
+    /// types §6: a function and a generic function under one name cannot
+    /// be told apart, and nothing orders one before the other, so neither
+    /// stands.
+    #[test]
+    fn a_function_and_a_generic_function_under_one_path_are_both_refused() {
+        let mut fixture = Fixture::new();
+        let id = fixture.name("m", "f");
+        let t = fixture.ty(TyKind::Var(0));
+        let ty = fixture.function(&[t], t);
+        fixture.declare(id, fixture.plain(ty, 1));
+        fixture.declare_impls(id, ty, 1, vec![]);
+        assert_eq!(refusals(fixture), vec![Refused::DuplicateFunction { id }]);
+    }
+
+    /// extern-fn §6: a generic impl's signature is its generic function's;
+    /// another one is a bug of whoever built the declarations, not a
+    /// refusal.
+    #[test]
+    #[should_panic(expected = "is not its generic function's signature")]
+    fn a_generic_impl_of_another_signature_panics() {
+        let mut fixture = Fixture::new();
+        let f = fixture.name("m", "f");
+        let t = fixture.ty(TyKind::Var(0));
+        let own_ty = fixture.function(&[t], t);
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let impl_ty = fixture.function(&[int], int);
+        let generic_impl = Scheme {
+            impl_of: Some(ImplOf { generic_function: f, kind: ImplKind::Generic }),
+            ..fixture.plain(impl_ty, 0)
+        };
+        fixture.declare_impls(f, own_ty, 1, vec![generic_impl]);
+        let _ = fixture.verify();
     }
 
     /// operators §2: an impl of a lang item is held to the compiler's type

@@ -3,11 +3,11 @@
 //! removal removes, and a refused program is never lowered (refusals).
 
 use acvus_ast::Literal;
-use acvus_utils::Astr;
+use acvus_utils::{Astr, QualifiedRef};
 
 use super::BodyId;
 use crate::ir::{
-    BinOp, Callee, ExternImpl, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId,
+    BinOp, Callee, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId,
 };
 use crate::ty::{CastTy, Concrete, Mutability, Ty, Types, copies};
 
@@ -84,15 +84,15 @@ pub enum Op {
     // -- Slices (RFC-0047) ------------------------------------------
     /// Take the whole run of `container`'s elements: the result is a
     /// `Ref(mutability, Slice(T))` holding the loan `container` holds, and
-    /// `impl` is the `core::as_slice` / `core::as_slice_mut` the
-    /// container's own evidence settled on.
+    /// `impl` is the impl of `core::as_slice` / `core::as_slice_mut` the
+    /// checker chose for the container.
     ///
     /// It is not a `FunctionCall` because the kind itself states that it
     /// is a pure, infallible borrow projection.
     AsSlice {
         container: ValueId,
         mutability: Mutability,
-        r#impl: ExternImpl,
+        r#impl: QualifiedRef,
     },
     /// The whole run of the elements of the array `src` names: a
     /// `&[T; N]` becomes a `&[T]`, and a `&mut [T; N]` a `&mut [T]`. It is

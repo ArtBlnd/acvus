@@ -107,7 +107,7 @@ use crate::passes::analysis::{Analysis, DenseAnalysis, Direction, Dominators, Qu
 use crate::passes::domain::{JoinSemiLattice, Widen};
 use crate::ty::structural::{PartKey, structure};
 use crate::ty::{
-    Alignment, Concrete, FlowEnd, Flows, Holds, Mutability, PositionKind, Reissue, Source, Ty, TyKind,
+    Alignment, Concrete, Declared, FlowEnd, Flows, Holds, Mutability, PositionKind, Reissue, Source, Ty, TyKind,
     Types, lent_types, position_kinds, positions,
 };
 
@@ -879,10 +879,10 @@ impl Forward<'_> {
     /// The places a call's callee declares it touches, where the facts it
     /// reaches declare an access.
     fn access(&self, callee: &Callee) -> Option<&[Touch]> {
-        let Callee::Extern { id, r#impl, .. } = callee else {
+        let Callee::Extern { id, .. } = callee else {
             return None;
         };
-        let facts = self.decls.call_facts(*id, *r#impl);
+        let facts = self.decls.call_facts(*id);
         facts.access.iter().find_map(|form| match form {
             DeclaredAccess::Touches(touches) => Some(&touches[..]),
             DeclaredAccess::Equivalence | DeclaredAccess::Gives { .. } => None,
@@ -1772,7 +1772,7 @@ impl Forward<'_> {
             .collect();
         let callee_value = indirect(callee).next().copied();
         let (result, writes) = match callee {
-            Callee::Extern { id, r#impl, .. } => match call_flows(self.decls, self.decls.called(*id, *r#impl), self.types, params, *ret) {
+            Callee::Extern { id, .. } => match call_flows(self.decls, Declared { function: *id }, self.types, params, *ret) {
                 Some(flows) => (self.declared_result(&flows, *ret, passed), self.declared_writes(&flows, self.access(callee), passed)),
                 None => self.flowed(&Flows::Every, callee, *ret, passed, &captured, callee_value.is_some()),
             },

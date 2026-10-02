@@ -45,7 +45,7 @@ impl NamedFact {
 }
 
 use super::impl_fit::is_impl_of;
-use super::{Core, DeclaredFacts, Refused, Scheme, TyVarBound};
+use super::{Core, DeclaredFacts, GenericFunction, Impls, Refused, Scheme, TyVarBound};
 use crate::ty::{Declared, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
 /// A parameter's storage whole, or one element of it. A parameter is
@@ -64,72 +64,86 @@ pub enum Element {
     Index(usize),
 }
 
-/// Refuses every declared fact that is not well formed at the signature it
-/// is stated on, and facts stated on a declaration that has impls, which
-/// no call reaches (`Scheme`). The generic impl's signature is its
-/// function's own.
-pub(super) fn refuse_ill_formed(
-    types: &mut Types<Poly>,
-    core: &Core,
-    functions: &FxHashMap<QualifiedRef, Scheme>,
-    declared_order: &[QualifiedRef],
-    refused: &mut Vec<Refused>,
-) {
-    for function in declared_order {
-        let Some(scheme) = functions.get(function) else {
-            continue;
-        };
-        if scheme.impls.is_some() && !scheme.facts.states_nothing() {
-            refused.push(Refused::FactsBesideImpls { function: *function });
+/// The functions a declared fact names: a declaration that is no impl, or
+/// a generic function, whose impls state its facts. An impl is reached
+/// only through its generic function (extern-fn §6), so a fact names none.
+pub(in crate::decl) struct Functions<'d> {
+    functions: &'d FxHashMap<QualifiedRef, Scheme>,
+    generic_functions: &'d FxHashMap<QualifiedRef, GenericFunction>,
+    impls: &'d FxHashMap<QualifiedRef, Impls>,
+}
+
+impl<'d> Functions<'d> {
+    pub(in crate::decl) fn new(
+        functions: &'d FxHashMap<QualifiedRef, Scheme>,
+        generic_functions: &'d FxHashMap<QualifiedRef, GenericFunction>,
+        impls: &'d FxHashMap<QualifiedRef, Impls>,
+    ) -> Self {
+        Functions { functions, generic_functions, impls }
+    }
+
+    /// The declaration `function` names, where it is one and no impl.
+    fn declaration(&self, function: QualifiedRef) -> Option<&'d Scheme> {
+        self.functions.get(&function).filter(|scheme| scheme.impl_of.is_none())
+    }
+
+    /// The signature `function` names: a declaration's, or a generic
+    /// function's.
+    fn ty(&self, function: QualifiedRef) -> Option<TyId<Poly>> {
+        match self.generic_functions.get(&function) {
+            Some(generic) => Some(generic.ty),
+            None => self.declaration(function).map(|scheme| scheme.ty),
         }
-        for StatedOn { declared, ty, bounds, facts } in stated_signatures(*function, scheme) {
-            let Some(stated) = Stated::of(declared, core, types, ty, bounds) else {
-                continue;
-            };
-            access::refuse_ill_formed(&stated, &facts.access, functions, types, refused);
-            action::refuse_ill_formed(&stated, &facts.action, functions, types, refused);
-            source::refuse_ill_formed(&stated, &facts.source, functions, types, refused);
-            relation::refuse_ill_formed(&stated, types, &facts.relations, refused);
+    }
+
+    /// Every set of facts stated for a call of `function`: a declaration's
+    /// own, or each of a generic function's impls'.
+    fn stated_facts(&self, function: QualifiedRef) -> Vec<&'d DeclaredFacts> {
+        match self.impls.get(&function) {
+            Some(impls) => impls
+                .concrete
+                .iter()
+                .chain(&impls.generic)
+                .filter_map(|r#impl| self.functions.get(r#impl))
+                .map(|scheme| &scheme.facts)
+                .collect(),
+            None => self.declaration(function).map(|scheme| &scheme.facts).into_iter().collect(),
         }
     }
 }
 
-/// A set of facts and the signature it is stated on.
-struct StatedOn<'s> {
-    declared: Declared,
-    ty: TyId<Poly>,
-    bounds: &'s [TyVarBound],
-    facts: &'s DeclaredFacts,
-}
-
-/// Each set of facts with its signature: the declaration's own and its
-/// generic impl's, both at its own type and bounds, then each concrete
-/// impl's, at the impl's own type and bounds.
-fn stated_signatures(function: QualifiedRef, scheme: &Scheme) -> impl Iterator<Item = StatedOn<'_>> {
-    let own = Declared { function, r#impl: None };
-    let at_own = move |facts| StatedOn { declared: own, ty: scheme.ty, bounds: &scheme.bounds, facts };
-    let generic = scheme.impls.iter().filter_map(|impls| impls.generic.as_ref()).map(move |generic| at_own(&generic.facts));
-    let concrete =
-        scheme.impls.iter().flat_map(|impls| impls.concrete.iter().enumerate()).map(move |(at, r#impl)| StatedOn {
-            declared: Declared { function, r#impl: Some(at) },
-            ty: r#impl.ty,
-            bounds: &r#impl.bounds,
-            facts: &r#impl.facts,
-        });
-    std::iter::once(at_own(&scheme.facts)).chain(generic).chain(concrete)
-}
-
-/// Every set of facts stated on `scheme` or on one of its impls.
-fn stated_facts(scheme: &Scheme) -> impl Iterator<Item = &DeclaredFacts> {
-    let impls = scheme.impls.iter();
-    let generic = impls.clone().filter_map(|impls| impls.generic.as_ref()).map(|generic| &generic.facts);
-    let concrete = impls.flat_map(|impls| impls.concrete.iter()).map(|r#impl| &r#impl.facts);
-    std::iter::once(&scheme.facts).chain(generic).chain(concrete)
+/// Refuses every declared fact that is not well formed at the signature of
+/// the declaration it is stated on.
+pub(in crate::decl) fn refuse_ill_formed(
+    types: &mut Types<Poly>,
+    core: &Core,
+    functions: &Functions<'_>,
+    declared_order: &[QualifiedRef],
+    refused: &mut Vec<Refused>,
+) {
+    for function in declared_order {
+        let Some(scheme) = functions.functions.get(function) else {
+            continue;
+        };
+        let declared = Declared { function: *function };
+        let impl_of = scheme.impl_of.map(|impl_of| impl_of.generic_function);
+        let Some(stated) = Stated::of(declared, impl_of, core, types, scheme.ty, &scheme.bounds) else {
+            continue;
+        };
+        let facts = &scheme.facts;
+        access::refuse_ill_formed(&stated, &facts.access, functions, types, refused);
+        action::refuse_ill_formed(&stated, &facts.action, functions, types, refused);
+        source::refuse_ill_formed(&stated, &facts.source, functions, types, refused);
+        relation::refuse_ill_formed(&stated, types, &facts.relations, refused);
+    }
 }
 
 /// The signature a set of facts is stated on.
 struct Stated<'a> {
     declared: Declared,
+    /// The generic function the declaration is an impl of, where it is
+    /// one.
+    impl_of: Option<QualifiedRef>,
     core: &'a Core,
     params: Box<[TyId<Poly>]>,
     ret: TyId<Poly>,
@@ -139,11 +153,18 @@ struct Stated<'a> {
 impl<'a> Stated<'a> {
     /// `None` where `ty` is no function type, which `verify` refuses on its
     /// own.
-    fn of(declared: Declared, core: &'a Core, types: &Types<Poly>, ty: TyId<Poly>, bounds: &'a [TyVarBound]) -> Option<Self> {
+    fn of(
+        declared: Declared,
+        impl_of: Option<QualifiedRef>,
+        core: &'a Core,
+        types: &Types<Poly>,
+        ty: TyId<Poly>,
+        bounds: &'a [TyVarBound],
+    ) -> Option<Self> {
         let TyKind::Fn { params, ret, .. } = types.kind(ty) else {
             return None;
         };
-        Some(Stated { declared, core, params: params.clone(), ret: *ret, bounds })
+        Some(Stated { declared, impl_of, core, params: params.clone(), ret: *ret, bounds })
     }
 
     /// The type of parameter `at`; where the signature has none, refused.

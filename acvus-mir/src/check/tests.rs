@@ -34,7 +34,7 @@ impl Fixture {
             raw: RawDeclarations {
                 types: Types::new(),
                 functions: Vec::new(),
-                lang_impls: Vec::new(),
+                generic_functions: Vec::new(),
                 user_types: Vec::new(),
                 casts: Vec::new(),
                 conversions: Vec::new(),
@@ -82,7 +82,7 @@ impl Fixture {
         });
         let id = QualifiedRef::root(self.name(name));
         let param_names = (0..params.len()).map(|at| self.name(&format!("p{at}"))).collect();
-        let scheme = Scheme { ty, param_names, bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]), awaits: false };
+        let scheme = Scheme { ty, param_names, bounds: Box::new([]), impl_of: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]), awaits: false };
         self.raw.functions.push((id, scheme));
         id
     }

@@ -7,7 +7,8 @@ use acvus_utils::{Astr, Interner, Namespace, QualifiedRef};
 
 use super::{lower_script, lower_template};
 use crate::decl::{
-    ContextDecl, ConversionRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl,
+    ContextDecl, ConversionRule, Core, Declarations, DeclaredFacts, GenericFunction, ImplKind, ImplOf, LoopMarkers, RawDeclarations, Scheme, TyVarBound,
+    UserTypeDecl,
 };
 use crate::ir::cfg::edit::{DefDominatesUses, Invariant, NeverDiverges, OrderChainWhole, SplitTakenOnce, StructureKept, TypesAgree, Violation};
 use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
@@ -16,6 +17,11 @@ use crate::passes::analysis::{Loan, Mode, Storage};
 use crate::ty::{Mark, MarkTerm};
 use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 use crate::typeck::{Inputs, Interfaces, check_script, check_template};
+
+/// The impl at `at` of `generic`, a declaration of its own named `generic#at`.
+fn impl_id(names: &Interner, generic: QualifiedRef, at: usize) -> QualifiedRef {
+    QualifiedRef::qualified(generic.namespace, names.intern(&format!("{}#{at}", names.resolve(generic.name))))
+}
 
 struct Fixture {
     names: Interner,
@@ -33,7 +39,7 @@ impl Fixture {
             raw: RawDeclarations {
                 types: Types::new(),
                 functions: Vec::new(),
-                lang_impls: Vec::new(),
+                generic_functions: Vec::new(),
                 user_types: Vec::new(),
                 casts: Vec::new(),
                 conversions: Vec::new(),
@@ -81,7 +87,7 @@ impl Fixture {
     /// A plain extern fn `name` of type `ty`, with no type variable.
     fn declare(&mut self, name: &str, ty: TyId<Poly>, arity: usize) -> QualifiedRef {
         let id = QualifiedRef::root(self.name(name));
-        let scheme = Scheme { ty, param_names: self.param_names(arity), bounds: Box::new([]), impls: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]), awaits: false };
+        let scheme = Scheme { ty, param_names: self.param_names(arity), bounds: Box::new([]), impl_of: None, requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]), awaits: false };
         self.raw.functions.push((id, scheme));
         id
     }
@@ -105,23 +111,23 @@ impl Fixture {
     }
 
     fn lang_item(&mut self, item: QualifiedRef, impls: &[TyId<Poly>]) {
-        let concrete = impls
-            .iter()
-            .map(|ty| ImplSig {
+        for (at, ty) in impls.iter().enumerate() {
+            let scheme = Scheme {
                 ty: *ty,
                 bounds: vec![TyVarBound::Any; variables_of(&self.raw.types, *ty)].into(),
                 param_names: self.param_names(match self.raw.types.kind(*ty) {
                     TyKind::Fn { params, .. } => params.len(),
                     _ => 0,
                 }),
+                impl_of: Some(ImplOf { generic_function: item, kind: ImplKind::Concrete }),
                 requires: Box::new([]),
                 facts: Default::default(),
                 runs: Box::new([]),
                 awaits: false,
                 specialized: Box::new([]),
-            })
-            .collect();
-        self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
+            };
+            self.raw.functions.push((impl_id(&self.names, item, at), scheme));
+        }
     }
 
     /// An extern `Vec<T>` whose `as_slice` impl views it as `&[T]`, and the
@@ -884,7 +890,7 @@ fn a_template_appends_text_and_displays_values_onto_its_output() {
     assert_eq!(count(&ops, |op| matches!(op, Op::StringAppend { .. })), 1);
     let display = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("display"));
     assert_eq!(
-        count(&ops, |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == display)),
+        count(&ops, |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == impl_id(&lowered.names, display, 0))),
         1
     );
     assert!(matches!(lowered.module.types().kind(lowered.entry().ret()), TyKind::String));
@@ -1007,7 +1013,7 @@ impl Fixture {
             ty,
             param_names: self.param_names(arity),
             bounds: vec![TyVarBound::Any; variables].into(),
-            impls: None,
+            impl_of: None,
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
@@ -1379,7 +1385,7 @@ fn a_lifted_parts_call_is_unmarked_after_it_where_a_use_raises_it() {
     let given = body
         .blocks()
         .flat_map(|(_, block)| block.insts())
-        .find(|inst| matches!(inst.op(), Op::FunctionCall { callee: Callee::Extern { id, r#impl: Some(0), .. }, .. } if *id == default))
+        .find(|inst| matches!(inst.op(), Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == impl_id(&lowered.names, default, 0)))
         .and_then(|inst| inst.result())
         .expect("a call of default at `#Vec<i64>`");
     assert_eq!(src, given, "{}", shown(body));
@@ -1424,6 +1430,13 @@ fn calls_of(lowered: &Lowered, callee: QualifiedRef) -> usize {
     count(&lowered.entry_ops(), |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == callee))
 }
 
+/// The calls of any of the first `impls` impls of `generic`, the ones the
+/// test's declarations give it.
+fn calls_of_impls(lowered: &Lowered, generic: QualifiedRef, impls: usize) -> usize {
+    let ids: Vec<QualifiedRef> = (0..impls).map(|at| impl_id(&lowered.names, generic, at)).collect();
+    count(&lowered.entry_ops(), |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if ids.contains(id)))
+}
+
 /// `==` on a tuple compares its parts in order through each part's
 /// `core::eq`, the second only where the first is equal (operators §4).
 #[test]
@@ -1432,7 +1445,7 @@ fn tuple_equality_compares_part_by_part() {
     fx.comparisons();
     let lowered = fx.script("(1, true) == (2, false)");
     let eq = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("eq"));
-    assert_eq!(calls_of(&lowered, eq), 2);
+    assert_eq!(calls_of_impls(&lowered, eq, 2), 2);
     assert!(lowered.entry_terminators().iter().any(|terminator| matches!(terminator, Terminator::Diamond { .. })));
 }
 
@@ -1444,7 +1457,7 @@ fn tuple_ordering_is_the_first_unequal_parts_cmp() {
     fx.comparisons();
     let lowered = fx.script("(1, 2) < (1, 3)");
     let cmp = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("cmp"));
-    assert_eq!(calls_of(&lowered, cmp), 2);
+    assert_eq!(calls_of_impls(&lowered, cmp, 2), 2);
     let lt = count(&lowered.entry_ops(), |op| matches!(op, Op::BinOp { op: crate::ir::BinOp::Lt, .. }));
     assert_eq!(lt, 1);
 }
@@ -1463,7 +1476,7 @@ fn option_equality_tests_tags_before_payloads() {
     let ops = lowered.entry_ops();
     assert_eq!(count(&ops, |op| matches!(op, Op::TestVariant { .. })), 2);
     let eq = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("eq"));
-    assert_eq!(calls_of(&lowered, eq), 1);
+    assert_eq!(calls_of_impls(&lowered, eq, 2), 1);
 }
 
 /// An input read inside a lambda is captured as a binding is (D79).
@@ -1699,7 +1712,7 @@ fn array_equality_is_one_for_that_exits_at_the_first_difference() {
     });
     assert!(exits_early, "{}", shown(body));
     let eq = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("eq"));
-    assert_eq!(calls_of(&lowered, eq), 1, "one element comparison, in the loop: {}", shown(body));
+    assert_eq!(calls_of_impls(&lowered, eq, 2), 1, "one element comparison, in the loop: {}", shown(body));
 }
 
 /// The values a part read of a `&mut` part yields in `source`'s entry, each
@@ -1718,7 +1731,7 @@ fn mut_parts_read_shared(source: &str, read: impl Fn(&Op) -> bool) -> usize {
         })
         .collect();
     let eq = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("eq"));
-    assert!(calls_of(&lowered, eq) >= 1, "the `i64`s the parts name are compared: {}", shown(body));
+    assert!(calls_of_impls(&lowered, eq, 2) >= 1, "the `i64`s the parts name are compared: {}", shown(body));
     let reads: Vec<crate::ir::ValueId> = read_values(body, &read)
         .into_iter()
         .filter(|result| matches!(lowered.kind_of(body, *result), TyKind::Ref(..)))
@@ -1896,7 +1909,7 @@ fn array_ordering_is_one_for_that_exits_at_the_first_nonzero_cmp() {
     let [answer] = body.block(exit).params() else { panic!("the exit takes the answer: {}", shown(body)) };
     assert_eq!(lowered.kind_of(body, *answer), &TyKind::Int(IntTy::I64));
     let cmp = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("cmp"));
-    assert_eq!(calls_of(&lowered, cmp), 1, "{}", shown(body));
+    assert_eq!(calls_of_impls(&lowered, cmp, 2), 1, "{}", shown(body));
     let lt = count(&lowered.entry_ops(), |op| matches!(op, Op::BinOp { op: crate::ir::BinOp::Lt, left, .. } if left == answer));
     assert_eq!(lt, 1, "{}", shown(body));
 }
@@ -2013,14 +2026,15 @@ fn a_lifted_clone_calls_each_parts_impl_and_rebuilds_the_tuple() {
     let lowered = fx.script("$t.clone()");
     let body = lowered.entry();
     let ops = lowered.entry_ops();
-    let calls: Vec<Option<usize>> = ops
+    let clone_impls: Vec<QualifiedRef> = (0..impls.len()).map(|at| impl_id(&lowered.names, clone, at)).collect();
+    let calls: Vec<QualifiedRef> = ops
         .iter()
         .filter_map(|op| match op {
-            Op::FunctionCall { callee: Callee::Extern { id, r#impl, .. }, .. } if *id == clone => Some(*r#impl),
+            Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if clone_impls.contains(id) => Some(*id),
             _ => None,
         })
         .collect();
-    assert_eq!(calls, vec![Some(0)], "only the `String` part calls an impl: {}", shown(body));
+    assert_eq!(calls, vec![clone_impls[0]], "only the `String` part calls an impl: {}", shown(body));
     for at in [0, 1] {
         let part = |op: &Op| matches!(op, Op::Ref { path, mutability: Mutability::Shared, .. } if path[..] == [PathSeg::Index(at)]);
         assert_eq!(count(&ops, part), 1, "part {at} is lent: {}", shown(body));
@@ -2040,14 +2054,24 @@ fn a_lifted_eq_asks_each_parts_impl_in_order() {
     let at_int = fx.function(&[shared, shared], bool_ty, Effect::pure());
     let eq = fx.raw.core.eq;
     let facts = DeclaredFacts { access: Box::new([crate::decl::declared::Access::Equivalence]), ..Default::default() };
-    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts, runs: Box::new([]), specialized: Box::new([]), awaits: false }]);
-    fx.raw.lang_impls.push((eq, Impls { concrete, generic: None }));
+    let at_eq = Scheme {
+        ty: at_int,
+        bounds: Box::new([]),
+        param_names: fx.param_names(2),
+        impl_of: Some(ImplOf { generic_function: eq, kind: ImplKind::Concrete }),
+        requires: Box::new([]),
+        facts,
+        runs: Box::new([]),
+        specialized: Box::new([]),
+        awaits: false,
+    };
+    fx.raw.functions.push((impl_id(&fx.names, eq, 0), at_eq));
     let pair = fx.ty(TyKind::Tuple(Box::new([int, int]), ()));
     fx.input("t", pair);
     let lowered = fx.script("eq(&$t, &$t)");
     let body = lowered.entry();
     let ops = lowered.entry_ops();
-    let calls = count(&ops, |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == eq));
+    let calls = count(&ops, |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == impl_id(&lowered.names, eq, 0)));
     assert_eq!(calls, 2, "{}", shown(body));
     let diamonds = lowered.entry_terminators().iter().filter(|terminator| matches!(terminator, Terminator::Diamond { .. })).count();
     assert_eq!(diamonds, 1, "the second part is asked only where the first is equal: {}", shown(body));
@@ -2117,7 +2141,8 @@ fn a_lifted_clone_of_an_array_maps_its_elements() {
     let body = lowered.entry();
     let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, .. });
     assert_eq!(count(&lowered.entry_ops(), mapped), 1, "{}", shown(body));
-    let cloned = |op: &Op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == clone);
+    let clone_impl = impl_id(&lowered.names, clone, 0);
+    let cloned = |op: &Op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == clone_impl);
     assert_eq!(count(&all_ops(&lowered), cloned), 1, "{}", shown(body));
 }
 
@@ -2168,19 +2193,20 @@ fn an_array_rebuilt_from_no_argument_or_several_is_one_map() {
     let generic = fx.function(&[shared_t, shared_t], t, Effect::pure());
     let at_int = fx.function(&[shared_int, shared_int], int, Effect::pure());
     let id = QualifiedRef::root(fx.name("pick"));
-    let concrete = Box::new([ImplSig { ty: at_int, bounds: Box::new([]), param_names: fx.param_names(2), requires: Box::new([]), facts: DeclaredFacts::default(), runs: Box::new([]), specialized: Box::new([]), awaits: false }]);
-    let scheme = Scheme {
-        ty: generic,
+    let at_pick = Scheme {
+        ty: at_int,
+        bounds: Box::new([]),
         param_names: fx.param_names(2),
-        bounds: Box::new([TyVarBound::Any]),
-        impls: Some(Impls { concrete, generic: None }),
+        impl_of: Some(ImplOf { generic_function: id, kind: ImplKind::Concrete }),
         requires: Box::new([]),
         facts: DeclaredFacts::default(),
         runs: Box::new([]),
-        awaits: false,
         specialized: Box::new([]),
+        awaits: false,
     };
-    fx.raw.functions.push((id, scheme));
+    let function = GenericFunction { ty: generic, param_names: fx.param_names(2), bounds: Box::new([TyVarBound::Any]), specialized: Box::new([]) };
+    fx.raw.functions.push((impl_id(&fx.names, id, 0), at_pick));
+    fx.raw.generic_functions.push((id, function));
     let lowered = fx.script("let a = [1, 2]; let b = [3, 4]; let c = pick(&a, &b); 0");
     let body = lowered.entry();
     let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, args } if args.len() == 3);

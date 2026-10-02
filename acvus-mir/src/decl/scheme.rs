@@ -8,15 +8,9 @@ use crate::ty::{EffectTerm, IdentityTerm, Poly, TyId, TyKind, Types};
 
 /// An extern fn's declaration (extern-fn): its signature, a function type
 /// whose effect carries its split (effects §6), the bound of each type
-/// parameter by position, its impls, what it requires, and its declared
-/// facts.
-///
-/// A call's declared facts are stated in one place, on what the call
-/// reaches: the declaration itself where it has no impls, and the impl
-/// that answers where it has them. A fact set per signature, read whole,
-/// needs no rule for how two sets of one kind would combine, and the
-/// ledger states none. So a declaration with impls states its facts on
-/// them, and `verify` refuses facts on its own `facts`.
+/// parameter by position, what it requires, and its declared facts. An
+/// impl is one too, and states the generic function it is an impl of; a
+/// call reaches it only through that generic function (extern-fn §6).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scheme {
     pub ty: TyId<Poly>,
@@ -27,10 +21,10 @@ pub struct Scheme {
     /// Exactly one bound per type variable of `ty`, by position; `verify`
     /// refuses any other count.
     pub bounds: Box<[TyVarBound]>,
-    /// `Some` for a generic function's impls (extern-fn §6).
-    pub impls: Option<Impls>,
+    /// The generic function this declaration is an impl of, where it is
+    /// one (extern-fn §6).
+    pub impl_of: Option<ImplOf>,
     pub requires: Box<[Requirement]>,
-    /// The facts a call of a declaration without impls reaches.
     pub facts: DeclaredFacts,
     /// The effect variables of `ty` whose work a call runs before its
     /// result is taken (extern-fn §2). The call's effect is the join of the
@@ -40,9 +34,7 @@ pub struct Scheme {
     /// gives is pure. `verify` refuses an effect variable a parameter gives
     /// that is neither here nor in the result.
     pub runs: Box<[u32]>,
-    /// Whether the declaration has a body that may suspend (extern-fn §2):
-    /// a call of one that has none is refused where its effect suspends.
-    /// A generic function's is its impls', each stating its own.
+    /// Whether the declaration has a body that may suspend (extern-fn §2).
     pub awaits: bool,
     /// The whole concrete types a registry named and made this declaration
     /// concrete at once more (types §8, rfc_extern registry): the uniform
@@ -51,6 +43,34 @@ pub struct Scheme {
     /// shares one mark: marked from the start where the use's type there
     /// is one of them, unmarked where it is not, and joined as any mark
     /// after. Which of the pair a call is follows from that mark.
+    pub specialized: Box<[TyId<Poly>]>,
+}
+
+/// The generic function an impl is an impl of, and which of its impls it
+/// is: a concrete one, or the generic one, which reach takes only where no
+/// concrete one answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImplOf {
+    pub generic_function: QualifiedRef,
+    pub kind: ImplKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImplKind {
+    Concrete,
+    Generic,
+}
+
+/// A generic function (extern-fn §6): a name with a signature and no
+/// body. It states nothing a body states; its impls do.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericFunction {
+    pub ty: TyId<Poly>,
+    /// As `Scheme::param_names`.
+    pub param_names: Box<[Astr]>,
+    /// As `Scheme::bounds`.
+    pub bounds: Box<[TyVarBound]>,
+    /// As `Scheme::specialized`.
     pub specialized: Box<[TyId<Poly>]>,
 }
 
@@ -63,38 +83,12 @@ pub enum PairMember {
     Specialized,
 }
 
-/// The impls of a generic function: the concrete ones in order, then
-/// the generic one.
+/// A generic function's impls, each a declaration of its own: the concrete
+/// ones in declaration order, then the generic one.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Impls {
-    pub concrete: Box<[ImplSig]>,
-    pub generic: Option<GenericImplSig>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ImplSig {
-    pub ty: TyId<Poly>,
-    /// Exactly one bound per type variable of `ty` the impl leaves open,
-    /// by position, as `Scheme::bounds`.
-    pub bounds: Box<[TyVarBound]>,
-    /// One name per parameter of `ty`, in order, as `Scheme::param_names`.
-    pub param_names: Box<[Astr]>,
-    pub requires: Box<[Requirement]>,
-    pub facts: DeclaredFacts,
-    /// As `Scheme::runs`.
-    pub runs: Box<[u32]>,
-    /// As `Scheme::awaits`.
-    pub awaits: bool,
-    /// As `Scheme::specialized`.
-    pub specialized: Box<[TyId<Poly>]>,
-}
-
-/// The generic impl: its type is the generic function's own.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct GenericImplSig {
-    pub facts: DeclaredFacts,
-    /// As `Scheme::awaits`.
-    pub awaits: bool,
+    pub concrete: Box<[QualifiedRef]>,
+    pub generic: Option<QualifiedRef>,
 }
 
 /// What a declaration states beyond its signature, trusted absolutely
@@ -128,13 +122,6 @@ pub enum Ends {
     Returns,
     /// The call's own code returns a value and never traps.
     Total,
-}
-
-impl DeclaredFacts {
-    /// Whether no fact of any kind is stated.
-    pub(super) fn states_nothing(&self) -> bool {
-        *self == DeclaredFacts::default()
-    }
 }
 
 /// An impl of `generic_function` whose type joins `pattern`, written at the

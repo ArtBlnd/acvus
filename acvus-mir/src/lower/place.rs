@@ -402,7 +402,7 @@ pub(super) fn slice_of<S: Slot>(
             let lent = convert(cx, callee_site, lent, span);
             let slice = cx.builder.intern(TyKind::Slice(element));
             let ty = cx.ref_ty(mutability, slice);
-            let op = Op::AsSlice { container: lent, mutability, r#impl: cx.extern_impl(chosen) };
+            let op = Op::AsSlice { container: lent, mutability, r#impl: cx.reached_function(chosen) };
             cx.builder.push(op, ty, span)
         }
     }

@@ -122,7 +122,7 @@ impl Fixture {
         A: Analysis,
     {
         let decls = Declarations::verify(RawDeclarations {
-            lang_impls: Vec::new(),
+            generic_functions: Vec::new(),
             types: Types::new(),
             functions: Vec::new(),
             user_types: Vec::new(),
@@ -496,17 +496,17 @@ fn an_extern_call_prints_its_impl_where_its_function_has_impls() {
     let g_ty = pure(&mut f.module.types, &[int], int);
     let core = f.names.namespace(&[f.name("core")]);
     let (eq, g, as_slice) =
-        (QualifiedRef::qualified(core, f.name("eq")), QualifiedRef::root(f.name("g")), QualifiedRef::qualified(core, f.name("as_slice")));
+        (QualifiedRef::qualified(core, f.name("eq#1")), QualifiedRef::root(f.name("g")), QualifiedRef::qualified(core, f.name("as_slice#0")));
     let (n, xs) = (f.name("n"), f.name("xs"));
 
     let mut builder = f.module.build_body(false, int);
     let n = builder.param(n, int, Span::ZERO);
     let xs = builder.param(xs, array_ref, Span::ZERO);
-    let at_impl = Op::FunctionCall { callee: Callee::Extern { id: eq, r#impl: Some(1), required: Vec::new(), member: crate::decl::PairMember::Uniform }, callee_ty: eq_ty, args: vec![n, n] };
+    let at_impl = Op::FunctionCall { callee: Callee::Extern { id: eq, required: Vec::new(), member: crate::decl::PairMember::Uniform }, callee_ty: eq_ty, args: vec![n, n] };
     builder.push(at_impl, bool, Span::ZERO);
-    let at_none = Op::FunctionCall { callee: Callee::Extern { id: g, r#impl: None, required: Vec::new(), member: crate::decl::PairMember::Uniform }, callee_ty: g_ty, args: vec![n] };
+    let at_none = Op::FunctionCall { callee: Callee::Extern { id: g, required: Vec::new(), member: crate::decl::PairMember::Uniform }, callee_ty: g_ty, args: vec![n] };
     let result = builder.push(at_none, int, Span::ZERO);
-    let view = Op::AsSlice { container: xs, mutability: Mutability::Shared, r#impl: crate::ir::ExternImpl { id: as_slice, r#impl: Some(0) } };
+    let view = Op::AsSlice { container: xs, mutability: Mutability::Shared, r#impl: as_slice };
     builder.push(view, slice_ref, Span::ZERO);
     builder.terminate(Terminator::Return { value: result, order: None, span: Span::ZERO }, Span::ZERO);
     let id = builder.seal().expect("the body has no open state");

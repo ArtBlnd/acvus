@@ -64,10 +64,10 @@ mod tests {
 
     use super::*;
     use crate::decl::declared::{Atom, Comparison, Relation, Subject, Term};
-    use crate::decl::{Core, DeclaredFacts, GenericImplSig, Impls, LoopMarkers, RawDeclarations, Scheme};
+    use crate::decl::{Core, DeclaredFacts, GenericFunction, ImplKind, ImplOf, LoopMarkers, RawDeclarations, Scheme};
     use crate::decl::Declarations;
     use crate::ir::cfg::{BlockId, Inst, Terminator};
-    use crate::ir::{Callee, ExternImpl, ForSource, IndexMode, RefTarget, ValueId};
+    use crate::ir::{Callee, ForSource, IndexMode, RefTarget, ValueId};
     use crate::ty::{
         Calls, Concrete, Effect, EffectTerm, FlowTerm, Holds, IntTy, LenTerm, Mutability, Poly, Ty, TyKind,
         Types,
@@ -78,6 +78,7 @@ mod tests {
     struct Fixture {
         module: Module,
         decls: Declarations,
+        /// The impl `make#0` a call of `make` reaches.
         make: QualifiedRef,
         as_slice: QualifiedRef,
         int: Ty,
@@ -113,16 +114,20 @@ mod tests {
             comparison: Comparison::Eq,
             right: Term::Atom(Atom::Arg(0)),
         }];
+        let make_function = GenericFunction {
+            ty: declared,
+            param_names: Box::new([interner.intern("n")]),
+            bounds: Box::new([]),
+            specialized: Box::new([]),
+        };
+        let make_impl = QualifiedRef::qualified(make.namespace, interner.intern("make#0"));
         let scheme = Scheme {
             ty: declared,
             param_names: Box::new([interner.intern("n")]),
             bounds: Box::new([]),
-            impls: Some(Impls {
-                concrete: Box::new([]),
-                generic: Some(GenericImplSig { facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() }, awaits: false }),
-            }),
+            impl_of: Some(ImplOf { generic_function: make, kind: ImplKind::Generic }),
             requires: Box::new([]),
-            facts: DeclaredFacts::default(),
+            facts: DeclaredFacts { relations: relations.into(), ..DeclaredFacts::default() },
             runs: Box::new([]),
             awaits: false,
             specialized: Box::new([]),
@@ -131,7 +136,7 @@ mod tests {
             ty: declared,
             param_names: Box::new([interner.intern("n")]),
             bounds: Box::new([]),
-            impls: None,
+            impl_of: None,
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
@@ -140,8 +145,8 @@ mod tests {
         };
         let decls = Declarations::verify(RawDeclarations {
             types: poly,
-            functions: vec![(make, scheme), (as_slice, as_slice_scheme)],
-            lang_impls: Vec::new(),
+            functions: vec![(make_impl, scheme), (as_slice, as_slice_scheme)],
+            generic_functions: vec![(make, make_function)],
             user_types: Vec::new(),
             casts: Vec::new(),
             conversions: Vec::new(),
@@ -168,7 +173,7 @@ mod tests {
         });
         let array = types.intern(TyKind::Array(int, LenTerm::Known(4), ()));
         let array_ref = types.intern(TyKind::Ref(Mutability::Shared, array));
-        Fixture { module: Module::new(types), decls, make, as_slice, int, index, slice_ref, make_ty, array, array_ref }
+        Fixture { module: Module::new(types), decls, make: make_impl, as_slice, int, index, slice_ref, make_ty, array, array_ref }
     }
 
     fn constant(n: i128) -> Op {
@@ -248,7 +253,7 @@ mod tests {
             SymbolicEnd::DeclaredLen => {
                 let n = builder.param(interner.intern("n"), index, Span::ZERO);
                 let call = Op::FunctionCall {
-                    callee: Callee::Extern { id: make, r#impl: Some(0), required: Vec::new(), member: crate::decl::PairMember::Uniform },
+                    callee: Callee::Extern { id: make, required: Vec::new(), member: crate::decl::PairMember::Uniform },
                     callee_ty: make_ty,
                     args: vec![n],
                 };
@@ -330,7 +335,7 @@ mod tests {
             Made::ByADeclaredCall => {
                 let n = builder.push(constant(10), index, Span::ZERO);
                 let call = Op::FunctionCall {
-                    callee: Callee::Extern { id: make, r#impl: Some(0), required: Vec::new(), member: crate::decl::PairMember::Uniform },
+                    callee: Callee::Extern { id: make, required: Vec::new(), member: crate::decl::PairMember::Uniform },
                     callee_ty: make_ty,
                     args: vec![n],
                 };
@@ -346,7 +351,7 @@ mod tests {
                 let view = Op::AsSlice {
                     container: r,
                     mutability: Mutability::Shared,
-                    r#impl: ExternImpl { id: as_slice, r#impl: None },
+                    r#impl: as_slice,
                 };
                 builder.push(view, slice_ref, Span::ZERO)
             }

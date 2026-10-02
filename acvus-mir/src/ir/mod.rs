@@ -201,12 +201,11 @@ pub enum Callee {
     /// A unit's function in the graph, at its instantiation at the call's
     /// `callee_ty` (graph). Enables pre-fetch and inlining.
     Direct(QualifiedRef),
-    /// An ExternFn at the impl the checker settled on (RFC-0040), none for
-    /// a function that has no impls, with what that call's requirements
-    /// settled on (RFC-0070 rule 3).
+    /// The declaration the call reached: a function, or the impl of a
+    /// generic function the checker chose (extern-fn §6), with what that
+    /// call's requirements chose.
     Extern {
         id: QualifiedRef,
-        r#impl: Option<usize>,
         required: Vec<Chosen>,
         /// Which of a `#` pair the call is (types §8); `Uniform` for a
         /// declaration that is no pair.
@@ -219,36 +218,13 @@ pub enum Callee {
 impl Callee {
 }
 
-/// One node of the impl tree the checker settled (RFC-0070 rule 3).
-/// `impl` numbers `generic_function`'s impls as the registry numbers its
-/// handlers, and `required` stands one to one against the requirements the
-/// chosen impl's declaration states, which is the order
-/// `InstanceEntry::requires` is read in.
+/// One node of the impl tree the checker chose: the impl a requirement
+/// reached, and what its own requirements chose. `required` stands one to
+/// one against the requirements the chosen impl's declaration states.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Chosen {
-    pub generic_function: QualifiedRef,
-    pub r#impl: usize,
+    pub function: QualifiedRef,
     pub required: Vec<Chosen>,
-}
-
-/// An ExternFn at the impl the checker settled on (RFC-0040), none for a
-/// function that has no impls, for an instruction that runs one without
-/// being a `FunctionCall`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExternImpl {
-    pub id: QualifiedRef,
-    pub r#impl: Option<usize>,
-}
-
-impl From<ExternImpl> for Callee {
-    fn from(ExternImpl { id, r#impl }: ExternImpl) -> Callee {
-        Callee::Extern {
-            id,
-            r#impl,
-            required: Vec::new(),
-            member: PairMember::Uniform,
-        }
-    }
 }
 
 /// How an `Index` yields its element (RFC-0047 rule 4). The checker decides it

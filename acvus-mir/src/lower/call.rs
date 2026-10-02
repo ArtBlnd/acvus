@@ -48,7 +48,7 @@ pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, 
                 let TyKind::Ref(mutability, _) = cx.kind(step.to) else {
                     panic!("a view's result is a reference (operators §5)")
                 };
-                let op = Op::AsSlice { container: at, mutability: *mutability, r#impl: cx.extern_impl(&step.via) };
+                let op = Op::AsSlice { container: at, mutability: *mutability, r#impl: cx.reached_function(&step.via) };
                 cx.builder.push(op, step.to, span)
             }
             false => {
@@ -153,7 +153,7 @@ fn call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &[&Exp
     }
     if let Expr::Ident { name, ref_kind: RefKind::Value, .. } = func
         && !name.namespace.is_root()
-        && cx.decls.scheme(*name).is_none()
+        && !cx.decls.names_a_function(*name)
     {
         return variant_call(cx, site, name.name, args, span);
     }

@@ -6,11 +6,11 @@
 use rustc_hash::FxHashMap;
 
 use acvus_ast::{AstId, Literal, Span};
-use acvus_utils::Astr;
+use acvus_utils::{Astr, QualifiedRef};
 
 use crate::decl::{Declarations, PairMember};
 use crate::ir::cfg::{BlockId, Builder, Op, Terminator};
-use crate::ir::{Callee, Chosen as IrChosen, ExternImpl, ValueId};
+use crate::ir::{Callee, Chosen as IrChosen, ValueId};
 use crate::ty::{Effect, IntTy, Mutability, Reissue, Ty, TyKind};
 use crate::typeck::{Chosen, Impl, Typeck};
 
@@ -168,43 +168,44 @@ impl<'a, 'm> Lcx<'a, 'm> {
         self.binder_spans.insert(binder, span);
     }
 
-    /// The impl `chosen` reached, numbered as the IR numbers a generic
-    /// function's impls: a concrete impl by its index, the generic impl
-    /// after them. A declaration without impls is itself the callee, at no
-    /// impl.
-    pub fn impl_index(&self, chosen: &Chosen) -> Option<usize> {
-        let at = match chosen.r#impl {
-            None => return None,
-            Some(Impl::Concrete(at)) => at,
-            Some(Impl::Generic) => {
-                let scheme = self
-                    .decls
-                    .scheme(chosen.declaration)
-                    .unwrap_or_else(|| panic!("a reached declaration {:?} is declared", chosen.declaration));
-                let impls = scheme.impls.as_ref().expect("a declaration reached at its generic impl has impls");
-                impls.concrete.len()
-            }
-            // A call answered structurally is lowered by its tree
-            // (`part_tree::lifted`), and a requirement so answered is refused
-            // by typeck (`Unimplemented::LiftedImplAsRequirement`), so no
-            // chosen impl numbered here is one.
-            Some(Impl::Structural) => unreachable!(
+    /// The declaration `chosen` reached: the function itself, or the impl
+    /// of a generic function typeck chose (extern-fn §6).
+    ///
+    /// # Panics
+    /// `chosen` is a lifted impl: a call answered structurally is lowered by
+    /// its tree (`part_tree::lifted`), and a requirement so answered is
+    /// refused by typeck (`Unimplemented::LiftedImplAsRequirement`), so no
+    /// declaration reached here is one.
+    pub fn reached_function(&self, chosen: &Chosen) -> QualifiedRef {
+        let r#impl = match chosen.r#impl {
+            None => return chosen.declaration,
+            Some(r#impl) => r#impl,
+        };
+        let (_, impls) = self
+            .decls
+            .generic_function(chosen.declaration)
+            .unwrap_or_else(|| panic!("a declaration {:?} reached at an impl is a generic function", chosen.declaration));
+        match r#impl {
+            Impl::Concrete(at) => impls.concrete[at],
+            Impl::Generic => impls.generic.expect("a declaration reached at its generic impl has one"),
+            Impl::Structural => unreachable!(
                 "a lifted impl {:?} is no callee: typeck refuses one as a requirement, and lower calls its parts",
                 chosen.declaration
             ),
-        };
-        Some(at)
+        }
     }
 
     /// # Panics
     /// A required impl is at no impl: a requirement names a generic
     /// function, which is reached only at one of its impls.
     pub fn ir_chosen(&self, chosen: &Chosen) -> IrChosen {
+        assert!(
+            chosen.r#impl.is_some(),
+            "a requirement names a generic function reached at one of its impls, not {:?}",
+            chosen.declaration
+        );
         IrChosen {
-            generic_function: chosen.declaration,
-            r#impl: self.impl_index(chosen).unwrap_or_else(|| {
-                panic!("a requirement names a generic function reached at one of its impls, not {:?}", chosen.declaration)
-            }),
+            function: self.reached_function(chosen),
             required: chosen.required.iter().map(|required| self.ir_chosen(required)).collect(),
         }
     }
@@ -212,15 +213,10 @@ impl<'a, 'm> Lcx<'a, 'm> {
     /// The call of `chosen` as `member` of its `#` pair (types §8).
     pub fn callee(&self, chosen: &Chosen, member: PairMember) -> Callee {
         Callee::Extern {
-            id: chosen.declaration,
-            r#impl: self.impl_index(chosen),
+            id: self.reached_function(chosen),
             required: chosen.required.iter().map(|required| self.ir_chosen(required)).collect(),
             member,
         }
-    }
-
-    pub fn extern_impl(&self, chosen: &Chosen) -> ExternImpl {
-        ExternImpl { id: chosen.declaration, r#impl: self.impl_index(chosen) }
     }
 
     /// The impl typeck reached at `site`.

@@ -461,7 +461,7 @@ impl Printer<'_> {
             Op::AsSlice { container, mutability, r#impl } => format!(
                 "AsSlice{} {} {}",
                 mutability_flag(*mutability),
-                self.at_impl(r#impl.id, r#impl.r#impl),
+                self.qualified(*r#impl),
                 self.value(*container)
             ),
             Op::ArrayView { src, mutability } => format!("ArrayView{} {}", mutability_flag(*mutability), self.value(*src)),
@@ -609,20 +609,11 @@ impl Printer<'_> {
     fn callee(&self, callee: &Callee) -> String {
         match callee {
             Callee::Direct(id) => self.qualified(*id),
-            Callee::Extern { id, r#impl, required: _, member } => match member {
-                PairMember::Uniform => self.at_impl(*id, *r#impl),
-                PairMember::Specialized => format!("#{}", self.at_impl(*id, *r#impl)),
+            Callee::Extern { id, required: _, member } => match member {
+                PairMember::Uniform => self.qualified(*id),
+                PairMember::Specialized => format!("#{}", self.qualified(*id)),
             },
             Callee::Indirect(value) => self.value(*value),
-        }
-    }
-
-    /// An extern function by its name, and `#n` where it is called at its
-    /// impl `n`; a function without impls, by its name alone.
-    fn at_impl(&self, id: QualifiedRef, r#impl: Option<usize>) -> String {
-        match r#impl {
-            Some(at) => format!("{}#{at}", self.qualified(id)),
-            None => self.qualified(id),
         }
     }
 

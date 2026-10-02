@@ -29,7 +29,7 @@ use super::output::{AsCast, Chosen, Converted, Impl, Iteration, TryExit};
 use super::reach::{self, Candidate, Match, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
-use crate::decl::{Base, Head, ImplSig, Scheme};
+use crate::decl::{Base, GenericFunction, Head, Scheme};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, Level, OpenSources, PairAt, RequiredAt, Term};
 use crate::ty::structural::structure;
 use crate::ty::{
@@ -1410,36 +1410,36 @@ pub(super) fn offers(cx: &Ctxt<'_>, callee: &Callee) -> Offers {
     let mut concrete = Vec::new();
     let mut generic = Vec::new();
     let mut offer_of = |declaration: QualifiedRef, keep: &dyn Fn(&crate::decl::DeclaredFacts) -> bool| {
-        let scheme = cx
-            .decls
-            .scheme(declaration)
-            .expect("a callee names a declared function: names come from the declarations");
-        match &scheme.impls {
-            None => concrete.push(Offer {
+        let Some((_, impls)) = cx.decls.generic_function(declaration) else {
+            let scheme = cx
+                .decls
+                .scheme(declaration)
+                .expect("a callee names a declared function: names come from the declarations");
+            concrete.push(Offer {
                 declaration,
                 r#impl: None,
                 ty: scheme.ty,
-            }),
-            Some(impls) => {
-                for (at, sig) in impls.concrete.iter().enumerate() {
-                    if keep(&sig.facts) {
-                        concrete.push(Offer {
-                            declaration,
-                            r#impl: Some(Impl::Concrete(at)),
-                            ty: sig.ty,
-                        });
-                    }
-                }
-                if let Some(sig) = &impls.generic
-                    && keep(&sig.facts)
-                {
-                    generic.push(Offer {
-                        declaration,
-                        r#impl: Some(Impl::Generic),
-                        ty: scheme.ty,
-                    });
-                }
+            });
+            return;
+        };
+        let impl_scheme = |r#impl: &QualifiedRef| cx.decls.scheme(*r#impl).expect("an impl is a declaration");
+        for (at, sig) in impls.concrete.iter().map(impl_scheme).enumerate() {
+            if keep(&sig.facts) {
+                concrete.push(Offer {
+                    declaration,
+                    r#impl: Some(Impl::Concrete(at)),
+                    ty: sig.ty,
+                });
             }
+        }
+        if let Some(sig) = impls.generic.as_ref().map(impl_scheme)
+            && keep(&sig.facts)
+        {
+            generic.push(Offer {
+                declaration,
+                r#impl: Some(Impl::Generic),
+                ty: sig.ty,
+            });
         }
     };
     let any = |_: &crate::decl::DeclaredFacts| true;
@@ -1452,14 +1452,14 @@ pub(super) fn offers(cx: &Ctxt<'_>, callee: &Callee) -> Offers {
         Callee::Declaration(declaration) => offer_of(*declaration, &any),
         Callee::Core(sig) => {
             let declaration = core_name(cx, *sig);
-            if cx.decls.scheme(declaration).is_some() {
+            if cx.decls.generic_function(declaration).is_some() {
                 offer_of(declaration, &any);
             }
         }
         Callee::Required(required) | Callee::Part(required) => {
             let law = required.fact;
             let states = move |facts: &crate::decl::DeclaredFacts| law.is_none_or(|law| law.stated_by(facts));
-            if cx.decls.scheme(required.generic_function).is_some() {
+            if cx.decls.generic_function(required.generic_function).is_some() {
                 offer_of(required.generic_function, &states);
             }
         }
@@ -1712,21 +1712,27 @@ pub(super) fn reach_step(cx: &mut Ctxt<'_>, step: Step<'_>, from: Term, to: Term
         view,
         body,
     } = step;
-    let scheme = cx
-        .decls
-        .scheme(via)
-        .expect("a step's `via` is declared: verify refuses one that is not (ViaNotItsFunction)");
     let offer = match view {
-        Some(at) => Offer {
-            declaration: via,
-            r#impl: Some(Impl::Concrete(at)),
-            ty: scheme.impls.as_ref().expect("a view step is an impl of its view").concrete[at].ty,
-        },
-        None => Offer {
-            declaration: via,
-            r#impl: None,
-            ty: scheme.ty,
-        },
+        Some(at) => {
+            let (_, impls) = cx.decls.generic_function(via).expect("a view step's `via` is its view, a lang item");
+            let r#impl = cx.decls.scheme(impls.concrete[at]).expect("an impl is a declaration");
+            Offer {
+                declaration: via,
+                r#impl: Some(Impl::Concrete(at)),
+                ty: r#impl.ty,
+            }
+        }
+        None => {
+            let scheme = cx
+                .decls
+                .scheme(via)
+                .expect("a step's `via` is declared: verify refuses one that is not (ViaNotItsFunction)");
+            Offer {
+                declaration: via,
+                r#impl: None,
+                ty: scheme.ty,
+            }
+        }
     };
     let Instantiated { ty, requirements, declared_result, pair, .. } = instantiate(cx, offer, span);
     let TyKind::Fn { params, ret, effect, .. } = cx.infer.types().kind(cx.infer.shallow(ty)).clone() else {
@@ -1781,24 +1787,28 @@ pub(super) fn push_required(cx: &mut Ctxt<'_>, site: AstId, span: Span, required
 }
 
 /// `offer`'s type at fresh variables with the generic function's bounds,
-/// and every requirement the generic function and the impl state.
+/// and every requirement the declaration it reaches states: an impl's
+/// signature is related to its generic function's by `eq`.
 fn instantiate(cx: &mut Ctxt<'_>, offer: Offer, span: Span) -> Instantiated {
-    let scheme = cx
-        .decls
-        .scheme(offer.declaration)
-        .expect("an offer names a declared function");
-    let generic = instantiate_scheme(cx, scheme, span);
-    let Some(Impl::Concrete(at)) = offer.r#impl else {
-        return generic;
+    let decls = cx.decls;
+    let Some(r#impl) = offer.r#impl else {
+        let scheme = decls.scheme(offer.declaration).expect("an offer names a declared function");
+        return instantiate_scheme(cx, scheme, span);
     };
-    let sig = &scheme.impls.as_ref().expect("a concrete impl's scheme has impls").concrete[at];
-    let own = instantiate_scheme(cx, &impl_scheme(sig), span);
-    cx.eq(generic.ty, own.ty, span);
-    let mut requirements = generic.requirements;
-    requirements.extend(own.requirements);
-    let mut flows = generic.flows;
+    let (generic, impls) = decls.generic_function(offer.declaration).expect("an impl's offer names its generic function");
+    let signature = instantiate_generic(cx, generic, span);
+    let own = match r#impl {
+        Impl::Concrete(at) => impls.concrete[at],
+        Impl::Generic => impls.generic.expect("a generic impl's offer names a generic function that has one"),
+        // A lift has no body: each part's impl is reached at a node of its
+        // own.
+        Impl::Structural => return signature,
+    };
+    let own = instantiate_scheme(cx, decls.scheme(own).expect("an impl is a declaration"), span);
+    cx.eq(signature.ty, own.ty, span);
+    let mut flows = signature.flows;
     flows.extend(own.flows);
-    Instantiated { ty: own.ty, requirements, flows, declared_result: own.declared_result, pair: own.pair.or(generic.pair) }
+    Instantiated { ty: own.ty, requirements: own.requirements, flows, declared_result: own.declared_result, pair: own.pair.or(signature.pair) }
 }
 
 /// `scheme` at fresh variables, each flow into its call's effect refused,
@@ -1815,6 +1825,17 @@ pub(super) fn instantiate_scheme(cx: &mut Ctxt<'_>, scheme: &Scheme, span: Span)
     instantiated
 }
 
+/// `generic`'s signature at fresh variables, as `instantiate_scheme`
+/// makes a declaration's.
+pub(super) fn instantiate_generic(cx: &mut Ctxt<'_>, generic: &GenericFunction, span: Span) -> Instantiated {
+    let instantiated = cx.infer.instantiate_generic(cx.decls, generic);
+    if let Some(pair) = &instantiated.pair {
+        let PairAt { mark, positions, specialized } = pair.clone();
+        cx.decisions.push(Decision::StartMark { span, positions: positions.into(), mark, specialized }, cx.infer.level());
+    }
+    instantiated
+}
+
 /// A call reached at `site` whose result as declared holds a mark its value
 /// starts fresh, and the mark a `#` pair's positions share there
 /// (types §8), each recorded where the call has one.
@@ -1824,23 +1845,6 @@ fn record_origin(cx: &mut Ctxt<'_>, site: AstId, declared_result: Option<Term>, 
     }
     if let Some(pair) = pair {
         cx.out.pairs.insert(site, pair.mark);
-    }
-}
-
-/// A concrete impl as a scheme of its own, each of its type variables at
-/// the impl's own bound; the generic function's bounds reach them too,
-/// through `eq` with the generic function's instantiation.
-fn impl_scheme(sig: &ImplSig) -> Scheme {
-    Scheme {
-        ty: sig.ty,
-        param_names: sig.param_names.clone(),
-        bounds: sig.bounds.clone(),
-        impls: None,
-        requires: sig.requires.clone(),
-        facts: sig.facts.clone(),
-        runs: sig.runs.clone(),
-        awaits: sig.awaits,
-        specialized: sig.specialized.clone(),
     }
 }
 

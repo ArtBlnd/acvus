@@ -94,7 +94,7 @@ fn declarations(interner: &Interner) -> Declarations {
         user_types: Vec::new(),
         casts: Vec::new(),
         conversions: Vec::new(),
-        lang_impls: Vec::new(),
+        generic_functions: Vec::new(),
         contexts: vec![
             context("page", int, false),
             context("clock", int, true),

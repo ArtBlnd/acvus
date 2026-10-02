@@ -9,13 +9,20 @@ use super::{
     check_script, check_template,
 };
 use super::decision::variables_of;
-use crate::decl::{CastRule, Core, Declarations, DeclaredFacts, ImplSig, Impls, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl};
+use crate::decl::{
+    CastRule, Core, Declarations, DeclaredFacts, GenericFunction, ImplKind, ImplOf, LoopMarkers, RawDeclarations, Scheme, TyVarBound, UserTypeDecl,
+};
 use crate::infer::{Mismatch, ShapeCoercion};
 use crate::ty::structural::PartKey;
 use crate::ty::{IdentityTerm, Mark, MarkTerm};
 use crate::ty::{
     Calls, Concrete, EffectTerm, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability, Poly, Ty, TyId, TyKind, Types,
 };
+
+/// The impl at `at` of `generic`, a declaration of its own named `generic#at`.
+fn impl_id(names: &Interner, generic: QualifiedRef, at: usize) -> QualifiedRef {
+    QualifiedRef::qualified(generic.namespace, names.intern(&format!("{}#{at}", names.resolve(generic.name))))
+}
 
 struct Fixture {
     names: Interner,
@@ -64,7 +71,7 @@ impl Fixture {
         Self {
             names,
             raw: RawDeclarations {
-                lang_impls: Vec::new(),
+                generic_functions: Vec::new(),
                 types: Types::new(),
                 functions: Vec::new(),
                 user_types: Vec::new(),
@@ -138,7 +145,7 @@ impl Fixture {
             ty,
             param_names: self.param_names(self.arity(ty)),
             bounds: bounds.into(),
-            impls: None,
+            impl_of: None,
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
@@ -163,7 +170,7 @@ impl Fixture {
             ty,
             param_names: self.param_names(self.arity(ty)),
             bounds: Box::new([]),
-            impls: None,
+            impl_of: None,
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
@@ -216,38 +223,38 @@ impl Fixture {
     /// A lang item's concrete impls; its generic function is the
     /// compiler's (operators §2).
     fn lang_item(&mut self, item: QualifiedRef, impls: &[TyId<Poly>]) {
-        let concrete = impls
-            .iter()
-            .map(|ty| ImplSig {
+        for (at, ty) in impls.iter().enumerate() {
+            let scheme = Scheme {
                 ty: *ty,
                 bounds: vec![TyVarBound::Any; variables_of(&self.raw.types, &[*ty])].into(),
                 param_names: self.param_names(self.arity(*ty)),
+                impl_of: Some(ImplOf { generic_function: item, kind: ImplKind::Concrete }),
                 requires: Box::new([]),
                 facts: Default::default(),
                 runs: Box::new([]),
                 awaits: false,
                 specialized: Box::new([]),
-            })
-            .collect();
-        self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
+            };
+            self.raw.functions.push((impl_id(&self.names, item, at), scheme));
+        }
     }
 
     /// A lang item's concrete impls, each declaring `facts`.
     fn lang_item_stating(&mut self, item: QualifiedRef, impls: &[TyId<Poly>], facts: DeclaredFacts) {
-        let concrete = impls
-            .iter()
-            .map(|ty| ImplSig {
+        for (at, ty) in impls.iter().enumerate() {
+            let scheme = Scheme {
                 ty: *ty,
                 bounds: vec![TyVarBound::Any; variables_of(&self.raw.types, &[*ty])].into(),
                 param_names: self.param_names(self.arity(*ty)),
+                impl_of: Some(ImplOf { generic_function: item, kind: ImplKind::Concrete }),
                 requires: Box::new([]),
                 facts: facts.clone(),
                 runs: Box::new([]),
                 awaits: false,
                 specialized: Box::new([]),
-            })
-            .collect();
-        self.raw.lang_impls.push((item, Impls { concrete, generic: None }));
+            };
+            self.raw.functions.push((impl_id(&self.names, item, at), scheme));
+        }
     }
 
     /// Impls of `clone<T>(&T) -> T` at each of `types`.
@@ -938,7 +945,7 @@ fn a_call_reaches_the_overload_its_argument_decides() {
             ty,
             param_names: fx.param_names(1),
             bounds: Box::new([]),
-            impls: None,
+            impl_of: None,
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
@@ -1164,7 +1171,7 @@ fn a_call_two_declarations_answer_is_refused() {
             ty,
             param_names: fx.param_names(1),
             bounds: Box::new([]),
-            impls: None,
+            impl_of: None,
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
@@ -2415,10 +2422,11 @@ fn a_view_steps_requirements_are_reached() {
         holds: Holds::Nothing,
         values: (),
     });
-    let view = ImplSig {
+    let view = Scheme {
         ty: at_vec,
         bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at_vec])].into(),
         param_names: fx.param_names(1),
+        impl_of: Some(ImplOf { generic_function: as_slice, kind: ImplKind::Concrete }),
         requires: Box::new([crate::decl::Requirement {
             generic_function: clone,
             pattern: clones_e,
@@ -2429,7 +2437,7 @@ fn a_view_steps_requirements_are_reached() {
         awaits: false,
         specialized: Box::new([]),
     };
-    fx.raw.lang_impls.push((as_slice, Impls { concrete: Box::new([view]), generic: None }));
+    fx.raw.functions.push((impl_id(&fx.names, as_slice, 0), view));
     let bool_ty = fx.ty(TyKind::Bool);
     let shared_bool = fx.reference(Mutability::Shared, bool_ty);
     let clones_bool = fx.pure(&[shared_bool], bool_ty);
@@ -2788,19 +2796,20 @@ fn an_unclaimed_flow_set_takes_every_flow_at_a_stall() {
 fn generic_with_impl(fx: &mut Fixture, name: &str, generic: TyId<Poly>, at: TyId<Poly>, facts: DeclaredFacts) -> QualifiedRef {
     let id = QualifiedRef::root(fx.name(name));
     let arity = fx.arity(generic);
-    let concrete = Box::new([ImplSig { ty: at, bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at])].into(), param_names: fx.param_names(arity), requires: Box::new([]), facts, runs: Box::new([]), specialized: Box::new([]), awaits: false }]);
-    let scheme = Scheme {
-        ty: generic,
+    let at_impl = Scheme {
+        ty: at,
+        bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at])].into(),
         param_names: fx.param_names(arity),
-        bounds: Box::new([TyVarBound::Any]),
-        impls: Some(Impls { concrete, generic: None }),
+        impl_of: Some(ImplOf { generic_function: id, kind: ImplKind::Concrete }),
         requires: Box::new([]),
-        facts: DeclaredFacts::default(),
+        facts,
         runs: Box::new([]),
-        awaits: false,
         specialized: Box::new([]),
+        awaits: false,
     };
-    fx.raw.functions.push((id, scheme));
+    let function = GenericFunction { ty: generic, param_names: fx.param_names(arity), bounds: Box::new([TyVarBound::Any]), specialized: Box::new([]) };
+    fx.raw.functions.push((impl_id(&fx.names, id, 0), at_impl));
+    fx.raw.generic_functions.push((id, function));
     id
 }
 
@@ -2878,28 +2887,20 @@ fn a_concrete_impl_is_instantiated_at_its_own_bounds() {
         let t = fx.var(0);
         let ty = fx.pure(&[t], t);
         let id = QualifiedRef::root(fx.name("pick"));
-        let r#impl = ImplSig {
+        let at_impl = Scheme {
             ty,
             bounds: Box::new([bound]),
             param_names: fx.param_names(1),
+            impl_of: Some(ImplOf { generic_function: id, kind: ImplKind::Concrete }),
             requires: Box::new([]),
             facts: DeclaredFacts::default(),
             runs: Box::new([]),
             awaits: false,
             specialized: Box::new([]),
         };
-        let scheme = Scheme {
-            ty,
-            param_names: fx.param_names(1),
-            bounds: Box::new([TyVarBound::Any]),
-            impls: Some(Impls { concrete: Box::new([r#impl]), generic: None }),
-            requires: Box::new([]),
-            facts: DeclaredFacts::default(),
-            runs: Box::new([]),
-            awaits: false,
-            specialized: Box::new([]),
-        };
-        fx.raw.functions.push((id, scheme));
+        let function = GenericFunction { ty, param_names: fx.param_names(1), bounds: Box::new([TyVarBound::Any]), specialized: Box::new([]) };
+        fx.raw.functions.push((impl_id(&fx.names, id, 0), at_impl));
+        fx.raw.generic_functions.push((id, function));
         let (checked, _) = fx.script(source);
         match admitted {
             true => checked.admitted(),
@@ -2990,17 +2991,18 @@ fn a_requirement_a_lift_would_answer_is_refused_as_unimplemented() {
         holds: Holds::Nothing,
         values: (),
     });
-    let view = ImplSig {
+    let view = Scheme {
         ty: at_vec,
         bounds: vec![TyVarBound::Any; variables_of(&fx.raw.types, &[at_vec])].into(),
         param_names: fx.param_names(1),
+        impl_of: Some(ImplOf { generic_function: as_slice, kind: ImplKind::Concrete }),
         requires: Box::new([crate::decl::Requirement { generic_function: clone, pattern: clones_e, fact: None }]),
         facts: Default::default(),
         runs: Box::new([]),
         awaits: false,
         specialized: Box::new([]),
     };
-    fx.raw.lang_impls.push((as_slice, Impls { concrete: Box::new([view]), generic: None }));
+    fx.raw.functions.push((impl_id(&fx.names, as_slice, 0), view));
     let string = fx.ty(TyKind::String);
     fx.clones(&[string]);
     let single = fx.ty(TyKind::Tuple(Box::new([string]), ()));

@@ -4,7 +4,7 @@
 //! an extern's alike.
 
 use super::declared::NamedFact;
-use super::scheme::Scheme;
+use super::scheme::GenericFunction;
 use crate::ty::{IntTy, Mutability, Poly, TyId, TyKind, Types};
 
 /// A generic function's impl at a transparent structured type, where one
@@ -45,17 +45,17 @@ pub enum Taking {
     Ref(Mutability),
 }
 
-/// `scheme`'s lift, where it has one. A generic function lifts where its
+/// `generic`'s lift, where it has one. A generic function lifts where its
 /// impls choose one type variable `T`, every parameter takes `T` as `T`,
-/// `&T` or `&mut T`, its requirements name no law, and either its result
-/// is `T` (`Lift::Rebuild`), or its result is the answer the combination
-/// of a law its impls may state combines (`Lift::Combine`).
-pub(super) fn lift_of(types: &Types<Poly>, scheme: &Scheme) -> Option<Lift> {
+/// `&T` or `&mut T`, and either its result is `T` (`Lift::Rebuild`), or
+/// its result is the answer the combination of a law its impls may state
+/// combines (`Lift::Combine`).
+pub(super) fn lift_of(types: &Types<Poly>, generic: &GenericFunction) -> Option<Lift> {
     const VAR: u32 = 0;
-    if scheme.bounds.len() != 1 || scheme.requires.iter().any(|required| required.fact.is_some()) {
+    if generic.bounds.len() != 1 {
         return None;
     }
-    let TyKind::Fn { params, ret, .. } = types.kind(scheme.ty) else {
+    let TyKind::Fn { params, ret, .. } = types.kind(generic.ty) else {
         return None;
     };
     let params: Box<[Taking]> = params.iter().map(|param| taking(types, *param, VAR)).collect::<Option<_>>()?;

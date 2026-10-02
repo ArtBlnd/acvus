@@ -25,7 +25,7 @@ mod verify;
 use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::FxHashMap;
 
-use crate::ty::{Declared, IdentityId, LifetimesOf, Poly, TyId, Types};
+use crate::ty::{IdentityId, LifetimesOf, Poly, TyId, Types};
 
 pub use bound::TyVarBound;
 pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
@@ -37,7 +37,7 @@ pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel,
 pub use lift::{Lift, LiftShape, Taking};
 pub use loop_markers::{KeyingMarkers, LoopMarkers};
 pub use segments::{Segment, segments};
-pub use scheme::{DeclaredFacts, Ends, GenericImplSig, ImplSig, Impls, PairMember, Requirement, Scheme};
+pub use scheme::{DeclaredFacts, Ends, GenericFunction, ImplKind, ImplOf, Impls, PairMember, Requirement, Scheme};
 pub(crate) use scheme::{effect_variables, identity_variables};
 pub use user_type::UserTypeDecl;
 pub use verify::{Refused, Written};
@@ -46,11 +46,12 @@ pub use verify::{Refused, Written};
 /// verification.
 pub struct RawDeclarations {
     pub types: Types<Poly>,
-    /// Every declared function but the lang items, whose generic functions
-    /// the compiler builds (operators §2).
+    /// Every declared function, impls among them: an impl of a lang item
+    /// names its `core` name.
     pub functions: Vec<(QualifiedRef, Scheme)>,
-    /// The impls each lang item is given, by its `core` name.
-    pub lang_impls: Vec<(QualifiedRef, Impls)>,
+    /// Every generic function but the lang items, whose generic functions
+    /// the compiler builds (operators §2).
+    pub generic_functions: Vec<(QualifiedRef, GenericFunction)>,
     pub user_types: Vec<UserTypeDecl>,
     pub casts: Vec<CastRule>,
     pub conversions: Vec<ConversionRule>,
@@ -85,6 +86,9 @@ pub struct ContextDecl {
 pub struct Declarations {
     types: Types<Poly>,
     functions: FxHashMap<QualifiedRef, Scheme>,
+    /// Each generic function with its impls, each of them one of
+    /// `functions`.
+    generic_functions: FxHashMap<QualifiedRef, (GenericFunction, Impls)>,
     /// Every declaration a bare name may reach, for reach to decide among
     /// (types §6, extern-fn §5).
     overloads: FxHashMap<Astr, Box<[QualifiedRef]>>,
@@ -117,6 +121,20 @@ impl Declarations {
 
     pub fn scheme(&self, function: QualifiedRef) -> Option<&Scheme> {
         self.functions.get(&function)
+    }
+
+    /// Whether a program names `function` itself: a declaration that is no
+    /// impl, or a generic function. An impl is reached only through its
+    /// generic function (extern-fn §6).
+    pub fn names_a_function(&self, function: QualifiedRef) -> bool {
+        self.generic_functions.contains_key(&function)
+            || self.functions.get(&function).is_some_and(|scheme| scheme.impl_of.is_none())
+    }
+
+    /// `function`'s signature and its impls, where it is a generic
+    /// function.
+    pub fn generic_function(&self, function: QualifiedRef) -> Option<(&GenericFunction, &Impls)> {
+        self.generic_functions.get(&function).map(|(generic, impls)| (generic, impls))
     }
 
     /// The declarations a bare name may reach; empty when none.
@@ -172,47 +190,14 @@ impl Declarations {
         &self.core
     }
 
-    /// The facts a call reaches (`Scheme`): a declaration without impls,
-    /// called at no impl, states them itself; otherwise the impl the call
-    /// chose states them, a concrete impl by its index, the generic impl
-    /// after them.
+    /// The facts a call of `function` reaches: a call names the
+    /// declaration it reached, an impl where it reached one, and that
+    /// declaration states them.
     ///
     /// # Panics
-    /// `function` is not declared; it has impls and the call names none, or
-    /// it has none and the call names one; or it has no impl `r#impl`: a
-    /// call names a declared function and, where it has impls, one of them.
-    pub(crate) fn call_facts(&self, function: QualifiedRef, r#impl: Option<usize>) -> &DeclaredFacts {
-        let scheme = self.scheme(function).unwrap_or_else(|| panic!("the call names {function:?}, which is not declared"));
-        let (impls, r#impl) = match (&scheme.impls, r#impl) {
-            (None, None) => return &scheme.facts,
-            (Some(impls), Some(r#impl)) => (impls, r#impl),
-            (None, Some(r#impl)) => panic!("a call of {function:?}, which has no impls, names impl {}", r#impl),
-            (Some(_), None) => panic!("a call of {function:?}, which has impls, names none"),
-        };
-        match impls.concrete.get(r#impl) {
-            Some(concrete) => &concrete.facts,
-            None if r#impl == impls.concrete.len() => {
-                &impls.generic.as_ref().unwrap_or_else(|| panic!("{function:?} has no impl {}", r#impl)).facts
-            }
-            None => panic!("{function:?} has no impl {}", r#impl),
-        }
-    }
-
-    /// The signature a call of `function` at `r#impl` instantiates, the
-    /// impl numbered as `call_facts` numbers it: a concrete impl's own, or
-    /// for its generic impl or a declaration without impls, the scheme's.
-    ///
-    /// # Panics
-    /// As `call_facts`.
-    pub(crate) fn called(&self, function: QualifiedRef, r#impl: Option<usize>) -> Declared {
-        let scheme = self.scheme(function).unwrap_or_else(|| panic!("the call names {function:?}, which is not declared"));
-        let concrete = match (&scheme.impls, r#impl) {
-            (None, None) => None,
-            (Some(impls), Some(r#impl)) if r#impl < impls.concrete.len() => Some(r#impl),
-            (Some(impls), Some(r#impl)) if r#impl == impls.concrete.len() && impls.generic.is_some() => None,
-            (_, r#impl) => panic!("a call of {function:?} names impl {impl:?}, which it does not have"),
-        };
-        Declared { function, r#impl: concrete }
+    /// `function` is not declared: a call names a declared function.
+    pub(crate) fn call_facts(&self, function: QualifiedRef) -> &DeclaredFacts {
+        &self.scheme(function).unwrap_or_else(|| panic!("the call names {function:?}, which is not declared")).facts
     }
 
     /// Every declared function with its scheme, in no promised order.
