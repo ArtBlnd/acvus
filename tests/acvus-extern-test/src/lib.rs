@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use acvus_extern::{
-    Arguments, ExternFn, FnKind, OptionKind, Registry, ResultKind, Runtime, ScalarKind, StringKind, TupleKind,
+    Arguments, EnumKind, ExternFn, FnKind, ObjectKind, OptionKind, Registry, ResultKind, Runtime, ScalarKind, StringKind,
+    TupleKind,
 };
 use acvus_mir::decl::Scheme;
 use acvus_mir::ty::{Poly, Types};
@@ -38,8 +39,10 @@ enum Held {
     Unit(RefCell<()>),
     String(RefCell<String>),
     Tuple(RefCell<Box<[Value]>>),
+    Object(Box<[Value]>),
     Option(RefCell<Option<Value>>),
     Result(RefCell<Result<Value, Value>>),
+    Enum { tag: usize, payload: Value },
     Fn(Body),
 }
 
@@ -137,8 +140,10 @@ impl Registry for Safe {
 pub struct SafeScalar;
 pub struct SafeString;
 pub struct SafeTuple;
+pub struct SafeObject;
 pub struct SafeOption;
 pub struct SafeResult;
+pub struct SafeEnum;
 pub struct SafeFn;
 
 impl Runtime for Safe {
@@ -147,8 +152,10 @@ impl Runtime for Safe {
     type Scalar = SafeScalar;
     type String = SafeString;
     type Tuple = SafeTuple;
+    type Object = SafeObject;
     type Option = SafeOption;
     type Result = SafeResult;
+    type Enum = SafeEnum;
     type Fn = SafeFn;
 
     fn release(value: Value) {
@@ -158,6 +165,12 @@ impl Runtime for Safe {
                     Safe::release(part);
                 }
             }
+            Held::Object(fields) => {
+                for field in fields {
+                    Safe::release(field);
+                }
+            }
+            Held::Enum { payload, .. } => Safe::release(payload),
             Held::Option(option) => {
                 if let Some(payload) = option.into_inner() {
                     Safe::release(payload);
@@ -291,6 +304,38 @@ impl TupleKind<Safe> for SafeTuple {
                 lent(parts.each_mut())
             }
             _ => mismatch("a tuple"),
+        }
+    }
+}
+
+impl ObjectKind<Safe> for SafeObject {
+    fn make<const N: usize>(_rt: &Safe, fields: [Value; N]) -> Value {
+        hold(Held::Object(Box::new(fields)))
+    }
+
+    fn take<const N: usize>(_rt: &Safe, value: Value) -> [Value; N] {
+        match unhold(value) {
+            Held::Object(fields) => {
+                let fields: Box<[Value; N]> = fields.try_into().expect("safe runtime: an object is taken at another field count");
+                *fields
+            }
+            _ => mismatch("an object"),
+        }
+    }
+}
+
+impl EnumKind<Safe> for SafeEnum {
+    fn make(_rt: &Safe, tag: usize, payload: Value) -> Value {
+        hold(Held::Enum { tag, payload })
+    }
+
+    fn take<E>(rt: &Safe, value: Value, variants: &[fn(&Safe, Value) -> E]) -> E {
+        match unhold(value) {
+            Held::Enum { tag, payload } => {
+                let construct = variants.get(tag).expect("safe runtime: an enum's tag is past its variants");
+                construct(rt, payload)
+            }
+            _ => mismatch("an enum"),
         }
     }
 }

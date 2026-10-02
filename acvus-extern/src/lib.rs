@@ -3,8 +3,11 @@
 
 #![deny(unsafe_code)]
 
+mod crossing;
 mod kind;
 mod runtime;
 
-pub use kind::{FnKind, OptionKind, ResultKind, ScalarKind, StringKind, TupleKind};
+pub use acvus_extern_macro::Structural;
+pub use crossing::Crossing;
+pub use kind::{EnumKind, FnKind, ObjectKind, OptionKind, ResultKind, ScalarKind, StringKind, TupleKind};
 pub use runtime::{Arguments, ExternFn, Registry, Runtime};

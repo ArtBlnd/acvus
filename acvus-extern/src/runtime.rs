@@ -2,7 +2,7 @@ use acvus_mir::decl::Scheme;
 use acvus_mir::ty::{Poly, Types};
 use acvus_utils::{Interner, QualifiedRef};
 
-use crate::kind::{FnKind, OptionKind, ResultKind, ScalarKind, StringKind, TupleKind};
+use crate::kind::{EnumKind, FnKind, ObjectKind, OptionKind, ResultKind, ScalarKind, StringKind, TupleKind};
 
 /// What every runtime implements and every extern fn is written against. A
 /// value is the runtime's `Value`, reached only through the kind of its type,
@@ -24,8 +24,10 @@ pub trait Runtime: Sized + 'static {
         + ScalarKind<Self, ()>;
     type String: StringKind<Self>;
     type Tuple: TupleKind<Self>;
+    type Object: ObjectKind<Self>;
     type Option: OptionKind<Self>;
     type Result: ResultKind<Self>;
+    type Enum: EnumKind<Self>;
     type Fn: FnKind<Self>;
 
     /// Ends a value the runtime holds, and every part it owns. It takes no

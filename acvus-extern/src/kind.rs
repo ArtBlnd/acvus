@@ -66,6 +66,28 @@ where
     fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut Result<R::Value, R::Value>) -> O) -> O;
 }
 
+/// An acvus object, its fields in their names' text order (rfc_compiler
+/// types §2). It crosses by value alone.
+pub trait ObjectKind<R>
+where
+    R: Runtime,
+{
+    fn make<const N: usize>(rt: &R, fields: [R::Value; N]) -> R::Value;
+    fn take<const N: usize>(rt: &R, value: R::Value) -> [R::Value; N];
+}
+
+/// An acvus enum: a tag, its variant's place in its names' text order, and
+/// one payload, `()` for a variant that carries none. It crosses by value
+/// alone. `take` picks the constructor for the tag from `variants`, so the
+/// runtime is where a tag outside them is caught.
+pub trait EnumKind<R>
+where
+    R: Runtime,
+{
+    fn make(rt: &R, tag: usize, payload: R::Value) -> R::Value;
+    fn take<E>(rt: &R, value: R::Value, variants: &[fn(&R, R::Value) -> E]) -> E;
+}
+
 /// The kind of `Fn` and `Closures`: a function value, whether it runs on an
 /// acvus frame or is a Rust function an extern gave.
 pub trait FnKind<R>
