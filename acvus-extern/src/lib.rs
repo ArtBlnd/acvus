@@ -5,13 +5,15 @@
 
 mod crossing;
 mod kind;
+mod marker;
 mod repr;
 mod runtime;
+mod uniform;
 
-pub use acvus_extern_macro::Structural;
+pub use acvus_extern_macro::{Opaque, Structural};
 pub use crossing::Crossing;
-pub use kind::{
-    EnumKind, FnKind, ObjectKind, OpaqueKind, OptionKind, RefKind, ResultKind, ScalarKind, StringKind, TupleKind,
-};
+pub use kind::{EnumKind, FnKind, ObjectKind, OpaqueKind, OptionKind, RefKind, ResultKind, ScalarKind, StringKind, TupleKind};
+pub use marker::{EffectVar, IdentityVar, Never, SomeEffect, SomeIdentity, TypeVar};
 pub use repr::{Boxed, StoredOpaque, StoredRef, Words};
 pub use runtime::{Arguments, ExternFn, Registry, Runtime, Stores};
+pub use uniform::{Lend, Uniform};

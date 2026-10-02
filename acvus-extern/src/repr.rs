@@ -11,7 +11,55 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering, fence};
 
 use crate::kind::{OpaqueKind, RefKind};
-use crate::runtime::Stores;
+use crate::runtime::{Runtime, Stores};
+use crate::uniform::Uniform;
+
+/// Reads `from` as `To`, a reference cast between two types that differ only
+/// in `Value`s seen as `Uniform`s: `Uniform<R, X>` is `R::Value` behind
+/// `repr(transparent)`, and the layouts' sizes and alignments are checked
+/// where each cast is instantiated. That the two are laid out alike beyond
+/// that is the note's premise for `X<T>` and `X<U>`, which Miri checks.
+fn reread<From, To>(from: &From) -> &To {
+    const { assert!(size_of::<From>() == size_of::<To>() && align_of::<From>() == align_of::<To>(), "a uniform view keeps its layout") };
+    // SAFETY: the premise above; the borrow is carried over unchanged.
+    unsafe { &*std::ptr::from_ref(from).cast::<To>() }
+}
+
+fn reread_mut<From, To>(from: &mut From) -> &mut To {
+    const { assert!(size_of::<From>() == size_of::<To>() && align_of::<From>() == align_of::<To>(), "a uniform view keeps its layout") };
+    // SAFETY: as `reread`; the exclusive borrow is carried over unchanged.
+    unsafe { &mut *std::ptr::from_mut(from).cast::<To>() }
+}
+
+pub(crate) fn uniform_option<R, Y>(option: &Option<R::Value>) -> &Option<Uniform<R, Y>>
+where
+    R: Runtime,
+{
+    reread(option)
+}
+
+pub(crate) fn uniform_option_mut<R, Y>(option: &mut Option<R::Value>) -> &mut Option<Uniform<R, Y>>
+where
+    R: Runtime,
+{
+    reread_mut(option)
+}
+
+pub(crate) fn uniform_result<R, Y, E>(result: &Result<R::Value, R::Value>) -> &Result<Uniform<R, Y>, Uniform<R, E>>
+where
+    R: Runtime,
+{
+    reread(result)
+}
+
+pub(crate) fn uniform_result_mut<R, Y, E>(
+    result: &mut Result<R::Value, R::Value>,
+) -> &mut Result<Uniform<R, Y>, Uniform<R, E>>
+where
+    R: Runtime,
+{
+    reread_mut(result)
+}
 
 #[repr(C)]
 struct Header {

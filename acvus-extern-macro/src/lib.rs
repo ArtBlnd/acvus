@@ -1,5 +1,6 @@
 //! The macros of the extern side (`docs/extern-note.md`).
 
+mod opaque;
 mod structural;
 
 use proc_macro::TokenStream;
@@ -11,4 +12,12 @@ use syn::{DeriveInput, parse_macro_input};
 pub fn structural(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     structural::derive(&input).unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
+/// Marks a Rust type as an extern-defined type, held whole by the runtime's
+/// Opaque kind.
+#[proc_macro_derive(Opaque)]
+pub fn opaque(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    opaque::derive(&input).into()
 }
