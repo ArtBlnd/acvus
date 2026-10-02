@@ -15,7 +15,7 @@ The single basis of the extern rework. Every step derives from it, and structure
 3. A value that crossed is kept nowhere its declaration does not show.
 4. The boundary has no dynamic check and no dynamic conversion.
 
-These hold by the primitives below, with nothing added on top. The standard is a safe API, and `unsafe` is welcome where it is stated honestly and isolated: an explicit `unsafe` can be safer than a safe-looking API. Boundary and author code have no branch on a type's form or kind, no forced unwrap, no cast, and no assert or type check outside the runtime. Only the runtime contract, `Uniform`'s boxing included, may require `'static`. Inputs are values or views; outputs are owned values or runtime references, so a borrow means what it means in the compiler's IR. Where attaching something to a structure or to its parts means different things, the difference is expressed without ambiguity. The registry is the extern side's; the compiler only receives declarations, and every declaration form is writable and written correctly.
+These hold by the primitives below, with nothing added on top. The standard is a safe API, and `unsafe` is welcome where it is stated honestly and isolated: an explicit `unsafe` can be safer than a safe-looking API. Boundary and author code have no branch on a type's form or kind, no forced unwrap, no cast, and no assert or type check outside the runtime. Only the runtime contract, `Uniform`'s boxing included, may require `'static`. Inputs are values or views; outputs are owned values or Rust references. A reference to a structure is written as the structure of references, `Option<&T>` or `(&A, &B)`, never `&Option<T>`, as the IR has it (ownership §5), so a borrow means what it means there. Where attaching something to a structure or to its parts means different things, the difference is expressed without ambiguity. The registry is the extern side's; the compiler only receives declarations, and every declaration form is writable and written correctly.
 
 ## Primitives
 
@@ -23,10 +23,9 @@ These hold by the primitives below, with nothing added on top. The standard is a
 |---|---|---|
 | `Value` | The runtime's value: pointer-like, `Copy`, never exposed. | privacy |
 | `Uniform<Rt, X>` | A value boxed by the runtime, its type kept by the marker `X`. Made by `Uniform::new(rt, value)`, projected to `&` or `&mut` only through the runtime, never taken out; a `Copy` value may be got. Moved, popped and dropped whole. Requires `X: 'static`, and is invariant in `X` by `PhantomData<fn(X) -> X>` (types §4). Used where a concrete type is needed: `Vec<Uniform<Rt, String>>` is an unmarked `Vec<String>` seen uniformly. | marker, privacy, `'static` |
-| `Ref`, `Mut` | A subset of `Uniform`: a `Uniform` is a value, so it may be taken as a reference or a mutable one. Where a `Uniform` came in by reference, they stand for `&T` and `&mut T` in return position, carrying that reference's lifetime. | lifetimes |
 | `TypeVar`, `EffectVar`, `IdentityVar` | The one marker bound of a generic parameter, one per kind. Carried through other types, so Rust keeps each variable one type. | Rust's type checker |
 | `InstanceOf` | An impl's witness apart from its value, given only by reference and so never kept: kept, it could meet another type of the same signature. | borrow checker |
-| `Instance` | A value and its impl as one, of one generic function. Its mode, owned, `Ref` or `Mut`, is a marker the macro reads from the signature; the body receives `T`, `&T` or `&mut T`. Once received it may go anywhere, its flows tracked. | type, flows |
+| `Instance` | A value and its impl as one, of one generic function. Its mode, owned, shared or exclusive, is a marker the macro reads from the signature; the body receives `T`, `&T` or `&mut T`. Once received it may go anywhere, its flows tracked. | type, flows |
 | Flows | Rust lifetime parameters. rustc checks the body; the compiler tracks liveness in the program, so references may sit inside values. | rustc, compiler |
 | Generic function, impl | A generic function enters the compiler as one; an impl enters with the function and the choice it implements. It pairs with `Instance` and `InstanceOf`. | compiler |
 | `#`, demotion | A whole concrete type such as `Vec<String>` is a specialized opaque type, apart from the generic `Vec<T>` over uniform values. A value that passes a non-`#` function even once is unmarked from where it is made, as the compiler decides (types §8). | compiler |
@@ -42,6 +41,8 @@ It is monomorphized as `Uniform<Rt, Never>`, never as `Value`. `X<T>` transmutes
 ## Runtime and registry
 
 A safe runtime holds a value of any type in a slot as `Box<dyn Any>` and checks its type on access, so misuse panics; an optimized runtime casts without the check, so misuse is UB. The `'static` that `Any` needs is the one the runtime contract requires. A view is lent in continuation-passing style: the runtime calls a closure with it, so its lifetime is the closure's, and the contract carries no lifetime-generic associated type for it. Each kind lends its own views so, `Option` as `Option<&_>`, and each argument is opened by its own kind; the entry nests the body inside these closures and gives its result inside them. Its zero cost rests on the closures being inlined, which is to be verified, not assumed.
+
+A reference is returned as a Rust reference, `&'a X` or `&'a mut X`. It crosses as the runtime's reference value, which holds the reference's words, and is read back at one isolated `unsafe` of the extern crate. This is the first trade-off taken: a reference points into Rust memory and is read without the runtime, so a runtime's places are Rust memory; in return the references are Rust's own, with their lifetimes, copies and reborrows checked by Rust. A value that holds a loan is plain Rust, such as `Cursor<'a, T>` holding `&'a [T]`.
 
 `Registry: Runtime` is a runtime that registers extern fns. An extern fn reaches it as a type implementing `ExternFn`, which states its own declaration and whose fixed parameter shape is an associated type: its `N` arguments are `Self::Args`, a `[Value; N]`, which `call` takes; the registry gives the declarations to the compiler. Because the runtime receives each extern fn as a type rather than as an erased function, it can build specialized operations around one: a natural closed loop with its `next` inlined differs greatly from one that calls through an erased function. The macros are what implement `ExternFn`.
 
@@ -71,6 +72,7 @@ Branded lifetimes, as GhostCell's, serve well but sit uneasily with associated t
 
 Open:
 
+- A value that holds a loan is not `'static`, so the runtime can keep it only with its lifetime erased, and it is opened again bound to its call's one lifetime, never unbounded. How, at one isolated `unsafe`, is designed first.
 - What a Rust closure given to acvus may capture.
 - Async. Work such as a closure is spawned on a thread pool and so crosses `'static`; where it dies there, what it holds is dropped while acvus counts it alive. An `Arc` per value makes `map` and `collect` too slow. Candidates are one `Arc` at the spawn rather than one per value, or a shared-ownership primitive the runtime provides.
 
