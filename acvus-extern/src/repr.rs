@@ -1,8 +1,8 @@
-//! The one module that writes `unsafe`: reading untyped storage back as a
-//! Rust type. Every read here rests on the compiler's premise that a value is
-//! read at the type it was made at, or at one of the same layout (the extern
-//! note: Type variables). Nothing here checks that premise; a safe runtime
-//! checks what it can around these reads, in its own storage.
+//! The one module that reads untyped storage back as a Rust type. Every read
+//! here rests on the premise that a value is read at the type it was made at,
+//! or at one of the same layout (the extern note: Type variables), which the
+//! `unsafe fn` it sits in states. Nothing here checks that premise; a safe
+//! runtime checks what it can around these reads, in its own storage.
 
 #![allow(unsafe_code, clippy::disallowed_methods)]
 
@@ -14,51 +14,75 @@ use crate::kind::{OpaqueKind, RefKind};
 use crate::runtime::{Runtime, Stores};
 use crate::uniform::Uniform;
 
-/// Reads `from` as `To`, a reference cast between two types that differ only
-/// in `Value`s seen as `Uniform`s: `Uniform<R, X>` is `R::Value` behind
-/// `repr(transparent)`, and the layouts' sizes and alignments are checked
-/// where each cast is instantiated. That the two are laid out alike beyond
-/// that is the note's premise for `X<T>` and `X<U>`, which Miri checks.
-fn reread<From, To>(from: &From) -> &To {
+/// Reads `from` as `To`. The sizes and alignments are checked where each
+/// reread is instantiated.
+///
+/// # Safety
+///
+/// `From` and `To` differ only in `Value`s seen as `Uniform`s, each made as
+/// the `Uniform`'s marker: `Uniform<R, X>` is `R::Value` behind
+/// `repr(transparent)`, and the two are laid out alike beyond that by the
+/// extern note's second exception.
+unsafe fn reread<From, To>(from: &From) -> &To {
     const { assert!(size_of::<From>() == size_of::<To>() && align_of::<From>() == align_of::<To>(), "a uniform view keeps its layout") };
-    // SAFETY: the premise above; the borrow is carried over unchanged.
+    // SAFETY: the caller's premise; the borrow is carried over unchanged.
     unsafe { &*std::ptr::from_ref(from).cast::<To>() }
 }
 
-fn reread_mut<From, To>(from: &mut From) -> &mut To {
+/// # Safety
+///
+/// As `reread`.
+unsafe fn reread_mut<From, To>(from: &mut From) -> &mut To {
     const { assert!(size_of::<From>() == size_of::<To>() && align_of::<From>() == align_of::<To>(), "a uniform view keeps its layout") };
-    // SAFETY: as `reread`; the exclusive borrow is carried over unchanged.
+    // SAFETY: the caller's premise; the exclusive borrow is carried over
+    // unchanged.
     unsafe { &mut *std::ptr::from_mut(from).cast::<To>() }
 }
 
-pub(crate) fn uniform_option<R, Y>(option: &Option<R::Value>) -> &Option<Uniform<R, Y>>
+/// # Safety
+///
+/// The payload, if any, was made as `Y`.
+pub(crate) unsafe fn uniform_option<R, Y>(option: &Option<R::Value>) -> &Option<Uniform<R, Y>>
 where
     R: Runtime,
 {
-    reread(option)
+    // SAFETY: the caller's premise.
+    unsafe { reread(option) }
 }
 
-pub(crate) fn uniform_option_mut<R, Y>(option: &mut Option<R::Value>) -> &mut Option<Uniform<R, Y>>
+/// # Safety
+///
+/// As `uniform_option`.
+pub(crate) unsafe fn uniform_option_mut<R, Y>(option: &mut Option<R::Value>) -> &mut Option<Uniform<R, Y>>
 where
     R: Runtime,
 {
-    reread_mut(option)
+    // SAFETY: the caller's premise.
+    unsafe { reread_mut(option) }
 }
 
-pub(crate) fn uniform_result<R, Y, E>(result: &Result<R::Value, R::Value>) -> &Result<Uniform<R, Y>, Uniform<R, E>>
+/// # Safety
+///
+/// An `Ok` payload was made as `Y`, and an `Err` payload as `E`.
+pub(crate) unsafe fn uniform_result<R, Y, E>(result: &Result<R::Value, R::Value>) -> &Result<Uniform<R, Y>, Uniform<R, E>>
 where
     R: Runtime,
 {
-    reread(result)
+    // SAFETY: the caller's premise.
+    unsafe { reread(result) }
 }
 
-pub(crate) fn uniform_result_mut<R, Y, E>(
+/// # Safety
+///
+/// As `uniform_result`.
+pub(crate) unsafe fn uniform_result_mut<R, Y, E>(
     result: &mut Result<R::Value, R::Value>,
 ) -> &mut Result<Uniform<R, Y>, Uniform<R, E>>
 where
     R: Runtime,
 {
-    reread_mut(result)
+    // SAFETY: the caller's premise.
+    unsafe { reread_mut(result) }
 }
 
 #[repr(C)]
@@ -237,21 +261,22 @@ where
         rt.hold(Boxed::new(value))
     }
 
-    fn take<X>(rt: &R, value: R::Value) -> X {
-        // SAFETY: the compiler's premise: the value was made as `X`, and a
-        // value taken by value has no other owner.
+    unsafe fn take<X>(rt: &R, value: R::Value) -> X {
+        // SAFETY: the caller's premise: the value was made by `make` as `X`,
+        // and the caller owns it, so no other owner shares the block.
         unsafe { rt.unhold(value).into_inner() }
     }
 
-    fn view<X, O>(rt: &R, value: &R::Value, lent: impl FnOnce(&X) -> O) -> O {
-        // SAFETY: the compiler's premise: the value was made as `X`.
-        rt.lend(value, |boxed| lent(unsafe { boxed.as_ref() }))
+    unsafe fn view<X, O>(rt: &R, value: &R::Value, lent: impl FnOnce(&X) -> O) -> O {
+        // SAFETY: the caller's premise: the value is live and was made by
+        // `make` as `X`.
+        unsafe { rt.lend(value, |boxed| lent(boxed.as_ref())) }
     }
 
-    fn view_mut<X, O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut X) -> O) -> O {
-        // SAFETY: the compiler's premise: the value was made as `X`, and the
-        // runtime lends it exclusively.
-        rt.lend_mut(value, |boxed| lent(unsafe { boxed.as_mut() }))
+    unsafe fn view_mut<X, O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut X) -> O) -> O {
+        // SAFETY: the caller's premise: as `view`, and held exclusively while
+        // `lent` runs.
+        unsafe { rt.lend_mut(value, |boxed| lent(boxed.as_mut())) }
     }
 }
 
@@ -277,24 +302,25 @@ where
         rt.hold_words(Words::of(std::ptr::from_mut(reference).cast_const()))
     }
 
-    fn view<X, O>(rt: &R, value: &R::Value, lent: impl FnOnce(&X) -> O) -> O
+    unsafe fn view<X, O>(rt: &R, value: &R::Value, lent: impl FnOnce(&X) -> O) -> O
     where
         X: ?Sized,
     {
-        let pointer = rt.words(value);
-        // SAFETY: the compiler's premise: the words name a live `X` that
-        // nothing writes while this view lives (rfc_compiler ownership §5).
-        lent(unsafe { &*pointer.pointer::<X>() })
+        // SAFETY: the caller's premise: the value is live and was made by
+        // `hold_words`, its words naming a live `X` that nothing writes while
+        // this view lives.
+        let reference = unsafe { &*rt.words(value).pointer::<X>() };
+        lent(reference)
     }
 
-    fn view_mut<X, O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut X) -> O) -> O
+    unsafe fn view_mut<X, O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut X) -> O) -> O
     where
         X: ?Sized,
     {
-        let pointer = rt.words(value);
-        // SAFETY: the compiler's premise: the words were made from an
-        // exclusive reference to a live `X`, reached only through this value
-        // while the view lives (rfc_compiler ownership §5).
-        lent(unsafe { &mut *pointer.pointer::<X>().cast_mut() })
+        // SAFETY: the caller's premise: the words were made by `make_mut`
+        // from an exclusive reference to a live `X`, reached through nothing
+        // else while this view lives.
+        let reference = unsafe { &mut *rt.words(value).pointer::<X>().cast_mut() };
+        lent(reference)
     }
 }

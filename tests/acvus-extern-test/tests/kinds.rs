@@ -2,6 +2,11 @@
 //! them: each argument taken by its kind, the body called, and its result made
 //! by its kind. Every test ends with no value held, so ownership is checked
 //! along with the results.
+//!
+//! The tests and the entries play the compiler: each `unsafe` asserts the
+//! premise for a value made here, at the type it was made at, except in the
+//! last two tests, which break a premise on purpose to show that the safe
+//! runtime panics.
 
 use acvus_extern::{
     Declared, Declaring, ExternFn, FnKind, OptionKind, Registry, ResultKind, Runtime, ScalarKind, StringKind, TupleKind,
@@ -55,11 +60,14 @@ where
     <R::Scalar as ScalarKind<R, i64>>::make(rt, x)
 }
 
-fn take_int<R>(rt: &R, value: R::Value) -> i64
+/// # Safety
+///
+/// `value` was made as an `i64`, and the caller owns it.
+unsafe fn take_int<R>(rt: &R, value: R::Value) -> i64
 where
     R: Runtime,
 {
-    <R::Scalar as ScalarKind<R, i64>>::take(rt, value)
+    unsafe { <R::Scalar as ScalarKind<R, i64>>::take(rt, value) }
 }
 
 // The bodies, as an author writes them.
@@ -99,8 +107,8 @@ where
         declared(cx, "inc", &[("x", int)], int)
     }
 
-    fn call(rt: &R, [x]: [R::Value; 1]) -> R::Value {
-        make_int(rt, inc(take_int(rt, x)))
+    unsafe fn call(rt: &R, [x]: [R::Value; 1]) -> R::Value {
+        make_int(rt, inc(unsafe { take_int(rt, x) }))
     }
 }
 
@@ -117,8 +125,8 @@ where
         declared(cx, "shout", &[("s", string)], string)
     }
 
-    fn call(rt: &R, [s]: [R::Value; 1]) -> R::Value {
-        <R::String as StringKind<R>>::make(rt, shout(<R::String as StringKind<R>>::take(rt, s)))
+    unsafe fn call(rt: &R, [s]: [R::Value; 1]) -> R::Value {
+        <R::String as StringKind<R>>::make(rt, shout(unsafe { <R::String as StringKind<R>>::take(rt, s) }))
     }
 }
 
@@ -136,9 +144,9 @@ where
         declared(cx, "swap", &[("pair", pair)], swapped)
     }
 
-    fn call(rt: &R, [pair]: [R::Value; 1]) -> R::Value {
-        let [first, second] = <R::Tuple as TupleKind<R>>::take::<2>(rt, pair);
-        let pair = (take_int(rt, first), <R::String as StringKind<R>>::take(rt, second));
+    unsafe fn call(rt: &R, [pair]: [R::Value; 1]) -> R::Value {
+        let [first, second] = unsafe { <R::Tuple as TupleKind<R>>::take::<2>(rt, pair) };
+        let pair = unsafe { (take_int(rt, first), <R::String as StringKind<R>>::take(rt, second)) };
         let (first, second) = swap(pair);
         let parts = [<R::String as StringKind<R>>::make(rt, first), make_int(rt, second)];
         <R::Tuple as TupleKind<R>>::make(rt, parts)
@@ -159,9 +167,9 @@ where
         declared(cx, "or", &[("option", option), ("fallback", int)], int)
     }
 
-    fn call(rt: &R, [option, fallback]: [R::Value; 2]) -> R::Value {
-        let option = <R::Option as OptionKind<R>>::take(rt, option).map(|payload| take_int(rt, payload));
-        make_int(rt, or(option, take_int(rt, fallback)))
+    unsafe fn call(rt: &R, [option, fallback]: [R::Value; 2]) -> R::Value {
+        let option = unsafe { <R::Option as OptionKind<R>>::take(rt, option) }.map(|payload| unsafe { take_int(rt, payload) });
+        make_int(rt, or(option, unsafe { take_int(rt, fallback) }))
     }
 }
 
@@ -179,8 +187,8 @@ where
         declared(cx, "parse", &[("text", string)], result)
     }
 
-    fn call(rt: &R, [text]: [R::Value; 1]) -> R::Value {
-        let parsed = parse(<R::String as StringKind<R>>::take(rt, text))
+    unsafe fn call(rt: &R, [text]: [R::Value; 1]) -> R::Value {
+        let parsed = parse(unsafe { <R::String as StringKind<R>>::take(rt, text) })
             .map(|int| make_int(rt, int))
             .map_err(|text| <R::String as StringKind<R>>::make(rt, text));
         <R::Result as ResultKind<R>>::make(rt, parsed)
@@ -201,9 +209,9 @@ where
         declared(cx, "apply", &[("f", function), ("x", int)], int)
     }
 
-    fn call(rt: &R, [function, x]: [R::Value; 2]) -> R::Value {
-        let applied = <R::Fn as FnKind<R>>::call::<1>(rt, &function, [x]);
-        R::release(function);
+    unsafe fn call(rt: &R, [function, x]: [R::Value; 2]) -> R::Value {
+        let applied = unsafe { <R::Fn as FnKind<R>>::call::<1>(rt, &function, [x]) };
+        unsafe { R::release(function) };
         applied
     }
 }
@@ -222,9 +230,12 @@ where
         declared(cx, "adder", &[("n", int)], function)
     }
 
-    fn call(rt: &R, [n]: [R::Value; 1]) -> R::Value {
-        let n = take_int(rt, n);
-        <R::Fn as FnKind<R>>::make::<1>(rt, move |rt, [x]| make_int(rt, take_int(rt, x) + n))
+    unsafe fn call(rt: &R, [n]: [R::Value; 1]) -> R::Value {
+        let n = unsafe { take_int(rt, n) };
+        // The body is a safe closure that consumes its argument on a premise
+        // its type does not state: the extern note's open question on a
+        // function value's body.
+        <R::Fn as FnKind<R>>::make::<1>(rt, move |rt, [x]| make_int(rt, unsafe { take_int(rt, x) } + n))
     }
 }
 
@@ -244,26 +255,29 @@ fn make_string(rt: &Safe, s: &str) -> Value {
     <<Safe as Runtime>::String as StringKind<Safe>>::make(rt, s.to_owned())
 }
 
-fn take_string(rt: &Safe, value: Value) -> String {
-    <<Safe as Runtime>::String as StringKind<Safe>>::take(rt, value)
+/// # Safety
+///
+/// `value` was made as a `String`, and the caller owns it.
+unsafe fn take_string(rt: &Safe, value: Value) -> String {
+    unsafe { <<Safe as Runtime>::String as StringKind<Safe>>::take(rt, value) }
 }
 
 #[test]
 fn a_scalar_crosses_by_value() {
     let rt = runtime();
-    let out = rt.call("inc", &[make_int(&rt, 41)]);
-    assert_eq!(take_int(&rt, out), 42);
+    let out = unsafe { rt.call("inc", &[make_int(&rt, 41)]) };
+    assert_eq!(unsafe { take_int(&rt, out) }, 42);
     assert_eq!(live(), 0);
 }
 
 #[test]
 fn a_string_crosses_by_value_and_is_lent_in_place() {
     let rt = runtime();
-    let mut out = rt.call("shout", &[make_string(&rt, "ab")]);
-    <<Safe as Runtime>::String as StringKind<Safe>>::view_mut(&rt, &mut out, |s| s.push('!'));
-    let len = <<Safe as Runtime>::String as StringKind<Safe>>::view(&rt, &out, |s| s.len());
+    let mut out = unsafe { rt.call("shout", &[make_string(&rt, "ab")]) };
+    unsafe { <<Safe as Runtime>::String as StringKind<Safe>>::view_mut(&rt, &mut out, |s| s.push('!')) };
+    let len = unsafe { <<Safe as Runtime>::String as StringKind<Safe>>::view(&rt, &out, |s| s.len()) };
     assert_eq!(len, 3);
-    assert_eq!(take_string(&rt, out), "AB!");
+    assert_eq!(unsafe { take_string(&rt, out) }, "AB!");
     assert_eq!(live(), 0);
 }
 
@@ -271,12 +285,14 @@ fn a_string_crosses_by_value_and_is_lent_in_place() {
 fn a_tuple_crosses_part_by_part() {
     let rt = runtime();
     let pair = <<Safe as Runtime>::Tuple as TupleKind<Safe>>::make(&rt, [make_int(&rt, 7), make_string(&rt, "x")]);
-    let mut out = rt.call("swap", &[pair]);
-    <<Safe as Runtime>::Tuple as TupleKind<Safe>>::view_mut::<2, _>(&rt, &mut out, |[_, second]| {
-        <<Safe as Runtime>::Scalar as ScalarKind<Safe, i64>>::view_mut(&rt, second, |n| *n *= 2)
-    });
-    let [first, second] = <<Safe as Runtime>::Tuple as TupleKind<Safe>>::take::<2>(&rt, out);
-    assert_eq!((take_string(&rt, first), take_int(&rt, second)), ("x".to_owned(), 14));
+    let mut out = unsafe { rt.call("swap", &[pair]) };
+    unsafe {
+        <<Safe as Runtime>::Tuple as TupleKind<Safe>>::view_mut::<2, _>(&rt, &mut out, |[_, second]| {
+            <<Safe as Runtime>::Scalar as ScalarKind<Safe, i64>>::view_mut(&rt, second, |n| *n *= 2)
+        })
+    };
+    let [first, second] = unsafe { <<Safe as Runtime>::Tuple as TupleKind<Safe>>::take::<2>(&rt, out) };
+    assert_eq!(unsafe { (take_string(&rt, first), take_int(&rt, second)) }, ("x".to_owned(), 14));
     assert_eq!(live(), 0);
 }
 
@@ -284,32 +300,34 @@ fn a_tuple_crosses_part_by_part() {
 fn an_option_lends_its_payload_and_replaces_its_variant() {
     let rt = runtime();
     let some = <<Safe as Runtime>::Option as OptionKind<Safe>>::make(&rt, Some(make_int(&rt, 3)));
-    let out = rt.call("or", &[some, make_int(&rt, 9)]);
-    assert_eq!(take_int(&rt, out), 3);
+    let out = unsafe { rt.call("or", &[some, make_int(&rt, 9)]) };
+    assert_eq!(unsafe { take_int(&rt, out) }, 3);
 
     let mut option = <<Safe as Runtime>::Option as OptionKind<Safe>>::make(&rt, None);
-    let none = rt.call("or", &[<<Safe as Runtime>::Option as OptionKind<Safe>>::make(&rt, None), make_int(&rt, 9)]);
-    assert_eq!(take_int(&rt, none), 9);
+    let none = unsafe { rt.call("or", &[<<Safe as Runtime>::Option as OptionKind<Safe>>::make(&rt, None), make_int(&rt, 9)]) };
+    assert_eq!(unsafe { take_int(&rt, none) }, 9);
     let five = make_int(&rt, 5);
-    let old = <<Safe as Runtime>::Option as OptionKind<Safe>>::view_mut(&rt, &mut option, |option| option.replace(five));
+    let old = unsafe { <<Safe as Runtime>::Option as OptionKind<Safe>>::view_mut(&rt, &mut option, |option| option.replace(five)) };
     assert_eq!(old, None);
-    let incremented = <<Safe as Runtime>::Option as OptionKind<Safe>>::view_mut(&rt, &mut option, |option| {
-        option.as_mut().map(|payload| <<Safe as Runtime>::Scalar as ScalarKind<Safe, i64>>::view_mut(&rt, payload, |n| *n += 1))
-    });
+    let incremented = unsafe {
+        <<Safe as Runtime>::Option as OptionKind<Safe>>::view_mut(&rt, &mut option, |option| {
+            option.as_mut().map(|payload| <<Safe as Runtime>::Scalar as ScalarKind<Safe, i64>>::view_mut(&rt, payload, |n| *n += 1))
+        })
+    };
     assert_eq!(incremented, Some(()));
-    let out = rt.call("or", &[option, make_int(&rt, 0)]);
-    assert_eq!(take_int(&rt, out), 6);
+    let out = unsafe { rt.call("or", &[option, make_int(&rt, 0)]) };
+    assert_eq!(unsafe { take_int(&rt, out) }, 6);
     assert_eq!(live(), 0);
 }
 
 #[test]
 fn a_result_crosses_with_either_payload() {
     let rt = runtime();
-    let ok = rt.call("parse", &[make_string(&rt, "12")]);
-    let ok = <<Safe as Runtime>::Result as ResultKind<Safe>>::take(&rt, ok).map(|int| take_int(&rt, int));
+    let ok = unsafe { rt.call("parse", &[make_string(&rt, "12")]) };
+    let ok = unsafe { <<Safe as Runtime>::Result as ResultKind<Safe>>::take(&rt, ok) }.map(|int| unsafe { take_int(&rt, int) });
     assert_eq!(ok, Ok(12));
-    let err = rt.call("parse", &[make_string(&rt, "twelve")]);
-    let err = <<Safe as Runtime>::Result as ResultKind<Safe>>::take(&rt, err).map_err(|text| take_string(&rt, text));
+    let err = unsafe { rt.call("parse", &[make_string(&rt, "twelve")]) };
+    let err = unsafe { <<Safe as Runtime>::Result as ResultKind<Safe>>::take(&rt, err) }.map_err(|text| unsafe { take_string(&rt, text) });
     assert_eq!(err, Err("\"twelve\" is no integer: invalid digit found in string".to_owned()));
     assert_eq!(live(), 0);
 }
@@ -317,9 +335,9 @@ fn a_result_crosses_with_either_payload() {
 #[test]
 fn a_function_value_is_given_and_called() {
     let rt = runtime();
-    let add_two = rt.call("adder", &[make_int(&rt, 2)]);
-    let out = rt.call("apply", &[add_two, make_int(&rt, 40)]);
-    assert_eq!(take_int(&rt, out), 42);
+    let add_two = unsafe { rt.call("adder", &[make_int(&rt, 2)]) };
+    let out = unsafe { rt.call("apply", &[add_two, make_int(&rt, 40)]) };
+    assert_eq!(unsafe { take_int(&rt, out) }, 42);
     assert_eq!(live(), 0);
 }
 
@@ -329,7 +347,7 @@ fn releasing_a_structure_releases_its_parts() {
     let inner = <<Safe as Runtime>::Option as OptionKind<Safe>>::make(&rt, Some(make_string(&rt, "s")));
     let outer = <<Safe as Runtime>::Tuple as TupleKind<Safe>>::make(&rt, [make_int(&rt, 1), inner]);
     assert_eq!(live(), 4);
-    Safe::release(outer);
+    unsafe { Safe::release(outer) };
     assert_eq!(live(), 0);
 }
 
@@ -346,9 +364,11 @@ fn two_exclusive_views_of_one_value_panic() {
     let rt = runtime();
     let mut first = make_string(&rt, "a");
     let mut second = first;
-    <<Safe as Runtime>::String as StringKind<Safe>>::view_mut(&rt, &mut first, |_| {
-        <<Safe as Runtime>::String as StringKind<Safe>>::view_mut(&rt, &mut second, |_| ())
-    });
+    unsafe {
+        <<Safe as Runtime>::String as StringKind<Safe>>::view_mut(&rt, &mut first, |_| {
+            <<Safe as Runtime>::String as StringKind<Safe>>::view_mut(&rt, &mut second, |_| ())
+        })
+    };
 }
 
 #[test]
@@ -356,6 +376,6 @@ fn two_exclusive_views_of_one_value_panic() {
 fn a_released_value_is_not_used_again() {
     let rt = runtime();
     let value = make_int(&rt, 1);
-    Safe::release(value);
-    <<Safe as Runtime>::Scalar as ScalarKind<Safe, i64>>::view(&rt, &value, |_| ());
+    unsafe { Safe::release(value) };
+    unsafe { <<Safe as Runtime>::Scalar as ScalarKind<Safe, i64>>::view(&rt, &value, |_| ()) };
 }

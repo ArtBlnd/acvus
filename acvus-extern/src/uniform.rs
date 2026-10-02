@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use std::marker::PhantomData;
 
 use crate::crossing::Crossing;
@@ -7,8 +9,10 @@ use crate::runtime::Runtime;
 
 /// A value the runtime holds, its type kept by the marker `X` alone: its
 /// layout is `R::Value`'s for every `X`. It is invariant in `X` (rfc_compiler
-/// types §4), made only through the runtime, lent only through it, and never
-/// taken out; it is moved and dropped whole.
+/// types §4), made only by `new` or by the `unsafe` `Crossing::take`, lent
+/// only through the runtime, and never taken out; it is moved and dropped
+/// whole. So it always owns a live value made as `X`, which its views and its
+/// drop rest on.
 #[repr(transparent)]
 pub struct Uniform<R, X>
 where
@@ -35,14 +39,17 @@ where
     where
         X: Lend<R>,
     {
-        X::view(rt, &self.value, lent)
+        // SAFETY: `self` owns a live value made as `X`.
+        unsafe { X::view(rt, &self.value, lent) }
     }
 
     pub fn as_mut<O>(&mut self, rt: &R, lent: impl FnOnce(&mut X::Viewed) -> O) -> O
     where
         X: Lend<R>,
     {
-        X::view_mut(rt, &mut self.value, lent)
+        // SAFETY: `self` owns a live value made as `X`, held exclusively
+        // through `&mut self`.
+        unsafe { X::view_mut(rt, &mut self.value, lent) }
     }
 
     pub fn get(&self, rt: &R) -> X
@@ -58,7 +65,8 @@ where
     R: Runtime,
 {
     fn drop(&mut self) {
-        R::release(self.value);
+        // SAFETY: `self` owns its value, and is dropped once.
+        unsafe { R::release(self.value) }
     }
 }
 
@@ -72,7 +80,7 @@ where
         value
     }
 
-    fn take(_rt: &R, value: R::Value) -> Self {
+    unsafe fn take(_rt: &R, value: R::Value) -> Self {
         Uniform { value, marker: PhantomData }
     }
 }
@@ -86,8 +94,16 @@ where
 {
     type Viewed: ?Sized;
 
-    fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&Self::Viewed) -> O) -> O;
-    fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut Self::Viewed) -> O) -> O;
+    /// # Safety
+    ///
+    /// `value` is live and was given as this type, or as one of its layout as
+    /// the extern note's Type variables admit.
+    unsafe fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&Self::Viewed) -> O) -> O;
+
+    /// # Safety
+    ///
+    /// As `view`, and the caller holds `value` exclusively while `lent` runs.
+    unsafe fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut Self::Viewed) -> O) -> O;
 }
 
 macro_rules! scalars {
@@ -98,12 +114,14 @@ macro_rules! scalars {
         {
             type Viewed = $scalar;
 
-            fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&$scalar) -> O) -> O {
-                <R::Scalar as ScalarKind<R, $scalar>>::view(rt, value, lent)
+            unsafe fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&$scalar) -> O) -> O {
+                // SAFETY: the caller's premise.
+                unsafe { <R::Scalar as ScalarKind<R, $scalar>>::view(rt, value, lent) }
             }
 
-            fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut $scalar) -> O) -> O {
-                <R::Scalar as ScalarKind<R, $scalar>>::view_mut(rt, value, lent)
+            unsafe fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut $scalar) -> O) -> O {
+                // SAFETY: the caller's premise.
+                unsafe { <R::Scalar as ScalarKind<R, $scalar>>::view_mut(rt, value, lent) }
             }
         }
     )*};
@@ -117,12 +135,14 @@ where
 {
     type Viewed = String;
 
-    fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&String) -> O) -> O {
-        <R::String as StringKind<R>>::view(rt, value, lent)
+    unsafe fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&String) -> O) -> O {
+        // SAFETY: the caller's premise.
+        unsafe { <R::String as StringKind<R>>::view(rt, value, lent) }
     }
 
-    fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut String) -> O) -> O {
-        <R::String as StringKind<R>>::view_mut(rt, value, lent)
+    unsafe fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut String) -> O) -> O {
+        // SAFETY: the caller's premise.
+        unsafe { <R::String as StringKind<R>>::view_mut(rt, value, lent) }
     }
 }
 
@@ -133,12 +153,15 @@ where
 {
     type Viewed = Option<Uniform<R, Y>>;
 
-    fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&Self::Viewed) -> O) -> O {
-        <R::Option as OptionKind<R>>::view(rt, value, |option| lent(repr::uniform_option(option)))
+    unsafe fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&Self::Viewed) -> O) -> O {
+        // SAFETY: the caller's premise; the option's payload was given as
+        // `Y`, so it may be seen as a `Uniform<R, Y>`.
+        unsafe { <R::Option as OptionKind<R>>::view(rt, value, |option| lent(repr::uniform_option(option))) }
     }
 
-    fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut Self::Viewed) -> O) -> O {
-        <R::Option as OptionKind<R>>::view_mut(rt, value, |option| lent(repr::uniform_option_mut(option)))
+    unsafe fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut Self::Viewed) -> O) -> O {
+        // SAFETY: as `view`, exclusively.
+        unsafe { <R::Option as OptionKind<R>>::view_mut(rt, value, |option| lent(repr::uniform_option_mut(option))) }
     }
 }
 
@@ -150,11 +173,14 @@ where
 {
     type Viewed = Result<Uniform<R, Y>, Uniform<R, E>>;
 
-    fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&Self::Viewed) -> O) -> O {
-        <R::Result as ResultKind<R>>::view(rt, value, |result| lent(repr::uniform_result(result)))
+    unsafe fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&Self::Viewed) -> O) -> O {
+        // SAFETY: the caller's premise; either payload was given as its own
+        // type, so it may be seen as a `Uniform` of it.
+        unsafe { <R::Result as ResultKind<R>>::view(rt, value, |result| lent(repr::uniform_result(result))) }
     }
 
-    fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut Self::Viewed) -> O) -> O {
-        <R::Result as ResultKind<R>>::view_mut(rt, value, |result| lent(repr::uniform_result_mut(result)))
+    unsafe fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut Self::Viewed) -> O) -> O {
+        // SAFETY: as `view`, exclusively.
+        unsafe { <R::Result as ResultKind<R>>::view_mut(rt, value, |result| lent(repr::uniform_result_mut(result))) }
     }
 }

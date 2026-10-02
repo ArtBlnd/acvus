@@ -1,6 +1,10 @@
 //! `Uniform`, `Lend`, the type variable marker and `#[derive(Opaque)]`: a
 //! value held by the runtime, lent through its kind, and an opaque value seen
 //! from generic code and from a concrete view alike. Run under Miri.
+//!
+//! A `Uniform` is safe to use; only taking one back from a `Value` is
+//! `unsafe`, and each such `unsafe` here plays the compiler, asserting the
+//! premise for a value given just before.
 
 use acvus_extern::{Crossing, Lend, Never, Opaque, Runtime, TypeVar, Uniform};
 use acvus_extern_test::{Safe, live};
@@ -94,12 +98,12 @@ fn an_opaque_value_is_seen_from_generic_code_and_from_a_concrete_view() {
     let given = stack.give(&rt);
 
     // The generic entry opens it at the marker, as a type variable's value.
-    let generic: U<Stack<U<Never>>> = Crossing::take(&rt, given);
+    let generic: U<Stack<U<Never>>> = unsafe { Crossing::take(&rt, given) };
     let counted = generic.as_ref(&rt, count::<Safe, U<Never>>);
     assert_eq!(counted, 2);
 
     // A concrete view opens the same value at its concrete element type.
-    let concrete: U<Stack<U<i64>>> = Crossing::take(&rt, generic.give(&rt));
+    let concrete: U<Stack<U<i64>>> = unsafe { Crossing::take(&rt, generic.give(&rt)) };
     let sum: i64 = concrete.as_ref(&rt, |stack| stack.items.iter().map(|item| item.get(&rt)).sum());
     assert_eq!(sum, 3);
     drop(concrete);
@@ -112,7 +116,7 @@ fn an_opaque_value_crosses_by_value_and_is_lent() {
     let mut stack = U::new(&rt, Stack { items: vec![U::new(&rt, String::from("a"))] });
     let pushed = U::new(&rt, String::from("b"));
     stack.as_mut(&rt, |stack| stack.items.push(pushed));
-    let taken: Stack<U<String>> = Crossing::take(&rt, stack.give(&rt));
+    let taken: Stack<U<String>> = unsafe { Crossing::take(&rt, stack.give(&rt)) };
     let joined: String = taken.items.iter().map(|item| item.as_ref(&rt, String::clone)).collect();
     assert_eq!(joined, "ab");
     drop(taken);

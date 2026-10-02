@@ -28,13 +28,17 @@ pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let (_, ty_generics, _) = input.generics.split_for_impl();
     let declared = declared(input, &crossing, &declare);
+    // Every `unsafe` block the derive writes takes back a part of a value the
+    // caller of `take` owns and vouched was given as this type, so each part
+    // was given as its field's type and is the caller's along with the whole.
     Ok(quote! {
+        #[allow(unsafe_code)]
         impl #impl_generics ::acvus_extern::Crossing<__R> for #name #ty_generics #where_clause {
             fn give(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
                 #give
             }
 
-            fn take(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
+            unsafe fn take(__rt: &__R, __value: <__R as ::acvus_extern::Runtime>::Value) -> Self {
                 #take
             }
         }
@@ -151,7 +155,7 @@ fn object_parts(fields: &[Named<'_>]) -> (TokenStream, TokenStream) {
     };
     let take = |value: TokenStream| {
         quote! {
-            let [#(#bindings),*] = <<__R as ::acvus_extern::Runtime>::Object as ::acvus_extern::ObjectKind<__R>>::take(__rt, #value);
+            let [#(#bindings),*] = unsafe { <<__R as ::acvus_extern::Runtime>::Object as ::acvus_extern::ObjectKind<__R>>::take(__rt, #value) };
         }
     };
     (give, take(quote!(__payload)))
@@ -168,8 +172,8 @@ fn object(name: &Ident, fields: &FieldsNamed) -> syn::Result<(TokenStream, Token
         #give_object
     };
     let take = quote! {
-        let [#(#bindings),*] = <<__R as ::acvus_extern::Runtime>::Object as ::acvus_extern::ObjectKind<__R>>::take(__rt, __value);
-        #name { #(#names: <#tys as ::acvus_extern::Crossing<__R>>::take(__rt, #bindings)),* }
+        let [#(#bindings),*] = unsafe { <<__R as ::acvus_extern::Runtime>::Object as ::acvus_extern::ObjectKind<__R>>::take(__rt, __value) };
+        #name { #(#names: unsafe { <#tys as ::acvus_extern::Crossing<__R>>::take(__rt, #bindings) }),* }
     };
     let crossing = fields.iter().map(|field| field.ty.clone()).collect();
     Ok((give, take, crossing))
@@ -196,7 +200,7 @@ fn variant(name: &Ident, tag: usize, variant: &syn::Variant, crossing: &mut Vec<
                 give: quote!(#name::#label => #made),
                 take: quote! {
                     |__rt, __payload| {
-                        <() as ::acvus_extern::Crossing<__R>>::take(__rt, __payload);
+                        unsafe { <() as ::acvus_extern::Crossing<__R>>::take(__rt, __payload) };
                         #name::#label
                     }
                 },
@@ -211,7 +215,7 @@ fn variant(name: &Ident, tag: usize, variant: &syn::Variant, crossing: &mut Vec<
                 give: quote!(#name::#label(#(#bindings),*) => #made),
                 take: quote! {
                     |__rt, __payload| {
-                        let (#(#bindings),*) = <(#(#tys),*) as ::acvus_extern::Crossing<__R>>::take(__rt, __payload);
+                        let (#(#bindings),*) = unsafe { <(#(#tys),*) as ::acvus_extern::Crossing<__R>>::take(__rt, __payload) };
                         #name::#label(#(#bindings),*)
                     }
                 },
@@ -230,7 +234,7 @@ fn variant(name: &Ident, tag: usize, variant: &syn::Variant, crossing: &mut Vec<
                 take: quote! {
                     |__rt, __payload| {
                         #take_object
-                        #name::#label { #(#names: <#tys as ::acvus_extern::Crossing<__R>>::take(__rt, #bindings)),* }
+                        #name::#label { #(#names: unsafe { <#tys as ::acvus_extern::Crossing<__R>>::take(__rt, #bindings) }),* }
                     }
                 },
             }
@@ -255,9 +259,12 @@ fn sum(name: &Ident, data: &DataEnum) -> syn::Result<(TokenStream, TokenStream, 
             #(#gives,)*
         }
     };
+    // Each constructor is a closure coerced at once to an `unsafe fn`, so the
+    // only handle to it states its premise: the payload is the one made for
+    // its variant, which the runtime asserts by calling it for the tag.
     let take = quote! {
-        let __variants: [fn(&__R, <__R as ::acvus_extern::Runtime>::Value) -> Self; #count] = [#(#takes),*];
-        <<__R as ::acvus_extern::Runtime>::Enum as ::acvus_extern::EnumKind<__R>>::take(__rt, __value, &__variants)
+        let __variants: [unsafe fn(&__R, <__R as ::acvus_extern::Runtime>::Value) -> Self; #count] = [#(#takes),*];
+        unsafe { <<__R as ::acvus_extern::Runtime>::Enum as ::acvus_extern::EnumKind<__R>>::take(__rt, __value, &__variants) }
     };
     Ok((give, take, crossing))
 }

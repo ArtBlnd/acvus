@@ -1,3 +1,5 @@
+#![allow(unsafe_code)]
+
 use crate::kind::{OptionKind, ResultKind, ScalarKind, StringKind, TupleKind};
 use crate::runtime::Runtime;
 
@@ -9,7 +11,13 @@ where
     R: Runtime,
 {
     fn give(self, rt: &R) -> R::Value;
-    fn take(rt: &R, value: R::Value) -> Self;
+
+    /// # Safety
+    ///
+    /// `value` was given as this type, or as one of its layout as the extern
+    /// note's Type variables admit; the caller owns it and uses neither it
+    /// nor a copy of it again.
+    unsafe fn take(rt: &R, value: R::Value) -> Self;
 }
 
 macro_rules! scalars {
@@ -22,8 +30,9 @@ macro_rules! scalars {
                 <R::Scalar as ScalarKind<R, $scalar>>::make(rt, self)
             }
 
-            fn take(rt: &R, value: R::Value) -> Self {
-                <R::Scalar as ScalarKind<R, $scalar>>::take(rt, value)
+            unsafe fn take(rt: &R, value: R::Value) -> Self {
+                // SAFETY: the caller's premise.
+                unsafe { <R::Scalar as ScalarKind<R, $scalar>>::take(rt, value) }
             }
         }
     )*};
@@ -39,8 +48,9 @@ where
         <R::String as StringKind<R>>::make(rt, self)
     }
 
-    fn take(rt: &R, value: R::Value) -> Self {
-        <R::String as StringKind<R>>::take(rt, value)
+    unsafe fn take(rt: &R, value: R::Value) -> Self {
+        // SAFETY: the caller's premise.
+        unsafe { <R::String as StringKind<R>>::take(rt, value) }
     }
 }
 
@@ -53,8 +63,10 @@ where
         <R::Option as OptionKind<R>>::make(rt, self.map(|payload| payload.give(rt)))
     }
 
-    fn take(rt: &R, value: R::Value) -> Self {
-        <R::Option as OptionKind<R>>::take(rt, value).map(|payload| T::take(rt, payload))
+    unsafe fn take(rt: &R, value: R::Value) -> Self {
+        // SAFETY: the caller's premise; the payload was given as `T` and is
+        // the caller's along with the option.
+        unsafe { <R::Option as OptionKind<R>>::take(rt, value) }.map(|payload| unsafe { T::take(rt, payload) })
     }
 }
 
@@ -69,8 +81,12 @@ where
         <R::Result as ResultKind<R>>::make(rt, result)
     }
 
-    fn take(rt: &R, value: R::Value) -> Self {
-        <R::Result as ResultKind<R>>::take(rt, value).map(|payload| T::take(rt, payload)).map_err(|payload| E::take(rt, payload))
+    unsafe fn take(rt: &R, value: R::Value) -> Self {
+        // SAFETY: the caller's premise; either payload was given as its own
+        // type and is the caller's along with the result.
+        unsafe { <R::Result as ResultKind<R>>::take(rt, value) }
+            .map(|payload| unsafe { T::take(rt, payload) })
+            .map_err(|payload| unsafe { E::take(rt, payload) })
     }
 }
 
@@ -87,9 +103,11 @@ macro_rules! tuples {
                 <R::Tuple as TupleKind<R>>::make(rt, [$($value.give(rt)),+])
             }
 
-            fn take(rt: &R, value: R::Value) -> Self {
-                let [$($value),+] = <R::Tuple as TupleKind<R>>::take(rt, value);
-                ($($part::take(rt, $value),)+)
+            unsafe fn take(rt: &R, value: R::Value) -> Self {
+                // SAFETY: the caller's premise; each part was given as its own
+                // type and is the caller's along with the tuple.
+                let [$($value),+] = unsafe { <R::Tuple as TupleKind<R>>::take(rt, value) };
+                ($(unsafe { $part::take(rt, $value) },)+)
             }
         }
     )+};

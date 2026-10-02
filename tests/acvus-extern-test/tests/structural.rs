@@ -1,6 +1,9 @@
 //! `#[derive(Structural)]`: a struct crosses as an object and an enum as an
 //! enum, field by field, each field and variant in its name's text order.
 //! Every test ends with no value held.
+//!
+//! The tests and the entry play the compiler: each `unsafe` asserts the
+//! premise for a value made here, at the type it was made at.
 
 use acvus_extern::{Crossing, Declared, Declaring, EnumKind, ExternFn, ObjectKind, Registry, Runtime, Structural};
 use acvus_extern_test::{Safe, Value, live};
@@ -50,16 +53,16 @@ where
     T: Crossing<Safe>,
 {
     let given = value.give(rt);
-    T::take(rt, given)
+    unsafe { T::take(rt, given) }
 }
 
 #[test]
 fn a_struct_crosses_as_an_object_in_its_fields_text_order() {
     let rt = runtime();
     let given = Point { b: "x".to_owned(), a: 7 }.give(&rt);
-    let [first, second] = <<Safe as Runtime>::Object as ObjectKind<Safe>>::take::<2>(&rt, given);
-    assert_eq!(<i64 as Crossing<Safe>>::take(&rt, first), 7);
-    assert_eq!(<String as Crossing<Safe>>::take(&rt, second), "x");
+    let [first, second] = unsafe { <<Safe as Runtime>::Object as ObjectKind<Safe>>::take::<2>(&rt, given) };
+    assert_eq!(unsafe { <i64 as Crossing<Safe>>::take(&rt, first) }, 7);
+    assert_eq!(unsafe { <String as Crossing<Safe>>::take(&rt, second) }, "x");
     assert_eq!(live(), 0);
 }
 
@@ -67,9 +70,9 @@ fn a_struct_crosses_as_an_object_in_its_fields_text_order() {
 fn a_raw_field_name_is_ordered_by_its_text() {
     let rt = runtime();
     let given = Keyword { r#type: true, name: 'n' }.give(&rt);
-    let [first, second] = <<Safe as Runtime>::Object as ObjectKind<Safe>>::take::<2>(&rt, given);
-    assert_eq!(<char as Crossing<Safe>>::take(&rt, first), 'n');
-    assert!(<bool as Crossing<Safe>>::take(&rt, second));
+    let [first, second] = unsafe { <<Safe as Runtime>::Object as ObjectKind<Safe>>::take::<2>(&rt, given) };
+    assert_eq!(unsafe { <char as Crossing<Safe>>::take(&rt, first) }, 'n');
+    assert!(unsafe { <bool as Crossing<Safe>>::take(&rt, second) });
     assert_eq!(live(), 0);
 }
 
@@ -88,25 +91,25 @@ fn an_enum_tags_its_variants_in_their_names_text_order() {
     let rt = runtime();
     let tag_of = |shape: Shape| {
         let given = shape.give(&rt);
-        let tags: [fn(&Safe, Value) -> usize; 4] = [
+        let tags: [unsafe fn(&Safe, Value) -> usize; 4] = [
             |_, payload| {
-                Safe::release(payload);
+                unsafe { Safe::release(payload) };
                 0
             },
             |_, payload| {
-                Safe::release(payload);
+                unsafe { Safe::release(payload) };
                 1
             },
             |_, payload| {
-                Safe::release(payload);
+                unsafe { Safe::release(payload) };
                 2
             },
             |_, payload| {
-                Safe::release(payload);
+                unsafe { Safe::release(payload) };
                 3
             },
         ];
-        <<Safe as Runtime>::Enum as EnumKind<Safe>>::take(&rt, given, &tags)
+        unsafe { <<Safe as Runtime>::Enum as EnumKind<Safe>>::take(&rt, given, &tags) }
     };
     let labeled = Shape::Labeled { width: 1.0, name: "l".to_owned() };
     let tags = [tag_of(Shape::Empty), tag_of(labeled), tag_of(Shape::Rect(1.0, 2.0)), tag_of(Shape::Square(3.0))];
@@ -188,8 +191,8 @@ where
         (cx.root("area"), scheme)
     }
 
-    fn call(rt: &R, [shape]: [R::Value; 1]) -> R::Value {
-        area(Shape::take(rt, shape)).give(rt)
+    unsafe fn call(rt: &R, [shape]: [R::Value; 1]) -> R::Value {
+        area(unsafe { Shape::take(rt, shape) }).give(rt)
     }
 }
 
@@ -197,7 +200,7 @@ where
 fn an_extern_fn_takes_an_enum_by_value() {
     let mut rt = runtime();
     rt.register::<Area>();
-    let out = rt.call("area", &[Shape::Rect(2.0, 5.0).give(&rt)]);
-    assert_eq!(<f64 as Crossing<Safe>>::take(&rt, out), 10.0);
+    let out = unsafe { rt.call("area", &[Shape::Rect(2.0, 5.0).give(&rt)]) };
+    assert_eq!(unsafe { <f64 as Crossing<Safe>>::take(&rt, out) }, 10.0);
     assert_eq!(live(), 0);
 }

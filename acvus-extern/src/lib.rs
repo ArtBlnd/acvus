@@ -1,7 +1,7 @@
 //! The extern side of acvus: the contract a runtime implements, and the way
 //! an extern fn reaches a runtime (`docs/extern-note.md`).
 
-#![deny(unsafe_code)]
+#![deny(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 mod crossing;
 mod declared;

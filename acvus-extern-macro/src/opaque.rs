@@ -107,25 +107,30 @@ pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     let (declared_impl, declared_ty, declared_where) = declared_generics.split_for_impl();
 
     Ok(quote! {
+        #[allow(unsafe_code)]
         impl #impl_generics ::acvus_extern::Crossing<__R> for #name #ty_generics #where_clause {
             fn give(self, __rt: &__R) -> #value {
                 #opaque::make(__rt, self)
             }
 
-            fn take(__rt: &__R, __value: #value) -> Self {
-                #opaque::take(__rt, __value)
+            unsafe fn take(__rt: &__R, __value: #value) -> Self {
+                // SAFETY: the caller's premise, which is `OpaqueKind::take`'s.
+                unsafe { #opaque::take(__rt, __value) }
             }
         }
 
+        #[allow(unsafe_code)]
         impl #impl_generics ::acvus_extern::Lend<__R> for #name #ty_generics #where_clause {
             type Viewed = Self;
 
-            fn view<__O>(__rt: &__R, __value: &#value, __lent: impl ::core::ops::FnOnce(&Self) -> __O) -> __O {
-                #opaque::view(__rt, __value, __lent)
+            unsafe fn view<__O>(__rt: &__R, __value: &#value, __lent: impl ::core::ops::FnOnce(&Self) -> __O) -> __O {
+                // SAFETY: the caller's premise, which is `OpaqueKind::view`'s.
+                unsafe { #opaque::view(__rt, __value, __lent) }
             }
 
-            fn view_mut<__O>(__rt: &__R, __value: &mut #value, __lent: impl ::core::ops::FnOnce(&mut Self) -> __O) -> __O {
-                #opaque::view_mut(__rt, __value, __lent)
+            unsafe fn view_mut<__O>(__rt: &__R, __value: &mut #value, __lent: impl ::core::ops::FnOnce(&mut Self) -> __O) -> __O {
+                // SAFETY: the caller's premise, which is `OpaqueKind::view_mut`'s.
+                unsafe { #opaque::view_mut(__rt, __value, __lent) }
             }
         }
 

@@ -1,11 +1,16 @@
 //! The extern crate's unsafe kinds, `StoredOpaque` and `StoredRef`, over the
 //! safe runtime's `Stores`. These are the tests Miri runs: each one reads
-//! storage back as a Rust type, the one `unsafe` the extern crate writes.
+//! storage back as a Rust type, which the extern crate does in `repr` alone.
+//!
+//! The tests and the entry play the compiler: each `unsafe` asserts the
+//! premise for a value made here, at the type it was made at, except in
+//! `a_shared_opaque_value_is_not_taken`, which breaks one on purpose to show
+//! that the safe runtime panics.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use acvus_extern::{OpaqueKind, OptionKind, RefKind, Runtime};
+use acvus_extern::{Never, OpaqueKind, OptionKind, RefKind, Runtime, Uniform};
 use acvus_extern_test::{Safe, Value, live};
 use acvus_utils::Interner;
 
@@ -29,10 +34,10 @@ impl Drop for Counted {
 fn an_opaque_value_is_lent_and_taken_back() {
     let rt = runtime();
     let mut held = <Opaque as OpaqueKind<Safe>>::make(&rt, vec![1_i64, 2]);
-    let len = <Opaque as OpaqueKind<Safe>>::view(&rt, &held, |xs: &Vec<i64>| xs.len());
+    let len = unsafe { <Opaque as OpaqueKind<Safe>>::view(&rt, &held, |xs: &Vec<i64>| xs.len()) };
     assert_eq!(len, 2);
-    <Opaque as OpaqueKind<Safe>>::view_mut(&rt, &mut held, |xs: &mut Vec<i64>| xs.push(3));
-    let xs: Vec<i64> = <Opaque as OpaqueKind<Safe>>::take(&rt, held);
+    unsafe { <Opaque as OpaqueKind<Safe>>::view_mut(&rt, &mut held, |xs: &mut Vec<i64>| xs.push(3)) };
+    let xs: Vec<i64> = unsafe { <Opaque as OpaqueKind<Safe>>::take(&rt, held) };
     assert_eq!(xs, [1, 2, 3]);
     assert_eq!(live(), 0);
 }
@@ -42,14 +47,14 @@ fn an_opaque_value_ends_once_with_its_last_owner() {
     let rt = runtime();
     let drops = Arc::new(AtomicUsize::new(0));
     let held = <Opaque as OpaqueKind<Safe>>::make(&rt, Counted(Arc::clone(&drops)));
-    let shared = rt.share(&held);
-    Safe::release(held);
+    let shared = unsafe { rt.share(&held) };
+    unsafe { Safe::release(held) };
     assert_eq!(drops.load(Ordering::Relaxed), 0);
-    Safe::release(shared);
+    unsafe { Safe::release(shared) };
     assert_eq!(drops.load(Ordering::Relaxed), 1);
 
     let alone = <Opaque as OpaqueKind<Safe>>::make(&rt, Counted(Arc::clone(&drops)));
-    Safe::release(alone);
+    unsafe { Safe::release(alone) };
     assert_eq!(drops.load(Ordering::Relaxed), 2);
     assert_eq!(live(), 0);
 }
@@ -59,8 +64,8 @@ fn an_opaque_value_ends_once_with_its_last_owner() {
 fn a_shared_opaque_value_is_not_taken() {
     let rt = runtime();
     let held = <Opaque as OpaqueKind<Safe>>::make(&rt, 1_u8);
-    let _shared = rt.share(&held);
-    let _: u8 = <Opaque as OpaqueKind<Safe>>::take(&rt, held);
+    let _shared = unsafe { rt.share(&held) };
+    let _: u8 = unsafe { <Opaque as OpaqueKind<Safe>>::take(&rt, held) };
 }
 
 /// A value that holds a loan, as an extern type may.
@@ -79,10 +84,16 @@ fn next<'a>(cursor: &mut Cursor<'a>) -> Option<&'a i64> {
 /// The entry, as the macros will write it: every loan of the call is opened
 /// at `'call`, a borrow of the call's own arguments, and the result is given
 /// back before the call ends.
-fn next_entry<'call>(rt: &Safe, [cursor]: &'call mut [Value; 1]) -> Value {
-    let found = <Opaque as OpaqueKind<Safe>>::view_mut(rt, cursor, |cursor: &mut Cursor<'call>| {
-        next(cursor).map(|x| <Ref as RefKind<Safe>>::make(rt, x))
-    });
+///
+/// # Safety
+///
+/// `cursor` is a live `Cursor` whose loan lives through `'call`.
+unsafe fn next_entry<'call>(rt: &Safe, [cursor]: &'call mut [Value; 1]) -> Value {
+    let found = unsafe {
+        <Opaque as OpaqueKind<Safe>>::view_mut(rt, cursor, |cursor: &mut Cursor<'call>| {
+            next(cursor).map(|x| <Ref as RefKind<Safe>>::make(rt, x))
+        })
+    };
     <<Safe as Runtime>::Option as OptionKind<Safe>>::make(rt, found)
 }
 
@@ -93,16 +104,16 @@ fn a_value_holding_a_loan_is_held_and_opened_at_the_calls_lifetime() {
     let mut args = [<Opaque as OpaqueKind<Safe>>::make(&rt, Cursor { xs: &xs, at: 0 })];
     let mut seen = Vec::new();
     loop {
-        let found = next_entry(&rt, &mut args);
-        let Some(found) = <<Safe as Runtime>::Option as OptionKind<Safe>>::take(&rt, found) else {
+        let found = unsafe { next_entry(&rt, &mut args) };
+        let Some(found) = (unsafe { <<Safe as Runtime>::Option as OptionKind<Safe>>::take(&rt, found) }) else {
             break;
         };
-        seen.push(<Ref as RefKind<Safe>>::view(&rt, &found, |x: &i64| *x));
-        Safe::release(found);
+        seen.push(unsafe { <Ref as RefKind<Safe>>::view(&rt, &found, |x: &i64| *x) });
+        unsafe { Safe::release(found) };
     }
     assert_eq!(seen, [10, 20]);
     let [cursor] = args;
-    Safe::release(cursor);
+    unsafe { Safe::release(cursor) };
     assert_eq!(live(), 0);
 }
 
@@ -111,17 +122,17 @@ fn a_reference_crosses_as_its_words_thin_or_fat() {
     let rt = runtime();
     let n = 5_i64;
     let thin = <Ref as RefKind<Safe>>::make(&rt, &n);
-    assert_eq!(<Ref as RefKind<Safe>>::view(&rt, &thin, |n: &i64| *n), 5);
+    assert_eq!(unsafe { <Ref as RefKind<Safe>>::view(&rt, &thin, |n: &i64| *n) }, 5);
 
     let text = String::from("hello");
     let fat = <Ref as RefKind<Safe>>::make(&rt, text.as_str());
-    assert!(<Ref as RefKind<Safe>>::view(&rt, &fat, |s: &str| s == "hello"));
+    assert!(unsafe { <Ref as RefKind<Safe>>::view(&rt, &fat, |s: &str| s == "hello") });
 
     let mut xs = vec![1_i64, 2, 3];
     let mut run = <Ref as RefKind<Safe>>::make_mut(&rt, xs.as_mut_slice());
-    <Ref as RefKind<Safe>>::view_mut(&rt, &mut run, |xs: &mut [i64]| xs[0] = 9);
+    unsafe { <Ref as RefKind<Safe>>::view_mut(&rt, &mut run, |xs: &mut [i64]| xs[0] = 9) };
     for value in [thin, fat, run] {
-        Safe::release(value);
+        unsafe { Safe::release(value) };
     }
     assert_eq!(xs, [9, 2, 3]);
     assert_eq!(live(), 0);
@@ -131,29 +142,27 @@ fn a_reference_crosses_as_its_words_thin_or_fat() {
 fn a_reference_into_an_opaque_value_outlives_the_view_it_was_made_in() {
     let rt = runtime();
     let held = <Opaque as OpaqueKind<Safe>>::make(&rt, vec![7_i64, 8]);
-    let second = <Opaque as OpaqueKind<Safe>>::view(&rt, &held, |xs: &Vec<i64>| <Ref as RefKind<Safe>>::make(&rt, &xs[1]));
-    assert_eq!(<Ref as RefKind<Safe>>::view(&rt, &second, |x: &i64| *x), 8);
-    Safe::release(second);
-    let xs: Vec<i64> = <Opaque as OpaqueKind<Safe>>::take(&rt, held);
+    let second = unsafe { <Opaque as OpaqueKind<Safe>>::view(&rt, &held, |xs: &Vec<i64>| <Ref as RefKind<Safe>>::make(&rt, &xs[1])) };
+    assert_eq!(unsafe { <Ref as RefKind<Safe>>::view(&rt, &second, |x: &i64| *x) }, 8);
+    unsafe { Safe::release(second) };
+    let xs: Vec<i64> = unsafe { <Opaque as OpaqueKind<Safe>>::take(&rt, held) };
     assert_eq!(xs, [7, 8]);
     assert_eq!(live(), 0);
 }
 
-#[repr(transparent)]
-struct Celsius(u64);
-
-#[repr(transparent)]
-struct Kelvin(u64);
-
-/// The premise the note's type variables rest on: a value made as `X<T>` is
-/// read as `X<U>` where `T` and `U` share a layout. Miri checks this build.
+/// The premise the note's type variables rest on, its second exception: one
+/// value read under views that differ only in `Uniform`'s marker, which sits
+/// in `PhantomData`, from the concrete view to the generic one and back. Miri
+/// checks this build, and the tests run under `-Zrandomize-layout`.
 #[test]
-fn an_opaque_value_is_read_at_another_instantiation_of_its_layout() {
+fn an_opaque_value_is_read_under_views_differing_only_in_a_marker() {
     let rt = runtime();
-    let held = <Opaque as OpaqueKind<Safe>>::make(&rt, vec![Celsius(1), Celsius(2)]);
-    let sum = <Opaque as OpaqueKind<Safe>>::view(&rt, &held, |xs: &Vec<Kelvin>| xs.iter().map(|k| k.0).sum::<u64>());
-    assert_eq!(sum, 3);
-    let xs: Vec<Kelvin> = <Opaque as OpaqueKind<Safe>>::take(&rt, held);
-    assert_eq!(xs.len(), 2);
+    let items: Vec<Uniform<Safe, i64>> = vec![Uniform::new(&rt, 1), Uniform::new(&rt, 2)];
+    let held = <Opaque as OpaqueKind<Safe>>::make(&rt, items);
+    let counted = unsafe { <Opaque as OpaqueKind<Safe>>::view(&rt, &held, |items: &Vec<Uniform<Safe, Never>>| items.len()) };
+    assert_eq!(counted, 2);
+    let items: Vec<Uniform<Safe, i64>> = unsafe { <Opaque as OpaqueKind<Safe>>::take(&rt, held) };
+    assert_eq!(items.iter().map(|item| item.get(&rt)).sum::<i64>(), 3);
+    drop(items);
     assert_eq!(live(), 0);
 }

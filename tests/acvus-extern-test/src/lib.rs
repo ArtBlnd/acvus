@@ -1,12 +1,17 @@
 //! A runtime that runs extern fns and nothing else. It holds every value in a
-//! slot it checks on each access, so a misuse panics, and it writes no
-//! `unsafe`: it is the evidence that the safe kinds and `Stores` are
-//! implementable without it. Its unsafe kinds are the ones the extern crate
-//! provides.
+//! slot it checks on each access, so a misuse of a safe kind panics; its
+//! unsafe kinds are the ones the extern crate provides, and a misuse of those
+//! is UB, as the extern note states. It is the evidence that the safe kinds
+//! and `Stores` are implementable with no unsafe operation: it writes
+//! `unsafe` in the signatures the contract states, and performs an unsafe
+//! operation in two places alone, each asserting the compiler's premise: an
+//! extern fn's dispatch, in `register`, and an enum variant's construction,
+//! in `EnumKind::take`. Every `unsafe` sits under an `allow(unsafe_code)` on
+//! the item that holds it.
 //!
 //! Its slots are thread-local because `Runtime::release` takes no runtime.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code, unsafe_op_in_unsafe_fn)]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -154,13 +159,21 @@ impl Safe {
         declare(&mut Declaring::new(&mut self.types, &self.names, &mut self.user_types))
     }
 
-    pub fn call(&self, name: &str, args: &[Value]) -> Value {
+    /// Calls the extern fn registered at `name`.
+    ///
+    /// # Safety
+    ///
+    /// Each argument is a live value of the type the extern fn's declaration
+    /// states at its position, and the call owns it.
+    #[allow(unsafe_code)]
+    pub unsafe fn call(&self, name: &str, args: &[Value]) -> Value {
         let name = QualifiedRef::root(self.names.intern(name));
         let function = self.functions.get(&name).expect("safe runtime: no extern fn is registered at this name");
         function(self, args)
     }
 }
 
+#[allow(unsafe_code)]
 impl Registry for Safe {
     fn register<F>(&mut self)
     where
@@ -168,7 +181,10 @@ impl Registry for Safe {
     {
         let (name, scheme) = F::declare(&mut Declaring::new(&mut self.types, &self.names, &mut self.user_types));
         self.declared.push((name, scheme));
-        let body: Body = Box::new(|rt, args| F::call(rt, F::Args::from_fn(|at| args[at])));
+        // SAFETY: the body is called by `Safe::call` alone, whose caller
+        // vouches that the arguments are the declaration's types and the
+        // call's own: the compiler's premise.
+        let body: Body = Box::new(|rt, args| unsafe { F::call(rt, F::Args::from_fn(|at| args[at])) });
         self.functions.insert(name, body);
     }
 }
@@ -182,6 +198,7 @@ pub struct SafeResult;
 pub struct SafeEnum;
 pub struct SafeFn;
 
+#[allow(unsafe_code)]
 impl Runtime for Safe {
     type Value = Value;
 
@@ -196,7 +213,7 @@ impl Runtime for Safe {
     type Opaque = StoredOpaque;
     type Ref = StoredRef;
 
-    fn share(&self, value: &Value) -> Value {
+    unsafe fn share(&self, value: &Value) -> Value {
         let held = lend(*value);
         match &*held {
             Held::Boxed(boxed) => hold(Held::Boxed(RefCell::new(boxed.borrow().share()))),
@@ -204,70 +221,77 @@ impl Runtime for Safe {
         }
     }
 
-    fn release(value: Value) {
-        let Some(held) = Rc::into_inner(unslot(value)) else {
-            return;
-        };
-        match held {
-            Held::Tuple(parts) => {
-                for part in parts.into_inner() {
-                    Safe::release(part);
-                }
-            }
-            Held::Object(fields) => {
-                for field in fields {
-                    Safe::release(field);
-                }
-            }
-            Held::Enum { payload, .. } => Safe::release(payload),
-            Held::Option(option) => {
-                if let Some(payload) = option.into_inner() {
-                    Safe::release(payload);
-                }
-            }
-            Held::Result(result) => match result.into_inner() {
-                Ok(payload) | Err(payload) => Safe::release(payload),
-            },
-            Held::I8(_)
-            | Held::I16(_)
-            | Held::I32(_)
-            | Held::I64(_)
-            | Held::U8(_)
-            | Held::U16(_)
-            | Held::U32(_)
-            | Held::U64(_)
-            | Held::F64(_)
-            | Held::Bool(_)
-            | Held::Char(_)
-            | Held::Unit(_)
-            | Held::String(_)
-            | Held::Fn(_)
-            | Held::Boxed(_)
-            | Held::Words(_) => {}
-        }
+    unsafe fn release(value: Value) {
+        release(value);
     }
 }
 
+/// Ends one owner of `value`, and with the last its parts, each checked by
+/// its slot.
+fn release(value: Value) {
+    let Some(held) = Rc::into_inner(unslot(value)) else {
+        return;
+    };
+    match held {
+        Held::Tuple(parts) => {
+            for part in parts.into_inner() {
+                release(part);
+            }
+        }
+        Held::Object(fields) => {
+            for field in fields {
+                release(field);
+            }
+        }
+        Held::Enum { payload, .. } => release(payload),
+        Held::Option(option) => {
+            if let Some(payload) = option.into_inner() {
+                release(payload);
+            }
+        }
+        Held::Result(result) => match result.into_inner() {
+            Ok(payload) | Err(payload) => release(payload),
+        },
+        Held::I8(_)
+        | Held::I16(_)
+        | Held::I32(_)
+        | Held::I64(_)
+        | Held::U8(_)
+        | Held::U16(_)
+        | Held::U32(_)
+        | Held::U64(_)
+        | Held::F64(_)
+        | Held::Bool(_)
+        | Held::Char(_)
+        | Held::Unit(_)
+        | Held::String(_)
+        | Held::Fn(_)
+        | Held::Boxed(_)
+        | Held::Words(_) => {}
+    }
+}
+
+#[allow(unsafe_code)]
 impl Stores for Safe {
     fn hold(&self, boxed: Boxed) -> Value {
         hold(Held::Boxed(RefCell::new(boxed)))
     }
 
-    fn lend<O>(&self, value: &Value, lent: impl FnOnce(&Boxed) -> O) -> O {
+    unsafe fn lend<O>(&self, value: &Value, lent: impl FnOnce(&Boxed) -> O) -> O {
         match &*lend(*value) {
             Held::Boxed(boxed) => lent(&boxed.borrow()),
             _ => mismatch("an opaque value"),
         }
     }
 
-    fn lend_mut<O>(&self, value: &mut Value, lent: impl FnOnce(&mut Boxed) -> O) -> O {
+    unsafe fn lend_mut<O>(&self, value: &mut Value, lent: impl FnOnce(&mut Boxed) -> O) -> O {
         match &*lend(*value) {
             Held::Boxed(boxed) => lent(&mut boxed.borrow_mut()),
             _ => mismatch("an opaque value"),
         }
     }
 
-    fn unhold(&self, value: Value) -> Boxed {
+    unsafe fn unhold(&self, value: Value) -> Boxed {
         match unhold(value) {
             Held::Boxed(boxed) => {
                 let boxed = boxed.into_inner();
@@ -282,7 +306,7 @@ impl Stores for Safe {
         hold(Held::Words(words))
     }
 
-    fn words(&self, value: &Value) -> Words {
+    unsafe fn words(&self, value: &Value) -> Words {
         match &*lend(*value) {
             Held::Words(words) => *words,
             _ => mismatch("a reference"),
@@ -292,26 +316,27 @@ impl Stores for Safe {
 
 macro_rules! scalars {
     ($($scalar:ty => $variant:ident),* $(,)?) => {$(
+        #[allow(unsafe_code)]
         impl ScalarKind<Safe, $scalar> for SafeScalar {
             fn make(_rt: &Safe, scalar: $scalar) -> Value {
                 hold(Held::$variant(RefCell::new(scalar)))
             }
 
-            fn take(_rt: &Safe, value: Value) -> $scalar {
+            unsafe fn take(_rt: &Safe, value: Value) -> $scalar {
                 match unhold(value) {
                     Held::$variant(scalar) => scalar.into_inner(),
                     _ => mismatch(stringify!($scalar)),
                 }
             }
 
-            fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(&$scalar) -> O) -> O {
+            unsafe fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(&$scalar) -> O) -> O {
                 match &*lend(*value) {
                     Held::$variant(scalar) => lent(&scalar.borrow()),
                     _ => mismatch(stringify!($scalar)),
                 }
             }
 
-            fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(&mut $scalar) -> O) -> O {
+            unsafe fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(&mut $scalar) -> O) -> O {
                 match &*lend(*value) {
                     Held::$variant(scalar) => lent(&mut scalar.borrow_mut()),
                     _ => mismatch(stringify!($scalar)),
@@ -336,26 +361,27 @@ scalars! {
     () => Unit,
 }
 
+#[allow(unsafe_code)]
 impl StringKind<Safe> for SafeString {
     fn make(_rt: &Safe, string: String) -> Value {
         hold(Held::String(RefCell::new(string)))
     }
 
-    fn take(_rt: &Safe, value: Value) -> String {
+    unsafe fn take(_rt: &Safe, value: Value) -> String {
         match unhold(value) {
             Held::String(string) => string.into_inner(),
             _ => mismatch("a string"),
         }
     }
 
-    fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(&String) -> O) -> O {
+    unsafe fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(&String) -> O) -> O {
         match &*lend(*value) {
             Held::String(string) => lent(&string.borrow()),
             _ => mismatch("a string"),
         }
     }
 
-    fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(&mut String) -> O) -> O {
+    unsafe fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(&mut String) -> O) -> O {
         match &*lend(*value) {
             Held::String(string) => lent(&mut string.borrow_mut()),
             _ => mismatch("a string"),
@@ -363,12 +389,13 @@ impl StringKind<Safe> for SafeString {
     }
 }
 
+#[allow(unsafe_code)]
 impl TupleKind<Safe> for SafeTuple {
     fn make<const N: usize>(_rt: &Safe, parts: [Value; N]) -> Value {
         hold(Held::Tuple(RefCell::new(Box::new(parts))))
     }
 
-    fn take<const N: usize>(_rt: &Safe, value: Value) -> [Value; N] {
+    unsafe fn take<const N: usize>(_rt: &Safe, value: Value) -> [Value; N] {
         match unhold(value) {
             Held::Tuple(parts) => {
                 let parts: Box<[Value; N]> = parts.into_inner().try_into().expect("safe runtime: a tuple is taken at another arity");
@@ -378,7 +405,7 @@ impl TupleKind<Safe> for SafeTuple {
         }
     }
 
-    fn view<const N: usize, O>(_rt: &Safe, value: &Value, lent: impl FnOnce([&Value; N]) -> O) -> O {
+    unsafe fn view<const N: usize, O>(_rt: &Safe, value: &Value, lent: impl FnOnce([&Value; N]) -> O) -> O {
         match &*lend(*value) {
             Held::Tuple(parts) => {
                 let parts = parts.borrow();
@@ -389,7 +416,7 @@ impl TupleKind<Safe> for SafeTuple {
         }
     }
 
-    fn view_mut<const N: usize, O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce([&mut Value; N]) -> O) -> O {
+    unsafe fn view_mut<const N: usize, O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce([&mut Value; N]) -> O) -> O {
         match &*lend(*value) {
             Held::Tuple(parts) => {
                 let mut parts = parts.borrow_mut();
@@ -401,12 +428,13 @@ impl TupleKind<Safe> for SafeTuple {
     }
 }
 
+#[allow(unsafe_code)]
 impl ObjectKind<Safe> for SafeObject {
     fn make<const N: usize>(_rt: &Safe, fields: [Value; N]) -> Value {
         hold(Held::Object(Box::new(fields)))
     }
 
-    fn take<const N: usize>(_rt: &Safe, value: Value) -> [Value; N] {
+    unsafe fn take<const N: usize>(_rt: &Safe, value: Value) -> [Value; N] {
         match unhold(value) {
             Held::Object(fields) => {
                 let fields: Box<[Value; N]> = fields.try_into().expect("safe runtime: an object is taken at another field count");
@@ -417,42 +445,47 @@ impl ObjectKind<Safe> for SafeObject {
     }
 }
 
+#[allow(unsafe_code)]
 impl EnumKind<Safe> for SafeEnum {
     fn make(_rt: &Safe, tag: usize, payload: Value) -> Value {
         hold(Held::Enum { tag, payload })
     }
 
-    fn take<E>(rt: &Safe, value: Value, variants: &[fn(&Safe, Value) -> E]) -> E {
+    unsafe fn take<E>(rt: &Safe, value: Value, variants: &[unsafe fn(&Safe, Value) -> E]) -> E {
         match unhold(value) {
             Held::Enum { tag, payload } => {
                 let construct = variants.get(tag).expect("safe runtime: an enum's tag is past its variants");
-                construct(rt, payload)
+                // SAFETY: `payload` is the one `make` received for `tag`, and
+                // the caller vouches that `variants[tag]` builds that variant
+                // from it: the compiler's premise.
+                unsafe { construct(rt, payload) }
             }
             _ => mismatch("an enum"),
         }
     }
 }
 
+#[allow(unsafe_code)]
 impl OptionKind<Safe> for SafeOption {
     fn make(_rt: &Safe, option: Option<Value>) -> Value {
         hold(Held::Option(RefCell::new(option)))
     }
 
-    fn take(_rt: &Safe, value: Value) -> Option<Value> {
+    unsafe fn take(_rt: &Safe, value: Value) -> Option<Value> {
         match unhold(value) {
             Held::Option(option) => option.into_inner(),
             _ => mismatch("an option"),
         }
     }
 
-    fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(&Option<Value>) -> O) -> O {
+    unsafe fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(&Option<Value>) -> O) -> O {
         match &*lend(*value) {
             Held::Option(option) => lent(&option.borrow()),
             _ => mismatch("an option"),
         }
     }
 
-    fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(&mut Option<Value>) -> O) -> O {
+    unsafe fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(&mut Option<Value>) -> O) -> O {
         match &*lend(*value) {
             Held::Option(option) => lent(&mut option.borrow_mut()),
             _ => mismatch("an option"),
@@ -460,26 +493,27 @@ impl OptionKind<Safe> for SafeOption {
     }
 }
 
+#[allow(unsafe_code)]
 impl ResultKind<Safe> for SafeResult {
     fn make(_rt: &Safe, result: Result<Value, Value>) -> Value {
         hold(Held::Result(RefCell::new(result)))
     }
 
-    fn take(_rt: &Safe, value: Value) -> Result<Value, Value> {
+    unsafe fn take(_rt: &Safe, value: Value) -> Result<Value, Value> {
         match unhold(value) {
             Held::Result(result) => result.into_inner(),
             _ => mismatch("a result"),
         }
     }
 
-    fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(&Result<Value, Value>) -> O) -> O {
+    unsafe fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(&Result<Value, Value>) -> O) -> O {
         match &*lend(*value) {
             Held::Result(result) => lent(&result.borrow()),
             _ => mismatch("a result"),
         }
     }
 
-    fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(&mut Result<Value, Value>) -> O) -> O {
+    unsafe fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(&mut Result<Value, Value>) -> O) -> O {
         match &*lend(*value) {
             Held::Result(result) => lent(&mut result.borrow_mut()),
             _ => mismatch("a result"),
@@ -487,6 +521,7 @@ impl ResultKind<Safe> for SafeResult {
     }
 }
 
+#[allow(unsafe_code)]
 impl FnKind<Safe> for SafeFn {
     fn make<const N: usize>(_rt: &Safe, body: impl Fn(&Safe, [Value; N]) -> Value + 'static) -> Value {
         let body: Body = Box::new(move |rt, args| {
@@ -496,7 +531,7 @@ impl FnKind<Safe> for SafeFn {
         hold(Held::Fn(body))
     }
 
-    fn call<const N: usize>(rt: &Safe, function: &Value, args: [Value; N]) -> Value {
+    unsafe fn call<const N: usize>(rt: &Safe, function: &Value, args: [Value; N]) -> Value {
         match &*lend(*function) {
             Held::Fn(body) => body(rt, &args),
             _ => mismatch("a function"),
