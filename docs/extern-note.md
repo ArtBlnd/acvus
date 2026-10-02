@@ -39,6 +39,35 @@ A type variable is never concrete and never wrapped in `Uniform`; it lives in co
 
 It is monomorphized as `Uniform<Rt, Never>`, never as `Value`. `X<T>` transmutes to `X<U>` whenever `T` does to `U`, except where `X` consumes `T` through an associated type; `Never` is generated under a fresh name at every compilation, so no code names it to give it an impl of its own. A const check confirms the sizes agree, and the round trip makes the type in between irrelevant.
 
+## Kinds
+
+The runtime contract gives one associated type per kind, each with a trait of its own functions; no function serves every kind. A kind groups the constructors of the compiler's `TyKind` that the boundary treats alike: how a value is made and given back, how a reference to it opens, and whether it is `Copy`. A kind's `unsafe`, where it has any, stays inside its own implementation.
+
+| Kind | `TyKind` |
+|---|---|
+| Scalar | `Int`, `Float`, `Char`, `Bool`, `Unit` |
+| String | `String` |
+| View | `Str`, `Slice` |
+| Tuple | `Tuple` |
+| Object | `Object` |
+| Option | `Option` |
+| Result | `Result` |
+| Enum | `Enum` |
+| Fn | `Fn`, `Closures` |
+| Opaque | `UserDefined` |
+| Ref | `Ref` |
+
+`Never` has no value, `Order` and `Handle` are no program's, and `Array` is no declaration's. `Option` and `Result` open by reference natively, as `Option<&_>` and `Result<&_, &_>`. Function values cross both ways: acvus gives its closures to an extern, and an extern gives Rust functions to acvus. Either is a Rust lambda, run on an acvus frame or as a Rust function.
+
+## Lifetimes in the macro
+
+Branded lifetimes, as GhostCell's, serve well but sit uneasily with associated types, and Rust's trait solver is incomplete there: it can fail to prove what holds, and it can ICE. Where it stops the work, the cause is told apart first, with a minimal reproduction: a wrong structure Rust rightly refuses, the solver's incompleteness, or an ICE. A workaround is a layer added; it is brought back for agreement, never put in alone, and it applies to the whole concept, never to the instance that tripped the solver.
+
+Open:
+
+- What a Rust closure given to acvus may capture.
+- Async. Work such as a closure is spawned on a thread pool and so crosses `'static`; where it dies there, what it holds is dropped while acvus counts it alive. An `Arc` per value makes `map` and `collect` too slow. Candidates are one `Arc` at the spawn rather than one per value, or a shared-ownership primitive the runtime provides.
+
 ## Forbidden
 
 - Instantiation: a named type or form treated apart, a marker, trait, wrapper or conversion for one case, a flag parting two meanings held in one place. One makes a path Rust does not guard; nothing built on it can then be guarded, and no further work repairs that.
