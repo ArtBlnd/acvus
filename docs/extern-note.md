@@ -30,7 +30,7 @@ These hold by the primitives below, with nothing added on top. The standard is a
 | Generic function, impl | A generic function enters the compiler as one; an impl enters with the function and the choice it implements. It pairs with `Instance` and `InstanceOf`. | compiler |
 | `#`, demotion | A whole concrete type such as `Vec<String>` is a specialized opaque type, apart from the generic `Vec<T>` over uniform values. A value that passes a non-`#` function even once is unmarked from where it is made, as the compiler decides (types §8). | compiler |
 | Optimization declarations | Effect, declared facts, ends, casts and conversions, conveyed as declared and trusted. | author |
-| Runtime | Lowers the IR and runs it, implementing the compiler's primitives as functions so nothing else needs `unsafe`. Generic over backends and zero cost from outside. Its contract states only the minimal conditions for a safe runtime, with associated types, and is implementable without `unsafe`. It may check internally: misuse panics in a safe runtime and is UB in an optimized one. The compiler's correctness is its premise. | Rust |
+| Runtime | Lowers the IR and runs it, implementing the compiler's primitives as functions so nothing else needs `unsafe`. Generic over backends and zero cost from outside. Its contract states only the minimal conditions for a safe runtime, with associated types; its safe kinds are implementable without `unsafe`. It may check internally: misuse panics in a safe runtime and is UB in an optimized one. The compiler's correctness is its premise. | Rust |
 
 ## Type variables
 
@@ -40,7 +40,7 @@ It is monomorphized as `Uniform<Rt, Never>`, never as `Value`. `X<T>` transmutes
 
 ## Runtime and registry
 
-A safe runtime holds a value of any type in a slot as `Box<dyn Any>` and checks its type on access, so misuse panics; an optimized runtime casts without the check, so misuse is UB. The `'static` that `Any` needs is the one the runtime contract requires. A view is lent in continuation-passing style: the runtime calls a closure with it, so its lifetime is the closure's, and the contract carries no lifetime-generic associated type for it. Each kind lends its own views so, `Option` as `Option<&_>`, and each argument is opened by its own kind; the entry nests the body inside these closures and gives its result inside them. Its zero cost rests on the closures being inlined, which is to be verified, not assumed.
+Safety is decided per kind. A safe kind is implementable without `unsafe`, and misuse within it, such as aliasing or a released value, panics. An unsafe kind's `unsafe` stays inside its implementation, which the extern crate provides once, isolated and checked by Miri, and which a runtime may replace with its own; misuse within it is UB, and a value's type there is the compiler's premise. A view is lent in continuation-passing style: the runtime calls a closure with it, so its lifetime is the closure's, and the contract carries no lifetime-generic associated type for it. Each kind lends its own views so, `Option` as `Option<&_>`, and each argument is opened by its own kind; the entry nests the body inside these closures and gives its result inside them. Its zero cost rests on the closures being inlined, which is to be verified, not assumed.
 
 A reference is returned as a Rust reference, `&'a X` or `&'a mut X`. It crosses as the runtime's reference value, which holds the reference's words, and is read back at one isolated `unsafe` of the extern crate. This is the first trade-off taken: a reference points into Rust memory and is read without the runtime, so a runtime's places are Rust memory; in return the references are Rust's own, with their lifetimes, copies and reborrows checked by Rust. A value that holds a loan is plain Rust, such as `Cursor<'a, T>` holding `&'a [T]`.
 
@@ -48,21 +48,23 @@ A reference is returned as a Rust reference, `&'a X` or `&'a mut X`. It crosses 
 
 ## Kinds
 
-The runtime contract gives one associated type per kind, each with a trait of its own functions; no function serves every kind. A kind groups the constructors of the compiler's `TyKind` that the boundary treats alike: how a value is made and given back, how a reference to it opens, and whether it is `Copy`. A kind's `unsafe`, where it has any, stays inside its own implementation.
+The runtime contract gives one associated type per kind, each with a trait of its own functions; no function serves every kind. A kind groups the constructors of the compiler's `TyKind` that the boundary treats alike: how a value is made and given back, how a reference to it opens, and whether it is `Copy`. Each kind is safe or unsafe.
 
-| Kind | `TyKind` |
-|---|---|
-| Scalar | `Int`, `Float`, `Char`, `Bool`, `Unit` |
-| String | `String` |
-| View | `Str`, `Slice` |
-| Tuple | `Tuple` |
-| Object | `Object` |
-| Option | `Option` |
-| Result | `Result` |
-| Enum | `Enum` |
-| Fn | `Fn`, `Closures` |
-| Opaque | `UserDefined` |
-| Ref | `Ref` |
+| Kind | `TyKind` | Safety |
+|---|---|---|
+| Scalar | `Int`, `Float`, `Char`, `Bool`, `Unit` | safe |
+| String | `String` | safe |
+| View | `Str`, `Slice` | unsafe |
+| Tuple | `Tuple` | safe |
+| Object | `Object` | safe |
+| Option | `Option` | safe |
+| Result | `Result` | safe |
+| Enum | `Enum` | safe |
+| Fn | `Fn`, `Closures` | safe |
+| Opaque | `UserDefined` | unsafe |
+| Ref | `Ref` | unsafe |
+
+Opaque is unsafe because one value is seen as several Rust types, generic and uniform, under fresh `Never`s, so it is held untyped and read by layout. Ref is unsafe because a reference is read back from its words. View is unsafe so that a runtime may hold a text or a run as it likes, a short text inline for one; a view may also cross as two `Value`s.
 
 `Never` has no value, `Order` and `Handle` are no program's, and `Array` is no declaration's. `Option` and `Result` open by reference natively, as `Option<&_>` and `Result<&_, &_>`. Function values cross both ways: acvus gives its closures to an extern, and an extern gives Rust functions to acvus. Either is a Rust lambda, run on an acvus frame or as a Rust function.
 
