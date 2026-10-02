@@ -13,7 +13,7 @@ use acvus_extern_test::WordRuntime;
 #[generic_fn]
 fn pick<T: Var<kind::Type>>(xs: &[T]) -> &T;
 
-#[extern_fn(effect = pure, impl_of = pick<i64>)]
+#[extern_fn(effect = pure, impl_of = pick<Uniform<R, i64>>)]
 fn pick_i64<'a, R: Runtime>(#[executor] cx: &Executor<'_, R>, xs: &'a [Uniform<R, i64>]) -> &'a Uniform<R, i64> {
     xs.iter().max_by_key(|x| x.get(cx)).unwrap_or(&xs[0])
 }

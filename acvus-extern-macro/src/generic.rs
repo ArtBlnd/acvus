@@ -41,9 +41,9 @@ pub fn generic_fn(attr: ExternFnAttr, mut func: ForeignItemFn) -> syn::Result<To
     let types = types as usize;
     let Signature { params, result, lifetimes } = signature(&sig, &runtime);
 
-    // Its signature at its variables, each named as written and held as a
-    // value of it is, `Uniform<R, T>`; the runtime is the function's own
-    // where it names one.
+    // Its signature at its variables, each the Rust type a value of it is,
+    // named as written; the runtime is the function's own where it names
+    // one.
     let own_runtime = sig.generics.iter().find_map(|generic| match generic {
         Generic::Runtime { ident, .. } => Some(ident.clone()),
         Generic::Var { .. } => None,
@@ -57,7 +57,7 @@ pub fn generic_fn(attr: ExternFnAttr, mut func: ForeignItemFn) -> syn::Result<To
             Generic::Runtime { .. } => None,
         })
         .collect();
-    let pointer = fn_pointer(&sig, &func.sig.generics, &at_runtime);
+    let pointer = fn_pointer(&sig, &func.sig.generics);
 
     Ok(quote! {
         /// The generic function's family marker (impls §2).

@@ -247,7 +247,9 @@ pub fn signature(sig: &Sig, runtime: &Ident) -> Signature {
 /// An impl's signature is its generic function's at the choice it writes
 /// (extern fn §6), checked by Rust: the function pointer type of its
 /// arguments and result is `FamilyAt`'s at that choice, or the impl does not
-/// compile. Nothing is checked at run time.
+/// compile. Each chosen type is the Rust type a value of the variable is: a
+/// variable of the impl's own, or `Uniform<R, X>`. Nothing is checked at run
+/// time.
 fn signature_is_at_choice(impl_of: &ImplOf, sig: &Sig, generics: &syn::Generics, runtime: &Ident) -> TokenStream {
     let ImplOf { generic_function, choice } = impl_of;
     let own_runtime = sig.generics.iter().find_map(|generic| match generic {
@@ -260,7 +262,7 @@ fn signature_is_at_choice(impl_of: &ImplOf, sig: &Sig, generics: &syn::Generics,
     };
     let params = generics.type_params();
     let predicates = generics.where_clause.iter().flat_map(|clause| &clause.predicates);
-    let pointer = fn_pointer(sig, generics, &at_runtime);
+    let pointer = fn_pointer(sig, generics);
     quote! {
         const _: () = {
             #[allow(dead_code, non_snake_case)]
@@ -276,19 +278,15 @@ fn signature_is_at_choice(impl_of: &ImplOf, sig: &Sig, generics: &syn::Generics,
     }
 }
 
-/// The function pointer type of `sig`'s arguments and its result, each
-/// type variable as the value it stands for is held, `Uniform<runtime, T>`,
-/// and each lifetime `generics` names bound by it: as `FamilyAt` states a
-/// generic function's signature, and an impl's is compared with it
-/// (extern fn §6).
-pub fn fn_pointer(sig: &Sig, generics: &syn::Generics, runtime: &Ident) -> TokenStream {
+/// The function pointer type of `sig`'s arguments and its result as
+/// written, each lifetime `generics` names bound by it: as `FamilyAt` states
+/// a generic function's signature, and an impl's is compared with it
+/// (extern fn §6). A type variable stands where a value of it is: its own
+/// name is that value's Rust type.
+pub fn fn_pointer(sig: &Sig, generics: &syn::Generics) -> TokenStream {
     let lifetimes = generics.lifetimes().map(|param| &param.lifetime);
-    let arguments = sig
-        .params
-        .iter()
-        .filter(|p| matches!(p.role, Role::Argument))
-        .map(|p| sig.held(&p.ty, runtime));
-    let output = sig.held(&sig.written_output, runtime);
+    let arguments = sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.ty);
+    let output = &sig.written_output;
     quote!(for<#(#lifetimes),*> fn(#(#arguments),*) -> #output)
 }
 

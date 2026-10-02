@@ -212,18 +212,19 @@ pub trait Declared<R: Runtime> {
 /// fn same<R: Runtime, T: Var<kind::Type>>(#[executor] cx: &Executor<'_, R>, a: &T, b: &T) -> bool;
 /// ```
 ///
-/// An impl's signature is its generic function's at the choice it writes,
-/// each variable held as `Uniform<R, X>`; another signature does not
-/// compile:
+/// An impl's signature is its generic function's at the choice it writes;
+/// another signature does not compile:
 ///
 /// ```compile_fail
+/// use acvus_extern::Uniform;
 /// use acvus_extern::decl::{Var, kind};
+/// use acvus_extern::runtime::Runtime;
 ///
 /// #[acvus_extern::generic_fn]
 /// fn same<T: Var<kind::Type>>(a: &T, b: &T) -> bool;
 ///
-/// #[acvus_extern::extern_fn(impl_of = same<i64>)]
-/// fn same_i64(a: &i64) -> bool { true }
+/// #[acvus_extern::extern_fn(impl_of = same<Uniform<R, i64>>)]
+/// fn same_i64<R: Runtime>(a: &Uniform<R, i64>) -> bool { true }
 /// ```
 ///
 /// `generic` marks an impl, so it is stated with `impl_of`:
@@ -242,7 +243,9 @@ pub trait GenericDeclared<R: Runtime> {
 
 /// A generic function's signature at its variables `Ts`, as the Rust
 /// function pointer type of its parameters and its result: an impl stating
-/// it is one at `Ts` has exactly this signature (extern fn §6).
+/// it is one at `Ts` has exactly this signature (extern fn §6). Each of `Ts`
+/// is the Rust type a value of its variable is: a variable, whose own name
+/// is that type, or `Uniform<R, X>`.
 pub trait FamilyAt<R: Runtime, Ts> {
     type Signature;
 }

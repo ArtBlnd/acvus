@@ -135,15 +135,6 @@ impl Sig {
         ty
     }
 
-    /// `ty` with each type variable as the value it stands for is held,
-    /// `Uniform<runtime, T>`, its name kept, and everything else as written:
-    /// the Rust type a signature is compared at (extern fn §6).
-    pub fn held(&self, ty: &Type, runtime: &Ident) -> Type {
-        let mut ty = ty.clone();
-        Held { generics: &self.generics, runtime }.visit_type_mut(&mut ty);
-        ty
-    }
-
     /// Whether `ident` is one of the function's effect variables.
     pub fn names_effect_variable(&self, ident: &Ident) -> bool {
         self.generics
@@ -407,27 +398,6 @@ impl VisitMut for StandIns<'_> {
 
     fn visit_lifetime_mut(&mut self, lifetime: &mut Lifetime) {
         *lifetime = Lifetime::new("'_", lifetime.span());
-    }
-}
-
-/// Each type variable as `Uniform<runtime, T>`.
-struct Held<'g> {
-    generics: &'g [Generic],
-    runtime: &'g Ident,
-}
-
-impl VisitMut for Held<'_> {
-    fn visit_type_mut(&mut self, ty: &mut Type) {
-        if let Type::Path(path) = ty
-            && path.qself.is_none()
-            && let Some(ident) = path.path.get_ident()
-            && self.generics.iter().any(|generic| matches!(generic, Generic::Var { ident: v, kind: Kind::Type, .. } if v == ident))
-        {
-            let runtime = self.runtime;
-            *ty = syn::parse_quote!(::acvus_extern::Uniform<#runtime, #ident>);
-            return;
-        }
-        syn::visit_mut::visit_type_mut(self, ty);
     }
 }
 
