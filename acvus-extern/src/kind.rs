@@ -41,18 +41,18 @@ where
     fn view_mut<const N: usize, O>(rt: &R, value: &mut R::Value, lent: impl FnOnce([&mut R::Value; N]) -> O) -> O;
 }
 
-/// An `Option`, whose payload is a value it owns. A view lends the payload
-/// alone; `replace` writes the variant and the payload together, as a store
-/// through an exclusive reference to a sum does (rfc_compiler ownership §5).
+/// An `Option`, held in Rust's own shape with a payload it owns. A view lends
+/// the whole of it, so an exclusive one writes the variant and the payload
+/// together, as a store through an exclusive reference to a sum does
+/// (rfc_compiler ownership §5).
 pub trait OptionKind<R>
 where
     R: Runtime,
 {
     fn make(rt: &R, option: Option<R::Value>) -> R::Value;
     fn take(rt: &R, value: R::Value) -> Option<R::Value>;
-    fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(Option<&R::Value>) -> O) -> O;
-    fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(Option<&mut R::Value>) -> O) -> O;
-    fn replace(rt: &R, value: &mut R::Value, option: Option<R::Value>) -> Option<R::Value>;
+    fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&Option<R::Value>) -> O) -> O;
+    fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut Option<R::Value>) -> O) -> O;
 }
 
 /// A `Result`, as `OptionKind` is an `Option`.
@@ -62,9 +62,8 @@ where
 {
     fn make(rt: &R, result: Result<R::Value, R::Value>) -> R::Value;
     fn take(rt: &R, value: R::Value) -> Result<R::Value, R::Value>;
-    fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(Result<&R::Value, &R::Value>) -> O) -> O;
-    fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(Result<&mut R::Value, &mut R::Value>) -> O) -> O;
-    fn replace(rt: &R, value: &mut R::Value, result: Result<R::Value, R::Value>) -> Result<R::Value, R::Value>;
+    fn view<O>(rt: &R, value: &R::Value, lent: impl FnOnce(&Result<R::Value, R::Value>) -> O) -> O;
+    fn view_mut<O>(rt: &R, value: &mut R::Value, lent: impl FnOnce(&mut Result<R::Value, R::Value>) -> O) -> O;
 }
 
 /// The kind of `Fn` and `Closures`: a function value, whether it runs on an

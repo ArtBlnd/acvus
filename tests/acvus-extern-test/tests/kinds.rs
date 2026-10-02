@@ -294,10 +294,11 @@ fn an_option_lends_its_payload_and_replaces_its_variant() {
     let mut option = <<Safe as Runtime>::Option as OptionKind<Safe>>::make(&rt, None);
     let none = rt.call("or", &[<<Safe as Runtime>::Option as OptionKind<Safe>>::make(&rt, None), make_int(&rt, 9)]);
     assert_eq!(take_int(&rt, none), 9);
-    let old = <<Safe as Runtime>::Option as OptionKind<Safe>>::replace(&rt, &mut option, Some(make_int(&rt, 5)));
+    let five = make_int(&rt, 5);
+    let old = <<Safe as Runtime>::Option as OptionKind<Safe>>::view_mut(&rt, &mut option, |option| option.replace(five));
     assert_eq!(old, None);
-    let incremented = <<Safe as Runtime>::Option as OptionKind<Safe>>::view_mut(&rt, &mut option, |payload| {
-        payload.map(|payload| <<Safe as Runtime>::Scalar as ScalarKind<Safe, i64>>::view_mut(&rt, payload, |n| *n += 1))
+    let incremented = <<Safe as Runtime>::Option as OptionKind<Safe>>::view_mut(&rt, &mut option, |option| {
+        option.as_mut().map(|payload| <<Safe as Runtime>::Scalar as ScalarKind<Safe, i64>>::view_mut(&rt, payload, |n| *n += 1))
     });
     assert_eq!(incremented, Some(()));
     let out = rt.call("or", &[option, make_int(&rt, 0)]);

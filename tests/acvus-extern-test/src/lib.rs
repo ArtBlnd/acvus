@@ -307,23 +307,16 @@ impl OptionKind<Safe> for SafeOption {
         }
     }
 
-    fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(Option<&Value>) -> O) -> O {
+    fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(&Option<Value>) -> O) -> O {
         match &*lend(*value) {
-            Held::Option(option) => lent(option.borrow().as_ref()),
+            Held::Option(option) => lent(&option.borrow()),
             _ => mismatch("an option"),
         }
     }
 
-    fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(Option<&mut Value>) -> O) -> O {
+    fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(&mut Option<Value>) -> O) -> O {
         match &*lend(*value) {
-            Held::Option(option) => lent(option.borrow_mut().as_mut()),
-            _ => mismatch("an option"),
-        }
-    }
-
-    fn replace(_rt: &Safe, value: &mut Value, option: Option<Value>) -> Option<Value> {
-        match &*lend(*value) {
-            Held::Option(held) => held.replace(option),
+            Held::Option(option) => lent(&mut option.borrow_mut()),
             _ => mismatch("an option"),
         }
     }
@@ -341,23 +334,16 @@ impl ResultKind<Safe> for SafeResult {
         }
     }
 
-    fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(Result<&Value, &Value>) -> O) -> O {
+    fn view<O>(_rt: &Safe, value: &Value, lent: impl FnOnce(&Result<Value, Value>) -> O) -> O {
         match &*lend(*value) {
-            Held::Result(result) => lent(result.borrow().as_ref()),
+            Held::Result(result) => lent(&result.borrow()),
             _ => mismatch("a result"),
         }
     }
 
-    fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(Result<&mut Value, &mut Value>) -> O) -> O {
+    fn view_mut<O>(_rt: &Safe, value: &mut Value, lent: impl FnOnce(&mut Result<Value, Value>) -> O) -> O {
         match &*lend(*value) {
-            Held::Result(result) => lent(result.borrow_mut().as_mut()),
-            _ => mismatch("a result"),
-        }
-    }
-
-    fn replace(_rt: &Safe, value: &mut Value, result: Result<Value, Value>) -> Result<Value, Value> {
-        match &*lend(*value) {
-            Held::Result(held) => held.replace(result),
+            Held::Result(result) => lent(&mut result.borrow_mut()),
             _ => mismatch("a result"),
         }
     }
