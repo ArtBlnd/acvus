@@ -2,7 +2,7 @@ use acvus_mir::decl::{LabelledSignature, Lifetime, Outlives, SegmentLabel};
 use acvus_mir::ty::FlowEnd;
 use acvus_utils::{Interner, QualifiedRef};
 
-use super::{At, EndNames, Written, labelled};
+use super::{At, EndNames, labelled};
 use crate::decl::DeclTy;
 
 fn shared(target: DeclTy) -> DeclTy {
@@ -40,7 +40,7 @@ fn a_result_takes_the_loan_its_name_says() {
         EndNames { at: At::Result, ty: DeclTy::Option(Box::new(shared(DeclTy::Param(1)))), outer: None, inner: &["'m"] },
     ];
 
-    let signature = labelled(&ends, &[]);
+    let signature = labelled(&ends);
 
     let map = labels(&signature, FlowEnd::Param(0));
     let key = labels(&signature, FlowEnd::Param(1));
@@ -63,7 +63,7 @@ fn an_outermost_reference_keeps_its_own_label() {
         EndNames { at: At::Result, ty: DeclTy::Option(Box::new(shared(DeclTy::Param(0)))), outer: None, inner: &["'a"] },
     ];
 
-    let signature = labelled(&ends, &[]);
+    let signature = labelled(&ends);
 
     let it = labels(&signature, FlowEnd::Param(0));
     let result = labels(&signature, FlowEnd::Result);
@@ -85,7 +85,7 @@ fn the_names_inside_an_end_are_one_label() {
         EndNames { at: At::Result, ty: shared(number), outer: Some("'b"), inner: &[] },
     ];
 
-    let signature = labelled(&ends, &[]);
+    let signature = labelled(&ends);
 
     assert_eq!(labels(&signature, FlowEnd::Result)[0], labels(&signature, FlowEnd::Param(0))[0]);
 }
@@ -101,27 +101,8 @@ fn a_lifetime_elided_in_a_path_is_its_ends_own() {
         EndNames { at: At::Param(1), ty: refs, outer: None, inner: &[] },
     ];
 
-    let signature = labelled(&ends, &[]);
+    let signature = labelled(&ends);
 
     assert_ne!(labels(&signature, FlowEnd::Param(0))[0], labels(&signature, FlowEnd::Param(1))[0]);
 }
 
-/// A bound written between two ends' lifetimes is kept; one naming a
-/// lifetime no label takes is not.
-#[test]
-fn a_written_bound_is_kept_between_labelled_lifetimes() {
-    let text = shared(DeclTy::Str);
-    let ends = [
-        EndNames { at: At::Param(0), ty: text.clone(), outer: Some("'a"), inner: &[] },
-        EndNames { at: At::Param(1), ty: text, outer: Some("'b"), inner: &[] },
-    ];
-
-    let signature = labelled(
-        &ends,
-        &[Written { longer: "'a", shorter: "'b" }, Written { longer: "'a", shorter: "'unnamed" }],
-    );
-
-    let a = lifetime(labels(&signature, FlowEnd::Param(0))[0]);
-    let b = lifetime(labels(&signature, FlowEnd::Param(1))[0]);
-    assert_eq!(*signature.outlives, [Outlives { longer: a, shorter: b }]);
-}

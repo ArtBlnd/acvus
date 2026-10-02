@@ -40,15 +40,10 @@ pub struct EndNames {
     pub inner: &'static [&'static str],
 }
 
-/// A bound the signature writes, `longer: shorter`, by name.
-pub struct Written {
-    pub longer: &'static str,
-    pub shorter: &'static str,
-}
-
-/// The labels of each end, and the order of the lifetimes they name: each
-/// bound written, and the inside of each outermost `&` outliving it.
-pub fn labelled(ends: &[EndNames], written: &[Written]) -> LabelledSignature {
+/// The labels of each end, and the order of the lifetimes they name: the
+/// inside of each outermost `&` outliving it, which its type implies. A
+/// signature writes no bound between lifetimes.
+pub fn labelled(ends: &[EndNames]) -> LabelledSignature {
     let mut classes = Classes::default();
     for end in ends {
         classes.union_all(end.inner);
@@ -87,14 +82,10 @@ pub fn labelled(ends: &[EndNames], written: &[Written]) -> LabelledSignature {
         labelled_ends.push(EndLabels { end: flow_end(end.at), labels: labels.into() });
     }
 
-    let written: Vec<Outlives> = written
-        .iter()
-        .map(|bound| Outlives { longer: classes.find(bound.longer), shorter: classes.find(bound.shorter) })
-        .collect();
     let mut orders: Vec<Outlives> = Vec::new();
     // An order between one lifetime and itself says nothing, and the
     // compiler takes an order only between lifetimes the labels name.
-    for order in written.into_iter().chain(implied) {
+    for order in implied {
         let named = used.contains(&order.longer) && used.contains(&order.shorter);
         if order.longer != order.shorter && named && !orders.contains(&order) {
             orders.push(order);

@@ -15,7 +15,7 @@ use syn::{
 };
 
 use crate::facts;
-use crate::lifetimes::{self, Bound, Names};
+use crate::lifetimes::{self, Names};
 
 /// The kinds a generic parameter may be (compiler: extern fn §1-§2).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -87,8 +87,6 @@ pub struct Sig {
     pub output: Output,
     /// The lifetime names the result writes.
     pub result_names: Names,
-    /// The bounds written between lifetimes.
-    pub written: Vec<Bound>,
     pub awaited: bool,
 }
 
@@ -104,7 +102,7 @@ impl Sig {
         let arguments: Vec<&Names> =
             params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.names).collect();
         let result_names = lifetimes::result(&sig.output, &inputs, &arguments)?;
-        let written = lifetimes::written(sig);
+        lifetimes::refuse_bounds(sig)?;
         let output = output(&sig.output);
         let written_output = match &sig.output {
             ReturnType::Type(_, ty) => (**ty).clone(),
@@ -125,7 +123,6 @@ impl Sig {
             params,
             output,
             result_names,
-            written,
             awaited,
         })
     }

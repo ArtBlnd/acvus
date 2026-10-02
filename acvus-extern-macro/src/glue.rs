@@ -238,12 +238,8 @@ pub fn signature(sig: &Sig, runtime: &Ident) -> Signature {
     ends.push(quote! {
         ::acvus_extern::decl::EndNames { at: ::acvus_extern::decl::At::Result, ty: #result, outer: #outer, inner: #inner }
     });
-    let written = sig.written.iter().map(|bound| {
-        let (longer, shorter) = (&bound.longer, &bound.shorter);
-        quote!(::acvus_extern::decl::Written { longer: #longer, shorter: #shorter })
-    });
     let lifetimes = quote! {
-        ::acvus_extern::decl::labelled(&[#(#ends),*], &[#(#written),*])
+        ::acvus_extern::decl::labelled(&[#(#ends),*])
     };
     Signature { params, result, lifetimes }
 }
@@ -263,9 +259,7 @@ fn signature_is_at_choice(impl_of: &ImplOf, sig: &Sig, generics: &syn::Generics,
         None => (runtime.clone(), Some(quote!(#runtime: ::acvus_extern::runtime::Runtime))),
     };
     let params = generics.type_params();
-    let predicates = generics.where_clause.iter().flat_map(|clause| &clause.predicates).filter(|predicate| {
-        !matches!(predicate, syn::WherePredicate::Lifetime(_))
-    });
+    let predicates = generics.where_clause.iter().flat_map(|clause| &clause.predicates);
     let pointer = fn_pointer(sig, generics, &at_runtime);
     quote! {
         const _: () = {

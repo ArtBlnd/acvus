@@ -105,6 +105,18 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// fn f(n: u64) -> u64 { n * n }
 /// ```
 ///
+/// A bound written between lifetimes, which no signature writes:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn]
+/// fn f<'a, 'b: 'a>(x: &'a str, y: &'b str) -> &'a str { y }
+/// ```
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn]
+/// fn f<'a, 'b>(x: &'a str, y: &'b str) -> &'a str where 'b: 'a { y }
+/// ```
+///
 /// A returning body named for a function that is one itself:
 ///
 /// ```compile_fail

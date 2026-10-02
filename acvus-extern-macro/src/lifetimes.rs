@@ -1,7 +1,7 @@
 //! The lifetime names a signature writes: for each end, the name its outermost
 //! `&` is written at, where its type is one, and every other name written in
-//! it; and the bounds written between names. This is all the attribute reads
-//! of a signature's lifetimes. Where each name lies in a declared type is the
+//! it. This is all the attribute reads of a signature's lifetimes; it refuses
+//! a bound written between them. Where each name lies in a declared type is the
 //! type's, read by the compiler (rfc_extern macros §4; acvus_extern::decl::labels).
 //!
 //! An elided lifetime is named here: in an argument, freshly, as Rust elides
@@ -26,12 +26,6 @@ impl Names {
     pub fn all(&self) -> impl Iterator<Item = &String> {
         self.outer.iter().chain(&self.inner)
     }
-}
-
-/// A bound the signature writes, `longer: shorter`.
-pub struct Bound {
-    pub longer: String,
-    pub shorter: String,
 }
 
 /// The names elided arguments are given, each its own.
@@ -160,28 +154,20 @@ pub fn refuse_static(sig: &Signature) -> syn::Result<()> {
     }
 }
 
-/// The bounds written between lifetimes: on a lifetime parameter, and in the
-/// `where` clause.
-pub fn written(sig: &Signature) -> Vec<Bound> {
-    let mut bounds = Vec::new();
-    for param in &sig.generics.params {
-        if let GenericParam::Lifetime(param) = param {
-            for shorter in &param.bounds {
-                bounds.push(Bound { longer: format!("'{}", param.lifetime.ident), shorter: format!("'{}", shorter.ident) });
-            }
-        }
+/// Refuses a bound written between lifetimes, on a lifetime parameter or in
+/// the `where` clause. What one name outlives is only what the signature's
+/// own types imply, a reference to a reference, which the labels read.
+pub fn refuse_bounds(sig: &Signature) -> syn::Result<()> {
+    let on_params = sig.generics.params.iter().filter_map(|param| match param {
+        GenericParam::Lifetime(param) => param.bounds.first().map(|bound| bound.span()),
+        _ => None,
+    });
+    let in_where = sig.generics.where_clause.iter().flat_map(|clause| &clause.predicates).filter_map(|predicate| match predicate {
+        WherePredicate::Lifetime(predicate) => Some(predicate.span()),
+        _ => None,
+    });
+    match on_params.chain(in_where).next() {
+        Some(span) => Err(syn::Error::new(span, "an extern fn writes no bound between lifetimes: its types imply all it has")),
+        None => Ok(()),
     }
-    if let Some(clause) = &sig.generics.where_clause {
-        for predicate in &clause.predicates {
-            if let WherePredicate::Lifetime(predicate) = predicate {
-                for shorter in &predicate.bounds {
-                    bounds.push(Bound {
-                        longer: format!("'{}", predicate.lifetime.ident),
-                        shorter: format!("'{}", shorter.ident),
-                    });
-                }
-            }
-        }
-    }
-    bounds
 }
