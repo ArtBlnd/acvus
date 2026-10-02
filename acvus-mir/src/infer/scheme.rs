@@ -555,10 +555,5 @@ fn bound_of(bound: &TyVarBound) -> Bound {
     match bound {
         TyVarBound::Any => Bound::Any,
         TyVarBound::Settled => Bound::Settled,
-        TyVarBound::Integer { signed, among } => Bound::Integer {
-            signed: *signed,
-            among: among.clone(),
-            literal: false,
-        },
     }
 }

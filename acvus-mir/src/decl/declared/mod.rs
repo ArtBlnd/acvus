@@ -45,7 +45,7 @@ impl NamedFact {
 }
 
 use super::impl_fit::is_impl_of;
-use super::{Core, DeclaredFacts, GenericFunction, Impls, Refused, Scheme, TyVarBound};
+use super::{Core, DeclaredFacts, GenericFunction, Impls, Refused, Scheme};
 use crate::ty::{Declared, IntTy, Mutability, Poly, TyId, TyKind, Types};
 
 /// A parameter's storage whole, or one element of it. A parameter is
@@ -127,7 +127,7 @@ pub(in crate::decl) fn refuse_ill_formed(
         };
         let declared = Declared { function: *function };
         let impl_of = scheme.impl_of.map(|impl_of| impl_of.generic_function);
-        let Some(stated) = Stated::of(declared, impl_of, core, types, scheme.ty, &scheme.bounds) else {
+        let Some(stated) = Stated::of(declared, impl_of, core, types, scheme.ty) else {
             continue;
         };
         let facts = &scheme.facts;
@@ -147,7 +147,6 @@ struct Stated<'a> {
     core: &'a Core,
     params: Box<[TyId<Poly>]>,
     ret: TyId<Poly>,
-    bounds: &'a [TyVarBound],
 }
 
 impl<'a> Stated<'a> {
@@ -159,12 +158,11 @@ impl<'a> Stated<'a> {
         core: &'a Core,
         types: &Types<Poly>,
         ty: TyId<Poly>,
-        bounds: &'a [TyVarBound],
     ) -> Option<Self> {
         let TyKind::Fn { params, ret, .. } = types.kind(ty) else {
             return None;
         };
-        Some(Stated { declared, impl_of, core, params: params.clone(), ret: *ret, bounds })
+        Some(Stated { declared, impl_of, core, params: params.clone(), ret: *ret })
     }
 
     /// The type of parameter `at`; where the signature has none, refused.
@@ -184,13 +182,8 @@ impl<'a> Stated<'a> {
         }
     }
 
-    /// An integer type, or a type variable bounded to integers.
     fn is_integer(&self, types: &Types<Poly>, ty: TyId<Poly>) -> bool {
-        match types.kind(ty) {
-            TyKind::Int(_) => true,
-            TyKind::Var(at) => matches!(self.bounds.get(*at as usize), Some(TyVarBound::Integer { .. })),
-            _ => false,
-        }
+        matches!(types.kind(ty), TyKind::Int(_))
     }
 
     /// Whether a value of `ty`, or what it lends, has an element count: a

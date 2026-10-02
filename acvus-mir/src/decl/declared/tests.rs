@@ -420,40 +420,6 @@ fn a_relation_over_an_atom_that_is_no_integer_is_refused() {
     assert_eq!(f.refusals(), vec![Refused::RelationOverNonInteger { declared: own(g), atom: Atom::Arg(0) }]);
 }
 
-/// extern-fn §1, §3: a concrete impl's variables carry the impl's own
-/// bounds, as a scheme's carry its: a relation over an argument whose type
-/// is the impl's variable stands where the impl bounds it to integers, and
-/// is refused where the impl lets it be any type.
-#[test]
-fn a_relation_reads_a_concrete_impls_own_bounds() {
-    let integer = TyVarBound::Integer { signed: true, among: Box::new([IntTy::I64]) };
-    for (bound, refused) in [(integer, false), (TyVarBound::Any, true)] {
-        let mut f = Fixture::new();
-        let (var, int) = (f.ty(TyKind::Var(0)), f.int());
-        let ty = f.function(&[var], int);
-        let g = QualifiedRef::root(f.interner.intern("g"));
-        let at_impl = Scheme {
-            ty,
-            bounds: Box::new([bound]),
-            param_names: f.param_names(1),
-            impl_of: Some(ImplOf { generic_function: g, kind: ImplKind::Concrete }),
-            requires: Box::new([]),
-            facts: relates(Atom::Result, Term::Atom(Atom::Arg(0))),
-            runs: Box::new([]),
-            awaits: false,
-            specialized: Box::new([]),
-        };
-        let function = GenericFunction { ty, param_names: f.param_names(1), bounds: Box::new([TyVarBound::Any]), specialized: Box::new([]) };
-        f.raw.generic_functions.push((g, function));
-        let at_impl = Declared { function: f.push_impl(g, 0, at_impl) };
-        let expected = match refused {
-            true => vec![Refused::RelationOverNonInteger { declared: at_impl, atom: Atom::Arg(0) }],
-            false => Vec::new(),
-        };
-        assert_eq!(f.refusals(), expected);
-    }
-}
-
 #[test]
 fn a_length_of_a_value_with_no_element_count_is_refused() {
     let mut f = Fixture::new();

@@ -1872,7 +1872,7 @@ pub(super) fn settle_bounded(cx: &mut Ctxt<'_>, ty: Term, span: Span) {
     let bounded: FxHashSet<TyVarId> = cx
         .infer
         .unbound()
-        .filter(|(_, bound)| matches!(bound, Bound::Settled | Bound::Integer { literal: false, .. }))
+        .filter(|(_, bound)| matches!(bound, Bound::Settled))
         .map(|(var, _)| var)
         .collect();
     for var in unbound_vars(cx, [ty]) {

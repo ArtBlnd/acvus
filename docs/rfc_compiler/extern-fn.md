@@ -12,7 +12,7 @@ The reason is the language's identity: it is a DSL for DSLs. It defines no domai
 
 Named parameters and a result. A parameter takes its value by value, by `&T` or by `&mut T`; a sequence arrives as a slice. No declaration carries an array type.
 
-A type parameter is parametric, and carries one bound: any type; an integer type; or any type that the use must settle, never taken as `!`. Which shapes a function takes is said by its impls (§6), not by a bound.
+A type parameter is parametric, and carries one bound: any type, or any type that the use must settle, never taken as `!`. Which shapes a function takes is said by its impls (§6), not by a bound.
 
 An extern fn is called, never taken as a value: a program names it only to call it, and where a function value is wanted it writes a lambda that calls it. So a declaration's flows (§4) are read only at its calls.
 

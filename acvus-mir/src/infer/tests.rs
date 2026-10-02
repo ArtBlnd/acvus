@@ -2,7 +2,7 @@ use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::*;
 use crate::decl::{
-    CastRule, CastTree, ConversionRule, Core, Declarations, DeclaredFacts, Head, LoopMarkers, RawDeclarations, Requirement, Scheme, TyVarBound,
+    CastRule, CastTree, ConversionRule, Core, Declarations, DeclaredFacts, Head, LoopMarkers, RawDeclarations, Scheme,
 };
 use crate::ty::{
     Alignment, Calls, CallsTerm, Concrete, Contexts, Cost, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, HoldsTerm, IdentityId,
@@ -823,84 +823,6 @@ fn raw(names: &Interner, types: Types<Poly>, functions: Vec<(QualifiedRef, Schem
         loop_markers: LoopMarkers::default(),
         core: Core::of(names),
     }
-}
-
-/// extern-fn §6, types §1: a scheme at one use has a fresh variable per
-/// type parameter, with its declared bound, standing as is wherever the
-/// parameter does; every structural node is opaque; a requirement comes
-/// back at the use's own variables.
-#[test]
-fn instantiate_builds_opaque_nodes_at_fresh_variables() {
-    let mut fx = Fixture::new();
-    let (f, shared, x, a, b) = (
-        QualifiedRef::root(fx.name("f")),
-        QualifiedRef::root(fx.name("shared")),
-        fx.name("x"),
-        fx.name("a"),
-        fx.name("b"),
-    );
-    let mut types = Types::<Poly>::new();
-    let t = types.intern(TyKind::Var(0));
-    let object = types.intern(TyKind::Object { fields: Box::new([(x, t)]), label: () });
-    let option = types.intern(TyKind::Option(t, ()));
-    let signature = pure_fn(&mut types, vec![object, t], option);
-    let integer = TyVarBound::Integer {
-        signed: true,
-        among: Box::new([IntTy::I32, IntTy::I64]),
-    };
-    let scheme = Scheme {
-        ty: signature,
-        param_names: Box::new([a, b]),
-        bounds: Box::new([integer]),
-        impl_of: None,
-        requires: Box::new([Requirement {
-            generic_function: shared,
-            pattern: t,
-            fact: None,
-        }]),
-        facts: DeclaredFacts::default(),
-        runs: Box::new([]),
-        awaits: false,
-        specialized: Box::new([]),
-    };
-    let decls = Declarations::verify(raw(&fx.names, types, vec![(f, scheme)], Vec::new())).expect("verified");
-    let scheme = decls.scheme(f).expect("declared");
-
-    let used = fx.infer.instantiate(&decls, scheme);
-
-    let TyKind::Fn { params, ret, .. } = fx.infer.types().kind(used.ty).clone() else {
-        panic!("a function type")
-    };
-    let var = params[1];
-    let TyKind::Var(id) = *fx.infer.types().kind(var) else {
-        panic!("a type parameter's place is its variable")
-    };
-    assert_eq!(
-        fx.infer.types().kind(params[0]),
-        &TyKind::Object { fields: Box::new([(x, var)]), label: Label::Elsewhere }
-    );
-    assert_eq!(fx.infer.types().kind(ret), &TyKind::Option(var, Label::Elsewhere));
-    assert_eq!(
-        fx.infer.unbound().collect::<Vec<_>>(),
-        vec![(
-            id,
-            &Bound::Integer {
-                signed: true,
-                among: Box::new([IntTy::I32, IntTy::I64]),
-                literal: false,
-            }
-        )]
-    );
-    assert_eq!(
-        used.requirements,
-        vec![RequiredAt {
-            generic_function: shared,
-            pattern: var,
-            fact: None
-        }]
-    );
-    let again = fx.infer.instantiate(&decls, scheme);
-    assert_ne!(again.ty, used.ty, "each use has its own variables");
 }
 
 /// types §6: a head with a step up is closed only once no open source may
