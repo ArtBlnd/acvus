@@ -7,13 +7,13 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Ident, ItemFn, LitStr};
 
-use crate::attr::{Effect, ExternFnAttr};
+use crate::attr::{Effect, ExternFnAttr, ImplOf};
 use crate::facts;
 use crate::lifetimes::Names;
-use crate::sig::{Output, Role, Sig};
+use crate::sig::{Generic, Output, Role, Sig};
 
 pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStream> {
-    let sig = Sig::read(&mut func)?;
+    let sig = Sig::read(&mut func.sig)?;
     if let Some(Effect::Var(var)) = &attr.effect
         && !sig.names_effect_variable(var)
     {
@@ -21,6 +21,9 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
             var.span(),
             "an effect is `pure`, `idempotent`, `opaque`, or one of the function's `Var<kind::Effect>` parameters",
         ));
+    }
+    if let (Some(generic), None) = (&attr.generic, &attr.impl_of) {
+        return Err(syn::Error::new(generic.span(), "`generic` marks an impl's kind: it is stated with `impl_of`"));
     }
     if let Some(body) = &attr.sync
         && !sig.awaited
@@ -61,6 +64,7 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
 
     let declared = declared(&attr, &sig, &marker, &runtime)?;
     let dispatch = dispatch(&sig, attr.sync.as_ref(), &marker, &runtime);
+    let impl_of = attr.impl_of.as_ref().map(|impl_of| signature_is_at_choice(impl_of, &sig, &func.sig.generics, &runtime));
 
     Ok(quote! {
         #func
@@ -82,6 +86,8 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
         #declared
 
         #dispatch
+
+        #impl_of
     })
 }
 
@@ -111,11 +117,88 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     };
     let [types, effects, identities] = sig.counts;
     let types = types as usize;
+    let Signature { params, result, lifetimes } = signature(sig, runtime);
+    let role = match &attr.impl_of {
+        None => quote!(::acvus_extern::decl::Role::Function),
+        Some(ImplOf { generic_function, .. }) => {
+            let kind = match attr.generic {
+                Some(_) => quote!(Generic),
+                None => quote!(Concrete),
+            };
+            quote! {
+                ::acvus_extern::decl::Role::ImplOf {
+                    generic_function: <#generic_function as ::acvus_extern::register::GenericDeclared<#runtime>>::path(names),
+                    kind: ::acvus_extern::decl::ImplKind::#kind,
+                }
+            }
+        }
+    };
+    // The facts the attribute states (compiler: extern fn §3-§4), each of
+    // the arguments by their names.
+    let argument_names: Vec<&Ident> =
+        sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.name).collect();
+    let ending = facts::ends(attr.ends);
+    let relations = facts::relations(&attr.relations, &argument_names)?;
+    let places: Vec<&facts::PlaceFacts> =
+        sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.place).collect();
+    let access = facts::access(&places, &argument_names, runtime)?;
+    let action = facts::actions(attr.combine.as_ref(), &places, &argument_names, runtime)?;
+    Ok(quote! {
+        impl<#runtime: ::acvus_extern::runtime::Runtime> ::acvus_extern::register::Declared<#runtime> for #marker {
+            /// The function's Rust module path and its name (macros §1).
+            fn path(names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::QualifiedRef {
+                let module: ::std::vec::Vec<_> =
+                    ::core::module_path!().split("::").map(|segment| names.intern(segment)).collect();
+                ::acvus_extern::decl::QualifiedRef::qualified(names.namespace(&module), names.intern(#name))
+            }
+
+            fn declaration(&self, names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::Declaration {
+                ::acvus_extern::decl::Declaration {
+                    path: <Self as ::acvus_extern::register::Declared<#runtime>>::path(names),
+                    binders: ::acvus_extern::decl::Binders {
+                        types: ::std::vec![::acvus_extern::decl::TyVarBound::Any; #types],
+                        effects: #effects,
+                        identities: #identities,
+                    },
+                    params: ::std::vec![#(#params),*],
+                    result: #result,
+                    effect: #effect,
+                    // Every effect variable is taken to be run by the call,
+                    // the bound that is always sound: a call may run each
+                    // closure it is given.
+                    runs: (0..#effects).collect(),
+                    awaits: #awaits,
+                    facts: ::acvus_extern::decl::DeclaredFacts {
+                        lifetimes: ::core::option::Option::Some(#lifetimes),
+                        access: ::std::boxed::Box::new([#(#access),*]),
+                        action: ::std::boxed::Box::new([#(#action),*]),
+                        ends: #ending,
+                        relations: ::std::boxed::Box::new([#(#relations),*]),
+                        ..::acvus_extern::decl::DeclaredFacts::default()
+                    },
+                    requires: ::std::vec::Vec::new(),
+                    role: #role,
+                }
+            }
+        }
+    })
+}
+
+/// A signature as a declaration states it: each argument's name and
+/// declared type, the result's, and the lifetimes the signature names, each
+/// end with its names (ownership §5, extern-fn §4).
+pub struct Signature {
+    pub params: Vec<TokenStream>,
+    pub result: TokenStream,
+    pub lifetimes: TokenStream,
+}
+
+pub fn signature(sig: &Sig, runtime: &Ident) -> Signature {
     let params = sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| {
         let name = LitStr::new(&p.name.to_string(), p.name.span());
         let ty = sig.at_stand_ins(&p.ty, runtime);
         quote!((names.intern(#name), <#ty as ::acvus_extern::decl::ParamMode>::decl(names)))
-    });
+    }).collect();
     let result = match &sig.output {
         Output::Never => quote!(::acvus_extern::decl::DeclTy::Never),
         Output::Value | Output::Borrowed => {
@@ -155,62 +238,64 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     ends.push(quote! {
         ::acvus_extern::decl::EndNames { at: ::acvus_extern::decl::At::Result, ty: #result, outer: #outer, inner: #inner }
     });
-    // The facts the attribute states (compiler: extern fn §3-§4), each of
-    // the arguments by their names.
-    let argument_names: Vec<&Ident> =
-        sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.name).collect();
-    let ending = facts::ends(attr.ends);
-    let relations = facts::relations(&attr.relations, &argument_names)?;
-    let places: Vec<&facts::PlaceFacts> =
-        sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.place).collect();
-    let access = facts::access(&places, &argument_names, runtime)?;
-    let action = facts::actions(attr.combine.as_ref(), &places, &argument_names, runtime)?;
     let written = sig.written.iter().map(|bound| {
         let (longer, shorter) = (&bound.longer, &bound.shorter);
         quote!(::acvus_extern::decl::Written { longer: #longer, shorter: #shorter })
     });
-    Ok(quote! {
-        impl<#runtime: ::acvus_extern::runtime::Runtime> ::acvus_extern::register::Declared<#runtime> for #marker {
-            /// The function's Rust module path and its name (macros §1).
-            fn path(names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::QualifiedRef {
-                let module: ::std::vec::Vec<_> =
-                    ::core::module_path!().split("::").map(|segment| names.intern(segment)).collect();
-                ::acvus_extern::decl::QualifiedRef::qualified(names.namespace(&module), names.intern(#name))
-            }
+    let lifetimes = quote! {
+        ::acvus_extern::decl::labelled(&[#(#ends),*], &[#(#written),*])
+    };
+    Signature { params, result, lifetimes }
+}
 
-            fn declaration(&self, names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::Declaration {
-                ::acvus_extern::decl::Declaration {
-                    path: <Self as ::acvus_extern::register::Declared<#runtime>>::path(names),
-                    binders: ::acvus_extern::decl::Binders {
-                        types: ::std::vec![::acvus_extern::decl::TyVarBound::Any; #types],
-                        effects: #effects,
-                        identities: #identities,
-                    },
-                    params: ::std::vec![#(#params),*],
-                    result: #result,
-                    effect: #effect,
-                    // Every effect variable is taken to be run by the call,
-                    // the bound that is always sound: a call may run each
-                    // closure it is given.
-                    runs: (0..#effects).collect(),
-                    awaits: #awaits,
-                    facts: ::acvus_extern::decl::DeclaredFacts {
-                        lifetimes: ::core::option::Option::Some(::acvus_extern::decl::labelled(
-                            &[#(#ends),*],
-                            &[#(#written),*],
-                        )),
-                        access: ::std::boxed::Box::new([#(#access),*]),
-                        action: ::std::boxed::Box::new([#(#action),*]),
-                        ends: #ending,
-                        relations: ::std::boxed::Box::new([#(#relations),*]),
-                        ..::acvus_extern::decl::DeclaredFacts::default()
-                    },
-                    requires: ::std::vec::Vec::new(),
-                    role: ::acvus_extern::decl::Role::Function,
-                }
+/// An impl's signature is its generic function's at the choice it writes
+/// (extern fn §6), checked by Rust: the function pointer type of its
+/// arguments and result is `FamilyAt`'s at that choice, or the impl does not
+/// compile. Nothing is checked at run time.
+fn signature_is_at_choice(impl_of: &ImplOf, sig: &Sig, generics: &syn::Generics, runtime: &Ident) -> TokenStream {
+    let ImplOf { generic_function, choice } = impl_of;
+    let own_runtime = sig.generics.iter().find_map(|generic| match generic {
+        Generic::Runtime { ident, .. } => Some(ident.clone()),
+        Generic::Var { .. } => None,
+    });
+    let (at_runtime, added) = match own_runtime {
+        Some(ident) => (ident, None),
+        None => (runtime.clone(), Some(quote!(#runtime: ::acvus_extern::runtime::Runtime))),
+    };
+    let params = generics.type_params();
+    let predicates = generics.where_clause.iter().flat_map(|clause| &clause.predicates).filter(|predicate| {
+        !matches!(predicate, syn::WherePredicate::Lifetime(_))
+    });
+    let pointer = fn_pointer(sig, generics, &at_runtime);
+    quote! {
+        const _: () = {
+            #[allow(dead_code, non_snake_case)]
+            fn __signature_is_at_choice<#(#params,)* #added>()
+            where
+                #(#predicates,)*
+            {
+                let _: ::core::marker::PhantomData<
+                    <#generic_function as ::acvus_extern::register::FamilyAt<#at_runtime, (#(#choice,)*)>>::Signature,
+                > = ::core::marker::PhantomData::<#pointer>;
             }
-        }
-    })
+        };
+    }
+}
+
+/// The function pointer type of `sig`'s arguments and its result, each
+/// type variable as the value it stands for is held, `Uniform<runtime, T>`,
+/// and each lifetime `generics` names bound by it: as `FamilyAt` states a
+/// generic function's signature, and an impl's is compared with it
+/// (extern fn §6).
+pub fn fn_pointer(sig: &Sig, generics: &syn::Generics, runtime: &Ident) -> TokenStream {
+    let lifetimes = generics.lifetimes().map(|param| &param.lifetime);
+    let arguments = sig
+        .params
+        .iter()
+        .filter(|p| matches!(p.role, Role::Argument))
+        .map(|p| sig.held(&p.ty, runtime));
+    let output = sig.held(&sig.written_output, runtime);
+    quote!(for<#(#lifetimes),*> fn(#(#arguments),*) -> #output)
 }
 
 /// The dispatch of each body the function has: an awaited body's, with its

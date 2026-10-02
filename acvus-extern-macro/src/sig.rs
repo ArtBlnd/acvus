@@ -10,7 +10,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
 use syn::{
-    FnArg, GenericArgument, GenericParam, Ident, ItemFn, Lifetime, Pat, PathArguments, ReturnType, Signature, Type,
+    FnArg, GenericArgument, GenericParam, Ident, Lifetime, Pat, PathArguments, ReturnType, Signature, Type,
     TypeParamBound, TypeReference, WherePredicate,
 };
 
@@ -93,10 +93,9 @@ pub struct Sig {
 }
 
 impl Sig {
-    /// Reads `func`'s signature, and strips the attribute's own marks from
-    /// its parameters so the function compiles as written.
-    pub fn read(func: &mut ItemFn) -> syn::Result<Sig> {
-        let sig = &mut func.sig;
+    /// Reads a function's signature, and strips the attribute's own marks
+    /// from its parameters so the function compiles as written.
+    pub fn read(sig: &mut Signature) -> syn::Result<Sig> {
         refuse_unsupported(sig)?;
         let (generics, counts) = generics(sig)?;
         lifetimes::refuse_static(sig)?;
@@ -136,6 +135,15 @@ impl Sig {
     pub fn at_stand_ins(&self, ty: &Type, runtime: &Ident) -> Type {
         let mut ty = ty.clone();
         StandIns { generics: &self.generics, runtime }.visit_type_mut(&mut ty);
+        ty
+    }
+
+    /// `ty` with each type variable as the value it stands for is held,
+    /// `Uniform<runtime, T>`, its name kept, and everything else as written:
+    /// the Rust type a signature is compared at (extern fn §6).
+    pub fn held(&self, ty: &Type, runtime: &Ident) -> Type {
+        let mut ty = ty.clone();
+        Held { generics: &self.generics, runtime }.visit_type_mut(&mut ty);
         ty
     }
 
@@ -402,6 +410,27 @@ impl VisitMut for StandIns<'_> {
 
     fn visit_lifetime_mut(&mut self, lifetime: &mut Lifetime) {
         *lifetime = Lifetime::new("'_", lifetime.span());
+    }
+}
+
+/// Each type variable as `Uniform<runtime, T>`.
+struct Held<'g> {
+    generics: &'g [Generic],
+    runtime: &'g Ident,
+}
+
+impl VisitMut for Held<'_> {
+    fn visit_type_mut(&mut self, ty: &mut Type) {
+        if let Type::Path(path) = ty
+            && path.qself.is_none()
+            && let Some(ident) = path.path.get_ident()
+            && self.generics.iter().any(|generic| matches!(generic, Generic::Var { ident: v, kind: Kind::Type, .. } if v == ident))
+        {
+            let runtime = self.runtime;
+            *ty = syn::parse_quote!(::acvus_extern::Uniform<#runtime, #ident>);
+            return;
+        }
+        syn::visit_mut::visit_type_mut(self, ty);
     }
 }
 

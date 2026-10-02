@@ -1,10 +1,10 @@
 //! The attribute's own arguments: `#[extern_fn(name = "..", effect = ..,
-//! ends = .., sync = .., relation(..), combine(..))]`. Every key is known;
-//! any other is refused.
+//! ends = .., sync = .., impl_of = g<..>, generic, relation(..),
+//! combine(..))]`. Every key is known; any other is refused.
 
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Expr, Ident, LitStr, Path, Token, parenthesized, token};
+use syn::{Expr, GenericArgument, Ident, LitStr, Path, PathArguments, Token, Type, parenthesized, token};
 
 /// A call's effect as stated (compiler: extern fn §2): a level, or one of
 /// the function's effect variables, the effect of the work it runs.
@@ -34,6 +34,40 @@ pub struct ExternFnAttr {
     /// An awaited body's returning body, a function of its signature
     /// (macros §1).
     pub sync: Option<Path>,
+    /// The generic function this is an impl of, at the choice of its
+    /// variables written (extern fn §6).
+    pub impl_of: Option<ImplOf>,
+    /// That the impl is its generic function's generic one.
+    pub generic: Option<Ident>,
+}
+
+/// `impl_of = g<A, ..>`: the generic function's family marker, and the
+/// choice of each of its variables.
+pub struct ImplOf {
+    pub generic_function: Path,
+    pub choice: Vec<Type>,
+}
+
+impl Parse for ImplOf {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut generic_function: Path = input.parse()?;
+        let last = generic_function.segments.last_mut().expect("a path has a segment");
+        let choice = match std::mem::replace(&mut last.arguments, PathArguments::None) {
+            PathArguments::None => Vec::new(),
+            PathArguments::AngleBracketed(args) => args
+                .args
+                .into_iter()
+                .map(|arg| match arg {
+                    GenericArgument::Type(ty) => Ok(ty),
+                    other => Err(syn::Error::new_spanned(other, "a generic function's variable is chosen as a type")),
+                })
+                .collect::<syn::Result<_>>()?,
+            other @ PathArguments::Parenthesized(_) => {
+                return Err(syn::Error::new_spanned(other, "`impl_of` names a generic function as `g<A, ..>`"));
+            }
+        };
+        Ok(ImplOf { generic_function, choice })
+    }
 }
 
 /// A combine's laws as written: its identity and its absorbing element, each
@@ -118,6 +152,18 @@ impl Parse for ExternFnAttr {
                         return Err(twice());
                     }
                 }
+                "impl_of" if input.peek(Token![=]) => {
+                    input.parse::<Token![=]>()?;
+                    let impl_of: ImplOf = input.parse()?;
+                    if attr.impl_of.replace(impl_of).is_some() {
+                        return Err(twice());
+                    }
+                }
+                "generic" => {
+                    if attr.generic.replace(key.clone()).is_some() {
+                        return Err(twice());
+                    }
+                }
                 "sync" if input.peek(Token![=]) => {
                     input.parse::<Token![=]>()?;
                     let body: Path = input.parse()?;
@@ -140,7 +186,7 @@ impl Parse for ExternFnAttr {
                 _ => {
                     return Err(syn::Error::new(
                         key.span(),
-                        "`#[extern_fn]` knows `name = \"..\"`, `effect = ..`, `ends = ..`, `sync = ..`, `relation(..)` and `combine(..)`, and nothing else",
+                        "`#[extern_fn]` knows `name = \"..\"`, `effect = ..`, `ends = ..`, `sync = ..`, `impl_of = ..`, `generic`, `relation(..)` and `combine(..)`, and nothing else",
                     ));
                 }
             }

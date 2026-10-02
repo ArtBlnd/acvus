@@ -12,6 +12,7 @@ use syn::{ItemFn, parse_macro_input};
 
 mod attr;
 mod facts;
+mod generic;
 mod glue;
 mod lifetimes;
 mod opaque;
@@ -23,6 +24,18 @@ mod sig;
 pub fn derive_opaque(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as syn::DeriveInput);
     match opaque::derive(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// A generic function's signature (rfc_extern macros, impls §1-§2): a name
+/// with a signature and no body.
+#[proc_macro_attribute]
+pub fn generic_fn(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = parse_macro_input!(attr as attr::ExternFnAttr);
+    let func = parse_macro_input!(item as syn::ForeignItemFn);
+    match generic::generic_fn(attr, func) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }

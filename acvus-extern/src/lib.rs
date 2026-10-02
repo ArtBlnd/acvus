@@ -23,7 +23,7 @@ pub mod runtime;
 #[doc(hidden)]
 pub use boundary::seal;
 
-pub use acvus_extern_macro::{Opaque, extern_fn};
+pub use acvus_extern_macro::{Opaque, extern_fn, generic_fn};
 
 pub use boundary::entry::{Args, Entry, Mode, Settled, SiteShape, mode};
 pub use boundary::loaned::{Loaned, LoanedMut};

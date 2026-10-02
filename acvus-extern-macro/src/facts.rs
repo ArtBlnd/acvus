@@ -251,6 +251,11 @@ pub struct Gives {
 }
 
 impl PlaceFacts {
+    /// Whether no fact of a place is written.
+    pub fn is_empty(&self) -> bool {
+        self.touches.is_empty() && self.gives.is_empty() && self.updates.is_empty() && self.inverses.is_empty()
+    }
+
     /// The facts `attrs` write, each a `#[touch(..)]` or a `#[gives(..)]`.
     pub fn read(attrs: &[Attribute]) -> syn::Result<PlaceFacts> {
         let mut facts = PlaceFacts::default();

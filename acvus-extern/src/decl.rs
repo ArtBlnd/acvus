@@ -22,7 +22,7 @@ pub use acvus_mir::decl::declared::{
     Update,
 };
 pub use acvus_mir::ty::Mutability;
-pub use acvus_mir::decl::{DeclaredFacts, Ends, TyVarBound};
+pub use acvus_mir::decl::{DeclaredFacts, Ends, ImplKind, LabelledSignature, TyVarBound};
 pub use acvus_mir::ty::{Contexts, Effect, Reissue, SplitCost};
 
 pub use acvus_utils::{Interner, QualifiedRef};
@@ -93,12 +93,26 @@ pub struct Requirement {
 pub enum Role {
     #[default]
     Function,
-    /// An impl of this generic function; reached only through it.
-    ImplOf(QualifiedRef),
+    /// An impl of this generic function, a concrete one or its generic
+    /// one; reached only through it (extern fn §6).
+    ImplOf { generic_function: QualifiedRef, kind: ImplKind },
     /// A step up the tree of casts (types §3).
     Cast,
     /// A conversion, no part of that tree (types §7).
     Conversion,
+}
+
+/// Everything the compiler knows of one generic function (extern fn §6): a
+/// name with a signature and no body, so it states nothing a body states.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericDeclaration {
+    /// The Rust module path and the generic function's name.
+    pub path: QualifiedRef,
+    pub binders: Binders,
+    pub params: Vec<(Astr, DeclTy)>,
+    pub result: DeclTy,
+    /// The lifetimes its signature names (extern fn §4).
+    pub lifetimes: LabelledSignature,
 }
 
 /// Everything the compiler knows of one extern fn.

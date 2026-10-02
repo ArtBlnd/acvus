@@ -9,7 +9,7 @@ use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::entry::SiteShape;
 use crate::boundary::seal::ExternFns;
-use crate::decl::Declaration;
+use crate::decl::{Declaration, GenericDeclaration};
 use crate::done::Done;
 use crate::runtime::Runtime;
 
@@ -167,6 +167,72 @@ pub trait Declared<R: Runtime> {
 
     /// What the compiler knows of the function.
     fn declaration(&self, names: &Interner) -> Declaration;
+}
+
+/// A generic function's declaration (extern fn §6): a name with a signature
+/// and no body, implemented by `#[generic_fn]` on the generic function's
+/// family marker. It has no dispatch: a call of it is a call of the impl it
+/// reaches.
+///
+/// A generic function states nothing a body states, so the attribute refuses
+/// an effect, a fact, an executor, a capture and an awaited signature:
+///
+/// ```compile_fail
+/// use acvus_extern::decl::{Var, kind};
+///
+/// #[acvus_extern::generic_fn(effect = pure)]
+/// fn same<T: Var<kind::Type>>(a: &T, b: &T) -> bool;
+/// ```
+///
+/// ```compile_fail
+/// use acvus_extern::decl::{Var, kind};
+///
+/// #[acvus_extern::generic_fn]
+/// async fn same<T: Var<kind::Type>>(a: T, b: T) -> bool;
+/// ```
+///
+/// ```compile_fail
+/// use acvus_extern::decl::{Var, kind};
+/// use acvus_extern::executor::Executor;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::generic_fn]
+/// fn same<R: Runtime, T: Var<kind::Type>>(#[executor] cx: &Executor<'_, R>, a: &T, b: &T) -> bool;
+/// ```
+///
+/// An impl's signature is its generic function's at the choice it writes,
+/// each variable held as `Uniform<R, X>`; another signature does not
+/// compile:
+///
+/// ```compile_fail
+/// use acvus_extern::decl::{Var, kind};
+///
+/// #[acvus_extern::generic_fn]
+/// fn same<T: Var<kind::Type>>(a: &T, b: &T) -> bool;
+///
+/// #[acvus_extern::extern_fn(impl_of = same<i64>)]
+/// fn same_i64(a: &i64) -> bool { true }
+/// ```
+///
+/// `generic` marks an impl, so it is stated with `impl_of`:
+///
+/// ```compile_fail
+/// #[acvus_extern::extern_fn(generic)]
+/// fn f(n: u64) -> u64 { n }
+/// ```
+pub trait GenericDeclared<R: Runtime> {
+    /// The generic function's path: its Rust module path and its name.
+    fn path(names: &Interner) -> QualifiedRef;
+
+    /// What the compiler knows of the generic function.
+    fn declaration(names: &Interner) -> GenericDeclaration;
+}
+
+/// A generic function's signature at its variables `Ts`, as the Rust
+/// function pointer type of its parameters and its result: an impl stating
+/// it is one at `Ts` has exactly this signature (extern fn §6).
+pub trait FamilyAt<R: Runtime, Ts> {
+    type Signature;
 }
 
 /// An awaited function's dispatch at the runtime `R`, whose call is a future
