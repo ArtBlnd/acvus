@@ -38,7 +38,7 @@ These hold by the primitives below, with nothing added on top. The standard is a
 
 A type variable is never concrete and never wrapped in `Uniform`; it lives in containers. It carries no `'static`: the macro sees every lifetime bound and refuses one. So nothing keeps it out of sight, and nothing wraps it. A value holding a variable or a loan crosses as its own type, where its declaration shows them.
 
-It is monomorphized as `Uniform<Rt, Never>`, never as `Value`. `X<T>` transmutes to `X<U>` whenever `T` does to `U`, except where `X` consumes `T` through an associated type; `Never` is generated under a fresh name at every compilation, so no code names it to give it an impl of its own. A const check confirms the sizes agree, and the round trip makes the type in between irrelevant.
+It is monomorphized as `Uniform<Rt, Never>`, never as `Value`, where `Never` is one fixed uninhabited marker, apart from Rust's `!`, which stands for acvus's `!`. `X<T>` transmutes to `X<U>` whenever `T` does to `U`, except where `X` consumes `T` through an associated type. `TypeVar` holds for every `Uniform<Rt, X>`, and has no associated type and no supertrait but auto traits, which hold alike for every `X`. So an impl that generic code reaches through its one bound covers every view of a value alike, and coherence refuses a second impl for one view; an impl naming `Never` itself is one that generic code cannot reach. Specialization and default impls are assumed absent. A const check confirms the sizes agree, and the round trip makes the type in between irrelevant.
 
 ## Runtime and registry
 
@@ -72,7 +72,7 @@ The runtime contract gives one associated type per kind, each with a trait of it
 | Opaque | `UserDefined` | unsafe |
 | Ref | `Ref` | unsafe |
 
-Opaque is unsafe because one value is seen as several Rust types, generic and uniform, under fresh `Never`s, so it is held untyped and read by layout. Ref is unsafe because a reference is read back from its words. View is unsafe so that a runtime may hold a text or a run as it likes. How a `Value` is laid out is the runtime's choice. An opaque value is `Send + Sync`, so that a spawn may carry it.
+Opaque is unsafe because one value is seen as several Rust types, generic and uniform, so it is held untyped and read by layout. Ref is unsafe because a reference is read back from its words. View is unsafe so that a runtime may hold a text or a run as it likes. How a `Value` is laid out is the runtime's choice. An opaque value is `Send + Sync`, so that a spawn may carry it.
 
 `Never` has no value, `Order` and `Handle` are no program's, and `Array` is no declaration's. `Option` and `Result` are held in Rust's own shapes, so a reference to one is a Rust reference to it, and its payload opens natively, as `Option<&_>` and `Result<&_, &_>`. Function values cross both ways: acvus gives its closures to an extern, and an extern gives Rust functions to acvus. Either is a Rust lambda, run on an acvus frame or as a Rust function.
 
