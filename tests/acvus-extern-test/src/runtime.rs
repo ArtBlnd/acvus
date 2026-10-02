@@ -5,23 +5,22 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use acvus_extern::callback::{CallArgs, CallsBack, LoanForm, MovedArgs};
+use acvus_extern::callback::CallsBack;
 use acvus_extern::{Settled, SiteShape};
-use acvus_extern::runtime::{Crosses, Runtime};
+use acvus_extern::runtime::Runtime;
 use acvus_extern::register::{AwaitedFn, Declared, ExternFn, Refused, Registers};
 use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::{self, Held, Kinds, Word};
 
-/// The runtime: its interner, the paths registered at it, and the wide
-/// pointers its reference values hold; every value's storage is its own
-/// allocation. It runs no compiled program, so it keeps no registered
-/// function: the tests call a function through its dispatch.
+/// The runtime: its interner and the paths registered at it; every value's
+/// storage is its own word or allocation. It runs no compiled program, so it
+/// keeps no registered function: the tests call a function through its
+/// dispatch.
 #[derive(Default)]
 pub struct WordRuntime {
     interner: Interner,
     registered: HashSet<QualifiedRef>,
-    pub(crate) wide: boundary::WideParts,
 }
 
 impl WordRuntime {
@@ -66,6 +65,7 @@ impl Runtime for WordRuntime {
     type Option = Kinds;
     type Result = Kinds;
     type Tuple = Kinds;
+    type Sequence = Kinds;
     type Ref = Kinds;
 
     fn interner(&self) -> &Interner {
@@ -78,31 +78,23 @@ impl Runtime for WordRuntime {
 }
 
 impl CallsBack for WordRuntime {
-    fn call_now<'l, A, U>(&'l self, closure: Word, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
-    where
-        A: CallArgs<Self> + 'l,
-        U: LoanForm<Self> + 'l,
-    {
-        let run: Vec<Word> = A::lend_run(args, self, at).collect();
-        let result = call_closure(self, closure, &run, at);
-        U::read(result, self, at)
+    fn call_now<'l>(&'l self, closure: Word, run: impl IntoIterator<Item = Word>, at: Settled<'l>) -> Word {
+        let run: Vec<Word> = run.into_iter().collect();
+        call_closure(self, closure, &run, at)
     }
 
-    fn call_later<'a, A, U>(
-        &'a self,
-        closure: Word,
-        args: A::Moved,
-        at: Settled<'a>,
-    ) -> impl Future<Output = U> + Send
-    where
-        A: MovedArgs<Self>,
-        U: Crosses<Self>,
-    {
-        let run: Vec<Held> = A::move_run(args, self, at).map(Held::kept).collect();
+    fn own<'c>(&'c self, function: &'c Word, at: Settled<'c>) -> Word {
+        boundary::owned_closure(*function, at)
+    }
+
+    fn call_later<'a>(&'a self, closure: Word, run: impl IntoIterator<Item = Word>, at: Settled<'a>) -> impl Future<Output = Word> + Send + 'a {
+        // The given values are this runtime's from here on, released if the
+        // call is dropped before it runs; a lent reference names storage the
+        // call future's borrow keeps.
+        let run: Vec<Held> = run.into_iter().map(Held::kept).collect();
         async move {
             let run: Vec<Word> = run.into_iter().map(Held::hand_over).collect();
-            let result = call_closure(self, closure, &run, at);
-            U::take(self, result, at)
+            call_closure(self, closure, &run, at)
         }
     }
 }

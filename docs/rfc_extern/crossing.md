@@ -4,35 +4,30 @@ How values and references cross between a run and an extern fn.
 
 ## 1. One entry
 
-Each call has one entry. The entry opens the call's guards and hands them to the call's body inside a closure, so no guard outlives the call. Forgetting a guard is safe: nothing sound rests on a guard's drop, so a loan's end action is a representation's upkeep, never a fact soundness needs. Everything after the entry is safe.
+Each call has one entry. It opens the call's arguments and the impls its site chose, each once, and hands them to the call's body inside a closure, so nothing it opens outlives the call. Nothing sound rests on a guard's drop: forgetting one is safe.
 
-## 2. Projections
+## 2. Forms
 
-A reference to a value of a transparent structured type (compiler: types §1) crosses as its projection: a value of the same structure in which each part that is not itself one of those types is a reference to that part's storage, shared or mutable as the reference is. An extern-defined part is lent as itself. The slice is the array's projection, so an extern fn receives a program's array only as a slice, and returns a sequence as a `Vec`. That `Vec` is a sequence (compiler: operators §3) of its element type: each element is the runtime's uniform value at that type, which the crossing holds and gives back as one value of it, one to one. A projection is a contract operation. Through a mutable projection only its parts are written; an enum's variant, an `Option`'s presence and an object whole change by value.
+A declared type and the Rust type written for it correspond one to one, wherever it is written: a parameter, a result, or a function type's parameter or result.
 
-*Why.* The layout of such a value is the backend's, so no Rust reference to it exists. The registry refuses a declaration carrying an array type, whoever built it.
+- A value crosses by value.
+- A reference names storage of the Rust type it is to: an extern-defined value, a primitive, text, a held value, or a slice.
+- A value of a transparent structured type (compiler: types §1) is lent as the structure of references to its parts, the value `as_ref` or `as_mut` makes of it (compiler: ownership §5); a reference to the value itself is no form, except to an array, which is lent as a slice.
+- A sequence is given as a `Vec` of held values, one to one.
+- A function value is held at its function type.
 
-## 3. The crossing rule
+## 3. Lending
 
-A reference crosses only when three facts hold of its storage: it is live for the whole call, it is whole, and it is excluded from every other access. Where one does not hold, the crossing remedies it: the value moves, the value is copied, or the access itself is handed over.
-
-- An awaited call of a callback takes its arguments by move. A handler lends none of its storage to it, shared or mutable. Each argument is placed in the callback run's frame, and a by-reference parameter of the callback is a reference to it there.
-- A returning call of a callback takes plain references; it hands no work to an executor.
-
-*Why.* Rust has no asynchronous drop: a call future dropped while it awaits cannot wait for the callback run's work still aloft, which would then read or write storage the handler has released or reused.
-
-*Rejected.* A move made by the boundary behind a reference parameter: the declaration would not show it. Tracking in the glue whether a dropped call finished: it can only turn the violation into death, at a state and a check per call. Lending from storage the run keeps: a second mechanism for what a move already gives.
+A reference crosses only while its storage is live, whole, and excluded from every other access, for the whole call. Every call lends as Rust lends, a handler's call of a callback or an impl included, returning or awaited: the lender's borrow spans the call, and every run that may read what was lent is held by the call (§5), so none outlives the borrow.
 
 ## 4. Results
 
-The result of a returning call of a callback borrows only what that call lent, and no longer than that loan; the result of an awaited call borrows nothing the handler holds. The bound is a type.
+A call's result borrows only what that call lent, and no longer than that loan. The bound is a type.
 
 ## 5. Completion
 
-An awaited entry completes only after every callback run it started has no work aloft, including runs whose call future was dropped.
+A run is held by the future that calls it. Dropping a future ends the runs it holds, innermost first, and a run's storage is released only after what it holds has ended (runtime contract §4).
 
 ## 6. The host
 
-A host passes a run its inputs and reads its result and its contexts through the crossing a handler call uses, at the types the checker settled; it has no access path of its own. The host's API exposes no runtime value.
-
-*Why.* The handler crossing is sound; a second crossing needs a second proof.
+A host passes a run its inputs and reads its result and its contexts through the crossing a handler call uses, at the types the checker settled. The host's API exposes no runtime value.

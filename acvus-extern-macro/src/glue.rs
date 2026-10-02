@@ -1,7 +1,7 @@
 //! What `#[extern_fn]` emits beside the function: its marker, the seal, its
-//! declaration and its dispatch. The glue holds no `unsafe` (macros §1): the
+//! declaration and its dispatch. The glue holds no `unsafe` (macros §4): the
 //! seal is the one `unsafe impl`, the attribute's assertion that the dispatch
-//! opens each argument by its parameter's own mode.
+//! opens each argument at its parameter's own Rust type.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -19,8 +19,17 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
     {
         return Err(syn::Error::new(
             var.span(),
-            "an effect is `pure`, `idempotent`, `opaque`, or one of the function's `Var<kind::Effect>` parameters",
+            "an effect is `pure`, `idempotent`, `opaque`, or one of the function's `EffectVar` parameters",
         ));
+    }
+    if let (Some(_), Some(param)) = (&attr.impl_of, sig.params.iter().find(|p| p.role.takes_impl())) {
+        return Err(syn::Error::new(
+            param.name.span(),
+            "an impl takes no requirement as a parameter: the impls it requires are captured in its value where its site chooses it (impls §2)",
+        ));
+    }
+    if let (Some(_), Some(name)) = (&attr.impl_of, &attr.name) {
+        return Err(syn::Error::new(name.span(), "an impl states no name: it is reached only through its generic function (macros §1)"));
     }
     if let (Some(generic), None) = (&attr.generic, &attr.impl_of) {
         return Err(syn::Error::new(generic.span(), "`generic` marks an impl's kind: it is stated with `impl_of`"));
@@ -66,8 +75,12 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
     let dispatch = dispatch(&sig, attr.sync.as_ref(), &marker, &runtime);
     let impl_of = attr.impl_of.as_ref().map(|impl_of| signature_is_at_choice(impl_of, &sig, &func.sig.generics, &runtime));
 
+    let checks = signature_checks(&func.sig, attr.sync.as_ref());
+
     Ok(quote! {
         #func
+
+        #checks
 
         #[allow(non_camel_case_types)]
         #vis struct #marker {
@@ -79,8 +92,10 @@ pub fn extern_fn(attr: ExternFnAttr, mut func: ItemFn) -> syn::Result<TokenStrea
         }
 
         // SAFETY: `#[extern_fn]` wrote the dispatch below from the function's
-        // signature: it opens each argument by the mode its parameter's Rust
-        // type picks (`ParamMode`), at that type.
+        // signature: it opens each argument once, at the Rust type its
+        // parameter writes (`Open`) or by its requirement's mode
+        // (`RequiresParam`, `InstanceParam`), and each impl its site chose
+        // with the parameter that states the requirement.
         unsafe impl ::acvus_extern::seal::ExternFns for #marker {}
 
         #declared
@@ -135,16 +150,26 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
     };
     // The facts the attribute states (compiler: extern fn §3-§4), each of
     // the arguments by their names.
-    let argument_names: Vec<&Ident> =
-        sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.name).collect();
+    let argument_names: Vec<&Ident> = sig.params.iter().filter(|p| p.role.takes_argument()).map(|p| &p.name).collect();
     let ending = facts::ends(attr.ends);
     let relations = facts::relations(&attr.relations, &argument_names)?;
-    let places: Vec<&facts::PlaceFacts> =
-        sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.place).collect();
+    let places: Vec<&facts::PlaceFacts> = sig.params.iter().filter(|p| p.role.takes_argument()).map(|p| &p.place).collect();
+    // Each requirement, in the order of the parameters that state one: the
+    // order the site's impls are in (impls §3).
+    let requires = sig.params.iter().filter(|p| p.role.takes_impl()).map(|p| {
+        let ty = sig.at_stand_ins(&p.ty, runtime);
+        match p.role {
+            Role::Instance => quote!(<#ty as ::acvus_extern::decl::InstanceParam<#runtime>>::requirement(names)),
+            _ => quote!(<#ty as ::acvus_extern::decl::RequiresParam<#runtime>>::requirement(names)),
+        }
+    });
     let access = facts::access(&places, &argument_names, runtime)?;
     let action = facts::actions(attr.combine.as_ref(), &places, &argument_names, runtime)?;
+    // The declaration is the handler's at each runtime it runs at: the
+    // bounds it states of its runtime, as its dispatch is.
+    let bounds = sig.runtime_bounds();
     Ok(quote! {
-        impl<#runtime: ::acvus_extern::runtime::Runtime> ::acvus_extern::register::Declared<#runtime> for #marker {
+        impl<#runtime: ::acvus_extern::runtime::Runtime #(+ #bounds)*> ::acvus_extern::register::Declared<#runtime> for #marker {
             /// The function's Rust module path and its name (macros §1).
             fn path(names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::QualifiedRef {
                 let module: ::std::vec::Vec<_> =
@@ -176,7 +201,7 @@ fn declared(attr: &ExternFnAttr, sig: &Sig, marker: &Ident, runtime: &Ident) -> 
                         relations: ::std::boxed::Box::new([#(#relations),*]),
                         ..::acvus_extern::decl::DeclaredFacts::default()
                     },
-                    requires: ::std::vec::Vec::new(),
+                    requires: ::std::vec![#(#requires),*],
                     role: #role,
                 }
             }
@@ -194,16 +219,30 @@ pub struct Signature {
 }
 
 pub fn signature(sig: &Sig, runtime: &Ident) -> Signature {
-    let params = sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| {
-        let name = LitStr::new(&p.name.to_string(), p.name.span());
+    // Each argument's declared type: its Rust type's form's, a receiver's
+    // as its instance states it.
+    let declared = |p: &crate::sig::Param| {
         let ty = sig.at_stand_ins(&p.ty, runtime);
-        quote!((names.intern(#name), <#ty as ::acvus_extern::decl::ParamMode>::decl(names)))
-    }).collect();
+        match p.role {
+            Role::Instance => quote!(<#ty as ::acvus_extern::decl::InstanceParam<#runtime>>::decl(names)),
+            _ => quote!(::acvus_extern::decl::decl_in::<#runtime, #ty>(names)),
+        }
+    };
+    let params = sig
+        .params
+        .iter()
+        .filter(|p| p.role.takes_argument())
+        .map(|p| {
+            let name = LitStr::new(&p.name.to_string(), p.name.span());
+            let ty = declared(p);
+            quote!((names.intern(#name), #ty))
+        })
+        .collect();
     let result = match &sig.output {
         Output::Never => quote!(::acvus_extern::decl::DeclTy::Never),
-        Output::Value | Output::Borrowed => {
+        Output::Value => {
             let ty = sig.at_stand_ins(&sig.written_output, runtime);
-            quote!(<#ty as ::acvus_extern::decl::DeclType>::decl_ty(names))
+            quote!(::acvus_extern::decl::decl_out::<#runtime, #ty>(names))
         }
     };
     // Each end with the lifetime names it writes, read by the declaration's
@@ -219,15 +258,15 @@ pub fn signature(sig: &Sig, runtime: &Ident) -> Signature {
     let mut ends: Vec<TokenStream> = sig
         .params
         .iter()
-        .filter(|p| matches!(p.role, Role::Argument))
+        .filter(|p| p.role.takes_argument())
         .enumerate()
         .map(|(at, p)| {
-            let ty = sig.at_stand_ins(&p.ty, runtime);
+            let ty = declared(p);
             let (outer, inner) = names(&p.names);
             quote! {
                 ::acvus_extern::decl::EndNames {
                     at: ::acvus_extern::decl::At::Param(#at),
-                    ty: <#ty as ::acvus_extern::decl::ParamMode>::decl(names),
+                    ty: #ty,
                     outer: #outer,
                     inner: #inner,
                 }
@@ -245,11 +284,11 @@ pub fn signature(sig: &Sig, runtime: &Ident) -> Signature {
 }
 
 /// An impl's signature is its generic function's at the choice it writes
-/// (extern fn §6), checked by Rust: the function pointer type of its
-/// arguments and result is `FamilyAt`'s at that choice, or the impl does not
-/// compile. Each chosen type is the Rust type a value of the variable is: a
-/// variable of the impl's own, or `Uniform<R, X>`. Nothing is checked at run
-/// time.
+/// (extern fn §6), checked by Rust: its parameters' and its result's keys,
+/// read at one loan, are `FamilyAt`'s at that choice, or the impl does not
+/// compile. Each chosen
+/// type is the Rust type a value of the variable is: a variable of the
+/// impl's own, or `Uniform<R, X>`. Nothing is checked at run time.
 fn signature_is_at_choice(impl_of: &ImplOf, sig: &Sig, generics: &syn::Generics, runtime: &Ident) -> TokenStream {
     let ImplOf { generic_function, choice } = impl_of;
     let own_runtime = sig.generics.iter().find_map(|generic| match generic {
@@ -260,54 +299,108 @@ fn signature_is_at_choice(impl_of: &ImplOf, sig: &Sig, generics: &syn::Generics,
         Some(ident) => (ident, None),
         None => (runtime.clone(), Some(quote!(#runtime: ::acvus_extern::runtime::Runtime))),
     };
-    let params = generics.type_params();
+    let loan = syn::Lifetime::new("'__p", proc_macro2::Span::call_site());
+    let lifetimes = generics.lifetimes();
+    let params: Vec<_> = generics.type_params().collect();
+    let outlive = params.iter().map(|param| {
+        let ident = &param.ident;
+        quote!(#ident: #loan)
+    });
     let predicates = generics.where_clause.iter().flat_map(|clause| &clause.predicates);
-    let pointer = fn_pointer(sig, generics);
+    let key = |ty: &syn::Type| {
+        let ty = crate::sig::at_lifetime(ty, &loan);
+        quote!(<#ty as ::acvus_extern::runtime::Place<#loan, #at_runtime>>::Key)
+    };
+    let arguments = sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| key(&p.ty));
+    let result = key(&sig.written_output);
     quote! {
         const _: () = {
             #[allow(dead_code, non_snake_case)]
-            fn __signature_is_at_choice<#(#params,)* #added>()
+            fn __signature_is_at_choice<#loan, #(#lifetimes,)* #(#params,)* #added>()
             where
+                #(#outlive,)*
                 #(#predicates,)*
             {
-                let _: ::core::marker::PhantomData<
-                    <#generic_function as ::acvus_extern::register::FamilyAt<#at_runtime, (#(#choice,)*)>>::Signature,
-                > = ::core::marker::PhantomData::<#pointer>;
+                ::acvus_extern::instance::is_the_signature::<#loan, #at_runtime, #generic_function, (#(#choice,)*), (#(#arguments,)*), #result>();
             }
         };
     }
 }
 
-/// The function pointer type of `sig`'s arguments and its result as
-/// written, each lifetime `generics` names bound by it: as `FamilyAt` states
-/// a generic function's signature, and an impl's is compared with it
-/// (extern fn §6). A type variable stands where a value of it is: its own
-/// name is that value's Rust type.
-pub fn fn_pointer(sig: &Sig, generics: &syn::Generics) -> TokenStream {
-    let lifetimes = generics.lifetimes().map(|param| &param.lifetime);
-    let arguments = sig.params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.ty);
-    let output = &sig.written_output;
-    quote!(for<#(#lifetimes),*> fn(#(#arguments),*) -> #output)
+/// Checks Rust makes of the signature as written, at compile time only: no
+/// lifetime is elided in a path, so every lifetime the declaration's labels
+/// read is written (lifetimes); and where `sync` names a returning body, it
+/// has the awaited body's signature, lifetimes included (macros §1).
+pub fn signature_checks(signature: &syn::Signature, sync: Option<&syn::Path>) -> TokenStream {
+    let generics = &signature.generics;
+    let where_clause = &generics.where_clause;
+    let inputs: Vec<&syn::Type> = signature
+        .inputs
+        .iter()
+        .filter_map(|input| match input {
+            syn::FnArg::Typed(typed) => Some(&*typed.ty),
+            syn::FnArg::Receiver(_) => None,
+        })
+        .collect();
+    let output = match &signature.output {
+        syn::ReturnType::Type(_, ty) => quote!(#ty),
+        syn::ReturnType::Default => quote!(()),
+    };
+    let sync_check = sync.map(|body| {
+        let lifetimes = generics.lifetimes().map(|param| &param.lifetime);
+        let type_params: Vec<_> = generics.type_params().collect();
+        let type_args = type_params.iter().map(|param| &param.ident);
+        quote! {
+            #[allow(dead_code)]
+            fn __sync_is_the_signature<#(#type_params),*>() #where_clause {
+                let _: for<#(#lifetimes),*> fn(#(#inputs),*) -> #output = #body::<#(#type_args),*>;
+            }
+        }
+    });
+    quote! {
+        const _: () = {
+            #[deny(elided_lifetimes_in_paths)]
+            #[allow(dead_code, unused_variables, clippy::all)]
+            fn __signature #generics (#(_: #inputs),*) -> #output #where_clause {
+                loop {}
+            }
+
+            #sync_check
+        };
+    }
 }
 
 /// The dispatch of each body the function has: an awaited body's, with its
 /// returning body's where `sync` names one, or a returning body's. Both open
 /// one signature's arguments and call a function of it.
 fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident) -> TokenStream {
-    let arguments: Vec<(usize, Ident, syn::Type)> = sig
+    // The values the entry hands the body: one per parameter taking an
+    // argument, in the arguments' order, and one per parameter taking an
+    // impl, in the requirements' order.
+    let given: Vec<Ident> =
+        sig.params.iter().enumerate().filter(|(_, p)| p.role.takes_argument()).map(|(i, _)| format_ident!("__given{}", i)).collect();
+    let chosen: Vec<Ident> =
+        sig.params.iter().enumerate().filter(|(_, p)| p.role.takes_impl()).map(|(i, _)| format_ident!("__chosen{}", i)).collect();
+    // Each parameter opened once, from its values, at its Rust type or by the
+    // mode its requirement's Rust type picks for its role.
+    let opens: Vec<TokenStream> = sig
         .params
         .iter()
         .enumerate()
-        .filter(|(_, p)| matches!(p.role, Role::Argument))
-        .map(|(i, p)| (i, format_ident!("__a{}", i), sig.at_stand_ins(&p.ty, runtime)))
-        .collect();
-    // Each argument opened once, by the mode its parameter's Rust type
-    // picks, from the value the entry hands it at its position.
-    let given: Vec<Ident> = arguments.iter().map(|(i, _, _)| format_ident!("__given{}", i)).collect();
-    let opens: Vec<TokenStream> = arguments
-        .iter()
-        .zip(&given)
-        .map(|((_, a, ty), given)| quote!(let #a = #given.open::<<#ty as ::acvus_extern::decl::ParamMode>::Mode>();))
+        .filter_map(|(i, p)| {
+            let ty = sig.at_stand_ins(&p.ty, runtime);
+            let (a, given, chosen) = (format_ident!("__a{}", i), format_ident!("__given{}", i), format_ident!("__chosen{}", i));
+            match p.role {
+                Role::Argument => Some(quote!(let #a = #given.open::<#ty>();)),
+                Role::Requires => Some(quote! {
+                    let #a = #chosen.open::<<#ty as ::acvus_extern::decl::RequiresParam<#runtime>>::Mode>();
+                }),
+                Role::Instance => Some(quote! {
+                    let #a = #given.open_with::<<#ty as ::acvus_extern::decl::InstanceParam<#runtime>>::Mode>(#chosen);
+                }),
+                Role::Capture { .. } | Role::Executor => None,
+            }
+        })
         .collect();
     let call_args: Vec<TokenStream> = sig
         .params
@@ -318,7 +411,7 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
             match &p.role {
                 Role::Capture { .. } => quote!(&self.#name),
                 Role::Executor => quote!(__executor),
-                Role::Argument => {
+                Role::Argument | Role::Requires | Role::Instance => {
                     let a = format_ident!("__a{}", i);
                     quote!(#a)
                 }
@@ -335,17 +428,11 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
 
     let bounds = sig.runtime_bounds();
     let bounds = quote!(#(+ #bounds)*);
-    let arity = arguments.len();
-    // The attribute states no requirement yet: a site chooses no impl.
-    let requirements = 0usize;
+    let arity = given.len();
+    let requirements = chosen.len();
 
     let returning = |call: TokenStream| {
         let finish = match sig.output {
-            Output::Borrowed => quote! {
-                #executor
-                let __result = #call;
-                __cx.finish_borrowed(__result)
-            },
             Output::Never => quote! {
                 #executor
                 match #call {}
@@ -364,7 +451,7 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
                     args: [<#runtime as ::acvus_extern::runtime::Runtime>::Value; #arity],
                     site: &::acvus_extern::SiteShape<#runtime, #requirements>,
                 ) -> ::acvus_extern::done::Done<#runtime> {
-                    ::acvus_extern::Entry::new(runtime, args, site).open(|__cx, [#(#given),*], []| {
+                    ::acvus_extern::Entry::new(runtime, args, site).open(|__cx, [#(#given),*], [#(#chosen),*]| {
                         #(#opens)*
                         #finish
                     })
@@ -382,7 +469,7 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
             #executor
             match #call.await {}
         },
-        Output::Value | Output::Borrowed => quote! {
+        Output::Value => quote! {
             #executor
             let __result = #call.await;
             __cx.finish(__result)
@@ -398,7 +485,7 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
                 site: &'c ::acvus_extern::SiteShape<#runtime, #requirements>,
             ) -> impl ::core::future::Future<Output = ::acvus_extern::done::Done<#runtime>> + ::core::marker::Send + 'c {
                 ::acvus_extern::Entry::new(runtime, args, site)
-                    .open_awaited(move |__cx, [#(#given),*], []| {
+                    .open_awaited(move |__cx, [#(#given),*], [#(#chosen),*]| {
                         #(#opens)*
                         async move {
                             #awaited_finish

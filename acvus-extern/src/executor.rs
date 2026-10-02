@@ -4,9 +4,8 @@
 //! awaited, and finishes.
 
 use crate::boundary::entry::Settled;
-use crate::borrowed::{Borrows, Sink};
 use crate::done::Done;
-use crate::runtime::{Crosses, Runtime};
+use crate::runtime::{Give, Runtime};
 
 pub struct Executor<'c, R: Runtime> {
     runtime: &'c R,
@@ -22,23 +21,13 @@ impl<'c, R: Runtime> Executor<'c, R> {
         self.runtime
     }
 
-    /// Finishes the call with its result, crossed at the site's settled result
-    /// type.
-    pub fn finish<T: Crosses<R>>(self, value: T) -> Done<R> {
-        Done::of(value.give(self.runtime, Settled::of_the_entry()))
-    }
-
-    /// Finishes the call with a result that borrows: each reference in it a
-    /// reference value made from it, at a lifetime within this call (runtime
-    /// contract §2, References). Which loan each holds, an argument's lent in
-    /// place or one a carrier holds, the declaration's lifetimes say. Only a
-    /// returning body's result borrows (macros §1).
-    pub fn finish_borrowed<'s>(self, result: impl Borrows<'s, R>) -> Done<R>
+    /// Finishes the call with its result at the site's settled result type: a
+    /// runtime value, at the loan `'s` it borrows for (crossing §4).
+    pub fn finish<'s, P: Give<'s, R>>(self, result: P) -> Done<R>
     where
         'c: 's,
     {
-        let sink = Sink::of_the_finish(self.runtime, Settled::of_the_entry());
-        Done::of(result.made(&sink).into_value())
+        Done::of(result.give(self.runtime, Settled::of_the_entry()))
     }
 
     pub fn sleep(&self, d: std::time::Duration) -> impl Future<Output = ()> + Send {

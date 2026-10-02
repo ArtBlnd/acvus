@@ -2,7 +2,7 @@
 //! `&` is written at, where its type is one, and every other name written in
 //! it. This is all the attribute reads of a signature's lifetimes; it refuses
 //! a bound written between them. Where each name lies in a declared type is the
-//! type's, read by the compiler (rfc_extern macros §4; acvus_extern::decl::labels).
+//! type's, read by the compiler (rfc_extern macros §1; acvus_extern::decl::labels).
 //!
 //! An elided lifetime is named here: in an argument, freshly, as Rust elides
 //! it there; in the result, as the one lifetime the inputs name, as Rust does.

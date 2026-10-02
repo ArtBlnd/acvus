@@ -3,27 +3,31 @@ use std::marker::PhantomData;
 use acvus_mir::ty::IntTy;
 use acvus_utils::Interner;
 
-use super::{DeclType, EffectNth, Nth, ParamMode};
-use crate::boundary::entry::mode::{ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
+use super::{DeclType, EffectNth, Nth};
 use crate::boundary::stub::Stub;
 use crate::boundary::uniform::Uniform;
-use crate::callback::{Callable, Lent};
-use crate::decl::{DeclEffect, DeclTy};
+use crate::callback::Callable;
+use crate::decl::{DeclEffect, DeclTy, decl_in};
+use crate::runtime::{MutKey, Open, Place, RefKey};
 
 fn decl<T: DeclType + ?Sized>() -> DeclTy {
     let names = Interner::new();
     T::decl_ty(&names)
 }
 
-fn param<T: ParamMode>() -> DeclTy {
+fn param<T>() -> DeclTy
+where
+    T: Open<'static, Stub>,
+{
     let names = Interner::new();
-    T::decl(&names)
+    decl_in::<Stub, T>(&names)
 }
 
-/// Compiles only where `M` is `P`'s mode.
-fn mode_of<P: ParamMode, M>(_: PhantomData<M>)
+/// Compiles only where `K` is `P`'s key.
+fn key_of<P, K>(_: PhantomData<K>)
 where
-    P::Mode: Is<M>,
+    P: Place<'static, Stub>,
+    P::Key: Is<K>,
 {
 }
 
@@ -59,11 +63,11 @@ fn a_type_variables_value_is_its_parameter() {
 
 #[test]
 fn a_reference_is_a_ref_to_its_target() {
-    assert_eq!(decl::<&str>(), shared(DeclTy::Str));
-    assert_eq!(decl::<&mut String>(), exclusive(DeclTy::String));
-    assert_eq!(decl::<&[Uniform<Stub, Nth<0>>]>(), shared(DeclTy::Slice(Box::new(DeclTy::Param(0)))));
+    assert_eq!(param::<&str>(), shared(DeclTy::Str));
+    assert_eq!(param::<&mut String>(), exclusive(DeclTy::String));
+    assert_eq!(param::<&[Uniform<Stub, Nth<0>>]>(), shared(DeclTy::Slice(Box::new(DeclTy::Param(0)))));
     assert_eq!(
-        decl::<&mut [Uniform<Stub, i64>]>(),
+        param::<&mut [Uniform<Stub, i64>]>(),
         exclusive(DeclTy::Slice(Box::new(DeclTy::Int(IntTy::I64))))
     );
 }
@@ -71,7 +75,7 @@ fn a_reference_is_a_ref_to_its_target() {
 #[test]
 fn a_function_value_is_a_function_type_at_its_effect_variable() {
     assert_eq!(
-        decl::<Uniform<Stub, Callable<'_, (Lent<str>, i64), bool, EffectNth<2>>>>(),
+        decl::<Uniform<Stub, Callable<'_, (RefKey<str>, i64), bool, EffectNth<2>>>>(),
         DeclTy::Fn {
             params: vec![shared(DeclTy::Str), DeclTy::Int(IntTy::I64)],
             result: Box::new(DeclTy::Bool),
@@ -81,18 +85,21 @@ fn a_function_value_is_a_function_type_at_its_effect_variable() {
 }
 
 #[test]
-fn a_parameters_type_picks_its_mode() {
-    mode_of::<i64, ByValue<i64>>(PhantomData);
-    mode_of::<Uniform<Stub, Nth<0>>, ByUniform<Nth<0>>>(PhantomData);
-    mode_of::<&String, ByRef<String>>(PhantomData);
-    mode_of::<&mut String, ByMut<String>>(PhantomData);
-    mode_of::<&[Uniform<Stub, Nth<0>>], BySlice<Nth<0>>>(PhantomData);
-    mode_of::<&mut [Uniform<Stub, u8>], BySliceMut<u8>>(PhantomData);
-    mode_of::<&str, ByStr>(PhantomData);
-    mode_of::<Uniform<Stub, Callable<'_, (i64,), i64, EffectNth<0>>>, ByUniform<Callable<'_, (i64,), i64, EffectNth<0>>>>(
+fn a_parameters_type_picks_its_key() {
+    key_of::<i64, i64>(PhantomData);
+    key_of::<Uniform<Stub, Nth<0>>, Uniform<Stub, Nth<0>>>(PhantomData);
+    key_of::<&String, RefKey<String>>(PhantomData);
+    key_of::<&mut String, MutKey<String>>(PhantomData);
+    key_of::<&[Uniform<Stub, Nth<0>>], RefKey<[Uniform<Stub, Nth<0>>]>>(PhantomData);
+    key_of::<&mut [Uniform<Stub, u8>], MutKey<[u8]>>(PhantomData);
+    key_of::<&[u8], RefKey<[u8]>>(PhantomData);
+    key_of::<&[Uniform<Stub, u8>], RefKey<[u8]>>(PhantomData);
+    key_of::<Uniform<Stub, u8>, u8>(PhantomData);
+    key_of::<&str, RefKey<str>>(PhantomData);
+    key_of::<Uniform<Stub, Callable<'_, (i64,), i64, EffectNth<0>>>, Uniform<Stub, Callable<'_, (i64,), i64, EffectNth<0>>>>(
         PhantomData,
     );
-    mode_of::<&Uniform<Stub, Callable<'_, (i64,), i64, EffectNth<0>>>, ByRef<Uniform<Stub, Callable<'_, (i64,), i64, EffectNth<0>>>>>(
+    key_of::<&Uniform<Stub, Callable<'_, (i64,), i64, EffectNth<0>>>, RefKey<Uniform<Stub, Callable<'_, (i64,), i64, EffectNth<0>>>>>(
         PhantomData,
     );
     assert_eq!(param::<&str>(), shared(DeclTy::Str));

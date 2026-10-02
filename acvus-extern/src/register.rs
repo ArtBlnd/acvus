@@ -1,14 +1,14 @@
 //! Registering an extern fn with a runtime, one function at a time and at
 //! once (registry). A registered function is its dispatch: the glue
 //! `#[extern_fn]` writes, which takes the call's argument run and opens each
-//! argument by its own mode, monomorphised at the runtime and at every
+//! argument at the Rust type its parameter writes, monomorphised at the runtime and at every
 //! parameter's type, so the runtime reaches the body by the one indirect call
 //! it makes to the function and nothing else is dispatched or tested.
 
 use acvus_utils::{Interner, QualifiedRef};
 
 use crate::boundary::entry::SiteShape;
-use crate::boundary::seal::ExternFns;
+use crate::boundary::seal::{ExternFns, Families};
 use crate::decl::{Declaration, GenericDeclaration};
 use crate::done::Done;
 use crate::runtime::Runtime;
@@ -24,7 +24,7 @@ use crate::runtime::Runtime;
 /// without a length and a compare.
 pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send + Sync + 'static {
     /// Runs one call: the entry over `args` and `site`, each argument opened
-    /// by its mode, the body, and its result.
+    /// at its parameter's Rust type, the body, and its result.
     fn call(&self, runtime: &R, args: [R::Value; N], site: &SiteShape<R, M>) -> Done<R>;
 }
 
@@ -41,8 +41,8 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// fn f(a: i64) -> i64 { a }
 /// ```
 ///
-/// A generic parameter bounded by anything but one `Var<kind::..>`, beside
-/// the runtime:
+/// A generic parameter bounded by anything but one `TypeVar<R>`, `EffectVar`
+/// or `IdentityVar`, beside the runtime:
 ///
 /// ```compile_fail
 /// use acvus_extern::runtime::Runtime;
@@ -71,6 +71,16 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// ```compile_fail
 /// #[acvus_extern::extern_fn]
 /// fn f(text: &'static str) -> usize { text.len() }
+/// ```
+///
+/// A lifetime elided in a path, which a signature names:
+///
+/// ```compile_fail
+/// use acvus_extern::Loaned;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::extern_fn]
+/// fn f<R: Runtime>(text: Loaned<String, R>) {}
 /// ```
 ///
 /// A result whose lifetime is the executor's alone:
@@ -164,13 +174,6 @@ pub trait ExternFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send
 /// #[acvus_extern::extern_fn]
 /// fn g(#[update(f)] counter: &mut i64, by: i64) {}
 /// ```
-///
-/// An awaited body whose result borrows:
-///
-/// ```compile_fail
-/// #[acvus_extern::extern_fn]
-/// async fn f(text: &str) -> &str { text }
-/// ```
 pub trait Declared<R: Runtime> {
     /// The declaration's path, the name a compiled call names it by: the
     /// function's own, whatever it captures, so another declaration names it
@@ -186,30 +189,45 @@ pub trait Declared<R: Runtime> {
 /// family marker. It has no dispatch: a call of it is a call of the impl it
 /// reaches.
 ///
+/// Only `#[generic_fn]` makes a family (the seal `Families`): a family
+/// written by hand, which could state a run its impls do not take, does not
+/// compile.
+///
+/// ```compile_fail,E0277
+/// #[allow(non_camel_case_types)]
+/// struct fake {}
+///
+/// impl acvus_extern::instance::GenericFunction for fake {
+///     type Takes = acvus_extern::instance::receiver::Shared;
+/// }
+/// ```
+///
 /// A generic function states nothing a body states, so the attribute refuses
 /// an effect, a fact, an executor, a capture and an awaited signature:
 ///
 /// ```compile_fail
-/// use acvus_extern::decl::{Var, kind};
+/// use acvus_extern::decl::TypeVar;
+/// use acvus_extern::runtime::Runtime;
 ///
 /// #[acvus_extern::generic_fn(effect = pure)]
-/// fn same<T: Var<kind::Type>>(a: &T, b: &T) -> bool;
+/// fn same<R: Runtime, T: TypeVar<R>>(a: &T, b: &T) -> bool;
 /// ```
 ///
 /// ```compile_fail
-/// use acvus_extern::decl::{Var, kind};
+/// use acvus_extern::decl::TypeVar;
+/// use acvus_extern::runtime::Runtime;
 ///
 /// #[acvus_extern::generic_fn]
-/// async fn same<T: Var<kind::Type>>(a: T, b: T) -> bool;
+/// async fn same<R: Runtime, T: TypeVar<R>>(a: T, b: T) -> bool;
 /// ```
 ///
 /// ```compile_fail
-/// use acvus_extern::decl::{Var, kind};
+/// use acvus_extern::decl::TypeVar;
 /// use acvus_extern::executor::Executor;
 /// use acvus_extern::runtime::Runtime;
 ///
 /// #[acvus_extern::generic_fn]
-/// fn same<R: Runtime, T: Var<kind::Type>>(#[executor] cx: &Executor<'_, R>, a: &T, b: &T) -> bool;
+/// fn same<R: Runtime, T: TypeVar<R>>(#[executor] cx: &Executor<'_, R>, a: &T, b: &T) -> bool;
 /// ```
 ///
 /// An impl's signature is its generic function's at the choice it writes;
@@ -217,14 +235,121 @@ pub trait Declared<R: Runtime> {
 ///
 /// ```compile_fail
 /// use acvus_extern::Uniform;
-/// use acvus_extern::decl::{Var, kind};
+/// use acvus_extern::decl::TypeVar;
 /// use acvus_extern::runtime::Runtime;
 ///
 /// #[acvus_extern::generic_fn]
-/// fn same<T: Var<kind::Type>>(a: &T, b: &T) -> bool;
+/// fn same<R: Runtime, T: TypeVar<R>>(a: &T, b: &T) -> bool;
 ///
 /// #[acvus_extern::extern_fn(impl_of = same<Uniform<R, i64>>)]
 /// fn same_i64<R: Runtime>(a: &Uniform<R, i64>) -> bool { true }
+/// ```
+///
+/// A requirement is written by its role, and its Rust type is that role's:
+/// a handle at a type for a generic function taking its receiver by `&`,
+/// the receiver with its impl for one taking it by value or by `&mut`:
+///
+/// ```compile_fail
+/// use acvus_extern::callback::CallsBack;
+/// use acvus_extern::decl::TypeVar;
+/// use acvus_extern::executor::Executor;
+/// use acvus_extern::instance::Instance;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::generic_fn]
+/// fn bump<R: Runtime, T: TypeVar<R>>(counter: &mut T) -> u64;
+///
+/// #[acvus_extern::extern_fn]
+/// fn f<R: CallsBack, T: TypeVar<R>>(#[executor] cx: &Executor<'_, R>, #[requires] c: Instance<R, bump, (T,)>) -> u64 { 0 }
+/// ```
+///
+/// ```compile_fail
+/// use acvus_extern::callback::CallsBack;
+/// use acvus_extern::decl::TypeVar;
+/// use acvus_extern::executor::Executor;
+/// use acvus_extern::instance::InstanceOf;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::generic_fn]
+/// fn bump<R: Runtime, T: TypeVar<R>>(counter: &mut T) -> u64;
+///
+/// #[acvus_extern::extern_fn]
+/// fn f<R: CallsBack, T: TypeVar<R>>(#[executor] cx: &Executor<'_, R>, #[requires] c: &InstanceOf<R, bump, (T,)>) -> u64 { 0 }
+/// ```
+///
+/// ```compile_fail
+/// use acvus_extern::callback::CallsBack;
+/// use acvus_extern::decl::TypeVar;
+/// use acvus_extern::executor::Executor;
+/// use acvus_extern::instance::Instance;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::generic_fn]
+/// fn same<R: Runtime, T: TypeVar<R>>(a: &T, b: &T) -> bool;
+///
+/// #[acvus_extern::extern_fn]
+/// fn f<R: CallsBack, T: TypeVar<R>>(#[executor] cx: &Executor<'_, R>, #[instance] c: Instance<R, same, (T,)>) -> u64 { 0 }
+/// ```
+///
+/// A type variable's place takes a held value, `Uniform<R, X>`: a Rust
+/// value is its type's own representation, which never stands for a type
+/// variable (runtime contract §1), whether an impl chooses it or a
+/// requirement does:
+///
+/// ```compile_fail
+/// use acvus_extern::decl::TypeVar;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::generic_fn]
+/// fn same<R: Runtime, T: TypeVar<R>>(a: &T, b: &T) -> bool;
+///
+/// #[acvus_extern::extern_fn(impl_of = same<i64>)]
+/// fn same_i64(a: &i64, b: &i64) -> bool { a == b }
+/// ```
+///
+/// ```compile_fail
+/// use acvus_extern::callback::CallsBack;
+/// use acvus_extern::decl::TypeVar;
+/// use acvus_extern::executor::Executor;
+/// use acvus_extern::instance::InstanceOf;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::generic_fn]
+/// fn same<R: Runtime, T: TypeVar<R>>(a: &T, b: &T) -> bool;
+///
+/// #[acvus_extern::extern_fn]
+/// fn f<R: CallsBack>(#[executor] cx: &Executor<'_, R>, #[requires] eq: &InstanceOf<R, same, (i64,)>) -> bool { true }
+/// ```
+///
+/// An impl takes no requirement as a parameter: the impls it requires are
+/// its value's captures (impls §2):
+///
+/// ```compile_fail
+/// use acvus_extern::Uniform;
+/// use acvus_extern::callback::CallsBack;
+/// use acvus_extern::decl::TypeVar;
+/// use acvus_extern::instance::InstanceOf;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::generic_fn]
+/// fn same<R: Runtime, T: TypeVar<R>>(a: &T, b: &T) -> bool;
+///
+/// #[acvus_extern::extern_fn(impl_of = same<Uniform<R, i64>>)]
+/// fn same_i64<R: CallsBack>(#[requires] eq: &InstanceOf<R, same, (Uniform<R, i64>,)>, a: &Uniform<R, i64>, b: &Uniform<R, i64>) -> bool { true }
+/// ```
+///
+/// An impl states no name: it is reached only through its generic function:
+///
+/// ```compile_fail
+/// use acvus_extern::Uniform;
+/// use acvus_extern::decl::TypeVar;
+/// use acvus_extern::runtime::Runtime;
+///
+/// #[acvus_extern::generic_fn]
+/// fn same<R: Runtime, T: TypeVar<R>>(a: &T, b: &T) -> bool;
+///
+/// #[acvus_extern::extern_fn(impl_of = same<Uniform<R, i64>>, name = "same_i64")]
+/// fn same_i64<R: Runtime>(a: &Uniform<R, i64>, b: &Uniform<R, i64>) -> bool { true }
 /// ```
 ///
 /// `generic` marks an impl, so it is stated with `impl_of`:
@@ -233,21 +358,12 @@ pub trait Declared<R: Runtime> {
 /// #[acvus_extern::extern_fn(generic)]
 /// fn f(n: u64) -> u64 { n }
 /// ```
-pub trait GenericDeclared<R: Runtime> {
+pub trait GenericDeclared<R: Runtime>: Families {
     /// The generic function's path: its Rust module path and its name.
     fn path(names: &Interner) -> QualifiedRef;
 
     /// What the compiler knows of the generic function.
     fn declaration(names: &Interner) -> GenericDeclaration;
-}
-
-/// A generic function's signature at its variables `Ts`, as the Rust
-/// function pointer type of its parameters and its result: an impl stating
-/// it is one at `Ts` has exactly this signature (extern fn §6). Each of `Ts`
-/// is the Rust type a value of its variable is: a variable, whose own name
-/// is that type, or `Uniform<R, X>`.
-pub trait FamilyAt<R: Runtime, Ts> {
-    type Signature;
 }
 
 /// An awaited function's dispatch at the runtime `R`, whose call is a future
@@ -257,8 +373,8 @@ pub trait FamilyAt<R: Runtime, Ts> {
 /// own. Only `#[extern_fn]` implements it (the seal), for an `async fn`.
 pub trait AwaitedFn<R: Runtime, const N: usize, const M: usize>: ExternFns + Send + Sync + 'static {
     /// Runs one call: the entry over `args` and `site`, each argument opened
-    /// by its mode before the future is made, the body awaited, and its
-    /// result.
+    /// at its parameter's Rust type before the future is made, the body
+    /// awaited, and its result.
     fn call<'c>(
         &'c self,
         runtime: &'c R,

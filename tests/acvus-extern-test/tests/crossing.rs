@@ -10,13 +10,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use acvus_extern::Uniform;
-use acvus_extern::callback::{Callable, Lent, LentMut};
+use acvus_extern::callback::Callable;
+use acvus_extern::decl::EffectNth;
 use acvus_extern::executor::Executor;
-use acvus_extern::mode::{ByMut, ByRef, BySlice, BySliceMut, ByStr, ByUniform, ByValue};
 use acvus_extern::done::Done;
 use acvus_extern::register::{Declared, ExternFn, Refused, Registers};
-use acvus_extern::runtime::{Crosses, Runtime};
-use acvus_extern::{Argument, Entry, Mode, SiteShape};
+use acvus_extern::runtime::{Form, Key, Place, Ref, RefMut, Runtime};
+use acvus_extern::{Argument, Entry, SiteShape};
 use acvus_utils::QualifiedRef;
 use acvus_extern_test::{Frame, Number, Pair, Pass, Tally, WordRuntime};
 
@@ -57,7 +57,7 @@ fn a_path_registered_returning_and_awaited_is_refused() {
 
 /// A variable holding `value`, made as a program makes one: the result of a
 /// call.
-fn produce<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
+fn produce<T: for<'l> Place<'l, WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
     frame.call([], |entry| entry.open(|cx, [], []| cx.finish(value)))
 }
 
@@ -65,7 +65,7 @@ fn produce<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
 fn read_array(frame: &mut Frame<'_>, pass: Pass) -> Vec<i64> {
     let mut read = None;
     frame.call([pass], |entry| {
-        entry.open(|cx, [__given0], []| { let run = __given0.open::<BySlice<i64>>(); 
+        entry.open(|cx, [__given0], []| { let run = __given0.open::<&[Uniform<WordRuntime, i64>]>(); 
             read = Some(run.iter().map(|element| element.get(&cx)).collect());
             cx.finish(())
         })
@@ -74,10 +74,10 @@ fn read_array(frame: &mut Frame<'_>, pass: Pass) -> Vec<i64> {
 }
 
 /// A variable's value, given to a call that takes it by value.
-fn read<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
+fn read<T: for<'l> Place<'l, WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
     let mut read = None;
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let value = __given0.open::<ByValue<T>>(); 
+        entry.open(|cx, [__given0], []| { let value = __given0.open::<T>(); 
             read = Some(value);
             cx.finish(())
         })
@@ -89,7 +89,7 @@ fn read<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
 fn read_name(frame: &mut Frame<'_>, pass: Pass) -> String {
     let mut read = None;
     frame.call([pass], |entry| {
-        entry.open(|cx, [__given0], []| { let lent = __given0.open::<ByRef<Pair>>(); 
+        entry.open(|cx, [__given0], []| { let lent = __given0.open::<&Pair>(); 
             read = Some(lent.name.clone());
             cx.finish(())
         })
@@ -101,7 +101,7 @@ fn read_name(frame: &mut Frame<'_>, pass: Pass) -> String {
 fn read_text(frame: &mut Frame<'_>, pass: Pass) -> String {
     let mut read = None;
     frame.call([pass], |entry| {
-        entry.open(|cx, [__given0], []| { let text = __given0.open::<ByStr>(); 
+        entry.open(|cx, [__given0], []| { let text = __given0.open::<&str>(); 
             read = Some(String::from(&*text));
             cx.finish(())
         })
@@ -133,7 +133,7 @@ fn a_value_taken_at_once_is_released_by_the_handler_once() {
     let variable = produce(&mut frame, value);
 
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let taken = __given0.open::<ByValue<Tally>>(); 
+        entry.open(|cx, [__given0], []| { let taken = __given0.open::<Tally>(); 
             drop(taken);
             cx.finish(())
         })
@@ -152,7 +152,7 @@ fn a_held_value_only_dropped_is_released_once() {
     let variable = produce(&mut frame, value);
 
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let held = __given0.open::<ByUniform<Tally>>(); 
+        entry.open(|cx, [__given0], []| { let held = __given0.open::<Uniform<WordRuntime, Tally>>(); 
             drop(held);
             cx.finish(())
         })
@@ -172,7 +172,7 @@ fn a_held_value_taken_is_released_by_its_new_owner_once() {
 
     let mut kept = None;
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let held = __given0.open::<ByUniform<Tally>>(); 
+        entry.open(|cx, [__given0], []| { let held = __given0.open::<Uniform<WordRuntime, Tally>>(); 
             kept = Some(held.into_inner(&cx));
             cx.finish(())
         })
@@ -192,7 +192,7 @@ fn a_held_value_is_read_and_written_in_place() {
 
     let mut read = None;
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let mut held = __given0.open::<ByUniform<Pair>>(); 
+        entry.open(|cx, [__given0], []| { let mut held = __given0.open::<Uniform<WordRuntime, Pair>>(); 
             let before = held.open(&cx).name.len();
             held.open_mut(&cx).name.push_str(" and written");
             read = Some((before, held.into_inner(&cx).name));
@@ -226,7 +226,7 @@ fn a_reference_to_a_variable_opens_as_the_value_it_holds() {
 
     let mut read = None;
     frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let held = __given0.open::<ByRef<Uniform<WordRuntime, String>>>(); 
+        entry.open(|cx, [__given0], []| { let held = __given0.open::<&Uniform<WordRuntime, String>>(); 
             read = Some(held.open(&cx).clone());
             cx.finish(())
         })
@@ -259,7 +259,7 @@ fn a_held_primitive_is_read_and_written_by_a_copy() {
 
     let mut read = None;
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let mut held = __given0.open::<ByUniform<i64>>(); 
+        entry.open(|cx, [__given0], []| { let mut held = __given0.open::<Uniform<WordRuntime, i64>>(); 
             let before = held.get(&cx);
             held.set(&cx, 9);
             read = Some((before, held.into_inner(&cx)));
@@ -300,7 +300,7 @@ fn an_exclusive_lend_writes_the_variable_in_place() {
     let variable = produce(&mut frame, pair("lent"));
 
     frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let lent = __given0.open::<ByMut<Pair>>(); 
+        entry.open(|cx, [__given0], []| { let lent = __given0.open::<&mut Pair>(); 
             lent.name.push_str(" and written");
             cx.finish(())
         })
@@ -325,7 +325,7 @@ fn a_borrowed_result_names_the_whole_lent_value() {
     let variable = produce(&mut frame, pair("whole"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let lent = __given0.open::<ByRef<Pair>>(); cx.finish_borrowed(&*lent) })
+        entry.open(|cx, [__given0], []| { let lent = __given0.open::<&Pair>(); cx.finish(&*lent) })
     });
 
     assert_eq!(read_name(&mut frame, Pass::Same(borrowed)), "whole");
@@ -338,7 +338,7 @@ fn a_borrowed_result_names_a_range_of_lent_text() {
     let variable = produce(&mut frame, String::from("a range"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let text = __given0.open::<ByStr>(); cx.finish_borrowed(&text[2..5]) })
+        entry.open(|cx, [__given0], []| { let text = __given0.open::<&str>(); cx.finish(&text[2..5]) })
     });
 
     assert_eq!(read_text(&mut frame, Pass::Same(borrowed)), "ran");
@@ -351,7 +351,7 @@ fn a_borrowed_result_names_a_strings_text() {
     let variable = produce(&mut frame, pair("owned text"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let lent = __given0.open::<ByRef<Pair>>(); cx.finish_borrowed(lent.name.as_str()) })
+        entry.open(|cx, [__given0], []| { let lent = __given0.open::<&Pair>(); cx.finish(lent.name.as_str()) })
     });
 
     assert_eq!(read_text(&mut frame, Pass::Same(borrowed)), "owned text");
@@ -365,7 +365,7 @@ fn pair(name: &str) -> Pair {
 fn read_number(frame: &mut Frame<'_>, pass: Pass) -> Number {
     let mut read = None;
     frame.call([pass], |entry| {
-        entry.open(|cx, [__given0], []| { let number = __given0.open::<ByRef<Number>>(); 
+        entry.open(|cx, [__given0], []| { let number = __given0.open::<&Number>(); 
             read = Some(*number);
             cx.finish(())
         })
@@ -380,7 +380,7 @@ fn a_borrowed_result_names_a_field() {
     let variable = produce(&mut frame, pair("field"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let lent = __given0.open::<ByRef<Pair>>(); cx.finish_borrowed(&lent.lead) })
+        entry.open(|cx, [__given0], []| { let lent = __given0.open::<&Pair>(); cx.finish(&lent.lead) })
     });
 
     assert_eq!(read_number(&mut frame, Pass::Same(borrowed)), Number(2));
@@ -393,7 +393,7 @@ fn a_borrowed_result_names_an_element_the_lent_value_owns() {
     let variable = produce(&mut frame, pair("element"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let lent = __given0.open::<ByRef<Pair>>(); cx.finish_borrowed(&lent.items[1]) })
+        entry.open(|cx, [__given0], []| { let lent = __given0.open::<&Pair>(); cx.finish(&lent.items[1]) })
     });
 
     assert_eq!(read_number(&mut frame, Pass::Same(borrowed)), Number(5));
@@ -406,10 +406,10 @@ fn a_writable_borrowed_result_writes_the_lent_value() {
     let variable = produce(&mut frame, pair("borrowed"));
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let lent = __given0.open::<ByMut<Pair>>(); cx.finish_borrowed(&mut *lent) })
+        entry.open(|cx, [__given0], []| { let lent = __given0.open::<&mut Pair>(); cx.finish(&mut *lent) })
     });
     frame.call([Pass::Same(borrowed)], |entry| {
-        entry.open(|cx, [__given0], []| { let target = __given0.open::<ByMut<Pair>>(); 
+        entry.open(|cx, [__given0], []| { let target = __given0.open::<&mut Pair>(); 
             target.name.push_str(" and written");
             cx.finish(())
         })
@@ -426,13 +426,13 @@ fn an_array_is_lent_as_a_slice() {
 
     let mut sum = None;
     frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let run = __given0.open::<BySlice<i64>>(); 
+        entry.open(|cx, [__given0], []| { let run = __given0.open::<&[Uniform<WordRuntime, i64>]>(); 
             sum = Some(run.iter().map(|element| element.get(&cx)).sum::<i64>());
             cx.finish(())
         })
     });
     frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let run = __given0.open::<BySliceMut<i64>>(); 
+        entry.open(|cx, [__given0], []| { let run = __given0.open::<&mut [Uniform<WordRuntime, i64>]>(); 
             for element in run.iter_mut() {
                 let doubled = element.get(&cx) * 2;
                 element.set(&cx, doubled);
@@ -452,7 +452,7 @@ fn a_borrowed_result_names_a_run_of_a_lent_slice() {
     let variable = frame.array(&[3i64, 5, 8]);
 
     let borrowed = frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let run = __given0.open::<BySlice<i64>>(); cx.finish_borrowed(&run[1..]) })
+        entry.open(|cx, [__given0], []| { let run = __given0.open::<&[Uniform<WordRuntime, i64>]>(); cx.finish(&run[1..]) })
     });
 
     assert_eq!(read_array(&mut frame, Pass::Same(borrowed)), [5, 8]);
@@ -474,7 +474,7 @@ fn an_awaited_body_takes_its_argument_and_finishes_after_a_wait() {
     let text = produce(&mut frame, String::from("awaited"));
 
     let length = executor().block_on(frame.call_awaited([Pass::Give(text)], async |entry| {
-        let body = entry.open_awaited(|cx, [__given0], []| { let text = __given0.open::<ByValue<String>>(); async move {
+        let body = entry.open_awaited(|cx, [__given0], []| { let text = __given0.open::<String>(); async move {
             cx.sleep(Duration::from_millis(1)).await;
             cx.finish(text.len() as i64)
         } });
@@ -491,7 +491,7 @@ fn an_awaited_body_reads_its_lend_before_a_wait() {
     let text = produce(&mut frame, pair("held across"));
 
     let length = executor().block_on(frame.call_awaited([Pass::Lend(text)], async |entry| {
-        let body = entry.open_awaited(|cx, [__given0], []| { let lent = __given0.open::<ByRef<Pair>>(); {
+        let body = entry.open_awaited(|cx, [__given0], []| { let lent = __given0.open::<&Pair>(); {
             let length = lent.name.len() as i64;
             async move {
                 cx.sleep(Duration::from_millis(1)).await;
@@ -512,7 +512,7 @@ fn an_awaited_body_holds_a_guard_across_a_wait() {
     let text = produce(&mut frame, pair("held across a wait"));
 
     let length = executor().block_on(frame.call_awaited([Pass::Lend(text)], async |entry| {
-        let body = entry.open_awaited(|cx, [__given0], []| { let lent = __given0.open::<ByRef<Pair>>(); async move {
+        let body = entry.open_awaited(|cx, [__given0], []| { let lent = __given0.open::<&Pair>(); async move {
             cx.sleep(Duration::from_millis(1)).await;
             let length = lent.name.len() as i64;
             cx.finish(length)
@@ -525,27 +525,27 @@ fn an_awaited_body_holds_a_guard_across_a_wait() {
 }
 
 /// A function value's dispatch, written as `#[extern_fn]` writes one: the
-/// entry over the argument run, each argument opened by its mode `A`, the body
+/// entry over the argument run, each argument opened at the shape keys `A`, the body
 /// `f`, and its result given.
 struct Dispatch<A, F> {
     f: F,
-    _modes: PhantomData<fn() -> A>,
+    _keys: PhantomData<fn() -> A>,
 }
 
 fn dispatch<A, F>(f: F) -> Dispatch<A, F> {
-    Dispatch { f, _modes: PhantomData }
+    Dispatch { f, _keys: PhantomData }
 }
 
 // SAFETY: this stands in for `#[extern_fn]`: `call` opens the arguments by
-// the modes `A` the body `f` takes them at.
+// the shape keys `A` the body `f` takes them at.
 #[allow(unsafe_code)]
 unsafe impl<A, F> acvus_extern::seal::ExternFns for Dispatch<A, F> {}
 
 impl<R, A, U, F, const N: usize> ExternFn<R, N, 0> for Dispatch<A, F>
 where
     R: Runtime,
-    A: Modes<R, N> + 'static,
-    U: Crosses<R>,
+    A: Keys<R, N> + 'static,
+    U: for<'c> Form<'c, R>,
     F: for<'c> Fn(&Executor<'c, R>, A::Opened<'c>) -> U + Send + Sync + 'static,
 {
     fn call(&self, runtime: &R, args: [R::Value; N], site: &SiteShape<R, 0>) -> Done<R> {
@@ -556,9 +556,9 @@ where
     }
 }
 
-/// The modes of a dispatch's arguments, a tuple of one or two, each argument
-/// opened by its own.
-trait Modes<R: Runtime, const N: usize> {
+/// The shape keys of a dispatch's arguments, a tuple of one or two, each
+/// argument opened at its own shape's form.
+trait Keys<R: Runtime, const N: usize> {
     type Opened<'c>
     where
         Self: 'c,
@@ -569,9 +569,13 @@ trait Modes<R: Runtime, const N: usize> {
         Self: 'c;
 }
 
-impl<R: Runtime, P: Mode<R>> Modes<R, 1> for (P,) {
+impl<R, P> Keys<R, 1> for (P,)
+where
+    R: Runtime,
+    P: for<'c> Key<'c, R>,
+{
     type Opened<'c>
-        = (P::Opened<'c>,)
+        = (<P as Key<'c, R>>::At,)
     where
         Self: 'c,
         R: 'c;
@@ -580,13 +584,18 @@ impl<R: Runtime, P: Mode<R>> Modes<R, 1> for (P,) {
     where
         Self: 'c,
     {
-        (p.open::<P>(),)
+        (p.open::<<P as Key<'c, R>>::At>(),)
     }
 }
 
-impl<R: Runtime, P: Mode<R>, Q: Mode<R>> Modes<R, 2> for (P, Q) {
+impl<R, P, Q> Keys<R, 2> for (P, Q)
+where
+    R: Runtime,
+    P: for<'c> Key<'c, R>,
+    Q: for<'c> Key<'c, R>,
+{
     type Opened<'c>
-        = (P::Opened<'c>, Q::Opened<'c>)
+        = (<P as Key<'c, R>>::At, <Q as Key<'c, R>>::At)
     where
         Self: 'c,
         R: 'c;
@@ -595,7 +604,7 @@ impl<R: Runtime, P: Mode<R>, Q: Mode<R>> Modes<R, 2> for (P, Q) {
     where
         Self: 'c,
     {
-        (p.open::<P>(), q.open::<Q>())
+        (p.open::<<P as Key<'c, R>>::At>(), q.open::<<Q as Key<'c, R>>::At>())
     }
 }
 
@@ -608,7 +617,7 @@ fn length_of<R: Runtime>(_: &Executor<'_, R>, (text,): (&str,)) -> i64 {
 fn a_function_value_is_called_through_its_dispatch() {
     let runtime = WordRuntime::default();
     let mut frame = Frame::new(&runtime);
-    let function = frame.function(dispatch::<(ByStr,), _>(length_of::<WordRuntime>));
+    let function = frame.function(dispatch::<(Ref<str>,), _>(length_of::<WordRuntime>));
     let short = produce(&mut frame, String::from("four"));
     let long = produce(&mut frame, String::from("eleven long"));
 
@@ -625,7 +634,7 @@ fn a_function_value_releases_what_it_captures_once() {
     let runtime = WordRuntime::default();
     let (captured, drops) = tally();
     let mut frame = Frame::new(&runtime);
-    let function = frame.function(dispatch::<(ByValue<i64>,), _>(move |_: &Executor<'_, WordRuntime>, (n,): (i64,)| {
+    let function = frame.function(dispatch::<(i64,), _>(move |_: &Executor<'_, WordRuntime>, (n,): (i64,)| {
         n + Arc::strong_count(&captured.0) as i64
     }));
 
@@ -642,11 +651,11 @@ fn a_function_value_releases_what_it_captures_once() {
 fn a_callback_is_lent_a_part_of_the_handlers_storage() {
     let runtime = WordRuntime::default();
     let mut frame = Frame::new(&runtime);
-    let function = frame.function(dispatch::<(ByStr,), _>(length_of::<WordRuntime>));
+    let function = frame.function(dispatch::<(Ref<str>,), _>(length_of::<WordRuntime>));
     let text = produce(&mut frame, String::from("lent to a callback"));
 
     let called = executor().block_on(frame.call_awaited([Pass::Lend(text), Pass::Lend(function)], async |entry| {
-        let body = entry.open_awaited(|cx, [__given0, __given1], []| { let text = __given0.open::<ByStr>(); let callback = __given1.open::<ByRef<Uniform<WordRuntime, Callable<'_, (Lent<str>,), i64, ()>>>>(); async move {
+        let body = entry.open_awaited(|cx, [__given0, __given1], []| { let text = __given0.open::<&str>(); let callback = __given1.open::<&Uniform<WordRuntime, Callable<'_, (Ref<str>,), i64, EffectNth<0>>>>(); async move {
                 let first = callback.call(&cx, (&*text,));
                 let second = callback.call(&cx, (&*text,));
                 cx.finish(first + second)
@@ -660,7 +669,7 @@ fn a_callback_is_lent_a_part_of_the_handlers_storage() {
 
 /// Appends to the name of a `Pair` lent exclusively, in the view its crossing
 /// opens.
-fn append_written<'c, R: Runtime>(_: &Executor<'c, R>, (lent,): (<Pair as Crosses<R>>::OpenMut<'c>,)) {
+fn append_written<'c, R: Runtime>(_: &Executor<'c, R>, (lent,): (&'c mut Pair,)) {
     lent.name.push_str(" and written");
 }
 
@@ -672,11 +681,11 @@ fn words_in<R: Runtime>(_: &Executor<'_, R>, (text,): (&str,)) -> i64 {
 fn a_callback_writes_through_a_part_lent_exclusively() {
     let runtime = WordRuntime::default();
     let mut frame = Frame::new(&runtime);
-    let append = frame.function(dispatch::<(ByMut<Pair>,), _>(append_written::<WordRuntime>));
+    let append = frame.function(dispatch::<(RefMut<Pair>,), _>(append_written::<WordRuntime>));
     let lent = produce(&mut frame, pair("lent"));
 
     executor().block_on(frame.call_awaited([Pass::Lend(lent), Pass::Lend(append)], async |entry| {
-        let body = entry.open_awaited(|cx, [__given0, __given1], []| { let lent = __given0.open::<ByMut<Pair>>(); let callback = __given1.open::<ByRef<Uniform<WordRuntime, Callable<'_, (LentMut<Pair>,), (), ()>>>>(); async move {
+        let body = entry.open_awaited(|cx, [__given0, __given1], []| { let lent = __given0.open::<&mut Pair>(); let callback = __given1.open::<&Uniform<WordRuntime, Callable<'_, (RefMut<Pair>,), (), EffectNth<0>>>>(); async move {
                 callback.call(&cx, (&mut *lent,));
                 cx.finish(())
             } });
@@ -690,11 +699,11 @@ fn a_callback_writes_through_a_part_lent_exclusively() {
 fn a_callback_is_lent_text() {
     let runtime = WordRuntime::default();
     let mut frame = Frame::new(&runtime);
-    let count = frame.function(dispatch::<(ByStr,), _>(words_in::<WordRuntime>));
+    let count = frame.function(dispatch::<(Ref<str>,), _>(words_in::<WordRuntime>));
     let text = produce(&mut frame, String::from("three short words and more"));
 
     let called = executor().block_on(frame.call_awaited([Pass::Lend(text), Pass::Lend(count)], async |entry| {
-        let body = entry.open_awaited(|cx, [__given0, __given1], []| { let text = __given0.open::<ByStr>(); let callback = __given1.open::<ByRef<Uniform<WordRuntime, Callable<'_, (Lent<str>,), i64, ()>>>>(); async move {
+        let body = entry.open_awaited(|cx, [__given0, __given1], []| { let text = __given0.open::<&str>(); let callback = __given1.open::<&Uniform<WordRuntime, Callable<'_, (Ref<str>,), i64, EffectNth<0>>>>(); async move {
                 let words = callback.call(&cx, (&text[..17],));
                 cx.finish(words)
             } });
@@ -716,10 +725,10 @@ fn an_awaited_callback_takes_its_arguments_by_move() {
     let runtime = WordRuntime::default();
     let (value, drops) = tally();
     let mut frame = Frame::new(&runtime);
-    let consume = frame.function(dispatch::<(ByValue<String>, ByUniform<Tally>), _>(length_and_drop::<WordRuntime>));
+    let consume = frame.function(dispatch::<(String, Uniform<WordRuntime, Tally>), _>(length_and_drop::<WordRuntime>));
 
     let called = executor().block_on(frame.call_awaited([Pass::Give(consume)], async |entry| {
-        let body = entry.open_awaited(|cx, [__given0], []| { let callback = __given0.open::<ByUniform<Callable<'_, (String, Tally), i64, ()>>>(); async move {
+        let body = entry.open_awaited(|cx, [__given0], []| { let callback = __given0.open::<Uniform<WordRuntime, Callable<'_, (String, Tally), i64, EffectNth<0>>>>(); async move {
             cx.sleep(Duration::from_millis(1)).await;
             let length = callback.call_await(&cx, (String::from("moved"), value)).await;
             cx.finish(length)
@@ -740,7 +749,7 @@ fn held_length<R: Runtime>(cx: &Executor<'_, R>, (held,): (Uniform<R, String>,))
 fn a_function_body_reads_its_held_argument_through_its_executor() {
     let runtime = WordRuntime::default();
     let mut frame = Frame::new(&runtime);
-    let function = frame.function(dispatch::<(ByUniform<String>,), _>(held_length::<WordRuntime>));
+    let function = frame.function(dispatch::<(Uniform<WordRuntime, String>,), _>(held_length::<WordRuntime>));
     let text = produce(&mut frame, String::from("held"));
 
     let called = frame.call_function(function, [Pass::Give(text)]);
@@ -788,7 +797,7 @@ fn a_type_variables_value_crosses_inside_an_option() {
 
     let mut taken = None;
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let held = __given0.open::<ByValue<Option<Uniform<WordRuntime, Tally>>>>(); 
+        entry.open(|cx, [__given0], []| { let held = __given0.open::<Option<Uniform<WordRuntime, Tally>>>(); 
             taken = held.map(|held| held.into_inner(&cx));
             cx.finish(())
         })
@@ -806,7 +815,7 @@ fn a_string_lent_exclusively_is_written_in_place() {
     let variable = produce(&mut frame, String::from("lent"));
 
     frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let lent = __given0.open::<ByMut<String>>(); 
+        entry.open(|cx, [__given0], []| { let lent = __given0.open::<&mut String>(); 
             lent.push_str(" and written");
             cx.finish(())
         })
@@ -823,7 +832,7 @@ fn a_primitive_lent_exclusively_is_written_in_place() {
 
     let mut before = None;
     frame.call([Pass::Lend(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let lent = __given0.open::<ByMut<i16>>(); 
+        entry.open(|cx, [__given0], []| { let lent = __given0.open::<&mut i16>(); 
             before = Some(*lent);
             *lent = -300;
             cx.finish(())
@@ -832,48 +841,4 @@ fn a_primitive_lent_exclusively_is_written_in_place() {
 
     assert_eq!(before, Some(5));
     assert_eq!(read::<i16>(&mut frame, variable), -300);
-}
-
-/// The name of the pair an option lent holds, where it holds one: the option
-/// taken as its projection.
-#[acvus_extern::extern_fn(effect = pure)]
-fn name_if(o: Option<&Pair>) -> Option<String> {
-    o.map(|pair| pair.name.clone())
-}
-
-#[test]
-fn a_lent_option_is_viewed_as_its_part() {
-    let runtime = WordRuntime::default();
-    let mut frame = Frame::new(&runtime);
-    let present = produce(&mut frame, Some(pair("inside")));
-    let absent = produce(&mut frame, None::<Pair>);
-    let function = frame.function(name_if::new());
-
-    let named = frame.call_function(function, [Pass::Lend(present)]);
-    let unnamed = frame.call_function(function, [Pass::Lend(absent)]);
-
-    assert_eq!(read::<Option<String>>(&mut frame, named), Some(String::from("inside")));
-    assert_eq!(read::<Option<String>>(&mut frame, unnamed), None);
-}
-
-#[test]
-fn a_held_tuple_is_opened_as_its_parts() {
-    let runtime = WordRuntime::default();
-    let mut frame = Frame::new(&runtime);
-    let variable = produce(&mut frame, (4i64, String::from("held")));
-
-    let mut read = None;
-    frame.call([Pass::Give(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let mut held = __given0.open::<ByUniform<(i64, String)>>(); 
-            {
-                let (number, text) = held.open_mut(&cx);
-                *number *= 2;
-                text.push_str(" and written");
-            }
-            read = Some(held.into_inner(&cx));
-            cx.finish(())
-        })
-    });
-
-    assert_eq!(read, Some((8, String::from("held and written"))));
 }

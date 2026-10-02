@@ -1,38 +1,7 @@
 # limitations
 
-What an extern fn cannot do, and what it cannot rely on.
+## 1. Keeping
 
-## 0. No erased value from a Rust value
+A handler keeps nothing it was lent past its call; what it keeps, it takes by value. Every value a call lends a handler carries the call's lifetime in its Rust type, so Rust refuses keeping one. No runtime type identity is read at the boundary.
 
-An extern fn cannot erase a Rust value into a runtime value. No such path exists anywhere (runtime contract §1). It may hold a Rust value of a type that crosses at that type, and the value stays of it.
-
-## 1. Types
-
-- No declaration carries an array type, or an array length. A sequence enters as a slice and leaves as a `Vec`. Registration refuses a declaration with an array type, whoever built it.
-- An extern-defined type is opaque to the program: it equals only itself, is never widened, and crosses exactly as declared, containers included. A program's value meets it only through a declared conversion.
-- An enum a declaration writes does not grow. A pattern naming a variant it lacks is refused.
-- An extern's type parameter is parametric: the extern cannot inspect the type that passes through it.
-
-## 2. Calls
-
-- A callback is callable any number of times. An extern cannot ask for a callback that is called once.
-- An awaited call of a callback takes its arguments by move; only a returning call lends the handler's storage, and its result borrows only what it lent, no longer than that loan.
-- An extern that wants threads brings its own pool and joins it before it returns. The contract spawns nothing.
-
-## 3. Keeping
-
-A handler keeps nothing it was lent past its call. What it wants to keep, it takes by value.
-
-No type parameter of an extern is bounded `'static`, and every value a call lends a handler, a callback included, carries the call's lifetime in its Rust type; a handler that retains one past the call is rejected by Rust's borrow checker. No runtime type identity (`TypeId`, `Any`) is read at the boundary.
-
-*Rejected.* `'static` type parameters with a run-time type check: it permits the retention, and re-checks at run time what the checker settled.
-
-An extern-defined result may retain arguments taken by value past the call. A retained argument may hold loans on places of the calling program, a callback through its captures included. The declaration's flows map each such loan from the argument's lifetime position to a lifetime position of the result; the result holds the mapped loans while it is live, and the checker applies them to the borrowed places for that duration. Taking an argument by value permits retaining it; it does not end the loans it holds. A retained loan is held as the runtime's reference value, never as a Rust reference: each use opens it within a call (crossing §1), so no Rust reference to lent storage outlives the guard it came from.
-
-## 4. Trust
-
-Every declared fact is trusted and unchecked in a release build. A false one is the author's undefined behaviour (compiler: extern fn).
-
-## 5. unsafe
-
-An extern author writes no `unsafe`. The only facts an author signs are the structural facts about a type the derive reads (safety §2), and a hand-written implementation for a foreign type signs the same facts.
+An extern-defined result may keep arguments taken by value, with the loans they hold, a function value's captures included. The declaration's flows map each such loan to a lifetime of the result, and the checker holds it while the result is live. A kept loan is a reference value, never a Rust reference, and is opened only within a call (crossing §1).

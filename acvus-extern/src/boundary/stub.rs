@@ -11,7 +11,7 @@ use crate::boundary::entry::Settled;
 use crate::boundary::signed::{SignedS1, SignedS2, SignedS3};
 use crate::boundary::uniform::{Primitive, Release, Releasing};
 use crate::runtime::{
-    Opaque, OpaqueKind, OptionKind, PrimitiveKind, RefKind, RefTarget, ResultKind, Runtime, StringKind, TupleKind,
+    Opaque, OpaqueKind, OptionKind, PrimitiveKind, RefKind, ResultKind, Runtime, StringKind, TupleKind, ViewKind,
 };
 
 /// A value that counts its releases and names no storage.
@@ -48,6 +48,7 @@ impl Runtime for Stub {
     type Option = NoKind;
     type Result = NoKind;
     type Tuple = NoKind;
+    type View = NoKind;
     type Ref = NoKind;
 
     fn interner(&self) -> &Interner {
@@ -114,12 +115,6 @@ impl OptionKind<Stub> for NoKind {
     fn take(_: &Stub, _: Counted, _: Settled<'_>) -> Option<Counted> {
         unreachable!()
     }
-    fn shared<'a>(_: &'a Stub, _: &'a Counted, _: Settled<'a>) -> Option<&'a Counted> {
-        unreachable!()
-    }
-    fn exclusive<'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> Option<&'a mut Counted> {
-        unreachable!()
-    }
 }
 
 impl ResultKind<Stub> for NoKind {
@@ -127,12 +122,6 @@ impl ResultKind<Stub> for NoKind {
         unreachable!()
     }
     fn take(_: &Stub, _: Counted, _: Settled<'_>) -> Result<Counted, Counted> {
-        unreachable!()
-    }
-    fn shared<'a>(_: &'a Stub, _: &'a Counted, _: Settled<'a>) -> Result<&'a Counted, &'a Counted> {
-        unreachable!()
-    }
-    fn exclusive<'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> Result<&'a mut Counted, &'a mut Counted> {
         unreachable!()
     }
 }
@@ -144,22 +133,37 @@ impl TupleKind<Stub> for NoKind {
     fn take<const N: usize>(_: &Stub, _: Counted, _: Settled<'_>) -> [Counted; N] {
         unreachable!()
     }
-    fn shared<'a, const N: usize>(_: &'a Stub, _: &'a Counted, _: Settled<'a>) -> &'a [Counted; N] {
+}
+
+impl ViewKind<Stub> for NoKind {
+    fn text<'a>(_: &'a Stub, _: &'a Counted, _: usize, _: usize, _: Settled<'a>) -> Counted {
         unreachable!()
     }
-    fn exclusive<'a, const N: usize>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> &'a mut [Counted; N] {
+    fn text_mut<'a>(_: &'a Stub, _: &'a mut Counted, _: usize, _: usize, _: Settled<'a>) -> Counted {
+        unreachable!()
+    }
+    fn narrow<'a>(_: &'a Stub, _: Counted, _: usize, _: usize, _: Settled<'a>) -> Counted {
+        unreachable!()
+    }
+    fn places<'l>(_: &'l Stub, _: Counted, _: Settled<'l>) -> &'l [Counted] {
+        unreachable!()
+    }
+    fn places_mut<'l>(_: &'l Stub, _: Counted, _: Settled<'l>) -> &'l mut [Counted] {
+        unreachable!()
+    }
+    fn str<'l>(_: &'l Stub, _: Counted, _: Settled<'l>) -> &'l str {
+        unreachable!()
+    }
+    fn str_mut<'l>(_: &'l Stub, _: Counted, _: Settled<'l>) -> &'l mut str {
         unreachable!()
     }
 }
 
 impl RefKind<Stub> for NoKind {
-    fn reference<'a, P: ?Sized>(_: &'a Stub, _: RefTarget<'a, P>, _: Settled<'a>) -> Counted {
+    fn of<'a>(_: &'a Stub, _: &'a Counted, _: Settled<'a>) -> Counted {
         unreachable!()
     }
-    fn target<'l, P: ?Sized>(_: &'l Stub, _: Counted, _: Settled<'l>) -> &'l P {
-        unreachable!()
-    }
-    fn target_mut<'l, P: ?Sized>(_: &'l Stub, _: Counted, _: Settled<'l>) -> &'l mut P {
+    fn of_mut<'a>(_: &'a Stub, _: &'a mut Counted, _: Settled<'a>) -> Counted {
         unreachable!()
     }
     fn place<'l>(_: &'l Stub, _: Counted, _: Settled<'l>) -> &'l Counted {

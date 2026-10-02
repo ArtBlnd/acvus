@@ -8,12 +8,15 @@
 //! - `loaned`: a retained loan is opened only within a call, at the type it
 //!   was lent at (K12).
 //! - `signed`: the facts no type can carry, signed by a runtime or a derive.
-//! - `seal`: the crossing trait whose methods choose a typed read's type is
-//!   implemented only here (safety §1).
+//! - `instance`: a requirement's handle is the site's impl value seen in
+//!   place, lent for the call (impls §3).
+//! - `seal`: the seals, one `unsafe` trait per meaning, implemented only
+//!   here and by the macros (safety §1).
 
 #![allow(unsafe_code)]
 
 pub(crate) mod entry;
+pub mod instance;
 pub(crate) mod loaned;
 pub mod seal;
 pub(crate) mod signed;

@@ -1,6 +1,7 @@
 //! The one door of one call (crossing §1): it hands the body the call's
 //! arguments and the impls its site chose, each a value to open once by its
-//! parameter's mode at the site's settled type, and its executor, inside a
+//! parameter's Rust type or its requirement's mode at the site's settled
+//! type, and its executor, inside a
 //! closure (G1, G9, G10).
 
 use std::marker::PhantomData;
@@ -55,7 +56,8 @@ impl<'c, R: Runtime, const N: usize, const M: usize> Entry<'c, R, N, M> {
     }
 
     /// Runs the returning body with the call's arguments and the impls its
-    /// site chose, each to be opened once by its parameter's mode.
+    /// site chose, each to be opened once at its parameter's Rust type or
+    /// by its requirement's mode.
     pub fn open(
         self,
         body: impl FnOnce(Executor<'c, R>, [Argument<'c, R>; N], [Impl<'c, R>; M]) -> Done<R>,
@@ -81,12 +83,12 @@ impl<'c, R: Runtime, const N: usize, const M: usize> Entry<'c, R, N, M> {
     fn given(&self) -> ([Argument<'c, R>; N], [Impl<'c, R>; M]) {
         let (runtime, at) = (self.runtime, Settled::of_the_entry());
         let args = self.args.map(|value| Argument { runtime, value, at });
-        let impls = self.site.impls.map(|value| Impl { runtime, value, at });
+        let impls = self.site.impls.each_ref().map(|place| Impl { runtime, place, at });
         (args, impls)
     }
 }
 
-/// One argument of a call, opened once by its parameter's mode: only the
+/// One argument of a call, opened once at its parameter's Rust type: only the
 /// entry makes one, and opening it consumes it.
 pub struct Argument<'c, R: Runtime> {
     runtime: &'c R,
@@ -95,42 +97,33 @@ pub struct Argument<'c, R: Runtime> {
 }
 
 impl<'c, R: Runtime> Argument<'c, R> {
-    /// The argument opened by the mode `P` its parameter's Rust type picks.
-    pub fn open<P: Mode<R> + 'c>(self) -> P::Opened<'c> {
+    /// The argument opened as the Rust type `P` its parameter writes, at the
+    /// call's loan (crossing §2).
+    pub fn open<P: Open<'c, R>>(self) -> P {
         P::open(self.runtime, self.value, self.at)
+    }
+
+    /// The argument opened with the impl its site chose for it, by the
+    /// mode `B` of a parameter that takes both (impls §3).
+    pub fn open_with<B: PairedMode<R> + 'c>(self, r#impl: Impl<'c, R>) -> B::Opened<'c> {
+        B::open(self.runtime, self.value, r#impl.place, self.at)
     }
 }
 
 /// One impl a call's site chose for a requirement (impls §3), opened once by
 /// its requirement's mode: only the entry makes one, and opening it
-/// consumes it.
+/// consumes it. The impl's value is the site's, lent for the call.
 pub struct Impl<'c, R: Runtime> {
     runtime: &'c R,
-    value: R::Value,
+    place: &'c R::Value,
     at: Settled<'c>,
 }
 
 impl<'c, R: Runtime> Impl<'c, R> {
     /// The impl opened by the mode `Q` its requirement's Rust type picks.
     pub fn open<Q: RequirementMode<R> + 'c>(self) -> Q::Opened<'c> {
-        Q::open(self.runtime, self.value, self.at)
+        Q::open(self.runtime, self.place, self.at)
     }
-}
-
-/// A parameter's mode, chosen by its Rust type (macros §4): how the entry
-/// opens its argument as the Rust argument the handler's parameter takes,
-/// within the call `'c`.
-pub trait Mode<R: Runtime>: Crossing {
-    type Opened<'c>
-    where
-        Self: 'c,
-        R: 'c;
-
-    #[doc(hidden)]
-    fn open<'c>(runtime: &'c R, v: R::Value, at: Settled<'c>) -> Self::Opened<'c>
-    where
-        Self: 'c,
-        R: 'c;
 }
 
 /// A requirement's mode: how the entry opens the impl the site chose.
@@ -140,86 +133,84 @@ pub trait RequirementMode<R: Runtime>: Crossing {
         Self: 'c,
         R: 'c;
 
+    /// Opens the impl the site chose, its value the site's, lent for the
+    /// call.
     #[doc(hidden)]
-    fn open<'c>(runtime: &'c R, impl_value: R::Value, at: Settled<'c>) -> Self::Opened<'c>
+    fn open<'c>(runtime: &'c R, r#impl: &'c R::Value, at: Settled<'c>) -> Self::Opened<'c>
     where
         Self: 'c,
         R: 'c;
 }
 
-/// The parameter modes (macros §2, crossing §2).
+/// The mode of a parameter that takes an argument and the impl its site
+/// chose for it, as one value (impls §3).
+pub trait PairedMode<R: Runtime>: Crossing {
+    type Opened<'c>
+    where
+        Self: 'c,
+        R: 'c;
+
+    /// Opens the argument with the impl the site chose for it, its value
+    /// the site's, lent for the call.
+    #[doc(hidden)]
+    fn open<'c>(runtime: &'c R, argument: R::Value, r#impl: &'c R::Value, at: Settled<'c>) -> Self::Opened<'c>
+    where
+        Self: 'c,
+        R: 'c;
+}
+
+/// The requirements' modes.
 pub mod mode {
     use std::marker::PhantomData;
 
-    /// Taken by value where the handler needs the value itself: taken at once
-    /// by its crossing.
-    pub struct ByValue<T>(PhantomData<fn() -> T>);
-    /// Held by value where the handler writes `Uniform<R, T>`: read in place,
-    /// released if dropped, taken only by `into_inner`.
-    pub struct ByUniform<T>(PhantomData<fn() -> T>);
-    /// Lent `&T`, opened as `T`'s view of what the reference names.
-    pub struct ByRef<T>(PhantomData<fn() -> T>);
-    /// Lent `&mut T`, opened as `T`'s exclusive view.
-    pub struct ByMut<T>(PhantomData<fn() -> T>);
-    /// A program's array lent as `&[Uniform<R, T>]` or `&mut [Uniform<R, T>]`,
-    /// its argument a reference to the array or to a run of it, read through
-    /// `target`.
-    pub struct BySlice<T>(PhantomData<fn() -> T>);
-    pub struct BySliceMut<T>(PhantomData<fn() -> T>);
-    /// Text lent as `&str`, its argument a reference to a `String` or to a
-    /// range of one, read through `target`.
-    pub struct ByStr;
-    /// A reference kept as it is, a carrier: `Loaned<'a, T, R>` for `&T`,
-    /// `LoanedMut<'a, T, R>` for `&mut T`, for a result to hold the loan
-    /// (limitations §3).
-    pub struct ByLoaned<T>(PhantomData<fn() -> T>);
-    pub struct ByLoanedMut<T>(PhantomData<fn() -> T>);
+    /// A requirement held as a handle at a type, `&InstanceOf<R, G, Ts>`,
+    /// the site's impl value lent for the call (impls §3).
+    pub struct ByInstanceOf<G, Ts>(PhantomData<fn() -> (G, Ts)>);
+    /// A receiver and the impl the site chose for it, owned as one value,
+    /// `Instance<R, G, Ts>`: the argument taken, and the impl given its own
+    /// value (impls §3).
+    pub struct ByInstance<G, Ts>(PhantomData<fn() -> (G, Ts)>);
 }
 
 use mode::*;
 
-use crate::boundary::loaned::{Loaned, LoanedMut};
+use crate::boundary::seal::{Crossing, Families};
 use crate::boundary::uniform::Uniform;
-use crate::boundary::seal::Crossing;
-use crate::runtime::{Crosses, RefKind};
+use crate::callback::CallsBack;
+use crate::instance::{Holds, Instance, InstanceOf};
+use crate::runtime::Open;
 
-macro_rules! modes {
-    ($r:ident; $([$($g:tt)*] $m:ty => $opened:ty, |$runtime:ident, $v:ident, $at:ident| $open:expr;)+) => {$(
-        impl<$r: Runtime, $($g)*> Mode<$r> for $m {
-            type Opened<'c> = $opened
-            where
-                Self: 'c,
-                $r: 'c;
+impl<R: Runtime, G: Families, Ts> RequirementMode<R> for ByInstanceOf<G, Ts> {
+    type Opened<'c>
+        = &'c InstanceOf<R, G, Ts>
+    where
+        Self: 'c,
+        R: 'c;
 
-            fn open<'c>($runtime: &'c $r, $v: $r::Value, $at: Settled<'c>) -> Self::Opened<'c>
-            where
-                Self: 'c,
-                $r: 'c,
-            {
-                $open
-            }
-        }
-    )+};
+    fn open<'c>(_runtime: &'c R, r#impl: &'c R::Value, _at: Settled<'c>) -> Self::Opened<'c>
+    where
+        Self: 'c,
+        R: 'c,
+    {
+        InstanceOf::at_place(r#impl)
+    }
 }
 
-modes! {
-    R;
-    [T: Crosses<R>] ByValue<T> => T,
-        |runtime, v, at| T::take(runtime, v, at);
-    [T: Crosses<R>] ByRef<T> => T::Open<'c>,
-        |runtime, v, at| T::open_ref(runtime, v, at);
-    [T: Crosses<R>] ByMut<T> => T::OpenMut<'c>,
-        |runtime, v, at| T::open_ref_mut(runtime, v, at);
-    [T] ByUniform<T> => Uniform<R, T>,
-        |_runtime, v, _at| Uniform::of_the_crossing(v);
-    [T] BySlice<T> => &'c [Uniform<R, T>],
-        |runtime, v, at| <R::Ref as RefKind<R>>::target(runtime, v, at);
-    [T] BySliceMut<T> => &'c mut [Uniform<R, T>],
-        |runtime, v, at| <R::Ref as RefKind<R>>::target_mut(runtime, v, at);
-    [] ByStr => &'c str,
-        |runtime, v, at| <R::Ref as RefKind<R>>::target(runtime, v, at);
-    [T] ByLoaned<T> => Loaned<'c, T, R>,
-        |_runtime, v, _at| Loaned::of_the_entry(v);
-    [T] ByLoanedMut<T> => LoanedMut<'c, T, R>,
-        |_runtime, v, _at| LoanedMut::of_the_entry(v);
+impl<R: CallsBack, G, Ts> PairedMode<R> for ByInstance<G, Ts>
+where
+    G: Holds<R, Ts>,
+{
+    type Opened<'c>
+        = Instance<R, G, Ts>
+    where
+        Self: 'c,
+        R: 'c;
+
+    fn open<'c>(runtime: &'c R, argument: R::Value, r#impl: &'c R::Value, at: Settled<'c>) -> Self::Opened<'c>
+    where
+        Self: 'c,
+        R: 'c,
+    {
+        Instance::of_the_entry(Uniform::of_the_crossing(argument), Uniform::of_the_crossing(runtime.own(r#impl, at)))
+    }
 }

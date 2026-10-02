@@ -1,257 +1,153 @@
-//! A function value an extern calls (crossing §3-§4): a returning call lends
-//! references and its result borrows only what it lent; an awaited call takes
-//! its arguments by move and lends none of the handler's storage (K3).
+//! A function value an extern calls (crossing §3-§5): returning or awaited,
+//! it lends as Rust lends, and its result borrows only what it lent. An
+//! awaited call's run is held by its call future, so nothing it was lent is
+//! read past the future.
 //!
 //! A function value is held as any value is, in the owning holder indexed by
-//! its function type, `Uniform<R, Callable<'f, A, U, E>>`: taken by value it is
-//! the handler's, released by its drop and kept only where a result holds it;
-//! lent, it is `&Uniform<R, Callable<..>>`. Either body calls one, either
-//! way, through its executor (macros §1).
+//! its function type, `Uniform<R, Callable<'f, A, U, E>>`: taken by value it
+//! is the handler's, released by its drop and kept only where a result holds
+//! it; lent, it is `&Uniform<R, Callable<..>>`. Either body calls one through
+//! its executor (macros §1).
 
 use std::marker::PhantomData;
 
 use crate::boundary::entry::Settled;
-use crate::boundary::seal::Crossing;
-use crate::boundary::uniform::Uniform;
+use crate::boundary::uniform::{Abstract, Index, Uniform};
+use crate::decl::DeclType;
 use crate::executor::Executor;
-use crate::runtime::{Crosses, Opaque, RefKind, RefTarget, Referent, Runtime};
+use crate::runtime::{Give, Key, Open, Runtime};
 
 /// The function type `Fn(A) -> U` at effect `E`, whose values hold the loans
-/// `'f` their captures hold (compiler: ownership §5): an index only, as a type
-/// variable's is, so no Rust value of it exists and nothing is held at it from
-/// Rust. `A` and `U` are loan forms: a returning call lends its arguments for
-/// `'l` and its result may borrow what it lent, no longer (crossing §4); an
-/// awaited call moves its arguments and its result borrows nothing. `E` is
-/// one of the declaration's effect variables (types §2).
+/// `'f` their captures hold (compiler: ownership §5): an index only, so no
+/// Rust value of it exists. `A` is a tuple of the parameters' keys and `U`
+/// the result's (`runtime::Key`). `E` is one of the declaration's effect
+/// variables (types §2).
 pub struct Callable<'f, A, U, E> {
     _never: PhantomData<(&'f (), fn(A) -> U, E)>,
 }
 
-/// A type's form over the loan `'l` a returning call lends: the Rust type it is
-/// at `'l`. A crossing type is itself; `Lent<T>` is `&'l T` and `LentMut<T>` is
-/// `&'l mut T`. Its methods make and read values at the form's type, so it
-/// is sealed: only this crate implements it.
-pub trait LoanForm<R: Runtime>: Crossing {
-    type At<'l>
-    where
-        Self: 'l;
+/// A function value as a part of a function type: its form at the call's
+/// loan `'l` holds what that call lent (compiler: types §5). A function value
+/// a call returns is not used after what the call lent dies:
+///
+/// ```compile_fail,E0597
+/// use acvus_extern::Uniform;
+/// use acvus_extern::callback::{Callable, CallsBack, Func};
+/// use acvus_extern::decl::EffectVar;
+/// use acvus_extern::executor::Executor;
+/// use acvus_extern::runtime::Ref;
+///
+/// fn made<'f, R: CallsBack, E: EffectVar>(
+///     cx: &Executor<'_, R>,
+///     make: &Uniform<R, Callable<'f, (Ref<i64>,), Func<(i64,), i64, E>, E>>,
+/// ) -> i64 {
+///     let made = {
+///         let local = 1i64;
+///         make.call(cx, (&local,))
+///     };
+///     made.call(cx, (2,))
+/// }
+/// ```
+pub struct Func<A, U, E> {
+    _never: PhantomData<fn(A) -> (U, E)>,
+}
 
-    /// The value a returning call's argument crosses as: a reference value to
-    /// a lent leaf, a given value for a crossing leaf.
+impl<'l, R: Runtime, A, U, E> Key<'l, R> for Func<A, U, E>
+where
+    Func<A, U, E>: DeclType,
+    Callable<'l, A, U, E>: DeclType,
+{
+    type Give = Uniform<R, Callable<'l, A, U, E>>;
+    type Open = Uniform<R, Callable<'l, A, U, E>>;
+}
+
+/// A function value has no Rust view: its box is viewed as itself.
+impl<A, U, E> Abstract for Callable<'_, A, U, E> {}
+
+impl<'f, R: Runtime, A, U, E> Index<R> for Callable<'f, A, U, E> {
+    type View = Uniform<R, Callable<'f, A, U, E>>;
+    type Key = Uniform<R, Callable<'f, A, U, E>>;
+}
+
+/// A call's parameters, a tuple of keys: each given as a runtime value at
+/// the loan `'l` the call lends for.
+pub trait Keys<'l, R: Runtime> {
+    type Give;
+
+    /// The argument run, one value per parameter.
     #[doc(hidden)]
-    fn lend<'l>(value: Self::At<'l>, rt: &'l R, at: Settled<'l>) -> R::Value
-    where
-        Self: 'l;
-    /// A returning call's result read back at its form: a reference value's
-    /// target, or the value taken.
-    #[doc(hidden)]
-    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> Self::At<'l>
-    where
-        Self: 'l;
+    fn give_run(args: Self::Give, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>;
 }
 
-/// `&'l T`: a part of what the returning call lent, shared.
-pub struct Lent<T: ?Sized>(PhantomData<fn() -> *const T>);
-/// `&'l mut T`: a part of what the returning call lent, exclusively.
-pub struct LentMut<T: ?Sized>(PhantomData<fn() -> *const T>);
-
-/// A value that crosses is its own loan form: given to the call, and taken
-/// back from it.
-macro_rules! given {
-    ($([$($g:tt)*] $t:ty;)+) => {$(
-        impl<R: Runtime, $($g)*> LoanForm<R> for $t
-        where
-            $t: Crosses<R>,
-        {
-            type At<'l>
-                = $t
-            where
-                Self: 'l;
-
-            fn lend<'l>(value: $t, rt: &'l R, at: Settled<'l>) -> R::Value
-            where
-                Self: 'l,
-            {
-                value.give(rt, at)
-            }
-
-            fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> $t
-            where
-                Self: 'l,
-            {
-                <$t as Crosses<R>>::take(rt, v, at)
-            }
-        }
-    )+};
-}
-
-given! {
-    [T: Opaque] T;
-    [] String;
-    [T] Option<T>;
-    [T, E] Result<T, E>;
-    [X] Uniform<R, X>;
-}
-
-macro_rules! given_primitives {
-    ($($t:ty => $decl:expr),+ $(,)?) => {
-        given! { $([] $t;)+ }
-    };
-}
-
-primitives!(given_primitives);
-
-macro_rules! given_tuples {
-    ($($n:literal ($($p:ident $v:ident $i:tt),+))+) => {
-        given! { $([$($p),+] ($($p,)+);)+ }
-    };
-}
-
-tuples!(given_tuples);
-
-impl<R: Runtime, T: ?Sized + Referent> LoanForm<R> for Lent<T> {
-    type At<'l>
-        = &'l T
-    where
-        Self: 'l;
-
-    fn lend<'l>(value: &'l T, rt: &'l R, at: Settled<'l>) -> R::Value
-    where
-        Self: 'l,
-    {
-        <R::Ref as RefKind<R>>::reference(rt, RefTarget::Shared(value), at)
-    }
-
-    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l T
-    where
-        Self: 'l,
-    {
-        <R::Ref as RefKind<R>>::target(rt, v, at)
-    }
-}
-
-impl<R: Runtime, T: ?Sized + Referent> LoanForm<R> for LentMut<T> {
-    type At<'l>
-        = &'l mut T
-    where
-        Self: 'l;
-
-    fn lend<'l>(value: &'l mut T, rt: &'l R, at: Settled<'l>) -> R::Value
-    where
-        Self: 'l,
-    {
-        <R::Ref as RefKind<R>>::reference(rt, RefTarget::Exclusive(value), at)
-    }
-
-    fn read<'l>(v: R::Value, rt: &'l R, at: Settled<'l>) -> &'l mut T
-    where
-        Self: 'l,
-    {
-        <R::Ref as RefKind<R>>::target_mut(rt, v, at)
-    }
-}
-
-/// A callback's parameters, a tuple of loan forms: lent together for `'l` to a
-/// returning call, or, where every one is a crossing type, moved into an
-/// awaited one.
-pub trait CallArgs<R: Runtime>: Crossing {
-    type Lent<'l>
-    where
-        Self: 'l;
-
-    /// The argument run of a returning call, one value per parameter.
-    #[doc(hidden)]
-    fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>
-    where
-        Self: 'l;
-}
-
-/// A callback's parameters an awaited call is given: each a crossing type,
-/// moved into the call, which lends none of the handler's storage (K3).
-pub trait MovedArgs<R: Runtime>: CallArgs<R> {
-    type Moved;
-
-    /// The argument run of an awaited call.
-    #[doc(hidden)]
-    fn move_run<'a>(args: Self::Moved, rt: &'a R, at: Settled<'a>) -> impl ExactSizeIterator<Item = R::Value>;
-}
-
-/// A callback's parameters of each arity: none, and each tuple of loan
-/// forms.
-macro_rules! forms {
-    ($($n:literal ($($f:ident $v:ident $i:tt),*))+) => {$(
-        impl<R: Runtime, $($f: LoanForm<R>),*> CallArgs<R> for ($($f,)*) {
-            type Lent<'l>
-                = ($($f::At<'l>,)*)
-            where
-                Self: 'l;
+/// A call's parameters of each arity: none, and each tuple of keys.
+macro_rules! keys {
+    ($($n:literal ($($p:ident $v:ident $i:tt),*))+) => {$(
+        impl<'l, R: Runtime, $($p: Key<'l, R>),*> Keys<'l, R> for ($($p,)*) {
+            type Give = ($($p::Give,)*);
 
             #[allow(unused_variables)]
-            fn lend_run<'l>(args: Self::Lent<'l>, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value>
-            where
-                Self: 'l,
-            {
+            fn give_run(args: Self::Give, rt: &'l R, at: Settled<'l>) -> impl ExactSizeIterator<Item = R::Value> {
                 let ($($v,)*) = args;
-                let run: [R::Value; $n] = [$($f::lend($v, rt, at)),*];
-                run.into_iter()
-            }
-        }
-
-        impl<R: Runtime, $($f: Crosses<R> + LoanForm<R>),*> MovedArgs<R> for ($($f,)*) {
-            type Moved = ($($f,)*);
-
-            #[allow(unused_variables)]
-            fn move_run<'a>(args: Self::Moved, rt: &'a R, at: Settled<'a>) -> impl ExactSizeIterator<Item = R::Value> {
-                let ($($v,)*) = args;
-                let run: [R::Value; $n] = [$($v.give(rt, at)),*];
+                let run: [R::Value; $n] = [$(Give::give($v, rt, at)),*];
                 run.into_iter()
             }
         }
     )+};
 }
 
-forms! { 0 () }
-tuples!(forms);
+keys! { 0 () }
+tuples!(keys);
 
-impl<A, U, E, R: CallsBack> Uniform<R, Callable<'_, A, U, E>> {
-    /// A returning call: the arguments lent for `'l`, the result borrowing at
-    /// most what they lend. A function value that may suspend is driven to
-    /// its end here (runtime contract §2, Callbacks).
-    pub fn call<'l>(&'l self, cx: &'l Executor<'_, R>, args: <A as CallArgs<R>>::Lent<'l>) -> U::At<'l>
+impl<'f, A, U, E, R: CallsBack> Uniform<R, Callable<'f, A, U, E>> {
+    /// A returning call, its arguments lent for `'l` and its result
+    /// borrowing only what it lent (crossing §4).
+    pub fn call<'l>(&'l self, cx: &'l Executor<'_, R>, args: <A as Keys<'l, R>>::Give) -> <U as Key<'l, R>>::Open
     where
-        A: CallArgs<R> + 'l,
-        U: LoanForm<R> + 'l,
+        A: Keys<'l, R>,
+        U: Key<'l, R>,
     {
-        cx.runtime().call_now::<A, U>(self.value(), args, Settled::of_the_entry())
+        let (runtime, at) = (cx.runtime(), Settled::of_the_entry());
+        let result = runtime.call_now(self.value(), A::give_run(args, runtime, at), at);
+        <U::Open as Open<'l, R>>::open(runtime, result, at)
     }
 
-    /// An awaited call: the arguments moved, the result borrowing nothing
-    /// (crossing §3-§4).
-    pub fn call_await<'a>(&'a self, cx: &'a Executor<'_, R>, args: A::Moved) -> impl Future<Output = U> + Send + 'a
+    /// An awaited call, its arguments lent for the call future `'a`, which
+    /// holds the call's run (crossing §3, §5).
+    pub fn call_await<'a>(&'a self, cx: &'a Executor<'_, R>, args: <A as Keys<'a, R>>::Give) -> impl Future<Output = <U as Key<'a, R>>::Open> + Send + 'a
     where
-        A: MovedArgs<R>,
-        U: Crosses<R>,
+        A: Keys<'a, R>,
+        U: Key<'a, R>,
+        U::Open: Send,
     {
-        cx.runtime().call_later::<A, U>(self.value(), args, Settled::of_the_entry())
+        let (runtime, at) = (cx.runtime(), Settled::of_the_entry());
+        let result = runtime.call_later(self.value(), A::give_run(args, runtime, at), at);
+        async move { <U::Open as Open<'a, R>>::open(runtime, result.await, at) }
     }
 }
 
 /// Calling a function value, returning or awaited (runtime contract §2): the
-/// arguments are made at the runtime, and the callee's entry is opened at it.
+/// runtime calls it with a run of values the caller made, and gives back the
+/// value of its result, which the caller reads at its type.
 pub trait CallsBack: Runtime {
-    /// A returning call, which drives a function value that may suspend to
-    /// its end where it is called.
-    fn call_now<'l, A, U>(&'l self, closure: Self::Value, args: A::Lent<'l>, at: Settled<'l>) -> U::At<'l>
-    where
-        A: CallArgs<Self> + 'l,
-        U: LoanForm<Self> + 'l;
-    fn call_later<'a, A, U>(
+    /// A returning call of `function` on the argument run `run`: the value
+    /// of its result. A function value that may suspend is driven to its
+    /// end here. A reference value in the run is valid for `'l` only, and
+    /// a given value is the runtime's from the call on.
+    fn call_now<'l>(&'l self, function: Self::Value, run: impl IntoIterator<Item = Self::Value>, at: Settled<'l>) -> Self::Value;
+
+    /// An owned function value of the function `function` names, released
+    /// by its own holder's drop: what an instance keeps of the impl its site
+    /// chose (runtime contract §2, Impls).
+    fn own<'c>(&'c self, function: &'c Self::Value, at: Settled<'c>) -> Self::Value;
+
+    /// An awaited call of `function` on the argument run `run`: the value of
+    /// its result. The call's run is held by the future and ends when it ends
+    /// or is dropped (crossing §5); a reference value in the run is valid for
+    /// `'a` only, and a given value is the runtime's from the call on.
+    fn call_later<'a>(
         &'a self,
-        closure: Self::Value,
-        args: A::Moved,
+        function: Self::Value,
+        run: impl IntoIterator<Item = Self::Value>,
         at: Settled<'a>,
-    ) -> impl Future<Output = U> + Send
-    where
-        A: MovedArgs<Self>,
-        U: Crosses<Self>;
+    ) -> impl Future<Output = Self::Value> + Send + 'a;
 }

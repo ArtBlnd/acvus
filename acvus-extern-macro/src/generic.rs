@@ -1,16 +1,17 @@
 //! What `#[generic_fn]` emits for a generic function's signature (rfc_extern
 //! impls §1-§2, compiler: extern fn §6): its family marker, its declaration,
-//! a name with a signature and no body, and its signature at each choice of
-//! its variables, which an impl's is checked against. It emits no dispatch:
-//! a call of a generic function is a call of the impl it reaches.
+//! a name with a signature and no body, how it takes its receiver, and its
+//! signature at each choice of its variables as keys, which a requirer's
+//! call is made by and an impl's is checked against. It emits no dispatch: a
+//! call of a generic function is a call of the impl it reaches.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
-use syn::{ForeignItemFn, LitStr};
+use syn::{ForeignItemFn, LitStr, Type};
 
 use crate::attr::ExternFnAttr;
-use crate::glue::{Signature, fn_pointer, signature};
-use crate::sig::{Generic, Role, Sig};
+use crate::glue::{Signature, signature, signature_checks};
+use crate::sig::{Generic, Kind, Role, Sig, at_lifetime};
 
 pub fn generic_fn(attr: ExternFnAttr, mut func: ForeignItemFn) -> syn::Result<TokenStream> {
     refuse_body_keys(&attr, &func)?;
@@ -24,7 +25,7 @@ pub fn generic_fn(attr: ExternFnAttr, mut func: ForeignItemFn) -> syn::Result<To
     if let Some(param) = sig.params.iter().find(|p| !matches!(p.role, Role::Argument)) {
         return Err(syn::Error::new(
             param.name.span(),
-            "a generic function has no body, so no capture and no executor: its parameters are its arguments",
+            "a generic function has no body, so no capture, executor or requirement: its parameters are its arguments",
         ));
     }
     if let Some(param) = sig.params.iter().find(|p| !p.place.is_empty()) {
@@ -57,12 +58,71 @@ pub fn generic_fn(attr: ExternFnAttr, mut func: ForeignItemFn) -> syn::Result<To
             Generic::Runtime { .. } => None,
         })
         .collect();
-    let pointer = fn_pointer(&sig, &func.sig.generics);
+    let type_variables = sig.generics.iter().filter_map(|generic| match generic {
+        Generic::Var { ident, kind: Kind::Type, .. } => Some(ident),
+        _ => None,
+    });
+    // Each variable at its kind's bound: a type variable is chosen as any
+    // type its signature's places admit, a value type or a variable of the
+    // requirer's; an effect's and an identity's as a variable of the
+    // requirer's.
+    let bounded = sig.generics.iter().filter_map(|generic| match generic {
+        Generic::Var { ident, kind: Kind::Type, .. } => Some(quote!(#ident: ::acvus_extern::decl::DeclType)),
+        Generic::Var { ident, kind: Kind::Effect, .. } => Some(quote!(#ident: ::acvus_extern::decl::EffectVar)),
+        Generic::Var { ident, kind: Kind::Identity, .. } => Some(quote!(#ident: ::acvus_extern::decl::IdentityVar)),
+        Generic::Runtime { .. } => None,
+    });
+    // Each part's key, read off the signature at one loan.
+    let loan = syn::Lifetime::new("'__p", proc_macro2::Span::call_site());
+    let key = |ty: &Type| {
+        let ty = at_lifetime(ty, &loan);
+        quote!(<#ty as ::acvus_extern::runtime::Place<#loan, #at_runtime>>::Key)
+    };
+    let arguments: Vec<&Type> = sig.params.iter().map(|p| &p.ty).collect();
+    let keys: Vec<TokenStream> = arguments.iter().map(|ty| key(ty)).collect();
+    // Each part names a key at the loan: a choice its places do not admit
+    // has no signature.
+    let places: Vec<TokenStream> = arguments
+        .iter()
+        .copied()
+        .chain([&sig.written_output])
+        .map(|ty| {
+            let ty = at_lifetime(ty, &loan);
+            quote!(#ty: ::acvus_extern::runtime::Place<#loan, #at_runtime>)
+        })
+        .collect();
+    let result_key = key(&sig.written_output);
+    let rest = &keys[keys.len().min(1)..];
+    let (takes, held) = match arguments.first() {
+        None => (quote!(None), quote!(())),
+        Some(Type::Reference(reference)) if reference.mutability.is_some() => {
+            let held = &reference.elem;
+            (quote!(Mut), quote!(#held))
+        }
+        Some(Type::Reference(reference)) => {
+            let held = &reference.elem;
+            (quote!(Shared), quote!(#held))
+        }
+        Some(ty) => (quote!(Value), quote!(#ty)),
+    };
+    let outlive = sig.generics.iter().filter_map(|generic| match generic {
+        Generic::Var { ident, kind: Kind::Type, .. } => Some(quote!(#ident: #loan)),
+        _ => None,
+    });
+    let bounded: Vec<TokenStream> = bounded.collect();
+
+    let checks = signature_checks(&func.sig, None);
 
     Ok(quote! {
-        /// The generic function's family marker (impls §2).
+        #checks
+
+        /// The generic function's family marker (impls §1).
         #[allow(non_camel_case_types)]
         #vis struct #marker {}
+
+        // SAFETY: `#[generic_fn]` wrote this family below from the one
+        // signature it declares: its path and how it takes its receiver.
+        unsafe impl ::acvus_extern::seal::Families for #marker {}
 
         impl<#runtime: ::acvus_extern::runtime::Runtime> ::acvus_extern::register::GenericDeclared<#runtime> for #marker {
             /// The generic function's Rust module path and its name.
@@ -87,10 +147,31 @@ pub fn generic_fn(attr: ExternFnAttr, mut func: ForeignItemFn) -> syn::Result<To
             }
         }
 
-        impl<#at_runtime: ::acvus_extern::runtime::Runtime, #(#variables),*>
-            ::acvus_extern::register::FamilyAt<#at_runtime, (#(#variables,)*)> for #marker
+        impl ::acvus_extern::instance::GenericFunction for #marker {
+            type Takes = ::acvus_extern::instance::receiver::#takes;
+        }
+
+        // SAFETY: `#[generic_fn]` read these keys off the one signature it
+        // declares, at every choice of its variables, each at its kind's
+        // bound, and at every loan.
+        unsafe impl<#loan, #at_runtime: ::acvus_extern::runtime::Runtime, #(#bounded),*> ::acvus_extern::instance::FamilyAt<#loan, #at_runtime, (#(#variables,)*)> for #marker
+        where
+            #(#outlive,)*
+            #(#places,)*
         {
-            type Signature = #pointer;
+            type Params = (#(#keys,)*);
+            type Result = #result_key;
+            type Rest = (#(#rest,)*);
+        }
+
+        // SAFETY: as above, of the same signature: its receiver, and its
+        // type variables in order.
+        unsafe impl<#at_runtime: ::acvus_extern::runtime::Runtime, #(#bounded),*> ::acvus_extern::instance::Holds<#at_runtime, (#(#variables,)*)> for #marker {
+            type Held = #held;
+
+            fn pattern(names: &::acvus_extern::decl::Interner) -> ::std::vec::Vec<::acvus_extern::decl::DeclTy> {
+                ::std::vec![#(<#type_variables as ::acvus_extern::decl::DeclType>::decl_ty(names)),*]
+            }
         }
     })
 }
@@ -115,3 +196,4 @@ fn refuse_body_keys(attr: &ExternFnAttr, func: &ForeignItemFn) -> syn::Result<()
         None => Ok(()),
     }
 }
+

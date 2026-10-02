@@ -7,7 +7,8 @@ use crate::boundary::entry::Settled;
 use crate::boundary::seal::Crossing;
 use crate::boundary::signed::{GenericParam, LayoutFact, Structural, StructuralFacts};
 use crate::executor::Executor;
-use crate::runtime::{Crosses, PrimitiveKind, Runtime};
+use crate::decl::DeclType;
+use crate::runtime::Runtime;
 
 /// The permission to release one value, made only by an owning holder's drop.
 pub struct Releasing {
@@ -23,6 +24,28 @@ pub trait Release: Copy {
 /// The uniform index fixed: every `Uniform<R, X>` has `Uniform<R, Never>` as
 /// its canonical form.
 pub enum Never {}
+
+/// A box as an element of a run: a slice of boxes is the run of their
+/// places.
+pub trait Element<R: Runtime>: Crossing + Sized {
+    #[doc(hidden)]
+    fn slice(places: &[R::Value]) -> &[Self];
+    #[doc(hidden)]
+    fn slice_mut(places: &mut [R::Value]) -> &mut [Self];
+}
+
+impl<R: Runtime, X> Element<R> for Uniform<R, X> {
+    fn slice(places: &[R::Value]) -> &[Self] {
+        // SAFETY: `Uniform` is `repr(transparent)` over the runtime value, so
+        // a slice of values is a slice of boxes, of one length.
+        unsafe { &*(std::ptr::from_ref(places) as *const [Self]) }
+    }
+
+    fn slice_mut(places: &mut [R::Value]) -> &mut [Self] {
+        // SAFETY: as `slice`, exclusively.
+        unsafe { &mut *(std::ptr::from_mut(places) as *mut [Self]) }
+    }
+}
 
 /// The uniform value at a type variable `X`. No trait implemented on it has an
 /// item that depends on `X` (runtime contract §1).
@@ -63,12 +86,66 @@ impl<R: Runtime, X> Uniform<R, X> {
     }
 }
 
-impl<R: Runtime, T: Crosses<R>> Uniform<R, T> {
-    /// `value` held at its own type, within the call `cx` belongs to: its
-    /// crossing makes the runtime's value of it, and the holder keeps `T`,
-    /// so it is read and given only at `T` and never erased (runtime contract
-    /// §1). A type variable's index crosses at no type, so no Rust value is
-    /// held at one:
+/// What a box holds in place, made, taken and viewed through its kind: a
+/// primitive, text, an extern-defined value. Only through the runtime is a
+/// box made, opened or taken.
+pub trait InPlace<R: Runtime>: Crossing + DeclType + Sized {
+    #[doc(hidden)]
+    fn give(self, rt: &R, at: Settled<'_>) -> R::Value;
+    #[doc(hidden)]
+    fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self;
+    #[doc(hidden)]
+    fn shared<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a Self
+    where
+        Self: 'a;
+    #[doc(hidden)]
+    fn exclusive<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut Self
+    where
+        Self: 'a;
+}
+
+/// A box's index whose values have no Rust view of their own: a type
+/// variable's stand-in, the canonical index, a function type, an impl. A box
+/// at one is viewed as the box itself.
+pub trait Abstract {}
+
+impl Abstract for Never {}
+
+/// A box's index, and what a box at it is: viewed as (`View`), and named in a
+/// function type's signature as (`Key`).
+pub trait Index<R: Runtime> {
+    type View: ?Sized;
+    type Key;
+}
+
+/// A box, whatever its index: what a reference value is made from, and what
+/// it is viewed as through one.
+pub trait Boxed<R: Runtime>: Crossing {
+    type View: ?Sized;
+
+    #[doc(hidden)]
+    fn place(&self) -> &R::Value;
+    #[doc(hidden)]
+    fn place_mut(&mut self) -> &mut R::Value;
+}
+
+impl<R: Runtime, X: Index<R>> Boxed<R> for Uniform<R, X> {
+    type View = X::View;
+
+    fn place(&self) -> &R::Value {
+        &self.value
+    }
+
+    fn place_mut(&mut self) -> &mut R::Value {
+        &mut self.value
+    }
+}
+
+impl<R: Runtime, X> Uniform<R, X> {
+    /// `value` boxed at its own type, within the call `cx` belongs to: its
+    /// kind makes the runtime's value of it, and the box keeps `X`, so it is
+    /// read and given only at `X` and never erased (runtime contract §1). A
+    /// type variable's index has no kind of its own:
     ///
     /// ```compile_fail,E0277
     /// use acvus_extern::Uniform;
@@ -80,29 +157,42 @@ impl<R: Runtime, T: Crosses<R>> Uniform<R, T> {
     ///     Uniform::new(cx, Nth::<0>)
     /// }
     /// ```
-    pub fn new<'c>(cx: &Executor<'c, R>, value: T) -> Self {
+    pub fn new<'c>(cx: &Executor<'c, R>, value: X) -> Self
+    where
+        X: InPlace<R>,
+    {
         Uniform::of_the_crossing(value.give(cx.runtime(), Settled::of_the_entry()))
-    }
-
-    /// Lends the value in place within the call `cx` belongs to, as `T`'s
-    /// view.
-    pub fn open<'s>(&'s self, cx: &Executor<'s, R>) -> T::Open<'s> {
-        T::open(cx.runtime(), &self.value, Settled::of_the_entry())
-    }
-
-    pub fn open_mut<'s>(&'s mut self, cx: &Executor<'s, R>) -> T::OpenMut<'s> {
-        T::open_mut(cx.runtime(), &mut self.value, Settled::of_the_entry())
     }
 
     /// The value itself. A `Uniform` only dropped is released and never
     /// taken.
-    pub fn into_inner<'c>(self, cx: &Executor<'c, R>) -> T {
-        T::take(cx.runtime(), self.into_value(), Settled::of_the_entry())
+    pub fn into_inner<'c>(self, cx: &Executor<'c, R>) -> X
+    where
+        X: InPlace<R>,
+    {
+        X::take(cx.runtime(), self.into_value(), Settled::of_the_entry())
     }
+
+    /// The value in place, for as long as the box is borrowed.
+    pub fn as_ref<'s>(&'s self, cx: &Executor<'s, R>) -> &'s X
+    where
+        X: InPlace<R>,
+    {
+        X::shared(cx.runtime(), &self.value, Settled::of_the_entry())
+    }
+
+    /// The value in place, exclusively, for as long as the box is borrowed.
+    pub fn as_mut<'s>(&'s mut self, cx: &Executor<'s, R>) -> &'s mut X
+    where
+        X: InPlace<R>,
+    {
+        X::exclusive(cx.runtime(), &mut self.value, Settled::of_the_entry())
+    }
+
 }
 
-/// A primitive: it owns nothing, so it is read by a copy and written by a
-/// replacement.
+/// A primitive: a `Copy` value the runtime holds in its own representation
+/// and views in place.
 pub trait Primitive: Copy + Send + Sync + Crossing + 'static {}
 
 macro_rules! primitive {
@@ -112,20 +202,6 @@ macro_rules! primitive {
 }
 
 primitives!(primitive);
-
-impl<R: Runtime, T: Primitive> Uniform<R, T> {
-    /// The value, read by a copy: the runtime's take of the held value's
-    /// copy, which owns nothing to release.
-    pub fn get<'c>(&self, cx: &Executor<'c, R>) -> T {
-        <R::Primitive as PrimitiveKind<R>>::take(cx.runtime(), self.value, Settled::of_the_entry())
-    }
-
-    /// The value replaced by `value`, made by the runtime.
-    pub fn set<'c>(&mut self, cx: &Executor<'c, R>, value: T) {
-        let made = <R::Primitive as PrimitiveKind<R>>::give(cx.runtime(), value, Settled::of_the_entry());
-        std::mem::replace(&mut self.value, made).release(Releasing { _private: () });
-    }
-}
 
 impl<R: Runtime, X> Drop for Uniform<R, X> {
     fn drop(&mut self) {

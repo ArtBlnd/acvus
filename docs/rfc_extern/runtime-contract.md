@@ -1,66 +1,48 @@
 # runtime contract
 
-The runtime contract is the seam between extern fns and whatever runs them. Every extern fn is callable through the contract alone, whatever implements it: this interpreter today, a JIT or another executor later. It is defined well enough to give that freedom.
+The seam between extern fns and whatever runs them. Every extern fn is callable through the contract alone, whatever implements it.
 
 ## 1. Values
 
-A value's representation is not part of the contract. The contract holds whatever a runtime's value is, a trivial enum of any size included. The extern side reaches values only through the contract's operations, generic over the runtime and dispatched statically, so a runtime pays nothing for the generality.
+A value's representation is not part of the contract. The extern side reaches values only through the contract's operations, generic over the runtime and dispatched statically.
 
-**Nothing anywhere erases a Rust value into a runtime value.** No function, trait or conversion turns a `T` into a `Value`. A value of the runtime exists only where a crossing made it: at the type the checker settled for a site, or held at its own type. The reason is variance: a path from `T` to `Value` makes `fn(Value)` usable as `fn(T)`, and a function parameter is contravariant, so a function written for one type would be called with a value made from another. That is undefined behaviour, and no bound or `unsafe` marker on the path prevents it; the path does not exist.
+Nothing turns a Rust value into a runtime value except a crossing at the type the checker settled for its site. A value made at one type is never read at another: a path from a Rust type to a runtime value would make a function written for one type callable with a value made from another.
 
-A Rust value of a type that crosses may be held, within a call, in the owning holder indexed by its own type: its type's crossing makes the runtime's value of it, and the holder keeps the type. The value is read and given only at that type, and leaves where a declaration states that type, so it is never erased. A type variable's index is no type that crosses, so no Rust value is held at one.
+A runtime value is copyable data and owns nothing. The extern side owns one only through its owning holder, indexed by the value's type and releasing it on drop. A type variable's value is held so, indexed by the variable; a Rust value of a type that crosses may be held so at its own type.
 
-The runtime's value crosses to the extern side as the extern side's own owning holder. A runtime keeps an extern-defined value so that it can lend one: what `&S` points at is the runtime's, and the contract says only that it is a shared reference to an `S`.
-
-A runtime value is `Copy` and has no drop glue. The extern side owns a runtime value only through one owning type, whose `Drop` releases it; a copy of a runtime value owns nothing and releases nothing.
-
-*Rejected.* An explicit release at each holder: a holder that omits it leaks, and two holders of copies release twice.
-
-An extern-defined generic type is stored as one Rust value. Where a type argument is unmarked, its part holds the runtime's uniform value, indexed in handler Rust types by a phantom type parameter so that distinct type parameters remain distinct Rust types. One stored value is therefore read at Rust instantiations that differ only in these indices, which is sound only where those instantiations are layout- and drop-equivalent. Each index is parametric: no projection through it determines the layout of a type that holds it. Drop equivalence follows from E0367. Equal field order at equal size and alignment is argued, since Rust guarantees no layout shared by two instantiations of one `repr(Rust)` type.
-
-*Rejected.* The uniform value unindexed in handler Rust types: two type parameters become one Rust type, and a value of one is accepted by an impl chosen at the other.
+An extern-defined generic type is stored as one Rust value whose type variables' parts are held values, indexed by phantom type parameters. Its instantiations that differ only in those indices are read as one another, so they are layout- and drop-equivalent: each index is parametric, and no projection through it determines a layout.
 
 ## 2. Operations
 
-- **Typed reads.** Reading a value back at a type is the runtime's operation, and so are its reads at a stored form and its guards. A Rust value becomes a runtime value only inside a crossing, at the site's settled type or held at its own (§1).
-- **Guards.** A shared guard, an exclusive guard, and a taken value. The extern side is lent storage only under a guard.
-- **The entry.** Each call has one entry, which the runtime's boundary calls with the call's values (crossing §1).
-- **Views.** A script array's slice view, shared or mutable, is a contract operation.
-- **References.** The runtime makes a reference value from a Rust borrow the call holds, a writable one only from an exclusive borrow, of storage that lives until the checker's loan the reference is labelled with ends: what an argument lent in this call, whole or any part of it, or what a loan the call was given holds (a carrier, limitations §3). A borrowed result is such a reference, and which loan it holds the declaration's lifetimes say (compiler: extern fn §4). The bound is the borrow's lifetime, which Rust checks against the signature those lifetimes are read from; where the borrowed storage lies is not the runtime's to rely on. A reference value is read back at its target: storage of a Rust type, or a value the runtime holds in its own representation, read as that value.
-- **Kinds.** The runtime makes, takes and lends values by kind: an extern-defined value, a primitive, text, an option, a result, a tuple, and a reference. Each kind is the runtime's own associated type, so each runtime implements it for its own representation. A kind's value is made from its parts' values and taken apart into them; a held value's storage and the storage a reference names are lent in place, an option's, a result's and a tuple's as their parts', so a projection is a guard at each leaf (crossing §2). A type's crossing composes its kind's operations over its parts' crossings; the runtime sees no type's structure beyond its kind's.
-- **Impls.** The runtime registers an impl, and makes its value, a function value, where a site chooses it (impls §2).
-- **Callbacks.** Calling a function value synchronously and awaited. A function value is held as any value is, in the owning holder indexed by its function type: taken by value it is the handler's, released by its drop and kept only where a result holds it; lent, it is a reference to it. Whatever made it, a script or later a Rust function, is not the caller's to know. A synchronous call of a function value that may suspend is driven to its end where it is called: it may block the caller, and is sound.
-- **Names.** The extern side interns a name in the interner the contract returns; a runtime maps no name itself.
+- **Entry.** Each call has one entry (crossing §1).
+- **Kinds.** Values are made, taken and lent by kind: an extern-defined value, a primitive, text, an option, a result, a tuple, a reference. A type's crossing composes its kind's operations over its parts'; the runtime sees no structure beyond the kind.
+- **Typed reads.** A value is read at a type only by the runtime (§3).
+- **Guards.** Storage is lent to the extern side only under a guard: shared, exclusive, or taken.
+- **References.** A reference value is made from a Rust borrow the call holds, writable only from an exclusive one, and read back at its target. It names its target until the checker's loan it is labelled with ends.
+- **Views.** A program's array is lent as a slice, shared or mutable.
+- **Function values.** A function value is called returning or awaited. A returning call of one that may suspend is driven to its end where it is made. An awaited call's run is held by its call future, and ends when the future ends or is dropped. What made a function value is not the caller's to know.
+- **Impls.** An impl is registered, and its value, a function value, is made where a site chooses it (impls §2). A requirer that keeps the impl with its receiver is given a value of its own.
+- **Names.** A name is interned in the interner the contract gives.
 - **Time.** `sleep`.
 
 ## 3. What a caller owes
 
-Every typed read states its caller's obligation over the checker's typing of the read path, never over how the value was made: this value, reached through this runtime's own operations along a path the checker typed `T`, is taken at `T`. The extern side discharges it from the checker, and a runtime trusts its own reads.
-
-The extern side reinterprets a part the runtime handed it only by a layout-only cast under a layout witness, and every later typed read of that part goes back to the runtime. A layout witness is made only where the layout identity it proves is signed, at the type (safety §2, L), and nowhere else.
-
-The entry is safe. Every runtime that implements the contract trusts its own typed reads, and owes that each value is live at the type the checker settled for the site (safety §3).
+A typed read states its obligation over the checker's typing of the read path, never over how the value was made: a value reached through the runtime's operations along a path the checker typed `T` is taken at `T`. The extern side discharges it from the checker. It reinterprets a part the runtime handed it only by a layout-only cast under a layout witness, which exists only where the layout identity is signed (safety §2).
 
 ## 4. What the runtime signs
 
-A runtime signs, by `unsafe` trait bounds, the three facts no type can carry:
+- **S1**, on storage a shared guard lends: it keeps its address, and is written only under an exclusive loan, until the checker's loan ends, after the guard drops as well.
+- **S2**, on a value made as a reference: it names its target, or its written-back copy, until the checker's loan ends.
+- **S3**, on the runtime: storage lent to a run, and a kept value, are released only after every work that may read them has ended or been dropped.
 
-- **S1**, on the storage a shared guard lends: it keeps its address, and is written only under an exclusive loan, until the checker's loan ends, after the guard drops as well. The checker's loan is not a Rust lifetime: a stored source owns all it holds and spans calls.
-- **S2**, on the runtime's value: a value made as a reference to a target names that target, or its written-back copy, until the checker's loan ends. The value is copyable data with no lifetime.
-- **S3**, on the runtime: storage lent in place to another run, and a kept value, are released only after the last work that may read them has ended or been dropped. Only a count per loan could carry it as a type, and that is a release cost.
-
-Nothing else is signed. Every other fact is a type, a bound, the Rust validity of what the runtime returns, or the runtime's own business.
+Nothing else is signed.
 
 ## 5. What the contract does not state
 
-No word encoding, frame layout or register. No default or vacant value, and no destination filled ahead of its writer. No array type. No spawning of any kind: a handler that wants threads brings its own pool and joins it before it returns.
-
-*Why.* A spawned task that borrows from a run outlives the run when the run is dropped while awaiting, and a scope the handler owns does not bound its tasks, since the handler can `mem::forget` it.
+No word encoding, frame layout or register. No default or vacant value. No array type. No spawning: a handler that wants threads brings its own pool and joins it before it returns.
 
 ## 6. Cost
 
-- A call reaches its handler by static dispatch. A synchronous call performs no dynamic dispatch and no allocation beyond what its declared types require.
-- Where a call through the boundary is in tail position in its caller, the boundary executes nothing after it, and no address of the caller's frame is live across it.
-- The action at a loan's end is a constant of the lent type, and upkeep only: a loan whose guard is forgotten stays sound (crossing §1). A loan whose end has no action compiles to no code and is not tested at run time.
-
-*Why.* A run-time test at each loan's end, or boundary code after a tail call, costs every call its inlining and its tail call, including calls whose loans need no action.
+- A call reaches its handler by static dispatch. A returning call performs no dynamic dispatch and no allocation beyond what its declared types require.
+- Where a call through the boundary is in tail position, the boundary executes nothing after it, and no address of the caller's frame is live across it.
+- A loan's end action is a constant of the lent type and upkeep only. A loan whose end has no action compiles to no code.

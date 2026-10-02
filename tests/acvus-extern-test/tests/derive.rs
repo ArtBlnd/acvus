@@ -2,38 +2,37 @@
 //! as itself, a generic one at its type variables' uniform values, and is
 //! declared at its name, its arguments and its lifetimes.
 
-use acvus_extern::decl::{DeclTy, Declaration, Var, kind};
+use acvus_extern::decl::{DeclTy, Declaration, EffectVar, IdentityVar, TypeVar};
 use acvus_extern::extern_fn;
-use acvus_extern::mode::ByValue;
 use acvus_extern::register::Declared;
 use acvus_extern::executor::Executor;
-use acvus_extern::runtime::{Crosses, Runtime};
+use acvus_extern::runtime::{Place, Runtime};
 use acvus_extern::{GenericParam, LayoutFact, Structural, Uniform};
 use acvus_extern_test::{Cursor, Frame, Pair, Pass, Session, Stack, Word, WordRuntime};
 use acvus_utils::Interner;
 
 #[extern_fn(effect = pure)]
-fn stack<T: Var<kind::Type>>() -> Stack<T> {
-    Stack { items: Vec::new() }
+fn stack<R: Runtime, T: TypeVar<R>>() -> Stack<R, T> {
+    Stack { items: Vec::new(), runtime: std::marker::PhantomData }
 }
 
 #[extern_fn(effect = pure)]
-fn push<T: Var<kind::Type>>(s: &mut Stack<T>, x: T) {
+fn push<R: Runtime, T: TypeVar<R>>(s: &mut Stack<R, T>, x: T) {
     s.items.push(x)
 }
 
 #[extern_fn(effect = pure)]
-fn pop<T: Var<kind::Type>>(s: &mut Stack<T>) -> Option<T> {
+fn pop<R: Runtime, T: TypeVar<R>>(s: &mut Stack<R, T>) -> Option<T> {
     s.items.pop()
 }
 
 #[extern_fn(effect = pure)]
-fn peek<T: Var<kind::Type>>(s: &Stack<T>) -> Option<&T> {
+fn peek<R: Runtime, T: TypeVar<R>>(s: &Stack<R, T>) -> Option<&T> {
     s.items.last()
 }
 
 #[extern_fn]
-fn session<T: Var<kind::Type>, E: Var<kind::Effect>, I: Var<kind::Identity>>() -> Session<T, E, I> {
+fn session<R: Runtime, T: TypeVar<R>, E: EffectVar, I: IdentityVar>() -> Session<R, T, E, I> {
     Session { pending: Vec::new(), at: std::marker::PhantomData }
 }
 
@@ -49,14 +48,14 @@ fn part<R: Runtime>(#[executor] cx: &Executor<'_, R>, parts: &Vec<Uniform<R, Str
     parts[at as usize].open(cx).clone()
 }
 
-fn produce<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
+fn produce<T: for<'l> Place<'l, WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
     frame.call([], |entry| entry.open(|cx, [], []| cx.finish(value)))
 }
 
-fn read<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
+fn read<T: for<'l> Place<'l, WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
     let mut read = None;
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let value = __given0.open::<ByValue<T>>(); 
+        entry.open(|cx, [__given0], []| { let value = __given0.open::<T>(); 
             read = Some(value);
             cx.finish(())
         })
@@ -126,8 +125,8 @@ fn a_derived_type_is_declared_at_its_name_arguments_and_lifetimes() {
 
     assert_eq!(<Cursor<'_, WordRuntime>>::FACTS.generics, [GenericParam::Lifetime]);
     assert_eq!(<Cursor<'_, WordRuntime>>::FACTS.layout, LayoutFact::CanonicalOf);
-    assert_eq!(<Stack<Uniform<WordRuntime, i64>>>::FACTS.generics, [GenericParam::Type]);
-    assert_eq!(<Stack<i64>>::FACTS.layout, LayoutFact::OwnCanonical);
+    assert_eq!(<Stack<WordRuntime, Uniform<WordRuntime, i64>>>::FACTS.generics, [GenericParam::Type]);
+    assert_eq!(<Stack<WordRuntime, Uniform<WordRuntime, i64>>>::FACTS.layout, LayoutFact::CanonicalOf);
     assert_eq!(<Pair>::FACTS.generics, []);
 
     let (_, session) = declaration_of(session::new());

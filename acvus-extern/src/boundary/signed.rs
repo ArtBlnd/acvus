@@ -144,9 +144,6 @@ macro_rules! canonical_over_parts {
 
 canonical_over_parts!(<T> Option<T> => Option<T::Canon>);
 canonical_over_parts!(<T, E> Result<T, E> => Result<T::Canon, E::Canon>);
-// A sequence leaves as a `Vec` (limitations §1): a runtime gives it at the
-// settled array type.
-canonical_over_parts!(<T> Vec<T> => Vec<T::Canon>);
 canonical_over_parts!(<T> Box<T> => Box<T::Canon>);
 
 // SAFETY: `PhantomData<T>` is of size 0 and alignment 1 at every `T`, has no
@@ -170,3 +167,20 @@ macro_rules! tuple_canonical {
 }
 
 tuples!(tuple_canonical);
+
+// SAFETY: an effect's or an identity's stand-in is a unit struct with no
+// field: `Canon` is `Self`, so size, alignment, field offsets and release are
+// one, and it reaches no lifetime or type parameter. It is no type parameter
+// the checker's flows read, as `FACTS` states with an empty generic list.
+unsafe impl<const N: u32> Structural for crate::decl::EffectNth<N> {
+    type Canon = Self;
+
+    const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
+}
+
+// SAFETY: as `EffectNth`'s.
+unsafe impl<const N: u32> Structural for crate::decl::IdentityNth<N> {
+    type Canon = Self;
+
+    const FACTS: StructuralFacts = StructuralFacts { layout: LayoutFact::OwnCanonical, generics: &[] };
+}

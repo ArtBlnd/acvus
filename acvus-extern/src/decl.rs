@@ -3,10 +3,9 @@
 //! combines into the compiler's input. Nothing here checks a declaration
 //! against its body; the compiler trusts it absolutely.
 //!
-//! A declared type is never written by hand: a Rust type states its own
-//! through `DeclType`, and a parameter's Rust type picks its mode through
-//! `ParamMode` (macros §4). A declaration is built with its generics filled by
-//! stand-ins: `Nth<N>` for the N-th type parameter, `EffectNth<N>` and
+//! A declared type is never written by hand: a place's Rust type states its
+//! own through its form (crossing §2), and a function type's part through
+//! `DeclType`. A declaration is built with its generics filled by stand-ins: `Nth<N>` for the N-th type parameter, `EffectNth<N>` and
 //! `IdentityNth<N>`.
 
 pub mod labels;
@@ -27,7 +26,9 @@ pub use acvus_mir::ty::{Contexts, Effect, Reissue, SplitCost};
 
 pub use acvus_utils::{Interner, QualifiedRef};
 pub use labels::{At, EndNames, labelled};
-pub use ty::{DeclType, EffectNth, IdentityNth, Nth, ParamMode, Part, Passed, Var, kind, part};
+pub use ty::{
+    DeclParts, DeclType, EffectNth, EffectVar, IdentityNth, IdentityVar, InstanceParam, Nth, RequiresParam, TypeVar, decl_in, decl_out,
+};
 
 /// A declared type (compiler: extern fn §1, §8; types §1-§3).
 #[derive(Debug, Clone, PartialEq, Eq)]

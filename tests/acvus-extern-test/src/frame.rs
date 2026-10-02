@@ -118,6 +118,45 @@ impl<'r> Frame<'r> {
         self.keep(done)
     }
 
+    /// Calls the returning function `f` through its dispatch with the
+    /// arguments `passes` names, at a site that chose the impls the
+    /// variables `impls` hold, one per requirement in order, and keeps its
+    /// result in a new variable. An impl is a function value (impls §2).
+    pub fn call_dispatch_choosing<F, const N: usize, const M: usize>(
+        &mut self,
+        f: &F,
+        passes: [Pass; N],
+        impls: [usize; M],
+    ) -> usize
+    where
+        F: ExternFn<WordRuntime, N, M>,
+    {
+        let args = self.arguments(passes);
+        let site = SiteShape::new(impls.map(|i| self.variable(i).same()));
+
+        let done = f.call(self.runtime, args, &site);
+
+        self.keep(done)
+    }
+
+    /// As `call_dispatch_choosing`, for an awaited function.
+    pub async fn call_dispatch_awaited_choosing<F, const N: usize, const M: usize>(
+        &mut self,
+        f: &F,
+        passes: [Pass; N],
+        impls: [usize; M],
+    ) -> usize
+    where
+        F: AwaitedFn<WordRuntime, N, M>,
+    {
+        let args = self.arguments(passes);
+        let site = SiteShape::new(impls.map(|i| self.variable(i).same()));
+
+        let done = f.call(self.runtime, args, &site).await;
+
+        self.keep(done)
+    }
+
     /// As `call_dispatch`, for an awaited function.
     pub async fn call_dispatch_awaited<F, const N: usize>(&mut self, f: &F, passes: [Pass; N]) -> usize
     where
@@ -131,21 +170,15 @@ impl<'r> Frame<'r> {
         self.keep(done)
     }
 
-    /// What the variable, an `Option<&P>`, names: the target of its part,
-    /// copied out, where it is present.
-    pub fn option_referent<P>(&self, variable: usize) -> Option<P::Owned>
-    where
-        P: ?Sized + ToOwned,
-    {
-        self.variables[variable].as_deref().expect("a variable given away is not read").option_referent::<P>()
+    /// What the variable, an `Option<&P>`, names where it is present: the
+    /// named value's word, copied out.
+    pub fn option_referent(&self, variable: usize) -> Option<Word> {
+        self.variables[variable].as_deref().expect("a variable given away is not read").option_referent()
     }
 
-    /// What the variable, a pair of references to `P`, names, copied out.
-    pub fn pair_referents<P>(&self, variable: usize) -> (P::Owned, P::Owned)
-    where
-        P: ?Sized + ToOwned,
-    {
-        self.variables[variable].as_deref().expect("a variable given away is not read").pair_referents::<P>()
+    /// What the variable, a pair of references to text, names, copied out.
+    pub fn pair_texts(&self, variable: usize) -> (String, String) {
+        self.variables[variable].as_deref().expect("a variable given away is not read").pair_texts()
     }
 
     fn arguments<const N: usize>(&mut self, passes: [Pass; N]) -> [Word; N] {
@@ -163,6 +196,12 @@ impl<'r> Frame<'r> {
     fn keep(&mut self, done: Done<WordRuntime>) -> usize {
         self.variables.push(Some(Box::new(Held::of_the_result(done))));
         self.variables.len() - 1
+    }
+
+    /// Releases the variable's value, as a run does where the variable's
+    /// scope ends.
+    pub fn release(&mut self, i: usize) {
+        drop(self.variables[i].take().expect("a variable is released once"));
     }
 
     fn variable(&mut self, i: usize) -> &mut Held {

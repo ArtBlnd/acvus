@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::marker::PhantomData;
 
-use acvus_extern::decl::{Var, kind};
+use acvus_extern::decl::{EffectVar, IdentityVar, TypeVar};
 use acvus_extern::runtime::Runtime;
-use acvus_extern::{Loaned, Opaque};
+use acvus_extern::{Opaque, Ref};
 
 /// A value that counts its drops, for the crossing's release tests.
 #[derive(Opaque)]
@@ -33,26 +33,26 @@ pub struct Pair {
 #[derive(Opaque, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Number(pub i64);
 
-/// An extern-defined type that keeps a loan on a `Pair` an argument lent: the
-/// carrier a result holds the loan in (limitations §3), its lifetime the
-/// loan's.
+/// An extern-defined type that keeps a loan on a `Pair` an argument lent, as
+/// the reference value the argument was: its lifetime is the loan's.
 #[derive(Opaque)]
 pub struct Cursor<'a, R: Runtime> {
-    pub over: Loaned<'a, Pair, R>,
+    pub over: Ref<'a, R, Pair>,
     pub at: usize,
 }
 
 /// An extern-defined type that carries an effect and an identity, each held as
 /// a marker: a session, of one identity, whose work runs at its effect.
 #[derive(Opaque)]
-pub struct Session<T, E: Var<kind::Effect>, I: Var<kind::Identity>> {
+pub struct Session<R: Runtime, T: TypeVar<R>, E: EffectVar, I: IdentityVar> {
     pub pending: Vec<T>,
-    pub at: PhantomData<fn() -> (E, I)>,
+    pub at: PhantomData<fn() -> (R, E, I)>,
 }
 
 /// An extern-defined generic type: a stack of a type variable's values, each
 /// held as the runtime's uniform value.
 #[derive(Opaque)]
-pub struct Stack<T> {
+pub struct Stack<R: Runtime, T: TypeVar<R>> {
     pub items: Vec<T>,
+    pub runtime: PhantomData<fn() -> R>,
 }

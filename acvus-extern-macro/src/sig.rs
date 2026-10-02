@@ -1,6 +1,6 @@
 //! What the attribute reads off the function's signature: its generic
 //! parameters by kind, its parameters by role, and how its result is made.
-//! How a type crosses is never read here (macros §4); only where the
+//! How a type crosses is never read here (macros §5); only where the
 //! signature's own syntax is the fact: which parameter is a capture or the
 //! executor, which generic parameter is the runtime or a variable of which
 //! kind, and the lifetime names each end writes (`lifetimes`).
@@ -10,7 +10,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
 use syn::{
-    FnArg, GenericArgument, GenericParam, Ident, Lifetime, Pat, PathArguments, ReturnType, Signature, Type,
+    FnArg, GenericParam, Ident, Lifetime, Pat, PathArguments, ReturnType, Signature, Type,
     TypeParamBound, TypeReference, WherePredicate,
 };
 
@@ -44,7 +44,7 @@ pub enum Generic {
 
 /// What a parameter is to the call.
 pub enum Role {
-    /// An argument position, opened by its mode.
+    /// An argument position, opened at its Rust type.
     Argument,
     /// A capture the marker holds, lent to every call: `#[capture] name: &T`
     /// holds a `T`.
@@ -52,6 +52,25 @@ pub enum Role {
     /// The body's executor: `#[executor] cx: &Executor<'_, R>`, for either
     /// body.
     Executor,
+    /// A requirement held as a handle at a type: `#[requires] name:
+    /// &InstanceOf<R, g, Ts>`, opened from the impl its site chose (impls §3).
+    Requires,
+    /// A requirement owned with its receiver: `#[instance] name:
+    /// Instance<R, g, Ts>`, an argument, the receiver, opened with the impl
+    /// its site chose (impls §3).
+    Instance,
+}
+
+impl Role {
+    /// Whether the parameter takes an argument of the call.
+    pub fn takes_argument(&self) -> bool {
+        matches!(self, Role::Argument | Role::Instance)
+    }
+
+    /// Whether the parameter takes an impl its call's site chose.
+    pub fn takes_impl(&self) -> bool {
+        matches!(self, Role::Requires | Role::Instance)
+    }
 }
 
 pub struct Param {
@@ -66,11 +85,9 @@ pub struct Param {
 
 /// How the result is made.
 pub enum Output {
-    /// A value that crosses: the result as written.
+    /// A value that crosses, at the form written: one that borrows holds a
+    /// loan its lifetimes name (crossing §4).
     Value,
-    /// A value whose every leaf is a reference, each holding a loan the result's
-    /// lifetimes name (runtime contract §2, References).
-    Borrowed,
     /// No value: the call never returns.
     Never,
 }
@@ -100,7 +117,7 @@ impl Sig {
         let params = params(sig)?;
         let inputs: Vec<&Names> = params.iter().map(|p| &p.names).collect();
         let arguments: Vec<&Names> =
-            params.iter().filter(|p| matches!(p.role, Role::Argument)).map(|p| &p.names).collect();
+            params.iter().filter(|p| p.role.takes_argument()).map(|p| &p.names).collect();
         let result_names = lifetimes::result(&sig.output, &inputs, &arguments)?;
         lifetimes::refuse_bounds(sig)?;
         let output = output(&sig.output);
@@ -109,12 +126,6 @@ impl Sig {
             ReturnType::Default => syn::parse_quote!(()),
         };
         let awaited = sig.asyncness.is_some();
-        if awaited && matches!(output, Output::Borrowed) {
-            return Err(syn::Error::new(
-                sig.output.span(),
-                "an awaited body's result borrows nothing: it moves its arguments (crossing §3-§4)",
-            ));
-        }
         Ok(Sig {
             ident: sig.ident.clone(),
             written_output,
@@ -193,8 +204,8 @@ fn refuse_unsupported(sig: &Signature) -> syn::Result<()> {
     Ok(())
 }
 
-/// Each generic type parameter is a variable, bounded by one `Var<kind::K>`
-/// and nothing else, or the runtime: the one parameter that is not a
+/// Each generic type parameter is a variable, bounded by one of
+/// `TypeVar<R>`, `EffectVar` and `IdentityVar` and nothing else, or the runtime: the one parameter that is not a
 /// variable, whose bounds (`Runtime`, `CallsBack`, ..) the dispatch keeps. A
 /// lifetime parameter is the signature's own; a const parameter is refused.
 fn generics(sig: &Signature) -> syn::Result<(Vec<Generic>, [u32; 3])> {
@@ -230,7 +241,7 @@ fn generics(sig: &Signature) -> syn::Result<(Vec<Generic>, [u32; 3])> {
                 if std::mem::replace(&mut runtime, true) {
                     return Err(syn::Error::new(
                         ty.ident.span(),
-                        "an extern fn names one runtime; every other generic parameter is a `Var<kind::..>`",
+                        "an extern fn names one runtime; every other generic parameter is a `TypeVar<R>`, an `EffectVar` or an `IdentityVar`",
                     ));
                 }
                 generics.push(Generic::Runtime { ident: ty.ident.clone(), bounds });
@@ -238,7 +249,7 @@ fn generics(sig: &Signature) -> syn::Result<(Vec<Generic>, [u32; 3])> {
             _ => {
                 return Err(syn::Error::new(
                     ty.ident.span(),
-                    "a variable is bounded by one `Var<kind::..>` and nothing else",
+                    "a variable is bounded by one `TypeVar<R>`, `EffectVar` or `IdentityVar` and nothing else",
                 ));
             }
         }
@@ -246,25 +257,17 @@ fn generics(sig: &Signature) -> syn::Result<(Vec<Generic>, [u32; 3])> {
     Ok((generics, counts))
 }
 
-/// The kind `K` of a `Var<kind::K>` bound; none for any other bound.
+/// The kind a variable's bound says: `TypeVar<R>`, `EffectVar` or
+/// `IdentityVar`; none for any other bound.
 fn var_kind(bound: &TypeParamBound) -> Option<Kind> {
     let TypeParamBound::Trait(tr) = bound else {
         return None;
     };
     let last = tr.path.segments.last()?;
-    if last.ident != "Var" {
-        return None;
-    }
-    let PathArguments::AngleBracketed(args) = &last.arguments else {
-        return None;
-    };
-    let [GenericArgument::Type(Type::Path(kind))] = args.args.iter().collect::<Vec<_>>().as_slice() else {
-        return None;
-    };
-    match kind.path.segments.last()?.ident.to_string().as_str() {
-        "Type" => Some(Kind::Type),
-        "Effect" => Some(Kind::Effect),
-        "Identity" => Some(Kind::Identity),
+    match (last.ident.to_string().as_str(), &last.arguments) {
+        ("TypeVar", PathArguments::AngleBracketed(_)) => Some(Kind::Type),
+        ("EffectVar", PathArguments::None) => Some(Kind::Effect),
+        ("IdentityVar", PathArguments::None) => Some(Kind::Identity),
         _ => None,
     }
 }
@@ -290,13 +293,7 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
                 place_facts.push(attr.clone());
                 return false;
             }
-            let which = if attr.path().is_ident("capture") {
-                Some("capture")
-            } else if attr.path().is_ident("executor") {
-                Some("executor")
-            } else {
-                None
-            };
+            let which = ["capture", "executor", "requires", "instance"].into_iter().find(|role| attr.path().is_ident(role));
             match which {
                 Some(which) => {
                     marked = Some((which, attr.span(), marked.is_some()));
@@ -307,7 +304,7 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
         });
         if let Some((which, span, twice)) = marked {
             if twice {
-                return Err(syn::Error::new(span, "a parameter is a capture or the executor, not both"));
+                return Err(syn::Error::new(span, "a parameter has one role: a capture, the executor, `requires` or `instance`"));
             }
             role = match which {
                 "capture" => {
@@ -321,11 +318,16 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
                     Statics.visit_type_mut(&mut held);
                     Role::Capture { held: Box::new(held) }
                 }
+                "requires" => Role::Requires,
+                "instance" => Role::Instance,
                 _ => Role::Executor,
             };
         }
         if let (Some(attr), false) = (place_facts.first(), matches!(role, Role::Argument)) {
-            return Err(syn::Error::new(attr.span(), "a fact of a place is of an argument's; a capture and the executor are none"));
+            return Err(syn::Error::new(
+                attr.span(),
+                "a fact of a place is of an argument's; a capture, the executor and a requirement are none",
+            ));
         }
         let place = facts::PlaceFacts::read(&place_facts)?;
         let names = lifetimes::param(&typed.ty, &mut elided);
@@ -338,30 +340,10 @@ fn params(sig: &mut Signature) -> syn::Result<Vec<Param>> {
 }
 
 fn output(output: &ReturnType) -> Output {
-    let ReturnType::Type(_, ty) = output else {
-        return Output::Value;
-    };
-    if let Type::Never(_) = &**ty {
-        return Output::Never;
+    match output {
+        ReturnType::Type(_, ty) if matches!(&**ty, Type::Never(_)) => Output::Never,
+        _ => Output::Value,
     }
-    match holds_reference(ty) {
-        true => Output::Borrowed,
-        false => Output::Value,
-    }
-}
-
-/// Whether `ty` holds a reference, a leaf the finish makes a reference value
-/// of. A result holding what a carrier holds and no reference is a value.
-fn holds_reference(ty: &Type) -> bool {
-    struct Finds(bool);
-    impl<'a> syn::visit::Visit<'a> for Finds {
-        fn visit_type_reference(&mut self, _: &'a TypeReference) {
-            self.0 = true;
-        }
-    }
-    let mut finds = Finds(false);
-    syn::visit::Visit::visit_type(&mut finds, ty);
-    finds.0
 }
 
 /// The runtime named `runtime`, each variable its stand-in, each lifetime
@@ -398,6 +380,27 @@ impl VisitMut for StandIns<'_> {
 
     fn visit_lifetime_mut(&mut self, lifetime: &mut Lifetime) {
         *lifetime = Lifetime::new("'_", lifetime.span());
+    }
+}
+
+/// `ty` with every lifetime, written or elided in a reference, `lifetime`:
+/// a type read for its key at one loan (crossing §2).
+pub fn at_lifetime(ty: &Type, lifetime: &Lifetime) -> Type {
+    let mut ty = ty.clone();
+    AtLifetime(lifetime.clone()).visit_type_mut(&mut ty);
+    ty
+}
+
+struct AtLifetime(Lifetime);
+
+impl VisitMut for AtLifetime {
+    fn visit_lifetime_mut(&mut self, lifetime: &mut Lifetime) {
+        *lifetime = self.0.clone();
+    }
+
+    fn visit_type_reference_mut(&mut self, reference: &mut TypeReference) {
+        reference.lifetime.get_or_insert_with(|| self.0.clone());
+        syn::visit_mut::visit_type_reference_mut(self, reference);
     }
 }
 

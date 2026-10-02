@@ -4,12 +4,11 @@
 use acvus_extern::Uniform;
 use acvus_extern::callback::{Callable, CallsBack};
 use acvus_extern::executor::Executor;
-use acvus_extern::decl::{Contexts, DeclTy, Declaration, Reissue, SplitCost, Var, kind};
+use acvus_extern::decl::{Contexts, DeclTy, Declaration, EffectVar, Reissue, SplitCost, TypeVar};
 use acvus_extern::done::Done;
 use acvus_extern::extern_fn;
-use acvus_extern::mode::ByValue;
 use acvus_extern::register::{Declared, Refused, Registers};
-use acvus_extern::runtime::{Crosses, Runtime};
+use acvus_extern::runtime::{Place, Runtime};
 use acvus_extern::Loaned;
 use acvus_extern_test::{Cursor, Frame, Pair, Pass, Stack, WordRuntime};
 use acvus_mir::decl::SegmentLabel;
@@ -23,12 +22,12 @@ fn add(a: u64, b: u64) -> u64 {
 }
 
 #[extern_fn]
-fn first<T: Var<kind::Type>>(xs: &[T]) -> &T {
+fn first<R: Runtime, T: TypeVar<R>>(xs: &[T]) -> &T {
     &xs[0]
 }
 
 #[extern_fn(effect = pure)]
-fn get<T: Var<kind::Type>>(xs: &[T], at: u64) -> Option<&T> {
+fn get<R: Runtime, T: TypeVar<R>>(xs: &[T], at: u64) -> Option<&T> {
     xs.get(at as usize)
 }
 
@@ -53,7 +52,7 @@ fn tagged(#[capture] tag: &String, text: &str) -> String {
 }
 
 #[extern_fn(effect = E)]
-async fn apply<'f, R: CallsBack, E: Var<kind::Effect>>(
+async fn apply<'f, R: CallsBack, E: EffectVar>(
     #[executor] cx: &Executor<'_, R>,
     f: Uniform<R, Callable<'f, (i64,), i64, E>>,
     n: i64,
@@ -62,7 +61,7 @@ async fn apply<'f, R: CallsBack, E: Var<kind::Effect>>(
 }
 
 #[extern_fn(effect = E, sync = twice_now)]
-async fn twice<'f, R: CallsBack, E: Var<kind::Effect>>(
+async fn twice<'f, R: CallsBack, E: EffectVar>(
     #[executor] cx: &Executor<'_, R>,
     f: &Uniform<R, Callable<'f, (i64,), i64, E>>,
     n: i64,
@@ -72,7 +71,7 @@ async fn twice<'f, R: CallsBack, E: Var<kind::Effect>>(
 }
 
 /// `twice`'s returning body: the callback called synchronously.
-fn twice_now<'f, R: CallsBack, E: Var<kind::Effect>>(
+fn twice_now<'f, R: CallsBack, E: EffectVar>(
     cx: &Executor<'_, R>,
     f: &Uniform<R, Callable<'f, (i64,), i64, E>>,
     n: i64,
@@ -87,15 +86,15 @@ async fn measure(text: String) -> i64 {
 }
 
 /// A variable holding `value`, made as a program makes one: a call's result.
-fn produce<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
+fn produce<T: for<'l> Place<'l, WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
     frame.call([], |entry| entry.open(|cx, [], []| cx.finish(value)))
 }
 
 /// A variable's value, given to a call that takes it by value.
-fn read<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
+fn read<T: for<'l> Place<'l, WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
     let mut read = None;
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let value = __given0.open::<ByValue<T>>(); 
+        entry.open(|cx, [__given0], []| { let value = __given0.open::<T>(); 
             read = Some(value);
             cx.finish(())
         })
@@ -170,7 +169,7 @@ unsafe impl acvus_extern::seal::ExternFns for Doubled {}
 
 impl<R: Runtime> acvus_extern::register::ExternFn<R, 1, 0> for Doubled {
     fn call(&self, runtime: &R, args: [R::Value; 1], site: &acvus_extern::SiteShape<R, 0>) -> Done<R> {
-        acvus_extern::Entry::new(runtime, args, site).open(|cx, [__given0], []| { let n = __given0.open::<ByValue<i64>>(); cx.finish(n * 2) })
+        acvus_extern::Entry::new(runtime, args, site).open(|cx, [__given0], []| { let n = __given0.open::<i64>(); cx.finish(n * 2) })
     }
 }
 
@@ -285,7 +284,7 @@ fn labels(declaration: &Declaration, end: FlowEnd) -> Vec<SegmentLabel> {
 }
 
 #[extern_fn(effect = pure)]
-fn pick<'m, 'k, T: Var<kind::Type>>(from: &'m [T], at: &'k u64) -> Option<&'m T> {
+fn pick<'m, 'k, R: Runtime, T: TypeVar<R>>(from: &'m [T], at: &'k u64) -> Option<&'m T> {
     from.get(*at as usize)
 }
 
@@ -410,7 +409,7 @@ fn a_result_borrows_through_a_kept_loan() {
 fn read_text(frame: &mut Frame<'_>, variable: usize) -> String {
     let mut read = None;
     frame.call([Pass::Same(variable)], |entry| {
-        entry.open(|cx, [__given0], []| { let text = __given0.open::<acvus_extern::mode::ByStr>(); 
+        entry.open(|cx, [__given0], []| { let text = __given0.open::<&str>(); 
             read = Some(String::from(&*text));
             cx.finish(())
         })
@@ -454,16 +453,16 @@ fn the_facts_written_are_stated_as_the_compilers_forms() {
 
 /// How many elements a stack holds, read whole.
 #[extern_fn(effect = pure)]
-fn depth<T: Var<kind::Type>>(#[touch(read)] s: &Stack<T>) -> u64 {
+fn depth<R: Runtime, T: TypeVar<R>>(#[touch(read)] s: &Stack<R, T>) -> u64 {
     s.items.len() as u64
 }
 
 /// The element at `at` replaced by `x`, the one it held given back.
 #[extern_fn(effect = pure)]
-fn put<T: Var<kind::Type>>(
+fn put<R: Runtime, T: TypeVar<R>>(
     #[touch(store(x), index = at)]
     #[gives(index = at)]
-    s: &mut Stack<T>,
+    s: &mut Stack<R, T>,
     at: u64,
     x: T,
 ) -> T {
@@ -472,7 +471,7 @@ fn put<T: Var<kind::Type>>(
 
 /// A stack emptied, its depth before given back through `depth`.
 #[extern_fn(effect = pure)]
-fn clear<T: Var<kind::Type>>(#[touch(store(empty))] #[gives(through = depth)] s: &mut Stack<T>) -> u64 {
+fn clear<R: Runtime, T: TypeVar<R>>(#[touch(store(empty))] #[gives(through = depth)] s: &mut Stack<R, T>) -> u64 {
     let depth = s.items.len() as u64;
     s.items.clear();
     depth
@@ -566,13 +565,135 @@ fn a_call_that_never_returns_declares_no_value() {
     assert_eq!(fail.result, DeclTy::Never);
 }
 
-/// A borrowed result's parts need outlive only the borrow they are made
-/// under, whatever lifetimes their own type carries: no type variable is
-/// bounded `'static` (limitations §3). This compiles, and is all it checks.
-#[allow(dead_code)]
-fn borrows_at_any_lifetime<'s, 'x, R: Runtime>(
-    part: &'s [Uniform<R, &'x ()>],
-    sink: &acvus_extern::borrowed::Sink<'s, R>,
-) -> acvus_extern::borrowed::Made<'s, R> {
-    acvus_extern::borrowed::Borrows::made(part.first(), sink)
+/// Its argument's referent, plus one.
+#[extern_fn(effect = pure)]
+fn plus_one(x: &i64) -> i64 {
+    *x + 1
+}
+
+/// Lends a value it holds as its own local to `p` across an await, and
+/// reads that local again once the call has ended.
+#[extern_fn(effect = E)]
+async fn lend_a_local<'f, R: CallsBack, E: EffectVar>(
+    #[executor] cx: &Executor<'_, R>,
+    p: &Uniform<R, Callable<'f, (acvus_extern::runtime::Ref<i64>,), i64, E>>,
+    n: i64,
+) -> i64 {
+    let x = n * 10;
+    let read = p.call_await(cx, (&x,)).await;
+    read + x
+}
+
+#[test]
+fn an_awaited_call_lends_a_local_and_the_handler_keeps_it() {
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let p = frame.function(plus_one::new());
+    let n = produce(&mut frame, 4i64);
+    let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
+
+    let result = executor.block_on(frame.call_dispatch_awaited(&lend_a_local::new(), [Pass::Lend(p), Pass::Give(n)]));
+
+    // x = 40, the callback reads 41 through its loan; 41 + 40.
+    assert_eq!(read::<i64>(&mut frame, result), 81);
+}
+
+/// Adds five to its argument's referent, in place.
+#[extern_fn]
+fn add_five(x: &mut i64) {
+    *x += 5;
+}
+
+/// Lends a value it holds as its own local exclusively to `p` across an
+/// await, and reads what `p` wrote there once the call has ended.
+#[extern_fn(effect = E)]
+async fn lend_a_local_mutably<'f, R: CallsBack, E: EffectVar>(
+    #[executor] cx: &Executor<'_, R>,
+    p: &Uniform<R, Callable<'f, (acvus_extern::runtime::RefMut<i64>,), (), E>>,
+    n: i64,
+) -> i64 {
+    let mut x = n;
+    p.call_await(cx, (&mut x,)).await;
+    x
+}
+
+#[test]
+fn an_awaited_call_lends_mutably_and_sees_the_write() {
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let p = frame.function(add_five::new());
+    let n = produce(&mut frame, 4i64);
+    let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
+
+    let result = executor.block_on(frame.call_dispatch_awaited(&lend_a_local_mutably::new(), [Pass::Lend(p), Pass::Give(n)]));
+
+    assert_eq!(read::<i64>(&mut frame, result), 9);
+}
+
+/// Two numbers read as the digits of one: an order-sensitive reduce.
+#[extern_fn(effect = pure)]
+fn digits(a: i64, b: i64) -> i64 {
+    a * 10 + b
+}
+
+/// Gives `a` and `b` to `f` by value and returns the value `f` gives back.
+#[extern_fn(effect = E, sync = reduce_now)]
+async fn reduce<'f, R: CallsBack, T: TypeVar<R>, E: EffectVar>(
+    #[executor] cx: &Executor<'_, R>,
+    f: &Uniform<R, Callable<'f, (T, T), T, E>>,
+    a: T,
+    b: T,
+) -> T {
+    f.call_await(cx, (a, b)).await
+}
+
+/// `reduce`'s returning body.
+fn reduce_now<'f, R: CallsBack, T: TypeVar<R>, E: EffectVar>(
+    cx: &Executor<'_, R>,
+    f: &Uniform<R, Callable<'f, (T, T), T, E>>,
+    a: T,
+    b: T,
+) -> T {
+    f.call(cx, (a, b))
+}
+
+#[test]
+fn a_type_variables_value_is_given_and_taken_back() {
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let f = frame.function(digits::new());
+    let (a, b) = (produce(&mut frame, 3i64), produce(&mut frame, 4i64));
+    let returned = frame.call_dispatch(&reduce::new(), [Pass::Lend(f), Pass::Give(a), Pass::Give(b)]);
+    let (c, d) = (produce(&mut frame, 5i64), produce(&mut frame, 6i64));
+    let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
+    let awaited = executor.block_on(frame.call_dispatch_awaited(&reduce::new(), [Pass::Lend(f), Pass::Give(c), Pass::Give(d)]));
+
+    assert_eq!(read::<i64>(&mut frame, returned), 34);
+    assert_eq!(read::<i64>(&mut frame, awaited), 56);
+}
+
+/// The element `p` picks from `xs`, if any, read after the await while `xs`
+/// is still lent to the result, plus a hundred per element of `xs`.
+#[extern_fn(effect = E)]
+async fn picked<'f, R: CallsBack, E: EffectVar>(
+    #[executor] cx: &Executor<'_, R>,
+    p: &Uniform<R, Callable<'f, (acvus_extern::runtime::Ref<[Uniform<R, i64>]>,), Option<acvus_extern::runtime::Ref<Uniform<R, i64>>>, E>>,
+    xs: &[Uniform<R, i64>],
+) -> Option<i64> {
+    let picked = p.call_await(cx, (xs,)).await;
+    picked.map(|element| element.get(cx) + xs.len() as i64 * 100)
+}
+
+#[test]
+fn an_awaited_result_borrows_what_the_call_lent() {
+    let runtime = WordRuntime::default();
+    let mut frame = Frame::new(&runtime);
+    let p = frame.function(first_positive::new());
+    let xs = frame.array(&[-3i64, 0, 7, 2]);
+    let executor = tokio::runtime::Builder::new_current_thread().build().expect("a current-thread executor");
+
+    let result = executor.block_on(frame.call_dispatch_awaited(&picked::new(), [Pass::Lend(p), Pass::Lend(xs)]));
+
+    // The first positive element is 7; four elements.
+    assert_eq!(read::<Option<i64>>(&mut frame, result), Some(407));
 }

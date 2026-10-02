@@ -6,13 +6,22 @@
 //! is made and read only by a crossing, at the type the checker settled or
 //! held at its own type (`Uniform::new`), never erased.
 //!
-//! The runtime makes, takes and lends values by kind
-//! (`OpaqueKind`, `PrimitiveKind`, `StringKind`, `OptionKind`, `ResultKind`,
-//! `TupleKind`, `RefKind`), each kind its own associated type, so a runtime
-//! implements each kind for its own representation. A type's crossing
-//! (`Crosses`) is its own: it composes its kind's operations over its parts'
-//! crossings, and the runtime never sees a type's structure, only the kind's.
+//! The runtime makes, takes and views values by kind (`OpaqueKind`,
+//! `PrimitiveKind`, `StringKind`, `OptionKind`, `ResultKind`, `TupleKind`),
+//! makes and reads references to values' places (`RefKind`), and makes and
+//! reads views of runs and of text (`ViewKind`), each its own associated type, so a runtime implements each
+//! for its own representation. `R` is generic, so every operation is
+//! inlined at a call: a value held in place is read in a register, one held
+//! apart by one pointer step.
+//!
+//! What comes into a call is opened as the Rust type its place writes
+//! (`Open`): a value, a view of a place, a box, a reference value, or a
+//! container of these. What goes out is a runtime value (`Give`): a box
+//! (`Uniform`), a reference value (`Ref`, `Mut`), or a container of these. A
+//! reference value always names a value's place: the runtime makes one only
+//! from a box's place, so its lifetime is the runtime's borrow.
 
+use std::marker::PhantomData;
 use std::time::Duration;
 
 use acvus_utils::Interner;
@@ -21,23 +30,40 @@ use crate::boundary::entry::Settled;
 use crate::boundary::seal::Crossing;
 use crate::boundary::signed::{SignedS1, SignedS2, SignedS3, Structural};
 use crate::boundary::uniform::{Primitive, Release};
+use crate::decl::{DeclTy, DeclType};
 
-/// A type that crosses at the runtime `R`: one of the language's types, or an
-/// extern type the derive declares. Each crossing is its type's own and is
-/// sealed: this crate writes the language's, and the derive an extern type's.
+/// What comes into a call, opened as the Rust type its place writes, at the
+/// loan `'l`: a value taken, a view of the place a reference names, a box, a
+/// reference value kept, or a container of these (crossing §2).
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a form a value comes in as",
+    label = "no declared type",
+    note = "a value comes in as itself, as a view (`&X`, `&mut X`) of a place, as a box `Uniform<R, X>`, as a reference value `Ref`, `Mut`, or as an `Option`, a `Result` or a tuple of these",
+    note = "a reference to an option, a result or a tuple is lent as its parts' references, the program's `as_ref`"
+)]
+pub trait Open<'l, R: Runtime>: Sized + Crossing {
+    /// Its declared type.
+    fn decl(names: &Interner) -> DeclTy;
+    #[doc(hidden)]
+    fn open(rt: &'l R, v: R::Value, at: Settled<'l>) -> Self;
+}
+
+/// What goes out of a call, a runtime value at the loan `'l`: a box, a
+/// reference value, or a container of these (crossing §2). A Rust value goes
+/// out only boxed, `Uniform::new`, and a reference only as a reference value
+/// the runtime made, `Ref::of`:
 ///
-/// `give` makes the runtime's value of `self` and `take` moves one back out.
-/// `open` lends a held value's place as the type's projection, and
-/// `open_ref` the storage a reference value names: `&T` for a type the
-/// runtime holds as itself, and for an option, a result or a tuple the same
-/// structure over its parts' projections (crossing §2).
+/// ```compile_fail,E0277
+/// use acvus_extern::executor::Executor;
+/// use acvus_extern::done::Done;
+/// use acvus_extern::runtime::Runtime;
 ///
-/// A type that crosses may carry lifetimes; a value that holds a loan holds it
-/// as a `Loaned`, never as a Rust reference.
+/// fn finish<R: Runtime>(cx: Executor<'_, R>) -> Done<R> {
+///     cx.finish(3i64)
+/// }
+/// ```
 ///
-/// A type neither declares does not cross, nor does a sequence of a Rust
-/// element type: a sequence is lent as a slice and given as a `Vec` of the
-/// runtime's uniform values, `Vec<Uniform<R, X>>`:
+/// A type neither declares does not cross:
 ///
 /// ```compile_fail,E0277
 /// use acvus_extern::executor::Executor;
@@ -60,34 +86,70 @@ use crate::boundary::uniform::{Primitive, Release};
 ///     cx.finish(vec![1i64])
 /// }
 /// ```
-pub trait Crosses<R: Runtime>: Sized + Send + Sync + Crossing {
-    type Open<'a>
-    where
-        Self: 'a,
-        R: 'a;
-    type OpenMut<'a>
-    where
-        Self: 'a,
-        R: 'a;
-
-    fn give(self, rt: &R, at: Settled<'_>) -> R::Value;
-    fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Self;
-
-    fn open<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Self::Open<'a>
-    where
-        Self: 'a;
-    fn open_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
-    where
-        Self: 'a;
-
-    /// The storage the reference value `reference` names, lent as the view.
-    fn open_ref<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::Open<'a>
-    where
-        Self: 'a;
-    fn open_ref_mut<'a>(rt: &'a R, reference: R::Value, at: Settled<'a>) -> Self::OpenMut<'a>
-    where
-        Self: 'a;
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a form a value goes out as",
+    label = "not a runtime value",
+    note = "a value goes out as a box `Uniform<R, X>` (`Uniform::new`), a reference value `Ref`, `Mut` (`Ref::of`), or an `Option`, a `Result` or a tuple of these"
+)]
+pub trait Give<'l, R: Runtime>: Sized + Crossing {
+    /// Its declared type.
+    fn decl(names: &Interner) -> DeclTy;
+    #[doc(hidden)]
+    fn give(self, rt: &'l R, at: Settled<'l>) -> R::Value;
 }
+
+/// What a reference value names, viewed as this Rust type: a value's place
+/// viewed in place by its kind (a primitive, text, an extern-defined value, a
+/// box whose values have no Rust view of their own), or a view of a run or of
+/// text (a slice of boxes, `str`).
+pub trait Referent<R: Runtime>: Crossing + DeclType {
+    #[doc(hidden)]
+    fn view<'l>(rt: &'l R, reference: R::Value, at: Settled<'l>) -> &'l Self
+    where
+        Self: 'l;
+    #[doc(hidden)]
+    fn view_mut<'l>(rt: &'l R, reference: R::Value, at: Settled<'l>) -> &'l mut Self
+    where
+        Self: 'l;
+}
+
+/// A part of a function type, named with no loan of its own (crossing §2):
+/// at the call's loan `'l` it is given as `Give` and opened as `Open`. A value
+/// type is given boxed and opened as itself; `RefKey<X>` is given as
+/// `Ref<'l, R, X>` and opened as `&'l X`; `Func<A, U, E>` is a function value,
+/// which holds what the call lent (compiler: types §5); an extern-defined
+/// type with lifetimes is at `'l` whatever lifetime it is written with.
+pub trait Key<'l, R: Runtime>: DeclType {
+    type Give: Give<'l, R>;
+    type Open: Open<'l, R>;
+}
+
+/// A Rust type written in a signature at `'l`, named as a key: how a generic
+/// function's signature, written in Rust, is stated in its keys. A key names
+/// a declared type, so a box at a value type and the value type name one key:
+/// `[Uniform<R, i64>]` and `[i64]` are both `[i64]`.
+pub trait Place<'l, R: Runtime> {
+    type Key: ?Sized;
+}
+
+/// How a declared type, written as its key, is viewed where a reference
+/// names it: a value type as itself, a type variable as its box, a run of
+/// values as the slice of its elements as held, text as `str`.
+pub trait Viewed<R: Runtime>: DeclType {
+    type View: ?Sized;
+}
+
+/// How a value of a declared type, written as its key, is held in a
+/// container: a value type boxed, a type variable as its box.
+pub trait Repr<R: Runtime>: Viewed<R> {
+    type Held;
+}
+
+/// The declared type `&X` as a function type's part.
+pub struct RefKey<X: ?Sized>(PhantomData<fn() -> *const X>);
+
+/// The declared type `&mut X` as a function type's part.
+pub struct MutKey<X: ?Sized>(PhantomData<fn() -> *const X>);
 
 /// An extern type, held by the runtime as the Rust value itself. Only the
 /// derive declares one, `#[derive(Opaque)]`, reading the definition: a field
@@ -115,26 +177,7 @@ pub trait Crosses<R: Runtime>: Sized + Send + Sync + Crossing {
 /// #[derive(acvus_extern::Opaque)]
 /// pub struct Fixed<const N: usize> { items: [u8; N] }
 /// ```
-pub trait Opaque: Send + Sync + Structural + Crossing + Referent {}
-
-/// What a reference value is made to from Rust storage: storage whose Rust
-/// type is the type the reference is read back at. A type the runtime holds as
-/// itself (an extern type, a primitive, a `String`), text, a type variable's
-/// value and a run of them are; an option, a result and a tuple, which the
-/// runtime holds in its own representation, are not, so no Rust storage of
-/// one is lent as a reference. Sealed: only this crate and the derive declare
-/// one.
-pub trait Referent: Crossing {}
-
-/// What a reference value is made from: a Rust borrow, at a lifetime within
-/// the call, of storage that lives until the loan it is labelled with ends
-/// (`executor::Executor::finish_borrowed`); a writable one only from an
-/// exclusive borrow. The storage is what an argument lent, whole or any part
-/// of it, or what a kept loan holds (runtime contract §2, References).
-pub enum RefTarget<'a, P: ?Sized> {
-    Shared(&'a P),
-    Exclusive(&'a mut P),
-}
+pub trait Opaque: Send + Sync + Structural + Crossing {}
 
 pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS3 {
     type Value: Release + Send + Sync + 'static;
@@ -145,14 +188,14 @@ pub trait Runtime: Sized + Send + Sync + 'static + SignedS1 + SignedS2 + SignedS
     type Option: OptionKind<Self>;
     type Result: ResultKind<Self>;
     type Tuple: TupleKind<Self>;
+    type View: ViewKind<Self>;
     type Ref: RefKind<Self>;
 
     fn interner(&self) -> &Interner;
     fn sleep(&self, d: Duration) -> impl Future<Output = ()> + Send;
 }
 
-/// An extern type's value, holding the Rust value itself, whose storage is lent
-/// as a reference to it.
+/// An extern type's value, holding the Rust value itself, viewed in place.
 pub trait OpaqueKind<R: Runtime> {
     fn give<T: Opaque>(rt: &R, value: T, at: Settled<'_>) -> R::Value;
     /// Moves the value out, releasing its storage.
@@ -162,7 +205,8 @@ pub trait OpaqueKind<R: Runtime> {
     fn exclusive<'a, T: Opaque + 'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut T;
 }
 
-/// A primitive's value, the primitive in the runtime's own representation.
+/// A primitive's value, the primitive in the runtime's own representation,
+/// viewed in place as the Rust primitive.
 pub trait PrimitiveKind<R: Runtime> {
     fn give<P: Primitive>(rt: &R, value: P, at: Settled<'_>) -> R::Value;
     fn take<P: Primitive>(rt: &R, v: R::Value, at: Settled<'_>) -> P;
@@ -171,7 +215,7 @@ pub trait PrimitiveKind<R: Runtime> {
     fn exclusive<'a, P: Primitive>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut P;
 }
 
-/// Text, a Rust `String`.
+/// Text, a Rust `String`, viewed in place.
 pub trait StringKind<R: Runtime> {
     fn give(rt: &R, value: String, at: Settled<'_>) -> R::Value;
     fn take(rt: &R, v: R::Value, at: Settled<'_>) -> String;
@@ -180,50 +224,46 @@ pub trait StringKind<R: Runtime> {
     fn exclusive<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut String;
 }
 
-/// An option over its part's value. Its release releases the part. Lent, it
-/// is its part, if present, in place.
+/// An option over its part's value. Its release releases the part.
 pub trait OptionKind<R: Runtime> {
     fn give(rt: &R, value: Option<R::Value>, at: Settled<'_>) -> R::Value;
     fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Option<R::Value>;
-    fn shared<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Option<&'a R::Value>;
-    fn exclusive<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> Option<&'a mut R::Value>;
 }
 
 /// A result over its ok part's or its error part's value.
 pub trait ResultKind<R: Runtime> {
     fn give(rt: &R, value: Result<R::Value, R::Value>, at: Settled<'_>) -> R::Value;
     fn take(rt: &R, v: R::Value, at: Settled<'_>) -> Result<R::Value, R::Value>;
-    fn shared<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> Result<&'a R::Value, &'a R::Value>;
-    fn exclusive<'a>(
-        rt: &'a R,
-        place: &'a mut R::Value,
-        at: Settled<'a>,
-    ) -> Result<&'a mut R::Value, &'a mut R::Value>;
 }
 
 /// A tuple over its `N` parts' values.
 pub trait TupleKind<R: Runtime> {
     fn give<const N: usize>(rt: &R, parts: [R::Value; N], at: Settled<'_>) -> R::Value;
     fn take<const N: usize>(rt: &R, v: R::Value, at: Settled<'_>) -> [R::Value; N];
-    fn shared<'a, const N: usize>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> &'a [R::Value; N];
-    fn exclusive<'a, const N: usize>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> &'a mut [R::Value; N];
 }
 
-/// A reference value, naming storage the call lent.
+/// A view: a run of values' places or a range of text, a reference value the
+/// program lends, or made from a `String`'s place and a range, or narrowed
+/// from another view (runtime contract §2, Views). A view is read back as the
+/// run of its places, or as `str`, for the loan `'l`.
+pub trait ViewKind<R: Runtime> {
+    fn text<'a>(rt: &'a R, base: &'a R::Value, from: usize, to: usize, at: Settled<'a>) -> R::Value;
+    fn text_mut<'a>(rt: &'a R, base: &'a mut R::Value, from: usize, to: usize, at: Settled<'a>) -> R::Value;
+    fn narrow<'a>(rt: &'a R, view: R::Value, from: usize, to: usize, at: Settled<'a>) -> R::Value;
+
+    fn places<'l>(rt: &'l R, view: R::Value, at: Settled<'l>) -> &'l [R::Value];
+    fn places_mut<'l>(rt: &'l R, view: R::Value, at: Settled<'l>) -> &'l mut [R::Value];
+    fn str<'l>(rt: &'l R, view: R::Value, at: Settled<'l>) -> &'l str;
+    fn str_mut<'l>(rt: &'l R, view: R::Value, at: Settled<'l>) -> &'l mut str;
+}
+
+/// A reference value: made by the runtime from a value's place the call
+/// borrows, a writable one only from an exclusive borrow, and read back as
+/// that place for the loan `'l`. By S2 it names its place until the
+/// checker's loan ends (runtime contract §2, References).
 pub trait RefKind<R: Runtime> {
-    /// The reference value made from a part of storage the call lent; a
-    /// borrowed result is one (crossing §4).
-    fn reference<'a, P: ?Sized>(rt: &'a R, target: RefTarget<'a, P>, at: Settled<'a>) -> R::Value;
-    /// What a reference value names, read back for the loan `'l` it was made
-    /// under: by S2 it names its target until that loan ends (runtime
-    /// contract §2, Typed reads).
-    fn target<'l, P: ?Sized>(rt: &'l R, v: R::Value, at: Settled<'l>) -> &'l P;
-    fn target_mut<'l, P: ?Sized>(rt: &'l R, v: R::Value, at: Settled<'l>) -> &'l mut P;
-    /// The runtime's value a reference value names, where its target is
-    /// held in the runtime's own representation (an option, a result, a
-    /// tuple, a type variable's value, a function value), read back as that
-    /// value's place for the loan `'l`, as `target` reads storage of a Rust
-    /// type.
+    fn of<'a>(rt: &'a R, place: &'a R::Value, at: Settled<'a>) -> R::Value;
+    fn of_mut<'a>(rt: &'a R, place: &'a mut R::Value, at: Settled<'a>) -> R::Value;
     fn place<'l>(rt: &'l R, v: R::Value, at: Settled<'l>) -> &'l R::Value;
     fn place_mut<'l>(rt: &'l R, v: R::Value, at: Settled<'l>) -> &'l mut R::Value;
 }

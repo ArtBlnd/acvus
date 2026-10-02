@@ -1,13 +1,13 @@
-//! `#[derive(Opaque)]` (rfc_extern macros §2): an extern-defined opaque type,
+//! `#[derive(Opaque)]` (rfc_extern macros §3): an extern-defined opaque type,
 //! held by the runtime as the Rust value itself. The derive reads the
 //! definition and emits the type's crossing, its declared type and the
 //! structural facts no stable bound states (safety §2), and nothing else.
 //!
 //! A generic parameter is a lifetime, the runtime (`R: Runtime`), the effect
-//! the type carries (`E: Var<kind::Effect>`), its identity
-//! (`I: Var<kind::Identity>`), or a type parameter, unbounded: parametric, its
-//! value the runtime's uniform one, so a type parameter crosses and is
-//! declared only at `Uniform<R, X>` (runtime contract §1). A field naming a
+//! the type carries (`E: EffectVar`), its identity (`I: IdentityVar`), or a
+//! type variable (`T: TypeVar<R>`): parametric, its value the runtime's
+//! uniform one, so a type parameter crosses and is declared only at
+//! `Uniform<R, X>` (runtime contract §1). A field naming a
 //! lifetime or a type parameter is `Structural`, which carries what P and M
 //! say of them (safety §2): a field whose type projects through one or holds
 //! it under interior mutability has no `Structural` and is refused by its
@@ -15,16 +15,16 @@
 //! naming only them, a marker, is free.
 
 use proc_macro2::{Span, TokenStream};
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::spanned::Spanned;
 use syn::visit::Visit;
-use syn::{Data, DeriveInput, Fields, GenericParam, Ident, Lifetime, PathArguments, Type, TypeParamBound, WherePredicate};
+use syn::{Data, DeriveInput, Fields, GenericParam, Ident, Lifetime, Type, TypeParamBound, WherePredicate};
 
 /// What a generic parameter of the type is.
 enum Param {
     Lifetime(Lifetime),
     Runtime { ident: Ident, bounds: Vec<TypeParamBound> },
-    Type(Ident),
+    Type { ident: Ident, bounds: Vec<TypeParamBound> },
     Effect { ident: Ident, bounds: Vec<TypeParamBound> },
     Identity { ident: Ident, bounds: Vec<TypeParamBound> },
 }
@@ -35,20 +35,22 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let fields = field_types(&input)?;
 
     let lifetimes: Vec<&Lifetime> = params.iter().filter_map(|p| match p { Param::Lifetime(l) => Some(l), _ => None }).collect();
-    let types: Vec<&Ident> = params.iter().filter_map(|p| match p { Param::Type(t) => Some(t), _ => None }).collect();
+    let types: Vec<&Ident> = params.iter().filter_map(|p| match p { Param::Type { ident, .. } => Some(ident), _ => None }).collect();
     let runtime = params.iter().find_map(|p| match p { Param::Runtime { ident, .. } => Some(ident), _ => None });
 
     // Each parameter as written, with the bounds the definition gives it.
     let declared: Vec<TokenStream> = params.iter().map(|p| match p {
         Param::Lifetime(l) => quote!(#l),
-        Param::Type(t) => quote!(#t),
-        Param::Runtime { ident, bounds } | Param::Effect { ident, bounds } | Param::Identity { ident, bounds } => {
+        Param::Type { ident, bounds }
+        | Param::Runtime { ident, bounds }
+        | Param::Effect { ident, bounds }
+        | Param::Identity { ident, bounds } => {
             quote!(#ident: #(#bounds)+*)
         }
     }).collect();
     let written: Vec<TokenStream> = params.iter().map(|p| match p {
         Param::Lifetime(l) => quote!(#l),
-        Param::Type(t) | Param::Runtime { ident: t, .. } | Param::Effect { ident: t, .. } | Param::Identity { ident: t, .. } => {
+        Param::Type { ident: t, .. } | Param::Runtime { ident: t, .. } | Param::Effect { ident: t, .. } | Param::Identity { ident: t, .. } => {
             quote!(#t)
         }
     }).collect();
@@ -58,7 +60,7 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     let named: Vec<&Type> = fields.iter().copied().filter(|ty| names_a_parameter(ty, &params)).collect();
     let canon: Vec<TokenStream> = params.iter().map(|p| match p {
         Param::Lifetime(_) => quote!('static),
-        Param::Type(t) => quote!(<#t as ::acvus_extern::Structural>::Canon),
+        Param::Type { ident: t, .. } => quote!(<#t as ::acvus_extern::Structural>::Canon),
         Param::Runtime { ident, .. } | Param::Effect { ident, .. } | Param::Identity { ident, .. } => quote!(#ident),
     }).collect();
     let statics: Vec<TokenStream> = params.iter().filter_map(|p| match p {
@@ -72,55 +74,50 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
     };
     let generic_facts = params.iter().filter_map(|p| match p {
         Param::Lifetime(_) => Some(quote!(::acvus_extern::GenericParam::Lifetime)),
-        Param::Type(_) => Some(quote!(::acvus_extern::GenericParam::Type)),
+        Param::Type { .. } => Some(quote!(::acvus_extern::GenericParam::Type)),
         _ => None,
     });
 
-    // The type at the runtime it crosses at: each type parameter its uniform
-    // value at an index, the runtime its own or a fresh one.
+    // The runtime the type crosses at: its own, or a fresh one.
     let at_runtime = runtime.cloned().unwrap_or_else(|| Ident::new("__R", Span::call_site()));
-    let indices: Vec<Ident> = (0..types.len()).map(|at| format_ident!("__X{}", at)).collect();
-    let crossing_args = at_indices(&params, &at_runtime, |effect| quote!(#effect), |identity| quote!(#identity));
-    let crossing_generics: Vec<TokenStream> = lifetimes
+    let at_generics: Vec<TokenStream> = declared
         .iter()
-        .map(|l| quote!(#l))
-        .chain(std::iter::once(quote!(#at_runtime: ::acvus_extern::runtime::Runtime)))
-        .chain(indices.iter().map(|x| quote!(#x)))
-        .chain(params.iter().filter_map(|p| match p {
-            Param::Effect { ident, bounds } | Param::Identity { ident, bounds } => Some(quote!(#ident: #(#bounds)+*)),
-            _ => None,
-        }))
+        .cloned()
+        .chain(runtime.is_none().then(|| quote!(#at_runtime: ::acvus_extern::runtime::Runtime)))
         .collect();
-
-    // The type as a declaration writes it: each type parameter at a declared
-    // type, its effect and identity at the declaration's variables.
-    let declared_args = at_indices(
-        &params,
-        &at_runtime,
-        |_| quote!(::acvus_extern::decl::EffectNth<__EFFECT>),
-        |_| quote!(::acvus_extern::decl::IdentityNth<__IDENTITY>),
-    );
-    let declared_generics: Vec<TokenStream> = lifetimes
-        .iter()
-        .map(|l| quote!(#l))
-        .chain((runtime.is_some() || !types.is_empty()).then(|| quote!(#at_runtime: ::acvus_extern::runtime::Runtime)))
-        .chain(indices.iter().map(|x| quote!(#x: ::acvus_extern::decl::DeclType)))
-        .chain(params.iter().filter_map(|p| match p {
-            Param::Effect { .. } => Some(quote!(const __EFFECT: u32)),
-            Param::Identity { .. } => Some(quote!(const __IDENTITY: u32)),
-            _ => None,
-        }))
-        .collect();
-    let effect = match params.iter().any(|p| matches!(p, Param::Effect { .. })) {
-        true => quote!(::core::option::Option::Some(::acvus_extern::decl::DeclEffect::Var(__EFFECT))),
-        false => quote!(::core::option::Option::None),
+    // Its declared type: its name, each type parameter's declared type, its
+    // effect and its identity variables' positions, and its lifetimes.
+    let effect = match params.iter().find_map(|p| match p { Param::Effect { ident, .. } => Some(ident), _ => None }) {
+        Some(e) => quote!(::core::option::Option::Some(::acvus_extern::decl::DeclEffect::Var(<#e as ::acvus_extern::decl::EffectVar>::INDEX))),
+        None => quote!(::core::option::Option::None),
     };
-    let identity = match params.iter().any(|p| matches!(p, Param::Identity { .. })) {
-        true => quote!(::core::option::Option::Some(__IDENTITY)),
-        false => quote!(::core::option::Option::None),
+    let identity = match params.iter().find_map(|p| match p { Param::Identity { ident, .. } => Some(ident), _ => None }) {
+        Some(i) => quote!(::core::option::Option::Some(<#i as ::acvus_extern::decl::IdentityVar>::INDEX)),
+        None => quote!(::core::option::Option::None),
     };
     let lifetime_count = lifetimes.len() as u32;
     let type_name = name.to_string();
+    let runtime_value = quote!(<#at_runtime as ::acvus_extern::runtime::Runtime>::Value);
+    // The type at one loan: each of its lifetimes `'__l`, the rest as
+    // written; and the generics that leaves.
+    let at_loan: Vec<TokenStream> = params.iter().map(|p| match p {
+        Param::Lifetime(_) => quote!('__l),
+        Param::Type { ident: t, .. } | Param::Runtime { ident: t, .. } | Param::Effect { ident: t, .. } | Param::Identity { ident: t, .. } => {
+            quote!(#t)
+        }
+    }).collect();
+    let loan_generics: Vec<TokenStream> = std::iter::once(quote!('__l))
+        .chain(params.iter().filter_map(|p| match p {
+            Param::Lifetime(_) => None,
+            Param::Type { ident, bounds }
+            | Param::Runtime { ident, bounds }
+            | Param::Effect { ident, bounds }
+            | Param::Identity { ident, bounds } => Some(quote!(#ident: #(#bounds)+*)),
+        }))
+        .chain(runtime.is_none().then(|| quote!(#at_runtime: ::acvus_extern::runtime::Runtime)))
+        .collect();
+    let key_generics: Vec<TokenStream> = std::iter::once(quote!('__l)).chain(at_generics.iter().cloned()).collect();
+    let opaque_kind = quote!(<<#at_runtime as ::acvus_extern::runtime::Runtime>::Opaque as ::acvus_extern::runtime::OpaqueKind<#at_runtime>>);
 
     Ok(quote! {
         // SAFETY: `#[derive(Opaque)]` wrote the crossing below from the
@@ -165,89 +162,19 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             };
         }
 
-        impl<#(#declared),*> ::acvus_extern::runtime::Referent for #name<#(#written),*> {}
-
         impl<#(#declared),*> ::acvus_extern::runtime::Opaque for #name<#(#written),*>
         where
             Self: ::core::marker::Send + ::core::marker::Sync + ::acvus_extern::Structural,
         {
         }
 
-        impl<#(#crossing_generics),*> ::acvus_extern::runtime::Crosses<#at_runtime> for #name<#(#crossing_args),*>
-        where
-            Self: ::acvus_extern::runtime::Opaque,
-        {
-            type Open<'__a>
-                = &'__a Self
-            where
-                Self: '__a,
-                #at_runtime: '__a;
-            type OpenMut<'__a>
-                = &'__a mut Self
-            where
-                Self: '__a,
-                #at_runtime: '__a;
-
-            fn give(self, rt: &#at_runtime, at: ::acvus_extern::Settled<'_>) -> <#at_runtime as ::acvus_extern::runtime::Runtime>::Value {
-                <<#at_runtime as ::acvus_extern::runtime::Runtime>::Opaque as ::acvus_extern::runtime::OpaqueKind<#at_runtime>>::give(rt, self, at)
-            }
-
-            fn take(rt: &#at_runtime, v: <#at_runtime as ::acvus_extern::runtime::Runtime>::Value, at: ::acvus_extern::Settled<'_>) -> Self {
-                <<#at_runtime as ::acvus_extern::runtime::Runtime>::Opaque as ::acvus_extern::runtime::OpaqueKind<#at_runtime>>::take(rt, v, at)
-            }
-
-            fn open<'__a>(
-                rt: &'__a #at_runtime,
-                place: &'__a <#at_runtime as ::acvus_extern::runtime::Runtime>::Value,
-                at: ::acvus_extern::Settled<'__a>,
-            ) -> Self::Open<'__a>
-            where
-                Self: '__a,
-            {
-                <<#at_runtime as ::acvus_extern::runtime::Runtime>::Opaque as ::acvus_extern::runtime::OpaqueKind<#at_runtime>>::shared(rt, place, at)
-            }
-
-            fn open_mut<'__a>(
-                rt: &'__a #at_runtime,
-                place: &'__a mut <#at_runtime as ::acvus_extern::runtime::Runtime>::Value,
-                at: ::acvus_extern::Settled<'__a>,
-            ) -> Self::OpenMut<'__a>
-            where
-                Self: '__a,
-            {
-                <<#at_runtime as ::acvus_extern::runtime::Runtime>::Opaque as ::acvus_extern::runtime::OpaqueKind<#at_runtime>>::exclusive(rt, place, at)
-            }
-
-            fn open_ref<'__a>(
-                rt: &'__a #at_runtime,
-                reference: <#at_runtime as ::acvus_extern::runtime::Runtime>::Value,
-                at: ::acvus_extern::Settled<'__a>,
-            ) -> Self::Open<'__a>
-            where
-                Self: '__a,
-            {
-                <<#at_runtime as ::acvus_extern::runtime::Runtime>::Ref as ::acvus_extern::runtime::RefKind<#at_runtime>>::target(rt, reference, at)
-            }
-
-            fn open_ref_mut<'__a>(
-                rt: &'__a #at_runtime,
-                reference: <#at_runtime as ::acvus_extern::runtime::Runtime>::Value,
-                at: ::acvus_extern::Settled<'__a>,
-            ) -> Self::OpenMut<'__a>
-            where
-                Self: '__a,
-            {
-                <<#at_runtime as ::acvus_extern::runtime::Runtime>::Ref as ::acvus_extern::runtime::RefKind<#at_runtime>>::target_mut(rt, reference, at)
-            }
-        }
-
-        impl<#(#declared_generics),*> ::acvus_extern::decl::DeclType for #name<#(#declared_args),*> {
+        impl<#(#declared),*> ::acvus_extern::decl::DeclType for #name<#(#written),*> {
             fn decl_ty(names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::DeclTy {
                 let module: ::std::vec::Vec<_> =
                     ::core::module_path!().split("::").map(|segment| names.intern(segment)).collect();
                 ::acvus_extern::decl::DeclTy::Extern {
                     name: ::acvus_extern::decl::QualifiedRef::qualified(names.namespace(&module), names.intern(#type_name)),
-                    args: ::std::vec![#(<#indices as ::acvus_extern::decl::DeclType>::decl_ty(names)),*],
+                    args: ::std::vec![#(<#types as ::acvus_extern::decl::DeclType>::decl_ty(names)),*],
                     effect: #effect,
                     identity: #identity,
                     lifetimes: #lifetime_count,
@@ -255,48 +182,62 @@ pub fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
             }
         }
 
-        impl<#(#declared_generics),*> ::acvus_extern::decl::Part for #name<#(#declared_args),*> {
-            type Class = ::acvus_extern::decl::part::Value;
-            type Of = Self;
-        }
-
-        impl<#(#declared_generics),*> ::acvus_extern::decl::ParamMode for #name<#(#declared_args),*> {
-            type Mode = ::acvus_extern::mode::ByValue<Self>;
-
+        // The type is held in place by the opaque kind, so it is boxed,
+        // viewed and taken as every extern-defined value is. At a loan it
+        // comes in as itself, every lifetime of it that loan; as a part of a
+        // function type it is named with any lifetime, given boxed and opened
+        // as itself at the call's loan; and written in a signature it is its
+        // own key, viewed as itself and held boxed.
+        impl<#(#loan_generics),*> ::acvus_extern::runtime::Open<'__l, #at_runtime> for #name<#(#at_loan),*>
+        where
+            Self: ::acvus_extern::runtime::Opaque,
+        {
             fn decl(names: &::acvus_extern::decl::Interner) -> ::acvus_extern::decl::DeclTy {
                 <Self as ::acvus_extern::decl::DeclType>::decl_ty(names)
             }
+
+            fn open(rt: &'__l #at_runtime, v: #runtime_value, at: ::acvus_extern::Settled<'__l>) -> Self {
+                #opaque_kind::take(rt, v, at)
+            }
+        }
+
+        impl<#(#key_generics),*> ::acvus_extern::runtime::Key<'__l, #at_runtime> for #name<#(#written),*>
+        where
+            #name<#(#at_loan),*>: ::acvus_extern::runtime::Open<'__l, #at_runtime> + ::acvus_extern::runtime::Opaque,
+        {
+            type Give = ::acvus_extern::Uniform<#at_runtime, #name<#(#at_loan),*>>;
+            type Open = #name<#(#at_loan),*>;
+        }
+
+        impl<#(#at_generics),*> ::acvus_extern::Index<#at_runtime> for #name<#(#written),*>
+        where
+            Self: ::acvus_extern::runtime::Opaque,
+        {
+            type View = Self;
+            type Key = Self;
+        }
+
+        impl<#(#at_generics),*> ::acvus_extern::runtime::Viewed<#at_runtime> for #name<#(#written),*>
+        where
+            Self: ::acvus_extern::runtime::Opaque,
+        {
+            type View = Self;
+        }
+
+        impl<#(#at_generics),*> ::acvus_extern::runtime::Repr<#at_runtime> for #name<#(#written),*>
+        where
+            Self: ::acvus_extern::runtime::Opaque,
+        {
+            type Held = ::acvus_extern::Uniform<#at_runtime, Self>;
+        }
+
+        impl<#(#loan_generics),*> ::acvus_extern::runtime::Place<'__l, #at_runtime> for #name<#(#at_loan),*>
+        where
+            Self: ::acvus_extern::runtime::Key<'__l, #at_runtime>,
+        {
+            type Key = Self;
         }
     })
-}
-
-/// The type's arguments with each type parameter its uniform value at its own
-/// index, `__X0`, `__X1`, .. in order, each lifetime and the runtime as
-/// written, and the effect and the identity as `effect` and `identity` write
-/// them.
-fn at_indices(
-    params: &[Param],
-    runtime: &Ident,
-    effect: impl Fn(&Ident) -> TokenStream,
-    identity: impl Fn(&Ident) -> TokenStream,
-) -> Vec<TokenStream> {
-    let mut args = Vec::with_capacity(params.len());
-    let mut next = 0usize;
-    for param in params {
-        let arg = match param {
-            Param::Lifetime(l) => quote!(#l),
-            Param::Runtime { ident, .. } => quote!(#ident),
-            Param::Type(_) => {
-                let index = format_ident!("__X{}", next);
-                next += 1;
-                quote!(::acvus_extern::Uniform<#runtime, #index>)
-            }
-            Param::Effect { ident, .. } => effect(ident),
-            Param::Identity { ident, .. } => identity(ident),
-        };
-        args.push(arg);
-    }
-    args
 }
 
 /// The type's generic parameters, each by what its bounds say it is.
@@ -326,15 +267,15 @@ fn params(input: &DeriveInput) -> syn::Result<Vec<Param>> {
                 }
                 let ident = t.ident.clone();
                 params.push(match bound_kind(&bounds) {
-                    Some(Kind::Unbounded) => Param::Type(ident),
+                    Some(Kind::Type) => Param::Type { ident, bounds },
                     Some(Kind::Runtime) => Param::Runtime { ident, bounds },
                     Some(Kind::Effect) => Param::Effect { ident, bounds },
                     Some(Kind::Identity) => Param::Identity { ident, bounds },
                     None => {
                         return Err(syn::Error::new(
                             t.span(),
-                            "an opaque type's parameter is unbounded (a type, parametric), `Runtime`, \
-                             `Var<kind::Effect>` or `Var<kind::Identity>`",
+                            "an opaque type's parameter is its runtime (`R: Runtime`), a type variable \
+                             (`T: TypeVar<R>`), an `EffectVar` or an `IdentityVar`",
                         ));
                     }
                 });
@@ -345,10 +286,10 @@ fn params(input: &DeriveInput) -> syn::Result<Vec<Param>> {
         for predicate in &clause.predicates {
             let bounds_a_param = matches!(predicate, WherePredicate::Type(p)
                 if matches!(&p.bounded_ty, Type::Path(path) if params.iter().any(|q| matches!(q,
-                    Param::Runtime { ident, .. } | Param::Effect { ident, .. } | Param::Identity { ident, .. }
+                    Param::Runtime { ident, .. } | Param::Type { ident, .. } | Param::Effect { ident, .. } | Param::Identity { ident, .. }
                         if path.path.is_ident(ident)))));
             if !bounds_a_param {
-                return Err(syn::Error::new(predicate.span(), "an opaque type's `where` clause bounds only its runtime, effect and identity"));
+                return Err(syn::Error::new(predicate.span(), "an opaque type's `where` clause bounds only its runtime, type variables, effect and identity"));
             }
         }
     }
@@ -365,17 +306,17 @@ fn params(input: &DeriveInput) -> syn::Result<Vec<Param>> {
 }
 
 enum Kind {
-    Unbounded,
+    Type,
     Runtime,
     Effect,
     Identity,
 }
 
-/// What a type parameter's bounds say it is: none, one `Runtime`, or one
-/// `Var` of the effect or the identity kind.
+/// What a type parameter's bounds say it is: one `Runtime`, one
+/// `TypeVar<R>`, one `EffectVar` or one `IdentityVar`.
 fn bound_kind(bounds: &[TypeParamBound]) -> Option<Kind> {
     let [bound] = bounds else {
-        return bounds.is_empty().then_some(Kind::Unbounded);
+        return None;
     };
     let TypeParamBound::Trait(trait_bound) = bound else {
         return None;
@@ -384,18 +325,10 @@ fn bound_kind(bounds: &[TypeParamBound]) -> Option<Kind> {
     if last.ident == "Runtime" && last.arguments.is_none() {
         return Some(Kind::Runtime);
     }
-    if last.ident != "Var" {
-        return None;
-    }
-    let PathArguments::AngleBracketed(args) = &last.arguments else {
-        return None;
-    };
-    let [syn::GenericArgument::Type(Type::Path(kind))] = args.args.iter().collect::<Vec<_>>().as_slice() else {
-        return None;
-    };
-    match kind.path.segments.last()?.ident.to_string().as_str() {
-        "Effect" => Some(Kind::Effect),
-        "Identity" => Some(Kind::Identity),
+    match (last.ident.to_string().as_str(), last.arguments.is_none()) {
+        ("TypeVar", false) => Some(Kind::Type),
+        ("EffectVar", true) => Some(Kind::Effect),
+        ("IdentityVar", true) => Some(Kind::Identity),
         _ => None,
     }
 }
@@ -423,7 +356,7 @@ fn names_a_parameter(ty: &Type, params: &[Param]) -> bool {
             self.found |= self.params.iter().any(|p| matches!(p, Param::Lifetime(l) if l == lifetime));
         }
         fn visit_ident(&mut self, ident: &'a Ident) {
-            self.found |= self.params.iter().any(|p| matches!(p, Param::Type(i) if i == ident));
+            self.found |= self.params.iter().any(|p| matches!(p, Param::Type { ident: i, .. } if i == ident));
         }
     }
     let mut names = Names { params, found: false };

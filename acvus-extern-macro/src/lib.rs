@@ -18,7 +18,7 @@ mod lifetimes;
 mod opaque;
 mod sig;
 
-/// An extern-defined opaque type (rfc_extern macros §2, types §2): its
+/// An extern-defined opaque type (rfc_extern macros §3, types §2): its
 /// crossing, its declared type and its structural facts.
 #[proc_macro_derive(Opaque)]
 pub fn derive_opaque(item: TokenStream) -> TokenStream {
