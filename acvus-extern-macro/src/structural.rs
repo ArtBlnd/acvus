@@ -8,9 +8,9 @@ use syn::ext::IdentExt;
 use syn::{Data, DataEnum, DeriveInput, Fields, FieldsNamed, Generics, Ident, Type, WherePredicate, parse_quote};
 
 pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
-    let (give, take, crossing) = match &input.data {
+    let ((give, take, crossing), declare) = match &input.data {
         Data::Struct(data) => match &data.fields {
-            Fields::Named(fields) => object(&input.ident, fields)?,
+            Fields::Named(fields) => (object(&input.ident, fields)?, declared_object(&in_text_order(fields)?)),
             Fields::Unnamed(_) | Fields::Unit => {
                 return Err(syn::Error::new_spanned(
                     &input.ident,
@@ -18,7 +18,7 @@ pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
                 ));
             }
         },
-        Data::Enum(data) => sum(&input.ident, data)?,
+        Data::Enum(data) => (sum(&input.ident, data)?, declared_enum(&input.ident, data)?),
         Data::Union(data) => {
             return Err(syn::Error::new_spanned(data.union_token, "`Structural` derives a struct or an enum; a union has no acvus counterpart"));
         }
@@ -27,6 +27,7 @@ pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
     let generics = with_runtime(&input.generics, &crossing);
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let (_, ty_generics, _) = input.generics.split_for_impl();
+    let declared = declared(input, &crossing, &declare);
     Ok(quote! {
         impl #impl_generics ::acvus_extern::Crossing<__R> for #name #ty_generics #where_clause {
             fn give(self, __rt: &__R) -> <__R as ::acvus_extern::Runtime>::Value {
@@ -37,7 +38,68 @@ pub fn derive(input: &DeriveInput) -> syn::Result<TokenStream> {
                 #take
             }
         }
+
+        #declared
     })
+}
+
+/// The enum's declared type: its variants in their names' text order, each
+/// carrying the payload its fields make (the extern note: `Structural`).
+fn declared_enum(name: &Ident, data: &DataEnum) -> syn::Result<TokenStream> {
+    let mut ordered: Vec<&syn::Variant> = data.variants.iter().collect();
+    ordered.sort_by_key(|variant| variant.ident.unraw().to_string());
+    let mut variants = Vec::new();
+    for variant in ordered {
+        let tag = variant.ident.unraw().to_string();
+        let payload = match &variant.fields {
+            Fields::Unit => quote!(::core::option::Option::None),
+            Fields::Unnamed(unnamed) => {
+                let tys = unnamed.unnamed.iter().map(|field| &field.ty);
+                quote!(::core::option::Option::Some(<(#(#tys),*) as ::acvus_extern::Declared>::declare(__cx)))
+            }
+            Fields::Named(named) => {
+                let object = declared_object(&in_text_order(named)?);
+                quote!(::core::option::Option::Some({ #object }))
+            }
+        };
+        variants.push(quote!((#tag, #payload)));
+    }
+    let label = name.unraw().to_string();
+    Ok(quote! {
+        let __variants = [#(#variants),*];
+        __cx.enumeration(#label, &__variants)
+    })
+}
+
+/// The type's `Declared`, whose body `declare` builds its type.
+fn declared(input: &DeriveInput, fields: &[Type], declare: &TokenStream) -> TokenStream {
+    let name = &input.ident;
+    let mut generics = input.generics.clone();
+    let predicates = &mut generics.make_where_clause().predicates;
+    for ty in fields {
+        let predicate: WherePredicate = parse_quote!(#ty: ::acvus_extern::Declared);
+        predicates.push(predicate);
+    }
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    quote! {
+        impl #impl_generics ::acvus_extern::Declared for #name #ty_generics #where_clause {
+            const UNIFORM: bool = false #(|| <#fields as ::acvus_extern::Declared>::UNIFORM)*;
+
+            fn declare(__cx: &mut ::acvus_extern::Declaring<'_>) -> ::acvus_extern::Ty {
+                #declare
+            }
+        }
+    }
+}
+
+/// An object of `fields`, given in text order.
+fn declared_object(fields: &[Named<'_>]) -> TokenStream {
+    let names = fields.iter().map(|field| field.name.unraw().to_string());
+    let tys = fields.iter().map(|field| field.ty);
+    quote! {
+        let __fields = [#((#names, <#tys as ::acvus_extern::Declared>::declare(__cx))),*];
+        __cx.object(&__fields)
+    }
 }
 
 /// The impl's generics: the type's own, a runtime `__R`, and a `Crossing<__R>`

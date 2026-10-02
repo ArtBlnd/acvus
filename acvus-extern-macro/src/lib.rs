@@ -19,5 +19,5 @@ pub fn structural(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Opaque)]
 pub fn opaque(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    opaque::derive(&input).into()
+    opaque::derive(&input).unwrap_or_else(syn::Error::into_compile_error).into()
 }

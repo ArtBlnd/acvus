@@ -3,14 +3,17 @@
 //! by its kind. Every test ends with no value held, so ownership is checked
 //! along with the results.
 
-use acvus_extern::{ExternFn, FnKind, OptionKind, Registry, ResultKind, Runtime, ScalarKind, StringKind, TupleKind};
+use acvus_extern::{
+    Declared, Declaring, ExternFn, FnKind, OptionKind, Registry, ResultKind, Runtime, ScalarKind, StringKind, TupleKind,
+    Ty,
+};
 use acvus_extern_test::{Safe, Value, live};
 use acvus_mir::decl::{DeclaredFacts, Scheme};
-use acvus_mir::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Poly, TyId, TyKind, Types};
+use acvus_mir::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, TyKind};
 use acvus_utils::{Interner, QualifiedRef};
 
-fn pure_fn(types: &mut Types<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> TyId<Poly> {
-    types.intern(TyKind::Fn {
+fn pure_fn(cx: &mut Declaring<'_>, params: &[Ty], ret: Ty) -> Ty {
+    cx.intern(TyKind::Fn {
         params: params.into(),
         ret,
         effect: EffectTerm::Known(Effect::pure()),
@@ -21,17 +24,11 @@ fn pure_fn(types: &mut Types<Poly>, params: &[TyId<Poly>], ret: TyId<Poly>) -> T
     })
 }
 
-fn declared(
-    types: &mut Types<Poly>,
-    names: &Interner,
-    name: &str,
-    params: &[(&str, TyId<Poly>)],
-    ret: TyId<Poly>,
-) -> (QualifiedRef, Scheme) {
-    let param_types: Vec<TyId<Poly>> = params.iter().map(|(_, ty)| *ty).collect();
+fn declared(cx: &mut Declaring<'_>, name: &str, params: &[(&str, Ty)], ret: Ty) -> (QualifiedRef, Scheme) {
+    let param_types: Vec<Ty> = params.iter().map(|(_, ty)| *ty).collect();
     let scheme = Scheme {
-        ty: pure_fn(types, &param_types, ret),
-        param_names: params.iter().map(|(name, _)| names.intern(name)).collect(),
+        ty: pure_fn(cx, &param_types, ret),
+        param_names: params.iter().map(|(name, _)| cx.name(name)).collect(),
         bounds: Box::new([]),
         impl_of: None,
         requires: Box::new([]),
@@ -40,15 +37,15 @@ fn declared(
         awaits: false,
         specialized: Box::new([]),
     };
-    (QualifiedRef::root(names.intern(name)), scheme)
+    (cx.root(name), scheme)
 }
 
-fn int(types: &mut Types<Poly>) -> TyId<Poly> {
-    types.intern(TyKind::Int(IntTy::I64))
+fn int(cx: &mut Declaring<'_>) -> Ty {
+    <i64 as Declared>::declare(cx)
 }
 
-fn string(types: &mut Types<Poly>) -> TyId<Poly> {
-    types.intern(TyKind::String)
+fn string(cx: &mut Declaring<'_>) -> Ty {
+    <String as Declared>::declare(cx)
 }
 
 fn make_int<R>(rt: &R, x: i64) -> R::Value
@@ -97,9 +94,9 @@ where
 {
     type Args = [R::Value; 1];
 
-    fn declare(types: &mut Types<Poly>, names: &Interner) -> (QualifiedRef, Scheme) {
-        let int = int(types);
-        declared(types, names, "inc", &[("x", int)], int)
+    fn declare(cx: &mut Declaring<'_>) -> (QualifiedRef, Scheme) {
+        let int = int(cx);
+        declared(cx, "inc", &[("x", int)], int)
     }
 
     fn call(rt: &R, [x]: [R::Value; 1]) -> R::Value {
@@ -115,9 +112,9 @@ where
 {
     type Args = [R::Value; 1];
 
-    fn declare(types: &mut Types<Poly>, names: &Interner) -> (QualifiedRef, Scheme) {
-        let string = string(types);
-        declared(types, names, "shout", &[("s", string)], string)
+    fn declare(cx: &mut Declaring<'_>) -> (QualifiedRef, Scheme) {
+        let string = string(cx);
+        declared(cx, "shout", &[("s", string)], string)
     }
 
     fn call(rt: &R, [s]: [R::Value; 1]) -> R::Value {
@@ -133,11 +130,10 @@ where
 {
     type Args = [R::Value; 1];
 
-    fn declare(types: &mut Types<Poly>, names: &Interner) -> (QualifiedRef, Scheme) {
-        let (int, string) = (int(types), string(types));
-        let pair = types.intern(TyKind::Tuple(Box::new([int, string]), ()));
-        let swapped = types.intern(TyKind::Tuple(Box::new([string, int]), ()));
-        declared(types, names, "swap", &[("pair", pair)], swapped)
+    fn declare(cx: &mut Declaring<'_>) -> (QualifiedRef, Scheme) {
+        let pair = <(i64, String) as Declared>::declare(cx);
+        let swapped = <(String, i64) as Declared>::declare(cx);
+        declared(cx, "swap", &[("pair", pair)], swapped)
     }
 
     fn call(rt: &R, [pair]: [R::Value; 1]) -> R::Value {
@@ -157,10 +153,10 @@ where
 {
     type Args = [R::Value; 2];
 
-    fn declare(types: &mut Types<Poly>, names: &Interner) -> (QualifiedRef, Scheme) {
-        let int = int(types);
-        let option = types.intern(TyKind::Option(int, ()));
-        declared(types, names, "or", &[("option", option), ("fallback", int)], int)
+    fn declare(cx: &mut Declaring<'_>) -> (QualifiedRef, Scheme) {
+        let int = int(cx);
+        let option = <Option<i64> as Declared>::declare(cx);
+        declared(cx, "or", &[("option", option), ("fallback", int)], int)
     }
 
     fn call(rt: &R, [option, fallback]: [R::Value; 2]) -> R::Value {
@@ -177,10 +173,10 @@ where
 {
     type Args = [R::Value; 1];
 
-    fn declare(types: &mut Types<Poly>, names: &Interner) -> (QualifiedRef, Scheme) {
-        let (int, string) = (int(types), string(types));
-        let result = types.intern(TyKind::Result(int, string, ()));
-        declared(types, names, "parse", &[("text", string)], result)
+    fn declare(cx: &mut Declaring<'_>) -> (QualifiedRef, Scheme) {
+        let string = string(cx);
+        let result = <Result<i64, String> as Declared>::declare(cx);
+        declared(cx, "parse", &[("text", string)], result)
     }
 
     fn call(rt: &R, [text]: [R::Value; 1]) -> R::Value {
@@ -199,10 +195,10 @@ where
 {
     type Args = [R::Value; 2];
 
-    fn declare(types: &mut Types<Poly>, names: &Interner) -> (QualifiedRef, Scheme) {
-        let int = int(types);
-        let function = pure_fn(types, &[int], int);
-        declared(types, names, "apply", &[("f", function), ("x", int)], int)
+    fn declare(cx: &mut Declaring<'_>) -> (QualifiedRef, Scheme) {
+        let int = int(cx);
+        let function = pure_fn(cx, &[int], int);
+        declared(cx, "apply", &[("f", function), ("x", int)], int)
     }
 
     fn call(rt: &R, [function, x]: [R::Value; 2]) -> R::Value {
@@ -220,10 +216,10 @@ where
 {
     type Args = [R::Value; 1];
 
-    fn declare(types: &mut Types<Poly>, names: &Interner) -> (QualifiedRef, Scheme) {
-        let int = int(types);
-        let function = pure_fn(types, &[int], int);
-        declared(types, names, "adder", &[("n", int)], function)
+    fn declare(cx: &mut Declaring<'_>) -> (QualifiedRef, Scheme) {
+        let int = int(cx);
+        let function = pure_fn(cx, &[int], int);
+        declared(cx, "adder", &[("n", int)], function)
     }
 
     fn call(rt: &R, [n]: [R::Value; 1]) -> R::Value {

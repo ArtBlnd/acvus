@@ -1,7 +1,7 @@
 use acvus_mir::decl::Scheme;
-use acvus_mir::ty::{Poly, Types};
-use acvus_utils::{Interner, QualifiedRef};
+use acvus_utils::QualifiedRef;
 
+use crate::declared::Declaring;
 use crate::kind::{EnumKind, FnKind, ObjectKind, OpaqueKind, OptionKind, RefKind, ResultKind, ScalarKind, StringKind, TupleKind};
 use crate::repr::{Boxed, Words};
 
@@ -66,8 +66,9 @@ where
     /// The call's arguments, one `Value` each: a `[R::Value; N]`.
     type Args: Arguments<R>;
 
-    /// The declaration the compiler takes, its types interned in `types`.
-    fn declare(types: &mut Types<Poly>, names: &Interner) -> (QualifiedRef, Scheme);
+    /// The declaration the compiler takes, its types declared through `cx`,
+    /// which also records every extern-defined type they meet.
+    fn declare(cx: &mut Declaring<'_>) -> (QualifiedRef, Scheme);
 
     /// Runs the call. Every argument is the call's own, and so is the result
     /// it gives back.

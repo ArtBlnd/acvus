@@ -4,6 +4,7 @@
 #![deny(unsafe_code)]
 
 mod crossing;
+mod declared;
 mod kind;
 mod marker;
 mod repr;
@@ -12,6 +13,9 @@ mod uniform;
 
 pub use acvus_extern_macro::{Opaque, Structural};
 pub use crossing::Crossing;
+pub use declared::{
+    Declared, DeclaredEffect, DeclaredIdentity, Declaring, EffectAt, IdentityAt, OpaqueDecl, Ty, Var,
+};
 pub use kind::{EnumKind, FnKind, ObjectKind, OpaqueKind, OptionKind, RefKind, ResultKind, ScalarKind, StringKind, TupleKind};
 pub use marker::{EffectVar, IdentityVar, Never, SomeEffect, SomeIdentity, TypeVar};
 pub use repr::{Boxed, StoredOpaque, StoredRef, Words};

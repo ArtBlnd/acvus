@@ -2,10 +2,10 @@
 //! enum, field by field, each field and variant in its name's text order.
 //! Every test ends with no value held.
 
-use acvus_extern::{Crossing, EnumKind, ExternFn, ObjectKind, Registry, Runtime, Structural};
+use acvus_extern::{Crossing, Declared, Declaring, EnumKind, ExternFn, ObjectKind, Registry, Runtime, Structural};
 use acvus_extern_test::{Safe, Value, live};
 use acvus_mir::decl::{DeclaredFacts, Scheme};
-use acvus_mir::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, Poly, TyKind, Types};
+use acvus_mir::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, TyKind};
 use acvus_utils::{Interner, QualifiedRef};
 
 #[derive(Structural, Debug, Clone, PartialEq)]
@@ -162,25 +162,10 @@ where
 {
     type Args = [R::Value; 1];
 
-    fn declare(types: &mut Types<Poly>, names: &Interner) -> (QualifiedRef, Scheme) {
-        let float = types.intern(TyKind::Float);
-        let string = types.intern(TyKind::String);
-        let labeled = types.intern(TyKind::Object {
-            fields: Box::new([(names.intern("name"), string), (names.intern("width"), float)]),
-            label: (),
-        });
-        let rect = types.intern(TyKind::Tuple(Box::new([float, float]), ()));
-        let shape = types.intern(TyKind::Enum {
-            name: QualifiedRef::root(names.intern("Shape")),
-            variants: Box::new([
-                (names.intern("Empty"), None),
-                (names.intern("Labeled"), Some(labeled)),
-                (names.intern("Rect"), Some(rect)),
-                (names.intern("Square"), Some(float)),
-            ]),
-            label: (),
-        });
-        let ty = types.intern(TyKind::Fn {
+    fn declare(cx: &mut Declaring<'_>) -> (QualifiedRef, Scheme) {
+        let shape = <Shape as Declared>::declare(cx);
+        let float = <f64 as Declared>::declare(cx);
+        let ty = cx.intern(TyKind::Fn {
             params: Box::new([shape]),
             ret: float,
             effect: EffectTerm::Known(Effect::pure()),
@@ -191,7 +176,7 @@ where
         });
         let scheme = Scheme {
             ty,
-            param_names: Box::new([names.intern("shape")]),
+            param_names: Box::new([cx.name("shape")]),
             bounds: Box::new([]),
             impl_of: None,
             requires: Box::new([]),
@@ -200,7 +185,7 @@ where
             awaits: false,
             specialized: Box::new([]),
         };
-        (QualifiedRef::root(names.intern("area")), scheme)
+        (cx.root("area"), scheme)
     }
 
     fn call(rt: &R, [shape]: [R::Value; 1]) -> R::Value {

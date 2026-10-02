@@ -13,10 +13,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use acvus_extern::{
-    Arguments, Boxed, EnumKind, ExternFn, FnKind, ObjectKind, OptionKind, Registry, ResultKind, Runtime, ScalarKind,
-    Stores, StoredOpaque, StoredRef, StringKind, TupleKind, Words,
+    Arguments, Boxed, Declared, Declaring, EnumKind, ExternFn, FnKind, ObjectKind, OptionKind, Registry, ResultKind,
+    Runtime, ScalarKind, Stores, StoredOpaque, StoredRef, StringKind, TupleKind, Ty, Words,
 };
-use acvus_mir::decl::Scheme;
+use acvus_mir::decl::{Scheme, UserTypeDecl};
 use acvus_mir::ty::{Poly, Types};
 use acvus_utils::{Interner, QualifiedRef};
 
@@ -115,13 +115,14 @@ fn mismatch(kind: &str) -> ! {
 pub struct Safe {
     names: Interner,
     types: Types<Poly>,
+    user_types: Vec<UserTypeDecl>,
     declared: Vec<(QualifiedRef, Scheme)>,
     functions: HashMap<QualifiedRef, Body>,
 }
 
 impl Safe {
     pub fn new(names: Interner) -> Self {
-        Safe { names, types: Types::new(), declared: Vec::new(), functions: HashMap::new() }
+        Safe { names, types: Types::new(), user_types: Vec::new(), declared: Vec::new(), functions: HashMap::new() }
     }
 
     pub fn declared(&self) -> &[(QualifiedRef, Scheme)] {
@@ -130,6 +131,27 @@ impl Safe {
 
     pub fn types(&self) -> &Types<Poly> {
         &self.types
+    }
+
+    pub fn user_types(&self) -> &[UserTypeDecl] {
+        &self.user_types
+    }
+
+    pub fn names(&self) -> &Interner {
+        &self.names
+    }
+
+    /// Declares `X` through the registry's own table, as an extern fn's
+    /// declaration does.
+    pub fn declare<X>(&mut self) -> Ty
+    where
+        X: Declared + ?Sized,
+    {
+        self.declare_with(X::declare)
+    }
+
+    pub fn declare_with(&mut self, declare: impl FnOnce(&mut Declaring<'_>) -> Ty) -> Ty {
+        declare(&mut Declaring::new(&mut self.types, &self.names, &mut self.user_types))
     }
 
     pub fn call(&self, name: &str, args: &[Value]) -> Value {
@@ -144,7 +166,7 @@ impl Registry for Safe {
     where
         F: ExternFn<Self>,
     {
-        let (name, scheme) = F::declare(&mut self.types, &self.names);
+        let (name, scheme) = F::declare(&mut Declaring::new(&mut self.types, &self.names, &mut self.user_types));
         self.declared.push((name, scheme));
         let body: Body = Box::new(|rt, args| F::call(rt, F::Args::from_fn(|at| args[at])));
         self.functions.insert(name, body);
