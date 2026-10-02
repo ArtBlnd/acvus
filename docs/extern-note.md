@@ -5,7 +5,7 @@ The single basis of the extern rework. Every step derives from it, and structure
 ## Aim
 
 - Every ordinary Rust function signature is expressible at the extern boundary, strictly more than before. Excluded from signatures are type-level tricks, such as associated types, GATs, HKTs, HRTB tricks and upcasting, and lazy monomorphization.
-- Generality is the intersection of Rust and acvus. What acvus defines and Rust expresses by what Rust guarantees is a general case, met by one rule over the whole concept: `Option`, `Result`, tuples of every arity Rust's means reach, objects and enums as Rust structs and enums projected as pin-project projects them, primitives, `String`, `str`, slices, references, functions and passing modes. A type only Rust has, such as `Vec`, is an extern-defined type to acvus and reaches it only through the general mechanisms. What Rust does not guarantee is not guaranteed.
+- Generality is the intersection of Rust and acvus. What acvus defines and Rust expresses by what Rust guarantees is a general case, met by one rule over the whole concept: `Option`, `Result`, tuples of every arity Rust's means reach, objects and enums as Rust structs and enums projected as pin-project projects them, primitives, `String`, `str`, slices, references, functions and passing modes. A type only Rust has, such as `Vec`, is no part of acvus: an extern-defined type is a Rust type its author defines and marks `#[derive(Opaque)]`, so that what is opaque is written where the type is, and a type the author did not define enters wrapped in one, as `#[derive(Opaque)] struct Stack<T>(Vec<T>)`. What Rust does not guarantee is not guaranteed.
 - A signature that cannot be expressed is a defect of the structure, and the structure is revisited.
 
 ## Invariants and constraints
@@ -22,7 +22,7 @@ These hold by the primitives below, with nothing added on top. The standard is a
 | Primitive | Meaning | Guarded by |
 |---|---|---|
 | `Value` | The runtime's value: pointer-like, `Copy`, never exposed. | privacy |
-| `Uniform<Rt, X>` | A value boxed by the runtime, its type kept by the marker `X`. Made by `Uniform::new(rt, value)`, projected to `&` or `&mut` only through the runtime, never taken out; a `Copy` value may be got. Moved, popped and dropped whole. Requires `X: 'static`, and is invariant in `X` by `PhantomData<fn(X) -> X>` (types §4). Its layout is `R::Value`'s for every `X`: it carries no niche of `X`, which would make `Option<Uniform<Rt, X>>` differ from one `X` to another. Used where a concrete type is needed: `Vec<Uniform<Rt, String>>` is an unmarked `Vec<String>` seen uniformly. | marker, privacy, `'static` |
+| `Uniform<Rt, X>` | A value boxed by the runtime, its type kept by the marker `X`. Made by `Uniform::new(rt, value)`, projected to `&` or `&mut` only through the runtime, never taken out; a `Copy` value may be got. Moved, popped and dropped whole. Requires `X: 'static`, and is invariant in `X` by `PhantomData<fn(X) -> X>` (types §4). Its layout is `R::Value`'s for every `X`: it carries no niche of `X`, which would make `Option<Uniform<Rt, X>>` differ from one `X` to another. Used where a concrete type is needed: `Stack<Uniform<Rt, String>>` is an unmarked `Stack<String>` seen uniformly. | marker, privacy, `'static` |
 | `TypeVar`, `EffectVar`, `IdentityVar` | The one marker bound of a generic parameter, one per kind. Carried through other types, so Rust keeps each variable one type. | Rust's type checker |
 | `InstanceOf` | An impl's witness apart from its value, given only by reference and so never kept: kept, it could meet another type of the same signature. | borrow checker |
 | `Instance` | A value and its impl as one, of one generic function. Its mode, owned, shared or exclusive, is a marker the macro reads from the signature; the body receives `T`, `&T` or `&mut T`. Once received it may go anywhere, its flows tracked. | type, flows |
@@ -30,7 +30,7 @@ These hold by the primitives below, with nothing added on top. The standard is a
 | `#[derive(Structural)]` | A Rust struct with named fields crosses as an acvus object, and a Rust enum as an acvus enum, by value alone: the derive gives each field by its own crossing and takes each back. Neither is lent by reference, the second trade-off taken, since such uses are rare; `Option` and `Result` keep their references. Fields and variants take their places in their names' text order (types §2). A variant's payload is nothing for a unit variant, its field for one unnamed field, the tuple of its fields for several, and the object of its fields for named ones. | Rust's type checker |
 | Flows | Rust lifetime parameters. rustc checks the body; the compiler tracks liveness in the program, so references may sit inside values. | rustc, compiler |
 | Generic function, impl | A generic function enters the compiler as one; an impl enters with the function and the choice it implements. It pairs with `Instance` and `InstanceOf`. | compiler |
-| `#`, demotion | A whole concrete type such as `Vec<String>` is a specialized opaque type, apart from the generic `Vec<T>` over uniform values. A value that passes a non-`#` function even once is unmarked from where it is made, as the compiler decides (types §8). | compiler |
+| `#`, demotion | A whole concrete type such as `Stack<String>` is a specialized opaque type, apart from the generic `Stack<T>` over uniform values. A value that passes a non-`#` function even once is unmarked from where it is made, as the compiler decides (types §8). | compiler |
 | Optimization declarations | Effect, declared facts, ends, casts and conversions, conveyed as declared and trusted. | author |
 | Runtime | Lowers the IR and runs it, implementing the compiler's primitives as functions so nothing else needs `unsafe`. Generic over backends and zero cost from outside. Its contract states only the minimal conditions for a safe runtime, with associated types; its safe kinds are implementable without `unsafe`. It may check internally: misuse panics in a safe runtime and is UB in an optimized one. The compiler's correctness is its premise. | Rust |
 
@@ -62,7 +62,6 @@ The runtime contract gives one associated type per kind, each with a trait of it
 |---|---|---|
 | Scalar | `Int`, `Float`, `Char`, `Bool`, `Unit` | safe |
 | String | `String` | safe |
-| View | `Str`, `Slice` | unsafe |
 | Tuple | `Tuple` | safe |
 | Object | `Object` | safe |
 | Option | `Option` | safe |
@@ -70,9 +69,9 @@ The runtime contract gives one associated type per kind, each with a trait of it
 | Enum | `Enum` | safe |
 | Fn | `Fn`, `Closures` | safe |
 | Opaque | `UserDefined` | unsafe |
-| Ref | `Ref` | unsafe |
+| Ref | `Ref`, with `Str` and `Slice` as what it reaches | unsafe |
 
-Opaque is unsafe because one value is seen as several Rust types, generic and uniform, so it is held untyped and read by layout. Ref is unsafe because a reference is read back from its words. View is unsafe so that a runtime may hold a text or a run as it likes. How a `Value` is laid out is the runtime's choice. An opaque value is `Send + Sync`, so that a spawn may carry it.
+Opaque is unsafe because one value is seen as several Rust types, generic and uniform, so it is held untyped and read by layout. Ref is unsafe because a reference is read back from its words; a reference to text or a run, `&str` or `&[T]`, is two words, the fat-pointer exception, so `Str` and `Slice` need no kind of their own. How a `Value` is laid out is the runtime's choice. An opaque value is `Send + Sync`, so that a spawn may carry it.
 
 `Never` has no value, `Order` and `Handle` are no program's, and `Array` is no declaration's. `Option` and `Result` are held in Rust's own shapes, so a reference to one is a Rust reference to it, and its payload opens natively, as `Option<&_>` and `Result<&_, &_>`. Function values cross both ways: acvus gives its closures to an extern, and an extern gives Rust functions to acvus. Either is a Rust lambda, run on an acvus frame or as a Rust function.
 
