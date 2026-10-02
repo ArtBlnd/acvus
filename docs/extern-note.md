@@ -46,6 +46,12 @@ Safety is decided per kind. A safe kind is implementable without `unsafe`, and m
 
 A reference is returned as a Rust reference, `&'a X` or `&'a mut X`. It crosses as the runtime's reference value, which holds the reference's words, and is read back at one isolated `unsafe` of the extern crate. This is the first trade-off taken: a reference points into Rust memory and is read without the runtime, so a runtime's places are Rust memory; in return the references are Rust's own, with their lifetimes, copies and reborrows checked by Rust. A value that holds a loan is plain Rust, such as `Cursor<'a, T>` holding `&'a [T]`.
 
+The unsafe kinds' implementations sit on `Stores`, which every runtime implements in safe code: it holds the extern crate's `Boxed` behind a `Value`, lends it back shared or exclusive, and gives it back whole, and it holds a reference's `Words`. `Boxed` owns one value of any type, `Send + Sync`, behind one pointer to a header and the value, the header holding an atomic count and the value's drop; it needs no `'static`, since it erases the type. `Words` holds a reference's two words. Reading a `Boxed` or `Words` back as a Rust type is the one `unsafe`, in the extern crate, on the compiler's premise.
+
+`Runtime::share` gives a second owner of a value; `release` ends one. A boxed value shares through its header's count; a value held inline copies. Sharing is for the boundaries that need it, such as a spawn, not for every value: a value never shared is released after one atomic load of its count.
+
+A value that holds a loan is kept in a `Boxed` with its type, its lifetimes included, erased. An entry opens it again at one named lifetime of its own, `'call`, that every loan of the call takes: never `'static`, and never a lifetime the code around it can stretch, so the body, checked against its own signature's lifetimes, only narrows what it holds, and the loans' life is the flows' premise.
+
 `Registry: Runtime` is a runtime that registers extern fns. An extern fn reaches it as a type implementing `ExternFn`, which states its own declaration and whose fixed parameter shape is an associated type: its `N` arguments are `Self::Args`, a `[Value; N]`, which `call` takes; the registry gives the declarations to the compiler. Because the runtime receives each extern fn as a type rather than as an erased function, it can build specialized operations around one: a natural closed loop with its `next` inlined differs greatly from one that calls through an erased function. The macros are what implement `ExternFn`.
 
 ## Kinds
@@ -66,7 +72,7 @@ The runtime contract gives one associated type per kind, each with a trait of it
 | Opaque | `UserDefined` | unsafe |
 | Ref | `Ref` | unsafe |
 
-Opaque is unsafe because one value is seen as several Rust types, generic and uniform, under fresh `Never`s, so it is held untyped and read by layout. Ref is unsafe because a reference is read back from its words. View is unsafe so that a runtime may hold a text or a run as it likes. How a `Value` is laid out is the runtime's choice.
+Opaque is unsafe because one value is seen as several Rust types, generic and uniform, under fresh `Never`s, so it is held untyped and read by layout. Ref is unsafe because a reference is read back from its words. View is unsafe so that a runtime may hold a text or a run as it likes. How a `Value` is laid out is the runtime's choice. An opaque value is `Send + Sync`, so that a spawn may carry it.
 
 `Never` has no value, `Order` and `Handle` are no program's, and `Array` is no declaration's. `Option` and `Result` are held in Rust's own shapes, so a reference to one is a Rust reference to it, and its payload opens natively, as `Option<&_>` and `Result<&_, &_>`. Function values cross both ways: acvus gives its closures to an extern, and an extern gives Rust functions to acvus. Either is a Rust lambda, run on an acvus frame or as a Rust function.
 
@@ -80,9 +86,8 @@ Set aside: lending a struct's projection in continuation-passing style. Through 
 
 Open:
 
-- A value that holds a loan is not `'static`, so the runtime can keep it only with its lifetime erased, and it is opened again bound to its call's one lifetime, never unbounded. How, at one isolated `unsafe`, is designed first.
 - What a Rust closure given to acvus may capture.
-- Async. Work such as a closure is spawned on a thread pool and so crosses `'static`; where it dies there, what it holds is dropped while acvus counts it alive. An `Arc` per value makes `map` and `collect` too slow. Candidates are one `Arc` at the spawn rather than one per value, or a shared-ownership primitive the runtime provides.
+- Async. Work such as a closure is spawned on a thread pool and so crosses `'static`; where it dies there, what it holds is dropped while acvus counts it alive. `Runtime::share` is the means a spawn keeps its values alive by; how a spawn takes it is open.
 
 ## Forbidden
 
