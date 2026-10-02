@@ -88,14 +88,14 @@ async fn measure(text: String) -> i64 {
 
 /// A variable holding `value`, made as a program makes one: a call's result.
 fn produce<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
-    frame.call([], |entry| entry.open::<(), ()>(|cx, (), ()| cx.finish(value)))
+    frame.call([], |entry| entry.open(|cx, [], []| cx.finish(value)))
 }
 
 /// A variable's value, given to a call that takes it by value.
 fn read<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
     let mut read = None;
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open::<(ByValue<T>,), ()>(|cx, (value,), ()| {
+        entry.open(|cx, [__given0], []| { let value = __given0.open::<ByValue<T>>(); 
             read = Some(value);
             cx.finish(())
         })
@@ -170,7 +170,7 @@ unsafe impl acvus_extern::seal::ExternFns for Doubled {}
 
 impl<R: Runtime> acvus_extern::register::ExternFn<R, 1, 0> for Doubled {
     fn call(&self, runtime: &R, args: [R::Value; 1], site: &acvus_extern::SiteShape<R, 0>) -> Done<R> {
-        acvus_extern::Entry::new(runtime, args, site).open::<(ByValue<i64>,), ()>(|cx, (n,), ()| cx.finish(n * 2))
+        acvus_extern::Entry::new(runtime, args, site).open(|cx, [__given0], []| { let n = __given0.open::<ByValue<i64>>(); cx.finish(n * 2) })
     }
 }
 
@@ -410,7 +410,7 @@ fn a_result_borrows_through_a_kept_loan() {
 fn read_text(frame: &mut Frame<'_>, variable: usize) -> String {
     let mut read = None;
     frame.call([Pass::Same(variable)], |entry| {
-        entry.open::<(acvus_extern::mode::ByStr,), ()>(|cx, (text,), ()| {
+        entry.open(|cx, [__given0], []| { let text = __given0.open::<acvus_extern::mode::ByStr>(); 
             read = Some(String::from(&*text));
             cx.finish(())
         })

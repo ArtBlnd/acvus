@@ -303,11 +303,14 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
         .filter(|(_, p)| matches!(p.role, Role::Argument))
         .map(|(i, p)| (i, format_ident!("__a{}", i), sig.at_stand_ins(&p.ty, runtime)))
         .collect();
-    let modes: Vec<TokenStream> = arguments
+    // Each argument opened once, by the mode its parameter's Rust type
+    // picks, from the value the entry hands it at its position.
+    let given: Vec<Ident> = arguments.iter().map(|(i, _, _)| format_ident!("__given{}", i)).collect();
+    let opens: Vec<TokenStream> = arguments
         .iter()
-        .map(|(_, _, ty)| quote!(<#ty as ::acvus_extern::decl::ParamMode>::Mode))
+        .zip(&given)
+        .map(|((_, a, ty), given)| quote!(let #a = #given.open::<<#ty as ::acvus_extern::decl::ParamMode>::Mode>();))
         .collect();
-    let opened = arguments.iter().map(|(_, a, _)| a);
     let call_args: Vec<TokenStream> = sig
         .params
         .iter()
@@ -334,11 +337,9 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
 
     let bounds = sig.runtime_bounds();
     let bounds = quote!(#(+ #bounds)*);
-    let args_tuple = quote!((#(#modes,)*));
     let arity = arguments.len();
     // The attribute states no requirement yet: a site chooses no impl.
     let requirements = 0usize;
-    let opened_tuple = quote!((#(#opened,)*));
 
     let returning = |call: TokenStream| {
         let finish = match sig.output {
@@ -365,7 +366,8 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
                     args: [<#runtime as ::acvus_extern::runtime::Runtime>::Value; #arity],
                     site: &::acvus_extern::SiteShape<#runtime, #requirements>,
                 ) -> ::acvus_extern::done::Done<#runtime> {
-                    ::acvus_extern::Entry::new(runtime, args, site).open::<#args_tuple, ()>(|__cx, #opened_tuple, ()| {
+                    ::acvus_extern::Entry::new(runtime, args, site).open(|__cx, [#(#given),*], []| {
+                        #(#opens)*
                         #finish
                     })
                 }
@@ -398,8 +400,11 @@ fn dispatch(sig: &Sig, sync: Option<&syn::Path>, marker: &Ident, runtime: &Ident
                 site: &'c ::acvus_extern::SiteShape<#runtime, #requirements>,
             ) -> impl ::core::future::Future<Output = ::acvus_extern::done::Done<#runtime>> + ::core::marker::Send + 'c {
                 ::acvus_extern::Entry::new(runtime, args, site)
-                    .open_awaited::<#args_tuple, (), _>(move |__cx, #opened_tuple, ()| async move {
-                        #awaited_finish
+                    .open_awaited(move |__cx, [#(#given),*], []| {
+                        #(#opens)*
+                        async move {
+                            #awaited_finish
+                        }
                     })
             }
         }

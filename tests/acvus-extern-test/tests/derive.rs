@@ -50,13 +50,13 @@ fn part<R: Runtime>(#[executor] cx: &Executor<'_, R>, parts: &Vec<Uniform<R, Str
 }
 
 fn produce<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, value: T) -> usize {
-    frame.call([], |entry| entry.open::<(), ()>(|cx, (), ()| cx.finish(value)))
+    frame.call([], |entry| entry.open(|cx, [], []| cx.finish(value)))
 }
 
 fn read<T: Crosses<WordRuntime>>(frame: &mut Frame<'_>, variable: usize) -> T {
     let mut read = None;
     frame.call([Pass::Give(variable)], |entry| {
-        entry.open::<(ByValue<T>,), ()>(|cx, (value,), ()| {
+        entry.open(|cx, [__given0], []| { let value = __given0.open::<ByValue<T>>(); 
             read = Some(value);
             cx.finish(())
         })

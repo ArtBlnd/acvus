@@ -1,6 +1,7 @@
-//! The one door of one call (crossing §1): it reads every argument at the
-//! site's settled type, opens it by its mode, and hands the body its
-//! arguments and its executor inside a closure (G1, G9, G10).
+//! The one door of one call (crossing §1): it hands the body the call's
+//! arguments and the impls its site chose, each a value to open once by its
+//! parameter's mode at the site's settled type, and its executor, inside a
+//! closure (G1, G9, G10).
 
 use std::marker::PhantomData;
 
@@ -53,35 +54,66 @@ impl<'c, R: Runtime, const N: usize, const M: usize> Entry<'c, R, N, M> {
         Entry { runtime, args, site }
     }
 
-    /// Opens the arguments `A`, one per position, and the requirements `Q`,
-    /// from the site's impls, and runs the returning body.
-    pub fn open<A, Q>(self, body: impl FnOnce(Executor<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Done<R>) -> Done<R>
-    where
-        A: Args<R, N> + 'c,
-        Q: Requires<R, M> + 'c,
-    {
-        let at = Settled::of_the_entry();
-        let args = A::open(self.runtime, self.args, at);
-        let requirements = Q::open(self.runtime, self.site.impls, at);
-        body(Executor::of_the_entry(self.runtime), args, requirements)
+    /// Runs the returning body with the call's arguments and the impls its
+    /// site chose, each to be opened once by its parameter's mode.
+    pub fn open(
+        self,
+        body: impl FnOnce(Executor<'c, R>, [Argument<'c, R>; N], [Impl<'c, R>; M]) -> Done<R>,
+    ) -> Done<R> {
+        let (args, impls) = self.given();
+        body(Executor::of_the_entry(self.runtime), args, impls)
     }
 
-    /// Opens the arguments and the requirements as `open` does, and runs the
-    /// awaited body. The arguments are opened before the body's future is
-    /// made, so the future holds them and nothing else of the entry.
-    pub fn open_awaited<A, Q, Fut>(
+    /// Runs the awaited body as `open` runs the returning one. The body opens
+    /// its arguments before it makes its future, so the future holds them
+    /// and nothing else of the entry.
+    pub fn open_awaited<Fut>(
         self,
-        body: impl FnOnce(Executor<'c, R>, A::Opened<'c>, Q::Opened<'c>) -> Fut,
+        body: impl FnOnce(Executor<'c, R>, [Argument<'c, R>; N], [Impl<'c, R>; M]) -> Fut,
     ) -> impl Future<Output = Done<R>> + Send + 'c
     where
-        A: Args<R, N> + 'c,
-        Q: Requires<R, M> + 'c,
         Fut: Future<Output = Done<R>> + Send + 'c,
     {
-        let at = Settled::of_the_entry();
-        let args = A::open(self.runtime, self.args, at);
-        let requirements = Q::open(self.runtime, self.site.impls, at);
-        body(Executor::of_the_entry(self.runtime), args, requirements)
+        let (args, impls) = self.given();
+        body(Executor::of_the_entry(self.runtime), args, impls)
+    }
+
+    fn given(&self) -> ([Argument<'c, R>; N], [Impl<'c, R>; M]) {
+        let (runtime, at) = (self.runtime, Settled::of_the_entry());
+        let args = self.args.map(|value| Argument { runtime, value, at });
+        let impls = self.site.impls.map(|value| Impl { runtime, value, at });
+        (args, impls)
+    }
+}
+
+/// One argument of a call, opened once by its parameter's mode: only the
+/// entry makes one, and opening it consumes it.
+pub struct Argument<'c, R: Runtime> {
+    runtime: &'c R,
+    value: R::Value,
+    at: Settled<'c>,
+}
+
+impl<'c, R: Runtime> Argument<'c, R> {
+    /// The argument opened by the mode `P` its parameter's Rust type picks.
+    pub fn open<P: Mode<R> + 'c>(self) -> P::Opened<'c> {
+        P::open(self.runtime, self.value, self.at)
+    }
+}
+
+/// One impl a call's site chose for a requirement (impls §3), opened once by
+/// its requirement's mode: only the entry makes one, and opening it
+/// consumes it.
+pub struct Impl<'c, R: Runtime> {
+    runtime: &'c R,
+    value: R::Value,
+    at: Settled<'c>,
+}
+
+impl<'c, R: Runtime> Impl<'c, R> {
+    /// The impl opened by the mode `Q` its requirement's Rust type picks.
+    pub fn open<Q: RequirementMode<R> + 'c>(self) -> Q::Opened<'c> {
+        Q::open(self.runtime, self.value, self.at)
     }
 }
 
@@ -110,37 +142,6 @@ pub trait RequirementMode<R: Runtime>: Crossing {
 
     #[doc(hidden)]
     fn open<'c>(runtime: &'c R, impl_value: R::Value, at: Settled<'c>) -> Self::Opened<'c>
-    where
-        Self: 'c,
-        R: 'c;
-}
-
-/// The argument parameters of a handler, a tuple of `N` modes, one position
-/// each, opened from the call's argument run `[R::Value; N]`.
-pub trait Args<R: Runtime, const N: usize>: Crossing {
-    type Opened<'c>
-    where
-        Self: 'c,
-        R: 'c;
-
-    /// Each argument opened by its position's mode.
-    #[doc(hidden)]
-    fn open<'c>(runtime: &'c R, args: [R::Value; N], at: Settled<'c>) -> Self::Opened<'c>
-    where
-        Self: 'c,
-        R: 'c;
-}
-
-/// The requirement parameters of a handler, a tuple of requirement modes.
-pub trait Requires<R: Runtime, const M: usize>: Crossing {
-    type Opened<'c>
-    where
-        Self: 'c,
-        R: 'c;
-
-    /// Each impl the site chose opened by its requirement's mode.
-    #[doc(hidden)]
-    fn open<'c>(runtime: &'c R, impls: [R::Value; M], at: Settled<'c>) -> Self::Opened<'c>
     where
         Self: 'c,
         R: 'c;
@@ -222,46 +223,3 @@ modes! {
     [T] ByLoanedMut<T> => LoanedMut<'c, T, R>,
         |_runtime, v, _at| LoanedMut::of_the_entry(v);
 }
-
-/// The argument and requirement parameters of each arity: none, and each
-/// tuple of modes.
-macro_rules! mode_tuples {
-    ($($n:literal ($($m:ident $v:ident $i:tt),*))+) => {$(
-        impl<R: Runtime, $($m: Mode<R>),*> Args<R, $n> for ($($m,)*) {
-            type Opened<'c> = ($($m::Opened<'c>,)*)
-            where
-                Self: 'c,
-                R: 'c;
-
-            #[allow(unused_variables, clippy::unused_unit)]
-            fn open<'c>(runtime: &'c R, args: [R::Value; $n], at: Settled<'c>) -> Self::Opened<'c>
-            where
-                Self: 'c,
-                R: 'c,
-            {
-                let [$($v),*] = args;
-                ($($m::open(runtime, $v, at),)*)
-            }
-        }
-
-        impl<R: Runtime, $($m: RequirementMode<R>),*> Requires<R, $n> for ($($m,)*) {
-            type Opened<'c> = ($($m::Opened<'c>,)*)
-            where
-                Self: 'c,
-                R: 'c;
-
-            #[allow(unused_variables, clippy::unused_unit)]
-            fn open<'c>(runtime: &'c R, impls: [R::Value; $n], at: Settled<'c>) -> Self::Opened<'c>
-            where
-                Self: 'c,
-                R: 'c,
-            {
-                let [$($v),*] = impls;
-                ($($m::open(runtime, $v, at),)*)
-            }
-        }
-    )+};
-}
-
-mode_tuples! { 0 () }
-tuples!(mode_tuples);

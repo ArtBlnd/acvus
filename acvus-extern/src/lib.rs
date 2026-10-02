@@ -25,7 +25,7 @@ pub use boundary::seal;
 
 pub use acvus_extern_macro::{Opaque, extern_fn, generic_fn};
 
-pub use boundary::entry::{Args, Entry, Mode, Settled, SiteShape, mode};
+pub use boundary::entry::{Argument, Entry, Impl, Mode, Settled, SiteShape, mode};
 pub use boundary::loaned::{Loaned, LoanedMut};
 pub use boundary::signed::{GenericParam, LayoutFact, SignedS1, SignedS2, SignedS3, Structural, StructuralFacts};
 pub use boundary::stored::LayoutWitness;
