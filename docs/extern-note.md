@@ -39,6 +39,12 @@ A type variable is never concrete and never wrapped in `Uniform`; it lives in co
 
 It is monomorphized as `Uniform<Rt, Never>`, never as `Value`. `X<T>` transmutes to `X<U>` whenever `T` does to `U`, except where `X` consumes `T` through an associated type; `Never` is generated under a fresh name at every compilation, so no code names it to give it an impl of its own. A const check confirms the sizes agree, and the round trip makes the type in between irrelevant.
 
+## Runtime and registry
+
+A safe runtime holds a value of any type in a slot as `Box<dyn Any>` and checks its type on access, so misuse panics; an optimized runtime casts without the check, so misuse is UB. The `'static` that `Any` needs is the one the runtime contract requires. A view is a plain reference whose lifetime is the borrow of the place its `Value` names; the contract carries no lifetime-generic associated type for it.
+
+`Registry: Runtime` is a runtime that registers extern fns. An extern fn reaches it as a type implementing `ExternFn`, which states its own declaration and whose fixed parameter shape is an associated type: its `N` arguments are `Self::Args`, a `[Value; N]`, which `call` takes; the registry gives the declarations to the compiler. Because the runtime receives each extern fn as a type rather than as an erased function, it can build specialized operations around one: a natural closed loop with its `next` inlined differs greatly from one that calls through an erased function. The macros are what implement `ExternFn`.
+
 ## Kinds
 
 The runtime contract gives one associated type per kind, each with a trait of its own functions; no function serves every kind. A kind groups the constructors of the compiler's `TyKind` that the boundary treats alike: how a value is made and given back, how a reference to it opens, and whether it is `Copy`. A kind's `unsafe`, where it has any, stays inside its own implementation.
