@@ -1,14 +1,17 @@
 //! A model of a safe runtime, and of the scope through which an extern lends
 //! values to an asynchronous call (functions §3): the scope takes the callable
 //! and the arguments by value, lends them to the call, and gives them back
-//! with its result. The model has no `unsafe`, so memory safety holds by Rust
-//! alone; what it checks is that the runtime keeps what a call borrows until
-//! the call ends, whatever happens to the future that started it.
+//! with its result. The call runs in place, as the future that awaits it is
+//! polled, so a future dropped between its polls abandons the call where it
+//! suspended. The model has no `unsafe`, so memory safety holds by Rust alone;
+//! what it checks is what a scope gives back, whatever happens to its call.
 //!
 //! One runtime per thread, so no `R` parameter. A `Value` is an index into the
 //! runtime's slots. An acvus function value is a `Program`, what the compiler
 //! would have compiled: it waits `yields` times, adds one to its exclusive
-//! argument, and returns the length of its shared one.
+//! argument, and returns the length of its shared one. One that takes the
+//! argument out across its waits is what the compiler refuses (rfc_compiler
+//! ownership §4); it is here to show what that rule keeps out.
 
 #![forbid(unsafe_code)]
 
@@ -17,7 +20,6 @@ use std::cell::RefCell;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
-use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -30,12 +32,9 @@ struct Slot {
     exclusive: bool,
 }
 
-type Task = Pin<Box<dyn Future<Output = ()>>>;
-
 #[derive(Default)]
 struct Store {
     slots: Vec<Slot>,
-    tasks: Vec<Task>,
 }
 
 thread_local! {
@@ -54,10 +53,12 @@ fn hold(value: Box<dyn Any>) -> Value {
 }
 
 /// Ends the owner of `value`; the runtime frees it once no call uses it.
+/// A place released empty is one an optimized runtime would drop again.
 fn end_owner(value: Value) {
     with_store(|store| {
         let slot = &mut store.slots[value.0];
         assert!(slot.owned, "a value released twice");
+        assert!(slot.value.is_some(), "a value released with its content taken out");
         slot.owned = false;
         if slot.in_use == 0 {
             slot.value = None;
@@ -102,28 +103,24 @@ fn write<X: 'static, O>(value: Value, f: impl FnOnce(&mut X) -> O) -> O {
     })
 }
 
+/// Takes the content of `value`'s place out, leaving the place empty.
+fn take_out<X: 'static>(value: Value) -> Box<X> {
+    with_store(|store| {
+        store.slots[value.0].value.take().expect("a value taken out twice").downcast::<X>().expect("a value taken as another type")
+    })
+}
+
+/// Fills `value`'s place again.
+fn put_back<X: 'static>(value: Value, content: X) {
+    with_store(|store| store.slots[value.0].value = Some(Box::new(content)))
+}
+
 /// The number of values the runtime still holds.
 pub fn live() -> usize {
     with_store(|store| store.slots.iter().filter(|slot| slot.value.is_some()).count())
 }
 
-fn spawn(task: Task) {
-    with_store(|store| store.tasks.push(task));
-}
-
-/// Polls every task once, keeping those still pending. Whether any is left.
-pub fn run_tasks() -> bool {
-    let tasks = with_store(|store| std::mem::take(&mut store.tasks));
-    let mut context = Context::from_waker(Waker::noop());
-    let mut pending: Vec<Task> = tasks.into_iter().filter_map(|mut task| task.as_mut().poll(&mut context).is_pending().then_some(task)).collect();
-    with_store(|store| {
-        pending.append(&mut store.tasks);
-        store.tasks = pending;
-        !store.tasks.is_empty()
-    })
-}
-
-/// Runs `future` to its end, running the runtime's tasks between polls.
+/// Runs `future` to its end.
 pub fn block_on<O>(future: impl Future<Output = O>) -> O {
     let mut future = std::pin::pin!(future);
     let mut context = Context::from_waker(Waker::noop());
@@ -131,16 +128,13 @@ pub fn block_on<O>(future: impl Future<Output = O>) -> O {
         if let Poll::Ready(out) = future.as_mut().poll(&mut context) {
             return out;
         }
-        run_tasks();
     }
 }
 
-/// Polls `future` once, running the runtime's tasks after.
+/// Polls `future` once.
 pub fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
     let mut context = Context::from_waker(Waker::noop());
-    let polled = future.poll(&mut context);
-    run_tasks();
-    polled
+    future.poll(&mut context)
 }
 
 struct YieldNow(bool);
@@ -189,6 +183,9 @@ impl<X> Drop for Uniform<X> {
 /// An acvus function value as the runtime holds it.
 pub struct Program {
     pub yields: usize,
+    /// Whether its body takes its exclusive argument out before its waits
+    /// and writes it back after them.
+    pub takes_across_waits: bool,
 }
 
 /// A shared reference a scope lends to a call: invariant in `'s`, so only
@@ -225,54 +222,63 @@ pub struct Calling<'s> {
     marker: PhantomData<fn(&'s ()) -> &'s ()>,
 }
 
-/// An asynchronous call, started when it is made: a started call is taken
-/// on every path from it (rfc_compiler effects §6), so dropping this future
-/// leaves the call running in the runtime.
+/// An asynchronous call, running in place as it is polled. Dropped before
+/// it ends, it abandons the call where the call suspended.
 pub struct Call<'s> {
-    done: Rc<RefCell<Option<usize>>>,
+    body: Pin<Box<dyn Future<Output = usize>>>,
+    uses: [Value; 3],
+    ended: bool,
     marker: PhantomData<fn(&'s ()) -> &'s ()>,
 }
 
 impl Future for Call<'_> {
     type Output = usize;
 
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<usize> {
-        match self.done.borrow_mut().take() {
-            Some(out) => Poll::Ready(out),
-            None => Poll::Pending,
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<usize> {
+        let polled = self.body.as_mut().poll(context);
+        if polled.is_ready() {
+            self.ended = true;
+            self.uses.iter().for_each(|used| end_use(*used));
+        }
+        polled
+    }
+}
+
+impl Drop for Call<'_> {
+    fn drop(&mut self) {
+        if !self.ended {
+            self.uses.iter().for_each(|used| end_use(*used));
         }
     }
 }
 
-fn start(function: Value, counter: Value, text: Value) -> Rc<RefCell<Option<usize>>> {
-    let done = Rc::new(RefCell::new(None));
-    let yields = read(function, |program: &Program| program.yields);
+fn start<'s>(function: Value, counter: Value, text: Value) -> Call<'s> {
+    let (yields, takes_across_waits) = read(function, |program: &Program| (program.yields, program.takes_across_waits));
     begin_use(function, false);
     begin_use(counter, true);
     begin_use(text, false);
-    let finished = done.clone();
-    spawn(Box::pin(async move {
+    let body = Box::pin(async move {
+        let taken = takes_across_waits.then(|| take_out::<i64>(counter));
         for _ in 0..yields {
             YieldNow(false).await;
         }
-        write(counter, |n: &mut i64| *n += 1);
-        let len = read(text, |s: &String| s.len());
-        *finished.borrow_mut() = Some(len);
-        for used in [function, counter, text] {
-            end_use(used);
+        match taken {
+            Some(n) => put_back(counter, *n + 1),
+            None => write(counter, |n: &mut i64| *n += 1),
         }
-    }));
-    done
+        read(text, |s: &String| s.len())
+    });
+    Call { body, uses: [function, counter, text], ended: false, marker: PhantomData }
 }
 
 impl<'s> Calling<'s> {
     pub fn call(self, counter: LentMut<'s, i64>, text: Lent<'s, String>) -> Call<'s> {
-        Call { done: start(self.function, counter.value, text.value), marker: PhantomData }
+        start(self.function, counter.value, text.value)
     }
 
     /// The negative control's call, taking a covariant exclusive loan.
     pub fn call_covariant(self, counter: CovLentMut<'s, i64>, text: Lent<'s, String>) -> Call<'s> {
-        Call { done: start(self.function, counter.value, text.value), marker: PhantomData }
+        start(self.function, counter.value, text.value)
     }
 }
 

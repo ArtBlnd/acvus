@@ -150,10 +150,12 @@ fn a_reference_into_an_opaque_value_outlives_the_view_it_was_made_in() {
     assert_eq!(live(), 0);
 }
 
-/// The premise the note's type variables rest on, its second exception: one
-/// value read under views that differ only in `Uniform`'s marker, which sits
-/// in `PhantomData`, from the concrete view to the generic one and back. Miri
-/// checks this build, and the tests run under `-Zrandomize-layout`.
+/// The reinterpretation the note's type variables rest on, its second
+/// exception: one value read under views that differ only in `Uniform`'s
+/// marker, which sits in `PhantomData`, from the concrete view to the generic
+/// one and back. This exercises the reads under the current compiler's
+/// layout; no check exercises the premise itself (the extern note: Type
+/// variables).
 #[test]
 fn an_opaque_value_is_read_under_views_differing_only_in_a_marker() {
     let rt = runtime();
