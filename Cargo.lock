@@ -78,29 +78,8 @@ dependencies = [
 name = "acvus-extern"
 version = "0.1.0"
 dependencies = [
- "acvus-extern-macro",
  "acvus-mir",
  "acvus-utils",
- "tokio",
-]
-
-[[package]]
-name = "acvus-extern-macro"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "acvus-extern-test"
-version = "0.1.0"
-dependencies = [
- "acvus-extern",
- "acvus-mir",
- "acvus-utils",
- "tokio",
 ]
 
 [[package]]

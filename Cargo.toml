@@ -12,8 +12,6 @@ members = [
     "acvus-ext-net",
     "acvus-lsp",
     "acvus-extern",
-    "acvus-extern-macro",
-    "tests/acvus-extern-test",
     "tests/acvus-wasm-probe",
 ]
 
