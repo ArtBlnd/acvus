@@ -16,6 +16,7 @@ The standard is a safe API, and `unsafe` is welcome where it is stated honestly 
 
 ## 4. Forbidden
 
+- A `Value` in a contravariant position, never and nowhere. A position that takes a `T`, a parameter of a function, a closure or a function value, never takes a `Value` in its place: erased so, it takes a value made as any type, reads it as `T`, and the first of another type is undefined behaviour. A type is erased only where a value is given, by the side that holds it as its type, never where a value is taken.
 - Instantiation: a named type or form treated apart, a marker, trait, wrapper or conversion for one case, a flag parting two meanings held in one place. One makes a path Rust does not guard; nothing built on it can then be guarded, and no further work repairs that.
 - Reliance on what Rust does not guarantee, but for the one exception of variables §4.
 - Lifetime detach: a lifetime made through `unsafe` that is not bound to its source, such as an unsafe GAT projection `'x` over `'t`. In generic code it is unbounded, and every borrow check around it passes vacuously. A transmute to `'static` shows where it is written; a detach hides behind a safe signature.

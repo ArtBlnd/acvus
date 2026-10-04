@@ -1,6 +1,6 @@
 # functions
 
-An extern receives an acvus function lent for the call, as a closure parameter, or kept past it, as a function value, and writes either in Rust's own closure signatures.
+An extern receives an acvus function lent for the call, as a closure parameter, or kept past it, as a function value, and writes either in Rust's own closure signatures. An extern gives acvus no Rust function, a closure or any other: a function value it returns is one acvus gave it.
 
 ## 1. Closure parameters
 
@@ -12,6 +12,6 @@ An author names a function type it keeps, once, where it writes it, as an alias 
 
 ## 3. Asynchronous calls
 
-Work that outlives the future of the call that started it borrows only what it owns, since Rust guarantees no destructor runs. A scope takes the callable and its arguments by value, lends them to the call, and gives them back with its result, so the call's flows are plain moves and what the work keeps shows in its declaration. The runtime owns spawning: it keeps what a scope holds and the storage the call borrows until the call's frame ends, and it outlives its tasks. A function called asynchronously crosses as a function value; a closure lent for the call cannot outlive a cancellation. A started call is taken on every path from it (compiler: effects §6), so a call is cancelled only by its run's end.
+Work that outlives the future of the call that started it borrows only what it owns, since Rust guarantees no destructor runs. A scope takes the callable and its arguments by value, lends them to the call, and gives them back with its result, so the call's flows are plain moves and what the work keeps shows in its declaration. The work a scope starts is given its loans for every loan the scope may make, so a loan from outside the scope, the caller's own or another scope's, fits none of its calls. The runtime owns spawning: it keeps what a scope holds and the storage the call borrows until the call's frame ends, and it outlives its tasks. A function called asynchronously crosses as a function value; a closure lent for the call cannot outlive a cancellation. A started call is taken on every path from it (compiler: effects §6), so a call is cancelled only by its run's end.
 
 *Rejected.* A per-call wrapper that gives a closure a fresh lifetime at each call through a family of marker types: it gives every reference argument of a call one lifetime, and its higher-ranked opener fails for a generic type. A second owner for asynchronous work: what the work uses it owns.
