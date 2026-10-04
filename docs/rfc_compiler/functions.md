@@ -12,7 +12,7 @@ A function value bound by `let` is polymorphic, as a module's `fn` is. Its expre
 
 ## 3. Once and many rules
 
-A closure whose body moves a captured value out can be called once; every other closure can be called many times. An extern fn's closure parameter is always many.
+A closure whose body moves a captured value out can be called once; every other closure can be called many times. An extern fn's closure parameter is called once or many times, as its declared function type states.
 
 ## 4. Recursion
 

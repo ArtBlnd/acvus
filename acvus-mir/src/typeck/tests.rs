@@ -1519,10 +1519,10 @@ fn a_mut_lambda_entering_a_slot_that_holds_nothing_is_refused() {
     assert_eq!(checked.typeck.refusals[0].span, args[0].span(), "refused at the lambda");
 }
 
-/// D94, functions §3: an extern fn's closure parameter is always many, so
-/// a lambda that moves its capture out, called once, is refused there.
+/// D94, functions §3: a closure parameter declared many takes no lambda
+/// that moves its capture out, called once.
 #[test]
-fn a_once_lambda_passed_to_an_externs_closure_parameter_is_refused() {
+fn a_once_lambda_passed_to_a_closure_parameter_declared_many_is_refused() {
     let mut fx = Fixture::new();
     declare_apply(&mut fx);
     let string = fx.ty(TyKind::String);

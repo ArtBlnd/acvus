@@ -65,4 +65,4 @@ An extern-defined type may carry one effect, apart from its type arguments: `T<â
 
 ## 9. What a call is given
 
-The compiler holds its side of the declaration as the extern holds its own. A call receives each argument as a valid value of its declared type, by the passing its declaration states. What a call is lent stays alive until the call's result is taken; nothing else writes what is lent `&`, and nothing else touches what is lent `&mut`. A closure argument is callable as its function type states, any number of times, for as long as its holds allow.
+The compiler holds its side of the declaration as the extern holds its own. A call receives each argument as a valid value of its declared type, by the passing its declaration states. What a call is lent stays alive until the call's result is taken; nothing else writes what is lent `&`, and nothing else touches what is lent `&mut`. A closure argument is callable as its function type states, once or any number of times, for as long as its holds allow.

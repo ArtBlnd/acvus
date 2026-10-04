@@ -4,7 +4,7 @@
 
 use super::{Fixture, covers, span_of};
 use crate::check::{Refusal, RefusalKind};
-use crate::ty::{Mutability, TyKind};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Holds, Mutability, TyKind};
 
 /// ownership §4's example: on the one path that reaches the whole use,
 /// every field of the binding's type is written before it.
@@ -134,4 +134,47 @@ fn a_read_no_path_reaches_is_admitted() {
     fx.input("c", bool_ty);
     let refusals = fx.refusals("let x; if $c { return 2; x } else { 1 }");
     assert_eq!(refusals, []);
+}
+
+/// `apply_once(f: fn(i64) -> i64) -> i64`, whose closure parameter is
+/// declared once, and a context `@s` of a `String`, which does not copy.
+fn declare_apply_once(fx: &mut Fixture) {
+    let int = fx.int();
+    let closure = fx.ty(TyKind::Fn {
+        params: Box::new([int]),
+        ret: int,
+        effect: EffectTerm::Known(Effect::pure()),
+        flows: FlowTerm::Known(crate::decl::declared_fn_flows()),
+        calls: Calls::Once,
+        holds: Holds::Nothing,
+        values: (),
+    });
+    fx.declare("apply_once", &[closure], int);
+    let string = fx.ty(TyKind::String);
+    fx.context("s", string);
+}
+
+/// functions §3: a closure parameter declared once takes a lambda that
+/// moves its capture out.
+#[test]
+fn a_once_lambda_enters_a_closure_parameter_declared_once() {
+    let mut fx = Fixture::new();
+    declare_apply_once(&mut fx);
+    let refusals = fx.refusals("let s = @s; let f = move |x| -> { let t = s; x }; apply_once(f)");
+    assert!(refusals.is_empty(), "{refusals:?}");
+}
+
+/// functions §3, ownership §2: a lambda called once does not copy, so its
+/// first pass moves it and a second is refused, naming the first.
+#[test]
+fn a_once_lambda_is_not_passed_after_its_move() {
+    let mut fx = Fixture::new();
+    declare_apply_once(&mut fx);
+    let source = "let s = @s; let f = move |x| -> { let t = s; x }; (apply_once(f), apply_once(f))";
+    let refusals = fx.refusals(source);
+    let [Refusal { kind: RefusalKind::UsedAfterMove { moved }, span }] = refusals[..] else {
+        panic!("one UsedAfterMove: {refusals:?}");
+    };
+    assert!(covers(span, span_of(source, "f", 2)), "at the second pass: {span:?}");
+    assert!(covers(moved, span_of(source, "f", 1)), "naming the first: {moved:?}");
 }
