@@ -2,19 +2,8 @@
 
 ## 1. Generic functions
 
-A generic function is a name with a signature and no body (compiler: extern fn §6). Its family names it, and states, at each choice of its type variables, its signature and how it takes its receiver. One family serves every impl and every requirer.
+A generic function enters the compiler as one (compiler: extern fn §6), and an impl enters with the function and the choice it implements, which Rust checks against the function's signature. An impl written with `Uniform` is the one generic code reaches, and one written natively is its `#` counterpart (types §3).
 
-## 2. Impls
+## 2. Witnesses
 
-An impl states its generic function and the choice its signature is at, and Rust holds its signature to the family's at that choice. Its value is a function value: its dispatch, with the values of the impls it requires as its captures, each fixed where its site chose it. It takes no requirement as a parameter. It is reached only through its generic function.
-
-## 3. Requirements
-
-A requirement takes one of two forms, decided by how the generic function takes its receiver:
-
-- By value or by `&mut`: the requirer owns the receiver and the impl value chosen for it as one value, an instance. Only the entry makes one, from the argument and the impl the site chose. It calls that receiver only, and may be kept.
-- By `&`: the requirer is lent a handle at the type for the call, and applies it to any value of that type.
-
-The other pairing is a type error. Values of different impls share one Rust type (runtime contract §1), so a receiver is paired with its impl by ownership, and a handle is not kept past the call that lent it.
-
-A requirer calls an instance or a handle as a function value is called (runtime contract §2).
+A body that calls a generic function at its own type variable receives the impl in one of two forms. Which impl arrives the compiler decides at each call, and the parameter that receives it states no condition on it; an impl's facts are its own, and the compiler uses them where it knows that impl is the one reached (facts §1). `InstanceOf` is the impl's witness apart from any value, given only by reference and so never kept: a type variable stands for every acvus type as one Rust type (variables §3), so a witness kept could meet a value of another type whose impl has the same signature. `Instance` is a value and its impl of one generic function, as one. Its mode, owned, shared or exclusive, is a marker the macro reads from the signature, and the body receives `T`, `&T` or `&mut T`. Once received it may go anywhere, since its impl meets no other value and its flows are tracked (declarations §2).

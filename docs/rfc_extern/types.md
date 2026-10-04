@@ -1,17 +1,15 @@
-# extern types
+# types
 
-A type an extern fn defines is extern-defined: an opaque registered type. An object or an enum an extern takes or gives is the language's own. Each follows the transparency rule (compiler: types §1), and crosses exactly as declared.
+## 1. Extern-defined types
 
-## 1. Objects and enums
+An extern-defined type (compiler: extern fn §8) is a Rust type its author defines and marks `#[derive(Opaque)]`, so that what is opaque is written where the type is; a type the author did not define enters wrapped in one, as `#[derive(Opaque)] struct Stack<T>(Vec<T>)`. Its values are held with their type erased, and the derive states the type's own declaration. An opaque value can be carried by a task the runtime spawns. The effect it carries and its identity (compiler: extern fn §8; types §3) are each a type parameter of it bounded by `EffectVar` or `IdentityVar`, at most one of each, which the declarations that write it fill with their own variables. An effect is what a call does, so only a function has one: a type that carries an effect carries the effect of the functions its values hold, as a variable, and holds none of its own.
 
-A declaration writes an object by its fields and an enum by its name and variants (compiler: types §2), closed as written: a value crosses only as the declared shape, and nothing is widened. The extern holds one by value as a struct or an enum of its parts, each crossing by its own type, and a reference to one as its parts' references (crossing §2). No view is the value's layout, which is the backend's.
+## 2. Structural types
 
-## 2. Opaque types
+A Rust struct with named fields marked `#[derive(Structural)]` is an acvus object, and a Rust enum so marked an acvus enum, one acvus type to one Rust type. Fields and variants take their places in their names' text order (compiler: types §2). A variant's payload is nothing for a unit variant, its field for one unnamed field, the tuple of its fields for several, and the object of its fields for named ones. The derive states the type's declaration and its crossing by value, part by part, an enum's through a constructor for each variant, which the runtime picks by the tag. A structural type is never lent as its Rust value: a reference to one is the structure of its parts' references, written as a structural type whose fields are `Ref`s or `Mut`s, or, to change an enum's variant, a `Mut` of the enum value (references §3).
 
-An opaque registered type is known only by its name and the extern fns that take or give it. A type that must be told apart from others of its shape, or that carries an identity, an effect or lifetimes, is opaque (compiler: types §3, extern fn §8). Its type parameters are type variables (runtime contract §1).
+## 3. The two forms
 
-A type carries an effect only from the work its values hold, a function value a declaration was given. Its effect is that function's, one of the declaration's effect variables; no type is written with a stated effect.
+An extern-defined type is written in one of two forms. In the uniform form every type argument is a `Uniform` or a type variable at its root, and the type is unmarked. In the whole native form no `Uniform` and no variable stands anywhere in it, and it is marked `#` (compiler: types §8). Any other form specializes at a type argument, which the compiler rejects, and is refused; a part a type always holds natively is a field of its own definition. The form is read through the types' own kinds, never from syntax, so an alias or a nesting decides nothing. A declaration in the whole native form is the `#` member of one written uniformly, the same function at the marked type. It names its uniform member and the choice of that member's variables, as an impl names its generic function, states nothing of its own, and shares that member's declaration; Rust confirms that its signature is its uniform member's at that choice, each part written natively, so a uniform member that lends a part of the marked type has no `#` member. Without its uniform member it is refused, since a value that passes an unmarked function even once is unmarked from where it is made, as the compiler decides, and its maker is then the uniform member, so no value changes its representation.
 
-## 3. Conversions
-
-A declared conversion may name any extern-defined type on either side. It is the one way a program's value meets an extern-defined type; the declared casts give the subtyping of compiler: types §3.
+*Rejected.* A structural type lent as its Rust value: a runtime holding it as one would give a part acvus code lends no `Value` to name, and one assembled at each lend is written back after the call. Crossing a structural type by value alone: `fn f(s: &mut Shape)` would not be expressible (boundary §1). A registry pairing a `#` member with a uniform one by their names and shapes: the pairing would be implicit.
