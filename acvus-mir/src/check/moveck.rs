@@ -12,7 +12,10 @@
 //! the page is seen beyond the program (context §1): at each site `Loans`
 //! records seeing it, a call that may touch it or a `Return`, a unit of it
 //! that some path moved out refuses the site `NotRefilled`, naming the
-//! move. A move through a reference is refused
+//! move. Both are whole wherever the body may suspend (ownership §4), since
+//! what awaits it may abandon it there: at each site that takes an effect
+//! that may suspend, a unit of storage outside the body or of a context the
+//! body names that some path moved out refuses the site `NotRefilled`. A move through a reference is refused
 //! `MoveThroughShared` where a loan of the reference it is made through is
 //! shared (ownership §5, what a shared reference lends is never taken
 //! from), and `MoveThroughSeveral` where it reaches more than one place, or
@@ -40,7 +43,8 @@ use super::{Refusal, RefusalKind};
 use crate::ir::cfg::{Body, BodyId, Inst, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path};
 use crate::lower::required::{OverwriteEnd, absent_among, edge_drops, overwrite_end};
-use crate::passes::analysis::{AnalysisManager, ContentLiveness, Initialization, Loans, Mode, Reach, Storage, Stored};
+use crate::ir::fn_effect;
+use crate::passes::analysis::{AnalysisManager, ContentLiveness, Initialization, Loans, Mode, Reach, Storage, Stored, taken_callee};
 use crate::ty::{Concrete, Types, copies};
 
 /// The judgment over `body`, its refusals pushed to `out`.
@@ -53,7 +57,13 @@ pub(super) fn check(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'
         for inst in block.insts() {
             let site = Site::Inst(inst.id());
             moves_through(&loans, site, inst.span(), out);
-            let taken = taken_before(&initialization, site, loans.page_seen(site).map(Storage::Context));
+            let suspends = taken_callee(body, inst)
+                .is_some_and(|callee| fn_effect(module.types(), callee).expect("a call's callee type is a function type").suspends());
+            let seen: BTreeSet<Storage> = match suspends {
+                true => initialization.places().filter(|place| matches!(place, Storage::Outside { .. } | Storage::Context(_))).collect(),
+                false => loans.page_seen(site).map(Storage::Context).collect(),
+            };
+            let taken = taken_before(&initialization, site, seen.into_iter());
             out.extend(taken.into_iter().map(|taken| Refusal { kind: RefusalKind::NotRefilled { taken }, span: inst.span() }));
             if let Some(moved) = stored_over_content_maybe_moved(module.types(), body, &initialization, &loans, &content, inst) {
                 out.push(Refusal { kind: RefusalKind::StoreOverContentMaybeMoved { moved }, span: inst.span() });

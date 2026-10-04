@@ -111,6 +111,33 @@ use crate::ty::{
     Types, lent_types, position_kinds, positions,
 };
 
+/// The function type whose effect `inst` takes, where it takes one: a
+/// call's, the function `ArrayMap` calls, or, at a split call's taking, its
+/// start's. A call's effect enters where it is taken (effects §6).
+///
+/// # Panics
+/// A taking's handle is not a start's result: a taking takes a start's
+/// handle (effects §6).
+pub(crate) fn taken_callee(body: &Body, inst: &Inst) -> Option<Ty> {
+    match inst.op() {
+        Op::FunctionCall { callee_ty, .. } => Some(*callee_ty),
+        Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args } => {
+            let [.., function] = &args[..] else { panic!("`ArrayMap` takes `[a_1, …, a_k, f]`") };
+            Some(body.ty_of(*function))
+        }
+        Op::TakeEffect { src } => {
+            let Definition::Inst(start) = body.definition(*src) else {
+                panic!("a taking's handle is a start's result (effects §6)")
+            };
+            match body.inst(start).op() {
+                Op::Spawn { callee_ty, .. } => Some(*callee_ty),
+                other => panic!("a taking's handle is a start's result (effects §6), not {other:?}'s"),
+            }
+        }
+        _ => None,
+    }
+}
+
 /// A storage a loan names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Storage {
@@ -896,22 +923,8 @@ impl Forward<'_> {
     /// at a `FunctionCall`, at `ArrayMap`, which calls its function, and at
     /// a split call's taking, not its start.
     fn page_of_inst(&self, inst: &Inst) -> Page {
-        let callee_ty = match inst.op() {
-            Op::FunctionCall { callee_ty, .. } => *callee_ty,
-            Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args } => {
-                let [.., function] = &args[..] else { panic!("`ArrayMap` takes `[a_1, …, a_k, f]`") };
-                self.body.ty_of(*function)
-            }
-            Op::TakeEffect { src } => {
-                let Definition::Inst(start) = self.body.definition(*src) else {
-                    panic!("a taking's handle is a start's result (effects §6)")
-                };
-                match self.body.inst(start).op() {
-                    Op::Spawn { callee_ty, .. } => *callee_ty,
-                    other => panic!("a taking's handle is a start's result (effects §6), not {other:?}'s"),
-                }
-            }
-            _ => return Page::default(),
+        let Some(callee_ty) = taken_callee(self.body, inst) else {
+            return Page::default();
         };
         let effect = fn_effect(self.types, callee_ty).expect("a call's callee type is a function type");
         let named = self.body.contexts().iter().map(|named| named.context);

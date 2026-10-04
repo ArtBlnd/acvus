@@ -2,7 +2,7 @@
 
 ## 1. Extern-defined types
 
-An extern-defined type (compiler: extern fn §8) is a Rust type its author defines and marks `#[derive(Opaque)]`, so that what is opaque is written where the type is; a type the author did not define enters wrapped in one, as `#[derive(Opaque)] struct Stack<T>(Vec<T>)`. Its values are held with their type erased, and the derive states the type's own declaration. An opaque value can be carried by a task the runtime spawns. The effect it carries and its identity (compiler: extern fn §8; types §3) are each a type parameter of it bounded by `EffectVar` or `IdentityVar`, at most one of each, which the declarations that write it fill with their own variables. An effect is what a call does, so only a function has one: a type that carries an effect carries the effect of the functions its values hold, as a variable, and holds none of its own.
+An extern-defined type (compiler: extern fn §8) is a Rust type its author defines and marks `#[derive(Opaque)]`, so that what is opaque is written where the type is; a type the author did not define enters wrapped in one, as `#[derive(Opaque)] struct Stack<T>(Vec<T>)`. Its values are held with their type erased, and the derive states the type's own declaration. The effect it carries and its identity (compiler: extern fn §8; types §3) are each a type parameter of it bounded by `EffectVar` or `IdentityVar`, at most one of each, which the declarations that write it fill with their own variables. An effect is what a call does, so only a function has one: a type that carries an effect carries the effect of the functions its values hold, as a variable, and holds none of its own.
 
 ## 2. Structural types
 

@@ -72,10 +72,10 @@ pub enum RefusalKind {
     /// A `match` some value reaches with no arm answering (patterns §3):
     /// where its scrutinee's variants are not all seen, it needs `_`.
     NotExhaustive,
-    /// A return with storage outside the body, or a return or a call where
-    /// a context is seen beyond the program, a part of which some path took
-    /// out and did not write back (ownership §4, context §1): `taken` where
-    /// it was taken.
+    /// A return with storage outside the body, a return or a call where a
+    /// context is seen beyond the program, or a call where the body may
+    /// suspend, with either, a part of which some path took out and did not
+    /// write back (ownership §4, context §1): `taken` where it was taken.
     NotRefilled { taken: Span },
     /// A move of what a shared reference lends (ownership §5).
     MoveThroughShared,

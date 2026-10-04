@@ -2,7 +2,7 @@
 
 ## 1. Role
 
-A runtime lowers the IR and runs it, implementing the compiler's primitives as functions, so nothing outside it needs `unsafe` beyond what safety §3 states. It is generic over backends and zero cost from outside, and the compiler's correctness is its premise. A value it holds out of line does not move while a reference to it lives; the places that hold its `Value`s may. It owns spawning and outlives its tasks (functions §3).
+A runtime lowers the IR and runs it, implementing the compiler's primitives as functions, so nothing outside it needs `unsafe` beyond what safety §3 states. It is generic over backends and zero cost from outside, and the compiler's correctness is its premise. A value it holds out of line does not move while a reference to it lives; the places that hold its `Value`s may. It runs an asynchronous call as the future that awaits it is polled (functions §3).
 
 ## 2. Kinds
 

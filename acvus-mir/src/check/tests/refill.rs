@@ -3,7 +3,7 @@
 
 use super::{Fixture, covers, span_of};
 use crate::check::{Refusal, RefusalKind};
-use crate::ty::{Effect, TyKind};
+use crate::ty::{Contexts, Effect, Reissue, SplitCost, TyKind};
 
 /// A fixture with `make`, `consume` and a context `@c: Vec<i64>`.
 fn with_context() -> Fixture {
@@ -163,4 +163,61 @@ fn a_copy_read_of_a_context_is_admitted_with_no_refill() {
     fx.declare_with_effect("touch", &[], int, Effect::opaque());
     let refusals = fx.refusals("let x = @n; touch(); x");
     assert_eq!(refusals, []);
+}
+
+/// `with_context` and `wait()`, a call that may suspend and touches no
+/// context.
+fn with_wait() -> Fixture {
+    let mut fx = with_context();
+    let int = fx.int();
+    let suspends = Effect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable, true);
+    fx.declare_with_effect("wait", &[], int, suspends);
+    fx
+}
+
+/// ownership §4: what a `&mut` parameter lends is whole wherever the body
+/// may suspend, since what awaits it may abandon it there.
+#[test]
+fn a_function_suspending_between_its_take_and_its_write_back_through_a_mut_parameter_is_refused() {
+    let source = "let f = |r| -> { let t = *r; wait(); *r = make(); consume(t) }; let v = make(); f(&mut v)";
+    let refusals = with_wait().refusals(source);
+    let [Refusal { kind: RefusalKind::NotRefilled { taken }, span }] = refusals[..] else {
+        panic!("one NotRefilled: {refusals:?}");
+    };
+    assert_eq!(taken, span_of(source, "*r", 0), "naming the take through the parameter");
+    assert!(covers(span, span_of(source, "wait()", 0)), "at the call that may suspend: {span:?}");
+}
+
+/// ownership §4: a part written back before the body may suspend is whole
+/// there.
+#[test]
+fn a_function_writing_back_before_it_suspends_is_admitted() {
+    let source = "let f = |r| -> { let t = *r; *r = make(); wait(); consume(t) }; let v = make(); f(&mut v)";
+    let refusals = with_wait().refusals(source);
+    assert_eq!(refusals, []);
+}
+
+/// ownership §4: a call that does not suspend between a take and its write
+/// back abandons nothing.
+#[test]
+fn a_call_that_does_not_suspend_between_a_take_and_its_write_back_is_admitted() {
+    let mut fx = with_context();
+    let int = fx.int();
+    fx.declare("still", &[], int);
+    let source = "let f = |r| -> { let t = *r; still(); *r = make(); consume(t) }; let v = make(); f(&mut v)";
+    let refusals = fx.refusals(source);
+    assert_eq!(refusals, []);
+}
+
+/// ownership §4, context §1: a context is whole wherever the body may
+/// suspend, though the call that may suspend does not touch it.
+#[test]
+fn a_context_taken_across_a_call_that_may_suspend_is_refused_there() {
+    let source = "let x = @c; wait(); @c = x; 0";
+    let refusals = with_wait().refusals(source);
+    let [Refusal { kind: RefusalKind::NotRefilled { taken }, span }] = refusals[..] else {
+        panic!("one NotRefilled: {refusals:?}");
+    };
+    assert_eq!(taken, span_of(source, "@c", 0), "naming the take");
+    assert!(covers(span, span_of(source, "wait()", 0)), "at the call that may suspend: {span:?}");
 }

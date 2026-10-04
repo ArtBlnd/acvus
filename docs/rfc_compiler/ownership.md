@@ -26,7 +26,7 @@ if blackbox {
 
 On the one path that reaches `f(a)`, every field of `a`'s type is written before the whole use, so the program compiles.
 
-Storage outside the body, a context and what a reference the body was given or captured lends, is whole whenever the body returns: a part taken out of it through the body is written back on every path to the return. A part taken out of the body's own storage through a reference is taken from the place the reference lends, and where that place is not one on every path, it is not taken. What a shared reference lends is never taken from (§5).
+Storage outside the body, a context and what a reference the body was given or captured lends, is whole whenever the body returns and wherever it may suspend: a part taken out of it through the body is written back on every path to the return and to each call that may suspend, since what awaits a suspended body may abandon it there. A part taken out of the body's own storage through a reference is taken from the place the reference lends, and where that place is not one on every path, it is not taken. What a shared reference lends is never taken from (§5).
 
 ## 5. Borrows
 
