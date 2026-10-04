@@ -2,7 +2,7 @@
 
 ## 1. `Value`
 
-A `Value` is the runtime's value: `Copy`, laid out as its runtime chooses, and relied on by nothing outside it. It does not carry its type. Its bits tell its form alone, a scalar held in place, a reference, or a value held out of line, and only the runtime's operations that take no type read them. The values a runtime may hold in place are the acvus scalars; it holds in place those its layout has room for, and every other value out of line, in storage that does not move while a reference to it lives. Code that knows a value's type never reads its `Value` to learn its form: the type and the runtime decide it, so a read chooses by a constant.
+A `Value` is the runtime's value: `Copy`, laid out as its runtime chooses, and relied on by nothing outside it. It does not carry its type, and how it holds a value, or names one it references, is the runtime's. Only the runtime's operations that take no type, its release and its making of a reference value (references §1), read a `Value` without its type. Code that knows a value's type never reads its `Value` to learn how it is held: its type's kind decides, so a read chooses by a constant.
 
 ## 2. `Uniform`
 
