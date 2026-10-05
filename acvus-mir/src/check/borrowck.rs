@@ -20,7 +20,10 @@
 //! one is exclusive. Each pair of loans that meet, each loan taken up to the
 //! outermost of the loans it is made through that the other is not, is one
 //! `LoanConflict` (refusals: one fact, one path), and so is each loan, taken
-//! up to its outermost, that accesses by name meet. It stands at the access
+//! up to its outermost, that accesses by name meet. A loan an access makes
+//! that the loan it meets is made through is that making's own earlier run,
+//! since within one run a loan is made before the loans made through it:
+//! the pair is the making's outermost loans, each with itself. It stands at the access
 //! that conflicted and carries its whole trace, `ConflictTrace`: where each
 //! loan was made, a parameter's or capture's at its binder, with every loan
 //! it is made through, and every other access that met the same.
@@ -340,13 +343,12 @@ fn met_at(loans: &Loans, site: Site, span: Span, live: &LoanSet, met: &mut Vec<M
                 }
             }
             for access_loan in made_by {
-                let (ours, theirs) = (side(loans, access_loan, loan), side(loans, loan, access_loan));
-                for (by, lifted) in ours.iter().flat_map(|ours| theirs.iter().map(move |theirs| (ours, theirs))) {
+                for (by, lifted) in pairs(loans, access_loan, loan, makes) {
                     let pair = Met {
                         access: span,
-                        by: Some(by.clone()),
+                        by: Some(by),
                         makes,
-                        loan: lifted.clone(),
+                        loan: lifted,
                         access_loan: Some(access_loan.clone()),
                         met_loan: loan.clone(),
                     };
@@ -365,15 +367,17 @@ fn met_at(loans: &Loans, site: Site, span: Span, live: &LoanSet, met: &mut Vec<M
                         && !related(loans, made, other)
                 };
                 for other in second.made.iter().filter(meets_made) {
-                    let pair = Met {
-                        access: span,
-                        by: Some(other.clone()),
-                        makes: true,
-                        loan: made.clone(),
-                        access_loan: Some(other.clone()),
-                        met_loan: made.clone(),
-                    };
-                    push_once(met, pair);
+                    for (by, lifted) in pairs(loans, other, made, true) {
+                        let pair = Met {
+                            access: span,
+                            by: Some(by),
+                            makes: true,
+                            loan: lifted,
+                            access_loan: Some(other.clone()),
+                            met_loan: made.clone(),
+                        };
+                        push_once(met, pair);
+                    }
                 }
             }
         }
@@ -385,6 +389,22 @@ fn with_ancestors(loans: &Loans, loan: &Loan) -> LoanSet {
     let mut chain = loans.ancestors(&LoanSet::from([loan.clone()]));
     chain.insert(loan.clone());
     chain
+}
+
+/// The pairs of loans the meeting of `access_loan`, which the access makes
+/// where `makes`, with `met_loan` stands for (one fact, one refusal): each
+/// side as `side` takes it; but where the access makes a loan `met_loan` is
+/// made through, each outermost loan of that making's chain with itself.
+/// Within one run a loan is made before every loan made through it, so
+/// such a `met_loan` comes of an earlier run of the same making, and the
+/// fact is that making meeting its earlier run, whichever of its loans
+/// meet.
+fn pairs(loans: &Loans, access_loan: &Loan, met_loan: &Loan, makes: bool) -> Vec<(Loan, Loan)> {
+    if makes && with_ancestors(loans, met_loan).contains(access_loan) {
+        return outermost(loans, &with_ancestors(loans, access_loan)).into_iter().map(|root| (root.clone(), root)).collect();
+    }
+    let (ours, theirs) = (side(loans, access_loan, met_loan), side(loans, met_loan, access_loan));
+    ours.iter().flat_map(|ours| theirs.iter().map(move |theirs| (ours.clone(), theirs.clone()))).collect()
 }
 
 /// What `by` stands for in a pair with `other` (one fact, one refusal): the
