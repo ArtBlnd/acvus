@@ -3,9 +3,13 @@
 //! makes, are each a loan of its own, and each meets what the same lend
 //! bound to a name first would meet.
 
+use acvus_utils::QualifiedRef;
+
 use super::borrowck::{lifetimes, one_conflict};
 use super::{Fixture, covers, span_of};
-use crate::ty::{FlowEnd, Mutability, Poly, TyId, TyKind};
+use crate::check::RefusalKind;
+use crate::decl::UserTypeDecl;
+use crate::ty::{FlowEnd, Mark, MarkTerm, Mutability, Poly, TyId, TyKind};
 
 /// `&mut i64`.
 fn mut_int(fx: &mut Fixture) -> TyId<Poly> {
@@ -39,6 +43,14 @@ fn refused_within(fx: Fixture, source: &str, within: &str) {
     let refusals = fx.refusals(source);
     let (span, _) = one_conflict(&refusals);
     assert!(covers(span_of(source, within, 0), span), "within {within:?}: {span:?}");
+}
+
+/// Some `LoanConflict` of `source`'s refusals lies within `within`.
+fn conflict_within(fx: Fixture, source: &str, within: &str) {
+    let refusals = fx.refusals(source);
+    let outer = span_of(source, within, 0);
+    let found = refusals.iter().any(|refusal| matches!(refusal.kind, RefusalKind::LoanConflict { .. }) && covers(outer, refusal.span));
+    assert!(found, "a LoanConflict within {within:?}: {refusals:?}");
 }
 
 /// The lend `&mut a`, made where `f` starts, meets the shared loan `r`
@@ -132,4 +144,61 @@ fn an_inline_mut_lend_a_result_takes_in_a_loop_meets_nothing() {
     let mut fx = Fixture::new();
     declare_g(&mut fx, true);
     assert_eq!(fx.refusals("let a = 1; for i in 0..3 { let r = g(&mut a); *r = i; } a"), []);
+}
+
+/// An extern `Holder<'a>`; `hold<'a>(x: &'a mut i64) -> Holder<'a>`;
+/// `put<'a, 'b>(h: &'b mut Holder<'a>, x: &'a mut i64)`, which keeps `x` in
+/// `h`; and `peek(h: &Holder) -> i64`, stating no lifetimes.
+fn declare_holder(fx: &mut Fixture) {
+    let id = QualifiedRef::root(fx.name("Holder"));
+    fx.raw.user_types.push(UserTypeDecl { id, type_params: Box::new([]), carries_effect: false, carries_identity: false, lifetimes: 1 });
+    let holder = fx.ty(TyKind::UserDefined { id, type_args: Box::new([]), effect: None, identity: None, marked: MarkTerm::Known(Mark::Unmarked) });
+    let (mut_int, int, unit) = (mut_int(fx), fx.int(), fx.ty(TyKind::Unit));
+    let (mut_holder, shared_holder) = (fx.ty(TyKind::Ref(Mutability::Mut, holder)), fx.ty(TyKind::Ref(Mutability::Shared, holder)));
+    fx.declare_labelled("hold", &[mut_int], holder, lifetimes(&[(FlowEnd::Result, &[0]), (FlowEnd::Param(0), &[0])]));
+    fx.declare_labelled("put", &[mut_holder, mut_int], unit, lifetimes(&[(FlowEnd::Param(0), &[1, 0]), (FlowEnd::Param(1), &[0])]));
+    fx.declare("peek", &[shared_holder], int);
+}
+
+/// Each run's `&mut x` is kept in `h`, which lives past the loop: the next
+/// run's lend of `x` meets the previous run's, which `h` still holds.
+#[test]
+fn a_named_mut_lend_kept_across_runs_of_a_loop_meets_the_previous_runs() {
+    let mut fx = Fixture::new();
+    declare_holder(&mut fx);
+    let body = "for i in 0..2 { let w = &mut x; put(&mut h, w); }";
+    conflict_within(fx, &format!("let x = 1; let y = 2; let h = hold(&mut y); {body} peek(&h)"), body);
+}
+
+/// refusals: the user sees one fact, that each run's `&mut x` meets the
+/// previous run's, which `h` holds, so it is refused once.
+#[test]
+fn a_mut_lend_kept_across_runs_of_a_loop_is_refused_once() {
+    let mut fx = Fixture::new();
+    declare_holder(&mut fx);
+    let body = "for i in 0..2 { let w = &mut x; put(&mut h, w); }";
+    refused_within(fx, &format!("let x = 1; let y = 2; let h = hold(&mut y); {body} peek(&h)"), body);
+}
+
+/// The same lend written as `put`'s argument: the loan the argument holds
+/// is not yet made where `put` starts, but the previous run's, which `h`
+/// holds, is.
+#[test]
+fn an_inline_mut_lend_kept_across_runs_of_a_loop_meets_the_previous_runs() {
+    let mut fx = Fixture::new();
+    declare_holder(&mut fx);
+    let body = "for i in 0..2 { put(&mut h, &mut x); }";
+    conflict_within(fx, &format!("let x = 1; let y = 2; let h = hold(&mut y); {body} peek(&h)"), body);
+}
+
+/// Each run passes `r` to `g` and keeps its result in `r`, so the loan the
+/// next run's argument is made through is the previous run's result's: the
+/// loans `r` holds are made through each other around the loop, and through
+/// the lend of `x` before it. The shared lend of `x` meets them while `r`
+/// lives on to `*r`.
+#[test]
+fn a_shared_lend_meets_a_mut_loan_carried_around_a_loop_through_a_call() {
+    let mut fx = Fixture::new();
+    declare_g(&mut fx, true);
+    refused_within(fx, "let x = 1; let r = &mut x; for i in 0..3 { r = g(r); } let s = &x; *r", "let s = &x");
 }
