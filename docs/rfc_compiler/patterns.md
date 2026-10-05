@@ -14,4 +14,4 @@ Exhaustiveness follows the transparency rule too. Where every variant the scruti
 
 ## 4. A scrutinee of type `!`
 
-A scrutinee of type `!` reaches no arm. Each slot of its pattern is `!`, and no exhaustiveness question arises.
+A scrutinee of type `!` reaches no arm. No slot of its pattern holds a value, so each decides nothing of its type (types §4), and no exhaustiveness question arises.

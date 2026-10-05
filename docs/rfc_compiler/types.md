@@ -64,7 +64,7 @@ The coercion makes a value of the slot's type. No type becomes a subtype of anot
 
 ## 4. Bottom and invariance
 
-`!` is the bottom type, and every type constructor is invariant. No type is `!` by holding a part of type `!`. A reference's target is never a reference.
+`!` is the bottom type, and every type constructor is invariant. No type is `!` by holding a part of type `!`. No value has type `!`, so an expression that gives no value decides nothing of its type: its type is what its uses decide, and `!` where nothing does (§5). A reference's target is never a reference.
 
 ## 5. Defaults
 
@@ -72,7 +72,7 @@ Defaults apply only where nothing more can be decided. A type variable nothing c
 
 ## 6. Deciding by type
 
-What a `for` iterates, what `?` unwraps, and which declaration a name or a method call reaches are decided by a type, wherever in the program that type becomes known. A decision reads a type only once nothing can change it, and what the decision leads back into that type must fit it unchanged. The outcome does not depend on the order the program is checked in. A construct whose type never becomes known is refused.
+What a `for` iterates, what `?` unwraps, and which declaration a name or a method call reaches are decided by a type, wherever in the program that type becomes known. A decision reads a type only once nothing can change it, and what the decision leads back into that type must fit it unchanged. The outcome does not depend on the order the program is checked in. A construct whose type never becomes known is refused. `!` says nothing of a type: a decision that reads it decides nothing from it and refuses nothing for it.
 
 A type becomes known in two steps. Its constructor is known first: that it is an object, an enum of a name, a tuple of an arity, an array, a reference, a number of a width, and so on, once no value meeting in it can still move it up the tree of §3. Its members, the fields of an object, the variants of an enum and the mark of an extern-defined type (§8), are known after, once no value can still meet in it anywhere in the program (§1). A decision waits only for what it reads. Which declaration a name or a method call reaches, what a `for` iterates, what `?` unwraps, and whether a value entering a slot is folded, coerced or converted read constructors, and are decided once those are known. How a value is coerced by its kind's shape (§3), a comparison part by part (operators §4), and a generic function answered at a structure's parts (§1) read members, and are decided once those are known. No decision is made on what may still change, so none is made again, and a type is decided once, the same wherever it is read (§1).
 
