@@ -28,8 +28,8 @@ pub enum Refused {
     TwoStepsUp { head: Head, via: [QualifiedRef; 2] },
     /// The steps up from `head` return to it (types §3).
     CastCycle { head: Head },
-    /// A required impl's types are not smaller than the declaration's
-    /// own (extern-fn §6).
+    /// An impl requires an impl at types not smaller than its own
+    /// (extern-fn §6).
     RequirementNotSmaller { declaration: QualifiedRef, generic_function: QualifiedRef },
     /// An end's labels are not one per segment of its declared type, or
     /// name a lifetime the signature does not have.
@@ -610,8 +610,12 @@ fn type_variables(
     })
 }
 
-/// extern-fn §6: a required impl's types are smaller than the
-/// declaration's own, so requirements end.
+/// extern-fn §6: a requirement is answered by an impl, so only an impl's
+/// requirements lead on to further ones, and an impl requires impls only
+/// at types smaller than its own, so the requirements a call reaches end.
+/// A declaration that is no impl is reached by its calls alone: its
+/// requirements start a chain and are no link of one, so they are not
+/// measured.
 fn refuse_unending_requirements(
     types: &Types<Poly>,
     functions: &[(QualifiedRef, Scheme)],
@@ -621,7 +625,7 @@ fn refuse_unending_requirements(
         types,
         known: FxHashMap::default(),
     };
-    for (id, scheme) in functions {
+    for (id, scheme) in functions.iter().filter(|(_, scheme)| scheme.impl_of.is_some()) {
         sizes.refuse_not_smaller(*id, scheme.ty, &scheme.requires, refused);
     }
 }
@@ -1967,11 +1971,38 @@ mod tests {
         }])
     }
 
-    /// extern-fn §6: a required impl's types are smaller than the
-    /// declaration's own. `fn(T) -> ()` has three nodes, and so has the
-    /// pattern `(T, T)`.
+    /// extern-fn §6: an impl requires impls only at types smaller than its
+    /// own. The impl `fn(Option<i64>) -> ()` has four nodes, and so has the
+    /// pattern `(i64, i64, i64)`.
     #[test]
-    fn a_requirement_as_large_as_its_declaration_is_refused() {
+    fn an_impl_requirement_as_large_as_the_impl_is_refused() {
+        let mut fixture = Fixture::new();
+        let (f, shared) = (fixture.name("m", "f"), fixture.name("m", "hash"));
+        let var = fixture.ty(TyKind::Var(0));
+        let unit = fixture.ty(TyKind::Unit);
+        let own_ty = fixture.function(&[var], unit);
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let option = fixture.ty(TyKind::Option(int, ()));
+        let impl_ty = fixture.function(&[option], unit);
+        let pattern = fixture.ty(TyKind::Tuple(Box::new([int, int, int]), ()));
+        let at_option = fixture.r#impl(f, impl_ty, requiring(shared, pattern));
+        fixture.declare_impls(f, own_ty, 1, vec![at_option]);
+        let declaration = fixture.impl_id(f, 0);
+        assert_eq!(
+            refusals(fixture),
+            vec![Refused::RequirementNotSmaller {
+                declaration,
+                generic_function: shared
+            }]
+        );
+    }
+
+    /// extern-fn §6: a declaration that is no impl is reached by its calls
+    /// alone, so its requirement, though no smaller than its own
+    /// `fn(T) -> ()`, is taken in: it starts a chain of requirements and is
+    /// no link of one.
+    #[test]
+    fn a_requirement_of_a_declaration_that_is_no_impl_is_not_measured() {
         let mut fixture = Fixture::new();
         let (f, shared) = (fixture.name("m", "f"), fixture.name("m", "hash"));
         let var = fixture.ty(TyKind::Var(0));
@@ -1985,13 +2016,7 @@ mod tests {
                 ..fixture.plain(ty, 1)
             },
         );
-        assert_eq!(
-            refusals(fixture),
-            vec![Refused::RequirementNotSmaller {
-                declaration: f,
-                generic_function: shared
-            }]
-        );
+        assert!(fixture.verify().is_ok());
     }
 
     /// extern-fn §6: the pattern `T`, one node, is smaller than `fn(T) -> ()`,
