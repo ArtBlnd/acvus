@@ -6,8 +6,9 @@
 //!
 //! A loan lives while a holder of it, or of a loan within it, is live. The
 //! content of an outside storage is live throughout the body: its holder is
-//! the caller. A value that is only one call's argument holds its loans
-//! from that call on.
+//! the caller. A value one call's argument makes holds the loans made at
+//! that call from its start on: not at the call itself, whose accesses make
+//! them, and where the call runs again, as the loans of that run.
 //!
 //! At every access `Loans` records, every live loan whose place overlaps the
 //! accessed one is held against it, save the loans the reference the access
@@ -284,7 +285,8 @@ fn met(module: &Module, body_id: BodyId, am: &mut AnalysisManager<'_>) -> Vec<Me
         let mut held = LoanSet::new();
         for value in values.iter().filter(|value| !slots.contains(value)) {
             let from = loans.holds_from(*value);
-            let not_yet_made = |loan: &Loan| from.is_some_and(|call| loan.made == Made::At(call) && !order.after(site, call));
+            let not_yet_made =
+                |loan: &Loan| from.is_some_and(|call| loan.made == Made::At(call) && (site == call || !order.after(site, call)));
             held.extend(loans.all_of(*value).into_iter().filter(|loan| !not_yet_made(loan)));
         }
         for (storage, content) in loans.contents_before(site) {
@@ -356,13 +358,6 @@ fn met_at(loans: &Loans, site: Site, span: Span, live: &LoanSet, met: &mut Vec<M
     let lends: Vec<&Access> = accesses.iter().filter(|access| access.reach == Reach::Lend).collect();
     for (at, first) in lends.iter().enumerate() {
         for second in &lends[at + 1..] {
-            let one_run = match (first.on_edge, second.on_edge) {
-                (Some(a), Some(b)) => a == b,
-                _ => true,
-            };
-            if !one_run {
-                continue;
-            }
             for made in &first.made {
                 let meets_made = |other: &&Loan| {
                     (made.mode == Mode::Exclusive || other.mode == Mode::Exclusive)

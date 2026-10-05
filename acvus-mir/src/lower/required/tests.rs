@@ -31,6 +31,10 @@ struct Tys {
     takes_two_strings: Ty,
     /// A pure function of one `i64` to an `i64`.
     takes_int: Ty,
+    /// `&mut i64`.
+    mut_int: Ty,
+    /// A pure function of two `&mut i64`s to an `i64`.
+    takes_two_mut_ints: Ty,
     callee: QualifiedRef,
 }
 
@@ -60,9 +64,19 @@ fn fixture() -> Fixture {
     let takes_string = function(&[string]);
     let takes_two_strings = function(&[string, string]);
     let takes_int = function(&[int]);
+    let mut_int = types.intern(TyKind::Ref(Mutability::Mut, int));
+    let takes_two_mut_ints = types.intern(TyKind::Fn {
+        params: Box::new([mut_int, mut_int]),
+        ret: int,
+        effect: EffectTerm::Known(Effect::pure()),
+        flows: FlowTerm::Known(Flows::none()),
+        calls: Calls::Many,
+        holds: Holds::Nothing,
+        values: (),
+    });
     let interner = Interner::new();
     let callee = QualifiedRef::root(interner.intern("f"));
-    let t = Tys { int, bool, string, string_ref, takes_string, takes_two_strings, takes_int, callee };
+    let t = Tys { int, bool, string, string_ref, takes_string, takes_two_strings, takes_int, mut_int, takes_two_mut_ints, callee };
     Fixture { module: Module::new(types), interner, t }
 }
 
@@ -179,6 +193,72 @@ fn is_take_of(op: &Op, of: ValueId) -> bool {
 
 fn drops(ops: &[Op]) -> usize {
     ops.iter().filter(|op| matches!(op, Op::Drop { .. })).count()
+}
+
+// -- reborrow_mut_uses -------------------------------------------------------
+
+fn is_reborrow_of(op: &Op, of: ValueId) -> bool {
+    matches!(op, Op::Ref { target: RefTarget::Through(reference), path, mutability: Mutability::Mut } if *reference == of && path.is_empty())
+}
+
+/// `x = 1; r = &mut x; f(r, r)`: each argument is a use of `r`, so each
+/// takes a reborrow of its own, made just before the call with its span,
+/// and `r` itself is passed nowhere (ownership §5).
+#[test]
+fn each_use_of_a_mut_reference_by_one_call_takes_a_reborrow_of_its_own() {
+    let mut f = fixture();
+    let t = f.t;
+    let mut builder = f.module.build_body(false, t.int);
+    let entry = builder.current_block();
+    let x = builder.slot(t.int, at(1));
+    let one = builder.push(constant(1), t.int, at(1));
+    builder.push_unit(assign(x, one), at(1));
+    let r = builder.push(Op::Ref { target: RefTarget::Var(x), path: Vec::new(), mutability: Mutability::Mut }, t.mut_int, at(2));
+    let called = builder.push(t.call(t.takes_two_mut_ints, vec![r, r]), t.int, at(3));
+    builder.terminate(ret(called), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, reborrow_mut_uses);
+
+    let ops = f.ops(id, entry);
+    let [_, _, _, first, second, call] = &ops[..] else {
+        panic!("two reborrows are added before the call: {ops:?}")
+    };
+    assert!(is_reborrow_of(first, r) && is_reborrow_of(second, r));
+    let insts: Vec<_> = f.module.body(id).block(entry).insts().collect();
+    assert_eq!((insts[3].span(), insts[4].span()), (at(3), at(3)), "each reborrow takes the span of the use it serves");
+    let made = |at: usize| insts[at].result().expect("a reborrow yields a value");
+    assert_eq!(arguments(call), [made(3), made(4)]);
+}
+
+/// `(m: &mut i64) jump b1(m); b1(p): return p`: an edge's argument and a
+/// returned value are uses of a `&mut`, each reborrowed at the end of its
+/// block; a `Jump` has one edge, so the reborrow is made on it alone.
+#[test]
+fn a_mut_reference_passed_along_a_jump_and_returned_takes_a_reborrow_before_each_terminator() {
+    let mut f = fixture();
+    let t = f.t;
+    let nm = f.interner.intern("m");
+    let mut builder = f.module.build_body(false, t.mut_int);
+    let entry = builder.current_block();
+    let m = builder.param(nm, t.mut_int, Span::ZERO);
+    let next = builder.new_block(&[t.mut_int]);
+    let p = builder.block_params(next)[0];
+    builder.terminate(jump(next, vec![m]), at(1));
+    builder.switch_to(next);
+    builder.terminate(ret(p), Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    run(&mut f, reborrow_mut_uses);
+
+    let body = f.module.body(id);
+    for (block, of) in [(entry, m), (next, p)] {
+        let ops = f.ops(id, block);
+        let [reborrow] = &ops[..] else { panic!("one reborrow ends {block:?}: {ops:?}") };
+        assert!(is_reborrow_of(reborrow, of));
+        let made = body.block(block).insts().next().expect("the reborrow").result().expect("a reborrow yields a value");
+        assert_eq!(body.block(block).terminator().operands()[0], made, "the terminator takes the reborrow");
+    }
 }
 
 // -- clone_strings -----------------------------------------------------------

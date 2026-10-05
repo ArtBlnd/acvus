@@ -1,13 +1,14 @@
 //! Takings: how each instruction and terminator takes each value it names,
 //! moved, read or cut in part (ownership §1-3, §5, §6; functions §3). This is
 //! the one statement of it: `passes::analysis::Initialization` records the
-//! moves it states, `passes::analysis::Loans` makes an implicit reborrow
-//! where it reads a `&mut` at a by-value position, `check::borrowck` holds
-//! each access as it states, and `lower::required` clones and drops by it.
+//! moves it states, `check::borrowck` holds each access as it states, and
+//! `lower::required` reborrows, clones and drops by it.
 //!
 //! - A value that copies is read (ownership §1, §2).
-//! - A `&mut` is read, by value or taken from a place by name: each use
-//!   reborrows it and its holder keeps it (ownership §5).
+//! - A `&mut` taken from a place by name is read, and its holder keeps it.
+//!   A `&mut` at a by-value position is moved: each use reborrows it
+//!   (ownership §5), and `lower::required::reborrow_mut_uses` has given each
+//!   such position a reborrow of its own, made just before it.
 //! - A callee called once is moved and one called many times is read, and a
 //!   closure kept at signatures is moved where one of them is called once
 //!   (functions §3).
@@ -42,8 +43,7 @@ mod tests;
 pub enum Taken {
     /// The value goes to another holder, or ends here.
     Moved,
-    /// The value is read, and its holder keeps it. At a by-value position,
-    /// a `&mut` read so is its implicit reborrow (ownership §5).
+    /// The value is read, and its holder keeps it.
     Read,
     /// A part that does not copy leaves a whole that does not copy, or a
     /// part is replaced in one: the whole is cut, and each of its units is
@@ -55,13 +55,15 @@ pub enum Taken {
 /// an operand that names a storage, as a `Take`'s or an `Assign`'s target
 /// does, rather than passing a value. `lent` is, for the reference a
 /// `Take`, a `Ref` or an `Assign` reaches its place through, how that place
-/// is taken; `None` for every other operand.
+/// is taken; `None` for every other operand. `by_value` marks an operand at
+/// a by-value position, taken as `by_value` states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Operand {
     pub value: ValueId,
     pub taken: Taken,
     pub names_place: bool,
     pub lent: Option<Taken>,
+    pub by_value: bool,
 }
 
 /// A value a terminator names apart from its edges' arguments, and how it
@@ -75,13 +77,13 @@ pub struct Named {
 /// How a by-value position takes a value of `ty`: an argument, an edge's
 /// argument, a returned value, a value stored or built into another.
 pub fn by_value(types: &Types<Concrete>, ty: Ty) -> Taken {
-    match copies(types, ty) || is_mut_ref(types, ty) {
+    match copies(types, ty) {
         true => Taken::Read,
         false => Taken::Moved,
     }
 }
 
-fn is_mut_ref(types: &Types<Concrete>, ty: Ty) -> bool {
+pub fn is_mut_ref(types: &Types<Concrete>, ty: Ty) -> bool {
     matches!(types.kind(ty), TyKind::Ref(Mutability::Mut, _))
 }
 
@@ -92,8 +94,8 @@ fn is_mut_ref(types: &Types<Concrete>, ty: Ty) -> bool {
 pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallVec<[Operand; 4]> {
     let ty = |value: ValueId| body.ty_of(value);
     let copying = |value: ValueId| copies(types, ty(value));
-    let taken = |value: ValueId, taken: Taken| Operand { value, taken, names_place: false, lent: None };
-    let passed = |value: ValueId| taken(value, by_value(types, ty(value)));
+    let taken = |value: ValueId, taken: Taken| Operand { value, taken, names_place: false, lent: None, by_value: false };
+    let passed = |value: ValueId| Operand { by_value: true, ..taken(value, by_value(types, ty(value))) };
     let read = |value: ValueId| taken(value, Taken::Read);
     let result_copies = || inst.result().is_some_and(copying);
     let extracted = |src: ValueId| match copying(src) || result_copies() {
@@ -101,7 +103,9 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         false => taken(src, Taken::PartMoved),
     };
     let place = |target: &RefTarget, taken: Taken| match target {
-        RefTarget::Var(named) | RefTarget::Param(named) => Some(Operand { value: *named, taken, names_place: true, lent: None }),
+        RefTarget::Var(named) | RefTarget::Param(named) => {
+            Some(Operand { value: *named, taken, names_place: true, lent: None, by_value: false })
+        }
         RefTarget::Through(reference) => Some(Operand { lent: Some(taken), ..read(*reference) }),
         RefTarget::Context(_) => None,
     };

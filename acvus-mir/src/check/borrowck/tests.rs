@@ -10,7 +10,7 @@ use crate::check::ConflictTrace;
 use crate::decl::{Core, Declarations, LoopMarkers, RawDeclarations};
 use crate::ir::cfg::{Module, Op, Terminator};
 use crate::lower::lower_script;
-use crate::lower::required::clone_strings;
+use crate::lower::required::{clone_strings, reborrow_mut_uses};
 use crate::passes::analysis::{AnalysisManager, Loans};
 use crate::ty::{
     Alignment, Calls, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, Mutability, TyKind, Types,
@@ -45,6 +45,7 @@ impl Found {
         assert!(typeck.refusals.is_empty(), "typeck refused {source:?}: {:?}", typeck.refusals);
         let mut module: Module = lower_script(&decls, &typeck, types, &script);
         let mut am = AnalysisManager::new(&decls);
+        reborrow_mut_uses(&mut module, &mut am);
         clone_strings(&mut module, &mut am);
         let conflicts = module
             .body_ids()

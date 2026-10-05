@@ -1,9 +1,12 @@
 //! The required steps after lowering (D40, D55, D71): meaning, not
 //! optimization. They run on every program, at every level, in the order
-//! `clone_strings`, the checks, `insert_drops`.
+//! `reborrow_mut_uses`, `clone_strings`, the checks, `insert_drops`.
 //! Each edits every body of the module through its own scopes' editors,
 //! with `EditFacts` as their needs where they read facts, and invalidates
 //! the manager for what it changed.
+//! - `reborrow_mut_uses`, scope `Value`: each use of a `&mut` at a by-value
+//!   position reborrows it (ownership §5), through `insert` and
+//!   `replace_operand` (G3).
 //! - `clone_strings`, scopes `Clones` and `Value`: a `String` use that is
 //!   not its last is a clone, and its last use moves it (ownership §3),
 //!   through `clone_read` (S4) for a place's content and `insert` and
@@ -23,7 +26,7 @@ use smallvec::SmallVec;
 use crate::ir::cfg::edit::{
     CannotRemoveParam, Cfg, Clones, Drops, Editor, InstRef, NoFacts, PartOf, Position, RootStep, RootedPlace, Value,
 };
-use crate::ir::cfg::takings::{Named, Taken, by_value, inst_takings, terminator_takings};
+use crate::ir::cfg::takings::{Named, Taken, by_value, inst_takings, is_mut_ref, terminator_takings};
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Inst, InstId, Module, Op, Site, Terminator};
 use crate::ir::parts::{self, Path, covers, overlap};
 use crate::ir::{Callee, PathSeg, RefTarget, ValueId};
@@ -39,6 +42,7 @@ mod tests;
 /// then takes no step after them (refusals: the checker is the only place
 /// a program is refused).
 pub fn run(module: &mut Module, am: &mut AnalysisManager<'_>) -> Result<(), Vec<crate::check::Refusal>> {
+    reborrow_mut_uses(module, am);
     clone_strings(module, am);
     let refusals = crate::check::check(module, am);
     if !refusals.is_empty() {
@@ -46,6 +50,94 @@ pub fn run(module: &mut Module, am: &mut AnalysisManager<'_>) -> Result<(), Vec<
     }
     insert_drops(module, am);
     Ok(())
+}
+
+/// Every body: each operand at a by-value position that is a `&mut` takes a
+/// reborrow of it, a `Ref` through it of an empty path, made just before
+/// its site with the site's span, and the operand moves that reborrow
+/// (ownership §5, `ir::cfg::takings`). Each use so has a loan of its own,
+/// made where the use is.
+///
+/// Cost per body: one insertion and one `replace_operand` per such operand.
+pub fn reborrow_mut_uses(module: &mut Module, am: &mut AnalysisManager<'_>) {
+    for body in module.body_ids() {
+        let changes = reborrow_mut_uses_in(module, body, am);
+        am.invalidate(body, &changes);
+    }
+}
+
+fn reborrow_mut_uses_in(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) -> Changes {
+    let mut facts = EditFacts::new(am, body);
+    let mut editor = Editor::<Value>::new(module, body, &mut facts);
+    let mut cursor = editor.cursor();
+    while let Some(inst) = cursor.next() {
+        reborrow_before_inst(cursor.editor(), inst);
+    }
+    let blocks: Vec<BlockId> = editor.body().blocks().map(|(block, _)| block).collect();
+    for block in blocks {
+        reborrow_before_terminator(&mut editor, block);
+    }
+    editor.finish()
+}
+
+/// Each `&mut` the instruction at `inst` takes at a by-value position,
+/// by its index among the instruction's operands.
+fn reborrow_before_inst(editor: &mut Editor<'_, Value>, inst: InstRef) {
+    let record = editor.inst_of(inst);
+    let span = record.span();
+    let (body, types) = (editor.body(), editor.types());
+    let passed: SmallVec<[(usize, ValueId); 2]> = inst_takings(body, types, record)
+        .into_iter()
+        .enumerate()
+        .filter(|(_, operand)| operand.by_value && is_mut_ref(types, body.ty_of(operand.value)))
+        .map(|(position, operand)| (position, operand.value))
+        .collect();
+    for (position, value) in passed {
+        let reborrow = insert_reborrow(editor, Position::Before(inst), value, span);
+        editor
+            .replace_operand(Site::Inst(inst.id()), position, value, reborrow)
+            .expect("a reborrow inserted just before its use dominates it");
+    }
+}
+
+/// Each `&mut` the terminator of `block` takes by value: a `Return`'s value
+/// and a `Jump`'s arguments, every operand of either being at a by-value
+/// position (`terminator_takings`). A reborrow at the block's end is made on
+/// the one edge a `Jump` has; lowering passes a value along an edge only as
+/// a `Jump`'s argument, so no other terminator passes a `&mut`.
+///
+/// # Panics
+/// A terminator of more than one edge passes a `&mut`, which no position in
+/// the block reborrows on that edge alone.
+fn reborrow_before_terminator(editor: &mut Editor<'_, Value>, block: BlockId) {
+    let record = editor.body().block(block);
+    let span = record.terminator_span();
+    let terminator = record.terminator();
+    let (body, types) = (editor.body(), editor.types());
+    let is_mut = |value: ValueId| is_mut_ref(types, body.ty_of(value));
+    let passed: SmallVec<[(usize, ValueId); 2]> = match terminator {
+        Terminator::Return { .. } | Terminator::Jump { .. } => {
+            terminator.operands().into_iter().enumerate().filter(|(_, value)| is_mut(*value)).collect()
+        }
+        other => {
+            let passes_mut = other.edges().iter().flat_map(|edge| edge.args.iter()).any(|arg| is_mut(*arg));
+            assert!(!passes_mut, "{other:?} passes a `&mut` along one of several edges, which lowering passes only along a `Jump`");
+            SmallVec::new()
+        }
+    };
+    for (position, value) in passed {
+        let reborrow = insert_reborrow(editor, Position::End(block), value, span);
+        editor
+            .replace_operand(Site::Term(block), position, value, reborrow)
+            .expect("a reborrow inserted at its block's end dominates the terminator");
+    }
+}
+
+/// A `&mut` reborrow of the whole of what `reference` lends, `&mut *reference`.
+fn insert_reborrow(editor: &mut Editor<'_, Value>, at: Position, reference: ValueId, span: Span) -> ValueId {
+    let ty = editor.body().ty_of(reference);
+    let op = Op::Ref { target: RefTarget::Through(reference), path: Vec::new(), mutability: Mutability::Mut };
+    editor.insert(at, op, ty, span)
 }
 
 /// Every body: a `String` a use moves while the same content is read again

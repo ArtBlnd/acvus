@@ -148,6 +148,7 @@ impl Fixture {
         assert!(typeck.refusals.is_empty(), "typeck refused: {:?}", typeck.refusals);
         let mut module = lower_script(&decls, &typeck, types, &script);
         let mut am = AnalysisManager::new(&decls);
+        required::reborrow_mut_uses(&mut module, &mut am);
         required::clone_strings(&mut module, &mut am);
         check(&module, &mut am)
     }

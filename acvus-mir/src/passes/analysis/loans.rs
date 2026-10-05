@@ -20,9 +20,16 @@
 //! parameter's and capture's type, distinct from every other since its
 //! callers were checked.
 //!
-//! A loan is made at one site, on one place, at one mode: two loans are one
-//! only where one site made them on one place. A loan made through another
-//! is within it, and lives no longer than it (ownership §5). A loan's path
+//! A loan is made by one making (`Making`): a lend, a reborrow through one
+//! reference operand of a site, a call's result taking from an argument's
+//! loan, or a parameter's or capture's loan held when the body starts. Two
+//! loans are one only where one making made them on one place at one mode,
+//! and every run of that making is that one loan. A loan is made where it
+//! starts to live (`Made`), which is its making's site but for a loan an
+//! argument makes (6). A loan made through another is within it, and lives
+//! no longer than it (ownership §5); a lend and a loan held when the body
+//! starts are made through no other, so every chain of loans ends at one
+//! of them. A loan's path
 //! is exact, or, where a call's result borrows from an argument, some part
 //! under it the flows do not tell (extern-fn §4). A loan a reference holds
 //! is at a part of its target: the whole for a plain reference, part `i`
@@ -32,9 +39,11 @@
 //! 1. Lend, `Ref` by name of a place whose type is not a reference: one loan
 //!    made there on that place, exact, at the reference's mode.
 //! 2. Reborrow: a `Ref` through `r`; a `Ref` by name of a place whose type
-//!    is a reference, which reborrows its target (types §4); and a use the
-//!    takings (`ir::cfg::takings`) take `Read` of a `&mut` at a by-value
-//!    position, which reborrows it implicitly. For each loan `l` of `r`'s
+//!    is a reference, which reborrows its target (types §4); an `AsSlice`,
+//!    an `ArrayView` and an `Index` that lends an element; and a `For`'s
+//!    element of a slice. Each use of a `&mut` at a by-value position is a
+//!    `Ref` through it that `lower::required::reborrow_mut_uses` made for that
+//!    use (ownership §5). For each loan `l` of `r`'s
 //!    own, one loan made there on `l`'s place extended by the path, exact
 //!    where `l` is, at the weaker of `l`'s mode and the reborrow's, within
 //!    `l`. The result holds these as its own. A `Take` through `r` of a
@@ -58,8 +67,9 @@
 //! 5. Gather: the reference built holds each part reference's own loans at
 //!    that part; no loan is made.
 //! 6. A call: an argument's lend or reborrow is made where the call starts
-//!    (ownership §5, effects §6), so a value that is only one call's argument
-//!    holds its loans from the call on. The result and the written
+//!    (ownership §5, effects §6): the lend or reborrow that makes a value
+//!    that is only one call's argument, and that makes a reference only such
+//!    a reborrow is made through. The result and the written
 //!    arguments take loans only as the call's flows state: a declared
 //!    function's, its lifetimes read at the call's types (`call_flows`),
 //!    every flow where it states none; a function value's, its function
@@ -97,8 +107,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::decl::declared::{Access as DeclaredAccess, Element, Touch};
 use crate::decl::{CallFlows, Declarations, call_flows};
-use crate::ir::cfg::takings::{Taken, by_value, place_taking};
-use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Definition, Edge, Inst, Module, Op, Site, Terminator};
+use crate::ir::cfg::takings::{Taken, place_taking};
+use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Module, Op, Site, Terminator};
 use crate::ir::parts::{Path, covers, overlap};
 use acvus_utils::QualifiedRef;
 
@@ -176,7 +186,7 @@ pub enum Mode {
 
 /// A loan (ownership §5): the place it names, a storage and a path in it
 /// (`ir::parts`), and its mode; the part of its reference's target it is
-/// at, and where it was made.
+/// at, where it was made, and what made it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Loan {
     pub storage: Storage,
@@ -187,12 +197,33 @@ pub struct Loan {
     /// The part of a reference's target this loan is at: [] for a plain reference, [i] for part i of a Gather.
     pub at: Path,
     pub made: Made,
+    pub by: Making,
 }
 
+/// Where a loan is made: the site from which it lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Made {
     At(Site),
     /// A parameter's or capture's loan, made outside the body; named at its binder.
+    Outside { of: ValueId },
+}
+
+/// What makes a loan (ownership §5, extern-fn §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Making {
+    /// A `Ref` by name of a place whose type is not a reference: a loan
+    /// made through no other.
+    Lend(InstId),
+    /// A reference made through the reference `site` takes at its operand
+    /// `operand`: a `Ref` through it or by name of a place whose type is a
+    /// reference, an `AsSlice`, an `ArrayView`, an `Index`, a `Take` through
+    /// it of a part whose type is a reference, `ArrayMap`'s element of its
+    /// array, and a `For`'s element of its slice.
+    Reborrow { site: Site, operand: usize },
+    /// A loan the result of the call at this site takes from an argument's.
+    Taken(Site),
+    /// A parameter's or capture's loan, held when the body starts: a loan
+    /// made through no other.
     Outside { of: ValueId },
 }
 
@@ -236,9 +267,6 @@ pub struct Access {
     pub through: LoanSet,
     /// A lend's loans; none for any other access.
     pub made: LoanSet,
-    /// The edge of the site's terminator the access is made on, where it
-    /// is an edge's argument: a run takes one edge.
-    pub on_edge: Option<usize>,
 }
 
 /// A storage whole, or one element of it named by a value, which a call
@@ -547,9 +575,9 @@ impl Analysis for Loans {
                 loans.seen.insert(site, page.seen());
             }
             forward.step_terminator(id, block.terminator(), &mut state, &mut record);
-            for (index, edge) in block.terminator().edges().iter().enumerate() {
+            for edge in block.terminator().edges().iter() {
                 let mut along = state.clone();
-                forward.step_edge(id, Some(index), edge, body.block(edge.to).params(), &mut along, &mut record);
+                forward.step_edge(edge, body.block(edge.to).params(), &mut along);
             }
             for (value, positions) in state.values {
                 let kept = loans.values.entry(value).or_insert_with(|| empty(positions.len()));
@@ -594,19 +622,26 @@ impl Record {
 
     fn through(&mut self, site: Site, reach: Reach, located: &[Located], through: LoanSet) {
         let places = located.iter().map(Located::place).collect();
-        self.access(site, Access { reach, places, through, made: LoanSet::new(), on_edge: None });
+        self.access(site, Access { reach, places, through, made: LoanSet::new() });
     }
 
     /// `made`, made at `site` through `through`, a lend at each loan's mode.
-    fn lend(&mut self, site: Site, on_edge: Option<usize>, made: LoanSet, through: LoanSet) {
+    fn lend(&mut self, site: Site, made: LoanSet, through: LoanSet) {
         if made.is_empty() {
             return;
         }
         let places = made.iter().map(Loan::place).collect();
-        self.access(site, Access { reach: Reach::Lend, places, through, made, on_edge });
+        self.access(site, Access { reach: Reach::Lend, places, through, made });
     }
 
+    /// `loan` made through `parent`. A lend and a loan held when the body
+    /// starts are made through no other, so every chain of loans ends at
+    /// one of them.
     fn made_within(&mut self, loan: &Loan, parent: &Loan) {
+        assert!(
+            !matches!(loan.by, Making::Lend(_) | Making::Outside { .. }),
+            "{loan:?}, made through no other loan, is made through {parent:?}"
+        );
         self.within.entry(loan.clone()).or_default().insert(parent.clone());
     }
 }
@@ -639,7 +674,7 @@ impl Page {
                 .iter()
                 .map(|context| Place { storage: Storage::Context(*context), path: Vec::new(), exact: true })
                 .collect();
-            record.access(site, Access { reach, places, through: LoanSet::new(), made: LoanSet::new(), on_edge: None });
+            record.access(site, Access { reach, places, through: LoanSet::new(), made: LoanSet::new() });
         }
     }
 }
@@ -827,13 +862,14 @@ impl Loan {
         Some(Located { storage: self.storage, path, exact: self.exact, supplies: supplies.to_vec() })
     }
 
-    /// The loan a reborrow of `path` at `mode` through a reference holding
-    /// this one makes at `made`, where this loan's part meets `path`: on the
-    /// place it reaches there, at the weaker of the two modes, at the part
-    /// of the new reference's target this loan's part is (ownership §5).
-    fn reborrowed(&self, path: &[PathSeg], mode: Mode, made: Site) -> Option<Loan> {
+    /// The loan the reborrow `by` of `path` at `mode` through a reference
+    /// holding this one makes at `made`, where this loan's part meets
+    /// `path`: on the place it reaches there, at the weaker of the two modes,
+    /// at the part of the new reference's target this loan's part is
+    /// (ownership §5).
+    fn reborrowed(&self, path: &[PathSeg], mode: Mode, made: Site, by: Making) -> Option<Loan> {
         let Located { storage, path, exact, supplies } = self.resolve(path)?;
-        Some(Loan { storage, path, exact, mode: self.mode.min(mode), at: supplies, made: Made::At(made) })
+        Some(Loan { storage, path, exact, mode: self.mode.min(mode), at: supplies, made: Made::At(made), by })
     }
 
     /// This loan, held by a part reference `Gather` puts at `part` of the
@@ -848,7 +884,8 @@ impl Loan {
     /// a mode than the result's position holds (extern-fn §4).
     fn taken_by_result(&self, held: Option<Mode>, made: Site) -> Loan {
         let mode = held.map_or(self.mode, |held| self.mode.min(held));
-        Loan { storage: self.storage, path: self.path.clone(), exact: false, mode, at: Vec::new(), made: Made::At(made) }
+        let (path, by) = (self.path.clone(), Making::Taken(made));
+        Loan { storage: self.storage, path, exact: false, mode, at: Vec::new(), made: Made::At(made), by }
     }
 }
 
@@ -880,11 +917,14 @@ impl<'b> Forward<'b> {
     }
 }
 
-/// Each value that is only one call's argument, never its callee, and the
-/// call: the loans such a value makes are made where the call starts
+/// Each value one call's argument makes, and the call: a value that is only
+/// that call's argument, never its callee, and a reference that is only the
+/// operand a reborrow of such a value is made through. The loans an
+/// argument makes, by a lend or a reborrow, are made where the call starts
 /// (ownership §5, effects §6).
 fn sole_calls(body: &Body) -> FxHashMap<ValueId, Site> {
     let mut sole = FxHashMap::default();
+    let mut pending = Vec::new();
     for (_, block) in body.blocks() {
         for inst in block.insts() {
             let (Op::FunctionCall { callee, args, .. } | Op::Spawn { callee, args, .. }) = inst.op() else {
@@ -893,13 +933,34 @@ fn sole_calls(body: &Body) -> FxHashMap<ValueId, Site> {
             let site = Site::Inst(inst.id());
             for arg in args {
                 let only_an_argument = indirect(callee).all(|function| function != arg) && body.users(*arg).all(|user| user == site);
-                if only_an_argument {
-                    sole.insert(*arg, site);
+                if only_an_argument && sole.insert(*arg, site).is_none() {
+                    pending.push(*arg);
                 }
             }
         }
     }
+    while let Some(made) = pending.pop() {
+        let Definition::Inst(reborrow) = body.definition(made) else { continue };
+        let Some(reference) = reborrowed_through(body.inst(reborrow).op()) else { continue };
+        let call = sole[&made];
+        let only_this_reborrow = body.users(reference).all(|user| user == Site::Inst(reborrow));
+        if only_this_reborrow && sole.insert(reference, call).is_none() {
+            pending.push(reference);
+        }
+    }
     sole
+}
+
+/// The reference a reborrow `op` is made through: a `Ref` through it, an
+/// `AsSlice`, an `ArrayView`, and an `Index` that lends an element.
+fn reborrowed_through(op: &Op) -> Option<ValueId> {
+    match op {
+        Op::Ref { target: RefTarget::Through(reference), .. }
+        | Op::AsSlice { container: reference, .. }
+        | Op::ArrayView { src: reference, .. }
+        | Op::Index { slice: reference, mode: IndexMode::Ref, .. } => Some(*reference),
+        _ => None,
+    }
 }
 
 impl Forward<'_> {
@@ -1022,10 +1083,6 @@ impl Forward<'_> {
         }
     }
 
-    fn is_mut_ref(&self, ty: Ty) -> bool {
-        matches!(self.types.kind(ty), TyKind::Ref(Mutability::Mut, _))
-    }
-
     /// The loans of each parameter and capture, each position naming its
     /// own outside storage; and each order parameter's none.
     fn defined_before_entry(&self) -> Vec<Held> {
@@ -1050,7 +1107,8 @@ impl Forward<'_> {
                     PositionKind::InFlight => panic!("a parameter or capture of a body holds no started call"),
                 };
                 let storage = Storage::Outside { of, position };
-                LoanSet::from([Loan { storage, path: Vec::new(), exact: true, mode, at: Vec::new(), made: Made::Outside { of } }])
+                let (made, by) = (Made::Outside { of }, Making::Outside { of });
+                LoanSet::from([Loan { storage, path: Vec::new(), exact: true, mode, at: Vec::new(), made, by }])
             })
             .collect()
     }
@@ -1366,13 +1424,13 @@ impl Forward<'_> {
         positions
     }
 
-    /// The loans a reborrow of `path` at `mode` through a reference holding
-    /// `source` makes at `made`, each within the loan of `source` it is
-    /// made through (ownership §5).
-    fn reborrow_loans(&self, source: &LoanSet, path: &[PathSeg], mode: Mode, made: Site, record: &mut Record) -> LoanSet {
+    /// The loans the reborrow `by` of `path` at `mode` through a reference
+    /// holding `source` makes at `made`, each within the loan of `source` it
+    /// is made through (ownership §5).
+    fn reborrow_loans(&self, source: &LoanSet, path: &[PathSeg], mode: Mode, made: Site, by: Making, record: &mut Record) -> LoanSet {
         let mut own = LoanSet::new();
         for loan in source {
-            let Some(reborrowed) = loan.reborrowed(path, mode, made) else { continue };
+            let Some(reborrowed) = loan.reborrowed(path, mode, made, by) else { continue };
             record.made_within(&reborrowed, loan);
             own.insert(reborrowed);
         }
@@ -1380,14 +1438,15 @@ impl Forward<'_> {
     }
 
     /// A use of a reference `stored` in a place a path of references reaches,
-    /// the first of which holds `first`: a reborrow of it made at `made`, of
-    /// mode `mode`, each loan within the stored one and within `first`, and
-    /// exclusive only where all of them are (ownership §5); a lend there.
-    fn reborrow_stored(&self, stored: &LoanSet, first: &LoanSet, mode: Mode, made: Site, record: &mut Record) -> LoanSet {
+    /// the first of which holds `first`: the reborrow `by` of it made at
+    /// `made`, of mode `mode`, each loan within the stored one and within
+    /// `first`, and exclusive only where all of them are (ownership §5); a
+    /// lend there.
+    fn reborrow_stored(&self, stored: &LoanSet, first: &LoanSet, mode: Mode, made: Site, by: Making, record: &mut Record) -> LoanSet {
         let mode = first.iter().map(|loan| loan.mode).fold(mode, Mode::min);
         let mut own = LoanSet::new();
         for loan in stored {
-            let reborrowed = loan.reborrowed(&[], mode, made).expect("a reborrow of the whole meets every part");
+            let reborrowed = loan.reborrowed(&[], mode, made, by).expect("a reborrow of the whole meets every part");
             record.made_within(&reborrowed, loan);
             for outer in first {
                 record.made_within(&reborrowed, outer);
@@ -1396,17 +1455,17 @@ impl Forward<'_> {
         }
         let mut through = stored.clone();
         through.extend(first.iter().cloned());
-        record.lend(made, None, own.clone(), through);
+        record.lend(made, own.clone(), through);
         own
     }
 
-    /// A reborrow of the whole of what `reference` lends, of mode `mode`,
-    /// made at `made`, a lend there: its own loans, and what its target
-    /// holds.
-    fn reborrow(&self, state: &State, reference: ValueId, mode: Mode, made: Site, record: &mut Record) -> Vec<LoanSet> {
+    /// The reborrow `by` of the whole of what `reference` lends, of mode
+    /// `mode`, made at `made`, a lend there: its own loans, and what its
+    /// target holds.
+    fn reborrow(&self, state: &State, reference: ValueId, mode: Mode, made: Site, by: Making, record: &mut Record) -> Vec<LoanSet> {
         let source = self.own(state, reference);
-        let own = self.reborrow_loans(&source, &[], mode, made, record);
-        record.lend(made, None, own.clone(), source);
+        let own = self.reborrow_loans(&source, &[], mode, made, by, record);
+        record.lend(made, own.clone(), source);
         let mut positions = vec![own];
         positions.extend(self.target(state, reference));
         positions
@@ -1420,21 +1479,6 @@ impl Forward<'_> {
         let mut target = self.read(state, &self.place_through(state, reference, &[]), held.len() - 1, Some(target_ty));
         join_positions(&mut target, &held[1..]);
         target
-    }
-
-    /// `value` taken at a by-value position of `site`: a `&mut` the
-    /// takings read there is reborrowed, a loan made there within each of
-    /// its own, and a lend (ownership §5); any other value is as it is.
-    fn passed(&self, state: &State, value: ValueId, site: Site, on_edge: Option<usize>, record: &mut Record) -> Vec<LoanSet> {
-        let mut positions = self.value(state, value);
-        let ty = self.body.ty_of(value);
-        if by_value(self.types, ty) == Taken::Read && self.is_mut_ref(ty) {
-            let source = positions[0].clone();
-            let own = self.reborrow_loans(&source, &[], Mode::Exclusive, site, record);
-            record.lend(site, on_edge, own.clone(), source);
-            positions[0] = own;
-        }
-        positions
     }
 
     fn define(&self, state: &mut State, value: ValueId, positions: Vec<LoanSet>) {
@@ -1514,26 +1558,29 @@ impl Forward<'_> {
                 {
                     let path = self.canonical_through(*reference, path);
                     let first: LoanSet = self.own(state, *reference).into_iter().filter(|loan| loan.resolve(&path).is_some()).collect();
-                    positions[0] = self.reborrow_stored(&positions[0], &first, mode(*mutability), site, record);
+                    let by = Making::Reborrow { site, operand: self.operand_of(site, *reference) };
+                    positions[0] = self.reborrow_stored(&positions[0], &first, mode(*mutability), site, by, record);
                 }
                 positions
             }
             Op::Assign { target, path, value, .. } => {
                 let place = self.place(state, target, path);
                 record.through(site, Reach::Write, &place, self.through(state, target));
-                let written = self.passed(state, *value, site, None, record);
+                let written = self.value(state, *value);
                 self.write(state, &place, Some(self.body.ty_of(*value)), &written);
                 return None;
             }
             Op::AsSlice { container: lent, mutability, .. } | Op::ArrayView { src: lent, mutability } => {
-                self.reborrow(state, *lent, mode(*mutability), made(), record)
+                let by = Making::Reborrow { site, operand: self.operand_of(site, *lent) };
+                self.reborrow(state, *lent, mode(*mutability), made(), by, record)
             }
             Op::Index { slice, mode: IndexMode::Ref, .. } => {
                 let held = match self.types.kind(self.body.ty_of(*slice)) {
                     TyKind::Ref(held, _) => mode(*held),
                     other => panic!("an index reads a slice reference, not {other:?}"),
                 };
-                self.reborrow(state, *slice, held, made(), record)
+                let by = Making::Reborrow { site, operand: self.operand_of(site, *slice) };
+                self.reborrow(state, *slice, held, made(), by, record)
             }
             Op::Index { slice, mode: IndexMode::Copy, .. } => {
                 let place = self.place_through(state, *slice, &[]);
@@ -1543,7 +1590,7 @@ impl Forward<'_> {
             Op::IndexSet { slice, value, .. } => {
                 let place = self.place_through(state, *slice, &[]);
                 record.through(site, Reach::Write, &place, self.own(state, *slice));
-                let written = self.passed(state, *value, site, None, record);
+                let written = self.value(state, *value);
                 self.join_into(state, &place, None, &written);
                 return None;
             }
@@ -1562,20 +1609,20 @@ impl Forward<'_> {
                 let [range] = &self.parts_of(&reached, self.body.ty_of(*value))[..] else {
                     panic!("a field path names one field")
                 };
-                positions[range.clone()].clone_from_slice(&self.passed(state, *value, site, None, record));
+                positions[range.clone()].clone_from_slice(&self.value(state, *value));
                 positions
             }
             Op::ArrayPush { array, value } => {
-                let mut positions = self.passed(state, *array, site, None, record);
-                join_positions(&mut positions, &self.passed(state, *value, site, None, record));
+                let mut positions = self.value(state, *array);
+                join_positions(&mut positions, &self.value(state, *value));
                 positions
             }
             Op::MakeTuple { elements } => {
-                elements.iter().flat_map(|element| self.passed(state, *element, site, None, record)).collect()
+                elements.iter().flat_map(|element| self.value(state, *element)).collect()
             }
             Op::Intrinsic { intrinsic: Intrinsic::Gather, args } => {
                 let [structure] = &args[..] else { panic!("`Gather` takes `[structure]`") };
-                let held = self.passed(state, *structure, site, None, record);
+                let held = self.value(state, *structure);
                 self.gather(self.body.ty_of(*structure), &held, ty())
             }
             Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args } => self.array_map(state, args, site, record),
@@ -1588,7 +1635,7 @@ impl Forward<'_> {
                 };
                 let mut passed: BTreeMap<acvus_utils::Astr, Vec<LoanSet>> = BTreeMap::new();
                 for (name, value) in fields {
-                    passed.insert(*name, self.passed(state, *value, site, None, record));
+                    passed.insert(*name, self.value(state, *value));
                 }
                 declared
                     .iter()
@@ -1598,7 +1645,7 @@ impl Forward<'_> {
             Op::MakeVariant { tag, payload } => {
                 let mut positions = empty(self.width(ty()));
                 if let Some(payload) = payload {
-                    let held = self.passed(state, *payload, site, None, record);
+                    let held = self.value(state, *payload);
                     for range in self.variant_ranges(ty(), *tag, self.body.ty_of(*payload)) {
                         join_positions(&mut positions[range], &held);
                     }
@@ -1606,19 +1653,19 @@ impl Forward<'_> {
                 positions
             }
             Op::MakeClosure { captures, .. } => {
-                vec![captures.iter().flat_map(|capture| fold(&self.passed(state, *capture, site, None, record))).collect()]
+                vec![captures.iter().flat_map(|capture| fold(&self.value(state, *capture))).collect()]
             }
             // The same environment at fewer signatures: its one position
             // holds what the closure's does.
             Op::Specialize { closure, .. } => vec![fold(&self.value(state, *closure))],
             Op::FunctionCall { args, .. } => {
-                let passed = self.arguments(state, args, site, record);
+                let passed = self.arguments(state, args);
                 self.call(state, inst, &passed, record)
             }
             // A started call holds what its arguments and its callee value
             // hold until it is taken.
             Op::Spawn { callee, args, .. } => {
-                let passed = self.arguments(state, args, site, record);
+                let passed = self.arguments(state, args);
                 let mut held: LoanSet = passed.iter().flat_map(|positions| fold(positions)).collect();
                 for function in indirect(callee) {
                     held.extend(fold(&self.deepened(state, self.body.ty_of(*function), self.value(state, *function))));
@@ -1627,7 +1674,7 @@ impl Forward<'_> {
                 std::iter::once(held).chain(result).collect()
             }
             Op::TakeEffect { src } => self.value(state, *src)[1..].to_vec(),
-            Op::Unmark { src } => self.passed(state, *src, site, None, record),
+            Op::Unmark { src } => self.value(state, *src),
         })
     }
 
@@ -1636,6 +1683,20 @@ impl Forward<'_> {
         if let TyKind::Ref(..) = self.types.kind(self.body.ty_of(value)) {
             record.through(site, Reach::Read, &self.place_through(state, value, &[]), self.own(state, value));
         }
+    }
+
+    /// The index among `site`'s operands of `reference`, the one operand
+    /// a reborrow there is made through.
+    fn operand_of(&self, site: Site, reference: ValueId) -> usize {
+        let operands = match site {
+            Site::Inst(inst) => self.body.inst(inst).operands(),
+            Site::Term(block) => self.body.block(block).terminator().operands(),
+        };
+        let mut at = operands.iter().enumerate().filter(|(_, operand)| **operand == reference).map(|(at, _)| at);
+        let (Some(operand), None) = (at.next(), at.next()) else {
+            panic!("{reference:?} is one operand of {site:?}, the reference a reborrow there is made through")
+        };
+        operand
     }
 
     /// Where the loans `inst` makes its result with are made: at the call
@@ -1654,14 +1715,15 @@ impl Forward<'_> {
         let Op::Ref { target, path, mutability } = inst.op() else {
             panic!("a lend is a `Ref`, not {:?}", inst.op());
         };
-        let (made, mode) = (self.made_at(inst), mode(*mutability));
+        let (site, made, mode) = (Site::Inst(inst.id()), self.made_at(inst), mode(*mutability));
         let lent = self.lent(self.body.ty_of(inst.result().expect("a `Ref` yields a reference")));
         let lent_width = self.width(lent);
         let (storage, storage_ty) = match target {
             RefTarget::Through(reference) => {
                 let source = self.own(state, *reference);
-                let own = self.reborrow_loans(&source, &self.canonical_through(*reference, path), mode, made, record);
-                record.lend(made, None, own.clone(), source);
+                let by = Making::Reborrow { site, operand: self.operand_of(site, *reference) };
+                let own = self.reborrow_loans(&source, &self.canonical_through(*reference, path), mode, made, by, record);
+                record.lend(made, own.clone(), source);
                 let place = self.place_through(state, *reference, path);
                 let mut positions = vec![own];
                 positions.extend(self.read(state, &place, lent_width, Some(lent)));
@@ -1677,18 +1739,23 @@ impl Forward<'_> {
         let reference = named.parts.iter().find(|part| matches!(self.types.kind(part.ty), TyKind::Ref(..)));
         match reference {
             Some(reference) => {
+                let (RefTarget::Var(named) | RefTarget::Param(named)) = target else {
+                    panic!("a context's type has no positions (context §3), so no part of it is a reference")
+                };
                 let held = self.read(state, &place, self.width(reference.ty), Some(reference.ty));
                 let source = held[0].clone();
-                let own = self.reborrow_loans(&source, &[], mode, made, record);
-                record.lend(made, None, own.clone(), source);
+                let by = Making::Reborrow { site, operand: self.operand_of(site, *named) };
+                let own = self.reborrow_loans(&source, &[], mode, made, by, record);
+                record.lend(made, own.clone(), source);
                 let mut positions = vec![own];
                 positions.extend(held[1..].iter().cloned());
                 positions
             }
             None => {
-                let loan = Loan { storage, path: path.to_vec(), exact: true, mode, at: Vec::new(), made: Made::At(made) };
+                let by = Making::Lend(inst.id());
+                let loan = Loan { storage, path: path.to_vec(), exact: true, mode, at: Vec::new(), made: Made::At(made), by };
                 let own = LoanSet::from([loan]);
-                record.lend(made, None, own.clone(), LoanSet::new());
+                record.lend(made, own.clone(), LoanSet::new());
                 let mut positions = vec![own];
                 positions.extend(self.read(state, &place, lent_width, Some(lent)));
                 positions
@@ -1756,13 +1823,12 @@ impl Forward<'_> {
         }
     }
 
-    /// Each argument of the call at `site` as the call takes it: passed by
-    /// value, so that a `&mut` is reborrowed there, and deepened through the
+    /// Each argument of a call as the call takes it: deepened through the
     /// references it holds.
-    fn arguments(&self, state: &State, args: &[ValueId], site: Site, record: &mut Record) -> Vec<Vec<LoanSet>> {
+    fn arguments(&self, state: &State, args: &[ValueId]) -> Vec<Vec<LoanSet>> {
         args.iter()
             .map(|arg| {
-                let positions = self.passed(state, *arg, site, None, record);
+                let positions = self.value(state, *arg);
                 self.deepened(state, self.body.ty_of(*arg), positions)
             })
             .collect()
@@ -1815,7 +1881,7 @@ impl Forward<'_> {
         };
         let flows = flows.get();
         let elements: Vec<Vec<LoanSet>> =
-            arrays.iter().zip(params.iter()).map(|(array, param)| self.element(state, *array, *param, site, record)).collect();
+            arrays.iter().zip(params.iter()).enumerate().map(|(operand, (array, param))| self.element(state, *array, operand, *param, site, record)).collect();
         let passed: Vec<Vec<LoanSet>> =
             elements.iter().zip(params.iter()).map(|(element, param)| self.deepened(state, *param, element.clone())).collect();
         let captured = vec![fold(&self.deepened(state, function_ty, self.value(state, *function)))];
@@ -1833,31 +1899,31 @@ impl Forward<'_> {
         result
     }
 
-    /// What `ArrayMap` passes `f` of `array`'s one element part, as a value
-    /// of `param`: an array's element as it holds it; through a reference,
-    /// the element lent at the reference's mutability, or where the element
-    /// is itself a reference, that reference reborrowed (`Intrinsic`,
-    /// ownership §5).
-    fn element(&self, state: &State, array: ValueId, param: Ty, site: Site, record: &mut Record) -> Vec<LoanSet> {
-        let passed = self.passed(state, array, site, None, record);
+    /// What `ArrayMap` at `site` passes `f` of the one element part of
+    /// `array`, its operand `operand`, as a value of `param`: an array's
+    /// element as it holds it; through a reference, the element lent at the
+    /// reference's mutability, or where the element is itself a reference,
+    /// that reference reborrowed (`Intrinsic`, ownership §5).
+    fn element(&self, state: &State, array: ValueId, operand: usize, param: Ty, site: Site, record: &mut Record) -> Vec<LoanSet> {
+        let held = self.value(state, array);
         let TyKind::Ref(mutability, lent) = self.types.kind(self.body.ty_of(array)) else {
-            return passed;
+            return held;
         };
         let element_ty = match self.types.kind(*lent) {
             TyKind::Array(element, _, _) | TyKind::Slice(element) => *element,
             other => panic!("`ArrayMap` maps arrays or references to them, not {other:?}"),
         };
-        let first = passed[0].clone();
+        let (first, by) = (held[0].clone(), Making::Reborrow { site, operand });
         let place = through_loans(&first, &[ELEMENT]);
         let element = match self.types.kind(element_ty) {
             TyKind::Ref(..) => {
                 let mut stored = self.read(state, &place, self.width(element_ty), Some(element_ty));
-                stored[0] = self.reborrow_stored(&stored[0], &first, mode(*mutability), site, record);
+                stored[0] = self.reborrow_stored(&stored[0], &first, mode(*mutability), site, by, record);
                 stored
             }
             _ => {
-                let own = self.reborrow_loans(&first, &[ELEMENT], mode(*mutability), site, record);
-                record.lend(site, None, own.clone(), first);
+                let own = self.reborrow_loans(&first, &[ELEMENT], mode(*mutability), site, by, record);
+                record.lend(site, own.clone(), first);
                 std::iter::once(own).chain(self.read(state, &place, self.width(element_ty), Some(element_ty))).collect()
             }
         };
@@ -1977,7 +2043,7 @@ impl Forward<'_> {
             }
             result.push(position);
         }
-        record.lend(site, None, made, sources);
+        record.lend(site, made, sources);
         result
     }
 
@@ -2126,17 +2192,20 @@ impl Forward<'_> {
         let site = Site::Term(block);
         let (source, body) = match terminator {
             Terminator::For { source, body, .. } => (source, body),
-            Terminator::Return { value, .. } => {
-                self.passed(state, *value, site, None, record);
+            Terminator::Return { .. } => {
                 self.page_of_terminator(terminator).record(site, record);
                 return;
             }
             _ => return,
         };
         let params = self.body.block(*body).params();
+        let slice_element = |slice: ValueId, mode: Mode, record: &mut Record| {
+            let by = Making::Reborrow { site, operand: self.operand_of(site, slice) };
+            self.reborrow(state, slice, mode, site, by, record)
+        };
         let element = match source {
-            ForSource::Slice(slice) => Some(self.reborrow(state, *slice, Mode::Shared, site, record)),
-            ForSource::SliceMut(slice) => Some(self.reborrow(state, *slice, Mode::Exclusive, site, record)),
+            ForSource::Slice(slice) => Some(slice_element(*slice, Mode::Shared, record)),
+            ForSource::SliceMut(slice) => Some(slice_element(*slice, Mode::Exclusive, record)),
             ForSource::Array(array) => Some(self.value(state, *array)),
             ForSource::Range { .. } => None,
         };
@@ -2152,19 +2221,10 @@ impl Forward<'_> {
         }
     }
 
-    /// Each argument of `edge`, the `on_edge`th out of `from`, passed by
-    /// value into the parameter it fills.
-    fn step_edge(
-        &self,
-        from: BlockId,
-        on_edge: Option<usize>,
-        edge: &Edge<'_>,
-        target_params: &[ValueId],
-        state: &mut State,
-        record: &mut Record,
-    ) {
+    /// Each argument of `edge` passed by value into the parameter it fills.
+    fn step_edge(&self, edge: &Edge<'_>, target_params: &[ValueId], state: &mut State) {
         for (param, arg) in target_params[edge.supplied..].iter().zip(edge.args) {
-            let positions = self.passed(state, *arg, Site::Term(from), on_edge, record);
+            let positions = self.value(state, *arg);
             self.define(state, *param, positions);
         }
     }
@@ -2252,7 +2312,7 @@ impl DenseAnalysis for Forward<'_> {
         self.step_terminator(block, terminator, state, &mut Record::default());
     }
 
-    fn transfer_edge(&self, from: BlockId, edge: &Edge<'_>, target_params: &[ValueId], state: &mut State) {
-        self.step_edge(from, None, edge, target_params, state, &mut Record::default());
+    fn transfer_edge(&self, _: BlockId, edge: &Edge<'_>, target_params: &[ValueId], state: &mut State) {
+        self.step_edge(edge, target_params, state);
     }
 }

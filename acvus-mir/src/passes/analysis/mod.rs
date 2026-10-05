@@ -31,7 +31,7 @@ pub use dominators::{Dominators, Point};
 pub use annotate::{InitAnnotations, LiveAnnotations, LoanAnnotations};
 pub use escapes::Escapes;
 pub use liveness::Liveness;
-pub use loans::{Access, ElementAt, Loan, LoanSet, Loans, Made, Mode, Place, Reach, Storage, TouchedPlace};
+pub use loans::{Access, ElementAt, Loan, LoanSet, Loans, Made, Making, Mode, Place, Reach, Storage, TouchedPlace};
 pub(crate) use loans::taken_callee;
 pub use loop_tree::{LoopId, LoopTree};
 pub use post_dominators::PostDominators;

@@ -361,16 +361,22 @@ fn a_declared_write_takes_the_input_position_its_lifetimes_give() {
 }
 
 /// extern-fn §4: `put` stating no lifetimes has every flow, so it writes
-/// every loan of `src`, the one on `t` among them, into `s`: writing `t`
-/// while `s` lives is one refusal, at the write.
+/// every loan of its arguments into `s`: the one on `t`, and the exclusive
+/// loan on `s` that `dst` holds. Writing `t` while `s` lives is one
+/// refusal, at the write; lending `s` while its content holds an exclusive
+/// loan on `s` is another, at the lend.
 #[test]
 fn a_declared_write_without_lifetimes_takes_every_loan_of_its_arguments() {
     let mut fx = Fixture::new();
     declare_put(&mut fx, false);
     let source = "let x = 1; let y = 2; let s = make(&x); let t = make(&y); put(&mut s, &t); t = make(&x); read(&s)";
     let refusals = fx.refusals(source);
-    let (span, _) = one_conflict(&refusals);
-    assert!(covers(span_of(source, "t = make(&x);", 0), span), "at the write of `t`: {span:?}");
+    let [write, lend] = &refusals[..] else { panic!("two refusals: {refusals:?}") };
+    for refusal in [write, lend] {
+        assert!(matches!(refusal.kind, RefusalKind::LoanConflict { .. }), "a LoanConflict: {refusal:?}");
+    }
+    assert!(covers(span_of(source, "t = make(&x);", 0), write.span), "at the write of `t`: {write:?}");
+    assert!(covers(span_of(source, "read(&s)", 0), lend.span), "at the lend of `s`: {lend:?}");
 }
 
 /// extern-fn §1: where a function value is wanted, a lambda calls the

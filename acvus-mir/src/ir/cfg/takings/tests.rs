@@ -43,8 +43,8 @@ fn take_takings(module: &Module, body: crate::ir::cfg::BodyId) -> Vec<Vec<Operan
         .collect()
 }
 
-/// `s = "a"; r = &mut s; r; r`: each take of the slot `r` reborrows the
-/// `&mut` it holds, so `r` keeps it and both are read (ownership §5).
+/// `s = "a"; r = &mut s; r; r`: a `&mut` taken from a place by name is
+/// read, so `r` keeps it and both takes are reads.
 #[test]
 fn a_mut_ref_slot_taken_twice_is_read_both_times() {
     let mut f = fixture();
@@ -65,7 +65,7 @@ fn a_mut_ref_slot_taken_twice_is_read_both_times() {
     builder.terminate(Terminator::Return { value: zero, order: None, span: Span::ZERO }, Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
-    let read = Operand { value: r, taken: Taken::Read, names_place: true, lent: None };
+    let read = Operand { value: r, taken: Taken::Read, names_place: true, lent: None, by_value: false };
     let takings = take_takings(&f.module, id);
     assert_eq!(takings, [[read], [read]]);
 }
@@ -97,8 +97,8 @@ fn an_object_holding_a_mut_ref_is_moved_whole_and_its_mut_ref_field_is_read() {
     builder.terminate(Terminator::Return { value: zero, order: None, span: Span::ZERO }, Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
-    let field = Operand { value: o, taken: Taken::Read, names_place: true, lent: None };
-    let whole = Operand { value: o, taken: Taken::Moved, names_place: true, lent: None };
+    let field = Operand { value: o, taken: Taken::Read, names_place: true, lent: None, by_value: false };
+    let whole = Operand { value: o, taken: Taken::Moved, names_place: true, lent: None, by_value: false };
     let takings = take_takings(&f.module, id);
     assert_eq!(takings, [[field], [whole]]);
 }
@@ -123,7 +123,7 @@ fn a_take_through_a_reference_moves_what_it_lends_and_reads_the_reference() {
     builder.terminate(Terminator::Return { value: zero, order: None, span: Span::ZERO }, Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
 
-    let through = Operand { value: r, taken: Taken::Read, names_place: false, lent: Some(Taken::Moved) };
+    let through = Operand { value: r, taken: Taken::Read, names_place: false, lent: Some(Taken::Moved), by_value: false };
     let takings = take_takings(&f.module, id);
     assert_eq!(takings, [[through]]);
 }
