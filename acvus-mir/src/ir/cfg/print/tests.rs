@@ -321,7 +321,7 @@ b0():
   Assign slot0.a, v3
   Assign slot0.b, v3
   v4: i64 = Take slot0.a
-  # loans: v5=[slot0.b mut @41..47]
+  # loans: v5=[slot0.b mut @41..47 lend v5]
   v5: &mut i64 = Ref(mut) slot0.b
   v6: i64 = Call f()
   v8: bool = Lt v4, p0
@@ -372,7 +372,7 @@ b0():
   Assign slot0.a, v0
   Assign slot0.b, v0
   v1: i64 = Take slot0.a
-  # loans: v2=[slot0.b mut @41..47]
+  # loans: v2=[slot0.b mut @41..47 lend v2]
   v2: &mut i64 = Ref(mut) slot0.b
   v3: i64 = Call f()
   v4: bool = Lt v1, p0

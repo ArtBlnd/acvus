@@ -8,8 +8,11 @@
 //!   that reaches, `N` left unwritten by some path, `M@start..end` moved out
 //!   at that span by some path, several joined by `|`.
 //! - `LoanAnnotations`, key `loans`: each value defined by the instruction
-//!   and holding loans, `v2=[slot0.b mut @25..33]`, a loan by its place, its
-//!   mode and where it was made, `~` after the path where it is not exact.
+//!   and holding loans, `v2=[slot0.b mut @25..33 lend v2]`, a loan by its
+//!   place, its mode, where it was made and what made it, `~` after the path
+//!   where it is not exact. A making is named by the value its instruction
+//!   defines, or the block its terminator ends: `lend v2`, `reborrow v7.0`
+//!   through the operand at index 0, `taken v9`, `outside p0`.
 //!
 //! Every set prints sorted, values in the order their names print; a value
 //! and a block by the print's `Names`, a path and a span as the printer
@@ -20,7 +23,7 @@ use acvus_utils::Interner;
 use crate::ir::ValueId;
 use crate::ir::cfg::print::{self, Annotate, Names};
 use crate::ir::cfg::{BlockId, Body, InstId, Site};
-use crate::passes::analysis::{Initialization, Liveness, Loan, Loans, Made, Mode, Storage, Written};
+use crate::passes::analysis::{Initialization, Liveness, Loan, Loans, Made, Making, Mode, Storage, Written};
 
 /// `live`: the values live at a block's start.
 pub struct LiveAnnotations<'a> {
@@ -146,7 +149,7 @@ impl<'a> LoanAnnotations<'a> {
         LoanAnnotations { body, interner, loans }
     }
 
-    /// `slot0.b~ mut @25..33`.
+    /// `slot0.b~ mut @25..33 lend v2`.
     fn loan(&self, names: &Names<'_>, loan: &Loan) -> String {
         let mut text = storage(names, self.interner, loan.storage);
         text.push_str(&print::path(self.interner, &loan.path));
@@ -163,7 +166,27 @@ impl<'a> LoanAnnotations<'a> {
         };
         text.push(' ');
         text.push_str(&print::span(made));
+        text.push(' ');
+        text.push_str(&self.making(names, loan.by));
         text
+    }
+
+    /// `lend v2`, `reborrow v7.0`, `taken v9`, `outside p0`.
+    fn making(&self, names: &Names<'_>, by: Making) -> String {
+        match by {
+            Making::Lend(inst) => format!("lend {}", self.site(names, Site::Inst(inst))),
+            Making::Reborrow { site, operand } => format!("reborrow {}.{operand}", self.site(names, site)),
+            Making::Taken(site) => format!("taken {}", self.site(names, site)),
+            Making::Outside { of } => format!("outside {}", names.value(of)),
+        }
+    }
+
+    /// An instruction by the value it defines, a terminator by its block.
+    fn site(&self, names: &Names<'_>, site: Site) -> String {
+        match site {
+            Site::Inst(inst) => names.value(self.body.inst(inst).result().expect("an instruction that makes a loan defines the value holding it")),
+            Site::Term(block) => names.block(block),
+        }
     }
 
 }
