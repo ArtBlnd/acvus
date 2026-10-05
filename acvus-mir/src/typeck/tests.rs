@@ -443,6 +443,26 @@ fn an_empty_list_is_an_array_of_never() {
     assert_eq!(checked.kind(*element), &TyKind::Never);
 }
 
+/// types §5, §6: `r = &mut *r` gives `r`'s slot a value its own deref
+/// makes, so the slot's meeting and the deref wait on each other, a cycle
+/// through decisions. The deref's target is that decision's to bind, no
+/// source of the cycle, so it takes no default before the cycle breaks on
+/// `&mut x`, the value from outside it: `*r` is `i64`.
+#[test]
+fn a_reference_given_a_reborrow_of_itself_keeps_its_target() {
+    let (checked, script) = Fixture::new().script("let x = 1; let r = &mut x; r = &mut *r; *r");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::I64));
+}
+
+/// The same where `r` is given itself.
+#[test]
+fn a_reference_given_itself_keeps_its_target() {
+    let (checked, script) = Fixture::new().script("let x = 1; let r = &mut x; r = r; *r");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::I64));
+}
+
 // Names (types §6, programs §4)
 
 /// A binding's term is what flows into it; a use of it names the binder.

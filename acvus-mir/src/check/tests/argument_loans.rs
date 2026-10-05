@@ -202,3 +202,12 @@ fn a_shared_lend_meets_a_mut_loan_carried_around_a_loop_through_a_call() {
     declare_g(&mut fx, true);
     refused_within(fx, "let x = 1; let r = &mut x; for i in 0..3 { r = g(r); } let s = &x; *r", "let s = &x");
 }
+
+/// `r` is reborrowed through itself on each run of the loop, so the loan it
+/// holds is made through its own previous run's: the shared lend of `x`
+/// meets it while `r` lives on to `*r`.
+#[test]
+fn a_shared_lend_meets_a_mut_reborrow_carried_around_a_loop() {
+    let fx = Fixture::new();
+    refused_within(fx, "let x = 1; let r = &mut x; for i in 0..3 { r = &mut *r; } let s = &x; *r", "let s = &x");
+}

@@ -6,13 +6,15 @@
 //! changes anything: a form whose head is open is decided by its own use
 //! where it can be (`uses_decide`); every integer literal
 //! no use decided takes its default width; every type variable no pending
-//! decision reads is `!`; then every type variable at all is `!`; then
-//! every effect nothing constrains is opaque, every open `#` is not
-//! specialized, and every flow set no lambda claims states every flow
-//! (types §5); then a
-//! decision closed only up to a cycle through decisions fires on what the
-//! sources outside the cycle fixed (typeck-structure section 4). What is
-//! still open after that is refused, naming the construct left open.
+//! decision reads is `!`; then every type variable no pending decision
+//! binds is `!`; then every effect nothing constrains is opaque, every open
+//! `#` is not specialized, and every flow set no lambda claims states every
+//! flow (types §5); then a decision closed only up to a cycle through
+//! decisions fires on what the sources outside the cycle fixed
+//! (typeck-structure section 4); then every type variable at all is `!`. A
+//! variable a pending decision binds is no source of a cycle, so it takes
+//! its default only once no decision fires even so. What is still open
+//! after that is refused, naming the construct left open.
 //!
 //! Cost: a round is O(pending²); each firing removes one decision and
 //! pushes at most the chosen declaration's arity, requirements and bounded
@@ -552,10 +554,11 @@ pub(super) fn solve(cx: &mut Ctxt<'_>) {
         if fire_round(cx, Reading::Closed)
             || uses_decide(cx)
             || default_literals(cx)
-            || default_unconstrained(cx, true)
-            || default_unconstrained(cx, false)
+            || default_unconstrained(cx, Unconstrained::Unread)
+            || default_unconstrained(cx, Unconstrained::BoundByNone)
             || default_non_type_terms(cx)
             || fire_round(cx, Reading::CycleBroken)
+            || default_unconstrained(cx, Unconstrained::Every)
         {
             continue;
         }
@@ -2004,19 +2007,34 @@ fn default_literals(cx: &mut Ctxt<'_>) -> bool {
     !widths.is_empty()
 }
 
-/// types §5: a type variable nothing constrains is `!`. With
-/// `outside_pending`, only those no pending decision reads; without, every
-/// one left, since a decision still waiting on one is not a use that will
-/// answer it. Whether any was bound.
-fn default_unconstrained(cx: &mut Ctxt<'_>, outside_pending: bool) -> bool {
-    let read: FxHashSet<TyVarId> = match outside_pending {
-        true => unbound_vars(cx, cx.decisions.pending.iter().flat_map(Decision::terms).collect::<Vec<_>>()),
-        false => FxHashSet::default(),
+/// Which type variables a default step takes (types §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unconstrained {
+    /// Those no pending decision reads.
+    Unread,
+    /// Those no pending decision binds: a decision still waiting on one is
+    /// not a use that will answer it.
+    BoundByNone,
+    /// Every one left, once no decision fires even on what a cycle's
+    /// sources fixed: nothing more is decided of them.
+    Every,
+}
+
+/// types §5: a type variable nothing constrains is `!`, of those `which`
+/// takes. A variable a pending decision binds, one of its outputs, is no
+/// source: a decision in a cycle through decisions binds it once it fires
+/// on what the sources outside the cycle fixed. Whether any was bound.
+fn default_unconstrained(cx: &mut Ctxt<'_>, which: Unconstrained) -> bool {
+    let pending = |terms: &dyn Fn(&Decision) -> Vec<Term>| unbound_vars(cx, cx.decisions.pending.iter().flat_map(terms).collect::<Vec<_>>());
+    let kept: FxHashSet<TyVarId> = match which {
+        Unconstrained::Unread => pending(&Decision::terms),
+        Unconstrained::BoundByNone => pending(&|decision| decision.outputs().collect()),
+        Unconstrained::Every => FxHashSet::default(),
     };
     let free: Vec<TyVarId> = cx
         .infer
         .unbound()
-        .filter(|(var, bound)| matches!(bound, Bound::Any) && !read.contains(var))
+        .filter(|(var, bound)| matches!(bound, Bound::Any) && !kept.contains(var))
         .map(|(var, _)| var)
         .collect();
     for var in &free {
