@@ -2,11 +2,11 @@
 //! one kind of literal is one `Switch` dispatch, with a default where it has
 //! a catch-all, and its join held by the `Switch`; any other `match` tests
 //! its arms one at a time, in order, within the same region and to the same
-//! join (D57). Exhaustiveness is `check`'s.
+//! join. Exhaustiveness is `check`'s.
 //!
 //! A pattern is tested, then bound. A value scrutinee that is not a
-//! reference is put in a slot first, as Rust's MIR matches on a place
-//! (D89): the test reads its parts through references and moves nothing,
+//! reference is put in a slot first, as Rust's MIR matches on a place:
+//! the test reads its parts through references and moves nothing,
 //! built so that a part is read only where the tests before it hold, and
 //! binding takes each bound part once, where the whole test held. Through a
 //! reference, as Rust's default binding modes do, the parts are places
@@ -59,7 +59,7 @@ enum ListAt {
 impl Matched {
     /// The scrutinee `value`: a reference as it is, since tests read
     /// through it and never move it; any other value in a slot of its own,
-    /// assigned at `span`, so that no test moves a part of it (D89).
+    /// assigned at `span`, so that no test moves a part of it.
     pub fn scrutinee(cx: &mut Lcx<'_, '_>, value: ValueId, span: Span) -> Matched {
         let ty = cx.value_ty(value);
         if matches!(cx.kind(ty), TyKind::Ref(..)) {
@@ -360,7 +360,7 @@ fn list_elements<'p, S: Slot>(
 
 /// What a test reads: the value, or a shared reference to the place, read
 /// through as a `Switch` reads its tag through one; a test takes nothing
-/// out (D89).
+/// out.
 pub(super) fn tag_source(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> ValueId {
     match matched {
         Matched::Value { value, .. } => *value,
@@ -499,7 +499,7 @@ fn switch_plan<S: Slot>(cx: &Lcx<'_, '_>, scrutinee: Ty, arms: &[MatchExprArm<S>
 }
 
 /// The key of a literal a `Switch` can dispatch on. A string's key would
-/// name interned text, and lowering holds no interner (D60), so a string
+/// name interned text, and lowering holds no interner, so a string
 /// literal is tested arm by arm.
 fn literal_key(literal: &Literal) -> Option<SwitchKey> {
     match literal {
@@ -586,7 +586,7 @@ pub(super) fn lower_match<S: Slot>(
             }
         }
     }
-    // The join is a block of the match all the same (D45): where no arm
+    // The join is a block of the match all the same: where no arm
     // reaches it, it ends in `Diverge`.
     cx.builder.switch_to(join);
     match joined {

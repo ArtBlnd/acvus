@@ -1,12 +1,12 @@
-//! Control forms, each one region with one entry and one exit (control-flow).
+//! Control forms, each one region with one entry, and one exit where a run
+//! gets past it (control-flow).
 //! `if`/`if let` and short-circuit `&&`/`||` are a `Diamond` the Builder
 //! makes with its join known, a value being the join's parameter; `match`
 //! is `pat`'s; `for` is a `For` by typeck's `Iteration` (`&`/`&mut` through
 //! the recorded `as_slice(_mut)` or the language's view of an array, arrays
 //! by value, ranges); `while`/`while let` a `While`; `break`/`continue` go
-//! to the innermost loop's exit/header; `return` is the body's `Return`,
-//! after every context held is committed; `?` tests the tag and returns the
-//! `Err`/`None` early.
+//! to the innermost loop's exit/header; `return` is the body's `Return`;
+//! `?` tests the tag and returns the `Err`/`None` early.
 
 use acvus_ast::{AstId, BinOp, Binder, ElseBranch, Expr, ForHead, Pattern, Slot, Span, Stmt};
 
@@ -25,7 +25,7 @@ use crate::typeck::{Iteration, TryExit};
 /// join taking one value of `ty`. Each arm lowers itself in its own block
 /// and yields its value; an arm a run gets past enters the join with it.
 /// Where neither is, the region is `Unreached`, and its join, a block of the
-/// region all the same (D45), ends in `Diverge`.
+/// region all the same, ends in `Diverge`.
 pub(super) fn diamond(
     cx: &mut Lcx<'_, '_>,
     cond: ValueId,

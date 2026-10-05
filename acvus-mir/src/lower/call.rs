@@ -1,10 +1,10 @@
 //! Calls: to the `Chosen` typeck recorded, at the callee type it recorded
 //! (extern-fn §5-6). An operator is a call of its lang item's impl on
 //! shared references to its operands (operators §2); `^ & | << >> !` are
-//! the language's operations, a shift's amount keeping its own width
-//! (D79); `as` is a cast; `.unwrap()` is the
-//! language's own (operators §2); a comparison and `.clone()` follow
-//! typeck's part tree (`part_tree`). A coercion is each step of its chain in
+//! the language's operations, a shift's amount keeping its own width;
+//! `as` is a cast; `.unwrap()` is the language's own (operators §2); a
+//! comparison and `.clone()` follow typeck's part tree (`part_tree`). A
+//! coercion is each step of its chain in
 //! order: a view through its impl as an `AsSlice` (operators §5), a
 //! declared cast or conversion as a call of its `via` (types §3, §7). A
 //! call whose uses take its value with marks raised is followed by an

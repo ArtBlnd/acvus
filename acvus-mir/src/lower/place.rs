@@ -4,7 +4,7 @@
 //! lent by a `Ref`, and written by an `Assign`; `&` of a reference is a
 //! reborrow, since a reference's target is never a reference (types §4);
 //! `*r` is a take (operators §6). A value that is not a place and is lent
-//! is put in a slot of its own first (D67 item 9).
+//! is put in a slot of its own first.
 
 use acvus_ast::{AstId, Expr, Place as AstPlace, PlaceBase, RefKind, Root, Slot, Span};
 use acvus_utils::QualifiedRef;
@@ -44,7 +44,7 @@ pub(super) enum Operand {
 /// The place a binding lives in, holding a `ty`.
 /// A slot holds its content at the slot's own type: a `&mut` binding a
 /// lambda captured by `&` holds a shared reborrow of it there, though the
-/// lambda's uses are typed as the binding (D85).
+/// lambda's uses are typed as the binding.
 pub(super) fn binding_place(cx: &Lcx<'_, '_>, binder: AstId, ty: Ty) -> Place {
     match cx.home(binder) {
         Home::Slot(slot) => Place { target: RefTarget::Var(slot), path: Vec::new(), ty: cx.value_ty(slot) },
@@ -69,8 +69,8 @@ pub(super) fn operand<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>, mutability:
             if let Operand::Place(place) = &object
                 && matches!(cx.kind(place.ty), TyKind::Never)
             {
-                // A field of `!` is `!` (types §4): the object holds no
-                // value, so no run gets past taking it.
+                // The object is a place of type `!`, which holds no value
+                // (types §4): no run gets past taking it.
                 let Err(unreached) = read(cx, object, *span) else { panic!("a place of type `!` holds no value a run reads") };
                 return Err(unreached);
             }
@@ -175,8 +175,8 @@ fn part_ty(cx: &Lcx<'_, '_>, object: &Operand, field: acvus_utils::Astr) -> Ty {
 
 /// The type of `container`'s elements as its sequence holds them: an
 /// array's or a slice's own, any other container's by the `as_slice(_mut)`
-/// reached at `callee_site` (operators §3); an element of `!` is `!`
-/// (types §4).
+/// reached at `callee_site` (operators §3); for a container of type `!`,
+/// which no run gets past (`slice_of`), `!` itself.
 pub(super) fn element_of<S: Slot>(cx: &Lcx<'_, '_>, container: &Expr<S>, callee_site: AstId) -> Ty {
     let held = cx.ty(container.id());
     if matches!(cx.kind(held), TyKind::Never) {
@@ -385,7 +385,7 @@ fn sequence(cx: &Lcx<'_, '_>, held: Ty) -> Sequence {
 /// `&mut [element]`: an array's through the language's own view; any other
 /// container's through the `as_slice(_mut)` typeck reached at
 /// `callee_site`, at the mutability that impl names. A container of type
-/// `!` has no elements: no run gets past evaluating it (types §4).
+/// `!` holds no value (types §4): no run gets past evaluating it.
 pub(super) fn slice_of<S: Slot>(
     cx: &mut Lcx<'_, '_>,
     container: &Expr<S>,
@@ -487,8 +487,8 @@ fn store_target<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>) -> Lowered<P
         AstPlace::Field { object, field, span, .. } => {
             let object = store_target(cx, object)?;
             if matches!(cx.kind(object.ty), TyKind::Never) {
-                // A field of `!` is `!` (types §4): the object holds no
-                // value, so no run gets past taking it.
+                // The object is a place of type `!`, which holds no value
+                // (types §4): no run gets past taking it.
                 let Err(unreached) = read(cx, Operand::Place(object), *span) else { panic!("a place of type `!` holds no value a run reads") };
                 return Err(unreached);
             }

@@ -1,14 +1,15 @@
-//! lower (lower-structure.md, D57): an admitted program and what typeck
+//! lower: an admitted program and what typeck
 //! decided become one `ir::cfg::Module`. Lower decides only the shape of the
 //! IR: blocks, values, storage, calls. It reads every type and every decision
 //! from `Typeck` and decides none of them again. The order token is the
 //! Builder's; no rule here names a token.
 //!
-//! Three axes: control (every form one region with one entry and one exit;
+//! Three axes: control (every form one region with one entry, and one exit
+//! where a run gets past it and none where no run does (`ctxt::Lowered`);
 //! `Diamond` for `if`, `&&`, `||`; `Switch` with its join for `match`;
-//! `For`/`While` for loops), value (an expression is a typed value in the
-//! current block; a value-producing form hands it on as its join's
-//! parameter), and effect (carried by the Builder).
+//! `For`/`While` for loops), value (an expression a run gets past is a typed
+//! value in the current block; a value-producing form hands it on as its
+//! join's parameter), and effect (carried by the Builder).
 
 mod call;
 mod closure;

@@ -1,6 +1,6 @@
 //! Equality and ordering, and the impls a transparent structured type has
-//! by a lift, by the structure tree typeck recorded (operators §4, types §1,
-//! D87). A tuple, an object, an `Option` and a `Result` are expanded part by
+//! by a lift, by the structure tree typeck recorded (operators §4, types §1).
+//! A tuple, an object, an `Option` and a `Result` are expanded part by
 //! part in `ty::structural`'s order. An array is one `For` over its
 //! elements, never unrolled: a comparison leaves it at the first element
 //! whose answer settles the whole. A leaf is a call of the impl reached.

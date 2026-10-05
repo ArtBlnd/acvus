@@ -1,4 +1,4 @@
-//! The required steps after lowering (D40, D55, D71): meaning, not
+//! The required steps after lowering: meaning, not
 //! optimization. They run on every program, at every level, in the order
 //! `reborrow_mut_uses`, `clone_strings`, the checks, `insert_drops`.
 //! Each edits every body of the module through its own scopes' editors,
@@ -145,7 +145,7 @@ fn insert_reborrow(editor: &mut Editor<'_, Value>, at: Position, reference: Valu
 /// span, and the use takes the clone (ownership §3). A `String` part of a
 /// place read by a `Take`, the whole included, becomes a clone of a shared
 /// `Ref` of it where that same part is read again, per part as
-/// `ContentLiveness` keeps it (D89); a value's use takes a `StringClone` of
+/// `ContentLiveness` keeps it; a value's use takes a `StringClone` of
 /// the value. Of the
 /// operands of one site that move one value, all but the last are clones,
 /// and the last is one too where the value is read after the site. A clone
@@ -185,7 +185,7 @@ pub fn clone_strings(module: &mut Module, am: &mut AnalysisManager<'_>) {
 ///   (`rooted_place`, `drop_overwritten_on_edge`). Among several places,
 ///   all it replaces is dropped just before the store. A `Take` of a
 ///   volatile context stands on the order chain, and the body never drops
-///   a context's content at its end (context §3, D71).
+///   a context's content at its end (context §3).
 /// - A value or a place's content some part of which that does not copy is
 ///   moved out, or stored into: the part moved is ended by its holder, each
 ///   other unit (`ir::parts`) ends where its own liveness ends, dropped
@@ -768,7 +768,7 @@ fn insert_drops_in(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'
 
 /// A block parameter that does not copy and that nothing reads has no
 /// reason to exist: it goes with its argument on every edge, and each
-/// argument then ends on its edge unless read beyond (D74). Removing one can
+/// argument then ends on its edge unless read beyond. Removing one can
 /// leave the parameter that fed it unread, so this repeats until none is
 /// left; each round removes at least one parameter.
 fn remove_dead_block_params(module: &mut Module, body: BodyId, am: &mut AnalysisManager<'_>) {
@@ -897,7 +897,7 @@ impl PlanFacts<'_> {
                 !as_value,
                 "the parameter {param:?} is named both as a storage and as a value; a by-value parameter lives in \
                  one form, its storage where anything lends or writes it and a value otherwise, and two are lower's \
-                 defect (D74)"
+                 defect"
             );
         }
         storages
@@ -966,7 +966,7 @@ impl PlanFacts<'_> {
                     }
                     definition => panic!(
                         "{value:?}, defined at {definition:?}, is dead where {block:?} starts; a block parameter \
-                         nothing reads was removed before the plan, unless a loop's terminator fills it (D74)"
+                         nothing reads was removed before the plan, unless a loop's terminator fills it"
                     ),
                 },
             };
@@ -1081,7 +1081,7 @@ impl PlanFacts<'_> {
     /// Before each store whose old content ends at the store
     /// (`OverwriteEnd::AtStore`), of a value that does not copy, that
     /// content is dropped, taken out through the name the store uses
-    /// (ownership §6, context §3, D71). In one place, each unit it replaces
+    /// (ownership §6, context §3). In one place, each unit it replaces
     /// that does not copy ends at the last point it is known to be that
     /// content (R1): just before the store where it is present on every
     /// path, and on each edge into the paths' meeting where it is present,

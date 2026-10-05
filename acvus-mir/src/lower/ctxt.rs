@@ -255,7 +255,7 @@ impl<'a, 'm> Lcx<'a, 'm> {
 
 /// Whether a body of this effect issues effects, and so takes an order
 /// token (effects §3). A body's effect holds the contexts it reads and
-/// writes (D69), whose loads and commits are effects (context §3).
+/// writes, whose loads and commits are effects (context §3).
 pub(super) fn ordered(effect: &Effect) -> bool {
     effect.reissue() != Reissue::Pure || !effect.reads().is_empty() || !effect.writes().is_empty()
 }
