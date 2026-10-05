@@ -10,7 +10,7 @@ use crate::ir::cfg::body::InstId;
 use crate::ir::cfg::{BlockId, Body, Head, Inst, Op, OrderUse, Site, Terminator};
 use crate::ir::{BinOp, Callee, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
 use crate::ty::structural;
-use crate::ty::{CastTy, Concrete, IntTy, Mark, MarkTerm, Mutability, Ty, TyKind, Types};
+use crate::ty::{CastTy, Concrete, IntTy, Mark, MarkTerm, Mutability, Ty, TyKind, Types, inhabited};
 
 /// A breach of an invariant: a compiler defect, never a refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +73,7 @@ invariant!(TypesAgree, types_agree, "Every operand's type is what its instructio
 invariant!(DefDominatesUses, def_dominates_uses, "Every value's definition dominates each of its uses.");
 invariant!(OrderChainWhole, order_chain_whole, "Every effectful instruction consumes exactly one live token, and every token but a Merge's reaches the body's return (effects §2-3); a Merge nothing consumes orders nothing and is a dead value (D65). A place operation on a volatile context stands on the chain, and one on a context that is not volatile does not (context §3).");
 invariant!(StructureKept, structure_kept, "Every `Diamond`'s and `Switch`'s join and every loop's body and exit are blocks of the body (D45, D57).");
-invariant!(NeverDiverges, never_diverges, "In every block the entry reaches, an instruction yielding `!` is the block's last, and the block ends in `Diverge`: no value of type `!` exists, so no run goes past one (types §4, control-flow).");
+invariant!(NeverDiverges, never_diverges, "In every block the entry reaches, an instruction yielding a value of a type no value has (`ty::inhabited`) is the block's last, and the block ends in `Diverge`; a block a parameter of which has such a type, and the entry of a body a parameter or a capture of which has one, holds no instruction and ends in `Diverge`: no such value exists, so no run goes past one, nor enters where one is given (types §4, control-flow).");
 invariant!(SplitTakenOnce, split_taken_once, "Every start of a split call is taken exactly once on every path from it (effects §6).");
 
 /// A checker's finding: what breaks the invariant, in words.
@@ -90,21 +90,30 @@ fn found(holds: bool, detail: impl FnOnce() -> String) -> Found {
 
 fn never_diverges(body: &Body, types: &Types<Concrete>) -> Found {
     let reached = reached_blocks(body);
+    let holds_none = |value: ValueId| !inhabited(types, body.ty_of(value));
+    let entry_given_none = body.params().iter().chain(body.captures()).any(|(_, value)| holds_none(*value));
     for (id, block) in body.blocks() {
         if !reached.contains(&id) {
             continue;
         }
         let insts: Vec<&Inst> = block.insts().collect();
+        let given_none = block.params().iter().any(|param| holds_none(*param)) || (id == body.entry() && entry_given_none);
+        if given_none {
+            found(insts.is_empty() && matches!(block.terminator(), Terminator::Diverge), || {
+                format!("{id:?} is given a value of a type no value has, and holds {} instructions before {:?}", insts.len(), block.terminator())
+            })?;
+            continue;
+        }
         for (at, inst) in insts.iter().enumerate() {
             let Some(result) = inst.result() else {
                 continue;
             };
-            if !matches!(types.kind(body.ty_of(result)), TyKind::Never) {
+            if inhabited(types, body.ty_of(result)) {
                 continue;
             }
             let last = at + 1 == insts.len();
             found(last && matches!(block.terminator(), Terminator::Diverge), || {
-                format!("{id:?} {:?} {:?} yields `!` and is followed by {:?}", inst.id(), inst.op(), match last {
+                format!("{id:?} {:?} {:?} yields a value of a type no value has and is followed by {:?}", inst.id(), inst.op(), match last {
                     true => format!("{:?}", block.terminator()),
                     false => format!("{:?}", insts[at + 1].op()),
                 })

@@ -57,7 +57,7 @@ struct ArrayOf {
 /// `ty` is neither a transparent structured type, a reference nor `!`:
 /// typeck records parts only at those.
 fn shape(cx: &Lcx<'_, '_>, ty: Ty) -> Shape {
-    match structure(cx.builder.types(), ty) {
+    match structure(cx.types(), ty) {
         Some(Structure::Tuple(items, _)) => Shape::Tuple(items.to_vec()),
         Some(Structure::Object(fields, _)) => Shape::Object(fields.to_vec()),
         Some(Structure::Enum(variants, _)) => Shape::Enum(variants.to_vec()),
@@ -128,18 +128,18 @@ fn payload_part<'t>(variant: &Variant, trees: &'t [(PartKey, StructureTree)]) ->
 /// The operand of `part` of the node whose operand is `base`, a shared
 /// reference (operators §4): a reference part is read through it as a
 /// shared reborrow, the least on its path (ownership §5).
-fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span) -> ValueId {
+fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span) -> Lowered<ValueId> {
     let target = RefTarget::Through(base);
     let path = vec![part.seg];
     match cx.kind(part.ty) {
         TyKind::Ref(made, referent) => {
             let (made, referent) = (*made, *referent);
-            let taken = cx.builder.push(Op::Take { target, path, taken_out: false }, part.ty, span);
-            super::place::reborrow(cx, taken, made, referent, Mutability::Shared, span)
+            let taken = cx.emit(Op::Take { target, path, taken_out: false }, part.ty, span)?;
+            Ok(super::place::reborrow(cx, taken, made, referent, Mutability::Shared, span))
         }
         _ => {
             let ty = cx.ref_ty(Mutability::Shared, part.ty);
-            cx.builder.push(Op::Ref { target, path, mutability: Mutability::Shared }, ty, span)
+            cx.emit(Op::Ref { target, path, mutability: Mutability::Shared }, ty, span)
         }
     }
 }
@@ -147,17 +147,18 @@ fn part_operand(cx: &mut Lcx<'_, '_>, base: ValueId, part: Part<'_>, span: Span)
 /// The operand of element `at` of the shared slice `elements` of
 /// `element`s: a reference element is read as a shared reborrow, the least
 /// on its path (ownership §5).
-fn element_operand(cx: &mut Lcx<'_, '_>, elements: ValueId, at: ValueId, element: Ty, span: Span) -> ValueId {
+fn element_operand(cx: &mut Lcx<'_, '_>, elements: ValueId, at: ValueId, element: Ty, span: Span) -> Lowered<ValueId> {
     match cx.kind(element) {
         TyKind::Ref(made, referent) => {
             let (made, referent) = (*made, *referent);
             let op = Op::Index { slice: elements, index: at, mode: IndexMode::Copy, bound: IndexBound::Checked };
-            let taken = cx.builder.push(op, element, span);
-            super::place::reborrow(cx, taken, made, referent, Mutability::Shared, span)
+            let taken = cx.emit(op, element, span)?;
+            Ok(super::place::reborrow(cx, taken, made, referent, Mutability::Shared, span))
         }
         _ => {
             let ty = cx.ref_ty(Mutability::Shared, element);
-            cx.builder.push(Op::Index { slice: elements, index: at, mode: IndexMode::Ref, bound: IndexBound::Checked }, ty, span)
+            let op = Op::Index { slice: elements, index: at, mode: IndexMode::Ref, bound: IndexBound::Checked };
+            cx.emit(op, ty, span)
         }
     }
 }
@@ -184,11 +185,11 @@ pub(super) fn compare<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, op: BinOp, lef
     let bool_ty = cx.ty(site);
     Ok(match op {
         BinOp::Eq => answer,
-        BinOp::Neq => cx.builder.push(Op::UnaryOp { op: UnaryOp::Not, operand: answer }, bool_ty, span),
+        BinOp::Neq => cx.made(Op::UnaryOp { op: UnaryOp::Not, operand: answer }, bool_ty, span),
         BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
             let answer_ty = cx.value_ty(answer);
             let zero = cx.constant(Literal::Int(0), answer_ty, span);
-            cx.builder.push(Op::BinOp { op: op.into(), left: answer, right: zero }, bool_ty, span)
+            cx.made(Op::BinOp { op: op.into(), left: answer, right: zero }, bool_ty, span)
         }
         other => panic!("{other:?} is not a comparison"),
     })
@@ -198,7 +199,7 @@ pub(super) fn compare<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, op: BinOp, lef
 fn compared(cx: &mut Lcx<'_, '_>, tree: &StructureTree, asked: Asked, ty: Ty, a: ValueId, b: ValueId, span: Span) -> Lowered<ValueId> {
     let trees = match tree {
         StructureTree::Reached { chosen, callee, unmark, member } => {
-            return Ok(reached_part(cx, chosen, *member, (*callee, *unmark), vec![a, b], span));
+            return reached_part(cx, chosen, *member, (*callee, *unmark), vec![a, b], span);
         }
         StructureTree::Parts(trees) => trees,
         StructureTree::Own(own) => unreachable!("the language answers only `clone` and `default` itself, no comparison ({own:?})"),
@@ -208,7 +209,7 @@ fn compared(cx: &mut Lcx<'_, '_>, tree: &StructureTree, asked: Asked, ty: Ty, a:
         Shape::Ref(target) => compared(cx, tree, asked, target, a, b, span),
         Shape::Tuple(items) => in_order(cx, asked, &tuple_parts(&items, trees), a, b, span),
         Shape::Object(fields) => in_order(cx, asked, &field_parts(&fields, trees), a, b, span),
-        Shape::Array(array) => Ok(array_compared(cx, asked, array, tree_at(trees, PartKey::Element), a, b, span)),
+        Shape::Array(array) => array_compared(cx, asked, array, tree_at(trees, PartKey::Element), a, b, span),
         Shape::Option(payload) => {
             let tags = cx.decls.core().tags;
             let payload = Part { seg: PathSeg::Payload, ty: payload, tree: tree_at(trees, PartKey::Some) };
@@ -226,7 +227,7 @@ fn compared(cx: &mut Lcx<'_, '_>, tree: &StructureTree, asked: Asked, ty: Ty, a:
             // (operators §4, `RefusalKind::Unordered`).
             Asked::Order => unreachable!("typeck refuses ordering an enum (operators §4)"),
         },
-        Shape::Never => Ok(answered(cx, asked, span)),
+        Shape::Never => unreachable!("the operands of a node of type `!` lend places no value is in, and no run gets past those lends"),
     }
 }
 
@@ -241,11 +242,8 @@ fn enum_equal(
     span: Span,
 ) -> Lowered<ValueId> {
     let bool_ty = cx.bool_ty();
-    if variants.is_empty() {
-        return Ok(answered(cx, Asked::Equal, span));
-    }
     by_variant(cx, variants, bool_ty, a, span, &|cx, variant| {
-        let same = cx.builder.push(Op::TestVariant { src: b, tag: variant.tag }, bool_ty, span);
+        let same = cx.made(Op::TestVariant { src: b, tag: variant.tag }, bool_ty, span);
         let payloads = |cx: &mut Lcx<'_, '_>| match payload_part(variant, trees) {
             Some(payload) => part_compared(cx, Asked::Equal, payload, a, b, span),
             None => Ok(answered(cx, Asked::Equal, span)),
@@ -271,12 +269,12 @@ fn answered(cx: &mut Lcx<'_, '_>, asked: Asked, span: Span) -> ValueId {
 fn answer_ty(cx: &mut Lcx<'_, '_>, asked: Asked) -> Ty {
     match asked {
         Asked::Equal => cx.bool_ty(),
-        Asked::Order => cx.builder.intern(TyKind::Int(IntTy::I64)),
+        Asked::Order => cx.intern(TyKind::Int(IntTy::I64)),
     }
 }
 
 fn order_const(cx: &mut Lcx<'_, '_>, value: i128, span: Span) -> ValueId {
-    let i64_ty = cx.builder.intern(TyKind::Int(IntTy::I64));
+    let i64_ty = cx.intern(TyKind::Int(IntTy::I64));
     cx.constant(Literal::Int(value), i64_ty, span)
 }
 
@@ -287,14 +285,14 @@ fn still_open(cx: &mut Lcx<'_, '_>, asked: Asked, answer: ValueId, span: Span) -
         Asked::Order => {
             let zero = order_const(cx, 0, span);
             let bool_ty = cx.bool_ty();
-            cx.builder.push(Op::BinOp { op: crate::ir::BinOp::Eq, left: answer, right: zero }, bool_ty, span)
+            cx.made(Op::BinOp { op: crate::ir::BinOp::Eq, left: answer, right: zero }, bool_ty, span)
         }
     }
 }
 
 fn part_compared(cx: &mut Lcx<'_, '_>, asked: Asked, part: Part<'_>, a: ValueId, b: ValueId, span: Span) -> Lowered<ValueId> {
-    let a = part_operand(cx, a, part, span);
-    let b = part_operand(cx, b, part, span);
+    let a = part_operand(cx, a, part, span)?;
+    let b = part_operand(cx, b, part, span)?;
     compared(cx, part.tree, asked, part.ty, a, b, span)
 }
 
@@ -324,15 +322,15 @@ fn in_order(cx: &mut Lcx<'_, '_>, asked: Asked, parts: &[Part<'_>], a: ValueId, 
 /// indices, as Rust compares arrays: the loop leaves at the first element
 /// whose answer is not equal, with that answer, and answers equal where it
 /// runs to its end.
-fn array_compared(cx: &mut Lcx<'_, '_>, asked: Asked, array: ArrayOf, tree: &StructureTree, a: ValueId, b: ValueId, span: Span) -> ValueId {
+fn array_compared(cx: &mut Lcx<'_, '_>, asked: Asked, array: ArrayOf, tree: &StructureTree, a: ValueId, b: ValueId, span: Span) -> Lowered<ValueId> {
     let ArrayOf { element, len } = array;
     let a_elements = view_array(cx, a, Mutability::Shared, element, span);
     let b_elements = view_array(cx, b, Mutability::Shared, element, span);
     let all_equal = answered(cx, asked, span);
     let answer_ty = answer_ty(cx, asked);
     indices(cx, len, answer_ty, all_equal, span, |cx, at, header, exit| {
-        let x = element_operand(cx, a_elements, at, element, span);
-        let y = element_operand(cx, b_elements, at, element, span);
+        let x = element_operand(cx, a_elements, at, element, span)?;
+        let y = element_operand(cx, b_elements, at, element, span)?;
         let answer = compared(cx, tree, asked, element, x, y, span)?;
         let open = still_open(cx, asked, answer, span);
         Ok(Terminator::JumpIf { cond: open, then_to: header, then_args: Vec::new(), else_to: exit, else_args: vec![answer] })
@@ -351,16 +349,16 @@ fn indices(
     at_end: ValueId,
     span: Span,
     body: impl FnOnce(&mut Lcx<'_, '_>, ValueId, BlockId, BlockId) -> Lowered<Terminator>,
-) -> ValueId {
+) -> Lowered<ValueId> {
     let u64_ty = cx.u64_ty();
     let len = u64::try_from(len).expect("an array's length fits its `u64` index (operators §3)");
     let from = cx.constant(Literal::Int(0), u64_ty, span);
     let to = cx.constant(Literal::Int(i128::from(len)), u64_ty, span);
-    let header = cx.builder.new_block(&[]);
+    let header = cx.new_block(&[]);
     cx.jump(header, Vec::new(), span);
-    cx.builder.switch_to(header);
-    let body_block = cx.builder.new_block(&[u64_ty]);
-    let exit = cx.builder.new_block(&[exit_ty]);
+    cx.enter_block(header, span)?;
+    let body_block = cx.new_block(&[u64_ty]);
+    let exit = cx.new_block(&[exit_ty]);
     let terminator = Terminator::For {
         source: ForSource::Range { at: from, hi: to },
         body: body_block,
@@ -368,14 +366,11 @@ fn indices(
         exit,
         exit_args: vec![at_end],
     };
-    cx.builder.terminate(terminator, span);
-    cx.builder.switch_to(body_block);
-    let at = cx.builder.block_params(body_block)[0];
-    if let Ok(end) = body(cx, at, header, exit) {
-        cx.builder.terminate(end, span);
+    cx.terminate(terminator, span);
+    if let Ok(end) = cx.enter_block(body_block, span).and_then(|params| body(cx, params[0], header, exit)) {
+        cx.terminate(end, span);
     }
-    cx.builder.switch_to(exit);
-    cx.builder.block_params(exit)[0]
+    Ok(cx.enter_block(exit, span)?[0])
 }
 
 /// An `Option` or a `Result` compared: by tag first, `None` before `Some`
@@ -383,9 +378,9 @@ fn indices(
 /// share.
 fn tagged(cx: &mut Lcx<'_, '_>, asked: Asked, first: Astr, payloads: Tagged<'_>, a: ValueId, b: ValueId, span: Span) -> Lowered<ValueId> {
     let bool_ty = cx.bool_ty();
-    let a_first = cx.builder.push(Op::TestVariant { src: a, tag: first }, bool_ty, span);
-    let b_first = cx.builder.push(Op::TestVariant { src: b, tag: first }, bool_ty, span);
-    let same = cx.builder.push(Op::BinOp { op: crate::ir::BinOp::Eq, left: a_first, right: b_first }, bool_ty, span);
+    let a_first = cx.made(Op::TestVariant { src: a, tag: first }, bool_ty, span);
+    let b_first = cx.made(Op::TestVariant { src: b, tag: first }, bool_ty, span);
+    let same = cx.made(Op::BinOp { op: crate::ir::BinOp::Eq, left: a_first, right: b_first }, bool_ty, span);
     let answer_ty = answer_ty(cx, asked);
     let payloads_compared = |cx: &mut Lcx<'_, '_>| match payloads {
         Tagged::Option(payload) => {
@@ -475,23 +470,23 @@ pub(super) fn lifted(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span
 fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty, args: &[ValueId], span: Span) -> Lowered<ValueId> {
     let trees = match tree {
         StructureTree::Reached { chosen, callee, unmark, member } => {
-            return Ok(reached_part(cx, chosen, *member, (*callee, *unmark), args.to_vec(), span));
+            return reached_part(cx, chosen, *member, (*callee, *unmark), args.to_vec(), span);
         }
         StructureTree::Parts(trees) => trees,
         StructureTree::Own(Own::Copy) => {
-            return Ok(match lift.params.first() {
+            return match lift.params.first() {
                 Some(Taking::Ref(_)) => {
                     let op = Op::Take { target: RefTarget::Through(args[0]), path: Vec::new(), taken_out: false };
-                    cx.builder.push(op, ty, span)
+                    cx.emit(op, ty, span)
                 }
-                Some(Taking::Value) => args[0],
+                Some(Taking::Value) => Ok(args[0]),
                 None => unreachable!("`clone` takes the value it copies"),
-            });
+            };
         }
         StructureTree::Own(Own::Lend(_)) => unreachable!("typeck answers a lend only at its own call, never at a part"),
         StructureTree::Own(Own::OptionNone) => {
             let none = cx.decls.core().tags.none;
-            return Ok(cx.builder.push(Op::MakeVariant { tag: none, payload: None }, ty, span));
+            return Ok(cx.made(Op::MakeVariant { tag: none, payload: None }, ty, span));
         }
     };
     let shape = shape(cx, ty);
@@ -505,11 +500,11 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
         return by_variant(cx, &variants, ty, decides, span, &|cx, variant| {
             let payload = payload_part(variant, trees)
                 .map(|part| {
-                    let part_args = part_args(cx, args, lift, part, span);
+                    let part_args = part_args(cx, args, lift, part, span)?;
                     rebuilt(cx, part.tree, lift, part.ty, &part_args, span)
                 })
                 .transpose()?;
-            Ok(cx.builder.push(Op::MakeVariant { tag: variant.tag, payload }, ty, span))
+            Ok(cx.made(Op::MakeVariant { tag: variant.tag, payload }, ty, span))
         });
     }
     match shape {
@@ -517,11 +512,11 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
             let elements = tuple_parts(&items, trees)
                 .into_iter()
                 .map(|part| {
-                    let part_args = part_args(cx, args, lift, part, span);
+                    let part_args = part_args(cx, args, lift, part, span)?;
                     rebuilt(cx, part.tree, lift, part.ty, &part_args, span)
                 })
                 .collect::<Lowered<_>>()?;
-            Ok(cx.builder.push(Op::MakeTuple { elements }, ty, span))
+            Ok(cx.made(Op::MakeTuple { elements }, ty, span))
         }
         Shape::Object(fields) => {
             let fields = field_parts(&fields, trees)
@@ -530,11 +525,11 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
                     let PathSeg::Field(name) = part.seg else {
                         unreachable!("an object's part is a field")
                     };
-                    let part_args = part_args(cx, args, lift, part, span);
+                    let part_args = part_args(cx, args, lift, part, span)?;
                     Ok((name, rebuilt(cx, part.tree, lift, part.ty, &part_args, span)?))
                 })
                 .collect::<Lowered<_>>()?;
-            Ok(cx.builder.push(Op::MakeObject { fields }, ty, span))
+            Ok(cx.made(Op::MakeObject { fields }, ty, span))
         }
         // Each argument's elements are mapped together, one index at a
         // time; with no argument the length is the array type's.
@@ -550,7 +545,7 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
                 .collect();
             let effect = tree_effect(cx, tree);
             let map = ArrayMap { arrays: args.to_vec(), params, mapped: element, len, effect, span };
-            Ok(array_map(cx, map, &|cx, at| rebuilt(cx, tree, lift, element, at, span)))
+            array_map(cx, map, &|cx, at| rebuilt(cx, tree, lift, element, at, span))
         }
         Shape::Option(_) | Shape::Result { .. } | Shape::Enum(_) => unreachable!("a variant type is rebuilt by its variant above"),
         Shape::Ref(_) | Shape::Never => panic!("a lift answers only at a transparent structured type, not {ty:?}"),
@@ -559,12 +554,19 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
 
 /// The call of the impl a part node reached, as `member` of its `#` pair,
 /// its value taken at `unmark` where its uses settled it so (types §8).
-fn reached_part(cx: &mut Lcx<'_, '_>, chosen: &Chosen, member: PairMember, (callee, unmark): (Ty, Option<Ty>), args: Vec<ValueId>, span: Span) -> ValueId {
+fn reached_part(
+    cx: &mut Lcx<'_, '_>,
+    chosen: &Chosen,
+    member: PairMember,
+    (callee, unmark): (Ty, Option<Ty>),
+    args: Vec<ValueId>,
+    span: Span,
+) -> Lowered<ValueId> {
     let called = cx.callee(chosen, member);
-    let given = issue(cx, called, callee, args, span);
+    let given = issue(cx, called, callee, args, span)?;
     match unmark {
-        Some(taken) => cx.builder.push(Op::Unmark { src: given }, taken, span),
-        None => given,
+        Some(taken) => cx.emit(Op::Unmark { src: given }, taken, span),
+        None => Ok(given),
     }
 }
 
@@ -572,7 +574,7 @@ fn reached_part(cx: &mut Lcx<'_, '_>, chosen: &Chosen, member: PairMember, (call
 fn tree_effect(cx: &Lcx<'_, '_>, tree: &StructureTree) -> Effect {
     match tree {
         StructureTree::Reached { callee, .. } => {
-            fn_effect(cx.builder.types(), *callee).expect("a reached impl's type has an effect").clone()
+            fn_effect(cx.types(), *callee).expect("a reached impl's type has an effect").clone()
         }
         StructureTree::Parts(parts) => parts.iter().fold(Effect::pure(), |joined, (_, part)| joined.join(&tree_effect(cx, part))),
         StructureTree::Own(_) => Effect::pure(),
@@ -581,15 +583,15 @@ fn tree_effect(cx: &Lcx<'_, '_>, tree: &StructureTree) -> Effect {
 
 /// `part`'s arguments, from the node's `args` as `lift` takes each: a
 /// reference to the part through a reference, or the part moved out of a
-/// value.
-fn part_args(cx: &mut Lcx<'_, '_>, args: &[ValueId], lift: &LiftShape, part: Part<'_>, span: Span) -> Vec<ValueId> {
+/// value (`Lcx::emit`).
+fn part_args(cx: &mut Lcx<'_, '_>, args: &[ValueId], lift: &LiftShape, part: Part<'_>, span: Span) -> Lowered<Vec<ValueId>> {
     args.iter()
         .zip(lift.params.iter())
         .map(|(arg, taking)| match taking {
             Taking::Ref(mutability) => {
                 let ty = cx.ref_ty(*mutability, part.ty);
                 let op = Op::Ref { target: RefTarget::Through(*arg), path: vec![part.seg], mutability: *mutability };
-                cx.builder.push(op, ty, span)
+                cx.emit(op, ty, span)
             }
             Taking::Value => {
                 let op = match part.seg {
@@ -597,7 +599,7 @@ fn part_args(cx: &mut Lcx<'_, '_>, args: &[ValueId], lift: &LiftShape, part: Par
                     PathSeg::Field(field) => Op::FieldGet { object: *arg, field, rest: Vec::new() },
                     PathSeg::Payload => Op::UnwrapVariant { src: *arg },
                 };
-                cx.builder.push(op, part.ty, span)
+                cx.emit(op, part.ty, span)
             }
         })
         .collect()

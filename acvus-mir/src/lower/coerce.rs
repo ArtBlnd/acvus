@@ -16,12 +16,13 @@ use acvus_ast::Span;
 use acvus_utils::Astr;
 
 use super::call::coerce;
-use super::control::{diamond, return_value};
-use super::ctxt::{Lcx, Lowered};
+use super::context::Named;
+use super::control::diamond;
+use super::ctxt::{Declared, Entry, Lcx, Lowered};
 use crate::ir::cfg::Op;
 use crate::ir::{Intrinsic, PathSeg, RefTarget, ValueId, fn_effect, known_len};
 use crate::ty::structural::{PartKey, Structure, structure};
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, LenTerm, Mutability, Reissue, Ty, TyKind};
+use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, LenTerm, Mutability, Ty, TyKind};
 use crate::typeck::Coercion;
 
 /// `value`, a transparent structured value, or where `through` is `Some` a
@@ -47,7 +48,7 @@ pub(super) fn structured(
     let assembled = assemble(cx, Assembly { through, from, target, made, parts, value, span })?;
     Ok(match through {
         None => assembled,
-        Some(_) => cx.builder.push(Op::Intrinsic { intrinsic: Intrinsic::Gather, args: vec![assembled] }, to, span),
+        Some(_) => cx.made(Op::Intrinsic { intrinsic: Intrinsic::Gather, args: vec![assembled] }, to, span),
     })
 }
 
@@ -78,7 +79,7 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> Lowered<ValueId> {
     let Assembly { through, from, target, made, parts, value, span } = assembly;
     let coerced = Coerced { parts, span };
     let access = Access { value, through, span };
-    let types = cx.builder.types();
+    let types = cx.types();
     match (structure(types, from), structure(types, target)) {
         (Some(Structure::Tuple(items, _)), Some(Structure::Tuple(..))) => {
             let items = items.to_vec();
@@ -86,11 +87,11 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> Lowered<ValueId> {
                 .into_iter()
                 .enumerate()
                 .map(|(at, item)| {
-                    let part = access.part(cx, PathSeg::Index(at), item);
+                    let part = access.part(cx, PathSeg::Index(at), item)?;
                     coerced.part(cx, PartKey::Index(at), part)
                 })
                 .collect::<Lowered<_>>()?;
-            Ok(cx.builder.push(Op::MakeTuple { elements }, made, span))
+            Ok(cx.made(Op::MakeTuple { elements }, made, span))
         }
         (Some(Structure::Object(from_fields, _)), Some(Structure::Object(slot_fields, _))) => {
             let (from_fields, slot_fields): (Vec<(Astr, Ty)>, Vec<(Astr, Ty)>) = (from_fields.to_vec(), slot_fields.to_vec());
@@ -101,11 +102,11 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> Lowered<ValueId> {
                         .iter()
                         .find(|(field, _)| *field == name)
                         .unwrap_or_else(|| panic!("typeck narrows an object only where it holds every field its slot names"));
-                    let field = access.part(cx, PathSeg::Field(name), field_ty);
+                    let field = access.part(cx, PathSeg::Field(name), field_ty)?;
                     Ok((name, coerced.part(cx, PartKey::Field(name), field)?))
                 })
                 .collect::<Lowered<_>>()?;
-            Ok(cx.builder.push(Op::MakeObject { fields }, made, span))
+            Ok(cx.made(Op::MakeObject { fields }, made, span))
         }
         (Some(Structure::Option(payload, _)), Some(Structure::Option(..))) => {
             let variants = Variant::of_option(cx, payload);
@@ -131,7 +132,7 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> Lowered<ValueId> {
             };
             let effect = coerced.effect(cx, PartKey::Element);
             let map = ArrayMap { arrays: vec![value], params: vec![param], mapped, len, effect, span };
-            Ok(array_map(cx, map, &|cx, element| coerced.part(cx, PartKey::Element, element[0])))
+            array_map(cx, map, &|cx, element| coerced.part(cx, PartKey::Element, element[0]))
         }
         _ => panic!("typeck coerces a structured value only to a slot of its own kind, not {from:?} to {target:?}"),
     }
@@ -151,8 +152,8 @@ fn referent(cx: &Lcx<'_, '_>, ty: Ty) -> Ty {
 /// §4), as typeck pairs the parts.
 pub(super) fn part_reference(cx: &mut Lcx<'_, '_>, through: Mutability, part: Ty) -> Ty {
     match cx.kind(part).clone() {
-        TyKind::Ref(Mutability::Mut, target) if through == Mutability::Mut => cx.builder.intern(TyKind::Ref(Mutability::Mut, target)),
-        TyKind::Ref(_, target) => cx.builder.intern(TyKind::Ref(Mutability::Shared, target)),
+        TyKind::Ref(Mutability::Mut, target) if through == Mutability::Mut => cx.intern(TyKind::Ref(Mutability::Mut, target)),
+        TyKind::Ref(_, target) => cx.intern(TyKind::Ref(Mutability::Shared, target)),
         _ => cx.ref_ty(through, part),
     }
 }
@@ -180,7 +181,7 @@ fn gathered(cx: &mut Lcx<'_, '_>, through: Mutability, target: Ty) -> Ty {
         }
         other => panic!("a reference is gathered only of a transparent structured type's parts, not {other:?}"),
     };
-    cx.builder.intern(kind)
+    cx.intern(kind)
 }
 
 /// How a part of the coerced value is reached: moved out of the value, or,
@@ -192,8 +193,9 @@ struct Access {
 }
 
 impl Access {
-    /// The part at `seg`, of type `ty` in the value's type.
-    fn part(&self, cx: &mut Lcx<'_, '_>, seg: PathSeg, ty: Ty) -> ValueId {
+    /// The part at `seg`, of type `ty` in the value's type, taken out of the
+    /// value or lent through the reference to it (`Lcx::emit`).
+    fn part(&self, cx: &mut Lcx<'_, '_>, seg: PathSeg, ty: Ty) -> Lowered<ValueId> {
         let span = self.span;
         let Some(through) = self.through else {
             let op = match seg {
@@ -201,7 +203,7 @@ impl Access {
                 PathSeg::Field(field) => Op::FieldGet { object: self.value, field, rest: Vec::new() },
                 PathSeg::Payload => Op::UnwrapVariant { src: self.value },
             };
-            return cx.builder.push(op, ty, span);
+            return cx.emit(op, ty, span);
         };
         let target = RefTarget::Through(self.value);
         let path = vec![seg];
@@ -210,16 +212,16 @@ impl Access {
             // A reference part is taken as it is where the mutabilities
             // agree, and read shared through the one taken otherwise.
             TyKind::Ref(held, _) => {
-                let taken = cx.builder.push(Op::Take { target, path, taken_out: false }, ty, span);
-                match held == through || held == Mutability::Shared {
+                let taken = cx.emit(Op::Take { target, path, taken_out: false }, ty, span)?;
+                Ok(match held == through || held == Mutability::Shared {
                     true => taken,
                     false => {
                         let op = Op::Ref { target: RefTarget::Through(taken), path: Vec::new(), mutability: Mutability::Shared };
-                        cx.builder.push(op, lent, span)
+                        cx.made(op, lent, span)
                     }
-                }
+                })
             }
-            _ => cx.builder.push(Op::Ref { target, path, mutability: through }, lent, span),
+            _ => cx.emit(Op::Ref { target, path, mutability: through }, lent, span),
         }
     }
 }
@@ -237,13 +239,17 @@ pub(super) struct ArrayMap {
     pub span: Span,
 }
 
-/// The array `map` makes, its function a body of its own that `element`
-/// lowers from its parameters, returning `element`'s value where a run gets
-/// past it; it stands on the order chain where that function's effect is
-/// not pure, as a call of it does.
-pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&mut Lcx<'_, '_>, &[ValueId]) -> Lowered<ValueId>) -> ValueId {
+/// The array `map` makes, its function a body of its own (`Lcx::make_body`)
+/// that `element` lowers from its parameters; it stands on the order chain
+/// where that function's effect is not pure, as a call of it does
+/// (`Lcx::emit`).
+pub(super) fn array_map(
+    cx: &mut Lcx<'_, '_>,
+    map: ArrayMap,
+    element: &dyn Fn(&mut Lcx<'_, '_>, &[ValueId]) -> Lowered<ValueId>,
+) -> Lowered<ValueId> {
     let ArrayMap { arrays, params, mapped, len, effect, span } = map;
-    let fn_ty = cx.builder.intern(TyKind::Fn {
+    let fn_ty = cx.intern(TyKind::Fn {
         params: params.clone().into(),
         ret: mapped,
         effect: EffectTerm::Known(effect.clone()),
@@ -252,32 +258,15 @@ pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&m
         holds: Holds::Nothing,
         values: (),
     });
-    let result_ty = cx.builder.intern(TyKind::Array(mapped, LenTerm::Known(len), ()));
-    let (decls, anyorder) = (cx.decls, cx.anyorder);
-    let name = decls.core().receiver_param();
-    let nested = cx.builder.build_nested(super::ctxt::ordered(&effect), mapped);
-    let (decided, bodies) = (cx.decided, cx.bodies.clone());
-    let mut inner = Lcx::new(decls, decided, nested, anyorder);
-    inner.bodies = bodies;
-    if anyorder > 0 {
-        inner.builder.open_anyorder();
-    }
-    let at: Vec<ValueId> = params.iter().map(|param| inner.builder.param(name, *param, span)).collect();
-    if let Ok(value) = element(&mut inner, &at) {
-        return_value(&mut inner, value, span);
-    }
-    if anyorder > 0 {
-        inner.builder.close_anyorder();
-    }
-    let body = inner.builder.seal().unwrap_or_else(|open| panic!("an array map's function is sealed whole: {open:?}"));
-    let f = cx.builder.push(Op::MakeClosure { bodies: vec![body], captures: Vec::new() }, fn_ty, span);
+    let result_ty = cx.intern(TyKind::Array(mapped, LenTerm::Known(len), ()));
+    let name = cx.decls.core().receiver_param();
+    let named = Named::default();
+    let entry = Entry { captures: Vec::new(), params: params.iter().map(|ty| Declared { name, ty: *ty, span }).collect(), named: &named };
+    let body = cx.nested(cx.decided, super::ctxt::ordered(&effect), mapped).make_body(entry, |inner, _, at| element(inner, at), span);
+    let f = cx.made(Op::MakeClosure { bodies: vec![body], captures: Vec::new() }, fn_ty, span);
     let mut args = arrays;
     args.push(f);
-    let op = Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args };
-    match effect.reissue() {
-        Reissue::Pure => cx.builder.push(op, result_ty, span),
-        Reissue::Idempotent | Reissue::Opaque => cx.builder.push_effect(op, result_ty, span),
-    }
+    cx.emit(Op::Intrinsic { intrinsic: Intrinsic::ArrayMap, args }, result_ty, span)
 }
 
 /// Each kept part's coercion, by its key.
@@ -310,7 +299,7 @@ impl Coerced<'_> {
 fn coercion_effect(cx: &Lcx<'_, '_>, coercion: &Coercion) -> Effect {
     match coercion {
         Coercion::Steps(steps) => steps.iter().fold(Effect::pure(), |joined, step| {
-            let effect = fn_effect(cx.builder.types(), step.via_ty).expect("a step's function type has an effect");
+            let effect = fn_effect(cx.types(), step.via_ty).expect("a step's function type has an effect");
             joined.join(effect)
         }),
         Coercion::Structured { parts, .. } => parts
@@ -353,17 +342,21 @@ fn same_variant(cx: &mut Lcx<'_, '_>, coerced: &Coerced<'_>, access: &Access, va
         let payload = variant
             .payload
             .map(|(key, ty)| {
-                let part = access.part(cx, PathSeg::Payload, ty);
+                let part = access.part(cx, PathSeg::Payload, ty)?;
                 coerced.part(cx, key, part)
             })
             .transpose()?;
-        Ok(cx.builder.push(Op::MakeVariant { tag: variant.tag, payload }, made, span))
+        Ok(cx.made(Op::MakeVariant { tag: variant.tag, payload }, made, span))
     })
 }
 
 /// `arm` of the variant `value` is, a value of `ty`: each of `variants` of
 /// its type but the last is tested in turn, and the last is what the value
 /// is where none of them matched.
+///
+/// # Panics
+/// `variants` is empty: no value has a type of no variant, so no run gets
+/// past making or lending one (`Lcx::emit`), and none dispatches on it.
 pub(super) fn by_variant(
     cx: &mut Lcx<'_, '_>,
     variants: &[Variant],
@@ -372,14 +365,13 @@ pub(super) fn by_variant(
     span: Span,
     arm: &dyn Fn(&mut Lcx<'_, '_>, &Variant) -> Lowered<ValueId>,
 ) -> Lowered<ValueId> {
-    // No value of an enum of no variant is ever made, so no run reaches here.
     let Some((variant, rest)) = variants.split_first() else {
-        return Ok(cx.unreached_value(ty, span));
+        unreachable!("no value has a type of no variant, so no run dispatches on one")
     };
     if rest.is_empty() {
         return arm(cx, variant);
     }
     let bool_ty = cx.bool_ty();
-    let is = cx.builder.push(Op::TestVariant { src: value, tag: variant.tag }, bool_ty, span);
+    let is = cx.made(Op::TestVariant { src: value, tag: variant.tag }, bool_ty, span);
     diamond(cx, is, ty, span, |cx| arm(cx, variant), |cx| by_variant(cx, rest, ty, value, span, arm))
 }

@@ -14,7 +14,7 @@
 use acvus_ast::{ElseBranch, Expr, ForHead, ObjectPatternField, Pattern, Place, PlaceBase, RefKind, Root, Slot, Span, Stmt, TuplePatternElem};
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::ctxt::{Home, Lcx, Lowered};
+use super::ctxt::{Declared, Home, Lcx, Lowered};
 use super::place::{Operand, Place as LPlace, assign, read};
 use crate::ir::{RefTarget, ValueId};
 use crate::ty::Ty;
@@ -265,25 +265,17 @@ impl<'t> Namer<'t> {
     }
 }
 
-/// The body's entry: it states each context it names, with its type and
-/// the volatility its declaration states.
-pub(super) fn enter_body(cx: &mut Lcx<'_, '_>, named: &Named) {
-    for NamedContext { context, ty } in &named.contexts {
-        let volatile = cx
-            .decls
-            .context_is_volatile(*context)
-            .unwrap_or_else(|| panic!("the context {context:?} an admitted program names is declared"));
-        cx.builder.context(*context, *ty, volatile);
-    }
+/// The entry body's parameters: each input it names (programs §4).
+pub(super) fn input_params(named: &Named) -> Vec<Declared> {
+    named.inputs.iter().map(|NamedInput { name, ty, span }| Declared { name: *name, ty: *ty, span: *span }).collect()
 }
 
-/// The entry body's inputs: each it names is a parameter held in a slot
-/// (programs §4). A lambda reaches an input by capturing it.
-pub(super) fn enter_inputs(cx: &mut Lcx<'_, '_>, named: &Named) {
-    for NamedInput { name, ty, span } in &named.inputs {
-        let param = cx.builder.param(*name, *ty, *span);
-        let slot = cx.builder.slot(*ty, *span);
-        assign(cx, slot_place(slot, *ty), param, *span);
+/// The entry body's inputs, `params` as `input_params` declares them: each
+/// held in a slot of its own. A lambda reaches an input by capturing it.
+pub(super) fn enter_inputs(cx: &mut Lcx<'_, '_>, named: &Named, params: &[ValueId]) {
+    for (NamedInput { name, ty, span }, param) in named.inputs.iter().zip(params) {
+        let slot = cx.slot(*ty, *span);
+        assign(cx, slot_place(slot, *ty), *param, *span);
         cx.inputs.insert(*name, Home::Slot(slot));
     }
 }

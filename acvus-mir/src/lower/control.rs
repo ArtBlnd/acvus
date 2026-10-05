@@ -34,26 +34,24 @@ pub(super) fn diamond(
     then_arm: impl FnOnce(&mut Lcx<'_, '_>) -> Lowered<ValueId>,
     else_arm: impl FnOnce(&mut Lcx<'_, '_>) -> Lowered<ValueId>,
 ) -> Lowered<ValueId> {
-    let then_to = cx.builder.new_block(&[]);
-    let else_to = cx.builder.new_block(&[]);
-    let join = cx.builder.new_block(&[ty]);
+    let then_to = cx.new_block(&[]);
+    let else_to = cx.new_block(&[]);
+    let join = cx.new_block(&[ty]);
     let terminator =
         Terminator::Diamond { cond, then_to, then_args: Vec::new(), else_to, else_args: Vec::new(), join };
-    cx.builder.terminate(terminator, span);
+    cx.terminate(terminator, span);
     let mut joined = false;
-    cx.builder.switch_to(then_to);
-    if let Ok(value) = then_arm(cx) {
+    if let Ok(value) = cx.enter_block(then_to, span).and_then(|_| then_arm(cx)) {
         cx.jump(join, vec![value], span);
         joined = true;
     }
-    cx.builder.switch_to(else_to);
-    if let Ok(value) = else_arm(cx) {
+    if let Ok(value) = cx.enter_block(else_to, span).and_then(|_| else_arm(cx)) {
         cx.jump(join, vec![value], span);
         joined = true;
     }
-    cx.builder.switch_to(join);
+    let params = cx.enter_block(join, span)?;
     match joined {
-        true => Ok(cx.builder.block_params(join)[0]),
+        true => Ok(params[0]),
         false => Err(cx.end_block(Terminator::Diverge, span)),
     }
 }
@@ -159,17 +157,18 @@ fn loop_body<S: Slot>(cx: &mut Lcx<'_, '_>, targets: LoopTargets, body: &[Stmt<S
 
 /// `while cond { body }`: its exit is reached where its condition is.
 pub(super) fn lower_while<S: Slot>(cx: &mut Lcx<'_, '_>, cond: &Expr<S>, body: &[Stmt<S>], span: Span) -> Lowered<()> {
-    let header = cx.builder.new_block(&[]);
+    let header = cx.new_block(&[]);
     cx.jump(header, Vec::new(), span);
-    cx.builder.switch_to(header);
+    cx.enter_block(header, span)?;
     let cond = lower_expr(cx, cond)?;
-    let body_block = cx.builder.new_block(&[]);
-    let exit = cx.builder.new_block(&[]);
+    let body_block = cx.new_block(&[]);
+    let exit = cx.new_block(&[]);
     let terminator = Terminator::While { cond, body: body_block, body_args: Vec::new(), exit, exit_args: Vec::new() };
-    cx.builder.terminate(terminator, span);
-    cx.builder.switch_to(body_block);
-    loop_body(cx, LoopTargets { exit, header }, body, span);
-    cx.builder.switch_to(exit);
+    cx.terminate(terminator, span);
+    if cx.enter_block(body_block, span).is_ok() {
+        loop_body(cx, LoopTargets { exit, header }, body, span);
+    }
+    cx.enter_block(exit, span)?;
     Ok(())
 }
 
@@ -182,24 +181,23 @@ pub(super) fn lower_while_let<S: Slot>(
     body: &[Stmt<S>],
     span: Span,
 ) -> Lowered<()> {
-    let header = cx.builder.new_block(&[]);
+    let header = cx.new_block(&[]);
     cx.jump(header, Vec::new(), span);
-    cx.builder.switch_to(header);
+    cx.enter_block(header, span)?;
     let scrutinee = lower_expr(cx, source)?;
     let matched = Matched::scrutinee(cx, scrutinee, source.span());
     let cond = match test(cx, pattern, &matched)? {
         Some(cond) => cond,
         None => cx.bool_const(true, span),
     };
-    let body_block = cx.builder.new_block(&[]);
-    let exit = cx.builder.new_block(&[]);
+    let body_block = cx.new_block(&[]);
+    let exit = cx.new_block(&[]);
     let terminator = Terminator::While { cond, body: body_block, body_args: Vec::new(), exit, exit_args: Vec::new() };
-    cx.builder.terminate(terminator, span);
-    cx.builder.switch_to(body_block);
-    if bind(cx, pattern, &matched).is_ok() {
+    cx.terminate(terminator, span);
+    if cx.enter_block(body_block, span).and_then(|_| bind(cx, pattern, &matched)).is_ok() {
         loop_body(cx, LoopTargets { exit, header }, body, span);
     }
-    cx.builder.switch_to(exit);
+    cx.enter_block(exit, span)?;
     Ok(())
 }
 
@@ -220,11 +218,11 @@ pub(super) fn lower_for<S: Slot>(
 ) -> Lowered<()> {
     let element = cx.ty(binder.id);
     let traversal = traversal(cx, site, callee_site, head, element, span)?;
-    let header = cx.builder.new_block(&[]);
+    let header = cx.new_block(&[]);
     cx.jump(header, Vec::new(), span);
-    cx.builder.switch_to(header);
-    let body_block = cx.builder.new_block(&traversal.params);
-    let exit = cx.builder.new_block(&[]);
+    cx.enter_block(header, span)?;
+    let body_block = cx.new_block(&traversal.params);
+    let exit = cx.new_block(&[]);
     let terminator = Terminator::For {
         source: traversal.source,
         body: body_block,
@@ -232,14 +230,14 @@ pub(super) fn lower_for<S: Slot>(
         exit,
         exit_args: Vec::new(),
     };
-    cx.builder.terminate(terminator, span);
-    cx.builder.switch_to(body_block);
-    let item = cx.builder.block_params(body_block)[0];
-    let slot = cx.builder.slot(element, binder.span);
-    assign(cx, Place { target: RefTarget::Var(slot), path: Vec::new(), ty: element }, item, binder.span);
-    cx.bind(binder.id, Home::Slot(slot), binder.span);
-    loop_body(cx, LoopTargets { exit, header }, body, span);
-    cx.builder.switch_to(exit);
+    cx.terminate(terminator, span);
+    if let Ok(params) = cx.enter_block(body_block, binder.span) {
+        let slot = cx.slot(element, binder.span);
+        assign(cx, Place { target: RefTarget::Var(slot), path: Vec::new(), ty: element }, params[0], binder.span);
+        cx.bind(binder.id, Home::Slot(slot), binder.span);
+        loop_body(cx, LoopTargets { exit, header }, body, span);
+    }
+    cx.enter_block(exit, span)?;
     Ok(())
 }
 
@@ -277,10 +275,10 @@ fn traversal<S: Slot>(
                     TyKind::Slice(_) => reference,
                     _ => {
                         let chosen = cx.reached(callee_site);
-                        let slice = cx.builder.intern(TyKind::Slice(item));
+                        let slice = cx.intern(TyKind::Slice(item));
                         let ty = cx.ref_ty(mutability, slice);
                         let op = Op::AsSlice { container: reference, mutability, r#impl: cx.reached_function(chosen) };
-                        cx.builder.push(op, ty, span)
+                        cx.made(op, ty, span)
                     }
                 },
                 other => panic!("a `for` by reference has a reference head, not {other:?}"),
@@ -313,16 +311,11 @@ pub(super) fn lower_loop_exit(cx: &mut Lcx<'_, '_>, to_exit: bool, span: Span) -
     cx.end_block(Terminator::Jump { to, args: Vec::new() }, span)
 }
 
-/// The body's return of `value`.
-pub(super) fn return_value(cx: &mut Lcx<'_, '_>, value: ValueId, span: Span) -> Unreached {
-    cx.end_block(Terminator::Return { value, order: None, span }, span)
-}
-
 /// `return value`: the value enters the body's result at its own site.
 pub(super) fn lower_return<S: Slot>(cx: &mut Lcx<'_, '_>, value: &Expr<S>, span: Span) -> Lowered<ValueId> {
     let returned = lower_expr(cx, value)?;
     let returned = convert(cx, value.id(), returned, value.span())?;
-    Err(return_value(cx, returned, span))
+    Err(cx.return_value(returned, span))
 }
 
 /// `inner?`: `Some`/`Ok`'s payload goes on; `None`/`Err` leaves the body,
@@ -340,27 +333,26 @@ pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr
         TryExit::Result(ty) => (tags.ok, ty),
     };
     let bool_ty = cx.bool_ty();
-    let holds = cx.builder.push(Op::TestVariant { src: tried, tag: goes_on }, bool_ty, span);
-    let on = cx.builder.new_block(&[]);
-    let leave = cx.builder.new_block(&[]);
+    let holds = cx.made(Op::TestVariant { src: tried, tag: goes_on }, bool_ty, span);
+    let on = cx.new_block(&[]);
+    let leave = cx.new_block(&[]);
     let terminator =
         Terminator::JumpIf { cond: holds, then_to: on, then_args: Vec::new(), else_to: leave, else_args: Vec::new() };
-    cx.builder.terminate(terminator, span);
-    cx.builder.switch_to(leave);
-    let left = match exit {
-        TryExit::Option(_) => cx.builder.push(Op::MakeVariant { tag: tags.none, payload: None }, exit_ty, span),
+    cx.terminate(terminator, span);
+    let left = cx.enter_block(leave, span).and_then(|_| match exit {
+        TryExit::Option(_) => Ok(cx.made(Op::MakeVariant { tag: tags.none, payload: None }, exit_ty, span)),
         TryExit::Result(_) => {
             let error_ty = match cx.kind(cx.value_ty(tried)) {
                 TyKind::Result(_, error, _) => *error,
                 other => panic!("a `?` that leaves by `Err` tries a `Result`, not {other:?}"),
             };
-            let error = cx.builder.push(Op::UnwrapVariant { src: tried }, error_ty, span);
-            cx.builder.push(Op::MakeVariant { tag: tags.err, payload: Some(error) }, exit_ty, span)
+            let error = cx.emit(Op::UnwrapVariant { src: tried }, error_ty, span)?;
+            Ok(cx.made(Op::MakeVariant { tag: tags.err, payload: Some(error) }, exit_ty, span))
         }
-    };
-    if let Ok(left) = convert(cx, site, left, span) {
-        return_value(cx, left, span);
+    });
+    if let Ok(left) = left.and_then(|left| convert(cx, site, left, span)) {
+        cx.return_value(left, span);
     }
-    cx.builder.switch_to(on);
-    Ok(cx.builder.push(Op::UnwrapVariant { src: tried }, value_ty, span))
+    cx.enter_block(on, span)?;
+    cx.emit(Op::UnwrapVariant { src: tried }, value_ty, span)
 }

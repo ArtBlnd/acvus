@@ -13,7 +13,7 @@ use super::call::convert;
 use super::context;
 use super::ctxt::{Home, Lcx, Lowered};
 use super::expr::lower_expr;
-use crate::ir::cfg::{Op, Terminator};
+use crate::ir::cfg::Op;
 use crate::ir::{IndexBound, IndexMode, PathSeg, RefTarget, ValueId, is_word};
 use crate::ty::{Mutability, Ty, TyKind};
 use crate::typeck::Name;
@@ -146,7 +146,7 @@ fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, ty:
             Operand::Place(Place { target: RefTarget::Through(value), path: vec![PathSeg::Field(field)], ty })
         }
         Operand::Value(value) => {
-            Operand::Value(cx.builder.push(Op::FieldGet { object: value, field, rest: Vec::new() }, ty, span))
+            Operand::Value(cx.emit(Op::FieldGet { object: value, field, rest: Vec::new() }, ty, span)?)
         }
     })
 }
@@ -224,17 +224,12 @@ fn is_ref(cx: &Lcx<'_, '_>, ty: Ty) -> bool {
     matches!(cx.kind(ty), TyKind::Ref(..))
 }
 
-/// The value of `operand`: a place's is taken. A place of type `!` holds
-/// no value, so no run gets past its take (types §4).
+/// The value of `operand`: a place's is taken (`Lcx::emit`).
 pub(super) fn read(cx: &mut Lcx<'_, '_>, operand: Operand, span: Span) -> Lowered<ValueId> {
     match operand {
         Operand::Place(place) => {
             let op = Op::Take { target: place.target, path: place.path, taken_out: false };
-            let value = cx.builder.push_place(op, place.ty, span);
-            if matches!(cx.kind(place.ty), TyKind::Never) {
-                return Err(cx.end_block(Terminator::Diverge, span));
-            }
-            Ok(value)
+            cx.emit(op, place.ty, span)
         }
         Operand::Value(value) => Ok(value),
     }
@@ -242,7 +237,7 @@ pub(super) fn read(cx: &mut Lcx<'_, '_>, operand: Operand, span: Span) -> Lowere
 
 /// A `mutability` reference to `operand`: a place is lent where it stands,
 /// a reference is reborrowed, and any other value is put in a slot of its
-/// own and lent there.
+/// own and lent there (`Lcx::emit`).
 pub(super) fn lend(cx: &mut Lcx<'_, '_>, operand: Operand, mutability: Mutability, span: Span) -> Lowered<ValueId> {
     let held = match &operand {
         Operand::Place(place) => place.ty,
@@ -256,13 +251,13 @@ pub(super) fn lend(cx: &mut Lcx<'_, '_>, operand: Operand, mutability: Mutabilit
     let place = match operand {
         Operand::Place(place) => place,
         Operand::Value(value) => {
-            let slot = cx.builder.slot(held, span);
-            cx.builder.push_unit(Op::Assign { target: RefTarget::Var(slot), path: Vec::new(), value, restores: false }, span);
+            let slot = cx.slot(held, span);
+            cx.emit_unit(Op::Assign { target: RefTarget::Var(slot), path: Vec::new(), value, restores: false }, span);
             Place { target: RefTarget::Var(slot), path: Vec::new(), ty: held }
         }
     };
     let ty = cx.ref_ty(mutability, place.ty);
-    Ok(cx.builder.push_place(Op::Ref { target: place.target, path: place.path, mutability }, ty, span))
+    cx.emit(Op::Ref { target: place.target, path: place.path, mutability }, ty, span)
 }
 
 /// `reference`, a `made` reference to `target`, as a `wanted` one: itself
@@ -286,7 +281,7 @@ pub(super) fn reborrow(
         _ => {
             let ty = cx.ref_ty(Mutability::Shared, target);
             let op = Op::Ref { target: RefTarget::Through(reference), path: Vec::new(), mutability: Mutability::Shared };
-            cx.builder.push(op, ty, span)
+            cx.made(op, ty, span)
         }
     }
 }
@@ -322,7 +317,7 @@ pub(super) fn lower_index<S: Slot>(
     span: Span,
 ) -> Lowered<ValueId> {
     let element = element_of(cx, object, callee_site);
-    if !is_word(cx.builder.types(), element) {
+    if !is_word(cx.types(), element) {
         let reference = element_ref(cx, object, callee_site, index, Mutability::Shared, element, span)?;
         let place = Place { target: RefTarget::Through(reference), path: Vec::new(), ty: element };
         let value = read(cx, Operand::Place(place), span)?;
@@ -331,7 +326,7 @@ pub(super) fn lower_index<S: Slot>(
     let slice = slice_of(cx, object, callee_site, Mutability::Shared, element, span)?;
     let at = lower_expr(cx, index)?;
     let op = Op::Index { slice, index: at, mode: IndexMode::Copy, bound: IndexBound::Checked };
-    let value = cx.builder.push(op, element, span);
+    let value = cx.emit(op, element, span)?;
     Ok(read_as(cx, value, cx.ty(site), span))
 }
 
@@ -354,7 +349,7 @@ fn element_ref<S: Slot>(
     };
     let ty = cx.ref_ty(held, element);
     let op = Op::Index { slice, index: at, mode: IndexMode::Ref, bound: IndexBound::Checked };
-    Ok(cx.builder.push(op, ty, span))
+    cx.emit(op, ty, span)
 }
 
 /// How a container gives up the slice of its elements (operators §3).
@@ -422,10 +417,10 @@ pub(super) fn slice_of<S: Slot>(
             let operand = operand(cx, container, mutability)?;
             let lent = lend(cx, operand, mutability, span)?;
             let lent = convert(cx, callee_site, lent, span)?;
-            let slice = cx.builder.intern(TyKind::Slice(element));
+            let slice = cx.intern(TyKind::Slice(element));
             let ty = cx.ref_ty(mutability, slice);
             let op = Op::AsSlice { container: lent, mutability, r#impl: cx.reached_function(chosen) };
-            cx.builder.push(op, ty, span)
+            cx.made(op, ty, span)
         }
     })
 }
@@ -442,9 +437,9 @@ fn as_mutability(cx: &mut Lcx<'_, '_>, reference: ValueId, mutability: Mutabilit
 /// The language's own view of the array `array` references as a slice of
 /// its `element`s.
 pub(super) fn view_array(cx: &mut Lcx<'_, '_>, array: ValueId, mutability: Mutability, element: Ty, span: Span) -> ValueId {
-    let slice = cx.builder.intern(TyKind::Slice(element));
+    let slice = cx.intern(TyKind::Slice(element));
     let ty = cx.ref_ty(mutability, slice);
-    cx.builder.push(Op::ArrayView { src: array, mutability }, ty, span)
+    cx.made(Op::ArrayView { src: array, mutability }, ty, span)
 }
 
 /// `*r` read: a take of what `r` names (operators §6).
@@ -466,7 +461,7 @@ pub(super) fn lower_store<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>, va
 
 pub(super) fn assign(cx: &mut Lcx<'_, '_>, place: Place, value: ValueId, span: Span) {
     let op = Op::Assign { target: place.target, path: place.path, value, restores: false };
-    cx.builder.push_place_unit(op, span);
+    cx.emit_unit(op, span);
 }
 
 fn store_target<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>) -> Lowered<Place> {

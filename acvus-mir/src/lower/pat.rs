@@ -65,7 +65,7 @@ impl Matched {
         if matches!(cx.kind(ty), TyKind::Ref(..)) {
             return Matched::Value { value, ty };
         }
-        let slot = cx.builder.slot(ty, span);
+        let slot = cx.slot(ty, span);
         let place = Place { target: RefTarget::Var(slot), path: Vec::new(), ty };
         assign(cx, place.clone(), value, span);
         Matched::Held { place, slot_ty: ty }
@@ -110,14 +110,16 @@ fn held_reference(cx: &mut Lcx<'_, '_>, place: &Place, slot_ty: Ty, held: Mutabi
             let slot = Place { target: place.target, path: Vec::new(), ty: slot_ty };
             let lent = lend(cx, Operand::Place(slot), Mutability::Mut, span)?;
             let op = Op::Take { target: RefTarget::Through(lent), path: place.path.clone(), taken_out: false };
-            Ok(cx.builder.push(op, place.ty, span))
+            cx.emit(op, place.ty, span)
         }
     }
 }
 
-fn part(cx: &mut Lcx<'_, '_>, matched: &Matched, part: Part, span: Span) -> Matched {
+/// `part` of what `matched` is: a value's taken out of it (`Lcx::emit`); a
+/// place's, the place under it.
+fn part(cx: &mut Lcx<'_, '_>, matched: &Matched, part: Part, span: Span) -> Lowered<Matched> {
     let ty = part_ty(cx, matched.ty(), part);
-    match matched {
+    Ok(match matched {
         Matched::Value { value, .. } => {
             let op = match part {
                 Part::Tuple(index) => Op::TupleIndex { tuple: *value, index },
@@ -125,11 +127,11 @@ fn part(cx: &mut Lcx<'_, '_>, matched: &Matched, part: Part, span: Span) -> Matc
                 Part::Payload(_) => Op::UnwrapVariant { src: *value },
                 Part::Element(index) => Op::ArrayIndex { array: *value, index },
             };
-            Matched::Value { value: cx.builder.push(op, ty, span), ty }
+            Matched::Value { value: cx.emit(op, ty, span)?, ty }
         }
         Matched::Held { place, slot_ty } => Matched::Held { place: place.with(segment(part), ty), slot_ty: *slot_ty },
         Matched::Place { place, lent } => Matched::Place { place: place.with(segment(part), ty), lent: *lent },
-    }
+    })
 }
 
 fn segment(part: Part) -> PathSeg {
@@ -141,8 +143,8 @@ fn segment(part: Part) -> PathSeg {
 }
 
 /// The element a list pattern names at `at`: an array's is a part; a
-/// slice's is reached by index, past its length test.
-fn element(cx: &mut Lcx<'_, '_>, matched: &Matched, at: ListAt, span: Span) -> Matched {
+/// slice's is reached by index, past its length test (`Lcx::emit`).
+fn element(cx: &mut Lcx<'_, '_>, matched: &Matched, at: ListAt, span: Span) -> Lowered<Matched> {
     let (place, lent) = match (at, matched) {
         (ListAt::Array(index), _) => return part(cx, matched, Part::Element(index), span),
         (ListAt::SliceHead(_) | ListAt::SliceTail { .. }, Matched::Place { place, lent }) => (place, *lent),
@@ -154,28 +156,28 @@ fn element(cx: &mut Lcx<'_, '_>, matched: &Matched, at: ListAt, span: Span) -> M
         panic!("a slice's element is named of a slice")
     };
     let ty = *ty;
-    let slice = slice_ref(cx, place, lent, span);
+    let slice = slice_ref(cx, place, lent, span)?;
     let u64_ty = cx.u64_ty();
     let index = match at {
         ListAt::SliceTail { back } => {
-            let len = cx.builder.push(Op::SliceLen { src: slice }, u64_ty, span);
+            let len = cx.made(Op::SliceLen { src: slice }, u64_ty, span);
             let back = cx.constant(Literal::Int(back as i128), u64_ty, span);
             let op = Op::BinOp { op: BinOp::Sub, left: len, right: back };
-            cx.builder.push(op, u64_ty, span)
+            cx.made(op, u64_ty, span)
         }
         ListAt::SliceHead(front) | ListAt::Array(front) => cx.constant(Literal::Int(front as i128), u64_ty, span),
     };
     let element_ref = cx.ref_ty(lent, ty);
     let op = Op::Index { slice, index, mode: IndexMode::Ref, bound: IndexBound::Checked };
-    let reference = cx.builder.push(op, element_ref, span);
-    Matched::Place { place: Place { target: RefTarget::Through(reference), path: Vec::new(), ty }, lent }
+    let reference = cx.emit(op, element_ref, span)?;
+    Ok(Matched::Place { place: Place { target: RefTarget::Through(reference), path: Vec::new(), ty }, lent })
 }
 
 /// A reference, at `lent`, to the slice `place` holds.
-fn slice_ref(cx: &mut Lcx<'_, '_>, place: &Place, lent: Mutability, span: Span) -> ValueId {
+fn slice_ref(cx: &mut Lcx<'_, '_>, place: &Place, lent: Mutability, span: Span) -> Lowered<ValueId> {
     let ty = cx.ref_ty(lent, place.ty);
     let op = Op::Ref { target: place.target, path: place.path.clone(), mutability: lent };
-    cx.builder.push_place(op, ty, span)
+    cx.emit(op, ty, span)
 }
 
 /// The type of `part` of a `whole`.
@@ -251,18 +253,18 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         Pattern::Binding { .. } | Pattern::Wildcard { .. } | Pattern::ContextBind { .. } => None,
         Pattern::Literal { value, .. } => {
             let matched = through(cx, matched, span)?;
-            let src = tag_source(cx, &matched, span);
+            let src = tag_source(cx, &matched, span)?;
             let bool_ty = cx.bool_ty();
-            Some(cx.builder.push(Op::TestLiteral { src, value: value.clone() }, bool_ty, span))
+            Some(cx.made(Op::TestLiteral { src, value: value.clone() }, bool_ty, span))
         }
         Pattern::Variant { tag, payload, .. } => {
             let matched = through(cx, matched, span)?;
-            let src = tag_source(cx, &matched, span);
+            let src = tag_source(cx, &matched, span)?;
             let bool_ty = cx.bool_ty();
-            let tagged = cx.builder.push(Op::TestVariant { src, tag: *tag }, bool_ty, span);
+            let tagged = cx.made(Op::TestVariant { src, tag: *tag }, bool_ty, span);
             match payload {
                 Some(payload) if refutable(payload) => and(cx, Some(tagged), span, |cx| {
-                    let inner = part(cx, &matched, Part::Payload(*tag), span);
+                    let inner = part(cx, &matched, Part::Payload(*tag), span)?;
                     test(cx, payload, &inner)
                 })?,
                 _ => Some(tagged),
@@ -279,7 +281,7 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
                     continue;
                 }
                 held = and(cx, held, span, |cx| {
-                    let inner = part(cx, &matched, Part::Tuple(index), span);
+                    let inner = part(cx, &matched, Part::Tuple(index), span)?;
                     test(cx, element, &inner)
                 })?;
             }
@@ -290,7 +292,7 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
             let mut held = None;
             for field in fields.iter().filter(|field| refutable(&field.pattern)) {
                 held = and(cx, held, span, |cx| {
-                    let inner = part(cx, &matched, Part::Field(field.key), span);
+                    let inner = part(cx, &matched, Part::Field(field.key), span)?;
                     test(cx, &field.pattern, &inner)
                 })?;
             }
@@ -298,13 +300,13 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         }
         Pattern::List { head, rest, tail, .. } => {
             let matched = through(cx, matched, span)?;
-            let mut held = slice_length_test(cx, &matched, head.len() + tail.len(), rest.is_some(), span);
+            let mut held = slice_length_test(cx, &matched, head.len() + tail.len(), rest.is_some(), span)?;
             for (at, part_pattern) in list_elements(cx, &matched, head, tail) {
                 if !refutable(part_pattern) {
                     continue;
                 }
                 held = and(cx, held, span, |cx| {
-                    let inner = element(cx, &matched, at, span);
+                    let inner = element(cx, &matched, at, span)?;
                     test(cx, part_pattern, &inner)
                 })?;
             }
@@ -317,23 +319,23 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
 /// A list pattern's length test: none on an array, whose type fixes its
 /// length; on a slice, its length equal to the named elements', or at
 /// least that where the list has a `..`.
-fn slice_length_test(cx: &mut Lcx<'_, '_>, matched: &Matched, named: usize, rest: bool, span: Span) -> Option<ValueId> {
+fn slice_length_test(cx: &mut Lcx<'_, '_>, matched: &Matched, named: usize, rest: bool, span: Span) -> Lowered<Option<ValueId>> {
     let Matched::Place { place, lent } = matched else {
-        return None;
+        return Ok(None);
     };
     if !matches!(cx.kind(place.ty), TyKind::Slice(_)) {
-        return None;
+        return Ok(None);
     }
-    let slice = slice_ref(cx, place, *lent, span);
+    let slice = slice_ref(cx, place, *lent, span)?;
     let u64_ty = cx.u64_ty();
-    let len = cx.builder.push(Op::SliceLen { src: slice }, u64_ty, span);
+    let len = cx.made(Op::SliceLen { src: slice }, u64_ty, span);
     let named = cx.constant(Literal::Int(named as i128), u64_ty, span);
     let op = match rest {
         true => BinOp::Gte,
         false => BinOp::Eq,
     };
     let bool_ty = cx.bool_ty();
-    Some(cx.builder.push(Op::BinOp { op, left: len, right: named }, bool_ty, span))
+    Ok(Some(cx.made(Op::BinOp { op, left: len, right: named }, bool_ty, span)))
 }
 
 /// Each element a list pattern names, with where it stands.
@@ -360,14 +362,14 @@ fn list_elements<'p, S: Slot>(
 
 /// What a test reads: the value, or a shared reference to the place, read
 /// through as a `Switch` reads its tag through one; a test takes nothing
-/// out.
-pub(super) fn tag_source(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> ValueId {
+/// out (`Lcx::emit`).
+pub(super) fn tag_source(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> Lowered<ValueId> {
     match matched {
-        Matched::Value { value, .. } => *value,
+        Matched::Value { value, .. } => Ok(*value),
         Matched::Held { place, .. } | Matched::Place { place, .. } => {
             let ty = cx.ref_ty(Mutability::Shared, place.ty);
             let op = Op::Ref { target: place.target, path: place.path.clone(), mutability: Mutability::Shared };
-            cx.builder.push_place(op, ty, span)
+            cx.emit(op, ty, span)
         }
     }
 }
@@ -383,7 +385,7 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         Pattern::Binding { id, .. } => {
             let ty = cx.ty(*id);
             let value = bound(cx, matched, ty, span)?;
-            let slot = cx.builder.slot(ty, span);
+            let slot = cx.slot(ty, span);
             assign(cx, Place { target: RefTarget::Var(slot), path: Vec::new(), ty }, value, span);
             cx.bind(*id, Home::Slot(slot), span);
         }
@@ -402,7 +404,7 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         Pattern::Variant { tag, payload, .. } => {
             if let Some(payload) = payload {
                 let matched = through(cx, matched, span)?;
-                let inner = part(cx, &matched, Part::Payload(*tag), span);
+                let inner = part(cx, &matched, Part::Payload(*tag), span)?;
                 bind(cx, payload, &inner)?;
             }
         }
@@ -410,7 +412,7 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
             let matched = through(cx, matched, span)?;
             for (index, element) in elements.iter().enumerate() {
                 if let TuplePatternElem::Pattern(element) = element {
-                    let inner = part(cx, &matched, Part::Tuple(index), span);
+                    let inner = part(cx, &matched, Part::Tuple(index), span)?;
                     bind(cx, element, &inner)?;
                 }
             }
@@ -418,14 +420,14 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         Pattern::Object { fields, .. } => {
             let matched = through(cx, matched, span)?;
             for field in fields {
-                let inner = part(cx, &matched, Part::Field(field.key), span);
+                let inner = part(cx, &matched, Part::Field(field.key), span)?;
                 bind(cx, &field.pattern, &inner)?;
             }
         }
         Pattern::List { head, tail, .. } => {
             let matched = through(cx, matched, span)?;
             for (at, part_pattern) in list_elements(cx, &matched, head, tail) {
-                let inner = element(cx, &matched, at, span);
+                let inner = element(cx, &matched, at, span)?;
                 bind(cx, part_pattern, &inner)?;
             }
         }
@@ -521,32 +523,38 @@ pub(super) fn lower_match<S: Slot>(
     let value = lower_expr(cx, scrutinee)?;
     let matched = Matched::scrutinee(cx, value, scrutinee.span());
     let ty = cx.ty(site);
-    let join = cx.builder.new_block(&[ty]);
+    // The tag a `Switch` reads, before any block of the match is made.
+    let dispatch = match switch_plan(cx, matched.ty(), arms) {
+        Some(plan) => Some((plan, tag_source(cx, &matched, span)?)),
+        None => None,
+    };
+    let join = cx.new_block(&[ty]);
     let mut joined = false;
-    match switch_plan(cx, matched.ty(), arms) {
-        Some(plan) => {
+    match dispatch {
+        Some((plan, tag)) => {
             let keyed: Vec<(SwitchKey, BlockId, usize)> =
-                plan.keyed.iter().map(|(key, at)| (*key, cx.builder.new_block(&[]), *at)).collect();
-            let default = plan.default.map(|at| (cx.builder.new_block(&[]), at));
+                plan.keyed.iter().map(|(key, at)| (*key, cx.new_block(&[]), *at)).collect();
+            let default = plan.default.map(|at| (cx.new_block(&[]), at));
             // No catch-all: a value no key names goes to the block where no
             // arm answers, which matchck judges (patterns §3).
-            let unmatched = default.is_none().then(|| cx.builder.new_block(&[]));
-            let tag = tag_source(cx, &matched, span);
+            let unmatched = default.is_none().then(|| cx.new_block(&[]));
             let terminator = Terminator::Switch {
                 tag,
                 arms: keyed.iter().map(|(key, block, _)| (*key, *block, Vec::new())).collect(),
                 default: default.map(|(block, _)| block).or(unmatched).map(|block| (block, Vec::new())),
                 join,
             };
-            cx.builder.terminate(terminator, span);
-            if let Some(unmatched) = unmatched {
-                cx.builder.switch_to(unmatched);
-                cx.builder.terminate(Terminator::NoArmMatched { span }, span);
+            cx.terminate(terminator, span);
+            if let Some(unmatched) = unmatched
+                && cx.enter_block(unmatched, span).is_ok()
+            {
+                cx.end_block(Terminator::NoArmMatched { span }, span);
             }
             let entered = keyed.iter().map(|(_, block, at)| (*block, *at));
             for (block, at) in entered.chain(default) {
-                cx.builder.switch_to(block);
-                joined |= arm_body(cx, &arms[at], &matched, join);
+                if cx.enter_block(block, arms[at].span).is_ok() {
+                    joined |= arm_body(cx, &arms[at], &matched, join);
+                }
             }
         }
         None => {
@@ -566,8 +574,8 @@ pub(super) fn lower_match<S: Slot>(
                         break;
                     }
                 };
-                let then_to = cx.builder.new_block(&[]);
-                let else_to = cx.builder.new_block(&[]);
+                let then_to = cx.new_block(&[]);
+                let else_to = cx.new_block(&[]);
                 let terminator = Terminator::Diamond {
                     cond: holds,
                     then_to,
@@ -576,21 +584,25 @@ pub(super) fn lower_match<S: Slot>(
                     else_args: Vec::new(),
                     join,
                 };
-                cx.builder.terminate(terminator, arm.span);
-                cx.builder.switch_to(then_to);
-                joined |= arm_body(cx, arm, &matched, join);
-                cx.builder.switch_to(else_to);
+                cx.terminate(terminator, arm.span);
+                if cx.enter_block(then_to, arm.span).is_ok() {
+                    joined |= arm_body(cx, arm, &matched, join);
+                }
+                if cx.enter_block(else_to, arm.span).is_err() {
+                    open = false;
+                    break;
+                }
             }
             if open {
-                cx.builder.terminate(Terminator::NoArmMatched { span }, span);
+                cx.end_block(Terminator::NoArmMatched { span }, span);
             }
         }
     }
     // The join is a block of the match all the same: where no arm
     // reaches it, it ends in `Diverge`.
-    cx.builder.switch_to(join);
+    let params = cx.enter_block(join, span)?;
     match joined {
-        true => Ok(cx.builder.block_params(join)[0]),
+        true => Ok(params[0]),
         false => Err(cx.end_block(Terminator::Diverge, span)),
     }
 }

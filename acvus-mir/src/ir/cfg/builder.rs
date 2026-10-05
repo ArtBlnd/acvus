@@ -221,6 +221,26 @@ impl<'m> Builder<'m> {
         self.body.contexts.push(BodyContext { context, ty, volatile });
     }
 
+    /// Appends `op`, typed `ty`, as what it is, and returns its result: an
+    /// effect where it is a call whose callee's effect is not pure or a
+    /// place operation on a volatile context (`push_effect`), and an
+    /// instruction otherwise (`push`). Cost: `push`'s or `push_effect`'s.
+    pub fn add(&mut self, op: Op, ty: Ty, span: Span) -> ValueId {
+        match self.effectful_call(&op) || self.body.on_volatile_context(&op) {
+            true => self.push_effect(op, ty, span),
+            false => self.push(op, ty, span),
+        }
+    }
+
+    /// Appends `op`, which yields nothing, as `add` appends one that yields
+    /// a value. Cost: `push_unit`'s or `push_effect_unit`'s.
+    pub fn add_unit(&mut self, op: Op, span: Span) {
+        match self.body.on_volatile_context(&op) {
+            true => self.push_effect_unit(op, span),
+            false => self.push_unit(op, span),
+        }
+    }
+
     /// Appends `op`, a `Take` or a `Ref`, typed `ty`, and returns its
     /// result: as an effect where it names a volatile context, whose every
     /// place operation is one (context §3), and as `push` does otherwise.

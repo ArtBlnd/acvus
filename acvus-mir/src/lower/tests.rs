@@ -2414,3 +2414,174 @@ fn an_unused_generalized_binding_makes_a_closure_of_no_signature() {
     assert_eq!(captures, 1, "its capture is taken: {}", shown(body));
     assert!(matches!(lowered.kind_of(body, closure), TyKind::Closures(signatures) if signatures.is_empty()), "{}", shown(body));
 }
+
+// -- values of a type no value has (`ty::inhabited`, types §4) --------------
+
+/// The blocks a `For` of `body` goes into.
+fn for_bodies(body: &Body) -> Vec<crate::ir::cfg::BlockId> {
+    body.blocks()
+        .filter_map(|(_, block)| match block.terminator() {
+            Terminator::For { body, .. } => Some(*body),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether `block` of `body` holds no instruction and ends in `Diverge`.
+fn enters_no_run(body: &Body, block: crate::ir::cfg::BlockId) -> bool {
+    let block = body.block(block);
+    block.insts().next().is_none() && matches!(block.terminator(), Terminator::Diverge)
+}
+
+/// `Ok(mk())` is a `Result<String, !>` (types §5): no value of it is an
+/// `Err`, so the clone's `Err` arm ends where it lends the payload, and no
+/// `Err` is made.
+#[test]
+fn a_clone_makes_no_variant_whose_payload_no_value_has() {
+    let mut fx = Fixture::new();
+    let string = fx.ty(TyKind::String);
+    let mk = fx.function(&[], string, Effect::pure());
+    fx.declare("mk", mk, 0);
+    let shared = fx.reference(Mutability::Shared, string);
+    let clone_ty = fx.function(&[shared], string, Effect::pure());
+    let clone = fx.raw.core.clone;
+    fx.lang_item(clone, &[clone_ty]);
+    let lowered = fx.script("let r = Ok(mk()); let c = r.clone(); 0");
+    let err = lowered.name("Err");
+    let errs = count(&lowered.entry_ops(), |op| matches!(op, Op::MakeVariant { tag, .. } if *tag == err));
+    assert_eq!(errs, 0, "{}", shown(lowered.entry()));
+}
+
+/// `None` is an `Option<!>` here (types §5): no value of it is a `Some`, so
+/// where both sides would be one, the comparison ends where it lends their
+/// payloads, and the one `true` it answers is the two `None`s'.
+#[test]
+fn a_comparison_answers_nothing_for_payloads_no_value_has() {
+    let mut fx = Fixture::new();
+    fx.comparisons();
+    let lowered = fx.script("let a = None; a == None");
+    let trues = count(&lowered.entry_ops(), |op| matches!(op, Op::Const { value: acvus_ast::Literal::Bool(true) }));
+    assert_eq!(trues, 1, "{}", shown(lowered.entry()));
+}
+
+/// `[]` is a `[!; 0]` here: its one value has no element, so no run enters
+/// the loop's body, and the loop's exit goes on to the tail.
+#[test]
+fn a_for_over_elements_no_value_has_enters_no_body() {
+    let lowered = Fixture::new().script("let a = []; for x in a { x; } 0");
+    let body = lowered.entry();
+    assert!(matches!(&for_bodies(body)[..], [entered] if enters_no_run(body, *entered)), "{}", shown(body));
+    assert!(lowered.entry_terminators().iter().any(|terminator| matches!(terminator, Terminator::Return { .. })), "{}", shown(body));
+}
+
+/// The enum `E` of no variant: no value is one, so no run gets past the
+/// call that would give one, and neither the second call nor the
+/// comparison is lowered.
+#[test]
+fn a_call_giving_a_type_no_value_has_ends_its_block() {
+    let mut fx = Fixture::new();
+    let e = fx.ty(TyKind::Enum { name: QualifiedRef::root(fx.name("E")), variants: Box::new([]), label: () });
+    let ty = fx.function(&[], e, Effect::pure());
+    let mk_e = fx.declare("mk_e", ty, 0);
+    let lowered = fx.script("mk_e() == mk_e()");
+    assert_eq!(calls_of(&lowered, mk_e), 1, "{}", shown(lowered.entry()));
+    assert!(matches!(&lowered.entry_terminators()[..], [Terminator::Diverge]), "{}", shown(lowered.entry()));
+}
+
+/// The same value coerced into `k`'s `E { A }` (types §3): no run gets
+/// there, so nothing stands for it, and `k` is not called.
+#[test]
+fn a_value_no_type_has_is_coerced_nowhere() {
+    let mut fx = Fixture::new();
+    let a = fx.name("A");
+    let e = QualifiedRef::root(fx.name("E"));
+    let empty = fx.ty(TyKind::Enum { name: e, variants: Box::new([]), label: () });
+    let wide = fx.ty(TyKind::Enum { name: e, variants: Box::new([(a, None)]), label: () });
+    let int = fx.int();
+    let (mk_ty, k_ty) = (fx.function(&[], empty, Effect::pure()), fx.function(&[wide], int, Effect::pure()));
+    fx.declare("mk_e", mk_ty, 0);
+    let k = fx.declare("k", k_ty, 1);
+    let lowered = fx.script("k(mk_e())");
+    assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::Undef)), 0, "{}", shown(lowered.entry()));
+    assert_eq!(calls_of(&lowered, k), 0, "{}", shown(lowered.entry()));
+}
+
+/// `o` is built field by field (ownership §4), and its type holds a `b` of
+/// type `!`, so no value of it is ever whole; `o.a` is written and read
+/// where a run gets, all the same: no type is `!` by holding a part of type
+/// `!` (types §4), and a part some value has is reached though its whole is
+/// not.
+#[test]
+fn a_part_some_value_has_is_read_though_its_whole_has_none() {
+    let lowered = Fixture::new().script("let o; o.a = 1; if true { o.b = return 3; }; o.a");
+    let a = lowered.name("a");
+    let reads = count(&lowered.entry_ops(), |op| matches!(op, Op::Take { path, .. } if path[..] == [PathSeg::Field(a)]));
+    assert_eq!(reads, 1, "{}", shown(lowered.entry()));
+    let returns = lowered.entry_terminators().iter().filter(|terminator| matches!(terminator, Terminator::Return { .. })).count();
+    assert_eq!(returns, 2, "{}", shown(lowered.entry()));
+}
+
+/// `return 2` as a part of a tuple: no run gets past it, so the tuple is
+/// not made and nothing after it is lowered (types §4, control-flow).
+#[test]
+fn a_return_as_an_operand_ends_its_block() {
+    let mut fx = Fixture::new();
+    let f = fx.opaque_f();
+    let lowered = fx.script("let y = (1, return 2); f(1)");
+    assert_eq!(calls_of(&lowered, f), 0, "{}", shown(lowered.entry()));
+    assert_eq!(count(&lowered.entry_ops(), |op| matches!(op, Op::MakeTuple { .. })), 0, "{}", shown(lowered.entry()));
+    let returns = lowered.entry_terminators().iter().filter(|terminator| matches!(terminator, Terminator::Return { .. })).count();
+    assert_eq!(returns, 1, "{}", shown(lowered.entry()));
+}
+
+/// Both arms of the `if` return, so no run reaches its join: the join ends
+/// in `Diverge`, and `f` is not called.
+#[test]
+fn a_join_no_arm_reaches_ends_in_diverge() {
+    let mut fx = Fixture::new();
+    let f = fx.opaque_f();
+    let lowered = fx.script("let x = if true { return 1 } else { return 2 }; f(x)");
+    let body = lowered.entry();
+    assert_eq!(calls_of(&lowered, f), 0, "{}", shown(body));
+    let joins: Vec<_> = body
+        .blocks()
+        .filter_map(|(_, block)| match block.terminator() {
+            Terminator::Diamond { join, .. } => Some(*join),
+            _ => None,
+        })
+        .collect();
+    assert!(matches!(&joins[..], [join] if matches!(body.block(*join).terminator(), Terminator::Diverge)), "{}", shown(body));
+}
+
+/// A `break` ends the loop's body: what follows it is not lowered, and the
+/// body goes to the loop's exit, not back to its header.
+#[test]
+fn a_loop_body_a_break_ends_goes_to_its_exit_alone() {
+    let mut fx = Fixture::new();
+    let f = fx.opaque_f();
+    let lowered = fx.script("for i in 0..3 { break; f(i); } 0");
+    let body = lowered.entry();
+    assert_eq!(calls_of(&lowered, f), 0, "{}", shown(body));
+    let exits: Vec<_> = body
+        .blocks()
+        .filter_map(|(_, block)| match block.terminator() {
+            Terminator::For { body, exit, .. } => Some((*body, *exit)),
+            _ => None,
+        })
+        .collect();
+    let [(entered, exit)] = exits[..] else { panic!("one `For`: {}", shown(body)) };
+    assert!(matches!(body.block(entered).terminator(), Terminator::Jump { to, .. } if *to == exit), "{}", shown(body));
+}
+
+/// A `return` inside an `anyorder` scope, after an effect: the scope closes
+/// where no run gets, and the order chain stays whole (effects §3).
+#[test]
+fn a_return_inside_anyorder_keeps_the_chain_whole() {
+    let mut fx = Fixture::new();
+    let f = fx.opaque_f();
+    let lowered = fx.script("let a = 1; anyorder { f(a); return 2; } 3");
+    assert_eq!(calls_of(&lowered, f), 1, "{}", shown(lowered.entry()));
+    let returns = lowered.entry_terminators().iter().filter(|terminator| matches!(terminator, Terminator::Return { .. })).count();
+    assert_eq!(returns, 1, "{}", shown(lowered.entry()));
+}
+

@@ -8,9 +8,8 @@
 //! order: a view through its impl as an `AsSlice` (operators §5), a
 //! declared cast or conversion as a call of its `via` (types §3, §7). A
 //! call whose uses take its value with marks raised is followed by an
-//! `Unmark` to the type they take it at (types §8). An
-//! effectful call goes through `push_effect`, bracketed by the contexts its
-//! effect touches (context §3).
+//! `Unmark` to the type they take it at (types §8). A call whose callee's
+//! effect is not pure is appended as an effect (`Lcx::emit`).
 
 use acvus_ast::{Args, AstId, BinOp, Binder, Expr, Literal, RefKind, Slot, Span};
 
@@ -20,8 +19,8 @@ use super::expr::lower_expr;
 use super::place::{lend, operand};
 use crate::decl::PairMember;
 use crate::ir::cfg::Op;
-use crate::ir::{Callee, UnaryOp, ValueId, fn_effect};
-use crate::ty::{Mutability, Reissue, Ty, TyKind};
+use crate::ir::{Callee, UnaryOp, ValueId};
+use crate::ty::{Mutability, Ty, TyKind};
 use crate::typeck::{Adjustment, Coercion, Impl};
 
 /// `value`, written at `site`, coerced as typeck recorded there.
@@ -49,13 +48,13 @@ pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, 
                     panic!("a view's result is a reference (operators §5)")
                 };
                 let op = Op::AsSlice { container: at, mutability: *mutability, r#impl: cx.reached_function(&step.via) };
-                cx.builder.push(op, step.to, span)
+                cx.made(op, step.to, span)
             }
             false => {
                 let callee = cx.callee(&step.via, step.member);
-                let given = issue(cx, callee, step.via_ty, vec![at], span);
+                let given = issue(cx, callee, step.via_ty, vec![at], span)?;
                 match step.unmark {
-                    Some(taken) => cx.builder.push(Op::Unmark { src: given }, taken, span),
+                    Some(taken) => cx.emit(Op::Unmark { src: given }, taken, span)?,
                     None => given,
                 }
             }
@@ -64,21 +63,14 @@ pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, 
     Ok(at)
 }
 
-/// A call of a callee of type `callee_ty`: pushed as an effect where the
-/// callee's effect is not pure.
-pub(super) fn issue(cx: &mut Lcx<'_, '_>, callee: Callee, callee_ty: Ty, args: Vec<ValueId>, span: Span) -> ValueId {
-    let (ret, effect) = match cx.kind(callee_ty) {
-        TyKind::Fn { ret, .. } => {
-            let effect = fn_effect(cx.builder.types(), callee_ty).expect("a function type has an effect").clone();
-            (*ret, effect)
-        }
-        other => panic!("a callee's type is a function type, not {other:?}"),
+/// A call of a callee of type `callee_ty`, an effect where the callee's
+/// effect is not pure (`Lcx::emit`).
+pub(super) fn issue(cx: &mut Lcx<'_, '_>, callee: Callee, callee_ty: Ty, args: Vec<ValueId>, span: Span) -> Lowered<ValueId> {
+    let TyKind::Fn { ret, .. } = cx.kind(callee_ty) else {
+        panic!("a callee's type is a function type, not {:?}", cx.kind(callee_ty))
     };
-    let op = Op::FunctionCall { callee, callee_ty, args };
-    match effect.reissue() {
-        Reissue::Pure => cx.builder.push(op, ret, span),
-        Reissue::Idempotent | Reissue::Opaque => cx.builder.push_effect(op, ret, span),
-    }
+    let ret = *ret;
+    cx.emit(Op::FunctionCall { callee, callee_ty, args }, ret, span)
 }
 
 /// A call of the declaration typeck reached at `site`, at the callee type
@@ -93,11 +85,11 @@ pub(super) fn call_reached(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>
         .decided
         .callee(site)
         .unwrap_or_else(|| panic!("typeck records the callee type at every reached call site, and not at {site:?}"));
-    let given = issue(cx, callee, callee_ty, args, span);
-    Ok(match cx.decided.unmark(site) {
-        Some(taken) => cx.builder.push(Op::Unmark { src: given }, taken, span),
-        None => given,
-    })
+    let given = issue(cx, callee, callee_ty, args, span)?;
+    match cx.decided.unmark(site) {
+        Some(taken) => cx.emit(Op::Unmark { src: given }, taken, span),
+        None => Ok(given),
+    }
 }
 
 /// Each argument's value, coerced at its own site.
@@ -138,7 +130,7 @@ fn unit_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, args: &[(Binder, Expr<S
         .decided
         .callee(site)
         .unwrap_or_else(|| panic!("typeck records the callee type at every unit call, and not at {site:?}"));
-    Ok(issue(cx, Callee::Direct(call.unit), callee_ty, passed, span))
+    issue(cx, Callee::Direct(call.unit), callee_ty, passed, span)
 }
 
 /// `left | func`: `func(left)`.
@@ -160,7 +152,7 @@ fn call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &[&Exp
     let callee = lower_expr(cx, func)?;
     let callee_ty = cx.value_ty(callee);
     let args = arguments(cx, args)?;
-    Ok(issue(cx, Callee::Indirect(callee), callee_ty, args, span))
+    issue(cx, Callee::Indirect(callee), callee_ty, args, span)
 }
 
 /// `Enum::Tag(payload)` or `Enum::Tag()`, a variant the parser leaves as a
@@ -172,7 +164,7 @@ fn variant_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, tag: acvus_utils::As
         _ => panic!("typeck refuses a variant of more than one payload (VariantArity)"),
     };
     let ty = cx.ty(site);
-    Ok(cx.builder.push(Op::MakeVariant { tag, payload }, ty, span))
+    Ok(cx.made(Op::MakeVariant { tag, payload }, ty, span))
 }
 
 /// `receiver.name(args)`, reached at `callee_site`: the receiver is the
@@ -206,7 +198,7 @@ pub(super) fn lower_method<S: Slot>(
             panic!("`unwrap` takes its receiver alone (operators §2)")
         };
         let ty = cx.ty(site);
-        return Ok(cx.builder.push(Op::UnwrapVariant { src: *wrapped }, ty, span));
+        return cx.emit(Op::UnwrapVariant { src: *wrapped }, ty, span);
     }
     call_reached(cx, callee_site, all, span)
 }
@@ -233,7 +225,7 @@ pub(super) fn lower_binary<S: Slot>(
             let lhs = lower_expr(cx, left)?;
             let rhs = lower_expr(cx, right)?;
             let ty = cx.ty(site);
-            Ok(cx.builder.push(Op::BinOp { op: op.into(), left: lhs, right: rhs }, ty, span))
+            Ok(cx.made(Op::BinOp { op: op.into(), left: lhs, right: rhs }, ty, span))
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
             let args = vec![lent_operand(cx, left)?, lent_operand(cx, right)?];
@@ -257,14 +249,14 @@ pub(super) fn lower_not<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, operand: &Ex
     let value = lower_expr(cx, operand)?;
     let ty = cx.ty(site);
     Ok(match cx.kind(ty) {
-        TyKind::Bool => cx.builder.push(Op::UnaryOp { op: UnaryOp::Not, operand: value }, ty, span),
+        TyKind::Bool => cx.made(Op::UnaryOp { op: UnaryOp::Not, operand: value }, ty, span),
         TyKind::Int(width) => {
             let every_bit = match width.signed() {
                 true => -1,
                 false => width.max(),
             };
             let mask = cx.constant(Literal::Int(every_bit), ty, span);
-            cx.builder.push(Op::BinOp { op: crate::ir::BinOp::Xor, left: value, right: mask }, ty, span)
+            cx.made(Op::BinOp { op: crate::ir::BinOp::Xor, left: value, right: mask }, ty, span)
         }
         other => panic!("typeck admits `!` only on `bool` and the integers, not {other:?}"),
     })

@@ -38,13 +38,13 @@ pub(super) fn lower_stmt<S: Slot>(cx: &mut Lcx<'_, '_>, stmt: &Stmt<S>) -> Lower
             let value = lower_expr(cx, expr)?;
             let value = convert(cx, expr.id(), value, expr.span())?;
             let ty = cx.ty(binder.id);
-            let slot = cx.builder.slot(ty, binder.span);
+            let slot = cx.slot(ty, binder.span);
             assign(cx, Place { target: RefTarget::Var(slot), path: Vec::new(), ty }, value, binder.span);
             cx.bind(binder.id, Home::Slot(slot), binder.span);
         }
         Stmt::LetUninit { binder, .. } => {
             let ty = cx.ty(binder.id);
-            let slot = cx.builder.slot(ty, binder.span);
+            let slot = cx.slot(ty, binder.span);
             cx.bind(binder.id, Home::Slot(slot), binder.span);
         }
         Stmt::Assign { id, expr, span, .. } => {
@@ -65,7 +65,7 @@ pub(super) fn lower_stmt<S: Slot>(cx: &mut Lcx<'_, '_>, stmt: &Stmt<S>) -> Lower
         Stmt::Break { span, .. } => return Err(lower_loop_exit(cx, true, *span)),
         Stmt::Continue { span, .. } => return Err(lower_loop_exit(cx, false, *span)),
         Stmt::Anyorder { body, .. } => cx.in_anyorder(|cx| lower_stmts(cx, body))?,
-        Stmt::Text { value, span, .. } => lower_text(cx, value, *span),
+        Stmt::Text { value, span, .. } => lower_text(cx, value, *span)?,
         Stmt::Append { id, expr, span } => lower_append(cx, *id, expr, *span)?,
         Stmt::FnDecl(_) => panic!("a `fn` in a script is refused (FnDeclInScript), and never lowered"),
         Stmt::Error(_) => panic!("a statement the parse left in error is refused, and never lowered"),

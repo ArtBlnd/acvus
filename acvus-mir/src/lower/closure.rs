@@ -10,9 +10,8 @@
 use acvus_ast::{AstId, Binder, Expr, Slot, Span};
 
 use super::call::convert;
-use super::context::{Namer, enter_body};
-use super::control::return_value;
-use super::ctxt::{Home, Lcx, Lowered, ordered};
+use super::context::Namer;
+use super::ctxt::{Declared, Entry, Home, Lcx, Lowered, ordered};
 use super::expr::lower_expr;
 use super::place::{Operand, Place, assign, binding_place, input_place, input_ty, lend, read};
 use crate::ir::cfg::Op;
@@ -38,7 +37,7 @@ pub(super) fn lower_lambda<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, params: &
     let passed = passed(cx, site, span)?;
     let lowered = lower_body(cx, Lambda { params, body, span, decided: cx.decided, fn_ty }, &passed);
     let captures = passed.iter().map(|passed| passed.value).collect();
-    Ok(cx.builder.push(Op::MakeClosure { bodies: vec![lowered], captures }, fn_ty, span))
+    Ok(cx.made(Op::MakeClosure { bodies: vec![lowered], captures }, fn_ty, span))
 }
 
 /// Each name the lambda at `site` captures, as the enclosing body passes
@@ -75,47 +74,38 @@ fn lower_body<S: Slot>(cx: &mut Lcx<'_, '_>, lambda: Lambda<'_, '_, S>, passed: 
         namer.expr(body);
         namer.finish()
     };
-    let decls = cx.decls;
-    let anyorder = cx.anyorder;
-    let bodies = cx.bodies.clone();
-    let nested = cx.builder.build_nested(ordered, ret);
-    let mut inner = Lcx::new(decls, decided, nested, anyorder);
-    inner.bodies = bodies;
-    if anyorder > 0 {
-        inner.builder.open_anyorder();
-    }
-    for passed in passed {
-        let capture = inner.builder.capture(passed.captured.name, passed.ty, passed.span);
-        let by_reference = matches!(passed.captured.capture, Capture::Ref(_));
-        let home = match by_reference && !matches!(inner.kind(passed.binding_ty), TyKind::Ref(..)) {
-            true => Home::Through(capture),
-            false => {
-                let slot = inner.builder.slot(passed.ty, passed.span);
-                assign(&mut inner, Place { target: RefTarget::Var(slot), path: Vec::new(), ty: passed.ty }, capture, passed.span);
-                Home::Slot(slot)
-            }
-        };
-        match passed.captured.binder {
-            CaptureOf::Binding(binder) => inner.bind(binder, home, passed.span),
-            CaptureOf::Input(name) => {
-                inner.inputs.insert(name, home);
+    let entry = Entry {
+        captures: passed.iter().map(|passed| Declared { name: passed.captured.name, ty: passed.ty, span: passed.span }).collect(),
+        params: params.iter().zip(param_tys.iter()).map(|(param, ty)| Declared { name: param.name, ty: *ty, span: param.span }).collect(),
+        named: &named,
+    };
+    let content = |inner: &mut Lcx<'_, '_>, captures: &[ValueId], values: &[ValueId]| {
+        for (passed, capture) in passed.iter().zip(captures) {
+            let by_reference = matches!(passed.captured.capture, Capture::Ref(_));
+            let home = match by_reference && !matches!(inner.kind(passed.binding_ty), TyKind::Ref(..)) {
+                true => Home::Through(*capture),
+                false => {
+                    let slot = inner.slot(passed.ty, passed.span);
+                    assign(inner, Place { target: RefTarget::Var(slot), path: Vec::new(), ty: passed.ty }, *capture, passed.span);
+                    Home::Slot(slot)
+                }
+            };
+            match passed.captured.binder {
+                CaptureOf::Binding(binder) => inner.bind(binder, home, passed.span),
+                CaptureOf::Input(name) => {
+                    inner.inputs.insert(name, home);
+                }
             }
         }
-    }
-    for (param, ty) in params.iter().zip(param_tys.iter()) {
-        let value = inner.builder.param(param.name, *ty, param.span);
-        let slot = inner.builder.slot(*ty, param.span);
-        assign(&mut inner, Place { target: RefTarget::Var(slot), path: Vec::new(), ty: *ty }, value, param.span);
-        inner.bind(param.id, Home::Slot(slot), param.span);
-    }
-    enter_body(&mut inner, &named);
-    if let Ok(value) = lower_expr(&mut inner, body).and_then(|value| convert(&mut inner, body.id(), value, body.span())) {
-        return_value(&mut inner, value, span);
-    }
-    if anyorder > 0 {
-        inner.builder.close_anyorder();
-    }
-    inner.builder.seal().unwrap_or_else(|open| panic!("a lowered lambda's body is sealed whole: {open:?}"))
+        for ((param, value), ty) in params.iter().zip(values).zip(param_tys.iter()) {
+            let slot = inner.slot(*ty, param.span);
+            assign(inner, Place { target: RefTarget::Var(slot), path: Vec::new(), ty: *ty }, *value, param.span);
+            inner.bind(param.id, Home::Slot(slot), param.span);
+        }
+        let value = lower_expr(inner, body)?;
+        convert(inner, body.id(), value, body.span())
+    };
+    cx.nested(decided, ordered, ret).make_body(entry, content, span)
 }
 
 /// What the enclosing body passes for `captured`: the value by move, a
@@ -190,7 +180,7 @@ fn at_signatures(cx: &mut Lcx<'_, '_>, mut signatures: Vec<Ty>) -> Ty {
     signatures.dedup();
     match signatures[..] {
         [one] => one,
-        _ => cx.builder.intern(TyKind::Closures(signatures.into())),
+        _ => cx.intern(TyKind::Closures(signatures.into())),
     }
 }
 
@@ -227,7 +217,7 @@ fn lower_generalized_lambda<S: Slot>(
     }
     let ty = cx.decided.value_type(binder);
     let captures = passed.iter().map(|passed| passed.value).collect();
-    Ok(cx.builder.push(Op::MakeClosure { bodies, captures }, ty, span))
+    Ok(cx.made(Op::MakeClosure { bodies, captures }, ty, span))
 }
 
 /// A use of the generalized binding at `use_site`, whose value is
@@ -279,5 +269,5 @@ pub(super) fn specialize(cx: &mut Lcx<'_, '_>, closure: ValueId, use_site: AstId
     if cx.value_ty(closure) == ty {
         return closure;
     }
-    cx.builder.push(Op::Specialize { closure, signatures }, ty, span)
+    cx.made(Op::Specialize { closure, signatures }, ty, span)
 }

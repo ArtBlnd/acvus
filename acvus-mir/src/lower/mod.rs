@@ -36,9 +36,8 @@ use crate::ir::cfg::{BodyId, Module};
 use crate::ty::{Concrete, Ty, Types};
 use crate::typeck::Typeck;
 
-use context::{Namer, enter_body, enter_inputs};
-use control::return_value;
-use ctxt::{Lcx, ordered};
+use context::{Namer, enter_inputs, input_params};
+use ctxt::{Entry, Lcx, ordered};
 
 /// Lowers an admitted script. A refused program is never lowered
 /// (refusals): the entry composes typeck, and lowers only when typeck
@@ -69,17 +68,16 @@ pub fn lower_script_into<S: Slot>(decls: &Declarations, typeck: &Typeck, module:
     let ret = run_result(typeck);
     let closures = decided::closure_types(typeck, module.types_mut());
     let builder = module.build_body(ordered(&typeck.body_effect), ret);
-    let mut cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
-    enter_body(&mut cx, &named);
-    enter_inputs(&mut cx, &named);
-    let lowered = stmt::lower_body(&mut cx, &script.stmts, script.tail.as_deref(), script.span).and_then(|value| match &script.tail {
-        Some(tail) => call::convert(&mut cx, tail.id(), value, tail.span()),
-        None => Ok(value),
-    });
-    if let Ok(value) = lowered {
-        return_value(&mut cx, value, script.span);
-    }
-    cx.builder.seal().unwrap_or_else(|open| panic!("a lowered script's body is sealed whole: {open:?}"))
+    let cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
+    let entry = Entry { captures: Vec::new(), params: input_params(&named), named: &named };
+    let content = |cx: &mut Lcx<'_, '_>, _: &[_], params: &[_]| {
+        enter_inputs(cx, &named, params);
+        stmt::lower_body(cx, &script.stmts, script.tail.as_deref(), script.span).and_then(|value| match &script.tail {
+            Some(tail) => call::convert(cx, tail.id(), value, tail.span()),
+            None => Ok(value),
+        })
+    };
+    cx.make_body(entry, content, script.span)
 }
 
 /// Lowers an admitted template: one body returning the `String` it builds,
@@ -110,14 +108,15 @@ pub fn lower_template_into<S: Slot>(decls: &Declarations, typeck: &Typeck, modul
     let ret = run_result(typeck);
     let closures = decided::closure_types(typeck, module.types_mut());
     let builder = module.build_body(ordered(&typeck.body_effect), ret);
-    let mut cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
-    enter_body(&mut cx, &named);
-    enter_inputs(&mut cx, &named);
-    template::open_output(&mut cx, template.span);
-    if let Ok(value) = stmt::lower_stmts(&mut cx, &template.body).and_then(|()| template::take_output(&mut cx, template.span)) {
-        return_value(&mut cx, value, template.span);
-    }
-    cx.builder.seal().unwrap_or_else(|open| panic!("a lowered template's body is sealed whole: {open:?}"))
+    let cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
+    let entry = Entry { captures: Vec::new(), params: input_params(&named), named: &named };
+    let content = |cx: &mut Lcx<'_, '_>, _: &[_], params: &[_]| {
+        enter_inputs(cx, &named, params);
+        template::open_output(cx, template.span);
+        stmt::lower_stmts(cx, &template.body)?;
+        template::take_output(cx, template.span)
+    };
+    cx.make_body(entry, content, template.span)
 }
 
 fn assert_admitted(typeck: &Typeck) {

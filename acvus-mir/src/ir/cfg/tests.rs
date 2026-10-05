@@ -1171,3 +1171,64 @@ fn a_result_of_order_type_is_refused() {
     let order = f.order;
     build(&mut f.module, true, f.int).push(Op::Undef, order, at(42));
 }
+
+// -- NeverDiverges: where a value of a type no value has is given ---------
+
+/// Whether the body `id` keeps `NeverDiverges`.
+fn never_diverges(f: &Fixture, id: BodyId) -> bool {
+    <crate::ir::cfg::edit::NeverDiverges as crate::ir::cfg::edit::Invariant>::check(f.body(id), f.module.types()).is_ok()
+}
+
+/// A `for` over a `[!; 0]`: its body block is given an element of type
+/// `!`, which no value has, so no run enters it. It keeps `NeverDiverges`
+/// holding no instruction and ending in `Diverge`, and breaks it holding
+/// one.
+#[test]
+fn a_block_given_a_value_of_a_type_no_value_has_holds_nothing() {
+    for holds_one in [false, true] {
+        let mut f = fixture();
+        let int = f.int;
+        let u64_ty = f.module.types_mut().intern(TyKind::Int(IntTy::U64));
+        let never = f.module.types_mut().intern(TyKind::Never);
+        let empty = f.module.types_mut().intern(TyKind::Array(never, crate::ty::LenTerm::Known(0), ()));
+        let mut builder = build(&mut f.module, false, int);
+        let array = builder.push(Op::ArrayBegin { capacity: 0 }, empty, at(1));
+        let header = builder.new_block(&[]);
+        builder.terminate(jump(header), Span::ZERO);
+        builder.switch_to(header);
+        let body = builder.new_block(&[never, u64_ty]);
+        let exit = builder.new_block(&[]);
+        let source = crate::ir::ForSource::Array(array);
+        builder.terminate(Terminator::For { source, body, body_args: Vec::new(), exit, exit_args: Vec::new() }, Span::ZERO);
+        builder.switch_to(body);
+        if holds_one {
+            builder.push(Op::Const { value: Literal::Int(0) }, int, at(2));
+        }
+        builder.terminate(Terminator::Diverge, Span::ZERO);
+        builder.switch_to(exit);
+        let zero = builder.push(Op::Const { value: Literal::Int(0) }, int, at(3));
+        builder.terminate(ret(zero), Span::ZERO);
+        let id = builder.seal().expect("the body has no open state");
+        assert_eq!(never_diverges(&f, id), !holds_one, "holding an instruction: {holds_one}");
+    }
+}
+
+/// A body whose parameter is of type `!` is called by no run: its entry
+/// keeps `NeverDiverges` holding no instruction and ending in `Diverge`, and
+/// breaks it holding one.
+#[test]
+fn a_body_given_a_parameter_of_a_type_no_value_has_holds_nothing_at_its_entry() {
+    for holds_one in [false, true] {
+        let mut f = fixture();
+        let (int, name) = (f.int, f.name("x"));
+        let never = f.module.types_mut().intern(TyKind::Never);
+        let mut builder = build(&mut f.module, false, int);
+        builder.param(name, never, Span::ZERO);
+        if holds_one {
+            builder.push(Op::Const { value: Literal::Int(0) }, int, at(1));
+        }
+        builder.terminate(Terminator::Diverge, Span::ZERO);
+        let id = builder.seal().expect("the body has no open state");
+        assert_eq!(never_diverges(&f, id), !holds_one, "holding an instruction: {holds_one}");
+    }
+}

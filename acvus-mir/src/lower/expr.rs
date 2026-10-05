@@ -12,20 +12,17 @@ use super::ctxt::{Lcx, Lowered};
 use super::pat::lower_match;
 use super::place::{Operand, lend, lower_borrow, lower_deref, lower_index, operand, read, read_as};
 use super::stmt::lower_body;
-use crate::ir::cfg::{Op, Terminator};
+use crate::ir::cfg::Op;
 use crate::ir::ValueId;
 use crate::ty::{LenTerm, Mutability, TyKind};
 use crate::typeck::Name;
 
-/// `expr`'s value. A value of type `!` does not exist, so no run gets past
-/// the expression that yields one: the block ends there, and the
-/// expression is `Unreached` (types §4, control-flow).
+/// `expr`'s value, or `Unreached` where no run gets past it (types §4,
+/// control-flow). Each value it is made of has a type some value has: the
+/// point that would give one of a type no value has ends the block there
+/// (`ctxt`).
 pub(super) fn lower_expr<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> Lowered<ValueId> {
-    let value = acvus_utils::grow(|| lower_form(cx, expr))?;
-    if matches!(cx.kind(cx.value_ty(value)), TyKind::Never) {
-        return Err(cx.end_block(Terminator::Diverge, expr.span()));
-    }
-    Ok(value)
+    acvus_utils::grow(|| lower_form(cx, expr))
 }
 
 fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> Lowered<ValueId> {
@@ -60,7 +57,7 @@ fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> Lowered<ValueId>
                 })
                 .collect::<Lowered<_>>()?;
             let ty = cx.ty(*id);
-            cx.builder.push(Op::MakeObject { fields }, ty, *span)
+            cx.made(Op::MakeObject { fields }, ty, *span)
         }
         Expr::Tuple { id, elements, span } => lower_tuple(cx, *id, elements, *span)?,
         Expr::Block { stmts, tail, span, .. } => lower_body(cx, stmts, Some(tail), *span)?,
@@ -71,13 +68,13 @@ fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> Lowered<ValueId>
         Expr::Variant { id, tag, payload, span, .. } => {
             let payload = payload.as_deref().map(|payload| lower_expr(cx, payload)).transpose()?;
             let ty = cx.ty(*id);
-            cx.builder.push(Op::MakeVariant { tag: *tag, payload }, ty, *span)
+            cx.made(Op::MakeVariant { tag: *tag, payload }, ty, *span)
         }
         Expr::Cast { id, expr: source, span, .. } => {
             let value = lower_expr(cx, source)?;
             let ty = cx.ty(*id);
             let cast = cx.decided.cast(*id).unwrap_or_else(|| panic!("typeck records every `as` of a source a run reaches, and not {id:?}"));
-            cx.builder.push(Op::Cast { src: value, to: cast.to }, ty, *span)
+            cx.made(Op::Cast { src: value, to: cast.to }, ty, *span)
         }
         Expr::Try { id, inner, span } => lower_try(cx, *id, inner, *span)?,
         Expr::Return { value, span, .. } => lower_return(cx, value, *span)?,
@@ -130,7 +127,7 @@ fn lower_ident<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, expr: &Expr<S>, span:
 pub(super) fn lower_literal(cx: &mut Lcx<'_, '_>, site: AstId, literal: &Literal, span: Span) -> Lowered<ValueId> {
     let ty = cx.ty(site);
     match literal {
-        Literal::String(text) => Ok(cx.builder.push(Op::ConstStr { text: text.clone() }, ty, span)),
+        Literal::String(text) => Ok(cx.made(Op::ConstStr { text: text.clone() }, ty, span)),
         Literal::Bytes(_) => {
             let TyKind::Ref(_, array) = cx.kind(ty) else {
                 panic!("a byte string is a reference to an array of its bytes")
@@ -154,13 +151,13 @@ fn lower_list<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, head: &[Expr<S>], tail
     };
     let element = *element;
     let items: Vec<&Expr<S>> = head.iter().chain(tail).collect();
-    let empty = cx.builder.intern(TyKind::Array(element, LenTerm::Known(0), ()));
-    let mut array = cx.builder.push(Op::ArrayBegin { capacity: items.len() }, empty, span);
+    let empty = cx.intern(TyKind::Array(element, LenTerm::Known(0), ()));
+    let mut array = cx.made(Op::ArrayBegin { capacity: items.len() }, empty, span);
     for (at, item) in items.iter().enumerate() {
         let value = lower_expr(cx, item)?;
         let value = convert(cx, item.id(), value, item.span())?;
-        let longer = cx.builder.intern(TyKind::Array(element, LenTerm::Known(at + 1), ()));
-        array = cx.builder.push(Op::ArrayPush { array, value }, longer, item.span());
+        let longer = cx.intern(TyKind::Array(element, LenTerm::Known(at + 1), ()));
+        array = cx.made(Op::ArrayPush { array, value }, longer, item.span());
     }
     Ok(array)
 }
@@ -178,5 +175,5 @@ fn lower_tuple<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, elements: &[TupleElem
             TupleElem::Wildcard(_) => panic!("`_` standing as a value is refused (PatternInValue), and never lowered"),
         })
         .collect::<Lowered<_>>()?;
-    Ok(cx.builder.push(Op::MakeTuple { elements }, ty, span))
+    Ok(cx.made(Op::MakeTuple { elements }, ty, span))
 }
