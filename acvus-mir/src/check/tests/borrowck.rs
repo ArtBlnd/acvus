@@ -25,7 +25,7 @@ fn binder(source: &str, name: &str) -> Span {
 }
 
 /// The trace of the one `LoanConflict` of `refusals`, and its span.
-fn one_conflict(refusals: &[Refusal]) -> (Span, &ConflictTrace) {
+pub(super) fn one_conflict(refusals: &[Refusal]) -> (Span, &ConflictTrace) {
     let [Refusal { kind: RefusalKind::LoanConflict { trace }, span }] = refusals else {
         panic!("one LoanConflict: {refusals:?}");
     };
@@ -213,7 +213,7 @@ fn a_mut_lend_of_a_context_dead_before_a_call_touching_it_is_admitted() {
 }
 
 /// Each end's labels, and no order on the lifetimes.
-fn lifetimes(ends: &[(FlowEnd, &[u32])]) -> LabelledSignature {
+pub(super) fn lifetimes(ends: &[(FlowEnd, &[u32])]) -> LabelledSignature {
     let ends = ends
         .iter()
         .map(|(end, labels)| EndLabels { end: *end, labels: labels.iter().map(|at| SegmentLabel::Lifetime(Lifetime(*at))).collect() })

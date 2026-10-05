@@ -2,9 +2,11 @@
 //! typeck, lowered, and taken through the required steps up to
 //! `clone_strings`, as the checks see them.
 
+mod argument_loans;
 mod borrowck;
 mod initialization;
 mod matchck;
+mod produced_parts;
 mod refill;
 
 use acvus_ast::{Script, Span};
