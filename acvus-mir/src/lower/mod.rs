@@ -31,7 +31,7 @@ pub mod required;
 use acvus_ast::{Script, Slot, Template};
 
 use crate::decl::Declarations;
-use crate::ir::cfg::{BodyId, Module, Terminator};
+use crate::ir::cfg::{BodyId, Module};
 use crate::ty::{Concrete, Ty, Types};
 use crate::typeck::Typeck;
 
@@ -71,13 +71,13 @@ pub fn lower_script_into<S: Slot>(decls: &Declarations, typeck: &Typeck, module:
     let mut cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
     enter_body(&mut cx, &named);
     enter_inputs(&mut cx, &named);
-    let value = stmt::lower_body(&mut cx, &script.stmts, script.tail.as_deref(), script.span);
-    let value = match &script.tail {
+    let lowered = stmt::lower_body(&mut cx, &script.stmts, script.tail.as_deref(), script.span).and_then(|value| match &script.tail {
         Some(tail) => call::convert(&mut cx, tail.id(), value, tail.span()),
-        None => value,
-    };
-    return_value(&mut cx, value, script.span);
-    cx.builder.terminate(Terminator::Diverge, script.span);
+        None => Ok(value),
+    });
+    if let Ok(value) = lowered {
+        return_value(&mut cx, value, script.span);
+    }
     cx.builder.seal().unwrap_or_else(|open| panic!("a lowered script's body is sealed whole: {open:?}"))
 }
 
@@ -113,10 +113,9 @@ pub fn lower_template_into<S: Slot>(decls: &Declarations, typeck: &Typeck, modul
     enter_body(&mut cx, &named);
     enter_inputs(&mut cx, &named);
     template::open_output(&mut cx, template.span);
-    stmt::lower_stmts(&mut cx, &template.body);
-    let value = template::take_output(&mut cx, template.span);
-    return_value(&mut cx, value, template.span);
-    cx.builder.terminate(Terminator::Diverge, template.span);
+    if let Ok(value) = stmt::lower_stmts(&mut cx, &template.body).and_then(|()| template::take_output(&mut cx, template.span)) {
+        return_value(&mut cx, value, template.span);
+    }
     cx.builder.seal().unwrap_or_else(|open| panic!("a lowered template's body is sealed whole: {open:?}"))
 }
 

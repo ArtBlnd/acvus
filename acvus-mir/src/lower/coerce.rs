@@ -17,8 +17,8 @@ use acvus_utils::Astr;
 
 use super::call::coerce;
 use super::control::{diamond, return_value};
-use super::ctxt::Lcx;
-use crate::ir::cfg::{Op, Terminator};
+use super::ctxt::{Lcx, Lowered};
+use crate::ir::cfg::Op;
 use crate::ir::{Intrinsic, PathSeg, RefTarget, ValueId, fn_effect, known_len};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, LenTerm, Mutability, Reissue, Ty, TyKind};
@@ -35,7 +35,7 @@ pub(super) fn structured(
     parts: &[(PartKey, Option<Coercion>)],
     value: ValueId,
     span: Span,
-) -> ValueId {
+) -> Lowered<ValueId> {
     let (from, target) = match through {
         None => (cx.value_ty(value), to),
         Some(_) => (referent(cx, cx.value_ty(value)), referent(cx, to)),
@@ -44,18 +44,18 @@ pub(super) fn structured(
         None => to,
         Some(mutability) => gathered(cx, mutability, target),
     };
-    let assembled = assemble(cx, Assembly { through, from, target, made, parts, value, span });
-    match through {
+    let assembled = assemble(cx, Assembly { through, from, target, made, parts, value, span })?;
+    Ok(match through {
         None => assembled,
         Some(_) => cx.builder.push(Op::Intrinsic { intrinsic: Intrinsic::Gather, args: vec![assembled] }, to, span),
-    }
+    })
 }
 
 /// `as_ref` or `as_mut` of `value`, a reference of `mutability` to a
 /// transparent structured value (operators §2): the structure of `made`,
 /// each part a reference into the original storage, one level. Nothing is
 /// taken out or copied.
-pub(super) fn lend(cx: &mut Lcx<'_, '_>, mutability: Mutability, value: ValueId, made: Ty, span: Span) -> ValueId {
+pub(super) fn lend(cx: &mut Lcx<'_, '_>, mutability: Mutability, value: ValueId, made: Ty, span: Span) -> Lowered<ValueId> {
     let target = referent(cx, cx.value_ty(value));
     assemble(cx, Assembly { through: Some(mutability), from: target, target, made, parts: &[], value, span })
 }
@@ -74,7 +74,7 @@ struct Assembly<'p> {
     span: Span,
 }
 
-fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> ValueId {
+fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> Lowered<ValueId> {
     let Assembly { through, from, target, made, parts, value, span } = assembly;
     let coerced = Coerced { parts, span };
     let access = Access { value, through, span };
@@ -89,8 +89,8 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> ValueId {
                     let part = access.part(cx, PathSeg::Index(at), item);
                     coerced.part(cx, PartKey::Index(at), part)
                 })
-                .collect();
-            cx.builder.push(Op::MakeTuple { elements }, made, span)
+                .collect::<Lowered<_>>()?;
+            Ok(cx.builder.push(Op::MakeTuple { elements }, made, span))
         }
         (Some(Structure::Object(from_fields, _)), Some(Structure::Object(slot_fields, _))) => {
             let (from_fields, slot_fields): (Vec<(Astr, Ty)>, Vec<(Astr, Ty)>) = (from_fields.to_vec(), slot_fields.to_vec());
@@ -102,10 +102,10 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> ValueId {
                         .find(|(field, _)| *field == name)
                         .unwrap_or_else(|| panic!("typeck narrows an object only where it holds every field its slot names"));
                     let field = access.part(cx, PathSeg::Field(name), field_ty);
-                    (name, coerced.part(cx, PartKey::Field(name), field))
+                    Ok((name, coerced.part(cx, PartKey::Field(name), field)?))
                 })
-                .collect();
-            cx.builder.push(Op::MakeObject { fields }, made, span)
+                .collect::<Lowered<_>>()?;
+            Ok(cx.builder.push(Op::MakeObject { fields }, made, span))
         }
         (Some(Structure::Option(payload, _)), Some(Structure::Option(..))) => {
             let variants = Variant::of_option(cx, payload);
@@ -131,7 +131,7 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> ValueId {
             };
             let effect = coerced.effect(cx, PartKey::Element);
             let map = ArrayMap { arrays: vec![value], params: vec![param], mapped, len, effect, span };
-            array_map(cx, map, &|cx, element| coerced.part(cx, PartKey::Element, element[0]))
+            Ok(array_map(cx, map, &|cx, element| coerced.part(cx, PartKey::Element, element[0])))
         }
         _ => panic!("typeck coerces a structured value only to a slot of its own kind, not {from:?} to {target:?}"),
     }
@@ -238,9 +238,10 @@ pub(super) struct ArrayMap {
 }
 
 /// The array `map` makes, its function a body of its own that `element`
-/// lowers from its parameters; it stands on the order chain where that
-/// function's effect is not pure, as a call of it does.
-pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&mut Lcx<'_, '_>, &[ValueId]) -> ValueId) -> ValueId {
+/// lowers from its parameters, returning `element`'s value where a run gets
+/// past it; it stands on the order chain where that function's effect is
+/// not pure, as a call of it does.
+pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&mut Lcx<'_, '_>, &[ValueId]) -> Lowered<ValueId>) -> ValueId {
     let ArrayMap { arrays, params, mapped, len, effect, span } = map;
     let fn_ty = cx.builder.intern(TyKind::Fn {
         params: params.clone().into(),
@@ -262,12 +263,12 @@ pub(super) fn array_map(cx: &mut Lcx<'_, '_>, map: ArrayMap, element: &dyn Fn(&m
         inner.builder.open_anyorder();
     }
     let at: Vec<ValueId> = params.iter().map(|param| inner.builder.param(name, *param, span)).collect();
-    let value = element(&mut inner, &at);
-    return_value(&mut inner, value, span);
+    if let Ok(value) = element(&mut inner, &at) {
+        return_value(&mut inner, value, span);
+    }
     if anyorder > 0 {
         inner.builder.close_anyorder();
     }
-    inner.builder.terminate(Terminator::Diverge, span);
     let body = inner.builder.seal().unwrap_or_else(|open| panic!("an array map's function is sealed whole: {open:?}"));
     let f = cx.builder.push(Op::MakeClosure { bodies: vec![body], captures: Vec::new() }, fn_ty, span);
     let mut args = arrays;
@@ -288,10 +289,10 @@ struct Coerced<'p> {
 impl Coerced<'_> {
     /// `part`, the value's part at `key`, coerced by its own coercion where
     /// it has one.
-    fn part(&self, cx: &mut Lcx<'_, '_>, key: PartKey, part: ValueId) -> ValueId {
+    fn part(&self, cx: &mut Lcx<'_, '_>, key: PartKey, part: ValueId) -> Lowered<ValueId> {
         match self.parts.iter().find(|(at, _)| *at == key) {
             Some((_, Some(coercion))) => coerce(cx, coercion, part, self.span),
-            Some((_, None)) | None => part,
+            Some((_, None)) | None => Ok(part),
         }
     }
 
@@ -346,14 +347,17 @@ impl Variant {
 }
 
 /// A variant value made the same variant of `made`, its payload coerced.
-fn same_variant(cx: &mut Lcx<'_, '_>, coerced: &Coerced<'_>, access: &Access, variants: &[Variant], made: Ty) -> ValueId {
+fn same_variant(cx: &mut Lcx<'_, '_>, coerced: &Coerced<'_>, access: &Access, variants: &[Variant], made: Ty) -> Lowered<ValueId> {
     let span = coerced.span;
     by_variant(cx, variants, made, access.value, span, &|cx, variant| {
-        let payload = variant.payload.map(|(key, ty)| {
-            let part = access.part(cx, PathSeg::Payload, ty);
-            coerced.part(cx, key, part)
-        });
-        cx.builder.push(Op::MakeVariant { tag: variant.tag, payload }, made, span)
+        let payload = variant
+            .payload
+            .map(|(key, ty)| {
+                let part = access.part(cx, PathSeg::Payload, ty);
+                coerced.part(cx, key, part)
+            })
+            .transpose()?;
+        Ok(cx.builder.push(Op::MakeVariant { tag: variant.tag, payload }, made, span))
     })
 }
 
@@ -366,11 +370,11 @@ pub(super) fn by_variant(
     ty: Ty,
     value: ValueId,
     span: Span,
-    arm: &dyn Fn(&mut Lcx<'_, '_>, &Variant) -> ValueId,
-) -> ValueId {
+    arm: &dyn Fn(&mut Lcx<'_, '_>, &Variant) -> Lowered<ValueId>,
+) -> Lowered<ValueId> {
     // No value of an enum of no variant is ever made, so no run reaches here.
     let Some((variant, rest)) = variants.split_first() else {
-        return cx.unreached_value(ty, span);
+        return Ok(cx.unreached_value(ty, span));
     };
     if rest.is_empty() {
         return arm(cx, variant);

@@ -1,7 +1,12 @@
 //! What lowering one body holds: the Builder, what typeck decided, the home
-//! of each binding, the targets of the loops it is inside, the home of each
-//! context it names, and whether the block being appended to is reached. A
-//! lambda's body is lowered with its own `Lcx` over a nested Builder.
+//! of each binding, the targets of the loops it is inside, and the home of
+//! each context it names. A lambda's body is lowered with its own `Lcx` over
+//! a nested Builder.
+//!
+//! A form, and a value built from a form's by a coercion or by a structure
+//! tree, yields `Lowered`: its value where a run gets past it, the block it
+//! ends in open, and `Unreached` where none does, the block it ends in
+//! terminated and no block open (types §4, control-flow).
 
 use rustc_hash::FxHashMap;
 
@@ -13,6 +18,15 @@ use crate::ir::cfg::{BlockId, Builder, Op, Terminator};
 use crate::ir::{Callee, Chosen as IrChosen, ValueId};
 use crate::ty::{Effect, IntTy, Mutability, Reissue, Ty, TyKind};
 use crate::typeck::{Chosen, Impl, Typeck};
+
+/// No run gets past the form that yields this: the block lowering appended
+/// to is terminated, and no block is open.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Unreached;
+
+/// A form's value where a run gets past it, the block it ends in open;
+/// `Unreached` where none does.
+pub(super) type Lowered<T> = Result<T, Unreached>;
 
 /// Where `break` and `continue` go: the innermost loop's exit and header
 /// (control-flow).
@@ -50,10 +64,6 @@ pub(super) struct Lcx<'a, 'm> {
     /// Where each input the body names lives (programs §4): a slot of the
     /// entry body, or a lambda's capture of it.
     pub inputs: FxHashMap<Astr, Home>,
-    /// Whether a run reaches the current block: after a `return`, a
-    /// `break`, a `continue` or a `?`'s exit, what follows is appended to
-    /// a block no edge enters, and its own edges out become `Diverge`.
-    pub reachable: bool,
     /// How many `anyorder` scopes are open around the current position; a
     /// lambda written inside one belongs to it (effects §3).
     pub anyorder: usize,
@@ -73,7 +83,6 @@ impl<'a, 'm> Lcx<'a, 'm> {
             binder_spans: FxHashMap::default(),
             loops: Vec::new(),
             inputs: FxHashMap::default(),
-            reachable: true,
             anyorder,
             out: None,
         }
@@ -125,29 +134,42 @@ impl<'a, 'm> Lcx<'a, 'm> {
         self.constant(Literal::Unit, ty, span)
     }
 
-    /// A value of `ty` standing where no run reaches: a form after a
-    /// diverging one still yields a value of its recorded type.
+    /// A value of `ty`, a type no value has, standing where no run reaches:
+    /// the coercion of a value of an enum of no variant.
     pub fn unreached_value(&mut self, ty: Ty, span: Span) -> ValueId {
         self.builder.push(Op::Undef, ty, span)
     }
 
-    /// Ends the current block with a terminator no run passes, such as a
-    /// `Return`, and goes on in a block no edge enters.
-    pub fn end_block(&mut self, terminator: Terminator, span: Span) {
+    /// Ends the current block with a terminator no run passes on from, such
+    /// as a `Return` or an edge out of a loop, and opens none.
+    pub fn end_block(&mut self, terminator: Terminator, span: Span) -> Unreached {
         self.builder.terminate(terminator, span);
-        let dead = self.builder.new_block(&[]);
-        self.builder.switch_to(dead);
-        self.reachable = false;
+        Unreached
     }
 
-    /// Ends the current block with an edge to `to`, or with `Diverge` where
-    /// no run reaches the block.
+    /// Ends the current block with an edge to `to`.
     pub fn jump(&mut self, to: BlockId, args: Vec<ValueId>, span: Span) {
-        let terminator = match self.reachable {
-            true => Terminator::Jump { to, args },
-            false => Terminator::Diverge,
-        };
-        self.builder.terminate(terminator, span);
+        self.builder.terminate(Terminator::Jump { to, args }, span);
+    }
+
+    /// `body` lowered inside the loop `targets` names, which its `break`
+    /// and `continue` reach; the loop is left whatever `body` yields.
+    pub fn in_loop<T>(&mut self, targets: LoopTargets, body: impl FnOnce(&mut Self) -> T) -> T {
+        self.loops.push(targets);
+        let lowered = body(self);
+        self.loops.pop();
+        lowered
+    }
+
+    /// `body` lowered inside an `anyorder` scope (effects §3), which is
+    /// closed whatever `body` yields.
+    pub fn in_anyorder<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+        self.builder.open_anyorder();
+        self.anyorder += 1;
+        let lowered = body(self);
+        self.anyorder -= 1;
+        self.builder.close_anyorder();
+        lowered
     }
 
     /// The binding `binder` is, in this body.

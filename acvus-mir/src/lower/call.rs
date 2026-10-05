@@ -15,7 +15,7 @@
 use acvus_ast::{Args, AstId, BinOp, Binder, Expr, Literal, RefKind, Slot, Span};
 
 use super::control::lower_short_circuit;
-use super::ctxt::Lcx;
+use super::ctxt::{Lcx, Lowered};
 use super::expr::lower_expr;
 use super::place::{lend, operand};
 use crate::decl::PairMember;
@@ -25,16 +25,16 @@ use crate::ty::{Mutability, Reissue, Ty, TyKind};
 use crate::typeck::{Adjustment, Coercion, Impl};
 
 /// `value`, written at `site`, coerced as typeck recorded there.
-pub(super) fn convert(cx: &mut Lcx<'_, '_>, site: AstId, value: ValueId, span: Span) -> ValueId {
+pub(super) fn convert(cx: &mut Lcx<'_, '_>, site: AstId, value: ValueId, span: Span) -> Lowered<ValueId> {
     match cx.decided.coercion(site) {
-        None => value,
+        None => Ok(value),
         Some(coercion) => coerce(cx, coercion, value, span),
     }
 }
 
 /// `value` coerced by `coercion`: a concrete value by each step in order;
 /// a structured one by `coerce::structured` (types §3).
-pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, span: Span) -> ValueId {
+pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, span: Span) -> Lowered<ValueId> {
     let steps = match coercion {
         Coercion::Steps(steps) => steps,
         Coercion::Structured { through, to, parts, .. } => return super::coerce::structured(cx, *through, *to, parts, value, span),
@@ -61,7 +61,7 @@ pub(super) fn coerce(cx: &mut Lcx<'_, '_>, coercion: &Coercion, value: ValueId, 
             }
         };
     }
-    at
+    Ok(at)
 }
 
 /// A call of a callee of type `callee_ty`: pushed as an effect where the
@@ -83,7 +83,7 @@ pub(super) fn issue(cx: &mut Lcx<'_, '_>, callee: Callee, callee_ty: Ty, args: V
 
 /// A call of the declaration typeck reached at `site`, at the callee type
 /// it recorded there.
-pub(super) fn call_reached(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span: Span) -> ValueId {
+pub(super) fn call_reached(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>, span: Span) -> Lowered<ValueId> {
     if cx.reached(site).r#impl == Some(Impl::Structural) {
         return super::part_tree::lifted(cx, site, args, span);
     }
@@ -94,17 +94,17 @@ pub(super) fn call_reached(cx: &mut Lcx<'_, '_>, site: AstId, args: Vec<ValueId>
         .callee(site)
         .unwrap_or_else(|| panic!("typeck records the callee type at every reached call site, and not at {site:?}"));
     let given = issue(cx, callee, callee_ty, args, span);
-    match cx.decided.unmark(site) {
+    Ok(match cx.decided.unmark(site) {
         Some(taken) => cx.builder.push(Op::Unmark { src: given }, taken, span),
         None => given,
-    }
+    })
 }
 
 /// Each argument's value, coerced at its own site.
-fn arguments<S: Slot>(cx: &mut Lcx<'_, '_>, args: &[&Expr<S>]) -> Vec<ValueId> {
+fn arguments<S: Slot>(cx: &mut Lcx<'_, '_>, args: &[&Expr<S>]) -> Lowered<Vec<ValueId>> {
     args.iter()
         .map(|arg| {
-            let value = lower_expr(cx, arg);
+            let value = lower_expr(cx, arg)?;
             convert(cx, arg.id(), value, arg.span())
         })
         .collect()
@@ -113,7 +113,7 @@ fn arguments<S: Slot>(cx: &mut Lcx<'_, '_>, args: &[&Expr<S>]) -> Vec<ValueId> {
 /// `f(args)`: by position, of a declaration typeck reached at the call, of
 /// a variant `Enum::Tag(payload)`, which the parser writes as a call, or of
 /// a value; by name, of a unit.
-pub(super) fn lower_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &Args<S>, span: Span) -> ValueId {
+pub(super) fn lower_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &Args<S>, span: Span) -> Lowered<ValueId> {
     match args {
         Args::Positional(args) => {
             let args: Vec<&Expr<S>> = args.iter().collect();
@@ -126,29 +126,29 @@ pub(super) fn lower_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr
 /// A call of a unit: of its instantiation at the call's types, the callee
 /// type typeck recorded (graph). The arguments are evaluated as written
 /// and passed in the order of the unit's parameters.
-fn unit_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, args: &[(Binder, Expr<S>)], span: Span) -> ValueId {
+fn unit_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, args: &[(Binder, Expr<S>)], span: Span) -> Lowered<ValueId> {
     let call = cx
         .decided
         .unit_call(site)
         .unwrap_or_else(|| panic!("typeck admits a call by name only of a unit, and records it, not at {site:?}"));
     let written: Vec<&Expr<S>> = args.iter().map(|(_, arg)| arg).collect();
-    let values = arguments(cx, &written);
+    let values = arguments(cx, &written)?;
     let passed = call.arguments.iter().map(|at| values[*at]).collect();
     let callee_ty = cx
         .decided
         .callee(site)
         .unwrap_or_else(|| panic!("typeck records the callee type at every unit call, and not at {site:?}"));
-    issue(cx, Callee::Direct(call.unit), callee_ty, passed, span)
+    Ok(issue(cx, Callee::Direct(call.unit), callee_ty, passed, span))
 }
 
 /// `left | func`: `func(left)`.
-pub(super) fn lower_pipe<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, left: &Expr<S>, func: &Expr<S>, span: Span) -> ValueId {
+pub(super) fn lower_pipe<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, left: &Expr<S>, func: &Expr<S>, span: Span) -> Lowered<ValueId> {
     call(cx, site, func, &[left], span)
 }
 
-fn call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &[&Expr<S>], span: Span) -> ValueId {
+fn call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &[&Expr<S>], span: Span) -> Lowered<ValueId> {
     if cx.decided.reached(site).is_some() {
-        let args = arguments(cx, args);
+        let args = arguments(cx, args)?;
         return call_reached(cx, site, args, span);
     }
     if let Expr::Ident { name, ref_kind: RefKind::Value, .. } = func
@@ -157,22 +157,22 @@ fn call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, func: &Expr<S>, args: &[&Exp
     {
         return variant_call(cx, site, name.name, args, span);
     }
-    let callee = lower_expr(cx, func);
+    let callee = lower_expr(cx, func)?;
     let callee_ty = cx.value_ty(callee);
-    let args = arguments(cx, args);
-    issue(cx, Callee::Indirect(callee), callee_ty, args, span)
+    let args = arguments(cx, args)?;
+    Ok(issue(cx, Callee::Indirect(callee), callee_ty, args, span))
 }
 
 /// `Enum::Tag(payload)` or `Enum::Tag()`, a variant the parser leaves as a
 /// call.
-fn variant_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, tag: acvus_utils::Astr, args: &[&Expr<S>], span: Span) -> ValueId {
+fn variant_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, tag: acvus_utils::Astr, args: &[&Expr<S>], span: Span) -> Lowered<ValueId> {
     let payload = match args {
         [] => None,
-        [payload] => Some(lower_expr(cx, payload)),
+        [payload] => Some(lower_expr(cx, payload)?),
         _ => panic!("typeck refuses a variant of more than one payload (VariantArity)"),
     };
     let ty = cx.ty(site);
-    cx.builder.push(Op::MakeVariant { tag, payload }, ty, span)
+    Ok(cx.builder.push(Op::MakeVariant { tag, payload }, ty, span))
 }
 
 /// `receiver.name(args)`, reached at `callee_site`: the receiver is the
@@ -185,37 +185,37 @@ pub(super) fn lower_method<S: Slot>(
     receiver: &Expr<S>,
     args: &[Expr<S>],
     span: Span,
-) -> ValueId {
+) -> Lowered<ValueId> {
     let adjustment = cx
         .decided
         .adjustment(callee_site)
         .unwrap_or_else(|| panic!("typeck records the receiver adjustment of every reached method call, and not {callee_site:?}"));
     let taken = match adjustment {
-        Adjustment::AsWritten => lower_expr(cx, receiver),
+        Adjustment::AsWritten => lower_expr(cx, receiver)?,
         Adjustment::Ref(mutability) => {
-            let place = operand(cx, receiver, mutability);
-            lend(cx, place, mutability, receiver.span())
+            let place = operand(cx, receiver, mutability)?;
+            lend(cx, place, mutability, receiver.span())?
         }
     };
-    let taken = convert(cx, receiver.id(), taken, receiver.span());
+    let taken = convert(cx, receiver.id(), taken, receiver.span())?;
     let rest: Vec<&Expr<S>> = args.iter().collect();
     let mut all = vec![taken];
-    all.extend(arguments(cx, &rest));
+    all.extend(arguments(cx, &rest)?);
     if cx.reached(callee_site).declaration == cx.decls.core().unwrap {
         let [wrapped] = &all[..] else {
             panic!("`unwrap` takes its receiver alone (operators §2)")
         };
         let ty = cx.ty(site);
-        return cx.builder.push(Op::UnwrapVariant { src: *wrapped }, ty, span);
+        return Ok(cx.builder.push(Op::UnwrapVariant { src: *wrapped }, ty, span));
     }
     call_reached(cx, callee_site, all, span)
 }
 
 /// A shared reference to an operand, coerced at the operand's site: what a
 /// lang item takes (operators §2).
-pub(super) fn lent_operand<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> ValueId {
-    let place = operand(cx, expr, Mutability::Shared);
-    let lent = lend(cx, place, Mutability::Shared, expr.span());
+pub(super) fn lent_operand<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> Lowered<ValueId> {
+    let place = operand(cx, expr, Mutability::Shared)?;
+    let lent = lend(cx, place, Mutability::Shared, expr.span())?;
     convert(cx, expr.id(), lent, expr.span())
 }
 
@@ -226,17 +226,17 @@ pub(super) fn lower_binary<S: Slot>(
     left: &Expr<S>,
     right: &Expr<S>,
     span: Span,
-) -> ValueId {
+) -> Lowered<ValueId> {
     match op {
         BinOp::And | BinOp::Or => lower_short_circuit(cx, site, op, left, right, span),
         BinOp::Xor | BinOp::BitAnd | BinOp::Shl | BinOp::Shr => {
-            let lhs = lower_expr(cx, left);
-            let rhs = lower_expr(cx, right);
+            let lhs = lower_expr(cx, left)?;
+            let rhs = lower_expr(cx, right)?;
             let ty = cx.ty(site);
-            cx.builder.push(Op::BinOp { op: op.into(), left: lhs, right: rhs }, ty, span)
+            Ok(cx.builder.push(Op::BinOp { op: op.into(), left: lhs, right: rhs }, ty, span))
         }
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-            let args = vec![lent_operand(cx, left), lent_operand(cx, right)];
+            let args = vec![lent_operand(cx, left)?, lent_operand(cx, right)?];
             call_reached(cx, site, args, span)
         }
         BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
@@ -246,17 +246,17 @@ pub(super) fn lower_binary<S: Slot>(
 }
 
 /// `-x`: `core::neg` on `&x` (operators §2).
-pub(super) fn lower_neg<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, operand: &Expr<S>, span: Span) -> ValueId {
-    let args = vec![lent_operand(cx, operand)];
+pub(super) fn lower_neg<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, operand: &Expr<S>, span: Span) -> Lowered<ValueId> {
+    let args = vec![lent_operand(cx, operand)?];
     call_reached(cx, site, args, span)
 }
 
 /// `!x`: on a `bool` its negation; on an integer, as Rust defines it, the
 /// value with every bit flipped, `x ^ !0`.
-pub(super) fn lower_not<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, operand: &Expr<S>, span: Span) -> ValueId {
-    let value = lower_expr(cx, operand);
+pub(super) fn lower_not<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, operand: &Expr<S>, span: Span) -> Lowered<ValueId> {
+    let value = lower_expr(cx, operand)?;
     let ty = cx.ty(site);
-    match cx.kind(ty) {
+    Ok(match cx.kind(ty) {
         TyKind::Bool => cx.builder.push(Op::UnaryOp { op: UnaryOp::Not, operand: value }, ty, span),
         TyKind::Int(width) => {
             let every_bit = match width.signed() {
@@ -267,5 +267,5 @@ pub(super) fn lower_not<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, operand: &Ex
             cx.builder.push(Op::BinOp { op: crate::ir::BinOp::Xor, left: value, right: mask }, ty, span)
         }
         other => panic!("typeck admits `!` only on `bool` and the integers, not {other:?}"),
-    }
+    })
 }

@@ -14,7 +14,7 @@
 use acvus_ast::{ElseBranch, Expr, ForHead, ObjectPatternField, Pattern, Place, PlaceBase, RefKind, Root, Slot, Span, Stmt, TuplePatternElem};
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::ctxt::{Home, Lcx};
+use super::ctxt::{Home, Lcx, Lowered};
 use super::place::{Operand, Place as LPlace, assign, read};
 use crate::ir::{RefTarget, ValueId};
 use crate::ty::Ty;
@@ -298,7 +298,7 @@ pub(super) fn context_place(context: QualifiedRef, ty: Ty) -> LPlace {
 }
 
 /// `@x` read: a take of the context, which copies it where its type does.
-pub(super) fn lower_context_read(cx: &mut Lcx<'_, '_>, context: QualifiedRef, ty: Ty, span: Span) -> ValueId {
+pub(super) fn lower_context_read(cx: &mut Lcx<'_, '_>, context: QualifiedRef, ty: Ty, span: Span) -> Lowered<ValueId> {
     read(cx, Operand::Place(context_place(context, ty)), span)
 }
 

@@ -12,10 +12,10 @@ use acvus_ast::{AstId, Binder, Expr, Slot, Span};
 use super::call::convert;
 use super::context::{Namer, enter_body};
 use super::control::return_value;
-use super::ctxt::{Home, Lcx, ordered};
+use super::ctxt::{Home, Lcx, Lowered, ordered};
 use super::expr::lower_expr;
 use super::place::{Operand, Place, assign, binding_place, input_place, input_ty, lend, read};
-use crate::ir::cfg::{Op, Terminator};
+use crate::ir::cfg::Op;
 use crate::ir::{RefTarget, ValueId, known_effect};
 use crate::ty::{Ty, TyKind};
 use crate::typeck::{Capture, CaptureOf, Captured, InstanceDecided, InstanceId};
@@ -30,20 +30,20 @@ struct Passed {
     span: Span,
 }
 
-pub(super) fn lower_lambda<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, params: &[Binder], body: &Expr<S>, span: Span) -> ValueId {
+pub(super) fn lower_lambda<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, params: &[Binder], body: &Expr<S>, span: Span) -> Lowered<ValueId> {
     if let Some(binder) = generalized_binder(cx, site) {
         return lower_generalized_lambda(cx, site, binder, params, body, span);
     }
     let fn_ty = cx.ty(site);
-    let passed = passed(cx, site, span);
+    let passed = passed(cx, site, span)?;
     let lowered = lower_body(cx, Lambda { params, body, span, decided: cx.decided, fn_ty }, &passed);
     let captures = passed.iter().map(|passed| passed.value).collect();
-    cx.builder.push(Op::MakeClosure { bodies: vec![lowered], captures }, fn_ty, span)
+    Ok(cx.builder.push(Op::MakeClosure { bodies: vec![lowered], captures }, fn_ty, span))
 }
 
 /// Each name the lambda at `site` captures, as the enclosing body passes
 /// it: once, where the lambda is written (functions §2).
-fn passed(cx: &mut Lcx<'_, '_>, site: AstId, span: Span) -> Vec<Passed> {
+fn passed(cx: &mut Lcx<'_, '_>, site: AstId, span: Span) -> Lowered<Vec<Passed>> {
     let closure = cx
         .typeck
         .closures
@@ -109,19 +109,18 @@ fn lower_body<S: Slot>(cx: &mut Lcx<'_, '_>, lambda: Lambda<'_, '_, S>, passed: 
         inner.bind(param.id, Home::Slot(slot), param.span);
     }
     enter_body(&mut inner, &named);
-    let value = lower_expr(&mut inner, body);
-    let value = convert(&mut inner, body.id(), value, body.span());
-    return_value(&mut inner, value, span);
+    if let Ok(value) = lower_expr(&mut inner, body).and_then(|value| convert(&mut inner, body.id(), value, body.span())) {
+        return_value(&mut inner, value, span);
+    }
     if anyorder > 0 {
         inner.builder.close_anyorder();
     }
-    inner.builder.terminate(Terminator::Diverge, span);
     inner.builder.seal().unwrap_or_else(|open| panic!("a lowered lambda's body is sealed whole: {open:?}"))
 }
 
 /// What the enclosing body passes for `captured`: the value by move, a
 /// reference to the binding by reference.
-fn pass(cx: &mut Lcx<'_, '_>, captured: Captured, span: Span) -> Passed {
+fn pass(cx: &mut Lcx<'_, '_>, captured: Captured, span: Span) -> Lowered<Passed> {
     let (place, binder_span) = match captured.binder {
         CaptureOf::Binding(binder) => {
             let place = binding_place(cx, binder, cx.ty(binder));
@@ -135,10 +134,10 @@ fn pass(cx: &mut Lcx<'_, '_>, captured: Captured, span: Span) -> Passed {
     };
     let binding_ty = place.ty;
     let value = match captured.capture {
-        Capture::Move => read(cx, Operand::Place(place), span),
-        Capture::Ref(mutability) => lend(cx, Operand::Place(place), mutability, span),
+        Capture::Move => read(cx, Operand::Place(place), span)?,
+        Capture::Ref(mutability) => lend(cx, Operand::Place(place), mutability, span)?,
     };
-    Passed { captured, value, ty: cx.value_ty(value), binding_ty, span: binder_span }
+    Ok(Passed { captured, value, ty: cx.value_ty(value), binding_ty, span: binder_span })
 }
 
 /// The binder of the generalized binding the lambda at `site` is written as
@@ -209,9 +208,9 @@ fn lower_generalized_lambda<S: Slot>(
     params: &[Binder],
     body: &Expr<S>,
     span: Span,
-) -> ValueId {
+) -> Lowered<ValueId> {
     let signatures = signatures(cx, binder);
-    let passed = passed(cx, site, span);
+    let passed = passed(cx, site, span)?;
     let mut bodies = Vec::with_capacity(signatures.len());
     for signature in &signatures {
         let cached = cx.bodies.borrow().get(&(site, signature.ty)).copied();
@@ -228,7 +227,7 @@ fn lower_generalized_lambda<S: Slot>(
     }
     let ty = cx.decided.value_type(binder);
     let captures = passed.iter().map(|passed| passed.value).collect();
-    cx.builder.push(Op::MakeClosure { bodies, captures }, ty, span)
+    Ok(cx.builder.push(Op::MakeClosure { bodies, captures }, ty, span))
 }
 
 /// A use of the generalized binding at `use_site`, whose value is

@@ -18,7 +18,7 @@ use acvus_utils::Astr;
 use super::call::convert;
 use super::context;
 use super::control::diamond;
-use super::ctxt::{Home, Lcx};
+use super::ctxt::{Home, Lcx, Lowered, Unreached};
 use super::expr::lower_expr;
 use super::place::{Operand, Place, assign, lend, read};
 use super::stmt::lower_body;
@@ -82,35 +82,35 @@ impl Matched {
 /// `matched` past a reference, where it is one: a pattern that is not a
 /// name destructures what the reference names (patterns §1). A shared
 /// reference on the way keeps every name below it shared.
-fn through(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> Matched {
+fn through(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> Lowered<Matched> {
     let TyKind::Ref(held, target) = cx.kind(matched.ty()) else {
-        return matched.clone();
+        return Ok(matched.clone());
     };
     let (held, target) = (*held, *target);
     let (reference, lent) = match matched {
         Matched::Value { value, .. } => (*value, held),
-        Matched::Held { place, slot_ty } => (held_reference(cx, place, *slot_ty, held, span), held),
+        Matched::Held { place, slot_ty } => (held_reference(cx, place, *slot_ty, held, span)?, held),
         Matched::Place { place, lent } => {
-            let reference = read(cx, Operand::Place(place.clone()), span);
+            let reference = read(cx, Operand::Place(place.clone()), span)?;
             let lent = lent.least(held);
             (super::place::reborrow(cx, reference, held, target, lent, span), lent)
         }
     };
-    Matched::Place { place: Place { target: RefTarget::Through(reference), path: Vec::new(), ty: target }, lent }
+    Ok(Matched::Place { place: Place { target: RefTarget::Through(reference), path: Vec::new(), ty: target }, lent })
 }
 
 /// The reference a held part is, read without moving it out of the slot. A
 /// `&` copies, so it is read as it is. A `&mut` does not copy, and each use
 /// reborrows it (ownership §5): it is read through a `&mut` to the slot, so
 /// the slot keeps it and the drop plan sees no part of the slot move.
-fn held_reference(cx: &mut Lcx<'_, '_>, place: &Place, slot_ty: Ty, held: Mutability, span: Span) -> ValueId {
+fn held_reference(cx: &mut Lcx<'_, '_>, place: &Place, slot_ty: Ty, held: Mutability, span: Span) -> Lowered<ValueId> {
     match held {
         Mutability::Shared => read(cx, Operand::Place(place.clone()), span),
         Mutability::Mut => {
             let slot = Place { target: place.target, path: Vec::new(), ty: slot_ty };
-            let lent = lend(cx, Operand::Place(slot), Mutability::Mut, span);
+            let lent = lend(cx, Operand::Place(slot), Mutability::Mut, span)?;
             let op = Op::Take { target: RefTarget::Through(lent), path: place.path.clone(), taken_out: false };
-            cx.builder.push(op, place.ty, span)
+            Ok(cx.builder.push(op, place.ty, span))
         }
     }
 }
@@ -220,8 +220,8 @@ fn and(
     cx: &mut Lcx<'_, '_>,
     held: Option<ValueId>,
     span: Span,
-    next: impl FnOnce(&mut Lcx<'_, '_>) -> Option<ValueId>,
-) -> Option<ValueId> {
+    next: impl FnOnce(&mut Lcx<'_, '_>) -> Lowered<Option<ValueId>>,
+) -> Lowered<Option<ValueId>> {
     let Some(held) = held else {
         return next(cx);
     };
@@ -231,32 +231,32 @@ fn and(
         held,
         bool_ty,
         span,
-        |cx| match next(cx) {
-            Some(holds) => holds,
-            None => cx.bool_const(true, span),
+        |cx| match next(cx)? {
+            Some(holds) => Ok(holds),
+            None => Ok(cx.bool_const(true, span)),
         },
-        |cx| cx.bool_const(false, span),
-    );
-    Some(joined)
+        |cx| Ok(cx.bool_const(false, span)),
+    )?;
+    Ok(Some(joined))
 }
 
 /// Whether `pattern` matches: `None` where it cannot fail.
-pub(super) fn test<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Matched) -> Option<ValueId> {
+pub(super) fn test<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Matched) -> Lowered<Option<ValueId>> {
     acvus_utils::grow(|| test_level(cx, pattern, matched))
 }
 
-fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Matched) -> Option<ValueId> {
+fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Matched) -> Lowered<Option<ValueId>> {
     let span = pattern.span();
-    match pattern {
+    Ok(match pattern {
         Pattern::Binding { .. } | Pattern::Wildcard { .. } | Pattern::ContextBind { .. } => None,
         Pattern::Literal { value, .. } => {
-            let matched = through(cx, matched, span);
+            let matched = through(cx, matched, span)?;
             let src = tag_source(cx, &matched, span);
             let bool_ty = cx.bool_ty();
             Some(cx.builder.push(Op::TestLiteral { src, value: value.clone() }, bool_ty, span))
         }
         Pattern::Variant { tag, payload, .. } => {
-            let matched = through(cx, matched, span);
+            let matched = through(cx, matched, span)?;
             let src = tag_source(cx, &matched, span);
             let bool_ty = cx.bool_ty();
             let tagged = cx.builder.push(Op::TestVariant { src, tag: *tag }, bool_ty, span);
@@ -264,12 +264,12 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
                 Some(payload) if refutable(payload) => and(cx, Some(tagged), span, |cx| {
                     let inner = part(cx, &matched, Part::Payload(*tag), span);
                     test(cx, payload, &inner)
-                }),
+                })?,
                 _ => Some(tagged),
             }
         }
         Pattern::Tuple { elements, .. } => {
-            let matched = through(cx, matched, span);
+            let matched = through(cx, matched, span)?;
             let mut held = None;
             for (index, element) in elements.iter().enumerate() {
                 let TuplePatternElem::Pattern(element) = element else {
@@ -281,23 +281,23 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
                 held = and(cx, held, span, |cx| {
                     let inner = part(cx, &matched, Part::Tuple(index), span);
                     test(cx, element, &inner)
-                });
+                })?;
             }
             held
         }
         Pattern::Object { fields, .. } => {
-            let matched = through(cx, matched, span);
+            let matched = through(cx, matched, span)?;
             let mut held = None;
             for field in fields.iter().filter(|field| refutable(&field.pattern)) {
                 held = and(cx, held, span, |cx| {
                     let inner = part(cx, &matched, Part::Field(field.key), span);
                     test(cx, &field.pattern, &inner)
-                });
+                })?;
             }
             held
         }
         Pattern::List { head, rest, tail, .. } => {
-            let matched = through(cx, matched, span);
+            let matched = through(cx, matched, span)?;
             let mut held = slice_length_test(cx, &matched, head.len() + tail.len(), rest.is_some(), span);
             for (at, part_pattern) in list_elements(cx, &matched, head, tail) {
                 if !refutable(part_pattern) {
@@ -306,12 +306,12 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
                 held = and(cx, held, span, |cx| {
                     let inner = element(cx, &matched, at, span);
                     test(cx, part_pattern, &inner)
-                });
+                })?;
             }
             held
         }
         Pattern::Error(_) => panic!("a pattern the parse left in error is refused, and never lowered"),
-    }
+    })
 }
 
 /// A list pattern's length test: none on an array, whose type fixes its
@@ -373,16 +373,16 @@ pub(super) fn tag_source(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) ->
 }
 
 /// Binds `pattern`'s names against `matched`, where its test held.
-pub(super) fn bind<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Matched) {
+pub(super) fn bind<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Matched) -> Lowered<()> {
     acvus_utils::grow(|| bind_level(cx, pattern, matched))
 }
 
-fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Matched) {
+fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Matched) -> Lowered<()> {
     let span = pattern.span();
     match pattern {
         Pattern::Binding { id, .. } => {
             let ty = cx.ty(*id);
-            let value = bound(cx, matched, ty, span);
+            let value = bound(cx, matched, ty, span)?;
             let slot = cx.builder.slot(ty, span);
             assign(cx, Place { target: RefTarget::Var(slot), path: Vec::new(), ty }, value, span);
             cx.bind(*id, Home::Slot(slot), span);
@@ -390,56 +390,57 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         Pattern::ContextBind { id, name, .. } => {
             let value = match matched {
                 Matched::Value { value, .. } => *value,
-                Matched::Held { place, .. } => read(cx, Operand::Place(place.clone()), span),
+                Matched::Held { place, .. } => read(cx, Operand::Place(place.clone()), span)?,
                 Matched::Place { .. } => {
                     panic!("a name bound past a reference is a reference, which typeck refuses to store into a context")
                 }
             };
-            let value = convert(cx, *id, value, span);
+            let value = convert(cx, *id, value, span)?;
             context::store(cx, *name, value, span);
         }
         Pattern::Wildcard { .. } | Pattern::Literal { .. } => {}
         Pattern::Variant { tag, payload, .. } => {
             if let Some(payload) = payload {
-                let matched = through(cx, matched, span);
+                let matched = through(cx, matched, span)?;
                 let inner = part(cx, &matched, Part::Payload(*tag), span);
-                bind(cx, payload, &inner);
+                bind(cx, payload, &inner)?;
             }
         }
         Pattern::Tuple { elements, .. } => {
-            let matched = through(cx, matched, span);
+            let matched = through(cx, matched, span)?;
             for (index, element) in elements.iter().enumerate() {
                 if let TuplePatternElem::Pattern(element) = element {
                     let inner = part(cx, &matched, Part::Tuple(index), span);
-                    bind(cx, element, &inner);
+                    bind(cx, element, &inner)?;
                 }
             }
         }
         Pattern::Object { fields, .. } => {
-            let matched = through(cx, matched, span);
+            let matched = through(cx, matched, span)?;
             for field in fields {
                 let inner = part(cx, &matched, Part::Field(field.key), span);
-                bind(cx, &field.pattern, &inner);
+                bind(cx, &field.pattern, &inner)?;
             }
         }
         Pattern::List { head, tail, .. } => {
-            let matched = through(cx, matched, span);
+            let matched = through(cx, matched, span)?;
             for (at, part_pattern) in list_elements(cx, &matched, head, tail) {
                 let inner = element(cx, &matched, at, span);
-                bind(cx, part_pattern, &inner);
+                bind(cx, part_pattern, &inner)?;
             }
         }
         Pattern::Error(_) => panic!("a pattern the parse left in error is refused, and never lowered"),
     }
+    Ok(())
 }
 
 /// What a name binds: the part itself, or past a reference, a reference to
 /// it at the binder's mutability (patterns §1).
-fn bound(cx: &mut Lcx<'_, '_>, matched: &Matched, ty: Ty, span: Span) -> ValueId {
+fn bound(cx: &mut Lcx<'_, '_>, matched: &Matched, ty: Ty, span: Span) -> Lowered<ValueId> {
     match matched {
         Matched::Value { value, ty: held } => {
             assert_eq!(*held, ty, "a name bound to a value has the value's type");
-            *value
+            Ok(*value)
         }
         Matched::Held { place, .. } => {
             assert_eq!(place.ty, ty, "a name bound to a held part has the part's type");
@@ -516,11 +517,10 @@ pub(super) fn lower_match<S: Slot>(
     scrutinee: &Expr<S>,
     arms: &[MatchExprArm<S>],
     span: Span,
-) -> ValueId {
-    let value = lower_expr(cx, scrutinee);
+) -> Lowered<ValueId> {
+    let value = lower_expr(cx, scrutinee)?;
     let matched = Matched::scrutinee(cx, value, scrutinee.span());
     let ty = cx.ty(site);
-    let live = cx.reachable;
     let join = cx.builder.new_block(&[ty]);
     let mut joined = false;
     match switch_plan(cx, matched.ty(), arms) {
@@ -546,58 +546,66 @@ pub(super) fn lower_match<S: Slot>(
             let entered = keyed.iter().map(|(_, block, at)| (*block, *at));
             for (block, at) in entered.chain(default) {
                 cx.builder.switch_to(block);
-                cx.reachable = live;
                 joined |= arm_body(cx, &arms[at], &matched, join);
             }
         }
         None => {
-            let mut caught = false;
+            // The block a value no arm's test holds reaches: open unless an
+            // arm catches every value or no run gets past a test.
+            let mut open = true;
             for arm in arms {
-                match test(cx, &arm.pattern, &matched) {
-                    None => {
+                let holds = match test(cx, &arm.pattern, &matched) {
+                    Ok(Some(holds)) => holds,
+                    Ok(None) => {
                         joined |= arm_body(cx, arm, &matched, join);
-                        caught = true;
+                        open = false;
                         break;
                     }
-                    Some(holds) => {
-                        let then_to = cx.builder.new_block(&[]);
-                        let else_to = cx.builder.new_block(&[]);
-                        let terminator = Terminator::Diamond {
-                            cond: holds,
-                            then_to,
-                            then_args: Vec::new(),
-                            else_to,
-                            else_args: Vec::new(),
-                            join,
-                        };
-                        cx.builder.terminate(terminator, arm.span);
-                        cx.builder.switch_to(then_to);
-                        cx.reachable = live;
-                        joined |= arm_body(cx, arm, &matched, join);
-                        cx.builder.switch_to(else_to);
-                        cx.reachable = live;
+                    Err(Unreached) => {
+                        open = false;
+                        break;
                     }
-                }
+                };
+                let then_to = cx.builder.new_block(&[]);
+                let else_to = cx.builder.new_block(&[]);
+                let terminator = Terminator::Diamond {
+                    cond: holds,
+                    then_to,
+                    then_args: Vec::new(),
+                    else_to,
+                    else_args: Vec::new(),
+                    join,
+                };
+                cx.builder.terminate(terminator, arm.span);
+                cx.builder.switch_to(then_to);
+                joined |= arm_body(cx, arm, &matched, join);
+                cx.builder.switch_to(else_to);
             }
-            if !caught {
+            if open {
                 cx.builder.terminate(Terminator::NoArmMatched { span }, span);
             }
         }
     }
+    // The join is a block of the match all the same (D45): where no arm
+    // reaches it, it ends in `Diverge`.
     cx.builder.switch_to(join);
-    cx.reachable = joined;
-    cx.builder.block_params(join)[0]
+    match joined {
+        true => Ok(cx.builder.block_params(join)[0]),
+        false => Err(cx.end_block(Terminator::Diverge, span)),
+    }
 }
 
 /// One arm: its names bound, its body lowered, its value entering the
-/// match's one slot at its tail's site or the arm's; whether it reaches
-/// the join.
+/// match's one slot at its tail's site or the arm's; whether a run gets
+/// past it to the join.
 fn arm_body<S: Slot>(cx: &mut Lcx<'_, '_>, arm: &MatchExprArm<S>, matched: &Matched, join: BlockId) -> bool {
-    bind(cx, &arm.pattern, matched);
-    let value = lower_body(cx, &arm.body, arm.tail.as_deref(), arm.span);
     let at = arm.tail.as_deref().map_or(arm.id, Expr::id);
-    let value = convert(cx, at, value, arm.span);
-    let reached = cx.reachable;
+    let lowered = bind(cx, &arm.pattern, matched)
+        .and_then(|()| lower_body(cx, &arm.body, arm.tail.as_deref(), arm.span))
+        .and_then(|value| convert(cx, at, value, arm.span));
+    let Ok(value) = lowered else {
+        return false;
+    };
     cx.jump(join, vec![value], arm.span);
-    reached
+    true
 }

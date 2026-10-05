@@ -11,7 +11,7 @@
 use acvus_ast::{AstId, BinOp, Binder, ElseBranch, Expr, ForHead, Pattern, Slot, Span, Stmt};
 
 use super::call::convert;
-use super::ctxt::{Home, Lcx, LoopTargets};
+use super::ctxt::{Home, Lcx, LoopTargets, Lowered, Unreached};
 use super::expr::lower_expr;
 use super::pat::{Matched, bind, test};
 use super::place::{Place, assign, view_array};
@@ -22,17 +22,18 @@ use crate::ty::{Mutability, Ty, TyKind};
 use crate::typeck::{Iteration, TryExit};
 
 /// A two-way region: a `Diamond` on `cond` into two arms that meet at a
-/// join taking one value of `ty`. Each arm lowers itself and yields its
-/// value; the join is reached where either arm is.
+/// join taking one value of `ty`. Each arm lowers itself in its own block
+/// and yields its value; an arm a run gets past enters the join with it.
+/// Where neither is, the region is `Unreached`, and its join, a block of the
+/// region all the same (D45), ends in `Diverge`.
 pub(super) fn diamond(
     cx: &mut Lcx<'_, '_>,
     cond: ValueId,
     ty: Ty,
     span: Span,
-    then_arm: impl FnOnce(&mut Lcx<'_, '_>) -> ValueId,
-    else_arm: impl FnOnce(&mut Lcx<'_, '_>) -> ValueId,
-) -> ValueId {
-    let live = cx.reachable;
+    then_arm: impl FnOnce(&mut Lcx<'_, '_>) -> Lowered<ValueId>,
+    else_arm: impl FnOnce(&mut Lcx<'_, '_>) -> Lowered<ValueId>,
+) -> Lowered<ValueId> {
     let then_to = cx.builder.new_block(&[]);
     let else_to = cx.builder.new_block(&[]);
     let join = cx.builder.new_block(&[ty]);
@@ -41,18 +42,20 @@ pub(super) fn diamond(
     cx.builder.terminate(terminator, span);
     let mut joined = false;
     cx.builder.switch_to(then_to);
-    cx.reachable = live;
-    let value = then_arm(cx);
-    joined |= cx.reachable;
-    cx.jump(join, vec![value], span);
+    if let Ok(value) = then_arm(cx) {
+        cx.jump(join, vec![value], span);
+        joined = true;
+    }
     cx.builder.switch_to(else_to);
-    cx.reachable = live;
-    let value = else_arm(cx);
-    joined |= cx.reachable;
-    cx.jump(join, vec![value], span);
+    if let Ok(value) = else_arm(cx) {
+        cx.jump(join, vec![value], span);
+        joined = true;
+    }
     cx.builder.switch_to(join);
-    cx.reachable = joined;
-    cx.builder.block_params(join)[0]
+    match joined {
+        true => Ok(cx.builder.block_params(join)[0]),
+        false => Err(cx.end_block(Terminator::Diverge, span)),
+    }
 }
 
 pub(super) fn lower_if<S: Slot>(
@@ -63,8 +66,8 @@ pub(super) fn lower_if<S: Slot>(
     then_tail: Option<&Expr<S>>,
     otherwise: Option<&ElseBranch<S>>,
     span: Span,
-) -> ValueId {
-    let cond = lower_expr(cx, cond);
+) -> Lowered<ValueId> {
+    let cond = lower_expr(cx, cond)?;
     let ty = cx.ty(site);
     diamond(cx, cond, ty, span, |cx| branch(cx, site, then, then_tail, span), |cx| else_branch(cx, site, otherwise, span))
 }
@@ -80,10 +83,10 @@ pub(super) fn lower_if_let<S: Slot>(
     then_tail: Option<&Expr<S>>,
     otherwise: Option<&ElseBranch<S>>,
     span: Span,
-) -> ValueId {
-    let scrutinee = lower_expr(cx, source);
+) -> Lowered<ValueId> {
+    let scrutinee = lower_expr(cx, source)?;
     let matched = Matched::scrutinee(cx, scrutinee, source.span());
-    let cond = match test(cx, pattern, &matched) {
+    let cond = match test(cx, pattern, &matched)? {
         Some(cond) => cond,
         None => cx.bool_const(true, span),
     };
@@ -94,7 +97,7 @@ pub(super) fn lower_if_let<S: Slot>(
         ty,
         span,
         |cx| {
-            bind(cx, pattern, &matched);
+            bind(cx, pattern, &matched)?;
             branch(cx, site, then, then_tail, span)
         },
         |cx| else_branch(cx, site, otherwise, span),
@@ -103,21 +106,21 @@ pub(super) fn lower_if_let<S: Slot>(
 
 /// A branch's block; its value enters the construct's one slot at its
 /// tail's site, or at the construct's where it has none.
-fn branch<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, stmts: &[Stmt<S>], tail: Option<&Expr<S>>, span: Span) -> ValueId {
-    let value = lower_body(cx, stmts, tail, span);
+fn branch<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, stmts: &[Stmt<S>], tail: Option<&Expr<S>>, span: Span) -> Lowered<ValueId> {
+    let value = lower_body(cx, stmts, tail, span)?;
     let at = tail.map_or(site, Expr::id);
     convert(cx, at, value, span)
 }
 
 /// The `else`: without one, the missing branch is `()` (control-flow).
-fn else_branch<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, otherwise: Option<&ElseBranch<S>>, span: Span) -> ValueId {
+fn else_branch<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, otherwise: Option<&ElseBranch<S>>, span: Span) -> Lowered<ValueId> {
     match otherwise {
         None => {
             let unit = cx.unit(span);
             convert(cx, site, unit, span)
         }
         Some(ElseBranch::ElseIf(expr)) => {
-            let value = lower_expr(cx, expr);
+            let value = lower_expr(cx, expr)?;
             convert(cx, expr.id(), value, expr.span())
         }
         Some(ElseBranch::Else { body, tail, span }) => branch(cx, site, body, tail.as_deref(), *span),
@@ -132,42 +135,42 @@ pub(super) fn lower_short_circuit<S: Slot>(
     left: &Expr<S>,
     right: &Expr<S>,
     span: Span,
-) -> ValueId {
-    let decided = lower_expr(cx, left);
+) -> Lowered<ValueId> {
+    let decided = lower_expr(cx, left)?;
     let ty = cx.ty(site);
     let rest = |cx: &mut Lcx<'_, '_>| lower_expr(cx, right);
     match op {
-        BinOp::And => diamond(cx, decided, ty, span, rest, |cx| cx.bool_const(false, span)),
-        BinOp::Or => diamond(cx, decided, ty, span, |cx| cx.bool_const(true, span), rest),
+        BinOp::And => diamond(cx, decided, ty, span, rest, |cx| Ok(cx.bool_const(false, span))),
+        BinOp::Or => diamond(cx, decided, ty, span, |cx| Ok(cx.bool_const(true, span)), rest),
         other => panic!("{other:?} does not short-circuit"),
     }
 }
 
 /// A loop's body between its header and its exit: `break` and `continue`
-/// inside go to them.
+/// inside go to them, and where a run gets past the body, it goes back to
+/// the header.
 fn loop_body<S: Slot>(cx: &mut Lcx<'_, '_>, targets: LoopTargets, body: &[Stmt<S>], span: Span) {
-    cx.loops.push(targets);
-    lower_stmts(cx, body);
-    cx.jump(targets.header, Vec::new(), span);
-    cx.loops.pop();
+    cx.in_loop(targets, |cx| {
+        if lower_stmts(cx, body).is_ok() {
+            cx.jump(targets.header, Vec::new(), span);
+        }
+    });
 }
 
-pub(super) fn lower_while<S: Slot>(cx: &mut Lcx<'_, '_>, cond: &Expr<S>, body: &[Stmt<S>], span: Span) {
-    let live = cx.reachable;
+/// `while cond { body }`: its exit is reached where its condition is.
+pub(super) fn lower_while<S: Slot>(cx: &mut Lcx<'_, '_>, cond: &Expr<S>, body: &[Stmt<S>], span: Span) -> Lowered<()> {
     let header = cx.builder.new_block(&[]);
     cx.jump(header, Vec::new(), span);
     cx.builder.switch_to(header);
-    cx.reachable = live;
-    let cond = lower_expr(cx, cond);
+    let cond = lower_expr(cx, cond)?;
     let body_block = cx.builder.new_block(&[]);
     let exit = cx.builder.new_block(&[]);
     let terminator = Terminator::While { cond, body: body_block, body_args: Vec::new(), exit, exit_args: Vec::new() };
     cx.builder.terminate(terminator, span);
     cx.builder.switch_to(body_block);
-    cx.reachable = live;
     loop_body(cx, LoopTargets { exit, header }, body, span);
     cx.builder.switch_to(exit);
-    cx.reachable = live;
+    Ok(())
 }
 
 /// `while let pattern = source`: the pattern's test is the loop's
@@ -178,15 +181,13 @@ pub(super) fn lower_while_let<S: Slot>(
     source: &Expr<S>,
     body: &[Stmt<S>],
     span: Span,
-) {
-    let live = cx.reachable;
+) -> Lowered<()> {
     let header = cx.builder.new_block(&[]);
     cx.jump(header, Vec::new(), span);
     cx.builder.switch_to(header);
-    cx.reachable = live;
-    let scrutinee = lower_expr(cx, source);
+    let scrutinee = lower_expr(cx, source)?;
     let matched = Matched::scrutinee(cx, scrutinee, source.span());
-    let cond = match test(cx, pattern, &matched) {
+    let cond = match test(cx, pattern, &matched)? {
         Some(cond) => cond,
         None => cx.bool_const(true, span),
     };
@@ -195,11 +196,11 @@ pub(super) fn lower_while_let<S: Slot>(
     let terminator = Terminator::While { cond, body: body_block, body_args: Vec::new(), exit, exit_args: Vec::new() };
     cx.builder.terminate(terminator, span);
     cx.builder.switch_to(body_block);
-    cx.reachable = live;
-    bind(cx, pattern, &matched);
-    loop_body(cx, LoopTargets { exit, header }, body, span);
+    if bind(cx, pattern, &matched).is_ok() {
+        loop_body(cx, LoopTargets { exit, header }, body, span);
+    }
     cx.builder.switch_to(exit);
-    cx.reachable = live;
+    Ok(())
 }
 
 /// What a `for` traverses, and the parameters its body block takes.
@@ -216,16 +217,12 @@ pub(super) fn lower_for<S: Slot>(
     head: &ForHead<S>,
     body: &[Stmt<S>],
     span: Span,
-) {
+) -> Lowered<()> {
     let element = cx.ty(binder.id);
-    let Some(traversal) = traversal(cx, site, callee_site, head, element, span) else {
-        return;
-    };
-    let live = cx.reachable;
+    let traversal = traversal(cx, site, callee_site, head, element, span)?;
     let header = cx.builder.new_block(&[]);
     cx.jump(header, Vec::new(), span);
     cx.builder.switch_to(header);
-    cx.reachable = live;
     let body_block = cx.builder.new_block(&traversal.params);
     let exit = cx.builder.new_block(&[]);
     let terminator = Terminator::For {
@@ -237,18 +234,17 @@ pub(super) fn lower_for<S: Slot>(
     };
     cx.builder.terminate(terminator, span);
     cx.builder.switch_to(body_block);
-    cx.reachable = live;
     let item = cx.builder.block_params(body_block)[0];
     let slot = cx.builder.slot(element, binder.span);
     assign(cx, Place { target: RefTarget::Var(slot), path: Vec::new(), ty: element }, item, binder.span);
     cx.bind(binder.id, Home::Slot(slot), binder.span);
     loop_body(cx, LoopTargets { exit, header }, body, span);
     cx.builder.switch_to(exit);
-    cx.reachable = live;
+    Ok(())
 }
 
-/// The source of a `for` by what typeck decided it iterates; `None` where
-/// the head is `!`, which no run gets past.
+/// The source of a `for` by what typeck decided it iterates. typeck
+/// decides none for a head of type `!`, which no run gets past.
 fn traversal<S: Slot>(
     cx: &mut Lcx<'_, '_>,
     site: AstId,
@@ -256,24 +252,21 @@ fn traversal<S: Slot>(
     head: &ForHead<S>,
     element: Ty,
     span: Span,
-) -> Option<Traversal> {
+) -> Lowered<Traversal> {
     let counter = cx.u64_ty();
     let iteration = cx.decided.iteration(site);
     match (head, iteration) {
         (ForHead::Range { lo, hi }, _) => {
-            let at = lower_expr(cx, lo);
-            let hi = lower_expr(cx, hi);
-            Some(Traversal { source: ForSource::Range { at, hi }, params: vec![element] })
+            let at = lower_expr(cx, lo)?;
+            let hi = lower_expr(cx, hi)?;
+            Ok(Traversal { source: ForSource::Range { at, hi }, params: vec![element] })
         }
         (ForHead::Value(expr), Some(Iteration::ByValue)) => {
-            let array = lower_expr(cx, expr);
-            if matches!(cx.kind(cx.value_ty(array)), TyKind::Never) {
-                return None;
-            }
-            Some(Traversal { source: ForSource::Array(array), params: vec![element, counter] })
+            let array = lower_expr(cx, expr)?;
+            Ok(Traversal { source: ForSource::Array(array), params: vec![element, counter] })
         }
         (ForHead::Value(expr), Some(Iteration::ByRef(mutability))) => {
-            let reference = lower_expr(cx, expr);
+            let reference = lower_expr(cx, expr)?;
             let TyKind::Ref(_, lent) = cx.kind(element) else {
                 panic!("a `for` by reference binds a reference to each element")
             };
@@ -296,57 +289,51 @@ fn traversal<S: Slot>(
                 Mutability::Shared => ForSource::Slice(slice),
                 Mutability::Mut => ForSource::SliceMut(slice),
             };
-            Some(Traversal { source, params: vec![element, counter] })
+            Ok(Traversal { source, params: vec![element, counter] })
         }
         (ForHead::Value(expr), Some(Iteration::Range)) => {
             panic!("typeck iterates by range only a range head, not {:?}", expr.id())
         }
         (ForHead::Value(expr), None) => {
-            lower_expr(cx, expr);
-            None
+            let Err(unreached) = lower_expr(cx, expr) else {
+                panic!("typeck decides how a `for` iterates every head a run gets past, and not {:?}", expr.id())
+            };
+            Err(unreached)
         }
     }
 }
 
 /// `break` or `continue`: to the innermost loop's exit or header.
-pub(super) fn lower_loop_exit(cx: &mut Lcx<'_, '_>, to_exit: bool, span: Span) {
+pub(super) fn lower_loop_exit(cx: &mut Lcx<'_, '_>, to_exit: bool, span: Span) -> Unreached {
     let targets = *cx.loops.last().expect("typeck refuses `break` and `continue` outside a loop (OutsideLoop)");
     let to = match to_exit {
         true => targets.exit,
         false => targets.header,
     };
-    match cx.reachable {
-        true => cx.end_block(Terminator::Jump { to, args: Vec::new() }, span),
-        false => cx.end_block(Terminator::Diverge, span),
-    }
+    cx.end_block(Terminator::Jump { to, args: Vec::new() }, span)
 }
 
 /// The body's return of `value`.
-pub(super) fn return_value(cx: &mut Lcx<'_, '_>, value: ValueId, span: Span) {
-    let terminator = match cx.reachable {
-        true => Terminator::Return { value, order: None, span },
-        false => Terminator::Diverge,
-    };
-    cx.end_block(terminator, span);
+pub(super) fn return_value(cx: &mut Lcx<'_, '_>, value: ValueId, span: Span) -> Unreached {
+    cx.end_block(Terminator::Return { value, order: None, span }, span)
 }
 
 /// `return value`: the value enters the body's result at its own site.
-pub(super) fn lower_return<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, value: &Expr<S>, span: Span) -> ValueId {
-    let returned = lower_expr(cx, value);
-    let returned = convert(cx, value.id(), returned, value.span());
-    return_value(cx, returned, span);
-    let never = cx.ty(site);
-    cx.unreached_value(never, span)
+pub(super) fn lower_return<S: Slot>(cx: &mut Lcx<'_, '_>, value: &Expr<S>, span: Span) -> Lowered<ValueId> {
+    let returned = lower_expr(cx, value)?;
+    let returned = convert(cx, value.id(), returned, value.span())?;
+    Err(return_value(cx, returned, span))
 }
 
 /// `inner?`: `Some`/`Ok`'s payload goes on; `None`/`Err` leaves the body,
 /// coerced into its result at the `?`'s site.
-pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr<S>, span: Span) -> ValueId {
-    let tried = lower_expr(cx, inner);
+pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr<S>, span: Span) -> Lowered<ValueId> {
+    let tried = lower_expr(cx, inner)?;
     let value_ty = cx.ty(site);
-    let Some(exit) = cx.decided.try_exit(site) else {
-        return cx.unreached_value(value_ty, span);
-    };
+    let exit = cx
+        .decided
+        .try_exit(site)
+        .unwrap_or_else(|| panic!("typeck decides the exit of every `?` whose operand a run gets past, and not {site:?}"));
     let tags = cx.decls.core().tags;
     let (goes_on, exit_ty) = match exit {
         TryExit::Option(ty) => (tags.some, ty),
@@ -354,14 +341,12 @@ pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr
     };
     let bool_ty = cx.bool_ty();
     let holds = cx.builder.push(Op::TestVariant { src: tried, tag: goes_on }, bool_ty, span);
-    let live = cx.reachable;
     let on = cx.builder.new_block(&[]);
     let leave = cx.builder.new_block(&[]);
     let terminator =
         Terminator::JumpIf { cond: holds, then_to: on, then_args: Vec::new(), else_to: leave, else_args: Vec::new() };
     cx.builder.terminate(terminator, span);
     cx.builder.switch_to(leave);
-    cx.reachable = live;
     let left = match exit {
         TryExit::Option(_) => cx.builder.push(Op::MakeVariant { tag: tags.none, payload: None }, exit_ty, span),
         TryExit::Result(_) => {
@@ -373,10 +358,9 @@ pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr
             cx.builder.push(Op::MakeVariant { tag: tags.err, payload: Some(error) }, exit_ty, span)
         }
     };
-    let left = convert(cx, site, left, span);
-    return_value(cx, left, span);
-    cx.builder.terminate(Terminator::Diverge, span);
+    if let Ok(left) = convert(cx, site, left, span) {
+        return_value(cx, left, span);
+    }
     cx.builder.switch_to(on);
-    cx.reachable = live;
-    cx.builder.push(Op::UnwrapVariant { src: tried }, value_ty, span)
+    Ok(cx.builder.push(Op::UnwrapVariant { src: tried }, value_ty, span))
 }

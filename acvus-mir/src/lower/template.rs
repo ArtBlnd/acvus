@@ -5,7 +5,7 @@
 use acvus_ast::{AstId, Expr, Literal, Slot, Span};
 
 use super::call::{call_reached, convert};
-use super::ctxt::Lcx;
+use super::ctxt::{Lcx, Lowered};
 use super::place::{Operand, lend, operand};
 use crate::ir::cfg::Op;
 use crate::ir::{RefTarget, ValueId};
@@ -31,13 +31,14 @@ pub(super) fn lower_text(cx: &mut Lcx<'_, '_>, text: &str, span: Span) {
 
 /// `{{ x }}`: the value formatted onto the output by the `core::display`
 /// impl typeck reached at `site` (operators §2, §7).
-pub(super) fn lower_append<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, expr: &Expr<S>, span: Span) {
-    let shown = operand(cx, expr, Mutability::Shared);
-    let shown = lend(cx, shown, Mutability::Shared, expr.span());
-    let shown = convert(cx, expr.id(), shown, expr.span());
+pub(super) fn lower_append<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, expr: &Expr<S>, span: Span) -> Lowered<()> {
+    let shown = operand(cx, expr, Mutability::Shared)?;
+    let shown = lend(cx, shown, Mutability::Shared, expr.span())?;
+    let shown = convert(cx, expr.id(), shown, expr.span())?;
     let target = output(cx, span);
-    let target = convert(cx, site, target, span);
-    call_reached(cx, site, vec![shown, target], span);
+    let target = convert(cx, site, target, span)?;
+    call_reached(cx, site, vec![shown, target], span)?;
+    Ok(())
 }
 
 /// The template's output, an empty `String` to begin with.
@@ -50,7 +51,7 @@ pub(super) fn open_output(cx: &mut Lcx<'_, '_>, span: Span) {
 }
 
 /// The template's output, taken to be returned.
-pub(super) fn take_output(cx: &mut Lcx<'_, '_>, span: Span) -> ValueId {
+pub(super) fn take_output(cx: &mut Lcx<'_, '_>, span: Span) -> Lowered<ValueId> {
     let out = cx.out.expect("a template's body holds its output");
     let ty = cx.value_ty(out);
     let place = super::place::Place { target: RefTarget::Var(out), path: Vec::new(), ty };
