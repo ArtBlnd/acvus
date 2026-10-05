@@ -579,6 +579,25 @@ fn a_return_inside_anyorder_carries_the_merge() {
     assert_eq!(returned_order(body, body.entry()), Some(merge));
 }
 
+/// The scope's end follows a `Return`, so no block is open where it
+/// closes: the `Return` passed the merge, and nothing resumes the chain.
+#[test]
+fn an_anyorder_scope_closes_where_no_run_reaches_its_end() {
+    let mut f = fixture();
+    let (int, whole) = (f.int, f.whole);
+    let inside = f.call(whole);
+    let mut builder = build(&mut f.module, true, f.int);
+    builder.open_anyorder();
+    let value = builder.push_effect(inside, int, at(22));
+    builder.terminate(ret(value), acvus_ast::Span::ZERO);
+    builder.close_anyorder();
+    let id = builder.seal().expect("the body has no open state");
+
+    let body = f.body(id);
+    let merge = result_of(body.block(body.entry()).insts().nth(1).expect("the block holds that instruction"));
+    assert_eq!(returned_order(body, body.entry()), Some(merge));
+}
+
 #[test]
 fn removing_an_effectful_call_rethreads_the_token_around_it() {
     let mut f = fixture();

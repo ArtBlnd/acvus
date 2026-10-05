@@ -519,11 +519,14 @@ impl<'m> Builder<'m> {
         thread.scope = Some(AnyorderScope { id, entry, first_member });
     }
 
-    /// Closes the innermost open `anyorder` scope; closing the outermost
-    /// one resumes the chain from the scope's merge. Cost: O(1).
+    /// Closes the innermost open `anyorder` scope. Closing the outermost one
+    /// resumes the chain from the scope's merge in the current block where
+    /// that block is open. Where it is terminated, no run reaches the
+    /// scope's end: a `Return` or an edge out of the scope passed the merge
+    /// at its own terminator (`terminate`), and nothing resumes. Cost: O(1).
     ///
     /// # Panics
-    /// No scope is open, or the current block is terminated.
+    /// No scope is open.
     pub fn close_anyorder(&mut self) {
         assert!(self.anyorder_depth > 0, "close_anyorder without an open anyorder scope");
         self.anyorder_depth -= 1;
@@ -534,12 +537,14 @@ impl<'m> Builder<'m> {
         let Building::Made(current) = self.building(at) else {
             panic!("the current block {at:?} is made")
         };
-        assert!(current.terminator.is_none(), "{at:?} is terminated; the chain cannot resume in it");
+        let reached = current.terminator.is_none();
         let Some(scope) = self.order_mut().scope.take() else {
             panic!("an ordered body's outermost anyorder scope is recorded when it opens")
         };
-        let gathered = self.read_order(OrderVar::Gathered(scope.id), at);
-        self.write_order(OrderVar::Token, at, gathered);
+        if reached {
+            let gathered = self.read_order(OrderVar::Gathered(scope.id), at);
+            self.write_order(OrderVar::Token, at, gathered);
+        }
     }
 
     /// Checks that no open state is left, adds the body to the module and
