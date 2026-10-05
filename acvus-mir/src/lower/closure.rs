@@ -10,7 +10,6 @@
 use acvus_ast::{AstId, Binder, Expr, Slot, Span};
 
 use super::call::convert;
-use super::context::Namer;
 use super::ctxt::{Declared, Entry, Home, Lcx, Lowered, ordered};
 use super::expr::lower_expr;
 use super::place::{Operand, Place, assign, binding_place, input_place, input_ty, lend, read};
@@ -35,7 +34,7 @@ pub(super) fn lower_lambda<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, params: &
     }
     let fn_ty = cx.ty(site);
     let passed = passed(cx, site, span)?;
-    let lowered = lower_body(cx, Lambda { params, body, span, decided: cx.decided, fn_ty }, &passed);
+    let lowered = lower_body(cx, Lambda { site, params, body, span, decided: cx.decided, fn_ty }, &passed);
     let captures = passed.iter().map(|passed| passed.value).collect();
     Ok(cx.made(Op::MakeClosure { bodies: vec![lowered], captures }, fn_ty, span))
 }
@@ -54,6 +53,7 @@ fn passed(cx: &mut Lcx<'_, '_>, site: AstId, span: Span) -> Lowered<Vec<Passed>>
 /// A lambda's body to lower at one function type, over what `decided`
 /// says of its sites.
 struct Lambda<'e, 'd, S: Slot> {
+    site: AstId,
     params: &'e [Binder],
     body: &'e Expr<S>,
     span: Span,
@@ -64,20 +64,16 @@ struct Lambda<'e, 'd, S: Slot> {
 /// The lambda's body, lowered as a body of its own at its function type:
 /// its captures its first parameters' homes, and its parameters the rest.
 fn lower_body<S: Slot>(cx: &mut Lcx<'_, '_>, lambda: Lambda<'_, '_, S>, passed: &[Passed]) -> crate::ir::cfg::BodyId {
-    let Lambda { params, body, span, decided, fn_ty } = lambda;
+    let Lambda { site, params, body, span, decided, fn_ty } = lambda;
     let TyKind::Fn { params: param_tys, ret, effect, .. } = cx.kind(fn_ty).clone() else {
         panic!("a lambda's type is a function type")
     };
     let ordered = ordered(known_effect(&effect));
-    let named = {
-        let mut namer = Namer::new(cx.typeck);
-        namer.expr(body);
-        namer.finish()
-    };
+    let typeck = cx.typeck;
     let entry = Entry {
         captures: passed.iter().map(|passed| Declared { name: passed.captured.name, ty: passed.ty, span: passed.span }).collect(),
         params: params.iter().zip(param_tys.iter()).map(|(param, ty)| Declared { name: param.name, ty: *ty, span: param.span }).collect(),
-        named: &named,
+        contexts: typeck.contexts.get(&Some(site)).map_or(&[], |named| named),
     };
     let content = |inner: &mut Lcx<'_, '_>, captures: &[ValueId], values: &[ValueId]| {
         for (passed, capture) in passed.iter().zip(captures) {
@@ -208,7 +204,7 @@ fn lower_generalized_lambda<S: Slot>(
             Some(made) => made,
             None => {
                 let decided = cx.decided.at(signature.instance);
-                let made = lower_body(cx, Lambda { params, body, span, decided, fn_ty: signature.ty }, &passed);
+                let made = lower_body(cx, Lambda { site, params, body, span, decided, fn_ty: signature.ty }, &passed);
                 cx.bodies.borrow_mut().insert((site, signature.ty), made);
                 made
             }

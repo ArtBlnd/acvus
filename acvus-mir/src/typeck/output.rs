@@ -346,9 +346,25 @@ pub(super) struct Output {
     /// Each comparison's and each lifted impl's structure node.
     pub structures: FxHashMap<AstId, StructureNode>,
     pub body_effect: Option<EffectTerm<InferPhase>>,
+    /// Each input the source reads (programs §4), at the span of its first
+    /// read, in the order first read.
+    pub inputs_read: Vec<(Astr, Span)>,
+    /// Each context a body names (context §3), with the lambda whose body
+    /// it is, none for the run's, at its declared type's term, in the order
+    /// named.
+    pub contexts_named: Vec<(Option<AstId>, QualifiedRef, Term)>,
     /// The unit's interface, where its inputs were open (`generalize::export`).
     pub interface: Option<super::interface::Interface>,
     pub refusals: Vec<super::refusal::Made>,
+}
+
+/// One of the run's parameters: an input its source reads (programs §4), at
+/// its type, with the span of its first read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunInput {
+    pub name: Astr,
+    pub ty: Ty,
+    pub span: Span,
 }
 
 /// What typeck hands on: every decision at concrete types.
@@ -395,6 +411,14 @@ pub struct Typeck {
     /// The unit's interface, where its inputs were open: its scheme, which
     /// every caller instantiates (programs §1-§2).
     pub interface: Option<super::interface::Interface>,
+    /// The run's parameters: each input its source reads, in the order of
+    /// the unit's parameters (`parameter_order`), which a caller passes its
+    /// arguments in (programs §1-§2, §4).
+    pub inputs: Box<[RunInput]>,
+    /// The contexts each body names (context §3), the run's at `None` and a
+    /// lambda's at its site, each once, in the order first named, at its
+    /// declared type (context §2).
+    pub contexts: FxHashMap<Option<AstId>, Box<[(QualifiedRef, Ty)]>>,
     /// The run's result type: the slot every tail and `return` enters, and
     /// for a template the `String` it builds. `None` only where a refusal
     /// left it open.

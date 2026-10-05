@@ -344,3 +344,27 @@ fn a_units_instantiation_is_claimed_at_its_calls_function_type() {
     assert_eq!(claimed(put), Some(FlowTerm::Known(into_m_from_r)));
     assert_eq!(claimed(main), None);
 }
+
+/// programs §1-§2: a unit's body takes its parameters in its interface's
+/// order, which its calls pass their arguments in, whatever order its
+/// source reads its inputs in: `put` reads `$r` before `$m`.
+#[test]
+fn a_units_body_takes_its_parameters_in_its_interfaces_order() {
+    let mut fx = Fixture::new();
+    let put = fx.script(&["lib"], "put", "{ let x = $r; *$m = 0; 0 }");
+    let main = fx.script(&["app"], "main", "let a = 1; let c = 2; lib::put(m: &mut a, r: &c); a");
+    fx.entry(main, &[], None);
+    let mut graph = fx.graph();
+    let names = graph.names.clone();
+    let compiled = graph.compile(Stop::Lowered).unwrap_or_else(|refused| panic!("refused: {refused:?}"));
+    let (_, module) = compiled.modules.iter().find(|(name, _)| *name == put).expect("the unit's module");
+    let [(ref types, body)] = module.instantiations[..] else {
+        panic!("one instantiation of the unit");
+    };
+    let body = module.module.body(body);
+    let params: Vec<&str> = body.params().iter().map(|(name, _)| names.resolve(*name)).collect();
+    assert_eq!(params, ["m", "r"]);
+    let param_types: Vec<_> = body.params().iter().map(|(_, value)| body.ty_of(*value)).collect();
+    assert_eq!(&param_types[..], &types[..], "each parameter at the type its call passes there");
+}
+

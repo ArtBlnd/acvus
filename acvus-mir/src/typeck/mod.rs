@@ -59,7 +59,7 @@ use crate::ty::{Concrete, Ty, TyKind, Types};
 
 pub use generalize::InstanceId;
 pub use interface::{Interface, Interfaces};
-pub use output::{InstanceDecided, Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Coercion, Conversion, Impl, Iteration, Name, Own, StructureTree, TryExit, Typeck, UnitCall};
+pub use output::{InstanceDecided, Adjustment, AsCast, Capture, CaptureOf, Captured, Chosen, Closure, Coercion, Conversion, Impl, Iteration, Name, Own, RunInput, StructureTree, TryExit, Typeck, UnitCall};
 pub use refusal::{Exceeding, Frozen, FrozenMismatch, Refusal, RefusalKind, Unimplemented};
 
 /// A unit's inputs as a check takes them (graph): open, each a fresh type
@@ -153,13 +153,20 @@ fn enter_inputs(cx: &mut Ctxt<'_>, types: &Types<Concrete>, inputs: Inputs<'_>) 
     }
 }
 
+/// The order of a unit's parameters: its inputs by the text of their names,
+/// so a call that passes them by name passes them in one order wherever it
+/// is written (programs §1-§2).
+fn parameter_order<T>(cx: &Ctxt<'_>, inputs: &mut [(Astr, T)]) {
+    inputs.sort_by(|(a, _), (b, _)| cx.interner.resolve(*a).cmp(cx.interner.resolve(*b)));
+}
+
 /// The check, its inputs open, as one scheme (`generalize::register_unit`):
-/// a function from its inputs, by the order of their names, to `result`,
-/// with the check's effect, called any number of times and capturing
-/// nothing (programs §1-§2, functions §3).
+/// a function from its inputs, in the order of its parameters
+/// (`parameter_order`), to `result`, with the check's effect, called any
+/// number of times and capturing nothing (programs §1-§2, functions §3).
 fn unit_scheme(cx: &mut Ctxt<'_>, root: acvus_ast::AstId, result: crate::infer::Term) -> (generalize::SchemeId, Box<[Astr]>) {
     let mut inputs = cx.scope.inputs();
-    inputs.sort_by(|(a, _), (b, _)| cx.interner.resolve(*a).cmp(cx.interner.resolve(*b)));
+    parameter_order(cx, &mut inputs);
     let effect = effect::body_effect(cx);
     let flows = crate::ty::FlowTerm::Var(cx.infer.fresh_flow());
     let values = cx.infer.fresh_values();

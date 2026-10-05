@@ -2,6 +2,7 @@
 //! values' claimed flows into their function types.
 
 use acvus_ast::AstId;
+use acvus_utils::{Astr, QualifiedRef};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ctxt::Ctxt;
@@ -69,6 +70,8 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         None => Effect::pure(),
     };
     let closures: FxHashMap<_, Closure> = std::mem::take(&mut cx.out.closures);
+    let inputs = run_inputs(&mut cx, types, &mut memo);
+    let contexts = named_contexts(&mut cx, types, &mut memo);
 
     Typeck {
         types: frozen,
@@ -90,9 +93,44 @@ pub(super) fn finish(mut cx: Ctxt<'_>, types: &mut Types<Concrete>, result: Term
         value_sites,
         body_effect,
         interface: cx.out.interface.take(),
+        inputs,
+        contexts,
         result,
         refusals: super::refusal::frozen(&cx.infer, std::mem::take(&mut cx.out.refusals)),
     }
+}
+
+/// The run's parameters: each input read, in the order of the unit's
+/// parameters (`parameter_order`), at its type, with its first read's span.
+fn run_inputs(cx: &mut Ctxt<'_>, types: &mut Types<Concrete>, memo: &mut FreezeMemo) -> Box<[super::RunInput]> {
+    let terms: FxHashMap<Astr, Term> = cx.scope.inputs().into_iter().collect();
+    let mut read = std::mem::take(&mut cx.out.inputs_read);
+    super::parameter_order(cx, &mut read);
+    read.into_iter()
+        .filter_map(|(name, span)| {
+            let term = *terms.get(&name).unwrap_or_else(|| panic!("an input read is entered, as {name:?} is not"));
+            Some(super::RunInput { name, ty: freeze(cx, types, memo, term)?, span })
+        })
+        .collect()
+}
+
+/// The contexts each body names, each once, in the order first named, at
+/// its declared type.
+fn named_contexts(
+    cx: &mut Ctxt<'_>,
+    types: &mut Types<Concrete>,
+    memo: &mut FreezeMemo,
+) -> FxHashMap<Option<AstId>, Box<[(QualifiedRef, Ty)]>> {
+    let mut named: FxHashMap<Option<AstId>, Vec<(QualifiedRef, Ty)>> = FxHashMap::default();
+    for (body, context, term) in std::mem::take(&mut cx.out.contexts_named) {
+        if named.get(&body).is_some_and(|contexts| contexts.iter().any(|(at, _)| *at == context)) {
+            continue;
+        }
+        if let Some(ty) = freeze(cx, types, memo, term) {
+            named.entry(body).or_default().push((context, ty));
+        }
+    }
+    named.into_iter().map(|(body, contexts)| (body, contexts.into_boxed_slice())).collect()
 }
 
 /// `term` frozen. `None` only where a refusal already left a variable

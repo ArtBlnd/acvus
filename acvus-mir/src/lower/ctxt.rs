@@ -22,7 +22,6 @@ use rustc_hash::FxHashMap;
 use acvus_ast::{AstId, Literal, Span};
 use acvus_utils::{Astr, QualifiedRef};
 
-use super::context::{Named, NamedContext};
 use crate::decl::{Declarations, PairMember};
 use crate::ir::cfg::{BlockId, BodyId, Builder, Op, Terminator};
 use crate::ir::{Callee, Chosen as IrChosen, Intrinsic, RefTarget, ValueId};
@@ -135,7 +134,7 @@ impl<'a, 'm> Lcx<'a, 'm> {
             entry.captures.iter().map(|declared| self.builder.capture(declared.name, declared.ty, declared.span)).collect();
         let params: Vec<ValueId> =
             entry.params.iter().map(|declared| self.builder.param(declared.name, declared.ty, declared.span)).collect();
-        for NamedContext { context, ty } in &entry.named.contexts {
+        for (context, ty) in entry.contexts {
             let volatile = self
                 .decls
                 .context_is_volatile(*context)
@@ -429,11 +428,12 @@ pub(super) struct Declared {
 }
 
 /// What a body declares at its entry (`Lcx::make_body`): its captures, its
-/// parameters, and the contexts it names (context §3).
+/// parameters, and the contexts it names (context §3, `Typeck::contexts`),
+/// each at its declared type.
 pub(super) struct Entry<'n> {
     pub captures: Vec<Declared>,
     pub params: Vec<Declared>,
-    pub named: &'n Named,
+    pub contexts: &'n [(QualifiedRef, Ty)],
 }
 
 /// How an instruction's result comes to be, which decides what lowering

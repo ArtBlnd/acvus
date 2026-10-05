@@ -36,7 +36,7 @@ use crate::ir::cfg::{BodyId, Module};
 use crate::ty::{Concrete, Ty, Types};
 use crate::typeck::Typeck;
 
-use context::{Namer, enter_inputs, input_params};
+use context::{enter_inputs, input_params};
 use ctxt::{Entry, Lcx, ordered};
 
 /// Lowers an admitted script. A refused program is never lowered
@@ -57,21 +57,13 @@ pub fn lower_script<S: Slot>(decls: &Declarations, typeck: &Typeck, types: Types
 /// of its source (graph).
 pub fn lower_script_into<S: Slot>(decls: &Declarations, typeck: &Typeck, module: &mut Module, script: &Script<S>) -> BodyId {
     assert_admitted(typeck);
-    let named = {
-        let mut namer = Namer::new(typeck);
-        namer.stmts(&script.stmts);
-        if let Some(tail) = &script.tail {
-            namer.expr(tail);
-        }
-        namer.finish()
-    };
     let ret = run_result(typeck);
     let closures = decided::closure_types(typeck, module.types_mut());
     let builder = module.build_body(ordered(&typeck.body_effect), ret);
     let cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
-    let entry = Entry { captures: Vec::new(), params: input_params(&named), named: &named };
+    let entry = Entry { captures: Vec::new(), params: input_params(&typeck.inputs), contexts: run_contexts(typeck) };
     let content = |cx: &mut Lcx<'_, '_>, _: &[_], params: &[_]| {
-        enter_inputs(cx, &named, params);
+        enter_inputs(cx, &typeck.inputs, params);
         stmt::lower_body(cx, &script.stmts, script.tail.as_deref(), script.span).and_then(|value| match &script.tail {
             Some(tail) => call::convert(cx, tail.id(), value, tail.span()),
             None => Ok(value),
@@ -100,23 +92,24 @@ pub fn lower_template<S: Slot>(
 /// `lower_template`'s body, added to `module`, as `lower_script_into`.
 pub fn lower_template_into<S: Slot>(decls: &Declarations, typeck: &Typeck, module: &mut Module, template: &Template<S>) -> BodyId {
     assert_admitted(typeck);
-    let named = {
-        let mut namer = Namer::new(typeck);
-        namer.stmts(&template.body);
-        namer.finish()
-    };
     let ret = run_result(typeck);
     let closures = decided::closure_types(typeck, module.types_mut());
     let builder = module.build_body(ordered(&typeck.body_effect), ret);
     let cx = Lcx::new(decls, decided::Decided::run(typeck, &closures), builder, 0);
-    let entry = Entry { captures: Vec::new(), params: input_params(&named), named: &named };
+    let entry = Entry { captures: Vec::new(), params: input_params(&typeck.inputs), contexts: run_contexts(typeck) };
     let content = |cx: &mut Lcx<'_, '_>, _: &[_], params: &[_]| {
-        enter_inputs(cx, &named, params);
+        enter_inputs(cx, &typeck.inputs, params);
         template::open_output(cx, template.span);
         stmt::lower_stmts(cx, &template.body)?;
         template::take_output(cx, template.span)
     };
     cx.make_body(entry, content, template.span)
+}
+
+/// The contexts the run's own body names, outside its lambdas
+/// (`Typeck::contexts`).
+fn run_contexts(typeck: &Typeck) -> &[(acvus_utils::QualifiedRef, Ty)] {
+    typeck.contexts.get(&None).map_or(&[], |named| named)
 }
 
 fn assert_admitted(typeck: &Typeck) {

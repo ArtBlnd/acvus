@@ -344,6 +344,9 @@ fn check_input(cx: &mut Ctxt<'_>, site: AstId, name: Astr, span: Span) -> Term {
     match entered {
         Some(term) => {
             cx.out.names.insert(site, Name::Input(name));
+            if !cx.out.inputs_read.iter().any(|(read, _)| *read == name) {
+                cx.out.inputs_read.push((name, span));
+            }
             let crossed = cx.scope.lambdas();
             let capturing = Capturing {
                 name,

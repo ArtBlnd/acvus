@@ -61,10 +61,16 @@ pub(super) fn note_access(cx: &mut Ctxt<'_>, context: QualifiedRef, access: Acce
 }
 
 /// A context's declared type at this body, every node `Opaque`, so it never
-/// grows and equals only itself (context §2, types §1).
+/// grows and equals only itself (context §2, types §1). The body names it
+/// (`Output::contexts_named`): the run's, or the innermost lambda's around.
 pub(super) fn context_term(cx: &mut Ctxt<'_>, _site: AstId, context: QualifiedRef, span: Span) -> Option<Term> {
     match cx.decls.context(context) {
-        Some(ty) => Some(cx.context_type(context, ty)),
+        Some(ty) => {
+            let term = cx.context_type(context, ty);
+            let body = cx.scope.lambdas().first().copied();
+            cx.out.contexts_named.push((body, context, term));
+            Some(term)
+        }
         None => {
             refusal::push(cx, RefusalKind::UnknownContext { context }, span);
             None

@@ -16,7 +16,6 @@ use acvus_ast::Span;
 use acvus_utils::Astr;
 
 use super::call::coerce;
-use super::context::Named;
 use super::control::diamond;
 use super::ctxt::{Declared, Entry, Lcx, Lowered};
 use crate::ir::cfg::Op;
@@ -260,8 +259,7 @@ pub(super) fn array_map(
     });
     let result_ty = cx.intern(TyKind::Array(mapped, LenTerm::Known(len), ()));
     let name = cx.decls.core().receiver_param();
-    let named = Named::default();
-    let entry = Entry { captures: Vec::new(), params: params.iter().map(|ty| Declared { name, ty: *ty, span }).collect(), named: &named };
+    let entry = Entry { captures: Vec::new(), params: params.iter().map(|ty| Declared { name, ty: *ty, span }).collect(), contexts: &[] };
     let body = cx.nested(cx.decided, super::ctxt::ordered(&effect), mapped).make_body(entry, |inner, _, at| element(inner, at), span);
     let f = cx.made(Op::MakeClosure { bodies: vec![body], captures: Vec::new() }, fn_ty, span);
     let mut args = arrays;

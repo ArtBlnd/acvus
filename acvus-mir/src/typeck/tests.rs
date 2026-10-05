@@ -4036,3 +4036,43 @@ fn an_interface_is_the_same_but_for_the_identities_its_bodies_made() {
     };
     assert!(!one.same(elsewhere), "two verifications make two identities of the context");
 }
+
+// -- what the run declares: its parameters and the contexts each body names ---
+
+/// programs §1-§2, §4: the run's parameters are the inputs its source
+/// reads, in the order of the unit's parameters, the text of their names,
+/// whatever order the source reads them in; an input given and not read is
+/// none.
+#[test]
+fn the_runs_parameters_are_the_inputs_it_reads_by_name() {
+    let mut fx = Fixture::new();
+    let int = fx.int(IntTy::I64);
+    for input in ["b", "a", "c"] {
+        fx.input(input, int);
+    }
+    let names = fx.names.clone();
+    let (checked, _) = fx.script("($b, $a)");
+    checked.admitted();
+    let params: Vec<&str> = checked.typeck.inputs.iter().map(|input| names.resolve(input.name)).collect();
+    assert_eq!(params, ["a", "b"]);
+}
+
+/// context §3: each body names its own contexts, the run's outside its
+/// lambdas and a lambda's in its body, each once, at its declared type.
+#[test]
+fn each_body_names_its_own_contexts_once() {
+    let mut fx = Fixture::new();
+    let int = fx.int(IntTy::I64);
+    fx.context("x", int);
+    fx.context("y", int);
+    let names = fx.names.clone();
+    let (checked, _) = fx.script("let a = @x; let f = |z| -> @y; @x");
+    checked.admitted();
+    let named = |body: &[(QualifiedRef, Ty)]| -> Vec<String> {
+        body.iter().map(|(context, ty)| format!("{}: {:?}", names.resolve(context.name), checked.kind(*ty))).collect()
+    };
+    assert_eq!(named(&checked.typeck.contexts[&None]), ["x: Int(I64)"]);
+    let lambdas: Vec<Vec<String>> = checked.typeck.contexts.iter().filter(|(body, _)| body.is_some()).map(|(_, body)| named(body)).collect();
+    assert_eq!(lambdas, [vec!["y: Int(I64)".to_string()]]);
+}
+
