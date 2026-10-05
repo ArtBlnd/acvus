@@ -1,8 +1,10 @@
-//! Facts of a concrete type alone: what copies (ownership §1) and where a
-//! value holds loans (ownership §5).
+//! Facts of a concrete type alone: what copies (ownership §1), whether some
+//! value has it, and where a value holds loans (ownership §5).
 
 use acvus_utils::QualifiedRef;
+use rustc_hash::FxHashMap;
 
+use super::arg::LenTerm;
 use super::kind::{Holds, Mutability, TyKind};
 use super::structural::structure;
 use super::{Concrete, Phase, Ty, TyId, Types};
@@ -89,6 +91,65 @@ where
             | TyKind::Unit
             | TyKind::Ref(Mutability::Shared, _)
     )
+}
+
+/// Whether some value has the concrete `ty`. `!` has none (types §4). A
+/// value holds every part of a tuple, an object and an array, so each has
+/// one where every part does, and an array of no element always; it holds
+/// one variant of an enum, an `Option` and a `Result` (types §1), so each
+/// has one where some variant does, a variant of no payload always. A
+/// reference lends storage holding a value of its target (ownership §5), so
+/// it has one where its target does; a slice may be empty, so it always
+/// does. Every other type has one: a primitive, `String`, `str`, a function
+/// value, an order token, a started call, and an extern-defined type, whose
+/// values the language knows only through its declarations.
+///
+/// Cost: O(the types `ty` reaches), each judged once.
+pub fn inhabited(types: &Types<Concrete>, ty: Ty) -> bool {
+    inhabited_in(types, ty, &mut FxHashMap::default())
+}
+
+/// `inhabited`, each type already judged answered from `judged`.
+fn inhabited_in(types: &Types<Concrete>, ty: Ty, judged: &mut FxHashMap<Ty, bool>) -> bool {
+    if let Some(known) = judged.get(&ty) {
+        return *known;
+    }
+    let answer = acvus_utils::grow(|| inhabited_level(types, ty, judged));
+    judged.insert(ty, answer);
+    answer
+}
+
+fn inhabited_level(types: &Types<Concrete>, ty: Ty, judged: &mut FxHashMap<Ty, bool>) -> bool {
+    match types.kind(ty) {
+        TyKind::Never => false,
+        TyKind::Tuple(items, _) => items.iter().all(|item| inhabited_in(types, *item, judged)),
+        TyKind::Object { fields, .. } => fields.iter().all(|(_, field)| inhabited_in(types, *field, judged)),
+        TyKind::Array(element, len, _) => match len {
+            LenTerm::Known(0) => true,
+            LenTerm::Known(_) => inhabited_in(types, *element, judged),
+            LenTerm::Var(var) => match *var {},
+        },
+        TyKind::Enum { variants, .. } => {
+            variants.iter().any(|(_, payload)| payload.is_none_or(|payload| inhabited_in(types, payload, judged)))
+        }
+        TyKind::Option(..) => true,
+        TyKind::Result(ok, err, _) => inhabited_in(types, *ok, judged) || inhabited_in(types, *err, judged),
+        TyKind::Ref(_, target) => inhabited_in(types, *target, judged),
+        TyKind::Slice(_)
+        | TyKind::Int(_)
+        | TyKind::Float
+        | TyKind::Char
+        | TyKind::String
+        | TyKind::Bool
+        | TyKind::Unit
+        | TyKind::Str
+        | TyKind::Order
+        | TyKind::Handle(_)
+        | TyKind::Fn { .. }
+        | TyKind::Closures(_)
+        | TyKind::UserDefined { .. } => true,
+        TyKind::Var(var) => match *var {},
+    }
 }
 
 /// What one position of a type is (ownership §5, effects §6).
@@ -223,4 +284,152 @@ pub fn lent_types(types: &Types<Concrete>, lifetimes: &impl LifetimesOf, ty: Ty)
         })
     });
     lent
+}
+
+#[cfg(test)]
+mod tests {
+    use acvus_utils::{Interner, QualifiedRef};
+
+    use super::inhabited;
+    use crate::ty::{Concrete, IntTy, LenTerm, Mark, MarkTerm, Mutability, Ty, TyKind, Types};
+
+    struct Fixture {
+        names: Interner,
+        types: Types<Concrete>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Fixture { names: Interner::new(), types: Types::new() }
+        }
+
+        fn ty(&mut self, kind: TyKind<Concrete>) -> Ty {
+            self.types.intern(kind)
+        }
+
+        fn never(&mut self) -> Ty {
+            self.ty(TyKind::Never)
+        }
+
+        fn int(&mut self) -> Ty {
+            self.ty(TyKind::Int(IntTy::I64))
+        }
+
+        /// The enum `E` of `variants`, each a tag and its payload.
+        fn enum_of(&mut self, variants: &[(&str, Option<Ty>)]) -> Ty {
+            let variants = variants.iter().map(|(tag, payload)| (self.names.intern(tag), *payload)).collect();
+            let name = QualifiedRef::root(self.names.intern("E"));
+            self.ty(TyKind::Enum { name, variants, label: () })
+        }
+
+        fn holds_a_value(&self, ty: Ty) -> bool {
+            inhabited(&self.types, ty)
+        }
+    }
+
+    #[test]
+    fn never_has_no_value() {
+        let mut fx = Fixture::new();
+        let never = fx.never();
+        assert!(!fx.holds_a_value(never));
+    }
+
+    /// A tuple or an object has a value where every part does.
+    #[test]
+    fn a_tuple_or_an_object_has_none_where_a_part_has_none() {
+        let mut fx = Fixture::new();
+        let (int, never) = (fx.int(), fx.never());
+        let (a, b) = (fx.names.intern("a"), fx.names.intern("b"));
+        let held = fx.ty(TyKind::Tuple(Box::new([int, never]), ()));
+        let unit = fx.ty(TyKind::Tuple(Box::new([]), ()));
+        let ints = fx.ty(TyKind::Tuple(Box::new([int, int]), ()));
+        let object = fx.ty(TyKind::Object { fields: Box::new([(a, int), (b, never)]), label: () });
+        assert!(!fx.holds_a_value(held));
+        assert!(!fx.holds_a_value(object));
+        assert!(fx.holds_a_value(unit));
+        assert!(fx.holds_a_value(ints));
+    }
+
+    /// An array of no element has its one value whatever its element type;
+    /// a longer one holds an element.
+    #[test]
+    fn an_array_has_none_only_where_it_holds_an_element_that_has_none() {
+        let mut fx = Fixture::new();
+        let (int, never) = (fx.int(), fx.never());
+        let empty = fx.ty(TyKind::Array(never, LenTerm::Known(0), ()));
+        let two = fx.ty(TyKind::Array(never, LenTerm::Known(2), ()));
+        let ints = fx.ty(TyKind::Array(int, LenTerm::Known(2), ()));
+        assert!(fx.holds_a_value(empty));
+        assert!(!fx.holds_a_value(two));
+        assert!(fx.holds_a_value(ints));
+    }
+
+    /// A value holds one variant: a sum has a value where some variant
+    /// does, and a variant of no payload always does.
+    #[test]
+    fn a_sum_has_a_value_where_some_variant_does() {
+        let mut fx = Fixture::new();
+        let (int, never) = (fx.int(), fx.never());
+        let none_only = fx.ty(TyKind::Option(never, ()));
+        let ok_only = fx.ty(TyKind::Result(int, never, ()));
+        let neither = fx.ty(TyKind::Result(never, never, ()));
+        assert!(fx.holds_a_value(none_only));
+        assert!(fx.holds_a_value(ok_only));
+        assert!(!fx.holds_a_value(neither));
+        let no_variant = fx.enum_of(&[]);
+        let bare = fx.enum_of(&[("A", None)]);
+        let held = fx.enum_of(&[("A", Some(never))]);
+        let one_held = fx.enum_of(&[("A", Some(never)), ("B", None)]);
+        assert!(!fx.holds_a_value(no_variant));
+        assert!(fx.holds_a_value(bare));
+        assert!(!fx.holds_a_value(held));
+        assert!(fx.holds_a_value(one_held));
+    }
+
+    /// A reference lends storage holding a value of its target; a slice
+    /// may be empty.
+    #[test]
+    fn a_reference_has_a_value_where_its_target_does() {
+        let mut fx = Fixture::new();
+        let (int, never) = (fx.int(), fx.never());
+        let shared = fx.ty(TyKind::Ref(Mutability::Shared, never));
+        let exclusive = fx.ty(TyKind::Ref(Mutability::Mut, never));
+        let lent_int = fx.ty(TyKind::Ref(Mutability::Shared, int));
+        let slice = fx.ty(TyKind::Slice(never));
+        let lent_slice = fx.ty(TyKind::Ref(Mutability::Shared, slice));
+        assert!(!fx.holds_a_value(shared));
+        assert!(!fx.holds_a_value(exclusive));
+        assert!(fx.holds_a_value(lent_int));
+        assert!(fx.holds_a_value(lent_slice));
+    }
+
+    /// An extern-defined type has a value whatever its arguments: the
+    /// language knows its values only through its declarations.
+    #[test]
+    fn an_extern_defined_type_has_a_value() {
+        let mut fx = Fixture::new();
+        let never = fx.never();
+        let id = QualifiedRef::root(fx.names.intern("Vec"));
+        let vec = fx.ty(TyKind::UserDefined {
+            id,
+            type_args: Box::new([never]),
+            effect: None,
+            identity: None,
+            marked: MarkTerm::Known(Mark::Unmarked),
+        });
+        assert!(fx.holds_a_value(vec));
+    }
+
+    /// compilation §2: a type written in k steps is judged in O(k), so a
+    /// tuple of two copies of the one before it, 64 deep, is judged at
+    /// once.
+    #[test]
+    fn a_type_repeating_its_parts_is_judged_once_per_type() {
+        let mut fx = Fixture::new();
+        let mut ty = fx.never();
+        for _ in 0..64 {
+            ty = fx.ty(TyKind::Tuple(Box::new([ty, ty]), ()));
+        }
+        assert!(!fx.holds_a_value(ty));
+    }
 }

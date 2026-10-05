@@ -25,7 +25,7 @@ use rustc_hash::FxBuildHasher;
 pub use arg::{IdentityId, IdentityTerm, LenTerm, Mark, MarkTerm};
 pub use effect::{Contexts, Cost, Effect, EffectTerm, Reissue, SplitCost};
 pub use flow::{Alignment, Declared, Flow, FlowEnd, FlowTerm, Flows, Source};
-pub use facts::{LifetimesOf, PositionKind, Resolve, copies, copies_alone, copies_in, for_each_position, lent_types, position_kinds, positions};
+pub use facts::{LifetimesOf, PositionKind, Resolve, copies, copies_alone, copies_in, for_each_position, inhabited, lent_types, position_kinds, positions};
 pub use kind::{Calls, CallsTerm, Holds, HoldsTerm, Mutability, TyKind};
 pub use num::{CastTy, IntTy, WordTy};
 
