@@ -45,7 +45,7 @@ Equality and ordering mean what they mean in Rust, with one exception: `NaN == N
 
 `as` casts between the numbers, `bool` and `char` as Rust casts them.
 
-A coercion is applied without being written. A reference to a container reads as its view: `&Vec<T>` as `&[T]`, `&String` as `&str`. A declared extern cast coerces as types §3 and §7 state.
+A coercion is applied without being written. A reference to an extern-defined container reads as its view: `&Vec<T>` as `&[T]`. A built-in container has no such view: `&String` reads as `&str` only through `as_str()`. A declared extern cast coerces as types §3 and §7 state.
 
 ## 6. Deref
 

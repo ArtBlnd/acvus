@@ -44,7 +44,7 @@ An object's fields, and an enum's variants, are ordered by their names' text, so
 
 ## 3. Subtyping
 
-A declared extern cast from `S` to `T` makes `S` a subtype of `T`. The declared casts and the views (operators §5) form a tree: every type has at most one next step up, so every order they give is total. Where values of different types meet in one slot, the slot takes their nearest common ancestor, and each value is coerced to it.
+A declared extern cast from `S` to `T` makes `S` a subtype of `T`. `S` is an extern-defined type or a reference to one, and `T` is any type of the same mode: an owned value casts to an owned one, a `&` to a `&`, and a `&mut` to a `&mut`. A cast of a reference is declared as one; no cast of a type gives one of a reference to it. The declared casts and the views (operators §5) form a tree: every type has at most one next step up, so every order they give is total. Where values of different types meet in one slot, the slot takes their nearest common ancestor, and each value is coerced to it.
 
 An identity is a binding a value's type carries: it never changes, two identities are known to be one or not, and two different identities are never made one. A type carries at most one identity.
 
