@@ -16,10 +16,10 @@ use acvus_ast::{Args, AstId, BinOp, Binder, Expr, Literal, RefKind, Slot, Span};
 use super::control::lower_short_circuit;
 use super::ctxt::{Lcx, Lowered};
 use super::expr::lower_expr;
-use super::place::{lend, operand};
+use super::place::{extract, lend, operand};
 use crate::decl::{PairMember, unwrapped};
 use crate::ir::cfg::Op;
-use crate::ir::{Callee, UnaryOp, ValueId};
+use crate::ir::{Callee, PathSeg, UnaryOp, ValueId};
 use crate::ty::structural::structure;
 use crate::ty::{Mutability, Ty, TyKind};
 use crate::typeck::{Adjustment, Coercion, Impl};
@@ -174,7 +174,6 @@ fn variant_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, tag: acvus_utils::As
 /// `.unwrap()` is the language's own (operators §2).
 pub(super) fn lower_method<S: Slot>(
     cx: &mut Lcx<'_, '_>,
-    site: AstId,
     callee_site: AstId,
     receiver: &Expr<S>,
     args: &[Expr<S>],
@@ -202,8 +201,7 @@ pub(super) fn lower_method<S: Slot>(
         let variant = structure(cx.types(), cx.value_ty(*wrapped))
             .and_then(|wrapped| unwrapped(&wrapped))
             .unwrap_or_else(|| panic!("`unwrap` takes an `Option` or a `Result` (operators §2), not {:?}", cx.kind(cx.value_ty(*wrapped))));
-        let ty = cx.ty(site);
-        return cx.emit(Op::UnwrapVariant { src: *wrapped, variant }, ty, span);
+        return extract(cx, *wrapped, PathSeg::Payload(variant), span);
     }
     call_reached(cx, callee_site, all, span)
 }

@@ -1,9 +1,14 @@
 //! The parts of a transparent structured type (types §1): an object, an
 //! enum, a tuple, an array, an `Option` and a `Result`, and no other. Each
 //! kind's parts are in the order the type table stores them, so no interner
-//! is read. This is the one place such a type is taken apart; typeck, lower
-//! and every later reader ask it. A sequence's element is read here too
-//! (`element`), a slice's among them, though a slice is no structure.
+//! is read. Typeck, lowering and the IR take such a type apart here: one
+//! part by its key, a product's fields, a variant type's variants, and a
+//! sequence's element (`element`), a slice's among them, though a slice is
+//! no structure. Three kinds of reader still match these kinds themselves:
+//! a walk or a map over a type's components, which also enters references,
+//! functions and declared types; the loans analysis's layout of a value's
+//! positions, which follows the order those walks lay positions in; and an
+//! operation's check of the operand kinds it is defined on.
 //!
 //! A struct a declaration names is not one: it is defined outside the
 //! program and equals only itself (types §1).
@@ -76,7 +81,7 @@ pub struct Part<V: Phase> {
 
 /// The element of a sequence (operators §3): an array's, its one part
 /// `Element` (types §1), and a slice's, which is no structure; `None` for
-/// any other type. The one place a sequence's element is read.
+/// any other type.
 pub fn element<V>(types: &Types<V>, ty: TyId<V>) -> Option<TyId<V>>
 where
     V: Phase,
@@ -149,7 +154,7 @@ impl<V: Phase> Structure<'_, V> {
     /// The variants of a variant type, in order, each with its payload's
     /// type where it has one: `Some` then `None`, `Ok` then `Err`, an enum's
     /// in the order its type stores them. `None` for a structure that is no
-    /// variant type. The one place a variant type's variants are listed.
+    /// variant type.
     pub fn variants(&self) -> Option<SmallVec<[Variant<V>; 4]>> {
         let variant = |key, payload| Variant { key, payload };
         match *self {
@@ -171,8 +176,7 @@ impl<V: Phase> Structure<'_, V> {
 
     /// A product's fields, keyed, in order: a tuple's elements by their
     /// positions, an object's fields in the order its type stores them.
-    /// `None` for a structure that is no tuple or object. The one place a
-    /// product's fields are listed.
+    /// `None` for a structure that is no tuple or object.
     pub fn fields(&self) -> Option<SmallVec<[Part<V>; 4]>> {
         let part = |key, ty| Part { key, ty };
         match *self {

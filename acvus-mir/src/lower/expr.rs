@@ -40,9 +40,7 @@ fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> Lowered<ValueId>
         }
         Expr::Index { id, callee_id, object, index, span } => lower_index(cx, *id, *callee_id, object, index, *span)?,
         Expr::FuncCall { id, func, args, span } => lower_call(cx, *id, func, args, *span)?,
-        Expr::MethodCall { id, callee_id, receiver, args, span, .. } => {
-            lower_method(cx, *id, *callee_id, receiver, args, *span)?
-        }
+        Expr::MethodCall { callee_id, receiver, args, span, .. } => lower_method(cx, *callee_id, receiver, args, *span)?,
         Expr::Pipe { id, left, right, span } => lower_pipe(cx, *id, left, right, *span)?,
         Expr::Lambda { id, params, body, span, .. } => lower_lambda(cx, *id, params, body, *span)?,
         Expr::Paren { inner, .. } => lower_expr(cx, inner)?,

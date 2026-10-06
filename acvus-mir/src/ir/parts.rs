@@ -37,7 +37,7 @@ pub(crate) fn owned_region(path: &[PathSeg]) -> &[PathSeg] {
 /// The type of the part `seg` names of a value of `holder`, where it has
 /// that part: a sequence's element at any index (`element`), a tuple's
 /// element at its position, a field, or the payload of a variant (types
-/// §1). The one place a step of a path is typed.
+/// §1).
 pub(crate) fn step_ty(types: &Types<Concrete>, holder: Ty, seg: PathSeg) -> Option<Ty> {
     match seg {
         PathSeg::Index(at) => element(types, holder).or_else(|| structure(types, holder)?.part(PartKey::Index(at))),

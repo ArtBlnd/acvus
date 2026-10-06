@@ -14,12 +14,12 @@ use super::call::convert;
 use super::ctxt::{Home, Lcx, LoopTargets, Lowered, Unreached};
 use super::expr::lower_expr;
 use super::pat::{Matched, bind, test};
-use super::place::{Place, assign, view_array};
+use super::place::{Place, assign, extract, view_array};
 use super::stmt::{lower_body, lower_stmts};
 use crate::decl::unwrapped;
 use crate::ir::cfg::{Op, Terminator};
-use crate::ir::{ForSource, RefTarget, ValueId};
-use crate::ty::structural::{PartKey, VariantKey, structure};
+use crate::ir::{ForSource, PathSeg, RefTarget, ValueId};
+use crate::ty::structural::{VariantKey, structure};
 use crate::ty::{Mutability, Ty, TyKind};
 use crate::typeck::{Iteration, TryExit};
 
@@ -328,7 +328,6 @@ pub(super) fn lower_return<S: Slot>(cx: &mut Lcx<'_, '_>, value: &Expr<S>, span:
 /// into its result at the `?`'s site.
 pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr<S>, span: Span) -> Lowered<ValueId> {
     let tried = lower_expr(cx, inner)?;
-    let value_ty = cx.ty(site);
     let exit = cx
         .decided
         .try_exit(site)
@@ -350,10 +349,7 @@ pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr
     let left = cx.enter_block(leave, span).and_then(|_| match exit {
         TryExit::Option(_) => Ok(cx.made(Op::MakeVariant { variant: VariantKey::None, payload: None }, exit_ty, span)),
         TryExit::Result(_) => {
-            let error_ty = structure(cx.types(), tried_ty)
-                .and_then(|structured| structured.part(PartKey::Payload(VariantKey::Err)))
-                .unwrap_or_else(|| panic!("a `?` that leaves by `Err` tries a `Result`, not {:?}", cx.kind(tried_ty)));
-            let error = cx.emit(Op::UnwrapVariant { src: tried, variant: VariantKey::Err }, error_ty, span)?;
+            let error = extract(cx, tried, PathSeg::Payload(VariantKey::Err), span)?;
             Ok(cx.made(Op::MakeVariant { variant: VariantKey::Err, payload: Some(error) }, exit_ty, span))
         }
     });
@@ -361,5 +357,5 @@ pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr
         cx.return_value(left, span);
     }
     cx.enter_block(on, span)?;
-    cx.emit(Op::UnwrapVariant { src: tried, variant: goes_on }, value_ty, span)
+    extract(cx, tried, PathSeg::Payload(goes_on), span)
 }

@@ -1114,9 +1114,7 @@ fn fire_iterate(
     cx.out.iteration.insert(site, iteration);
 }
 
-/// The element of a closed array or slice node, a sequence's one part
-/// (operators §3): an array's is its structure's (types §1), and a slice,
-/// which is no structure, holds its own.
+/// The element of a closed array or slice node (`ty::structural::element`).
 ///
 /// # Panics
 /// `sequence` is neither: callers match its head first.
@@ -1530,7 +1528,7 @@ fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, out: 
     let Some(Structure::Tuple(items, _)) = structure(cx.infer.types(), closed.term) else {
         return true;
     };
-    for (at, item) in items.to_vec().iter().enumerate() {
+    for (at, item) in items.iter().enumerate() {
         let mut part = path.clone();
         part.push(at);
         if !position(cx, *item, part, reading, out) {

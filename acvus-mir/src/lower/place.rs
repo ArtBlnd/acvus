@@ -155,7 +155,6 @@ pub(super) fn input_place(cx: &Lcx<'_, '_>, name: acvus_utils::Astr, ty: Ty) -> 
     Place { target, path: Vec::new(), ty }
 }
 
-
 /// Field `field` of `object`, through a reference as Rust auto-derefs: a
 /// reference on the way is read at the least of its own mutability and the
 /// path's before it, what the path reaches (ownership §5). The path's is
@@ -183,7 +182,6 @@ fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, spa
         Operand::Value(value) => Operand::Value(extract(cx, value, seg, span)?),
     })
 }
-
 
 /// The type of `container`'s elements as its sequence holds them: an
 /// array's or a slice's own, any other container's by the `as_slice(_mut)`

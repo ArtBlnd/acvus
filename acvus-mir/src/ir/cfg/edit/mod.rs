@@ -1527,8 +1527,6 @@ fn touches_part(op: &Op, value: ValueId, path: &[PathSeg]) -> bool {
     true
 }
 
-
-
 impl<S> Editor<'_, S>
 where
     S: ClonesReads,

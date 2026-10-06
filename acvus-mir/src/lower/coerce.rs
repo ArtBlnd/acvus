@@ -94,16 +94,20 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> Lowered<ValueId> {
                 .collect::<Lowered<_>>()?;
             Ok(cx.made(Op::MakeTuple { elements }, made, span))
         }
-        (Some(Structure::Object(from_fields, _)), Some(Structure::Object(slot_fields, _))) => {
-            let (from_fields, slot_fields): (Vec<(Astr, Ty)>, Vec<(Astr, Ty)>) = (from_fields.to_vec(), slot_fields.to_vec());
-            let fields = slot_fields
-                .into_iter()
+        (Some(of_from @ Structure::Object(..)), Some(Structure::Object(slot_fields, _))) => {
+            let narrowed: Vec<(Astr, Ty)> = slot_fields
+                .iter()
                 .map(|(name, _)| {
-                    let (_, field_ty) = *from_fields
-                        .iter()
-                        .find(|(field, _)| *field == name)
+                    let ty = of_from
+                        .part(PartKey::Field(*name))
                         .unwrap_or_else(|| panic!("typeck narrows an object only where it holds every field its slot names"));
-                    let field = access.part(cx, PathSeg::Field(name), field_ty)?;
+                    (*name, ty)
+                })
+                .collect();
+            let fields = narrowed
+                .into_iter()
+                .map(|(name, ty)| {
+                    let field = access.part(cx, PathSeg::Field(name), ty)?;
                     Ok((name, coerced.part(cx, PartKey::Field(name), field)?))
                 })
                 .collect::<Lowered<_>>()?;

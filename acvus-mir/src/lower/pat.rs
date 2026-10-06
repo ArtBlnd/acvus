@@ -156,7 +156,6 @@ fn slice_ref(cx: &mut Lcx<'_, '_>, place: &Place, lent: Mutability, span: Span) 
     cx.emit(op, ty, span)
 }
 
-
 /// Whether a pattern may fail on a value of its type. A list's length is
 /// tested by `test` itself, so a list counts as refutable here.
 fn refutable<S: Slot>(pattern: &Pattern<S>) -> bool {

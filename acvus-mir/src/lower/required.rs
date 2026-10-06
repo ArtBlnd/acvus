@@ -1232,7 +1232,6 @@ enum UnitUse {
     Moved,
 }
 
-
 impl PlanFacts<'_> {
     /// Every holder the body cuts. A value is cut where an operand takes
     /// it as `PartMoved`: an extraction moves a part out of it, or a
