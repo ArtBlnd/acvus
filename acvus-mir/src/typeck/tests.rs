@@ -760,33 +760,13 @@ fn branches_enter_one_slot() {
     assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(_)]));
 }
 
-/// control-flow, types §4: `return` is `!`, and its value enters the body's
-/// result.
+/// control-flow, types §4: `return` gives no value, and its value enters
+/// the body's result.
 #[test]
-fn return_is_never_and_enters_the_result() {
+fn return_gives_no_value_and_enters_the_result() {
     let (checked, script) = Fixture::new().script("if true { return 1u8; }; 2");
     checked.admitted();
     assert!(is_int(&checked, tail(&checked, &script), IntTy::U8));
-}
-
-/// `let x = if $c { then } else { other }; 0` refused, each refusal a
-/// relation between the two that does not hold.
-fn assert_constructors_do_not_meet(then: &str, other: &str) {
-    let mut fx = Fixture::new();
-    let bool_ty = fx.ty(TyKind::Bool);
-    fx.input("c", bool_ty);
-    let source = format!("let x = if $c {{ {then} }} else {{ {other} }}; 0");
-    let (checked, _) = fx.script(&source);
-    let refusals = checked.refusals();
-    assert!(!refusals.is_empty() && refusals.iter().all(|kind| matches!(kind, RefusalKind::Mismatch(_))), "{source}: {refusals:?}");
-}
-
-/// types §4: every constructor is invariant, and no type is `!` by holding
-/// a part of type `!`, so a tuple with a `!` element does not meet one
-/// without.
-#[test]
-fn a_tuple_with_a_never_element_does_not_meet_its_sibling() {
-    assert_constructors_do_not_meet("(0, 1)", "(0, return 2)");
 }
 
 /// types §3-4: an array literal's elements are values entering its one
@@ -804,18 +784,6 @@ fn an_array_with_a_never_element_joins_its_sibling() {
         panic!("not an array");
     };
     assert!(is_int(&checked, *element, IntTy::I64));
-}
-
-/// types §4: likewise an object with a `!` field.
-#[test]
-fn an_object_with_a_never_field_does_not_meet_its_sibling() {
-    assert_constructors_do_not_meet("{ a: 0, b: 1, }", "{ a: 0, b: return 2, }");
-}
-
-/// types §4: likewise a `Some` with a `!` payload.
-#[test]
-fn a_some_with_a_never_payload_does_not_meet_its_sibling() {
-    assert_constructors_do_not_meet("Some(1)", "Some(return 2)");
 }
 
 /// control-flow: a range iterates its integers by value.
@@ -2311,10 +2279,11 @@ fn a_view_step_names_its_impl() {
     assert_eq!(*ret, steps[0].to);
 }
 
-/// control-flow, types §6: a block whose last statement's type is `!` is
-/// `!`, where that type becomes known only once its call is reached.
+/// control-flow, types §4, §6: a block whose last statement is a call of a
+/// declaration whose result is `!` gives no value, which is known only once
+/// its call is reached, and takes the type its use decides: the `if`'s.
 #[test]
-fn a_block_ending_in_a_call_of_type_never_is_never() {
+fn a_block_ending_in_a_call_of_a_declaration_of_result_never_takes_its_uses_type() {
     let mut fx = Fixture::new();
     let never = fx.ty(TyKind::Never);
     let aborts = fx.pure(&[], never);
@@ -4076,3 +4045,552 @@ fn each_body_names_its_own_contexts_once() {
     assert_eq!(lambdas, [vec!["y: Int(I64)".to_string()]]);
 }
 
+// -- a value of type `!`: what a diverging form decides (types §4-6) -------
+//
+// `!` is the type of no value. A form whose value is `!`, a `return`, a
+// block whose last statement is `break` or `continue`, or a call of a
+// declaration whose declared result is `!`, decides nothing of its own
+// type: its type is what its uses decide, and `!` where nothing does
+// (types §4, §5). `!` says nothing of a type: a decision that reads it
+// decides nothing from it and refuses nothing for it, and at a reach every
+// candidate matches it at an argument position, the receiver included,
+// and it is no type a result is taken at (types §6). So whether a program
+// is admitted does not depend on which of these forms gives the `!`, nor
+// on the order of a call's arguments.
+
+/// `statements`, each `{X}` a form whose value is `!`, then the tail `0`, in
+/// each way such a form is written: directly, `(return 1)`; where two arms
+/// that both return meet, `(if $c { return 1 } else { return 2 })`; read
+/// from a binding given one, `let a = return 1;` and `a`; and inside a
+/// `while`, where an arm that breaks meets one that continues,
+/// `(if $c { break; } else { continue; })`.
+fn diverging_forms(statements: &str) -> [String; 4] {
+    let at = |value: &str| statements.replace("{X}", value);
+    [
+        format!("{} 0", at("(return 1)")),
+        format!("{} 0", at("(if $c { return 1 } else { return 2 })")),
+        format!("let a = return 1; {} 0", at("a")),
+        format!("while $c {{ {} }} 0", at("(if $c { break; } else { continue; })")),
+    ]
+}
+
+/// `statements` in the body of the lambda `k`, then its tail `y`, in each
+/// form `diverging_forms` writes, each `return` leaving `k` with `y`; the
+/// run calls `k(3)`.
+fn diverging_forms_in_a_lambda(statements: &str) -> [String; 4] {
+    let at = |value: &str| statements.replace("{X}", value);
+    [
+        format!("let k = |y| -> {{ {} y }}; k(3)", at("(return y)")),
+        format!("let k = |y| -> {{ {} y }}; k(3)", at("(if $c { return y } else { return y })")),
+        format!("let k = |y| -> {{ let a = return y; {} y }}; k(3)", at("a")),
+        format!("let k = |y| -> {{ while $c {{ {} }} y }}; k(3)", at("(if $c { break; } else { continue; })")),
+    ]
+}
+
+/// `statements`, each `{X}` a call of `abort`, whose declared result is
+/// `!`, then the tail `0`, in each way one is written: directly, `abort()`;
+/// where two arms that both call it meet,
+/// `(if $c { abort() } else { abort() })`; and read from a binding given
+/// one, `let a = abort();` and `a`.
+fn aborting_forms(statements: &str) -> [String; 3] {
+    let at = |value: &str| statements.replace("{X}", value);
+    [
+        format!("{} 0", at("abort()")),
+        format!("{} 0", at("(if $c { abort() } else { abort() })")),
+        format!("let a = abort(); {} 0", at("a")),
+    ]
+}
+
+/// `statements` in the body of the lambda `k`, then its tail `y`, in each
+/// form `aborting_forms` writes; the run calls `k(3)`.
+fn aborting_forms_in_a_lambda(statements: &str) -> [String; 3] {
+    let at = |value: &str| statements.replace("{X}", value);
+    [
+        format!("let k = |y| -> {{ {} y }}; k(3)", at("abort()")),
+        format!("let k = |y| -> {{ {} y }}; k(3)", at("(if $c { abort() } else { abort() })")),
+        format!("let k = |y| -> {{ let a = abort(); {} y }}; k(3)", at("a")),
+    ]
+}
+
+/// What this section's programs read: the input `$c: bool`, `abort() -> !`,
+/// `g(i64) -> i64`, `h(&i64) -> i64`, and `core::eq`, `core::cmp` and
+/// `core::add` each at `i64` alone.
+fn never_fixture() -> Fixture {
+    let mut fx = Fixture::new();
+    let (bool_ty, i64_ty) = (fx.ty(TyKind::Bool), fx.int(IntTy::I64));
+    fx.input("c", bool_ty);
+    let never = fx.ty(TyKind::Never);
+    let aborts = fx.pure(&[], never);
+    fx.declare("abort", aborts, &[]);
+    let by_value = fx.pure(&[i64_ty], i64_ty);
+    fx.declare("g", by_value, &[]);
+    let shared = fx.reference(Mutability::Shared, i64_ty);
+    let lent = fx.pure(&[shared], i64_ty);
+    fx.declare("h", lent, &[]);
+    let (eq, cmp, add) = (fx.raw.core.eq, fx.raw.core.cmp, fx.raw.core.add);
+    let equality = fx.pure(&[shared, shared], bool_ty);
+    fx.lang_item(eq, &[equality]);
+    let order = fx.pure(&[shared, shared], i64_ty);
+    fx.lang_item(cmp, &[order]);
+    fx.arithmetic(add, &[TyKind::Int(IntTy::I64)]);
+    fx
+}
+
+/// `never_fixture` with `f` declared over `(u8, u8)` and over `(bool, bool)`,
+/// each returning a `u8`, in two namespaces a bare `f` reaches both of; and
+/// the `(u8, u8)` one.
+fn with_two_overloads_of_f() -> (Fixture, QualifiedRef) {
+    let mut fx = never_fixture();
+    let (u8_ty, bool_ty) = (fx.int(IntTy::U8), fx.ty(TyKind::Bool));
+    let of_bytes = fx.pure(&[u8_ty, u8_ty], u8_ty);
+    let bytes = fx.overload("n0", "f", of_bytes);
+    let of_bools = fx.pure(&[bool_ty, bool_ty], u8_ty);
+    fx.overload("n1", "f", of_bools);
+    (fx, bytes)
+}
+
+/// The refusals of `source` checked over `fixture`'s declarations, each
+/// written, and the kinds among them.
+fn never_verdict(fixture: Fixture, source: &str) -> (Vec<String>, std::collections::HashSet<std::mem::Discriminant<RefusalKind>>) {
+    let names = fixture.names.clone();
+    let (checked, _) = fixture.script(source);
+    let written = checked.typeck.refusals.iter().map(|refusal| refusal.kind.written(&names)).collect();
+    let kinds = checked.typeck.refusals.iter().map(|refusal| std::mem::discriminant(&refusal.kind)).collect();
+    (written, kinds)
+}
+
+/// Each of `sources` admitted over the declarations `fixture` makes; the
+/// failure names every one refused, with its refusals.
+fn assert_each_admitted(fixture: impl Fn() -> Fixture, sources: &[String]) {
+    let refused: Vec<String> = sources
+        .iter()
+        .filter_map(|source| {
+            let (written, _) = never_verdict(fixture(), source);
+            (!written.is_empty()).then(|| format!("{source}\n    refused: {written:?}"))
+        })
+        .collect();
+    assert!(refused.is_empty(), "each is admitted, and these are refused:\n{}", refused.join("\n"));
+}
+
+/// Each of `sources` given one verdict over the declarations `fixture`
+/// makes: all admitted, or all refused by the same kinds of refusal.
+fn assert_one_verdict(fixture: impl Fn() -> Fixture, sources: &[String]) {
+    let verdicts: Vec<_> = sources.iter().map(|source| (source, never_verdict(fixture(), source))).collect();
+    let shown = verdicts
+        .iter()
+        .map(|(source, (written, _))| format!("{source}\n    refused: {written:?}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let alike = verdicts.windows(2).all(|pair| pair[0].1.1 == pair[1].1.1);
+    assert!(alike, "each is admitted, or each refused by the same kinds:\n{shown}");
+}
+
+/// Each of `sources` refused over the declarations `fixture` makes, all by
+/// the same kinds of refusal.
+fn assert_each_refused_alike(fixture: impl Fn() -> Fixture, sources: &[String]) {
+    assert_one_verdict(&fixture, sources);
+    let admitted: Vec<&String> = sources.iter().filter(|source| never_verdict(fixture(), source).0.is_empty()).collect();
+    assert!(admitted.is_empty(), "each is refused, and these are admitted:\n{admitted:#?}");
+}
+
+/// `sources` checked over `fixture`'s declarations, each admitted, and its
+/// every reached call but those of `abort`, which give the `!`, reaching
+/// the declaration `fixture` names.
+fn assert_each_reaches(fixture: impl Fn() -> (Fixture, QualifiedRef), sources: &[String]) {
+    let failed: Vec<String> = sources
+        .iter()
+        .filter_map(|source| {
+            let (fx, wanted) = fixture();
+            let names = fx.names.clone();
+            let abort = QualifiedRef::root(names.intern("abort"));
+            let (checked, _) = fx.script(source);
+            let refused: Vec<String> = checked.typeck.refusals.iter().map(|refusal| refusal.kind.written(&names)).collect();
+            let reached: Vec<QualifiedRef> =
+                checked.typeck.reached.values().map(|chosen| chosen.declaration).filter(|declaration| *declaration != abort).collect();
+            let shown = |declaration: &QualifiedRef| crate::ty::print::qualified(&names, *declaration);
+            let fits = refused.is_empty() && reached == [wanted];
+            (!fits).then(|| format!("{source}\n    refused: {refused:?}; reached: {:?}", reached.iter().map(shown).collect::<Vec<_>>()))
+        })
+        .collect();
+    assert!(failed.is_empty(), "each is admitted and reaches the one declaration; these are not:\n{}", failed.join("\n"));
+}
+
+/// The sources of every one of `templates` in every form `forms` writes.
+fn every_form<const FORMS: usize>(forms: fn(&str) -> [String; FORMS], templates: &[&str]) -> Vec<String> {
+    templates.iter().flat_map(|template| forms(template)).collect()
+}
+
+/// The sources of every one of `templates` in every form `diverging_forms`
+/// and `aborting_forms` write.
+fn every_diverging_form(templates: &[&str]) -> Vec<String> {
+    [every_form(diverging_forms, templates), every_form(aborting_forms, templates)].concat()
+}
+
+/// types §4-6, control-flow: a condition of a diverging form is decided by
+/// the condition: `if X`, `while X` and `if !X` are admitted in every form.
+#[test]
+fn a_condition_of_a_diverging_form_is_decided_by_the_condition() {
+    let templates = ["if {X} { 2 } else { 3 };", "while {X} { }", "if !{X} { 2 } else { 3 };"];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §4-6, operators §2: an operand of `&&` or `||` of a diverging form,
+/// on either side, is decided by the operator: admitted in every form.
+#[test]
+fn an_operand_of_and_or_or_of_a_diverging_form_is_decided_by_the_operator() {
+    let templates = ["let b = {X} && true;", "let b = true && {X};", "let b = {X} || true;", "let b = true || {X};"];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §4-6, control-flow: a range's end of a diverging form is an integer
+/// of the range's one width: admitted at either end in every form.
+#[test]
+fn a_range_end_of_a_diverging_form_is_decided_by_the_range() {
+    let templates = ["for i in {X}..3 { }", "for i in 0..{X} { }"];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §4-6, operators §2, §4: an operand of `==`, `!=` or `<` of a
+/// diverging form meets the other operand's type, on either side, and
+/// compares through `core::eq` or `core::cmp` there: admitted in every form.
+#[test]
+fn a_comparison_operand_of_a_diverging_form_meets_the_other_operand() {
+    let templates = [
+        "let b = {X} == 1;",
+        "let b = 1 == {X};",
+        "let b = {X} != 1;",
+        "let b = 1 != {X};",
+        "let b = {X} < 1;",
+        "let b = 1 < {X};",
+    ];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §4-6, operators §2: an operand of `^`, `&`, `<<` or `>>` of a
+/// diverging form, on either side, is admitted in every form: `^` and `&`
+/// take it at the other operand's type, and a shift reads a `!` as no value.
+#[test]
+fn an_operand_of_the_languages_own_integer_operators_of_a_diverging_form_is_admitted() {
+    let templates = [
+        "let b = {X} ^ 1;",
+        "let b = 1 ^ {X};",
+        "let b = {X} & 1;",
+        "let b = 1 & {X};",
+        "let b = {X} << 1;",
+        "let b = 1 << {X};",
+        "let b = {X} >> 1;",
+        "let b = 1 >> {X};",
+    ];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §4-6: an argument of a diverging form, by value to `g(i64)` or lent
+/// to `h(&i64)`, the one declaration of its name, reaches it and enters its
+/// parameter: admitted in every form.
+#[test]
+fn an_argument_of_a_diverging_form_reaches_the_one_declaration() {
+    let templates = ["let r = g({X});", "let r = h(&{X});"];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §2-4: a part of a diverging form of a tuple, an object, a `Some` or
+/// an array meets its sibling's part where the two values meet in an `if`'s
+/// one slot: its type is what that meeting decides, so the two meet,
+/// admitted in every form.
+#[test]
+fn a_constructor_part_of_a_diverging_form_meets_its_siblings_part() {
+    let templates = [
+        "let x = if $c { (0, 1) } else { (0, {X}) };",
+        "let x = if $c { { a: 0, b: 1, } } else { { a: 0, b: {X}, } };",
+        "let x = if $c { Some(1) } else { Some({X}) };",
+        "let x = if $c { [0, 1] } else { [0, {X}] };",
+    ];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §4-6, operators §3, §5, §6, control-flow: a field, an element, a
+/// deref, a `?` and an `as` of a diverging form, used as a condition: what
+/// each reads of a `!` decides nothing of the value it gives, which the
+/// condition decides: admitted in every form.
+#[test]
+fn a_projection_of_a_diverging_form_is_decided_by_its_use() {
+    let templates = [
+        "if {X}.x { 2 } else { 3 };",
+        "if {X}[0] { 2 } else { 3 };",
+        "if *{X} { 2 } else { 3 };",
+        "if {X}? { 2 } else { 3 };",
+        "if {X} as i64 == 1 { 2 } else { 3 };",
+    ];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §4-6, control-flow, patterns §4: a `for` over a diverging form and
+/// a `match` on one bind names whose type their uses decide, here a
+/// condition's `bool`: admitted in every form.
+#[test]
+fn a_for_head_or_a_scrutinee_of_a_diverging_form_binds_names_its_uses_decide() {
+    let templates = ["for v in {X} { if v { } }", "match {X} { v => if v { 2 } else { 3 }, };"];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §4-6, control-flow: a diverging form standing as a statement, and
+/// as the last statement of a block with no tail, which then decides nothing
+/// of the block's type, is admitted in every form.
+#[test]
+fn a_diverging_form_as_a_statement_or_a_blocks_end_is_admitted() {
+    let templates = ["{X};", "let x = if $c { 1 } else { {X}; };"];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §4-6, functions §2: in a lambda's body a diverging form is what it
+/// is in the run's: `if return y { 1 } else { 2 }` as the body, and a
+/// condition, an argument, a tuple's part and a call of the overloaded `f`
+/// in a block body, each `return` leaving the lambda, are admitted in every
+/// form, a call of `abort` among them. The lambda named `f` is a binding,
+/// which its call reads.
+#[test]
+fn a_diverging_form_in_a_lambda_body_is_admitted_as_in_the_run() {
+    let mut sources = vec![
+        "let f = |y| -> if return y { 1 } else { 2 }; f(3)".to_string(),
+        "let f = |y| -> if (if $c { return y } else { return y }) { 1 } else { 2 }; f(3)".to_string(),
+        "let f = |y| -> { let a = return y; if a { 1 } else { 2 } }; f(3)".to_string(),
+    ];
+    let templates = [
+        "if {X} { 2 } else { 3 };",
+        "let r = g({X});",
+        "let x = if $c { (0, 1) } else { (0, {X}) };",
+        "let r = f(2u8, {X});",
+        "let r = f({X}, 2u8);",
+    ];
+    sources.extend(every_form(diverging_forms_in_a_lambda, &templates));
+    sources.extend(every_form(aborting_forms_in_a_lambda, &templates));
+    assert_each_admitted(|| with_two_overloads_of_f().0, &sources);
+}
+
+/// types §6: a reach reads a position of type `!` as one every candidate
+/// matches, narrowing nothing there, so the order of the positions decides
+/// nothing: with `f` over `(u8, u8)` and `(bool, bool)`, `f(2u8, X)` and
+/// `f(X, 2u8)` each reach the `(u8, u8)` declaration, in every form.
+#[test]
+fn a_diverging_argument_narrows_no_overload_in_either_position() {
+    let templates = ["let r = f(2u8, {X});", "let r = f({X}, 2u8);"];
+    assert_each_reaches(with_two_overloads_of_f, &every_diverging_form(&templates));
+}
+
+/// types §6: with `o` over `i64` and over `bool`, each returning an `i64`,
+/// and nothing else deciding, `o(X)` of a diverging `X` leaves both: it is
+/// refused, by the same kinds of refusal in every form.
+#[test]
+fn a_diverging_argument_alone_before_two_overloads_is_refused_alike() {
+    assert_each_refused_alike(with_two_overloads_of_o, &every_form(diverging_forms, &["let r = o({X});"]));
+}
+
+/// `never_fixture` with `o` declared over `i64` and over `bool`, each
+/// returning an `i64`, in two namespaces a bare `o` reaches both of.
+fn with_two_overloads_of_o() -> Fixture {
+    let mut fx = never_fixture();
+    let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+    let of_int = fx.pure(&[i64_ty], i64_ty);
+    fx.overload("n0", "o", of_int);
+    let of_bool = fx.pure(&[bool_ty], i64_ty);
+    fx.overload("n1", "o", of_bool);
+    fx
+}
+
+/// types §6: `o(X)`, `X` a call of `abort`, whose declared result is `!`,
+/// narrows neither of `o`'s declarations, and nothing else decides: it is
+/// refused, by the same kinds of refusal in the three forms.
+#[test]
+fn a_call_of_abort_alone_before_two_overloads_is_refused_alike() {
+    assert_each_refused_alike(with_two_overloads_of_o, &every_form(aborting_forms, &["let r = o({X});"]));
+}
+
+/// types §5: a type variable nothing constrains is still `!`, and what reads
+/// it decides nothing: `[] == []`, and a lambda whose parameter nothing
+/// constrains reading a field, an element, a deref, a `?`, a `for` and an
+/// `as` of it, are admitted.
+#[test]
+fn a_type_variable_nothing_constrains_is_never_and_read_as_no_value() {
+    let sources = [
+        "[] == []",
+        "let f = |x| -> x.a; 0",
+        "let f = |x| -> x[0]; 0",
+        "let f = |x| -> *x; 0",
+        "let f = |x| -> x?; 0",
+        "let f = |x| -> { for v in x { } 0 }; 0",
+        "let f = |x| -> x as i64; 0",
+    ]
+    .map(String::from);
+    assert_each_admitted(never_fixture, &sources);
+}
+
+/// types §4-6: a `return` of a `return` is two diverging forms, each decided
+/// by its uses: the inner one by the run's result it enters, the outer one
+/// by the condition. Admitted in every form.
+#[test]
+fn a_return_of_a_return_is_decided_by_its_uses() {
+    let sources = [
+        "if (return (return 1)) { 2 } else { 3 }",
+        "if (if $c { return (return 1) } else { return (return 2) }) { 2 } else { 3 }",
+        "let a = return (return 1); if a { 2 } else { 3 }",
+    ]
+    .map(String::from);
+    assert_each_admitted(never_fixture, &sources);
+}
+
+/// types §4-6, operators §2, §4: both operands of one operator of a
+/// diverging form: nothing but each other decides them, so they are `!`,
+/// which a comparison and the language's own operators read as no value:
+/// admitted in every form.
+#[test]
+fn diverging_operands_on_both_sides_of_an_operator_are_admitted() {
+    let templates = [
+        "let b = {X} == {X};",
+        "let b = {X} < {X};",
+        "let b = {X} && {X};",
+        "let b = {X} ^ {X};",
+        "let b = {X} << {X};",
+    ];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §6: `f(X, X)` of a diverging `X` narrows neither overload at
+/// either position, and both give a `u8`, so both are left: refused, by the
+/// same kinds of refusal in every form.
+#[test]
+fn diverging_arguments_at_every_position_leave_both_overloads_and_are_refused_alike() {
+    assert_each_refused_alike(|| with_two_overloads_of_f().0, &every_form(diverging_forms, &["let r = f({X}, {X});"]));
+}
+
+/// types §6: `f(X, X)`, each `X` a call of `abort`, whose declared result is
+/// `!`, narrows neither overload at either position, and both give a `u8`:
+/// refused, by the same kinds of refusal in the three forms.
+#[test]
+fn calls_of_abort_at_every_position_leave_both_overloads_and_are_refused_alike() {
+    assert_each_refused_alike(|| with_two_overloads_of_f().0, &every_form(aborting_forms, &["let r = f({X}, {X});"]));
+}
+
+/// types §6: a tuple is reached by its parts in order, and a part of type
+/// `!` narrows nothing: with `p` over `((u8, u8))` and `((bool, bool))`,
+/// `p((X, 2u8))` and `p((2u8, X))` each reach the `(u8, u8)` one, in every
+/// form.
+#[test]
+fn a_diverging_tuple_part_narrows_no_overload_in_either_position() {
+    let with_two_overloads_of_p = || {
+        let mut fx = never_fixture();
+        let (u8_ty, bool_ty) = (fx.int(IntTy::U8), fx.ty(TyKind::Bool));
+        let bytes = fx.ty(TyKind::Tuple(Box::new([u8_ty, u8_ty]), ()));
+        let of_bytes = fx.pure(&[bytes], u8_ty);
+        let wanted = fx.overload("n0", "p", of_bytes);
+        let bools = fx.ty(TyKind::Tuple(Box::new([bool_ty, bool_ty]), ()));
+        let of_bools = fx.pure(&[bools], u8_ty);
+        fx.overload("n1", "p", of_bools);
+        (fx, wanted)
+    };
+    let templates = ["let r = p(({X}, 2u8));", "let r = p((2u8, {X}));"];
+    assert_each_reaches(with_two_overloads_of_p, &every_diverging_form(&templates));
+}
+
+/// types §6: a method call reaches by its receiver, then its arguments in
+/// order, and an argument of type `!` narrows nothing: with `m` over
+/// `(i64, u8, u8)` and `(i64, bool, bool)`, `$n.m(2u8, X)` and
+/// `$n.m(X, 2u8)` each reach the `(i64, u8, u8)` one, in every form.
+#[test]
+fn a_diverging_method_argument_narrows_no_overload_in_either_position() {
+    let with_two_overloads_of_m = || {
+        let mut fx = never_fixture();
+        let (i64_ty, u8_ty, bool_ty) = (fx.int(IntTy::I64), fx.int(IntTy::U8), fx.ty(TyKind::Bool));
+        fx.input("n", i64_ty);
+        let of_bytes = fx.pure(&[i64_ty, u8_ty, u8_ty], u8_ty);
+        let wanted = fx.overload("n0", "m", of_bytes);
+        let of_bools = fx.pure(&[i64_ty, bool_ty, bool_ty], u8_ty);
+        fx.overload("n1", "m", of_bools);
+        (fx, wanted)
+    };
+    let templates = ["let r = $n.m(2u8, {X});", "let r = $n.m({X}, 2u8);"];
+    assert_each_reaches(with_two_overloads_of_m, &every_diverging_form(&templates));
+}
+
+/// `never_fixture` with `step(i64) -> i64`, the one method of its name; and
+/// `step`.
+fn with_step() -> (Fixture, QualifiedRef) {
+    let mut fx = never_fixture();
+    let i64_ty = fx.int(IntTy::I64);
+    let step = fx.pure(&[i64_ty], i64_ty);
+    let wanted = fx.overload("n0", "step", step);
+    (fx, wanted)
+}
+
+/// types §6: a method call's receiver is its reach's first position, and
+/// `!` there says nothing of a type, so every candidate matches it: the
+/// first adjustment, as written, is taken. `X.step()` of a diverging `X`
+/// reaches `step(i64) -> i64`, the one method of its name, in every form.
+#[test]
+fn a_method_call_on_a_diverging_receiver_reaches_its_one_method_as_written() {
+    assert_each_reaches(with_step, &every_diverging_form(&["let r = {X}.step();"]));
+}
+
+/// types §4-6: a diverging callee's type is what its use decides, and a
+/// call decides a function type, whose flows, holds and calls nothing else
+/// decides and take their defaults (types §5): `X(2)` of a diverging `X`,
+/// as a condition, is admitted in every form.
+#[test]
+fn a_diverging_callee_is_decided_by_its_call() {
+    assert_each_admitted(never_fixture, &every_diverging_form(&["if {X}(2) { 2 } else { 3 };"]));
+}
+
+/// types §4-6, patterns §1, §4: a pattern destructuring a diverging
+/// scrutinee decides its type, and the names it binds are what their uses
+/// decide: `if let`, `while let` and a tuple pattern of `match`, each
+/// binding a condition's `bool`, are admitted in every form.
+#[test]
+fn a_pattern_over_a_diverging_scrutinee_binds_what_its_uses_decide() {
+    let templates = [
+        "let r = if let Some(u) = {X} { if u { 2 } else { 3 } } else { 4 };",
+        "while let Some(u) = {X} { if u { } }",
+        "let r = match {X} { (u, w) => if u { 2 } else { 3 }, };",
+    ];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §3-6, operators §2-3: a diverging form entering a slot, an index's
+/// `u64`, a let-bound lambda's parameter, a field stored into and a binding
+/// assigned, and one lent to `core::add`, whose one impl takes `&i64`, on
+/// either side, is admitted in every form.
+#[test]
+fn a_diverging_form_entering_a_slot_or_one_impls_parameter_is_admitted() {
+    let templates = [
+        "let v = [1, 2]; let e = v[{X}];",
+        "let k = |z| -> if z { 1 } else { 2 }; let r = k({X});",
+        "let o = { x: 1, }; o.x = {X};",
+        "let z = 0; z = {X};",
+        "let s = {X} + 1;",
+        "let s = 1 + {X};",
+    ];
+    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+}
+
+/// types §4, §6: a declaration whose result is `!` gives no value, so it
+/// matches every type its result is taken at. With `stop` over `() -> !`
+/// and `() -> i64`, a `bool` condition leaves the `!` one alone, which is
+/// reached; an `i64` leaves both, and the call is refused.
+#[test]
+fn a_declared_result_of_type_never_matches_every_type_the_result_is_taken_at() {
+    let with_two_stops = || {
+        let mut fx = never_fixture();
+        let (never, i64_ty) = (fx.ty(TyKind::Never), fx.int(IntTy::I64));
+        let stops = fx.pure(&[], never);
+        let wanted = fx.overload("n0", "stop", stops);
+        let gives = fx.pure(&[], i64_ty);
+        fx.overload("n1", "stop", gives);
+        (fx, wanted)
+    };
+    assert_each_reaches(with_two_stops, &["if stop() { 2 } else { 3 }".to_string()]);
+    let (fx, _) = with_two_stops();
+    let (checked, _) = fx.script("let x = stop(); let b = x == 1; 0");
+    assert!(
+        matches!(checked.refusals()[..], [RefusalKind::SeveralDeclarations { .. }]),
+        "{:?}",
+        checked.refusals()
+    );
+}

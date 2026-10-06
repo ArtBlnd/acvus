@@ -8,7 +8,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::ctxt::Ctxt;
 use super::generalize::InstanceId;
 use super::output::{Closure, Coercion, CoercionNode, Conversion, Entered, InstanceDecided, StructureNode, StructureTree, Typeck};
-use crate::decl::{Base, DeclaredFacts, Head, PairMember, Scheme, TyVarBound};
+use crate::decl::{DeclaredFacts, PairMember, Scheme, TyVarBound};
 use crate::infer::{FreezeMemo, ShapeCoercion, Term, Unsettled};
 use crate::ty::structural::PartKey;
 use crate::ty::{
@@ -486,7 +486,8 @@ fn climb(cx: &mut Ctxt<'_>, entered: Entered) -> Option<Vec<Step>> {
     let (Some(mut at), Some(to)) = (cx.closed(value), cx.closed(slot)) else {
         return None;
     };
-    if at.head == Head::Base(Base::Never) {
+    // A value of type `!` is none: it is folded, and no step is taken.
+    if super::never::says_nothing(at.head) {
         return Some(Vec::new());
     }
     let mut steps = Vec::new();

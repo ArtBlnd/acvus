@@ -4,8 +4,11 @@
 //! order: at each one, stepping up from its exact type along the cast tree,
 //! the candidates that match at the first step where any match are kept.
 //! Where more than one is left after them, the head the call's result is
-//! taken at decides last, matched exactly. Exactly one must be left. Cost:
-//! (positions × tree height + 1) × candidates.
+//! taken at decides last, matched exactly. Exactly one must be left. `!`
+//! says nothing of a type (`never`): a position of type `!` narrows no
+//! candidate, and a candidate whose declared result is `!` matches every
+//! type its result is taken at. Cost: (positions × tree height + 1) ×
+//! candidates.
 
 use crate::decl::{Base, Head, Taking};
 
@@ -64,10 +67,13 @@ pub(super) fn reach(candidates: &[Candidate<'_>], positions: &[Vec<Head>], resul
 
 /// Whether `matched` matches `head` at one step: a lifted impl's variable
 /// at a transparent structured type taken as the lift takes it (types §1),
-/// with no other mutability.
+/// with no other mutability. `!` on either side says nothing of a type, so
+/// it matches (`never`).
 fn matches(matched: Match, head: Head) -> bool {
     let structured = |base: Base| matches!(base, Base::Tuple(_) | Base::Array | Base::Option | Base::Result | Base::Object | Base::Enum(_));
     match (matched, head) {
+        (_, head) if super::never::says_nothing(head) => true,
+        (Match::Head(own), _) if super::never::says_nothing(own) => true,
         (Match::Any, _) => true,
         (Match::Head(own), head) => own == head,
         (Match::Structured(Taking::Value), Head::Base(base)) => structured(base),
@@ -87,6 +93,7 @@ mod tests {
     const I64: Head = Head::Base(Base::Int(IntTy::I64));
     const U8: Head = Head::Base(Base::Int(IntTy::U8));
     const BOOL: Head = Head::Base(Base::Bool);
+    const NEVER: Head = Head::Base(Base::Never);
     const PAIR: Head = Head::Base(Base::Tuple(2));
     const SLICE: Head = Head::Ref(Mutability::Shared, Base::Slice);
     const STR: Head = Head::Ref(Mutability::Shared, Base::Str);
@@ -192,5 +199,25 @@ mod tests {
     fn the_result_is_not_read_where_the_arguments_leave_one() {
         let rows = vec![(vec![head(I64)], head(BOOL)), (vec![head(U8)], head(I64))];
         assert_eq!(reach(&candidates(&rows), &[vec![I64]], Some(I64)), Ok(0));
+    }
+
+    /// types §4, §6: `!` says nothing of a type, so a position of type `!`
+    /// narrows no candidate, a lifted one included, and a later position
+    /// decides.
+    #[test]
+    fn a_position_of_type_never_narrows_no_candidate() {
+        let rows = vec![(vec![head(I64), head(U8)], Match::Any), (vec![VALUE, head(I64)], Match::Any)];
+        assert_eq!(reach(&candidates(&rows), &[vec![NEVER], vec![U8]], None), Ok(0));
+        assert_eq!(reach(&candidates(&rows), &[vec![NEVER], vec![NEVER]], None), Err(NoReach::Several(vec![0, 1])));
+    }
+
+    /// types §4, §6: a candidate whose declared result is `!` gives no
+    /// value, so it matches every type its result is taken at.
+    #[test]
+    fn a_declared_result_of_type_never_matches_every_type_taken() {
+        let rows = vec![(vec![], head(NEVER)), (vec![], head(I64))];
+        let rows = candidates(&rows);
+        assert_eq!(reach(&rows, &[], Some(BOOL)), Ok(0));
+        assert_eq!(reach(&rows, &[], Some(I64)), Err(NoReach::Several(vec![0, 1])));
     }
 }

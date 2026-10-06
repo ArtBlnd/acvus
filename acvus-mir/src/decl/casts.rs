@@ -44,8 +44,8 @@ pub enum Head {
 /// no reference is a `Base`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Base {
-    /// The bottom type (types §4): a closed head for decisions on a diverging
-    /// term. No tree step leaves or reaches it.
+    /// The bottom type (types §4): a closed head that says nothing of a type
+    /// (types §6). No tree step leaves or reaches it.
     Never,
     Int(IntTy),
     Float,

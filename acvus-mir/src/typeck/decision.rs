@@ -166,8 +166,8 @@ pub(super) enum Decision {
     /// head is known; the call's reach follows it.
     Adjust(Box<super::method::Adjust>),
     /// A block with no tail whose last statement is the expression of
-    /// term `last`: `block` is `!` where `last` is, and `()` otherwise
-    /// (control-flow).
+    /// term `last`: `block` is `()` where `last` gives a value, and its
+    /// uses' where it gives none, `last` being `!` (control-flow, `never`).
     BlockEnd { span: Span, last: Term, block: Term },
     /// An operand of one of the language's own operators, whose type is
     /// in the operator's domain (operators §2).
@@ -596,7 +596,7 @@ pub(super) fn index_pending(cx: &Ctxt<'_>, callee_site: AstId) -> bool {
 
 /// The one term whose head a decision reads before it fires, where it has
 /// exactly one.
-fn read_head(decision: &Decision) -> Option<Term> {
+pub(super) fn read_head(decision: &Decision) -> Option<Term> {
     match decision {
         Decision::Enter { value, .. } | Decision::Lend { value, .. } => Some(*value),
         Decision::Field { object, .. } => Some(*object),
@@ -734,8 +734,13 @@ pub(super) fn closed_for(cx: &Ctxt<'_>, term: Term, reading: Reading) -> Option<
     }
 }
 
-/// Fires `decision` if its inputs are closed; hands it back otherwise.
+/// Fires `decision` if its inputs are closed; hands it back otherwise. One
+/// that reads `!` is `never::settle`'s, so no firing below reads one but
+/// those it hands back.
 fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), Decision> {
+    let Err(decision) = super::never::settle(cx, decision, reading) else {
+        return Ok(());
+    };
     match decision {
         Decision::Enter {
             site,
@@ -960,10 +965,10 @@ fn fire(cx: &mut Ctxt<'_>, decision: Decision, reading: Reading) -> Result<(), D
             super::method::fire_adjust(cx, *adjust, closed, reading).map_err(|adjust| Decision::Adjust(Box::new(adjust)))
         }
         Decision::BlockEnd { span, last, block } => {
-            let Some(closed) = closed_for(cx, last, reading) else {
+            if closed_for(cx, last, reading).is_none() {
                 return Err(Decision::BlockEnd { span, last, block });
-            };
-            super::stmt::fire_block_end(cx, span, closed, block);
+            }
+            super::stmt::fire_block_end(cx, span, block);
             Ok(())
         }
         Decision::Operand { span, operand, domain } => {
@@ -1084,11 +1089,6 @@ fn fire_iterate(
             cx.eq(item, element, span);
             Iteration::ByValue
         }
-        Head::Base(Base::Never) => {
-            let never = cx.never();
-            cx.eq(item, never, span);
-            Iteration::ByValue
-        }
         Head::Ref(mutability, Base::Array | Base::Slice) => {
             let element = element_of(cx, cx.referent(head.term));
             let lent = cx.lend(element, mutability, span);
@@ -1144,11 +1144,6 @@ fn fire_try(cx: &mut Ctxt<'_>, site: AstId, span: Span, operand: Closed, value: 
             cx.eq(exit, leaves, span);
             TryExit::Result(exit)
         }
-        TyKind::Never => {
-            let never = cx.never();
-            cx.eq(value, never, span);
-            return;
-        }
         _ => {
             refusal::push(cx, RefusalKind::NotTryable, span);
             return;
@@ -1161,9 +1156,6 @@ fn fire_try(cx: &mut Ctxt<'_>, site: AstId, span: Span, operand: Closed, value: 
 /// (operators §5).
 fn fire_cast(cx: &mut Ctxt<'_>, site: AstId, span: Span, source: Closed, to: CastTy) {
     let kind = cx.infer.types().kind(source.term);
-    if matches!(kind, TyKind::Never) {
-        return;
-    }
     match CastTy::of_kind(kind) {
         Some(from) if from.admits(to) => {
             cx.out.casts.insert(site, AsCast { from, to });
@@ -1297,11 +1289,11 @@ struct Read<'p> {
     result: Option<Head>,
 }
 
-/// The head a call's result is taken at, once closed (types §6). A `!`
-/// that no use gave it, only the default of a variable nothing constrains
-/// (types §5), is no type the result is taken at.
+/// The head a call's result is taken at, once closed (types §6). `!` says
+/// nothing of a type, so it is no type the result is taken at
+/// (`never::says_nothing`).
 fn result_head(cx: &Ctxt<'_>, result: Term, reading: Reading) -> Option<Head> {
-    closed_for(cx, result, reading).map(|closed| closed.head).filter(|head| *head != Head::Base(Base::Never))
+    closed_for(cx, result, reading).map(|closed| closed.head).filter(|head| !super::never::says_nothing(*head))
 }
 
 /// A reach whose type never became known (types §6).
@@ -1671,7 +1663,7 @@ fn reached(cx: &mut Ctxt<'_>, decision: Reach, offer: Offer) {
             for ((arg_site, arg), param) in args.iter().zip(params.iter()) {
                 cx.enter_in(effect.clone(), *arg_site, *arg, *param, crate::ty::Reach::Named, span);
             }
-            cx.eq(result, ret, span);
+            super::never::call_result(cx, result, ret, span);
             super::effect::join_into(cx, &effect, &declared_effect, span);
             cx.out.reached.insert(site, chosen);
             cx.out.callees.insert(site, ty);
@@ -2038,11 +2030,7 @@ fn default_unconstrained(cx: &mut Ctxt<'_>, which: Unconstrained) -> bool {
         .map(|(var, _)| var)
         .collect();
     for var in &free {
-        let var = cx.node(TyKind::Var(*var));
-        let never = cx.never();
-        cx.infer
-            .eq(var, never)
-            .expect("an unbound variable of no bound takes `!`: it is no reference, so no reference target refuses it");
+        super::never::default(cx, *var);
     }
     !free.is_empty()
 }

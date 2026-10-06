@@ -2585,3 +2585,306 @@ fn a_return_inside_anyorder_keeps_the_chain_whole() {
     assert_eq!(returns, 1, "{}", shown(lowered.entry()));
 }
 
+// -- where a form whose value is `!` stands (types §4) ----------------------
+//
+// Each program below is admitted where a form whose value is `!` decides
+// nothing of its own type (types §4-6), whichever form gives the `!`: a
+// `return`, a block that breaks or continues, or a call of `abort`, whose
+// declared result is `!`. No run gets past that form, so lowering ends the
+// block it stands in there: the body returns what the `return` gives, a
+// call of `abort` is its block's last instruction and the block ends in
+// `Diverge` (`NeverDiverges`), and `f`, written right after the form in the
+// same block, is called nowhere.
+
+/// What this section's programs read: the input `$c: bool`, `abort() -> !`
+/// and `g(i64) -> i64`, both pure, `f(i64) -> i64` whose effect is opaque,
+/// `h(&i64) -> i64`, and the `comparisons`; and `f`.
+fn never_fixture() -> (Fixture, QualifiedRef) {
+    let mut fx = Fixture::new();
+    let bool_ty = fx.ty(TyKind::Bool);
+    fx.input("c", bool_ty);
+    let never = fx.ty(TyKind::Never);
+    let aborts = fx.function(&[], never, Effect::pure());
+    fx.declare("abort", aborts, 0);
+    let f = fx.opaque_f();
+    let int = fx.int();
+    let by_value = fx.function(&[int], int, Effect::pure());
+    fx.declare("g", by_value, 1);
+    let shared = fx.reference(Mutability::Shared, int);
+    let lent = fx.function(&[shared], int, Effect::pure());
+    fx.declare("h", lent, 1);
+    fx.comparisons();
+    (fx, f)
+}
+
+/// `statements`, each `{X}` a form whose value is `!`, then the tail `0`, in
+/// each way one that returns is written: directly, `(return 1)`; where two
+/// arms that both return meet, `(if $c { return 1 } else { return 2 })`;
+/// and read from a binding given one, `let a = return 1;` and `a`. Each
+/// with the integers its entry returns, sorted, what its `return`s give and
+/// the tail's `0` where `continues` says a run gets past `statements` on
+/// another path; and the calls of `abort` it lowers, none.
+fn returning_forms(statements: &str, continues: bool) -> [(String, Vec<i128>, usize); 3] {
+    let at = |value: &str| statements.replace("{X}", value);
+    let with_tail = |returned: &[i128]| {
+        let mut all = returned.to_vec();
+        if continues {
+            all.insert(0, 0);
+        }
+        all
+    };
+    [
+        (format!("{} 0", at("(return 1)")), with_tail(&[1]), 0),
+        (format!("{} 0", at("(if $c { return 1 } else { return 2 })")), with_tail(&[1, 2]), 0),
+        (format!("let a = return 1; {} 0", at("a")), vec![1], 0),
+    ]
+}
+
+/// `statements` inside a `while`, each `{X}` where an arm that breaks meets
+/// one that continues, `(if $c { break; } else { continue; })`, then the
+/// tail `0`, which is all the entry returns; it lowers no call of `abort`.
+fn looping_form(statements: &str) -> (String, Vec<i128>, usize) {
+    let at = statements.replace("{X}", "(if $c { break; } else { continue; })");
+    (format!("while $c {{ {at} }} 0"), vec![0], 0)
+}
+
+/// `statements`, each `{X}` a call of `abort`, then the tail `0`, in each way
+/// one is written: directly, `abort()`; where two arms that both call it
+/// meet, `(if $c { abort() } else { abort() })`; and read from a binding
+/// given one, `let a = abort();` and `a`. Each with the integers its entry
+/// returns: the tail's `0` where `continues` says a run gets past
+/// `statements` on another path, and none from the binding, which no run
+/// gets past; and the calls of `abort` it lowers.
+fn aborting_forms(statements: &str, continues: bool) -> [(String, Vec<i128>, usize); 3] {
+    let at = |value: &str| statements.replace("{X}", value);
+    let tail = if continues { vec![0] } else { Vec::new() };
+    [
+        (format!("{} 0", at("abort()")), tail.clone(), 1),
+        (format!("{} 0", at("(if $c { abort() } else { abort() })")), tail, 2),
+        (format!("let a = abort(); {} 0", at("a")), Vec::new(), 1),
+    ]
+}
+
+/// Each of `programs`, a statement template and whether a run gets past it
+/// on another path, in every form `returning_forms`, `looping_form` and
+/// `aborting_forms` write.
+fn diverging_forms(programs: &[(&str, bool)]) -> Vec<(String, Vec<i128>, usize)> {
+    programs
+        .iter()
+        .flat_map(|(statements, continues)| {
+            let returning = returning_forms(statements, *continues).into_iter().chain([looping_form(statements)]);
+            returning.chain(aborting_forms(statements, *continues))
+        })
+        .collect()
+}
+
+/// `statements` in the block body of the lambda `k`, then its tail `0`, in
+/// each form `returning_forms`, `looping_form` and `aborting_forms` write,
+/// each `return` leaving `k`; the run calls `k(3)`. Each with the integers
+/// `k`'s body returns, sorted, and the calls of `abort` it lowers.
+fn diverging_forms_in_a_lambda(statements: &str) -> [(String, Vec<i128>, usize); 7] {
+    let at = |value: &str| statements.replace("{X}", value);
+    [
+        (format!("let k = |y| -> {{ {} 0 }}; k(3)", at("(return 1)")), vec![1], 0),
+        (format!("let k = |y| -> {{ {} 0 }}; k(3)", at("(if $c { return 1 } else { return 2 })")), vec![1, 2], 0),
+        (format!("let k = |y| -> {{ let a = return 1; {} 0 }}; k(3)", at("a")), vec![1], 0),
+        (format!("let k = |y| -> {{ while $c {{ {} }} 0 }}; k(3)", at("(if $c { break; } else { continue; })")), vec![0], 0),
+        (format!("let k = |y| -> {{ {} 0 }}; k(3)", at("abort()")), Vec::new(), 1),
+        (format!("let k = |y| -> {{ {} 0 }}; k(3)", at("(if $c { abort() } else { abort() })")), Vec::new(), 2),
+        (format!("let k = |y| -> {{ let a = abort(); {} 0 }}; k(3)", at("a")), Vec::new(), 1),
+    ]
+}
+
+/// The integer each `Return` of `body` returns where a `Const` makes the
+/// value, `None` where something else does; sorted.
+fn returned_integers(body: &Body) -> Vec<Option<i128>> {
+    let made: std::collections::HashMap<crate::ir::ValueId, &Op> =
+        body.blocks().flat_map(|(_, block)| block.insts()).filter_map(|inst| inst.result().map(|result| (result, inst.op()))).collect();
+    let mut returned: Vec<Option<i128>> = body
+        .blocks()
+        .filter_map(|(_, block)| match block.terminator() {
+            Terminator::Return { value, .. } => Some(match made.get(value) {
+                Some(Op::Const { value: acvus_ast::Literal::Int(integer) }) => Some(*integer),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .collect();
+    returned.sort();
+    returned
+}
+
+/// For each call of `callee` in `body`, whether it is its block's last
+/// instruction and the block ends in `Diverge`.
+fn calls_ending_their_blocks(body: &Body, callee: QualifiedRef) -> Vec<bool> {
+    body.blocks()
+        .flat_map(|(_, block)| {
+            let ops: Vec<&Op> = block.insts().map(|inst| inst.op()).collect();
+            let diverges = matches!(block.terminator(), Terminator::Diverge);
+            let calls: Vec<usize> = ops
+                .iter()
+                .enumerate()
+                .filter(|(_, op)| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == callee))
+                .map(|(at, _)| at)
+                .collect();
+            calls.into_iter().map(move |at| at + 1 == ops.len() && diverges)
+        })
+        .collect()
+}
+
+/// The one body of `lowered` besides its entry: a lambda's, at its one
+/// signature.
+fn the_lambdas_body(lowered: &Lowered) -> &Body {
+    let entry = lowered.module.entry();
+    let others: Vec<BodyId> = lowered.module.body_ids().filter(|body| *body != entry).collect();
+    let [lambda] = others[..] else { panic!("one body besides the entry, not {others:?}") };
+    lowered.module.body(lambda)
+}
+
+/// What is wrong with `source` lowered through `Fixture::script` over
+/// `never_fixture`'s declarations, where anything is: a refusal or a panic
+/// on the way, which the message holds; a call of `f` in any body; the body
+/// `returning` picks returning other than `returned`; or that body holding
+/// other than `aborts` calls of `abort`, or one that is not its block's
+/// last instruction in a block ending in `Diverge`.
+fn lowering_fault(source: &str, returned: &[i128], aborts: usize, returning: fn(&Lowered) -> &Body) -> Option<String> {
+    let lowered = std::panic::catch_unwind(|| {
+        let (fx, f) = never_fixture();
+        let lowered = fx.script(source);
+        let calls: usize = lowered
+            .module
+            .body_ids()
+            .map(|body| count(&lowered.ops(body), |op| matches!(op, Op::FunctionCall { callee: Callee::Extern { id, .. }, .. } if *id == f)))
+            .sum();
+        let abort = QualifiedRef::root(lowered.name("abort"));
+        let body = returning(&lowered);
+        (calls, returned_integers(body), calls_ending_their_blocks(body, abort), shown(body))
+    });
+    let (calls, integers, abort_calls, body) = match lowered {
+        Ok(lowered) => lowered,
+        Err(payload) => {
+            let message = payload.downcast_ref::<String>().cloned().or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string()));
+            return Some(format!("{source}\n    panicked: {}", message.unwrap_or_default()));
+        }
+    };
+    let wanted: Vec<Option<i128>> = returned.iter().map(|integer| Some(*integer)).collect();
+    let aborts_end = abort_calls.len() == aborts && abort_calls.iter().all(|ends| *ends);
+    (calls != 0 || integers != wanted || !aborts_end).then(|| {
+        format!(
+            "{source}\n    calls of `f`: {calls}; returns {integers:?}, not {wanted:?}; calls of `abort`, each ending its block in `Diverge`: {abort_calls:?}, not {aborts} that do\n{body}"
+        )
+    })
+}
+
+/// Each of `sources` lowered ending its block where it diverges, the body
+/// `returning` picks returning the integers and holding the calls of
+/// `abort` it is given with; the failure names every one that does not.
+fn assert_each_ends_where_it_diverges(sources: &[(String, Vec<i128>, usize)], returning: fn(&Lowered) -> &Body) {
+    let faults: Vec<String> =
+        sources.iter().filter_map(|(source, returned, aborts)| lowering_fault(source, returned, *aborts, returning)).collect();
+    assert!(faults.is_empty(), "each ends its block where it diverges; these do not:\n{}", faults.join("\n"));
+}
+
+/// types §4, control-flow: a condition of a diverging form, of `if`, of
+/// `while` and under `!`, ends its block: nothing after it is lowered.
+/// `while X` is lowered in the forms that return or call `abort` alone: a
+/// `break` in the condition of a `while` inside another names a loop
+/// control-flow does not state, as Rust refuses one there, and that loop
+/// decides whether what follows the inner `while` runs.
+#[test]
+fn a_condition_of_a_diverging_form_ends_its_block_there() {
+    let mut sources = diverging_forms(&[("if {X} { 2 } else { 3 }; f(0);", false), ("if !{X} { 2 } else { 3 }; f(0);", false)]);
+    let while_condition = "while {X} { } f(0);";
+    sources.extend(returning_forms(while_condition, false));
+    sources.extend(aborting_forms(while_condition, false));
+    assert_each_ends_where_it_diverges(&sources, Lowered::entry);
+}
+
+/// types §4, operators §2, §4: an operand of a diverging form of `&&`, `||`,
+/// a comparison and the language's own integer operators ends its block:
+/// nothing after it is lowered, the operator included.
+#[test]
+fn an_operand_of_a_diverging_form_ends_its_block_there() {
+    assert_each_ends_where_it_diverges(&diverging_forms(&[
+        ("let b = {X} && true; f(0);", false),
+        ("let b = {X} || true; f(0);", false),
+        ("let b = {X} == 1; f(0);", false),
+        ("let b = 1 != {X}; f(0);", false),
+        ("let b = {X} < 1; f(0);", false),
+        ("let b = {X} ^ 1; f(0);", false),
+        ("let b = 1 & {X}; f(0);", false),
+        ("let b = {X} << 1; f(0);", false),
+        ("let b = 1 >> {X}; f(0);", false),
+    ]), Lowered::entry);
+}
+
+/// types §4, control-flow: a range's end of a diverging form ends its
+/// block: the `for` is not lowered, nor what follows it.
+#[test]
+fn a_range_end_of_a_diverging_form_ends_its_block_there() {
+    assert_each_ends_where_it_diverges(&diverging_forms(&[("for i in {X}..3 { } f(0);", false), ("for i in 0..{X} { } f(0);", false)]), Lowered::entry);
+}
+
+/// types §4: an argument of a diverging form, by value and lent, ends its
+/// block: the call is not lowered, nor what follows it.
+#[test]
+fn an_argument_of_a_diverging_form_ends_its_block_there() {
+    assert_each_ends_where_it_diverges(&diverging_forms(&[("let r = g({X}); f(0);", false), ("let r = h(&{X}); f(0);", false)]), Lowered::entry);
+}
+
+/// types §2-4: a part of a diverging form of a tuple, an object, a `Some`
+/// and an array, in the arm of an `if` whose other arm meets it, ends that
+/// arm's block: the parts after it are not lowered, and the run goes on
+/// through the other arm to the tail.
+#[test]
+fn a_constructor_part_of_a_diverging_form_ends_its_arms_block_there() {
+    assert_each_ends_where_it_diverges(&diverging_forms(&[
+        ("let x = if $c { (0, 1, 2) } else { (0, {X}, f(0)) };", true),
+        ("let x = if $c { { a: 0, b: 1, c: 2, } } else { { a: 0, b: {X}, c: f(0), } };", true),
+        ("let x = if $c { Some(1) } else { let s = Some({X}); f(0); s };", true),
+        ("let x = if $c { [0, 1, 2] } else { [0, {X}, f(0)] };", true),
+    ]), Lowered::entry);
+}
+
+/// types §4, operators §3, §5, §6, control-flow: a field, an element, a
+/// deref, a `?` and an `as` of a diverging form, as a condition, end their
+/// block: nothing after it is lowered.
+#[test]
+fn a_projection_of_a_diverging_form_ends_its_block_there() {
+    assert_each_ends_where_it_diverges(&diverging_forms(&[
+        ("if {X}.x { 2 } else { 3 }; f(0);", false),
+        ("if {X}[0] { 2 } else { 3 }; f(0);", false),
+        ("if *{X} { 2 } else { 3 }; f(0);", false),
+        ("if {X}? { 2 } else { 3 }; f(0);", false),
+        ("if {X} as i64 == 1 { 2 } else { 3 }; f(0);", false),
+    ]), Lowered::entry);
+}
+
+/// types §4, control-flow, patterns §4: a `for` over a diverging form and a
+/// `match` on one end their block: neither the loop nor an arm is lowered,
+/// nor what follows.
+#[test]
+fn a_for_head_or_a_scrutinee_of_a_diverging_form_ends_its_block_there() {
+    assert_each_ends_where_it_diverges(&diverging_forms(&[
+        ("for v in {X} { if v { } } f(0);", false),
+        ("match {X} { v => if v { 2 } else { 3 }, }; f(0);", false),
+    ]), Lowered::entry);
+}
+
+/// types §4, control-flow: a diverging form standing as a statement ends its
+/// block: the statement after it is not lowered.
+#[test]
+fn a_diverging_statement_ends_its_block_there() {
+    assert_each_ends_where_it_diverges(&diverging_forms(&[("{X}; f(0);", false)]), Lowered::entry);
+}
+
+/// types §4, functions §2: in a lambda's body a diverging form ends its
+/// block as in the run's: the lambda's body returns what its `return`
+/// gives, or its tail where the form leaves a `while`, ends each block
+/// where it calls `abort`, and calls no `f`.
+#[test]
+fn a_diverging_form_in_a_lambda_body_ends_that_bodys_block_there() {
+    let sources: Vec<(String, Vec<i128>, usize)> =
+        ["if {X} { 2 } else { 3 }; f(y);", "let r = g({X}); f(y);"].into_iter().flat_map(diverging_forms_in_a_lambda).collect();
+    assert_each_ends_where_it_diverges(&sources, the_lambdas_body);
+}

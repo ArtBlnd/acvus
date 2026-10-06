@@ -1,5 +1,6 @@
 //! Control flow (control-flow): branches `enter` one slot (types §2-3), a
-//! diverging block is `!` (types §4), and `for` and `?` are decided by type.
+//! diverging form gives no value and decides nothing of its type (types §4,
+//! `never`), and `for` and `?` are decided by type.
 
 use acvus_ast::{AstId, Binder, ElseBranch, Expr, ForHead, MatchExprArm, Pattern, Slot, Span, Stmt};
 
@@ -161,13 +162,14 @@ pub(super) fn check_try<S: Slot>(cx: &mut Ctxt<'_>, site: AstId, inner: &Expr<S>
     value
 }
 
-/// `return v`: `v` enters the body's result; the form is `!`.
+/// `return v`: `v` enters the body's result; the form gives no value, and
+/// its type is its uses' (types §4, `never`).
 pub(super) fn check_return<S: Slot>(cx: &mut Ctxt<'_>, value: &Expr<S>, span: Span) -> Term {
     let term = check_expr(cx, value, Demand::Read);
     if let Some(result) = leaves_to(cx, span) {
         cx.enter(value.id(), term, result, crate::ty::Reach::Named, span);
     }
-    cx.never()
+    super::never::diverged(cx)
 }
 
 /// The slot a `return` or a `?` at `span` leaves the innermost body

@@ -60,6 +60,9 @@ pub enum Refused {
     /// A declared type holds a reference whose target is a reference
     /// (types §4).
     ReferenceToReference { written: Written },
+    /// A declared type holds `!` other than as a function signature's whole
+    /// result, a call that gives no value: not supported yet.
+    NeverOutsideResult { written: Written },
     /// A declared type holds a marked extern-defined type with a variable
     /// in it but its identity: only a whole concrete type carries `#`
     /// (types §8).
@@ -719,7 +722,8 @@ fn written_types<'d>(declared: &DeclaredTypes<'d>) -> impl Iterator<Item = (Writ
 /// `Order` and `Handle` are written by the compiler's IR alone; types §4: a
 /// reference's target is never a reference. Every type the declarations
 /// write is held to all three. Returns the functions that break any, whose
-/// segments are not read.
+/// segments are not read. A `!` written anywhere but as a function
+/// signature's whole result is refused as not supported yet.
 fn refuse_unwritable_types(
     types: &Types<Poly>,
     declared: DeclaredTypes<'_>,
@@ -750,7 +754,8 @@ fn refuse_unwritable_types(
         }
         let marked_over_variable = terms.marked_over_variable.then_some(Refused::MarkedOverTypeVariable { written });
         let marked_part = terms.marked_part.then_some(Refused::MarkedPart { written });
-        for refusal in marked_over_variable.into_iter().chain(marked_part) {
+        let never = never_outside_result(types, written, ty).then_some(Refused::NeverOutsideResult { written });
+        for refusal in marked_over_variable.into_iter().chain(marked_part).chain(never) {
             if !reported.contains(&refusal) {
                 reported.push(refusal.clone());
                 refused.push(refusal);
@@ -758,6 +763,33 @@ fn refuse_unwritable_types(
         }
     }
     unreadable
+}
+
+/// Whether `ty`, written at `written`, holds a `!` other than a function
+/// signature's whole result, the one place a declaration writes it.
+fn never_outside_result(types: &Types<Poly>, written: Written, ty: TyId<Poly>) -> bool {
+    match (written, types.kind(ty)) {
+        (Written::Function(_), TyKind::Fn { params, ret, .. }) => {
+            params.iter().any(|param| holds_never(types, *param)) || (!matches!(types.kind(*ret), TyKind::Never) && holds_never(types, *ret))
+        }
+        _ => holds_never(types, ty),
+    }
+}
+
+/// Whether `ty` holds `!` anywhere.
+fn holds_never(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
+    let mut seen = FxHashSet::default();
+    let mut stack = vec![ty];
+    while let Some(at) = stack.pop() {
+        if !seen.insert(at) {
+            continue;
+        }
+        match types.kind(at) {
+            TyKind::Never => return true,
+            kind => kind.for_each_child(|child| stack.push(child)),
+        }
+    }
+    false
 }
 
 /// Every type an entry writes: its inputs' and its result's.
@@ -2947,6 +2979,54 @@ mod tests {
             vec![Refused::InternalType {
                 written: Written::Context(context)
             }]
+        );
+    }
+
+    /// types §4: a call of a function whose signature's whole result is `!`
+    /// gives no value; such a declaration is taken in.
+    #[test]
+    fn a_signature_whose_whole_result_is_never_is_taken_in() {
+        let mut fixture = Fixture::new();
+        let abort = fixture.name("m", "abort");
+        let never = fixture.ty(TyKind::Never);
+        let ty = fixture.function(&[], never);
+        fixture.declare(abort, fixture.plain(ty, 0));
+        assert!(fixture.verify().is_ok());
+    }
+
+    /// A `!` a declaration writes anywhere but as a function signature's
+    /// whole result is not supported yet: a parameter, a part of a result, a
+    /// result of a function type a signature holds, a context's type, and
+    /// an entry's input and result are each refused.
+    #[test]
+    fn a_never_written_outside_a_signatures_whole_result_is_refused() {
+        let mut fixture = Fixture::new();
+        let (by_param, by_part, by_callback) = (fixture.name("m", "f"), fixture.name("m", "g"), fixture.name("m", "h"));
+        let (context, by_input, by_result) = (fixture.name("m", "c"), fixture.name("m", "e"), fixture.name("m", "r"));
+        let input = fixture.interner.intern("i");
+        let (never, int) = (fixture.ty(TyKind::Never), fixture.ty(TyKind::Int(IntTy::I64)));
+        let takes_never = fixture.function(&[never], int);
+        fixture.declare(by_param, fixture.plain(takes_never, 0));
+        let option = fixture.ty(TyKind::Option(never, ()));
+        let gives_part = fixture.function(&[], option);
+        fixture.declare(by_part, fixture.plain(gives_part, 0));
+        let aborts = fixture.function(&[], never);
+        let takes_callback = fixture.function(&[aborts], int);
+        fixture.declare(by_callback, fixture.plain(takes_callback, 0));
+        fixture.raw.contexts.push((context, ContextDecl { ty: never, volatile: false }));
+        fixture.raw.entries.push(EntryDecl { function: by_input, inputs: vec![(input, never)], result: Some(int) });
+        fixture.raw.entries.push(EntryDecl { function: by_result, inputs: vec![(input, int)], result: Some(never) });
+        let refused = |written| Refused::NeverOutsideResult { written };
+        assert_eq!(
+            refusals(fixture),
+            vec![
+                refused(Written::Function(by_param)),
+                refused(Written::Function(by_part)),
+                refused(Written::Function(by_callback)),
+                refused(Written::Context(context)),
+                refused(Written::Entry(by_input)),
+                refused(Written::Entry(by_result)),
+            ]
         );
     }
 

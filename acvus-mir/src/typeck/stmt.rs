@@ -9,13 +9,13 @@ use super::place::{self, Demand};
 use super::refusal::{self, RefusalKind};
 use super::scope::{self, Binding};
 use super::{control, template};
-use crate::decl::{Base, Head};
-use crate::infer::{Closed, Term};
+use crate::infer::Term;
 
-/// Statements then a tail: the tail's term, or without one `()`, or `!`
-/// where the last statement diverges (control-flow). A `break` or a
-/// `continue` diverges as written; an expression statement diverges where
-/// its type is `!`, decided once that type is known (types §6).
+/// Statements then a tail: the tail's term, or without one `()`, or, where
+/// the last statement diverges and so the body gives no value, a type its
+/// uses decide (control-flow, `never`). A `break` or a `continue` diverges
+/// as written; an expression statement diverges where its type is `!`,
+/// decided once that type is known (types §6).
 pub(super) fn check_body<S: Slot>(cx: &mut Ctxt<'_>, stmts: &[Stmt<S>], tail: Option<&Expr<S>>) -> Term {
     if let Some(tail) = tail {
         check_stmts(cx, stmts);
@@ -39,7 +39,7 @@ pub(super) fn check_body<S: Slot>(cx: &mut Ctxt<'_>, stmts: &[Stmt<S>], tail: Op
         }
         Stmt::Break { .. } | Stmt::Continue { .. } => {
             check_stmt(cx, last);
-            cx.never()
+            super::never::diverged(cx)
         }
         _ => {
             check_stmt(cx, last);
@@ -49,14 +49,11 @@ pub(super) fn check_body<S: Slot>(cx: &mut Ctxt<'_>, stmts: &[Stmt<S>], tail: Op
 }
 
 /// A block with no tail whose last statement is an expression, fired on
-/// that expression's type: `!` where it is `!`, and `()` otherwise
-/// (control-flow).
-pub(super) fn fire_block_end(cx: &mut Ctxt<'_>, span: Span, last: Closed, block: Term) {
-    let ends = match last.head {
-        Head::Base(Base::Never) => cx.never(),
-        _ => cx.unit(),
-    };
-    cx.eq(block, ends, span);
+/// that expression's type: `()` (control-flow). An expression of type `!`
+/// gives no value, and the block's type is its uses' (`never::settle`).
+pub(super) fn fire_block_end(cx: &mut Ctxt<'_>, span: Span, block: Term) {
+    let unit = cx.unit();
+    cx.eq(block, unit, span);
 }
 
 pub(super) fn check_stmts<S: Slot>(cx: &mut Ctxt<'_>, stmts: &[Stmt<S>]) {

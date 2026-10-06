@@ -105,9 +105,9 @@ fn past(cx: &Ctxt<'_>, from: Term, reach: Reach, mutability: Mutability) -> Muta
 }
 
 /// A field read fired, of an object reached by `reach`: through a
-/// reference to its target, reached through it, as Rust auto-derefs; of
-/// `!`, `!`; of an object, the field it has or grows to have where
-/// transparent at `reach` (types §1-2).
+/// reference to its target, reached through it, as Rust auto-derefs; of an
+/// object, the field it has or grows to have where transparent at `reach`
+/// (types §1-2). A field of `!` is `never::settle`'s.
 /// The part is reached as its object was, or through the reference. `head`
 /// is `None` where the object's use decides it at a stall, which makes it
 /// an object and never a reference.
@@ -122,11 +122,6 @@ pub(super) fn fire_field(cx: &mut Ctxt<'_>, span: Span, (object, reach): (Term, 
             record_reach(cx, target, Some(least));
             let reached = field_of(cx, target, field, span);
             cx.eq(part, reached, span);
-            return;
-        }
-        Some(Head::Base(Base::Never)) => {
-            let never = cx.never();
-            cx.eq(part, never, span);
             return;
         }
         Some(Head::Base(_)) | None => {}
@@ -197,11 +192,6 @@ pub(super) fn fire_index(
     let sequence = match container.head {
         Head::Base(Base::Array) => Some(container.term),
         Head::Ref(_, Base::Array | Base::Slice) => Some(cx.referent(container.term)),
-        Head::Base(Base::Never) => {
-            let never = cx.never();
-            cx.eq(element, never, span);
-            return;
-        }
         Head::Base(_) | Head::Ref(..) => None,
     };
     if let Some(sequence) = sequence {
@@ -296,7 +286,8 @@ fn deref(cx: &mut Ctxt<'_>, reference: Term, store: bool, span: Span) -> Term {
 }
 
 /// A deref fired: a reference's target, which a store reaches only through
-/// a `&mut` (operators §6); `!` of `!`; anything else is refused.
+/// a `&mut` (operators §6); anything else is refused. A deref of `!` is
+/// `never::settle`'s.
 pub(super) fn fire_deref(cx: &mut Ctxt<'_>, span: Span, (reference, of): (Closed, Term), target: Term, store: bool) {
     match reference.head {
         Head::Ref(Mutability::Shared, _) if store => refusal::push(cx, RefusalKind::StoreThroughShared, span),
@@ -305,10 +296,6 @@ pub(super) fn fire_deref(cx: &mut Ctxt<'_>, span: Span, (reference, of): (Closed
             cx.eq(target, referent, span);
             let least = past(cx, of, Reach::Named, mutability);
             record_reach(cx, target, Some(least));
-        }
-        Head::Base(Base::Never) => {
-            let never = cx.never();
-            cx.eq(target, never, span);
         }
         Head::Base(_) => refusal::push(cx, RefusalKind::NotAReference, span),
     }

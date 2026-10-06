@@ -36,6 +36,7 @@ mod expr;
 mod generalize;
 mod interface;
 mod method;
+mod never;
 mod op;
 mod output;
 mod pat;

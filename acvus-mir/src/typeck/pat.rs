@@ -217,8 +217,8 @@ fn destructure(cx: &mut Ctxt<'_>, shape: Shape, scrutinee: Term, lent: Option<Mu
 }
 
 /// A destructuring fired on the scrutinee's head: through a reference, on
-/// its target with names lent (patterns §1); on `!`, every name is `!`
-/// (patterns §4); otherwise by the shape. `head` is `None` where the
+/// its target with names lent (patterns §1); otherwise by the shape. One
+/// on `!` is `never::settle`'s (patterns §4). `head` is `None` where the
 /// pattern's use decides an open scrutinee at a stall: it is then the
 /// shape, never a reference. `reach` is how the scrutinee was reached.
 pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, (scrutinee, reach): (Term, Reach), head: Option<Head>, lent: Option<Mutability>) {
@@ -230,13 +230,6 @@ pub(super) fn fire_destructure(cx: &mut Ctxt<'_>, shape: Shape, (scrutinee, reac
             };
             let target = cx.referent(scrutinee);
             destructure(cx, shape, target, Some(through));
-        }
-        Some(Head::Base(Base::Never)) => {
-            record_matched(cx, &shape, scrutinee);
-            for term in shape.bindings() {
-                let never = cx.never();
-                cx.eq(term, never, shape.span);
-            }
         }
         Some(Head::Base(_)) | None => apply(cx, shape, (scrutinee, reach), head, lent),
     }
@@ -316,7 +309,7 @@ fn reached_part(cx: &mut Ctxt<'_>, least: Option<Mutability>) -> Term {
 /// The type a pattern's site has: what it matched, except at a name,
 /// whose site is its binder and has the binding's type, lent where the
 /// match passed through a reference (patterns §1).
-fn record_matched(cx: &mut Ctxt<'_>, shape: &Shape, scrutinee: Term) {
+pub(super) fn record_matched(cx: &mut Ctxt<'_>, shape: &Shape, scrutinee: Term) {
     if !matches!(shape.form, Form::Bind { .. }) {
         cx.record(shape.site, scrutinee);
     }

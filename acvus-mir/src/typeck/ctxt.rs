@@ -74,10 +74,6 @@ impl<'d> Ctxt<'d> {
         self.node(TyKind::Unit)
     }
 
-    pub fn never(&mut self) -> Term {
-        self.node(TyKind::Never)
-    }
-
     pub fn bool(&mut self) -> Term {
         self.node(TyKind::Bool)
     }

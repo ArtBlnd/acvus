@@ -209,3 +209,27 @@ fn a_match_with_a_catch_all_is_admitted() {
         admitted(fx, source);
     }
 }
+
+// -- a scrutinee of a diverging form (patterns §4, types §4-6) -------------
+
+/// patterns §3-4, types §4-6: no run reaches the arms of a `match` whose
+/// scrutinee is a form whose value is `!`, whichever way it is written:
+/// directly, where two arms that both return meet, read from a binding
+/// given one, and inside a `while` where an arm that breaks meets one that
+/// continues. `match X { 0 => 1, }` is refused by nothing in any of them.
+#[test]
+fn a_match_on_a_diverging_scrutinee_is_not_refused_in_any_form() {
+    let at = |value: &str| format!("let r = match {value} {{ 0 => 1, }};");
+    let sources = [
+        format!("{} 0", at("(return 1)")),
+        format!("{} 0", at("(if $c { return 1 } else { return 2 })")),
+        format!("let a = return 1; {} 0", at("a")),
+        format!("while $c {{ {} }} 0", at("(if $c { break; } else { continue; })")),
+    ];
+    for source in &sources {
+        let mut fx = Fixture::new();
+        let bool_ty = fx.ty(TyKind::Bool);
+        fx.input("c", bool_ty);
+        admitted(fx, source);
+    }
+}

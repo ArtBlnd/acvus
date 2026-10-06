@@ -140,7 +140,6 @@ pub(super) fn fire_compare(
                 super::decision::decide(cx, compare);
                 return;
             }
-            TyKind::Never => Some(Vec::new()),
             _ => None,
         },
     };
@@ -165,10 +164,9 @@ pub(super) fn fire_compare(
 }
 
 /// An operand of the language's own operator fired on its type
-/// (operators §2): refused outside `domain`. A `!` operand is never read.
+/// (operators §2): refused outside `domain`.
 pub(super) fn fire_operand(cx: &mut Ctxt<'_>, span: Span, operand: Closed, domain: Domain) {
     let admitted = match operand.head {
-        Head::Base(Base::Never) => true,
         Head::Base(Base::Bool) => domain != Domain::Integer,
         Head::Base(Base::Int(_)) => domain != Domain::Bool,
         Head::Base(_) | Head::Ref(..) => false,

@@ -243,8 +243,10 @@ Return       = "return" Expr                            ← return e
 
 `return e` leaves the enclosing body -- a script or a lambda -- with `e`,
 from any depth, loops included. It is an expression and not a statement:
-its type is `!`, so `let x = if c { return 1 } else { 2 };` reads the other
-branch's type and `return e;` is the expression-statement rule. There is no
+it gives no value, so its type is what its use decides and `!` where
+nothing does (types §4); `let x = if c { return 1 } else { 2 };` reads the
+other branch's type, `if return 1 { 2 } else { 3 }` is checked as any
+`if` is, and `return e;` is the expression-statement rule. There is no
 `return;`, because every body returns a value (RFC-0054):
 
 ```
@@ -263,7 +265,7 @@ A `return` leaves every enclosing loop at once, and each array traversal
 among them releases the elements it had not taken, as on a `break`.
 
 What the source wrote after a `return` lands in a block no jump reaches,
-as it does after `break`, `continue` or an expression typed `!`. It is
+as it does after `break`, `continue` or any expression that gives no value. It is
 still checked: this language has no warnings, and an unreachable statement
 meets the body's return type like any other.
 

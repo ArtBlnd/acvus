@@ -110,7 +110,7 @@ pub(super) fn lifted_offer(cx: &Ctxt<'_>, callee: &Callee, arity: usize) -> Opti
 
 /// Whether the type `decision`'s callee's lift stands at is not known yet:
 /// the argument that takes its variable, or the result where none does, is
-/// open, or is a `!` only a default gave it (types §5).
+/// open, or is `!`, which says nothing of a type (`never::says_nothing`).
 pub(super) fn lift_open(cx: &Ctxt<'_>, decision: &Reach, reading: Reading) -> bool {
     let Some(CalleeLift { lift, .. }) = lift_of_callee(cx, &decision.callee, decision.args.len()) else {
         return false;
@@ -119,7 +119,7 @@ pub(super) fn lift_open(cx: &Ctxt<'_>, decision: &Reach, reading: Reading) -> bo
         true => decision.result,
         false => decision.args[0].1,
     };
-    closed_for(cx, taking, reading).is_none_or(|closed| closed.head == Head::Base(Base::Never))
+    closed_for(cx, taking, reading).is_none_or(|closed| super::never::says_nothing(closed.head))
 }
 
 /// The head a method's receiver takes where the language's own copy
@@ -377,7 +377,7 @@ fn reach_structural(cx: &mut Ctxt<'_>, decision: Reach, function: QualifiedRef, 
             for ((arg_site, arg), param) in args.iter().zip(params.iter()) {
                 cx.enter_in(effect.clone(), *arg_site, *arg, *param, crate::ty::Reach::Named, span);
             }
-            cx.eq(result, ret, span);
+            super::never::call_result(cx, result, ret, span);
         }
     }
     super::effect::join_into(cx, &effect, &own_effect, span);
