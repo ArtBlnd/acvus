@@ -155,7 +155,9 @@ fn loop_body<S: Slot>(cx: &mut Lcx<'_, '_>, targets: LoopTargets, body: &[Stmt<S
     });
 }
 
-/// `while cond { body }`: its exit is reached where its condition is.
+/// `while cond { body }`: its exit is reached where its condition is. Its
+/// condition leaves no loop: typeck refuses a `break` or a `continue` there
+/// (`InLoopCondition`).
 pub(super) fn lower_while<S: Slot>(cx: &mut Lcx<'_, '_>, cond: &Expr<S>, body: &[Stmt<S>], span: Span) -> Lowered<()> {
     let header = cx.new_block(&[]);
     cx.jump(header, Vec::new(), span);
@@ -173,7 +175,8 @@ pub(super) fn lower_while<S: Slot>(cx: &mut Lcx<'_, '_>, cond: &Expr<S>, body: &
 }
 
 /// `while let pattern = source`: the pattern's test is the loop's
-/// condition, and its names are bound in the body.
+/// condition, and its names are bound in the body. Its source leaves no
+/// loop, as a `while`'s condition does not.
 pub(super) fn lower_while_let<S: Slot>(
     cx: &mut Lcx<'_, '_>,
     pattern: &Pattern<S>,

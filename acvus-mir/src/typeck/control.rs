@@ -11,7 +11,7 @@ use super::output::Iteration;
 use super::pat::check_pattern;
 use super::place::Demand;
 use super::refusal::{self, RefusalKind};
-use super::scope::{Binding, Run};
+use super::scope::{Binding, LoopPart, Run};
 use super::stmt::{check_body, check_stmts};
 use crate::infer::Term;
 
@@ -64,22 +64,29 @@ pub(super) fn check_match<S: Slot>(cx: &mut Ctxt<'_>, _site: AstId, scrutinee: &
 }
 
 /// A `while`: its condition and its body are evaluated at each iteration,
-/// one instantiation of the loop's body (types §3).
+/// one instantiation of the loop's body (types §3). A `break` or a
+/// `continue` in its condition is refused (`LoopPart::Condition`).
 pub(super) fn check_while<S: Slot>(cx: &mut Ctxt<'_>, cond: &Expr<S>, body: &[Stmt<S>]) {
     cx.in_body(|cx| {
+        cx.scope.push_loop(LoopPart::Condition);
         check_condition(cx, cond);
-        cx.scope.push_loop();
+        cx.scope.pop();
+        cx.scope.push_loop(LoopPart::Body);
         check_stmts(cx, body);
         cx.scope.pop();
     });
 }
 
 /// A `while let`: its source, its pattern and its body are evaluated at
-/// each iteration, one instantiation of the loop's body (types §3).
+/// each iteration, one instantiation of the loop's body (types §3). A
+/// `break` or a `continue` in its source is refused, as in a `while`'s
+/// condition.
 pub(super) fn check_while_let<S: Slot>(cx: &mut Ctxt<'_>, pattern: &Pattern<S>, source: &Expr<S>, body: &[Stmt<S>]) {
     cx.in_body(|cx| {
+        cx.scope.push_loop(LoopPart::Condition);
         let scrutinee = check_expr(cx, source, Demand::Read);
-        cx.scope.push_loop();
+        cx.scope.pop();
+        cx.scope.push_loop(LoopPart::Body);
         check_pattern(cx, pattern, scrutinee);
         check_stmts(cx, body);
         cx.scope.pop();
@@ -129,7 +136,7 @@ pub(super) fn check_for<S: Slot>(
     // The head is evaluated once; each iteration of the body is one
     // instantiation of it (types §3).
     cx.in_body(|cx| {
-        cx.scope.push_loop();
+        cx.scope.push_loop(LoopPart::Body);
         cx.scope.define(
             binder.name,
             Binding {

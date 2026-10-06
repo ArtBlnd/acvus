@@ -136,11 +136,11 @@ pub(super) fn check_stmt<S: Slot>(cx: &mut Ctxt<'_>, stmt: &Stmt<S>) {
             body,
             ..
         } => control::check_for(cx, *id, *callee_id, binder, head, body),
-        Stmt::Break { span, .. } | Stmt::Continue { span, .. } => {
-            if !cx.scope.in_loop() {
-                refusal::push(cx, RefusalKind::OutsideLoop, *span);
-            }
-        }
+        Stmt::Break { span, .. } | Stmt::Continue { span, .. } => match cx.scope.loop_part() {
+            Some(scope::LoopPart::Body) => {}
+            Some(scope::LoopPart::Condition) => refusal::push(cx, RefusalKind::InLoopCondition, *span),
+            None => refusal::push(cx, RefusalKind::OutsideLoop, *span),
+        },
         // typeck checks an `anyorder` body as plain statements; the order
         // token it cuts is the lowerer's (D29, effects §3).
         Stmt::Anyorder { body, .. } => {

@@ -31,11 +31,22 @@ struct Body {
 }
 
 /// One frame of bindings; a lambda's body opens one of its own, and so
-/// does a loop's.
+/// does a loop's body and a `while`'s condition.
 struct Frame {
     names: FxHashMap<Astr, Binding>,
     body: Option<Body>,
-    is_loop: bool,
+    loop_part: Option<LoopPart>,
+}
+
+/// The part of a loop a frame is, which decides what a `break` or a
+/// `continue` written there does (control-flow).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LoopPart {
+    /// The body: it leaves the loop.
+    Body,
+    /// A `while`'s condition, or a `while let`'s source: it is refused, as
+    /// Rust refuses one there with no label, and there are no labels.
+    Condition,
 }
 
 /// A binding found, and the lambdas the lookup crossed on its way out: the
@@ -88,7 +99,7 @@ impl Scope {
             frames: vec![Frame {
                 names: FxHashMap::default(),
                 body: None,
-                is_loop: false,
+                loop_part: None,
             }],
             run_result: None,
         }
@@ -99,16 +110,16 @@ impl Scope {
         self.frames.push(Frame {
             names: FxHashMap::default(),
             body: None,
-            is_loop: false,
+            loop_part: None,
         });
     }
 
-    /// A loop body's frame, which a `break` or a `continue` leaves.
-    pub fn push_loop(&mut self) {
+    /// A frame of `part` of a loop.
+    pub fn push_loop(&mut self, part: LoopPart) {
         self.frames.push(Frame {
             names: FxHashMap::default(),
             body: None,
-            is_loop: true,
+            loop_part: Some(part),
         });
     }
 
@@ -122,23 +133,24 @@ impl Scope {
                 result,
                 effect: None,
             }),
-            is_loop: false,
+            loop_part: None,
         });
     }
 
-    /// Whether a `break` or a `continue` here leaves a loop: a loop's
-    /// frame is found before a lambda's boundary, since a lambda's `break`
-    /// never leaves a loop outside it.
-    pub fn in_loop(&self) -> bool {
+    /// The part of the innermost loop a `break` or a `continue` here is
+    /// written in, `None` outside every loop: a loop's frame is found before
+    /// a lambda's boundary, since a lambda's `break` never leaves a loop
+    /// outside it.
+    pub fn loop_part(&self) -> Option<LoopPart> {
         for frame in self.frames.iter().rev() {
-            if frame.is_loop {
-                return true;
+            if let Some(part) = frame.loop_part {
+                return Some(part);
             }
             if frame.body.is_some() {
-                return false;
+                return None;
             }
         }
-        false
+        None
     }
 
     /// Whether the lambda `lambda`, whose body is in scope, is written with

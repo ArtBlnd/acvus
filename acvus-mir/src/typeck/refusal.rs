@@ -95,6 +95,10 @@ pub enum RefusalKind {
     /// `break` or `continue` with no loop around it before a lambda's
     /// boundary (control-flow).
     OutsideLoop,
+    /// `break` or `continue` in a `while`'s condition or a `while let`'s
+    /// source, with no loop inside it around it: Rust refuses one there with
+    /// no label, and there are no labels (control-flow).
+    InLoopCondition,
     // C: growth into what may not grow.
     GrowsOpaque,
     /// A function value entering a function type that may not grow to be
@@ -319,6 +323,7 @@ impl RefusalKind {
             | RefusalKind::NotBool
             | RefusalKind::NotInteger
             | RefusalKind::OutsideLoop
+            | RefusalKind::InLoopCondition
             | RefusalKind::GrowsOpaque
             | RefusalKind::Undecided
             | RefusalKind::BoundUnanswered

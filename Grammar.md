@@ -200,7 +200,9 @@ a `for` over `u64..u32` needs one integer width at both bounds
 ```
 
 `break` and `continue` name the innermost loop -- there are no labels -- and
-they are admitted in `for`, `while` and `while let` alike. Outside every
+they are admitted in `for`, `while` and `while let` alike, but not in a
+`while`'s condition or a `while let`'s source, where Rust refuses one with
+no label; one in a loop inside the condition leaves that loop. Outside every
 loop each is refused:
 
 ```

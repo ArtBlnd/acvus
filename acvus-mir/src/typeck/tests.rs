@@ -1721,6 +1721,37 @@ fn break_outside_a_loop_is_refused() {
     assert_eq!(checked.refusals(), vec![&RefusalKind::OutsideLoop]);
 }
 
+/// control-flow: `break` and `continue` mean what they mean in Rust, which
+/// refuses one with no label in a `while`'s condition or a `while let`'s
+/// source, with a loop outside or none; there are no labels. One in a loop
+/// inside the condition leaves that loop, and one in a `for`'s head, which
+/// is evaluated once before its loop, leaves the loop outside.
+#[test]
+fn break_or_continue_in_a_while_condition_is_refused() {
+    let fixture = || {
+        let mut fx = Fixture::new();
+        let bool_ty = fx.ty(TyKind::Bool);
+        fx.input("c", bool_ty);
+        fx
+    };
+    for source in [
+        "while $c { while (if $c { break; } else { true }) { } } 0",
+        "while $c { while (if $c { continue; } else { true }) { } } 0",
+        "while $c { while let Some(x) = (if $c { break; } else { Some(1) }) { } } 0",
+        "while (if $c { break; } else { true }) { } 0",
+    ] {
+        let (checked, _) = fixture().script(source);
+        assert_eq!(checked.refusals(), vec![&RefusalKind::InLoopCondition], "{source}");
+    }
+    for source in [
+        "while $c { while (if $c { while $c { break; } true } else { false }) { } } 0",
+        "while $c { for x in (if $c { break; } else { [1, 2] }) { } } 0",
+    ] {
+        let (checked, _) = fixture().script(source);
+        assert!(checked.refusals().is_empty(), "{source}: {:?}", checked.refusals());
+    }
+}
+
 // Casts (operators §5)
 
 /// operators §5: `as` casts between the numbers, `bool` and `char` as Rust
@@ -4226,12 +4257,23 @@ fn every_diverging_form(templates: &[&str]) -> Vec<String> {
     [every_form(diverging_forms, templates), every_form(aborting_forms, templates)].concat()
 }
 
+/// The sources of every one of `templates`, each `{X}` a `while`'s
+/// condition or a `while let`'s source, in every form but the loop's: a
+/// `break` or a `continue` there is refused (control-flow,
+/// `break_or_continue_in_a_while_condition_is_refused`).
+fn every_diverging_form_in_a_condition(templates: &[&str]) -> Vec<String> {
+    let returning = templates.iter().flat_map(|template| diverging_forms(template).into_iter().take(3));
+    returning.chain(every_form(aborting_forms, templates)).collect()
+}
+
 /// types §4-6, control-flow: a condition of a diverging form is decided by
-/// the condition: `if X`, `while X` and `if !X` are admitted in every form.
+/// the condition: `if X`, `while X` and `if !X` are admitted in every form,
+/// `while X` in every form but the loop's.
 #[test]
 fn a_condition_of_a_diverging_form_is_decided_by_the_condition() {
-    let templates = ["if {X} { 2 } else { 3 };", "while {X} { }", "if !{X} { 2 } else { 3 };"];
-    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+    let mut sources = every_diverging_form(&["if {X} { 2 } else { 3 };", "if !{X} { 2 } else { 3 };"]);
+    sources.extend(every_diverging_form_in_a_condition(&["while {X} { }"]));
+    assert_each_admitted(never_fixture, &sources);
 }
 
 /// types §4-6, operators §2: an operand of `&&` or `||` of a diverging form,
@@ -4542,15 +4584,17 @@ fn a_diverging_callee_is_decided_by_its_call() {
 /// types §4-6, patterns §1, §4: a pattern destructuring a diverging
 /// scrutinee decides its type, and the names it binds are what their uses
 /// decide: `if let`, `while let` and a tuple pattern of `match`, each
-/// binding a condition's `bool`, are admitted in every form.
+/// binding a condition's `bool`, are admitted in every form, `while let` in
+/// every form but the loop's.
 #[test]
 fn a_pattern_over_a_diverging_scrutinee_binds_what_its_uses_decide() {
     let templates = [
         "let r = if let Some(u) = {X} { if u { 2 } else { 3 } } else { 4 };",
-        "while let Some(u) = {X} { if u { } }",
         "let r = match {X} { (u, w) => if u { 2 } else { 3 }, };",
     ];
-    assert_each_admitted(never_fixture, &every_diverging_form(&templates));
+    let mut sources = every_diverging_form(&templates);
+    sources.extend(every_diverging_form_in_a_condition(&["while let Some(u) = {X} { if u { } }"]));
+    assert_each_admitted(never_fixture, &sources);
 }
 
 /// types §3-6, operators §2-3: a diverging form entering a slot, an index's
