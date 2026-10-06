@@ -33,8 +33,9 @@ use acvus_utils::{Interner, LocalIdOps, QualifiedRef};
 use rustc_hash::FxHashMap;
 
 use super::{Block, BlockId, Body, BodyId, Definition, InstId, Module, Op, OrderUse, Terminator};
-use crate::decl::PairMember;
+use crate::decl::{Core, PairMember};
 use crate::ir::{BinOp, Callee, ForSource, IndexBound, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValOrigin, ValueId};
+use crate::ty::structural::VariantKey;
 use crate::ty::{self, Mutability, Ty};
 
 /// The items a print shows beyond blocks, instructions, terminators and
@@ -94,9 +95,15 @@ pub(crate) fn path(names: &Interner, path: &[PathSeg]) -> String {
         .map(|seg| match seg {
             PathSeg::Field(field) => format!(".{}", names.resolve(*field)),
             PathSeg::Index(index) => format!(".{index}"),
-            PathSeg::Payload => ".Payload".to_string(),
+            PathSeg::Payload(variant) => format!(".{}", variant_name(names, *variant)),
         })
         .collect()
+}
+
+/// A variant as the program writes it: an `Option`'s and a `Result`'s by
+/// the names `core` gives them (`Tags::tag`), an enum's by its own.
+pub(crate) fn variant_name(names: &Interner, variant: VariantKey) -> String {
+    names.resolve(Core::of(names).tags.tag(variant)).to_string()
 }
 
 /// `@start..end`.
@@ -519,12 +526,12 @@ impl Printer<'_> {
                 let signatures: Vec<String> = signatures.iter().map(|signature| self.ty(*signature)).collect();
                 format!("Specialize {} [{}]", self.value(*closure), signatures.join(", "))
             }
-            Op::MakeVariant { tag, payload } => match payload {
-                Some(payload) => format!("MakeVariant {}({})", self.names.resolve(*tag), self.value(*payload)),
-                None => format!("MakeVariant {}", self.names.resolve(*tag)),
+            Op::MakeVariant { variant, payload } => match payload {
+                Some(payload) => format!("MakeVariant {}({})", variant_name(self.names, *variant), self.value(*payload)),
+                None => format!("MakeVariant {}", variant_name(self.names, *variant)),
             },
-            Op::TestVariant { src, tag } => format!("TestVariant {}, {}", self.value(*src), self.names.resolve(*tag)),
-            Op::UnwrapVariant { src } => format!("UnwrapVariant {}", self.value(*src)),
+            Op::TestVariant { src, variant } => format!("TestVariant {}, {}", self.value(*src), variant_name(self.names, *variant)),
+            Op::UnwrapVariant { src, variant } => format!("UnwrapVariant {}, {}", self.value(*src), variant_name(self.names, *variant)),
             Op::Undef => "Undef".to_string(),
             Op::Drop { src } => format!("Drop {}", self.value(*src)),
         }
@@ -594,7 +601,7 @@ impl Printer<'_> {
 
     fn switch_key(&self, key: SwitchKey) -> String {
         match key {
-            SwitchKey::Tag(tag) => self.names.resolve(tag).to_string(),
+            SwitchKey::Variant(variant) => variant_name(self.names, variant),
             SwitchKey::Int(n) => n.to_string(),
             SwitchKey::Bool(b) => b.to_string(),
             SwitchKey::Char(c) => format!("{c:?}"),

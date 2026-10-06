@@ -1534,7 +1534,7 @@ fn extraction(types: &Types<Concrete>, ty: Ty, value: ValueId, path: &[PathSeg])
         .iter()
         .map(|seg| match seg {
             PathSeg::Field(name) => Some(*name),
-            PathSeg::Index(_) | PathSeg::Payload => None,
+            PathSeg::Index(_) | PathSeg::Payload(_) => None,
         })
         .collect();
     match (fields.as_deref(), path, types.kind(ty)) {

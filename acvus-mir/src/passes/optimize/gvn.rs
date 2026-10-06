@@ -54,6 +54,7 @@ use crate::ir::{BinOp, Callee, Chosen, IndexBound, IndexMode, UnaryOp, ValueId, 
 use crate::passes::analysis::{AnalysisManager, Dominators};
 use crate::passes::edit_facts::EditFacts;
 use crate::passes::optimize::BodyTransform;
+use crate::ty::structural::VariantKey;
 use crate::ty::{CastTy, Concrete, Mutability, Reissue, Ty, TyKind, Types, copies};
 
 pub struct Gvn;
@@ -225,9 +226,9 @@ enum Shape {
     ArrayIndex(usize),
     ObjectGet(Astr),
     MakeClosure(Vec<BodyId>),
-    MakeVariant { tag: Astr, has_payload: bool },
-    TestVariant(Astr),
-    UnwrapVariant,
+    MakeVariant { variant: VariantKey, has_payload: bool },
+    TestVariant(VariantKey),
+    UnwrapVariant(VariantKey),
     Undef,
 }
 
@@ -351,9 +352,9 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
         // A specialized closure is its closure at fewer signatures; left to
         // the closure's own number.
         Op::Specialize { .. } => return None,
-        Op::MakeVariant { tag, payload } => Shape::MakeVariant { tag: *tag, has_payload: payload.is_some() },
-        Op::TestVariant { tag, .. } => Shape::TestVariant(*tag),
-        Op::UnwrapVariant { .. } => Shape::UnwrapVariant,
+        Op::MakeVariant { variant, payload } => Shape::MakeVariant { variant: *variant, has_payload: payload.is_some() },
+        Op::TestVariant { variant, .. } => Shape::TestVariant(*variant),
+        Op::UnwrapVariant { variant, .. } => Shape::UnwrapVariant(*variant),
         Op::Undef => Shape::Undef,
         Op::Ref { .. }
         | Op::Take { .. }

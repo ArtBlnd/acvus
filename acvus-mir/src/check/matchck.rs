@@ -15,7 +15,7 @@ use crate::passes::analysis::{AnalysisManager, MatchFacts};
 /// The judgment over `body`, its refusals pushed to `out`.
 pub(super) fn check(module: &Module, body: BodyId, am: &mut AnalysisManager<'_>, out: &mut Vec<Refusal>) {
     let facts = am.get::<MatchFacts>(module, body);
-    let reached = MatchFacts::reached(&facts, module, am.decls(), body);
+    let reached = MatchFacts::reached(&facts, module, body);
     for (block, record) in module.body(body).blocks() {
         if let Terminator::NoArmMatched { span } = record.terminator()
             && reached.contains(&block)

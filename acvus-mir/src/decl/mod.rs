@@ -30,7 +30,7 @@ use crate::ty::{IdentityId, LifetimesOf, Poly, TyId, Types};
 pub use bound::TyVarBound;
 pub use casts::{Base, CastRule, CastTree, Head, VerifiedExternCast};
 pub use conversions::{ConversionRule, VerifiedConversion};
-pub use core::{Core, Tags};
+pub use core::{Core, Tags, unwrapped};
 pub use declared::NamedFact;
 pub use call_flows::{CallFlows, call_flows};
 pub use labels::{EndLabels, LabelledSignature, Lifetime, Outlives, SegmentLabel, declared_fn_flows};

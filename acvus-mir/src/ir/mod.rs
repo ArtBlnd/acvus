@@ -6,6 +6,7 @@ pub(crate) mod parts;
 
 use acvus_utils::QualifiedRef;
 use crate::decl::PairMember;
+use crate::ty::structural::VariantKey;
 use crate::ty::{Concrete, IntTy, Mutability, Ty, TyKind, Types};
 
 /// An operation of the language no single op states, each read by
@@ -152,7 +153,8 @@ pub enum UnaryOp {
 /// with such an arm keeps the chain `lower_match_expr` emits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SwitchKey {
-    Tag(Astr),
+    /// The variant a value of a variant type holds.
+    Variant(VariantKey),
     Int(i128),
     Bool(bool),
     Char(char),
@@ -177,7 +179,9 @@ impl SwitchKey {
 pub enum PathSeg {
     Field(Astr),
     Index(usize),
-    Payload,
+    /// The payload of `VariantKey`'s variant: what a value holds where it
+    /// holds that variant.
+    Payload(VariantKey),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -445,6 +449,17 @@ pub fn known_effect(effect: &crate::ty::EffectTerm<Concrete>) -> &crate::ty::Eff
     match effect {
         crate::ty::EffectTerm::Known(effect) => effect,
         crate::ty::EffectTerm::Var(var) => match *var {},
+    }
+}
+
+/// The type a test (`TestLiteral`, `TestObjectKey`, `TestVariant`) or a
+/// `Switch` reads of an operand of type `ty`: what `ty` names where it is a
+/// reference, which a test reads through without taking anything out
+/// (D89), and `ty` itself otherwise. The one place that reading is stated.
+pub(crate) fn tested_ty(types: &Types<Concrete>, ty: Ty) -> Ty {
+    match types.kind(ty) {
+        TyKind::Ref(_, target) => *target,
+        _ => ty,
     }
 }
 

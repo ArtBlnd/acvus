@@ -31,7 +31,7 @@ use super::output::{AsCast, Chosen, Converted, Impl, Iteration, TryExit};
 use super::reach::{self, Candidate, Match, NoReach};
 use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
-use crate::decl::{Base, GenericFunction, Head, Scheme};
+use crate::decl::{Base, GenericFunction, Head, Scheme, unwrapped};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, Level, OpenSources, PairAt, RequiredAt, Term};
 use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{
@@ -1132,28 +1132,30 @@ pub(super) fn element_of(cx: &Ctxt<'_>, sequence: Term) -> Term {
 }
 
 /// `?` on an `Option` or a `Result` (control-flow): its value is the
-/// payload, and it leaves through the same primitive at the body's type.
+/// payload of the variant it goes on with (`decl::unwrapped`), and it
+/// leaves through the same primitive at the body's type.
 fn fire_try(cx: &mut Ctxt<'_>, site: AstId, span: Span, operand: Closed, value: Term, exit: Term) {
-    let tried = match structure(cx.infer.types(), operand.term) {
-        Some(Structure::Option(payload, _)) => {
-            cx.eq(value, payload, span);
+    let Some((tried, goes_on)) = structure(cx.infer.types(), operand.term).and_then(|tried| Some((tried, unwrapped(&tried)?))) else {
+        refusal::push(cx, RefusalKind::NotTryable, span);
+        return;
+    };
+    let payload = tried.part(PartKey::Payload(goes_on)).expect("the variant `?` goes on with carries its payload (operators §2)");
+    let (leaves, tried) = match tried {
+        Structure::Option(..) => {
             let any = cx.fresh();
-            let leaves = cx.node(TyKind::Option(any, Label::Here));
-            cx.eq(exit, leaves, span);
-            TryExit::Option(exit)
+            (TyKind::Option(any, Label::Here), TryExit::Option(exit))
         }
-        Some(Structure::Result { ok: payload, err: error, .. }) => {
-            cx.eq(value, payload, span);
+        Structure::Result { err: error, .. } => {
             let any = cx.fresh();
-            let leaves = cx.node(TyKind::Result(any, error, Label::Here));
-            cx.eq(exit, leaves, span);
-            TryExit::Result(exit)
+            (TyKind::Result(any, error, Label::Here), TryExit::Result(exit))
         }
-        _ => {
-            refusal::push(cx, RefusalKind::NotTryable, span);
-            return;
+        Structure::Tuple(..) | Structure::Object(..) | Structure::Enum(..) | Structure::Array { .. } => {
+            unreachable!("`unwrapped` names a variant only of an `Option` or a `Result`")
         }
     };
+    cx.eq(value, payload, span);
+    let leaves = cx.node(leaves);
+    cx.eq(exit, leaves, span);
     cx.out.tries.insert(site, tried);
 }
 

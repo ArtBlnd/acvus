@@ -20,8 +20,8 @@ use super::control::diamond;
 use super::ctxt::{Declared, Entry, Lcx, Lowered};
 use crate::ir::cfg::Op;
 use crate::ir::{Intrinsic, PathSeg, RefTarget, ValueId, fn_effect, known_len};
-use crate::ty::structural::{PartKey, Structure, structure};
-use crate::ty::{Calls, Effect, EffectTerm, FlowTerm, Flows, Holds, LenTerm, Mutability, Ty, TyKind};
+use crate::ty::structural::{PartKey, Structure, Variant, structure};
+use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, LenTerm, Mutability, Ty, TyKind};
 use crate::typeck::Coercion;
 
 /// `value`, a transparent structured value, or where `through` is `Some` a
@@ -107,16 +107,10 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> Lowered<ValueId> {
                 .collect::<Lowered<_>>()?;
             Ok(cx.made(Op::MakeObject { fields }, made, span))
         }
-        (Some(Structure::Option(payload, _)), Some(Structure::Option(..))) => {
-            let variants = Variant::of_option(cx, payload);
-            same_variant(cx, &coerced, &access, &variants, made)
-        }
-        (Some(Structure::Result { ok, err, .. }), Some(Structure::Result { .. })) => {
-            let variants = Variant::of_result(cx, ok, err);
-            same_variant(cx, &coerced, &access, &variants, made)
-        }
-        (Some(Structure::Enum(variants, _)), Some(Structure::Enum(..))) => {
-            let variants = Variant::of_enum(variants);
+        (Some(of_from @ Structure::Option(..)), Some(Structure::Option(..)))
+        | (Some(of_from @ Structure::Result { .. }), Some(Structure::Result { .. }))
+        | (Some(of_from @ Structure::Enum(..)), Some(Structure::Enum(..))) => {
+            let variants = of_from.variants().expect("an enum, an `Option` and a `Result` are variant types");
             same_variant(cx, &coerced, &access, &variants, made)
         }
         (Some(Structure::Array { element, len, .. }), Some(Structure::Array { .. })) => {
@@ -200,7 +194,7 @@ impl Access {
             let op = match seg {
                 PathSeg::Index(index) => Op::TupleIndex { tuple: self.value, index },
                 PathSeg::Field(field) => Op::FieldGet { object: self.value, field, rest: Vec::new() },
-                PathSeg::Payload => Op::UnwrapVariant { src: self.value },
+                PathSeg::Payload(variant) => Op::UnwrapVariant { src: self.value, variant },
             };
             return cx.emit(op, ty, span);
         };
@@ -307,44 +301,18 @@ fn coercion_effect(cx: &Lcx<'_, '_>, coercion: &Coercion) -> Effect {
     }
 }
 
-/// One variant of a variant type: its tag, and its payload's type and key
-/// where it has one.
-pub(super) struct Variant {
-    pub tag: Astr,
-    pub payload: Option<(PartKey, Ty)>,
-}
-
-impl Variant {
-    pub fn of_option(cx: &Lcx<'_, '_>, payload: Ty) -> [Variant; 2] {
-        let tags = cx.decls.core().tags;
-        [Variant { tag: tags.some, payload: Some((PartKey::Some, payload)) }, Variant { tag: tags.none, payload: None }]
-    }
-
-    pub fn of_result(cx: &Lcx<'_, '_>, ok: Ty, err: Ty) -> [Variant; 2] {
-        let tags = cx.decls.core().tags;
-        [Variant { tag: tags.ok, payload: Some((PartKey::Ok, ok)) }, Variant { tag: tags.err, payload: Some((PartKey::Err, err)) }]
-    }
-
-    pub fn of_enum(variants: &[(Astr, Option<Ty>)]) -> Vec<Variant> {
-        variants
-            .iter()
-            .map(|(tag, payload)| Variant { tag: *tag, payload: payload.map(|ty| (PartKey::Variant(*tag), ty)) })
-            .collect()
-    }
-}
-
 /// A variant value made the same variant of `made`, its payload coerced.
-fn same_variant(cx: &mut Lcx<'_, '_>, coerced: &Coerced<'_>, access: &Access, variants: &[Variant], made: Ty) -> Lowered<ValueId> {
+fn same_variant(cx: &mut Lcx<'_, '_>, coerced: &Coerced<'_>, access: &Access, variants: &[Variant<Concrete>], made: Ty) -> Lowered<ValueId> {
     let span = coerced.span;
     by_variant(cx, variants, made, access.value, span, &|cx, variant| {
         let payload = variant
             .payload
-            .map(|(key, ty)| {
-                let part = access.part(cx, PathSeg::Payload, ty)?;
-                coerced.part(cx, key, part)
+            .map(|ty| {
+                let part = access.part(cx, PathSeg::Payload(variant.key), ty)?;
+                coerced.part(cx, PartKey::Payload(variant.key), part)
             })
             .transpose()?;
-        Ok(cx.made(Op::MakeVariant { tag: variant.tag, payload }, made, span))
+        Ok(cx.made(Op::MakeVariant { variant: variant.key, payload }, made, span))
     })
 }
 
@@ -357,11 +325,11 @@ fn same_variant(cx: &mut Lcx<'_, '_>, coerced: &Coerced<'_>, access: &Access, va
 /// past making or lending one (`Lcx::emit`), and none dispatches on it.
 pub(super) fn by_variant(
     cx: &mut Lcx<'_, '_>,
-    variants: &[Variant],
+    variants: &[Variant<Concrete>],
     ty: Ty,
     value: ValueId,
     span: Span,
-    arm: &dyn Fn(&mut Lcx<'_, '_>, &Variant) -> Lowered<ValueId>,
+    arm: &dyn Fn(&mut Lcx<'_, '_>, &Variant<Concrete>) -> Lowered<ValueId>,
 ) -> Lowered<ValueId> {
     let Some((variant, rest)) = variants.split_first() else {
         unreachable!("no value has a type of no variant, so no run dispatches on one")
@@ -370,6 +338,6 @@ pub(super) fn by_variant(
         return arm(cx, variant);
     }
     let bool_ty = cx.bool_ty();
-    let is = cx.made(Op::TestVariant { src: value, tag: variant.tag }, bool_ty, span);
+    let is = cx.made(Op::TestVariant { src: value, variant: variant.key }, bool_ty, span);
     diamond(cx, is, ty, span, |cx| arm(cx, variant), |cx| by_variant(cx, rest, ty, value, span, arm))
 }

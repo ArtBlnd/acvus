@@ -140,7 +140,7 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         | Op::ObjectGet { object: src, .. }
         | Op::TupleIndex { tuple: src, .. }
         | Op::ArrayIndex { array: src, .. } => operands.push(extracted(*src)),
-        Op::UnwrapVariant { src } => operands.push(match copying(*src) || result_copies() {
+        Op::UnwrapVariant { src, .. } => operands.push(match copying(*src) || result_copies() {
             true => read(*src),
             false => taken(*src, Taken::Moved),
         }),

@@ -17,9 +17,10 @@ use super::control::lower_short_circuit;
 use super::ctxt::{Lcx, Lowered};
 use super::expr::lower_expr;
 use super::place::{lend, operand};
-use crate::decl::PairMember;
+use crate::decl::{PairMember, unwrapped};
 use crate::ir::cfg::Op;
 use crate::ir::{Callee, UnaryOp, ValueId};
+use crate::ty::structural::structure;
 use crate::ty::{Mutability, Ty, TyKind};
 use crate::typeck::{Adjustment, Coercion, Impl};
 
@@ -164,7 +165,8 @@ fn variant_call<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, tag: acvus_utils::As
         _ => panic!("typeck refuses a variant of more than one payload (VariantArity)"),
     };
     let ty = cx.ty(site);
-    Ok(cx.made(Op::MakeVariant { tag, payload }, ty, span))
+    let variant = cx.variant(ty, tag);
+    Ok(cx.made(Op::MakeVariant { variant, payload }, ty, span))
 }
 
 /// `receiver.name(args)`, reached at `callee_site`: the receiver is the
@@ -197,8 +199,11 @@ pub(super) fn lower_method<S: Slot>(
         let [wrapped] = &all[..] else {
             panic!("`unwrap` takes its receiver alone (operators §2)")
         };
+        let variant = structure(cx.types(), cx.value_ty(*wrapped))
+            .and_then(|wrapped| unwrapped(&wrapped))
+            .unwrap_or_else(|| panic!("`unwrap` takes an `Option` or a `Result` (operators §2), not {:?}", cx.kind(cx.value_ty(*wrapped))));
         let ty = cx.ty(site);
-        return cx.emit(Op::UnwrapVariant { src: *wrapped }, ty, span);
+        return cx.emit(Op::UnwrapVariant { src: *wrapped, variant }, ty, span);
     }
     call_reached(cx, callee_site, all, span)
 }

@@ -16,8 +16,10 @@ use super::expr::lower_expr;
 use super::pat::{Matched, bind, test};
 use super::place::{Place, assign, view_array};
 use super::stmt::{lower_body, lower_stmts};
+use crate::decl::unwrapped;
 use crate::ir::cfg::{Op, Terminator};
 use crate::ir::{ForSource, RefTarget, ValueId};
+use crate::ty::structural::{PartKey, VariantKey, structure};
 use crate::ty::{Mutability, Ty, TyKind};
 use crate::typeck::{Iteration, TryExit};
 
@@ -321,8 +323,9 @@ pub(super) fn lower_return<S: Slot>(cx: &mut Lcx<'_, '_>, value: &Expr<S>, span:
     Err(cx.return_value(returned, span))
 }
 
-/// `inner?`: `Some`/`Ok`'s payload goes on; `None`/`Err` leaves the body,
-/// coerced into its result at the `?`'s site.
+/// `inner?`: the payload of the variant it goes on with
+/// (`decl::unwrapped`) goes on; the other variant leaves the body, coerced
+/// into its result at the `?`'s site.
 pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr<S>, span: Span) -> Lowered<ValueId> {
     let tried = lower_expr(cx, inner)?;
     let value_ty = cx.ty(site);
@@ -330,32 +333,33 @@ pub(super) fn lower_try<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, inner: &Expr
         .decided
         .try_exit(site)
         .unwrap_or_else(|| panic!("typeck decides the exit of every `?` whose operand a run gets past, and not {site:?}"));
-    let tags = cx.decls.core().tags;
-    let (goes_on, exit_ty) = match exit {
-        TryExit::Option(ty) => (tags.some, ty),
-        TryExit::Result(ty) => (tags.ok, ty),
+    let tried_ty = cx.value_ty(tried);
+    let goes_on = structure(cx.types(), tried_ty)
+        .and_then(|structured| unwrapped(&structured))
+        .unwrap_or_else(|| panic!("typeck admits a `?` only of an `Option` or a `Result`, not {:?}", cx.kind(tried_ty)));
+    let exit_ty = match exit {
+        TryExit::Option(ty) | TryExit::Result(ty) => ty,
     };
     let bool_ty = cx.bool_ty();
-    let holds = cx.made(Op::TestVariant { src: tried, tag: goes_on }, bool_ty, span);
+    let holds = cx.made(Op::TestVariant { src: tried, variant: goes_on }, bool_ty, span);
     let on = cx.new_block(&[]);
     let leave = cx.new_block(&[]);
     let terminator =
         Terminator::JumpIf { cond: holds, then_to: on, then_args: Vec::new(), else_to: leave, else_args: Vec::new() };
     cx.terminate(terminator, span);
     let left = cx.enter_block(leave, span).and_then(|_| match exit {
-        TryExit::Option(_) => Ok(cx.made(Op::MakeVariant { tag: tags.none, payload: None }, exit_ty, span)),
+        TryExit::Option(_) => Ok(cx.made(Op::MakeVariant { variant: VariantKey::None, payload: None }, exit_ty, span)),
         TryExit::Result(_) => {
-            let error_ty = match cx.kind(cx.value_ty(tried)) {
-                TyKind::Result(_, error, _) => *error,
-                other => panic!("a `?` that leaves by `Err` tries a `Result`, not {other:?}"),
-            };
-            let error = cx.emit(Op::UnwrapVariant { src: tried }, error_ty, span)?;
-            Ok(cx.made(Op::MakeVariant { tag: tags.err, payload: Some(error) }, exit_ty, span))
+            let error_ty = structure(cx.types(), tried_ty)
+                .and_then(|structured| structured.part(PartKey::Payload(VariantKey::Err)))
+                .unwrap_or_else(|| panic!("a `?` that leaves by `Err` tries a `Result`, not {:?}", cx.kind(tried_ty)));
+            let error = cx.emit(Op::UnwrapVariant { src: tried, variant: VariantKey::Err }, error_ty, span)?;
+            Ok(cx.made(Op::MakeVariant { variant: VariantKey::Err, payload: Some(error) }, exit_ty, span))
         }
     });
     if let Ok(left) = left.and_then(|left| convert(cx, site, left, span)) {
         cx.return_value(left, span);
     }
     cx.enter_block(on, span)?;
-    cx.emit(Op::UnwrapVariant { src: tried }, value_ty, span)
+    cx.emit(Op::UnwrapVariant { src: tried, variant: goes_on }, value_ty, span)
 }

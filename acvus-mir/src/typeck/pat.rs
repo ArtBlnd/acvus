@@ -20,6 +20,7 @@ use super::refusal::{self, RefusalKind};
 use super::scope::Binding;
 use crate::decl::{Base, Head};
 use crate::infer::Term;
+use crate::ty::structural::{PartKey, VariantKey, structure};
 use crate::ty::{EffectTerm, Infer as InferPhase, Label, LenTerm, Mutability, Reach, TyKind};
 
 /// A checked pattern, waiting for its scrutinee's head.
@@ -351,33 +352,33 @@ fn variant(
     lent: Option<Mutability>,
     span: Span,
 ) {
-    let tags = cx.decls.core().tags;
     let least = lent.or_else(|| super::place::path_of(cx, scrutinee, reach));
-    let (kind, part) = match enum_name {
-        Some(name) => {
+    let (variant, kind) = match (enum_name, cx.decls.core().tags.primitive(tag)) {
+        (Some(name), _) => {
             let part = payload.as_ref().map(|_| reached_part(cx, least));
             let kind = TyKind::Enum {
                 name: QualifiedRef::root(name),
                 variants: Box::new([(tag, part)]),
                 label: Label::Here,
             };
-            (kind, part)
+            (VariantKey::Enum(tag), kind)
         }
-        None if tag == tags.some || tag == tags.none => {
-            let inner = reached_part(cx, least);
-            (TyKind::Option(inner, Label::Here), (tag == tags.some).then_some(inner))
+        (None, Some(variant @ (VariantKey::Some | VariantKey::None))) => {
+            (variant, TyKind::Option(reached_part(cx, least), Label::Here))
         }
-        None if tag == tags.ok || tag == tags.err => {
+        (None, Some(variant @ (VariantKey::Ok | VariantKey::Err))) => {
             let (ok, err) = (reached_part(cx, least), reached_part(cx, least));
-            (TyKind::Result(ok, err, Label::Here), Some(if tag == tags.ok { ok } else { err }))
+            (variant, TyKind::Result(ok, err, Label::Here))
         }
-        None => {
+        (None, Some(VariantKey::Enum(_))) => unreachable!("`Tags::primitive` names no enum's variant"),
+        (None, None) => {
             refusal::push(cx, RefusalKind::UnnamedVariant { tag }, span);
             return;
         }
     };
-    let variant = cx.held(kind);
-    cx.join(scrutinee, variant, reach, span);
+    let held = cx.held(kind);
+    let part = structure(cx.infer.types(), cx.infer.shallow(held)).and_then(|structure| structure.part(PartKey::Payload(variant)));
+    cx.join(scrutinee, held, reach, span);
     match (payload, part) {
         (Some(payload), Some(part)) => destructure(cx, payload, part, lent),
         (None, None) => {}

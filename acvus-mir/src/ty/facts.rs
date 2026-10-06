@@ -129,11 +129,11 @@ fn inhabited_level(types: &Types<Concrete>, ty: Ty, judged: &mut FxHashMap<Ty, b
             LenTerm::Known(_) => inhabited_in(types, *element, judged),
             LenTerm::Var(var) => match *var {},
         },
-        TyKind::Enum { variants, .. } => {
-            variants.iter().any(|(_, payload)| payload.is_none_or(|payload| inhabited_in(types, payload, judged)))
-        }
-        TyKind::Option(..) => true,
-        TyKind::Result(ok, err, _) => inhabited_in(types, *ok, judged) || inhabited_in(types, *err, judged),
+        TyKind::Enum { .. } | TyKind::Option(..) | TyKind::Result(..) => structure(types, ty)
+            .and_then(|structure| structure.variants())
+            .expect("an enum, an `Option` and a `Result` are variant types")
+            .iter()
+            .any(|variant| variant.payload.is_none_or(|payload| inhabited_in(types, payload, judged))),
         TyKind::Ref(_, target) => inhabited_in(types, *target, judged),
         TyKind::Slice(_)
         | TyKind::Int(_)

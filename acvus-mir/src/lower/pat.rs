@@ -23,7 +23,8 @@ use super::expr::lower_expr;
 use super::place::{Operand, Place, assign, lend, read};
 use super::stmt::lower_body;
 use crate::ir::cfg::{BlockId, Op, Terminator};
-use crate::ir::{BinOp, IndexBound, IndexMode, PathSeg, RefTarget, SwitchKey, ValueId, known_len};
+use crate::ir::{BinOp, IndexBound, IndexMode, PathSeg, RefTarget, SwitchKey, ValueId, known_len, tested_ty};
+use crate::ty::structural::{PartKey, VariantKey, structure};
 use crate::ty::{Mutability, Ty, TyKind};
 
 /// What a pattern is matched against: a reference value; a place the match
@@ -41,7 +42,7 @@ pub(super) enum Matched {
 enum Part {
     Tuple(usize),
     Field(Astr),
-    Payload(Astr),
+    Payload(VariantKey),
     /// An array's element, at an index its type fixes.
     Element(usize),
 }
@@ -124,7 +125,7 @@ fn part(cx: &mut Lcx<'_, '_>, matched: &Matched, part: Part, span: Span) -> Lowe
             let op = match part {
                 Part::Tuple(index) => Op::TupleIndex { tuple: *value, index },
                 Part::Field(field) => Op::FieldGet { object: *value, field, rest: Vec::new() },
-                Part::Payload(_) => Op::UnwrapVariant { src: *value },
+                Part::Payload(variant) => Op::UnwrapVariant { src: *value, variant },
                 Part::Element(index) => Op::ArrayIndex { array: *value, index },
             };
             Matched::Value { value: cx.emit(op, ty, span)?, ty }
@@ -138,7 +139,7 @@ fn segment(part: Part) -> PathSeg {
     match part {
         Part::Tuple(index) | Part::Element(index) => PathSeg::Index(index),
         Part::Field(field) => PathSeg::Field(field),
-        Part::Payload(_) => PathSeg::Payload,
+        Part::Payload(variant) => PathSeg::Payload(variant),
     }
 }
 
@@ -186,17 +187,12 @@ fn slice_ref(cx: &mut Lcx<'_, '_>, place: &Place, lent: Mutability, span: Span) 
 /// `whole` has no such part: typeck admits a pattern only on a type that
 /// has what it names.
 fn part_ty(cx: &Lcx<'_, '_>, whole: Ty, part: Part) -> Ty {
-    let tags = cx.decls.core().tags;
     let found = match (cx.kind(whole), part) {
         (TyKind::Tuple(items, _), Part::Tuple(index)) => items.get(index).copied(),
         (TyKind::Object { fields, .. }, Part::Field(field)) => {
             fields.iter().find(|(name, _)| *name == field).map(|(_, ty)| *ty)
         }
-        (TyKind::Option(payload, _), Part::Payload(_)) => Some(*payload),
-        (TyKind::Result(ok, err, _), Part::Payload(tag)) => Some(if tag == tags.ok { *ok } else { *err }),
-        (TyKind::Enum { variants, .. }, Part::Payload(tag)) => {
-            variants.iter().find(|(name, _)| *name == tag).and_then(|(_, payload)| *payload)
-        }
+        (_, Part::Payload(variant)) => structure(cx.types(), whole).and_then(|structure| structure.part(PartKey::Payload(variant))),
         (TyKind::Array(element, _, _), Part::Element(_)) => Some(*element),
         _ => None,
     };
@@ -261,10 +257,11 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
             let matched = through(cx, matched, span)?;
             let src = tag_source(cx, &matched, span)?;
             let bool_ty = cx.bool_ty();
-            let tagged = cx.made(Op::TestVariant { src, tag: *tag }, bool_ty, span);
+            let variant = cx.variant(matched.ty(), *tag);
+            let tagged = cx.made(Op::TestVariant { src, variant }, bool_ty, span);
             match payload {
                 Some(payload) if refutable(payload) => and(cx, Some(tagged), span, |cx| {
-                    let inner = part(cx, &matched, Part::Payload(*tag), span)?;
+                    let inner = part(cx, &matched, Part::Payload(variant), span)?;
                     test(cx, payload, &inner)
                 })?,
                 _ => Some(tagged),
@@ -404,7 +401,8 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         Pattern::Variant { tag, payload, .. } => {
             if let Some(payload) = payload {
                 let matched = through(cx, matched, span)?;
-                let inner = part(cx, &matched, Part::Payload(*tag), span)?;
+                let variant = cx.variant(matched.ty(), *tag);
+                let inner = part(cx, &matched, Part::Payload(variant), span)?;
                 bind(cx, payload, &inner)?;
             }
         }
@@ -464,15 +462,13 @@ struct SwitchPlan {
     default: Option<usize>,
 }
 
-/// The one-dispatch plan of a `match` whose arms each test one tag of one
-/// enum, or one literal of one kind, the first catch-all being the
-/// default; `None` for any other.
+/// The one-dispatch plan of a `match` whose arms each test one variant of
+/// one variant type, or one literal of one kind, the first catch-all being
+/// the default; `None` for any other. The `Switch` reads the scrutinee's
+/// type as `ir::tested_ty` states.
 fn switch_plan<S: Slot>(cx: &Lcx<'_, '_>, scrutinee: Ty, arms: &[MatchExprArm<S>]) -> Option<SwitchPlan> {
-    let tested = match cx.kind(scrutinee) {
-        TyKind::Ref(_, target) => *target,
-        _ => scrutinee,
-    };
-    let tagged = matches!(cx.kind(tested), TyKind::Option(.., _) | TyKind::Result(..) | TyKind::Enum { .. });
+    let tested = tested_ty(cx.types(), scrutinee);
+    let of_variants = structure(cx.types(), tested).is_some_and(|structure| structure.variants().is_some());
     let mut keyed: Vec<(SwitchKey, usize)> = Vec::new();
     let mut default = None;
     for (at, arm) in arms.iter().enumerate() {
@@ -481,8 +477,8 @@ fn switch_plan<S: Slot>(cx: &Lcx<'_, '_>, scrutinee: Ty, arms: &[MatchExprArm<S>
                 default = Some(at);
                 break;
             }
-            Pattern::Variant { tag, payload, .. } if tagged && payload.as_deref().is_none_or(|payload| !refutable(payload)) => {
-                SwitchKey::Tag(*tag)
+            Pattern::Variant { tag, payload, .. } if of_variants && payload.as_deref().is_none_or(|payload| !refutable(payload)) => {
+                SwitchKey::Variant(cx.variant(tested, *tag))
             }
             Pattern::Literal { value, .. } => literal_key(value)?,
             _ => return None,

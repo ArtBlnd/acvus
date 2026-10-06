@@ -109,13 +109,13 @@ use crate::decl::declared::{Access as DeclaredAccess, Element, Touch};
 use crate::decl::{CallFlows, Declarations, call_flows};
 use crate::ir::cfg::takings::{Taken, place_taking};
 use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Module, Op, Site, Terminator};
-use crate::ir::parts::{Path, covers, overlap};
+use crate::ir::parts::{Path, covers, overlap, step_ty};
 use acvus_utils::QualifiedRef;
 
 use crate::ir::{Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, ValueId, fn_effect};
 use crate::passes::analysis::{Analysis, DenseAnalysis, Direction, Dominators, Queries, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
-use crate::ty::structural::{PartKey, structure};
+use crate::ty::structural::{PartKey, Variant, structure};
 use crate::ty::{
     Alignment, Concrete, Declared, FlowEnd, Flows, Holds, Mutability, PositionKind, Reissue, Source, Ty, TyKind,
     Types, lent_types, position_kinds, positions,
@@ -898,7 +898,7 @@ fn part_seg(key: PartKey) -> PathSeg {
     match key {
         PartKey::Index(index) => PathSeg::Index(index),
         PartKey::Field(field) => PathSeg::Field(field),
-        PartKey::Variant(_) | PartKey::Some | PartKey::Ok | PartKey::Err => PathSeg::Payload,
+        PartKey::Payload(variant) => PathSeg::Payload(variant),
         PartKey::Element => ELEMENT,
     }
 }
@@ -1161,17 +1161,14 @@ impl Forward<'_> {
                         exact = false;
                         next.push(Part { range: part.range.clone(), ty: *element });
                     }
-                    (PathSeg::Payload, TyKind::Option(payload, _)) => {
-                        next.push(Part { range: part.range.clone(), ty: *payload });
-                    }
-                    (PathSeg::Payload, TyKind::Result(ok, err, _)) => {
-                        exact = false;
-                        next.extend(laid(&mut [*ok, *err].into_iter()));
-                    }
-                    (PathSeg::Payload, TyKind::Enum { variants, .. }) => {
-                        let payloads: Vec<Ty> = variants.iter().filter_map(|(_, payload)| *payload).collect();
-                        exact &= payloads.len() == 1;
-                        next.extend(laid(&mut payloads.into_iter()));
+                    // A variant type lays its variants' payloads one after
+                    // another, as its positions count them: the payload of
+                    // `variant` is the one at its place among them.
+                    (PathSeg::Payload(variant), _) => {
+                        let variants = structure(self.types, part.ty).and_then(|structure| structure.variants())?;
+                        let carrying: Vec<&Variant<Concrete>> = variants.iter().filter(|held| held.payload.is_some()).collect();
+                        let at = carrying.iter().position(|held| held.key == *variant)?;
+                        next.extend(laid(&mut carrying.iter().filter_map(|held| held.payload)).into_iter().nth(at));
                     }
                     _ => return None,
                 }
@@ -1270,19 +1267,10 @@ impl Forward<'_> {
         canonical
     }
 
-    /// The types `seg` may step to from a value of `ty`.
+    /// The type `seg` steps to from a value of `ty`, where it names a part
+    /// of it (`ir::parts::step_ty`).
     fn part_types(&self, ty: Ty, seg: &PathSeg) -> Vec<Ty> {
-        match (seg, self.types.kind(ty)) {
-            (PathSeg::Field(field), TyKind::Object { fields, .. }) => {
-                fields.iter().filter(|(name, _)| name == field).map(|(_, ty)| *ty).collect()
-            }
-            (PathSeg::Index(index), TyKind::Tuple(items, _)) => items.get(*index).copied().into_iter().collect(),
-            (PathSeg::Index(_), TyKind::Array(element, _, _) | TyKind::Slice(element)) => vec![*element],
-            (PathSeg::Payload, TyKind::Option(payload, _)) => vec![*payload],
-            (PathSeg::Payload, TyKind::Result(ok, err, _)) => vec![*ok, *err],
-            (PathSeg::Payload, TyKind::Enum { variants, .. }) => variants.iter().filter_map(|(_, payload)| *payload).collect(),
-            _ => Vec::new(),
-        }
+        step_ty(self.types, ty, *seg).into_iter().collect()
     }
 
     /// Whether `place`'s path steps into a sequence's elements, all of which
@@ -1601,7 +1589,7 @@ impl Forward<'_> {
             Op::ObjectGet { object, key } => self.project(state, *object, &[PathSeg::Field(*key)], ty()),
             Op::TupleIndex { tuple, index } => self.project(state, *tuple, &[PathSeg::Index(*index)], ty()),
             Op::ArrayIndex { array, .. } => self.project(state, *array, &[PathSeg::Index(0)], ty()),
-            Op::UnwrapVariant { src } => self.project(state, *src, &[PathSeg::Payload], ty()),
+            Op::UnwrapVariant { src, variant } => self.project(state, *src, &[PathSeg::Payload(*variant)], ty()),
             Op::FieldSet { object, field, rest, value } => {
                 let path: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
                 let mut positions = self.value(state, *object);
@@ -1642,12 +1630,12 @@ impl Forward<'_> {
                     .flat_map(|(name, _)| passed.remove(name).expect("an object is made with every field of its type"))
                     .collect()
             }
-            Op::MakeVariant { tag, payload } => {
+            Op::MakeVariant { variant, payload } => {
                 let mut positions = empty(self.width(ty()));
                 if let Some(payload) = payload {
                     let held = self.value(state, *payload);
-                    for range in self.variant_ranges(ty(), *tag, self.body.ty_of(*payload)) {
-                        join_positions(&mut positions[range], &held);
+                    for part in self.reach_value(ty(), &[PathSeg::Payload(*variant)]).parts {
+                        join_positions(&mut positions[part.range], &held);
                     }
                 }
                 positions
@@ -1800,27 +1788,6 @@ impl Forward<'_> {
             join_positions(&mut out, &positions[range]);
         }
         out
-    }
-
-    /// The ranges of the variant `tag` of `ty` whose payload is `payload`:
-    /// an `Option`'s one, a `Result`'s of that type, an enum's by its tag.
-    fn variant_ranges(&self, ty: Ty, tag: acvus_utils::Astr, payload: Ty) -> Vec<Range<usize>> {
-        match self.types.kind(ty) {
-            TyKind::Option(.., _) | TyKind::Result(..) => self.parts_of(&self.reach_value(ty, &[PathSeg::Payload]), payload),
-            TyKind::Enum { variants, .. } => {
-                let mut at = 0;
-                for (name, declared) in variants.iter() {
-                    let Some(declared) = declared else { continue };
-                    let width = self.width(*declared);
-                    if *name == tag {
-                        return vec![at..at + width];
-                    }
-                    at += width;
-                }
-                panic!("a variant is made with a tag of its enum")
-            }
-            other => panic!("a variant is made at a variant type, not {other:?}"),
-        }
     }
 
     /// Each argument of a call as the call takes it: deepened through the

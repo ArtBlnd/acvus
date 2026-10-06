@@ -1,15 +1,17 @@
 //! `MatchFacts`: every value's `MatchValue` over one body, conditional on
 //! the arms its facts leave (the sparse engine, Wegman and Zadeck), for
-//! `check::matchck` (patterns §3). Cost: the sparse engine's; the tags' height
-//! is the body's tag names, the constant's 3, the interval's bounded by its
-//! widening.
+//! `check::matchck` (patterns §3). Cost: the sparse engine's; the variants'
+//! height is the body's variants, the constant's 3, the interval's bounded
+//! by its widening.
 //!
 //! An instruction that is not a value operation (`transfer`):
-//! - `MakeVariant { tag, .. }`: tags `Of({tag})`; constant and interval top.
-//! - `TestVariant { src, tag }`: a `bool` whose constant is, from `src`'s
-//!   tags: `true` where they are `Of({tag})`; `false` where they are `Of(s)`
-//!   and `tag ∉ s`; bottom where they are `None`; top otherwise, `Any`
-//!   included. A `src` that is a reference has tags `Any`.
+//! - `MakeVariant { variant, .. }`: variants `Of({variant})`; constant and
+//!   interval top.
+//! - `TestVariant { src, variant }`: a `bool` whose constant is, from
+//!   `src`'s variants: `true` where they are `Of({variant})`; `false` where
+//!   they are `Of(s)` and `variant ∉ s`; bottom where they are `None`; top
+//!   otherwise, `Any` included. A `src` that is a reference has variants
+//!   `Any`.
 //! - Every other: top.
 //!
 //! A value's top and its widening at a loop header are `IntervalValues`'
@@ -18,14 +20,14 @@
 //!
 //! Which successors run (`executable`):
 //! - `Diamond`, `JumpIf`: by the condition's constant, as `ConstantValues`.
-//! - `Switch`: by the fact of the value it switches on, which is its tag
-//!   value, or that value's target where the tag value is a reference. The
-//!   analysis tracks no storage's contents, so a target's fact is the top
-//!   of its type, an integer's interval its type's range (undefined
-//!   behaviour §2).
-//!   - On `Tag` keys: the set is the value's tags, `Any` read as every
-//!     variant of its type. An arm runs where its key is in the set;
-//!     `default` where the set holds a tag no key names.
+//! - `Switch`: by the fact of the value it switches on, which is its
+//!   operand, or that operand's target where the operand is a reference
+//!   (`ir::tested_ty`). The analysis tracks no storage's contents, so a
+//!   target's fact is the top of its type, an integer's interval its type's
+//!   range (undefined behaviour §2).
+//!   - On `Variant` keys: the set is the value's variants, `Any` read as
+//!     every variant of its type. An arm runs where its key is in the set;
+//!     `default` where the set holds a variant no key names.
 //!   - On `Bool` keys: by the constant; `default` where a `bool` value the
 //!     constant allows has no key.
 //!   - On `Int` or `Char` keys: by the interval; `default` where the
@@ -36,28 +38,27 @@ use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use acvus_ast::Literal;
-use acvus_utils::Astr;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
 use super::values::OperandTypes;
-use crate::decl::{Declarations, Tags as PrimitiveTags};
 use crate::ir::cfg::{BlockId, BodyId, Inst, Module, Op, Terminator};
-use crate::ir::{BinOp, SwitchKey, UnaryOp, ValueId};
+use crate::ir::{BinOp, SwitchKey, UnaryOp, ValueId, tested_ty};
 use crate::passes::analysis::{Analysis, Executable, Queries, SparseAnalysis, SparseFacts, solve_sparse};
 use crate::passes::domain::{
-    Bound, Constant, ConstantDomain, Interval, IntervalDomain, JoinSemiLattice, Tags, TagsDomain, ValueDomain, Widen,
+    Bound, Constant, ConstantDomain, Interval, IntervalDomain, JoinSemiLattice, ValueDomain, Variants, VariantsDomain, Widen,
 };
+use crate::ty::structural::{VariantKey, structure};
 use crate::ty::{CastTy, TyKind};
 
-/// This analysis's own product: a value's tags, its constant and its
+/// This analysis's own product: a value's variants, its constant and its
 /// interval, run together in one engine so that a fact of any of them may
 /// rule an arm out. Each component is its own domain's; the product only
 /// pairs them, reducing nothing between them.
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchValue {
-    pub tags: Tags,
+    pub variants: Variants,
     pub constant: Constant,
     pub interval: Interval,
 }
@@ -65,33 +66,33 @@ pub struct MatchValue {
 /// Each component joins, compares and widens by its own domain.
 impl JoinSemiLattice for MatchValue {
     fn bottom() -> Self {
-        MatchValue { tags: Tags::bottom(), constant: Constant::bottom(), interval: Interval::bottom() }
+        MatchValue { variants: Variants::bottom(), constant: Constant::bottom(), interval: Interval::bottom() }
     }
 
     fn join(&mut self, other: &Self) -> bool {
-        let tags = self.tags.join(&other.tags);
+        let variants = self.variants.join(&other.variants);
         let constant = self.constant.join(&other.constant);
         let interval = self.interval.join(&other.interval);
-        tags || constant || interval
+        variants || constant || interval
     }
 
     fn le(&self, other: &Self) -> bool {
-        self.tags.le(&other.tags) && self.constant.le(&other.constant) && self.interval.le(&other.interval)
+        self.variants.le(&other.variants) && self.constant.le(&other.constant) && self.interval.le(&other.interval)
     }
 }
 
 impl Widen for MatchValue {
     fn widen(&mut self, next: &Self) -> bool {
-        let tags = self.tags.widen(&next.tags);
+        let variants = self.variants.widen(&next.variants);
         let constant = self.constant.widen(&next.constant);
         let interval = self.interval.widen(&next.interval);
-        tags || constant || interval
+        variants || constant || interval
     }
 }
 
 /// Each value operation is each component domain's.
 pub struct MatchDomain {
-    pub tags: TagsDomain,
+    pub variants: VariantsDomain,
     pub constant: ConstantDomain,
     pub interval: IntervalDomain,
 }
@@ -100,12 +101,12 @@ impl ValueDomain for MatchDomain {
     type Value = MatchValue;
 
     fn top(&self) -> MatchValue {
-        MatchValue { tags: self.tags.top(), constant: self.constant.top(), interval: self.interval.top() }
+        MatchValue { variants: self.variants.top(), constant: self.constant.top(), interval: self.interval.top() }
     }
 
     fn constant(&self, literal: &Literal, ty: CastTy) -> MatchValue {
         MatchValue {
-            tags: self.tags.constant(literal, ty),
+            variants: self.variants.constant(literal, ty),
             constant: self.constant.constant(literal, ty),
             interval: self.interval.constant(literal, ty),
         }
@@ -113,7 +114,7 @@ impl ValueDomain for MatchDomain {
 
     fn binary(&self, op: BinOp, ty: CastTy, left: &MatchValue, right: &MatchValue) -> MatchValue {
         MatchValue {
-            tags: self.tags.binary(op, ty, &left.tags, &right.tags),
+            variants: self.variants.binary(op, ty, &left.variants, &right.variants),
             constant: self.constant.binary(op, ty, &left.constant, &right.constant),
             interval: self.interval.binary(op, ty, &left.interval, &right.interval),
         }
@@ -121,7 +122,7 @@ impl ValueDomain for MatchDomain {
 
     fn unary(&self, op: UnaryOp, ty: CastTy, operand: &MatchValue) -> MatchValue {
         MatchValue {
-            tags: self.tags.unary(op, ty, &operand.tags),
+            variants: self.variants.unary(op, ty, &operand.variants),
             constant: self.constant.unary(op, ty, &operand.constant),
             interval: self.interval.unary(op, ty, &operand.interval),
         }
@@ -129,7 +130,7 @@ impl ValueDomain for MatchDomain {
 
     fn cast(&self, from: CastTy, to: CastTy, operand: &MatchValue) -> MatchValue {
         MatchValue {
-            tags: self.tags.cast(from, to, &operand.tags),
+            variants: self.variants.cast(from, to, &operand.variants),
             constant: self.constant.cast(from, to, &operand.constant),
             interval: self.interval.cast(from, to, &operand.interval),
         }
@@ -147,8 +148,8 @@ impl Analysis for MatchFacts {
         crate::ir::cfg::Aspect::Types,
     ];
 
-    fn compute(queries: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Self::Facts {
-        solve_sparse(&Matches::new(module, body, queries.decls()), module.body(body))
+    fn compute(_: &mut Queries<'_, '_>, module: &Module, body: BodyId) -> Self::Facts {
+        solve_sparse(&Matches::new(module, body), module.body(body))
     }
 }
 
@@ -158,8 +159,8 @@ impl MatchFacts {
     /// found executable is one these final facts let run, and no other,
     /// since a fact only rises and `executable` only grows with it. Cost:
     /// O(blocks + each terminator's operands and keys).
-    pub fn reached(facts: &SparseFacts<MatchDomain>, module: &Module, decls: &Declarations, body: BodyId) -> FxHashSet<BlockId> {
-        let matches = Matches::new(module, body, decls);
+    pub fn reached(facts: &SparseFacts<MatchDomain>, module: &Module, body: BodyId) -> FxHashSet<BlockId> {
+        let matches = Matches::new(module, body);
         let body = module.body(body);
         let mut reached = FxHashSet::default();
         let mut to_visit = vec![body.entry()];
@@ -193,15 +194,13 @@ impl MatchFacts {
 struct Matches<'m> {
     domain: MatchDomain,
     operand_types: OperandTypes<'m>,
-    primitive: PrimitiveTags,
 }
 
 impl<'m> Matches<'m> {
-    fn new(module: &'m Module, body: BodyId, decls: &Declarations) -> Matches<'m> {
+    fn new(module: &'m Module, body: BodyId) -> Matches<'m> {
         Matches {
-            domain: MatchDomain { tags: TagsDomain, constant: ConstantDomain, interval: IntervalDomain },
+            domain: MatchDomain { variants: VariantsDomain, constant: ConstantDomain, interval: IntervalDomain },
             operand_types: OperandTypes { types: module.types(), body: module.body(body) },
-            primitive: decls.core().tags,
         }
     }
 
@@ -214,46 +213,45 @@ impl<'m> Matches<'m> {
         matches!(self.kind(value), TyKind::Ref(..))
     }
 
-    /// Every variant of `value`'s type, or of its target's where `value` is
-    /// a reference.
+    /// Every variant of the type a `Switch` on `value` reads
+    /// (`ir::tested_ty`).
     ///
     /// # Panics
-    /// That type is no enum, `Option` or `Result`: lower switches on tags
-    /// only of those.
-    fn variants(&self, value: ValueId) -> BTreeSet<Astr> {
-        let types = self.operand_types.types;
-        let tagged = match self.kind(value) {
-            TyKind::Ref(_, target) => types.kind(*target),
-            other => other,
-        };
-        match tagged {
-            TyKind::Enum { variants, .. } => variants.iter().map(|(tag, _)| *tag).collect(),
-            TyKind::Option(..) => BTreeSet::from([self.primitive.some, self.primitive.none]),
-            TyKind::Result(..) => BTreeSet::from([self.primitive.ok, self.primitive.err]),
-            other => panic!("a switch on tags reads an enum, an Option or a Result, not {other:?}"),
+    /// That type is no enum, `Option` or `Result`: lower switches on
+    /// variants only of those.
+    fn variants(&self, value: ValueId) -> BTreeSet<VariantKey> {
+        let OperandTypes { types, body } = self.operand_types;
+        let tested = tested_ty(types, body.ty_of(value));
+        structure(types, tested)
+            .and_then(|structure| structure.variants())
+            .unwrap_or_else(|| panic!("a switch on variants reads an enum, an Option or a Result, not {:?}", types.kind(tested)))
+            .iter()
+            .map(|variant| variant.key)
+            .collect()
+    }
+
+    /// Whether `src`, of variants `variants`, holds the variant `variant`.
+    fn tested(&self, src: ValueId, variant: VariantKey, variants: &Variants) -> Constant {
+        let variants = if self.is_reference(src) { &Variants::Any } else { variants };
+        match variants {
+            Variants::None => Constant::Bottom,
+            Variants::Of(held) if !held.contains(&variant) => Constant::Known(Literal::Bool(false)),
+            Variants::Of(held) if held.len() == 1 => Constant::Known(Literal::Bool(true)),
+            Variants::Of(_) | Variants::Any => Constant::Top,
         }
     }
 
-    /// Whether `src`, of tags `tags`, holds `tag`'s variant.
-    fn tested(&self, src: ValueId, tag: Astr, tags: &Tags) -> Constant {
-        let tags = if self.is_reference(src) { &Tags::Any } else { tags };
-        match tags {
-            Tags::None => Constant::Bottom,
-            Tags::Of(held) if !held.contains(&tag) => Constant::Known(Literal::Bool(false)),
-            Tags::Of(held) if held.len() == 1 => Constant::Known(Literal::Bool(true)),
-            Tags::Of(_) | Tags::Any => Constant::Top,
-        }
-    }
-
-    /// The fact of the value a `Switch` on `tag` switches on: the tag
-    /// value's own, or, where it is a reference, the top of its target's
-    /// type.
+    /// The fact of the value a `Switch` on `tag` switches on: the operand's
+    /// own, or, where it is a reference, the top of the type the `Switch`
+    /// reads (`ir::tested_ty`).
     fn switched<'f>(&self, tag: ValueId, fact: &'f MatchValue) -> Cow<'f, MatchValue> {
-        match self.kind(tag) {
-            TyKind::Ref(_, target) => {
-                Cow::Owned(MatchValue { interval: self.operand_types.interval_top_of(*target), ..self.domain.top() })
+        let OperandTypes { types, body } = self.operand_types;
+        match self.is_reference(tag) {
+            true => {
+                let tested = tested_ty(types, body.ty_of(tag));
+                Cow::Owned(MatchValue { interval: self.operand_types.interval_top_of(tested), ..self.domain.top() })
             }
-            _ => Cow::Borrowed(fact),
+            false => Cow::Borrowed(fact),
         }
     }
 
@@ -261,7 +259,7 @@ impl<'m> Matches<'m> {
         let keys: Vec<SwitchKey> = arms.iter().map(|(key, _, _)| *key).collect();
         let fact = self.switched(tag, fact);
         let chosen = match keys.first() {
-            Some(SwitchKey::Tag(_)) => self.tag_choice(tag, &keys, &fact.tags),
+            Some(SwitchKey::Variant(_)) => self.variant_choice(tag, &keys, &fact.variants),
             Some(SwitchKey::Bool(_)) => bool_choice(&keys, &fact.constant),
             Some(SwitchKey::Int(_) | SwitchKey::Char(_)) => ordinal_choice(&keys, &fact.interval),
             Some(SwitchKey::Str(_)) | None => return Executable::All,
@@ -271,17 +269,17 @@ impl<'m> Matches<'m> {
         Executable::Only(arms_run.chain(default_runs).collect())
     }
 
-    /// The set is the tag value's tags, `Any` read as every variant of its
-    /// type.
-    fn tag_choice(&self, tag: ValueId, keys: &[SwitchKey], tags: &Tags) -> Choice {
-        let held = match tags {
-            Tags::None => BTreeSet::new(),
-            Tags::Of(held) => held.clone(),
-            Tags::Any => self.variants(tag),
+    /// The set is the operand's variants, `Any` read as every variant of
+    /// the type the `Switch` reads.
+    fn variant_choice(&self, tag: ValueId, keys: &[SwitchKey], variants: &Variants) -> Choice {
+        let held = match variants {
+            Variants::None => BTreeSet::new(),
+            Variants::Of(held) => held.clone(),
+            Variants::Any => self.variants(tag),
         };
-        let named: BTreeSet<Astr> = keys.iter().map(|key| key_tag(*key)).collect();
+        let named: BTreeSet<VariantKey> = keys.iter().map(|key| key_variant(*key)).collect();
         Choice {
-            keys: held.iter().map(|tag| SwitchKey::Tag(*tag)).filter(|key| keys.contains(key)).collect(),
+            keys: held.iter().map(|variant| SwitchKey::Variant(*variant)).filter(|key| keys.contains(key)).collect(),
             unkeyed: !held.is_subset(&named),
         }
     }
@@ -294,10 +292,10 @@ struct Choice {
     unkeyed: bool,
 }
 
-fn key_tag(key: SwitchKey) -> Astr {
+fn key_variant(key: SwitchKey) -> VariantKey {
     match key {
-        SwitchKey::Tag(tag) => tag,
-        other => panic!("a switch on tags has only tag keys, not {other:?}"),
+        SwitchKey::Variant(variant) => variant,
+        other => panic!("a switch on variants has only variant keys, not {other:?}"),
     }
 }
 
@@ -363,9 +361,9 @@ impl SparseAnalysis for Matches<'_> {
         }
         let result = inst.result().expect("the engine evaluates an instruction that yields a value");
         match (inst.op(), operands) {
-            (Op::MakeVariant { tag, .. }, _) => MatchValue { tags: Tags::Of(BTreeSet::from([*tag])), ..self.top(result) },
-            (Op::TestVariant { src, tag }, [src_fact]) => {
-                MatchValue { constant: self.tested(*src, *tag, &src_fact.tags), ..self.top(result) }
+            (Op::MakeVariant { variant, .. }, _) => MatchValue { variants: Variants::Of(BTreeSet::from([*variant])), ..self.top(result) },
+            (Op::TestVariant { src, variant }, [src_fact]) => {
+                MatchValue { constant: self.tested(*src, *variant, &src_fact.variants), ..self.top(result) }
             }
             (Op::TestVariant { .. }, _) => panic!("a TestVariant is handed {} operand facts, not one", operands.len()),
             _ => self.top(result),
@@ -403,9 +401,9 @@ impl SparseAnalysis for Matches<'_> {
     /// Each component widens by its own domain, the interval by
     /// `IntervalValues`' rule.
     fn widen(&self, value: ValueId, fact: &mut MatchValue, next: &MatchValue) -> bool {
-        let tags = fact.tags.widen(&next.tags);
+        let variants = fact.variants.widen(&next.variants);
         let constant = fact.constant.widen(&next.constant);
         let interval = self.operand_types.widen_interval(value, &mut fact.interval, &next.interval);
-        tags || constant || interval
+        variants || constant || interval
     }
 }

@@ -14,6 +14,7 @@ use super::*;
 use crate::ir::cfg::{Aspect, Builder, Inst, OrderUse, Terminator};
 use crate::ir::{BinOp, Callee, RefTarget, UnaryOp};
 use crate::ir::{ForSource, SwitchKey};
+use crate::ty::structural::VariantKey;
 use crate::ty::{Mark, MarkTerm};
 use crate::ty::{
     Calls, Concrete, Contexts, Cost, Effect as CallEffect, EffectTerm, FlowTerm, Flows, Holds, IntTy, Mutability,
@@ -1523,24 +1524,72 @@ fn types_agree_checks_that_a_context_value_holds_no_position() {
     assert!(matches!(types_agree(&f, bad), Err(Violation { invariant: "TypesAgree", .. })));
 }
 
-fn unwrapping(f: &mut Fixture, ty: Ty) -> BodyId {
+/// `entry(a: i64, r: Result<i64, bool>): unwrap r as `variant`, of type
+/// `ty`; return a`.
+fn unwrapping(f: &mut Fixture, variant: VariantKey, ty: Ty) -> BodyId {
     let (na, nr, int, result) = (f.name("a"), f.name("r"), f.int, f.result);
     let mut builder = f.build(false, f.int);
     let a = builder.param(na, int, acvus_ast::Span::ZERO);
     let r = builder.param(nr, result, acvus_ast::Span::ZERO);
-    builder.push(Op::UnwrapVariant { src: r }, ty, at(1));
+    builder.push(Op::UnwrapVariant { src: r, variant }, ty, at(1));
     builder.terminate(ret(a), acvus_ast::Span::ZERO);
     builder.seal().expect("the body has no open state")
 }
 
+/// An unwrap names the variant whose payload it takes, so its result is
+/// that variant's payload type and no other's: of `Result<i64, bool>`, an
+/// `Err`'s is a `bool` and an `Ok`'s an `i64`; an `Option`'s variant names
+/// no payload of a `Result`.
 #[test]
-fn types_agree_checks_a_result_payload_against_its_variants() {
+fn types_agree_checks_an_unwrap_against_the_variant_it_names() {
     let mut f = fixture();
-    let (bool, str_ref) = (f.bool, f.str_ref);
-    let good = unwrapping(&mut f, bool);
-    assert_eq!(types_agree(&f, good), Ok(()));
-    let bad = unwrapping(&mut f, str_ref);
-    assert!(matches!(types_agree(&f, bad), Err(Violation { invariant: "TypesAgree", .. })));
+    let (int, bool, str_ref) = (f.int, f.bool, f.str_ref);
+    for (variant, ty, agrees) in [
+        (VariantKey::Err, bool, true),
+        (VariantKey::Ok, int, true),
+        (VariantKey::Ok, bool, false),
+        (VariantKey::Err, int, false),
+        (VariantKey::Err, str_ref, false),
+        (VariantKey::Some, int, false),
+    ] {
+        let body = unwrapping(&mut f, variant, ty);
+        let checked = types_agree(&f, body);
+        assert_eq!(checked.is_ok(), agrees, "{variant:?} as {ty:?}: {checked:?}");
+    }
+}
+
+/// `entry(a: i64, b: bool): make `variant` of `Result<i64, bool>` from
+/// `payload`, then test the made value for `tested`; return a`.
+fn making(f: &mut Fixture, variant: VariantKey, payload: bool, tested: VariantKey) -> BodyId {
+    let (na, nb, int, bool, result) = (f.name("a"), f.name("b"), f.int, f.bool, f.result);
+    let mut builder = f.build(false, f.int);
+    let a = builder.param(na, int, acvus_ast::Span::ZERO);
+    let b = builder.param(nb, bool, acvus_ast::Span::ZERO);
+    let payload = if payload { b } else { a };
+    let made = builder.push(Op::MakeVariant { variant, payload: Some(payload) }, result, at(1));
+    builder.push(Op::TestVariant { src: made, variant: tested }, bool, at(2));
+    builder.terminate(ret(a), acvus_ast::Span::ZERO);
+    builder.seal().expect("the body has no open state")
+}
+
+/// A variant is made and tested by the variant it names, of its type: of
+/// `Result<i64, bool>`, an `Err` carries a `bool` and an `Ok` an `i64`, and
+/// neither is tested for an `Option`'s variant.
+#[test]
+fn types_agree_checks_a_made_and_a_tested_variant_against_its_type() {
+    let mut f = fixture();
+    for (variant, of_bool, tested, agrees) in [
+        (VariantKey::Err, true, VariantKey::Ok, true),
+        (VariantKey::Ok, false, VariantKey::Err, true),
+        (VariantKey::Ok, true, VariantKey::Ok, false),
+        (VariantKey::Err, false, VariantKey::Err, false),
+        (VariantKey::Some, false, VariantKey::Ok, false),
+        (VariantKey::Ok, false, VariantKey::None, false),
+    ] {
+        let body = making(&mut f, variant, of_bool, tested);
+        let checked = types_agree(&f, body);
+        assert_eq!(checked.is_ok(), agrees, "{variant:?} of a bool: {of_bool}, tested for {tested:?}: {checked:?}");
+    }
 }
 
 // -- D57: a Switch holds its join --------------------------------------------

@@ -14,6 +14,7 @@ use crate::ir::cfg::{Aspect, BlockId, Body, BodyId, Changes, Edge, Inst, Module,
 use crate::ir::cfg::Site;
 use crate::ir::{BinOp, Callee, ForSource, PathSeg, RefTarget, UnaryOp, ValueId};
 use crate::passes::domain::{JoinSemiLattice, ValueDomain, Widen};
+use crate::ty::structural::VariantKey;
 use crate::ty::{
     Alignment, Calls, CastTy, Contexts, Effect, EffectTerm, Flow, FlowEnd, FlowTerm, Flows, Holds, IntTy, LenTerm, Mutability,
     Reissue, SplitCost, Ty, TyKind, Types,
@@ -1938,7 +1939,7 @@ fn an_option_of_a_reference_parameter_names_its_outside_storage() {
     let mut builder = f.module.build_body(false, int);
     let o = builder.param(no, option_ref, acvus_ast::Span::ZERO);
     let entry = builder.current_block();
-    let u = builder.push(Op::UnwrapVariant { src: o }, ref_int, Span::ZERO);
+    let u = builder.push(Op::UnwrapVariant { src: o, variant: VariantKey::Some }, ref_int, Span::ZERO);
     let v = builder.push(Op::Take { target: RefTarget::Through(u), path: Vec::new(), taken_out: false }, int, Span::ZERO);
     builder.terminate(ret(v), acvus_ast::Span::ZERO);
     let id = builder.seal().expect("the body has no open state");
@@ -1949,6 +1950,55 @@ fn an_option_of_a_reference_parameter_names_its_outside_storage() {
     assert_eq!(loans_of(&loans, o, 0), [on_outside.clone()]);
     assert_eq!(loans_of(&loans, u, 0), [on_outside]);
     assert_eq!(*loans.reads(site_at(&f.module, id, entry, 1)), BTreeSet::from([outside]));
+}
+
+/// ```text
+/// a = 1; b = 1; ra = &a; rb = &b
+/// s = Ok(ra); s.Err = rb; u = s.Ok; e = s.Err
+/// s.Ok = rb; w = s.Ok; return 0
+/// ```
+/// with `s: Result<&i64, &i64>`: a payload path names the one variant's
+/// payload exactly, so a variant is made into its own payload's positions
+/// alone, a write through one payload leaves the other's loans, and a write
+/// through a payload replaces what it held.
+#[test]
+fn a_payload_path_names_its_variants_payload_exactly() {
+    let mut f = loan_fixture();
+    let (int, ref_int) = (f.int, f.ref_int);
+    let mut builder = f.module.build_body(false, int);
+    let result_of_refs = builder.intern(TyKind::Result(ref_int, ref_int, ()));
+    let s = builder.slot(result_of_refs, Span::ZERO);
+    let a = builder.slot(int, Span::ZERO);
+    let b = builder.slot(int, Span::ZERO);
+    let entry = builder.current_block();
+    let payload = |variant| vec![PathSeg::Payload(variant)];
+    let write = |variant, value| Op::Assign { target: RefTarget::Var(s), path: payload(variant), value, restores: false };
+    let read = |variant| Op::Take { target: RefTarget::Var(s), path: payload(variant), taken_out: false };
+    let one = builder.push(constant(1), int, Span::ZERO);
+    builder.push_unit(assign(a, one), Span::ZERO);
+    builder.push_unit(assign(b, one), Span::ZERO);
+    let ra = builder.push(reference(a, Mutability::Shared), ref_int, Span::ZERO);
+    let rb = builder.push(reference(b, Mutability::Shared), ref_int, Span::ZERO);
+    let made = builder.push(Op::MakeVariant { variant: VariantKey::Ok, payload: Some(ra) }, result_of_refs, Span::ZERO);
+    builder.push_unit(assign(s, made), Span::ZERO);
+    builder.push_unit(write(VariantKey::Err, rb), Span::ZERO);
+    let u = builder.push(read(VariantKey::Ok), ref_int, Span::ZERO);
+    let e = builder.push(read(VariantKey::Err), ref_int, Span::ZERO);
+    builder.push_unit(write(VariantKey::Ok, rb), Span::ZERO);
+    let w = builder.push(read(VariantKey::Ok), ref_int, Span::ZERO);
+    let zero = builder.push(constant(0), int, Span::ZERO);
+    builder.terminate(ret(zero), acvus_ast::Span::ZERO);
+    let id = builder.seal().expect("the body has no open state");
+
+    let loans = f.facts::<Loans>(id);
+    let site = |index| site_at(&f.module, id, entry, index);
+    let on_a = loan(Storage::Slot(a), Mode::Shared, lend(site(3)));
+    let on_b = loan(Storage::Slot(b), Mode::Shared, lend(site(4)));
+    assert_eq!(loans_of(&loans, made, 0), [on_a.clone()], "`Ok`'s payload holds what it is made of");
+    assert!(loans.of(made, 1).is_empty(), "`Err`'s payload is not made");
+    assert_eq!(loans_of(&loans, u, 0), [on_a], "a write through `Err` leaves `Ok`'s loans");
+    assert_eq!(loans_of(&loans, e, 0), [on_b.clone()]);
+    assert_eq!(loans_of(&loans, w, 0), [on_b], "a write through `Ok` replaces what it held");
 }
 
 /// A loan on `path` of `storage`, exact, at `mode`, that `by` makes where it

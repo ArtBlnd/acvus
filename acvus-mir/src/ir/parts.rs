@@ -11,6 +11,7 @@
 //! variant (`owned_region`).
 
 use super::{PathSeg, known_len};
+use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{Concrete, Ty, TyKind, Types};
 
 pub(crate) type Path = Vec<PathSeg>;
@@ -28,34 +29,38 @@ pub(crate) fn overlap(a: &[PathSeg], b: &[PathSeg]) -> bool {
 /// The region a move of `path` empties: `path` up to the first payload it
 /// steps into, since that variant then owns nothing more.
 pub(crate) fn owned_region(path: &[PathSeg]) -> &[PathSeg] {
-    let end = path.iter().position(|seg| *seg == PathSeg::Payload).unwrap_or(path.len());
+    let end = path.iter().position(|seg| matches!(seg, PathSeg::Payload(_))).unwrap_or(path.len());
     &path[..end]
+}
+
+/// The type of the part `seg` names of a value of `holder`, where it has
+/// that part: a tuple's element at its position, an array's or a slice's
+/// element at any index, a field, or the payload of a variant (types §1).
+/// The one place a step of a path is typed.
+pub(crate) fn step_ty(types: &Types<Concrete>, holder: Ty, seg: PathSeg) -> Option<Ty> {
+    if let (PathSeg::Index(_), TyKind::Slice(element)) = (seg, types.kind(holder)) {
+        return Some(*element);
+    }
+    let structure = structure(types, holder)?;
+    let key = match (seg, structure) {
+        (PathSeg::Index(at), Structure::Tuple(..)) => PartKey::Index(at),
+        (PathSeg::Index(_), Structure::Array { .. }) => PartKey::Element,
+        (PathSeg::Index(_), _) => return None,
+        (PathSeg::Field(name), _) => PartKey::Field(name),
+        (PathSeg::Payload(variant), _) => PartKey::Payload(variant),
+    };
+    structure.part(key)
 }
 
 /// The type of the part of a `ty` at `path`.
 ///
 /// # Panics
-/// `path` steps into a type without that part, or into a payload, whose
-/// type the path alone does not name: callers pass `owned_region`s.
+/// `path` steps into a part its type does not have: a path names only
+/// parts its type has.
 pub(crate) fn part_ty(types: &Types<Concrete>, ty: Ty, path: &[PathSeg]) -> Ty {
-    let mut at = ty;
-    for seg in path {
-        at = match (types.kind(at), seg) {
-            (TyKind::Tuple(items, _), PathSeg::Index(index)) => items[*index],
-            (TyKind::Array(element, _, _), PathSeg::Index(_)) => *element,
-            (TyKind::Object { fields, .. }, PathSeg::Field(field)) => field_ty(fields, *field),
-            (kind, seg) => panic!("{seg:?} names no part of {kind:?}; a path names only parts its type has"),
-        };
-    }
-    at
-}
-
-fn field_ty(fields: &[(acvus_utils::Astr, Ty)], field: acvus_utils::Astr) -> Ty {
-    fields
-        .iter()
-        .find(|(name, _)| *name == field)
-        .map(|(_, ty)| *ty)
-        .unwrap_or_else(|| panic!("{field:?} is no field of {fields:?}; a path names only fields its type has"))
+    path.iter().fold(ty, |at, seg| {
+        step_ty(types, at, *seg).unwrap_or_else(|| panic!("{seg:?} names no part of {:?}; a path names only parts its type has", types.kind(at)))
+    })
 }
 
 /// The steps from a `ty` to each of its immediate parts.

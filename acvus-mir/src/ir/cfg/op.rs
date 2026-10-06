@@ -9,6 +9,7 @@ use super::BodyId;
 use crate::ir::{
     BinOp, Callee, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId,
 };
+use crate::ty::structural::VariantKey;
 use crate::ty::{CastTy, Concrete, Mutability, Ty, Types, copies};
 
 #[derive(Debug, Clone)]
@@ -235,8 +236,8 @@ pub enum Op {
 
     // Pattern matching (decision tree)
     /// Whether `src` is `value`. `src` is the value itself, or a reference
-    /// to it, read through as `TestVariant` reads a tag: a test on a place
-    /// takes nothing out of it (D89).
+    /// to it, read through (`ir::tested_ty`): a test on a place takes
+    /// nothing out of it (D89).
     TestLiteral {
         src: ValueId,
         value: Literal,
@@ -279,20 +280,25 @@ pub enum Op {
     },
 
     // Variant (tagged union)
+    /// A value of the variant `variant`, carrying `payload` where the
+    /// variant has one.
     MakeVariant {
-        tag: Astr,
+        variant: VariantKey,
         payload: Option<ValueId>,
     },
-    /// Whether the variant `src` holds is `tag`'s. `src` is the variant
-    /// itself, or a reference to it, read through as a `Switch` reads its
-    /// tag through one: a pattern past a reference tests the variant the
-    /// reference names without taking it out.
+    /// Whether the variant `src` holds is `variant`. `src` is the variant
+    /// itself, or a reference to it, read through as every test and a
+    /// `Switch` read one (`ir::tested_ty`): a pattern past a reference tests
+    /// the variant the reference names without taking it out.
     TestVariant {
         src: ValueId,
-        tag: Astr,
+        variant: VariantKey,
     },
+    /// The payload `src` holds as the variant `variant`; it traps where `src`
+    /// holds another.
     UnwrapVariant {
         src: ValueId,
+        variant: VariantKey,
     },
     /// Undefined value - valid to move/copy, UB to read as a concrete value.
     /// Used as initial value for SSA variables that are defined inside loops
@@ -345,7 +351,7 @@ macro_rules! walk_operands {
             | Op::TestObjectKey { src, .. }
             | Op::TestVariant { src, .. }
             | Op::SliceLen { src }
-            | Op::UnwrapVariant { src }
+            | Op::UnwrapVariant { src, .. }
             | Op::Drop { src } => $on(src),
             Op::Ref { target, .. } | Op::Take { target, .. } => on_target(target, $on),
             Op::Assign { target, value, .. } => {

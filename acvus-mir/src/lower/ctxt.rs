@@ -25,6 +25,7 @@ use acvus_utils::{Astr, QualifiedRef};
 use crate::decl::{Declarations, PairMember};
 use crate::ir::cfg::{BlockId, BodyId, Builder, Op, Terminator};
 use crate::ir::{Callee, Chosen as IrChosen, Intrinsic, RefTarget, ValueId};
+use crate::ty::structural::{VariantKey, structure};
 use crate::ty::{Concrete, Effect, IntTy, Mutability, Reissue, Ty, TyKind, Types, inhabited};
 use crate::typeck::{Chosen, Impl, Typeck};
 
@@ -272,6 +273,19 @@ impl<'a, 'm> Lcx<'a, 'm> {
 
     pub fn bool_ty(&mut self) -> Ty {
         self.intern(TyKind::Bool)
+    }
+
+    /// The variant the program's `tag` names of a value of `ty`, a variant
+    /// type (`Tags::variant`).
+    ///
+    /// # Panics
+    /// `ty` has no such variant: typeck admits a variant only of a type
+    /// that has it.
+    pub fn variant(&self, ty: Ty, tag: Astr) -> VariantKey {
+        let tags = self.decls.core().tags;
+        structure(self.types(), ty)
+            .and_then(|structure| tags.variant(&structure, tag))
+            .unwrap_or_else(|| panic!("typeck admits a variant only of a type that has it, not {tag:?} of {:?}", self.kind(ty)))
     }
 
     pub fn unit_ty(&mut self) -> Ty {

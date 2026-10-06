@@ -8,8 +8,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::dominators::{Dominators, def_points};
 use crate::ir::cfg::body::InstId;
 use crate::ir::cfg::{BlockId, Body, Head, Inst, Op, OrderUse, Site, Terminator};
-use crate::ir::{BinOp, Callee, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len};
-use crate::ty::structural;
+use crate::ir::{BinOp, Callee, IndexMode, Intrinsic, PathSeg, RefTarget, SwitchKey, UnaryOp, ValueId, known_len, tested_ty};
+use crate::ty::structural::{self, PartKey};
 use crate::ty::{CastTy, Concrete, IntTy, Mark, MarkTerm, Mutability, Ty, TyKind, Types, inhabited};
 
 /// A breach of an invariant: a compiler defect, never a refusal.
@@ -320,11 +320,11 @@ impl TypeCheck<'_> {
                 };
                 found(made == mutability, || format!("{result:?} is not a {mutability:?} reference"))?;
                 let lent = *lent;
-                let places = self.place(target, path)?;
-                found(places.contains(&lent), || format!("{result:?} lends another type than the place holds"))
+                let place = self.place(target, path)?;
+                found(place == lent, || format!("{result:?} lends another type than the place holds"))
             }
-            Op::Take { target, path, .. } => self.one_of(Self::result(inst)?, &self.place(target, path)?, "the place"),
-            Op::Assign { target, path, value, .. } => self.one_of(*value, &self.place(target, path)?, "the place"),
+            Op::Take { target, path, .. } => self.same(Self::result(inst)?, self.place(target, path)?, "the place"),
+            Op::Assign { target, path, value, .. } => self.same(*value, self.place(target, path)?, "the place"),
             Op::AsSlice { container, mutability, .. } => {
                 self.is(*container, |kind| matches!(kind, TyKind::Ref(..)), "a reference")?;
                 self.is(
@@ -535,34 +535,29 @@ impl TypeCheck<'_> {
                 let at = self.field_path(self.ty(*object), *key, &[])?;
                 self.same(Self::result(inst)?, at, "the field")
             }
-            Op::TestLiteral { .. } | Op::TestObjectKey { .. } | Op::TestVariant { .. } => {
+            Op::TestLiteral { .. } | Op::TestObjectKey { .. } => self.is_bool(Self::result(inst)?),
+            Op::TestVariant { src, variant } => {
+                self.key_fits(&SwitchKey::Variant(*variant), tested_ty(self.types, self.ty(*src)))?;
                 self.is_bool(Self::result(inst)?)
             }
-            Op::MakeVariant { tag, payload } => {
+            Op::MakeVariant { variant, payload } => {
                 let result = Self::result(inst)?;
-                match (self.kind(self.ty(result)), payload) {
-                    (TyKind::Option(held, _), Some(payload)) => self.same(*payload, *held, "the Option's payload"),
-                    (TyKind::Enum { variants, .. }, payload) => {
-                        let Some((_, declared)) = variants.iter().find(|(name, _)| name == tag) else {
-                            return Err(format!("the enum has no variant {tag:?}"));
-                        };
-                        match (declared, payload) {
-                            (Some(declared), Some(payload)) => self.same(*payload, *declared, "the variant's payload"),
-                            (None, None) => Ok(()),
-                            (Some(_), None) | (None, Some(_)) => {
-                                Err(format!("the payload of {tag:?} does not match its declaration"))
-                            }
-                        }
-                    }
-                    (TyKind::Option(.., _), None) => Ok(()),
-                    (TyKind::Result(ok, err, _), Some(payload)) => self.one_of(*payload, &[*ok, *err], "a Result's payload"),
-                    (TyKind::Result(..), None) => Err("a Result's variant always carries a payload".to_string()),
-                    (other, _) => Err(format!("the result is {other:?}, not a variant type")),
+                let made = self.ty(result);
+                let Some(structure) = structural::structure(self.types, made).filter(|structure| structure.has_variant(*variant)) else {
+                    return Err(format!("the result is {:?}, which has no variant {variant:?}", self.kind(made)));
+                };
+                match (structure.part(PartKey::Payload(*variant)), payload) {
+                    (Some(declared), Some(payload)) => self.same(*payload, declared, "the variant's payload"),
+                    (None, None) => Ok(()),
+                    (Some(_), None) | (None, Some(_)) => Err(format!("the payload of {variant:?} does not match its type")),
                 }
             }
-            Op::UnwrapVariant { src } => {
-                let payloads = self.payloads(self.ty(*src))?;
-                self.one_of(Self::result(inst)?, &payloads, "a payload of the variant type")
+            Op::UnwrapVariant { src, variant } => {
+                let held = self.ty(*src);
+                let Some(payload) = structural::structure(self.types, held).and_then(|structure| structure.part(PartKey::Payload(*variant))) else {
+                    return Err(format!("{src:?} is {:?}, which has no variant {variant:?} of a payload", self.kind(held)));
+                };
+                self.same(Self::result(inst)?, payload, "the variant's payload")
             }
             Op::Undef | Op::Drop { .. } => Ok(()),
         }
@@ -653,9 +648,9 @@ impl TypeCheck<'_> {
         }
     }
 
-    /// Every type `path` may reach under `target`: one, but at a payload of
-    /// a `Result` or an enum, which names no one variant, each payload's.
-    fn place(&self, target: &RefTarget, path: &[PathSeg]) -> Result<Vec<Ty>, String> {
+    /// The type `path` reaches under `target`, each step typed by
+    /// `ir::parts`.
+    fn place(&self, target: &RefTarget, path: &[PathSeg]) -> Result<Ty, String> {
         let root = match target {
             RefTarget::Var(storage) | RefTarget::Param(storage) => self.ty(*storage),
             RefTarget::Through(reference) => match self.kind(self.ty(*reference)) {
@@ -664,45 +659,8 @@ impl TypeCheck<'_> {
             },
             RefTarget::Context(context) => self.context(*context)?,
         };
-        let mut reached = vec![root];
-        for seg in path {
-            let mut next = Vec::new();
-            for at in reached {
-                match (seg, self.kind(at)) {
-                    (PathSeg::Field(field), TyKind::Object { fields, .. }) => {
-                        next.extend(fields.iter().filter(|(name, _)| name == field).map(|(_, ty)| *ty))
-                    }
-                    (PathSeg::Index(_), TyKind::Array(element, _, _)) => next.push(*element),
-                    (PathSeg::Index(index), TyKind::Tuple(elements, _)) => next.extend(elements.get(*index).copied()),
-                    (PathSeg::Payload, TyKind::Option(.., _) | TyKind::Result(..) | TyKind::Enum { .. }) => {
-                        next.extend(self.payloads(at)?)
-                    }
-                    _ => {}
-                }
-            }
-            if next.is_empty() {
-                return Err(format!("{seg:?} steps into none of the types the path reached"));
-            }
-            reached = next;
-        }
-        Ok(reached)
-    }
-
-    /// The payload types a variant of `ty` may carry.
-    fn payloads(&self, ty: Ty) -> Result<Vec<Ty>, String> {
-        match self.kind(ty) {
-            TyKind::Option(payload, _) => Ok(vec![*payload]),
-            TyKind::Result(ok, err, _) => Ok(vec![*ok, *err]),
-            TyKind::Enum { variants, .. } => Ok(variants.iter().filter_map(|(_, payload)| *payload).collect()),
-            other => Err(format!("{other:?} is not a variant type")),
-        }
-    }
-
-    fn one_of(&self, value: ValueId, expected: &[Ty], what: &str) -> Found {
-        let ty = self.ty(value);
-        found(expected.contains(&ty), || {
-            let expected: Vec<&TyKind<Concrete>> = expected.iter().map(|ty| self.kind(*ty)).collect();
-            format!("{value:?} is {:?}, and {what} is one of {expected:?}", self.kind(ty))
+        path.iter().try_fold(root, |at, seg| {
+            crate::ir::parts::step_ty(self.types, at, *seg).ok_or_else(|| format!("{seg:?} names no part of {:?}", self.kind(at)))
         })
     }
 
@@ -751,10 +709,7 @@ impl TypeCheck<'_> {
                 }
             }
             Terminator::Switch { tag, arms, .. } => {
-                let scrutinee = match self.kind(self.ty(*tag)) {
-                    TyKind::Ref(_, lent) => *lent,
-                    _ => self.ty(*tag),
-                };
+                let scrutinee = tested_ty(self.types, self.ty(*tag));
                 for (key, _, _) in arms {
                     self.key_fits(key, scrutinee).map_err(at)?;
                 }
@@ -783,13 +738,13 @@ impl TypeCheck<'_> {
         Ok(())
     }
 
-    /// Whether a switch key names a value of the scrutinee's type. A tag of
-    /// an `Option` or a `Result` is checked as a tag of a variant type: its
-    /// name is text the interner holds.
+    /// Whether a key, a `Switch`'s or the variant a `TestVariant` tests,
+    /// names a value of the type it reads (`ir::tested_ty`).
     fn key_fits(&self, key: &SwitchKey, scrutinee: Ty) -> Found {
         let fits = match (key, self.kind(scrutinee)) {
-            (SwitchKey::Tag(tag), TyKind::Enum { variants, .. }) => variants.iter().any(|(name, _)| name == tag),
-            (SwitchKey::Tag(_), TyKind::Option(.., _) | TyKind::Result(..)) => true,
+            (SwitchKey::Variant(variant), _) => {
+                structural::structure(self.types, scrutinee).is_some_and(|structure| structure.has_variant(*variant))
+            }
             (SwitchKey::Int(_), TyKind::Int(_)) | (SwitchKey::Bool(_), TyKind::Bool) | (SwitchKey::Char(_), TyKind::Char) => {
                 true
             }

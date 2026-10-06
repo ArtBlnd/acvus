@@ -16,7 +16,7 @@ use super::{End, Infer, Level, Term, VarState};
 use super::closed::poly_head;
 use super::Closed;
 use crate::decl::{Base, Declarations, Head, VerifiedConversion};
-use crate::ty::structural::{PartKey, Structure, structure};
+use crate::ty::structural::{PartKey, Structure, VariantKey, structure};
 use crate::ty::{FnValue, FnValues, Reach, ValuesVarId, is_transparent};
 use crate::ty::{
     Effect, EffectTerm, Flows, IdentityTerm, IdentityVarId, Infer as InferPhase, Label, Mark, MarkTerm, Mutability,
@@ -482,9 +482,16 @@ impl Infer {
                 self.len_vars.unify(&len_x, &len_y).map_err(|Unequal| heads)?;
                 Ok(kept(vec![(PartKey::Element, x, y)]))
             }
-            (Structure::Option(x, _), Structure::Option(y, _)) => Ok(kept(vec![(PartKey::Some, x, y)])),
-            (Structure::Result { ok: ok_x, err: err_x, .. }, Structure::Result { ok: ok_y, err: err_y, .. }) => {
-                Ok(kept(vec![(PartKey::Ok, ok_x, ok_y), (PartKey::Err, err_x, err_y)]))
+            (Structure::Option(..), Structure::Option(..)) | (Structure::Result { .. }, Structure::Result { .. }) => {
+                let pairs = of_value
+                    .parts()
+                    .iter()
+                    .map(|part| {
+                        let slot = of_slot.part(part.key).expect("an `Option` or a `Result` has the parts of its kind");
+                        (part.key, part.ty, slot)
+                    })
+                    .collect();
+                Ok(kept(pairs))
             }
             (Structure::Object(fields_x, _), Structure::Object(fields_y, _)) => {
                 let mut parts = Vec::new();
@@ -510,7 +517,9 @@ impl Infer {
                 let mut taken = Vec::new();
                 for member in members(variants_x, variants_y) {
                     match member {
-                        Member::Both(tag, Some(x), Some(y)) => parts.push(CoercedPart { key: PartKey::Variant(tag), value: x, slot: y }),
+                        Member::Both(tag, Some(x), Some(y)) => {
+                            parts.push(CoercedPart { key: PartKey::Payload(VariantKey::Enum(tag)), value: x, slot: y })
+                        }
                         Member::Both(_, None, None) => {}
                         Member::OnlyB(tag, _) => taken.push(tag),
                         Member::Both(..) | Member::OnlyA(..) => return Err(heads),

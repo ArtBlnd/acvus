@@ -916,6 +916,29 @@ fn some_is_an_option() {
     assert_eq!(checked.kind(*payload), &TyKind::Bool);
 }
 
+/// types §2, patterns §2: a variant written with no enum's name is
+/// `Option`'s or `Result`'s, and names its own payload: of a
+/// `Result<i64, bool>`, `Ok(x)` binds the `i64` and `Err(e)` the `bool`;
+/// `Ok(1)` and `Err(true)` make a `Result` of an integer and a `bool`.
+#[test]
+fn a_primitive_variant_names_its_own_payload() {
+    let mut fx = Fixture::new();
+    let (int, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+    let result = fx.ty(TyKind::Result(int, bool_ty, ()));
+    fx.context("r", result);
+    let (checked, script) = fx.script("match @r { Ok(x) => x, Err(e) => if e { 1 } else { 0 }, }");
+    checked.admitted();
+    assert!(is_int(&checked, tail(&checked, &script), IntTy::I64));
+
+    let (checked, script) = Fixture::new().script("if true { Ok(1) } else { Err(true) }");
+    checked.admitted();
+    let TyKind::Result(ok, err, _) = checked.kind(tail(&checked, &script)) else {
+        panic!("not a result");
+    };
+    assert!(matches!(checked.kind(*ok), TyKind::Int(_)));
+    assert_eq!(checked.kind(*err), &TyKind::Bool);
+}
+
 // Calls (types §6-7, extern-fn §5)
 
 /// types §6: a call of a name reaches the declaration its arguments'

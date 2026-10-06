@@ -13,7 +13,7 @@ use super::place::{self, Demand};
 use super::refusal::{self, RefusalKind};
 use crate::decl::{Base, Head};
 use crate::infer::{Closed, Term};
-use crate::ty::structural::{PartKey, Structure, structure};
+use crate::ty::structural::{PartKey, structure};
 use crate::ty::{EffectTerm, Infer as InferPhase, Mutability, TyKind};
 
 /// `==` and the orderings compare part by part where the operands' type is
@@ -127,7 +127,7 @@ pub(super) fn fire_compare(
     body: &EffectTerm<InferPhase>,
 ) {
     let types = cx.infer.types();
-    let sum = matches!(structure(types, operand.term), Some(Structure::Enum(..) | Structure::Option(..) | Structure::Result { .. }));
+    let sum = structure(types, operand.term).is_some_and(|structure| structure.variants().is_some());
     if sig == CoreSig::Cmp && sum {
         refusal::push(cx, RefusalKind::Unordered, span);
         return;

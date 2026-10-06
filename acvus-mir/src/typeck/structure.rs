@@ -55,7 +55,7 @@ pub(super) fn lift_at(cx: &Ctxt<'_>, decision: &Reach, reading: Reading) -> Opti
 /// variant must be its one argument's (types §1); and they have no order,
 /// so no total order combines at one (operators §4).
 fn lifts_at(lift: &Lift, structured: &Structure<'_, InferPhase>) -> bool {
-    let sum = matches!(structured, Structure::Enum(..) | Structure::Option(..) | Structure::Result { .. });
+    let sum = structured.variants().is_some();
     match lift {
         Lift::Rebuild(shape) => !sum || shape.params.len() == 1,
         Lift::Combine { law: NamedFact::TotalOrder, .. } => !sum,

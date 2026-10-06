@@ -14,6 +14,7 @@ use crate::ir::cfg::edit::{DefDominatesUses, Invariant, NeverDiverges, OrderChai
 use crate::ir::cfg::{Body, BodyId, Module, Op, OrderUse, Terminator};
 use crate::ir::{Callee, ForSource, PathSeg, RefTarget, SwitchKey};
 use crate::passes::analysis::{Loan, Mode, Storage};
+use crate::ty::structural::VariantKey;
 use crate::ty::{Mark, MarkTerm};
 use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
 use crate::typeck::{Inputs, Interfaces, check_script, check_template};
@@ -418,7 +419,7 @@ fn a_match_over_tags_is_one_switch() {
         .collect();
     let [(arms, default, join)] = &switches[..] else { panic!("one Switch: {}", shown(lowered.entry())) };
     let keys: Vec<SwitchKey> = arms.iter().map(|(key, _, _)| *key).collect();
-    assert_eq!(keys, vec![SwitchKey::Tag(lowered.name("Some")), SwitchKey::Tag(lowered.name("None"))]);
+    assert_eq!(keys, vec![SwitchKey::Variant(VariantKey::Some), SwitchKey::Variant(VariantKey::None)]);
     // No catch-all: a value no key names goes to the block where no arm
     // answers, which matchck judges (patterns §3).
     let (unmatched, _) = default.as_ref().expect("a Switch with no catch-all defaults to the block no arm answers");
@@ -526,7 +527,7 @@ fn while_let_is_a_while_on_the_patterns_test() {
     assert!(matches!(lowered.kind_of(body, cond), TyKind::Bool));
     let bound: Vec<_> = body.block(loop_body).insts().collect();
     assert!(
-        matches!(bound[0].op(), Op::Take { path, .. } if *path == [PathSeg::Payload]),
+        matches!(bound[0].op(), Op::Take { path, .. } if *path == [PathSeg::Payload(VariantKey::Some)]),
         "the body binds x first, taking the payload out of the scrutinee's slot (D89): {}",
         shown(body)
     );
@@ -571,7 +572,7 @@ fn a_pattern_test_moves_nothing_and_a_bind_takes_each_part_once() {
         count(&ops, |op| matches!(op, Op::Take { target: RefTarget::Var(named), path, .. } if *named == slot && path == wanted))
     };
     assert_eq!(takes(&[]), 0, "the pair is never taken whole: {}", shown(body));
-    assert_eq!(takes(&[PathSeg::Index(0), PathSeg::Payload]), 1, "`a` is bound once: {}", shown(body));
+    assert_eq!(takes(&[PathSeg::Index(0), PathSeg::Payload(VariantKey::Some)]), 1, "`a` is bound once: {}", shown(body));
     assert_eq!(takes(&[PathSeg::Index(1)]), 2, "`b` is bound once, and dropped once where the test fails: {}", shown(body));
     assert_eq!(takes(&[PathSeg::Index(0)]), 1, "the option is dropped once where the test fails: {}", shown(body));
     let tested = count(&ops, |op| matches!(op, Op::Ref { target: RefTarget::Var(named), path, .. } if *named == slot && *path == [PathSeg::Index(0)]));
@@ -1462,10 +1463,12 @@ fn tuple_ordering_is_the_first_unequal_parts_cmp() {
     assert_eq!(lt, 1);
 }
 
-/// `==` on an `Option` tests both tags, and compares the payloads only
-/// where both are `Some`.
+/// `==` on an `Option` is the equality of a variant type (operators §4):
+/// it tests which variant `a` holds, then whether `b` holds the same one,
+/// `Some` and then `None`, three tests in all, and compares the payloads
+/// only where both are `Some`.
 #[test]
-fn option_equality_tests_tags_before_payloads() {
+fn option_equality_tests_variants_before_payloads() {
     let mut fx = Fixture::new();
     fx.comparisons();
     let int = fx.int();
@@ -1474,7 +1477,7 @@ fn option_equality_tests_tags_before_payloads() {
     fx.input("p", option);
     let lowered = fx.script("$o == $p");
     let ops = lowered.entry_ops();
-    assert_eq!(count(&ops, |op| matches!(op, Op::TestVariant { .. })), 2);
+    assert_eq!(count(&ops, |op| matches!(op, Op::TestVariant { .. })), 3);
     let eq = QualifiedRef::qualified(lowered.namespace(&["core"]), lowered.name("eq"));
     assert_eq!(calls_of_impls(&lowered, eq, 2), 1);
 }
@@ -2164,8 +2167,7 @@ fn the_languages_own_answers_call_no_impl() {
     fx.declare("f", ty, 1);
     let lowered = fx.script("f(default())");
     let body = lowered.entry();
-    let none = lowered.name("None");
-    let made = |op: &Op| matches!(op, Op::MakeVariant { tag, payload: None } if *tag == none);
+    let made = |op: &Op| matches!(op, Op::MakeVariant { variant: VariantKey::None, payload: None });
     assert_eq!(count(&lowered.entry_ops(), made), 1, "{}", shown(body));
 }
 
@@ -2229,7 +2231,7 @@ fn as_ref_lowers_to_references_into_each_part() {
 
     let lowered = Fixture::new().script("let o = Some(1); let r = o.as_ref(); 0");
     let ops = lowered.entry_ops();
-    let payload = |op: &Op| matches!(op, Op::Ref { path, .. } if path[..] == [PathSeg::Payload]);
+    let payload = |op: &Op| matches!(op, Op::Ref { path, .. } if path[..] == [PathSeg::Payload(VariantKey::Some)]);
     assert_eq!(count(&ops, payload), 1, "{}", shown(lowered.entry()));
 
     let lowered = Fixture::new().script("let a = [1, 2]; let r = a.as_ref(); 0");
@@ -2447,8 +2449,7 @@ fn a_clone_makes_no_variant_whose_payload_no_value_has() {
     let clone = fx.raw.core.clone;
     fx.lang_item(clone, &[clone_ty]);
     let lowered = fx.script("let r = Ok(mk()); let c = r.clone(); 0");
-    let err = lowered.name("Err");
-    let errs = count(&lowered.entry_ops(), |op| matches!(op, Op::MakeVariant { tag, .. } if *tag == err));
+    let errs = count(&lowered.entry_ops(), |op| matches!(op, Op::MakeVariant { variant: VariantKey::Err, .. }));
     assert_eq!(errs, 0, "{}", shown(lowered.entry()));
 }
 

@@ -10,7 +10,8 @@
 use acvus_utils::{Astr, Interner, QualifiedRef};
 
 use super::{GenericFunction, TyVarBound};
-use crate::ty::{Calls, CastTy, EffectTerm, FlowTerm, Holds, IntTy, Mutability, Poly, TyId, TyKind, Types};
+use crate::ty::structural::{Structure, VariantKey};
+use crate::ty::{Calls, CastTy, EffectTerm, FlowTerm, Holds, IntTy, Mutability, Phase, Poly, TyId, TyKind, Types};
 
 /// The names of `core`'s generic functions: the lang items (operators §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,58 @@ pub struct Tags {
     pub none: Astr,
     pub ok: Astr,
     pub err: Astr,
+}
+
+impl Tags {
+    /// The primitive variant `tag`, written with no enum's name, names
+    /// (types §2): `Some` and `None` of `Option`, `Ok` and `Err` of
+    /// `Result`; `None` for any other. It never names an enum's variant.
+    /// The one place a name the program writes becomes a primitive variant.
+    pub fn primitive(&self, tag: Astr) -> Option<VariantKey> {
+        [(self.some, VariantKey::Some), (self.none, VariantKey::None), (self.ok, VariantKey::Ok), (self.err, VariantKey::Err)]
+            .into_iter()
+            .find_map(|(name, variant)| (name == tag).then_some(variant))
+    }
+
+    /// The variant `tag` names of a value of the variant type `structure`:
+    /// an enum's by its name, an `Option`'s and a `Result`'s as `primitive`
+    /// reads it. `None` where the type has no such variant.
+    pub fn variant<V>(&self, structure: &Structure<'_, V>, tag: Astr) -> Option<VariantKey>
+    where
+        V: Phase,
+    {
+        let variant = match structure {
+            Structure::Enum(..) => VariantKey::Enum(tag),
+            Structure::Option(..) | Structure::Result { .. } => self.primitive(tag)?,
+            Structure::Tuple(..) | Structure::Object(..) | Structure::Array { .. } => return None,
+        };
+        structure.has_variant(variant).then_some(variant)
+    }
+
+    /// The name the program writes `variant` with.
+    pub fn tag(&self, variant: VariantKey) -> Astr {
+        match variant {
+            VariantKey::Some => self.some,
+            VariantKey::None => self.none,
+            VariantKey::Ok => self.ok,
+            VariantKey::Err => self.err,
+            VariantKey::Enum(name) => name,
+        }
+    }
+}
+
+/// The variant whose payload `unwrap` gives and `?` goes on with, of a
+/// value of `structure` (operators §2: `Some(x)` and `Ok(x)` give `x`):
+/// an `Option`'s `Some`, a `Result`'s `Ok`; `None` for any other.
+pub fn unwrapped<V>(structure: &Structure<'_, V>) -> Option<VariantKey>
+where
+    V: Phase,
+{
+    match structure {
+        Structure::Option(..) => Some(VariantKey::Some),
+        Structure::Result { .. } => Some(VariantKey::Ok),
+        Structure::Tuple(..) | Structure::Object(..) | Structure::Enum(..) | Structure::Array { .. } => None,
+    }
 }
 
 impl Core {

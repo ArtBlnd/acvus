@@ -68,7 +68,8 @@ fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> Lowered<ValueId>
         Expr::Variant { id, tag, payload, span, .. } => {
             let payload = payload.as_deref().map(|payload| lower_expr(cx, payload)).transpose()?;
             let ty = cx.ty(*id);
-            cx.made(Op::MakeVariant { tag: *tag, payload }, ty, *span)
+            let variant = cx.variant(ty, *tag);
+            cx.made(Op::MakeVariant { variant, payload }, ty, *span)
         }
         Expr::Cast { id, expr: source, span, .. } => {
             let value = lower_expr(cx, source)?;

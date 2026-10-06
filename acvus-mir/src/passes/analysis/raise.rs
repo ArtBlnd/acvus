@@ -42,7 +42,8 @@ use crate::passes::analysis::{
     AffineValues, Analysis, CallGraph, Dominators, Evolutions, IntervalValues, LoopId, LoopTree, MatchFacts, Queries, ScalarEvolution, SparseFacts, ValueBounds,
 };
 use crate::passes::analysis::match_facts::MatchDomain;
-use crate::passes::domain::{Bound, Interval, Tags};
+use crate::passes::domain::{Bound, Interval, Variants};
+use crate::ty::structural::VariantKey;
 use crate::ty::{CastTy, Concrete, Ty, TyKind, Types};
 
 /// How a run of a body ends, as a caller sees it.
@@ -189,7 +190,7 @@ impl Raiser<'_> {
             Op::Index { slice, index, bound: IndexBound::Checked, .. } | Op::IndexSet { slice, index, bound: IndexBound::Checked, .. } => {
                 Ending::traps_unless(self.bounds.index_in_bounds(*slice, *index))
             }
-            Op::UnwrapVariant { src } => Ending::traps_unless(self.holds_a_payload(*src)),
+            Op::UnwrapVariant { src, variant } => Ending::traps_unless(self.holds_only(*src, *variant)),
             Op::FunctionCall { callee, args, .. } => self.call(queries, callee, args, works),
             Op::Spawn { .. } => Ending::CLEAN,
             Op::TakeEffect { src } => {
@@ -213,21 +214,14 @@ impl Raiser<'_> {
         matches!(CastTy::of_kind(self.types().kind(self.body.ty_of(value))), Some(CastTy::Int(_)))
     }
 
-    /// Whether every variant the match facts leave `src` holding is one an
-    /// unwrap takes a payload of: `Some`, `Ok`, or an enum's variant with a
-    /// payload. No run reaches an unwrap of a value no run defines.
-    fn holds_a_payload(&self, src: ValueId) -> bool {
-        let tags = match &self.matches.of(src).tags {
-            Tags::None => return true,
-            Tags::Any => return false,
-            Tags::Of(tags) => tags,
-        };
-        let primitive = self.decls.core().tags;
-        match self.types().kind(self.body.ty_of(src)) {
-            TyKind::Option(..) => tags.iter().all(|tag| *tag == primitive.some),
-            TyKind::Result(..) => tags.iter().all(|tag| *tag == primitive.ok),
-            TyKind::Enum { variants, .. } => tags.iter().all(|tag| variants.iter().any(|(name, payload)| name == tag && payload.is_some())),
-            _ => false,
+    /// Whether every variant the match facts leave `src` holding is
+    /// `variant`, whose payload an unwrap of it takes. No run reaches an
+    /// unwrap of a value no run defines.
+    fn holds_only(&self, src: ValueId, variant: VariantKey) -> bool {
+        match &self.matches.of(src).variants {
+            Variants::None => true,
+            Variants::Any => false,
+            Variants::Of(held) => held.iter().all(|held| *held == variant),
         }
     }
 
@@ -892,13 +886,12 @@ mod tests {
         let int = f.int;
         let option = f.module.types_mut().intern(TyKind::Option(int, ()));
         let (na, no) = (f.name("a"), f.name("o"));
-        let some = Core::of(&f.interner).tags.some;
         let mut builder = f.module.build_body(false, int);
         let a = builder.param(na, int, Span::ZERO);
         let o = builder.param(no, option, Span::ZERO);
-        let s = builder.push(Op::MakeVariant { tag: some, payload: Some(a) }, option, Span::ZERO);
-        let u = builder.push(Op::UnwrapVariant { src: s }, int, Span::ZERO);
-        let v = builder.push(Op::UnwrapVariant { src: o }, int, Span::ZERO);
+        let s = builder.push(Op::MakeVariant { variant: VariantKey::Some, payload: Some(a) }, option, Span::ZERO);
+        let u = builder.push(Op::UnwrapVariant { src: s, variant: VariantKey::Some }, int, Span::ZERO);
+        let v = builder.push(Op::UnwrapVariant { src: o, variant: VariantKey::Some }, int, Span::ZERO);
         builder.terminate(ret(u), Span::ZERO);
         let id = builder.seal().expect("the body has no open state");
 
@@ -906,5 +899,31 @@ mod tests {
 
         assert!(!endings.may_trap(made(&f, id, u)));
         assert!(endings.may_trap(made(&f, id, v)));
+    }
+
+    /// `entry(a: i64, b: bool): e = Err(b); x = unwrap e as Err; y = unwrap
+    /// e as Ok; return a`: an unwrap traps unless the value holds the
+    /// variant it names, so one of the `Err` it holds does not trap, and one
+    /// of `Ok` does.
+    #[test]
+    fn an_unwrap_traps_unless_the_value_holds_the_variant_it_names() {
+        let mut f = Fixture::new();
+        let int = f.int;
+        let bool_ty = f.module.types_mut().intern(TyKind::Bool);
+        let result = f.module.types_mut().intern(TyKind::Result(int, bool_ty, ()));
+        let (na, nb) = (f.name("a"), f.name("b"));
+        let mut builder = f.module.build_body(false, int);
+        let a = builder.param(na, int, Span::ZERO);
+        let b = builder.param(nb, bool_ty, Span::ZERO);
+        let e = builder.push(Op::MakeVariant { variant: VariantKey::Err, payload: Some(b) }, result, Span::ZERO);
+        let x = builder.push(Op::UnwrapVariant { src: e, variant: VariantKey::Err }, bool_ty, Span::ZERO);
+        let y = builder.push(Op::UnwrapVariant { src: e, variant: VariantKey::Ok }, int, Span::ZERO);
+        builder.terminate(ret(a), Span::ZERO);
+        let id = builder.seal().expect("the body has no open state");
+
+        let (endings, _) = empty_endings(&f, id);
+
+        assert!(!endings.may_trap(made(&f, id, x)));
+        assert!(endings.may_trap(made(&f, id, y)));
     }
 }

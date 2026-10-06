@@ -37,13 +37,33 @@ pub enum PartKey {
     /// A tuple's element at its position.
     Index(usize),
     Field(Astr),
-    /// An enum variant's payload.
-    Variant(Astr),
     /// An array's elements, which share one part.
     Element,
+    /// The payload of a variant, where it carries one.
+    Payload(VariantKey),
+}
+
+/// Which variant of a variant type a value holds (types §1-2): an
+/// `Option`'s `Some` or `None`, a `Result`'s `Ok` or `Err`, or an enum's
+/// variant by its name. It names the variant by the type alone, so no
+/// reader needs the names the program writes `Option`'s and `Result`'s
+/// variants with to tell which one it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum VariantKey {
     Some,
+    None,
     Ok,
     Err,
+    /// An enum's variant of this name.
+    Enum(Astr),
+}
+
+/// One variant of a variant type: which it is, and its payload's type
+/// where it carries one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Variant<V: Phase> {
+    pub key: VariantKey,
+    pub payload: Option<TyId<V>>,
 }
 
 /// One part of a structure: which it is, and its type.
@@ -98,41 +118,58 @@ impl<V: Phase> Structure<'_, V> {
     }
 
     /// The type of the part `key` names, where the structure has it: a
-    /// tuple's element at its position, a field, a variant's payload, an
-    /// array's element, or `Some`'s, `Ok`'s or `Err`'s payload.
+    /// tuple's element at its position, a field, an array's element, or the
+    /// payload of a variant (`variants`).
     pub fn part(&self, key: PartKey) -> Option<TyId<V>> {
         match (*self, key) {
             (Structure::Tuple(items, _), PartKey::Index(at)) => items.get(at).copied(),
             (Structure::Object(fields, _), PartKey::Field(name)) => {
                 fields.iter().find(|(field, _)| *field == name).map(|(_, ty)| *ty)
             }
-            (Structure::Enum(variants, _), PartKey::Variant(tag)) => {
-                variants.iter().find(|(variant, _)| *variant == tag).and_then(|(_, payload)| *payload)
-            }
             (Structure::Array { element, .. }, PartKey::Element) => Some(element),
-            (Structure::Option(payload, _), PartKey::Some) => Some(payload),
-            (Structure::Result { ok, .. }, PartKey::Ok) => Some(ok),
-            (Structure::Result { err, .. }, PartKey::Err) => Some(err),
+            (_, PartKey::Payload(variant)) => self.variants()?.into_iter().find(|held| held.key == variant)?.payload,
             _ => None,
         }
     }
 
+    /// The variants of a variant type, in order, each with its payload's
+    /// type where it has one: `Some` then `None`, `Ok` then `Err`, an enum's
+    /// in the order its type stores them. `None` for a structure that is no
+    /// variant type. The one place a variant type's variants are listed.
+    pub fn variants(&self) -> Option<SmallVec<[Variant<V>; 4]>> {
+        let variant = |key, payload| Variant { key, payload };
+        match *self {
+            Structure::Option(payload, _) => {
+                Some(smallvec::smallvec![variant(VariantKey::Some, Some(payload)), variant(VariantKey::None, None)])
+            }
+            Structure::Result { ok, err, .. } => {
+                Some(smallvec::smallvec![variant(VariantKey::Ok, Some(ok)), variant(VariantKey::Err, Some(err))])
+            }
+            Structure::Enum(variants, _) => Some(variants.iter().map(|(name, payload)| variant(VariantKey::Enum(*name), *payload)).collect()),
+            Structure::Tuple(..) | Structure::Object(..) | Structure::Array { .. } => None,
+        }
+    }
+
+    /// Whether the structure is a variant type with the variant `variant`.
+    pub fn has_variant(&self, variant: VariantKey) -> bool {
+        self.variants().is_some_and(|variants| variants.iter().any(|held| held.key == variant))
+    }
+
     /// Each part, keyed, in order: a tuple's elements, an object's fields,
-    /// an enum's variant payloads, an `Option`'s `Some` payload, a
-    /// `Result`'s `Ok` payload then its `Err` payload. An array has one part,
-    /// `Element`, which every one of its elements has.
+    /// a variant type's payloads in its variants' order (`variants`). An
+    /// array has one part, `Element`, which every one of its elements has.
     pub fn parts(&self) -> SmallVec<[Part<V>; 4]> {
         let part = |key, ty| Part { key, ty };
         match *self {
             Structure::Tuple(items, _) => items.iter().enumerate().map(|(at, ty)| part(PartKey::Index(at), *ty)).collect(),
             Structure::Object(fields, _) => fields.iter().map(|(name, ty)| part(PartKey::Field(*name), *ty)).collect(),
-            Structure::Enum(variants, _) => variants
-                .iter()
-                .filter_map(|(tag, payload)| payload.map(|ty| part(PartKey::Variant(*tag), ty)))
-                .collect(),
             Structure::Array { element, .. } => smallvec::smallvec![part(PartKey::Element, element)],
-            Structure::Option(payload, _) => smallvec::smallvec![part(PartKey::Some, payload)],
-            Structure::Result { ok, err, .. } => smallvec::smallvec![part(PartKey::Ok, ok), part(PartKey::Err, err)],
+            Structure::Enum(..) | Structure::Option(..) | Structure::Result { .. } => self
+                .variants()
+                .expect("an enum, an `Option` and a `Result` are variant types")
+                .into_iter()
+                .filter_map(|variant| Some(part(PartKey::Payload(variant.key), variant.payload?)))
+                .collect(),
         }
     }
 }
@@ -141,7 +178,7 @@ impl<V: Phase> Structure<'_, V> {
 mod tests {
     use acvus_utils::{Interner, QualifiedRef};
 
-    use super::{PartKey, Structure, structure};
+    use super::{PartKey, Structure, VariantKey, structure};
     use crate::ty::{Mark, MarkTerm};
     use crate::ty::{Concrete, IntTy, LenTerm, Mutability, Ty, TyKind, Types};
 
@@ -202,7 +239,7 @@ mod tests {
         let variants = Box::new([(none, None), (some, Some(int))]);
         let r#enum = types.intern(TyKind::Enum { name: QualifiedRef::root(names.intern("E")), variants, label: () });
         let keys: Vec<_> = structure(&types, r#enum).expect("an enum is structured").parts().iter().map(|part| part.key).collect();
-        assert_eq!(keys, vec![PartKey::Variant(some)]);
+        assert_eq!(keys, vec![PartKey::Payload(VariantKey::Enum(some))]);
         assert_eq!(parts(&types, r#enum), vec![int]);
     }
 
@@ -237,8 +274,42 @@ mod tests {
         assert_eq!(tuple.part(PartKey::Index(2)), None);
         assert_eq!(tuple.part(PartKey::Element), None);
         let r#enum = structure(&types, structured[2]).expect("an enum");
-        assert_eq!(r#enum.part(PartKey::Variant(empty)), None, "a variant of no payload");
-        assert_eq!(r#enum.part(PartKey::Variant(a)), None, "no such variant");
+        assert_eq!(r#enum.part(PartKey::Payload(VariantKey::Enum(empty))), None, "a variant of no payload");
+        assert_eq!(r#enum.part(PartKey::Payload(VariantKey::Enum(a))), None, "no such variant");
+    }
+
+    /// types §1-2: a variant type's variants are named by the type alone, in
+    /// order, each with its payload's type; a key of another kind of variant
+    /// type, or a variant the type does not have, names none.
+    #[test]
+    fn a_variant_types_variants_are_keyed_by_the_type() {
+        let names = Interner::new();
+        let (full, empty) = (names.intern("Full"), names.intern("Empty"));
+        let mut types = Types::<Concrete>::new();
+        let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
+        let option = types.intern(TyKind::Option(string, ()));
+        let result = types.intern(TyKind::Result(string, int, ()));
+        let r#enum = types.intern(TyKind::Enum {
+            name: QualifiedRef::root(names.intern("E")),
+            variants: Box::new([(empty, None), (full, Some(int))]),
+            label: (),
+        });
+        let variants = |ty| {
+            let variants = structure(&types, ty).and_then(|structure| structure.variants()).expect("a variant type");
+            variants.iter().map(|variant| (variant.key, variant.payload)).collect::<Vec<_>>()
+        };
+        assert_eq!(variants(option), vec![(VariantKey::Some, Some(string)), (VariantKey::None, None)]);
+        assert_eq!(variants(result), vec![(VariantKey::Ok, Some(string)), (VariantKey::Err, Some(int))]);
+        assert_eq!(variants(r#enum), vec![(VariantKey::Enum(empty), None), (VariantKey::Enum(full), Some(int))]);
+        let result = structure(&types, result).expect("a result");
+        assert_eq!(result.part(PartKey::Payload(VariantKey::Err)), Some(int));
+        assert_eq!(result.part(PartKey::Payload(VariantKey::Some)), None, "an `Option`'s key names no `Result` variant");
+        assert!(result.has_variant(VariantKey::Ok) && !result.has_variant(VariantKey::None));
+        let r#enum = structure(&types, r#enum).expect("an enum");
+        assert_eq!(r#enum.part(PartKey::Payload(VariantKey::Enum(empty))), None, "a variant of no payload");
+        assert!(!r#enum.has_variant(VariantKey::Enum(names.intern("Other"))));
+        let tuple = types.intern(TyKind::Tuple(Box::new([int]), ()));
+        assert_eq!(structure(&types, tuple).expect("a tuple").variants(), None);
     }
 
     /// types §1: an extern-defined type is opaque, so it has no parts; nor
