@@ -23,7 +23,9 @@ use smallvec::SmallVec;
 use super::body::{BlockData, BlockId, Body, Def, Edge, Head, Inst, InstId, InstList, OrderUse, Rebind, Site, Terminator, UseSites, ValueDef};
 use super::op::Op;
 use super::order::At;
+use crate::ir::parts::step;
 use crate::ir::{DebugInfo, IndexBound, OrderEdge, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
+use crate::ty::structural::structure;
 use crate::ty::{Concrete, Reissue, SplitCost, Ty, TyKind, Types};
 
 /// A value that still has uses, removed without a replacement.
@@ -1106,8 +1108,12 @@ impl Body {
         let Def::Slot { .. } = self.def_of(slot) else {
             panic!("{slot:?} is not a slot")
         };
-        let fields = structural_fields(types, self.ty_of(slot))
-            .unwrap_or_else(|| panic!("{slot:?} is not of a tuple or a structural object type"));
+        let fields: Vec<(PathSeg, Ty)> = structure(types, self.ty_of(slot))
+            .and_then(|structured| structured.fields())
+            .unwrap_or_else(|| panic!("{slot:?} is not of a tuple or a structural object type"))
+            .iter()
+            .map(|field| (step(field.key).expect("a field has one step"), field.ty))
+            .collect();
         let span = self.slot_spans[&slot];
         let parts: Vec<ValueId> = fields
             .iter()
@@ -1354,19 +1360,6 @@ impl Body {
         self.blocks[block.index()].terminator = Terminator::Jump { to: moved(callee.entry), args: Vec::new() };
         self.blocks[block.index()].terminator_span = call_span;
         continuation
-    }
-}
-
-/// The fields of a tuple or a structural object, each with the path segment
-/// that names it; `None` for any other type, an extern-defined object among
-/// them (compilation §3).
-pub(super) fn structural_fields(types: &Types<Concrete>, ty: Ty) -> Option<Vec<(PathSeg, Ty)>> {
-    match types.kind(ty) {
-        TyKind::Tuple(elements, _) => Some(elements.iter().enumerate().map(|(index, ty)| (PathSeg::Index(index), *ty)).collect()),
-        TyKind::Object { fields, .. } => {
-            Some(fields.iter().map(|(name, ty)| (PathSeg::Field(*name), *ty)).collect())
-        }
-        _ => None,
     }
 }
 

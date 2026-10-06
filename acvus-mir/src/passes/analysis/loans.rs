@@ -109,13 +109,13 @@ use crate::decl::declared::{Access as DeclaredAccess, Element, Touch};
 use crate::decl::{CallFlows, Declarations, call_flows};
 use crate::ir::cfg::takings::{Taken, place_taking};
 use crate::ir::cfg::{Aspect, Block, BlockId, Body, BodyId, Definition, Edge, Inst, InstId, Module, Op, Site, Terminator};
-use crate::ir::parts::{Path, covers, overlap, step_ty};
+use crate::ir::parts::{Path, covers, overlap, step, step_ty};
 use acvus_utils::QualifiedRef;
 
 use crate::ir::{Callee, ForSource, IndexMode, Intrinsic, PathSeg, RefTarget, ValueId, fn_effect};
 use crate::passes::analysis::{Analysis, DenseAnalysis, Direction, Dominators, Queries, solve_dense};
 use crate::passes::domain::{JoinSemiLattice, Widen};
-use crate::ty::structural::{PartKey, Variant, structure};
+use crate::ty::structural::{self, PartKey, Variant, structure};
 use crate::ty::{
     Alignment, Concrete, Declared, FlowEnd, Flows, Holds, Mutability, PositionKind, Reissue, Source, Ty, TyKind,
     Types, lent_types, position_kinds, positions,
@@ -893,14 +893,10 @@ impl Loan {
 /// (ownership §5): every index of a sequence names it.
 const ELEMENT: PathSeg = PathSeg::Index(0);
 
-/// The step from a structure to its part `key`.
+/// The step from a structure to its part `key` (`ir::parts::step`), an
+/// array's elements' written `ELEMENT`.
 fn part_seg(key: PartKey) -> PathSeg {
-    match key {
-        PartKey::Index(index) => PathSeg::Index(index),
-        PartKey::Field(field) => PathSeg::Field(field),
-        PartKey::Payload(variant) => PathSeg::Payload(variant),
-        PartKey::Element => ELEMENT,
-    }
+    step(key).unwrap_or(ELEMENT)
 }
 
 struct Forward<'b> {
@@ -1250,27 +1246,21 @@ impl Forward<'_> {
 
     /// `path` in a value of `ty`, every step into a sequence's elements
     /// written `ELEMENT`, so that a place names a sequence's one element
-    /// part whatever index reached it. A step past a part whose type the
-    /// path does not tell, the payload of one of several variants, stays as
-    /// it is.
+    /// part whatever index reached it. Past a step into a part the type does
+    /// not have, which a path a loan keeps need not agree with (`reach`),
+    /// no step is known to be into a sequence.
     fn canonical(&self, ty: Ty, path: &[PathSeg]) -> Path {
-        let mut at = vec![ty];
+        let mut at = Some(ty);
         let mut canonical = Vec::with_capacity(path.len());
         for seg in path {
-            let sequence = !at.is_empty() && at.iter().all(|ty| matches!(self.types.kind(*ty), TyKind::Array(..) | TyKind::Slice(_)));
+            let sequence = at.is_some_and(|ty| structural::element(self.types, ty).is_some());
             canonical.push(match (seg, sequence) {
                 (PathSeg::Index(_), true) => ELEMENT,
                 _ => *seg,
             });
-            at = at.iter().flat_map(|ty| self.part_types(*ty, seg)).collect();
+            at = at.and_then(|ty| step_ty(self.types, ty, *seg));
         }
         canonical
-    }
-
-    /// The type `seg` steps to from a value of `ty`, where it names a part
-    /// of it (`ir::parts::step_ty`).
-    fn part_types(&self, ty: Ty, seg: &PathSeg) -> Vec<Ty> {
-        step_ty(self.types, ty, *seg).into_iter().collect()
     }
 
     /// Whether `place`'s path steps into a sequence's elements, all of which
@@ -1282,13 +1272,12 @@ impl Forward<'_> {
             Storage::Context(context) => Some(self.body.context_ty(context)),
             Storage::Outside { of, position } => lent_types(self.types, self.decls, self.body.ty_of(of))[position],
         };
-        let mut at: Vec<Ty> = root.into_iter().collect();
+        let mut at = root;
         for seg in &place.path {
-            let sequence = |ty: &Ty| matches!(self.types.kind(*ty), TyKind::Array(..) | TyKind::Slice(_));
-            if matches!(seg, PathSeg::Index(_)) && at.iter().any(sequence) {
+            if matches!(seg, PathSeg::Index(_)) && at.is_some_and(|ty| structural::element(self.types, ty).is_some()) {
                 return true;
             }
-            at = at.iter().flat_map(|ty| self.part_types(*ty, seg)).collect();
+            at = at.and_then(|ty| step_ty(self.types, ty, *seg));
         }
         false
     }
@@ -1582,18 +1571,14 @@ impl Forward<'_> {
                 self.join_into(state, &place, None, &written);
                 return None;
             }
-            Op::FieldGet { object, field, rest } => {
-                let path: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
-                self.project(state, *object, &path, ty())
+            Op::FieldGet { .. } | Op::TupleIndex { .. } | Op::ArrayIndex { .. } | Op::UnwrapVariant { .. } => {
+                let (src, path) = inst.op().extracted().expect("an extraction names the part it takes");
+                self.project(state, src, &path, ty())
             }
-            Op::ObjectGet { object, key } => self.project(state, *object, &[PathSeg::Field(*key)], ty()),
-            Op::TupleIndex { tuple, index } => self.project(state, *tuple, &[PathSeg::Index(*index)], ty()),
-            Op::ArrayIndex { array, .. } => self.project(state, *array, &[PathSeg::Index(0)], ty()),
-            Op::UnwrapVariant { src, variant } => self.project(state, *src, &[PathSeg::Payload(*variant)], ty()),
-            Op::FieldSet { object, field, rest, value } => {
-                let path: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
-                let mut positions = self.value(state, *object);
-                let reached = self.reach_value(self.body.ty_of(*object), &path);
+            Op::FieldSet { value, .. } => {
+                let (object, path) = inst.op().replaced().expect("a `FieldSet` names the part it replaces");
+                let mut positions = self.value(state, object);
+                let reached = self.reach_value(self.body.ty_of(object), &path);
                 let [range] = &self.parts_of(&reached, self.body.ty_of(*value))[..] else {
                     panic!("a field path names one field")
                 };
@@ -1876,10 +1861,8 @@ impl Forward<'_> {
         let TyKind::Ref(mutability, lent) = self.types.kind(self.body.ty_of(array)) else {
             return held;
         };
-        let element_ty = match self.types.kind(*lent) {
-            TyKind::Array(element, _, _) | TyKind::Slice(element) => *element,
-            other => panic!("`ArrayMap` maps arrays or references to them, not {other:?}"),
-        };
+        let element_ty = structural::element(self.types, *lent)
+            .unwrap_or_else(|| panic!("`ArrayMap` maps arrays or references to them, not {:?}", self.types.kind(*lent)));
         let (first, by) = (held[0].clone(), Making::Reborrow { site, operand });
         let place = through_loans(&first, &[ELEMENT]);
         let element = match self.types.kind(element_ty) {
@@ -2127,7 +2110,6 @@ impl Forward<'_> {
             | Op::TestLiteral { .. }
             | Op::TestObjectKey { .. }
             | Op::ArrayIndex { .. }
-            | Op::ObjectGet { .. }
             | Op::MakeClosure { .. }
             | Op::Specialize { .. }
             | Op::MakeVariant { .. }

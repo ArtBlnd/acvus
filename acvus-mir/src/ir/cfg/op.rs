@@ -250,10 +250,6 @@ pub enum Op {
         array: ValueId,
         index: usize,
     },
-    ObjectGet {
-        object: ValueId,
-        key: Astr,
-    },
 
     // Closures
     /// A closure over the environment `captures`, taken once where the
@@ -317,6 +313,11 @@ pub enum Op {
     },
 }
 
+/// The path of a field op's `field` and the `rest` under it.
+fn field_path(field: Astr, rest: &[Astr]) -> Vec<PathSeg> {
+    std::iter::once(field).chain(rest.iter().copied()).map(PathSeg::Field).collect()
+}
+
 /// Walks every operand of an `Op`, by shared or by mutable reference: one
 /// list, so the two walks cannot disagree on what an operand is.
 macro_rules! walk_operands {
@@ -369,7 +370,7 @@ macro_rules! walk_operands {
                 $on(index);
                 $on(value);
             }
-            Op::FieldGet { object, .. } | Op::ObjectGet { object, .. } => $on(object),
+            Op::FieldGet { object, .. } => $on(object),
             Op::FieldSet { object, value, .. } => {
                 $on(object);
                 $on(value);
@@ -415,6 +416,28 @@ impl Op {
     pub(super) fn for_each_operand_mut(&mut self, mut on_use: impl FnMut(&mut ValueId)) {
         let on_use: &mut dyn FnMut(&mut ValueId) = &mut on_use;
         walk_operands!(self, on_use, &mut)
+    }
+
+    /// The value an extraction takes a part out of, and that part's path
+    /// (`ir::parts::extraction` makes the extraction of a path): a
+    /// `FieldGet`'s fields, a `TupleIndex`'s or an `ArrayIndex`'s index, an
+    /// `UnwrapVariant`'s payload. Cost: O(the path).
+    pub fn extracted(&self) -> Option<(ValueId, Vec<PathSeg>)> {
+        match self {
+            Op::FieldGet { object, field, rest } => Some((*object, field_path(*field, rest))),
+            Op::TupleIndex { tuple: src, index } | Op::ArrayIndex { array: src, index } => Some((*src, vec![PathSeg::Index(*index)])),
+            Op::UnwrapVariant { src, variant } => Some((*src, vec![PathSeg::Payload(*variant)])),
+            _ => None,
+        }
+    }
+
+    /// The value a `FieldSet` replaces a part of, and that part's path.
+    /// Cost: O(the path).
+    pub fn replaced(&self) -> Option<(ValueId, Vec<PathSeg>)> {
+        match self {
+            Op::FieldSet { object, field, rest, .. } => Some((*object, field_path(*field, rest))),
+            _ => None,
+        }
     }
 
     /// The place a `Take`, an `Assign` or a `Ref` names: its target and its
@@ -475,7 +498,6 @@ impl Op {
             | Op::TestLiteral { .. }
             | Op::TestObjectKey { .. }
             | Op::ArrayIndex { .. }
-            | Op::ObjectGet { .. }
             | Op::MakeClosure { .. }
             | Op::Specialize { .. }
             | Op::MakeVariant { .. }
@@ -546,7 +568,6 @@ impl Op {
             | Op::TestLiteral { .. }
             | Op::TestObjectKey { .. }
             | Op::ArrayIndex { .. }
-            | Op::ObjectGet { .. }
             | Op::MakeClosure { .. }
             | Op::Specialize { .. }
             | Op::MakeVariant { .. }

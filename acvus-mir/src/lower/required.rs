@@ -28,7 +28,7 @@ use crate::ir::cfg::edit::{
 };
 use crate::ir::cfg::takings::{Named, Taken, by_value, inst_takings, is_mut_ref, terminator_takings};
 use crate::ir::cfg::{BlockId, Body, BodyId, Changes, Definition, Inst, InstId, Module, Op, Site, Terminator};
-use crate::ir::parts::{self, Path, covers, overlap};
+use crate::ir::parts::{self, Path, covers, overlap, owned_region};
 use crate::ir::{Callee, PathSeg, RefTarget, ValueId};
 use crate::passes::analysis::{AnalysisManager, ContentLiveness, Liveness, Loans, Presence, Reach, Storage, Stored, stored};
 use crate::passes::edit_facts::EditFacts;
@@ -1232,30 +1232,6 @@ enum UnitUse {
     Moved,
 }
 
-/// The path of the part an extraction of `value` names, where `op` is one.
-fn extracted_path(op: &Op, value: ValueId) -> Option<Path> {
-    let fields = |field: &acvus_utils::Astr, rest: &[acvus_utils::Astr]| {
-        std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect()
-    };
-    match op {
-        Op::FieldGet { object, field, rest } if *object == value => Some(fields(field, rest)),
-        Op::ObjectGet { object, key } if *object == value => Some(vec![PathSeg::Field(*key)]),
-        Op::TupleIndex { tuple: whole, index } | Op::ArrayIndex { array: whole, index } if *whole == value => {
-            Some(vec![PathSeg::Index(*index)])
-        }
-        _ => None,
-    }
-}
-
-/// The path of the part a `FieldSet` of `value` replaces, where `op` is one.
-fn replaced_path(op: &Op, value: ValueId) -> Option<Path> {
-    match op {
-        Op::FieldSet { object, field, rest, .. } if *object == value => {
-            Some(std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect())
-        }
-        _ => None,
-    }
-}
 
 impl PlanFacts<'_> {
     /// Every holder the body cuts. A value is cut where an operand takes
@@ -1271,8 +1247,12 @@ impl PlanFacts<'_> {
                     if operand.taken != Taken::PartMoved || operand.names_place || !self.holds(storages, operand.value) {
                         continue;
                     }
-                    let path = extracted_path(inst.op(), operand.value)
-                        .or_else(|| replaced_path(inst.op(), operand.value))
+                    let path = inst
+                        .op()
+                        .extracted()
+                        .or_else(|| inst.op().replaced())
+                        .filter(|(of, _)| *of == operand.value)
+                        .map(|(_, path)| owned_region(&path).to_vec())
                         .unwrap_or_else(|| panic!("a value is taken as a part only by an extraction or a FieldSet, not {:?}", inst.op()));
                     let cuts = value_cuts.entry(operand.value).or_default();
                     if !cuts.contains(&path) {
@@ -1359,24 +1339,29 @@ impl PlanFacts<'_> {
 
     /// How `inst` uses `unit` of the cut value `value`, if at all. An
     /// extraction reads an overlapping unit where what it takes copies, and
-    /// otherwise moves the units under it; a `FieldSet` moves every unit
-    /// but those under the part it replaces; any other use uses the value
-    /// whole.
+    /// otherwise moves the units under the region it empties
+    /// (`owned_region`); a `FieldSet` moves every unit but those under the
+    /// part it replaces; any other use uses the value whole.
     ///
     /// # Panics
     /// An extraction that moves a part overlaps `unit` without covering it:
     /// units refine every cut.
     fn unit_use(&self, inst: &Inst, value: ValueId, unit: &[PathSeg]) -> Option<UnitUse> {
-        if let Some(path) = extracted_path(inst.op(), value) {
+        if let Some((of, path)) = inst.op().extracted()
+            && of == value
+        {
+            let path = owned_region(&path);
             let result_copies = inst.result().is_some_and(|result| copies(self.types, self.body.ty_of(result)));
-            return match (result_copies, overlap(&path, unit), covers(&path, unit)) {
+            return match (result_copies, overlap(path, unit), covers(path, unit)) {
                 (_, false, _) => None,
                 (true, true, _) => Some(UnitUse::Read),
                 (false, true, true) => Some(UnitUse::Moved),
                 (false, true, false) => panic!("{path:?} of {value:?} moves out part of the unit {unit:?}; units refine every cut"),
             };
         }
-        if let Some(path) = replaced_path(inst.op(), value) {
+        if let Some((of, path)) = inst.op().replaced()
+            && of == value
+        {
             return (!covers(&path, unit)).then_some(UnitUse::Moved);
         }
         let takings: SmallVec<[Taken; 2]> = inst_takings(self.body, self.types, inst)

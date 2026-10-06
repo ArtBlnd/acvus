@@ -517,7 +517,6 @@ impl Printer<'_> {
             Op::TestLiteral { src, value } => format!("TestLiteral {}, {}", self.value(*src), literal(value)),
             Op::TestObjectKey { src, key } => format!("TestObjectKey {}.{}", self.value(*src), self.names.resolve(*key)),
             Op::ArrayIndex { array, index } => format!("ArrayIndex {}[{index}]", self.value(*array)),
-            Op::ObjectGet { object, key } => format!("ObjectGet {}.{}", self.value(*object), self.names.resolve(*key)),
             Op::MakeClosure { bodies, captures } => {
                 let bodies: Vec<String> = bodies.iter().map(|body| format!("body{}", body.0)).collect();
                 format!("MakeClosure [{}]({})", bodies.join(", "), self.values(captures))

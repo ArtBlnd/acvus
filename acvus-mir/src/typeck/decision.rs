@@ -33,7 +33,7 @@ use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
 use crate::decl::{Base, GenericFunction, Head, Scheme, unwrapped};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, Level, OpenSources, PairAt, RequiredAt, Term};
-use crate::ty::structural::{PartKey, Structure, structure};
+use crate::ty::structural::{PartKey, Structure, element, structure};
 use crate::ty::{
     CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mark, MarkTerm, Mutability, Poly, TyId, TyKind, TyVarId, Types,
 };
@@ -1123,11 +1123,7 @@ fn fire_iterate(
 pub(super) fn element_of(cx: &Ctxt<'_>, sequence: Term) -> Term {
     let types = cx.infer.types();
     let sequence = cx.infer.shallow(sequence);
-    if let TyKind::Slice(element) = types.kind(sequence) {
-        return *element;
-    }
-    structure(types, sequence)
-        .and_then(|structure| structure.part(PartKey::Element))
+    element(types, sequence)
         .unwrap_or_else(|| panic!("element_of: a term closed as an array or a slice is one, not {:?}", types.kind(sequence)))
 }
 

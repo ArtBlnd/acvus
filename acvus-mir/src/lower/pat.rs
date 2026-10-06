@@ -13,18 +13,17 @@
 //! under it and a name binds a reference to its part (patterns §1).
 
 use acvus_ast::{AstId, Expr, Literal, MatchExprArm, Pattern, Slot, Span, TuplePatternElem};
-use acvus_utils::Astr;
 
 use super::call::convert;
 use super::context;
 use super::control::diamond;
 use super::ctxt::{Home, Lcx, Lowered, Unreached};
 use super::expr::lower_expr;
-use super::place::{Operand, Place, assign, lend, read};
+use super::place::{Operand, Place, assign, extract, lend, read};
 use super::stmt::lower_body;
 use crate::ir::cfg::{BlockId, Op, Terminator};
 use crate::ir::{BinOp, IndexBound, IndexMode, PathSeg, RefTarget, SwitchKey, ValueId, known_len, tested_ty};
-use crate::ty::structural::{PartKey, VariantKey, structure};
+use crate::ty::structural::structure;
 use crate::ty::{Mutability, Ty, TyKind};
 
 /// What a pattern is matched against: a reference value; a place the match
@@ -35,16 +34,6 @@ pub(super) enum Matched {
     Value { value: ValueId, ty: Ty },
     Held { place: Place, slot_ty: Ty },
     Place { place: Place, lent: Mutability },
-}
-
-/// A part a pattern names of what it matches.
-#[derive(Debug, Clone, Copy)]
-enum Part {
-    Tuple(usize),
-    Field(Astr),
-    Payload(VariantKey),
-    /// An array's element, at an index its type fixes.
-    Element(usize),
 }
 
 /// Where an element a list pattern names stands.
@@ -97,7 +86,7 @@ fn through(cx: &mut Lcx<'_, '_>, matched: &Matched, span: Span) -> Lowered<Match
             (super::place::reborrow(cx, reference, held, target, lent, span), lent)
         }
     };
-    Ok(Matched::Place { place: Place { target: RefTarget::Through(reference), path: Vec::new(), ty: target }, lent })
+    Ok(Matched::Place { place: Place::through(cx, reference), lent })
 }
 
 /// The reference a held part is, read without moving it out of the slot. A
@@ -116,38 +105,24 @@ fn held_reference(cx: &mut Lcx<'_, '_>, place: &Place, slot_ty: Ty, held: Mutabi
     }
 }
 
-/// `part` of what `matched` is: a value's taken out of it (`Lcx::emit`); a
-/// place's, the place under it.
-fn part(cx: &mut Lcx<'_, '_>, matched: &Matched, part: Part, span: Span) -> Lowered<Matched> {
-    let ty = part_ty(cx, matched.ty(), part);
+/// The part at `seg` of what `matched` is: a value's taken out of it
+/// (`place::extract`); a place's, the place under it (`Place::with`).
+fn part(cx: &mut Lcx<'_, '_>, matched: &Matched, seg: PathSeg, span: Span) -> Lowered<Matched> {
     Ok(match matched {
         Matched::Value { value, .. } => {
-            let op = match part {
-                Part::Tuple(index) => Op::TupleIndex { tuple: *value, index },
-                Part::Field(field) => Op::FieldGet { object: *value, field, rest: Vec::new() },
-                Part::Payload(variant) => Op::UnwrapVariant { src: *value, variant },
-                Part::Element(index) => Op::ArrayIndex { array: *value, index },
-            };
-            Matched::Value { value: cx.emit(op, ty, span)?, ty }
+            let value = extract(cx, *value, seg, span)?;
+            Matched::Value { value, ty: cx.value_ty(value) }
         }
-        Matched::Held { place, slot_ty } => Matched::Held { place: place.with(segment(part), ty), slot_ty: *slot_ty },
-        Matched::Place { place, lent } => Matched::Place { place: place.with(segment(part), ty), lent: *lent },
+        Matched::Held { place, slot_ty } => Matched::Held { place: place.with(cx, seg), slot_ty: *slot_ty },
+        Matched::Place { place, lent } => Matched::Place { place: place.with(cx, seg), lent: *lent },
     })
-}
-
-fn segment(part: Part) -> PathSeg {
-    match part {
-        Part::Tuple(index) | Part::Element(index) => PathSeg::Index(index),
-        Part::Field(field) => PathSeg::Field(field),
-        Part::Payload(variant) => PathSeg::Payload(variant),
-    }
 }
 
 /// The element a list pattern names at `at`: an array's is a part; a
 /// slice's is reached by index, past its length test (`Lcx::emit`).
 fn element(cx: &mut Lcx<'_, '_>, matched: &Matched, at: ListAt, span: Span) -> Lowered<Matched> {
     let (place, lent) = match (at, matched) {
-        (ListAt::Array(index), _) => return part(cx, matched, Part::Element(index), span),
+        (ListAt::Array(index), _) => return part(cx, matched, PathSeg::Index(index), span),
         (ListAt::SliceHead(_) | ListAt::SliceTail { .. }, Matched::Place { place, lent }) => (place, *lent),
         (ListAt::SliceHead(_) | ListAt::SliceTail { .. }, Matched::Value { .. } | Matched::Held { .. }) => {
             panic!("a slice is matched only past the reference that lends it")
@@ -171,7 +146,7 @@ fn element(cx: &mut Lcx<'_, '_>, matched: &Matched, at: ListAt, span: Span) -> L
     let element_ref = cx.ref_ty(lent, ty);
     let op = Op::Index { slice, index, mode: IndexMode::Ref, bound: IndexBound::Checked };
     let reference = cx.emit(op, element_ref, span)?;
-    Ok(Matched::Place { place: Place { target: RefTarget::Through(reference), path: Vec::new(), ty }, lent })
+    Ok(Matched::Place { place: Place::through(cx, reference), lent })
 }
 
 /// A reference, at `lent`, to the slice `place` holds.
@@ -181,23 +156,6 @@ fn slice_ref(cx: &mut Lcx<'_, '_>, place: &Place, lent: Mutability, span: Span) 
     cx.emit(op, ty, span)
 }
 
-/// The type of `part` of a `whole`.
-///
-/// # Panics
-/// `whole` has no such part: typeck admits a pattern only on a type that
-/// has what it names.
-fn part_ty(cx: &Lcx<'_, '_>, whole: Ty, part: Part) -> Ty {
-    let found = match (cx.kind(whole), part) {
-        (TyKind::Tuple(items, _), Part::Tuple(index)) => items.get(index).copied(),
-        (TyKind::Object { fields, .. }, Part::Field(field)) => {
-            fields.iter().find(|(name, _)| *name == field).map(|(_, ty)| *ty)
-        }
-        (_, Part::Payload(variant)) => structure(cx.types(), whole).and_then(|structure| structure.part(PartKey::Payload(variant))),
-        (TyKind::Array(element, _, _), Part::Element(_)) => Some(*element),
-        _ => None,
-    };
-    found.unwrap_or_else(|| panic!("typeck admits {part:?} only of a type that has it, not {:?}", cx.kind(whole)))
-}
 
 /// Whether a pattern may fail on a value of its type. A list's length is
 /// tested by `test` itself, so a list counts as refutable here.
@@ -261,7 +219,7 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
             let tagged = cx.made(Op::TestVariant { src, variant }, bool_ty, span);
             match payload {
                 Some(payload) if refutable(payload) => and(cx, Some(tagged), span, |cx| {
-                    let inner = part(cx, &matched, Part::Payload(variant), span)?;
+                    let inner = part(cx, &matched, PathSeg::Payload(variant), span)?;
                     test(cx, payload, &inner)
                 })?,
                 _ => Some(tagged),
@@ -278,7 +236,7 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
                     continue;
                 }
                 held = and(cx, held, span, |cx| {
-                    let inner = part(cx, &matched, Part::Tuple(index), span)?;
+                    let inner = part(cx, &matched, PathSeg::Index(index), span)?;
                     test(cx, element, &inner)
                 })?;
             }
@@ -289,7 +247,7 @@ fn test_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
             let mut held = None;
             for field in fields.iter().filter(|field| refutable(&field.pattern)) {
                 held = and(cx, held, span, |cx| {
-                    let inner = part(cx, &matched, Part::Field(field.key), span)?;
+                    let inner = part(cx, &matched, PathSeg::Field(field.key), span)?;
                     test(cx, &field.pattern, &inner)
                 })?;
             }
@@ -402,7 +360,7 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
             if let Some(payload) = payload {
                 let matched = through(cx, matched, span)?;
                 let variant = cx.variant(matched.ty(), *tag);
-                let inner = part(cx, &matched, Part::Payload(variant), span)?;
+                let inner = part(cx, &matched, PathSeg::Payload(variant), span)?;
                 bind(cx, payload, &inner)?;
             }
         }
@@ -410,7 +368,7 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
             let matched = through(cx, matched, span)?;
             for (index, element) in elements.iter().enumerate() {
                 if let TuplePatternElem::Pattern(element) = element {
-                    let inner = part(cx, &matched, Part::Tuple(index), span)?;
+                    let inner = part(cx, &matched, PathSeg::Index(index), span)?;
                     bind(cx, element, &inner)?;
                 }
             }
@@ -418,7 +376,7 @@ fn bind_level<S: Slot>(cx: &mut Lcx<'_, '_>, pattern: &Pattern<S>, matched: &Mat
         Pattern::Object { fields, .. } => {
             let matched = through(cx, matched, span)?;
             for field in fields {
-                let inner = part(cx, &matched, Part::Field(field.key), span)?;
+                let inner = part(cx, &matched, PathSeg::Field(field.key), span)?;
                 bind(cx, &field.pattern, &inner)?;
             }
         }

@@ -39,11 +39,12 @@ use acvus_ast::Span;
 use rustc_hash::FxHashSet;
 
 use super::body::{Def, InstId};
-use super::core::{InstShift, structural_fields};
+use super::core::InstShift;
 use super::order::At;
 use super::{Block, BlockId, Body, BodyId, Changes, Inst, Module, Op, OrderUse, Rewriter, Site, Terminator};
 use crate::ir::parts;
 use crate::ir::{Callee, IndexBound, PathSeg, RefTarget, SwitchKey, ValueId, fn_effect};
+use crate::ty::structural::structure;
 use crate::ty::{Concrete, Mutability, Reissue, SplitCost, Ty, TyKind, Types};
 use reach::{BlockPoint, Direction, PointKey, Reached};
 
@@ -1200,7 +1201,7 @@ where
     pub fn split_slot(&mut self, slot: ValueId) -> Result<Vec<ValueId>, CannotSplitSlot> {
         let body = self.body_ref();
         assert!(matches!(body.def_of(slot), Def::Slot { .. }), "{slot:?} is not a slot of the body");
-        let Some(fields) = structural_fields(self.module.types(), body.ty_of(slot)) else {
+        let Some(fields) = structure(self.module.types(), body.ty_of(slot)).and_then(|structured| structured.fields()) else {
             return Err(CannotSplitSlot::NotStructural);
         };
         let mut sites: Vec<Site> = body.users(slot).collect();
@@ -1212,7 +1213,7 @@ where
             let inst = body.inst(id);
             let once = inst.operands().iter().filter(|value| **value == slot).count() == 1;
             let field = inst.op().place().is_some_and(|(target, path)| {
-                *target == RefTarget::Var(slot) && path.first().is_some_and(|seg| fields.iter().any(|(named, _)| named == seg))
+                *target == RefTarget::Var(slot) && path.first().is_some_and(|seg| fields.iter().any(|field| parts::step(field.key) == Some(*seg)))
             });
             once && field
         };
@@ -1461,7 +1462,11 @@ where
                 }) {
                     return Err(CannotDrop::UsedAfter(site));
                 }
-                (self.body_ref().ty_of(value), extraction(self.module.types(), self.body_ref().ty_of(value), value, path))
+                let holder = self.body_ref().ty_of(value);
+                let op = parts::extraction(self.module.types(), holder, value, path).unwrap_or_else(|| {
+                    panic!("a value's part is named by fields or by one index of a tuple or an array, not {path:?} of {:?}", self.module.types().kind(holder))
+                });
+                (holder, op)
             }
         };
         let (holder, op) = taken;
@@ -1505,45 +1510,23 @@ fn insert_place_op(rewriter: &mut Rewriter<'_>, at: At, op: Op, ty: Ty, span: Sp
 }
 
 /// Whether `op`, a use of `value`, touches its part at `path`: an
-/// extraction of an overlapping part, a `FieldSet` of a part that does not
-/// hold it, and any other use, which uses the value whole.
+/// extraction of a part whose region (`parts::owned_region`) overlaps it, a
+/// `FieldSet` of a part that does not hold it, and any other use, which
+/// uses the value whole.
 fn touches_part(op: &Op, value: ValueId, path: &[PathSeg]) -> bool {
-    match op {
-        Op::FieldGet { object, field, rest } if *object == value => {
-            let named: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
-            parts::overlap(&named, path)
-        }
-        Op::ObjectGet { object, key } if *object == value => parts::overlap(&[PathSeg::Field(*key)], path),
-        Op::TupleIndex { tuple: whole, index } | Op::ArrayIndex { array: whole, index } if *whole == value => {
-            parts::overlap(&[PathSeg::Index(*index)], path)
-        }
-        Op::FieldSet { object, field, rest, .. } if *object == value => {
-            let replaced: Vec<PathSeg> = std::iter::once(field).chain(rest).map(|name| PathSeg::Field(*name)).collect();
-            !parts::covers(&replaced, path)
-        }
-        _ => true,
+    if let Some((of, extracted)) = op.extracted()
+        && of == value
+    {
+        return parts::overlap(parts::owned_region(&extracted), path);
     }
+    if let Some((of, replaced)) = op.replaced()
+        && of == value
+    {
+        return !parts::covers(&replaced, path);
+    }
+    true
 }
 
-/// The extraction of `value`'s part at `path`, of a value of type `ty`.
-///
-/// # Panics
-/// `path` is neither all fields nor one index of a tuple or an array.
-fn extraction(types: &Types<Concrete>, ty: Ty, value: ValueId, path: &[PathSeg]) -> Op {
-    let fields: Option<Vec<acvus_utils::Astr>> = path
-        .iter()
-        .map(|seg| match seg {
-            PathSeg::Field(name) => Some(*name),
-            PathSeg::Index(_) | PathSeg::Payload(_) => None,
-        })
-        .collect();
-    match (fields.as_deref(), path, types.kind(ty)) {
-        (Some([field, rest @ ..]), _, _) => Op::FieldGet { object: value, field: *field, rest: rest.to_vec() },
-        (_, [PathSeg::Index(index)], TyKind::Tuple(.., _)) => Op::TupleIndex { tuple: value, index: *index },
-        (_, [PathSeg::Index(index)], TyKind::Array(..)) => Op::ArrayIndex { array: value, index: *index },
-        (_, path, kind) => panic!("a value's part is named by fields or by one index of a tuple or an array, not {path:?} of {kind:?}"),
-    }
-}
 
 
 impl<S> Editor<'_, S>

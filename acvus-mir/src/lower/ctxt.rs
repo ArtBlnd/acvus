@@ -477,7 +477,6 @@ fn yields(op: &Op) -> Yields {
         | Op::Take { .. }
         | Op::Index { .. }
         | Op::FieldGet { .. }
-        | Op::ObjectGet { .. }
         | Op::TupleIndex { .. }
         | Op::ArrayIndex { .. }
         | Op::UnwrapVariant { .. }

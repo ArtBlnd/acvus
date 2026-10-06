@@ -2,7 +2,8 @@
 //! enum, a tuple, an array, an `Option` and a `Result`, and no other. Each
 //! kind's parts are in the order the type table stores them, so no interner
 //! is read. This is the one place such a type is taken apart; typeck, lower
-//! and every later reader ask it.
+//! and every later reader ask it. A sequence's element is read here too
+//! (`element`), a slice's among them, though a slice is no structure.
 //!
 //! A struct a declaration names is not one: it is defined outside the
 //! program and equals only itself (types §1).
@@ -71,6 +72,19 @@ pub struct Variant<V: Phase> {
 pub struct Part<V: Phase> {
     pub key: PartKey,
     pub ty: TyId<V>,
+}
+
+/// The element of a sequence (operators §3): an array's, its one part
+/// `Element` (types §1), and a slice's, which is no structure; `None` for
+/// any other type. The one place a sequence's element is read.
+pub fn element<V>(types: &Types<V>, ty: TyId<V>) -> Option<TyId<V>>
+where
+    V: Phase,
+{
+    match types.kind(ty) {
+        TyKind::Slice(element) => Some(*element),
+        _ => structure(types, ty)?.part(PartKey::Element),
+    }
 }
 
 /// `ty`'s structure, where `ty` is a transparent structured type.
@@ -155,14 +169,26 @@ impl<V: Phase> Structure<'_, V> {
         self.variants().is_some_and(|variants| variants.iter().any(|held| held.key == variant))
     }
 
-    /// Each part, keyed, in order: a tuple's elements, an object's fields,
-    /// a variant type's payloads in its variants' order (`variants`). An
-    /// array has one part, `Element`, which every one of its elements has.
+    /// A product's fields, keyed, in order: a tuple's elements by their
+    /// positions, an object's fields in the order its type stores them.
+    /// `None` for a structure that is no tuple or object. The one place a
+    /// product's fields are listed.
+    pub fn fields(&self) -> Option<SmallVec<[Part<V>; 4]>> {
+        let part = |key, ty| Part { key, ty };
+        match *self {
+            Structure::Tuple(items, _) => Some(items.iter().enumerate().map(|(at, ty)| part(PartKey::Index(at), *ty)).collect()),
+            Structure::Object(fields, _) => Some(fields.iter().map(|(name, ty)| part(PartKey::Field(*name), *ty)).collect()),
+            Structure::Enum(..) | Structure::Array { .. } | Structure::Option(..) | Structure::Result { .. } => None,
+        }
+    }
+
+    /// Each part, keyed, in order: a product's fields (`fields`), a variant
+    /// type's payloads in its variants' order (`variants`). An array has one
+    /// part, `Element`, which every one of its elements has.
     pub fn parts(&self) -> SmallVec<[Part<V>; 4]> {
         let part = |key, ty| Part { key, ty };
         match *self {
-            Structure::Tuple(items, _) => items.iter().enumerate().map(|(at, ty)| part(PartKey::Index(at), *ty)).collect(),
-            Structure::Object(fields, _) => fields.iter().map(|(name, ty)| part(PartKey::Field(*name), *ty)).collect(),
+            Structure::Tuple(..) | Structure::Object(..) => self.fields().expect("a tuple and an object are products"),
             Structure::Array { element, .. } => smallvec::smallvec![part(PartKey::Element, element)],
             Structure::Enum(..) | Structure::Option(..) | Structure::Result { .. } => self
                 .variants()
@@ -178,7 +204,7 @@ impl<V: Phase> Structure<'_, V> {
 mod tests {
     use acvus_utils::{Interner, QualifiedRef};
 
-    use super::{PartKey, Structure, VariantKey, structure};
+    use super::{PartKey, Structure, VariantKey, element, structure};
     use crate::ty::{Mark, MarkTerm};
     use crate::ty::{Concrete, IntTy, LenTerm, Mutability, Ty, TyKind, Types};
 
@@ -310,6 +336,54 @@ mod tests {
         assert!(!r#enum.has_variant(VariantKey::Enum(names.intern("Other"))));
         let tuple = types.intern(TyKind::Tuple(Box::new([int]), ()));
         assert_eq!(structure(&types, tuple).expect("a tuple").variants(), None);
+    }
+
+    /// A product's fields are a tuple's elements by position and an
+    /// object's fields in its stored order, and they are its parts; an
+    /// array and a variant type are no product.
+    #[test]
+    fn a_products_fields_are_its_parts_and_no_other_structure_has_fields() {
+        let names = Interner::new();
+        let (a, b) = (names.intern("a"), names.intern("b"));
+        let mut types = Types::<Concrete>::new();
+        let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
+        let tuple = types.intern(TyKind::Tuple(Box::new([string, int]), ()));
+        let object = types.intern(TyKind::Object { fields: Box::new([(b, int), (a, string)]), label: () });
+        let others = [
+            types.intern(TyKind::Array(int, LenTerm::Known(2), ())),
+            types.intern(TyKind::Option(int, ())),
+            types.intern(TyKind::Result(int, string, ())),
+        ];
+        let fields = |ty| {
+            let structure = structure(&types, ty).expect("a structural type");
+            structure.fields().map(|fields| fields.iter().map(|field| (field.key, field.ty)).collect::<Vec<_>>())
+        };
+        assert_eq!(fields(tuple), Some(vec![(PartKey::Index(0), string), (PartKey::Index(1), int)]));
+        assert_eq!(fields(object), Some(vec![(PartKey::Field(b), int), (PartKey::Field(a), string)]));
+        for product in [tuple, object] {
+            let structure = structure(&types, product).expect("a product");
+            assert_eq!(structure.fields().expect("a product").to_vec(), structure.parts().to_vec());
+        }
+        for other in others {
+            assert_eq!(fields(other), None, "{:?}", types.kind(other));
+        }
+    }
+
+    /// operators §3: an array's and a slice's element is a sequence's; a
+    /// tuple, even of one type, and any other type are no sequence.
+    #[test]
+    fn a_sequences_element_is_an_arrays_or_a_slices() {
+        let mut types = Types::<Concrete>::new();
+        let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
+        let array = types.intern(TyKind::Array(string, LenTerm::Known(2), ()));
+        let slice = types.intern(TyKind::Slice(int));
+        assert_eq!(element(&types, array), Some(string));
+        assert_eq!(element(&types, slice), Some(int));
+        let tuple = types.intern(TyKind::Tuple(Box::new([int, int]), ()));
+        let reference = types.intern(TyKind::Ref(Mutability::Shared, slice));
+        for other in [tuple, reference, string, int] {
+            assert_eq!(element(&types, other), None, "{:?}", types.kind(other));
+        }
     }
 
     /// types §1: an extern-defined type is opaque, so it has no parts; nor

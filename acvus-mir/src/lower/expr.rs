@@ -30,7 +30,7 @@ fn lower_form<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>) -> Lowered<ValueId>
         Expr::Ident { id, span, .. } => lower_ident(cx, *id, expr, *span)?,
         Expr::Literal { id, value, span } => lower_literal(cx, *id, value, *span)?,
         Expr::BinaryOp { id, left, op, right, span } => lower_binary(cx, *id, *op, left, right, *span)?,
-        Expr::UnaryOp { id, op: UnaryOp::Deref, operand, span } => lower_deref(cx, *id, operand, *span)?,
+        Expr::UnaryOp { op: UnaryOp::Deref, operand, span, .. } => lower_deref(cx, operand, *span)?,
         Expr::UnaryOp { id, op: UnaryOp::Neg, operand, span } => lower_neg(cx, *id, operand, *span)?,
         Expr::UnaryOp { id, op: UnaryOp::Not, operand, span } => lower_not(cx, *id, operand, *span)?,
         Expr::FieldAccess { id, span, .. } => {

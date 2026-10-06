@@ -11,18 +11,18 @@
 //! never a reference (types §4).
 
 use acvus_ast::{AstId, BinOp, Expr, Literal, Slot, Span};
-use acvus_utils::Astr;
 use smallvec::SmallVec;
 
 use super::call::{convert, issue, lent_operand};
 use super::coerce::{ArrayMap, array_map, by_variant};
 use super::control::diamond;
 use super::ctxt::{Lcx, Lowered};
-use super::place::view_array;
+use super::place::{extract, view_array};
 use crate::decl::{Lift, LiftShape, PairMember, Taking};
 use crate::ir::cfg::{BlockId, Op, Terminator};
 use crate::ir::{ForSource, IndexBound, IndexMode, PathSeg, RefTarget, UnaryOp, ValueId, fn_effect, known_len};
-use crate::ty::structural::{PartKey, Structure, Variant, VariantKey, structure};
+use crate::ir::parts::step;
+use crate::ty::structural::{self, PartKey, Structure, Variant, VariantKey, structure};
 use crate::ty::{Concrete, Effect, IntTy, Mutability, Ty, TyKind};
 use crate::typeck::{Chosen, Own, StructureTree};
 
@@ -38,8 +38,10 @@ enum Asked {
 /// A node's type as its tree takes it apart: a transparent structured type
 /// by `ty::structural`, a reference by what it names, `!` by no part.
 enum Shape {
-    Tuple(Vec<Ty>),
-    Object(Vec<(Astr, Ty)>),
+    /// A tuple or an object, by its fields (`Structure::fields`); the two
+    /// are made by different operations.
+    Tuple(Fields),
+    Object(Fields),
     Array(ArrayOf),
     /// An enum, an `Option` or a `Result`, by its variants
     /// (`Structure::variants`).
@@ -47,6 +49,9 @@ enum Shape {
     Ref(Ty),
     Never,
 }
+
+/// A product's fields, keyed.
+type Fields = SmallVec<[structural::Part<Concrete>; 4]>;
 
 /// An array's element type and length.
 #[derive(Clone, Copy)]
@@ -60,8 +65,8 @@ struct ArrayOf {
 /// typeck records parts only at those.
 fn shape(cx: &Lcx<'_, '_>, ty: Ty) -> Shape {
     match structure(cx.types(), ty) {
-        Some(Structure::Tuple(items, _)) => Shape::Tuple(items.to_vec()),
-        Some(Structure::Object(fields, _)) => Shape::Object(fields.to_vec()),
+        Some(structured @ Structure::Tuple(..)) => Shape::Tuple(structured.fields().expect("a tuple is a product")),
+        Some(structured @ Structure::Object(..)) => Shape::Object(structured.fields().expect("an object is a product")),
         Some(Structure::Array { element, len, .. }) => Shape::Array(ArrayOf { element, len: known_len(&len) }),
         Some(structured @ (Structure::Enum(..) | Structure::Option(..) | Structure::Result { .. })) => {
             Shape::Variants(structured.variants().expect("an enum, an `Option` and a `Result` are variant types"))
@@ -95,26 +100,24 @@ fn tree_at(trees: &[(PartKey, StructureTree)], key: PartKey) -> &StructureTree {
         .unwrap_or_else(|| panic!("typeck records a tree at every part of a node, and not at {key:?}"))
 }
 
-/// A tuple's parts, each with its tree.
-fn tuple_parts<'t>(items: &[Ty], trees: &'t [(PartKey, StructureTree)]) -> Vec<Part<'t>> {
-    items
-        .iter()
-        .enumerate()
-        .map(|(at, ty)| Part { seg: PathSeg::Index(at), ty: *ty, tree: tree_at(trees, PartKey::Index(at)) })
-        .collect()
+/// The part of a node at `key`, of type `ty`, with its tree.
+///
+/// # Panics
+/// `key` names an array's elements, which no one step names: an array's
+/// part is reached by its elements' map or fold, never by a step.
+fn part_at<'t>(key: PartKey, ty: Ty, trees: &'t [(PartKey, StructureTree)]) -> Part<'t> {
+    let seg = step(key).unwrap_or_else(|| panic!("an array's elements are reached by a map or a fold, not by a step ({key:?})"));
+    Part { seg, ty, tree: tree_at(trees, key) }
 }
 
-/// An object's parts, each with its tree.
-fn field_parts<'t>(fields: &[(Astr, Ty)], trees: &'t [(PartKey, StructureTree)]) -> Vec<Part<'t>> {
-    fields
-        .iter()
-        .map(|(name, ty)| Part { seg: PathSeg::Field(*name), ty: *ty, tree: tree_at(trees, PartKey::Field(*name)) })
-        .collect()
+/// A product's parts, each with its tree.
+fn field_parts<'t>(fields: &Fields, trees: &'t [(PartKey, StructureTree)]) -> Vec<Part<'t>> {
+    fields.iter().map(|field| part_at(field.key, field.ty, trees)).collect()
 }
 
 /// The payload part of `variant`, where it has one.
 fn payload_part<'t>(variant: &Variant<Concrete>, trees: &'t [(PartKey, StructureTree)]) -> Option<Part<'t>> {
-    variant.payload.map(|ty| Part { seg: PathSeg::Payload(variant.key), ty, tree: tree_at(trees, PartKey::Payload(variant.key)) })
+    variant.payload.map(|ty| part_at(PartKey::Payload(variant.key), ty, trees))
 }
 
 /// The operand of `part` of the node whose operand is `base`, a shared
@@ -199,8 +202,7 @@ fn compared(cx: &mut Lcx<'_, '_>, tree: &StructureTree, asked: Asked, ty: Ty, a:
     match shape(cx, ty) {
         // typeck compares a reference at its own node by what it names.
         Shape::Ref(target) => compared(cx, tree, asked, target, a, b, span),
-        Shape::Tuple(items) => in_order(cx, asked, &tuple_parts(&items, trees), a, b, span),
-        Shape::Object(fields) => in_order(cx, asked, &field_parts(&fields, trees), a, b, span),
+        Shape::Tuple(fields) | Shape::Object(fields) => in_order(cx, asked, &field_parts(&fields, trees), a, b, span),
         Shape::Array(array) => array_compared(cx, asked, array, tree_at(trees, PartKey::Element), a, b, span),
         Shape::Variants(variants) => match asked {
             Asked::Equal => variant_equal(cx, &variants, trees, a, b, span),
@@ -446,8 +448,8 @@ fn rebuilt(cx: &mut Lcx<'_, '_>, tree: &StructureTree, lift: &LiftShape, ty: Ty,
                 Ok(cx.made(Op::MakeVariant { variant: variant.key, payload }, ty, span))
             })
         }
-        Shape::Tuple(items) => {
-            let elements = tuple_parts(&items, trees)
+        Shape::Tuple(fields) => {
+            let elements = field_parts(&fields, trees)
                 .into_iter()
                 .map(|part| {
                     let part_args = part_args(cx, args, lift, part, span)?;
@@ -520,7 +522,7 @@ fn tree_effect(cx: &Lcx<'_, '_>, tree: &StructureTree) -> Effect {
 
 /// `part`'s arguments, from the node's `args` as `lift` takes each: a
 /// reference to the part through a reference, or the part moved out of a
-/// value (`Lcx::emit`).
+/// value (`place::extract`).
 fn part_args(cx: &mut Lcx<'_, '_>, args: &[ValueId], lift: &LiftShape, part: Part<'_>, span: Span) -> Lowered<Vec<ValueId>> {
     args.iter()
         .zip(lift.params.iter())
@@ -530,14 +532,7 @@ fn part_args(cx: &mut Lcx<'_, '_>, args: &[ValueId], lift: &LiftShape, part: Par
                 let op = Op::Ref { target: RefTarget::Through(*arg), path: vec![part.seg], mutability: *mutability };
                 cx.emit(op, ty, span)
             }
-            Taking::Value => {
-                let op = match part.seg {
-                    PathSeg::Index(index) => Op::TupleIndex { tuple: *arg, index },
-                    PathSeg::Field(field) => Op::FieldGet { object: *arg, field, rest: Vec::new() },
-                    PathSeg::Payload(variant) => Op::UnwrapVariant { src: *arg, variant },
-                };
-                cx.emit(op, part.ty, span)
-            }
+            Taking::Value => extract(cx, *arg, part.seg, span),
         })
         .collect()
 }

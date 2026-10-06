@@ -224,7 +224,6 @@ enum Shape {
     TestLiteral(LiteralKey),
     TestObjectKey(Astr),
     ArrayIndex(usize),
-    ObjectGet(Astr),
     MakeClosure(Vec<BodyId>),
     MakeVariant { variant: VariantKey, has_payload: bool },
     TestVariant(VariantKey),
@@ -347,7 +346,6 @@ fn shape_of(types: &Types<Concrete>, op: &Op) -> Option<Shape> {
         Op::TestLiteral { value, .. } => Shape::TestLiteral(LiteralKey::of(value)),
         Op::TestObjectKey { key, .. } => Shape::TestObjectKey(*key),
         Op::ArrayIndex { index, .. } => Shape::ArrayIndex(*index),
-        Op::ObjectGet { key, .. } => Shape::ObjectGet(*key),
         Op::MakeClosure { bodies, .. } => Shape::MakeClosure(bodies.clone()),
         // A specialized closure is its closure at fewer signatures; left to
         // the closure's own number.

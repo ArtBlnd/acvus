@@ -531,10 +531,6 @@ impl TypeCheck<'_> {
                 TyKind::Array(element, _, _) => self.same(Self::result(inst)?, *element, "the element"),
                 other => Err(format!("{array:?} is {other:?}, not an array")),
             },
-            Op::ObjectGet { object, key } => {
-                let at = self.field_path(self.ty(*object), *key, &[])?;
-                self.same(Self::result(inst)?, at, "the field")
-            }
             Op::TestLiteral { .. } | Op::TestObjectKey { .. } => self.is_bool(Self::result(inst)?),
             Op::TestVariant { src, variant } => {
                 self.key_fits(&SwitchKey::Variant(*variant), tested_ty(self.types, self.ty(*src)))?;

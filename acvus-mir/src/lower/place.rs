@@ -14,7 +14,9 @@ use super::context;
 use super::ctxt::{Home, Lcx, Lowered};
 use super::expr::lower_expr;
 use crate::ir::cfg::Op;
+use crate::ir::parts::{extraction, step_ty};
 use crate::ir::{IndexBound, IndexMode, PathSeg, RefTarget, ValueId, is_word};
+use crate::ty::structural::element;
 use crate::ty::{Mutability, Ty, TyKind};
 use crate::typeck::Name;
 
@@ -27,11 +29,46 @@ pub(super) struct Place {
 }
 
 impl Place {
-    pub fn with(&self, seg: PathSeg, ty: Ty) -> Place {
+    /// The part of this place at `seg`, of that part's type
+    /// (`ir::parts::step_ty`).
+    ///
+    /// # Panics
+    /// The place's type has no part at `seg`: typeck admits a step only
+    /// into a part its type has.
+    pub fn with(&self, cx: &Lcx<'_, '_>, seg: PathSeg) -> Place {
+        let ty = step_ty(cx.types(), self.ty, seg)
+            .unwrap_or_else(|| panic!("typeck admits a step only into a part its type has, not {seg:?} of {:?}", cx.kind(self.ty)));
         let mut path = self.path.clone();
         path.push(seg);
         Place { target: self.target, path, ty }
     }
+
+    /// The place `reference` names, of the type it lends.
+    ///
+    /// # Panics
+    /// `reference` is no reference.
+    pub fn through(cx: &Lcx<'_, '_>, reference: ValueId) -> Place {
+        let TyKind::Ref(_, lent) = cx.kind(cx.value_ty(reference)) else {
+            panic!("a place is reached through a reference, not {:?}", cx.kind(cx.value_ty(reference)))
+        };
+        Place { target: RefTarget::Through(reference), path: Vec::new(), ty: *lent }
+    }
+}
+
+/// The part of `value` at `seg`, taken out of it by its extraction
+/// (`ir::parts::extraction`), of that part's type (`ir::parts::step_ty`),
+/// as `Lcx::emit` takes it.
+///
+/// # Panics
+/// `value`'s type has no part at `seg`: typeck admits a step only into a
+/// part its type has.
+pub(super) fn extract(cx: &mut Lcx<'_, '_>, value: ValueId, seg: PathSeg, span: Span) -> Lowered<ValueId> {
+    let holder = cx.value_ty(value);
+    let ty = step_ty(cx.types(), holder, seg)
+        .unwrap_or_else(|| panic!("typeck admits a step only into a part its type has, not {seg:?} of {:?}", cx.kind(holder)));
+    let op = extraction(cx.types(), holder, value, std::slice::from_ref(&seg))
+        .unwrap_or_else(|| panic!("one step into a part is taken by one extraction, not {seg:?} of {:?}", cx.kind(holder)));
+    cx.emit(op, ty, span)
 }
 
 /// An expression as a place where it names one, and as a value otherwise.
@@ -74,17 +111,16 @@ pub(super) fn operand<S: Slot>(cx: &mut Lcx<'_, '_>, expr: &Expr<S>, mutability:
                 let Err(unreached) = read(cx, object, *span) else { panic!("a place of type `!` holds no value a run reads") };
                 return Err(unreached);
             }
-            let ty = part_ty(cx, &object, *field);
-            field_of(cx, object, *field, ty, *span)?
+            field_of(cx, object, *field, *span)?
         }
         Expr::Index { callee_id, object, index, span, .. } => {
             let element = element_of(cx, object, *callee_id);
             let reference = element_ref(cx, object, *callee_id, index, mutability, element, *span)?;
-            Operand::Place(Place { target: RefTarget::Through(reference), path: Vec::new(), ty: element })
+            Operand::Place(Place::through(cx, reference))
         }
-        Expr::UnaryOp { id, op: acvus_ast::UnaryOp::Deref, operand: reference, .. } => {
+        Expr::UnaryOp { op: acvus_ast::UnaryOp::Deref, operand: reference, .. } => {
             let reference = lower_expr(cx, reference)?;
-            Operand::Place(Place { target: RefTarget::Through(reference), path: Vec::new(), ty: cx.ty(*id) })
+            Operand::Place(Place::through(cx, reference))
         }
         Expr::Paren { inner, .. } => operand(cx, inner, mutability)?,
         _ => Operand::Value(lower_expr(cx, expr)?),
@@ -120,12 +156,13 @@ pub(super) fn input_place(cx: &Lcx<'_, '_>, name: acvus_utils::Astr, ty: Ty) -> 
 }
 
 
-/// Field `field` of `object`, through a reference as Rust auto-derefs.
-/// Field `field` of `object`, a place of type `ty`: a reference on the way
-/// is read at the least of its own mutability and the path's before it,
-/// what the path reaches (ownership §5). The path's is the reference the
-/// place is reached through, each on the way already read at its least.
-fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, ty: Ty, span: Span) -> Lowered<Operand> {
+/// Field `field` of `object`, through a reference as Rust auto-derefs: a
+/// reference on the way is read at the least of its own mutability and the
+/// path's before it, what the path reaches (ownership §5). The path's is
+/// the reference the place is reached through, each on the way already read
+/// at its least. The field is typed by the object's type (`Place::with`).
+fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, span: Span) -> Lowered<Operand> {
+    let seg = PathSeg::Field(field);
     Ok(match object {
         Operand::Place(place) if is_ref(cx, place.ty) => {
             let TyKind::Ref(made, target) = cx.kind(place.ty) else { unreachable!("matched as a reference") };
@@ -139,39 +176,14 @@ fn field_of(cx: &mut Lcx<'_, '_>, object: Operand, field: acvus_utils::Astr, ty:
             };
             let reference = read(cx, Operand::Place(place), span)?;
             let reference = reborrow(cx, reference, made, target, least, span);
-            Operand::Place(Place { target: RefTarget::Through(reference), path: vec![PathSeg::Field(field)], ty })
+            Operand::Place(Place::through(cx, reference).with(cx, seg))
         }
-        Operand::Place(place) => Operand::Place(place.with(PathSeg::Field(field), ty)),
-        Operand::Value(value) if is_ref(cx, cx.value_ty(value)) => {
-            Operand::Place(Place { target: RefTarget::Through(value), path: vec![PathSeg::Field(field)], ty })
-        }
-        Operand::Value(value) => {
-            Operand::Value(cx.emit(Op::FieldGet { object: value, field, rest: Vec::new() }, ty, span)?)
-        }
+        Operand::Place(place) => Operand::Place(place.with(cx, seg)),
+        Operand::Value(value) if is_ref(cx, cx.value_ty(value)) => Operand::Place(Place::through(cx, value).with(cx, seg)),
+        Operand::Value(value) => Operand::Value(extract(cx, value, seg, span)?),
     })
 }
 
-/// The type of field `field` of `object`, past a reference to it: the
-/// place's own, which a read may take as a weaker reborrow (`read_as`).
-fn part_ty(cx: &Lcx<'_, '_>, object: &Operand, field: acvus_utils::Astr) -> Ty {
-    let held = match object {
-        Operand::Place(place) => place.ty,
-        Operand::Value(value) => cx.value_ty(*value),
-    };
-    let held = match cx.kind(held) {
-        TyKind::Ref(_, target) => *target,
-        _ => held,
-    };
-    let fields = match cx.kind(held) {
-        TyKind::Object { fields, .. } => fields,
-        other => panic!("a field is read of an object, not {other:?}"),
-    };
-    fields
-        .iter()
-        .find(|(name, _)| *name == field)
-        .map(|(_, ty)| *ty)
-        .unwrap_or_else(|| panic!("typeck admits a field read only of an object that has the field"))
-}
 
 /// The type of `container`'s elements as its sequence holds them: an
 /// array's or a slice's own, any other container's by the `as_slice(_mut)`
@@ -197,10 +209,7 @@ pub(super) fn element_of<S: Slot>(cx: &Lcx<'_, '_>, container: &Expr<S>, callee_
             }
         }
     };
-    match cx.kind(sequence) {
-        TyKind::Array(element, ..) | TyKind::Slice(element) => *element,
-        other => panic!("a sequence is an array or a slice, not {other:?}"),
-    }
+    element(cx.types(), sequence).unwrap_or_else(|| panic!("a sequence is an array or a slice, not {:?}", cx.kind(sequence)))
 }
 
 /// `value`, read out of a place, as the read's type `ty`: itself, or where
@@ -319,8 +328,7 @@ pub(super) fn lower_index<S: Slot>(
     let element = element_of(cx, object, callee_site);
     if !is_word(cx.types(), element) {
         let reference = element_ref(cx, object, callee_site, index, Mutability::Shared, element, span)?;
-        let place = Place { target: RefTarget::Through(reference), path: Vec::new(), ty: element };
-        let value = read(cx, Operand::Place(place), span)?;
+        let value = read(cx, Operand::Place(Place::through(cx, reference)), span)?;
         return Ok(read_as(cx, value, cx.ty(site), span));
     }
     let slice = slice_of(cx, object, callee_site, Mutability::Shared, element, span)?;
@@ -443,10 +451,9 @@ pub(super) fn view_array(cx: &mut Lcx<'_, '_>, array: ValueId, mutability: Mutab
 }
 
 /// `*r` read: a take of what `r` names (operators §6).
-pub(super) fn lower_deref<S: Slot>(cx: &mut Lcx<'_, '_>, site: AstId, reference: &Expr<S>, span: Span) -> Lowered<ValueId> {
+pub(super) fn lower_deref<S: Slot>(cx: &mut Lcx<'_, '_>, reference: &Expr<S>, span: Span) -> Lowered<ValueId> {
     let reference = lower_expr(cx, reference)?;
-    let place = Place { target: RefTarget::Through(reference), path: Vec::new(), ty: cx.ty(site) };
-    read(cx, Operand::Place(place), span)
+    read(cx, Operand::Place(Place::through(cx, reference)), span)
 }
 
 /// `place = value`: the value is evaluated first, as Rust does, and enters
@@ -465,19 +472,21 @@ pub(super) fn assign(cx: &mut Lcx<'_, '_>, place: Place, value: ValueId, span: S
 }
 
 fn store_target<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>) -> Lowered<Place> {
-    let ty = cx.ty(place.id());
     Ok(match place {
+        // A root's type is typeck's, as a binding's or a context's place
+        // holds it.
         AstPlace::Base(PlaceBase::Root { id, root, .. }) => match root {
             Root::Local(_) => match cx.typeck.names.get(id) {
-                Some(Name::Binding(binder)) => binding_place(cx, *binder, ty),
+                Some(Name::Binding(binder)) => binding_place(cx, *binder, cx.ty(place.id())),
                 other => panic!("a store's root names a binding in an admitted program, not {other:?}"),
             },
-            Root::Context(name) => context::context_place(QualifiedRef::root(*name), ty),
+            Root::Context(name) => context::context_place(QualifiedRef::root(*name), cx.ty(place.id())),
             Root::ExternParam(_) => panic!("an input is never assigned (programs §4); typeck refuses the store"),
         },
         AstPlace::Base(PlaceBase::Element { callee_id, container, index, span, .. }) => {
-            let reference = element_ref(cx, container.expr(), *callee_id, index, Mutability::Mut, ty, *span)?;
-            Place { target: RefTarget::Through(reference), path: Vec::new(), ty }
+            let element = element_of(cx, container.expr(), *callee_id);
+            let reference = element_ref(cx, container.expr(), *callee_id, index, Mutability::Mut, element, *span)?;
+            Place::through(cx, reference)
         }
         AstPlace::Field { object, field, span, .. } => {
             let object = store_target(cx, object)?;
@@ -490,9 +499,9 @@ fn store_target<S: Slot>(cx: &mut Lcx<'_, '_>, place: &AstPlace<S>) -> Lowered<P
             match is_ref(cx, object.ty) {
                 true => {
                     let reference = read(cx, Operand::Place(object), *span)?;
-                    Place { target: RefTarget::Through(reference), path: vec![PathSeg::Field(*field)], ty }
+                    Place::through(cx, reference).with(cx, PathSeg::Field(*field))
                 }
-                false => object.with(PathSeg::Field(*field), ty),
+                false => object.with(cx, PathSeg::Field(*field)),
             }
         }
     })
@@ -503,10 +512,6 @@ pub(super) fn lower_deref_store<S: Slot>(cx: &mut Lcx<'_, '_>, target: &Expr<S>,
     let reference = lower_expr(cx, target)?;
     let stored = lower_expr(cx, value)?;
     let stored = convert(cx, value.id(), stored, value.span())?;
-    let TyKind::Ref(_, referent) = cx.kind(cx.value_ty(reference)) else {
-        panic!("typeck admits `*r = v` only where `r` is a `&mut`")
-    };
-    let ty = *referent;
-    assign(cx, Place { target: RefTarget::Through(reference), path: Vec::new(), ty }, stored, span);
+    assign(cx, Place::through(cx, reference), stored, span);
     Ok(())
 }

@@ -18,7 +18,9 @@ use acvus_utils::Astr;
 use super::call::coerce;
 use super::control::diamond;
 use super::ctxt::{Declared, Entry, Lcx, Lowered};
+use super::place::extract;
 use crate::ir::cfg::Op;
+use crate::ir::parts::step;
 use crate::ir::{Intrinsic, PathSeg, RefTarget, ValueId, fn_effect, known_len};
 use crate::ty::structural::{PartKey, Structure, Variant, structure};
 use crate::ty::{Calls, Concrete, Effect, EffectTerm, FlowTerm, Flows, Holds, LenTerm, Mutability, Ty, TyKind};
@@ -80,14 +82,14 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> Lowered<ValueId> {
     let access = Access { value, through, span };
     let types = cx.types();
     match (structure(types, from), structure(types, target)) {
-        (Some(Structure::Tuple(items, _)), Some(Structure::Tuple(..))) => {
-            let items = items.to_vec();
-            let elements = items
-                .into_iter()
-                .enumerate()
-                .map(|(at, item)| {
-                    let part = access.part(cx, PathSeg::Index(at), item)?;
-                    coerced.part(cx, PartKey::Index(at), part)
+        (Some(of_from @ Structure::Tuple(..)), Some(Structure::Tuple(..))) => {
+            let fields = of_from.fields().expect("a tuple is a product");
+            let elements = fields
+                .iter()
+                .map(|field| {
+                    let seg = step(field.key).expect("a field has one step");
+                    let part = access.part(cx, seg, field.ty)?;
+                    coerced.part(cx, field.key, part)
                 })
                 .collect::<Lowered<_>>()?;
             Ok(cx.made(Op::MakeTuple { elements }, made, span))
@@ -187,16 +189,12 @@ struct Access {
 
 impl Access {
     /// The part at `seg`, of type `ty` in the value's type, taken out of the
-    /// value or lent through the reference to it (`Lcx::emit`).
+    /// value (`place::extract`) or lent through the reference to it
+    /// (`Lcx::emit`).
     fn part(&self, cx: &mut Lcx<'_, '_>, seg: PathSeg, ty: Ty) -> Lowered<ValueId> {
         let span = self.span;
         let Some(through) = self.through else {
-            let op = match seg {
-                PathSeg::Index(index) => Op::TupleIndex { tuple: self.value, index },
-                PathSeg::Field(field) => Op::FieldGet { object: self.value, field, rest: Vec::new() },
-                PathSeg::Payload(variant) => Op::UnwrapVariant { src: self.value, variant },
-            };
-            return cx.emit(op, ty, span);
+            return extract(cx, self.value, seg, span);
         };
         let target = RefTarget::Through(self.value);
         let path = vec![seg];
@@ -308,8 +306,9 @@ fn same_variant(cx: &mut Lcx<'_, '_>, coerced: &Coerced<'_>, access: &Access, va
         let payload = variant
             .payload
             .map(|ty| {
-                let part = access.part(cx, PathSeg::Payload(variant.key), ty)?;
-                coerced.part(cx, PartKey::Payload(variant.key), part)
+                let key = PartKey::Payload(variant.key);
+                let part = access.part(cx, step(key).expect("a payload has one step"), ty)?;
+                coerced.part(cx, key, part)
             })
             .transpose()?;
         Ok(cx.made(Op::MakeVariant { variant: variant.key, payload }, made, span))

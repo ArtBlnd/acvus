@@ -98,10 +98,6 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
     let passed = |value: ValueId| Operand { by_value: true, ..taken(value, by_value(types, ty(value))) };
     let read = |value: ValueId| taken(value, Taken::Read);
     let result_copies = || inst.result().is_some_and(copying);
-    let extracted = |src: ValueId| match copying(src) || result_copies() {
-        true => read(src),
-        false => taken(src, Taken::PartMoved),
-    };
     let place = |target: &RefTarget, taken: Taken| match target {
         RefTarget::Var(named) | RefTarget::Param(named) => {
             Some(Operand { value: *named, taken, names_place: true, lent: None, by_value: false })
@@ -136,14 +132,17 @@ pub fn inst_takings(body: &Body, types: &Types<Concrete>, inst: &Inst) -> SmallV
         Op::AsSlice { container: lent, .. } | Op::ArrayView { src: lent, .. } => operands.push(read(*lent)),
         Op::Index { slice, index, .. } => operands.extend([read(*slice), read(*index)]),
         Op::IndexSet { slice, index, value, .. } => operands.extend([read(*slice), read(*index), passed(*value)]),
-        Op::FieldGet { object: src, .. }
-        | Op::ObjectGet { object: src, .. }
-        | Op::TupleIndex { tuple: src, .. }
-        | Op::ArrayIndex { array: src, .. } => operands.push(extracted(*src)),
-        Op::UnwrapVariant { src, .. } => operands.push(match copying(*src) || result_copies() {
-            true => read(*src),
-            false => taken(*src, Taken::Moved),
-        }),
+        // An extraction reads its source where what it takes copies, and
+        // otherwise moves the region it empties (`owned_region`): a part,
+        // or through a payload the source whole.
+        Op::FieldGet { .. } | Op::TupleIndex { .. } | Op::ArrayIndex { .. } | Op::UnwrapVariant { .. } => {
+            let (src, path) = inst.op().extracted().expect("an extraction names the part it takes");
+            operands.push(match (copying(src) || result_copies(), parts::owned_region(&path).is_empty()) {
+                (true, _) => read(src),
+                (false, true) => taken(src, Taken::Moved),
+                (false, false) => taken(src, Taken::PartMoved),
+            });
+        }
         Op::FieldSet { object, value, .. } => {
             let object = if copying(*object) { read(*object) } else { taken(*object, Taken::PartMoved) };
             operands.extend([object, passed(*value)]);
