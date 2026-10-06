@@ -801,18 +801,18 @@ struct Part {
     ty: Ty,
 }
 
-/// Where a path leads within a type: every part it may name, and whether it
-/// names exactly one part exactly, which an array index or an ambiguous
-/// payload does not, since the path does not tell which element or variant.
+/// Where a path leads within a type: the part it names, and whether it
+/// names that part exactly, which an array index does not, since the path
+/// does not tell which element.
 struct Reached {
-    parts: Vec<Part>,
+    part: Part,
     exact: bool,
 }
 
-/// The positions of a storage's content a path names: the range of each
-/// part it may name, and whether it names exactly one part exactly.
+/// The positions of a storage's content a path names, and whether it names
+/// them exactly.
 struct Region {
-    ranges: Vec<Range<usize>>,
+    range: Range<usize>,
     exact: bool,
 }
 
@@ -1126,52 +1126,44 @@ impl Forward<'_> {
     /// place it was made on, and a path extended from it need not agree
     /// with any type. Cost: O(the path · the parts it passes).
     fn reach(&self, root: Ty, path: &[PathSeg]) -> Option<Reached> {
-        let mut parts = vec![Part { range: 0..self.width(root), ty: root }];
+        let mut part = Part { range: 0..self.width(root), ty: root };
         let mut exact = true;
         for seg in path {
-            let mut next = Vec::new();
-            for part in parts {
-                let start = part.range.start;
-                let laid = |items: &mut dyn Iterator<Item = Ty>| {
-                    let mut at = start;
-                    items
-                        .map(|ty| {
-                            let width = self.width(ty);
-                            let item = Part { range: at..at + width, ty };
-                            at += width;
-                            item
-                        })
-                        .collect::<Vec<Part>>()
-                };
-                match (seg, self.types.kind(part.ty)) {
-                    (PathSeg::Field(field), TyKind::Object { fields: declared, .. }) => {
-                        let fields = laid(&mut declared.iter().map(|(_, ty)| *ty));
-                        let at = declared.iter().position(|(name, _)| name == field)?;
-                        next.extend(fields.into_iter().nth(at));
-                    }
-                    (PathSeg::Index(index), TyKind::Tuple(items, _)) => {
-                        let item = laid(&mut items.iter().copied()).into_iter().nth(*index)?;
-                        next.push(item);
-                    }
-                    (PathSeg::Index(_), TyKind::Array(element, _, _)) => {
-                        exact = false;
-                        next.push(Part { range: part.range.clone(), ty: *element });
-                    }
-                    // A variant type lays its variants' payloads one after
-                    // another, as its positions count them: the payload of
-                    // `variant` is the one at its place among them.
-                    (PathSeg::Payload(variant), _) => {
-                        let variants = structure(self.types, part.ty).and_then(|structure| structure.variants())?;
-                        let carrying: Vec<&Variant<Concrete>> = variants.iter().filter(|held| held.payload.is_some()).collect();
-                        let at = carrying.iter().position(|held| held.key == *variant)?;
-                        next.extend(laid(&mut carrying.iter().filter_map(|held| held.payload)).into_iter().nth(at));
-                    }
-                    _ => return None,
+            let start = part.range.start;
+            let laid = |items: &mut dyn Iterator<Item = Ty>| {
+                let mut at = start;
+                items
+                    .map(|ty| {
+                        let width = self.width(ty);
+                        let item = Part { range: at..at + width, ty };
+                        at += width;
+                        item
+                    })
+                    .collect::<Vec<Part>>()
+            };
+            part = match (seg, self.types.kind(part.ty)) {
+                (PathSeg::Field(field), TyKind::Object { fields: declared, .. }) => {
+                    let at = declared.iter().position(|(name, _)| name == field)?;
+                    laid(&mut declared.iter().map(|(_, ty)| *ty)).into_iter().nth(at)?
                 }
-            }
-            parts = next;
+                (PathSeg::Index(index), TyKind::Tuple(items, _)) => laid(&mut items.iter().copied()).into_iter().nth(*index)?,
+                (PathSeg::Index(_), TyKind::Array(element, _, _)) => {
+                    exact = false;
+                    Part { range: part.range.clone(), ty: *element }
+                }
+                // A variant type lays its variants' payloads one after
+                // another, as its positions count them: the payload of
+                // `variant` is the one at its place among them.
+                (PathSeg::Payload(variant), _) => {
+                    let variants = structure(self.types, part.ty).and_then(|structure| structure.variants())?;
+                    let carrying: Vec<&Variant<Concrete>> = variants.iter().filter(|held| held.payload.is_some()).collect();
+                    let at = carrying.iter().position(|held| held.key == *variant)?;
+                    laid(&mut carrying.iter().filter_map(|held| held.payload)).into_iter().nth(at)?
+                }
+                _ => return None,
+            };
         }
-        Some(Reached { parts, exact })
+        Some(Reached { part, exact })
     }
 
     /// Where `path` leads within a value of `root`, a part of which the body
@@ -1183,42 +1175,43 @@ impl Forward<'_> {
         self.reach(root, path).unwrap_or_else(|| panic!("{path:?} steps into {:?}; a part read agrees with its type", self.types.kind(root)))
     }
 
-    /// The parts of `reached` of type `ty`.
-    fn parts_of(&self, reached: &Reached, ty: Ty) -> Vec<Range<usize>> {
-        let ranges: Vec<Range<usize>> =
-            reached.parts.iter().filter(|part| part.ty == ty).map(|part| part.range.clone()).collect();
-        assert!(!ranges.is_empty(), "a value's path reaches its part's type, {:?}", self.types.kind(ty));
-        ranges
+    /// The positions of the part `reached` names, which is of type `ty`.
+    ///
+    /// # Panics
+    /// The part is of another type: a value's path reaches a part of the
+    /// type its read or its write takes.
+    fn range_of(&self, reached: &Reached, ty: Ty) -> Range<usize> {
+        assert!(reached.part.ty == ty, "a value's path reaches its part's type, {:?}", self.types.kind(ty));
+        reached.part.range.clone()
     }
 
-    /// The parts of `storage`'s content, `width` positions long, that
+    /// The positions of `storage`'s content, `width` positions long, that
     /// `path` names; `None` where the content's layout does not locate
     /// them. An outside storage's content is its reference's target, whose
     /// type the storage does not keep, so only its whole is located.
     fn region(&self, storage: Storage, path: &[PathSeg], width: usize) -> Option<Region> {
         match storage {
             Storage::Slot(value) | Storage::Param(value) => {
-                let Reached { parts, exact } = self.reach(self.body.ty_of(value), path)?;
-                Some(Region { ranges: parts.into_iter().map(|part| part.range).collect(), exact })
+                let Reached { part, exact } = self.reach(self.body.ty_of(value), path)?;
+                Some(Region { range: part.range, exact })
             }
             Storage::Context(context) => {
-                let Reached { parts, exact } = self.reach(self.body.context_ty(context), path)?;
-                Some(Region { ranges: parts.into_iter().map(|part| part.range).collect(), exact })
+                let Reached { part, exact } = self.reach(self.body.context_ty(context), path)?;
+                Some(Region { range: part.range, exact })
             }
-            Storage::Outside { .. } if path.is_empty() => Some(Region { ranges: vec![0..width], exact: true }),
+            Storage::Outside { .. } if path.is_empty() => Some(Region { range: 0..width, exact: true }),
             Storage::Outside { .. } => None,
         }
     }
 
-    /// The ranges of a value `width` positions long, of type `ty` where it
-    /// is known, that the part `supplies` of it lies at; `None` where the
+    /// The positions of a value `width` positions long, of type `ty` where
+    /// it is known, that the part `supplies` of it lies at; `None` where the
     /// type does not locate it.
-    fn supplied(&self, ty: Option<Ty>, width: usize, supplies: &[PathSeg]) -> Option<Vec<Range<usize>>> {
+    fn supplied(&self, ty: Option<Ty>, width: usize, supplies: &[PathSeg]) -> Option<Range<usize>> {
         if supplies.is_empty() {
-            return Some(vec![0..width]);
+            return Some(0..width);
         }
-        let reached = self.reach(ty?, supplies)?;
-        Some(reached.parts.into_iter().map(|part| part.range).collect())
+        Some(self.reach(ty?, supplies)?.part.range)
     }
 
     /// What a reference names at its own position.
@@ -1246,9 +1239,9 @@ impl Forward<'_> {
 
     /// `path` in a value of `ty`, every step into a sequence's elements
     /// written `ELEMENT`, so that a place names a sequence's one element
-    /// part whatever index reached it. Past a step into a part the type does
-    /// not have, which a path a loan keeps need not agree with (`reach`),
-    /// no step is known to be into a sequence.
+    /// part whatever index reached it. A loan's path need not agree with the
+    /// type it is read in (`reach`); after a step into a part the type does
+    /// not have, no later step is taken to be into a sequence.
     fn canonical(&self, ty: Ty, path: &[PathSeg]) -> Path {
         let mut at = Some(ty);
         let mut canonical = Vec::with_capacity(path.len());
@@ -1309,21 +1302,16 @@ impl Forward<'_> {
         let mut out = empty(width);
         for located in place {
             let content = self.content(state, located.storage);
-            let into = self.supplied(ty, width, &located.supplies).unwrap_or_else(|| vec![0..width]);
-            let region = self.region(located.storage, &located.path, content.len());
-            for into in into {
-                match &region {
-                    Some(region) => {
-                        for range in &region.ranges {
-                            let held = &content[range.clone()];
-                            match located.exact {
-                                true => join_aligned_or_spread(&mut out[into.clone()], held),
-                                false => spread(&mut out[into.clone()], &fold(held)),
-                            }
-                        }
+            let into = self.supplied(ty, width, &located.supplies).unwrap_or(0..width);
+            match self.region(located.storage, &located.path, content.len()) {
+                Some(region) => {
+                    let held = &content[region.range];
+                    match located.exact {
+                        true => join_aligned_or_spread(&mut out[into], held),
+                        false => spread(&mut out[into], &fold(held)),
                     }
-                    None => spread(&mut out[into.clone()], &fold(content)),
                 }
+                None => spread(&mut out[into], &fold(content)),
             }
         }
         out
@@ -1340,11 +1328,10 @@ impl Forward<'_> {
             let width = self.content(state, located.storage).len();
             if let Some(region) = self.region(located.storage, &located.path, width)
                 && region.exact
-                && let [range] = &region.ranges[..]
-                && range.len() == value.len()
+                && region.range.len() == value.len()
             {
                 let content = state.storages.get_mut(&located.storage).expect("a written storage is present");
-                content[range.clone()].clone_from_slice(value);
+                content[region.range].clone_from_slice(value);
                 return;
             }
         }
@@ -1359,22 +1346,17 @@ impl Forward<'_> {
     fn join_into(&self, state: &mut State, place: &[Located], ty: Option<Ty>, value: &[LoanSet]) {
         for located in place {
             let supplied: Vec<LoanSet> = match self.supplied(ty, value.len(), &located.supplies) {
-                Some(ranges) if ranges.len() == 1 => value[ranges[0].clone()].to_vec(),
-                Some(ranges) => vec![ranges.into_iter().flat_map(|range| fold(&value[range])).collect()],
+                Some(range) => value[range].to_vec(),
                 None => vec![fold(value)],
             };
             let width = self.content(state, located.storage).len();
             let region = self.region(located.storage, &located.path, width);
             let content = state.storages.get_mut(&located.storage).expect("a written storage is present");
             match region {
-                Some(region) => {
-                    for range in region.ranges {
-                        match located.exact {
-                            true => join_aligned_or_spread(&mut content[range], &supplied),
-                            false => spread(&mut content[range], &fold(&supplied)),
-                        }
-                    }
-                }
+                Some(region) => match located.exact {
+                    true => join_aligned_or_spread(&mut content[region.range], &supplied),
+                    false => spread(&mut content[region.range], &fold(&supplied)),
+                },
                 None => spread(content, &fold(&supplied)),
             }
         }
@@ -1579,10 +1561,8 @@ impl Forward<'_> {
                 let (object, path) = inst.op().replaced().expect("a `FieldSet` names the part it replaces");
                 let mut positions = self.value(state, object);
                 let reached = self.reach_value(self.body.ty_of(object), &path);
-                let [range] = &self.parts_of(&reached, self.body.ty_of(*value))[..] else {
-                    panic!("a field path names one field")
-                };
-                positions[range.clone()].clone_from_slice(&self.value(state, *value));
+                let range = self.range_of(&reached, self.body.ty_of(*value));
+                positions[range].clone_from_slice(&self.value(state, *value));
                 positions
             }
             Op::ArrayPush { array, value } => {
@@ -1619,9 +1599,8 @@ impl Forward<'_> {
                 let mut positions = empty(self.width(ty()));
                 if let Some(payload) = payload {
                     let held = self.value(state, *payload);
-                    for part in self.reach_value(ty(), &[PathSeg::Payload(*variant)]).parts {
-                        join_positions(&mut positions[part.range], &held);
-                    }
+                    let range = self.reach_value(ty(), &[PathSeg::Payload(*variant)]).part.range;
+                    join_positions(&mut positions[range], &held);
                 }
                 positions
             }
@@ -1708,8 +1687,8 @@ impl Forward<'_> {
         };
         let path = &self.canonical(storage_ty, path);
         let place = [Located::by_name(storage, path)];
-        let named = self.reach_value(storage_ty, path);
-        let reference = named.parts.iter().find(|part| matches!(self.types.kind(part.ty), TyKind::Ref(..)));
+        let named = self.reach_value(storage_ty, path).part;
+        let reference = Some(&named).filter(|part| matches!(self.types.kind(part.ty), TyKind::Ref(..)));
         match reference {
             Some(reference) => {
                 let (RefTarget::Var(named) | RefTarget::Param(named)) = target else {
@@ -1763,16 +1742,11 @@ impl Forward<'_> {
         std::iter::once(own).chain(targets).collect()
     }
 
-    /// The part of `value` at `path` of type `ty`, joined over every part
-    /// the path may name.
+    /// The part of `value` at `path`, of type `ty`.
     fn project(&self, state: &State, value: ValueId, path: &[PathSeg], ty: Ty) -> Vec<LoanSet> {
         let positions = self.value(state, value);
         let reached = self.reach_value(self.body.ty_of(value), path);
-        let mut out = empty(self.width(ty));
-        for range in self.parts_of(&reached, ty) {
-            join_positions(&mut out, &positions[range]);
-        }
-        out
+        positions[self.range_of(&reached, ty)].to_vec()
     }
 
     /// Each argument of a call as the call takes it: deepened through the
