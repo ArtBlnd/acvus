@@ -220,6 +220,34 @@ impl Fixture {
         })
     }
 
+    /// An extern `Small` of no parameter, `small()` making one, and a cast
+    /// from it to `to` performed by `widen`, of `effect`: a value that
+    /// climbs the cast tree (types §3), which only an extern-defined type
+    /// does. Gives `Small`'s name, its type and `widen`.
+    fn small_widening_to(&mut self, to: TyId<Poly>, effect: EffectTerm<Poly>) -> (QualifiedRef, TyId<Poly>, QualifiedRef) {
+        let small_id = QualifiedRef::root(self.name("Small"));
+        self.raw.user_types.push(UserTypeDecl {
+            id: small_id,
+            type_params: Box::new([]),
+            carries_effect: false,
+            carries_identity: false,
+            lifetimes: 0,
+        });
+        let small = self.ty(TyKind::UserDefined {
+            id: small_id,
+            type_args: Box::new([]),
+            effect: None,
+            identity: None,
+            marked: MarkTerm::Known(Mark::Unmarked),
+        });
+        let makes = self.pure(&[], small);
+        self.declare("small", makes, &[]);
+        let widening = self.function(&[small], to, effect);
+        let widen = self.declare("widen", widening, &[]);
+        self.raw.casts.push(CastRule { from: small, to, via: widen });
+        (small_id, small, widen)
+    }
+
     /// A lang item's concrete impls; its generic function is the
     /// compiler's (operators §2).
     fn lang_item(&mut self, item: QualifiedRef, impls: &[TyId<Poly>]) {
@@ -2115,17 +2143,15 @@ fn an_enum_widens_to_the_variants_a_declarations_parameter_names() {
 fn a_tuple_part_casts_at_a_declarations_parameter_but_not_where_two_meet_in_a_body() {
     let widening = || {
         let mut fx = Fixture::new();
-        let (u8_ty, i64_ty, bool_ty, unit) = (fx.int(IntTy::U8), fx.int(IntTy::I64), fx.ty(TyKind::Bool), fx.ty(TyKind::Unit));
-        let widening = fx.pure(&[u8_ty], i64_ty);
-        let widen = fx.declare("widen", widening, &[]);
-        fx.raw.casts.push(CastRule { from: u8_ty, to: i64_ty, via: widen });
+        let (i64_ty, bool_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool), fx.ty(TyKind::Unit));
+        let (_, _, widen) = fx.small_widening_to(i64_ty, EffectTerm::Known(crate::ty::Effect::pure()));
         let pair = fx.ty(TyKind::Tuple(Box::new([i64_ty, bool_ty]), ()));
         let takes = fx.pure(&[pair], unit);
         fx.declare("f", takes, &[]);
         (fx, widen)
     };
     let (fx, widen) = widening();
-    let (checked, script) = fx.script("f((1u8, true))");
+    let (checked, script) = fx.script("f((small(), true))");
     checked.admitted();
     let Some(Expr::FuncCall { args: acvus_ast::Args::Positional(args), .. }) = script.tail.as_deref() else {
         panic!("not a call");
@@ -2140,7 +2166,7 @@ fn a_tuple_part_casts_at_a_declarations_parameter_but_not_where_two_meet_in_a_bo
     assert_eq!(steps[0].via.declaration, widen);
 
     let (fx, _) = widening();
-    let (checked, _) = fx.script("if true { (1u8, true) } else { (2i64, false) }");
+    let (checked, _) = fx.script("if true { (small(), true) } else { (2i64, false) }");
     assert!(matches!(checked.refusals()[..], [RefusalKind::Mismatch(_)]), "{:?}", checked.refusals());
 }
 
@@ -2200,27 +2226,22 @@ fn a_store_through_a_reference_known_later_to_be_shared_is_refused() {
 
 /// types §6: a decision reads a term only once no pending decision may
 /// change it, and a term linked to a pending slot is that slot. `==` makes
-/// `y` one with the `if`'s slot, which `g(w)` raises from `u8` to `i64`
-/// once `w` is known, so `f(y)` reaches `f` at `i64`.
+/// `y` one with the `if`'s slot, which `g(w)` raises from `Small` to
+/// `i64` once `w` is known, so `f(y)` reaches `f` at `i64`.
 #[test]
 fn a_term_linked_to_a_pending_slot_waits_for_it() {
     let mut fx = Fixture::new();
-    let (u8_ty, i64_ty, bool_ty) = (fx.int(IntTy::U8), fx.int(IntTy::I64), fx.ty(TyKind::Bool));
-    let widening = fx.pure(&[u8_ty], i64_ty);
-    let widen = fx.declare("widen", widening, &[]);
-    fx.raw.casts.push(CastRule {
-        from: u8_ty,
-        to: i64_ty,
-        via: widen,
-    });
+    let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+    let (_, small, _) = fx.small_widening_to(i64_ty, EffectTerm::Known(crate::ty::Effect::pure()));
+    let widening = fx.pure(&[small], i64_ty);
     let of_bool = fx.pure(&[bool_ty], i64_ty);
     fx.overload("a", "g", widening);
     fx.overload("b", "g", of_bool);
-    let (takes_u8, takes_i64) = (fx.pure(&[u8_ty], bool_ty), fx.pure(&[i64_ty], bool_ty));
-    fx.overload("a", "f", takes_u8);
+    let (takes_small, takes_i64) = (fx.pure(&[small], bool_ty), fx.pure(&[i64_ty], bool_ty));
+    fx.overload("a", "f", takes_small);
     let wide = fx.overload("b", "f", takes_i64);
     let eq = fx.raw.core.eq;
-    let equalities: Vec<TyId<Poly>> = [u8_ty, i64_ty]
+    let equalities: Vec<TyId<Poly>> = [small, i64_ty]
         .into_iter()
         .map(|compared| {
             let shared = fx.reference(Mutability::Shared, compared);
@@ -2228,7 +2249,7 @@ fn a_term_linked_to_a_pending_slot_waits_for_it() {
         })
         .collect();
     fx.lang_item(eq, &equalities);
-    let (checked, script) = fx.script("let y; let w; let z = y == (if true { 1u8 } else { g(w) }); w = 2u8; f(y)");
+    let (checked, script) = fx.script("let y; let w; let z = y == (if true { small() } else { g(w) }); w = small(); f(y)");
     checked.admitted();
     let site = script.tail.as_ref().unwrap().id();
     assert_eq!(checked.typeck.reached[&site].declaration, wide);
@@ -2277,19 +2298,13 @@ fn bitwise_and_and_shifts_are_the_languages_own_on_the_integers() {
 
 /// types §3, §7: a `return` and the tail each enter the run's result at
 /// their own site. The result is the two's join up the cast tree, and the
-/// `u8` returned is converted where it is returned.
+/// `Small` returned is converted where it is returned.
 #[test]
 fn a_return_and_the_tail_each_enter_the_runs_result() {
     let mut fx = Fixture::new();
-    let (u8_ty, i64_ty) = (fx.int(IntTy::U8), fx.int(IntTy::I64));
-    let widening = fx.pure(&[u8_ty], i64_ty);
-    let widen = fx.declare("widen", widening, &[]);
-    fx.raw.casts.push(CastRule {
-        from: u8_ty,
-        to: i64_ty,
-        via: widen,
-    });
-    let (checked, script) = fx.script("if true { return 1u8; }; 2i64");
+    let i64_ty = fx.int(IntTy::I64);
+    let (small_id, _, widen) = fx.small_widening_to(i64_ty, EffectTerm::Known(crate::ty::Effect::pure()));
+    let (checked, script) = fx.script("if true { return small(); }; 2i64");
     checked.admitted();
     let Stmt::Expr(Expr::If { then_body, .. }) = &script.stmts[0] else {
         panic!("not an if");
@@ -2304,7 +2319,7 @@ fn a_return_and_the_tail_each_enter_the_runs_result() {
     let TyKind::Fn { params, ret, .. } = checked.kind(steps[0].via_ty) else {
         panic!("a step's `via` is a function");
     };
-    assert!(is_int(&checked, params[0], IntTy::U8));
+    assert!(is_named(&checked, params[0], small_id));
     assert!(is_int(&checked, *ret, IntTy::I64));
     let tail_site = script.tail.as_ref().unwrap().id();
     assert!(!checked.typeck.coercions.contains_key(&tail_site));
@@ -2551,15 +2566,9 @@ fn a_coercions_effect_joins_its_bodys() {
     let idempotent = || EffectTerm::Known(Effect::new(Reissue::Idempotent, true, Contexts::new(), Contexts::new(), SplitCost::Unavailable, false));
 
     let mut fx = Fixture::new();
-    let (u8_ty, i64_ty) = (fx.int(IntTy::U8), fx.int(IntTy::I64));
-    let widening = fx.function(&[u8_ty], i64_ty, idempotent());
-    let widen = fx.declare("widen", widening, &[]);
-    fx.raw.casts.push(CastRule {
-        from: u8_ty,
-        to: i64_ty,
-        via: widen,
-    });
-    let (checked, _) = fx.script("if true { return 1u8; }; 2i64");
+    let i64_ty = fx.int(IntTy::I64);
+    fx.small_widening_to(i64_ty, idempotent());
+    let (checked, _) = fx.script("if true { return small(); }; 2i64");
     checked.admitted();
     assert_eq!(checked.typeck.body_effect.reissue(), Reissue::Idempotent);
 
@@ -2890,17 +2899,15 @@ fn generic_with_impl(fx: &mut Fixture, name: &str, generic: TyId<Poly>, at: TyId
 fn a_meeting_is_decided_by_the_value_written_elsewhere_in_either_order() {
     let tuple_fixture = || {
         let mut fx = Fixture::new();
-        let (u8_ty, i64_ty, bool_ty) = (fx.int(IntTy::U8), fx.int(IntTy::I64), fx.ty(TyKind::Bool));
-        let widening = fx.pure(&[u8_ty], i64_ty);
-        let widen = fx.declare("widen", widening, &[]);
-        fx.raw.casts.push(CastRule { from: u8_ty, to: i64_ty, via: widen });
+        let (i64_ty, bool_ty) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool));
+        fx.small_widening_to(i64_ty, EffectTerm::Known(crate::ty::Effect::pure()));
         let pair = fx.ty(TyKind::Tuple(Box::new([i64_ty, bool_ty]), ()));
         let makes = fx.pure(&[], pair);
         fx.declare("f", makes, &[]);
         fx.input("c", bool_ty);
         fx
     };
-    for source in ["if $c { f() } else { (1u8, true) }", "if $c { (1u8, true) } else { f() }"] {
+    for source in ["if $c { f() } else { (small(), true) }", "if $c { (small(), true) } else { f() }"] {
         let (checked, _) = tuple_fixture().script(source);
         checked.admitted();
     }
@@ -3093,8 +3100,8 @@ fn a_law_is_stated_by_its_declared_fact() {
 /// parameter that is a reference to a declaration's structure is coerced
 /// through its target, each part as a reference into the original
 /// storage: an object narrows, but a part is not cast, since a reference
-/// to a `u8` is no reference to an `i64`; through a `&mut`, an enum does
-/// not widen.
+/// to a `Small` is no reference to an `i64`; through a `&mut`, an enum
+/// does not widen.
 #[test]
 fn a_reference_to_a_structure_is_coerced_through_its_target() {
     let mut fx = Fixture::new();
@@ -3117,15 +3124,13 @@ fn a_reference_to_a_structure_is_coerced_through_its_target() {
     assert!(matches!(parts[..], [(PartKey::Field(_), None)]), "{parts:?}");
 
     let mut fx = Fixture::new();
-    let (u8_ty, i64_ty, bool_ty, unit) = (fx.int(IntTy::U8), fx.int(IntTy::I64), fx.ty(TyKind::Bool), fx.ty(TyKind::Unit));
-    let widening = fx.pure(&[u8_ty], i64_ty);
-    let widen = fx.declare("widen", widening, &[]);
-    fx.raw.casts.push(CastRule { from: u8_ty, to: i64_ty, via: widen });
+    let (i64_ty, bool_ty, unit) = (fx.int(IntTy::I64), fx.ty(TyKind::Bool), fx.ty(TyKind::Unit));
+    fx.small_widening_to(i64_ty, EffectTerm::Known(crate::ty::Effect::pure()));
     let pair = fx.ty(TyKind::Tuple(Box::new([i64_ty, bool_ty]), ()));
     let shared_pair = fx.reference(Mutability::Shared, pair);
     let takes = fx.pure(&[shared_pair], unit);
     fx.declare("f", takes, &[]);
-    let (checked, _) = fx.script("f(&(1u8, true))");
+    let (checked, _) = fx.script("f(&(small(), true))");
     assert_eq!(checked.refusals(), vec![&RefusalKind::NoConversion]);
 
     for (mutability, source, admitted) in [

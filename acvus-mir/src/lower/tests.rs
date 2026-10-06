@@ -2113,13 +2113,25 @@ fn a_reference_coerced_through_its_target_gathers_references_to_its_parts() {
 #[test]
 fn an_array_coerced_is_mapped_element_by_element() {
     let mut fx = Fixture::new();
-    let (u8_ty, int) = (fx.ty(TyKind::Int(IntTy::U8)), fx.int());
-    let widening = fx.function(&[u8_ty], int, Effect::pure());
+    let small_id = QualifiedRef::root(fx.name("Small"));
+    fx.raw.user_types.push(UserTypeDecl {
+        id: small_id,
+        type_params: Box::new([]),
+        carries_effect: false,
+        carries_identity: false,
+        lifetimes: 0,
+    });
+    let unmarked = MarkTerm::Known(Mark::Unmarked);
+    let small = fx.ty(TyKind::UserDefined { id: small_id, type_args: Box::new([]), effect: None, identity: None, marked: unmarked });
+    let int = fx.int();
+    let makes = fx.function(&[], small, Effect::pure());
+    fx.declare("small", makes, 0);
+    let widening = fx.function(&[small], int, Effect::pure());
     let widen = fx.declare("widen", widening, 1);
-    fx.raw.casts.push(crate::decl::CastRule { from: u8_ty, to: int, via: widen });
+    fx.raw.casts.push(crate::decl::CastRule { from: small, to: int, via: widen });
     let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(2), ()));
     fx.context("v", array, false);
-    let lowered = fx.script("@v = [1u8, 2u8]; 0");
+    let lowered = fx.script("@v = [small(), small()]; 0");
     let body = lowered.entry();
     let ops = lowered.entry_ops();
     let mapped = |op: &Op| matches!(op, Op::Intrinsic { intrinsic: crate::ir::Intrinsic::ArrayMap, .. });

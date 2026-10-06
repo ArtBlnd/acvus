@@ -34,6 +34,12 @@ impl Fixture {
         self.kind(TyKind::Int(width))
     }
 
+    /// The extern type `name` of no parameter, as the fixtures declare it.
+    fn named(&mut self, name: &str) -> Term {
+        let id = QualifiedRef::root(self.name(name));
+        self.kind(TyKind::UserDefined { id, type_args: Box::new([]), effect: None, identity: None, marked: MarkTerm::Known(Mark::Unmarked) })
+    }
+
     fn object(&mut self, fields: &[(&str, Term)], label: Label) -> Term {
         let mut fields: Vec<(Astr, Term)> = fields.iter().map(|(name, ty)| (self.name(name), *ty)).collect();
         fields.sort_by_key(|(name, _)| *name);
@@ -832,8 +838,9 @@ fn a_head_with_a_step_up_is_closed_only_when_nothing_may_change_it() {
     let mut fx = Fixture::new();
     let (widen, v) = (QualifiedRef::root(fx.name("widen")), fx.name("v"));
     let mut types = Types::<Poly>::new();
-    let (i32_, i64_) = (types.intern(TyKind::Int(IntTy::I32)), types.intern(TyKind::Int(IntTy::I64)));
-    let signature = pure_fn(&mut types, vec![i32_], i64_);
+    let ([byte, _], user_types) = byte_and_short(&fx.names, &mut types);
+    let i64_ = types.intern(TyKind::Int(IntTy::I64));
+    let signature = pure_fn(&mut types, vec![byte], i64_);
     let scheme = Scheme {
         ty: signature,
         param_names: Box::new([v]),
@@ -846,20 +853,22 @@ fn a_head_with_a_step_up_is_closed_only_when_nothing_may_change_it() {
         specialized: Box::new([]),
     };
     let cast = CastRule {
-        from: i32_,
+        from: byte,
         to: i64_,
         via: widen,
     };
-    let decls = Declarations::verify(raw(&fx.names, types, vec![(widen, scheme)], vec![cast])).expect("verified");
+    let mut raw = raw(&fx.names, types, vec![(widen, scheme)], vec![cast]);
+    raw.user_types = user_types;
+    let decls = Declarations::verify(raw).expect("verified");
 
-    let int = fx.int(IntTy::I32);
-    let held = fx.held(int);
+    let byte = fx.named("Byte");
+    let held = fx.held(byte);
     assert_eq!(fx.infer.closed(decls.casts(), &Open(true), held), None);
     assert_eq!(
         fx.infer.closed(decls.casts(), &Open(false), held),
         Some(Closed {
-            head: Head::Base(crate::decl::Base::Int(IntTy::I32)),
-            term: int
+            head: Head::Base(crate::decl::Base::Named(QualifiedRef::root(fx.name("Byte")))),
+            term: byte
         })
     );
 }
@@ -1032,15 +1041,26 @@ fn with_casts_and_conversions(
     Declarations::verify(raw).expect("verified")
 }
 
-/// `i8 -> i64` and `i16 -> i64`.
+/// The extern types `Byte` and `Short`, each of no parameter, as
+/// declared types and as declarations of them.
+fn byte_and_short(names: &Interner, types: &mut Types<Poly>) -> ([crate::ty::TyId<Poly>; 2], Vec<crate::decl::UserTypeDecl>) {
+    let ids = ["Byte", "Short"].map(|name| QualifiedRef::root(names.intern(name)));
+    let declared = ids.map(|id| {
+        types.intern(TyKind::UserDefined { id, type_args: Box::new([]), effect: None, identity: None, marked: MarkTerm::Known(Mark::Unmarked) })
+    });
+    let decls = ids
+        .into_iter()
+        .map(|id| crate::decl::UserTypeDecl { id, type_params: Box::new([]), carries_effect: false, carries_identity: false, lifetimes: 0 })
+        .collect();
+    (declared, decls)
+}
+
+/// `Byte -> i64` and `Short -> i64`, `Byte` and `Short` extern types.
 fn widening(names: &Interner) -> Declarations {
     let mut types = Types::<Poly>::new();
-    let (i8_, i16_, i64_) = (
-        types.intern(TyKind::Int(IntTy::I8)),
-        types.intern(TyKind::Int(IntTy::I16)),
-        types.intern(TyKind::Int(IntTy::I64)),
-    );
-    with_casts(names, types, Vec::new(), &[("widen8", i8_, i64_), ("widen16", i16_, i64_)])
+    let ([byte, short], user_types) = byte_and_short(names, &mut types);
+    let i64_ = types.intern(TyKind::Int(IntTy::I64));
+    with_casts(names, types, user_types, &[("widen8", byte, i64_), ("widen16", short, i64_)])
 }
 
 impl Fixture {
@@ -1098,18 +1118,18 @@ fn a_value_of_the_slots_head_joins_into_it_as_one_type() {
 fn a_slot_folds_its_values_to_their_nearest_common_ancestor() {
     let mut fx = Fixture::new();
     let decls = widening(&fx.names);
-    let (i8_, i16_, i64_) = (fx.int(IntTy::I8), fx.int(IntTy::I16), fx.int(IntTy::I64));
-    for (first, second) in [(i8_, i16_), (i16_, i8_)] {
+    let (byte, short, i64_) = (fx.named("Byte"), fx.named("Short"), fx.int(IntTy::I64));
+    for (first, second) in [(byte, short), (short, byte)] {
         let slot = fx.held(first);
         let value = fx.held(second);
         assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
         assert_eq!(fx.infer.shallow(slot), i64_);
         assert_eq!(fx.infer.shallow(value), second, "the value keeps its type");
     }
-    let slot = fx.held(i8_);
-    let value = fx.held(i8_);
+    let slot = fx.held(byte);
+    let value = fx.held(byte);
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
-    assert_eq!(fx.infer.shallow(slot), i8_);
+    assert_eq!(fx.infer.shallow(slot), byte);
     let slot = fx.held(i64_);
     assert_eq!(fx.enter(&decls, value, slot), Ok(Entered::Folded));
     assert_eq!(fx.infer.shallow(slot), i64_);
@@ -1122,8 +1142,8 @@ fn a_slot_folds_its_values_to_their_nearest_common_ancestor() {
 fn a_value_and_a_slot_of_no_common_ancestor_do_not_meet() {
     let mut fx = Fixture::new();
     let decls = widening(&fx.names);
-    let (i8_, string) = (fx.int(IntTy::I8), fx.kind(TyKind::String));
-    let (value, slot) = (fx.held(string), fx.held(i8_));
+    let (byte, string) = (fx.named("Byte"), fx.kind(TyKind::String));
+    let (value, slot) = (fx.held(string), fx.held(byte));
     assert_eq!(
         fx.enter(&decls, value, slot),
         Err(Mismatch::Conversions {
@@ -1132,13 +1152,13 @@ fn a_value_and_a_slot_of_no_common_ancestor_do_not_meet() {
     );
 }
 
-/// `i8 -> i64` and `i16 -> i64` as casts, and as conversions `String ->
+/// `Byte -> i64` and `Short -> i64` as casts, and as conversions `String ->
 /// i64` through `parse`, `String -> i16` through `parse16`, and, where
 /// `twice`, `String -> i64` through `parse_again`.
 fn parsing(names: &Interner, twice: bool) -> Declarations {
     let mut types = Types::<Poly>::new();
-    let (i8_, i16_, i64_, string) = (
-        types.intern(TyKind::Int(IntTy::I8)),
+    let ([byte, short], user_types) = byte_and_short(names, &mut types);
+    let (i16_, i64_, string) = (
         types.intern(TyKind::Int(IntTy::I16)),
         types.intern(TyKind::Int(IntTy::I64)),
         types.intern(TyKind::String),
@@ -1150,8 +1170,8 @@ fn parsing(names: &Interner, twice: bool) -> Declarations {
     with_casts_and_conversions(
         names,
         types,
-        Vec::new(),
-        &[("widen8", i8_, i64_), ("widen16", i16_, i64_)],
+        user_types,
+        &[("widen8", byte, i64_), ("widen16", short, i64_)],
         &conversions,
     )
 }
@@ -1199,9 +1219,9 @@ fn several_conversions_to_the_slots_head_are_refused_by_name() {
 fn a_slot_no_variable_holds_does_not_move() {
     let mut fx = Fixture::new();
     let decls = widening(&fx.names);
-    let (i8_, i16_, i64_) = (fx.int(IntTy::I8), fx.int(IntTy::I16), fx.int(IntTy::I64));
-    let value = fx.held(i16_);
-    assert!(fx.enter(&decls, value, i8_).is_err());
+    let (byte, short, i64_) = (fx.named("Byte"), fx.named("Short"), fx.int(IntTy::I64));
+    let value = fx.held(short);
+    assert!(fx.enter(&decls, value, byte).is_err());
     assert_eq!(fx.enter(&decls, value, i64_), Ok(Entered::Folded));
 }
 

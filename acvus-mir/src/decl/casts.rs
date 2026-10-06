@@ -69,7 +69,9 @@ pub enum Base {
 
 /// The declared casts and the views (operators §5) as one tree: every head
 /// has at most one next step up, and no step returns to a head below it
-/// (types §3). Every order the tree gives is total. Two values of two
+/// (types §3). A step goes up only from an extern-defined type, or a
+/// reference to one, and keeps the value owned, `&` or `&mut` as it was
+/// (`decl::verify`). Every order the tree gives is total. Two values of two
 /// identities meet at their nearest common ancestor that carries no
 /// identity: an identity-carrying ancestor is passed, not joined at.
 #[derive(Debug, Default)]

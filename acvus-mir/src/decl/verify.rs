@@ -74,6 +74,14 @@ pub enum Refused {
     /// a cast is taken from the unmarked type, and a marked value taking it
     /// is raised (types §8).
     CastFromMarked { via: QualifiedRef },
+    /// A declared cast from a type no extern declaration defines, or from a
+    /// reference to one: only an extern-defined type steps up the tree
+    /// (types §3).
+    CastFromNonExtern { via: QualifiedRef },
+    /// A declared cast or a view whose ends are of two modes: a step takes
+    /// an owned value to an owned one, a `&` to a `&`, and a `&mut` to a
+    /// `&mut` (types §3).
+    CastChangesMode { via: QualifiedRef },
     /// A context's or an entry's declared type holds a type variable. A
     /// context is one value of one fixed type (context §2), and an entry is
     /// instantiated at the types the host declares for it (programs), so no
@@ -1015,6 +1023,20 @@ fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
     })
 }
 
+/// Whether a value of `head` is an extern-defined type or a reference to
+/// one, the only heads a step goes up from.
+fn is_extern_head(head: Head) -> bool {
+    matches!(head, Head::Base(Base::Named(_)) | Head::Ref(_, Base::Named(_)))
+}
+
+/// The mode a value of `head` is held in: owned, or lent at a mutability.
+fn mode_of(head: Head) -> Option<Mutability> {
+    match head {
+        Head::Base(_) => None,
+        Head::Ref(mutability, _) => Some(mutability),
+    }
+}
+
 /// A rule the tree is built from: a declared cast, or a view at the
 /// concrete impl it is (operators §5).
 struct TreeRule {
@@ -1040,7 +1062,10 @@ impl Step {
 }
 
 /// The declared casts and the views as one tree (types §3): every head
-/// steps up at most once, and no path of steps returns to its start.
+/// steps up at most once, and no path of steps returns to its start. A
+/// step goes up from an extern-defined type, or a reference to one, and
+/// keeps its mode. A view from any other container is no step: its impl is
+/// a function the program calls by name (operators §5).
 fn cast_tree(
     types: &Types<Poly>,
     casts: &[CastRule],
@@ -1062,6 +1087,12 @@ fn cast_tree(
     for rule in rules {
         match rule.and_then(|rule| Step::of(types, rule)) {
             Ok(step) if is_or_lends_marked(types, step.rule.rule.from) => refused.push(Refused::CastFromMarked { via: step.rule.rule.via }),
+            Ok(step) if !is_extern_head(step.from) => {
+                if step.rule.view_impl.is_none() {
+                    refused.push(Refused::CastFromNonExtern { via: step.rule.rule.via });
+                }
+            }
+            Ok(step) if mode_of(step.from) != mode_of(step.to) => refused.push(Refused::CastChangesMode { via: step.rule.rule.via }),
             Ok(step) => steps.push(step),
             Err(refusal) => refused.push(refusal),
         }
@@ -1151,8 +1182,9 @@ fn conversions_by_head(
 
 /// Each impl of `core::as_slice`, `core::as_slice_mut` and
 /// `core::as_str` as a cast from its parameter to its result, at that impl
-/// (operators §3, §5). A generic impl's container is a variable, which has no
-/// head. An impl refused as not of its generic function is left out.
+/// (operators §3, §5); `cast_tree` keeps only those from an extern-defined
+/// container. A generic impl's container is a variable, which has no head.
+/// An impl refused as not of its generic function is left out.
 ///
 /// # Panics
 /// A fitting impl is not a function of one parameter. A fitting impl is
@@ -1889,6 +1921,83 @@ mod tests {
         assert_eq!(refusals(fixture), vec![Refused::CastFromMarked { via }]);
     }
 
+    /// Only an extern-defined type, or a reference to one, steps up the
+    /// tree: a declared cast from a number, from a reference to a built-in
+    /// `String` or from an `Option` is refused.
+    #[test]
+    fn a_cast_from_a_type_no_declaration_defines_is_refused() {
+        let mut fixture = Fixture::new();
+        let a = fixture.name("m", "A");
+        let a_ty = fixture.user_type(a, 0);
+        let (i32_, i64_) = (fixture.ty(TyKind::Int(IntTy::I32)), fixture.ty(TyKind::Int(IntTy::I64)));
+        let string = fixture.ty(TyKind::String);
+        let string_ref = fixture.reference(Mutability::Shared, string);
+        let str_ref = fixture.shared_str();
+        let option = fixture.ty(TyKind::Option(i64_, ()));
+        let (widen, as_str, unwrap_a) = (fixture.name("m", "widen"), fixture.name("m", "as_str"), fixture.name("m", "unwrap_a"));
+        fixture.cast(i32_, i64_, widen);
+        fixture.cast(string_ref, str_ref, as_str);
+        fixture.cast(option, a_ty, unwrap_a);
+        assert_eq!(
+            refusals(fixture),
+            vec![
+                Refused::CastFromNonExtern { via: widen },
+                Refused::CastFromNonExtern { via: as_str },
+                Refused::CastFromNonExtern { via: unwrap_a },
+            ]
+        );
+    }
+
+    /// A step keeps its value owned, `&` or `&mut` as it was: a cast from an
+    /// owned value to a reference, from a reference to an owned value, or
+    /// between `&` and `&mut`, is refused.
+    #[test]
+    fn a_cast_that_changes_its_mode_is_refused() {
+        let mut fixture = Fixture::new();
+        let names = ["A", "B", "C", "D", "E", "F", "G", "H"].map(|name| fixture.name("m", name));
+        let types = names.map(|name| fixture.user_type(name, 0));
+        let [a, b, c, d, e, f, g, h] = types;
+        let b_ref = fixture.reference(Mutability::Shared, b);
+        let c_ref = fixture.reference(Mutability::Shared, c);
+        let e_ref = fixture.reference(Mutability::Shared, e);
+        let f_mut = fixture.reference(Mutability::Mut, f);
+        let g_mut = fixture.reference(Mutability::Mut, g);
+        let h_ref = fixture.reference(Mutability::Shared, h);
+        let vias = ["lend", "own", "exclusive", "share"].map(|via| fixture.name("m", via));
+        fixture.cast(a, b_ref, vias[0]);
+        fixture.cast(c_ref, d, vias[1]);
+        fixture.cast(e_ref, f_mut, vias[2]);
+        fixture.cast(g_mut, h_ref, vias[3]);
+        assert_eq!(refusals(fixture), vias.map(|via| Refused::CastChangesMode { via }).to_vec());
+    }
+
+    /// A step goes up from an extern-defined type, or a reference to one, to
+    /// a type of any kind in the same mode: `A` to `String`, `&A` to `&str`
+    /// and `&mut V` to `&mut [i64]`. `A` and `&A` are two heads, each with
+    /// its one step up.
+    #[test]
+    fn a_cast_from_an_extern_type_keeps_its_mode_and_ends_at_any_type() {
+        let mut fixture = Fixture::new();
+        let (a, v) = (fixture.name("m", "A"), fixture.name("m", "V"));
+        let (a_ty, v_ty) = (fixture.user_type(a, 0), fixture.user_type(v, 0));
+        let string = fixture.ty(TyKind::String);
+        let a_ref = fixture.reference(Mutability::Shared, a_ty);
+        let str_ref = fixture.shared_str();
+        let v_mut = fixture.reference(Mutability::Mut, v_ty);
+        let int = fixture.ty(TyKind::Int(IntTy::I64));
+        let slice = fixture.ty(TyKind::Slice(int));
+        let slice_mut = fixture.reference(Mutability::Mut, slice);
+        let (to_string, view, view_mut) = (fixture.name("m", "to_string"), fixture.name("m", "view"), fixture.name("m", "view_mut"));
+        fixture.cast(a_ty, string, to_string);
+        fixture.cast(a_ref, str_ref, view);
+        fixture.cast(v_mut, slice_mut, view_mut);
+        let decls = fixture.verify().expect("each step is from an extern type and keeps its mode");
+        let via_from = |head| decls.casts().step_up(head).map(|step| step.rule().via);
+        assert_eq!(via_from(Head::Base(Base::Named(a))), Some(to_string));
+        assert_eq!(via_from(Head::Ref(Mutability::Shared, Base::Named(a))), Some(view));
+        assert_eq!(via_from(Head::Ref(Mutability::Mut, Base::Named(v))), Some(view_mut));
+    }
+
     /// types §3, §7: a cast or a conversion is performed by its `via`, so
     /// a `via` that is not declared, or not of type `fn(from) -> to`, is
     /// refused.
@@ -1901,9 +2010,11 @@ mod tests {
             fixture.ty(TyKind::String),
         );
         let (undeclared_via, other_type) = (fixture.name("m", "widen"), fixture.name("m", "parse"));
+        let (a, b) = (fixture.name("m", "A"), fixture.name("m", "B"));
+        let (a_ty, b_ty) = (fixture.user_type(a, 0), fixture.user_type(b, 0));
         fixture.raw.casts.push(CastRule {
-            from: i32_,
-            to: i64_,
+            from: a_ty,
+            to: b_ty,
             via: undeclared_via,
         });
         fixture.performing(other_type, string, i32_);
@@ -1930,13 +2041,14 @@ mod tests {
     #[test]
     fn a_via_with_impls_is_refused() {
         let mut fixture = Fixture::new();
-        let (i32_, i64_) = (fixture.ty(TyKind::Int(IntTy::I32)), fixture.ty(TyKind::Int(IntTy::I64)));
+        let (a, b) = (fixture.name("m", "A"), fixture.name("m", "B"));
+        let (a_ty, b_ty) = (fixture.user_type(a, 0), fixture.user_type(b, 0));
         let widen = fixture.name("m", "widen");
-        let ty = fixture.function(&[i32_], i64_);
+        let ty = fixture.function(&[a_ty], b_ty);
         fixture.with_impls(widen, ty, 0, &[ty]);
         fixture.raw.casts.push(CastRule {
-            from: i32_,
-            to: i64_,
+            from: a_ty,
+            to: b_ty,
             via: widen,
         });
         assert_eq!(
@@ -1982,17 +2094,28 @@ mod tests {
     }
 
     /// types §3: a cast between two types of one head is a step from that
-    /// head to itself, a path back to its start.
+    /// head to itself, a path back to its start: `Box<i64>` to
+    /// `Box<String>`.
     #[test]
     fn a_cast_within_one_head_is_refused() {
         let mut fixture = Fixture::new();
-        let via = fixture.name("m", "widen");
+        let (boxed, via) = (fixture.name("m", "Box"), fixture.name("m", "widen"));
+        fixture.raw.user_types.push(UserTypeDecl {
+            id: boxed,
+            type_params: Box::new([TyVarBound::Any]),
+            carries_effect: false,
+            carries_identity: false,
+            lifetimes: 0,
+        });
         let int = fixture.ty(TyKind::Int(IntTy::I64));
         let string = fixture.ty(TyKind::String);
-        let from = fixture.ty(TyKind::Option(int, ()));
-        let to = fixture.ty(TyKind::Option(string, ()));
+        let mut box_of = |argument| {
+            let unmarked = MarkTerm::Known(Mark::Unmarked);
+            fixture.ty(TyKind::UserDefined { id: boxed, type_args: Box::new([argument]), effect: None, identity: None, marked: unmarked })
+        };
+        let (from, to) = (box_of(int), box_of(string));
         fixture.cast(from, to, via);
-        assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Base(Base::Option) }]);
+        assert_eq!(refusals(fixture), vec![Refused::CastCycle { head: Head::Base(Base::Named(boxed)) }]);
     }
 
     fn requiring(generic_function: QualifiedRef, pattern: TyId<Poly>) -> Box<[Requirement]> {
@@ -2394,12 +2517,12 @@ mod tests {
         assert_eq!(decls.overloads(other), &[] as &[QualifiedRef]);
     }
 
-    /// operators §5, types §3: `as_slice` at `&Vec` is a step from
-    /// `Ref(Shared, Named(Vec))` to `Ref(Shared, Slice)`; `as_str` at
-    /// `&String` from `Ref(Shared, String)` to `Ref(Shared, Str)`. Two views
-    /// leave two heads, so they form a tree.
+    /// operators §5, types §3: `as_slice` at `&Vec`, an extern-defined
+    /// container, is a step from `Ref(Shared, Named(Vec))` to
+    /// `Ref(Shared, Slice)`. `as_str` at `&String`, a built-in one, is no
+    /// step: the program calls it by name.
     #[test]
-    fn a_view_is_a_step_from_a_containers_reference_to_its_view() {
+    fn a_view_is_a_step_from_an_extern_containers_reference_to_its_view() {
         let mut fixture = Fixture::new();
         let core = fixture.raw.core;
         let vec = fixture.name("m", "Vec");
@@ -2415,17 +2538,13 @@ mod tests {
         let as_str_at_string = fixture.function(&[string_ref], str_ref);
         fixture.give(core.as_slice, &[as_slice_at_vec]);
         fixture.give(core.as_str, &[as_str_at_string]);
-        let decls = fixture.verify().expect("two views from two heads are a tree");
+        let decls = fixture.verify().expect("a view from a built-in container is no step and refused nothing");
         let from_vec = decls
             .casts()
             .step_up(Head::Ref(Mutability::Shared, Base::Named(vec)))
             .expect("&Vec steps up");
         assert_eq!(from_vec.rule().via, core.as_slice);
-        let from_string = decls
-            .casts()
-            .step_up(Head::Ref(Mutability::Shared, Base::String))
-            .expect("&String steps up");
-        assert_eq!(from_string.rule().via, core.as_str);
+        assert!(decls.casts().step_up(Head::Ref(Mutability::Shared, Base::String)).is_none());
         assert!(decls.casts().step_up(Head::Ref(Mutability::Shared, Base::Slice)).is_none());
     }
 
@@ -2490,14 +2609,11 @@ mod tests {
             fixture.name("m", "parse_again"),
             fixture.name("m", "widen"),
         );
-        let (string, i32_, i64_) = (
-            fixture.ty(TyKind::String),
-            fixture.ty(TyKind::Int(IntTy::I32)),
-            fixture.ty(TyKind::Int(IntTy::I64)),
-        );
-        fixture.cast(i32_, i64_, widen);
-        let parse_i32 = fixture.name("m", "parse_i32");
-        for (from, via) in [(string, parse), (string, parse_again), (i32_, parse_i32)] {
+        let a = fixture.name("m", "A");
+        let (string, a_ty, i64_) = (fixture.ty(TyKind::String), fixture.user_type(a, 0), fixture.ty(TyKind::Int(IntTy::I64)));
+        fixture.cast(a_ty, i64_, widen);
+        let parse_a = fixture.name("m", "parse_a");
+        for (from, via) in [(string, parse), (string, parse_again), (a_ty, parse_a)] {
             fixture.conversion(from, i64_, via);
         }
         let decls = fixture.verify().expect("conversions form no tree");
@@ -2509,7 +2625,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(vias(Head::Base(Base::String)), vec![parse, parse_again]);
-        assert_eq!(vias(Head::Base(Base::Int(IntTy::I32))), vec![parse_i32]);
+        assert_eq!(vias(Head::Base(Base::Named(a))), vec![parse_a]);
         assert_eq!(vias(Head::Base(Base::Int(IntTy::I64))), Vec::new());
     }
 
@@ -2838,11 +2954,12 @@ mod tests {
         assert!(decls.casts().step_up(Head::Ref(Mutability::Shared, Base::String)).is_none());
     }
 
-    /// types §3: a view impl's heads are what it states, and the tree
-    /// judges them. `as_slice` at `&String` and `as_str` at `&String` are
-    /// two steps up from `Ref(Shared, String)`.
+    /// types §3: a view from a built-in container is no step, so two views
+    /// from one such container leave no head with two steps up. `as_slice`
+    /// at `&String` and `as_str` at `&String` refuse nothing and step from
+    /// nowhere.
     #[test]
-    fn a_view_at_any_container_is_judged_by_the_tree() {
+    fn views_from_a_built_in_container_are_no_steps() {
         let mut fixture = Fixture::new();
         let core = fixture.raw.core;
         let string = fixture.ty(TyKind::String);
@@ -2855,13 +2972,8 @@ mod tests {
         let as_str_at_string = fixture.function(&[string_ref], str_ref);
         fixture.give(core.as_slice, &[as_slice_at_string]);
         fixture.give(core.as_str, &[as_str_at_string]);
-        assert_eq!(
-            refusals(fixture),
-            vec![Refused::TwoStepsUp {
-                head: Head::Ref(Mutability::Shared, Base::String),
-                via: [core.as_slice, core.as_str]
-            }]
-        );
+        let decls = fixture.verify().expect("views from a built-in container refuse nothing");
+        assert!(decls.casts().step_up(Head::Ref(Mutability::Shared, Base::String)).is_none());
     }
 
     /// extern-fn §8: a type term names only declared types; a context's
