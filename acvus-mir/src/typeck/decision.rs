@@ -33,7 +33,7 @@ use super::refusal::{self, RefusalKind};
 use super::pat::Shape;
 use crate::decl::{Base, GenericFunction, Head, Scheme};
 use crate::infer::{Bound, Closed, Entered, Infer, Instantiated, Level, OpenSources, PairAt, RequiredAt, Term};
-use crate::ty::structural::structure;
+use crate::ty::structural::{PartKey, Structure, structure};
 use crate::ty::{
     CastTy, EffectTerm, Infer as InferPhase, IntTy, Label, Mark, MarkTerm, Mutability, Poly, TyId, TyKind, TyVarId, Types,
 };
@@ -1114,30 +1114,35 @@ fn fire_iterate(
     cx.out.iteration.insert(site, iteration);
 }
 
-/// The element of a closed array or slice node.
+/// The element of a closed array or slice node, a sequence's one part
+/// (operators §3): an array's is its structure's (types §1), and a slice,
+/// which is no structure, holds its own.
 ///
 /// # Panics
 /// `sequence` is neither: callers match its head first.
-fn element_of(cx: &Ctxt<'_>, sequence: Term) -> Term {
-    match cx.infer.types().kind(cx.infer.shallow(sequence)) {
-        TyKind::Array(element, _, _) | TyKind::Slice(element) => *element,
-        other => panic!("element_of: a term closed as an array or a slice is one, not {other:?}"),
+pub(super) fn element_of(cx: &Ctxt<'_>, sequence: Term) -> Term {
+    let types = cx.infer.types();
+    let sequence = cx.infer.shallow(sequence);
+    if let TyKind::Slice(element) = types.kind(sequence) {
+        return *element;
     }
+    structure(types, sequence)
+        .and_then(|structure| structure.part(PartKey::Element))
+        .unwrap_or_else(|| panic!("element_of: a term closed as an array or a slice is one, not {:?}", types.kind(sequence)))
 }
 
 /// `?` on an `Option` or a `Result` (control-flow): its value is the
 /// payload, and it leaves through the same primitive at the body's type.
 fn fire_try(cx: &mut Ctxt<'_>, site: AstId, span: Span, operand: Closed, value: Term, exit: Term) {
-    let kind = cx.infer.types().kind(operand.term).clone();
-    let tried = match kind {
-        TyKind::Option(payload, _) => {
+    let tried = match structure(cx.infer.types(), operand.term) {
+        Some(Structure::Option(payload, _)) => {
             cx.eq(value, payload, span);
             let any = cx.fresh();
             let leaves = cx.node(TyKind::Option(any, Label::Here));
             cx.eq(exit, leaves, span);
             TryExit::Option(exit)
         }
-        TyKind::Result(payload, error, _) => {
+        Some(Structure::Result { ok: payload, err: error, .. }) => {
             cx.eq(value, payload, span);
             let any = cx.fresh();
             let leaves = cx.node(TyKind::Result(any, error, Label::Here));
@@ -1524,10 +1529,10 @@ fn position(cx: &Ctxt<'_>, term: Term, path: Vec<usize>, reading: Reading, out: 
         path: path.clone(),
         chain: Some(chain_up(cx, closed.head)),
     });
-    let TyKind::Tuple(items, _) = cx.infer.types().kind(closed.term) else {
+    let Some(Structure::Tuple(items, _)) = structure(cx.infer.types(), closed.term) else {
         return true;
     };
-    for (at, item) in items.clone().iter().enumerate() {
+    for (at, item) in items.to_vec().iter().enumerate() {
         let mut part = path.clone();
         part.push(at);
         if !position(cx, *item, part, reading, out) {
@@ -1550,16 +1555,17 @@ pub(super) fn chain_up(cx: &Ctxt<'_>, head: Head) -> Vec<Head> {
 }
 
 /// A declared parameter's head at `path`, `None` where any head matches:
-/// a type variable, a reference to one, or a part below a head that is not
-/// a tuple, which its own position already decided.
+/// a type variable, a reference to one, or a part the parameter does not
+/// have, below a head that is not a tuple or of a tuple of another arity,
+/// which its own position already decided.
 pub(super) fn param_head_at(types: &Types<Poly>, params: &[TyId<Poly>], path: &[usize]) -> Option<Head> {
     let (first, parts) = path.split_first().expect("a position names its argument");
     let mut at = params[*first];
     for part in parts {
-        match types.kind(at) {
-            TyKind::Tuple(items, _) => at = items[*part],
+        at = match structure(types, at) {
+            Some(tuple @ Structure::Tuple(..)) => tuple.part(PartKey::Index(*part))?,
             _ => return None,
-        }
+        };
     }
     poly_head(types, at)
 }

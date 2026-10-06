@@ -97,6 +97,26 @@ impl<V: Phase> Structure<'_, V> {
         }
     }
 
+    /// The type of the part `key` names, where the structure has it: a
+    /// tuple's element at its position, a field, a variant's payload, an
+    /// array's element, or `Some`'s, `Ok`'s or `Err`'s payload.
+    pub fn part(&self, key: PartKey) -> Option<TyId<V>> {
+        match (*self, key) {
+            (Structure::Tuple(items, _), PartKey::Index(at)) => items.get(at).copied(),
+            (Structure::Object(fields, _), PartKey::Field(name)) => {
+                fields.iter().find(|(field, _)| *field == name).map(|(_, ty)| *ty)
+            }
+            (Structure::Enum(variants, _), PartKey::Variant(tag)) => {
+                variants.iter().find(|(variant, _)| *variant == tag).and_then(|(_, payload)| *payload)
+            }
+            (Structure::Array { element, .. }, PartKey::Element) => Some(element),
+            (Structure::Option(payload, _), PartKey::Some) => Some(payload),
+            (Structure::Result { ok, .. }, PartKey::Ok) => Some(ok),
+            (Structure::Result { err, .. }, PartKey::Err) => Some(err),
+            _ => None,
+        }
+    }
+
     /// Each part, keyed, in order: a tuple's elements, an object's fields,
     /// an enum's variant payloads, an `Option`'s `Some` payload, a
     /// `Result`'s `Ok` payload then its `Err` payload. An array has one part,
@@ -184,6 +204,41 @@ mod tests {
         let keys: Vec<_> = structure(&types, r#enum).expect("an enum is structured").parts().iter().map(|part| part.key).collect();
         assert_eq!(keys, vec![PartKey::Variant(some)]);
         assert_eq!(parts(&types, r#enum), vec![int]);
+    }
+
+    /// `part` names each part `parts` lists by its key, and nothing for a key
+    /// of another kind or a position, field or variant the type does not
+    /// have.
+    #[test]
+    fn a_part_by_its_key_is_the_part_parts_lists() {
+        let names = Interner::new();
+        let (a, full, empty) = (names.intern("a"), names.intern("Full"), names.intern("Empty"));
+        let mut types = Types::<Concrete>::new();
+        let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
+        let structured = [
+            types.intern(TyKind::Tuple(Box::new([string, int]), ())),
+            types.intern(TyKind::Object { fields: Box::new([(a, int)]), label: () }),
+            types.intern(TyKind::Enum {
+                name: QualifiedRef::root(names.intern("E")),
+                variants: Box::new([(empty, None), (full, Some(int))]),
+                label: (),
+            }),
+            types.intern(TyKind::Array(string, LenTerm::Known(2), ())),
+            types.intern(TyKind::Option(string, ())),
+            types.intern(TyKind::Result(string, int, ())),
+        ];
+        for ty in structured {
+            let structure = structure(&types, ty).expect("a structural type");
+            for part in structure.parts() {
+                assert_eq!(structure.part(part.key), Some(part.ty), "{:?}", part.key);
+            }
+        }
+        let tuple = structure(&types, structured[0]).expect("a tuple");
+        assert_eq!(tuple.part(PartKey::Index(2)), None);
+        assert_eq!(tuple.part(PartKey::Element), None);
+        let r#enum = structure(&types, structured[2]).expect("an enum");
+        assert_eq!(r#enum.part(PartKey::Variant(empty)), None, "a variant of no payload");
+        assert_eq!(r#enum.part(PartKey::Variant(a)), None, "no such variant");
     }
 
     /// types §1: an extern-defined type is opaque, so it has no parts; nor

@@ -195,10 +195,7 @@ pub(super) fn fire_index(
         Head::Base(_) | Head::Ref(..) => None,
     };
     if let Some(sequence) = sequence {
-        let part = match cx.infer.types().kind(cx.infer.shallow(sequence)) {
-            TyKind::Array(part, _, _) | TyKind::Slice(part) => *part,
-            other => panic!("a term closed as an array or a slice is one, not {other:?}"),
-        };
+        let part = super::decision::element_of(cx, sequence);
         cx.eq(element, part, span);
         return;
     }

@@ -1709,6 +1709,32 @@ fn an_unclaimed_function_types_holds_and_calls_take_the_defaults() {
     assert_eq!((*calls, *holds), (Calls::Many, Holds::Nothing));
 }
 
+/// types §6: a tuple is reached by its parts in order, past its head; a
+/// declaration whose tuple parameter is of another arity is left at the
+/// head, and its parts are not read. With `p` over `((i64, i64, i64))` and
+/// `((u8, u8))`, each call reaches the one of its arity.
+#[test]
+fn a_tuple_argument_reaches_past_a_parameter_of_another_arity() {
+    let fixture = || {
+        let mut fx = Fixture::new();
+        let (i64_ty, u8_ty) = (fx.int(IntTy::I64), fx.int(IntTy::U8));
+        let three = fx.ty(TyKind::Tuple(Box::new([i64_ty, i64_ty, i64_ty]), ()));
+        let two = fx.ty(TyKind::Tuple(Box::new([u8_ty, u8_ty]), ()));
+        let (of_three, of_two) = (fx.pure(&[three], i64_ty), fx.pure(&[two], i64_ty));
+        let by_three = fx.overload("n0", "p", of_three);
+        let by_two = fx.overload("n1", "p", of_two);
+        (fx, by_three, by_two)
+    };
+    for (source, three) in [("p((1i64, 2i64, 3i64))", true), ("p((1u8, 2u8))", false)] {
+        let (fx, by_three, by_two) = fixture();
+        let (checked, _) = fx.script(source);
+        checked.admitted();
+        let wanted = if three { by_three } else { by_two };
+        let reached: Vec<QualifiedRef> = checked.typeck.reached.values().map(|chosen| chosen.declaration).collect();
+        assert_eq!(reached, vec![wanted], "{source}");
+    }
+}
+
 /// control-flow: `break` and `continue` leave a loop; one outside every
 /// loop, or inside a lambda inside one, is refused.
 #[test]
