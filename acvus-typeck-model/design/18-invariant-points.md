@@ -1,4 +1,4 @@
-# 18 Own relations first, invariant points last (draft)
+# 18 Own relations first, invariant points last
 
 Rests on the spec's l.74 (variance), l.86 (join), l.169 and l.176 (LitVars), l.218
 (decided), l.226–238 (meeting, boundary, recording), l.240–271 (dependency),
@@ -12,9 +12,10 @@ is among several (choice (a): "Literal은 솔직히 편하게 가려면 이게 �
 questions were answered by 준량 on 2026-10-21: what reaches a class the rule typed
 is "결정된 타입 그 자체 혹은 !"; an ambiguous class is refused once the rule types
 nothing more, "일관성과 비순서 보장때문에"; the default comes after that, and a
-decided node whose type the default overrides is left as it is. It is to be a
-reading, `InvariantPoints::Last`, beside the spec as stated,
-`InvariantPoints::AsStated`.
+decided node whose type the default overrides is left as it is. It is the reading
+`InvariantPoints::Last`, beside the spec as stated, `InvariantPoints::AsStated`,
+which stays the default. The rule is `src/invariant.rs`; where the other rows
+change the code is under Code below.
 
 ## Meaning
 
@@ -37,14 +38,15 @@ once nothing else can be solved, and then only as the one type that fits.
 
 - An **invariant point** of a class `α` is an equation that an invariant part of a
   boundary `β ⇝ U` gives between `α`, a part of `β`, and the part of `U` there,
-  where that part is decided, a type the text or a declaration writes (l.218,
-  l.289); and `?N ⇝ U`, at the boundary or at any part of it, where `?N` is `α`'s
-  LitVar and `U` is decided (l.291). A decided use gives the invariant points of
-  its candidate, and an undecided one those of each of its candidates (note 08,
-  reading 13). Where `α` takes its constructor from its own relations, an invariant
-  point of it relates its parts instead, as an equation does (l.165): an own
-  equation where the part of `U` is an unknown, an invariant point where it is
-  decided.
+  where that part is closed, a type the text or a declaration writes in full, with
+  no unknown in it (l.218, l.289); and `?N ⇝ U`, at the boundary or at any part of
+  it, where `?N` is `α`'s LitVar and `U` is closed (l.291). A use decided as one
+  candidate gives the invariant points of that candidate; one that is not, those
+  of each of its candidates, all of them while it is undecided and the remaining
+  ones where it is left unreached (note 08, reading 13). Where `α` takes its
+  constructor from its own relations, an invariant point of it relates its parts
+  instead, as an equation does (l.165), each again an invariant point, the parts
+  of a closed type being closed.
 - A class's **own relations** are every relation into it but its invariant points:
   its lower bounds, decided ones among them (a use's result, a value the text
   writes), and what their parts give when split (l.284–289); the text's equations
@@ -52,11 +54,36 @@ once nothing else can be solved, and then only as the one type that fits.
   (`push`'s `&mut Vec⟨T⟩`); kinds; and LitVars.
 - A class is **own-solved** where its own relations give it its constructor
   (l.275).
-- A node **waits for** a class that is not own-solved, has invariant points, and
-  has not yet been through row 3, where what it reads there is not decided by
-  then: a use whose read leaves several candidates because of that class's
-  position, and a lend, a projection or a binding where it reads whether the class
-  is a reference (l.267), unless a use has recorded that at once (l.252).
+- A node **waits for** a class that row 3 may still type, one not own-solved, not
+  refused, and with an invariant point whose type fits it, where what the node
+  reads there does not decide it: a use whose candidates remain several and differ
+  at that class's position, and a lend, a projection or a binding where its value
+  read decides neither by a constructor, nor by a LitVar, nor by a use's record at
+  once (l.252) whether the class is a reference (l.267).
+
+**Closed, where the draft said decided.** A type a declaration writes with a
+variable in it, `push`'s `Vec⟨T⟩`, is decided as l.218 has it, and the draft's
+own relations counted the equation it gives as own. Two of them, `Vec⟨T₁⟩` and
+`Vec⟨T₂⟩` of two `push`es into one buffer whose own relations give it no
+constructor, are not two types to choose between, but row 3's steps would count
+them as two and refuse. Read as closed, an equation with a type that has an
+unknown in it is own whole, the closed parts of that type with it, so in
+`fill(&mut Vec⟨(u8, T)⟩)` the `u8` types such a buffer's element's first component
+as its own relations do. This reading is the model's, taken from the draft's
+`push` example, and is to be confirmed by 준량.
+
+**Read as the rule reads it.** Whether row 3 may still type a class, its own
+relations so far, its invariant points, and which of their types fit it, are read
+in the value read leaving out nothing: each class solved by its sources whatever
+its dependencies, as a node's value read solves it (l.267). In the state itself,
+`X` of `x = 0` holds its LitVar only once `X` is solved (l.176), which a
+dependency may hold back while a node's value read already has it. Run first with
+whether a node waits read in its own value read, and row 3 in the state, H7 left
+every node undecided: the lend `&x` waited for `X`, its value read giving `X` the
+LitVar and `probe`'s invariant points, while in the state `X`, held back by its
+dependency on `x + y`'s result, held no LitVar, so row 3 never took it. Two
+changes followed together, that a LitVar decides that a class is no reference, and
+the reading above; which of them alone closes H7 was not run apart.
 
 ## Rows
 
@@ -179,14 +206,42 @@ default taken with `W`, `X` would be `i32`, and `g` refused.
   `m(&str)` reached two outcomes under it, `n(u16)` accepted and `n` refused, and
   one by position, `n` refused, I\* reporting completeness at `n`.
 - Note 08, readings 11, 15 and 18; note 10, its rows of l.244 (b) and l.247–250.
-- Note 14: an invariant point is a check of its boundary, and a row for row 3: each
-  class row 3 typed has, among the types its invariant points give at the end,
-  exactly that type fitting it, or several of a LitVar's family with that type its
-  default.
+- Note 14: an invariant point is a check of its boundary, which the checker
+  checks as it checks every boundary; row 5 is a row of its contract, a value
+  passing into a class row 3 typed holding only as that class's value or `!`
+  (`DecidedBy::Rule`), which class row 3 typed being taken from the certificate.
+  A row for row 3's choice, that each class it typed has, among the types its
+  invariant points give at the end, exactly that type fitting it, or several of a
+  LitVar's family with that type its default, is not added (Open).
 - Note 15: "what a node records into" reads l.250 by relation; under this reading
-  it is own relations, as row 2 has it. Row 3 decides classes, which
-  I\* does not decide again (note 15, Not covered), so I\* reporting nothing is
-  weaker evidence here than for nodes.
+  a use records into its result and into what its candidates would equate with an
+  unknown, as row 2 has it, and an invariant point records into nothing. Row 3
+  decides classes, which I\* does not decide again (note 15, Not covered), so I\*
+  reporting nothing is weaker evidence here than for nodes.
+
+## Code
+
+- `Readings::invariant_points` (`src/program.rs`); `Relation::Invariant`, the
+  pending check, and `Recorder::Invariant`, row 3's, which no value read leaves
+  out (`src/relation.rs`); `ClassName::InvariantRule`, the class row 3 makes for
+  the type it gives; `Refusal::Ambiguous`.
+- Row 1: `State::split_parts` records an invariant point at an invariant part of
+  a boundary, and at the reborrow row's targets, where the part of `U` holds a
+  closed type (`State::closed`, the classes `instantiate`, `State::closed` and
+  the text's closed classes make); `State::solve` records no l.291 equation into
+  such a class; `relate_invariant_parts` relates an invariant point's parts once
+  its class takes a constructor.
+- Row 2: `may_record_own` and `would_record_own_by` (`src/node.rs`) give the
+  dependency's edges of l.244 (b) and l.247–250 (`src/dep.rs`); `eligible` keeps
+  out a node that waits (`decision_or_waits`, `waits`); `narrow` takes no default
+  where a LitVar it reads lies in a class with invariant points; `has_work` counts
+  no LitVar boundary into a closed type.
+- Row 3: `State::apply_invariant_rule` (`src/invariant.rs`), taken where no step
+  is left, in `fixpoints`, `explore_with`, `sample_with` and `State::run`, and,
+  in the entry, before fallback.
+- Row 5: `State::checks` checks a value entering a class row 3 typed by
+  `as_it_is`.
+- I\*: `records` and `into` (`src/istar.rs`) as note 15 above.
 
 ## Expected results
 
@@ -217,7 +272,47 @@ Derived before running, under `InvariantPoints::Last`; under
 
 In each, I\* reports nothing and the certificate holds.
 
+## Results
+
+Run, every row of the table holds as derived, each a test in `examples.rs`: P1
+`a_literal_added_to_a_literal`, P2 `a_literal_passed_to_one_parameter`, P3
+`a_literal_passed_to_overloads_of_which_one_fits`, P4
+`a_literal_passed_to_overloads_that_both_fit`, P5
+`a_literal_read_by_two_uses_that_leave_two_types`, P7
+`a_literal_passed_to_overloads_with_the_default`, P8
+`a_literal_typed_first_narrows_the_use_another_reads`, P9
+`a_default_where_a_decided_use_gives_another_type`, and the examples' and holes'
+own tests, each with a half read this way (Example 2 with the push,
+`example_2_with_a_push_before_fill_all`). That Example 12's `x + y` and `y + 1` do
+not depend on each other is not asserted; its outcome is. Example 14, sampled,
+reaches the spec's outcome.
+
+Two results the table did not give:
+
+- **O4 under the spec's captures** (`holes.md`, O4) reaches four outcomes, where the
+  spec reaches three: `X` depends on `probe` only where `probe` may record an own
+  relation into it, and a boundary into `A` or `B` is none, so `X` may be solved
+  before `probe` and before the call's instance, and `probe`, decided after the
+  instance, reads `B`: `probe(B)`, refused with `x: A`. The table's "the other
+  current examples, as under the spec" was wrong there. By the captured
+  environment, one outcome, as under the spec.
+- **P4, first run**, had I\* report `n`: decided unreached once row 3 refused `X`,
+  it gave no invariant point at the end, so I\* read `X` with none and took the
+  default. A use left unreached gives its remaining candidates' points (note 08,
+  reading 13), as I\* already reads what it records into; so read, I\* reports
+  nothing.
+
+With the default swapped to `InvariantPoints::Last`, 104 of 108 tests pass; the
+four failing are the spec's halves of Example 3, H3 and H7, and O4's under the
+spec's captures, each the change above.
+
 ## Open
 
+- **Closed or decided** (Definitions): to be confirmed by 준량.
+- **A certificate row for row 3's choice** (note 14): the invariant points of a
+  class row 3 typed lie at parts, `A`'s element in Example 2, which the checker,
+  on closed values, does not name. Checking the choice needs the checker to name
+  classes at parts, which changes what note 14 keeps it from; to be agreed.
+- **O4 under the spec's captures**, one outcome more (Results).
 - **Not covered.** O1 (a binding's path), O3 (a reference's mutability), O2 beyond
   the cycles row 2 no longer makes, and O5 are not changed here.

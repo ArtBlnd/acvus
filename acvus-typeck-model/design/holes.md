@@ -60,6 +60,11 @@ The join of two references reaches the same place: `&A ⊔ &C` is `&B` by the ca
 `&A → &B` and `&C → &B` (l.86), while two lower bounds `&A ≤ R` and `&C ≤ R` equate
 their targets.
 
+Read with invariant points last (`design/18-invariant-points.md`), the target's
+equation is an invariant point, a check: `V` is `Vec⟨u8⟩` by `make()`, and the
+boundary `&Vec⟨u8⟩ ⇝ &[u8]` is reached by the view's cast. Accepted, in every
+order (same test). The join of two references is not changed.
+
 ## H4. A reborrow at a split
 
 Where `&mut X` meets `&Y` at a lower bound or a boundary, the constructors differ
@@ -145,10 +150,15 @@ alone, `?N ⇝ U` unifies it with the parameter (l.291), so `probe` can change w
 would record no lower bound, equation or kind into the class it reads made the
 outcome depend on the order: `let x = 0; n(x); m(x);` with `n(u8)`, `n(u16)`,
 `m(u16)` and `m(&str)` reached `n(u16)` accepted where `m` was decided first, and
-`n` refused where `n` was. It is removed. `design/18-invariant-points.md` drafts an
-order of solving under which what `probe` records into `X` is no source until `X`'s
-own relations leave it without a type, so that `x + y` does not depend on
-`probe`.
+`n` refused where `n` was. It is removed.
+
+Read with invariant points last (`design/18-invariant-points.md`), `probe`'s
+boundary is an invariant point, no source until `X`'s own relations leave it
+without a type, and `probe` records nothing else into `X`, so `x + y` does not
+depend on it: `probe` reads `X` as `u16`. One outcome, accepted (same test). The
+witness of the removed reading, `n(x); m(x)`, is refused there in every order, `X`
+ambiguous between `u8` and `u16` (`examples.rs`,
+`a_literal_read_by_two_uses_that_leave_two_types`).
 
 ## T1. A type parameter's bound
 
@@ -310,6 +320,13 @@ Read by the captured environment (`design/17-environment.md`,
 is the enclosing group's, recorded once, and `V` lies at the call's positions:
 `X` and `probe` wait for the call. With `probe(x)`, one outcome, `x: B` and
 `probe(B)`, accepted; without it, one outcome, `x: B`, accepted (same test).
+
+Read with invariant points last (`design/18-invariant-points.md`) and the spec's
+captures, four outcomes: `X` depends on `probe` only where `probe` may record an
+own relation into it, which a boundary into `A` or `B` is not, so `X` may also be
+solved before `probe` is decided, and `probe` decided after the instance reads
+`B`: `probe(B)`, refused with `x: A`, besides the three. With the captured
+environment as well, the one outcome (same test).
 
 ## O5. Two lends of one place
 

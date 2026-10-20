@@ -20,6 +20,10 @@ pub enum Relation {
     Boundary { from: ClassId, to: ClassId },
     /// An equation, which an invariant place records (l.236).
     Equation(ClassId, ClassId),
+    /// An invariant point: the equation an invariant part of a boundary
+    /// gives between `class` and the class of a closed type, kept as a check
+    /// until the invariant rule applies it (`design/18-invariant-points.md`).
+    Invariant { class: ClassId, closed: ClassId },
     /// A kind known in part, which a projection records (l.237).
     Fact(ClassId, Fact),
     /// A kind the class holds: a type the text or a declaration writes
@@ -42,6 +46,7 @@ impl Relation {
             Relation::LowerBound { lower, upper } => vec![*lower, *upper],
             Relation::Boundary { from, to } => vec![*from, *to],
             Relation::Equation(a, b) => vec![*a, *b],
+            Relation::Invariant { class, closed } => vec![*class, *closed],
             Relation::Fact(class, fact) => vec![*class, fact.class()],
             Relation::Kind(class, term, _) => std::iter::once(*class)
                 .chain(term.parts().into_iter().map(|(_, part)| *part))
@@ -69,6 +74,13 @@ impl Relation {
             Relation::Equation(a, b) => {
                 let a = f(a);
                 Relation::Equation(a, f(b))
+            }
+            Relation::Invariant { class, closed } => {
+                let class = f(class);
+                Relation::Invariant {
+                    class,
+                    closed: f(closed),
+                }
             }
             Relation::Fact(class, fact) => {
                 let class = f(class);
@@ -100,6 +112,10 @@ pub enum Recorder {
     /// A cycle of lower bounds alone, merged into one equivalence class
     /// (l.275).
     Cycle,
+    /// The invariant rule, typing a class by its invariant points
+    /// (`design/18-invariant-points.md`, row 3). No node records it, so no
+    /// value read leaves it out.
+    Invariant,
     /// The I\* check, making an instance of a lambda's C that no call made, in
     /// a view of a state it decides nodes again in (`design/15-istar.md`,
     /// Domain). Solving never records it.
@@ -137,6 +153,7 @@ impl Recorder {
             | Recorder::Text(_)
             | Recorder::Split(_)
             | Recorder::Cycle
+            | Recorder::Invariant
             | Recorder::Check => Vec::new(),
         }
     }
@@ -147,7 +164,11 @@ impl Recorder {
         match self {
             Recorder::Text(_) | Recorder::Node(_) => true,
             Recorder::Instance { of, .. } => of.is_entering(),
-            Recorder::Origin | Recorder::Split(_) | Recorder::Cycle | Recorder::Check => false,
+            Recorder::Origin
+            | Recorder::Split(_)
+            | Recorder::Cycle
+            | Recorder::Invariant
+            | Recorder::Check => false,
         }
     }
 }
@@ -177,6 +198,14 @@ impl fmt::Display for Named<'_> {
             Relation::LowerBound { lower, upper } => write!(f, "{} ≤ {}", name(lower), name(upper)),
             Relation::Boundary { from, to } => write!(f, "{} ⇝ {}", name(from), name(to)),
             Relation::Equation(a, b) => write!(f, "{} = {}", name(a), name(b)),
+            Relation::Invariant { class, closed } => {
+                write!(
+                    f,
+                    "{} = {} at an invariant point",
+                    name(class),
+                    name(closed)
+                )
+            }
             Relation::Fact(class, fact) => write!(f, "{}: {fact:?}", name(class)),
             Relation::Kind(class, term, _) => {
                 let term = term.clone().map(|_, part| name(&part).clone());

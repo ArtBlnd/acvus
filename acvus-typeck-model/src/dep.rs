@@ -39,15 +39,25 @@ enum Edge {
     Path,
     /// A universal on the use that chooses it (l.246).
     Chosen,
+    /// A node on a class it waits for, which only the invariant rule's
+    /// eligibility reads (`design/18-invariant-points.md`, row 3).
+    Waits,
 }
 
+type Edges = BTreeMap<Vertex, BTreeSet<(Vertex, Edge)>>;
+
 pub(crate) struct Graph {
-    edges: BTreeMap<Vertex, BTreeSet<(Vertex, Edge)>>,
+    edges: Edges,
     /// Each vertex's strongly connected component, by its least vertex.
     component: BTreeMap<Vertex, Vertex>,
 }
 
 impl Graph {
+    fn new(edges: Edges) -> Graph {
+        let component = components(&edges);
+        Graph { edges, component }
+    }
+
     fn unbroken(&self, from: &Vertex) -> impl Iterator<Item = &(Vertex, Edge)> + '_ {
         let own = self.component.get(from);
         self.edges
@@ -82,7 +92,26 @@ impl Graph {
 
 impl State {
     pub(crate) fn graph(&self) -> Graph {
-        let mut edges: BTreeMap<Vertex, BTreeSet<(Vertex, Edge)>> = BTreeMap::new();
+        Graph::new(self.edges())
+    }
+
+    /// The graph with an edge from each node to each class it waits for
+    /// (`design/18-invariant-points.md`, row 3).
+    pub(crate) fn graph_waiting(&self, waits: &[(Name, BTreeSet<ClassId>)]) -> Graph {
+        let mut edges = self.edges();
+        for (name, classes) in waits {
+            for &class in classes {
+                edges
+                    .entry(Vertex::Node(name.clone()))
+                    .or_default()
+                    .insert((Vertex::Class(self.root(class)), Edge::Waits));
+            }
+        }
+        Graph::new(edges)
+    }
+
+    fn edges(&self) -> Edges {
+        let mut edges: Edges = BTreeMap::new();
         let mut add = |from: Vertex, to: Vertex, edge: Edge| {
             edges.entry(from).or_default().insert((to, edge));
         };
@@ -129,7 +158,8 @@ impl State {
         for (name, node) in &undecided {
             for position in self.positions(&node.kind) {
                 let position = self.root(position);
-                if !self.is_solved(position) {
+                let own = !self.keeps_invariant_points() || self.may_record_own(name, position);
+                if !self.is_solved(position) && own {
                     add(
                         Vertex::Class(position),
                         Vertex::Node((*name).clone()),
@@ -140,7 +170,7 @@ impl State {
         }
         // The nodes that record into a class (l.250), each with the class at
         // whose position it lies.
-        let recording = |class: ClassId, edges: &BTreeMap<Vertex, BTreeSet<(Vertex, Edge)>>| {
+        let recording = |class: ClassId, edges: &Edges| {
             let mut classes = BTreeSet::from([self.root(class)]);
             let mut work = vec![self.root(class)];
             let mut nodes = BTreeSet::new();
@@ -193,8 +223,7 @@ impl State {
                 .or_default()
                 .insert((to, edge));
         }
-        let component = components(&edges);
-        Graph { edges, component }
+        edges
     }
 
     /// The roots of the classes at any depth within the kind of `id`'s
@@ -277,7 +306,7 @@ impl State {
         self.settled_in(&self.graph())
     }
 
-    fn settled_in(&self, graph: &Graph) -> BTreeSet<ClassId> {
+    pub(crate) fn settled_in(&self, graph: &Graph) -> BTreeSet<ClassId> {
         let mut settled = BTreeSet::new();
         loop {
             let more: Vec<ClassId> = self
@@ -307,18 +336,28 @@ impl State {
             .filter(|&root| {
                 !self.is_solved(root) && !self.has_no_value(root) && !self.is_foreign(root)
             })
-            .filter(|&root| {
-                graph
-                    .unbroken(&Vertex::Class(root))
-                    .all(|(to, edge)| self.satisfied(to, *edge, settled))
-            })
+            .filter(|&root| self.is_unblocked_in(graph, &Vertex::Class(root), settled))
             .collect()
+    }
+
+    /// Whether every unbroken dependency of the vertex is solved, settled,
+    /// or gives nothing.
+    pub(crate) fn is_unblocked_in(
+        &self,
+        graph: &Graph,
+        vertex: &Vertex,
+        settled: &BTreeSet<ClassId>,
+    ) -> bool {
+        graph
+            .unbroken(vertex)
+            .all(|(to, edge)| self.satisfied(to, *edge, settled))
     }
 
     /// The equivalence classes that may be solved now, being unblocked and
     /// given something to take or a LitVar to unify by their sources, and the
     /// nodes that may be decided now, whose unbroken dependencies are all
-    /// decided.
+    /// decided, and which wait for no class the invariant rule may still type
+    /// (`design/18-invariant-points.md`, row 2).
     pub(crate) fn eligible(&self) -> (Vec<ClassId>, Vec<Name>) {
         let graph = self.graph();
         let settled = self.settled_in(&graph);
@@ -332,14 +371,24 @@ impl State {
             .iter()
             .filter(|(_, node)| node.decision.is_none())
             .map(|(name, _)| name)
-            .filter(|name| {
-                graph
-                    .unbroken(&Vertex::Node((*name).clone()))
-                    .all(|(to, edge)| self.satisfied(to, *edge, &settled))
-            })
+            .filter(|name| self.is_unblocked_in(&graph, &Vertex::Node((*name).clone()), &settled))
             .cloned()
             .collect();
-        (classes, nodes)
+        (classes, self.not_waiting(nodes))
+    }
+
+    /// Of the nodes, those that wait for no class the invariant rule may
+    /// still type, where the reading keeps invariant points as checks.
+    fn not_waiting(&self, nodes: Vec<Name>) -> Vec<Name> {
+        if !self.keeps_invariant_points() || nodes.is_empty() {
+            return nodes;
+        }
+        let whole = self.read_state(&BTreeSet::new());
+        let points = whole.invariant_points(&self.pending_uses());
+        nodes
+            .into_iter()
+            .filter(|name| self.decision_or_waits(name, &whole, &points).is_ok())
+            .collect()
     }
 
     /// The equivalence classes to fall back once nothing is eligible: those
@@ -358,7 +407,12 @@ impl State {
         if !self.fact_heads(root).is_empty() {
             return true;
         }
-        if held.lit.is_some() && !self.boundaries_from(root).is_empty() {
+        if held.lit.is_some()
+            && self
+                .boundaries_from(root)
+                .into_iter()
+                .any(|to| !self.is_invariant_point_target(to))
+        {
             return true;
         }
         self.lower_bounds(root).into_iter().any(|lower| {

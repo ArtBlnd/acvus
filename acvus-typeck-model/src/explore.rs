@@ -81,7 +81,7 @@ where
             let steps = state.steps();
             if steps.is_empty() {
                 let mut next = state.clone();
-                if next.fall_back() {
+                if next.apply_invariant_rule() || next.fall_back() {
                     work.push(next);
                 } else {
                     visit(&Final {
@@ -127,7 +127,10 @@ fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<Stat
         }
         let steps = state.steps();
         if steps.is_empty() {
-            if reached.insert(state.fingerprint()) {
+            let mut next = state.clone();
+            if next.apply_invariant_rule() {
+                work.push(next);
+            } else if reached.insert(state.fingerprint()) {
                 fixpoints.push(state);
             }
             continue;
@@ -162,10 +165,13 @@ where
             let mut state = State::of_group(program, &group, &solved);
             loop {
                 let steps = state.steps();
-                if steps.is_empty() {
+                if !steps.is_empty() {
+                    state.step(&steps[picks.next(steps.len())]);
+                    continue;
+                }
+                if !state.apply_invariant_rule() {
                     break;
                 }
-                state.step(&steps[picks.next(steps.len())]);
             }
             solved.insert(group, Rc::new(state));
         }
@@ -176,7 +182,7 @@ where
                 state.step(&steps[picks.next(steps.len())]);
                 continue;
             }
-            if !state.fall_back() {
+            if !state.apply_invariant_rule() && !state.fall_back() {
                 break;
             }
         }

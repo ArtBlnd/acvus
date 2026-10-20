@@ -30,6 +30,9 @@ pub struct Sheet {
     /// The roots an equation decides: their kind is one a type the text or a
     /// declaration writes (l.279, l.293).
     written: BTreeSet<ClassId>,
+    /// The roots the invariant rule typed (`design/18-invariant-points.md`,
+    /// row 3).
+    ruled: BTreeSet<ClassId>,
     decisions: BTreeMap<Name, Option<Decision>>,
     instances: Vec<Made>,
 }
@@ -47,6 +50,11 @@ impl Sheet {
         let values = distinct
             .iter()
             .map(|&root| (root, state.value(root)))
+            .collect();
+        let ruled = distinct
+            .iter()
+            .copied()
+            .filter(|&root| state.is_ruled(root))
             .collect();
         let written = distinct
             .into_iter()
@@ -68,6 +76,7 @@ impl Sheet {
             roots,
             values,
             written,
+            ruled,
             decisions,
             instances: state.instances.clone(),
         }
@@ -137,6 +146,20 @@ impl Certificate {
             .unwrap_or_else(|| panic!("{group} has the class {name}"));
         let root = sheet.root(id);
         sheet.values.insert(root, Some(value));
+    }
+
+    /// Marks the class `name` of `group`'s state, with every class equated to
+    /// it, as typed by the invariant rule (`design/18-invariant-points.md`).
+    pub(crate) fn set_ruled(&mut self, group: &str, name: &ClassName) {
+        let sheet = self
+            .sheets
+            .get_mut(&Name::new(group))
+            .unwrap_or_else(|| panic!("the certificate has a sheet of {group}"));
+        let id = sheet
+            .id(name)
+            .unwrap_or_else(|| panic!("{group} has the class {name}"));
+        let root = sheet.root(id);
+        sheet.ruled.insert(root);
     }
 
     /// Gives the node `node` of `group`'s state the decision `decision`.
@@ -230,12 +253,25 @@ enum Decided {
 }
 
 /// A parameter's type, whether an argument meets it or passes into it by a
-/// boundary, and whether an equation decides it, so that a coercion may reach
-/// it where the argument meets it (l.293).
+/// boundary, and what decides it, which decides how the argument may reach it.
 struct Param {
     ty: Ty,
     meets: bool,
-    written: bool,
+    decided: DecidedBy,
+}
+
+/// What decides a class a value passes into, which decides how the value may
+/// reach it (l.293).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DecidedBy {
+    /// Its sources' join: a value meeting it reaches it along `≤`.
+    Join,
+    /// An equation with a type the text or a declaration writes: a coercion
+    /// reaches it besides (l.279, l.293).
+    Equation,
+    /// The invariant rule: only its type itself, and `!`, reach it
+    /// (`design/18-invariant-points.md`, row 5).
+    Rule,
 }
 
 impl<'a> Context<'a> {
@@ -291,9 +327,16 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn written(&self, level: usize, id: ClassId) -> bool {
+    fn decided_by(&self, level: usize, id: ClassId) -> DecidedBy {
         let (at, root) = self.locate(level, id);
-        self.sheet(at).written.contains(&root)
+        let sheet = self.sheet(at);
+        if sheet.ruled.contains(&root) {
+            DecidedBy::Rule
+        } else if sheet.written.contains(&root) {
+            DecidedBy::Equation
+        } else {
+            DecidedBy::Join
+        }
     }
 
     /// The decision of the group's node `name`: its own, or its copy's in an
@@ -491,21 +534,27 @@ impl Checker<'_> {
         self.get(context, at, name.as_str(), lookup)
     }
 
-    fn text_written(&self, context: &Context<'_>, name: &Name) -> bool {
+    fn text_decided_by(&self, context: &Context<'_>, name: &Name) -> DecidedBy {
         let id = context
             .own
             .id(&ClassName::Text(name.clone()))
             .unwrap_or_else(|| panic!("{} names the class {name}", context.group));
-        context.written(0, id)
+        context.decided_by(0, id)
     }
 
-    /// Whether an equation decides the class the decision at `level` made at
-    /// `at` for its node `owner`.
-    fn node_written(&self, context: &Context<'_>, level: usize, owner: &Name, at: NodeAt) -> bool {
+    /// What decides the class the decision at `level` made at `at` for its
+    /// node `owner`.
+    fn node_decided_by(
+        &self,
+        context: &Context<'_>,
+        level: usize,
+        owner: &Name,
+        at: NodeAt,
+    ) -> DecidedBy {
         context
             .sheet(level)
             .id(&ClassName::Node(Rc::new(owner.clone()), at))
-            .is_some_and(|id| context.written(level, id))
+            .map_or(DecidedBy::Join, |id| context.decided_by(level, id))
     }
 
     /// The decided node's decision, none where it is left in C, recording a
@@ -521,12 +570,21 @@ impl Checker<'_> {
         }
     }
 
-    fn lower(&self, from: &Ty, to: &Ty, written: bool) -> bool {
-        along_le(self.decls, from, to).is_ok() || written && coerce(self.decls, from, to).is_ok()
+    fn lower(&self, from: &Ty, to: &Ty, decided: DecidedBy) -> bool {
+        match decided {
+            DecidedBy::Join => along_le(self.decls, from, to).is_ok(),
+            DecidedBy::Equation => {
+                along_le(self.decls, from, to).is_ok() || coerce(self.decls, from, to).is_ok()
+            }
+            DecidedBy::Rule => as_it_is(from, to),
+        }
     }
 
-    fn boundary(&self, from: &Ty, to: &Ty) -> bool {
-        coerce(self.decls, from, to).is_ok()
+    fn boundary(&self, from: &Ty, to: &Ty, decided: DecidedBy) -> bool {
+        match decided {
+            DecidedBy::Join | DecidedBy::Equation => coerce(self.decls, from, to).is_ok(),
+            DecidedBy::Rule => as_it_is(from, to),
+        }
     }
 
     /// l.301: every class of the entry has a value, every node of the entry
@@ -630,11 +688,12 @@ impl Checker<'_> {
                 let at = format!("the pass of {value} into {into}");
                 let from = self.text(context, &at, value)?;
                 let to = self.text(context, &at, into)?;
+                let decided = self.text_decided_by(context, into);
                 if self.text.meets(self.program, &context.group, into, *place) {
-                    let holds = self.lower(&from, &to, self.text_written(context, into));
+                    let holds = self.lower(&from, &to, decided);
                     self.require(context, &at, holds, format!("{from} ≤ {to} fails (l.293)"));
                 } else {
-                    let holds = self.boundary(&from, &to);
+                    let holds = self.boundary(&from, &to, decided);
                     self.require(context, &at, holds, format!("{from} ⇝ {to} fails (l.293)"));
                 }
             }
@@ -684,8 +743,7 @@ impl Checker<'_> {
     }
 
     /// The value, at `level`, of the copy in the instance `made` of the class
-    /// `name` of the group `function` lies in, and whether an equation decides
-    /// it.
+    /// `name` of the group `function` lies in, and what decides it.
     fn copy(
         &mut self,
         context: &Context<'_>,
@@ -694,7 +752,7 @@ impl Checker<'_> {
         made: &Made,
         function: &Function,
         name: &Name,
-    ) -> Option<(Ty, bool)> {
+    ) -> Option<(Ty, DecidedBy)> {
         let from = &self.certificate.sheets[&function.group];
         let id = from
             .id(&ClassName::Text(name.clone()))
@@ -705,16 +763,16 @@ impl Checker<'_> {
         };
         let lookup = context.lookup(level, copy);
         let ty = self.get(context, at, &copy_name(&made.at, name).to_string(), lookup)?;
-        Some((ty, context.written(level, copy)))
+        Some((ty, context.decided_by(level, copy)))
     }
 
     /// Each argument into its parameter's type.
     fn passes(&mut self, context: &Context<'_>, at: &str, args: &[Ty], params: &[Param]) {
         for (k, (arg, param)) in args.iter().zip(params).enumerate() {
             let holds = if param.meets {
-                self.lower(arg, &param.ty, param.written)
+                self.lower(arg, &param.ty, param.decided)
             } else {
-                self.boundary(arg, &param.ty)
+                self.boundary(arg, &param.ty, param.decided)
             };
             let ty = &param.ty;
             self.require(
@@ -726,17 +784,17 @@ impl Checker<'_> {
         }
     }
 
-    /// The result type into the result, as a lower bound, `written` where an
-    /// equation decides the result.
+    /// The result type into the result, as a lower bound, the result decided
+    /// by `decided`.
     fn returns(
         &mut self,
         context: &Context<'_>,
         at: &str,
         returned: &Ty,
         result: &Ty,
-        written: bool,
+        decided: DecidedBy,
     ) {
-        let holds = self.lower(returned, result, written);
+        let holds = self.lower(returned, result, decided);
         self.require(context, at, holds, format!("{returned} ≤ {result} fails"));
     }
 
@@ -771,7 +829,7 @@ impl Checker<'_> {
                     Some(Param {
                         ty,
                         meets: false,
-                        written: false,
+                        decided: DecidedBy::Join,
                     })
                 })
                 .collect::<Option<Vec<_>>>()?;
@@ -786,17 +844,17 @@ impl Checker<'_> {
                 .params
                 .iter()
                 .map(|param| {
-                    let (ty, written) = self.copy(context, &at, 0, made, function, param)?;
+                    let (ty, decided) = self.copy(context, &at, 0, made, function, param)?;
                     let meets = self.text.meets_copy(param);
-                    Some(Param { ty, meets, written })
+                    Some(Param { ty, meets, decided })
                 })
                 .collect::<Option<Vec<_>>>()?;
             let (returned, _) = self.copy(context, &at, 0, made, function, &function.result)?;
             (params, returned)
         };
-        let written = self.text_written(context, result);
+        let decided = self.text_decided_by(context, result);
         self.passes(context, &at, &arg_values, &params);
-        self.returns(context, &at, &returned, &result_value, written);
+        self.returns(context, &at, &returned, &result_value, decided);
         Some(())
     }
 
@@ -843,22 +901,22 @@ impl Checker<'_> {
                         self.violation(context, &at, format!("parameter {k} has no type"));
                         return None;
                     };
-                    let (meets, written) = match param {
+                    let (meets, decided) = match param {
                         SigTy::Var(var) => (
                             true,
-                            self.node_written(context, level, &owner, NodeAt::Var(*var)),
+                            self.node_decided_by(context, level, &owner, NodeAt::Var(*var)),
                         ),
-                        SigTy::Term(_) => (false, false),
+                        SigTy::Term(_) => (false, DecidedBy::Join),
                     };
-                    params.push(Param { ty, meets, written });
+                    params.push(Param { ty, meets, decided });
                 }
                 let Ok(returned) = sig.result().substitute(&bound) else {
                     self.violation(context, &at, "the result has no type".to_string());
                     return None;
                 };
-                let written = self.text_written(context, result);
+                let decided = self.text_decided_by(context, result);
                 self.passes(context, &at, &arg_values, &params);
-                self.returns(context, &at, &returned, &result_value, written);
+                self.returns(context, &at, &returned, &result_value, decided);
             }
             Decision::Never => {
                 let candidates: Vec<&Signature> = self
@@ -1071,7 +1129,7 @@ impl Checker<'_> {
     ) -> Option<()> {
         let at = format!("the binding {name}");
         let DecidedAt { decision, .. } = self.decided(context, &at, name)?;
-        let written = self.text_written(context, binding);
+        let decided = self.text_decided_by(context, binding);
         let position = self.text(context, &at, position)?;
         let binding = self.text(context, &at, binding)?;
         let read = match decision {
@@ -1096,7 +1154,7 @@ impl Checker<'_> {
                 return None;
             }
         };
-        let holds = self.lower(&read, &binding, written);
+        let holds = self.lower(&read, &binding, decided);
         self.require(
             context,
             &at,
@@ -1130,7 +1188,7 @@ impl Checker<'_> {
             .map(|arg| self.text(context, &at, arg))
             .collect::<Option<Vec<Ty>>>()?;
         let result_value = self.text(context, &at, result)?;
-        let written = self.text_written(context, result);
+        let decided = self.text_decided_by(context, result);
         let met = self.lambdas_met(callee);
         for lambda in &lambdas {
             let named = met.contains(lambda);
@@ -1160,13 +1218,13 @@ impl Checker<'_> {
                 .map(|param| {
                     if self.program.in_environment(param) {
                         let ty = self.text(context, &at, param)?;
-                        let written = self.text_written(context, param);
+                        let decided = self.text_decided_by(context, param);
                         let meets = self.text.unknown(param);
-                        return Some(Param { ty, meets, written });
+                        return Some(Param { ty, meets, decided });
                     }
-                    let (ty, written) = self.copy(context, &at, level, made, &function, param)?;
+                    let (ty, decided) = self.copy(context, &at, level, made, &function, param)?;
                     let meets = self.text.meets_copy(param);
-                    Some(Param { ty, meets, written })
+                    Some(Param { ty, meets, decided })
                 })
                 .collect::<Option<Vec<_>>>()
             else {
@@ -1182,7 +1240,7 @@ impl Checker<'_> {
                 continue;
             };
             self.passes(context, &at, &arg_values, &params);
-            self.returns(context, &at, &returned, &result_value, written);
+            self.returns(context, &at, &returned, &result_value, decided);
         }
         Some(())
     }
@@ -1324,4 +1382,10 @@ fn view_element(decls: &Decls, ty: &Ty) -> Option<Ty> {
         },
         _ => None,
     }
+}
+
+/// A value reaching a class the invariant rule typed: that type itself, or `!`
+/// (`design/18-invariant-points.md`, row 5).
+fn as_it_is(from: &Ty, to: &Ty) -> bool {
+    from == to || *from.term() == Term::Never
 }

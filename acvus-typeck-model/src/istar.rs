@@ -252,7 +252,10 @@ fn depends_on(
 /// `read` takes them (`design/15-istar.md`, Definitions). A use records into
 /// what its candidate would record into by l.286 (note 08, reading 13), its
 /// remaining candidates' where it is not decided as one: the classes it
-/// makes anew are its own, and no other node reads them. Another decided node
+/// makes anew are its own, and no other node reads them. Where invariant
+/// points are kept as checks, a use records into its result and what its
+/// candidates would equate with an unknown alone
+/// (`design/18-invariant-points.md`, row 2). Another decided node
 /// records into what its own relations record into, those of the instances it
 /// made among them; one not decided, into the classes at its positions. A
 /// read of whether a class is a reference leaves out what cannot decide it
@@ -284,9 +287,16 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
                     .map(|decl| decl.sig.clone())
                     .collect(),
             };
-            sigs.iter()
-                .flat_map(|sig| view.would_record_by(args, *result, sig).into_keys())
-                .collect()
+            if view.keeps_invariant_points() {
+                sigs.iter()
+                    .flat_map(|sig| view.would_record_own_by(args, sig))
+                    .chain([view.root(*result)])
+                    .collect()
+            } else {
+                sigs.iter()
+                    .flat_map(|sig| view.would_record_by(args, *result, sig).into_keys())
+                    .collect()
+            }
         }
         (_, Some(_)) => view
             .log
@@ -294,7 +304,11 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
             .filter(|recorded| recorded.recorder.nodes().contains(name))
             .flat_map(|recorded| into(&recorded.relation))
             .collect(),
-        (kind, None) => view.positions(kind),
+        (kind, None) => view
+            .positions(kind)
+            .into_iter()
+            .filter(|&class| !view.keeps_invariant_points() || view.may_record_own(name, class))
+            .collect(),
     };
     let mut roots: BTreeSet<ClassId> = classes.into_iter().map(|class| view.root(class)).collect();
     if read == Read::Reference {
@@ -316,12 +330,15 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
 
 /// The classes a relation records into: the upper side of a lower bound, the
 /// type passed into at a boundary, both sides of an equation, and the class
-/// a kind, a fact, a LitVar, a record of l.252 or a lambda is given to.
+/// a kind, a fact, a LitVar, a record of l.252 or a lambda is given to. An
+/// invariant point records into none, being a check
+/// (`design/18-invariant-points.md`, row 1).
 fn into(relation: &Relation) -> Vec<ClassId> {
     match relation {
         Relation::LowerBound { upper, .. } => vec![*upper],
         Relation::Boundary { to, .. } => vec![*to],
         Relation::Equation(a, b) => vec![*a, *b],
+        Relation::Invariant { .. } => Vec::new(),
         Relation::Fact(class, _)
         | Relation::Kind(class, ..)
         | Relation::Lit(class, _)

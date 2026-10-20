@@ -41,6 +41,9 @@ pub enum ClassName {
         step: usize,
         at: LinkAt,
     },
+    /// The closed type the invariant rule gave the named class
+    /// (`design/18-invariant-points.md`, row 3).
+    InvariantRule(Rc<ClassName>),
 }
 
 /// Which class of a cast's signature a link's class is.
@@ -61,6 +64,7 @@ impl fmt::Display for ClassName {
             ClassName::Link { from, to, step, at } => {
                 write!(f, "link({from} → {to})[{step}].{at:?}")
             }
+            ClassName::InvariantRule(class) => write!(f, "rule({class})"),
         }
     }
 }

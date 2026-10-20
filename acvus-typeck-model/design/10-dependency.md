@@ -43,6 +43,9 @@ reading changes one place:
 - `State::reads`: what a node reads, and the projections on a binding's path it
   depends on (`holes.md`, O1).
 - `State::records_into`: which nodes at a class's position may change what a node
-  reads there (l.248, l.250; `holes.md`, H7).
+  reads there (l.248, l.250; `holes.md`, H7). Read with invariant points last,
+  the nodes that may record an own relation into it, and only those make a class
+  depend on a node at whose position it lies (`State::may_record_own`;
+  `design/18-invariant-points.md`, row 2).
 - `State::chosen_outside`: which classes depend on the use that makes their
   group's instance (l.246; `holes.md`, H5).

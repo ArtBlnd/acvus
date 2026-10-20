@@ -9,7 +9,7 @@ use crate::node::{Decision, LendTarget};
 use std::collections::BTreeSet;
 
 use crate::program::{
-    BindingPath, Captures, Deferral, Program, ProgramBuilder, Projection, Readings,
+    BindingPath, Captures, Deferral, InvariantPoints, Program, ProgramBuilder, Projection, Readings,
 };
 use crate::sig::{DeclaredTypes, ExternDecl, SigTy, SigVar, Signature};
 use crate::solve::Outcome;
@@ -233,10 +233,19 @@ fn example_1_an_if_with_information_on_one_side() {
 /// let y = if c { x } else { Some(1u16) };
 /// take(x);                 // take(Option⟨u8⟩)
 /// ```
-/// `take(x)` is encoded as the boundary it records.
+/// `take(x)` is encoded as the boundary it records. With invariant points
+/// last (`design/18-invariant-points.md`) the outcome is the same: a covariant
+/// part's boundary is no invariant point.
 #[test]
 fn example_4_a_covariant_boundary_is_a_check() {
+    for readings in [Readings::default(), invariant_points_last()] {
+        example_4(readings);
+    }
+}
+
+fn example_4(readings: Readings) {
     let mut p = ProgramBuilder::new(no_decls());
+    p.readings(readings);
     let x = p.var("X");
     let k = p.var("?k");
     let none = p.written("None", Term::Option(k));
@@ -301,8 +310,50 @@ fn closed_extern(name: &str, args: Vec<Ty>) -> Ty {
 /// let a = Vec::new();      // new() -> Vec⟨T⟩
 /// fill_all(&mut a);        // fill_all(&mut Vec⟨u8⟩)
 /// ```
+/// With invariant points last (`design/18-invariant-points.md`), `A` is
+/// `Vec⟨_⟩` by its own relations, and the invariant rule types its element.
 #[test]
 fn example_2_a_boundarys_invariant_part() {
+    for readings in [Readings::default(), invariant_points_last()] {
+        let outcome = only_outcome(&example_2(readings, false));
+        assert!(outcome.accepted, "{outcome:#?}");
+        assert_eq!(
+            value(&outcome, "A"),
+            Some(closed_extern("Vec", vec![closed_int(IntTy::U8)]))
+        );
+        assert_eq!(
+            decision(&outcome, "lend"),
+            Decision::Lend {
+                target: LendTarget::Place,
+                mutability: Mutability::Exclusive
+            }
+        );
+    }
+}
+
+/// Example 2 with `push(&mut a, 0u16)` before `fill_all`, `push(&mut Vec⟨T⟩,
+/// T)`, read with invariant points last. `push`'s `Vec⟨T⟩` has an unknown, so
+/// its equation is `A`'s own, and `A` is `Vec⟨u16⟩`; `fill_all`'s invariant
+/// point at `A`'s element is a check, and its boundary
+/// `&mut Vec⟨u16⟩ ⇝ &mut Vec⟨u8⟩` fails.
+#[test]
+fn example_2_with_a_push_before_fill_all() {
+    let outcome = only_outcome(&example_2(invariant_points_last(), true));
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "A"),
+        Some(closed_extern("Vec", vec![closed_int(IntTy::U16)]))
+    );
+    let failed: Vec<&str> = outcome
+        .checks
+        .iter()
+        .filter(|check| check.coercion.is_err())
+        .map(|check| check.relation.as_str())
+        .collect();
+    assert_eq!(failed, ["&mut a ⇝ fill_all.Param(0)"], "{outcome:#?}");
+}
+
+fn example_2(readings: Readings, push: bool) -> Program {
     let mut d = declare(&[("Vec", 1)]);
     function(
         &mut d,
@@ -310,6 +361,15 @@ fn example_2_a_boundarys_invariant_part() {
         &["T"],
         vec![],
         s_extern("Vec", vec![t(0)]),
+        Role::Fn,
+    );
+    let vec_t = s_extern("Vec", vec![t(0)]);
+    function(
+        &mut d,
+        "push",
+        &["T"],
+        vec![s_ref(Mutability::Exclusive, vec_t), t(0)],
+        s_unit(),
         Role::Fn,
     );
     let vec_u8 = s_extern("Vec", vec![s_int(IntTy::U8)]);
@@ -322,27 +382,23 @@ fn example_2_a_boundarys_invariant_part() {
         Role::Fn,
     );
     let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(readings);
     let a = p.var("A");
     let new = p.var("new()");
     let lent = p.var("&mut a");
     let filled = p.var("fill_all(..)");
     p.call("new", "new", &[], &new);
     p.pass(&new, &a);
+    if push {
+        let lent_2 = p.var("&mut a 2");
+        let u16_ = p.written("0u16", int(IntTy::U16));
+        let pushed = p.var("push(..)");
+        p.lend("lend 2", Mutability::Exclusive, &a, &lent_2);
+        p.call("push", "push", &[&lent_2, &u16_], &pushed);
+    }
     p.lend("lend", Mutability::Exclusive, &a, &lent);
     p.call("fill_all", "fill_all", &[&lent], &filled);
-    let outcome = only_outcome(&p.build());
-    assert!(outcome.accepted, "{outcome:#?}");
-    assert_eq!(
-        value(&outcome, "A"),
-        Some(closed_extern("Vec", vec![closed_int(IntTy::U8)]))
-    );
-    assert_eq!(
-        decision(&outcome, "lend"),
-        Decision::Lend {
-            target: LendTarget::Place,
-            mutability: Mutability::Exclusive
-        }
-    );
+    p.build()
 }
 
 /// ```text
@@ -350,10 +406,14 @@ fn example_2_a_boundarys_invariant_part() {
 /// push(&mut buf, 1u16);    // push(&mut Vec⟨T⟩, T)
 /// consume(buf);            // consume(Vec⟨u8⟩)
 /// ```
-/// with the declared conversion `u16 → u8`, and without it.
+/// with the declared conversion `u16 → u8`, and without it. With invariant
+/// points last (`design/18-invariant-points.md`), `consume`'s `Vec⟨u8⟩` does
+/// not retype `B`, which its own relations make `Vec⟨u16⟩`: refused with the
+/// conversion as without it, the conversion reaching `u8` from `u16` and not
+/// `Vec⟨u8⟩` from `Vec⟨u16⟩`.
 #[test]
 fn example_3_a_conversion_where_an_equation_wins() {
-    let program = |conversion: bool| {
+    let program = |readings: Readings, conversion: bool| {
         let mut d = declare(&[("Vec", 1)]);
         function(
             &mut d,
@@ -385,6 +445,7 @@ fn example_3_a_conversion_where_an_equation_wins() {
             );
         }
         let mut p = ProgramBuilder::new(d.finish().unwrap());
+        p.readings(readings);
         let buf = p.var("B");
         let new = p.var("new()");
         let lent = p.var("&mut buf");
@@ -398,7 +459,7 @@ fn example_3_a_conversion_where_an_equation_wins() {
         p.call("consume", "consume", &[&buf], &consumed);
         p.build()
     };
-    let outcome = only_outcome(&program(true));
+    let outcome = only_outcome(&program(Readings::default(), true));
     assert!(outcome.accepted, "{outcome:#?}");
     assert_eq!(
         value(&outcome, "B"),
@@ -415,8 +476,17 @@ fn example_3_a_conversion_where_an_equation_wins() {
             .any(|check| check.coercion == Ok(crate::coerce::Coercion::Conversion(narrow.clone()))),
         "{outcome:#?}"
     );
-    let refused = only_outcome(&program(false));
+    let refused = only_outcome(&program(Readings::default(), false));
     assert!(!refused.accepted, "{refused:#?}");
+
+    for conversion in [true, false] {
+        let refused = only_outcome(&program(invariant_points_last(), conversion));
+        assert!(!refused.accepted, "{refused:#?}");
+        assert_eq!(
+            value(&refused, "B"),
+            Some(closed_extern("Vec", vec![closed_int(IntTy::U16)]))
+        );
+    }
 }
 
 /// ```text
@@ -471,9 +541,26 @@ fn example_9_a_lend_that_reborrows_a_reference() {
 /// ```
 /// The boundary `&V ⇝ &[u8]` joins two references, whose constructors are
 /// their mutabilities alone (l.66), so its target is an equation (l.289),
-/// `V = [u8]`, and the view's cast is never taken.
+/// `V = [u8]`, and the view's cast is never taken. With invariant points last
+/// (`design/18-invariant-points.md`), the target's equation is an invariant
+/// point, a check: `V` is `Vec⟨u8⟩` by `make()`, and the boundary
+/// `&Vec⟨u8⟩ ⇝ &[u8]` is reached by the view's cast.
 #[test]
 fn hole_3_a_view_at_a_boundary_equates_the_targets() {
+    let outcome = only_outcome(&hole_3(Readings::default()));
+    assert!(!outcome.accepted, "{outcome:#?}");
+    let slice_u8 = closed(Term::Slice(closed_int(IntTy::U8)));
+    assert_eq!(value(&outcome, "V"), Some(slice_u8));
+
+    let outcome = only_outcome(&hole_3(invariant_points_last()));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "V"),
+        Some(closed_extern("Vec", vec![closed_int(IntTy::U8)]))
+    );
+}
+
+fn hole_3(readings: Readings) -> Program {
     let mut d = declare(&[("Vec", 1)]);
     let vec_t = s_extern("Vec", vec![t(0)]);
     let slice_t = SigTy::term(Term::Slice(t(0)));
@@ -497,6 +584,7 @@ fn hole_3_a_view_at_a_boundary_equates_the_targets() {
         Role::Fn,
     );
     let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(readings);
     let v = p.var("V");
     let made = p.var("make()");
     let lent = p.var("&v");
@@ -505,10 +593,7 @@ fn hole_3_a_view_at_a_boundary_equates_the_targets() {
     p.pass(&made, &v);
     p.lend("lend", Mutability::Shared, &v, &lent);
     p.call("take", "take", &[&lent], &taken);
-    let outcome = only_outcome(&p.build());
-    assert!(!outcome.accepted, "{outcome:#?}");
-    let slice_u8 = closed(Term::Slice(closed_int(IntTy::U8)));
-    assert_eq!(value(&outcome, "V"), Some(slice_u8));
+    p.build()
 }
 
 /// `holes.md`, H4: a reborrow at a boundary.
@@ -518,9 +603,18 @@ fn hole_3_a_view_at_a_boundary_equates_the_targets() {
 /// ```
 /// The constructors `&mut` and `&` differ and no cast links them (l.291);
 /// the model reads the reborrow row `&mut T ⇝ &T` as an equation of the
-/// targets, so `V = Vec⟨u8⟩`.
+/// targets, so `V = Vec⟨u8⟩`. With invariant points last
+/// (`design/18-invariant-points.md`), that equation is an invariant point,
+/// `V` is `Vec⟨_⟩` by its own relations, and the invariant rule types its
+/// element.
 #[test]
 fn hole_4_a_reborrow_at_a_boundary_equates_the_targets() {
+    for readings in [Readings::default(), invariant_points_last()] {
+        hole_4(readings);
+    }
+}
+
+fn hole_4(readings: Readings) {
     let mut d = declare(&[("Vec", 1)]);
     function(
         &mut d,
@@ -540,6 +634,7 @@ fn hole_4_a_reborrow_at_a_boundary_equates_the_targets() {
         Role::Fn,
     );
     let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(readings);
     let v = p.var("V");
     let new = p.var("new()");
     let lent = p.var("&mut v");
@@ -991,8 +1086,18 @@ fn example_of_l254_a_projection_and_an_overload() {
 /// fill_all(&mut parse(s));     // parse(&str) -> Vec⟨u8⟩, parse(&str) -> Vec⟨u16⟩; fill_all(&mut Vec⟨u8⟩)
 /// let _ = &mut parse(s);
 /// ```
+/// With invariant points last (`design/18-invariant-points.md`), `parse`
+/// waits for `R`, which depends on `parse` alone, whose result is an own
+/// relation of it: the invariant rule types `R` `Vec⟨u8⟩`, and `parse` reads
+/// that. The second line's `R` has no invariant point.
 #[test]
 fn example_13_an_overload_chosen_by_its_result() {
+    for readings in [Readings::default(), invariant_points_last()] {
+        example_13(readings);
+    }
+}
+
+fn example_13(readings: Readings) {
     let mut d = declare(&[("Vec", 1)]);
     let str_ref = s_ref(Mutability::Shared, SigTy::term(Term::Str));
     for element in [IntTy::U8, IntTy::U16] {
@@ -1015,6 +1120,7 @@ fn example_13_an_overload_chosen_by_its_result() {
         Role::Fn,
     );
     let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(readings);
     let str_ = p.written("str", Term::Str);
     let s = p.written("&str", Term::Ref(Mutability::Shared, str_));
     let parsed = p.var("parse(s)");
@@ -1072,14 +1178,20 @@ fn add_impls(builder: &mut DeclsBuilder, numbers: &[IntTy]) {
 /// A literal operand is a temporary of the literal's type, which `&` lends.
 /// `x + y` and `y + 1` depend on each other and break their dependencies
 /// (l.269); either reading of what a broken dependency defers reaches the
-/// spec's outcome.
+/// spec's outcome. With invariant points last
+/// (`design/18-invariant-points.md`), `x + y` records only invariant points
+/// into `Y`, so it no longer depends on `y + 1`'s reading, the outcome is the
+/// same, and the literal `1`'s class `?b` is typed by the invariant rule.
 #[test]
 fn example_12_accumulation_that_starts_from_a_literal() {
-    for deferral in [Deferral::Recording, Deferral::Reading] {
-        let readings = Readings {
+    let readings = [Deferral::Recording, Deferral::Reading]
+        .map(|deferral| Readings {
             deferral,
             ..Readings::default()
-        };
+        })
+        .into_iter()
+        .chain([invariant_points_last()]);
+    for readings in readings {
         let outcome = only_outcome(&example_12(readings, false));
         assert!(outcome.accepted, "{outcome:#?}");
         for class in ["X", "Y", "?a", "?b", "R1", "R2"] {
@@ -1099,9 +1211,18 @@ fn example_12_accumulation_that_starts_from_a_literal() {
 /// `probe(i32)`. `probe` and `x + y` both read `X`, each lying at a position the
 /// other reads, so each breaks its dependency on the other (l.250, l.269), and
 /// `probe` reads `X` without `x + y`'s relations, as `?a` alone, takes the
-/// default `i32`, and is refused in every order.
+/// default `i32`, and is refused in every order. With invariant points last
+/// (`design/18-invariant-points.md`), `probe` records nothing into `X`, so
+/// `x + y` does not depend on it, and `probe` reads `X` as `u16`.
 #[test]
 fn hole_7_two_uses_that_read_one_class() {
+    let outcome = only_outcome(&example_12(invariant_points_last(), true));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        decision(&outcome, "probe"),
+        Decision::Use(overload("probe", 0))
+    );
+
     let checked = checked(&example_12(Readings::default(), true));
     assert_eq!(
         checked.istar_by(|outcome| decision(outcome, "probe")),
@@ -1620,7 +1741,11 @@ fn capture_written_after_a_use(readings: Readings, probe: bool) -> Program {
 /// refused with `X` `A`. I\* decides `probe(B)` in each, reading the instance's
 /// relations. Read by the captured environment (`design/17-environment.md`),
 /// `V ≤ X` is the enclosing group's and `V` lies at the call's positions, so
-/// `X` and `probe` wait for it: one outcome, `X` `B`, `probe(B)`.
+/// `X` and `probe` wait for it: one outcome, `X` `B`, `probe(B)`. With
+/// invariant points last (`design/18-invariant-points.md`), `X` no longer
+/// depends on `probe`, which records nothing into it: under the spec's
+/// captures a fourth outcome, `probe(B)` refused with `X` `A`, and by the
+/// captured environment the one outcome.
 #[test]
 fn hole_o4_a_capture_written_after_a_use_reads_it() {
     let failed = |outcome: &Outcome| -> Vec<String> {
@@ -1682,7 +1807,7 @@ fn hole_o4_a_capture_written_after_a_use_reads_it() {
     assert_eq!(
         decisions,
         BTreeSet::from([
-            (Decision::Use(overload("probe", 0)), false, Some(a)),
+            (Decision::Use(overload("probe", 0)), false, Some(a.clone())),
             (Decision::Use(overload("probe", 0)), true, Some(b.clone())),
             (Decision::Use(overload("probe", 1)), true, Some(b.clone())),
         ]),
@@ -1693,6 +1818,44 @@ fn hole_o4_a_capture_written_after_a_use_reads_it() {
     assert!(outcome.accepted, "{outcome:#?}");
     assert_eq!(value(&outcome, "X"), Some(b.clone()));
     let outcome = only_outcome(&capture_written_after_a_use(by_environment(), true));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "X"), Some(b.clone()));
+    assert_eq!(
+        decision(&outcome, "probe"),
+        Decision::Use(overload("probe", 1))
+    );
+
+    let last = checked(&capture_written_after_a_use(invariant_points_last(), true));
+    assert_eq!(
+        last.istar_by(|outcome| (
+            decision(outcome, "probe"),
+            outcome.accepted,
+            value(outcome, "X")
+        )),
+        BTreeSet::from([
+            (
+                (Decision::Use(overload("probe", 0)), false, Some(a.clone())),
+                BTreeSet::from([at(Kind::Completeness, "probe")])
+            ),
+            (
+                (Decision::Use(overload("probe", 0)), true, Some(b.clone())),
+                BTreeSet::from([at(Kind::Soundness, "probe")])
+            ),
+            (
+                (Decision::Use(overload("probe", 1)), false, Some(a)),
+                none()
+            ),
+            (
+                (Decision::Use(overload("probe", 1)), true, Some(b.clone())),
+                none()
+            ),
+        ])
+    );
+    let readings = Readings {
+        invariant_points: InvariantPoints::Last,
+        ..by_environment()
+    };
+    let outcome = only_outcome(&capture_written_after_a_use(readings, true));
     assert!(outcome.accepted, "{outcome:#?}");
     assert_eq!(value(&outcome, "X"), Some(b));
     assert_eq!(
@@ -2009,8 +2172,65 @@ fn comparison_impls(builder: &mut DeclsBuilder, numbers: &[IntTy]) {
 /// ```
 /// Its states are too many to explore, so the orders are sampled. Refused, as
 /// the spec has it, but where `q` has no value (`holes.md`, H6).
+/// With invariant points last (`design/18-invariant-points.md`), the sampled
+/// orders reach the same outcome.
 #[test]
 fn example_14_a_struct_and_recursion_that_grows() {
+    for readings in [Readings::default(), invariant_points_last()] {
+        example_14_sampled(readings);
+    }
+}
+
+fn example_14_sampled(readings: Readings) {
+    let sampled = sampled(&example_14(readings), 200);
+    let istar = sampled.istar();
+    assert!(istar.is_empty(), "I* fails: {istar:#?}");
+    let outcomes = sampled.outcomes;
+    assert_eq!(
+        outcomes.len(),
+        1,
+        "every sampled order reaches one outcome: {outcomes:#?}"
+    );
+    let outcome = outcomes.into_iter().next().unwrap();
+    assert!(!outcome.accepted, "{outcome:#?}");
+    let str_ref = closed(Term::Ref(Mutability::Shared, closed(Term::Str)));
+    let pair_of = |l: Ty, r: Ty| closed(Term::Struct(Name::new("Pair"), vec![l, r]));
+    assert_eq!(
+        value(&outcome, "p"),
+        Some(pair_of(closed_int(IntTy::U8), str_ref))
+    );
+    // `holes.md`, H6: the copy of `nest`'s `A` is `q`'s first part, whose
+    // lower bounds are `&str` and `Pair⟨A', B'⟩`, so it reaches a part of its
+    // own (l.275) and `q` has no value.
+    assert_eq!(value(&outcome, "q"), None, "{outcome:#?}");
+    assert!(
+        has_refusal(&outcome, |refusal| matches!(
+            refusal,
+            crate::solve::Refusal::Infinite(_)
+        )),
+        "{outcome:#?}"
+    );
+    let narrowed: Vec<Decision> = ["n == 0", "n - 1"]
+        .iter()
+        .map(|node| {
+            let copied = outcome
+                .decisions
+                .keys()
+                .find(|name| name.as_str().ends_with(&format!("/{node}")))
+                .unwrap_or_else(|| panic!("{node} is copied: {outcome:#?}"));
+            decision(&outcome, copied.as_str())
+        })
+        .collect();
+    assert_eq!(
+        narrowed,
+        [
+            Decision::Use(overload("core::eq", 1)),
+            Decision::Use(overload("core::sub", 1)),
+        ]
+    );
+}
+
+fn example_14(readings: Readings) -> Program {
     let pair = Name::new("Pair");
     let mut types = DeclaredTypes::default();
     types
@@ -2024,6 +2244,7 @@ fn example_14_a_struct_and_recursion_that_grows() {
     let mut d = DeclsBuilder::new(types);
     comparison_impls(&mut d, &[IntTy::U8, IntTy::I32]);
     let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(readings);
     let u8_term = || int(IntTy::U8);
     let made = |p: &mut ProgramBuilder, name: &str| {
         let l = p.var(&format!("{name}.l"));
@@ -2110,52 +2331,7 @@ fn example_14_a_struct_and_recursion_that_grows() {
     let nested = p.var("q.nest(3)");
     p.call("q.nest(3)", "nest", &[&q, &three], &nested);
 
-    let sampled = sampled(&p.build(), 200);
-    let istar = sampled.istar();
-    assert!(istar.is_empty(), "I* fails: {istar:#?}");
-    let outcomes = sampled.outcomes;
-    assert_eq!(
-        outcomes.len(),
-        1,
-        "every sampled order reaches one outcome: {outcomes:#?}"
-    );
-    let outcome = outcomes.into_iter().next().unwrap();
-    assert!(!outcome.accepted, "{outcome:#?}");
-    let str_ref = closed(Term::Ref(Mutability::Shared, closed(Term::Str)));
-    let pair_of = |l: Ty, r: Ty| closed(Term::Struct(pair.clone(), vec![l, r]));
-    assert_eq!(
-        value(&outcome, "p"),
-        Some(pair_of(closed_int(IntTy::U8), str_ref))
-    );
-    // `holes.md`, H6: the copy of `nest`'s `A` is `q`'s first part, whose
-    // lower bounds are `&str` and `Pair⟨A', B'⟩`, so it reaches a part of its
-    // own (l.275) and `q` has no value.
-    assert_eq!(value(&outcome, "q"), None, "{outcome:#?}");
-    assert!(
-        has_refusal(&outcome, |refusal| matches!(
-            refusal,
-            crate::solve::Refusal::Infinite(_)
-        )),
-        "{outcome:#?}"
-    );
-    let narrowed: Vec<Decision> = ["n == 0", "n - 1"]
-        .iter()
-        .map(|node| {
-            let copied = outcome
-                .decisions
-                .keys()
-                .find(|name| name.as_str().ends_with(&format!("/{node}")))
-                .unwrap_or_else(|| panic!("{node} is copied: {outcome:#?}"));
-            decision(&outcome, copied.as_str())
-        })
-        .collect();
-    assert_eq!(
-        narrowed,
-        [
-            Decision::Use(overload("core::eq", 1)),
-            Decision::Use(overload("core::sub", 1)),
-        ]
-    );
+    p.build()
 }
 
 /// `design/15-istar.md`, what the check presupposes: a read that leaves out a
@@ -2341,4 +2517,248 @@ fn a_certificate_with_a_wrong_value_or_decision_fails() {
             "Result is recorded as no reference, and its value is &A (l.252)".to_string(),
         ])
     );
+}
+
+/// Readings that keep invariant points as checks until the invariant rule
+/// (`design/18-invariant-points.md`).
+fn invariant_points_last() -> Readings {
+    Readings {
+        invariant_points: InvariantPoints::Last,
+        ..Readings::default()
+    }
+}
+
+/// `let x = 0;` and then `f(x)` for each `(f, params)` of `uses`, `f` declared
+/// once for each of `params`, returning `()`; read with invariant points last.
+fn a_literal_passed(uses: &[(&str, Vec<SigTy>)]) -> Program {
+    let mut d = declare(&[]);
+    for (name, params) in uses {
+        for param in params {
+            function(&mut d, name, &[], vec![param.clone()], s_unit(), Role::Fn);
+        }
+    }
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(invariant_points_last());
+    let x = p.var("X");
+    let zero = p.lit("0", int_lit(0));
+    p.pass(&zero, &x);
+    for (name, _) in uses {
+        let called = p.var(&format!("{name}(x)"));
+        p.call(name, name, &[&x], &called);
+    }
+    p.build()
+}
+
+fn s_str_ref() -> SigTy {
+    s_ref(Mutability::Shared, SigTy::term(Term::Str))
+}
+
+fn is_ambiguous(refusal: &crate::solve::Refusal) -> bool {
+    matches!(refusal, crate::solve::Refusal::Ambiguous(_))
+}
+
+/// `design/18-invariant-points.md`, P2: `let x = 0; takes_u8(x);`. The
+/// boundary `X ⇝ u8` is an invariant point, `X`'s only, so the rule types it.
+#[test]
+fn a_literal_passed_to_one_parameter() {
+    let program = a_literal_passed(&[("takes_u8", vec![s_int(IntTy::U8)])]);
+    let outcome = only_outcome(&program);
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "X"), Some(closed_int(IntTy::U8)));
+}
+
+/// P3: `let x = 0; m(x);` with `m(u16)` and `m(&str)`. `&str` admits no
+/// literal, so `m` is decided as `m(u16)`, whose invariant point types `X`.
+#[test]
+fn a_literal_passed_to_overloads_of_which_one_fits() {
+    let program = a_literal_passed(&[("m", vec![s_int(IntTy::U16), s_str_ref()])]);
+    let outcome = only_outcome(&program);
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "X"), Some(closed_int(IntTy::U16)));
+    assert_eq!(decision(&outcome, "m"), Decision::Use(overload("m", 0)));
+}
+
+/// P4: `let x = 0; n(x);` with `n(u8)` and `n(u16)`. `n` waits for `X`, whose
+/// invariant points give `u8` and `u16`, both fitting and neither the default.
+#[test]
+fn a_literal_passed_to_overloads_that_both_fit() {
+    let program = a_literal_passed(&[("n", vec![s_int(IntTy::U8), s_int(IntTy::U16)])]);
+    let outcome = only_outcome(&program);
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert!(has_refusal(&outcome, is_ambiguous), "{outcome:#?}");
+}
+
+/// P5: `let x = 0; n(x); m(x);`, the witness the removed
+/// `Recording::Relation` decided by order. `m` is decided as `m(u16)`; `n`
+/// waits, and `X`'s invariant points give `u8` and `u16`.
+#[test]
+fn a_literal_read_by_two_uses_that_leave_two_types() {
+    let program = a_literal_passed(&[
+        ("n", vec![s_int(IntTy::U8), s_int(IntTy::U16)]),
+        ("m", vec![s_int(IntTy::U16), s_str_ref()]),
+    ]);
+    let outcome = only_outcome(&program);
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert!(has_refusal(&outcome, is_ambiguous), "{outcome:#?}");
+    assert_eq!(decision(&outcome, "m"), Decision::Use(overload("m", 0)));
+}
+
+/// P7: `let x = 0; f(x);` with `f(u8)` and `f(i32)`. Both fit, and `i32` is
+/// the default: adding `f(i32)` to `f(u8)` turns `x: u8` into `x: i32`, the
+/// cost agreed as choice (a).
+#[test]
+fn a_literal_passed_to_overloads_with_the_default() {
+    let program = a_literal_passed(&[("f", vec![s_int(IntTy::U8), s_int(IntTy::I32)])]);
+    let outcome = only_outcome(&program);
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "X"), Some(closed_int(IntTy::I32)));
+    assert_eq!(decision(&outcome, "f"), Decision::Use(overload("f", 1)));
+}
+
+/// P9: `let x = 0; m(x); f(x);` with `m(u16)`, `m(&str)`, `f(u8)`, `f(i32)`.
+/// `m` is decided as `m(u16)`; `X`'s invariant points give `u16`, `u8` and
+/// `i32`, so the rule takes the default, and `m`'s boundary fails. I\*
+/// reports `m`, which reading `i32` has no candidate.
+#[test]
+fn a_default_where_a_decided_use_gives_another_type() {
+    let program = a_literal_passed(&[
+        ("m", vec![s_int(IntTy::U16), s_str_ref()]),
+        ("f", vec![s_int(IntTy::U8), s_int(IntTy::I32)]),
+    ]);
+    let checked = checked(&program);
+    assert_eq!(
+        checked.istar(),
+        BTreeSet::from([at(Kind::Completeness, "m")])
+    );
+    let outcomes = checked.outcomes;
+    let [outcome] = outcomes.as_slice() else {
+        panic!("every order reaches one outcome: {outcomes:#?}");
+    };
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(outcome, "X"), Some(closed_int(IntTy::I32)));
+    assert_eq!(decision(outcome, "m"), Decision::Use(overload("m", 0)));
+    assert_eq!(decision(outcome, "f"), Decision::Use(overload("f", 1)));
+}
+
+/// P1: `let x = 0; let y = x + 1;` with `core::add` for `u8`, `u16` and
+/// `i32`. `+` waits for `X` and for the literal `1`, each of whose invariant
+/// points give all three, so the rule takes the default for both.
+#[test]
+fn a_literal_added_to_a_literal() {
+    let mut d = declare(&[]);
+    add_impls(&mut d, &[IntTy::U8, IntTy::U16, IntTy::I32]);
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(invariant_points_last());
+    let x = p.var("X");
+    let zero = p.lit("0", int_lit(0));
+    let one = p.lit("?1", int_lit(1));
+    let lx = p.var("&x");
+    let l1 = p.var("&1");
+    let sum = p.var("x + 1");
+    let y = p.var("Y");
+    p.pass(&zero, &x);
+    p.lend("&x", Mutability::Shared, &x, &lx);
+    p.lend("&1", Mutability::Shared, &one, &l1);
+    p.call("x + 1", "core::add", &[&lx, &l1], &sum);
+    p.pass(&sum, &y);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    for class in ["X", "?1", "Y"] {
+        assert_eq!(
+            value(&outcome, class),
+            Some(closed_int(IntTy::I32)),
+            "{class}"
+        );
+    }
+    assert_eq!(
+        decision(&outcome, "x + 1"),
+        Decision::Use(overload("core::add", 2))
+    );
+}
+
+/// P8: `let x = 0; let w = 0; g(x, w);` with `g(u8, u8)` and `g(i32, &str)`.
+/// Only `u8` of `W`'s candidates fits it, so the rule's first step types `W`;
+/// `g` is then decided as `g(u8, u8)`, and the next round types `X` `u8`.
+/// Were the default taken with `W`, `X` would be `i32` and `g` refused.
+#[test]
+fn a_literal_typed_first_narrows_the_use_another_reads() {
+    let mut d = declare(&[]);
+    function(
+        &mut d,
+        "g",
+        &[],
+        vec![s_int(IntTy::U8), s_int(IntTy::U8)],
+        s_unit(),
+        Role::Fn,
+    );
+    function(
+        &mut d,
+        "g",
+        &[],
+        vec![s_int(IntTy::I32), s_str_ref()],
+        s_unit(),
+        Role::Fn,
+    );
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(invariant_points_last());
+    let x = p.var("X");
+    let w = p.var("W");
+    let zero = p.lit("0", int_lit(0));
+    let zero_2 = p.lit("0 2", int_lit(0));
+    let called = p.var("g(x, w)");
+    p.pass(&zero, &x);
+    p.pass(&zero_2, &w);
+    p.call("g", "g", &[&x, &w], &called);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "X"), Some(closed_int(IntTy::U8)));
+    assert_eq!(value(&outcome, "W"), Some(closed_int(IntTy::U8)));
+    assert_eq!(decision(&outcome, "g"), Decision::Use(overload("g", 0)));
+}
+
+/// `design/14-certificate.md` with `design/18-invariant-points.md`, row 5: a
+/// value reaches a class the invariant rule typed only as that type itself or
+/// as `!`.
+/// ```text
+/// let x = if c { make() } else { make_b() };   // make() -> A, make_b() -> B; a cast A → B
+/// ```
+/// Accepted with `x: B`, `make()` reaching it by the cast. A certificate that
+/// marks `X` as typed by the rule fails at `make()`'s pass alone.
+#[test]
+fn a_certificate_where_the_rule_typed_a_class_admits_its_type_alone() {
+    let mut d = declare(&[("A", 0), ("B", 0)]);
+    function(&mut d, "make", &[], vec![], s_named("A"), Role::Fn);
+    function(&mut d, "make_b", &[], vec![], s_named("B"), Role::Fn);
+    function(
+        &mut d,
+        "up",
+        &[],
+        vec![s_named("A")],
+        s_named("B"),
+        Role::Cast,
+    );
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    let x = p.var("X");
+    let made = p.var("make()");
+    let made_b = p.var("make_b()");
+    p.call("make", "make", &[], &made);
+    p.call("make_b", "make_b", &[], &made_b);
+    p.pass(&made, &x);
+    p.pass(&made_b, &x);
+    let program = p.build();
+    let outcome = only_outcome(&program);
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "X"), Some(closed_extern("B", vec![])));
+
+    let mut what = BTreeSet::new();
+    explore_with(&program, BUDGET, |end| {
+        let mut certificate = Certificate::of(end);
+        certificate.set_ruled(
+            crate::program::ENTRY,
+            &crate::class::ClassName::Text(Name::new("X")),
+        );
+        let violations = crate::certificate::check(&program, &certificate);
+        what.extend(violations.into_iter().map(|violation| violation.what));
+    });
+    assert_eq!(what, BTreeSet::from(["A ≤ B fails (l.293)".to_string()]));
 }

@@ -53,8 +53,8 @@ What each item and decision gives, and what holding means on closed values:
 | `Origin::Written(τ)`, `Origin::Host(τ)` | the class's kind | its value is `τ` with each part's value |
 | `Origin::Lit(l)` | a LitVar | its value is a type of `l`'s family (l.134) |
 | `Origin::Lambda(λ)` | a function value naming `λ` | its value is `Fn/n`, `n` being `λ`'s parameters |
-| `Pass` into an unknown of the place's group (l.226) | `τ ≤ α` | `≤` reaches it, or a coercion does where an equation decides `α` (l.293) |
-| `Pass` otherwise | `τ ⇝ U` | a coercion reaches it (l.293) |
+| `Pass` into an unknown of the place's group (l.226) | `τ ≤ α` | `≤` reaches it, or a coercion does where an equation decides `α` (l.293); where the invariant rule typed `α`, `τ`'s value is `α`'s or `!` (note 18, row 5) |
+| `Pass` otherwise | `τ ⇝ U` | a coercion reaches it (l.293), or, into a class the invariant rule typed, as above |
 | `Equation` | `a = b` | the two values are equal |
 | a use of a function, own group (l.516) | each argument into its universal by a boundary, the result type as a lower bound | as above |
 | a use of a function, another group | the same, into the instance's copies | as above, under the instance's assignment |
@@ -105,7 +105,9 @@ the groups solved before it, to the caller (note 13, Checks).
 - Whether an equation decides a class is taken from the certificate. Deciding it
   needs the equations splits derive (l.286), which the checker does not regenerate;
   a solver that marks a class wrongly, and so admits a coercion where `≤` was due,
-  is not seen.
+  is not seen. So is whether the invariant rule typed a class (note 18), and
+  whether its choice is the one its invariant points give is not checked: those
+  points lie at parts, which the checker, on closed values, does not name.
 - Which candidate a use is decided as, and what a lend or a projection reads, are
   not this check's: any decision whose relations hold passes here. Whether the
   decision is the one its node should make is note 15's.
@@ -125,7 +127,9 @@ Run, every accepted final state of every example passes (Example 14, refused,
 has none), and `examples.rs`, `a_certificate_with_a_wrong_value_or_decision_fails`,
 finds `x: B` in place of `x: A` at the pass of `make()` into `X` and at
 `probe(A)`'s boundary, `probe(B)` in place of `probe(A)` at its boundary, and
-`probe(x): &A` in place of `()` at its result and at the record of l.252. A
+`probe(x): &A` in place of `()` at its result and at the record of l.252, and
+`a_certificate_where_the_rule_typed_a_class_admits_its_type_alone` finds `A ≤ B`
+at `make()`'s pass into a class marked as typed by the invariant rule. A
 first run reported Example 3's `push` refused at `u16` into `u8`: the checker
 dropped whether an equation decides the parameter's variable, which admits the
 conversion (l.293); it was the checker's error.
