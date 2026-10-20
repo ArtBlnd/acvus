@@ -23,8 +23,10 @@ row is of the moment: a dependency on a solved class or a decided node is gone.
    invariant part gives.
 3. **A LitVar lower bound is not waited for.** A lower bound holding only a LitVar
    and waiting for nothing gives its LitVar, which the join unifies (l.176), so the
-   class it bounds may be solved. Read as an unsolved lower bound, Example 12's `X`
-   would wait until fallback made `?a` `i32`, against its narrative.
+   class it bounds may be solved. Read as an unsolved lower bound, which waits,
+   every current example reaches the outcome it does: run by changing the model,
+   Example 12's `X` waits for `?a` and takes `u16` all the same, from the equation
+   the decided `x + y` records. No example yet tells the two readings apart.
 4. **The part row.** A part depends on the classes it is a part of taking a
    constructor (l.245). A class holding a kind is solved (note 06, reading 4), so
    the row holds of every part already.

@@ -77,7 +77,8 @@ reads its position, or lends it where its path passes a reference.
    only where it already reads as one (l.307); and a call of a function value at
    its arguments. The pick example (l.263) needs the first: `pick` lies at `A`, its
    argument, which its candidates record nothing into. The second keeps two lends
-   of one place from depending on each other (Example 12's two `&y`).
+   of one place from depending on each other (Example 12's two `&y`; `holes.md`,
+   O5).
 13. **What candidates would record** (l.252). A candidate records its result type
    into its result, and, inside each argument's kind as it is at the moment, the
    equations its parameter's invariant parts give (l.286), each part beneath an

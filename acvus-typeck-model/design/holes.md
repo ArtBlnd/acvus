@@ -253,13 +253,6 @@ decided, and only the value read by the node that broke it leaves them out
 l.269 is for, that each node of a cycle reads without the others (Example 12, step
 3), without holding the relations from third nodes.
 
-An earlier encoding found Example 12 itself order-dependent, through a cycle of its
-two lends of `y`; that cycle was the encoding's: a lend cannot decide whether its
-place is a reference, and leaving out of a lend's dependencies the nodes that
-cannot decide it, as l.248 leaves out the uses that have recorded it, removes the
-cycle (`design/08-node.md`, reading 12). Example 12 now reaches its outcome in every
-order under both readings.
-
 ## O3. A reference recorded at once has no mutability
 
 Where every candidate records a reference into a class, a use records at once that
@@ -303,3 +296,25 @@ Without `probe(x)`, two outcomes: `x: B` accepted, and `x: A` refused at `V ≤ 
 The invariant broken is that a node recording into a class is seen as the class's
 dependency before it records and stays after: a lambda's instance writes classes
 its call does not lie at.
+
+## O5. Two lends of one place
+
+A lend depends on the nodes that record into its place's class, other than
+projections of a field, a component, an index or a variant, and uses that have
+already recorded whether that class is a reference (l.248); the nodes that record
+into a class include those at whose position it lies (l.250). Two lends of one place
+each lie at it, so each depends on the other, and each breaks its dependency on the
+other (l.269). Example 12's `&y` and `&y 2` are two such lends. Read as l.248
+states, the model reaches two outcomes there: `u16` everywhere, accepted, and
+`i32` everywhere, refused at `1u16 ≤ Y`. That was run by changing the model, and no
+test keeps it.
+
+A lend records into its place only that it is a reference, and only where it
+already reads as one (l.307), so it cannot decide whether its place is one. The
+model leaves out of a read of whether a class is a reference every node that cannot
+decide it: a use whose candidates would record no lower bound or equation into the
+class, which the spec's own example needs (l.263); a lend at its place and a binding
+at its position; and a call of a function value at its arguments
+(`design/08-node.md`, reading 12). Read so, Example 12 reaches its outcome in every
+order. The model takes this with no reading of its own: l.248 as stated is not
+encoded.
