@@ -1048,15 +1048,15 @@ fn hole_o2_a_deferred_relation_read_by_a_third_node() {
         ..Readings::default()
     };
     let recording = outcomes(&example_12(readings(Deferral::Recording), true));
-    let decisions: BTreeSet<Decision> = recording
+    let decisions: BTreeSet<(Decision, bool)> = recording
         .iter()
-        .map(|outcome| decision(outcome, "probe"))
+        .map(|outcome| (decision(outcome, "probe"), outcome.accepted))
         .collect();
     assert_eq!(
         decisions,
         BTreeSet::from([
-            Decision::Use(overload("probe", 0)),
-            Decision::Use(overload("probe", 1)),
+            (Decision::Use(overload("probe", 0)), true),
+            (Decision::Use(overload("probe", 1)), false),
         ]),
         "{recording:#?}"
     );
