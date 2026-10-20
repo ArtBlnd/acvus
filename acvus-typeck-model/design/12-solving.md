@@ -21,3 +21,9 @@ value, and a boundary by a coercion (l.293).
    class holds a joined value, so its lower bounds reach it by `≤`.
 3. **What is checked.** The relations the text and the nodes record; a split's
    relations are parts of those.
+
+## Left open for change
+
+- `State::splits_now`: when a lower bound's or a boundary's parts are related
+  (l.284; `holes.md`, T2). What they are related by is `State::split_parts`
+  (`holes.md`, H3, H4).

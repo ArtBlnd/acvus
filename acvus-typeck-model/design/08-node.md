@@ -106,3 +106,11 @@ reads its position, or lends it where its path passes a reference.
    class at their positions. For a use's read, which is of a value, the spec makes
    no narrowing such as l.248 makes for a reference read; the model takes the two
    as a reading (`Recording`, `holes.md`, H7).
+
+## Left open for change
+
+- `State::record_at_once`: what a use records before it is decided, the positions
+  its candidates write alike (l.335) and whether a class is a reference where they
+  agree (l.252); what it leaves out is `holes.md`, O3.
+- `State::defer`: when a decided node's relations are recorded, and which reads
+  leave them out (l.269; `holes.md`, O2).

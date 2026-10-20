@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::class::ClassId;
-use crate::program::Recording;
+use crate::node::Reads;
 use crate::relation::Relation;
 use crate::solve::State;
 use crate::ty::Name;
@@ -117,7 +117,7 @@ impl State {
             }
         }
         for root in self.classes.roots() {
-            if self.is_universal(root) {
+            if self.chosen_outside(root) {
                 add(Vertex::Class(root), Vertex::Outside, Edge::Chosen);
             }
         }
@@ -161,30 +161,27 @@ impl State {
             }
             nodes
         };
-        let by_relation = self.readings.recording == Recording::Relation;
         let mut reads = Vec::new();
-        for (name, node) in &undecided {
-            let reads_reference = node.kind.reads_reference();
-            for position in self.read_positions(&node.kind) {
+        for (name, _) in &undecided {
+            let Reads {
+                read,
+                classes,
+                path,
+            } = self.reads(name);
+            for position in classes {
                 for (recorder, at) in recording(position, &edges) {
                     let left_out = match &recorder {
                         Vertex::Node(recorder) => {
-                            recorder == *name
-                                || reads_reference
-                                    && (self.is_inner_projection(recorder)
-                                        || !self.may_decide_reference(recorder, at))
-                                || !reads_reference
-                                    && by_relation
-                                    && !self.may_record_into(recorder, at)
+                            recorder == *name || !self.records_into(recorder, at, read)
                         }
-                        _ => false,
+                        Vertex::Class(_) | Vertex::Outside => false,
                     };
                     if !left_out {
                         reads.push(((*name).clone(), recorder, Edge::Reads));
                     }
                 }
             }
-            for step in self.path_of(name) {
+            for step in path {
                 if self.nodes[&step].decision.is_none() {
                     reads.push(((*name).clone(), Vertex::Node(step), Edge::Path));
                 }
@@ -217,6 +214,13 @@ impl State {
             }
         }
         seen
+    }
+
+    /// Whether the equivalence class depends on the use that makes an
+    /// instance of its binding group, which lies outside it (l.246): a
+    /// universal (`holes.md`, H5).
+    pub(crate) fn chosen_outside(&self, root: ClassId) -> bool {
+        self.is_universal(root)
     }
 
     /// The undecided nodes that broke their dependency on the node (l.269).

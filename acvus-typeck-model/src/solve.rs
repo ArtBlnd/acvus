@@ -632,7 +632,7 @@ impl State {
                     Relation::LowerBound { lower, upper } => {
                         if self.root(lower) == self.root(upper) {
                             self.split.insert(i);
-                        } else if self.is_solved(lower) && self.is_solved(upper) {
+                        } else if self.splits_now(lower, upper) {
                             self.split.insert(i);
                             self.split_parts(lower, upper, Side::Lower, upper);
                         } else if self.is_lit(lower)
@@ -646,7 +646,7 @@ impl State {
                     Relation::Boundary { from, to } => {
                         if self.root(from) == self.root(to) {
                             self.split.insert(i);
-                        } else if self.is_solved(from) && self.is_solved(to) {
+                        } else if self.splits_now(from, to) {
                             self.split.insert(i);
                             self.split_parts(from, to, Side::Boundary, from);
                         }
@@ -665,6 +665,13 @@ impl State {
                 return;
             }
         }
+    }
+
+    /// Whether the parts of a lower bound's or a boundary's two sides are
+    /// related now (l.284): once both sides have taken a constructor
+    /// (`holes.md`, T2).
+    fn splits_now(&self, a: ClassId, b: ClassId) -> bool {
+        self.is_solved(a) && self.is_solved(b)
     }
 
     /// Links each kind "indexes `τ`" an extern-defined container's class holds

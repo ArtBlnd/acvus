@@ -28,3 +28,15 @@ row is of the moment: a dependency on a solved class or a decided node is gone.
 4. **The part row.** A part depends on the classes it is a part of taking a
    constructor (l.245). A class holding a kind is solved (note 06, reading 4), so
    the row holds of every part already.
+
+## Left open for change
+
+Each rule of the table that the ledger finds open is one function, so that a
+reading changes one place:
+
+- `State::reads`: what a node reads, and the projections on a binding's path it
+  depends on (`holes.md`, O1).
+- `State::records_into`: which nodes at a class's position may change what a node
+  reads there (l.248, l.250; `holes.md`, H7).
+- `State::chosen_outside`: which classes depend on the use that makes their
+  group's instance (l.246; `holes.md`, H5).

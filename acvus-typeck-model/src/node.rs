@@ -7,7 +7,7 @@ use std::rc::Rc;
 use crate::class::{ClassId, ClassName, Fact, KindSource};
 use crate::coerce::coerce_read;
 use crate::decl::{Decl, DeclId};
-use crate::program::{BindingPath, Deferral, Projection};
+use crate::program::{BindingPath, Deferral, Projection, Recording};
 use crate::read::ReadValue;
 use crate::relation::{Recorder, Relation};
 use crate::sig::{SigTy, Signature};
@@ -48,15 +48,34 @@ pub enum NodeKind {
     },
 }
 
+/// What a node reads at the classes at its positions (l.267).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Read {
+    /// Their values: a use, and a call of a function value.
+    Value,
+    /// Whether they are references: a lend, a projection, a binding.
+    Reference,
+}
+
 impl NodeKind {
-    /// Whether it reads whether a class is a reference (l.267): a lend, a
-    /// projection or a binding.
-    pub(crate) fn reads_reference(&self) -> bool {
-        matches!(
-            self,
-            NodeKind::Lend { .. } | NodeKind::Project { .. } | NodeKind::Bind { .. }
-        )
+    pub(crate) fn read(&self) -> Read {
+        match self {
+            NodeKind::Lend { .. } | NodeKind::Project { .. } | NodeKind::Bind { .. } => {
+                Read::Reference
+            }
+            NodeKind::Use { .. } | NodeKind::CallValue { .. } => Read::Value,
+        }
     }
+}
+
+/// What a node reads (l.267), on which it depends (l.247–248).
+pub(crate) struct Reads {
+    pub(crate) read: Read,
+    /// The classes at the positions it reads.
+    pub(crate) classes: Vec<ClassId>,
+    /// The projections on a binding's path, where the reading takes it so
+    /// (`holes.md`, O1).
+    pub(crate) path: Vec<Name>,
 }
 
 /// What a use, a lend, a projection or a binding became (l.267).
@@ -364,6 +383,37 @@ impl State {
             .any(|&recorded| self.root(recorded) == root)
     }
 
+    /// What a node reads, and on which it depends (l.247–248, l.267).
+    pub(crate) fn reads(&self, name: &Name) -> Reads {
+        let kind = &self.nodes[name].kind;
+        let path = match (kind, self.readings.binding_path) {
+            (NodeKind::Bind { path, .. }, BindingPath::AfterPath) => path.clone(),
+            _ => Vec::new(),
+        };
+        Reads {
+            read: kind.read(),
+            classes: self.read_positions(kind),
+            path,
+        }
+    }
+
+    /// Whether the relations the node `recorder` records may change what a
+    /// node reading `read` reads at `class`, a class at the recorder's
+    /// position or reached from one (l.244 (b), l.250). For a value, every
+    /// such node, or, as `Recording::Relation` reads l.250, one that would
+    /// record into the class (`holes.md`, H7); for whether a class is a
+    /// reference, a node that may decide it, other than a projection of a
+    /// field, a component, an index or a variant (l.248).
+    pub(crate) fn records_into(&self, recorder: &Name, class: ClassId, read: Read) -> bool {
+        match (read, self.readings.recording) {
+            (Read::Value, Recording::Position) => true,
+            (Read::Value, Recording::Relation) => self.may_record_into(recorder, class),
+            (Read::Reference, _) => {
+                !self.is_inner_projection(recorder) && self.may_decide_reference(recorder, class)
+            }
+        }
+    }
+
     /// Whether what the node records may yet decide whether the class is a
     /// reference, which is decided by its lower bounds and equations (l.309):
     /// for a use, where some candidate would record one into it and the use
@@ -372,7 +422,7 @@ impl State {
     /// records into. A lend records into its place, and a binding into its
     /// position, only that it is a reference to a class, and only where it
     /// already reads as one (l.307; `design/08-node.md`, reading 12).
-    pub(crate) fn may_decide_reference(&self, name: &Name, class: ClassId) -> bool {
+    fn may_decide_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
         match &self.nodes[name].kind {
             NodeKind::Use { .. } => {
@@ -398,7 +448,7 @@ impl State {
     /// result (l.307); a binding into its own type and its position, which it
     /// may lend; and a projection or a call of a function value into every
     /// class at its positions.
-    pub(crate) fn may_record_into(&self, name: &Name, class: ClassId) -> bool {
+    fn may_record_into(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
         match &self.nodes[name].kind {
             NodeKind::Use { .. } => self
@@ -422,7 +472,7 @@ impl State {
     fn excluded(&self, name: &Name) -> BTreeSet<Name> {
         let mut excluded = self.dependents(name);
         excluded.extend(self.broken.get(name).into_iter().flatten().cloned());
-        if self.nodes[name].kind.reads_reference() {
+        if self.nodes[name].kind.read() == Read::Reference {
             excluded.extend(
                 self.nodes
                     .keys()
@@ -527,14 +577,21 @@ impl State {
             .decision = Some(decision);
     }
 
-    /// Decides the node by the value it reads. Where undecided nodes broke
-    /// their dependency on it, what it records waits for them to be decided,
-    /// or their reads leave it out, as the reading takes it (l.269).
+    /// Decides the node by the value it reads, and records what it records
+    /// as the reading of l.269 takes it.
     pub(crate) fn decide(&mut self, name: &Name) {
         let decision = self.decision_of(name);
         let waiting = self.broken_on(name);
         self.set_decision(name, decision);
         self.broken.remove(name);
+        self.defer(name, waiting);
+    }
+
+    /// Records what the node just decided records, or defers it, as the
+    /// reading takes l.269 (`Deferral`; `holes.md`, O2), `waiting` being the
+    /// undecided nodes that broke their dependency on it; then records what
+    /// each deferred node records once the nodes it waits for are decided.
+    fn defer(&mut self, name: &Name, waiting: BTreeSet<Name>) {
         match self.readings.deferral {
             Deferral::Recording if !waiting.is_empty() => {
                 self.deferred.insert(name.clone(), waiting);
@@ -985,15 +1042,6 @@ impl State {
             }
         };
         self.written(at(NodeAt::Lent), Term::Ref(mutability, target), recorder)
-    }
-
-    /// The projections on a binding's path, on which it depends where the
-    /// reading takes it so (`holes.md`, O1).
-    pub(crate) fn path_of(&self, name: &Name) -> Vec<Name> {
-        match (&self.nodes[name].kind, self.readings.binding_path) {
-            (NodeKind::Bind { path, .. }, BindingPath::AfterPath) => path.clone(),
-            _ => Vec::new(),
-        }
     }
 
     /// Narrows the candidates by the value the use reads at each position
