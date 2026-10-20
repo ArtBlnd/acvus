@@ -1,0 +1,785 @@
+//! Steps, state, fixpoint, fallback and acceptance (l.295–301), with the
+//! splits a class taking a constructor records (l.284–291).
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
+
+use crate::class::{Arena, ClassId, ClassName, Classes, Conflict, Fact, KindSource, LinkAt};
+use crate::coerce::{CoerceError, Coercion, along_le, coerce};
+use crate::decl::{Decls, Node};
+use crate::node::{Decision, NodeKind, NodeState};
+use crate::program::{Item, Origin, Program};
+use crate::relation::{Named, Recorded, Recorder, Relation};
+use crate::ty::{Mutability, Name, Term, Ty, Variance};
+use crate::value::{Head, head};
+
+/// Where a definition gives no result (l.301).
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Refusal {
+    /// No type holds what a relation made one equivalence class hold.
+    Conflict { at: String, conflict: String },
+    /// The types an equivalence class's sources give have no join.
+    NoJoin(ClassName),
+    /// The equivalence class reaches a part of its own (l.275).
+    Infinite(ClassName),
+    /// The equivalence class has no value once solving ends.
+    NoValue(ClassName),
+    /// A type the text writes disagrees with its declaration.
+    Undeclared(String),
+}
+
+/// A relation an entering value is checked by once everything is solved
+/// (l.291, l.293), with the coercion that changes it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Check {
+    pub relation: String,
+    pub coercion: Result<Coercion, CoerceError>,
+}
+
+/// What solving decides (I3).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Outcome {
+    pub values: BTreeMap<ClassName, Option<Ty>>,
+    pub decisions: BTreeMap<Name, Option<Decision>>,
+    pub partition: BTreeSet<BTreeSet<ClassName>>,
+    pub checks: Vec<Check>,
+    pub refusals: BTreeSet<Refusal>,
+    pub accepted: bool,
+}
+
+/// How a relation's two sides are related part by part (l.286).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Side {
+    Lower,
+    Boundary,
+}
+
+#[derive(Clone, Debug)]
+pub struct State {
+    pub(crate) decls: Rc<Decls>,
+    pub(crate) arena: Arena,
+    pub(crate) classes: Classes,
+    pub(crate) log: Vec<Recorded>,
+    /// The classes the text gives, in the program's order.
+    pub(crate) texts: Vec<ClassId>,
+    /// The classes decided when solving starts, which are no unknowns (l.218).
+    pub(crate) decided: BTreeSet<ClassId>,
+    /// The lower bounds and boundaries, by their place in the log, whose
+    /// parts are related.
+    pub(crate) split: BTreeSet<usize>,
+    /// The classes found to reach a part of their own, or whose sources have
+    /// no join.
+    pub(crate) no_value: BTreeSet<ClassId>,
+    pub(crate) refusals: BTreeSet<Refusal>,
+    /// The uses and lends, by name.
+    pub(crate) nodes: BTreeMap<Name, NodeState>,
+    /// In a state a value read is taken from, the classes found to give
+    /// nothing, having no relation left (l.267).
+    pub(crate) nothing: BTreeSet<ClassId>,
+}
+
+/// A step that may be taken.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Step {
+    /// The equivalence class takes its constructor and members (l.275).
+    Solve(ClassId),
+    /// The use or lend is decided by the value it reads (l.267).
+    Decide(Name),
+}
+
+impl State {
+    /// The state where the text's constraints are recorded and nothing is
+    /// solved (l.230).
+    pub fn new(program: &Program) -> State {
+        let mut state = State {
+            decls: Rc::new(program.decls.clone()),
+            arena: Arena::default(),
+            classes: Classes::default(),
+            log: Vec::new(),
+            texts: Vec::new(),
+            decided: BTreeSet::new(),
+            split: BTreeSet::new(),
+            no_value: BTreeSet::new(),
+            refusals: BTreeSet::new(),
+            nodes: BTreeMap::new(),
+            nothing: BTreeSet::new(),
+        };
+        for class in &program.classes {
+            let id = state.arena.intern(ClassName::Text(class.name.clone()));
+            state.texts.push(id);
+        }
+        state.classes.grow(&state.arena);
+        for class in &program.classes {
+            let id = state.text(&class.name);
+            match &class.origin {
+                Origin::Var => {}
+                Origin::Lit(lit) => state.record(Relation::Lit(id, lit.clone()), Recorder::Origin),
+                Origin::Written(term) => {
+                    let term = term.clone().map(|_, part| state.text(&part));
+                    state.record(Relation::Kind(id, term), Recorder::Origin);
+                }
+            }
+        }
+        for (i, item) in program.items.iter().enumerate() {
+            if let Item::Equation(a, b) = item {
+                let relation = Relation::Equation(state.text(a), state.text(b));
+                state.record(relation, Recorder::Text(i));
+            }
+        }
+        state.decided = state
+            .texts
+            .iter()
+            .copied()
+            .filter(|&id| state.classes.held(id).kind.is_some())
+            .collect();
+        for (i, item) in program.items.iter().enumerate() {
+            match item {
+                Item::Pass { value, into, .. } => {
+                    let (value, into) = (state.text(value), state.text(into));
+                    let relation = if state.is_unknown(into) {
+                        Relation::LowerBound {
+                            lower: value,
+                            upper: into,
+                        }
+                    } else {
+                        Relation::Boundary {
+                            from: value,
+                            to: into,
+                        }
+                    };
+                    state.record(relation, Recorder::Text(i));
+                }
+                Item::Use {
+                    name,
+                    callee,
+                    args,
+                    result,
+                } => {
+                    let kind = NodeKind::Use {
+                        callee: callee.clone(),
+                        args: args.iter().map(|arg| state.text(arg)).collect(),
+                        result: state.text(result),
+                    };
+                    state.add_node(name, kind);
+                }
+                Item::Lend {
+                    name,
+                    mutability,
+                    place,
+                    result,
+                } => {
+                    let kind = NodeKind::Lend {
+                        mutability: *mutability,
+                        place: state.text(place),
+                        result: state.text(result),
+                    };
+                    state.add_node(name, kind);
+                }
+                Item::Equation(..) => {}
+            }
+        }
+        state.settle();
+        state
+    }
+
+    fn add_node(&mut self, name: &Name, kind: NodeKind) {
+        let node = NodeState {
+            kind,
+            decision: None,
+        };
+        if self.nodes.insert(name.clone(), node).is_some() {
+            panic!("the program names the node {name} once");
+        }
+    }
+
+    fn text(&self, name: &Name) -> ClassId {
+        self.arena
+            .get(&ClassName::Text(name.clone()))
+            .unwrap_or_else(|| panic!("the program names the class {name}"))
+    }
+
+    /// A class not decided when solving starts (l.218). The model has one
+    /// binding group so far, so no class is universal or of an enclosing one.
+    pub(crate) fn is_unknown(&self, id: ClassId) -> bool {
+        !self.decided.contains(&id)
+    }
+
+    pub(crate) fn record(&mut self, relation: Relation, recorder: Recorder) {
+        let decls = Rc::clone(&self.decls);
+        let types = decls.types();
+        let given = match &relation {
+            Relation::Equation(a, b) => self.classes.unify(*a, *b, types),
+            Relation::Fact(class, fact) => self.classes.give_fact(*class, fact.clone(), types),
+            Relation::Kind(class, term) => match types.check(term) {
+                Ok(()) => {
+                    let given =
+                        self.classes
+                            .give_kind(*class, term.clone(), KindSource::Written, types);
+                    self.classes.mark_solved(*class);
+                    given
+                }
+                Err(error) => {
+                    self.refusals
+                        .insert(Refusal::Undeclared(format!("{error:?}")));
+                    Ok(())
+                }
+            },
+            Relation::Lit(class, lit) => self.classes.give_lit(*class, lit.clone(), types),
+            Relation::LowerBound { .. } | Relation::Boundary { .. } => Ok(()),
+        };
+        if let Err(conflict) = given {
+            let at = Named {
+                relation: &relation,
+                arena: &self.arena,
+            }
+            .to_string();
+            self.refuse_conflict(at, conflict);
+        }
+        self.log.push(Recorded { relation, recorder });
+    }
+
+    fn refuse_conflict(&mut self, at: String, conflict: Conflict) {
+        self.refusals.insert(Refusal::Conflict {
+            at,
+            conflict: format!("{conflict:?}"),
+        });
+    }
+
+    pub(crate) fn root(&self, id: ClassId) -> ClassId {
+        self.classes.find(id)
+    }
+
+    pub(crate) fn is_solved(&self, id: ClassId) -> bool {
+        self.classes.held(id).solved
+    }
+
+    /// Holds a LitVar and no kind.
+    pub(crate) fn is_lit(&self, id: ClassId) -> bool {
+        let held = self.classes.held(id);
+        held.lit.is_some() && held.kind.is_none()
+    }
+
+    pub(crate) fn has_no_value(&self, id: ClassId) -> bool {
+        self.classes
+            .held(id)
+            .members
+            .iter()
+            .any(|member| self.no_value.contains(member))
+    }
+
+    /// The name of an equivalence class: the least of its members' names.
+    pub(crate) fn class_name(&self, id: ClassId) -> ClassName {
+        self.classes
+            .held(id)
+            .members
+            .iter()
+            .map(|&member| self.arena.name(member).clone())
+            .min()
+            .expect("an equivalence class has a member")
+    }
+
+    /// The steps that may be taken now.
+    pub fn steps(&self) -> Vec<Step> {
+        let (classes, nodes) = self.eligible();
+        classes
+            .into_iter()
+            .map(Step::Solve)
+            .chain(nodes.into_iter().map(Step::Decide))
+            .collect()
+    }
+
+    /// Takes the step, and records what follows at once from it.
+    pub fn step(&mut self, step: &Step) {
+        match step {
+            Step::Solve(root) => self.solve(*root),
+            Step::Decide(name) => self.decide(name),
+        }
+        self.settle();
+    }
+
+    pub(crate) fn solve(&mut self, root: ClassId) {
+        if self.reaches_own_part(root) {
+            let name = self.class_name(root);
+            let members = self.classes.held(root).members.clone();
+            self.no_value.extend(members);
+            self.refusals.insert(Refusal::Infinite(name));
+            return;
+        }
+        let settled = self.settled();
+        for lower in self.lower_bounds(root) {
+            if self.is_lit(lower) && settled.contains(&self.root(lower)) {
+                self.record(Relation::Equation(lower, root), Recorder::Split(root));
+            }
+        }
+        if self.is_lit(root) {
+            for to in self.boundaries_from(root) {
+                self.record(Relation::Equation(root, to), Recorder::Split(root));
+            }
+        }
+        let root = self.root(root);
+        if self.classes.held(root).kind.is_none() {
+            let mut sources: Vec<Head> = self
+                .lower_bounds(root)
+                .into_iter()
+                .filter(|&lower| self.is_solved(lower))
+                .filter_map(|lower| self.classes.held(lower).kind.as_ref().map(|(k, _)| head(k)))
+                .collect();
+            sources.extend(
+                self.classes
+                    .held(root)
+                    .facts
+                    .iter()
+                    .filter_map(Fact::visible_member)
+                    .map(|(constructor, member)| Head {
+                        constructor,
+                        members: [member].into(),
+                    }),
+            );
+            let Some(first) = sources.first().cloned() else {
+                return;
+            };
+            let joined = sources
+                .iter()
+                .skip(1)
+                .try_fold(first, |joined, source| self.head_join(&joined, source));
+            let Some(joined) = joined else {
+                let name = self.class_name(root);
+                let members = self.classes.held(root).members.clone();
+                self.no_value.extend(members);
+                self.refusals.insert(Refusal::NoJoin(name));
+                return;
+            };
+            let owner = self.class_name(root);
+            let kind = self.skeleton(&joined, &owner);
+            let decls = Rc::clone(&self.decls);
+            if let Err(conflict) =
+                self.classes
+                    .give_kind(root, kind, KindSource::Solved, decls.types())
+            {
+                self.refuse_conflict(format!("the value of {owner}"), conflict);
+            }
+        }
+        self.classes.mark_solved(root);
+    }
+
+    /// What follows at once from what is recorded: lower-bound cycles merged
+    /// (l.275), the parts of each lower bound and boundary whose two sides are
+    /// solved related (l.284), and a LitVar lower bound of a solved class
+    /// unified with it (l.176).
+    pub(crate) fn settle(&mut self) {
+        loop {
+            let before = (self.log.len(), self.split.len());
+            self.merge_cycles();
+            let settled = self.settled();
+            for i in 0..self.log.len() {
+                if self.split.contains(&i) {
+                    continue;
+                }
+                match self.log[i].relation.clone() {
+                    Relation::LowerBound { lower, upper } => {
+                        if self.root(lower) == self.root(upper) {
+                            self.split.insert(i);
+                        } else if self.is_solved(lower) && self.is_solved(upper) {
+                            self.split.insert(i);
+                            self.split_parts(lower, upper, Side::Lower, upper);
+                        } else if self.is_lit(lower)
+                            && self.is_solved(upper)
+                            && settled.contains(&self.root(lower))
+                        {
+                            self.split.insert(i);
+                            self.record(Relation::Equation(lower, upper), Recorder::Split(upper));
+                        }
+                    }
+                    Relation::Boundary { from, to } => {
+                        if self.root(from) == self.root(to) {
+                            self.split.insert(i);
+                        } else if self.is_solved(from) && self.is_solved(to) {
+                            self.split.insert(i);
+                            self.split_parts(from, to, Side::Boundary, from);
+                        }
+                    }
+                    Relation::Equation(..)
+                    | Relation::Fact(..)
+                    | Relation::Kind(..)
+                    | Relation::Lit(..) => {
+                        self.split.insert(i);
+                    }
+                }
+            }
+            if (self.log.len(), self.split.len()) == before {
+                return;
+            }
+        }
+    }
+
+    /// Merges each cycle of lower bounds alone into one equivalence class.
+    fn merge_cycles(&mut self) {
+        let mut edges: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
+        for recorded in &self.log {
+            if let Relation::LowerBound { lower, upper } = recorded.relation {
+                let (lower, upper) = (self.root(lower), self.root(upper));
+                if lower != upper {
+                    edges.entry(upper).or_default().insert(lower);
+                }
+            }
+        }
+        let reach = |from: ClassId| {
+            let mut seen = BTreeSet::new();
+            let mut work = vec![from];
+            while let Some(at) = work.pop() {
+                for &next in edges.get(&at).into_iter().flatten() {
+                    if seen.insert(next) {
+                        work.push(next);
+                    }
+                }
+            }
+            seen
+        };
+        let mut merges = Vec::new();
+        for &from in edges.keys() {
+            for to in reach(from) {
+                if to != from && reach(to).contains(&from) && from < to {
+                    merges.push((from, to));
+                }
+            }
+        }
+        for (a, b) in merges {
+            if self.root(a) != self.root(b) {
+                self.record(Relation::Equation(a, b), Recorder::Cycle);
+            }
+        }
+    }
+
+    /// Records the relations between the parts of a lower bound's or a
+    /// boundary's two sides (l.286), linking the parts through the declared
+    /// casts where their constructors differ (l.291).
+    pub(crate) fn split_parts(&mut self, from: ClassId, to: ClassId, side: Side, by: ClassId) {
+        let recorder = Recorder::Split(by);
+        let (Some((from_kind, _)), Some((to_kind, _))) = (
+            self.classes.held(from).kind.clone(),
+            self.classes.held(to).kind.clone(),
+        ) else {
+            return;
+        };
+        let (from_c, to_c) = (from_kind.constructor(), to_kind.constructor());
+        if from_c == to_c {
+            let variance = from_c.variance();
+            for (key, from_part) in from_kind.parts() {
+                let Some(&to_part) = to_kind.part(&key) else {
+                    continue;
+                };
+                let relation = match (variance, side) {
+                    (Variance::Invariant, _) => Relation::Equation(*from_part, to_part),
+                    (Variance::Covariant, Side::Lower) => Relation::LowerBound {
+                        lower: *from_part,
+                        upper: to_part,
+                    },
+                    (Variance::Covariant, Side::Boundary) if self.is_unknown(to_part) => {
+                        Relation::LowerBound {
+                            lower: *from_part,
+                            upper: to_part,
+                        }
+                    }
+                    (Variance::Covariant, Side::Boundary) => Relation::Boundary {
+                        from: *from_part,
+                        to: to_part,
+                    },
+                };
+                self.record(relation, recorder.clone());
+            }
+            return;
+        }
+        if let (
+            Term::Ref(Mutability::Exclusive, from_target),
+            Term::Ref(Mutability::Shared, to_target),
+        ) = (&from_kind, &to_kind)
+        {
+            self.record(Relation::Equation(*from_target, *to_target), recorder);
+            return;
+        }
+        let path = self
+            .decls
+            .tree()
+            .path(&Node::Owned(from_c.clone()), &Node::Owned(to_c.clone()));
+        let Some(path) = path else {
+            return;
+        };
+        let (from_name, to_name) = (Rc::new(self.class_name(from)), Rc::new(self.class_name(to)));
+        let mut current = from;
+        for (step, cast) in path.iter().enumerate() {
+            let sig = self.decls.decl(cast).sig.clone();
+            let link = |at: LinkAt| ClassName::Link {
+                from: from_name.clone(),
+                to: to_name.clone(),
+                step,
+                at,
+            };
+            let mut vars = BTreeMap::new();
+            let var_name = |var| link(LinkAt::Var(var));
+            let param = self.instantiate(
+                &sig.params()[0],
+                &mut vars,
+                link(LinkAt::Param),
+                &var_name,
+                &recorder,
+            );
+            let result = self.instantiate(
+                sig.result(),
+                &mut vars,
+                link(LinkAt::Result),
+                &var_name,
+                &recorder,
+            );
+            let (Some((current_kind, _)), Some((param_kind, _))) = (
+                self.classes.held(current).kind.clone(),
+                self.classes.held(param).kind.clone(),
+            ) else {
+                return;
+            };
+            for ((_, current_part), (_, param_part)) in
+                current_kind.parts().into_iter().zip(param_kind.parts())
+            {
+                self.record(
+                    Relation::Equation(*current_part, *param_part),
+                    recorder.clone(),
+                );
+            }
+            current = result;
+        }
+        self.split_parts(current, to, side, by);
+    }
+
+    /// Whether the equivalence class reaches a part of its own along recorded
+    /// lower bounds and parts (l.275).
+    fn reaches_own_part(&self, root: ClassId) -> bool {
+        let root = self.root(root);
+        let mut seen: BTreeSet<(ClassId, bool)> = BTreeSet::new();
+        let mut work = vec![(root, false)];
+        while let Some((at, through_part)) = work.pop() {
+            let mut next: Vec<(ClassId, bool)> = self
+                .lower_bounds(at)
+                .into_iter()
+                .map(|lower| (self.root(lower), through_part))
+                .collect();
+            if let Some((kind, _)) = &self.classes.held(at).kind {
+                next.extend(
+                    kind.parts()
+                        .into_iter()
+                        .map(|(_, part)| (self.root(*part), true)),
+                );
+            }
+            for (class, through_part) in next {
+                if class == root && through_part {
+                    return true;
+                }
+                if seen.insert((class, through_part)) {
+                    work.push((class, through_part));
+                }
+            }
+        }
+        false
+    }
+
+    /// The lower bounds of the equivalence class, other than itself.
+    pub(crate) fn lower_bounds(&self, id: ClassId) -> Vec<ClassId> {
+        let root = self.root(id);
+        self.log
+            .iter()
+            .filter_map(|recorded| match recorded.relation {
+                Relation::LowerBound { lower, upper }
+                    if self.root(upper) == root && self.root(lower) != root =>
+                {
+                    Some(lower)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The types the equivalence class passes into by a boundary.
+    pub(crate) fn boundaries_from(&self, id: ClassId) -> Vec<ClassId> {
+        let root = self.root(id);
+        self.log
+            .iter()
+            .filter_map(|recorded| match recorded.relation {
+                Relation::Boundary { from, to }
+                    if self.root(from) == root && self.root(to) != root =>
+                {
+                    Some(to)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The equivalence classes left to fall back to a default take it
+    /// (l.299): those that are not solved and have no unbroken dependency.
+    /// Returns whether any did.
+    pub fn fall_back(&mut self) -> bool {
+        let targets = self.fallback_targets();
+        let decls = Rc::clone(&self.decls);
+        let types = decls.types();
+        for &root in &targets {
+            let term = match &self.classes.held(root).lit {
+                Some(lit) => Term::Scalar(lit.default_scalar()),
+                None => Term::Never,
+            };
+            if let Err(conflict) = self
+                .classes
+                .give_kind(root, term, KindSource::Solved, types)
+            {
+                let name = self.class_name(root);
+                self.refuse_conflict(format!("the default of {name}"), conflict);
+            }
+            self.classes.mark_solved(root);
+        }
+        self.settle();
+        !targets.is_empty()
+    }
+
+    /// Solves to the fixpoint and falls back until no class is left to fall
+    /// back, taking at each step the first step `choose` picks.
+    pub fn run<F>(mut self, mut choose: F) -> Outcome
+    where
+        F: FnMut(&[Step]) -> usize,
+    {
+        loop {
+            let steps = self.steps();
+            if let Some(step) = steps.get(choose(&steps)) {
+                let step = step.clone();
+                self.step(&step);
+                continue;
+            }
+            if !self.fall_back() {
+                return self.outcome();
+            }
+        }
+    }
+
+    /// The closed type the equivalence class holds, where it has one.
+    pub fn value(&self, id: ClassId) -> Option<Ty> {
+        self.value_in(id, &mut BTreeSet::new())
+    }
+
+    fn value_in(&self, id: ClassId, visiting: &mut BTreeSet<ClassId>) -> Option<Ty> {
+        let root = self.root(id);
+        if self.has_no_value(root) || !visiting.insert(root) {
+            return None;
+        }
+        let (kind, _) = self.classes.held(root).kind.clone()?;
+        let term = kind
+            .try_map(|_, part| self.value_in(part, visiting).ok_or(()))
+            .ok()?;
+        visiting.remove(&root);
+        Ty::new(term).ok()
+    }
+
+    /// Checks each value the text makes enter a type (l.293).
+    fn checks(&self) -> Vec<Check> {
+        let mut checks = Vec::new();
+        for recorded in &self.log {
+            if !matches!(recorded.recorder, Recorder::Text(_) | Recorder::Node(_)) {
+                continue;
+            }
+            let (from, to, lower) = match recorded.relation {
+                Relation::LowerBound { lower, upper } => (lower, upper, true),
+                Relation::Boundary { from, to } => (from, to, false),
+                Relation::Equation(..)
+                | Relation::Fact(..)
+                | Relation::Kind(..)
+                | Relation::Lit(..) => continue,
+            };
+            let (Some(from_value), Some(to_value)) = (self.value(from), self.value(to)) else {
+                continue;
+            };
+            let written = matches!(self.classes.held(to).kind, Some((_, KindSource::Written)));
+            let coercion = if lower {
+                match along_le(&self.decls, &from_value, &to_value) {
+                    Ok(coercion) => Ok(coercion),
+                    Err(_) if written => coerce(&self.decls, &from_value, &to_value),
+                    Err(error) => Err(error),
+                }
+            } else {
+                coerce(&self.decls, &from_value, &to_value)
+            };
+            let relation = Named {
+                relation: &recorded.relation,
+                arena: &self.arena,
+            }
+            .to_string();
+            checks.push(Check { relation, coercion });
+        }
+        checks
+    }
+
+    pub fn outcome(&self) -> Outcome {
+        let values = self
+            .texts
+            .iter()
+            .map(|&id| (self.arena.name(id).clone(), self.value(id)))
+            .collect();
+        let mut partition: BTreeMap<ClassId, BTreeSet<ClassName>> = BTreeMap::new();
+        for &id in &self.texts {
+            partition
+                .entry(self.root(id))
+                .or_default()
+                .insert(self.arena.name(id).clone());
+        }
+        let checks = self.checks();
+        let mut refusals = self.refusals.clone();
+        for root in self.classes.roots() {
+            if self.value(root).is_none() && !self.has_no_value(root) {
+                refusals.insert(Refusal::NoValue(self.class_name(root)));
+            }
+        }
+        let decisions: BTreeMap<Name, Option<Decision>> = self
+            .nodes
+            .iter()
+            .map(|(name, node)| (name.clone(), node.decision.clone()))
+            .collect();
+        let accepted = refusals.is_empty()
+            && checks.iter().all(|check| check.coercion.is_ok())
+            && decisions
+                .values()
+                .all(|decision| matches!(decision, Some(decision) if decision.is_reached()));
+        Outcome {
+            values,
+            decisions,
+            partition: partition.into_values().collect(),
+            checks,
+            refusals,
+            accepted,
+        }
+    }
+
+    /// A text of the state that names classes as the outcome does, so that
+    /// two states reached apart compare by it.
+    pub fn fingerprint(&self) -> String {
+        let mut roots: Vec<String> = self
+            .classes
+            .roots()
+            .map(|root| {
+                let held = self.classes.held(root);
+                let kind = held.kind.as_ref().map(|(kind, source)| {
+                    let kind = kind.clone().map(|_, part| self.class_name(part));
+                    format!("{kind:?}/{source:?}")
+                });
+                format!(
+                    "{}:{kind:?}:{:?}:{}:{}",
+                    self.class_name(root),
+                    held.lit,
+                    held.solved,
+                    self.has_no_value(root),
+                )
+            })
+            .collect();
+        roots.sort();
+        let decisions: Vec<_> = self.nodes.values().map(|node| &node.decision).collect();
+        format!(
+            "{roots:?}|{}|{:?}|{:?}|{decisions:?}",
+            self.log.len(),
+            self.split,
+            self.refusals
+        )
+    }
+}

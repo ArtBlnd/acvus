@@ -38,6 +38,36 @@ part is not an unknown of the binding group the place lies in (l.286), such as a
 reference reaching a capture whose error part the enclosing body joined from `B`
 and `D`.
 
+## H3. A view at a boundary
+
+A view impl is a cast from a reference to a container to a reference to a slice or
+`str` (l.78), and a reference's node is its mutability and its target's constructor
+(l.78). A reference's constructor is its mutability alone (l.66), so at a boundary
+`&V ⇝ &[u8]` the two sides have one constructor, and the target, an invariant part,
+gives the equation `V = [u8]` (l.289); the casts link parts only where constructors
+differ (l.291). The view is never taken, and `make() ≤ V` with `make() -> Vec⟨u8⟩`
+fails. Witness, refused by the model (`examples.rs`,
+`hole_3_a_view_at_a_boundary_equates_the_targets`):
+
+```
+let v = make();          // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
+take(&v);                // take(&[u8])
+```
+
+The join of two references reaches the same place: `&A ⊔ &C` is `&B` by the casts
+`&A → &B` and `&C → &B` (l.86), while two lower bounds `&A ≤ R` and `&C ≤ R` equate
+their targets.
+
+## H4. A reborrow at a split
+
+Where `&mut X` meets `&Y` at a lower bound or a boundary, the constructors differ
+and no cast links them (l.291), so nothing relates `X` and `Y`. In
+`look(&mut v)` with `look(&Vec⟨u8⟩)` and `v = Vec::new()`, `v`'s argument has no
+relation and falls back to `!`, and `&mut Vec⟨!⟩ ⇝ &Vec⟨u8⟩` fails. The model
+relates the targets by an equation, as the reborrow row `&mut T ⇝ &T` keeps `T`
+(`design/11-value.md`, reading 2), and accepts it (`examples.rs`,
+`hole_4_a_reborrow_at_a_boundary_equates_the_targets`).
+
 ## T1. A type parameter's bound
 
 Extern fn §1 gives a type parameter one bound, any type or any type the use must
