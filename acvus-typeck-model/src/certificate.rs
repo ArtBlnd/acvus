@@ -403,7 +403,8 @@ impl Text {
             .functions
             .iter()
             .flat_map(|function| function.params.iter())
-            .chain(&program.universals);
+            .chain(&program.universals)
+            .filter(|name| program.is_universal(name));
         for name in universals {
             let root = text.root(name);
             text.universal.insert(root);
@@ -432,7 +433,7 @@ impl Text {
         match place {
             Place::ThroughRef => false,
             Place::ByName => self.unknown(into),
-            Place::Slot => program.class(into).group == *group && self.unknown(into),
+            Place::Slot => program.owner(into) == group && self.unknown(into),
         }
     }
 
@@ -564,12 +565,12 @@ impl Checker<'_> {
         for class in program
             .classes
             .iter()
-            .filter(|class| class.group == context.group)
+            .filter(|class| *program.owner(&class.name) == context.group)
         {
             self.origin(context, &class.name, &class.origin);
         }
-        for (i, (group, item)) in program.items.iter().enumerate() {
-            if *group == context.group {
+        for (i, (_, item)) in program.items.iter().enumerate() {
+            if *program.item_group(i) == context.group {
                 self.item(context, i, item);
             }
         }
@@ -1157,6 +1158,12 @@ impl Checker<'_> {
                 .params
                 .iter()
                 .map(|param| {
+                    if self.program.in_environment(param) {
+                        let ty = self.text(context, &at, param)?;
+                        let written = self.text_written(context, param);
+                        let meets = self.text.unknown(param);
+                        return Some(Param { ty, meets, written });
+                    }
                     let (ty, written) = self.copy(context, &at, level, made, &function, param)?;
                     let meets = self.text.meets_copy(param);
                     Some(Param { ty, meets, written })
@@ -1165,9 +1172,13 @@ impl Checker<'_> {
             else {
                 continue;
             };
-            let Some((returned, _)) =
+            let returned = if self.program.in_environment(&function.result) {
+                self.text(context, &at, &function.result)
+            } else {
                 self.copy(context, &at, level, made, &function, &function.result)
-            else {
+                    .map(|(returned, _)| returned)
+            };
+            let Some(returned) = returned else {
                 continue;
             };
             self.passes(context, &at, &arg_values, &params);

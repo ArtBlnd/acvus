@@ -227,6 +227,7 @@ impl State {
             enclosing_unknowns: self.enclosing_unknowns.clone(),
             enclosing: self.enclosing.clone(),
             functions: Rc::clone(&self.functions),
+            environment: Rc::clone(&self.environment),
             solved: self.solved.clone(),
             instances: Vec::new(),
         };

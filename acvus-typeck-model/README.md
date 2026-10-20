@@ -56,6 +56,6 @@ The primitives, each assuming only those before it:
 | 14 | The certificate and its checker | l.226–238, l.293, l.301 |
 | 15 | I\* | l.244–269, `docs/notes/typeck-pivot.md` §1–2 |
 | 16 | Inputs up to a size (draft) | l.226–238, l.303–321 |
-| 17 | The captured environment (draft) | l.203, l.210–226, functions §2 |
+| 17 | The captured environment | l.203, l.210–226, functions §2 |
 
 Writing a note may change the notes after it.

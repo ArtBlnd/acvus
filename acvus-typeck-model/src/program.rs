@@ -23,6 +23,17 @@ pub struct Program {
     pub classes: Vec<TextClass>,
     pub items: Vec<(Name, Item)>,
     pub readings: Readings,
+    /// Which group solves each class and item, where `readings.captures`
+    /// moves it from the one it lies in.
+    cut: Cut,
+}
+
+/// The classes and items a lambda's captured environment holds, each with the
+/// group that solves it, its enclosing one's (`design/17-environment.md`).
+#[derive(Clone, Debug, Default)]
+struct Cut {
+    classes: BTreeMap<Name, Name>,
+    items: BTreeMap<usize, Name>,
 }
 
 /// The binding group of the function the run starts at (l.206). Its inputs
@@ -71,23 +82,152 @@ impl Program {
             .unwrap_or_else(|| panic!("the program names the class {name}"))
     }
 
-    /// Whether the class is an unknown of its own group, as its text gives it
-    /// (l.218): not written, and no function's parameter type.
+    /// The group that solves the class: the one it lies in, or the group
+    /// enclosing the lambda whose environment holds it.
+    pub fn owner(&self, class: &Name) -> &Name {
+        self.cut
+            .classes
+            .get(class)
+            .unwrap_or_else(|| &self.class(class).group)
+    }
+
+    /// The group that records the item at `i` in `items`.
+    pub fn item_group(&self, i: usize) -> &Name {
+        self.cut.items.get(&i).unwrap_or_else(|| &self.items[i].0)
+    }
+
+    /// Whether a lambda's environment holds the class.
+    pub fn in_environment(&self, class: &Name) -> bool {
+        self.cut.classes.contains_key(class)
+    }
+
+    /// The classes the lambdas' environments hold.
+    pub fn environment(&self) -> BTreeSet<Name> {
+        self.cut.classes.keys().cloned().collect()
+    }
+
+    /// Whether the class is universal: a function's parameter type that no
+    /// environment holds, or a receiver's `T̄` (l.217, l.325).
+    pub fn is_universal(&self, name: &Name) -> bool {
+        let parameter = self
+            .functions
+            .iter()
+            .any(|function| function.params.contains(name));
+        self.universals.contains(name) || parameter && !self.in_environment(name)
+    }
+
+    /// Whether the class is an unknown of the group that solves it, as its
+    /// text gives it (l.218): not written, and not universal.
     pub fn is_text_unknown(&self, name: &Name) -> bool {
         let class = self.class(name);
-        let universal = self.universals.contains(name)
-            || self
-                .functions
-                .iter()
-                .any(|function| function.params.contains(name));
-        matches!(class.origin, Origin::Var | Origin::Lit(_)) && !universal
+        matches!(class.origin, Origin::Var | Origin::Lit(_)) && !self.is_universal(name)
+    }
+
+    /// Each lambda's environment, moved to its enclosing group, the innermost
+    /// lambdas first, so that what a lambda's environment records into an
+    /// enclosing lambda is part of that lambda's text
+    /// (`design/17-environment.md`, Definitions).
+    fn cut_environments(&self) -> Cut {
+        let mut cut = Cut::default();
+        let mut lambdas: Vec<(&Name, &Name)> = self
+            .groups
+            .iter()
+            .filter_map(|(group, parent)| Some((group, parent.as_ref()?)))
+            .collect();
+        lambdas.sort_by_key(|(group, _)| std::cmp::Reverse(self.enclosing(group).len()));
+        for (lambda, parent) in lambdas {
+            let owner = |cut: &Cut, class: &Name| -> Name {
+                cut.classes
+                    .get(class)
+                    .cloned()
+                    .unwrap_or_else(|| self.class(class).group.clone())
+            };
+            let items: Vec<usize> = (0..self.items.len())
+                .filter(|&i| cut.items.get(&i).unwrap_or(&self.items[i].0) == lambda)
+                .collect();
+            let mut joined = Joined::default();
+            for &i in &items {
+                let named = self.joined_by(i, &items);
+                for pair in named.windows(2) {
+                    joined.join(pair[0], pair[1]);
+                }
+                for name in named {
+                    joined.add(name);
+                }
+            }
+            for class in &self.classes {
+                if owner(&cut, &class.name) != *lambda {
+                    continue;
+                }
+                joined.add(&class.name);
+                if let Origin::Written(term) | Origin::Host(term) = &class.origin {
+                    for (_, part) in term.parts() {
+                        joined.join(&class.name, part);
+                    }
+                }
+            }
+            let captures: BTreeSet<Name> = joined
+                .names()
+                .filter(|name| owner(&cut, name) != *lambda)
+                .map(|name| joined.root(name))
+                .collect();
+            let held: Vec<Name> = joined
+                .names()
+                .filter(|name| captures.contains(&joined.root(name)))
+                .cloned()
+                .collect();
+            for name in &held {
+                if owner(&cut, name) == *lambda {
+                    cut.classes.insert(name.clone(), parent.clone());
+                }
+            }
+            for i in items {
+                if self
+                    .joined_by(i, &[])
+                    .into_iter()
+                    .any(|name| captures.contains(&joined.root(name)))
+                {
+                    cut.items.insert(i, parent.clone());
+                }
+            }
+        }
+        cut
+    }
+
+    /// The classes the item at `i` joins: those it names, the parameter and
+    /// result types of a function of an enclosing group it uses, and, for a
+    /// binding, those its path's projections among `items` name.
+    fn joined_by(&self, i: usize, items: &[usize]) -> Vec<&Name> {
+        let item = &self.items[i].1;
+        let mut named = item.classes();
+        match item {
+            Item::Use { callee, .. } => {
+                if let Some(function) = self.function(callee)
+                    && self.enclosing(&self.items[i].0).contains(&function.group)
+                {
+                    named.extend(function.params.iter().chain([&function.result]));
+                }
+            }
+            Item::Bind { path, .. } => {
+                for &j in items {
+                    if let Item::Project { name, .. } = &self.items[j].1
+                        && path.contains(name)
+                    {
+                        named.extend(self.items[j].1.classes());
+                    }
+                }
+            }
+            _ => {}
+        }
+        named
     }
 
     /// The groups other than the entry, each before the groups whose uses
     /// make instances of it, and before the group it lies inside (l.220).
     pub fn group_order(&self) -> Vec<Name> {
         let mut before: BTreeMap<Name, BTreeSet<Name>> = BTreeMap::new();
-        for (group, item) in &self.items {
+        for (i, (_, item)) in self.items.iter().enumerate() {
+            let group = self.item_group(i);
             if let Item::Use { callee, .. } = item
                 && let Some(function) = self.function(callee)
                 && function.group != *group
@@ -132,6 +272,20 @@ pub struct Readings {
     pub binding_path: BindingPath,
     pub deferral: Deferral,
     pub recording: Recording,
+    pub captures: Captures,
+}
+
+/// Which part of a lambda's text its binding group solves (l.210–222;
+/// `holes.md`, H5 and O4; `design/17-environment.md`).
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum Captures {
+    /// All of it, its captures shared with the enclosing group and recorded
+    /// into by each instance (l.222).
+    #[default]
+    AsStated,
+    /// All but its environment, the classes joined to a capture and the items
+    /// naming them, which the enclosing group solves once (functions §2).
+    Environment,
 }
 
 /// Which nodes record relations into a class, for a use that reads it (l.247,
@@ -469,7 +623,7 @@ impl ProgramBuilder {
     }
 
     pub fn build(self) -> Program {
-        Program {
+        let mut program = Program {
             decls: self.decls,
             groups: self.groups,
             functions: self.functions,
@@ -477,6 +631,46 @@ impl ProgramBuilder {
             classes: self.classes,
             items: self.items,
             readings: self.readings,
+            cut: Cut::default(),
+        };
+        if program.readings.captures == Captures::Environment {
+            program.cut = program.cut_environments();
         }
+        program
+    }
+}
+
+/// Classes joined by the items that name them together (`design/17-environment.md`).
+#[derive(Default)]
+struct Joined {
+    parent: BTreeMap<Name, Name>,
+}
+
+impl Joined {
+    fn add(&mut self, name: &Name) {
+        self.parent
+            .entry(name.clone())
+            .or_insert_with(|| name.clone());
+    }
+
+    fn root(&self, name: &Name) -> Name {
+        let mut at = name.clone();
+        while let Some(next) = self.parent.get(&at).filter(|next| **next != at) {
+            at = next.clone();
+        }
+        at
+    }
+
+    fn join(&mut self, a: &Name, b: &Name) {
+        self.add(a);
+        self.add(b);
+        let (a, b) = (self.root(a), self.root(b));
+        if a != b {
+            self.parent.insert(a, b);
+        }
+    }
+
+    fn names(&self) -> impl Iterator<Item = &Name> {
+        self.parent.keys()
     }
 }

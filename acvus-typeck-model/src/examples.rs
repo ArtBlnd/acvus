@@ -9,7 +9,7 @@ use crate::node::{Decision, LendTarget};
 use std::collections::BTreeSet;
 
 use crate::program::{
-    BindingPath, Deferral, Program, ProgramBuilder, Projection, Readings, Recording,
+    BindingPath, Captures, Deferral, Program, ProgramBuilder, Projection, Readings, Recording,
 };
 use crate::sig::{DeclaredTypes, ExternDecl, SigTy, SigVar, Signature};
 use crate::solve::Outcome;
@@ -1420,14 +1420,24 @@ fn review_2_p4_a_boundary_between_two_instances_universals() {
     assert_eq!(value(&outcome, "g(..)"), Some(closed_int(IntTy::U8)));
 }
 
+/// The captured environment's reading, the rest as the spec states.
+fn by_environment() -> Readings {
+    Readings {
+        captures: Captures::Environment,
+        ..Readings::default()
+    }
+}
+
 /// ```text
 /// let mut last = None;
 /// let remember = |x| last = Some(x);
 /// remember(1u8);
 /// ```
-#[test]
-fn example_6_a_capture_written_by_name() {
+/// with a call `remember(literal)` for each of `calls`, the literal of the
+/// type it names.
+fn example_6(readings: Readings, calls: &[(&str, IntTy)]) -> Program {
     let mut p = ProgramBuilder::new(no_decls());
+    p.readings(readings);
     p.group_in("λ", Some(crate::program::ENTRY));
     let x = p.var("X");
     let s = p.var("S");
@@ -1442,21 +1452,109 @@ fn example_6_a_capture_written_by_name() {
     let none = p.written("None", Term::Option(k));
     let lambda = p.class("|x| ..", crate::program::Origin::Lambda(Name::new("λ")));
     let remember = p.var("remember");
-    let u8_ = p.written("1u8", int(IntTy::U8));
-    let called = p.var("remember(1u8)");
     p.pass(&none, &last);
     p.pass(&lambda, &remember);
-    p.call_value("remember(1u8)", &remember, &[&u8_], &called);
+    for &(literal, number) in calls {
+        let given = p.written(literal, int(number));
+        let name = format!("remember({literal})");
+        let called = p.var(&name);
+        p.call_value(&name, &remember, &[&given], &called);
+    }
     p.group("λ");
     p.pass_at(&some, &last, crate::program::Place::ByName);
     p.pass(&unit, &returned);
+    p.build()
+}
+
+/// Read by the captured environment (`design/17-environment.md`), `X`, `S` and
+/// `Some(x)` are the environment's, solved in the enclosing group, where the
+/// call meets `X`.
+#[test]
+fn example_6_a_capture_written_by_name() {
+    let calls = [("1u8", IntTy::U8)];
+    let option_u8 = closed(Term::Option(closed_int(IntTy::U8)));
+    let outcome = only_outcome(&example_6(Readings::default(), &calls));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "L"), Some(option_u8.clone()));
+    assert_eq!(value(&outcome, "S"), None, "S stays in the lambda's C");
+
+    let outcome = only_outcome(&example_6(by_environment(), &calls));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "L"), Some(option_u8));
+    assert_eq!(value(&outcome, "S"), Some(closed_int(IntTy::U8)));
+    assert_eq!(value(&outcome, "X"), Some(closed_int(IntTy::U8)));
+}
+
+/// Example 6 with `remember(1u8); remember(2u16);`, refused in every order
+/// under the spec, where both instances' `Some(x)` reach `L`. Read by the
+/// captured environment, both calls meet `X`, and `u8 ⊔ u16` has no join.
+#[test]
+fn example_6_called_with_two_types() {
+    let calls = [("1u8", IntTy::U8), ("2u16", IntTy::U16)];
+    let as_stated = checked(&example_6(Readings::default(), &calls)).outcomes;
+    assert!(
+        as_stated.iter().all(|outcome| !outcome.accepted),
+        "{as_stated:#?}"
+    );
+
+    let outcome = only_outcome(&example_6(by_environment(), &calls));
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert!(
+        has_refusal(&outcome, |refusal| matches!(
+            refusal,
+            crate::solve::Refusal::NoJoin(_)
+        )),
+        "{outcome:#?}"
+    );
+}
+
+/// Read by the captured environment (`design/17-environment.md`).
+/// ```text
+/// let mut last = None;
+/// let r = &mut last;
+/// let remember = |x| *r = Some(x);
+/// remember(1u8);
+/// ```
+/// `*r`, `Some(x)`, `S` and `X` are joined to the capture `R`; the write
+/// through it is a boundary whose payload, `L`'s, takes a lower bound (l.286).
+#[test]
+fn example_6_through_a_reference() {
+    let mut p = ProgramBuilder::new(no_decls());
+    p.readings(by_environment());
+    p.group_in("λ", Some(crate::program::ENTRY));
+    let x = p.var("X");
+    let s = p.var("S");
+    let some = p.written("Some(x)", Term::Option(s.clone()));
+    let deref = p.var("*r");
+    let unit = p.written("()", Term::Unit);
+    let returned = p.var("λ result");
+    p.function("λ", &[&x], &returned);
+    p.pass(&x, &s);
+    p.pass(&unit, &returned);
+    p.group(crate::program::ENTRY);
+    let last = p.var("L");
+    let k = p.var("?k");
+    let none = p.written("None", Term::Option(k));
+    let lent = p.var("&mut last");
+    let r = p.var("R");
+    let lambda = p.class("|x| ..", crate::program::Origin::Lambda(Name::new("λ")));
+    let remember = p.var("remember");
+    let u8_ = p.written("1u8", int(IntTy::U8));
+    let called = p.var("remember(1u8)");
+    p.pass(&none, &last);
+    p.lend("&mut last", Mutability::Exclusive, &last, &lent);
+    p.pass(&lent, &r);
+    p.pass(&lambda, &remember);
+    p.call_value("remember(1u8)", &remember, &[&u8_], &called);
+    p.group("λ");
+    p.project("*r", Projection::Deref, &r, &deref);
+    p.pass_at(&some, &deref, crate::program::Place::ThroughRef);
     let outcome = only_outcome(&p.build());
     assert!(outcome.accepted, "{outcome:#?}");
     assert_eq!(
         value(&outcome, "L"),
         Some(closed(Term::Option(closed_int(IntTy::U8))))
     );
-    assert_eq!(value(&outcome, "S"), None, "S stays in the lambda's C");
 }
 
 /// ```text
@@ -1513,7 +1611,7 @@ fn example_7_a_write_through_a_captured_reference() {
 /// put(make_b());
 /// ```
 /// with `probe(x)`, and without it.
-fn capture_written_after_a_use(probe: bool) -> Program {
+fn capture_written_after_a_use(readings: Readings, probe: bool) -> Program {
     let mut d = declare(&[("A", 0), ("B", 0)]);
     function(&mut d, "make_a", &[], vec![], s_named("A"), Role::Fn);
     function(&mut d, "make_b", &[], vec![], s_named("B"), Role::Fn);
@@ -1544,6 +1642,7 @@ fn capture_written_after_a_use(probe: bool) -> Program {
         );
     }
     let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(readings);
     p.group_in("λ", Some(crate::program::ENTRY));
     let v = p.var("V");
     let unit = p.written("()", Term::Unit);
@@ -1578,7 +1677,9 @@ fn capture_written_after_a_use(probe: bool) -> Program {
 /// instance's `V ≤ X` (l.301); I\* decides no node otherwise there. With it,
 /// three outcomes: `probe(B)`, `probe(A)` accepted with `X` `B`, and `probe(A)`
 /// refused with `X` `A`. I\* decides `probe(B)` in each, reading the instance's
-/// relations.
+/// relations. Read by the captured environment (`design/17-environment.md`),
+/// `V ≤ X` is the enclosing group's and `V` lies at the call's positions, so
+/// `X` and `probe` wait for it: one outcome, `X` `B`, `probe(B)`.
 #[test]
 fn hole_o4_a_capture_written_after_a_use_reads_it() {
     let failed = |outcome: &Outcome| -> Vec<String> {
@@ -1592,7 +1693,7 @@ fn hole_o4_a_capture_written_after_a_use_reads_it() {
     let b = closed_extern("B", vec![]);
     let a = closed_extern("A", vec![]);
 
-    let without = checked(&capture_written_after_a_use(false));
+    let without = checked(&capture_written_after_a_use(Readings::default(), false));
     assert_eq!(
         without.istar_by(|outcome| (outcome.accepted, value(outcome, "X"))),
         BTreeSet::from([
@@ -1614,7 +1715,7 @@ fn hole_o4_a_capture_written_after_a_use_reads_it() {
         "{outcomes:#?}"
     );
 
-    let with = checked(&capture_written_after_a_use(true));
+    let with = checked(&capture_written_after_a_use(Readings::default(), true));
     assert_eq!(
         with.istar_by(|outcome| (decision(outcome, "probe"), outcome.accepted)),
         BTreeSet::from([
@@ -1642,9 +1743,20 @@ fn hole_o4_a_capture_written_after_a_use_reads_it() {
         BTreeSet::from([
             (Decision::Use(overload("probe", 0)), false, Some(a)),
             (Decision::Use(overload("probe", 0)), true, Some(b.clone())),
-            (Decision::Use(overload("probe", 1)), true, Some(b)),
+            (Decision::Use(overload("probe", 1)), true, Some(b.clone())),
         ]),
         "{outcomes:#?}"
+    );
+
+    let outcome = only_outcome(&capture_written_after_a_use(by_environment(), false));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "X"), Some(b.clone()));
+    let outcome = only_outcome(&capture_written_after_a_use(by_environment(), true));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "X"), Some(b));
+    assert_eq!(
+        decision(&outcome, "probe"),
+        Decision::Use(overload("probe", 1))
     );
 }
 
@@ -1658,40 +1770,12 @@ fn hole_o4_a_capture_written_after_a_use_reads_it() {
 /// dependency makes its `probe` wait for what the enclosing group records into
 /// `X` (l.216, l.244–250), so `probe` reads `X` as nothing and is refused.
 /// I\* decides `probe(A)`, reading what the call's instance and an instance of
-/// the check's own record into `X`.
+/// the check's own record into `X`. Read by the captured environment
+/// (`design/17-environment.md`), `probe` is the enclosing group's, and reads
+/// `X` as `A`.
 #[test]
 fn hole_5_a_lambda_reads_a_capture() {
-    let mut d = declare(&[("A", 0), ("B", 0)]);
-    function(&mut d, "make", &[], vec![], s_named("A"), Role::Fn);
-    for param in ["A", "B"] {
-        function(
-            &mut d,
-            "probe",
-            &[],
-            vec![s_named(param)],
-            s_unit(),
-            Role::Fn,
-        );
-    }
-    let mut p = ProgramBuilder::new(d.finish().unwrap());
-    p.group_in("λ", Some(crate::program::ENTRY));
-    let returned = p.var("λ result");
-    let probed = p.var("probe(x)");
-    p.function("λ", &[], &returned);
-    p.pass(&probed, &returned);
-    p.group(crate::program::ENTRY);
-    let x = p.var("X");
-    let made = p.var("make()");
-    let lambda = p.class("|| ..", crate::program::Origin::Lambda(Name::new("λ")));
-    let f = p.var("f");
-    let called = p.var("f()");
-    p.call("make", "make", &[], &made);
-    p.pass(&made, &x);
-    p.pass(&lambda, &f);
-    p.call_value("f()", &f, &[], &called);
-    p.group("λ");
-    p.call("probe", "probe", &[&x], &probed);
-    let checked = checked(&p.build());
+    let checked = checked(&hole_5(Readings::default()));
     assert_eq!(
         checked.istar_by(|outcome| outcome.accepted),
         BTreeSet::from([(
@@ -1710,6 +1794,237 @@ fn hole_5_a_lambda_reads_a_capture() {
     assert!(
         matches!(decision(outcome, "probe"), Decision::Unreached(_)),
         "{outcome:#?}"
+    );
+
+    let outcome = only_outcome(&hole_5(by_environment()));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        decision(&outcome, "probe"),
+        Decision::Use(overload("probe", 0))
+    );
+}
+
+fn hole_5(readings: Readings) -> Program {
+    let mut d = declare(&[("A", 0), ("B", 0)]);
+    function(&mut d, "make", &[], vec![], s_named("A"), Role::Fn);
+    for param in ["A", "B"] {
+        function(
+            &mut d,
+            "probe",
+            &[],
+            vec![s_named(param)],
+            s_unit(),
+            Role::Fn,
+        );
+    }
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(readings);
+    p.group_in("λ", Some(crate::program::ENTRY));
+    let returned = p.var("λ result");
+    let probed = p.var("probe(x)");
+    p.function("λ", &[], &returned);
+    p.pass(&probed, &returned);
+    p.group(crate::program::ENTRY);
+    let x = p.var("X");
+    let made = p.var("make()");
+    let lambda = p.class("|| ..", crate::program::Origin::Lambda(Name::new("λ")));
+    let f = p.var("f");
+    let called = p.var("f()");
+    p.call("make", "make", &[], &made);
+    p.pass(&made, &x);
+    p.pass(&lambda, &f);
+    p.call_value("f()", &f, &[], &called);
+    p.group("λ");
+    p.call("probe", "probe", &[&x], &probed);
+    p.build()
+}
+
+/// `let x = ..; let f = || takes_u8(x);` with `takes_u8(u8)`, `capture`
+/// writing `x`'s value in the enclosing group, and `f()` where `called`.
+fn passes_a_capture<F>(readings: Readings, capture: F, called: bool) -> Program
+where
+    F: FnOnce(&mut ProgramBuilder) -> Name,
+{
+    let mut d = declare(&[]);
+    function(
+        &mut d,
+        "takes_u8",
+        &[],
+        vec![s_int(IntTy::U8)],
+        s_unit(),
+        Role::Fn,
+    );
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(readings);
+    p.group_in("λ", Some(crate::program::ENTRY));
+    let returned = p.var("λ result");
+    let taken = p.var("takes_u8(x)");
+    p.function("λ", &[], &returned);
+    p.pass(&taken, &returned);
+    p.group(crate::program::ENTRY);
+    let given = capture(&mut p);
+    let x = p.var("X");
+    let lambda = p.class("|| ..", crate::program::Origin::Lambda(Name::new("λ")));
+    let f = p.var("f");
+    p.pass(&given, &x);
+    p.pass(&lambda, &f);
+    if called {
+        let called = p.var("f()");
+        p.call_value("f()", &f, &[], &called);
+    }
+    p.group("λ");
+    p.call("takes_u8", "takes_u8", &[&x], &taken);
+    p.build()
+}
+
+/// Read by the captured environment (`design/17-environment.md`).
+/// ```text
+/// let x = 0;
+/// let f = || takes_u8(x);  // takes_u8(u8)
+/// f();
+/// ```
+/// `takes_u8` is the enclosing group's, and `X`, holding the literal's
+/// LitVar, is unified with `u8` by its boundary (l.291).
+#[test]
+fn a_literal_capture_passed_to_a_parameter() {
+    let zero = |p: &mut ProgramBuilder| p.lit("0", int_lit(0));
+    let outcome = only_outcome(&passes_a_capture(by_environment(), zero, true));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "X"), Some(closed_int(IntTy::U8)));
+}
+
+/// ```text
+/// let x = "s";
+/// let f = || takes_u8(x);  // takes_u8(u8), f never called
+/// ```
+/// Under the spec, `takes_u8` and its boundary `X ⇝ u8` stay in the lambda's
+/// C, which no instance copies, and the program is accepted. Read by the
+/// captured environment (`design/17-environment.md`, row 1), they are the
+/// enclosing group's, recorded whether or not a call reaches the lambda, and
+/// `&str ⇝ u8` fails (l.293).
+#[test]
+fn a_lambda_never_called_and_its_environment() {
+    let s = |p: &mut ProgramBuilder| {
+        let str_ = p.written("str", Term::Str);
+        p.written("\"s\"", Term::Ref(Mutability::Shared, str_))
+    };
+    let program = |readings| passes_a_capture(readings, s, false);
+    let outcome = only_outcome(&program(Readings::default()));
+    assert!(outcome.accepted, "{outcome:#?}");
+
+    let outcome = only_outcome(&program(by_environment()));
+    assert!(!outcome.accepted, "{outcome:#?}");
+    let failed: Vec<&str> = outcome
+        .checks
+        .iter()
+        .filter(|check| check.coercion.is_err())
+        .map(|check| check.relation.as_str())
+        .collect();
+    let [failed] = failed.as_slice() else {
+        panic!("one check fails: {outcome:#?}");
+    };
+    assert!(failed.starts_with("X ⇝ "), "{outcome:#?}");
+}
+
+/// Read by the captured environment (`design/17-environment.md`).
+/// ```text
+/// let mut buf = Vec::new();    // new() -> Vec⟨T⟩
+/// let fill = || fill_all(&mut buf);    // fill_all(&mut Vec⟨u8⟩)
+/// fill();
+/// ```
+/// The lend and `fill_all` are the enclosing group's, so `buf` is typed as in
+/// Example 2.
+#[test]
+fn a_capture_lent_in_a_lambda() {
+    let mut d = declare(&[("Vec", 1)]);
+    function(
+        &mut d,
+        "new",
+        &["T"],
+        vec![],
+        s_extern("Vec", vec![t(0)]),
+        Role::Fn,
+    );
+    let vec_u8 = s_extern("Vec", vec![s_int(IntTy::U8)]);
+    function(
+        &mut d,
+        "fill_all",
+        &[],
+        vec![s_ref(Mutability::Exclusive, vec_u8)],
+        s_unit(),
+        Role::Fn,
+    );
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(by_environment());
+    p.group_in("λ", Some(crate::program::ENTRY));
+    let returned = p.var("λ result");
+    let lent = p.var("&mut buf");
+    let filled = p.var("fill_all(..)");
+    p.function("λ", &[], &returned);
+    p.pass(&filled, &returned);
+    p.group(crate::program::ENTRY);
+    let buf = p.var("BUF");
+    let new = p.var("new()");
+    let lambda = p.class("|| ..", crate::program::Origin::Lambda(Name::new("λ")));
+    let fill = p.var("fill");
+    let called = p.var("fill()");
+    p.call("new", "new", &[], &new);
+    p.pass(&new, &buf);
+    p.pass(&lambda, &fill);
+    p.call_value("fill()", &fill, &[], &called);
+    p.group("λ");
+    p.lend("lend", Mutability::Exclusive, &buf, &lent);
+    p.call("fill_all", "fill_all", &[&lent], &filled);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "BUF"),
+        Some(closed_extern("Vec", vec![closed_int(IntTy::U8)]))
+    );
+}
+
+/// Read by the captured environment (`design/17-environment.md`).
+/// ```text
+/// let mut acc = 0;
+/// let f = || acc + 1;      // core::add for u8, u16, i32
+/// acc = f();
+/// ```
+/// `acc + 1` and the lambda's result type are the enclosing group's, and the
+/// call's result takes that result type (row 3).
+#[test]
+fn a_capture_written_by_the_lambdas_result() {
+    let mut d = declare(&[]);
+    add_impls(&mut d, &[IntTy::U8, IntTy::U16, IntTy::I32]);
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(by_environment());
+    p.group_in("λ", Some(crate::program::ENTRY));
+    let returned = p.var("λ result");
+    let one = p.lit("?1", int_lit(1));
+    let lent_acc = p.var("&acc");
+    let lent_one = p.var("&1");
+    let sum = p.var("R");
+    p.function("λ", &[], &returned);
+    p.group(crate::program::ENTRY);
+    let zero = p.lit("?0", int_lit(0));
+    let acc = p.var("ACC");
+    let lambda = p.class("|| ..", crate::program::Origin::Lambda(Name::new("λ")));
+    let f = p.var("f");
+    let called = p.var("f()");
+    p.pass(&zero, &acc);
+    p.pass(&lambda, &f);
+    p.call_value("f()", &f, &[], &called);
+    p.pass(&called, &acc);
+    p.group("λ");
+    p.lend("&acc", Mutability::Shared, &acc, &lent_acc);
+    p.lend("&1", Mutability::Shared, &one, &lent_one);
+    p.call("acc + 1", "core::add", &[&lent_acc, &lent_one], &sum);
+    p.pass(&sum, &returned);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "ACC"), Some(closed_int(IntTy::I32)));
+    assert_eq!(
+        decision(&outcome, "acc + 1"),
+        Decision::Use(overload("core::add", 2))
     );
 }
 
@@ -1914,9 +2229,29 @@ fn example_14_a_struct_and_recursion_that_grows() {
 /// `choose` and `f(x)` break their dependencies on each other. Decided after the
 /// call, under `Deferral::Reading`, `choose` reads `X` leaving out the call, and
 /// with it the instance's `make_b() ≤ X`, so it reads `A`, as it does decided
-/// before the call.
+/// before the call. Read by the captured environment
+/// (`design/17-environment.md`), `make_b() ≤ X` is the enclosing group's,
+/// recorded where it is written, and no read leaves it out with the call:
+/// `choose` reads `B`.
 #[test]
 fn a_call_left_out_leaves_out_its_instance_relations() {
+    for (captures, chosen) in [(Captures::AsStated, 0), (Captures::Environment, 1)] {
+        let readings = Readings {
+            deferral: Deferral::Reading,
+            captures,
+            ..Readings::default()
+        };
+        let outcome = only_outcome(&a_call_left_out(readings));
+        assert!(outcome.accepted, "{outcome:#?}");
+        assert_eq!(
+            decision(&outcome, "choose"),
+            Decision::Use(overload("choose", chosen)),
+            "{captures:?}"
+        );
+    }
+}
+
+fn a_call_left_out(readings: Readings) -> Program {
     let mut d = declare(&[("A", 0), ("B", 0)]);
     function(&mut d, "make_a", &[], vec![], s_named("A"), Role::Fn);
     function(&mut d, "make_b", &[], vec![], s_named("B"), Role::Fn);
@@ -1947,10 +2282,7 @@ fn a_call_left_out_leaves_out_its_instance_relations() {
         );
     }
     let mut p = ProgramBuilder::new(d.finish().unwrap());
-    p.readings(Readings {
-        deferral: Deferral::Reading,
-        ..Readings::default()
-    });
+    p.readings(readings);
     p.group_in("λ", Some(crate::program::ENTRY));
     let w = p.var("W");
     let unit = p.written("()", Term::Unit);
@@ -1974,12 +2306,7 @@ fn a_call_left_out_leaves_out_its_instance_relations() {
     p.group("λ");
     p.call("make_b", "make_b", &[], &made_b);
     p.pass_at(&made_b, &x, crate::program::Place::ByName);
-    let outcome = only_outcome(&p.build());
-    assert!(outcome.accepted, "{outcome:#?}");
-    assert_eq!(
-        decision(&outcome, "choose"),
-        Decision::Use(overload("choose", 0))
-    );
+    p.build()
 }
 
 /// `design/14-certificate.md`, Expected results: the checker finds a value or

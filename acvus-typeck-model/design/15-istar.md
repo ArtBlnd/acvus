@@ -68,7 +68,10 @@ Every decided node, in each context its decision holds for:
   instance of its group's C that was made, under that instance's map, and, through
   an instance made for the check, in the enclosing group's end state, so that a
   lambda never called is checked as well. A lambda inside a function's body is so
-  checked in each instance of that function.
+  checked in each instance of that function. Read by the captured environment
+  (note 17), the environment's nodes are the enclosing group's, decided and
+  checked in its end state, and the instance the check makes copies the generic
+  part.
 - A copy of a node left in C, in the state of its instance, as a node of that
   state.
 
@@ -139,4 +142,5 @@ sampled orders.
 - A class's solving, `α ≐ ⊔S` (l.295), is the decision the pivot's I\* is first
   stated of, and this check decides only nodes again. O4's third outcome is such a
   decision: `X` is solved as `A` before the call's instance records `B ≤ X`, and
-  the check reports it only through `probe`, which reads `X`.
+  the check reports it only through `probe`, which reads `X`. Read by the captured
+  environment, `X` waits for the call, and O4 has one outcome.

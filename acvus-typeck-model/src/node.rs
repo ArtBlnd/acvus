@@ -210,7 +210,9 @@ impl State {
     }
 
     /// The classes at a node's positions, and those within the depth its
-    /// candidates reach (l.244 (b)).
+    /// candidates reach (l.244 (b)): for a call of a function value, the
+    /// parameters and the result type in the environment of each lambda its
+    /// callee's Values name (`design/17-environment.md`, row 3).
     pub(crate) fn positions(&self, kind: &NodeKind) -> BTreeSet<ClassId> {
         match kind {
             NodeKind::Use {
@@ -244,13 +246,47 @@ impl State {
                 callee,
                 args,
                 result,
-            } => [callee]
-                .into_iter()
-                .chain(args)
-                .chain([result])
-                .copied()
-                .collect(),
+            } => {
+                let mut positions: BTreeSet<ClassId> = [callee]
+                    .into_iter()
+                    .chain(args)
+                    .chain([result])
+                    .copied()
+                    .collect();
+                for lambda in self.values_of(*callee) {
+                    positions.extend(self.environment_of(&lambda).into_iter().flatten());
+                }
+                positions
+            }
         }
+    }
+
+    /// The parameter types of the lambda, and then its result type, each the
+    /// class here where its environment holds it (`design/17-environment.md`,
+    /// row 3), none where its binding group does.
+    pub(crate) fn environment_of(&self, lambda: &Name) -> Vec<Option<ClassId>> {
+        let function = self
+            .functions
+            .iter()
+            .find(|function| function.name == *lambda)
+            .expect("a lambda is a function");
+        function
+            .params
+            .iter()
+            .chain([&function.result])
+            .map(|name| {
+                self.environment.contains(name).then(|| {
+                    self.arena
+                        .get(&ClassName::Text(name.clone()))
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{lambda}'s value reaches a group its environment is not in, \
+                             which is not yet encoded (design/17-environment.md, Open)"
+                            )
+                        })
+                })
+            })
+            .collect()
     }
 
     /// The classes the equivalence class of `id` is known to be a reference
@@ -788,12 +824,17 @@ impl State {
                     );
                     let at = Name::new(&format!("{name}#{lambda}"));
                     let mut copy = crate::instance::Instance::new(&at, recorder.clone(), &from);
-                    let params: Vec<ClassId> = function
-                        .params
-                        .iter()
-                        .map(|param| copy.class(self, from.text(param)))
-                        .collect();
-                    let returned = copy.class(self, from.text(&function.result));
+                    let mut met = Vec::new();
+                    let held = self.environment_of(lambda);
+                    for (name, held) in function.params.iter().chain([&function.result]).zip(held) {
+                        let class = match held {
+                            Some(class) => class,
+                            None => copy.class(self, from.text(name)),
+                        };
+                        met.push(class);
+                    }
+                    let returned = met.pop().expect("the result type follows the parameters");
+                    let params = met;
                     copy.record_rest(self);
                     self.record_call(args, &params, returned, *result, &recorder);
                 }

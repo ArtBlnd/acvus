@@ -54,7 +54,10 @@ the group takes the body's own types.
    (l.220). The classes of enclosing groups its text names are shared: no unknowns
    of it (l.218), never solved or fallen back there, so its relations on them stay
    in its C, and a copy shares them (l.222). A lambda's use that reads one is
-   `holes.md`, H5.
+   `holes.md`, H5. Read by the captured environment (`Captures::Environment`,
+   note 17), the classes joined to a capture and the items naming them are the
+   enclosing group's, recorded there once, and the lambda's group is the rest,
+   which names no class of an enclosing group.
 8. **Meeting and boundary** (l.226). A value passing into an unknown of the
    place's own group meets it. One passing into a binding of an enclosing group
    reached by name meets it where that binding's type is an unknown of its own
@@ -62,12 +65,16 @@ the group takes the body's own types.
    (l.218). One passing through a reference from a binding of an enclosing group
    is a boundary, whatever class the place's last projection names, since that
    class is the lambda's own until the reference's target is known (Example 7).
+   Read by the captured environment, an item of the environment keeps the place
+   its text gives, and is recorded in the enclosing group.
 9. **A call of a function value** reads the value's Values: the lambdas of the
    function values met in its class by equations or lower bounds (l.180, l.188).
    Decided, it makes an instance of each lambda's C, its arguments meeting the
    copies of the lambda's parameters' types, and the copy of its result type
    entering the call's result (l.203). A value whose Values names no lambda gives
-   no result.
+   no result. Read by the captured environment, an argument meets the lambda's
+   parameter itself where its environment holds it, and the call's result takes
+   the environment's result type where it holds that (note 17, row 3).
 10. **A receiver's `T̄`** is universal (l.325), and the receiver's class holds the
    kind the text writes, so it is decided and universal at once: an argument
    passes into its copy by a boundary (Example 14, step 2). A node that reads

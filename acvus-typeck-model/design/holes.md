@@ -93,6 +93,12 @@ Read so that a shared class depends on the use that makes the lambda's instance,
 as a universal does on the use that chooses it (l.246), `probe` would stay in C
 and be decided in the copy, where `X` is `A`.
 
+Read by functions §2, what a lambda's captured environment holds is not
+generalized and belongs to where it was written (`design/17-environment.md`,
+`Captures::Environment`): `probe` names the capture `X`, so it is the enclosing
+group's, decided there once, and reads `X` as `A`. One outcome, accepted, in every
+order (same test).
+
 ## H6. Example 14's `q` has no value
 
 Example 14 has `q` be `Pair⟨&str, u8⟩`, and the copy of C of `nest` refused at the
@@ -296,6 +302,12 @@ Without `probe(x)`, two outcomes: `x: B` accepted, and `x: A` refused at `V ≤ 
 The invariant broken is that a node recording into a class is seen as the class's
 dependency before it records and stays after: a lambda's instance writes classes
 its call does not lie at.
+
+Read by the captured environment (`design/17-environment.md`,
+`Captures::Environment`), `V` is joined to the capture `X` by `x = v`, so `V ≤ X`
+is the enclosing group's, recorded once, and `V` lies at the call's positions:
+`X` and `probe` wait for the call. With `probe(x)`, one outcome, `x: B` and
+`probe(B)`, accepted; without it, one outcome, `x: B`, accepted (same test).
 
 ## O5. Two lends of one place
 

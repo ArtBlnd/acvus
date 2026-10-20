@@ -102,6 +102,9 @@ pub struct State {
     /// The groups enclosing it, innermost first.
     pub(crate) enclosing: Vec<Name>,
     pub(crate) functions: Rc<Vec<Function>>,
+    /// The classes the lambdas' environments hold, which the groups
+    /// enclosing them solve (`design/17-environment.md`).
+    pub(crate) environment: Rc<BTreeSet<Name>>,
     /// Each group solved before it, at its fixpoint (l.220).
     pub(crate) solved: BTreeMap<Name, Rc<State>>,
     /// The instances made here, in the order made (l.222).
@@ -151,19 +154,20 @@ impl State {
             enclosing_unknowns: BTreeSet::new(),
             enclosing: program.enclosing(group),
             functions: Rc::new(program.functions.clone()),
+            environment: Rc::new(program.environment()),
             solved: solved.clone(),
             instances: Vec::new(),
         };
         let classes: Vec<&TextClass> = program
             .classes
             .iter()
-            .filter(|class| class.group == *group)
+            .filter(|class| program.owner(&class.name) == group)
             .collect();
         let items: Vec<(usize, &Item)> = program
             .items
             .iter()
             .enumerate()
-            .filter(|(_, (at, _))| at == group)
+            .filter(|&(i, _)| program.item_group(i) == group)
             .map(|(i, (_, item))| (i, item))
             .collect();
         for class in &classes {
@@ -186,7 +190,11 @@ impl State {
             }
         }
         for function in program.functions.iter().filter(|f| f.group == *group) {
-            for param in &function.params {
+            for param in function
+                .params
+                .iter()
+                .filter(|param| program.is_universal(param))
+            {
                 let id = state.text(param);
                 state.universals.insert(id);
             }

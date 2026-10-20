@@ -30,6 +30,10 @@ row is of the moment: a dependency on a solved class or a decided node is gone.
 4. **The part row.** A part depends on the classes it is a part of taking a
    constructor (l.245). A class holding a kind is solved (note 06, reading 4), so
    the row holds of every part already.
+5. **A call of a function value's positions.** Read by the captured environment,
+   they include the parameters and the result type in the environment of each
+   lambda its callee's Values name at the moment (note 17, row 3), so a class the
+   call meets there waits for it.
 
 ## Left open for change
 

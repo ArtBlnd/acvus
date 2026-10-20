@@ -1,4 +1,4 @@
-# 17 The captured environment (draft)
+# 17 The captured environment
 
 Rests on the spec's l.203 (a call of a function value), l.210–222 (binding groups,
 C, instances), l.226 (meeting), l.244 (b) (what a class depends on), l.267, l.293
@@ -7,10 +7,13 @@ generalizes what its type leaves unconstrained, "except what the enclosing scope
 the captured environment holds: those belong to where they were written"; its
 environment is captured once, where it is written) and `types.md` §1 (every slot
 has one type; values meeting through a chain of slots are of one type); and on
-`holes.md`, H5 and O4. A draft: its direction was agreed with 준량 on 2026-10-21,
-and its rows are to be agreed before code. It is a reading, `Captures::Environment`,
-beside the spec as stated, `Captures::AsStated`, so that both run on the same
-witnesses.
+`holes.md`, H5 and O4. Its direction and its rows were agreed with 준량 on
+2026-10-21. It is a reading, `Captures::Environment`, beside the spec as stated,
+`Captures::AsStated`, the default, so that both run on the same witnesses. The code
+is `Program::cut_environments` and `Program::owner`, `Program::item_group` and
+`Program::is_universal` in `src/program.rs`, `State::positions` and
+`State::environment_of` in `src/node.rs`, and the certificate's contexts and
+`call_value` in `src/certificate.rs`.
 
 ## Meaning
 
@@ -35,6 +38,10 @@ call.
   **environment** of a lambda is every class joined, directly or through others, to
   a capture, and every item that names one of them. A lambda inside it records its
   own environment into it first, as items of its text.
+- An item **names** the classes it relates. A use of a function of an enclosing
+  group names that function's parameter and result types as well, which it takes
+  as they are (note 09, reading 4), and a binding names the classes of the
+  projections on its path (l.317).
 - The **generic part** of a lambda is the rest of its text, its parameters among it
   where they are not in the environment.
 
@@ -124,6 +131,26 @@ every current test keeps its outcome.
 
 In each, I\* reports nothing and the certificate holds.
 
+## Run
+
+Every row of the table holds as derived, each asserted under
+`Captures::Environment`, and under `Captures::AsStated` where the table states it
+(`examples.rs`: `hole_5_a_lambda_reads_a_capture`,
+`hole_o4_a_capture_written_after_a_use_reads_it`,
+`example_6_a_capture_written_by_name`, `example_6_called_with_two_types`,
+`example_6_through_a_reference`, `a_literal_capture_passed_to_a_parameter`,
+`a_capture_lent_in_a_lambda`, `a_lambda_never_called_and_its_environment`,
+`a_capture_written_by_the_lambdas_result`,
+`a_call_left_out_leaves_out_its_instance_relations`). Under
+`Captures::Environment` each reaches one outcome in every order, I\* reports
+nothing, and the certificate holds of each accepted final state (a refused one has
+nothing to check, note 14).
+
+With the default changed to `Captures::Environment`, 95 of the 99 tests pass; the
+four that fail are those whose first half asserts the spec's outcome through
+`Readings::default()`: H5, O4, Example 6's `S` and the lambda never called. That
+was run by changing the model, and no test keeps it.
+
 ## Open
 
 - A function value that leaves the group its lambda lies in, returned from a
@@ -131,4 +158,6 @@ In each, I\* reports nothing and the certificate holds.
   C. Function values crossing groups are not yet encoded (note 09).
 - A call's candidates are the Values of the moment. Whether Values can still grow
   after a call is decided, and whether row 3 makes cycles beyond those l.269
-  breaks, the witnesses are to show.
+  breaks, is not shown: in every witness the lambda reaches the callee's class by a
+  pass recorded when the group's solving starts, so no call's Values grow after
+  it.
