@@ -126,9 +126,10 @@ Before the check runs, as its acceptance criteria:
 | the program above | none |
 | Example 12, l.265 with `pick(u8) -> &u8`, the other current examples | none |
 
-Run, the check reports these and no others: each witness of `holes.md` asserts
-the nodes it reports and how, and every other example asserts it reports none
-(`examples.rs`, `checked`, `outcomes`). O4's `probe(A)` is a soundness violation
+Run, the check reports these and no others: each witness of `holes.md` asserts,
+for the outcome of each final state, the nodes it reports there and how, and every
+other example asserts it reports none (`examples.rs`, `Checked::istar_by`,
+`outcomes`). O4's `probe(A)` is a soundness violation
 where the program is accepted and a completeness one in its third outcome,
 refused at `put(..)#λ/V ≤ X` (`holes.md`, O4). Example 14 reports none over its
 sampled orders.

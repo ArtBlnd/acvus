@@ -102,45 +102,85 @@ fn closed_int(int: IntTy) -> Ty {
     closed(Term::Scalar(Scalar::Int(int)))
 }
 
-/// The outcomes every order of solving reaches, and the nodes at which I\*
-/// fails in their final states, each with how (`design/15-istar.md`). The
-/// certificate of every final state holds (`design/14-certificate.md`).
+/// The outcomes every order of solving reaches, and each final state's
+/// outcome with the nodes at which I\* fails in it, each with how
+/// (`design/15-istar.md`). The certificate of every final state holds
+/// (`design/14-certificate.md`).
 struct Checked {
     outcomes: Vec<Outcome>,
+    finals: Vec<FinalChecked>,
+}
+
+/// A final state's outcome, and the nodes at which I\* fails in it.
+struct FinalChecked {
+    outcome: Outcome,
     istar: BTreeSet<(Kind, Name)>,
 }
 
-/// Runs the checks of notes 14 and 15 on a final state, panicking where the
-/// certificate fails, and returns where I\* fails.
-fn check_final(program: &Program, end: &Final<'_>) -> BTreeSet<(Kind, Name)> {
-    let unsound = crate::certificate::check(program, &Certificate::of(end));
+impl Checked {
+    /// The nodes at which I\* fails in some final state.
+    fn istar(&self) -> BTreeSet<(Kind, Name)> {
+        self.finals
+            .iter()
+            .flat_map(|end| end.istar.iter().cloned())
+            .collect()
+    }
+
+    /// For each final state, `key` of its outcome, with where I\* fails in it.
+    fn istar_by<K, F>(&self, key: F) -> BTreeSet<(K, BTreeSet<(Kind, Name)>)>
+    where
+        K: Ord,
+        F: Fn(&Outcome) -> K,
+    {
+        self.finals
+            .iter()
+            .map(|end| (key(&end.outcome), end.istar.clone()))
+            .collect()
+    }
+}
+
+/// The checks of notes 14 and 15 on the final states `run` hands to its
+/// visitor, asserting the certificate of each once every one is checked.
+fn check_finals<R, T>(program: &Program, run: R) -> (T, Vec<FinalChecked>)
+where
+    R: FnOnce(&mut dyn FnMut(&Final<'_>)) -> T,
+{
+    let mut unsound = Vec::new();
+    let mut finals = Vec::new();
+    let ran = run(&mut |end| {
+        unsound.extend(crate::certificate::check(program, &Certificate::of(end)));
+        let istar = crate::istar::check(program, end)
+            .into_iter()
+            .map(|violation| (violation.kind, violation.node))
+            .collect();
+        let outcome = end.entry.outcome_with(end.groups);
+        finals.push(FinalChecked { outcome, istar });
+    });
     assert!(unsound.is_empty(), "the certificate fails: {unsound:#?}");
-    crate::istar::check(program, end)
-        .into_iter()
-        .map(|violation| (violation.kind, violation.node))
-        .collect()
+    (ran, finals)
 }
 
 fn checked(program: &Program) -> Checked {
-    let mut istar = BTreeSet::new();
-    let Exploration {
-        outcomes,
-        states,
-        complete,
-    } = explore_with(program, BUDGET, |end| {
-        istar.extend(check_final(program, end))
-    });
+    let (
+        Exploration {
+            outcomes,
+            states,
+            complete,
+        },
+        finals,
+    ) = check_finals(program, |visit| explore_with(program, BUDGET, visit));
     assert!(complete, "explored {states} states within the budget");
-    Checked { outcomes, istar }
+    Checked { outcomes, finals }
 }
 
 /// The checks of notes 14 and 15 on `orders` sampled orders.
 fn sampled(program: &Program, orders: u64) -> Checked {
-    let mut istar = BTreeSet::new();
-    let outcomes = sample_with(program, orders, |end| {
-        istar.extend(check_final(program, end))
-    });
-    Checked { outcomes, istar }
+    let (outcomes, finals) = check_finals(program, |visit| sample_with(program, orders, visit));
+    Checked { outcomes, finals }
+}
+
+fn none() -> BTreeSet<(Kind, Name)> {
+    BTreeSet::new()
 }
 
 fn at(kind: Kind, node: &str) -> (Kind, Name) {
@@ -519,9 +559,10 @@ fn hole_4_a_reborrow_at_a_boundary_equates_the_targets() {
 /// Every outcome some order of solving reaches, where I\* holds of every
 /// decision.
 fn outcomes(program: &Program) -> Vec<Outcome> {
-    let Checked { outcomes, istar } = checked(program);
+    let checked = checked(program);
+    let istar = checked.istar();
     assert!(istar.is_empty(), "I* fails: {istar:#?}");
-    outcomes
+    checked.outcomes
 }
 
 fn int_lit(value: u128) -> crate::lit::LitVar {
@@ -810,11 +851,17 @@ fn a_binding_behind_a_reference_lends_its_position() {
             mutability: Mutability::Shared
         }
     );
-    let Checked {
-        outcomes: as_stated,
-        istar,
-    } = checked(&program(BindingPath::AsStated));
-    assert_eq!(istar, BTreeSet::from([at(Kind::Soundness, "x")]));
+    let as_stated = checked(&program(BindingPath::AsStated));
+    let u8_ = closed_int(IntTy::U8);
+    let ref_u8 = closed(Term::Ref(Mutability::Shared, u8_.clone()));
+    assert_eq!(
+        as_stated.istar_by(|outcome| value(outcome, "X")),
+        BTreeSet::from([
+            (Some(u8_), BTreeSet::from([at(Kind::Soundness, "x")])),
+            (Some(ref_u8), none()),
+        ])
+    );
+    let as_stated = as_stated.outcomes;
     let values: BTreeSet<Option<Ty>> = as_stated
         .iter()
         .map(|outcome| value(outcome, "X"))
@@ -1058,11 +1105,15 @@ fn example_12_accumulation_that_starts_from_a_literal() {
 /// `x + y`, waits for it, and reads `X` as `u16`.
 #[test]
 fn hole_7_two_uses_that_read_one_class() {
-    let Checked {
-        outcomes: by_position,
-        istar,
-    } = checked(&example_12(Readings::default(), true));
-    assert_eq!(istar, BTreeSet::from([at(Kind::Completeness, "probe")]));
+    let checked = checked(&example_12(Readings::default(), true));
+    assert_eq!(
+        checked.istar_by(|outcome| decision(outcome, "probe")),
+        BTreeSet::from([(
+            Decision::Use(overload("probe", 1)),
+            BTreeSet::from([at(Kind::Completeness, "probe")])
+        )])
+    );
+    let by_position = checked.outcomes;
     let [by_position] = by_position.as_slice() else {
         panic!("every order reaches one outcome: {by_position:#?}");
     };
@@ -1097,11 +1148,18 @@ fn hole_o2_a_deferred_relation_read_by_a_third_node() {
         deferral,
         ..Readings::default()
     };
-    let Checked {
-        outcomes: recording,
-        istar,
-    } = checked(&example_12(readings(Deferral::Recording), true));
-    assert_eq!(istar, BTreeSet::from([at(Kind::Completeness, "probe")]));
+    let checked = checked(&example_12(readings(Deferral::Recording), true));
+    assert_eq!(
+        checked.istar_by(|outcome| decision(outcome, "probe")),
+        BTreeSet::from([
+            (Decision::Use(overload("probe", 0)), none()),
+            (
+                Decision::Use(overload("probe", 1)),
+                BTreeSet::from([at(Kind::Completeness, "probe")])
+            ),
+        ])
+    );
+    let recording = checked.outcomes;
     let decisions: BTreeSet<(Decision, bool)> = recording
         .iter()
         .map(|outcome| (decision(outcome, "probe"), outcome.accepted))
@@ -1202,21 +1260,29 @@ fn hole_o3_a_reference_recorded_at_once_has_no_mutability() {
     p.call("first", "first", &[&x], &first);
     p.pass(&first, &r);
     p.lend("&mut r", Mutability::Exclusive, &r, &lent);
-    let Checked { outcomes, istar } = checked(&p.build());
-    assert_eq!(istar, BTreeSet::from([at(Kind::Completeness, "&mut r")]));
+    let checked = checked(&p.build());
+    let through = Decision::Lend {
+        target: LendTarget::Through(Some(Mutability::Shared)),
+        mutability: Mutability::Shared,
+    };
+    assert_eq!(
+        checked.istar_by(|outcome| decision(outcome, "&mut r")),
+        BTreeSet::from([
+            (
+                Decision::NoResult,
+                BTreeSet::from([at(Kind::Completeness, "&mut r")])
+            ),
+            (through.clone(), none()),
+        ])
+    );
+    let outcomes = checked.outcomes;
     let decisions: BTreeSet<Decision> = outcomes
         .iter()
         .map(|outcome| decision(outcome, "&mut r"))
         .collect();
     assert_eq!(
         decisions,
-        BTreeSet::from([
-            Decision::NoResult,
-            Decision::Lend {
-                target: LendTarget::Through(Some(Mutability::Shared)),
-                mutability: Mutability::Shared
-            },
-        ]),
+        BTreeSet::from([Decision::NoResult, through]),
         "{outcomes:#?}"
     );
 }
@@ -1526,8 +1592,15 @@ fn hole_o4_a_capture_written_after_a_use_reads_it() {
     let b = closed_extern("B", vec![]);
     let a = closed_extern("A", vec![]);
 
-    let Checked { outcomes, istar } = checked(&capture_written_after_a_use(false));
-    assert!(istar.is_empty(), "{istar:#?}");
+    let without = checked(&capture_written_after_a_use(false));
+    assert_eq!(
+        without.istar_by(|outcome| (outcome.accepted, value(outcome, "X"))),
+        BTreeSet::from([
+            ((true, Some(b.clone())), none()),
+            ((false, Some(a.clone())), none()),
+        ])
+    );
+    let outcomes = without.outcomes;
     let solved: BTreeSet<(bool, Option<Ty>, Vec<String>)> = outcomes
         .iter()
         .map(|outcome| (outcome.accepted, value(outcome, "X"), failed(outcome)))
@@ -1541,14 +1614,22 @@ fn hole_o4_a_capture_written_after_a_use_reads_it() {
         "{outcomes:#?}"
     );
 
-    let Checked { outcomes, istar } = checked(&capture_written_after_a_use(true));
+    let with = checked(&capture_written_after_a_use(true));
     assert_eq!(
-        istar,
+        with.istar_by(|outcome| (decision(outcome, "probe"), outcome.accepted)),
         BTreeSet::from([
-            at(Kind::Completeness, "probe"),
-            at(Kind::Soundness, "probe"),
+            (
+                (Decision::Use(overload("probe", 0)), false),
+                BTreeSet::from([at(Kind::Completeness, "probe")])
+            ),
+            (
+                (Decision::Use(overload("probe", 0)), true),
+                BTreeSet::from([at(Kind::Soundness, "probe")])
+            ),
+            ((Decision::Use(overload("probe", 1)), true), none()),
         ])
     );
+    let outcomes = with.outcomes;
     let decisions: BTreeSet<(Decision, bool, Option<Ty>)> = outcomes
         .iter()
         .map(|outcome| {
@@ -1610,14 +1691,18 @@ fn hole_5_a_lambda_reads_a_capture() {
     p.call_value("f()", &f, &[], &called);
     p.group("λ");
     p.call("probe", "probe", &[&x], &probed);
-    let Checked { outcomes, istar } = checked(&p.build());
+    let checked = checked(&p.build());
     assert_eq!(
-        istar,
-        BTreeSet::from([
-            at(Kind::Completeness, "f()#λ/probe"),
-            at(Kind::Completeness, "λ#check/probe"),
-        ])
+        checked.istar_by(|outcome| outcome.accepted),
+        BTreeSet::from([(
+            false,
+            BTreeSet::from([
+                at(Kind::Completeness, "f()#λ/probe"),
+                at(Kind::Completeness, "λ#check/probe"),
+            ])
+        )])
     );
+    let outcomes = checked.outcomes;
     let [outcome] = outcomes.as_slice() else {
         panic!("every order reaches one outcome: {outcomes:#?}");
     };
@@ -1769,8 +1854,10 @@ fn example_14_a_struct_and_recursion_that_grows() {
     let nested = p.var("q.nest(3)");
     p.call("q.nest(3)", "nest", &[&q, &three], &nested);
 
-    let Checked { outcomes, istar } = sampled(&p.build(), 200);
+    let sampled = sampled(&p.build(), 200);
+    let istar = sampled.istar();
     assert!(istar.is_empty(), "I* fails: {istar:#?}");
+    let outcomes = sampled.outcomes;
     assert_eq!(
         outcomes.len(),
         1,
