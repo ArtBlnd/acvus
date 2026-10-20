@@ -100,9 +100,14 @@ pub enum Recorder {
     /// A cycle of lower bounds alone, merged into one equivalence class
     /// (l.275).
     Cycle,
-    /// The use `at`, which made an instance and records in its binding group
+    /// The instance `at`, made by `by`, the use of a function at its item or
+    /// the call of a function value (l.203), recording in its binding group
     /// the copy of what `of` recorded in C (l.222).
-    Instance { at: Name, of: Box<Recorder> },
+    Instance {
+        at: Name,
+        by: Box<Recorder>,
+        of: Box<Recorder>,
+    },
 }
 
 impl Recorder {
@@ -110,6 +115,17 @@ impl Recorder {
     /// read derives it again from the relations that remain (l.267).
     pub fn is_derived(&self) -> bool {
         matches!(self, Recorder::Split(_) | Recorder::Cycle)
+    }
+
+    /// The node that recorded it, a node's own relations and those of the
+    /// instances it made, which a value read leaving that node out leaves out
+    /// (l.267).
+    pub fn node(&self) -> Option<&Name> {
+        match self {
+            Recorder::Node(name) => Some(name),
+            Recorder::Instance { by, .. } => by.node(),
+            Recorder::Origin | Recorder::Text(_) | Recorder::Split(_) | Recorder::Cycle => None,
+        }
     }
 
     /// Whether the text or a node records it, so that a value it makes enter

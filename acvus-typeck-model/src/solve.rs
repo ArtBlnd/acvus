@@ -418,7 +418,7 @@ impl State {
                 .unwrap_or_else(|| panic!("{} is solved first (l.220)", function.group)),
         );
         let at = Name::new(&format!("{}@{item}", function.name));
-        let mut copy = Instance::new(&at, &from);
+        let mut copy = Instance::new(&at, recorder.clone(), &from);
         let params: Vec<ClassId> = function
             .params
             .iter()

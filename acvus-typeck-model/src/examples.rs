@@ -1696,3 +1696,83 @@ fn example_14_a_struct_and_recursion_that_grows() {
         ]
     );
 }
+
+/// `design/15-istar.md`, what the check presupposes: a read that leaves out a
+/// call of a function value leaves out the relations of the instances the call
+/// made, which are the call's (l.267).
+/// ```text
+/// let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
+/// let put = |w| x = make_b();
+/// let f = if c { put } else { choose(x) };   // choose(A) -> Fn/1, choose(B) -> Fn/1
+/// f(x);
+/// ```
+/// `choose` and `f(x)` break their dependencies on each other. Decided after the
+/// call, under `Deferral::Reading`, `choose` reads `X` leaving out the call, and
+/// with it the instance's `make_b() ≤ X`, so it reads `A`, as it does decided
+/// before the call.
+#[test]
+fn a_call_left_out_leaves_out_its_instance_relations() {
+    let mut d = declare(&[("A", 0), ("B", 0)]);
+    function(&mut d, "make_a", &[], vec![], s_named("A"), Role::Fn);
+    function(&mut d, "make_b", &[], vec![], s_named("B"), Role::Fn);
+    function(
+        &mut d,
+        "up",
+        &[],
+        vec![s_named("A")],
+        s_named("B"),
+        Role::Cast,
+    );
+    function(
+        &mut d,
+        "down",
+        &[],
+        vec![s_named("B")],
+        s_named("A"),
+        Role::Conversion,
+    );
+    for param in ["A", "B"] {
+        function(
+            &mut d,
+            "choose",
+            &[],
+            vec![s_named(param)],
+            SigTy::term(Term::FunctionValue { arity: 1 }),
+            Role::Fn,
+        );
+    }
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(Readings {
+        deferral: Deferral::Reading,
+        ..Readings::default()
+    });
+    p.group_in("λ", Some(crate::program::ENTRY));
+    let w = p.var("W");
+    let unit = p.written("()", Term::Unit);
+    let returned = p.var("λ result");
+    let made_b = p.var("make_b()");
+    p.function("λ", &[&w], &returned);
+    p.pass(&unit, &returned);
+    p.group(crate::program::ENTRY);
+    let x = p.var("X");
+    let made_a = p.var("make_a()");
+    let lambda = p.class("|w| ..", crate::program::Origin::Lambda(Name::new("λ")));
+    let f = p.var("F");
+    let chosen = p.var("choose(x)");
+    let called = p.var("f(x)");
+    p.call("make_a", "make_a", &[], &made_a);
+    p.pass(&made_a, &x);
+    p.pass(&lambda, &f);
+    p.call("choose", "choose", &[&x], &chosen);
+    p.pass(&chosen, &f);
+    p.call_value("f(x)", &f, &[&x], &called);
+    p.group("λ");
+    p.call("make_b", "make_b", &[], &made_b);
+    p.pass_at(&made_b, &x, crate::program::Place::ByName);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        decision(&outcome, "choose"),
+        Decision::Use(overload("choose", 0))
+    );
+}

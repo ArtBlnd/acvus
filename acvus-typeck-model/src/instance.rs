@@ -14,6 +14,9 @@ use crate::ty::{Name, Ty};
 /// the use `at` (l.219, l.222).
 pub(crate) struct Instance<'a> {
     at: Rc<Name>,
+    /// What made the instance, which every relation it records is recorded by
+    /// (l.267).
+    by: Recorder,
     from: &'a State,
     /// The roots of C's classes in `from`: those left unsolved, or whose value
     /// is not closed, and the universals.
@@ -23,7 +26,7 @@ pub(crate) struct Instance<'a> {
 }
 
 impl<'a> Instance<'a> {
-    pub(crate) fn new(at: &Name, from: &'a State) -> Instance<'a> {
+    pub(crate) fn new(at: &Name, by: Recorder, from: &'a State) -> Instance<'a> {
         let c = from
             .classes
             .roots()
@@ -31,6 +34,7 @@ impl<'a> Instance<'a> {
             .collect();
         Instance {
             at: Rc::new(at.clone()),
+            by,
             from,
             c,
             made: BTreeMap::new(),
@@ -38,7 +42,7 @@ impl<'a> Instance<'a> {
     }
 
     /// What records a copied relation here: the copy of an undecided node, or
-    /// the use that made the instance.
+    /// the instance, made by what made it.
     fn recorder(&self, of: &Recorder) -> Recorder {
         match of {
             Recorder::Node(node) if self.from.nodes[node].decision.is_none() => {
@@ -46,6 +50,7 @@ impl<'a> Instance<'a> {
             }
             _ => Recorder::Instance {
                 at: (*self.at).clone(),
+                by: Box::new(self.by.clone()),
                 of: Box::new(of.clone()),
             },
         }

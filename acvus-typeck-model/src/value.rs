@@ -8,7 +8,6 @@ use crate::class::{ClassId, ClassName, Classes, Fact};
 use crate::decl::Node;
 use crate::program::Visibility;
 use crate::read::ReadValue;
-use crate::relation::Recorder;
 use crate::solve::State;
 use crate::ty::{Constructor, HasTerm, Member, Name, PartKey, Term};
 
@@ -235,7 +234,7 @@ impl State {
             if recorded.recorder.is_derived() {
                 continue;
             }
-            if let Recorder::Node(name) | Recorder::Instance { at: name, .. } = &recorded.recorder
+            if let Some(name) = recorded.recorder.node()
                 && excluded.contains(name)
             {
                 continue;

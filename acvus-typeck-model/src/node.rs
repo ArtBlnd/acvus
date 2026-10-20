@@ -723,7 +723,7 @@ impl State {
                             .expect("a lambda's group is solved first (l.220)"),
                     );
                     let at = Name::new(&format!("{name}#{lambda}"));
-                    let mut copy = crate::instance::Instance::new(&at, &from);
+                    let mut copy = crate::instance::Instance::new(&at, recorder.clone(), &from);
                     let params: Vec<ClassId> = function
                         .params
                         .iter()
