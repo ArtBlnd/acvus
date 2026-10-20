@@ -12,6 +12,7 @@ mod examples;
 pub mod explore;
 #[cfg(test)]
 mod fixture;
+pub mod instance;
 pub mod join;
 pub mod lit;
 pub mod node;

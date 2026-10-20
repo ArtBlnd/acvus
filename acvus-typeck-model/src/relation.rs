@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use crate::class::{Arena, ClassId, Fact};
+use crate::class::{Arena, ClassId, Fact, KindSource};
 use crate::lit::LitVar;
 use crate::ty::{Name, Term};
 
@@ -22,13 +22,62 @@ pub enum Relation {
     Equation(ClassId, ClassId),
     /// A kind known in part, which a projection records (l.237).
     Fact(ClassId, Fact),
-    /// A type the text or a declaration writes, which the class holds (l.127).
-    Kind(ClassId, Term<ClassId>),
+    /// A kind the class holds: a type the text or a declaration writes
+    /// (l.127), or, in a copy of C, the kind the class held where its binding
+    /// group was solved (l.222).
+    Kind(ClassId, Term<ClassId>, KindSource),
     /// A literal's type (l.134).
     Lit(ClassId, LitVar),
     /// Whether the class is a reference, which a use records before it is
     /// decided (l.252).
     Reference(ClassId, bool),
+}
+
+impl Relation {
+    /// The classes the relation names, a kind's parts among them.
+    pub fn classes(&self) -> Vec<ClassId> {
+        match self {
+            Relation::LowerBound { lower, upper } => vec![*lower, *upper],
+            Relation::Boundary { from, to } => vec![*from, *to],
+            Relation::Equation(a, b) => vec![*a, *b],
+            Relation::Fact(class, fact) => vec![*class, fact.class()],
+            Relation::Kind(class, term, _) => std::iter::once(*class)
+                .chain(term.parts().into_iter().map(|(_, part)| *part))
+                .collect(),
+            Relation::Lit(class, _) | Relation::Reference(class, _) => vec![*class],
+        }
+    }
+
+    /// The relation with each class it names put through `f`.
+    pub fn map<F>(self, mut f: F) -> Relation
+    where
+        F: FnMut(ClassId) -> ClassId,
+    {
+        match self {
+            Relation::LowerBound { lower, upper } => Relation::LowerBound {
+                lower: f(lower),
+                upper: f(upper),
+            },
+            Relation::Boundary { from, to } => Relation::Boundary {
+                from: f(from),
+                to: f(to),
+            },
+            Relation::Equation(a, b) => {
+                let a = f(a);
+                Relation::Equation(a, f(b))
+            }
+            Relation::Fact(class, fact) => {
+                let class = f(class);
+                Relation::Fact(class, fact.map(f))
+            }
+            Relation::Kind(class, term, source) => {
+                let class = f(class);
+                Relation::Kind(class, term.map(|_, part| f(part)), source)
+            }
+            Relation::Lit(class, lit) => Relation::Lit(f(class), lit),
+            Relation::Reference(class, reference) => Relation::Reference(f(class), reference),
+        }
+    }
 }
 
 /// What recorded a relation.
@@ -46,6 +95,9 @@ pub enum Recorder {
     /// A cycle of lower bounds alone, merged into one equivalence class
     /// (l.275).
     Cycle,
+    /// The use `at`, which made an instance and records in its binding group
+    /// the copy of what `of` recorded in C (l.222).
+    Instance { at: Name, of: Box<Recorder> },
 }
 
 impl Recorder {
@@ -53,6 +105,16 @@ impl Recorder {
     /// read derives it again from the relations that remain (l.267).
     pub fn is_derived(&self) -> bool {
         matches!(self, Recorder::Split(_) | Recorder::Cycle)
+    }
+
+    /// Whether the text or a node records it, so that a value it makes enter
+    /// a type is checked (l.293), in a copy of C as where it was recorded.
+    pub fn is_entering(&self) -> bool {
+        match self {
+            Recorder::Text(_) | Recorder::Node(_) => true,
+            Recorder::Instance { of, .. } => of.is_entering(),
+            Recorder::Origin | Recorder::Split(_) | Recorder::Cycle => false,
+        }
     }
 }
 
@@ -76,7 +138,7 @@ impl fmt::Display for Named<'_> {
             Relation::Boundary { from, to } => write!(f, "{} ⇝ {}", name(from), name(to)),
             Relation::Equation(a, b) => write!(f, "{} = {}", name(a), name(b)),
             Relation::Fact(class, fact) => write!(f, "{}: {fact:?}", name(class)),
-            Relation::Kind(class, term) => {
+            Relation::Kind(class, term, _) => {
                 let term = term.clone().map(|_, part| name(&part).clone());
                 write!(f, "{}: {term:?}", name(class))
             }

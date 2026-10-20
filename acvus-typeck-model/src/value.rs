@@ -222,6 +222,8 @@ impl State {
             viewed: BTreeSet::new(),
             deferred: BTreeMap::new(),
             broken: BTreeMap::new(),
+            group: self.group.clone(),
+            universals: self.universals.clone(),
         };
         read.classes.grow(&read.arena);
         for recorded in &self.log {

@@ -48,7 +48,7 @@ The primitives, each assuming only those before it:
 | 06 | Equivalence classes: names, union-find, type variables, kinds | l.118–176 |
 | 07 | Relations and what records them | l.228–238 |
 | 08 | Uses, lends, projections and bindings | l.149–161, l.303–345 |
-| 09 | Binding groups, universals, C and instances | l.195–222 |
+| 09 | Binding groups, universals, C and instances | l.195–226, l.246, l.297–301 |
 | 10 | The dependency graph | l.240–271 |
 | 11 | Values and splits | l.273–293 |
 | 12 | Steps, state, fixpoint and fallback | l.295–301 |

@@ -1,9 +1,11 @@
 //! Every order of solving a program, up to a budget of states (I2, I3).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
-use crate::program::Program;
+use crate::program::{ENTRY, Program};
 use crate::solve::{Outcome, State};
+use crate::ty::Name;
 
 /// The outcomes every order of solving reaches.
 #[derive(Clone, Debug)]
@@ -16,35 +18,96 @@ pub struct Exploration {
     pub complete: bool,
 }
 
-/// Takes every step each state allows, a state reached twice explored once,
-/// and falls back wherever no step is left.
+/// Solves each binding group other than the entry to its fixpoint in every
+/// order, before the groups that make instances of it (l.220), then the entry
+/// in every order, falling back wherever no step is left (l.299). A state
+/// reached twice is explored once.
 pub fn explore(program: &Program, budget: usize) -> Exploration {
-    let mut seen = BTreeSet::new();
-    let mut outcomes: Vec<Outcome> = Vec::new();
-    let mut work = vec![State::new(program)];
+    let mut choices: Vec<BTreeMap<Name, Rc<State>>> = vec![BTreeMap::new()];
     let mut states = 0;
+    for group in program.group_order() {
+        let mut next = Vec::new();
+        for solved in &choices {
+            let start = State::of_group(program, &group, solved);
+            let Some(fixpoints) = fixpoints(start, budget, &mut states) else {
+                return Exploration {
+                    outcomes: Vec::new(),
+                    states,
+                    complete: false,
+                };
+            };
+            for fixpoint in fixpoints {
+                let mut solved = solved.clone();
+                solved.insert(group.clone(), Rc::new(fixpoint));
+                next.push(solved);
+            }
+        }
+        choices = next;
+    }
+    let mut outcomes: Vec<Outcome> = Vec::new();
+    for solved in &choices {
+        let start = State::of_group(program, &Name::new(ENTRY), solved);
+        let mut seen = BTreeSet::new();
+        let mut work = vec![start];
+        while let Some(state) = work.pop() {
+            if !seen.insert(state.fingerprint()) {
+                continue;
+            }
+            states += 1;
+            if states > budget {
+                return Exploration {
+                    outcomes,
+                    states,
+                    complete: false,
+                };
+            }
+            let steps = state.steps();
+            if steps.is_empty() {
+                let mut next = state.clone();
+                if next.fall_back() {
+                    work.push(next);
+                } else {
+                    let outcome = state.outcome_with(solved);
+                    if !outcomes.contains(&outcome) {
+                        outcomes.push(outcome);
+                    }
+                }
+                continue;
+            }
+            for step in steps {
+                let mut next = state.clone();
+                next.step(&step);
+                work.push(next);
+            }
+        }
+    }
+    Exploration {
+        outcomes,
+        states,
+        complete: true,
+    }
+}
+
+/// The distinct states at which a binding group's solving reaches its
+/// fixpoint, inside which there is no fallback (l.297), or none where the
+/// budget runs out.
+fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<State>> {
+    let mut seen = BTreeSet::new();
+    let mut reached = BTreeSet::new();
+    let mut fixpoints = Vec::new();
+    let mut work = vec![start];
     while let Some(state) = work.pop() {
         if !seen.insert(state.fingerprint()) {
             continue;
         }
-        states += 1;
-        if states > budget {
-            return Exploration {
-                outcomes,
-                states,
-                complete: false,
-            };
+        *states += 1;
+        if *states > budget {
+            return None;
         }
         let steps = state.steps();
         if steps.is_empty() {
-            let mut next = state.clone();
-            if next.fall_back() {
-                work.push(next);
-            } else {
-                let outcome = state.outcome();
-                if !outcomes.contains(&outcome) {
-                    outcomes.push(outcome);
-                }
+            if reached.insert(state.fingerprint()) {
+                fixpoints.push(state);
             }
             continue;
         }
@@ -54,9 +117,5 @@ pub fn explore(program: &Program, budget: usize) -> Exploration {
             work.push(next);
         }
     }
-    Exploration {
-        outcomes,
-        states,
-        complete: true,
-    }
+    Some(fixpoints)
 }

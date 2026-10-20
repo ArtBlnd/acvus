@@ -28,6 +28,10 @@ pub enum ClassName {
     Part(Rc<ClassName>, PartKey),
     /// A class a use or a lend of this name made anew.
     Node(Rc<Name>, crate::node::NodeAt),
+    /// The copy of a class of another binding group's C that the use `at`
+    /// made anew, or of a class outside C, whose closed type it writes
+    /// (l.222).
+    Copy { at: Rc<Name>, of: Rc<ClassName> },
     /// A class of the signature of the cast at `step` of the path that links
     /// the parts of a relation from `from` to `to` (l.291), or of the view
     /// that links the container `from` to its element `to` (l.161).
@@ -53,6 +57,7 @@ impl fmt::Display for ClassName {
             ClassName::Text(name) => write!(f, "{name}"),
             ClassName::Part(class, key) => write!(f, "{class}.{key:?}"),
             ClassName::Node(node, at) => write!(f, "{node}.{at:?}"),
+            ClassName::Copy { at, of } => write!(f, "{at}/{of}"),
             ClassName::Link { from, to, step, at } => {
                 write!(f, "link({from} → {to})[{step}].{at:?}")
             }
@@ -128,6 +133,27 @@ pub enum Fact {
 }
 
 impl Fact {
+    pub fn map<F>(self, mut f: F) -> Fact
+    where
+        F: FnMut(ClassId) -> ClassId,
+    {
+        match self {
+            Fact::Ref(class) => Fact::Ref(f(class)),
+            Fact::Field(field, class) => Fact::Field(field, f(class)),
+            Fact::Component(i, class) => Fact::Component(i, f(class)),
+            Fact::Indexes(class) => Fact::Indexes(f(class)),
+            Fact::Variant {
+                enum_name,
+                variant,
+                payload,
+            } => Fact::Variant {
+                enum_name,
+                variant,
+                payload: f(payload),
+            },
+        }
+    }
+
     pub fn class(&self) -> ClassId {
         match self {
             Fact::Ref(class)

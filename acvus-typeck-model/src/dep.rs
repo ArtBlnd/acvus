@@ -15,6 +15,9 @@ use crate::ty::Name;
 pub(crate) enum Vertex {
     Class(ClassId),
     Node(Name),
+    /// The use that chooses a universal, which lies outside the binding group
+    /// and is never decided in it (l.246).
+    Outside,
 }
 
 /// A dependency (l.244–248).
@@ -34,6 +37,8 @@ enum Edge {
     Reads,
     /// A binding on an undecided projection on its path (`holes.md`, H5).
     Path,
+    /// A universal on the use that chooses it (l.246).
+    Chosen,
 }
 
 pub(crate) struct Graph {
@@ -111,6 +116,11 @@ impl State {
                 _ => {}
             }
         }
+        for root in self.classes.roots() {
+            if self.is_universal(root) {
+                add(Vertex::Class(root), Vertex::Outside, Edge::Chosen);
+            }
+        }
         let undecided: Vec<(&Name, &crate::node::NodeState)> = self
             .nodes
             .iter()
@@ -142,8 +152,8 @@ impl State {
                                 work.push(*next);
                             }
                         }
-                        (Vertex::Node(node), Edge::Records) => {
-                            nodes.insert((node.clone(), at));
+                        (Vertex::Node(_), Edge::Records) | (Vertex::Outside, Edge::Chosen) => {
+                            nodes.insert((to.clone(), at));
                         }
                         _ => {}
                     }
@@ -156,17 +166,23 @@ impl State {
             let reads_reference = !matches!(node.kind, NodeKind::Use { .. });
             for position in self.read_positions(&node.kind) {
                 for (recorder, at) in recording(position, &edges) {
-                    let left_out = reads_reference
-                        && (self.is_inner_projection(&recorder)
-                            || !self.may_decide_reference(&recorder, at));
-                    if recorder != **name && !left_out {
+                    let left_out = match &recorder {
+                        Vertex::Node(recorder) => {
+                            recorder == *name
+                                || reads_reference
+                                    && (self.is_inner_projection(recorder)
+                                        || !self.may_decide_reference(recorder, at))
+                        }
+                        _ => false,
+                    };
+                    if !left_out {
                         reads.push(((*name).clone(), recorder, Edge::Reads));
                     }
                 }
             }
             for step in self.path_of(name) {
                 if self.nodes[&step].decision.is_none() {
-                    reads.push(((*name).clone(), step, Edge::Path));
+                    reads.push(((*name).clone(), Vertex::Node(step), Edge::Path));
                 }
             }
         }
@@ -174,7 +190,7 @@ impl State {
             edges
                 .entry(Vertex::Node(from))
                 .or_default()
-                .insert((Vertex::Node(to), edge));
+                .insert((to, edge));
         }
         let component = components(&edges);
         Graph { edges, component }
@@ -221,7 +237,7 @@ impl State {
             .into_iter()
             .filter_map(|vertex| match vertex {
                 Vertex::Node(name) => Some(name),
-                Vertex::Class(_) => None,
+                Vertex::Class(_) | Vertex::Outside => None,
             })
             .collect();
         excluded.insert(name.clone());

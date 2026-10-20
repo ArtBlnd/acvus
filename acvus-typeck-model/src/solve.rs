@@ -7,8 +7,9 @@ use std::rc::Rc;
 use crate::class::{Arena, ClassId, ClassName, Classes, Conflict, Fact, KindSource, LinkAt};
 use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::decl::{Decls, Node};
+use crate::instance::Instance;
 use crate::node::{Decision, NodeKind, NodeState};
-use crate::program::{Item, Origin, Program, Readings};
+use crate::program::{ENTRY, Function, Item, Origin, Program, Readings, TextClass};
 use crate::relation::{Named, Recorded, Recorder, Relation};
 use crate::sig::SigTy;
 use crate::ty::{Mutability, Name, Term, Ty, Variance};
@@ -89,6 +90,11 @@ pub struct State {
     /// For each undecided node, the decided nodes it broke its dependency on,
     /// whose relations its read leaves out (`Deferral::Reading`).
     pub(crate) broken: BTreeMap<Name, BTreeSet<Name>>,
+    /// The binding group being solved.
+    pub(crate) group: Name,
+    /// The types of its functions' parameters, chosen by the uses that make
+    /// instances of it (l.217, l.246).
+    pub(crate) universals: BTreeSet<ClassId>,
 }
 
 /// A step that may be taken.
@@ -101,9 +107,16 @@ pub enum Step {
 }
 
 impl State {
-    /// The state where the text's constraints are recorded and nothing is
-    /// solved (l.230).
+    /// The state of the run's entry where the text's constraints are recorded
+    /// and nothing is solved (l.230), the program having no other group.
     pub fn new(program: &Program) -> State {
+        State::of_group(program, &Name::new(ENTRY), &BTreeMap::new())
+    }
+
+    /// The state of the binding group `group` where its text's constraints
+    /// are recorded and nothing is solved (l.216, l.230). `solved` holds each
+    /// group its uses make instances of, at its fixpoint.
+    pub fn of_group(program: &Program, group: &Name, solved: &BTreeMap<Name, Rc<State>>) -> State {
         let mut state = State {
             decls: Rc::new(program.decls.clone()),
             arena: Arena::default(),
@@ -121,29 +134,51 @@ impl State {
             viewed: BTreeSet::new(),
             deferred: BTreeMap::new(),
             broken: BTreeMap::new(),
+            group: group.clone(),
+            universals: BTreeSet::new(),
         };
-        for class in &program.classes {
+        let classes: Vec<&TextClass> = program
+            .classes
+            .iter()
+            .filter(|class| class.group == *group)
+            .collect();
+        let items: Vec<(usize, &Item)> = program
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _))| at == group)
+            .map(|(i, (_, item))| (i, item))
+            .collect();
+        for class in &classes {
             let id = state.arena.intern(ClassName::Text(class.name.clone()));
             state.texts.push(id);
         }
         state.classes.grow(&state.arena);
-        for class in &program.classes {
+        for function in program.functions.iter().filter(|f| f.group == *group) {
+            for param in &function.params {
+                let id = state.text(param);
+                state.universals.insert(id);
+            }
+        }
+        for class in &classes {
             let id = state.text(&class.name);
             match &class.origin {
                 Origin::Var => {}
                 Origin::Lit(lit) => state.record(Relation::Lit(id, lit.clone()), Recorder::Origin),
                 Origin::Written(term) => {
                     let term = term.clone().map(|_, part| state.text(&part));
-                    state.record(Relation::Kind(id, term), Recorder::Origin);
+                    let relation = Relation::Kind(id, term, KindSource::Written);
+                    state.record(relation, Recorder::Origin);
                 }
                 Origin::Host(term) => {
                     state.hosts.insert(id);
                     let term = term.clone().map(|_, part| state.text(&part));
-                    state.record(Relation::Kind(id, term), Recorder::Origin);
+                    let relation = Relation::Kind(id, term, KindSource::Written);
+                    state.record(relation, Recorder::Origin);
                 }
             }
         }
-        for (i, item) in program.items.iter().enumerate() {
+        for &(i, item) in &items {
             if let Item::Equation(a, b) = item {
                 let relation = Relation::Equation(state.text(a), state.text(b));
                 state.record(relation, Recorder::Text(i));
@@ -155,7 +190,7 @@ impl State {
             .copied()
             .filter(|&id| state.classes.held(id).kind.is_some())
             .collect();
-        for (i, item) in program.items.iter().enumerate() {
+        for &(i, item) in &items {
             match item {
                 Item::Pass { value, into, .. } => {
                     let (value, into) = (state.text(value), state.text(into));
@@ -171,6 +206,17 @@ impl State {
                         }
                     };
                     state.record(relation, Recorder::Text(i));
+                }
+                Item::Use {
+                    callee,
+                    args,
+                    result,
+                    ..
+                } if program.function(callee).is_some() => {
+                    let function = program.function(callee).expect("the function is declared");
+                    let args: Vec<ClassId> = args.iter().map(|arg| state.text(arg)).collect();
+                    let result = state.text(result);
+                    state.call(i, function, &args, result, solved);
                 }
                 Item::Use {
                     name,
@@ -232,7 +278,7 @@ impl State {
         state
     }
 
-    fn add_node(&mut self, name: &Name, kind: NodeKind) {
+    pub(crate) fn add_node(&mut self, name: &Name, kind: NodeKind) {
         let node = NodeState {
             kind,
             decision: None,
@@ -244,16 +290,92 @@ impl State {
         }
     }
 
-    fn text(&self, name: &Name) -> ClassId {
+    pub(crate) fn text(&self, name: &Name) -> ClassId {
         self.arena
             .get(&ClassName::Text(name.clone()))
             .unwrap_or_else(|| panic!("the program names the class {name}"))
     }
 
-    /// A class not decided when solving starts (l.218). The model has one
-    /// binding group so far, so no class is universal or of an enclosing one.
+    /// A class not universal and not decided when solving starts (l.218).
+    /// The model has no lambda so far, so no class is of an enclosing group.
     pub(crate) fn is_unknown(&self, id: ClassId) -> bool {
-        !self.decided.contains(&id)
+        !self.decided.contains(&id) && !self.is_universal(id)
+    }
+
+    pub(crate) fn is_universal(&self, id: ClassId) -> bool {
+        self.classes
+            .held(id)
+            .members
+            .iter()
+            .any(|member| self.universals.contains(member))
+    }
+
+    /// A use that calls a function (l.199–202). Within the function's group it
+    /// takes that body's own types: each argument passes into its parameter's
+    /// type, universal and so a boundary (Example 10), and the body's result
+    /// type enters the use's result. From another group it makes an instance
+    /// of the group's C (l.222).
+    fn call(
+        &mut self,
+        item: usize,
+        function: &Function,
+        args: &[ClassId],
+        result: ClassId,
+        solved: &BTreeMap<Name, Rc<State>>,
+    ) {
+        let recorder = Recorder::Text(item);
+        if function.group == self.group {
+            let params: Vec<ClassId> = function.params.iter().map(|p| self.text(p)).collect();
+            let returned = self.text(&function.result);
+            self.record_call(args, &params, returned, result, &recorder);
+            return;
+        }
+        let from = Rc::clone(
+            solved
+                .get(&function.group)
+                .unwrap_or_else(|| panic!("{} is solved first (l.220)", function.group)),
+        );
+        let at = Name::new(&format!("{}@{item}", function.name));
+        let mut copy = Instance::new(&at, &from);
+        let params: Vec<ClassId> = function
+            .params
+            .iter()
+            .map(|param| copy.class(self, from.text(param)))
+            .collect();
+        let returned = copy.class(self, from.text(&function.result));
+        copy.record_rest(self);
+        self.record_call(args, &params, returned, result, &recorder);
+    }
+
+    fn record_call(
+        &mut self,
+        args: &[ClassId],
+        params: &[ClassId],
+        returned: ClassId,
+        result: ClassId,
+        recorder: &Recorder,
+    ) {
+        for (&arg, &param) in args.iter().zip(params) {
+            let relation = if self.is_unknown(param) {
+                Relation::LowerBound {
+                    lower: arg,
+                    upper: param,
+                }
+            } else {
+                Relation::Boundary {
+                    from: arg,
+                    to: param,
+                }
+            };
+            self.record(relation, recorder.clone());
+        }
+        self.record(
+            Relation::LowerBound {
+                lower: returned,
+                upper: result,
+            },
+            recorder.clone(),
+        );
     }
 
     pub(crate) fn record(&mut self, relation: Relation, recorder: Recorder) {
@@ -262,11 +384,9 @@ impl State {
         let given = match &relation {
             Relation::Equation(a, b) => self.classes.unify(*a, *b, types),
             Relation::Fact(class, fact) => self.classes.give_fact(*class, fact.clone(), types),
-            Relation::Kind(class, term) => match types.check(term) {
+            Relation::Kind(class, term, source) => match types.check(term) {
                 Ok(()) => {
-                    let given =
-                        self.classes
-                            .give_kind(*class, term.clone(), KindSource::Written, types);
+                    let given = self.classes.give_kind(*class, term.clone(), *source, types);
                     self.classes.mark_solved(*class);
                     given
                 }
@@ -820,7 +940,7 @@ impl State {
     fn checks(&self) -> Vec<Check> {
         let mut checks = Vec::new();
         for recorded in &self.log {
-            if !matches!(recorded.recorder, Recorder::Text(_) | Recorder::Node(_)) {
+            if !recorded.recorder.is_entering() {
                 continue;
             }
             let (from, to, lower) = match recorded.relation {
@@ -893,6 +1013,40 @@ impl State {
             refusals,
             accepted,
         }
+    }
+
+    /// The outcome of the entry's state, with what each other binding group
+    /// decided at its fixpoint: the values of its text's classes, its decided
+    /// nodes, its checks of values entering classes it solved, and its
+    /// refusals. Its classes and nodes left in C need no value and no decision
+    /// there (l.301).
+    pub fn outcome_with(&self, groups: &BTreeMap<Name, Rc<State>>) -> Outcome {
+        let mut outcome = self.outcome();
+        for group in groups.values() {
+            outcome.values.extend(
+                group
+                    .texts
+                    .iter()
+                    .map(|&id| (group.arena.name(id).clone(), group.value(id))),
+            );
+            let decided: Vec<(Name, Decision)> = group
+                .nodes
+                .iter()
+                .filter_map(|(name, node)| Some((name.clone(), node.decision.clone()?)))
+                .collect();
+            let reached = decided.iter().all(|(_, decision)| decision.is_reached());
+            outcome.decisions.extend(
+                decided
+                    .into_iter()
+                    .map(|(name, decision)| (name, Some(decision))),
+            );
+            let checks = group.checks();
+            let checked = checks.iter().all(|check| check.coercion.is_ok());
+            outcome.checks.extend(checks);
+            outcome.refusals.extend(group.refusals.iter().cloned());
+            outcome.accepted &= reached && checked && group.refusals.is_empty();
+        }
+        outcome
     }
 
     /// A text of the state that names classes as the outcome does, so that

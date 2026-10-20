@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, Fact};
+use crate::class::{ClassId, ClassName, Fact, KindSource};
 use crate::coerce::coerce_read;
 use crate::decl::{Decl, DeclId};
 use crate::program::{BindingPath, Deferral, Projection};
@@ -941,11 +941,19 @@ impl State {
     }
 
     /// A class made anew that holds `term` as a declaration writes it.
-    fn written(&mut self, name: ClassName, term: Term<ClassId>, recorder: &Recorder) -> ClassId {
+    pub(crate) fn written(
+        &mut self,
+        name: ClassName,
+        term: Term<ClassId>,
+        recorder: &Recorder,
+    ) -> ClassId {
         let class = self.arena.intern(name);
         self.classes.grow(&self.arena);
         self.decided.insert(class);
-        self.record(Relation::Kind(class, term), recorder.clone());
+        self.record(
+            Relation::Kind(class, term, KindSource::Written),
+            recorder.clone(),
+        );
         class
     }
 

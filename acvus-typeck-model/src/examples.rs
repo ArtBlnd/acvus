@@ -1124,3 +1124,99 @@ fn a_use_whose_argument_is_never() {
     assert_eq!(decision(&outcome, "f"), Decision::Never);
     assert_eq!(value(&outcome, "R"), Some(closed(Term::Never)));
 }
+
+fn s_named(name: &str) -> SigTy {
+    s_extern(name, vec![])
+}
+
+/// ```text
+/// fn g(a, b) { g(b, a) }
+/// ```
+/// ```text
+/// g(1u8, "s")
+/// ```
+#[test]
+fn example_10_recursion_by_name() {
+    let mut p = ProgramBuilder::new(no_decls());
+    p.group("g");
+    let a = p.var("A");
+    let b = p.var("B");
+    let r = p.var("R");
+    let called = p.var("g(b, a)");
+    p.function("g", &[&a, &b], &r);
+    p.call("g(b, a)", "g", &[&b, &a], &called);
+    p.pass(&called, &r);
+    p.group(crate::program::ENTRY);
+    let u8_ = p.written("1u8", int(IntTy::U8));
+    let str_ = p.written("str", Term::Str);
+    let s = p.written("\"s\"", Term::Ref(Mutability::Shared, str_));
+    let out = p.var("g(1u8, \"s\")");
+    p.call("g(1u8, \"s\")", "g", &[&u8_, &s], &out);
+    let outcome = only_outcome(&p.build());
+    assert!(!outcome.accepted, "{outcome:#?}");
+    let failed: Vec<&str> = outcome
+        .checks
+        .iter()
+        .filter(|check| check.coercion.is_err())
+        .map(|check| check.relation.as_str())
+        .collect();
+    assert_eq!(failed, ["g@2/B ⇝ g@2/A", "g@2/A ⇝ g@2/B"], "{outcome:#?}");
+}
+
+/// Review 2's P4 (`holes.md`, T2).
+/// ```text
+/// fn g(a, b) { g(b, b); 0u8 }
+/// ```
+/// ```text
+/// g(Some(f1()), Some(f2()))    // f1() -> F1, f2() -> F2; casts F1 → G, F2 → G
+/// ```
+/// The copied boundary `B' ⇝ A'` relates the payloads once both are solved,
+/// so `A'`'s payload joins `F1` and `F2` to `G` in every order.
+#[test]
+fn review_2_p4_a_boundary_between_two_instances_universals() {
+    let mut d = declare(&[("F1", 0), ("F2", 0), ("G", 0)]);
+    function(&mut d, "f1", &[], vec![], s_named("F1"), Role::Fn);
+    function(&mut d, "f2", &[], vec![], s_named("F2"), Role::Fn);
+    function(
+        &mut d,
+        "up1",
+        &[],
+        vec![s_named("F1")],
+        s_named("G"),
+        Role::Cast,
+    );
+    function(
+        &mut d,
+        "up2",
+        &[],
+        vec![s_named("F2")],
+        s_named("G"),
+        Role::Cast,
+    );
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.group("g");
+    let a = p.var("A");
+    let b = p.var("B");
+    let r = p.var("R");
+    let called = p.var("g(b, b)");
+    let u8_ = p.written("0u8", int(IntTy::U8));
+    p.function("g", &[&a, &b], &r);
+    p.call("g(b, b)", "g", &[&b, &b], &called);
+    p.pass(&u8_, &r);
+    p.group(crate::program::ENTRY);
+    let f1 = p.var("f1()");
+    let f2 = p.var("f2()");
+    let s1 = p.var("S1");
+    let s2 = p.var("S2");
+    let some_1 = p.written("Some(f1())", Term::Option(s1.clone()));
+    let some_2 = p.written("Some(f2())", Term::Option(s2.clone()));
+    let out = p.var("g(..)");
+    p.call("f1", "f1", &[], &f1);
+    p.call("f2", "f2", &[], &f2);
+    p.pass(&f1, &s1);
+    p.pass(&f2, &s2);
+    p.call("g(..)", "g", &[&some_1, &some_2], &out);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(value(&outcome, "g(..)"), Some(closed_int(IntTy::U8)));
+}
