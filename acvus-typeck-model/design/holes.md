@@ -11,6 +11,19 @@ it. Three kinds of entry:
 A reading the model takes where the text leaves one open is stated in the note of
 the primitive it belongs to, not here.
 
+## H1. A cast narrower than its node
+
+A cast's node is its parameter's constructor (l.78), and nothing requires its
+parameter to match every type of that node, nor its result to write only variables
+its parameter writes: `Vec<u8> → Bytes`, or `A → Box<T>`. The join raises each type
+by casts to the nearest common ancestor node (l.86), and a type of that node the
+cast does not match, `Vec<u16>`, or one whose step up is not determined, `A`, can
+be raised by none, though its node has an ancestor. Types §3 states the tree per
+type ("every type has at most one next step up") and the spec per node. The spec
+gives no join there, so a relation that needs one is refused. Requiring a cast's
+parameter to be its node at distinct variables, and its result to write only those,
+would close the hole at the declaration.
+
 ## T1. A type parameter's bound
 
 Extern fn §1 gives a type parameter one bound, any type or any type the use must
