@@ -406,7 +406,7 @@ fn and_is_a_short_circuit_diamond() {
 fn a_match_over_tags_is_one_switch() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int, ()));
+    let option = fx.ty(TyKind::Option(int));
     fx.input("o", option);
     let lowered = fx.script("match $o { Some(x) => x, None => 0, }");
     let switches: Vec<_> = lowered
@@ -434,8 +434,8 @@ fn a_match_over_tags_is_one_switch() {
 fn a_nested_pattern_is_tested_arm_by_arm() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int, ()));
-    let pair = fx.ty(TyKind::Tuple(Box::new([option, int]), ()));
+    let option = fx.ty(TyKind::Option(int));
+    let pair = fx.ty(TyKind::Tuple(Box::new([option, int])));
     fx.input("p", pair);
     let lowered = fx.script("match $p { (Some(x), 1) => x, _ => 0, }");
     let terminators = lowered.entry_terminators();
@@ -512,7 +512,7 @@ fn a_for_over_a_range_is_a_for_of_its_bounds() {
 fn while_let_is_a_while_on_the_patterns_test() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int, ()));
+    let option = fx.ty(TyKind::Option(int));
     fx.input("o", option);
     let lowered = fx.script("let o = $o; while let Some(x) = o { o = None; } 1");
     let body = lowered.entry();
@@ -541,8 +541,8 @@ fn while_let_is_a_while_on_the_patterns_test() {
 fn a_pattern_test_moves_nothing_and_a_bind_takes_each_part_once() {
     let mut fx = Fixture::new();
     let string = fx.ty(TyKind::String);
-    let option = fx.ty(TyKind::Option(string, ()));
-    let pair = fx.ty(TyKind::Tuple(Box::new([option, string]), ()));
+    let option = fx.ty(TyKind::Option(string));
+    let pair = fx.ty(TyKind::Tuple(Box::new([option, string])));
     let pair_fn = fx.function(&[], pair, Effect::pure());
     fx.declare("pair", pair_fn, 0);
     let script: Script = acvus_ast::parse_script(&fx.names, "if let (Some(a), b) = pair() { 1 } else { 2 }").expect("parses");
@@ -561,7 +561,7 @@ fn a_pattern_test_moves_nothing_and_a_bind_takes_each_part_once() {
         .iter()
         .find_map(|op| match op {
             Op::Assign { target: RefTarget::Var(slot), path, .. }
-                if path.is_empty() && matches!(lowered.kind_of(body, *slot), TyKind::Tuple(items, _) if items.len() == 2) =>
+                if path.is_empty() && matches!(lowered.kind_of(body, *slot), TyKind::Tuple(items) if items.len() == 2) =>
             {
                 Some(*slot)
             }
@@ -618,7 +618,7 @@ fn break_and_continue_go_to_the_loops_exit_and_header() {
 fn try_returns_none_early() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int, ()));
+    let option = fx.ty(TyKind::Option(int));
     fx.input("o", option);
     let lowered = fx.script("let x = $o?; Some(x)");
     let ops = lowered.entry_ops();
@@ -1154,7 +1154,7 @@ fn a_part_taken_unmarked_unmarks_the_whole_result() {
     let mut fx = Fixture::new();
     let (_, _, marked) = fx.makes_marked_vec();
     let int = fx.int();
-    let pair_ty = fx.ty(TyKind::Tuple(Box::new([marked, int]), ()));
+    let pair_ty = fx.ty(TyKind::Tuple(Box::new([marked, int])));
     let pair_fn = fx.function(&[], pair_ty, Effect::pure());
     let pair = fx.declare("pair", pair_fn, 0);
     fx.identity_fn();
@@ -1162,8 +1162,8 @@ fn a_part_taken_unmarked_unmarks_the_whole_result() {
     let body = lowered.entry();
     let [(src, unmarked)] = unmarks_of(&lowered)[..] else { panic!("one Unmark: {}", shown(body)) };
     assert_eq!(results_of(&lowered, pair), vec![src]);
-    let TyKind::Tuple(given, _) = lowered.kind_of(body, src) else { panic!("the result as declared is a tuple") };
-    let TyKind::Tuple(taken, _) = lowered.kind_of(body, unmarked) else { panic!("the result taken is a tuple") };
+    let TyKind::Tuple(given) = lowered.kind_of(body, src) else { panic!("the result as declared is a tuple") };
+    let TyKind::Tuple(taken) = lowered.kind_of(body, unmarked) else { panic!("the result taken is a tuple") };
     let marks = |parts: &[crate::ty::Ty]| match lowered.module.types().kind(parts[0]) {
         TyKind::UserDefined { marked, .. } => *marked,
         other => panic!("the first part is `Vec<i64>`, not {other:?}"),
@@ -1378,7 +1378,7 @@ fn a_lifted_parts_call_is_unmarked_after_it_where_a_use_raises_it() {
     let at_int = fx.function(&[], int, Effect::pure());
     let default = fx.raw.core.default;
     fx.lang_item(default, &[at_marked, at_int]);
-    let pair = fx.ty(TyKind::Tuple(Box::new([vec, int]), ()));
+    let pair = fx.ty(TyKind::Tuple(Box::new([vec, int])));
     fx.context("p", pair, false);
     let lowered = fx.script("@p = default(); 0");
     let body = lowered.entry();
@@ -1472,7 +1472,7 @@ fn option_equality_tests_variants_before_payloads() {
     let mut fx = Fixture::new();
     fx.comparisons();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int, ()));
+    let option = fx.ty(TyKind::Option(int));
     fx.input("o", option);
     fx.input("p", option);
     let lowered = fx.script("$o == $p");
@@ -1632,7 +1632,7 @@ fn a_match_through_a_held_mut_reference_reborrows_it_and_moves_no_part() {
         .find_map(|inst| match inst.op() {
             Op::Assign { target: RefTarget::Var(slot), path, .. }
                 if path.is_empty()
-                    && matches!(lowered.kind_of(body, *slot), TyKind::Tuple(items, _)
+                    && matches!(lowered.kind_of(body, *slot), TyKind::Tuple(items)
                         if matches!(lowered.module.types().kind(items[0]), TyKind::Ref(Mutability::Mut, _))) =>
             {
                 Some(*slot)
@@ -1701,7 +1701,7 @@ fn array_equality_is_one_for_that_exits_at_the_first_difference() {
     let mut fx = Fixture::new();
     fx.comparisons();
     let int = fx.int();
-    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3), ()));
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3)));
     fx.input("a", array);
     fx.input("b", array);
     let lowered = fx.script("$a == $b");
@@ -1903,7 +1903,7 @@ fn array_ordering_is_one_for_that_exits_at_the_first_nonzero_cmp() {
     let mut fx = Fixture::new();
     fx.comparisons();
     let int = fx.int();
-    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(4), ()));
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(4)));
     fx.input("a", array);
     fx.input("b", array);
     let lowered = fx.script("$a < $b");
@@ -1927,8 +1927,8 @@ fn part_trees_survive_the_required_steps_and_the_pipeline() {
     clones_strings(&mut fx);
     let string = fx.ty(TyKind::String);
     let int = fx.int();
-    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3), ()));
-    let pair = fx.ty(TyKind::Tuple(Box::new([string, int]), ()));
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3)));
+    let pair = fx.ty(TyKind::Tuple(Box::new([string, int])));
     fx.input("a", array);
     fx.input("b", array);
     fx.input("t", pair);
@@ -1985,7 +1985,7 @@ fn a_narrowed_object_is_a_new_object_of_the_parameters_fields() {
     let mut fx = Fixture::new();
     let a = fx.name("a");
     let (int, unit) = (fx.int(), fx.ty(TyKind::Unit));
-    let object = fx.ty(TyKind::Object { fields: Box::new([(a, int)]), label: () });
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, int)]) });
     let ty = fx.function(&[object], unit, Effect::pure());
     let f = fx.declare("f", ty, 1);
     let lowered = fx.script("f({ a: 1, b: true, })");
@@ -2024,7 +2024,7 @@ fn a_lifted_clone_calls_each_parts_impl_and_rebuilds_the_tuple() {
         .collect();
     let clone = fx.raw.core.clone;
     fx.lang_item(clone, &impls);
-    let pair = fx.ty(TyKind::Tuple(Box::new([string, int]), ()));
+    let pair = fx.ty(TyKind::Tuple(Box::new([string, int])));
     fx.input("t", pair);
     let lowered = fx.script("$t.clone()");
     let body = lowered.entry();
@@ -2069,7 +2069,7 @@ fn a_lifted_eq_asks_each_parts_impl_in_order() {
         awaits: false,
     };
     fx.raw.functions.push((impl_id(&fx.names, eq, 0), at_eq));
-    let pair = fx.ty(TyKind::Tuple(Box::new([int, int]), ()));
+    let pair = fx.ty(TyKind::Tuple(Box::new([int, int])));
     fx.input("t", pair);
     let lowered = fx.script("eq(&$t, &$t)");
     let body = lowered.entry();
@@ -2094,7 +2094,7 @@ fn a_reference_coerced_through_its_target_gathers_references_to_its_parts() {
     let mut fx = Fixture::new();
     let a = fx.name("a");
     let (int, unit) = (fx.int(), fx.ty(TyKind::Unit));
-    let object = fx.ty(TyKind::Object { fields: Box::new([(a, int)]), label: () });
+    let object = fx.ty(TyKind::Object { fields: Box::new([(a, int)]) });
     let shared = fx.reference(Mutability::Shared, object);
     let ty = fx.function(&[shared], unit, Effect::pure());
     fx.declare("f", ty, 1);
@@ -2129,7 +2129,7 @@ fn an_array_coerced_is_mapped_element_by_element() {
     let widening = fx.function(&[small], int, Effect::pure());
     let widen = fx.declare("widen", widening, 1);
     fx.raw.casts.push(crate::decl::CastRule { from: small, to: int, via: widen });
-    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(2), ()));
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(2)));
     fx.context("v", array, false);
     let lowered = fx.script("@v = [small(), small()]; 0");
     let body = lowered.entry();
@@ -2150,7 +2150,7 @@ fn a_lifted_clone_of_an_array_maps_its_elements() {
     let clones = fx.function(&[shared], string, Effect::pure());
     let clone = fx.raw.core.clone;
     fx.lang_item(clone, &[clones]);
-    let array = fx.ty(TyKind::Array(string, crate::ty::LenTerm::Known(2), ()));
+    let array = fx.ty(TyKind::Array(string, crate::ty::LenTerm::Known(2)));
     fx.input("a", array);
     let lowered = fx.script("$a.clone()");
     let body = lowered.entry();
@@ -2174,7 +2174,7 @@ fn the_languages_own_answers_call_no_impl() {
 
     let mut fx = Fixture::new();
     let (int, unit) = (fx.int(), fx.ty(TyKind::Unit));
-    let option = fx.ty(TyKind::Option(int, ()));
+    let option = fx.ty(TyKind::Option(int));
     let ty = fx.function(&[option], unit, Effect::pure());
     fx.declare("f", ty, 1);
     let lowered = fx.script("f(default())");
@@ -2193,7 +2193,7 @@ fn an_array_rebuilt_from_no_argument_or_several_is_one_map() {
     let at_int = fx.function(&[], int, Effect::pure());
     let default = fx.raw.core.default;
     fx.lang_item(default, &[at_int]);
-    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3), ()));
+    let array = fx.ty(TyKind::Array(int, crate::ty::LenTerm::Known(3)));
     fx.context("v", array, false);
     let lowered = fx.script("@v = default(); 0");
     let body = lowered.entry();
@@ -2493,7 +2493,7 @@ fn a_for_over_elements_no_value_has_enters_no_body() {
 #[test]
 fn a_call_giving_a_type_no_value_has_ends_its_block() {
     let mut fx = Fixture::new();
-    let e = fx.ty(TyKind::Enum { name: QualifiedRef::root(fx.name("E")), variants: Box::new([]), label: () });
+    let e = fx.ty(TyKind::Enum { name: QualifiedRef::root(fx.name("E")), variants: Box::new([]) });
     let ty = fx.function(&[], e, Effect::pure());
     let mk_e = fx.declare("mk_e", ty, 0);
     let lowered = fx.script("mk_e() == mk_e()");
@@ -2508,8 +2508,8 @@ fn a_value_no_type_has_is_coerced_nowhere() {
     let mut fx = Fixture::new();
     let a = fx.name("A");
     let e = QualifiedRef::root(fx.name("E"));
-    let empty = fx.ty(TyKind::Enum { name: e, variants: Box::new([]), label: () });
-    let wide = fx.ty(TyKind::Enum { name: e, variants: Box::new([(a, None)]), label: () });
+    let empty = fx.ty(TyKind::Enum { name: e, variants: Box::new([]) });
+    let wide = fx.ty(TyKind::Enum { name: e, variants: Box::new([(a, None)]) });
     let int = fx.int();
     let (mk_ty, k_ty) = (fx.function(&[], empty, Effect::pure()), fx.function(&[wide], int, Effect::pure()));
     fx.declare("mk_e", mk_ty, 0);

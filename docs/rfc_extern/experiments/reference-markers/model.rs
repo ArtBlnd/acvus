@@ -97,19 +97,19 @@ impl Crossing for String {
     }
 }
 
-/// A value type's view, read through the runtime.
+/// A value type's projection, read through the runtime.
 pub trait Lend: Crossing {
-    fn view<O>(value: &Value, lent: impl FnOnce(&Self) -> O) -> O;
+    fn project<O>(value: &Value, lent: impl FnOnce(&Self) -> O) -> O;
 }
 
 impl Lend for i64 {
-    fn view<O>(value: &Value, lent: impl FnOnce(&i64) -> O) -> O {
+    fn project<O>(value: &Value, lent: impl FnOnce(&i64) -> O) -> O {
         lent(&(value.m as i64))
     }
 }
 
 impl Lend for String {
-    fn view<O>(value: &Value, lent: impl FnOnce(&String) -> O) -> O {
+    fn project<O>(value: &Value, lent: impl FnOnce(&String) -> O) -> O {
         // SAFETY: a `Value` lent as a `String` names storage `hold` made.
         lent(&unsafe { stored(value) }.text)
     }
@@ -162,7 +162,7 @@ where
     }
 
     pub fn with<O>(&self, lent: impl FnOnce(&X) -> O) -> O {
-        X::view(&self.value, lent)
+        X::project(&self.value, lent)
     }
 
     /// The negative control: a `Ref` that copies the owning `Value` bit for
@@ -205,6 +205,14 @@ impl<X> TypeVar for Uniform<X> {
     }
 }
 
+/// The one bound of an effect variable.
+pub trait EffectVar {}
+
+/// The effect marker an entry instantiates an effect variable at.
+pub enum Effect0 {}
+
+impl EffectVar for Effect0 {}
+
 #[repr(transparent)]
 pub struct Ref<'a, X> {
     value: Value,
@@ -230,7 +238,7 @@ where
     X: Lend,
 {
     pub fn with<O>(self, lent: impl FnOnce(&X) -> O) -> O {
-        X::view(&self.value, lent)
+        X::project(&self.value, lent)
     }
 }
 
@@ -248,12 +256,12 @@ impl Mut<'_, i64> {
     }
 }
 
-/// Reads a `Vec` of one element view as another, as one value is read under
-/// several views. Sound by `Vec::from_raw_parts` where the element types have
+/// Reads a `Vec` at one element instantiation as another, as one value is
+/// read at several instantiations. Sound by `Vec::from_raw_parts` where the element types have
 /// one size and alignment, which `repr(transparent)` over `Value` gives every
 /// `Uniform<X>`; it does not touch the open question of `Vec<A>` against
 /// `Vec<B>` as types, which layout.rs probes.
-pub fn view_as<A, B>(items: Vec<A>) -> Vec<B> {
+pub fn read_as<A, B>(items: Vec<A>) -> Vec<B> {
     const { assert!(size_of::<A>() == size_of::<B>() && align_of::<A>() == align_of::<B>()) };
     let mut items = std::mem::ManuallyDrop::new(items);
     let (ptr, len, cap) = (items.as_mut_ptr(), items.len(), items.capacity());

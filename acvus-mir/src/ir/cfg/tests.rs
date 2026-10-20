@@ -1190,7 +1190,7 @@ fn a_block_given_a_value_of_a_type_no_value_has_holds_nothing() {
         let int = f.int;
         let u64_ty = f.module.types_mut().intern(TyKind::Int(IntTy::U64));
         let never = f.module.types_mut().intern(TyKind::Never);
-        let empty = f.module.types_mut().intern(TyKind::Array(never, crate::ty::LenTerm::Known(0), ()));
+        let empty = f.module.types_mut().intern(TyKind::Array(never, crate::ty::LenTerm::Known(0)));
         let mut builder = build(&mut f.module, false, int);
         let array = builder.push(Op::ArrayBegin { capacity: 0 }, empty, at(1));
         let header = builder.new_block(&[]);

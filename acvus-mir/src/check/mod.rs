@@ -24,9 +24,6 @@ mod initck;
 mod matchck;
 mod moveck;
 
-#[cfg(test)]
-mod tests;
-
 use acvus_ast::Span;
 
 use crate::ir::cfg::Module;

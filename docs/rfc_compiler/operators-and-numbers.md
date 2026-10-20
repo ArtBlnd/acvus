@@ -35,8 +35,6 @@ A type gives `core::as_slice` and `core::as_slice_mut` only where it is a sequen
 
 A sequence's length, `core::len`, is the length of that slice. No other value has a length.
 
-*Rejected.* A length a type declares for itself, or a slice of a view a measure chooses: either picks one order and one atom among several, and is not the type's own.
-
 ## 4. Equality and ordering
 
 Equality and ordering mean what they mean in Rust, with one exception: `NaN == NaN` is true. A transparent structured type (types §1) compares part by part where its parts compare. An enum, `Option` and `Result` have equality but no order: which variant comes first is not defined, so ordering one is refused. Any other type compares through its `core::eq` and `core::cmp` impls.

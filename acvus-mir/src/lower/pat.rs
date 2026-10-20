@@ -301,7 +301,7 @@ fn list_elements<'p, S: Slot>(
 ) -> Vec<(ListAt, &'p Pattern<S>)> {
     let heads = head.iter().enumerate();
     match cx.kind(matched.ty()) {
-        TyKind::Array(_, len, _) => {
+        TyKind::Array(_, len) => {
             let from_end = known_len(len) - tail.len();
             let tails = tail.iter().enumerate().map(|(at, part)| (ListAt::Array(from_end + at), part));
             heads.map(|(at, part)| (ListAt::Array(at), part)).chain(tails).collect()

@@ -1,0 +1,17 @@
+[package]
+name = "effect-identity"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "probes"
+path = "probes.rs"
+
+[dependencies]
+acvus-ast = { path = "../../../../acvus-ast" }
+acvus-mir = { path = "../../../../acvus-mir" }
+acvus-utils = { path = "../../../../acvus-utils" }
+
+# Its own workspace: the experiment is no member of the repository's.
+[workspace]

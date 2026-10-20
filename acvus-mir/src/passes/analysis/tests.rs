@@ -1686,12 +1686,12 @@ fn loan_fixture() -> LoanFixture {
     let bool = types.intern(TyKind::Bool);
     let ref_int = types.intern(TyKind::Ref(Mutability::Shared, int));
     let mut_int = types.intern(TyKind::Ref(Mutability::Mut, int));
-    let option_ref = types.intern(TyKind::Option(ref_int, ()));
-    let pair_of_refs = types.intern(TyKind::Tuple(Box::new([ref_int, ref_int]), ()));
-    let pair_of_ints = types.intern(TyKind::Tuple(Box::new([int, int]), ()));
-    let array_of_ints = types.intern(TyKind::Array(int, LenTerm::Known(2), ()));
+    let option_ref = types.intern(TyKind::Option(ref_int));
+    let pair_of_refs = types.intern(TyKind::Tuple(Box::new([ref_int, ref_int])));
+    let pair_of_ints = types.intern(TyKind::Tuple(Box::new([int, int])));
+    let array_of_ints = types.intern(TyKind::Array(int, LenTerm::Known(2)));
     let ref_array = types.intern(TyKind::Ref(Mutability::Shared, array_of_ints));
-    let array_of_refs = types.intern(TyKind::Array(ref_int, LenTerm::Known(2), ()));
+    let array_of_refs = types.intern(TyKind::Array(ref_int, LenTerm::Known(2)));
     let ref_pair = types.intern(TyKind::Ref(Mutability::Shared, pair_of_refs));
     let mut_pair = types.intern(TyKind::Ref(Mutability::Mut, pair_of_refs));
     let mut function = |params: &[Ty], ret: Ty, flows: Flows| {
@@ -1966,7 +1966,7 @@ fn a_payload_path_names_its_variants_payload_exactly() {
     let mut f = loan_fixture();
     let (int, ref_int) = (f.int, f.ref_int);
     let mut builder = f.module.build_body(false, int);
-    let result_of_refs = builder.intern(TyKind::Result(ref_int, ref_int, ()));
+    let result_of_refs = builder.intern(TyKind::Result(ref_int, ref_int));
     let s = builder.slot(result_of_refs, Span::ZERO);
     let a = builder.slot(int, Span::ZERO);
     let b = builder.slot(int, Span::ZERO);

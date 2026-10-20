@@ -67,7 +67,7 @@ fn refused_within(fx: Fixture, source: &str, within: &str) {
 /// type variable's part its own, else stating no lifetimes.
 fn declare_map_opt(fx: &mut Fixture, labelled: bool) {
     let (t, u) = (fx.ty(TyKind::Var(0)), fx.ty(TyKind::Var(1)));
-    let (option_t, option_u) = (fx.ty(TyKind::Option(t, ())), fx.ty(TyKind::Option(u, ())));
+    let (option_t, option_u) = (fx.ty(TyKind::Option(t)), fx.ty(TyKind::Option(u)));
     let f = function(fx, &[t], u, Calls::Once, Holds::Shared);
     let ty = function(fx, &[option_t, f], option_u, Calls::Many, Holds::Nothing);
     let lifetimes = labelled.then(|| signature(&[(FlowEnd::Result, &[U]), (FlowEnd::Param(0), &[T]), (FlowEnd::Param(1), &[L0])]));
@@ -78,7 +78,7 @@ fn declare_map_opt(fx: &mut Fixture, labelled: bool) {
 /// `id_opt<T>(x: Option<T>) -> Option<T>`, its type variable's part its own.
 fn declare_id_opt(fx: &mut Fixture) {
     let t = fx.ty(TyKind::Var(0));
-    let option_t = fx.ty(TyKind::Option(t, ()));
+    let option_t = fx.ty(TyKind::Option(t));
     let ty = function(fx, &[option_t], option_t, Calls::Many, Holds::Nothing);
     let declaration = scheme(fx, ty, 1, Some(signature(&[(FlowEnd::Result, &[T]), (FlowEnd::Param(0), &[T])])));
     fx.raw.functions.push((QualifiedRef::root(fx.name("id_opt")), declaration));
@@ -136,13 +136,13 @@ fn declare_first_of(fx: &mut Fixture, labelled: bool) {
     fx.raw.functions.push((QualifiedRef::root(fx.name("src_of")), src_of));
 
     let (it, t) = (fx.ty(TyKind::Var(0)), fx.ty(TyKind::Var(1)));
-    let (mut_it, option_t) = (fx.ty(TyKind::Ref(Mutability::Mut, it)), fx.ty(TyKind::Option(t, ())));
+    let (mut_it, option_t) = (fx.ty(TyKind::Ref(Mutability::Mut, it)), fx.ty(TyKind::Option(t)));
     let next_ty = function(fx, &[mut_it], option_t, Calls::Many, Holds::Nothing);
     let next = QualifiedRef::root(fx.name("next"));
     let generic = GenericFunction { ty: next_ty, param_names: Box::new([fx.name("it")]), bounds: Box::new([TyVarBound::Any, TyVarBound::Any]), specialized: Box::new([]) };
     fx.raw.generic_functions.push((next, generic));
 
-    let (mut_src, option_int_ref) = (fx.ty(TyKind::Ref(Mutability::Mut, src)), fx.ty(TyKind::Option(shared_int, ())));
+    let (mut_src, option_int_ref) = (fx.ty(TyKind::Ref(Mutability::Mut, src)), fx.ty(TyKind::Option(shared_int)));
     let next_at_src = function(fx, &[mut_src], option_int_ref, Calls::Many, Holds::Nothing);
     let mut next_at_src = scheme(fx, next_at_src, 0, Some(signature(&[(FlowEnd::Result, &[L0]), (FlowEnd::Param(0), &[L1, L0])])));
     next_at_src.impl_of = Some(ImplOf { generic_function: next, kind: ImplKind::Concrete });

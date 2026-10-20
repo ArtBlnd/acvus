@@ -1146,8 +1146,8 @@ impl Forward<'_> {
                     let at = declared.iter().position(|(name, _)| name == field)?;
                     laid(&mut declared.iter().map(|(_, ty)| *ty)).into_iter().nth(at)?
                 }
-                (PathSeg::Index(index), TyKind::Tuple(items, _)) => laid(&mut items.iter().copied()).into_iter().nth(*index)?,
-                (PathSeg::Index(_), TyKind::Array(element, _, _)) => {
+                (PathSeg::Index(index), TyKind::Tuple(items)) => laid(&mut items.iter().copied()).into_iter().nth(*index)?,
+                (PathSeg::Index(_), TyKind::Array(element, _)) => {
                     exact = false;
                     Part { range: part.range.clone(), ty: *element }
                 }

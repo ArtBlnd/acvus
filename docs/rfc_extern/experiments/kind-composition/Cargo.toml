@@ -1,0 +1,26 @@
+[package]
+name = "kind-composition"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "model"
+path = "model.rs"
+
+[[test]]
+name = "behavior"
+path = "behavior.rs"
+
+[[bin]]
+name = "bench"
+path = "bench.rs"
+
+[features]
+default = ["count"]
+# The box runtime counts the boxes it holds, for the behaviour tests' leak
+# checks; the bench runs without it, so no count is on its paths.
+count = []
+
+# Its own workspace: the experiment is no member of the repository's.
+[workspace]

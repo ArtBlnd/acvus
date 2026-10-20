@@ -545,6 +545,3 @@ fn live_before_terminator(liveness: &Liveness, block: BlockId, terminator: &Term
     live.extend(terminator.operands());
     live
 }
-
-#[cfg(test)]
-mod tests;

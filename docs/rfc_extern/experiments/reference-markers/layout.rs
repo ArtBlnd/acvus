@@ -1,6 +1,6 @@
-//! Field offsets of author-defined containers under each element view, to be
-//! compiled with and without `-Zrandomize-layout`. Prints one line per view:
-//! whether its layout equals the generic view's, `Uniform<Never>`.
+//! Field offsets of author-defined containers at each element instantiation,
+//! to be compiled with and without `-Zrandomize-layout`. Prints one line per
+//! instantiation: whether its layout equals the generic one's, `Uniform<Never>`.
 
 use std::marker::PhantomData;
 use std::mem::offset_of;
@@ -43,14 +43,14 @@ macro_rules! layout {
 
 fn main() {
     let generic = layout!(Uniform<Never>);
-    let views: [(&str, [usize; 9]); 5] = [
+    let instantiations: [(&str, [usize; 9]); 5] = [
         ("Uniform<String>", layout!(Uniform<String>)),
         ("Uniform<Shared<'static, i64>>", layout!(Uniform<Shared<'static, i64>>)),
         ("Uniform<Exclusive<'static, i64>>", layout!(Uniform<Exclusive<'static, i64>>)),
         ("Ref<'static, i64>", layout!(Ref<'static, i64>)),
         ("Mut<'static, i64>", layout!(Mut<'static, i64>)),
     ];
-    for (name, layout) in views {
+    for (name, layout) in instantiations {
         let verdict = if layout == generic { "same" } else { "APART" };
         println!("{name:<34} {verdict}");
     }

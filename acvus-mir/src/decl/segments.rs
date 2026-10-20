@@ -55,7 +55,9 @@ fn push_segments_level(poly: &Types<Poly>, lifetimes: &impl LifetimesOf, ty: TyI
         | TyKind::Never
         | TyKind::Str => {}
         TyKind::Fn { .. } => out.push(Segment::FunctionValue),
-        TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) => panic!("a declared type holds no Handle, Order or Closures"),
+        TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) | TyKind::Struct { .. } => {
+            panic!("a declared type holds no Handle, Order, Closures or struct: a struct is its module's own")
+        }
         TyKind::Var(var) => out.push(Segment::TypeVar(*var)),
         TyKind::Ref(_, target) => {
             out.push(Segment::Reference);
@@ -67,14 +69,14 @@ fn push_segments_level(poly: &Types<Poly>, lifetimes: &impl LifetimesOf, ty: TyI
                 push_segments(poly, lifetimes, *arg, out);
             }
         }
-        TyKind::Array(element, _, _) | TyKind::Slice(element) | TyKind::Option(element, _) => {
+        TyKind::Array(element, _) | TyKind::Slice(element) | TyKind::Option(element) => {
             push_segments(poly, lifetimes, *element, out)
         }
-        TyKind::Result(ok, err, _) => {
+        TyKind::Result(ok, err) => {
             push_segments(poly, lifetimes, *ok, out);
             push_segments(poly, lifetimes, *err, out);
         }
-        TyKind::Tuple(items, _) => {
+        TyKind::Tuple(items) => {
             for item in items {
                 push_segments(poly, lifetimes, *item, out);
             }

@@ -77,8 +77,8 @@ fn fixture() -> Fixture {
         call_ty(CallEffect::new(Reissue::Idempotent, false, Contexts::new(), Contexts::new(), SplitCost::Unavailable, false));
     let str_ty = types.intern(TyKind::Str);
     let str_ref = types.intern(TyKind::Ref(Mutability::Shared, str_ty));
-    let result = types.intern(TyKind::Result(int, bool, ()));
-    let object = types.intern(TyKind::Object { fields: Box::new([(interner.intern("x"), int)]), label: () });
+    let result = types.intern(TyKind::Result(int, bool));
+    let object = types.intern(TyKind::Object { fields: Box::new([(interner.intern("x"), int)]) });
     let extern_defined = types.intern(TyKind::UserDefined {
         id: QualifiedRef::root(interner.intern("Point")),
         type_args: Box::new([]),
@@ -1422,7 +1422,7 @@ fn types_agree_checks_a_loops_source_against_what_it_hands_its_body() {
 fn viewing(f: &mut Fixture, mutability: Mutability, viewed: Ty) -> BodyId {
     let (na, int) = (f.name("a"), f.int);
     let mut builder = f.build(false, f.int);
-    let array = builder.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2), ()));
+    let array = builder.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2)));
     let lent = builder.intern(TyKind::Ref(Mutability::Shared, array));
     let a = builder.param(na, lent, acvus_ast::Span::ZERO);
     builder.push(Op::ArrayView { src: a, mutability }, viewed, at(1));
@@ -2120,7 +2120,7 @@ fn discharging_another_kind_is_a_callers_defect() {
 fn split_slot_gives_each_field_of_a_tuple_its_own_slot() {
     let mut f = fixture();
     let (name, int) = (f.name("a"), f.int);
-    let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int]), ()));
+    let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int])));
     let int_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, int));
     let mut builder = f.build(false, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
@@ -2157,7 +2157,7 @@ fn split_slot_gives_each_field_of_a_tuple_its_own_slot() {
 fn split_slot_refuses_a_type_that_is_not_structural_and_a_use_of_the_whole() {
     let mut f = fixture();
     let (name, int, extern_defined) = (f.name("a"), f.int, f.extern_defined);
-    let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int]), ()));
+    let pair = f.module.types.intern(TyKind::Tuple(Box::new([int, int])));
     let mut builder = f.build(false, f.int);
     let a = builder.param(name, int, acvus_ast::Span::ZERO);
     let scalar = builder.slot(int, at(0));

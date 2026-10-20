@@ -127,7 +127,7 @@ fn a_local_enum_missing_a_variant_is_refused() {
 fn an_option_from_an_extern_call_covered_by_some_and_none_is_admitted() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int, ()));
+    let option = fx.ty(TyKind::Option(int));
     fx.nullary("get", option);
     admitted(fx, "match get() { Some(x) => x, None => 0, }");
 }
@@ -157,7 +157,7 @@ fn an_int_match_without_a_catch_all_is_refused() {
 fn a_nested_pattern_without_a_catch_all_is_refused() {
     let mut fx = Fixture::new();
     let int = fx.int();
-    let option = fx.ty(TyKind::Option(int, ()));
+    let option = fx.ty(TyKind::Option(int));
     fx.input("o", option);
     refused_at_the_match(fx, "match $o { Some(0) => 1, Some(x) => x, None => 3, }");
 }
@@ -203,7 +203,7 @@ fn a_match_with_a_catch_all_is_admitted() {
     for source in ["match $n { 0 => 1, _ => 2, }", "match $o { Some(0) => 1, _ => 2, }"] {
         let mut fx = Fixture::new();
         let int = fx.int();
-        let option = fx.ty(TyKind::Option(int, ()));
+        let option = fx.ty(TyKind::Option(int));
         fx.input("n", int);
         fx.input("o", option);
         admitted(fx, source);

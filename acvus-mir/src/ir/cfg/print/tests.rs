@@ -34,7 +34,7 @@ fn fixture() -> Fixture {
     let int = types.intern(TyKind::Int(IntTy::I64));
     let bool = types.intern(TyKind::Bool);
     let (a, b) = (names.intern("a"), names.intern("b"));
-    let object = types.intern(TyKind::Object { fields: Box::new([(a, int), (b, int)]), label: () });
+    let object = types.intern(TyKind::Object { fields: Box::new([(a, int), (b, int)]) });
     let mut_int = types.intern(TyKind::Ref(Mutability::Mut, int));
     let effectful = types.intern(TyKind::Fn {
         params: Box::new([]),
@@ -477,7 +477,7 @@ fn pure_reading(context: QualifiedRef) -> Effect {
 fn an_extern_call_prints_its_impl_where_its_function_has_impls() {
     let mut f = fixture();
     let (int, bool) = (f.int, f.bool);
-    let array = f.module.types.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2), ()));
+    let array = f.module.types.intern(TyKind::Array(int, crate::ty::LenTerm::Known(2)));
     let array_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, array));
     let slice = f.module.types.intern(TyKind::Slice(int));
     let slice_ref = f.module.types.intern(TyKind::Ref(Mutability::Shared, slice));

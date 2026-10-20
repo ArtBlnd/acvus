@@ -63,7 +63,7 @@ impl Fixture {
 
     pub(super) fn object(&mut self, fields: &[(&str, TyId<Poly>)]) -> TyId<Poly> {
         let fields = fields.iter().map(|(name, ty)| (self.name(name), *ty)).collect();
-        self.ty(TyKind::Object { fields, label: () })
+        self.ty(TyKind::Object { fields })
     }
 
     /// A pure extern fn `name` of these parameters and result.

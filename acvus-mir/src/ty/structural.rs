@@ -20,20 +20,19 @@ use super::arg::LenTerm;
 use super::kind::TyKind;
 use super::{Phase, TyId, Types};
 
-/// A transparent structured type, by kind, with its parts and who wrote
-/// it (`Label`).
+/// A transparent structured type, by kind, with its parts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Structure<'t, V: Phase> {
-    Tuple(&'t [TyId<V>], V::Label),
+    Tuple(&'t [TyId<V>]),
     /// The fields in the order the object's type stores them.
-    Object(&'t [(Astr, TyId<V>)], V::Label),
+    Object(&'t [(Astr, TyId<V>)]),
     /// The variants sorted by tag, each with its payload if it has one.
-    Enum(&'t [(Astr, Option<TyId<V>>)], V::Label),
+    Enum(&'t [(Astr, Option<TyId<V>>)]),
     /// Every element is of `element`; there are `len` of them.
-    Array { element: TyId<V>, len: LenTerm<V>, label: V::Label },
+    Array { element: TyId<V>, len: LenTerm<V> },
     /// The `Some` payload.
-    Option(TyId<V>, V::Label),
-    Result { ok: TyId<V>, err: TyId<V>, label: V::Label },
+    Option(TyId<V>),
+    Result { ok: TyId<V>, err: TyId<V> },
 }
 
 /// Which part of a structure a part is: what a coercion, a lifted impl and
@@ -98,12 +97,12 @@ where
     V: Phase,
 {
     match types.kind(ty) {
-        TyKind::Tuple(items, label) => Some(Structure::Tuple(items, *label)),
-        TyKind::Object { fields, label } => Some(Structure::Object(fields, *label)),
-        TyKind::Enum { variants, label, .. } => Some(Structure::Enum(variants, *label)),
-        TyKind::Array(element, len, label) => Some(Structure::Array { element: *element, len: *len, label: *label }),
-        TyKind::Option(payload, label) => Some(Structure::Option(*payload, *label)),
-        TyKind::Result(ok, err, label) => Some(Structure::Result { ok: *ok, err: *err, label: *label }),
+        TyKind::Tuple(items) => Some(Structure::Tuple(items)),
+        TyKind::Object { fields } => Some(Structure::Object(fields)),
+        TyKind::Enum { variants, .. } => Some(Structure::Enum(variants)),
+        TyKind::Array(element, len) => Some(Structure::Array { element: *element, len: *len }),
+        TyKind::Option(payload) => Some(Structure::Option(*payload)),
+        TyKind::Result(ok, err) => Some(Structure::Result { ok: *ok, err: *err }),
         TyKind::Int(_)
         | TyKind::Float
         | TyKind::Char
@@ -118,31 +117,20 @@ where
         | TyKind::Fn { .. }
         | TyKind::Closures(_)
         | TyKind::UserDefined { .. }
+        | TyKind::Struct { .. }
         | TyKind::Ref(..)
         | TyKind::Var(_) => None,
     }
 }
 
 impl<V: Phase> Structure<'_, V> {
-    /// Who wrote it (`Label`).
-    pub fn label(&self) -> V::Label {
-        match *self {
-            Structure::Tuple(_, label)
-            | Structure::Object(_, label)
-            | Structure::Enum(_, label)
-            | Structure::Array { label, .. }
-            | Structure::Option(_, label)
-            | Structure::Result { label, .. } => label,
-        }
-    }
-
     /// The type of the part `key` names, where the structure has it: a
     /// tuple's element at its position, a field, an array's element, or the
     /// payload of a variant (`variants`).
     pub fn part(&self, key: PartKey) -> Option<TyId<V>> {
         match (*self, key) {
-            (Structure::Tuple(items, _), PartKey::Index(at)) => items.get(at).copied(),
-            (Structure::Object(fields, _), PartKey::Field(name)) => {
+            (Structure::Tuple(items), PartKey::Index(at)) => items.get(at).copied(),
+            (Structure::Object(fields), PartKey::Field(name)) => {
                 fields.iter().find(|(field, _)| *field == name).map(|(_, ty)| *ty)
             }
             (Structure::Array { element, .. }, PartKey::Element) => Some(element),
@@ -158,13 +146,13 @@ impl<V: Phase> Structure<'_, V> {
     pub fn variants(&self) -> Option<SmallVec<[Variant<V>; 4]>> {
         let variant = |key, payload| Variant { key, payload };
         match *self {
-            Structure::Option(payload, _) => {
+            Structure::Option(payload) => {
                 Some(smallvec::smallvec![variant(VariantKey::Some, Some(payload)), variant(VariantKey::None, None)])
             }
             Structure::Result { ok, err, .. } => {
                 Some(smallvec::smallvec![variant(VariantKey::Ok, Some(ok)), variant(VariantKey::Err, Some(err))])
             }
-            Structure::Enum(variants, _) => Some(variants.iter().map(|(name, payload)| variant(VariantKey::Enum(*name), *payload)).collect()),
+            Structure::Enum(variants) => Some(variants.iter().map(|(name, payload)| variant(VariantKey::Enum(*name), *payload)).collect()),
             Structure::Tuple(..) | Structure::Object(..) | Structure::Array { .. } => None,
         }
     }
@@ -180,8 +168,8 @@ impl<V: Phase> Structure<'_, V> {
     pub fn fields(&self) -> Option<SmallVec<[Part<V>; 4]>> {
         let part = |key, ty| Part { key, ty };
         match *self {
-            Structure::Tuple(items, _) => Some(items.iter().enumerate().map(|(at, ty)| part(PartKey::Index(at), *ty)).collect()),
-            Structure::Object(fields, _) => Some(fields.iter().map(|(name, ty)| part(PartKey::Field(*name), *ty)).collect()),
+            Structure::Tuple(items) => Some(items.iter().enumerate().map(|(at, ty)| part(PartKey::Index(at), *ty)).collect()),
+            Structure::Object(fields) => Some(fields.iter().map(|(name, ty)| part(PartKey::Field(*name), *ty)).collect()),
             Structure::Enum(..) | Structure::Array { .. } | Structure::Option(..) | Structure::Result { .. } => None,
         }
     }
@@ -220,7 +208,7 @@ mod tests {
     fn a_tuples_parts_are_its_elements_in_order() {
         let mut types = Types::new();
         let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
-        let tuple = types.intern(TyKind::Tuple(Box::new([string, int, string]), ()));
+        let tuple = types.intern(TyKind::Tuple(Box::new([string, int, string])));
         assert_eq!(parts(&types, tuple), vec![string, int, string]);
     }
 
@@ -230,9 +218,9 @@ mod tests {
         let (a, b) = (names.intern("a"), names.intern("b"));
         let mut types = Types::new();
         let (int, bool_ty) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::Bool));
-        let object = types.intern(TyKind::Object { fields: Box::new([(b, bool_ty), (a, int)]), label: () });
+        let object = types.intern(TyKind::Object { fields: Box::new([(b, bool_ty), (a, int)]) });
         assert_eq!(parts(&types, object), vec![bool_ty, int]);
-        let Some(Structure::Object(fields, _)) = structure(&types, object) else {
+        let Some(Structure::Object(fields)) = structure(&types, object) else {
             panic!("a structural object is an object");
         };
         let order: Vec<_> = fields.iter().map(|(name, _)| *name).collect();
@@ -243,18 +231,18 @@ mod tests {
     fn an_arrays_one_part_is_its_element_type() {
         let mut types = Types::new();
         let string = types.intern(TyKind::String);
-        let array = types.intern(TyKind::Array(string, LenTerm::Known(3), ()));
+        let array = types.intern(TyKind::Array(string, LenTerm::Known(3)));
         assert_eq!(parts(&types, array), vec![string]);
-        assert_eq!(structure(&types, array), Some(Structure::Array { element: string, len: LenTerm::Known(3), label: () }));
+        assert_eq!(structure(&types, array), Some(Structure::Array { element: string, len: LenTerm::Known(3) }));
     }
 
     #[test]
     fn an_options_part_is_its_payload_and_a_results_are_ok_then_err() {
         let mut types = Types::new();
         let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
-        let option = types.intern(TyKind::Option(string, ()));
+        let option = types.intern(TyKind::Option(string));
         assert_eq!(parts(&types, option), vec![string]);
-        let result = types.intern(TyKind::Result(string, int, ()));
+        let result = types.intern(TyKind::Result(string, int));
         assert_eq!(parts(&types, result), vec![string, int]);
     }
 
@@ -267,7 +255,7 @@ mod tests {
         let mut types = Types::new();
         let int = types.intern(TyKind::Int(IntTy::I64));
         let variants = Box::new([(none, None), (some, Some(int))]);
-        let r#enum = types.intern(TyKind::Enum { name: QualifiedRef::root(names.intern("E")), variants, label: () });
+        let r#enum = types.intern(TyKind::Enum { name: QualifiedRef::root(names.intern("E")), variants });
         let keys: Vec<_> = structure(&types, r#enum).expect("an enum is structured").parts().iter().map(|part| part.key).collect();
         assert_eq!(keys, vec![PartKey::Payload(VariantKey::Enum(some))]);
         assert_eq!(parts(&types, r#enum), vec![int]);
@@ -283,16 +271,15 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
         let structured = [
-            types.intern(TyKind::Tuple(Box::new([string, int]), ())),
-            types.intern(TyKind::Object { fields: Box::new([(a, int)]), label: () }),
+            types.intern(TyKind::Tuple(Box::new([string, int]))),
+            types.intern(TyKind::Object { fields: Box::new([(a, int)]) }),
             types.intern(TyKind::Enum {
                 name: QualifiedRef::root(names.intern("E")),
                 variants: Box::new([(empty, None), (full, Some(int))]),
-                label: (),
             }),
-            types.intern(TyKind::Array(string, LenTerm::Known(2), ())),
-            types.intern(TyKind::Option(string, ())),
-            types.intern(TyKind::Result(string, int, ())),
+            types.intern(TyKind::Array(string, LenTerm::Known(2))),
+            types.intern(TyKind::Option(string)),
+            types.intern(TyKind::Result(string, int)),
         ];
         for ty in structured {
             let structure = structure(&types, ty).expect("a structural type");
@@ -317,12 +304,11 @@ mod tests {
         let (full, empty) = (names.intern("Full"), names.intern("Empty"));
         let mut types = Types::<Concrete>::new();
         let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
-        let option = types.intern(TyKind::Option(string, ()));
-        let result = types.intern(TyKind::Result(string, int, ()));
+        let option = types.intern(TyKind::Option(string));
+        let result = types.intern(TyKind::Result(string, int));
         let r#enum = types.intern(TyKind::Enum {
             name: QualifiedRef::root(names.intern("E")),
             variants: Box::new([(empty, None), (full, Some(int))]),
-            label: (),
         });
         let variants = |ty| {
             let variants = structure(&types, ty).and_then(|structure| structure.variants()).expect("a variant type");
@@ -338,7 +324,7 @@ mod tests {
         let r#enum = structure(&types, r#enum).expect("an enum");
         assert_eq!(r#enum.part(PartKey::Payload(VariantKey::Enum(empty))), None, "a variant of no payload");
         assert!(!r#enum.has_variant(VariantKey::Enum(names.intern("Other"))));
-        let tuple = types.intern(TyKind::Tuple(Box::new([int]), ()));
+        let tuple = types.intern(TyKind::Tuple(Box::new([int])));
         assert_eq!(structure(&types, tuple).expect("a tuple").variants(), None);
     }
 
@@ -351,12 +337,12 @@ mod tests {
         let (a, b) = (names.intern("a"), names.intern("b"));
         let mut types = Types::<Concrete>::new();
         let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
-        let tuple = types.intern(TyKind::Tuple(Box::new([string, int]), ()));
-        let object = types.intern(TyKind::Object { fields: Box::new([(b, int), (a, string)]), label: () });
+        let tuple = types.intern(TyKind::Tuple(Box::new([string, int])));
+        let object = types.intern(TyKind::Object { fields: Box::new([(b, int), (a, string)]) });
         let others = [
-            types.intern(TyKind::Array(int, LenTerm::Known(2), ())),
-            types.intern(TyKind::Option(int, ())),
-            types.intern(TyKind::Result(int, string, ())),
+            types.intern(TyKind::Array(int, LenTerm::Known(2))),
+            types.intern(TyKind::Option(int)),
+            types.intern(TyKind::Result(int, string)),
         ];
         let fields = |ty| {
             let structure = structure(&types, ty).expect("a structural type");
@@ -379,11 +365,11 @@ mod tests {
     fn a_sequences_element_is_an_arrays_or_a_slices() {
         let mut types = Types::<Concrete>::new();
         let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
-        let array = types.intern(TyKind::Array(string, LenTerm::Known(2), ()));
+        let array = types.intern(TyKind::Array(string, LenTerm::Known(2)));
         let slice = types.intern(TyKind::Slice(int));
         assert_eq!(element(&types, array), Some(string));
         assert_eq!(element(&types, slice), Some(int));
-        let tuple = types.intern(TyKind::Tuple(Box::new([int, int]), ()));
+        let tuple = types.intern(TyKind::Tuple(Box::new([int, int])));
         let reference = types.intern(TyKind::Ref(Mutability::Shared, slice));
         for other in [tuple, reference, string, int] {
             assert_eq!(element(&types, other), None, "{:?}", types.kind(other));

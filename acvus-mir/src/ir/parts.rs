@@ -109,7 +109,7 @@ fn children(types: &Types<Concrete>, ty: Ty) -> Vec<PathSeg> {
 /// product: a field's own step (`Structure::fields`), and each index of an
 /// array, whose every element a cut may move apart (ownership §6).
 fn product_parts(types: &Types<Concrete>, ty: Ty) -> Option<Vec<PathSeg>> {
-    if let TyKind::Array(_, len, _) = types.kind(ty) {
+    if let TyKind::Array(_, len) = types.kind(ty) {
         return Some((0..known_len(len)).map(PathSeg::Index).collect());
     }
     let fields = structure(types, ty)?.fields()?;
@@ -176,11 +176,11 @@ mod tests {
         let mut types = Types::<Concrete>::new();
         let (int, string) = (types.intern(TyKind::Int(IntTy::I64)), types.intern(TyKind::String));
         let structured = [
-            types.intern(TyKind::Tuple(Box::new([string, int]), ())),
-            types.intern(TyKind::Object { fields: Box::new([(a, int)]), label: () }),
-            types.intern(TyKind::Enum { name: QualifiedRef::root(names.intern("E")), variants: Box::new([(full, Some(int))]), label: () }),
-            types.intern(TyKind::Option(string, ())),
-            types.intern(TyKind::Result(string, int, ())),
+            types.intern(TyKind::Tuple(Box::new([string, int]))),
+            types.intern(TyKind::Object { fields: Box::new([(a, int)]) }),
+            types.intern(TyKind::Enum { name: QualifiedRef::root(names.intern("E")), variants: Box::new([(full, Some(int))]) }),
+            types.intern(TyKind::Option(string)),
+            types.intern(TyKind::Result(string, int)),
         ];
         for ty in structured {
             for part in structure(&types, ty).expect("a structural type").parts() {
@@ -189,7 +189,7 @@ mod tests {
             }
         }
         assert_eq!(step(PartKey::Element), None);
-        let array = types.intern(TyKind::Array(string, LenTerm::Known(3), ()));
+        let array = types.intern(TyKind::Array(string, LenTerm::Known(3)));
         let slice = types.intern(TyKind::Slice(int));
         assert_eq!(step_ty(&types, array, PathSeg::Index(2)), Some(string));
         assert_eq!(step_ty(&types, slice, PathSeg::Index(7)), Some(int));
@@ -205,11 +205,11 @@ mod tests {
         let (a, b) = (names.intern("a"), names.intern("b"));
         let mut types = Types::<Concrete>::new();
         let int = types.intern(TyKind::Int(IntTy::I64));
-        let tuple = types.intern(TyKind::Tuple(Box::new([int, int]), ()));
-        let array = types.intern(TyKind::Array(int, LenTerm::Known(2), ()));
-        let inner = types.intern(TyKind::Object { fields: Box::new([(b, int)]), label: () });
-        let object = types.intern(TyKind::Object { fields: Box::new([(a, inner)]), label: () });
-        let option = types.intern(TyKind::Option(int, ()));
+        let tuple = types.intern(TyKind::Tuple(Box::new([int, int])));
+        let array = types.intern(TyKind::Array(int, LenTerm::Known(2)));
+        let inner = types.intern(TyKind::Object { fields: Box::new([(b, int)]) });
+        let object = types.intern(TyKind::Object { fields: Box::new([(a, inner)]) });
+        let option = types.intern(TyKind::Option(int));
         let src = ValueId::from_raw(0);
         let taken = [
             (object, vec![PathSeg::Field(a), PathSeg::Field(b)]),

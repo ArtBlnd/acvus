@@ -171,7 +171,7 @@ mod tests {
             holds: Holds::Nothing,
             values: (),
         });
-        let array = types.intern(TyKind::Array(int, LenTerm::Known(4), ()));
+        let array = types.intern(TyKind::Array(int, LenTerm::Known(4)));
         let array_ref = types.intern(TyKind::Ref(Mutability::Shared, array));
         Fixture { module: Module::new(types), decls, make: make_impl, as_slice, int, index, slice_ref, make_ty, array, array_ref }
     }

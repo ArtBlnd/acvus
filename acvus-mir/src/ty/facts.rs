@@ -122,9 +122,11 @@ fn inhabited_in(types: &Types<Concrete>, ty: Ty, judged: &mut FxHashMap<Ty, bool
 fn inhabited_level(types: &Types<Concrete>, ty: Ty, judged: &mut FxHashMap<Ty, bool>) -> bool {
     match types.kind(ty) {
         TyKind::Never => false,
-        TyKind::Tuple(items, _) => items.iter().all(|item| inhabited_in(types, *item, judged)),
+        TyKind::Tuple(items) | TyKind::Struct { args: items, .. } => {
+            items.iter().all(|item| inhabited_in(types, *item, judged))
+        }
         TyKind::Object { fields, .. } => fields.iter().all(|(_, field)| inhabited_in(types, *field, judged)),
-        TyKind::Array(element, len, _) => match len {
+        TyKind::Array(element, len) => match len {
             LenTerm::Known(0) => true,
             LenTerm::Known(_) => inhabited_in(types, *element, judged),
             LenTerm::Var(var) => match *var {},
@@ -225,14 +227,14 @@ fn for_each_position_level(
             on_position(PositionKind::InFlight, ty);
             for_each_position(types, lifetimes, *result, on_position);
         }
-        TyKind::Array(element, _, _) | TyKind::Slice(element) | TyKind::Option(element, _) => {
+        TyKind::Array(element, _) | TyKind::Slice(element) | TyKind::Option(element) => {
             for_each_position(types, lifetimes, *element, on_position);
         }
-        TyKind::Result(ok, err, _) => {
+        TyKind::Result(ok, err) => {
             for_each_position(types, lifetimes, *ok, on_position);
             for_each_position(types, lifetimes, *err, on_position);
         }
-        TyKind::Tuple(items, _) => {
+        TyKind::Tuple(items) | TyKind::Struct { args: items, .. } => {
             for item in items.iter() {
                 for_each_position(types, lifetimes, *item, on_position);
             }
@@ -319,7 +321,7 @@ mod tests {
         fn enum_of(&mut self, variants: &[(&str, Option<Ty>)]) -> Ty {
             let variants = variants.iter().map(|(tag, payload)| (self.names.intern(tag), *payload)).collect();
             let name = QualifiedRef::root(self.names.intern("E"));
-            self.ty(TyKind::Enum { name, variants, label: () })
+            self.ty(TyKind::Enum { name, variants })
         }
 
         fn holds_a_value(&self, ty: Ty) -> bool {
@@ -340,10 +342,10 @@ mod tests {
         let mut fx = Fixture::new();
         let (int, never) = (fx.int(), fx.never());
         let (a, b) = (fx.names.intern("a"), fx.names.intern("b"));
-        let held = fx.ty(TyKind::Tuple(Box::new([int, never]), ()));
-        let unit = fx.ty(TyKind::Tuple(Box::new([]), ()));
-        let ints = fx.ty(TyKind::Tuple(Box::new([int, int]), ()));
-        let object = fx.ty(TyKind::Object { fields: Box::new([(a, int), (b, never)]), label: () });
+        let held = fx.ty(TyKind::Tuple(Box::new([int, never])));
+        let unit = fx.ty(TyKind::Unit);
+        let ints = fx.ty(TyKind::Tuple(Box::new([int, int])));
+        let object = fx.ty(TyKind::Object { fields: Box::new([(a, int), (b, never)]) });
         assert!(!fx.holds_a_value(held));
         assert!(!fx.holds_a_value(object));
         assert!(fx.holds_a_value(unit));
@@ -356,9 +358,9 @@ mod tests {
     fn an_array_has_none_only_where_it_holds_an_element_that_has_none() {
         let mut fx = Fixture::new();
         let (int, never) = (fx.int(), fx.never());
-        let empty = fx.ty(TyKind::Array(never, LenTerm::Known(0), ()));
-        let two = fx.ty(TyKind::Array(never, LenTerm::Known(2), ()));
-        let ints = fx.ty(TyKind::Array(int, LenTerm::Known(2), ()));
+        let empty = fx.ty(TyKind::Array(never, LenTerm::Known(0)));
+        let two = fx.ty(TyKind::Array(never, LenTerm::Known(2)));
+        let ints = fx.ty(TyKind::Array(int, LenTerm::Known(2)));
         assert!(fx.holds_a_value(empty));
         assert!(!fx.holds_a_value(two));
         assert!(fx.holds_a_value(ints));
@@ -370,9 +372,9 @@ mod tests {
     fn a_sum_has_a_value_where_some_variant_does() {
         let mut fx = Fixture::new();
         let (int, never) = (fx.int(), fx.never());
-        let none_only = fx.ty(TyKind::Option(never, ()));
-        let ok_only = fx.ty(TyKind::Result(int, never, ()));
-        let neither = fx.ty(TyKind::Result(never, never, ()));
+        let none_only = fx.ty(TyKind::Option(never));
+        let ok_only = fx.ty(TyKind::Result(int, never));
+        let neither = fx.ty(TyKind::Result(never, never));
         assert!(fx.holds_a_value(none_only));
         assert!(fx.holds_a_value(ok_only));
         assert!(!fx.holds_a_value(neither));
@@ -428,7 +430,7 @@ mod tests {
         let mut fx = Fixture::new();
         let mut ty = fx.never();
         for _ in 0..64 {
-            ty = fx.ty(TyKind::Tuple(Box::new([ty, ty]), ()));
+            ty = fx.ty(TyKind::Tuple(Box::new([ty, ty])));
         }
         assert!(!fx.holds_a_value(ty));
     }

@@ -1,7 +1,7 @@
 //! Runtime behaviour of the decision, on the model: release, the borrowed
 //! marker and the reference markers. Run as tests, natively and under Miri.
 
-use model::{Exclusive, Never, Ref, Shared, TypeVar, Uniform, clear_arena, owners, view_as};
+use model::{Exclusive, Never, Ref, Shared, TypeVar, Uniform, clear_arena, owners, read_as};
 
 /// Generic code that owns a container of a type variable's values and drops
 /// it, as an extern body may.
@@ -19,7 +19,7 @@ where
 fn a_generic_drop_of_held_references_ends_no_owner() {
     let owner = Uniform::new(String::from("hello"));
     let held: Vec<Uniform<Shared<'_, String>>> = vec![Uniform::from_ref(owner.as_ref()), Uniform::from_ref(owner.as_ref())];
-    drop_all(view_as::<_, Uniform<Never>>(held));
+    drop_all(read_as::<_, Uniform<Never>>(held));
     assert_eq!(owners(owner.bits()), 1);
     let bits = owner.bits();
     drop(owner);
@@ -33,7 +33,7 @@ fn a_generic_drop_of_held_references_ends_no_owner() {
 fn a_verbatim_ref_in_a_generic_container_ends_the_owner_early() {
     let owner = Uniform::new(String::from("hello"));
     let held: Vec<Uniform<Shared<'_, String>>> = vec![Uniform::from_ref(owner.as_ref_verbatim()), Uniform::from_ref(owner.as_ref_verbatim())];
-    drop_all(view_as::<_, Uniform<Never>>(held));
+    drop_all(read_as::<_, Uniform<Never>>(held));
     assert_eq!(owners(owner.bits()), -1);
     let bits = owner.bits();
     drop(owner);
@@ -73,7 +73,7 @@ fn a_scalar_ref_is_its_bits() {
     assert_eq!(reference.bits(), owner.bits());
     assert_eq!(reference.bits().p, 0);
     let held = vec![Uniform::from_ref(reference)];
-    drop_all(view_as::<_, Uniform<Never>>(held));
+    drop_all(read_as::<_, Uniform<Never>>(held));
     assert_eq!(owner.with(|scalar| *scalar), 7);
 }
 
@@ -86,7 +86,7 @@ fn a_held_exclusive_reference_writes_through_its_place() {
         let mut held = Uniform::<Exclusive<'_, i64>>::from_mut(owner.as_mut());
         held.as_mut().set(9);
         let as_variable = vec![held];
-        drop_all(view_as::<_, Uniform<Never>>(as_variable));
+        drop_all(read_as::<_, Uniform<Never>>(as_variable));
     }
     assert_eq!(owner.with(|scalar| *scalar), 9);
 }

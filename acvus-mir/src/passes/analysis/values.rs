@@ -593,7 +593,7 @@ impl ValueBounds<'_> {
             panic!("an AsSlice's container {container:?} is a reference")
         };
         match self.types.kind(*lent) {
-            TyKind::Array(_, len, _) => Some(i128::try_from(known_len(len)).expect("an array's length fits an i128")),
+            TyKind::Array(_, len) => Some(i128::try_from(known_len(len)).expect("an array's length fits an i128")),
             _ => None,
         }
     }
@@ -1059,7 +1059,7 @@ mod tests {
         let mut f = fixture();
         let decls = declarations(&f.interner, Vec::new(), Vec::new(), Types::new());
         let (name, byte) = (f.interner.intern("xs"), f.byte);
-        let array = f.module.types_mut().intern(TyKind::Array(byte, crate::ty::LenTerm::Known(3), ()));
+        let array = f.module.types_mut().intern(TyKind::Array(byte, crate::ty::LenTerm::Known(3)));
         let count = f.module.types_mut().intern(TyKind::Int(IntTy::U64));
         let mut builder = f.module.build_body(false, byte);
         let xs = builder.param(name, array, Span::ZERO);

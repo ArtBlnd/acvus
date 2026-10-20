@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds layout.rs with nightly rustc, once without layout randomization and
-# once at each seed from 1 to 32, and counts how often each view's layout
-# matched the generic view's.
+# once at each seed from 1 to 32, and counts how often each instantiation's
+# layout matched the generic one's.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -17,7 +17,7 @@ run() {
 echo "without randomization:"
 run
 
-echo "-Zrandomize-layout, seeds 1 to 32 (count, view, verdict):"
+echo "-Zrandomize-layout, seeds 1 to 32 (count, instantiation, verdict):"
 for seed in $(seq 1 32); do
   run -Zrandomize-layout "-Zlayout-seed=$seed"
 done | sort | uniq -c

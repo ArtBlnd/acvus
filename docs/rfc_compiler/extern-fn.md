@@ -22,11 +22,9 @@ A call's effect states whether reissuing it is pure, idempotent or opaque, an or
 
 A declaration states whether it has a body that may suspend.
 
-A declaration may name effect variables, as it names type variables. A function type it writes carries an effect, and an extern-defined type may carry an effect (§8).
+Everything a declaration writes that runs carries an effect, always, since what it runs is unknown: a function type, a closure parameter, and a generic function's signature, at which a required impl is called. An extern-defined type may carry an effect (§8).
 
-A call's effect is the join of what its declaration states for the call itself and of the effect variables of the work the call runs before its result is taken: a closure argument it calls, or work a value it is given holds. Work the call does not run leaves only in its result, whose type carries its effect.
-
-Every effect variable a declaration takes from its parameters appears in the call's effect, in its result's type, or in both. A declaration where one appears in neither is refused: the work it names would run where no effect records it. An effect variable its parameters do not give names no work, and is pure.
+An extern fn and an impl each name one effect and one identity among their variables, as they name type variables, and that effect is the effect of everything they write that runs, a closure parameter included, though no variable is written on it. How the effect and the identity of the parameters reach the result is derived from the signature, from where each variable stands: a variable is written as itself, and no alias stands for one. Where the result does not carry the effect, the extern fn or impl must consume it as its own.
 
 ## 3. Declared facts: access, action, source, relation
 
@@ -51,7 +49,7 @@ Several declarations may share a name. A call reaches the one its arguments' typ
 
 ## 6. Generic functions and impls
 
-A generic function is a name with a signature and no body, so it states nothing a body states: no effect, no declared fact, no requirement. A declaration may be an impl of one; its signature is the generic function's at a choice of its type variables. A call of a generic function is a call of the impl it reaches. A declaration may require impls of generic functions at its own type variables, and may name a declared fact (§3) such an impl must state. A requirement is answered by an impl, so only an impl's requirements lead on to further ones: an impl requires impls only at types smaller than its own, so the requirements a call reaches end and never cycle. A declaration that is no impl is reached by its calls alone; its requirements start a chain and are no link of one.
+A generic function is a name with a signature and no body, so it states nothing a body states: no declared fact and no requirement. Its effect, which it always has, and its identity are type parameters of that signature, as its type variables are; it does nothing without an impl, so it consumes neither. A declaration may be an impl of one; its signature is the generic function's at a choice of its type variables. A call of a generic function is a call of the impl it reaches. A declaration may require impls of generic functions at its own type variables, and may name a declared fact (§3) such an impl must state. A requirement is answered by an impl, so only an impl's requirements lead on to further ones: an impl requires impls only at types smaller than its own, so the requirements a call reaches end and never cycle. A declaration that is no impl is reached by its calls alone; its requirements start a chain and are no link of one.
 
 ## 7. Conversions
 

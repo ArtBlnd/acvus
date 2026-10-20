@@ -70,7 +70,7 @@ mod tests {
         let interner = Interner::new();
         let mut types = Types::<Concrete>::new();
         let int = types.intern(TyKind::Int(IntTy::I64));
-        let pair = types.intern(TyKind::Tuple(Box::new([int, int]), ()));
+        let pair = types.intern(TyKind::Tuple(Box::new([int, int])));
         let ref_pair = types.intern(TyKind::Ref(Mutability::Shared, pair));
         let declared = types.intern(TyKind::UserDefined {
             id: QualifiedRef::root(interner.intern("Point")),

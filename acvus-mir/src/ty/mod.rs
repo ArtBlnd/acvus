@@ -48,10 +48,6 @@ pub trait Phase: 'static + Copy + fmt::Debug + Eq + Hash {
     /// type is transparent; nothing once solved, since no later reader
     /// asks it.
     type ValuesTerm: fmt::Debug + Copy + Eq + Hash;
-    /// Who wrote a transparent structured type's node (types §1): fixed
-    /// where the node is born, and part of its identity. Only solving asks
-    /// it.
-    type Label: fmt::Debug + Copy + Eq + Hash;
 }
 
 /// Every variable is `Infallible`: a concrete type holds none.
@@ -68,7 +64,6 @@ impl Phase for Concrete {
     type HoldsTerm = Holds;
     type CallsTerm = Calls;
     type ValuesTerm = ();
-    type Label = ();
 }
 
 /// A declaration's signature: its variables are positional placeholders.
@@ -85,7 +80,6 @@ impl Phase for Poly {
     type HoldsTerm = Holds;
     type CallsTerm = Calls;
     type ValuesTerm = ();
-    type Label = ();
 }
 
 /// A type under solving: its variables are the solver's.
@@ -102,39 +96,6 @@ impl Phase for Infer {
     type HoldsTerm = HoldsTerm;
     type CallsTerm = CallsTerm;
     type ValuesTerm = ValuesVarId;
-    type Label = crate::ty::Label;
-}
-
-/// How a relation reached the node it may grow (types §1): from a binding
-/// by name, through fields and parts named from it, or through a
-/// reference, which reaches some place of its target's type and not which
-/// one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Reach {
-    Named,
-    Through,
-}
-
-/// Whether a node of `label`, reached by `reach`, may grow (types §1): the
-/// one test of transparency every relation that grows a type asks. A node
-/// the body wrote, reached by name.
-pub fn is_transparent(label: Label, reach: Reach) -> bool {
-    label == Label::Here && reach == Reach::Named
-}
-
-/// C, the transparency rule (types §1): who wrote a transparent structured
-/// type's node, the body being checked or anything else. A value entering a
-/// slot grows the slot's type where the body wrote it, and is coerced to it
-/// otherwise (types §1, §3). Every one of the six kinds carries it: the
-/// tuple, the array, `Option` and `Result` never grow, but a value entering
-/// one written elsewhere is coerced part by part, and one written here is
-/// not (types §3, §4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Label {
-    /// The body being checked wrote it.
-    Here,
-    /// A declaration, the host, or another body's scheme wrote it.
-    Elsewhere,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -261,9 +222,12 @@ impl<V: Phase> Types<V> {
     /// The one id of `kind` in this table.
     ///
     /// # Panics
-    /// The table holds `u32::MAX` shapes, or `kind` names an id of another
-    /// table.
+    /// The table holds `u32::MAX` shapes, `kind` names an id of another
+    /// table, or `kind` is a tuple of no part: `()` is `Unit`.
     pub fn intern(&mut self, kind: TyKind<V>) -> TyId<V> {
+        if let TyKind::Tuple(items) = &kind {
+            assert!(!items.is_empty(), "Types::intern: a tuple has at least one part; `()` is `Unit`");
+        }
         kind.for_each_child(|child| self.assert_own(child));
         let (index, _) = self.kinds.insert_full(kind);
         TyId {

@@ -5,15 +5,20 @@ layout exception of variables §4. `model.rs` is a model runtime of
 sixteen-byte `Value`s with `Uniform`, `Ref`, `Mut`, the `Shared` and
 `Exclusive` markers and `TypeVar` as references and variables state them; its storage counts
 owners instead of freeing, so a wrong count is seen without undefined
-behaviour.
+behaviour. It also holds `EffectVar` and one effect marker, which the
+closure-params probes build against.
 
 | Part | What it checks | Run |
 |---|---|---|
 | `behavior.rs` | release, the borrowed marker, the held forms, and a negative control | `cargo test --manifest-path docs/rfc_extern/experiments/reference-markers/Cargo.toml` |
 | the same, under Miri | that the model has no undefined behaviour | `cargo +nightly miri test --manifest-path docs/rfc_extern/experiments/reference-markers/Cargo.toml` |
 | `probes/` | what rustc admits and refuses, each probe's second line stating the expected outcome | `docs/rfc_extern/experiments/reference-markers/run_probes.sh` |
-| `layout.rs` | an author-defined container's layout under each element view, against the generic view | `docs/rfc_extern/experiments/reference-markers/run_layout.sh` |
+| `layout.rs` | an author-defined container's layout at each element instantiation, against the generic one | `docs/rfc_extern/experiments/reference-markers/run_layout.sh` |
 
 Every build output goes to `target/` here, which git ignores. The layout run
 needs a nightly toolchain; std is not rebuilt with `-Zrandomize-layout`, so
 only the containers defined in `layout.rs` are randomized.
+
+Result, 2026-10-06, with stable rustc 1.97.1: the eighteen probes as
+expected, and the five behaviour tests pass. Miri and the layout run were
+not run then.

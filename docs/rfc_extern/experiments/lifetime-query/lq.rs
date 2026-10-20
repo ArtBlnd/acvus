@@ -151,10 +151,10 @@ where
     type Seq = Cons<Lt<'a>, X::Seq>;
 }
 
-/// A `#[fn_type]` marker.
-pub struct Pred<'f, T>(PhantomData<(fn(T) -> T, fn() -> &'f ())>);
+/// A `#[fn_type]` marker. Its effect variable carries no lifetime.
+pub struct Pred<'f, T, E>(PhantomData<(fn(T) -> T, fn() -> &'f (), fn(E) -> E)>);
 
-impl<'f, T> Lifetimed for Pred<'f, T>
+impl<'f, T, E> Lifetimed for Pred<'f, T, E>
 where
     T: Lifetimed,
 {

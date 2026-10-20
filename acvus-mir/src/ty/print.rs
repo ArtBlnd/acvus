@@ -57,7 +57,7 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             write_ty(types, names, *inner, out);
             out.push('>');
         }
-        TyKind::Array(element, len, ()) => {
+        TyKind::Array(element, len) => {
             out.push('[');
             write_ty(types, names, *element, out);
             out.push_str(&format!("; {}]", known_len(len)));
@@ -67,7 +67,7 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             write_ty(types, names, *element, out);
             out.push(']');
         }
-        TyKind::Tuple(items, ()) => {
+        TyKind::Tuple(items) => {
             out.push('(');
             write_list(types, names, items, out);
             if items.len() == 1 {
@@ -75,20 +75,20 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
             }
             out.push(')');
         }
-        TyKind::Option(payload, ()) => {
+        TyKind::Option(payload) => {
             out.push_str("Option<");
             write_ty(types, names, *payload, out);
             out.push('>');
         }
-        TyKind::Result(ok, err, ()) => {
+        TyKind::Result(ok, err) => {
             out.push_str("Result<");
             write_ty(types, names, *ok, out);
             out.push_str(", ");
             write_ty(types, names, *err, out);
             out.push('>');
         }
-        TyKind::Object { fields, label: () } => write_fields(types, names, fields, out),
-        TyKind::Enum { name, variants, label: () } => {
+        TyKind::Object { fields } => write_fields(types, names, fields, out),
+        TyKind::Enum { name, variants } => {
             out.push_str(&qualified(names, *name));
             out.push('{');
             for (index, (tag, payload)) in variants.iter().enumerate() {
@@ -146,6 +146,14 @@ fn write_ty(types: &Types<Concrete>, names: &Interner, ty: Ty, out: &mut String)
                 carried.push(format!("id0={identity}"));
             }
             write_bracket(&carried, out);
+        }
+        TyKind::Struct { id, args } => {
+            out.push_str(&qualified(names, *id));
+            if !args.is_empty() {
+                out.push('<');
+                write_list(types, names, args, out);
+                out.push('>');
+            }
         }
         TyKind::Ref(mutability, target) => {
             out.push('&');

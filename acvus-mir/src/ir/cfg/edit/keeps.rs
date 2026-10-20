@@ -272,7 +272,7 @@ impl TypeCheck<'_> {
                     acvus_ast::Literal::Unit => matches!(kind, TyKind::Unit),
                     acvus_ast::Literal::Bytes(bytes) => matches!(
                         kind,
-                        TyKind::Array(byte, len, _)
+                        TyKind::Array(byte, len)
                             if matches!(self.kind(*byte), TyKind::Int(IntTy::U8)) && known_len(len) == bytes.len()
                     ),
                     acvus_ast::Literal::List(_) => matches!(kind, TyKind::Array(..)),
@@ -343,7 +343,7 @@ impl TypeCheck<'_> {
                     return Err(format!("{src:?} is not a reference"));
                 };
                 found(held == mutability, || format!("{src:?} is not a {mutability:?} reference"))?;
-                let TyKind::Array(element, _, _) = self.kind(*lent) else {
+                let TyKind::Array(element, _) = self.kind(*lent) else {
                     return Err(format!("{src:?} lends {:?}, not an array", self.kind(*lent)));
                 };
                 let (made, viewed) = self.slice(Self::result(inst)?)?;
@@ -485,12 +485,12 @@ impl TypeCheck<'_> {
             }
             Op::ArrayBegin { .. } => self.is(
                 Self::result(inst)?,
-                |kind| matches!(kind, TyKind::Array(_, len, _) if known_len(len) == 0),
+                |kind| matches!(kind, TyKind::Array(_, len) if known_len(len) == 0),
                 "an array of no elements",
             ),
             Op::ArrayPush { array, value } => {
                 let result = Self::result(inst)?;
-                let (TyKind::Array(element, len, _), TyKind::Array(held, held_len, _)) =
+                let (TyKind::Array(element, len), TyKind::Array(held, held_len)) =
                     (self.kind(self.ty(result)), self.kind(self.ty(*array)))
                 else {
                     return Err(format!("{result:?} and {array:?} are not both arrays"));
@@ -513,7 +513,7 @@ impl TypeCheck<'_> {
                 Ok(())
             }
             Op::MakeTuple { elements } => {
-                let TyKind::Tuple(element_tys, _) = self.kind(self.ty(Self::result(inst)?)) else {
+                let TyKind::Tuple(element_tys) = self.kind(self.ty(Self::result(inst)?)) else {
                     return Err("the result is not a tuple".to_string());
                 };
                 found(element_tys.len() == elements.len(), || "the tuple's arity differs".to_string())?;
@@ -521,14 +521,14 @@ impl TypeCheck<'_> {
             }
             Op::Intrinsic { intrinsic, args } => self.intrinsic(*intrinsic, args, Self::result(inst)?),
             Op::TupleIndex { tuple, index } => match self.kind(self.ty(*tuple)) {
-                TyKind::Tuple(elements, _) => match elements.get(*index) {
+                TyKind::Tuple(elements) => match elements.get(*index) {
                     Some(element) => self.same(Self::result(inst)?, *element, "the element"),
                     None => Err(format!("{tuple:?} has no element {index}")),
                 },
                 other => Err(format!("{tuple:?} is {other:?}, not a tuple")),
             },
             Op::ArrayIndex { array, .. } => match self.kind(self.ty(*array)) {
-                TyKind::Array(element, _, _) => self.same(Self::result(inst)?, *element, "the element"),
+                TyKind::Array(element, _) => self.same(Self::result(inst)?, *element, "the element"),
                 other => Err(format!("{array:?} is {other:?}, not an array")),
             },
             Op::TestLiteral { .. } | Op::TestObjectKey { .. } => self.is_bool(Self::result(inst)?),
@@ -594,9 +594,9 @@ impl TypeCheck<'_> {
                 let mut len = None;
                 for (array, param) in arrays.iter().zip(params.iter()) {
                     let (element, array_len, lent) = match self.kind(self.ty(*array)) {
-                        TyKind::Array(element, len, _) => (*element, known_len(len), None),
+                        TyKind::Array(element, len) => (*element, known_len(len), None),
                         TyKind::Ref(mutability, target) => match self.kind(*target) {
-                            TyKind::Array(element, len, _) => (*element, known_len(len), Some(*mutability)),
+                            TyKind::Array(element, len) => (*element, known_len(len), Some(*mutability)),
                             other => return Err(format!("{array:?} lends {other:?}, not an array")),
                         },
                         other => return Err(format!("{array:?} is {other:?}, not an array or a reference to one")),
@@ -622,7 +622,7 @@ impl TypeCheck<'_> {
                 }
                 self.is(
                     result,
-                    |kind| matches!(kind, TyKind::Array(mapped, mapped_len, _) if *mapped == ret && len.is_none_or(|len| known_len(mapped_len) == len)),
+                    |kind| matches!(kind, TyKind::Array(mapped, mapped_len) if *mapped == ret && len.is_none_or(|len| known_len(mapped_len) == len)),
                     "the array of `f`'s results",
                 )
             }

@@ -94,7 +94,7 @@ fn assemble(cx: &mut Lcx<'_, '_>, assembly: Assembly<'_>) -> Lowered<ValueId> {
                 .collect::<Lowered<_>>()?;
             Ok(cx.made(Op::MakeTuple { elements }, made, span))
         }
-        (Some(of_from @ Structure::Object(..)), Some(Structure::Object(slot_fields, _))) => {
+        (Some(of_from @ Structure::Object(..)), Some(Structure::Object(slot_fields))) => {
             let narrowed: Vec<(Astr, Ty)> = slot_fields
                 .iter()
                 .map(|(name, _)| {
@@ -163,20 +163,19 @@ pub(super) fn part_reference(cx: &mut Lcx<'_, '_>, through: Mutability, part: Ty
 fn gathered(cx: &mut Lcx<'_, '_>, through: Mutability, target: Ty) -> Ty {
     let part = |cx: &mut Lcx<'_, '_>, ty: Ty| part_reference(cx, through, ty);
     let kind = match cx.kind(target).clone() {
-        TyKind::Tuple(items, ()) => TyKind::Tuple(items.iter().map(|item| part(cx, *item)).collect(), ()),
-        TyKind::Object { fields, label: () } => {
-            TyKind::Object { fields: fields.iter().map(|(name, field)| (*name, part(cx, *field))).collect(), label: () }
+        TyKind::Tuple(items) => TyKind::Tuple(items.iter().map(|item| part(cx, *item)).collect()),
+        TyKind::Object { fields } => {
+            TyKind::Object { fields: fields.iter().map(|(name, field)| (*name, part(cx, *field))).collect() }
         }
-        TyKind::Enum { name, variants, label: () } => TyKind::Enum {
+        TyKind::Enum { name, variants } => TyKind::Enum {
             name,
             variants: variants.iter().map(|(tag, payload)| (*tag, payload.map(|payload| part(cx, payload)))).collect(),
-            label: (),
         },
-        TyKind::Array(element, len, ()) => TyKind::Array(part(cx, element), LenTerm::Known(known_len(&len)), ()),
-        TyKind::Option(payload, ()) => TyKind::Option(part(cx, payload), ()),
-        TyKind::Result(ok, err, ()) => {
+        TyKind::Array(element, len) => TyKind::Array(part(cx, element), LenTerm::Known(known_len(&len))),
+        TyKind::Option(payload) => TyKind::Option(part(cx, payload)),
+        TyKind::Result(ok, err) => {
             let ok = part(cx, ok);
-            TyKind::Result(ok, part(cx, err), ())
+            TyKind::Result(ok, part(cx, err))
         }
         other => panic!("a reference is gathered only of a transparent structured type's parts, not {other:?}"),
     };
@@ -253,7 +252,7 @@ pub(super) fn array_map(
         holds: Holds::Nothing,
         values: (),
     });
-    let result_ty = cx.intern(TyKind::Array(mapped, LenTerm::Known(len), ()));
+    let result_ty = cx.intern(TyKind::Array(mapped, LenTerm::Known(len)));
     let name = cx.decls.core().receiver_param();
     let entry = Entry { captures: Vec::new(), params: params.iter().map(|ty| Declared { name, ty: *ty, span }).collect(), contexts: &[] };
     let body = cx.nested(cx.decided, super::ctxt::ordered(&effect), mapped).make_body(entry, |inner, _, at| element(inner, at), span);

@@ -393,13 +393,14 @@ fn commutes(op: BinOp, operand: &TyKind<Concrete>) -> bool {
         | TyKind::Array(..)
         | TyKind::Slice(_)
         | TyKind::Str
-        | TyKind::Tuple(.., _)
-        | TyKind::Option(.., _)
+        | TyKind::Tuple(..)
+        | TyKind::Option(..)
         | TyKind::Result(..)
         | TyKind::Object { .. }
         | TyKind::Enum { .. }
         | TyKind::Fn { .. }
         | TyKind::UserDefined { .. }
+        | TyKind::Struct { .. }
         | TyKind::Ref(..) => false,
         TyKind::Var(var) => match *var {},
     }

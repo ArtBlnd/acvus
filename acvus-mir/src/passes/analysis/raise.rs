@@ -323,11 +323,11 @@ fn holds_work(types: &Types<Concrete>, ty: Ty, works: &mut FxHashMap<Ty, bool>) 
         | TyKind::Never
         | TyKind::Order
         | TyKind::Str => false,
-        TyKind::Array(part, ..) | TyKind::Slice(part) | TyKind::Option(part, _) | TyKind::Ref(_, part) => {
+        TyKind::Array(part, ..) | TyKind::Slice(part) | TyKind::Option(part) | TyKind::Ref(_, part) => {
             holds_work(types, *part, works)
         }
-        TyKind::Result(ok, err, _) => holds_work(types, *ok, works) || holds_work(types, *err, works),
-        TyKind::Tuple(parts, _) => parts.iter().any(|part| holds_work(types, *part, works)),
+        TyKind::Result(ok, err) => holds_work(types, *ok, works) || holds_work(types, *err, works),
+        TyKind::Tuple(parts) | TyKind::Struct { args: parts, .. } => parts.iter().any(|part| holds_work(types, *part, works)),
         TyKind::Object { fields, .. } => fields.iter().any(|(_, part)| holds_work(types, *part, works)),
         TyKind::Enum { variants, .. } => variants.iter().filter_map(|(_, payload)| *payload).any(|part| holds_work(types, part, works)),
         TyKind::UserDefined { type_args, effect: None, .. } => type_args.iter().any(|part| holds_work(types, *part, works)),
@@ -884,7 +884,7 @@ mod tests {
     fn an_unwrap_of_a_known_some_does_not_trap_and_of_an_unknown_option_may() {
         let mut f = Fixture::new();
         let int = f.int;
-        let option = f.module.types_mut().intern(TyKind::Option(int, ()));
+        let option = f.module.types_mut().intern(TyKind::Option(int));
         let (na, no) = (f.name("a"), f.name("o"));
         let mut builder = f.module.build_body(false, int);
         let a = builder.param(na, int, Span::ZERO);
@@ -910,7 +910,7 @@ mod tests {
         let mut f = Fixture::new();
         let int = f.int;
         let bool_ty = f.module.types_mut().intern(TyKind::Bool);
-        let result = f.module.types_mut().intern(TyKind::Result(int, bool_ty, ()));
+        let result = f.module.types_mut().intern(TyKind::Result(int, bool_ty));
         let (na, nb) = (f.name("a"), f.name("b"));
         let mut builder = f.module.build_body(false, int);
         let a = builder.param(na, int, Span::ZERO);

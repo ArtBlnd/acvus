@@ -552,7 +552,7 @@ impl Scev<'_> {
                 self.outside_every_loop(*slice).then(|| Evolution::Invariant(Polynomial::atom(Symbol::Len(*slice))))
             }
             ForSource::Array(array) => {
-                let TyKind::Array(_, len, _) = self.types.kind(self.body.ty_of(*array)) else {
+                let TyKind::Array(_, len) = self.types.kind(self.body.ty_of(*array)) else {
                     panic!("a For over an array reads an array, and {array:?} is none")
                 };
                 let len = i128::try_from(known_len(len)).expect("an array's length fits an i128");

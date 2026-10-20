@@ -21,25 +21,23 @@ pub enum TyKind<V: Phase> {
     Order,
     /// A started call, taken exactly once (effects §6). No program writes it.
     Handle(TyId<V>),
-    Array(TyId<V>, LenTerm<V>, V::Label),
+    Array(TyId<V>, LenTerm<V>),
     /// The run of elements a container lends; only under a `Ref`.
     Slice(TyId<V>),
     /// The run of bytes a `String` lends; only under a shared `Ref`.
     Str,
-    Tuple(Box<[TyId<V>]>, V::Label),
+    /// At least one part; `()` is `Unit`.
+    Tuple(Box<[TyId<V>]>),
     /// A primitive, closed like an extern enum (types §2).
-    Option(TyId<V>, V::Label),
+    Option(TyId<V>),
     /// A primitive, closed like an extern enum (types §2).
-    Result(TyId<V>, TyId<V>, V::Label),
-    /// An object's fields, sorted by name; its label says who wrote it
-    /// (`Label`). An object a declaration writes is this shape, written
-    /// elsewhere, so closed as written (rfc_extern types §1, types §1).
-    Object { fields: Box<[(Astr, TyId<V>)]>, label: V::Label },
+    Result(TyId<V>, TyId<V>),
+    /// An object's fields, sorted by name.
+    Object { fields: Box<[(Astr, TyId<V>)]> },
     /// An enum the program names; its variants sorted by tag (types §2).
     Enum {
         name: QualifiedRef,
         variants: Box<[(Astr, Option<TyId<V>>)]>,
-        label: V::Label,
     },
     Fn {
         params: Box<[TyId<V>]>,
@@ -69,6 +67,12 @@ pub enum TyKind<V: Phase> {
         /// it. Only a whole concrete extern-defined type is ever marked.
         marked: MarkTerm<V>,
     },
+    /// A module's struct: known by its name, each argument the type of one
+    /// of its fields, in the order the struct declares them. Its fields are
+    /// named only inside its impl blocks (type system: Transparency 3,
+    /// Module), so it is no transparent structured type; a value of it
+    /// holds every field, as a tuple holds its parts.
+    Struct { id: QualifiedRef, args: Box<[TyId<V>]> },
     Ref(Mutability, TyId<V>),
     /// A closure with code at each of a set of function types over one
     /// environment: what a generalized binding holds once lowered, each a
@@ -164,21 +168,20 @@ impl<V: Phase> TyKind<V> {
     pub fn with_children(&self, map: &mut impl FnMut(TyId<V>) -> TyId<V>) -> TyKind<V> {
         match self {
             TyKind::Handle(inner) => TyKind::Handle(map(*inner)),
-            TyKind::Array(element, len, label) => TyKind::Array(map(*element), *len, *label),
+            TyKind::Array(element, len) => TyKind::Array(map(*element), *len),
             TyKind::Slice(element) => TyKind::Slice(map(*element)),
-            TyKind::Option(payload, label) => TyKind::Option(map(*payload), *label),
-            TyKind::Result(ok, err, label) => {
+            TyKind::Option(payload) => TyKind::Option(map(*payload)),
+            TyKind::Result(ok, err) => {
                 let ok = map(*ok);
-                TyKind::Result(ok, map(*err), *label)
+                TyKind::Result(ok, map(*err))
             }
-            TyKind::Tuple(items, label) => TyKind::Tuple(items.iter().map(|item| map(*item)).collect(), *label),
-            TyKind::Object { fields, label } => {
-                TyKind::Object { fields: fields.iter().map(|(name, field)| (*name, map(*field))).collect(), label: *label }
+            TyKind::Tuple(items) => TyKind::Tuple(items.iter().map(|item| map(*item)).collect()),
+            TyKind::Object { fields } => {
+                TyKind::Object { fields: fields.iter().map(|(name, field)| (*name, map(*field))).collect() }
             }
-            TyKind::Enum { name, variants, label } => TyKind::Enum {
+            TyKind::Enum { name, variants } => TyKind::Enum {
                 name: *name,
                 variants: variants.iter().map(|(tag, payload)| (*tag, payload.map(|payload| map(payload)))).collect(),
-                label: *label,
             },
             TyKind::Fn { params, ret, effect, flows, calls, holds, values } => TyKind::Fn {
                 params: params.iter().map(|param| map(*param)).collect(),
@@ -196,6 +199,7 @@ impl<V: Phase> TyKind<V> {
                 identity: *identity,
                 marked: *marked,
             },
+            TyKind::Struct { id, args } => TyKind::Struct { id: *id, args: args.iter().map(|arg| map(*arg)).collect() },
             TyKind::Ref(mutability, target) => TyKind::Ref(*mutability, map(*target)),
             TyKind::Closures(signatures) => TyKind::Closures(signatures.iter().map(|signature| map(*signature)).collect()),
             leaf @ (TyKind::Int(_)
@@ -224,14 +228,14 @@ impl<V: Phase> TyKind<V> {
             | TyKind::Order
             | TyKind::Str
             | TyKind::Var(_) => {}
-            TyKind::Handle(inner) | TyKind::Array(inner, _, _) | TyKind::Slice(inner) | TyKind::Option(inner, _) => {
+            TyKind::Handle(inner) | TyKind::Array(inner, _) | TyKind::Slice(inner) | TyKind::Option(inner) => {
                 on_child(*inner)
             }
-            TyKind::Result(ok, err, _) => {
+            TyKind::Result(ok, err) => {
                 on_child(*ok);
                 on_child(*err);
             }
-            TyKind::Tuple(items, _) => items.iter().copied().for_each(on_child),
+            TyKind::Tuple(items) => items.iter().copied().for_each(on_child),
             TyKind::Object { fields, .. } => fields.iter().for_each(|(_, ty)| on_child(*ty)),
             TyKind::Enum { variants, .. } => variants
                 .iter()
@@ -242,6 +246,7 @@ impl<V: Phase> TyKind<V> {
                 on_child(*ret);
             }
             TyKind::UserDefined { type_args, .. } => type_args.iter().copied().for_each(on_child),
+            TyKind::Struct { args, .. } => args.iter().copied().for_each(on_child),
             TyKind::Ref(_, target) => on_child(*target),
             TyKind::Closures(signatures) => signatures.iter().copied().for_each(on_child),
         }

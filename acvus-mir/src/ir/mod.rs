@@ -343,7 +343,7 @@ impl ForSource {
                 TyKind::Ref(wanted, *element)
             }
             Self::Array(array) => match types.kind(ty_of(array)) {
-                TyKind::Array(element, _, _) => types.kind(*element).clone(),
+                TyKind::Array(element, _) => types.kind(*element).clone(),
                 _ => return Err(unfit(array)),
             },
         };
@@ -414,7 +414,7 @@ impl DebugInfo {
 /// option a box would have to move this arm with it.
 pub fn is_word(types: &Types<Concrete>, ty: Ty) -> bool {
     acvus_utils::grow(|| match types.kind(ty) {
-        crate::ty::TyKind::Option(payload, _) => is_word(types, *payload),
+        crate::ty::TyKind::Option(payload) => is_word(types, *payload),
         kind => is_scalar(kind) || matches!(kind, crate::ty::TyKind::Ref(..)),
     })
 }
@@ -429,11 +429,12 @@ pub fn is_scalar(kind: &crate::ty::TyKind<Concrete>) -> bool {
         TyKind::String
         | TyKind::Array(..)
         | TyKind::Object { .. }
-        | TyKind::Tuple(.., _)
-        | TyKind::Option(.., _)
+        | TyKind::Tuple(..)
+        | TyKind::Option(..)
         | TyKind::Result(..)
         | TyKind::Fn { .. }
         | TyKind::UserDefined { .. }
+        | TyKind::Struct { .. }
         | TyKind::Enum { .. }
         | TyKind::Slice(_)
         | TyKind::Str

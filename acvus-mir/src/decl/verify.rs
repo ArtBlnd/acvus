@@ -862,7 +862,7 @@ fn holds_variable(types: &Types<Poly>, ty: TyId<Poly>) -> bool {
         let kind = types.kind(at);
         let variable = match kind {
             TyKind::Var(_) => true,
-            TyKind::Array(_, len, _) => matches!(len, LenTerm::Var(_)),
+            TyKind::Array(_, len) => matches!(len, LenTerm::Var(_)),
             TyKind::Fn { effect, .. } => matches!(effect, EffectTerm::Var(_)),
             TyKind::UserDefined { effect, .. } => matches!(effect, Some(EffectTerm::Var(_))),
             _ => false,
@@ -1008,13 +1008,14 @@ fn base(types: &Types<Poly>, ty: TyId<Poly>) -> Option<Base> {
         TyKind::Str => Base::Str,
         TyKind::Array(..) => Base::Array,
         TyKind::Slice(_) => Base::Slice,
-        TyKind::Tuple(items, _) => Base::Tuple(items.len()),
-        TyKind::Option(.., _) => Base::Option,
+        TyKind::Tuple(items) => Base::Tuple(items.len()),
+        TyKind::Option(..) => Base::Option,
         TyKind::Result(..) => Base::Result,
         TyKind::Object { .. } => Base::Object,
         TyKind::Enum { name, .. } => Base::Enum(*name),
         TyKind::Fn { .. } => Base::Fn,
         TyKind::UserDefined { id, .. } => Base::Named(*id),
+        TyKind::Struct { .. } => panic!("a declared type holds no struct: a struct is its module's own"),
         TyKind::Ref(..) => panic!(
             "a reference's target is never a reference (types §4): a rule with such an end is refused as \
              ReferenceToReference and left out of the tree"
@@ -1431,7 +1432,9 @@ fn push_written(types: &Types<Poly>, lifetimes: &dyn LifetimesOf, ty: TyId<Poly>
         | TyKind::Unit
         | TyKind::Never
         | TyKind::Str => {}
-        TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) => panic!("a declared type holds no Handle, Order or Closures"),
+        TyKind::Order | TyKind::Handle(_) | TyKind::Closures(_) | TyKind::Struct { .. } => {
+            panic!("a declared type holds no Handle, Order, Closures or struct: a struct is its module's own")
+        }
         TyKind::Fn { holds, .. } => out.push(under_mut || *holds == Holds::Mut),
         TyKind::Var(_) => out.push(under_mut),
         TyKind::Ref(mutability, target) => {
@@ -1444,14 +1447,14 @@ fn push_written(types: &Types<Poly>, lifetimes: &dyn LifetimesOf, ty: TyId<Poly>
                 push_written(types, lifetimes, *arg, under_mut, out);
             }
         }
-        TyKind::Array(element, _, _) | TyKind::Slice(element) | TyKind::Option(element, _) => {
+        TyKind::Array(element, _) | TyKind::Slice(element) | TyKind::Option(element) => {
             push_written(types, lifetimes, *element, under_mut, out)
         }
-        TyKind::Result(ok, err, _) => {
+        TyKind::Result(ok, err) => {
             push_written(types, lifetimes, *ok, under_mut, out);
             push_written(types, lifetimes, *err, under_mut, out);
         }
-        TyKind::Tuple(items, _) => {
+        TyKind::Tuple(items) => {
             for item in items {
                 push_written(types, lifetimes, *item, under_mut, out);
             }
@@ -1758,7 +1761,7 @@ mod tests {
         let (by_input, by_result) = (fixture.name("m", "f"), fixture.name("m", "g"));
         let input = fixture.interner.intern("i");
         let var = fixture.ty(TyKind::Var(0));
-        let option = fixture.ty(TyKind::Option(var, ()));
+        let option = fixture.ty(TyKind::Option(var));
         let int = fixture.ty(TyKind::Int(IntTy::I64));
         fixture.raw.contexts.push((context, ContextDecl { ty: option, volatile: false }));
         fixture.raw.entries.push(EntryDecl { function: by_input, inputs: vec![(input, var)], result: Some(int) });
@@ -1785,7 +1788,7 @@ mod tests {
         let mut fixture = Fixture::new();
         let f = fixture.name("m", "f");
         let int = fixture.ty(TyKind::Int(IntTy::I64));
-        let array = fixture.ty(TyKind::Array(int, LenTerm::Known(3), ()));
+        let array = fixture.ty(TyKind::Array(int, LenTerm::Known(3)));
         let unit = fixture.ty(TyKind::Unit);
         let ty = fixture.function(&[array], unit);
         fixture.declare(f, fixture.plain(ty, 0));
@@ -1802,7 +1805,7 @@ mod tests {
         let unit = fixture.ty(TyKind::Unit);
         let own_ty = fixture.function(&[var], unit);
         let int = fixture.ty(TyKind::Int(IntTy::I64));
-        let array = fixture.ty(TyKind::Array(int, LenTerm::Var(0), ()));
+        let array = fixture.ty(TyKind::Array(int, LenTerm::Var(0)));
         let impl_ty = fixture.function(&[array], unit);
         let at_f = fixture.r#impl(f, impl_ty, Box::new([]));
         fixture.declare_impls(f, own_ty, 1, vec![at_f]);
@@ -1870,8 +1873,8 @@ mod tests {
         let lent = fixture.reference(Mutability::Shared, marked_a);
         let inner = fixture.function(&[marked_a], marked_a);
         let int = fixture.ty(TyKind::Int(IntTy::I64));
-        let tuple = fixture.ty(TyKind::Tuple(Box::new([marked_a, int]), ()));
-        let option = fixture.ty(TyKind::Option(marked_a, ()));
+        let tuple = fixture.ty(TyKind::Tuple(Box::new([marked_a, int])));
+        let option = fixture.ty(TyKind::Option(marked_a));
         let ty = fixture.function(&[marked_a, lent, inner, option], tuple);
         let f = fixture.name("m", "f");
         fixture.declare(f, fixture.plain(ty, 0));
@@ -1933,7 +1936,7 @@ mod tests {
         let string = fixture.ty(TyKind::String);
         let string_ref = fixture.reference(Mutability::Shared, string);
         let str_ref = fixture.shared_str();
-        let option = fixture.ty(TyKind::Option(i64_, ()));
+        let option = fixture.ty(TyKind::Option(i64_));
         let (widen, as_str, unwrap_a) = (fixture.name("m", "widen"), fixture.name("m", "as_str"), fixture.name("m", "unwrap_a"));
         fixture.cast(i32_, i64_, widen);
         fixture.cast(string_ref, str_ref, as_str);
@@ -2137,9 +2140,9 @@ mod tests {
         let unit = fixture.ty(TyKind::Unit);
         let own_ty = fixture.function(&[var], unit);
         let int = fixture.ty(TyKind::Int(IntTy::I64));
-        let option = fixture.ty(TyKind::Option(int, ()));
+        let option = fixture.ty(TyKind::Option(int));
         let impl_ty = fixture.function(&[option], unit);
-        let pattern = fixture.ty(TyKind::Tuple(Box::new([int, int, int]), ()));
+        let pattern = fixture.ty(TyKind::Tuple(Box::new([int, int, int])));
         let at_option = fixture.r#impl(f, impl_ty, requiring(shared, pattern));
         fixture.declare_impls(f, own_ty, 1, vec![at_option]);
         let declaration = fixture.impl_id(f, 0);
@@ -2163,7 +2166,7 @@ mod tests {
         let var = fixture.ty(TyKind::Var(0));
         let unit = fixture.ty(TyKind::Unit);
         let ty = fixture.function(&[var], unit);
-        let pattern = fixture.ty(TyKind::Tuple(Box::new([var, var]), ()));
+        let pattern = fixture.ty(TyKind::Tuple(Box::new([var, var])));
         fixture.declare(
             f,
             Scheme {
@@ -2205,10 +2208,10 @@ mod tests {
         let unit = fixture.ty(TyKind::Unit);
         let own_ty = fixture.function(&[var], unit);
         let int = fixture.ty(TyKind::Int(IntTy::I64));
-        let inner = fixture.ty(TyKind::Option(int, ()));
-        let outer = fixture.ty(TyKind::Option(inner, ()));
+        let inner = fixture.ty(TyKind::Option(int));
+        let outer = fixture.ty(TyKind::Option(inner));
         let impl_ty = fixture.function(&[outer], unit);
-        let pattern = fixture.ty(TyKind::Tuple(Box::new([int, int, int]), ()));
+        let pattern = fixture.ty(TyKind::Tuple(Box::new([int, int, int])));
         let at_f = fixture.r#impl(f, impl_ty, requiring(shared, pattern));
         fixture.declare_impls(f, own_ty, 1, vec![at_f]);
         assert!(fixture.verify().is_ok());
@@ -2353,7 +2356,7 @@ mod tests {
         );
         let mut types = Types::new();
         let s = concrete_shared_str(&mut types);
-        let pair = types.intern(TyKind::Tuple(Box::new([s, s]), ()));
+        let pair = types.intern(TyKind::Tuple(Box::new([s, s])));
         let pairs = types.intern(TyKind::Slice(pair));
         let v = types.intern(TyKind::Ref(Mutability::Mut, pairs));
         let unit = types.intern(TyKind::Unit);
@@ -2856,7 +2859,7 @@ mod tests {
         let int = fixture.ty(TyKind::Int(IntTy::I64));
         let int_ref = fixture.reference(Mutability::Shared, int);
         let int_mut = fixture.reference(Mutability::Mut, int);
-        let option = fixture.ty(TyKind::Option(int, ()));
+        let option = fixture.ty(TyKind::Option(int));
         let fits = fixture.function(&[int_ref], int_ref);
         let wrong_mutability = fixture.function(&[int_ref], int_mut);
         let wrong_constructor = fixture.function(&[option], int_ref);
@@ -2908,7 +2911,7 @@ mod tests {
         let (int, unit) = (fixture.ty(TyKind::Int(IntTy::I64)), fixture.ty(TyKind::Unit));
         let inner = fixture.reference(Mutability::Shared, int);
         let outer = fixture.reference(Mutability::Mut, inner);
-        let option = fixture.ty(TyKind::Option(outer, ()));
+        let option = fixture.ty(TyKind::Option(outer));
         let ty = fixture.function(&[option], unit);
         fixture.declare(f, fixture.plain(ty, 0));
         assert_eq!(
@@ -3000,7 +3003,7 @@ mod tests {
         let (f, shared, ghost) = (fixture.name("m", "f"), fixture.name("m", "hash"), fixture.name("m", "Ghost"));
         let ghost_ty = undeclared(&mut fixture, ghost);
         let var = fixture.ty(TyKind::Var(0));
-        let pair = fixture.ty(TyKind::Tuple(Box::new([var, var]), ()));
+        let pair = fixture.ty(TyKind::Tuple(Box::new([var, var])));
         let unit = fixture.ty(TyKind::Unit);
         let ty = fixture.function(&[pair], unit);
         fixture.declare(
@@ -3084,7 +3087,7 @@ mod tests {
         let mut fixture = Fixture::new();
         let context = fixture.name("m", "token");
         let order = fixture.ty(TyKind::Order);
-        let option = fixture.ty(TyKind::Option(order, ()));
+        let option = fixture.ty(TyKind::Option(order));
         fixture.raw.contexts.push((context, ContextDecl { ty: option, volatile: false }));
         assert_eq!(
             refusals(fixture),
@@ -3119,7 +3122,7 @@ mod tests {
         let (never, int) = (fixture.ty(TyKind::Never), fixture.ty(TyKind::Int(IntTy::I64)));
         let takes_never = fixture.function(&[never], int);
         fixture.declare(by_param, fixture.plain(takes_never, 0));
-        let option = fixture.ty(TyKind::Option(never, ()));
+        let option = fixture.ty(TyKind::Option(never));
         let gives_part = fixture.function(&[], option);
         fixture.declare(by_part, fixture.plain(gives_part, 0));
         let aborts = fixture.function(&[], never);
@@ -3385,7 +3388,7 @@ mod tests {
         fixture.user_type(t, 0);
         fixture.user_type(t, 0);
         let int = fixture.ty(TyKind::Int(IntTy::I64));
-        let array = fixture.ty(TyKind::Array(int, LenTerm::Known(1), ()));
+        let array = fixture.ty(TyKind::Array(int, LenTerm::Known(1)));
         let ty = fixture.function(&[], array);
         fixture.declare(f, fixture.plain(ty, 0));
         let refused = refusals(fixture);

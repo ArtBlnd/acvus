@@ -123,33 +123,26 @@ impl Choice<'_> {
             ) => types.kind(generic) == other,
             (TyKind::Handle(a), TyKind::Handle(b))
             | (TyKind::Slice(a), TyKind::Slice(b))
-            | (TyKind::Option(a, _), TyKind::Option(b, _)) => self.ty(*a, *b),
-            (TyKind::Array(a, a_len, _), TyKind::Array(b, b_len, _)) => self.len(a_len, b_len) && self.ty(*a, *b),
-            (TyKind::Tuple(a, _), TyKind::Tuple(b, _)) => all_pairs(a, b, |a, b| self.ty(*a, *b)),
-            (TyKind::Result(a_ok, a_err, _), TyKind::Result(b_ok, b_err, _)) => {
+            | (TyKind::Option(a), TyKind::Option(b)) => self.ty(*a, *b),
+            (TyKind::Array(a, a_len), TyKind::Array(b, b_len)) => self.len(a_len, b_len) && self.ty(*a, *b),
+            (TyKind::Tuple(a), TyKind::Tuple(b)) => all_pairs(a, b, |a, b| self.ty(*a, *b)),
+            (TyKind::Result(a_ok, a_err), TyKind::Result(b_ok, b_err)) => {
                 self.ty(*a_ok, *b_ok) && self.ty(*a_err, *b_err)
             }
-            (TyKind::Object { fields: a, label: a_label }, TyKind::Object { fields: b, label: b_label }) => {
-                let same_object = a_label == b_label;
-                same_object
-                    && all_pairs(a, b, |(a_name, a), (b_name, b)| {
-                        a_name == b_name && self.ty(*a, *b)
-                    })
+            (TyKind::Object { fields: a }, TyKind::Object { fields: b }) => {
+                all_pairs(a, b, |(a_name, a), (b_name, b)| a_name == b_name && self.ty(*a, *b))
             }
             (
                 TyKind::Enum {
                     name: a_name,
                     variants: a_variants,
-                    label: a_label,
                 },
                 TyKind::Enum {
                     name: b_name,
                     variants: b_variants,
-                    label: b_label,
                 },
             ) => {
                 a_name == b_name
-                    && a_label == b_label
                     && all_pairs(a_variants, b_variants, |(a_tag, a), (b_tag, b)| {
                         a_tag == b_tag
                             && match (a, b) {
@@ -208,6 +201,9 @@ impl Choice<'_> {
                     && all_pairs(a_effect.as_slice(), b_effect.as_slice(), |a, b| self.effect(a, b))
                     && all_pairs(a_identity.as_slice(), b_identity.as_slice(), |a, b| self.identity(a, b))
             }
+            (TyKind::Struct { id: a_id, args: a_args }, TyKind::Struct { id: b_id, args: b_args }) => {
+                a_id == b_id && all_pairs(a_args, b_args, |a, b| self.ty(*a, *b))
+            }
             (TyKind::Ref(a_mutability, a), TyKind::Ref(b_mutability, b)) => {
                 a_mutability == b_mutability && self.ty(*a, *b)
             }
@@ -215,13 +211,14 @@ impl Choice<'_> {
                 TyKind::Handle(_)
                 | TyKind::Array(..)
                 | TyKind::Slice(_)
-                | TyKind::Tuple(.., _)
-                | TyKind::Option(.., _)
+                | TyKind::Tuple(..)
+                | TyKind::Option(..)
                 | TyKind::Result(..)
                 | TyKind::Object { .. }
                 | TyKind::Enum { .. }
                 | TyKind::Fn { .. }
                 | TyKind::UserDefined { .. }
+                | TyKind::Struct { .. }
                 | TyKind::Ref(..),
                 _,
             ) => false,

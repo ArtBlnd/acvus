@@ -51,3 +51,7 @@ What this rules out, and what to do instead:
 - **Recording who decided, and when.**
   Don't: "(owner, 2026-09-27) The checker is always right."
   Do: "The checker is right." The history is in version control.
+
+- **Keeping a log of what was tried, rejected or replaced.**
+  Don't: "*Rejected.* An alias of Rust's own closure type, `dyn Fn(&T) -> bool + 'f`, its call read from the bound it is written with."
+  Do: "The mode is declared, never read from a type."

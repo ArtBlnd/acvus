@@ -237,7 +237,7 @@ impl<'a> Stated<'a> {
         let (_, lent) = self.lent(types, self.params[place.param]).expect("a well-formed place is lent");
         match (place.element, types.kind(lent)) {
             (None, _) => Some(lent),
-            (Some(Element::Index(_)), TyKind::Slice(element) | TyKind::Array(element, _, _)) => Some(*element),
+            (Some(Element::Index(_)), TyKind::Slice(element) | TyKind::Array(element, _)) => Some(*element),
             (Some(Element::Index(_) | Element::Key(_)), _) => None,
         }
     }
