@@ -13,9 +13,13 @@ use crate::ty::{Mutability, Name, Term};
 pub struct Program {
     pub decls: Decls,
     /// The binding groups other than the run's entry, which holds the text
-    /// outside them (l.206).
-    pub groups: Vec<Name>,
+    /// outside them (l.206), each with the group it lies inside, a lambda's
+    /// being its enclosing body's (l.23).
+    pub groups: Vec<(Name, Option<Name>)>,
     pub functions: Vec<Function>,
+    /// The classes the text makes universal besides its parameters' types: a
+    /// receiver's `T̄` (l.325).
+    pub universals: Vec<Name>,
     pub classes: Vec<TextClass>,
     pub items: Vec<(Name, Item)>,
     pub readings: Readings,
@@ -44,14 +48,50 @@ impl Program {
             .find(|function| function.name == *name)
     }
 
+    /// The groups enclosing `group`, innermost first, the entry last.
+    pub fn enclosing(&self, group: &Name) -> Vec<Name> {
+        let mut enclosing = Vec::new();
+        let mut at = group.clone();
+        while at.as_str() != ENTRY {
+            at = self
+                .groups
+                .iter()
+                .find(|(name, _)| *name == at)
+                .and_then(|(_, parent)| parent.clone())
+                .unwrap_or_else(|| Name::new(ENTRY));
+            enclosing.push(at.clone());
+        }
+        enclosing
+    }
+
+    pub fn class(&self, name: &Name) -> &TextClass {
+        self.classes
+            .iter()
+            .find(|class| class.name == *name)
+            .unwrap_or_else(|| panic!("the program names the class {name}"))
+    }
+
+    /// Whether the class is an unknown of its own group, as its text gives it
+    /// (l.218): not written, and no function's parameter type.
+    pub fn is_text_unknown(&self, name: &Name) -> bool {
+        let class = self.class(name);
+        let universal = self.universals.contains(name)
+            || self
+                .functions
+                .iter()
+                .any(|function| function.params.contains(name));
+        matches!(class.origin, Origin::Var | Origin::Lit(_)) && !universal
+    }
+
     /// The groups other than the entry, each before the groups whose uses
-    /// make instances of it (l.220).
+    /// make instances of it, and before the group it lies inside (l.220).
     pub fn group_order(&self) -> Vec<Name> {
         let mut before: BTreeMap<Name, BTreeSet<Name>> = BTreeMap::new();
         for (group, item) in &self.items {
             if let Item::Use { callee, .. } = item
                 && let Some(function) = self.function(callee)
                 && function.group != *group
+                && !self.enclosing(group).contains(&function.group)
             {
                 before
                     .entry(group.clone())
@@ -59,11 +99,16 @@ impl Program {
                     .insert(function.group.clone());
             }
         }
+        for (group, parent) in &self.groups {
+            let parent = parent.clone().unwrap_or_else(|| Name::new(ENTRY));
+            before.entry(parent).or_default().insert(group.clone());
+        }
         let mut order: Vec<Name> = Vec::new();
         while order.len() < self.groups.len() {
             let next = self
                 .groups
                 .iter()
+                .map(|(group, _)| group)
                 .find(|group| {
                     !order.contains(group)
                         && before
@@ -89,7 +134,7 @@ pub struct Readings {
 }
 
 /// When the relations of a node that a broken dependency pointed to are
-/// recorded (l.269; `holes.md`, H6).
+/// recorded (l.269; `holes.md`, O2).
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum Deferral {
     /// Once the node that broke the dependency is decided.
@@ -113,7 +158,7 @@ pub enum Visibility {
 }
 
 /// What decides whether a binding's path passes a reference (l.317;
-/// `holes.md`, H5).
+/// `holes.md`, O1).
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub enum BindingPath {
     /// The binding depends on what l.248 states alone, and a projection on its
@@ -145,6 +190,9 @@ pub enum Origin {
     /// A type the host gives (l.37, l.282), its parts named by other text
     /// classes.
     Host(Term<Name>),
+    /// The value of the lambda whose function is named: a function value
+    /// whose Values names that lambda alone (l.188, l.193).
+    Lambda(Name),
 }
 
 #[derive(Clone, Debug)]
@@ -181,6 +229,13 @@ pub enum Item {
         operand: Name,
         result: Name,
     },
+    /// A use that calls the function value of the type `callee` (l.203).
+    CallValue {
+        name: Name,
+        callee: Name,
+        args: Vec<Name>,
+        result: Name,
+    },
     /// A binding at a pattern's position of the type `position`, reached from
     /// the scrutinee by the projections `path`, of the type `binding`
     /// (l.311–317).
@@ -190,6 +245,30 @@ pub enum Item {
         position: Name,
         binding: Name,
     },
+}
+
+impl Item {
+    /// The classes the item names.
+    pub fn classes(&self) -> Vec<&Name> {
+        match self {
+            Item::Pass { value, into, .. } => vec![value, into],
+            Item::Equation(a, b) => vec![a, b],
+            Item::Use { args, result, .. } => args.iter().chain([result]).collect(),
+            Item::CallValue {
+                callee,
+                args,
+                result,
+                ..
+            } => [callee].into_iter().chain(args).chain([result]).collect(),
+            Item::Lend { place, result, .. } => vec![place, result],
+            Item::Project {
+                operand, result, ..
+            } => vec![operand, result],
+            Item::Bind {
+                position, binding, ..
+            } => vec![position, binding],
+        }
+    }
 }
 
 /// A projection (l.153–159).
@@ -210,20 +289,22 @@ pub enum Projection {
 /// How the place a value passes into is reached (l.226).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Place {
-    /// By neither a binding's name nor a reference: a block's value, an
-    /// argument.
+    /// Neither of the others: a block's value, an argument, a binding of the
+    /// place's own group.
     Slot,
-    /// A binding reached by name, or its fields and parts.
+    /// A binding of an enclosing group reached by name, or its fields and
+    /// parts.
     ByName,
-    /// Through a reference.
+    /// Through a reference, from a binding of an enclosing group.
     ThroughRef,
 }
 
 /// A program written item by item, as the examples' encodings write it.
 pub struct ProgramBuilder {
     decls: Decls,
-    groups: Vec<Name>,
+    groups: Vec<(Name, Option<Name>)>,
     functions: Vec<Function>,
+    universals: Vec<Name>,
     classes: Vec<TextClass>,
     items: Vec<(Name, Item)>,
     readings: Readings,
@@ -237,6 +318,7 @@ impl ProgramBuilder {
             decls,
             groups: Vec::new(),
             functions: Vec::new(),
+            universals: Vec::new(),
             classes: Vec::new(),
             items: Vec::new(),
             readings: Readings::default(),
@@ -247,11 +329,32 @@ impl ProgramBuilder {
     /// Writes what follows in the binding group `name`, declared where first
     /// named.
     pub fn group(&mut self, name: &str) {
+        self.group_in(name, None);
+    }
+
+    /// As `group`, the group lying inside `parent`, as a lambda lies inside
+    /// its enclosing body (l.23).
+    pub fn group_in(&mut self, name: &str, parent: Option<&str>) {
         let name = Name::new(name);
-        if name.as_str() != ENTRY && !self.groups.contains(&name) {
-            self.groups.push(name.clone());
+        let declared = self.groups.iter().any(|(group, _)| *group == name);
+        if name.as_str() != ENTRY && !declared {
+            self.groups.push((name.clone(), parent.map(Name::new)));
         }
         self.group = name;
+    }
+
+    /// Makes the class universal, as a receiver's `T̄` is (l.325).
+    pub fn universal(&mut self, class: &Name) {
+        self.universals.push(class.clone());
+    }
+
+    pub fn call_value(&mut self, name: &str, callee: &Name, args: &[&Name], result: &Name) {
+        self.item(Item::CallValue {
+            name: Name::new(name),
+            callee: callee.clone(),
+            args: args.iter().map(|&arg| arg.clone()).collect(),
+            result: result.clone(),
+        });
     }
 
     /// Declares a function of the current group, its parameters' types and
@@ -356,6 +459,7 @@ impl ProgramBuilder {
             decls: self.decls,
             groups: self.groups,
             functions: self.functions,
+            universals: self.universals,
             classes: self.classes,
             items: self.items,
             readings: self.readings,

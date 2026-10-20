@@ -6,7 +6,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::class::ClassId;
-use crate::node::NodeKind;
 use crate::relation::Relation;
 use crate::solve::State;
 use crate::ty::Name;
@@ -35,7 +34,7 @@ enum Edge {
     /// A node on an undecided node that records relations into the classes at
     /// the positions it reads (l.247–248).
     Reads,
-    /// A binding on an undecided projection on its path (`holes.md`, H5).
+    /// A binding on an undecided projection on its path (`holes.md`, O1).
     Path,
     /// A universal on the use that chooses it (l.246).
     Chosen,
@@ -163,7 +162,7 @@ impl State {
         };
         let mut reads = Vec::new();
         for (name, node) in &undecided {
-            let reads_reference = !matches!(node.kind, NodeKind::Use { .. });
+            let reads_reference = node.kind.reads_reference();
             for position in self.read_positions(&node.kind) {
                 for (recorder, at) in recording(position, &edges) {
                     let left_out = match &recorder {
@@ -275,7 +274,9 @@ impl State {
             let more: Vec<ClassId> = self
                 .classes
                 .roots()
-                .filter(|&root| self.is_lit(root) && !settled.contains(&root))
+                .filter(|&root| {
+                    self.is_lit(root) && !settled.contains(&root) && !self.is_foreign(root)
+                })
                 .filter(|&root| {
                     graph
                         .unbroken(&Vertex::Class(root))
@@ -294,7 +295,9 @@ impl State {
     fn unblocked(&self, graph: &Graph, settled: &BTreeSet<ClassId>) -> Vec<ClassId> {
         self.classes
             .roots()
-            .filter(|&root| !self.is_solved(root) && !self.has_no_value(root))
+            .filter(|&root| {
+                !self.is_solved(root) && !self.has_no_value(root) && !self.is_foreign(root)
+            })
             .filter(|&root| {
                 graph
                     .unbroken(&Vertex::Class(root))

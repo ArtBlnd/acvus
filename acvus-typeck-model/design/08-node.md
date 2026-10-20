@@ -62,7 +62,7 @@ reads its position, or lends it where its path passes a reference.
    meetings. The references a path passes are those its projections applied
    through by auto-deref after its last Deref, since `&π` matches a reference
    itself, as in Rust (patterns §1). How the binding learns its path's projections'
-   decisions is `holes.md`, H5, and the model takes it as a reading
+   decisions is `holes.md`, O1, and the model takes it as a reading
    (`BindingPath`).
 11. **What a use reads.** At each position where its candidates differ, the class
    there and the classes within the depth its candidates reach there (l.244 (b)),
@@ -88,8 +88,8 @@ reads its position, or lends it where its path passes a reference.
 16. **A reference of undecided mutability.** A class read as a reference only by a
    use's record (l.252) has a mutability the value read does not decide; a
    projection applies to its target all the same, and a lend or a binding whose
-   reference's mutability is then undecided gives no result (`holes.md`, H7).
+   reference's mutability is then undecided gives no result (`holes.md`, O3).
 17. **A broken dependency** (l.269). A node decided while undecided nodes broke
    their dependency on it records once they are decided; whether that holds of
-   the state or of their reads only is `holes.md`, H6, and the model takes it as a
+   the state or of their reads only is `holes.md`, O2, and the model takes it as a
    reading (`Deferral`).

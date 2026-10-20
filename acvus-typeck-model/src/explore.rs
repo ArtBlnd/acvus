@@ -119,3 +119,70 @@ fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<Stat
     }
     Some(fixpoints)
 }
+
+/// The distinct outcomes `orders` orders of solving reach, each taking at
+/// every state the step its own sequence picks: the first step always, the
+/// last always, then sequences a fixed generator gives. It checks I2 on a
+/// sample, for programs with too many states to explore.
+pub fn sample(program: &Program, orders: u64) -> Vec<Outcome> {
+    let mut outcomes: Vec<Outcome> = Vec::new();
+    for order in 0..orders {
+        let mut picks = Picks::new(order);
+        let mut solved: BTreeMap<Name, Rc<State>> = BTreeMap::new();
+        for group in program.group_order() {
+            let mut state = State::of_group(program, &group, &solved);
+            loop {
+                let steps = state.steps();
+                if steps.is_empty() {
+                    break;
+                }
+                state.step(&steps[picks.next(steps.len())]);
+            }
+            solved.insert(group, Rc::new(state));
+        }
+        let mut state = State::of_group(program, &Name::new(ENTRY), &solved);
+        loop {
+            let steps = state.steps();
+            if !steps.is_empty() {
+                state.step(&steps[picks.next(steps.len())]);
+                continue;
+            }
+            if !state.fall_back() {
+                break;
+            }
+        }
+        let outcome = state.outcome_with(&solved);
+        if !outcomes.contains(&outcome) {
+            outcomes.push(outcome);
+        }
+    }
+    outcomes
+}
+
+/// The steps one sampled order picks.
+struct Picks {
+    order: u64,
+    state: u64,
+}
+
+impl Picks {
+    fn new(order: u64) -> Picks {
+        Picks {
+            order,
+            state: order.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1,
+        }
+    }
+
+    fn next(&mut self, steps: usize) -> usize {
+        match self.order {
+            0 => 0,
+            1 => steps - 1,
+            _ => {
+                self.state ^= self.state << 13;
+                self.state ^= self.state >> 7;
+                self.state ^= self.state << 17;
+                (self.state % steps as u64) as usize
+            }
+        }
+    }
+}

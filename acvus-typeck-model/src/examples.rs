@@ -978,7 +978,7 @@ fn add_impls(builder: &mut DeclsBuilder, numbers: &[IntTy]) {
 /// }
 /// ```
 /// A literal operand is a temporary of the literal's type, which `&` lends.
-/// The two lends of `y` depend on each other (`holes.md`, H6), so the outcome
+/// The two lends of `y` depend on each other (`holes.md`, O2), so the outcome
 /// depends on the order where the relations of the first decided wait for the
 /// other (`Deferral::Recording`), and is the spec's where they are left out of
 /// its read only (`Deferral::Reading`).
@@ -1033,7 +1033,7 @@ fn example_12(deferral: Deferral) -> Program {
     p.build()
 }
 
-/// `holes.md`, H7.
+/// `holes.md`, O3.
 /// ```text
 /// let r = first(x);        // x: A; first(A) -> &u8, first(B) -> &mut u8
 /// let s = &mut r;
@@ -1043,7 +1043,7 @@ fn example_12(deferral: Deferral) -> Program {
 /// before `first`, the lend reads `r` as a reference whose mutability the value
 /// read does not decide, and `&mut` gives no result (l.307).
 #[test]
-fn hole_7_a_reference_recorded_at_once_has_no_mutability() {
+fn hole_o3_a_reference_recorded_at_once_has_no_mutability() {
     let mut d = declare(&[("A", 0), ("B", 0)]);
     for (param, mutability) in [("A", Mutability::Shared), ("B", Mutability::Exclusive)] {
         function(
@@ -1160,7 +1160,7 @@ fn example_10_recursion_by_name() {
         .filter(|check| check.coercion.is_err())
         .map(|check| check.relation.as_str())
         .collect();
-    assert_eq!(failed, ["g@2/B ⇝ g@2/A", "g@2/A ⇝ g@2/B"], "{outcome:#?}");
+    assert_eq!(failed, ["g@2/A ⇝ g@2/B", "g@2/B ⇝ g@2/A"], "{outcome:#?}");
 }
 
 /// Review 2's P4 (`holes.md`, T2).
@@ -1219,4 +1219,402 @@ fn review_2_p4_a_boundary_between_two_instances_universals() {
     let outcome = only_outcome(&p.build());
     assert!(outcome.accepted, "{outcome:#?}");
     assert_eq!(value(&outcome, "g(..)"), Some(closed_int(IntTy::U8)));
+}
+
+/// ```text
+/// let mut last = None;
+/// let remember = |x| last = Some(x);
+/// remember(1u8);
+/// ```
+#[test]
+fn example_6_a_capture_written_by_name() {
+    let mut p = ProgramBuilder::new(no_decls());
+    p.group_in("λ", Some(crate::program::ENTRY));
+    let x = p.var("X");
+    let s = p.var("S");
+    let some = p.written("Some(x)", Term::Option(s.clone()));
+    let unit = p.written("()", Term::Unit);
+    let returned = p.var("λ result");
+    p.function("λ", &[&x], &returned);
+    p.pass(&x, &s);
+    p.group(crate::program::ENTRY);
+    let last = p.var("L");
+    let k = p.var("?k");
+    let none = p.written("None", Term::Option(k));
+    let lambda = p.class("|x| ..", crate::program::Origin::Lambda(Name::new("λ")));
+    let remember = p.var("remember");
+    let u8_ = p.written("1u8", int(IntTy::U8));
+    let called = p.var("remember(1u8)");
+    p.pass(&none, &last);
+    p.pass(&lambda, &remember);
+    p.call_value("remember(1u8)", &remember, &[&u8_], &called);
+    p.group("λ");
+    p.pass_at(&some, &last, crate::program::Place::ByName);
+    p.pass(&unit, &returned);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "L"),
+        Some(closed(Term::Option(closed_int(IntTy::U8))))
+    );
+    assert_eq!(value(&outcome, "S"), None, "S stays in the lambda's C");
+}
+
+/// ```text
+/// let mut x = None;
+/// let r = &mut x;
+/// let f = || *r = Some(1u8);
+/// f();
+/// ```
+/// The write through the captured `r` is a boundary (l.464), whose payload,
+/// an unknown of the enclosing group, takes a lower bound (l.286).
+#[test]
+fn example_7_a_write_through_a_captured_reference() {
+    let mut p = ProgramBuilder::new(no_decls());
+    p.group_in("λ", Some(crate::program::ENTRY));
+    let deref = p.var("*r");
+    let s = p.var("S");
+    let some = p.written("Some(1u8)", Term::Option(s.clone()));
+    let u8_ = p.written("1u8", int(IntTy::U8));
+    let unit = p.written("()", Term::Unit);
+    let returned = p.var("λ result");
+    p.function("λ", &[], &returned);
+    p.pass(&u8_, &s);
+    p.pass(&unit, &returned);
+    p.group(crate::program::ENTRY);
+    let x = p.var("X");
+    let k = p.var("?k");
+    let none = p.written("None", Term::Option(k));
+    let lent = p.var("&mut x");
+    let r = p.var("R");
+    let lambda = p.class("|| ..", crate::program::Origin::Lambda(Name::new("λ")));
+    let f = p.var("f");
+    let called = p.var("f()");
+    p.pass(&none, &x);
+    p.lend("&mut x", Mutability::Exclusive, &x, &lent);
+    p.pass(&lent, &r);
+    p.pass(&lambda, &f);
+    p.call_value("f()", &f, &[], &called);
+    p.group("λ");
+    p.project("*r", Projection::Deref, &r, &deref);
+    p.pass_at(&some, &deref, crate::program::Place::ThroughRef);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "X"),
+        Some(closed(Term::Option(closed_int(IntTy::U8))))
+    );
+}
+
+/// `holes.md`, O4.
+/// ```text
+/// let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
+/// let put = |v| x = v;
+/// probe(x);                // probe(A), probe(B)
+/// put(make_b());
+/// ```
+/// `probe` reads `X`, and the call of `put` records into `X` only once it is
+/// decided and makes its instance, so nothing makes `probe` wait for it.
+#[test]
+fn hole_o4_a_capture_written_after_a_use_reads_it() {
+    let mut d = declare(&[("A", 0), ("B", 0)]);
+    function(&mut d, "make_a", &[], vec![], s_named("A"), Role::Fn);
+    function(&mut d, "make_b", &[], vec![], s_named("B"), Role::Fn);
+    function(
+        &mut d,
+        "up",
+        &[],
+        vec![s_named("A")],
+        s_named("B"),
+        Role::Cast,
+    );
+    function(
+        &mut d,
+        "down",
+        &[],
+        vec![s_named("B")],
+        s_named("A"),
+        Role::Conversion,
+    );
+    for param in ["A", "B"] {
+        function(
+            &mut d,
+            "probe",
+            &[],
+            vec![s_named(param)],
+            s_unit(),
+            Role::Fn,
+        );
+    }
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.group_in("λ", Some(crate::program::ENTRY));
+    let v = p.var("V");
+    let unit = p.written("()", Term::Unit);
+    let returned = p.var("λ result");
+    p.function("λ", &[&v], &returned);
+    p.pass(&unit, &returned);
+    p.group(crate::program::ENTRY);
+    let x = p.var("X");
+    let made_a = p.var("make_a()");
+    let lambda = p.class("|v| ..", crate::program::Origin::Lambda(Name::new("λ")));
+    let put = p.var("put");
+    let probed = p.var("probe(x)");
+    let made_b = p.var("make_b()");
+    let called = p.var("put(..)");
+    p.call("make_a", "make_a", &[], &made_a);
+    p.pass(&made_a, &x);
+    p.pass(&lambda, &put);
+    p.call("probe", "probe", &[&x], &probed);
+    p.call("make_b", "make_b", &[], &made_b);
+    p.call_value("put(..)", &put, &[&made_b], &called);
+    p.group("λ");
+    p.pass_at(&v, &x, crate::program::Place::ByName);
+    let outcomes = outcomes(&p.build());
+    let decisions: BTreeSet<Decision> = outcomes
+        .iter()
+        .map(|outcome| decision(outcome, "probe"))
+        .collect();
+    assert_eq!(
+        decisions,
+        BTreeSet::from([
+            Decision::Use(overload("probe", 0)),
+            Decision::Use(overload("probe", 1)),
+        ]),
+        "{outcomes:#?}"
+    );
+}
+
+/// `holes.md`, H5.
+/// ```text
+/// let x = make();          // make() -> A
+/// let f = || probe(x);     // probe(A), probe(B)
+/// f();
+/// ```
+/// The lambda's group is solved before the enclosing one (l.220), and no
+/// dependency makes its `probe` wait for what the enclosing group records into
+/// `X` (l.216, l.244–250), so `probe` reads `X` as nothing and is refused.
+#[test]
+fn hole_5_a_lambda_reads_a_capture() {
+    let mut d = declare(&[("A", 0), ("B", 0)]);
+    function(&mut d, "make", &[], vec![], s_named("A"), Role::Fn);
+    for param in ["A", "B"] {
+        function(
+            &mut d,
+            "probe",
+            &[],
+            vec![s_named(param)],
+            s_unit(),
+            Role::Fn,
+        );
+    }
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.group_in("λ", Some(crate::program::ENTRY));
+    let returned = p.var("λ result");
+    let probed = p.var("probe(x)");
+    p.function("λ", &[], &returned);
+    p.pass(&probed, &returned);
+    p.group(crate::program::ENTRY);
+    let x = p.var("X");
+    let made = p.var("make()");
+    let lambda = p.class("|| ..", crate::program::Origin::Lambda(Name::new("λ")));
+    let f = p.var("f");
+    let called = p.var("f()");
+    p.call("make", "make", &[], &made);
+    p.pass(&made, &x);
+    p.pass(&lambda, &f);
+    p.call_value("f()", &f, &[], &called);
+    p.group("λ");
+    p.call("probe", "probe", &[&x], &probed);
+    let outcome = only_outcome(&p.build());
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert!(
+        matches!(decision(&outcome, "probe"), Decision::Unreached(_)),
+        "{outcome:#?}"
+    );
+}
+
+/// Declarations of `core::eq(&T, &T) -> bool` and `core::sub(&T, &T) -> T` for
+/// each of `numbers`.
+fn comparison_impls(builder: &mut DeclsBuilder, numbers: &[IntTy]) {
+    for number in numbers {
+        let operand = s_ref(Mutability::Shared, s_int(*number));
+        let bool_ = SigTy::term(Term::Scalar(Scalar::Bool));
+        function(
+            builder,
+            "core::eq",
+            &[],
+            vec![operand.clone(), operand.clone()],
+            bool_,
+            Role::Fn,
+        );
+        function(
+            builder,
+            "core::sub",
+            &[],
+            vec![operand.clone(), operand],
+            s_int(*number),
+            Role::Fn,
+        );
+    }
+}
+
+/// ```text
+/// struct Pair { l, r }
+/// impl Pair {
+///     fn new(l, r) { Self { l, r } }
+///     fn swap(self) { Self { l: self.r, r: self.l } }
+///     fn nest(self, n) { if n == 0 { 0u8 } else { Self { l: self, r: 0u8 }.nest(n - 1) } }
+/// }
+/// ```
+/// ```text
+/// let p = Pair::new(1u8, "s");
+/// let q = p.swap();
+/// q.nest(3)
+/// ```
+/// Its states are too many to explore, so the orders are sampled. Refused, as
+/// the spec has it, but where `q` has no value (`holes.md`, H6).
+#[test]
+fn example_14_a_struct_and_recursion_that_grows() {
+    let pair = Name::new("Pair");
+    let mut types = DeclaredTypes::default();
+    types
+        .declare_struct(
+            pair.clone(),
+            crate::sig::StructDecl {
+                fields: vec![Name::new("l"), Name::new("r")],
+            },
+        )
+        .unwrap();
+    let mut d = DeclsBuilder::new(types);
+    comparison_impls(&mut d, &[IntTy::U8, IntTy::I32]);
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    let u8_term = || int(IntTy::U8);
+    let made = |p: &mut ProgramBuilder, name: &str| {
+        let l = p.var(&format!("{name}.l"));
+        let r = p.var(&format!("{name}.r"));
+        let made = p.written(name, Term::Struct(pair.clone(), vec![l.clone(), r.clone()]));
+        (made, l, r)
+    };
+    let receiver = |p: &mut ProgramBuilder, group: &str| {
+        let a = p.var(&format!("{group} A"));
+        let b = p.var(&format!("{group} B"));
+        p.universal(&a);
+        p.universal(&b);
+        p.written(
+            &format!("{group} self"),
+            Term::Struct(pair.clone(), vec![a, b]),
+        )
+    };
+
+    p.group("new");
+    let l = p.var("new L");
+    let r = p.var("new R");
+    let returned = p.var("new result");
+    p.function("new", &[&l, &r], &returned);
+    let (value_, part_l, part_r) = made(&mut p, "Self { l, r }");
+    p.pass(&l, &part_l);
+    p.pass(&r, &part_r);
+    p.pass(&value_, &returned);
+
+    p.group("swap");
+    let self_ = receiver(&mut p, "swap");
+    let returned = p.var("swap result");
+    p.function("swap", &[&self_], &returned);
+    let self_r = p.var("self.r");
+    let self_l = p.var("self.l");
+    p.project("self.r", field("r"), &self_, &self_r);
+    p.project("self.l", field("l"), &self_, &self_l);
+    let (value_, part_l, part_r) = made(&mut p, "Self { l: self.r, r: self.l }");
+    p.pass(&self_r, &part_l);
+    p.pass(&self_l, &part_r);
+    p.pass(&value_, &returned);
+
+    p.group("nest");
+    let self_ = receiver(&mut p, "nest");
+    let n = p.var("N");
+    let returned = p.var("nest result");
+    p.function("nest", &[&self_, &n], &returned);
+    let lent_n = p.var("&n");
+    let zero = p.lit("0", int_lit(0));
+    let lent_zero = p.var("&0");
+    let compared = p.var("n == 0");
+    p.lend("&n", Mutability::Shared, &n, &lent_n);
+    p.lend("&0", Mutability::Shared, &zero, &lent_zero);
+    p.call("n == 0", "core::eq", &[&lent_n, &lent_zero], &compared);
+    let tail = p.written("0u8", u8_term());
+    p.pass(&tail, &returned);
+    let (value_, part_l, part_r) = made(&mut p, "Self { l: self, r: 0u8 }");
+    let r_u8 = p.written("r: 0u8", u8_term());
+    p.pass(&self_, &part_l);
+    p.pass(&r_u8, &part_r);
+    let lent_n_2 = p.var("&n 2");
+    let one = p.lit("1", int_lit(1));
+    let lent_one = p.var("&1");
+    let less = p.var("n - 1");
+    p.lend("&n 2", Mutability::Shared, &n, &lent_n_2);
+    p.lend("&1", Mutability::Shared, &one, &lent_one);
+    p.call("n - 1", "core::sub", &[&lent_n_2, &lent_one], &less);
+    let recursed = p.var("….nest(n - 1)");
+    p.call("….nest(n - 1)", "nest", &[&value_, &less], &recursed);
+    p.pass(&recursed, &returned);
+
+    p.group(crate::program::ENTRY);
+    let u8_ = p.written("1u8", u8_term());
+    let str_ = p.written("str", Term::Str);
+    let s = p.written("\"s\"", Term::Ref(Mutability::Shared, str_));
+    let new = p.var("Pair::new(..)");
+    let p_ = p.var("p");
+    p.call("Pair::new", "new", &[&u8_, &s], &new);
+    p.pass(&new, &p_);
+    let swapped = p.var("p.swap()");
+    let q = p.var("q");
+    p.call("p.swap()", "swap", &[&p_], &swapped);
+    p.pass(&swapped, &q);
+    let three = p.lit("3", int_lit(3));
+    let nested = p.var("q.nest(3)");
+    p.call("q.nest(3)", "nest", &[&q, &three], &nested);
+
+    let outcomes = crate::explore::sample(&p.build(), 200);
+    assert_eq!(
+        outcomes.len(),
+        1,
+        "every sampled order reaches one outcome: {outcomes:#?}"
+    );
+    let outcome = outcomes.into_iter().next().unwrap();
+    assert!(!outcome.accepted, "{outcome:#?}");
+    let str_ref = closed(Term::Ref(Mutability::Shared, closed(Term::Str)));
+    let pair_of = |l: Ty, r: Ty| closed(Term::Struct(pair.clone(), vec![l, r]));
+    assert_eq!(
+        value(&outcome, "p"),
+        Some(pair_of(closed_int(IntTy::U8), str_ref))
+    );
+    // `holes.md`, H6: the copy of `nest`'s `A` is `q`'s first part, whose
+    // lower bounds are `&str` and `Pair⟨A', B'⟩`, so it reaches a part of its
+    // own (l.275) and `q` has no value.
+    assert_eq!(value(&outcome, "q"), None, "{outcome:#?}");
+    assert!(
+        has_refusal(&outcome, |refusal| matches!(
+            refusal,
+            crate::solve::Refusal::Infinite(_)
+        )),
+        "{outcome:#?}"
+    );
+    let narrowed: Vec<Decision> = ["n == 0", "n - 1"]
+        .iter()
+        .map(|node| {
+            let copied = outcome
+                .decisions
+                .keys()
+                .find(|name| name.as_str().ends_with(&format!("/{node}")))
+                .unwrap_or_else(|| panic!("{node} is copied: {outcome:#?}"));
+            decision(&outcome, copied.as_str())
+        })
+        .collect();
+    assert_eq!(
+        narrowed,
+        [
+            Decision::Use(overload("core::eq", 1)),
+            Decision::Use(overload("core::sub", 1)),
+        ]
+    );
 }

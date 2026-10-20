@@ -63,6 +63,28 @@ impl<'a> Instance<'a> {
         if let Some(&made) = self.made.get(&root) {
             return made;
         }
+        let shared = self
+            .from
+            .classes
+            .held(root)
+            .members
+            .iter()
+            .find(|member| self.from.foreign.contains(member))
+            .copied();
+        if let Some(shared) = shared {
+            let ClassName::Text(name) = self.from.arena.name(shared).clone() else {
+                unreachable!("a class of an enclosing group is the text's");
+            };
+            let made = match here.arena.get(&ClassName::Text(name.clone())) {
+                Some(made) => made,
+                None => {
+                    let unknown = self.from.enclosing_unknowns.contains(&shared);
+                    here.share(&name, unknown)
+                }
+            };
+            self.made.insert(root, made);
+            return made;
+        }
         let name = ClassName::Copy {
             at: Rc::clone(&self.at),
             of: Rc::new(self.from.class_name(root)),
@@ -158,6 +180,15 @@ impl<'a> Instance<'a> {
                     path: path.iter().map(|step| self.node(step)).collect(),
                     position: self.class(here, position),
                     binding: self.class(here, binding),
+                },
+                NodeKind::CallValue {
+                    callee,
+                    args,
+                    result,
+                } => NodeKind::CallValue {
+                    callee: self.class(here, callee),
+                    args: args.into_iter().map(|arg| self.class(here, arg)).collect(),
+                    result: self.class(here, result),
                 },
             };
             let copy = self.node(name);

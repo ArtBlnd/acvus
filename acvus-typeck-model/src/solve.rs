@@ -9,7 +9,7 @@ use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::decl::{Decls, Node};
 use crate::instance::Instance;
 use crate::node::{Decision, NodeKind, NodeState};
-use crate::program::{ENTRY, Function, Item, Origin, Program, Readings, TextClass};
+use crate::program::{ENTRY, Function, Item, Origin, Place, Program, Readings, TextClass};
 use crate::relation::{Named, Recorded, Recorder, Relation};
 use crate::sig::SigTy;
 use crate::ty::{Mutability, Name, Term, Ty, Variance};
@@ -95,6 +95,15 @@ pub struct State {
     /// The types of its functions' parameters, chosen by the uses that make
     /// instances of it (l.217, l.246).
     pub(crate) universals: BTreeSet<ClassId>,
+    /// The classes of enclosing groups its text names, shared, not solved
+    /// here (l.218, l.222), with those that are unknowns of their own group.
+    pub(crate) foreign: BTreeSet<ClassId>,
+    pub(crate) enclosing_unknowns: BTreeSet<ClassId>,
+    /// The groups enclosing it, innermost first.
+    pub(crate) enclosing: Vec<Name>,
+    pub(crate) functions: Rc<Vec<Function>>,
+    /// Each group solved before it, at its fixpoint (l.220).
+    pub(crate) solved: BTreeMap<Name, Rc<State>>,
 }
 
 /// A step that may be taken.
@@ -136,6 +145,11 @@ impl State {
             broken: BTreeMap::new(),
             group: group.clone(),
             universals: BTreeSet::new(),
+            foreign: BTreeSet::new(),
+            enclosing_unknowns: BTreeSet::new(),
+            enclosing: program.enclosing(group),
+            functions: Rc::new(program.functions.clone()),
+            solved: solved.clone(),
         };
         let classes: Vec<&TextClass> = program
             .classes
@@ -154,9 +168,29 @@ impl State {
             state.texts.push(id);
         }
         state.classes.grow(&state.arena);
+        let mut named: Vec<&Name> = items.iter().flat_map(|(_, item)| item.classes()).collect();
+        for (_, item) in &items {
+            if let Item::Use { callee, .. } = item
+                && let Some(function) = program.function(callee)
+                && state.enclosing.contains(&function.group)
+            {
+                named.extend(function.params.iter().chain([&function.result]));
+            }
+        }
+        for name in named {
+            if state.arena.get(&ClassName::Text(name.clone())).is_none() {
+                state.share(name, program.is_text_unknown(name));
+            }
+        }
         for function in program.functions.iter().filter(|f| f.group == *group) {
             for param in &function.params {
                 let id = state.text(param);
+                state.universals.insert(id);
+            }
+        }
+        for class in &classes {
+            if program.universals.contains(&class.name) {
+                let id = state.text(&class.name);
                 state.universals.insert(id);
             }
         }
@@ -176,6 +210,14 @@ impl State {
                     let relation = Relation::Kind(id, term, KindSource::Written);
                     state.record(relation, Recorder::Origin);
                 }
+                Origin::Lambda(lambda) => {
+                    let function = program.function(lambda).expect("the lambda is a function");
+                    let arity = function.params.len();
+                    let term = Term::FunctionValue { arity };
+                    let relation = Relation::Kind(id, term, KindSource::Written);
+                    state.record(relation, Recorder::Origin);
+                    state.record(Relation::Values(id, lambda.clone()), Recorder::Origin);
+                }
             }
         }
         for &(i, item) in &items {
@@ -192,9 +234,16 @@ impl State {
             .collect();
         for &(i, item) in &items {
             match item {
-                Item::Pass { value, into, .. } => {
+                Item::Pass { value, into, place } => {
                     let (value, into) = (state.text(value), state.text(into));
-                    let relation = if state.is_unknown(into) {
+                    let meeting = match place {
+                        Place::ThroughRef => false,
+                        Place::ByName => {
+                            state.is_unknown(into) || state.enclosing_unknowns.contains(&into)
+                        }
+                        Place::Slot => state.is_unknown(into),
+                    };
+                    let relation = if meeting {
                         Relation::LowerBound {
                             lower: value,
                             upper: into,
@@ -206,6 +255,19 @@ impl State {
                         }
                     };
                     state.record(relation, Recorder::Text(i));
+                }
+                Item::CallValue {
+                    name,
+                    callee,
+                    args,
+                    result,
+                } => {
+                    let kind = NodeKind::CallValue {
+                        callee: state.text(callee),
+                        args: args.iter().map(|arg| state.text(arg)).collect(),
+                        result: state.text(result),
+                    };
+                    state.add_node(name, kind);
                 }
                 Item::Use {
                     callee,
@@ -296,10 +358,30 @@ impl State {
             .unwrap_or_else(|| panic!("the program names the class {name}"))
     }
 
-    /// A class not universal and not decided when solving starts (l.218).
-    /// The model has no lambda so far, so no class is of an enclosing group.
+    /// A class of an enclosing group, shared here (l.222), and whether it is
+    /// an unknown of its own group.
+    pub(crate) fn share(&mut self, name: &Name, unknown: bool) -> ClassId {
+        let id = self.arena.intern(ClassName::Text(name.clone()));
+        self.classes.grow(&self.arena);
+        self.foreign.insert(id);
+        if unknown {
+            self.enclosing_unknowns.insert(id);
+        }
+        id
+    }
+
+    /// A class not universal, not decided when solving starts, and not of an
+    /// enclosing group (l.218).
     pub(crate) fn is_unknown(&self, id: ClassId) -> bool {
-        !self.decided.contains(&id) && !self.is_universal(id)
+        !self.decided.contains(&id) && !self.is_universal(id) && !self.is_foreign(id)
+    }
+
+    pub(crate) fn is_foreign(&self, id: ClassId) -> bool {
+        self.classes
+            .held(id)
+            .members
+            .iter()
+            .any(|member| self.foreign.contains(member))
     }
 
     pub(crate) fn is_universal(&self, id: ClassId) -> bool {
@@ -324,7 +406,7 @@ impl State {
         solved: &BTreeMap<Name, Rc<State>>,
     ) {
         let recorder = Recorder::Text(item);
-        if function.group == self.group {
+        if function.group == self.group || self.enclosing.contains(&function.group) {
             let params: Vec<ClassId> = function.params.iter().map(|p| self.text(p)).collect();
             let returned = self.text(&function.result);
             self.record_call(args, &params, returned, result, &recorder);
@@ -347,7 +429,7 @@ impl State {
         self.record_call(args, &params, returned, result, &recorder);
     }
 
-    fn record_call(
+    pub(crate) fn record_call(
         &mut self,
         args: &[ClassId],
         params: &[ClassId],
@@ -399,6 +481,10 @@ impl State {
             Relation::Lit(class, lit) => self.classes.give_lit(*class, lit.clone(), types),
             Relation::Reference(class, reference) => {
                 self.classes.give_reference(*class, *reference, types)
+            }
+            Relation::Values(class, lambda) => {
+                self.classes.give_value(*class, lambda.clone());
+                Ok(())
             }
             Relation::LowerBound { .. } | Relation::Boundary { .. } => Ok(()),
         };
@@ -569,7 +655,8 @@ impl State {
                     | Relation::Fact(..)
                     | Relation::Kind(..)
                     | Relation::Lit(..)
-                    | Relation::Reference(..) => {
+                    | Relation::Reference(..)
+                    | Relation::Values(..) => {
                         self.split.insert(i);
                     }
                 }
@@ -936,7 +1023,8 @@ impl State {
         Ty::new(term).ok()
     }
 
-    /// Checks each value the text makes enter a type (l.293).
+    /// Checks each value the text makes enter a type (l.293), in the order of
+    /// their relations' names, which no order of solving changes (I3).
     fn checks(&self) -> Vec<Check> {
         let mut checks = Vec::new();
         for recorded in &self.log {
@@ -950,7 +1038,8 @@ impl State {
                 | Relation::Fact(..)
                 | Relation::Kind(..)
                 | Relation::Lit(..)
-                | Relation::Reference(..) => continue,
+                | Relation::Reference(..)
+                | Relation::Values(..) => continue,
             };
             let (Some(from_value), Some(to_value)) = (self.value(from), self.value(to)) else {
                 continue;
@@ -972,6 +1061,10 @@ impl State {
             .to_string();
             checks.push(Check { relation, coercion });
         }
+        checks.sort_by(|a, b| {
+            (&a.relation, format!("{:?}", a.coercion))
+                .cmp(&(&b.relation, format!("{:?}", b.coercion)))
+        });
         checks
     }
 

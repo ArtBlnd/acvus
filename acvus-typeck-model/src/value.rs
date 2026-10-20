@@ -224,13 +224,18 @@ impl State {
             broken: BTreeMap::new(),
             group: self.group.clone(),
             universals: self.universals.clone(),
+            foreign: self.foreign.clone(),
+            enclosing_unknowns: self.enclosing_unknowns.clone(),
+            enclosing: self.enclosing.clone(),
+            functions: Rc::clone(&self.functions),
+            solved: self.solved.clone(),
         };
         read.classes.grow(&read.arena);
         for recorded in &self.log {
             if recorded.recorder.is_derived() {
                 continue;
             }
-            if let Recorder::Node(name) = &recorded.recorder
+            if let Recorder::Node(name) | Recorder::Instance { at: name, .. } = &recorded.recorder
                 && excluded.contains(name)
             {
                 continue;

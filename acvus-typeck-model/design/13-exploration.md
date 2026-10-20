@@ -18,3 +18,13 @@ outcome is reached.
    classes by their least member's name. Names of classes made while solving may
    differ between orders (note 06), so two states alike but for those names are
    both explored; this costs states, never outcomes.
+2. **A sample of orders.** Where a program has too many states to explore, as
+   Example 14 has, orders are sampled: the first step always, the last always,
+   and sequences a fixed generator gives, each group solved in turn. One outcome
+   over a sample is weaker evidence than over every order.
+3. **Groups.** Each group other than the entry is explored to its fixpoints, and
+   the next group is explored once for each combination of the fixpoints before
+   it (note 09, reading 6).
+4. **Checks compare as a set.** The checks of an outcome are ordered by their
+   relations' names, so two orders that check the same relations reach one
+   outcome.

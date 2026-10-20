@@ -8,6 +8,8 @@ it. Three kinds of entry:
 - **T**, a text: the spec's two texts disagree, or the spec and an RFC it cites do.
 - **O**, an order: the outcome depends on the order of solving.
 
+Within each kind, the entries are numbered in the order encoding found them.
+
 A reading the model takes where the text leaves one open is stated in the note of
 the primitive it belongs to, not here.
 
@@ -68,70 +70,45 @@ relates the targets by an equation, as the reborrow row `&mut T ⇝ &T` keeps `T
 (`design/11-value.md`, reading 2), and accepts it (`examples.rs`,
 `hole_4_a_reborrow_at_a_boundary_equates_the_targets`).
 
-## H5. What a binding reads of its path
+## H5. A lambda's node that reads a capture
 
-A binding reads its position where its path passes no reference, and lends it where
-the path passes one (l.317). Whether the path passes one is what the projections on
-it became: each applies to its operand's target where the operand is a reference
-(l.309). But a binding reads "whether its equivalence class is a reference" (l.267),
-and depends on the nodes that record into its place, other than projections of a
-field, a component, an index or a variant (l.248), which are the projections on
-its path. So nothing makes a binding wait for them, and nothing it reads tells it
-what they became. Under the dependencies l.248 states, the outcome depends on the
-order: a binding decided before its path's projection reads its position, and one
-decided after lends it. Witness, two outcomes in the model, `x: u8` and `x: &u8`,
-both accepted (`examples.rs`, `a_binding_behind_a_reference_lends_its_position`,
-`BindingPath::AsStated`):
+A lambda is a binding group of its own (l.23), solved before the group in which a
+use records its C (l.220), which for a lambda is its enclosing body's. A capture's
+type is a class of the enclosing group (l.217), which the lambda shares and does
+not solve (l.218, l.222). The dependency graph has the lambda's nodes and classes
+alone (l.216, l.269), and no row makes anything wait for what the enclosing group
+records into a shared class (l.244–250); only a universal waits for something
+outside (l.246). So a lambda's use that reads a capture is decided when the lambda
+is solved, before the enclosing group records anything into it, and reads it as
+nothing. Witness, refused by the model (`examples.rs`,
+`hole_5_a_lambda_reads_a_capture`):
 
 ```
-let o = Some(1u8);
-if let Some(x) = &o { }
+let x = make();          // make() -> A
+let f = || probe(x);     // probe(A), probe(B)
+f();
 ```
 
-Making the binding depend on the projections on its path gives one outcome, `x:
-&u8`, as in Rust (`BindingPath::AfterPath`). The exclusion in l.248 is about whether
-a class is a reference, which those projections do not decide; what a path passes
-is a different question, which l.248 does not ask.
+Read so that a shared class depends on the use that makes the lambda's instance,
+as a universal does on the use that chooses it (l.246), `probe` would stay in C
+and be decided in the copy, where `X` is `A`.
 
-## H6. What a broken dependency's relations wait for
+## H6. Example 14's `q` has no value
 
-A lend reads whether its place is a reference (l.267) and depends on the nodes
-that record into its place (l.248), which are the nodes at whose positions the
-place lies (l.244 (b), l.250); a lend's place is at its position. So two lends of
-one place depend on each other, each breaks its dependency on the other (l.269),
-and "the relations recorded by a node that a broken dependency pointed to are
-recorded once the node that broke it is decided" (l.269). Until then the
-reference the first lend gives has no kind, and a use that reads it in between
-reads nothing there. In Example 12, `&y` and the `&y` of `y + 1` are such a pair:
-`y + 1` decided between them reads its first argument as nothing and its second as
-`?{1}`, takes the default `i32` (l.344), and the program is refused, `1u16 ≤ Y` not
-reaching `i32`. Witness: Example 12 itself, which reaches an accepted and a
-refused outcome (`examples.rs`, `example_12_accumulation_that_starts_from_a_literal`,
-`Deferral::Recording`).
-
-Read so that a broken dependency's relations are recorded when their node is
-decided, and only the value read by the node that broke it leaves them out
-(`Deferral::Reading`), Example 12 reaches the spec's outcome in every order. That
-reading keeps what l.269 is for, that each node of a cycle reads without the
-others (Example 12, step 3), without holding the relations from third nodes.
-
-## H7. A reference recorded at once has no mutability
-
-Where every candidate records a reference into a class, a use records at once that
-the class is a reference (l.252), and a lend that reads it no longer depends on the
-use (l.248). The record names no mutability, and a lend's mutability is the lesser
-of its own and its place's (l.307), so a `&mut` lend decided before the use has no
-result. Witness, two outcomes in the model, one where the lend gives no result
-(`examples.rs`, `hole_7_a_reference_recorded_at_once_has_no_mutability`):
-
-```
-let r = first(x);        // x: A; first(A) -> &u8, first(B) -> &mut u8
-let s = &mut r;
-```
-
-Where the candidates agree on the mutability, recording the reference's
-constructor, which is its mutability (l.66), would close it there; where they
-differ, as here, the lend would have to keep depending on the use.
+Example 14 has `q` be `Pair⟨&str, u8⟩`, and the copy of C of `nest` refused at the
+lower bound `Pair⟨&str, u8⟩` that "must reach `&str`" (l.590, l.596). But `q`'s
+first part has no equation: it is the part `swap` makes anew in `Self { l: self.r,
+r: self.l }` (l.325), which takes `self.r` as a lower bound, and `self.r` is
+`p`'s second part, which takes `"s"` by a meeting through `new`. The instance of
+`nest` is recorded as soon as `q.nest(3)` is given (l.230, l.238): the boundary
+into the receiver equates `q`'s first part with the copy of `A` (l.289), and the
+copied `P = A` with `P ≥ Pair⟨A, B⟩` (l.594) gives that part the lower bound
+`Pair⟨A', B'⟩`, which holds it. So the part reaches a part of its own along lower
+bounds and parts, has no value (l.275), and `q` has none. Example 14 is refused, as
+the spec has it, but at `q`'s first part, and `q` has no value. Witness: Example 14
+itself (`examples.rs`, `example_14_a_struct_and_recursion_that_grows`, sampled
+orders). The narrative's check holds only of a class whose value an equation
+decides (l.293).
 
 ## T1. A type parameter's bound
 
@@ -201,3 +178,89 @@ spec states no exception for `!`. Witness, refused by the model (`examples.rs`,
 let n = never();         // never() -> !
 if let Some(x) = n { }
 ```
+
+## O1. What a binding reads of its path
+
+A binding reads its position where its path passes no reference, and lends it where
+the path passes one (l.317). Whether the path passes one is what the projections on
+it became: each applies to its operand's target where the operand is a reference
+(l.309). But a binding reads "whether its equivalence class is a reference" (l.267),
+and depends on the nodes that record into its place, other than projections of a
+field, a component, an index or a variant (l.248), which are the projections on
+its path. So nothing makes a binding wait for them, and nothing it reads tells it
+what they became. Under the dependencies l.248 states, the outcome depends on the
+order: a binding decided before its path's projection reads its position, and one
+decided after lends it. Witness, two outcomes in the model, `x: u8` and `x: &u8`,
+both accepted (`examples.rs`, `a_binding_behind_a_reference_lends_its_position`,
+`BindingPath::AsStated`):
+
+```
+let o = Some(1u8);
+if let Some(x) = &o { }
+```
+
+Making the binding depend on the projections on its path gives one outcome, `x:
+&u8`, as in Rust (`BindingPath::AfterPath`). The exclusion in l.248 is about whether
+a class is a reference, which those projections do not decide; what a path passes
+is a different question, which l.248 does not ask.
+
+## O2. What a broken dependency's relations wait for
+
+A lend reads whether its place is a reference (l.267) and depends on the nodes
+that record into its place (l.248), which are the nodes at whose positions the
+place lies (l.244 (b), l.250); a lend's place is at its position. So two lends of
+one place depend on each other, each breaks its dependency on the other (l.269),
+and "the relations recorded by a node that a broken dependency pointed to are
+recorded once the node that broke it is decided" (l.269). Until then the
+reference the first lend gives has no kind, and a use that reads it in between
+reads nothing there. In Example 12, `&y` and the `&y` of `y + 1` are such a pair:
+`y + 1` decided between them reads its first argument as nothing and its second as
+`?{1}`, takes the default `i32` (l.344), and the program is refused, `1u16 ≤ Y` not
+reaching `i32`. Witness: Example 12 itself, which reaches an accepted and a
+refused outcome (`examples.rs`, `example_12_accumulation_that_starts_from_a_literal`,
+`Deferral::Recording`).
+
+Read so that a broken dependency's relations are recorded when their node is
+decided, and only the value read by the node that broke it leaves them out
+(`Deferral::Reading`), Example 12 reaches the spec's outcome in every order. That
+reading keeps what l.269 is for, that each node of a cycle reads without the
+others (Example 12, step 3), without holding the relations from third nodes.
+
+## O3. A reference recorded at once has no mutability
+
+Where every candidate records a reference into a class, a use records at once that
+the class is a reference (l.252), and a lend that reads it no longer depends on the
+use (l.248). The record names no mutability, and a lend's mutability is the lesser
+of its own and its place's (l.307), so a `&mut` lend decided before the use has no
+result. Witness, two outcomes in the model, one where the lend gives no result
+(`examples.rs`, `hole_o3_a_reference_recorded_at_once_has_no_mutability`):
+
+```
+let r = first(x);        // x: A; first(A) -> &u8, first(B) -> &mut u8
+let s = &mut r;
+```
+
+Where the candidates agree on the mutability, recording the reference's
+constructor, which is its mutability (l.66), would close it there; where they
+differ, as here, the lend would have to keep depending on the use.
+
+## O4. A capture written after a use reads it
+
+A lambda's write to a capture reached by name is a meeting, and stays in the
+lambda's C (Example 6, l.446); it is recorded into the capture's class only when a
+call of the lambda's value is decided and makes its instance (l.203). Until then
+nothing at the capture's class waits for that call: the class lies at no position
+of it (l.244 (b)). So a use reading the capture may be decided before the call or
+after it. Witness, two outcomes in the model, `probe` decided as `probe(A)` and as
+`probe(B)`, both accepted (`examples.rs`, `hole_o4_a_capture_written_after_a_use_reads_it`):
+
+```
+let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
+let put = |v| x = v;
+probe(x);                // probe(A), probe(B)
+put(make_b());
+```
+
+The invariant broken is that a node recording into a class is seen as the class's
+dependency before it records and stays after: a lambda's instance writes classes
+its call does not lie at.

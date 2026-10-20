@@ -203,6 +203,9 @@ pub struct Held {
     /// Whether it is a reference, as a use records it before it is decided
     /// (l.252).
     pub reference: Option<bool>,
+    /// The lambdas the Values of the function values met in it name, joined
+    /// (l.180, l.188).
+    pub values: BTreeSet<Name>,
     /// Whether it took its constructor and members, written or joined
     /// (l.275).
     pub solved: bool,
@@ -244,6 +247,7 @@ impl Classes {
                     facts: BTreeSet::new(),
                     lit: None,
                     reference: None,
+                    values: BTreeSet::new(),
                     solved: false,
                 },
             );
@@ -338,6 +342,16 @@ impl Classes {
         self.unify_pairs(pairs, types)
     }
 
+    /// Records a lambda the Values of the class of `id` names.
+    pub fn give_value(&mut self, id: ClassId, lambda: Name) {
+        let root = self.find(id);
+        self.held
+            .get_mut(&root)
+            .expect("a root holds")
+            .values
+            .insert(lambda);
+    }
+
     /// Records whether the equivalence class of `id` is a reference.
     pub fn give_reference(
         &mut self,
@@ -399,6 +413,7 @@ impl Classes {
             let merged = self.held.remove(&gone).expect("a root holds");
             let held = self.held.get_mut(&keep).expect("a root holds");
             held.members.extend(merged.members);
+            held.values.extend(merged.values);
             held.facts.extend(merged.facts);
             held.kind = kind;
             held.lit = lit;

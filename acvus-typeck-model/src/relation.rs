@@ -31,6 +31,8 @@ pub enum Relation {
     /// Whether the class is a reference, which a use records before it is
     /// decided (l.252).
     Reference(ClassId, bool),
+    /// A lambda the Values of the class's function value names (l.188).
+    Values(ClassId, Name),
 }
 
 impl Relation {
@@ -44,7 +46,9 @@ impl Relation {
             Relation::Kind(class, term, _) => std::iter::once(*class)
                 .chain(term.parts().into_iter().map(|(_, part)| *part))
                 .collect(),
-            Relation::Lit(class, _) | Relation::Reference(class, _) => vec![*class],
+            Relation::Lit(class, _)
+            | Relation::Reference(class, _)
+            | Relation::Values(class, _) => vec![*class],
         }
     }
 
@@ -76,6 +80,7 @@ impl Relation {
             }
             Relation::Lit(class, lit) => Relation::Lit(f(class), lit),
             Relation::Reference(class, reference) => Relation::Reference(f(class), reference),
+            Relation::Values(class, lambda) => Relation::Values(f(class), lambda),
         }
     }
 }
@@ -145,6 +150,7 @@ impl fmt::Display for Named<'_> {
             Relation::Lit(class, lit) => write!(f, "{}: {lit}", name(class)),
             Relation::Reference(class, true) => write!(f, "{}: a reference", name(class)),
             Relation::Reference(class, false) => write!(f, "{}: no reference", name(class)),
+            Relation::Values(class, lambda) => write!(f, "{}: Values ∋ {lambda}", name(class)),
         }
     }
 }

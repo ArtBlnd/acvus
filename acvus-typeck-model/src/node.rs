@@ -40,6 +40,23 @@ pub enum NodeKind {
         position: ClassId,
         binding: ClassId,
     },
+    /// A use that calls the function value of `callee` (l.203).
+    CallValue {
+        callee: ClassId,
+        args: Vec<ClassId>,
+        result: ClassId,
+    },
+}
+
+impl NodeKind {
+    /// Whether it reads whether a class is a reference (l.267): a lend, a
+    /// projection or a binding.
+    pub(crate) fn reads_reference(&self) -> bool {
+        matches!(
+            self,
+            NodeKind::Lend { .. } | NodeKind::Project { .. } | NodeKind::Bind { .. }
+        )
+    }
 }
 
 /// What a use, a lend, a projection or a binding became (l.267).
@@ -73,8 +90,12 @@ pub enum Decision {
         mutability: Mutability,
     },
     /// What the node reads decides nothing of the mutability its reference
-    /// needs, so it gives no result (l.267, l.301).
+    /// needs, or the function value it calls names no lambda, so it gives no
+    /// result (l.267, l.301).
     NoResult,
+    /// The call reads the function value as one whose Values names these
+    /// lambdas, and makes an instance of each (l.203).
+    Calls(BTreeSet<Name>),
 }
 
 /// What a lend's place reads as (l.307).
@@ -200,6 +221,16 @@ impl State {
             NodeKind::Bind {
                 position, binding, ..
             } => [*position, *binding].into(),
+            NodeKind::CallValue {
+                callee,
+                args,
+                result,
+            } => [callee]
+                .into_iter()
+                .chain(args)
+                .chain([result])
+                .copied()
+                .collect(),
         }
     }
 
@@ -292,7 +323,26 @@ impl State {
             } => Vec::new(),
             NodeKind::Project { operand, .. } => vec![*operand],
             NodeKind::Bind { position, .. } => vec![*position],
+            NodeKind::CallValue { callee, .. } => vec![*callee],
         }
+    }
+
+    /// The lambdas the Values of the class's function value names: those of
+    /// the function values that meet in it, by equations or lower bounds
+    /// (l.180, l.188).
+    fn values_of(&self, id: ClassId) -> BTreeSet<Name> {
+        let mut seen = BTreeSet::from([self.root(id)]);
+        let mut work = vec![self.root(id)];
+        let mut values = BTreeSet::new();
+        while let Some(at) = work.pop() {
+            values.extend(self.classes.held(at).values.iter().cloned());
+            for lower in self.lower_bounds(at) {
+                if seen.insert(self.root(lower)) {
+                    work.push(self.root(lower));
+                }
+            }
+        }
+        values
     }
 
     /// Whether the node is a projection other than a Deref, whose relations a
@@ -337,7 +387,7 @@ impl State {
     fn excluded(&self, name: &Name) -> BTreeSet<Name> {
         let mut excluded = self.dependents(name);
         excluded.extend(self.broken.get(name).into_iter().flatten().cloned());
-        if !matches!(self.nodes[name].kind, NodeKind::Use { .. }) {
+        if self.nodes[name].kind.reads_reference() {
             excluded.extend(
                 self.nodes
                     .keys()
@@ -522,6 +572,14 @@ impl State {
                     None => Decision::NoResult,
                 },
             },
+            NodeKind::CallValue { callee, .. } => {
+                let values = self.read_state(&excluded).values_of(*callee);
+                if values.is_empty() {
+                    Decision::NoResult
+                } else {
+                    Decision::Calls(values)
+                }
+            }
         }
     }
 
@@ -615,6 +673,31 @@ impl State {
                     },
                     recorder,
                 );
+            }
+            (NodeKind::CallValue { args, result, .. }, Decision::Calls(lambdas)) => {
+                for lambda in lambdas {
+                    let function = self
+                        .functions
+                        .iter()
+                        .find(|function| function.name == *lambda)
+                        .expect("a lambda is a function")
+                        .clone();
+                    let from = Rc::clone(
+                        self.solved
+                            .get(&function.group)
+                            .expect("a lambda's group is solved first (l.220)"),
+                    );
+                    let at = Name::new(&format!("{name}#{lambda}"));
+                    let mut copy = crate::instance::Instance::new(&at, &from);
+                    let params: Vec<ClassId> = function
+                        .params
+                        .iter()
+                        .map(|param| copy.class(self, from.text(param)))
+                        .collect();
+                    let returned = copy.class(self, from.text(&function.result));
+                    copy.record_rest(self);
+                    self.record_call(args, &params, returned, *result, &recorder);
+                }
             }
             (
                 NodeKind::Bind {
@@ -870,7 +953,7 @@ impl State {
     }
 
     /// The projections on a binding's path, on which it depends where the
-    /// reading takes it so (`holes.md`, H5).
+    /// reading takes it so (`holes.md`, O1).
     pub(crate) fn path_of(&self, name: &Name) -> Vec<Name> {
         match (&self.nodes[name].kind, self.readings.binding_path) {
             (NodeKind::Bind { path, .. }, BindingPath::AfterPath) => path.clone(),
