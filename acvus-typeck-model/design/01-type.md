@@ -58,3 +58,6 @@ The spec leaves three questions open at this level. These readings were agreed o
   identities included, although the first examples need none of them, so encoding
   more of the spec later does not reshape types.
 - `Name` is one string. Interning, or provenance, changes only what is inside it.
+- `HasTerm` is what a closed type shares with a value a use reads (note 05), whose
+  positions may be undecided, and `check_term` is the one check of a term's own
+  parts, which `Ty::new` makes.

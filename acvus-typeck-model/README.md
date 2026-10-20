@@ -44,7 +44,7 @@ The primitives, each assuming only those before it:
 | 02 | Types in declarations: declared types, signatures, substitution and matching | l.54–55, l.64, l.331, l.354 |
 | 03 | Declarations and the cast tree: extern fns and impls by name, casts and views, conversions | l.76–78, l.112, l.331 |
 | 04 | Join and `≤` | l.80–97 |
-| 05 | Coercion and rank | l.99–116 |
+| 05 | Coercion and rank: LitVars, values a use reads, coercion, the steps of `≤`, rank | l.99–116, l.134, l.169, l.267, l.293, l.344 |
 | 06 | Equivalence classes: names, union-find, type variables, kinds | l.118–176 |
 | 07 | Relations and what records them | l.228–238 |
 | 08 | Uses, lends, projections and bindings | l.303–345 |

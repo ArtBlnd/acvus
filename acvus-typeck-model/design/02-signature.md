@@ -46,3 +46,6 @@ fields in declared order (l.54).
   signatures and kinds share one check.
 - `SigArgs` binds some of the variables, so matching can bind them one parameter at
   a time.
+- Substitution and matching take any `HasTerm`, so a signature also meets a value
+  a use reads (note 05). A term the signature writes does not match a position the
+  value leaves undecided.

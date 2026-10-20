@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use crate::sig::{DeclaredTypes, SigArgs, SigTy, Signature};
-use crate::ty::{Constructor, Mutability, Name, Term, Ty};
+use crate::ty::{Constructor, HasTerm, Mutability, Name, Term, Ty};
 
 #[cfg(test)]
 mod tests;
@@ -44,9 +44,20 @@ pub enum Node {
 
 impl Node {
     pub fn of(ty: &Ty) -> Node {
-        match ty.term() {
-            Term::Ref(mutability, target) => Node::Ref(*mutability, target.term().constructor()),
-            term => Node::Owned(term.constructor()),
+        Node::of_decided(ty).expect("every position of a closed type is decided")
+    }
+
+    /// The node of a type whose outermost term, and a reference's target there,
+    /// are decided.
+    pub fn of_decided<T>(ty: &T) -> Option<Node>
+    where
+        T: HasTerm,
+    {
+        match ty.decided()? {
+            Term::Ref(mutability, target) => {
+                Some(Node::Ref(*mutability, target.decided()?.constructor()))
+            }
+            term => Some(Node::Owned(term.constructor())),
         }
     }
 
@@ -307,17 +318,23 @@ impl Decls {
 
     /// `ty` one step up the tree, by the cast that goes up from its node, where
     /// that cast's parameter matches it.
-    pub fn step_up(&self, ty: &Ty) -> Option<(DeclId, Ty)> {
-        let id = self.tree.up(&Node::of(ty))?;
+    pub fn step_up<T>(&self, ty: &T) -> Option<(DeclId, T)>
+    where
+        T: HasTerm,
+    {
+        let id = self.tree.up(&Node::of_decided(ty)?)?;
         let applied = apply(&self.decl(id).sig, ty)?;
         Some((id.clone(), applied))
     }
 
     /// `ty` raised up the tree to `node`, with each cast taken.
-    pub fn raise(&self, ty: &Ty, node: &Node) -> Option<(Vec<DeclId>, Ty)> {
+    pub fn raise<T>(&self, ty: &T, node: &Node) -> Option<(Vec<DeclId>, T)>
+    where
+        T: HasTerm,
+    {
         let mut casts = Vec::new();
         let mut ty = ty.clone();
-        while &Node::of(&ty) != node {
+        while Node::of_decided(&ty).as_ref() != Some(node) {
             let (cast, up) = self.step_up(&ty)?;
             casts.push(cast);
             ty = up;
@@ -342,13 +359,16 @@ impl Decls {
     }
 }
 
-/// The result of a one-parameter signature at the closed type its parameter
-/// matches, where every variable of the result is bound by that match.
-fn apply(sig: &Signature, ty: &Ty) -> Option<Ty> {
+/// The result of a one-parameter signature at the type its parameter matches,
+/// where every variable of the result is bound by that match.
+fn apply<T>(sig: &Signature, ty: &T) -> Option<T>
+where
+    T: HasTerm,
+{
     let [param] = sig.params() else {
         return None;
     };
-    let mut args: SigArgs = sig.unbound();
+    let mut args: SigArgs<T> = sig.unbound();
     if !param.match_ty(ty, &mut args) {
         return None;
     }

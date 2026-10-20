@@ -66,7 +66,7 @@ pub fn error_join(decls: &Decls, e1: &Ty, e2: &Ty) -> Result<Ty, JoinError> {
         _ => {
             let mut variants = BTreeMap::new();
             for element in &elements {
-                let Some(name) = type_name(element) else {
+                let Some(name) = type_name(element.term()) else {
                     return Err(JoinError::ErrorElements(elements));
                 };
                 if variants.insert(name.clone(), element.clone()).is_some() {
@@ -88,17 +88,20 @@ pub fn le(decls: &Decls, s: &Ty, t: &Ty) -> bool {
 fn error_elements(e: &Ty) -> Vec<Ty> {
     match e.term() {
         Term::Never => Vec::new(),
-        Term::Enum(name, variants) if name.as_str() == ERROR => {
-            variants.values().cloned().collect()
-        }
+        Term::Enum(_, variants) if is_error(e.term()) => variants.values().cloned().collect(),
         _ => vec![e.clone()],
     }
 }
 
+/// Whether the term is the language's enum `Error`.
+pub(crate) fn is_error<P>(term: &Term<P>) -> bool {
+    matches!(term, Term::Enum(name, _) if name.as_str() == ERROR)
+}
+
 /// The name of an enum, a struct or an extern-defined type, which names the
 /// variant of `Error` it lies in.
-fn type_name(ty: &Ty) -> Option<&Name> {
-    match ty.term() {
+pub(crate) fn type_name<P>(term: &Term<P>) -> Option<&Name> {
+    match term {
         Term::Enum(name, _) | Term::Struct(name, _) | Term::Extern { name, .. } => Some(name),
         _ => None,
     }
@@ -161,7 +164,8 @@ where
     Ok(united)
 }
 
-fn is_error_part(constructor: &Constructor, key: &PartKey) -> bool {
+/// Whether the part is a `Result`'s error part, where the error join is taken.
+pub(crate) fn is_error_part(constructor: &Constructor, key: &PartKey) -> bool {
     *constructor == Constructor::Result
         && constructor.payload_part(&Name::new(ERR)).as_ref() == Some(key)
 }

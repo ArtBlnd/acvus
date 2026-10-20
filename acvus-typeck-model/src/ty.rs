@@ -477,25 +477,47 @@ pub enum TyError {
     IdentityPlace,
 }
 
+/// A type each of whose positions holds a term or is not decided: a closed
+/// type, every position of which holds one, or a value a use reads (note 05).
+pub trait HasTerm: Clone + Eq + Sized {
+    /// The term at the outermost position, where one is decided.
+    fn decided(&self) -> Option<&Term<Self>>;
+
+    /// The type whose outermost term is `term`, refused where `check_term`
+    /// refuses it.
+    fn from_term(term: Term<Self>) -> Result<Self, TyError>;
+}
+
+/// The parts of `term` are checked already, so checking its own parts checks
+/// the whole tree. A part inside a reference's target is not restricted:
+/// `&N⟨&U⟩` is a type (l.64). A position not decided is refused nowhere.
+pub fn check_term<P>(term: &Term<P>) -> Result<(), TyError>
+where
+    P: HasTerm,
+{
+    if let Term::Ref(_, target) = term
+        && matches!(target.decided(), Some(Term::Ref(..)))
+    {
+        return Err(TyError::RefTarget);
+    }
+    if matches!(term, Term::Tuple(components) if components.is_empty()) {
+        return Err(TyError::EmptyTuple);
+    }
+    for (key, part) in term.parts() {
+        let Some(part) = part.decided() else {
+            continue;
+        };
+        let is_identity = matches!(part, Term::Identity(_));
+        if is_identity != (key == PartKey::Identity) {
+            return Err(TyError::IdentityPlace);
+        }
+    }
+    Ok(())
+}
+
 impl Ty {
-    /// The parts of `term` are closed types already, so checking `term`'s own
-    /// parts checks the whole tree. A part inside a reference's target is not
-    /// restricted: `&N⟨&U⟩` is a type (l.64).
     pub fn new(term: Term<Ty>) -> Result<Ty, TyError> {
-        if let Term::Ref(_, target) = &term
-            && matches!(target.term(), Term::Ref(..))
-        {
-            return Err(TyError::RefTarget);
-        }
-        if matches!(&term, Term::Tuple(components) if components.is_empty()) {
-            return Err(TyError::EmptyTuple);
-        }
-        for (key, part) in term.parts() {
-            let is_identity = matches!(part.term(), Term::Identity(_));
-            if is_identity != (key == PartKey::Identity) {
-                return Err(TyError::IdentityPlace);
-            }
-        }
+        check_term(&term)?;
         Ok(Ty(Rc::new(term)))
     }
 
@@ -504,11 +526,24 @@ impl Ty {
     }
 }
 
+impl HasTerm for Ty {
+    fn decided(&self) -> Option<&Term<Ty>> {
+        Some(self.term())
+    }
+
+    fn from_term(term: Term<Ty>) -> Result<Ty, TyError> {
+        Ty::new(term)
+    }
+}
+
 /// The spec's notation, with a function value written `Fn/n` for its arity,
 /// since the spec writes none for it.
-impl fmt::Display for Ty {
+impl<P> fmt::Display for Term<P>
+where
+    P: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.term() {
+        match self {
             Term::Ref(Mutability::Shared, target) => write!(f, "&{target}"),
             Term::Ref(Mutability::Exclusive, target) => write!(f, "&mut {target}"),
             Term::Tuple(components) if components.len() == 1 => write!(f, "({},)", components[0]),
@@ -555,7 +590,7 @@ impl fmt::Display for Ty {
                 identity,
             } => {
                 write!(f, "{name}")?;
-                let parts: Vec<&Ty> = args.iter().chain(identity).collect();
+                let parts: Vec<&P> = args.iter().chain(identity).collect();
                 if !parts.is_empty() {
                     f.write_str("⟨")?;
                     write_listed(f, parts)?;
@@ -570,6 +605,12 @@ impl fmt::Display for Ty {
             Term::Never => f.write_str("!"),
             Term::Identity(name) => write!(f, "{name}"),
         }
+    }
+}
+
+impl fmt::Display for Ty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self.term(), f)
     }
 }
 

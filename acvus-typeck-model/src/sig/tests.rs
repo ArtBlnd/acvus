@@ -266,7 +266,7 @@ fn substitution_puts_each_bound_variable_in_its_place() {
         identity: None,
     });
     assert_eq!(vec_t.substitute(&args), Ok(expected));
-    let unbound = SigArgs {
+    let unbound: SigArgs = SigArgs {
         types: vec![None],
         identity: None,
     };

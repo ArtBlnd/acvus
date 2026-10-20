@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::ty::{Constructor, Name, PartKey, Term, Ty, TyError};
+use crate::ty::{Constructor, HasTerm, Name, PartKey, Term, Ty, TyError};
 
 #[cfg(test)]
 mod tests;
@@ -143,11 +143,12 @@ pub enum SigTy {
     Term(Rc<Term<SigTy>>),
 }
 
-/// Closed types for some of a signature's variables.
+/// Types for some of a signature's variables: closed types, or values a use
+/// reads.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct SigArgs {
-    pub types: Vec<Option<Ty>>,
-    pub identity: Option<Ty>,
+pub struct SigArgs<T = Ty> {
+    pub types: Vec<Option<T>>,
+    pub identity: Option<T>,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -156,15 +157,15 @@ pub enum SubstError {
     Ty(TyError),
 }
 
-impl SigArgs {
-    pub fn get(&self, var: SigVar) -> Option<&Ty> {
+impl<T> SigArgs<T> {
+    pub fn get(&self, var: SigVar) -> Option<&T> {
         match var {
             SigVar::Type(i) => self.types.get(i).and_then(Option::as_ref),
             SigVar::Identity => self.identity.as_ref(),
         }
     }
 
-    fn bind(&mut self, var: SigVar, ty: Ty) {
+    fn bind(&mut self, var: SigVar, ty: T) {
         match var {
             SigVar::Type(i) => self.types[i] = Some(ty),
             SigVar::Identity => self.identity = Some(ty),
@@ -187,29 +188,36 @@ impl SigTy {
     /// Each bound variable's closed type put in its place. Where that makes a
     /// reference's target a reference, the two are one reference to the inner
     /// target, exclusive only where both are (l.64).
-    pub fn substitute(&self, args: &SigArgs) -> Result<Ty, SubstError> {
+    pub fn substitute<T>(&self, args: &SigArgs<T>) -> Result<T, SubstError>
+    where
+        T: HasTerm,
+    {
         match self {
             SigTy::Var(var) => args.get(*var).cloned().ok_or(SubstError::Unbound(*var)),
             SigTy::Term(term) => {
                 let term = (**term).clone().try_map(|_, part| part.substitute(args))?;
                 let term = match term {
-                    Term::Ref(outer, target) => match target.term() {
-                        Term::Ref(inner, inner_target) => {
+                    Term::Ref(outer, target) => match target.decided() {
+                        Some(Term::Ref(inner, inner_target)) => {
                             Term::Ref(outer.min(*inner), inner_target.clone())
                         }
                         _ => Term::Ref(outer, target),
                     },
                     term => term,
                 };
-                Ty::new(term).map_err(SubstError::Ty)
+                T::from_term(term).map_err(SubstError::Ty)
             }
         }
     }
 
     /// Extends `args` so that `self` substituted by them is `ty`, and returns
     /// whether it could; where it could not, `args` is left as it was. A
-    /// variable is bound to the closed type at its place.
-    pub fn match_ty(&self, ty: &Ty, args: &mut SigArgs) -> bool {
+    /// variable is bound to the type at its place, and a term written where
+    /// `ty`'s position is not decided does not match.
+    pub fn match_ty<T>(&self, ty: &T, args: &mut SigArgs<T>) -> bool
+    where
+        T: HasTerm,
+    {
         let mut found = args.clone();
         let matched = self.match_into(ty, &mut found);
         if matched {
@@ -218,7 +226,10 @@ impl SigTy {
         matched
     }
 
-    fn match_into(&self, ty: &Ty, found: &mut SigArgs) -> bool {
+    fn match_into<T>(&self, ty: &T, found: &mut SigArgs<T>) -> bool
+    where
+        T: HasTerm,
+    {
         match self {
             SigTy::Var(var) => match found.get(*var) {
                 Some(bound) => bound == ty,
@@ -228,14 +239,17 @@ impl SigTy {
                 }
             },
             SigTy::Term(term) => {
-                if term.constructor() != ty.term().constructor()
-                    || term.members() != ty.term().members()
+                let Some(decided) = ty.decided() else {
+                    return false;
+                };
+                if term.constructor() != decided.constructor()
+                    || term.members() != decided.members()
                 {
                     return false;
                 }
                 term.parts()
                     .into_iter()
-                    .zip(ty.term().parts())
+                    .zip(decided.parts())
                     .all(|((_, written), (_, part))| written.match_into(part, found))
             }
         }
@@ -353,7 +367,10 @@ impl Signature {
     }
 
     /// Bindings with no variable bound.
-    pub fn unbound(&self) -> SigArgs {
+    pub fn unbound<T>(&self) -> SigArgs<T>
+    where
+        T: Clone,
+    {
         SigArgs {
             types: vec![None; self.type_params.len()],
             identity: None,
