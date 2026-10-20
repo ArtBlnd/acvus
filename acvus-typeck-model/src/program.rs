@@ -271,7 +271,6 @@ pub struct Readings {
     pub visibility: Visibility,
     pub binding_path: BindingPath,
     pub deferral: Deferral,
-    pub recording: Recording,
     pub captures: Captures,
 }
 
@@ -286,19 +285,6 @@ pub enum Captures {
     /// All but its environment, the classes joined to a capture and the items
     /// naming them, which the enclosing group solves once (functions §2).
     Environment,
-}
-
-/// Which nodes record relations into a class, for a use that reads it (l.247,
-/// l.250; `holes.md`, H7).
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub enum Recording {
-    /// Every node at whose position the class lies, or that a class it
-    /// reaches depends on (l.244 (b), l.250).
-    #[default]
-    Position,
-    /// Of those, the nodes that would record a lower bound, an equation or a
-    /// kind into the class.
-    Relation,
 }
 
 /// When the relations of a node that a broken dependency pointed to are

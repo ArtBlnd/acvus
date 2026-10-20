@@ -7,7 +7,7 @@ use std::rc::Rc;
 use crate::class::{ClassId, ClassName, Fact, KindSource};
 use crate::coerce::coerce_read;
 use crate::decl::{Decl, DeclId};
-use crate::program::{BindingPath, Deferral, Projection, Recording};
+use crate::program::{BindingPath, Deferral, Projection};
 use crate::read::ReadValue;
 use crate::relation::{Recorder, Relation};
 use crate::sig::{SigTy, Signature};
@@ -436,15 +436,13 @@ impl State {
     /// Whether the relations the node `recorder` records may change what a
     /// node reading `read` reads at `class`, a class at the recorder's
     /// position or reached from one (l.244 (b), l.250). For a value, every
-    /// such node, or, as `Recording::Relation` reads l.250, one that would
-    /// record into the class (`holes.md`, H7); for whether a class is a
-    /// reference, a node that may decide it, other than a projection of a
-    /// field, a component, an index or a variant (l.248).
+    /// such node (`holes.md`, H7); for whether a class is a reference, a node
+    /// that may decide it, other than a projection of a field, a component, an
+    /// index or a variant (l.248).
     pub(crate) fn records_into(&self, recorder: &Name, class: ClassId, read: Read) -> bool {
-        match (read, self.readings.recording) {
-            (Read::Value, Recording::Position) => true,
-            (Read::Value, Recording::Relation) => self.may_record_into(recorder, class),
-            (Read::Reference, _) => {
+        match read {
+            Read::Value => true,
+            Read::Reference => {
                 !self.is_inner_projection(recorder) && self.may_decide_reference(recorder, class)
             }
         }
@@ -473,31 +471,6 @@ impl State {
             }
             NodeKind::Bind { binding, .. } => self.root(*binding) == root,
             NodeKind::Project { .. } => true,
-        }
-    }
-
-    /// Whether the node would record a lower bound, an equation or a kind into
-    /// the class, or into a type the class is an invariant part of, through
-    /// which an equation reaches it (`Recording`; `design/08-node.md`, reading
-    /// 18): a use where some candidate would (reading 13); a lend into its
-    /// result and its place, the target of the reference it equates with its
-    /// result (l.307); a binding into its own type and its position, which it
-    /// may lend; and a projection or a call of a function value into every
-    /// class at its positions.
-    fn may_record_into(&self, name: &Name, class: ClassId) -> bool {
-        let root = self.root(class);
-        match &self.nodes[name].kind {
-            NodeKind::Use { .. } => self
-                .would_record_per_candidate(name)
-                .iter()
-                .any(|found| found.contains_key(&root)),
-            NodeKind::Lend { place, result, .. } => {
-                self.root(*place) == root || self.root(*result) == root
-            }
-            NodeKind::Bind {
-                position, binding, ..
-            } => self.root(*position) == root || self.root(*binding) == root,
-            NodeKind::Project { .. } | NodeKind::CallValue { .. } => true,
         }
     }
 

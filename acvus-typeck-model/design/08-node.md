@@ -99,14 +99,12 @@ reads its position, or lends it where its path passes a reference.
    the state or of their reads only is `holes.md`, O2, and the model takes it as a
    reading (`Deferral`).
 18. **Which nodes record into a class** (l.244 (b), l.250). The nodes that record
-   relations into a class are those at whose positions it lies, or, read by the
-   relations, those of them that would record a lower bound, an equation or a kind
-   into it or into a type it is an invariant part of: a use where some candidate
-   would (reading 13), a lend at its place and its result, a binding at its
-   position and its own type, a projection and a call of a function value at every
-   class at their positions. For a use's read, which is of a value, the spec makes
-   no narrowing such as l.248 makes for a reference read; the model takes the two
-   as a reading (`Recording`, `holes.md`, H7).
+   relations into a class are those at whose positions it lies. For a use's read,
+   which is of a value, the spec makes no narrowing such as l.248 makes for a
+   reference read. A reading that kept only the nodes that would record a lower
+   bound, an equation or a kind into the class left out what l.291 makes a boundary
+   record into a class holding a LitVar alone, and made the outcome depend on the
+   order; it is removed (`holes.md`, H7).
 
 ## Left open for change
 

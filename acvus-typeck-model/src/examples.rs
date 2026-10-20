@@ -9,7 +9,7 @@ use crate::node::{Decision, LendTarget};
 use std::collections::BTreeSet;
 
 use crate::program::{
-    BindingPath, Captures, Deferral, Program, ProgramBuilder, Projection, Readings, Recording,
+    BindingPath, Captures, Deferral, Program, ProgramBuilder, Projection, Readings,
 };
 use crate::sig::{DeclaredTypes, ExternDecl, SigTy, SigVar, Signature};
 use crate::solve::Outcome;
@@ -1099,10 +1099,7 @@ fn example_12_accumulation_that_starts_from_a_literal() {
 /// `probe(i32)`. `probe` and `x + y` both read `X`, each lying at a position the
 /// other reads, so each breaks its dependency on the other (l.250, l.269), and
 /// `probe` reads `X` without `x + y`'s relations, as `?a` alone, takes the
-/// default `i32`, and is refused in every order. Where only the nodes that
-/// would record a relation into a class record into it (`Recording::Relation`),
-/// `probe`, which records nothing into its argument, is no dependency of
-/// `x + y`, waits for it, and reads `X` as `u16`.
+/// default `i32`, and is refused in every order.
 #[test]
 fn hole_7_two_uses_that_read_one_class() {
     let checked = checked(&example_12(Readings::default(), true));
@@ -1113,70 +1110,14 @@ fn hole_7_two_uses_that_read_one_class() {
             BTreeSet::from([at(Kind::Completeness, "probe")])
         )])
     );
-    let by_position = checked.outcomes;
-    let [by_position] = by_position.as_slice() else {
-        panic!("every order reaches one outcome: {by_position:#?}");
+    let outcomes = checked.outcomes;
+    let [outcome] = outcomes.as_slice() else {
+        panic!("every order reaches one outcome: {outcomes:#?}");
     };
-    assert!(!by_position.accepted, "{by_position:#?}");
+    assert!(!outcome.accepted, "{outcome:#?}");
     assert_eq!(
-        decision(by_position, "probe"),
+        decision(outcome, "probe"),
         Decision::Use(overload("probe", 1))
-    );
-    let by_relation = Readings {
-        recording: Recording::Relation,
-        deferral: Deferral::Reading,
-        ..Readings::default()
-    };
-    let outcome = only_outcome(&example_12(by_relation, true));
-    assert!(outcome.accepted, "{outcome:#?}");
-    assert_eq!(
-        decision(&outcome, "probe"),
-        Decision::Use(overload("probe", 0))
-    );
-}
-
-/// `holes.md`, O2: the program of H7, read by relation (`Recording::Relation`).
-/// `x + y` and `y + 1` break their dependencies on each other. Decided after
-/// `x + y` and before `y + 1`, `probe` reads `X` without the relations `x + y`
-/// defers until `y + 1` is decided (`Deferral::Recording`), and takes `i32`;
-/// where only the breaking node's read leaves them out (`Deferral::Reading`),
-/// every order reaches `probe(u16)`.
-#[test]
-fn hole_o2_a_deferred_relation_read_by_a_third_node() {
-    let readings = |deferral| Readings {
-        recording: Recording::Relation,
-        deferral,
-        ..Readings::default()
-    };
-    let checked = checked(&example_12(readings(Deferral::Recording), true));
-    assert_eq!(
-        checked.istar_by(|outcome| decision(outcome, "probe")),
-        BTreeSet::from([
-            (Decision::Use(overload("probe", 0)), none()),
-            (
-                Decision::Use(overload("probe", 1)),
-                BTreeSet::from([at(Kind::Completeness, "probe")])
-            ),
-        ])
-    );
-    let recording = checked.outcomes;
-    let decisions: BTreeSet<(Decision, bool)> = recording
-        .iter()
-        .map(|outcome| (decision(outcome, "probe"), outcome.accepted))
-        .collect();
-    assert_eq!(
-        decisions,
-        BTreeSet::from([
-            (Decision::Use(overload("probe", 0)), true),
-            (Decision::Use(overload("probe", 1)), false),
-        ]),
-        "{recording:#?}"
-    );
-    let outcome = only_outcome(&example_12(readings(Deferral::Reading), true));
-    assert!(outcome.accepted, "{outcome:#?}");
-    assert_eq!(
-        decision(&outcome, "probe"),
-        Decision::Use(overload("probe", 0))
     );
 }
 

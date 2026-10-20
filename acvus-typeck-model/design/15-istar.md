@@ -20,8 +20,8 @@ change it, outside a cycle.
 
 - **The end state** of a binding group: the entry's final state, after fallback,
   and another group's state at its fixpoint (l.297).
-- **What a node records into** at the end, as `Recording::Relation` reads l.250
-  (note 08, reading 18). A use, the classes its candidate would record a lower
+- **What a node records into** at the end, read by the relations it records, not
+  by position as the solver reads l.250 (note 08, reading 18). A use, the classes its candidate would record a lower
   bound or an equation into by l.286, or into a type they are an invariant part
   of (reading 13), those of its remaining candidates where it is not decided as
   one, and its result where it is decided `Never`: the classes a use makes anew
@@ -107,8 +107,11 @@ never records.
   not see it.
 - It computes on its own the dependency at the end, the exclusions and the
   comparison, never through `graph()`, which is the means under test.
-- It presupposes `Recording::Relation`'s reading of what a node records into, as
-  agreed. Under `Recording::Position` it reports H7.
+- It reads what a node records into by relation, where the solver reads it by
+  position, and reports H7 for that reason. A boundary out of a class that holds a
+  LitVar alone is left out of what a node records into, though l.291 makes such a
+  boundary change the class (`holes.md`, H7): in such a cycle the check reads
+  relations the solver's read leaves out.
 - It presupposes that a read leaves out the relations of the instances a call of a
   function value made, when the read leaves out the call (note 07, reading 3). An
   earlier encoding did not, naming an instance's relations by the instance alone:
@@ -123,9 +126,9 @@ Before the check runs, as its acceptance criteria:
 
 | Program | Expected |
 |---|---|
-| H7, under `Recording::Position` | a completeness violation at `probe`, in every order |
+| H7 | a completeness violation at `probe`, in every order |
 | H5 | a completeness violation at the lambda's `probe`, in the instance and in the entry's end state |
-| O1 under `AsStated`, O2 under `Recording::Relation` with `Deferral::Recording`, O3, O4 | a violation in exactly the orders that make the early decision, `x: u8`, `probe(i32)`, the lend's `NoResult` and `probe(A)`; none in the others |
+| O1 under `AsStated`, O3, O4 | a violation in exactly the orders that make the early decision, `x: u8`, the lend's `NoResult` and `probe(A)`; none in the others |
 | the program above | none |
 | Example 12, l.265 with `pick(u8) -> &u8`, the other current examples | none |
 

@@ -22,8 +22,8 @@ gives it, which a conversion then reaches (Example 3). So every node at whose
 position a class lies may change what another node reads there: two uses that read
 one class depend on each other, and l.269 has each read without the other (H7;
 Example 12's `x + y` and `y + 1`); and the order in which they are decided decides
-the outcome wherever a reading leaves such a node out (`n(x); m(x)` under
-`Recording::Relation`, below).
+the outcome wherever a reading leaves such a node out (`n(x); m(x)` under the
+removed `Recording::Relation`, below).
 
 Read by 준량's rule, a class takes its type from its own relations first. What a
 declaration writes reaches it only where its own relations leave it without a type,
@@ -153,20 +153,18 @@ instead, `R` would take a declaration's type before its own.
   records into `Y`, are invariant points, so neither `x + y` and `probe`, nor
   `x + y` and `y + 1`, depend on each other. A node that reads its own result
   through a class, `x + y` through `X`, still leaves its own relations out (l.267).
-  O2's witness rests on `Recording::Relation` and on that cycle.
-- `Recording::Relation` approximates row 2's dependency, but leaves out what l.291
-  makes a boundary record into a LitVar's class under the spec as stated:
-  `let x = 0; n(x); m(x);` with `n(u8)`, `n(u16)`, `m(u16)`, `m(&str)` reaches two
-  outcomes there, `n(u16)` accepted and `n` refused, and `Recording::Position` one,
-  `n` refused, I\* reporting completeness at `n` (run by changing the model; no test
-  keeps it).
+- The reading `Recording::Relation`, removed, approximated row 2's dependency
+  under the spec as stated, but left out what l.291 makes a boundary record into a
+  LitVar's class: `let x = 0; n(x); m(x);` with `n(u8)`, `n(u16)`, `m(u16)`,
+  `m(&str)` reached two outcomes under it, `n(u16)` accepted and `n` refused, and
+  one by position, `n` refused, I\* reporting completeness at `n`.
 - Note 08, readings 11, 15 and 18; note 10, its rows of l.244 (b) and l.247–250.
 - Note 14: an invariant point is a check of its boundary, and a row for row 3: each
   class row 3 typed has, among the types its invariant points give at the end,
   exactly that type fitting it, or several of a LitVar's family with that type its
   default.
-- Note 15: "what a node records into" reads l.250 as `Recording::Relation`; under
-  this reading it is own relations, as row 2 has it. Row 3 decides classes, which
+- Note 15: "what a node records into" reads l.250 by relation; under this reading
+  it is own relations, as row 2 has it. Row 3 decides classes, which
   I\* does not decide again (note 15, Not covered), so I\* reporting nothing is
   weaker evidence here than for nodes.
 
@@ -212,7 +210,5 @@ In each, I\* reports nothing and the certificate holds.
   class is not the default, and another node's candidates add the default, row 3
   takes the default and the decided node's check fails: refused either way, and
   I\* reports it.
-- **`Recording::Relation`.** Whether it is kept beside `InvariantPoints::AsStated`,
-  and whether `n(x); m(x)` is kept as its witness.
 - **Not covered.** O1 (a binding's path), O3 (a reference's mutability), O2 beyond
   the cycles row 2 no longer makes, and O5 are not changed here.

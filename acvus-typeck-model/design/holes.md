@@ -121,11 +121,9 @@ decides (l.293).
 A use depends on the nodes that record relations into the classes at the positions
 it reads (l.247), and the nodes that record relations into a class are those the
 class depends on (l.250): by l.244 (b), the relations not yet recorded into it by a
-node at whose position it lies. Read as every node at whose position the class
-lies (`Recording::Position`), two uses that both read a class depend on each other,
-each breaks its dependency on the other (l.269), and each reads the class without
-the other's relations, whether or not the other's candidates would record any into
-it. Witness, refused in every order under that reading (`examples.rs`,
+node at whose position it lies. So two uses that both read a class depend on each
+other, each breaks its dependency on the other (l.269), and each reads the class
+without the other's relations. Witness, refused in every order (`examples.rs`,
 `hole_7_two_uses_that_read_one_class`):
 
 ```
@@ -139,14 +137,18 @@ probe(x);                // probe(u16), probe(i32)
 ```
 
 `probe` passes `x` into a parameter its declarations write, a boundary out of `X`
-(l.218), and records no lower bound, equation or kind into `X`; yet `x + y` depends
-on it, so `probe` reads `X` without `x + y`'s relations, as `?a` alone, takes the
-default `i32` (l.344), and `X ⇝ i32` fails once `X` is `u16`. Line 252 names what a
-use's candidates "would record into one equivalence class" as lower bounds and
-equations. Read so that a node records into a class only where it would record a
-lower bound, an equation or a kind into it, or into a type it is an invariant part
-of (`Recording::Relation`), `probe` is no dependency of `x + y`, waits for it, and
-reads `u16`. That reading narrows every read as l.248 narrows a reference read.
+(l.218), and `x + y` depends on it, so `probe` reads `X` without `x + y`'s
+relations, as `?a` alone, takes the default `i32` (l.344), and `X ⇝ i32` fails once
+`X` is `u16`. The dependency is not one to leave out: while `X` holds a LitVar
+alone, `?N ⇝ U` unifies it with the parameter (l.291), so `probe` can change what
+`x + y` reads. A reading that left out of a node's dependencies the nodes that
+would record no lower bound, equation or kind into the class it reads made the
+outcome depend on the order: `let x = 0; n(x); m(x);` with `n(u8)`, `n(u16)`,
+`m(u16)` and `m(&str)` reached `n(u16)` accepted where `m` was decided first, and
+`n` refused where `n` was. It is removed. `design/18-invariant-points.md` drafts an
+order of solving under which what `probe` records into `X` is no source until `X`'s
+own relations leave it without a type, so that `x + y` does not depend on
+`probe`.
 
 ## T1. A type parameter's bound
 
@@ -246,16 +248,16 @@ is a different question, which l.248 does not ask.
 
 "The relations recorded by a node that a broken dependency pointed to are recorded
 once the node that broke it is decided" (l.269). Until then, a third node that no
-longer waits for the first, it being decided, reads without them. Witness, the
-program of H7 read by relation (`Recording::Relation`): `x + y` and `y + 1` break
-their dependencies on each other, and `probe`, decided after `x + y` and before
-`y + 1`, reads `X` as `?a` alone and takes `i32`; decided after both, it reads
-`u16`. Two outcomes, one refused (`examples.rs`,
-`hole_o2_a_deferred_relation_read_by_a_third_node`, `Deferral::Recording`).
+longer waits for the first, it being decided, reads without them. The witness was
+the program of H7 under the reading H7 removes, where `probe` lay outside the cycle
+of `x + y` and `y + 1`: decided after `x + y` and before `y + 1`, it read `X` as
+`?a` alone and took `i32`, and decided after both, `u16`. Under the spec as stated
+`probe` is in that cycle, and a witness whose third node lies outside a cycle is
+not yet found.
 
 Read so that a broken dependency's relations are recorded when their node is
 decided, and only the value read by the node that broke it leaves them out
-(`Deferral::Reading`), every order reaches `probe(u16)`. That reading keeps what
+(`Deferral::Reading`), no third node reads without them. That reading keeps what
 l.269 is for, that each node of a cycle reads without the others (Example 12, step
 3), without holding the relations from third nodes.
 
