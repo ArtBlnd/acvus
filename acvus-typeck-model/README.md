@@ -57,5 +57,6 @@ The primitives, each assuming only those before it:
 | 15 | I\* | l.244–269, `docs/notes/typeck-pivot.md` §1–2 |
 | 16 | Inputs up to a size (draft) | l.226–238, l.303–321 |
 | 17 | The captured environment | l.203, l.210–226, functions §2 |
+| 18 | Own relations first, invariant points last (draft) | l.228, l.240–301, l.344 |
 
 Writing a note may change the notes after it.
