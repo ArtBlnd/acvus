@@ -316,8 +316,11 @@ Three results the table did not give:
   point. The payload depends on `?k` (l.244), unsolved, so row 3 does not take
   it, and takes nothing; fallback then gives `?k` `!` (l.299), the payload is `!`
   by its own relations, and the boundary fails. P6's control as first derived,
-  `Some(?s)` in `g`, `?s` with no source, was refused the same way; with the
-  LitVar of `Some(0)` there, settled (l.176), row 3 takes the payload. So
+  `Some(?s)` in `g`, `?s` with no source, was refused at the same boundary, in
+  the instance, `S` and `O` left without a value in `g`'s C; that the payload is
+  `!` there was not shown, the instance's values not being read. With the LitVar
+  of `Some(0)` there, settled (l.176), the one difference, row 3 takes the
+  payload. So
   fallback reaches a class row 3 would type, through its lower bound, before
   row 3 does, against the order of rows 3 and 4.
 

@@ -2697,7 +2697,8 @@ fn generic_fill(literal: &str, number: IntTy, passes_a: bool) -> Program {
 /// `None`'s `?k` falls back. With invariant points last, the payload's lower
 /// bound `?k` has no source and no invariant point, and the payload depends on
 /// it, so the rule takes neither; `?k` falls back to `!`, the payload is `!` by
-/// its own relations, and the boundary fails.
+/// its own relations, and the boundary fails. That fallback comes first here is
+/// against the order of rows 3 and 4 (`design/18-invariant-points.md`, Open).
 #[test]
 fn a_none_lent_to_a_filled_option() {
     let outcome = only_outcome(&a_none_filled(Readings::default()));
