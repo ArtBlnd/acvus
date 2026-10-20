@@ -157,7 +157,13 @@ was run by changing the model, and no test keeps it.
   function, reaches calls whose group copies the environment with that function's
   C. Function values crossing groups are not yet encoded (note 09).
 - A call's candidates are the Values of the moment. Whether Values can still grow
-  after a call is decided, and whether row 3 makes cycles beyond those l.269
-  breaks, is not shown: in every witness the lambda reaches the callee's class by a
-  pass recorded when the group's solving starts, so no call's Values grow after
-  it.
+  after a call is decided is not shown: in every witness the lambda reaches the
+  callee's class by a pass recorded when the group's solving starts, so no call's
+  Values grow after it.
+- Row 3 makes a node's result reach what it reads through a call. In
+  `acc = f()` with `f = || acc + 1`, `acc + 1`'s result `R` reaches `ACC`, which it
+  reads, by `R ≤ λ result ≤ f() ≤ ACC`. Probed in every order by changing the
+  model, `f()` is decided first, no node breaks a dependency on another (l.269),
+  nothing is deferred, and `acc + 1`'s read leaves out its own relations alone
+  (l.267). Whether row 3 makes a cycle between distinct nodes, which l.269
+  breaks, no witness yet shows.
