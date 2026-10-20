@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::class::ClassId;
+use crate::program::Recording;
 use crate::relation::Relation;
 use crate::solve::State;
 use crate::ty::Name;
@@ -160,6 +161,7 @@ impl State {
             }
             nodes
         };
+        let by_relation = self.readings.recording == Recording::Relation;
         let mut reads = Vec::new();
         for (name, node) in &undecided {
             let reads_reference = node.kind.reads_reference();
@@ -171,6 +173,9 @@ impl State {
                                 || reads_reference
                                     && (self.is_inner_projection(recorder)
                                         || !self.may_decide_reference(recorder, at))
+                                || !reads_reference
+                                    && by_relation
+                                    && !self.may_record_into(recorder, at)
                         }
                         _ => false,
                     };

@@ -110,6 +110,38 @@ itself (`examples.rs`, `example_14_a_struct_and_recursion_that_grows`, sampled
 orders). The narrative's check holds only of a class whose value an equation
 decides (l.293).
 
+## H7. Two uses that read one class
+
+A use depends on the nodes that record relations into the classes at the positions
+it reads (l.247), and the nodes that record relations into a class are those the
+class depends on (l.250): by l.244 (b), the relations not yet recorded into it by a
+node at whose position it lies. Read as every node at whose position the class
+lies (`Recording::Position`), two uses that both read a class depend on each other,
+each breaks its dependency on the other (l.269), and each reads the class without
+the other's relations, whether or not the other's candidates would record any into
+it. Witness, refused in every order under that reading (`examples.rs`,
+`hole_7_two_uses_that_read_one_class`):
+
+```
+let mut x = 0;
+let mut y = 1u16;
+while c {
+    x = x + y;
+    y = y + 1;
+}
+probe(x);                // probe(u16), probe(i32)
+```
+
+`probe` passes `x` into a parameter its declarations write, a boundary out of `X`
+(l.218), and records no lower bound, equation or kind into `X`; yet `x + y` depends
+on it, so `probe` reads `X` without `x + y`'s relations, as `?a` alone, takes the
+default `i32` (l.344), and `X ⇝ i32` fails once `X` is `u16`. Line 252 names what a
+use's candidates "would record into one equivalence class" as lower bounds and
+equations. Read so that a node records into a class only where it would record a
+lower bound, an equation or a kind into it, or into a type it is an invariant part
+of (`Recording::Relation`), `probe` is no dependency of `x + y`, waits for it, and
+reads `u16`. That reading narrows every read as l.248 narrows a reference read.
+
 ## T1. A type parameter's bound
 
 Extern fn §1 gives a type parameter one bound, any type or any type the use must
@@ -206,25 +238,27 @@ is a different question, which l.248 does not ask.
 
 ## O2. What a broken dependency's relations wait for
 
-A lend reads whether its place is a reference (l.267) and depends on the nodes
-that record into its place (l.248), which are the nodes at whose positions the
-place lies (l.244 (b), l.250); a lend's place is at its position. So two lends of
-one place depend on each other, each breaks its dependency on the other (l.269),
-and "the relations recorded by a node that a broken dependency pointed to are
-recorded once the node that broke it is decided" (l.269). Until then the
-reference the first lend gives has no kind, and a use that reads it in between
-reads nothing there. In Example 12, `&y` and the `&y` of `y + 1` are such a pair:
-`y + 1` decided between them reads its first argument as nothing and its second as
-`?{1}`, takes the default `i32` (l.344), and the program is refused, `1u16 ≤ Y` not
-reaching `i32`. Witness: Example 12 itself, which reaches an accepted and a
-refused outcome (`examples.rs`, `example_12_accumulation_that_starts_from_a_literal`,
-`Deferral::Recording`).
+"The relations recorded by a node that a broken dependency pointed to are recorded
+once the node that broke it is decided" (l.269). Until then, a third node that no
+longer waits for the first, it being decided, reads without them. Witness, the
+program of H7 read by relation (`Recording::Relation`): `x + y` and `y + 1` break
+their dependencies on each other, and `probe`, decided after `x + y` and before
+`y + 1`, reads `X` as `?a` alone and takes `i32`; decided after both, it reads
+`u16`. Two outcomes, one refused (`examples.rs`,
+`hole_o2_a_deferred_relation_read_by_a_third_node`, `Deferral::Recording`).
 
 Read so that a broken dependency's relations are recorded when their node is
 decided, and only the value read by the node that broke it leaves them out
-(`Deferral::Reading`), Example 12 reaches the spec's outcome in every order. That
-reading keeps what l.269 is for, that each node of a cycle reads without the
-others (Example 12, step 3), without holding the relations from third nodes.
+(`Deferral::Reading`), every order reaches `probe(u16)`. That reading keeps what
+l.269 is for, that each node of a cycle reads without the others (Example 12, step
+3), without holding the relations from third nodes.
+
+An earlier encoding found Example 12 itself order-dependent, through a cycle of its
+two lends of `y`; that cycle was the encoding's: a lend cannot decide whether its
+place is a reference, and leaving out of a lend's dependencies the nodes that
+cannot decide it, as l.248 leaves out the uses that have recorded it, removes the
+cycle (`design/08-node.md`, reading 12). Example 12 now reaches its outcome in every
+order under both readings.
 
 ## O3. A reference recorded at once has no mutability
 

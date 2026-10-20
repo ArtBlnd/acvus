@@ -68,12 +68,16 @@ reads its position, or lends it where its path passes a reference.
    there and the classes within the depth its candidates reach there (l.244 (b)),
    since the value read there is compared whole (l.337). Example 12 rests on it:
    `x + y` reads `Y`, the target of `&y`, and so depends on `y + 1`.
-12. **Which uses a reference-ness read waits for** (l.248). Whether a class is a
-   reference is decided by its lower bounds and equations (l.309), so a use found
-   at a class (l.250) is left out where no candidate would record a lower bound or
-   an equation into that class, or where it has recorded whether the class is a
-   reference. The pick example (l.263) needs the first: `pick` lies at `A`, its
-   argument, which its candidates record nothing into.
+12. **Which nodes a reference-ness read waits for** (l.248). Whether a class is a
+   reference is decided by its lower bounds and equations (l.309), so a node found
+   at a class (l.250) is left out where it cannot decide it: a use where no
+   candidate would record a lower bound or an equation into that class, or where
+   it has recorded whether the class is a reference; a lend at its place and a
+   binding at its position, which record there only that it is a reference, and
+   only where it already reads as one (l.307); and a call of a function value at
+   its arguments. The pick example (l.263) needs the first: `pick` lies at `A`, its
+   argument, which its candidates record nothing into. The second keeps two lends
+   of one place from depending on each other (Example 12's two `&y`).
 13. **What candidates would record** (l.252). A candidate records its result type
    into its result, and, inside each argument's kind as it is at the moment, the
    equations its parameter's invariant parts give (l.286), each part beneath an
@@ -93,3 +97,12 @@ reads its position, or lends it where its path passes a reference.
    their dependency on it records once they are decided; whether that holds of
    the state or of their reads only is `holes.md`, O2, and the model takes it as a
    reading (`Deferral`).
+18. **Which nodes record into a class** (l.244 (b), l.250). The nodes that record
+   relations into a class are those at whose positions it lies, or, read by the
+   relations, those of them that would record a lower bound, an equation or a kind
+   into it or into a type it is an invariant part of: a use where some candidate
+   would (reading 13), a lend at its place and its result, a binding at its
+   position and its own type, a projection and a call of a function value at every
+   class at their positions. For a use's read, which is of a value, the spec makes
+   no narrowing such as l.248 makes for a reference read; the model takes the two
+   as a reading (`Recording`, `holes.md`, H7).

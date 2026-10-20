@@ -6,7 +6,9 @@ use crate::explore::{Exploration, explore};
 use crate::node::{Decision, LendTarget};
 use std::collections::BTreeSet;
 
-use crate::program::{BindingPath, Deferral, Program, ProgramBuilder, Projection, Readings};
+use crate::program::{
+    BindingPath, Deferral, Program, ProgramBuilder, Projection, Readings, Recording,
+};
 use crate::sig::{DeclaredTypes, ExternDecl, SigTy, SigVar, Signature};
 use crate::solve::Outcome;
 use crate::ty::{IntTy, Mutability, Name, Scalar, Term, Ty};
@@ -978,37 +980,109 @@ fn add_impls(builder: &mut DeclsBuilder, numbers: &[IntTy]) {
 /// }
 /// ```
 /// A literal operand is a temporary of the literal's type, which `&` lends.
-/// The two lends of `y` depend on each other (`holes.md`, O2), so the outcome
-/// depends on the order where the relations of the first decided wait for the
-/// other (`Deferral::Recording`), and is the spec's where they are left out of
-/// its read only (`Deferral::Reading`).
+/// `x + y` and `y + 1` depend on each other and break their dependencies
+/// (l.269); either reading of what a broken dependency defers reaches the
+/// spec's outcome.
 #[test]
 fn example_12_accumulation_that_starts_from_a_literal() {
-    let recording = outcomes(&example_12(Deferral::Recording));
-    let accepted: BTreeSet<bool> = recording.iter().map(|outcome| outcome.accepted).collect();
-    assert_eq!(accepted, BTreeSet::from([false, true]), "{recording:#?}");
-    let outcome = only_outcome(&example_12(Deferral::Reading));
-    assert!(outcome.accepted, "{outcome:#?}");
-    for class in ["X", "Y", "?a", "?b", "R1", "R2"] {
-        assert_eq!(
-            value(&outcome, class),
-            Some(closed_int(IntTy::U16)),
-            "{class}: {outcome:#?}"
-        );
+    for deferral in [Deferral::Recording, Deferral::Reading] {
+        let readings = Readings {
+            deferral,
+            ..Readings::default()
+        };
+        let outcome = only_outcome(&example_12(readings, false));
+        assert!(outcome.accepted, "{outcome:#?}");
+        for class in ["X", "Y", "?a", "?b", "R1", "R2"] {
+            assert_eq!(
+                value(&outcome, class),
+                Some(closed_int(IntTy::U16)),
+                "{class}: {outcome:#?}"
+            );
+        }
+        let add_u16 = overload("core::add", 1);
+        assert_eq!(decision(&outcome, "x + y"), Decision::Use(add_u16.clone()));
+        assert_eq!(decision(&outcome, "y + 1"), Decision::Use(add_u16));
     }
-    let add_u16 = overload("core::add", 1);
-    assert_eq!(decision(&outcome, "x + y"), Decision::Use(add_u16.clone()));
-    assert_eq!(decision(&outcome, "y + 1"), Decision::Use(add_u16));
 }
 
-fn example_12(deferral: Deferral) -> Program {
-    let mut d = declare(&[]);
-    add_impls(&mut d, &[IntTy::U8, IntTy::U16, IntTy::I32]);
-    let mut p = ProgramBuilder::new(d.finish().unwrap());
-    p.readings(Readings {
+/// `holes.md`, H7: Example 12 followed by `probe(x)`, with `probe(u16)` and
+/// `probe(i32)`. `probe` and `x + y` both read `X`, each lying at a position the
+/// other reads, so each breaks its dependency on the other (l.250, l.269), and
+/// `probe` reads `X` without `x + y`'s relations, as `?a` alone, takes the
+/// default `i32`, and is refused in every order. Where only the nodes that
+/// would record a relation into a class record into it (`Recording::Relation`),
+/// `probe`, which records nothing into its argument, is no dependency of
+/// `x + y`, waits for it, and reads `X` as `u16`.
+#[test]
+fn hole_7_two_uses_that_read_one_class() {
+    let by_position = only_outcome(&example_12(Readings::default(), true));
+    assert!(!by_position.accepted, "{by_position:#?}");
+    assert_eq!(
+        decision(&by_position, "probe"),
+        Decision::Use(overload("probe", 1))
+    );
+    let by_relation = Readings {
+        recording: Recording::Relation,
+        deferral: Deferral::Reading,
+        ..Readings::default()
+    };
+    let outcome = only_outcome(&example_12(by_relation, true));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        decision(&outcome, "probe"),
+        Decision::Use(overload("probe", 0))
+    );
+}
+
+/// `holes.md`, O2: the program of H7, read by relation (`Recording::Relation`).
+/// `x + y` and `y + 1` break their dependencies on each other. Decided after
+/// `x + y` and before `y + 1`, `probe` reads `X` without the relations `x + y`
+/// defers until `y + 1` is decided (`Deferral::Recording`), and takes `i32`;
+/// where only the breaking node's read leaves them out (`Deferral::Reading`),
+/// every order reaches `probe(u16)`.
+#[test]
+fn hole_o2_a_deferred_relation_read_by_a_third_node() {
+    let readings = |deferral| Readings {
+        recording: Recording::Relation,
         deferral,
         ..Readings::default()
-    });
+    };
+    let recording = outcomes(&example_12(readings(Deferral::Recording), true));
+    let decisions: BTreeSet<Decision> = recording
+        .iter()
+        .map(|outcome| decision(outcome, "probe"))
+        .collect();
+    assert_eq!(
+        decisions,
+        BTreeSet::from([
+            Decision::Use(overload("probe", 0)),
+            Decision::Use(overload("probe", 1)),
+        ]),
+        "{recording:#?}"
+    );
+    let outcome = only_outcome(&example_12(readings(Deferral::Reading), true));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        decision(&outcome, "probe"),
+        Decision::Use(overload("probe", 0))
+    );
+}
+
+fn example_12(readings: Readings, probe: bool) -> Program {
+    let mut d = declare(&[]);
+    add_impls(&mut d, &[IntTy::U8, IntTy::U16, IntTy::I32]);
+    for number in [IntTy::U16, IntTy::I32] {
+        function(
+            &mut d,
+            "probe",
+            &[],
+            vec![s_int(number)],
+            s_unit(),
+            Role::Fn,
+        );
+    }
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(readings);
     let x = p.var("X");
     let a = p.lit("?a", int_lit(0));
     let y = p.var("Y");
@@ -1030,6 +1104,10 @@ fn example_12(deferral: Deferral) -> Program {
     p.lend("&1", Mutability::Shared, &b, &lb);
     p.call("y + 1", "core::add", &[&ly_2, &lb], &r2);
     p.pass(&r2, &y);
+    if probe {
+        let probed = p.var("probe(x)");
+        p.call("probe", "probe", &[&x], &probed);
+    }
     p.build()
 }
 

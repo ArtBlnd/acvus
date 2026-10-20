@@ -364,20 +364,55 @@ impl State {
             .any(|&recorded| self.root(recorded) == root)
     }
 
-    /// Whether what the use records may yet decide whether the class is a
-    /// reference: some candidate would record a lower bound or an equation
-    /// into it, and the use has not recorded whether it is one (l.248, l.252;
-    /// `design/08-node.md`, reading 12).
+    /// Whether what the node records may yet decide whether the class is a
+    /// reference, which is decided by its lower bounds and equations (l.309):
+    /// for a use, where some candidate would record one into it and the use
+    /// has not recorded whether it is one (l.248, l.252); for a lend, a binding
+    /// and a call of a function value, where the class is the result it
+    /// records into. A lend records into its place, and a binding into its
+    /// position, only that it is a reference to a class, and only where it
+    /// already reads as one (l.307; `design/08-node.md`, reading 12).
     pub(crate) fn may_decide_reference(&self, name: &Name, class: ClassId) -> bool {
-        if !matches!(self.nodes[name].kind, NodeKind::Use { .. }) {
-            return true;
-        }
         let root = self.root(class);
-        !self.recorded_reference(name, class)
-            && self
+        match &self.nodes[name].kind {
+            NodeKind::Use { .. } => {
+                !self.recorded_reference(name, class)
+                    && self
+                        .would_record_per_candidate(name)
+                        .iter()
+                        .any(|found| found.contains_key(&root))
+            }
+            NodeKind::Lend { result, .. } | NodeKind::CallValue { result, .. } => {
+                self.root(*result) == root
+            }
+            NodeKind::Bind { binding, .. } => self.root(*binding) == root,
+            NodeKind::Project { .. } => true,
+        }
+    }
+
+    /// Whether the node would record a lower bound, an equation or a kind into
+    /// the class, or into a type the class is an invariant part of, through
+    /// which an equation reaches it (`Recording`; `design/08-node.md`, reading
+    /// 18): a use where some candidate would (reading 13); a lend into its
+    /// result and its place, the target of the reference it equates with its
+    /// result (l.307); a binding into its own type and its position, which it
+    /// may lend; and a projection or a call of a function value into every
+    /// class at its positions.
+    pub(crate) fn may_record_into(&self, name: &Name, class: ClassId) -> bool {
+        let root = self.root(class);
+        match &self.nodes[name].kind {
+            NodeKind::Use { .. } => self
                 .would_record_per_candidate(name)
                 .iter()
-                .any(|found| found.contains_key(&root))
+                .any(|found| found.contains_key(&root)),
+            NodeKind::Lend { place, result, .. } => {
+                self.root(*place) == root || self.root(*result) == root
+            }
+            NodeKind::Bind {
+                position, binding, ..
+            } => self.root(*position) == root || self.root(*binding) == root,
+            NodeKind::Project { .. } | NodeKind::CallValue { .. } => true,
+        }
     }
 
     /// The nodes whose relations the node's read leaves out: itself and those
