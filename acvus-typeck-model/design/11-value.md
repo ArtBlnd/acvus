@@ -34,3 +34,15 @@ decided on a separate state that replays the relations a node does not leave out
    recorded and those solving derives (note 07), solves each class from its sources
    in one fixed order, decides no node and falls nothing back. A class with no
    relation left gives nothing, and one holding only a LitVar gives that LitVar.
+7. **An element along a view.** Where an extern-defined container's class holds
+   "indexes `τ`", its parts are related to those of the view's parameter's target,
+   and `τ` to the element of its result's slice, by equations, the view being the
+   cast going up from a shared reference to the container (l.78, l.161); a cast up
+   from `&mut N` has one from `&N`. A container whose cast goes elsewhere, or that
+   has none, has no view, and the kind is refused.
+8. **Visibility.** A kind gives its member where it names a field, or a variant of
+   an enum the text names (l.282). Whether a lower bound the host gives makes it
+   give none is `holes.md`, T5, and the model takes it as a reading
+   (`Visibility`).
+9. **`!` and a kind known in part.** `!` has no part, so it meets no kind known in
+   part (`holes.md`, T6).

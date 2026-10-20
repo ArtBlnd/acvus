@@ -47,7 +47,7 @@ The primitives, each assuming only those before it:
 | 05 | Coercion and rank: LitVars, values a use reads, coercion, the steps of `≤`, rank | l.99–116, l.134, l.169, l.267, l.293, l.344 |
 | 06 | Equivalence classes: names, union-find, type variables, kinds | l.118–176 |
 | 07 | Relations and what records them | l.228–238 |
-| 08 | Uses, lends, projections and bindings | l.303–345 |
+| 08 | Uses, lends, projections and bindings | l.149–161, l.303–345 |
 | 09 | Binding groups, universals, C and instances | l.195–222 |
 | 10 | The dependency graph | l.240–271 |
 | 11 | Values and splits | l.273–293 |

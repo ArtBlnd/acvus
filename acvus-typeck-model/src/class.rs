@@ -29,7 +29,8 @@ pub enum ClassName {
     /// A class a use or a lend of this name made anew.
     Node(Rc<Name>, crate::node::NodeAt),
     /// A class of the signature of the cast at `step` of the path that links
-    /// the parts of a relation from `from` to `to` (l.291).
+    /// the parts of a relation from `from` to `to` (l.291), or of the view
+    /// that links the container `from` to its element `to` (l.161).
     Link {
         from: Rc<ClassName>,
         to: Rc<ClassName>,
@@ -375,6 +376,10 @@ impl Classes {
                 }
             }
             if let Some((kind, _)) = &held.kind {
+                if let (Term::Extern { .. }, Fact::Indexes(_)) = (kind, fact) {
+                    // The state links it along the container's view (l.161).
+                    continue;
+                }
                 let resolved = resolve(kind, fact, types)
                     .ok_or_else(|| Conflict::Fact(fact.clone(), kind.constructor()))?;
                 pairs.push((resolved, fact.class()));
@@ -408,8 +413,7 @@ impl FactPart {
 
 /// The part of `kind` the fact names, where the kind meets the fact. A
 /// struct's field is the part at the field's place in the declared order
-/// (l.325). The element of an extern-defined container, linked through its
-/// view (l.161), is not yet encoded.
+/// (l.325). An extern-defined container's element is not a part of it.
 fn resolve(kind: &Term<ClassId>, fact: &Fact, types: &DeclaredTypes) -> Option<ClassId> {
     match (kind, fact) {
         (Term::Ref(_, target), Fact::Ref(_)) => Some(*target),

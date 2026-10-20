@@ -3,8 +3,10 @@
 
 use crate::decl::{DeclId, Decls, DeclsBuilder, Role};
 use crate::explore::{Exploration, explore};
-use crate::node::Decision;
-use crate::program::{Program, ProgramBuilder};
+use crate::node::{Decision, LendTarget};
+use std::collections::BTreeSet;
+
+use crate::program::{BindingPath, Program, ProgramBuilder, Projection, Readings};
 use crate::sig::{DeclaredTypes, ExternDecl, SigTy, SigVar, Signature};
 use crate::solve::Outcome;
 use crate::ty::{IntTy, Mutability, Name, Scalar, Term, Ty};
@@ -250,7 +252,10 @@ fn example_2_a_boundarys_invariant_part() {
         value(&outcome, "A"),
         Some(closed_extern("Vec", vec![closed_int(IntTy::U8)]))
     );
-    assert_eq!(decision(&outcome, "lend"), Decision::LendPlace);
+    assert_eq!(
+        decision(&outcome, "lend"),
+        Decision::Lend(LendTarget::Place)
+    );
 }
 
 /// ```text
@@ -360,7 +365,7 @@ fn example_9_a_lend_that_reborrows_a_reference() {
     assert!(outcome.accepted, "{outcome:#?}");
     assert_eq!(
         decision(&outcome, "lend r"),
-        Decision::LendThrough(Mutability::Exclusive)
+        Decision::Lend(LendTarget::Through(Mutability::Exclusive))
     );
     let vec_never = closed_extern("Vec", vec![closed(Term::Never)]);
     assert_eq!(
@@ -458,5 +463,350 @@ fn hole_4_a_reborrow_at_a_boundary_equates_the_targets() {
     assert_eq!(
         value(&outcome, "V"),
         Some(closed_extern("Vec", vec![closed_int(IntTy::U8)]))
+    );
+}
+
+/// Every outcome some order of solving reaches.
+fn outcomes(program: &Program) -> Vec<Outcome> {
+    let Exploration {
+        outcomes,
+        states,
+        complete,
+    } = explore(program, BUDGET);
+    assert!(complete, "explored {states} states within the budget");
+    outcomes
+}
+
+fn int_lit(value: u128) -> crate::lit::LitVar {
+    crate::lit::LitVar::of(crate::lit::Literal::Int(value))
+}
+
+fn field(name: &str) -> Projection {
+    Projection::Field(Name::new(name))
+}
+
+fn variant(name: &str) -> Projection {
+    Projection::Payload {
+        enum_name: None,
+        variant: Name::new(name),
+    }
+}
+
+fn object(fields: &[(&str, Ty)]) -> Ty {
+    closed(Term::Object(
+        fields
+            .iter()
+            .map(|(name, ty)| (Name::new(name), ty.clone()))
+            .collect(),
+    ))
+}
+
+fn has_refusal<F>(outcome: &Outcome, which: F) -> bool
+where
+    F: Fn(&crate::solve::Refusal) -> bool,
+{
+    outcome.refusals.iter().any(which)
+}
+
+/// ```text
+/// let mut x = None;
+/// let r = &mut x;
+/// *r = Some(1u8);
+/// ```
+#[test]
+fn example_7_a_write_through_a_reference() {
+    let mut p = ProgramBuilder::new(no_decls());
+    let x = p.var("X");
+    let k = p.var("?k");
+    let none = p.written("None", Term::Option(k));
+    let lent = p.var("&mut x");
+    let r = p.var("R");
+    let deref = p.var("*r");
+    let s = p.var("S");
+    let some = p.written("Some(1u8)", Term::Option(s.clone()));
+    let u8_ = p.written("1u8", int(IntTy::U8));
+    p.pass(&none, &x);
+    p.lend("&mut x", Mutability::Exclusive, &x, &lent);
+    p.pass(&lent, &r);
+    p.project("*r", Projection::Deref, &r, &deref);
+    p.pass(&u8_, &s);
+    p.pass(&some, &deref);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "X"),
+        Some(closed(Term::Option(closed_int(IntTy::U8))))
+    );
+    assert_eq!(
+        decision(&outcome, "&mut x"),
+        Decision::Lend(LendTarget::Place)
+    );
+}
+
+/// ```text
+/// let a;
+/// a.x = 0;
+/// ```
+#[test]
+fn example_8_a_field_written_by_the_text() {
+    let mut p = ProgramBuilder::new(no_decls());
+    let a = p.var("A");
+    let x = p.var("a.x");
+    let zero = p.lit("0", int_lit(0));
+    p.project("a.x", field("x"), &a, &x);
+    p.pass(&zero, &x);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "A"),
+        Some(object(&[("x", closed_int(IntTy::I32))]))
+    );
+    assert_eq!(decision(&outcome, "a.x"), Decision::Applied);
+}
+
+/// `@cfg.extra = 1;` with `@cfg` the host's `{name: String}`.
+#[test]
+fn example_8_a_field_of_a_type_the_host_gives() {
+    let mut p = ProgramBuilder::new(no_decls());
+    let string = p.written("String", Term::String);
+    let cfg = p.host("@cfg", Term::Object([(Name::new("name"), string)].into()));
+    let extra = p.var("@cfg.extra");
+    let one = p.lit("1", int_lit(1));
+    p.project("@cfg.extra", field("extra"), &cfg, &extra);
+    p.pass(&one, &extra);
+    let outcome = only_outcome(&p.build());
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert!(
+        has_refusal(&outcome, |refusal| matches!(
+            refusal,
+            crate::solve::Refusal::Conflict { .. }
+        )),
+        "{outcome:#?}"
+    );
+}
+
+/// `if let Ok(v) = Some(1u8) { }`
+#[test]
+fn example_8_a_variant_the_language_writes() {
+    let mut p = ProgramBuilder::new(no_decls());
+    let s = p.var("S");
+    let some = p.written("Some(1u8)", Term::Option(s.clone()));
+    let u8_ = p.written("1u8", int(IntTy::U8));
+    let payload = p.var("Ok.0");
+    let v = p.var("V");
+    p.pass(&u8_, &s);
+    p.project("Ok", variant("Ok"), &some, &payload);
+    p.bind("v", &["Ok"], &payload, &v);
+    let outcome = only_outcome(&p.build());
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert!(
+        has_refusal(&outcome, |refusal| matches!(
+            refusal,
+            crate::solve::Refusal::Conflict { .. }
+        )),
+        "{outcome:#?}"
+    );
+}
+
+/// `holes.md`, T5.
+/// ```text
+/// let a = @cfg;            // @cfg is { name: String }, given by the host
+/// a.extra = 1;
+/// ```
+/// Read by the member, `extra` is written by the text and visible, and `a`
+/// grows to `{extra, name}`; read by the sources, a lower bound the host gives
+/// makes no member visible, and the kind conflicts with `{name}`.
+#[test]
+fn hole_t5_a_field_on_a_class_the_host_bounds() {
+    let program = |visibility: crate::program::Visibility| {
+        let mut p = ProgramBuilder::new(no_decls());
+        p.readings(Readings {
+            visibility,
+            ..Readings::default()
+        });
+        let string = p.written("String", Term::String);
+        let cfg = p.host("@cfg", Term::Object([(Name::new("name"), string)].into()));
+        let a = p.var("A");
+        let extra = p.var("a.extra");
+        let one = p.lit("1", int_lit(1));
+        p.pass(&cfg, &a);
+        p.project("a.extra", field("extra"), &a, &extra);
+        p.pass(&one, &extra);
+        p.build()
+    };
+    let by_member = only_outcome(&program(crate::program::Visibility::ByMember));
+    assert!(by_member.accepted, "{by_member:#?}");
+    assert_eq!(
+        value(&by_member, "A"),
+        Some(object(&[
+            ("extra", closed_int(IntTy::I32)),
+            ("name", closed(Term::String)),
+        ]))
+    );
+    let by_sources = only_outcome(&program(crate::program::Visibility::BySources));
+    assert!(!by_sources.accepted, "{by_sources:#?}");
+}
+
+/// ```text
+/// let mut v = Vec::new();  // new() -> Vec⟨T⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
+/// v[0] = 1u8;
+/// ```
+/// and without the view, which l.161 refuses.
+#[test]
+fn an_index_through_a_view() {
+    let program = |view: bool| {
+        let mut d = declare(&[("Vec", 1)]);
+        function(
+            &mut d,
+            "new",
+            &["T"],
+            vec![],
+            s_extern("Vec", vec![t(0)]),
+            Role::Fn,
+        );
+        if view {
+            let vec_t = s_extern("Vec", vec![t(0)]);
+            let slice_t = SigTy::term(Term::Slice(t(0)));
+            function(
+                &mut d,
+                "core::as_slice",
+                &["T"],
+                vec![s_ref(Mutability::Shared, vec_t)],
+                s_ref(Mutability::Shared, slice_t),
+                Role::Cast,
+            );
+        }
+        let mut p = ProgramBuilder::new(d.finish().unwrap());
+        let v = p.var("V");
+        let new = p.var("new()");
+        let element = p.var("v[0]");
+        let u8_ = p.written("1u8", int(IntTy::U8));
+        p.call("new", "new", &[], &new);
+        p.pass(&new, &v);
+        p.project("v[0]", Projection::Elem, &v, &element);
+        p.pass(&u8_, &element);
+        p.build()
+    };
+    let outcome = only_outcome(&program(true));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "V"),
+        Some(closed_extern("Vec", vec![closed_int(IntTy::U8)]))
+    );
+    let refused = only_outcome(&program(false));
+    assert!(!refused.accepted, "{refused:#?}");
+}
+
+/// ```text
+/// let a;
+/// a[0] = 1;
+/// ```
+/// The kind "indexes `τ`" names no member, so `A` has no source that gives a
+/// constructor and falls back to `!`, which holds no element.
+#[test]
+fn an_index_alone_names_no_constructor() {
+    let mut p = ProgramBuilder::new(no_decls());
+    let a = p.var("A");
+    let element = p.var("a[0]");
+    let one = p.lit("1", int_lit(1));
+    p.project("a[0]", Projection::Elem, &a, &element);
+    p.pass(&one, &element);
+    let outcome = only_outcome(&p.build());
+    assert!(!outcome.accepted, "{outcome:#?}");
+}
+
+/// ```text
+/// let o = Some(1u8);
+/// if let Some(x) = &o { }
+/// ```
+/// The payload's projection applies to the target of `&o` (l.309), so the
+/// path passes a shared reference and `x` lends its position (l.317).
+#[test]
+fn a_binding_behind_a_reference_lends_its_position() {
+    let program = |binding_path: BindingPath| {
+        let mut p = ProgramBuilder::new(no_decls());
+        p.readings(Readings {
+            binding_path,
+            ..Readings::default()
+        });
+        let s = p.var("S");
+        let some = p.written("Some(1u8)", Term::Option(s.clone()));
+        let u8_ = p.written("1u8", int(IntTy::U8));
+        let o = p.var("O");
+        let lent = p.var("&o");
+        let payload = p.var("Some.0");
+        let x = p.var("X");
+        p.pass(&u8_, &s);
+        p.pass(&some, &o);
+        p.lend("&o", Mutability::Shared, &o, &lent);
+        p.project("Some", variant("Some"), &lent, &payload);
+        p.bind("x", &["Some"], &payload, &x);
+        p.build()
+    };
+    let outcome = only_outcome(&program(BindingPath::AfterPath));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "X"),
+        Some(closed(Term::Ref(Mutability::Shared, closed_int(IntTy::U8))))
+    );
+    assert_eq!(
+        decision(&outcome, "Some"),
+        Decision::AppliedToTarget(Mutability::Shared)
+    );
+    assert_eq!(
+        decision(&outcome, "x"),
+        Decision::BindLend(Mutability::Shared, LendTarget::Place)
+    );
+    let as_stated = outcomes(&program(BindingPath::AsStated));
+    let values: BTreeSet<Option<Ty>> = as_stated
+        .iter()
+        .map(|outcome| value(outcome, "X"))
+        .collect();
+    assert_eq!(
+        values,
+        BTreeSet::from([
+            Some(closed_int(IntTy::U8)),
+            Some(closed(Term::Ref(Mutability::Shared, closed_int(IntTy::U8)))),
+        ]),
+        "{as_stated:#?}"
+    );
+}
+
+/// `holes.md`, T6.
+/// ```text
+/// let n = never();         // never() -> !
+/// if let Some(x) = n { }
+/// ```
+/// The kind "has variant `Some`" gives no member, so `N` is `!`, which holds
+/// no payload, and the model refuses; patterns §4 has the pattern decide
+/// nothing.
+#[test]
+fn hole_t6_a_pattern_on_a_scrutinee_of_type_never() {
+    let mut d = declare(&[]);
+    function(
+        &mut d,
+        "never",
+        &[],
+        vec![],
+        SigTy::term(Term::Never),
+        Role::Fn,
+    );
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    let n = p.var("N");
+    let called = p.var("never()");
+    let payload = p.var("Some.0");
+    let x = p.var("X");
+    p.call("never", "never", &[], &called);
+    p.pass(&called, &n);
+    p.project("Some", variant("Some"), &n, &payload);
+    p.bind("x", &["Some"], &payload, &x);
+    let outcome = only_outcome(&p.build());
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert!(
+        has_refusal(&outcome, |refusal| matches!(
+            refusal,
+            crate::solve::Refusal::Conflict { at, .. } if at.contains("N")
+        )),
+        "{outcome:#?}"
     );
 }

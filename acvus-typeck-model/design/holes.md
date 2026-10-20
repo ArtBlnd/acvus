@@ -68,6 +68,31 @@ relates the targets by an equation, as the reborrow row `&mut T ⇝ &T` keeps `T
 (`design/11-value.md`, reading 2), and accepts it (`examples.rs`,
 `hole_4_a_reborrow_at_a_boundary_equates_the_targets`).
 
+## H5. What a binding reads of its path
+
+A binding reads its position where its path passes no reference, and lends it where
+the path passes one (l.317). Whether the path passes one is what the projections on
+it became: each applies to its operand's target where the operand is a reference
+(l.309). But a binding reads "whether its equivalence class is a reference" (l.267),
+and depends on the nodes that record into its place, other than projections of a
+field, a component, an index or a variant (l.248), which are the projections on
+its path. So nothing makes a binding wait for them, and nothing it reads tells it
+what they became. Under the dependencies l.248 states, the outcome depends on the
+order: a binding decided before its path's projection reads its position, and one
+decided after lends it. Witness, two outcomes in the model, `x: u8` and `x: &u8`,
+both accepted (`examples.rs`, `a_binding_behind_a_reference_lends_its_position`,
+`BindingPath::AsStated`):
+
+```
+let o = Some(1u8);
+if let Some(x) = &o { }
+```
+
+Making the binding depend on the projections on its path gives one outcome, `x:
+&u8`, as in Rust (`BindingPath::AfterPath`). The exclusion in l.248 is about whether
+a class is a reference, which those projections do not decide; what a path passes
+is a different question, which l.248 does not ask.
+
 ## T1. A type parameter's bound
 
 Extern fn §1 gives a type parameter one bound, any type or any type the use must
@@ -100,3 +125,39 @@ names, and each remaining part coerces as its type does. The model reads types �
 The spec's scalars are Rust's (l.56). Operators §1 makes the numbers the integer
 types of 8 to 64 bits and `f64`, so `i128`, `u128`, `isize`, `usize` and `f32` are
 scalars of the spec and no number of the RFC. The model follows the spec.
+
+## T5. Which members a host's type keeps from growing
+
+A kind gives a member only where the member is visible: an object's fields and an
+enum's variants are visible since the body's text writes them, and the members of a
+type the host gives are not (l.282). Read by the member, the field `extra` in
+`a.extra` is written by the text and visible wherever `a`'s type came from, so the
+clause about the host's type changes no outcome: a class holding the host's type
+itself has an equation, which a kind cannot grow (Example 8). Patterns §2 has an
+enum grow only "where every use of the enum is visible", and an enum not visible
+there does not grow; read so, a class with a lower bound the host gives grows by no
+kind. Witness, accepted read by the member with `a: {extra: i32, name: String}`,
+refused read by the sources (`examples.rs`,
+`hole_t5_a_field_on_a_class_the_host_bounds`):
+
+```
+let a = @cfg;            // @cfg is { name: String }, given by the host
+a.extra = 1;
+```
+
+Read by the sources, the clause holds of a direct lower bound only: through `let b
+= a; b.extra = 1;` the class `b` has no lower bound the host gives, and grows.
+
+## T6. A pattern on a scrutinee of type `!`
+
+Patterns §4 has a scrutinee of type `!` reach no arm, each slot of its pattern
+deciding nothing of its type. In the spec, a projection of the pattern gives the
+scrutinee's class a kind known in part (l.311–315), and its value must meet that
+kind (l.282). `!` has no part, so it meets none, and the program is refused; the
+spec states no exception for `!`. Witness, refused by the model (`examples.rs`,
+`hole_t6_a_pattern_on_a_scrutinee_of_type_never`):
+
+```
+let n = never();         // never() -> !
+if let Some(x) = n { }
+```

@@ -24,8 +24,9 @@ turn.
    (l.138–147). Two facts of one part name one class, and a fact meets the kind
    where the kind has that part (l.165): a struct's field is the part at its place
    in the declared order (l.325). A fact the kind does not meet is a conflict: no
-   type holds both (l.282). The element an extern-defined container's view gives
-   (l.161) is not yet encoded.
+   type holds both (l.282). An extern-defined container's element is not its part,
+   so "indexes `τ`" meets its kind in the state, along its view (note 11, reading
+   7).
 2. **A conflict.** Where two classes' kinds have different constructors or members,
    or a LitVar meets a scalar that does not admit its values, the two are left apart
    and the relation that would make them one is refused.

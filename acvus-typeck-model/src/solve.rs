@@ -8,8 +8,9 @@ use crate::class::{Arena, ClassId, ClassName, Classes, Conflict, Fact, KindSourc
 use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::decl::{Decls, Node};
 use crate::node::{Decision, NodeKind, NodeState};
-use crate::program::{Item, Origin, Program};
+use crate::program::{Item, Origin, Program, Projection, Readings};
 use crate::relation::{Named, Recorded, Recorder, Relation};
+use crate::sig::SigTy;
 use crate::ty::{Mutability, Name, Term, Ty, Variance};
 use crate::value::{Head, head};
 
@@ -76,6 +77,12 @@ pub struct State {
     /// In a state a value read is taken from, the classes found to give
     /// nothing, having no relation left (l.267).
     pub(crate) nothing: BTreeSet<ClassId>,
+    pub(crate) readings: Readings,
+    /// The classes of the types the host gives (l.282).
+    pub(crate) hosts: BTreeSet<ClassId>,
+    /// The classes named by a kind "indexes `τ`" already linked along a view
+    /// (l.161).
+    pub(crate) viewed: BTreeSet<ClassId>,
 }
 
 /// A step that may be taken.
@@ -103,6 +110,9 @@ impl State {
             refusals: BTreeSet::new(),
             nodes: BTreeMap::new(),
             nothing: BTreeSet::new(),
+            readings: program.readings,
+            hosts: BTreeSet::new(),
+            viewed: BTreeSet::new(),
         };
         for class in &program.classes {
             let id = state.arena.intern(ClassName::Text(class.name.clone()));
@@ -115,6 +125,11 @@ impl State {
                 Origin::Var => {}
                 Origin::Lit(lit) => state.record(Relation::Lit(id, lit.clone()), Recorder::Origin),
                 Origin::Written(term) => {
+                    let term = term.clone().map(|_, part| state.text(&part));
+                    state.record(Relation::Kind(id, term), Recorder::Origin);
+                }
+                Origin::Host(term) => {
+                    state.hosts.insert(id);
                     let term = term.clone().map(|_, part| state.text(&part));
                     state.record(Relation::Kind(id, term), Recorder::Origin);
                 }
@@ -175,8 +190,51 @@ impl State {
                     };
                     state.add_node(name, kind);
                 }
+                Item::Project {
+                    name,
+                    projection,
+                    operand,
+                    result,
+                } => {
+                    let kind = NodeKind::Project {
+                        projection: projection.clone(),
+                        operand: state.text(operand),
+                        result: state.text(result),
+                    };
+                    state.add_node(name, kind);
+                }
+                Item::Bind {
+                    name,
+                    path,
+                    position,
+                    binding,
+                } => {
+                    let kind = NodeKind::Bind {
+                        path: path.clone(),
+                        position: state.text(position),
+                        binding: state.text(binding),
+                    };
+                    state.add_node(name, kind);
+                }
                 Item::Equation(..) => {}
             }
+        }
+        let derefs: Vec<Name> = state
+            .nodes
+            .iter()
+            .filter(|(_, node)| {
+                matches!(
+                    node.kind,
+                    NodeKind::Project {
+                        projection: Projection::Deref,
+                        ..
+                    }
+                )
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        for deref in &derefs {
+            state.decide(deref);
         }
         state.settle();
         state
@@ -324,17 +382,7 @@ impl State {
                 .filter(|&lower| self.is_solved(lower))
                 .filter_map(|lower| self.classes.held(lower).kind.as_ref().map(|(k, _)| head(k)))
                 .collect();
-            sources.extend(
-                self.classes
-                    .held(root)
-                    .facts
-                    .iter()
-                    .filter_map(Fact::visible_member)
-                    .map(|(constructor, member)| Head {
-                        constructor,
-                        members: [member].into(),
-                    }),
-            );
+            sources.extend(self.fact_heads(root));
             let Some(first) = sources.first().cloned() else {
                 return;
             };
@@ -370,6 +418,7 @@ impl State {
         loop {
             let before = (self.log.len(), self.split.len());
             self.merge_cycles();
+            self.link_views();
             let settled = self.settled();
             for i in 0..self.log.len() {
                 if self.split.contains(&i) {
@@ -410,6 +459,100 @@ impl State {
                 return;
             }
         }
+    }
+
+    /// Links each kind "indexes `τ`" an extern-defined container's class holds
+    /// to the slice's element along the signature of its view (l.161). A
+    /// container with no view cannot have the kind.
+    fn link_views(&mut self) {
+        let pending: Vec<(ClassId, ClassId)> = self
+            .classes
+            .roots()
+            .flat_map(|root| {
+                let held = self.classes.held(root);
+                let container = matches!(held.kind, Some((Term::Extern { .. }, _)));
+                held.facts.iter().filter_map(move |fact| match fact {
+                    Fact::Indexes(element) if container => Some((root, *element)),
+                    _ => None,
+                })
+            })
+            .filter(|(_, element)| !self.viewed.contains(element))
+            .collect();
+        for (root, element) in pending {
+            self.viewed.insert(element);
+            self.link_view(root, element);
+        }
+    }
+
+    fn link_view(&mut self, root: ClassId, element: ClassId) {
+        let recorder = Recorder::Split(root);
+        let Some((kind, _)) = self.classes.held(root).kind.clone() else {
+            return;
+        };
+        let constructor = kind.constructor();
+        let view = self
+            .decls
+            .tree()
+            .up(&Node::Ref(Mutability::Shared, constructor.clone()))
+            .cloned()
+            .filter(|cast| {
+                matches!(self.decls.decl(cast).sig.result(), SigTy::Term(term)
+                    if matches!(&**term, Term::Ref(_, SigTy::Term(target))
+                        if matches!(&**target, Term::Slice(_))))
+            });
+        let Some(view) = view else {
+            let at = format!(
+                "{}: indexes {}",
+                self.class_name(root),
+                self.class_name(element)
+            );
+            self.refuse_conflict(at, Conflict::Fact(Fact::Indexes(element), constructor));
+            return;
+        };
+        let sig = self.decls.decl(&view).sig.clone();
+        let (from, to) = (
+            Rc::new(self.class_name(root)),
+            Rc::new(self.class_name(element)),
+        );
+        let link = |at: LinkAt| ClassName::Link {
+            from: from.clone(),
+            to: to.clone(),
+            step: 0,
+            at,
+        };
+        let mut vars = BTreeMap::new();
+        let var_name = |var| link(LinkAt::Var(var));
+        let param = self.instantiate(
+            &sig.params()[0],
+            &mut vars,
+            link(LinkAt::Param),
+            &var_name,
+            &recorder,
+        );
+        let result = self.instantiate(
+            sig.result(),
+            &mut vars,
+            link(LinkAt::Result),
+            &var_name,
+            &recorder,
+        );
+        let target = |state: &State, id: ClassId| match &state.classes.held(id).kind {
+            Some((Term::Ref(_, target), _)) => Some(*target),
+            _ => None,
+        };
+        let (Some(container), Some(slice)) = (target(self, param), target(self, result)) else {
+            return;
+        };
+        let (Some((container_kind, _)), Some((Term::Slice(slice_element), _))) = (
+            self.classes.held(container).kind.clone(),
+            self.classes.held(slice).kind.clone(),
+        ) else {
+            return;
+        };
+        for ((_, part), (_, param_part)) in kind.parts().into_iter().zip(container_kind.parts()) {
+            self.record(Relation::Equation(*part, *param_part), recorder.clone());
+        }
+        self.record(Relation::Equation(element, slice_element), recorder);
     }
 
     /// Merges each cycle of lower bounds alone into one equivalence class.

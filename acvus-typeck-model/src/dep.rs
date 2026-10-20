@@ -5,7 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::class::{ClassId, Fact};
+use crate::class::ClassId;
+use crate::node::NodeKind;
 use crate::relation::Relation;
 use crate::solve::State;
 use crate::ty::Name;
@@ -31,6 +32,8 @@ enum Edge {
     /// A node on an undecided node that records relations into the classes at
     /// the positions it reads (l.247–248).
     Reads,
+    /// A binding on an undecided projection on its path (`holes.md`, H5).
+    Path,
 }
 
 pub(crate) struct Graph {
@@ -148,19 +151,27 @@ impl State {
         };
         let mut reads = Vec::new();
         for (name, node) in &undecided {
+            let reads_reference = !matches!(node.kind, NodeKind::Use { .. });
             for position in self.read_positions(&node.kind) {
                 for recorder in recording(position, &edges) {
-                    if recorder != **name {
-                        reads.push(((*name).clone(), recorder));
+                    if recorder != **name
+                        && !(reads_reference && self.is_inner_projection(&recorder))
+                    {
+                        reads.push(((*name).clone(), recorder, Edge::Reads));
                     }
                 }
             }
+            for step in self.path_of(name) {
+                if self.nodes[&step].decision.is_none() {
+                    reads.push(((*name).clone(), step, Edge::Path));
+                }
+            }
         }
-        for (from, to) in reads {
+        for (from, to, edge) in reads {
             edges
                 .entry(Vertex::Node(from))
                 .or_default()
-                .insert((Vertex::Node(to), Edge::Reads));
+                .insert((Vertex::Node(to), edge));
         }
         let component = components(&edges);
         Graph { edges, component }
@@ -301,11 +312,7 @@ impl State {
         if held.kind.is_some() {
             return true;
         }
-        if held
-            .facts
-            .iter()
-            .any(|fact| Fact::visible_member(fact).is_some())
-        {
+        if !self.fact_heads(root).is_empty() {
             return true;
         }
         if held.lit.is_some() && !self.boundaries_from(root).is_empty() {

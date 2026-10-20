@@ -4,8 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, Classes};
+use crate::class::{ClassId, ClassName, Classes, Fact};
 use crate::decl::Node;
+use crate::program::Visibility;
 use crate::read::ReadValue;
 use crate::relation::Recorder;
 use crate::solve::State;
@@ -65,6 +66,37 @@ impl State {
             constructor: a.constructor,
             members,
         })
+    }
+
+    /// The constructors and members the kinds known in part of the class give:
+    /// those of the members visible to this body (l.282).
+    pub(crate) fn fact_heads(&self, root: ClassId) -> Vec<Head> {
+        let host_bound = self
+            .lower_bounds(root)
+            .into_iter()
+            .any(|lower| self.is_host(lower));
+        if self.readings.visibility == Visibility::BySources && host_bound {
+            return Vec::new();
+        }
+        self.classes
+            .held(root)
+            .facts
+            .iter()
+            .filter_map(Fact::visible_member)
+            .map(|(constructor, member)| Head {
+                constructor,
+                members: [member].into(),
+            })
+            .collect()
+    }
+
+    /// Whether the equivalence class holds a type the host gives.
+    fn is_host(&self, id: ClassId) -> bool {
+        self.classes
+            .held(id)
+            .members
+            .iter()
+            .any(|member| self.hosts.contains(member))
     }
 
     /// The constructor and members at `node` that the casts up from `head`'s
@@ -185,6 +217,9 @@ impl State {
             refusals: BTreeSet::new(),
             nodes: BTreeMap::new(),
             nothing: BTreeSet::new(),
+            readings: self.readings,
+            hosts: self.hosts.clone(),
+            viewed: BTreeSet::new(),
         };
         read.classes.grow(&read.arena);
         for recorded in &self.log {
