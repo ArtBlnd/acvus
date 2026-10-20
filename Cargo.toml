@@ -6,6 +6,7 @@ members = [
     "tests/acvus-interpreter-test",
     "acvus-ast",
     "acvus-mir",
+    "acvus-typeck-model",
     "acvus-cli",
     "tests/acvus-mir-test",
     "acvus-ext",
