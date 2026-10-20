@@ -11,17 +11,17 @@ contract. This note keeps what the code cannot carry.
 A type is a finite term: one constructor, its members and its parts, each part
 again a type (l.41). `Ty` is a closed type, one that holds no equivalence class.
 `Term<P>` is the shape of a term whose parts are `P`s, which closed types and kinds
-(note 05) share.
+(note 06) share.
 
 ## Not owned here
 
 - Agreement with the declarations, such as a struct's number of fields, or an
   extern-defined type's number of arguments and whether it carries an identity,
   is note 02's.
-- Join is note 03's, and coercion and rank are note 04's.
-- What holds of a kind, a `Term` whose parts are equivalence classes, is note 05's.
+- Join is note 04's, and coercion and rank are note 05's.
+- What holds of a kind, a `Term` whose parts are equivalence classes, is note 06's.
   `Term<P>` checks nothing about its `P`s.
-- Facts are carried beside a type, from note 05 on. A fact is neither a part nor a
+- Facts are carried beside a type, from note 06 on. A fact is neither a part nor a
   member (l.180), and two types are equal by their constructors, members and parts
   alone (l.66).
 - The specialization mark has no representation, since a type carries none (l.70).

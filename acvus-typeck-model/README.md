@@ -41,16 +41,17 @@ The primitives, each assuming only those before it:
 | Note | Primitive | Spec |
 |---|---|---|
 | 01 | Types: names, terms, constructors, members, parts, variance | l.39–74 |
-| 02 | Declarations: extern-defined types, structs, the cast tree, conversions, extern candidates | l.76–78, l.112, l.331 |
-| 03 | Join and `≤` | l.80–97 |
-| 04 | Coercion and rank | l.99–116 |
-| 05 | Equivalence classes: names, union-find, type variables, kinds | l.118–176 |
-| 06 | Relations and what records them | l.228–238 |
-| 07 | Uses, lends, projections and bindings | l.303–345 |
-| 08 | Binding groups, universals, C and instances | l.195–222 |
-| 09 | The dependency graph | l.240–271 |
-| 10 | Values and splits | l.273–293 |
-| 11 | Steps, state, fixpoint and fallback | l.295–301 |
-| 12 | Outcome and exploration | I2, I3 |
+| 02 | Types in declarations: declared types, signatures, substitution and matching | l.54–55, l.64, l.331, l.354 |
+| 03 | Declarations and the cast tree: extern fns and impls by name, casts and views, conversions | l.76–78, l.112, l.331 |
+| 04 | Join and `≤` | l.80–97 |
+| 05 | Coercion and rank | l.99–116 |
+| 06 | Equivalence classes: names, union-find, type variables, kinds | l.118–176 |
+| 07 | Relations and what records them | l.228–238 |
+| 08 | Uses, lends, projections and bindings | l.303–345 |
+| 09 | Binding groups, universals, C and instances | l.195–222 |
+| 10 | The dependency graph | l.240–271 |
+| 11 | Values and splits | l.273–293 |
+| 12 | Steps, state, fixpoint and fallback | l.295–301 |
+| 13 | Outcome and exploration | I2, I3 |
 
 Writing a note may change the notes after it.

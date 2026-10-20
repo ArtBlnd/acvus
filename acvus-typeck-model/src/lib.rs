@@ -3,4 +3,5 @@
 //! `docs/transparency-constraint-type-system-kr.md`, and a line number in this
 //! crate is that text's, which its English text keeps.
 
+pub mod sig;
 pub mod ty;

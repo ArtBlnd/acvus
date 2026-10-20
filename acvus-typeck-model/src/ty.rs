@@ -7,6 +7,7 @@
 //! that equality.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::fmt;
 use std::rc::Rc;
 
@@ -328,21 +329,32 @@ impl<P> Term<P> {
     where
         F: FnMut(PartKey, P) -> Q,
     {
-        match self {
-            Term::Ref(mutability, target) => Term::Ref(mutability, f(PartKey::Target, target)),
+        let mapped: Result<Term<Q>, Infallible> = self.try_map(|key, part| Ok(f(key, part)));
+        match mapped {
+            Ok(term) => term,
+        }
+    }
+
+    /// `map` with an `f` that may fail, stopping at the first part it fails at.
+    pub fn try_map<Q, E, F>(self, mut f: F) -> Result<Term<Q>, E>
+    where
+        F: FnMut(PartKey, P) -> Result<Q, E>,
+    {
+        Ok(match self {
+            Term::Ref(mutability, target) => Term::Ref(mutability, f(PartKey::Target, target)?),
             Term::Tuple(components) => Term::Tuple(
                 components
                     .into_iter()
                     .enumerate()
                     .map(|(i, component)| f(PartKey::Component(i), component))
-                    .collect(),
+                    .collect::<Result<_, E>>()?,
             ),
-            Term::Array(len, element) => Term::Array(len, f(PartKey::Element, element)),
-            Term::Slice(element) => Term::Slice(f(PartKey::Element, element)),
-            Term::Option(payload) => Term::Option(f(PartKey::Payload(Name::new(SOME)), payload)),
+            Term::Array(len, element) => Term::Array(len, f(PartKey::Element, element)?),
+            Term::Slice(element) => Term::Slice(f(PartKey::Element, element)?),
+            Term::Option(payload) => Term::Option(f(PartKey::Payload(Name::new(SOME)), payload)?),
             Term::Result { ok, err } => {
-                let ok = f(PartKey::Payload(Name::new(OK)), ok);
-                let err = f(PartKey::Payload(Name::new(ERR)), err);
+                let ok = f(PartKey::Payload(Name::new(OK)), ok)?;
+                let err = f(PartKey::Payload(Name::new(ERR)), err)?;
                 Term::Result { ok, err }
             }
             Term::Function { params, ret } => {
@@ -350,8 +362,8 @@ impl<P> Term<P> {
                     .into_iter()
                     .enumerate()
                     .map(|(i, param)| f(PartKey::Param(i), param))
-                    .collect();
-                let ret = f(PartKey::Return, ret);
+                    .collect::<Result<_, E>>()?;
+                let ret = f(PartKey::Return, ret)?;
                 Term::Function { params, ret }
             }
             Term::FunctionValue { arity } => Term::FunctionValue { arity },
@@ -359,27 +371,27 @@ impl<P> Term<P> {
                 fields
                     .into_iter()
                     .map(|(field, ty)| {
-                        let ty = f(PartKey::Field(field.clone()), ty);
-                        (field, ty)
+                        let ty = f(PartKey::Field(field.clone()), ty)?;
+                        Ok((field, ty))
                     })
-                    .collect(),
+                    .collect::<Result<_, E>>()?,
             ),
             Term::Enum(name, variants) => Term::Enum(
                 name,
                 variants
                     .into_iter()
                     .map(|(variant, payload)| {
-                        let payload = f(PartKey::Payload(variant.clone()), payload);
-                        (variant, payload)
+                        let payload = f(PartKey::Payload(variant.clone()), payload)?;
+                        Ok((variant, payload))
                     })
-                    .collect(),
+                    .collect::<Result<_, E>>()?,
             ),
             Term::Struct(module, args) => Term::Struct(
                 module,
                 args.into_iter()
                     .enumerate()
                     .map(|(i, arg)| f(PartKey::Arg(i), arg))
-                    .collect(),
+                    .collect::<Result<_, E>>()?,
             ),
             Term::Extern {
                 name,
@@ -390,8 +402,11 @@ impl<P> Term<P> {
                     .into_iter()
                     .enumerate()
                     .map(|(i, arg)| f(PartKey::Arg(i), arg))
-                    .collect();
-                let identity = identity.map(|identity| f(PartKey::Identity, identity));
+                    .collect::<Result<_, E>>()?;
+                let identity = match identity {
+                    Some(identity) => Some(f(PartKey::Identity, identity)?),
+                    None => None,
+                };
                 Term::Extern {
                     name,
                     args,
@@ -404,7 +419,7 @@ impl<P> Term<P> {
             Term::Unit => Term::Unit,
             Term::Never => Term::Never,
             Term::Identity(name) => Term::Identity(name),
-        }
+        })
     }
 }
 
