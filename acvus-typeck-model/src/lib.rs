@@ -4,5 +4,6 @@
 //! crate is that text's, which its English text keeps.
 
 pub mod decl;
+pub mod join;
 pub mod sig;
 pub mod ty;

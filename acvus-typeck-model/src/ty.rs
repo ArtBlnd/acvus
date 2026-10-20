@@ -14,10 +14,11 @@ use std::rc::Rc;
 #[cfg(test)]
 mod tests;
 
-const SOME: &str = "Some";
-const NONE: &str = "None";
-const OK: &str = "Ok";
-const ERR: &str = "Err";
+/// The names of `Option`'s and `Result`'s variants (l.49–50).
+pub const SOME: &str = "Some";
+pub const NONE: &str = "None";
+pub const OK: &str = "Ok";
+pub const ERR: &str = "Err";
 
 /// The name of an extern-defined type, an enum, a struct's module, a field, a
 /// variant, a lambda or an identity.
