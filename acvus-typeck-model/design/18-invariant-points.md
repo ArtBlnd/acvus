@@ -8,9 +8,13 @@ Its direction was agreed with 준량 on 2026-10-21: a type a declaration writes 
 a class backward only where nothing else types it, since otherwise "함수 하나를
 추가하면 완전히 다른 타입이 돼"; where it then leaves several types, it is refused,
 and where none, the class falls back; a LitVar takes its family's default where that
-is among several (choice (a): "Literal은 솔직히 편하게 가려면 이게 맞아"). Its rows are
-to be agreed before code. It is to be a reading, `InvariantPoints::Last`, beside the
-spec as stated, `InvariantPoints::AsStated`.
+is among several (choice (a): "Literal은 솔직히 편하게 가려면 이게 맞아"). Its open
+questions were answered by 준량 on 2026-10-21: what reaches a class the rule typed
+is "결정된 타입 그 자체 혹은 !"; an ambiguous class is refused once the rule types
+nothing more, "일관성과 비순서 보장때문에"; the default comes after that, and a
+decided node whose type the default overrides is left as it is. It is to be a
+reading, `InvariantPoints::Last`, beside the spec as stated,
+`InvariantPoints::AsStated`.
 
 ## Meaning
 
@@ -37,7 +41,10 @@ once nothing else can be solved, and then only as the one type that fits.
   l.289); and `?N ⇝ U`, at the boundary or at any part of it, where `?N` is `α`'s
   LitVar and `U` is decided (l.291). A decided use gives the invariant points of
   its candidate, and an undecided one those of each of its candidates (note 08,
-  reading 13).
+  reading 13). Where `α` takes its constructor from its own relations, an invariant
+  point of it relates its parts instead, as an equation does (l.165): an own
+  equation where the part of `U` is an unknown, an invariant point where it is
+  decided.
 - A class's **own relations** are every relation into it but its invariant points:
   its lower bounds, decided ones among them (a use's result, a value the text
   writes), and what their parts give when split (l.284–289); the text's equations
@@ -68,20 +75,22 @@ once nothing else can be solved, and then only as the one type that fits.
    not own-solved, has invariant points, and has no unbroken dependency, in the
    graph of row 2 with an edge from each node to each class it waits for, is taken
    at once, from one state. Its candidates are the types its invariant points
-   give. Of those that fit it, by its kind and its LitVar's family and values
-   (l.169):
-   - exactly one: the class is unified with it;
-   - several, all of a LitVar's family, its family's default among them: the
-     default (l.344, moved here);
-   - several otherwise: refused at the class, ambiguous;
-   - none: the class is left to fallback.
+   give, and of them it takes those that fit it, by its kind and its LitVar's
+   family and values (l.169). Of these steps, the first that applies to some class
+   is taken, and row 2 resumes:
+   1. each class that exactly one candidate fits is unified with it;
+   2. each class with a LitVar that several fit, its family's default among them,
+      takes the default (l.344, moved here);
+   3. each class that several fit is refused there, ambiguous.
 
-   Then row 2 resumes. A class with a dependency on a universal is not taken: it
-   stays in C, and is taken in each instance (l.219, l.222).
+   A class that no candidate fits is not taken, and is left to fallback. A class
+   with a dependency on a universal is not taken: it stays in C, and is taken in
+   each instance (l.219, l.222).
 4. **Fallback.** At the run only, once row 3 takes nothing, as l.299 states; then
    rows 2 and 3 resume.
-5. **What reaches a class row 3 typed.** No cast and no conversion: a value that
-   enters it afterwards reaches it as it is (Open).
+5. **What reaches a class row 3 typed.** Its type itself, or `!`: a value that
+   enters it afterwards reaches it as it is, or is `!` (l.112), and no other row of
+   the Coercion table reaches it.
 
 Every invariant point is checked once everything is solved. Where its class was
 own-solved, it is checked as part of the boundary it lies in, by coercion (l.293).
@@ -95,9 +104,13 @@ What each row excludes:
 - Row 3: a choice among several by order; a class typed by its invariant points
   while a node that may still record an own relation into it waits on something
   other than it (an edge out of its component); a class with a universal's
-  dependency typed in its body's group. A decided node's invariant point at a
-  class is among its candidates, so where that node's type fits, no other fitting
-  type is chosen: the choice is that type, or ambiguous.
+  dependency typed in its body's group; a refusal while steps 1 and 2 still type a
+  class, and a default while step 1 still does. A decided node's invariant point
+  at a class is among its candidates, so where that node's type fits, no other
+  fitting type is chosen but by step 2: the choice is that type, the default, or a
+  refusal. Where it is the default, the decided node's check fails, and the
+  program is refused, as it is where no type holds both; I\* reports the decided
+  node (P9 below).
 
 The edge from a node to a class it waits for exists only for row 3: the node's own
 waiting is not broken by l.269. In Example 13, `parse` waits for `R`, and `R`
@@ -106,6 +119,13 @@ component, so `R` has no unbroken dependency and row 3 types it `Vec⟨u8⟩`, a
 `parse` then reads that. Were `R` typed while `parse` waited on another class
 instead, `R` would take a declaration's type before its own.
 
+Steps 1 and 2 are apart so that a use that still gives all its candidates at one
+class narrows once another class is typed: in `let x = 0; let w = 0; g(x, w);`
+with `g(u8, u8)` and `g(i32, &str)`, `W`'s candidates are `u8` and `&str`, of which
+only `u8` fits its LitVar, and `X`'s are `u8` and `i32`, both fitting. Step 1
+types `W` `u8`, `g` is then decided as `g(u8, u8)`, and `X` is `u8`. Were the
+default taken with `W`, `X` would be `i32`, and `g` refused.
+
 ## Invariants
 
 - **I2.** One outcome per program, whatever the order: row 3 and fallback take every
@@ -113,8 +133,8 @@ instead, `R` would take a declaration's type before its own.
 - **I\*** (note 15). A node decided before row 3 types a class it reads would not
   be decided otherwise reading that type: a node waits where what it reads there
   is not decided, and a use decided as one candidate gives row 3 that candidate's
-  invariant points, so row 3 gives the class that type or refuses it; but in the
-  case Open states (a decided node and the default).
+  invariant points, so row 3 gives the class that type or refuses it; but where
+  step 2 gives it the default instead, as row 3's exclusions state.
 - **준량's rule.** A declaration's type decides a class only where its own relations
   give it none, and only as the one type that fits. Adding a declaration changes a
   type row 3 gives only into a refusal, but where the candidate added is a LitVar
@@ -181,6 +201,8 @@ Derived before running, under `InvariantPoints::Last`; under
 | P4 `let x = 0; n(x);`, `n(u8)`, `n(u16)` | refused, ambiguous at `X` |
 | P5 `let x = 0; n(x); m(x);` | refused, ambiguous at `X`, in every order |
 | P7 `let x = 0; f(x);`, `f(u8)`, `f(i32)` | `x: i32` |
+| P8 `let x = 0; let w = 0; g(x, w);`, `g(u8, u8)`, `g(i32, &str)` | `x: u8`, `w: u8`, `g(u8, u8)`: `W` by step 1, then `X` |
+| P9 `let x = 0; m(x); f(x);`, `m(u16)`, `m(&str)`, `f(u8)`, `f(i32)` | refused: `X` takes `i32`, and `m`, decided, fails; I\* reports `m` |
 | Example 2 | `a: Vec⟨u8⟩`, by row 3 at its element |
 | Example 2 with `a.push(0u16)` before `fill_all` | refused at `fill_all`: `&mut Vec⟨u16⟩ ⇝ &mut Vec⟨u8⟩` |
 | Example 3 | refused, with the conversion and without |
@@ -197,18 +219,5 @@ In each, I\* reports nothing and the certificate holds.
 
 ## Open
 
-- **What reaches a class row 3 typed** (row 5). Casts and conversions are excluded.
-  Whether `! ⇝ U`, reborrow and the structural rows are too is to be agreed; the
-  draft's proposal is that only the type itself and `!` reach it.
-- **When an ambiguous class is refused.** At once, as row 3 states; or only once a
-  round of row 3 types nothing, since a use that still gives all its candidates at
-  one class may narrow once another class is typed and row 2 resumes: in
-  `g(x, w)` with `g(u8, u8)`, `g(u16, u16)`, `x` a LitVar and `w` typed `u8` by
-  another use's invariant point, `X` is ambiguous in the first round and `u8` in
-  the second.
-- **A decided node and the default.** Where a decided node's type at a LitVar's
-  class is not the default, and another node's candidates add the default, row 3
-  takes the default and the decided node's check fails: refused either way, and
-  I\* reports it.
 - **Not covered.** O1 (a binding's path), O3 (a reference's mutability), O2 beyond
   the cycles row 2 no longer makes, and O5 are not changed here.
