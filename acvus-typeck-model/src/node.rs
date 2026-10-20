@@ -294,7 +294,7 @@ impl State {
     }
 
     /// The positions where a use's candidates differ, which it reads (l.267).
-    fn differing(candidates: &[&Signature], args: usize) -> Vec<usize> {
+    pub(crate) fn differing(candidates: &[&Signature], args: usize) -> Vec<usize> {
         (0..=args)
             .filter(|&i| {
                 let first = Self::at_position(candidates[0], i);
@@ -466,20 +466,11 @@ impl State {
     }
 
     /// The nodes whose relations the node's read leaves out: itself and those
-    /// that transitively depend on it, and for a lend, a projection or a
-    /// binding, which reads whether a class is a reference, every projection
-    /// other than a Deref (l.267).
+    /// that transitively depend on it (l.267), and those it broke its
+    /// dependency on where the reading takes it so (`Deferral::Reading`).
     fn excluded(&self, name: &Name) -> BTreeSet<Name> {
         let mut excluded = self.dependents(name);
         excluded.extend(self.broken.get(name).into_iter().flatten().cloned());
-        if self.nodes[name].kind.read() == Read::Reference {
-            excluded.extend(
-                self.nodes
-                    .keys()
-                    .filter(|node| self.is_inner_projection(node))
-                    .cloned(),
-            );
-        }
         excluded
     }
 
@@ -626,8 +617,24 @@ impl State {
     }
 
     fn decision_of(&self, name: &Name) -> Decision {
+        self.decision_under(name, &self.excluded(name))
+    }
+
+    /// What the node becomes by the value it reads leaving out the relations
+    /// of the nodes `excluded`, and, for a lend, a projection or a binding,
+    /// which reads whether a class is a reference, of every projection other
+    /// than a Deref (l.267).
+    pub(crate) fn decision_under(&self, name: &Name, excluded: &BTreeSet<Name>) -> Decision {
         let kind = &self.nodes[name].kind;
-        let excluded = self.excluded(name);
+        let mut excluded = excluded.clone();
+        if kind.read() == Read::Reference {
+            excluded.extend(
+                self.nodes
+                    .keys()
+                    .filter(|node| self.is_inner_projection(node))
+                    .cloned(),
+            );
+        }
         let lend = |mutability: Option<Mutability>, place: ClassId| {
             let (target, through) = match self.reads_as_reference(place, &excluded) {
                 Some(through) => (LendTarget::Through(through), through),
@@ -976,15 +983,25 @@ impl State {
         };
         self.candidates(callee, args.len())
             .into_iter()
-            .map(|decl| {
-                let mut found = BTreeMap::new();
-                for (arg, param) in args.iter().zip(decl.sig.params()) {
-                    self.would_record(*arg, param, false, &mut found);
-                }
-                found.insert(self.root(*result), is_reference(decl.sig.result()));
-                found
-            })
+            .map(|decl| self.would_record_by(args, *result, &decl.sig))
             .collect()
+    }
+
+    /// The classes a candidate of signature `sig` would record a lower bound
+    /// or an equation into, for a use of these arguments and result, as
+    /// `would_record_per_candidate` gives them.
+    pub(crate) fn would_record_by(
+        &self,
+        args: &[ClassId],
+        result: ClassId,
+        sig: &Signature,
+    ) -> BTreeMap<ClassId, Option<bool>> {
+        let mut found = BTreeMap::new();
+        for (arg, param) in args.iter().zip(sig.params()) {
+            self.would_record(*arg, param, false, &mut found);
+        }
+        found.insert(self.root(result), is_reference(sig.result()));
+        found
     }
 
     /// The classes inside an argument's kind that a candidate's parameter

@@ -18,11 +18,28 @@ pub struct Exploration {
     pub complete: bool,
 }
 
+/// A final state of an order of solving: the entry's, once nothing is left to
+/// fall back (l.299), with each group solved before it at its fixpoint
+/// (l.220).
+pub struct Final<'a> {
+    pub entry: &'a State,
+    pub groups: &'a BTreeMap<Name, Rc<State>>,
+}
+
 /// Solves each binding group other than the entry to its fixpoint in every
 /// order, before the groups that make instances of it (l.220), then the entry
 /// in every order, falling back wherever no step is left (l.299). A state
 /// reached twice is explored once.
 pub fn explore(program: &Program, budget: usize) -> Exploration {
+    explore_with(program, budget, |_| {})
+}
+
+/// As `explore`, handing each distinct final state to `visit` before it is
+/// reduced to an outcome (`design/13-exploration.md`, Checks).
+pub fn explore_with<F>(program: &Program, budget: usize, mut visit: F) -> Exploration
+where
+    F: FnMut(&Final<'_>),
+{
     let mut choices: Vec<BTreeMap<Name, Rc<State>>> = vec![BTreeMap::new()];
     let mut states = 0;
     for group in program.group_order() {
@@ -67,6 +84,10 @@ pub fn explore(program: &Program, budget: usize) -> Exploration {
                 if next.fall_back() {
                     work.push(next);
                 } else {
+                    visit(&Final {
+                        entry: &state,
+                        groups: solved,
+                    });
                     let outcome = state.outcome_with(solved);
                     if !outcomes.contains(&outcome) {
                         outcomes.push(outcome);
@@ -125,6 +146,14 @@ fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<Stat
 /// last always, then sequences a fixed generator gives. It checks I2 on a
 /// sample, for programs with too many states to explore.
 pub fn sample(program: &Program, orders: u64) -> Vec<Outcome> {
+    sample_with(program, orders, |_| {})
+}
+
+/// As `sample`, handing each order's final state to `visit`.
+pub fn sample_with<F>(program: &Program, orders: u64, mut visit: F) -> Vec<Outcome>
+where
+    F: FnMut(&Final<'_>),
+{
     let mut outcomes: Vec<Outcome> = Vec::new();
     for order in 0..orders {
         let mut picks = Picks::new(order);
@@ -151,6 +180,10 @@ pub fn sample(program: &Program, orders: u64) -> Vec<Outcome> {
                 break;
             }
         }
+        visit(&Final {
+            entry: &state,
+            groups: &solved,
+        });
         let outcome = state.outcome_with(&solved);
         if !outcomes.contains(&outcome) {
             outcomes.push(outcome);

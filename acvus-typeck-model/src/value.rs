@@ -228,14 +228,18 @@ impl State {
             enclosing: self.enclosing.clone(),
             functions: Rc::clone(&self.functions),
             solved: self.solved.clone(),
+            instances: Vec::new(),
         };
         read.classes.grow(&read.arena);
         for recorded in &self.log {
             if recorded.recorder.is_derived() {
                 continue;
             }
-            if let Some(name) = recorded.recorder.node()
-                && excluded.contains(name)
+            if recorded
+                .recorder
+                .nodes()
+                .iter()
+                .any(|node| excluded.contains(node))
             {
                 continue;
             }

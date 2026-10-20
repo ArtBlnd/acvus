@@ -106,6 +106,14 @@ impl Arena {
         self.names.len()
     }
 
+    /// Every class, with its name.
+    pub fn classes(&self) -> impl Iterator<Item = (ClassId, &ClassName)> + '_ {
+        self.names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (ClassId(i), name))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.names.is_empty()
     }

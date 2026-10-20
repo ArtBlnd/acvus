@@ -6,9 +6,20 @@ use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, KindSource};
 use crate::node::{NodeKind, NodeState};
-use crate::relation::{Recorder, Relation};
+use crate::relation::{Recorder, Relation, copy_name};
 use crate::solve::State;
 use crate::ty::{Name, Ty};
+
+/// An instance a state made: of the C of the binding group `group`, named `at`
+/// and made by `by`, with each root of that group's state it met and that
+/// root's class in the state that made it (l.222).
+#[derive(Clone, Debug)]
+pub struct Made {
+    pub at: Name,
+    pub by: Recorder,
+    pub group: Name,
+    pub made: BTreeMap<ClassId, ClassId>,
+}
 
 /// C of the binding group `from` reached its fixpoint in, being made anew at
 /// the use `at` (l.219, l.222).
@@ -41,6 +52,67 @@ impl<'a> Instance<'a> {
         }
     }
 
+    /// The instance `made` by `by` resumed, to map more of `from` the way it
+    /// did.
+    pub(crate) fn resume(made: &Made, from: &'a State) -> Instance<'a> {
+        Instance {
+            made: made.made.clone(),
+            ..Instance::new(&made.at, made.by.clone(), from)
+        }
+    }
+
+    /// A node's kind here, its classes those here and a binding's path the
+    /// copies of its projections.
+    pub(crate) fn kind(&mut self, here: &mut State, kind: &NodeKind) -> NodeKind {
+        match kind.clone() {
+            NodeKind::Use {
+                callee,
+                args,
+                result,
+            } => NodeKind::Use {
+                callee,
+                args: args.into_iter().map(|arg| self.class(here, arg)).collect(),
+                result: self.class(here, result),
+            },
+            NodeKind::Lend {
+                mutability,
+                place,
+                result,
+            } => NodeKind::Lend {
+                mutability,
+                place: self.class(here, place),
+                result: self.class(here, result),
+            },
+            NodeKind::Project {
+                projection,
+                operand,
+                result,
+            } => NodeKind::Project {
+                projection,
+                operand: self.class(here, operand),
+                result: self.class(here, result),
+            },
+            NodeKind::Bind {
+                path,
+                position,
+                binding,
+            } => NodeKind::Bind {
+                path: path.iter().map(|step| self.node(step)).collect(),
+                position: self.class(here, position),
+                binding: self.class(here, binding),
+            },
+            NodeKind::CallValue {
+                callee,
+                args,
+                result,
+            } => NodeKind::CallValue {
+                callee: self.class(here, callee),
+                args: args.into_iter().map(|arg| self.class(here, arg)).collect(),
+                result: self.class(here, result),
+            },
+        }
+    }
+
     /// What records a copied relation here: the copy of an undecided node, or
     /// the instance, made by what made it.
     fn recorder(&self, of: &Recorder) -> Recorder {
@@ -56,8 +128,8 @@ impl<'a> Instance<'a> {
         }
     }
 
-    fn node(&self, name: &Name) -> Name {
-        Name::new(&format!("{}/{name}", self.at))
+    pub(crate) fn node(&self, name: &Name) -> Name {
+        copy_name(&self.at, name)
     }
 
     /// The class here of the class `id` of `from`: for a class of C, one made
@@ -123,8 +195,8 @@ impl<'a> Instance<'a> {
         made
     }
 
-    /// Records here every relation of `from` on a class of C, and makes anew
-    /// each node `from` left undecided (l.219).
+    /// Records here every relation of `from` on a class of C, makes anew each
+    /// node `from` left undecided (l.219), and keeps the instance here.
     pub(crate) fn record_rest(&mut self, here: &mut State) {
         let from = self.from;
         for recorded in &from.log {
@@ -149,53 +221,7 @@ impl<'a> Instance<'a> {
             .filter(|(_, node)| node.decision.is_none())
             .collect();
         for (name, node) in undecided {
-            let kind = match node.kind.clone() {
-                NodeKind::Use {
-                    callee,
-                    args,
-                    result,
-                } => NodeKind::Use {
-                    callee,
-                    args: args.into_iter().map(|arg| self.class(here, arg)).collect(),
-                    result: self.class(here, result),
-                },
-                NodeKind::Lend {
-                    mutability,
-                    place,
-                    result,
-                } => NodeKind::Lend {
-                    mutability,
-                    place: self.class(here, place),
-                    result: self.class(here, result),
-                },
-                NodeKind::Project {
-                    projection,
-                    operand,
-                    result,
-                } => NodeKind::Project {
-                    projection,
-                    operand: self.class(here, operand),
-                    result: self.class(here, result),
-                },
-                NodeKind::Bind {
-                    path,
-                    position,
-                    binding,
-                } => NodeKind::Bind {
-                    path: path.iter().map(|step| self.node(step)).collect(),
-                    position: self.class(here, position),
-                    binding: self.class(here, binding),
-                },
-                NodeKind::CallValue {
-                    callee,
-                    args,
-                    result,
-                } => NodeKind::CallValue {
-                    callee: self.class(here, callee),
-                    args: args.into_iter().map(|arg| self.class(here, arg)).collect(),
-                    result: self.class(here, result),
-                },
-            };
+            let kind = self.kind(here, &node.kind);
             let copy = self.node(name);
             here.add_node(&copy, kind);
             let shared = node.shared.clone();
@@ -208,6 +234,12 @@ impl<'a> Instance<'a> {
             state.shared = shared;
             state.references = references;
         }
+        here.instances.push(Made {
+            at: (*self.at).clone(),
+            by: self.by.clone(),
+            group: from.group.clone(),
+            made: self.made.clone(),
+        });
     }
 }
 

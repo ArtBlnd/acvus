@@ -28,3 +28,20 @@ outcome is reached.
 4. **Checks compare as a set.** The checks of an outcome are ordered by their
    relations' names, so two orders that check the same relations reach one
    outcome.
+
+## Checks
+
+`explore_with` and `sample_with` hand the final states on; `examples.rs` runs the
+checks on them (`checked`, `sampled`) and states I2 where an example has one
+outcome (`only_outcome`).
+
+- **I2.** A program meets I2 where exploration is complete and reaches exactly one
+  outcome. An exploration its budget cuts short shows nothing of I2, neither that
+  it holds nor that it fails.
+- **Ending.** The budget of states is the model's only bound. A program whose
+  exploration exceeds it is reported as not ended within that many states, never
+  as one whose solving does not end: that would need a measure each step
+  decreases, which the model does not have.
+- **Final states.** Exploration hands each final state, with the groups solved
+  before it, to the checks of notes 14 and 15, and only then reduces it to an
+  outcome.

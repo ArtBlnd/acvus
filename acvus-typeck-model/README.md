@@ -53,5 +53,8 @@ The primitives, each assuming only those before it:
 | 11 | Values and splits | l.273–293 |
 | 12 | Steps, state, fixpoint and fallback | l.295–301 |
 | 13 | Outcome and exploration | I2, I3 |
+| 14 | The certificate and its checker | l.226–238, l.293, l.301 |
+| 15 | I\* | l.244–269, `docs/notes/typeck-pivot.md` §1–2 |
+| 16 | Inputs up to a size (draft) | l.226–238, l.303–321 |
 
 Writing a note may change the notes after it.

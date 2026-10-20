@@ -100,6 +100,10 @@ pub enum Recorder {
     /// A cycle of lower bounds alone, merged into one equivalence class
     /// (l.275).
     Cycle,
+    /// The I\* check, making an instance of a lambda's C that no call made, in
+    /// a view of a state it decides nodes again in (`design/15-istar.md`,
+    /// Domain). Solving never records it.
+    Check,
     /// The instance `at`, made by `by`, the use of a function at its item or
     /// the call of a function value (l.203), recording in its binding group
     /// the copy of what `of` recorded in C (l.222).
@@ -117,14 +121,23 @@ impl Recorder {
         matches!(self, Recorder::Split(_) | Recorder::Cycle)
     }
 
-    /// The node that recorded it, a node's own relations and those of the
-    /// instances it made, which a value read leaving that node out leaves out
-    /// (l.267).
-    pub fn node(&self) -> Option<&Name> {
+    /// The nodes it is recorded by, a value read leaving any of them out
+    /// leaving it out (l.267): a node's own relation names that node, and a
+    /// copy in an instance names what made the instance and, by `copy_name`,
+    /// the nodes the relation it copies is recorded by.
+    pub fn nodes(&self) -> Vec<Name> {
         match self {
-            Recorder::Node(name) => Some(name),
-            Recorder::Instance { by, .. } => by.node(),
-            Recorder::Origin | Recorder::Text(_) | Recorder::Split(_) | Recorder::Cycle => None,
+            Recorder::Node(name) => vec![name.clone()],
+            Recorder::Instance { at, by, of } => by
+                .nodes()
+                .into_iter()
+                .chain(of.nodes().iter().map(|node| copy_name(at, node)))
+                .collect(),
+            Recorder::Origin
+            | Recorder::Text(_)
+            | Recorder::Split(_)
+            | Recorder::Cycle
+            | Recorder::Check => Vec::new(),
         }
     }
 
@@ -134,9 +147,15 @@ impl Recorder {
         match self {
             Recorder::Text(_) | Recorder::Node(_) => true,
             Recorder::Instance { of, .. } => of.is_entering(),
-            Recorder::Origin | Recorder::Split(_) | Recorder::Cycle => false,
+            Recorder::Origin | Recorder::Split(_) | Recorder::Cycle | Recorder::Check => false,
         }
     }
+}
+
+/// The name, in the binding group an instance `at` is recorded in, of the
+/// node `node` of the group instantiated (l.222).
+pub fn copy_name(at: &Name, node: &Name) -> Name {
+    Name::new(&format!("{at}/{node}"))
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

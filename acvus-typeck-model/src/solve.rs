@@ -7,7 +7,7 @@ use std::rc::Rc;
 use crate::class::{Arena, ClassId, ClassName, Classes, Conflict, Fact, KindSource, LinkAt};
 use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::decl::{Decls, Node};
-use crate::instance::Instance;
+use crate::instance::{Instance, Made};
 use crate::node::{Decision, NodeKind, NodeState};
 use crate::program::{ENTRY, Function, Item, Origin, Place, Program, Readings, TextClass};
 use crate::relation::{Named, Recorded, Recorder, Relation};
@@ -104,6 +104,8 @@ pub struct State {
     pub(crate) functions: Rc<Vec<Function>>,
     /// Each group solved before it, at its fixpoint (l.220).
     pub(crate) solved: BTreeMap<Name, Rc<State>>,
+    /// The instances made here, in the order made (l.222).
+    pub(crate) instances: Vec<Made>,
 }
 
 /// A step that may be taken.
@@ -150,6 +152,7 @@ impl State {
             enclosing: program.enclosing(group),
             functions: Rc::new(program.functions.clone()),
             solved: solved.clone(),
+            instances: Vec::new(),
         };
         let classes: Vec<&TextClass> = program
             .classes

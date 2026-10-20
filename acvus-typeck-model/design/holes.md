@@ -284,9 +284,12 @@ A lambda's write to a capture reached by name is a meeting, and stays in the
 lambda's C (Example 6, l.446); it is recorded into the capture's class only when a
 call of the lambda's value is decided and makes its instance (l.203). Until then
 nothing at the capture's class waits for that call: the class lies at no position
-of it (l.244 (b)). So a use reading the capture may be decided before the call or
-after it. Witness, two outcomes in the model, `probe` decided as `probe(A)` and as
-`probe(B)`, both accepted (`examples.rs`, `hole_o4_a_capture_written_after_a_use_reads_it`):
+of it (l.244 (b)). So the capture's class may be solved before the call or after
+it, and so may a use reading it. Witness, three outcomes in the model
+(`examples.rs`, `hole_o4_a_capture_written_after_a_use_reads_it`): `probe` decided
+as `probe(B)`, accepted; as `probe(A)`, accepted with `x: B`, `B ⇝ A` being the
+conversion; and as `probe(A)`, refused with `x: A`, at the instance's `V ≤ X`
+(l.301), `X` solved before the instance recorded it:
 
 ```
 let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
@@ -294,6 +297,8 @@ let put = |v| x = v;
 probe(x);                // probe(A), probe(B)
 put(make_b());
 ```
+
+Without `probe(x)`, two outcomes: `x: B` accepted, and `x: A` refused at `V ≤ X`.
 
 The invariant broken is that a node recording into a class is seen as the class's
 dependency before it records and stays after: a lambda's instance writes classes
