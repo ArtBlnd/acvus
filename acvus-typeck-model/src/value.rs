@@ -220,6 +220,8 @@ impl State {
             readings: self.readings,
             hosts: self.hosts.clone(),
             viewed: BTreeSet::new(),
+            deferred: BTreeMap::new(),
+            broken: BTreeMap::new(),
         };
         read.classes.grow(&read.arena);
         for recorded in &self.log {

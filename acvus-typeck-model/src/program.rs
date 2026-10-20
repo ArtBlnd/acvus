@@ -20,6 +20,19 @@ pub struct Program {
 pub struct Readings {
     pub visibility: Visibility,
     pub binding_path: BindingPath,
+    pub deferral: Deferral,
+}
+
+/// When the relations of a node that a broken dependency pointed to are
+/// recorded (l.269; `holes.md`, H6).
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub enum Deferral {
+    /// Once the node that broke the dependency is decided.
+    #[default]
+    Recording,
+    /// When their node is decided; the value the node that broke the
+    /// dependency reads leaves them out.
+    Reading,
 }
 
 /// Which members a kind gives (l.282; `holes.md`, T5).

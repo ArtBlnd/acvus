@@ -2,8 +2,8 @@
 
 Rests on the spec's l.303–345 (place, lends, patterns, structs, overload
 resolution), with l.149–161 (projections), l.267 (what a node reads) and l.252 (a
-use's record of whether a class is a reference). Uses, lends, projections and
-bindings are encoded; l.252 is not yet. The code is `src/node.rs`.
+use's record of whether a class is a reference), l.269 (what a broken dependency
+defers) and l.335 (what all candidates share). The code is `src/node.rs`.
 
 ## Meaning
 
@@ -20,9 +20,11 @@ reads its position, or lends it where its path passes a reference.
 
 ## Readings
 
-1. **One candidate reads nothing.** A use reads the positions where its candidates
-   differ (l.267), so a use with one candidate reads nothing, depends on nothing,
-   and is decided as that candidate.
+1. **One candidate reads nothing.** A use's candidates are the declarations its name
+   reaches with as many parameters as it has arguments (l.331). It reads the
+   positions where they differ (l.267), so a use with one candidate reads nothing,
+   and all of it is shared (l.335): it is decided as that candidate as it is
+   recorded. A use with none is refused as it is recorded.
 2. **A candidate's variables are made at the decision.** They are unknowns of the
    use's binding group (l.331). Only the decided candidate records, so only its
    variables are made.
@@ -52,9 +54,7 @@ reads its position, or lends it where its path passes a reference.
    type.
 9. **What a read of whether a class is a reference leaves out.** For a lend, a
    projection and a binding, the read (l.267) and the dependency (l.248) both leave
-   out every projection other than a Deref. Line 252 and the clause of l.248 about
-   it are not yet encoded, so such a node still depends on every use that records
-   into its place.
+   out every projection other than a Deref.
 10. **A binding.** "Its equivalence class" (l.267) is its position (l.305), which a
    binding that lends reads as a lend reads its place (l.307); so "the position's
    own" mutability (l.317) is that lend's `n`. A read of the position passes its
@@ -64,3 +64,32 @@ reads its position, or lends it where its path passes a reference.
    itself, as in Rust (patterns §1). How the binding learns its path's projections'
    decisions is `holes.md`, H5, and the model takes it as a reading
    (`BindingPath`).
+11. **What a use reads.** At each position where its candidates differ, the class
+   there and the classes within the depth its candidates reach there (l.244 (b)),
+   since the value read there is compared whole (l.337). Example 12 rests on it:
+   `x + y` reads `Y`, the target of `&y`, and so depends on `y + 1`.
+12. **Which uses a reference-ness read waits for** (l.248). Whether a class is a
+   reference is decided by its lower bounds and equations (l.309), so a use found
+   at a class (l.250) is left out where no candidate would record a lower bound or
+   an equation into that class, or where it has recorded whether the class is a
+   reference. The pick example (l.263) needs the first: `pick` lies at `A`, its
+   argument, which its candidates record nothing into.
+13. **What candidates would record** (l.252). A candidate records its result type
+   into its result, and, inside each argument's kind as it is at the moment, the
+   equations its parameter's invariant parts give (l.286), each part beneath an
+   equated one equated too. A variable there is an unknown, neither a reference
+   nor not one, so a candidate that writes one agrees with none.
+14. **What all candidates share** (l.335). Each argument and the result where every
+   candidate's signature writes one type with no variable, recorded at once as the
+   decided candidate would record it. Line 252 is the reference-ness part of it.
+15. **An argument of `!`** (l.344). An argument position the use reads, read as
+   `!`, decides it with the result `!`: the result takes `!` as a lower bound, and
+   nothing else is recorded. A position the use does not read is not seen.
+16. **A reference of undecided mutability.** A class read as a reference only by a
+   use's record (l.252) has a mutability the value read does not decide; a
+   projection applies to its target all the same, and a lend or a binding whose
+   reference's mutability is then undecided gives no result (`holes.md`, H7).
+17. **A broken dependency** (l.269). A node decided while undecided nodes broke
+   their dependency on it records once they are decided; whether that holds of
+   the state or of their reads only is `holes.md`, H6, and the model takes it as a
+   reading (`Deferral`).

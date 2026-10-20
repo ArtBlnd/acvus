@@ -128,6 +128,8 @@ impl State {
                 }
             }
         }
+        // The nodes that record into a class (l.250), each with the class at
+        // whose position it lies.
         let recording = |class: ClassId, edges: &BTreeMap<Vertex, BTreeSet<(Vertex, Edge)>>| {
             let mut classes = BTreeSet::from([self.root(class)]);
             let mut work = vec![self.root(class)];
@@ -141,7 +143,7 @@ impl State {
                             }
                         }
                         (Vertex::Node(node), Edge::Records) => {
-                            nodes.insert(node.clone());
+                            nodes.insert((node.clone(), at));
                         }
                         _ => {}
                     }
@@ -153,10 +155,11 @@ impl State {
         for (name, node) in &undecided {
             let reads_reference = !matches!(node.kind, NodeKind::Use { .. });
             for position in self.read_positions(&node.kind) {
-                for recorder in recording(position, &edges) {
-                    if recorder != **name
-                        && !(reads_reference && self.is_inner_projection(&recorder))
-                    {
+                for (recorder, at) in recording(position, &edges) {
+                    let left_out = reads_reference
+                        && (self.is_inner_projection(&recorder)
+                            || !self.may_decide_reference(&recorder, at));
+                    if recorder != **name && !left_out {
                         reads.push(((*name).clone(), recorder, Edge::Reads));
                     }
                 }
@@ -194,6 +197,18 @@ impl State {
             }
         }
         seen
+    }
+
+    /// The undecided nodes that broke their dependency on the node (l.269).
+    pub(crate) fn broken_on(&self, name: &Name) -> BTreeSet<Name> {
+        let graph = self.graph();
+        let node = Vertex::Node(name.clone());
+        self.nodes
+            .iter()
+            .filter(|(other, state)| *other != name && state.decision.is_none())
+            .map(|(other, _)| other.clone())
+            .filter(|other| graph.broken(&Vertex::Node(other.clone()), &node))
+            .collect()
     }
 
     /// The nodes whose relations the value a node reads leaves out: itself

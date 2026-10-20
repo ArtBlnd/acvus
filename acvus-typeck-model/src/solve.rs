@@ -8,7 +8,7 @@ use crate::class::{Arena, ClassId, ClassName, Classes, Conflict, Fact, KindSourc
 use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::decl::{Decls, Node};
 use crate::node::{Decision, NodeKind, NodeState};
-use crate::program::{Item, Origin, Program, Projection, Readings};
+use crate::program::{Item, Origin, Program, Readings};
 use crate::relation::{Named, Recorded, Recorder, Relation};
 use crate::sig::SigTy;
 use crate::ty::{Mutability, Name, Term, Ty, Variance};
@@ -83,6 +83,12 @@ pub struct State {
     /// The classes named by a kind "indexes `τ`" already linked along a view
     /// (l.161).
     pub(crate) viewed: BTreeSet<ClassId>,
+    /// The decided nodes whose relations wait for the undecided nodes that
+    /// broke their dependency on them (l.269).
+    pub(crate) deferred: BTreeMap<Name, BTreeSet<Name>>,
+    /// For each undecided node, the decided nodes it broke its dependency on,
+    /// whose relations its read leaves out (`Deferral::Reading`).
+    pub(crate) broken: BTreeMap<Name, BTreeSet<Name>>,
 }
 
 /// A step that may be taken.
@@ -113,6 +119,8 @@ impl State {
             readings: program.readings,
             hosts: BTreeSet::new(),
             viewed: BTreeSet::new(),
+            deferred: BTreeMap::new(),
+            broken: BTreeMap::new(),
         };
         for class in &program.classes {
             let id = state.arena.intern(ClassName::Text(class.name.clone()));
@@ -219,23 +227,7 @@ impl State {
                 Item::Equation(..) => {}
             }
         }
-        let derefs: Vec<Name> = state
-            .nodes
-            .iter()
-            .filter(|(_, node)| {
-                matches!(
-                    node.kind,
-                    NodeKind::Project {
-                        projection: Projection::Deref,
-                        ..
-                    }
-                )
-            })
-            .map(|(name, _)| name.clone())
-            .collect();
-        for deref in &derefs {
-            state.decide(deref);
-        }
+        state.decide_at_once();
         state.settle();
         state
     }
@@ -244,6 +236,8 @@ impl State {
         let node = NodeState {
             kind,
             decision: None,
+            shared: BTreeSet::new(),
+            references: BTreeSet::new(),
         };
         if self.nodes.insert(name.clone(), node).is_some() {
             panic!("the program names the node {name} once");
@@ -283,6 +277,9 @@ impl State {
                 }
             },
             Relation::Lit(class, lit) => self.classes.give_lit(*class, lit.clone(), types),
+            Relation::Reference(class, reference) => {
+                self.classes.give_reference(*class, *reference, types)
+            }
             Relation::LowerBound { .. } | Relation::Boundary { .. } => Ok(()),
         };
         if let Err(conflict) = given {
@@ -419,6 +416,7 @@ impl State {
             let before = (self.log.len(), self.split.len());
             self.merge_cycles();
             self.link_views();
+            self.record_at_once();
             let settled = self.settled();
             for i in 0..self.log.len() {
                 if self.split.contains(&i) {
@@ -450,7 +448,8 @@ impl State {
                     Relation::Equation(..)
                     | Relation::Fact(..)
                     | Relation::Kind(..)
-                    | Relation::Lit(..) => {
+                    | Relation::Lit(..)
+                    | Relation::Reference(..) => {
                         self.split.insert(i);
                     }
                 }
@@ -830,7 +829,8 @@ impl State {
                 Relation::Equation(..)
                 | Relation::Fact(..)
                 | Relation::Kind(..)
-                | Relation::Lit(..) => continue,
+                | Relation::Lit(..)
+                | Relation::Reference(..) => continue,
             };
             let (Some(from_value), Some(to_value)) = (self.value(from), self.value(to)) else {
                 continue;
@@ -919,10 +919,12 @@ impl State {
         roots.sort();
         let decisions: Vec<_> = self.nodes.values().map(|node| &node.decision).collect();
         format!(
-            "{roots:?}|{}|{:?}|{:?}|{decisions:?}",
+            "{roots:?}|{}|{:?}|{:?}|{decisions:?}|{:?}|{:?}",
             self.log.len(),
             self.split,
-            self.refusals
+            self.refusals,
+            self.deferred,
+            self.broken,
         )
     }
 }

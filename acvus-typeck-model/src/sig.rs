@@ -178,6 +178,14 @@ impl SigTy {
         SigTy::Term(Rc::new(term))
     }
 
+    /// Whether it writes no variable.
+    pub fn is_closed(&self) -> bool {
+        match self {
+            SigTy::Var(_) => false,
+            SigTy::Term(term) => term.parts().into_iter().all(|(_, part)| part.is_closed()),
+        }
+    }
+
     pub fn mentions(&self, var: SigVar) -> bool {
         match self {
             SigTy::Var(own) => *own == var,

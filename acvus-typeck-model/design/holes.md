@@ -93,6 +93,46 @@ Making the binding depend on the projections on its path gives one outcome, `x:
 a class is a reference, which those projections do not decide; what a path passes
 is a different question, which l.248 does not ask.
 
+## H6. What a broken dependency's relations wait for
+
+A lend reads whether its place is a reference (l.267) and depends on the nodes
+that record into its place (l.248), which are the nodes at whose positions the
+place lies (l.244 (b), l.250); a lend's place is at its position. So two lends of
+one place depend on each other, each breaks its dependency on the other (l.269),
+and "the relations recorded by a node that a broken dependency pointed to are
+recorded once the node that broke it is decided" (l.269). Until then the
+reference the first lend gives has no kind, and a use that reads it in between
+reads nothing there. In Example 12, `&y` and the `&y` of `y + 1` are such a pair:
+`y + 1` decided between them reads its first argument as nothing and its second as
+`?{1}`, takes the default `i32` (l.344), and the program is refused, `1u16 ≤ Y` not
+reaching `i32`. Witness: Example 12 itself, which reaches an accepted and a
+refused outcome (`examples.rs`, `example_12_accumulation_that_starts_from_a_literal`,
+`Deferral::Recording`).
+
+Read so that a broken dependency's relations are recorded when their node is
+decided, and only the value read by the node that broke it leaves them out
+(`Deferral::Reading`), Example 12 reaches the spec's outcome in every order. That
+reading keeps what l.269 is for, that each node of a cycle reads without the
+others (Example 12, step 3), without holding the relations from third nodes.
+
+## H7. A reference recorded at once has no mutability
+
+Where every candidate records a reference into a class, a use records at once that
+the class is a reference (l.252), and a lend that reads it no longer depends on the
+use (l.248). The record names no mutability, and a lend's mutability is the lesser
+of its own and its place's (l.307), so a `&mut` lend decided before the use has no
+result. Witness, two outcomes in the model, one where the lend gives no result
+(`examples.rs`, `hole_7_a_reference_recorded_at_once_has_no_mutability`):
+
+```
+let r = first(x);        // x: A; first(A) -> &u8, first(B) -> &mut u8
+let s = &mut r;
+```
+
+Where the candidates agree on the mutability, recording the reference's
+constructor, which is its mutability (l.66), would close it there; where they
+differ, as here, the lend would have to keep depending on the use.
+
 ## T1. A type parameter's bound
 
 Extern fn §1 gives a type parameter one bound, any type or any type the use must

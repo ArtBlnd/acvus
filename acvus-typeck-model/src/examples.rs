@@ -6,7 +6,7 @@ use crate::explore::{Exploration, explore};
 use crate::node::{Decision, LendTarget};
 use std::collections::BTreeSet;
 
-use crate::program::{BindingPath, Program, ProgramBuilder, Projection, Readings};
+use crate::program::{BindingPath, Deferral, Program, ProgramBuilder, Projection, Readings};
 use crate::sig::{DeclaredTypes, ExternDecl, SigTy, SigVar, Signature};
 use crate::solve::Outcome;
 use crate::ty::{IntTy, Mutability, Name, Scalar, Term, Ty};
@@ -254,7 +254,10 @@ fn example_2_a_boundarys_invariant_part() {
     );
     assert_eq!(
         decision(&outcome, "lend"),
-        Decision::Lend(LendTarget::Place)
+        Decision::Lend {
+            target: LendTarget::Place,
+            mutability: Mutability::Exclusive
+        }
     );
 }
 
@@ -365,7 +368,10 @@ fn example_9_a_lend_that_reborrows_a_reference() {
     assert!(outcome.accepted, "{outcome:#?}");
     assert_eq!(
         decision(&outcome, "lend r"),
-        Decision::Lend(LendTarget::Through(Mutability::Exclusive))
+        Decision::Lend {
+            target: LendTarget::Through(Some(Mutability::Exclusive)),
+            mutability: Mutability::Shared
+        }
     );
     let vec_never = closed_extern("Vec", vec![closed(Term::Never)]);
     assert_eq!(
@@ -539,7 +545,10 @@ fn example_7_a_write_through_a_reference() {
     );
     assert_eq!(
         decision(&outcome, "&mut x"),
-        Decision::Lend(LendTarget::Place)
+        Decision::Lend {
+            target: LendTarget::Place,
+            mutability: Mutability::Exclusive
+        }
     );
 }
 
@@ -751,11 +760,14 @@ fn a_binding_behind_a_reference_lends_its_position() {
     );
     assert_eq!(
         decision(&outcome, "Some"),
-        Decision::AppliedToTarget(Mutability::Shared)
+        Decision::AppliedToTarget(Some(Mutability::Shared))
     );
     assert_eq!(
         decision(&outcome, "x"),
-        Decision::BindLend(Mutability::Shared, LendTarget::Place)
+        Decision::BindLend {
+            target: LendTarget::Place,
+            mutability: Mutability::Shared
+        }
     );
     let as_stated = outcomes(&program(BindingPath::AsStated));
     let values: BTreeSet<Option<Ty>> = as_stated
@@ -809,4 +821,306 @@ fn hole_t6_a_pattern_on_a_scrutinee_of_type_never() {
         )),
         "{outcome:#?}"
     );
+}
+
+fn s_object(fields: &[(&str, SigTy)]) -> SigTy {
+    SigTy::term(Term::Object(
+        fields
+            .iter()
+            .map(|(name, ty)| (Name::new(name), ty.clone()))
+            .collect(),
+    ))
+}
+
+fn overload(name: &str, index: usize) -> DeclId {
+    DeclId {
+        name: Name::new(name),
+        overload: index,
+    }
+}
+
+/// The example of l.254–265.
+/// ```text
+/// let mut a;
+/// a.x = 0;
+/// a = pick(a);             // pick({x: i32}) -> {x: i32}, pick(u8) -> u8
+/// ```
+/// and with `pick(u8) -> &u8` in place of the second, which is refused.
+#[test]
+fn example_of_l254_a_projection_and_an_overload() {
+    let program = |second_is_reference: bool| {
+        let mut d = declare(&[]);
+        let object = s_object(&[("x", s_int(IntTy::I32))]);
+        function(&mut d, "pick", &[], vec![object.clone()], object, Role::Fn);
+        let second = if second_is_reference {
+            s_ref(Mutability::Shared, s_int(IntTy::U8))
+        } else {
+            s_int(IntTy::U8)
+        };
+        function(
+            &mut d,
+            "pick",
+            &[],
+            vec![s_int(IntTy::U8)],
+            second,
+            Role::Fn,
+        );
+        let mut p = ProgramBuilder::new(d.finish().unwrap());
+        let a = p.var("A");
+        let x = p.var("a.x");
+        let zero = p.lit("0", int_lit(0));
+        let picked = p.var("pick(a)");
+        p.project("a.x", field("x"), &a, &x);
+        p.pass(&zero, &x);
+        p.call("pick", "pick", &[&a], &picked);
+        p.pass(&picked, &a);
+        p.build()
+    };
+    let outcome = only_outcome(&program(false));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        decision(&outcome, "pick"),
+        Decision::Use(overload("pick", 0))
+    );
+    assert_eq!(decision(&outcome, "a.x"), Decision::Applied);
+    assert_eq!(
+        value(&outcome, "A"),
+        Some(object(&[("x", closed_int(IntTy::I32))]))
+    );
+    let refused = only_outcome(&program(true));
+    assert!(!refused.accepted, "{refused:#?}");
+    assert!(
+        matches!(decision(&refused, "pick"), Decision::Unreached(_)),
+        "{refused:#?}"
+    );
+}
+
+/// ```text
+/// fill_all(&mut parse(s));     // parse(&str) -> Vec⟨u8⟩, parse(&str) -> Vec⟨u16⟩; fill_all(&mut Vec⟨u8⟩)
+/// let _ = &mut parse(s);
+/// ```
+#[test]
+fn example_13_an_overload_chosen_by_its_result() {
+    let mut d = declare(&[("Vec", 1)]);
+    let str_ref = s_ref(Mutability::Shared, SigTy::term(Term::Str));
+    for element in [IntTy::U8, IntTy::U16] {
+        function(
+            &mut d,
+            "parse",
+            &[],
+            vec![str_ref.clone()],
+            s_extern("Vec", vec![s_int(element)]),
+            Role::Fn,
+        );
+    }
+    let vec_u8 = s_extern("Vec", vec![s_int(IntTy::U8)]);
+    function(
+        &mut d,
+        "fill_all",
+        &[],
+        vec![s_ref(Mutability::Exclusive, vec_u8)],
+        s_unit(),
+        Role::Fn,
+    );
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    let str_ = p.written("str", Term::Str);
+    let s = p.written("&str", Term::Ref(Mutability::Shared, str_));
+    let parsed = p.var("parse(s)");
+    let lent = p.var("&mut parse(s)");
+    let filled = p.var("fill_all(..)");
+    let parsed_2 = p.var("parse(s) 2");
+    let lent_2 = p.var("&mut parse(s) 2");
+    p.call("parse", "parse", &[&s], &parsed);
+    p.lend("lend", Mutability::Exclusive, &parsed, &lent);
+    p.call("fill_all", "fill_all", &[&lent], &filled);
+    p.call("parse 2", "parse", &[&s], &parsed_2);
+    p.lend("lend 2", Mutability::Exclusive, &parsed_2, &lent_2);
+    let outcome = only_outcome(&p.build());
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        decision(&outcome, "parse"),
+        Decision::Use(overload("parse", 0))
+    );
+    assert_eq!(
+        decision(&outcome, "lend"),
+        Decision::Lend {
+            target: LendTarget::Place,
+            mutability: Mutability::Exclusive
+        }
+    );
+    assert!(
+        matches!(decision(&outcome, "parse 2"), Decision::Unreached(_)),
+        "{outcome:#?}"
+    );
+}
+
+/// Declarations of `core::add(&T, &T) -> T` for each of `numbers`.
+fn add_impls(builder: &mut DeclsBuilder, numbers: &[IntTy]) {
+    for number in numbers {
+        let operand = s_ref(Mutability::Shared, s_int(*number));
+        function(
+            builder,
+            "core::add",
+            &[],
+            vec![operand.clone(), operand],
+            s_int(*number),
+            Role::Fn,
+        );
+    }
+}
+
+/// ```text
+/// let mut x = 0;
+/// let mut y = 1u16;
+/// while c {
+///     x = x + y;
+///     y = y + 1;
+/// }
+/// ```
+/// A literal operand is a temporary of the literal's type, which `&` lends.
+/// The two lends of `y` depend on each other (`holes.md`, H6), so the outcome
+/// depends on the order where the relations of the first decided wait for the
+/// other (`Deferral::Recording`), and is the spec's where they are left out of
+/// its read only (`Deferral::Reading`).
+#[test]
+fn example_12_accumulation_that_starts_from_a_literal() {
+    let recording = outcomes(&example_12(Deferral::Recording));
+    let accepted: BTreeSet<bool> = recording.iter().map(|outcome| outcome.accepted).collect();
+    assert_eq!(accepted, BTreeSet::from([false, true]), "{recording:#?}");
+    let outcome = only_outcome(&example_12(Deferral::Reading));
+    assert!(outcome.accepted, "{outcome:#?}");
+    for class in ["X", "Y", "?a", "?b", "R1", "R2"] {
+        assert_eq!(
+            value(&outcome, class),
+            Some(closed_int(IntTy::U16)),
+            "{class}: {outcome:#?}"
+        );
+    }
+    let add_u16 = overload("core::add", 1);
+    assert_eq!(decision(&outcome, "x + y"), Decision::Use(add_u16.clone()));
+    assert_eq!(decision(&outcome, "y + 1"), Decision::Use(add_u16));
+}
+
+fn example_12(deferral: Deferral) -> Program {
+    let mut d = declare(&[]);
+    add_impls(&mut d, &[IntTy::U8, IntTy::U16, IntTy::I32]);
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(Readings {
+        deferral,
+        ..Readings::default()
+    });
+    let x = p.var("X");
+    let a = p.lit("?a", int_lit(0));
+    let y = p.var("Y");
+    let u16_ = p.written("1u16", int(IntTy::U16));
+    let b = p.lit("?b", int_lit(1));
+    let lx = p.var("&x");
+    let ly = p.var("&y");
+    let r1 = p.var("R1");
+    let ly_2 = p.var("&y 2");
+    let lb = p.var("&1");
+    let r2 = p.var("R2");
+    p.pass(&a, &x);
+    p.pass(&u16_, &y);
+    p.lend("&x", Mutability::Shared, &x, &lx);
+    p.lend("&y", Mutability::Shared, &y, &ly);
+    p.call("x + y", "core::add", &[&lx, &ly], &r1);
+    p.pass(&r1, &x);
+    p.lend("&y 2", Mutability::Shared, &y, &ly_2);
+    p.lend("&1", Mutability::Shared, &b, &lb);
+    p.call("y + 1", "core::add", &[&ly_2, &lb], &r2);
+    p.pass(&r2, &y);
+    p.build()
+}
+
+/// `holes.md`, H7.
+/// ```text
+/// let r = first(x);        // x: A; first(A) -> &u8, first(B) -> &mut u8
+/// let s = &mut r;
+/// ```
+/// Both candidates return a reference, so `first` records at once that its
+/// result is one (l.252), and the lend no longer depends on it (l.248). Decided
+/// before `first`, the lend reads `r` as a reference whose mutability the value
+/// read does not decide, and `&mut` gives no result (l.307).
+#[test]
+fn hole_7_a_reference_recorded_at_once_has_no_mutability() {
+    let mut d = declare(&[("A", 0), ("B", 0)]);
+    for (param, mutability) in [("A", Mutability::Shared), ("B", Mutability::Exclusive)] {
+        function(
+            &mut d,
+            "first",
+            &[],
+            vec![s_extern(param, vec![])],
+            s_ref(mutability, s_int(IntTy::U8)),
+            Role::Fn,
+        );
+    }
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    let x = p.written(
+        "x",
+        Term::Extern {
+            name: Name::new("A"),
+            args: vec![],
+            identity: None,
+        },
+    );
+    let first = p.var("first(x)");
+    let r = p.var("R");
+    let lent = p.var("&mut r");
+    p.call("first", "first", &[&x], &first);
+    p.pass(&first, &r);
+    p.lend("&mut r", Mutability::Exclusive, &r, &lent);
+    let outcomes = outcomes(&p.build());
+    let decisions: BTreeSet<Decision> = outcomes
+        .iter()
+        .map(|outcome| decision(outcome, "&mut r"))
+        .collect();
+    assert_eq!(
+        decisions,
+        BTreeSet::from([
+            Decision::NoResult,
+            Decision::Lend {
+                target: LendTarget::Through(Some(Mutability::Shared)),
+                mutability: Mutability::Shared
+            },
+        ]),
+        "{outcomes:#?}"
+    );
+}
+
+/// ```text
+/// let r = f(never());      // never() -> !; f(u8) -> u8, f(u16) -> u16
+/// ```
+/// The argument reads as `!`, so the use is decided with the result `!`
+/// (l.344).
+#[test]
+fn a_use_whose_argument_is_never() {
+    let mut d = declare(&[]);
+    function(
+        &mut d,
+        "never",
+        &[],
+        vec![],
+        SigTy::term(Term::Never),
+        Role::Fn,
+    );
+    for number in [IntTy::U8, IntTy::U16] {
+        function(
+            &mut d,
+            "f",
+            &[],
+            vec![s_int(number)],
+            s_int(number),
+            Role::Fn,
+        );
+    }
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    let never = p.var("never()");
+    let r = p.var("R");
+    p.call("never", "never", &[], &never);
+    p.call("f", "f", &[&never], &r);
+    let outcome = only_outcome(&p.build());
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(decision(&outcome, "f"), Decision::Never);
+    assert_eq!(value(&outcome, "R"), Some(closed(Term::Never)));
 }

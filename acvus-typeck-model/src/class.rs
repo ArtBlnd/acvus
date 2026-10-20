@@ -174,6 +174,9 @@ pub struct Held {
     pub kind: Option<(Term<ClassId>, KindSource)>,
     pub facts: BTreeSet<Fact>,
     pub lit: Option<LitVar>,
+    /// Whether it is a reference, as a use records it before it is decided
+    /// (l.252).
+    pub reference: Option<bool>,
     /// Whether it took its constructor and members, written or joined
     /// (l.275).
     pub solved: bool,
@@ -189,6 +192,9 @@ pub enum Conflict {
     Lit(LitVar, Option<Constructor>),
     /// A fact that the kind does not meet (l.282).
     Fact(Fact, Constructor),
+    /// A record of whether the class is a reference that its kind, or another
+    /// record, does not meet (l.252).
+    Reference(bool, Option<Constructor>),
 }
 
 /// The equivalence classes over one arena.
@@ -211,6 +217,7 @@ impl Classes {
                     kind: None,
                     facts: BTreeSet::new(),
                     lit: None,
+                    reference: None,
                     solved: false,
                 },
             );
@@ -305,6 +312,25 @@ impl Classes {
         self.unify_pairs(pairs, types)
     }
 
+    /// Records whether the equivalence class of `id` is a reference.
+    pub fn give_reference(
+        &mut self,
+        id: ClassId,
+        reference: bool,
+        types: &DeclaredTypes,
+    ) -> Result<(), Conflict> {
+        let root = self.find(id);
+        {
+            let held = self.held.get_mut(&root).expect("a root holds");
+            if held.reference.is_some_and(|own| own != reference) {
+                return Err(Conflict::Reference(reference, None));
+            }
+            held.reference = Some(reference);
+        }
+        let pairs = self.normalize(root, types)?;
+        self.unify_pairs(pairs, types)
+    }
+
     /// Merges the two equivalence classes, and their parts of one name in turn.
     pub fn unify(&mut self, a: ClassId, b: ClassId, types: &DeclaredTypes) -> Result<(), Conflict> {
         self.unify_pairs(vec![(a, b)], types)
@@ -337,6 +363,12 @@ impl Classes {
                 ),
                 (lit, other) => lit.clone().or_else(|| other.clone()),
             };
+            let reference = match (kept.reference, merged.reference) {
+                (Some(own), Some(other)) if own != other => {
+                    return Err(Conflict::Reference(other, None));
+                }
+                (own, other) => own.or(other),
+            };
             self.parent[gone.0] = keep;
             let merged = self.held.remove(&gone).expect("a root holds");
             let held = self.held.get_mut(&keep).expect("a root holds");
@@ -344,6 +376,7 @@ impl Classes {
             held.facts.extend(merged.facts);
             held.kind = kind;
             held.lit = lit;
+            held.reference = reference;
             held.solved |= merged.solved;
             work.extend(self.normalize(keep, types)?);
         }
@@ -364,6 +397,13 @@ impl Classes {
                 return Err(Conflict::Lit(lit.clone(), Some(kind.constructor())));
             }
             held.lit = None;
+        }
+        if let (Some(reference), Some((kind, _))) = (held.reference, &held.kind) {
+            let constructor = kind.constructor();
+            let is_reference = matches!(constructor, Constructor::Ref(_));
+            if constructor != Constructor::Never && is_reference != reference {
+                return Err(Conflict::Reference(reference, Some(constructor)));
+            }
         }
         let mut pairs = Vec::new();
         let mut by_part: BTreeMap<FactPart, ClassId> = BTreeMap::new();

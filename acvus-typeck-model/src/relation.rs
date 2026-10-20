@@ -26,6 +26,9 @@ pub enum Relation {
     Kind(ClassId, Term<ClassId>),
     /// A literal's type (l.134).
     Lit(ClassId, LitVar),
+    /// Whether the class is a reference, which a use records before it is
+    /// decided (l.252).
+    Reference(ClassId, bool),
 }
 
 /// What recorded a relation.
@@ -78,6 +81,8 @@ impl fmt::Display for Named<'_> {
                 write!(f, "{}: {term:?}", name(class))
             }
             Relation::Lit(class, lit) => write!(f, "{}: {lit}", name(class)),
+            Relation::Reference(class, true) => write!(f, "{}: a reference", name(class)),
+            Relation::Reference(class, false) => write!(f, "{}: no reference", name(class)),
         }
     }
 }
