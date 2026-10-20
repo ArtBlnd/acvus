@@ -83,7 +83,9 @@ every node undecided: the lend `&x` waited for `X`, its value read giving `X` th
 LitVar and `probe`'s invariant points, while in the state `X`, held back by its
 dependency on `x + y`'s result, held no LitVar, so row 3 never took it. Two
 changes followed together, that a LitVar decides that a class is no reference, and
-the reading above; which of them alone closes H7 was not run apart.
+the reading above. Run with the reading above and without the first, H7 reaches
+one outcome, refused, every other test keeping its outcome; so the first is
+needed with the second. Whether the first alone closes H7 is not run.
 
 ## Rows
 
@@ -111,8 +113,9 @@ the reading above; which of them alone closes H7 was not run apart.
    3. each class that several fit is refused there, ambiguous.
 
    A class that no candidate fits is not taken, and is left to fallback. A class
-   with a dependency on a universal is not taken: it stays in C, and is taken in
-   each instance (l.219, l.222).
+   with an unbroken dependency on a universal, which depends on the use that makes
+   an instance (l.246), is not taken: it stays in C, and is taken in each instance
+   (l.219, l.222).
 4. **Fallback.** At the run only, once row 3 takes nothing, as l.299 states; then
    rows 2 and 3 resume.
 5. **What reaches a class row 3 typed.** Its type itself, or `!`: a value that
@@ -130,8 +133,8 @@ What each row excludes:
   into a class row 3 typed.
 - Row 3: a choice among several by order; a class typed by its invariant points
   while a node that may still record an own relation into it waits on something
-  other than it (an edge out of its component); a class with a universal's
-  dependency typed in its body's group; a refusal while steps 1 and 2 still type a
+  other than it (an edge out of its component); a class with an unbroken
+  dependency on a universal typed in its body's group; a refusal while steps 1 and 2 still type a
   class, and a default while step 1 still does. A decided node's invariant point
   at a class is among its candidates, so where that node's type fits, no other
   fitting type is chosen but by step 2: the choice is that type, the default, or a
@@ -238,7 +241,9 @@ default taken with `W`, `X` would be `i32`, and `g` refused.
   no LitVar boundary into a closed type.
 - Row 3: `State::apply_invariant_rule` (`src/invariant.rs`), taken where no step
   is left, in `fixpoints`, `explore_with`, `sample_with` and `State::run`, and,
-  in the entry, before fallback.
+  in the entry, before fallback. A universal depends on the use outside
+  (`Edge::Chosen`), never decided in its group, so it stays unsolved there, and a
+  class with an unbroken dependency on it is not unblocked, as in row 2 (P6).
 - Row 5: `State::checks` checks a value entering a class row 3 typed by
   `as_it_is`.
 - I\*: `records` and `into` (`src/istar.rs`) as note 15 above.
@@ -255,6 +260,7 @@ Derived before running, under `InvariantPoints::Last`; under
 | P3 `let x = 0; m(x);`, `m(u16)`, `m(&str)` | `x: u16` |
 | P4 `let x = 0; n(x);`, `n(u8)`, `n(u16)` | refused, ambiguous at `X` |
 | P5 `let x = 0; n(x); m(x);` | refused, ambiguous at `X`, in every order |
+| P6 `fn g(a) { let mut o = Some(a); fill(&mut o); }`, `fill(&mut Option⟨u8⟩)`, called `g(1u8)` or `g(1u16)` | `O`'s payload, whose lower bound `S` lies on the universal `A`, stays in `g`'s C, row 3 not taking it; `g(1u8)` accepted, `g(1u16)` refused at the instance's `&mut o ⇝ fill.Param(0)`; with `Some(0)` for `Some(a)`, `O: Option⟨u8⟩` by row 3 in `g`'s C, both accepted (added after the rest of the table was run; its control first derived as `Some(?s)`, below) |
 | P7 `let x = 0; f(x);`, `f(u8)`, `f(i32)` | `x: i32` |
 | P8 `let x = 0; let w = 0; g(x, w);`, `g(u8, u8)`, `g(i32, &str)` | `x: u8`, `w: u8`, `g(u8, u8)`: `W` by step 1, then `X` |
 | P9 `let x = 0; m(x); f(x);`, `m(u16)`, `m(&str)`, `f(u8)`, `f(i32)` | refused: `X` takes `i32`, and `m`, decided, fails; I\* reports `m` |
@@ -270,7 +276,8 @@ Derived before running, under `InvariantPoints::Last`; under
 | H7 | one outcome, accepted, `probe(u16)` |
 | the other current examples | as under the spec |
 
-In each, I\* reports nothing and the certificate holds.
+In each, the certificate of every final state holds, and I\* reports nothing but
+`m` in P9.
 
 ## Results
 
@@ -278,7 +285,8 @@ Run, every row of the table holds as derived, each a test in `examples.rs`: P1
 `a_literal_added_to_a_literal`, P2 `a_literal_passed_to_one_parameter`, P3
 `a_literal_passed_to_overloads_of_which_one_fits`, P4
 `a_literal_passed_to_overloads_that_both_fit`, P5
-`a_literal_read_by_two_uses_that_leave_two_types`, P7
+`a_literal_read_by_two_uses_that_leave_two_types`, P6
+`a_class_on_a_universal_is_typed_in_each_instance`, P7
 `a_literal_passed_to_overloads_with_the_default`, P8
 `a_literal_typed_first_narrows_the_use_another_reads`, P9
 `a_default_where_a_decided_use_gives_another_type`, and the examples' and holes'
@@ -287,7 +295,7 @@ own tests, each with a half read this way (Example 2 with the push,
 not depend on each other is not asserted; its outcome is. Example 14, sampled,
 reaches the spec's outcome.
 
-Two results the table did not give:
+Three results the table did not give:
 
 - **O4 under the spec's captures** (`holes.md`, O4) reaches four outcomes, where the
   spec reaches three: `X` depends on `probe` only where `probe` may record an own
@@ -301,10 +309,22 @@ Two results the table did not give:
   default. A use left unreached gives its remaining candidates' points (note 08,
   reading 13), as I\* already reads what it records into; so read, I\* reports
   nothing.
+- **A lower bound with no source.** `let mut x = None; fill(&mut x);` with
+  `fill(&mut Option⟨u8⟩)`, accepted under the spec with `x: Option⟨u8⟩`, is
+  refused (`a_none_lent_to_a_filled_option`): `X`'s payload has the invariant
+  point `u8` and the lower bound `?k`, which has no source and no invariant
+  point. The payload depends on `?k` (l.244), unsolved, so row 3 does not take
+  it, and takes nothing; fallback then gives `?k` `!` (l.299), the payload is `!`
+  by its own relations, and the boundary fails. P6's control as first derived,
+  `Some(?s)` in `g`, `?s` with no source, was refused the same way; with the
+  LitVar of `Some(0)` there, settled (l.176), row 3 takes the payload. So
+  fallback reaches a class row 3 would type, through its lower bound, before
+  row 3 does, against the order of rows 3 and 4.
 
-With the default swapped to `InvariantPoints::Last`, 104 of 108 tests pass; the
-four failing are the spec's halves of Example 3, H3 and H7, and O4's under the
-spec's captures, each the change above.
+With the default swapped to `InvariantPoints::Last`, run before P6 and the lower
+bound with no source were added, 104 of 108 tests pass; the four failing are the
+spec's halves of Example 3, H3 and H7, and O4's under the spec's captures, each
+the change above.
 
 ## Open
 
@@ -314,5 +334,7 @@ spec's captures, each the change above.
   on closed values, does not name. Checking the choice needs the checker to name
   classes at parts, which changes what note 14 keeps it from; to be agreed.
 - **O4 under the spec's captures**, one outcome more (Results).
+- **A lower bound with no source** (Results): row 3 waits on a class only
+  fallback can type, so fallback comes first there; to be decided with 준량.
 - **Not covered.** O1 (a binding's path), O3 (a reference's mutability), O2 beyond
   the cycles row 2 no longer makes, and O5 are not changed here.

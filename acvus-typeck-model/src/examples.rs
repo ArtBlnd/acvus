@@ -2603,6 +2603,149 @@ fn a_literal_read_by_two_uses_that_leave_two_types() {
     assert_eq!(decision(&outcome, "m"), Decision::Use(overload("m", 0)));
 }
 
+/// P6, row 3's class on a universal:
+/// ```text
+/// fn g(a) { let mut o = Some(a); fill(&mut o); }   // fill(&mut Option⟨u8⟩)
+/// g(1u8)   or   g(1u16)
+/// ```
+/// `fill`'s boundary gives `O`'s payload the invariant point `u8`; its lower
+/// bound `S` depends on the universal `A`, so the rule does not take it in
+/// `g`'s C. In each instance it is the argument's type by its own relations:
+/// `g(1u8)` is accepted, and `g(1u16)` refused at the instance's boundary.
+/// With `Some(0)` for `Some(a)`, the payload's lower bound is a LitVar, and
+/// the rule types it `u8` in `g`'s C.
+#[test]
+fn a_class_on_a_universal_is_typed_in_each_instance() {
+    for (literal, number, accepted) in [("1u8", IntTy::U8, true), ("1u16", IntTy::U16, false)] {
+        let outcome = only_outcome(&generic_fill(literal, number, true));
+        assert_eq!(outcome.accepted, accepted, "{literal}: {outcome:#?}");
+        assert_eq!(value(&outcome, "S"), None, "{literal}: S stays in g's C");
+        let failed: Vec<&str> = outcome
+            .checks
+            .iter()
+            .filter(|check| check.coercion.is_err())
+            .map(|check| check.relation.as_str())
+            .collect();
+        if accepted {
+            assert!(failed.is_empty(), "{literal}: {outcome:#?}");
+        } else {
+            let [boundary] = failed.as_slice() else {
+                panic!("{literal}: one boundary fails: {outcome:#?}");
+            };
+            assert!(
+                boundary.contains("&mut o") && boundary.ends_with("fill.Param(0)"),
+                "{literal}: {boundary}"
+            );
+        }
+
+        let outcome = only_outcome(&generic_fill(literal, number, false));
+        assert!(outcome.accepted, "{literal}, Some(0): {outcome:#?}");
+        assert_eq!(
+            value(&outcome, "O"),
+            Some(closed(Term::Option(closed_int(IntTy::U8))))
+        );
+    }
+}
+
+/// P6's program, `g` called with the literal, `a` passed into `S` where
+/// `passes_a` and the literal `0` otherwise; read with invariant points last.
+fn generic_fill(literal: &str, number: IntTy, passes_a: bool) -> Program {
+    let option_u8 = SigTy::term(Term::Option(s_int(IntTy::U8)));
+    let mut d = declare(&[]);
+    function(
+        &mut d,
+        "fill",
+        &[],
+        vec![s_ref(Mutability::Exclusive, option_u8)],
+        s_unit(),
+        Role::Fn,
+    );
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(invariant_points_last());
+    p.group("g");
+    let a = p.var("A");
+    let r = p.var("R");
+    let s = p.var("S");
+    let some = p.written("Some(a)", Term::Option(s.clone()));
+    let o = p.var("O");
+    let lent = p.var("&mut o");
+    let filled = p.var("fill(..)");
+    let unit = p.written("()", Term::Unit);
+    p.function("g", &[&a], &r);
+    if passes_a {
+        p.pass(&a, &s);
+    } else {
+        let zero = p.lit("0", int_lit(0));
+        p.pass(&zero, &s);
+    }
+    p.pass(&some, &o);
+    p.lend("lend", Mutability::Exclusive, &o, &lent);
+    p.call("fill", "fill", &[&lent], &filled);
+    p.pass(&unit, &r);
+    p.group(crate::program::ENTRY);
+    let given = p.written(literal, int(number));
+    let called = p.var("g(..)");
+    p.call("g(..)", "g", &[&given], &called);
+    p.build()
+}
+
+/// ```text
+/// let mut x = None;
+/// fill(&mut x);            // fill(&mut Option⟨u8⟩)
+/// ```
+/// Under the spec, the boundary's equation types `X`'s payload `u8`, and
+/// `None`'s `?k` falls back. With invariant points last, the payload's lower
+/// bound `?k` has no source and no invariant point, and the payload depends on
+/// it, so the rule takes neither; `?k` falls back to `!`, the payload is `!` by
+/// its own relations, and the boundary fails.
+#[test]
+fn a_none_lent_to_a_filled_option() {
+    let outcome = only_outcome(&a_none_filled(Readings::default()));
+    assert!(outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "X"),
+        Some(closed(Term::Option(closed_int(IntTy::U8))))
+    );
+
+    let outcome = only_outcome(&a_none_filled(invariant_points_last()));
+    assert!(!outcome.accepted, "{outcome:#?}");
+    assert_eq!(
+        value(&outcome, "X"),
+        Some(closed(Term::Option(closed(Term::Never))))
+    );
+    let failed: Vec<&str> = outcome
+        .checks
+        .iter()
+        .filter(|check| check.coercion.is_err())
+        .map(|check| check.relation.as_str())
+        .collect();
+    assert_eq!(failed, ["&mut x ⇝ fill.Param(0)"], "{outcome:#?}");
+}
+
+fn a_none_filled(readings: Readings) -> Program {
+    let option_u8 = SigTy::term(Term::Option(s_int(IntTy::U8)));
+    let mut d = declare(&[]);
+    function(
+        &mut d,
+        "fill",
+        &[],
+        vec![s_ref(Mutability::Exclusive, option_u8)],
+        s_unit(),
+        Role::Fn,
+    );
+    let mut p = ProgramBuilder::new(d.finish().unwrap());
+    p.readings(readings);
+    let x = p.var("X");
+    let k = p.var("?k");
+    let none = p.written("None", Term::Option(k));
+    let lent = p.var("&mut x");
+    let filled = p.var("fill(..)");
+    p.pass(&none, &x);
+    p.lend("lend", Mutability::Exclusive, &x, &lent);
+    p.call("fill", "fill", &[&lent], &filled);
+    p.build()
+}
+
 /// P7: `let x = 0; f(x);` with `f(u8)` and `f(i32)`. Both fit, and `i32` is
 /// the default: adding `f(i32)` to `f(u8)` turns `x: u8` into `x: i32`, the
 /// cost agreed as choice (a).
