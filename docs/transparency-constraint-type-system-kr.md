@@ -231,7 +231,7 @@ body의 텍스트가 주는 제약은 주어지는 즉시 동치류에 기록되
 | invariant 자리 | 등식 |
 | projection | kind |
 | use | 그 타입들이 후보의 signature 가운데 하나와 같다는 제약(Overload resolution). instance를 만들면 그 C다. |
-| block expr | 정해지면, 그 타입과 그 안의 값이 그 타입으로 바뀌는 coercion(Block) |
+| block expr | 정해지면, 그 타입(Block) |
 
 ### 의존
 
@@ -260,7 +260,7 @@ a = pick(a);
 - `pick`은 그 kind에 의존하므로 `A`를 `{x: τ}`로 읽고, `pick({x: i32})`가 남는다.
 - 둘째 선언이 `pick(u8) -> &u8`이면 두 후보가 이 점에서 다르므로, `a.x`는 `pick`에 의존하고 `pick`도 `a.x`에 의존한다. 둘은 서로에게 추이적으로 의존하므로 서로로의 의존을 끊으며, `pick`이 읽는 `A`는 아무것도 정하지 않아 그 호출에서 거부된다.
 
-use, lend, projection, binding, block이 무엇이 되는지는 그것이 읽는 값으로 정해진다. 읽는 값은 그 동치류의 값을, 자기 자신과 자기에게 추이적으로 의존하는 use, lend, projection, binding, block이 기록하는 관계 없이 남은 관계만으로 정한 것이다. 이때 각 동치류의 값은, 그것이 의존하는 것이 풀렸는지와 상관없이 값의 표, 쪼갬, 채움으로 정하며, 남은 관계가 하나도 없는 동치류는 아무것도 주지 않는다. 선언을 부르는 use는 후보들이 갈리는 자리를 읽고, lend, projection, binding은 그 동치류가 reference인지를 읽으며, block은 자기 타입의 동치류를 읽는다(Block). reference인지를 읽을 때는 field, component, index, variant의 projection이 기록하는 관계도 기록되지 않았다고 본다(Place). 읽는 값이 아무것도 정하지 않는 자리는 아무것도 정하지 않는다.
+use, lend, projection, binding, block이 무엇이 되는지는 그것이 읽는 값으로 정해진다. 읽는 값은 그 동치류의 값을, 자기 자신과 자기에게 추이적으로 의존하는 use, lend, projection, binding, block이 기록하는 관계 없이 남은 관계만으로 정한 것이다. 이때 각 동치류의 값은, 그것이 의존하는 것이 풀렸는지와 상관없이 값의 표, 쪼갬, 채움으로 정하며, 남은 관계가 하나도 없는 동치류는 아무것도 주지 않는다. 선언을 부르는 use는 후보들이 갈리는 자리를 읽고, lend, projection, binding은 그 동치류가 reference인지를 읽으며, block은 그 안의 식의 타입의 동치류를 읽는다(Block). reference인지를 읽을 때는 field, component, index, variant의 projection이 기록하는 관계도 기록되지 않았다고 본다(Place). 읽는 값이 아무것도 정하지 않는 자리는 아무것도 정하지 않는다.
 
 의존 그래프는, 그때의 동치류들과 use, lend, projection, binding, block을 노드로 하고 위 표의 각 행이 주는 의존을 간선으로 하는 그래프다. `Y`가 `X`에 추이적으로 의존한다는 것은 의존 그래프를 따라 `Y`에서 `X`에 닿는다는 것이다. 각 노드는 자기 자신으로의 의존과, 자기에게 추이적으로 의존하는 노드로의 의존을 끊는다. 끊긴 의존이 가리키던 노드가 기록하는 관계는, 그 의존을 끊은 노드가 정해진 뒤에 기록되어 검사된다(값).
 
@@ -279,7 +279,7 @@ kind가 member를 주는 것은 그 member가 이 body에 보일 때뿐이다. o
 
 동치류가 constructor를 받으면, 그 하한, part 하한, 경계의 두 쪽의 part마다, 값의 part가 넘어가는 자리로서 관계가 기록된다(쪼갬). 그 자리가 만남이면 structural type의 part 사이에는 part 하한이, 그 밖의 part 사이에는 등식이, 경계이면 경계가 기록된다(만남과 경계). 하한이나 경계의 두 쪽의 constructor가 다르면, 값이 선언된 cast들의 parameter로 넘어가고 그 결과가 다시 넘어가는 것으로 보아 같은 규칙으로 잇고, `&mut T`가 `&U`로 넘어가면 target끼리 잇는다. `?N ⇝ U`이면 `?N`을 `U`와 unify한다.
 
-동치류가 풀린 뒤, 하한과 use의 결과로 들어오는 값은 Join의 `≤`로, part 하한으로 들어오는 part는 `≤ₚ`로 그 값에 닿으며, 그 단계마다 Coercion 표의 행으로 바뀐다. 다만 object에 더해진 field는 바뀌지 않고, 그 값이 통째로 쓰이기 전에 쓰인다(ownership §4). 경계로 넘어가는 값은 `U`의 값에 coercion으로 닿는다. 어느 쪽이든 그 함수는 그 값이 들어온 자리에서 호출되며, 닿지 않으면 그 자리에서 거부된다.
+동치류가 풀린 뒤, 하한, use의 결과, block으로 들어오는 값은 Join의 `≤`로, part 하한으로 들어오는 part는 `≤ₚ`로 그 값에 닿으며, 그 단계마다 Coercion 표의 행으로 바뀐다. 다만 object에 더해진 field는 바뀌지 않고, 그 값이 통째로 쓰이기 전에 쓰인다(ownership §4). 경계로 넘어가는 값은 `U`의 값에 coercion으로 닿는다. 어느 쪽이든 그 함수는 그 값이 들어온 자리에서 호출되며, 닿지 않으면 그 자리에서 거부된다.
 
 아무것도 들어오지 않는 동치류, 곧 끊기지 않은 의존이 모두 풀리거나 정해졌는데 출처가 하나도 없는 동치류는, 하한과 part 하한으로서 아무것도 주지 않는다. 그 동치류가 넘어가는 자리, 곧 그것이 `τ`인 하한과 part 하한의 `α`와 그것이 `T`인 경계의 `U`가 모두 값을 가지면, 그 값들이 한 타입일 때 그 동치류는 그 타입을 받고(채움), 서로 다르면 값을 갖지 않는다. 채워진 동치류는 그 자리들에 coercion 없이 닿는다. LitVar만 들어오는 동치류는 쪼갬의 `?N ⇝ U`와 LitVar의 join으로 같은 일을 한다.
 
@@ -340,7 +340,7 @@ method 호출의 receiver는 첫 인자다. 적힌 그대로, `&`, 그리고 rec
 
 ## Block
 
-block expr `{ e }`, 곧 그 자체로 식인 block은 `e`의 값을 바깥의 타입으로 바꾼다. if의 branch나 body인 block은 block expr가 아니다. block expr의 타입은 그 자리에서 새로 만든 동치류 `B`다. `e`의 타입 `E`는 `B`의 출처가 아니고, `B`는 `E`가 넘어가는 자리가 아니다. block은 읽는 `B`의 값으로 정해진다(의존). 그 값이 타입 하나이면, 곧 아무것도 정하지 않는 자리도 LitVar도 없으면, block은 그 타입으로 정해지고 `B`는 그 타입을 받으며, `e`의 값은 그 타입에 coercion으로 닿는다. 그 밖이면 block은 정해지지 않는다. 그래서 `E`의 타입은 `B`로, `B`의 타입은 `E`로 넘어가지 않으며, 둘을 잇는 것은 그 coercion 하나다.
+block expr `{ e }`, 곧 그 자체로 식인 block은 `e`의 타입을 그것이 넘어가는 자리와 상관없이 정하고, 그 타입을 내보낸다. if의 branch나 body인 block은 block expr가 아니다. block expr의 타입은 그 자리에서 새로 만든 동치류 `B`다. `e`의 타입 `E`는 `B`의 출처가 아니고, `B`는 `E`가 넘어가는 자리가 아니다. block은 읽는 `E`의 값으로 정해진다(의존). 그 값이 타입 하나이면, 곧 아무것도 정하지 않는 자리도 LitVar도 없으면, block은 그 타입으로 정해지고, 그 타입은 `B`의 출처다(값). 그 밖이면 block은 정해지지 않는다. block은 `B`에만 기록하므로, `E`의 타입은 block이 정해진 타입으로서만 `B`로 넘어가고, `B`의 타입은 `E`로 넘어가지 않는다.
 
 ## Identity
 
