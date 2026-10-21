@@ -3,12 +3,9 @@
 // fn g(a, b) { g(b, b); 0u8 }
 // g(Some(f1()), Some(f2()))    // f1() -> F1, f2() -> F2; casts F1 → G, F2 → G
 // The copied boundary B' ⇝ A' relates the payloads once both are solved, so A''s
-// payload has F1 and F2 entering it in every order. A part takes no cast
-// (l.74), so Option<F1> does not reach A''s value along ≤, nor Option<F2> by
-// the boundary, and the program is refused in every order. The text refuses it
-// where the payload's part lower bounds have no join (l.89, l.280); the model,
-// which records them as lower bounds, joins them to G and refuses at the two
-// checks.
+// payload has F1 and F2 entering it in every order, each by a part lower bound
+// (l.280). A part takes no cast (l.74), so the two have no join (l.89), and
+// the program is refused there in every order.
 extern type F1;
 extern type F2;
 extern type G;
@@ -42,4 +39,4 @@ S2 = `f2()`;
 
 must fail;
 assert `g(..)`: u8;
-assert failing [`Some(f1()) <= g@6/A`, `g@6/B ~> g@6/A`];
+assert refused no_join `g@6/A.Payload(Some)`;

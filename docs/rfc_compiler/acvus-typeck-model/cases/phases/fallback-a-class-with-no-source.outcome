@@ -14,6 +14,8 @@ start run
 step 1 run: solve A
   join A: Option {Variant(None), Variant(Some)}
   split #1 None <= A: parts
-    record #2 ?k <= A.Payload(Some)
+    record #2 ?k <=p A.Payload(Some)
 fallback 2 run
   default ?k: !
+  default `A.Payload(Some)`: !
+  split #2 ?k <=p A.Payload(Some): parts

@@ -50,14 +50,14 @@ The primitives, each assuming only those before it:
 | 08 | Uses, lends, projections and bindings | l.144–156, l.294–336 |
 | 09 | Binding groups, universals, C and instances | l.190–221, l.242, l.288–292 |
 | 10 | The dependency graph | l.236–267 |
-| 11 | Values and splits | l.269–282 |
+| 11 | Values, splits and fills | l.269–284 |
 | 12 | Steps, state, fixpoint and fallback | l.286–292 |
 | 13 | Outcome and exploration | I2, I3 |
 | 14 | The certificate and its checker | l.221–233, l.282, l.292 |
 | 15 | I\* | l.240–265, `docs/notes/typeck-pivot.md` §1–2 |
 | 16 | Inputs up to a size (draft) | l.221–233, l.294–312 |
 | 17 | The captured environment | l.198, l.205–221, functions §2 |
-| 18 | Own relations first, invariant points last (draft) | l.223, l.236–292, l.335 |
+| 18 | Own relations first, invariant points last (draft, superseded by l.280 and l.284) | l.223, l.236–292, l.335 |
 | 19 | Cases and their runner, and the phases' reports | I2, I3, I4, notes 13–15 |
 
 Writing a note may change the notes after it.

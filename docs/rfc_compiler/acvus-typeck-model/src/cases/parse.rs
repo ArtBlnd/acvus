@@ -145,6 +145,7 @@ pub enum TextItem {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum StepText {
     Solve(String),
+    Fill(String),
     Decide(String),
     Fallback,
 }
@@ -166,6 +167,7 @@ pub enum Orders {
 pub enum RefusalText {
     Infinite(Option<String>),
     NoJoin(Option<String>),
+    NoFill(Option<String>),
     NoValue(Option<String>),
     Conflict(Option<String>),
     Undeclared,
@@ -928,6 +930,7 @@ impl Parser<'_> {
         Ok(match kind.as_str() {
             "infinite" => RefusalText::Infinite(named(self)?),
             "no_join" => RefusalText::NoJoin(named(self)?),
+            "no_fill" => RefusalText::NoFill(named(self)?),
             "no_value" => RefusalText::NoValue(named(self)?),
             "conflict" => {
                 if self.eat_word("at") {
@@ -1196,6 +1199,7 @@ fn directives(source: &str, case: &mut Case) -> Parsed<()> {
                     .filter(|step| !step.is_empty())
                     .map(|step| match step.split_once(' ') {
                         Some(("solve", class)) => Ok(StepText::Solve(unquote(class))),
+                        Some(("fill", class)) => Ok(StepText::Fill(unquote(class))),
                         Some(("decide", node)) => Ok(StepText::Decide(unquote(node))),
                         None if step == "fallback" => Ok(StepText::Fallback),
                         _ => Err(format!("line {at}: no step {step}")),

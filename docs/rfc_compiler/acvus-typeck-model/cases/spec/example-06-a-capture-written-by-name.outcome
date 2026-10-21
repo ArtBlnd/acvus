@@ -4,9 +4,9 @@ outcome 1
   accepted
   value `()`: ()
   value 1u8: u8
-  value ?k: !
+  value ?k: u8
   value L: Option<u8>
-  value None: Option<!>
+  value None: Option<u8>
   value S: none
   value `Some(x)`: none
   value X: none
@@ -16,7 +16,7 @@ outcome 1
   value `λ result`: ()
   decision `remember(1u8)`: calls {λ}
   check `1u8 <= remember(1u8)#λ/X`: Ok(Identity)
-  check `None <= L`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
+  check `None <= L`: Ok(Identity)
   check `remember(1u8)#λ/Some(x) <= L`: Ok(Identity)
   check `remember(1u8)#λ/X <= remember(1u8)#λ/S`: Ok(Identity)
   check `remember(1u8)#λ/λ result <= remember(1u8)`: Ok(Identity)

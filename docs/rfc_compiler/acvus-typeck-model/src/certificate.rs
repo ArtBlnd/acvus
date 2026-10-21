@@ -18,7 +18,7 @@ use crate::program::{ENTRY, Function, Item, Origin, Place, Program, Projection};
 use crate::relation::copy_name;
 use crate::sig::{SigArgs, SigTy, SigVar, Signature};
 use crate::solve::State;
-use crate::ty::{Constructor, Mutability, Name, PartKey, Term, Ty};
+use crate::ty::{Constructor, Mutability, Name, Term, Ty};
 
 /// What one state of a final state decided, as the checker reads it.
 pub struct Sheet {
@@ -834,33 +834,21 @@ impl Checker<'_> {
         args: &[Ty],
         result: &Ty,
     ) {
-        let per_candidate: Vec<BTreeMap<Position, (Ty, bool)>> = self
+        let per_candidate: Vec<Option<bool>> = self
             .decls
             .candidates(callee)
             .iter()
             .filter(|decl| decl.sig.params().len() == args.len())
-            .map(|decl| would_record(&decl.sig, args, result))
+            .map(|decl| would_record(&decl.sig))
             .collect();
-        let Some((first, rest)) = per_candidate.split_first() else {
+        let Some((&first, rest)) = per_candidate.split_first() else {
             return;
         };
-        let mut recorded: BTreeMap<Position, (Ty, bool)> = first
-            .iter()
-            .filter(|(position, (_, reference))| {
-                rest.iter().all(|other| {
-                    other
-                        .get(*position)
-                        .is_some_and(|(_, other)| other == reference)
-                })
-            })
-            .map(|(position, recorded)| (position.clone(), recorded.clone()))
-            .collect();
-        if let Some(sig) = decided {
-            recorded.extend(would_record(sig, args, result));
-        }
-        for (position, (value, reference)) in recorded {
-            let holds =
-                *value.term() == Term::Never || matches!(value.term(), Term::Ref(..)) == reference;
+        let agreed = first.filter(|reference| rest.iter().all(|other| *other == Some(*reference)));
+        let recorded = decided.and_then(would_record).or(agreed);
+        if let Some(reference) = recorded {
+            let holds = *result.term() == Term::Never
+                || matches!(result.term(), Term::Ref(..)) == reference;
             let is = if reference {
                 "a reference"
             } else {
@@ -870,7 +858,7 @@ impl Checker<'_> {
                 context,
                 at,
                 holds,
-                format!("{position:?} is recorded as {is}, and its value is {value} (l.248)"),
+                format!("Result is recorded as {is}, and its value is {result} (l.248)"),
             );
         }
     }
@@ -1150,60 +1138,19 @@ impl Checker<'_> {
     }
 }
 
-/// A position a use records into: its result, or a part of one of its
-/// arguments, reached by the keys from the argument down.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum Position {
-    Result,
-    Argument(usize, Vec<PartKey>),
-}
-
-/// The positions a candidate of signature `sig` would record a lower bound or
-/// an equation into, each with its value and whether the candidate's type there
-/// is a reference (l.248; note 08, reading 13): the result, and each part of an
-/// argument's value that an invariant part of its parameter equates, with every
-/// part beneath it. A position the signature writes as a variable is none.
-fn would_record(sig: &Signature, args: &[Ty], result: &Ty) -> BTreeMap<Position, (Ty, bool)> {
-    let mut found = BTreeMap::new();
-    for (i, (arg, param)) in args.iter().zip(sig.params()).enumerate() {
-        would_record_in(arg, param, false, i, &mut Vec::new(), &mut found);
-    }
-    if let SigTy::Term(term) = sig.result() {
-        let reference = matches!(**term, Term::Ref(..));
-        found.insert(Position::Result, (result.clone(), reference));
-    }
-    found
-}
-
-fn would_record_in(
-    value: &Ty,
-    ty: &SigTy,
-    equated: bool,
-    arg: usize,
-    path: &mut Vec<PartKey>,
-    found: &mut BTreeMap<Position, (Ty, bool)>,
-) {
-    let SigTy::Term(term) = ty else {
-        return;
-    };
-    if equated {
-        let reference = matches!(**term, Term::Ref(..));
-        found.insert(
-            Position::Argument(arg, path.clone()),
-            (value.clone(), reference),
-        );
-    }
-    let constructor = value.term().constructor();
-    if constructor != term.constructor() {
-        return;
-    }
-    let invariant = !constructor.is_structural();
-    for (key, written) in term.parts() {
-        if let Some(part) = value.term().part(&key) {
-            path.push(key);
-            would_record_in(part, written, equated || invariant, arg, path, found);
-            path.pop();
-        }
+/// Whether a candidate of signature `sig` would record a reference into the
+/// use's result, where the type it would record there is one it writes
+/// (l.248; note 08, reading 13). The result is the one place a candidate
+/// records a type it writes into: each argument passes into its parameter's
+/// type, a boundary recording into that type, and each part of the
+/// argument's passes into that type's part, a meeting where the signature
+/// writes a variable, so that what is recorded into the argument's part is
+/// an equation with the variable, and a boundary into a type it writes
+/// elsewhere (l.280).
+fn would_record(sig: &Signature) -> Option<bool> {
+    match sig.result() {
+        SigTy::Term(term) => Some(matches!(**term, Term::Ref(..))),
+        SigTy::Var(_) => None,
     }
 }
 

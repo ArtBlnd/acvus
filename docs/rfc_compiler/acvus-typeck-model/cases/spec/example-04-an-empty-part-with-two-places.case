@@ -17,6 +17,11 @@ S = u16;
 Y = `Some(1u16)`;
 `Option⟨u8⟩` = X;
 
-must pass;
-assert X: Option<!>;
+// Nothing enters X's payload P (l.412–413). The places it passes into are Y's
+// payload, which is u16, and the u8 of P ⇝ u8, which the split of
+// X ⇝ Option<u8> records: two types, so P is not filled and has no value
+// (l.284, l.414).
+must fail;
 assert Y: Option<u16>;
+assert X: none;
+assert refused no_fill `X.Payload(Some)`;

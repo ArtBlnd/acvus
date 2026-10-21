@@ -1,5 +1,4 @@
 //@ spec: Example 14, l.565–590
-//@ hole: H6
 // struct Pair { l, r }
 // impl Pair {
 //     fn new(l, r) { Self { l, r } }
@@ -9,10 +8,11 @@
 // let p = Pair::new(1u8, "s");
 // let q = p.swap();
 // q.nest(3)
-// Its states are too many to explore, so the orders are sampled. Refused, as the
-// spec has it, but where q has no value (holes.md, H6): the copy of nest's A is
-// q's first part, whose lower bounds are &str and Pair<A', B'>, so it reaches a
-// part of its own (l.271).
+// Its states are too many to explore, so the orders are sampled. The recursive
+// call's boundary into nest's receiver splits into P ⇝ A and Q ⇝ B toward the
+// universals (l.588), which C keeps; the copy q.nest(3) makes keeps them split
+// (l.217). q is Pair<&str, u8>, and the copy of the recursive call's argument,
+// Pair<Pair<&str, u8>, u8>, reaches Pair<&str, u8> by no coercion (l.590).
 //@ orders: sampled 200
 struct Pair { l, r }
 extern fn core::eq(&u8, &u8) -> bool;
@@ -103,16 +103,10 @@ let `q.nest(3)`;
 
 must fail;
 assert p: Pair<u8, &str>;
-assert q: none;
-assert refused infinite;
+assert q: Pair<&str, u8>;
+assert failing [`nest@23/Self { l: self, r: 0u8 } ~> nest@23/nest self`];
 // The copy of nest's C that q.nest(3) makes, at its item 23, narrows its uses
 // to the i32 candidates.
 assert `nest@23/n == 0` == core::eq#1;
 assert `nest@23/n - 1` == core::sub#1;
 
-// Example 14's text has q be Pair<&str, u8> (l.584), refused at the copy of
-// nest's C (l.590).
-wanted {
-    must fail;
-    assert q: Pair<&str, u8>;
-}

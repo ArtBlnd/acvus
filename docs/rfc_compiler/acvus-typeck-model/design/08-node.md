@@ -83,10 +83,16 @@ reads its position, or lends it where its path passes a reference.
    of one place from depending on each other (Example 12's two `&y`; `holes.md`,
    O5).
 13. **What candidates would record** (l.248). A candidate records its result type
-   into its result, and, inside each argument's kind as it is at the moment, the
-   equations its parameter's invariant parts give (l.280), each part beneath an
-   equated one equated too. A variable there is an unknown, neither a reference
-   nor not one, so a candidate that writes one agrees with none.
+   into its result. An argument passes into its parameter's type, a boundary that
+   records into that type alone, and inside the argument's kind as it is at the
+   moment each part passes into the parameter's part by the split's rule (l.280):
+   where the parameter writes a variable, an unknown, an equation records into the
+   argument's part unless it is a structural type's, whose part lower bound
+   records into the variable alone; where it writes a type, a boundary records
+   into that type, and the part's parts pass on into its parts. Two constructors
+   are linked as a split links them, through a reborrow's targets and the first
+   cast's parameter. A variable is an unknown, neither a reference nor not one, so
+   a candidate records whether a class is a reference at its result alone.
 14. **What all candidates share** (l.326). Each argument and the result where every
    candidate's signature writes one type with no variable, recorded at once as the
    decided candidate would record it. Line 248 is the reference-ness part of it.

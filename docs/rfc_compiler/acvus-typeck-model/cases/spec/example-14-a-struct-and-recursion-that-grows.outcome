@@ -19,7 +19,7 @@ outcome 1
   value `Self { l, r }.r`: none
   value `Self { l: self, r: 0u8 }`: none
   value `Self { l: self, r: 0u8 }.l`: none
-  value `Self { l: self, r: 0u8 }.r`: none
+  value `Self { l: self, r: 0u8 }.r`: u8
   value `Self { l: self.r, r: self.l }`: none
   value `Self { l: self.r, r: self.l }.l`: none
   value `Self { l: self.r, r: self.l }.r`: none
@@ -33,8 +33,8 @@ outcome 1
   value `new R`: none
   value `new result`: none
   value p: Pair<u8, &str>
-  value `p.swap()`: none
-  value q: none
+  value `p.swap()`: Pair<&str, u8>
+  value q: Pair<&str, u8>
   value `q.nest(3)`: u8
   value `r: 0u8`: u8
   value `self.l`: none
@@ -61,24 +61,25 @@ outcome 1
   check `nest@23/&1 ~> nest@23/n - 1.Param(1)`: Ok(Identity)
   check `nest@23/&n 2 ~> nest@23/n - 1.Param(0)`: Ok(Identity)
   check `nest@23/&n ~> nest@23/n == 0.Param(0)`: Ok(Identity)
+  check `nest@23/Self { l: self, r: 0u8 } ~> nest@23/nest self`: Err(None)
   check `nest@23/n - 1 ~> nest@23/N`: Ok(Identity)
   check `nest@23/n - 1.Result <= nest@23/n - 1`: Ok(Identity)
   check `nest@23/n == 0.Result <= nest@23/n == 0`: Ok(Identity)
   check `nest@23/nest result <= q.nest(3)`: Ok(Identity)
+  check `nest@23/nest self <= nest@23/Self { l: self, r: 0u8 }.l`: Ok(Identity)
   check `new@19/Self { l, r } <= new@19/new result`: Ok(Identity)
   check `new@19/new L <= new@19/Self { l, r }.l`: Ok(Identity)
   check `new@19/new R <= new@19/Self { l, r }.r`: Ok(Identity)
   check `new@19/new result <= Pair::new(..)`: Ok(Identity)
   check `p ~> swap@21/swap self`: Ok(Identity)
+  check `p.swap() <= q`: Ok(Identity)
+  check `q ~> nest@23/nest self`: Ok(Identity)
+  check `swap@21/Self { l: self.r, r: self.l } <= swap@21/swap result`: Ok(Identity)
+  check `swap@21/self.l <= swap@21/Self { l: self.r, r: self.l }.r`: Ok(Identity)
+  check `swap@21/self.r <= swap@21/Self { l: self.r, r: self.l }.l`: Ok(Identity)
+  check `swap@21/swap result <= p.swap()`: Ok(Identity)
   check `0u8 <= nest result`: Ok(Identity)
   check `nest result <= ….nest(n - 1)`: Ok(Identity)
+  check `r: 0u8 <= Self { l: self, r: 0u8 }.r`: Ok(Identity)
   check `….nest(n - 1) <= nest result`: Ok(Identity)
-  refusal infinite `p.swap().Arg(0)`
-  refusal no_value `p.swap()`
-  refusal no_value q
-  refusal no_value `p.swap().Arg(1)`
-  refusal no_value `nest@23/Self { l: self, r: 0u8 }`
-  refusal no_value `nest@23/nest self`
-  refusal no_value `swap@21/Self { l: self.r, r: self.l }`
-  refusal no_value `swap@21/swap result`
   I* of a final state: []

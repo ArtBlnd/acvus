@@ -1,4 +1,22 @@
-# 18 Own relations first, invariant points last (draft)
+# 18 Own relations first, invariant points last (draft, superseded)
+
+**Status.** The reading below was not implemented, and the text now takes its
+direction itself, as 준량 decided at 1f43f122 and 13c726db. A type a declaration
+writes is a part toward which a split records a boundary, and a boundary decides
+no value (l.280): what this draft calls an invariant point is such a boundary, a
+check by coercion (l.282), and no source. An equivalence class nothing enters takes
+the one type the places it passes into give, has no value where they give two, and
+otherwise falls back (l.284, l.290). It departs from this draft in three points. A
+fill is a step like a solve, taken once its places have values (l.284, l.288), not
+a row after an own fixpoint. Where the places give two types, the class has no
+value: no candidate is chosen by what fits it, nor a LitVar's default among several
+(row 3, steps 1 and 2), and a class only LitVars enter is unified by a split's
+`?N ⇝ U` instead (l.284). Example 4 is refused at `x`'s payload, which its places would fill with `u16` and `u8`
+(`cases/spec/example-04-an-empty-part-with-two-places.case`), where the table below
+expected `x: Option⟨!⟩`. Example 2, Example 3 with and without the conversion, H3
+and H4 give what the table expects, and H7 is as `holes.md` states. P1–P9 have no
+case, and what the text gives them is not derived here. The rest of the note is
+the draft as written.
 
 Rests on the spec's l.74 (variance), l.86 (join), l.164 and l.171 (LitVars), l.213
 (decided), l.221–233 (meeting, boundary, recording), l.236–267 (dependency),

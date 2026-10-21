@@ -309,12 +309,15 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
     roots
 }
 
-/// The classes a relation records into: the upper side of a lower bound, the
-/// type passed into at a boundary, both sides of an equation, and the class
-/// a kind, a fact, a LitVar, a record of l.248 or a lambda is given to.
+/// The classes a relation records into: the upper side of a lower bound or a
+/// part lower bound, the type passed into at a boundary, both sides of an
+/// equation, and the class a kind, a fact, a LitVar, a record of l.248 or a
+/// lambda is given to.
 fn into(relation: &Relation) -> Vec<ClassId> {
     match relation {
-        Relation::LowerBound { upper, .. } => vec![*upper],
+        Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => {
+            vec![*upper]
+        }
         Relation::Boundary { to, .. } => vec![*to],
         Relation::Equation(a, b) => vec![*a, *b],
         Relation::Fact(class, _)
@@ -326,8 +329,8 @@ fn into(relation: &Relation) -> Vec<ClassId> {
 }
 
 /// Reach at the end (`design/15-istar.md`, Definitions): from a class to each
-/// class it has as a lower bound, along every lower bound recorded, a split's
-/// among them. Every class has taken its constructor by the end, so the rows
+/// class it has as a lower bound or a part lower bound, along every one
+/// recorded, a split's among them. Every class has taken its constructor by the end, so the rows
 /// of l.240 (a) and l.241 hold of none.
 struct Reach {
     edges: BTreeMap<ClassId, BTreeSet<ClassId>>,
@@ -337,7 +340,9 @@ impl Reach {
     fn of(view: &State) -> Reach {
         let mut edges: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
         for recorded in &view.log {
-            if let Relation::LowerBound { lower, upper } = recorded.relation {
+            if let Relation::LowerBound { lower, upper }
+            | Relation::PartLowerBound { lower, upper } = recorded.relation
+            {
                 let (lower, upper) = (view.root(lower), view.root(upper));
                 if lower != upper {
                     edges.entry(upper).or_default().insert(lower);

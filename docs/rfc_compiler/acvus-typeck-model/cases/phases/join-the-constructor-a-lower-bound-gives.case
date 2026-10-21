@@ -2,8 +2,7 @@
 // A takes the constructor and members its solved lower bound gives, its part
 // made anew.
 // Once both sides of Some(1u8) ≤ A are solved, their parts are related, a
-// structural type's part by a lower bound, where the text records a part lower
-// bound (l.280).
+// structural type's part by a part lower bound (l.280).
 //@ order: solve A
 let A;
 let S;
@@ -13,6 +12,6 @@ S = u8;
 A = `Some(1u8)`;
 
 assert trace "join A: Option {Variant(None), Variant(Some)}";
-assert split records `S <= A.Payload(Some)`;
+assert split records `S <=p A.Payload(Some)`;
 must pass;
 assert A: Option<u8>;

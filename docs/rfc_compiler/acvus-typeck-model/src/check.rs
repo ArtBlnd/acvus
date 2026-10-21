@@ -21,6 +21,9 @@ pub enum Refusal {
     NoJoin(ClassName),
     /// The equivalence class reaches a part of its own (l.271).
     Infinite(ClassName),
+    /// The places the equivalence class nothing enters passes into have two
+    /// types (l.284).
+    NoFill(ClassName),
     /// The equivalence class has no value once solving ends.
     NoValue(ClassName),
     /// A type the text writes disagrees with its declaration.
@@ -72,7 +75,8 @@ impl State {
             let (from, to, lower) = match recorded.relation {
                 Relation::LowerBound { lower, upper } => (lower, upper, true),
                 Relation::Boundary { from, to } => (from, to, false),
-                Relation::Equation(..)
+                Relation::PartLowerBound { .. }
+                | Relation::Equation(..)
                 | Relation::Fact(..)
                 | Relation::Kind(..)
                 | Relation::Lit(..)

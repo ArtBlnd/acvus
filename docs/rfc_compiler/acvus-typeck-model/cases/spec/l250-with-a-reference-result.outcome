@@ -4,12 +4,11 @@ outcome 1
   refused
   value 0: i32
   value A: none
-  value `a.x`: i32
+  value `a.x`: none
   value `pick(a)`: none
   decision `a.x`: applied
   decision pick: undecided
-  partition {0, `a.x`}
-  check `0 <= a.x`: Ok(Identity)
   refusal no_value A
+  refusal no_value `a.x`
   refusal no_value `pick(a)`
   I* of a final state: []

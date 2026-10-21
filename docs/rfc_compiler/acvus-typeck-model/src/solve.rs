@@ -1,12 +1,12 @@
 //! The state of a binding group's solving (l.203–217), and the composition of
 //! the phases on it: recording (`record.rs`), unification (`unify.rs`), the
-//! join that gives an equivalence class its value (`value.rs`), splits
-//! (`split.rs`), the decisions of uses, lends, projections and bindings
-//! (`node/`) in the order the dependencies allow (`dep.rs`), fallback
-//! (`fallback.rs`) and the checks (`check.rs`): the steps to a fixpoint and
-//! fallback after it (l.286–290), each returning the trace of what its phases
-//! reported (`trace.rs`), and the state a node's value read is taken from
-//! (l.263).
+//! join that gives an equivalence class its value and the fill (`value.rs`),
+//! splits (`split.rs`), the decisions of uses, lends, projections and
+//! bindings (`node/`) in the order the dependencies allow (`dep.rs`),
+//! fallback (`fallback.rs`) and the checks (`check.rs`): the steps to a
+//! fixpoint and fallback after it (l.286–290), each returning the trace of
+//! what its phases reported (`trace.rs`), and the state a node's value read
+//! is taken from (l.263).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -14,6 +14,7 @@ use std::rc::Rc;
 use crate::check::{Outcome, Refusal};
 use crate::class::{Arena, ClassId, ClassName, Classes};
 use crate::decl::Decls;
+use crate::dep::Eligible;
 use crate::instance::Made;
 use crate::node::NodeState;
 use crate::program::{ENTRY, Function, Item, Program, Readings, TextClass};
@@ -33,9 +34,13 @@ pub struct State {
     pub(crate) texts: Vec<ClassId>,
     /// The classes decided when solving starts, which are no unknowns (l.213).
     pub(crate) decided: BTreeSet<ClassId>,
-    /// The lower bounds and boundaries, by their place in the log, whose
-    /// parts are related.
+    /// The lower bounds, part lower bounds and boundaries, by their place in
+    /// the log, whose parts are related.
     pub(crate) split: BTreeSet<usize>,
+    /// Those copied from a C where they were split, by their place in the log:
+    /// what their splits recorded is copied with them, so that no state splits
+    /// them again (l.217, l.280).
+    pub(crate) copied_split: BTreeSet<usize>,
     /// The classes found to reach a part of their own, or whose sources have
     /// no join.
     pub(crate) no_value: BTreeSet<ClassId>,
@@ -90,6 +95,9 @@ pub struct Started {
 pub enum Step {
     /// The equivalence class takes its constructor and members (l.271).
     Solve(ClassId),
+    /// The equivalence class nothing enters takes the one type the places it
+    /// passes into give, or has no value where they give two (l.284).
+    Fill(ClassId),
     /// The use or lend is decided by the value it reads (l.263).
     Decide(Name),
 }
@@ -120,6 +128,7 @@ impl State {
             texts: Vec::new(),
             decided: BTreeSet::new(),
             split: BTreeSet::new(),
+            copied_split: BTreeSet::new(),
             no_value: BTreeSet::new(),
             refusals: BTreeSet::new(),
             nodes: BTreeMap::new(),
@@ -223,10 +232,16 @@ impl State {
         id
     }
 
-    /// A class not universal, not decided when solving starts, and not of an
-    /// enclosing group (l.213).
+    /// An equivalence class not universal, not decided when solving starts,
+    /// and not of an enclosing group (l.213): none of its members is.
     pub(crate) fn is_unknown(&self, id: ClassId) -> bool {
-        !self.decided.contains(&id) && !self.is_universal(id) && !self.is_foreign(id)
+        let decided = self
+            .classes
+            .held(id)
+            .members
+            .iter()
+            .any(|member| self.decided.contains(member));
+        !decided && !self.is_universal(id) && !self.is_foreign(id)
     }
 
     pub(crate) fn is_foreign(&self, id: ClassId) -> bool {
@@ -278,17 +293,22 @@ impl State {
             .expect("an equivalence class has a member")
     }
 
-    /// The steps that may be taken now: each eligible class solved, and each
-    /// eligible node decided where the value it reads now decides it, a node
-    /// whose value decides nothing staying undecided (l.263, l.335).
+    /// The steps that may be taken now: each eligible class solved or filled,
+    /// and each eligible node decided where the value it reads now decides it,
+    /// a node whose value decides nothing staying undecided (l.263, l.335).
     pub fn steps(&self) -> Vec<Step> {
-        let (classes, nodes) = self.eligible();
-        let decided = nodes
+        let Eligible {
+            solve,
+            fill,
+            decide,
+        } = self.eligible();
+        let decided = decide
             .into_iter()
             .filter(|name| self.read_now(name).decision.is_some());
-        classes
+        solve
             .into_iter()
             .map(Step::Solve)
+            .chain(fill.into_iter().map(Step::Fill))
             .chain(decided.map(Step::Decide))
             .collect()
     }
@@ -297,6 +317,9 @@ impl State {
     pub fn step(&mut self, step: &Step) -> Trace {
         let mut trace = match step {
             Step::Solve(root) => self.solve(*root),
+            Step::Fill(root) => Trace {
+                reports: vec![Report::Filled(self.fill(*root))],
+            },
             Step::Decide(name) => Trace {
                 reports: vec![Report::Decided(self.decide(name))],
             },
@@ -351,10 +374,11 @@ impl State {
         trace
     }
 
-    /// What follows at once from what is recorded: lower-bound cycles merged
-    /// (l.271), the parts of each lower bound and boundary whose two sides are
-    /// solved related (l.280), and a LitVar lower bound of a solved class
-    /// unified with it (l.171). The trace holds what changed the state.
+    /// What follows at once from what is recorded: cycles of lower bounds and
+    /// part lower bounds merged (l.271), the parts of each lower bound, part
+    /// lower bound and boundary whose two sides are solved related (l.280),
+    /// and a LitVar lower bound of a solved class unified with it (l.171).
+    /// The trace holds what changed the state.
     pub(crate) fn settle(&mut self) -> Trace {
         let mut trace = Trace::default();
         loop {
@@ -390,16 +414,42 @@ impl State {
         }
     }
 
-    /// The lower bounds of the equivalence class, other than itself.
+    /// The lower bounds and part lower bounds of the equivalence class, other
+    /// than itself.
     pub(crate) fn lower_bounds(&self, id: ClassId) -> Vec<ClassId> {
         let root = self.root(id);
         self.log
             .iter()
             .filter_map(|recorded| match recorded.relation {
                 Relation::LowerBound { lower, upper }
+                | Relation::PartLowerBound { lower, upper }
                     if self.root(upper) == root && self.root(lower) != root =>
                 {
                     Some(lower)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The places the equivalence class passes into (l.284): the `α` of each
+    /// lower bound and part lower bound whose `τ` it is, and the `U` of each
+    /// boundary whose `T` it is, other than itself.
+    pub(crate) fn places(&self, id: ClassId) -> Vec<ClassId> {
+        let root = self.root(id);
+        self.log
+            .iter()
+            .filter_map(|recorded| match recorded.relation {
+                Relation::LowerBound { lower, upper }
+                | Relation::PartLowerBound { lower, upper }
+                    if self.root(lower) == root && self.root(upper) != root =>
+                {
+                    Some(upper)
+                }
+                Relation::Boundary { from, to }
+                    if self.root(from) == root && self.root(to) != root =>
+                {
+                    Some(to)
                 }
                 _ => None,
             })
@@ -455,10 +505,11 @@ impl State {
     }
 
     /// The state a node's value read is taken from (l.263): the relations
-    /// recorded by neither the nodes `excluded` nor solving, solved where
-    /// each class's value is decided by its sources whatever its other
-    /// dependencies, no node decided, nothing fallen back, and a class with
-    /// no relation left giving nothing. Classes are solved in one order here.
+    /// recorded by neither the nodes `excluded` nor solving, solved and filled
+    /// where each class's value is decided by the table of values, splits and
+    /// fills whatever its other dependencies, no node decided, nothing fallen
+    /// back, and a class with no relation left giving nothing. Classes are
+    /// solved and filled in one order here.
     pub(crate) fn read_state(&self, excluded: &BTreeSet<Name>) -> State {
         let mut read = State {
             decls: Rc::clone(&self.decls),
@@ -468,6 +519,7 @@ impl State {
             texts: self.texts.clone(),
             decided: self.decided.clone(),
             split: BTreeSet::new(),
+            copied_split: BTreeSet::new(),
             no_value: BTreeSet::new(),
             refusals: BTreeSet::new(),
             nodes: BTreeMap::new(),
@@ -488,16 +540,26 @@ impl State {
             instances: Vec::new(),
         };
         read.classes.grow(&read.arena);
-        for recorded in &self.log {
+        for (at, recorded) in self.log.iter().enumerate() {
             if recorded.recorder.is_derived() || left_out_by(&recorded.recorder, excluded) {
                 continue;
             }
-            let _ = read.record(recorded.relation.clone(), recorded.recorder.clone());
+            let entry = read.record(recorded.relation.clone(), recorded.recorder.clone());
+            if self.copied_split.contains(&at) {
+                read.split.insert(entry.at);
+                read.copied_split.insert(entry.at);
+            }
         }
         read.settle();
         loop {
-            if let Some(&root) = read.eligible().0.first() {
+            let eligible = read.eligible();
+            if let Some(&root) = eligible.solve.first() {
                 read.solve(root);
+                read.settle();
+                continue;
+            }
+            if let Some(&root) = eligible.fill.first() {
+                read.fill(root);
                 read.settle();
                 continue;
             }

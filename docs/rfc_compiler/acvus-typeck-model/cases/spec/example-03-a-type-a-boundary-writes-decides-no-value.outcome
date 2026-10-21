@@ -2,19 +2,19 @@
 run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
 outcome 1
   refused
-  value `&mut buf`: &mut Vec<u8>
+  value `&mut buf`: &mut Vec<u16>
   value 1u16: u16
-  value B: Vec<u8>
+  value B: Vec<u16>
   value `consume(..)`: ()
-  value `new()`: Vec<u8>
+  value `new()`: Vec<u16>
   value `push(..)`: ()
   decision consume: consume#0
   decision lend: lend &mut place
   decision new: new#0
   decision push: push#0
   check `&mut buf ~> push.Param(0)`: Ok(Identity)
-  check `1u16 <= push.Var(Type(0))`: Err(None)
-  check `B ~> consume.Param(0)`: Ok(Identity)
+  check `1u16 <= push.Var(Type(0))`: Ok(Identity)
+  check `B ~> consume.Param(0)`: Err(None)
   check `consume.Result <= consume(..)`: Ok(Identity)
   check `new() <= B`: Ok(Identity)
   check `new.Result <= new()`: Ok(Identity)

@@ -77,7 +77,9 @@ impl State {
                 self.classes.give_value(*class, lambda.clone());
                 Unified::default()
             }
-            Relation::LowerBound { .. } | Relation::Boundary { .. } => Unified::default(),
+            Relation::LowerBound { .. }
+            | Relation::PartLowerBound { .. }
+            | Relation::Boundary { .. } => Unified::default(),
         };
         let Some(conflict) = unified.conflict.as_ref().map(|c| c.conflict().clone()) else {
             return Unification {

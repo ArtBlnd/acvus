@@ -22,19 +22,19 @@ change it, outside a cycle.
   and another group's state at its fixpoint (l.288).
 - **What a node records into** at the end, read by the relations it records, not
   by position as the solver reads l.246 (note 08, reading 18). A use, the classes its candidate would record a lower
-  bound or an equation into by l.280, or into a type they are an invariant part
-  of (reading 13), those of its remaining candidates where it is not decided as
-  one, and its result where it is decided `Never`: the classes a use makes anew
+  bound or an equation into by the splits of l.280 (note 08, reading 13), those
+  of its remaining candidates where it is not decided as one, and its result where it is decided `Never`: the classes a use makes anew
   are its own, and no other node reads them. Another decided node, the classes its
   own relations record into, those of the instances it made among them: the upper
-  side of a lower bound, the type passed into at a boundary, both sides of an
+  side of a lower bound or a part lower bound, the type passed into at a
+  boundary, both sides of an
   equation, and the class a kind, a fact, a LitVar or a lambda is given to. A node
   not decided, the classes at its positions. For a read of whether a class is a
   reference, a use leaves out the classes it recorded that of at once (l.244), a
   lend its place, a binding its position, and a projection of a field, a
   component, an index or a variant everything (note 08, readings 9 and 12).
-- **Reach at the end.** A class reaches each class it has as a lower bound, along
-  every lower bound recorded by the end, a split's among them. By the end every
+- **Reach at the end.** A class reaches each class it has as a lower bound or a
+  part lower bound, along every one recorded by the end, a split's among them. By the end every
   class has taken its constructor, so the rows of l.240 (a) and l.241, which wait
   for a class to take one, hold of none; what a class's value comes from then is
   its sources (l.271–278), and what its taking a constructor recorded into its

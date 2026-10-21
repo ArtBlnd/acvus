@@ -39,7 +39,11 @@ the group takes the body's own types.
    outside C enters a copy as its closed type, written. Every relation of the
    group's log naming a class of C is copied, the splits it derived included,
    recorded by the use that made the instance or by the copy of the undecided
-   node that recorded it.
+   node that recorded it. A relation the group split stays split in the copy:
+   what its split recorded is copied with it, and no class of the copy takes
+   there a constructor it did not hold in the group, so the split is not made
+   again where a copied universal is an unknown (l.217, l.280; Example 14,
+   l.588–590).
 4. **A use of a function in its own group** passes each argument into the
    parameter's universal type, a boundary (Example 10, l.510), and the body's
    result type enters the use's result as a lower bound, as a use's result does

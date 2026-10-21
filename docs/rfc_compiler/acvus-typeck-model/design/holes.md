@@ -10,7 +10,8 @@ it. Three kinds of entry:
 
 Within each kind, the entries are numbered in the order encoding found them. An
 entry encoding found where the model departed from the text, and the text does not
-have, keeps its number and says so ("Not a hole", "Not an order").
+have, keeps its number and says so ("Not a hole", "Not an order"), as does an entry
+the text has since closed.
 
 A reading the model takes where the text leaves one open is stated in the note of
 the primitive it belongs to, not here.
@@ -45,31 +46,34 @@ toward a type a declaration writes.
 
 A view impl is a cast from a reference to a container to a reference to a slice or
 `str` (l.78), and a reference's node is its mutability and its target's constructor
-(l.78). A reference's constructor is its mutability alone (l.66), so at a boundary
-`&V ⇝ &[u8]` the two sides have one constructor, and the target, an invariant part,
-gives the equation `V = [u8]` (l.280); the casts link parts only where constructors
-differ (l.280). The view is never taken, and `make() ≤ V` with `make() -> Vec⟨u8⟩`
-fails. Witness, refused by the model
-(`cases/holes/h3-a-view-at-a-boundary-equates-the-targets.case`):
+(l.78). A reference's constructor is its mutability alone (l.66), so where two
+references meet, they have one constructor, and their targets are related by the
+split (l.280). At a boundary this is no hole since 13c726db: `&V ⇝ &[u8]` records
+`V ⇝ [u8]` toward a type the declaration writes, which decides no value, so `V`
+takes `Vec⟨u8⟩` from `make()`, and the whole value reaches `&[u8]` by the view.
+Witness, accepted by the model
+(`cases/holes/h3-a-view-at-a-boundary-is-taken-whole.case`):
 
 ```
 let v = make();          // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
 take(&v);                // take(&[u8])
 ```
 
-The join of two references reaches the same place: `&A ⊔ &C` is `&B` by the casts
-`&A → &B` and `&C → &B` (l.86), while two lower bounds `&A ≤ R` and `&C ≤ R` equate
-their targets.
+Where two references meet, the hole stays: `&A ⊔ &C` is `&B` by the casts
+`&A → &B` and `&C → &B` (l.86), while two lower bounds `&A ≤ R` and `&C ≤ R` give
+`R` the constructor `&` and equate its target, an unknown, with `A` and `C`
+(l.280).
 
 ## H4. A reborrow at a split
 
-Where `&mut X` meets `&Y` at a lower bound or a boundary, the constructors differ
-and no cast links them (l.280), so nothing relates `X` and `Y`. In
-`look(&mut v)` with `look(&Vec⟨u8⟩)` and `v = Vec::new()`, `v`'s argument has no
-relation and falls back to `!`, and `&mut Vec⟨!⟩ ⇝ &Vec⟨u8⟩` fails. The model
-relates the targets by an equation, as the reborrow row `&mut T ⇝ &T` keeps `T`
-(`design/11-value.md`, reading 2), and accepts it
-(`cases/holes/h4-a-reborrow-at-a-boundary-equates-the-targets.case`).
+Not a hole since 13c726db, which links the targets where `&mut T` passes into `&U`
+(l.280). Where `&mut X` met `&Y` at a lower bound or a boundary, the constructors
+differed and no cast linked them, so nothing related `X` and `Y`: in `look(&mut v)`
+with `look(&Vec⟨u8⟩)` and `v = Vec::new()`, `v`'s argument had no relation and fell
+back to `!`, and `&mut Vec⟨!⟩ ⇝ &Vec⟨u8⟩` failed. The text now records `V ⇝
+Vec⟨u8⟩` there, whose split records `T ⇝ u8` for `new`'s `T`, and `T`, which
+nothing enters, is filled with `u8` (l.284). The model accepts it
+(`cases/holes/h4-a-reborrow-at-a-boundary-links-the-targets.case`).
 
 ## H5. A lambda's node that reads a capture
 
@@ -99,20 +103,21 @@ order (`cases/environment/h5-a-lambda-reads-a-capture.case`).
 
 ## H6. Example 14's `q` has no value
 
-Example 14 has `q` be `Pair⟨&str, u8⟩`, and the copy of C of `nest` refused at the
-lower bound `Pair⟨&str, u8⟩` that "must reach `&str`" (l.584, l.590). But `q`'s
-first part has no equation: it is the part `swap` makes anew in `Self { l: self.r,
-r: self.l }` (l.316), which takes `self.r` as a lower bound, and `self.r` is
-`p`'s second part, which takes `"s"` by a meeting through `new`. The instance of
-`nest` is recorded as soon as `q.nest(3)` is given (l.225, l.233): the boundary
-into the receiver equates `q`'s first part with the copy of `A` (l.280), and the
-copied `P = A` with `P ≥ Pair⟨A, B⟩` (l.588) gives that part the lower bound
-`Pair⟨A', B'⟩`, which holds it. So the part reaches a part of its own along lower
-bounds and parts, has no value (l.271), and `q` has none. Example 14 is refused, as
-the spec has it, but at `q`'s first part, and `q` has no value. Witness: Example 14
-itself (`cases/holes/h6-example-14-a-struct-and-recursion-that-grows.case`, sampled
-orders), whose `wanted` block holds the narrative's `q`. The narrative's check holds only of a class whose value an equation
-decides (l.282).
+Not a hole since 13c726db. Example 14 has `q` be `Pair⟨&str, u8⟩`, and the copy of
+C of `nest` refused at the recursive call (l.590). The split of the recursive
+call's boundary into the receiver equated `Self { l: self, r: 0u8 }`'s first part
+`P` with `nest`'s `A`, an invariant part, and with `P ≥ Pair⟨A, B⟩` (l.588) the
+copy of `A` in `q.nest(3)`'s instance, `q`'s first part, held `Pair⟨A', B'⟩` and
+reached a part of its own (l.271), so `q` had no value. The split now records the
+boundaries `P ⇝ A` and `Q ⇝ B` toward the universals, which C keeps (l.588), and
+the copy keeps that relation split (`design/09-group.md`, reading 3), so `q` is
+`Pair⟨&str, u8⟩`, and the copy of the recursive call's argument,
+`Pair⟨Pair⟨&str, u8⟩, u8⟩`, reaches `Pair⟨&str, u8⟩` by no coercion: the model
+refuses that whole boundary, where the text names its part `Pair⟨&str, u8⟩ ⇝ &str`,
+which the model checks as a part of the whole (`design/12-solving.md`, reading 3).
+Witness:
+Example 14 itself (`cases/spec/example-14-a-struct-and-recursion-that-grows.case`,
+sampled orders).
 
 ## H7. Two uses that read one class
 
@@ -137,16 +142,19 @@ probe(x);                // probe(u16), probe(i32)
 `probe` passes `x` into a parameter its declarations write, a boundary out of `X`
 (l.213), and `x + y` depends on it, so `probe` reads `X` without `x + y`'s
 relations, as `?a` alone, takes the default `i32` (l.335), and `X ⇝ i32` fails once
-`X` is `u16`. The dependency is not one to leave out: while `X` holds a LitVar
-alone, `?N ⇝ U` unifies it with the parameter (l.280), so `probe` can change what
-`x + y` reads. A reading that left out of a node's dependencies the nodes that
-would record no lower bound, equation or kind into the class it reads made the
-outcome depend on the order: `let x = 0; n(x); m(x);` with `n(u8)`, `n(u16)`,
-`m(u16)` and `m(&str)` reached `n(u16)` accepted where `m` was decided first, and
-`n` refused where `n` was. It is removed. `design/18-invariant-points.md` drafts an
-order of solving under which what `probe` records into `X` is no source until `X`'s
-own relations leave it without a type, so that `x + y` does not depend on
-`probe`.
+`X` is `u16`: `x + y`'s relations wait for `probe` (l.265), and `R1`, at `x + y`'s
+position, depends on those it has not yet recorded (l.240 (b)), so `X` waits for
+`R1`'s `u16` in every order, and is not one only LitVars enter (l.284). The
+dependency is not one to leave out: while only LitVars enter `X`, `?N ⇝ U` unifies
+it with the parameter (l.280), so `probe` can change what `x + y` reads. A reading
+that left out of a node's dependencies the nodes that would record no lower bound,
+equation or kind into the class it reads made the outcome depend on the order:
+`let x = 0; n(x); m(x);` with `n(u8)`, `n(u16)`, `m(u16)` and `m(&str)` reached
+`n(u16)` accepted where `m` was decided first, and `n` refused where `n` was. It is
+removed. `design/18-invariant-points.md` drafted an order of solving under which
+what `probe` records into `X` is no source until `X`'s own relations leave it
+without a type, so that `x + y` does not depend on `probe`; the text's fill
+(l.284), which that draft's direction became, leaves this dependency as it is.
 
 ## T1. A type parameter's bound
 
@@ -157,14 +165,15 @@ type parameter that no use settles becomes `!` where extern fn §1 would refuse.
 
 ## T2. Which side of a boundary records into the parts
 
-The Korean l.280 records "하한과 경계의 part 사이 관계" when a class takes a
-constructor, naming no side of the boundary; the English l.280 records "the
-relations between the parts of its lower bounds and boundaries". Line 240 (a) names
-only the class `α` of `α ⇝ U` taking a constructor. Read as the English text and
-l.240 (a) suggest, a boundary `α ⇝ U` whose `U` takes its constructor after `α`
-relates no parts, and the outcome then depends on the order of solving (review 2,
-P4: `fn g(a, b) { g(b, b); 0u8 }` with `g(Some(f1()), Some(f2()))`). The model reads
-the Korean text: the parts are related once both sides have taken a constructor.
+Before 13c726db, the Korean l.280 recorded "하한과 경계의 part 사이 관계" when a class
+took a constructor, naming no side of the boundary, and the English l.280 recorded
+"the relations between the parts of its lower bounds and boundaries". Line 240 (a)
+names only the class `α` of `α ⇝ U` taking a constructor. Read as the English text
+and l.240 (a) suggested, a boundary `α ⇝ U` whose `U` takes its constructor after
+`α` relates no parts, and the outcome then depends on the order of solving (review
+2, P4: `fn g(a, b) { g(b, b); 0u8 }` with `g(Some(f1()), Some(f2()))`). Both texts
+now record at each part of the two sides ("두 쪽의 part마다", "each part of the two
+sides"), and the model relates the parts once both sides have taken a constructor.
 
 ## T3. A structural coercion that changes members and parts
 

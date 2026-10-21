@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use crate::certificate::Certificate;
 use crate::check::{Outcome, Refusal};
-use crate::class::ClassName;
+use crate::class::{ClassId, ClassName};
 use crate::explore::{Final, Order, explore_with, sample_with};
 use crate::node::Decision;
 use crate::program::{ENTRY, Program};
@@ -378,28 +378,29 @@ impl Follow<'_> {
     }
 }
 
+/// The root of the classes a written step names, which must be one.
+fn root_named(state: &State, step: &str, class: &str) -> Result<ClassId, String> {
+    let roots: BTreeSet<_> = state
+        .arena
+        .classes()
+        .filter(|(_, name)| name.to_string() == *class)
+        .map(|(id, _)| state.root(id))
+        .collect();
+    match roots.into_iter().collect::<Vec<_>>().as_slice() {
+        [] => Err(format!("{step} {class}: no class of that name")),
+        [root] => Ok(*root),
+        _ => Err(format!(
+            "{step} {class}: classes of two roots have that name"
+        )),
+    }
+}
+
 /// A step a case writes, as a step the state may take now.
 fn step_of(state: &State, text: &StepText) -> Result<Step, String> {
     let steps = state.steps();
     let wanted = match text {
-        StepText::Solve(class) => {
-            let roots: BTreeSet<_> = state
-                .arena
-                .classes()
-                .filter(|(_, name)| name.to_string() == *class)
-                .map(|(id, _)| state.root(id))
-                .collect();
-            let root = match roots.into_iter().collect::<Vec<_>>().as_slice() {
-                [] => return Err(format!("solve {class}: no class of that name")),
-                [root] => *root,
-                _ => {
-                    return Err(format!(
-                        "solve {class}: classes of two roots have that name"
-                    ));
-                }
-            };
-            Step::Solve(root)
-        }
+        StepText::Solve(class) => Step::Solve(root_named(state, "solve", class)?),
+        StepText::Fill(class) => Step::Fill(root_named(state, "fill", class)?),
         StepText::Decide(node) => Step::Decide(Name::new(node)),
         StepText::Fallback => return Err("fallback is no step".to_string()),
     };

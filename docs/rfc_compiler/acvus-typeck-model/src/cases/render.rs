@@ -23,7 +23,7 @@ use crate::solve::{State, Step};
 use crate::split::Split;
 use crate::trace::Report;
 use crate::ty::{HasTerm, Mutability, Name, Term};
-use crate::value::{Head, Sources, Took};
+use crate::value::{Fill, Head, Sources, Took};
 
 use super::parse::Phase;
 
@@ -143,6 +143,7 @@ pub fn refusal(refusal: &Refusal) -> String {
     match refusal {
         Refusal::Conflict { at, conflict } => format!("conflict at {at:?}: {conflict}"),
         Refusal::NoJoin(class) => format!("no_join {}", name(&class.to_string())),
+        Refusal::NoFill(class) => format!("no_fill {}", name(&class.to_string())),
         Refusal::Infinite(class) => format!("infinite {}", name(&class.to_string())),
         Refusal::NoValue(class) => format!("no_value {}", name(&class.to_string())),
         Refusal::Undeclared(what) => format!("undeclared: {what}"),
@@ -153,6 +154,7 @@ pub fn refusal(refusal: &Refusal) -> String {
 pub fn step(state: &State, step: &Step) -> String {
     match step {
         Step::Solve(root) => format!("solve {}", name(&state.class_name(*root).to_string())),
+        Step::Fill(root) => format!("fill {}", name(&state.class_name(*root).to_string())),
         Step::Decide(node) => format!("decide {}", name(node.as_str())),
     }
 }
@@ -253,6 +255,17 @@ pub fn report(state: &State, report: &Report) -> Rendered {
             Some(format!("join {}: {}", class(*id), took(&joined.took))),
             None,
         ),
+        Report::Filled(filled) => {
+            let took = match &filled.fill {
+                Fill::Took { ty, .. } => ty.to_string(),
+                Fill::Differ(_) => "differ".to_string(),
+            };
+            (
+                Phase::Join,
+                Some(format!("fill {}: {took}", class(filled.class))),
+                None,
+            )
+        }
         Report::LitJoined { bound, recorded } => (
             Phase::Join,
             Some(format!("lit join #{bound} {}", relation(state, *bound))),
@@ -609,6 +622,12 @@ fn sources(state: &State, sources: &Sources) -> Lines {
             format!("lower {}: {}", class_of(state, *lower), head(given)),
         );
     }
+    for (lower, given) in &sources.part_lowers {
+        lines.push(
+            0,
+            format!("part lower {}: {}", class_of(state, *lower), head(given)),
+        );
+    }
     for given in &sources.facts {
         lines.push(0, format!("fact: {}", head(given)));
     }
@@ -778,6 +797,15 @@ pub fn traced(state: &State, report: &Report) -> Lines {
             }
             None
         }
+        Report::Filled(filled) => {
+            for (place, value) in &filled.places {
+                detail.push(0, format!("place {}: {value}", class_of(state, *place)));
+            }
+            if let Fill::Took { unified: made, .. } = &filled.fill {
+                detail.nest(0, self::unified(state, made, None));
+            }
+            None
+        }
         Report::FellBack(fell) => {
             detail.nest(0, self::unified(state, &fell.unified, None));
             None
@@ -821,6 +849,7 @@ fn dependencies(state: &State, waits: Vec<(Vertex, Edge)>) -> String {
     let waits = waits.into_iter().map(|(to, edge)| match (to, edge) {
         (Vertex::Class(lower), Edge::Lower) => format!("lower {}", class_of(state, lower)),
         (Vertex::Class(taking), Edge::Taking) => format!("taking {}", class_of(state, taking)),
+        (Vertex::Class(owner), Edge::Part) => format!("part of {}", class_of(state, owner)),
         (Vertex::Node(node), Edge::Records) => format!("records {}", name(node.as_str())),
         (Vertex::Outside, Edge::Chosen) => "chosen".to_string(),
         (Vertex::Node(node), Edge::Reads) => format!("reads {}", name(node.as_str())),

@@ -1,9 +1,10 @@
 //@ hole: H4
 // let mut v = Vec::new();  // new() -> Vec<T>
 // look(&mut v);            // look(&Vec<u8>)
-// The constructors &mut and & differ and no cast links them (l.280); the model
-// reads the reborrow row &mut T ⇝ &T as an equation of the targets, so
-// V = Vec<u8>.
+// The constructors &mut and & differ, and the split links the targets by its
+// one rule (l.280): Vec<u8> is a type the declaration writes, so V ⇝ Vec<u8>,
+// whose split records T ⇝ u8 for new's T. Nothing enters T, which is filled
+// with u8 (l.284), so V = Vec<u8>.
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 extern fn look(&Vec<u8>);

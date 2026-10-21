@@ -12,4 +12,4 @@ A = None;
 
 must pass;
 assert A: Option<u8>;
-assert ?k: !;
+assert ?k: u8;

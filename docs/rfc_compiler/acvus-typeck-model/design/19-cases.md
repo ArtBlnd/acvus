@@ -116,7 +116,7 @@ classes, and `universal A;` a universal.
 | `//@ reading: deferral = reading, captures = environment` | a run under these readings, the others the default; each line a run, `default` the defaults | one run, `Readings::default()` |
 | `//@ orders: all` | every order, which must end within 100 000 states | `all` |
 | `//@ orders: sampled 200` | 200 sampled orders (note 13, reading 2) | — |
-| `//@ order: solve A, decide f, fallback` | one order: the entry's steps, then its first step until none is left, falling back where none is | — |
+| `//@ order: solve A, fill B, decide f, fallback` | one order: the entry's steps, then its first step until none is left, falling back where none is | — |
 | `//@ order g: solve A` | the steps of the group `g` in that order; every other group takes its first step | — |
 
 A step names a class by any of its members' names, as the arena names them
@@ -131,7 +131,7 @@ final state, of every run.
 | `must pass;`, `must fail;` | the outcome is accepted, refused |
 | `assert A: Vec<u8>;`, `assert S: none;` | the class has the value, or none |
 | `assert f == f#1;` | the node's decision, as below |
-| `assert refused infinite X;`, `no_join`, `no_value`, `conflict at "…"`, `undeclared` | some refusal is that, of that class where one is written |
+| `assert refused infinite X;`, `no_join`, `no_fill`, `no_value`, `conflict at "…"`, `undeclared` | some refusal is that, of that class where one is written |
 | `` assert failing [`g@2/A ~> g@2/B`]; `` | the failing checks' relations are exactly these, in the outcome's order |
 | `` assert check `X ~> probe.Param(0)` == conversion down#0; `` | a check of the relation has that coercion |
 | `assert istar completeness probe;` | an I\* violation; the final states' violations are exactly those written, none where none is |
@@ -153,9 +153,9 @@ node are named as the model names them, a copy's as its instance does
 (`nest@23/n == 0`, `put(..)#λ/V <= X`).
 
 **Notation.** What the model writes is ASCII, the names a case gives kept as it
-writes them. A relation is `A <= B` (a lower bound), `A ~> B` (a boundary),
-`A = B`, `A: <kind>`, `A: <kind known in part>`, `A: <LitVar>`, `A: reference`,
-`A: no reference`, or `A: Values contains λ`. A kind and a type are written as a
+writes them. A relation is `A <= B` (a lower bound), `A <=p B` (a part lower
+bound), `A ~> B` (a boundary), `A = B`, `A: <kind>`, `A: <kind known in part>`,
+`A: <LitVar>`, `A: reference`, `A: no reference`, or `A: Values contains λ`. A kind and a type are written as a
 case writes a type, `Fn(P -> R)` for a function's; a kind known in part is
 `ref T`, `field x: T`, `component i: T`, `index T`, `variant V: T` or
 `variant E::V: T`; a LitVar `?{1, 2}: int`. What no type holds is `<a> vs <b>`: two
@@ -208,7 +208,8 @@ it. `settle`'s trace holds what changed the state.
 | | `link_views`, `link_view` | `Linked`: the container, the element, the relations recorded, the refusal where no view is |
 | the join | `refuse_infinite` | the refusal |
 | | `join_lit_lowers`, `merge_cycles`, `join_lit_at` | the relations recorded |
-| | `join` | `Joined`: its `Sources` (its equations and kinds, the solved lower bounds it counts, the kinds known in part, the lower bounds left out) and `Took`: the kind it held, the head it joined with what unification did, nothing, or no join |
+| | `join` | `Joined`: its `Sources` (its equations and kinds, the solved lower bounds and part lower bounds it counts, the kinds known in part, those left out) and `Took`: the kind it held, the head it joined with what unification did, nothing, or no join |
+| | `fill` | `Filled`: each place the class passes into with its value, and `Fill`: the one type they have, with what unification did as the class took it, and the refusal where it could not take it, or the refusal where they have two |
 | splits | `split_at` | `Split`: one class, the parts' relations, unsolved, or no parts |
 | | `unify_lit_boundaries`, `split_parts` | the relations recorded |
 | nodes | `decide`, `decide_at_once` | `Decided`: the node, its decision, the relations recorded, and for `decide` `DecidedBy`: the nodes that depend on it, the dependencies it broke, the undecided nodes that broke theirs on it, and its `ValueRead` (the nodes and relations it leaves out, and its `Reading`: a use's `Narrowing`, what a class reads as for a lend, a projection or a binding, or a function value's Values) |
@@ -233,7 +234,7 @@ does not rename what an earlier one shows.
 | Line | Means |
 |---|---|
 | `start g` | the binding group `g`'s state as solving starts it |
-| `step k g: <step>` | the `k`th step of the order, `solve X` or `decide n`, taken in `g`; under `TRACE=1`, `steps: <step>, ...`, the steps the state could take |
+| `step k g: <step>` | the `k`th step of the order, `solve X`, `fill X` or `decide n`, taken in `g`; under `TRACE=1`, `steps: <step>, ...`, the steps the state could take |
 | `fallback k g` | the `k`th step of the order is the entry's fallback; with no `default` under it, no class falls back |
 | `default X: T` | under `fallback`: `X` takes its default `T` |
 | `refuse: <refusal>` | under `start`, `step` and `fallback`: a refusal the step made, as an outcome writes it |
@@ -244,6 +245,7 @@ does not rename what an earlier one shows.
 | `lit lowers X` | `X`'s LitVar lower bounds unified with it |
 | `lit join #k <relation>` | the LitVar lower bound at `#k` unified with the class it bounds |
 | `join X: <took>` | `X` solved, having taken `held` (its kind), a constructor and its members, `nothing`, `no join`, or `infinite` (it reaches a part of its own) |
+| `fill X: <took>` | `X`, which nothing enters, filled: the one type the places it passes into have, or `differ` where they have two |
 | `lit boundaries X` | `X` unified with each type it passes into |
 | `split #k <relation>: <what>` | the relation at `#k`: `one class`, `parts`, `unsolved`, `no parts` |
 | `decide n: <decision>` | the node `n` decided, its decision written as an expectation writes one |
@@ -262,8 +264,10 @@ Under `TRACE=1` alone:
 | `conflict {M, ...}: <conflict>` | the class of these members holds what no type holds |
 | `equations: #k, ...` | under `join`: the relations that give `X` its kinds |
 | `lower L: <constructor>` | under `join`: a solved lower bound, and the constructor and members it gives |
+| `part lower L: <constructor>` | under `join`: a solved part lower bound, and the constructor and members it gives |
 | `fact: <constructor>` | under `join`: the constructor and members a kind known in part gives |
-| `left out: L, ...` | under `join`: the lower bounds not solved |
+| `left out: L, ...` | under `join`: the lower bounds and part lower bounds not solved |
+| `place P: <type>` | under `fill`: a place `X` passes into, and its value |
 | `exclude: n, ...` | under `decide`: the nodes whose relations its read leaves out |
 | `broke: n, ...` | under `decide`: the decided nodes it broke its dependency on |
 | `broken by: n, ...` | under `decide`: the undecided nodes that broke theirs on it |
@@ -277,7 +281,7 @@ Under `TRACE=1` alone:
 | `retry` | under the `decide` of a use: the narrowing again, each LitVar taken as its family's default |
 | `unsolved X` | `X` is not solved; `universal: yes` for a universal, and `no value: yes`, `enclosing: yes` (of an enclosing group) or `wait:` |
 | `undecided n` | `n` is not decided; `wait:` |
-| `wait: <dependency>, ...` | of `unsolved` and `undecided`: the unbroken dependencies not yet met: `lower L`, `taking T`, `records n`, `reads n`, `reads outside`, `path n`, `chosen`; `none` where none is |
+| `wait: <dependency>, ...` | of `unsolved` and `undecided`: the unbroken dependencies not yet met: `lower L`, `taking T`, `part of O`, `records n`, `reads n`, `reads outside`, `path n`, `chosen`; `none` where none is |
 | `C g` | what `g` leaves in C at its fixpoint: under it `classes: ...`, `nodes: ...` and each `relation #k <relation>` with its `by:` |
 | `written order`, `first order` | the order traced |
 | `limit: 10000` | the first order did not end within 10 000 steps |
@@ -289,8 +293,8 @@ Under `TRACE=1` alone:
 A golden writes a written order's trace without the lines of `TRACE=1` alone.
 `assert <phase> records` finds a `record` under a line of its phase: directly
 under `start` or `step` (`record`), under `link` (`unify`), `merge`, `lit lowers`,
-`lit join` or `join` (`join`), `lit boundaries` or `split` (`split`), `shared` or
-`decide` (`node`), `default` (`fallback`).
+`lit join`, `join` or `fill` (`join`), `lit boundaries` or `split` (`split`),
+`shared` or `decide` (`node`), `default` (`fallback`).
 
 ### `TRACE=1`
 
@@ -334,27 +338,16 @@ steps; `golden()` and every expectation read what they read without it.
   l.263, l.322–335) and fallback (l.288–290). 2 cases under `cases/primitives` test
   the join, `≤` and coercion on the declarations of `fixture::decls()` without
   `Box`, coercion with a conversion `u16 → u8` besides.
-- 62 cases under `cases/rules` are 61 programs the spec's rules refuse in every
-  order and one they accept (`classes/b-a-lambda-calling-a-captured-lambda`), each
-  derived from quoted lines of its region: `types` (l.39–112, 16 of them
-  primitives), `classes` (l.1–38, l.113–218), `solving` (l.219–293) and `place`
-  (l.294–354). The model refuses each refused one at the place its derivation
-  names. Five of them passed only once a node whose read decides nothing was left
-  undecided (note 08, reading 19): the three `solving` cases of a use whose read
-  decides nothing, `place/a-a-use-whose-name-reaches-no-declaration`, where the
-  model had panicked, and the accepted one. The model did not end on
+- 61 cases under `cases/rules` are 16 primitives under `types`, 44 programs the
+  spec's rules refuse in every order and one they accept
+  (`classes/b-a-lambda-calling-a-captured-lambda`), each derived from quoted lines
+  of its region: `types` (l.39–112), `classes` (l.1–38, l.113–218), `solving`
+  (l.219–293) and `place` (l.294–354). The model refuses each refused one at the
+  place its derivation names. Five of them passed only once a node whose read
+  decides nothing was left undecided (note 08, reading 19): the three `solving`
+  cases of a use whose read decides nothing,
+  `place/a-a-use-whose-name-reaches-no-declaration`, where the model had
+  panicked, and the accepted one. The model did not end on
   `solving/a-two-literal-families-have-no-join` until a LitVar join that
   conflicts was made a join with no result (note 11, reading 4).
-- H6's case writes the narrative's `q` as `wanted`, and is `XFAIL`.
-- Four cases assert what the model gives where it departs from the text. At a
-  split the text records a boundary toward every part that is no unknown of the
-  binding group, and a part lower bound between a structural type's parts
-  (l.280), and it fills a class nothing enters (l.284); the model records an
-  equation toward an invariant part a declaration writes, and a lower bound,
-  joined with casts, between a structural type's parts, and fills none. Example
-  3's two cases and
-  `solving/a-lower-bound-not-reaching-an-equation-value` are refused where `1u16`
-  enters `push`'s `T`, the text refusing at `consume(buf)`; T2's is refused at its
-  two checks, the text refusing where its payload's part lower bounds have no join.
-  Each says so.
 - Every case passes, and every golden is the model's.

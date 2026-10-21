@@ -66,7 +66,7 @@ What each item and decision gives, and what holding means on closed values:
 | `Read` | the position as a lower bound of the binding (l.308) | as above |
 | `BindLend { target, mutability }` | a reference to the position, or its target, as a lower bound of the binding (l.308) | as above |
 | `Calls(λ̄)` | each `λ` is named by a function value that reaches the callee by the regenerated lower bounds and equations (l.183); each argument meets its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result (l.198) | as above, under each instance |
-| a use's record of l.248 | at each position every candidate would record a lower bound or an equation into, the result and the parts of an argument an invariant part equates (note 08, reading 13), that it is a reference where every candidate's type there is one, and no reference where none is; under `Use(k)`, as `k`'s type there | its value is, or is not, a reference, or is `!` |
+| a use's record of l.248 | at its result, the one position a candidate records a type it writes into (note 08, reading 13), that it is a reference where every candidate's result type is one, and no reference where none is; under `Use(k)`, as `k`'s result type | its value is, or is not, a reference, or is `!` |
 
 The l.248 row is checked on its own: it is the record a use made before it was
 decided, which `Use(k)`'s rows do not name. That `!` holds either is the solver's

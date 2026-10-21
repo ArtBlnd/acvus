@@ -3,8 +3,9 @@
 // a.x = 1u8;
 // take(&a.x);              // take(&u16)
 // The place a.x has the type the projection names (l.296), so the lend targets
-// that class by an equation (l.298). The boundary into &u16 equates it with u16,
-// and the lower bound 1u8 reaches u16 by no coercion (l.282).
+// that class by an equation (l.298). The boundary into &u16 records a.x ⇝ u16
+// toward a type the declaration writes, which decides no value (l.280): a.x is
+// u8, and &u8 reaches &u16 by no coercion (l.282).
 extern fn take(&u16);
 
 let A;
@@ -20,4 +21,4 @@ let `take(..)`;
 must fail;
 assert `a.x` == applied;
 assert lend == lend & place;
-assert failing [`1u8 <= a.x`];
+assert failing [`&a.x ~> take.Param(0)`];

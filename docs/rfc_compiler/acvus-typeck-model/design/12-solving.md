@@ -7,13 +7,14 @@ settling and a fallback return the trace of what their phases reported,
 
 ## Meaning
 
-A step solves an eligible class or decides an eligible node, and what follows at
-once is recorded: merged cycles of lower bounds, splits, and LitVars meeting solved
-classes. With no step left, fallback gives each unsolved class with no unbroken
-dependency its family's default or `!`, and solving resumes, until nothing falls
-back. The program is accepted where no refusal was recorded, every class has a
-value, every node is reached, and every value the text or a node makes enter a type
-reaches it: a lower bound by `≤`, and a boundary by a coercion (l.282).
+A step solves an eligible class, fills one nothing enters, or decides an eligible
+node, and what follows at once is recorded: merged cycles of lower bounds and part
+lower bounds, splits, and LitVars meeting solved classes. With no step left, the
+fixpoint (l.288), fallback gives each unsolved class with no unbroken dependency
+its family's default or `!`, and solving resumes, until nothing falls back. The
+program is accepted where no refusal was recorded, every class has a value, every
+node is reached, and every value the text or a node makes enter a type reaches it:
+a lower bound by `≤`, and a boundary by a coercion (l.282).
 
 ## Readings
 
@@ -26,6 +27,7 @@ reaches it: a lower bound by `≤`, and a boundary by a coercion (l.282).
 
 ## Left open for change
 
-- `State::splits_now` in `src/split.rs`: when a lower bound's or a boundary's
-  parts are related (l.280; `holes.md`, T2). What they are related by is
-  `State::split_parts` (`holes.md`, H3, H4).
+- `State::splits_now` in `src/split.rs`: when a lower bound's, a part lower
+  bound's or a boundary's parts are related (l.280; `holes.md`, T2). What they
+  are related by is `State::split_parts`, by the one rule of
+  `State::part_relation` (`holes.md`, H3).

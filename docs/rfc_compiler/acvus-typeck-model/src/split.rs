@@ -1,8 +1,12 @@
-//! Splits (l.280): once an equivalence class takes a constructor, the
-//! relations between the parts of its lower bounds and boundaries are recorded
-//! in the parts' equivalence classes, by the table of l.280, through the
-//! signatures of the declared casts where the two sides' constructors differ;
-//! and `?N ⇝ U` unifies `?N` with `U`.
+//! Splits (l.280): once an equivalence class takes a constructor, a relation
+//! is recorded at each part of the two sides of each of its lower bounds, part
+//! lower bounds and boundaries, as at a place the value's part passes into: a
+//! meeting where that place is an unknown (l.221), recording a part lower bound
+//! between the parts of a structural type and an equation between other parts,
+//! and a boundary where it is not. Where the two sides' constructors differ,
+//! the parts are linked by the same rule through the declared casts'
+//! parameters and results, or between the targets where `&mut T` passes into
+//! `&U`; and `?N ⇝ U` unifies `?N` with `U`.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -12,61 +16,49 @@ use crate::decl::Node;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
-use crate::ty::{Mutability, Term};
+use crate::ty::{Constructor, Mutability, Term};
 
-/// How a relation's two sides are related part by part (l.280).
+/// How a relation's value passes into its other side (l.280).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Side {
-    Lower,
-    Boundary,
+pub(crate) enum Passing {
+    /// By a lower bound or a boundary: the value passes whole, so that two
+    /// constructors are linked through the declared casts or a reborrow.
+    Whole,
+    /// By a part lower bound: a part passes, which takes no cast (l.74, l.89).
+    Part,
 }
 
 /// What became of a relation of the log at a split (l.280).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Split {
-    /// A lower bound or a boundary whose two sides are one equivalence class:
-    /// marked split, nothing left to relate.
+    /// A lower bound, a part lower bound or a boundary whose two sides are one
+    /// equivalence class: marked split, nothing left to relate.
     OneClass,
-    /// A lower bound or a boundary whose two sides are solved: marked split,
-    /// with the relations recorded between their parts.
+    /// A lower bound, a part lower bound or a boundary whose two sides are
+    /// solved: marked split, with the relations recorded between their parts.
     Parts(Recording),
-    /// A lower bound or a boundary whose two sides are not both solved: left
-    /// as it is.
+    /// A lower bound, a part lower bound or a boundary whose two sides are not
+    /// both solved: left as it is.
     Unsolved,
-    /// No lower bound and no boundary: marked split, having no parts to
-    /// relate.
+    /// No lower bound, no part lower bound and no boundary: marked split,
+    /// having no parts to relate.
     NoParts,
 }
 
 impl State {
     /// Splits the relation at `i` in the log where its two sides are solved,
     /// and marks it split where there is nothing left to split: two sides of
-    /// one equivalence class, or a relation that is no lower bound and no
-    /// boundary.
+    /// one equivalence class, or a relation that is no lower bound, no part
+    /// lower bound and no boundary.
     pub(crate) fn split_at(&mut self, i: usize) -> Split {
-        match self.log[i].relation.clone() {
+        match self.log[i].relation {
             Relation::LowerBound { lower, upper } => {
-                if self.root(lower) == self.root(upper) {
-                    self.split.insert(i);
-                    Split::OneClass
-                } else if self.splits_now(lower, upper) {
-                    self.split.insert(i);
-                    Split::Parts(self.split_parts(lower, upper, Side::Lower, upper))
-                } else {
-                    Split::Unsolved
-                }
+                self.split_sides(i, lower, upper, Passing::Whole, upper)
             }
-            Relation::Boundary { from, to } => {
-                if self.root(from) == self.root(to) {
-                    self.split.insert(i);
-                    Split::OneClass
-                } else if self.splits_now(from, to) {
-                    self.split.insert(i);
-                    Split::Parts(self.split_parts(from, to, Side::Boundary, from))
-                } else {
-                    Split::Unsolved
-                }
+            Relation::PartLowerBound { lower, upper } => {
+                self.split_sides(i, lower, upper, Passing::Part, upper)
             }
+            Relation::Boundary { from, to } => self.split_sides(i, from, to, Passing::Whole, from),
             Relation::Equation(..)
             | Relation::Fact(..)
             | Relation::Kind(..)
@@ -79,19 +71,44 @@ impl State {
         }
     }
 
-    /// Whether the parts of a lower bound's or a boundary's two sides are
-    /// related now (l.280): once both sides have taken a constructor
-    /// (`holes.md`, T2).
+    /// Splits the relation at `i`, whose value passes from `from` into `to`,
+    /// recorded as `by` taking a constructor.
+    fn split_sides(
+        &mut self,
+        i: usize,
+        from: ClassId,
+        to: ClassId,
+        passing: Passing,
+        by: ClassId,
+    ) -> Split {
+        if self.root(from) == self.root(to) {
+            self.split.insert(i);
+            Split::OneClass
+        } else if self.splits_now(from, to) {
+            self.split.insert(i);
+            Split::Parts(self.split_parts(from, to, passing, by))
+        } else {
+            Split::Unsolved
+        }
+    }
+
+    /// Whether the parts of a relation's two sides are related now (l.280):
+    /// once both sides have taken a constructor (`holes.md`, T2).
     pub(crate) fn splits_now(&self, a: ClassId, b: ClassId) -> bool {
         self.is_solved(a) && self.is_solved(b)
     }
 
     /// `?N ⇝ U` unifies `?N` with `U` (l.280): where the equivalence class
-    /// holds a LitVar and no kind, it is unified with each type it passes into
-    /// by a boundary. Returns the equations recorded.
+    /// holds a LitVar and no kind, and only LitVars enter it, no solved lower
+    /// bound, part lower bound or kind known in part giving it a constructor
+    /// (l.284), it is unified with each type it passes into by a boundary.
+    /// Returns the equations recorded.
     pub(crate) fn unify_lit_boundaries(&mut self, root: ClassId) -> Recording {
         let mut recorded = Recording::default();
-        if self.is_lit(root) {
+        let sources = self.sources(root);
+        let lits_alone =
+            sources.lowers.is_empty() && sources.part_lowers.is_empty() && sources.facts.is_empty();
+        if self.is_lit(root) && lits_alone {
             for to in self.boundaries_from(root) {
                 let relation = Relation::Equation(root, to);
                 recorded.push(self.record(relation, Recorder::Split(root)));
@@ -100,15 +117,34 @@ impl State {
         recorded
     }
 
-    /// Records the relations between the parts of a lower bound's or a
-    /// boundary's two sides (l.280), linking the parts through the declared
-    /// casts where their constructors differ (l.280). Returns the relations
+    /// The relation recorded where the part `from` passes into the part `to`
+    /// of a type of constructor `of` (l.280): where `to` is an unknown the
+    /// place is a meeting (l.221), recording a part lower bound where `of` is
+    /// structural and an equation otherwise, and elsewhere it is a boundary.
+    fn part_relation(&self, of: &Constructor, from: ClassId, to: ClassId) -> Relation {
+        if !self.is_unknown(to) {
+            Relation::Boundary { from, to }
+        } else if of.is_structural() {
+            Relation::PartLowerBound {
+                lower: from,
+                upper: to,
+            }
+        } else {
+            Relation::Equation(from, to)
+        }
+    }
+
+    /// Records the relations between the parts of a relation's two sides
+    /// (l.280). Where their constructors differ and the value passes whole,
+    /// the parts are linked through the declared casts' parameters and
+    /// results, or between the targets of a reborrow; a part lower bound's
+    /// sides of two constructors relate nothing (l.89). Returns the relations
     /// recorded.
-    pub(crate) fn split_parts(
+    fn split_parts(
         &mut self,
         from: ClassId,
         to: ClassId,
-        side: Side,
+        passing: Passing,
         by: ClassId,
     ) -> Recording {
         let mut recorded = Recording::default();
@@ -121,28 +157,16 @@ impl State {
         };
         let (from_c, to_c) = (from_kind.constructor(), to_kind.constructor());
         if from_c == to_c {
-            let structural = from_c.is_structural();
             for (key, from_part) in from_kind.parts() {
                 let Some(&to_part) = to_kind.part(&key) else {
                     continue;
                 };
-                let relation = match (structural, side) {
-                    (false, _) => Relation::Equation(*from_part, to_part),
-                    (true, Side::Lower) => Relation::LowerBound {
-                        lower: *from_part,
-                        upper: to_part,
-                    },
-                    (true, Side::Boundary) if self.is_unknown(to_part) => Relation::LowerBound {
-                        lower: *from_part,
-                        upper: to_part,
-                    },
-                    (true, Side::Boundary) => Relation::Boundary {
-                        from: *from_part,
-                        to: to_part,
-                    },
-                };
+                let relation = self.part_relation(&to_c, *from_part, to_part);
                 recorded.push(self.record(relation, recorder.clone()));
             }
+            return recorded;
+        }
+        if passing == Passing::Part {
             return recorded;
         }
         if let (
@@ -150,7 +174,7 @@ impl State {
             Term::Ref(Mutability::Shared, to_target),
         ) = (&from_kind, &to_kind)
         {
-            let relation = Relation::Equation(*from_target, *to_target);
+            let relation = self.part_relation(&to_c, *from_target, *to_target);
             recorded.push(self.record(relation, recorder));
             return recorded;
         }
@@ -195,15 +219,16 @@ impl State {
             ) else {
                 return recorded;
             };
+            let of = param_kind.constructor();
             for ((_, current_part), (_, param_part)) in
                 current_kind.parts().into_iter().zip(param_kind.parts())
             {
-                let relation = Relation::Equation(*current_part, *param_part);
+                let relation = self.part_relation(&of, *current_part, *param_part);
                 recorded.push(self.record(relation, recorder.clone()));
             }
             current = result;
         }
-        recorded.append(self.split_parts(current, to, side, by));
+        recorded.append(self.split_parts(current, to, passing, by));
         recorded
     }
 }

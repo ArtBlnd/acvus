@@ -16,6 +16,9 @@ pub enum Relation {
     /// `τ ≤ α`, which a meeting records (l.229), and a use's result type
     /// entering its result (l.276).
     LowerBound { lower: ClassId, upper: ClassId },
+    /// `τ ≤ₚ α`, which a split records between the parts of a structural type
+    /// where the place the value's part passes into is a meeting (l.280).
+    PartLowerBound { lower: ClassId, upper: ClassId },
     /// `T ⇝ U`, which a boundary records (l.230).
     Boundary { from: ClassId, to: ClassId },
     /// An equation, which an invariant place records (l.231).
@@ -39,7 +42,9 @@ impl Relation {
     /// The classes the relation names, a kind's parts among them.
     pub fn classes(&self) -> Vec<ClassId> {
         match self {
-            Relation::LowerBound { lower, upper } => vec![*lower, *upper],
+            Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper } => {
+                vec![*lower, *upper]
+            }
             Relation::Boundary { from, to } => vec![*from, *to],
             Relation::Equation(a, b) => vec![*a, *b],
             Relation::Fact(class, fact) => vec![*class, fact.class()],
@@ -59,6 +64,10 @@ impl Relation {
     {
         match self {
             Relation::LowerBound { lower, upper } => Relation::LowerBound {
+                lower: f(lower),
+                upper: f(upper),
+            },
+            Relation::PartLowerBound { lower, upper } => Relation::PartLowerBound {
                 lower: f(lower),
                 upper: f(upper),
             },
@@ -176,6 +185,9 @@ impl fmt::Display for Named<'_> {
         match self.relation {
             Relation::LowerBound { lower, upper } => {
                 write!(f, "{} <= {}", name(lower), name(upper))
+            }
+            Relation::PartLowerBound { lower, upper } => {
+                write!(f, "{} <=p {}", name(lower), name(upper))
             }
             Relation::Boundary { from, to } => write!(f, "{} ~> {}", name(from), name(to)),
             Relation::Equation(a, b) => write!(f, "{} = {}", name(a), name(b)),

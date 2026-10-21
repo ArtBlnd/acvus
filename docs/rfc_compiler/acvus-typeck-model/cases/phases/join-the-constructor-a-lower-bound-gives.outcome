@@ -19,4 +19,4 @@ start run
 step 1 run: solve A
   join A: Option {Variant(None), Variant(Some)}
   split #3 Some(1u8) <= A: parts
-    record #4 S <= A.Payload(Some)
+    record #4 S <=p A.Payload(Some)

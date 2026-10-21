@@ -226,6 +226,9 @@ impl<'a> Instance<'a> {
 
     /// Records here every relation of `from` on a class of C, makes anew each
     /// node `from` left undecided (l.214), and keeps the instance here.
+    /// A relation `from` split is split here too: what its split recorded is
+    /// among the relations copied, and no class of the copy takes a
+    /// constructor here that it did not hold in `from` (l.217, l.280).
     /// Returns what the instance recorded here, itself the instance made.
     pub(crate) fn record_rest(&mut self, here: &mut State) -> Recording {
         let from = self.from;
@@ -236,7 +239,12 @@ impl<'a> Instance<'a> {
                 .clone()
                 .map(|class| self.class(here, class));
             let recorder = self.recorder(&recorded.recorder);
-            self.recorded.push(here.record(relation, recorder));
+            let entry = here.record(relation, recorder);
+            if from.split.contains(&at) {
+                here.split.insert(entry.at);
+                here.copied_split.insert(entry.at);
+            }
+            self.recorded.push(entry);
         }
         let undecided: Vec<(&Name, &NodeState)> = from
             .nodes

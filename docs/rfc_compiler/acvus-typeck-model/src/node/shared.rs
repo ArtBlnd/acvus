@@ -5,11 +5,12 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName};
+use crate::decl::Node;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::sig::{SigTy, Signature};
 use crate::solve::State;
-use crate::ty::{Name, Term};
+use crate::ty::{Constructor, Mutability, Name, Term};
 
 use super::{NodeAt, NodeKind};
 
@@ -161,41 +162,74 @@ impl State {
     ) -> BTreeMap<ClassId, Option<bool>> {
         let mut found = BTreeMap::new();
         for (arg, param) in args.iter().zip(sig.params()) {
-            self.would_record(*arg, param, false, &mut found);
+            self.would_record(*arg, param, &mut found);
         }
         found.insert(self.root(result), is_reference(sig.result()));
         found
     }
 
     /// The classes inside an argument's kind that a candidate's parameter
-    /// would record a lower bound or an equation into, by the table of l.280:
-    /// the parts an invariant part equates, and every part beneath them. A
-    /// part the parameter writes as a variable is a lower bound of that
-    /// unknown, recording into it only, unless an invariant part equates it.
+    /// would record a lower bound or an equation into, by the splits of
+    /// l.280. The argument passes into the type the parameter writes, which
+    /// records into that type alone, and each of its parts passes into that
+    /// type's part: a meeting where the parameter writes a variable, an
+    /// unknown (l.221), recording an equation into the part, unless it is a
+    /// structural type's, whose part lower bound records into the variable
+    /// alone; and where the parameter writes a type, the part passes into it
+    /// in turn. Two constructors are linked as a split links them: the targets
+    /// of a reborrow, and the parts of the first declared cast's parameter,
+    /// into which the argument passes; the later casts' parameters and the
+    /// parameter's type relate the casts' results, which are not the
+    /// argument's.
     pub(super) fn would_record(
         &self,
         class: ClassId,
         ty: &SigTy,
-        equated: bool,
         found: &mut BTreeMap<ClassId, Option<bool>>,
     ) {
-        if equated {
-            found.insert(self.root(class), is_reference(ty));
-        }
         let SigTy::Term(term) = ty else {
             return;
         };
         let Some((kind, _)) = &self.classes.held(class).kind else {
             return;
         };
-        if kind.constructor() != term.constructor() {
+        let (from, to) = (kind.constructor(), term.constructor());
+        if from == to {
+            for (key, written) in term.parts() {
+                if let Some(&part) = kind.part(&key) {
+                    self.would_record_part(&to, part, written, found);
+                }
+            }
             return;
         }
-        let invariant = !kind.constructor().is_structural();
-        for (key, written) in term.parts() {
-            if let Some(&part) = kind.part(&key) {
-                self.would_record(part, written, equated || invariant, found);
+        if let (Term::Ref(Mutability::Exclusive, target), Term::Ref(Mutability::Shared, written)) =
+            (kind, &**term)
+        {
+            self.would_record_part(&to, *target, written, found);
+            return;
+        }
+        let path = self.decls.tree().path(&Node::Owned(from), &Node::Owned(to));
+        if let Some(cast) = path.as_deref().and_then(<[_]>::first) {
+            let param = &self.decls.decl(cast).sig.params()[0];
+            self.would_record(class, param, found);
+        }
+    }
+
+    /// As `would_record`, at the part `part` of an argument passing into the
+    /// part `written` of a type of constructor `of`.
+    fn would_record_part(
+        &self,
+        of: &Constructor,
+        part: ClassId,
+        written: &SigTy,
+        found: &mut BTreeMap<ClassId, Option<bool>>,
+    ) {
+        match written {
+            SigTy::Var(_) if !of.is_structural() => {
+                found.insert(self.root(part), is_reference(written));
             }
+            SigTy::Var(_) => {}
+            SigTy::Term(_) => self.would_record(part, written, found),
         }
     }
 }

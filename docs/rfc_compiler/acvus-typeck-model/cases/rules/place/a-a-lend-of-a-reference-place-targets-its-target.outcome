@@ -2,17 +2,17 @@
 run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
 outcome 1
   refused
-  value `&r`: &u16
-  value `&x`: &u16
+  value `&r`: &u8
+  value `&x`: &u8
   value 1u8: u8
-  value R: &u16
-  value X: u16
+  value R: &u8
+  value X: u8
   value `take(..)`: ()
   decision `&r`: lend & through &
   decision `&x`: lend & place
   decision take: take#0
-  check `&r ~> take.Param(0)`: Ok(Identity)
+  check `&r ~> take.Param(0)`: Err(None)
   check `&x <= R`: Ok(Identity)
-  check `1u8 <= X`: Err(None)
+  check `1u8 <= X`: Ok(Identity)
   check `take.Result <= take(..)`: Ok(Identity)
   I* of a final state: []

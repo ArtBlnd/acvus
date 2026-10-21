@@ -37,7 +37,8 @@ turn.
 4. **A written type is solved.** A type the text or a declaration writes is decided
    when solving starts (l.213), and nothing records into it, so it is solved as it
    is recorded. A class unified with a solved one is solved: its value is decided
-   once (types §6), and its lower bounds and boundaries are split as they come.
+   once (types §6), and its lower bounds, part lower bounds and boundaries are
+   split as they come.
 5. **Names.** A text class keeps its name. A part made when a class is solved is
    named after the least of that class's members' names at that moment, a class a
    use or a lend makes after it and its place in the signature, and a class of a

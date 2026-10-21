@@ -55,7 +55,7 @@ impl State {
     /// unblocked (l.290).
     pub(crate) fn fallback_targets(&self) -> Vec<ClassId> {
         let graph = self.graph();
-        let settled = self.settled_in(&graph);
-        self.unblocked(&graph, &settled)
+        let met = self.met_in(&graph);
+        self.unblocked(&graph, &met)
     }
 }

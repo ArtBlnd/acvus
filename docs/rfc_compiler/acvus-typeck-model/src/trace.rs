@@ -10,7 +10,7 @@ use crate::node::Decided;
 use crate::record::Recording;
 use crate::split::Split;
 use crate::unify::Linked;
-use crate::value::Joined;
+use crate::value::{Filled, Joined};
 
 /// What one phase did, a relation named by its place in the log.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -32,6 +32,8 @@ pub enum Report {
     LitBoundaries { class: ClassId, recorded: Recording },
     /// The join: what the equivalence class took, and from what (l.271).
     Joined { class: ClassId, joined: Joined },
+    /// The fill: what the equivalence class nothing enters took (l.284).
+    Filled(Filled),
     /// The join: the LitVar lower bound at `bound` unified with the solved
     /// class it bounds (l.171).
     LitJoined { bound: usize, recorded: Recording },

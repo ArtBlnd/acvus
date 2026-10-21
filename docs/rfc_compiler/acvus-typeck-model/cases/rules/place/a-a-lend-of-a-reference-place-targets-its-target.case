@@ -2,8 +2,9 @@
 // let x = 1u8;
 // let r = &x;
 // take(&r);                // take(&u16)
-// r is &X, so &r lends X itself (l.298), the boundary into &u16 equates X with
-// u16, and the lower bound 1u8 reaches u16 by no coercion (l.282).
+// r is &X, so &r lends X itself (l.298). The boundary into &u16 records
+// X ⇝ u16 toward a type the declaration writes, which decides no value
+// (l.280): X is u8, and &u8 reaches &u16 by no coercion (l.282).
 extern fn take(&u16);
 
 let X;
@@ -21,4 +22,4 @@ R = `&x`;
 must fail;
 assert `&x` == lend & place;
 assert `&r` == lend & through &;
-assert failing [`1u8 <= X`];
+assert failing [`&r ~> take.Param(0)`];
