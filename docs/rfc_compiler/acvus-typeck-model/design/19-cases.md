@@ -334,7 +334,7 @@ steps; `golden()` and every expectation read what they read without it.
   l.267, l.331–344) and fallback (l.297–299). 2 cases under `cases/primitives` test
   the join, `≤` and coercion on the declarations of `fixture::decls()` without
   `Box`, coercion with a conversion `u16 → u8` besides.
-- 61 cases under `cases/rules` are 60 programs the spec's rules refuse in every
+- 62 cases under `cases/rules` are 61 programs the spec's rules refuse in every
   order and one they accept (`classes/b-a-lambda-calling-a-captured-lambda`), each
   derived from quoted lines of its region: `types` (l.39–117, 16 of them
   primitives), `classes` (l.1–38, l.118–223), `solving` (l.224–302) and `place`
@@ -342,6 +342,8 @@ steps; `golden()` and every expectation read what they read without it.
   names. Five of them passed only once a node whose read decides nothing was left
   undecided (note 08, reading 19): the three `solving` cases of a use whose read
   decides nothing, `place/a-a-use-whose-name-reaches-no-declaration`, where the
-  model had panicked, and the accepted one.
+  model had panicked, and the accepted one. The model did not end on
+  `solving/a-two-literal-families-have-no-join` until a LitVar join that
+  conflicts was made a join with no result (note 11, reading 4).
 - H6's case writes the narrative's `q` as `wanted`, and is `XFAIL`.
 - Every case passes, and every golden is the model's.

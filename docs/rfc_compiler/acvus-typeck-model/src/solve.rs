@@ -307,8 +307,10 @@ impl State {
 
     /// The equivalence class is solved (l.275), unless it reaches a part of
     /// its own: its LitVar lower bounds joined, `?N ⇝ U` where it holds a
-    /// LitVar alone (l.291), and then its constructor and members. The trace
-    /// holds what the class took, and the LitVars unified where any are.
+    /// LitVar alone (l.291), and then its constructor and members. Where it
+    /// holds no kind and its LitVar lower bounds' join conflicts, its sources
+    /// have no join. The trace holds what the class took, and the LitVars
+    /// unified where any are.
     pub(crate) fn solve(&mut self, root: ClassId) -> Trace {
         if let Some(refusal) = self.refuse_infinite(root) {
             return Trace {
@@ -320,11 +322,21 @@ impl State {
         }
         let mut trace = Trace::default();
         let lowers = self.join_lit_lowers(root);
+        let conflicted = lowers
+            .entries
+            .iter()
+            .find_map(|entry| entry.unification.refused.clone());
         if !lowers.is_empty() {
             trace.push(Report::LitLowers {
                 class: root,
                 recorded: lowers,
             });
+        }
+        let class = self.root(root);
+        if let Some(refusal) = conflicted.filter(|_| self.classes.held(class).kind.is_none()) {
+            let joined = self.lit_no_join(class, refusal);
+            trace.push(Report::Joined { class, joined });
+            return trace;
         }
         let boundaries = self.unify_lit_boundaries(root);
         if !boundaries.is_empty() {

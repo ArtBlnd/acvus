@@ -30,7 +30,12 @@ decided on a separate state that replays the relations a node does not leave out
    cast's parameter being an extern-defined type or a reference, whose parts are
    invariant; the last cast's result is then related to the other side by l.286.
 4. **Sources that give no constructor.** A class whose sources are only LitVars is
-   unified with them and stays unsolved, holding a LitVar until fallback.
+   unified with them and stays unsolved, holding a LitVar until fallback. Where
+   they are of two families the unification conflicts (l.170), so its sources
+   have no join: it has no value and is not solved again, refused by the
+   conflict (l.176, l.301), as where the types its sources give have no join.
+   A class that holds a kind takes its value from it, and a LitVar lower bound
+   that conflicts with it is refused there alone.
 5. **When a relation splits.** Once both of its sides are solved (`holes.md`, T2).
 6. **A value read.** The state replays every relation but those the left-out nodes
    recorded and those solving derives (note 07), solves each class from its sources

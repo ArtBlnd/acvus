@@ -45,7 +45,7 @@ pub enum Took {
     },
     /// No source gives a constructor, so it is left unsolved.
     Nothing,
-    /// Its sources have no join, so it is refused.
+    /// Its sources have no join, so it has no value and is refused.
     NoJoin(Refusal),
 }
 
@@ -343,12 +343,8 @@ impl State {
             .skip(1)
             .try_fold(first, |joined, source| self.head_join(&joined, source));
         let Some(joined) = joined else {
-            let name = self.class_name(root);
-            let members = self.classes.held(root).members.clone();
-            self.no_value.extend(members);
-            let refusal = Refusal::NoJoin(name);
-            self.refusals.insert(refusal.clone());
-            return with_sources(Took::NoJoin(refusal));
+            let refusal = Refusal::NoJoin(self.class_name(root));
+            return with_sources(self.no_join(root, refusal));
         };
         let owner = self.class_name(root);
         let kind = self.skeleton(&joined, &owner);
@@ -367,6 +363,26 @@ impl State {
             unified,
             refused,
         })
+    }
+
+    /// The equivalence class, holding no kind, has LitVar lower bounds whose
+    /// unification with it, their join (l.176), conflicts: two LitVars of two
+    /// families meet (l.170). Its sources have no join, so it has no value
+    /// and is refused there (l.301), by the conflict's refusal.
+    pub(crate) fn lit_no_join(&mut self, root: ClassId, refusal: Refusal) -> Joined {
+        let root = self.root(root);
+        Joined {
+            sources: self.sources(root),
+            took: self.no_join(root, refusal),
+        }
+    }
+
+    /// The equivalence class has no value, and is never solved again (l.301).
+    fn no_join(&mut self, root: ClassId, refusal: Refusal) -> Took {
+        let members = self.classes.held(root).members.clone();
+        self.no_value.extend(members);
+        self.refusals.insert(refusal.clone());
+        Took::NoJoin(refusal)
     }
 
     /// Unifies a LitVar lower bound, at `i` in the log, with the solved

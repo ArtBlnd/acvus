@@ -1,0 +1,17 @@
+//@ spec: l.170, l.176, l.226, l.280, l.301
+// let mut x = 1;
+// x = 1.5;
+// The initializer and the assignment are meetings, 1 <= X and 1.5 <= X
+// (l.226). X has no equation, so its value is the join of its sources (l.280),
+// and a LitVar's join unifies it with X (l.176). Two LitVars of two families
+// have no rule (l.170), so the join has no result: X has no value, and the
+// program is refused there (l.301).
+let X;
+let 1: lit 1;
+let `1.5`: lit 1.5;
+X = 1;
+X = `1.5`;
+
+must fail;
+assert X: none;
+assert refused conflict at "1.5 = X";
