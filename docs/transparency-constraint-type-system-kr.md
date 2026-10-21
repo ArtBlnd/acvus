@@ -277,7 +277,7 @@ use, lend, projection, binding, block이 무엇이 되는지는 그것이 읽는
 
 kind가 member를 주는 것은 그 member가 이 body에 보일 때뿐이다. object의 field와 enum의 variant는 body의 텍스트가 쓰므로 보이고, `Option`, `Result`, `Error`의 member와 host가 준 타입의 member는 바깥에서 쓰므로 보이지 않는다. 출처가 kind뿐인 동치류는 그 kind가 가리키는 member의 constructor를 받는다. 동치류의 값은 그 동치류가 지닌 kind를 만족하는 타입이다.
 
-동치류가 constructor를 받으면, 그 하한, part 하한, 경계의 두 쪽의 part 사이에 관계가 기록된다(쪼갬). structural type의 part 사이에는 part 하한이, 그 밖의 part 사이에는 등식이 기록된다. 다만 경계 `T ⇝ U`에서 `U` 쪽 part가 그 binding group의 미지수가 아니면, 곧 선언이나 텍스트가 적은 타입, universal, 감싸는 binding group의 동치류이면, 그 사이에는 경계가 기록된다. 하한이나 경계의 두 쪽의 constructor가 다르면, 선언된 cast들의 signature를 따라 part를 잇는다. `?N ⇝ U`이면 `?N`을 `U`와 unify한다.
+동치류가 constructor를 받으면, 그 하한, part 하한, 경계의 두 쪽의 part마다, 값의 part가 넘어가는 자리로서 관계가 기록된다(쪼갬). 그 자리가 만남이면 structural type의 part 사이에는 part 하한이, 그 밖의 part 사이에는 등식이, 경계이면 경계가 기록된다(만남과 경계). 하한이나 경계의 두 쪽의 constructor가 다르면, 값이 선언된 cast들의 parameter로 넘어가고 그 결과가 다시 넘어가는 것으로 보아 같은 규칙으로 잇고, `&mut T`가 `&U`로 넘어가면 target끼리 잇는다. `?N ⇝ U`이면 `?N`을 `U`와 unify한다.
 
 동치류가 풀린 뒤, 하한과 use의 결과로 들어오는 값은 Join의 `≤`로, part 하한으로 들어오는 part는 `≤ₚ`로 그 값에 닿으며, 그 단계마다 Coercion 표의 행으로 바뀐다. 다만 object에 더해진 field는 바뀌지 않고, 그 값이 통째로 쓰이기 전에 쓰인다(ownership §4). 경계로 넘어가는 값은 `U`의 값에 coercion으로 닿는다. 어느 쪽이든 그 함수는 그 값이 들어온 자리에서 호출되며, 닿지 않으면 그 자리에서 거부된다.
 
