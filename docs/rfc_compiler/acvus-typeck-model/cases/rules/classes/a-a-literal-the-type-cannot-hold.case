@@ -1,0 +1,12 @@
+//@ spec: l.169, with l.134, l.226, l.291, l.301
+// @n = 256;                // @n is the host's u8
+// The literal's type is ?{256} (l.134), and the store is the boundary
+// 256 ⇝ @n (l.218, l.226), which unifies ?{256} with u8 (l.291). l.169 asks
+// the constructor to hold every value in N: u8 does not hold 256, so the
+// unification gives no result, and the program is refused there (l.301).
+let `@n`: host u8;
+let 256: lit 256;
+`@n` = 256;
+
+must fail;
+assert refused conflict at "256 = @n";

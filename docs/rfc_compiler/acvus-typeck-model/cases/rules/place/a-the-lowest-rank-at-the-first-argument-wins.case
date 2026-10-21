@@ -1,0 +1,20 @@
+//@ spec: l.337–342, l.116
+// f(make_a(), 1u16)        // make_a() -> A; f(A, u8), f(B, u16); a cast A → B
+// The first argument passes into A with the empty rank and into B with a cast's,
+// so f(A, u8) alone remains (l.337); the second, u16, does not reach u8, and no
+// candidate remains though f(B, u16) took both.
+extern type A;
+extern type B;
+#[cast] extern fn up(A) -> B;
+extern fn make_a() -> A;
+extern fn f(A, u8);
+extern fn f(B, u16);
+
+let `make_a()`;
+let 1u16: u16;
+let R;
+`make_a()` = make_a() @ make_a;
+R = f(`make_a()`, 1u16) @ f;
+
+must fail;
+assert f == unreached;

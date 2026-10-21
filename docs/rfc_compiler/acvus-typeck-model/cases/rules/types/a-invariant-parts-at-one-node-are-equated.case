@@ -1,0 +1,18 @@
+//@ spec: l.74, l.86, l.110
+// Vec's argument and a reference's target are invariant (l.74), and the
+// relation between invariant parts is an equation. l.86 joins only covariant
+// parts; read alone it gives no result for unequal invariant parts, and read
+// with l.74 it asks A = C: either way Vec<A> and Vec<C> have no join. The
+// covariant-part row of l.110 has no covariant part to descend into, and the
+// equation A = B fails, so Vec<A> does not coerce to Vec<B>; after the
+// reborrow, Option<A> sits behind a reference, invariant, and A = B fails.
+extern type A;
+extern type B;
+extern type C;
+extern type Vec<T>;
+#[cast] extern fn a_b(A) -> B;
+#[cast] extern fn c_b(C) -> B;
+
+assert join(Vec<A>, Vec<C>) == none;
+assert coerce(Vec<A>, Vec<B>) == none;
+assert coerce(&mut Option<A>, &Option<B>) == none;

@@ -1,0 +1,11 @@
+//@ spec: l.74
+// A function type is not structural (l.68), so its parameter is invariant,
+// and no part is contravariant (l.74). A = B fails, so fn(B) -> u8 does not
+// coerce to fn(A) -> u8 though A casts to B, and fn(A) -> u8 and fn(B) -> u8
+// have no join.
+extern type A;
+extern type B;
+#[cast] extern fn a_b(A) -> B;
+
+assert coerce(fn(B) -> u8, fn(A) -> u8) == none;
+assert join(fn(A) -> u8, fn(B) -> u8) == none;

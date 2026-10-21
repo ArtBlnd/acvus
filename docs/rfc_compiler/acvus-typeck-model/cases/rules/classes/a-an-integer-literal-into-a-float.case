@@ -1,0 +1,13 @@
+//@ spec: l.169, with l.134, l.226, l.291, l.301
+// @n = 1;                  // @n is the host's f64
+// The literal's type is the LitVar ?{1} of the integer family (l.134). The
+// host's f64 is decided when solving starts, so the store is the boundary
+// 1 ⇝ @n (l.218, l.226). ?N ⇝ U unifies ?N with U (l.291), and l.169 asks the
+// constructor to be one of ?N's family: f64 is a float, so the unification
+// gives no result, and the program is refused there (l.301).
+let `@n`: host f64;
+let 1: lit 1;
+`@n` = 1;
+
+must fail;
+assert refused conflict at "1 = @n";

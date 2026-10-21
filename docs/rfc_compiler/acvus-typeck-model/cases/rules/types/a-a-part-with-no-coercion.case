@@ -1,0 +1,5 @@
+//@ spec: l.110, l.112
+// The covariant-part row needs a coercion at each covariant part (l.110);
+// u8 ⇝ u16 has no row and no conversion is declared, so Option<u8> does not
+// coerce to Option<u16>.
+assert coerce(Option<u8>, Option<u16>) == none;

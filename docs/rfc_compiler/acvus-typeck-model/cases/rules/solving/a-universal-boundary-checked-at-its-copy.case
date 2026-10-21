@@ -1,0 +1,26 @@
+//@ spec: l.246, l.222, l.299, l.293, l.301
+// fn g(x) { take_u8(x) }   // take_u8(u8)
+// g(1u16)
+// x's type X is universal and depends on the use that chooses it, outside g's
+// binding group (l.246), so X is never solved in g, takes no fallback (l.299),
+// and the boundary X ⇝ u8 stays in g's C. The call makes an instance: X' is an
+// unknown of the entry that 1u16 meets (l.222, l.226), so X' is u16, and the
+// copy of the boundary reaches u8 by no coercion (l.293): refused at that copy
+// (l.301). The original X is left in C and needs no value.
+extern fn take_u8(u8);
+
+group g {
+    let X;
+    let R;
+    let `take_u8(x)`;
+    fn g(X) -> R;
+    `take_u8(x)` = take_u8(X) @ take_u8;
+    R = `take_u8(x)`;
+}
+let 1u16: u16;
+let `g(1u16)`;
+`g(1u16)` = g(1u16) @ `g(1u16)`;
+
+must fail;
+assert take_u8 == take_u8#0;
+assert failing [`g@2/X ⇝ g@2/take_u8.Param(0)`];

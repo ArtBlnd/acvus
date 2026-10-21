@@ -1,0 +1,31 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value 1u8: u8
+  value F: Fn/1
+  value X1: none
+  value X2: none
+  value `f(1u8)`: ()
+  value `take_u16(x)`: ()
+  value `take_u8(x)`: ()
+  value `|x| take_u16(x)`: Fn/1
+  value `|x| take_u8(x)`: Fn/1
+  value `λ1 result`: ()
+  value `λ2 result`: ()
+  decision `f(1u8)`: calls {λ1, λ2}
+  decision take_u16: take_u16#0
+  decision take_u8: take_u8#0
+  check `1u8 ≤ f(1u8)#λ1/X1`: Ok(Identity)
+  check `1u8 ≤ f(1u8)#λ2/X2`: Ok(Identity)
+  check `f(1u8)#λ1/X1 ⇝ f(1u8)#λ1/take_u8.Param(0)`: Ok(Identity)
+  check `f(1u8)#λ1/λ1 result ≤ f(1u8)`: Ok(Identity)
+  check `f(1u8)#λ2/X2 ⇝ f(1u8)#λ2/take_u16.Param(0)`: Err(None)
+  check `f(1u8)#λ2/λ2 result ≤ f(1u8)`: Ok(Identity)
+  check `|x| take_u16(x) ≤ F`: Ok(Identity)
+  check `|x| take_u8(x) ≤ F`: Ok(Identity)
+  check `take_u8(x) ≤ λ1 result`: Ok(Identity)
+  check `take_u8.Result ≤ take_u8(x)`: Ok(Identity)
+  check `take_u16(x) ≤ λ2 result`: Ok(Identity)
+  check `take_u16.Result ≤ take_u16(x)`: Ok(Identity)
+  I* of a final state: []

@@ -1,0 +1,10 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value 256: u8
+  value `@n`: u8
+  partition {256, `@n`}
+  check `256 ⇝ @n`: Ok(Identity)
+  refusal conflict at "256 = @n": Lit(LitVar { family: Int, values: {Int(256)} }, Some(Scalar(Int(U8))))
+  I* of a final state: []

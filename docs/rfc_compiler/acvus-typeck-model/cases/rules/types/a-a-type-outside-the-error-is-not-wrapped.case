@@ -1,0 +1,9 @@
+//@ spec: l.109
+// E ⇝ Error{N̄(Ē)} only where E is one of Ē (l.109); D is neither A nor C, has
+// no cast, and no conversion is declared, so D does not coerce to
+// Error{A(A), C(C)}.
+extern type A;
+extern type C;
+extern type D;
+
+assert coerce(D, Error{A(A), C(C)}) == none;

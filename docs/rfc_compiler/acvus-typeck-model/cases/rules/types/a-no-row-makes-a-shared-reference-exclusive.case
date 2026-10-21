@@ -1,0 +1,6 @@
+//@ spec: l.106
+// The only row that changes a reference's mutability is &mut T ⇝ &T (l.106);
+// with no cast declared, &A does not coerce to &mut A.
+extern type A;
+
+assert coerce(&A, &mut A) == none;

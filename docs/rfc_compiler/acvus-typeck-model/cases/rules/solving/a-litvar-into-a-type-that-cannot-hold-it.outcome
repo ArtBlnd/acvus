@@ -1,0 +1,11 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value 300: u8
+  value `take(300)`: ()
+  decision take: take#0
+  check `300 ⇝ take.Param(0)`: Ok(Identity)
+  check `take.Result ≤ take(300)`: Ok(Identity)
+  refusal conflict at "300 = take.Param(0)": Lit(LitVar { family: Int, values: {Int(300)} }, Some(Scalar(Int(U8))))
+  I* of a final state: []

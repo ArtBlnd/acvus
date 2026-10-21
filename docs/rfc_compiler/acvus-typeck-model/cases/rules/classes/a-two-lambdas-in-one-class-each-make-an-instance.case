@@ -1,0 +1,40 @@
+//@ spec: l.180, l.188, l.191, l.193, l.203, with l.222, l.301, l.344
+// let f = if c { |x| take_u8(x) } else { |x| take_u16(x) };
+// f(1u8);                  // take_u8(u8), take_u16(u16)
+// Each lambda's use reads its universal, which decides nothing (l.344), and
+// its x ⇝ u8 or x ⇝ u16 rests on it, in its C. Both function values meet in
+// F, whose Values are joined (l.180): a set of lambdas, since at an instance
+// Values is always one (l.191), so {λ1, λ2}. The call reads F and makes an
+// instance for each (l.203); each instance's X' meets 1u8, and λ2's copied
+// u8 ⇝ u16 has no coercion (l.301).
+extern fn take_u8(u8);
+extern fn take_u16(u16);
+
+group λ1 in run {
+    let X1;
+    let `λ1 result`;
+    fn λ1(X1) -> `λ1 result`;
+    let `take_u8(x)`;
+    `take_u8(x)` = take_u8(X1) @ take_u8;
+    `λ1 result` = `take_u8(x)`;
+}
+group λ2 in run {
+    let X2;
+    let `λ2 result`;
+    fn λ2(X2) -> `λ2 result`;
+    let `take_u16(x)`;
+    `take_u16(x)` = take_u16(X2) @ take_u16;
+    `λ2 result` = `take_u16(x)`;
+}
+let `|x| take_u8(x)`: lambda λ1;
+let `|x| take_u16(x)`: lambda λ2;
+let F;
+F = `|x| take_u8(x)`;
+F = `|x| take_u16(x)`;
+let 1u8: u8;
+let `f(1u8)`;
+`f(1u8)` = (F)(1u8) @ `f(1u8)`;
+
+must fail;
+assert `f(1u8)` == calls {λ1, λ2};
+assert failing [`f(1u8)#λ2/X2 ⇝ f(1u8)#λ2/take_u16.Param(0)`];

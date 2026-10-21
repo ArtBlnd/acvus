@@ -1,0 +1,11 @@
+//@ spec: l.318, l.315
+// match 1u8 { None => {} }
+// None is None(_) (l.318), the projection Payload at the scrutinee (l.315),
+// whose kind u8 has no variant None (l.165).
+let 1u8: u8;
+let `None.0`;
+`None.0` = 1u8 as None @ None;
+
+must fail;
+assert None == applied;
+assert refused conflict at "1u8: Variant { enum_name: None, variant: None, payload: ClassId(1) }";

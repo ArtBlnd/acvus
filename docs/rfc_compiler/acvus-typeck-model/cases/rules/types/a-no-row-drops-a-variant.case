@@ -1,0 +1,4 @@
+//@ spec: l.108, l.110
+// The enum row goes to more variants (l.108), and the covariant-part row needs
+// equal members (l.110), so E{V(u8), W(u8)} does not coerce to E{V(u8)}.
+assert coerce(E{V(u8), W(u8)}, E{V(u8)}) == none;

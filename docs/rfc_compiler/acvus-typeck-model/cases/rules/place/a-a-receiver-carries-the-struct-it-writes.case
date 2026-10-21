@@ -1,0 +1,27 @@
+//@ spec: l.325, Example 14 step 2 (l.593)
+// struct Pair { l, r }
+// impl Pair { fn first(self) { self.l } }
+// Pair::first(1u8)
+// The receiver self carries the kind Pair<A, B> as the text writes it, A and B
+// universal (l.325). At the call's instance the argument passes into the copy of
+// that Pair, a boundary (l.593), which u8 reaches by no coercion (l.293).
+struct Pair { l, r }
+
+group first {
+    let `first A`;
+    let `first B`;
+    universal `first A`;
+    universal `first B`;
+    let `self`: Pair<`first A`, `first B`>;
+    let `first result`;
+    fn first(`self`) -> `first result`;
+    let `self.l`;
+    `self.l` = `self`.l @ `self.l`;
+    `first result` = `self.l`;
+}
+let 1u8: u8;
+let `Pair::first(1u8)`;
+`Pair::first(1u8)` = first(1u8) @ call;
+
+must fail;
+assert failing [`1u8 ⇝ first@2/self`];

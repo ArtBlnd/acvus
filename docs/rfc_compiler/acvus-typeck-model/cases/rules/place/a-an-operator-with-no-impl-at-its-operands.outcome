@@ -1,0 +1,17 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value `&x`: &u8
+  value `&y`: &u16
+  value 1u8: u8
+  value 2u16: u16
+  value R: !
+  value X: u8
+  value Y: u16
+  decision `&x`: lend & place
+  decision `&y`: lend & place
+  decision `x + y`: unreached []
+  check `1u8 ≤ X`: Ok(Identity)
+  check `2u16 ≤ Y`: Ok(Identity)
+  I* of a final state: []

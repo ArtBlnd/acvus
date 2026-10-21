@@ -1,0 +1,14 @@
+//@ spec: l.68, l.74
+// l.68 names the array among the structural types and not the slice, so a
+// slice's element is invariant (l.74), related by an equation. A = C fails, so
+// [A] and [C] have no join though A and C join at B; A = B fails, so no row
+// coerces [A] to [B]; ! = u8 fails, and `! ⇝ U` is a row of ! whole.
+extern type A;
+extern type B;
+extern type C;
+#[cast] extern fn a_b(A) -> B;
+#[cast] extern fn c_b(C) -> B;
+
+assert join([A], [C]) == none;
+assert coerce([A], [B]) == none;
+assert coerce([!], [u8]) == none;

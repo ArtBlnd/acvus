@@ -1,0 +1,19 @@
+//@ spec: l.327
+// let x = if c { E::A(1u8) } else { F::A(1u8) };
+// E::A(e) is an enum named E whose only member is A (l.327), and F::A(e) one
+// named F. The name is in the constructor (l.66), so the two have no common
+// node and no join (l.86).
+let P1;
+let 1u8: u8;
+let `E::A(1u8)`: E{A(P1)};
+let P2;
+let `1u8 2`: u8;
+let `F::A(1u8)`: F{A(P2)};
+let X;
+P1 = 1u8;
+P2 = `1u8 2`;
+X = `E::A(1u8)`;
+X = `F::A(1u8)`;
+
+must fail;
+assert refused no_join X;

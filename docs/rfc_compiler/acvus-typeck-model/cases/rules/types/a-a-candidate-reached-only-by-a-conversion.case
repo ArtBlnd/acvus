@@ -1,0 +1,19 @@
+//@ spec: l.112, l.116, l.337, l.344
+// f(make());               // make() -> A; f(u8) -> u8, f(u16) -> u16;
+//                          // a declared conversion A → u8
+// A reaches u8 only by the conversion, which is no composition and has no
+// rank (l.116), and narrowing takes none (l.344); A reaches u16 by nothing.
+// No candidate remains, and the use is not decided.
+extern type A;
+extern fn make() -> A;
+extern fn f(u8) -> u8;
+extern fn f(u16) -> u16;
+#[conversion] extern fn conv(A) -> u8;
+
+let `make()`;
+let `f(..)`;
+`make()` = make() @ make;
+`f(..)` = f(`make()`) @ f;
+
+must fail;
+assert f == unreached [];

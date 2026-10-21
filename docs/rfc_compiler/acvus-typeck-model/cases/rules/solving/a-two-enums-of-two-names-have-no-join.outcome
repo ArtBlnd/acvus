@@ -1,0 +1,17 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value 1u8: u8
+  value 2u8: u8
+  value `E::A(1u8)`: none
+  value `F::B(2u8)`: none
+  value P: none
+  value Q: none
+  value V: none
+  refusal no_join V
+  refusal no_value `E::A(1u8)`
+  refusal no_value `F::B(2u8)`
+  refusal no_value P
+  refusal no_value Q
+  I* of a final state: []

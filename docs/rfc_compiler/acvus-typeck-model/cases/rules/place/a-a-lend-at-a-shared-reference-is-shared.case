@@ -1,0 +1,23 @@
+//@ spec: l.307
+// let x = 1u8;
+// let r = &x;
+// put(&mut r);             // put(&mut u8)
+// r is a shared &X, so &mut r is a shared reference to X, the lesser of the two
+// mutabilities (l.307), and &u8 reaches &mut u8 by no coercion (l.106, l.293).
+extern fn put(&mut u8);
+
+let X;
+let 1u8: u8;
+let `&x`;
+let R;
+let `&mut r`;
+let `put(..)`;
+X = 1u8;
+`&x` = &X @ `&x`;
+R = `&x`;
+`&mut r` = &mut R @ `&mut r`;
+`put(..)` = put(`&mut r`) @ put;
+
+must fail;
+assert `&mut r` == lend & through &;
+assert failing [`&mut r ⇝ put.Param(0)`];

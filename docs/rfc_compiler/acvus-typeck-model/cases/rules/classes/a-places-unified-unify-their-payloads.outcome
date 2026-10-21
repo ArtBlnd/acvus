@@ -1,0 +1,26 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value `&mut a`: none
+  value `&mut b`: none
+  value 1u8: u8
+  value 2u16: u16
+  value A: none
+  value B: none
+  value R: none
+  value S1: u8
+  value S2: u16
+  value `Some(1u8)`: Option⟨u8⟩
+  value `Some(2u16)`: Option⟨u16⟩
+  decision `lend a`: lend &mut place
+  decision `lend b`: lend &mut place
+  partition {A, B}
+  check `1u8 ≤ S1`: Ok(Identity)
+  check `2u16 ≤ S2`: Ok(Identity)
+  refusal no_join `A.Payload(Some)`
+  refusal no_value `&mut a`
+  refusal no_value `&mut b`
+  refusal no_value A
+  refusal no_value R
+  I* of a final state: []

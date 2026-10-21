@@ -1,0 +1,14 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value 1u16: u16
+  value `@n`: u8
+  value F: Fn/0
+  value `|| ..`: Fn/0
+  value `λ result`: ()
+  value `λ's ()`: ()
+  check `|| .. ≤ F`: Ok(Identity)
+  check `1u16 ⇝ @n`: Err(None)
+  check `λ's () ≤ λ result`: Ok(Identity)
+  I* of a final state: []

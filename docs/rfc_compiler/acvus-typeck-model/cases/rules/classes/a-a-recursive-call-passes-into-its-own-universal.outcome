@@ -1,0 +1,17 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value `"s"`: &str
+  value 1u8: u8
+  value A: none
+  value `g result`: none
+  value `g("s")`: !
+  value `g(1u8)`: none
+  value str: str
+  check `"s" ≤ g@2/A`: Ok(Identity)
+  check `g@2/1u8 ⇝ g@2/A`: Err(None)
+  check `g@2/g result ≤ g("s")`: Ok(Identity)
+  check `g@2/g result ≤ g@2/g result`: Ok(Identity)
+  check `g@2/g result ≤ g@2/g result`: Ok(Identity)
+  I* of a final state: []

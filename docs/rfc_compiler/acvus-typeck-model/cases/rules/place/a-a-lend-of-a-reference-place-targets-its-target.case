@@ -1,0 +1,24 @@
+//@ spec: l.307
+// let x = 1u8;
+// let r = &x;
+// take(&r);                // take(&u16)
+// r is &X, so &r lends X itself (l.307), the boundary into &u16 equates X with
+// u16, and the lower bound 1u8 reaches u16 by no coercion (l.293).
+extern fn take(&u16);
+
+let X;
+let 1u8: u8;
+let `&x`;
+let R;
+let `&r`;
+let `take(..)`;
+X = 1u8;
+`&x` = &X @ `&x`;
+R = `&x`;
+`&r` = &R @ `&r`;
+`take(..)` = take(`&r`) @ take;
+
+must fail;
+assert `&x` == lend & place;
+assert `&r` == lend & through &;
+assert failing [`1u8 ≤ X`];

@@ -1,0 +1,27 @@
+//@ spec: l.331, l.337–342
+// let x = 1u8;
+// let y = 2u16;
+// x + y                    // core::add for (&u8, &u8) -> u8 and (&u16, &u16) -> u16
+// x + y is core::add(&x, &y), whose candidates are the lang item's impls (l.331).
+// The first argument keeps the u8 impl alone, which the second, &u16, does not
+// reach (l.337–342).
+extern fn core::add(&u8, &u8) -> u8;
+extern fn core::add(&u16, &u16) -> u16;
+
+let X;
+let 1u8: u8;
+let Y;
+let 2u16: u16;
+let `&x`;
+let `&y`;
+let R;
+X = 1u8;
+Y = 2u16;
+`&x` = &X @ `&x`;
+`&y` = &Y @ `&y`;
+R = core::add(`&x`, `&y`) @ `x + y`;
+
+must fail;
+assert `&x` == lend & place;
+assert `&y` == lend & place;
+assert `x + y` == unreached;

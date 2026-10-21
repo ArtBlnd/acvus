@@ -1,0 +1,13 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value `.0`: !
+  value `.1`: !
+  value `mk()`: (u8,)
+  decision `.0`: applied
+  decision `.1`: applied
+  decision mk: mk#0
+  check `mk.Result ≤ mk()`: Ok(Identity)
+  refusal conflict at "the value of mk()": Fact(Component(1, ClassId(2)), Tuple(1))
+  I* of a final state: []

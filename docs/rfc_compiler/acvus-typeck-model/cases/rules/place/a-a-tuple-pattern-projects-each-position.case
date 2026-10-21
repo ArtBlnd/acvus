@@ -1,0 +1,17 @@
+//@ spec: l.311, l.315, l.319
+// let (_, _) = mk();       // mk() -> (u8,)
+// The pattern records a Component projection at each of its positions (l.315),
+// and _ records nothing (l.319). The scrutinee's value (u8,) has no component 1,
+// so it is no type that meets its kind (l.282).
+extern fn mk() -> (u8,);
+
+let `mk()`;
+let `.0`;
+let `.1`;
+`mk()` = mk() @ mk;
+`.0` = `mk()`.0 @ `.0`;
+`.1` = `mk()`.1 @ `.1`;
+
+must fail;
+assert `.1` == applied;
+assert refused conflict at "the value of mk()";

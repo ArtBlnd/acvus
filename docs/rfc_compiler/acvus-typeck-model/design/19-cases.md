@@ -222,5 +222,9 @@ it. `settle`'s trace holds what changed the state.
   l.267, l.331–344) and fallback (l.297–299). 2 cases under `cases/primitives` test
   the join, `≤` and coercion on the declarations of `fixture::decls()` without
   `Box`, coercion with a conversion `u16 → u8` besides.
+- 56 cases under `cases/rules` are programs the spec's rules refuse in every order, each
+  derived from quoted lines of its region: `types` (l.39–117, 16 of them primitives),
+  `classes` (l.1–38, l.118–223), `solving` (l.224–302) and `place` (l.303–359). The model
+  refuses each at the place its derivation names.
 - H6's case writes the narrative's `q` as `wanted`, and is `XFAIL`.
 - Every case passes, and every golden is the model's.

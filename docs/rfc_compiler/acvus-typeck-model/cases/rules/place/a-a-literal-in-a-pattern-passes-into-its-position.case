@@ -1,0 +1,13 @@
+//@ spec: l.316
+// let x = 1u8;
+// match x { 1u16 => {} }
+// The literal is a value passing into the type of its position (l.316), x's
+// unknown X: a meeting, a second lower bound beside 1u8, with no join (l.86).
+let X;
+let 1u8: u8;
+let 1u16: u16;
+X = 1u8;
+X = 1u16;
+
+must fail;
+assert refused no_join X;
