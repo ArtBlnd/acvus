@@ -214,7 +214,7 @@ A binding group is solved as one constraint graph.
 | C | The equivalence classes left unsolved and the uses, lends, projections, bindings and blocks left undecided when the binding group reaches its fixpoint, and the constraints on them. |
 | Order | A binding group is solved before the binding group in which a use records its C. |
 
-When a use makes an instance, it makes anew the equivalence classes and the uses, lends, projections, bindings and blocks of C that are that binding group's own, puts its type arguments in the universals' places, and records them in its own binding group. Those copies are decided in the binding group they are recorded in. The type arguments are unknowns of the binding group the use lies in. The equivalence classes of an enclosing binding group are not made anew but shared.
+When a use makes an instance, it makes anew the equivalence classes and the uses, lends, projections, bindings and blocks of C that are that binding group's own, puts its type arguments in the universals' places, and records them in its own binding group. Those copies are decided in the binding group they are recorded in. The type arguments are unknowns of the binding group the use lies in. The equivalence classes of an enclosing binding group are not made anew but shared. A lower bound, part lower bound or boundary already split in C is not split again in the copies (Value).
 
 ### Meeting and boundary
 
