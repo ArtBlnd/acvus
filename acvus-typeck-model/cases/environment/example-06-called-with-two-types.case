@@ -1,0 +1,35 @@
+//@ spec: Example 6, l.435–449, called with two types; design/17-environment.md
+// let mut last = None;
+// let remember = |x| last = Some(x);
+// remember(1u8); remember(2u16);
+//@ reading: captures = environment
+group λ in run {
+    let X;
+    let S;
+    let `Some(x)`: Option<S>;
+    let `()`: ();
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    S = X;
+}
+let L;
+let ?k;
+let None: Option<?k>;
+let `|x| ..`: lambda λ;
+let remember;
+L = None;
+remember = `|x| ..`;
+let 1u8: u8;
+let `remember(1u8)`;
+`remember(1u8)` = (remember)(1u8) @ `remember(1u8)`;
+let 2u16: u16;
+let `remember(2u16)`;
+`remember(2u16)` = (remember)(2u16) @ `remember(2u16)`;
+group λ {
+    #[by_name] L = `Some(x)`;
+    `λ result` = `()`;
+}
+
+// Both calls meet X, and u8 ⊔ u16 has no join.
+must fail;
+assert refused no_join;

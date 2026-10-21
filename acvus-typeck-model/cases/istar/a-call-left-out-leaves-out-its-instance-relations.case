@@ -1,0 +1,46 @@
+//@ spec: design/15-istar.md, what the check presupposes
+// let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
+// let put = |w| x = make_b();
+// let f = if c { put } else { choose(x) };   // choose(A) -> Fn/1, choose(B) -> Fn/1
+// f(x);
+// choose and f(x) break their dependencies on each other.
+// Decided after the call, under Deferral::Reading, choose reads X leaving out
+// the call, and with it the instance's make_b() ≤ X, so it reads A, as it does
+// decided before the call (l.267).
+//@ reading: deferral = reading
+extern type A;
+extern type B;
+extern fn make_a() -> A;
+extern fn make_b() -> B;
+#[cast] extern fn up(A) -> B;
+#[conversion] extern fn down(B) -> A;
+extern fn choose(A) -> Fn/1;
+extern fn choose(B) -> Fn/1;
+
+group λ in run {
+    let W;
+    let `()`: ();
+    let `λ result`;
+    let `make_b()`;
+    fn λ(W) -> `λ result`;
+    `λ result` = `()`;
+}
+let X;
+let `make_a()`;
+let `|w| ..`: lambda λ;
+let F;
+let `choose(x)`;
+let `f(x)`;
+`make_a()` = make_a() @ make_a;
+X = `make_a()`;
+F = `|w| ..`;
+`choose(x)` = choose(X) @ choose;
+F = `choose(x)`;
+`f(x)` = (F)(X) @ `f(x)`;
+group λ {
+    `make_b()` = make_b() @ make_b;
+    #[by_name] X = `make_b()`;
+}
+
+must pass;
+assert choose == choose#0;

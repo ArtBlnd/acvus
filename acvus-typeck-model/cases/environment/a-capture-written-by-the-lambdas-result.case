@@ -1,0 +1,38 @@
+//@ spec: design/17-environment.md
+// let mut acc = 0;
+// let f = || acc + 1;      // core::add for u8, u16, i32
+// acc = f();
+// acc + 1 and the lambda's result type are the enclosing group's, and the call's
+// result takes that result type (row 3).
+//@ reading: captures = environment
+extern fn core::add(&u8, &u8) -> u8;
+extern fn core::add(&u16, &u16) -> u16;
+extern fn core::add(&i32, &i32) -> i32;
+
+group λ in run {
+    let `λ result`;
+    let ?1: lit 1;
+    let `&acc`;
+    let `&1`;
+    let R;
+    fn λ() -> `λ result`;
+}
+let ?0: lit 0;
+let ACC;
+let `|| ..`: lambda λ;
+let f;
+let `f()`;
+ACC = ?0;
+f = `|| ..`;
+`f()` = (f)() @ `f()`;
+ACC = `f()`;
+group λ {
+    `&acc` = &ACC @ `&acc`;
+    `&1` = &?1 @ `&1`;
+    R = core::add(`&acc`, `&1`) @ `acc + 1`;
+    `λ result` = R;
+}
+
+must pass;
+assert ACC: i32;
+assert `acc + 1` == core::add#2;

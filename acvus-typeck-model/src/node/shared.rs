@@ -2,6 +2,7 @@
 //! decided (l.252, l.335; `design/08-node.md`, readings 13 and 14).
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName};
@@ -26,7 +27,9 @@ impl State {
     /// candidates share: each position their signatures write alike with no
     /// variable (l.335), and whether each class they would record a lower
     /// bound or an equation into is a reference, where they agree (l.252).
-    pub(crate) fn record_at_once(&mut self) {
+    /// Returns the relations recorded.
+    pub(crate) fn record_at_once(&mut self) -> Range<usize> {
+        let start = self.log.len();
         let uses: Vec<Name> = self
             .nodes
             .iter()
@@ -38,6 +41,7 @@ impl State {
             self.record_shared(&name);
             self.record_references(&name);
         }
+        start..self.log.len()
     }
 
     pub(super) fn record_shared(&mut self, name: &Name) {

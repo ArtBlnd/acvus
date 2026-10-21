@@ -135,13 +135,8 @@ In each, I\* reports nothing and the certificate holds.
 
 Every row of the table holds as derived, each asserted under
 `Captures::Environment`, and under `Captures::AsStated` where the table states it
-(`examples.rs`: `hole_5_a_lambda_reads_a_capture`,
-`hole_o4_a_capture_written_after_a_use_reads_it`,
-`example_6_a_capture_written_by_name`, `example_6_called_with_two_types`,
-`example_6_through_a_reference`, `a_literal_capture_passed_to_a_parameter`,
-`a_capture_lent_in_a_lambda`, `a_lambda_never_called_and_its_environment`,
-`a_capture_written_by_the_lambdas_result`,
-`a_call_left_out_leaves_out_its_instance_relations`). Under
+(the cases under `cases/environment/`, and their twins of one name under
+`cases/spec/`, `cases/holes/` and `cases/istar/`). Under
 `Captures::Environment` each reaches one outcome in every order, I\* reports
 nothing, and the certificate holds of each accepted final state (a refused one has
 nothing to check, note 14).

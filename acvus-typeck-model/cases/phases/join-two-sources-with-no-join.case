@@ -1,0 +1,13 @@
+//@ spec: l.80–90, l.280, l.301
+// u8 and u16 have no common ancestor, so A's sources have no join and A is
+// refused.
+//@ order: solve A
+let A;
+let u8: u8;
+let u16: u16;
+A = u8;
+A = u16;
+
+assert trace "join A has no join: no_join A";
+must fail;
+assert refused no_join A;

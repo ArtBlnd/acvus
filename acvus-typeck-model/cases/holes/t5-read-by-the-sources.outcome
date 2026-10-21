@@ -1,0 +1,15 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: BySources, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value 1: i32
+  value `@cfg`: {name: String}
+  value A: {name: String}
+  value String: String
+  value `a.extra`: i32
+  decision `a.extra`: applied
+  partition {1, `a.extra`}
+  check `1 ≤ a.extra`: Ok(Identity)
+  check `@cfg ≤ A`: Ok(Identity)
+  refusal conflict at "the value of A": Fact(Field(extra, ClassId(3)), Object)
+  I* of a final state: []

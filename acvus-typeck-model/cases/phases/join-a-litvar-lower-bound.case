@@ -1,0 +1,14 @@
+//@ spec: l.176, l.275
+// A LitVar lower bound of a class that waits for nothing is unified with it
+// as the class is solved.
+//@ order: solve A
+let A;
+let 0: lit 0;
+let u8: u8;
+A = u8;
+A = 0;
+
+assert join records `0 = A`;
+must pass;
+assert A: u8;
+assert 0: u8;

@@ -1,0 +1,11 @@
+//@ spec: l.297–299
+// ?k has no source; once nothing is left to solve it falls back to !.
+//@ order: solve A, fallback
+let A;
+let ?k;
+let None: Option<?k>;
+A = None;
+
+assert trace "fallback ?k took !";
+must pass;
+assert A: Option<!>;

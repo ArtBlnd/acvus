@@ -4,6 +4,7 @@
 //! the sources give, the kind the class takes with its parts made anew.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 use std::rc::Rc;
 
 use crate::check::Refusal;
@@ -27,6 +28,23 @@ pub fn head(term: &Term<ClassId>) -> Head {
         constructor: term.constructor(),
         members: term.members(),
     }
+}
+
+/// What an equivalence class took when it was solved (l.275).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Took {
+    /// The kind it held already.
+    Held,
+    /// The join of the constructors and members its sources give, its parts
+    /// made anew, with the refusal where the class could not take it.
+    Joined {
+        head: Head,
+        refused: Option<Refusal>,
+    },
+    /// No source gives a constructor, so it is left unsolved.
+    Nothing,
+    /// Its sources have no join, so it is refused.
+    NoJoin(Refusal),
 }
 
 impl State {
@@ -203,27 +221,31 @@ impl State {
 impl State {
     /// Refuses the equivalence class where it reaches a part of its own along
     /// recorded lower bounds and parts: no finite type holds it, so it has no
-    /// value (l.275). Returns whether it is refused.
-    pub(crate) fn refuse_infinite(&mut self, root: ClassId) -> bool {
+    /// value (l.275). Returns the refusal, where it is refused.
+    pub(crate) fn refuse_infinite(&mut self, root: ClassId) -> Option<Refusal> {
         if !self.reaches_own_part(root) {
-            return false;
+            return None;
         }
         let name = self.class_name(root);
         let members = self.classes.held(root).members.clone();
         self.no_value.extend(members);
-        self.refusals.insert(Refusal::Infinite(name));
-        true
+        let refusal = Refusal::Infinite(name);
+        self.refusals.insert(refusal.clone());
+        Some(refusal)
     }
 
     /// Unifies with the equivalence class each LitVar lower bound of it that
-    /// waits for nothing: the join of a LitVar (l.176).
-    pub(crate) fn join_lit_lowers(&mut self, root: ClassId) {
+    /// waits for nothing: the join of a LitVar (l.176). Returns the
+    /// equations recorded.
+    pub(crate) fn join_lit_lowers(&mut self, root: ClassId) -> Range<usize> {
+        let start = self.log.len();
         let settled = self.settled();
         for lower in self.lower_bounds(root) {
             if self.is_lit(lower) && settled.contains(&self.root(lower)) {
                 self.record(Relation::Equation(lower, root), Recorder::Split(root));
             }
         }
+        start..self.log.len()
     }
 
     /// The equivalence class takes its constructor and members, and is
@@ -231,59 +253,76 @@ impl State {
     /// and members its solved lower bounds and its kinds known in part give
     /// (l.280), its parts made anew. Where they give none it is left
     /// unsolved, and where they have no join it is refused.
-    pub(crate) fn join(&mut self, root: ClassId) {
+    pub(crate) fn join(&mut self, root: ClassId) -> Took {
         let root = self.root(root);
-        if self.classes.held(root).kind.is_none() {
-            let mut sources: Vec<Head> = self
-                .lower_bounds(root)
-                .into_iter()
-                .filter(|&lower| self.is_solved(lower))
-                .filter_map(|lower| self.classes.held(lower).kind.as_ref().map(|(k, _)| head(k)))
-                .collect();
-            sources.extend(self.fact_heads(root));
-            let Some(first) = sources.first().cloned() else {
-                return;
-            };
-            let joined = sources
-                .iter()
-                .skip(1)
-                .try_fold(first, |joined, source| self.head_join(&joined, source));
-            let Some(joined) = joined else {
-                let name = self.class_name(root);
-                let members = self.classes.held(root).members.clone();
-                self.no_value.extend(members);
-                self.refusals.insert(Refusal::NoJoin(name));
-                return;
-            };
-            let owner = self.class_name(root);
-            let kind = self.skeleton(&joined, &owner);
-            let decls = Rc::clone(&self.decls);
-            if let Err(conflict) =
-                self.classes
-                    .give_kind(root, kind, KindSource::Solved, decls.types())
-            {
-                self.refuse_conflict(format!("the value of {owner}"), conflict);
-            }
+        if self.classes.held(root).kind.is_some() {
+            self.classes.mark_solved(root);
+            return Took::Held;
         }
+        let mut sources: Vec<Head> = self
+            .lower_bounds(root)
+            .into_iter()
+            .filter(|&lower| self.is_solved(lower))
+            .filter_map(|lower| self.classes.held(lower).kind.as_ref().map(|(k, _)| head(k)))
+            .collect();
+        sources.extend(self.fact_heads(root));
+        let Some(first) = sources.first().cloned() else {
+            return Took::Nothing;
+        };
+        let joined = sources
+            .iter()
+            .skip(1)
+            .try_fold(first, |joined, source| self.head_join(&joined, source));
+        let Some(joined) = joined else {
+            let name = self.class_name(root);
+            let members = self.classes.held(root).members.clone();
+            self.no_value.extend(members);
+            let refusal = Refusal::NoJoin(name);
+            self.refusals.insert(refusal.clone());
+            return Took::NoJoin(refusal);
+        };
+        let owner = self.class_name(root);
+        let kind = self.skeleton(&joined, &owner);
+        let decls = Rc::clone(&self.decls);
+        let refused = match self
+            .classes
+            .give_kind(root, kind, KindSource::Solved, decls.types())
+        {
+            Ok(()) => None,
+            Err(conflict) => Some(self.refuse_conflict(format!("the value of {owner}"), conflict)),
+        };
         self.classes.mark_solved(root);
+        Took::Joined {
+            head: joined,
+            refused,
+        }
     }
 
     /// Unifies a LitVar lower bound, at `i` in the log, with the solved
     /// equivalence class it bounds, where the LitVar's class waits for nothing
     /// (`settled`): the join of a LitVar (l.176). It is then marked split.
-    pub(crate) fn join_lit_at(&mut self, i: usize, settled: &BTreeSet<ClassId>) {
+    /// Returns the equation recorded, where one is.
+    pub(crate) fn join_lit_at(
+        &mut self,
+        i: usize,
+        settled: &BTreeSet<ClassId>,
+    ) -> Option<Range<usize>> {
         let Relation::LowerBound { lower, upper } = self.log[i].relation else {
-            return;
+            return None;
         };
-        if self.is_lit(lower) && self.is_solved(upper) && settled.contains(&self.root(lower)) {
-            self.split.insert(i);
-            self.record(Relation::Equation(lower, upper), Recorder::Split(upper));
+        if !(self.is_lit(lower) && self.is_solved(upper) && settled.contains(&self.root(lower))) {
+            return None;
         }
+        self.split.insert(i);
+        let start = self.log.len();
+        self.record(Relation::Equation(lower, upper), Recorder::Split(upper));
+        Some(start..self.log.len())
     }
 
     /// Merges each cycle of lower bounds alone into one equivalence class
-    /// (l.275).
-    pub(crate) fn merge_cycles(&mut self) {
+    /// (l.275). Returns the equations recorded.
+    pub(crate) fn merge_cycles(&mut self) -> Range<usize> {
+        let start = self.log.len();
         let mut edges: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
         for recorded in &self.log {
             if let Relation::LowerBound { lower, upper } = recorded.relation {
@@ -318,6 +357,7 @@ impl State {
                 self.record(Relation::Equation(a, b), Recorder::Cycle);
             }
         }
+        start..self.log.len()
     }
 
     /// Whether the equivalence class reaches a part of its own along recorded

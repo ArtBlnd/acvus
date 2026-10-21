@@ -1,0 +1,32 @@
+//@ spec: Example 6, l.435–449
+// let mut last = None;
+// let remember = |x| last = Some(x);
+// remember(1u8);
+group λ in run {
+    let X;
+    let S;
+    let `Some(x)`: Option<S>;
+    let `()`: ();
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    S = X;
+}
+let L;
+let ?k;
+let None: Option<?k>;
+let `|x| ..`: lambda λ;
+let remember;
+L = None;
+remember = `|x| ..`;
+let 1u8: u8;
+let `remember(1u8)`;
+`remember(1u8)` = (remember)(1u8) @ `remember(1u8)`;
+group λ {
+    #[by_name] L = `Some(x)`;
+    `λ result` = `()`;
+}
+
+must pass;
+assert L: Option<u8>;
+// S stays in the lambda's C.
+assert S: none;

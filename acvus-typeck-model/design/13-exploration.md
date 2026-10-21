@@ -31,9 +31,9 @@ outcome is reached.
 
 ## Checks
 
-`explore_with` and `sample_with` hand the final states on; `examples.rs` runs the
-checks on them (`checked`, `sampled`) and states I2 where an example has one
-outcome (`only_outcome`).
+`explore_with` and `sample_with` hand the final states on; the cases' runner
+(`design/19-cases.md`) runs the checks on them and states I2 where a case has one
+outcome, which it expects unless it writes otherwise.
 
 - **I2.** A program meets I2 where exploration is complete and reaches exactly one
   outcome. An exploration its budget cuts short shows nothing of I2, neither that

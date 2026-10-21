@@ -1,0 +1,19 @@
+//@ spec: Example 2, l.377–390
+// let a = Vec::new();      // new() -> Vec<T>
+// fill_all(&mut a);        // fill_all(&mut Vec<u8>)
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+extern fn fill_all(&mut Vec<u8>);
+
+let A;
+let `new()`;
+let `&mut a`;
+let `fill_all(..)`;
+`new()` = new() @ new;
+A = `new()`;
+`&mut a` = &mut A @ lend;
+`fill_all(..)` = fill_all(`&mut a`) @ fill_all;
+
+must pass;
+assert A: Vec<u8>;
+assert lend == lend &mut place;

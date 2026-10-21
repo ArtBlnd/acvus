@@ -1,0 +1,16 @@
+//@ spec: l.252, l.335
+// Both candidates write bool at the result and no variable there, so the use
+// records the result before it is decided, and that its result is no
+// reference.
+//@ order:
+extern fn g(u8) -> bool;
+extern fn g(u16) -> bool;
+
+let x: u8;
+let R;
+R = g(x) @ g;
+
+assert node records `g.Result ≤ R`;
+assert node records `R: no reference`;
+must pass;
+assert R: bool;

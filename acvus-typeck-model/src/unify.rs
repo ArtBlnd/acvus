@@ -7,6 +7,7 @@
 //! the slice's element along the signature of its view (l.161).
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::rc::Rc;
 
 use crate::check::Refusal;
@@ -17,11 +18,23 @@ use crate::sig::SigTy;
 use crate::solve::State;
 use crate::ty::{Mutability, Term};
 
+/// A kind "indexes `τ`" an extern-defined container's class holds, linked to
+/// the slice's element along the signature of its view (l.161): the relations
+/// recorded, and the refusal where the container has no view.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Linked {
+    pub container: ClassId,
+    pub element: ClassId,
+    pub recorded: Range<usize>,
+    pub refused: Option<Refusal>,
+}
+
 impl State {
     /// The equivalence classes take what `relation` records, as it is recorded
     /// (l.230, l.165–170). What no type holds is refused at the relation, and
     /// a type the text writes that disagrees with its declaration is refused.
-    pub(crate) fn hold(&mut self, relation: &Relation) {
+    /// Returns the refusal made.
+    pub(crate) fn hold(&mut self, relation: &Relation) -> Option<Refusal> {
         let decls = Rc::clone(&self.decls);
         let types = decls.types();
         let given = match relation {
@@ -34,9 +47,9 @@ impl State {
                     given
                 }
                 Err(error) => {
-                    self.refusals
-                        .insert(Refusal::Undeclared(format!("{error:?}")));
-                    Ok(())
+                    let refusal = Refusal::Undeclared(format!("{error:?}"));
+                    self.refusals.insert(refusal.clone());
+                    return Some(refusal);
                 }
             },
             Relation::Lit(class, lit) => self.classes.give_lit(*class, lit.clone(), types),
@@ -49,20 +62,21 @@ impl State {
             }
             Relation::LowerBound { .. } | Relation::Boundary { .. } => Ok(()),
         };
-        if let Err(conflict) = given {
-            let at = Named {
-                relation,
-                arena: &self.arena,
-            }
-            .to_string();
-            self.refuse_conflict(at, conflict);
+        let Err(conflict) = given else {
+            return None;
+        };
+        let at = Named {
+            relation,
+            arena: &self.arena,
         }
+        .to_string();
+        Some(self.refuse_conflict(at, conflict))
     }
 
     /// Links each kind "indexes `τ`" an extern-defined container's class holds
     /// to the slice's element along the signature of its view (l.161). A
-    /// container with no view cannot have the kind.
-    pub(crate) fn link_views(&mut self) {
+    /// container with no view cannot have the kind. Returns each link made.
+    pub(crate) fn link_views(&mut self) -> Vec<Linked> {
         let pending: Vec<(ClassId, ClassId)> = self
             .classes
             .roots()
@@ -76,16 +90,25 @@ impl State {
             })
             .filter(|(_, element)| !self.viewed.contains(element))
             .collect();
+        let mut linked = Vec::new();
         for (root, element) in pending {
             self.viewed.insert(element);
-            self.link_view(root, element);
+            linked.push(self.link_view(root, element));
         }
+        linked
     }
 
-    fn link_view(&mut self, root: ClassId, element: ClassId) {
+    pub(crate) fn link_view(&mut self, root: ClassId, element: ClassId) -> Linked {
+        let start = self.log.len();
+        let linked = |state: &State, refused| Linked {
+            container: root,
+            element,
+            recorded: start..state.log.len(),
+            refused,
+        };
         let recorder = Recorder::Split(root);
         let Some((kind, _)) = self.classes.held(root).kind.clone() else {
-            return;
+            return linked(self, None);
         };
         let constructor = kind.constructor();
         let view = self
@@ -104,8 +127,9 @@ impl State {
                 self.class_name(root),
                 self.class_name(element)
             );
-            self.refuse_conflict(at, Conflict::Fact(Fact::Indexes(element), constructor));
-            return;
+            let refused =
+                self.refuse_conflict(at, Conflict::Fact(Fact::Indexes(element), constructor));
+            return linked(self, Some(refused));
         };
         let sig = self.decls.decl(&view).sig.clone();
         let (from, to) = (
@@ -139,17 +163,18 @@ impl State {
             _ => None,
         };
         let (Some(container), Some(slice)) = (target(self, param), target(self, result)) else {
-            return;
+            return linked(self, None);
         };
         let (Some((container_kind, _)), Some((Term::Slice(slice_element), _))) = (
             self.classes.held(container).kind.clone(),
             self.classes.held(slice).kind.clone(),
         ) else {
-            return;
+            return linked(self, None);
         };
         for ((_, part), (_, param_part)) in kind.parts().into_iter().zip(container_kind.parts()) {
             self.record(Relation::Equation(*part, *param_part), recorder.clone());
         }
         self.record(Relation::Equation(element, slice_element), recorder);
+        linked(self, None)
     }
 }

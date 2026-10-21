@@ -1,0 +1,23 @@
+//@ spec: Example 9, l.491–503
+// let mut v = Vec::new();
+// let r = &mut v;
+// let s = &r;
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+
+let V;
+let `new()`;
+let `&mut v`;
+let R;
+let `&r`;
+let S;
+`new()` = new() @ new;
+V = `new()`;
+`&mut v` = &mut V @ `lend v`;
+R = `&mut v`;
+`&r` = &R @ `lend r`;
+S = `&r`;
+
+must pass;
+assert `lend r` == lend & through &mut;
+assert S: &Vec<!>;

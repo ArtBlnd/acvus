@@ -5,8 +5,10 @@
 //! node — and the classes of a type a declaration writes (l.127, l.218).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 use std::rc::Rc;
 
+use crate::check::Refusal;
 use crate::class::{ClassId, ClassName, KindSource};
 use crate::instance::Instance;
 use crate::node::{NodeKind, NodeState};
@@ -16,22 +18,39 @@ use crate::sig::{SigTy, SigVar};
 use crate::solve::State;
 use crate::ty::{Name, PartKey, Term, Ty};
 
+/// A relation's place in the log, and what unification refused at it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Entry {
+    pub at: usize,
+    pub refused: Option<Refusal>,
+}
+
 impl State {
     /// Records the relation, which the equivalence classes take at once
     /// (l.230).
-    pub(crate) fn record(&mut self, relation: Relation, recorder: Recorder) {
-        self.hold(&relation);
+    pub(crate) fn record(&mut self, relation: Relation, recorder: Recorder) -> Entry {
+        let refused = self.hold(&relation);
+        let at = self.log.len();
         self.log.push(Recorded { relation, recorder });
+        Entry { at, refused }
     }
 
     /// The types the text gives its classes: a literal's LitVar, a type the
     /// text or the host writes, and a lambda's function value (l.230).
-    pub(crate) fn record_origins(&mut self, program: &Program, classes: &[&TextClass]) {
+    /// Returns the relations recorded, by their places in the log.
+    pub(crate) fn record_origins(
+        &mut self,
+        program: &Program,
+        classes: &[&TextClass],
+    ) -> Range<usize> {
+        let start = self.log.len();
         for class in classes {
             let id = self.text(&class.name);
             match &class.origin {
                 Origin::Var => {}
-                Origin::Lit(lit) => self.record(Relation::Lit(id, lit.clone()), Recorder::Origin),
+                Origin::Lit(lit) => {
+                    self.record(Relation::Lit(id, lit.clone()), Recorder::Origin);
+                }
                 Origin::Written(term) => {
                     let term = term.clone().map(|_, part| self.text(&part));
                     let relation = Relation::Kind(id, term, KindSource::Written);
@@ -53,27 +72,33 @@ impl State {
                 }
             }
         }
+        start..self.log.len()
     }
 
-    /// The equations the text's invariant places give (l.236).
-    pub(crate) fn record_equations(&mut self, items: &[(usize, &Item)]) {
+    /// The equations the text's invariant places give (l.236). Returns the
+    /// relations recorded.
+    pub(crate) fn record_equations(&mut self, items: &[(usize, &Item)]) -> Range<usize> {
+        let start = self.log.len();
         for &(i, item) in items {
             if let Item::Equation(a, b) = item {
                 let relation = Relation::Equation(self.text(a), self.text(b));
                 self.record(relation, Recorder::Text(i));
             }
         }
+        start..self.log.len()
     }
 
     /// The rest of the text: each value passing into a type, as a meeting or
     /// a boundary (l.226, l.234–235), each call of a function (l.199–202), and
     /// each other use, lend, projection and binding, as a node (l.238).
+    /// Returns the relations recorded.
     pub(crate) fn record_items(
         &mut self,
         program: &Program,
         items: &[(usize, &Item)],
         solved: &BTreeMap<Name, Rc<State>>,
-    ) {
+    ) -> Range<usize> {
+        let start = self.log.len();
         for &(i, item) in items {
             match item {
                 Item::Pass { value, into, place } => {
@@ -177,6 +202,7 @@ impl State {
                 Item::Equation(..) => {}
             }
         }
+        start..self.log.len()
     }
 
     pub(crate) fn add_node(&mut self, name: &Name, kind: NodeKind) {
@@ -195,21 +221,22 @@ impl State {
     /// takes that body's own types: each argument passes into its parameter's
     /// type, universal and so a boundary (Example 10), and the body's result
     /// type enters the use's result. From another group it makes an instance
-    /// of the group's C (l.222).
-    fn call(
+    /// of the group's C (l.222). Returns the relations recorded.
+    pub(crate) fn call(
         &mut self,
         item: usize,
         function: &Function,
         args: &[ClassId],
         result: ClassId,
         solved: &BTreeMap<Name, Rc<State>>,
-    ) {
+    ) -> Range<usize> {
+        let start = self.log.len();
         let recorder = Recorder::Text(item);
         if function.group == self.group || self.enclosing.contains(&function.group) {
             let params: Vec<ClassId> = function.params.iter().map(|p| self.text(p)).collect();
             let returned = self.text(&function.result);
             self.record_call(args, &params, returned, result, &recorder);
-            return;
+            return start..self.log.len();
         }
         let from = Rc::clone(
             solved
@@ -226,8 +253,11 @@ impl State {
         let returned = copy.class(self, from.text(&function.result));
         copy.record_rest(self);
         self.record_call(args, &params, returned, result, &recorder);
+        start..self.log.len()
     }
 
+    /// Each argument passing into its parameter's type, and the result type
+    /// entering the use's result (l.199–202). Returns the relations recorded.
     pub(crate) fn record_call(
         &mut self,
         args: &[ClassId],
@@ -235,7 +265,8 @@ impl State {
         returned: ClassId,
         result: ClassId,
         recorder: &Recorder,
-    ) {
+    ) -> Range<usize> {
+        let start = self.log.len();
         for (&arg, &param) in args.iter().zip(params) {
             let relation = if self.is_unknown(param) {
                 Relation::LowerBound {
@@ -257,6 +288,7 @@ impl State {
             },
             recorder.clone(),
         );
+        start..self.log.len()
     }
 
     /// A class made anew that holds `term` as a declaration writes it.

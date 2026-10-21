@@ -1,0 +1,21 @@
+//@ spec: l.161
+// Once V holds Vec<?>, its kind "indexes v[0]" is linked to the slice's element
+// along the signature of Vec's view.
+//@ order: decide `v[0]`, solve `new()`, solve V
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+#[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
+
+let V;
+let `new()`;
+let `v[0]`;
+let 1u8: u8;
+`new()` = new() @ new;
+V = `new()`;
+`v[0]` = V[] @ `v[0]`;
+`v[0]` = 1u8;
+
+assert trace "unify linked V to `v[0]`";
+assert unify records `v[0] = link(V → v[0])[0].Var(Type(0))`;
+must pass;
+assert V: Vec<u8>;

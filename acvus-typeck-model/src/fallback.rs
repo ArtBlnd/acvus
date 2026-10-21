@@ -4,33 +4,52 @@
 
 use std::rc::Rc;
 
+use crate::check::Refusal;
 use crate::class::{ClassId, KindSource};
 use crate::solve::State;
 use crate::ty::Term;
 
+/// An equivalence class fallen back (l.299): the default it took, with the
+/// refusal where it could not take it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct FellBack {
+    pub class: ClassId,
+    pub default: Term<ClassId>,
+    pub refused: Option<Refusal>,
+}
+
 impl State {
     /// The equivalence classes left to fall back to a default take it
     /// (l.299): those that are not solved and have no unbroken dependency.
-    /// Returns whether any did.
-    pub(crate) fn take_defaults(&mut self) -> bool {
+    pub(crate) fn take_defaults(&mut self) -> Vec<FellBack> {
         let targets = self.fallback_targets();
         let decls = Rc::clone(&self.decls);
         let types = decls.types();
-        for &root in &targets {
+        let mut fell = Vec::new();
+        for root in targets {
             let term = match &self.classes.held(root).lit {
                 Some(lit) => Term::Scalar(lit.default_scalar()),
                 None => Term::Never,
             };
-            if let Err(conflict) = self
-                .classes
-                .give_kind(root, term, KindSource::Solved, types)
-            {
-                let name = self.class_name(root);
-                self.refuse_conflict(format!("the default of {name}"), conflict);
-            }
+            let refused =
+                match self
+                    .classes
+                    .give_kind(root, term.clone(), KindSource::Solved, types)
+                {
+                    Ok(()) => None,
+                    Err(conflict) => {
+                        let name = self.class_name(root);
+                        Some(self.refuse_conflict(format!("the default of {name}"), conflict))
+                    }
+                };
             self.classes.mark_solved(root);
+            fell.push(FellBack {
+                class: root,
+                default: term,
+                refused,
+            });
         }
-        !targets.is_empty()
+        fell
     }
 
     /// The equivalence classes to fall back once nothing is eligible: those

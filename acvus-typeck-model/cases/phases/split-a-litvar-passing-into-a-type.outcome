@@ -1,0 +1,24 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, the written order
+outcome 1
+  accepted
+  value 0: u8
+  value W: u8
+  partition {0, W}
+  check `0 ⇝ W`: Ok(Identity)
+  I* of a final state: []
+step 1 in run: start
+  record the text
+    records W: Scalar(Int(U8))
+    records 0: ?{0}: int
+  record the text
+  record the text
+    records 0 ⇝ W
+  split W: Scalar(Int(U8)): no parts
+  split 0: ?{0}: int: no parts
+step 2 in run: solve 0
+  split unified 0 with what it passes into
+    records 0 = W
+  join 0 held its kind
+  split 0 ⇝ W: one class
+  split 0 = W: no parts

@@ -1,7 +1,9 @@
 # 12 Steps, state, fixpoint and fallback
 
 Rests on the spec's l.295–301. The code is `src/solve.rs`, which composes the
-steps, fallback in `src/fallback.rs`, and acceptance in `src/check.rs`.
+steps, fallback in `src/fallback.rs`, and acceptance in `src/check.rs`. A step, a
+settling and a fallback return the trace of what their phases reported,
+`src/trace.rs` (note 19).
 
 ## Meaning
 

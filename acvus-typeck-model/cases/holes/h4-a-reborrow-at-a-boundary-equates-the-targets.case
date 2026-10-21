@@ -1,0 +1,21 @@
+//@ hole: H4
+// let mut v = Vec::new();  // new() -> Vec<T>
+// look(&mut v);            // look(&Vec<u8>)
+// The constructors &mut and & differ and no cast links them (l.291); the model
+// reads the reborrow row &mut T ⇝ &T as an equation of the targets, so
+// V = Vec<u8>.
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+extern fn look(&Vec<u8>);
+
+let V;
+let `new()`;
+let `&mut v`;
+let `look(..)`;
+`new()` = new() @ new;
+V = `new()`;
+`&mut v` = &mut V @ lend;
+`look(..)` = look(`&mut v`) @ look;
+
+must pass;
+assert V: Vec<u8>;

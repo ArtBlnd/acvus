@@ -1,0 +1,24 @@
+//@ spec: l.99–116
+extern type A;
+extern type B;
+extern type C;
+#[cast] extern fn cast0(A) -> B;
+#[cast] extern fn cast1(C) -> B;
+#[cast] extern fn cast2(&A) -> &B;
+#[cast] extern fn cast3(&mut A) -> &mut B;
+#[conversion] extern fn narrow(u16) -> u8;
+
+assert coerce(A, A) == identity;
+// A cast steps up the tree, and a reborrow comes before it.
+assert coerce(A, B) == cast cast0#0;
+assert coerce(&mut A, &B) == reborrow + cast cast2#0;
+assert coerce(&mut A, &mut B) == cast cast3#0;
+assert coerce(&mut A, &A) == reborrow;
+assert coerce(B, A) == none;
+// ! coerces to every type.
+assert coerce(!, A) == never;
+// A conversion is taken where no composition reaches.
+assert coerce(u16, u8) == conversion narrow#0;
+// Along ≤, no conversion is taken.
+assert along_le(A, B) == cast cast0#0;
+assert along_le(u16, u8) == none;

@@ -1,0 +1,20 @@
+//@ spec: l.284–291
+// The two sides of b ⇝ s have different constructors, so their parts are
+// linked through the signature of the cast between them: S equals the cast's
+// variable, which equals s's argument P.
+//@ order:
+extern type Box<T>;
+extern type Shared<T>;
+#[cast] extern fn share<T>(Box<T>) -> Shared<T>;
+
+let S;
+let P;
+let u8: u8;
+let b: Box<S>;
+let s: Shared<P>;
+S = u8;
+s = b;
+
+assert split records `S = link(b → s)[0].Var(Type(0))`;
+must pass;
+assert P: u8;

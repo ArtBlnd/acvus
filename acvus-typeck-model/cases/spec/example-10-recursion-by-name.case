@@ -1,0 +1,20 @@
+//@ spec: Example 10, l.504–521
+// fn g(a, b) { g(b, a) }
+// g(1u8, "s")
+group g {
+    let A;
+    let B;
+    let R;
+    let `g(b, a)`;
+    fn g(A, B) -> R;
+    `g(b, a)` = g(B, A) @ `g(b, a)`;
+    R = `g(b, a)`;
+}
+let 1u8: u8;
+let str: str;
+let `"s"`: &str;
+let `g(1u8, "s")`;
+`g(1u8, "s")` = g(1u8, `"s"`) @ `g(1u8, "s")`;
+
+must fail;
+assert failing [`g@2/A ⇝ g@2/B`, `g@2/B ⇝ g@2/A`];

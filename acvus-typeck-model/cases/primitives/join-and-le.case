@@ -1,0 +1,30 @@
+//@ spec: l.80–97
+// A, B and C of no argument, the casts A → B and C → B, and &A → &B and
+// &mut A → &mut B.
+extern type A;
+extern type B;
+extern type C;
+#[cast] extern fn cast0(A) -> B;
+#[cast] extern fn cast1(C) -> B;
+#[cast] extern fn cast2(&A) -> &B;
+#[cast] extern fn cast3(&mut A) -> &mut B;
+
+// ! is below every type.
+assert join(!, u8) == u8;
+assert join(A, !) == A;
+// Two nodes are raised to their nearest common ancestor.
+assert join(A, C) == B;
+assert join(A, B) == B;
+assert join(u8, u16) == none;
+// An exclusive reference joins a shared one as shared.
+assert join(&mut A, &B) == &B;
+assert join(&mut A, &mut B) == &mut B;
+// Members are united and covariant parts joined.
+assert join({x: A}, {x: C, y: u8}) == {x: B, y: u8};
+assert join(E{V(A)}, E{W(!)}) == E{V(A), W(!)};
+assert join(Option<A>, Option<C>) == Option<B>;
+// s ≤ t where s ⊔ t = t.
+assert le(A, B);
+assert le(!, A);
+assert not le(B, A);
+assert not le(u8, u16);

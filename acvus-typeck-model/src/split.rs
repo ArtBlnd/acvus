@@ -5,6 +5,7 @@
 //! and `?N ⇝ U` unifies `?N` with `U`.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, LinkAt};
@@ -20,31 +21,50 @@ pub(crate) enum Side {
     Boundary,
 }
 
+/// What became of a relation of the log at a split (l.284).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Split {
+    /// A lower bound or a boundary whose two sides are one equivalence class:
+    /// marked split, nothing left to relate.
+    OneClass,
+    /// A lower bound or a boundary whose two sides are solved: marked split,
+    /// with the relations recorded between their parts.
+    Parts(Range<usize>),
+    /// A lower bound or a boundary whose two sides are not both solved: left
+    /// as it is.
+    Unsolved,
+    /// No lower bound and no boundary: marked split, having no parts to
+    /// relate.
+    NoParts,
+}
+
 impl State {
     /// Splits the relation at `i` in the log where its two sides are solved,
     /// and marks it split where there is nothing left to split: two sides of
     /// one equivalence class, or a relation that is no lower bound and no
-    /// boundary. Returns whether it is marked.
-    pub(crate) fn split_at(&mut self, i: usize) -> bool {
+    /// boundary.
+    pub(crate) fn split_at(&mut self, i: usize) -> Split {
         match self.log[i].relation.clone() {
             Relation::LowerBound { lower, upper } => {
                 if self.root(lower) == self.root(upper) {
                     self.split.insert(i);
+                    Split::OneClass
                 } else if self.splits_now(lower, upper) {
                     self.split.insert(i);
-                    self.split_parts(lower, upper, Side::Lower, upper);
+                    Split::Parts(self.split_parts(lower, upper, Side::Lower, upper))
                 } else {
-                    return false;
+                    Split::Unsolved
                 }
             }
             Relation::Boundary { from, to } => {
                 if self.root(from) == self.root(to) {
                     self.split.insert(i);
+                    Split::OneClass
                 } else if self.splits_now(from, to) {
                     self.split.insert(i);
-                    self.split_parts(from, to, Side::Boundary, from);
+                    Split::Parts(self.split_parts(from, to, Side::Boundary, from))
                 } else {
-                    return false;
+                    Split::Unsolved
                 }
             }
             Relation::Equation(..)
@@ -54,39 +74,49 @@ impl State {
             | Relation::Reference(..)
             | Relation::Values(..) => {
                 self.split.insert(i);
+                Split::NoParts
             }
         }
-        true
     }
 
     /// Whether the parts of a lower bound's or a boundary's two sides are
     /// related now (l.284): once both sides have taken a constructor
     /// (`holes.md`, T2).
-    fn splits_now(&self, a: ClassId, b: ClassId) -> bool {
+    pub(crate) fn splits_now(&self, a: ClassId, b: ClassId) -> bool {
         self.is_solved(a) && self.is_solved(b)
     }
 
     /// `?N ⇝ U` unifies `?N` with `U` (l.291): where the equivalence class
     /// holds a LitVar and no kind, it is unified with each type it passes into
-    /// by a boundary.
-    pub(crate) fn unify_lit_boundaries(&mut self, root: ClassId) {
+    /// by a boundary. Returns the equations recorded.
+    pub(crate) fn unify_lit_boundaries(&mut self, root: ClassId) -> Range<usize> {
+        let start = self.log.len();
         if self.is_lit(root) {
             for to in self.boundaries_from(root) {
                 self.record(Relation::Equation(root, to), Recorder::Split(root));
             }
         }
+        start..self.log.len()
     }
 
     /// Records the relations between the parts of a lower bound's or a
     /// boundary's two sides (l.286), linking the parts through the declared
-    /// casts where their constructors differ (l.291).
-    pub(crate) fn split_parts(&mut self, from: ClassId, to: ClassId, side: Side, by: ClassId) {
+    /// casts where their constructors differ (l.291). Returns the relations
+    /// recorded.
+    pub(crate) fn split_parts(
+        &mut self,
+        from: ClassId,
+        to: ClassId,
+        side: Side,
+        by: ClassId,
+    ) -> Range<usize> {
+        let start = self.log.len();
         let recorder = Recorder::Split(by);
         let (Some((from_kind, _)), Some((to_kind, _))) = (
             self.classes.held(from).kind.clone(),
             self.classes.held(to).kind.clone(),
         ) else {
-            return;
+            return start..self.log.len();
         };
         let (from_c, to_c) = (from_kind.constructor(), to_kind.constructor());
         if from_c == to_c {
@@ -114,7 +144,7 @@ impl State {
                 };
                 self.record(relation, recorder.clone());
             }
-            return;
+            return start..self.log.len();
         }
         if let (
             Term::Ref(Mutability::Exclusive, from_target),
@@ -122,14 +152,14 @@ impl State {
         ) = (&from_kind, &to_kind)
         {
             self.record(Relation::Equation(*from_target, *to_target), recorder);
-            return;
+            return start..self.log.len();
         }
         let path = self
             .decls
             .tree()
             .path(&Node::Owned(from_c.clone()), &Node::Owned(to_c.clone()));
         let Some(path) = path else {
-            return;
+            return start..self.log.len();
         };
         let (from_name, to_name) = (Rc::new(self.class_name(from)), Rc::new(self.class_name(to)));
         let mut current = from;
@@ -161,7 +191,7 @@ impl State {
                 self.classes.held(current).kind.clone(),
                 self.classes.held(param).kind.clone(),
             ) else {
-                return;
+                return start..self.log.len();
             };
             for ((_, current_part), (_, param_part)) in
                 current_kind.parts().into_iter().zip(param_kind.parts())
@@ -174,5 +204,6 @@ impl State {
             current = result;
         }
         self.split_parts(current, to, side, by);
+        start..self.log.len()
     }
 }

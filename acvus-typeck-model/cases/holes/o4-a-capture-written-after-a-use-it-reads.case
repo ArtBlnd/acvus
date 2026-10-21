@@ -1,0 +1,57 @@
+//@ hole: O4
+// let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
+// let put = |v| x = v;
+// probe(x);                // probe(A), probe(B)
+// put(make_b());
+// Three outcomes: probe(B), probe(A) accepted with X B, and probe(A) refused
+// with X A. I* decides probe(B) in each, reading the instance's relations.
+extern type A;
+extern type B;
+extern fn make_a() -> A;
+extern fn make_b() -> B;
+#[cast] extern fn up(A) -> B;
+#[conversion] extern fn down(B) -> A;
+extern fn probe(A);
+extern fn probe(B);
+
+group λ in run {
+    let V;
+    let `()`: ();
+    let `λ result`;
+    fn λ(V) -> `λ result`;
+    `λ result` = `()`;
+}
+let X;
+let `make_a()`;
+let `|v| ..`: lambda λ;
+let put;
+let `make_b()`;
+let `put(..)`;
+let `probe(x)`;
+`make_a()` = make_a() @ make_a;
+X = `make_a()`;
+put = `|v| ..`;
+`probe(x)` = probe(X) @ probe;
+`make_b()` = make_b() @ make_b;
+`put(..)` = (put)(`make_b()`) @ `put(..)`;
+group λ {
+    #[by_name] X = V;
+}
+
+outcome {
+    must fail;
+    assert probe == probe#0;
+    assert X: A;
+    assert istar completeness probe;
+}
+outcome {
+    must pass;
+    assert probe == probe#0;
+    assert X: B;
+    assert istar soundness probe;
+}
+outcome {
+    must pass;
+    assert probe == probe#1;
+    assert X: B;
+}

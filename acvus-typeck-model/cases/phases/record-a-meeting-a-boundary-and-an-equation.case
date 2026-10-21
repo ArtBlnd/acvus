@@ -1,0 +1,18 @@
+//@ spec: l.226, l.230, l.234–236
+// A value passing into an unknown is a meeting, recorded as a lower bound; into
+// a type the text writes, a boundary; an invariant place gives an equation.
+// Each is recorded as the text gives it, before anything is solved.
+//@ order:
+let A;
+let W: u8;
+let B;
+let 1u8: u8;
+A = 1u8;
+W = 1u8;
+A == B;
+
+assert record records `1u8 ≤ A`;
+assert record records `1u8 ⇝ W`;
+assert record records `A = B`;
+must pass;
+assert B: u8;

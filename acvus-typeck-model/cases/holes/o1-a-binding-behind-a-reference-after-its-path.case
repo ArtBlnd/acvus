@@ -1,0 +1,24 @@
+//@ hole: O1
+// let o = Some(1u8);
+// if let Some(x) = &o { }
+// The payload's projection applies to the target of &o (l.309), so the path
+// passes a shared reference and x lends its position (l.317).
+//@ reading: binding_path = after_path
+
+let S;
+let `Some(1u8)`: Option<S>;
+let 1u8: u8;
+let O;
+let `&o`;
+let `Some.0`;
+let X;
+S = 1u8;
+O = `Some(1u8)`;
+`&o` = &O @ `&o`;
+`Some.0` = `&o` as Some @ Some;
+X = bind `Some.0` via [Some] @ x;
+
+must pass;
+assert X: &u8;
+assert Some == applied through &;
+assert x == bind lend & place;

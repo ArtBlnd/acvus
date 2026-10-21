@@ -1,0 +1,15 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value 1u8: u8
+  value `Ok.0`: !
+  value S: u8
+  value `Some(1u8)`: Option⟨u8⟩
+  value V: !
+  decision Ok: applied
+  decision v: read
+  check `1u8 ≤ S`: Ok(Identity)
+  check `Ok.0 ≤ V`: Ok(Identity)
+  refusal conflict at "Some(1u8): Variant { enum_name: None, variant: Ok, payload: ClassId(3) }": Fact(Variant { enum_name: None, variant: Ok, payload: ClassId(3) }, Option)
+  I* of a final state: []

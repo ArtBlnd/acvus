@@ -1,0 +1,18 @@
+//@ spec: l.161
+// let mut v = Vec::new();  // new() -> Vec<T>; the view as_slice(&Vec<T>) -> &[T]
+// v[0] = 1u8;
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+#[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
+
+let V;
+let `new()`;
+let `v[0]`;
+let 1u8: u8;
+`new()` = new() @ new;
+V = `new()`;
+`v[0]` = V[] @ `v[0]`;
+`v[0]` = 1u8;
+
+must pass;
+assert V: Vec<u8>;

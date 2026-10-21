@@ -1,0 +1,29 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  accepted
+  value `&mut x`: &mut Option⟨u8⟩
+  value `()`: ()
+  value `*r`: none
+  value 1u8: u8
+  value ?k: !
+  value None: Option⟨!⟩
+  value R: &mut Option⟨u8⟩
+  value S: u8
+  value `Some(1u8)`: Option⟨u8⟩
+  value X: Option⟨u8⟩
+  value f: Fn/0
+  value `f()`: ()
+  value `|| ..`: Fn/0
+  value `λ result`: ()
+  decision `&mut x`: lend &mut place
+  decision `*r`: applied
+  decision `f()`: calls {λ}
+  check `&mut x ≤ R`: Ok(Identity)
+  check `None ≤ X`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
+  check `f()#λ/Some(1u8) ⇝ f()#λ/*r`: Ok(Identity)
+  check `f()#λ/λ result ≤ f()`: Ok(Identity)
+  check `|| .. ≤ f`: Ok(Identity)
+  check `() ≤ λ result`: Ok(Identity)
+  check `1u8 ≤ S`: Ok(Identity)
+  I* of a final state: []

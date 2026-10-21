@@ -1,0 +1,84 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, 200 sampled orders
+outcome 1
+  refused
+  value `"s"`: &str
+  value `&0`: none
+  value `&1`: none
+  value `&n`: none
+  value `&n 2`: none
+  value 0: none
+  value 0u8: u8
+  value 1: none
+  value 1u8: u8
+  value 3: i32
+  value N: none
+  value `Pair::new(..)`: Pair⟨u8, &str⟩
+  value `Self { l, r }`: none
+  value `Self { l, r }.l`: none
+  value `Self { l, r }.r`: none
+  value `Self { l: self, r: 0u8 }`: none
+  value `Self { l: self, r: 0u8 }.l`: none
+  value `Self { l: self, r: 0u8 }.r`: none
+  value `Self { l: self.r, r: self.l }`: none
+  value `Self { l: self.r, r: self.l }.l`: none
+  value `Self { l: self.r, r: self.l }.r`: none
+  value `n - 1`: none
+  value `n == 0`: none
+  value `nest A`: none
+  value `nest B`: none
+  value `nest result`: u8
+  value `nest self`: none
+  value `new L`: none
+  value `new R`: none
+  value `new result`: none
+  value p: Pair⟨u8, &str⟩
+  value `p.swap()`: none
+  value q: none
+  value `q.nest(3)`: u8
+  value `r: 0u8`: u8
+  value `self.l`: none
+  value `self.r`: none
+  value str: str
+  value `swap A`: none
+  value `swap B`: none
+  value `swap result`: none
+  value `swap self`: none
+  value `….nest(n - 1)`: u8
+  decision `&0`: lend & place
+  decision `&1`: lend & place
+  decision `nest@23/&n`: lend & place
+  decision `nest@23/&n 2`: lend & place
+  decision `nest@23/n - 1`: core::sub#1
+  decision `nest@23/n == 0`: core::eq#1
+  decision `swap@21/self.l`: applied
+  decision `swap@21/self.r`: applied
+  check `"s" ≤ new@19/new R`: Ok(Identity)
+  check `1u8 ≤ new@19/new L`: Ok(Identity)
+  check `3 ≤ nest@23/N`: Ok(Identity)
+  check `Pair::new(..) ≤ p`: Ok(Identity)
+  check `nest@23/&0 ⇝ nest@23/n == 0.Param(1)`: Ok(Identity)
+  check `nest@23/&1 ⇝ nest@23/n - 1.Param(1)`: Ok(Identity)
+  check `nest@23/&n 2 ⇝ nest@23/n - 1.Param(0)`: Ok(Identity)
+  check `nest@23/&n ⇝ nest@23/n == 0.Param(0)`: Ok(Identity)
+  check `nest@23/n - 1 ⇝ nest@23/N`: Ok(Identity)
+  check `nest@23/n - 1.Result ≤ nest@23/n - 1`: Ok(Identity)
+  check `nest@23/n == 0.Result ≤ nest@23/n == 0`: Ok(Identity)
+  check `nest@23/nest result ≤ q.nest(3)`: Ok(Identity)
+  check `new@19/Self { l, r } ≤ new@19/new result`: Ok(Identity)
+  check `new@19/new L ≤ new@19/Self { l, r }.l`: Ok(Identity)
+  check `new@19/new R ≤ new@19/Self { l, r }.r`: Ok(Identity)
+  check `new@19/new result ≤ Pair::new(..)`: Ok(Identity)
+  check `p ⇝ swap@21/swap self`: Ok(Identity)
+  check `0u8 ≤ nest result`: Ok(Identity)
+  check `nest result ≤ ….nest(n - 1)`: Ok(Identity)
+  check `….nest(n - 1) ≤ nest result`: Ok(Identity)
+  refusal infinite `p.swap().Arg(0)`
+  refusal no_value `p.swap()`
+  refusal no_value q
+  refusal no_value `p.swap().Arg(1)`
+  refusal no_value `nest@23/Self { l: self, r: 0u8 }`
+  refusal no_value `nest@23/nest self`
+  refusal no_value `swap@21/Self { l: self.r, r: self.l }`
+  refusal no_value `swap@21/swap result`
+  I* of a final state: []

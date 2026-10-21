@@ -1,0 +1,34 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, the written order
+outcome 1
+  accepted
+  value P: u8
+  value S: u8
+  value b: Box⟨u8⟩
+  value s: Shared⟨u8⟩
+  value u8: u8
+  partition {P, S}
+  check `b ⇝ s`: Ok(Composition { reborrow: false, casts: [DeclId { name: share, overload: 0 }], structural: None })
+  check `u8 ≤ S`: Ok(Identity)
+  I* of a final state: []
+step 1 in run: start
+  record the text
+    records u8: Scalar(Int(U8))
+    records b: Extern { name: Box, args: [S], identity: None }
+    records s: Extern { name: Shared, args: [P], identity: None }
+  record the text
+  record the text
+    records u8 ≤ S
+    records b ⇝ s
+  split u8: Scalar(Int(U8)): no parts
+  split b: Extern { name: Box, args: [S], identity: None }: no parts
+  split s: Extern { name: Shared, args: [P], identity: None }: no parts
+  split b ⇝ s: parts
+    records link(b → s)[0].Param: Extern { name: Box, args: [link(b → s)[0].Var(Type(0))], identity: None }
+    records link(b → s)[0].Result: Extern { name: Shared, args: [link(b → s)[0].Var(Type(0))], identity: None }
+    records S = link(b → s)[0].Var(Type(0))
+    records link(b → s)[0].Var(Type(0)) = P
+  split link(b → s)[0].Param: Extern { name: Box, args: [link(b → s)[0].Var(Type(0))], identity: None }: no parts
+  split link(b → s)[0].Result: Extern { name: Shared, args: [link(b → s)[0].Var(Type(0))], identity: None }: no parts
+  split S = link(b → s)[0].Var(Type(0)): no parts
+  split link(b → s)[0].Var(Type(0)) = P: no parts

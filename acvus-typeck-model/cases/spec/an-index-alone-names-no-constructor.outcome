@@ -1,0 +1,12 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value 1: i32
+  value A: !
+  value `a[0]`: i32
+  decision `a[0]`: applied
+  partition {1, `a[0]`}
+  check `1 ≤ a[0]`: Ok(Identity)
+  refusal conflict at "the default of A": Fact(Indexes(ClassId(1)), Never)
+  I* of a final state: []

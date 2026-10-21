@@ -1,0 +1,12 @@
+//@ spec: l.161, l.280, l.299
+// let a;
+// a[0] = 1;
+// The kind "indexes τ" names no member, so A has no source that gives a
+// constructor and falls back to !, which holds no element.
+let A;
+let `a[0]`;
+let 1: lit 1;
+`a[0]` = A[] @ `a[0]`;
+`a[0]` = 1;
+
+must fail;

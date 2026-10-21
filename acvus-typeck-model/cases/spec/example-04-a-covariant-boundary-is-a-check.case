@@ -1,0 +1,22 @@
+//@ spec: Example 4, l.406–421
+// let x = None;
+// let y = if c { x } else { Some(1u16) };
+// take(x);                 // take(Option<u8>), encoded as the boundary it records
+let X;
+let ?k;
+let None: Option<?k>;
+let Y;
+let S;
+let u16: u16;
+let `Some(1u16)`: Option<S>;
+let u8: u8;
+let `Option⟨u8⟩`: Option<u8>;
+X = None;
+Y = X;
+S = u16;
+Y = `Some(1u16)`;
+`Option⟨u8⟩` = X;
+
+must pass;
+assert X: Option<!>;
+assert Y: Option<u16>;

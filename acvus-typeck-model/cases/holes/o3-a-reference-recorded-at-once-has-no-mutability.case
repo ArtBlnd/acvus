@@ -1,0 +1,27 @@
+//@ hole: O3
+// let r = first(x);        // x: A; first(A) -> &u8, first(B) -> &mut u8
+// let s = &mut r;
+// Both candidates return a reference, so first records at once that its result
+// is one (l.252), and the lend no longer depends on it (l.248). Decided before
+// first, the lend reads r as a reference whose mutability the value read does
+// not decide, and &mut gives no result (l.307).
+extern type A;
+extern type B;
+extern fn first(A) -> &u8;
+extern fn first(B) -> &mut u8;
+
+let x: A;
+let `first(x)`;
+let R;
+let `&mut r`;
+`first(x)` = first(x) @ first;
+R = `first(x)`;
+`&mut r` = &mut R @ `&mut r`;
+
+outcome {
+    assert `&mut r` == no result;
+    assert istar completeness `&mut r`;
+}
+outcome {
+    assert `&mut r` == lend & through &;
+}

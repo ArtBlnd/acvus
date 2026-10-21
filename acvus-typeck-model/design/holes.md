@@ -48,8 +48,8 @@ A view impl is a cast from a reference to a container to a reference to a slice 
 `&V ⇝ &[u8]` the two sides have one constructor, and the target, an invariant part,
 gives the equation `V = [u8]` (l.289); the casts link parts only where constructors
 differ (l.291). The view is never taken, and `make() ≤ V` with `make() -> Vec⟨u8⟩`
-fails. Witness, refused by the model (`examples.rs`,
-`hole_3_a_view_at_a_boundary_equates_the_targets`):
+fails. Witness, refused by the model
+(`cases/holes/h3-a-view-at-a-boundary-equates-the-targets.case`):
 
 ```
 let v = make();          // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
@@ -67,8 +67,8 @@ and no cast links them (l.291), so nothing relates `X` and `Y`. In
 `look(&mut v)` with `look(&Vec⟨u8⟩)` and `v = Vec::new()`, `v`'s argument has no
 relation and falls back to `!`, and `&mut Vec⟨!⟩ ⇝ &Vec⟨u8⟩` fails. The model
 relates the targets by an equation, as the reborrow row `&mut T ⇝ &T` keeps `T`
-(`design/11-value.md`, reading 2), and accepts it (`examples.rs`,
-`hole_4_a_reborrow_at_a_boundary_equates_the_targets`).
+(`design/11-value.md`, reading 2), and accepts it
+(`cases/holes/h4-a-reborrow-at-a-boundary-equates-the-targets.case`).
 
 ## H5. A lambda's node that reads a capture
 
@@ -80,8 +80,8 @@ alone (l.216, l.269), and no row makes anything wait for what the enclosing grou
 records into a shared class (l.244–250); only a universal waits for something
 outside (l.246). So a lambda's use that reads a capture is decided when the lambda
 is solved, before the enclosing group records anything into it, and reads it as
-nothing. Witness, refused by the model (`examples.rs`,
-`hole_5_a_lambda_reads_a_capture`):
+nothing. Witness, refused by the model
+(`cases/holes/h5-a-lambda-reads-a-capture.case`):
 
 ```
 let x = make();          // make() -> A
@@ -97,7 +97,7 @@ Read by functions §2, what a lambda's captured environment holds is not
 generalized and belongs to where it was written (`design/17-environment.md`,
 `Captures::Environment`): `probe` names the capture `X`, so it is the enclosing
 group's, decided there once, and reads `X` as `A`. One outcome, accepted, in every
-order (same test).
+order (`cases/environment/h5-a-lambda-reads-a-capture.case`).
 
 ## H6. Example 14's `q` has no value
 
@@ -112,8 +112,8 @@ copied `P = A` with `P ≥ Pair⟨A, B⟩` (l.594) gives that part the lower bou
 `Pair⟨A', B'⟩`, which holds it. So the part reaches a part of its own along lower
 bounds and parts, has no value (l.275), and `q` has none. Example 14 is refused, as
 the spec has it, but at `q`'s first part, and `q` has no value. Witness: Example 14
-itself (`examples.rs`, `example_14_a_struct_and_recursion_that_grows`, sampled
-orders). The narrative's check holds only of a class whose value an equation
+itself (`cases/holes/h6-example-14-a-struct-and-recursion-that-grows.case`, sampled
+orders), whose `wanted` block holds the narrative's `q`. The narrative's check holds only of a class whose value an equation
 decides (l.293).
 
 ## H7. Two uses that read one class
@@ -123,8 +123,8 @@ it reads (l.247), and the nodes that record relations into a class are those the
 class depends on (l.250): by l.244 (b), the relations not yet recorded into it by a
 node at whose position it lies. So two uses that both read a class depend on each
 other, each breaks its dependency on the other (l.269), and each reads the class
-without the other's relations. Witness, refused in every order (`examples.rs`,
-`hole_7_two_uses_that_read_one_class`):
+without the other's relations. Witness, refused in every order
+(`cases/holes/h7-two-uses-that-read-one-class.case`):
 
 ```
 let mut x = 0;
@@ -194,8 +194,8 @@ itself has an equation, which a kind cannot grow (Example 8). Patterns §2 has a
 enum grow only "where every use of the enum is visible", and an enum not visible
 there does not grow; read so, a class with a lower bound the host gives grows by no
 kind. Witness, accepted read by the member with `a: {extra: i32, name: String}`,
-refused read by the sources (`examples.rs`,
-`hole_t5_a_field_on_a_class_the_host_bounds`):
+refused read by the sources (`cases/holes/t5-a-field-on-a-class-the-host-bounds.case`,
+`cases/holes/t5-read-by-the-sources.case`):
 
 ```
 let a = @cfg;            // @cfg is { name: String }, given by the host
@@ -211,8 +211,8 @@ Patterns §4 has a scrutinee of type `!` reach no arm, each slot of its pattern
 deciding nothing of its type. In the spec, a projection of the pattern gives the
 scrutinee's class a kind known in part (l.311–315), and its value must meet that
 kind (l.282). `!` has no part, so it meets none, and the program is refused; the
-spec states no exception for `!`. Witness, refused by the model (`examples.rs`,
-`hole_t6_a_pattern_on_a_scrutinee_of_type_never`):
+spec states no exception for `!`. Witness, refused by the model
+(`cases/holes/t6-a-pattern-on-a-scrutinee-of-type-never.case`):
 
 ```
 let n = never();         // never() -> !
@@ -231,8 +231,7 @@ its path. So nothing makes a binding wait for them, and nothing it reads tells i
 what they became. Under the dependencies l.248 states, the outcome depends on the
 order: a binding decided before its path's projection reads its position, and one
 decided after lends it. Witness, two outcomes in the model, `x: u8` and `x: &u8`,
-both accepted (`examples.rs`, `a_binding_behind_a_reference_lends_its_position`,
-`BindingPath::AsStated`):
+both accepted (`cases/holes/o1-a-binding-behind-a-reference-as-stated.case`):
 
 ```
 let o = Some(1u8);
@@ -268,7 +267,7 @@ the class is a reference (l.252), and a lend that reads it no longer depends on 
 use (l.248). The record names no mutability, and a lend's mutability is the lesser
 of its own and its place's (l.307), so a `&mut` lend decided before the use has no
 result. Witness, two outcomes in the model, one where the lend gives no result
-(`examples.rs`, `hole_o3_a_reference_recorded_at_once_has_no_mutability`):
+(`cases/holes/o3-a-reference-recorded-at-once-has-no-mutability.case`):
 
 ```
 let r = first(x);        // x: A; first(A) -> &u8, first(B) -> &mut u8
@@ -287,7 +286,7 @@ call of the lambda's value is decided and makes its instance (l.203). Until then
 nothing at the capture's class waits for that call: the class lies at no position
 of it (l.244 (b)). So the capture's class may be solved before the call or after
 it, and so may a use reading it. Witness, three outcomes in the model
-(`examples.rs`, `hole_o4_a_capture_written_after_a_use_reads_it`): `probe` decided
+(`cases/holes/o4-a-capture-written-after-a-use-it-reads.case`): `probe` decided
 as `probe(B)`, accepted; as `probe(A)`, accepted with `x: B`, `B ⇝ A` being the
 conversion; and as `probe(A)`, refused with `x: A`, at the instance's `V ≤ X`
 (l.301), `X` solved before the instance recorded it:

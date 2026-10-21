@@ -1,0 +1,12 @@
+//@ spec: l.299
+// Solving A unifies its LitVar lower bound with it (l.176), and no source gives
+// a constructor; at the fixpoint, the class falls back to the LitVar's family's
+// default, i32 for an integer.
+//@ order: solve A, fallback
+let A;
+let 0: lit 0;
+A = 0;
+
+assert trace "fallback 0 took i32";
+must pass;
+assert A: i32;

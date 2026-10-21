@@ -47,11 +47,14 @@ pub struct Outcome {
 }
 
 impl State {
-    pub(crate) fn refuse_conflict(&mut self, at: String, conflict: Conflict) {
-        self.refusals.insert(Refusal::Conflict {
+    /// Refuses at `at` what no type holds, and returns the refusal.
+    pub(crate) fn refuse_conflict(&mut self, at: String, conflict: Conflict) -> Refusal {
+        let refusal = Refusal::Conflict {
             at,
             conflict: format!("{conflict:?}"),
-        });
+        };
+        self.refusals.insert(refusal.clone());
+        refusal
     }
 
     /// Checks each value the text makes enter a type (l.293), in the order of

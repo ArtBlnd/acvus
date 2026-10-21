@@ -1,0 +1,29 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, the written order
+outcome 1
+  refused
+  value 1: i32
+  value `@cfg`: {name: String}
+  value `@cfg.extra`: i32
+  value String: String
+  decision `@cfg.extra`: applied
+  partition {1, `@cfg.extra`}
+  check `1 ≤ @cfg.extra`: Ok(Identity)
+  refusal conflict at "@cfg: Field(extra, ClassId(2))": Fact(Field(extra, ClassId(2)), Object)
+  I* of a final state: []
+step 1 in run: start
+  record the text
+    records String: String
+    records @cfg: Object({name: String})
+    records 1: ?{1}: int
+  record the text
+  record the text
+    records 1 ≤ @cfg.extra
+  split String: String: no parts
+  split @cfg: Object({name: String}): no parts
+  split 1: ?{1}: int: no parts
+step 2 in run: decide `@cfg.extra`
+  node decided `@cfg.extra` as applied
+    records @cfg: Field(extra, ClassId(2))
+  split @cfg: Field(extra, ClassId(2)): no parts
+  refused conflict at "@cfg: Field(extra, ClassId(2))": Fact(Field(extra, ClassId(2)), Object)

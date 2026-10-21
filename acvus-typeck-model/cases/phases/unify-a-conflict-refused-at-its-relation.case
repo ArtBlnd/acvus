@@ -1,0 +1,15 @@
+//@ spec: l.165–170
+// The projection, decided, records that @cfg has the field extra, which the
+// object {name} the host gives does not hold: refused at that relation.
+//@ order: decide `@cfg.extra`
+let String: String;
+let `@cfg`: host {name: String};
+let `@cfg.extra`;
+let 1: lit 1;
+`@cfg.extra` = `@cfg`.extra @ `@cfg.extra`;
+`@cfg.extra` = 1;
+
+assert trace "node decided `@cfg.extra` as applied";
+assert node records `@cfg: Field(extra, ClassId(2))`;
+must fail;
+assert refused conflict at "@cfg: Field(extra, ClassId(2))";

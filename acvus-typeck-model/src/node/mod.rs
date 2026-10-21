@@ -11,6 +11,7 @@ mod position;
 mod shared;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, Fact};
@@ -170,10 +171,19 @@ pub enum NodeAt {
     Target,
 }
 
+/// A node decided (l.267), with the relations recorded once it is: its own,
+/// and those of the nodes deferred on it that it lets record (l.269).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Decided {
+    pub node: Name,
+    pub decision: Decision,
+    pub recorded: Range<usize>,
+}
+
 impl State {
     /// Decides as it is recorded a node that reads nothing: a Deref, and a use
     /// with one candidate or none (`design/08-node.md`, readings 1 and 6).
-    pub(crate) fn decide_at_once(&mut self) {
+    pub(crate) fn decide_at_once(&mut self) -> Vec<Decided> {
         let at_once: Vec<(Name, Decision)> = self
             .nodes
             .iter()
@@ -193,13 +203,21 @@ impl State {
                 _ => None,
             })
             .collect();
+        let mut decided = Vec::new();
         for (name, decision) in at_once {
-            self.set_decision(&name, decision);
+            let start = self.log.len();
+            self.set_decision(&name, decision.clone());
             self.record_decision(&name);
+            decided.push(Decided {
+                node: name,
+                decision,
+                recorded: start..self.log.len(),
+            });
         }
+        decided
     }
 
-    fn set_decision(&mut self, name: &Name, decision: Decision) {
+    pub(crate) fn set_decision(&mut self, name: &Name, decision: Decision) {
         self.nodes
             .get_mut(name)
             .expect("the node is the state's")
@@ -208,24 +226,32 @@ impl State {
 
     /// Decides the node by the value it reads, and records what it records
     /// as the reading of l.269 takes it.
-    pub(crate) fn decide(&mut self, name: &Name) {
+    pub(crate) fn decide(&mut self, name: &Name) -> Decided {
+        let start = self.log.len();
         let decision = self.decision_of(name);
         let waiting = self.broken_on(name);
-        self.set_decision(name, decision);
+        self.set_decision(name, decision.clone());
         self.broken.remove(name);
         self.defer(name, waiting);
+        Decided {
+            node: name.clone(),
+            decision,
+            recorded: start..self.log.len(),
+        }
     }
 
     /// Records what the node just decided records, or defers it, as the
     /// reading takes l.269 (`Deferral`; `holes.md`, O2), `waiting` being the
     /// undecided nodes that broke their dependency on it; then records what
     /// each deferred node records once the nodes it waits for are decided.
-    fn defer(&mut self, name: &Name, waiting: BTreeSet<Name>) {
+    pub(crate) fn defer(&mut self, name: &Name, waiting: BTreeSet<Name>) {
         match self.readings.deferral {
             Deferral::Recording if !waiting.is_empty() => {
                 self.deferred.insert(name.clone(), waiting);
             }
-            Deferral::Recording => self.record_decision(name),
+            Deferral::Recording => {
+                self.record_decision(name);
+            }
             Deferral::Reading => {
                 for node in waiting {
                     self.broken.entry(node).or_default().insert(name.clone());
@@ -254,7 +280,7 @@ impl State {
         }
     }
 
-    fn decision_of(&self, name: &Name) -> Decision {
+    pub(crate) fn decision_of(&self, name: &Name) -> Decision {
         self.decision_under(name, &self.excluded(name))
     }
 
@@ -320,11 +346,13 @@ impl State {
         }
     }
 
-    /// Records what the decided node records.
-    fn record_decision(&mut self, name: &Name) {
+    /// Records what the decided node records. Returns the relations
+    /// recorded.
+    pub(crate) fn record_decision(&mut self, name: &Name) -> Range<usize> {
+        let start = self.log.len();
         let node = self.nodes[name].clone();
         let Some(decision) = node.decision else {
-            return;
+            return start..self.log.len();
         };
         let recorder = Recorder::Node(name.clone());
         let owner = Rc::new(name.clone());
@@ -458,5 +486,6 @@ impl State {
             }
             _ => {}
         }
+        start..self.log.len()
     }
 }

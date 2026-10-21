@@ -1,0 +1,16 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  refused
+  value N: !
+  value `Some.0`: !
+  value X: !
+  value `never()`: !
+  decision Some: applied
+  decision never: never#0
+  decision x: read
+  check `Some.0 ≤ X`: Ok(Identity)
+  check `never() ≤ N`: Ok(Identity)
+  check `never.Result ≤ never()`: Ok(Identity)
+  refusal conflict at "the value of N": Fact(Variant { enum_name: None, variant: Some, payload: ClassId(2) }, Never)
+  I* of a final state: []

@@ -1,0 +1,28 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: Environment }, every order
+outcome 1
+  accepted
+  value `&1`: &i32
+  value `&acc`: &i32
+  value ?0: i32
+  value ?1: i32
+  value ACC: i32
+  value R: i32
+  value f: Fn/0
+  value `f()`: i32
+  value `|| ..`: Fn/0
+  value `λ result`: i32
+  decision `&1`: lend & place
+  decision `&acc`: lend & place
+  decision `acc + 1`: core::add#2
+  decision `f()`: calls {λ}
+  partition {?0, ACC}
+  check `&1 ⇝ acc + 1.Param(1)`: Ok(Identity)
+  check `&acc ⇝ acc + 1.Param(0)`: Ok(Identity)
+  check `?0 ≤ ACC`: Ok(Identity)
+  check `R ≤ λ result`: Ok(Identity)
+  check `acc + 1.Result ≤ R`: Ok(Identity)
+  check `f() ≤ ACC`: Ok(Identity)
+  check `|| .. ≤ f`: Ok(Identity)
+  check `λ result ≤ f()`: Ok(Identity)
+  I* of a final state: []

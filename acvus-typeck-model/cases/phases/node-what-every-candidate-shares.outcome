@@ -1,0 +1,22 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, the written order
+outcome 1
+  accepted
+  value R: bool
+  value x: u8
+  decision g: g#0
+  check `g.Result ≤ R`: Ok(Identity)
+  check `x ⇝ g.Param(0)`: Ok(Identity)
+  I* of a final state: []
+step 1 in run: start
+  record the text
+    records x: Scalar(Int(U8))
+  record the text
+  record the text
+  node recorded what candidates share
+    records g.Result: Scalar(Bool)
+    records g.Result ≤ R
+    records R: no reference
+  split x: Scalar(Int(U8)): no parts
+  split g.Result: Scalar(Bool): no parts
+  split R: no reference: no parts

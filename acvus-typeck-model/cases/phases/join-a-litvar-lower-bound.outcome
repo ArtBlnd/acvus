@@ -1,0 +1,28 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, the written order
+outcome 1
+  accepted
+  value 0: u8
+  value A: u8
+  value u8: u8
+  partition {0, A}
+  check `0 ≤ A`: Ok(Identity)
+  check `u8 ≤ A`: Ok(Identity)
+  I* of a final state: []
+step 1 in run: start
+  record the text
+    records 0: ?{0}: int
+    records u8: Scalar(Int(U8))
+  record the text
+  record the text
+    records u8 ≤ A
+    records 0 ≤ A
+  split 0: ?{0}: int: no parts
+  split u8: Scalar(Int(U8)): no parts
+step 2 in run: solve A
+  join unified 0 with its LitVar lower bounds
+    records 0 = A
+  join 0 took Scalar(Int(U8))
+  split u8 ≤ A: parts
+  split 0 ≤ A: one class
+  split 0 = A: no parts

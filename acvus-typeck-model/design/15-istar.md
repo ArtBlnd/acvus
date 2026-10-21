@@ -118,7 +118,7 @@ never records.
   `let f = if c { put } else { choose(x) }; f(x);` with `put = |w| x = make_b()`,
   `choose(A)`, `choose(B)` and `make_a() ≤ X` reached `choose(A)` and `choose(B)`
   by order under `Deferral::Reading`, and now reaches `choose(A)` in every order
-  (`examples.rs`, `a_call_left_out_leaves_out_its_instance_relations`).
+  (`cases/istar/a-call-left-out-leaves-out-its-instance-relations.case`).
 
 ## Expected results
 
@@ -134,8 +134,8 @@ Before the check runs, as its acceptance criteria:
 
 Run, the check reports these and no others: each witness of `holes.md` asserts,
 for the outcome of each final state, the nodes it reports there and how, and every
-other example asserts it reports none (`examples.rs`, `Checked::istar_by`,
-`outcomes`). O4's `probe(A)` is a soundness violation
+other example asserts it reports none (`design/19-cases.md`: a case's `assert istar`,
+none where it writes none, of every final state). O4's `probe(A)` is a soundness violation
 where the program is accepted and a completeness one in its third outcome,
 refused at `put(..)#λ/V ≤ X` (`holes.md`, O4). Example 14 reports none over its
 sampled orders.

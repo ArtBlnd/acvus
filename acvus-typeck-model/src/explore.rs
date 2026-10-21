@@ -82,7 +82,7 @@ where
             let steps = state.steps();
             if steps.is_empty() {
                 let mut next = state.clone();
-                if next.fall_back() {
+                if next.fall_back().fell_back() {
                     work.push(next);
                 } else {
                     visit(&Final {
@@ -177,7 +177,7 @@ where
                 state.step(&steps[picks.next(steps.len())]);
                 continue;
             }
-            if !state.fall_back() {
+            if !state.fall_back().fell_back() {
                 break;
             }
         }

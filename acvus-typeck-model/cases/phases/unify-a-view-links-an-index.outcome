@@ -1,0 +1,53 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, the written order
+outcome 1
+  accepted
+  value 1u8: u8
+  value V: Vec⟨u8⟩
+  value `new()`: Vec⟨u8⟩
+  value `v[0]`: u8
+  decision new: new#0
+  decision `v[0]`: applied
+  check `1u8 ≤ v[0]`: Ok(Identity)
+  check `new() ≤ V`: Ok(Identity)
+  check `new.Result ≤ new()`: Ok(Identity)
+  I* of a final state: []
+step 1 in run: start
+  record the text
+    records 1u8: Scalar(Int(U8))
+  record the text
+  record the text
+    records new() ≤ V
+    records 1u8 ≤ v[0]
+  node decided new as new#0
+    records new.Result: Extern { name: Vec, args: [new.Var(Type(0))], identity: None }
+    records new.Result ≤ new()
+  split 1u8: Scalar(Int(U8)): no parts
+  split new.Result: Extern { name: Vec, args: [new.Var(Type(0))], identity: None }: no parts
+step 2 in run: decide `v[0]`
+  node decided `v[0]` as applied
+    records V: Indexes(ClassId(2))
+  split V: Indexes(ClassId(2)): no parts
+step 3 in run: solve `new()`
+  join `new()` took Extern(Vec)
+  split new.Result ≤ new(): parts
+    records new.Var(Type(0)) = new().Arg(0)
+  split new.Var(Type(0)) = new().Arg(0): no parts
+step 4 in run: solve V
+  join V took Extern(Vec)
+  unify linked V to `v[0]`
+    records link(V → v[0])[0].Param.Target: Extern { name: Vec, args: [link(V → v[0])[0].Var(Type(0))], identity: None }
+    records link(V → v[0])[0].Param: Ref(Shared, link(V → v[0])[0].Param.Target)
+    records link(V → v[0])[0].Result.Target: Slice(link(V → v[0])[0].Var(Type(0)))
+    records link(V → v[0])[0].Result: Ref(Shared, link(V → v[0])[0].Result.Target)
+    records V.Arg(0) = link(V → v[0])[0].Var(Type(0))
+    records v[0] = link(V → v[0])[0].Var(Type(0))
+  split new() ≤ V: parts
+    records new().Arg(0) = V.Arg(0)
+  split link(V → v[0])[0].Param.Target: Extern { name: Vec, args: [link(V → v[0])[0].Var(Type(0))], identity: None }: no parts
+  split link(V → v[0])[0].Param: Ref(Shared, link(V → v[0])[0].Param.Target): no parts
+  split link(V → v[0])[0].Result.Target: Slice(link(V → v[0])[0].Var(Type(0))): no parts
+  split link(V → v[0])[0].Result: Ref(Shared, link(V → v[0])[0].Result.Target): no parts
+  split V.Arg(0) = link(V → v[0])[0].Var(Type(0)): no parts
+  split v[0] = link(V → v[0])[0].Var(Type(0)): no parts
+  split new().Arg(0) = V.Arg(0): no parts

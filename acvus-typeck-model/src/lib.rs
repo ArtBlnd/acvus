@@ -3,14 +3,14 @@
 //! `docs/transparency-constraint-type-system-kr.md`, and a line number in this
 //! crate is that text's, which its English text keeps.
 
+#[cfg(test)]
+mod cases;
 pub mod certificate;
 pub mod check;
 pub mod class;
 pub mod coerce;
 pub mod decl;
 pub mod dep;
-#[cfg(test)]
-mod examples;
 pub mod explore;
 pub mod fallback;
 #[cfg(test)]
@@ -27,6 +27,7 @@ pub mod relation;
 pub mod sig;
 pub mod solve;
 pub mod split;
+pub mod trace;
 pub mod ty;
 pub mod unify;
 pub mod value;

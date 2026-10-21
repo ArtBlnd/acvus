@@ -1,0 +1,17 @@
+//@ spec: l.275, l.280, l.284, l.286
+// A takes the constructor and members its solved lower bound gives, its part
+// made anew.
+// Once both sides of Some(1u8) ≤ A are solved, their parts are related, a
+// covariant part by a lower bound.
+//@ order: solve A
+let A;
+let S;
+let u8: u8;
+let `Some(1u8)`: Option<S>;
+S = u8;
+A = `Some(1u8)`;
+
+assert trace "join A took Option {Variant(None), Variant(Some)}";
+assert split records `S ≤ A.Payload(Some)`;
+must pass;
+assert A: Option<u8>;

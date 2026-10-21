@@ -1,0 +1,26 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  accepted
+  value `&mut r`: &u8
+  value R: &u8
+  value `first(x)`: &u8
+  value x: A
+  decision `&mut r`: lend & through &
+  decision first: first#0
+  check `first(x) ≤ R`: Ok(Identity)
+  check `first.Result ≤ first(x)`: Ok(Identity)
+  check `x ⇝ first.Param(0)`: Ok(Identity)
+  I* of a final state: []
+outcome 2
+  refused
+  value `&mut r`: !
+  value R: &u8
+  value `first(x)`: &u8
+  value x: A
+  decision `&mut r`: no result
+  decision first: first#0
+  check `first(x) ≤ R`: Ok(Identity)
+  check `first.Result ≤ first(x)`: Ok(Identity)
+  check `x ⇝ first.Param(0)`: Ok(Identity)
+  I* of a final state: [completeness `&mut r`]

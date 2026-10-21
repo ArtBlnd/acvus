@@ -1,0 +1,19 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  accepted
+  value ?k: !
+  value None: Option⟨!⟩
+  value `Option⟨u8⟩`: Option⟨u8⟩
+  value S: u16
+  value `Some(1u16)`: Option⟨u16⟩
+  value X: Option⟨!⟩
+  value Y: Option⟨u16⟩
+  value u16: u16
+  value u8: u8
+  check `None ≤ X`: Ok(Identity)
+  check `Some(1u16) ≤ Y`: Ok(Identity)
+  check `X ⇝ Option⟨u8⟩`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
+  check `X ≤ Y`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
+  check `u16 ≤ S`: Ok(Identity)
+  I* of a final state: []

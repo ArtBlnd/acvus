@@ -1,0 +1,29 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, the written order
+outcome 1
+  refused
+  value ?k: none
+  value None: none
+  value S: none
+  value `Some(x)`: none
+  value X: none
+  refusal infinite X
+  refusal no_value ?k
+  refusal no_value None
+  refusal no_value S
+  refusal no_value `Some(x)`
+  I* of a final state: []
+step 1 in run: start
+  record the text
+    records None: Option(?k)
+    records Some(x): Option(S)
+  record the text
+  record the text
+    records None ≤ X
+    records X ≤ S
+    records Some(x) ≤ X
+  split None: Option(?k): no parts
+  split Some(x): Option(S): no parts
+step 2 in run: solve X
+  join refused X: infinite X
+  refused infinite X

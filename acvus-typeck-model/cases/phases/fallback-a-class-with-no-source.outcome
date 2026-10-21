@@ -1,0 +1,22 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, the written order
+outcome 1
+  accepted
+  value ?k: !
+  value A: Option⟨!⟩
+  value None: Option⟨!⟩
+  check `None ≤ A`: Ok(Identity)
+  I* of a final state: []
+step 1 in run: start
+  record the text
+    records None: Option(?k)
+  record the text
+  record the text
+    records None ≤ A
+  split None: Option(?k): no parts
+step 2 in run: solve A
+  join A took Option {Variant(None), Variant(Some)}
+  split None ≤ A: parts
+    records ?k ≤ A.Payload(Some)
+step 3 in run: fallback
+  fallback ?k took !

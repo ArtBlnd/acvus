@@ -1,0 +1,25 @@
+//@ spec: l.222
+// let x = "s";
+// let f = || takes_u8(x);  // takes_u8(u8), f never called
+// Under the spec, takes_u8 and its boundary X ⇝ u8 stay in the lambda's C, which
+// no instance copies, and the program is accepted.
+extern fn takes_u8(u8);
+
+group λ in run {
+    let `λ result`;
+    let `takes_u8(x)`;
+    fn λ() -> `λ result`;
+    `λ result` = `takes_u8(x)`;
+}
+let str: str;
+let `"s"`: &str;
+let X;
+let `|| ..`: lambda λ;
+let f;
+X = `"s"`;
+f = `|| ..`;
+group λ {
+    `takes_u8(x)` = takes_u8(X) @ takes_u8;
+}
+
+must pass;

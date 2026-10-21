@@ -4,8 +4,9 @@
 //! (`split.rs`), the decisions of uses, lends, projections and bindings
 //! (`node/`) in the order the dependencies allow (`dep.rs`), fallback
 //! (`fallback.rs`) and the checks (`check.rs`): the steps to a fixpoint and
-//! fallback after it (l.295–299), and the state a node's value read is taken
-//! from (l.267).
+//! fallback after it (l.295–299), each returning the trace of what its phases
+//! reported (`trace.rs`), and the state a node's value read is taken from
+//! (l.267).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -18,6 +19,8 @@ use crate::node::NodeState;
 use crate::program::{ENTRY, Function, Item, Program, Readings, TextClass};
 use crate::read::ReadValue;
 use crate::relation::{Recorded, Relation};
+use crate::split::Split;
+use crate::trace::{Report, Trace};
 use crate::ty::{HasTerm, Name};
 
 #[derive(Clone, Debug)]
@@ -75,6 +78,13 @@ pub struct State {
     pub(crate) instances: Vec<Made>,
 }
 
+/// A binding group's state where its text's constraints are recorded and
+/// nothing is solved, with the trace of the phases that made it.
+pub struct Started {
+    pub state: State,
+    pub trace: Trace,
+}
+
 /// A step that may be taken.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Step {
@@ -95,6 +105,13 @@ impl State {
     /// are recorded and nothing is solved (l.216, l.230). `solved` holds each
     /// group its uses make instances of, at its fixpoint.
     pub fn of_group(program: &Program, group: &Name, solved: &BTreeMap<Name, Rc<State>>) -> State {
+        State::start(program, group, solved).state
+    }
+
+    /// As `of_group`, with the trace of what its phases reported: the text's
+    /// relations recorded, the nodes decided as they are recorded, and what
+    /// follows at once.
+    pub fn start(program: &Program, group: &Name, solved: &BTreeMap<Name, Rc<State>>) -> Started {
         let mut state = State {
             decls: Rc::new(program.decls.clone()),
             arena: Arena::default(),
@@ -169,18 +186,23 @@ impl State {
                 state.universals.insert(id);
             }
         }
-        state.record_origins(program, &classes);
-        state.record_equations(&items);
+        let mut trace = Trace::default();
+        trace.push(Report::Recorded(state.record_origins(program, &classes)));
+        trace.push(Report::Recorded(state.record_equations(&items)));
         state.decided = state
             .texts
             .iter()
             .copied()
             .filter(|&id| state.classes.held(id).kind.is_some())
             .collect();
-        state.record_items(program, &items, solved);
-        state.decide_at_once();
-        state.settle();
-        state
+        trace.push(Report::Recorded(
+            state.record_items(program, &items, solved),
+        ));
+        for decided in state.decide_at_once() {
+            trace.push(Report::Decided(decided));
+        }
+        trace.append(state.settle());
+        Started { state, trace }
     }
 
     pub(crate) fn text(&self, name: &Name) -> ClassId {
@@ -267,47 +289,86 @@ impl State {
     }
 
     /// Takes the step, and records what follows at once from it.
-    pub fn step(&mut self, step: &Step) {
-        match step {
+    pub fn step(&mut self, step: &Step) -> Trace {
+        let mut trace = match step {
             Step::Solve(root) => self.solve(*root),
-            Step::Decide(name) => self.decide(name),
-        }
-        self.settle();
+            Step::Decide(name) => Trace {
+                reports: vec![Report::Decided(self.decide(name))],
+            },
+        };
+        trace.append(self.settle());
+        trace
     }
 
     /// The equivalence class is solved (l.275), unless it reaches a part of
     /// its own: its LitVar lower bounds joined, `?N ⇝ U` where it holds a
-    /// LitVar alone (l.291), and then its constructor and members.
-    pub(crate) fn solve(&mut self, root: ClassId) {
-        if self.refuse_infinite(root) {
-            return;
+    /// LitVar alone (l.291), and then its constructor and members. The trace
+    /// holds what the class took, and the LitVars unified where any are.
+    pub(crate) fn solve(&mut self, root: ClassId) -> Trace {
+        if let Some(refusal) = self.refuse_infinite(root) {
+            return Trace {
+                reports: vec![Report::Infinite {
+                    class: root,
+                    refusal,
+                }],
+            };
         }
-        self.join_lit_lowers(root);
-        self.unify_lit_boundaries(root);
-        self.join(root);
+        let mut trace = Trace::default();
+        let lowers = self.join_lit_lowers(root);
+        if !lowers.is_empty() {
+            trace.push(Report::LitLowers {
+                class: root,
+                recorded: lowers,
+            });
+        }
+        let boundaries = self.unify_lit_boundaries(root);
+        if !boundaries.is_empty() {
+            trace.push(Report::LitBoundaries {
+                class: root,
+                recorded: boundaries,
+            });
+        }
+        let class = self.root(root);
+        let took = self.join(root);
+        trace.push(Report::Joined { class, took });
+        trace
     }
 
     /// What follows at once from what is recorded: lower-bound cycles merged
     /// (l.275), the parts of each lower bound and boundary whose two sides are
     /// solved related (l.284), and a LitVar lower bound of a solved class
-    /// unified with it (l.176).
-    pub(crate) fn settle(&mut self) {
+    /// unified with it (l.176). The trace holds what changed the state.
+    pub(crate) fn settle(&mut self) -> Trace {
+        let mut trace = Trace::default();
         loop {
             let before = (self.log.len(), self.split.len());
-            self.merge_cycles();
-            self.link_views();
-            self.record_at_once();
+            let merged = self.merge_cycles();
+            if !merged.is_empty() {
+                trace.push(Report::Merged(merged));
+            }
+            for linked in self.link_views() {
+                trace.push(Report::Linked(linked));
+            }
+            let shared = self.record_at_once();
+            if !shared.is_empty() {
+                trace.push(Report::Shared(shared));
+            }
             let settled = self.settled();
             for i in 0..self.log.len() {
                 if self.split.contains(&i) {
                     continue;
                 }
-                if !self.split_at(i) {
-                    self.join_lit_at(i, &settled);
+                match self.split_at(i) {
+                    Split::Unsolved => {
+                        if let Some(recorded) = self.join_lit_at(i, &settled) {
+                            trace.push(Report::LitJoined { bound: i, recorded });
+                        }
+                    }
+                    split => trace.push(Report::Split { at: i, split }),
                 }
             }
             if (self.log.len(), self.split.len()) == before {
-                return;
+                return trace;
             }
         }
     }
@@ -344,12 +405,17 @@ impl State {
             .collect()
     }
 
-    /// Falls back (l.299) and records what follows at once from it. Returns
-    /// whether any equivalence class fell back.
-    pub fn fall_back(&mut self) -> bool {
-        let fell = self.take_defaults();
-        self.settle();
-        fell
+    /// Falls back (l.299) and records what follows at once from it.
+    pub fn fall_back(&mut self) -> Trace {
+        let mut trace = Trace {
+            reports: self
+                .take_defaults()
+                .into_iter()
+                .map(Report::FellBack)
+                .collect(),
+        };
+        trace.append(self.settle());
+        trace
     }
 
     /// Solves to the fixpoint and falls back until no class is left to fall
@@ -365,7 +431,7 @@ impl State {
                 self.step(&step);
                 continue;
             }
-            if !self.fall_back() {
+            if !self.fall_back().fell_back() {
                 return self.outcome();
             }
         }

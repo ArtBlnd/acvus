@@ -1,0 +1,11 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  accepted
+  value 0: i32
+  value A: {x: i32}
+  value `a.x`: i32
+  decision `a.x`: applied
+  partition {0, `a.x`}
+  check `0 ≤ a.x`: Ok(Identity)
+  I* of a final state: []

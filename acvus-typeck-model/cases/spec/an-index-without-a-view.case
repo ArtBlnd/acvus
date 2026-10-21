@@ -1,0 +1,16 @@
+//@ spec: l.161, which refuses an index into a container with no view
+// let mut v = Vec::new();  // new() -> Vec<T>
+// v[0] = 1u8;
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+
+let V;
+let `new()`;
+let `v[0]`;
+let 1u8: u8;
+`new()` = new() @ new;
+V = `new()`;
+`v[0]` = V[] @ `v[0]`;
+`v[0]` = 1u8;
+
+must fail;

@@ -122,8 +122,7 @@ decision is changed, as a solver that erred would leave it, fails at each relati
 the change breaks.
 
 Run, every accepted final state of every example passes (Example 14, refused,
-has none), and `examples.rs`, `a_certificate_with_a_wrong_value_or_decision_fails`,
-finds `x: B` in place of `x: A` at the pass of `make()` into `X` and at
+has none), and `cases/certificate/a-wrong-value-or-decision-fails.case` finds `x: B` in place of `x: A` at the pass of `make()` into `X` and at
 `probe(A)`'s boundary, `probe(B)` in place of `probe(A)` at its boundary, and
 `probe(x): &A` in place of `()` at its result and at the record of l.252. A
 first run reported Example 3's `push` refused at `u16` into `u8`: the checker

@@ -1,0 +1,24 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: Environment }, every order
+outcome 1
+  accepted
+  value `&mut buf`: &mut Vec⟨u8⟩
+  value BUF: Vec⟨u8⟩
+  value fill: Fn/0
+  value `fill()`: ()
+  value `fill_all(..)`: ()
+  value `new()`: Vec⟨u8⟩
+  value `|| ..`: Fn/0
+  value `λ result`: ()
+  decision `fill()`: calls {λ}
+  decision fill_all: fill_all#0
+  decision lend: lend &mut place
+  decision new: new#0
+  check `&mut buf ⇝ fill_all.Param(0)`: Ok(Identity)
+  check `fill_all(..) ≤ λ result`: Ok(Identity)
+  check `fill_all.Result ≤ fill_all(..)`: Ok(Identity)
+  check `new() ≤ BUF`: Ok(Identity)
+  check `new.Result ≤ new()`: Ok(Identity)
+  check `|| .. ≤ fill`: Ok(Identity)
+  check `λ result ≤ fill()`: Ok(Identity)
+  I* of a final state: []

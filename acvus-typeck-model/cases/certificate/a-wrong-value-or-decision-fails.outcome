@@ -1,0 +1,14 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+outcome 1
+  accepted
+  value X: A
+  value `make()`: A
+  value `probe(x)`: ()
+  decision make: make#0
+  decision probe: probe#0
+  check `X ⇝ probe.Param(0)`: Ok(Identity)
+  check `make() ≤ X`: Ok(Identity)
+  check `make.Result ≤ make()`: Ok(Identity)
+  check `probe.Result ≤ probe(x)`: Ok(Identity)
+  I* of a final state: []
