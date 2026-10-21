@@ -53,7 +53,7 @@ What each item and decision gives, and what holding means on closed values:
 | `Origin::Written(τ)`, `Origin::Host(τ)` | the class's kind | its value is `τ` with each part's value |
 | `Origin::Lit(l)` | a LitVar | its value is a type of `l`'s family (l.129) |
 | `Origin::Lambda(λ)` | a function value naming `λ` | its value is `Fn/n`, `n` being `λ`'s parameters |
-| `Pass` into an unknown of the place's group (l.221) | `τ ≤ α` | `≤` reaches it, or a coercion does where an equation decides `α` (l.282) |
+| `Pass` into an unknown of the place's group (l.221) | `τ ≤ α` | `≤` reaches it (l.282) |
 | `Pass` otherwise | `τ ⇝ U` | a coercion reaches it (l.282) |
 | `Equation` | `a = b` | the two values are equal |
 | a use of a function, own group (l.510) | each argument into its universal by a boundary, the result type as a lower bound | as above |
@@ -68,10 +68,9 @@ What each item and decision gives, and what holding means on closed values:
 | `Calls(λ̄)` | each `λ` is named by a function value that reaches the callee by the regenerated lower bounds and equations (l.183); each argument meets its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result (l.198) | as above, under each instance |
 | a use's record of l.248 | at each position every candidate would record a lower bound or an equation into, the result and the parts of an argument an invariant part equates (note 08, reading 13), that it is a reference where every candidate's type there is one, and no reference where none is; under `Use(k)`, as `k`'s type there | its value is, or is not, a reference, or is `!` |
 
-The l.248 row is not implied by `Use(k)`'s: a cast changes not whether a type is a
-reference (l.78), but a declared conversion may, and admits a lower bound into a
-class an equation decides (l.282). That `!` holds either is the solver's reading
-(`Classes::normalize`), shared here.
+The l.248 row is checked on its own: it is the record a use made before it was
+decided, which `Use(k)`'s rows do not name. That `!` holds either is the solver's
+reading (`Classes::normalize`), shared here.
 
 Whether a `Pass` meets is recomputed from the program: the class passed into is an
 unknown of its own group by its text (l.213) and is equated by no regenerated
@@ -85,7 +84,7 @@ reading 3).
 
 - `Certificate::of(&Final)` takes a `Sheet` of each state of a final state, the
   entry's and each group's solved before it: every class's name and root, each
-  root's value and whether an equation decides it, every decision, and each
+  root's value, every decision, and each
   instance the state made (`Made`), with its group and the map from the group's
   roots to the copies made. It is not part of `Outcome`, since the names of the
   classes solving makes may differ between orders (note 13, reading 1).
@@ -102,10 +101,6 @@ the groups solved before it, to the caller (note 13, Checks).
 
 - The checker shares `coerce`, `along_le`, the LitVar families and `Ty` with the
   solver. An error there is shared, and the checker does not see it.
-- Whether an equation decides a class is taken from the certificate. Deciding it
-  needs the equations splits derive (l.280), which the checker does not regenerate;
-  a solver that marks a class wrongly, and so admits a coercion where `≤` was due,
-  is not seen.
 - Which candidate a use is decided as, and what a lend or a projection reads, are
   not this check's: any decision whose relations hold passes here. Whether the
   decision is the one its node should make is note 15's.
@@ -121,10 +116,9 @@ A violation there is the first soundness hole. A certificate whose value or
 decision is changed, as a solver that erred would leave it, fails at each relation
 the change breaks.
 
-Run, every accepted final state of every example passes (Example 14, refused,
-has none), and `cases/certificate/a-wrong-value-or-decision-fails.case` finds `x: B` in place of `x: A` at the pass of `make()` into `X` and at
+Run, every accepted final state of every example passes (Examples 3 and 14,
+refused, have none), and `cases/certificate/a-wrong-value-or-decision-fails.case` finds `x: B` in place of `x: A` at the pass of `make()` into `X` and at
 `probe(A)`'s boundary, `probe(B)` in place of `probe(A)` at its boundary, and
-`probe(x): &A` in place of `()` at its result and at the record of l.248. A
-first run reported Example 3's `push` refused at `u16` into `u8`: the checker
-dropped whether an equation decides the parameter's variable, which admits the
-conversion (l.282); it was the checker's error.
+`probe(x): &A` in place of `()` at its result and at the record of l.248. A lower
+bound reaches by `≤` alone (l.282), so the checker reads no class as decided by an
+equation.

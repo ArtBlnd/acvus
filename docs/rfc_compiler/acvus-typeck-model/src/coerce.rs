@@ -4,8 +4,8 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::decl::{DeclId, Decls, Node};
-use crate::join::{ERROR, is_error, is_error_part, type_name};
+use crate::decl::{DeclId, Decls};
+use crate::join::{ERROR, is_error};
 use crate::read::ReadValue;
 use crate::ty::{HasTerm, Member, Mutability, Name, PartKey, Term, Ty};
 
@@ -20,8 +20,9 @@ pub enum Stage {
     Structural,
 }
 
-/// The stages a coercion takes and its number of casts, both counted down
-/// into the parts' coercions; `empty` where it takes none.
+/// The stages a coercion takes, the structural stage counted down into the
+/// parts' coercions, which take no other (l.111), and its number of casts;
+/// `empty` where it takes none.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Rank {
     stages: BTreeSet<Stage>,
@@ -251,7 +252,7 @@ fn walk(
                     casts: casts.clone(),
                     structural: None,
                 });
-            } else if let Some(structural) = structural(decls, &at, to, way)? {
+            } else if let Some(structural) = structural(&at, to, way) {
                 found.push(Coercion::Composition {
                     reborrow,
                     casts: casts.clone(),
@@ -334,39 +335,52 @@ fn conversion(
     }
 }
 
-/// The structural stage from `at` to `to`, where one reaches.
-fn structural(
-    decls: &Decls,
-    at: &ReadValue,
-    to: &ReadValue,
-    way: Way,
-) -> Result<Option<Structural>, CoerceError> {
+/// The structural stage from `at` to `to`, where one reaches: an `Error` row
+/// of the whole value, or the rows `shape` takes.
+fn structural(at: &ReadValue, to: &ReadValue, way: Way) -> Option<Structural> {
     let (Some(a), Some(b)) = (at.decided(), to.decided()) else {
-        return Ok(None);
+        return None;
     };
     if let (Way::Coercion { .. }, Term::Enum(name, variants)) = (way, b)
         && name.as_str() == ERROR
         && !is_error(a)
     {
-        let wrap = variants
+        return variants
             .iter()
             .find(|(_, payload)| agrees(at, payload))
             .map(|(variant, _)| Structural::Wrap(variant.clone(), Box::new(Coercion::Identity)));
-        return Ok(wrap);
     }
+    shape(a, b, way)
+}
+
+/// A part's coercion `⇝ₚ`, or a part's steps along `≤` (l.89, l.111): the
+/// rows `shape` takes and `! ⇝ U` alone, so no reborrow, cast, `Error` wrap or
+/// conversion. None where no row reaches, the only way `deciding_nothing`
+/// gives no result.
+fn part(x: &ReadValue, y: &ReadValue, way: Way) -> Option<Coercion> {
+    if let Some(reached) = deciding_nothing(x, y) {
+        return reached.ok();
+    }
+    let (Some(a), Some(b)) = (x.decided(), y.decided()) else {
+        return None;
+    };
+    shape(a, b, way).map(|structural| Coercion::Composition {
+        reborrow: false,
+        casts: Vec::new(),
+        structural: Some(structural),
+    })
+}
+
+/// The object, enum and part rows at one structural constructor, each part
+/// changed by its `⇝ₚ`, where they reach.
+fn shape(a: &Term<ReadValue>, b: &Term<ReadValue>, way: Way) -> Option<Structural> {
     let constructor = a.constructor();
     if constructor != b.constructor() || !constructor.is_structural() {
-        return Ok(None);
+        return None;
     }
-    let part = |key: &PartKey, x: &ReadValue, y: &ReadValue| match way {
-        Way::Le if is_error_part(&constructor, key) => le_error(decls, x, y),
-        _ => walk(decls, x, y, way),
-    };
     let (members, dropped, added) = match (a, b, way) {
         (Term::Object(f), Term::Object(g), Way::Coercion { .. }) => {
-            let Some(dropped) = narrowed(f, g) else {
-                return Ok(None);
-            };
+            let dropped = narrowed(f, g)?;
             (
                 shared_parts(f, g, PartKey::Field),
                 field_members(dropped),
@@ -374,9 +388,7 @@ fn structural(
             )
         }
         (Term::Object(f), Term::Object(g), Way::Le) => {
-            let Some(gained) = narrowed(g, f) else {
-                return Ok(None);
-            };
+            let gained = narrowed(g, f)?;
             (
                 shared_parts(f, g, PartKey::Field),
                 BTreeSet::new(),
@@ -384,9 +396,7 @@ fn structural(
             )
         }
         (Term::Enum(_, v), Term::Enum(_, w), _) => {
-            let Some(widened) = narrowed(w, v) else {
-                return Ok(None);
-            };
+            let widened = narrowed(w, v)?;
             let added = widened.into_iter().map(Member::Variant).collect();
             (shared_parts(v, w, PartKey::Payload), BTreeSet::new(), added)
         }
@@ -400,52 +410,15 @@ fn structural(
             (pairs, BTreeSet::new(), BTreeSet::new())
         }
     };
-    let mut parts = Vec::new();
-    for (key, x, y) in members {
-        match part(&key, &x, &y) {
-            Ok(coercion) => parts.push((key, coercion)),
-            Err(CoerceError::None) => return Ok(None),
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(Some(Structural::Shape {
+    let parts = members
+        .into_iter()
+        .map(|(key, x, y)| Some((key, part(&x, &y, way)?)))
+        .collect::<Option<Vec<_>>>()?;
+    Some(Structural::Shape {
         dropped,
         added,
         parts,
-    }))
-}
-
-/// `e₁ ≤ e₂` at a `Result`'s error part, where the error join takes the
-/// place of the join: elements of one node only, and `Error`'s variants by
-/// their names (l.94–95).
-fn le_error(decls: &Decls, e1: &ReadValue, e2: &ReadValue) -> Result<Coercion, CoerceError> {
-    if let Some(reached) = deciding_nothing(e1, e2) {
-        return reached;
-    }
-    let (Some(a), Some(b)) = (e1.decided(), e2.decided()) else {
-        return Err(CoerceError::None);
-    };
-    match (is_error(a), b) {
-        (true, Term::Enum(_, _)) if is_error(b) => walk(decls, e1, e2, Way::Le),
-        (false, Term::Enum(_, variants)) if is_error(b) => {
-            let element = type_name(a).and_then(|name| variants.get_key_value(name));
-            let Some((variant, payload)) = element else {
-                return Err(CoerceError::None);
-            };
-            if Node::of_decided(e1) != Node::of_decided(payload) {
-                return Err(CoerceError::None);
-            }
-            let inner = walk(decls, e1, payload, Way::Le)?;
-            Ok(Coercion::Composition {
-                reborrow: false,
-                casts: Vec::new(),
-                structural: Some(Structural::Wrap(variant.clone(), Box::new(inner))),
-            })
-        }
-        (true, _) => Err(CoerceError::None),
-        (false, _) if Node::of_decided(e1) == Node::of_decided(e2) => walk(decls, e1, e2, Way::Le),
-        (false, _) => Err(CoerceError::None),
-    }
+    })
 }
 
 /// The members `wide` has that `narrow` has not, where `wide` has every

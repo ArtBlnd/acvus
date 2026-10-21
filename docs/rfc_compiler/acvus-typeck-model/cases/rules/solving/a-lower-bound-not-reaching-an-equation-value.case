@@ -3,9 +3,10 @@
 // push(&mut buf, 1u16);    // push(&mut Vec<T>, T)
 // consume(buf);            // consume(Vec<u8>)
 // push's T is an unknown that 1u16 meets, T ≥ u16; the two invariant arguments
-// make T's value the u8 the equations give (l.275). The lower bound u16 does
-// not reach u8 by ≤, so it must reach it by a coercion (l.282), and none goes
-// from u16 to u8: refused at that lower bound (l.292).
+// make T's value the u8 the equations give (l.275). A lower bound reaches its
+// value by ≤ alone (l.282), and u16 does not reach u8 by ≤: refused at that
+// lower bound (l.292). The text records the boundary ?t ⇝ u8 at consume(buf)
+// in place of that equation (l.280), and refuses there.
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 extern fn push<T>(&mut Vec<T>, T);

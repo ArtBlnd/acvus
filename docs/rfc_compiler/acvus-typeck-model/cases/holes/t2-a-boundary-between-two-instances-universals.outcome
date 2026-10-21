@@ -1,7 +1,7 @@
 // What the model gives, written by `BLESS=1` (design/19-cases.md).
 run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
 outcome 1
-  accepted
+  refused
   value 0u8: u8
   value A: none
   value B: none
@@ -16,13 +16,13 @@ outcome 1
   value `g(b, b)`: u8
   decision f1: f1#0
   decision f2: f2#0
-  check `Some(f1()) <= g@6/A`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Composition { reborrow: false, casts: [DeclId { name: up1, overload: 0 }], structural: None })] }) })
+  check `Some(f1()) <= g@6/A`: Err(None)
   check `Some(f2()) <= g@6/B`: Ok(Identity)
   check `f1() <= S1`: Ok(Identity)
   check `f1.Result <= f1()`: Ok(Identity)
   check `f2() <= S2`: Ok(Identity)
   check `f2.Result <= f2()`: Ok(Identity)
-  check `g@6/B ~> g@6/A`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Composition { reborrow: false, casts: [DeclId { name: up2, overload: 0 }], structural: None })] }) })
+  check `g@6/B ~> g@6/A`: Err(None)
   check `g@6/B ~> g@6/B`: Ok(Identity)
   check `g@6/R <= g(..)`: Ok(Identity)
   check `0u8 <= R`: Ok(Identity)

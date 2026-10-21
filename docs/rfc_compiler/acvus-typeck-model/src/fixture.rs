@@ -1,7 +1,7 @@
 //! Declarations and types the tests of several primitives share.
 
 use crate::decl::{Decls, DeclsBuilder, Role};
-use crate::join::{ERROR, type_name};
+use crate::join::ERROR;
 use crate::sig::{DeclaredTypes, ExternDecl, SigTy, Signature};
 use crate::ty::{IntTy, Mutability, Name, Scalar, Term, Ty};
 
@@ -60,12 +60,22 @@ pub fn result(ok: Ty, err: Ty) -> Ty {
     ty(Term::Result { ok, err })
 }
 
+/// The `Error` whose variants are the elements, each named after its type
+/// (l.339).
 pub fn error(elements: &[Ty]) -> Ty {
     let variants = elements
         .iter()
-        .map(|element| (type_name(element.term()).unwrap().clone(), element.clone()))
+        .map(|element| (type_name(element.term()).clone(), element.clone()))
         .collect();
     ty(Term::Enum(name(ERROR), variants))
+}
+
+/// The name of an enum, a struct or an extern-defined type.
+fn type_name(term: &Term<Ty>) -> &Name {
+    match term {
+        Term::Enum(name, _) | Term::Struct(name, _) | Term::Extern { name, .. } => name,
+        _ => panic!("an element of a fixture's `Error` is a type of a name"),
+    }
 }
 
 /// `A`, `B` and `C` of no argument and `Box` of one; the casts `A → B` and
@@ -124,8 +134,8 @@ pub fn never() -> Ty {
     ty(Term::Never)
 }
 
-/// Types up to one constructor deep over leaves that the cast tree, the
-/// reference row and the error join each relate.
+/// Types up to one constructor deep over leaves that the cast tree and the
+/// reference row each relate, and a `Result` whose error part is an `Error`.
 pub fn universe() -> Vec<Ty> {
     let leaves = [never(), int(IntTy::U8), named("A"), named("B"), named("C")];
     let mut types: Vec<Ty> = leaves.to_vec();

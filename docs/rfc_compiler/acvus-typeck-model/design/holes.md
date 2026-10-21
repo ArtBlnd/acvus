@@ -30,17 +30,16 @@ would close the hole at the declaration.
 
 ## H2. A value whose path up meets two variants of `Error`
 
-The error join keeps elements of different nodes apart even where one steps up to
-the other (l.95), so `Error{B(B), D(D)}` is a type where a cast goes from `B` to
-`D`. A value of `A`, with casts `A → B → D`, then reaches it by two compositions:
-`A → B` then the wrap in `B`, and `A → B → D` then the wrap in `D` (l.102, l.109).
-Line 111 states that the composition toward a given type is unique, and the two
-call different functions. The model refuses there (`CoerceError::Compositions`);
-taking the composition of the lowest rank would choose `B`. Whether a program
-reaches it is not yet shown. A candidate is a value entering by a boundary whose
-part is not an unknown of the binding group the place lies in (l.280), such as a
-reference reaching a capture whose error part the enclosing body joined from `B`
-and `D`.
+`?` makes a variant of `Error` for each error type's name (l.339), and two `Error`s
+join by uniting their variants, raising no part (l.89), so `Error{B(B), D(D)}` is a
+type where a cast goes from `B` to `D`. A value of `A`, with casts `A → B → D`, then
+reaches it by two compositions: `A → B` then the wrap in `B`, and `A → B → D` then
+the wrap in `D` (l.104, l.111). Line 111 states that the composition toward a given
+type is unique, and the two call different functions. The model refuses there
+(`CoerceError::Compositions`); taking the composition of the lowest rank would
+choose `B`. Whether a program reaches it is not yet shown. A candidate is a whole
+value passing into such an `Error`, a part taking no wrap (l.111), by a boundary
+toward a type a declaration writes.
 
 ## H3. A view at a boundary
 
@@ -169,12 +168,13 @@ the Korean text: the parts are related once both sides have taken a constructor.
 
 ## T3. A structural coercion that changes members and parts
 
-The spec composes at most one structural row (l.109), and its object and enum rows
-keep the parts while its part row keeps the members (l.97–106), so `{x: A, y: u8}
-⇝ {x: B}` reaches by no composition. Types §3 coerces a structured value by its
-kind's shape and part by part at once: the object narrows to the fields the slot
-names, and each remaining part coerces as its type does. The model reads types §3
-(`design/05-coercion.md`, reading 1).
+The spec composes at most one structural row (l.111), and its object and enum rows
+keep the parts while its part row keeps the members (l.101–103), so `{x: E{V(!)},
+y: u8} ⇝ {x: E{V(!), W(!)}}` reaches by no composition. Types §3 coerces a
+structured value by its kind's shape and part by part at once: the object narrows
+to the fields the slot names, and each remaining part coerces as its type does,
+here by `⇝ₚ` (l.111). The model reads types §3 (`design/05-coercion.md`,
+reading 1).
 
 ## T4. Which scalars are numbers
 

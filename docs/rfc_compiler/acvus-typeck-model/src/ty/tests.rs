@@ -26,14 +26,13 @@ fn extern_ty(text: &str, args: Vec<Ty>, identity: Option<Ty>) -> Ty {
     })
 }
 
-/// One type, with what the shape table and the variance of l.74 give it, and
-/// its notation.
+/// One type, with what the shape table and l.68 give it, and its notation.
 struct Shape {
     ty: Ty,
     constructor: Constructor,
     members: Vec<Member>,
     parts: Vec<PartKey>,
-    variance: Variance,
+    structural: bool,
     notation: &'static str,
 }
 
@@ -50,7 +49,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Ref(Mutability::Exclusive),
             members: vec![],
             parts: vec![PartKey::Target],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "&mut u8",
         },
         Shape {
@@ -58,7 +57,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Tuple(2),
             members: vec![],
             parts: vec![PartKey::Component(0), PartKey::Component(1)],
-            variance: Variance::Covariant,
+            structural: true,
             notation: "(u8, u16)",
         },
         Shape {
@@ -66,7 +65,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Tuple(1),
             members: vec![],
             parts: vec![PartKey::Component(0)],
-            variance: Variance::Covariant,
+            structural: true,
             notation: "(u8,)",
         },
         Shape {
@@ -74,7 +73,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Array(4),
             members: vec![],
             parts: vec![PartKey::Element],
-            variance: Variance::Covariant,
+            structural: true,
             notation: "[u8; 4]",
         },
         Shape {
@@ -82,7 +81,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Slice,
             members: vec![],
             parts: vec![PartKey::Element],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "[u8]",
         },
         Shape {
@@ -90,7 +89,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Option,
             members: vec![variant("None"), variant("Some")],
             parts: vec![payload("Some")],
-            variance: Variance::Covariant,
+            structural: true,
             notation: "Option<u8>",
         },
         Shape {
@@ -101,7 +100,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Result,
             members: vec![variant("Err"), variant("Ok")],
             parts: vec![payload("Ok"), payload("Err")],
-            variance: Variance::Covariant,
+            structural: true,
             notation: "Result<u8, u16>",
         },
         Shape {
@@ -112,7 +111,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Function(2),
             members: vec![],
             parts: vec![PartKey::Param(0), PartKey::Param(1), PartKey::Return],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "Fn(u8, u16 -> bool)",
         },
         Shape {
@@ -120,7 +119,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Function(2),
             members: vec![],
             parts: vec![],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "Fn/2",
         },
         Shape {
@@ -130,7 +129,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Object,
             members: vec![field("x"), field("y")],
             parts: vec![PartKey::Field(name("x")), PartKey::Field(name("y"))],
-            variance: Variance::Covariant,
+            structural: true,
             notation: "{x: u8, y: u16}",
         },
         Shape {
@@ -141,7 +140,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Enum(name("E")),
             members: vec![variant("A"), variant("B")],
             parts: vec![payload("A"), payload("B")],
-            variance: Variance::Covariant,
+            structural: true,
             notation: "E{A(!), B(u8)}",
         },
         Shape {
@@ -155,7 +154,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Struct(name("Pair")),
             members: vec![],
             parts: vec![PartKey::Arg(0), PartKey::Arg(1)],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "Pair<u8, &str>",
         },
         Shape {
@@ -163,7 +162,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Extern(name("F")),
             members: vec![],
             parts: vec![PartKey::Arg(0), PartKey::Identity],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "F<u8, ι>",
         },
         Shape {
@@ -171,7 +170,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Scalar(Scalar::Bool),
             members: vec![],
             parts: vec![],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "bool",
         },
         Shape {
@@ -179,7 +178,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::String,
             members: vec![],
             parts: vec![],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "String",
         },
         Shape {
@@ -187,7 +186,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Str,
             members: vec![],
             parts: vec![],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "str",
         },
         Shape {
@@ -195,7 +194,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Unit,
             members: vec![],
             parts: vec![],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "()",
         },
         Shape {
@@ -203,7 +202,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Never,
             members: vec![],
             parts: vec![],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "!",
         },
         Shape {
@@ -211,7 +210,7 @@ fn shapes() -> Vec<Shape> {
             constructor: Constructor::Identity(name("ι")),
             members: vec![],
             parts: vec![],
-            variance: Variance::Invariant,
+            structural: false,
             notation: "ι",
         },
     ]
@@ -391,9 +390,14 @@ fn identities_are_equal_exactly_when_their_names_are() {
 }
 
 #[test]
-fn structural_constructors_have_covariant_parts_and_all_others_invariant() {
+fn object_enum_tuple_array_option_and_result_alone_are_structural() {
     for shape in shapes() {
-        assert_eq!(shape.constructor.variance(), shape.variance, "{}", shape.ty);
+        assert_eq!(
+            shape.constructor.is_structural(),
+            shape.structural,
+            "{}",
+            shape.ty
+        );
     }
 }
 

@@ -20,6 +20,11 @@ B = `new()`;
 `push(..)` = push(`&mut buf`, 1u16) @ push;
 `consume(..)` = consume(B) @ consume;
 
-must pass;
+// The text refuses it at consume(buf), B being Vec<u16>: a split records the
+// boundary ?t ⇝ u8 toward a type the declaration writes, and u16 enters ?t
+// (l.280, l.393–400). The model, which records the equation ?t = u8 there,
+// gives B Vec<u8> and refuses where 1u16 enters push's T: a lower bound reaches
+// by ≤ alone (l.282), and the conversion is not taken.
+must fail;
 assert B: Vec<u8>;
-assert check `1u16 <= push.Var(Type(0))` == conversion narrow#0;
+assert failing [`1u16 <= push.Var(Type(0))`];

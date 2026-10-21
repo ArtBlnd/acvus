@@ -133,7 +133,7 @@ final state, of every run.
 | `assert f == f#1;` | the node's decision, as below |
 | `assert refused infinite X;`, `no_join`, `no_value`, `conflict at "…"`, `undeclared` | some refusal is that, of that class where one is written |
 | `` assert failing [`g@2/A ~> g@2/B`]; `` | the failing checks' relations are exactly these, in the outcome's order |
-| `` assert check `1u16 <= push.Var(Type(0))` == conversion narrow#0; `` | a check of the relation has that coercion |
+| `` assert check `X ~> probe.Param(0)` == conversion down#0; `` | a check of the relation has that coercion |
 | `assert istar completeness probe;` | an I\* violation; the final states' violations are exactly those written, none where none is |
 | `assert outcomes 2;` | the number of outcomes; one where none is written and no block is |
 | `assert partition {A, B};` | an equivalence class of exactly these |
@@ -329,7 +329,7 @@ steps; `golden()` and every expectation read what they read without it.
   (`starts_with`, `contains`) whole, as the model gives it. Example 14's copied
   decisions, which its test found by the end of their names, are named whole.
 - 13 cases under `cases/phases` test each phase along a written order, by the line
-  of the spec it rests on: recording (l.221, l.229–231), the join (l.80–90, l.171,
+  of the spec it rests on: recording (l.221, l.229–231), the join (l.80–91, l.171,
   l.271, l.276), splits (l.280), unification (l.156, l.160–165), nodes (l.248,
   l.263, l.322–335) and fallback (l.288–290). 2 cases under `cases/primitives` test
   the join, `≤` and coercion on the declarations of `fixture::decls()` without
@@ -346,4 +346,15 @@ steps; `golden()` and every expectation read what they read without it.
   `solving/a-two-literal-families-have-no-join` until a LitVar join that
   conflicts was made a join with no result (note 11, reading 4).
 - H6's case writes the narrative's `q` as `wanted`, and is `XFAIL`.
+- Four cases assert what the model gives where it departs from the text. At a
+  split the text records a boundary toward every part that is no unknown of the
+  binding group, and a part lower bound between a structural type's parts
+  (l.280), and it fills a class nothing enters (l.284); the model records an
+  equation toward an invariant part a declaration writes, and a lower bound,
+  joined with casts, between a structural type's parts, and fills none. Example
+  3's two cases and
+  `solving/a-lower-bound-not-reaching-an-equation-value` are refused where `1u16`
+  enters `push`'s `T`, the text refusing at `consume(buf)`; T2's is refused at its
+  two checks, the text refusing where its payload's part lower bounds have no join.
+  Each says so.
 - Every case passes, and every golden is the model's.

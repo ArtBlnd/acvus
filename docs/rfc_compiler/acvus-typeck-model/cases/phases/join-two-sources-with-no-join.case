@@ -1,4 +1,4 @@
-//@ spec: l.80–90, l.276, l.292
+//@ spec: l.80–91, l.276, l.292
 // u8 and u16 have no common ancestor, so A's sources have no join and A is
 // refused.
 //@ order: solve A

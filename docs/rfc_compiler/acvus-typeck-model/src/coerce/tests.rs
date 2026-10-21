@@ -130,10 +130,12 @@ fn a_cast_steps_up_the_tree_and_a_reborrow_comes_before_it() {
 }
 
 #[test]
-fn an_object_drops_fields_and_coerces_those_it_keeps_in_one_structural_stage() {
+fn an_object_drops_fields_and_changes_those_it_keeps_by_their_part_rows() {
     let decls = decls();
-    let from = object(&[("x", named("A")), ("y", int(IntTy::U8))]);
-    let to = object(&[("x", named("B"))]);
+    let v = enumeration("E", &[("V", never())]);
+    let vw = enumeration("E", &[("V", never()), ("W", never())]);
+    let from = object(&[("x", v), ("y", int(IntTy::U8))]);
+    let to = object(&[("x", vw)]);
     let coercion = coerce(&decls, &from, &to).unwrap();
     assert_eq!(
         coercion,
@@ -147,8 +149,12 @@ fn an_object_drops_fields_and_coerces_those_it_keeps_in_one_structural_stage() {
                     PartKey::Field(name("x")),
                     Coercion::Composition {
                         reborrow: false,
-                        casts: casts(&[0]),
-                        structural: None,
+                        casts: Vec::new(),
+                        structural: Some(Structural::Shape {
+                            dropped: BTreeSet::new(),
+                            added: [Member::Variant(name("W"))].into(),
+                            parts: vec![(PartKey::Payload(name("V")), Coercion::Identity)],
+                        }),
                     }
                 )],
             }),
@@ -156,11 +162,20 @@ fn an_object_drops_fields_and_coerces_those_it_keeps_in_one_structural_stage() {
     );
     let rank = coercion.rank().unwrap();
     assert_eq!(rank.highest(), Some(Stage::Structural));
-    assert_eq!(rank.casts(), 1);
+    assert_eq!(rank.casts(), 0);
     assert_eq!(
         coerce(&decls, &to, &from),
         Err(CoerceError::None),
         "no coercion gains a field"
+    );
+    assert_eq!(
+        coerce(
+            &decls,
+            &object(&[("x", named("A"))]),
+            &object(&[("x", named("B"))])
+        ),
+        Err(CoerceError::None),
+        "no cast at a part"
     );
 }
 
@@ -184,6 +199,12 @@ fn an_enum_widens_and_a_named_type_is_wrapped_in_its_variant_of_error() {
             casts: casts(&[0]),
             structural: Some(Structural::Wrap(name("B"), Box::new(Coercion::Identity))),
         })
+    );
+    let some = |t: Ty| ty(Term::Option(t));
+    assert_eq!(
+        coerce(&decls, &some(named("B")), &some(b_c)),
+        Err(CoerceError::None),
+        "no wrap at a part"
     );
 }
 
@@ -245,13 +266,11 @@ fn a_conversion_is_taken_only_where_no_composition_reaches_and_exactly_one_appli
         "narrowing takes no conversion"
     );
     let some = |t: &Ty| ty(Term::Option(t.clone()));
-    assert!(matches!(
+    assert_eq!(
         coerce(&one, &some(&u16_), &some(&u8_)),
-        Ok(Coercion::Composition {
-            structural: Some(Structural::Shape { .. }),
-            ..
-        })
-    ));
+        Err(CoerceError::None),
+        "no conversion at a part"
+    );
 }
 
 #[test]
@@ -266,21 +285,18 @@ fn ranks_compare_by_highest_stage_then_casts_then_lower_stages() {
     let shared_b = reference(Mutability::Shared, named("B"));
     let v = enumeration("E", &[("V", never())]);
     let vw = enumeration("E", &[("V", never()), ("W", never())]);
-    let reborrow = rank(&decls, mut_a.clone(), shared_a.clone());
-    let reborrow_cast = rank(&decls, mut_a.clone(), shared_b);
-    let structural = rank(&decls, v.clone(), vw.clone());
-    let structural_reborrow = rank(
-        &decls,
-        ty(Term::Tuple(vec![mut_a, v])),
-        ty(Term::Tuple(vec![shared_a, vw])),
-    );
+    let reborrow = rank(&decls, mut_a.clone(), shared_a);
+    let reborrow_cast = rank(&decls, mut_a, shared_b);
+    let structural = rank(&decls, v, vw);
+    let cast_structural = rank(&decls, named("A"), error(&[named("B")]));
     assert!(Rank::empty() < reborrow);
     assert!(reborrow < one_cast);
     assert!(one_cast < two_casts);
     assert!(reborrow < reborrow_cast);
+    assert!(one_cast < reborrow_cast);
     assert!(reborrow_cast < structural);
     assert!(two_casts < structural);
-    assert!(structural < structural_reborrow);
+    assert!(structural < cast_structural);
 }
 
 #[test]
@@ -311,10 +327,10 @@ fn a_position_that_decides_nothing_reaches_every_type() {
 }
 
 #[test]
-fn along_le_gains_fields_unchanged_and_wraps_only_at_an_error_part() {
+fn along_le_gains_fields_unchanged_and_takes_no_cast_or_wrap_at_a_part() {
     let decls = decls();
     let from = object(&[("x", named("A"))]);
-    let to = object(&[("x", named("B")), ("y", int(IntTy::U8))]);
+    let to = object(&[("x", named("A")), ("y", int(IntTy::U8))]);
     assert_eq!(
         along_le(&decls, &from, &to),
         Ok(Coercion::Composition {
@@ -323,37 +339,39 @@ fn along_le_gains_fields_unchanged_and_wraps_only_at_an_error_part() {
             structural: Some(Structural::Shape {
                 dropped: BTreeSet::new(),
                 added: [Member::Field(name("y"))].into(),
-                parts: vec![(
-                    PartKey::Field(name("x")),
-                    Coercion::Composition {
-                        reborrow: false,
-                        casts: casts(&[0]),
-                        structural: None,
-                    }
-                )],
+                parts: vec![(PartKey::Field(name("x")), Coercion::Identity)],
             }),
         })
+    );
+    assert_eq!(
+        along_le(&decls, &from, &object(&[("x", named("B"))])),
+        Err(CoerceError::None),
+        "no cast at a part"
     );
     let u8_ = int(IntTy::U8);
     let a_c = error(&[named("A"), named("C")]);
     let ok_a = result(u8_.clone(), named("A"));
+    assert_eq!(
+        along_le(&decls, &ok_a, &result(u8_.clone(), a_c.clone())),
+        Err(CoerceError::None),
+        "no wrap at a part"
+    );
     let Ok(Coercion::Composition {
         structural: Some(Structural::Shape { parts, .. }),
         ..
-    }) = along_le(&decls, &ok_a, &result(u8_.clone(), a_c.clone()))
+    }) = along_le(
+        &decls,
+        &result(u8_.clone(), error(&[named("A")])),
+        &result(u8_, a_c.clone()),
+    )
     else {
-        panic!("`Result⟨u8, A⟩ ≤ Result⟨u8, Error{{A(A), C(C)}}⟩` by a wrap at the error part");
+        panic!("`Result⟨u8, Error{{A(A)}}⟩ ≤ Result⟨u8, Error{{A(A), C(C)}}⟩` by the enum row");
     };
     assert!(matches!(
         &parts[1],
-        (_, Coercion::Composition { structural: Some(Structural::Wrap(variant, _)), .. })
-            if *variant == name("A")
+        (_, Coercion::Composition { structural: Some(Structural::Shape { added, .. }), .. })
+            if *added == [Member::Variant(name("C"))].into()
     ));
-    assert_eq!(
-        along_le(&decls, &ok_a, &result(u8_, named("B"))),
-        Err(CoerceError::None),
-        "at an error part, elements are raised across no node"
-    );
     assert_eq!(along_le(&decls, &named("A"), &a_c), Err(CoerceError::None));
 }
 

@@ -13,8 +13,7 @@ classes. With no step left, fallback gives each unsolved class with no unbroken
 dependency its family's default or `!`, and solving resumes, until nothing falls
 back. The program is accepted where no refusal was recorded, every class has a
 value, every node is reached, and every value the text or a node makes enter a type
-reaches it: a lower bound by `≤`, or by a coercion where an equation decides the
-value, and a boundary by a coercion (l.282).
+reaches it: a lower bound by `≤`, and a boundary by a coercion (l.282).
 
 ## Readings
 

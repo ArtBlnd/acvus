@@ -19,4 +19,6 @@ B = `new()`;
 `push(..)` = push(`&mut buf`, 1u16) @ push;
 `consume(..)` = consume(B) @ consume;
 
+// Refused, as with the conversion: the text refuses at consume(buf), and the
+// model where 1u16 enters push's T (`example-03-a-type-a-boundary-writes-…`).
 must fail;

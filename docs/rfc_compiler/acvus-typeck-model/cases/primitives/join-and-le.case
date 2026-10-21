@@ -19,10 +19,13 @@ assert join(u8, u16) == none;
 // An exclusive reference joins a shared one as shared.
 assert join(&mut A, &B) == &B;
 assert join(&mut A, &mut B) == &mut B;
-// Members are united and covariant parts joined.
-assert join({x: A}, {x: C, y: u8}) == {x: B, y: u8};
+// Members are united, and the parts of a structural type joined by ⊔ₚ, which
+// raises no part by a cast.
+assert join({x: A}, {x: A, y: u8}) == {x: A, y: u8};
+assert join({x: A}, {x: C, y: u8}) == none;
 assert join(E{V(A)}, E{W(!)}) == E{V(A), W(!)};
-assert join(Option<A>, Option<C>) == Option<B>;
+assert join(Option<!>, Option<A>) == Option<A>;
+assert join(Option<A>, Option<C>) == none;
 // s ≤ t where s ⊔ t = t.
 assert le(A, B);
 assert le(!, A);

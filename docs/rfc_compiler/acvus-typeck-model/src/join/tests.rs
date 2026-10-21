@@ -1,4 +1,4 @@
-use super::{JoinError, error_join, join, le};
+use super::{JoinError, join, le};
 use crate::decl::Node;
 use crate::fixture::*;
 use crate::ty::{IntTy, Mutability, PartKey, Term, Ty};
@@ -38,13 +38,15 @@ fn an_exclusive_reference_joins_a_shared_one_as_shared() {
 }
 
 #[test]
-fn members_are_united_and_covariant_parts_joined() {
+fn members_are_united_and_structural_parts_joined_without_casts() {
     let decls = decls();
     let x_a = object(&[("x", named("A"))]);
+    let x_a_y = object(&[("x", named("A")), ("y", int(IntTy::U8))]);
+    assert_eq!(join(&decls, &x_a, &x_a_y), Ok(x_a_y.clone()));
     let x_c_y = object(&[("x", named("C")), ("y", int(IntTy::U8))]);
     assert_eq!(
         join(&decls, &x_a, &x_c_y),
-        Ok(object(&[("x", named("B")), ("y", int(IntTy::U8))]))
+        Err(JoinError::PartConstructors(named("A"), named("C")))
     );
     let v = enumeration("E", &[("V", named("A"))]);
     let w = enumeration("E", &[("W", never())]);
@@ -53,13 +55,40 @@ fn members_are_united_and_covariant_parts_joined() {
         Ok(enumeration("E", &[("V", named("A")), ("W", never())]))
     );
     assert!(join(&decls, &v, &enumeration("F", &[("V", named("A"))])).is_err());
+    let option = |payload| ty(Term::Option(payload));
+    assert_eq!(
+        join(&decls, &option(named("A")), &option(named("C"))),
+        Err(JoinError::PartConstructors(named("A"), named("C")))
+    );
+    assert_eq!(
+        join(&decls, &option(never()), &option(named("A"))),
+        Ok(option(named("A")))
+    );
     assert_eq!(
         join(
             &decls,
-            &ty(Term::Option(named("A"))),
-            &ty(Term::Option(named("C")))
+            &option(option(named("A"))),
+            &option(option(never()))
         ),
-        Ok(ty(Term::Option(named("B"))))
+        Ok(option(option(named("A"))))
+    );
+    let mut_a = reference(Mutability::Exclusive, named("A"));
+    let shared_a = reference(Mutability::Shared, named("A"));
+    assert_eq!(
+        join(&decls, &option(mut_a.clone()), &option(shared_a.clone())),
+        Err(JoinError::PartConstructors(mut_a, shared_a))
+    );
+    assert_eq!(
+        join(
+            &decls,
+            &option(boxed(named("A"))),
+            &option(boxed(named("C")))
+        ),
+        Err(JoinError::InvariantPart(
+            PartKey::Arg(0),
+            named("A"),
+            named("C")
+        ))
     );
 }
 
@@ -90,32 +119,26 @@ fn invariant_parts_of_one_name_must_be_equal() {
 }
 
 #[test]
-fn error_parts_join_into_the_error_enum_by_node() {
+fn an_error_part_is_joined_as_every_other_structural_part() {
     let decls = decls();
     let u8_ = int(IntTy::U8);
     let ok_a = result(u8_.clone(), named("A"));
     let ok_c = result(u8_.clone(), named("C"));
-    let a_c = error(&[named("A"), named("C")]);
     assert_eq!(
         join(&decls, &ok_a, &ok_c),
-        Ok(result(u8_.clone(), a_c.clone()))
+        Err(JoinError::PartConstructors(named("A"), named("C")))
     );
     assert_eq!(
         join(&decls, &result(u8_.clone(), never()), &ok_a),
         Ok(ok_a.clone())
     );
     assert_eq!(join(&decls, &ok_a, &ok_a), Ok(ok_a.clone()));
-    let a_b_c = error(&[named("A"), named("B"), named("C")]);
-    assert_eq!(error_join(&decls, &a_c, &named("B")), Ok(a_b_c));
+    let a_c = error(&[named("A"), named("C")]);
+    let b = error(&[named("B")]);
     assert_eq!(
-        error_join(&decls, &named("A"), &u8_),
-        Err(JoinError::ErrorElements(vec![named("A"), u8_.clone()]))
+        join(&decls, &result(u8_.clone(), a_c), &result(u8_.clone(), b)),
+        Ok(result(u8_, error(&[named("A"), named("B"), named("C")])))
     );
-    let enum_a = enumeration("A", &[("V", never())]);
-    assert!(matches!(
-        error_join(&decls, &named("A"), &enum_a),
-        Err(JoinError::ErrorElements(_))
-    ));
 }
 
 #[test]
@@ -126,7 +149,12 @@ fn le_is_the_order_the_join_defines() {
     assert!(le(
         &decls,
         &object(&[("x", named("A"))]),
-        &object(&[("x", named("B")), ("y", never())])
+        &object(&[("x", named("A")), ("y", never())])
+    ));
+    assert!(!le(
+        &decls,
+        &object(&[("x", named("A"))]),
+        &object(&[("x", named("B"))])
     ));
     assert!(le(&decls, &never(), &named("A")));
     assert!(le(

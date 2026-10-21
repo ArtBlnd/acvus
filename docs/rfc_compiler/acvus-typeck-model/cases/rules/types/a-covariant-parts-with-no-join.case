@@ -1,5 +1,0 @@
-//@ spec: l.86
-// Option<u8> and Option<u16> are of one node, and their covariant payloads are
-// joined (l.86); u8 and u16 have no common ancestor, so the payload has no
-// join and neither has the whole.
-assert join(Option<u8>, Option<u16>) == none;

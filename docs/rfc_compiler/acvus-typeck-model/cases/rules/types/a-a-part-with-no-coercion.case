@@ -1,5 +1,6 @@
-//@ spec: l.110, l.107
-// The covariant-part row needs a coercion at each covariant part (l.110);
-// u8 ⇝ u16 has no row and no conversion is declared, so Option<u8> does not
-// coerce to Option<u16>.
+//@ spec: l.103, l.111, l.74
+// The part row changes each part by ⇝ₚ (l.103), the object, enum and part rows
+// and ! ⇝ U alone, so a part takes no cast and no conversion (l.111, l.74);
+// none of them goes from u8 to u16, so Option<u8> does not coerce to
+// Option<u16>.
 assert coerce(Option<u8>, Option<u16>) == none;

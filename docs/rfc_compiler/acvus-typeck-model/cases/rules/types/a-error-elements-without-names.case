@@ -1,6 +1,0 @@
-//@ spec: l.90, l.94–95
-// At the error part, ⊔ᴱ (l.90): ⟦u8⟧ ∪ ⟦u16⟧ = {u8, u16} (l.94), two elements
-// of two nodes, not merged; two remain and neither is a type of a name (an
-// enum, a struct, an extern-defined type), so l.95 gives no result and the
-// whole has no join.
-assert join(Result<u8, u8>, Result<u8, u16>) == none;

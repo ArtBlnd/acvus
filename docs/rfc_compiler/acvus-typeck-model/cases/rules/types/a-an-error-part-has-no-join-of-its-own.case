@@ -1,0 +1,5 @@
+//@ spec: l.86, l.89
+// A Result's error part is a part of a structural type, joined by ⊔ₚ as every
+// other is (l.86); u8 and u16 have two constructors and neither is !, so ⊔ₚ
+// gives no join (l.89), and neither has the whole.
+assert join(Result<u8, u8>, Result<u8, u16>) == none;

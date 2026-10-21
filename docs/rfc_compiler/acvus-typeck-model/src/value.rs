@@ -75,7 +75,7 @@ pub struct Joined {
 }
 
 impl State {
-    /// The join of two sources' constructors and members (l.86–90): `!` below
+    /// The join of two sources' constructors and members (l.86–88): `!` below
     /// every one, two references at the lesser mutability, and two others
     /// raised by casts to their nearest common ancestor node, their members
     /// united. A reference's target is a part, and the constructor of a

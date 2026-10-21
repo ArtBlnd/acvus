@@ -221,12 +221,6 @@ pub enum PartKey {
     Identity,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Variance {
-    Covariant,
-    Invariant,
-}
-
 impl<P> Term<P> {
     pub fn constructor(&self) -> Constructor {
         match self {
@@ -425,7 +419,9 @@ impl<P> Term<P> {
 }
 
 impl Constructor {
-    /// Object, enum, tuple, array, option and result (l.68).
+    /// Object, enum, tuple, array, option and result (l.68). The parts of a
+    /// structural constructor are joined without casts, and every part of any
+    /// other constructor is invariant (l.74).
     pub fn is_structural(&self) -> bool {
         matches!(
             self,
@@ -436,16 +432,6 @@ impl Constructor {
                 | Constructor::Option
                 | Constructor::Result
         )
-    }
-
-    /// Every part of a structural constructor is covariant, and every part of
-    /// any other constructor is invariant (l.74).
-    pub fn variance(&self) -> Variance {
-        if self.is_structural() {
-            Variance::Covariant
-        } else {
-            Variance::Invariant
-        }
     }
 
     /// The part that holds `variant`'s payload. `Some` and `None` share

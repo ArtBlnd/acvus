@@ -9,7 +9,7 @@ use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::sig::{SigTy, Signature};
 use crate::solve::State;
-use crate::ty::{Name, Term, Variance};
+use crate::ty::{Name, Term};
 
 use super::{NodeAt, NodeKind};
 
@@ -191,7 +191,7 @@ impl State {
         if kind.constructor() != term.constructor() {
             return;
         }
-        let invariant = kind.constructor().variance() == Variance::Invariant;
+        let invariant = !kind.constructor().is_structural();
         for (key, written) in term.parts() {
             if let Some(&part) = kind.part(&key) {
                 self.would_record(part, written, equated || invariant, found);

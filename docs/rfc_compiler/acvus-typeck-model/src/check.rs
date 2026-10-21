@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, Conflict, KindSource, NamedConflict};
+use crate::class::{ClassId, ClassName, Conflict, NamedConflict};
 use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::node::Decision;
 use crate::relation::{Named, Relation};
@@ -82,13 +82,8 @@ impl State {
             let (Some(from_value), Some(to_value)) = (self.value(from), self.value(to)) else {
                 continue;
             };
-            let written = matches!(self.classes.held(to).kind, Some((_, KindSource::Written)));
             let coercion = if lower {
-                match along_le(&self.decls, &from_value, &to_value) {
-                    Ok(coercion) => Ok(coercion),
-                    Err(_) if written => coerce(&self.decls, &from_value, &to_value),
-                    Err(error) => Err(error),
-                }
+                along_le(&self.decls, &from_value, &to_value)
             } else {
                 coerce(&self.decls, &from_value, &to_value)
             };

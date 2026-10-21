@@ -12,7 +12,7 @@ use crate::decl::Node;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
-use crate::ty::{Mutability, Term, Variance};
+use crate::ty::{Mutability, Term};
 
 /// How a relation's two sides are related part by part (l.280).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -121,24 +121,22 @@ impl State {
         };
         let (from_c, to_c) = (from_kind.constructor(), to_kind.constructor());
         if from_c == to_c {
-            let variance = from_c.variance();
+            let structural = from_c.is_structural();
             for (key, from_part) in from_kind.parts() {
                 let Some(&to_part) = to_kind.part(&key) else {
                     continue;
                 };
-                let relation = match (variance, side) {
-                    (Variance::Invariant, _) => Relation::Equation(*from_part, to_part),
-                    (Variance::Covariant, Side::Lower) => Relation::LowerBound {
+                let relation = match (structural, side) {
+                    (false, _) => Relation::Equation(*from_part, to_part),
+                    (true, Side::Lower) => Relation::LowerBound {
                         lower: *from_part,
                         upper: to_part,
                     },
-                    (Variance::Covariant, Side::Boundary) if self.is_unknown(to_part) => {
-                        Relation::LowerBound {
-                            lower: *from_part,
-                            upper: to_part,
-                        }
-                    }
-                    (Variance::Covariant, Side::Boundary) => Relation::Boundary {
+                    (true, Side::Boundary) if self.is_unknown(to_part) => Relation::LowerBound {
+                        lower: *from_part,
+                        upper: to_part,
+                    },
+                    (true, Side::Boundary) => Relation::Boundary {
                         from: *from_part,
                         to: to_part,
                     },
