@@ -8,7 +8,9 @@ it. Three kinds of entry:
 - **T**, a text: the spec's two texts disagree, or the spec and an RFC it cites do.
 - **O**, an order: the outcome depends on the order of solving.
 
-Within each kind, the entries are numbered in the order encoding found them.
+Within each kind, the entries are numbered in the order encoding found them. An
+entry encoding found where the model departed from the text, and the text does not
+have, keeps its number and says so ("Not a hole", "Not an order").
 
 A reading the model takes where the text leaves one open is stated in the note of
 the primitive it belongs to, not here.
@@ -72,15 +74,16 @@ relates the targets by an equation, as the reborrow row `&mut T ⇝ &T` keeps `T
 
 ## H5. A lambda's node that reads a capture
 
-A lambda is a binding group of its own (l.23), solved before the group in which a
-use records its C (l.220), which for a lambda is its enclosing body's. A capture's
-type is a class of the enclosing group (l.217), which the lambda shares and does
-not solve (l.218, l.222). The dependency graph has the lambda's nodes and classes
-alone (l.216, l.269), and no row makes anything wait for what the enclosing group
-records into a shared class (l.244–250); only a universal waits for something
-outside (l.246). So a lambda's use that reads a capture is decided when the lambda
-is solved, before the enclosing group records anything into it, and reads it as
-nothing. Witness, refused by the model
+Not a hole. A lambda is a binding group of its own (l.23), solved before the group
+in which a use records its C (l.220), which for a lambda is its enclosing body's. A
+capture's type is a class of the enclosing group (l.217), which the lambda shares
+and does not solve (l.218, l.222), and no row makes anything wait for what the
+enclosing group records into a shared class (l.244–250). So a lambda's use that
+reads a capture reads it as nothing when the lambda is solved. The position then
+decides nothing, every candidate remains, and the use is not decided (l.267,
+l.344): it stays in C (l.219) and is decided in the copy, where `X` is `A`. Encoding
+found it as a hole while the model decided every node it read, one whose read
+decides nothing included, and refused there. One outcome, accepted, in every order
 (`cases/holes/h5-a-lambda-reads-a-capture.case`):
 
 ```
@@ -88,10 +91,6 @@ let x = make();          // make() -> A
 let f = || probe(x);     // probe(A), probe(B)
 f();
 ```
-
-Read so that a shared class depends on the use that makes the lambda's instance,
-as a universal does on the use that chooses it (l.246), `probe` would stay in C
-and be decided in the copy, where `X` is `A`.
 
 Read by functions §2, what a lambda's captured environment holds is not
 generalized and belongs to where it was written (`design/17-environment.md`,
@@ -262,21 +261,19 @@ l.269 is for, that each node of a cycle reads without the others (Example 12, st
 
 ## O3. A reference recorded at once has no mutability
 
-Where every candidate records a reference into a class, a use records at once that
-the class is a reference (l.252), and a lend that reads it no longer depends on the
-use (l.248). The record names no mutability, and a lend's mutability is the lesser
-of its own and its place's (l.307), so a `&mut` lend decided before the use has no
-result. Witness, two outcomes in the model, one where the lend gives no result
+Not an order. Where every candidate records a reference into a class, a use records
+at once that the class is a reference (l.252), and a lend that reads it no longer
+depends on the use (l.248). The record names no mutability, and a lend's
+mutability is the lesser of its own and its place's (l.307), so before the use is
+decided a `&mut` lend's read decides nothing, and the lend is not decided until it
+does (l.267). Encoding found it as an order while the model decided such a lend
+as giving no result. One outcome, `&mut r` lent `&` through `&`, accepted
 (`cases/holes/o3-a-reference-recorded-at-once-has-no-mutability.case`):
 
 ```
 let r = first(x);        // x: A; first(A) -> &u8, first(B) -> &mut u8
 let s = &mut r;
 ```
-
-Where the candidates agree on the mutability, recording the reference's
-constructor, which is its mutability (l.66), would close it there; where they
-differ, as here, the lend would have to keep depending on the use.
 
 ## O4. A capture written after a use reads it
 

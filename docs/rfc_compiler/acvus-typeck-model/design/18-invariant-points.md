@@ -219,5 +219,5 @@ In each, I\* reports nothing and the certificate holds.
 
 ## Open
 
-- **Not covered.** O1 (a binding's path), O3 (a reference's mutability), O2 beyond
-  the cycles row 2 no longer makes, and O5 are not changed here.
+- **Not covered.** O1 (a binding's path), O2 beyond the cycles row 2 no longer
+  makes, and O5 are not changed here.

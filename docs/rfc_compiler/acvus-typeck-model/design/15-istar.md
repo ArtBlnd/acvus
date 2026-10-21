@@ -140,6 +140,12 @@ where the program is accepted and a completeness one in its third outcome,
 refused at `put(..)#λ/V ≤ X` (`holes.md`, O4). Example 14 reports none over its
 sampled orders.
 
+The table is as derived before that run. Since a node whose read decides nothing is
+no longer decided (note 08, reading 19), its H5 and O3 rows no longer hold, and both
+report none: H5's `probe` stays in C and is decided in the copy, as the check
+decided it, and O3's lend waits for `first`, so no order makes the early decision
+the table names.
+
 ## Not covered
 
 - A class's solving, `α ≐ ⊔S` (l.295), is the decision the pivot's I\* is first

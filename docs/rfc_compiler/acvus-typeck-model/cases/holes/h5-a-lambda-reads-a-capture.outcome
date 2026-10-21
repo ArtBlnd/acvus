@@ -1,21 +1,22 @@
 // What the model gives, written by `BLESS=1` (design/19-cases.md).
 run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
 outcome 1
-  refused
+  accepted
   value X: A
   value f: Fn/0
   value `f()`: ()
   value `make()`: A
-  value `probe(x)`: ()
+  value `probe(x)`: none
   value `|| ..`: Fn/0
-  value `λ result`: ()
+  value `λ result`: none
   decision `f()`: calls {λ}
+  decision `f()#λ/probe`: probe#0
   decision make: make#0
-  decision probe: unreached [probe#0, probe#1]
+  check `X ~> f()#λ/probe.Param(0)`: Ok(Identity)
+  check `f()#λ/probe(x) <= f()#λ/λ result`: Ok(Identity)
+  check `f()#λ/probe.Result <= f()#λ/probe(x)`: Ok(Identity)
   check `f()#λ/λ result <= f()`: Ok(Identity)
   check `make() <= X`: Ok(Identity)
   check `make.Result <= make()`: Ok(Identity)
   check `|| .. <= f`: Ok(Identity)
-  check `probe(x) <= λ result`: Ok(Identity)
-  check `probe.Result <= probe(x)`: Ok(Identity)
-  I* of a final state: [completeness `f()#λ/probe`, completeness `λ#check/probe`]
+  I* of a final state: []

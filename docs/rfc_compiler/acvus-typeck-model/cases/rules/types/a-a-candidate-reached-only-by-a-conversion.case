@@ -16,4 +16,4 @@ let `f(..)`;
 `f(..)` = f(`make()`) @ f;
 
 must fail;
-assert f == unreached [];
+assert f == undecided;

@@ -17,4 +17,4 @@ let R;
 R = f(`make_a()`, 1u16) @ f;
 
 must fail;
-assert f == unreached;
+assert f == undecided;

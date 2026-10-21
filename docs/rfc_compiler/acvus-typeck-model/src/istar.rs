@@ -35,7 +35,8 @@ pub struct Violation {
     pub group: Name,
     pub node: Name,
     pub decided: Decision,
-    pub again: Decision,
+    /// What it becomes decided again, none where that decides nothing.
+    pub again: Option<Decision>,
     /// The nodes whose relations the decision again leaves out.
     pub left_out: BTreeSet<Name>,
 }
@@ -141,7 +142,7 @@ where
             }
             _ => view.decision_under(name, &left_out),
         };
-        if again == decided {
+        if again.as_ref() == Some(&decided) {
             continue;
         }
         let kind = if accepted {
@@ -251,8 +252,8 @@ fn depends_on(
 /// The roots of the classes the node records into at the end, as a read of
 /// `read` takes them (`design/15-istar.md`, Definitions). A use records into
 /// what its candidate would record into by l.286 (note 08, reading 13), its
-/// remaining candidates' where it is not decided as one: the classes it
-/// makes anew are its own, and no other node reads them. Another decided node
+/// candidates' where it is not decided: the classes it makes anew are its own,
+/// and no other node reads them. Another decided node
 /// records into what its own relations record into, those of the instances it
 /// made among them; one not decided, into the classes at its positions. A
 /// read of whether a class is a reference leaves out what cannot decide it
@@ -271,13 +272,7 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
             let sigs: Vec<Signature> = match decision {
                 Some(Decision::Use(id)) => vec![view.decls.decl(id).sig.clone()],
                 Some(Decision::Never) => return BTreeSet::from([view.root(*result)]),
-                Some(Decision::Unreached(remaining)) => remaining
-                    .iter()
-                    .map(|id| view.decls.decl(id).sig.clone())
-                    .collect(),
-                Some(other) => {
-                    unreachable!("a use is decided as a candidate, unreached or never: {other:?}")
-                }
+                Some(other) => unreachable!("a use is decided as a candidate or never: {other:?}"),
                 None => view
                     .candidates(callee, args.len())
                     .into_iter()

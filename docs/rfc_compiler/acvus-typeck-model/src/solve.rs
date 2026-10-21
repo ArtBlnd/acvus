@@ -278,13 +278,18 @@ impl State {
             .expect("an equivalence class has a member")
     }
 
-    /// The steps that may be taken now.
+    /// The steps that may be taken now: each eligible class solved, and each
+    /// eligible node decided where the value it reads now decides it, a node
+    /// whose value decides nothing staying undecided (l.267, l.344).
     pub fn steps(&self) -> Vec<Step> {
         let (classes, nodes) = self.eligible();
+        let decided = nodes
+            .into_iter()
+            .filter(|name| self.read_now(name).decision.is_some());
         classes
             .into_iter()
             .map(Step::Solve)
-            .chain(nodes.into_iter().map(Step::Decide))
+            .chain(decided.map(Step::Decide))
             .collect()
     }
 

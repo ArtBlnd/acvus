@@ -23,5 +23,5 @@ let `pick(t)`;
 T = `pick(t)`;
 
 must fail;
-assert pick == unreached [pick#0, pick#1];
+assert pick == undecided;
 assert `t.0` == applied;

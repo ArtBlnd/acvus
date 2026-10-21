@@ -10,4 +10,4 @@ let R;
 R = f(0) @ f;
 
 must fail;
-assert f == unreached;
+assert f == undecided;

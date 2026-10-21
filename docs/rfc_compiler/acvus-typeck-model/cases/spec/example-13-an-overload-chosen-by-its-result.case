@@ -22,4 +22,4 @@ let `&mut parse(s) 2`;
 must fail;
 assert parse == parse#0;
 assert lend == lend &mut place;
-assert `parse 2` == unreached;
+assert `parse 2` == undecided;

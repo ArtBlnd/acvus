@@ -1,0 +1,42 @@
+//@ spec: l.203, l.217, l.222, with l.191, l.230, l.267, l.344
+// let f = |x| take_u8(x);  // take_u8(u8)
+// let g = || f(1u8);
+// g();
+// In g's lambda, f is the capture F, the enclosing group's class (l.217),
+// whose lower bound, f's lambda's value, is recorded as the text gives it
+// (l.230). The call reads F, whose Values are {λf} (l.203, l.267), and makes
+// an instance of that lambda whose X' meets 1u8; its copy u8 ⇝ u8 holds.
+// Were F read before its lower bound, the read would decide nothing, the
+// call would stay undecided, in g's C, and its copy, made by g() in the
+// script's group, would be decided there by the same Values (l.222). Either
+// way the program is accepted and g() is ().
+extern fn take_u8(u8);
+
+group λf in run {
+    let X;
+    let `λf result`;
+    fn λf(X) -> `λf result`;
+    let `take_u8(x)`;
+    `take_u8(x)` = take_u8(X) @ take_u8;
+    `λf result` = `take_u8(x)`;
+}
+let `|x| ..`: lambda λf;
+let F;
+F = `|x| ..`;
+group λg in run {
+    let `λg result`;
+    fn λg() -> `λg result`;
+    let 1u8: u8;
+    let `f(1u8)`;
+    `f(1u8)` = (F)(1u8) @ `f(1u8)`;
+    `λg result` = `f(1u8)`;
+}
+let `|| ..`: lambda λg;
+let G;
+G = `|| ..`;
+let `g()`;
+`g()` = (G)() @ `g()`;
+
+must pass;
+assert `g()` == calls {λg};
+assert `g()`: ();

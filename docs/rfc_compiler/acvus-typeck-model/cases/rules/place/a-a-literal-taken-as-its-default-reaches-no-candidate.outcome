@@ -2,8 +2,9 @@
 run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
 outcome 1
   refused
-  value 0: i32
-  value R: ()
-  decision f: unreached []
-  check `f.Result <= R`: Ok(Identity)
+  value 0: none
+  value R: none
+  decision f: undecided
+  refusal no_value 0
+  refusal no_value R
   I* of a final state: []

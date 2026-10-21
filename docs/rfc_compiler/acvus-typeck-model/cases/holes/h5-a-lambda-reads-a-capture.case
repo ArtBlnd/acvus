@@ -4,9 +4,9 @@
 // f();
 // The lambda's group is solved before the enclosing one (l.220), and no
 // dependency makes its probe wait for what the enclosing group records into X
-// (l.216, l.244–250), so probe reads X as nothing and is refused. I* decides
-// probe(A), reading what the call's instance and an instance of the check's own
-// record into X.
+// (l.216, l.244–250), so probe reads X as nothing: the position decides
+// nothing, both candidates remain, and probe is not decided (l.267, l.344). It
+// stays in C (l.219) and is decided in the copy the call makes, where X is A.
 extern type A;
 extern type B;
 extern fn make() -> A;
@@ -32,7 +32,5 @@ group λ {
     `probe(x)` = probe(X) @ probe;
 }
 
-must fail;
-assert probe == unreached;
-assert istar completeness `f()#λ/probe`;
-assert istar completeness `λ#check/probe`;
+must pass;
+assert `f()#λ/probe` == probe#0;

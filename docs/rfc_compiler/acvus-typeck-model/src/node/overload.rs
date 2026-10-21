@@ -43,7 +43,9 @@ pub struct Narrowing {
     /// The narrowing again with each LitVar taken as its family's default,
     /// where several candidates remained and a value read holds a LitVar.
     pub retry: Option<Vec<Narrowed>>,
-    pub decision: Decision,
+    /// The candidate it is decided as, or `!` where an argument reads as `!`;
+    /// none where not exactly one remains (l.344).
+    pub decision: Option<Decision>,
 }
 
 impl State {
@@ -63,14 +65,16 @@ impl State {
         sig.params().get(i).unwrap_or(sig.result())
     }
 
-    /// The positions where a use's candidates differ, which it reads (l.267).
+    /// The positions where a use's candidates differ, which it reads (l.267);
+    /// none where it has no candidate.
     pub(crate) fn differing(candidates: &[&Signature], args: usize) -> Vec<usize> {
+        let Some(first) = candidates.first() else {
+            return Vec::new();
+        };
         (0..=args)
             .filter(|&i| {
-                let first = Self::at_position(candidates[0], i);
-                candidates
-                    .iter()
-                    .any(|sig| Self::at_position(sig, i) != first)
+                let at = Self::at_position(first, i);
+                candidates.iter().any(|sig| Self::at_position(sig, i) != at)
             })
             .collect()
     }
@@ -167,7 +171,7 @@ impl State {
             .iter()
             .any(|(i, value)| *i < args.len() && matches!(value.decided(), Some(Term::Never)));
         if never {
-            return narrowing(Vec::new(), None, Decision::Never);
+            return narrowing(Vec::new(), None, Some(Decision::Never));
         }
         let narrowed = |values: &[(usize, ReadValue)]| {
             let mut remaining: Vec<usize> = (0..sigs.len()).collect();
@@ -215,8 +219,8 @@ impl State {
             retry = Some(stages);
         }
         let decision = match remaining.as_slice() {
-            [one] => Decision::Use(ids[*one].clone()),
-            _ => Decision::Unreached(remaining.into_iter().map(|c| ids[c].clone()).collect()),
+            [one] => Some(Decision::Use(ids[*one].clone())),
+            _ => None,
         };
         narrowing(stages, retry, decision)
     }

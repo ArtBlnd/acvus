@@ -1,0 +1,13 @@
+//@ spec: l.331, l.344
+// let x = 1u8;
+// f(x)                     // no declaration named f
+// f's candidates are the declarations its name reaches (l.331), none, so no
+// candidate remains and f is not decided (l.344, l.301).
+let X;
+let 1u8: u8;
+let R;
+X = 1u8;
+R = f(X) @ f;
+
+must fail;
+assert f == undecided;

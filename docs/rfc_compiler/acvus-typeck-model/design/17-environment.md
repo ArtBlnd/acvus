@@ -21,8 +21,9 @@ The spec solves a lambda's group before its enclosing one, and copies all of its
 the captures shared, at each call of its value (l.220, l.222). What the lambda
 records into a capture is then recorded only by the calls' instances, at none of
 their positions, so the capture and what reads it are decided before or after it by
-order (O4), and a node of the lambda that reads a capture is decided before the
-enclosing group records into it (H5).
+order (O4). A node of the lambda that reads a capture reads it before the enclosing
+group records into it, and where that decides nothing it is decided in each copy
+(H5, which is not a hole).
 
 Read by functions §2, the part of a lambda's text that its captured environment
 holds is not generalized: it belongs to the enclosing group and is solved there,

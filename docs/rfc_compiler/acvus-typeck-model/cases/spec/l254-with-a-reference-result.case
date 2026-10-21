@@ -12,4 +12,4 @@ let `pick(a)`;
 A = `pick(a)`;
 
 must fail;
-assert pick == unreached;
+assert pick == undecided;

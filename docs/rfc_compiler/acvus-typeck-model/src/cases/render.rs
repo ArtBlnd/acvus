@@ -75,7 +75,6 @@ where
 pub fn decision(decision: &Decision) -> String {
     match decision {
         Decision::Use(id) => decl(id),
-        Decision::Unreached(ids) => format!("unreached [{}]", listed(ids.iter().map(decl))),
         Decision::Never => "never".to_string(),
         Decision::Lend {
             target: lent,
@@ -90,7 +89,6 @@ pub fn decision(decision: &Decision) -> String {
             target: lent,
             mutability,
         } => format!("bind lend {} {}", reference(*mutability), target(lent)),
-        Decision::NoResult => "no result".to_string(),
         Decision::Calls(lambdas) => format!(
             "calls {{{}}}",
             listed(lambdas.iter().map(|lambda| name(lambda.as_str())))
@@ -691,14 +689,26 @@ fn as_reference(state: &State, at: &str, read: &AsReference) -> String {
 
 /// The value a node read when it was decided.
 fn decided_by(state: &State, node: &Name, by: &DecidedBy) -> Lines {
-    let mut lines = Lines::default();
-    let value = &by.value;
-    let facts = [
-        ("exclude", nodes(&value.left_out)),
+    let broke = [
         ("broke", nodes(&by.broke)),
         ("broken by", nodes(&by.broken_on)),
-        ("left out", places(value.relations.iter().copied())),
     ];
+    value_read(state, node, &by.value, broke)
+}
+
+/// The value a node reads: the nodes and relations it leaves out, with the
+/// dependencies `broke` names, and what it reads at each position.
+fn value_read(
+    state: &State,
+    node: &Name,
+    value: &ValueRead,
+    broke: [(&str, Option<String>); 2],
+) -> Lines {
+    let mut lines = Lines::default();
+    let facts = [("exclude", nodes(&value.left_out))]
+        .into_iter()
+        .chain(broke)
+        .chain([("left out", places(value.relations.iter().copied()))]);
     for (key, listed) in facts {
         if let Some(listed) = listed {
             lines.push(0, format!("{key}: {listed}"));
@@ -804,24 +814,27 @@ pub fn traced(state: &State, report: &Report) -> Lines {
 
 /// The unbroken dependencies of `from` not yet met.
 fn waits_for(state: &State, from: &Vertex) -> String {
-    let waits = state
-        .waits_for(from)
-        .into_iter()
-        .map(|(to, edge)| match (to, edge) {
-            (Vertex::Class(lower), Edge::Lower) => format!("lower {}", class_of(state, lower)),
-            (Vertex::Class(taking), Edge::Taking) => format!("taking {}", class_of(state, taking)),
-            (Vertex::Node(node), Edge::Records) => format!("records {}", name(node.as_str())),
-            (Vertex::Outside, Edge::Chosen) => "chosen".to_string(),
-            (Vertex::Node(node), Edge::Reads) => format!("reads {}", name(node.as_str())),
-            (Vertex::Outside, Edge::Reads) => "reads outside".to_string(),
-            (Vertex::Node(node), Edge::Path) => format!("path {}", name(node.as_str())),
-            (to, edge) => unreachable!("the dependency graph has no edge {edge:?} to {to:?}"),
-        });
+    dependencies(state, state.waits_for(from))
+}
+
+fn dependencies(state: &State, waits: Vec<(Vertex, Edge)>) -> String {
+    let waits = waits.into_iter().map(|(to, edge)| match (to, edge) {
+        (Vertex::Class(lower), Edge::Lower) => format!("lower {}", class_of(state, lower)),
+        (Vertex::Class(taking), Edge::Taking) => format!("taking {}", class_of(state, taking)),
+        (Vertex::Node(node), Edge::Records) => format!("records {}", name(node.as_str())),
+        (Vertex::Outside, Edge::Chosen) => "chosen".to_string(),
+        (Vertex::Node(node), Edge::Reads) => format!("reads {}", name(node.as_str())),
+        (Vertex::Outside, Edge::Reads) => "reads outside".to_string(),
+        (Vertex::Node(node), Edge::Path) => format!("path {}", name(node.as_str())),
+        (to, edge) => unreachable!("the dependency graph has no edge {edge:?} to {to:?}"),
+    });
     some_listed(waits).unwrap_or("none".to_string())
 }
 
 /// What a binding group waits for: each equivalence class not solved, and
-/// each node not decided, with the unbroken dependencies of it not yet met.
+/// each node not decided, with the unbroken dependencies of it not yet met,
+/// and a node that waits for nothing with the value it reads, which decides
+/// nothing.
 pub fn waiting(state: &State) -> Lines {
     let mut lines = Lines::default();
     for root in state.classes.roots() {
@@ -844,9 +857,15 @@ pub fn waiting(state: &State) -> Lines {
         if held.decision.is_some() {
             continue;
         }
-        let wait = waits_for(state, &Vertex::Node(node.clone()));
+        let waits = state.waits_for(&Vertex::Node(node.clone()));
+        let waits_for_nothing = waits.is_empty();
         let line = format!("undecided {}", name(node.as_str()));
+        let wait = dependencies(state, waits);
         lines.push(0, attributes(line, [("wait", Some(wait))]));
+        if waits_for_nothing {
+            let none = [("broke", None), ("broken by", None)];
+            lines.nest(1, value_read(state, node, &state.read_now(node), none));
+        }
     }
     lines
 }

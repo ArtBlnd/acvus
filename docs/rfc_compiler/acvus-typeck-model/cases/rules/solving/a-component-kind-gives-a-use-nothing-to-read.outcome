@@ -3,13 +3,13 @@ run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Record
 outcome 1
   refused
   value 0: i32
-  value T: !
-  value `pick(t)`: !
+  value T: none
+  value `pick(t)`: none
   value `t.0`: i32
-  decision pick: unreached [pick#0, pick#1]
+  decision pick: undecided
   decision `t.0`: applied
   partition {0, `t.0`}
   check `0 <= t.0`: Ok(Identity)
-  check `pick(t) <= T`: Ok(Identity)
-  refusal conflict at "the value of T": Never vs component 0: t.0
+  refusal no_value T
+  refusal no_value `pick(t)`
   I* of a final state: []

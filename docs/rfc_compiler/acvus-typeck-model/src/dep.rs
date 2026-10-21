@@ -117,7 +117,7 @@ impl State {
             }
         }
         for root in self.classes.roots() {
-            if self.chosen_outside(root) {
+            if self.is_universal(root) {
                 add(Vertex::Class(root), Vertex::Outside, Edge::Chosen);
             }
         }
@@ -214,13 +214,6 @@ impl State {
             }
         }
         seen
-    }
-
-    /// Whether the equivalence class depends on the use that makes an
-    /// instance of its binding group, which lies outside it (l.246): a
-    /// universal (`holes.md`, H5).
-    pub(crate) fn chosen_outside(&self, root: ClassId) -> bool {
-        self.is_universal(root)
     }
 
     /// The undecided nodes that broke their dependency on the node (l.269).

@@ -24,4 +24,4 @@ R = core::add(`&x`, `&y`) @ `x + y`;
 must fail;
 assert `&x` == lend & place;
 assert `&y` == lend & place;
-assert `x + y` == unreached;
+assert `x + y` == undecided;

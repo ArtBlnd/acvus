@@ -27,7 +27,7 @@ reads its position, or lends it where its path passes a reference.
    reaches with as many parameters as it has arguments (l.331). It reads the
    positions where they differ (l.267), so a use with one candidate reads nothing,
    and all of it is shared (l.335): it is decided as that candidate as it is
-   recorded. A use with none is refused as it is recorded.
+   recorded. A use with none is never decided (l.344; reading 19).
 2. **A candidate's variables are made at the decision.** They are unknowns of the
    use's binding group (l.331). Only the decided candidate records, so only its
    variables are made.
@@ -96,7 +96,8 @@ reads its position, or lends it where its path passes a reference.
 16. **A reference of undecided mutability.** A class read as a reference only by a
    use's record (l.252) has a mutability the value read does not decide; a
    projection applies to its target all the same, and a lend or a binding whose
-   reference's mutability is then undecided gives no result (`holes.md`, O3).
+   lesser mutability (l.307) is then undecided, a `&mut` one, decides nothing
+   until the mutability is read (reading 19; `holes.md`, O3).
 17. **A broken dependency** (l.269). A node decided while undecided nodes broke
    their dependency on it records once they are decided; whether that holds of
    the state or of their reads only is `holes.md`, O2, and the model takes it as a
@@ -108,11 +109,20 @@ reads its position, or lends it where its path passes a reference.
    bound, an equation or a kind into the class left out what l.291 makes a boundary
    record into a class holding a LitVar alone, and made the outcome depend on the
    order; it is removed (`holes.md`, H7).
+19. **A read that decides nothing** (l.267, l.344). A node is decided only by a
+   value read that decides it: a use where exactly one candidate remains or an
+   argument it reads is `!`, a lend and a binding where their lesser mutability is
+   read, a call of a function value where its Values name a lambda; a projection,
+   and a binding whose path passes no reference, always are. A node whose read decides nothing
+   is not decided then and waits, undecided, for relations that make it decide.
+   One undecided at its group's fixpoint stays in C, and one undecided once the
+   run ends is refused (l.301), as the pick example's `pick` is at its call
+   (l.265) and Example 13's `parse` (l.569).
 
 ## Left open for change
 
 - `State::record_at_once`: what a use records before it is decided, the positions
   its candidates write alike (l.335) and whether a class is a reference where they
-  agree (l.252); what it leaves out is `holes.md`, O3.
+  agree (l.252).
 - `State::defer`: when a decided node's relations are recorded, and which reads
   leave them out (l.269; `holes.md`, O2).

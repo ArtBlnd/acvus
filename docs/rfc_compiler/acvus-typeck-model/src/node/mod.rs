@@ -95,8 +95,6 @@ pub(crate) struct Reads {
 pub enum Decision {
     /// The use is decided as this candidate (l.344).
     Use(DeclId),
-    /// The use leaves no candidate, or several, and is refused (l.344).
-    Unreached(Vec<DeclId>),
     /// The use's argument reads as `!`, so it is never carried out and is
     /// decided with the result `!` (l.344).
     Never,
@@ -120,10 +118,6 @@ pub enum Decision {
         target: LendTarget,
         mutability: Mutability,
     },
-    /// What the node reads decides nothing of the mutability its reference
-    /// needs, or the function value it calls names no lambda, so it gives no
-    /// result (l.267, l.301).
-    NoResult,
     /// The call reads the function value as one whose Values names these
     /// lambdas, and makes an instance of each (l.203).
     Calls(BTreeSet<Name>),
@@ -137,13 +131,6 @@ pub enum LendTarget {
     /// A reference, so the target is that reference's; the mutability is the
     /// reference's where the value read decides it.
     Through(Option<Mutability>),
-}
-
-impl Decision {
-    /// Whether the node is reached by what it reads, and records.
-    pub fn is_reached(&self) -> bool {
-        !matches!(self, Decision::Unreached(_) | Decision::NoResult)
-    }
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -208,7 +195,9 @@ pub struct ValueRead {
     /// Their relations, by their places in the log.
     pub relations: Vec<usize>,
     pub reading: Reading,
-    pub decision: Decision,
+    /// What the node becomes by it, none where it decides nothing (l.267,
+    /// l.344).
+    pub decision: Option<Decision>,
 }
 
 /// What a node read at its positions (l.267).
@@ -239,7 +228,8 @@ pub enum Reading {
 
 impl State {
     /// Decides as it is recorded a node that reads nothing: a Deref, and a use
-    /// with one candidate or none (`design/08-node.md`, readings 1 and 6).
+    /// with one candidate (`design/08-node.md`, readings 1 and 6). A use with
+    /// none is never decided (l.344).
     pub(crate) fn decide_at_once(&mut self) -> Vec<Decided> {
         let at_once: Vec<(Name, Decision)> = self
             .nodes
@@ -252,7 +242,6 @@ impl State {
                 } => Some((name.clone(), Decision::Applied)),
                 NodeKind::Use { callee, args, .. } => {
                     match self.candidates(callee, args.len()).as_slice() {
-                        [] => Some((name.clone(), Decision::Unreached(Vec::new()))),
                         [one] => Some((name.clone(), Decision::Use(one.id.clone()))),
                         _ => None,
                     }
@@ -281,22 +270,36 @@ impl State {
             .decision = Some(decision);
     }
 
-    /// Decides the node by the value it reads leaving out the relations of
-    /// itself, of the nodes that transitively depend on it, and of those it
-    /// broke its dependency on (`Deferral::Reading`), and records what it
-    /// records as the reading of l.269 takes it.
-    pub(crate) fn decide(&mut self, name: &Name) -> Decided {
-        let dependents = self.dependents(name);
-        let broke: BTreeSet<Name> = self
+    /// The nodes whose relations the node's read leaves out: itself and those
+    /// that transitively depend on it (l.267), and those it broke its
+    /// dependency on (`Deferral::Reading`).
+    fn read_leaves_out(&self, name: &Name) -> (BTreeSet<Name>, BTreeSet<Name>) {
+        let broke = self
             .broken
             .get(name)
             .into_iter()
             .flatten()
             .cloned()
             .collect();
+        (self.dependents(name), broke)
+    }
+
+    /// The value the node reads now, as deciding it would read it.
+    pub(crate) fn read_now(&self, name: &Name) -> ValueRead {
+        let (dependents, broke) = self.read_leaves_out(name);
+        self.value_read(name, &dependents.union(&broke).cloned().collect())
+    }
+
+    /// Decides the node by the value it reads, which decides it (`steps`),
+    /// and records what it records as the reading of l.269 takes it.
+    pub(crate) fn decide(&mut self, name: &Name) -> Decided {
+        let (dependents, broke) = self.read_leaves_out(name);
         let excluded = dependents.union(&broke).cloned().collect();
         let value = self.value_read(name, &excluded);
-        let decision = value.decision.clone();
+        let decision = value
+            .decision
+            .clone()
+            .expect("a node is decided where the value it reads decides it");
         let broken_on = self.broken_on(name);
         self.set_decision(name, decision.clone());
         self.broken.remove(name);
@@ -357,15 +360,21 @@ impl State {
     }
 
     /// What the node becomes by the value it reads leaving out the relations
-    /// of the nodes `excluded`, as `value_read` reads it.
-    pub(crate) fn decision_under(&self, name: &Name, excluded: &BTreeSet<Name>) -> Decision {
+    /// of the nodes `excluded`, as `value_read` reads it; none where that
+    /// value decides nothing.
+    pub(crate) fn decision_under(
+        &self,
+        name: &Name,
+        excluded: &BTreeSet<Name>,
+    ) -> Option<Decision> {
         self.value_read(name, excluded).decision
     }
 
     /// The value the node reads leaving out the relations of the nodes
     /// `excluded`, and, for a lend, a projection or a binding, which reads
     /// whether a class is a reference, of every projection other than a Deref
-    /// (l.267), and what the node becomes by it.
+    /// (l.267), and what the node becomes by it, none where it decides nothing
+    /// (l.267, l.344).
     pub(crate) fn value_read(&self, name: &Name, excluded: &BTreeSet<Name>) -> ValueRead {
         let kind = &self.nodes[name].kind;
         let mut excluded = excluded.clone();
@@ -400,32 +409,28 @@ impl State {
                 mutability, place, ..
             } => {
                 let (read, lent) = lend(Some(*mutability), *place);
-                let decision = match lent {
-                    Some((target, mutability)) => Decision::Lend { target, mutability },
-                    None => Decision::NoResult,
-                };
+                let decision =
+                    lent.map(|(target, mutability)| Decision::Lend { target, mutability });
                 (Reading::Place(read), decision)
             }
             NodeKind::Project {
                 projection: Projection::Deref,
                 ..
-            } => (Reading::Nothing, Decision::Applied),
+            } => (Reading::Nothing, Some(Decision::Applied)),
             NodeKind::Project { operand, .. } => {
                 let read = self.reads_as_reference(*operand, &excluded);
                 let decision = match read.reads_as {
                     Some(mutability) => Decision::AppliedToTarget(mutability),
                     None => Decision::Applied,
                 };
-                (Reading::Place(read), decision)
+                (Reading::Place(read), Some(decision))
             }
             NodeKind::Bind { path, position, .. } => match self.passed(path) {
-                None => (Reading::Nothing, Decision::Read),
+                None => (Reading::Nothing, Some(Decision::Read)),
                 Some(passed) => {
                     let (read, lent) = lend(passed, *position);
-                    let decision = match lent {
-                        Some((target, mutability)) => Decision::BindLend { target, mutability },
-                        None => Decision::NoResult,
-                    };
+                    let decision =
+                        lent.map(|(target, mutability)| Decision::BindLend { target, mutability });
                     let reading = Reading::Binding {
                         passed,
                         position: read,
@@ -436,11 +441,7 @@ impl State {
             NodeKind::CallValue { callee, .. } => {
                 let read = self.read_state(&excluded);
                 let lambdas = read.values_of(*callee);
-                let decision = if lambdas.is_empty() {
-                    Decision::NoResult
-                } else {
-                    Decision::Calls(lambdas.clone())
-                };
+                let decision = (!lambdas.is_empty()).then(|| Decision::Calls(lambdas.clone()));
                 let reading = Reading::Values {
                     callee: *callee,
                     value: read.read_value(*callee),

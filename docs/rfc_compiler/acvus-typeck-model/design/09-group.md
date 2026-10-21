@@ -54,11 +54,13 @@ the group takes the body's own types.
 7. **A lambda's group** lies inside its enclosing body's and is solved before it
    (l.220). The classes of enclosing groups its text names are shared: no unknowns
    of it (l.218), never solved or fallen back there, so its relations on them stay
-   in its C, and a copy shares them (l.222). A lambda's use that reads one is
-   `holes.md`, H5. Read by the captured environment (`Captures::Environment`,
-   note 17), the classes joined to a capture and the items naming them are the
-   enclosing group's, recorded there once, and the lambda's group is the rest,
-   which names no class of an enclosing group.
+   in its C, and a copy shares them (l.222). A lambda's use that reads one reads
+   what the lambda's group recorded there alone; where that decides nothing, the
+   use stays in C and is decided in each copy (`holes.md`, H5). Read by the
+   captured environment (`Captures::Environment`, note 17), the classes joined to
+   a capture and the items naming them are the enclosing group's, recorded there
+   once, and the lambda's group is the rest, which names no class of an enclosing
+   group.
 8. **Meeting and boundary** (l.226). A value passing into an unknown of the
    place's own group meets it. One passing into a binding of an enclosing group
    reached by name meets it where that binding's type is an unknown of its own
@@ -72,10 +74,11 @@ the group takes the body's own types.
    function values met in its class by equations or lower bounds (l.180, l.188).
    Decided, it makes an instance of each lambda's C, its arguments meeting the
    copies of the lambda's parameters' types, and the copy of its result type
-   entering the call's result (l.203). A value whose Values names no lambda gives
-   no result. Read by the captured environment, an argument meets the lambda's
-   parameter itself where its environment holds it, and the call's result takes
-   the environment's result type where it holds that (note 17, row 3).
+   entering the call's result (l.203). A call whose callee's Values name no
+   lambda decides nothing and is not decided then (note 08, reading 19). Read by
+   the captured environment, an argument meets the lambda's parameter itself
+   where its environment holds it, and the call's result takes the environment's
+   result type where it holds that (note 17, row 3).
 10. **A receiver's `T̄`** is universal (l.325), and the receiver's class holds the
    kind the text writes, so it is decided and universal at once: an argument
    passes into its copy by a boundary (Example 14, step 2). A node that reads

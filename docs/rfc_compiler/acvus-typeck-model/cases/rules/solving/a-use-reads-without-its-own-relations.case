@@ -1,0 +1,20 @@
+//@ spec: l.267, l.252, l.335, l.344, l.301
+// let mut x;
+// x = g(x);                // g(u8) -> u8, g(u16) -> u8
+// Both candidates give u8 at the result, so g records at once g.Result: u8 and
+// its passing into R, and R passes into X (l.335, l.252). g reads X at its
+// argument, where the candidates differ, without the relations g records
+// itself (l.267): left without them, R gives nothing, and X has no other
+// source, so the value read decides nothing and both candidates remain (l.344).
+// Refused at g (l.301); X and R lie at g's positions and have no value.
+extern fn g(u8) -> u8;
+extern fn g(u16) -> u8;
+
+let X;
+let R;
+R = g(X) @ g;
+X = R;
+
+must fail;
+assert g == undecided;
+assert X: none;

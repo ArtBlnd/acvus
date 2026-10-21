@@ -545,15 +545,11 @@ impl Checker<'_> {
                 }
             }
             for (name, decision) in &sheet.decisions {
-                let reached = match decision {
-                    Some(decision) => decision.is_reached(),
-                    None => !sheet.is_entry(),
-                };
-                if !reached {
+                if decision.is_none() && sheet.is_entry() {
                     self.violations.push(Violation {
                         context: group.to_string(),
                         at: name.to_string(),
-                        what: format!("not reached: {decision:?} (l.301)"),
+                        what: "undecided (l.301)".to_string(),
                     });
                 }
             }

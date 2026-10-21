@@ -3,7 +3,7 @@ run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Record
 outcome 1
   refused
   value 1u16: u16
-  value R: ()
-  decision f: unreached []
-  check `f.Result <= R`: Ok(Identity)
+  value R: none
+  decision f: undecided
+  refusal no_value R
   I* of a final state: []

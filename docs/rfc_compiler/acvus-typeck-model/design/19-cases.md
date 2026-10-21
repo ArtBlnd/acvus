@@ -143,13 +143,12 @@ final state, of every run.
 | `assert join(A, C) == B;`, `== none`; `assert le(A, B);`, `assert not le(B, A);` | the primitive, on the declarations |
 | `assert coerce(&mut A, &B) == reborrow + cast cast2#0;`, `assert along_le(…) == …;` | the coercion, on the declarations |
 
-A decision is written `f#0`, `unreached [f#0, f#1]` (`unreached` alone for any),
-`never`, `lend &mut place`, `lend & through &mut` (`through _` where the value read
-decides no mutability), `applied`, `applied through &`, `read`,
-`bind lend & place`, `no result`, `calls {λ}`, `undecided`. A coercion is written
-`identity`, `undecided`, `never`, `conversion f#0`, steps joined by `+` (`reborrow`,
-`cast f#0`, `shape`, `wrap V(…)`), or `none`, `compositions […]`, `conversions […]`
-for none. Both are compared with whitespace left out. A relation, a class and a
+A decision is written `f#0`, `never`, `lend &mut place`, `lend & through &mut`
+(`through _` where the value read decides no mutability), `applied`,
+`applied through &`, `read`, `bind lend & place`, `calls {λ}`, `undecided`. A
+coercion is written `identity`, `undecided`, `never`, `conversion f#0`, steps
+joined by `+` (`reborrow`, `cast f#0`, `shape`, `wrap V(…)`), or `none`,
+`compositions […]`, `conversions […]` for none. Both are compared with whitespace left out. A relation, a class and a
 node are named as the model names them, a copy's as its instance does
 (`nest@23/n == 0`, `put(..)#λ/V <= X`).
 
@@ -335,9 +334,14 @@ steps; `golden()` and every expectation read what they read without it.
   l.267, l.331–344) and fallback (l.297–299). 2 cases under `cases/primitives` test
   the join, `≤` and coercion on the declarations of `fixture::decls()` without
   `Box`, coercion with a conversion `u16 → u8` besides.
-- 56 cases under `cases/rules` are programs the spec's rules refuse in every order, each
-  derived from quoted lines of its region: `types` (l.39–117, 16 of them primitives),
-  `classes` (l.1–38, l.118–223), `solving` (l.224–302) and `place` (l.303–359). The model
-  refuses each at the place its derivation names.
+- 61 cases under `cases/rules` are 60 programs the spec's rules refuse in every
+  order and one they accept (`classes/b-a-lambda-calling-a-captured-lambda`), each
+  derived from quoted lines of its region: `types` (l.39–117, 16 of them
+  primitives), `classes` (l.1–38, l.118–223), `solving` (l.224–302) and `place`
+  (l.303–359). The model refuses each refused one at the place its derivation
+  names. Five of them passed only once a node whose read decides nothing was left
+  undecided (note 08, reading 19): the three `solving` cases of a use whose read
+  decides nothing, `place/a-a-use-whose-name-reaches-no-declaration`, where the
+  model had panicked, and the accepted one.
 - H6's case writes the narrative's `q` as `wanted`, and is `XFAIL`.
 - Every case passes, and every golden is the model's.

@@ -81,7 +81,6 @@ pub fn decision(text: &str) -> Result<Decision, String> {
         ["applied"] => Decision::Applied,
         ["applied", "through", mutability] => Decision::AppliedToTarget(through(mutability)?),
         ["read"] => Decision::Read,
-        ["no", "result"] => Decision::NoResult,
         ["lend", mutability, rest @ ..] => Decision::Lend {
             target: target(rest)?,
             mutability: reference(mutability)?,
@@ -90,17 +89,6 @@ pub fn decision(text: &str) -> Result<Decision, String> {
             target: target(rest)?,
             mutability: reference(mutability)?,
         },
-        ["unreached", ..] => {
-            let rest = text
-                .trim()
-                .strip_prefix("unreached")
-                .expect("the text begins so");
-            let ids = listed(rest, '[', ']')?
-                .iter()
-                .map(|id| decl(id))
-                .collect::<Result<_, _>>()?;
-            Decision::Unreached(ids)
-        }
         ["calls", ..] => {
             let rest = text
                 .trim()
@@ -196,9 +184,7 @@ fn outcome_meets(decls: &Decls, outcome: &Outcome, expect: &Expect) -> Result<()
             let shown = decided
                 .as_ref()
                 .map_or("undecided".to_string(), render::decision);
-            let any_unreached = render::same(decision, "unreached")
-                && matches!(decided, Some(Decision::Unreached(_)));
-            if any_unreached || render::same(decision, &shown) {
+            if render::same(decision, &shown) {
                 Ok(())
             } else {
                 Err(format!("{node} is {shown}"))

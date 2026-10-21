@@ -11,4 +11,4 @@ let R;
 R = f(1u16) @ f;
 
 must fail;
-assert f == unreached;
+assert f == undecided;

@@ -44,5 +44,3 @@ reading changes one place:
   depends on (`holes.md`, O1).
 - `State::records_into`: which nodes at a class's position may change what a node
   reads there (l.248, l.250; `holes.md`, H7).
-- `State::chosen_outside`: which classes depend on the use that makes their
-  group's instance (l.246; `holes.md`, H5).

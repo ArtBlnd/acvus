@@ -133,9 +133,7 @@ impl State {
             .collect();
         let accepted = refusals.is_empty()
             && checks.iter().all(|check| check.coercion.is_ok())
-            && decisions
-                .values()
-                .all(|decision| matches!(decision, Some(decision) if decision.is_reached()));
+            && decisions.values().all(Option::is_some);
         Outcome {
             values,
             decisions,
@@ -165,7 +163,6 @@ impl State {
                 .iter()
                 .filter_map(|(name, node)| Some((name.clone(), node.decision.clone()?)))
                 .collect();
-            let reached = decided.iter().all(|(_, decision)| decision.is_reached());
             outcome.decisions.extend(
                 decided
                     .into_iter()
@@ -175,7 +172,7 @@ impl State {
             let checked = checks.iter().all(|check| check.coercion.is_ok());
             outcome.checks.extend(checks);
             outcome.refusals.extend(group.refusals.iter().cloned());
-            outcome.accepted &= reached && checked && group.refusals.is_empty();
+            outcome.accepted &= checked && group.refusals.is_empty();
         }
         outcome
     }
