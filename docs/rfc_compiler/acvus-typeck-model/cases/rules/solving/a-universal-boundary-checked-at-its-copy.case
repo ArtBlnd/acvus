@@ -1,12 +1,12 @@
-//@ spec: l.239, l.215, l.285, l.279, l.287
+//@ spec: l.242, l.217, l.290, l.282, l.292
 // fn g(x) { take_u8(x) }   // take_u8(u8)
 // g(1u16)
 // x's type X is universal and depends on the use that chooses it, outside g's
-// binding group (l.239), so X is never solved in g, takes no fallback (l.285),
+// binding group (l.242), so X is never solved in g, takes no fallback (l.290),
 // and the boundary X ⇝ u8 stays in g's C. The call makes an instance: X' is an
-// unknown of the entry that 1u16 meets (l.215, l.219), so X' is u16, and the
-// copy of the boundary reaches u8 by no coercion (l.279): refused at that copy
-// (l.287). The original X is left in C and needs no value.
+// unknown of the entry that 1u16 meets (l.217, l.221), so X' is u16, and the
+// copy of the boundary reaches u8 by no coercion (l.282): refused at that copy
+// (l.292). The original X is left in C and needs no value.
 extern fn take_u8(u8);
 
 group g {

@@ -1,5 +1,5 @@
-//@ spec: l.99
-// The only row that changes a reference's mutability is &mut T ⇝ &T (l.99);
+//@ spec: l.100
+// The only row that changes a reference's mutability is &mut T ⇝ &T (l.100);
 // with no cast declared, &A does not coerce to &mut A.
 extern type A;
 

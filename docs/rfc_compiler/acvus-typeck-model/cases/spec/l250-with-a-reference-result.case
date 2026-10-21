@@ -1,4 +1,4 @@
-//@ spec: the example of l.247–258, with pick(u8) -> &u8, which is refused
+//@ spec: the example of l.250–261, with pick(u8) -> &u8, which is refused
 extern fn pick({x: i32}) -> {x: i32};
 extern fn pick(u8) -> &u8;
 

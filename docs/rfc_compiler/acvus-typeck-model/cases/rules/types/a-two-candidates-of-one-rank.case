@@ -1,7 +1,7 @@
-//@ spec: l.109, l.323, l.330
+//@ spec: l.111, l.328, l.335
 // f(make());               // make() -> {x: u8, y: u8}; f({x: u8}), f({y: u8})
 // Each candidate is reached by narrowing {x: u8, y: u8} to one field: one
-// structural step, no cast, no lower stage (l.100, l.109). The ranks are
+// structural step, no cast, no lower stage (l.101, l.111). The ranks are
 // equal, so both remain; the result passes into a class that decides nothing,
 // so both remain again, and the use is not decided.
 extern fn make() -> {x: u8, y: u8};

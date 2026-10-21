@@ -2,11 +2,11 @@
 // let x = make();          // make() -> A
 // let f = || probe(x);     // probe(A), probe(B)
 // f();
-// The lambda's group is solved before the enclosing one (l.213), and no
+// The lambda's group is solved before the enclosing one (l.215), and no
 // dependency makes its probe wait for what the enclosing group records into X
-// (l.209, l.237–243), so probe reads X as nothing: the position decides
-// nothing, both candidates remain, and probe is not decided (l.260, l.330). It
-// stays in C (l.212) and is decided in the copy the call makes, where X is A.
+// (l.211, l.240–246), so probe reads X as nothing: the position decides
+// nothing, both candidates remain, and probe is not decided (l.263, l.335). It
+// stays in C (l.214) and is decided in the copy the call makes, where X is A.
 extern type A;
 extern type B;
 extern fn make() -> A;

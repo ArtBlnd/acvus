@@ -1,4 +1,4 @@
-//@ spec: Example 10, l.488–505
+//@ spec: Example 10, l.498–515
 // fn g(a, b) { g(b, a) }
 // g(1u8, "s")
 group g {

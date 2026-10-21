@@ -300,7 +300,7 @@ impl Decls {
         &self.tree
     }
 
-    /// The declarations a name reaches (l.317).
+    /// The declarations a name reaches (l.322).
     pub fn candidates(&self, name: &Name) -> &[Decl] {
         self.by_name.get(name).map_or(&[], Vec::as_slice)
     }

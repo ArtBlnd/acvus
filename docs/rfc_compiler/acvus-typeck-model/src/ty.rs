@@ -127,7 +127,7 @@ impl fmt::Display for Scalar {
 }
 
 /// A constructor, its members and its parts, each part a `P`: a closed type in
-/// `Ty`, an equivalence class in a kind (l.43–60, l.118).
+/// `Ty`, an equivalence class in a kind (l.43–60, l.120).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Term<P> {
     /// `&T` or `&mut T`, whose part is the target.
@@ -151,7 +151,7 @@ pub enum Term<P> {
         ret: P,
     },
     /// The type of a function value. Its parameters and result lie in its
-    /// lambdas' binding groups, and Values names those lambdas (l.186).
+    /// lambdas' binding groups, and Values names those lambdas (l.188).
     FunctionValue {
         arity: usize,
     },
@@ -173,7 +173,7 @@ pub enum Term<P> {
     Unit,
     /// `!`.
     Never,
-    /// The name of the storage an extern-defined type's values reach (l.338):
+    /// The name of the storage an extern-defined type's values reach (l.347):
     /// a type with no parts, lying only at that type's identity.
     Identity(Name),
 }
@@ -207,7 +207,7 @@ pub enum Member {
 }
 
 /// The name of a part. Parts of one name in two terms of one constructor
-/// correspond (l.158).
+/// correspond (l.160).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PartKey {
     Target,
@@ -473,7 +473,7 @@ pub enum TyError {
     /// A tuple of no component, which is `Unit` (l.59).
     EmptyTuple,
     /// An identity at a part other than an extern-defined type's identity, or
-    /// that part holding anything but an identity (l.55, l.338).
+    /// that part holding anything but an identity (l.55, l.347).
     IdentityPlace,
 }
 

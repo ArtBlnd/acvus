@@ -1,4 +1,4 @@
-//@ spec: Example 9, l.475–487
+//@ spec: Example 9, l.485–497
 // let mut v = Vec::new();
 // let r = &mut v;
 // let s = &r;

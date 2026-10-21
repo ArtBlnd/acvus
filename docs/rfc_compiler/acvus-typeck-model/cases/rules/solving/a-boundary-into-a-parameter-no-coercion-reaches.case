@@ -1,11 +1,11 @@
-//@ spec: l.219, l.228, l.279, l.287
+//@ spec: l.221, l.230, l.282, l.292
 // let x = 1u16;
 // take(x);                 // take(u8)
-// x's type is an unknown, so 1u16 meets it: X ≥ u16 (l.219, l.227). take's
+// x's type is an unknown, so 1u16 meets it: X ≥ u16 (l.221, l.229). take's
 // parameter u8 is decided, not an unknown, so x passing into it is a boundary,
-// X ⇝ u8 (l.219, l.228), which gives X no source (l.273): X is u16. A value
-// entering by a boundary reaches by a coercion (l.279), and none goes from u16
-// to u8, so the program is refused at that boundary (l.287).
+// X ⇝ u8 (l.221, l.230), which gives X no source (l.276): X is u16. A value
+// entering by a boundary reaches by a coercion (l.282), and none goes from u16
+// to u8, so the program is refused at that boundary (l.292).
 extern fn take(u8);
 
 let 1u16: u16;

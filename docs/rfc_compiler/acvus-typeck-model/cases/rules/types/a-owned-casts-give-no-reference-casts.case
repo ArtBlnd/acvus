@@ -1,4 +1,4 @@
-//@ spec: l.78, l.86, l.98
+//@ spec: l.78, l.86, l.99
 // A reference's node is its mutability and its target's constructor (l.78),
 // and a declared cast goes from the node it is declared at. A → B and C → B
 // declare nothing at (&, A) or (&, C), so &A and &C have no common ancestor

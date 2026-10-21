@@ -1,8 +1,8 @@
-//@ spec: l.317, l.330
+//@ spec: l.322, l.335
 // let x = 1u8;
 // f(x)                     // no declaration named f
-// f's candidates are the declarations its name reaches (l.317), none, so no
-// candidate remains and f is not decided (l.330, l.287).
+// f's candidates are the declarations its name reaches (l.322), none, so no
+// candidate remains and f is not decided (l.335, l.292).
 let X;
 let 1u8: u8;
 let R;

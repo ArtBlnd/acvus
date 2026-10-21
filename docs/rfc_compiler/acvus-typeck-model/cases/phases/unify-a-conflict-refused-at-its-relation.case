@@ -1,4 +1,4 @@
-//@ spec: l.158–163
+//@ spec: l.160–165
 // The projection, decided, records that @cfg has the field extra, which the
 // object {name} the host gives does not hold: refused at that relation.
 //@ order: decide `@cfg.extra`

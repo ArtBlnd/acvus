@@ -1,4 +1,4 @@
-//@ spec: l.215
+//@ spec: l.217
 // let x = "s";
 // let f = || takes_u8(x);  // takes_u8(u8), f never called
 // Under the spec, takes_u8 and its boundary X ⇝ u8 stay in the lambda's C, which

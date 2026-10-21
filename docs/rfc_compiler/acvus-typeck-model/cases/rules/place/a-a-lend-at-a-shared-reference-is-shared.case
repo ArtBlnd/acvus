@@ -1,9 +1,9 @@
-//@ spec: l.293
+//@ spec: l.298
 // let x = 1u8;
 // let r = &x;
 // put(&mut r);             // put(&mut u8)
 // r is a shared &X, so &mut r is a shared reference to X, the lesser of the two
-// mutabilities (l.293), and &u8 reaches &mut u8 by no coercion (l.99, l.279).
+// mutabilities (l.298), and &u8 reaches &mut u8 by no coercion (l.100, l.282).
 extern fn put(&mut u8);
 
 let X;

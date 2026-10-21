@@ -1,8 +1,8 @@
 # 02 Types in declarations
 
 Rests on the spec's l.54–55 (structs and extern-defined types), l.64 (what is
-reached through a reference), l.317 (an extern declaration's type parameters) and
-l.340 (an existential identity). The spec takes a declaration's form from the RFCs:
+reached through a reference), l.322 (an extern declaration's type parameters) and
+l.349 (an existential identity). The spec takes a declaration's form from the RFCs:
 extern fn §1 (a signature: parameters and a result, over type parameters) and §2
 (a declaration names one identity among its variables). The code is `src/sig.rs`,
 and `src/sig/tests.rs` exercises its contract.
@@ -22,7 +22,7 @@ fields in declared order (l.54).
 - Which declarations a program has, their names, casts and conversions, and the cast
   tree, are note 03's.
 - Matching against a type that is not closed is note 06's and after. A use's type
-  parameters are unknowns made anew at each use (l.317), so a signature meets
+  parameters are unknowns made anew at each use (l.322), so a signature meets
   equivalence classes there.
 - Effects, flows and declared facts have no representation, since no decision the
   spec defines reads them.
@@ -34,7 +34,7 @@ fields in declared order (l.54).
 1. **A reference substituted under a reference.** A signature may write `&T` or
    `&mut T`, and a use may make `T` a reference. No type has a reference directly as
    its target, and what is reached through a reference is reached by one reference,
-   exclusive only where both are (l.64); a lend of a reference does the same (l.293).
+   exclusive only where both are (l.64); a lend of a reference does the same (l.298).
    So such a substitution gives that one reference: `&T` and `&mut T` at `T = &U` are
    both `&U`, and `&mut T` at `T = &mut U` is `&mut U`. Matching binds a variable
    directly under a reference to the reference's target, which is never a reference,

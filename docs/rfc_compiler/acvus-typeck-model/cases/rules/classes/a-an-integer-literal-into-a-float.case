@@ -1,10 +1,10 @@
-//@ spec: l.162, with l.127, l.219, l.277, l.287
+//@ spec: l.164, with l.129, l.221, l.280, l.292
 // @n = 1;                  // @n is the host's f64
-// The literal's type is the LitVar ?{1} of the integer family (l.127). The
+// The literal's type is the LitVar ?{1} of the integer family (l.129). The
 // host's f64 is decided when solving starts, so the store is the boundary
-// 1 ⇝ @n (l.211, l.219). ?N ⇝ U unifies ?N with U (l.277), and l.162 asks the
+// 1 ⇝ @n (l.213, l.221). ?N ⇝ U unifies ?N with U (l.280), and l.164 asks the
 // constructor to be one of ?N's family: f64 is a float, so the unification
-// gives no result, and the program is refused there (l.287).
+// gives no result, and the program is refused there (l.292).
 let `@n`: host f64;
 let 1: lit 1;
 `@n` = 1;

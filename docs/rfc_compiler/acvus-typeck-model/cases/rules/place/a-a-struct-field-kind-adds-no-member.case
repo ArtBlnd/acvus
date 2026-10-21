@@ -1,9 +1,9 @@
-//@ spec: l.311
+//@ spec: l.316
 // struct Pair { l, r }
 // impl Pair { fn make() { Self { l: 1u8, r: 2u8 }.z } }
 // The entry is make's body, inside Pair's impl block (l.35). A struct's fields
 // are its parts, not members, so the kind "has field z" unifies with no part and
-// adds nothing (l.311): Pair has no field z (l.158).
+// adds nothing (l.316): Pair has no field z (l.160).
 struct Pair { l, r }
 
 let L;

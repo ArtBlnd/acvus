@@ -1,4 +1,4 @@
-//@ spec: Example 8, l.450–474
+//@ spec: Example 8, l.460–484
 // let a;
 // a.x = 0;
 let A;

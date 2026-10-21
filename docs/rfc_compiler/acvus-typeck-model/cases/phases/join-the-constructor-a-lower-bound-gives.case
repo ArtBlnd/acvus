@@ -1,4 +1,4 @@
-//@ spec: l.268, l.273, l.277, l.277
+//@ spec: l.271, l.276, l.280, l.280
 // A takes the constructor and members its solved lower bound gives, its part
 // made anew.
 // Once both sides of Some(1u8) ≤ A are solved, their parts are related, a

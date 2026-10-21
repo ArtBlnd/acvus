@@ -1,4 +1,4 @@
-//@ spec: Example 6, l.419–433
+//@ spec: Example 6, l.429–443
 // let mut last = None;
 // let remember = |x| last = Some(x);
 // remember(1u8);

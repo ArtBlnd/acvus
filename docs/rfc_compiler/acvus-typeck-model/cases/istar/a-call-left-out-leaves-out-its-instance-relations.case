@@ -6,7 +6,7 @@
 // choose and f(x) break their dependencies on each other.
 // Decided after the call, under Deferral::Reading, choose reads X leaving out
 // the call, and with it the instance's make_b() ≤ X, so it reads A, as it does
-// decided before the call (l.260).
+// decided before the call (l.263).
 //@ reading: deferral = reading
 extern type A;
 extern type B;

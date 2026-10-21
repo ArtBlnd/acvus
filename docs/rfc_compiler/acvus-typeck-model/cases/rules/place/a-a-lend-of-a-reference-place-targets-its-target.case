@@ -1,9 +1,9 @@
-//@ spec: l.293
+//@ spec: l.298
 // let x = 1u8;
 // let r = &x;
 // take(&r);                // take(&u16)
-// r is &X, so &r lends X itself (l.293), the boundary into &u16 equates X with
-// u16, and the lower bound 1u8 reaches u16 by no coercion (l.279).
+// r is &X, so &r lends X itself (l.298), the boundary into &u16 equates X with
+// u16, and the lower bound 1u8 reaches u16 by no coercion (l.282).
 extern fn take(&u16);
 
 let X;

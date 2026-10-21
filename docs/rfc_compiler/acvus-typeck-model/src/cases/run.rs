@@ -337,7 +337,7 @@ impl Follow<'_> {
         did
     }
 
-    /// Falls back (l.285), at the fixpoint of the entry; the trace's
+    /// Falls back (l.290), at the fixpoint of the entry; the trace's
     /// `fell_back` says whether a class fell back.
     fn fall_back(&mut self, state: &mut State) -> Did {
         self.taken += 1;
@@ -431,11 +431,11 @@ fn take(
             StepText::Fallback => {
                 if group != ENTRY {
                     return Err(format!(
-                        "fallback in {group}, inside which there is none (l.283)"
+                        "fallback in {group}, inside which there is none (l.288)"
                     ));
                 }
                 if !state.steps().is_empty() {
-                    return Err("fallback before the fixpoint (l.285)".to_string());
+                    return Err("fallback before the fixpoint (l.290)".to_string());
                 }
                 follow.fixpoint(state, group);
                 let did = follow.fall_back(state);
@@ -460,7 +460,7 @@ fn take(
 }
 
 /// One order: each group's written steps, then its first step until none is
-/// left, the entry falling back wherever none is (l.285).
+/// left, the entry falling back wherever none is (l.290).
 fn written<F>(
     program: &Program,
     steps: &BTreeMap<String, Vec<StepText>>,
@@ -538,7 +538,7 @@ where
 }
 
 /// The first order, as sampled order 0 takes it: at every state its first
-/// step, the entry falling back wherever none is (l.285), traced, and stopped
+/// step, the entry falling back wherever none is (l.290), traced, and stopped
 /// at `LIMIT` steps, so that a program whose exploration does not end still
 /// prints what this order does.
 fn first(program: &Program, tracer: &Tracer) {

@@ -1,10 +1,10 @@
-//! Unification (l.142–163): the equivalence classes hold what a relation
+//! Unification (l.144–165): the equivalence classes hold what a relation
 //! records — an equation unifies two into one, whose kind is the conjunction
-//! of theirs and whose parts of one name are unified in turn (l.158), and a
-//! kind, a kind known in part, a LitVar (l.162–163), whether a class is a
+//! of theirs and whose parts of one name are unified in turn (l.160), and a
+//! kind, a kind known in part, a LitVar (l.164–165), whether a class is a
 //! reference, or a lambda its Values name is held by the class it is given to
 //! — and a kind "indexes `τ`" an extern-defined container holds is linked to
-//! the slice's element along the signature of its view (l.154).
+//! the slice's element along the signature of its view (l.156).
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -19,7 +19,7 @@ use crate::solve::State;
 use crate::ty::{Mutability, Term};
 
 /// A kind "indexes `τ`" an extern-defined container's class holds, linked to
-/// the slice's element along the signature of its view (l.154): the relations
+/// the slice's element along the signature of its view (l.156): the relations
 /// recorded, and the refusal where the container has no view.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Linked {
@@ -29,7 +29,7 @@ pub struct Linked {
     pub refused: Option<Refusal>,
 }
 
-/// What the equivalence classes did as they took a relation (l.158–163): the
+/// What the equivalence classes did as they took a relation (l.160–165): the
 /// unions made, and the refusal where no type holds what it records or a type
 /// the text writes disagrees with its declaration.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
@@ -40,7 +40,7 @@ pub struct Unification {
 
 impl State {
     /// The equivalence classes take what `relation` records, as it is recorded
-    /// (l.223, l.158–163). What no type holds is refused at the relation, and
+    /// (l.225, l.160–165). What no type holds is refused at the relation, and
     /// a type the text writes that disagrees with its declaration is refused.
     pub(crate) fn hold(&mut self, relation: &Relation) -> Unification {
         let decls = Rc::clone(&self.decls);
@@ -95,7 +95,7 @@ impl State {
     }
 
     /// Links each kind "indexes `τ`" an extern-defined container's class holds
-    /// to the slice's element along the signature of its view (l.154). A
+    /// to the slice's element along the signature of its view (l.156). A
     /// container with no view cannot have the kind. Returns each link made.
     pub(crate) fn link_views(&mut self) -> Vec<Linked> {
         let pending: Vec<(ClassId, ClassId)> = self

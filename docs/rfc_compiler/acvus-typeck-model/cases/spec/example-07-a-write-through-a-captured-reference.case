@@ -1,10 +1,10 @@
-//@ spec: Example 7, l.434–449, the write in a lambda
+//@ spec: Example 7, l.444–459, the write in a lambda
 // let mut x = None;
 // let r = &mut x;
 // let f = || *r = Some(1u8);
 // f();
-// The write through the captured r is a boundary (l.448), whose payload, an
-// unknown of the enclosing group, takes a lower bound (l.277).
+// The write through the captured r is a boundary (l.458), whose payload, an
+// unknown of the enclosing group, takes a lower bound (l.280).
 group λ in run {
     let `*r`;
     let S;

@@ -1,10 +1,10 @@
-//@ spec: l.41, l.268, l.272
+//@ spec: l.41, l.271, l.275
 // let a;
 // f(&a, &a);               // f<T>(&T, &Vec<T>)
 // Each lend's target is A, which is a reference in no reading. Each argument
 // passes into a reference the declaration gives, a boundary whose target is
-// invariant (l.277): A = T and A = Vec<T>. A's class then holds Vec with
-// itself as its part, which no finite term is (l.41, l.268).
+// invariant (l.280): A = T and A = Vec<T>. A's class then holds Vec with
+// itself as its part, which no finite term is (l.41, l.271).
 extern type Vec<T>;
 extern fn f<T>(&T, &Vec<T>);
 

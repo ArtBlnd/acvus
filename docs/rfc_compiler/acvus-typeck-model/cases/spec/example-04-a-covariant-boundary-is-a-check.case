@@ -1,4 +1,4 @@
-//@ spec: Example 4, l.391–405
+//@ spec: Example 4, l.401–415
 // let x = None;
 // let y = if c { x } else { Some(1u16) };
 // take(x);                 // take(Option<u8>), encoded as the boundary it records

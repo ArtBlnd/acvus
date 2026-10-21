@@ -1,5 +1,5 @@
 //! Instances: a binding group's C made anew at a use, and recorded in the use's
-//! binding group (l.188–215).
+//! binding group (l.190–217).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -13,7 +13,7 @@ use crate::ty::{Name, Ty};
 
 /// An instance a state made: of the C of the binding group `group`, named `at`
 /// and made by `by`, with each root of that group's state it met and that
-/// root's class in the state that made it (l.215).
+/// root's class in the state that made it (l.217).
 #[derive(Clone, Debug)]
 pub struct Made {
     pub at: Name,
@@ -23,11 +23,11 @@ pub struct Made {
 }
 
 /// C of the binding group `from` reached its fixpoint in, being made anew at
-/// the use `at` (l.212, l.215).
+/// the use `at` (l.214, l.217).
 pub(crate) struct Instance<'a> {
     at: Rc<Name>,
     /// What made the instance, which every relation it records is recorded by
-    /// (l.260).
+    /// (l.263).
     by: Recorder,
     from: &'a State,
     /// The roots of C's classes in `from`: those left unsolved, or whose value
@@ -40,7 +40,7 @@ pub(crate) struct Instance<'a> {
 }
 
 impl State {
-    /// The roots of the classes C holds at this group's fixpoint (l.212):
+    /// The roots of the classes C holds at this group's fixpoint (l.214):
     /// those left unsolved, or whose value is not closed, and the universals.
     pub(crate) fn c(&self) -> BTreeSet<ClassId> {
         self.classes
@@ -225,7 +225,7 @@ impl<'a> Instance<'a> {
     }
 
     /// Records here every relation of `from` on a class of C, makes anew each
-    /// node `from` left undecided (l.212), and keeps the instance here.
+    /// node `from` left undecided (l.214), and keeps the instance here.
     /// Returns what the instance recorded here, itself the instance made.
     pub(crate) fn record_rest(&mut self, here: &mut State) -> Recording {
         let from = self.from;

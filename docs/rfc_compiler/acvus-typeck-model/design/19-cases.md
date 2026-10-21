@@ -19,8 +19,8 @@ Three scopes are tested, each locally:
   every final state.
 - **A phase**, along one order the case writes, by what each phase reports it did
   (`src/trace.rs`, below).
-- **A primitive** the spec defines on types alone: the join and `≤` (l.80–90), and
-  a coercion (l.92–109), on the case's own declarations.
+- **A primitive** the spec defines on types alone: the join and `≤` (l.80–91), and
+  a coercion (l.93–111), on the case's own declarations.
 
 ## Not owned here
 
@@ -40,7 +40,7 @@ Classes, items and declarations are recorded in the order written, as
 the same states.
 
 ```
-//@ spec: Example 2, l.362–375
+//@ spec: Example 2, l.371–384
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 extern fn fill_all(&mut Vec<u8>);
@@ -121,7 +121,7 @@ classes, and `universal A;` a universal.
 
 A step names a class by any of its members' names, as the arena names them
 (`A`, `A.Payload(Some)`), and a node by its name; it must be a step the state may
-take then, and `fallback` only where no step is left in the entry (l.283, l.285).
+take then, and `fallback` only where no step is left in the entry (l.288, l.290).
 
 **Expectations.** Each holds of every outcome, and an I\* expectation of every
 final state, of every run.
@@ -329,16 +329,16 @@ steps; `golden()` and every expectation read what they read without it.
   (`starts_with`, `contains`) whole, as the model gives it. Example 14's copied
   decisions, which its test found by the end of their names, are named whole.
 - 13 cases under `cases/phases` test each phase along a written order, by the line
-  of the spec it rests on: recording (l.219, l.227–229), the join (l.80–90, l.169,
-  l.268, l.273), splits (l.277), unification (l.154, l.158–163), nodes (l.245,
-  l.260, l.317–330) and fallback (l.283–285). 2 cases under `cases/primitives` test
+  of the spec it rests on: recording (l.221, l.229–231), the join (l.80–90, l.171,
+  l.271, l.276), splits (l.280), unification (l.156, l.160–165), nodes (l.248,
+  l.263, l.322–335) and fallback (l.288–290). 2 cases under `cases/primitives` test
   the join, `≤` and coercion on the declarations of `fixture::decls()` without
   `Box`, coercion with a conversion `u16 → u8` besides.
 - 62 cases under `cases/rules` are 61 programs the spec's rules refuse in every
   order and one they accept (`classes/b-a-lambda-calling-a-captured-lambda`), each
-  derived from quoted lines of its region: `types` (l.39–110, 16 of them
-  primitives), `classes` (l.1–38, l.111–216), `solving` (l.217–288) and `place`
-  (l.289–345). The model refuses each refused one at the place its derivation
+  derived from quoted lines of its region: `types` (l.39–112, 16 of them
+  primitives), `classes` (l.1–38, l.113–218), `solving` (l.219–293) and `place`
+  (l.294–354). The model refuses each refused one at the place its derivation
   names. Five of them passed only once a node whose read decides nothing was left
   undecided (note 08, reading 19): the three `solving` cases of a use whose read
   decides nothing, `place/a-a-use-whose-name-reaches-no-declaration`, where the

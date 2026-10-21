@@ -1,7 +1,7 @@
 //@ hole: O1
 // let o = Some(1u8);
 // if let Some(x) = &o { }
-// Depending on what l.241 states alone, x may be decided before the projection
+// Depending on what l.244 states alone, x may be decided before the projection
 // on its path, reading it as passing no reference.
 
 let S;

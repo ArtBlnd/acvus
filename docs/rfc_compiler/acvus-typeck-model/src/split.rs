@@ -1,6 +1,6 @@
-//! Splits (l.277): once an equivalence class takes a constructor, the
+//! Splits (l.280): once an equivalence class takes a constructor, the
 //! relations between the parts of its lower bounds and boundaries are recorded
-//! in the parts' equivalence classes, by the table of l.277, through the
+//! in the parts' equivalence classes, by the table of l.280, through the
 //! signatures of the declared casts where the two sides' constructors differ;
 //! and `?N ⇝ U` unifies `?N` with `U`.
 
@@ -14,14 +14,14 @@ use crate::relation::{Recorder, Relation};
 use crate::solve::State;
 use crate::ty::{Mutability, Term, Variance};
 
-/// How a relation's two sides are related part by part (l.277).
+/// How a relation's two sides are related part by part (l.280).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Side {
     Lower,
     Boundary,
 }
 
-/// What became of a relation of the log at a split (l.277).
+/// What became of a relation of the log at a split (l.280).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Split {
     /// A lower bound or a boundary whose two sides are one equivalence class:
@@ -80,13 +80,13 @@ impl State {
     }
 
     /// Whether the parts of a lower bound's or a boundary's two sides are
-    /// related now (l.277): once both sides have taken a constructor
+    /// related now (l.280): once both sides have taken a constructor
     /// (`holes.md`, T2).
     pub(crate) fn splits_now(&self, a: ClassId, b: ClassId) -> bool {
         self.is_solved(a) && self.is_solved(b)
     }
 
-    /// `?N ⇝ U` unifies `?N` with `U` (l.277): where the equivalence class
+    /// `?N ⇝ U` unifies `?N` with `U` (l.280): where the equivalence class
     /// holds a LitVar and no kind, it is unified with each type it passes into
     /// by a boundary. Returns the equations recorded.
     pub(crate) fn unify_lit_boundaries(&mut self, root: ClassId) -> Recording {
@@ -101,8 +101,8 @@ impl State {
     }
 
     /// Records the relations between the parts of a lower bound's or a
-    /// boundary's two sides (l.277), linking the parts through the declared
-    /// casts where their constructors differ (l.277). Returns the relations
+    /// boundary's two sides (l.280), linking the parts through the declared
+    /// casts where their constructors differ (l.280). Returns the relations
     /// recorded.
     pub(crate) fn split_parts(
         &mut self,

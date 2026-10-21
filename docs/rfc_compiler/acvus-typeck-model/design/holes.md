@@ -4,7 +4,7 @@ What encoding the spec found, each with the lines it rests on and the evidence f
 it. Three kinds of entry:
 
 - **H**, a hole: the spec gives no result where its own text, its examples or the
-  RFCs it cites want one, so l.287 refuses there.
+  RFCs it cites want one, so l.292 refuses there.
 - **T**, a text: the spec's two texts disagree, or the spec and an RFC it cites do.
 - **O**, an order: the outcome depends on the order of solving.
 
@@ -33,12 +33,12 @@ would close the hole at the declaration.
 The error join keeps elements of different nodes apart even where one steps up to
 the other (l.95), so `Error{B(B), D(D)}` is a type where a cast goes from `B` to
 `D`. A value of `A`, with casts `A → B → D`, then reaches it by two compositions:
-`A → B` then the wrap in `B`, and `A → B → D` then the wrap in `D` (l.101, l.107).
-Line 109 states that the composition toward a given type is unique, and the two
+`A → B` then the wrap in `B`, and `A → B → D` then the wrap in `D` (l.102, l.109).
+Line 111 states that the composition toward a given type is unique, and the two
 call different functions. The model refuses there (`CoerceError::Compositions`);
 taking the composition of the lowest rank would choose `B`. Whether a program
 reaches it is not yet shown. A candidate is a value entering by a boundary whose
-part is not an unknown of the binding group the place lies in (l.277), such as a
+part is not an unknown of the binding group the place lies in (l.280), such as a
 reference reaching a capture whose error part the enclosing body joined from `B`
 and `D`.
 
@@ -48,8 +48,8 @@ A view impl is a cast from a reference to a container to a reference to a slice 
 `str` (l.78), and a reference's node is its mutability and its target's constructor
 (l.78). A reference's constructor is its mutability alone (l.66), so at a boundary
 `&V ⇝ &[u8]` the two sides have one constructor, and the target, an invariant part,
-gives the equation `V = [u8]` (l.277); the casts link parts only where constructors
-differ (l.277). The view is never taken, and `make() ≤ V` with `make() -> Vec⟨u8⟩`
+gives the equation `V = [u8]` (l.280); the casts link parts only where constructors
+differ (l.280). The view is never taken, and `make() ≤ V` with `make() -> Vec⟨u8⟩`
 fails. Witness, refused by the model
 (`cases/holes/h3-a-view-at-a-boundary-equates-the-targets.case`):
 
@@ -65,7 +65,7 @@ their targets.
 ## H4. A reborrow at a split
 
 Where `&mut X` meets `&Y` at a lower bound or a boundary, the constructors differ
-and no cast links them (l.277), so nothing relates `X` and `Y`. In
+and no cast links them (l.280), so nothing relates `X` and `Y`. In
 `look(&mut v)` with `look(&Vec⟨u8⟩)` and `v = Vec::new()`, `v`'s argument has no
 relation and falls back to `!`, and `&mut Vec⟨!⟩ ⇝ &Vec⟨u8⟩` fails. The model
 relates the targets by an equation, as the reborrow row `&mut T ⇝ &T` keeps `T`
@@ -75,13 +75,13 @@ relates the targets by an equation, as the reborrow row `&mut T ⇝ &T` keeps `T
 ## H5. A lambda's node that reads a capture
 
 Not a hole. A lambda is a binding group of its own (l.23), solved before the group
-in which a use records its C (l.213), which for a lambda is its enclosing body's. A
-capture's type is a class of the enclosing group (l.210), which the lambda shares
-and does not solve (l.211, l.215), and no row makes anything wait for what the
-enclosing group records into a shared class (l.237–243). So a lambda's use that
+in which a use records its C (l.215), which for a lambda is its enclosing body's. A
+capture's type is a class of the enclosing group (l.212), which the lambda shares
+and does not solve (l.213, l.217), and no row makes anything wait for what the
+enclosing group records into a shared class (l.240–246). So a lambda's use that
 reads a capture reads it as nothing when the lambda is solved. The position then
-decides nothing, every candidate remains, and the use is not decided (l.260,
-l.330): it stays in C (l.212) and is decided in the copy, where `X` is `A`. Encoding
+decides nothing, every candidate remains, and the use is not decided (l.263,
+l.335): it stays in C (l.214) and is decided in the copy, where `X` is `A`. Encoding
 found it as a hole while the model decided every node it read, one whose read
 decides nothing included, and refused there. One outcome, accepted, in every order
 (`cases/holes/h5-a-lambda-reads-a-capture.case`):
@@ -101,27 +101,27 @@ order (`cases/environment/h5-a-lambda-reads-a-capture.case`).
 ## H6. Example 14's `q` has no value
 
 Example 14 has `q` be `Pair⟨&str, u8⟩`, and the copy of C of `nest` refused at the
-lower bound `Pair⟨&str, u8⟩` that "must reach `&str`" (l.574, l.580). But `q`'s
+lower bound `Pair⟨&str, u8⟩` that "must reach `&str`" (l.584, l.590). But `q`'s
 first part has no equation: it is the part `swap` makes anew in `Self { l: self.r,
-r: self.l }` (l.311), which takes `self.r` as a lower bound, and `self.r` is
+r: self.l }` (l.316), which takes `self.r` as a lower bound, and `self.r` is
 `p`'s second part, which takes `"s"` by a meeting through `new`. The instance of
-`nest` is recorded as soon as `q.nest(3)` is given (l.223, l.231): the boundary
-into the receiver equates `q`'s first part with the copy of `A` (l.277), and the
-copied `P = A` with `P ≥ Pair⟨A, B⟩` (l.578) gives that part the lower bound
+`nest` is recorded as soon as `q.nest(3)` is given (l.225, l.233): the boundary
+into the receiver equates `q`'s first part with the copy of `A` (l.280), and the
+copied `P = A` with `P ≥ Pair⟨A, B⟩` (l.588) gives that part the lower bound
 `Pair⟨A', B'⟩`, which holds it. So the part reaches a part of its own along lower
-bounds and parts, has no value (l.268), and `q` has none. Example 14 is refused, as
+bounds and parts, has no value (l.271), and `q` has none. Example 14 is refused, as
 the spec has it, but at `q`'s first part, and `q` has no value. Witness: Example 14
 itself (`cases/holes/h6-example-14-a-struct-and-recursion-that-grows.case`, sampled
 orders), whose `wanted` block holds the narrative's `q`. The narrative's check holds only of a class whose value an equation
-decides (l.279).
+decides (l.282).
 
 ## H7. Two uses that read one class
 
 A use depends on the nodes that record relations into the classes at the positions
-it reads (l.240), and the nodes that record relations into a class are those the
-class depends on (l.243): by l.237 (b), the relations not yet recorded into it by a
+it reads (l.243), and the nodes that record relations into a class are those the
+class depends on (l.246): by l.240 (b), the relations not yet recorded into it by a
 node at whose position it lies. So two uses that both read a class depend on each
-other, each breaks its dependency on the other (l.262), and each reads the class
+other, each breaks its dependency on the other (l.265), and each reads the class
 without the other's relations. Witness, refused in every order
 (`cases/holes/h7-two-uses-that-read-one-class.case`):
 
@@ -136,10 +136,10 @@ probe(x);                // probe(u16), probe(i32)
 ```
 
 `probe` passes `x` into a parameter its declarations write, a boundary out of `X`
-(l.211), and `x + y` depends on it, so `probe` reads `X` without `x + y`'s
-relations, as `?a` alone, takes the default `i32` (l.330), and `X ⇝ i32` fails once
+(l.213), and `x + y` depends on it, so `probe` reads `X` without `x + y`'s
+relations, as `?a` alone, takes the default `i32` (l.335), and `X ⇝ i32` fails once
 `X` is `u16`. The dependency is not one to leave out: while `X` holds a LitVar
-alone, `?N ⇝ U` unifies it with the parameter (l.277), so `probe` can change what
+alone, `?N ⇝ U` unifies it with the parameter (l.280), so `probe` can change what
 `x + y` reads. A reading that left out of a node's dependencies the nodes that
 would record no lower bound, equation or kind into the class it reads made the
 outcome depend on the order: `let x = 0; n(x); m(x);` with `n(u8)`, `n(u16)`,
@@ -153,24 +153,24 @@ own relations leave it without a type, so that `x + y` does not depend on
 
 Extern fn §1 gives a type parameter one bound, any type or any type the use must
 settle, never taken as `!`. The spec states no bound, and its fallback gives `!` to
-a class nothing decides (l.285). The model follows the spec, so a declaration's
+a class nothing decides (l.290). The model follows the spec, so a declaration's
 type parameter that no use settles becomes `!` where extern fn §1 would refuse.
 
 ## T2. Which side of a boundary records into the parts
 
-The Korean l.277 records "하한과 경계의 part 사이 관계" when a class takes a
-constructor, naming no side of the boundary; the English l.277 records "the
-relations between the parts of its lower bounds and boundaries". Line 237 (a) names
+The Korean l.280 records "하한과 경계의 part 사이 관계" when a class takes a
+constructor, naming no side of the boundary; the English l.280 records "the
+relations between the parts of its lower bounds and boundaries". Line 240 (a) names
 only the class `α` of `α ⇝ U` taking a constructor. Read as the English text and
-l.237 (a) suggest, a boundary `α ⇝ U` whose `U` takes its constructor after `α`
+l.240 (a) suggest, a boundary `α ⇝ U` whose `U` takes its constructor after `α`
 relates no parts, and the outcome then depends on the order of solving (review 2,
 P4: `fn g(a, b) { g(b, b); 0u8 }` with `g(Some(f1()), Some(f2()))`). The model reads
 the Korean text: the parts are related once both sides have taken a constructor.
 
 ## T3. A structural coercion that changes members and parts
 
-The spec composes at most one structural row (l.107), and its object and enum rows
-keep the parts while its part row keeps the members (l.96–104), so `{x: A, y: u8}
+The spec composes at most one structural row (l.109), and its object and enum rows
+keep the parts while its part row keeps the members (l.97–106), so `{x: A, y: u8}
 ⇝ {x: B}` reaches by no composition. Types §3 coerces a structured value by its
 kind's shape and part by part at once: the object narrows to the fields the slot
 names, and each remaining part coerces as its type does. The model reads types §3
@@ -186,7 +186,7 @@ scalars of the spec and no number of the RFC. The model follows the spec.
 
 A kind gives a member only where the member is visible: an object's fields and an
 enum's variants are visible since the body's text writes them, and the members of a
-type the host gives are not (l.275). Read by the member, the field `extra` in
+type the host gives are not (l.278). Read by the member, the field `extra` in
 `a.extra` is written by the text and visible wherever `a`'s type came from, so the
 clause about the host's type changes no outcome: a class holding the host's type
 itself has an equation, which a kind cannot grow (Example 8). Patterns §2 has an
@@ -208,8 +208,8 @@ Read by the sources, the clause holds of a direct lower bound only: through `let
 
 Patterns §4 has a scrutinee of type `!` reach no arm, each slot of its pattern
 deciding nothing of its type. In the spec, a projection of the pattern gives the
-scrutinee's class a kind known in part (l.297–301), and its value must meet that
-kind (l.275). `!` has no part, so it meets none, and the program is refused; the
+scrutinee's class a kind known in part (l.302–306), and its value must meet that
+kind (l.278). `!` has no part, so it meets none, and the program is refused; the
 spec states no exception for `!`. Witness, refused by the model
 (`cases/holes/t6-a-pattern-on-a-scrutinee-of-type-never.case`):
 
@@ -221,13 +221,13 @@ if let Some(x) = n { }
 ## O1. What a binding reads of its path
 
 A binding reads its position where its path passes no reference, and lends it where
-the path passes one (l.303). Whether the path passes one is what the projections on
+the path passes one (l.308). Whether the path passes one is what the projections on
 it became: each applies to its operand's target where the operand is a reference
-(l.295). But a binding reads "whether its equivalence class is a reference" (l.260),
+(l.300). But a binding reads "whether its equivalence class is a reference" (l.263),
 and depends on the nodes that record into its place, other than projections of a
-field, a component, an index or a variant (l.241), which are the projections on
+field, a component, an index or a variant (l.244), which are the projections on
 its path. So nothing makes a binding wait for them, and nothing it reads tells it
-what they became. Under the dependencies l.241 states, the outcome depends on the
+what they became. Under the dependencies l.244 states, the outcome depends on the
 order: a binding decided before its path's projection reads its position, and one
 decided after lends it. Witness, two outcomes in the model, `x: u8` and `x: &u8`,
 both accepted (`cases/holes/o1-a-binding-behind-a-reference-as-stated.case`):
@@ -238,14 +238,14 @@ if let Some(x) = &o { }
 ```
 
 Making the binding depend on the projections on its path gives one outcome, `x:
-&u8`, as in Rust (`BindingPath::AfterPath`). The exclusion in l.241 is about whether
+&u8`, as in Rust (`BindingPath::AfterPath`). The exclusion in l.244 is about whether
 a class is a reference, which those projections do not decide; what a path passes
-is a different question, which l.241 does not ask.
+is a different question, which l.244 does not ask.
 
 ## O2. What a broken dependency's relations wait for
 
 "The relations recorded by a node that a broken dependency pointed to are recorded
-once the node that broke it is decided" (l.262). Until then, a third node that no
+once the node that broke it is decided" (l.265). Until then, a third node that no
 longer waits for the first, it being decided, reads without them. The witness was
 the program of H7 under the reading H7 removes, where `probe` lay outside the cycle
 of `x + y` and `y + 1`: decided after `x + y` and before `y + 1`, it read `X` as
@@ -256,17 +256,17 @@ not yet found.
 Read so that a broken dependency's relations are recorded when their node is
 decided, and only the value read by the node that broke it leaves them out
 (`Deferral::Reading`), no third node reads without them. That reading keeps what
-l.262 is for, that each node of a cycle reads without the others (Example 12, step
+l.265 is for, that each node of a cycle reads without the others (Example 12, step
 3), without holding the relations from third nodes.
 
 ## O3. A reference recorded at once has no mutability
 
 Not an order. Where every candidate records a reference into a class, a use records
-at once that the class is a reference (l.245), and a lend that reads it no longer
-depends on the use (l.241). The record names no mutability, and a lend's
-mutability is the lesser of its own and its place's (l.293), so before the use is
+at once that the class is a reference (l.248), and a lend that reads it no longer
+depends on the use (l.244). The record names no mutability, and a lend's
+mutability is the lesser of its own and its place's (l.298), so before the use is
 decided a `&mut` lend's read decides nothing, and the lend is not decided until it
-does (l.260). Encoding found it as an order while the model decided such a lend
+does (l.263). Encoding found it as an order while the model decided such a lend
 as giving no result. One outcome, `&mut r` lent `&` through `&`, accepted
 (`cases/holes/o3-a-reference-recorded-at-once-has-no-mutability.case`):
 
@@ -278,15 +278,15 @@ let s = &mut r;
 ## O4. A capture written after a use reads it
 
 A lambda's write to a capture reached by name is a meeting, and stays in the
-lambda's C (Example 6, l.430); it is recorded into the capture's class only when a
-call of the lambda's value is decided and makes its instance (l.196). Until then
+lambda's C (Example 6, l.440); it is recorded into the capture's class only when a
+call of the lambda's value is decided and makes its instance (l.198). Until then
 nothing at the capture's class waits for that call: the class lies at no position
-of it (l.237 (b)). So the capture's class may be solved before the call or after
+of it (l.240 (b)). So the capture's class may be solved before the call or after
 it, and so may a use reading it. Witness, three outcomes in the model
 (`cases/holes/o4-a-capture-written-after-a-use-it-reads.case`): `probe` decided
 as `probe(B)`, accepted; as `probe(A)`, accepted with `x: B`, `B ⇝ A` being the
 conversion; and as `probe(A)`, refused with `x: A`, at the instance's `V ≤ X`
-(l.287), `X` solved before the instance recorded it:
+(l.292), `X` solved before the instance recorded it:
 
 ```
 let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
@@ -311,20 +311,20 @@ is the enclosing group's, recorded once, and `V` lies at the call's positions:
 
 A lend depends on the nodes that record into its place's class, other than
 projections of a field, a component, an index or a variant, and uses that have
-already recorded whether that class is a reference (l.241); the nodes that record
-into a class include those at whose position it lies (l.243). Two lends of one place
+already recorded whether that class is a reference (l.244); the nodes that record
+into a class include those at whose position it lies (l.246). Two lends of one place
 each lie at it, so each depends on the other, and each breaks its dependency on the
-other (l.262). Example 12's `&y` and `&y 2` are two such lends. Read as l.241
+other (l.265). Example 12's `&y` and `&y 2` are two such lends. Read as l.244
 states, the model reaches two outcomes there: `u16` everywhere, accepted, and
 `i32` everywhere, refused at `1u16 ≤ Y`. That was run by changing the model, and no
 test keeps it.
 
 A lend records into its place only that it is a reference, and only where it
-already reads as one (l.293), so it cannot decide whether its place is one. The
+already reads as one (l.298), so it cannot decide whether its place is one. The
 model leaves out of a read of whether a class is a reference every node that cannot
 decide it: a use whose candidates would record no lower bound or equation into the
-class, which the spec's own example needs (l.256); a lend at its place and a binding
+class, which the spec's own example needs (l.259); a lend at its place and a binding
 at its position; and a call of a function value at its arguments
 (`design/08-node.md`, reading 12). Read so, Example 12 reaches its outcome in every
-order. The model takes this with no reading of its own: l.241 as stated is not
+order. The model takes this with no reading of its own: l.244 as stated is not
 encoded.

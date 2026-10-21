@@ -1,6 +1,6 @@
 # 04 Join and `≤`
 
-Rests on the spec's l.80–90 (the join, the error join and `Error`), with l.74 (an
+Rests on the spec's l.80–91 (the join, the error join and `Error`), with l.74 (an
 invariant part's relation is an equation). The code is `src/join.rs`, and
 `src/join/tests.rs` exercises its contract.
 
@@ -17,15 +17,15 @@ after each element. `S ≤ T` where `S ⊔ T = T`.
 
 ## Not owned here
 
-- The join of a LitVar (l.169) unifies equivalence classes, and is note 06's.
+- The join of a LitVar (l.171) unifies equivalence classes, and is note 06's.
 - An equivalence class's value joins the types its sources give at its own
-  constructor and members, linking parts through the casts' signatures (l.273,
-  l.277, l.277), and is note 11's. So is the value of an equivalence class whose
-  sources carry two identities (l.344): `F⟨ι₁⟩ ⊔ F⟨ι₂⟩` has no join here, and the
+  constructor and members, linking parts through the casts' signatures (l.276,
+  l.280, l.280), and is note 11's. So is the value of an equivalence class whose
+  sources carry two identities (l.353): `F⟨ι₁⟩ ⊔ F⟨ι₂⟩` has no join here, and the
   equivalence class takes their nearest common ancestor that carries no identity.
-- How a value is changed along `≤`, and the fields an object gains (l.279), are
+- How a value is changed along `≤`, and the fields an object gains (l.282), are
   note 05's.
-- Facts are joined beside a type (l.173), from note 06 on.
+- Facts are joined beside a type (l.175), from note 06 on.
 
 ## Readings
 

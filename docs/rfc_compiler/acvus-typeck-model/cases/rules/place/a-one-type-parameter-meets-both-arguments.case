@@ -1,7 +1,7 @@
-//@ spec: l.317, l.219, l.227
+//@ spec: l.322, l.221, l.229
 // pair(1u8, 2u16)          // pair<T>(T, T)
-// pair's T is an unknown of the entry made at this use (l.317), so both
-// arguments meet it (l.219): two lower bounds, u8 and u16, with no join.
+// pair's T is an unknown of the entry made at this use (l.322), so both
+// arguments meet it (l.221): two lower bounds, u8 and u16, with no join.
 extern fn pair<T>(T, T);
 
 let 1u8: u8;

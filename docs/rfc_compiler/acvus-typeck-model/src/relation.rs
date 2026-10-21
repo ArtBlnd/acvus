@@ -1,8 +1,8 @@
-//! Relations and what records them (l.221–231).
+//! Relations and what records them (l.223–233).
 //!
 //! Every relation is kept in a log with what recorded it, and the
 //! equivalence classes are what the log makes of them. So the value a use
-//! reads can be decided from the remaining relations alone (l.260).
+//! reads can be decided from the remaining relations alone (l.263).
 
 use std::fmt;
 
@@ -13,25 +13,25 @@ use crate::ty::{Name, Term};
 /// A relation recorded in equivalence classes.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Relation {
-    /// `τ ≤ α`, which a meeting records (l.227), and a use's result type
-    /// entering its result (l.273).
+    /// `τ ≤ α`, which a meeting records (l.229), and a use's result type
+    /// entering its result (l.276).
     LowerBound { lower: ClassId, upper: ClassId },
-    /// `T ⇝ U`, which a boundary records (l.228).
+    /// `T ⇝ U`, which a boundary records (l.230).
     Boundary { from: ClassId, to: ClassId },
-    /// An equation, which an invariant place records (l.229).
+    /// An equation, which an invariant place records (l.231).
     Equation(ClassId, ClassId),
-    /// A kind known in part, which a projection records (l.230).
+    /// A kind known in part, which a projection records (l.232).
     Fact(ClassId, Fact),
     /// A kind the class holds: a type the text or a declaration writes
-    /// (l.120), or, in a copy of C, the kind the class held where its binding
-    /// group was solved (l.215).
+    /// (l.122), or, in a copy of C, the kind the class held where its binding
+    /// group was solved (l.217).
     Kind(ClassId, Term<ClassId>, KindSource),
-    /// A literal's type (l.127).
+    /// A literal's type (l.129).
     Lit(ClassId, LitVar),
     /// Whether the class is a reference, which a use records before it is
-    /// decided (l.245).
+    /// decided (l.248).
     Reference(ClassId, bool),
-    /// A lambda the Values of the class's function value names (l.181).
+    /// A lambda the Values of the class's function value names (l.183).
     Values(ClassId, Name),
 }
 
@@ -88,25 +88,25 @@ impl Relation {
 /// What recorded a relation.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Recorder {
-    /// The type the text gives a class (l.120).
+    /// The type the text gives a class (l.122).
     Origin,
-    /// The body's text, at the item of the program at this index (l.223).
+    /// The body's text, at the item of the program at this index (l.225).
     Text(usize),
     /// The use, lend, projection or binding of this name, when it was
     /// decided.
     Node(Name),
-    /// The equivalence class of this class taking a constructor (l.277).
+    /// The equivalence class of this class taking a constructor (l.280).
     Split(ClassId),
     /// A cycle of lower bounds alone, merged into one equivalence class
-    /// (l.268).
+    /// (l.271).
     Cycle,
     /// The I\* check, making an instance of a lambda's C that no call made, in
     /// a view of a state it decides nodes again in (`design/15-istar.md`,
     /// Domain). Solving never records it.
     Check,
     /// The instance `at`, made by `by`, the use of a function at its item or
-    /// the call of a function value (l.196), recording in its binding group
-    /// the copy of what `of` recorded in C (l.215).
+    /// the call of a function value (l.198), recording in its binding group
+    /// the copy of what `of` recorded in C (l.217).
     Instance {
         at: Name,
         by: Box<Recorder>,
@@ -116,13 +116,13 @@ pub enum Recorder {
 
 impl Recorder {
     /// Whether solving derives it from the other relations, so that a value
-    /// read derives it again from the relations that remain (l.260).
+    /// read derives it again from the relations that remain (l.263).
     pub fn is_derived(&self) -> bool {
         matches!(self, Recorder::Split(_) | Recorder::Cycle)
     }
 
     /// The nodes it is recorded by, a value read leaving any of them out
-    /// leaving it out (l.260): a node's own relation names that node, and a
+    /// leaving it out (l.263): a node's own relation names that node, and a
     /// copy in an instance names what made the instance and, by `copy_name`,
     /// the nodes the relation it copies is recorded by.
     pub fn nodes(&self) -> Vec<Name> {
@@ -142,7 +142,7 @@ impl Recorder {
     }
 
     /// Whether the text or a node records it, so that a value it makes enter
-    /// a type is checked (l.279), in a copy of C as where it was recorded.
+    /// a type is checked (l.282), in a copy of C as where it was recorded.
     pub fn is_entering(&self) -> bool {
         match self {
             Recorder::Text(_) | Recorder::Node(_) => true,
@@ -153,7 +153,7 @@ impl Recorder {
 }
 
 /// The name, in the binding group an instance `at` is recorded in, of the
-/// node `node` of the group instantiated (l.215).
+/// node `node` of the group instantiated (l.217).
 pub fn copy_name(at: &Name, node: &Name) -> Name {
     Name::new(&format!("{at}/{node}"))
 }

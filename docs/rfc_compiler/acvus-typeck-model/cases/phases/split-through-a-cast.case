@@ -1,4 +1,4 @@
-//@ spec: l.277
+//@ spec: l.280
 // The two sides of b ⇝ s have different constructors, so their parts are
 // linked through the signature of the cast between them: S equals the cast's
 // variable, which equals s's argument P.

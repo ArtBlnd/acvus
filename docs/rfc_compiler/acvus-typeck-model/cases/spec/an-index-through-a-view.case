@@ -1,4 +1,4 @@
-//@ spec: l.154
+//@ spec: l.156
 // let mut v = Vec::new();  // new() -> Vec<T>; the view as_slice(&Vec<T>) -> &[T]
 // v[0] = 1u8;
 extern type Vec<T>;

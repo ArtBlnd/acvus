@@ -1,87 +1,87 @@
 # 09 Binding groups, universals, C and instances
 
-Rests on the spec's l.188–219 (instances, binding groups, meeting and boundary),
-l.239 (a universal's dependency) and l.283–287 (fixpoint, fallback, acceptance).
+Rests on the spec's l.190–221 (instances, binding groups, meeting and boundary),
+l.242 (a universal's dependency) and l.288–292 (fixpoint, fallback, acceptance).
 The code is `src/program.rs` (groups and functions), `src/instance.rs`,
 `State::of_group` in `src/solve.rs`, `State::call` in `src/record.rs`, and
 `src/explore.rs`.
-Passing a function value across a boundary into a given function type (l.197),
-the facts other than Values, and a receiver's adjustments (l.319) are not yet
+Passing a function value across a boundary into a given function type (l.199),
+the facts other than Values, and a receiver's adjustments (l.324) are not yet
 encoded.
 
 ## Meaning
 
 Each binding group other than the run's entry is solved on its own to its
 fixpoint, in every order, before the groups whose uses make instances of it
-(l.213). Its functions' parameters' types are universal: each depends on the use
+(l.215). Its functions' parameters' types are universal: each depends on the use
 that chooses it, which lies outside the group and is never decided there, so what
 reaches a universal stays in C. At the fixpoint, C is the group's classes whose
 values are not closed, its universals, its undecided nodes and every relation on
-them (l.212). A use in another group makes C anew and records it there; a use in
+them (l.214). A use in another group makes C anew and records it there; a use in
 the group takes the body's own types.
 
 ## Readings
 
 1. **The run.** The entry's inputs are the types the embedding declares, so the
-   entry has no universal (l.199), and the run's instance of it is the entry's own
+   entry has no universal (l.201), and the run's instance of it is the entry's own
    solving continued: copying all of C into a group that adds nothing changes
    nothing. Fallback happens there alone. A group other than the entry has none
-   (l.283), and what it leaves unsolved reaches fallback only as a copy (l.285),
+   (l.288), and what it leaves unsolved reaches fallback only as a copy (l.290),
    so a fallback after a group's C was copied out does not change that copy.
-2. **A universal's dependency** (l.239) is a vertex its group never decides. A
+2. **A universal's dependency** (l.242) is a vertex its group never decides. A
    class with a lower bound on a universal, and a node that reads one, stay in C
    (Example 14, step 4, narrows `n == 0` in the instance).
 3. **What C holds.** A class whose value is not closed at the fixpoint is of C,
-   a solved one among them where a part is not (`Some(x)` in Example 6, l.431), as
+   a solved one among them where a part is not (`Some(x)` in Example 6, l.441), as
    is each universal. A copy is made per root, so the equations among C's classes
    hold in it, and a kind the group solved a class to is recorded in its copy with
-   that source, so that "with an equation" (l.272) stays as it was. A class
+   that source, so that "with an equation" (l.275) stays as it was. A class
    outside C enters a copy as its closed type, written. Every relation of the
    group's log naming a class of C is copied, the splits it derived included,
    recorded by the use that made the instance or by the copy of the undecided
    node that recorded it.
 4. **A use of a function in its own group** passes each argument into the
-   parameter's universal type, a boundary (Example 10, l.500), and the body's
+   parameter's universal type, a boundary (Example 10, l.510), and the body's
    result type enters the use's result as a lower bound, as a use's result does
    (note 07, reading 2).
 5. **A group's outcome.** A group's text classes are reported with the values it
    solved them to, its decided nodes with their decisions, its checks where both
    sides are closed there, and its refusals. What it leaves in C needs neither a
-   value nor a decision (l.287); its copies are checked where they are recorded.
+   value nor a decision (l.292); its copies are checked where they are recorded.
 6. **Several fixpoints.** A group whose solving reaches distinct fixpoints in
    different orders gives each to the groups after it, so an order dependence
    inside it shows in their outcomes.
 7. **A lambda's group** lies inside its enclosing body's and is solved before it
-   (l.213). The classes of enclosing groups its text names are shared: no unknowns
-   of it (l.211), never solved or fallen back there, so its relations on them stay
-   in its C, and a copy shares them (l.215). A lambda's use that reads one reads
+   (l.215). The classes of enclosing groups its text names are shared: no unknowns
+   of it (l.213), never solved or fallen back there, so its relations on them stay
+   in its C, and a copy shares them (l.217). A lambda's use that reads one reads
    what the lambda's group recorded there alone; where that decides nothing, the
    use stays in C and is decided in each copy (`holes.md`, H5). Read by the
    captured environment (`Captures::Environment`, note 17), the classes joined to
    a capture and the items naming them are the enclosing group's, recorded there
    once, and the lambda's group is the rest, which names no class of an enclosing
    group.
-8. **Meeting and boundary** (l.219). A value passing into an unknown of the
+8. **Meeting and boundary** (l.221). A value passing into an unknown of the
    place's own group meets it. One passing into a binding of an enclosing group
    reached by name meets it where that binding's type is an unknown of its own
    group, judged by its text: a type the text writes, and a universal, are not
-   (l.211). One passing through a reference from a binding of an enclosing group
+   (l.213). One passing through a reference from a binding of an enclosing group
    is a boundary, whatever class the place's last projection names, since that
    class is the lambda's own until the reference's target is known (Example 7).
    Read by the captured environment, an item of the environment keeps the place
    its text gives, and is recorded in the enclosing group.
 9. **A call of a function value** reads the value's Values: the lambdas of the
-   function values met in its class by equations or lower bounds (l.173, l.181).
+   function values met in its class by equations or lower bounds (l.175, l.183).
    Decided, it makes an instance of each lambda's C, its arguments meeting the
    copies of the lambda's parameters' types, and the copy of its result type
-   entering the call's result (l.196). A call whose callee's Values name no
+   entering the call's result (l.198). A call whose callee's Values name no
    lambda decides nothing and is not decided then (note 08, reading 19). Read by
    the captured environment, an argument meets the lambda's parameter itself
    where its environment holds it, and the call's result takes the environment's
    result type where it holds that (note 17, row 3).
-10. **A receiver's `T̄`** is universal (l.311), and the receiver's class holds the
+10. **A receiver's `T̄`** is universal (l.316), and the receiver's class holds the
    kind the text writes, so it is decided and universal at once: an argument
    passes into its copy by a boundary (Example 14, step 2). A node that reads
-   whether a receiver is a reference depends on the use that chooses it (l.239)
+   whether a receiver is a reference depends on the use that chooses it (l.242)
    and is decided in the copies, although the kind the text writes already
    decides it.

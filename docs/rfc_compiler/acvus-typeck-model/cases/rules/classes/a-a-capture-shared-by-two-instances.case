@@ -1,14 +1,14 @@
-//@ spec: l.210, l.215, with Example 6 (l.419–433), l.86, l.273, l.285, l.287
+//@ spec: l.212, l.217, with Example 6 (l.429–443), l.86, l.276, l.290, l.292
 // let mut last = None;
 // let remember = |x| last = Some(x);
 // remember(1u8);
 // remember(2u16);
 // As in Example 6, the write is a meeting L ≥ Option⟨S⟩ with S ≥ X, resting
 // on X, in the lambda's C. last's type L is the enclosing binding group's
-// class, not universal (l.210), so each instance shares it and copies only
-// S and X (l.215): L's payload P has the lower bounds ?k, S' = u8 and
+// class, not universal (l.212), so each instance shares it and copies only
+// S and X (l.217): L's payload P has the lower bounds ?k, S' = u8 and
 // S'' = u16. ?k falls back to !, and u8 and u16 have no common ancestor
-// (l.86), so P has no value (l.273, l.287).
+// (l.86), so P has no value (l.276, l.292).
 group λ in run {
     let X;
     let S;

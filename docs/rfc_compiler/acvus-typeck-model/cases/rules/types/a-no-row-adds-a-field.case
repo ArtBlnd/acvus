@@ -1,5 +1,5 @@
-//@ spec: l.100, l.110
-// The object row goes to some of the fields (l.100), and the covariant-part
+//@ spec: l.101, l.110
+// The object row goes to some of the fields (l.101), and the covariant-part
 // row needs equal members (l.110), so {x: u8} does not coerce to
 // {x: u8, y: u8}, though it is below it by ≤.
 assert coerce({x: u8}, {x: u8, y: u8}) == none;

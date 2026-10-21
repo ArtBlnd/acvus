@@ -1,7 +1,7 @@
-//@ spec: l.302
+//@ spec: l.307
 // let x = 1u8;
 // match x { 1u16 => {} }
-// The literal is a value passing into the type of its position (l.302), x's
+// The literal is a value passing into the type of its position (l.307), x's
 // unknown X: a meeting, a second lower bound beside 1u8, with no join (l.86).
 let X;
 let 1u8: u8;

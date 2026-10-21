@@ -1,4 +1,4 @@
-//! Overload resolution (l.315–330): a use's candidates, the positions where
+//! Overload resolution (l.320–335): a use's candidates, the positions where
 //! they differ, the narrowing, and what a decided candidate's signature
 //! records.
 
@@ -17,7 +17,7 @@ use crate::ty::{HasTerm, Name, Term};
 use super::Decision;
 
 /// The candidates a use's read leaves at one position where they differ
-/// (l.323–330).
+/// (l.328–335).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Narrowed {
     /// The argument's index, the result's being the number of arguments.
@@ -30,7 +30,7 @@ pub struct Narrowed {
     pub remaining: Vec<DeclId>,
 }
 
-/// How a use's candidates are narrowed by the value it reads (l.321–330).
+/// How a use's candidates are narrowed by the value it reads (l.326–335).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Narrowing {
     pub candidates: Vec<DeclId>,
@@ -44,13 +44,13 @@ pub struct Narrowing {
     /// where several candidates remained and a value read holds a LitVar.
     pub retry: Option<Vec<Narrowed>>,
     /// The candidate it is decided as, or `!` where an argument reads as `!`;
-    /// none where not exactly one remains (l.330).
+    /// none where not exactly one remains (l.335).
     pub decision: Option<Decision>,
 }
 
 impl State {
     /// The candidates of a use: the declarations its name reaches whose
-    /// parameters are as many as its arguments (l.317).
+    /// parameters are as many as its arguments (l.322).
     pub(crate) fn candidates(&self, callee: &Name, arity: usize) -> Vec<&Decl> {
         self.decls
             .candidates(callee)
@@ -65,7 +65,7 @@ impl State {
         sig.params().get(i).unwrap_or(sig.result())
     }
 
-    /// The positions where a use's candidates differ, which it reads (l.260);
+    /// The positions where a use's candidates differ, which it reads (l.263);
     /// none where it has no candidate.
     pub(crate) fn differing(candidates: &[&Signature], args: usize) -> Vec<usize> {
         let Some(first) = candidates.first() else {
@@ -136,7 +136,7 @@ impl State {
     }
 
     /// Narrows the candidates by the value the use reads at each position
-    /// where they differ, then by the result (l.323–330).
+    /// where they differ, then by the result (l.328–335).
     pub(super) fn narrow(
         &self,
         callee: &Name,

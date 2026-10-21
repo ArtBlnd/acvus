@@ -1,7 +1,7 @@
 # 03 Declarations and the cast tree
 
-Rests on the spec's l.76–78 (the cast tree), l.105 (a declared conversion) and
-l.317 (the declarations a name reaches), with extern fn §5 (several declarations
+Rests on the spec's l.76–78 (the cast tree), l.107 (a declared conversion) and
+l.322 (the declarations a name reaches), with extern fn §5 (several declarations
 share a name), §6 (an impl is a declaration of its generic function's name) and §7
 (a cast or a conversion goes from its parameter's type to its result's type), and
 types §7 (a conversion is decided by the slot's type). The code is `src/decl.rs`,
@@ -19,11 +19,11 @@ included.
 
 ## Not owned here
 
-- Which declaration a use reaches, narrowing included (l.319–331), is note 08's.
+- Which declaration a use reaches, narrowing included (l.324–336), is note 08's.
   A declaration's overload index names it and orders nothing a decision reads.
 - A generic function's own signature, and the requirements a declaration states
   (extern fn §6), have no representation, since no decision the spec defines reads
-  them. A generic function called at a structural type's parts (l.317) is note
+  them. A generic function called at a structural type's parts (l.322) is note
   08's.
 - Join, and which casts a join takes, is note 04's; which casts and conversion a
   coercion takes is note 05's.
@@ -41,7 +41,7 @@ included.
    `&mut X ⊔ (&mut Y ⊔ &Y) = &mut X ⊔ &Y = &X ⊔ &Y` (l.88), and `&X` and `&Y` have no
    common ancestor. A class's value joins its lower bounds in whatever order they
    come, so the vacuous reading makes it depend on that order. Coercion says the
-   same: `reborrow? ; cast*` (l.109) reaches `&Y` from `&mut X` only through `&X`'s
+   same: `reborrow? ; cast*` (l.111) reaches `&Y` from `&mut X` only through `&X`'s
    cast.
 3. **A cast steps up only from the types its parameter matches.** A cast's node is
    its parameter's constructor, and its parameter may still be narrower than the

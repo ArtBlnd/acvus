@@ -15,34 +15,34 @@ use crate::value::Joined;
 /// What one phase did, a relation named by its place in the log.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Report {
-    /// Recording: relations of the text recorded (l.217–231).
+    /// Recording: relations of the text recorded (l.219–233).
     Recorded(Recording),
-    /// Unification: a kind "indexes `τ`" linked along a view (l.154).
+    /// Unification: a kind "indexes `τ`" linked along a view (l.156).
     Linked(Linked),
-    /// The join: cycles of lower bounds alone merged (l.268).
+    /// The join: cycles of lower bounds alone merged (l.271).
     Merged(Recording),
     /// The join: the equivalence class reaches a part of its own, and is
-    /// refused (l.268).
+    /// refused (l.271).
     Infinite { class: ClassId, refusal: Refusal },
     /// The join: the equivalence class's LitVar lower bounds unified with it
-    /// (l.169).
+    /// (l.171).
     LitLowers { class: ClassId, recorded: Recording },
     /// A split: `?N ⇝ U` unifying the equivalence class with each type it
-    /// passes into (l.277).
+    /// passes into (l.280).
     LitBoundaries { class: ClassId, recorded: Recording },
-    /// The join: what the equivalence class took, and from what (l.268).
+    /// The join: what the equivalence class took, and from what (l.271).
     Joined { class: ClassId, joined: Joined },
     /// The join: the LitVar lower bound at `bound` unified with the solved
-    /// class it bounds (l.169).
+    /// class it bounds (l.171).
     LitJoined { bound: usize, recorded: Recording },
-    /// A split: what became of the relation at `at` (l.277).
+    /// A split: what became of the relation at `at` (l.280).
     Split { at: usize, split: Split },
     /// The nodes: what the candidates of the uses not yet decided share
-    /// (l.245, l.321).
+    /// (l.248, l.326).
     Shared(Recording),
-    /// The nodes: a node decided (l.260).
+    /// The nodes: a node decided (l.263).
     Decided(Decided),
-    /// Fallback (l.285).
+    /// Fallback (l.290).
     FellBack(FellBack),
 }
 
@@ -61,7 +61,7 @@ impl Trace {
         self.reports.append(&mut other.reports);
     }
 
-    /// Whether an equivalence class fell back (l.285).
+    /// Whether an equivalence class fell back (l.290).
     pub fn fell_back(&self) -> bool {
         self.reports
             .iter()

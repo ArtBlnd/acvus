@@ -1,5 +1,5 @@
 //! The join of two closed types, the error join at a `Result`'s error part,
-//! and the order `≤` the join defines (l.80–90).
+//! and the order `≤` the join defines (l.80–91).
 
 use std::collections::BTreeMap;
 
@@ -9,7 +9,7 @@ use crate::ty::{Constructor, ERR, Mutability, Name, PartKey, Term, Ty, Variance}
 #[cfg(test)]
 mod tests;
 
-/// The language's enum whose variants only the error join makes (l.90).
+/// The language's enum whose variants only the error join makes (l.91).
 pub const ERROR: &str = "Error";
 
 /// Where a join gives no result.
