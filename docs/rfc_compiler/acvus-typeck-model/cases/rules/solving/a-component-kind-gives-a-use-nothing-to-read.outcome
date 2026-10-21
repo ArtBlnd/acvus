@@ -9,7 +9,7 @@ outcome 1
   decision pick: unreached [pick#0, pick#1]
   decision `t.0`: applied
   partition {0, `t.0`}
-  check `0 ≤ t.0`: Ok(Identity)
-  check `pick(t) ≤ T`: Ok(Identity)
-  refusal conflict at "the value of T": Fact(Component(0, ClassId(1)), Never)
+  check `0 <= t.0`: Ok(Identity)
+  check `pick(t) <= T`: Ok(Identity)
+  refusal conflict at "the value of T": Never vs component 0: t.0
   I* of a final state: []

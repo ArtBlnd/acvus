@@ -13,4 +13,4 @@ R = 1u8;
 R = text;
 
 must fail;
-assert failing [`1u8 ⇝ R`];
+assert failing [`1u8 ~> R`];

@@ -24,4 +24,4 @@ let `Pair::first(1u8)`;
 `Pair::first(1u8)` = first(1u8) @ call;
 
 must fail;
-assert failing [`1u8 ⇝ first@2/self`];
+assert failing [`1u8 ~> first@2/self`];

@@ -20,4 +20,4 @@ R = `&x`;
 
 must fail;
 assert `&mut r` == lend & through &;
-assert failing [`&mut r ⇝ put.Param(0)`];
+assert failing [`&mut r ~> put.Param(0)`];

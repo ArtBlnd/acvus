@@ -20,4 +20,4 @@ let `take(..)`;
 must fail;
 assert `a.x` == applied;
 assert lend == lend & place;
-assert failing [`1u8 ≤ a.x`];
+assert failing [`1u8 <= a.x`];

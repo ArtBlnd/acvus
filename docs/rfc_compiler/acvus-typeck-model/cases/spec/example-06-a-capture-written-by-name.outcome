@@ -5,8 +5,8 @@ outcome 1
   value `()`: ()
   value 1u8: u8
   value ?k: !
-  value L: Option⟨u8⟩
-  value None: Option⟨!⟩
+  value L: Option<u8>
+  value None: Option<!>
   value S: none
   value `Some(x)`: none
   value X: none
@@ -15,11 +15,11 @@ outcome 1
   value `|x| ..`: Fn/1
   value `λ result`: ()
   decision `remember(1u8)`: calls {λ}
-  check `1u8 ≤ remember(1u8)#λ/X`: Ok(Identity)
-  check `None ≤ L`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
-  check `remember(1u8)#λ/Some(x) ≤ L`: Ok(Identity)
-  check `remember(1u8)#λ/X ≤ remember(1u8)#λ/S`: Ok(Identity)
-  check `remember(1u8)#λ/λ result ≤ remember(1u8)`: Ok(Identity)
-  check `|x| .. ≤ remember`: Ok(Identity)
-  check `() ≤ λ result`: Ok(Identity)
+  check `1u8 <= remember(1u8)#λ/X`: Ok(Identity)
+  check `None <= L`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
+  check `remember(1u8)#λ/Some(x) <= L`: Ok(Identity)
+  check `remember(1u8)#λ/X <= remember(1u8)#λ/S`: Ok(Identity)
+  check `remember(1u8)#λ/λ result <= remember(1u8)`: Ok(Identity)
+  check `|x| .. <= remember`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
   I* of a final state: []

@@ -5,20 +5,17 @@ outcome 1
   value 0: u8
   value W: u8
   partition {0, W}
-  check `0 ⇝ W`: Ok(Identity)
+  check `0 ~> W`: Ok(Identity)
   I* of a final state: []
-step 1 in run: start
-  record the text
-    records W: Scalar(Int(U8))
-    records 0: ?{0}: int
-  record the text
-  record the text
-    records 0 ⇝ W
-  split W: Scalar(Int(U8)): no parts
-  split 0: ?{0}: int: no parts
-step 2 in run: solve 0
-  split unified 0 with what it passes into
-    records 0 = W
-  join 0 held its kind
-  split 0 ⇝ W: one class
-  split 0 = W: no parts
+start run
+  record #0 W: u8
+  record #1 0: ?{0}: int
+  record #2 0 ~> W
+  split #0 W: u8: no parts
+  split #1 0: ?{0}: int: no parts
+step 1 run: solve 0
+  lit boundaries 0
+    record #3 0 = W
+  join 0: held
+  split #2 0 ~> W: one class
+  split #3 0 = W: no parts

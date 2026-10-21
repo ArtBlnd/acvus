@@ -17,12 +17,12 @@ outcome 1
   decision `acc + 1`: core::add#2
   decision `f()`: calls {λ}
   partition {?0, ACC}
-  check `&1 ⇝ acc + 1.Param(1)`: Ok(Identity)
-  check `&acc ⇝ acc + 1.Param(0)`: Ok(Identity)
-  check `?0 ≤ ACC`: Ok(Identity)
-  check `R ≤ λ result`: Ok(Identity)
-  check `acc + 1.Result ≤ R`: Ok(Identity)
-  check `f() ≤ ACC`: Ok(Identity)
-  check `|| .. ≤ f`: Ok(Identity)
-  check `λ result ≤ f()`: Ok(Identity)
+  check `&1 ~> acc + 1.Param(1)`: Ok(Identity)
+  check `&acc ~> acc + 1.Param(0)`: Ok(Identity)
+  check `?0 <= ACC`: Ok(Identity)
+  check `R <= λ result`: Ok(Identity)
+  check `acc + 1.Result <= R`: Ok(Identity)
+  check `f() <= ACC`: Ok(Identity)
+  check `|| .. <= f`: Ok(Identity)
+  check `λ result <= f()`: Ok(Identity)
   I* of a final state: []

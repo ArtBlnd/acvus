@@ -8,6 +8,6 @@ outcome 1
   decision `.0`: applied
   decision `.1`: applied
   decision mk: mk#0
-  check `mk.Result ≤ mk()`: Ok(Identity)
-  refusal conflict at "the value of mk()": Fact(Component(1, ClassId(2)), Tuple(1))
+  check `mk.Result <= mk()`: Ok(Identity)
+  refusal conflict at "the value of mk()": Tuple(1) vs component 1: .1
   I* of a final state: []

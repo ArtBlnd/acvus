@@ -27,4 +27,4 @@ must fail;
 assert B: Vec<u8>;
 assert push == push#0;
 assert lend == lend &mut place;
-assert failing [`1u16 ≤ push.Var(Type(0))`];
+assert failing [`1u16 <= push.Var(Type(0))`];

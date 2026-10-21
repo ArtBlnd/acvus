@@ -536,8 +536,9 @@ impl HasTerm for Ty {
     }
 }
 
-/// The spec's notation, with a function value written `Fn/n` for its arity,
-/// since the spec writes none for it.
+/// The spec's notation in ASCII, `<` and `>` for its angle brackets and `->`
+/// for its arrow (`design/19-cases.md`, Notation), with a function value
+/// written `Fn/n` for its arity, since the spec writes none for it.
 impl<P> fmt::Display for Term<P>
 where
     P: fmt::Display,
@@ -554,12 +555,12 @@ where
             }
             Term::Array(len, element) => write!(f, "[{element}; {len}]"),
             Term::Slice(element) => write!(f, "[{element}]"),
-            Term::Option(payload) => write!(f, "Option⟨{payload}⟩"),
-            Term::Result { ok, err } => write!(f, "Result⟨{ok}, {err}⟩"),
+            Term::Option(payload) => write!(f, "Option<{payload}>"),
+            Term::Result { ok, err } => write!(f, "Result<{ok}, {err}>"),
             Term::Function { params, ret } => {
                 f.write_str("Fn(")?;
                 write_listed(f, params)?;
-                write!(f, " → {ret})")
+                write!(f, " -> {ret})")
             }
             Term::FunctionValue { arity } => write!(f, "Fn/{arity}"),
             Term::Object(fields) => {
@@ -578,9 +579,9 @@ where
             Term::Struct(module, args) => {
                 write!(f, "{module}")?;
                 if !args.is_empty() {
-                    f.write_str("⟨")?;
+                    f.write_str("<")?;
                     write_listed(f, args)?;
-                    f.write_str("⟩")?;
+                    f.write_str(">")?;
                 }
                 Ok(())
             }
@@ -592,9 +593,9 @@ where
                 write!(f, "{name}")?;
                 let parts: Vec<&P> = args.iter().chain(identity).collect();
                 if !parts.is_empty() {
-                    f.write_str("⟨")?;
+                    f.write_str("<")?;
                     write_listed(f, parts)?;
-                    f.write_str("⟩")?;
+                    f.write_str(">")?;
                 }
                 Ok(())
             }

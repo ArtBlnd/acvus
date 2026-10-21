@@ -12,6 +12,6 @@ outcome 1
   decision `&x`: lend & place
   decision `&y`: lend & place
   decision `x + y`: unreached []
-  check `1u8 ≤ X`: Ok(Identity)
-  check `2u16 ≤ Y`: Ok(Identity)
+  check `1u8 <= X`: Ok(Identity)
+  check `2u16 <= Y`: Ok(Identity)
   I* of a final state: []

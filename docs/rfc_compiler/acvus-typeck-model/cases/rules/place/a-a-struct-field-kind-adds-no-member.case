@@ -18,4 +18,4 @@ Rr = 2u8;
 
 must fail;
 assert `.z` == applied;
-assert refused conflict at "Self {..}: Field(z, ClassId(5))";
+assert refused conflict at "Self {..}: field z: .z";

@@ -2,24 +2,21 @@
 run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, the written order
 outcome 1
   accepted
-  value A: Option⟨u8⟩
+  value A: Option<u8>
   value S: u8
-  value `Some(1u8)`: Option⟨u8⟩
+  value `Some(1u8)`: Option<u8>
   value u8: u8
-  check `Some(1u8) ≤ A`: Ok(Identity)
-  check `u8 ≤ S`: Ok(Identity)
+  check `Some(1u8) <= A`: Ok(Identity)
+  check `u8 <= S`: Ok(Identity)
   I* of a final state: []
-step 1 in run: start
-  record the text
-    records u8: Scalar(Int(U8))
-    records Some(1u8): Option(S)
-  record the text
-  record the text
-    records u8 ≤ S
-    records Some(1u8) ≤ A
-  split u8: Scalar(Int(U8)): no parts
-  split Some(1u8): Option(S): no parts
-step 2 in run: solve A
-  join A took Option {Variant(None), Variant(Some)}
-  split Some(1u8) ≤ A: parts
-    records S ≤ A.Payload(Some)
+start run
+  record #0 u8: u8
+  record #1 Some(1u8): Option<S>
+  record #2 u8 <= S
+  record #3 Some(1u8) <= A
+  split #0 u8: u8: no parts
+  split #1 Some(1u8): Option<S>: no parts
+step 1 run: solve A
+  join A: Option {Variant(None), Variant(Some)}
+  split #3 Some(1u8) <= A: parts
+    record #4 S <= A.Payload(Some)

@@ -21,4 +21,4 @@ let `g("s")`;
 `g("s")` = g(`"s"`) @ `g("s")`;
 
 must fail;
-assert failing [`g@2/1u8 ⇝ g@2/A`];
+assert failing [`g@2/1u8 ~> g@2/A`];

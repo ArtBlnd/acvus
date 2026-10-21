@@ -20,4 +20,4 @@ let F;
 F = `|| ..`;
 
 must fail;
-assert failing [`1u16 ⇝ @n`];
+assert failing [`1u16 ~> @n`];

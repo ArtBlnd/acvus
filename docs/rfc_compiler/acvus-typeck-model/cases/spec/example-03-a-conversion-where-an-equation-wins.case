@@ -22,4 +22,4 @@ B = `new()`;
 
 must pass;
 assert B: Vec<u8>;
-assert check `1u16 ≤ push.Var(Type(0))` == conversion narrow#0;
+assert check `1u16 <= push.Var(Type(0))` == conversion narrow#0;

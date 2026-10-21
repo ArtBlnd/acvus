@@ -8,9 +8,9 @@ outcome 1
   value `g(1u16)`: ()
   value `take_u8(x)`: ()
   decision take_u8: take_u8#0
-  check `1u16 ≤ g@2/X`: Ok(Identity)
-  check `g@2/R ≤ g(1u16)`: Ok(Identity)
-  check `g@2/X ⇝ g@2/take_u8.Param(0)`: Err(None)
-  check `take_u8(x) ≤ R`: Ok(Identity)
-  check `take_u8.Result ≤ take_u8(x)`: Ok(Identity)
+  check `1u16 <= g@2/X`: Ok(Identity)
+  check `g@2/R <= g(1u16)`: Ok(Identity)
+  check `g@2/X ~> g@2/take_u8.Param(0)`: Err(None)
+  check `take_u8(x) <= R`: Ok(Identity)
+  check `take_u8.Result <= take_u8(x)`: Ok(Identity)
   I* of a final state: []

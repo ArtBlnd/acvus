@@ -15,6 +15,6 @@ let s: Shared<P>;
 S = u8;
 s = b;
 
-assert split records `S = link(b → s)[0].Var(Type(0))`;
+assert split records `S = link(b -> s)[0].Var(Type(0))`;
 must pass;
 assert P: u8;

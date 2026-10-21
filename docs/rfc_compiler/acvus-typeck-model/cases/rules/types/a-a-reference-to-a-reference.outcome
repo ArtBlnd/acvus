@@ -8,8 +8,8 @@ outcome 1
   value `g(&x)`: none
   decision g: g#0
   decision lend: lend & place
-  check `&x ≤ g.Var(Type(0))`: Ok(Identity)
-  check `1u8 ≤ X`: Ok(Identity)
+  check `&x <= g.Var(Type(0))`: Ok(Identity)
+  check `1u8 <= X`: Ok(Identity)
   refusal no_value `g(&x)`
   refusal no_value `g.Result`
   I* of a final state: []

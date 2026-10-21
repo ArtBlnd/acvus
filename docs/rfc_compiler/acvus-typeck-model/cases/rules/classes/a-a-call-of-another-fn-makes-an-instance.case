@@ -21,4 +21,4 @@ let `f(1u16)`;
 `f(1u16)` = f(1u16) @ `f(1u16)`;
 
 must fail;
-assert failing [`f@2/X ⇝ f@2/take_u8.Param(0)`];
+assert failing [`f@2/X ~> f@2/take_u8.Param(0)`];

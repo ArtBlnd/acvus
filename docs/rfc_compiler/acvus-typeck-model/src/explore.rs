@@ -1,11 +1,12 @@
-//! Every order of solving a program, up to a budget of states (I2, I3).
+//! Every order of solving a program, up to a budget of states (I2, I3), each
+//! final state handed on with the order that reached it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::check::Outcome;
 use crate::program::{ENTRY, Program};
-use crate::solve::State;
+use crate::solve::{State, Step};
 use crate::ty::Name;
 
 /// The outcomes every order of solving reaches.
@@ -19,18 +20,58 @@ pub struct Exploration {
     pub complete: bool,
 }
 
+/// An order of solving (I2): the steps that took each binding group other
+/// than the entry to its fixpoint, in the order the groups are solved
+/// (l.220), then the entry's steps to each of its fixpoints, a fallback that
+/// fell a class back taken between one fixpoint and the next steps (l.299).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Order {
+    pub groups: Vec<(Name, Vec<Step>)>,
+    pub entry: Vec<Vec<Step>>,
+}
+
+impl Order {
+    /// The order of no step, before any group is solved.
+    pub fn new() -> Order {
+        Order {
+            groups: Vec::new(),
+            entry: vec![Vec::new()],
+        }
+    }
+
+    /// Takes `step` next in the entry.
+    pub fn push_step(&mut self, step: Step) {
+        self.entry
+            .last_mut()
+            .expect("the entry's steps have a fixpoint to reach")
+            .push(step);
+    }
+
+    /// Takes a fallback next in the entry, which fell a class back.
+    pub fn push_fallback(&mut self) {
+        self.entry.push(Vec::new());
+    }
+}
+
+impl Default for Order {
+    fn default() -> Order {
+        Order::new()
+    }
+}
+
 /// A final state of an order of solving: the entry's, once nothing is left to
 /// fall back (l.299), with each group solved before it at its fixpoint
-/// (l.220).
+/// (l.220), and the order that reached it.
 pub struct Final<'a> {
     pub entry: &'a State,
     pub groups: &'a BTreeMap<Name, Rc<State>>,
+    pub order: &'a Order,
 }
 
 /// Solves each binding group other than the entry to its fixpoint in every
 /// order, before the groups that make instances of it (l.220), then the entry
 /// in every order, falling back wherever no step is left (l.299). A state
-/// reached twice is explored once.
+/// reached twice is explored once, along the order that reached it first.
 pub fn explore(program: &Program, budget: usize) -> Exploration {
     explore_with(program, budget, |_| {})
 }
@@ -41,11 +82,12 @@ pub fn explore_with<F>(program: &Program, budget: usize, mut visit: F) -> Explor
 where
     F: FnMut(&Final<'_>),
 {
-    let mut choices: Vec<BTreeMap<Name, Rc<State>>> = vec![BTreeMap::new()];
+    let mut choices: Vec<(BTreeMap<Name, Rc<State>>, Order)> =
+        vec![(BTreeMap::new(), Order::new())];
     let mut states = 0;
     for group in program.group_order() {
         let mut next = Vec::new();
-        for solved in &choices {
+        for (solved, order) in &choices {
             let start = State::of_group(program, &group, solved);
             let Some(fixpoints) = fixpoints(start, budget, &mut states) else {
                 return Exploration {
@@ -54,20 +96,22 @@ where
                     complete: false,
                 };
             };
-            for fixpoint in fixpoints {
+            for (fixpoint, steps) in fixpoints {
                 let mut solved = solved.clone();
                 solved.insert(group.clone(), Rc::new(fixpoint));
-                next.push(solved);
+                let mut order = order.clone();
+                order.groups.push((group.clone(), steps));
+                next.push((solved, order));
             }
         }
         choices = next;
     }
     let mut outcomes: Vec<Outcome> = Vec::new();
-    for solved in &choices {
+    for (solved, order) in &choices {
         let start = State::of_group(program, &Name::new(ENTRY), solved);
         let mut seen = BTreeSet::new();
-        let mut work = vec![start];
-        while let Some(state) = work.pop() {
+        let mut work = vec![(start, order.clone())];
+        while let Some((state, order)) = work.pop() {
             if !seen.insert(state.fingerprint()) {
                 continue;
             }
@@ -83,11 +127,14 @@ where
             if steps.is_empty() {
                 let mut next = state.clone();
                 if next.fall_back().fell_back() {
-                    work.push(next);
+                    let mut order = order.clone();
+                    order.push_fallback();
+                    work.push((next, order));
                 } else {
                     visit(&Final {
                         entry: &state,
                         groups: solved,
+                        order: &order,
                     });
                     let outcome = state.outcome_with(solved);
                     if !outcomes.contains(&outcome) {
@@ -99,7 +146,9 @@ where
             for step in steps {
                 let mut next = state.clone();
                 next.step(&step);
-                work.push(next);
+                let mut order = order.clone();
+                order.push_step(step);
+                work.push((next, order));
             }
         }
     }
@@ -111,14 +160,14 @@ where
 }
 
 /// The distinct states at which a binding group's solving reaches its
-/// fixpoint, inside which there is no fallback (l.297), or none where the
-/// budget runs out.
-fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<State>> {
+/// fixpoint, inside which there is no fallback (l.297), each with the steps
+/// that first reached it, or none where the budget runs out.
+fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<(State, Vec<Step>)>> {
     let mut seen = BTreeSet::new();
     let mut reached = BTreeSet::new();
     let mut fixpoints = Vec::new();
-    let mut work = vec![start];
-    while let Some(state) = work.pop() {
+    let mut work = vec![(start, Vec::new())];
+    while let Some((state, taken)) = work.pop() {
         if !seen.insert(state.fingerprint()) {
             continue;
         }
@@ -129,14 +178,16 @@ fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<Stat
         let steps = state.steps();
         if steps.is_empty() {
             if reached.insert(state.fingerprint()) {
-                fixpoints.push(state);
+                fixpoints.push((state, taken));
             }
             continue;
         }
         for step in steps {
             let mut next = state.clone();
             next.step(&step);
-            work.push(next);
+            let mut taken = taken.clone();
+            taken.push(step);
+            work.push((next, taken));
         }
     }
     Some(fixpoints)
@@ -150,7 +201,8 @@ pub fn sample(program: &Program, orders: u64) -> Vec<Outcome> {
     sample_with(program, orders, |_| {})
 }
 
-/// As `sample`, handing each order's final state to `visit`.
+/// As `sample`, handing each order's final state, with the order, to
+/// `visit`.
 pub fn sample_with<F>(program: &Program, orders: u64, mut visit: F) -> Vec<Outcome>
 where
     F: FnMut(&Final<'_>),
@@ -158,32 +210,41 @@ where
     let mut outcomes: Vec<Outcome> = Vec::new();
     for order in 0..orders {
         let mut picks = Picks::new(order);
+        let mut taken = Order::new();
         let mut solved: BTreeMap<Name, Rc<State>> = BTreeMap::new();
         for group in program.group_order() {
             let mut state = State::of_group(program, &group, &solved);
+            let mut steps_taken = Vec::new();
             loop {
                 let steps = state.steps();
                 if steps.is_empty() {
                     break;
                 }
-                state.step(&steps[picks.next(steps.len())]);
+                let step = steps[picks.next(steps.len())].clone();
+                state.step(&step);
+                steps_taken.push(step);
             }
+            taken.groups.push((group.clone(), steps_taken));
             solved.insert(group, Rc::new(state));
         }
         let mut state = State::of_group(program, &Name::new(ENTRY), &solved);
         loop {
             let steps = state.steps();
             if !steps.is_empty() {
-                state.step(&steps[picks.next(steps.len())]);
+                let step = steps[picks.next(steps.len())].clone();
+                state.step(&step);
+                taken.push_step(step);
                 continue;
             }
             if !state.fall_back().fell_back() {
                 break;
             }
+            taken.push_fallback();
         }
         visit(&Final {
             entry: &state,
             groups: &solved,
+            order: &taken,
         });
         let outcome = state.outcome_with(&solved);
         if !outcomes.contains(&outcome) {

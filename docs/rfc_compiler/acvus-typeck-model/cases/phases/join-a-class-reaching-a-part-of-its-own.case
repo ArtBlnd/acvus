@@ -11,6 +11,7 @@ X = None;
 S = X;
 X = `Some(x)`;
 
-assert trace "join refused X: infinite X";
+assert trace "join X: infinite";
+assert trace "refuse: infinite X";
 must fail;
 assert refused infinite X;

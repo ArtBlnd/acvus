@@ -5,18 +5,15 @@ outcome 1
   value R: bool
   value x: u8
   decision g: g#0
-  check `g.Result ≤ R`: Ok(Identity)
-  check `x ⇝ g.Param(0)`: Ok(Identity)
+  check `g.Result <= R`: Ok(Identity)
+  check `x ~> g.Param(0)`: Ok(Identity)
   I* of a final state: []
-step 1 in run: start
-  record the text
-    records x: Scalar(Int(U8))
-  record the text
-  record the text
-  node recorded what candidates share
-    records g.Result: Scalar(Bool)
-    records g.Result ≤ R
-    records R: no reference
-  split x: Scalar(Int(U8)): no parts
-  split g.Result: Scalar(Bool): no parts
-  split R: no reference: no parts
+start run
+  record #0 x: u8
+  shared
+    record #1 g.Result: bool
+    record #2 g.Result <= R
+    record #3 R: no reference
+  split #0 x: u8: no parts
+  split #1 g.Result: bool: no parts
+  split #3 R: no reference: no parts

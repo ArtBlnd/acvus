@@ -4,13 +4,13 @@
 //! the sources give, the kind the class takes with its parts made anew.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Range;
 use std::rc::Rc;
 
 use crate::check::Refusal;
-use crate::class::{ClassId, ClassName, Fact, KindSource};
+use crate::class::{ClassId, ClassName, Fact, KindSource, Unified};
 use crate::decl::Node;
 use crate::program::Visibility;
+use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
 use crate::ty::{Constructor, Member, Name, PartKey, Term, Ty};
@@ -36,15 +36,42 @@ pub enum Took {
     /// The kind it held already.
     Held,
     /// The join of the constructors and members its sources give, its parts
-    /// made anew, with the refusal where the class could not take it.
+    /// made anew, with what unification did as the class took it, and the
+    /// refusal where the class could not take it.
     Joined {
         head: Head,
+        unified: Unified,
         refused: Option<Refusal>,
     },
     /// No source gives a constructor, so it is left unsolved.
     Nothing,
     /// Its sources have no join, so it is refused.
     NoJoin(Refusal),
+}
+
+/// What an equivalence class's value is taken from when it is solved
+/// (l.279–282).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Sources {
+    /// The relations of the log that make the class hold a kind, by their
+    /// places: the equations on its members, and the kinds recorded on them
+    /// (l.279).
+    pub equations: Vec<usize>,
+    /// Each solved lower bound, with the constructor and members it gives
+    /// (l.280).
+    pub lowers: Vec<(ClassId, Head)>,
+    /// The constructors and members its kinds known in part give (l.282).
+    pub facts: Vec<Head>,
+    /// The lower bounds not solved, which give nothing.
+    pub left_out: Vec<ClassId>,
+}
+
+/// What an equivalence class took when it was solved, and its sources then
+/// (l.275–282).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Joined {
+    pub sources: Sources,
+    pub took: Took,
 }
 
 impl State {
@@ -237,15 +264,53 @@ impl State {
     /// Unifies with the equivalence class each LitVar lower bound of it that
     /// waits for nothing: the join of a LitVar (l.176). Returns the
     /// equations recorded.
-    pub(crate) fn join_lit_lowers(&mut self, root: ClassId) -> Range<usize> {
-        let start = self.log.len();
+    pub(crate) fn join_lit_lowers(&mut self, root: ClassId) -> Recording {
+        let mut recorded = Recording::default();
         let settled = self.settled();
         for lower in self.lower_bounds(root) {
             if self.is_lit(lower) && settled.contains(&self.root(lower)) {
-                self.record(Relation::Equation(lower, root), Recorder::Split(root));
+                let relation = Relation::Equation(lower, root);
+                recorded.push(self.record(relation, Recorder::Split(root)));
             }
         }
-        start..self.log.len()
+        recorded
+    }
+
+    /// The sources of the equivalence class's value (l.279–282).
+    pub(crate) fn sources(&self, root: ClassId) -> Sources {
+        let root = self.root(root);
+        let equations = self
+            .log
+            .iter()
+            .enumerate()
+            .filter(|(_, recorded)| match &recorded.relation {
+                Relation::Equation(a, b) => self.root(*a) == root || self.root(*b) == root,
+                Relation::Kind(class, ..) => self.root(*class) == root,
+                _ => false,
+            })
+            .map(|(at, _)| at)
+            .collect();
+        let mut lowers = Vec::new();
+        let mut left_out = Vec::new();
+        for lower in self.lower_bounds(root) {
+            let given = self
+                .classes
+                .held(lower)
+                .kind
+                .as_ref()
+                .filter(|_| self.is_solved(lower))
+                .map(|(kind, _)| head(kind));
+            match given {
+                Some(given) => lowers.push((lower, given)),
+                None => left_out.push(lower),
+            }
+        }
+        Sources {
+            equations,
+            lowers,
+            facts: self.fact_heads(root),
+            left_out,
+        }
     }
 
     /// The equivalence class takes its constructor and members, and is
@@ -253,23 +318,27 @@ impl State {
     /// and members its solved lower bounds and its kinds known in part give
     /// (l.280), its parts made anew. Where they give none it is left
     /// unsolved, and where they have no join it is refused.
-    pub(crate) fn join(&mut self, root: ClassId) -> Took {
+    pub(crate) fn join(&mut self, root: ClassId) -> Joined {
         let root = self.root(root);
+        let sources = self.sources(root);
+        let with_sources = |took| Joined {
+            sources: sources.clone(),
+            took,
+        };
         if self.classes.held(root).kind.is_some() {
             self.classes.mark_solved(root);
-            return Took::Held;
+            return with_sources(Took::Held);
         }
-        let mut sources: Vec<Head> = self
-            .lower_bounds(root)
-            .into_iter()
-            .filter(|&lower| self.is_solved(lower))
-            .filter_map(|lower| self.classes.held(lower).kind.as_ref().map(|(k, _)| head(k)))
+        let given: Vec<Head> = sources
+            .lowers
+            .iter()
+            .map(|(_, given)| given.clone())
+            .chain(sources.facts.iter().cloned())
             .collect();
-        sources.extend(self.fact_heads(root));
-        let Some(first) = sources.first().cloned() else {
-            return Took::Nothing;
+        let Some(first) = given.first().cloned() else {
+            return with_sources(Took::Nothing);
         };
-        let joined = sources
+        let joined = given
             .iter()
             .skip(1)
             .try_fold(first, |joined, source| self.head_join(&joined, source));
@@ -279,23 +348,25 @@ impl State {
             self.no_value.extend(members);
             let refusal = Refusal::NoJoin(name);
             self.refusals.insert(refusal.clone());
-            return Took::NoJoin(refusal);
+            return with_sources(Took::NoJoin(refusal));
         };
         let owner = self.class_name(root);
         let kind = self.skeleton(&joined, &owner);
         let decls = Rc::clone(&self.decls);
-        let refused = match self
-            .classes
-            .give_kind(root, kind, KindSource::Solved, decls.types())
-        {
-            Ok(()) => None,
-            Err(conflict) => Some(self.refuse_conflict(format!("the value of {owner}"), conflict)),
-        };
+        let unified =
+            self.classes
+                .unifying(decls.types())
+                .give_kind(root, kind, KindSource::Solved);
+        let refused = unified
+            .result()
+            .err()
+            .map(|conflict| self.refuse_conflict(format!("the value of {owner}"), conflict));
         self.classes.mark_solved(root);
-        Took::Joined {
+        with_sources(Took::Joined {
             head: joined,
+            unified,
             refused,
-        }
+        })
     }
 
     /// Unifies a LitVar lower bound, at `i` in the log, with the solved
@@ -306,7 +377,7 @@ impl State {
         &mut self,
         i: usize,
         settled: &BTreeSet<ClassId>,
-    ) -> Option<Range<usize>> {
+    ) -> Option<Recording> {
         let Relation::LowerBound { lower, upper } = self.log[i].relation else {
             return None;
         };
@@ -314,15 +385,16 @@ impl State {
             return None;
         }
         self.split.insert(i);
-        let start = self.log.len();
-        self.record(Relation::Equation(lower, upper), Recorder::Split(upper));
-        Some(start..self.log.len())
+        let mut recorded = Recording::default();
+        let relation = Relation::Equation(lower, upper);
+        recorded.push(self.record(relation, Recorder::Split(upper)));
+        Some(recorded)
     }
 
     /// Merges each cycle of lower bounds alone into one equivalence class
     /// (l.275). Returns the equations recorded.
-    pub(crate) fn merge_cycles(&mut self) -> Range<usize> {
-        let start = self.log.len();
+    pub(crate) fn merge_cycles(&mut self) -> Recording {
+        let mut recorded = Recording::default();
         let mut edges: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
         for recorded in &self.log {
             if let Relation::LowerBound { lower, upper } = recorded.relation {
@@ -354,10 +426,10 @@ impl State {
         }
         for (a, b) in merges {
             if self.root(a) != self.root(b) {
-                self.record(Relation::Equation(a, b), Recorder::Cycle);
+                recorded.push(self.record(Relation::Equation(a, b), Recorder::Cycle));
             }
         }
-        start..self.log.len()
+        recorded
     }
 
     /// Whether the equivalence class reaches a part of its own along recorded

@@ -22,4 +22,4 @@ X = `make()`;
 must fail;
 assert f == f#0;
 assert X: B;
-assert failing [`X ⇝ f.Param(1)`];
+assert failing [`X ~> f.Param(1)`];

@@ -2,10 +2,10 @@
 //! decided (l.252, l.335; `design/08-node.md`, readings 13 and 14).
 
 use std::collections::BTreeMap;
-use std::ops::Range;
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName};
+use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::sig::{SigTy, Signature};
 use crate::solve::State;
@@ -28,8 +28,8 @@ impl State {
     /// variable (l.335), and whether each class they would record a lower
     /// bound or an equation into is a reference, where they agree (l.252).
     /// Returns the relations recorded.
-    pub(crate) fn record_at_once(&mut self) -> Range<usize> {
-        let start = self.log.len();
+    pub(crate) fn record_at_once(&mut self) -> Recording {
+        let mut recorded = Recording::default();
         let uses: Vec<Name> = self
             .nodes
             .iter()
@@ -38,13 +38,14 @@ impl State {
             .map(|(name, _)| name.clone())
             .collect();
         for name in uses {
-            self.record_shared(&name);
-            self.record_references(&name);
+            recorded.append(self.record_shared(&name));
+            recorded.append(self.record_references(&name));
         }
-        start..self.log.len()
+        recorded
     }
 
-    pub(super) fn record_shared(&mut self, name: &Name) {
+    pub(super) fn record_shared(&mut self, name: &Name) -> Recording {
+        let mut recorded = Recording::default();
         let node = self.nodes[name].clone();
         let NodeKind::Use {
             callee,
@@ -52,7 +53,7 @@ impl State {
             result,
         } = &node.kind
         else {
-            return;
+            return recorded;
         };
         let sigs: Vec<Signature> = self
             .candidates(callee, args.len())
@@ -60,7 +61,7 @@ impl State {
             .map(|decl| decl.sig.clone())
             .collect();
         let Some(first) = sigs.first() else {
-            return;
+            return recorded;
         };
         let differing = Self::differing(&sigs.iter().collect::<Vec<_>>(), args.len());
         let recorder = Recorder::Node(name.clone());
@@ -73,7 +74,7 @@ impl State {
                 continue;
             }
             let mut vars = BTreeMap::new();
-            match args.get(i) {
+            recorded.append(match args.get(i) {
                 Some(arg) => self.record_argument(
                     *arg,
                     &ty,
@@ -90,19 +91,21 @@ impl State {
                     &var_name,
                     &recorder,
                 ),
-            }
+            });
             self.nodes
                 .get_mut(name)
                 .expect("the node is the state's")
                 .shared
                 .insert(i);
         }
+        recorded
     }
 
-    pub(super) fn record_references(&mut self, name: &Name) {
+    pub(super) fn record_references(&mut self, name: &Name) -> Recording {
+        let mut recorded = Recording::default();
         let per_candidate = self.would_record_per_candidate(name);
         let Some((first, rest)) = per_candidate.split_first() else {
-            return;
+            return recorded;
         };
         let agreed: Vec<(ClassId, bool)> = first
             .iter()
@@ -119,11 +122,10 @@ impl State {
                 .expect("the node is the state's")
                 .references
                 .insert(class);
-            self.record(
-                Relation::Reference(class, reference),
-                Recorder::Node(name.clone()),
-            );
+            let relation = Relation::Reference(class, reference);
+            recorded.push(self.record(relation, Recorder::Node(name.clone())));
         }
+        recorded
     }
 
     /// For each candidate of a use, the classes it would record a lower bound

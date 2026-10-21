@@ -7,8 +7,8 @@ outcome 1
   value `probe(x)`: ()
   decision make: make#0
   decision probe: probe#0
-  check `X ⇝ probe.Param(0)`: Ok(Identity)
-  check `make() ≤ X`: Ok(Identity)
-  check `make.Result ≤ make()`: Ok(Identity)
-  check `probe.Result ≤ probe(x)`: Ok(Identity)
+  check `X ~> probe.Param(0)`: Ok(Identity)
+  check `make() <= X`: Ok(Identity)
+  check `make.Result <= make()`: Ok(Identity)
+  check `probe.Result <= probe(x)`: Ok(Identity)
   I* of a final state: []

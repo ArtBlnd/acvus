@@ -5,24 +5,21 @@ outcome 1
   value R: u8
   value x: u8
   decision f: f#0
-  check `f.Result ≤ R`: Ok(Identity)
-  check `x ⇝ f.Param(0)`: Ok(Identity)
+  check `f.Result <= R`: Ok(Identity)
+  check `x ~> f.Param(0)`: Ok(Identity)
   I* of a final state: []
-step 1 in run: start
-  record the text
-    records x: Scalar(Int(U8))
-  record the text
-  record the text
-  node recorded what candidates share
-    records R: no reference
-  split x: Scalar(Int(U8)): no parts
-  split R: no reference: no parts
-step 2 in run: decide f
-  node decided f as f#0
-    records f.Param(0): Scalar(Int(U8))
-    records x ⇝ f.Param(0)
-    records f.Result: Scalar(Int(U8))
-    records f.Result ≤ R
-  split f.Param(0): Scalar(Int(U8)): no parts
-  split x ⇝ f.Param(0): parts
-  split f.Result: Scalar(Int(U8)): no parts
+start run
+  record #0 x: u8
+  shared
+    record #1 R: no reference
+  split #0 x: u8: no parts
+  split #1 R: no reference: no parts
+step 1 run: decide f
+  decide f: f#0
+    record #2 f.Param(0): u8
+    record #3 x ~> f.Param(0)
+    record #4 f.Result: u8
+    record #5 f.Result <= R
+  split #2 f.Param(0): u8: no parts
+  split #3 x ~> f.Param(0): parts
+  split #4 f.Result: u8: no parts

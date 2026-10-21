@@ -18,7 +18,7 @@ use crate::instance::Made;
 use crate::node::NodeState;
 use crate::program::{ENTRY, Function, Item, Program, Readings, TextClass};
 use crate::read::ReadValue;
-use crate::relation::{Recorded, Relation};
+use crate::relation::{Recorded, Recorder, Relation};
 use crate::split::Split;
 use crate::trace::{Report, Trace};
 use crate::ty::{HasTerm, Name};
@@ -329,8 +329,8 @@ impl State {
             });
         }
         let class = self.root(root);
-        let took = self.join(root);
-        trace.push(Report::Joined { class, took });
+        let joined = self.join(root);
+        trace.push(Report::Joined { class, joined });
         trace
     }
 
@@ -472,18 +472,10 @@ impl State {
         };
         read.classes.grow(&read.arena);
         for recorded in &self.log {
-            if recorded.recorder.is_derived() {
+            if recorded.recorder.is_derived() || left_out_by(&recorded.recorder, excluded) {
                 continue;
             }
-            if recorded
-                .recorder
-                .nodes()
-                .iter()
-                .any(|node| excluded.contains(node))
-            {
-                continue;
-            }
-            read.record(recorded.relation.clone(), recorded.recorder.clone());
+            let _ = read.record(recorded.relation.clone(), recorded.recorder.clone());
         }
         read.settle();
         loop {
@@ -529,4 +521,11 @@ impl State {
         visiting.remove(&root);
         value
     }
+}
+
+/// Whether a value read leaving out the relations of the nodes `excluded`
+/// leaves out a relation `recorder` recorded (l.267): one of those nodes
+/// recorded it.
+pub(crate) fn left_out_by(recorder: &Recorder, excluded: &BTreeSet<Name>) -> bool {
+    recorder.nodes().iter().any(|node| excluded.contains(node))
 }

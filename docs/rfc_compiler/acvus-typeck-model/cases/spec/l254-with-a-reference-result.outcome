@@ -9,6 +9,6 @@ outcome 1
   decision `a.x`: applied
   decision pick: unreached [pick#0, pick#1]
   partition {0, `a.x`}
-  check `0 ≤ a.x`: Ok(Identity)
-  check `pick(a) ≤ A`: Ok(Never)
+  check `0 <= a.x`: Ok(Identity)
+  check `pick(a) <= A`: Ok(Never)
   I* of a final state: []

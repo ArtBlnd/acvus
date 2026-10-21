@@ -22,7 +22,7 @@ pub(crate) enum Vertex {
 
 /// A dependency (l.244–248).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum Edge {
+pub(crate) enum Edge {
     /// An equivalence class on an unsolved lower bound.
     Lower,
     /// An equivalence class on one whose taking a constructor records
@@ -340,6 +340,21 @@ impl State {
             .cloned()
             .collect();
         (classes, nodes)
+    }
+
+    /// The unbroken dependencies of `from` not yet met (l.244–250, l.269):
+    /// what an equivalence class or a node still waits for, as a traced order
+    /// prints it (`design/19-cases.md`, `TRACE=1`). A class that waits for
+    /// nothing is unblocked, and a node that waits for nothing may be decided.
+    #[cfg(test)]
+    pub(crate) fn waits_for(&self, from: &Vertex) -> Vec<(Vertex, Edge)> {
+        let graph = self.graph();
+        let settled = self.settled_in(&graph);
+        graph
+            .unbroken(from)
+            .filter(|(to, edge)| !self.satisfied(to, *edge, &settled))
+            .cloned()
+            .collect()
     }
 
     fn has_work(&self, root: ClassId, graph: &Graph, settled: &BTreeSet<ClassId>) -> bool {

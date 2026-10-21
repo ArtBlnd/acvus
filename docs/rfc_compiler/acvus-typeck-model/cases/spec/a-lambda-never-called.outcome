@@ -10,8 +10,8 @@ outcome 1
   value `|| ..`: Fn/0
   value `λ result`: ()
   decision takes_u8: takes_u8#0
-  check `"s" ≤ X`: Ok(Identity)
-  check `|| .. ≤ f`: Ok(Identity)
-  check `takes_u8(x) ≤ λ result`: Ok(Identity)
-  check `takes_u8.Result ≤ takes_u8(x)`: Ok(Identity)
+  check `"s" <= X`: Ok(Identity)
+  check `|| .. <= f`: Ok(Identity)
+  check `takes_u8(x) <= λ result`: Ok(Identity)
+  check `takes_u8.Result <= takes_u8(x)`: Ok(Identity)
   I* of a final state: []

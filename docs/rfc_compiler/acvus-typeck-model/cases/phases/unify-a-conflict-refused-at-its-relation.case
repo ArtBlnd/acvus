@@ -9,7 +9,7 @@ let 1: lit 1;
 `@cfg.extra` = `@cfg`.extra @ `@cfg.extra`;
 `@cfg.extra` = 1;
 
-assert trace "node decided `@cfg.extra` as applied";
-assert node records `@cfg: Field(extra, ClassId(2))`;
+assert trace "decide `@cfg.extra`: applied";
+assert node records `@cfg: field extra: @cfg.extra`;
 must fail;
-assert refused conflict at "@cfg: Field(extra, ClassId(2))";
+assert refused conflict at "@cfg: field extra: @cfg.extra";

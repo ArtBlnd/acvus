@@ -258,13 +258,4 @@ impl State {
             NodeKind::Project { .. } => true,
         }
     }
-
-    /// The nodes whose relations the node's read leaves out: itself and those
-    /// that transitively depend on it (l.267), and those it broke its
-    /// dependency on where the reading takes it so (`Deferral::Reading`).
-    pub(super) fn excluded(&self, name: &Name) -> BTreeSet<Name> {
-        let mut excluded = self.dependents(name);
-        excluded.extend(self.broken.get(name).into_iter().flatten().cloned());
-        excluded
-    }
 }

@@ -2,17 +2,17 @@
 run 1: Readings { visibility: ByMember, binding_path: AfterPath, deferral: Recording, captures: AsStated }, every order
 outcome 1
   accepted
-  value `&o`: &Option⟨u8⟩
+  value `&o`: &Option<u8>
   value 1u8: u8
-  value O: Option⟨u8⟩
+  value O: Option<u8>
   value S: u8
-  value `Some(1u8)`: Option⟨u8⟩
+  value `Some(1u8)`: Option<u8>
   value `Some.0`: u8
   value X: &u8
   decision `&o`: lend & place
   decision Some: applied through &
   decision x: bind lend & place
-  check `1u8 ≤ S`: Ok(Identity)
-  check `Some(1u8) ≤ O`: Ok(Identity)
-  check `x.Lent ≤ X`: Ok(Identity)
+  check `1u8 <= S`: Ok(Identity)
+  check `Some(1u8) <= O`: Ok(Identity)
+  check `x.Lent <= X`: Ok(Identity)
   I* of a final state: []

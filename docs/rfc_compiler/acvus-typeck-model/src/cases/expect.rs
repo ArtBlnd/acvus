@@ -456,16 +456,18 @@ fn run_fails(
             ));
         }
     }
-    let (rendered, refused): (Vec<&super::render::Rendered>, Vec<String>) = match &run.explored {
+    // The reports, and each step's line and the refusals it made.
+    let (rendered, steps): (Vec<&super::render::Rendered>, Vec<String>) = match &run.explored {
         Explored::Written(taken) => (
             taken.iter().flat_map(|taken| &taken.reports).collect(),
             taken
                 .iter()
                 .flat_map(|taken| {
-                    taken
+                    let refused = taken
                         .refused
                         .iter()
-                        .map(|refusal| format!("refused {refusal}"))
+                        .map(|refusal| format!("refuse: {refusal}"));
+                    std::iter::once(taken.step.clone()).chain(refused)
                 })
                 .collect(),
         ),
@@ -478,10 +480,11 @@ fn run_fails(
                     fails.push(format!("line {line}: a trace needs a written order"));
                 } else if !rendered
                     .iter()
-                    .any(|report| render::same(&report.line, text))
-                    && !refused.iter().any(|line| render::same(line, text))
+                    .filter_map(|report| report.line.as_ref())
+                    .any(|line| render::same(line, text))
+                    && !steps.iter().any(|line| render::same(line, text))
                 {
-                    fails.push(format!("line {line}: no report is {text:?}"));
+                    fails.push(format!("line {line}: no line of the trace is {text:?}"));
                 }
             }
             Expect::Records {
@@ -498,7 +501,12 @@ fn run_fails(
                 let found = rendered
                     .iter()
                     .filter(|report| report.phase == *phase)
-                    .any(|report| report.recorded.iter().any(|r| render::same(r, relation)));
+                    .any(|report| {
+                        report
+                            .recorded
+                            .iter()
+                            .any(|(_, recorded)| render::same(recorded, relation))
+                    });
                 if found != *present {
                     let verb = if *present {
                         "records"
@@ -530,13 +538,13 @@ fn primitive_fail(decls: &Decls, expect: &Expect) -> Result<Option<String>, Stri
             let got = join(decls, &a, &b).ok();
             (got != expected).then(|| {
                 let shown = got.map_or("none".to_string(), |ty| ty.to_string());
-                format!("{a} ⊔ {b} is {shown}")
+                format!("join({a}, {b}) is {shown}")
             })
         }
         Expect::Le { a, b, holds } => {
             let (a, b) = (closed(types, a)?, closed(types, b)?);
             let got = le(decls, &a, &b);
-            (got != *holds).then(|| format!("{a} ≤ {b} is {got}"))
+            (got != *holds).then(|| format!("{a} <= {b} is {got}"))
         }
         Expect::Coerce {
             along_le: along,
@@ -551,7 +559,7 @@ fn primitive_fail(decls: &Decls, expect: &Expect) -> Result<Option<String>, Stri
                 coerce(decls, &from, &to)
             };
             let shown = render::coercion(&got);
-            (!render::same(&shown, coercion)).then(|| format!("{from} ⇝ {to} is {shown}"))
+            (!render::same(&shown, coercion)).then(|| format!("{from} ~> {to} is {shown}"))
         }
         _ => None,
     })

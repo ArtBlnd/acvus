@@ -16,15 +16,15 @@ outcome 1
   decision `f(x)`: calls {λ}
   decision make_a: make_a#0
   decision make_b: make_b#0
-  check `X ⇝ choose.Param(0)`: Ok(Conversion(DeclId { name: down, overload: 0 }))
-  check `X ≤ f(x)#λ/W`: Ok(Identity)
-  check `choose(x) ≤ F`: Ok(Identity)
-  check `choose.Result ≤ choose(x)`: Ok(Identity)
-  check `f(x)#λ/make_b() ≤ X`: Ok(Identity)
-  check `f(x)#λ/λ result ≤ f(x)`: Ok(Identity)
-  check `make_a() ≤ X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
-  check `make_a.Result ≤ make_a()`: Ok(Identity)
-  check `|w| .. ≤ F`: Ok(Identity)
-  check `() ≤ λ result`: Ok(Identity)
-  check `make_b.Result ≤ make_b()`: Ok(Identity)
+  check `X <= f(x)#λ/W`: Ok(Identity)
+  check `X ~> choose.Param(0)`: Ok(Conversion(DeclId { name: down, overload: 0 }))
+  check `choose(x) <= F`: Ok(Identity)
+  check `choose.Result <= choose(x)`: Ok(Identity)
+  check `f(x)#λ/make_b() <= X`: Ok(Identity)
+  check `f(x)#λ/λ result <= f(x)`: Ok(Identity)
+  check `make_a() <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
+  check `make_a.Result <= make_a()`: Ok(Identity)
+  check `|w| .. <= F`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
+  check `make_b.Result <= make_b()`: Ok(Identity)
   I* of a final state: []

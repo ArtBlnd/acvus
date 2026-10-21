@@ -8,9 +8,9 @@ outcome 1
   value x: A
   decision `&mut r`: lend & through &
   decision first: first#0
-  check `first(x) ≤ R`: Ok(Identity)
-  check `first.Result ≤ first(x)`: Ok(Identity)
-  check `x ⇝ first.Param(0)`: Ok(Identity)
+  check `first(x) <= R`: Ok(Identity)
+  check `first.Result <= first(x)`: Ok(Identity)
+  check `x ~> first.Param(0)`: Ok(Identity)
   I* of a final state: []
 outcome 2
   refused
@@ -20,7 +20,7 @@ outcome 2
   value x: A
   decision `&mut r`: no result
   decision first: first#0
-  check `first(x) ≤ R`: Ok(Identity)
-  check `first.Result ≤ first(x)`: Ok(Identity)
-  check `x ⇝ first.Param(0)`: Ok(Identity)
+  check `first(x) <= R`: Ok(Identity)
+  check `first.Result <= first(x)`: Ok(Identity)
+  check `x ~> first.Param(0)`: Ok(Identity)
   I* of a final state: [completeness `&mut r`]

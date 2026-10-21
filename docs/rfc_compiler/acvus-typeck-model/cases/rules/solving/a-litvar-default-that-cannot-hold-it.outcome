@@ -5,6 +5,6 @@ outcome 1
   value 3000000000: i32
   value X: i32
   partition {3000000000, X}
-  check `3000000000 ≤ X`: Ok(Identity)
-  refusal conflict at "the default of 3000000000": Lit(LitVar { family: Int, values: {Int(3000000000)} }, Some(Scalar(Int(I32))))
+  check `3000000000 <= X`: Ok(Identity)
+  refusal conflict at "the default of 3000000000": ?{3000000000}: int vs Scalar(Int(I32))
   I* of a final state: []

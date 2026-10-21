@@ -3,14 +3,14 @@ run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Record
 outcome 1
   refused
   value 1u8: u8
-  value O: Option⟨u8⟩
+  value O: Option<u8>
   value S: u8
-  value `Some(1u8)`: Option⟨u8⟩
+  value `Some(1u8)`: Option<u8>
   value X: !
   value `o[0]`: !
   decision `o[0]`: applied
-  check `1u8 ≤ S`: Ok(Identity)
-  check `Some(1u8) ≤ O`: Ok(Identity)
-  check `o[0] ≤ X`: Ok(Identity)
-  refusal conflict at "the value of O": Fact(Indexes(ClassId(4)), Option)
+  check `1u8 <= S`: Ok(Identity)
+  check `Some(1u8) <= O`: Ok(Identity)
+  check `o[0] <= X`: Ok(Identity)
+  refusal conflict at "the value of O": Option vs index o[0]
   I* of a final state: []

@@ -6,6 +6,6 @@ outcome 1
   value `make()`: {x: u8, y: u8}
   decision f: unreached [f#0, f#1]
   decision make: make#0
-  check `f.Result ≤ f(..)`: Ok(Identity)
-  check `make.Result ≤ make()`: Ok(Identity)
+  check `f.Result <= f(..)`: Ok(Identity)
+  check `make.Result <= make()`: Ok(Identity)
   I* of a final state: []

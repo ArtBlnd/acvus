@@ -5,5 +5,5 @@ outcome 1
   value 1u8: u8
   value `None.0`: !
   decision None: applied
-  refusal conflict at "1u8: Variant { enum_name: None, variant: None, payload: ClassId(1) }": Fact(Variant { enum_name: None, variant: None, payload: ClassId(1) }, Scalar(Int(U8)))
+  refusal conflict at "1u8: variant None: None.0": Scalar(Int(U8)) vs variant None: None.0
   I* of a final state: []

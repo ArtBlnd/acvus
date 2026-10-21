@@ -25,4 +25,4 @@ group λ {
 }
 
 must fail;
-assert failing [`X ⇝ takes_u8.Param(0)`];
+assert failing [`X ~> takes_u8.Param(0)`];

@@ -7,7 +7,7 @@ outcome 1
   value 2u16: u16
   value ?k: !
   value L: none
-  value None: Option⟨!⟩
+  value None: Option<!>
   value S: none
   value `Some(x)`: none
   value X: none
@@ -18,14 +18,14 @@ outcome 1
   value `λ result`: ()
   decision `remember(1u8)`: calls {λ}
   decision `remember(2u16)`: calls {λ}
-  check `1u8 ≤ remember(1u8)#λ/X`: Ok(Identity)
-  check `2u16 ≤ remember(2u16)#λ/X`: Ok(Identity)
-  check `remember(1u8)#λ/X ≤ remember(1u8)#λ/S`: Ok(Identity)
-  check `remember(1u8)#λ/λ result ≤ remember(1u8)`: Ok(Identity)
-  check `remember(2u16)#λ/X ≤ remember(2u16)#λ/S`: Ok(Identity)
-  check `remember(2u16)#λ/λ result ≤ remember(2u16)`: Ok(Identity)
-  check `|x| .. ≤ remember`: Ok(Identity)
-  check `() ≤ λ result`: Ok(Identity)
+  check `1u8 <= remember(1u8)#λ/X`: Ok(Identity)
+  check `2u16 <= remember(2u16)#λ/X`: Ok(Identity)
+  check `remember(1u8)#λ/X <= remember(1u8)#λ/S`: Ok(Identity)
+  check `remember(1u8)#λ/λ result <= remember(1u8)`: Ok(Identity)
+  check `remember(2u16)#λ/X <= remember(2u16)#λ/S`: Ok(Identity)
+  check `remember(2u16)#λ/λ result <= remember(2u16)`: Ok(Identity)
+  check `|x| .. <= remember`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
   refusal no_join `L.Payload(Some)`
   refusal no_value L
   I* of a final state: []

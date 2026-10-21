@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, Conflict, KindSource};
+use crate::class::{ClassId, ClassName, Conflict, KindSource, NamedConflict};
 use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::node::Decision;
 use crate::relation::{Named, Relation};
@@ -49,9 +49,13 @@ pub struct Outcome {
 impl State {
     /// Refuses at `at` what no type holds, and returns the refusal.
     pub(crate) fn refuse_conflict(&mut self, at: String, conflict: Conflict) -> Refusal {
+        let conflict = NamedConflict {
+            conflict: &conflict,
+            arena: &self.arena,
+        };
         let refusal = Refusal::Conflict {
             at,
-            conflict: format!("{conflict:?}"),
+            conflict: conflict.to_string(),
         };
         self.refusals.insert(refusal.clone());
         refusal

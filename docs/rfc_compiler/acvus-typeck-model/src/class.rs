@@ -5,7 +5,8 @@
 //! An equivalence class holds type variables, of which the model keeps the
 //! LitVar, and at most one kind (l.124). Unifying two merges them, the kind
 //! the conjunction of the two, and unifies their parts of one name in turn
-//! (l.165).
+//! (l.165). `Unifying` reports each union it makes, with its cause, and the
+//! conflict that stops it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -59,7 +60,7 @@ impl fmt::Display for ClassName {
             ClassName::Node(node, at) => write!(f, "{node}.{at:?}"),
             ClassName::Copy { at, of } => write!(f, "{at}/{of}"),
             ClassName::Link { from, to, step, at } => {
-                write!(f, "link({from} → {to})[{step}].{at:?}")
+                write!(f, "link({from} -> {to})[{step}].{at:?}")
             }
         }
     }
@@ -234,11 +235,162 @@ pub enum Conflict {
     Reference(bool, Option<Constructor>),
 }
 
+/// A kind known in part written with its class's name (`design/19-cases.md`,
+/// Notation): `ref T`, `field x: T`, `component i: T`, `index T`,
+/// `variant V: T`, `variant E::V: T`.
+pub struct NamedFact<'a> {
+    pub fact: &'a Fact,
+    pub arena: &'a Arena,
+}
+
+impl fmt::Display for NamedFact<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = |id: &ClassId| self.arena.name(*id);
+        match self.fact {
+            Fact::Ref(target) => write!(f, "ref {}", name(target)),
+            Fact::Field(field, part) => write!(f, "field {field}: {}", name(part)),
+            Fact::Component(i, part) => write!(f, "component {i}: {}", name(part)),
+            Fact::Indexes(element) => write!(f, "index {}", name(element)),
+            Fact::Variant {
+                enum_name: Some(enum_name),
+                variant,
+                payload,
+            } => write!(f, "variant {enum_name}::{variant}: {}", name(payload)),
+            Fact::Variant {
+                enum_name: None,
+                variant,
+                payload,
+            } => write!(f, "variant {variant}: {}", name(payload)),
+        }
+    }
+}
+
+/// What no type holds written with its classes' names, `<a> vs <b>`
+/// (`design/19-cases.md`, Notation).
+pub struct NamedConflict<'a> {
+    pub conflict: &'a Conflict,
+    pub arena: &'a Arena,
+}
+
+impl fmt::Display for NamedConflict<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let reference = |reference: bool| {
+            if reference {
+                "reference"
+            } else {
+                "no reference"
+            }
+        };
+        match self.conflict {
+            Conflict::Kinds(a, b) => write!(f, "{a:?} vs {b:?}"),
+            Conflict::Lit(lit, Some(constructor)) => write!(f, "{lit} vs {constructor:?}"),
+            Conflict::Lit(lit, None) => write!(f, "{lit} vs another family"),
+            Conflict::Fact(fact, constructor) => {
+                let fact = NamedFact {
+                    fact,
+                    arena: self.arena,
+                };
+                write!(f, "{constructor:?} vs {fact}")
+            }
+            Conflict::Reference(held, Some(constructor)) => {
+                write!(f, "{} vs {constructor:?}", reference(*held))
+            }
+            Conflict::Reference(held, None) => {
+                write!(f, "{} vs {}", reference(*held), reference(!*held))
+            }
+        }
+    }
+}
+
 /// The equivalence classes over one arena.
 #[derive(Clone, Default, Debug)]
 pub struct Classes {
     parent: Vec<ClassId>,
     held: BTreeMap<ClassId, Held>,
+}
+
+/// Why two equivalence classes are unified (l.165).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Cause {
+    /// They are the two the caller unifies: an equation's two sides.
+    Given,
+    /// Congruence: they are the parts of one name of the two kinds the
+    /// union at `parent`, of the same unifying, conjoined.
+    Congruence { parent: usize, part: PartKey },
+    /// Congruence: they are the parts of one name of the kind `class` held
+    /// and the kind it was given.
+    KindGiven { class: ClassId, part: PartKey },
+    /// One is the class a kind known in part of `class` names, and the other
+    /// the class its kind, or another kind known in part of it, names at that
+    /// part (l.140–147, l.161).
+    Fact { class: ClassId, fact: Fact },
+}
+
+/// Two classes to unify, and why.
+struct Pair {
+    a: ClassId,
+    b: ClassId,
+    cause: Cause,
+}
+
+/// A union of two equivalence classes (l.165).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Union {
+    pub cause: Cause,
+    /// The members of the two classes, each as it was before the union, in
+    /// the order the cause gives them.
+    pub sides: [BTreeSet<ClassId>; 2],
+    /// The kind of the class they make: the conjunction of theirs.
+    pub kind: Option<Term<ClassId>>,
+}
+
+/// What no type holds, met while unifying (l.165–170).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Conflicted {
+    Apart(Box<Apart>),
+    /// The class of these members holds what no type holds: what it was
+    /// given, or what the last union made it hold.
+    Holds {
+        members: BTreeSet<ClassId>,
+        conflict: Conflict,
+    },
+}
+
+/// Two classes that hold what no type holds together, and stay apart: those
+/// `cause` would unify, of these members and holding these kinds.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Apart {
+    pub cause: Cause,
+    pub sides: [BTreeSet<ClassId>; 2],
+    pub kinds: [Option<Term<ClassId>>; 2],
+    pub conflict: Conflict,
+}
+
+impl Conflicted {
+    pub fn conflict(&self) -> &Conflict {
+        match self {
+            Conflicted::Apart(apart) => &apart.conflict,
+            Conflicted::Holds { conflict, .. } => conflict,
+        }
+    }
+}
+
+/// What unifying did: each union it made, in order, and what no type holds
+/// where that stopped it.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct Unified {
+    pub unions: Vec<Union>,
+    pub conflict: Option<Conflicted>,
+}
+
+impl Unified {
+    /// The conflict that stopped it, the unions it made left out.
+    pub fn result(&self) -> Result<(), Conflict> {
+        match &self.conflict {
+            Some(conflicted) => Err(conflicted.conflict().clone()),
+            None => Ok(()),
+        }
+    }
 }
 
 impl Classes {
@@ -282,7 +434,17 @@ impl Classes {
         self.find(a) == self.find(b)
     }
 
-    /// Gives the equivalence class of `id` the kind `term`.
+    /// Unifying in these classes under the declared types, each union
+    /// reported.
+    pub fn unifying<'a>(&'a mut self, types: &'a DeclaredTypes) -> Unifying<'a> {
+        Unifying {
+            classes: self,
+            types,
+            unions: Vec::new(),
+        }
+    }
+
+    /// As `Unifying::give_kind`, with the conflict alone.
     pub fn give_kind(
         &mut self,
         id: ClassId,
@@ -290,22 +452,7 @@ impl Classes {
         source: KindSource,
         types: &DeclaredTypes,
     ) -> Result<(), Conflict> {
-        let root = self.find(id);
-        let held = self.held.get_mut(&root).expect("a root holds");
-        let mut pairs = Vec::new();
-        held.kind = Some(match held.kind.take() {
-            Some((kind, held_source)) => {
-                if let Err(conflict) = agree(&kind, &term) {
-                    held.kind = Some((kind, held_source));
-                    return Err(conflict);
-                }
-                pairs.extend(part_pairs(&kind, &term));
-                (kind, joined_source(held_source, source))
-            }
-            None => (term, source),
-        });
-        pairs.extend(self.normalize(root, types)?);
-        self.unify_pairs(pairs, types)
+        self.unifying(types).give_kind(id, term, source).result()
     }
 
     /// Marks the equivalence class of `id` as having taken its constructor.
@@ -314,40 +461,24 @@ impl Classes {
         self.held.get_mut(&root).expect("a root holds").solved = true;
     }
 
+    /// As `Unifying::give_fact`, with the conflict alone.
     pub fn give_fact(
         &mut self,
         id: ClassId,
         fact: Fact,
         types: &DeclaredTypes,
     ) -> Result<(), Conflict> {
-        let root = self.find(id);
-        self.held
-            .get_mut(&root)
-            .expect("a root holds")
-            .facts
-            .insert(fact);
-        let pairs = self.normalize(root, types)?;
-        self.unify_pairs(pairs, types)
+        self.unifying(types).give_fact(id, fact).result()
     }
 
+    /// As `Unifying::give_lit`, with the conflict alone.
     pub fn give_lit(
         &mut self,
         id: ClassId,
         lit: LitVar,
         types: &DeclaredTypes,
     ) -> Result<(), Conflict> {
-        let root = self.find(id);
-        {
-            let held = self.held.get_mut(&root).expect("a root holds");
-            held.lit = Some(match &held.lit {
-                Some(own) => own
-                    .union(&lit)
-                    .ok_or_else(|| Conflict::Lit(lit.clone(), None))?,
-                None => lit,
-            });
-        }
-        let pairs = self.normalize(root, types)?;
-        self.unify_pairs(pairs, types)
+        self.unifying(types).give_lit(id, lit).result()
     }
 
     /// Records a lambda the Values of the class of `id` names.
@@ -360,86 +491,15 @@ impl Classes {
             .insert(lambda);
     }
 
-    /// Records whether the equivalence class of `id` is a reference.
-    pub fn give_reference(
-        &mut self,
-        id: ClassId,
-        reference: bool,
-        types: &DeclaredTypes,
-    ) -> Result<(), Conflict> {
-        let root = self.find(id);
-        {
-            let held = self.held.get_mut(&root).expect("a root holds");
-            if held.reference.is_some_and(|own| own != reference) {
-                return Err(Conflict::Reference(reference, None));
-            }
-            held.reference = Some(reference);
-        }
-        let pairs = self.normalize(root, types)?;
-        self.unify_pairs(pairs, types)
-    }
-
-    /// Merges the two equivalence classes, and their parts of one name in turn.
+    /// As `Unifying::unify`, with the conflict alone.
     pub fn unify(&mut self, a: ClassId, b: ClassId, types: &DeclaredTypes) -> Result<(), Conflict> {
-        self.unify_pairs(vec![(a, b)], types)
-    }
-
-    fn unify_pairs(
-        &mut self,
-        mut work: Vec<(ClassId, ClassId)>,
-        types: &DeclaredTypes,
-    ) -> Result<(), Conflict> {
-        while let Some((a, b)) = work.pop() {
-            let (a, b) = (self.find(a), self.find(b));
-            if a == b {
-                continue;
-            }
-            let (keep, gone) = if a < b { (a, b) } else { (b, a) };
-            let (kept, merged) = (&self.held[&keep], &self.held[&gone]);
-            let kind = match (&kept.kind, &merged.kind) {
-                (Some((kind, s)), Some((other, t))) => {
-                    agree(kind, other)?;
-                    work.extend(part_pairs(kind, other));
-                    Some((kind.clone(), joined_source(*s, *t)))
-                }
-                (kind, other) => kind.clone().or_else(|| other.clone()),
-            };
-            let lit = match (&kept.lit, &merged.lit) {
-                (Some(lit), Some(other)) => Some(
-                    lit.union(other)
-                        .ok_or_else(|| Conflict::Lit(other.clone(), None))?,
-                ),
-                (lit, other) => lit.clone().or_else(|| other.clone()),
-            };
-            let reference = match (kept.reference, merged.reference) {
-                (Some(own), Some(other)) if own != other => {
-                    return Err(Conflict::Reference(other, None));
-                }
-                (own, other) => own.or(other),
-            };
-            self.parent[gone.0] = keep;
-            let merged = self.held.remove(&gone).expect("a root holds");
-            let held = self.held.get_mut(&keep).expect("a root holds");
-            held.members.extend(merged.members);
-            held.values.extend(merged.values);
-            held.facts.extend(merged.facts);
-            held.kind = kind;
-            held.lit = lit;
-            held.reference = reference;
-            held.solved |= merged.solved;
-            work.extend(self.normalize(keep, types)?);
-        }
-        Ok(())
+        self.unifying(types).unify(a, b).result()
     }
 
     /// The pairs of classes that what the equivalence class holds makes one:
     /// facts of one part name with each other and with its kind's part, and
     /// the LitVar checked against its kind's constructor.
-    fn normalize(
-        &mut self,
-        root: ClassId,
-        types: &DeclaredTypes,
-    ) -> Result<Vec<(ClassId, ClassId)>, Conflict> {
+    fn normalize(&mut self, root: ClassId, types: &DeclaredTypes) -> Result<Vec<Pair>, Conflict> {
         let held = self.held.get_mut(&root).expect("a root holds");
         if let (Some(lit), Some((kind, _))) = (&held.lit, &held.kind) {
             if !matches!(kind, Term::Scalar(scalar) if lit.admits(*scalar)) {
@@ -458,8 +518,16 @@ impl Classes {
         let mut by_part: BTreeMap<FactPart, ClassId> = BTreeMap::new();
         for fact in &held.facts {
             let part = FactPart::of(fact);
+            let cause = || Cause::Fact {
+                class: root,
+                fact: fact.clone(),
+            };
             match by_part.get(&part) {
-                Some(&first) => pairs.push((first, fact.class())),
+                Some(&first) => pairs.push(Pair {
+                    a: first,
+                    b: fact.class(),
+                    cause: cause(),
+                }),
                 None => {
                     by_part.insert(part, fact.class());
                 }
@@ -471,10 +539,220 @@ impl Classes {
                 }
                 let resolved = resolve(kind, fact, types)
                     .ok_or_else(|| Conflict::Fact(fact.clone(), kind.constructor()))?;
-                pairs.push((resolved, fact.class()));
+                pairs.push(Pair {
+                    a: resolved,
+                    b: fact.class(),
+                    cause: cause(),
+                });
             }
         }
         Ok(pairs)
+    }
+}
+
+/// Unifying in the equivalence classes (l.165–170), which reports each union
+/// it makes and the conflict that stops it.
+pub struct Unifying<'a> {
+    classes: &'a mut Classes,
+    types: &'a DeclaredTypes,
+    unions: Vec<Union>,
+}
+
+impl Unifying<'_> {
+    /// Gives the equivalence class of `id` the kind `term`.
+    pub fn give_kind(mut self, id: ClassId, term: Term<ClassId>, source: KindSource) -> Unified {
+        let given = self.kind_given(id, term, source);
+        self.finish(given)
+    }
+
+    fn kind_given(
+        &mut self,
+        id: ClassId,
+        term: Term<ClassId>,
+        source: KindSource,
+    ) -> Result<(), Conflicted> {
+        let root = self.classes.find(id);
+        let held = self.classes.held.get_mut(&root).expect("a root holds");
+        let mut pairs = Vec::new();
+        held.kind = Some(match held.kind.take() {
+            Some((kind, held_source)) => {
+                if let Err(conflict) = agree(&kind, &term) {
+                    held.kind = Some((kind, held_source));
+                    let members = held.members.clone();
+                    return Err(Conflicted::Holds { members, conflict });
+                }
+                pairs.extend(
+                    part_pairs(&kind, &term)
+                        .into_iter()
+                        .map(|(part, a, b)| Pair {
+                            a,
+                            b,
+                            cause: Cause::KindGiven { class: root, part },
+                        }),
+                );
+                (kind, joined_source(held_source, source))
+            }
+            None => (term, source),
+        });
+        pairs.extend(self.normalize(root)?);
+        self.unify_pairs(pairs)
+    }
+
+    pub fn give_fact(mut self, id: ClassId, fact: Fact) -> Unified {
+        let root = self.classes.find(id);
+        self.classes
+            .held
+            .get_mut(&root)
+            .expect("a root holds")
+            .facts
+            .insert(fact);
+        let given = self
+            .normalize(root)
+            .and_then(|pairs| self.unify_pairs(pairs));
+        self.finish(given)
+    }
+
+    pub fn give_lit(mut self, id: ClassId, lit: LitVar) -> Unified {
+        let given = self.lit_given(id, lit);
+        self.finish(given)
+    }
+
+    fn lit_given(&mut self, id: ClassId, lit: LitVar) -> Result<(), Conflicted> {
+        let root = self.classes.find(id);
+        {
+            let held = self.classes.held.get_mut(&root).expect("a root holds");
+            held.lit = Some(match &held.lit {
+                Some(own) => own.union(&lit).ok_or_else(|| Conflicted::Holds {
+                    members: held.members.clone(),
+                    conflict: Conflict::Lit(lit.clone(), None),
+                })?,
+                None => lit,
+            });
+        }
+        let pairs = self.normalize(root)?;
+        self.unify_pairs(pairs)
+    }
+
+    /// Records whether the equivalence class of `id` is a reference.
+    pub fn give_reference(mut self, id: ClassId, reference: bool) -> Unified {
+        let given = self.reference_given(id, reference);
+        self.finish(given)
+    }
+
+    fn reference_given(&mut self, id: ClassId, reference: bool) -> Result<(), Conflicted> {
+        let root = self.classes.find(id);
+        {
+            let held = self.classes.held.get_mut(&root).expect("a root holds");
+            if held.reference.is_some_and(|own| own != reference) {
+                return Err(Conflicted::Holds {
+                    members: held.members.clone(),
+                    conflict: Conflict::Reference(reference, None),
+                });
+            }
+            held.reference = Some(reference);
+        }
+        let pairs = self.normalize(root)?;
+        self.unify_pairs(pairs)
+    }
+
+    /// Merges the two equivalence classes, and their parts of one name in turn.
+    pub fn unify(mut self, a: ClassId, b: ClassId) -> Unified {
+        let unified = self.unify_pairs(vec![Pair {
+            a,
+            b,
+            cause: Cause::Given,
+        }]);
+        self.finish(unified)
+    }
+
+    fn unify_pairs(&mut self, mut work: Vec<Pair>) -> Result<(), Conflicted> {
+        while let Some(Pair { a, b, cause }) = work.pop() {
+            let (a, b) = (self.classes.find(a), self.classes.find(b));
+            if a == b {
+                continue;
+            }
+            let (keep, gone) = if a < b { (a, b) } else { (b, a) };
+            let classes = &self.classes;
+            let sides = [
+                classes.held[&a].members.clone(),
+                classes.held[&b].members.clone(),
+            ];
+            let apart = |conflict| {
+                Conflicted::Apart(Box::new(Apart {
+                    cause: cause.clone(),
+                    sides: sides.clone(),
+                    kinds: [a, b].map(|side| {
+                        classes.held[&side]
+                            .kind
+                            .as_ref()
+                            .map(|(kind, _)| kind.clone())
+                    }),
+                    conflict,
+                }))
+            };
+            let parent = self.unions.len();
+            let (kept, merged) = (&classes.held[&keep], &classes.held[&gone]);
+            let kind = match (&kept.kind, &merged.kind) {
+                (Some((kind, s)), Some((other, t))) => {
+                    agree(kind, other).map_err(apart)?;
+                    work.extend(
+                        part_pairs(kind, other)
+                            .into_iter()
+                            .map(|(part, a, b)| Pair {
+                                a,
+                                b,
+                                cause: Cause::Congruence { parent, part },
+                            }),
+                    );
+                    Some((kind.clone(), joined_source(*s, *t)))
+                }
+                (kind, other) => kind.clone().or_else(|| other.clone()),
+            };
+            let lit = match (&kept.lit, &merged.lit) {
+                (Some(lit), Some(other)) => Some(
+                    lit.union(other)
+                        .ok_or_else(|| apart(Conflict::Lit(other.clone(), None)))?,
+                ),
+                (lit, other) => lit.clone().or_else(|| other.clone()),
+            };
+            let reference = match (kept.reference, merged.reference) {
+                (Some(own), Some(other)) if own != other => {
+                    return Err(apart(Conflict::Reference(other, None)));
+                }
+                (own, other) => own.or(other),
+            };
+            self.classes.parent[gone.0] = keep;
+            let merged = self.classes.held.remove(&gone).expect("a root holds");
+            let held = self.classes.held.get_mut(&keep).expect("a root holds");
+            held.members.extend(merged.members);
+            held.values.extend(merged.values);
+            held.facts.extend(merged.facts);
+            held.kind = kind;
+            held.lit = lit;
+            held.reference = reference;
+            held.solved |= merged.solved;
+            let kind = held.kind.as_ref().map(|(kind, _)| kind.clone());
+            self.unions.push(Union { cause, sides, kind });
+            work.extend(self.normalize(keep)?);
+        }
+        Ok(())
+    }
+
+    /// `Classes::normalize`, what no type holds named by the class's members.
+    fn normalize(&mut self, root: ClassId) -> Result<Vec<Pair>, Conflicted> {
+        self.classes
+            .normalize(root, self.types)
+            .map_err(|conflict| Conflicted::Holds {
+                members: self.classes.held[&root].members.clone(),
+                conflict,
+            })
+    }
+
+    fn finish(self, result: Result<(), Conflicted>) -> Unified {
+        Unified {
+            unions: self.unions,
+            conflict: result.err(),
+        }
     }
 }
 
@@ -558,10 +836,12 @@ fn agree(a: &Term<ClassId>, b: &Term<ClassId>) -> Result<(), Conflict> {
     }
 }
 
-fn part_pairs(a: &Term<ClassId>, b: &Term<ClassId>) -> Vec<(ClassId, ClassId)> {
+/// The parts of one name of two kinds of one constructor and members, each
+/// with its name.
+fn part_pairs(a: &Term<ClassId>, b: &Term<ClassId>) -> Vec<(PartKey, ClassId, ClassId)> {
     a.parts()
         .into_iter()
         .zip(b.parts())
-        .map(|((_, x), (_, y))| (*x, *y))
+        .map(|((key, x), (_, y))| (key, *x, *y))
         .collect()
 }

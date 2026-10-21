@@ -1188,7 +1188,7 @@ fn directives(source: &str, case: &mut Case) -> Parsed<()> {
                 let group = match rest {
                     [] => crate::program::ENTRY.to_string(),
                     [group] => group.to_string(),
-                    _ => return Err(format!("line {at}: `order: …` or `order <group>: …`")),
+                    _ => return Err(format!("line {at}: `order: ...` or `order <group>: ...`")),
                 };
                 let steps = value
                     .split(',')

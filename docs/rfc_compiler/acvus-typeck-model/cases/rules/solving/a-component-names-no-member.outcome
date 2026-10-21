@@ -6,6 +6,6 @@ outcome 1
   value T: !
   value `t.0`: u8
   decision `t.0`: applied
-  check `1u8 ≤ t.0`: Ok(Identity)
-  refusal conflict at "the default of T": Fact(Component(0, ClassId(1)), Never)
+  check `1u8 <= t.0`: Ok(Identity)
+  refusal conflict at "the default of T": Never vs component 0: t.0
   I* of a final state: []

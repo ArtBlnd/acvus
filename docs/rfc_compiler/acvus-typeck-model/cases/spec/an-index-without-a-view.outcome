@@ -3,13 +3,13 @@ run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Record
 outcome 1
   refused
   value 1u8: u8
-  value V: Vec⟨!⟩
-  value `new()`: Vec⟨!⟩
+  value V: Vec<!>
+  value `new()`: Vec<!>
   value `v[0]`: u8
   decision new: new#0
   decision `v[0]`: applied
-  check `1u8 ≤ v[0]`: Ok(Identity)
-  check `new() ≤ V`: Ok(Identity)
-  check `new.Result ≤ new()`: Ok(Identity)
-  refusal conflict at "V: indexes v[0]": Fact(Indexes(ClassId(2)), Extern(Vec))
+  check `1u8 <= v[0]`: Ok(Identity)
+  check `new() <= V`: Ok(Identity)
+  check `new.Result <= new()`: Ok(Identity)
+  refusal conflict at "V: indexes v[0]": Extern(Vec) vs index v[0]
   I* of a final state: []

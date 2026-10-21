@@ -37,4 +37,4 @@ let `f(1u8)`;
 
 must fail;
 assert `f(1u8)` == calls {λ1, λ2};
-assert failing [`f(1u8)#λ2/X2 ⇝ f(1u8)#λ2/take_u16.Param(0)`];
+assert failing [`f(1u8)#λ2/X2 ~> f(1u8)#λ2/take_u16.Param(0)`];

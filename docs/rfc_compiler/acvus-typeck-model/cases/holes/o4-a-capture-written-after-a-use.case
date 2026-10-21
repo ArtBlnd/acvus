@@ -45,5 +45,5 @@ outcome {
 outcome {
     must fail;
     assert X: A;
-    assert failing [`put(..)#λ/V ≤ X`];
+    assert failing [`put(..)#λ/V <= X`];
 }

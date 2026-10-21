@@ -7,6 +7,6 @@ outcome 1
   value `a[0]`: i32
   decision `a[0]`: applied
   partition {1, `a[0]`}
-  check `1 ≤ a[0]`: Ok(Identity)
-  refusal conflict at "the default of A": Fact(Indexes(ClassId(1)), Never)
+  check `1 <= a[0]`: Ok(Identity)
+  refusal conflict at "the default of A": Never vs index a[0]
   I* of a final state: []

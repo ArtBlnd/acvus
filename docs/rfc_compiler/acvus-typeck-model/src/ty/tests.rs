@@ -91,7 +91,7 @@ fn shapes() -> Vec<Shape> {
             members: vec![variant("None"), variant("Some")],
             parts: vec![payload("Some")],
             variance: Variance::Covariant,
-            notation: "Option⟨u8⟩",
+            notation: "Option<u8>",
         },
         Shape {
             ty: ty(Term::Result {
@@ -102,7 +102,7 @@ fn shapes() -> Vec<Shape> {
             members: vec![variant("Err"), variant("Ok")],
             parts: vec![payload("Ok"), payload("Err")],
             variance: Variance::Covariant,
-            notation: "Result⟨u8, u16⟩",
+            notation: "Result<u8, u16>",
         },
         Shape {
             ty: ty(Term::Function {
@@ -113,7 +113,7 @@ fn shapes() -> Vec<Shape> {
             members: vec![],
             parts: vec![PartKey::Param(0), PartKey::Param(1), PartKey::Return],
             variance: Variance::Invariant,
-            notation: "Fn(u8, u16 → bool)",
+            notation: "Fn(u8, u16 -> bool)",
         },
         Shape {
             ty: ty(Term::FunctionValue { arity: 2 }),
@@ -156,7 +156,7 @@ fn shapes() -> Vec<Shape> {
             members: vec![],
             parts: vec![PartKey::Arg(0), PartKey::Arg(1)],
             variance: Variance::Invariant,
-            notation: "Pair⟨u8, &str⟩",
+            notation: "Pair<u8, &str>",
         },
         Shape {
             ty: extern_ty("F", vec![u8_.clone()], Some(identity("ι"))),
@@ -164,7 +164,7 @@ fn shapes() -> Vec<Shape> {
             members: vec![],
             parts: vec![PartKey::Arg(0), PartKey::Identity],
             variance: Variance::Invariant,
-            notation: "F⟨u8, ι⟩",
+            notation: "F<u8, ι>",
         },
         Shape {
             ty: bool_,
@@ -442,7 +442,7 @@ fn the_payload_part_of_a_variant_is_a_part_of_its_term() {
 }
 
 #[test]
-fn display_writes_the_specs_notation() {
+fn display_writes_the_specs_notation_in_ascii() {
     for shape in shapes() {
         assert_eq!(shape.ty.to_string(), shape.notation);
     }

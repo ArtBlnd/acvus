@@ -23,4 +23,4 @@ let `g(1u16)`;
 
 must fail;
 assert take_u8 == take_u8#0;
-assert failing [`g@2/X ⇝ g@2/take_u8.Param(0)`];
+assert failing [`g@2/X ~> g@2/take_u8.Param(0)`];

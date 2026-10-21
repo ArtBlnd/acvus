@@ -5,10 +5,8 @@
 //! node — and the classes of a type a declaration writes (l.127, l.218).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Range;
 use std::rc::Rc;
 
-use crate::check::Refusal;
 use crate::class::{ClassId, ClassName, KindSource};
 use crate::instance::Instance;
 use crate::node::{NodeKind, NodeState};
@@ -17,88 +15,128 @@ use crate::relation::{Recorded, Recorder, Relation};
 use crate::sig::{SigTy, SigVar};
 use crate::solve::State;
 use crate::ty::{Name, PartKey, Term, Ty};
+use crate::unify::Unification;
 
-/// A relation's place in the log, and what unification refused at it.
+/// A relation's place in the log, and what unification did as the
+/// equivalence classes took it.
+#[must_use]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Entry {
     pub at: usize,
-    pub refused: Option<Refusal>,
+    pub unification: Unification,
+}
+
+/// An instance made while recording (l.222): its name, what made it, the
+/// binding group whose C it copies, and the relations it recorded, by their
+/// places in the log.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Instantiated {
+    pub at: Name,
+    pub by: Recorder,
+    pub group: Name,
+    pub recorded: Vec<usize>,
+}
+
+/// What recording did (l.230): each relation recorded, in the order
+/// recorded, and each instance made (l.222).
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct Recording {
+    pub entries: Vec<Entry>,
+    pub instances: Vec<Instantiated>,
+}
+
+impl Recording {
+    pub fn push(&mut self, entry: Entry) {
+        self.entries.push(entry);
+    }
+
+    pub fn append(&mut self, mut other: Recording) {
+        self.entries.append(&mut other.entries);
+        self.instances.append(&mut other.instances);
+    }
+
+    /// The relations recorded, by their places in the log.
+    pub fn places(&self) -> impl Iterator<Item = usize> + '_ {
+        self.entries.iter().map(|entry| entry.at)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 impl State {
     /// Records the relation, which the equivalence classes take at once
     /// (l.230).
     pub(crate) fn record(&mut self, relation: Relation, recorder: Recorder) -> Entry {
-        let refused = self.hold(&relation);
+        let unification = self.hold(&relation);
         let at = self.log.len();
         self.log.push(Recorded { relation, recorder });
-        Entry { at, refused }
+        Entry { at, unification }
     }
 
     /// The types the text gives its classes: a literal's LitVar, a type the
     /// text or the host writes, and a lambda's function value (l.230).
-    /// Returns the relations recorded, by their places in the log.
     pub(crate) fn record_origins(
         &mut self,
         program: &Program,
         classes: &[&TextClass],
-    ) -> Range<usize> {
-        let start = self.log.len();
+    ) -> Recording {
+        let mut recorded = Recording::default();
         for class in classes {
             let id = self.text(&class.name);
             match &class.origin {
                 Origin::Var => {}
                 Origin::Lit(lit) => {
-                    self.record(Relation::Lit(id, lit.clone()), Recorder::Origin);
+                    recorded.push(self.record(Relation::Lit(id, lit.clone()), Recorder::Origin));
                 }
                 Origin::Written(term) => {
                     let term = term.clone().map(|_, part| self.text(&part));
                     let relation = Relation::Kind(id, term, KindSource::Written);
-                    self.record(relation, Recorder::Origin);
+                    recorded.push(self.record(relation, Recorder::Origin));
                 }
                 Origin::Host(term) => {
                     self.hosts.insert(id);
                     let term = term.clone().map(|_, part| self.text(&part));
                     let relation = Relation::Kind(id, term, KindSource::Written);
-                    self.record(relation, Recorder::Origin);
+                    recorded.push(self.record(relation, Recorder::Origin));
                 }
                 Origin::Lambda(lambda) => {
                     let function = program.function(lambda).expect("the lambda is a function");
                     let arity = function.params.len();
                     let term = Term::FunctionValue { arity };
                     let relation = Relation::Kind(id, term, KindSource::Written);
-                    self.record(relation, Recorder::Origin);
-                    self.record(Relation::Values(id, lambda.clone()), Recorder::Origin);
+                    recorded.push(self.record(relation, Recorder::Origin));
+                    let relation = Relation::Values(id, lambda.clone());
+                    recorded.push(self.record(relation, Recorder::Origin));
                 }
             }
         }
-        start..self.log.len()
+        recorded
     }
 
-    /// The equations the text's invariant places give (l.236). Returns the
-    /// relations recorded.
-    pub(crate) fn record_equations(&mut self, items: &[(usize, &Item)]) -> Range<usize> {
-        let start = self.log.len();
+    /// The equations the text's invariant places give (l.236).
+    pub(crate) fn record_equations(&mut self, items: &[(usize, &Item)]) -> Recording {
+        let mut recorded = Recording::default();
         for &(i, item) in items {
             if let Item::Equation(a, b) = item {
                 let relation = Relation::Equation(self.text(a), self.text(b));
-                self.record(relation, Recorder::Text(i));
+                recorded.push(self.record(relation, Recorder::Text(i)));
             }
         }
-        start..self.log.len()
+        recorded
     }
 
     /// The rest of the text: each value passing into a type, as a meeting or
     /// a boundary (l.226, l.234–235), each call of a function (l.199–202), and
     /// each other use, lend, projection and binding, as a node (l.238).
-    /// Returns the relations recorded.
     pub(crate) fn record_items(
         &mut self,
         program: &Program,
         items: &[(usize, &Item)],
         solved: &BTreeMap<Name, Rc<State>>,
-    ) -> Range<usize> {
-        let start = self.log.len();
+    ) -> Recording {
+        let mut recorded = Recording::default();
         for &(i, item) in items {
             match item {
                 Item::Pass { value, into, place } => {
@@ -121,7 +159,7 @@ impl State {
                             to: into,
                         }
                     };
-                    self.record(relation, Recorder::Text(i));
+                    recorded.push(self.record(relation, Recorder::Text(i)));
                 }
                 Item::CallValue {
                     name,
@@ -145,7 +183,7 @@ impl State {
                     let function = program.function(callee).expect("the function is declared");
                     let args: Vec<ClassId> = args.iter().map(|arg| self.text(arg)).collect();
                     let result = self.text(result);
-                    self.call(i, function, &args, result, solved);
+                    recorded.append(self.call(i, function, &args, result, solved));
                 }
                 Item::Use {
                     name,
@@ -202,7 +240,7 @@ impl State {
                 Item::Equation(..) => {}
             }
         }
-        start..self.log.len()
+        recorded
     }
 
     pub(crate) fn add_node(&mut self, name: &Name, kind: NodeKind) {
@@ -221,7 +259,7 @@ impl State {
     /// takes that body's own types: each argument passes into its parameter's
     /// type, universal and so a boundary (Example 10), and the body's result
     /// type enters the use's result. From another group it makes an instance
-    /// of the group's C (l.222). Returns the relations recorded.
+    /// of the group's C (l.222).
     pub(crate) fn call(
         &mut self,
         item: usize,
@@ -229,14 +267,12 @@ impl State {
         args: &[ClassId],
         result: ClassId,
         solved: &BTreeMap<Name, Rc<State>>,
-    ) -> Range<usize> {
-        let start = self.log.len();
+    ) -> Recording {
         let recorder = Recorder::Text(item);
         if function.group == self.group || self.enclosing.contains(&function.group) {
             let params: Vec<ClassId> = function.params.iter().map(|p| self.text(p)).collect();
             let returned = self.text(&function.result);
-            self.record_call(args, &params, returned, result, &recorder);
-            return start..self.log.len();
+            return self.record_call(args, &params, returned, result, &recorder);
         }
         let from = Rc::clone(
             solved
@@ -251,13 +287,13 @@ impl State {
             .map(|param| copy.class(self, from.text(param)))
             .collect();
         let returned = copy.class(self, from.text(&function.result));
-        copy.record_rest(self);
-        self.record_call(args, &params, returned, result, &recorder);
-        start..self.log.len()
+        let mut recorded = copy.record_rest(self);
+        recorded.append(self.record_call(args, &params, returned, result, &recorder));
+        recorded
     }
 
     /// Each argument passing into its parameter's type, and the result type
-    /// entering the use's result (l.199–202). Returns the relations recorded.
+    /// entering the use's result (l.199–202).
     pub(crate) fn record_call(
         &mut self,
         args: &[ClassId],
@@ -265,8 +301,8 @@ impl State {
         returned: ClassId,
         result: ClassId,
         recorder: &Recorder,
-    ) -> Range<usize> {
-        let start = self.log.len();
+    ) -> Recording {
+        let mut recorded = Recording::default();
         for (&arg, &param) in args.iter().zip(params) {
             let relation = if self.is_unknown(param) {
                 Relation::LowerBound {
@@ -279,39 +315,40 @@ impl State {
                     to: param,
                 }
             };
-            self.record(relation, recorder.clone());
+            recorded.push(self.record(relation, recorder.clone()));
         }
-        self.record(
-            Relation::LowerBound {
-                lower: returned,
-                upper: result,
-            },
-            recorder.clone(),
-        );
-        start..self.log.len()
+        let relation = Relation::LowerBound {
+            lower: returned,
+            upper: result,
+        };
+        recorded.push(self.record(relation, recorder.clone()));
+        recorded
     }
 
-    /// A class made anew that holds `term` as a declaration writes it.
+    /// A class made anew that holds `term` as a declaration writes it, the
+    /// relation it records kept in `recorded`.
     pub(crate) fn written(
         &mut self,
         name: ClassName,
         term: Term<ClassId>,
         recorder: &Recorder,
+        recorded: &mut Recording,
     ) -> ClassId {
         let class = self.arena.intern(name);
         self.classes.grow(&self.arena);
         self.decided.insert(class);
-        self.record(
+        recorded.push(self.record(
             Relation::Kind(class, term, KindSource::Written),
             recorder.clone(),
-        );
+        ));
         class
     }
 
     /// The classes of a type a declaration writes: the type named `name`, its
     /// parts named after it, and its variables those of `vars`, each made
     /// where first met and named by `var_name`. A variable is an unknown, and
-    /// a written term is decided (l.218).
+    /// a written term is decided (l.218). The relations it records are kept in
+    /// `recorded`.
     pub(crate) fn instantiate<F>(
         &mut self,
         ty: &SigTy,
@@ -319,6 +356,7 @@ impl State {
         name: ClassName,
         var_name: &F,
         recorder: &Recorder,
+        recorded: &mut Recording,
     ) -> ClassId
     where
         F: Fn(SigVar) -> ClassName,
@@ -337,20 +375,27 @@ impl State {
                 let shared = Rc::new(name.clone());
                 let term = (**term).clone().map(|key: PartKey, part| {
                     let part_name = ClassName::Part(shared.clone(), key);
-                    self.instantiate(&part, vars, part_name, var_name, recorder)
+                    self.instantiate(&part, vars, part_name, var_name, recorder, recorded)
                 });
-                self.written(name, term, recorder)
+                self.written(name, term, recorder, recorded)
             }
         }
     }
 
-    /// A class made anew that holds the closed type `ty`, written.
-    pub(crate) fn closed(&mut self, name: ClassName, ty: &Ty, recorder: &Recorder) -> ClassId {
+    /// A class made anew that holds the closed type `ty`, written, the
+    /// relations it records kept in `recorded`.
+    pub(crate) fn closed(
+        &mut self,
+        name: ClassName,
+        ty: &Ty,
+        recorder: &Recorder,
+        recorded: &mut Recording,
+    ) -> ClassId {
         let shared = Rc::new(name.clone());
-        let term = ty
-            .term()
-            .clone()
-            .map(|key, part| self.closed(ClassName::Part(shared.clone(), key), &part, recorder));
-        self.written(name, term, recorder)
+        let term = ty.term().clone().map(|key, part| {
+            let part_name = ClassName::Part(shared.clone(), key);
+            self.closed(part_name, &part, recorder, recorded)
+        });
+        self.written(name, term, recorder, recorded)
     }
 }

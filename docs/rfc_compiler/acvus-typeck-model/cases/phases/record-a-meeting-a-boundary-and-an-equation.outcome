@@ -7,19 +7,16 @@ outcome 1
   value B: u8
   value W: u8
   partition {A, B}
-  check `1u8 ⇝ W`: Ok(Identity)
-  check `1u8 ≤ A`: Ok(Identity)
+  check `1u8 <= A`: Ok(Identity)
+  check `1u8 ~> W`: Ok(Identity)
   I* of a final state: []
-step 1 in run: start
-  record the text
-    records W: Scalar(Int(U8))
-    records 1u8: Scalar(Int(U8))
-  record the text
-    records A = B
-  record the text
-    records 1u8 ≤ A
-    records 1u8 ⇝ W
-  split W: Scalar(Int(U8)): no parts
-  split 1u8: Scalar(Int(U8)): no parts
-  split A = B: no parts
-  split 1u8 ⇝ W: parts
+start run
+  record #0 W: u8
+  record #1 1u8: u8
+  record #2 A = B
+  record #3 1u8 <= A
+  record #4 1u8 ~> W
+  split #0 W: u8: no parts
+  split #1 1u8: u8: no parts
+  split #2 A = B: no parts
+  split #4 1u8 ~> W: parts

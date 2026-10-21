@@ -11,9 +11,9 @@ outcome 1
   decision a: read
   decision mk: mk#0
   decision take: take#0
-  check `.x ≤ A`: Ok(Identity)
-  check `A ⇝ take.Param(0)`: Err(None)
-  check `mk() ≤ P`: Ok(Identity)
-  check `mk.Result ≤ mk()`: Ok(Identity)
-  check `take.Result ≤ take(a)`: Ok(Identity)
+  check `.x <= A`: Ok(Identity)
+  check `A ~> take.Param(0)`: Err(None)
+  check `mk() <= P`: Ok(Identity)
+  check `mk.Result <= mk()`: Ok(Identity)
+  check `take.Result <= take(a)`: Ok(Identity)
   I* of a final state: []

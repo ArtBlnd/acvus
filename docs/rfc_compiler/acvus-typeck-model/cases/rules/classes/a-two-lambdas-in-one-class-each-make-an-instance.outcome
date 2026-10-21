@@ -16,16 +16,16 @@ outcome 1
   decision `f(1u8)`: calls {λ1, λ2}
   decision take_u16: take_u16#0
   decision take_u8: take_u8#0
-  check `1u8 ≤ f(1u8)#λ1/X1`: Ok(Identity)
-  check `1u8 ≤ f(1u8)#λ2/X2`: Ok(Identity)
-  check `f(1u8)#λ1/X1 ⇝ f(1u8)#λ1/take_u8.Param(0)`: Ok(Identity)
-  check `f(1u8)#λ1/λ1 result ≤ f(1u8)`: Ok(Identity)
-  check `f(1u8)#λ2/X2 ⇝ f(1u8)#λ2/take_u16.Param(0)`: Err(None)
-  check `f(1u8)#λ2/λ2 result ≤ f(1u8)`: Ok(Identity)
-  check `|x| take_u16(x) ≤ F`: Ok(Identity)
-  check `|x| take_u8(x) ≤ F`: Ok(Identity)
-  check `take_u8(x) ≤ λ1 result`: Ok(Identity)
-  check `take_u8.Result ≤ take_u8(x)`: Ok(Identity)
-  check `take_u16(x) ≤ λ2 result`: Ok(Identity)
-  check `take_u16.Result ≤ take_u16(x)`: Ok(Identity)
+  check `1u8 <= f(1u8)#λ1/X1`: Ok(Identity)
+  check `1u8 <= f(1u8)#λ2/X2`: Ok(Identity)
+  check `f(1u8)#λ1/X1 ~> f(1u8)#λ1/take_u8.Param(0)`: Ok(Identity)
+  check `f(1u8)#λ1/λ1 result <= f(1u8)`: Ok(Identity)
+  check `f(1u8)#λ2/X2 ~> f(1u8)#λ2/take_u16.Param(0)`: Err(None)
+  check `f(1u8)#λ2/λ2 result <= f(1u8)`: Ok(Identity)
+  check `|x| take_u16(x) <= F`: Ok(Identity)
+  check `|x| take_u8(x) <= F`: Ok(Identity)
+  check `take_u8(x) <= λ1 result`: Ok(Identity)
+  check `take_u8.Result <= take_u8(x)`: Ok(Identity)
+  check `take_u16(x) <= λ2 result`: Ok(Identity)
+  check `take_u16.Result <= take_u16(x)`: Ok(Identity)
   I* of a final state: []

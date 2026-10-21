@@ -5,11 +5,11 @@ outcome 1
   value 1u8: u8
   value `Ok.0`: !
   value S: u8
-  value `Some(1u8)`: Option⟨u8⟩
+  value `Some(1u8)`: Option<u8>
   value V: !
   decision Ok: applied
   decision v: read
-  check `1u8 ≤ S`: Ok(Identity)
-  check `Ok.0 ≤ V`: Ok(Identity)
-  refusal conflict at "Some(1u8): Variant { enum_name: None, variant: Ok, payload: ClassId(3) }": Fact(Variant { enum_name: None, variant: Ok, payload: ClassId(3) }, Option)
+  check `1u8 <= S`: Ok(Identity)
+  check `Ok.0 <= V`: Ok(Identity)
+  refusal conflict at "Some(1u8): variant Ok: Ok.0": Option vs variant Ok: Ok.0
   I* of a final state: []

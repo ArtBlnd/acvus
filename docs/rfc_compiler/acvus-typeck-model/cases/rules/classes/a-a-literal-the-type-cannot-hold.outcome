@@ -5,6 +5,6 @@ outcome 1
   value 256: u8
   value `@n`: u8
   partition {256, `@n`}
-  check `256 ⇝ @n`: Ok(Identity)
-  refusal conflict at "256 = @n": Lit(LitVar { family: Int, values: {Int(256)} }, Some(Scalar(Int(U8))))
+  check `256 ~> @n`: Ok(Identity)
+  refusal conflict at "256 = @n": ?{256}: int vs Scalar(Int(U8))
   I* of a final state: []

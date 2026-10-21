@@ -1,19 +1,29 @@
 //! What the model gives, written as a case writes it: decisions, coercions,
-//! refusals, a phase's reports and an outcome (`design/19-cases.md`). An
-//! expectation compares its text with these, whitespace left out.
+//! refusals, an outcome, and a trace's facts (`design/19-cases.md`, The
+//! trace). An expectation compares its text with these, whitespace left out.
+//! Under `TRACE=1`, the facts a report is made of, what a group waits for and
+//! its C, as a traced order prints them.
 
+use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use crate::check::{Outcome, Refusal};
-use crate::coerce::{CoerceError, Coercion, Structural};
+use crate::class::{
+    Apart, Cause, ClassId, Conflict, Conflicted, NamedConflict, NamedFact, Unified, Union,
+};
+use crate::coerce::{CoerceError, Coercion, Rank, Structural};
 use crate::decl::DeclId;
-use crate::node::{Decision, LendTarget};
-use crate::relation::Named;
+use crate::dep::{Edge, Vertex};
+use crate::node::{
+    AsReference, DecidedBy, Decision, LendTarget, Narrowed, Narrowing, NodeKind, Reading, ValueRead,
+};
+use crate::record::Recording;
+use crate::relation::{Named, Recorder};
 use crate::solve::{State, Step};
 use crate::split::Split;
 use crate::trace::Report;
-use crate::ty::{Mutability, Name};
-use crate::value::Took;
+use crate::ty::{HasTerm, Mutability, Name, Term};
+use crate::value::{Head, Sources, Took};
 
 use super::parse::Phase;
 
@@ -159,139 +169,141 @@ pub fn same(a: &str, b: &str) -> bool {
     squeezed(a) == squeezed(b)
 }
 
-/// A phase's report, and the relations it recorded, named in `state`.
+/// A phase's report as a trace writes it (`design/19-cases.md`, The trace):
+/// its line, none where it is only what it recorded, and the relations it
+/// recorded, each by its place in the log, named in `state`. A report that
+/// recorded nothing and has no other line writes nothing.
 pub struct Rendered {
     pub phase: Phase,
-    pub line: String,
-    pub recorded: Vec<String>,
+    pub line: Option<String>,
+    pub recorded: Vec<(usize, String)>,
+}
+
+fn relation(state: &State, at: usize) -> String {
+    Named {
+        relation: &state.log[at].relation,
+        arena: &state.arena,
+    }
+    .to_string()
+}
+
+/// A class named as the state names its equivalence class.
+fn class_of(state: &State, id: ClassId) -> String {
+    name(&state.class_name(id).to_string())
+}
+
+fn head(head: &Head) -> String {
+    let members: Vec<String> = head.members.iter().map(|m| format!("{m:?}")).collect();
+    if members.is_empty() {
+        format!("{:?}", head.constructor)
+    } else {
+        format!("{:?} {{{}}}", head.constructor, listed(members))
+    }
+}
+
+fn took(took: &Took) -> String {
+    match took {
+        Took::Held => "held".to_string(),
+        Took::Joined { head: joined, .. } => head(joined),
+        Took::Nothing => "nothing".to_string(),
+        Took::NoJoin(_) => "no join".to_string(),
+    }
 }
 
 pub fn report(state: &State, report: &Report) -> Rendered {
-    let class = |id| name(&state.class_name(id).to_string());
-    let relation = |at: usize| {
-        Named {
-            relation: &state.log[at].relation,
-            arena: &state.arena,
-        }
-        .to_string()
-    };
-    let refused = |refused: &Option<Refusal>| match refused {
-        Some(refused) => format!(", refused {}", self::refusal(refused)),
-        None => String::new(),
-    };
-    let (phase, line, recorded) = match report {
-        Report::Recorded(recorded) => (
-            Phase::Record,
-            "record the text".to_string(),
-            recorded.clone(),
-        ),
+    let class = |id| class_of(state, id);
+    let unless_empty = |recorded: &Recording, line: String| (!recorded.is_empty()).then_some(line);
+    let (phase, line, recorded): (Phase, Option<String>, Option<&Recording>) = match report {
+        Report::Recorded(recorded) => (Phase::Record, None, Some(recorded)),
         Report::Linked(linked) => (
             Phase::Unify,
-            format!(
-                "unify linked {} to {}{}",
+            Some(format!(
+                "link {}: {}",
                 class(linked.container),
-                class(linked.element),
-                refused(&linked.refused)
-            ),
-            linked.recorded.clone(),
+                class(linked.element)
+            )),
+            Some(&linked.recorded),
         ),
         Report::Merged(recorded) => (
             Phase::Join,
-            "join merged cycles".to_string(),
-            recorded.clone(),
+            unless_empty(recorded, "merge cycles".to_string()),
+            Some(recorded),
         ),
-        Report::Infinite { class: id, refusal } => (
+        Report::Infinite { class: id, .. } => (
             Phase::Join,
-            format!("join refused {}: {}", class(*id), self::refusal(refusal)),
-            0..0,
+            Some(format!("join {}: infinite", class(*id))),
+            None,
         ),
         Report::LitLowers {
             class: id,
             recorded,
         } => (
             Phase::Join,
-            format!("join unified {} with its LitVar lower bounds", class(*id)),
-            recorded.clone(),
+            unless_empty(recorded, format!("lit lowers {}", class(*id))),
+            Some(recorded),
         ),
         Report::LitBoundaries {
             class: id,
             recorded,
         } => (
             Phase::Split,
-            format!("split unified {} with what it passes into", class(*id)),
-            recorded.clone(),
+            unless_empty(recorded, format!("lit boundaries {}", class(*id))),
+            Some(recorded),
         ),
-        Report::Joined { class: id, took } => {
-            let took = match took {
-                Took::Held => "held its kind".to_string(),
-                Took::Joined { head, refused: r } => {
-                    let members: Vec<String> =
-                        head.members.iter().map(|m| format!("{m:?}")).collect();
-                    if members.is_empty() {
-                        format!("took {:?}{}", head.constructor, refused(r))
-                    } else {
-                        format!(
-                            "took {:?} {{{}}}{}",
-                            head.constructor,
-                            listed(members),
-                            refused(r)
-                        )
-                    }
-                }
-                Took::Nothing => "took nothing".to_string(),
-                Took::NoJoin(r) => format!("has no join: {}", self::refusal(r)),
-            };
-            (Phase::Join, format!("join {} {took}", class(*id)), 0..0)
-        }
+        Report::Joined { class: id, joined } => (
+            Phase::Join,
+            Some(format!("join {}: {}", class(*id), took(&joined.took))),
+            None,
+        ),
         Report::LitJoined { bound, recorded } => (
             Phase::Join,
-            format!("join unified the LitVar of {}", relation(*bound)),
-            recorded.clone(),
+            Some(format!("lit join #{bound} {}", relation(state, *bound))),
+            Some(recorded),
         ),
         Report::Split { at, split } => {
             let (what, recorded) = match split {
-                Split::OneClass => ("one class", 0..0),
-                Split::Parts(recorded) => ("parts", recorded.clone()),
-                Split::Unsolved => ("unsolved", 0..0),
-                Split::NoParts => ("no parts", 0..0),
+                Split::OneClass => ("one class", None),
+                Split::Parts(recorded) => ("parts", Some(recorded)),
+                Split::Unsolved => ("unsolved", None),
+                Split::NoParts => ("no parts", None),
             };
             (
                 Phase::Split,
-                format!("split {}: {what}", relation(*at)),
+                Some(format!("split #{at} {}: {what}", relation(state, *at))),
                 recorded,
             )
         }
         Report::Shared(recorded) => (
             Phase::Node,
-            "node recorded what candidates share".to_string(),
-            recorded.clone(),
+            unless_empty(recorded, "shared".to_string()),
+            Some(recorded),
         ),
         Report::Decided(decided) => (
             Phase::Node,
-            format!(
-                "node decided {} as {}",
+            Some(format!(
+                "decide {}: {}",
                 name(decided.node.as_str()),
                 decision(&decided.decision)
-            ),
-            decided.recorded.clone(),
+            )),
+            Some(&decided.recorded),
         ),
         Report::FellBack(fell) => {
             let default = fell.default.clone().map(|_, part| state.class_name(part));
             (
                 Phase::Fallback,
-                format!(
-                    "fallback {} took {default}{}",
-                    class(fell.class),
-                    refused(&fell.refused)
-                ),
-                0..0,
+                Some(format!("default {}: {default}", class(fell.class))),
+                None,
             )
         }
     };
     Rendered {
         phase,
         line,
-        recorded: recorded.map(relation).collect(),
+        recorded: recorded
+            .into_iter()
+            .flat_map(Recording::places)
+            .map(|at| (at, relation(state, at)))
+            .collect(),
     }
 }
 
@@ -345,4 +357,520 @@ pub fn istar(kind: crate::istar::Kind, node: &Name) -> String {
         crate::istar::Kind::Soundness => "soundness",
     };
     format!("{kind} {}", name(node.as_str()))
+}
+
+/// The lines a traced order prints of one thing (`TRACE=1`), each with its
+/// depth below the line it is a fact of.
+#[derive(Default)]
+pub struct Lines(pub Vec<(usize, String)>);
+
+impl Lines {
+    fn push(&mut self, depth: usize, text: String) {
+        self.0.push((depth, text));
+    }
+
+    fn nest(&mut self, depth: usize, lines: Lines) {
+        self.0
+            .extend(lines.0.into_iter().map(|(at, text)| (depth + at, text)));
+    }
+}
+
+/// A line's attributes, each `key: value` after two spaces; one with no value
+/// is none and not written.
+fn attributes<'a, I>(line: String, attributes: I) -> String
+where
+    I: IntoIterator<Item = (&'a str, Option<String>)>,
+{
+    attributes
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|value| format!("  {key}: {value}")))
+        .fold(line, |line, attribute| line + &attribute)
+}
+
+/// Items listed, none where there are none.
+fn some_listed<I>(items: I) -> Option<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let listed = listed(items);
+    (!listed.is_empty()).then_some(listed)
+}
+
+/// A class by its own name, not its equivalence class's: what a step's
+/// unifying names stays as it was when a later union of the step merges it.
+fn member(state: &State, id: ClassId) -> String {
+    name(&state.arena.name(id).to_string())
+}
+
+/// The members of a class, each by its own name.
+fn members(state: &State, members: &BTreeSet<ClassId>) -> String {
+    let named: BTreeSet<String> = members.iter().map(|&id| member(state, id)).collect();
+    format!("{{{}}}", listed(named))
+}
+
+/// A class as it was before a union, by the least of its members' names.
+fn side(state: &State, members: &BTreeSet<ClassId>) -> String {
+    let least = members
+        .iter()
+        .map(|&member| state.arena.name(member))
+        .min()
+        .expect("a class has a member");
+    name(&least.to_string())
+}
+
+/// A kind, each part by its own name, as a relation writes it.
+fn kind_of(state: &State, kind: &Term<ClassId>) -> String {
+    kind.clone()
+        .map(|_, part| state.arena.name(part).clone())
+        .to_string()
+}
+
+/// Places in the log, a run of consecutive places written as its ends.
+fn places<I>(places: I) -> Option<String>
+where
+    I: IntoIterator<Item = usize>,
+{
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for at in places {
+        match runs.last_mut() {
+            Some((_, end)) if *end + 1 == at => *end = at,
+            _ => runs.push((at, at)),
+        }
+    }
+    some_listed(runs.into_iter().map(|(start, end)| {
+        if start == end {
+            format!("#{start}")
+        } else {
+            format!("#{start}-#{end}")
+        }
+    }))
+}
+
+fn nodes<'a, I>(nodes: I) -> Option<String>
+where
+    I: IntoIterator<Item = &'a Name>,
+{
+    some_listed(nodes.into_iter().map(|node| name(node.as_str())))
+}
+
+/// Why two classes are unified, `at` the place of the relation the unifying
+/// took, where it took one.
+fn cause(state: &State, cause: &Cause, unions: &[Union], at: Option<usize>) -> String {
+    match cause {
+        Cause::Given => at.map_or("given".to_string(), |at| format!("#{at}")),
+        Cause::Congruence { parent, part } => {
+            let [a, b] = &unions[*parent].sides;
+            format!(
+                "congruence {part:?} of {} + {}",
+                side(state, a),
+                side(state, b)
+            )
+        }
+        Cause::KindGiven { class, part } => format!("kind {} at {part:?}", member(state, *class)),
+        Cause::Fact { class, fact } => {
+            let fact = NamedFact {
+                fact,
+                arena: &state.arena,
+            };
+            format!("fact {}: {fact}", member(state, *class))
+        }
+    }
+}
+
+fn conflict(state: &State, conflict: &Conflict) -> String {
+    NamedConflict {
+        conflict,
+        arena: &state.arena,
+    }
+    .to_string()
+}
+
+/// Each union unifying made, and the conflict that stopped it.
+fn unified(state: &State, unified: &Unified, at: Option<usize>) -> Lines {
+    let mut lines = Lines::default();
+    for union in &unified.unions {
+        let [a, b] = &union.sides;
+        let merged: BTreeSet<ClassId> = a.union(b).copied().collect();
+        let line = format!(
+            "union {} + {}: {}",
+            side(state, a),
+            side(state, b),
+            members(state, &merged)
+        );
+        let by = cause(state, &union.cause, &unified.unions, at);
+        let kind = union.kind.as_ref().map(|kind| kind_of(state, kind));
+        lines.push(0, attributes(line, [("by", Some(by)), ("kind", kind)]));
+    }
+    match &unified.conflict {
+        Some(Conflicted::Apart(apart)) => {
+            let Apart {
+                cause: why,
+                sides: [a, b],
+                kinds,
+                conflict: met,
+            } = &**apart;
+            let line = format!(
+                "conflict {} + {}: {}",
+                side(state, a),
+                side(state, b),
+                conflict(state, met)
+            );
+            let by = cause(state, why, &unified.unions, at);
+            let kinds = kinds.iter().any(Option::is_some).then(|| {
+                let [a, b] = kinds.each_ref().map(|kind| {
+                    kind.as_ref()
+                        .map_or("none".to_string(), |kind| kind_of(state, kind))
+                });
+                format!("{a} vs {b}")
+            });
+            lines.push(0, attributes(line, [("by", Some(by)), ("kinds", kinds)]));
+        }
+        Some(Conflicted::Holds {
+            members: held,
+            conflict: met,
+        }) => lines.push(
+            0,
+            format!(
+                "conflict {}: {}",
+                members(state, held),
+                conflict(state, met)
+            ),
+        ),
+        None => {}
+    }
+    lines
+}
+
+/// What recorded a relation, a copy's by what recorded its original in the
+/// group instantiated.
+fn recorder(state: &State, recorder: &Recorder) -> String {
+    match recorder {
+        Recorder::Origin => "origin".to_string(),
+        Recorder::Text(item) => format!("text {item}"),
+        Recorder::Node(node) => format!("node {}", name(node.as_str())),
+        Recorder::Split(class) => format!("split {}", class_of(state, *class)),
+        Recorder::Cycle => "cycle".to_string(),
+        Recorder::Check => "check".to_string(),
+        Recorder::Instance { at, of, .. } => {
+            let made = state
+                .instances
+                .iter()
+                .find(|made| made.at == *at)
+                .expect("a copy's instance is the state's");
+            let from = state
+                .solved
+                .get(&made.group)
+                .expect("the group an instance copies is solved before it");
+            format!(
+                "instance {} of {}",
+                name(at.as_str()),
+                self::recorder(from, of)
+            )
+        }
+    }
+}
+
+/// Each instance made, and each relation recorded with its recorder and what
+/// unification did as the classes took it.
+fn recording(state: &State, recorded: &Recording) -> Lines {
+    let mut lines = Lines::default();
+    for made in &recorded.instances {
+        let line = format!(
+            "instance {}: C of {}",
+            name(made.at.as_str()),
+            name(made.group.as_str())
+        );
+        let by = recorder(state, &made.by);
+        let records = places(made.recorded.iter().copied());
+        lines.push(
+            0,
+            attributes(line, [("by", Some(by)), ("records", records)]),
+        );
+    }
+    for entry in &recorded.entries {
+        let line = format!("record #{} {}", entry.at, relation(state, entry.at));
+        let by = recorder(state, &state.log[entry.at].recorder);
+        lines.push(0, attributes(line, [("by", Some(by))]));
+        lines.nest(
+            1,
+            unified(state, &entry.unification.unified, Some(entry.at)),
+        );
+    }
+    lines
+}
+
+/// What an equivalence class's value is taken from.
+fn sources(state: &State, sources: &Sources) -> Lines {
+    let mut lines = Lines::default();
+    if let Some(equations) = places(sources.equations.iter().copied()) {
+        lines.push(0, format!("equations: {equations}"));
+    }
+    for (lower, given) in &sources.lowers {
+        lines.push(
+            0,
+            format!("lower {}: {}", class_of(state, *lower), head(given)),
+        );
+    }
+    for given in &sources.facts {
+        lines.push(0, format!("fact: {}", head(given)));
+    }
+    let left_out = sources.left_out.iter().map(|&lower| class_of(state, lower));
+    if let Some(left_out) = some_listed(left_out) {
+        lines.push(0, format!("left out: {left_out}"));
+    }
+    lines
+}
+
+/// A position a use reads: an argument by its index, the result after them.
+fn position(position: usize, args: usize) -> String {
+    if position < args {
+        format!("arg{position}")
+    } else {
+        "result".to_string()
+    }
+}
+
+/// The candidates a use's read narrows at each position in turn.
+fn narrowed(stages: &[Narrowed], args: usize) -> Lines {
+    let mut lines = Lines::default();
+    for stage in stages {
+        let ranks = stage.ranks.iter().map(|(id, rank)| match rank {
+            Some(rank) if *rank == Rank::empty() => format!("{} empty", decl(id)),
+            Some(rank) => format!("{} {rank:?}", decl(id)),
+            None => format!("{} none", decl(id)),
+        });
+        lines.push(
+            0,
+            format!(
+                "narrow {} {}: {} -> {}",
+                position(stage.position, args),
+                stage.value,
+                listed(ranks),
+                some_listed(stage.remaining.iter().map(decl)).unwrap_or("none".to_string())
+            ),
+        );
+    }
+    lines
+}
+
+fn narrowing(state: &State, narrowing: &Narrowing, args: usize) -> Lines {
+    let mut lines = Lines::default();
+    if let Some(candidates) = some_listed(narrowing.candidates.iter().map(decl)) {
+        lines.push(0, format!("candidates: {candidates}"));
+    }
+    for (at, class, value) in &narrowing.values {
+        lines.push(
+            0,
+            format!(
+                "read {} {}: {value}",
+                position(*at, args),
+                class_of(state, *class)
+            ),
+        );
+    }
+    lines.nest(0, narrowed(&narrowing.stages, args));
+    if let Some(retry) = &narrowing.retry {
+        lines.push(0, "retry".to_string());
+        lines.nest(1, narrowed(retry, args));
+    }
+    lines
+}
+
+/// The value read at a class of a lend, a projection or a binding, and what
+/// it reads as.
+fn as_reference(state: &State, at: &str, read: &AsReference) -> String {
+    let reads_as = match read.reads_as {
+        Some(Some(mutability)) => reference(mutability),
+        Some(None) => "reference",
+        None if read.value.decided().is_some() => "no reference",
+        None => "none",
+    };
+    let line = format!("read {at} {}: {}", class_of(state, read.class), read.value);
+    attributes(line, [("as", Some(reads_as.to_string()))])
+}
+
+/// The value a node read when it was decided.
+fn decided_by(state: &State, node: &Name, by: &DecidedBy) -> Lines {
+    let mut lines = Lines::default();
+    let value = &by.value;
+    let facts = [
+        ("exclude", nodes(&value.left_out)),
+        ("broke", nodes(&by.broke)),
+        ("broken by", nodes(&by.broken_on)),
+        ("left out", places(value.relations.iter().copied())),
+    ];
+    for (key, listed) in facts {
+        if let Some(listed) = listed {
+            lines.push(0, format!("{key}: {listed}"));
+        }
+    }
+    let kind = &state.nodes[node].kind;
+    match &value.reading {
+        Reading::Nothing => {}
+        Reading::Use(narrowed) => {
+            let NodeKind::Use { args, .. } = kind else {
+                unreachable!("a use's narrowing is a use's")
+            };
+            lines.nest(0, narrowing(state, narrowed, args.len()));
+        }
+        Reading::Place(read) => {
+            let at = match kind {
+                NodeKind::Lend { .. } => "place",
+                NodeKind::Project { .. } => "operand",
+                NodeKind::Use { .. } | NodeKind::CallValue { .. } | NodeKind::Bind { .. } => {
+                    unreachable!("a place is read by a lend or a projection")
+                }
+            };
+            lines.push(0, as_reference(state, at, read));
+        }
+        Reading::Binding { position, .. } => {
+            lines.push(0, as_reference(state, "position", position))
+        }
+        Reading::Values {
+            callee,
+            value,
+            lambdas,
+        } => {
+            let line = format!("read callee {}: {value}", class_of(state, *callee));
+            lines.push(0, attributes(line, [("values", nodes(lambdas))]));
+        }
+    }
+    lines
+}
+
+/// A phase's report as a traced order prints it: its line, then the facts it
+/// is made of and what it recorded (`TRACE=1`).
+pub fn traced(state: &State, report: &Report) -> Lines {
+    let rendered = self::report(state, report);
+    let mut detail = Lines::default();
+    let recorded = match report {
+        Report::Recorded(recorded)
+        | Report::Merged(recorded)
+        | Report::Shared(recorded)
+        | Report::LitLowers { recorded, .. }
+        | Report::LitBoundaries { recorded, .. }
+        | Report::LitJoined { recorded, .. }
+        | Report::Split {
+            split: Split::Parts(recorded),
+            ..
+        } => Some(recorded),
+        Report::Linked(linked) => Some(&linked.recorded),
+        Report::Decided(decided) => {
+            if let Some(by) = &decided.read {
+                detail.nest(0, decided_by(state, &decided.node, by));
+            }
+            Some(&decided.recorded)
+        }
+        Report::Joined { joined, .. } => {
+            detail.nest(0, sources(state, &joined.sources));
+            if let Took::Joined { unified: made, .. } = &joined.took {
+                detail.nest(0, self::unified(state, made, None));
+            }
+            None
+        }
+        Report::FellBack(fell) => {
+            detail.nest(0, self::unified(state, &fell.unified, None));
+            None
+        }
+        Report::Infinite { .. } | Report::Split { .. } => None,
+    };
+    if let Some(recorded) = recorded {
+        detail.nest(0, recording(state, recorded));
+    }
+    let mut lines = Lines::default();
+    match rendered.line {
+        Some(line) => {
+            let passed = match report {
+                Report::Decided(decided) => match &decided.read {
+                    Some(DecidedBy {
+                        value:
+                            ValueRead {
+                                reading: Reading::Binding { passed, .. },
+                                ..
+                            },
+                        ..
+                    }) => Some(through(*passed).to_string()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            lines.push(0, attributes(line, [("passed", passed)]));
+            lines.nest(1, detail);
+        }
+        None => lines.nest(0, detail),
+    }
+    lines
+}
+
+/// The unbroken dependencies of `from` not yet met.
+fn waits_for(state: &State, from: &Vertex) -> String {
+    let waits = state
+        .waits_for(from)
+        .into_iter()
+        .map(|(to, edge)| match (to, edge) {
+            (Vertex::Class(lower), Edge::Lower) => format!("lower {}", class_of(state, lower)),
+            (Vertex::Class(taking), Edge::Taking) => format!("taking {}", class_of(state, taking)),
+            (Vertex::Node(node), Edge::Records) => format!("records {}", name(node.as_str())),
+            (Vertex::Outside, Edge::Chosen) => "chosen".to_string(),
+            (Vertex::Node(node), Edge::Reads) => format!("reads {}", name(node.as_str())),
+            (Vertex::Outside, Edge::Reads) => "reads outside".to_string(),
+            (Vertex::Node(node), Edge::Path) => format!("path {}", name(node.as_str())),
+            (to, edge) => unreachable!("the dependency graph has no edge {edge:?} to {to:?}"),
+        });
+    some_listed(waits).unwrap_or("none".to_string())
+}
+
+/// What a binding group waits for: each equivalence class not solved, and
+/// each node not decided, with the unbroken dependencies of it not yet met.
+pub fn waiting(state: &State) -> Lines {
+    let mut lines = Lines::default();
+    for root in state.classes.roots() {
+        if state.is_solved(root) {
+            continue;
+        }
+        let yes = |holds: bool| holds.then(|| "yes".to_string());
+        let (no_value, enclosing) = (state.has_no_value(root), state.is_foreign(root));
+        let wait = (!no_value && !enclosing).then(|| waits_for(state, &Vertex::Class(root)));
+        let line = format!("unsolved {}", class_of(state, root));
+        let facts = [
+            ("universal", yes(state.is_universal(root))),
+            ("no value", yes(no_value)),
+            ("enclosing", yes(!no_value && enclosing)),
+            ("wait", wait),
+        ];
+        lines.push(0, attributes(line, facts));
+    }
+    for (node, held) in &state.nodes {
+        if held.decision.is_some() {
+            continue;
+        }
+        let wait = waits_for(state, &Vertex::Node(node.clone()));
+        let line = format!("undecided {}", name(node.as_str()));
+        lines.push(0, attributes(line, [("wait", Some(wait))]));
+    }
+    lines
+}
+
+/// What a binding group leaves in C at its fixpoint.
+pub fn c(state: &State) -> Lines {
+    let mut lines = Lines::default();
+    lines.push(0, format!("C {}", name(state.group.as_str())));
+    let c = state.c();
+    if let Some(classes) = some_listed(c.iter().map(|&root| class_of(state, root))) {
+        lines.push(1, format!("classes: {classes}"));
+    }
+    let undecided = state
+        .nodes
+        .iter()
+        .filter(|(_, held)| held.decision.is_none())
+        .map(|(node, _)| node);
+    if let Some(undecided) = nodes(undecided) {
+        lines.push(1, format!("nodes: {undecided}"));
+    }
+    for at in state.relations_on(&c) {
+        let line = format!("relation #{at} {}", relation(state, at));
+        let by = recorder(state, &state.log[at].recorder);
+        lines.push(1, attributes(line, [("by", Some(by))]));
+    }
+    lines
 }

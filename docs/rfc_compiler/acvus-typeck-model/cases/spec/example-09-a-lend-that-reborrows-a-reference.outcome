@@ -2,17 +2,17 @@
 run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
 outcome 1
   accepted
-  value `&mut v`: &mut Vec⟨!⟩
-  value `&r`: &Vec⟨!⟩
-  value R: &mut Vec⟨!⟩
-  value S: &Vec⟨!⟩
-  value V: Vec⟨!⟩
-  value `new()`: Vec⟨!⟩
+  value `&mut v`: &mut Vec<!>
+  value `&r`: &Vec<!>
+  value R: &mut Vec<!>
+  value S: &Vec<!>
+  value V: Vec<!>
+  value `new()`: Vec<!>
   decision `lend r`: lend & through &mut
   decision `lend v`: lend &mut place
   decision new: new#0
-  check `&mut v ≤ R`: Ok(Identity)
-  check `&r ≤ S`: Ok(Identity)
-  check `new() ≤ V`: Ok(Identity)
-  check `new.Result ≤ new()`: Ok(Identity)
+  check `&mut v <= R`: Ok(Identity)
+  check `&r <= S`: Ok(Identity)
+  check `new() <= V`: Ok(Identity)
+  check `new.Result <= new()`: Ok(Identity)
   I* of a final state: []

@@ -37,4 +37,4 @@ must fail;
 assert X: u8;
 assert `&mut x` == lend &mut place;
 assert `f()` == calls {λ};
-assert failing [`f()#λ/2u16 ⇝ f()#λ/*r`];
+assert failing [`f()#λ/2u16 ~> f()#λ/*r`];

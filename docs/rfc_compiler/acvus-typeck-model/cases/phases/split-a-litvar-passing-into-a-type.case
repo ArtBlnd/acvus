@@ -5,7 +5,7 @@ let W: u8;
 let 0: lit 0;
 W = 0;
 
-assert record records `0 ⇝ W`;
+assert record records `0 ~> W`;
 assert split records `0 = W`;
 must pass;
 assert 0: u8;

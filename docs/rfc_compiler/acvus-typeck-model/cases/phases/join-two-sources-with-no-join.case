@@ -8,6 +8,7 @@ let u16: u16;
 A = u8;
 A = u16;
 
-assert trace "join A has no join: no_join A";
+assert trace "join A: no join";
+assert trace "refuse: no_join A";
 must fail;
 assert refused no_join A;

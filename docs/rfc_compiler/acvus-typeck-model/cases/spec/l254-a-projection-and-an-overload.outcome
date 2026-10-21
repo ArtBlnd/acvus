@@ -9,8 +9,8 @@ outcome 1
   decision `a.x`: applied
   decision pick: pick#0
   partition {0, `a.x`}
-  check `0 ≤ a.x`: Ok(Identity)
-  check `A ⇝ pick.Param(0)`: Ok(Identity)
-  check `pick(a) ≤ A`: Ok(Identity)
-  check `pick.Result ≤ pick(a)`: Ok(Identity)
+  check `0 <= a.x`: Ok(Identity)
+  check `A ~> pick.Param(0)`: Ok(Identity)
+  check `pick(a) <= A`: Ok(Identity)
+  check `pick.Result <= pick(a)`: Ok(Identity)
   I* of a final state: []

@@ -632,16 +632,16 @@ impl Checker<'_> {
                 let to = self.text(context, &at, into)?;
                 if self.text.meets(self.program, &context.group, into, *place) {
                     let holds = self.lower(&from, &to, self.text_written(context, into));
-                    self.require(context, &at, holds, format!("{from} ≤ {to} fails (l.293)"));
+                    self.require(context, &at, holds, format!("{from} <= {to} fails (l.293)"));
                 } else {
                     let holds = self.boundary(&from, &to);
-                    self.require(context, &at, holds, format!("{from} ⇝ {to} fails (l.293)"));
+                    self.require(context, &at, holds, format!("{from} ~> {to} fails (l.293)"));
                 }
             }
             Item::Equation(a, b) => {
                 let at = format!("the equation {a} = {b}");
                 let (a, b) = (self.text(context, &at, a)?, self.text(context, &at, b)?);
-                self.require(context, &at, a == b, format!("{a} ≠ {b}"));
+                self.require(context, &at, a == b, format!("{a} != {b}"));
             }
             Item::Use {
                 name,
@@ -737,7 +737,7 @@ impl Checker<'_> {
         written: bool,
     ) {
         let holds = self.lower(returned, result, written);
-        self.require(context, at, holds, format!("{returned} ≤ {result} fails"));
+        self.require(context, at, holds, format!("{returned} <= {result} fails"));
     }
 
     /// A use of a function (l.199–202): in its own group or an enclosing one,
@@ -1101,7 +1101,7 @@ impl Checker<'_> {
             context,
             &at,
             holds,
-            format!("{read} ≤ {binding} fails (l.317)"),
+            format!("{read} <= {binding} fails (l.317)"),
         );
         Some(())
     }

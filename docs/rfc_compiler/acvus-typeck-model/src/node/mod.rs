@@ -11,16 +11,19 @@ mod position;
 mod shared;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Range;
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, Fact};
 use crate::decl::DeclId;
 use crate::program::{Deferral, Projection};
+use crate::read::ReadValue;
+use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
-use crate::solve::State;
+use crate::solve::{State, left_out_by};
 use crate::ty::{Mutability, Name, Term};
 
+pub use overload::{Narrowed, Narrowing};
+pub use place::AsReference;
 use place::lesser;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -172,12 +175,66 @@ pub enum NodeAt {
 }
 
 /// A node decided (l.267), with the relations recorded once it is: its own,
-/// and those of the nodes deferred on it that it lets record (l.269).
+/// and those of the nodes deferred on it that it lets record (l.269). A node
+/// decided by the value it read has what it read; one decided as it is
+/// recorded reads nothing.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Decided {
     pub node: Name,
     pub decision: Decision,
-    pub recorded: Range<usize>,
+    pub recorded: Recording,
+    pub read: Option<DecidedBy>,
+}
+
+/// How a node was decided by the value it read (l.267, l.269).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DecidedBy {
+    /// The node and the nodes that transitively depend on it (l.267).
+    pub dependents: BTreeSet<Name>,
+    /// The decided nodes it broke its dependency on, whose relations its read
+    /// leaves out too (`Deferral::Reading`).
+    pub broke: BTreeSet<Name>,
+    /// The undecided nodes that broke their dependency on it (l.269).
+    pub broken_on: BTreeSet<Name>,
+    pub value: ValueRead,
+}
+
+/// The value a node read, and what it became by it (l.267).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ValueRead {
+    /// The nodes whose relations it leaves out: those it was given and, for
+    /// whether a class is a reference, every projection other than a Deref.
+    pub left_out: BTreeSet<Name>,
+    /// Their relations, by their places in the log.
+    pub relations: Vec<usize>,
+    pub reading: Reading,
+    pub decision: Decision,
+}
+
+/// What a node read at its positions (l.267).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Reading {
+    /// A Deref, and a binding whose path passes no reference, read nothing.
+    Nothing,
+    /// A use: the value read where its candidates differ, and its narrowing
+    /// (l.337–344).
+    Use(Narrowing),
+    /// A lend's place or a projection's operand, and what it reads as
+    /// (l.307, l.309).
+    Place(AsReference),
+    /// A binding whose path passes a reference, the least mutability of
+    /// those passed where decided, and what its position reads as (l.317).
+    Binding {
+        passed: Option<Mutability>,
+        position: AsReference,
+    },
+    /// A call of a function value: the value read at its callee, and the
+    /// lambdas its Values names there (l.203).
+    Values {
+        callee: ClassId,
+        value: ReadValue,
+        lambdas: BTreeSet<Name>,
+    },
 }
 
 impl State {
@@ -205,13 +262,13 @@ impl State {
             .collect();
         let mut decided = Vec::new();
         for (name, decision) in at_once {
-            let start = self.log.len();
             self.set_decision(&name, decision.clone());
-            self.record_decision(&name);
+            let recorded = self.record_decision(&name);
             decided.push(Decided {
                 node: name,
                 decision,
-                recorded: start..self.log.len(),
+                recorded,
+                read: None,
             });
         }
         decided
@@ -224,19 +281,36 @@ impl State {
             .decision = Some(decision);
     }
 
-    /// Decides the node by the value it reads, and records what it records
-    /// as the reading of l.269 takes it.
+    /// Decides the node by the value it reads leaving out the relations of
+    /// itself, of the nodes that transitively depend on it, and of those it
+    /// broke its dependency on (`Deferral::Reading`), and records what it
+    /// records as the reading of l.269 takes it.
     pub(crate) fn decide(&mut self, name: &Name) -> Decided {
-        let start = self.log.len();
-        let decision = self.decision_of(name);
-        let waiting = self.broken_on(name);
+        let dependents = self.dependents(name);
+        let broke: BTreeSet<Name> = self
+            .broken
+            .get(name)
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect();
+        let excluded = dependents.union(&broke).cloned().collect();
+        let value = self.value_read(name, &excluded);
+        let decision = value.decision.clone();
+        let broken_on = self.broken_on(name);
         self.set_decision(name, decision.clone());
         self.broken.remove(name);
-        self.defer(name, waiting);
+        let recorded = self.defer(name, broken_on.clone());
         Decided {
             node: name.clone(),
             decision,
-            recorded: start..self.log.len(),
+            recorded,
+            read: Some(DecidedBy {
+                dependents,
+                broke,
+                broken_on,
+                value,
+            }),
         }
     }
 
@@ -244,19 +318,21 @@ impl State {
     /// reading takes l.269 (`Deferral`; `holes.md`, O2), `waiting` being the
     /// undecided nodes that broke their dependency on it; then records what
     /// each deferred node records once the nodes it waits for are decided.
-    pub(crate) fn defer(&mut self, name: &Name, waiting: BTreeSet<Name>) {
+    /// Returns the relations recorded.
+    pub(crate) fn defer(&mut self, name: &Name, waiting: BTreeSet<Name>) -> Recording {
+        let mut recorded = Recording::default();
         match self.readings.deferral {
             Deferral::Recording if !waiting.is_empty() => {
                 self.deferred.insert(name.clone(), waiting);
             }
             Deferral::Recording => {
-                self.record_decision(name);
+                recorded.append(self.record_decision(name));
             }
             Deferral::Reading => {
                 for node in waiting {
                     self.broken.entry(node).or_default().insert(name.clone());
                 }
-                self.record_decision(name);
+                recorded.append(self.record_decision(name));
             }
         }
         loop {
@@ -271,24 +347,26 @@ impl State {
                 .map(|(name, _)| name.clone())
                 .collect();
             if ready.is_empty() {
-                return;
+                return recorded;
             }
             for name in ready {
                 self.deferred.remove(&name);
-                self.record_decision(&name);
+                recorded.append(self.record_decision(&name));
             }
         }
     }
 
-    pub(crate) fn decision_of(&self, name: &Name) -> Decision {
-        self.decision_under(name, &self.excluded(name))
+    /// What the node becomes by the value it reads leaving out the relations
+    /// of the nodes `excluded`, as `value_read` reads it.
+    pub(crate) fn decision_under(&self, name: &Name, excluded: &BTreeSet<Name>) -> Decision {
+        self.value_read(name, excluded).decision
     }
 
-    /// What the node becomes by the value it reads leaving out the relations
-    /// of the nodes `excluded`, and, for a lend, a projection or a binding,
-    /// which reads whether a class is a reference, of every projection other
-    /// than a Deref (l.267).
-    pub(crate) fn decision_under(&self, name: &Name, excluded: &BTreeSet<Name>) -> Decision {
+    /// The value the node reads leaving out the relations of the nodes
+    /// `excluded`, and, for a lend, a projection or a binding, which reads
+    /// whether a class is a reference, of every projection other than a Deref
+    /// (l.267), and what the node becomes by it.
+    pub(crate) fn value_read(&self, name: &Name, excluded: &BTreeSet<Name>) -> ValueRead {
         let kind = &self.nodes[name].kind;
         let mut excluded = excluded.clone();
         if kind.read() == Read::Reference {
@@ -300,59 +378,98 @@ impl State {
             );
         }
         let lend = |mutability: Option<Mutability>, place: ClassId| {
-            let (target, through) = match self.reads_as_reference(place, &excluded) {
+            let read = self.reads_as_reference(place, &excluded);
+            let (target, through) = match read.reads_as {
                 Some(through) => (LendTarget::Through(through), through),
                 None => (LendTarget::Place, Some(Mutability::Exclusive)),
             };
-            lesser(mutability, through).map(|mutability| (target, mutability))
+            let lent = lesser(mutability, through).map(|mutability| (target, mutability));
+            (read, lent)
         };
-        match kind {
+        let (reading, decision) = match kind {
             NodeKind::Use {
                 callee,
                 args,
                 result,
-            } => self.narrow(callee, args, *result, &excluded),
+            } => {
+                let narrowing = self.narrow(callee, args, *result, &excluded);
+                let decision = narrowing.decision.clone();
+                (Reading::Use(narrowing), decision)
+            }
             NodeKind::Lend {
                 mutability, place, ..
-            } => match lend(Some(*mutability), *place) {
-                Some((target, mutability)) => Decision::Lend { target, mutability },
-                None => Decision::NoResult,
-            },
+            } => {
+                let (read, lent) = lend(Some(*mutability), *place);
+                let decision = match lent {
+                    Some((target, mutability)) => Decision::Lend { target, mutability },
+                    None => Decision::NoResult,
+                };
+                (Reading::Place(read), decision)
+            }
             NodeKind::Project {
                 projection: Projection::Deref,
                 ..
-            } => Decision::Applied,
+            } => (Reading::Nothing, Decision::Applied),
             NodeKind::Project { operand, .. } => {
-                match self.reads_as_reference(*operand, &excluded) {
+                let read = self.reads_as_reference(*operand, &excluded);
+                let decision = match read.reads_as {
                     Some(mutability) => Decision::AppliedToTarget(mutability),
                     None => Decision::Applied,
-                }
+                };
+                (Reading::Place(read), decision)
             }
             NodeKind::Bind { path, position, .. } => match self.passed(path) {
-                None => Decision::Read,
-                Some(passed) => match lend(passed, *position) {
-                    Some((target, mutability)) => Decision::BindLend { target, mutability },
-                    None => Decision::NoResult,
-                },
+                None => (Reading::Nothing, Decision::Read),
+                Some(passed) => {
+                    let (read, lent) = lend(passed, *position);
+                    let decision = match lent {
+                        Some((target, mutability)) => Decision::BindLend { target, mutability },
+                        None => Decision::NoResult,
+                    };
+                    let reading = Reading::Binding {
+                        passed,
+                        position: read,
+                    };
+                    (reading, decision)
+                }
             },
             NodeKind::CallValue { callee, .. } => {
-                let values = self.read_state(&excluded).values_of(*callee);
-                if values.is_empty() {
+                let read = self.read_state(&excluded);
+                let lambdas = read.values_of(*callee);
+                let decision = if lambdas.is_empty() {
                     Decision::NoResult
                 } else {
-                    Decision::Calls(values)
-                }
+                    Decision::Calls(lambdas.clone())
+                };
+                let reading = Reading::Values {
+                    callee: *callee,
+                    value: read.read_value(*callee),
+                    lambdas,
+                };
+                (reading, decision)
             }
+        };
+        let relations = self
+            .log
+            .iter()
+            .enumerate()
+            .filter(|(_, recorded)| left_out_by(&recorded.recorder, &excluded))
+            .map(|(at, _)| at)
+            .collect();
+        ValueRead {
+            left_out: excluded,
+            relations,
+            reading,
+            decision,
         }
     }
 
-    /// Records what the decided node records. Returns the relations
-    /// recorded.
-    pub(crate) fn record_decision(&mut self, name: &Name) -> Range<usize> {
-        let start = self.log.len();
+    /// Records what the decided node records.
+    pub(crate) fn record_decision(&mut self, name: &Name) -> Recording {
+        let mut recorded = Recording::default();
         let node = self.nodes[name].clone();
         let Some(decision) = node.decision else {
-            return start..self.log.len();
+            return recorded;
         };
         let recorder = Recorder::Node(name.clone());
         let owner = Rc::new(name.clone());
@@ -364,40 +481,38 @@ impl State {
                 let var_name = |var| at(NodeAt::Var(var));
                 for (i, (arg, param)) in args.iter().zip(sig.params()).enumerate() {
                     if !node.shared.contains(&i) {
-                        self.record_argument(
+                        recorded.append(self.record_argument(
                             *arg,
                             param,
                             &mut vars,
                             at(NodeAt::Param(i)),
                             &var_name,
                             &recorder,
-                        );
+                        ));
                     }
                 }
                 if !node.shared.contains(&args.len()) {
-                    self.record_result(
+                    recorded.append(self.record_result(
                         *result,
                         sig.result(),
                         &mut vars,
                         at(NodeAt::Result),
                         &var_name,
                         &recorder,
-                    );
+                    ));
                 }
             }
             (NodeKind::Use { result, .. }, Decision::Never) => {
-                let never = self.written(at(NodeAt::Result), Term::Never, &recorder);
-                self.record(
-                    Relation::LowerBound {
-                        lower: never,
-                        upper: *result,
-                    },
-                    recorder,
-                );
+                let never = self.written(at(NodeAt::Result), Term::Never, &recorder, &mut recorded);
+                let relation = Relation::LowerBound {
+                    lower: never,
+                    upper: *result,
+                };
+                recorded.push(self.record(relation, recorder));
             }
             (NodeKind::Lend { place, result, .. }, Decision::Lend { target, mutability }) => {
-                let lent = self.lend(*mutability, *place, *target, &at, &recorder);
-                self.record(Relation::Equation(*result, lent), recorder);
+                let lent = self.lend(*mutability, *place, *target, &at, &recorder, &mut recorded);
+                recorded.push(self.record(Relation::Equation(*result, lent), recorder));
             }
             (
                 NodeKind::Project {
@@ -407,7 +522,8 @@ impl State {
                 },
                 Decision::Applied,
             ) => {
-                self.record(Relation::Fact(*operand, projection.fact(*result)), recorder);
+                let relation = Relation::Fact(*operand, projection.fact(*result));
+                recorded.push(self.record(relation, recorder));
             }
             (
                 NodeKind::Project {
@@ -419,11 +535,10 @@ impl State {
             ) => {
                 let target = self.arena.intern(at(NodeAt::Target));
                 self.classes.grow(&self.arena);
-                self.record(
-                    Relation::Fact(*operand, Fact::Ref(target)),
-                    recorder.clone(),
-                );
-                self.record(Relation::Fact(target, projection.fact(*result)), recorder);
+                let relation = Relation::Fact(*operand, Fact::Ref(target));
+                recorded.push(self.record(relation, recorder.clone()));
+                let relation = Relation::Fact(target, projection.fact(*result));
+                recorded.push(self.record(relation, recorder));
             }
             (
                 NodeKind::Bind {
@@ -431,13 +546,11 @@ impl State {
                 },
                 Decision::Read,
             ) => {
-                self.record(
-                    Relation::LowerBound {
-                        lower: *position,
-                        upper: *binding,
-                    },
-                    recorder,
-                );
+                let relation = Relation::LowerBound {
+                    lower: *position,
+                    upper: *binding,
+                };
+                recorded.push(self.record(relation, recorder));
             }
             (NodeKind::CallValue { args, result, .. }, Decision::Calls(lambdas)) => {
                 for lambda in lambdas {
@@ -465,8 +578,8 @@ impl State {
                     }
                     let returned = met.pop().expect("the result type follows the parameters");
                     let params = met;
-                    copy.record_rest(self);
-                    self.record_call(args, &params, returned, *result, &recorder);
+                    recorded.append(copy.record_rest(self));
+                    recorded.append(self.record_call(args, &params, returned, *result, &recorder));
                 }
             }
             (
@@ -475,17 +588,22 @@ impl State {
                 },
                 Decision::BindLend { target, mutability },
             ) => {
-                let lent = self.lend(*mutability, *position, *target, &at, &recorder);
-                self.record(
-                    Relation::LowerBound {
-                        lower: lent,
-                        upper: *binding,
-                    },
-                    recorder,
+                let lent = self.lend(
+                    *mutability,
+                    *position,
+                    *target,
+                    &at,
+                    &recorder,
+                    &mut recorded,
                 );
+                let relation = Relation::LowerBound {
+                    lower: lent,
+                    upper: *binding,
+                };
+                recorded.push(self.record(relation, recorder));
             }
             _ => {}
         }
-        start..self.log.len()
+        recorded
     }
 }

@@ -8,22 +8,19 @@ outcome 1
   value String: String
   decision `@cfg.extra`: applied
   partition {1, `@cfg.extra`}
-  check `1 ≤ @cfg.extra`: Ok(Identity)
-  refusal conflict at "@cfg: Field(extra, ClassId(2))": Fact(Field(extra, ClassId(2)), Object)
+  check `1 <= @cfg.extra`: Ok(Identity)
+  refusal conflict at "@cfg: field extra: @cfg.extra": Object vs field extra: @cfg.extra
   I* of a final state: []
-step 1 in run: start
-  record the text
-    records String: String
-    records @cfg: Object({name: String})
-    records 1: ?{1}: int
-  record the text
-  record the text
-    records 1 ≤ @cfg.extra
-  split String: String: no parts
-  split @cfg: Object({name: String}): no parts
-  split 1: ?{1}: int: no parts
-step 2 in run: decide `@cfg.extra`
-  node decided `@cfg.extra` as applied
-    records @cfg: Field(extra, ClassId(2))
-  split @cfg: Field(extra, ClassId(2)): no parts
-  refused conflict at "@cfg: Field(extra, ClassId(2))": Fact(Field(extra, ClassId(2)), Object)
+start run
+  record #0 String: String
+  record #1 @cfg: {name: String}
+  record #2 1: ?{1}: int
+  record #3 1 <= @cfg.extra
+  split #0 String: String: no parts
+  split #1 @cfg: {name: String}: no parts
+  split #2 1: ?{1}: int: no parts
+step 1 run: decide `@cfg.extra`
+  decide `@cfg.extra`: applied
+    record #4 @cfg: field extra: @cfg.extra
+  split #4 @cfg: field extra: @cfg.extra: no parts
+  refuse: conflict at "@cfg: field extra: @cfg.extra": Object vs field extra: @cfg.extra

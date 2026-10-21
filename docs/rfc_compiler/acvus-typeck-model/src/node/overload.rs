@@ -5,15 +5,46 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::class::{ClassId, ClassName};
-use crate::coerce::coerce_read;
+use crate::coerce::{Rank, coerce_read};
 use crate::decl::{Decl, DeclId};
 use crate::read::ReadValue;
+use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::sig::{SigTy, Signature};
 use crate::solve::State;
 use crate::ty::{HasTerm, Name, Term};
 
 use super::Decision;
+
+/// The candidates a use's read leaves at one position where they differ
+/// (l.337–344).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Narrowed {
+    /// The argument's index, the result's being the number of arguments.
+    pub position: usize,
+    pub value: ReadValue,
+    /// Each candidate left before it, with the rank of the coercion its
+    /// passing goes by there, none where no coercion reaches it.
+    pub ranks: Vec<(DeclId, Option<Rank>)>,
+    /// Those of the lowest rank, which remain.
+    pub remaining: Vec<DeclId>,
+}
+
+/// How a use's candidates are narrowed by the value it reads (l.335–344).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Narrowing {
+    pub candidates: Vec<DeclId>,
+    /// The class at each position where the candidates differ, by argument
+    /// index with the result last, and the value read there.
+    pub values: Vec<(usize, ClassId, ReadValue)>,
+    /// The narrowing at each of those positions in turn, none where an
+    /// argument reads as `!`.
+    pub stages: Vec<Narrowed>,
+    /// The narrowing again with each LitVar taken as its family's default,
+    /// where several candidates remained and a value read holds a LitVar.
+    pub retry: Option<Vec<Narrowed>>,
+    pub decision: Decision,
+}
 
 impl State {
     /// The candidates of a use: the declarations its name reaches whose
@@ -46,6 +77,7 @@ impl State {
 
     /// An argument passing into its parameter: a meeting where the parameter
     /// is an unknown, a boundary where a declaration writes it (reading 3).
+    /// Returns the relations recorded.
     pub(super) fn record_argument<F>(
         &mut self,
         arg: ClassId,
@@ -54,10 +86,12 @@ impl State {
         name: ClassName,
         var_name: &F,
         recorder: &Recorder,
-    ) where
+    ) -> Recording
+    where
         F: Fn(crate::sig::SigVar) -> ClassName,
     {
-        let param = self.instantiate(param, vars, name, var_name, recorder);
+        let mut recorded = Recording::default();
+        let param = self.instantiate(param, vars, name, var_name, recorder, &mut recorded);
         let relation = if self.is_unknown(param) {
             Relation::LowerBound {
                 lower: arg,
@@ -69,11 +103,12 @@ impl State {
                 to: param,
             }
         };
-        self.record(relation, recorder.clone());
+        recorded.push(self.record(relation, recorder.clone()));
+        recorded
     }
 
     /// The signature's result type entering the use's result (note 07,
-    /// reading 2).
+    /// reading 2). Returns the relations recorded.
     pub(super) fn record_result<F>(
         &mut self,
         result: ClassId,
@@ -82,17 +117,18 @@ impl State {
         name: ClassName,
         var_name: &F,
         recorder: &Recorder,
-    ) where
+    ) -> Recording
+    where
         F: Fn(crate::sig::SigVar) -> ClassName,
     {
-        let returned = self.instantiate(ty, vars, name, var_name, recorder);
-        self.record(
-            Relation::LowerBound {
-                lower: returned,
-                upper: result,
-            },
-            recorder.clone(),
-        );
+        let mut recorded = Recording::default();
+        let returned = self.instantiate(ty, vars, name, var_name, recorder, &mut recorded);
+        let relation = Relation::LowerBound {
+            lower: returned,
+            upper: result,
+        };
+        recorded.push(self.record(relation, recorder.clone()));
+        recorded
     }
 
     /// Narrows the candidates by the value the use reads at each position
@@ -103,26 +139,41 @@ impl State {
         args: &[ClassId],
         result: ClassId,
         excluded: &BTreeSet<Name>,
-    ) -> Decision {
+    ) -> Narrowing {
         let candidates = self.candidates(callee, args.len());
         let ids: Vec<DeclId> = candidates.iter().map(|decl| decl.id.clone()).collect();
         let sigs: Vec<&Signature> = candidates.iter().map(|decl| &decl.sig).collect();
         let differing = Self::differing(&sigs, args.len());
         let read = self.read_state(excluded);
-        let values: Vec<(usize, ReadValue)> = differing
+        let read_at: Vec<(usize, ClassId, ReadValue)> = differing
             .iter()
-            .map(|&i| (i, read.read_value(args.get(i).copied().unwrap_or(result))))
+            .map(|&i| {
+                let class = args.get(i).copied().unwrap_or(result);
+                (i, class, read.read_value(class))
+            })
+            .collect();
+        let narrowing = |stages, retry, decision| Narrowing {
+            candidates: ids.clone(),
+            values: read_at.clone(),
+            stages,
+            retry,
+            decision,
+        };
+        let values: Vec<(usize, ReadValue)> = read_at
+            .iter()
+            .map(|(i, _, value)| (*i, value.clone()))
             .collect();
         let never = values
             .iter()
             .any(|(i, value)| *i < args.len() && matches!(value.decided(), Some(Term::Never)));
         if never {
-            return Decision::Never;
+            return narrowing(Vec::new(), None, Decision::Never);
         }
         let narrowed = |values: &[(usize, ReadValue)]| {
             let mut remaining: Vec<usize> = (0..sigs.len()).collect();
+            let mut stages = Vec::new();
             for (i, value) in values {
-                let ranks: Vec<(usize, Option<crate::coerce::Rank>)> = remaining
+                let ranks: Vec<(usize, Option<Rank>)> = remaining
                     .iter()
                     .map(|&c| {
                         let written = ReadValue::of_sig(Self::at_position(sigs[c], *i));
@@ -136,24 +187,37 @@ impl State {
                     .collect();
                 let lowest = ranks.iter().filter_map(|(_, rank)| rank.clone()).min();
                 remaining = ranks
-                    .into_iter()
+                    .iter()
                     .filter(|(_, rank)| rank.is_some() && *rank == lowest)
-                    .map(|(c, _)| c)
+                    .map(|(c, _)| *c)
                     .collect();
+                stages.push(Narrowed {
+                    position: *i,
+                    value: value.clone(),
+                    ranks: ranks
+                        .into_iter()
+                        .map(|(c, rank)| (ids[c].clone(), rank))
+                        .collect(),
+                    remaining: remaining.iter().map(|&c| ids[c].clone()).collect(),
+                });
             }
-            remaining
+            (remaining, stages)
         };
-        let mut remaining = narrowed(&values);
+        let (mut remaining, stages) = narrowed(&values);
+        let mut retry = None;
         if remaining.len() > 1 && values.iter().any(|(_, value)| value.has_lit()) {
             let defaulted: Vec<(usize, ReadValue)> = values
                 .iter()
                 .map(|(i, value)| (*i, value.with_defaults()))
                 .collect();
-            remaining = narrowed(&defaulted);
+            let (again, stages) = narrowed(&defaulted);
+            remaining = again;
+            retry = Some(stages);
         }
-        match remaining.as_slice() {
+        let decision = match remaining.as_slice() {
             [one] => Decision::Use(ids[*one].clone()),
             _ => Decision::Unreached(remaining.into_iter().map(|c| ids[c].clone()).collect()),
-        }
+        };
+        narrowing(stages, retry, decision)
     }
 }

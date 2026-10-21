@@ -3,20 +3,17 @@ run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Record
 outcome 1
   accepted
   value ?k: !
-  value A: Option⟨!⟩
-  value None: Option⟨!⟩
-  check `None ≤ A`: Ok(Identity)
+  value A: Option<!>
+  value None: Option<!>
+  check `None <= A`: Ok(Identity)
   I* of a final state: []
-step 1 in run: start
-  record the text
-    records None: Option(?k)
-  record the text
-  record the text
-    records None ≤ A
-  split None: Option(?k): no parts
-step 2 in run: solve A
-  join A took Option {Variant(None), Variant(Some)}
-  split None ≤ A: parts
-    records ?k ≤ A.Payload(Some)
-step 3 in run: fallback
-  fallback ?k took !
+start run
+  record #0 None: Option<?k>
+  record #1 None <= A
+  split #0 None: Option<?k>: no parts
+step 1 run: solve A
+  join A: Option {Variant(None), Variant(Some)}
+  split #1 None <= A: parts
+    record #2 ?k <= A.Payload(Some)
+fallback 2 run
+  default ?k: !

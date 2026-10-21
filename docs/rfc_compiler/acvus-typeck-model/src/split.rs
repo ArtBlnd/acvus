@@ -5,11 +5,11 @@
 //! and `?N ⇝ U` unifies `?N` with `U`.
 
 use std::collections::BTreeMap;
-use std::ops::Range;
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, LinkAt};
 use crate::decl::Node;
+use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
 use crate::ty::{Mutability, Term, Variance};
@@ -29,7 +29,7 @@ pub enum Split {
     OneClass,
     /// A lower bound or a boundary whose two sides are solved: marked split,
     /// with the relations recorded between their parts.
-    Parts(Range<usize>),
+    Parts(Recording),
     /// A lower bound or a boundary whose two sides are not both solved: left
     /// as it is.
     Unsolved,
@@ -89,14 +89,15 @@ impl State {
     /// `?N ⇝ U` unifies `?N` with `U` (l.291): where the equivalence class
     /// holds a LitVar and no kind, it is unified with each type it passes into
     /// by a boundary. Returns the equations recorded.
-    pub(crate) fn unify_lit_boundaries(&mut self, root: ClassId) -> Range<usize> {
-        let start = self.log.len();
+    pub(crate) fn unify_lit_boundaries(&mut self, root: ClassId) -> Recording {
+        let mut recorded = Recording::default();
         if self.is_lit(root) {
             for to in self.boundaries_from(root) {
-                self.record(Relation::Equation(root, to), Recorder::Split(root));
+                let relation = Relation::Equation(root, to);
+                recorded.push(self.record(relation, Recorder::Split(root)));
             }
         }
-        start..self.log.len()
+        recorded
     }
 
     /// Records the relations between the parts of a lower bound's or a
@@ -109,14 +110,14 @@ impl State {
         to: ClassId,
         side: Side,
         by: ClassId,
-    ) -> Range<usize> {
-        let start = self.log.len();
+    ) -> Recording {
+        let mut recorded = Recording::default();
         let recorder = Recorder::Split(by);
         let (Some((from_kind, _)), Some((to_kind, _))) = (
             self.classes.held(from).kind.clone(),
             self.classes.held(to).kind.clone(),
         ) else {
-            return start..self.log.len();
+            return recorded;
         };
         let (from_c, to_c) = (from_kind.constructor(), to_kind.constructor());
         if from_c == to_c {
@@ -142,24 +143,25 @@ impl State {
                         to: to_part,
                     },
                 };
-                self.record(relation, recorder.clone());
+                recorded.push(self.record(relation, recorder.clone()));
             }
-            return start..self.log.len();
+            return recorded;
         }
         if let (
             Term::Ref(Mutability::Exclusive, from_target),
             Term::Ref(Mutability::Shared, to_target),
         ) = (&from_kind, &to_kind)
         {
-            self.record(Relation::Equation(*from_target, *to_target), recorder);
-            return start..self.log.len();
+            let relation = Relation::Equation(*from_target, *to_target);
+            recorded.push(self.record(relation, recorder));
+            return recorded;
         }
         let path = self
             .decls
             .tree()
             .path(&Node::Owned(from_c.clone()), &Node::Owned(to_c.clone()));
         let Some(path) = path else {
-            return start..self.log.len();
+            return recorded;
         };
         let (from_name, to_name) = (Rc::new(self.class_name(from)), Rc::new(self.class_name(to)));
         let mut current = from;
@@ -179,6 +181,7 @@ impl State {
                 link(LinkAt::Param),
                 &var_name,
                 &recorder,
+                &mut recorded,
             );
             let result = self.instantiate(
                 sig.result(),
@@ -186,24 +189,23 @@ impl State {
                 link(LinkAt::Result),
                 &var_name,
                 &recorder,
+                &mut recorded,
             );
             let (Some((current_kind, _)), Some((param_kind, _))) = (
                 self.classes.held(current).kind.clone(),
                 self.classes.held(param).kind.clone(),
             ) else {
-                return start..self.log.len();
+                return recorded;
             };
             for ((_, current_part), (_, param_part)) in
                 current_kind.parts().into_iter().zip(param_kind.parts())
             {
-                self.record(
-                    Relation::Equation(*current_part, *param_part),
-                    recorder.clone(),
-                );
+                let relation = Relation::Equation(*current_part, *param_part);
+                recorded.push(self.record(relation, recorder.clone()));
             }
             current = result;
         }
-        self.split_parts(current, to, side, by);
-        start..self.log.len()
+        recorded.append(self.split_parts(current, to, side, by));
+        recorded
     }
 }

@@ -6,5 +6,5 @@ outcome 1
   value `make()`: A
   decision f: unreached []
   decision make: make#0
-  check `make.Result ≤ make()`: Ok(Identity)
+  check `make.Result <= make()`: Ok(Identity)
   I* of a final state: []

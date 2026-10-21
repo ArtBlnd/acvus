@@ -5,20 +5,17 @@ outcome 1
   value 0: i32
   value A: i32
   partition {0, A}
-  check `0 ≤ A`: Ok(Identity)
+  check `0 <= A`: Ok(Identity)
   I* of a final state: []
-step 1 in run: start
-  record the text
-    records 0: ?{0}: int
-  record the text
-  record the text
-    records 0 ≤ A
-  split 0: ?{0}: int: no parts
-step 2 in run: solve A
-  join unified 0 with its LitVar lower bounds
-    records 0 = A
-  join 0 took nothing
-  split 0 ≤ A: one class
-  split 0 = A: no parts
-step 3 in run: fallback
-  fallback 0 took i32
+start run
+  record #0 0: ?{0}: int
+  record #1 0 <= A
+  split #0 0: ?{0}: int: no parts
+step 1 run: solve A
+  lit lowers 0
+    record #2 0 = A
+  join 0: nothing
+  split #1 0 <= A: one class
+  split #2 0 = A: no parts
+fallback 2 run
+  default 0: i32

@@ -17,4 +17,4 @@ let `g(1u8, "s")`;
 `g(1u8, "s")` = g(1u8, `"s"`) @ `g(1u8, "s")`;
 
 must fail;
-assert failing [`g@2/A ⇝ g@2/B`, `g@2/B ⇝ g@2/A`];
+assert failing [`g@2/A ~> g@2/B`, `g@2/B ~> g@2/A`];

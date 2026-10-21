@@ -7,16 +7,13 @@ outcome 1
   value u8: u8
   refusal no_join A
   I* of a final state: []
-step 1 in run: start
-  record the text
-    records u8: Scalar(Int(U8))
-    records u16: Scalar(Int(U16))
-  record the text
-  record the text
-    records u8 ≤ A
-    records u16 ≤ A
-  split u8: Scalar(Int(U8)): no parts
-  split u16: Scalar(Int(U16)): no parts
-step 2 in run: solve A
-  join A has no join: no_join A
-  refused no_join A
+start run
+  record #0 u8: u8
+  record #1 u16: u16
+  record #2 u8 <= A
+  record #3 u16 <= A
+  split #0 u8: u8: no parts
+  split #1 u16: u16: no parts
+step 1 run: solve A
+  join A: no join
+  refuse: no_join A

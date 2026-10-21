@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use crate::class::{Arena, ClassId, Fact, KindSource};
+use crate::class::{Arena, ClassId, Fact, KindSource, NamedFact};
 use crate::lit::LitVar;
 use crate::ty::{Name, Term};
 
@@ -174,18 +174,28 @@ impl fmt::Display for Named<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |id: &ClassId| self.arena.name(*id);
         match self.relation {
-            Relation::LowerBound { lower, upper } => write!(f, "{} ≤ {}", name(lower), name(upper)),
-            Relation::Boundary { from, to } => write!(f, "{} ⇝ {}", name(from), name(to)),
+            Relation::LowerBound { lower, upper } => {
+                write!(f, "{} <= {}", name(lower), name(upper))
+            }
+            Relation::Boundary { from, to } => write!(f, "{} ~> {}", name(from), name(to)),
             Relation::Equation(a, b) => write!(f, "{} = {}", name(a), name(b)),
-            Relation::Fact(class, fact) => write!(f, "{}: {fact:?}", name(class)),
+            Relation::Fact(class, fact) => {
+                let fact = NamedFact {
+                    fact,
+                    arena: self.arena,
+                };
+                write!(f, "{}: {fact}", name(class))
+            }
             Relation::Kind(class, term, _) => {
                 let term = term.clone().map(|_, part| name(&part).clone());
-                write!(f, "{}: {term:?}", name(class))
+                write!(f, "{}: {term}", name(class))
             }
             Relation::Lit(class, lit) => write!(f, "{}: {lit}", name(class)),
             Relation::Reference(class, true) => write!(f, "{}: a reference", name(class)),
             Relation::Reference(class, false) => write!(f, "{}: no reference", name(class)),
-            Relation::Values(class, lambda) => write!(f, "{}: Values ∋ {lambda}", name(class)),
+            Relation::Values(class, lambda) => {
+                write!(f, "{}: Values contains {lambda}", name(class))
+            }
         }
     }
 }

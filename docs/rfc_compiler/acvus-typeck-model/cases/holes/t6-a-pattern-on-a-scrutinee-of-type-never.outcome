@@ -9,8 +9,8 @@ outcome 1
   decision Some: applied
   decision never: never#0
   decision x: read
-  check `Some.0 ≤ X`: Ok(Identity)
-  check `never() ≤ N`: Ok(Identity)
-  check `never.Result ≤ never()`: Ok(Identity)
-  refusal conflict at "the value of N": Fact(Variant { enum_name: None, variant: Some, payload: ClassId(2) }, Never)
+  check `Some.0 <= X`: Ok(Identity)
+  check `never() <= N`: Ok(Identity)
+  check `never.Result <= never()`: Ok(Identity)
+  refusal conflict at "the value of N": Never vs variant Some: Some.0
   I* of a final state: []

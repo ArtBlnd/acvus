@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use parse::{Case, Expect, Located};
-use run::{Explored, Run};
+use run::{Explored, Run, Tracer};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Status {
@@ -86,17 +86,23 @@ fn golden(case: &Case, runs: &[Run]) -> String {
             }
         }
         if let Explored::Written(taken) = &run.explored {
-            for (k, step) in taken.iter().enumerate() {
-                writeln!(text, "step {} in {}: {}", k + 1, step.group, step.step)
-                    .expect("writing to a string");
+            for step in taken {
+                writeln!(text, "{}", step.step).expect("writing to a string");
                 for report in &step.reports {
-                    writeln!(text, "  {}", report.line).expect("writing to a string");
-                    for recorded in &report.recorded {
-                        writeln!(text, "    records {recorded}").expect("writing to a string");
+                    let depth = match &report.line {
+                        Some(line) => {
+                            writeln!(text, "  {line}").expect("writing to a string");
+                            "    "
+                        }
+                        None => "  ",
+                    };
+                    for (at, recorded) in &report.recorded {
+                        writeln!(text, "{depth}record #{at} {recorded}")
+                            .expect("writing to a string");
                     }
                 }
                 for refused in &step.refused {
-                    writeln!(text, "  refused {refused}").expect("writing to a string");
+                    writeln!(text, "  refuse: {refused}").expect("writing to a string");
                 }
             }
         }
@@ -105,8 +111,13 @@ fn golden(case: &Case, runs: &[Run]) -> String {
 }
 
 /// Runs the case, and checks it against its golden outcome at `golden_path`,
-/// which `bless` writes anew.
-fn run_case(source: &str, golden_path: &Path, bless: bool) -> Result<Ran, String> {
+/// which `bless` writes anew; `tracer` prints its runs' trace (`TRACE=1`).
+fn run_case(
+    source: &str,
+    golden_path: &Path,
+    bless: bool,
+    tracer: Option<&Tracer>,
+) -> Result<Ran, String> {
     let case = parse::parse(source)?;
     for block in &case.outcomes {
         check_block(&block.item, "outcome")?;
@@ -126,8 +137,24 @@ fn run_case(source: &str, golden_path: &Path, bless: bool) -> Result<Ran, String
     };
     let mut runs = Vec::new();
     for readings in readings {
+        if let Some(tracer) = tracer {
+            let explored = match &case.orders {
+                parse::Orders::All => "every order".to_string(),
+                parse::Orders::Sampled(orders) => format!("{orders} sampled orders"),
+                parse::Orders::Written(_) => "the written order".to_string(),
+            };
+            tracer.line(
+                0,
+                &format!("run {}: {readings:?}, {explored}", runs.len() + 1),
+            );
+        }
         let program = build::program(&case, &decls, readings)?;
-        runs.push(run::run(&program, &case.orders, &changes.corruptions)?);
+        runs.push(run::run(
+            &program,
+            &case.orders,
+            &changes.corruptions,
+            tracer,
+        )?);
     }
     let mut messages = expect::fails(
         &decls,
@@ -231,6 +258,11 @@ fn cases() {
         Some("1") => true,
         Some(other) => panic!("BLESS is 1 or unset, not {other}"),
     };
+    let trace = match variable("TRACE").as_deref() {
+        None => false,
+        Some("1") => true,
+        Some(other) => panic!("TRACE is 1 or unset, not {other}"),
+    };
     let mut paths = Vec::new();
     collect(&root, &mut paths);
     paths.sort();
@@ -274,7 +306,8 @@ fn cases() {
                         .spawn_scoped(scope, move || {
                             let source = std::fs::read_to_string(path)
                                 .map_err(|error| format!("reading the case: {error}"))?;
-                            run_case(&source, &golden_path, bless)
+                            let tracer = trace.then(|| Tracer::new(relative));
+                            run_case(&source, &golden_path, bless, tracer.as_ref())
                         })
                         .expect("a case's thread")
                         .join();

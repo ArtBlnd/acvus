@@ -5,16 +5,17 @@
 use std::rc::Rc;
 
 use crate::check::Refusal;
-use crate::class::{ClassId, KindSource};
+use crate::class::{ClassId, KindSource, Unified};
 use crate::solve::State;
 use crate::ty::Term;
 
-/// An equivalence class fallen back (l.299): the default it took, with the
-/// refusal where it could not take it.
+/// An equivalence class fallen back (l.299): the default it took, with what
+/// unification did as it took it, and the refusal where it could not take it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FellBack {
     pub class: ClassId,
     pub default: Term<ClassId>,
+    pub unified: Unified,
     pub refused: Option<Refusal>,
 }
 
@@ -31,21 +32,19 @@ impl State {
                 Some(lit) => Term::Scalar(lit.default_scalar()),
                 None => Term::Never,
             };
-            let refused =
-                match self
-                    .classes
-                    .give_kind(root, term.clone(), KindSource::Solved, types)
-                {
-                    Ok(()) => None,
-                    Err(conflict) => {
-                        let name = self.class_name(root);
-                        Some(self.refuse_conflict(format!("the default of {name}"), conflict))
-                    }
-                };
+            let unified =
+                self.classes
+                    .unifying(types)
+                    .give_kind(root, term.clone(), KindSource::Solved);
+            let refused = unified.result().err().map(|conflict| {
+                let name = self.class_name(root);
+                self.refuse_conflict(format!("the default of {name}"), conflict)
+            });
             self.classes.mark_solved(root);
             fell.push(FellBack {
                 class: root,
                 default: term,
+                unified,
                 refused,
             });
         }

@@ -10,7 +10,7 @@ let x: u8;
 let R;
 R = g(x) @ g;
 
-assert node records `g.Result ≤ R`;
+assert node records `g.Result <= R`;
 assert node records `R: no reference`;
 must pass;
 assert R: bool;

@@ -2,11 +2,11 @@
 run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
 outcome 1
   refused
-  value `&mut parse(s)`: &mut Vec⟨u8⟩
+  value `&mut parse(s)`: &mut Vec<u8>
   value `&mut parse(s) 2`: &mut !
   value `&str`: &str
   value `fill_all(..)`: ()
-  value `parse(s)`: Vec⟨u8⟩
+  value `parse(s)`: Vec<u8>
   value `parse(s) 2`: !
   value str: str
   decision fill_all: fill_all#0
@@ -14,9 +14,9 @@ outcome 1
   decision `lend 2`: lend &mut place
   decision parse: parse#0
   decision `parse 2`: unreached [parse#0, parse#1]
-  check `&mut parse(s) ⇝ fill_all.Param(0)`: Ok(Identity)
-  check `&str ⇝ parse 2.Param(0)`: Ok(Identity)
-  check `&str ⇝ parse.Param(0)`: Ok(Identity)
-  check `fill_all.Result ≤ fill_all(..)`: Ok(Identity)
-  check `parse.Result ≤ parse(s)`: Ok(Identity)
+  check `&mut parse(s) ~> fill_all.Param(0)`: Ok(Identity)
+  check `&str ~> parse 2.Param(0)`: Ok(Identity)
+  check `&str ~> parse.Param(0)`: Ok(Identity)
+  check `fill_all.Result <= fill_all(..)`: Ok(Identity)
+  check `parse.Result <= parse(s)`: Ok(Identity)
   I* of a final state: []

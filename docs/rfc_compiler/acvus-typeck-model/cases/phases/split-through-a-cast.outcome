@@ -4,31 +4,28 @@ outcome 1
   accepted
   value P: u8
   value S: u8
-  value b: Box⟨u8⟩
-  value s: Shared⟨u8⟩
+  value b: Box<u8>
+  value s: Shared<u8>
   value u8: u8
   partition {P, S}
-  check `b ⇝ s`: Ok(Composition { reborrow: false, casts: [DeclId { name: share, overload: 0 }], structural: None })
-  check `u8 ≤ S`: Ok(Identity)
+  check `b ~> s`: Ok(Composition { reborrow: false, casts: [DeclId { name: share, overload: 0 }], structural: None })
+  check `u8 <= S`: Ok(Identity)
   I* of a final state: []
-step 1 in run: start
-  record the text
-    records u8: Scalar(Int(U8))
-    records b: Extern { name: Box, args: [S], identity: None }
-    records s: Extern { name: Shared, args: [P], identity: None }
-  record the text
-  record the text
-    records u8 ≤ S
-    records b ⇝ s
-  split u8: Scalar(Int(U8)): no parts
-  split b: Extern { name: Box, args: [S], identity: None }: no parts
-  split s: Extern { name: Shared, args: [P], identity: None }: no parts
-  split b ⇝ s: parts
-    records link(b → s)[0].Param: Extern { name: Box, args: [link(b → s)[0].Var(Type(0))], identity: None }
-    records link(b → s)[0].Result: Extern { name: Shared, args: [link(b → s)[0].Var(Type(0))], identity: None }
-    records S = link(b → s)[0].Var(Type(0))
-    records link(b → s)[0].Var(Type(0)) = P
-  split link(b → s)[0].Param: Extern { name: Box, args: [link(b → s)[0].Var(Type(0))], identity: None }: no parts
-  split link(b → s)[0].Result: Extern { name: Shared, args: [link(b → s)[0].Var(Type(0))], identity: None }: no parts
-  split S = link(b → s)[0].Var(Type(0)): no parts
-  split link(b → s)[0].Var(Type(0)) = P: no parts
+start run
+  record #0 u8: u8
+  record #1 b: Box<S>
+  record #2 s: Shared<P>
+  record #3 u8 <= S
+  record #4 b ~> s
+  split #0 u8: u8: no parts
+  split #1 b: Box<S>: no parts
+  split #2 s: Shared<P>: no parts
+  split #4 b ~> s: parts
+    record #5 link(b -> s)[0].Param: Box<link(b -> s)[0].Var(Type(0))>
+    record #6 link(b -> s)[0].Result: Shared<link(b -> s)[0].Var(Type(0))>
+    record #7 S = link(b -> s)[0].Var(Type(0))
+    record #8 link(b -> s)[0].Var(Type(0)) = P
+  split #5 link(b -> s)[0].Param: Box<link(b -> s)[0].Var(Type(0))>: no parts
+  split #6 link(b -> s)[0].Result: Shared<link(b -> s)[0].Var(Type(0))>: no parts
+  split #7 S = link(b -> s)[0].Var(Type(0)): no parts
+  split #8 link(b -> s)[0].Var(Type(0)) = P: no parts

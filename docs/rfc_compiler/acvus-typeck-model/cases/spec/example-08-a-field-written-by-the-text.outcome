@@ -7,5 +7,5 @@ outcome 1
   value `a.x`: i32
   decision `a.x`: applied
   partition {0, `a.x`}
-  check `0 ≤ a.x`: Ok(Identity)
+  check `0 <= a.x`: Ok(Identity)
   I* of a final state: []

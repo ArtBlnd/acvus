@@ -4,13 +4,13 @@ outcome 1
   refused
   value `&v`: &[u8]
   value V: [u8]
-  value `make()`: Vec⟨u8⟩
+  value `make()`: Vec<u8>
   value `take(..)`: ()
   decision lend: lend & place
   decision make: make#0
   decision take: take#0
-  check `&v ⇝ take.Param(0)`: Ok(Identity)
-  check `make() ≤ V`: Err(None)
-  check `make.Result ≤ make()`: Ok(Identity)
-  check `take.Result ≤ take(..)`: Ok(Identity)
+  check `&v ~> take.Param(0)`: Ok(Identity)
+  check `make() <= V`: Err(None)
+  check `make.Result <= make()`: Ok(Identity)
+  check `take.Result <= take(..)`: Ok(Identity)
   I* of a final state: []

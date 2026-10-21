@@ -10,7 +10,7 @@ outcome 1
   decision `a.x`: applied
   decision lend: lend & place
   decision take: take#0
-  check `&a.x ⇝ take.Param(0)`: Ok(Identity)
-  check `1u8 ≤ a.x`: Err(None)
-  check `take.Result ≤ take(..)`: Ok(Identity)
+  check `&a.x ~> take.Param(0)`: Ok(Identity)
+  check `1u8 <= a.x`: Err(None)
+  check `take.Result <= take(..)`: Ok(Identity)
   I* of a final state: []

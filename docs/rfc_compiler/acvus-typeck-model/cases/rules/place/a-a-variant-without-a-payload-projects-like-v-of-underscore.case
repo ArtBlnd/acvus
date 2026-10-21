@@ -8,4 +8,4 @@ let `None.0`;
 
 must fail;
 assert None == applied;
-assert refused conflict at "1u8: Variant { enum_name: None, variant: None, payload: ClassId(1) }";
+assert refused conflict at "1u8: variant None: None.0";

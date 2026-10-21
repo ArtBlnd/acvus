@@ -6,6 +6,6 @@ let ?k;
 let None: Option<?k>;
 A = None;
 
-assert trace "fallback ?k took !";
+assert trace "default ?k: !";
 must pass;
 assert A: Option<!>;

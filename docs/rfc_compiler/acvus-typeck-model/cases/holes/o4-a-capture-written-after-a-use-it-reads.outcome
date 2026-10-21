@@ -16,16 +16,16 @@ outcome 1
   decision make_b: make_b#0
   decision probe: probe#1
   decision `put(..)`: calls {λ}
-  check `X ⇝ probe.Param(0)`: Ok(Identity)
-  check `make_a() ≤ X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
-  check `make_a.Result ≤ make_a()`: Ok(Identity)
-  check `make_b() ≤ put(..)#λ/V`: Ok(Identity)
-  check `make_b.Result ≤ make_b()`: Ok(Identity)
-  check `probe.Result ≤ probe(x)`: Ok(Identity)
-  check `put(..)#λ/V ≤ X`: Ok(Identity)
-  check `put(..)#λ/λ result ≤ put(..)`: Ok(Identity)
-  check `|v| .. ≤ put`: Ok(Identity)
-  check `() ≤ λ result`: Ok(Identity)
+  check `X ~> probe.Param(0)`: Ok(Identity)
+  check `make_a() <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
+  check `make_a.Result <= make_a()`: Ok(Identity)
+  check `make_b() <= put(..)#λ/V`: Ok(Identity)
+  check `make_b.Result <= make_b()`: Ok(Identity)
+  check `probe.Result <= probe(x)`: Ok(Identity)
+  check `put(..)#λ/V <= X`: Ok(Identity)
+  check `put(..)#λ/λ result <= put(..)`: Ok(Identity)
+  check `|v| .. <= put`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
   I* of a final state: []
 outcome 2
   accepted
@@ -43,16 +43,16 @@ outcome 2
   decision make_b: make_b#0
   decision probe: probe#0
   decision `put(..)`: calls {λ}
-  check `X ⇝ probe.Param(0)`: Ok(Conversion(DeclId { name: down, overload: 0 }))
-  check `make_a() ≤ X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
-  check `make_a.Result ≤ make_a()`: Ok(Identity)
-  check `make_b() ≤ put(..)#λ/V`: Ok(Identity)
-  check `make_b.Result ≤ make_b()`: Ok(Identity)
-  check `probe.Result ≤ probe(x)`: Ok(Identity)
-  check `put(..)#λ/V ≤ X`: Ok(Identity)
-  check `put(..)#λ/λ result ≤ put(..)`: Ok(Identity)
-  check `|v| .. ≤ put`: Ok(Identity)
-  check `() ≤ λ result`: Ok(Identity)
+  check `X ~> probe.Param(0)`: Ok(Conversion(DeclId { name: down, overload: 0 }))
+  check `make_a() <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
+  check `make_a.Result <= make_a()`: Ok(Identity)
+  check `make_b() <= put(..)#λ/V`: Ok(Identity)
+  check `make_b.Result <= make_b()`: Ok(Identity)
+  check `probe.Result <= probe(x)`: Ok(Identity)
+  check `put(..)#λ/V <= X`: Ok(Identity)
+  check `put(..)#λ/λ result <= put(..)`: Ok(Identity)
+  check `|v| .. <= put`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
   I* of a final state: [soundness probe]
 outcome 3
   refused
@@ -70,14 +70,14 @@ outcome 3
   decision make_b: make_b#0
   decision probe: probe#0
   decision `put(..)`: calls {λ}
-  check `X ⇝ probe.Param(0)`: Ok(Identity)
-  check `make_a() ≤ X`: Ok(Identity)
-  check `make_a.Result ≤ make_a()`: Ok(Identity)
-  check `make_b() ≤ put(..)#λ/V`: Ok(Identity)
-  check `make_b.Result ≤ make_b()`: Ok(Identity)
-  check `probe.Result ≤ probe(x)`: Ok(Identity)
-  check `put(..)#λ/V ≤ X`: Err(None)
-  check `put(..)#λ/λ result ≤ put(..)`: Ok(Identity)
-  check `|v| .. ≤ put`: Ok(Identity)
-  check `() ≤ λ result`: Ok(Identity)
+  check `X ~> probe.Param(0)`: Ok(Identity)
+  check `make_a() <= X`: Ok(Identity)
+  check `make_a.Result <= make_a()`: Ok(Identity)
+  check `make_b() <= put(..)#λ/V`: Ok(Identity)
+  check `make_b.Result <= make_b()`: Ok(Identity)
+  check `probe.Result <= probe(x)`: Ok(Identity)
+  check `put(..)#λ/V <= X`: Err(None)
+  check `put(..)#λ/λ result <= put(..)`: Ok(Identity)
+  check `|v| .. <= put`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
   I* of a final state: [completeness probe]

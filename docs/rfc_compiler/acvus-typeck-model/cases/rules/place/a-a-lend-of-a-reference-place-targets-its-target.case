@@ -21,4 +21,4 @@ R = `&x`;
 must fail;
 assert `&x` == lend & place;
 assert `&r` == lend & through &;
-assert failing [`1u8 ≤ X`];
+assert failing [`1u8 <= X`];

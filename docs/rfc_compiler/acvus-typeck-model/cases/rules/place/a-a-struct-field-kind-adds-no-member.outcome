@@ -7,9 +7,9 @@ outcome 1
   value 2u8: u8
   value L: u8
   value Rr: u8
-  value `Self {..}`: Pair⟨u8, u8⟩
+  value `Self {..}`: Pair<u8, u8>
   decision `.z`: applied
-  check `1u8 ≤ L`: Ok(Identity)
-  check `2u8 ≤ Rr`: Ok(Identity)
-  refusal conflict at "Self {..}: Field(z, ClassId(5))": Fact(Field(z, ClassId(5)), Struct(Pair))
+  check `1u8 <= L`: Ok(Identity)
+  check `2u8 <= Rr`: Ok(Identity)
+  refusal conflict at "Self {..}: field z: .z": Struct(Pair) vs field z: .z
   I* of a final state: []

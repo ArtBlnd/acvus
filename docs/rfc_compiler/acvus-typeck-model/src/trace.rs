@@ -3,53 +3,43 @@
 //! cases' runner reads and the solver's callers drop. A report names classes
 //! by `ClassId`, whose names are read in the state the trace ends in.
 
-use std::ops::Range;
-
 use crate::check::Refusal;
 use crate::class::ClassId;
 use crate::fallback::FellBack;
 use crate::node::Decided;
+use crate::record::Recording;
 use crate::split::Split;
 use crate::unify::Linked;
-use crate::value::Took;
+use crate::value::Joined;
 
 /// What one phase did, a relation named by its place in the log.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Report {
     /// Recording: relations of the text recorded (l.224–238).
-    Recorded(Range<usize>),
+    Recorded(Recording),
     /// Unification: a kind "indexes `τ`" linked along a view (l.161).
     Linked(Linked),
     /// The join: cycles of lower bounds alone merged (l.275).
-    Merged(Range<usize>),
+    Merged(Recording),
     /// The join: the equivalence class reaches a part of its own, and is
     /// refused (l.275).
     Infinite { class: ClassId, refusal: Refusal },
     /// The join: the equivalence class's LitVar lower bounds unified with it
     /// (l.176).
-    LitLowers {
-        class: ClassId,
-        recorded: Range<usize>,
-    },
+    LitLowers { class: ClassId, recorded: Recording },
     /// A split: `?N ⇝ U` unifying the equivalence class with each type it
     /// passes into (l.291).
-    LitBoundaries {
-        class: ClassId,
-        recorded: Range<usize>,
-    },
-    /// The join: what the equivalence class took (l.275).
-    Joined { class: ClassId, took: Took },
+    LitBoundaries { class: ClassId, recorded: Recording },
+    /// The join: what the equivalence class took, and from what (l.275).
+    Joined { class: ClassId, joined: Joined },
     /// The join: the LitVar lower bound at `bound` unified with the solved
     /// class it bounds (l.176).
-    LitJoined {
-        bound: usize,
-        recorded: Range<usize>,
-    },
+    LitJoined { bound: usize, recorded: Recording },
     /// A split: what became of the relation at `at` (l.284).
     Split { at: usize, split: Split },
     /// The nodes: what the candidates of the uses not yet decided share
     /// (l.252, l.335).
-    Shared(Range<usize>),
+    Shared(Recording),
     /// The nodes: a node decided (l.267).
     Decided(Decided),
     /// Fallback (l.299).

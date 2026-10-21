@@ -9,9 +9,9 @@ outcome 1
   value `g("s")`: !
   value `g(1u8)`: none
   value str: str
-  check `"s" ≤ g@2/A`: Ok(Identity)
-  check `g@2/1u8 ⇝ g@2/A`: Err(None)
-  check `g@2/g result ≤ g("s")`: Ok(Identity)
-  check `g@2/g result ≤ g@2/g result`: Ok(Identity)
-  check `g@2/g result ≤ g@2/g result`: Ok(Identity)
+  check `"s" <= g@2/A`: Ok(Identity)
+  check `g@2/1u8 ~> g@2/A`: Err(None)
+  check `g@2/g result <= g("s")`: Ok(Identity)
+  check `g@2/g result <= g@2/g result`: Ok(Identity)
+  check `g@2/g result <= g@2/g result`: Ok(Identity)
   I* of a final state: []

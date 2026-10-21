@@ -5,9 +5,21 @@ use std::collections::BTreeSet;
 
 use crate::class::{ClassId, ClassName, Fact};
 use crate::program::Projection;
+use crate::read::ReadValue;
+use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
 use crate::ty::{HasTerm, Mutability, Name, Term};
+
+/// What a class reads as in a value read (l.267, l.307): its value there, and
+/// so none where it reads as no reference or as nothing, and a reference, of
+/// its mutability where the value read decides one.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AsReference {
+    pub class: ClassId,
+    pub value: ReadValue,
+    pub reads_as: Option<Option<Mutability>>,
+}
 
 use super::{Decision, LendTarget, NodeAt};
 
@@ -45,16 +57,18 @@ impl State {
     /// value read decides no constructor, a use's record that a class it
     /// reaches by lower bounds is a reference still reads as a reference
     /// (l.252).
-    pub(super) fn reads_as_reference(
-        &self,
-        id: ClassId,
-        excluded: &BTreeSet<Name>,
-    ) -> Option<Option<Mutability>> {
+    pub(super) fn reads_as_reference(&self, id: ClassId, excluded: &BTreeSet<Name>) -> AsReference {
         let read = self.read_state(excluded);
-        match read.read_value(id).decided() {
+        let value = read.read_value(id);
+        let reads_as = match value.decided() {
             Some(Term::Ref(mutability, _)) => Some(Some(*mutability)),
             Some(_) => None,
             None => read.recorded_as_reference(id).then_some(None),
+        };
+        AsReference {
+            class: id,
+            value,
+            reads_as,
         }
     }
 
@@ -99,7 +113,7 @@ impl State {
     }
 
     /// The reference a lend gives, of `mutability`, to `place` or to its
-    /// target (l.307).
+    /// target (l.307), the relations it records kept in `recorded`.
     pub(super) fn lend<F>(
         &mut self,
         mutability: Mutability,
@@ -107,6 +121,7 @@ impl State {
         target: LendTarget,
         at: &F,
         recorder: &Recorder,
+        recorded: &mut Recording,
     ) -> ClassId
     where
         F: Fn(NodeAt) -> ClassName,
@@ -116,10 +131,12 @@ impl State {
             LendTarget::Through(_) => {
                 let target = self.arena.intern(at(NodeAt::Target));
                 self.classes.grow(&self.arena);
-                self.record(Relation::Fact(place, Fact::Ref(target)), recorder.clone());
+                let relation = Relation::Fact(place, Fact::Ref(target));
+                recorded.push(self.record(relation, recorder.clone()));
                 target
             }
         };
-        self.written(at(NodeAt::Lent), Term::Ref(mutability, target), recorder)
+        let lent = Term::Ref(mutability, target);
+        self.written(at(NodeAt::Lent), lent, recorder, recorded)
     }
 }

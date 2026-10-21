@@ -16,10 +16,10 @@ outcome 1
   decision `&mut x`: lend &mut place
   decision `*r`: applied
   decision `f()`: calls {λ}
-  check `&mut x ≤ R`: Ok(Identity)
-  check `1u8 ≤ X`: Ok(Identity)
-  check `f()#λ/2u16 ⇝ f()#λ/*r`: Err(None)
-  check `f()#λ/λ result ≤ f()`: Ok(Identity)
-  check `|| .. ≤ f`: Ok(Identity)
-  check `() ≤ λ result`: Ok(Identity)
+  check `&mut x <= R`: Ok(Identity)
+  check `1u8 <= X`: Ok(Identity)
+  check `f()#λ/2u16 ~> f()#λ/*r`: Err(None)
+  check `f()#λ/λ result <= f()`: Ok(Identity)
+  check `|| .. <= f`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
   I* of a final state: []

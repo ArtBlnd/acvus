@@ -8,23 +8,23 @@ outcome 1
   value R: u8
   value S1: F1
   value S2: F2
-  value `Some(f1())`: Option⟨F1⟩
-  value `Some(f2())`: Option⟨F2⟩
+  value `Some(f1())`: Option<F1>
+  value `Some(f2())`: Option<F2>
   value `f1()`: F1
   value `f2()`: F2
   value `g(..)`: u8
   value `g(b, b)`: u8
   decision f1: f1#0
   decision f2: f2#0
-  check `Some(f1()) ≤ g@6/A`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Composition { reborrow: false, casts: [DeclId { name: up1, overload: 0 }], structural: None })] }) })
-  check `Some(f2()) ≤ g@6/B`: Ok(Identity)
-  check `f1() ≤ S1`: Ok(Identity)
-  check `f1.Result ≤ f1()`: Ok(Identity)
-  check `f2() ≤ S2`: Ok(Identity)
-  check `f2.Result ≤ f2()`: Ok(Identity)
-  check `g@6/B ⇝ g@6/A`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Composition { reborrow: false, casts: [DeclId { name: up2, overload: 0 }], structural: None })] }) })
-  check `g@6/B ⇝ g@6/B`: Ok(Identity)
-  check `g@6/R ≤ g(..)`: Ok(Identity)
-  check `0u8 ≤ R`: Ok(Identity)
-  check `R ≤ g(b, b)`: Ok(Identity)
+  check `Some(f1()) <= g@6/A`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Composition { reborrow: false, casts: [DeclId { name: up1, overload: 0 }], structural: None })] }) })
+  check `Some(f2()) <= g@6/B`: Ok(Identity)
+  check `f1() <= S1`: Ok(Identity)
+  check `f1.Result <= f1()`: Ok(Identity)
+  check `f2() <= S2`: Ok(Identity)
+  check `f2.Result <= f2()`: Ok(Identity)
+  check `g@6/B ~> g@6/A`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Composition { reborrow: false, casts: [DeclId { name: up2, overload: 0 }], structural: None })] }) })
+  check `g@6/B ~> g@6/B`: Ok(Identity)
+  check `g@6/R <= g(..)`: Ok(Identity)
+  check `0u8 <= R`: Ok(Identity)
+  check `R <= g(b, b)`: Ok(Identity)
   I* of a final state: []

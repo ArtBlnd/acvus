@@ -9,7 +9,7 @@ outcome 1
   decision f: f#0
   decision `lend 1`: lend & place
   decision `lend 2`: lend & place
-  check `f.Result ≤ f(..)`: Ok(Identity)
+  check `f.Result <= f(..)`: Ok(Identity)
   refusal no_value `&a 1`
   refusal no_value `&a 2`
   refusal no_value A

@@ -20,4 +20,4 @@ A = bind `.x` via [`.x`] @ a;
 
 must fail;
 assert a == read;
-assert failing [`A ⇝ take.Param(0)`];
+assert failing [`A ~> take.Param(0)`];

@@ -7,6 +7,6 @@ let A;
 let 0: lit 0;
 A = 0;
 
-assert trace "fallback 0 took i32";
+assert trace "default 0: i32";
 must pass;
 assert A: i32;

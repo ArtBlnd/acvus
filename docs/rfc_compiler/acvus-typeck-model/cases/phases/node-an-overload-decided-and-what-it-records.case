@@ -10,8 +10,8 @@ let x: u8;
 let R;
 R = f(x) @ f;
 
-assert trace "node decided f as f#0";
-assert node records `x ⇝ f.Param(0)`;
-assert node records `f.Result ≤ R`;
+assert trace "decide f: f#0";
+assert node records `x ~> f.Param(0)`;
+assert node records `f.Result <= R`;
 must pass;
 assert R: u8;

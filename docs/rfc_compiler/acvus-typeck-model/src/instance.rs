@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, KindSource};
 use crate::node::{NodeKind, NodeState};
+use crate::record::{Instantiated, Recording};
 use crate::relation::{Recorder, Relation, copy_name};
 use crate::solve::State;
 use crate::ty::{Name, Ty};
@@ -34,21 +35,48 @@ pub(crate) struct Instance<'a> {
     c: BTreeSet<ClassId>,
     /// Each root of `from` met so far, with its class here.
     made: BTreeMap<ClassId, ClassId>,
+    /// The relations it has recorded here so far.
+    recorded: Recording,
+}
+
+impl State {
+    /// The roots of the classes C holds at this group's fixpoint (l.219):
+    /// those left unsolved, or whose value is not closed, and the universals.
+    pub(crate) fn c(&self) -> BTreeSet<ClassId> {
+        self.classes
+            .roots()
+            .filter(|&root| self.is_universal(root) || self.value(root).is_none())
+            .collect()
+    }
+
+    /// The relations of the log on a class of `c` that an instance copies, by
+    /// their places: an equation is kept by the classes it unified.
+    pub(crate) fn relations_on(&self, c: &BTreeSet<ClassId>) -> Vec<usize> {
+        self.log
+            .iter()
+            .enumerate()
+            .filter(|(_, recorded)| {
+                !matches!(recorded.relation, Relation::Equation(..))
+                    && recorded
+                        .relation
+                        .classes()
+                        .into_iter()
+                        .any(|class| c.contains(&self.root(class)))
+            })
+            .map(|(at, _)| at)
+            .collect()
+    }
 }
 
 impl<'a> Instance<'a> {
     pub(crate) fn new(at: &Name, by: Recorder, from: &'a State) -> Instance<'a> {
-        let c = from
-            .classes
-            .roots()
-            .filter(|&root| from.is_universal(root) || from.value(root).is_none())
-            .collect();
         Instance {
             at: Rc::new(at.clone()),
             by,
             from,
-            c,
+            c: from.c(),
             made: BTreeMap::new(),
+            recorded: Recording::default(),
         }
     }
 
@@ -172,7 +200,7 @@ impl<'a> Instance<'a> {
                 .value(root)
                 .expect("a class outside C has a closed value");
             let recorder = self.recorder(&Recorder::Origin);
-            let made = here.closed(name, &ty, &recorder);
+            let made = here.closed(name, &ty, &recorder, &mut self.recorded);
             self.made.insert(root, made);
             return made;
         }
@@ -190,30 +218,25 @@ impl<'a> Instance<'a> {
         if let Some((kind, KindSource::Solved)) = held.kind {
             let term = kind.map(|_, part| self.class(here, part));
             let recorder = self.recorder(&Recorder::Split(root));
-            here.record(Relation::Kind(made, term, KindSource::Solved), recorder);
+            let relation = Relation::Kind(made, term, KindSource::Solved);
+            self.recorded.push(here.record(relation, recorder));
         }
         made
     }
 
     /// Records here every relation of `from` on a class of C, makes anew each
     /// node `from` left undecided (l.219), and keeps the instance here.
-    pub(crate) fn record_rest(&mut self, here: &mut State) {
+    /// Returns what the instance recorded here, itself the instance made.
+    pub(crate) fn record_rest(&mut self, here: &mut State) -> Recording {
         let from = self.from;
-        for recorded in &from.log {
-            let mentions_c = recorded
+        for at in from.relations_on(&self.c) {
+            let recorded = &from.log[at];
+            let relation = recorded
                 .relation
-                .classes()
-                .into_iter()
-                .any(|class| self.c.contains(&from.root(class)));
-            if !mentions_c {
-                continue;
-            }
-            let relation = match recorded.relation.clone() {
-                Relation::Equation(..) => continue,
-                relation => relation.map(|class| self.class(here, class)),
-            };
+                .clone()
+                .map(|class| self.class(here, class));
             let recorder = self.recorder(&recorded.recorder);
-            here.record(relation, recorder);
+            self.recorded.push(here.record(relation, recorder));
         }
         let undecided: Vec<(&Name, &NodeState)> = from
             .nodes
@@ -240,5 +263,13 @@ impl<'a> Instance<'a> {
             group: from.group.clone(),
             made: self.made.clone(),
         });
+        let mut recorded = std::mem::take(&mut self.recorded);
+        recorded.instances.push(Instantiated {
+            at: (*self.at).clone(),
+            by: self.by.clone(),
+            group: from.group.clone(),
+            recorded: recorded.places().collect(),
+        });
+        recorded
     }
 }
