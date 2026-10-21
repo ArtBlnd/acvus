@@ -1,5 +1,5 @@
 //! What all candidates of a use not yet decided share, recorded before it is
-//! decided (l.252, l.335; `design/08-node.md`, readings 13 and 14).
+//! decided (l.245, l.321; `design/08-node.md`, readings 13 and 14).
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -25,8 +25,8 @@ pub(super) fn is_reference(ty: &SigTy) -> Option<bool> {
 impl State {
     /// Records, for each undecided use with several candidates, what all its
     /// candidates share: each position their signatures write alike with no
-    /// variable (l.335), and whether each class they would record a lower
-    /// bound or an equation into is a reference, where they agree (l.252).
+    /// variable (l.321), and whether each class they would record a lower
+    /// bound or an equation into is a reference, where they agree (l.245).
     /// Returns the relations recorded.
     pub(crate) fn record_at_once(&mut self) -> Recording {
         let mut recorded = Recording::default();
@@ -168,7 +168,7 @@ impl State {
     }
 
     /// The classes inside an argument's kind that a candidate's parameter
-    /// would record a lower bound or an equation into, by the table of l.286:
+    /// would record a lower bound or an equation into, by the table of l.277:
     /// the parts an invariant part equates, and every part beneath them. A
     /// part the parameter writes as a variable is a lower bound of that
     /// unknown, recording into it only, unless an invariant part equates it.

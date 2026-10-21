@@ -1,5 +1,5 @@
 //! Coercion, the steps of the join's `≤` each taken by a row of the Coercion
-//! table, and rank (l.99–116, l.293).
+//! table, and rank (l.92–109, l.279).
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -12,7 +12,7 @@ use crate::ty::{HasTerm, Member, Mutability, Name, PartKey, Term, Ty};
 #[cfg(test)]
 mod tests;
 
-/// A stage of a composition, ordered `reborrow ≺ cast ≺ structural` (l.116).
+/// A stage of a composition, ordered `reborrow ≺ cast ≺ structural` (l.109).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Stage {
     Reborrow,
@@ -81,7 +81,7 @@ impl PartialOrd for Rank {
 pub enum Coercion {
     /// None is needed.
     Identity,
-    /// A position that decides nothing, which reaches every type (l.344).
+    /// A position that decides nothing, which reaches every type (l.330).
     Undecided,
     /// `reborrow? ; cast* ; structural?`, taking at least one.
     Composition {
@@ -101,7 +101,7 @@ pub enum Structural {
     /// At one constructor: the object fields the type passed into does not
     /// name are dropped, the members it names besides are added, and each part
     /// both have is changed by its coercion. Along `≤`, the fields an object
-    /// gains are added and not changed (l.293).
+    /// gains are added and not changed (l.279).
     Shape {
         dropped: BTreeSet<Member>,
         added: BTreeSet<Member>,
@@ -187,7 +187,7 @@ pub enum CoerceError {
 enum Way {
     /// `⇝`, by the Coercion table, conversions included where `conversions`.
     Coercion { conversions: bool },
-    /// The join's `≤`, each step taken by a row of the Coercion table (l.293).
+    /// The join's `≤`, each step taken by a row of the Coercion table (l.279).
     Le,
 }
 
@@ -202,7 +202,7 @@ pub fn coerce(decls: &Decls, from: &Ty, to: &Ty) -> Result<Coercion, CoerceError
 }
 
 /// `from ⇝ to` between values a use reads, taking no conversion, as narrowing
-/// takes none (l.344).
+/// takes none (l.330).
 pub fn coerce_read(
     decls: &Decls,
     from: &ReadValue,
@@ -211,7 +211,7 @@ pub fn coerce_read(
     walk(decls, from, to, Way::Coercion { conversions: false })
 }
 
-/// How `from` is changed at each step of `from ≤ to` (l.293).
+/// How `from` is changed at each step of `from ≤ to` (l.279).
 pub fn along_le(decls: &Decls, from: &Ty, to: &Ty) -> Result<Coercion, CoerceError> {
     walk(
         decls,
@@ -275,7 +275,7 @@ fn walk(
 /// The result where no stage is taken: the two are equal, `from` is `!`, or
 /// a position decides nothing, being undecided on either side, or a LitVar,
 /// which reaches a LitVar of its family and a scalar admitting its values
-/// (l.169, l.344).
+/// (l.162, l.330).
 fn deciding_nothing(from: &ReadValue, to: &ReadValue) -> Option<Result<Coercion, CoerceError>> {
     if from == to {
         return Some(Ok(Coercion::Identity));

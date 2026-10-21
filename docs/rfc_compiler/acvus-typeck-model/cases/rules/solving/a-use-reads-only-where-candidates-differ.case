@@ -1,10 +1,10 @@
-//@ spec: l.267, l.335, l.337–344, l.293, l.301
+//@ spec: l.260, l.321, l.323–330, l.279, l.287
 // let b = make();          // make() -> B
 // f(1u8, b);               // f(u8, A) -> u8, f(u16, A) -> u16
 // The candidates differ only at the first argument, so f reads that position
-// alone (l.267); 1u8 leaves f(u8, A) (l.337–344). The second parameter, A, is
-// what both candidates share, so b ⇝ A holds at once (l.335). B reaches A by no
-// coercion (l.293): refused at that boundary (l.301), with f decided.
+// alone (l.260); 1u8 leaves f(u8, A) (l.323–330). The second parameter, A, is
+// what both candidates share, so b ⇝ A holds at once (l.321). B reaches A by no
+// coercion (l.279): refused at that boundary (l.287), with f decided.
 extern type A;
 extern type B;
 extern fn make() -> B;

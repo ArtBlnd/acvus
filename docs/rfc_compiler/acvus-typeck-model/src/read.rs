@@ -1,6 +1,6 @@
-//! The value a use, a lend, a projection or a binding reads (l.267): a type
+//! The value a use, a lend, a projection or a binding reads (l.260): a type
 //! some of whose positions may be left undecided, a position holding a LitVar
-//! deciding nothing within its family (l.344).
+//! deciding nothing within its family (l.330).
 
 use std::fmt;
 use std::rc::Rc;
@@ -25,7 +25,7 @@ impl ReadValue {
     }
 
     /// A candidate's type written by its signature. Each of its variables is an
-    /// unknown made anew at the use (l.331), which only the use itself records
+    /// unknown made anew at the use (l.317), which only the use itself records
     /// into, so the value the use reads there decides nothing.
     pub fn of_sig(ty: &SigTy) -> ReadValue {
         match ty {
@@ -48,7 +48,7 @@ impl ReadValue {
         Some(Ty::new(term).expect("a value read is checked as a closed type is"))
     }
 
-    /// Each LitVar taken as its family's default (l.344).
+    /// Each LitVar taken as its family's default (l.330).
     pub fn with_defaults(&self) -> ReadValue {
         match self {
             ReadValue::Undecided => ReadValue::Undecided,

@@ -2,7 +2,7 @@
 // let v = make();          // make() -> Vec<u8>; the view as_slice(&Vec<T>) -> &[T]
 // take(&v);                // take(&[u8])
 // The boundary &V ⇝ &[u8] joins two references, whose constructors are their
-// mutabilities alone (l.66), so its target is an equation (l.289), V = [u8],
+// mutabilities alone (l.66), so its target is an equation (l.277), V = [u8],
 // and the view's cast is never taken.
 extern type Vec<T>;
 #[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];

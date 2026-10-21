@@ -1,9 +1,9 @@
-//@ spec: l.317
+//@ spec: l.303
 // let p = mk();            // mk() -> {x: u8}
 // let {x: a} = p;
 // take(a);                 // take(&u8)
 // No class on a's path is a reference, so the binding reads its position
-// (l.317): a is u8, and u8 reaches &u8 by no coercion (l.293).
+// (l.303): a is u8, and u8 reaches &u8 by no coercion (l.279).
 extern fn mk() -> {x: u8};
 extern fn take(&u8);
 

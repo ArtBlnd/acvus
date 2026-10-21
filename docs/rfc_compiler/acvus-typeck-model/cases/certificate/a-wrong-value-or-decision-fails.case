@@ -4,7 +4,7 @@
 // Accepted as probe(A), with x: A. Given x: B, the pass of make() into X and
 // probe(A)'s boundary fail; decided as probe(B), its boundary fails; given
 // probe(x): &A, its result fails, and so does what probe records at once, that
-// its result is no reference (l.252).
+// its result is no reference (l.245).
 extern type A;
 extern type B;
 extern fn make() -> A;
@@ -20,6 +20,6 @@ X = `make()`;
 
 must pass;
 assert probe == probe#0;
-assert certificate set X: B fails ["A <= B fails (l.293)", "argument 0: B into A fails"];
+assert certificate set X: B fails ["A <= B fails (l.279)", "argument 0: B into A fails"];
 assert certificate set probe == probe#1 fails ["argument 0: A into B fails"];
-assert certificate set `probe(x)`: &A fails ["() <= &A fails", "Result is recorded as no reference, and its value is &A (l.252)"];
+assert certificate set `probe(x)`: &A fails ["() <= &A fails", "Result is recorded as no reference, and its value is &A (l.245)"];

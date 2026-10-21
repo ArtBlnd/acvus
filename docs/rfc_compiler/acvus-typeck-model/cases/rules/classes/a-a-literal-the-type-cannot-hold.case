@@ -1,9 +1,9 @@
-//@ spec: l.169, with l.134, l.226, l.291, l.301
+//@ spec: l.162, with l.127, l.219, l.277, l.287
 // @n = 256;                // @n is the host's u8
-// The literal's type is ?{256} (l.134), and the store is the boundary
-// 256 ⇝ @n (l.218, l.226), which unifies ?{256} with u8 (l.291). l.169 asks
+// The literal's type is ?{256} (l.127), and the store is the boundary
+// 256 ⇝ @n (l.211, l.219), which unifies ?{256} with u8 (l.277). l.162 asks
 // the constructor to hold every value in N: u8 does not hold 256, so the
-// unification gives no result, and the program is refused there (l.301).
+// unification gives no result, and the program is refused there (l.287).
 let `@n`: host u8;
 let 256: lit 256;
 `@n` = 256;

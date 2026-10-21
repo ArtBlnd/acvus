@@ -1,4 +1,4 @@
-//@ spec: Example 8, l.466–490
+//@ spec: Example 8, l.450–474
 // @cfg.extra = 1;          // @cfg is the host's {name: String}
 let String: String;
 let `@cfg`: host {name: String};

@@ -1,8 +1,8 @@
 # 17 The captured environment
 
-Rests on the spec's l.203 (a call of a function value), l.210–222 (binding groups,
-C, instances), l.226 (meeting), l.244 (b) (what a class depends on), l.267, l.293
-and l.301; on `docs/rfc_compiler/functions.md` §2 (a function value bound by `let`
+Rests on the spec's l.196 (a call of a function value), l.203–215 (binding groups,
+C, instances), l.219 (meeting), l.237 (b) (what a class depends on), l.260, l.279
+and l.287; on `docs/rfc_compiler/functions.md` §2 (a function value bound by `let`
 generalizes what its type leaves unconstrained, "except what the enclosing scope or
 the captured environment holds: those belong to where they were written"; its
 environment is captured once, where it is written) and `types.md` §1 (every slot
@@ -18,7 +18,7 @@ is `Program::cut_environments` and `Program::owner`, `Program::item_group` and
 ## Meaning
 
 The spec solves a lambda's group before its enclosing one, and copies all of its C,
-the captures shared, at each call of its value (l.220, l.222). What the lambda
+the captures shared, at each call of its value (l.213, l.215). What the lambda
 records into a capture is then recorded only by the calls' instances, at none of
 their positions, so the capture and what reads it are decided before or after it by
 order (O4). A node of the lambda that reads a capture reads it before the enclosing
@@ -33,7 +33,7 @@ call.
 ## Definitions
 
 - A **capture** of a lambda is a class of an enclosing group that its text names
-  (l.217).
+  (l.210).
 - Two classes of a lambda's text are **joined** where one item of the text names
   both, or one is a part of a kind the text writes for the other. The
   **environment** of a lambda is every class joined, directly or through others, to
@@ -42,24 +42,24 @@ call.
 - An item **names** the classes it relates. A use of a function of an enclosing
   group names that function's parameter and result types as well, which it takes
   as they are (note 09, reading 4), and a binding names the classes of the
-  projections on its path (l.317).
+  projections on its path (l.303).
 - The **generic part** of a lambda is the rest of its text, its parameters among it
   where they are not in the environment.
 
 ## Rows
 
 1. **The environment is the enclosing group's.** Its classes are classes of that
-   group, each an unknown of it unless the text writes it (l.218). Its items are
+   group, each an unknown of it unless the text writes it (l.211). Its items are
    recorded there, and its nodes made there, once, when that group's solving
    starts, whether or not a call reaches the lambda.
-2. **The lambda's binding group is its generic part** (l.210). Its C is the generic
-   part's, copied at each instance (l.219, l.222). It names no capture, so no
+2. **The lambda's binding group is its generic part** (l.203). Its C is the generic
+   part's, copied at each instance (l.212, l.215). It names no capture, so no
    instance records into one.
 3. **A call of a function value meets the environment where it is.** Each argument
    meets the copy of its candidate lambda's generic parameter, or that lambda's
    parameter in the environment, an unknown of the call's group; the call's result
    takes the copy of a generic result type, or the environment's. Within the depth
-   its candidates reach (l.244 (b)), the call's positions include the parameters
+   its candidates reach (l.237 (b)), the call's positions include the parameters
    and the result type in the environment of each lambda its callee's Values name
    at the moment.
 
@@ -67,7 +67,7 @@ What each row excludes:
 
 - Row 1: the environment generalized or copied, and a capture taking a relation
   from an instance. A lambda no call reaches still has its environment recorded,
-  and the nodes there are decided (l.301 holds of them).
+  and the nodes there are decided (l.287 holds of them).
 - Row 2: a class of an enclosing group in a lambda's C.
 - Row 3: a parameter in the environment solved before a call whose Values name its
   lambda is decided.
@@ -75,13 +75,13 @@ What each row excludes:
 ## Invariants
 
 - **I\* at a capture.** No relation into a capture is recorded after a decision that
-  reads it, outside a cycle (l.269; types §6: "A decision reads a type only once
+  reads it, outside a cycle (l.262; types §6: "A decision reads a type only once
   nothing can change it").
 - **I2 at the witnesses.** H5 and O4 reach one outcome each.
 - **Generalization** leaves out the environment (functions §2), and every capture
   has one type (types §1).
 - **Soundness.** Every item of a lambda's text is recorded, in the environment once
-  or in each instance, and checked as before (l.293).
+  or in each instance, and checked as before (l.279).
 - **Conservative refinement.** A later, finer environment, and the phases agreed
   first as the fall-back (O4's capture closed before the instance, its relations
   checked), are judged by whether every program this reading accepts keeps its
@@ -159,7 +159,7 @@ was run by changing the model, and no test keeps it.
 - Row 3 makes a node's result reach what it reads through a call. In
   `acc = f()` with `f = || acc + 1`, `acc + 1`'s result `R` reaches `ACC`, which it
   reads, by `R ≤ λ result ≤ f() ≤ ACC`. Probed in every order by changing the
-  model, `f()` is decided first, no node breaks a dependency on another (l.269),
+  model, `f()` is decided first, no node breaks a dependency on another (l.262),
   nothing is deferred, and `acc + 1`'s read leaves out its own relations alone
-  (l.267). Whether row 3 makes a cycle between distinct nodes, which l.269
+  (l.260). Whether row 3 makes a cycle between distinct nodes, which l.262
   breaks, no witness yet shows.

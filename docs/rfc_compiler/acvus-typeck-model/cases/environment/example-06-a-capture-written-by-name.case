@@ -1,4 +1,4 @@
-//@ spec: Example 6, l.435–449; design/17-environment.md
+//@ spec: Example 6, l.419–433; design/17-environment.md
 // let mut last = None;
 // let remember = |x| last = Some(x);
 // remember(1u8);

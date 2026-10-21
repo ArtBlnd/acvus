@@ -1,14 +1,14 @@
-//@ spec: l.203, l.217, l.222, with l.191, l.230, l.267, l.344
+//@ spec: l.196, l.210, l.215, with l.184, l.223, l.260, l.330
 // let f = |x| take_u8(x);  // take_u8(u8)
 // let g = || f(1u8);
 // g();
-// In g's lambda, f is the capture F, the enclosing group's class (l.217),
+// In g's lambda, f is the capture F, the enclosing group's class (l.210),
 // whose lower bound, f's lambda's value, is recorded as the text gives it
-// (l.230). The call reads F, whose Values are {λf} (l.203, l.267), and makes
+// (l.223). The call reads F, whose Values are {λf} (l.196, l.260), and makes
 // an instance of that lambda whose X' meets 1u8; its copy u8 ⇝ u8 holds.
 // Were F read before its lower bound, the read would decide nothing, the
 // call would stay undecided, in g's C, and its copy, made by g() in the
-// script's group, would be decided there by the same Values (l.222). Either
+// script's group, would be decided there by the same Values (l.215). Either
 // way the program is accepted and g() is ().
 extern fn take_u8(u8);
 

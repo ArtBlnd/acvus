@@ -1,4 +1,4 @@
-//@ spec: l.267, l.331–344
+//@ spec: l.260, l.317–330
 // f reads x as u8, which leaves f(u8) alone; decided, it records its argument
 // passing into its parameter's type, a boundary, and its result type entering
 // the use's result, a lower bound.

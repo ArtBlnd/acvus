@@ -1,10 +1,10 @@
-//@ spec: l.325, Example 14 step 2 (l.593)
+//@ spec: l.311, Example 14 step 2 (l.577)
 // struct Pair { l, r }
 // impl Pair { fn first(self) { self.l } }
 // Pair::first(1u8)
 // The receiver self carries the kind Pair<A, B> as the text writes it, A and B
-// universal (l.325). At the call's instance the argument passes into the copy of
-// that Pair, a boundary (l.593), which u8 reaches by no coercion (l.293).
+// universal (l.311). At the call's instance the argument passes into the copy of
+// that Pair, a boundary (l.577), which u8 reaches by no coercion (l.279).
 struct Pair { l, r }
 
 group first {

@@ -1,12 +1,12 @@
-//@ spec: l.180, l.188, l.191, l.193, l.203, with l.222, l.301, l.344
+//@ spec: l.173, l.181, l.184, l.186, l.196, with l.215, l.287, l.330
 // let f = if c { |x| take_u8(x) } else { |x| take_u16(x) };
 // f(1u8);                  // take_u8(u8), take_u16(u16)
-// Each lambda's use reads its universal, which decides nothing (l.344), and
+// Each lambda's use reads its universal, which decides nothing (l.330), and
 // its x ⇝ u8 or x ⇝ u16 rests on it, in its C. Both function values meet in
-// F, whose Values are joined (l.180): a set of lambdas, since at an instance
-// Values is always one (l.191), so {λ1, λ2}. The call reads F and makes an
-// instance for each (l.203); each instance's X' meets 1u8, and λ2's copied
-// u8 ⇝ u16 has no coercion (l.301).
+// F, whose Values are joined (l.173): a set of lambdas, since at an instance
+// Values is always one (l.184), so {λ1, λ2}. The call reads F and makes an
+// instance for each (l.196); each instance's X' meets 1u8, and λ2's copied
+// u8 ⇝ u16 has no coercion (l.287).
 extern fn take_u8(u8);
 extern fn take_u16(u16);
 

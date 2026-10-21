@@ -1,10 +1,10 @@
-//@ spec: l.267, l.344, l.301
+//@ spec: l.260, l.330, l.287
 // let a = mk();            // mk() -> u8, mk() -> u16
 // The candidates differ at the result alone, so mk reads R, the equivalence
-// class its result passes into (l.267, l.342). Left without mk's own
+// class its result passes into (l.260, l.328). Left without mk's own
 // relations, R has none but its passing into A, which gives it nothing, so the
-// value read decides nothing and both candidates remain (l.344). Refused at mk
-// (l.301); R lies at mk's position and A waits for R, so neither has a value.
+// value read decides nothing and both candidates remain (l.330). Refused at mk
+// (l.287); R lies at mk's position and A waits for R, so neither has a value.
 extern fn mk() -> u8;
 extern fn mk() -> u16;
 

@@ -1,11 +1,11 @@
-//@ spec: l.216, l.219, with l.37, l.218, l.226, l.293, l.301
+//@ spec: l.209, l.212, with l.37, l.211, l.219, l.279, l.287
 // let f = || { @n = 1u16; };   // @n is the host's u8; f is never called
-// The store is in the lambda's text, its constraint (l.216): the boundary
+// The store is in the lambda's text, its constraint (l.209): the boundary
 // 1u16 ⇝ @n, both of whose types are decided when solving starts (l.37,
-// l.218, l.226). C holds the classes left unsolved, the nodes left
-// undecided and the constraints on them (l.219); this boundary is on
+// l.211, l.219). C holds the classes left unsolved, the nodes left
+// undecided and the constraints on them (l.212); this boundary is on
 // neither, so it is no original left in C, and its value must reach u8 by a
-// coercion (l.293), which nothing gives (l.301), called or not.
+// coercion (l.279), which nothing gives (l.287), called or not.
 group λ in run {
     let `λ result`;
     fn λ() -> `λ result`;

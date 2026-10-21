@@ -1,11 +1,11 @@
-//@ spec: l.201, l.217, with l.202, l.218, l.222, l.226, l.301
+//@ spec: l.194, l.210, with l.195, l.211, l.215, l.219, l.287
 // fn g(a) { g(1u8) }       // a module's fn
 // g("s")                   // the script
 // g's call of itself is a call within its binding group, so it makes no
-// instance and takes g's own types (l.201): 1u8 passes into g's A, a universal
-// and no unknown (l.217, l.218), the boundary 1u8 ⇝ A, resting on A, in g's C.
-// g("s") makes an instance (l.202) whose A' is an unknown the argument meets
-// (l.222), &str, and the copied u8 ⇝ &str has no coercion (l.301).
+// instance and takes g's own types (l.194): 1u8 passes into g's A, a universal
+// and no unknown (l.210, l.211), the boundary 1u8 ⇝ A, resting on A, in g's C.
+// g("s") makes an instance (l.195) whose A' is an unknown the argument meets
+// (l.215), &str, and the copied u8 ⇝ &str has no coercion (l.287).
 group g {
     let A;
     let `g result`;

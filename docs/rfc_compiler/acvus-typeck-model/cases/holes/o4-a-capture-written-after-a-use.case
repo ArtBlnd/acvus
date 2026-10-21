@@ -5,7 +5,7 @@
 // The call of put records into X only once it is decided and makes its
 // instance, and X lies at none of its positions, so X does not wait for it: X is
 // B where the instance records B ≤ X before X is solved, and A where after,
-// refused at the instance's V ≤ X (l.301).
+// refused at the instance's V ≤ X (l.287).
 extern type A;
 extern type B;
 extern fn make_a() -> A;

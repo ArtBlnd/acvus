@@ -1,4 +1,4 @@
-//@ spec: Example 1, l.364–376
+//@ spec: Example 1, l.350–361
 // let a = if c { Some(1u8) } else { None };
 let A;
 let S;

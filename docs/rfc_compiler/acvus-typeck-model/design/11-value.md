@@ -1,6 +1,6 @@
 # 11 Values and splits
 
-Rests on the spec's l.267 (the value a node reads) and l.273–293 (values, splits
+Rests on the spec's l.260 (the value a node reads) and l.266–279 (values, splits
 and the checks of entering values). The code is `src/value.rs`, the splits in
 `src/split.rs`, a kind "indexes `τ`" linked along a view in `src/unify.rs`, the
 state a value read is taken from in `src/solve.rs`, and the checks in
@@ -11,7 +11,7 @@ state a value read is taken from in `src/solve.rs`, and the checks in
 A class takes its value once its unbroken dependencies are solved or decided: the
 type its equation gives, or the join of the constructors and members its sources
 give, each part made anew; a LitVar source is unified with it. A lower bound or a
-boundary whose two sides are solved relates their parts by the table of l.286,
+boundary whose two sides are solved relates their parts by the table of l.277,
 through the casts' signatures where the constructors differ. A value read is
 decided on a separate state that replays the relations a node does not leave out.
 
@@ -19,21 +19,21 @@ decided on a separate state that replays the relations a node does not leave out
 
 1. **Two references join whatever their targets.** A reference's constructor is its
    mutability alone (l.66), so two references meet at the lesser mutability, and
-   their targets, an invariant part, are related by an equation (l.289). A view's
+   their targets, an invariant part, are related by an equation (l.277). A view's
    cast, a step between two references' nodes (l.78), is then never taken at a
    class (`holes.md`, H3).
 2. **A reborrow at a split.** Where an exclusive reference meets a shared one, the
-   constructors differ and no cast links them (l.291). The model relates their
+   constructors differ and no cast links them (l.277). The model relates their
    targets by an equation, as the row `&mut T ⇝ &T` keeps `T` (`holes.md`, H4).
 3. **Linking through casts.** At each cast on the path between the two nodes, the
    current type's parts and the cast's parameter's are related by equations, a
    cast's parameter being an extern-defined type or a reference, whose parts are
-   invariant; the last cast's result is then related to the other side by l.286.
+   invariant; the last cast's result is then related to the other side by l.277.
 4. **Sources that give no constructor.** A class whose sources are only LitVars is
    unified with them and stays unsolved, holding a LitVar until fallback. Where
-   they are of two families the unification conflicts (l.170), so its sources
+   they are of two families the unification conflicts (l.163), so its sources
    have no join: it has no value and is not solved again, refused by the
-   conflict (l.176, l.301), as where the types its sources give have no join.
+   conflict (l.169, l.287), as where the types its sources give have no join.
    A class that holds a kind takes its value from it, and a LitVar lower bound
    that conflicts with it is refused there alone.
 5. **When a relation splits.** Once both of its sides are solved (`holes.md`, T2).
@@ -44,11 +44,11 @@ decided on a separate state that replays the relations a node does not leave out
 7. **An element along a view.** Where an extern-defined container's class holds
    "indexes `τ`", its parts are related to those of the view's parameter's target,
    and `τ` to the element of its result's slice, by equations, the view being the
-   cast going up from a shared reference to the container (l.78, l.161); a cast up
+   cast going up from a shared reference to the container (l.78, l.154); a cast up
    from `&mut N` has one from `&N`. A container whose cast goes elsewhere, or that
    has none, has no view, and the kind is refused.
 8. **Visibility.** A kind gives its member where it names a field, or a variant of
-   an enum the text names (l.282). Whether a lower bound the host gives makes it
+   an enum the text names (l.275). Whether a lower bound the host gives makes it
    give none is `holes.md`, T5, and the model takes it as a reading
    (`Visibility`).
 9. **`!` and a kind known in part.** `!` has no part, so it meets no kind known in

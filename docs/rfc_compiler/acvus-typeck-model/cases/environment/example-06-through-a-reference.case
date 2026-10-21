@@ -4,7 +4,7 @@
 // let remember = |x| *r = Some(x);
 // remember(1u8);
 // *r, Some(x), S and X are joined to the capture R; the write through it is a
-// boundary whose payload, L's, takes a lower bound (l.286).
+// boundary whose payload, L's, takes a lower bound (l.277).
 //@ reading: captures = environment
 group λ in run {
     let X;

@@ -1,5 +1,5 @@
 //! The positions a use, a lend, a projection or a binding lies at, and what
-//! it reads (l.244 (b), l.247–250, l.267).
+//! it reads (l.237 (b), l.240–243, l.260).
 
 use std::collections::BTreeSet;
 
@@ -13,7 +13,7 @@ use super::{NodeKind, Read, Reads};
 
 impl State {
     /// The classes at a node's positions, and those within the depth its
-    /// candidates reach (l.244 (b)): for a call of a function value, the
+    /// candidates reach (l.237 (b)): for a call of a function value, the
     /// parameters and the result type in the environment of each lambda its
     /// callee's Values name (`design/17-environment.md`, row 3).
     pub(crate) fn positions(&self, kind: &NodeKind) -> BTreeSet<ClassId> {
@@ -169,7 +169,7 @@ impl State {
 
     /// The lambdas the Values of the class's function value names: those of
     /// the function values that meet in it, by equations or lower bounds
-    /// (l.180, l.188).
+    /// (l.173, l.181).
     pub(super) fn values_of(&self, id: ClassId) -> BTreeSet<Name> {
         let mut seen = BTreeSet::from([self.root(id)]);
         let mut work = vec![self.root(id)];
@@ -186,7 +186,7 @@ impl State {
     }
 
     /// Whether the node is a projection other than a Deref, whose relations a
-    /// read of whether a class is a reference leaves out (l.248, l.267, l.309).
+    /// read of whether a class is a reference leaves out (l.241, l.260, l.295).
     pub(crate) fn is_inner_projection(&self, name: &Name) -> bool {
         matches!(
             &self.nodes[name].kind,
@@ -195,7 +195,7 @@ impl State {
     }
 
     /// Whether the node is a use that has recorded whether the class is a
-    /// reference (l.252).
+    /// reference (l.245).
     pub(super) fn recorded_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
         self.nodes[name]
@@ -204,7 +204,7 @@ impl State {
             .any(|&recorded| self.root(recorded) == root)
     }
 
-    /// What a node reads, and on which it depends (l.247–248, l.267).
+    /// What a node reads, and on which it depends (l.240–241, l.260).
     pub(crate) fn reads(&self, name: &Name) -> Reads {
         let kind = &self.nodes[name].kind;
         let path = match (kind, self.readings.binding_path) {
@@ -220,10 +220,10 @@ impl State {
 
     /// Whether the relations the node `recorder` records may change what a
     /// node reading `read` reads at `class`, a class at the recorder's
-    /// position or reached from one (l.244 (b), l.250). For a value, every
+    /// position or reached from one (l.237 (b), l.243). For a value, every
     /// such node (`holes.md`, H7); for whether a class is a reference, a node
     /// that may decide it, other than a projection of a field, a component, an
-    /// index or a variant (l.248).
+    /// index or a variant (l.241).
     pub(crate) fn records_into(&self, recorder: &Name, class: ClassId, read: Read) -> bool {
         match read {
             Read::Value => true,
@@ -234,13 +234,13 @@ impl State {
     }
 
     /// Whether what the node records may yet decide whether the class is a
-    /// reference, which is decided by its lower bounds and equations (l.309):
+    /// reference, which is decided by its lower bounds and equations (l.295):
     /// for a use, where some candidate would record one into it and the use
-    /// has not recorded whether it is one (l.248, l.252); for a lend, a binding
+    /// has not recorded whether it is one (l.241, l.245); for a lend, a binding
     /// and a call of a function value, where the class is the result it
     /// records into. A lend records into its place, and a binding into its
     /// position, only that it is a reference to a class, and only where it
-    /// already reads as one (l.307; `design/08-node.md`, reading 12).
+    /// already reads as one (l.293; `design/08-node.md`, reading 12).
     pub(super) fn may_decide_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
         match &self.nodes[name].kind {

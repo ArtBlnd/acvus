@@ -1,9 +1,9 @@
-//@ spec: l.21, with l.226, l.293, l.301
+//@ spec: l.21, with l.219, l.279, l.287
 // A template whose control line returns 1u8:
 // % return 1u8;
-// A template's result type is fixed to String (l.21), no unknown (l.226), so
+// A template's result type is fixed to String (l.21), no unknown (l.219), so
 // the returned value passes into it at the boundary 1u8 ⇝ R, and u8 reaches
-// String by no coercion (l.293, l.301). Its text, the String it formats, is
+// String by no coercion (l.279, l.287). Its text, the String it formats, is
 // its tail.
 let R: String;
 fn run() -> R;

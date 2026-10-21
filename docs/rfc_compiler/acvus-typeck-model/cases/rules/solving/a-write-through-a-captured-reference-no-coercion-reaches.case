@@ -1,13 +1,13 @@
-//@ spec: l.226, l.235, l.280, l.293, l.301
+//@ spec: l.219, l.228, l.273, l.279, l.287
 // let mut x = 1u8;
 // let r = &mut x;
 // let f = || *r = 2u16;
 // f();
 // The write in the lambda reaches X, an unknown of the enclosing binding group,
-// through the reference r, so it is a boundary, 2u16 ⇝ *r (l.226, l.235), and
-// the Deref makes *r X. A boundary is no source (l.280), so X is u8, from 1u8
+// through the reference r, so it is a boundary, 2u16 ⇝ *r (l.219, l.228), and
+// the Deref makes *r X. A boundary is no source (l.273), so X is u8, from 1u8
 // alone, and the value entering by the boundary reaches u8 by no coercion
-// (l.293): refused at that boundary (l.301).
+// (l.279): refused at that boundary (l.287).
 group λ in run {
     let `*r`;
     let 2u16: u16;

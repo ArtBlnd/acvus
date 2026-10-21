@@ -1,4 +1,4 @@
-//@ spec: Example 3, l.391–405, with the declared conversion u16 → u8
+//@ spec: Example 3, l.376–390, with the declared conversion u16 → u8
 // let mut buf = Vec::new();
 // push(&mut buf, 1u16);    // push(&mut Vec<T>, T)
 // consume(buf);            // consume(Vec<u8>)

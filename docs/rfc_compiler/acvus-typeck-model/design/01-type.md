@@ -1,8 +1,8 @@
 # 01 Types
 
-Rests on the spec's l.39–70 (Types) and l.72–74 (Variance), with l.165 (parts of
-one name), l.191–193 (function values), l.318 and l.327 (a variant written without
-a payload) and l.352–354 (identity). The code is `src/ty.rs`; its types, signatures
+Rests on the spec's l.39–70 (Types) and l.72–74 (Variance), with l.158 (parts of
+one name), l.184–186 (function values), l.304 and l.313 (a variant written without
+a payload) and l.338–340 (identity). The code is `src/ty.rs`; its types, signatures
 and docs carry the interface and the contract, and `src/ty/tests.rs` exercises the
 contract. This note keeps what the code cannot carry.
 
@@ -22,7 +22,7 @@ again a type (l.41). `Ty` is a closed type, one that holds no equivalence class.
 - What holds of a kind, a `Term` whose parts are equivalence classes, is note 06's.
   `Term<P>` checks nothing about its `P`s.
 - Facts are carried beside a type, from note 06 on. A fact is neither a part nor a
-  member (l.180), and two types are equal by their constructors, members and parts
+  member (l.173), and two types are equal by their constructors, members and parts
   alone (l.66).
 - The specialization mark has no representation, since a type carries none (l.70).
 
@@ -33,18 +33,18 @@ The spec leaves three questions open at this level. These readings were agreed o
 1. **The type of a function value.** The type table gives `Fn(P̄ → R)` the
    parameters and the result as parts (l.51), while an equivalence class that holds
    a function value does not carry them as parts and names its lambdas by Values
-   (l.193). Such a class still takes a constructor (l.275). So a function value's
+   (l.186). Such a class still takes a constructor (l.268). So a function value's
    type is the constructor `Function(n)` with no parts, `Term::FunctionValue`, and
    `Term::Function` with its parts is the type a declaration writes. Function values
-   come only from lambdas (l.191), so the latter appears only in signatures.
+   come only from lambdas (l.184), so the latter appears only in signatures.
 2. **An identity as a part.** An identity is a part of an extern-defined type
-   (l.55, l.352), and a part is again a type (l.41). So an identity is a type whose
+   (l.55, l.338), and a part is again a type (l.41). So an identity is a type whose
    constructor is its name and which has no parts, and it appears as a part only at
    an extern-defined type's identity. Two identities are then equal exactly when
-   their names are, and two different identities are never made one (l.354).
+   their names are, and two different identities are never made one (l.340).
 3. **The payload of `None`.** `Option` has one payload (l.49). `None` written
-   without a payload is `None(_)` in a pattern (l.318), and the payload that `None`
-   makes anew lies in `Option`'s part (l.327, Example 1). So `None`'s payload is that
+   without a payload is `None(_)` in a pattern (l.304), and the payload that `None`
+   makes anew lies in `Option`'s part (l.313, Example 1). So `None`'s payload is that
    one part, `Payload(Some)`.
 
 ## Left open for change

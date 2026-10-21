@@ -1,7 +1,7 @@
 //@ hole: H4
 // let mut v = Vec::new();  // new() -> Vec<T>
 // look(&mut v);            // look(&Vec<u8>)
-// The constructors &mut and & differ and no cast links them (l.291); the model
+// The constructors &mut and & differ and no cast links them (l.277); the model
 // reads the reborrow row &mut T ⇝ &T as an equation of the targets, so
 // V = Vec<u8>.
 extern type Vec<T>;

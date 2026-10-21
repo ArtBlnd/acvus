@@ -1,4 +1,4 @@
-//@ spec: l.161
+//@ spec: l.154
 // Once V holds Vec<?>, its kind "indexes v[0]" is linked to the slice's element
 // along the signature of Vec's view.
 //@ order: decide `v[0]`, solve `new()`, solve V

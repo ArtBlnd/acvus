@@ -1,4 +1,4 @@
-//@ spec: the example of l.254–265
+//@ spec: the example of l.247–258
 // let mut a;
 // a.x = 0;
 // a = pick(a);             // pick({x: i32}) -> {x: i32}, pick(u8) -> u8

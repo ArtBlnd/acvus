@@ -1,4 +1,4 @@
-//@ spec: l.80–97
+//@ spec: l.80–90
 // A, B and C of no argument, the casts A → B and C → B, and &A → &B and
 // &mut A → &mut B.
 extern type A;

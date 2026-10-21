@@ -1,6 +1,6 @@
-//@ spec: l.344
+//@ spec: l.330
 // f(1u16)                  // f(u8), f(u32); a conversion u16 → u8
-// Narrowing takes no conversion (l.344), and no composition takes u16 to u8 or
+// Narrowing takes no conversion (l.330), and no composition takes u16 to u8 or
 // to u32, so no candidate remains.
 #[conversion] extern fn narrow(u16) -> u8;
 extern fn f(u8);

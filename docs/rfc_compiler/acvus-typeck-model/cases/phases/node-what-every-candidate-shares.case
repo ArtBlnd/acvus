@@ -1,4 +1,4 @@
-//@ spec: l.252, l.335
+//@ spec: l.245, l.321
 // Both candidates write bool at the result and no variable there, so the use
 // records the result before it is decided, and that its result is no
 // reference.

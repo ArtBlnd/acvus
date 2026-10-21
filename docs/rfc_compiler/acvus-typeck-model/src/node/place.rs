@@ -1,4 +1,4 @@
-//! Places (l.303–321): what a lend's place, a projection's operand and a
+//! Places (l.289–307): what a lend's place, a projection's operand and a
 //! binding's path read as, and the reference a lend gives.
 
 use std::collections::BTreeSet;
@@ -11,7 +11,7 @@ use crate::relation::{Recorder, Relation};
 use crate::solve::State;
 use crate::ty::{HasTerm, Mutability, Name, Term};
 
-/// What a class reads as in a value read (l.267, l.307): its value there, and
+/// What a class reads as in a value read (l.260, l.293): its value there, and
 /// so none where it reads as no reference or as nothing, and a reference, of
 /// its mutability where the value read decides one.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -23,7 +23,7 @@ pub struct AsReference {
 
 use super::{Decision, LendTarget, NodeAt};
 
-/// The lesser of two mutabilities, where either may be undecided (l.307).
+/// The lesser of two mutabilities, where either may be undecided (l.293).
 pub(super) fn lesser(a: Option<Mutability>, b: Option<Mutability>) -> Option<Mutability> {
     match (a, b) {
         (Some(Mutability::Shared), _) | (_, Some(Mutability::Shared)) => Some(Mutability::Shared),
@@ -34,7 +34,7 @@ pub(super) fn lesser(a: Option<Mutability>, b: Option<Mutability>) -> Option<Mut
 
 impl Projection {
     /// The kind the projection gives the class it applies to, naming `part`
-    /// (l.153–159).
+    /// (l.146–152).
     pub(super) fn fact(&self, part: ClassId) -> Fact {
         match self {
             Projection::Deref => Fact::Ref(part),
@@ -53,10 +53,10 @@ impl Projection {
 impl State {
     /// What the class reads as in the value read leaving out `excluded`: none
     /// where it reads as no reference or as nothing, and a reference, of its
-    /// mutability where the value read decides one (l.267, l.307). Where the
+    /// mutability where the value read decides one (l.260, l.293). Where the
     /// value read decides no constructor, a use's record that a class it
     /// reaches by lower bounds is a reference still reads as a reference
-    /// (l.252).
+    /// (l.245).
     pub(super) fn reads_as_reference(&self, id: ClassId, excluded: &BTreeSet<Name>) -> AsReference {
         let read = self.read_state(excluded);
         let value = read.read_value(id);
@@ -73,7 +73,7 @@ impl State {
     }
 
     /// Whether a use recorded that the class, or one it reaches by lower
-    /// bounds, is a reference (l.252).
+    /// bounds, is a reference (l.245).
     pub(super) fn recorded_as_reference(&self, id: ClassId) -> bool {
         let mut seen = BTreeSet::from([self.root(id)]);
         let mut work = vec![self.root(id)];
@@ -91,7 +91,7 @@ impl State {
     }
 
     /// Whether the projections on a binding's path pass a reference, after its
-    /// last Deref, which matches a reference itself (l.317, patterns §1), and
+    /// last Deref, which matches a reference itself (l.303, patterns §1), and
     /// the least of their mutabilities where decided. A projection not yet
     /// decided has passed none.
     pub(super) fn passed(&self, path: &[Name]) -> Option<Option<Mutability>> {
@@ -113,7 +113,7 @@ impl State {
     }
 
     /// The reference a lend gives, of `mutability`, to `place` or to its
-    /// target (l.307), the relations it records kept in `recorded`.
+    /// target (l.293), the relations it records kept in `recorded`.
     pub(super) fn lend<F>(
         &mut self,
         mutability: Mutability,

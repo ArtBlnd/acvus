@@ -1,4 +1,4 @@
-//@ spec: Example 14, l.571–596
+//@ spec: Example 14, l.555–580
 //@ hole: H6
 // struct Pair { l, r }
 // impl Pair {
@@ -12,7 +12,7 @@
 // Its states are too many to explore, so the orders are sampled. Refused, as the
 // spec has it, but where q has no value (holes.md, H6): the copy of nest's A is
 // q's first part, whose lower bounds are &str and Pair<A', B'>, so it reaches a
-// part of its own (l.275).
+// part of its own (l.268).
 //@ orders: sampled 200
 struct Pair { l, r }
 extern fn core::eq(&u8, &u8) -> bool;
@@ -110,8 +110,8 @@ assert refused infinite;
 assert `nest@23/n == 0` == core::eq#1;
 assert `nest@23/n - 1` == core::sub#1;
 
-// Example 14's text has q be Pair<&str, u8> (l.590), refused at the copy of
-// nest's C (l.596).
+// Example 14's text has q be Pair<&str, u8> (l.574), refused at the copy of
+// nest's C (l.580).
 wanted {
     must fail;
     assert q: Pair<&str, u8>;

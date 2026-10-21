@@ -1,4 +1,4 @@
-//@ spec: l.297–299
+//@ spec: l.283–285
 // ?k has no source; once nothing is left to solve it falls back to !.
 //@ order: solve A, fallback
 let A;

@@ -41,23 +41,23 @@ The primitives, each assuming only those before it:
 | Note | Primitive | Spec |
 |---|---|---|
 | 01 | Types: names, terms, constructors, members, parts, variance | l.39–74 |
-| 02 | Types in declarations: declared types, signatures, substitution and matching | l.54–55, l.64, l.331, l.354 |
-| 03 | Declarations and the cast tree: extern fns and impls by name, casts and views, conversions | l.76–78, l.112, l.331 |
-| 04 | Join and `≤` | l.80–97 |
-| 05 | Coercion and rank: LitVars, values a use reads, coercion, the steps of `≤`, rank | l.99–116, l.134, l.169, l.267, l.293, l.344 |
-| 06 | Equivalence classes: names, union-find, type variables, kinds | l.118–176 |
-| 07 | Relations and what records them | l.228–238 |
-| 08 | Uses, lends, projections and bindings | l.149–161, l.303–345 |
-| 09 | Binding groups, universals, C and instances | l.195–226, l.246, l.297–301 |
-| 10 | The dependency graph | l.240–271 |
-| 11 | Values and splits | l.273–293 |
-| 12 | Steps, state, fixpoint and fallback | l.295–301 |
+| 02 | Types in declarations: declared types, signatures, substitution and matching | l.54–55, l.64, l.317, l.340 |
+| 03 | Declarations and the cast tree: extern fns and impls by name, casts and views, conversions | l.76–78, l.105, l.317 |
+| 04 | Join and `≤` | l.80–90 |
+| 05 | Coercion and rank: LitVars, values a use reads, coercion, the steps of `≤`, rank | l.92–109, l.127, l.162, l.260, l.279, l.330 |
+| 06 | Equivalence classes: names, union-find, type variables, kinds | l.111–169 |
+| 07 | Relations and what records them | l.221–231 |
+| 08 | Uses, lends, projections and bindings | l.142–154, l.289–331 |
+| 09 | Binding groups, universals, C and instances | l.188–219, l.239, l.283–287 |
+| 10 | The dependency graph | l.233–264 |
+| 11 | Values and splits | l.266–279 |
+| 12 | Steps, state, fixpoint and fallback | l.281–287 |
 | 13 | Outcome and exploration | I2, I3 |
-| 14 | The certificate and its checker | l.226–238, l.293, l.301 |
-| 15 | I\* | l.244–269, `docs/notes/typeck-pivot.md` §1–2 |
-| 16 | Inputs up to a size (draft) | l.226–238, l.303–321 |
-| 17 | The captured environment | l.203, l.210–226, functions §2 |
-| 18 | Own relations first, invariant points last (draft) | l.228, l.240–301, l.344 |
+| 14 | The certificate and its checker | l.219–231, l.279, l.287 |
+| 15 | I\* | l.237–262, `docs/notes/typeck-pivot.md` §1–2 |
+| 16 | Inputs up to a size (draft) | l.219–231, l.289–307 |
+| 17 | The captured environment | l.196, l.203–219, functions §2 |
+| 18 | Own relations first, invariant points last (draft) | l.221, l.233–287, l.330 |
 | 19 | Cases and their runner, and the phases' reports | I2, I3, I4, notes 13–15 |
 
 Writing a note may change the notes after it.

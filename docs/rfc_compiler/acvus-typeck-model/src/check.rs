@@ -1,4 +1,4 @@
-//! Checks and acceptance (l.291, l.293, l.301): each value the text makes
+//! Checks and acceptance (l.277, l.279, l.287): each value the text makes
 //! enter a type checked once everything is solved, the places where a
 //! definition gives no result, and what solving decides (I3).
 
@@ -12,14 +12,14 @@ use crate::relation::{Named, Relation};
 use crate::solve::State;
 use crate::ty::{Name, Ty};
 
-/// Where a definition gives no result (l.301).
+/// Where a definition gives no result (l.287).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Refusal {
     /// No type holds what a relation made one equivalence class hold.
     Conflict { at: String, conflict: String },
     /// The types an equivalence class's sources give have no join.
     NoJoin(ClassName),
-    /// The equivalence class reaches a part of its own (l.275).
+    /// The equivalence class reaches a part of its own (l.268).
     Infinite(ClassName),
     /// The equivalence class has no value once solving ends.
     NoValue(ClassName),
@@ -28,7 +28,7 @@ pub enum Refusal {
 }
 
 /// A relation an entering value is checked by once everything is solved
-/// (l.291, l.293), with the coercion that changes it.
+/// (l.277, l.279), with the coercion that changes it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Check {
     pub relation: String,
@@ -61,7 +61,7 @@ impl State {
         refusal
     }
 
-    /// Checks each value the text makes enter a type (l.293), in the order of
+    /// Checks each value the text makes enter a type (l.279), in the order of
     /// their relations' names, which no order of solving changes (I3).
     fn checks(&self) -> Vec<Check> {
         let mut checks = Vec::new();
@@ -148,7 +148,7 @@ impl State {
     /// decided at its fixpoint: the values of its text's classes, its decided
     /// nodes, its checks of values entering classes it solved, and its
     /// refusals. Its classes and nodes left in C need no value and no decision
-    /// there (l.301).
+    /// there (l.287).
     pub fn outcome_with(&self, groups: &BTreeMap<Name, Rc<State>>) -> Outcome {
         let mut outcome = self.outcome();
         for group in groups.values() {

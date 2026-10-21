@@ -1,4 +1,4 @@
-//@ spec: Example 8, l.466–490
+//@ spec: Example 8, l.450–474
 // if let Ok(v) = Some(1u8) { }
 let S;
 let `Some(1u8)`: Option<S>;

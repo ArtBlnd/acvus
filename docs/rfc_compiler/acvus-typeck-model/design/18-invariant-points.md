@@ -1,8 +1,8 @@
 # 18 Own relations first, invariant points last (draft)
 
-Rests on the spec's l.74 (variance), l.86 (join), l.169 and l.176 (LitVars), l.218
-(decided), l.226–238 (meeting, boundary, recording), l.240–271 (dependency),
-l.273–293 (value), l.295–301 (fixpoint, fallback, acceptance) and l.335–344
+Rests on the spec's l.74 (variance), l.86 (join), l.162 and l.169 (LitVars), l.211
+(decided), l.219–231 (meeting, boundary, recording), l.233–264 (dependency),
+l.266–279 (value), l.281–287 (fixpoint, fallback, acceptance) and l.321–330
 (overload resolution); on `holes.md`, H3, H7 and O2; and on notes 08, 10, 14 and 15.
 Its direction was agreed with 준량 on 2026-10-21: a type a declaration writes reaches
 a class backward only where nothing else types it, since otherwise "함수 하나를
@@ -18,13 +18,13 @@ reading, `InvariantPoints::Last`, beside the spec as stated,
 
 ## Meaning
 
-The spec records every relation as a source as soon as it is given (l.228). A type
+The spec records every relation as a source as soon as it is given (l.221). A type
 a declaration writes for a parameter then reaches the class of the argument passed
-into it backward, through an invariant part (l.289) and through a LitVar (l.291),
-and the equation it gives decides that class (l.279) even against what the text
+into it backward, through an invariant part (l.277) and through a LitVar (l.277),
+and the equation it gives decides that class (l.272) even against what the text
 gives it, which a conversion then reaches (Example 3). So every node at whose
 position a class lies may change what another node reads there: two uses that read
-one class depend on each other, and l.269 has each read without the other (H7;
+one class depend on each other, and l.262 has each read without the other (H7;
 Example 12's `x + y` and `y + 1`); and the order in which they are decided decides
 the outcome wherever a reading leaves such a node out (`n(x); m(x)` under the
 removed `Recording::Relation`, below).
@@ -37,63 +37,63 @@ once nothing else can be solved, and then only as the one type that fits.
 
 - An **invariant point** of a class `α` is an equation that an invariant part of a
   boundary `β ⇝ U` gives between `α`, a part of `β`, and the part of `U` there,
-  where that part is decided, a type the text or a declaration writes (l.218,
-  l.289); and `?N ⇝ U`, at the boundary or at any part of it, where `?N` is `α`'s
-  LitVar and `U` is decided (l.291). A decided use gives the invariant points of
+  where that part is decided, a type the text or a declaration writes (l.211,
+  l.277); and `?N ⇝ U`, at the boundary or at any part of it, where `?N` is `α`'s
+  LitVar and `U` is decided (l.277). A decided use gives the invariant points of
   its candidate, and an undecided one those of each of its candidates (note 08,
   reading 13). Where `α` takes its constructor from its own relations, an invariant
-  point of it relates its parts instead, as an equation does (l.165): an own
+  point of it relates its parts instead, as an equation does (l.158): an own
   equation where the part of `U` is an unknown, an invariant point where it is
   decided.
 - A class's **own relations** are every relation into it but its invariant points:
   its lower bounds, decided ones among them (a use's result, a value the text
-  writes), and what their parts give when split (l.284–289); the text's equations
-  (l.236), and those an invariant part of a boundary gives with an unknown
+  writes), and what their parts give when split (l.277); the text's equations
+  (l.229), and those an invariant part of a boundary gives with an unknown
   (`push`'s `&mut Vec⟨T⟩`); kinds; and LitVars.
 - A class is **own-solved** where its own relations give it its constructor
-  (l.275).
+  (l.268).
 - A node **waits for** a class that is not own-solved, has invariant points, and
   has not yet been through row 3, where what it reads there is not decided by
   then: a use whose read leaves several candidates because of that class's
   position, and a lend, a projection or a binding where it reads whether the class
-  is a reference (l.267), unless a use has recorded that at once (l.252).
+  is a reference (l.260), unless a use has recorded that at once (l.245).
 
 ## Rows
 
-1. **Recording.** Every relation is recorded as it is given (l.228). An invariant
+1. **Recording.** Every relation is recorded as it is given (l.221). An invariant
    point is a check, not a source: it gives no class a value, and its equation is
    not recorded, until row 3 applies it.
 2. **The own fixpoint.** Classes are solved, and nodes decided, as the spec states
-   (l.240–293), by own relations alone. A class depends on a node at whose position
-   it lies (l.244 (b)), and a node on the nodes that record into the classes it
-   reads (l.247, l.250), only where that node may record an own relation into it.
-   Joins raise by casts (l.86), and a coercion, a conversion among them (l.293),
+   (l.233–279), by own relations alone. A class depends on a node at whose position
+   it lies (l.237 (b)), and a node on the nodes that record into the classes it
+   reads (l.240, l.243), only where that node may record an own relation into it.
+   Joins raise by casts (l.86), and a coercion, a conversion among them (l.279),
    reaches only a class that is own-solved. A node that waits for a class is not
    decided. Where several candidates remain only because of a LitVar whose class
-   has no invariant point, l.344 holds as stated.
+   has no invariant point, l.330 holds as stated.
 3. **The invariant rule.** At each binding group's fixpoint, every class that is
    not own-solved, has invariant points, and has no unbroken dependency, in the
    graph of row 2 with an edge from each node to each class it waits for, is taken
    at once, from one state. Its candidates are the types its invariant points
    give, and of them it takes those that fit it, by its kind and its LitVar's
-   family and values (l.169). Of these steps, the first that applies to some class
+   family and values (l.162). Of these steps, the first that applies to some class
    is taken, and row 2 resumes:
    1. each class that exactly one candidate fits is unified with it;
    2. each class with a LitVar that several fit, its family's default among them,
-      takes the default (l.344, moved here);
+      takes the default (l.330, moved here);
    3. each class that several fit is refused there, ambiguous.
 
    A class that no candidate fits is not taken, and is left to fallback. A class
    with a dependency on a universal is not taken: it stays in C, and is taken in
-   each instance (l.219, l.222).
-4. **Fallback.** At the run only, once row 3 takes nothing, as l.299 states; then
+   each instance (l.212, l.215).
+4. **Fallback.** At the run only, once row 3 takes nothing, as l.285 states; then
    rows 2 and 3 resume.
 5. **What reaches a class row 3 typed.** Its type itself, or `!`: a value that
-   enters it afterwards reaches it as it is, or is `!` (l.112), and no other row of
+   enters it afterwards reaches it as it is, or is `!` (l.105), and no other row of
    the Coercion table reaches it.
 
 Every invariant point is checked once everything is solved. Where its class was
-own-solved, it is checked as part of the boundary it lies in, by coercion (l.293).
+own-solved, it is checked as part of the boundary it lies in, by coercion (l.279).
 
 What each row excludes:
 
@@ -113,7 +113,7 @@ What each row excludes:
   node (P9 below).
 
 The edge from a node to a class it waits for exists only for row 3: the node's own
-waiting is not broken by l.269. In Example 13, `parse` waits for `R`, and `R`
+waiting is not broken by l.262. In Example 13, `parse` waits for `R`, and `R`
 depends on `parse`, whose result is an own relation of it; each is in the other's
 component, so `R` has no unbroken dependency and row 3 types it `Vec⟨u8⟩`, and
 `parse` then reads that. Were `R` typed while `parse` waited on another class
@@ -139,8 +139,8 @@ default taken with `W`, `X` would be `i32`, and `g` refused.
   give it none, and only as the one type that fits. Adding a declaration changes a
   type row 3 gives only into a refusal, but where the candidate added is a LitVar
   family's default (P7 below).
-- **Soundness.** Every invariant point is checked (l.293), and every program accepted
-  has every class typed and every node decided (l.301).
+- **Soundness.** Every invariant point is checked (l.279), and every program accepted
+  has every class typed and every node decided (l.287).
 
 ## What it omits
 
@@ -156,12 +156,12 @@ default taken with `W`, `X` would be `i32`, and `g` refused.
 
 ## What it changes in the spec
 
-- l.228, l.279, l.289, l.291: an invariant point is no source until row 3.
-- l.244 (b), l.247, l.250: the nodes that record into a class are those that may
+- l.221, l.272, l.277, l.277: an invariant point is no source until row 3.
+- l.237 (b), l.240, l.243: the nodes that record into a class are those that may
   record an own relation into it.
-- l.293: a coercion reaches only an own-solved class.
-- l.297–299: row 3 at every group's fixpoint, before fallback.
-- l.344: a LitVar's default among several candidates is taken in row 3.
+- l.279: a coercion reaches only an own-solved class.
+- l.283–285: row 3 at every group's fixpoint, before fallback.
+- l.330: a LitVar's default among several candidates is taken in row 3.
 - Example 3: refused with the conversion as without it.
 - `holes.md`, H3: `take(&v)` with `v: Vec⟨u8⟩` is accepted, the boundary
   `&Vec⟨u8⟩ ⇝ &[u8]` reached by the view cast. `V` is own-solved by `make()`, so the
@@ -172,18 +172,18 @@ default taken with `W`, `X` would be `i32`, and `g` refused.
 - `holes.md`, H7 and Example 12: what `probe` records into `X`, and what `x + y`
   records into `Y`, are invariant points, so neither `x + y` and `probe`, nor
   `x + y` and `y + 1`, depend on each other. A node that reads its own result
-  through a class, `x + y` through `X`, still leaves its own relations out (l.267).
+  through a class, `x + y` through `X`, still leaves its own relations out (l.260).
 - The reading `Recording::Relation`, removed, approximated row 2's dependency
-  under the spec as stated, but left out what l.291 makes a boundary record into a
+  under the spec as stated, but left out what l.277 makes a boundary record into a
   LitVar's class: `let x = 0; n(x); m(x);` with `n(u8)`, `n(u16)`, `m(u16)`,
   `m(&str)` reached two outcomes under it, `n(u16)` accepted and `n` refused, and
   one by position, `n` refused, I\* reporting completeness at `n`.
-- Note 08, readings 11, 15 and 18; note 10, its rows of l.244 (b) and l.247–250.
+- Note 08, readings 11, 15 and 18; note 10, its rows of l.237 (b) and l.240–243.
 - Note 14: an invariant point is a check of its boundary, and a row for row 3: each
   class row 3 typed has, among the types its invariant points give at the end,
   exactly that type fitting it, or several of a LitVar's family with that type its
   default.
-- Note 15: "what a node records into" reads l.250 by relation; under this reading
+- Note 15: "what a node records into" reads l.243 by relation; under this reading
   it is own relations, as row 2 has it. Row 3 decides classes, which
   I\* does not decide again (note 15, Not covered), so I\* reporting nothing is
   weaker evidence here than for nodes.

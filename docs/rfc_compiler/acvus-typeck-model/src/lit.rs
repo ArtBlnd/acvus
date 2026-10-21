@@ -1,5 +1,5 @@
 //! A literal's type: a LitVar `?N`, `N` the literal values it holds, of the
-//! integer or the float family (l.134, l.169–170, l.299).
+//! integer or the float family (l.127, l.162–163, l.285).
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -57,7 +57,7 @@ impl LitVar {
         &self.values
     }
 
-    /// `?(N ∪ M)`, where the two are of one family (l.170).
+    /// `?(N ∪ M)`, where the two are of one family (l.163).
     pub fn union(&self, other: &LitVar) -> Option<LitVar> {
         (self.family == other.family).then(|| LitVar {
             family: self.family,
@@ -65,12 +65,12 @@ impl LitVar {
         })
     }
 
-    /// Whether `scalar` is of this family and holds every value in `N` (l.169).
+    /// Whether `scalar` is of this family and holds every value in `N` (l.162).
     pub fn admits(&self, scalar: Scalar) -> bool {
         self.values.iter().all(|&literal| holds(scalar, literal))
     }
 
-    /// The family's default (l.299).
+    /// The family's default (l.285).
     pub fn default_scalar(&self) -> Scalar {
         match self.family {
             Family::Int => Scalar::Int(IntTy::I32),
@@ -79,7 +79,7 @@ impl LitVar {
     }
 }
 
-/// `?{n, …}: int` or `?{x, …}: float`, as l.134 writes a LitVar.
+/// `?{n, …}: int` or `?{x, …}: float`, as l.127 writes a LitVar.
 impl fmt::Display for LitVar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("?{")?;

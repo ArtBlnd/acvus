@@ -1,7 +1,7 @@
-//@ spec: Example 12, l.539–557, followed by probe(x)
+//@ spec: Example 12, l.523–541, followed by probe(x)
 //@ hole: H7
 // probe and x + y both read X, each lying at a position the other reads, so
-// each breaks its dependency on the other (l.250, l.269), and probe reads X
+// each breaks its dependency on the other (l.243, l.262), and probe reads X
 // without x + y's relations, as ?a alone, takes the default i32, and is
 // refused in every order.
 extern fn core::add(&u8, &u8) -> u8;

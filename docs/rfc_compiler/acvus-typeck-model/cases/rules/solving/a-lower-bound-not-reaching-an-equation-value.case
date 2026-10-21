@@ -1,11 +1,11 @@
-//@ spec: l.293, l.301; Example 3, l.391–405, without the conversion
+//@ spec: l.279, l.287; Example 3, l.376–390, without the conversion
 // let mut buf = Vec::new();
 // push(&mut buf, 1u16);    // push(&mut Vec<T>, T)
 // consume(buf);            // consume(Vec<u8>)
 // push's T is an unknown that 1u16 meets, T ≥ u16; the two invariant arguments
-// make T's value the u8 the equations give (l.279). The lower bound u16 does
-// not reach u8 by ≤, so it must reach it by a coercion (l.293), and none goes
-// from u16 to u8: refused at that lower bound (l.301).
+// make T's value the u8 the equations give (l.272). The lower bound u16 does
+// not reach u8 by ≤, so it must reach it by a coercion (l.279), and none goes
+// from u16 to u8: refused at that lower bound (l.287).
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 extern fn push<T>(&mut Vec<T>, T);

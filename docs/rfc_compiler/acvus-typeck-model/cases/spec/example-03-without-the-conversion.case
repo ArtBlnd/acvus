@@ -1,4 +1,4 @@
-//@ spec: Example 3, l.391–405, without the conversion
+//@ spec: Example 3, l.376–390, without the conversion
 // let mut buf = Vec::new();
 // push(&mut buf, 1u16);    // push(&mut Vec<T>, T)
 // consume(buf);            // consume(Vec<u8>)

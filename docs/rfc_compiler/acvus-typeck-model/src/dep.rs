@@ -1,7 +1,7 @@
-//! The dependency graph (l.240–271): its nodes are the equivalence classes
+//! The dependency graph (l.233–264): its nodes are the equivalence classes
 //! of the moment and the uses and lends, and its edges the dependencies the
-//! rows of l.242–248 give. A dependency within a strongly connected component
-//! is broken (l.269), so the unbroken ones have no cycle (l.271).
+//! rows of l.235–241 give. A dependency within a strongly connected component
+//! is broken (l.262), so the unbroken ones have no cycle (l.264).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,28 +16,28 @@ pub(crate) enum Vertex {
     Class(ClassId),
     Node(Name),
     /// The use that chooses a universal, which lies outside the binding group
-    /// and is never decided in it (l.246).
+    /// and is never decided in it (l.239).
     Outside,
 }
 
-/// A dependency (l.244–248).
+/// A dependency (l.237–241).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Edge {
     /// An equivalence class on an unsolved lower bound.
     Lower,
     /// An equivalence class on one whose taking a constructor records
     /// relations into it: it lies within the `τ` of a lower bound `τ ≤ α`, or
-    /// within the `U` of a boundary `α ⇝ U`, `α` unsolved (l.244 (a)).
+    /// within the `U` of a boundary `α ⇝ U`, `α` unsolved (l.237 (a)).
     Taking,
     /// An equivalence class on an undecided node at whose position it lies,
-    /// or within the depth its candidates reach (l.244 (b)).
+    /// or within the depth its candidates reach (l.237 (b)).
     Records,
     /// A node on an undecided node that records relations into the classes at
-    /// the positions it reads (l.247–248).
+    /// the positions it reads (l.240–241).
     Reads,
     /// A binding on an undecided projection on its path (`holes.md`, O1).
     Path,
-    /// A universal on the use that chooses it (l.246).
+    /// A universal on the use that chooses it (l.239).
     Chosen,
 }
 
@@ -65,7 +65,7 @@ impl Graph {
         edge && self.component.get(from) == self.component.get(to)
     }
 
-    /// The vertices that reach `to` (l.269).
+    /// The vertices that reach `to` (l.262).
     fn reaching(&self, to: &Vertex) -> BTreeSet<Vertex> {
         let mut reaching = BTreeSet::new();
         let mut work = vec![to.clone()];
@@ -138,7 +138,7 @@ impl State {
                 }
             }
         }
-        // The nodes that record into a class (l.250), each with the class at
+        // The nodes that record into a class (l.243), each with the class at
         // whose position it lies.
         let recording = |class: ClassId, edges: &BTreeMap<Vertex, BTreeSet<(Vertex, Edge)>>| {
             let mut classes = BTreeSet::from([self.root(class)]);
@@ -216,7 +216,7 @@ impl State {
         seen
     }
 
-    /// The undecided nodes that broke their dependency on the node (l.269).
+    /// The undecided nodes that broke their dependency on the node (l.262).
     pub(crate) fn broken_on(&self, name: &Name) -> BTreeSet<Name> {
         let graph = self.graph();
         let node = Vertex::Node(name.clone());
@@ -229,7 +229,7 @@ impl State {
     }
 
     /// The nodes whose relations the value a node reads leaves out: itself
-    /// and those that transitively depend on it (l.267).
+    /// and those that transitively depend on it (l.260).
     pub(crate) fn dependents(&self, name: &Name) -> BTreeSet<Name> {
         let node = Vertex::Node(name.clone());
         let mut excluded: BTreeSet<Name> = self
@@ -264,7 +264,7 @@ impl State {
     }
 
     /// The unsolved equivalence classes holding only a LitVar that wait for
-    /// nothing. Joined, a LitVar is unified (l.176), so such a lower bound
+    /// nothing. Joined, a LitVar is unified (l.169), so such a lower bound
     /// gives its LitVar and is not waited for.
     pub(crate) fn settled(&self) -> BTreeSet<ClassId> {
         self.settled_in(&self.graph())
@@ -293,7 +293,7 @@ impl State {
     }
 
     /// The unsolved equivalence classes whose unbroken dependencies are all
-    /// solved, settled, or give nothing (l.275).
+    /// solved, settled, or give nothing (l.268).
     pub(crate) fn unblocked(&self, graph: &Graph, settled: &BTreeSet<ClassId>) -> Vec<ClassId> {
         self.classes
             .roots()
@@ -335,7 +335,7 @@ impl State {
         (classes, nodes)
     }
 
-    /// The unbroken dependencies of `from` not yet met (l.244–250, l.269):
+    /// The unbroken dependencies of `from` not yet met (l.237–243, l.262):
     /// what an equivalence class or a node still waits for, as a traced order
     /// prints it (`design/19-cases.md`, `TRACE=1`). A class that waits for
     /// nothing is unblocked, and a node that waits for nothing may be decided.
