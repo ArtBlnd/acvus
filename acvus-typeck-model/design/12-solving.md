@@ -1,6 +1,7 @@
 # 12 Steps, state, fixpoint and fallback
 
-Rests on the spec's l.295–301. The code is `src/solve.rs`.
+Rests on the spec's l.295–301. The code is `src/solve.rs`, which composes the
+steps, fallback in `src/fallback.rs`, and acceptance in `src/check.rs`.
 
 ## Meaning
 
@@ -24,6 +25,6 @@ value, and a boundary by a coercion (l.293).
 
 ## Left open for change
 
-- `State::splits_now`: when a lower bound's or a boundary's parts are related
-  (l.284; `holes.md`, T2). What they are related by is `State::split_parts`
-  (`holes.md`, H3, H4).
+- `State::splits_now` in `src/split.rs`: when a lower bound's or a boundary's
+  parts are related (l.284; `holes.md`, T2). What they are related by is
+  `State::split_parts` (`holes.md`, H3, H4).

@@ -1,7 +1,7 @@
 # 13 Outcome and exploration
 
 Rests on the crate's I2 and I3. The code is `src/explore.rs` and `Outcome` in
-`src/solve.rs`.
+`src/check.rs`.
 
 ## Meaning
 

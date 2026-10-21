@@ -3,7 +3,8 @@
 Rests on the spec's l.195–226 (instances, binding groups, meeting and boundary),
 l.246 (a universal's dependency) and l.297–301 (fixpoint, fallback, acceptance).
 The code is `src/program.rs` (groups and functions), `src/instance.rs`,
-`State::of_group` and `State::call` in `src/solve.rs`, and `src/explore.rs`.
+`State::of_group` in `src/solve.rs`, `State::call` in `src/record.rs`, and
+`src/explore.rs`.
 Passing a function value across a boundary into a given function type (l.204),
 the facts other than Values, and a receiver's adjustments (l.333) are not yet
 encoded.

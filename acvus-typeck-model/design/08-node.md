@@ -3,7 +3,10 @@
 Rests on the spec's l.303–345 (place, lends, patterns, structs, overload
 resolution), with l.149–161 (projections), l.267 (what a node reads) and l.252 (a
 use's record of whether a class is a reference), l.269 (what a broken dependency
-defers) and l.335 (what all candidates share). The code is `src/node.rs`.
+defers) and l.335 (what all candidates share). The code is `src/node/`: what each
+node is, its decision and what it records once decided in `mod.rs`, its positions
+and what it reads in `position.rs`, places in `place.rs`, overload resolution in
+`overload.rs`, and what an undecided use's candidates share in `shared.rs`.
 
 ## Meaning
 

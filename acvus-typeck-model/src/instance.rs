@@ -242,15 +242,3 @@ impl<'a> Instance<'a> {
         });
     }
 }
-
-impl State {
-    /// A class made anew that holds the closed type `ty`, written.
-    pub(crate) fn closed(&mut self, name: ClassName, ty: &Ty, recorder: &Recorder) -> ClassId {
-        let shared = Rc::new(name.clone());
-        let term = ty
-            .term()
-            .clone()
-            .map(|key, part| self.closed(ClassName::Part(shared.clone(), key), &part, recorder));
-        self.written(name, term, recorder)
-    }
-}

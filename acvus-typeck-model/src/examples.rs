@@ -8,11 +8,11 @@ use crate::istar::Kind;
 use crate::node::{Decision, LendTarget};
 use std::collections::BTreeSet;
 
+use crate::check::Outcome;
 use crate::program::{
     BindingPath, Captures, Deferral, Program, ProgramBuilder, Projection, Readings,
 };
 use crate::sig::{DeclaredTypes, ExternDecl, SigTy, SigVar, Signature};
-use crate::solve::Outcome;
 use crate::ty::{IntTy, Mutability, Name, Scalar, Term, Ty};
 
 const BUDGET: usize = 100_000;
@@ -284,7 +284,7 @@ fn example_5_a_lower_bound_reaching_a_part_of_its_own() {
         outcome
             .refusals
             .iter()
-            .any(|refusal| matches!(refusal, crate::solve::Refusal::Infinite(_))),
+            .any(|refusal| matches!(refusal, crate::check::Refusal::Infinite(_))),
         "{outcome:#?}"
     );
 }
@@ -591,7 +591,7 @@ fn object(fields: &[(&str, Ty)]) -> Ty {
 
 fn has_refusal<F>(outcome: &Outcome, which: F) -> bool
 where
-    F: Fn(&crate::solve::Refusal) -> bool,
+    F: Fn(&crate::check::Refusal) -> bool,
 {
     outcome.refusals.iter().any(which)
 }
@@ -670,7 +670,7 @@ fn example_8_a_field_of_a_type_the_host_gives() {
     assert!(
         has_refusal(&outcome, |refusal| matches!(
             refusal,
-            crate::solve::Refusal::Conflict { .. }
+            crate::check::Refusal::Conflict { .. }
         )),
         "{outcome:#?}"
     );
@@ -693,7 +693,7 @@ fn example_8_a_variant_the_language_writes() {
     assert!(
         has_refusal(&outcome, |refusal| matches!(
             refusal,
-            crate::solve::Refusal::Conflict { .. }
+            crate::check::Refusal::Conflict { .. }
         )),
         "{outcome:#?}"
     );
@@ -909,7 +909,7 @@ fn hole_t6_a_pattern_on_a_scrutinee_of_type_never() {
     assert!(
         has_refusal(&outcome, |refusal| matches!(
             refusal,
-            crate::solve::Refusal::Conflict { at, .. } if at.contains("N")
+            crate::check::Refusal::Conflict { at, .. } if at.contains("N")
         )),
         "{outcome:#?}"
     );
@@ -1443,7 +1443,7 @@ fn example_6_called_with_two_types() {
     assert!(
         has_refusal(&outcome, |refusal| matches!(
             refusal,
-            crate::solve::Refusal::NoJoin(_)
+            crate::check::Refusal::NoJoin(_)
         )),
         "{outcome:#?}"
     );
@@ -2134,7 +2134,7 @@ fn example_14_a_struct_and_recursion_that_grows() {
     assert!(
         has_refusal(&outcome, |refusal| matches!(
             refusal,
-            crate::solve::Refusal::Infinite(_)
+            crate::check::Refusal::Infinite(_)
         )),
         "{outcome:#?}"
     );

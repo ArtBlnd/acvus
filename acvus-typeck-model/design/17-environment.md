@@ -12,7 +12,7 @@ has one type; values meeting through a chain of slots are of one type); and on
 `Captures::AsStated`, the default, so that both run on the same witnesses. The code
 is `Program::cut_environments` and `Program::owner`, `Program::item_group` and
 `Program::is_universal` in `src/program.rs`, `State::positions` and
-`State::environment_of` in `src/node.rs`, and the certificate's contexts and
+`State::environment_of` in `src/node/position.rs`, and the certificate's contexts and
 `call_value` in `src/certificate.rs`.
 
 ## Meaning

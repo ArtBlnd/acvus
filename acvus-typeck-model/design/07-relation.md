@@ -1,7 +1,8 @@
 # 07 Relations and what records them
 
 Rests on the spec's l.228–238 (recording), with l.267 (a value read leaves out the
-relations some nodes record). The code is `src/relation.rs`.
+relations some nodes record). The code is `src/relation.rs`, and what the text
+records, `src/record.rs`.
 
 ## Meaning
 

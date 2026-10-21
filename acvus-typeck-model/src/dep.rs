@@ -277,7 +277,7 @@ impl State {
         self.settled_in(&self.graph())
     }
 
-    fn settled_in(&self, graph: &Graph) -> BTreeSet<ClassId> {
+    pub(crate) fn settled_in(&self, graph: &Graph) -> BTreeSet<ClassId> {
         let mut settled = BTreeSet::new();
         loop {
             let more: Vec<ClassId> = self
@@ -301,7 +301,7 @@ impl State {
 
     /// The unsolved equivalence classes whose unbroken dependencies are all
     /// solved, settled, or give nothing (l.275).
-    fn unblocked(&self, graph: &Graph, settled: &BTreeSet<ClassId>) -> Vec<ClassId> {
+    pub(crate) fn unblocked(&self, graph: &Graph, settled: &BTreeSet<ClassId>) -> Vec<ClassId> {
         self.classes
             .roots()
             .filter(|&root| {
@@ -340,14 +340,6 @@ impl State {
             .cloned()
             .collect();
         (classes, nodes)
-    }
-
-    /// The equivalence classes to fall back once nothing is eligible: those
-    /// unblocked (l.299).
-    pub(crate) fn fallback_targets(&self) -> Vec<ClassId> {
-        let graph = self.graph();
-        let settled = self.settled_in(&graph);
-        self.unblocked(&graph, &settled)
     }
 
     fn has_work(&self, root: ClassId, graph: &Graph, settled: &BTreeSet<ClassId>) -> bool {

@@ -4,6 +4,7 @@
 //! crate is that text's, which its English text keeps.
 
 pub mod certificate;
+pub mod check;
 pub mod class;
 pub mod coerce;
 pub mod decl;
@@ -11,6 +12,7 @@ pub mod dep;
 #[cfg(test)]
 mod examples;
 pub mod explore;
+pub mod fallback;
 #[cfg(test)]
 mod fixture;
 pub mod instance;
@@ -20,8 +22,11 @@ pub mod lit;
 pub mod node;
 pub mod program;
 pub mod read;
+pub mod record;
 pub mod relation;
 pub mod sig;
 pub mod solve;
+pub mod split;
 pub mod ty;
+pub mod unify;
 pub mod value;

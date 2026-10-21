@@ -3,8 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use crate::check::Outcome;
 use crate::program::{ENTRY, Program};
-use crate::solve::{Outcome, State};
+use crate::solve::State;
 use crate::ty::Name;
 
 /// The outcomes every order of solving reaches.
@@ -217,5 +218,40 @@ impl Picks {
                 (self.state % steps as u64) as usize
             }
         }
+    }
+}
+
+impl State {
+    /// A text of the state that names classes as the outcome does, so that
+    /// two states reached apart compare by it.
+    pub fn fingerprint(&self) -> String {
+        let mut roots: Vec<String> = self
+            .classes
+            .roots()
+            .map(|root| {
+                let held = self.classes.held(root);
+                let kind = held.kind.as_ref().map(|(kind, source)| {
+                    let kind = kind.clone().map(|_, part| self.class_name(part));
+                    format!("{kind:?}/{source:?}")
+                });
+                format!(
+                    "{}:{kind:?}:{:?}:{}:{}",
+                    self.class_name(root),
+                    held.lit,
+                    held.solved,
+                    self.has_no_value(root),
+                )
+            })
+            .collect();
+        roots.sort();
+        let decisions: Vec<_> = self.nodes.values().map(|node| &node.decision).collect();
+        format!(
+            "{roots:?}|{}|{:?}|{:?}|{decisions:?}|{:?}|{:?}",
+            self.log.len(),
+            self.split,
+            self.refusals,
+            self.deferred,
+            self.broken,
+        )
     }
 }

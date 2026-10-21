@@ -1,8 +1,10 @@
 # 11 Values and splits
 
 Rests on the spec's l.267 (the value a node reads) and l.273–293 (values, splits
-and the checks of entering values). The code is `src/value.rs` and the splits in
-`src/solve.rs`.
+and the checks of entering values). The code is `src/value.rs`, the splits in
+`src/split.rs`, a kind "indexes `τ`" linked along a view in `src/unify.rs`, the
+state a value read is taken from in `src/solve.rs`, and the checks in
+`src/check.rs`.
 
 ## Meaning
 

@@ -3,7 +3,8 @@
 Rests on the spec's l.118–176 (equivalence classes, type variables, kinds,
 projections' kinds, unification and the join of a LitVar), with l.279 (a class
 "with an equation") and l.282 (a value meets the kind its class holds). The code is
-`src/class.rs`, and `src/class/tests.rs` exercises its contract.
+`src/class.rs`, and `src/class/tests.rs` exercises its contract; what a recorded
+relation gives the classes is `State::hold` in `src/unify.rs`.
 
 ## Meaning
 
