@@ -9,9 +9,7 @@ use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::decl::{Decls, Node};
 use crate::instance::{Instance, Made};
 use crate::node::{Decision, NodeKind, NodeState};
-use crate::program::{
-    ENTRY, Function, InvariantPoints, Item, Origin, Place, Program, Readings, TextClass,
-};
+use crate::program::{ENTRY, Function, Item, Origin, Place, Program, Readings, TextClass};
 use crate::relation::{Named, Recorded, Recorder, Relation};
 use crate::sig::SigTy;
 use crate::ty::{Mutability, Name, Term, Ty, Variance};
@@ -30,9 +28,6 @@ pub enum Refusal {
     NoValue(ClassName),
     /// A type the text writes disagrees with its declaration.
     Undeclared(String),
-    /// Several of the types the equivalence class's invariant points give
-    /// fit it (`design/18-invariant-points.md`, row 3).
-    Ambiguous(ClassName),
 }
 
 /// A relation an entering value is checked by once everything is solved
@@ -71,12 +66,6 @@ pub struct State {
     pub(crate) texts: Vec<ClassId>,
     /// The classes decided when solving starts, which are no unknowns (l.218).
     pub(crate) decided: BTreeSet<ClassId>,
-    /// The classes made to hold a type the text or a declaration writes in
-    /// full, with no unknown in it.
-    pub(crate) closed: BTreeSet<ClassId>,
-    /// The classes the invariant rule typed (`design/18-invariant-points.md`,
-    /// row 3).
-    pub(crate) ruled: BTreeSet<ClassId>,
     /// The lower bounds and boundaries, by their place in the log, whose
     /// parts are related.
     pub(crate) split: BTreeSet<usize>,
@@ -149,8 +138,6 @@ impl State {
             log: Vec::new(),
             texts: Vec::new(),
             decided: BTreeSet::new(),
-            closed: BTreeSet::new(),
-            ruled: BTreeSet::new(),
             split: BTreeSet::new(),
             no_value: BTreeSet::new(),
             refusals: BTreeSet::new(),
@@ -216,12 +203,6 @@ impl State {
             if program.universals.contains(&class.name) {
                 let id = state.text(&class.name);
                 state.universals.insert(id);
-            }
-        }
-        for class in &classes {
-            if program.is_closed(&class.name) {
-                let id = state.text(&class.name);
-                state.closed.insert(id);
             }
         }
         for class in &classes {
@@ -495,7 +476,6 @@ impl State {
         let types = decls.types();
         let given = match &relation {
             Relation::Equation(a, b) => self.classes.unify(*a, *b, types),
-            Relation::Invariant { .. } => Ok(()),
             Relation::Fact(class, fact) => self.classes.give_fact(*class, fact.clone(), types),
             Relation::Kind(class, term, source) => match types.check(term) {
                 Ok(()) => {
@@ -605,9 +585,7 @@ impl State {
         }
         if self.is_lit(root) {
             for to in self.boundaries_from(root) {
-                if !self.is_invariant_point_target(to) {
-                    self.record(Relation::Equation(root, to), Recorder::Split(root));
-                }
+                self.record(Relation::Equation(root, to), Recorder::Split(root));
             }
         }
         let root = self.root(root);
@@ -684,14 +662,6 @@ impl State {
                             self.split_parts(from, to, Side::Boundary, from);
                         }
                     }
-                    Relation::Invariant { class, closed } => {
-                        if self.root(class) == self.root(closed) {
-                            self.split.insert(i);
-                        } else if self.is_solved(class) {
-                            self.split.insert(i);
-                            self.relate_invariant_parts(class, closed);
-                        }
-                    }
                     Relation::Equation(..)
                     | Relation::Fact(..)
                     | Relation::Kind(..)
@@ -706,59 +676,6 @@ impl State {
                 return;
             }
         }
-    }
-
-    /// The invariant point of a class that took a constructor, related part
-    /// by part, each an invariant point again (`design/18-invariant-points.md`,
-    /// Definitions). Where the constructors differ, it relates none, and the
-    /// boundary it lies in fails its check (l.293).
-    fn relate_invariant_parts(&mut self, class: ClassId, closed: ClassId) {
-        let (Some((kind, _)), Some((closed_kind, _))) = (
-            self.classes.held(class).kind.clone(),
-            self.classes.held(closed).kind.clone(),
-        ) else {
-            return;
-        };
-        if kind.constructor() != closed_kind.constructor()
-            || kind.members() != closed_kind.members()
-        {
-            return;
-        }
-        for ((_, part), (_, closed_part)) in kind.parts().into_iter().zip(closed_kind.parts()) {
-            let relation = Relation::Invariant {
-                class: *part,
-                closed: *closed_part,
-            };
-            self.record(relation, Recorder::Split(class));
-        }
-    }
-
-    /// Whether the reading keeps invariant points as checks until the
-    /// invariant rule (`design/18-invariant-points.md`).
-    pub(crate) fn keeps_invariant_points(&self) -> bool {
-        self.readings.invariant_points == InvariantPoints::Last
-    }
-
-    /// Whether an equation with the class, at an invariant part of a
-    /// boundary or by a LitVar's boundary into it (l.289, l.291), is an
-    /// invariant point: the class holds a closed type the text or a
-    /// declaration writes, and the reading keeps such points as checks.
-    pub(crate) fn is_invariant_point_target(&self, id: ClassId) -> bool {
-        self.keeps_invariant_points()
-            && self
-                .classes
-                .held(id)
-                .members
-                .iter()
-                .any(|member| self.closed.contains(member))
-    }
-
-    pub(crate) fn is_ruled(&self, id: ClassId) -> bool {
-        self.classes
-            .held(id)
-            .members
-            .iter()
-            .any(|member| self.ruled.contains(member))
     }
 
     /// Whether the parts of a lower bound's or a boundary's two sides are
@@ -919,14 +836,6 @@ impl State {
                     continue;
                 };
                 let relation = match (variance, side) {
-                    (Variance::Invariant, Side::Boundary)
-                        if self.is_invariant_point_target(to_part) =>
-                    {
-                        Relation::Invariant {
-                            class: *from_part,
-                            closed: to_part,
-                        }
-                    }
                     (Variance::Invariant, _) => Relation::Equation(*from_part, to_part),
                     (Variance::Covariant, Side::Lower) => Relation::LowerBound {
                         lower: *from_part,
@@ -952,15 +861,7 @@ impl State {
             Term::Ref(Mutability::Shared, to_target),
         ) = (&from_kind, &to_kind)
         {
-            let relation = if side == Side::Boundary && self.is_invariant_point_target(*to_target) {
-                Relation::Invariant {
-                    class: *from_target,
-                    closed: *to_target,
-                }
-            } else {
-                Relation::Equation(*from_target, *to_target)
-            };
-            self.record(relation, recorder);
+            self.record(Relation::Equation(*from_target, *to_target), recorder);
             return;
         }
         let path = self
@@ -1103,9 +1004,8 @@ impl State {
         !targets.is_empty()
     }
 
-    /// Solves to the fixpoint, applies the invariant rule there, and falls
-    /// back once it applies to nothing, until no class is left to fall back,
-    /// taking at each step the first step `choose` picks.
+    /// Solves to the fixpoint and falls back until no class is left to fall
+    /// back, taking at each step the first step `choose` picks.
     pub fn run<F>(mut self, mut choose: F) -> Outcome
     where
         F: FnMut(&[Step]) -> usize,
@@ -1117,7 +1017,7 @@ impl State {
                 self.step(&step);
                 continue;
             }
-            if !self.apply_invariant_rule() && !self.fall_back() {
+            if !self.fall_back() {
                 return self.outcome();
             }
         }
@@ -1153,7 +1053,6 @@ impl State {
                 Relation::LowerBound { lower, upper } => (lower, upper, true),
                 Relation::Boundary { from, to } => (from, to, false),
                 Relation::Equation(..)
-                | Relation::Invariant { .. }
                 | Relation::Fact(..)
                 | Relation::Kind(..)
                 | Relation::Lit(..)
@@ -1164,9 +1063,7 @@ impl State {
                 continue;
             };
             let written = matches!(self.classes.held(to).kind, Some((_, KindSource::Written)));
-            let coercion = if self.is_ruled(to) {
-                as_it_is(&from_value, &to_value)
-            } else if lower {
+            let coercion = if lower {
                 match along_le(&self.decls, &from_value, &to_value) {
                     Ok(coercion) => Ok(coercion),
                     Err(_) if written => coerce(&self.decls, &from_value, &to_value),
@@ -1287,25 +1184,12 @@ impl State {
         roots.sort();
         let decisions: Vec<_> = self.nodes.values().map(|node| &node.decision).collect();
         format!(
-            "{roots:?}|{}|{:?}|{:?}|{decisions:?}|{:?}|{:?}|{:?}",
+            "{roots:?}|{}|{:?}|{:?}|{decisions:?}|{:?}|{:?}",
             self.log.len(),
             self.split,
             self.refusals,
             self.deferred,
             self.broken,
-            self.ruled,
         )
-    }
-}
-
-/// How a value reaches a class the invariant rule typed: as that type itself,
-/// or as `!` (`design/18-invariant-points.md`, row 5).
-fn as_it_is(from: &Ty, to: &Ty) -> Result<Coercion, CoerceError> {
-    if from == to {
-        Ok(Coercion::Identity)
-    } else if *from.term() == Term::Never {
-        Ok(Coercion::Never)
-    } else {
-        Err(CoerceError::None)
     }
 }

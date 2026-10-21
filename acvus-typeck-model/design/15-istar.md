@@ -111,11 +111,7 @@ never records.
   position, and reports H7 for that reason. A boundary out of a class that holds a
   LitVar alone is left out of what a node records into, though l.291 makes such a
   boundary change the class (`holes.md`, H7): in such a cycle the check reads
-  relations the solver's read leaves out. Read with invariant points last
-  (`design/18-invariant-points.md`), the solver and the check read alike: a use
-  records into its result and into what its candidates would equate with an
-  unknown (`State::would_record_own_by`), an invariant point into nothing, and
-  such a boundary is an invariant point.
+  relations the solver's read leaves out.
 - It presupposes that a read leaves out the relations of the instances a call of a
   function value made, when the read leaves out the call (note 07, reading 3). An
   earlier encoding did not, naming an instance's relations by the instance alone:

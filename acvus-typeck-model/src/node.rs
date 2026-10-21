@@ -1,14 +1,12 @@
 //! Uses, lends, projections and bindings: the positions each lies at, what
 //! each reads, and what each records once decided (l.303–345).
 
-use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, Fact, KindSource};
 use crate::coerce::coerce_read;
 use crate::decl::{Decl, DeclId};
-use crate::invariant::Points;
 use crate::program::{BindingPath, Deferral, Projection};
 use crate::read::ReadValue;
 use crate::relation::{Recorder, Relation};
@@ -78,38 +76,6 @@ pub(crate) struct Reads {
     /// The projections on a binding's path, where the reading takes it so
     /// (`holes.md`, O1).
     pub(crate) path: Vec<Name>,
-}
-
-/// The value read a node's decision takes (l.267), made only once a decision
-/// needs it: a Deref, and a binding whose path passes no reference, read
-/// nothing. With it, the value read leaving out nothing, which the invariant
-/// rule reads (`design/18-invariant-points.md`).
-pub(crate) struct Reading<'a> {
-    state: &'a State,
-    excluded: BTreeSet<Name>,
-    read: OnceCell<State>,
-    whole: Whole<'a>,
-}
-
-/// The value read leaving out nothing: made once by a caller that decides
-/// several nodes in one state, or made here once needed.
-pub(crate) enum Whole<'a> {
-    Given(&'a State),
-    Made(Box<OnceCell<State>>),
-}
-
-impl Reading<'_> {
-    fn read(&self) -> &State {
-        self.read
-            .get_or_init(|| self.state.read_state(&self.excluded))
-    }
-
-    fn whole(&self) -> &State {
-        match &self.whole {
-            Whole::Given(whole) => whole,
-            Whole::Made(made) => made.get_or_init(|| self.state.read_state(&BTreeSet::new())),
-        }
-    }
 }
 
 /// What a use, a lend, a projection or a binding became (l.267).
@@ -470,98 +436,15 @@ impl State {
     /// Whether the relations the node `recorder` records may change what a
     /// node reading `read` reads at `class`, a class at the recorder's
     /// position or reached from one (l.244 (b), l.250). For a value, every
-    /// such node (`holes.md`, H7), or, where invariant points are kept as
-    /// checks, every such node that may record an own relation into it
-    /// (`design/18-invariant-points.md`, row 2); for whether a class is a
-    /// reference, a node that may decide it, other than a projection of a
-    /// field, a component, an index or a variant (l.248).
+    /// such node (`holes.md`, H7); for whether a class is a reference, a node
+    /// that may decide it, other than a projection of a field, a component, an
+    /// index or a variant (l.248).
     pub(crate) fn records_into(&self, recorder: &Name, class: ClassId, read: Read) -> bool {
         match read {
-            Read::Value => !self.keeps_invariant_points() || self.may_record_own(recorder, class),
+            Read::Value => true,
             Read::Reference => {
                 !self.is_inner_projection(recorder) && self.may_decide_reference(recorder, class)
             }
-        }
-    }
-
-    /// Whether the node may record into the class a relation other than an
-    /// invariant point (`design/18-invariant-points.md`, Definitions): a use
-    /// into its result and into what its candidates would equate with an
-    /// unknown, every other node into every class at its positions.
-    pub(crate) fn may_record_own(&self, name: &Name, class: ClassId) -> bool {
-        let root = self.root(class);
-        match &self.nodes[name].kind {
-            NodeKind::Use {
-                callee,
-                args,
-                result,
-            } => {
-                self.root(*result) == root
-                    || self
-                        .candidates(callee, args.len())
-                        .iter()
-                        .any(|decl| self.would_record_own_by(args, &decl.sig).contains(&root))
-            }
-            NodeKind::Lend { .. }
-            | NodeKind::Project { .. }
-            | NodeKind::Bind { .. }
-            | NodeKind::CallValue { .. } => true,
-        }
-    }
-
-    /// The classes inside the arguments' kinds that a candidate of signature
-    /// `sig` would record an equation with an unknown into, by the table of
-    /// l.286 and the reborrow row: each part an invariant part equates with a
-    /// variable or with a type that has one, and those beneath it. A part
-    /// equated with a closed type is an invariant point.
-    pub(crate) fn would_record_own_by(
-        &self,
-        args: &[ClassId],
-        sig: &Signature,
-    ) -> BTreeSet<ClassId> {
-        let mut found = BTreeSet::new();
-        for (arg, param) in args.iter().zip(sig.params()) {
-            self.would_record_own(*arg, param, false, &mut found);
-        }
-        found
-    }
-
-    fn would_record_own(
-        &self,
-        class: ClassId,
-        ty: &SigTy,
-        equated: bool,
-        found: &mut BTreeSet<ClassId>,
-    ) {
-        let SigTy::Term(term) = ty else {
-            if equated {
-                found.insert(self.root(class));
-            }
-            return;
-        };
-        if equated && ty.is_closed() {
-            return;
-        }
-        if equated {
-            found.insert(self.root(class));
-        }
-        let Some((kind, _)) = &self.classes.held(class).kind else {
-            return;
-        };
-        if kind.constructor() == term.constructor() {
-            let invariant = equated || kind.constructor().variance() == Variance::Invariant;
-            for (key, written) in term.parts() {
-                if let Some(&part) = kind.part(&key) {
-                    self.would_record_own(part, written, invariant, found);
-                }
-            }
-        } else if let (
-            false,
-            Term::Ref(Mutability::Exclusive, target),
-            Term::Ref(Mutability::Shared, written),
-        ) = (equated, kind, &**term)
-        {
-            self.would_record_own(*target, written, true, found);
         }
     }
 
@@ -576,9 +459,6 @@ impl State {
     fn may_decide_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
         match &self.nodes[name].kind {
-            NodeKind::Use { .. } if self.keeps_invariant_points() => {
-                !self.recorded_reference(name, class) && self.may_record_own(name, class)
-            }
             NodeKind::Use { .. } => {
                 !self.recorded_reference(name, class)
                     && self
@@ -603,39 +483,23 @@ impl State {
         excluded
     }
 
-    /// What the class reads as in this value read: none where it reads as no
-    /// reference or as nothing, and a reference, of its mutability where the
-    /// value read decides one (l.267, l.307). Where the value read decides no
-    /// constructor, a use's record that a class it reaches by lower bounds is
-    /// a reference still reads as a reference (l.252).
-    fn reads_as_reference(&self, id: ClassId) -> Option<Option<Mutability>> {
-        match self.read_value(id).decided() {
+    /// What the class reads as in the value read leaving out `excluded`: none
+    /// where it reads as no reference or as nothing, and a reference, of its
+    /// mutability where the value read decides one (l.267, l.307). Where the
+    /// value read decides no constructor, a use's record that a class it
+    /// reaches by lower bounds is a reference still reads as a reference
+    /// (l.252).
+    fn reads_as_reference(
+        &self,
+        id: ClassId,
+        excluded: &BTreeSet<Name>,
+    ) -> Option<Option<Mutability>> {
+        let read = self.read_state(excluded);
+        match read.read_value(id).decided() {
             Some(Term::Ref(mutability, _)) => Some(Some(*mutability)),
             Some(_) => None,
-            None => self.recorded_as_reference(id).then_some(None),
+            None => read.recorded_as_reference(id).then_some(None),
         }
-    }
-
-    /// Whether this value read decides whether the class is a reference: by
-    /// its constructor or its LitVar, or by a use's record of l.252 into it or
-    /// into a class it reaches by lower bounds.
-    fn decides_reference(&self, id: ClassId) -> bool {
-        if !matches!(self.read_value(id), ReadValue::Undecided) {
-            return true;
-        }
-        let mut seen = BTreeSet::from([self.root(id)]);
-        let mut work = vec![self.root(id)];
-        while let Some(at) = work.pop() {
-            if self.classes.held(at).reference.is_some() {
-                return true;
-            }
-            for lower in self.lower_bounds(at) {
-                if seen.insert(self.root(lower)) {
-                    work.push(self.root(lower));
-                }
-            }
-        }
-        false
     }
 
     /// Whether a use recorded that the class, or one it reaches by lower
@@ -765,40 +629,14 @@ impl State {
         self.decision_under(name, &self.excluded(name))
     }
 
-    /// What the node becomes by the value it reads, or, where it waits for
-    /// classes the invariant rule may still type, those classes
-    /// (`design/18-invariant-points.md`, Definitions), `whole` being this
-    /// state's value read leaving out nothing and `points` its invariant
-    /// points.
-    pub(crate) fn decision_or_waits(
-        &self,
-        name: &Name,
-        whole: &State,
-        points: &Points,
-    ) -> Result<Decision, BTreeSet<ClassId>> {
-        let mut reading = self.reading(name, &self.excluded(name));
-        reading.whole = Whole::Given(whole);
-        let decision = self.decision_in(name, &reading);
-        let waits = self.waits(name, &decision, &reading, points);
-        if waits.is_empty() {
-            Ok(decision)
-        } else {
-            Err(waits)
-        }
-    }
-
     /// What the node becomes by the value it reads leaving out the relations
-    /// of the nodes `excluded`.
+    /// of the nodes `excluded`, and, for a lend, a projection or a binding,
+    /// which reads whether a class is a reference, of every projection other
+    /// than a Deref (l.267).
     pub(crate) fn decision_under(&self, name: &Name, excluded: &BTreeSet<Name>) -> Decision {
-        self.decision_in(name, &self.reading(name, excluded))
-    }
-
-    /// The value read leaving out the relations of the nodes `excluded`, and,
-    /// for a lend, a projection or a binding, which reads whether a class is
-    /// a reference, of every projection other than a Deref (l.267).
-    fn reading<'a>(&'a self, name: &Name, excluded: &BTreeSet<Name>) -> Reading<'a> {
+        let kind = &self.nodes[name].kind;
         let mut excluded = excluded.clone();
-        if self.nodes[name].kind.read() == Read::Reference {
+        if kind.read() == Read::Reference {
             excluded.extend(
                 self.nodes
                     .keys()
@@ -806,91 +644,8 @@ impl State {
                     .cloned(),
             );
         }
-        Reading {
-            state: self,
-            excluded,
-            read: OnceCell::new(),
-            whole: Whole::Made(Box::default()),
-        }
-    }
-
-    /// The classes the node waits for, where invariant points are kept as
-    /// checks: those the invariant rule may still type, read as the rule
-    /// reads them, where this decision is not decided by what the node reads
-    /// there (`design/18-invariant-points.md`, Definitions). A use waits
-    /// where its candidates remain several and differ at the class's
-    /// position; a lend, a projection or a binding where its value read does
-    /// not decide whether the class it reads is a reference. The value read
-    /// leaving out nothing is made anew, without this state's refusals, so a
-    /// class the rule refused is told apart here.
-    fn waits(
-        &self,
-        name: &Name,
-        decision: &Decision,
-        reading: &Reading<'_>,
-        points: &Points,
-    ) -> BTreeSet<ClassId> {
-        if !self.keeps_invariant_points() {
-            return BTreeSet::new();
-        }
-        let open =
-            |class: ClassId| !self.has_no_value(class) && reading.whole().is_open(class, points);
-        let read_class = match (&self.nodes[name].kind, decision) {
-            (NodeKind::Use { args, result, .. }, Decision::Unreached(remaining))
-                if remaining.len() > 1 =>
-            {
-                let sigs: Vec<&Signature> = remaining
-                    .iter()
-                    .map(|id| &self.decls.decl(id).sig)
-                    .collect();
-                return self
-                    .classes_where_differing(&sigs, args, *result)
-                    .into_iter()
-                    .filter(|&class| open(class))
-                    .collect();
-            }
-            (NodeKind::Lend { place, .. }, _) => *place,
-            (
-                NodeKind::Project {
-                    projection,
-                    operand,
-                    ..
-                },
-                _,
-            ) if *projection != Projection::Deref => *operand,
-            (NodeKind::Bind { path, position, .. }, _) if self.passed(path).is_some() => *position,
-            _ => return BTreeSet::new(),
-        };
-        if reading.read().decides_reference(read_class) || !open(read_class) {
-            return BTreeSet::new();
-        }
-        BTreeSet::from([self.root(read_class)])
-    }
-
-    /// The classes at the positions where the signatures differ, and those
-    /// within the depth they reach there, as this state's kinds give them.
-    fn classes_where_differing(
-        &self,
-        sigs: &[&Signature],
-        args: &[ClassId],
-        result: ClassId,
-    ) -> BTreeSet<ClassId> {
-        let mut classes = BTreeSet::new();
-        for i in Self::differing(sigs, args.len()) {
-            let class = args.get(i).copied().unwrap_or(result);
-            classes.insert(self.root(class));
-            for sig in sigs {
-                classes.extend(self.within_depth(class, Self::at_position(sig, i)));
-            }
-        }
-        classes
-    }
-
-    /// What the node becomes by the value `reading` gives it.
-    fn decision_in(&self, name: &Name, reading: &Reading<'_>) -> Decision {
-        let kind = &self.nodes[name].kind;
         let lend = |mutability: Option<Mutability>, place: ClassId| {
-            let (target, through) = match reading.read().reads_as_reference(place) {
+            let (target, through) = match self.reads_as_reference(place, &excluded) {
                 Some(through) => (LendTarget::Through(through), through),
                 None => (LendTarget::Place, Some(Mutability::Exclusive)),
             };
@@ -901,7 +656,7 @@ impl State {
                 callee,
                 args,
                 result,
-            } => self.narrow(callee, args, *result, reading),
+            } => self.narrow(callee, args, *result, &excluded),
             NodeKind::Lend {
                 mutability, place, ..
             } => match lend(Some(*mutability), *place) {
@@ -913,7 +668,7 @@ impl State {
                 ..
             } => Decision::Applied,
             NodeKind::Project { operand, .. } => {
-                match reading.read().reads_as_reference(*operand) {
+                match self.reads_as_reference(*operand, &excluded) {
                     Some(mutability) => Decision::AppliedToTarget(mutability),
                     None => Decision::Applied,
                 }
@@ -926,7 +681,7 @@ impl State {
                 },
             },
             NodeKind::CallValue { callee, .. } => {
-                let values = reading.read().values_of(*callee);
+                let values = self.read_state(&excluded).values_of(*callee);
                 if values.is_empty() {
                     Decision::NoResult
                 } else {
@@ -1320,20 +1075,20 @@ impl State {
         self.written(at(NodeAt::Lent), Term::Ref(mutability, target), recorder)
     }
 
-    /// Narrows the candidates by the value `reading` gives the use at each
-    /// position where they differ, then by the result (l.337–344).
+    /// Narrows the candidates by the value the use reads at each position
+    /// where they differ, then by the result (l.337–344).
     fn narrow(
         &self,
         callee: &Name,
         args: &[ClassId],
         result: ClassId,
-        reading: &Reading<'_>,
+        excluded: &BTreeSet<Name>,
     ) -> Decision {
-        let read = reading.read();
         let candidates = self.candidates(callee, args.len());
         let ids: Vec<DeclId> = candidates.iter().map(|decl| decl.id.clone()).collect();
         let sigs: Vec<&Signature> = candidates.iter().map(|decl| &decl.sig).collect();
         let differing = Self::differing(&sigs, args.len());
+        let read = self.read_state(excluded);
         let values: Vec<(usize, ReadValue)> = differing
             .iter()
             .map(|&i| (i, read.read_value(args.get(i).copied().unwrap_or(result))))
@@ -1369,10 +1124,7 @@ impl State {
             remaining
         };
         let mut remaining = narrowed(&values);
-        if remaining.len() > 1
-            && values.iter().any(|(_, value)| value.has_lit())
-            && !self.reads_lit_with_invariant_points(&sigs, args, result, reading)
-        {
+        if remaining.len() > 1 && values.iter().any(|(_, value)| value.has_lit()) {
             let defaulted: Vec<(usize, ReadValue)> = values
                 .iter()
                 .map(|(i, value)| (*i, value.with_defaults()))
@@ -1383,26 +1135,6 @@ impl State {
             [one] => Decision::Use(ids[*one].clone()),
             _ => Decision::Unreached(remaining.into_iter().map(|c| ids[c].clone()).collect()),
         }
-    }
-
-    /// Whether a LitVar the use reads where its candidates differ lies in a
-    /// class with invariant points, whose default the invariant rule takes in
-    /// place of l.344 (`design/18-invariant-points.md`, row 3).
-    fn reads_lit_with_invariant_points(
-        &self,
-        sigs: &[&Signature],
-        args: &[ClassId],
-        result: ClassId,
-        reading: &Reading<'_>,
-    ) -> bool {
-        if !self.keeps_invariant_points() {
-            return false;
-        }
-        let (read, whole) = (reading.read(), reading.whole());
-        let points = whole.invariant_points(&self.pending_uses());
-        self.classes_where_differing(sigs, args, result)
-            .into_iter()
-            .any(|class| read.is_lit(class) && points.contains_key(&whole.root(class)))
     }
 
     /// A class made anew that holds `term` as a declaration writes it.
@@ -1453,11 +1185,7 @@ impl State {
                     let part_name = ClassName::Part(shared.clone(), key);
                     self.instantiate(&part, vars, part_name, var_name, recorder)
                 });
-                let class = self.written(name, term, recorder);
-                if ty.is_closed() {
-                    self.closed.insert(class);
-                }
-                class
+                self.written(name, term, recorder)
             }
         }
     }

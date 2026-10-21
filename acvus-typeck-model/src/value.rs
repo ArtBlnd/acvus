@@ -211,8 +211,6 @@ impl State {
             log: Vec::new(),
             texts: self.texts.clone(),
             decided: self.decided.clone(),
-            closed: self.closed.clone(),
-            ruled: self.ruled.clone(),
             split: BTreeSet::new(),
             no_value: BTreeSet::new(),
             refusals: BTreeSet::new(),

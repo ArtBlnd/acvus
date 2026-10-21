@@ -14,7 +14,6 @@ pub mod explore;
 #[cfg(test)]
 mod fixture;
 pub mod instance;
-pub mod invariant;
 pub mod istar;
 pub mod join;
 pub mod lit;

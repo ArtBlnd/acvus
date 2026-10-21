@@ -104,10 +104,7 @@ reads its position, or lends it where its path passes a reference.
    reference read. A reading that kept only the nodes that would record a lower
    bound, an equation or a kind into the class left out what l.291 makes a boundary
    record into a class holding a LitVar alone, and made the outcome depend on the
-   order; it is removed (`holes.md`, H7). Read with invariant points last, such a
-   boundary is an invariant point, no source until the invariant rule, and the
-   nodes that record into a class are those that may record an own relation into
-   it (`design/18-invariant-points.md`, row 2).
+   order; it is removed (`holes.md`, H7).
 
 ## Left open for change
 

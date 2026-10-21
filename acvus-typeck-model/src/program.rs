@@ -123,18 +123,6 @@ impl Program {
         matches!(class.origin, Origin::Var | Origin::Lit(_)) && !self.is_universal(name)
     }
 
-    /// Whether the class is a type the text writes in full, with no unknown
-    /// in it.
-    pub fn is_closed(&self, name: &Name) -> bool {
-        match &self.class(name).origin {
-            Origin::Written(term) | Origin::Host(term) => term
-                .parts()
-                .into_iter()
-                .all(|(_, part)| self.is_closed(part)),
-            Origin::Var | Origin::Lit(_) | Origin::Lambda(_) => false,
-        }
-    }
-
     /// Each lambda's environment, moved to its enclosing group, the innermost
     /// lambdas first, so that what a lambda's environment records into an
     /// enclosing lambda is part of that lambda's text
@@ -284,20 +272,6 @@ pub struct Readings {
     pub binding_path: BindingPath,
     pub deferral: Deferral,
     pub captures: Captures,
-    pub invariant_points: InvariantPoints,
-}
-
-/// When the equation an invariant part of a boundary gives with a closed
-/// type, and a LitVar's boundary into one, give a class its value (l.289,
-/// l.291; `design/18-invariant-points.md`).
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub enum InvariantPoints {
-    /// As soon as they are recorded (l.228).
-    #[default]
-    AsStated,
-    /// Only where the class's own relations give it no constructor, at a
-    /// binding group's fixpoint, and only as the one type that fits it.
-    Last,
 }
 
 /// Which part of a lambda's text its binding group solves (l.210–222;

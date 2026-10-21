@@ -187,13 +187,6 @@ impl<'a> Instance<'a> {
         {
             here.decided.insert(made);
         }
-        if held
-            .members
-            .iter()
-            .any(|member| self.from.closed.contains(member))
-        {
-            here.closed.insert(made);
-        }
         if let Some((kind, KindSource::Solved)) = held.kind {
             let term = kind.map(|_, part| self.class(here, part));
             let recorder = self.recorder(&Recorder::Split(root));
@@ -258,8 +251,6 @@ impl State {
             .term()
             .clone()
             .map(|key, part| self.closed(ClassName::Part(shared.clone(), key), &part, recorder));
-        let class = self.written(name, term, recorder);
-        self.closed.insert(class);
-        class
+        self.written(name, term, recorder)
     }
 }
