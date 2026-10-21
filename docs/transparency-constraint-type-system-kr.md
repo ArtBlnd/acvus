@@ -71,7 +71,7 @@ extern-defined type의 specialization mark(types §8)는 이 type system이 다�
 
 ### Variance
 
-structural type의 part는 모두 covariant이고, 그 밖의 타입의 part는 모두 invariant다. contravariant part는 없다. invariant part 사이의 관계는 등식이다.
+structural type은 member에 대해서만 covariant다(Join, Coercion). 모든 타입의 part는 invariant이고, contravariant인 것은 없다. part 사이의 관계는 등식이다.
 
 ### Cast tree
 
@@ -83,18 +83,11 @@ structural type의 part는 모두 covariant이고, 그 밖의 타입의 part는 
 
 | 정의 | 설명 |
 |---|---|
-| `S ⊔ T = nca(S, T)` | `S`와 `T`가 공통 조상 노드를 가질 때, 각각 cast로 가장 가까운 공통 조상 노드까지 올린 뒤(같은 노드이면 그대로), member는 합집합으로 하고 covariant part는 join한다. |
+| `S ⊔ T = nca(S, T)` | `S`와 `T`가 공통 조상 노드를 가질 때, 각각 cast로 가장 가까운 공통 조상 노드까지 올린 뒤(같은 노드이면 그대로), member는 합집합으로 한다. part는 같아야 하며, 다르면 join이 없다. |
 | `&mut S ⊔ &T = &S ⊔ &T` | `&mut S`는 `&S`로 보고 join한다. |
 | `! ⊔ T = T` | `!`와 `T`는 `T`. |
 
-`Result`의 error part에서는 `⊔` 대신 error join `⊔ᴱ`을 쓴다.
-
-| 정의 | 설명 |
-|---|---|
-| `⟦!⟧ = ∅`, `⟦Error{N̄(Ē)}⟧ = {Ē}`, 그 밖의 `⟦E⟧ = {E}` | error part의 타입을 error 타입들의 집합으로 본다. |
-| `E₁ ⊔ᴱ E₂ = ⟦E₁⟧ ∪ ⟦E₂⟧` | 노드가 같은 원소끼리는 먼저 `⊔`로 합친다. 그 뒤 원소가 없으면 `!`이고, 하나면 그 타입이고, 둘 이상이면서 모두 서로 다른 이름을 가진 타입(enum, struct, extern-defined type)이면 원소마다 그 이름을 딴 variant를 가진 `Error`다. |
-
-`Error`는 언어의 enum이며, 그 variant는 이 join으로만 만들어진다.
+`Error`는 언어의 enum이며, 그 variant는 `?`로만 만들어진다(`?`). 이름이 없는 error 타입 `E`에서 `?`는 variant 대신 `Error⟨E⟩`를 만든다. `Error⟨E⟩`는 variant가 없고 part 하나 `E`를 가진 `Error`이며, 그 constructor는 variant를 가진 `Error`의 것과 달라 둘은 join되지 않는다.
 
 ### Coercion
 
@@ -107,13 +100,13 @@ coercion은 값을 다른 타입의 값으로 바꾸는 것이며, 바꾸는 함
 | `{f̄, ḡ} ⇝ {f̄}` | object를 그 field 중 일부만 가진 object로. | 언어가 정함 |
 | `E{Ā} ⇝ E{Ā, B̄}` | enum을 variant가 더 많은 enum으로. | 언어가 정함 |
 | `E ⇝ Error{N̄(Ē)}`, `E`가 `Ē`의 하나 | 그 이름의 variant로 감싼다. | 언어가 정함 |
-| constructor와 member가 같고, 각 covariant part에서 `Tᵢ ⇝ Uᵢ`이면 `T ⇝ U` | 각 covariant part에서, 그 part의 coercion. | part의 coercion |
+| `E ⇝ Error⟨E⟩`, `E`가 이름이 없는 타입 | `Error⟨E⟩`로 감싼다. | 언어가 정함 |
 | `! ⇝ U` | `!`를 어떤 타입으로든. | 언어가 정함 |
 | 선언된 conversion `T → U`로 `T ⇝ U` | 위의 행들의 조합으로 그 타입에 닿지 않을 때. | 선언의 함수 |
 
 ### Rank
 
-coercion은 Coercion 표의 행들을 `reborrow? ; cast* ; structural?` 순서로 조합한 것이다. reborrow는 `&mut T ⇝ &T` 행, cast는 선언된 cast 행, structural은 object, enum, `Error`, covariant part 행이다. `! ⇝ U`와 선언된 conversion은 조합이 아니며, rank가 없다. 주어진 타입으로 가는 조합은 하나뿐이다. coercion이 필요 없으면 rank는 `empty`다. 단계의 순서는 `empty ≺ reborrow ≺ cast ≺ structural`이고, coercion의 rank는 가장 높은 단계, 그다음 cast의 수, 그다음 거치는 낮은 단계들 순으로 비교한다. 단계와 cast의 수는 part의 coercion까지 센다.
+coercion은 Coercion 표의 행들을 `reborrow? ; cast* ; structural?` 순서로 조합한 것이다. reborrow는 `&mut T ⇝ &T` 행, cast는 선언된 cast 행, structural은 object, enum, `Error` 행이다. `! ⇝ U`와 선언된 conversion은 조합이 아니며, rank가 없다. 주어진 타입으로 가는 조합은 하나뿐이다. coercion이 필요 없으면 rank는 `empty`다. 단계의 순서는 `empty ≺ reborrow ≺ cast ≺ structural`이고, coercion의 rank는 가장 높은 단계, 그다음 cast의 수, 그다음 거치는 낮은 단계들 순으로 비교한다.
 
 ## 동치류
 
@@ -281,14 +274,7 @@ use, lend, projection, binding이 무엇이 되는지는 그것이 읽는 값으
 
 kind가 member를 주는 것은 그 member가 이 body에 보일 때뿐이다. object의 field와 enum의 variant는 body의 텍스트가 쓰므로 보이고, `Option`, `Result`, `Error`의 member와 host가 준 타입의 member는 바깥에서 쓰므로 보이지 않는다. 출처가 kind뿐인 동치류는 그 kind가 가리키는 member의 constructor를 받는다. 동치류의 값은 그 동치류가 지닌 kind를 만족하는 타입이다.
 
-동치류가 constructor를 받으면, 하한과 경계의 part 사이 관계가 part의 동치류에 기록된다.
-
-| part | 하한 `τ ≤ α` | 경계 `α ⇝ U`, `U`의 part가 미지수 | 경계 `α ⇝ U`, 그 밖 |
-|---|---|---|---|
-| covariant | 하한 | 하한 | 그 part의 `⇝` |
-| invariant | 등식 | 등식 | 등식 |
-
-하한이나 경계의 두 쪽의 constructor가 다르면, 선언된 cast들의 signature를 따라 part를 잇는다. `?N ⇝ U`이면 `?N`을 `U`와 unify한다. covariant part의 `⇝`는 다 푼 뒤의 검사다.
+동치류가 constructor를 받으면, 그 하한과 경계의 두 쪽의 part 사이에 등식이 기록된다. 하한이나 경계의 두 쪽의 constructor가 다르면, 선언된 cast들의 signature를 따라 part를 잇는다. `?N ⇝ U`이면 `?N`을 `U`와 unify한다.
 
 동치류가 풀린 뒤, 하한과 use의 결과로 들어오는 값은 Join의 `≤`로 그 값에 닿으며, `≤`의 단계마다 Coercion 표의 행으로 바뀐다. 다만 object에 더해진 field는 바뀌지 않고, 그 값이 통째로 쓰이기 전에 쓰인다(ownership §4). 등식이 값을 정한 동치류에 `≤`로 닿지 않는 하한과, 경계로 들어오는 값은 coercion으로 그 값에 닿는다. 어느 쪽이든 그 함수는 그 값이 들어온 자리에서 호출된다.
 
@@ -345,7 +331,7 @@ method 호출의 receiver는 첫 인자다. 적힌 그대로, `&`, 그리고 rec
 
 ## `?`
 
-`e?`는 언어가 주는 두 후보, 곧 `Option⟨T⟩`과 `Result⟨T, E⟩`에서의 후보를 가진 use이며, 그 결과는 `T`다. exit는 `Option⟨!⟩`이나 `Result⟨!, E⟩`의 값이며, `return`처럼 가장 안쪽 body의 결과로 넘어간다.
+`e?`는 언어가 주는 두 후보, 곧 `Option⟨T⟩`과 `Result⟨T, E⟩`에서의 후보를 가진 use이며, 그 결과는 `T`다. exit는 `return None`이나 `return Err(x)`와 같다. `x`는 `e`의 error 값을 감싼 값이다. `E`가 이름 `N`을 가진 타입(enum, struct, extern-defined type)이면 `x`는 member가 `N` 하나인 `Error`의 값 `N(..)`이고, 그 밖이면 `Error⟨E⟩`의 값이다. `E`가 `Error`이면 그 이름은 `Error`이므로, `x`는 그것을 variant `Error(..)`로 감싸 중첩한다. 이 값들은 가장 안쪽 body의 결과에서 만나므로, 그 error part는 `?`마다 variant가 더해진 `Error`가 된다. exit의 다른 part는 새로 만든 동치류이므로(Struct), 그 body가 `Ok`를 돌려주지 않으면 ok part에는 출처가 없어 fallback으로 `!`가 된다.
 
 ## Identity
 
@@ -370,9 +356,8 @@ let a = if c { Some(1u8) } else { None };
 결과: `a`는 `Option⟨u8⟩`이다.
 
 1. 두 block의 값이 `a`의 동치류 `A`와 만나, `A ≥ Option⟨S⟩`와 `A ≥ Option⟨?k⟩`가 기록된다. `S`는 `Some`이 새로 만든 payload이고 `S ≥ u8`이며, `?k`는 `None`이 새로 만든 payload이고 아무 관계도 없다.
-2. 두 하한은 모두 constructor `Option`으로 풀려 있으므로 `A`는 `Option`을 받고, 그 payload `P`에 `P ≥ S`와 `P ≥ ?k`가 기록된다.
-3. `P`는 풀리지 않은 하한 `?k`에 의존하고, `?k`는 아무것에도 의존하지 않는다. 그래서 fallback은 `?k`에만 `!`를 준다.
-4. `S = u8`이므로 `P = u8 ⊔ ! = u8`이다.
+2. 두 하한은 모두 constructor `Option`으로 풀려 있으므로 `A`는 `Option`을 받고, 그 payload `P`에 등식 `P = S`와 `P = ?k`가 기록된다.
+3. `P`, `S`, `?k`는 한 동치류이고 그 하한은 `u8`뿐이므로 `P = u8`이다.
 
 ### 2. 경계의 invariant part
 
@@ -403,7 +388,7 @@ consume(buf);            // consume(Vec⟨u8⟩)
 3. `consume(buf)`는 `B ⇝ Vec⟨u8⟩`이고, `Vec`의 argument가 invariant이므로 등식 `?t = u8`을 준다.
 4. `?t`, 곧 `?T`의 값은 등식이 준 `u8`이다. 하한 `u16`은 `≤`로 `u8`에 닿지 않으므로 coercion으로 닿아야 하며, cast로는 닿지 않으니 그 값이 들어온 `push`의 둘째 인자에서 선언된 conversion이 호출된다.
 
-### 4. covariant 경계는 검사다
+### 4. 경계의 part는 등식이다
 
 ```
 let x = None;
@@ -411,13 +396,12 @@ let y = if c { x } else { Some(1u16) };
 take(x);                 // take(Option⟨u8⟩)
 ```
 
-결과: `x`는 `Option⟨!⟩`, `y`는 `Option⟨u16⟩`이다.
+결과: 거부된다. `x`와 `y`의 payload는 `u8`이고, `1u16`이 그리로 들어오는 자리에서 거부된다.
 
 1. `X ≥ Option⟨?k⟩`, `Y ≥ X`, `Y ≥ Option⟨S⟩`, `S ≥ u16`.
-2. `X`가 `Option`을 받으면 그 payload `P`에 `P ≥ ?k`가 기록된다. `take(x)`는 경계 `X ⇝ Option⟨u8⟩`이고, payload는 covariant이며 `u8`은 미지수가 아니므로 `P ⇝ u8`이 기록된다. 이것은 다 푼 뒤의 검사다.
-3. `?k`에는 출처가 없어 fallback이 `!`를 주고, `P = !`다.
-4. `Y`의 payload `Q`는 `Q ≥ P`, `Q ≥ S`이고 `S = u16`이므로 `Q = u16`이다.
-5. 검사 `! ⇝ u8`은 성립한다. 경계의 covariant part를 등식으로 기록했다면 `Q = u8 ⊔ u16`이 되어 거부되었을 것이다.
+2. `X`가 `Option`을 받으면 그 payload `P`에 등식 `P = ?k`가 기록된다. `take(x)`는 경계 `X ⇝ Option⟨u8⟩`이고 part는 invariant이므로 등식 `P = u8`이 기록된다.
+3. `Y`가 `Option`을 받으면 그 payload `Q`에 등식 `Q = P`와 `Q = S`가 기록된다.
+4. `S`의 값은 등식이 준 `u8`이다. 하한 `u16`은 `≤`로 `u8`에 닿지 않고, cast도 선언된 conversion도 없으므로 거부된다.
 
 ### 5. 자기 part에 닿는 하한
 
@@ -429,8 +413,8 @@ x = Some(x);
 결과: 거부된다.
 
 1. `X ≥ Option⟨?k⟩`이고, `Some(x)`는 새 payload `S`를 가진 `Option⟨S⟩`이며 `S ≥ X`이므로 `X ≥ Option⟨S⟩`다.
-2. `X`가 `Option`을 받으면 그 payload `P`에 `P ≥ ?k`와 `P ≥ S`가 기록된다.
-3. `X`는 part를 따라 `P`에, `P`는 하한을 따라 `S`에, `S`는 하한을 따라 다시 `X`에 닿는다. `X`가 자기 part 안에 다시 나타나므로, 그것을 담는 유한한 타입이 없어 거부된다.
+2. `X`가 `Option`을 받으면 그 payload `P`에 등식 `P = ?k`와 `P = S`가 기록된다.
+3. `X`는 part를 따라 `P`에 닿고, `P`는 `S`와 한 동치류이므로 하한을 따라 다시 `X`에 닿는다. `X`가 자기 part 안에 다시 나타나므로, 그것을 담는 유한한 타입이 없어 거부된다.
 
 ### 6. 이름으로 닿는 capture 쓰기
 
@@ -445,7 +429,7 @@ remember(1u8);
 1. `L ≥ Option⟨?k⟩`.
 2. lambda는 자기 binding group이고, `x`의 타입 `X`는 universal이다. `last`는 이름으로 닿고 그 타입 `L`은 감싸는 binding group의 미지수이므로, 쓰기는 만남이다: `L ≥ Option⟨S⟩`, `S ≥ X`. 이 하한은 `S`를 거쳐 `X`에 기대므로 lambda의 C에 남는다.
 3. `remember(1u8)`는 Values가 이 lambda뿐인 함수 값의 호출이라 instance를 만든다. `X`는 감싸는 binding group의 새 미지수 `X'`가 되고 인자와 만난다: `X' ≥ u8`. C의 사본은 `L ≥ Option⟨S'⟩`, `S' ≥ X'`이며, `L`은 새로 만들지 않고 함께 쓴다.
-4. `L`의 payload `P`는 `P ≥ ?k`, `P ≥ S'`이다. `?k`는 fallback으로 `!`, `S'`는 `X' = u8`을 하한으로 가져 `u8`이므로 `P = u8`이다.
+4. `L`의 payload `P`에는 등식 `P = ?k`, `P = S'`가 기록된다. 그 동치류의 하한은 `X'`뿐이고 `X' = u8`이므로 `P = u8`이다.
 
 ### 7. reference를 거친 쓰기
 
@@ -459,7 +443,7 @@ let r = &mut x;
 
 1. `X ≥ Option⟨?k⟩`. `X`는 reference가 아니므로 `r`의 타입은 target이 `X`인 `&mut`이다.
 2. `*r`의 타입은 `r`의 target `X`다. 쓰기가 같은 binding group에 있고 `X`는 그 미지수이므로 만남이다: `X ≥ Option⟨S⟩`, `S ≥ u8`.
-3. `X`의 payload는 `?k`와 `S`를 하한으로 가지며, `?k`가 `!`가 되고 `S = u8`이므로 `u8`이다.
+3. `X`의 payload에는 등식으로 `?k`와 `S`가 합쳐지고, 그 하한은 `u8`뿐이므로 `u8`이다.
 
 같은 쓰기를 lambda 안에서 capture한 `r`을 거쳐 하면, `X`가 감싸는 binding group의 미지수라도 reference를 거쳐 닿으므로 경계다.
 

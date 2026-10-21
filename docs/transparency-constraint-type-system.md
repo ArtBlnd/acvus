@@ -71,7 +71,7 @@ The specialization mark of an extern-defined type (types §8) is not handled by 
 
 ### Variance
 
-Every part of a structural type is covariant, and every part of any other type is invariant. No part is contravariant. The relation between invariant parts is an equation.
+A structural type is covariant in its members alone (Join, Coercion). Every part of every type is invariant, and nothing is contravariant. The relation between parts is an equation.
 
 ### Cast tree
 
@@ -83,18 +83,11 @@ The join of two types, and the order `≤` the join defines (`S ≤ T` where `S 
 
 | Definition | Description |
 |---|---|
-| `S ⊔ T = nca(S, T)` | Where `S` and `T` have a common ancestor node, each is raised by casts to their nearest common ancestor node, and left as it is where they are of one node; then their members are united and their covariant parts joined. |
+| `S ⊔ T = nca(S, T)` | Where `S` and `T` have a common ancestor node, each is raised by casts to their nearest common ancestor node, and left as it is where they are of one node; then their members are united. Their parts must be equal, and where they differ there is no join. |
 | `&mut S ⊔ &T = &S ⊔ &T` | `&mut S` is taken as `&S`, and joined. |
 | `! ⊔ T = T` | Of `!` and `T`, `T`. |
 
-At a `Result`'s error part, the error join `⊔ᴱ` is taken in place of `⊔`.
-
-| Definition | Description |
-|---|---|
-| `⟦!⟧ = ∅`, `⟦Error{N̄(Ē)}⟧ = {Ē}`, any other `⟦E⟧ = {E}` | The error part's type is taken as a set of error types. |
-| `E₁ ⊔ᴱ E₂ = ⟦E₁⟧ ∪ ⟦E₂⟧` | Elements of one node are first joined by `⊔`. Then the join is `!` where no element remains, that type where one does, and where two or more do and all are types of distinct names, enums, structs or extern-defined types, `Error` with a variant for each element, named after it. |
-
-`Error` is the language's enum, and its variants are made only by this join.
+`Error` is the language's enum, and its variants are made only by `?` (`?`). At an error type `E` with no name, `?` makes `Error⟨E⟩` in place of a variant. `Error⟨E⟩` is an `Error` with no variant and one part `E`, and its constructor differs from that of an `Error` with variants, so the two have no join.
 
 ### Coercion
 
@@ -107,13 +100,13 @@ A coercion changes a value into a value of another type, and the function that c
 | `{f̄, ḡ} ⇝ {f̄}` | An object to one with only some of its fields. | decided by the language |
 | `E{Ā} ⇝ E{Ā, B̄}` | An enum to one with more variants. | decided by the language |
 | `E ⇝ Error{N̄(Ē)}` where `E` is one of `Ē` | Wraps it in the variant of its name. | decided by the language |
-| `T ⇝ U` where their constructors and members are equal and `Tᵢ ⇝ Uᵢ` at each covariant part | At each covariant part, a coercion of that part. | the parts' coercions |
+| `E ⇝ Error⟨E⟩` where `E` has no name | Wraps it in `Error⟨E⟩`. | decided by the language |
 | `! ⇝ U` | `!` to any type. | decided by the language |
 | `T ⇝ U` by a declared conversion `T → U` | Where no composition of the rows above reaches the type. | the declaration's function |
 
 ### Rank
 
-A coercion is a composition of the Coercion table's rows in the order `reborrow? ; cast* ; structural?`: reborrow is the `&mut T ⇝ &T` row, cast a declared cast's row, and structural the object, enum, `Error` and covariant-part rows. `! ⇝ U` and a declared conversion are no composition, and have no rank. Toward a given type, the composition is unique. Where no coercion is needed, the rank is `empty`. The stages are ordered `empty ≺ reborrow ≺ cast ≺ structural`, and the ranks of coercions are compared by their highest stage, then by their number of casts, then by the lower stages they take. The stages and the number of casts include those of the parts' coercions.
+A coercion is a composition of the Coercion table's rows in the order `reborrow? ; cast* ; structural?`: reborrow is the `&mut T ⇝ &T` row, cast a declared cast's row, and structural the object, enum and `Error` rows. `! ⇝ U` and a declared conversion are no composition, and have no rank. Toward a given type, the composition is unique. Where no coercion is needed, the rank is `empty`. The stages are ordered `empty ≺ reborrow ≺ cast ≺ structural`, and the ranks of coercions are compared by their highest stage, then by their number of casts, then by the lower stages they take.
 
 ## Equivalence classes
 
@@ -281,14 +274,7 @@ An equivalence class takes its constructor and members once everything its unbro
 
 A kind gives a member only where that member is visible to this body. An object's fields and an enum's variants are visible, since the body's text writes them; the members of `Option`, `Result` and `Error`, and of a type the host gives, are written outside and are not. An equivalence class whose only sources are kinds takes the constructor of the members they name. An equivalence class's value is a type that meets the kind it holds.
 
-When an equivalence class takes a constructor, the relations between the parts of its lower bounds and boundaries are recorded in the parts' equivalence classes.
-
-| Part | lower bound `τ ≤ α` | boundary `α ⇝ U`, `U`'s part an unknown | boundary `α ⇝ U`, otherwise |
-|---|---|---|---|
-| covariant | a lower bound | a lower bound | that part's `⇝` |
-| invariant | an equation | an equation | an equation |
-
-Where the constructors of the two sides of a lower bound or a boundary differ, the parts are linked through the signatures of the declared casts. `?N ⇝ U` unifies `?N` with `U`. A covariant part's `⇝` is a check made once everything is solved.
+When an equivalence class takes a constructor, an equation is recorded between the parts of the two sides of each of its lower bounds and boundaries. Where the constructors of the two sides of a lower bound or a boundary differ, the parts are linked through the signatures of the declared casts. `?N ⇝ U` unifies `?N` with `U`.
 
 Once an equivalence class is solved, a value entering by a lower bound or a use's result reaches its value by the join's `≤`, and is changed at each step of that `≤` by a row of the Coercion table; but the fields an object gains are not changed, and are written before the value is used whole (ownership §4). A lower bound that does not reach by `≤` the value of an equivalence class whose value an equation decides, and a value entering by a boundary, reach that value by a coercion. Either way, its functions are called where the value enters.
 
@@ -345,7 +331,7 @@ A position that decides nothing reaches every candidate: a position the value th
 
 ## `?`
 
-`e?` is a use with two candidates the language gives, at `Option⟨T⟩` and at `Result⟨T, E⟩`, and its result is `T`. Its exit is a value of `Option⟨!⟩` or `Result⟨!, E⟩`, and passes into the result of the innermost body, as a `return` does.
+`e?` is a use with two candidates the language gives, at `Option⟨T⟩` and at `Result⟨T, E⟩`, and its result is `T`. Its exit is as `return None` or `return Err(x)`, where `x` wraps the error value of `e`. Where `E` is a type of a name `N`, an enum, a struct or an extern-defined type, `x` is a value `N(..)` of an `Error` whose one member is `N`, and otherwise a value of `Error⟨E⟩`. Where `E` is an `Error`, its name is `Error`, so `x` nests it in the variant `Error(..)`. These values meet at the result of the innermost body, so its error part is an `Error` with a variant added at each `?`. The exit's other parts are equivalence classes made anew (Struct), so where the body returns no `Ok`, the ok part has no source and falls back to `!`.
 
 ## Identity
 
@@ -370,9 +356,8 @@ let a = if c { Some(1u8) } else { None };
 Outcome: `a` is `Option⟨u8⟩`.
 
 1. The values of both blocks meet `a`'s equivalence class `A`, recording `A ≥ Option⟨S⟩` and `A ≥ Option⟨?k⟩`. `S` is the payload `Some` makes anew, with `S ≥ u8`, and `?k` is the payload `None` makes anew, with no relation.
-2. Both lower bounds are solved with the constructor `Option`, so `A` takes `Option`, and its payload `P` records `P ≥ S` and `P ≥ ?k`.
-3. `P` depends on its unsolved lower bound `?k`, and `?k` depends on nothing, so fallback gives `!` to `?k` alone.
-4. `S = u8`, so `P = u8 ⊔ ! = u8`.
+2. Both lower bounds are solved with the constructor `Option`, so `A` takes `Option`, and its payload `P` records the equations `P = S` and `P = ?k`.
+3. `P`, `S` and `?k` are one equivalence class whose only lower bound is `u8`, so `P = u8`.
 
 ### 2. A boundary's invariant part
 
@@ -403,7 +388,7 @@ Outcome: `buf` is `Vec⟨u8⟩`, and the declared conversion `u16 → u8` is cal
 3. `consume(buf)` is `B ⇝ Vec⟨u8⟩`, and `Vec`'s argument is invariant, so it gives the equation `?t = u8`.
 4. The value of `?t`, which is `?T`, is the equation's `u8`. The lower bound `u16` does not reach `u8` by `≤`, so it must reach it by a coercion, and since no cast reaches it, the declared conversion is called at `push`'s second argument, where that value enters.
 
-### 4. A covariant boundary is a check
+### 4. A boundary's parts are equations
 
 ```
 let x = None;
@@ -411,13 +396,12 @@ let y = if c { x } else { Some(1u16) };
 take(x);                 // take(Option⟨u8⟩)
 ```
 
-Outcome: `x` is `Option⟨!⟩` and `y` is `Option⟨u16⟩`.
+Outcome: refused. The payloads of `x` and `y` are `u8`, and the program is refused where `1u16` enters them.
 
 1. `X ≥ Option⟨?k⟩`, `Y ≥ X`, `Y ≥ Option⟨S⟩` and `S ≥ u16`.
-2. When `X` takes `Option`, its payload `P` records `P ≥ ?k`. `take(x)` is the boundary `X ⇝ Option⟨u8⟩`; the payload is covariant and `u8` is not an unknown, so `P ⇝ u8` is recorded, a check made once everything is solved.
-3. `?k` has no source, so fallback gives it `!`, and `P = !`.
-4. `Y`'s payload `Q` has `Q ≥ P` and `Q ≥ S`, and `S = u16`, so `Q = u16`.
-5. The check `! ⇝ u8` holds. Had the boundary's covariant part been recorded as an equation, `Q` would be `u8 ⊔ u16`, and it would be refused.
+2. When `X` takes `Option`, its payload `P` records the equation `P = ?k`. `take(x)` is the boundary `X ⇝ Option⟨u8⟩`, and the part is invariant, so the equation `P = u8` is recorded.
+3. When `Y` takes `Option`, its payload `Q` records the equations `Q = P` and `Q = S`.
+4. `S`'s value is `u8`, which the equations give. The lower bound `u16` does not reach `u8` by `≤`, and there is neither a cast nor a declared conversion, so it is refused.
 
 ### 5. A lower bound reaching a part of its own
 
@@ -429,8 +413,8 @@ x = Some(x);
 Outcome: refused.
 
 1. `X ≥ Option⟨?k⟩`, and `Some(x)` is an `Option⟨S⟩` with a new payload `S` and `S ≥ X`, so `X ≥ Option⟨S⟩`.
-2. When `X` takes `Option`, its payload `P` records `P ≥ ?k` and `P ≥ S`.
-3. `X` reaches `P` along a part, `P` reaches `S` along a lower bound, and `S` reaches `X` again along a lower bound. `X` appears again inside a part of its own, so no finite type holds it, and it is refused.
+2. When `X` takes `Option`, its payload `P` records the equations `P = ?k` and `P = S`.
+3. `X` reaches `P` along a part, and `P`, one equivalence class with `S`, reaches `X` again along a lower bound. `X` appears again inside a part of its own, so no finite type holds it, and it is refused.
 
 ### 6. A capture written by name
 
@@ -445,7 +429,7 @@ Outcome: `last` is `Option⟨u8⟩`.
 1. `L ≥ Option⟨?k⟩`.
 2. The lambda is a binding group of its own, and `x`'s type `X` is universal. `last` is reached by name and its type `L` is an unknown of the enclosing binding group, so the write is a meeting: `L ≥ Option⟨S⟩` with `S ≥ X`. This lower bound rests on `X` through `S` and stays in the lambda's C.
 3. `remember(1u8)` calls a function value whose Values is this lambda alone, so it makes an instance. `X` becomes a new unknown `X'` of the enclosing binding group, which the argument meets: `X' ≥ u8`. The copy of C is `L ≥ Option⟨S'⟩` with `S' ≥ X'`, `L` shared, not made anew.
-4. `L`'s payload `P` has `P ≥ ?k` and `P ≥ S'`. `?k` is `!` by fallback, and `S'` has `X' = u8` as its lower bound and is `u8`, so `P = u8`.
+4. `L`'s payload `P` records the equations `P = ?k` and `P = S'`. That equivalence class's only lower bound is `X'`, and `X' = u8`, so `P = u8`.
 
 ### 7. A write through a reference
 
@@ -459,7 +443,7 @@ Outcome: `x` is `Option⟨u8⟩`.
 
 1. `X ≥ Option⟨?k⟩`. `X` is not a reference, so `r`'s type is a `&mut` whose target is `X`.
 2. `*r`'s type is `r`'s target, `X`. The write lies in the same binding group and `X` is its unknown, so it is a meeting: `X ≥ Option⟨S⟩` with `S ≥ u8`.
-3. `X`'s payload has `?k` and `S` as lower bounds, and with `?k` `!` and `S = u8`, it is `u8`.
+3. `X`'s payload is one equivalence class with `?k` and `S` by the equations, whose only lower bound is `u8`, so it is `u8`.
 
 The same write made inside a lambda through a captured `r` is a boundary: although `X` is an unknown of the enclosing binding group, the place is reached through a reference.
 
