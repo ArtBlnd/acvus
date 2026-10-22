@@ -561,6 +561,13 @@ fn recorder(state: &State, recorder: &Recorder) -> String {
         Recorder::Node(node) => format!("node {}", name(node.as_str())),
         Recorder::Split(class) => format!("split {}", class_of(state, *class)),
         Recorder::Cycle => "cycle".to_string(),
+        Recorder::FunctionType { from, to } => {
+            format!(
+                "function type {} ~> {}",
+                class_of(state, *from),
+                class_of(state, *to)
+            )
+        }
         Recorder::Check => "check".to_string(),
         Recorder::Instance { at, of, .. } => {
             let made = state

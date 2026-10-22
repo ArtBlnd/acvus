@@ -16,7 +16,7 @@ use crate::explore::Final;
 use crate::instance::Made;
 use crate::node::{Decision, LendTarget, NodeAt};
 use crate::program::{ENTRY, Function, Item, Origin, Place, Program, Projection};
-use crate::relation::copy_name;
+use crate::relation::{Recorder, copy_name};
 use crate::sig::{SigArgs, SigTy, SigVar, Signature};
 use crate::solve::State;
 use crate::ty::{Constructor, HasTerm, Mutability, Name, Term, Ty, TyError, check_term};
@@ -312,6 +312,16 @@ enum Decided {
     At(DecidedAt),
     /// Left undecided in C at the last level, which is not the entry's.
     InC,
+}
+
+/// Where a function value passes into a function type (l.199): the level of
+/// the sheet that split it, the roots there of the two sides, and whether the
+/// type's result is an unknown the lambda's result meets.
+struct IntoFunctionType {
+    level: usize,
+    from: ClassId,
+    to: ClassId,
+    ret_meets: bool,
 }
 
 /// A parameter's type, and whether an argument meets it or passes into it by a
@@ -702,7 +712,40 @@ impl Checker<'_> {
                 let at = format!("the pass of {value} into {into}");
                 let from = self.text(context, &at, value)?;
                 let to = self.text(context, &at, into)?;
-                if self.text.meets(self.program, &context.group, into, *place) {
+                if let (Term::FunctionValue { .. }, Term::Function { .. }) =
+                    (from.term(), to.term())
+                {
+                    let Origin::Written(Term::Function { ret, .. }) =
+                        &self.program.class(into).origin
+                    else {
+                        panic!(
+                            "{into} holds a function type its text does not write, which no rule \
+                             links a function value to yet (l.199; design/14-certificate.md, Open)"
+                        );
+                    };
+                    let ret_meets = self.text.unknown(ret);
+                    let value_id = context.own.id(&ClassName::Text(value.clone()));
+                    let into_id = context.own.id(&ClassName::Text(into.clone()));
+                    let (Some(value_id), Some(into_id)) = (value_id, into_id) else {
+                        panic!("{} names the classes {value} and {into}", context.group);
+                    };
+                    let (level, from_root) = context.locate(0, value_id);
+                    let (into_level, to_root) = context.locate(0, into_id);
+                    if level != into_level {
+                        panic!(
+                            "{value} and {into} are read at two levels, which no rule links a \
+                             function value to a function type at yet (l.199; \
+                             design/14-certificate.md, Open)"
+                        );
+                    }
+                    let into_type = IntoFunctionType {
+                        level,
+                        from: from_root,
+                        to: to_root,
+                        ret_meets,
+                    };
+                    self.function_type(context, &at, &into_type, &from, &to);
+                } else if self.text.meets(self.program, &context.group, into, *place) {
                     let holds = self.lower(&from, &to);
                     self.require(context, &at, holds, format!("{from} <= {to} fails (l.282)"));
                 } else {
@@ -781,17 +824,137 @@ impl Checker<'_> {
     /// Each argument into its parameter's type.
     fn passes(&mut self, context: &Context<'_>, at: &str, args: &[Value], params: &[Param]) {
         for (k, (arg, param)) in args.iter().zip(params).enumerate() {
-            let holds = if param.meets {
-                self.lower(arg, &param.ty)
-            } else {
-                self.boundary(arg, &param.ty)
+            self.pass(context, at, k, arg, param);
+        }
+    }
+
+    /// The `k`th argument into its parameter's type.
+    fn pass(&mut self, context: &Context<'_>, at: &str, k: usize, arg: &Value, param: &Param) {
+        let holds = if param.meets {
+            self.lower(arg, &param.ty)
+        } else {
+            self.boundary(arg, &param.ty)
+        };
+        let ty = &param.ty;
+        self.require(
+            context,
+            at,
+            holds,
+            format!("argument {k}: {arg} into {ty} fails"),
+        );
+    }
+
+    /// Where a use's `k`th argument, the text class `arg`, passes into the
+    /// function type its decided candidate writes there, whose result the
+    /// candidate writes as `ret`.
+    fn argument_into_type(
+        &mut self,
+        context: &Context<'_>,
+        level: usize,
+        owner: &Name,
+        k: usize,
+        arg: &Name,
+        ret: &SigTy,
+    ) -> Option<IntoFunctionType> {
+        let arg_id = context
+            .own
+            .id(&ClassName::Text(arg.clone()))
+            .unwrap_or_else(|| panic!("{} names the class {arg}", context.group));
+        let (arg_level, from) = context.locate(0, arg_id);
+        if arg_level != level {
+            panic!(
+                "{arg} is read at another level than the use that passes it, which no rule links \
+                 a function value to a function type at yet (l.199; design/14-certificate.md, Open)"
+            );
+        }
+        let sheet = context.sheet(level);
+        let param = ClassName::Node(Rc::new(owner.clone()), NodeAt::Param(k));
+        let to = sheet.root(sheet.id(&param)?);
+        Some(IntoFunctionType {
+            level,
+            from,
+            to,
+            ret_meets: matches!(ret, SigTy::Var(_)),
+        })
+    }
+
+    /// A function value passing into a function type (l.199): each lambda
+    /// its Values names has an instance made where that boundary was split,
+    /// as though the function type called it, each parameter of the type
+    /// passing into the lambda's parameter and the lambda's result into the
+    /// type's result.
+    fn function_type(
+        &mut self,
+        context: &Context<'_>,
+        at: &str,
+        into: &IntoFunctionType,
+        value: &Value,
+        ty: &Value,
+    ) {
+        let Term::Function { params, ret } = ty.term() else {
+            unreachable!("{ty} is a function type");
+        };
+        let Some(lambdas) = &value.lambdas else {
+            unreachable!("{value} is a function value of a class, which names its Values (l.186)");
+        };
+        let sheet = context.sheet(into.level);
+        for lambda in lambdas {
+            let function = self
+                .program
+                .function(lambda)
+                .expect("a lambda is a function")
+                .clone();
+            let made = sheet.instances.iter().find(|made| {
+                made.group == function.group
+                    && matches!(made.by, Recorder::FunctionType { from, to }
+                        if sheet.root(from) == into.from && sheet.root(to) == into.to)
+            });
+            let Some(made) = made else {
+                self.violation(
+                    context,
+                    at,
+                    format!(
+                        "no instance of {lambda} is made where {value} passes into {ty} (l.199)"
+                    ),
+                );
+                continue;
             };
-            let ty = &param.ty;
+            let Some(lambda_params) = function
+                .params
+                .iter()
+                .map(|param| {
+                    if self.program.in_environment(param) {
+                        let ty = self.text(context, at, param)?;
+                        let meets = self.text.unknown(param);
+                        return Some(Param { ty, meets });
+                    }
+                    let ty = self.copy(context, at, into.level, made, &function, param)?;
+                    let meets = self.text.meets_copy(param);
+                    Some(Param { ty, meets })
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
+            let returned = if self.program.in_environment(&function.result) {
+                self.text(context, at, &function.result)
+            } else {
+                self.copy(context, at, into.level, made, &function, &function.result)
+            };
+            let Some(returned) = returned else {
+                continue;
+            };
+            self.passes(context, at, params, &lambda_params);
+            let holds = if into.ret_meets {
+                self.lower(&returned, ret)
+            } else {
+                self.boundary(&returned, ret)
+            };
             self.require(
                 context,
                 at,
                 holds,
-                format!("argument {k}: {arg} into {ty} fails"),
+                format!("the result of {lambda}: {returned} into {ret} fails (l.199)"),
             );
         }
     }
@@ -894,20 +1057,33 @@ impl Checker<'_> {
                 );
                 let sig = decl.sig.clone();
                 let bound = self.bound(context, &at, level, &owner, &sig)?;
-                let mut params = Vec::new();
-                for (k, param) in sig.params().iter().enumerate() {
+                for (k, (param, arg)) in sig.params().iter().zip(args).enumerate() {
                     let Ok(ty) = param.substitute(&bound) else {
                         self.violation(context, &at, format!("parameter {k} has no type"));
                         return None;
                     };
-                    let meets = matches!(param, SigTy::Var(_));
-                    params.push(Param { ty, meets });
+                    let arg_value = &arg_values[k];
+                    match (arg_value.term(), param) {
+                        (Term::FunctionValue { .. }, SigTy::Term(written))
+                            if matches!(**written, Term::Function { .. }) =>
+                        {
+                            let Term::Function { ret, .. } = &**written else {
+                                unreachable!("the parameter writes a function type");
+                            };
+                            let into_type =
+                                self.argument_into_type(context, level, &owner, k, arg, ret)?;
+                            self.function_type(context, &at, &into_type, arg_value, &ty);
+                        }
+                        _ => {
+                            let meets = matches!(param, SigTy::Var(_));
+                            self.pass(context, &at, k, arg_value, &Param { ty, meets });
+                        }
+                    }
                 }
                 let Ok(returned) = sig.result().substitute(&bound) else {
                     self.violation(context, &at, "the result has no type".to_string());
                     return None;
                 };
-                self.passes(context, &at, &arg_values, &params);
                 self.returns(context, &at, &returned, &result_value);
             }
             Decision::Never => {

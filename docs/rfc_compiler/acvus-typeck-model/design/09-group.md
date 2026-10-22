@@ -78,7 +78,10 @@ the group takes the body's own types.
    itself, and the copy of the generic part's result type, or the environment's,
    entering the call's result as a lower bound (l.198; note 17, row 3). A call
    whose callee's Values name no lambda decides nothing and is not decided then
-   (note 08, reading 19).
+   (note 08, reading 19). A function value passing into a function type makes the
+   same instances where that boundary is split, the type's parameters passing into
+   the lambda's and the lambda's result into the type's (l.199; note 11,
+   reading 4).
 10. **A receiver's `T̄`** is universal (l.316), and the receiver's class holds the
    kind the text writes, so it is decided and universal at once: an argument
    passes into its copy by a boundary (Example 14, step 2). A node that reads

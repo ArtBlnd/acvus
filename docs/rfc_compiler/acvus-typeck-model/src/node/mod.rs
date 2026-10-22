@@ -465,6 +465,46 @@ impl State {
         }
     }
 
+    /// An instance of the lambda's C made at `at` by `by` (l.217), each value
+    /// of `args` passing into the copy of the lambda's parameter in its generic
+    /// part, or into its parameter in the environment, and the copy of its
+    /// result type in its generic part, or the environment's, passing into
+    /// `result` (l.198, l.199).
+    pub(crate) fn instantiate_lambda(
+        &mut self,
+        at: &Name,
+        by: &Recorder,
+        lambda: &Name,
+        args: &[ClassId],
+        result: ClassId,
+    ) -> Recording {
+        let function = self
+            .functions
+            .iter()
+            .find(|function| function.name == *lambda)
+            .expect("a lambda is a function")
+            .clone();
+        let from = Rc::clone(
+            self.solved
+                .get(&function.group)
+                .expect("a lambda's group is solved first (l.215)"),
+        );
+        let mut copy = crate::instance::Instance::new(at, by.clone(), &from);
+        let mut met = Vec::new();
+        let held = self.environment_of(lambda);
+        for (name, held) in function.params.iter().chain([&function.result]).zip(held) {
+            let class = match held {
+                Some(class) => class,
+                None => copy.class(self, from.text(name)),
+            };
+            met.push(class);
+        }
+        let returned = met.pop().expect("the result type follows the parameters");
+        let mut recorded = copy.record_rest(self);
+        recorded.append(self.record_call(args, &met, returned, result, by));
+        recorded
+    }
+
     /// Records what the decided node records.
     pub(crate) fn record_decision(&mut self, name: &Name) -> Recording {
         let mut recorded = Recording::default();
@@ -555,32 +595,8 @@ impl State {
             }
             (NodeKind::CallValue { args, result, .. }, Decision::Calls(lambdas)) => {
                 for lambda in lambdas {
-                    let function = self
-                        .functions
-                        .iter()
-                        .find(|function| function.name == *lambda)
-                        .expect("a lambda is a function")
-                        .clone();
-                    let from = Rc::clone(
-                        self.solved
-                            .get(&function.group)
-                            .expect("a lambda's group is solved first (l.215)"),
-                    );
                     let at = Name::new(&format!("{name}#{lambda}"));
-                    let mut copy = crate::instance::Instance::new(&at, recorder.clone(), &from);
-                    let mut met = Vec::new();
-                    let held = self.environment_of(lambda);
-                    for (name, held) in function.params.iter().chain([&function.result]).zip(held) {
-                        let class = match held {
-                            Some(class) => class,
-                            None => copy.class(self, from.text(name)),
-                        };
-                        met.push(class);
-                    }
-                    let returned = met.pop().expect("the result type follows the parameters");
-                    let params = met;
-                    recorded.append(copy.record_rest(self));
-                    recorded.append(self.record_call(args, &params, returned, *result, &recorder));
+                    recorded.append(self.instantiate_lambda(&at, &recorder, lambda, args, *result));
                 }
             }
             (

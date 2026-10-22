@@ -70,6 +70,7 @@ What each item and decision gives, and what holding means on closed values:
 | `Read` | the position as a lower bound of the binding (l.308) | as above |
 | `BindLend { target, mutability }` | a reference to the position, or its target, as a lower bound of the binding (l.308) | as above |
 | `Calls(λ̄)` | the callee's Values name exactly `λ̄`: every lambda that reaches it is called, and none it does not reach (l.183, l.198); each argument meets its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result (l.198) | as above, under each instance |
+| a function value passing into a function type (l.199) | each lambda its Values names has an instance made where that boundary was split: each parameter of the type passes into the lambda's parameter, and the lambda's result into the type's result, each a meeting or a boundary (l.221) | as above, under that instance |
 | a use's record of l.248 | at its result, the one position a candidate records a type it writes into (note 08, reading 13), that it is a reference where every candidate's result type is one, and no reference where none is; under `Use(k)`, as `k`'s result type | its value is, or is not, a reference, or is `!` |
 
 Holding compares Values as part of the value. Two values are equal where their
@@ -129,8 +130,9 @@ fails there and the rule is decided with 준량:
 
 - Values across a cast or a declared conversion, which change the type the
   function value lies in by a signature (l.78, l.107).
-- A function value reaching a position that decides nothing, as a function value
-  passing into a function type a declaration writes (l.199) does.
+- A function value reaching a function type at a part of a value, or where the
+  two sides are read at two levels of a context: the instances of l.199 are found
+  at the whole value of a pass or an argument, at the level that split it.
 - The element an extern-defined container indexes along its view, a cast.
 - A value a test plants, which a case writes as a type and so with no Values.
 

@@ -293,7 +293,8 @@ impl State {
     }
 
     /// Each argument passing into its parameter's type, and the result type
-    /// entering the use's result (l.194–197).
+    /// passing into the result (l.194–199), each a meeting where the type
+    /// passed into is an unknown and a boundary otherwise (l.221).
     pub(crate) fn record_call(
         &mut self,
         args: &[ClassId],
@@ -303,25 +304,20 @@ impl State {
         recorder: &Recorder,
     ) -> Recording {
         let mut recorded = Recording::default();
-        for (&arg, &param) in args.iter().zip(params) {
-            let relation = if self.is_unknown(param) {
+        for (&value, &into) in args.iter().zip(params).chain([(&returned, &result)]) {
+            let relation = if self.is_unknown(into) {
                 Relation::LowerBound {
-                    lower: arg,
-                    upper: param,
+                    lower: value,
+                    upper: into,
                 }
             } else {
                 Relation::Boundary {
-                    from: arg,
-                    to: param,
+                    from: value,
+                    to: into,
                 }
             };
             recorded.push(self.record(relation, recorder.clone()));
         }
-        let relation = Relation::LowerBound {
-            lower: returned,
-            upper: result,
-        };
-        recorded.push(self.record(relation, recorder.clone()));
         recorded
     }
 

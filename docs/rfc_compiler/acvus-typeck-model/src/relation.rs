@@ -109,6 +109,10 @@ pub enum Recorder {
     /// A cycle of lower bounds alone, merged into one equivalence class
     /// (l.271).
     Cycle,
+    /// The function value `from` passing into the function type `to`, whose
+    /// split makes an instance of each lambda its Values names, as though the
+    /// function type called it (l.199, l.280).
+    FunctionType { from: ClassId, to: ClassId },
     /// The I\* check, making an instance of a lambda's C that no call made, in
     /// a view of a state it decides nodes again in (`design/15-istar.md`,
     /// Domain). Solving never records it.
@@ -127,7 +131,11 @@ impl Recorder {
     /// Whether solving derives it from the other relations, so that a value
     /// read derives it again from the relations that remain (l.263).
     pub fn is_derived(&self) -> bool {
-        matches!(self, Recorder::Split(_) | Recorder::Cycle)
+        match self {
+            Recorder::Split(_) | Recorder::Cycle | Recorder::FunctionType { .. } => true,
+            Recorder::Instance { by, .. } => by.is_derived(),
+            Recorder::Origin | Recorder::Text(_) | Recorder::Node(_) | Recorder::Check => false,
+        }
     }
 
     /// The nodes it is recorded by, a value read leaving any of them out
@@ -146,15 +154,17 @@ impl Recorder {
             | Recorder::Text(_)
             | Recorder::Split(_)
             | Recorder::Cycle
+            | Recorder::FunctionType { .. }
             | Recorder::Check => Vec::new(),
         }
     }
 
-    /// Whether the text or a node records it, so that a value it makes enter
-    /// a type is checked (l.282), in a copy of C as where it was recorded.
+    /// Whether the text, a node, or a function value passing into a function
+    /// type records it, so that a value it makes enter a type is checked
+    /// (l.282), in a copy of C as where it was recorded.
     pub fn is_entering(&self) -> bool {
         match self {
-            Recorder::Text(_) | Recorder::Node(_) => true,
+            Recorder::Text(_) | Recorder::Node(_) | Recorder::FunctionType { .. } => true,
             Recorder::Instance { of, .. } => of.is_entering(),
             Recorder::Origin | Recorder::Split(_) | Recorder::Cycle | Recorder::Check => false,
         }

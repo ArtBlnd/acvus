@@ -255,7 +255,7 @@ Under `TRACE=1` alone:
 | Line | Means |
 |---|---|
 | `fixpoint g` | `g` has no step left |
-| `by: <recorder>` | of `record` and `relation`: what recorded it: `origin`, `text i`, `node n`, `split X`, `cycle`, `check`, `instance m of <recorder>` (what recorded its original in the group `m` instantiates) |
+| `by: <recorder>` | of `record` and `relation`: what recorded it: `origin`, `text i`, `node n`, `split X`, `cycle`, `function type X ~> Y`, `check`, `instance m of <recorder>` (what recorded its original in the group `m` instantiates) |
 | `instance m: C of g` | the instance `m` made, of the C of `g`; `by: <recorder>`, `records: #k, ...` |
 | `union A + B: {M, ...}` | `A` and `B` unified into the class of these members |
 | `by: #k`, `by: congruence <part> of A + B`, `by: kind X at <part>`, `by: fact X: <kind known in part>` | of `union` and `conflict`: the equation at `#k`; the parts `<part>` of the kinds the union of `A` and `B` conjoined; the parts `<part>` of the kind `X` held and the kind it was given; a kind known in part of `X` and what its kind, or another kind known in part, names there |
@@ -349,6 +349,10 @@ steps; `golden()` and every expectation read what they read without it.
   `istar/a-call-left-out-leaves-out-its-instance-relations` declared `choose` to
   give `Fn/1`, a function value no declaration makes since 80b33ad9 (l.186), and
   gives back the one its `T` takes in.
+- 3 cases under `cases/spec`, `l199-*`, test a function value passing into a
+  function type (l.199): refused where the lambda's result reaches the type's by
+  no coercion, accepted where it does, and by a declared conversion at that
+  boundary.
 - 13 cases under `cases/phases` test each phase along a written order, by the line
   of the spec it rests on: recording (l.221, l.229–231), the join (l.80–91, l.171,
   l.271, l.276), splits (l.280), unification (l.156, l.160–165), nodes (l.248,

@@ -18,7 +18,8 @@ an unknown of the group (l.221), recording a part lower bound between a
 structural type's parts and an equation between other parts, and a boundary
 elsewhere. Where a lower bound's or a boundary's two constructors differ, the
 same rule links the parts through the casts' signatures, or the targets of a
-reborrow. A class nothing enters takes the one type the places it passes into
+reborrow; where a function value passes into a function type, an instance of each
+lambda its Values names links them (l.199). A class nothing enters takes the one type the places it passes into
 have, once each has one, and has no value where they have two (l.284). A value
 read is decided on a separate state that replays the relations a node does not
 leave out.
@@ -41,6 +42,19 @@ leave out.
    the last cast's result passes on into the other side. A part lower bound's two
    sides of two constructors relate nothing: a part takes no cast (l.74, l.89),
    and its sources then have no join.
+4. **A function value into a function type.** A function value and a function type
+   are of one constructor, the value carrying no parts (l.188), so no part of the
+   value passes into the type's. Where the split of a boundary finds the two, it
+   makes an instance of each lambda the value's Values names then, as though the
+   type called it (l.199): each parameter of the type passes into the copy of the
+   lambda's parameter, or into the environment's, and the copy of the lambda's
+   result type, or the environment's, into the type's result, each a meeting or a
+   boundary by l.221 (`State::instantiate_lambda`, shared with a call of a
+   function value). What the instance records is recorded by
+   `Recorder::FunctionType`, which a value read derives again, as it does a
+   split's, and checks, as it does a node's. The whole boundary's own check is
+   `Undecided`, a function value and a function type agreeing at every position
+   both decide; what the type requires is checked in the instance.
 4. **Sources that give no constructor.** A class whose sources are only LitVars is
    unified with them and stays unsolved, holding a LitVar until fallback. Where
    they are of two families the unification conflicts (l.165), so its sources

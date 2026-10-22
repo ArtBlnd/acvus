@@ -1,0 +1,19 @@
+//@ spec: l.199, l.280, l.221, l.282
+// takes(|x| x);            // takes(fn(u8) -> u16); a conversion u8 → u16
+// As where no conversion is declared, but the copy of λ's result passes into
+// the type's result by a boundary, which a declared conversion reaches
+// (l.282): accepted.
+extern fn takes(fn(u8) -> u16);
+#[conversion] extern fn widen(u8) -> u16;
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    `λ result` = X;
+}
+let `|x| x`: lambda λ;
+let `takes(..)`;
+`takes(..)` = takes(`|x| x`) @ takes;
+
+must pass;
+assert check `|x| x ~> takes.Param(0)#λ/λ result ~> takes.Param(0).Return` == conversion widen#0;

@@ -16,7 +16,7 @@ use crate::decl::Node;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
-use crate::ty::{Constructor, Mutability, Term};
+use crate::ty::{Constructor, Mutability, Name, Term};
 
 /// How a relation's value passes into its other side (l.280).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -138,8 +138,10 @@ impl State {
     /// (l.280). Where their constructors differ and the value passes whole,
     /// the parts are linked through the declared casts' parameters and
     /// results, or between the targets of a reborrow; a part lower bound's
-    /// sides of two constructors relate nothing (l.89). Returns the relations
-    /// recorded.
+    /// sides of two constructors relate nothing (l.89). Where a function value
+    /// passes whole into a function type, an instance of each lambda its
+    /// Values names links them, as though the type called it (l.199). Returns
+    /// the relations recorded.
     fn split_parts(
         &mut self,
         from: ClassId,
@@ -156,6 +158,22 @@ impl State {
             return recorded;
         };
         let (from_c, to_c) = (from_kind.constructor(), to_kind.constructor());
+        if let (Term::FunctionValue { .. }, Term::Function { params, ret }) = (&from_kind, &to_kind)
+        {
+            if passing == Passing::Part {
+                return recorded;
+            }
+            let recorder = Recorder::FunctionType { from, to };
+            for lambda in self.values_of(from) {
+                let at = Name::new(&format!(
+                    "{} ~> {}#{lambda}",
+                    self.arena.name(from),
+                    self.arena.name(to)
+                ));
+                recorded.append(self.instantiate_lambda(&at, &recorder, &lambda, params, *ret));
+            }
+            return recorded;
+        }
         if from_c == to_c {
             for (key, from_part) in from_kind.parts() {
                 let Some(&to_part) = to_kind.part(&key) else {

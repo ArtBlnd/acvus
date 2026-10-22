@@ -8,7 +8,8 @@ records, `src/record.rs`.
 
 Every relation is recorded in a log with what recorded it: the type the text gives
 a class, an item of the text, a use or a lend once decided, a class taking a
-constructor, or a cycle of lower bounds merged. The equivalence classes are what
+constructor, a cycle of lower bounds merged, or a function value passing into a
+function type, whose split makes its lambdas' instances (l.199). The equivalence classes are what
 the log makes, so a value read is decided by replaying the relations that remain.
 
 ## Readings
