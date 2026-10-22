@@ -1,0 +1,36 @@
+//@ spec: l.238, l.197, l.186
+// As before, with take(Option<U>): X is U by the split, a is Option<U>, and
+// take(a) holds: accepted in every order.
+extern type U;
+extern type T;
+#[cast] extern fn up(U) -> T;
+extern fn apply(fn(U) -> ());
+extern fn take(Option<U>);
+group λ in run {
+    let X;
+    let S;
+    let `Some(x)`: Option<S>;
+    let `()`: ();
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    S = X;
+}
+let L;
+let ?k;
+let None: Option<?k>;
+let `|x| ..`: lambda λ;
+let G;
+let `apply(g)`;
+let `take(a)`;
+L = None;
+G = `|x| ..`;
+`apply(g)` = apply(G) @ apply;
+`take(a)` = take(L) @ take;
+group λ {
+    #[by_name] L = `Some(x)`;
+    `λ result` = `()`;
+}
+
+must pass;
+assert X: U;
+assert L: Option<U>;

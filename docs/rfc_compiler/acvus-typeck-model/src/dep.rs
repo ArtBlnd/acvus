@@ -9,7 +9,7 @@ use crate::class::ClassId;
 use crate::node::Reads;
 use crate::relation::Relation;
 use crate::solve::State;
-use crate::ty::Name;
+use crate::ty::{Name, Term};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Vertex {
@@ -139,6 +139,21 @@ impl State {
                     for within in self.within(to) {
                         if within != from && !self.is_solved(within) {
                             add(Vertex::Class(within), Vertex::Class(from), Edge::Taking);
+                        }
+                    }
+                    // A function value passing into a function type records,
+                    // at its split, into the parameters in the environment of
+                    // each lambda whose value reaches it (l.197, l.238 (a)).
+                    if matches!(self.classes.held(to).kind, Some((Term::Function { .. }, _))) {
+                        for lambda in self.values_of(from) {
+                            let mut held = self.environment_of(&lambda);
+                            held.pop();
+                            for param in held.into_iter().flatten() {
+                                let param = self.root(param);
+                                if param != from && !self.is_solved(param) {
+                                    add(Vertex::Class(param), Vertex::Class(from), Edge::Taking);
+                                }
+                            }
                         }
                     }
                 }

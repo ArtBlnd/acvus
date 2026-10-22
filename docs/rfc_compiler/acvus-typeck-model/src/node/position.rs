@@ -31,6 +31,9 @@ impl State {
                     let sig = &candidate.sig;
                     for (arg, param) in args.iter().zip(sig.params()) {
                         positions.extend(self.within_depth(*arg, param));
+                        let (params, results) = self.environment_within(*arg, param);
+                        positions.extend(params);
+                        positions.extend(results);
                     }
                     positions.extend(self.within_depth(*result, sig.result()));
                 }
@@ -141,6 +144,9 @@ impl State {
                     SigTy::Term(_) => {
                         out.insert(self.root(*arg));
                         out.extend(self.within_depth(*arg, param));
+                        let (params, results) = self.environment_within(*arg, param);
+                        into.extend(params);
+                        out.extend(results);
                     }
                     SigTy::Var(_) => {
                         into.insert(self.root(*arg));
@@ -149,6 +155,42 @@ impl State {
             }
         }
         out.difference(&into).copied().collect()
+    }
+
+    /// Where `ty` writes a function type at a class holding a function value,
+    /// at any depth it writes terms, the parameter and the result types in the
+    /// environment of each lambda its Values names, as the parts at the function
+    /// type's parameters and result (l.238 (b)): the parameters, into which the
+    /// boundary's split records, and the results, which pass out of it.
+    pub(super) fn environment_within(
+        &self,
+        class: ClassId,
+        ty: &SigTy,
+    ) -> (BTreeSet<ClassId>, BTreeSet<ClassId>) {
+        let (mut params, mut results) = (BTreeSet::new(), BTreeSet::new());
+        let SigTy::Term(term) = ty else {
+            return (params, results);
+        };
+        let Some((kind, _)) = &self.classes.held(class).kind else {
+            return (params, results);
+        };
+        if let (Term::Function { .. }, Term::FunctionValue { .. }) = (&**term, kind) {
+            for lambda in self.values_of(class) {
+                let mut held = self.environment_of(&lambda);
+                let result = held.pop().expect("the result type follows the parameters");
+                params.extend(held.into_iter().flatten().map(|c| self.root(c)));
+                results.extend(result.map(|c| self.root(c)));
+            }
+            return (params, results);
+        }
+        for (key, written) in term.parts() {
+            if let Some(&part) = kind.part(&key) {
+                let (p, r) = self.environment_within(part, written);
+                params.extend(p);
+                results.extend(r);
+            }
+        }
+        (params, results)
     }
 
     /// The classes at the positions inside `class`'s kind where `ty` writes a

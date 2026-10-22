@@ -1,0 +1,30 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
+outcome 1
+  refused
+  value `()`: ()
+  value ?k: U
+  value G: Fn/1
+  value L: Option<U>
+  value None: Option<U>
+  value S: U
+  value `Some(x)`: Option<U>
+  value X: U
+  value `apply(g)`: ()
+  value `take(a)`: ()
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision apply: apply#0
+  decision take: take#0
+  check `G ~> apply.Param(0)`: Ok(Undecided)
+  check `G ~> apply.Param(0)#λ/λ result ~> apply.Param(0).Return`: Ok(Identity)
+  check `L ~> take.Param(0)`: Err(None)
+  check `None <= L`: Ok(Identity)
+  check `Some(x) <= L`: Ok(Identity)
+  check `X <= S`: Ok(Identity)
+  check `apply.Param(0).Param(0) <= X`: Ok(Identity)
+  check `apply.Result <= apply(g)`: Ok(Identity)
+  check `take.Result <= take(a)`: Ok(Identity)
+  check `|x| .. <= G`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
+  I* of a final state: []

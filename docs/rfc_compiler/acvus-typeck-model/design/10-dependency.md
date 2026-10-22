@@ -63,6 +63,18 @@ met.
    class has a source still to come, a use that only reads it waits for that source
    and is not waited for: H7. Four cases refused at an undecided use now give the
    classes at its arguments their values, the refusal unchanged.
+9. **A lambda's environment and a function type** (l.238, since 61f3edf3 and
+   77b3180b). A class holding a function value is taken as holding the parameter
+   and result types in its lambdas' environments as the parts at a function
+   type's parameters and result: they lie within the depth of a candidate writing
+   that function type (`State::environment_within`), the parameters as classes it
+   records into and the result types as ones it passes out of. And each
+   environment parameter of a lambda whose value reaches a class passing by a
+   boundary into a function type waits for that class to take its constructor,
+   the boundary's split recording into it (`Edge::Taking`). Without the second,
+   the use was decided at once, the split waited for the function value's class,
+   and the parameter was filled first: G1 of the review of 2026-10-22, four
+   outcomes, now one.
 
 ## Left open for change
 
