@@ -275,7 +275,7 @@ use, lend, projection, binding이 무엇이 되는지는 그것이 읽는 값으
 | 등식이 있음 | 모든 등식이 주는 타입. |
 | 등식이 없음 | 끊긴 의존이 가리키던 하한과 part 하한을 제외한 출처들이 주는 타입의 join, 곧 하한과 use가 주는 타입이 `≤`로, part 하한이 주는 타입이 `≤ₚ`로 닿는 가장 작은 타입. 하한과 part 하한은 자기 타입을, use는 고른 signature의 결과 타입을, kind는 자기가 가리키는 member를 준다. |
 
-kind가 member를 주는 것은 그 member가 이 body에 보일 때뿐이다. object의 field와 enum의 variant는 body의 텍스트가 쓰므로 보이고, `Option`, `Result`, `Error`의 member와 host가 준 타입의 member는 바깥에서 쓰므로 보이지 않는다. 출처가 kind뿐인 동치류는 그 kind가 가리키는 member의 constructor를 받는다. 동치류의 값은 그 동치류가 지닌 kind를 만족하는 타입이다.
+kind가 member를 주는 것은 그 member가 이 body에 보일 때뿐이다. object의 field와 enum의 variant는 body의 텍스트가 쓰므로 보이고, `Option`, `Result`, `Error`의 member와 host가 준 타입의 member는 바깥에서 쓰므로 보이지 않는다. 출처가 kind뿐인 동치류는 그 kind가 가리키는 member의 constructor를 받는다. 동치류의 값은 그 동치류가 지닌 kind를 만족하는 타입이며, 값이 없는 `!`는 모든 kind를 만족한다.
 
 동치류가 constructor를 받으면, 그 하한, part 하한, 경계의 두 쪽의 part마다, 값의 part가 넘어가는 자리로서 관계가 기록된다(쪼갬). 그 자리가 만남이면 structural type의 part 사이에는 part 하한이, 그 밖의 part 사이에는 등식이, 경계이면 경계가 기록된다(만남과 경계). 하한이나 경계의 두 쪽의 constructor가 다르면, 값이 선언된 cast들의 parameter로 넘어가고 그 결과가 다시 넘어가는 것으로 보아 같은 규칙으로 잇고, `&mut T`가 `&U`로 넘어가면 target끼리 잇는다. 함수 값이 함수 타입으로 넘어가면, 그 lambda들의 instance로 잇는다(Instance). `?`의 감싸기는 그 감싸는 `Error`의 payload로 잇는다(`?`). `?N ⇝ U`이면 `?N`을 `U`와 unify한다.
 
