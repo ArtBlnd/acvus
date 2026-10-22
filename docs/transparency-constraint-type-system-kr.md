@@ -88,7 +88,7 @@ structural type은 member에 대해 covariant다. structural type의 part는 cas
 | `! ⊔ T = T` | `!`와 `T`는 `T`. |
 | `S ⊔ₚ T` | part의 join. cast 없이 합친다. `S`와 `T`의 constructor가 같을 때 member는 합집합으로 하고, structural type의 part는 다시 `⊔ₚ`로 합치며, 그 밖의 part는 같아야 한다. `! ⊔ₚ T = T`이고, 그 밖에는 join이 없다. 이것이 정하는 순서가 `≤ₚ`다. |
 
-`Error`는 언어의 enum이며, 그 variant는 `?`로만 만들어진다(`?`). 선언과 텍스트가 적는 타입과 context가 주는 타입은 `Error`를 담지 않는다. 이름이 없는 error 타입 `E`에서 `?`는 variant 대신 `Error⟨E⟩`를 만든다. `Error⟨E⟩`는 variant가 없고 part 하나 `E`를 가진 `Error`이며, 그 constructor는 variant를 가진 `Error`의 것과 달라 둘은 join되지 않는다.
+`Error`는 언어의 enum이며, 그 variant는 `?`로만 만들어진다(`?`). 그래서 `Error`는 값이 program 밖으로 나가는 자리에만 적을 수 있다. 곧 선언의 parameter와 embedding이 결과에 선언한 타입은 `Error`를 담을 수 있고, 선언의 결과, embedding이 input에 선언한 타입, context가 주는 타입, 텍스트가 적는 타입은 담지 않는다. 함수 타입의 parameter에서는 값이 나가는 쪽이 뒤집힌다. 이름이 없는 error 타입 `E`에서 `?`는 variant 대신 `Error⟨E⟩`를 만든다. `Error⟨E⟩`는 variant가 없고 part 하나 `E`를 가진 `Error`이며, 그 constructor는 variant를 가진 `Error`의 것과 달라 둘은 join되지 않는다.
 
 ### Coercion
 

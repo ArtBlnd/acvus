@@ -88,7 +88,7 @@ The join of two types, and the order `≤` the join defines (`S ≤ T` where `S 
 | `! ⊔ T = T` | Of `!` and `T`, `T`. |
 | `S ⊔ₚ T` | The join of parts, made without casts. Where `S` and `T` have one constructor, their members are united, the parts of a structural type are joined by `⊔ₚ` again, and other parts must be equal. `! ⊔ₚ T = T`, and otherwise there is no join. The order it defines is `≤ₚ`. |
 
-`Error` is the language's enum, and its variants are made only by `?` (`?`). The types a declaration or the text writes, and those a context gives, hold no `Error`. At an error type `E` with no name, `?` makes `Error⟨E⟩` in place of a variant. `Error⟨E⟩` is an `Error` with no variant and one part `E`, and its constructor differs from that of an `Error` with variants, so the two have no join.
+`Error` is the language's enum, and its variants are made only by `?` (`?`). So `Error` may be written only where a value leaves the program: a declaration's parameters and the type the embedding declares for the result may hold `Error`, and a declaration's result, the types the embedding declares for the inputs, those a context gives and those the text writes hold none. At a function type's parameter, the side a value leaves by is turned over. At an error type `E` with no name, `?` makes `Error⟨E⟩` in place of a variant. `Error⟨E⟩` is an `Error` with no variant and one part `E`, and its constructor differs from that of an `Error` with variants, so the two have no join.
 
 ### Coercion
 
