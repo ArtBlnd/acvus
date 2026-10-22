@@ -212,7 +212,7 @@ A binding group is solved as one constraint graph.
 | C | The equivalence classes left unsolved and the uses, lends, projections and bindings left undecided when the binding group reaches its fixpoint, and the constraints on them. |
 | Order | A binding group is solved before the binding group in which a use records its C. |
 
-When a use makes an instance, it makes anew the equivalence classes and the uses, lends, projections and bindings of C that are that binding group's own, puts its type arguments in the universals' places, and records them in its own binding group. Those copies are decided in the binding group they are recorded in. The type arguments are unknowns of the binding group the use lies in. The equivalence classes of an enclosing binding group are not made anew but shared. A lower bound, part lower bound or boundary already split in C is not split again in the copies (Value).
+When a use makes an instance, it makes anew the equivalence classes and the uses, lends, projections and bindings of C that are that binding group's own, puts its type arguments in the universals' places, and records them in its own binding group. It makes anew, too, the lambdas placed in that binding group: a copy's environment is the equivalence classes the instance made anew, and the Values of a copy's function value name the copied lambdas. Those copies are decided in the binding group they are recorded in. The type arguments are unknowns of the binding group the use lies in. The equivalence classes of an enclosing binding group are not made anew but shared. A lower bound, part lower bound or boundary already split in C is not split again in the copies (Value).
 
 ### Meeting and boundary
 

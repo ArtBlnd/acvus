@@ -212,7 +212,7 @@ binding group 하나는 constraint graph 하나로 함께 풀린다.
 | C | 그 binding group이 fixpoint에 닿았을 때 풀리지 않은 동치류와 정해지지 않은 use, lend, projection, binding, 그리고 그것들에 걸린 제약. |
 | 순서 | binding group은, 그 C를 기록하는 use가 놓인 binding group보다 먼저 풀린다. |
 
-use는 instance를 만들 때 C에서 그 binding group 자신의 동치류와 use, lend, projection, binding을 새로 만들고, universal 자리에 use의 type argument를 놓아 자기 binding group에 기록한다. 그 사본은 그것이 기록된 binding group에서 정해진다. type argument는 use가 놓인 binding group의 미지수다. 감싸는 binding group의 동치류는 새로 만들지 않고 함께 쓴다. C에서 이미 쪼갠 하한, part 하한, 경계는 사본에서 다시 쪼개지 않는다(값).
+use는 instance를 만들 때 C에서 그 binding group 자신의 동치류와 use, lend, projection, binding을 새로 만들고, universal 자리에 use의 type argument를 놓아 자기 binding group에 기록한다. 그 binding group 안에 놓인 lambda도 새로 만든다. 그 사본의 environment는 그 instance가 새로 만든 동치류들이며, 사본의 함수 값의 Values는 그 사본 lambda를 가리킨다. 그 사본은 그것이 기록된 binding group에서 정해진다. type argument는 use가 놓인 binding group의 미지수다. 감싸는 binding group의 동치류는 새로 만들지 않고 함께 쓴다. C에서 이미 쪼갠 하한, part 하한, 경계는 사본에서 다시 쪼개지 않는다(값).
 
 ### 만남과 경계
 
