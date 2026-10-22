@@ -28,8 +28,11 @@ them, `!` joins every part, and two parts of two constructors have no join.
   note 05's.
 - Facts are joined beside a type (l.175), from note 06 on.
 - `Error`'s variants are made by `?` alone (l.91, l.339), which the model does not
-  have. Two `Error`s are joined as two enums of one name are: their variants
-  united, each payload by `⊔ₚ`.
+  have yet. Two `Error`s are joined as two enums of one name are: their variants
+  united, each payload by `⊔ₚ`. `Error⟨E⟩` (`Term::ErrorOf`) is an `Error` too, so
+  structural, its one part joined by `⊔ₚ`; its constructor is its own, so it has no
+  join with an `Error` with variants (l.91), as 준량 confirmed: `Error` is
+  structural so that what it holds joins part by part.
 
 ## Readings
 

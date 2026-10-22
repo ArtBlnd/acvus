@@ -1,0 +1,17 @@
+//@ spec: l.91, l.105, l.89, l.68
+// Error⟨E⟩ is the Error with no variant and one part, a constructor of its
+// own (l.91). A type with no name, u8 or Option⟨u8⟩, is wrapped into it
+// (l.105); a type of a name is not, nor is an Error, which is not wrapped
+// (l.339). Error is structural, so two Error⟨..⟩ join their parts by ⊔ₚ
+// (l.68, l.89); an Error⟨..⟩ and an Error with variants have no join (l.91).
+extern type B;
+
+assert coerce(u8, Error<u8>) == wrap Wrapped(identity);
+assert coerce(Option<u8>, Error<Option<u8>>) == wrap Wrapped(identity);
+assert coerce(B, Error<B>) == none;
+assert coerce(Error<u8>, Error<Error<u8>>) == none;
+assert coerce(Error<u8>, Error{B(B)}) == none;
+assert join(Error<u8>, Error<u8>) == Error<u8>;
+assert join(Error<Option<!>>, Error<Option<u8>>) == Error<Option<u8>>;
+assert join(Error<u8>, Error<u16>) == none;
+assert join(Error<u8>, Error{B(B)}) == none;

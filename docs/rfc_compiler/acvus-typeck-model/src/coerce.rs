@@ -108,9 +108,10 @@ pub enum Structural {
         added: BTreeSet<Member>,
         parts: Vec<(PartKey, Coercion)>,
     },
-    /// Wrapped in the variant of `Error` named after the value's type, after
-    /// the value is changed into that variant's payload.
-    Wrap(Name, Box<Coercion>),
+    /// Wrapped in the `Error` at this part: the variant named after the
+    /// value's type, or `Error⟨E⟩`'s one part where the type has no name
+    /// (l.104, l.105), after the value is changed into that part's type.
+    Wrap(PartKey, Box<Coercion>),
 }
 
 impl Coercion {
@@ -348,7 +349,19 @@ fn structural(at: &ReadValue, to: &ReadValue, way: Way) -> Option<Structural> {
         return variants
             .iter()
             .find(|(_, payload)| agrees(at, payload))
-            .map(|(variant, _)| Structural::Wrap(variant.clone(), Box::new(Coercion::Identity)));
+            .map(|(variant, _)| {
+                Structural::Wrap(
+                    PartKey::Payload(variant.clone()),
+                    Box::new(Coercion::Identity),
+                )
+            });
+    }
+    if let (Way::Coercion { .. }, Term::ErrorOf(wrapped)) = (way, b)
+        && !is_error(a)
+        && !matches!(a, Term::Enum(..) | Term::Struct(..) | Term::Extern { .. })
+    {
+        return agrees(at, wrapped)
+            .then(|| Structural::Wrap(PartKey::Wrapped, Box::new(Coercion::Identity)));
     }
     shape(a, b, way)
 }

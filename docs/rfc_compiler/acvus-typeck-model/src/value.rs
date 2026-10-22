@@ -241,6 +241,7 @@ impl State {
                     .map(|variant| (variant.clone(), part(PartKey::Payload(variant))))
                     .collect(),
             ),
+            Constructor::ErrorOf => Term::ErrorOf(part(PartKey::Wrapped)),
             Constructor::Struct(module) => {
                 let fields = decls
                     .types()

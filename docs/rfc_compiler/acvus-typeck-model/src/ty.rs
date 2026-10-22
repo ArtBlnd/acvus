@@ -159,6 +159,9 @@ pub enum Term<P> {
     Object(BTreeMap<Name, P>),
     /// `E{V̄(T̄)}`, by variant.
     Enum(Name, BTreeMap<Name, P>),
+    /// `Error⟨E⟩`, the `Error` with no variant and one part, the value it
+    /// wraps (l.91).
+    ErrorOf(P),
     /// A module's struct, with one part for each field in declared order.
     Struct(Name, Vec<P>),
     /// `N⟨T̄, ι⟩`.
@@ -190,6 +193,8 @@ pub enum Constructor {
     Function(usize),
     Object,
     Enum(Name),
+    /// `Error⟨E⟩`'s, which is not that of an `Error` with variants (l.91).
+    ErrorOf,
     Struct(Name),
     Extern(Name),
     Scalar(Scalar),
@@ -219,6 +224,8 @@ pub enum PartKey {
     Field(Name),
     Arg(usize),
     Identity,
+    /// `Error⟨E⟩`'s one part.
+    Wrapped,
 }
 
 impl<P> Term<P> {
@@ -234,6 +241,7 @@ impl<P> Term<P> {
             Term::FunctionValue { arity } => Constructor::Function(*arity),
             Term::Object(_) => Constructor::Object,
             Term::Enum(name, _) => Constructor::Enum(name.clone()),
+            Term::ErrorOf(_) => Constructor::ErrorOf,
             Term::Struct(module, _) => Constructor::Struct(module.clone()),
             Term::Extern { name, .. } => Constructor::Extern(name.clone()),
             Term::Scalar(scalar) => Constructor::Scalar(*scalar),
@@ -286,6 +294,7 @@ impl<P> Term<P> {
                 .iter()
                 .map(|(variant, payload)| (PartKey::Payload(variant.clone()), payload))
                 .collect(),
+            Term::ErrorOf(wrapped) => vec![(PartKey::Wrapped, wrapped)],
             Term::Struct(_, args) => args
                 .iter()
                 .enumerate()
@@ -381,6 +390,7 @@ impl<P> Term<P> {
                     })
                     .collect::<Result<_, E>>()?,
             ),
+            Term::ErrorOf(wrapped) => Term::ErrorOf(f(PartKey::Wrapped, wrapped)?),
             Term::Struct(module, args) => Term::Struct(
                 module,
                 args.into_iter()
@@ -419,14 +429,16 @@ impl<P> Term<P> {
 }
 
 impl Constructor {
-    /// Object, enum, tuple, array, option and result (l.68). The parts of a
-    /// structural constructor are joined without casts, and every part of any
-    /// other constructor is invariant (l.74).
+    /// Object, enum, tuple, array, option and result (l.68), `Error⟨E⟩`
+    /// among the enums as an `Error` (l.91). The parts of a structural
+    /// constructor are joined without casts, and every part of any other
+    /// constructor is invariant (l.74).
     pub fn is_structural(&self) -> bool {
         matches!(
             self,
             Constructor::Object
                 | Constructor::Enum(_)
+                | Constructor::ErrorOf
                 | Constructor::Tuple(_)
                 | Constructor::Array(_)
                 | Constructor::Option
@@ -562,6 +574,7 @@ where
                 write_listed(f, variants)?;
                 f.write_str("}")
             }
+            Term::ErrorOf(wrapped) => write!(f, "Error<{wrapped}>"),
             Term::Struct(module, args) => {
                 write!(f, "{module}")?;
                 if !args.is_empty() {

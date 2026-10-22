@@ -106,6 +106,10 @@ where
                         err: part(&args[1])?,
                     }
                 }
+                "Error" => {
+                    arity(1)?;
+                    Term::ErrorOf(part(&args[0])?)
+                }
                 _ => {
                     let name_ = Name::new(name);
                     if let Some(decl) = types.struct_decl(&name_) {

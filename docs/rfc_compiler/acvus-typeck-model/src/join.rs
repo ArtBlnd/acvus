@@ -64,9 +64,11 @@ fn part_join(s: &Ty, t: &Ty) -> Result<Ty, JoinError> {
     }
 }
 
-/// Whether the term is the language's enum `Error`.
+/// Whether the term is the language's enum `Error`, with variants or
+/// `Error⟨E⟩` (l.91).
 pub(crate) fn is_error<P>(term: &Term<P>) -> bool {
     matches!(term, Term::Enum(name, _) if name.as_str() == ERROR)
+        || matches!(term, Term::ErrorOf(_))
 }
 
 fn raised(decls: &Decls, ty: &Ty, node: &Node) -> Result<Ty, JoinError> {

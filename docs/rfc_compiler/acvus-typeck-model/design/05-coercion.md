@@ -58,7 +58,10 @@ within its family.
    below it is a whole value's: `A ⇝ Error{B(B)}` casts once, then wraps.
 5. **A wrap is exact.** `E ⇝ Error{N̄(Ē)}` where `E` is one of `Ē` (l.104): after
    the casts, the value's type is the variant's payload. Where the casts pass two
-   types that are variants, two compositions reach (`holes.md`, H2).
+   types that are variants, two compositions reach (`holes.md`, H2). `E ⇝ Error⟨E⟩`
+   wraps a type of no name, one neither an enum, a struct nor an extern-defined
+   type (l.105), at `Error⟨E⟩`'s one part (`Structural::Wrap(PartKey::Wrapped, ..)`);
+   an `Error`, of variants or `Error⟨..⟩`, is wrapped by neither row (l.339).
 6. **The steps of `≤`.** `S ≤ T` joins to `T`, so the steps are those of the join
    (l.86–89): a reborrow where an exclusive reference meets a shared one, the casts
    up to `T`'s node, then members gained, fields unchanged and variants added, and

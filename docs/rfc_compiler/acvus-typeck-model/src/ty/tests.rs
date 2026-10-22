@@ -144,6 +144,14 @@ fn shapes() -> Vec<Shape> {
             notation: "E{A(!), B(u8)}",
         },
         Shape {
+            ty: ty(Term::ErrorOf(u8_.clone())),
+            constructor: Constructor::ErrorOf,
+            members: vec![],
+            parts: vec![PartKey::Wrapped],
+            structural: true,
+            notation: "Error<u8>",
+        },
+        Shape {
             ty: ty(Term::Struct(
                 name("Pair"),
                 vec![
@@ -238,6 +246,7 @@ fn variant_index(term: &Term<Ty>) -> usize {
         Term::Unit => 15,
         Term::Never => 16,
         Term::Identity(_) => 17,
+        Term::ErrorOf(_) => 18,
     }
 }
 
@@ -247,7 +256,7 @@ fn shapes_cover_every_variant_of_term() {
         .iter()
         .map(|shape| variant_index(shape.ty.term()))
         .collect();
-    assert_eq!(covered, (0..18).collect::<BTreeSet<usize>>());
+    assert_eq!(covered, (0..19).collect::<BTreeSet<usize>>());
 }
 
 #[test]

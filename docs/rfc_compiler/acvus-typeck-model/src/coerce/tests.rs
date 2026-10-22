@@ -197,7 +197,10 @@ fn an_enum_widens_and_a_named_type_is_wrapped_in_its_variant_of_error() {
         Ok(Coercion::Composition {
             reborrow: false,
             casts: casts(&[0]),
-            structural: Some(Structural::Wrap(name("B"), Box::new(Coercion::Identity))),
+            structural: Some(Structural::Wrap(
+                PartKey::Payload(name("B")),
+                Box::new(Coercion::Identity)
+            )),
         })
     );
     let some = |t: Ty| ty(Term::Option(t));

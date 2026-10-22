@@ -1471,14 +1471,9 @@ fn carries(from: &Value, to: &Value, coercion: &Coercion) -> bool {
                     };
                     carries(from, to, coercion)
                 }),
-                Some(Structural::Wrap(variant, inner)) => {
-                    let Some(payload) = to
-                        .term()
-                        .constructor()
-                        .payload_part(variant)
-                        .and_then(|key| to.part(&key))
-                    else {
-                        panic!("{to} wraps a value in {variant}, which it has no payload of");
+                Some(Structural::Wrap(key, inner)) => {
+                    let Some(payload) = to.part(key) else {
+                        panic!("{to} wraps a value at {key:?}, which it has no part at");
                     };
                     carries(from, payload, inner)
                 }
