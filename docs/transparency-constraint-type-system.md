@@ -340,7 +340,7 @@ A position that decides nothing reaches every candidate: a position the value th
 
 ## Block
 
-A block expression `{ e }`, a block that is an expression by itself, is solved as a lambda with no parameter whose result is `e`, called where it lies: `(|| e)()` (Facts, Instance). A block that is a branch of an if or a body is not a block expression. But the exits of `return` and `?` inside it pass into the enclosing body's result type, not the lambda's. So what in `e` is joined to a capture is solved with the enclosing binding group, and the rest is solved first in its own binding group to its fixpoint: what is decided there is used as it is, and what is left undecided in C is decided in the enclosing binding group, as the call's instance.
+A block expression `{ e }`, a block that is an expression by itself, is solved as a lambda with no parameter whose result is `e`, called where it lies: `(|| e)()` (Facts, Instance). A block that is a branch of an if or a body is not a block expression. So what in `e` is joined to a capture is solved with the enclosing binding group, and the rest is solved first in its own binding group to its fixpoint: what is decided there is used as it is, and what is left undecided in C is decided in the enclosing binding group, as the call's instance.
 
 ## Identity
 

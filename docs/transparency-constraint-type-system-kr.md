@@ -340,7 +340,7 @@ method 호출의 receiver는 첫 인자다. 적힌 그대로, `&`, 그리고 rec
 
 ## Block
 
-block expr `{ e }`, 곧 그 자체로 식인 block은, parameter가 없고 `e`를 결과로 내는 lambda를 그 자리에서 바로 호출하는 것, 곧 `(|| e)()`로 풀린다(Facts, Instance). if의 branch나 body인 block은 block expr가 아니다. 다만 그 안의 `return`과 `?`의 exit는 그 lambda의 결과 타입이 아니라 감싸는 body의 결과 타입으로 넘어간다. 그래서 `e`에서 capture에 이어진 것은 감싸는 binding group에서 함께 풀리고, 나머지는 자기 binding group에서 먼저 fixpoint까지 풀리며, 거기서 정해진 것은 그대로 쓰이고 정해지지 않아 C에 남은 것은 그 호출의 instance로서 감싸는 binding group에서 정해진다.
+block expr `{ e }`, 곧 그 자체로 식인 block은, parameter가 없고 `e`를 결과로 내는 lambda를 그 자리에서 바로 호출하는 것, 곧 `(|| e)()`로 풀린다(Facts, Instance). if의 branch나 body인 block은 block expr가 아니다. 그래서 `e`에서 capture에 이어진 것은 감싸는 binding group에서 함께 풀리고, 나머지는 자기 binding group에서 먼저 fixpoint까지 풀리며, 거기서 정해진 것은 그대로 쓰이고 정해지지 않아 C에 남은 것은 그 호출의 instance로서 감싸는 binding group에서 정해진다.
 
 ## Identity
 
