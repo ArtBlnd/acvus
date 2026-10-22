@@ -239,7 +239,7 @@ body의 텍스트가 주는 제약은 주어지는 즉시 동치류에 기록되
 | part의 동치류 | 그것을 part로 가진 동치류들이 모두 constructor를 받는 것 |
 | universal | 그것을 고르는 use, 곧 그 body의 instance를 만드는 use. 그 use는 그 binding group 밖에 있다. |
 | use | 읽는 자리의 동치류에 관계를 기록하는 use, lend, projection, binding |
-| lend, projection, binding | 그 place나 operand의 동치류에 관계를 기록하는 use, lend, projection, binding 가운데, 그 동치류를 operand로 한 field, component, index, variant의 projection과, 그 동치류가 reference인지를 이미 기록한 use가 아닌 것 |
+| lend, projection, binding | 그 place나 operand의 동치류가 reference인지를 정할 수 있는 use, lend, projection, binding, 곧 그 동치류에 그것을 정하는 출처(Place)를 기록할 수 있는 것. 그래서 그 동치류를 operand로 한 field, component, index, variant의 projection, 그 동치류가 reference인지를 이미 기록했거나 어느 후보도 거기 하한이나 등식을 기록하지 않는 use, 그 동치류를 place로 한 lend와 자리로 한 binding, 그 동치류를 인자로 넘기는 함수 값 호출은 빠진다. |
 
 동치류에 관계를 기록하는 use, lend, projection, binding은, 그 동치류와, 그것에서 동치류끼리의 의존과, 아직 쪼개지지 않은 관계가 쪼개질 때 이을 두 쪽의 part끼리를 따라 닿는 동치류들이 의존하는 use, lend, projection, binding이다. use, lend, projection, binding은 동치류에 의존하지 않는다.
 
@@ -293,7 +293,7 @@ binding group은 더 풀리거나 채워지는 동치류가 없을 때까지 풀
 
 place는 root인 binding 뒤에 projection들이 이어진 것이며, 그 타입은 마지막 projection이 가리키는 동치류다.
 
-lend `&ₘ p`의 결과는 reference다. lend가 읽는 값에서 place가 `&ₙ U`이면 그 target은 `U`이고 mutability는 `m`과 `n` 가운데 약한 쪽이며, 아니면 target은 place의 동치류다. target과의 관계는 등식이다.
+lend `&ₘ p`의 결과는 reference다. lend가 읽는 값에서 place가 `&ₙ U`이면 그 target은 `U`이고 mutability는 `m`과 `n` 가운데 약한 쪽이며, 아니면 target은 place의 동치류다. target과의 관계는 등식이다. `m`이 `&`이 아닌데 읽는 값이 place가 reference라는 것만 정하고 그 mutability를 정하지 않으면, 그것을 정할 때까지 lend는 정해지지 않는다(의존).
 
 Deref가 아닌 projection은 operand가 reference이면 그 target에 걸린다(auto-deref). 동치류가 reference인지는 field, component, index, variant의 kind를 뺀 출처, 곧 하한, part 하한, 등식, use, Deref의 kind가 정한다.
 

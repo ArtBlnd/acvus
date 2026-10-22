@@ -239,7 +239,7 @@ The constraints a body's text gives are recorded in equivalence classes as soon 
 | a part's equivalence class | every equivalence class it is a part of taking a constructor |
 | a universal | the use that chooses it, that is, a use that makes an instance of that body; that use lies outside the binding group |
 | a use | the uses, lends, projections and bindings that record relations into the equivalence classes at the positions it reads |
-| a lend, a projection, a binding | the uses, lends, projections and bindings that record relations into the equivalence class of its place or operand, other than projections of a field, a component, an index or a variant whose operand is that equivalence class, and uses that have already recorded whether that equivalence class is a reference |
+| a lend, a projection, a binding | the uses, lends, projections and bindings that can decide whether the equivalence class of its place or operand is a reference, that is, that can record into it a source that decides it (Place). So projections of a field, a component, an index or a variant whose operand is that equivalence class, uses that have already recorded whether it is a reference or none of whose candidates records a lower bound or an equation into it, lends whose place it is and bindings whose position it is, and calls of a function value that pass it as an argument are left out. |
 
 The uses, lends, projections and bindings that record relations into an equivalence class are the uses, lends, projections and bindings that class, and the equivalence classes it reaches along dependencies between equivalence classes and between the parts of the two sides that a relation not yet split will link when it is split, depend on. A use, a lend, a projection or a binding depends on no equivalence class.
 
@@ -293,7 +293,7 @@ A program is accepted where its declared casts follow the cast tree, every equiv
 
 A place is a root, a binding, followed by projections, and its type is the equivalence class its last projection names.
 
-A lend `&ₘ p` gives a reference. Where, in the value the lend reads, the place is `&ₙ U`, its target is `U` and its mutability the lesser of `m` and `n`; otherwise its target is the place's equivalence class. The relation to its target is an equation.
+A lend `&ₘ p` gives a reference. Where, in the value the lend reads, the place is `&ₙ U`, its target is `U` and its mutability the lesser of `m` and `n`; otherwise its target is the place's equivalence class. The relation to its target is an equation. Where `m` is not `&` and the value the lend reads makes the place a reference but does not decide its mutability, the lend is not decided until it does (Dependency).
 
 A projection other than a Deref whose operand is a reference applies to its target (auto-deref). Whether an equivalence class is a reference is decided by its sources other than the kinds of a field, a component, an index or a variant: its lower bounds, part lower bounds, equations, uses and the kind of a Deref.
 
