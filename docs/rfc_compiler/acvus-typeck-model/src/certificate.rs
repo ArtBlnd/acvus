@@ -11,12 +11,13 @@ use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName};
 use crate::coerce::{Coercion, Structural, along_le, coerce};
+use crate::cut::Cut;
 use crate::decl::{Decls, Node};
 use crate::explore::Final;
 use crate::instance::Made;
 use crate::node::common::CommonPart;
 use crate::node::{Decision, LendTarget, NodeAt};
-use crate::program::{ENTRY, Function, Item, Origin, Place, Program, Projection};
+use crate::program::{ENTRY, Function, Item, Origin, Part, Place, Position, Program, Projection};
 use crate::relation::{Recorder, copy_name};
 use crate::sig::{SigArgs, SigTy, SigVar, Signature};
 use crate::solve::{LambdaCopy, State};
@@ -193,11 +194,14 @@ impl Sheet {
 /// group solved before it.
 pub struct Certificate {
     sheets: BTreeMap<Name, Sheet>,
+    /// Which group solves each class and constraint, as the groups the order
+    /// solved cut the lambdas' environments (l.186).
+    cut: Cut,
     accepted: bool,
 }
 
 impl Certificate {
-    pub fn of(end: &Final<'_>) -> Certificate {
+    pub fn of(program: &Program, end: &Final<'_>) -> Certificate {
         let sheets = end
             .groups
             .iter()
@@ -206,6 +210,7 @@ impl Certificate {
             .collect();
         Certificate {
             sheets,
+            cut: Cut::of(program, end.groups, &Name::new(ENTRY)),
             accepted: end.entry.outcome_with(end.groups).accepted,
         }
     }
@@ -260,9 +265,10 @@ pub fn check(program: &Program, certificate: &Certificate) -> Vec<Violation> {
     if !certificate.accepted {
         return Vec::new();
     }
-    let text = Text::of(program);
+    let text = Text::of(program, &certificate.cut);
     let mut checker = Checker {
         program,
+        cut: &certificate.cut,
         decls: &program.decls,
         text: &text,
         certificate,
@@ -469,7 +475,7 @@ struct Text {
 }
 
 impl Text {
-    fn of(program: &Program) -> Text {
+    fn of(program: &Program, cut: &Cut) -> Text {
         let mut text = Text {
             parent: BTreeMap::new(),
             decided: BTreeSet::new(),
@@ -497,7 +503,7 @@ impl Text {
             .iter()
             .flat_map(|function| function.params.iter())
             .chain(&program.universals)
-            .filter(|name| program.is_universal(name));
+            .filter(|name| cut.is_universal(program, name));
         for name in universals {
             let root = text.root(name);
             text.universal.insert(root);
@@ -522,11 +528,11 @@ impl Text {
 
     /// Whether a value passing into `into` at `place` meets it (l.219;
     /// `design/09-group.md`, reading 8).
-    fn meets(&self, program: &Program, group: &Name, into: &Name, place: Place) -> bool {
+    fn meets(&self, program: &Program, cut: &Cut, group: &Name, into: &Name, place: Place) -> bool {
         match place {
             Place::ThroughRef => false,
             Place::ByName => self.unknown(into),
-            Place::Slot => program.owner(into) == group && self.unknown(into),
+            Place::Slot => cut.owner(program, into) == group && self.unknown(into),
         }
     }
 
@@ -540,6 +546,7 @@ impl Text {
 
 struct Checker<'a> {
     program: &'a Program,
+    cut: &'a Cut,
     decls: &'a Decls,
     text: &'a Text,
     certificate: &'a Certificate,
@@ -642,13 +649,13 @@ impl Checker<'_> {
         for class in program
             .classes
             .iter()
-            .filter(|class| *program.owner(&class.name) == context.group)
+            .filter(|class| *self.cut.owner(program, &class.name) == context.group)
         {
             self.origin(context, &class.name, &class.origin);
         }
         for (i, (_, item)) in program.items.iter().enumerate() {
-            if *program.item_group(i) == context.group {
-                self.item(context, i, item);
+            if let Some(part) = self.cut.part(program, i, &context.group) {
+                self.item(context, i, item, &part);
             }
         }
     }
@@ -720,7 +727,8 @@ impl Checker<'_> {
         Some(())
     }
 
-    fn item(&mut self, context: &Context<'_>, i: usize, item: &Item) -> Option<()> {
+    /// The item's part the context's group records (l.186).
+    fn item(&mut self, context: &Context<'_>, i: usize, item: &Item, part: &Part) -> Option<()> {
         match item {
             Item::Pass { value, into, place } => {
                 let at = format!("the pass of {value} into {into}");
@@ -759,7 +767,10 @@ impl Checker<'_> {
                         ret_meets,
                     };
                     self.function_type(context, &at, &into_type, &from, &to);
-                } else if self.text.meets(self.program, &context.group, into, *place) {
+                } else if self
+                    .text
+                    .meets(self.program, self.cut, &context.group, into, *place)
+                {
                     let holds = self.lower(&from, &to);
                     self.require(context, &at, holds, format!("{from} <= {to} fails (l.280)"));
                 } else {
@@ -781,9 +792,9 @@ impl Checker<'_> {
             } => match self.program.function(callee) {
                 Some(function) => {
                     let function = function.clone();
-                    self.call(context, i, &function, args, result)?;
+                    self.call(context, i, &function, args, result, part)?;
                 }
-                None => self.use_(context, name, callee, args, result, exit.as_ref())?,
+                None => self.use_(context, name, callee, args, result, exit.as_ref(), part)?,
             },
             Item::Lend {
                 name,
@@ -894,15 +905,15 @@ impl Checker<'_> {
         );
     }
 
-    /// Where a use's `k`th argument, the text class `arg`, passes into the
-    /// function type its decided candidate writes there, whose result the
-    /// candidate writes as `ret`.
+    /// Where a use's argument, the text class `arg`, passes into the function
+    /// type its decided candidate, or its common part, writes there, the
+    /// class `param` the use made for it, whose result it writes as `ret`.
     fn argument_into_type(
         &mut self,
         context: &Context<'_>,
         level: usize,
         owner: &Name,
-        k: usize,
+        param: NodeAt,
         arg: &Name,
         ret: &SigTy,
     ) -> Option<IntoFunctionType> {
@@ -918,7 +929,7 @@ impl Checker<'_> {
             );
         }
         let sheet = context.sheet(level);
-        let param = ClassName::Node(Rc::new(owner.clone()), NodeAt::Param(k));
+        let param = ClassName::Node(Rc::new(owner.clone()), param);
         let to = sheet.root(sheet.id(&param)?);
         Some(IntoFunctionType {
             level,
@@ -971,7 +982,7 @@ impl Checker<'_> {
                 .iter()
                 .enumerate()
                 .map(|(i, param)| {
-                    if self.program.in_environment(param) {
+                    if self.cut.in_environment(param) {
                         let ty =
                             self.environment(context, at, into.level, copied.as_ref(), i, param)?;
                         let meets = self.text.unknown(param);
@@ -985,7 +996,7 @@ impl Checker<'_> {
             else {
                 continue;
             };
-            let returned = if self.program.in_environment(&function.result) {
+            let returned = if self.cut.in_environment(&function.result) {
                 let i = function.params.len();
                 self.environment(
                     context,
@@ -1022,9 +1033,11 @@ impl Checker<'_> {
         self.require(context, at, holds, format!("{returned} <= {result} fails"));
     }
 
-    /// A use of a function (l.192–195): in its own group or an enclosing one,
-    /// each argument passes into its universal parameter's type by a boundary
-    /// (l.508); from another group, into its copy in the instance.
+    /// A use of a function (l.192–195), at the positions of its constraints
+    /// the context's group records (l.186): in its own group or an enclosing
+    /// one, each argument passes into its universal parameter's type by a
+    /// boundary (l.508); from another group, into its copy in the instance
+    /// made here.
     fn call(
         &mut self,
         context: &Context<'_>,
@@ -1032,52 +1045,60 @@ impl Checker<'_> {
         function: &Function,
         args: &[Name],
         result: &Name,
+        part: &Part,
     ) -> Option<()> {
         let at = format!("the use {}@{i}", function.name);
-        let arg_values = args
+        let held: Vec<(usize, &Name)> = args
             .iter()
-            .map(|arg| self.text(context, &at, arg))
-            .collect::<Option<Vec<Value>>>()?;
-        let result_value = self.text(context, &at, result)?;
+            .enumerate()
+            .filter(|(k, _)| part.holds(Position::Arg(*k)))
+            .collect();
         let own = function.group == context.group
             || self
                 .program
                 .enclosing(&context.group)
                 .contains(&function.group);
-        let (params, returned) = if own {
-            let params = function
-                .params
-                .iter()
-                .map(|param| {
-                    let ty = self.text(context, &at, param)?;
-                    Some(Param { ty, meets: false })
-                })
-                .collect::<Option<Vec<_>>>()?;
-            (params, self.text(context, &at, &function.result)?)
+        let made = if own {
+            None
         } else {
             let made_at = Name::new(&format!("{}@{i}", function.name));
             let Some(made) = context.own.instance(&made_at) else {
                 self.violation(context, &at, "no instance is made (l.215)".to_string());
                 return None;
             };
-            let params = function
-                .params
-                .iter()
-                .map(|param| {
-                    let ty = self.copy(context, &at, 0, made, function, param)?;
-                    let meets = self.text.meets_copy(param);
-                    Some(Param { ty, meets })
-                })
-                .collect::<Option<Vec<_>>>()?;
-            let returned = self.copy(context, &at, 0, made, function, &function.result)?;
-            (params, returned)
+            Some(made)
         };
-        self.passes(context, &at, &arg_values, &params);
-        self.returns(context, &at, &returned, &result_value);
+        let param = |checker: &mut Self, name: &Name| -> Option<Param> {
+            match made {
+                None => {
+                    let ty = checker.text(context, &at, name)?;
+                    Some(Param { ty, meets: false })
+                }
+                Some(made) => {
+                    let ty = checker.copy(context, &at, 0, made, function, name)?;
+                    let meets = checker.text.meets_copy(name);
+                    Some(Param { ty, meets })
+                }
+            }
+        };
+        for (k, arg) in held {
+            let arg_value = self.text(context, &at, arg)?;
+            let param = param(self, &function.params[k])?;
+            self.pass(context, &at, k, &arg_value, &param);
+        }
+        if part.holds(Position::Result) {
+            let result_value = self.text(context, &at, result)?;
+            let returned = param(self, &function.result)?.ty;
+            self.returns(context, &at, &returned, &result_value);
+        }
         Some(())
     }
 
-    /// A use of declarations (l.320–333), by its decision.
+    /// A use of declarations (l.320–333), at the positions of its constraints
+    /// the context's group records (l.186): where its candidates' common part
+    /// writes one closed type, by that type, whatever the use becomes
+    /// (l.246); at the others, which its node holds, by its decision.
+    #[allow(clippy::too_many_arguments)]
     fn use_(
         &mut self,
         context: &Context<'_>,
@@ -1086,18 +1107,9 @@ impl Checker<'_> {
         args: &[Name],
         result: &Name,
         exit: Option<&Name>,
+        part: &Part,
     ) -> Option<()> {
         let at = format!("the use {name}");
-        let DecidedAt {
-            decision,
-            level,
-            owner,
-        } = self.decided(context, &at, name)?;
-        let arg_values = args
-            .iter()
-            .map(|arg| self.text(context, &at, arg))
-            .collect::<Option<Vec<Value>>>()?;
-        let result_value = self.text(context, &at, result)?;
         let candidates: Vec<&Signature> = self
             .decls
             .candidates(callee)
@@ -1106,12 +1118,55 @@ impl Checker<'_> {
             .map(|decl| &decl.sig)
             .collect();
         let common = (candidates.len() >= 2).then(|| CommonPart::of(&candidates));
+        let closed = |position: Position| {
+            common
+                .as_ref()
+                .is_some_and(|common| common.is_closed_at(position))
+        };
+        let mut arg_values: Vec<Option<Value>> = Vec::new();
+        for (k, arg) in args.iter().enumerate() {
+            let value = match part.holds(Position::Arg(k)) {
+                true => Some(self.text(context, &at, arg)?),
+                false => None,
+            };
+            arg_values.push(value);
+        }
+        let result_value = match part.holds(Position::Result) {
+            true => Some(self.text(context, &at, result)?),
+            false => None,
+        };
+        if let Some(common) = &common {
+            let values = (args, arg_values.as_slice());
+            self.closed(context, &at, name, common, values, result_value.as_ref())?;
+        }
+        // The positions the node holds.
+        let node_args: Vec<Option<Value>> = arg_values
+            .iter()
+            .enumerate()
+            .map(|(k, value)| value.clone().filter(|_| !closed(Position::Arg(k))))
+            .collect();
+        let node_result = result_value.filter(|_| !closed(Position::Result));
+        let node_exit = exit.filter(|_| part.holds(Position::Exit));
+        if node_args.iter().all(Option::is_none) && node_result.is_none() && node_exit.is_none() {
+            return Some(());
+        }
+        let DecidedAt {
+            decision,
+            level,
+            owner,
+        } = self.decided(context, &at, name)?;
         // The common part is recorded where the use is, before it is decided
         // (l.246), so its classes are the group's own, at level 0.
         let common_values = match &common {
-            Some(part) => {
-                Some(self.common(context, &at, 0, name, part, &arg_values, &result_value)?)
-            }
+            Some(part) => Some(self.common(
+                context,
+                &at,
+                0,
+                name,
+                part,
+                &node_args,
+                node_result.as_ref(),
+            )?),
             None => None,
         };
         match decision {
@@ -1125,13 +1180,23 @@ impl Checker<'_> {
                     format!("{id:?} is no candidate (l.320)"),
                 );
                 let sig = decl.sig.clone();
-                let bound = self.bound(context, &at, level, &owner, &sig)?;
+                let written: Vec<&SigTy> = sig
+                    .params()
+                    .iter()
+                    .zip(&node_args)
+                    .filter(|(_, value)| value.is_some())
+                    .map(|(param, _)| param)
+                    .chain(node_result.as_ref().map(|_| sig.result()))
+                    .collect();
+                let bound = self.bound(context, &at, level, &owner, &sig, &written)?;
                 for (k, (param, arg)) in sig.params().iter().zip(args).enumerate() {
+                    let Some(arg_value) = &node_args[k] else {
+                        continue;
+                    };
                     let Ok(ty) = param.substitute(&bound) else {
                         self.violation(context, &at, format!("parameter {k} has no type"));
                         return None;
                     };
-                    let arg_value = &arg_values[k];
                     match (arg_value.term(), param) {
                         (Term::FunctionValue { .. }, SigTy::Term(written))
                             if matches!(**written, Term::Function { .. }) =>
@@ -1139,8 +1204,14 @@ impl Checker<'_> {
                             let Term::Function { ret, .. } = &**written else {
                                 unreachable!("the parameter writes a function type");
                             };
-                            let into_type =
-                                self.argument_into_type(context, level, &owner, k, arg, ret)?;
+                            let into_type = self.argument_into_type(
+                                context,
+                                level,
+                                &owner,
+                                NodeAt::Param(k),
+                                arg,
+                                ret,
+                            )?;
                             self.function_type(context, &at, &into_type, arg_value, &ty);
                         }
                         _ => {
@@ -1149,11 +1220,13 @@ impl Checker<'_> {
                         }
                     }
                 }
-                let Ok(returned) = sig.result().substitute(&bound) else {
-                    self.violation(context, &at, "the result has no type".to_string());
-                    return None;
-                };
-                self.returns(context, &at, &returned, &result_value);
+                if let Some(result_value) = &node_result {
+                    let Ok(returned) = sig.result().substitute(&bound) else {
+                        self.violation(context, &at, "the result has no type".to_string());
+                        return None;
+                    };
+                    self.returns(context, &at, &returned, result_value);
+                }
                 if let (Some(part), Some(values)) = (&common, &common_values) {
                     let candidate = self
                         .decls
@@ -1177,22 +1250,19 @@ impl Checker<'_> {
                         );
                     }
                 }
-                if let Some(exit) = exit {
+                if let Some(exit) = node_exit {
                     self.exit(context, &at, level, &owner, &sig, exit)?;
                 }
             }
             Decision::Never => {
-                let candidates: Vec<&Signature> = self
-                    .decls
-                    .candidates(callee)
-                    .iter()
-                    .filter(|decl| decl.sig.params().len() == args.len())
-                    .map(|decl| &decl.sig)
-                    .collect();
                 let never = State::differing(&candidates, args.len())
                     .into_iter()
                     .filter(|&k| k < args.len())
-                    .any(|k| *arg_values[k].term() == Term::Never);
+                    .any(|k| {
+                        node_args[k]
+                            .as_ref()
+                            .is_some_and(|value| *value.term() == Term::Never)
+                    });
                 self.require(
                     context,
                     &at,
@@ -1201,6 +1271,68 @@ impl Checker<'_> {
                 );
             }
             other => self.violation(context, &at, format!("not reached: {other:?} (l.290)")),
+        }
+        Some(())
+    }
+
+    /// A use's constraints at the positions where its candidates' common part
+    /// writes one closed type, which hold whatever the use becomes (l.186,
+    /// l.246): each argument there passing into that type, a function value
+    /// into a function type as the common part's split makes it, and that
+    /// type entering the result.
+    #[allow(clippy::too_many_arguments)]
+    fn closed(
+        &mut self,
+        context: &Context<'_>,
+        at: &str,
+        name: &Name,
+        common: &CommonPart,
+        (names, args): (&[Name], &[Option<Value>]),
+        result: Option<&Value>,
+    ) -> Option<()> {
+        let none: SigArgs<Value> = SigArgs {
+            types: vec![None; common.vars.len()],
+            identity: None,
+        };
+        for (k, arg) in args.iter().enumerate() {
+            let Some(arg) = arg else {
+                continue;
+            };
+            if !common.is_closed_at(Position::Arg(k)) {
+                continue;
+            }
+            let param = &common.params[k];
+            let ty = param
+                .substitute(&none)
+                .expect("a closed type of the common part writes no variable");
+            match (arg.term(), param) {
+                (Term::FunctionValue { .. }, SigTy::Term(written))
+                    if matches!(**written, Term::Function { .. }) =>
+                {
+                    let Term::Function { ret, .. } = &**written else {
+                        unreachable!("the parameter writes a function type");
+                    };
+                    let into_type = self.argument_into_type(
+                        context,
+                        0,
+                        name,
+                        NodeAt::CommonParam(k),
+                        &names[k],
+                        ret,
+                    )?;
+                    self.function_type(context, at, &into_type, arg, &ty);
+                }
+                _ => self.pass(context, at, k, arg, &Param { ty, meets: false }),
+            }
+        }
+        if let Some(result) = result
+            && common.is_closed_at(Position::Result)
+        {
+            let returned = common
+                .result
+                .substitute(&none)
+                .expect("a closed type of the common part writes no variable");
+            self.returns(context, at, &returned, result);
         }
         Some(())
     }
@@ -1298,8 +1430,8 @@ impl Checker<'_> {
         level: usize,
         owner: &Name,
         part: &CommonPart,
-        args: &[Value],
-        result: &Value,
+        args: &[Option<Value>],
+        result: Option<&Value>,
     ) -> Option<Vec<Value>> {
         let mut values = Vec::new();
         for k in 0..part.vars.len() {
@@ -1332,6 +1464,9 @@ impl Checker<'_> {
             identity: None,
         };
         for (k, (param, arg)) in part.params.iter().zip(args).enumerate() {
+            let Some(arg) = arg else {
+                continue;
+            };
             if matches!(arg.term(), Term::FunctionValue { .. }) {
                 continue;
             }
@@ -1346,20 +1481,23 @@ impl Checker<'_> {
             let meets = matches!(param, SigTy::Var(_));
             self.pass(context, at, k, arg, &Param { ty, meets });
         }
-        let Ok(returned) = part.result.substitute(&bound) else {
-            self.violation(
-                context,
-                at,
-                "the common part's result has no type".to_string(),
-            );
-            return None;
-        };
-        self.returns(context, at, &returned, result);
+        if let Some(result) = result {
+            let Ok(returned) = part.result.substitute(&bound) else {
+                self.violation(
+                    context,
+                    at,
+                    "the common part's result has no type".to_string(),
+                );
+                return None;
+            };
+            self.returns(context, at, &returned, result);
+        }
         Some(values)
     }
 
-    /// The values of the variables the signature writes, those of the classes
-    /// the decision made for them (l.320).
+    /// The values of the variables the signature writes at the positions the
+    /// node holds, `written`, those of the classes the decision made for them
+    /// (l.320).
     fn bound(
         &mut self,
         context: &Context<'_>,
@@ -1367,17 +1505,14 @@ impl Checker<'_> {
         level: usize,
         owner: &Name,
         sig: &Signature,
+        written: &[&SigTy],
     ) -> Option<SigArgs<Value>> {
         let mut bound: SigArgs<Value> = sig.unbound();
         let vars = (0..sig.type_params().len())
             .map(SigVar::Type)
             .chain(sig.names_identity().then_some(SigVar::Identity));
         for var in vars {
-            let written = sig
-                .params()
-                .iter()
-                .chain([sig.result()])
-                .any(|ty| ty.mentions(var));
+            let written = written.iter().any(|ty| ty.mentions(var));
             if !written {
                 continue;
             }
@@ -1589,7 +1724,7 @@ impl Checker<'_> {
                 .iter()
                 .enumerate()
                 .map(|(i, param)| {
-                    if self.program.in_environment(param) {
+                    if self.cut.in_environment(param) {
                         let ty =
                             self.environment(context, &at, level, copied.as_ref(), i, param)?;
                         let meets = self.text.unknown(param);
@@ -1603,7 +1738,7 @@ impl Checker<'_> {
             else {
                 continue;
             };
-            let returned = if self.program.in_environment(&function.result) {
+            let returned = if self.cut.in_environment(&function.result) {
                 let i = function.params.len();
                 self.environment(context, &at, level, copied.as_ref(), i, &function.result)
             } else {

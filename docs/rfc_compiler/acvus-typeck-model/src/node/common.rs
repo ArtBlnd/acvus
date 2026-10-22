@@ -7,6 +7,7 @@ use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName};
 use crate::decl::{DeclId, Node};
+use crate::program::Position;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::sig::{SigTy, SigVar, Signature};
@@ -56,6 +57,17 @@ impl CommonPart {
             params,
             result,
             vars,
+        }
+    }
+
+    /// Whether the common part writes one closed type at the position, every
+    /// candidate writing it there, so that the use's constraint there holds
+    /// whatever the use becomes (l.186, l.246). An exit is not.
+    pub fn is_closed_at(&self, position: Position) -> bool {
+        match position {
+            Position::Arg(k) => self.params[k].is_closed(),
+            Position::Result => self.result.is_closed(),
+            Position::Exit => false,
         }
     }
 
@@ -168,6 +180,60 @@ impl State {
         recorded
     }
 
+    /// Records the constraints of the use `name`, of several candidates, at
+    /// the positions `closed` where its common part writes one closed type
+    /// (l.186, l.246): each argument there passing into that type, and that
+    /// type entering the result, recorded by the common part whatever the use
+    /// becomes. Returns the relations recorded.
+    pub(crate) fn record_closed(
+        &mut self,
+        name: &Name,
+        callee: &Name,
+        arity: usize,
+        closed: &[(Position, ClassId)],
+    ) -> Recording {
+        let mut recorded = Recording::default();
+        let sigs: Vec<Signature> = self
+            .candidates(callee, arity)
+            .into_iter()
+            .map(|decl| decl.sig.clone())
+            .collect();
+        let part = CommonPart::of(&sigs.iter().collect::<Vec<_>>());
+        let recorder = Recorder::Common(name.clone());
+        let owner = Rc::new(name.clone());
+        let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
+        let mut vars: BTreeMap<SigVar, ClassId> = BTreeMap::new();
+        let var_name = |var: SigVar| -> ClassName {
+            panic!("a closed type of the common part writes no variable, as {var:?}")
+        };
+        for &(position, class) in closed {
+            assert!(
+                part.is_closed_at(position),
+                "{name}: the common part writes no closed type at {position:?}"
+            );
+            recorded.append(match position {
+                Position::Arg(k) => self.record_argument(
+                    class,
+                    &part.params[k],
+                    &mut vars,
+                    at(NodeAt::CommonParam(k)),
+                    &var_name,
+                    &recorder,
+                ),
+                Position::Result => self.record_result(
+                    class,
+                    &part.result,
+                    &mut vars,
+                    at(NodeAt::CommonResult),
+                    &var_name,
+                    &recorder,
+                ),
+                Position::Exit => unreachable!("an exit is not closed"),
+            });
+        }
+        recorded
+    }
+
     fn record_common(&mut self, name: &Name) -> Recording {
         let mut recorded = Recording::default();
         let node = self.nodes[name].clone();
@@ -206,7 +272,13 @@ impl State {
                 let var_name = |var: SigVar| -> ClassName {
                     panic!("the common part's variable {var:?} is made before its types")
                 };
+                // The node holds the positions where the common part writes
+                // no closed type; those where it does are recorded apart
+                // (`record_closed`).
                 for (i, (arg, param)) in args.iter().zip(&part.params).enumerate() {
+                    let Some(arg) = arg else {
+                        continue;
+                    };
                     recorded.append(self.record_argument(
                         *arg,
                         param,
@@ -216,14 +288,16 @@ impl State {
                         &recorder,
                     ));
                 }
-                recorded.append(self.record_result(
-                    *result,
-                    &part.result,
-                    &mut vars,
-                    at(NodeAt::CommonResult),
-                    &var_name,
-                    &recorder,
-                ));
+                if let Some(result) = result {
+                    recorded.append(self.record_result(
+                        *result,
+                        &part.result,
+                        &mut vars,
+                        at(NodeAt::CommonResult),
+                        &var_name,
+                        &recorder,
+                    ));
+                }
                 let common = Common::Use {
                     part: Rc::new(part),
                     classes,
@@ -299,15 +373,17 @@ impl State {
             _ => None,
         };
         let mut found = BTreeMap::new();
-        for (i, (arg, param)) in args.iter().zip(sig.params()).enumerate() {
-            if common.is_some_and(|(part, _)| part.params[i].is_closed()) {
+        for (arg, param) in args.iter().zip(sig.params()) {
+            let Some(arg) = arg else {
                 continue;
-            }
+            };
             self.would_record(*arg, param, &mut found);
         }
         match common {
             None => {
-                found.insert(self.root(*result), is_reference(sig.result()));
+                if let Some(result) = result {
+                    found.insert(self.root(*result), is_reference(sig.result()));
+                }
             }
             Some((part, classes)) => {
                 for k in CommonPart::vars_in(&part.result) {

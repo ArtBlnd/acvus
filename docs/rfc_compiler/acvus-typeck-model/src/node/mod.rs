@@ -29,11 +29,15 @@ use place::lesser;
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum NodeKind {
     /// A use that calls the declarations `callee` names (l.320); for `e?`,
-    /// with the class its exit's value passes into (l.337).
+    /// with the class its exit's value passes into (l.337). It holds the
+    /// positions of the use's constraints its group records where the choice
+    /// of a candidate matters, none at the others: those another group
+    /// records, and, of several candidates, those where every candidate
+    /// writes one closed type, recorded apart (l.186, l.246).
     Use {
         callee: Name,
-        args: Vec<ClassId>,
-        result: ClassId,
+        args: Vec<Option<ClassId>>,
+        result: Option<ClassId>,
         exit: Option<ClassId>,
     },
     /// `&ₘ p` (l.296).
@@ -490,7 +494,13 @@ impl State {
         }
         let returned = met.pop().expect("the result type follows the parameters");
         let mut recorded = copy.record_rest(self);
-        recorded.append(self.record_call(args, &met, returned, result, by));
+        let pairs: Vec<(ClassId, ClassId)> = args
+            .iter()
+            .copied()
+            .zip(met)
+            .chain([(returned, result)])
+            .collect();
+        recorded.append(self.record_call(&pairs, by));
         recorded
     }
 
@@ -581,15 +591,14 @@ impl State {
                     Some(Common::Use { part, classes }) => Some((part.clone(), classes.clone())),
                     _ => None,
                 };
+                // The node holds no position where the common part writes a
+                // closed type, nor one another group records (l.186).
                 let mut vars = BTreeMap::new();
                 let var_name = |var| at(NodeAt::Var(var));
                 for (i, (arg, param)) in args.iter().zip(sig.params()).enumerate() {
-                    if common
-                        .as_ref()
-                        .is_some_and(|(part, _)| part.params[i].is_closed())
-                    {
+                    let Some(arg) = arg else {
                         continue;
-                    }
+                    };
                     recorded.append(self.record_argument(
                         *arg,
                         param,
@@ -600,14 +609,18 @@ impl State {
                     ));
                 }
                 match &common {
-                    None => recorded.append(self.record_result(
-                        *result,
-                        sig.result(),
-                        &mut vars,
-                        at(NodeAt::Result),
-                        &var_name,
-                        &recorder,
-                    )),
+                    None => {
+                        if let Some(result) = result {
+                            recorded.append(self.record_result(
+                                *result,
+                                sig.result(),
+                                &mut vars,
+                                at(NodeAt::Result),
+                                &var_name,
+                                &recorder,
+                            ));
+                        }
+                    }
                     Some((part, classes)) => {
                         let candidate = self.candidate_index(callee, args.len(), id);
                         for k in common::CommonPart::vars_in(&part.result) {
@@ -639,7 +652,15 @@ impl State {
                     ));
                 }
             }
-            (NodeKind::Use { result, .. }, Decision::Never) => {
+            // Where the result is a closed type of the common part, the node
+            // does not hold it, and records nothing there.
+            (
+                NodeKind::Use {
+                    result: Some(result),
+                    ..
+                },
+                Decision::Never,
+            ) => {
                 let never = self.written(at(NodeAt::Result), Term::Never, &recorder, &mut recorded);
                 let relation = Relation::LowerBound {
                     lower: never,

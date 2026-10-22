@@ -10,7 +10,7 @@ use std::rc::Rc;
 use crate::class::{ClassId, ClassName, KindSource};
 use crate::instance::Instance;
 use crate::node::{NodeKind, NodeState};
-use crate::program::{Function, Item, Origin, Place, Program, TextClass};
+use crate::program::{Function, Item, Origin, Part, Place, Position, Program, TextClass};
 use crate::relation::{Recorded, Recorder, Relation};
 use crate::sig::{SigTy, SigVar};
 use crate::solve::State;
@@ -110,9 +110,9 @@ impl State {
     }
 
     /// The equations the text's invariant places give (l.229).
-    pub(crate) fn record_equations(&mut self, items: &[(usize, &Item)]) -> Recording {
+    pub(crate) fn record_equations(&mut self, items: &[(usize, &Item, Part)]) -> Recording {
         let mut recorded = Recording::default();
-        for &(i, item) in items {
+        for &(i, item, _) in items {
             if let Item::Equation(a, b) = item {
                 let relation = Relation::Equation(self.text(a), self.text(b));
                 recorded.push(self.record(relation, Recorder::Text(i)));
@@ -123,15 +123,21 @@ impl State {
 
     /// The rest of the text: each value passing into a type, as a meeting or
     /// a boundary (l.219, l.227–228), each call of a function (l.192–195), and
-    /// each other use, lend, projection and binding, as a node (l.231).
+    /// each other use, lend, projection and binding, as a node (l.231); of a
+    /// use, the constraints at the positions its part holds (l.186).
     pub(crate) fn record_items(
         &mut self,
         program: &Program,
-        items: &[(usize, &Item)],
+        items: &[(usize, &Item, Part)],
         solved: &BTreeMap<Name, Rc<State>>,
     ) -> Recording {
         let mut recorded = Recording::default();
-        for &(i, item) in items {
+        for (i, item, part) in items {
+            let i = *i;
+            let held = |state: &State, position: Position| {
+                part.holds(position)
+                    .then(|| state.text(item.class_at(position)))
+            };
             match item {
                 Item::Pass { value, into, place } => {
                     let (value, into) = (self.text(value), self.text(into));
@@ -168,31 +174,65 @@ impl State {
                     };
                     self.add_node(name, kind);
                 }
-                Item::Use {
-                    callee,
-                    args,
-                    result,
-                    ..
-                } if program.function(callee).is_some() => {
+                Item::Use { callee, args, .. } if program.function(callee).is_some() => {
                     let function = program.function(callee).expect("the function is declared");
-                    let args: Vec<ClassId> = args.iter().map(|arg| self.text(arg)).collect();
-                    let result = self.text(result);
+                    let args: Vec<Option<ClassId>> = (0..args.len())
+                        .map(|k| held(self, Position::Arg(k)))
+                        .collect();
+                    let result = held(self, Position::Result);
                     recorded.append(self.call(i, function, &args, result, solved));
                 }
                 Item::Use {
-                    name,
-                    callee,
-                    args,
-                    result,
-                    exit,
+                    name, callee, args, ..
                 } => {
+                    // Of several candidates, the positions where every
+                    // candidate writes one closed type are recorded apart, by
+                    // the common part; the node holds the rest (l.186, l.246).
+                    let several = self.candidates(callee, args.len()).len() >= 2;
+                    let closed: BTreeSet<Position> = if several {
+                        let sigs: Vec<crate::sig::Signature> = self
+                            .candidates(callee, args.len())
+                            .into_iter()
+                            .map(|decl| decl.sig.clone())
+                            .collect();
+                        let common =
+                            crate::node::common::CommonPart::of(&sigs.iter().collect::<Vec<_>>());
+                        item.positions()
+                            .into_iter()
+                            .filter(|&position| common.is_closed_at(position))
+                            .collect()
+                    } else {
+                        BTreeSet::new()
+                    };
+                    let apart: Vec<(Position, ClassId)> = closed
+                        .iter()
+                        .filter_map(|&position| Some((position, held(self, position)?)))
+                        .collect();
+                    if !apart.is_empty() {
+                        recorded.append(self.record_closed(name, callee, args.len(), &apart));
+                    }
+                    let node = |position: Position| {
+                        held(self, position).filter(|_| !closed.contains(&position))
+                    };
                     let kind = NodeKind::Use {
                         callee: callee.clone(),
-                        args: args.iter().map(|arg| self.text(arg)).collect(),
-                        result: self.text(result),
-                        exit: exit.as_ref().map(|exit| self.text(exit)),
+                        args: (0..args.len()).map(|k| node(Position::Arg(k))).collect(),
+                        result: node(Position::Result),
+                        exit: item
+                            .positions()
+                            .contains(&Position::Exit)
+                            .then(|| node(Position::Exit))
+                            .flatten(),
                     };
-                    self.add_node(name, kind);
+                    let NodeKind::Use {
+                        args, result, exit, ..
+                    } = &kind
+                    else {
+                        unreachable!("the kind is a use's");
+                    };
+                    if args.iter().any(Option::is_some) || result.is_some() || exit.is_some() {
+                        self.add_node(name, kind);
+                    }
                 }
                 Item::Lend {
                     name,
@@ -251,24 +291,41 @@ impl State {
         }
     }
 
-    /// A use that calls a function (l.192–195). Within the function's group it
-    /// takes that body's own types: each argument passes into its parameter's
-    /// type, universal and so a boundary (Example 10), and the body's result
-    /// type enters the use's result. From another group it makes an instance
-    /// of the group's C (l.215).
+    /// A use that calls a function (l.192–195), at the positions of its
+    /// constraints this group records, none at the others (l.186). Within the
+    /// function's group it takes that body's own types: each argument passes
+    /// into its parameter's type, universal and so a boundary (Example 10),
+    /// and the body's result type enters the use's result. From another group
+    /// it makes an instance of the group's C (l.215): of all of it where this
+    /// group records every position, and otherwise of the parts of C the
+    /// positions it records lie in (`Instance::part`).
     pub(crate) fn call(
         &mut self,
         item: usize,
         function: &Function,
-        args: &[ClassId],
-        result: ClassId,
+        args: &[Option<ClassId>],
+        result: Option<ClassId>,
         solved: &BTreeMap<Name, Rc<State>>,
     ) -> Recording {
         let recorder = Recorder::Text(item);
+        let pairs = |params: Vec<Option<ClassId>>, returned: Option<ClassId>| {
+            let pairs: Vec<(ClassId, ClassId)> = args
+                .iter()
+                .zip(params)
+                .filter_map(|(arg, param)| Some(((*arg)?, param?)))
+                .chain(returned.zip(result))
+                .collect();
+            pairs
+        };
         if function.group == self.group || self.enclosing.contains(&function.group) {
-            let params: Vec<ClassId> = function.params.iter().map(|p| self.text(p)).collect();
-            let returned = self.text(&function.result);
-            return self.record_call(args, &params, returned, result, &recorder);
+            let params: Vec<Option<ClassId>> = function
+                .params
+                .iter()
+                .zip(args)
+                .map(|(param, arg)| arg.map(|_| self.text(param)))
+                .collect();
+            let returned = result.map(|_| self.text(&function.result));
+            return self.record_call(&pairs(params, returned), &recorder);
         }
         let from = Rc::clone(
             solved
@@ -276,31 +333,41 @@ impl State {
                 .unwrap_or_else(|| panic!("{} is solved first (l.213)", function.group)),
         );
         let at = Name::new(&format!("{}@{item}", function.name));
-        let mut copy = Instance::new(&at, recorder.clone(), &from);
-        let params: Vec<ClassId> = function
+        let positions: Vec<(ClassId, bool)> = function
             .params
             .iter()
-            .map(|param| copy.class(self, from.text(param)))
+            .zip(args)
+            .map(|(param, arg)| (from.text(param), arg.is_some()))
+            .chain([(from.text(&function.result), result.is_some())])
             .collect();
-        let returned = copy.class(self, from.text(&function.result));
+        let mut copy = if positions.iter().all(|&(_, held)| held) {
+            Instance::new(&at, recorder.clone(), &from)
+        } else {
+            Instance::part(&at, recorder.clone(), &from, &positions)
+        };
+        let params: Vec<Option<ClassId>> = function
+            .params
+            .iter()
+            .zip(args)
+            .map(|(param, arg)| arg.map(|_| copy.class(self, from.text(param))))
+            .collect();
+        let returned = result.map(|_| copy.class(self, from.text(&function.result)));
         let mut recorded = copy.record_rest(self);
-        recorded.append(self.record_call(args, &params, returned, result, &recorder));
+        recorded.append(self.record_call(&pairs(params, returned), &recorder));
         recorded
     }
 
-    /// Each argument passing into its parameter's type, and the result type
-    /// passing into the result (l.192–197), each a meeting where the type
-    /// passed into is an unknown and a boundary otherwise (l.219).
+    /// Each value passing into a type, as `pairs` gives them: an argument
+    /// into its parameter's type, and the result type into the result
+    /// (l.192–197), each a meeting where the type passed into is an unknown
+    /// and a boundary otherwise (l.219).
     pub(crate) fn record_call(
         &mut self,
-        args: &[ClassId],
-        params: &[ClassId],
-        returned: ClassId,
-        result: ClassId,
+        pairs: &[(ClassId, ClassId)],
         recorder: &Recorder,
     ) -> Recording {
         let mut recorded = Recording::default();
-        for (&value, &into) in args.iter().zip(params).chain([(&returned, &result)]) {
+        for &(value, into) in pairs {
             let relation = if self.is_unknown(into) {
                 Relation::LowerBound {
                     lower: value,

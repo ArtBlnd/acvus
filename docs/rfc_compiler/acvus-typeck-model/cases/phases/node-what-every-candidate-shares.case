@@ -1,7 +1,9 @@
-//@ spec: l.246
+//@ spec: l.186, l.246
 // The candidates' common part is g(?0) -> bool, ?0 standing for u8 or u16,
-// which no candidate writes a reference at: before g is decided, x meets ?0,
-// ?0 is no reference, and bool enters the result.
+// which no candidate writes a reference at: before g is decided, x meets ?0
+// and ?0 is no reference, which the node records. bool, which every candidate
+// writes at the result, is the use's constraint there alone (l.186), and
+// enters the result as the text is recorded.
 //@ order:
 extern fn g(u8) -> bool;
 extern fn g(u16) -> bool;
@@ -10,7 +12,7 @@ let x: u8;
 let R;
 R = g(x) @ g;
 
-assert node records `g.CommonResult <= R`;
+assert record records `g.CommonResult <= R`;
 assert node records `g.Common(0): no reference`;
 assert node records `x <= g.Common(0)`;
 must pass;

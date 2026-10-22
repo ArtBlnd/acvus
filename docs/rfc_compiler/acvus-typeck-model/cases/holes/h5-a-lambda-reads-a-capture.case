@@ -2,8 +2,9 @@
 // let x = make();          // make() -> A
 // let f = || probe(x);     // probe(A), probe(B)
 // f();
-// probe names the capture X, so it is the lambda's environment, the enclosing
-// group's (l.186), and reads X as A.
+// probe's choice of a candidate is its constraint at the capture X, so it is
+// the lambda's environment, the enclosing group's (l.186), and reads X as A;
+// its constraint at the result, () for both, is the lambda's.
 extern type A;
 extern type B;
 extern fn make() -> A;

@@ -173,11 +173,17 @@ impl State {
                 .iter()
                 .filter_map(|(name, node)| Some((name.clone(), node.decision.clone()?)))
                 .collect();
-            outcome.decisions.extend(
-                decided
-                    .into_iter()
-                    .map(|(name, decision)| (name, Some(decision))),
-            );
+            // A use whose constraints two groups record has a node in each,
+            // of one name, and each decides as the other (l.186).
+            for (name, decision) in decided {
+                let previous = outcome
+                    .decisions
+                    .insert(name.clone(), Some(decision.clone()));
+                assert!(
+                    previous.is_none_or(|previous| previous == Some(decision)),
+                    "two groups decide the node {name} apart"
+                );
+            }
             let checks = group.checks();
             let checked = checks.iter().all(|check| check.coercion.is_ok());
             outcome.checks.extend(checks);

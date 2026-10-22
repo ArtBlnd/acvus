@@ -2,8 +2,9 @@
 // let mut buf = Vec::new();    // new() -> Vec<T>
 // let fill = || fill_all(&mut buf);    // fill_all(&mut Vec<u8>)
 // fill();
-// The lend and fill_all are the enclosing group's, so buf is typed as in
-// Example 2.
+// The lend and fill_all's constraint at its argument are the enclosing
+// group's, so buf is typed as in Example 2; fill_all's constraint at the
+// result is the lambda's (l.186).
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 extern fn fill_all(&mut Vec<u8>);

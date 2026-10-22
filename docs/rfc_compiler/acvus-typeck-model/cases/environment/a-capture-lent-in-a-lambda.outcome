@@ -15,10 +15,10 @@ outcome 1
   decision lend: lend &mut place
   decision new: new#0
   check `&mut buf ~> fill_all.Param(0)`: Ok(Identity)
-  check `fill_all(..) <= λ result`: Ok(Identity)
-  check `fill_all.Result <= fill_all(..)`: Ok(Identity)
+  check `fill()#λ/λ result <= fill()`: Ok(Identity)
   check `new() <= BUF`: Ok(Identity)
   check `new.Result <= new()`: Ok(Identity)
   check `|| .. <= fill`: Ok(Identity)
-  check `λ result <= fill()`: Ok(Identity)
+  check `fill_all(..) <= λ result`: Ok(Identity)
+  check `fill_all.Result <= fill_all(..)`: Ok(Identity)
   I* of a final state: []

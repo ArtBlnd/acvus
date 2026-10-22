@@ -1,0 +1,46 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run: every order
+outcome 1
+  accepted
+  value `&k`: none
+  value `&x`: none
+  value 1u8: u8
+  value 2u8: u8
+  value CAP: u8
+  value F: Fn/1
+  value H: Fn/0
+  value K: none
+  value S: none
+  value X: none
+  value `adder result`: Fn/1
+  value `adder(cap)`: Fn/1
+  value `f(2u8)`: u8
+  value `h result`: Fn/1
+  value `h()`: Fn/1
+  value `|x| x + k`: Fn/1
+  value `|| ..`: Fn/0
+  value `λ result`: none
+  decision `&x`: lend & place
+  decision `adder@11/&k`: lend & place
+  decision `adder@11/x + k`: core::add#0
+  decision `f call`: calls {`adder@11/λ`}
+  decision `h call`: calls {h}
+  check `1u8 <= CAP`: Ok(Identity)
+  check `2u8 <= adder@11/X`: Ok(Identity)
+  check `CAP <= adder@11/K`: Ok(Identity)
+  check `adder(cap) <= h result`: Ok(Identity)
+  check `adder@11/&k <= adder@11/x + k.Common(0)`: Ok(Identity)
+  check `adder@11/&k ~> adder@11/x + k.Param(1)`: Ok(Identity)
+  check `adder@11/&x <= adder@11/x + k.Common(0)`: Ok(Identity)
+  check `adder@11/&x ~> adder@11/x + k.Param(0)`: Ok(Identity)
+  check `adder@11/S <= adder@11/λ result`: Ok(Identity)
+  check `adder@11/adder result <= adder(cap)`: Ok(Identity)
+  check `adder@11/x + k.Chosen(1) <= adder@11/x + k.Common(1)`: Ok(Identity)
+  check `adder@11/x + k.Common(1) <= adder@11/S`: Ok(Identity)
+  check `adder@11/|x| x + k <= adder@11/adder result`: Ok(Identity)
+  check `adder@11/λ result <= f(2u8)`: Ok(Identity)
+  check `h result <= h()`: Ok(Identity)
+  check `h() <= F`: Ok(Identity)
+  check `|| .. <= H`: Ok(Identity)
+  check `|x| x + k <= adder result`: Ok(Identity)
+  I* of a final state: []

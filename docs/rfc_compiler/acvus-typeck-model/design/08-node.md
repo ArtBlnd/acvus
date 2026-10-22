@@ -105,8 +105,13 @@ reads its position, or lends it where its path passes a reference.
      two references of one constructor (l.66, l.78). Each unknown is recorded a
      reference, or not, where every candidate agrees there. Arguments pass into
      the common parameters and the common result into the use's result, as a
-     decided candidate's are recorded. Decided, the use records an argument the
-     common part does not hold whole passing whole into the candidate's parameter,
+     decided candidate's are recorded. Where every candidate writes one closed
+     type, the use's constraint there is one alone (l.186, G4), recorded with the
+     text where the group that holds it lies (`State::record_closed`), the
+     recorder still `Recorder::Common`; the node holds the other positions, which
+     the choice decides (`NodeKind::Use`, none at those it does not hold).
+     Decided, the use records an argument the common part does not hold whole
+     passing whole into the candidate's parameter,
      and the candidate's type at each of the result's unknowns entering it
      (`NodeAt::Chosen(k)`); its positions are those, so its result no longer
      waits for it but its unknowns do (`State::left_to_record`). Two arguments of

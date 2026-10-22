@@ -90,10 +90,20 @@ fn view(state: &State, groups: &BTreeMap<Name, Rc<State>>) -> State {
 
 fn add_decided(here: &mut State, made: &Made, from: &State) {
     let mut copy = Instance::resume(made, from);
+    // An instance of parts of C has the decided nodes in those parts
+    // (l.186, l.215).
+    let components = made.parts.as_ref().map(|_| from.components());
     for (name, node) in &from.nodes {
         let Some(decision) = &node.decision else {
             continue;
         };
+        if let (Some(parts), Some(components)) = (&made.parts, &components)
+            && !components
+                .of_node(from, node)
+                .is_some_and(|part| parts.contains(&part))
+        {
+            continue;
+        }
         let kind = copy.kind(here, &node.kind);
         let references = node
             .references
@@ -281,7 +291,9 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
         ) => {
             let candidates: Vec<usize> = match decision {
                 Some(Decision::Use(id)) => vec![view.candidate_index(callee, args.len(), id)],
-                Some(Decision::Never) => return BTreeSet::from([view.root(*result)]),
+                Some(Decision::Never) => {
+                    return result.iter().map(|&result| view.root(result)).collect();
+                }
                 Some(other) => unreachable!("a use is decided as a candidate or never: {other:?}"),
                 None => (0..view.candidates(callee, args.len()).len()).collect(),
             };

@@ -13,11 +13,12 @@ use std::rc::Rc;
 
 use crate::check::{Outcome, Refusal};
 use crate::class::{Arena, ClassId, ClassName, Classes};
+use crate::cut::Cut;
 use crate::decl::Decls;
 use crate::dep::Eligible;
 use crate::instance::Made;
 use crate::node::NodeState;
-use crate::program::{ENTRY, Function, Item, Program, TextClass};
+use crate::program::{ENTRY, Function, Item, Part, Position, Program, TextClass};
 use crate::read::ReadValue;
 use crate::relation::{Recorded, Recorder, Relation};
 use crate::split::Split;
@@ -129,6 +130,9 @@ impl State {
     /// relations recorded, the nodes decided as they are recorded, and what
     /// follows at once.
     pub fn start(program: &Program, group: &Name, solved: &BTreeMap<Name, Rc<State>>) -> Started {
+        // The groups solved so far cut the lambdas' environments up to this
+        // group (l.186, l.213).
+        let cut = Cut::of(program, solved, group);
         let mut state = State {
             decls: Rc::new(program.decls.clone()),
             arena: Arena::default(),
@@ -150,7 +154,7 @@ impl State {
             enclosing_unknowns: BTreeSet::new(),
             enclosing: program.enclosing(group),
             functions: Rc::new(program.functions.clone()),
-            environment: Rc::new(program.environment()),
+            environment: Rc::new(cut.environment()),
             solved: solved.clone(),
             instances: Vec::new(),
             lambdas: BTreeMap::new(),
@@ -158,39 +162,49 @@ impl State {
         let classes: Vec<&TextClass> = program
             .classes
             .iter()
-            .filter(|class| program.owner(&class.name) == group)
+            .filter(|class| cut.owner(program, &class.name) == group)
             .collect();
-        let items: Vec<(usize, &Item)> = program
+        let items: Vec<(usize, &Item, Part)> = program
             .items
             .iter()
             .enumerate()
-            .filter(|&(i, _)| program.item_group(i) == group)
-            .map(|(i, (_, item))| (i, item))
+            .filter_map(|(i, (_, item))| Some((i, item, cut.part(program, i, group)?)))
             .collect();
         for class in &classes {
             let id = state.arena.intern(ClassName::Text(class.name.clone()));
             state.texts.push(id);
         }
         state.classes.grow(&state.arena);
-        let mut named: Vec<&Name> = items.iter().flat_map(|(_, item)| item.classes()).collect();
-        for (_, item) in &items {
+        let mut named: Vec<&Name> = items
+            .iter()
+            .flat_map(|(_, item, part)| item.classes_in(part))
+            .collect();
+        for (_, item, part) in &items {
             if let Item::Use { callee, .. } = item
                 && let Some(function) = program.function(callee)
                 && state.enclosing.contains(&function.group)
             {
-                named.extend(function.params.iter().chain([&function.result]));
+                let params = function.params.iter().enumerate();
+                named.extend(
+                    params
+                        .filter(|(k, _)| part.holds(Position::Arg(*k)))
+                        .map(|(_, param)| param),
+                );
+                if part.holds(Position::Result) {
+                    named.push(&function.result);
+                }
             }
         }
         for name in named {
             if state.arena.get(&ClassName::Text(name.clone())).is_none() {
-                state.share(name, program.is_text_unknown(name));
+                state.share(name, cut.is_text_unknown(program, name));
             }
         }
         for function in program.functions.iter().filter(|f| f.group == *group) {
             for param in function
                 .params
                 .iter()
-                .filter(|param| program.is_universal(param))
+                .filter(|param| cut.is_universal(program, param))
             {
                 let id = state.text(param);
                 state.universals.insert(id);

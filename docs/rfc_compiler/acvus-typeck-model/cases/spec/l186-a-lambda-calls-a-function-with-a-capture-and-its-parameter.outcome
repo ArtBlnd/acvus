@@ -1,0 +1,47 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run: every order
+outcome 1
+  accepted
+  value `&mut out`: &mut Buf
+  value 1u8: u8
+  value B: none
+  value EMIT: Fn/1
+  value OUT: Buf
+  value Str: str
+  value W: none
+  value X: none
+  value `buf()`: Buf
+  value `emit(1u8)`: ()
+  value `emit(s)`: ()
+  value `put result`: ()
+  value `put(..)`: ()
+  value s: &str
+  value `write(b, v)`: ()
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision `&mut out`: lend &mut place
+  decision buf: buf#0
+  decision `emit 1`: calls {λ}
+  decision `emit 1#λ/put@9/write`: write#0
+  decision `emit 2`: calls {λ}
+  decision `emit 2#λ/put@9/write`: write#1
+  check `&mut out <= put@9/B`: Ok(Identity)
+  check `1u8 <= emit 1#λ/X`: Ok(Identity)
+  check `buf() <= OUT`: Ok(Identity)
+  check `buf.Result <= buf()`: Ok(Identity)
+  check `emit 1#λ/X <= emit 1#λ/put@9/W`: Ok(Identity)
+  check `emit 1#λ/put@9/W <= emit 1#λ/put@9/write.Common(0)`: Ok(Identity)
+  check `emit 1#λ/put@9/W ~> emit 1#λ/put@9/write.Param(1)`: Ok(Identity)
+  check `emit 1#λ/λ result <= emit(1u8)`: Ok(Identity)
+  check `emit 2#λ/X <= emit 2#λ/put@9/W`: Ok(Identity)
+  check `emit 2#λ/put@9/W <= emit 2#λ/put@9/write.Common(0)`: Ok(Identity)
+  check `emit 2#λ/put@9/W ~> emit 2#λ/put@9/write.Param(1)`: Ok(Identity)
+  check `emit 2#λ/λ result <= emit(s)`: Ok(Identity)
+  check `put@9/B ~> put@9/write.CommonParam(0)`: Ok(Identity)
+  check `s <= emit 2#λ/X`: Ok(Identity)
+  check `|x| .. <= EMIT`: Ok(Identity)
+  check `write(b, v) <= put result`: Ok(Identity)
+  check `write.CommonResult <= write(b, v)`: Ok(Identity)
+  check `put(..) <= λ result`: Ok(Identity)
+  check `put@9/put result <= put(..)`: Ok(Identity)
+  I* of a final state: []

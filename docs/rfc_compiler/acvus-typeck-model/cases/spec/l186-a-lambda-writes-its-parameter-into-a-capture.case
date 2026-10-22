@@ -1,0 +1,41 @@
+//@ spec: l.186, l.246
+// let mut out = buf();
+// let emit = |x| write(&mut out, x);   // write(&mut Buf, u8), write(&mut Buf, &str)
+// emit(1u8); emit("s");
+// Both candidates write &mut Buf at the first argument, so the use's
+// constraint there is one alone, joined to the capture out: the environment's,
+// recorded once. The choice of a candidate is the constraint at x, which no
+// capture reaches, so x is the lambda's own, and each call decides write by
+// what it passes (l.186).
+extern type Buf;
+extern fn buf() -> Buf;
+extern fn write(&mut Buf, u8);
+extern fn write(&mut Buf, &str);
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    let `&mut out`;
+    let `write(..)`;
+    `λ result` = `write(..)`;
+}
+let OUT;
+let `buf()`;
+`buf()` = buf() @ buf;
+OUT = `buf()`;
+let `|x| ..`: lambda λ;
+let EMIT;
+EMIT = `|x| ..`;
+let 1u8: u8;
+let Str: str;
+let s: &Str;
+let `emit(1u8)`;
+let `emit(s)`;
+`emit(1u8)` = (EMIT)(1u8) @ `emit 1`;
+`emit(s)` = (EMIT)(s) @ `emit 2`;
+group λ {
+    `&mut out` = &mut OUT @ `&mut out`;
+    `write(..)` = write(`&mut out`, X) @ write;
+}
+
+must pass;

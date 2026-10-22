@@ -9,6 +9,7 @@ pub mod certificate;
 pub mod check;
 pub mod class;
 pub mod coerce;
+pub mod cut;
 pub mod decl;
 pub mod dep;
 pub mod explore;

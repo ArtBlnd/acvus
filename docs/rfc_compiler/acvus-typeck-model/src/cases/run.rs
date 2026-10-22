@@ -127,7 +127,7 @@ struct Visitor<'a> {
 
 impl Visitor<'_> {
     fn visit(&mut self, end: &Final<'_>) {
-        let unsound = crate::certificate::check(self.program, &Certificate::of(end))
+        let unsound = crate::certificate::check(self.program, &Certificate::of(self.program, end))
             .iter()
             .map(|violation| format!("{violation:?}"))
             .collect();
@@ -136,7 +136,7 @@ impl Visitor<'_> {
             .map(|violation| render::istar(violation.kind, &violation.node))
             .collect();
         for (corruption, corrupted) in self.corruptions.iter().zip(&mut self.corrupted) {
-            let mut certificate = Certificate::of(end);
+            let mut certificate = Certificate::of(self.program, end);
             match corruption {
                 Corruption::Value { group, class, ty } => {
                     certificate.set_value(group, class, ty.clone());

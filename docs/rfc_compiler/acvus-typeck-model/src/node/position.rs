@@ -12,16 +12,24 @@ use crate::ty::{Name, Term};
 use super::common::CommonPart;
 use super::{Common, NodeKind, NodeState, Read, Reads};
 
+/// What a use has yet to record once decided (l.238 (b), l.246).
+pub(crate) struct Left {
+    /// The arguments it holds that its common part does not hold whole, by
+    /// index with their classes.
+    pub(crate) args: Vec<(usize, ClassId)>,
+    /// The classes its result enters, each with the type each candidate
+    /// writes there.
+    pub(crate) results: Vec<(ClassId, Vec<SigTy>)>,
+}
+
 impl State {
     /// What a use has yet to record once decided (l.238 (b), l.246): the
-    /// arguments its common part does not hold whole, by index, and the
-    /// classes its result enters, each with the type each candidate writes
-    /// there: the result, or, once the common part is recorded, each of its
-    /// variables the result writes.
-    pub(crate) fn left_to_record(
-        &self,
-        node: &NodeState,
-    ) -> (Vec<usize>, Vec<(ClassId, Vec<SigTy>)>) {
+    /// arguments it holds, which its common part does not hold whole, by
+    /// index with their classes, and the classes its result enters, each with
+    /// the type each candidate writes there: the result, where it holds it,
+    /// or, once the common part is recorded, each of its variables the result
+    /// writes.
+    pub(crate) fn left_to_record(&self, node: &NodeState) -> Left {
         let NodeKind::Use {
             callee,
             args,
@@ -29,27 +37,46 @@ impl State {
             ..
         } = &node.kind
         else {
-            return (Vec::new(), Vec::new());
+            return Left {
+                args: Vec::new(),
+                results: Vec::new(),
+            };
         };
         let sigs: Vec<&Signature> = self
             .candidates(callee, args.len())
             .into_iter()
             .map(|decl| &decl.sig)
             .collect();
+        let held: Vec<(usize, ClassId)> = args
+            .iter()
+            .enumerate()
+            .filter_map(|(i, arg)| Some((i, (*arg)?)))
+            .collect();
         match &node.common {
             Some(Common::Use { part, classes }) => {
-                let args = (0..args.len())
-                    .filter(|&i| !part.params[i].is_closed())
-                    .collect();
                 let results = CommonPart::vars_in(&part.result)
                     .into_iter()
                     .map(|k| (classes[k], part.vars[k].clone()))
                     .collect();
-                (args, results)
+                Left {
+                    args: held,
+                    results,
+                }
             }
             _ => {
-                let results = sigs.iter().map(|sig| sig.result().clone()).collect();
-                ((0..args.len()).collect(), vec![(*result, results)])
+                let results = result
+                    .iter()
+                    .map(|&result| {
+                        (
+                            result,
+                            sigs.iter().map(|sig| sig.result().clone()).collect(),
+                        )
+                    })
+                    .collect();
+                Left {
+                    args: held,
+                    results,
+                }
             }
         }
     }
@@ -66,15 +93,18 @@ impl State {
             NodeKind::Use {
                 callee, args, exit, ..
             } => {
-                let (left, results) = self.left_to_record(node);
+                let Left {
+                    args: left,
+                    results,
+                } = self.left_to_record(node);
                 let mut positions: BTreeSet<ClassId> = exit.iter().copied().collect();
                 let candidates = self.candidates(callee, args.len());
-                for i in left {
-                    positions.insert(args[i]);
+                for (i, arg) in left {
+                    positions.insert(arg);
                     for candidate in &candidates {
                         let param = &candidate.sig.params()[i];
-                        positions.extend(self.within_depth(args[i], param));
-                        let (params, results) = self.environment_within(args[i], param);
+                        positions.extend(self.within_depth(arg, param));
+                        let (params, results) = self.environment_within(arg, param);
                         positions.extend(params);
                         positions.extend(results);
                     }
@@ -188,7 +218,10 @@ impl State {
         else {
             return BTreeSet::new();
         };
-        let (left, results) = self.left_to_record(node);
+        let Left {
+            args: left,
+            results,
+        } = self.left_to_record(node);
         let candidates = self.candidates(callee, args.len());
         let mut out = BTreeSet::new();
         let mut into: BTreeSet<ClassId> = exit.iter().map(|&class| self.root(class)).collect();
@@ -200,8 +233,8 @@ impl State {
         }
         for candidate in &candidates {
             let sig = &candidate.sig;
-            for &i in &left {
-                let (arg, param) = (&args[i], &sig.params()[i]);
+            for &(i, arg) in &left {
+                let (arg, param) = (&arg, &sig.params()[i]);
                 match param {
                     SigTy::Term(_) => {
                         out.insert(self.root(*arg));
@@ -297,7 +330,7 @@ impl State {
                 }
                 let mut read = BTreeSet::new();
                 for i in Self::differing(&candidates, args.len()) {
-                    let class = args.get(i).copied().unwrap_or(*result);
+                    let class = Self::differing_class(args, *result, i);
                     read.insert(self.root(class));
                     for sig in &candidates {
                         read.extend(self.within_depth(class, Self::at_position(sig, i)));

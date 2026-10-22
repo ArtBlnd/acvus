@@ -1,0 +1,38 @@
+//@ spec: l.186
+// let mut v = new();
+// let f = |x| push(&mut v, x);   // push<T>(&mut Vec<T>, T)
+// f(1u8); f("s");
+// T ties the two arguments into one constraint, joined to the capture v, so x
+// is the environment's, one type for both calls, and u8 and &str have no join
+// (l.186).
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+extern fn push<T>(&mut Vec<T>, T);
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    let `&mut v`;
+    let `push(..)`;
+    `λ result` = `push(..)`;
+}
+let V;
+let `new()`;
+`new()` = new() @ new;
+V = `new()`;
+let `|x| ..`: lambda λ;
+let F;
+F = `|x| ..`;
+let 1u8: u8;
+let Str: str;
+let s: &Str;
+let `f(1u8)`;
+let `f(s)`;
+`f(1u8)` = (F)(1u8) @ `f 1`;
+`f(s)` = (F)(s) @ `f 2`;
+group λ {
+    `&mut v` = &mut V @ `&mut v`;
+    `push(..)` = push(`&mut v`, X) @ push;
+}
+
+must fail;

@@ -65,6 +65,22 @@ impl State {
         sig.params().get(i).unwrap_or(sig.result())
     }
 
+    /// The class a use's node holds at the position `i` where its candidates
+    /// differ, by argument index with the result last: a position where they
+    /// differ is no closed type of their common part, so the node holds it
+    /// (l.186, l.246).
+    pub(crate) fn differing_class(
+        args: &[Option<ClassId>],
+        result: Option<ClassId>,
+        i: usize,
+    ) -> ClassId {
+        match args.get(i) {
+            Some(arg) => *arg,
+            None => result,
+        }
+        .expect("a use's node holds the positions where its candidates differ")
+    }
+
     /// The positions where a use's candidates differ, which it reads (l.261);
     /// none where it has no candidate.
     pub(crate) fn differing(candidates: &[&Signature], args: usize) -> Vec<usize> {
@@ -204,8 +220,8 @@ impl State {
         &self,
         name: &Name,
         callee: &Name,
-        args: &[ClassId],
-        result: ClassId,
+        args: &[Option<ClassId>],
+        result: Option<ClassId>,
         excluded: &BTreeSet<Name>,
     ) -> Narrowing {
         let candidates = self.candidates(callee, args.len());
@@ -213,11 +229,11 @@ impl State {
         let sigs: Vec<&Signature> = candidates.iter().map(|decl| &decl.sig).collect();
         let differing = Self::differing(&sigs, args.len());
         let read = self.read_state(excluded);
-        let meeting = Self::meeting_places(&read, name, result);
+        let meeting = result.and_then(|result| Self::meeting_places(&read, name, result));
         let read_at: Vec<(usize, ClassId, ReadValue)> = differing
             .iter()
             .map(|&i| {
-                let class = args.get(i).copied().unwrap_or(result);
+                let class = Self::differing_class(args, result, i);
                 (i, class, read.read_value(class))
             })
             .collect();

@@ -20,6 +20,37 @@ pub struct Made {
     pub by: Recorder,
     pub group: Name,
     pub made: BTreeMap<ClassId, ClassId>,
+    /// The parts of that C it made anew (`State::components`), none naming
+    /// all of it.
+    pub parts: Option<BTreeSet<usize>>,
+}
+
+/// C's classes, each in its part (l.215): two of C's classes lie in one part
+/// where one of C's relations is on both, a node left undecided names both, a
+/// binding's node and the projections on its path name them, one is a part of
+/// the other's kind, or one holds a function value whose Values name a lambda
+/// placed in the group and the other lies in that lambda's environment, which
+/// an instance makes anew with it. A part is what an instance makes anew
+/// together, and a use of the group's function ties the positions whose types
+/// lie in one part (l.186).
+pub(crate) struct Components {
+    /// Each root of C, with its part.
+    parts: BTreeMap<ClassId, usize>,
+}
+
+impl Components {
+    /// The part of C the class lies in, none where it lies outside C.
+    pub(crate) fn of(&self, state: &State, class: ClassId) -> Option<usize> {
+        self.parts.get(&state.root(class)).copied()
+    }
+
+    /// The part of C a node left undecided lies in, none where it names no
+    /// class of C.
+    pub(crate) fn of_node(&self, state: &State, node: &NodeState) -> Option<usize> {
+        named_by(node)
+            .into_iter()
+            .find_map(|class| self.of(state, class))
+    }
 }
 
 /// C of the binding group `from` reached its fixpoint in, being made anew at
@@ -30,9 +61,14 @@ pub(crate) struct Instance<'a> {
     /// (l.261).
     by: Recorder,
     from: &'a State,
-    /// The roots of C's classes in `from`: those left unsolved, or whose value
-    /// is not closed, and the universals.
+    /// The roots of C's classes in `from` it makes anew: those left unsolved,
+    /// or whose value is not closed, and the universals, all of them or those
+    /// in the parts of C at the positions the use records (`Instance::part`).
     c: BTreeSet<ClassId>,
+    /// The parts of C it makes anew, none naming all of C.
+    parts: Option<BTreeSet<usize>>,
+    /// The nodes `from` left undecided it makes anew, none naming them all.
+    nodes: Option<BTreeSet<Name>>,
     /// Each root of `from` met so far, with its class here.
     made: BTreeMap<ClassId, ClassId>,
     /// The relations it has recorded here so far.
@@ -60,6 +96,69 @@ impl State {
                         .any(|lambda| self.environment_here(lambda))
             })
             .collect()
+    }
+
+    /// C's classes, each in its part (`Components`, l.215).
+    pub(crate) fn components(&self) -> Components {
+        let c = self.c();
+        let mut edges: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
+        let mut tie = |classes: Vec<ClassId>| {
+            let roots: Vec<ClassId> = classes
+                .into_iter()
+                .map(|class| self.root(class))
+                .filter(|root| c.contains(root))
+                .collect();
+            for &a in &roots {
+                for &b in &roots {
+                    edges.entry(a).or_default().insert(b);
+                }
+            }
+        };
+        for at in self.relations_on(&c) {
+            let relation = &self.log[at].relation;
+            let mut classes = relation.classes();
+            if let Relation::Values(_, lambda) = relation
+                && self.environment_here(lambda)
+            {
+                classes.extend(self.environment_of(lambda).into_iter().flatten());
+            }
+            tie(classes);
+        }
+        for node in self.nodes.values().filter(|node| node.decision.is_none()) {
+            let mut classes = named_by(node);
+            if let NodeKind::Bind { path, .. } = &node.kind {
+                for step in path {
+                    classes.extend(self.nodes.get(step).map(named_by).into_iter().flatten());
+                }
+            }
+            tie(classes);
+        }
+        for &root in &c {
+            if let Some((kind, _)) = &self.classes.held(root).kind {
+                let parts = kind.parts().into_iter().map(|(_, part)| *part);
+                tie([root].into_iter().chain(parts).collect());
+            }
+        }
+        let mut parts: BTreeMap<ClassId, usize> = BTreeMap::new();
+        let mut count = 0;
+        for &start in &c {
+            if parts.contains_key(&start) {
+                continue;
+            }
+            let part = count;
+            count += 1;
+            let mut work = vec![start];
+            parts.insert(start, part);
+            while let Some(at) = work.pop() {
+                for &next in edges.get(&at).into_iter().flatten() {
+                    if let std::collections::btree_map::Entry::Vacant(entry) = parts.entry(next) {
+                        entry.insert(part);
+                        work.push(next);
+                    }
+                }
+            }
+        }
+        Components { parts }
     }
 
     /// Whether the lambda's environment holds a class of this group, which
@@ -118,8 +217,77 @@ impl<'a> Instance<'a> {
             by,
             from,
             c: from.c(),
+            parts: None,
+            nodes: None,
             made: BTreeMap::new(),
             recorded: Recording::default(),
+        }
+    }
+
+    /// An instance of the parts of C the positions a use records here lie in,
+    /// the use's other constraints recorded by another group (l.186, l.215).
+    /// `positions` are the classes of `from` at the function's parameters and
+    /// result, each with whether the use records it here. The cut groups the
+    /// use's positions by these parts, so no part holds positions of both.
+    /// Panics where a part of C, or a node left in it, lies at no position,
+    /// which no rule places.
+    pub(crate) fn part(
+        at: &Name,
+        by: Recorder,
+        from: &'a State,
+        positions: &[(ClassId, bool)],
+    ) -> Instance<'a> {
+        let components = from.components();
+        let parts_at = |held: bool| -> BTreeSet<usize> {
+            positions
+                .iter()
+                .filter(|&&(_, at)| at == held)
+                .filter_map(|&(class, _)| components.of(from, class))
+                .collect()
+        };
+        let (here, elsewhere) = (parts_at(true), parts_at(false));
+        assert!(
+            here.is_disjoint(&elsewhere),
+            "{at}: the cut groups a use's positions by the parts of C (l.186)"
+        );
+        let placed = |part: Option<usize>| {
+            part.is_some_and(|part| here.contains(&part) || elsewhere.contains(&part))
+        };
+        let c = from.c();
+        if let Some(root) = c.iter().find(|&&root| !placed(components.of(from, root))) {
+            panic!(
+                "{at}: {} lies in a part of C at no position of a use whose constraints two \
+                 groups record, which no rule places (l.186, l.215)",
+                from.class_name(*root)
+            );
+        }
+        let mut nodes = BTreeSet::new();
+        for (name, node) in &from.nodes {
+            if node.decision.is_some() {
+                continue;
+            }
+            let part = components.of_node(from, node);
+            if !placed(part) {
+                panic!(
+                    "{at}: the node {name} left in C lies at no position of a use whose \
+                     constraints two groups record, which no rule places (l.186, l.215)"
+                );
+            }
+            if part.is_some_and(|part| here.contains(&part)) {
+                nodes.insert(name.clone());
+            }
+        }
+        Instance {
+            c: c.into_iter()
+                .filter(|&root| {
+                    components
+                        .of(from, root)
+                        .is_some_and(|part| here.contains(&part))
+                })
+                .collect(),
+            parts: Some(here),
+            nodes: Some(nodes),
+            ..Instance::new(at, by, from)
         }
     }
 
@@ -143,8 +311,11 @@ impl<'a> Instance<'a> {
                 exit,
             } => NodeKind::Use {
                 callee,
-                args: args.into_iter().map(|arg| self.class(here, arg)).collect(),
-                result: self.class(here, result),
+                args: args
+                    .into_iter()
+                    .map(|arg| arg.map(|arg| self.class(here, arg)))
+                    .collect(),
+                result: result.map(|result| self.class(here, result)),
                 exit: exit.map(|exit| self.class(here, exit)),
             },
             NodeKind::Lend {
@@ -193,7 +364,16 @@ impl<'a> Instance<'a> {
             Recorder::Node(node) if self.from.nodes[node].decision.is_none() => {
                 Recorder::Node(self.node(node))
             }
-            Recorder::Common(node) if self.from.nodes[node].decision.is_none() => {
+            // A common part recorded where the node is not, at positions
+            // where every candidate writes one closed type (l.246), is as
+            // that of a node left undecided.
+            Recorder::Common(node)
+                if self
+                    .from
+                    .nodes
+                    .get(node)
+                    .is_none_or(|node| node.decision.is_none()) =>
+            {
                 Recorder::Common(self.node(node))
             }
             _ => Recorder::Instance {
@@ -329,7 +509,13 @@ impl<'a> Instance<'a> {
         let undecided: Vec<(&Name, &NodeState)> = from
             .nodes
             .iter()
-            .filter(|(_, node)| node.decision.is_none())
+            .filter(|(name, node)| {
+                node.decision.is_none()
+                    && self
+                        .nodes
+                        .as_ref()
+                        .is_none_or(|nodes| nodes.contains(*name))
+            })
             .collect();
         for (name, node) in undecided {
             let kind = self.kind(here, &node.kind);
@@ -359,6 +545,7 @@ impl<'a> Instance<'a> {
             by: self.by.clone(),
             group: from.group.clone(),
             made: self.made.clone(),
+            parts: self.parts.clone(),
         });
         let mut recorded = std::mem::take(&mut self.recorded);
         recorded.instances.push(Instantiated {
@@ -369,6 +556,43 @@ impl<'a> Instance<'a> {
         });
         recorded
     }
+}
+
+/// The classes a node names: those of its kind, and those its common part
+/// made and recorded whether they are references.
+fn named_by(node: &NodeState) -> Vec<ClassId> {
+    let mut classes: Vec<ClassId> = match &node.kind {
+        NodeKind::Use {
+            args, result, exit, ..
+        } => args
+            .iter()
+            .flatten()
+            .chain(result)
+            .chain(exit)
+            .copied()
+            .collect(),
+        NodeKind::Lend { place, result, .. } => vec![*place, *result],
+        NodeKind::Project {
+            operand, result, ..
+        } => vec![*operand, *result],
+        NodeKind::Bind {
+            position, binding, ..
+        } => vec![*position, *binding],
+        NodeKind::CallValue {
+            callee,
+            args,
+            result,
+        } => [*callee]
+            .into_iter()
+            .chain(args.iter().copied())
+            .chain([*result])
+            .collect(),
+    };
+    if let Some(Common::Use { classes: made, .. }) = &node.common {
+        classes.extend(made);
+    }
+    classes.extend(&node.references);
+    classes
 }
 
 /// Whether the value carries one of the identities, at any depth.

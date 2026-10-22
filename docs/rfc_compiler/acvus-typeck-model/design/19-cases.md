@@ -379,6 +379,20 @@ steps; `golden()` and every expectation read what they read without it.
   and refused where one is written. Each was derived before it was run, two
   derivations failing first and redone: the operands' bindings join by the
   cast, and the untyped tail leaves a fill a place with no value.
+- 7 cases under `cases/spec`, `l186-*`, test the environment cut by constraints
+  (G4 of the review of 2026-10-22, note 17): a lambda writing its parameter into a
+  capture by an overload that writes one closed type there, accepted; pushing it
+  into a capture by `push<T>`, refused at the parameter; calling a function that
+  ties the capture and the parameter to nothing together, accepted, the
+  function's instance in two parts; passing a capture and its parameter apart,
+  accepted; never called, passing a literal capture to a function, which types
+  it `u8`; writing two types a cast joins, each call deciding its own candidate
+  where the model before G4 decided one for both; and calling a function that
+  returns a closure, which ties the capture to the result through the closure's
+  environment (l.215). Each was derived
+  before it was run, in every order. Four cases
+  of the environment and the phase case of the common part changed with it, their
+  values and decisions kept (note 17, G4).
 - 4 cases under `cases/spec`, `l240-*`, test l.238 (b) since 09aef04e, beside H7,
   now accepted: two uses that fill one literal, a literal into a use then
   another, a sum into a use that only reads it, and a literal through a generic
