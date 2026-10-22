@@ -72,7 +72,7 @@ fn golden(runs: &[Run]) -> String {
             let istars: std::collections::BTreeSet<Vec<String>> = run
                 .finals
                 .iter()
-                .filter(|end| end.outcome == *outcome)
+                .filter(|end| end.outcome.same_typing(outcome))
                 .map(|end| end.istar.iter().cloned().collect())
                 .collect();
             for istar in istars {

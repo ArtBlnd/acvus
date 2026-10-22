@@ -289,7 +289,7 @@ fn block_fails(
     let finals: Vec<&Checked> = run
         .finals
         .iter()
-        .filter(|end| end.outcome == *outcome)
+        .filter(|end| end.outcome.same_typing(outcome))
         .collect();
     for end in finals {
         if end.istar != *istar {

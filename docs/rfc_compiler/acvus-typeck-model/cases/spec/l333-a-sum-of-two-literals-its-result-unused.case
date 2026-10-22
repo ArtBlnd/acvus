@@ -1,0 +1,20 @@
+//@ spec: l.333
+// let s = 1 + 2;   // s unused; core::add at three integers
+// Both operands read as LitVars and the result decides nothing, so several
+// candidates remain with a LitVar read: narrowed again at the default i32
+// (l.333, U1 of the review of 2026-10-22).
+extern fn core::add(&u8, &u8) -> u8;
+extern fn core::add(&u16, &u16) -> u16;
+extern fn core::add(&i32, &i32) -> i32;
+let 1: lit 1;
+let 2: lit 2;
+let `&1`;
+let `&2`;
+`&1` = &1 @ `&1`;
+`&2` = &2 @ `&2`;
+let S;
+S = core::add(`&1`, `&2`) @ `+`;
+
+must pass;
+assert `+` == core::add#2;
+assert S: i32;

@@ -39,14 +39,31 @@ pub struct Check {
 }
 
 /// What solving decides (I3).
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Debug)]
 pub struct Outcome {
     pub values: BTreeMap<ClassName, Option<Ty>>,
     pub decisions: BTreeMap<Name, Option<Decision>>,
+    /// Which of the text's classes are one, reported but not compared: two
+    /// orders may make two literals one class or leave them apart, of one
+    /// type either way (`same_typing`).
     pub partition: BTreeSet<BTreeSet<ClassName>>,
     pub checks: Vec<Check>,
     pub refusals: BTreeSet<Refusal>,
     pub accepted: bool,
+}
+
+impl Outcome {
+    /// Whether the two outcomes are one typing, which is what does not depend
+    /// on the order of solving (types §6, I2): each class's value, each node's
+    /// decision, each check, each refusal and whether the program is accepted.
+    /// Which classes are one is no part of it.
+    pub fn same_typing(&self, other: &Outcome) -> bool {
+        self.values == other.values
+            && self.decisions == other.decisions
+            && self.checks == other.checks
+            && self.refusals == other.refusals
+            && self.accepted == other.accepted
+    }
 }
 
 impl State {

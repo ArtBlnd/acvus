@@ -24,7 +24,10 @@ The model serves three ends:
 - **I3.** The outcome is every equivalence class's value, the partition the unions
   made, every decision, every relation checked with the coercion function it chose,
   every place of refusal, and whether the program is accepted. Equivalence classes
-  are compared by names that do not depend on the order of solving.
+  are compared by names that do not depend on the order of solving. Two outcomes are
+  one where their typing is, all but the partition (`Outcome::same_typing`, U1 of
+  the review of 2026-10-22): which classes are one is no part of what does not
+  depend on the order (types §6).
 - **I4.** The model depends on the standard library alone, so that its errors are
   independent of those of the code it checks.
 

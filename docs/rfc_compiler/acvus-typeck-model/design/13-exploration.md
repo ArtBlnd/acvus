@@ -9,8 +9,13 @@ The outcome is each text class's value, the partition the text classes fall into
 each node's decision, each checked relation with its coercion, the refusals, and
 whether the program is accepted. Exploration takes every step each state allows,
 explores a state reached twice once, falls back where no step is left, and collects
-the distinct outcomes. Order independence holds of a program where exactly one
-outcome is reached.
+the outcomes of distinct typings: two outcomes are one where all but the partition
+is (`Outcome::same_typing`), the first reached kept. Order independence holds of a
+program where exactly one is reached. Since U1 of the review of 2026-10-22, as 준량
+decided: `1 ^ 2` made its two literals one class where the common part's unknown
+was solved first, unified with both, and left them apart where each literal's
+boundary into the chosen candidate's parameter was split first, every type `i32`
+either way; the order independence the text states is of the typing (types §6).
 
 ## Readings
 

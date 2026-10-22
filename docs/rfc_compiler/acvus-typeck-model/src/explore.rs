@@ -12,7 +12,8 @@ use crate::ty::Name;
 /// The outcomes every order of solving reaches.
 #[derive(Clone, Debug)]
 pub struct Exploration {
-    /// The distinct outcomes, in the order first reached.
+    /// The outcomes of distinct typings (`Outcome::same_typing`), each as
+    /// first reached.
     pub outcomes: Vec<Outcome>,
     /// The states visited, each once.
     pub states: usize,
@@ -137,7 +138,7 @@ where
                         order: &order,
                     });
                     let outcome = state.outcome_with(solved);
-                    if !outcomes.contains(&outcome) {
+                    if !outcomes.iter().any(|reached| reached.same_typing(&outcome)) {
                         outcomes.push(outcome);
                     }
                 }
@@ -193,7 +194,8 @@ fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<(Sta
     Some(fixpoints)
 }
 
-/// The distinct outcomes `orders` orders of solving reach, each taking at
+/// The outcomes of distinct typings `orders` orders of solving reach (as
+/// `Exploration::outcomes`), each taking at
 /// every state the step its own sequence picks: the first step always, the
 /// last always, then sequences a fixed generator gives. It checks I2 on a
 /// sample, for programs with too many states to explore.
@@ -247,7 +249,7 @@ where
             order: &taken,
         });
         let outcome = state.outcome_with(&solved);
-        if !outcomes.contains(&outcome) {
+        if !outcomes.iter().any(|reached| reached.same_typing(&outcome)) {
             outcomes.push(outcome);
         }
     }

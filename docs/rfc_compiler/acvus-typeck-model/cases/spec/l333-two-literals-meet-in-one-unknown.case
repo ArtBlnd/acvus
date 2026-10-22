@@ -1,0 +1,19 @@
+//@ spec: l.333, l.169, l.278, types §6
+// let k = 1 ^ 2;   // ^ at bool and three integers
+// Narrowed again at i32 (l.333). Each literal meets the common part's unknown
+// and passes into the chosen candidate's parameter: unified at the one where
+// the unknown is solved first, at the other where its boundary is split first,
+// so the two literals are one class along some orders and apart along others,
+// every type i32. One typing, so one outcome (types §6; note 13).
+extern fn xor(bool, bool) -> bool;
+extern fn xor(u8, u8) -> u8;
+extern fn xor(u16, u16) -> u16;
+extern fn xor(i32, i32) -> i32;
+let 1: lit 1;
+let 2: lit 2;
+let K;
+K = xor(1, 2) @ `^`;
+
+must pass;
+assert `^` == xor#3;
+assert K: i32;

@@ -401,8 +401,14 @@ steps; `golden()` and every expectation read what they read without it.
   declarations; a `for` over a reference, a mutable reference, an array, a `Vec`
   by value and a range; and C1 of the review of 2026-10-22, a match on an
   overload chosen by its result. Each was derived before it was run, in every
-  order. `1 ^ 2` reached two outcomes, the two literals' classes one in one and
-  apart in the other, every type `i32`: it is U1's, and no case holds it yet.
+  order.
+- 3 cases under `cases/spec`, `l333-*` and `l282-a-literal-binding-*`, test U1 of
+  the review of 2026-10-22: a sum of two literals whose result is unused, narrowed
+  again at `i32` since 2c03da17; `1 ^ 2`, whose two literals are one class along
+  some orders and apart along others, one typing and so one outcome since
+  outcomes compare by their typing (note 13); and a literal binding into `u8` and
+  a `u16` meeting, refused at the meeting in every order. Each was derived before
+  it was run.
 - 4 cases under `cases/spec`, `l240-*`, test l.238 (b) since 09aef04e, beside H7,
   now accepted: two uses that fill one literal, a literal into a use then
   another, a sum into a use that only reads it, and a literal through a generic

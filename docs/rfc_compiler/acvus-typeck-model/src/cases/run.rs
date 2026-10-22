@@ -157,7 +157,9 @@ impl Visitor<'_> {
         }
         let outcome = end.entry.outcome_with(end.groups);
         if let Some(witnesses) = &mut self.witnesses
-            && !witnesses.iter().any(|(reached, _)| *reached == outcome)
+            && !witnesses
+                .iter()
+                .any(|(reached, _)| reached.same_typing(&outcome))
         {
             witnesses.push((outcome.clone(), end.order.clone()));
         }
@@ -765,7 +767,7 @@ fn witness(program: &Program, tracer: &Tracer, k: usize, outcome: &Outcome, orde
         taken: 0,
     };
     match replay(program, order, &mut follow, |_, _, _| Ok(())) {
-        Ok((state, solved)) if state.outcome_with(&solved) == *outcome => {
+        Ok((state, solved)) if state.outcome_with(&solved).same_typing(outcome) => {
             tracer.line(2, &format!("replay: outcome {k}"));
         }
         Ok(_) => tracer.line(2, "replay: another outcome"),

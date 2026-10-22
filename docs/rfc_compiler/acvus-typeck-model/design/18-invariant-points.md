@@ -87,8 +87,8 @@ once nothing else can be solved, and then only as the one type that fits.
    reads (l.241, l.244), only where that node may record an own relation into it.
    Joins raise by casts (l.86), and a coercion, a conversion among them (l.280),
    reaches only a class that is own-solved. A node that waits for a class is not
-   decided. Where several candidates remain only because of a LitVar whose class
-   has no invariant point, l.333 holds as stated.
+   decided. Where several candidates remain and a value read holds a LitVar whose
+   class has no invariant point, l.333 holds as stated.
 3. **The invariant rule.** At each binding group's fixpoint, every class that is
    not own-solved, has invariant points, and has no unbroken dependency, in the
    graph of row 2 with an edge from each node to each class it waits for, is taken
