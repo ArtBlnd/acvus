@@ -358,6 +358,9 @@ steps; `golden()` and every expectation read what they read without it.
   1–3, accepted with `b: G`; the same without the cast, refused at `b`; and an
   identity a body makes, made anew at each of two instances. Each was derived
   before it was run.
+- 1 case under `cases/spec`, `l341-a-try-in-a-match-arm`, tests that a match
+  arm's braces are no block expression (l.341, since d6ebc326): its `?` exits the
+  script, derived before it was run.
 - 7 cases under `cases/spec`, `l246-*`, test the common part (l.246): an overload
   chosen by its result through `?`, with the script's result typed, with no
   tail, and refused where the tail's result is untyped and a fill has a place
