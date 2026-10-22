@@ -1,7 +1,14 @@
-//@ spec: Example 6, l.429–443, called with two types; l.188
+//@ spec: Example 6, l.429–443, called with two types; l.188, l.198, l.212, l.221, l.86, l.276, l.292
 // let mut last = None;
 // let remember = |x| last = Some(x);
 // remember(1u8); remember(2u16);
+// last is reached by name and its type L is an unknown of the enclosing binding
+// group, so the write is a meeting, L ≥ Some(x) (l.221). It names the capture L,
+// and x's type X is joined to it through S, so the write, S and X are the
+// lambda's environment, recorded once in the enclosing binding group (l.188):
+// X is no universal (l.212) but one unknown of that group, which both calls'
+// arguments meet (l.198), X ≥ u8 and X ≥ u16, which have no common ancestor
+// (l.86), so X has no value (l.276): refused at X (l.292).
 group λ in run {
     let X;
     let S;
@@ -29,6 +36,7 @@ group λ {
     `λ result` = `()`;
 }
 
-// Both calls meet X, and u8 ⊔ u16 has no join.
 must fail;
-assert refused no_join;
+assert `remember(1u8)` == calls {λ};
+assert `remember(2u16)` == calls {λ};
+assert refused no_join X;

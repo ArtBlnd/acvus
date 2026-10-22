@@ -145,12 +145,14 @@ Since 8978eb70 the environment is cut always. The cases under
 then, under `cases/spec/`, `cases/holes/` and `cases/istar/`, are in that twin's
 place, the twin removed: H5, both of O4, Example 6 and Example 6 called with two
 types, the lambda never called, and the call left out under `Deferral::Reading`.
-Each keeps its outcome. Five cases written by the text of then change:
+Each keeps its outcome. Five cases written by the text of then changed:
 
 - `rules/classes/a-a-capture-shared-by-two-instances` and
   `rules/solving/a-two-instances-meet-a-capture-written-by-name`, Example 6 called
-  with `1u8` and `2u16`, are refused at `x`'s type, which both calls share, and no
-  longer at `last`'s payload (What it omits).
+  with `1u8` and `2u16`, were refused at `x`'s type, which both calls share, and no
+  longer at `last`'s payload (What it omits). Being then one program with one
+  derivation with `spec/example-06-called-with-two-types`, they are merged into
+  it, which asserts the refusal at `x`'s type.
 - `rules/solving/a-write-through-a-captured-reference-no-coercion-reaches` is
   refused at the same boundary, now the enclosing group's.
 - `rules/classes/b-a-lambda-calling-a-captured-lambda` and

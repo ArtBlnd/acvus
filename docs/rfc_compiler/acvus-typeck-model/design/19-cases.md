@@ -338,13 +338,17 @@ steps; `golden()` and every expectation read what they read without it.
   their twins, each moved to its place; 4 cases remain under `cases/environment`.
   9 cases under `cases/spec`, `block-*`, test the Block section (l.343), a block
   solved as a lambda called where it lies, each derived before it was run.
+  `rules/classes/a-a-capture-shared-by-two-instances` and
+  `rules/solving/a-two-instances-meet-a-capture-written-by-name`, become one
+  program with one derivation with `spec/example-06-called-with-two-types`, are
+  merged into it.
 - 13 cases under `cases/phases` test each phase along a written order, by the line
   of the spec it rests on: recording (l.221, l.229–231), the join (l.80–91, l.171,
   l.271, l.276), splits (l.280), unification (l.156, l.160–165), nodes (l.248,
   l.263, l.322–335) and fallback (l.288–290). 2 cases under `cases/primitives` test
   the join, `≤` and coercion on the declarations of `fixture::decls()` without
   `Box`, coercion with a conversion `u16 → u8` besides.
-- 61 cases under `cases/rules` are 16 primitives under `types`, 44 programs the
+- 59 cases under `cases/rules` are 16 primitives under `types`, 42 programs the
   spec's rules refuse in every order and one they accept
   (`classes/b-a-lambda-calling-a-captured-lambda`), each derived from quoted lines
   of its region: `types` (l.39–112), `classes` (l.1–38, l.113–218), `solving`
