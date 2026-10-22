@@ -1,5 +1,5 @@
-//@ spec: l.290
-// Solving A unifies its LitVar lower bound with it (l.171), and no source gives
+//@ spec: l.288
+// Solving A unifies its LitVar lower bound with it (l.169), and no source gives
 // a constructor; at the fixpoint, the class falls back to the LitVar's family's
 // default, i32 for an integer.
 //@ order: solve A, fallback

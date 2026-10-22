@@ -1,4 +1,4 @@
-//! An equivalence class's value (l.167–171, l.269–284): a cycle of lower
+//! An equivalence class's value (l.165–169, l.267–282): a cycle of lower
 //! bounds and part lower bounds alone merged first, a class that reaches a
 //! part of its own refused, a LitVar's join unifying it, the join of the
 //! constructors and members the sources give, the kind the class takes with
@@ -17,7 +17,7 @@ use crate::solve::State;
 use crate::ty::{Constructor, Member, Name, PartKey, Term, Ty};
 
 /// A constructor and its members: what an equivalence class takes when it is
-/// solved (l.271), each part then solved on its own.
+/// solved (l.269), each part then solved on its own.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Head {
     pub constructor: Constructor,
@@ -31,7 +31,7 @@ pub fn head(term: &Term<ClassId>) -> Head {
     }
 }
 
-/// What an equivalence class took when it was solved (l.271).
+/// What an equivalence class took when it was solved (l.269).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Took {
     /// The kind it held already.
@@ -50,7 +50,7 @@ pub enum Took {
     NoJoin(Refusal),
 }
 
-/// What an equivalence class nothing enters took at its fill (l.284).
+/// What an equivalence class nothing enters took at its fill (l.282).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Fill {
     /// The one type the places it passes into have, with what unification
@@ -65,7 +65,7 @@ pub enum Fill {
     Differ(Refusal),
 }
 
-/// A fill (l.284): the equivalence class, each place it passes into with
+/// A fill (l.282): the equivalence class, each place it passes into with
 /// that place's value, and what it took.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Filled {
@@ -75,20 +75,20 @@ pub struct Filled {
 }
 
 /// What an equivalence class's value is taken from when it is solved
-/// (l.275–278).
+/// (l.273–276).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Sources {
     /// The relations of the log that make the class hold a kind, by their
     /// places: the equations on its members, and the kinds recorded on them
-    /// (l.275).
+    /// (l.273).
     pub equations: Vec<usize>,
     /// Each solved lower bound, with the constructor and members it gives
-    /// (l.276).
+    /// (l.274).
     pub lowers: Vec<(ClassId, Head)>,
     /// Each solved part lower bound, with the constructor and members it
-    /// gives, which reach the value by `≤ₚ` (l.276).
+    /// gives, which reach the value by `≤ₚ` (l.274).
     pub part_lowers: Vec<(ClassId, Head)>,
-    /// The constructors and members its kinds known in part give (l.278).
+    /// The constructors and members its kinds known in part give (l.276).
     pub facts: Vec<Head>,
     /// The lower bounds and part lower bounds not solved, which give
     /// nothing.
@@ -96,7 +96,7 @@ pub struct Sources {
 }
 
 /// What an equivalence class took when it was solved, and its sources then
-/// (l.271–278).
+/// (l.269–276).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Joined {
     pub sources: Sources,
@@ -145,7 +145,7 @@ impl State {
     }
 
     /// The join raised where the sources carry two different identities, which
-    /// no class holds (l.353): to the nearest node above that carries none,
+    /// no class holds (l.351): to the nearest node above that carries none,
     /// each value cast up to it; none where no such node is, or where a part
     /// lower bound carries one, which reaches with no cast.
     fn without_two_identities(&self, sources: &Sources, joined: Head) -> Option<Head> {
@@ -172,7 +172,7 @@ impl State {
     }
 
     /// The constructors and members the kinds known in part of the class give:
-    /// those of the members visible to this body (l.278).
+    /// those of the members visible to this body (l.276).
     pub(crate) fn fact_heads(&self, root: ClassId) -> Vec<Head> {
         let host_bound = self
             .lower_bounds(root)
@@ -223,7 +223,7 @@ impl State {
     }
 
     /// The kind of `head`, each part a class made anew and named after
-    /// `owner` (l.271). Every kind's constructor agrees with its declaration:
+    /// `owner` (l.269). Every kind's constructor agrees with its declaration:
     /// the text's are checked when they are recorded, and a signature's when
     /// it is declared.
     pub(crate) fn skeleton(&mut self, head: &Head, owner: &ClassName) -> Term<ClassId> {
@@ -305,7 +305,7 @@ impl State {
 impl State {
     /// Refuses the equivalence class where it reaches a part of its own along
     /// recorded lower bounds, part lower bounds and parts: no finite type
-    /// holds it, so it has no value (l.271). Returns the refusal, where it is
+    /// holds it, so it has no value (l.269). Returns the refusal, where it is
     /// refused.
     pub(crate) fn refuse_infinite(&mut self, root: ClassId) -> Option<Refusal> {
         if !self.reaches_own_part(root) {
@@ -317,7 +317,7 @@ impl State {
     }
 
     /// Unifies with the equivalence class each LitVar lower bound of it that
-    /// waits for nothing: the join of a LitVar (l.171). Returns the
+    /// waits for nothing: the join of a LitVar (l.169). Returns the
     /// equations recorded.
     pub(crate) fn join_lit_lowers(&mut self, root: ClassId) -> Recording {
         let mut recorded = Recording::default();
@@ -331,7 +331,7 @@ impl State {
         recorded
     }
 
-    /// The sources of the equivalence class's value (l.275–278).
+    /// The sources of the equivalence class's value (l.273–276).
     pub(crate) fn sources(&self, root: ClassId) -> Sources {
         let root = self.root(root);
         let equations = self
@@ -385,9 +385,9 @@ impl State {
     }
 
     /// The equivalence class takes its constructor and members, and is
-    /// solved (l.271): where it holds no kind, the join of the constructors
+    /// solved (l.269): where it holds no kind, the join of the constructors
     /// and members its solved lower bounds, part lower bounds and kinds known
-    /// in part give (l.276), its parts made anew, each part lower bound's
+    /// in part give (l.274), its parts made anew, each part lower bound's
     /// constructor reaching it by `≤ₚ`, with no cast (l.89). Where they give
     /// none it is left unsolved, and where they have no join it is refused.
     pub(crate) fn join(&mut self, root: ClassId) -> Joined {
@@ -446,14 +446,14 @@ impl State {
     }
 
     /// Whether the equivalence class, nothing entering it, is filled now
-    /// (l.284): it passes into some place, and each place it passes into has
+    /// (l.282): it passes into some place, and each place it passes into has
     /// a value.
     pub(crate) fn fills_now(&self, root: ClassId) -> bool {
         let places = self.places(root);
         !places.is_empty() && places.iter().all(|&place| self.value(place).is_some())
     }
 
-    /// Fills the equivalence class nothing enters (l.284): where the places it
+    /// Fills the equivalence class nothing enters (l.282): where the places it
     /// passes into have one type, it takes that type, solved with each of its
     /// parts; where they have two, it has no value and is refused. Each place
     /// has a value (`fills_now`).
@@ -528,9 +528,9 @@ impl State {
     }
 
     /// The equivalence class, holding no kind, has LitVar lower bounds whose
-    /// unification with it, their join (l.171), conflicts: two LitVars of two
-    /// families meet (l.165). Its sources have no join, so it has no value
-    /// and is refused there (l.292), by the conflict's refusal.
+    /// unification with it, their join (l.169), conflicts: two LitVars of two
+    /// families meet (l.163). Its sources have no join, so it has no value
+    /// and is refused there (l.290), by the conflict's refusal.
     pub(crate) fn lit_no_join(&mut self, root: ClassId, refusal: Refusal) -> Joined {
         let root = self.root(root);
         Joined {
@@ -539,14 +539,14 @@ impl State {
         }
     }
 
-    /// The equivalence class's sources have no join (l.276).
+    /// The equivalence class's sources have no join (l.274).
     fn no_join(&mut self, root: ClassId, refusal: Refusal) -> Took {
         self.refuse_value(root, &refusal);
         Took::NoJoin(refusal)
     }
 
     /// The equivalence class has no value, and is never solved or filled
-    /// again (l.292).
+    /// again (l.290).
     fn refuse_value(&mut self, root: ClassId, refusal: &Refusal) {
         let members = self.classes.held(root).members.clone();
         self.no_value.extend(members);
@@ -555,7 +555,7 @@ impl State {
 
     /// Unifies a LitVar lower bound or part lower bound, at `i` in the log,
     /// with the solved equivalence class it bounds, where the LitVar's class
-    /// waits for nothing (`settled`): the join of a LitVar (l.171). It is then
+    /// waits for nothing (`settled`): the join of a LitVar (l.169). It is then
     /// marked split. Returns the equation recorded, where one is.
     pub(crate) fn join_lit_at(
         &mut self,
@@ -578,7 +578,7 @@ impl State {
     }
 
     /// Merges each cycle of lower bounds and part lower bounds alone into one
-    /// equivalence class (l.271). Returns the equations recorded.
+    /// equivalence class (l.269). Returns the equations recorded.
     pub(crate) fn merge_cycles(&mut self) -> Recording {
         let mut recorded = Recording::default();
         let mut edges: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
@@ -621,7 +621,7 @@ impl State {
     }
 
     /// Whether the equivalence class reaches a part of its own along recorded
-    /// lower bounds, part lower bounds and parts (l.271).
+    /// lower bounds, part lower bounds and parts (l.269).
     fn reaches_own_part(&self, root: ClassId) -> bool {
         let root = self.root(root);
         let mut seen: BTreeSet<(ClassId, bool)> = BTreeSet::new();

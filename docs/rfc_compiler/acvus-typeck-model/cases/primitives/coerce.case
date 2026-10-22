@@ -1,4 +1,4 @@
-//@ spec: l.93–111
+//@ spec: l.93–109
 extern type A;
 extern type B;
 extern type C;

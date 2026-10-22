@@ -1,4 +1,4 @@
-//@ spec: l.199, l.280, l.221, l.282
+//@ spec: l.197, l.278, l.219, l.280
 // takes(|x| x);            // takes(fn(u8) -> u8)
 // As where takes writes u16, but the copy of λ's result, u8, reaches the
 // type's result u8 by no change.

@@ -22,8 +22,8 @@ pub struct Exploration {
 
 /// An order of solving (I2): the steps that took each binding group other
 /// than the entry to its fixpoint, in the order the groups are solved
-/// (l.215), then the entry's steps to each of its fixpoints, a fallback that
-/// fell a class back taken between one fixpoint and the next steps (l.290).
+/// (l.213), then the entry's steps to each of its fixpoints, a fallback that
+/// fell a class back taken between one fixpoint and the next steps (l.288).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Order {
     pub groups: Vec<(Name, Vec<Step>)>,
@@ -60,8 +60,8 @@ impl Default for Order {
 }
 
 /// A final state of an order of solving: the entry's, once nothing is left to
-/// fall back (l.290), with each group solved before it at its fixpoint
-/// (l.215), and the order that reached it.
+/// fall back (l.288), with each group solved before it at its fixpoint
+/// (l.213), and the order that reached it.
 pub struct Final<'a> {
     pub entry: &'a State,
     pub groups: &'a BTreeMap<Name, Rc<State>>,
@@ -69,8 +69,8 @@ pub struct Final<'a> {
 }
 
 /// Solves each binding group other than the entry to its fixpoint in every
-/// order, before the groups that make instances of it (l.215), then the entry
-/// in every order, falling back wherever no step is left (l.290). A state
+/// order, before the groups that make instances of it (l.213), then the entry
+/// in every order, falling back wherever no step is left (l.288). A state
 /// reached twice is explored once, along the order that reached it first.
 pub fn explore(program: &Program, budget: usize) -> Exploration {
     explore_with(program, budget, |_| {})
@@ -160,7 +160,7 @@ where
 }
 
 /// The distinct states at which a binding group's solving reaches its
-/// fixpoint, inside which there is no fallback (l.288), each with the steps
+/// fixpoint, inside which there is no fallback (l.286), each with the steps
 /// that first reached it, or none where the budget runs out.
 fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<(State, Vec<Step>)>> {
     let mut seen = BTreeSet::new();

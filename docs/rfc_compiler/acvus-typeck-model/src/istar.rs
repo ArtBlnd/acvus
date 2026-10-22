@@ -221,8 +221,8 @@ impl EndGraph {
 }
 
 /// The nodes `name` depends on at the end: those that record into a class
-/// reached from the classes at the positions it reads (l.243, l.246), as
-/// what it reads takes them (l.244), and a binding's path (l.308).
+/// reached from the classes at the positions it reads (l.241, l.244), as
+/// what it reads takes them (l.242), and a binding's path (l.306).
 fn depends_on(
     view: &State,
     reach: &Reach,
@@ -251,13 +251,13 @@ fn depends_on(
 
 /// The roots of the classes the node records into at the end, as a read of
 /// `read` takes them (`design/15-istar.md`, Definitions). A use records into
-/// what its candidate would record into by l.280 (note 08, reading 13), its
+/// what its candidate would record into by l.278 (note 08, reading 13), its
 /// candidates' where it is not decided: the classes it makes anew are its own,
 /// and no other node reads them. Another decided node
 /// records into what its own relations record into, those of the instances it
 /// made among them; one not decided, into the classes at its positions. A
 /// read of whether a class is a reference leaves out what cannot decide it
-/// (l.244; note 08, reading 12).
+/// (l.242; note 08, reading 12).
 fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
     let node = &view.nodes[name];
     let classes: BTreeSet<ClassId> = match (&node.kind, &node.decision) {
@@ -312,7 +312,7 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
 
 /// The classes a relation records into: the upper side of a lower bound or a
 /// part lower bound, the type passed into at a boundary, both sides of an
-/// equation, and the class a kind, a fact, a LitVar, a record of l.248 or a
+/// equation, and the class a kind, a fact, a LitVar, a record of l.246 or a
 /// lambda is given to.
 fn into(relation: &Relation) -> Vec<ClassId> {
     match relation {
@@ -332,7 +332,7 @@ fn into(relation: &Relation) -> Vec<ClassId> {
 /// Reach at the end (`design/15-istar.md`, Definitions): from a class to each
 /// class it has as a lower bound or a part lower bound, along every one
 /// recorded, a split's among them. Every class has taken its constructor by the end, so the rows
-/// of l.240 (a) and l.241 hold of none.
+/// of l.238 (a) and l.239 hold of none.
 struct Reach {
     edges: BTreeMap<ClassId, BTreeSet<ClassId>>,
 }

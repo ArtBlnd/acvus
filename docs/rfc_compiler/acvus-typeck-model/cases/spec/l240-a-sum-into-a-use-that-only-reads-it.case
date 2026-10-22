@@ -1,8 +1,8 @@
-//@ spec: l.240, l.263, l.280, l.335; Example 12
+//@ spec: l.238, l.261, l.278, l.333; Example 12
 // let mut x = 0; while c { x = x + 1; } takes_u8(x);
 // takes_u8 is decided at once. x + 1 reads X without its own relations, so
 // R gives nothing and only LitVars enter X there, which takes_u8's boundary
-// unifies with u8 (l.263, l.280): x + 1 is add(u8), and x is u8.
+// unifies with u8 (l.261, l.278): x + 1 is add(u8), and x is u8.
 extern fn core::add(&u8, &u8) -> u8;
 extern fn core::add(&u16, &u16) -> u16;
 extern fn core::add(&i32, &i32) -> i32;

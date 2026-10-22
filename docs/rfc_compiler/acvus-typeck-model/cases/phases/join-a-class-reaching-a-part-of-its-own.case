@@ -1,4 +1,4 @@
-//@ spec: l.271
+//@ spec: l.269
 // X ≥ Some(x), whose payload S ≥ X: X reaches a part of its own along lower
 // bounds and parts, and no finite type holds it.
 //@ order: solve X

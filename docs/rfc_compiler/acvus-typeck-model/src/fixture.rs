@@ -61,7 +61,7 @@ pub fn result(ok: Ty, err: Ty) -> Ty {
 }
 
 /// The `Error` whose variants are the elements, each named after its type
-/// (l.339).
+/// (l.337).
 pub fn error(elements: &[Ty]) -> Ty {
     let variants = elements
         .iter()

@@ -1,4 +1,4 @@
-//@ spec: Example 14, l.565–590
+//@ spec: Example 14, l.563–588
 // struct Pair { l, r }
 // impl Pair {
 //     fn new(l, r) { Self { l, r } }
@@ -10,9 +10,9 @@
 // q.nest(3)
 // Its states are too many to explore, so the orders are sampled. The recursive
 // call's boundary into nest's receiver splits into P ⇝ A and Q ⇝ B toward the
-// universals (l.588), which C keeps; the copy q.nest(3) makes keeps them split
-// (l.217). q is Pair<&str, u8>, and the copy of the recursive call's argument,
-// Pair<Pair<&str, u8>, u8>, reaches Pair<&str, u8> by no coercion (l.590).
+// universals (l.586), which C keeps; the copy q.nest(3) makes keeps them split
+// (l.215). q is Pair<&str, u8>, and the copy of the recursive call's argument,
+// Pair<Pair<&str, u8>, u8>, reaches Pair<&str, u8> by no coercion (l.588).
 //@ orders: sampled 200
 struct Pair { l, r }
 extern fn core::eq(&u8, &u8) -> bool;

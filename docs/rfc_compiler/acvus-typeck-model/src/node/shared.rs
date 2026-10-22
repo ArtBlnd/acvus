@@ -1,5 +1,5 @@
 //! What all candidates of a use not yet decided share, recorded before it is
-//! decided (l.248, l.326; `design/08-node.md`, readings 13 and 14).
+//! decided (l.246, l.324; `design/08-node.md`, readings 13 and 14).
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -26,8 +26,8 @@ pub(super) fn is_reference(ty: &SigTy) -> Option<bool> {
 impl State {
     /// Records, for each undecided use with several candidates, what all its
     /// candidates share: each position their signatures write alike with no
-    /// variable (l.326), and whether each class they would record a lower
-    /// bound or an equation into is a reference, where they agree (l.248).
+    /// variable (l.324), and whether each class they would record a lower
+    /// bound or an equation into is a reference, where they agree (l.246).
     /// Returns the relations recorded.
     pub(crate) fn record_at_once(&mut self) -> Recording {
         let mut recorded = Recording::default();
@@ -172,10 +172,10 @@ impl State {
 
     /// The classes inside an argument's kind that a candidate's parameter
     /// would record a lower bound or an equation into, by the splits of
-    /// l.280. The argument passes into the type the parameter writes, which
+    /// l.278. The argument passes into the type the parameter writes, which
     /// records into that type alone, and each of its parts passes into that
     /// type's part: a meeting where the parameter writes a variable, an
-    /// unknown (l.221), recording an equation into the part, unless it is a
+    /// unknown (l.219), recording an equation into the part, unless it is a
     /// structural type's, whose part lower bound records into the variable
     /// alone; and where the parameter writes a type, the part passes into it
     /// in turn. Two constructors are linked as a split links them: the targets

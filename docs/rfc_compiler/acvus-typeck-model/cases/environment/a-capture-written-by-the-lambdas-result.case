@@ -1,9 +1,9 @@
-//@ spec: l.188, l.198
+//@ spec: l.186, l.196
 // let mut acc = 0;
 // let f = || acc + 1;      // core::add for u8, u16, i32
 // acc = f();
 // acc + 1 and the lambda's result type are the enclosing group's, and the call's
-// result takes that result type (l.198).
+// result takes that result type (l.196).
 extern fn core::add(&u8, &u8) -> u8;
 extern fn core::add(&u16, &u16) -> u16;
 extern fn core::add(&i32, &i32) -> i32;

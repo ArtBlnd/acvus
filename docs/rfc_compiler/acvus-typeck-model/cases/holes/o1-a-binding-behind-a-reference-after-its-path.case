@@ -1,8 +1,8 @@
 //@ hole: O1
 // let o = Some(1u8);
 // if let Some(x) = &o { }
-// The payload's projection applies to the target of &o (l.300), so the path
-// passes a shared reference and x lends its position (l.308).
+// The payload's projection applies to the target of &o (l.298), so the path
+// passes a shared reference and x lends its position (l.306).
 //@ reading: binding_path = after_path
 
 let S;

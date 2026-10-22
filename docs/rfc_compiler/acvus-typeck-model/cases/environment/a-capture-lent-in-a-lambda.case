@@ -1,4 +1,4 @@
-//@ spec: l.188
+//@ spec: l.186
 // let mut buf = Vec::new();    // new() -> Vec<T>
 // let fill = || fill_all(&mut buf);    // fill_all(&mut Vec<u8>)
 // fill();

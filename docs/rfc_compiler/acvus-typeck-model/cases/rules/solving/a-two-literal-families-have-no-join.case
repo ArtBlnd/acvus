@@ -1,11 +1,11 @@
-//@ spec: l.165, l.171, l.221, l.276, l.292
+//@ spec: l.163, l.169, l.219, l.274, l.290
 // let mut x = 1;
 // x = 1.5;
 // The initializer and the assignment are meetings, 1 <= X and 1.5 <= X
-// (l.221). X has no equation, so its value is the join of its sources (l.276),
-// and a LitVar's join unifies it with X (l.171). Two LitVars of two families
-// have no rule (l.165), so the join has no result: X has no value, and the
-// program is refused there (l.292).
+// (l.219). X has no equation, so its value is the join of its sources (l.274),
+// and a LitVar's join unifies it with X (l.169). Two LitVars of two families
+// have no rule (l.163), so the join has no result: X has no value, and the
+// program is refused there (l.290).
 let X;
 let 1: lit 1;
 let `1.5`: lit 1.5;

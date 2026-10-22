@@ -1,7 +1,7 @@
-//@ spec: l.309, l.306
+//@ spec: l.307, l.304
 // match 1u8 { None => {} }
-// None is None(_) (l.309), the projection Payload at the scrutinee (l.306),
-// whose kind u8 has no variant None (l.160).
+// None is None(_) (l.307), the projection Payload at the scrutinee (l.304),
+// whose kind u8 has no variant None (l.158).
 let 1u8: u8;
 let `None.0`;
 `None.0` = 1u8 as None @ None;

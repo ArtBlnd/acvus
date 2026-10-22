@@ -131,12 +131,12 @@ pub struct DeclsBuilder {
     by_name: BTreeMap<Name, Vec<Decl>>,
 }
 
-/// The name of `e?`'s use, whose two candidates the language gives (l.339).
+/// The name of `e?`'s use, whose two candidates the language gives (l.337).
 pub const TRY: &str = "?";
 
 impl DeclsBuilder {
     /// The declarations of the program, with the language's two candidates of
-    /// `e?`: `?(Option⟨T⟩) -> T` and `?(Result⟨T, E⟩) -> T` (l.339).
+    /// `e?`: `?(Option⟨T⟩) -> T` and `?(Result⟨T, E⟩) -> T` (l.337).
     pub fn new(types: DeclaredTypes) -> DeclsBuilder {
         let mut builder = DeclsBuilder {
             types,
@@ -328,7 +328,7 @@ impl Decls {
         &self.tree
     }
 
-    /// The declarations a name reaches (l.322).
+    /// The declarations a name reaches (l.320).
     pub fn candidates(&self, name: &Name) -> &[Decl] {
         self.by_name.get(name).map_or(&[], Vec::as_slice)
     }

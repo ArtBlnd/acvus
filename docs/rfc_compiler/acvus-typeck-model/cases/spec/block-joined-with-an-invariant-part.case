@@ -1,8 +1,8 @@
-//@ spec: l.343, l.188, l.217, l.86, l.280
+//@ spec: l.341, l.186, l.215, l.86, l.278
 // let x = if c { { Vec::new() } } else { make() };   // make() -> Vec<u8>
 // new's T is left in the lambda's C and copied by the call's instance
-// (l.217). X joins the two Vecs, and a Vec's argument is invariant, so the
-// splits equate the copy of T with u8 (l.280).
+// (l.215). X joins the two Vecs, and a Vec's argument is invariant, so the
+// splits equate the copy of T with u8 (l.278).
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 extern fn make() -> Vec<u8>;

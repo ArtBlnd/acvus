@@ -1,15 +1,15 @@
-//@ spec: l.263, l.276, l.244, l.335, l.292
+//@ spec: l.261, l.274, l.242, l.333, l.290
 // let mut t;
 // t.0 = 0;
 // t = pick(t);             // pick((i32,)) -> (i32,), pick(u8) -> u8
 // Neither candidate's result is a reference, so pick records that at once, and
 // the projection t.0, which reads only whether T is a reference, does not
-// depend on pick (l.244, l.248): T is no reference and takes the kind "has
+// depend on pick (l.242, l.246): T is no reference and takes the kind "has
 // component 0". pick reads T at its argument without its own relations
-// (l.263), and T's value is then the join of what its sources give (l.263,
-// l.276): the kind names no member, since a tuple has none, so it gives
-// nothing, the position decides nothing, and both candidates remain (l.335).
-// Refused at pick (l.292).
+// (l.261), and T's value is then the join of what its sources give (l.261,
+// l.274): the kind names no member, since a tuple has none, so it gives
+// nothing, the position decides nothing, and both candidates remain (l.333).
+// Refused at pick (l.290).
 extern fn pick((i32,)) -> (i32,);
 extern fn pick(u8) -> u8;
 

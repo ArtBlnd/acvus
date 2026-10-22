@@ -1,12 +1,12 @@
-//@ spec: l.339, l.240, l.288, l.290, l.217
+//@ spec: l.337, l.238, l.286, l.288, l.215
 // fn g() { Ok(1u8) }
 // fn f() { let a = g()?; Ok(a) }
 // ? reads its operand's outer constructor alone, Result, and is decided in
-// f's group (l.339). The candidate's E, which g's error part, entered by
+// f's group (l.337). The candidate's E, which g's error part, entered by
 // nothing, gives nothing, waits for nothing once ? is decided, and the
-// class the wrapping passes into waits for E (l.240 (a)); f's group falls
-// nothing back (l.288), so they stay in C. In the run's copy, E falls back
-// to ! (l.290), which is not wrapped (l.339), so f() is Result<u8, !>.
+// class the wrapping passes into waits for E (l.238 (a)); f's group falls
+// nothing back (l.286), so they stay in C. In the run's copy, E falls back
+// to ! (l.288), which is not wrapped (l.337), so f() is Result<u8, !>.
 group g {
     let `g result`;
     fn g() -> `g result`;

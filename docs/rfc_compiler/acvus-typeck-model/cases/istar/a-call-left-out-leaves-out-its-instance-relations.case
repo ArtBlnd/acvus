@@ -4,8 +4,8 @@
 // let f = if c { put } else { choose(x, put) };   // choose(A, T) -> T, choose(B, T) -> T
 // f(x);
 // choose gives back the function value its T takes in, put's, and makes none
-// (l.186). choose and f(x) break their dependencies on each other (l.265).
-// The captured environment is the enclosing group's (l.188), so make_b() ≤ X is
+// (l.184). choose and f(x) break their dependencies on each other (l.263).
+// The captured environment is the enclosing group's (l.186), so make_b() ≤ X is
 // recorded where it is written, and no read leaves it out with the call: choose
 // reads B, and f(x) calls put's lambda.
 //@ reading: deferral = reading

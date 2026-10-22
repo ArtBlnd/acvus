@@ -1,16 +1,16 @@
 # 17 The captured environment
 
-Rests on the spec's l.188 (the captured environment), l.198 (a call of a function
-value), l.205–217 (binding groups, C, instances), l.221 (meeting), l.240 (b) (what a
-class depends on), l.263, l.282 and l.292; on `docs/rfc_compiler/functions.md` §2 (a function value bound by `let`
+Rests on the spec's l.186 (the captured environment), l.196 (a call of a function
+value), l.203–215 (binding groups, C, instances), l.219 (meeting), l.238 (b) (what a
+class depends on), l.261, l.280 and l.290; on `docs/rfc_compiler/functions.md` §2 (a function value bound by `let`
 generalizes what its type leaves unconstrained, "except what the enclosing scope or
 the captured environment holds: those belong to where they were written"; its
 environment is captured once, where it is written) and `types.md` §1 (every slot
 has one type; values meeting through a chain of slots are of one type); and on
 `holes.md`, H5 and O4. Its direction and its rows were agreed with 준량 on
 2026-10-21, as a reading, `Captures::Environment`, beside the spec as stated then,
-`Captures::AsStated`. The text took them at 8978eb70, as 준량 decided (l.23, l.188,
-l.198, l.211, l.212, l.240), and both readings are removed with it: the
+`Captures::AsStated`. The text took them at 8978eb70, as 준량 decided (l.23, l.186,
+l.196, l.209, l.210, l.238), and both readings are removed with it: the
 environment is cut always. The code
 is `Program::cut_environments` and `Program::owner`, `Program::item_group` and
 `Program::is_universal` in `src/program.rs`, `State::positions` and
@@ -20,14 +20,14 @@ is `Program::cut_environments` and `Program::owner`, `Program::item_group` and
 ## Meaning
 
 Before 8978eb70 the spec solved a lambda's group before its enclosing one, and
-copied all of its C, the captures shared, at each call of its value (l.215, l.217).
+copied all of its C, the captures shared, at each call of its value (l.213, l.215).
 What the lambda recorded into a capture was then recorded only by the calls'
 instances, at none of their positions, so the capture and what reads it were
 decided before or after it by order (O4). A node of the lambda that read a capture
 read it before the enclosing group recorded into it, and where that decided
 nothing it was decided in each copy (H5, which is not a hole).
 
-By l.188, as functions §2 has it, the part of a lambda's text that its captured environment
+By l.186, as functions §2 has it, the part of a lambda's text that its captured environment
 holds is not generalized: it belongs to the enclosing group and is solved there,
 once. Only the rest is the lambda's binding group, generalized and copied at each
 call.
@@ -35,7 +35,7 @@ call.
 ## Definitions
 
 - A **capture** of a lambda is a class of an enclosing group that its text names
-  (l.212).
+  (l.210).
 - Two classes of a lambda's text are **joined** where one item of the text names
   both, or one is a part of a kind the text writes for the other. The
   **environment** of a lambda is every class joined, directly or through others, to
@@ -44,24 +44,24 @@ call.
 - An item **names** the classes it relates. A use of a function of an enclosing
   group names that function's parameter and result types as well, which it takes
   as they are (note 09, reading 4), and a binding names the classes of the
-  projections on its path (l.308).
+  projections on its path (l.306).
 - The **generic part** of a lambda is the rest of its text, its parameters among it
   where they are not in the environment.
 
 ## Rows
 
 1. **The environment is the enclosing group's.** Its classes are classes of that
-   group, each an unknown of it unless the text writes it (l.213). Its items are
+   group, each an unknown of it unless the text writes it (l.211). Its items are
    recorded there, and its nodes made there, once, when that group's solving
    starts, whether or not a call reaches the lambda.
-2. **The lambda's binding group is its generic part** (l.205). Its C is the generic
-   part's, copied at each instance (l.214, l.217). It names no capture, so no
+2. **The lambda's binding group is its generic part** (l.203). Its C is the generic
+   part's, copied at each instance (l.212, l.215). It names no capture, so no
    instance records into one.
 3. **A call of a function value meets the environment where it is.** Each argument
    meets the copy of its candidate lambda's generic parameter, or that lambda's
    parameter in the environment, an unknown of the call's group; the call's result
    takes the copy of a generic result type, or the environment's. Within the depth
-   its candidates reach (l.240 (b)), the call's positions include the parameters
+   its candidates reach (l.238 (b)), the call's positions include the parameters
    and the result type in the environment of each lambda its callee's Values name
    at the moment.
 
@@ -69,7 +69,7 @@ What each row excludes:
 
 - Row 1: the environment generalized or copied, and a capture taking a relation
   from an instance. A lambda no call reaches still has its environment recorded,
-  and the nodes there are decided (l.292 holds of them).
+  and the nodes there are decided (l.290 holds of them).
 - Row 2: a class of an enclosing group in a lambda's C.
 - Row 3: a parameter in the environment solved before a call whose Values name its
   lambda is decided.
@@ -77,13 +77,13 @@ What each row excludes:
 ## Invariants
 
 - **I\* at a capture.** No relation into a capture is recorded after a decision that
-  reads it, outside a cycle (l.265; types §6: "A decision reads a type only once
+  reads it, outside a cycle (l.263; types §6: "A decision reads a type only once
   nothing can change it").
 - **I2 at the witnesses.** H5 and O4 reach one outcome each.
 - **Generalization** leaves out the environment (functions §2), and every capture
   has one type (types §1).
 - **Soundness.** Every item of a lambda's text is recorded, in the environment once
-  or in each instance, and checked as before (l.282).
+  or in each instance, and checked as before (l.280).
 - **Conservative refinement.** A later, finer environment, and the phases agreed
   first as the fall-back (O4's capture closed before the instance, its relations
   checked), are judged by whether every program this reading accepts keeps its
@@ -173,7 +173,7 @@ Each keeps its outcome. Five cases written by the text of then changed:
 - Row 3 makes a node's result reach what it reads through a call. In
   `acc = f()` with `f = || acc + 1`, `acc + 1`'s result `R` reaches `ACC`, which it
   reads, by `R ≤ λ result ≤ f() ≤ ACC`. Probed in every order by changing the
-  model, `f()` is decided first, no node breaks a dependency on another (l.265),
+  model, `f()` is decided first, no node breaks a dependency on another (l.263),
   nothing is deferred, and `acc + 1`'s read leaves out its own relations alone
-  (l.263). Whether row 3 makes a cycle between distinct nodes, which l.265
+  (l.261). Whether row 3 makes a cycle between distinct nodes, which l.263
   breaks, no witness yet shows.

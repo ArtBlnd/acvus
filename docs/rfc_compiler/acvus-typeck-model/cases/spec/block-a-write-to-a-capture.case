@@ -1,10 +1,10 @@
-//@ spec: l.343, l.188, l.86; holes.md, O4
+//@ spec: l.341, l.186, l.86; holes.md, O4
 // let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
 // let y = { x = make_b(); 0u8 };
 // probe(x);                // probe(A), probe(B)
 // The write names the capture X, so it and make_b() are the lambda's
 // environment, recorded once in the run's binding group when its solving
-// starts (l.188): X joins A and B by the cast, B (l.86), and probe reads B.
+// starts (l.186): X joins A and B by the cast, B (l.86), and probe reads B.
 // One outcome in every order.
 extern type A;
 extern type B;

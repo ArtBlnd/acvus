@@ -1,4 +1,4 @@
-//@ spec: Example 2, l.371–384
+//@ spec: Example 2, l.369–382
 // let a = Vec::new();      // new() -> Vec<T>
 // fill_all(&mut a);        // fill_all(&mut Vec<u8>)
 extern type Vec<T>;

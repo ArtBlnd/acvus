@@ -1,13 +1,13 @@
-//@ spec: l.188, l.198, l.217, with l.186, l.225, l.263, l.335
+//@ spec: l.186, l.196, l.215, with l.184, l.223, l.261, l.333
 // let f = |x| take_u8(x);  // take_u8(u8)
 // let g = || f(1u8);
 // g();
 // In g's lambda, f is the capture F, so the call f(1u8) is g's environment,
-// the enclosing group's, recorded there once (l.188), where F's lower bound,
-// f's lambda's value, is recorded as the text gives it (l.225). The call reads
-// F, whose Values are {λf} (l.198, l.263), and makes an instance of that
+// the enclosing group's, recorded there once (l.186), where F's lower bound,
+// f's lambda's value, is recorded as the text gives it (l.223). The call reads
+// F, whose Values are {λf} (l.196, l.261), and makes an instance of that
 // lambda: x's type names no capture, so it is λf's generic part, and its copy
-// X' meets 1u8 (l.217); its copy u8 ⇝ u8 holds. The program is accepted and
+// X' meets 1u8 (l.215); its copy u8 ⇝ u8 holds. The program is accepted and
 // g() is ().
 extern fn take_u8(u8);
 

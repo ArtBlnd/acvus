@@ -1,12 +1,12 @@
-//@ spec: Example 11, l.516–532, lines 1–3; l.349, l.353
+//@ spec: Example 11, l.514–530, lines 1–3; l.347, l.351
 // let a = open();                     // open() -> F⟨new⟩, a cast F → G, G with no identity
 // at(&a, index_of(&a));               // index_of(&F⟨p⟩) -> Idx⟨p⟩, at(&F⟨p⟩, Idx⟨p⟩)
 // let b = if c { open() } else { a };
-// Each open() makes an identity anew (l.349). index_of's and at's p meet
+// Each open() makes an identity anew (l.347). index_of's and at's p meet
 // a's identity by the split's equations, so the second line holds with one
 // identity. b's lower bounds carry two different identities, which no class
 // holds, so its value is G, the nearest ancestor that carries none, and each
-// value is cast up to it (l.353).
+// value is cast up to it (l.351).
 extern type F<#>;
 extern type G;
 extern type Idx<#>;

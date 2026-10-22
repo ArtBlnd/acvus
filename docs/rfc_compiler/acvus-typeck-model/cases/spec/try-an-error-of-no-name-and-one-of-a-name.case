@@ -1,10 +1,10 @@
-//@ spec: l.339, l.91, l.276, l.292
+//@ spec: l.337, l.91, l.274, l.290
 //@ orders: sampled 200
 // fn f() { let a = get1()?; let b = get2()?; Ok(a) }
 // // get1() -> Result<u8, u8>, get2() -> Result<u16, B>
 // The exits' error parts are Error<u8> and Error{B(B)}, of two
 // constructors, which have no join (l.91): f's result's error part has no
-// value (l.276), refused there (l.292).
+// value (l.274), refused there (l.290).
 extern type B;
 extern fn get1() -> Result<u8, u8>;
 extern fn get2() -> Result<u16, B>;

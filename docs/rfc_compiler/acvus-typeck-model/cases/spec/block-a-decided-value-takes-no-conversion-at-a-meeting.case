@@ -1,10 +1,10 @@
-//@ spec: l.343, l.188, l.217, l.282, l.86
+//@ spec: l.341, l.186, l.215, l.280, l.86
 // let mut x = 0u8;
 // x = { 1u16 };            // a conversion u16 → u8
 // The lambda's result type is u16, decided in its binding group, so it is no
-// class of C and its copy is the closed u16 (l.214, l.217). The call's result
+// class of C and its copy is the closed u16 (l.212, l.215). The call's result
 // enters X by a meeting, where a value reaches by ≤ and takes no conversion
-// (l.282), and u8 ⊔ u16 has no join (l.86): refused at X.
+// (l.280), and u8 ⊔ u16 has no join (l.86): refused at X.
 #[conversion] extern fn narrow(u16) -> u8;
 group λ in run {
     let `λ result`;

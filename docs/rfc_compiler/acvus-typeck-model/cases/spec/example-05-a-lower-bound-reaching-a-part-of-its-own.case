@@ -1,4 +1,4 @@
-//@ spec: Example 5, l.416–428
+//@ spec: Example 5, l.414–426
 // let mut x = None;
 // x = Some(x);
 let X;

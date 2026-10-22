@@ -1,8 +1,8 @@
-//@ spec: l.156, l.276, l.278, l.290
+//@ spec: l.154, l.274, l.276, l.288
 // let a;
 // a[0] = 1;
 // The kind "indexes τ" names no member, so A has no source that gives a
-// constructor and falls back to !, whose element is ! (l.278): the literal
+// constructor and falls back to !, whose element is ! (l.276): the literal
 // entering it has no type there.
 let A;
 let `a[0]`;

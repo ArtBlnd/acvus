@@ -1,7 +1,7 @@
-//@ spec: l.240, l.280, l.335
+//@ spec: l.238, l.278, l.333
 // let x = 0; takes_u8(x); probe(x);   // probe(u8), probe(i32)
 // takes_u8 has one candidate and is decided at once; its boundary unifies X,
-// which only LitVars enter, with u8 (l.280), and probe reads u8.
+// which only LitVars enter, with u8 (l.278), and probe reads u8.
 extern fn takes_u8(u8);
 extern fn probe(u8);
 extern fn probe(i32);

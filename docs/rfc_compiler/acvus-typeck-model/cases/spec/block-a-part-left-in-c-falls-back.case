@@ -1,9 +1,9 @@
-//@ spec: l.343, l.188, l.217, l.290
+//@ spec: l.341, l.186, l.215, l.288
 // let x = { Vec::new() };
 // new's T is an unknown of the lambda's binding group that nothing enters
-// there, so it is left in C (l.214). Its copy in the run's binding group has
+// there, so it is left in C (l.212). Its copy in the run's binding group has
 // nothing entering it and no place it passes into, and falls back to !
-// (l.290).
+// (l.288).
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 group λ in run {

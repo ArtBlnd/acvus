@@ -1,4 +1,4 @@
-//@ spec: l.171, l.271
+//@ spec: l.169, l.269
 // A LitVar lower bound of a class that waits for nothing is unified with it
 // as the class is solved.
 //@ order: solve A

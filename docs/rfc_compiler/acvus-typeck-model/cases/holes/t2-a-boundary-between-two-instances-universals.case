@@ -4,7 +4,7 @@
 // g(Some(f1()), Some(f2()))    // f1() -> F1, f2() -> F2; casts F1 → G, F2 → G
 // The copied boundary B' ⇝ A' relates the payloads once both are solved, so A''s
 // payload has F1 and F2 entering it in every order, each by a part lower bound
-// (l.280). A part takes no cast (l.74), so the two have no join (l.89), and
+// (l.278). A part takes no cast (l.74), so the two have no join (l.89), and
 // the program is refused there in every order.
 extern type F1;
 extern type F2;

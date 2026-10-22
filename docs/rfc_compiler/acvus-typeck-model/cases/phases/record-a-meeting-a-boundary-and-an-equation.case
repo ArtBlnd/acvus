@@ -1,4 +1,4 @@
-//@ spec: l.221, l.225, l.229–231
+//@ spec: l.219, l.223, l.227–229
 // A value passing into an unknown is a meeting, recorded as a lower bound; into
 // a type the text writes, a boundary; an invariant place gives an equation.
 // Each is recorded as the text gives it, before anything is solved.

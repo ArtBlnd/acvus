@@ -1,11 +1,11 @@
-//@ spec: l.296, l.298
+//@ spec: l.294, l.296
 // let a;
 // a.x = 1u8;
 // take(&a.x);              // take(&u16)
-// The place a.x has the type the projection names (l.296), so the lend targets
-// that class by an equation (l.298). The boundary into &u16 records a.x ⇝ u16
-// toward a type the declaration writes, which decides no value (l.280): a.x is
-// u8, and &u8 reaches &u16 by no coercion (l.282).
+// The place a.x has the type the projection names (l.294), so the lend targets
+// that class by an equation (l.296). The boundary into &u16 records a.x ⇝ u16
+// toward a type the declaration writes, which decides no value (l.278): a.x is
+// u8, and &u8 reaches &u16 by no coercion (l.280).
 extern fn take(&u16);
 
 let A;

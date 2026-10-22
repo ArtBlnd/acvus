@@ -1,8 +1,8 @@
-//@ spec: l.343, l.188, l.217, l.89, l.280
+//@ spec: l.341, l.186, l.215, l.89, l.278
 // let x = if c { { None } } else { Some(1u8) };
 // None's payload is left in the lambda's C and copied by the call's instance
-// (l.217). X joins Option⟨S⟩ and the copy's Option, and the payloads are
-// related by part lower bounds (l.280), the copy's giving nothing (l.284): X
+// (l.215). X joins Option⟨S⟩ and the copy's Option, and the payloads are
+// related by part lower bounds (l.278), the copy's giving nothing (l.282): X
 // is Option⟨u8⟩.
 group λ in run {
     let `λ result`;

@@ -1,4 +1,4 @@
-//@ spec: l.156, which refuses an index into a container with no view
+//@ spec: l.154, which refuses an index into a container with no view
 // let mut v = Vec::new();  // new() -> Vec<T>
 // v[0] = 1u8;
 extern type Vec<T>;

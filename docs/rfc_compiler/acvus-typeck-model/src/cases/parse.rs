@@ -114,7 +114,7 @@ pub enum TextItem {
         callee: String,
         args: Vec<String>,
         result: String,
-        /// `e?`'s exit, written `?(e) into X` (l.339).
+        /// `e?`'s exit, written `?(e) into X` (l.337).
         exit: Option<String>,
     },
     CallValue {

@@ -1,11 +1,11 @@
 //@ hole: T6
-//@ spec: l.278
+//@ spec: l.276
 // let n = never();         // never() -> !
 // if let Some(x) = n { }
 // The kind "has variant Some" gives no member, so N is !; since 87efde71 `!`,
-// which has no value, meets every kind (l.278), so the pattern decides
+// which has no value, meets every kind (l.276), so the pattern decides
 // nothing, as patterns §4 has it, and x's type, which nothing enters, falls
-// back to ! (l.290).
+// back to ! (l.288).
 extern fn never() -> !;
 
 let N;

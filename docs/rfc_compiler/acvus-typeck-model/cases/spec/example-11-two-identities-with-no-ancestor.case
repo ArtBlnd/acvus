@@ -1,6 +1,6 @@
-//@ spec: Example 11, l.516–532, without the cast to G; l.353
+//@ spec: Example 11, l.514–530, without the cast to G; l.351
 // As in Example 11, without the cast F → G: b's two identities have no
-// ancestor that carries none, so b has no value and is refused (l.353).
+// ancestor that carries none, so b has no value and is refused (l.351).
 extern type F<#>;
 extern type G;
 extern type Idx<#>;

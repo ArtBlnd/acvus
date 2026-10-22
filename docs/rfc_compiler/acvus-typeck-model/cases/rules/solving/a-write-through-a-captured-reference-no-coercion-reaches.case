@@ -1,14 +1,14 @@
-//@ spec: l.188, l.221, l.230, l.276, l.282, l.292
+//@ spec: l.186, l.219, l.228, l.274, l.280, l.290
 // let mut x = 1u8;
 // let r = &mut x;
 // let f = || *r = 2u16;
 // f();
 // The write in the lambda names the capture R, so it is the lambda's
-// environment, recorded in the enclosing group (l.188), and it reaches X, an
+// environment, recorded in the enclosing group (l.186), and it reaches X, an
 // unknown of that group, through the reference r, so it is a boundary,
-// 2u16 ⇝ *r (l.221, l.230), and the Deref makes *r X. A boundary is no source (l.276), so X is u8, from 1u8
+// 2u16 ⇝ *r (l.219, l.228), and the Deref makes *r X. A boundary is no source (l.274), so X is u8, from 1u8
 // alone, and the value entering by the boundary reaches u8 by no coercion
-// (l.282): refused at that boundary (l.292).
+// (l.280): refused at that boundary (l.290).
 group λ in run {
     let `*r`;
     let 2u16: u16;

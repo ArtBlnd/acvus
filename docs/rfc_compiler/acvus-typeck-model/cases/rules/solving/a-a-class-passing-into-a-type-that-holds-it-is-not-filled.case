@@ -1,13 +1,13 @@
-//@ spec: l.280, l.284, l.290, l.282
+//@ spec: l.278, l.282, l.288, l.280
 // let a;
 // f(&a, &a);               // f<T>(&T, &Vec<T>)
 // Each lend's target is A, which is a reference in no reading. Each argument
 // passes into a reference the declaration gives, a boundary, whose split links
-// the targets (l.280): toward the unknown T, an equation A = T; toward the
+// the targets (l.278): toward the unknown T, an equation A = T; toward the
 // written Vec<T>, the boundary A ⇝ Vec<T>. Nothing enters A, and the one place
 // it passes into, Vec<T>, has a value only once A has one, so A is not filled
-// (l.284) and falls back to ! (l.290). &! reaches &Vec<!> by no coercion
-// (l.282).
+// (l.282) and falls back to ! (l.288). &! reaches &Vec<!> by no coercion
+// (l.280).
 extern type Vec<T>;
 extern fn f<T>(&T, &Vec<T>);
 

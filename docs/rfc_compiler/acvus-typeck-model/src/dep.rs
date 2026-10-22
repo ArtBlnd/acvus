@@ -1,7 +1,7 @@
-//! The dependency graph (l.236–267): its nodes are the equivalence classes
+//! The dependency graph (l.234–265): its nodes are the equivalence classes
 //! of the moment and the uses and lends, and its edges the dependencies the
-//! rows of l.238–244 give. A dependency within a strongly connected component
-//! is broken (l.265), so the unbroken ones have no cycle (l.267).
+//! rows of l.236–242 give. A dependency within a strongly connected component
+//! is broken (l.263), so the unbroken ones have no cycle (l.265).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,11 +16,11 @@ pub(crate) enum Vertex {
     Class(ClassId),
     Node(Name),
     /// The use that chooses a universal, which lies outside the binding group
-    /// and is never decided in it (l.242).
+    /// and is never decided in it (l.240).
     Outside,
 }
 
-/// A dependency (l.240–244).
+/// A dependency (l.238–242).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Edge {
     /// An equivalence class on an unsolved lower bound or part lower bound.
@@ -29,43 +29,43 @@ pub(crate) enum Edge {
     /// relations into it: it lies within the `τ` of a lower bound or a part
     /// lower bound `τ ≤ α`, or within the `U` of a boundary `α ⇝ U`, `α`
     /// unsolved, or it is the class `e?`'s wrapping passes into, its error
-    /// part unsolved (l.240 (a)).
+    /// part unsolved (l.238 (a)).
     Taking,
     /// An equivalence class on an unsolved one that has it as a part by a kind
-    /// known in part, taking a constructor (l.241). A class holding a kind is
+    /// known in part, taking a constructor (l.239). A class holding a kind is
     /// solved (note 06, reading 4).
     Part,
     /// An equivalence class on a node at whose position it lies, or within the
     /// depth its candidates reach, that has not recorded its relations: one
     /// undecided, or one decided whose relations wait for the nodes that broke
-    /// their dependency on it (l.240 (b), l.265).
+    /// their dependency on it (l.238 (b), l.263).
     Records,
     /// A node on an undecided node that records relations into the classes at
-    /// the positions it reads (l.243–244).
+    /// the positions it reads (l.241–242).
     Reads,
     /// A binding on an undecided projection on its path (`holes.md`, O1).
     Path,
-    /// A universal on the use that chooses it (l.242).
+    /// A universal on the use that chooses it (l.240).
     Chosen,
 }
 
 /// What meets an unbroken dependency on an unsolved equivalence class
-/// besides its being solved (l.240).
+/// besides its being solved (l.238).
 pub(crate) struct Met {
     /// The classes holding only a LitVar that wait for nothing.
     pub(crate) settled: BTreeSet<ClassId>,
-    /// The classes nothing enters (l.284).
+    /// The classes nothing enters (l.282).
     pub(crate) nothing_enters: BTreeSet<ClassId>,
 }
 
 /// What may be taken now.
 pub(crate) struct Eligible {
-    /// The equivalence classes that may be solved (l.271).
+    /// The equivalence classes that may be solved (l.269).
     pub(crate) solve: Vec<ClassId>,
-    /// The equivalence classes that may be filled (l.284).
+    /// The equivalence classes that may be filled (l.282).
     pub(crate) fill: Vec<ClassId>,
     /// The nodes whose unbroken dependencies are all decided, which the value
-    /// each reads may decide (l.263).
+    /// each reads may decide (l.261).
     pub(crate) decide: Vec<Name>,
 }
 
@@ -93,7 +93,7 @@ impl Graph {
         edge && self.component.get(from) == self.component.get(to)
     }
 
-    /// The vertices that reach `to` (l.265).
+    /// The vertices that reach `to` (l.263).
     fn reaching(&self, to: &Vertex) -> BTreeSet<Vertex> {
         let mut reaching = BTreeSet::new();
         let mut work = vec![to.clone()];
@@ -194,8 +194,8 @@ impl State {
         }
         // A node that records into a class only a boundary out of it changes
         // it only by the fill of a class nothing enters or LitVars alone
-        // enter (l.280, l.284), so the class waits for it only while it is
-        // one, judged without those dependencies (l.240 (b)).
+        // enter (l.278, l.282), so the class waits for it only while it is
+        // one, judged without those dependencies (l.238 (b)).
         let provisional = Graph {
             component: components(&edges),
             edges: edges.clone(),
@@ -209,7 +209,7 @@ impl State {
                     .insert((Vertex::Node(name), Edge::Records));
             }
         }
-        // The nodes that record into a class (l.246), each with the class at
+        // The nodes that record into a class (l.244), each with the class at
         // whose position it lies.
         let recording = |class: ClassId, edges: &BTreeMap<Vertex, BTreeSet<(Vertex, Edge)>>| {
             let mut classes = BTreeSet::from([self.root(class)]);
@@ -287,7 +287,7 @@ impl State {
         seen
     }
 
-    /// The undecided nodes that broke their dependency on the node (l.265).
+    /// The undecided nodes that broke their dependency on the node (l.263).
     pub(crate) fn broken_on(&self, name: &Name) -> BTreeSet<Name> {
         let graph = self.graph();
         let node = Vertex::Node(name.clone());
@@ -300,7 +300,7 @@ impl State {
     }
 
     /// The nodes whose relations the value a node reads leaves out: itself
-    /// and those that transitively depend on it (l.263).
+    /// and those that transitively depend on it (l.261).
     pub(crate) fn dependents(&self, name: &Name) -> BTreeSet<Name> {
         let node = Vertex::Node(name.clone());
         let mut excluded: BTreeSet<Name> = self
@@ -326,10 +326,10 @@ impl State {
 
     /// Whether an unbroken dependency on `to` is met without its being solved:
     /// a class holding only a LitVar that waits for nothing, or a lower bound
-    /// or part lower bound nothing enters (l.240), or, in a state a value read
-    /// is taken from, a class that gives nothing (l.263); and a node's on a
+    /// or part lower bound nothing enters (l.238), or, in a state a value read
+    /// is taken from, a class that gives nothing (l.261); and a node's on a
     /// node once that is decided, whose relations a class depends on until they
-    /// are recorded (l.240 (b), l.243).
+    /// are recorded (l.238 (b), l.241).
     fn satisfied(&self, to: &Vertex, edge: Edge, met: &Met) -> bool {
         match (to, edge) {
             (Vertex::Node(node), Edge::Reads | Edge::Path) => self.nodes[node].decision.is_some(),
@@ -344,7 +344,7 @@ impl State {
     }
 
     /// The unsolved equivalence classes holding only a LitVar that wait for
-    /// nothing. Joined, a LitVar is unified (l.171), so such a lower bound
+    /// nothing. Joined, a LitVar is unified (l.169), so such a lower bound
     /// gives its LitVar and is not waited for.
     pub(crate) fn settled(&self) -> BTreeSet<ClassId> {
         self.met_in(&self.graph()).settled
@@ -378,7 +378,7 @@ impl State {
     }
 
     /// The equivalence classes that take their type from the places they pass
-    /// into (l.284): those nothing enters, and those LitVars alone enter,
+    /// into (l.282): those nothing enters, and those LitVars alone enter,
     /// judged alike, each of their lower bounds and part lower bounds one of
     /// these and each of their unbroken dependencies met as such a lower
     /// bound's is, one holding a LitVar or with a lower bound at least.
@@ -424,12 +424,12 @@ impl State {
         }
     }
 
-    /// The equivalence classes nothing enters (l.284): unsolved, holding no
+    /// The equivalence classes nothing enters (l.282): unsolved, holding no
     /// kind, no LitVar and no kind known in part, each of their lower bounds
     /// and part lower bounds one nothing enters, and each of their unbroken
     /// dependencies met, as one on a lower bound or a part lower bound nothing
-    /// enters is (l.240). In a state a value read is taken from, a class that
-    /// gives nothing is not one, but is met as one is (l.263).
+    /// enters is (l.238). In a state a value read is taken from, a class that
+    /// gives nothing is not one, but is met as one is (l.261).
     fn nothing_enters_in(&self, graph: &Graph) -> BTreeSet<ClassId> {
         let mut found = BTreeSet::new();
         loop {
@@ -473,7 +473,7 @@ impl State {
     }
 
     /// The unsolved equivalence classes whose unbroken dependencies are all
-    /// solved or met (l.271).
+    /// solved or met (l.269).
     pub(crate) fn unblocked(&self, graph: &Graph, met: &Met) -> Vec<ClassId> {
         self.classes
             .roots()
@@ -491,7 +491,7 @@ impl State {
     /// What may be taken now: the equivalence classes that may be solved,
     /// being unblocked and given something to take or a LitVar to unify by
     /// their sources; those that may be filled, nothing entering them and each
-    /// place they pass into having a value (l.284); and the nodes whose
+    /// place they pass into having a value (l.282); and the nodes whose
     /// unbroken dependencies are all decided.
     pub(crate) fn eligible(&self) -> Eligible {
         let graph = self.graph();
@@ -526,7 +526,7 @@ impl State {
         }
     }
 
-    /// The unbroken dependencies of `from` not yet met (l.240–246, l.265):
+    /// The unbroken dependencies of `from` not yet met (l.238–244, l.263):
     /// what an equivalence class or a node still waits for, as a traced order
     /// prints it (`design/19-cases.md`, `TRACE=1`). A class that waits for
     /// nothing is unblocked, and a node that waits for nothing may be decided.

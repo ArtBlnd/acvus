@@ -1,10 +1,10 @@
-//@ spec: l.343, l.188, l.217, l.290
+//@ spec: l.341, l.186, l.215, l.288
 // let x = { 1 };
-// The block is (|| 1)() (l.343). Its expression names no capture, so it is
-// the lambda's generic part (l.188): the result type holds the LitVar alone,
+// The block is (|| 1)() (l.341). Its expression names no capture, so it is
+// the lambda's generic part (l.186): the result type holds the LitVar alone,
 // which nothing decides in the lambda's binding group, where nothing falls
-// back (l.288), so it is left in C. The call's instance copies it into the
-// run's binding group (l.217), where the copy falls back to i32 (l.290).
+// back (l.286), so it is left in C. The call's instance copies it into the
+// run's binding group (l.215), where the copy falls back to i32 (l.288).
 group λ in run {
     let `λ result`;
     let ?one: lit 1;

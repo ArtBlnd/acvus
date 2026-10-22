@@ -1,11 +1,11 @@
-//@ spec: l.192, l.197, l.217, with l.212, l.214, l.221, l.292, l.335
+//@ spec: l.190, l.195, l.215, with l.210, l.212, l.219, l.290, l.333
 // fn f(x) { take_u8(x) }   // a module's fn; take_u8(u8)
 // f(1u16)                  // the script
 // In f, take_u8 reads X, a universal with no relation left, which decides
-// nothing (l.335): it is take_u8, and x ⇝ u8 rests on X, in f's C (l.214).
+// nothing (l.333): it is take_u8, and x ⇝ u8 rests on X, in f's C (l.212).
 // The script's call is of another binding group's fn, so it makes one
-// instance (l.197): its X' is an unknown the argument meets (l.217), u16, and
-// the copied u16 ⇝ u8 has no coercion (l.292).
+// instance (l.195): its X' is an unknown the argument meets (l.215), u16, and
+// the copied u16 ⇝ u8 has no coercion (l.290).
 extern fn take_u8(u8);
 
 group f {

@@ -1,9 +1,9 @@
-//@ spec: l.240, l.263, l.265, l.335, l.280
+//@ spec: l.238, l.261, l.263, l.333, l.278
 // let x = 0; n(x); m(x);   // n(u16), n(i32); m(u16), m(&str)
 // Only LitVars enter X, so X waits for n and m, whose relations into it are
-// boundaries out of it, and each use depends on the other (l.240 (b), l.243):
-// each breaks the dependency (l.265) and reads X as ?a alone. n takes the
-// default i32 (l.335), m u16, and X is unified with both (l.280): refused in
+// boundaries out of it, and each use depends on the other (l.238 (b), l.241):
+// each breaks the dependency (l.263) and reads X as ?a alone. n takes the
+// default i32 (l.333), m u16, and X is unified with both (l.278): refused in
 // every order, as before 09aef04e.
 extern fn n(u16);
 extern fn n(i32);

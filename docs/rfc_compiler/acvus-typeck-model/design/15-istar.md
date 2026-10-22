@@ -1,28 +1,28 @@
 # 15 I\*: a decision sees what could change it
 
 Rests on `docs/notes/typeck-pivot.md` §1–2 (I\*: a decision is made only where no
-relation not yet recorded could change it), and on the spec's l.263 (the value a
-node reads), l.265 (breaking), l.240 (b), l.244 and l.246 (which nodes record into
-a class) and l.248. The code is `src/istar.rs`.
+relation not yet recorded could change it), and on the spec's l.261 (the value a
+node reads), l.263 (breaking), l.238 (b), l.242 and l.244 (which nodes record into
+a class) and l.246. The code is `src/istar.rs`.
 
 ## Meaning
 
-The dependency table (l.236–267) is the spec's means to I\*: a node waits for every
+The dependency table (l.234–265) is the spec's means to I\*: a node waits for every
 node that could record into what it reads, except within a cycle, where each reads
 without the others. This check tests the means against the end it serves. Once
 solving ends, each decided node is decided again, reading the relations recorded by
 then, leaving out those recorded by itself and by the nodes that transitively
-depend on it (l.263), the dependency taken from what the nodes record by then. A
+depend on it (l.261), the dependency taken from what the nodes record by then. A
 decision that differs from the one made was made without a relation that could
 change it, outside a cycle.
 
 ## Definitions
 
 - **The end state** of a binding group: the entry's final state, after fallback,
-  and another group's state at its fixpoint (l.288).
+  and another group's state at its fixpoint (l.286).
 - **What a node records into** at the end, read by the relations it records, not
-  by position as the solver reads l.246 (note 08, reading 18). A use, the classes its candidate would record a lower
-  bound or an equation into by the splits of l.280 (note 08, reading 13), those
+  by position as the solver reads l.244 (note 08, reading 18). A use, the classes its candidate would record a lower
+  bound or an equation into by the splits of l.278 (note 08, reading 13), those
   of its remaining candidates where it is not decided as one, and its result where it is decided `Never`: the classes a use makes anew
   are its own, and no other node reads them. Another decided node, the classes its
   own relations record into, those of the instances it made among them: the upper
@@ -30,18 +30,18 @@ change it, outside a cycle.
   boundary, both sides of an
   equation, and the class a kind, a fact, a LitVar or a lambda is given to. A node
   not decided, the classes at its positions. For a read of whether a class is a
-  reference, a use leaves out the classes it recorded that of at once (l.244), a
+  reference, a use leaves out the classes it recorded that of at once (l.242), a
   lend its place, a binding its position, and a projection of a field, a
   component, an index or a variant everything (note 08, readings 9 and 12).
 - **Reach at the end.** A class reaches each class it has as a lower bound or a
   part lower bound, along every one recorded by the end, a split's among them. By the end every
-  class has taken its constructor, so the rows of l.240 (a) and l.241, which wait
+  class has taken its constructor, so the rows of l.238 (a) and l.239, which wait
   for a class to take one, hold of none; what a class's value comes from then is
-  its sources (l.271–278), and what its taking a constructor recorded into its
+  its sources (l.269–276), and what its taking a constructor recorded into its
   parts is in the log as splits.
 - **Dependency at the end.** A node depends on each node that records into a class
-  reached from the classes at the positions it reads (l.243, l.246), and a binding
-  on the projections on its path (l.308).
+  reached from the classes at the positions it reads (l.241, l.244), and a binding
+  on the projections on its path (l.306).
 - **The exclusion of `n`**: `n` and every node that transitively depends on `n` in
   that graph.
 - **The decision again**: the decision `n`'s rule (note 08) gives reading the end
@@ -49,7 +49,7 @@ change it, outside a cycle.
   instances a call made counted as the call's. A projection in a binding's
   exclusion counts as undecided for its path.
 
-A first encoding read reach with the rows of l.240 (a) and l.241 as well, at the
+A first encoding read reach with the rows of l.238 (a) and l.239 as well, at the
 kinds of the end, and a lend, a binding, a projection and a call as recording into
 every class at their positions. Kinds the decisions gave then made cycles that
 held at no moment of solving: in Example 9, `&r`'s target is `V`, so `lend v`
@@ -63,7 +63,7 @@ Every decided node, in each context its decision holds for:
 
 - A node of the entry, in the entry's end state.
 - A node decided in a group other than the entry, in that group's end state.
-- A node decided in a lambda's group, its generic part (l.188), also in each
+- A node decided in a lambda's group, its generic part (l.186), also in each
   instance of that group's C that was made, under that instance's map, and,
   through an instance made for the check, in the enclosing group's end state, so
   that a lambda never called is checked as well. A lambda inside a function's body
@@ -106,7 +106,7 @@ never records.
   comparison, never through `graph()`, which is the means under test.
 - It reads what a node records into by relation, where the solver reads it by
   position, and reports H7 for that reason. A boundary out of a class that holds a
-  LitVar alone is left out of what a node records into, though l.280 makes such a
+  LitVar alone is left out of what a node records into, though l.278 makes such a
   boundary change the class (`holes.md`, H7): in such a cycle the check reads
   relations the solver's read leaves out.
 - It presupposes that a read leaves out the relations of the instances a call of a
@@ -115,10 +115,10 @@ never records.
   `let f = if c { put } else { choose(x) }; f(x);` with `put = |w| x = make_b()`,
   `choose(A)`, `choose(B)` and `make_a() ≤ X` reached `choose(A)` and `choose(B)`
   by order under `Deferral::Reading`, and then reached `choose(A)` in every order.
-  Since 8978eb70 `put`'s write is its environment, the enclosing group's (l.188),
+  Since 8978eb70 `put`'s write is its environment, the enclosing group's (l.186),
   so `make_b() ≤ X` is recorded where it is written, no read leaves it out with
   the call, and the program reaches `choose(B)` in every order. Since 80b33ad9 no
-  declaration gives a function value it was not given (l.186), and `choose` is
+  declaration gives a function value it was not given (l.184), and `choose` is
   `choose(A, T) -> T`, `choose(B, T) -> T`, called as `choose(x, put)`
   (`cases/istar/a-call-left-out-leaves-out-its-instance-relations.case`).
 
@@ -132,7 +132,7 @@ Before the check runs, as its acceptance criteria:
 | H5 | a completeness violation at the lambda's `probe`, in the instance and in the entry's end state |
 | O1 under `AsStated`, O3, O4 | a violation in exactly the orders that make the early decision, `x: u8`, the lend's `NoResult` and `probe(A)`; none in the others |
 | the program above | none |
-| Example 12, l.261 with `pick(u8) -> &u8`, the other current examples | none |
+| Example 12, l.259 with `pick(u8) -> &u8`, the other current examples | none |
 
 Run, the check reports these and no others: each witness of `holes.md` asserts,
 for the outcome of each final state, the nodes it reports there and how, and every
@@ -150,7 +150,7 @@ the table names.
 
 ## Not covered
 
-- A class's solving, `α ≐ ⊔S` (l.286), is the decision the pivot's I\* is first
+- A class's solving, `α ≐ ⊔S` (l.284), is the decision the pivot's I\* is first
   stated of, and this check decides only nodes again. Before 8978eb70, O4's third
   outcome was such a decision: `X` was solved as `A` before the call's instance
   recorded `B ≤ X`, and the check reported it only through `probe`, which reads

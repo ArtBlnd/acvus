@@ -1,8 +1,8 @@
-//@ spec: l.302, l.306, l.310
+//@ spec: l.300, l.304, l.308
 // let (_, _) = mk();       // mk() -> (u8,)
-// The pattern records a Component projection at each of its positions (l.306),
-// and _ records nothing (l.310). The scrutinee's value (u8,) has no component 1,
-// so it is no type that meets its kind (l.278).
+// The pattern records a Component projection at each of its positions (l.304),
+// and _ records nothing (l.308). The scrutinee's value (u8,) has no component 1,
+// so it is no type that meets its kind (l.276).
 extern fn mk() -> (u8,);
 
 let `mk()`;

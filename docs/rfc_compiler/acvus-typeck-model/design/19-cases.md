@@ -20,7 +20,7 @@ Three scopes are tested, each locally:
 - **A phase**, along one order the case writes, by what each phase reports it did
   (`src/trace.rs`, below).
 - **A primitive** the spec defines on types alone: the join and `≤` (l.80–91), and
-  a coercion (l.93–111), on the case's own declarations.
+  a coercion (l.93–109), on the case's own declarations.
 
 ## Not owned here
 
@@ -40,7 +40,7 @@ Classes, items and declarations are recorded in the order written, as
 the same states.
 
 ```
-//@ spec: Example 2, l.371–384
+//@ spec: Example 2, l.369–382
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 extern fn fill_all(&mut Vec<u8>);
@@ -102,7 +102,7 @@ classes, and `universal A;` a universal.
 | `A == B;` | an equation |
 | `R = f(X, Y) @ n;` | a use of `f`, the node `n` |
 | `R = (F)(X) @ n;` | a call of the function value of `F` |
-| `R = ?(X) into Q @ n;` | `e?` of the operand `X`, its exit's value of the class `Q` (l.339) |
+| `R = ?(X) into Q @ n;` | `e?` of the operand `X`, its exit's value of the class `Q` (l.337) |
 | `R = &P @ n;`, `R = &mut P @ n;` | a lend |
 | `R = P.x @ n;`, `P.0`, `*P`, `P[]`, `P as Some`, `P as E::V` | a projection |
 | `B = bind P via [p, q] @ n;` | a binding at `P` along the projections `p`, `q` |
@@ -122,7 +122,7 @@ classes, and `universal A;` a universal.
 
 A step names a class by any of its members' names, as the arena names them
 (`A`, `A.Payload(Some)`), and a node by its name; it must be a step the state may
-take then, and `fallback` only where no step is left in the entry (l.288, l.290).
+take then, and `fallback` only where no step is left in the entry (l.286, l.288).
 
 **Expectations.** Each holds of every outcome, and an I\* expectation of every
 final state, of every run.
@@ -334,10 +334,10 @@ steps; `golden()` and every expectation read what they read without it.
   (`starts_with`, `contains`) whole, as the model gives it. Example 14's copied
   decisions, which its test found by the end of their names, are named whole.
 - Since 8978eb70, where the text took a lambda's captured environment as the
-  enclosing binding group's (l.188), the seven of those cases that asserted the
+  enclosing binding group's (l.186), the seven of those cases that asserted the
   capture rule of then beside a twin of one name under `cases/environment` are
   their twins, each moved to its place; 4 cases remain under `cases/environment`.
-  9 cases under `cases/spec`, `block-*`, test the Block section (l.343), a block
+  9 cases under `cases/spec`, `block-*`, test the Block section (l.341), a block
   solved as a lambda called where it lies, each derived before it was run.
   `rules/classes/a-a-capture-shared-by-two-instances` and
   `rules/solving/a-two-instances-meet-a-capture-written-by-name`, become one
@@ -348,38 +348,38 @@ steps; `golden()` and every expectation read what they read without it.
   instance, and the call given no lambda to call. Where Values meet what no rule
   decides yet, the checker panics (note 14, Open).
   `istar/a-call-left-out-leaves-out-its-instance-relations` declared `choose` to
-  give `Fn/1`, a function value no declaration makes since 80b33ad9 (l.186), and
+  give `Fn/1`, a function value no declaration makes since 80b33ad9 (l.184), and
   gives back the one its `T` takes in.
-- 3 cases under `cases/spec` test identities (l.349, l.353): Example 11's lines
+- 3 cases under `cases/spec` test identities (l.347, l.351): Example 11's lines
   1–3, accepted with `b: G`; the same without the cast, refused at `b`; and an
   identity a body makes, made anew at each of two instances. Each was derived
   before it was run.
-- 4 cases under `cases/spec`, `l240-*`, test l.240 (b) since 09aef04e, beside H7,
+- 4 cases under `cases/spec`, `l240-*`, test l.238 (b) since 09aef04e, beside H7,
   now accepted: two uses that fill one literal, a literal into a use then
   another, a sum into a use that only reads it, and a literal through a generic
   use then two uses. Each was derived before it was run; the two refused ones
   report I\* completeness at both uses, as before.
 - 6 cases under `cases/spec`, `try-*`, and `block-collects-try` test `e?`
-  (l.339): two errors of a name meet as one `Error`, an `Error` is not wrapped,
+  (l.337): two errors of a name meet as one `Error`, an `Error` is not wrapped,
   an `Option`, two errors of no name meet as one `Error⟨..⟩`, one of no name and
   one of a name have no join, an error part nothing enters wraps into `!`, and a
   block collects its `?`. Each was derived before it was run. Those with two `?`
   are run over 200 sampled orders, every order passing 100 000 states.
 - 3 cases under `cases/spec`, `l199-*`, test a function value passing into a
-  function type (l.199): refused where the lambda's result reaches the type's by
+  function type (l.197): refused where the lambda's result reaches the type's by
   no coercion, accepted where it does, and by a declared conversion at that
   boundary.
 - 13 cases under `cases/phases` test each phase along a written order, by the line
-  of the spec it rests on: recording (l.221, l.229–231), the join (l.80–91, l.171,
-  l.271, l.276), splits (l.280), unification (l.156, l.160–165), nodes (l.248,
-  l.263, l.322–335) and fallback (l.288–290). 2 cases under `cases/primitives` test
+  of the spec it rests on: recording (l.219, l.227–229), the join (l.80–91, l.169,
+  l.269, l.274), splits (l.278), unification (l.154, l.158–163), nodes (l.246,
+  l.261, l.320–333) and fallback (l.286–288). 2 cases under `cases/primitives` test
   the join, `≤` and coercion on the declarations of `fixture::decls()` without
   `Box`, coercion with a conversion `u16 → u8` besides.
 - 59 cases under `cases/rules` are 16 primitives under `types`, 42 programs the
   spec's rules refuse in every order and one they accept
   (`classes/b-a-lambda-calling-a-captured-lambda`), each derived from quoted lines
-  of its region: `types` (l.39–112), `classes` (l.1–38, l.113–218), `solving`
-  (l.219–293) and `place` (l.294–354). The model refuses each refused one at the
+  of its region: `types` (l.39–110), `classes` (l.1–38, l.111–216), `solving`
+  (l.217–291) and `place` (l.292–352). The model refuses each refused one at the
   place its derivation names. Five of them passed only once a node whose read
   decides nothing was left undecided (note 08, reading 19): the three `solving`
   cases of a use whose read decides nothing,

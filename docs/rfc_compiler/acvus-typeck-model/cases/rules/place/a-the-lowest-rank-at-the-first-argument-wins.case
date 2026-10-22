@@ -1,7 +1,7 @@
-//@ spec: l.328–333, l.111
+//@ spec: l.326–331, l.109
 // f(make_a(), 1u16)        // make_a() -> A; f(A, u8), f(B, u16); a cast A → B
 // The first argument passes into A with the empty rank and into B with a cast's,
-// so f(A, u8) alone remains (l.328); the second, u16, does not reach u8, and no
+// so f(A, u8) alone remains (l.326); the second, u16, does not reach u8, and no
 // candidate remains though f(B, u16) took both.
 extern type A;
 extern type B;

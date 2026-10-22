@@ -2,7 +2,7 @@
 // Error⟨E⟩ is the Error with no variant and one part, a constructor of its
 // own (l.91). A type with no name, u8 or Option⟨u8⟩, is wrapped into it
 // (l.105); a type of a name is not, nor is an Error, which is not wrapped
-// (l.339). Error is structural, so two Error⟨..⟩ join their parts by ⊔ₚ
+// (l.337). Error is structural, so two Error⟨..⟩ join their parts by ⊔ₚ
 // (l.68, l.89); an Error⟨..⟩ and an Error with variants have no join (l.91).
 extern type B;
 

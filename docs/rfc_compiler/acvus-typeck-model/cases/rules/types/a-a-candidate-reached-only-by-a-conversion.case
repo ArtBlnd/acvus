@@ -1,8 +1,8 @@
-//@ spec: l.107, l.111, l.328, l.335
+//@ spec: l.105, l.109, l.326, l.333
 // f(make());               // make() -> A; f(u8) -> u8, f(u16) -> u16;
 //                          // a declared conversion A → u8
 // A reaches u8 only by the conversion, which is no composition and has no
-// rank (l.111), and narrowing takes none (l.335); A reaches u16 by nothing.
+// rank (l.109), and narrowing takes none (l.333); A reaches u16 by nothing.
 // No candidate remains, and the use is not decided.
 extern type A;
 extern fn make() -> A;

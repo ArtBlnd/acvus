@@ -2,9 +2,9 @@
 // let r = first(x);        // x: A; first(A) -> &u8, first(B) -> &mut u8
 // let s = &mut r;
 // Both candidates return a reference, so first records at once that its result
-// is one (l.248), and the lend no longer depends on it (l.244). Before first is
+// is one (l.246), and the lend no longer depends on it (l.242). Before first is
 // decided, the lend reads r as a reference whose mutability the value read does
-// not decide, so &mut decides nothing there (l.263, l.298) and the lend waits
+// not decide, so &mut decides nothing there (l.261, l.296) and the lend waits
 // for first's decision, which gives r: &u8.
 extern type A;
 extern type B;

@@ -1,14 +1,14 @@
-//@ spec: l.339, l.89, l.91, l.221, l.280, l.284
+//@ spec: l.337, l.89, l.91, l.219, l.278, l.282
 //@ orders: sampled 200
 // fn f() { let a = get1()?; let b = get2()?; Ok(a) }
 // // get1() -> Result<u8, E1>, get2() -> Result<u16, E2>
 // Each ? reads its operand's outer constructor, Result, and is decided as
-// ?(Result<T, E>) (l.339). Its exit's value is Result<O, X>, which passes
-// into f's result, an unknown: a meeting (l.221). E takes E1, a type of a
-// name, so the wrapping splits X into Error{E1(..)} (l.280, l.339); the
+// ?(Result<T, E>) (l.337). Its exit's value is Result<O, X>, which passes
+// into f's result, an unknown: a meeting (l.219). E takes E1, a type of a
+// name, so the wrapping splits X into Error{E1(..)} (l.278, l.337); the
 // other into Error{E2(..)}. f's result's error part joins the two by ⊔ₚ,
 // uniting the variants (l.89), and the exits' ok parts, which nothing
-// enters, are filled with u8 (l.284).
+// enters, are filled with u8 (l.282).
 extern type E1;
 extern type E2;
 extern fn get1() -> Result<u8, E1>;

@@ -1,9 +1,9 @@
 # 14 The certificate and its checker
 
-Rests on the spec's l.292 (acceptance), l.221 (meeting and boundary), l.223–233
-(what the text records), l.282 (entering values), l.122, l.129, l.183 (the types a
-class is given), l.146–156 (projections), l.248 (whether a class is a reference),
-l.298, l.300, l.308, l.322–335 (what a decision gives) and l.190–217 (instances),
+Rests on the spec's l.290 (acceptance), l.219 (meeting and boundary), l.221–231
+(what the text records), l.280 (entering values), l.120, l.127, l.181 (the types a
+class is given), l.144–154 (projections), l.246 (whether a class is a reference),
+l.296, l.298, l.306, l.320–333 (what a decision gives) and l.188–215 (instances),
 with the crate's I4. The code is `src/certificate.rs`.
 
 ## Meaning
@@ -11,9 +11,9 @@ with the crate's I4. The code is `src/certificate.rs`.
 An order of solving that accepts a program leaves a certificate: the value of every
 class each binding group's solving made, with its name, and every decision. A
 function value in a value carries the lambdas its Values names (`State::values_of`),
-as a function value carries its facts on its type (l.186), so that a value is
+as a function value carries its facts on its type (l.184), so that a value is
 `Option⟨Fn/1{λ}⟩` where the solver's type is `Option⟨Fn/1⟩`. No declaration, text
-or context writes a function value (l.186; note 02, reading 2), so every function
+or context writes a function value (l.184; note 02, reading 2), so every function
 value in a value is a class's, and names its Values. The
 checker regenerates, from the program's items and the decisions alone, every
 relation the text and the decisions give, and checks each on the certificate's
@@ -32,20 +32,20 @@ Every binding group, in every context its text is solved for:
 - The entry, under its final values.
 - A group other than the entry, under its values at the fixpoint, for the
   relations that name no class of its C.
-- Each instance of a group's C (l.214, l.217), made at a use of one of its
+- Each instance of a group's C (l.212, l.215), made at a use of one of its
   functions from another group, or at a call of a function value naming one of its
-  lambdas (l.198), under that instance's assignment: a class of C has its copy's
+  lambdas (l.196), under that instance's assignment: a class of C has its copy's
   value in the state that made the instance, a class outside C its group's value,
   and a class of an enclosing group the value of the class of that name in the
   state that made the instance.
 
 A relation is checked in each context that gives every class it names a value. A
-lambda's relations on enclosing groups' classes are its environment's (l.188),
+lambda's relations on enclosing groups' classes are its environment's (l.186),
 checked in the enclosing group's contexts whether or not the lambda is
 instantiated, and an instance's argument meets the environment's parameter
 there.
 
-Besides the relations, l.292's conditions: no refusal, every class outside C with a
+Besides the relations, l.290's conditions: no refusal, every class outside C with a
 value, and every node outside C reached.
 
 ## Contract
@@ -55,24 +55,24 @@ What each item and decision gives, and what holding means on closed values:
 | Given by | Relation | Holds where |
 |---|---|---|
 | `Origin::Written(τ)`, `Origin::Host(τ)` | the class's kind | its value is `τ` with each part's value |
-| `Origin::Lit(l)` | a LitVar | its value is a type of `l`'s family (l.129) |
+| `Origin::Lit(l)` | a LitVar | its value is a type of `l`'s family (l.127) |
 | `Origin::Lambda(λ)` | a function value naming `λ` | its value is `Fn/n`, `n` being `λ`'s parameters, whose Values name `λ` |
-| `Pass` into an unknown of the place's group (l.221) | `τ ≤ α` | `≤` reaches it (l.282) |
-| `Pass` otherwise | `τ ⇝ U` | a coercion reaches it (l.282) |
+| `Pass` into an unknown of the place's group (l.219) | `τ ≤ α` | `≤` reaches it (l.280) |
+| `Pass` otherwise | `τ ⇝ U` | a coercion reaches it (l.280) |
 | `Equation` | `a = b` | the two values are equal |
-| a use of a function, own group (l.510) | each argument into its universal by a boundary, the result type as a lower bound | as above |
+| a use of a function, own group (l.508) | each argument into its universal by a boundary, the result type as a lower bound | as above |
 | a use of a function, another group | the same, into the instance's copies | as above, under the instance's assignment |
-| `Use(k)` | `k` is a candidate (l.322); each argument into its parameter, a meeting where the signature writes a variable, a boundary where it writes a type; the result type as a lower bound of the result | as above, the variables taking the values of the classes the decision made |
-| `Never` | `!` as a lower bound of the result, and an argument the use reads has the value `!` (l.335) | as above |
-| `Lend { target, mutability }` | the result is a reference of `mutability` to the place, `mutability` being the lend's own; or, where the place is a reference, to its target, `mutability` being the lesser of the lend's and the place's (l.298) | the values have those shapes |
-| `Applied` | the operand has the member or part, of the result's value (l.146–154) | its value has it, or is `!`, which meets every kind (l.278) |
-| `AppliedToTarget(m)` | the operand is a reference, of `m` where decided, to a type that has it (l.300) | as above |
-| `Read` | the position as a lower bound of the binding (l.308) | as above |
-| `BindLend { target, mutability }` | a reference to the position, or its target, as a lower bound of the binding (l.308) | as above |
-| `Calls(λ̄)` | the callee's Values name exactly `λ̄`: every lambda that reaches it is called, and none it does not reach (l.183, l.198); each argument meets its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result (l.198) | as above, under each instance |
-| a function value passing into a function type (l.199) | each lambda its Values names has an instance made where that boundary was split: each parameter of the type passes into the lambda's parameter, and the lambda's result into the type's result, each a meeting or a boundary (l.221) | as above, under that instance |
-| `e?`'s exit (l.339) | its value is `Option⟨K⟩` under `?(Option⟨T⟩)` and `Result⟨O, X⟩` under `?(Result⟨T, E⟩)`, `E`'s value wrapped into `X`: as it is where it is an `Error` or `!`, into the payload of an `Error` whose one member is its name, or into that of an `Error⟨..⟩`; the value passes into the exit's class, a meeting where that is an unknown | as above |
-| a use's record of l.248 | at its result, the one position a candidate records a type it writes into (note 08, reading 13), that it is a reference where every candidate's result type is one, and no reference where none is; under `Use(k)`, as `k`'s result type | its value is, or is not, a reference, or is `!` |
+| `Use(k)` | `k` is a candidate (l.320); each argument into its parameter, a meeting where the signature writes a variable, a boundary where it writes a type; the result type as a lower bound of the result | as above, the variables taking the values of the classes the decision made |
+| `Never` | `!` as a lower bound of the result, and an argument the use reads has the value `!` (l.333) | as above |
+| `Lend { target, mutability }` | the result is a reference of `mutability` to the place, `mutability` being the lend's own; or, where the place is a reference, to its target, `mutability` being the lesser of the lend's and the place's (l.296) | the values have those shapes |
+| `Applied` | the operand has the member or part, of the result's value (l.144–152) | its value has it, or is `!`, which meets every kind (l.276) |
+| `AppliedToTarget(m)` | the operand is a reference, of `m` where decided, to a type that has it (l.298) | as above |
+| `Read` | the position as a lower bound of the binding (l.306) | as above |
+| `BindLend { target, mutability }` | a reference to the position, or its target, as a lower bound of the binding (l.306) | as above |
+| `Calls(λ̄)` | the callee's Values name exactly `λ̄`: every lambda that reaches it is called, and none it does not reach (l.181, l.196); each argument meets its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result (l.196) | as above, under each instance |
+| a function value passing into a function type (l.197) | each lambda its Values names has an instance made where that boundary was split: each parameter of the type passes into the lambda's parameter, and the lambda's result into the type's result, each a meeting or a boundary (l.219) | as above, under that instance |
+| `e?`'s exit (l.337) | its value is `Option⟨K⟩` under `?(Option⟨T⟩)` and `Result⟨O, X⟩` under `?(Result⟨T, E⟩)`, `E`'s value wrapped into `X`: as it is where it is an `Error` or `!`, into the payload of an `Error` whose one member is its name, or into that of an `Error⟨..⟩`; the value passes into the exit's class, a meeting where that is an unknown | as above |
+| a use's record of l.246 | at its result, the one position a candidate records a type it writes into (note 08, reading 13), that it is a reference where every candidate's result type is one, and no reference where none is; under `Use(k)`, as `k`'s result type | its value is, or is not, a reference, or is `!` |
 
 Holding compares Values as part of the value. Two values are equal where their
 types are and every function value in them names the same lambdas. Where `≤` or
@@ -83,14 +83,14 @@ coercion, where the structural stage changes the members; and at the payload whe
 the value is wrapped. So a lambda a value carries is among the Values of every
 class the value reaches, and a call of that class calls it.
 
-The l.248 row is checked on its own: it is the record a use made before it was
+The l.246 row is checked on its own: it is the record a use made before it was
 decided, which `Use(k)`'s rows do not name. That `!` holds either is the solver's
 reading (`Classes::normalize`), shared here.
 
 Whether a `Pass` meets is recomputed from the program: the class passed into is an
-unknown of its own group by its text (l.213) and is equated by no regenerated
+unknown of its own group by its text (l.211) and is equated by no regenerated
 equation to a class the text writes, and its group is the place's, or it is
-reached by name; a place reached through a reference is a boundary (l.221,
+reached by name; a place reached through a reference is a boundary (l.219,
 `design/09-group.md`, reading 8). The relations a split
 records are parts of the relations above and need no check of their own (note 12,
 reading 3).
@@ -130,9 +130,9 @@ Where Values meet what no rule decides yet, the checker panics, so that the case
 fails there and the rule is decided with 준량:
 
 - Values across a cast or a declared conversion, which change the type the
-  function value lies in by a signature (l.78, l.107).
+  function value lies in by a signature (l.78, l.105).
 - A function value reaching a function type at a part of a value, or where the
-  two sides are read at two levels of a context: the instances of l.199 are found
+  two sides are read at two levels of a context: the instances of l.197 are found
   at the whole value of a pass or an argument, at the level that split it.
 - The element an extern-defined container indexes along its view, a cast.
 - A value a test plants, which a case writes as a type and so with no Values.
@@ -147,6 +147,6 @@ the change breaks.
 Run, every accepted final state of every example passes (Examples 3 and 14,
 refused, have none), and `cases/certificate/a-wrong-value-or-decision-fails.case` finds `x: B` in place of `x: A` at the pass of `make()` into `X` and at
 `probe(A)`'s boundary, `probe(B)` in place of `probe(A)` at its boundary, and
-`probe(x): &A` in place of `()` at its result and at the record of l.248. A lower
-bound reaches by `≤` alone (l.282), so the checker reads no class as decided by an
+`probe(x): &A` in place of `()` at its result and at the record of l.246. A lower
+bound reaches by `≤` alone (l.280), so the checker reads no class as decided by an
 equation.

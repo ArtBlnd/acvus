@@ -1,12 +1,12 @@
-//@ spec: Example 7, l.444–459, the write in a lambda; l.188
+//@ spec: Example 7, l.442–457, the write in a lambda; l.186
 // let mut x = None;
 // let r = &mut x;
 // let f = || *r = Some(1u8);
 // f();
 // The write names the capture R, so it is the lambda's environment, recorded
-// in the enclosing group (l.188), and through the captured r it is a boundary
-// (l.458), whose payload, an unknown of that group, takes a lower bound
-// (l.280).
+// in the enclosing group (l.186), and through the captured r it is a boundary
+// (l.456), whose payload, an unknown of that group, takes a lower bound
+// (l.278).
 group λ in run {
     let `*r`;
     let S;

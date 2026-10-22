@@ -59,7 +59,7 @@ pub fn join(decls: &Decls, s: &Ty, t: &Ty) -> Result<Ty, JoinError> {
     combine(&s, &t)
 }
 
-/// The identity an extern-defined type carries (l.347).
+/// The identity an extern-defined type carries (l.345).
 pub(crate) fn identity(ty: &Ty) -> Option<&Ty> {
     match ty.term() {
         Term::Extern { identity, .. } => identity.as_ref(),
@@ -68,7 +68,7 @@ pub(crate) fn identity(ty: &Ty) -> Option<&Ty> {
 }
 
 /// The nearest node at or above `node` whose types carry no identity, to
-/// which two different identities are raised (l.353).
+/// which two different identities are raised (l.351).
 pub(crate) fn without_identity(decls: &Decls, node: &Node) -> Option<Node> {
     decls
         .tree()

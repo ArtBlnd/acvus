@@ -2,8 +2,8 @@
 // let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
 // let put = |v| x = v;
 // put(make_b());
-// V ≤ X is the lambda's environment, the enclosing group's (l.188), and V lies
-// at the call's positions (l.240), so X waits for it.
+// V ≤ X is the lambda's environment, the enclosing group's (l.186), and V lies
+// at the call's positions (l.238), so X waits for it.
 extern type A;
 extern type B;
 extern fn make_a() -> A;

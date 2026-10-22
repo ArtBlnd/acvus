@@ -1,5 +1,5 @@
 //! Instances: a binding group's C made anew at a use, and recorded in the use's
-//! binding group (l.190–217).
+//! binding group (l.188–215).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -13,7 +13,7 @@ use crate::ty::{Name, Term, Ty};
 
 /// An instance a state made: of the C of the binding group `group`, named `at`
 /// and made by `by`, with each root of that group's state it met and that
-/// root's class in the state that made it (l.217).
+/// root's class in the state that made it (l.215).
 #[derive(Clone, Debug)]
 pub struct Made {
     pub at: Name,
@@ -23,11 +23,11 @@ pub struct Made {
 }
 
 /// C of the binding group `from` reached its fixpoint in, being made anew at
-/// the use `at` (l.214, l.217).
+/// the use `at` (l.212, l.215).
 pub(crate) struct Instance<'a> {
     at: Rc<Name>,
     /// What made the instance, which every relation it records is recorded by
-    /// (l.263).
+    /// (l.261).
     by: Recorder,
     from: &'a State,
     /// The roots of C's classes in `from`: those left unsolved, or whose value
@@ -40,10 +40,10 @@ pub(crate) struct Instance<'a> {
 }
 
 impl State {
-    /// The roots of the classes C holds at this group's fixpoint (l.214):
+    /// The roots of the classes C holds at this group's fixpoint (l.212):
     /// those left unsolved, or whose value is not closed, the universals, and
     /// those whose value carries an identity this group's body made, which
-    /// each instance makes anew (l.349).
+    /// each instance makes anew (l.347).
     pub(crate) fn c(&self) -> BTreeSet<ClassId> {
         let made = self.made_identities();
         self.classes
@@ -59,7 +59,7 @@ impl State {
 
     /// The identities this state's body made, at calls of a declaration whose
     /// result carries one no parameter does, or anew at the instances it made
-    /// (l.349).
+    /// (l.347).
     pub(crate) fn made_identities(&self) -> BTreeSet<Name> {
         self.log
             .iter()
@@ -254,10 +254,10 @@ impl<'a> Instance<'a> {
     }
 
     /// Records here every relation of `from` on a class of C, makes anew each
-    /// node `from` left undecided (l.214), and keeps the instance here.
+    /// node `from` left undecided (l.212), and keeps the instance here.
     /// A relation `from` split is split here too: what its split recorded is
     /// among the relations copied, and no class of the copy takes a
-    /// constructor here that it did not hold in `from` (l.217, l.280).
+    /// constructor here that it did not hold in `from` (l.215, l.278).
     /// Returns what the instance recorded here, itself the instance made.
     pub(crate) fn record_rest(&mut self, here: &mut State) -> Recording {
         let from = self.from;

@@ -1,6 +1,6 @@
-//@ spec: l.103, l.111, l.74
+//@ spec: l.103, l.109, l.74
 // The part row changes each part by ⇝ₚ (l.103), the object, enum and part rows
-// and ! ⇝ U alone, so a part takes no cast and no conversion (l.111, l.74);
+// and ! ⇝ U alone, so a part takes no cast and no conversion (l.109, l.74);
 // none of them goes from u8 to u16, so Option<u8> does not coerce to
 // Option<u16>.
 assert coerce(Option<u8>, Option<u16>) == none;

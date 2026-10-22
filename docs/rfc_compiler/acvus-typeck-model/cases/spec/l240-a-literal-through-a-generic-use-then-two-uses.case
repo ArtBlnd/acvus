@@ -1,7 +1,7 @@
-//@ spec: l.240, l.271, l.265
+//@ spec: l.238, l.269, l.263
 // let mut x = 0; while c { x = id(x); } n(x); m(x);   // id<T>(T) -> T
 // id is decided at once, and its lower bounds make a cycle with X, merged
-// into one class (l.271) that only LitVars enter: n and m depend on each
+// into one class (l.269) that only LitVars enter: n and m depend on each
 // other as without id, and the program is refused in every order.
 extern fn id<T>(T) -> T;
 extern fn n(u16);

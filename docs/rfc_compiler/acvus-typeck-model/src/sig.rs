@@ -283,12 +283,12 @@ pub enum SigError {
     /// An identity anywhere but an extern-defined type's identity part, that
     /// part holding anything but the identity variable, or an identity a
     /// declaration makes its own. An identity is made only where a call or a
-    /// body lies (l.349).
+    /// body lies (l.347).
     IdentityPlace,
     /// A reference whose target is a reference (l.64).
     RefTarget,
     /// A function value, which a declaration makes none of: it returns one
-    /// only as a type variable takes it in (l.186).
+    /// only as a type variable takes it in (l.184).
     FunctionValue,
 }
 
@@ -370,7 +370,7 @@ impl Signature {
     }
 
     /// The identity lies in the result and in no parameter's type, so a call
-    /// makes it anew (l.349).
+    /// makes it anew (l.347).
     pub fn existential_identity(&self) -> bool {
         self.names_identity
             && self.result.mentions(SigVar::Identity)

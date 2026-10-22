@@ -1,4 +1,4 @@
-//@ spec: Example 4, l.401–415
+//@ spec: Example 4, l.399–413
 // let x = None;
 // let y = if c { x } else { Some(1u16) };
 // take(x);                 // take(Option<u8>), encoded as the boundary it records
@@ -17,10 +17,10 @@ S = u16;
 Y = `Some(1u16)`;
 `Option⟨u8⟩` = X;
 
-// Nothing enters X's payload P (l.412–413). The places it passes into are Y's
+// Nothing enters X's payload P (l.410–411). The places it passes into are Y's
 // payload, which is u16, and the u8 of P ⇝ u8, which the split of
 // X ⇝ Option<u8> records: two types, so P is not filled and has no value
-// (l.284, l.414).
+// (l.282, l.412).
 must fail;
 assert Y: Option<u16>;
 assert X: none;

@@ -1,9 +1,9 @@
-//@ spec: l.339, l.89
+//@ spec: l.337, l.89
 //@ orders: sampled 200
 // fn f() { let a = get1()?; let b = get2()?; Ok(a) }
 // // get1() -> Result<u8, Error{A(A)}>, get2() -> Result<u16, B>
 // get1()'s error value is an Error, so it is not wrapped and passes into
-// the exit's error part as it is (l.339); B is wrapped into Error{B(..)}.
+// the exit's error part as it is (l.337); B is wrapped into Error{B(..)}.
 // The variants unite with no nesting.
 extern type A;
 extern type B;

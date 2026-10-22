@@ -3,8 +3,8 @@
 // let put = |v| x = v;
 // probe(x);                // probe(A), probe(B)
 // put(make_b());
-// V ≤ X is the lambda's environment, the enclosing group's (l.188), and V lies
-// at the call's positions (l.240), so X and probe wait for the call: one
+// V ≤ X is the lambda's environment, the enclosing group's (l.186), and V lies
+// at the call's positions (l.238), so X and probe wait for the call: one
 // outcome, X B, probe(B).
 extern type A;
 extern type B;

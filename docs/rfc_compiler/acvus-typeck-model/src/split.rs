@@ -1,7 +1,7 @@
-//! Splits (l.280): once an equivalence class takes a constructor, a relation
+//! Splits (l.278): once an equivalence class takes a constructor, a relation
 //! is recorded at each part of the two sides of each of its lower bounds, part
 //! lower bounds and boundaries, as at a place the value's part passes into: a
-//! meeting where that place is an unknown (l.221), recording a part lower bound
+//! meeting where that place is an unknown (l.219), recording a part lower bound
 //! between the parts of a structural type and an equation between other parts,
 //! and a boundary where it is not. Where the two sides' constructors differ,
 //! the parts are linked by the same rule through the declared casts'
@@ -19,7 +19,7 @@ use crate::relation::{Recorder, Relation};
 use crate::solve::State;
 use crate::ty::{Constructor, Mutability, Name, PartKey, Term};
 
-/// How a relation's value passes into its other side (l.280).
+/// How a relation's value passes into its other side (l.278).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Passing {
     /// By a lower bound or a boundary: the value passes whole, so that two
@@ -29,7 +29,7 @@ pub(crate) enum Passing {
     Part,
 }
 
-/// What became of a relation of the log at a split (l.280).
+/// What became of a relation of the log at a split (l.278).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Split {
     /// A lower bound, a part lower bound or a boundary whose two sides are one
@@ -97,7 +97,7 @@ impl State {
         }
     }
 
-    /// Whether the parts of a relation's two sides are related now (l.280):
+    /// Whether the parts of a relation's two sides are related now (l.278):
     /// once both sides have taken a constructor (`holes.md`, T2).
     pub(crate) fn splits_now(&self, a: ClassId, b: ClassId) -> bool {
         self.is_solved(a) && self.is_solved(b)
@@ -105,7 +105,7 @@ impl State {
 
     /// Splits the kind known in part at `i` of `class`, naming `part`, once
     /// `class` takes a constructor: where that is `!`, which has no value and
-    /// meets every kind, the part it names is `!` (l.278); otherwise the
+    /// meets every kind, the part it names is `!` (l.276); otherwise the
     /// class's kind holds the part already, and nothing is left to relate.
     fn split_fact(&mut self, i: usize, class: ClassId, part: ClassId) -> Split {
         let root = self.root(class);
@@ -123,11 +123,11 @@ impl State {
     }
 
     /// Splits `e?`'s wrapping at `i` of the error value of the type `from`
-    /// into `to`, once `from` takes a constructor (l.280, l.339): an `Error`
+    /// into `to`, once `from` takes a constructor (l.278, l.337): an `Error`
     /// or `!` is not wrapped and passes into `to` as it is; a type of a name
     /// `N` passes into the payload of `to`, an `Error` whose one member is
     /// `N`; and any other type into that of `to`, an `Error⟨..⟩`. Each payload
-    /// is made anew, an unknown the value meets (l.221, l.318).
+    /// is made anew, an unknown the value meets (l.219, l.316).
     fn split_wrap(&mut self, i: usize, from: ClassId, to: ClassId) -> Split {
         let root = self.root(from);
         if !self.is_solved(root) {
@@ -173,10 +173,10 @@ impl State {
         Split::Parts(recorded)
     }
 
-    /// `?N ⇝ U` unifies `?N` with `U` (l.280): where the equivalence class
+    /// `?N ⇝ U` unifies `?N` with `U` (l.278): where the equivalence class
     /// holds a LitVar and no kind, and only LitVars enter it, no solved lower
     /// bound, part lower bound or kind known in part giving it a constructor
-    /// (l.284), it is unified with each type it passes into by a boundary.
+    /// (l.282), it is unified with each type it passes into by a boundary.
     /// Returns the equations recorded.
     pub(crate) fn unify_lit_boundaries(&mut self, root: ClassId) -> Recording {
         let mut recorded = Recording::default();
@@ -193,8 +193,8 @@ impl State {
     }
 
     /// The relation recorded where the part `from` passes into the part `to`
-    /// of a type of constructor `of` (l.280): where `to` is an unknown the
-    /// place is a meeting (l.221), recording a part lower bound where `of` is
+    /// of a type of constructor `of` (l.278): where `to` is an unknown the
+    /// place is a meeting (l.219), recording a part lower bound where `of` is
     /// structural and an equation otherwise, and elsewhere it is a boundary.
     fn part_relation(&self, of: &Constructor, from: ClassId, to: ClassId) -> Relation {
         if !self.is_unknown(to) {
@@ -210,12 +210,12 @@ impl State {
     }
 
     /// Records the relations between the parts of a relation's two sides
-    /// (l.280). Where their constructors differ and the value passes whole,
+    /// (l.278). Where their constructors differ and the value passes whole,
     /// the parts are linked through the declared casts' parameters and
     /// results, or between the targets of a reborrow; a part lower bound's
     /// sides of two constructors relate nothing (l.89). Where a function value
     /// passes whole into a function type, an instance of each lambda its
-    /// Values names links them, as though the type called it (l.199). Returns
+    /// Values names links them, as though the type called it (l.197). Returns
     /// the relations recorded.
     fn split_parts(
         &mut self,

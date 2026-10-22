@@ -1,11 +1,11 @@
 //! Equivalence classes: their names, union-find, type variables and kinds
-//! (l.113–171).
+//! (l.111–169).
 //!
-//! A type variable is one type, represented by an equivalence class (l.115).
+//! A type variable is one type, represented by an equivalence class (l.113).
 //! An equivalence class holds type variables, of which the model keeps the
-//! LitVar, and at most one kind (l.119). Unifying two merges them, the kind
+//! LitVar, and at most one kind (l.117). Unifying two merges them, the kind
 //! the conjunction of the two, and unifies their parts of one name in turn
-//! (l.160). `Unifying` reports each union it makes, with its cause, and the
+//! (l.158). `Unifying` reports each union it makes, with its cause, and the
 //! conflict that stops it.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,17 +25,17 @@ pub enum ClassName {
     /// A type the text gives, by the name the program gives it.
     Text(Name),
     /// The part `key` of the named class: made anew when its equivalence class
-    /// takes a constructor (l.271, l.280), or written with it.
+    /// takes a constructor (l.269, l.278), or written with it.
     Part(Rc<ClassName>, PartKey),
     /// A class a use or a lend of this name made anew.
     Node(Rc<Name>, crate::node::NodeAt),
     /// The copy of a class of another binding group's C that the use `at`
     /// made anew, or of a class outside C, whose closed type it writes
-    /// (l.217).
+    /// (l.215).
     Copy { at: Rc<Name>, of: Rc<ClassName> },
     /// A class of the signature of the cast at `step` of the path that links
-    /// the parts of a relation from `from` to `to` (l.280), or of the view
-    /// that links the container `from` to its element `to` (l.156).
+    /// the parts of a relation from `from` to `to` (l.278), or of the view
+    /// that links the container `from` to its element `to` (l.154).
     Link {
         from: Rc<ClassName>,
         to: Rc<ClassName>,
@@ -120,7 +120,7 @@ impl Arena {
     }
 }
 
-/// A kind known only in part (l.135–142).
+/// A kind known only in part (l.133–140).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Fact {
     /// A reference to `τ`.
@@ -133,7 +133,7 @@ pub enum Fact {
     Indexes(ClassId),
     /// Has variant `V` with payload `τ`; `enum_name` is the enum the text
     /// writes it of, `E` of `E::V`, and none for the language's `Some`,
-    /// `None`, `Ok` and `Err` (l.318).
+    /// `None`, `Ok` and `Err` (l.316).
     Variant {
         enum_name: Option<Name>,
         variant: Name,
@@ -174,7 +174,7 @@ impl Fact {
     }
 
     /// The member this fact names where the body's text writes it, which is
-    /// visible to this body (l.278): a field, or a variant of an enum the text
+    /// visible to this body (l.276): a field, or a variant of an enum the text
     /// names.
     pub fn visible_member(&self) -> Option<(Constructor, Member)> {
         match self {
@@ -196,9 +196,9 @@ impl Fact {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KindSource {
     /// A type the text or a declaration writes, held through equations from
-    /// before solving decides it (l.275, "with an equation").
+    /// before solving decides it (l.273, "with an equation").
     Written,
-    /// The equivalence class took it when it was solved (l.271).
+    /// The equivalence class took it when it was solved (l.269).
     Solved,
 }
 
@@ -210,13 +210,13 @@ pub struct Held {
     pub facts: BTreeSet<Fact>,
     pub lit: Option<LitVar>,
     /// Whether it is a reference, as a use records it before it is decided
-    /// (l.248).
+    /// (l.246).
     pub reference: Option<bool>,
     /// The lambdas the Values of the function values met in it name, joined
-    /// (l.175, l.183).
+    /// (l.173, l.181).
     pub values: BTreeSet<Name>,
     /// Whether it took its constructor and members, written or joined
-    /// (l.271).
+    /// (l.269).
     pub solved: bool,
 }
 
@@ -225,13 +225,13 @@ pub struct Held {
 pub enum Conflict {
     /// Two kinds of different constructors or members.
     Kinds(Constructor, Constructor),
-    /// A LitVar and a constructor that does not admit its values (l.164), or
-    /// two LitVars of different families (l.165).
+    /// A LitVar and a constructor that does not admit its values (l.162), or
+    /// two LitVars of different families (l.163).
     Lit(LitVar, Option<Constructor>),
-    /// A fact that the kind does not meet (l.278).
+    /// A fact that the kind does not meet (l.276).
     Fact(Fact, Constructor),
     /// A record of whether the class is a reference that its kind, or another
-    /// record, does not meet (l.248).
+    /// record, does not meet (l.246).
     Reference(bool, Option<Constructor>),
 }
 
@@ -309,7 +309,7 @@ pub struct Classes {
     held: BTreeMap<ClassId, Held>,
 }
 
-/// Why two equivalence classes are unified (l.160).
+/// Why two equivalence classes are unified (l.158).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Cause {
     /// They are the two the caller unifies: an equation's two sides.
@@ -322,7 +322,7 @@ pub enum Cause {
     KindGiven { class: ClassId, part: PartKey },
     /// One is the class a kind known in part of `class` names, and the other
     /// the class its kind, or another kind known in part of it, names at that
-    /// part (l.135–142, l.156).
+    /// part (l.133–140, l.154).
     Fact { class: ClassId, fact: Fact },
 }
 
@@ -333,7 +333,7 @@ struct Pair {
     cause: Cause,
 }
 
-/// A union of two equivalence classes (l.160).
+/// A union of two equivalence classes (l.158).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Union {
     pub cause: Cause,
@@ -344,7 +344,7 @@ pub struct Union {
     pub kind: Option<Term<ClassId>>,
 }
 
-/// What no type holds, met while unifying (l.160–165).
+/// What no type holds, met while unifying (l.158–163).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Conflicted {
     Apart(Box<Apart>),
@@ -534,11 +534,11 @@ impl Classes {
             }
             if let Some((kind, _)) = &held.kind {
                 if let (Term::Extern { .. }, Fact::Indexes(_)) = (kind, fact) {
-                    // The state links it along the container's view (l.156).
+                    // The state links it along the container's view (l.154).
                     continue;
                 }
                 if let Term::Never = kind {
-                    // `!`, which has no value, meets every kind (l.278).
+                    // `!`, which has no value, meets every kind (l.276).
                     continue;
                 }
                 let resolved = resolve(kind, fact, types)
@@ -554,7 +554,7 @@ impl Classes {
     }
 }
 
-/// Unifying in the equivalence classes (l.160–165), which reports each union
+/// Unifying in the equivalence classes (l.158–163), which reports each union
 /// it makes and the conflict that stops it.
 pub struct Unifying<'a> {
     classes: &'a mut Classes,
@@ -784,7 +784,7 @@ impl FactPart {
 
 /// The part of `kind` the fact names, where the kind meets the fact. A
 /// struct's field is the part at the field's place in the declared order
-/// (l.316). An extern-defined container's element is not a part of it.
+/// (l.314). An extern-defined container's element is not a part of it.
 fn resolve(kind: &Term<ClassId>, fact: &Fact, types: &DeclaredTypes) -> Option<ClassId> {
     match (kind, fact) {
         (Term::Ref(_, target), Fact::Ref(_)) => Some(*target),
