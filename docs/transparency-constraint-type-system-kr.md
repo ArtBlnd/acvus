@@ -237,7 +237,7 @@ body의 텍스트가 주는 제약은 주어지는 즉시 동치류에 기록되
 
 | 무엇이 | 무엇에 의존하는가 |
 |---|---|
-| 동치류 | 풀리지 않은 하한과 part 하한(아무것도 들어오지 않는 동치류는 빼고, 값), 그리고 다음이 아직 기록하지 않은 관계. (가) 자기가 하한이나 part 하한 `τ ≤ α`의 `τ`나 경계 `α ⇝ U`의 `U`의 part이면, `α`가 constructor를 받는 것. 자기가 `?`의 감싸기를 받는 `X`이면, 그 error part가 constructor를 받는 것. (나) 자기가 그 자리에 놓이거나, 그 후보나 pattern이 닿는 깊이 안의 part인 use, lend, projection, binding. 함수 값을 부르는 use의 자리에는, 그 callee의 Values가 그때 가리키는 lambda마다 그 environment에 든 parameter와 결과 타입도 든다(Facts). |
+| 동치류 | 풀리지 않은 하한과 part 하한(아무것도 들어오지 않는 동치류는 빼고, 값), 그리고 다음이 아직 기록하지 않은 관계. (가) 자기가 하한이나 part 하한 `τ ≤ α`의 `τ`나 경계 `α ⇝ U`의 `U`의 part이면, `α`가 constructor를 받는 것. 자기가 `?`의 감싸기를 받는 `X`이면, 그 error part가 constructor를 받는 것. (나) 자기가 그 자리에 놓이거나, 그 후보나 pattern이 닿는 깊이 안의 part인 use, lend, projection, binding. 다만 그것이 자기에게 기록하는 관계가 자기에서 나가는 경계뿐이면, 자기에게 LitVar만 들어오는 동안만 그것을 기다리며, LitVar만 들어오는지는 아무것도 들어오지 않는지와 같이 정한다(값). 함수 값을 부르는 use의 자리에는, 그 callee의 Values가 그때 가리키는 lambda마다 그 environment에 든 parameter와 결과 타입도 든다(Facts). |
 | part의 동치류 | 그것을 part로 가진 동치류들이 모두 constructor를 받는 것 |
 | universal | 그것을 고르는 use, 곧 그 body의 instance를 만드는 use. 그 use는 그 binding group 밖에 있다. |
 | use | 읽는 자리의 동치류에 관계를 기록하는 use, lend, projection, binding |
