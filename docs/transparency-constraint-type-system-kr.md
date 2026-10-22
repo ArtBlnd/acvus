@@ -336,7 +336,7 @@ method 호출의 receiver는 첫 인자다. 적힌 그대로, `&`, 그리고 rec
 
 ## `?`
 
-`e?`는 언어가 주는 두 후보, 곧 `Option⟨T⟩`과 `Result⟨T, E⟩`에서의 후보를 가진 use이며, 그 결과는 `T`다. exit는 `return None`이나 `return Err(x)`와 같다. `x`는 `e`의 error 값을 감싼 값이며, 그 타입은 새로 만든 동치류 `X`다. 감싸기는 `E`가 constructor를 받으면 쪼개진다(값). `E`가 `Error`나 `!`이면 감싸지 않으므로 error 값이 그대로 `X`로 넘어간다. 이름 `N`을 가진 그 밖의 타입(enum, struct, extern-defined type)이면 `X`는 member가 `N` 하나인 `Error`이고, 그 밖이면 `Error⟨..⟩`이며, 어느 쪽이든 그 payload는 새로 만든 동치류이고 error 값은 거기로 넘어간다(Struct). 이 값들은 가장 안쪽 body의 결과에서 만나므로, 그 error part는 `?`마다 variant가 더해진 `Error`가 된다. exit의 다른 part는 새로 만든 동치류이므로(Struct), 그 body가 `Ok`를 돌려주지 않으면 ok part로는 아무것도 들어오지 않고, 그것이 넘어가는 자리가 타입을 주지 않으면(값) fallback으로 `!`가 된다.
+`e?`는 언어가 주는 두 후보, 곧 `Option⟨T⟩`과 `Result⟨T, E⟩`에서의 후보를 가진 use이며, 그 결과는 `T`다. exit는 `return None`이나 `return Err(x)`와 같다. `x`는 `e`의 error 값을 감싼 값이며, 그 타입은 새로 만든 동치류 `X`다. exit의 값의 타입은 그 자리에서 새로 만든 동치류이며, 가장 안쪽 body의 결과로 넘어가고(만남과 경계), 그 use의 자리다(의존). 감싸기는 `E`가 constructor를 받으면 쪼개진다(값). `E`가 `Error`나 `!`이면 감싸지 않으므로 error 값이 그대로 `X`로 넘어간다. 이름 `N`을 가진 그 밖의 타입(enum, struct, extern-defined type)이면 `X`는 member가 `N` 하나인 `Error`이고, 그 밖이면 `Error⟨..⟩`이며, 어느 쪽이든 그 payload는 새로 만든 동치류이고 error 값은 거기로 넘어간다(Struct). 이 값들은 가장 안쪽 body의 결과에서 만나므로, 그 error part는 `?`마다 variant가 더해진 `Error`가 된다. exit의 다른 part는 새로 만든 동치류이므로(Struct), 그 body가 `Ok`를 돌려주지 않으면 ok part로는 아무것도 들어오지 않고, 그것이 넘어가는 자리가 타입을 주지 않으면(값) fallback으로 `!`가 된다.
 
 ## Block
 
