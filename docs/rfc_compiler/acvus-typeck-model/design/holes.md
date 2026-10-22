@@ -272,6 +272,8 @@ let r = first(x);        // x: A; first(A) -> &u8, first(B) -> &mut u8
 let s = &mut r;
 ```
 
+The text says so since f28c77a2 (l.296), as 준량 decided.
+
 ## O4. A capture written after a use reads it
 
 Not an order since 8978eb70, where the text takes a lambda's captured environment
@@ -327,5 +329,6 @@ decide it: a use whose candidates would record no lower bound or equation into t
 class, which the spec's own example needs (l.257); a lend at its place and a binding
 at its position; and a call of a function value at its arguments
 (`design/08-node.md`, reading 12). Read so, Example 12 reaches its outcome in every
-order. The model takes this with no reading of its own: l.242 as stated is not
-encoded.
+order. Since f28c77a2 the text's l.242 states it, as 준량 decided: a lend, a
+projection or a binding waits for the nodes that can decide whether its class is a
+reference (l.298), and those it named and these are left out.

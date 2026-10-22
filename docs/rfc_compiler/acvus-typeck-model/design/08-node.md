@@ -80,7 +80,7 @@ reads its position, or lends it where its path passes a reference.
    its arguments. The pick example (l.257) needs the first: `pick` lies at `A`, its
    argument, which its candidates record nothing into. The second keeps two lends
    of one place from depending on each other (Example 12's two `&y`; `holes.md`,
-   O5).
+   O5). The text's l.242 states this since f28c77a2.
 13. **What candidates would record** (l.246). Once the common part is recorded, a
    candidate records its result type at the result's unknowns, into each of them,
    and an argument the common part does not hold whole passes into its parameter's
