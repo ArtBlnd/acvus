@@ -350,7 +350,7 @@ identity는 extern-defined type의 part이며, 그 값이 가리키는 저장소
 
 execution은 body나 lambda의 한 번의 호출, 또는 loop의 한 iteration이며, level은 중첩된 execution 사이에서의 깊이다. 동치류는 자기가 생긴 자리의 level을 지니고, 둘이 합쳐지면 얕은 쪽의 level을 지닌다. 호출이 새로 만든 identity는 그 호출이 놓인 execution의 level을 지닌다.
 
-동치류는 서로 다른 identity를 함께 지니지 못하고, 자기보다 깊은 level의 identity도 지니지 못한다. 이것은 동치류의 값에 걸린 제약이므로, 등식이 없는 동치류의 출처들이 그런 identity를 지니면 그 값은 이 제약을 만족하는 가장 작은 타입, 곧 identity를 지니지 않는 가장 가까운 공통 조상이 되고, 각 값은 그 조상으로 coerce된다. part 하한은 cast 없이 닿아야 하므로, part 하한이 그런 identity를 지니면 그 동치류는 값을 갖지 않는다.
+동치류는 서로 다른 identity를 함께 지니지 못한다. 이것은 동치류의 값에 걸린 제약이므로, 등식이 없는 동치류의 출처들이 그런 identity를 지니면 그 값은 이 제약을 만족하는 가장 작은 타입, 곧 identity를 지니지 않는 가장 가까운 공통 조상이 되고, 각 값은 그 조상으로 coerce된다. part 하한은 cast 없이 닿아야 하므로, part 하한이 그런 identity를 지니면 그 동치류는 값을 갖지 않는다. 동치류는 자기보다 깊은 level의 identity를 지니지 못하며, 그런 identity를 지닌 값이 들어오면 그 자리에서 거부된다.
 
 ## Examples
 
@@ -523,12 +523,12 @@ let mut v = Vec::new();
 while c { push(&mut v, open()); }   // push(&mut Vec⟨T⟩, T)
 ```
 
-결과: 둘째 줄은 identity 하나로 받아들여지고, `b`는 `G`, `v`는 `Vec⟨G⟩`이다. `G`로 가는 cast가 없다면 `let b`와 `push`는 거부된다.
+결과: 둘째 줄은 identity 하나로 받아들여지고, `b`는 `G`이며, `push`는 거부된다. `G`로 가는 cast가 없다면 `let b`도 거부된다.
 
 1. 첫 `open()`이 만든 identity `ι₀`는 이 body의 execution의 것이고, `a: F⟨ι₀⟩`는 같은 level이다.
 2. `index_of`의 `p`는 이 use의 새 미지수다. `&F⟨ι₀⟩`가 `&F⟨p⟩`로 넘어가는 경계를 쪼개면, identity `p`는 미지수이므로 등식으로 `ι₀`가 되고, 결과는 `Idx⟨ι₀⟩`다. `at`의 `p`도 `ι₀` 하나로 맞는다.
 3. `if`의 결과 `B`에는 `F⟨ι₁⟩`과 `F⟨ι₀⟩`가 하한으로 기록된다. `B`는 서로 다른 identity를 함께 지니지 못하므로, 그 값은 identity가 없는 가장 가까운 공통 조상 `G`이고, 두 값은 각각 `G`로 cast된다.
-4. loop 안의 `open()`이 만든 `ι₂`는 그 iteration의 것이다. `push`의 `T`는 이 use에서 생기지만, `&mut Vec⟨T⟩`로 넘어가는 경계를 쪼개면 `T`는 미지수이므로 등식으로 `v`의 element와 합쳐지고, 얕은 쪽인 바깥 level을 지닌다. 그 동치류는 더 깊은 `ι₂`를 지니지 못하므로 값은 `G`가 되고, 넣는 값은 `G`로 cast된다.
+4. loop 안의 `open()`이 만든 `ι₂`는 그 iteration의 것이다. `push`의 `T`는 이 use에서 생기지만, `&mut Vec⟨T⟩`로 넘어가는 경계를 쪼개면 `T`는 미지수이므로 등식으로 `v`의 element와 합쳐지고, 얕은 쪽인 바깥 level을 지닌다. 그 동치류는 더 깊은 `ι₂`를 지니지 못하므로, `open()`의 값은 그 자리에서 거부된다.
 
 ### 12. literal에서 시작한 누적
 

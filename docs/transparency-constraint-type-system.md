@@ -350,7 +350,7 @@ An identity in a declaration's result that no parameter's type carries is existe
 
 An execution is one call of a body or a lambda, or one iteration of a loop, and a level is its depth among nested executions. An equivalence class has the level of the place it arises at, and two merged into one have the shallower level. An identity a call makes anew has the level of the execution the call lies in.
 
-An equivalence class holds neither two different identities nor an identity of a level deeper than its own. This is a constraint on its value, so where the sources of an equivalence class with no equation carry such identities, its value is the least type that meets the constraint, their nearest common ancestor that carries no identity, and each value is coerced to it. A part lower bound must reach without casts, so where a part lower bound carries such identities, the equivalence class has no value.
+An equivalence class holds no two different identities. This is a constraint on its value, so where the sources of an equivalence class with no equation carry such identities, its value is the least type that meets the constraint, their nearest common ancestor that carries no identity, and each value is coerced to it. A part lower bound must reach without casts, so where a part lower bound carries such identities, the equivalence class has no value. An equivalence class holds no identity of a level deeper than its own, and a value carrying one that enters it is refused there.
 
 ## Examples
 
@@ -523,12 +523,12 @@ let mut v = Vec::new();
 while c { push(&mut v, open()); }   // push(&mut Vec⟨T⟩, T)
 ```
 
-Outcome: the second line is admitted with one identity, `b` is `G` and `v` is `Vec⟨G⟩`. Without the cast to `G`, `let b` and the `push` are refused.
+Outcome: the second line is admitted with one identity, `b` is `G`, and the `push` is refused. Without the cast to `G`, `let b` is refused too.
 
 1. The identity `ι₀` the first `open()` makes belongs to this body's execution, and `a: F⟨ι₀⟩` is at the same level.
 2. `index_of`'s `p` is a new unknown of this use. Splitting the boundary where `&F⟨ι₀⟩` passes into `&F⟨p⟩`, the identity `p` is an unknown, so an equation makes it `ι₀`, and the result is `Idx⟨ι₀⟩`. `at`'s `p` fits as the one `ι₀` too.
 3. The `if`'s result `B` records `F⟨ι₁⟩` and `F⟨ι₀⟩` as lower bounds. `B` holds no two different identities, so its value is their nearest common ancestor that carries no identity, `G`, and each value is cast to `G`.
-4. The `ι₂` the `open()` in the loop makes belongs to its iteration. `push`'s `T` arises at this use, but splitting the boundary into `&mut Vec⟨T⟩`, `T` is an unknown, so an equation merges it with `v`'s element, and it has the shallower, outer level. That equivalence class holds no deeper `ι₂`, so its value is `G`, and each value put in is cast to `G`.
+4. The `ι₂` the `open()` in the loop makes belongs to its iteration. `push`'s `T` arises at this use, but splitting the boundary into `&mut Vec⟨T⟩`, `T` is an unknown, so an equation merges it with `v`'s element, and it has the shallower, outer level. That equivalence class holds no deeper `ι₂`, so the value of `open()` is refused there.
 
 ### 12. Accumulation that starts from a literal
 
