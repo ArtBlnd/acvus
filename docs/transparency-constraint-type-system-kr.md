@@ -196,7 +196,7 @@ instance는 use 하나에서 다른 body의 타입들을 새로 만든 것이며
 | use가 놓인 binding group이나 그것을 감싸는 binding group의 free fn이나 method를 호출함 | 만들지 않는다. 그 body 자신의 타입을 쓴다. |
 | 그 밖의 free fn이나 method를 호출함 | 하나 만든다. |
 | 함수 값을 호출함 | 그 함수 값을 읽어(의존), 그 Values가 가리키는 lambda마다 하나 만든다. 각 인자는 그 lambda의 generic part에 든 parameter의 사본이나 environment에 든 parameter로 넘어가고, generic part에 든 결과 타입의 사본이나 environment의 결과 타입이 호출 결과의 하한이 된다. |
-| 함수 값이 경계를 넘어 주어진 함수 타입으로 들어감 | 그 값의 Values가 가리키는 lambda마다 하나 만든다. 그 parameter와 result는 그 타입의 것이다. |
+| 함수 값이 경계를 넘어 주어진 함수 타입으로 들어감 | 그 경계를 쪼갤 때(값), 그 값의 Values가 가리키는 lambda마다 하나 만든다. 그 함수 타입이 그 lambda를 부르는 것처럼, 그 함수 타입의 각 parameter는 그 lambda의 generic part에 든 parameter의 사본이나 environment에 든 parameter로 넘어가고, generic part에 든 결과 타입의 사본이나 environment의 결과 타입은 그 함수 타입의 result로 넘어간다(만남과 경계). |
 
 embedding이 고른 함수로 시작하는 run은, 그 함수의 instance 하나를 만든다. universal 자리에는 embedding이 그 input에 선언한 타입을 놓고, 그 결과는 embedding이 결과에 선언한 타입으로 넘어간다(programs).
 
@@ -277,7 +277,7 @@ use, lend, projection, binding이 무엇이 되는지는 그것이 읽는 값으
 
 kind가 member를 주는 것은 그 member가 이 body에 보일 때뿐이다. object의 field와 enum의 variant는 body의 텍스트가 쓰므로 보이고, `Option`, `Result`, `Error`의 member와 host가 준 타입의 member는 바깥에서 쓰므로 보이지 않는다. 출처가 kind뿐인 동치류는 그 kind가 가리키는 member의 constructor를 받는다. 동치류의 값은 그 동치류가 지닌 kind를 만족하는 타입이다.
 
-동치류가 constructor를 받으면, 그 하한, part 하한, 경계의 두 쪽의 part마다, 값의 part가 넘어가는 자리로서 관계가 기록된다(쪼갬). 그 자리가 만남이면 structural type의 part 사이에는 part 하한이, 그 밖의 part 사이에는 등식이, 경계이면 경계가 기록된다(만남과 경계). 하한이나 경계의 두 쪽의 constructor가 다르면, 값이 선언된 cast들의 parameter로 넘어가고 그 결과가 다시 넘어가는 것으로 보아 같은 규칙으로 잇고, `&mut T`가 `&U`로 넘어가면 target끼리 잇는다. `?N ⇝ U`이면 `?N`을 `U`와 unify한다.
+동치류가 constructor를 받으면, 그 하한, part 하한, 경계의 두 쪽의 part마다, 값의 part가 넘어가는 자리로서 관계가 기록된다(쪼갬). 그 자리가 만남이면 structural type의 part 사이에는 part 하한이, 그 밖의 part 사이에는 등식이, 경계이면 경계가 기록된다(만남과 경계). 하한이나 경계의 두 쪽의 constructor가 다르면, 값이 선언된 cast들의 parameter로 넘어가고 그 결과가 다시 넘어가는 것으로 보아 같은 규칙으로 잇고, `&mut T`가 `&U`로 넘어가면 target끼리 잇는다. 함수 값이 함수 타입으로 넘어가면, 그 lambda들의 instance로 잇는다(Instance). `?N ⇝ U`이면 `?N`을 `U`와 unify한다.
 
 동치류가 풀린 뒤, 하한과 use의 결과로 들어오는 값은 Join의 `≤`로, part 하한으로 들어오는 part는 `≤ₚ`로 그 값에 닿으며, 그 단계마다 Coercion 표의 행으로 바뀐다. 다만 object에 더해진 field는 바뀌지 않고, 그 값이 통째로 쓰이기 전에 쓰인다(ownership §4). 경계로 넘어가는 값은 `U`의 값에 coercion으로 닿는다. 어느 쪽이든 그 함수는 그 값이 들어온 자리에서 호출되며, 닿지 않으면 그 자리에서 거부된다.
 
