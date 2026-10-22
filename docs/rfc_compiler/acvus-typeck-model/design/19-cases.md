@@ -350,6 +350,11 @@ steps; `golden()` and every expectation read what they read without it.
   `istar/a-call-left-out-leaves-out-its-instance-relations` declared `choose` to
   give `Fn/1`, a function value no declaration makes since 80b33ad9 (l.186), and
   gives back the one its `T` takes in.
+- 4 cases under `cases/spec`, `l240-*`, test l.240 (b) since 09aef04e, beside H7,
+  now accepted: two uses that fill one literal, a literal into a use then
+  another, a sum into a use that only reads it, and a literal through a generic
+  use then two uses. Each was derived before it was run; the two refused ones
+  report I\* completeness at both uses, as before.
 - 6 cases under `cases/spec`, `try-*`, and `block-collects-try` test `e?`
   (l.339): two errors of a name meet as one `Error`, an `Error` is not wrapped,
   an `Option`, two errors of no name meet as one `Error⟨..⟩`, one of no name and

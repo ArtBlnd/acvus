@@ -53,6 +53,16 @@ met.
    20), so that the innermost body's result, which that class passes into, does
    not take its value before the exit is recorded. Without it, the exit would
    record into a class no node lies at, as O4's instances once did.
+8. **A node that records only a boundary out of a class** (l.240 (b), since
+   09aef04e): a use at an argument each candidate writes a type for, and within the
+   depth those types reach, not at its result, its exit or an argument a candidate
+   writes a variable for (`State::passed_out_only`). Such a boundary changes the
+   class only by the fill of a class nothing enters or LitVars alone enter (l.280,
+   l.284), so the class waits for the node only while it is such a class, judged on
+   the graph without those dependencies (`State::filled_by_places_in`). Where the
+   class has a source still to come, a use that only reads it waits for that source
+   and is not waited for: H7. Four cases refused at an undecided use now give the
+   classes at its arguments their values, the refusal unchanged.
 
 ## Left open for change
 

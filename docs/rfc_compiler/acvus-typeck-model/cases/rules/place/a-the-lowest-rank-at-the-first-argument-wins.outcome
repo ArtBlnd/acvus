@@ -4,9 +4,9 @@ outcome 1
   refused
   value 1u16: u16
   value R: none
-  value `make_a()`: none
+  value `make_a()`: A
   decision f: undecided
   decision make_a: make_a#0
+  check `make_a.Result <= make_a()`: Ok(Identity)
   refusal no_value R
-  refusal no_value `make_a()`
   I* of a final state: []

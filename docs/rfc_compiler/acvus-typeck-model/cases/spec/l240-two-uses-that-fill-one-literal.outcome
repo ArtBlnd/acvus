@@ -1,0 +1,18 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
+outcome 1
+  refused
+  value ?a: u16
+  value X: u16
+  value `m(x)`: ()
+  value `n(x)`: ()
+  decision m: m#0
+  decision n: n#1
+  partition {?a, X}
+  check `?a <= X`: Ok(Identity)
+  check `X ~> m.Param(0)`: Ok(Identity)
+  check `X ~> n.Param(0)`: Err(None)
+  check `m.Result <= m(x)`: Ok(Identity)
+  check `n.Result <= n(x)`: Ok(Identity)
+  refusal conflict at "X = n.Param(0)": Scalar(Int(U16)) vs Scalar(Int(I32))
+  I* of a final state: [completeness m, completeness n]

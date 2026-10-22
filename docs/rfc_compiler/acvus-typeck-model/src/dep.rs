@@ -173,16 +173,40 @@ impl State {
             .nodes
             .iter()
             .filter(|(name, _)| self.deferred.contains_key(*name));
+        let mut passed_out = Vec::new();
         for (name, node) in undecided.iter().copied().chain(deferred) {
+            let only_out = self.passed_out_only(&node.kind);
             for position in self.positions(&node.kind) {
                 let position = self.root(position);
-                if !self.is_solved(position) {
+                if self.is_solved(position) {
+                    continue;
+                }
+                if only_out.contains(&position) {
+                    passed_out.push((position, (*name).clone()));
+                } else {
                     add(
                         Vertex::Class(position),
                         Vertex::Node((*name).clone()),
                         Edge::Records,
                     );
                 }
+            }
+        }
+        // A node that records into a class only a boundary out of it changes
+        // it only by the fill of a class nothing enters or LitVars alone
+        // enter (l.280, l.284), so the class waits for it only while it is
+        // one, judged without those dependencies (l.240 (b)).
+        let provisional = Graph {
+            component: components(&edges),
+            edges: edges.clone(),
+        };
+        let filled = self.filled_by_places_in(&provisional);
+        for (position, name) in passed_out {
+            if filled.contains(&position) {
+                edges
+                    .entry(Vertex::Class(position))
+                    .or_default()
+                    .insert((Vertex::Node(name), Edge::Records));
             }
         }
         // The nodes that record into a class (l.246), each with the class at
@@ -350,6 +374,53 @@ impl State {
                 return met;
             }
             met.settled.extend(more);
+        }
+    }
+
+    /// The equivalence classes that take their type from the places they pass
+    /// into (l.284): those nothing enters, and those LitVars alone enter,
+    /// judged alike, each of their lower bounds and part lower bounds one of
+    /// these and each of their unbroken dependencies met as such a lower
+    /// bound's is, one holding a LitVar or with a lower bound at least.
+    fn filled_by_places_in(&self, graph: &Graph) -> BTreeSet<ClassId> {
+        let nothing = self.nothing_enters_in(graph);
+        let mut found: BTreeSet<ClassId> = BTreeSet::new();
+        loop {
+            let alone = |class: &ClassId| found.contains(class) || nothing.contains(class);
+            let more: Vec<ClassId> = self
+                .classes
+                .roots()
+                .filter(|root| !alone(root))
+                .filter(|&root| {
+                    let held = self.classes.held(root);
+                    !self.is_solved(root)
+                        && !self.has_no_value(root)
+                        && !self.is_foreign(root)
+                        && held.kind.is_none()
+                        && held.facts.is_empty()
+                })
+                .filter(|&root| {
+                    let lowers = self.lower_bounds(root);
+                    (self.is_lit(root) || !lowers.is_empty())
+                        && lowers.into_iter().all(|lower| alone(&self.root(lower)))
+                })
+                .filter(|&root| {
+                    graph
+                        .unbroken(&Vertex::Class(root))
+                        .all(|(to, edge)| match (to, edge) {
+                            (Vertex::Class(class), Edge::Lower) => alone(class),
+                            (Vertex::Class(class), Edge::Taking | Edge::Part) => {
+                                self.gives_nothing(*class)
+                            }
+                            _ => false,
+                        })
+                })
+                .collect();
+            if more.is_empty() {
+                found.extend(nothing);
+                return found;
+            }
+            found.extend(more);
         }
     }
 

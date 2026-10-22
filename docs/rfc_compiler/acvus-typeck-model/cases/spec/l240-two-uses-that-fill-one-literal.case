@@ -1,0 +1,24 @@
+//@ spec: l.240, l.263, l.265, l.335, l.280
+// let x = 0; n(x); m(x);   // n(u16), n(i32); m(u16), m(&str)
+// Only LitVars enter X, so X waits for n and m, whose relations into it are
+// boundaries out of it, and each use depends on the other (l.240 (b), l.243):
+// each breaks the dependency (l.265) and reads X as ?a alone. n takes the
+// default i32 (l.335), m u16, and X is unified with both (l.280): refused in
+// every order, as before 09aef04e.
+extern fn n(u16);
+extern fn n(i32);
+extern fn m(u16);
+extern fn m(&str);
+let X;
+let ?a: lit 0;
+let `n(x)`;
+let `m(x)`;
+X = ?a;
+`n(x)` = n(X) @ n;
+`m(x)` = m(X) @ m;
+
+must fail;
+assert n == n#1;
+assert m == m#0;
+assert istar completeness n;
+assert istar completeness m;

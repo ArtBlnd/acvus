@@ -119,13 +119,11 @@ sampled orders).
 
 ## H7. Two uses that read one class
 
-A use depends on the nodes that record relations into the classes at the positions
-it reads (l.243), and the nodes that record relations into a class are those the
-class depends on (l.246): by l.240 (b), the relations not yet recorded into it by a
-node at whose position it lies. So two uses that both read a class depend on each
-other, each breaks its dependency on the other (l.265), and each reads the class
-without the other's relations. Witness, refused in every order
-(`cases/holes/h7-two-uses-that-read-one-class.case`):
+Not a hole since 09aef04e. Before it, a use depended on the nodes that record
+relations into the classes at the positions it reads (l.243), and a class on every
+node at whose position it lay (l.240 (b)). So two uses that both read a class
+depended on each other, each broke its dependency on the other (l.265), and each
+read the class without the other's relations:
 
 ```
 let mut x = 0;
@@ -138,21 +136,20 @@ probe(x);                // probe(u16), probe(i32)
 ```
 
 `probe` passes `x` into a parameter its declarations write, a boundary out of `X`
-(l.213), and `x + y` depends on it, so `probe` reads `X` without `x + y`'s
-relations, as `?a` alone, takes the default `i32` (l.335), and `X ⇝ i32` fails once
-`X` is `u16`: `x + y`'s relations wait for `probe` (l.265), and `R1`, at `x + y`'s
-position, depends on those it has not yet recorded (l.240 (b)), so `X` waits for
-`R1`'s `u16` in every order, and is not one only LitVars enter (l.284). The
-dependency is not one to leave out: while only LitVars enter `X`, `?N ⇝ U` unifies
-it with the parameter (l.280), so `probe` can change what `x + y` reads. A reading
-that left out of a node's dependencies the nodes that would record no lower bound,
-equation or kind into the class it reads made the outcome depend on the order:
-`let x = 0; n(x); m(x);` with `n(u8)`, `n(u16)`, `m(u16)` and `m(&str)` reached
-`n(u16)` accepted where `m` was decided first, and `n` refused where `n` was. It is
-removed. `design/18-invariant-points.md` drafted an order of solving under which
-what `probe` records into `X` is no source until `X`'s own relations leave it
-without a type, so that `x + y` does not depend on `probe`; the text's fill
-(l.284), which that draft's direction became, leaves this dependency as it is.
+(l.213), and `x + y` depended on it, since while only LitVars enter `X`, `?N ⇝ U`
+unifies it with the parameter (l.280). So `probe` read `X` without `x + y`'s
+relations, as `?a` alone, took the default `i32` (l.335), and `X ⇝ i32` failed once
+`X` was `u16`: refused in every order. A reading that left that dependency out
+whatever entered `X` made `let x = 0; n(x); m(x);` depend on the order.
+
+Since 09aef04e a class waits for a node whose only relation into it is a boundary
+out of it only while only LitVars enter it, judged as whether nothing enters it is
+(l.240 (b)), the condition of the fill that boundary would take part in (l.284).
+`X` has the lower bound `R1`, which waits for `x + y`, so it does not wait for
+`probe`; `probe` waits for `x + y` and reads `u16`: accepted in every order,
+`probe(u16)` (`cases/holes/h7-two-uses-that-read-one-class.case`). `n(x); m(x)`,
+where only LitVars enter `X`, keeps its dependencies and its one refusal
+(`cases/spec/l240-two-uses-that-fill-one-literal.case`).
 
 ## T1. A type parameter's bound
 

@@ -1,0 +1,24 @@
+//@ spec: l.240, l.271, l.265
+// let mut x = 0; while c { x = id(x); } n(x); m(x);   // id<T>(T) -> T
+// id is decided at once, and its lower bounds make a cycle with X, merged
+// into one class (l.271) that only LitVars enter: n and m depend on each
+// other as without id, and the program is refused in every order.
+extern fn id<T>(T) -> T;
+extern fn n(u16);
+extern fn n(i32);
+extern fn m(u16);
+extern fn m(&str);
+let X;
+let ?a: lit 0;
+let R;
+let `n(x)`;
+let `m(x)`;
+X = ?a;
+R = id(X) @ id;
+X = R;
+`n(x)` = n(X) @ n;
+`m(x)` = m(X) @ m;
+
+must fail;
+assert istar completeness n;
+assert istar completeness m;

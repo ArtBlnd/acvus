@@ -109,6 +109,48 @@ impl State {
         by_kind.into_iter().chain(by_fact).collect()
     }
 
+    /// The classes at a node's positions into which all the node records is a
+    /// boundary out of them (l.240 (b)): for a use, an argument each candidate
+    /// writes a type for, and each class within the depth a candidate writes
+    /// terms there, a split relating them by boundaries toward the types it
+    /// writes (l.280), unless the class lies elsewhere at the use too, at its
+    /// result, its exit, within the depth of its result, or at an argument a
+    /// candidate writes a variable for. No other node records only so.
+    pub(crate) fn passed_out_only(&self, kind: &NodeKind) -> BTreeSet<ClassId> {
+        let NodeKind::Use {
+            callee,
+            args,
+            result,
+            exit,
+        } = kind
+        else {
+            return BTreeSet::new();
+        };
+        let candidates = self.candidates(callee, args.len());
+        let mut out = BTreeSet::new();
+        let mut into: BTreeSet<ClassId> = [result]
+            .into_iter()
+            .chain(exit)
+            .map(|&class| self.root(class))
+            .collect();
+        for candidate in &candidates {
+            let sig = &candidate.sig;
+            into.extend(self.within_depth(*result, sig.result()));
+            for (arg, param) in args.iter().zip(sig.params()) {
+                match param {
+                    SigTy::Term(_) => {
+                        out.insert(self.root(*arg));
+                        out.extend(self.within_depth(*arg, param));
+                    }
+                    SigTy::Var(_) => {
+                        into.insert(self.root(*arg));
+                    }
+                }
+            }
+        }
+        out.difference(&into).copied().collect()
+    }
+
     /// The classes at the positions inside `class`'s kind where `ty` writes a
     /// term, down to where it writes a variable.
     pub(super) fn within_depth(&self, class: ClassId, ty: &SigTy) -> BTreeSet<ClassId> {

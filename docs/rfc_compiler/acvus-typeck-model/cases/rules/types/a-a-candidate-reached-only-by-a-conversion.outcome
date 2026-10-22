@@ -3,9 +3,9 @@ run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Record
 outcome 1
   refused
   value `f(..)`: none
-  value `make()`: none
+  value `make()`: A
   decision f: undecided
   decision make: make#0
+  check `make.Result <= make()`: Ok(Identity)
   refusal no_value `f(..)`
-  refusal no_value `make()`
   I* of a final state: []
