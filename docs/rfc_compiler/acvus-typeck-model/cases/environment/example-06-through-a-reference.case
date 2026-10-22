@@ -1,11 +1,10 @@
-//@ spec: Example 6 through a reference; design/17-environment.md
+//@ spec: Example 6 through a reference, l.429–443; l.188, l.221
 // let mut last = None;
 // let r = &mut last;
 // let remember = |x| *r = Some(x);
 // remember(1u8);
 // *r, Some(x), S and X are joined to the capture R; the write through it is a
 // boundary whose payload, L's, takes a lower bound (l.280).
-//@ reading: captures = environment
 group λ in run {
     let X;
     let S;

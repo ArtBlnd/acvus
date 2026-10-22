@@ -1,0 +1,37 @@
+//@ spec: l.343, l.188, l.265, l.335; Example 12, l.533–551
+// let mut x = 0;
+// while c { x = { x + 1 }; }
+// x + 1 names the capture X, and the lambda's result type is joined to it, so
+// the whole block is the lambda's environment, the run's (l.188): the call
+// meets the environment's result type, and x + 1 is decided in the run's
+// binding group, as without the block. It reads X without its own relations
+// (l.263, l.265), as the LitVar alone, and narrows to i32 by the default
+// (l.335).
+extern fn core::add(&u8, &u8) -> u8;
+extern fn core::add(&u16, &u16) -> u16;
+extern fn core::add(&i32, &i32) -> i32;
+group λ in run {
+    let `λ result`;
+    let `&x`;
+    let ?one: lit 1;
+    let `&1`;
+    let R;
+    fn λ() -> `λ result`;
+    `λ result` = R;
+}
+let X;
+let ?zero: lit 0;
+let `{..}`: lambda λ;
+let `{..}()`;
+X = ?zero;
+`{..}()` = (`{..}`)() @ call;
+X = `{..}()`;
+group λ {
+    `&x` = &X @ `&x`;
+    `&1` = &?one @ `&1`;
+    R = core::add(`&x`, `&1`) @ `x + 1`;
+}
+
+must pass;
+assert X: i32;
+assert `x + 1` == core::add#2;

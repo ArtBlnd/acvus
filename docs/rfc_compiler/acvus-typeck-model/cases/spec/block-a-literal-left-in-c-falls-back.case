@@ -1,0 +1,22 @@
+//@ spec: l.343, l.188, l.217, l.290
+// let x = { 1 };
+// The block is (|| 1)() (l.343). Its expression names no capture, so it is
+// the lambda's generic part (l.188): the result type holds the LitVar alone,
+// which nothing decides in the lambda's binding group, where nothing falls
+// back (l.288), so it is left in C. The call's instance copies it into the
+// run's binding group (l.217), where the copy falls back to i32 (l.290).
+group λ in run {
+    let `λ result`;
+    let ?one: lit 1;
+    fn λ() -> `λ result`;
+    `λ result` = ?one;
+}
+let X;
+let `{..}`: lambda λ;
+let `{..}()`;
+`{..}()` = (`{..}`)() @ call;
+X = `{..}()`;
+
+must pass;
+assert X: i32;
+assert call == calls {λ};

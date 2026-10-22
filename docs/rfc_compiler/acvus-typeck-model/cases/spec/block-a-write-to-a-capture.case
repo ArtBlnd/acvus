@@ -1,0 +1,42 @@
+//@ spec: l.343, l.188, l.86; holes.md, O4
+// let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
+// let y = { x = make_b(); 0u8 };
+// probe(x);                // probe(A), probe(B)
+// The write names the capture X, so it and make_b() are the lambda's
+// environment, recorded once in the run's binding group when its solving
+// starts (l.188): X joins A and B by the cast, B (l.86), and probe reads B.
+// One outcome in every order.
+extern type A;
+extern type B;
+extern fn make_a() -> A;
+extern fn make_b() -> B;
+#[cast] extern fn up(A) -> B;
+#[conversion] extern fn down(B) -> A;
+extern fn probe(A);
+extern fn probe(B);
+group λ in run {
+    let `λ result`;
+    let `make_b()`;
+    let 0u8: u8;
+    fn λ() -> `λ result`;
+    `λ result` = 0u8;
+}
+let X;
+let Y;
+let `make_a()`;
+let `{..}`: lambda λ;
+let `{..}()`;
+let `probe(x)`;
+`make_a()` = make_a() @ make_a;
+X = `make_a()`;
+`{..}()` = (`{..}`)() @ call;
+Y = `{..}()`;
+`probe(x)` = probe(X) @ probe;
+group λ {
+    `make_b()` = make_b() @ make_b;
+    #[by_name] X = `make_b()`;
+}
+
+must pass;
+assert X: B;
+assert probe == probe#1;

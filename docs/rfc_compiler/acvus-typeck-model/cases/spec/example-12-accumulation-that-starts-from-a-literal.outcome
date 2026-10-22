@@ -1,5 +1,5 @@
 // What the model gives, written by `BLESS=1` (design/19-cases.md).
-run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording, captures: AsStated }, every order
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
 outcome 1
   accepted
   value `&1`: &u16
@@ -31,7 +31,7 @@ outcome 1
   check `x + y.Result <= R1`: Ok(Identity)
   check `y + 1.Result <= R2`: Ok(Identity)
   I* of a final state: []
-run 2: Readings { visibility: ByMember, binding_path: AsStated, deferral: Reading, captures: AsStated }, every order
+run 2: Readings { visibility: ByMember, binding_path: AsStated, deferral: Reading }, every order
 outcome 1
   accepted
   value `&1`: &u16

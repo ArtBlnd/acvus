@@ -1,4 +1,4 @@
-//@ spec: Example 6, l.429–443, called with two types
+//@ spec: Example 6, l.429–443, called with two types; l.188
 // let mut last = None;
 // let remember = |x| last = Some(x);
 // remember(1u8); remember(2u16);
@@ -29,5 +29,6 @@ group λ {
     `λ result` = `()`;
 }
 
-// Refused in every order: both instances' Some(x) reach L.
+// Both calls meet X, and u8 ⊔ u16 has no join.
 must fail;
+assert refused no_join;

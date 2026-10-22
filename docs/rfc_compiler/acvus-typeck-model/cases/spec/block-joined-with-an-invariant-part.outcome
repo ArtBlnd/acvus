@@ -1,0 +1,20 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
+outcome 1
+  accepted
+  value X: Vec<u8>
+  value `make()`: Vec<u8>
+  value `new()`: none
+  value `{..}`: Fn/0
+  value `{..}()`: Vec<u8>
+  value `λ result`: none
+  decision call: calls {λ}
+  decision make: make#0
+  decision new: new#0
+  check `call#λ/new() <= call#λ/λ result`: Ok(Identity)
+  check `call#λ/new.Result <= call#λ/new()`: Ok(Identity)
+  check `call#λ/λ result <= {..}()`: Ok(Identity)
+  check `make() <= X`: Ok(Identity)
+  check `make.Result <= make()`: Ok(Identity)
+  check `{..}() <= X`: Ok(Identity)
+  I* of a final state: []

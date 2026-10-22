@@ -1,0 +1,26 @@
+//@ spec: l.343, l.188, l.217, l.280, l.284
+// let x: Vec<u8> = { Vec::new() };
+// new's T is left in the lambda's C, and the call's instance copies it
+// (l.217). The call's result passes into the Vec<u8> the text writes, a
+// boundary whose split records a boundary toward u8 (l.280), and the copy of
+// T, which nothing enters, is filled with u8 (l.284).
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+group λ in run {
+    let `λ result`;
+    let `new()`;
+    fn λ() -> `λ result`;
+    `λ result` = `new()`;
+}
+let E: u8;
+let X: Vec<E>;
+let `{..}`: lambda λ;
+let `{..}()`;
+`{..}()` = (`{..}`)() @ call;
+X = `{..}()`;
+group λ {
+    `new()` = new() @ new;
+}
+
+must pass;
+assert X: Vec<u8>;

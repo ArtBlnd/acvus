@@ -1,0 +1,25 @@
+//@ spec: l.343, l.188, l.217, l.290
+// let x = { Vec::new() };
+// new's T is an unknown of the lambda's binding group that nothing enters
+// there, so it is left in C (l.214). Its copy in the run's binding group has
+// nothing entering it and no place it passes into, and falls back to !
+// (l.290).
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+group λ in run {
+    let `λ result`;
+    let `new()`;
+    fn λ() -> `λ result`;
+    `λ result` = `new()`;
+}
+let X;
+let `{..}`: lambda λ;
+let `{..}()`;
+`{..}()` = (`{..}`)() @ call;
+X = `{..}()`;
+group λ {
+    `new()` = new() @ new;
+}
+
+must pass;
+assert X: Vec<!>;

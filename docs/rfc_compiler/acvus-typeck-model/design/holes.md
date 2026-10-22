@@ -77,17 +77,16 @@ nothing enters, is filled with `u8` (l.284). The model accepts it
 
 ## H5. A lambda's node that reads a capture
 
-Not a hole. A lambda is a binding group of its own (l.23), solved before the group
-in which a use records its C (l.215), which for a lambda is its enclosing body's. A
-capture's type is a class of the enclosing group (l.212), which the lambda shares
-and does not solve (l.213, l.217), and no row makes anything wait for what the
-enclosing group records into a shared class (l.240–246). So a lambda's use that
-reads a capture reads it as nothing when the lambda is solved. The position then
-decides nothing, every candidate remains, and the use is not decided (l.263,
-l.335): it stays in C (l.214) and is decided in the copy, where `X` is `A`. Encoding
-found it as a hole while the model decided every node it read, one whose read
-decides nothing included, and refused there. One outcome, accepted, in every order
-(`cases/holes/h5-a-lambda-reads-a-capture.case`):
+Not a hole. Before 8978eb70 a lambda was a binding group of its own (l.23), solved
+before the group in which a use records its C (l.215), which for a lambda is its
+enclosing body's. A capture's type is a class of the enclosing group (l.212), which
+the lambda shared and did not solve (l.213, l.217), and no row made anything wait
+for what the enclosing group records into a shared class (l.240–246). So a
+lambda's use that read a capture read it as nothing when the lambda was solved.
+The position then decided nothing, every candidate remained, and the use was not
+decided (l.263, l.335): it stayed in C (l.214) and was decided in the copy, where
+`X` is `A`. Encoding found it as a hole while the model decided every node it read,
+one whose read decides nothing included, and refused there.
 
 ```
 let x = make();          // make() -> A
@@ -95,11 +94,10 @@ let f = || probe(x);     // probe(A), probe(B)
 f();
 ```
 
-Read by functions §2, what a lambda's captured environment holds is not
-generalized and belongs to where it was written (`design/17-environment.md`,
-`Captures::Environment`): `probe` names the capture `X`, so it is the enclosing
-group's, decided there once, and reads `X` as `A`. One outcome, accepted, in every
-order (`cases/environment/h5-a-lambda-reads-a-capture.case`).
+Since 8978eb70 a lambda's captured environment is the enclosing group's (l.188):
+`probe` names the capture `X`, so it is the enclosing group's, decided there once,
+and reads `X` as `A`. One outcome, accepted, in every order
+(`cases/holes/h5-a-lambda-reads-a-capture.case`).
 
 ## H6. Example 14's `q` has no value
 
@@ -286,16 +284,17 @@ let s = &mut r;
 
 ## O4. A capture written after a use reads it
 
-A lambda's write to a capture reached by name is a meeting, and stays in the
-lambda's C (Example 6, l.440); it is recorded into the capture's class only when a
-call of the lambda's value is decided and makes its instance (l.198). Until then
-nothing at the capture's class waits for that call: the class lies at no position
-of it (l.240 (b)). So the capture's class may be solved before the call or after
-it, and so may a use reading it. Witness, three outcomes in the model
-(`cases/holes/o4-a-capture-written-after-a-use-it-reads.case`): `probe` decided
-as `probe(B)`, accepted; as `probe(A)`, accepted with `x: B`, `B ⇝ A` being the
-conversion; and as `probe(A)`, refused with `x: A`, at the instance's `V ≤ X`
-(l.292), `X` solved before the instance recorded it:
+Not an order since 8978eb70, where the text takes a lambda's captured environment
+as the enclosing binding group's (l.188). Before it, a lambda's write to a capture
+reached by name was a meeting, and stayed in the lambda's C (Example 6, l.440); it
+was recorded into the capture's class only when a call of the lambda's value was
+decided and made its instance (l.198). Until then nothing at the capture's class
+waited for that call: the class lay at no position of it (l.240 (b)). So the
+capture's class could be solved before the call or after it, and so could a use
+reading it. The model gave three outcomes: `probe` decided as `probe(B)`,
+accepted; as `probe(A)`, accepted with `x: B`, `B ⇝ A` being the conversion; and
+as `probe(A)`, refused with `x: A`, at the instance's `V ≤ X` (l.292), `X` solved
+before the instance recorded it:
 
 ```
 let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
@@ -306,15 +305,18 @@ put(make_b());
 
 Without `probe(x)`, two outcomes: `x: B` accepted, and `x: A` refused at `V ≤ X`.
 
-The invariant broken is that a node recording into a class is seen as the class's
-dependency before it records and stays after: a lambda's instance writes classes
+The invariant broken was that a node recording into a class is seen as the class's
+dependency before it records and stays after: a lambda's instance wrote classes
 its call does not lie at.
 
-Read by the captured environment (`design/17-environment.md`,
-`Captures::Environment`), `V` is joined to the capture `X` by `x = v`, so `V ≤ X`
-is the enclosing group's, recorded once, and `V` lies at the call's positions:
-`X` and `probe` wait for the call. With `probe(x)`, one outcome, `x: B` and
-`probe(B)`, accepted; without it, one outcome, `x: B`, accepted (same test).
+Now `V` is joined to the capture `X` by `x = v`, so `V ≤ X` is the environment's,
+recorded once in the enclosing group, and `V` lies at the call's positions (l.240
+(b)): `X` and `probe` wait for the call. With `probe(x)`, one outcome, `x: B` and
+`probe(B)`, accepted (`cases/holes/o4-a-capture-written-after-a-use-it-reads.case`);
+without it, one outcome, `x: B`, accepted
+(`cases/holes/o4-a-capture-written-after-a-use.case`). A block writing a capture,
+`{ x = make_b(); 0u8 }`, is such a lambda called where it lies (l.343), and has
+one outcome too (`cases/spec/block-a-write-to-a-capture.case`).
 
 ## O5. Two lends of one place
 

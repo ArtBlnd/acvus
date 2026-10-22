@@ -4,9 +4,9 @@
 // let f = if c { put } else { choose(x) };   // choose(A) -> Fn/1, choose(B) -> Fn/1
 // f(x);
 // choose and f(x) break their dependencies on each other.
-// Decided after the call, under Deferral::Reading, choose reads X leaving out
-// the call, and with it the instance's make_b() ≤ X, so it reads A, as it does
-// decided before the call (l.263).
+// The captured environment is the enclosing group's (l.188), so make_b() ≤ X is
+// recorded where it is written, and no read leaves it out with the call: choose
+// reads B.
 //@ reading: deferral = reading
 extern type A;
 extern type B;
@@ -43,4 +43,4 @@ group λ {
 }
 
 must pass;
-assert choose == choose#0;
+assert choose == choose#1;

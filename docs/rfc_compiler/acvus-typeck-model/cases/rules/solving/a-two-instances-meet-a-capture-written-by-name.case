@@ -1,14 +1,14 @@
-//@ spec: l.221, l.229, l.276, l.292
+//@ spec: l.188, l.198, l.221, l.229, l.276, l.292
 // let mut last = None;
 // let remember = |x| last = Some(x);
 // remember(1u8);
 // remember(2u16);
 // last is reached by name and its type L is an unknown of the enclosing binding
 // group, so the write in the lambda is a meeting, L ≥ Some(x) (l.221, l.229).
-// x's type is universal (l.212), so the lower bound stays in the lambda's C and
-// each call copies it with its own X' (l.217). L takes Option, and its payload
-// has the lower bounds ?k, S' = u8 and S'' = u16, which have no join (l.276):
-// refused at L's payload (l.292).
+// It names L, and x's type X is joined to it through S, so they are the
+// lambda's environment, recorded once in the enclosing group (l.188): X is one
+// unknown of that group, which both calls' arguments meet (l.198), X ≥ u8 and
+// X ≥ u16, which have no join (l.276): refused at X (l.292).
 group λ in run {
     let X;
     let S;
@@ -39,4 +39,4 @@ group λ {
 must fail;
 assert `remember(1u8)` == calls {λ};
 assert `remember(2u16)` == calls {λ};
-assert refused no_join `L.Payload(Some)`;
+assert refused no_join X;

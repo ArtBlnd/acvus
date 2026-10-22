@@ -1,4 +1,4 @@
-//@ spec: Example 6, l.429–443
+//@ spec: Example 6, l.429–443; l.188
 // let mut last = None;
 // let remember = |x| last = Some(x);
 // remember(1u8);
@@ -26,7 +26,9 @@ group λ {
     `λ result` = `()`;
 }
 
+// X, S and Some(x) are the environment's, solved in the enclosing group, where
+// the call meets X.
 must pass;
 assert L: Option<u8>;
-// S stays in the lambda's C.
-assert S: none;
+assert S: u8;
+assert X: u8;

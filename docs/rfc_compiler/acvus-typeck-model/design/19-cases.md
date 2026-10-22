@@ -113,7 +113,7 @@ classes, and `universal A;` a universal.
 | Directive | Means | Where none is written |
 |---|---|---|
 | `//@ spec: …`, `//@ hole: H7` | what the case witnesses | — |
-| `//@ reading: deferral = reading, captures = environment` | a run under these readings, the others the default; each line a run, `default` the defaults | one run, `Readings::default()` |
+| `//@ reading: deferral = reading, binding_path = after_path` | a run under these readings, the others the default; each line a run, `default` the defaults | one run, `Readings::default()` |
 | `//@ orders: all` | every order, which must end within 100 000 states | `all` |
 | `//@ orders: sampled 200` | 200 sampled orders (note 13, reading 2) | — |
 | `//@ order: solve A, fill B, decide f, fallback` | one order: the entry's steps, then its first step until none is left, falling back where none is | — |
@@ -332,6 +332,12 @@ steps; `golden()` and every expectation read what they read without it.
   refusal's kind) as the same pattern, and a text it matched in part
   (`starts_with`, `contains`) whole, as the model gives it. Example 14's copied
   decisions, which its test found by the end of their names, are named whole.
+- Since 8978eb70, where the text took a lambda's captured environment as the
+  enclosing binding group's (l.188), the seven of those cases that asserted the
+  capture rule of then beside a twin of one name under `cases/environment` are
+  their twins, each moved to its place; 4 cases remain under `cases/environment`.
+  9 cases under `cases/spec`, `block-*`, test the Block section (l.343), a block
+  solved as a lambda called where it lies, each derived before it was run.
 - 13 cases under `cases/phases` test each phase along a written order, by the line
   of the spec it rests on: recording (l.221, l.229–231), the join (l.80–91, l.171,
   l.271, l.276), splits (l.280), unification (l.156, l.160–165), nodes (l.248,

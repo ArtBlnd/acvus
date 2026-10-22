@@ -35,11 +35,10 @@ Every binding group, in every context its text is solved for:
   state that made the instance.
 
 A relation is checked in each context that gives every class it names a value. A
-lambda never instantiated leaves its relations on enclosing groups' classes
-unchecked, since nothing records them (l.217). Read by the captured environment
-(note 17), those relations are the environment's, checked in the enclosing group's
-contexts whether or not the lambda is instantiated, and an instance's argument
-meets the environment's parameter there.
+lambda's relations on enclosing groups' classes are its environment's (l.188),
+checked in the enclosing group's contexts whether or not the lambda is
+instantiated, and an instance's argument meets the environment's parameter
+there.
 
 Besides the relations, l.292's conditions: no refusal, every class outside C with a
 value, and every node outside C reached.

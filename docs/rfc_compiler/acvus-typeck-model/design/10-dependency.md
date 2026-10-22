@@ -45,10 +45,10 @@ met.
    being decided (l.243). Without it, a class at its position, which nothing
    entered until it recorded, met its dependents' dependencies on it, and the
    outcome depended on the order (`holes.md`, H7).
-6. **A call of a function value's positions.** Read by the captured environment,
-   they include the parameters and the result type in the environment of each
-   lambda its callee's Values name at the moment (note 17, row 3), so a class the
-   call meets there waits for it.
+6. **A call of a function value's positions** include the parameters and the
+   result type in the environment of each lambda its callee's Values name at the
+   moment (l.240 (b); note 17, row 3), so a class the call meets there waits for
+   it.
 
 ## Left open for change
 

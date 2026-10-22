@@ -1,14 +1,14 @@
-//@ spec: l.212, l.217, with Example 6 (l.429–443), l.86, l.276, l.290, l.292
+//@ spec: l.188, l.198, l.212, with Example 6 (l.429–443), l.86, l.276, l.292
 // let mut last = None;
 // let remember = |x| last = Some(x);
 // remember(1u8);
 // remember(2u16);
-// As in Example 6, the write is a meeting L ≥ Option⟨S⟩ with S ≥ X, resting
-// on X, in the lambda's C. last's type L is the enclosing binding group's
-// class, not universal (l.212), so each instance shares it and copies only
-// S and X (l.217): L's payload P has the lower bounds ?k, S' = u8 and
-// S'' = u16. ?k falls back to !, and u8 and u16 have no common ancestor
-// (l.86), so P has no value (l.276, l.292).
+// As in Example 6, the write names the capture L, and x's type X is joined to
+// it through S, so the write, S and X are the lambda's environment, the
+// enclosing binding group's (l.188), and X is no universal (l.212) but one
+// class both calls share: each argument meets X itself (l.198), X ≥ u8 and
+// X ≥ u16, which have no common ancestor (l.86), so X has no value (l.276,
+// l.292).
 group λ in run {
     let X;
     let S;
@@ -39,4 +39,4 @@ let `remember(2u16)`;
 must fail;
 assert `remember(1u8)` == calls {λ};
 assert `remember(2u16)` == calls {λ};
-assert refused no_join `L.Payload(Some)`;
+assert refused no_join X;

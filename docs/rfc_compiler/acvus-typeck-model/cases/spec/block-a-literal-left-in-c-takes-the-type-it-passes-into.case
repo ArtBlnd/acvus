@@ -1,0 +1,21 @@
+//@ spec: l.343, l.188, l.217, l.280, l.284
+// let x: u8 = { 1 };
+// As without the type, the LitVar is left in the lambda's C and copied by
+// the call's instance (l.217). The call's result passes into the u8 the text
+// writes, a boundary, and only LitVars enter it, so it is unified with u8
+// (l.280, l.284), and the copy of the LitVar with it.
+group λ in run {
+    let `λ result`;
+    let ?one: lit 1;
+    fn λ() -> `λ result`;
+    `λ result` = ?one;
+}
+let X: u8;
+let `{..}`: lambda λ;
+let `{..}()`;
+`{..}()` = (`{..}`)() @ call;
+X = `{..}()`;
+
+must pass;
+assert X: u8;
+assert `{..}()`: u8;

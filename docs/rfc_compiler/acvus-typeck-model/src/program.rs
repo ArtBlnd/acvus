@@ -23,8 +23,8 @@ pub struct Program {
     pub classes: Vec<TextClass>,
     pub items: Vec<(Name, Item)>,
     pub readings: Readings,
-    /// Which group solves each class and item, where `readings.captures`
-    /// moves it from the one it lies in.
+    /// Which group solves each class and item, where a lambda's environment
+    /// moves it from the one it lies in (l.188).
     cut: Cut,
 }
 
@@ -271,20 +271,6 @@ pub struct Readings {
     pub visibility: Visibility,
     pub binding_path: BindingPath,
     pub deferral: Deferral,
-    pub captures: Captures,
-}
-
-/// Which part of a lambda's text its binding group solves (l.205–217;
-/// `holes.md`, H5 and O4; `design/17-environment.md`).
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub enum Captures {
-    /// All of it, its captures shared with the enclosing group and recorded
-    /// into by each instance (l.217).
-    #[default]
-    AsStated,
-    /// All but its environment, the classes joined to a capture and the items
-    /// naming them, which the enclosing group solves once (functions §2).
-    Environment,
 }
 
 /// When the relations of a node that a broken dependency pointed to are
@@ -619,9 +605,7 @@ impl ProgramBuilder {
             readings: self.readings,
             cut: Cut::default(),
         };
-        if program.readings.captures == Captures::Environment {
-            program.cut = program.cut_environments();
-        }
+        program.cut = program.cut_environments();
         program
     }
 }

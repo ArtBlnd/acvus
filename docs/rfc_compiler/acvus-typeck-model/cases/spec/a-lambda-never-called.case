@@ -1,8 +1,9 @@
-//@ spec: l.217
+//@ spec: l.188, l.282
 // let x = "s";
 // let f = || takes_u8(x);  // takes_u8(u8), f never called
-// Under the spec, takes_u8 and its boundary X ⇝ u8 stay in the lambda's C, which
-// no instance copies, and the program is accepted.
+// takes_u8 and its boundary are the lambda's environment, the enclosing
+// group's, recorded whether or not a call reaches the lambda (l.188), and
+// &str ⇝ u8 fails (l.282).
 extern fn takes_u8(u8);
 
 group λ in run {
@@ -22,4 +23,5 @@ group λ {
     `takes_u8(x)` = takes_u8(X) @ takes_u8;
 }
 
-must pass;
+must fail;
+assert failing [`X ~> takes_u8.Param(0)`];

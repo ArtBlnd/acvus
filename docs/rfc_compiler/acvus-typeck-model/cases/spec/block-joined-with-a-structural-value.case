@@ -1,0 +1,26 @@
+//@ spec: l.343, l.188, l.217, l.89, l.280
+// let x = if c { { None } } else { Some(1u8) };
+// None's payload is left in the lambda's C and copied by the call's instance
+// (l.217). X joins Option⟨S⟩ and the copy's Option, and the payloads are
+// related by part lower bounds (l.280), the copy's giving nothing (l.284): X
+// is Option⟨u8⟩.
+group λ in run {
+    let `λ result`;
+    let ?k;
+    let None: Option<?k>;
+    fn λ() -> `λ result`;
+    `λ result` = None;
+}
+let X;
+let S;
+let u8: u8;
+let `Some(1u8)`: Option<S>;
+let `{..}`: lambda λ;
+let `{..}()`;
+S = u8;
+`{..}()` = (`{..}`)() @ call;
+X = `{..}()`;
+X = `Some(1u8)`;
+
+must pass;
+assert X: Option<u8>;

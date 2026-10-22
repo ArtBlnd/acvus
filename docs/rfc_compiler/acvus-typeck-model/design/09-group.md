@@ -55,16 +55,13 @@ the group takes the body's own types.
 6. **Several fixpoints.** A group whose solving reaches distinct fixpoints in
    different orders gives each to the groups after it, so an order dependence
    inside it shows in their outcomes.
-7. **A lambda's group** lies inside its enclosing body's and is solved before it
-   (l.215). The classes of enclosing groups its text names are shared: no unknowns
-   of it (l.213), never solved or fallen back there, so its relations on them stay
-   in its C, and a copy shares them (l.217). A lambda's use that reads one reads
-   what the lambda's group recorded there alone; where that decides nothing, the
-   use stays in C and is decided in each copy (`holes.md`, H5). Read by the
-   captured environment (`Captures::Environment`, note 17), the classes joined to
-   a capture and the items naming them are the enclosing group's, recorded there
-   once, and the lambda's group is the rest, which names no class of an enclosing
-   group.
+7. **A lambda's group** is its generic part (l.23, l.188): the classes joined to a
+   capture and the constraints on them, its environment, are the enclosing
+   group's, recorded there once whether or not a call reaches the lambda (note
+   17). The rest lies inside its enclosing body's group and is solved before it
+   (l.215). It names no class of an enclosing group, so its C holds none, and no
+   copy records into one (l.217). A block expression is such a lambda, called
+   where it lies (l.343).
 8. **Meeting and boundary** (l.221). A value passing into an unknown of the
    place's own group meets it. One passing into a binding of an enclosing group
    reached by name meets it where that binding's type is an unknown of its own
@@ -72,17 +69,16 @@ the group takes the body's own types.
    (l.213). One passing through a reference from a binding of an enclosing group
    is a boundary, whatever class the place's last projection names, since that
    class is the lambda's own until the reference's target is known (Example 7).
-   Read by the captured environment, an item of the environment keeps the place
-   its text gives, and is recorded in the enclosing group.
+   A constraint of a lambda's environment keeps the place its text gives, and is
+   recorded in the enclosing group (l.188).
 9. **A call of a function value** reads the value's Values: the lambdas of the
    function values met in its class by equations or lower bounds (l.175, l.183).
-   Decided, it makes an instance of each lambda's C, its arguments meeting the
-   copies of the lambda's parameters' types, and the copy of its result type
-   entering the call's result (l.198). A call whose callee's Values name no
-   lambda decides nothing and is not decided then (note 08, reading 19). Read by
-   the captured environment, an argument meets the lambda's parameter itself
-   where its environment holds it, and the call's result takes the environment's
-   result type where it holds that (note 17, row 3).
+   Decided, it makes an instance of each lambda's C, each argument passing into
+   the copy of the generic part's parameter, or into the environment's parameter
+   itself, and the copy of the generic part's result type, or the environment's,
+   entering the call's result as a lower bound (l.198; note 17, row 3). A call
+   whose callee's Values name no lambda decides nothing and is not decided then
+   (note 08, reading 19).
 10. **A receiver's `T̄`** is universal (l.316), and the receiver's class holds the
    kind the text writes, so it is decided and universal at once: an argument
    passes into its copy by a boundary (Example 14, step 2). A node that reads

@@ -56,7 +56,7 @@ The primitives, each assuming only those before it:
 | 14 | The certificate and its checker | l.221–233, l.282, l.292 |
 | 15 | I\* | l.240–265, `docs/notes/typeck-pivot.md` §1–2 |
 | 16 | Inputs up to a size (draft) | l.221–233, l.294–312 |
-| 17 | The captured environment | l.198, l.205–221, functions §2 |
+| 17 | The captured environment | l.188, l.198, l.205–221, l.240, functions §2 |
 | 18 | Own relations first, invariant points last (draft, superseded by l.280 and l.284) | l.223, l.236–292, l.335 |
 | 19 | Cases and their runner, and the phases' reports | I2, I3, I4, notes 13–15 |
 

@@ -1,15 +1,17 @@
 # 17 The captured environment
 
-Rests on the spec's l.198 (a call of a function value), l.205–217 (binding groups,
-C, instances), l.221 (meeting), l.240 (b) (what a class depends on), l.263, l.282
-and l.292; on `docs/rfc_compiler/functions.md` §2 (a function value bound by `let`
+Rests on the spec's l.188 (the captured environment), l.198 (a call of a function
+value), l.205–217 (binding groups, C, instances), l.221 (meeting), l.240 (b) (what a
+class depends on), l.263, l.282 and l.292; on `docs/rfc_compiler/functions.md` §2 (a function value bound by `let`
 generalizes what its type leaves unconstrained, "except what the enclosing scope or
 the captured environment holds: those belong to where they were written"; its
 environment is captured once, where it is written) and `types.md` §1 (every slot
 has one type; values meeting through a chain of slots are of one type); and on
 `holes.md`, H5 and O4. Its direction and its rows were agreed with 준량 on
-2026-10-21. It is a reading, `Captures::Environment`, beside the spec as stated,
-`Captures::AsStated`, the default, so that both run on the same witnesses. The code
+2026-10-21, as a reading, `Captures::Environment`, beside the spec as stated then,
+`Captures::AsStated`. The text took them at 8978eb70, as 준량 decided (l.23, l.188,
+l.198, l.211, l.212, l.240), and both readings are removed with it: the
+environment is cut always. The code
 is `Program::cut_environments` and `Program::owner`, `Program::item_group` and
 `Program::is_universal` in `src/program.rs`, `State::positions` and
 `State::environment_of` in `src/node/position.rs`, and the certificate's contexts and
@@ -17,15 +19,15 @@ is `Program::cut_environments` and `Program::owner`, `Program::item_group` and
 
 ## Meaning
 
-The spec solves a lambda's group before its enclosing one, and copies all of its C,
-the captures shared, at each call of its value (l.215, l.217). What the lambda
-records into a capture is then recorded only by the calls' instances, at none of
-their positions, so the capture and what reads it are decided before or after it by
-order (O4). A node of the lambda that reads a capture reads it before the enclosing
-group records into it, and where that decides nothing it is decided in each copy
-(H5, which is not a hole).
+Before 8978eb70 the spec solved a lambda's group before its enclosing one, and
+copied all of its C, the captures shared, at each call of its value (l.215, l.217).
+What the lambda recorded into a capture was then recorded only by the calls'
+instances, at none of their positions, so the capture and what reads it were
+decided before or after it by order (O4). A node of the lambda that read a capture
+read it before the enclosing group recorded into it, and where that decided
+nothing it was decided in each copy (H5, which is not a hole).
 
-Read by functions §2, the part of a lambda's text that its captured environment
+By l.188, as functions §2 has it, the part of a lambda's text that its captured environment
 holds is not generalized: it belongs to the enclosing group and is solved there,
 once. Only the rest is the lambda's binding group, generalized and copied at each
 call.
@@ -112,8 +114,8 @@ What each row excludes:
 
 ## Expected results
 
-Derived before running, under `Captures::Environment`; under `Captures::AsStated`
-every current test keeps its outcome.
+Derived before running, under `Captures::Environment`, before the text took it;
+under `Captures::AsStated` every test of then keeps its outcome.
 
 | Program | Expected |
 |---|---|
@@ -134,18 +136,26 @@ In each, I\* reports nothing and the certificate holds.
 
 ## Run
 
-Every row of the table holds as derived, each asserted under
-`Captures::Environment`, and under `Captures::AsStated` where the table states it
-(the cases under `cases/environment/`, and their twins of one name under
-`cases/spec/`, `cases/holes/` and `cases/istar/`). Under
-`Captures::Environment` each reaches one outcome in every order, I\* reports
-nothing, and the certificate holds of each accepted final state (a refused one has
-nothing to check, note 14).
+Every row of the table held as derived under `Captures::Environment`, each
+reaching one outcome in every order, I\* reporting nothing, and the certificate
+holding of each accepted final state (a refused one has nothing to check, note 14).
 
-With the default changed to `Captures::Environment`, 95 of the 99 tests pass; the
-four that fail are those whose first half asserts the spec's outcome through
-`Readings::default()`: H5, O4, Example 6's `S` and the lambda never called. That
-was run by changing the model, and no test keeps it.
+Since 8978eb70 the environment is cut always. The cases under
+`cases/environment/` that had a twin of one name asserting the spec's outcome of
+then, under `cases/spec/`, `cases/holes/` and `cases/istar/`, are in that twin's
+place, the twin removed: H5, both of O4, Example 6 and Example 6 called with two
+types, the lambda never called, and the call left out under `Deferral::Reading`.
+Each keeps its outcome. Five cases written by the text of then change:
+
+- `rules/classes/a-a-capture-shared-by-two-instances` and
+  `rules/solving/a-two-instances-meet-a-capture-written-by-name`, Example 6 called
+  with `1u8` and `2u16`, are refused at `x`'s type, which both calls share, and no
+  longer at `last`'s payload (What it omits).
+- `rules/solving/a-write-through-a-captured-reference-no-coercion-reaches` is
+  refused at the same boundary, now the enclosing group's.
+- `rules/classes/b-a-lambda-calling-a-captured-lambda` and
+  `spec/example-07-a-write-through-a-captured-reference` keep their outcomes, their
+  calls and writes decided and checked in the enclosing group.
 
 ## Open
 

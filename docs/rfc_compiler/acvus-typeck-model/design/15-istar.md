@@ -63,15 +63,12 @@ Every decided node, in each context its decision holds for:
 
 - A node of the entry, in the entry's end state.
 - A node decided in a group other than the entry, in that group's end state.
-- A node decided in a group whose text names classes of an enclosing group, a
-  lambda's above all, also in each state that records into those classes: in each
-  instance of its group's C that was made, under that instance's map, and, through
-  an instance made for the check, in the enclosing group's end state, so that a
-  lambda never called is checked as well. A lambda inside a function's body is so
-  checked in each instance of that function. Read by the captured environment
-  (note 17), the environment's nodes are the enclosing group's, decided and
-  checked in its end state, and the instance the check makes copies the generic
-  part.
+- A node decided in a lambda's group, its generic part (l.188), also in each
+  instance of that group's C that was made, under that instance's map, and,
+  through an instance made for the check, in the enclosing group's end state, so
+  that a lambda never called is checked as well. A lambda inside a function's body
+  is so checked in each instance of that function. The environment's nodes are the
+  enclosing group's, decided and checked in its end state.
 - A copy of a node left in C, in the state of its instance, as a node of that
   state.
 
@@ -117,7 +114,10 @@ never records.
   earlier encoding did not, naming an instance's relations by the instance alone:
   `let f = if c { put } else { choose(x) }; f(x);` with `put = |w| x = make_b()`,
   `choose(A)`, `choose(B)` and `make_a() ≤ X` reached `choose(A)` and `choose(B)`
-  by order under `Deferral::Reading`, and now reaches `choose(A)` in every order
+  by order under `Deferral::Reading`, and then reached `choose(A)` in every order.
+  Since 8978eb70 `put`'s write is its environment, the enclosing group's (l.188),
+  so `make_b() ≤ X` is recorded where it is written, no read leaves it out with
+  the call, and the program reaches `choose(B)` in every order
   (`cases/istar/a-call-left-out-leaves-out-its-instance-relations.case`).
 
 ## Expected results
@@ -135,10 +135,10 @@ Before the check runs, as its acceptance criteria:
 Run, the check reports these and no others: each witness of `holes.md` asserts,
 for the outcome of each final state, the nodes it reports there and how, and every
 other example asserts it reports none (`design/19-cases.md`: a case's `assert istar`,
-none where it writes none, of every final state). O4's `probe(A)` is a soundness violation
-where the program is accepted and a completeness one in its third outcome,
-refused at `put(..)#λ/V ≤ X` (`holes.md`, O4). Example 14 reports none over its
-sampled orders.
+none where it writes none, of every final state). Before 8978eb70, O4's `probe(A)`
+was a soundness violation where the program was accepted and a completeness one in
+its third outcome, refused at `put(..)#λ/V ≤ X`; since then O4 has one outcome and
+reports none (`holes.md`, O4). Example 14 reports none over its sampled orders.
 
 The table is as derived before that run. Since a node whose read decides nothing is
 no longer decided (note 08, reading 19), its H5 and O3 rows no longer hold, and both
@@ -149,7 +149,7 @@ the table names.
 ## Not covered
 
 - A class's solving, `α ≐ ⊔S` (l.286), is the decision the pivot's I\* is first
-  stated of, and this check decides only nodes again. O4's third outcome is such a
-  decision: `X` is solved as `A` before the call's instance records `B ≤ X`, and
-  the check reports it only through `probe`, which reads `X`. Read by the captured
-  environment, `X` waits for the call, and O4 has one outcome.
+  stated of, and this check decides only nodes again. Before 8978eb70, O4's third
+  outcome was such a decision: `X` was solved as `A` before the call's instance
+  recorded `B ≤ X`, and the check reported it only through `probe`, which reads
+  `X`. Since then `X` waits for the call, and O4 has one outcome.
