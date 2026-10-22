@@ -287,6 +287,9 @@ pub enum SigError {
     IdentityPlace,
     /// A reference whose target is a reference (l.64).
     RefTarget,
+    /// A function value, which a declaration makes none of: it returns one
+    /// only as a type variable takes it in (l.186).
+    FunctionValue,
 }
 
 impl Signature {
@@ -332,6 +335,9 @@ impl Signature {
             SigTy::Term(term) => {
                 if at_identity || matches!(**term, Term::Identity(_)) {
                     return Err(SigError::IdentityPlace);
+                }
+                if let Term::FunctionValue { .. } = **term {
+                    return Err(SigError::FunctionValue);
                 }
                 if let Term::Ref(_, SigTy::Term(target)) = &**term
                     && matches!(**target, Term::Ref(..))

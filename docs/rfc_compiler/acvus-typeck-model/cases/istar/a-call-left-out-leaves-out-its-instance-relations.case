@@ -1,12 +1,13 @@
 //@ spec: design/15-istar.md, what the check presupposes
 // let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
 // let put = |w| x = make_b();
-// let f = if c { put } else { choose(x) };   // choose(A) -> Fn/1, choose(B) -> Fn/1
+// let f = if c { put } else { choose(x, put) };   // choose(A, T) -> T, choose(B, T) -> T
 // f(x);
-// choose and f(x) break their dependencies on each other.
+// choose gives back the function value its T takes in, put's, and makes none
+// (l.186). choose and f(x) break their dependencies on each other (l.265).
 // The captured environment is the enclosing group's (l.188), so make_b() ≤ X is
 // recorded where it is written, and no read leaves it out with the call: choose
-// reads B.
+// reads B, and f(x) calls put's lambda.
 //@ reading: deferral = reading
 extern type A;
 extern type B;
@@ -14,8 +15,8 @@ extern fn make_a() -> A;
 extern fn make_b() -> B;
 #[cast] extern fn up(A) -> B;
 #[conversion] extern fn down(B) -> A;
-extern fn choose(A) -> Fn/1;
-extern fn choose(B) -> Fn/1;
+extern fn choose<T>(A, T) -> T;
+extern fn choose<T>(B, T) -> T;
 
 group λ in run {
     let W;
@@ -28,14 +29,16 @@ group λ in run {
 let X;
 let `make_a()`;
 let `|w| ..`: lambda λ;
+let PUT;
 let F;
-let `choose(x)`;
+let `choose(..)`;
 let `f(x)`;
 `make_a()` = make_a() @ make_a;
 X = `make_a()`;
-F = `|w| ..`;
-`choose(x)` = choose(X) @ choose;
-F = `choose(x)`;
+PUT = `|w| ..`;
+F = PUT;
+`choose(..)` = choose(X, PUT) @ choose;
+F = `choose(..)`;
 `f(x)` = (F)(X) @ `f(x)`;
 group λ {
     `make_b()` = make_b() @ make_b;
@@ -44,3 +47,4 @@ group λ {
 
 must pass;
 assert choose == choose#1;
+assert `f(x)` == calls {λ};

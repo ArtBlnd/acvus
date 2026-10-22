@@ -27,8 +27,9 @@ use crate::ty::{Constructor, HasTerm, Mutability, Name, Term, Ty, TyError, check
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct Value {
     term: Rc<Term<Value>>,
-    /// At a function value, the lambdas its Values names; none elsewhere, and
-    /// none at a function value a signature writes, which names no Values.
+    /// At a function value, the lambdas its Values names; none elsewhere. No
+    /// declaration, text or context writes a function value (l.186), so every
+    /// function value in a value is a class's, and names its Values.
     lambdas: Option<BTreeSet<Name>>,
 }
 
@@ -649,12 +650,6 @@ impl Checker<'_> {
                     parts.insert(part.clone(), ty);
                 }
                 let written = term.clone().map(|_, part| parts[&part].clone());
-                if let Term::FunctionValue { .. } = written {
-                    panic!(
-                        "{name} is a function value the text writes, which names no Values \
-                         (l.186; design/14-certificate.md, Open)"
-                    );
-                }
                 let holds = Value::from_term(written.clone()).is_ok_and(|written| written == value);
                 self.require(
                     context,
@@ -1322,9 +1317,8 @@ fn carries(from: &Value, to: &Value, coercion: &Coercion) -> bool {
 fn within(from: &Value, to: &Value) -> bool {
     if let Term::FunctionValue { .. } = from.term() {
         let (Some(lambdas), Some(reached)) = (&from.lambdas, &to.lambdas) else {
-            panic!(
-                "{from} reaching {to}, a function value that names no Values, carries Values by \
-                 no rule yet (l.186; design/14-certificate.md, Open)"
+            unreachable!(
+                "{from} and {to} are function values of classes, which name their Values (l.186)"
             );
         };
         return lambdas.is_subset(reached);

@@ -345,9 +345,10 @@ steps; `golden()` and every expectation read what they read without it.
 - `cases/certificate/a-function-value-passed-through-a-use` tests the
   certificate's Values (note 14): a lambda reaching a call only through a use's
   instance, and the call given no lambda to call. Where Values meet what no rule
-  decides yet, the checker panics (note 14, Open), and
-  `istar/a-call-left-out-leaves-out-its-instance-relations`, whose `choose` is
-  declared to give `Fn/1`, fails there until that is decided.
+  decides yet, the checker panics (note 14, Open).
+  `istar/a-call-left-out-leaves-out-its-instance-relations` declared `choose` to
+  give `Fn/1`, a function value no declaration makes since 80b33ad9 (l.186), and
+  gives back the one its `T` takes in.
 - 13 cases under `cases/phases` test each phase along a written order, by the line
   of the spec it rests on: recording (l.221, l.229–231), the join (l.80–91, l.171,
   l.271, l.276), splits (l.280), unification (l.156, l.160–165), nodes (l.248,
@@ -366,6 +367,4 @@ steps; `golden()` and every expectation read what they read without it.
   panicked, and the accepted one. The model did not end on
   `solving/a-two-literal-families-have-no-join` until a LitVar join that
   conflicts was made a join with no result (note 11, reading 4).
-- Every case passes but `istar/a-call-left-out-leaves-out-its-instance-relations`,
-  which panics where no rule is decided yet (note 14, Open), and every golden is
-  the model's.
+- Every case passes, and every golden is the model's.

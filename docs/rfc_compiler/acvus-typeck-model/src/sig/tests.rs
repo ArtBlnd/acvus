@@ -220,6 +220,21 @@ fn a_signature_is_checked_at_every_term_it_writes() {
         ),
         Err(SigError::RefTarget)
     );
+    let function_value = SigTy::term(Term::FunctionValue { arity: 1 });
+    assert_eq!(
+        Signature::new(vec![], false, vec![], function_value.clone(), &types),
+        Err(SigError::FunctionValue)
+    );
+    assert_eq!(
+        Signature::new(
+            vec![],
+            false,
+            vec![sig_ref(Mutability::Shared, function_value)],
+            SigTy::term(Term::Unit),
+            &types
+        ),
+        Err(SigError::FunctionValue)
+    );
     let bare_vec = sig_extern("Vec", vec![], None);
     assert!(matches!(
         Signature::new(

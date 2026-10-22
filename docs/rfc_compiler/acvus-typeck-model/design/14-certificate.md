@@ -12,7 +12,9 @@ An order of solving that accepts a program leaves a certificate: the value of ev
 class each binding group's solving made, with its name, and every decision. A
 function value in a value carries the lambdas its Values names (`State::values_of`),
 as a function value carries its facts on its type (l.186), so that a value is
-`Option⟨Fn/1{λ}⟩` where the solver's type is `Option⟨Fn/1⟩`. The
+`Option⟨Fn/1{λ}⟩` where the solver's type is `Option⟨Fn/1⟩`. No declaration, text
+or context writes a function value (l.186; note 02, reading 2), so every function
+value in a value is a class's, and names its Values. The
 checker regenerates, from the program's items and the decisions alone, every
 relation the text and the decisions give, and checks each on the certificate's
 closed values. A relation that does not hold on an accepted program is a soundness
@@ -129,9 +131,6 @@ fails there and the rule is decided with 준량:
   function value lies in by a signature (l.78, l.107).
 - A function value reaching a position that decides nothing, as a function value
   passing into a function type a declaration writes (l.199) does.
-- A function value a signature or the text writes, which names no Values: a
-  declaration whose result is `Fn/n`, against l.186's extern fn giving no function
-  value.
 - The element an extern-defined container indexes along its view, a cast.
 - A value a test plants, which a case writes as a type and so with no Values.
 

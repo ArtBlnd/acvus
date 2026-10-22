@@ -39,6 +39,11 @@ fields in declared order (l.54).
    both `&U`, and `&mut T` at `T = &mut U` is `&mut U`. Matching binds a variable
    directly under a reference to the reference's target, which is never a reference,
    so substituting what matching found gives back the type matched.
+2. **No function value.** A declaration makes no function value: it returns one
+   only as a type variable takes it in, as `T -> T` does (l.186). So a signature
+   writes none at any depth, and `Signature::new` refuses one
+   (`SigError::FunctionValue`); the text and a context write none either
+   (`ProgramBuilder::written`, `host`).
 
 ## Left open for change
 

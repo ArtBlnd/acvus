@@ -117,7 +117,9 @@ never records.
   by order under `Deferral::Reading`, and then reached `choose(A)` in every order.
   Since 8978eb70 `put`'s write is its environment, the enclosing group's (l.188),
   so `make_b() ≤ X` is recorded where it is written, no read leaves it out with
-  the call, and the program reaches `choose(B)` in every order
+  the call, and the program reaches `choose(B)` in every order. Since 80b33ad9 no
+  declaration gives a function value it was not given (l.186), and `choose` is
+  `choose(A, T) -> T`, `choose(B, T) -> T`, called as `choose(x, put)`
   (`cases/istar/a-call-left-out-leaves-out-its-instance-relations.case`).
 
 ## Expected results

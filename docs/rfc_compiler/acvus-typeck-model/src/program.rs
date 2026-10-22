@@ -534,11 +534,23 @@ impl ProgramBuilder {
         self.class(name, Origin::Lit(lit))
     }
 
+    /// A class holding a type the text writes, which is no function value: a
+    /// function value is a lambda's value alone (l.186).
     pub fn written(&mut self, name: &str, term: Term<Name>) -> Name {
+        assert!(
+            !matches!(term, Term::FunctionValue { .. }),
+            "{name}: the text writes no function value (l.186)"
+        );
         self.class(name, Origin::Written(term))
     }
 
+    /// A class holding a type a context gives, which is no function value
+    /// (l.186).
     pub fn host(&mut self, name: &str, term: Term<Name>) -> Name {
+        assert!(
+            !matches!(term, Term::FunctionValue { .. }),
+            "{name}: a context gives no function value (l.186)"
+        );
         self.class(name, Origin::Host(term))
     }
 
