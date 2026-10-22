@@ -53,7 +53,7 @@ A type is a finite term. A term consists of one constructor, its members and its
 | Enum | `E{V̄(T̄)}` | each payload | its variants |
 | Struct | `Self⟨T̄⟩` | one type parameter for each field, in the order the struct declares them | |
 | Extern-defined type | `N⟨T̄, ι⟩` | each argument, and the identity | |
-| Scalar | integer, float, `bool`, `char` (Rust's scalar types) | none | |
+| Scalar | the integers of 8 to 64 bits, `f32`, `f64`, `bool`, `char` | none | |
 | String | `String` | none | |
 | str | `str` | none | |
 | Unit type | `()` | none | |
@@ -75,7 +75,7 @@ A structural type is covariant in its members. The parts of a structural type ar
 
 ### Cast tree
 
-A declared cast goes from an extern-defined type or a reference to one, and changes neither whether it is a reference nor its mutability. An extern-defined container's view impl, an impl of `core::as_slice`, `core::as_slice_mut` or `core::as_str`, is a declared cast from a reference to that container to a reference to a slice or a `str` (operators §2, §5). The nodes of the cast tree are constructors, and a reference's node is its mutability and its target's constructor. The declared casts form a tree: at most one cast goes up from a node, they form no cycle, and where a cast goes from `&mut X` to `&mut Y`, the cast going up from `&X` goes to `&Y`.
+A declared cast goes from an extern-defined type or a reference to one, and changes neither whether it is a reference nor its mutability. An extern-defined container's view impl, an impl of `core::as_slice`, `core::as_slice_mut` or `core::as_str`, is a declared cast from a reference to that container to a reference to a slice or a `str` (operators §2, §5). The nodes of the cast tree are constructors, and a reference's node is its mutability and its target's constructor. The declared casts form a tree: at most one cast goes up from a node, they form no cycle, and where a cast goes from `&mut X` to `&mut Y`, the cast going up from `&X` goes to `&Y`. A declared cast's parameter writes its node with distinct type parameters as its parts, and its result writes those type parameters alone, so every type of a node goes up by its cast.
 
 ### Join
 
@@ -106,7 +106,7 @@ A coercion changes a value into a value of another type, and the function that c
 
 ### Rank
 
-A coercion is a composition of the Coercion table's rows in the order `reborrow? ; cast* ; structural?`: reborrow is the `&mut T ⇝ &T` row, cast a declared cast's row, and structural the object, enum and structural type's part rows. A part's coercion `⇝ₚ` is a composition of the object, enum and structural type's part rows and `! ⇝ U` alone. So a cast, a reborrow and a conversion are not used at a part. `! ⇝ U` and a declared conversion are no composition, and have no rank. Toward a given type, the composition is unique. Where no coercion is needed, the rank is `empty`. The stages are ordered `empty ≺ reborrow ≺ cast ≺ structural`, and the ranks of coercions are compared by their highest stage, then by their number of casts, then by the lower stages they take.
+A coercion is a composition of the Coercion table's rows in the order `reborrow? ; cast* ; structural?`: reborrow is the `&mut T ⇝ &T` row, cast a declared cast's row, and structural the object, enum and structural type's part rows used together as one stage, which changes the members and each remaining part by that part's coercion. A part's coercion `⇝ₚ` is a composition of the object, enum and structural type's part rows and `! ⇝ U` alone. So a cast, a reborrow and a conversion are not used at a part. `! ⇝ U` and a declared conversion are no composition, and have no rank. Toward a given type, the composition is unique. Where no coercion is needed, the rank is `empty`. The stages are ordered `empty ≺ reborrow ≺ cast ≺ structural`, and the ranks of coercions are compared by their highest stage, then by their number of casts, then by the lower stages they take.
 
 ## Equivalence classes
 

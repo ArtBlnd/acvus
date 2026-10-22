@@ -53,7 +53,7 @@ context의 타입은 host가 준다. context에 담긴 값은 실행이 끝난 �
 | Enum | `E{V̄(T̄)}` | 각 payload | variant들 |
 | Struct | `Self⟨T̄⟩` | field마다 타입 파라미터 하나, 선언한 순서대로 | |
 | Extern-defined type | `N⟨T̄, ι⟩` | 각 argument, 그리고 identity | |
-| Scalar | 정수, float, `bool`, `char` (Rust의 scalar type) | 없음 | |
+| Scalar | 8bit부터 64bit까지의 정수, `f32`, `f64`, `bool`, `char` | 없음 | |
 | String | `String` | 없음 | |
 | str | `str` | 없음 | |
 | Unit type | `()` | 없음 | |
@@ -75,7 +75,7 @@ structural type은 member에 대해 covariant다. structural type의 part는 cas
 
 ### Cast tree
 
-선언된 cast는 extern-defined type이나 그것을 가리키는 reference에서 가며, reference인지와 그 mutability를 바꾸지 않는다. extern-defined container의 view impl, 곧 `core::as_slice`, `core::as_slice_mut`, `core::as_str`의 impl은, 그 container를 가리키는 reference에서 slice나 `str`을 가리키는 reference로 가는 선언된 cast다(operators §2, §5). cast tree의 노드는 constructor이고, reference의 노드는 mutability와 target의 constructor다. 선언된 cast들은 tree를 이룬다. 곧 한 노드에서 위로 가는 cast는 많아야 하나이고, 순환이 없으며, `&mut X`에서 `&mut Y`로 가는 cast가 있으면 `&X`에서 위로 가는 cast는 `&Y`로 간다.
+선언된 cast는 extern-defined type이나 그것을 가리키는 reference에서 가며, reference인지와 그 mutability를 바꾸지 않는다. extern-defined container의 view impl, 곧 `core::as_slice`, `core::as_slice_mut`, `core::as_str`의 impl은, 그 container를 가리키는 reference에서 slice나 `str`을 가리키는 reference로 가는 선언된 cast다(operators §2, §5). cast tree의 노드는 constructor이고, reference의 노드는 mutability와 target의 constructor다. 선언된 cast들은 tree를 이룬다. 곧 한 노드에서 위로 가는 cast는 많아야 하나이고, 순환이 없으며, `&mut X`에서 `&mut Y`로 가는 cast가 있으면 `&X`에서 위로 가는 cast는 `&Y`로 간다. 선언된 cast의 parameter는 그 노드를, 서로 다른 type parameter를 part로 하여 적고, 결과는 그 type parameter만 쓴다. 그래서 한 노드의 모든 타입이 그 cast로 올라간다.
 
 ### Join
 
@@ -106,7 +106,7 @@ coercion은 값을 다른 타입의 값으로 바꾸는 것이며, 바꾸는 함
 
 ### Rank
 
-coercion은 Coercion 표의 행들을 `reborrow? ; cast* ; structural?` 순서로 조합한 것이다. reborrow는 `&mut T ⇝ &T` 행, cast는 선언된 cast 행, structural은 object, enum, structural type의 part 행이다. part의 coercion `⇝ₚ`는 object, enum, structural type의 part 행과 `! ⇝ U`만의 조합이다. 그래서 cast, reborrow, conversion은 part에서 쓰이지 않는다. `! ⇝ U`와 선언된 conversion은 조합이 아니며, rank가 없다. 주어진 타입으로 가는 조합은 하나뿐이다. coercion이 필요 없으면 rank는 `empty`다. 단계의 순서는 `empty ≺ reborrow ≺ cast ≺ structural`이고, coercion의 rank는 가장 높은 단계, 그다음 cast의 수, 그다음 거치는 낮은 단계들 순으로 비교한다.
+coercion은 Coercion 표의 행들을 `reborrow? ; cast* ; structural?` 순서로 조합한 것이다. reborrow는 `&mut T ⇝ &T` 행, cast는 선언된 cast 행, structural은 object, enum, structural type의 part 행을 함께 쓰는 한 단계로, member를 바꾸면서 남는 part를 그 part의 coercion으로 바꾼다. part의 coercion `⇝ₚ`는 object, enum, structural type의 part 행과 `! ⇝ U`만의 조합이다. 그래서 cast, reborrow, conversion은 part에서 쓰이지 않는다. `! ⇝ U`와 선언된 conversion은 조합이 아니며, rank가 없다. 주어진 타입으로 가는 조합은 하나뿐이다. coercion이 필요 없으면 rank는 `empty`다. 단계의 순서는 `empty ≺ reborrow ≺ cast ≺ structural`이고, coercion의 rank는 가장 높은 단계, 그다음 cast의 수, 그다음 거치는 낮은 단계들 순으로 비교한다.
 
 ## 동치류
 
