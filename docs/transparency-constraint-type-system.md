@@ -20,7 +20,7 @@ A program is one compilation graph. Its nodes are units, extern fns and contexts
 
 A template is a script whose body is the `String` formatted from its text, and whose result type is fixed to `String`. `{{ e }}` is a use of `core::display`. A script's or a template's input `$x` is a parameter of its function (programs §4).
 
-A lambda lies inside another body, its enclosing body. A call made by a lambda that lies in the text of a free fn or a method is a call of that free fn or method. Free fns and methods that reach one another by calls form one binding group, and a lambda is a binding group of its own, lying inside the binding group of its enclosing body.
+A lambda lies inside another body, its enclosing body. A call made by a lambda that lies in the text of a free fn or a method is a call of that free fn or method. Free fns and methods that reach one another by calls form one binding group, and a lambda, but for its environment (Facts), is a binding group of its own, lying inside the binding group of its enclosing body.
 
 ## Transparency
 
@@ -185,7 +185,7 @@ A fact is an attribute a function carries, neither a part nor a member of a type
 
 A function that becomes a value carries its facts in its function type, and a call performs the callee's effect in the body it is in. Since an extern fn gives no function value and a context holds no function, a function value's Values at an instance is always a set of lambdas.
 
-A lambda's parameter and result types lie in that lambda's binding group; an equivalence class that holds a function value does not carry them as parts but names the lambda by Values. At each use of the value, that lambda's C is made anew as an instance (Instance).
+A binding of the enclosing body that a lambda's text names is a capture of that lambda, and its type is an equivalence class of the enclosing binding group (Binding group). A constraint the text gives is on the equivalence classes it relates; a use calling a free fn or a method of an enclosing binding group is on its parameter and result types as well, and a binding on the equivalence classes of the projections on its path. Two equivalence classes are joined where one constraint is on both, or one is a part of a kind the text writes for the other, and the equivalence classes joined to a capture's type, directly or through others, with the constraints on them, are the lambda's environment. The environment is the enclosing binding group's. Its equivalence classes are that binding group's, each an unknown of it unless the text writes it; its constraints are recorded there once, when that binding group's solving starts, whether or not a call reaches the lambda; and a lambda inside it records its own environment first, as constraints of its text. The rest, the parameter and result types and the constraints not in the environment, is the lambda's binding group, called its generic part. An equivalence class that holds a function value does not carry the parameter and result types as parts but names the lambda by Values. At each use of the value, that lambda's C is made anew as an instance (Instance).
 
 ## Instance
 
@@ -195,7 +195,7 @@ An instance is another body's types made anew at one use, and is made at that us
 |---|---|
 | calls a free fn or a method of the binding group the use lies in, or of one enclosing it | none is made: the use takes that body's own types |
 | calls any other free fn or method | one is made |
-| calls a function value | it reads that function value (Dependency), and one is made for each lambda its Values names |
+| calls a function value | it reads that function value (Dependency), and one is made for each lambda its Values names. Each argument passes into the copy of that lambda's parameter in its generic part, or into its parameter in the environment, and the copy of the result type in its generic part, or the environment's result type, is a lower bound of the call's result. |
 | passes a function value across a boundary into a given function type | one is made for each lambda the value's Values names, whose parameters and result are that type's |
 
 A run, which starts at a function the embedding chooses, makes one instance of that function: the types the embedding declares for its inputs are put in the universals' places, and its result passes into the type the embedding declares for its result (programs).
@@ -208,13 +208,13 @@ A binding group is solved as one constraint graph.
 
 | | Definition |
 |---|---|
-| Constraints | The constraints the binding group's text records, without the text of the binding groups lying inside it, and the C each use in it records. |
-| Universal | The type of a parameter. The use chooses it. A capture's type is not universal but an equivalence class of the enclosing binding group. |
+| Constraints | The constraints the binding group's text records, without the text of the binding groups lying inside it but with the environments of the lambdas lying inside it, and the C each use in it records. |
+| Universal | The type of a parameter. The use chooses it. A capture's type is not universal but an equivalence class of the enclosing binding group. Nor is the type of a parameter in an environment, which is an equivalence class of the enclosing binding group (Facts). |
 | Unknown | An equivalence class in those constraints that is not universal, is not decided when solving starts, and is not of an enclosing binding group. |
-| C | The equivalence classes left unsolved and the uses, lends, projections, bindings and blocks left undecided when the binding group reaches its fixpoint, and the constraints on them. |
+| C | The equivalence classes left unsolved and the uses, lends, projections and bindings left undecided when the binding group reaches its fixpoint, and the constraints on them. |
 | Order | A binding group is solved before the binding group in which a use records its C. |
 
-When a use makes an instance, it makes anew the equivalence classes and the uses, lends, projections, bindings and blocks of C that are that binding group's own, puts its type arguments in the universals' places, and records them in its own binding group. Those copies are decided in the binding group they are recorded in. The type arguments are unknowns of the binding group the use lies in. The equivalence classes of an enclosing binding group are not made anew but shared. A lower bound, part lower bound or boundary already split in C is not split again in the copies (Value).
+When a use makes an instance, it makes anew the equivalence classes and the uses, lends, projections and bindings of C that are that binding group's own, puts its type arguments in the universals' places, and records them in its own binding group. Those copies are decided in the binding group they are recorded in. The type arguments are unknowns of the binding group the use lies in. The equivalence classes of an enclosing binding group are not made anew but shared. A lower bound, part lower bound or boundary already split in C is not split again in the copies (Value).
 
 ### Meeting and boundary
 
@@ -231,19 +231,19 @@ The constraints a body's text gives are recorded in equivalence classes as soon 
 | an invariant place | an equation |
 | a projection | a kind |
 | a use | The constraint that its types equal one of its candidates' signatures (Overload resolution), and where it makes an instance, that C. |
-| a block expression | once it is decided, its type (Block) |
+| a block expression | what the lambda it is solved as, called where it lies, records (Block) |
 
 ### Dependency
 
 | What | What it depends on |
 |---|---|
-| an equivalence class | its unsolved lower bounds and part lower bounds, other than equivalence classes nothing enters (Value), and the relations not yet recorded into it by: (a) where it is a part of `τ` in a lower bound or a part lower bound `τ ≤ α` or of `U` in a boundary `α ⇝ U`, `α` taking a constructor; (b) a use, lend, projection, binding or block at whose position it lies, or within the depth its candidates or pattern reach. |
+| an equivalence class | its unsolved lower bounds and part lower bounds, other than equivalence classes nothing enters (Value), and the relations not yet recorded into it by: (a) where it is a part of `τ` in a lower bound or a part lower bound `τ ≤ α` or of `U` in a boundary `α ⇝ U`, `α` taking a constructor; (b) a use, lend, projection or binding at whose position it lies, or within the depth its candidates or pattern reach. The positions of a use that calls a function value include, for each lambda its callee's Values names at the moment, the parameter and result types in that lambda's environment (Facts). |
 | a part's equivalence class | every equivalence class it is a part of taking a constructor |
 | a universal | the use that chooses it, that is, a use that makes an instance of that body; that use lies outside the binding group |
-| a use, a block | the uses, lends, projections, bindings and blocks that record relations into the equivalence classes at the positions it reads |
-| a lend, a projection, a binding | the uses, lends, projections, bindings and blocks that record relations into the equivalence class of its place or operand, other than projections of a field, a component, an index or a variant, and uses that have already recorded whether that equivalence class is a reference |
+| a use | the uses, lends, projections and bindings that record relations into the equivalence classes at the positions it reads |
+| a lend, a projection, a binding | the uses, lends, projections and bindings that record relations into the equivalence class of its place or operand, other than projections of a field, a component, an index or a variant, and uses that have already recorded whether that equivalence class is a reference |
 
-The uses, lends, projections, bindings and blocks that record relations into an equivalence class are the uses, lends, projections, bindings and blocks that class, and the equivalence classes it reaches along dependencies between equivalence classes, depend on. A use, a lend, a projection, a binding or a block depends on no equivalence class.
+The uses, lends, projections and bindings that record relations into an equivalence class are the uses, lends, projections and bindings that class, and the equivalence classes it reaches along dependencies between equivalence classes, depend on. A use, a lend, a projection or a binding depends on no equivalence class.
 
 A use records whether an equivalence class is a reference even before it is decided. Where the types of the lower bounds or equations its candidates would record into one equivalence class are references in every candidate, it records at once that the class is a reference; where they are a reference in no candidate, it records at once that the class is not one. Where the candidates differ in this, it is recorded when the use is decided.
 
@@ -260,9 +260,9 @@ a = pick(a);
 - `pick` depends on that kind, so it reads `A` as `{x: τ}`, and `pick({x: i32})` remains.
 - Were the second declaration `pick(u8) -> &u8`, the two candidates would differ in this, so `a.x` would depend on `pick` and `pick` on `a.x`. Each transitively depends on the other, so each breaks its dependency on the other, and the `A` that `pick` reads decides nothing, so the call is refused.
 
-What a use, a lend, a projection, a binding or a block becomes is decided by the value it reads. The value it reads is its equivalence class's value decided from the remaining relations alone, without the relations recorded by itself and by the uses, lends, projections, bindings and blocks that transitively depend on it. Here each equivalence class's value is decided by the table of values, by splits and by fills, whether or not what it depends on is solved, and an equivalence class with no relation remaining gives nothing. A use that calls a declaration reads the positions where its candidates differ, a lend, a projection or a binding reads whether its equivalence class is a reference, and a block reads the equivalence class of the type of the expression inside it (Block). In reading whether it is a reference, the relations recorded by projections of a field, a component, an index or a variant are not taken as recorded either (Place). A position where the value read decides nothing decides nothing.
+What a use, a lend, a projection or a binding becomes is decided by the value it reads. The value it reads is its equivalence class's value decided from the remaining relations alone, without the relations recorded by itself and by the uses, lends, projections and bindings that transitively depend on it. Here each equivalence class's value is decided by the table of values, by splits and by fills, whether or not what it depends on is solved, and an equivalence class with no relation remaining gives nothing. A use that calls a declaration reads the positions where its candidates differ, and a lend, a projection or a binding reads whether its equivalence class is a reference. In reading whether it is a reference, the relations recorded by projections of a field, a component, an index or a variant are not taken as recorded either (Place). A position where the value read decides nothing decides nothing.
 
-The dependency graph has as its nodes the equivalence classes of the moment and the uses, lends, projections, bindings and blocks, and as its edges the dependencies the rows of the table above give. That `Y` transitively depends on `X` means that `Y` reaches `X` along the dependency graph. Each node breaks its dependency on itself and on every node that transitively depends on it. The relations recorded by a node that a broken dependency pointed to are recorded once the node that broke it is decided, and checked (Value).
+The dependency graph has as its nodes the equivalence classes of the moment and the uses, lends, projections and bindings, and as its edges the dependencies the rows of the table above give. That `Y` transitively depends on `X` means that `Y` reaches `X` along the dependency graph. Each node breaks its dependency on itself and on every node that transitively depends on it. The relations recorded by a node that a broken dependency pointed to are recorded once the node that broke it is decided, and checked (Value).
 
 The unbroken dependencies have no cycle. Were there one, for any node on it, the next node would transitively depend on it along that cycle, so that dependency would have been broken.
 
@@ -273,13 +273,13 @@ An equivalence class takes its constructor and members once everything its unbro
 | | Value |
 |---|---|
 | with an equation | The type every equation gives. |
-| without one | The join of the types its sources give, except a lower bound or a part lower bound that a broken dependency points to: the least type that the types its lower bounds, uses and blocks give reach by `≤`, and the types its part lower bounds give reach by `≤ₚ`. A lower bound and a part lower bound give their own type, a use the result type of the signature it chose, a block the type it is decided as, and a kind the member it names. |
+| without one | The join of the types its sources give, except a lower bound or a part lower bound that a broken dependency points to: the least type that the types its lower bounds and uses give reach by `≤`, and the types its part lower bounds give reach by `≤ₚ`. A lower bound and a part lower bound give their own type, a use the result type of the signature it chose, and a kind the member it names. |
 
 A kind gives a member only where that member is visible to this body. An object's fields and an enum's variants are visible, since the body's text writes them; the members of `Option`, `Result` and `Error`, and of a type the host gives, are written outside and are not. An equivalence class whose only sources are kinds takes the constructor of the members they name. An equivalence class's value is a type that meets the kind it holds.
 
 When an equivalence class takes a constructor, a relation is recorded at each part of the two sides of each of its lower bounds, part lower bounds and boundaries, as at a place the value's part passes into (a split). Where that place is a meeting, a part lower bound is recorded between the parts of a structural type, and an equation between other parts; where it is a boundary, a boundary (Meeting and boundary). Where the constructors of the two sides of a lower bound or a boundary differ, the parts are linked by the same rule, the value taken as passing into the parameters of the declared casts and their results as passing on, and where `&mut T` passes into `&U`, the targets are linked. `?N ⇝ U` unifies `?N` with `U`.
 
-Once an equivalence class is solved, a value entering by a lower bound, a use's result or a block reaches its value by the join's `≤`, and a part entering by a part lower bound by `≤ₚ`, and is changed at each step by a row of the Coercion table; but the fields an object gains are not changed, and are written before the value is used whole (ownership §4). A value passing by a boundary reaches the value of `U` by a coercion. Either way, its functions are called where the value enters, and where it does not reach, it is refused there.
+Once an equivalence class is solved, a value entering by a lower bound or a use's result reaches its value by the join's `≤`, and a part entering by a part lower bound by `≤ₚ`, and is changed at each step by a row of the Coercion table; but the fields an object gains are not changed, and are written before the value is used whole (ownership §4). A value passing by a boundary reaches the value of `U` by a coercion. Either way, its functions are called where the value enters, and where it does not reach, it is refused there.
 
 An equivalence class nothing enters, that is, one whose unbroken dependencies are all solved or decided and which has no source, gives nothing as a lower bound or a part lower bound. Where the places it passes into, the `α` of each lower bound and part lower bound whose `τ` it is and the `U` of each boundary whose `T` it is, all have values, it takes that type where those values are one type (a fill), and has no value where they differ. A filled equivalence class reaches those places with no coercion. An equivalence class only LitVars enter does the same by a split's `?N ⇝ U` and the LitVars' join.
 
@@ -289,7 +289,7 @@ A binding group is solved until no more equivalence classes are solved or filled
 
 Once every binding group has reached its fixpoint, fallback is applied. An equivalence class that has no unbroken dependency and is unsolved takes its family's default if it is a LitVar, `i32` for an integer and `f64` for a float, and `!` otherwise. Fallback is not applied to the equivalence classes left in C, only to the copies a use makes anew. Solving then resumes to the fixpoint, and fallback and the fixpoint are repeated until no equivalence class is left to fall back.
 
-A program is accepted where its declared casts follow the cast tree, every equivalence class that is not an original left in C has a value, every use, lend, projection, binding and block that is not an original left in C is decided, and every value that enters or passes reaches. Any other program is refused at the place where a definition gives no result.
+A program is accepted where its declared casts follow the cast tree, every equivalence class that is not an original left in C has a value, every use, lend, projection and binding that is not an original left in C is decided, and every value that enters or passes reaches. Any other program is refused at the place where a definition gives no result.
 
 ## Place
 
@@ -297,7 +297,7 @@ A place is a root, a binding, followed by projections, and its type is the equiv
 
 A lend `&ₘ p` gives a reference. Where, in the value the lend reads, the place is `&ₙ U`, its target is `U` and its mutability the lesser of `m` and `n`; otherwise its target is the place's equivalence class. The relation to its target is an equation.
 
-A projection other than a Deref whose operand is a reference applies to its target (auto-deref). Whether an equivalence class is a reference is decided by its sources other than the kinds of a field, a component, an index or a variant: its lower bounds, part lower bounds, equations, uses, blocks and the kind of a Deref.
+A projection other than a Deref whose operand is a reference applies to its target (auto-deref). Whether an equivalence class is a reference is decided by its sources other than the kinds of a field, a component, an index or a variant: its lower bounds, part lower bounds, equations, uses and the kind of a Deref.
 
 A pattern is projections of its scrutinee's place, and at each of its positions records:
 
@@ -340,7 +340,7 @@ A position that decides nothing reaches every candidate: a position the value th
 
 ## Block
 
-A block expression `{ e }`, a block that is an expression by itself, decides `e`'s type regardless of the places it passes into, and passes that type on. A block that is a branch of an if or a body is not a block expression. A block expression's type is an equivalence class `B` made anew where it lies. `e`'s type `E` is not a source of `B`, and `B` is not a place `E` passes into. The block is decided by the value of `E` it reads (Dependency). Where that value is one type, with no position that decides nothing and no LitVar, the block is decided as that type, which is a source of `B` (Value). Otherwise the block is not decided. Since the block records into `B` alone, `E`'s type passes into `B` only as the type the block is decided as, and `B`'s type does not pass into `E`.
+A block expression `{ e }`, a block that is an expression by itself, is solved as a lambda with no parameter whose result is `e`, called where it lies: `(|| e)()` (Facts, Instance). A block that is a branch of an if or a body is not a block expression. But the exits of `return` and `?` inside it pass into the enclosing body's result type, not the lambda's. So what in `e` is joined to a capture is solved with the enclosing binding group, and the rest is solved first in its own binding group to its fixpoint: what is decided there is used as it is, and what is left undecided in C is decided in the enclosing binding group, as the call's instance.
 
 ## Identity
 
@@ -437,9 +437,9 @@ remember(1u8);
 Outcome: `last` is `Option⟨u8⟩`.
 
 1. `L ≥ Option⟨?k⟩`.
-2. The lambda is a binding group of its own, and `x`'s type `X` is universal. `last` is reached by name and its type `L` is an unknown of the enclosing binding group, so the write is a meeting: `L ≥ Option⟨S⟩` with `S ≥ X`. This lower bound rests on `X` through `S` and stays in the lambda's C.
-3. `remember(1u8)` calls a function value whose Values is this lambda alone, so it makes an instance. `X` becomes a new unknown `X'` of the enclosing binding group, which the argument meets: `X' ≥ u8`. The copy of C is `L ≥ Option⟨S'⟩` with `S' ≥ X'`, `L` shared, not made anew.
-4. `L`'s payload `P` records the part lower bounds `?k ≤ₚ P` and `S' ≤ₚ P`. `S'`'s only lower bound is `X'`, and `X' = u8`, so `S' = u8`; `?k` gives nothing, so `P = u8`.
+2. `last = Some(x)` names the capture `L`, and `x`'s type `X` is joined to it through `Some(x)`'s payload `S` and `S ≥ X`, so these are the lambda's environment and the enclosing binding group's (Facts). `X` is not universal but an unknown of that binding group. `last` is reached by name and `L` is an unknown of that binding group, so the write is a meeting: `L ≥ Option⟨S⟩` with `S ≥ X`. The generic part keeps the result's `()` alone.
+3. `remember(1u8)` calls a function value whose Values is this lambda alone, so it makes an instance. `X` is in the environment, so the argument meets `X` itself: `X ≥ u8`. Nothing is left in the generic part's C, so the copy adds nothing.
+4. `L`'s payload `P` records the part lower bounds `?k ≤ₚ P` and `S ≤ₚ P`. `S`'s only lower bound is `X`, and `X = u8`, so `S = u8`; `?k` gives nothing, so `P = u8`.
 
 ### 7. A write through a reference
 

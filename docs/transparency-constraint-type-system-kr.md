@@ -20,7 +20,7 @@
 
 template은 body가 그 텍스트를 formatting한 `String`인 script이며, 그 결과 타입은 `String`으로 정해져 있다. `{{ e }}`는 `core::display`의 use다. script와 template의 input `$x`는 그 함수의 parameter다(programs §4).
 
-lambda는 다른 body 안에 놓이며, 그 바깥 body가 lambda를 감싸는 body(enclosing body)다. free fn이나 method의 텍스트 안에 놓인 lambda가 하는 호출은 그 free fn이나 method의 호출이다. 호출을 따라 서로에게 닿는 free fn과 method는 한 binding group을 이루고, lambda 하나는 그 자체로 binding group이며 감싸는 body의 binding group 안에 놓인다.
+lambda는 다른 body 안에 놓이며, 그 바깥 body가 lambda를 감싸는 body(enclosing body)다. free fn이나 method의 텍스트 안에 놓인 lambda가 하는 호출은 그 free fn이나 method의 호출이다. 호출을 따라 서로에게 닿는 free fn과 method는 한 binding group을 이루고, lambda 하나는, 그 environment를 빼고(Facts), 그 자체로 binding group이며 감싸는 body의 binding group 안에 놓인다.
 
 ## Transparency
 
@@ -185,7 +185,7 @@ fact는 함수에 붙는 attribute이며, 타입의 part도 member도 아니다.
 
 값이 된 함수는 자기 fact를 그 함수 타입에 지니고, 호출은 callee의 effect를 그 호출이 놓인 body에서 수행한다. extern fn은 함수 값을 주지 않고 context는 함수를 담지 않으므로, instance에서 함수 값의 Values는 언제나 lambda들의 집합이다.
 
-lambda의 parameter와 결과의 타입은 그 lambda의 binding group에 있으며, 함수 값을 담는 동치류는 그것을 part로 지니지 않고 Values로 그 lambda를 가리킨다. 그 값의 use마다 그 lambda의 C가 instance로 새로 만들어진다(Instance).
+lambda의 텍스트가 이름으로 가리키는 감싸는 body의 binding이 그 lambda의 capture이며, 그 타입은 감싸는 binding group의 동치류다(Binding group). 텍스트가 주는 제약은 자기가 관계짓는 동치류에 걸리며, 감싸는 binding group의 free fn이나 method를 부르는 use는 그 parameter와 결과 타입에도, binding은 그 경로의 projection들의 동치류에도 걸린다. 한 제약이 두 동치류에 함께 걸리거나 하나가 다른 하나에 텍스트가 적은 kind의 part이면 둘은 이어지며, capture의 타입에 바로 또는 다른 동치류를 거쳐 이어진 동치류와 그것들에 걸린 제약이 그 lambda의 environment다. environment는 감싸는 binding group의 것이다. 그 동치류는 그 binding group의 동치류이고 텍스트가 적지 않았으면 그 미지수이며, 그 제약은 lambda가 호출되든 않든 그 binding group이 풀기 시작할 때 한 번 기록되고, 그 안에 놓인 lambda는 자기 environment를 그 텍스트의 제약으로서 먼저 기록한다. 나머지, 곧 environment에 들지 않은 parameter와 결과 타입과 제약은 그 lambda의 binding group이며, 이것을 generic part라 한다. 함수 값을 담는 동치류는 parameter와 결과 타입을 part로 지니지 않고 Values로 그 lambda를 가리킨다. 그 값의 use마다 그 lambda의 C가 instance로 새로 만들어진다(Instance).
 
 ## Instance
 
@@ -195,7 +195,7 @@ instance는 use 하나에서 다른 body의 타입들을 새로 만든 것이며
 |---|---|
 | use가 놓인 binding group이나 그것을 감싸는 binding group의 free fn이나 method를 호출함 | 만들지 않는다. 그 body 자신의 타입을 쓴다. |
 | 그 밖의 free fn이나 method를 호출함 | 하나 만든다. |
-| 함수 값을 호출함 | 그 함수 값을 읽어(의존), 그 Values가 가리키는 lambda마다 하나 만든다. |
+| 함수 값을 호출함 | 그 함수 값을 읽어(의존), 그 Values가 가리키는 lambda마다 하나 만든다. 각 인자는 그 lambda의 generic part에 든 parameter의 사본이나 environment에 든 parameter로 넘어가고, generic part에 든 결과 타입의 사본이나 environment의 결과 타입이 호출 결과의 하한이 된다. |
 | 함수 값이 경계를 넘어 주어진 함수 타입으로 들어감 | 그 값의 Values가 가리키는 lambda마다 하나 만든다. 그 parameter와 result는 그 타입의 것이다. |
 
 embedding이 고른 함수로 시작하는 run은, 그 함수의 instance 하나를 만든다. universal 자리에는 embedding이 그 input에 선언한 타입을 놓고, 그 결과는 embedding이 결과에 선언한 타입으로 넘어간다(programs).
@@ -208,13 +208,13 @@ binding group 하나는 constraint graph 하나로 함께 풀린다.
 
 | | 정의 |
 |---|---|
-| 제약 | 그 binding group의 텍스트가 기록한 제약(안에 놓인 binding group의 텍스트는 빼고)과, 그 안의 use가 기록한 C. |
-| universal | parameter의 타입. use가 고른다. capture의 타입은 universal이 아니라 감싸는 binding group의 동치류다. |
+| 제약 | 그 binding group의 텍스트가 기록한 제약(안에 놓인 binding group의 텍스트는 빼되, 안에 놓인 lambda의 environment는 넣고)과, 그 안의 use가 기록한 C. |
+| universal | parameter의 타입. use가 고른다. capture의 타입은 universal이 아니라 감싸는 binding group의 동치류다. environment에 든 parameter의 타입도 universal이 아니라 감싸는 binding group의 동치류다(Facts). |
 | 미지수 | 그 제약에 나오는 동치류 가운데, universal이 아니고, 풀기 시작할 때 정해져 있지 않으며, 감싸는 binding group의 것이 아닌 것. |
-| C | 그 binding group이 fixpoint에 닿았을 때 풀리지 않은 동치류와 정해지지 않은 use, lend, projection, binding, block, 그리고 그것들에 걸린 제약. |
+| C | 그 binding group이 fixpoint에 닿았을 때 풀리지 않은 동치류와 정해지지 않은 use, lend, projection, binding, 그리고 그것들에 걸린 제약. |
 | 순서 | binding group은, 그 C를 기록하는 use가 놓인 binding group보다 먼저 풀린다. |
 
-use는 instance를 만들 때 C에서 그 binding group 자신의 동치류와 use, lend, projection, binding, block을 새로 만들고, universal 자리에 use의 type argument를 놓아 자기 binding group에 기록한다. 그 사본은 그것이 기록된 binding group에서 정해진다. type argument는 use가 놓인 binding group의 미지수다. 감싸는 binding group의 동치류는 새로 만들지 않고 함께 쓴다. C에서 이미 쪼갠 하한, part 하한, 경계는 사본에서 다시 쪼개지 않는다(값).
+use는 instance를 만들 때 C에서 그 binding group 자신의 동치류와 use, lend, projection, binding을 새로 만들고, universal 자리에 use의 type argument를 놓아 자기 binding group에 기록한다. 그 사본은 그것이 기록된 binding group에서 정해진다. type argument는 use가 놓인 binding group의 미지수다. 감싸는 binding group의 동치류는 새로 만들지 않고 함께 쓴다. C에서 이미 쪼갠 하한, part 하한, 경계는 사본에서 다시 쪼개지 않는다(값).
 
 ### 만남과 경계
 
@@ -231,19 +231,19 @@ body의 텍스트가 주는 제약은 주어지는 즉시 동치류에 기록되
 | invariant 자리 | 등식 |
 | projection | kind |
 | use | 그 타입들이 후보의 signature 가운데 하나와 같다는 제약(Overload resolution). instance를 만들면 그 C다. |
-| block expr | 정해지면, 그 타입(Block) |
+| block expr | 그 자리에서 호출되는 lambda로서 기록되는 것(Block) |
 
 ### 의존
 
 | 무엇이 | 무엇에 의존하는가 |
 |---|---|
-| 동치류 | 풀리지 않은 하한과 part 하한(아무것도 들어오지 않는 동치류는 빼고, 값), 그리고 다음이 아직 기록하지 않은 관계. (가) 자기가 하한이나 part 하한 `τ ≤ α`의 `τ`나 경계 `α ⇝ U`의 `U`의 part이면, `α`가 constructor를 받는 것. (나) 자기가 그 자리에 놓이거나, 그 후보나 pattern이 닿는 깊이 안의 part인 use, lend, projection, binding, block. |
+| 동치류 | 풀리지 않은 하한과 part 하한(아무것도 들어오지 않는 동치류는 빼고, 값), 그리고 다음이 아직 기록하지 않은 관계. (가) 자기가 하한이나 part 하한 `τ ≤ α`의 `τ`나 경계 `α ⇝ U`의 `U`의 part이면, `α`가 constructor를 받는 것. (나) 자기가 그 자리에 놓이거나, 그 후보나 pattern이 닿는 깊이 안의 part인 use, lend, projection, binding. 함수 값을 부르는 use의 자리에는, 그 callee의 Values가 그때 가리키는 lambda마다 그 environment에 든 parameter와 결과 타입도 든다(Facts). |
 | part의 동치류 | 그것을 part로 가진 동치류들이 모두 constructor를 받는 것 |
 | universal | 그것을 고르는 use, 곧 그 body의 instance를 만드는 use. 그 use는 그 binding group 밖에 있다. |
-| use, block | 읽는 자리의 동치류에 관계를 기록하는 use, lend, projection, binding, block |
-| lend, projection, binding | 그 place나 operand의 동치류에 관계를 기록하는 use, lend, projection, binding, block 가운데, field, component, index, variant의 projection과, 그 동치류가 reference인지를 이미 기록한 use가 아닌 것 |
+| use | 읽는 자리의 동치류에 관계를 기록하는 use, lend, projection, binding |
+| lend, projection, binding | 그 place나 operand의 동치류에 관계를 기록하는 use, lend, projection, binding 가운데, field, component, index, variant의 projection과, 그 동치류가 reference인지를 이미 기록한 use가 아닌 것 |
 
-동치류에 관계를 기록하는 use, lend, projection, binding, block은, 그 동치류와, 그것에서 동치류끼리의 의존을 따라 닿는 동치류들이 의존하는 use, lend, projection, binding, block이다. use, lend, projection, binding, block은 동치류에 의존하지 않는다.
+동치류에 관계를 기록하는 use, lend, projection, binding은, 그 동치류와, 그것에서 동치류끼리의 의존을 따라 닿는 동치류들이 의존하는 use, lend, projection, binding이다. use, lend, projection, binding은 동치류에 의존하지 않는다.
 
 use는 정해지기 전에도 동치류가 reference인지를 기록한다. 그 후보들이 한 동치류에 기록할 하한이나 등식의 타입이 모든 후보에서 reference이면 그 동치류가 reference라는 것을, 어느 후보에서도 reference가 아니면 reference가 아니라는 것을 바로 기록한다. 후보들이 이 점에서 서로 다르면, 그것은 그 use가 정해질 때 기록된다.
 
@@ -260,9 +260,9 @@ a = pick(a);
 - `pick`은 그 kind에 의존하므로 `A`를 `{x: τ}`로 읽고, `pick({x: i32})`가 남는다.
 - 둘째 선언이 `pick(u8) -> &u8`이면 두 후보가 이 점에서 다르므로, `a.x`는 `pick`에 의존하고 `pick`도 `a.x`에 의존한다. 둘은 서로에게 추이적으로 의존하므로 서로로의 의존을 끊으며, `pick`이 읽는 `A`는 아무것도 정하지 않아 그 호출에서 거부된다.
 
-use, lend, projection, binding, block이 무엇이 되는지는 그것이 읽는 값으로 정해진다. 읽는 값은 그 동치류의 값을, 자기 자신과 자기에게 추이적으로 의존하는 use, lend, projection, binding, block이 기록하는 관계 없이 남은 관계만으로 정한 것이다. 이때 각 동치류의 값은, 그것이 의존하는 것이 풀렸는지와 상관없이 값의 표, 쪼갬, 채움으로 정하며, 남은 관계가 하나도 없는 동치류는 아무것도 주지 않는다. 선언을 부르는 use는 후보들이 갈리는 자리를 읽고, lend, projection, binding은 그 동치류가 reference인지를 읽으며, block은 그 안의 식의 타입의 동치류를 읽는다(Block). reference인지를 읽을 때는 field, component, index, variant의 projection이 기록하는 관계도 기록되지 않았다고 본다(Place). 읽는 값이 아무것도 정하지 않는 자리는 아무것도 정하지 않는다.
+use, lend, projection, binding이 무엇이 되는지는 그것이 읽는 값으로 정해진다. 읽는 값은 그 동치류의 값을, 자기 자신과 자기에게 추이적으로 의존하는 use, lend, projection, binding이 기록하는 관계 없이 남은 관계만으로 정한 것이다. 이때 각 동치류의 값은, 그것이 의존하는 것이 풀렸는지와 상관없이 값의 표, 쪼갬, 채움으로 정하며, 남은 관계가 하나도 없는 동치류는 아무것도 주지 않는다. 선언을 부르는 use는 후보들이 갈리는 자리를 읽고, lend, projection, binding은 그 동치류가 reference인지를 읽는다. reference인지를 읽을 때는 field, component, index, variant의 projection이 기록하는 관계도 기록되지 않았다고 본다(Place). 읽는 값이 아무것도 정하지 않는 자리는 아무것도 정하지 않는다.
 
-의존 그래프는, 그때의 동치류들과 use, lend, projection, binding, block을 노드로 하고 위 표의 각 행이 주는 의존을 간선으로 하는 그래프다. `Y`가 `X`에 추이적으로 의존한다는 것은 의존 그래프를 따라 `Y`에서 `X`에 닿는다는 것이다. 각 노드는 자기 자신으로의 의존과, 자기에게 추이적으로 의존하는 노드로의 의존을 끊는다. 끊긴 의존이 가리키던 노드가 기록하는 관계는, 그 의존을 끊은 노드가 정해진 뒤에 기록되어 검사된다(값).
+의존 그래프는, 그때의 동치류들과 use, lend, projection, binding을 노드로 하고 위 표의 각 행이 주는 의존을 간선으로 하는 그래프다. `Y`가 `X`에 추이적으로 의존한다는 것은 의존 그래프를 따라 `Y`에서 `X`에 닿는다는 것이다. 각 노드는 자기 자신으로의 의존과, 자기에게 추이적으로 의존하는 노드로의 의존을 끊는다. 끊긴 의존이 가리키던 노드가 기록하는 관계는, 그 의존을 끊은 노드가 정해진 뒤에 기록되어 검사된다(값).
 
 끊기지 않은 의존에는 순환이 없다. 순환이 있다면, 그 위의 어느 노드에게든 그 다음 노드는 그 순환을 따라 자기에게 추이적으로 의존하므로, 그 의존은 끊겼을 것이다.
 
@@ -273,13 +273,13 @@ use, lend, projection, binding, block이 무엇이 되는지는 그것이 읽는
 | | 값 |
 |---|---|
 | 등식이 있음 | 모든 등식이 주는 타입. |
-| 등식이 없음 | 끊긴 의존이 가리키던 하한과 part 하한을 제외한 출처들이 주는 타입의 join, 곧 하한, use, block이 주는 타입이 `≤`로, part 하한이 주는 타입이 `≤ₚ`로 닿는 가장 작은 타입. 하한과 part 하한은 자기 타입을, use는 고른 signature의 결과 타입을, block은 정해진 타입을, kind는 자기가 가리키는 member를 준다. |
+| 등식이 없음 | 끊긴 의존이 가리키던 하한과 part 하한을 제외한 출처들이 주는 타입의 join, 곧 하한과 use가 주는 타입이 `≤`로, part 하한이 주는 타입이 `≤ₚ`로 닿는 가장 작은 타입. 하한과 part 하한은 자기 타입을, use는 고른 signature의 결과 타입을, kind는 자기가 가리키는 member를 준다. |
 
 kind가 member를 주는 것은 그 member가 이 body에 보일 때뿐이다. object의 field와 enum의 variant는 body의 텍스트가 쓰므로 보이고, `Option`, `Result`, `Error`의 member와 host가 준 타입의 member는 바깥에서 쓰므로 보이지 않는다. 출처가 kind뿐인 동치류는 그 kind가 가리키는 member의 constructor를 받는다. 동치류의 값은 그 동치류가 지닌 kind를 만족하는 타입이다.
 
 동치류가 constructor를 받으면, 그 하한, part 하한, 경계의 두 쪽의 part마다, 값의 part가 넘어가는 자리로서 관계가 기록된다(쪼갬). 그 자리가 만남이면 structural type의 part 사이에는 part 하한이, 그 밖의 part 사이에는 등식이, 경계이면 경계가 기록된다(만남과 경계). 하한이나 경계의 두 쪽의 constructor가 다르면, 값이 선언된 cast들의 parameter로 넘어가고 그 결과가 다시 넘어가는 것으로 보아 같은 규칙으로 잇고, `&mut T`가 `&U`로 넘어가면 target끼리 잇는다. `?N ⇝ U`이면 `?N`을 `U`와 unify한다.
 
-동치류가 풀린 뒤, 하한, use의 결과, block으로 들어오는 값은 Join의 `≤`로, part 하한으로 들어오는 part는 `≤ₚ`로 그 값에 닿으며, 그 단계마다 Coercion 표의 행으로 바뀐다. 다만 object에 더해진 field는 바뀌지 않고, 그 값이 통째로 쓰이기 전에 쓰인다(ownership §4). 경계로 넘어가는 값은 `U`의 값에 coercion으로 닿는다. 어느 쪽이든 그 함수는 그 값이 들어온 자리에서 호출되며, 닿지 않으면 그 자리에서 거부된다.
+동치류가 풀린 뒤, 하한과 use의 결과로 들어오는 값은 Join의 `≤`로, part 하한으로 들어오는 part는 `≤ₚ`로 그 값에 닿으며, 그 단계마다 Coercion 표의 행으로 바뀐다. 다만 object에 더해진 field는 바뀌지 않고, 그 값이 통째로 쓰이기 전에 쓰인다(ownership §4). 경계로 넘어가는 값은 `U`의 값에 coercion으로 닿는다. 어느 쪽이든 그 함수는 그 값이 들어온 자리에서 호출되며, 닿지 않으면 그 자리에서 거부된다.
 
 아무것도 들어오지 않는 동치류, 곧 끊기지 않은 의존이 모두 풀리거나 정해졌는데 출처가 하나도 없는 동치류는, 하한과 part 하한으로서 아무것도 주지 않는다. 그 동치류가 넘어가는 자리, 곧 그것이 `τ`인 하한과 part 하한의 `α`와 그것이 `T`인 경계의 `U`가 모두 값을 가지면, 그 값들이 한 타입일 때 그 동치류는 그 타입을 받고(채움), 서로 다르면 값을 갖지 않는다. 채워진 동치류는 그 자리들에 coercion 없이 닿는다. LitVar만 들어오는 동치류는 쪼갬의 `?N ⇝ U`와 LitVar의 join으로 같은 일을 한다.
 
@@ -289,7 +289,7 @@ binding group은 더 풀리거나 채워지는 동치류가 없을 때까지 풀
 
 모든 binding group이 fixpoint에 닿으면, fallback을 한다. 끊기지 않은 의존이 없고 풀리지 않은 동치류는, LitVar이면 그 계열의 default, 곧 정수는 `i32`이고 float는 `f64`가 되며, 그 밖이면 `!`가 된다. C에 남은 동치류에는 fallback하지 않으며, use가 새로 만든 사본에 한다. 그 뒤 다시 fixpoint까지 풀며, fallback할 동치류가 남지 않을 때까지 fallback과 fixpoint를 되풀이한다.
 
-받아들여지는 프로그램은, 선언된 cast들이 Cast tree를 따르고, C에 남은 원본이 아닌 모든 동치류가 값을 갖고, C에 남은 원본이 아닌 모든 use, lend, projection, binding, block이 정해지며, 들어오고 넘어가는 모든 값이 닿는 프로그램이다. 그 밖의 프로그램은, 정의가 결과를 주지 못한 자리에서 거부된다.
+받아들여지는 프로그램은, 선언된 cast들이 Cast tree를 따르고, C에 남은 원본이 아닌 모든 동치류가 값을 갖고, C에 남은 원본이 아닌 모든 use, lend, projection, binding이 정해지며, 들어오고 넘어가는 모든 값이 닿는 프로그램이다. 그 밖의 프로그램은, 정의가 결과를 주지 못한 자리에서 거부된다.
 
 ## Place
 
@@ -297,7 +297,7 @@ place는 root인 binding 뒤에 projection들이 이어진 것이며, 그 타입
 
 lend `&ₘ p`의 결과는 reference다. lend가 읽는 값에서 place가 `&ₙ U`이면 그 target은 `U`이고 mutability는 `m`과 `n` 가운데 약한 쪽이며, 아니면 target은 place의 동치류다. target과의 관계는 등식이다.
 
-Deref가 아닌 projection은 operand가 reference이면 그 target에 걸린다(auto-deref). 동치류가 reference인지는 field, component, index, variant의 kind를 뺀 출처, 곧 하한, part 하한, 등식, use, block, Deref의 kind가 정한다.
+Deref가 아닌 projection은 operand가 reference이면 그 target에 걸린다(auto-deref). 동치류가 reference인지는 field, component, index, variant의 kind를 뺀 출처, 곧 하한, part 하한, 등식, use, Deref의 kind가 정한다.
 
 pattern은 scrutinee place의 projection들이며, 각 자리에서 다음을 기록한다.
 
@@ -340,7 +340,7 @@ method 호출의 receiver는 첫 인자다. 적힌 그대로, `&`, 그리고 rec
 
 ## Block
 
-block expr `{ e }`, 곧 그 자체로 식인 block은 `e`의 타입을 그것이 넘어가는 자리와 상관없이 정하고, 그 타입을 내보낸다. if의 branch나 body인 block은 block expr가 아니다. block expr의 타입은 그 자리에서 새로 만든 동치류 `B`다. `e`의 타입 `E`는 `B`의 출처가 아니고, `B`는 `E`가 넘어가는 자리가 아니다. block은 읽는 `E`의 값으로 정해진다(의존). 그 값이 타입 하나이면, 곧 아무것도 정하지 않는 자리도 LitVar도 없으면, block은 그 타입으로 정해지고, 그 타입은 `B`의 출처다(값). 그 밖이면 block은 정해지지 않는다. block은 `B`에만 기록하므로, `E`의 타입은 block이 정해진 타입으로서만 `B`로 넘어가고, `B`의 타입은 `E`로 넘어가지 않는다.
+block expr `{ e }`, 곧 그 자체로 식인 block은, parameter가 없고 `e`를 결과로 내는 lambda를 그 자리에서 바로 호출하는 것, 곧 `(|| e)()`로 풀린다(Facts, Instance). if의 branch나 body인 block은 block expr가 아니다. 다만 그 안의 `return`과 `?`의 exit는 그 lambda의 결과 타입이 아니라 감싸는 body의 결과 타입으로 넘어간다. 그래서 `e`에서 capture에 이어진 것은 감싸는 binding group에서 함께 풀리고, 나머지는 자기 binding group에서 먼저 fixpoint까지 풀리며, 거기서 정해진 것은 그대로 쓰이고 정해지지 않아 C에 남은 것은 그 호출의 instance로서 감싸는 binding group에서 정해진다.
 
 ## Identity
 
@@ -437,9 +437,9 @@ remember(1u8);
 결과: `last`는 `Option⟨u8⟩`이다.
 
 1. `L ≥ Option⟨?k⟩`.
-2. lambda는 자기 binding group이고, `x`의 타입 `X`는 universal이다. `last`는 이름으로 닿고 그 타입 `L`은 감싸는 binding group의 미지수이므로, 쓰기는 만남이다: `L ≥ Option⟨S⟩`, `S ≥ X`. 이 하한은 `S`를 거쳐 `X`에 기대므로 lambda의 C에 남는다.
-3. `remember(1u8)`는 Values가 이 lambda뿐인 함수 값의 호출이라 instance를 만든다. `X`는 감싸는 binding group의 새 미지수 `X'`가 되고 인자와 만난다: `X' ≥ u8`. C의 사본은 `L ≥ Option⟨S'⟩`, `S' ≥ X'`이며, `L`은 새로 만들지 않고 함께 쓴다.
-4. `L`의 payload `P`에는 part 하한 `?k ≤ₚ P`, `S' ≤ₚ P`가 기록된다. `S'`의 하한은 `X'`뿐이고 `X' = u8`이므로 `S' = u8`이며, `?k`는 아무것도 주지 않으므로 `P = u8`이다.
+2. `last = Some(x)`는 capture `L`을 이름하고, `Some(x)`의 payload `S`와 `S ≥ X`로 `x`의 타입 `X`가 그것에 이어지므로, 이것들은 lambda의 environment이며 감싸는 binding group의 것이다(Facts). `X`는 universal이 아니라 그 binding group의 미지수다. `last`는 이름으로 닿고 `L`은 그 binding group의 미지수이므로, 쓰기는 만남이다: `L ≥ Option⟨S⟩`, `S ≥ X`. generic part에는 결과의 `()`만 남는다.
+3. `remember(1u8)`는 Values가 이 lambda뿐인 함수 값의 호출이라 instance를 만든다. `X`는 environment에 들므로 인자는 `X` 자신과 만난다: `X ≥ u8`. generic part의 C에는 아무것도 남지 않아 사본은 아무것도 더하지 않는다.
+4. `L`의 payload `P`에는 part 하한 `?k ≤ₚ P`, `S ≤ₚ P`가 기록된다. `S`의 하한은 `X`뿐이고 `X = u8`이므로 `S = u8`이며, `?k`는 아무것도 주지 않으므로 `P = u8`이다.
 
 ### 7. reference를 거친 쓰기
 
