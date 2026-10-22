@@ -81,6 +81,21 @@ pub struct State {
     pub(crate) solved: BTreeMap<Name, Rc<State>>,
     /// The instances made here, in the order made (l.215).
     pub(crate) instances: Vec<Made>,
+    /// The lambdas an instance made anew, by name: each a copy of a lambda
+    /// placed in the group it copied, whose environment is that instance's
+    /// copies (l.215).
+    pub(crate) lambdas: BTreeMap<Name, LambdaCopy>,
+}
+
+/// A lambda an instance made anew (l.215): the instance, the lambda of the
+/// program it copies, and the classes here its environment holds, its
+/// parameter types and then its result type, none where its own binding group
+/// holds them.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LambdaCopy {
+    pub at: Name,
+    pub of: Name,
+    pub environment: Vec<Option<ClassId>>,
 }
 
 /// A binding group's state where its text's constraints are recorded and
@@ -147,6 +162,7 @@ impl State {
             environment: Rc::new(program.environment()),
             solved: solved.clone(),
             instances: Vec::new(),
+            lambdas: BTreeMap::new(),
         };
         let classes: Vec<&TextClass> = program
             .classes
@@ -538,6 +554,7 @@ impl State {
             environment: Rc::clone(&self.environment),
             solved: self.solved.clone(),
             instances: Vec::new(),
+            lambdas: self.lambdas.clone(),
         };
         read.classes.grow(&read.arena);
         for (at, recorded) in self.log.iter().enumerate() {

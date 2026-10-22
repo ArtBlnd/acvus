@@ -502,12 +502,7 @@ impl State {
         args: &[ClassId],
         result: ClassId,
     ) -> Recording {
-        let function = self
-            .functions
-            .iter()
-            .find(|function| function.name == *lambda)
-            .expect("a lambda is a function")
-            .clone();
+        let function = self.lambda_function(lambda).clone();
         let from = Rc::clone(
             self.solved
                 .get(&function.group)

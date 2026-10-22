@@ -1,0 +1,44 @@
+//@ spec: l.215, l.196, l.186
+//@ orders: sampled 200
+// fn adder(k) { |x| x + k }
+// let f = adder(1u8); f(2u8)
+// x is joined to the capture k, so it is the lambda's environment, adder's
+// (l.186). adder(1u8)'s instance makes the lambda anew, its environment the
+// instance's copies, k's among them u8 (l.215), and f's Values name that copy:
+// the call passes 2u8 into the copy's x (l.196), and f(2u8) is u8.
+extern fn core::add(&u8, &u8) -> u8;
+extern fn core::add(&u16, &u16) -> u16;
+group adder {
+    let K;
+    let `adder result`;
+    fn adder(K) -> `adder result`;
+}
+group λ in adder {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    let `&x`;
+    let `&k`;
+    let S;
+    `&x` = &X @ `&x`;
+    `λ result` = S;
+}
+group adder {
+    let `|x| x + k`: lambda λ;
+    `adder result` = `|x| x + k`;
+}
+group λ {
+    `&k` = &K @ `&k`;
+    S = core::add(`&x`, `&k`) @ `x + k`;
+}
+let 1u8: u8;
+let F;
+let `adder(1u8)`;
+`adder(1u8)` = adder(1u8) @ `adder 1`;
+F = `adder(1u8)`;
+let 2u8: u8;
+let `f(2u8)`;
+`f(2u8)` = (F)(2u8) @ `f call`;
+
+must pass;
+assert `f(2u8)`: u8;

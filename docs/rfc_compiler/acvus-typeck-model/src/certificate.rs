@@ -19,7 +19,7 @@ use crate::node::{Decision, LendTarget, NodeAt};
 use crate::program::{ENTRY, Function, Item, Origin, Place, Program, Projection};
 use crate::relation::{Recorder, copy_name};
 use crate::sig::{SigArgs, SigTy, SigVar, Signature};
-use crate::solve::State;
+use crate::solve::{LambdaCopy, State};
 use crate::ty::{Constructor, HasTerm, Mutability, Name, Term, Ty, TyError, check_term};
 
 /// A closed value as the certificate gives it: a type each of whose function
@@ -128,6 +128,9 @@ pub struct Sheet {
     values: BTreeMap<ClassId, Option<Value>>,
     decisions: BTreeMap<Name, Option<Decision>>,
     instances: Vec<Made>,
+    /// The lambdas an instance made anew here, with their environments
+    /// (l.215).
+    lambdas: BTreeMap<Name, LambdaCopy>,
 }
 
 impl Sheet {
@@ -156,6 +159,7 @@ impl Sheet {
             values,
             decisions,
             instances: state.instances.clone(),
+            lambdas: state.lambdas.clone(),
         }
     }
 
@@ -692,15 +696,24 @@ impl Checker<'_> {
                     holds,
                     format!("{value} is not Fn/{arity} (l.181)"),
                 );
+                // Each instance on the way that made the lambda anew names
+                // its copy (l.215).
+                let mut named_as = lambda.clone();
+                for step in &context.steps {
+                    let copy = copy_name(&step.made.at, &named_as);
+                    if step.sheet.lambdas.contains_key(&copy) {
+                        named_as = copy;
+                    }
+                }
                 let named = value
                     .lambdas
                     .as_ref()
-                    .is_some_and(|lambdas| lambdas.contains(lambda));
+                    .is_some_and(|lambdas| lambdas.contains(&named_as));
                 self.require(
                     context,
                     &at,
                     named,
-                    format!("{value}'s Values do not name {lambda} (l.181)"),
+                    format!("{value}'s Values do not name {named_as} (l.181, l.215)"),
                 );
             }
         }
@@ -823,6 +836,41 @@ impl Checker<'_> {
         self.get(context, at, &copy_name(&made.at, name).to_string(), lookup)
     }
 
+    /// The lambda of the program a lambda is, or an instance copied (l.215).
+    fn lambda_function(&self, lambda: &Name, copied: Option<&LambdaCopy>) -> Function {
+        let of = copied.map_or(lambda, |copied| &copied.of);
+        self.program
+            .function(of)
+            .expect("a lambda is a function")
+            .clone()
+    }
+
+    /// The value of the parameter or result type at `i` in a lambda's
+    /// environment: the text's class, or, for a lambda an instance copied,
+    /// that instance's copy (l.215).
+    fn environment(
+        &mut self,
+        context: &Context<'_>,
+        at: &str,
+        level: usize,
+        copied: Option<&LambdaCopy>,
+        i: usize,
+        name: &Name,
+    ) -> Option<Value> {
+        let Some(copied) = copied else {
+            return self.text(context, at, name);
+        };
+        let class =
+            copied.environment[i].expect("a copy's environment holds what the lambda's does");
+        let lookup = context.lookup(level, class);
+        self.get(
+            context,
+            at,
+            &copy_name(&copied.at, name).to_string(),
+            lookup,
+        )
+    }
+
     /// Each argument into its parameter's type.
     fn passes(&mut self, context: &Context<'_>, at: &str, args: &[Value], params: &[Param]) {
         for (k, (arg, param)) in args.iter().zip(params).enumerate() {
@@ -901,11 +949,8 @@ impl Checker<'_> {
         };
         let sheet = context.sheet(into.level);
         for lambda in lambdas {
-            let function = self
-                .program
-                .function(lambda)
-                .expect("a lambda is a function")
-                .clone();
+            let copied = sheet.lambdas.get(lambda).cloned();
+            let function = self.lambda_function(lambda, copied.as_ref());
             let made = sheet.instances.iter().find(|made| {
                 made.group == function.group
                     && matches!(made.by, Recorder::FunctionType { from, to }
@@ -924,9 +969,11 @@ impl Checker<'_> {
             let Some(lambda_params) = function
                 .params
                 .iter()
-                .map(|param| {
+                .enumerate()
+                .map(|(i, param)| {
                     if self.program.in_environment(param) {
-                        let ty = self.text(context, at, param)?;
+                        let ty =
+                            self.environment(context, at, into.level, copied.as_ref(), i, param)?;
                         let meets = self.text.unknown(param);
                         return Some(Param { ty, meets });
                     }
@@ -939,7 +986,15 @@ impl Checker<'_> {
                 continue;
             };
             let returned = if self.program.in_environment(&function.result) {
-                self.text(context, at, &function.result)
+                let i = function.params.len();
+                self.environment(
+                    context,
+                    at,
+                    into.level,
+                    copied.as_ref(),
+                    i,
+                    &function.result,
+                )
             } else {
                 self.copy(context, at, into.level, made, &function, &function.result)
             };
@@ -1051,16 +1106,12 @@ impl Checker<'_> {
             .map(|decl| &decl.sig)
             .collect();
         let common = (candidates.len() >= 2).then(|| CommonPart::of(&candidates));
+        // The common part is recorded where the use is, before it is decided
+        // (l.246), so its classes are the group's own, at level 0.
         let common_values = match &common {
-            Some(part) => Some(self.common(
-                context,
-                &at,
-                level,
-                &owner,
-                part,
-                &arg_values,
-                &result_value,
-            )?),
+            Some(part) => {
+                Some(self.common(context, &at, 0, name, part, &arg_values, &result_value)?)
+            }
             None => None,
         };
         match decision {
@@ -1522,11 +1573,8 @@ impl Checker<'_> {
             );
         }
         for lambda in &lambdas {
-            let function = self
-                .program
-                .function(lambda)
-                .expect("a lambda is a function")
-                .clone();
+            let copied = context.sheet(level).lambdas.get(lambda).cloned();
+            let function = self.lambda_function(lambda, copied.as_ref());
             let made_at = Name::new(&format!("{owner}#{lambda}"));
             let Some(made) = context.sheet(level).instance(&made_at) else {
                 self.violation(
@@ -1539,9 +1587,11 @@ impl Checker<'_> {
             let Some(params) = function
                 .params
                 .iter()
-                .map(|param| {
+                .enumerate()
+                .map(|(i, param)| {
                     if self.program.in_environment(param) {
-                        let ty = self.text(context, &at, param)?;
+                        let ty =
+                            self.environment(context, &at, level, copied.as_ref(), i, param)?;
                         let meets = self.text.unknown(param);
                         return Some(Param { ty, meets });
                     }
@@ -1554,7 +1604,8 @@ impl Checker<'_> {
                 continue;
             };
             let returned = if self.program.in_environment(&function.result) {
-                self.text(context, &at, &function.result)
+                let i = function.params.len();
+                self.environment(context, &at, level, copied.as_ref(), i, &function.result)
             } else {
                 self.copy(context, &at, level, made, &function, &function.result)
             };

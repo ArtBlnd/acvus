@@ -41,9 +41,10 @@ pub(crate) struct Instance<'a> {
 
 impl State {
     /// The roots of the classes C holds at this group's fixpoint (l.212):
-    /// those left unsolved, or whose value is not closed, the universals, and
-    /// those whose value carries an identity this group's body made, which
-    /// each instance makes anew (l.347).
+    /// those left unsolved, or whose value is not closed, the universals,
+    /// those whose value carries an identity this group's body made, and
+    /// those whose function value names a lambda whose environment is here,
+    /// each of which each instance makes anew (l.215, l.347).
     pub(crate) fn c(&self) -> BTreeSet<ClassId> {
         let made = self.made_identities();
         self.classes
@@ -53,8 +54,23 @@ impl State {
                     || self
                         .value(root)
                         .is_none_or(|value| carries_identity(&value, &made))
+                    || self
+                        .values_of(root)
+                        .iter()
+                        .any(|lambda| self.environment_here(lambda))
             })
             .collect()
+    }
+
+    /// Whether the lambda's environment holds a class of this group, which
+    /// an instance of it copies with the lambda (l.215).
+    pub(crate) fn environment_here(&self, lambda: &Name) -> bool {
+        self.environment_in(lambda).is_some_and(|environment| {
+            environment
+                .into_iter()
+                .flatten()
+                .any(|class| !self.is_foreign(class))
+        })
     }
 
     /// The identities this state's body made, at calls of a declaration whose
@@ -192,6 +208,32 @@ impl<'a> Instance<'a> {
         copy_name(&self.at, name)
     }
 
+    /// The copy here of a lambda placed in the group instantiated, its
+    /// environment this instance's copies (l.215).
+    fn lambda(&mut self, here: &mut State, lambda: &Name) -> Name {
+        let copy = copy_name(&self.at, lambda);
+        if !here.lambdas.contains_key(&copy) {
+            let of = self
+                .from
+                .lambdas
+                .get(lambda)
+                .map_or(lambda.clone(), |copied| copied.of.clone());
+            let environment = self
+                .from
+                .environment_of(lambda)
+                .into_iter()
+                .map(|class| class.map(|class| self.class(here, class)))
+                .collect();
+            let made = crate::solve::LambdaCopy {
+                at: (*self.at).clone(),
+                of,
+                environment,
+            };
+            here.lambdas.insert(copy.clone(), made);
+        }
+        copy
+    }
+
     /// The class here of the class `id` of `from`: for a class of C, one made
     /// anew, holding the kind `from` solved it to; for another, its closed
     /// type, written (`design/09-group.md`, reading 3).
@@ -269,6 +311,9 @@ impl<'a> Instance<'a> {
             let relation = match recorded.relation.clone() {
                 Relation::Kind(class, Term::Identity(name), source) => {
                     Relation::Kind(class, Term::Identity(copy_name(&self.at, &name)), source)
+                }
+                Relation::Values(class, lambda) if from.environment_here(&lambda) => {
+                    Relation::Values(class, self.lambda(here, &lambda))
                 }
                 relation => relation,
             }

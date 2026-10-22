@@ -1,0 +1,36 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, deferral: Recording }, 200 sampled orders
+outcome 1
+  accepted
+  value `&k`: none
+  value `&x`: none
+  value 1u8: u8
+  value 2u8: u8
+  value F: Fn/1
+  value K: none
+  value S: none
+  value X: none
+  value `adder result`: Fn/1
+  value `adder(1u8)`: Fn/1
+  value `f(2u8)`: u8
+  value `|x| x + k`: Fn/1
+  value `λ result`: none
+  decision `&x`: lend & place
+  decision `adder@5/&k`: lend & place
+  decision `adder@5/x + k`: core::add#0
+  decision `f call`: calls {`adder@5/λ`}
+  check `1u8 <= adder@5/K`: Ok(Identity)
+  check `2u8 <= adder@5/X`: Ok(Identity)
+  check `adder(1u8) <= F`: Ok(Identity)
+  check `adder@5/&k <= adder@5/x + k.Common(0)`: Ok(Identity)
+  check `adder@5/&k ~> adder@5/x + k.Param(1)`: Ok(Identity)
+  check `adder@5/&x <= adder@5/x + k.Common(0)`: Ok(Identity)
+  check `adder@5/&x ~> adder@5/x + k.Param(0)`: Ok(Identity)
+  check `adder@5/S <= adder@5/λ result`: Ok(Identity)
+  check `adder@5/adder result <= adder(1u8)`: Ok(Identity)
+  check `adder@5/x + k.Chosen(1) <= adder@5/x + k.Common(1)`: Ok(Identity)
+  check `adder@5/x + k.Common(1) <= adder@5/S`: Ok(Identity)
+  check `adder@5/|x| x + k <= adder@5/adder result`: Ok(Identity)
+  check `adder@5/λ result <= f(2u8)`: Ok(Identity)
+  check `|x| x + k <= adder result`: Ok(Identity)
+  I* of a final state: []

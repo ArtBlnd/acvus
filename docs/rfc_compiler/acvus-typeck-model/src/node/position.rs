@@ -119,30 +119,44 @@ impl State {
 
     /// The parameter types of the lambda, and then its result type, each the
     /// class here where its environment holds it (`design/17-environment.md`,
-    /// row 3), none where its binding group does.
+    /// row 3), none where its binding group does: for a lambda an instance
+    /// made anew, that instance's copies (l.215).
     pub(crate) fn environment_of(&self, lambda: &Name) -> Vec<Option<ClassId>> {
-        let function = self
-            .functions
-            .iter()
-            .find(|function| function.name == *lambda)
-            .expect("a lambda is a function");
+        self.environment_in(lambda).unwrap_or_else(|| {
+            panic!(
+                "{lambda}'s value reaches a group its environment is not in, \
+                 which is not yet encoded (design/17-environment.md, Open)"
+            )
+        })
+    }
+
+    /// As `environment_of`, none where its environment is not here.
+    pub(crate) fn environment_in(&self, lambda: &Name) -> Option<Vec<Option<ClassId>>> {
+        if let Some(copy) = self.lambdas.get(lambda) {
+            return Some(copy.environment.clone());
+        }
+        let function = self.lambda_function(lambda);
         function
             .params
             .iter()
             .chain([&function.result])
             .map(|name| {
-                self.environment.contains(name).then(|| {
-                    self.arena
-                        .get(&ClassName::Text(name.clone()))
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "{lambda}'s value reaches a group its environment is not in, \
-                             which is not yet encoded (design/17-environment.md, Open)"
-                            )
-                        })
-                })
+                if self.environment.contains(name) {
+                    self.arena.get(&ClassName::Text(name.clone())).map(Some)
+                } else {
+                    Some(None)
+                }
             })
             .collect()
+    }
+
+    /// The lambda of the program a lambda here is, or copies (l.215).
+    pub(crate) fn lambda_function(&self, lambda: &Name) -> &crate::program::Function {
+        let of = self.lambdas.get(lambda).map_or(lambda, |copy| &copy.of);
+        self.functions
+            .iter()
+            .find(|function| function.name == *of)
+            .expect("a lambda is a function")
     }
 
     /// The classes the equivalence class of `id` is known to be a reference

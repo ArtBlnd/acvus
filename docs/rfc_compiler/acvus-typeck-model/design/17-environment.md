@@ -162,8 +162,13 @@ Each keeps its outcome. Five cases written by the text of then changed:
 ## Open
 
 - A function value that leaves the group its lambda lies in, returned from a
-  function, reaches calls whose group copies the environment with that function's
-  C. Function values crossing groups are not yet encoded (note 09).
+  function, is encoded since the text's l.215 makes the lambda anew at each
+  instance of that group (`State::lambdas`, `LambdaCopy`): a class whose Values
+  name a lambda whose environment is the group's stays in C, and the instance
+  names the copy, whose environment is its copies, so each call of the returned
+  value reaches the environment of the instance it came from
+  (`cases/spec/l215-*`). A function value that reaches a group its environment is
+  in neither as the original nor as a copy still panics (`State::environment_of`).
 - A call's candidates are the Values of the moment. Whether Values can still grow
   after a call is decided is not shown: in every witness the lambda reaches the
   callee's class by a pass recorded when the group's solving starts, so no call's

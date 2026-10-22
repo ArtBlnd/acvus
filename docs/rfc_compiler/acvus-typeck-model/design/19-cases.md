@@ -359,6 +359,10 @@ steps; `golden()` and every expectation read what they read without it.
   1–3, accepted with `b: G`; the same without the cast, refused at `b`; and an
   identity a body makes, made anew at each of two instances. Each was derived
   before it was run.
+- 3 cases under `cases/spec`, `l215-*`, test a closure a function returns (l.215):
+  one instance's, two instances' apart, and a call of both, refused; each was
+  derived before it was run, over 200 sampled orders, every order of one passing
+  100 000 states.
 - 2 cases under `cases/spec`, `l091-*`, test where an `Error` is written (l.91):
   the run's result into the type the embedding declares (`out T`), and a
   declaration's parameter, each derived before it was run; that the text, a
