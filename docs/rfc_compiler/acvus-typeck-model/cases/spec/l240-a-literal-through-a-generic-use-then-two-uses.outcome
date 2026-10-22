@@ -2,21 +2,15 @@
 run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
 outcome 1
   refused
-  value ?a: u16
-  value R: u16
-  value X: u16
+  value ?a: none
+  value R: none
+  value X: none
   value `m(x)`: ()
   value `n(x)`: ()
   decision id: id#0
   decision m: m#0
   decision n: n#1
   partition {?a, R, X}
-  check `?a <= X`: Ok(Identity)
-  check `R <= X`: Ok(Identity)
-  check `X <= id.Var(Type(0))`: Ok(Identity)
-  check `X ~> m.Param(0)`: Ok(Identity)
-  check `X ~> n.Param(0)`: Err(None)
-  check `id.Var(Type(0)) <= R`: Ok(Identity)
   check `m.Result <= m(x)`: Ok(Identity)
   check `n.Result <= n(x)`: Ok(Identity)
   refusal conflict at "X = n.Param(0)": Scalar(Int(U16)) vs Scalar(Int(I32))

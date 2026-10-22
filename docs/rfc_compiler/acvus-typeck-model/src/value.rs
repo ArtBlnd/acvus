@@ -437,6 +437,9 @@ impl State {
             .result()
             .err()
             .map(|conflict| self.refuse_conflict(format!("the value of {owner}"), conflict));
+        if let Some(conflicted) = &unified.conflict {
+            self.conflicted_have_no_value(conflicted);
+        }
         self.classes.mark_solved(root);
         with_sources(Took::Joined {
             head: joined,
@@ -489,6 +492,9 @@ impl State {
                 .result()
                 .err()
                 .map(|conflict| self.refuse_conflict(format!("the fill of {owner}"), conflict));
+            if let Some(conflicted) = &unified.conflict {
+                self.conflicted_have_no_value(conflicted);
+            }
             self.classes.mark_solved(root);
             Fill::Took {
                 ty,

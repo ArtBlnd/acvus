@@ -2,9 +2,8 @@
 run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
 outcome 1
   refused
-  value 256: u8
-  value `@n`: u8
+  value 256: none
+  value `@n`: none
   partition {256, `@n`}
-  check `256 ~> @n`: Ok(Identity)
   refusal conflict at "256 = @n": ?{256}: int vs Scalar(Int(U8))
   I* of a final state: []

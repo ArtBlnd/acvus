@@ -94,6 +94,9 @@ impl State {
         }
         .to_string();
         let refused = Some(self.refuse_conflict(at, conflict));
+        if let Some(conflicted) = &unified.conflict {
+            self.conflicted_have_no_value(conflicted);
+        }
         Unification { unified, refused }
     }
 
@@ -153,6 +156,8 @@ impl State {
             );
             let refused =
                 self.refuse_conflict(at, Conflict::Fact(Fact::Indexes(element), constructor));
+            let members = self.classes.held(root).members.clone();
+            self.no_value.extend(members);
             return linked(recorded, Some(refused));
         };
         let sig = self.decls.decl(&view).sig.clone();

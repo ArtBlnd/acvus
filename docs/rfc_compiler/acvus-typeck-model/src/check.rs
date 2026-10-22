@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, Conflict, NamedConflict};
+use crate::class::{ClassId, ClassName, Conflict, Conflicted, NamedConflict};
 use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::node::Decision;
 use crate::relation::{Named, Relation};
@@ -51,6 +51,16 @@ pub struct Outcome {
 
 impl State {
     /// Refuses at `at` what no type holds, and returns the refusal.
+    /// The classes a conflict names hold a conjunction no type meets, so they
+    /// have no value (l.158, l.276), and are never solved or filled again.
+    pub(crate) fn conflicted_have_no_value(&mut self, conflicted: &Conflicted) {
+        let members: Vec<ClassId> = match conflicted {
+            Conflicted::Apart(apart) => apart.sides.iter().flatten().copied().collect(),
+            Conflicted::Holds { members, .. } => members.iter().copied().collect(),
+        };
+        self.no_value.extend(members);
+    }
+
     pub(crate) fn refuse_conflict(&mut self, at: String, conflict: Conflict) -> Refusal {
         let conflict = NamedConflict {
             conflict: &conflict,

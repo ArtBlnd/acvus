@@ -3,7 +3,7 @@ run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Record
 outcome 1
   refused
   value 1: none
-  value `1.5`: f64
+  value `1.5`: none
   value X: none
   partition {1, X}
   refusal conflict at "1.5 = X": ?{1.5}: float vs another family

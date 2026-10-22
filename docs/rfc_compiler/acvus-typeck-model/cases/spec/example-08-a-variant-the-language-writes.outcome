@@ -5,7 +5,7 @@ outcome 1
   value 1u8: u8
   value `Ok.0`: !
   value S: u8
-  value `Some(1u8)`: Option<u8>
+  value `Some(1u8)`: none
   value V: !
   decision Ok: applied
   decision v: read

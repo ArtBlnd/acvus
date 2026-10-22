@@ -30,7 +30,10 @@ turn.
    7).
 2. **A conflict.** Where two classes' kinds have different constructors or members,
    or a LitVar meets a scalar that does not admit its values, the two are left apart
-   and the relation that would make them one is refused.
+   and the relation that would make them one is refused. Unified, their kind would
+   be a conjunction no type meets (l.158, l.276), so each class the conflict names
+   has no value, as a class whose sources have no join (`State::conflicted_have_no_value`);
+   until 2026-10-22 each kept the kind it held, a value the text does not give.
 3. **"With an equation".** A class's value is the type every equation gives where
    it holds a kind the text or a declaration writes (l.273). That holds through
    unification, whatever else the class is unified with (`KindSource::Written`).

@@ -1,0 +1,14 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
+outcome 1
+  refused
+  value `&1u8`: none
+  value 1u8: none
+  value R: none
+  value `r.f`: !
+  decision `&1u8`: lend & place
+  decision `r.f`: applied through &
+  refusal conflict at "1u8 = R.Target": Scalar(Int(U8)) vs field f: r.f
+  refusal no_value `&1u8`
+  refusal no_value R
+  I* of a final state: []

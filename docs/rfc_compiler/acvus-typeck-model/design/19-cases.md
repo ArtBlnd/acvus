@@ -350,6 +350,10 @@ steps; `golden()` and every expectation read what they read without it.
   `istar/a-call-left-out-leaves-out-its-instance-relations` declared `choose` to
   give `Fn/1`, a function value no declaration makes since 80b33ad9 (l.184), and
   gives back the one its `T` takes in.
+- 2 cases under `cases/rules/classes` test a conflict, which leaves the classes it
+  names with no value (l.158, l.276), and 2 under `cases/rules/place` the
+  departure 3 of 2026-10-21, a part solved before its parent, which then gave two
+  and three outcomes and gives one now.
 - 3 cases under `cases/spec` test identities (l.347, l.351): Example 11's lines
   1–3, accepted with `b: G`; the same without the cast, refused at `b`; and an
   identity a body makes, made anew at each of two instances. Each was derived

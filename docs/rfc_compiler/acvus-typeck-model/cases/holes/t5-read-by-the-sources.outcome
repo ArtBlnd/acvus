@@ -4,12 +4,11 @@ outcome 1
   refused
   value 1: i32
   value `@cfg`: {name: String}
-  value A: {name: String}
+  value A: none
   value String: String
   value `a.extra`: i32
   decision `a.extra`: applied
   partition {1, `a.extra`}
   check `1 <= a.extra`: Ok(Identity)
-  check `@cfg <= A`: Ok(Identity)
   refusal conflict at "the value of A": Object vs field extra: a.extra
   I* of a final state: []

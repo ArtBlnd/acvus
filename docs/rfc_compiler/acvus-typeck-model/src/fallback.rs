@@ -40,6 +40,9 @@ impl State {
                 let name = self.class_name(root);
                 self.refuse_conflict(format!("the default of {name}"), conflict)
             });
+            if let Some(conflicted) = &unified.conflict {
+                self.conflicted_have_no_value(conflicted);
+            }
             self.classes.mark_solved(root);
             fell.push(FellBack {
                 class: root,

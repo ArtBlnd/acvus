@@ -3,7 +3,7 @@ run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Record
 outcome 1
   refused
   value 1: i32
-  value `@cfg`: {name: String}
+  value `@cfg`: none
   value `@cfg.extra`: i32
   value String: String
   decision `@cfg.extra`: applied

@@ -7,7 +7,7 @@ outcome 1
   value 2u8: u8
   value L: u8
   value Rr: u8
-  value `Self {..}`: Pair<u8, u8>
+  value `Self {..}`: none
   decision `.z`: applied
   check `1u8 <= L`: Ok(Identity)
   check `2u8 <= Rr`: Ok(Identity)
