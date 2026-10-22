@@ -63,7 +63,20 @@ met.
    class has a source still to come, a use that only reads it waits for that source
    and is not waited for: H7. Four cases refused at an undecided use now give the
    classes at its arguments their values, the refusal unchanged.
-9. **A lambda's environment and a function type** (l.238, since 61f3edf3 and
+9. **What a split not yet made will relate** (l.238 (a), l.244, since c30509e3).
+   One rule for every relation not yet split: the side that will take a relation
+   waits for the class whose taking a constructor splits it (`Edge::Taking`): a
+   part of `τ` in `τ ≤ α`, a part of `U` in `α ⇝ U`, a part at a parameter of a
+   function value, and the class `e?`'s wrapping passes into. And the nodes
+   recording into a class are reached along the parts of the two sides such a
+   split will link, among those they hold now by a kind, a kind known in part
+   or a function value's environment (`State::split_links`), so a pattern on a
+   variant's payload waits for the lend that makes it a reference (G3 of the
+   review of 2026-10-22), and a binding for its path's projections (`holes.md`,
+   O1). The exclusion of a field's, a component's, an index's and a variant's
+   projection from a read of whether a class is a reference is of those whose
+   operand is the class read (`State::projects_from`, l.242, l.261).
+10. **A lambda's environment and a function type** (l.238, since 61f3edf3 and
    77b3180b). A class holding a function value is taken as holding the parameter
    and result types in its lambdas' environments as the parts at a function
    type's parameters and result: they lie within the depth of a candidate writing

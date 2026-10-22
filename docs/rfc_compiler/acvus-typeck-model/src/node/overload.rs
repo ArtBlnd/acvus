@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::class::{ClassId, ClassName};
-use crate::coerce::{Rank, coerce_read};
+use crate::coerce::{Rank, along_le, coerce_read};
 use crate::decl::{Decl, DeclId};
 use crate::read::ReadValue;
 use crate::record::Recording;
@@ -135,6 +135,57 @@ impl State {
         recorded
     }
 
+    /// Where the use's result class, in the value read, has no source and
+    /// passes into places, the values of those places, each with whether the
+    /// result meets it there: a lower bound into an unknown, which its value
+    /// joins (l.219, l.274), or a boundary into a type written, which it
+    /// coerces to. None where the result class has a source.
+    fn meeting_places(read: &State, result: ClassId) -> Option<Vec<(bool, ReadValue)>> {
+        if !read.lower_bounds(result).is_empty() {
+            return None;
+        }
+        let root = read.root(result);
+        let places: Vec<(bool, ReadValue)> = read
+            .log
+            .iter()
+            .filter_map(|recorded| match recorded.relation {
+                Relation::LowerBound { lower, upper }
+                    if read.root(lower) == root && read.root(upper) != root =>
+                {
+                    Some((true, read.read_value(upper)))
+                }
+                Relation::Boundary { from, to }
+                    if read.root(from) == root && read.root(to) != root =>
+                {
+                    Some((false, read.read_value(to)))
+                }
+                _ => None,
+            })
+            .collect();
+        (!places.is_empty()).then_some(places)
+    }
+
+    /// The rank at which a candidate's result type passes into the places
+    /// the use's result passes into (l.324): into a meeting by the join's
+    /// `≤`, the type reaching the join of itself and that place's other
+    /// sources, as a meeting takes every value entering it (l.219); into a
+    /// boundary by a coercion, as before. A position that decides nothing
+    /// reaches every candidate. None where it reaches no place.
+    fn rank_into_places(&self, written: &ReadValue, places: &[(bool, ReadValue)]) -> Option<Rank> {
+        let mut ranks = Vec::new();
+        for (meets, value) in places {
+            let rank = match (meets, written.to_ty(), value.to_ty()) {
+                (true, Some(written), Some(value)) => {
+                    let joined = crate::join::join(&self.decls, &written, &value).ok()?;
+                    along_le(&self.decls, &written, &joined).ok()?.rank()?
+                }
+                _ => coerce_read(&self.decls, written, value).ok()?.rank()?,
+            };
+            ranks.push(rank);
+        }
+        ranks.into_iter().max()
+    }
+
     /// Narrows the candidates by the value the use reads at each position
     /// where they differ, then by the result (l.326–333).
     pub(super) fn narrow(
@@ -149,6 +200,7 @@ impl State {
         let sigs: Vec<&Signature> = candidates.iter().map(|decl| &decl.sig).collect();
         let differing = Self::differing(&sigs, args.len());
         let read = self.read_state(excluded);
+        let meeting = Self::meeting_places(&read, result);
         let read_at: Vec<(usize, ClassId, ReadValue)> = differing
             .iter()
             .map(|&i| {
@@ -181,6 +233,11 @@ impl State {
                     .iter()
                     .map(|&c| {
                         let written = ReadValue::of_sig(Self::at_position(sigs[c], *i));
+                        if *i == args.len()
+                            && let Some(places) = &meeting
+                        {
+                            return (c, self.rank_into_places(&written, places));
+                        }
                         let rank = if *i < args.len() {
                             coerce_read(&self.decls, value, &written)
                         } else {

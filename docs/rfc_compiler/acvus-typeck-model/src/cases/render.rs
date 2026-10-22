@@ -858,7 +858,6 @@ fn dependencies(state: &State, waits: Vec<(Vertex, Edge)>) -> String {
         (Vertex::Outside, Edge::Chosen) => "chosen".to_string(),
         (Vertex::Node(node), Edge::Reads) => format!("reads {}", name(node.as_str())),
         (Vertex::Outside, Edge::Reads) => "reads outside".to_string(),
-        (Vertex::Node(node), Edge::Path) => format!("path {}", name(node.as_str())),
         (to, edge) => unreachable!("the dependency graph has no edge {edge:?} to {to:?}"),
     });
     some_listed(waits).unwrap_or("none".to_string())

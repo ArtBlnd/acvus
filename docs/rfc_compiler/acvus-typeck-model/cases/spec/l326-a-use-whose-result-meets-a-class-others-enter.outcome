@@ -1,0 +1,23 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, deferral: Recording }, every order
+outcome 1
+  accepted
+  value 1u8: u8
+  value M: B
+  value R: B
+  value Str: str
+  value V: B
+  value `open()`: A
+  value s: &str
+  decision mk: mk#0
+  decision open: open#0
+  decision parse: parse#1
+  check `1u8 ~> mk.Param(0)`: Ok(Identity)
+  check `M <= V`: Ok(Identity)
+  check `R <= V`: Ok(Identity)
+  check `mk.Result <= M`: Ok(Identity)
+  check `open() <= V`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
+  check `open.Result <= open()`: Ok(Identity)
+  check `parse.Result <= R`: Ok(Identity)
+  check `s ~> parse.Param(0)`: Ok(Identity)
+  I* of a final state: []

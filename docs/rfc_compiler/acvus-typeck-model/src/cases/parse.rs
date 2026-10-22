@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::decl::Role;
 use crate::istar::Kind;
 use crate::lit::Literal;
-use crate::program::{BindingPath, Deferral, Place, Readings, Visibility};
+use crate::program::{Deferral, Place, Readings, Visibility};
 use crate::ty::Mutability;
 
 /// Where in a case's file something is written.
@@ -1254,8 +1254,6 @@ fn readings(text: &str) -> Result<Readings, String> {
         match (key.trim(), value.trim()) {
             ("visibility", "by_member") => readings.visibility = Visibility::ByMember,
             ("visibility", "by_sources") => readings.visibility = Visibility::BySources,
-            ("binding_path", "as_stated") => readings.binding_path = BindingPath::AsStated,
-            ("binding_path", "after_path") => readings.binding_path = BindingPath::AfterPath,
             ("deferral", "recording") => readings.deferral = Deferral::Recording,
             ("deferral", "reading") => readings.deferral = Deferral::Reading,
             (key, value) => return Err(format!("no reading {key} = {value}")),

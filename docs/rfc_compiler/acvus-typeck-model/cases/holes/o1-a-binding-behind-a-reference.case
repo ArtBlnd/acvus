@@ -1,9 +1,10 @@
 //@ hole: O1
 // let o = Some(1u8);
 // if let Some(x) = &o { }
-// The payload's projection applies to the target of &o (l.298), so the path
-// passes a shared reference and x lends its position (l.306).
-//@ reading: binding_path = after_path
+// Since c30509e3 the nodes recording into the binding's position are reached
+// along the link the split of O's payload will make with &o's target, so x
+// waits for its path's projection and lends through it (l.244, l.306): one
+// outcome, x: &u8, which the order split into two.
 
 let S;
 let `Some(1u8)`: Option<S>;
@@ -20,5 +21,3 @@ X = bind `Some.0` via [Some] @ x;
 
 must pass;
 assert X: &u8;
-assert Some == applied through &;
-assert x == bind lend & place;

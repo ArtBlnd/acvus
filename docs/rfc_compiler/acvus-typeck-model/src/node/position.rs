@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use crate::class::{ClassId, ClassName, Fact};
-use crate::program::{BindingPath, Projection};
+use crate::program::Projection;
 use crate::sig::{SigTy, Signature};
 use crate::solve::State;
 use crate::ty::{Name, Term};
@@ -294,30 +294,43 @@ impl State {
     /// What a node reads, and on which it depends (l.241–242, l.261).
     pub(crate) fn reads(&self, name: &Name) -> Reads {
         let kind = &self.nodes[name].kind;
-        let path = match (kind, self.readings.binding_path) {
-            (NodeKind::Bind { path, .. }, BindingPath::AfterPath) => path.clone(),
-            _ => Vec::new(),
-        };
         Reads {
             read: kind.read(),
             classes: self.read_positions(kind),
-            path,
         }
     }
 
     /// Whether the relations the node `recorder` records may change what a
-    /// node reading `read` reads at `class`, a class at the recorder's
-    /// position or reached from one (l.238 (b), l.244). For a value, every
-    /// such node (`holes.md`, H7); for whether a class is a reference, a node
-    /// that may decide it, other than a projection of a field, a component, an
-    /// index or a variant (l.242).
-    pub(crate) fn records_into(&self, recorder: &Name, class: ClassId, read: Read) -> bool {
+    /// node reading `read` at `position` reads at `class`, a class at the
+    /// recorder's position or reached from one (l.238 (b), l.244). For a
+    /// value, every such node (`holes.md`, H7); for whether a class is a
+    /// reference, a node that may decide it, other than a projection of a
+    /// field, a component, an index or a variant whose operand is the class
+    /// read (l.242), whose kind on it says nothing of whether it is one.
+    pub(crate) fn records_into(
+        &self,
+        recorder: &Name,
+        position: ClassId,
+        class: ClassId,
+        read: Read,
+    ) -> bool {
         match read {
             Read::Value => true,
             Read::Reference => {
-                !self.is_inner_projection(recorder) && self.may_decide_reference(recorder, class)
+                !self.projects_from(recorder, position)
+                    && self.may_decide_reference(recorder, class)
             }
         }
+    }
+
+    /// Whether the node is a projection of a field, a component, an index or
+    /// a variant whose operand is the class of `class` (l.242, l.261).
+    pub(crate) fn projects_from(&self, name: &Name, class: ClassId) -> bool {
+        matches!(
+            &self.nodes[name].kind,
+            NodeKind::Project { projection, operand, .. }
+                if *projection != Projection::Deref && self.root(*operand) == self.root(class)
+        )
     }
 
     /// Whether what the node records may yet decide whether the class is a

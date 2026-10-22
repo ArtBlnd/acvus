@@ -58,10 +58,12 @@ let v = make();          // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩
 take(&v);                // take(&[u8])
 ```
 
-Where two references meet, the hole stays: `&A ⊔ &C` is `&B` by the casts
-`&A → &B` and `&C → &B` (l.86), while two lower bounds `&A ≤ R` and `&C ≤ R` give
-`R` the constructor `&` and equate its target, an unknown, with `A` and `C`
-(l.278).
+Where two references meet, `&A ⊔ &C` is `&B` by the casts `&A → &B` and
+`&C → &B` (l.86), while two lower bounds `&A ≤ R` and `&C ≤ R` give `R` the
+constructor `&` and equate its target, an unknown, with `A` and `C` (l.278), so
+they have no value. 준량 judged this the intended reading on 2026-10-22: a
+reference is no structural type, so its target is invariant where references
+meet, and the two are left so.
 
 ## H4. A reborrow at a split
 
@@ -228,27 +230,27 @@ if let Some(x) = n { }
 
 ## O1. What a binding reads of its path
 
-A binding reads its position where its path passes no reference, and lends it where
-the path passes one (l.306). Whether the path passes one is what the projections on
-it became: each applies to its operand's target where the operand is a reference
-(l.298). But a binding reads "whether its equivalence class is a reference" (l.261),
-and depends on the nodes that record into its place, other than projections of a
-field, a component, an index or a variant (l.242), which are the projections on
-its path. So nothing makes a binding wait for them, and nothing it reads tells it
-what they became. Under the dependencies l.242 states, the outcome depends on the
-order: a binding decided before its path's projection reads its position, and one
-decided after lends it. Witness, two outcomes in the model, `x: u8` and `x: &u8`,
-both accepted (`cases/holes/o1-a-binding-behind-a-reference-as-stated.case`):
+Not an order since c30509e3. A binding reads its position where its path passes no
+reference, and lends it where the path passes one (l.306). Whether the path passes
+one is what the projections on it became: each applies to its operand's target
+where the operand is a reference (l.298). A binding depended on the nodes that
+record into its place, other than projections of a field, a component, an index or
+a variant (l.242), which are the projections on its path, so a binding decided
+before its path's projection read its position, and one decided after lent it: two
+outcomes, `x: u8` and `x: &u8`, which a reading of the model took apart by making
+the binding wait for its path (`BindingPath::AfterPath`, removed).
 
 ```
 let o = Some(1u8);
 if let Some(x) = &o { }
 ```
 
-Making the binding depend on the projections on its path gives one outcome, `x:
-&u8`, as in Rust (`BindingPath::AfterPath`). The exclusion in l.242 is about whether
-a class is a reference, which those projections do not decide; what a path passes
-is a different question, which l.242 does not ask.
+Since c30509e3 the exclusion in l.242 and l.261 is of the projections whose operand
+is the class read, and the nodes recording into a class are reached along the
+parts of the two sides that a relation not yet split will link (l.244). The
+binding's position, the payload of `&o`'s target, is so linked to `O`'s payload,
+and the binding waits for its path's projection: one outcome, `x: &u8`
+(`cases/holes/o1-a-binding-behind-a-reference.case`).
 
 ## O2. What a broken dependency's relations wait for
 

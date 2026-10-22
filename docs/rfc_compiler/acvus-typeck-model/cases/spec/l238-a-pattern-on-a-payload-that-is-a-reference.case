@@ -1,0 +1,32 @@
+//@ spec: l.238, l.244, l.261, l.296, l.306
+// let x = mk();              // mk() -> (u8, u8)
+// let o = Some(&x);
+// if let Some((_, b)) = o { }
+// .1 reads whether Some.0 is a reference, leaving out only the projections
+// whose operand is Some.0 (l.261, since c30509e3). Some.0 is O's payload, and
+// the split of O's lower bound will link it to S, the payload of Some(&x),
+// which the lend makes a reference: the nodes recording into Some.0 are
+// reached along that link (l.244), so .1 waits for the lend, applies through &
+// (l.296), and b lends (l.306): b: &u8 in every order.
+extern fn mk() -> (u8, u8);
+let X;
+let `mk()`;
+let `&x`;
+let S;
+let `Some(&x)`: Option<S>;
+let O;
+let `Some.0`;
+let `.1`;
+let Bv;
+`mk()` = mk() @ mk;
+X = `mk()`;
+`&x` = &X @ `&x`;
+S = `&x`;
+O = `Some(&x)`;
+`Some.0` = O as Some @ Some;
+`.1` = `Some.0`.1 @ `.1`;
+Bv = bind `.1` via [Some, `.1`] @ b;
+
+must pass;
+assert Bv: &u8;
+assert `.1` == applied through &;

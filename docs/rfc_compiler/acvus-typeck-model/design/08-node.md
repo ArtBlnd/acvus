@@ -64,9 +64,9 @@ reads its position, or lends it where its path passes a reference.
    value into the binding's type, and a lend passes its reference into it, both
    meetings. The references a path passes are those its projections applied
    through by auto-deref after its last Deref, since `&π` matches a reference
-   itself, as in Rust (patterns §1). How the binding learns its path's projections'
-   decisions is `holes.md`, O1, and the model takes it as a reading
-   (`BindingPath`).
+   itself, as in Rust (patterns §1). The binding learns its path's projections'
+   decisions by waiting for them, since the nodes recording into its position are
+   reached along the links of the splits not yet made (l.244; `holes.md`, O1).
 11. **What a use reads.** At each position where its candidates differ, the class
    there and the classes within the depth its candidates reach there (l.238 (b)),
    since the value read there is compared whole (l.326). Example 12 rests on it:
@@ -134,6 +134,13 @@ reads its position, or lends it where its path passes a reference.
    use records into it the value `Option⟨K⟩`, or `Result⟨O, X⟩` with the
    candidate's `E` wrapped into `X` (`Relation::Wrap`, note 11, reading 12), `K`
    and `O` made anew; decided as `!`, it records no exit, being not run (l.333).
+21. **A use's result into a meeting** (l.326, since c30509e3). Where the use's result
+   class has no source in the value read and passes into unknowns, the result step
+   narrows by the join: a candidate's result type reaches by `≤` its join with each
+   such place's other sources, as a meeting takes every value entering it; into a
+   boundary, by a coercion as before (`State::meeting_places`, `rank_into_places`). A
+   use whose result meets a class others enter is no longer refused against that
+   class's value without it (G2 of the review of 2026-10-22).
 
 ## Left open for change
 

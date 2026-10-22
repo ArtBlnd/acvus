@@ -114,7 +114,7 @@ classes, and `universal A;` a universal.
 | Directive | Means | Where none is written |
 |---|---|---|
 | `//@ spec: …`, `//@ hole: H7` | what the case witnesses | — |
-| `//@ reading: deferral = reading, binding_path = after_path` | a run under these readings, the others the default; each line a run, `default` the defaults | one run, `Readings::default()` |
+| `//@ reading: deferral = reading, visibility = by_sources` | a run under these readings, the others the default; each line a run, `default` the defaults | one run, `Readings::default()` |
 | `//@ orders: all` | every order, which must end within 100 000 states | `all` |
 | `//@ orders: sampled 200` | 200 sampled orders (note 13, reading 2) | — |
 | `//@ order: solve A, fill B, decide f, fallback` | one order: the entry's steps, then its first step until none is left, falling back where none is | — |

@@ -269,7 +269,6 @@ impl Program {
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Readings {
     pub visibility: Visibility,
-    pub binding_path: BindingPath,
     pub deferral: Deferral,
 }
 
@@ -295,18 +294,6 @@ pub enum Visibility {
     /// As `ByMember`, but none where a lower bound of the class is a type the
     /// host gives, which does not grow (patterns §2).
     BySources,
-}
-
-/// What decides whether a binding's path passes a reference (l.306;
-/// `holes.md`, O1).
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub enum BindingPath {
-    /// The binding depends on what l.242 states alone, and a projection on its
-    /// path not yet decided has passed no reference.
-    #[default]
-    AsStated,
-    /// The binding depends on the projections on its path as well.
-    AfterPath,
 }
 
 /// A type the text gives, named, in the binding group its text lies in.

@@ -5,11 +5,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::class::ClassId;
+use crate::class::{ClassId, Fact};
 use crate::node::Reads;
 use crate::relation::Relation;
 use crate::solve::State;
-use crate::ty::{Name, Term};
+use crate::ty::{NONE, Name, PartKey, SOME, Term};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Vertex {
@@ -43,8 +43,6 @@ pub(crate) enum Edge {
     /// A node on an undecided node that records relations into the classes at
     /// the positions it reads (l.241–242).
     Reads,
-    /// A binding on an undecided projection on its path (`holes.md`, O1).
-    Path,
     /// A universal on the use that chooses it (l.240).
     Chosen,
 }
@@ -225,12 +223,20 @@ impl State {
             }
         }
         // The nodes that record into a class (l.244), each with the class at
-        // whose position it lies.
+        // whose position it lies, reached along the dependencies between
+        // classes and the links a relation not yet split will make between
+        // the parts of its two sides (l.238 (a)).
+        let links = self.split_links();
         let recording = |class: ClassId, edges: &BTreeMap<Vertex, BTreeSet<(Vertex, Edge)>>| {
             let mut classes = BTreeSet::from([self.root(class)]);
             let mut work = vec![self.root(class)];
             let mut nodes = BTreeSet::new();
             while let Some(at) = work.pop() {
+                for &next in links.get(&at).into_iter().flatten() {
+                    if classes.insert(next) {
+                        work.push(next);
+                    }
+                }
                 for (to, edge) in edges.get(&Vertex::Class(at)).into_iter().flatten() {
                     match (to, edge) {
                         (Vertex::Class(next), Edge::Lower | Edge::Taking | Edge::Part) => {
@@ -249,27 +255,18 @@ impl State {
         };
         let mut reads = Vec::new();
         for (name, _) in &undecided {
-            let Reads {
-                read,
-                classes,
-                path,
-            } = self.reads(name);
+            let Reads { read, classes } = self.reads(name);
             for position in classes {
                 for (recorder, at) in recording(position, &edges) {
                     let left_out = match &recorder {
                         Vertex::Node(recorder) => {
-                            recorder == *name || !self.records_into(recorder, at, read)
+                            recorder == *name || !self.records_into(recorder, position, at, read)
                         }
                         Vertex::Class(_) | Vertex::Outside => false,
                     };
                     if !left_out {
                         reads.push(((*name).clone(), recorder, Edge::Reads));
                     }
-                }
-            }
-            for step in path {
-                if self.nodes[&step].decision.is_none() {
-                    reads.push(((*name).clone(), Vertex::Node(step), Edge::Path));
                 }
             }
         }
@@ -281,6 +278,96 @@ impl State {
         }
         let component = components(&edges);
         Graph { edges, component }
+    }
+
+    /// For each relation not yet split, the parts its split will relate,
+    /// among those its two sides hold now, by a kind, a kind known in part or
+    /// a function value's environment (l.238 (a), l.278): each part that will
+    /// take a relation, with the part of the other side it will take it from.
+    /// A lower bound's or a part lower bound's upper side takes from the lower,
+    /// a boundary's type passed into from the value, a function type's
+    /// parameter's environment parameter from the type's parameter, a function
+    /// type's result from the environment's result, and the class `e?`'s
+    /// wrapping passes into from its error part.
+    pub(crate) fn split_links(&self) -> BTreeMap<ClassId, BTreeSet<ClassId>> {
+        let mut links: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
+        let mut link = |taking: ClassId, from: ClassId| {
+            let (taking, from) = (self.root(taking), self.root(from));
+            if taking != from {
+                links.entry(taking).or_default().insert(from);
+            }
+        };
+        for (i, recorded) in self.log.iter().enumerate() {
+            if self.split.contains(&i) {
+                continue;
+            }
+            let (from, to) = match recorded.relation {
+                Relation::LowerBound { lower, upper }
+                | Relation::PartLowerBound { lower, upper } => (lower, upper),
+                Relation::Boundary { from, to } => (from, to),
+                Relation::Wrap { from, to } => {
+                    link(to, from);
+                    continue;
+                }
+                _ => continue,
+            };
+            let (from_parts, to_parts) = (self.parts_held(from), self.parts_held(to));
+            for (key, &taking) in &to_parts {
+                if let Some(&given) = from_parts.get(key) {
+                    match key {
+                        PartKey::Param(_) => link(given, taking),
+                        _ => link(taking, given),
+                    }
+                }
+            }
+        }
+        links
+    }
+
+    /// The parts a class holds now, by name: those of its kind, those its
+    /// kinds known in part name, and, for a function value, the parameter and
+    /// result types in its lambdas' environments at a function type's
+    /// parameters and result (l.238 (b)).
+    fn parts_held(&self, id: ClassId) -> BTreeMap<PartKey, ClassId> {
+        let root = self.root(id);
+        let held = self.classes.held(root);
+        let mut parts = BTreeMap::new();
+        match &held.kind {
+            Some((Term::FunctionValue { .. }, _)) => {
+                for lambda in self.values_of(root) {
+                    let mut environment = self.environment_of(&lambda);
+                    if let Some(Some(result)) = environment.pop() {
+                        parts.insert(PartKey::Return, result);
+                    }
+                    for (i, param) in environment.into_iter().enumerate() {
+                        if let Some(param) = param {
+                            parts.insert(PartKey::Param(i), param);
+                        }
+                    }
+                }
+            }
+            Some((kind, _)) => {
+                for (key, &part) in kind.parts() {
+                    parts.insert(key, part);
+                }
+            }
+            None => {
+                for fact in &held.facts {
+                    let key = match fact {
+                        Fact::Ref(_) => PartKey::Target,
+                        Fact::Field(name, _) => PartKey::Field(name.clone()),
+                        Fact::Component(i, _) => PartKey::Component(*i),
+                        Fact::Indexes(_) => PartKey::Element,
+                        Fact::Variant { variant, .. } => match variant.as_str() {
+                            SOME | NONE => PartKey::Payload(Name::new(SOME)),
+                            _ => PartKey::Payload(variant.clone()),
+                        },
+                    };
+                    parts.insert(key, fact.class());
+                }
+            }
+        }
+        parts
     }
 
     /// The roots of the classes at any depth within the kind of `id`'s
@@ -347,7 +434,7 @@ impl State {
     /// are recorded (l.238 (b), l.241).
     fn satisfied(&self, to: &Vertex, edge: Edge, met: &Met) -> bool {
         match (to, edge) {
-            (Vertex::Node(node), Edge::Reads | Edge::Path) => self.nodes[node].decision.is_some(),
+            (Vertex::Node(node), Edge::Reads) => self.nodes[node].decision.is_some(),
             (Vertex::Class(class), Edge::Lower) => {
                 met.settled.contains(class)
                     || met.nothing_enters.contains(class)

@@ -1,5 +1,5 @@
 // What the model gives, written by `BLESS=1` (design/19-cases.md).
-run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
+run 1: Readings { visibility: ByMember, deferral: Recording }, every order
 outcome 1
   accepted
   value `&1`: &u16

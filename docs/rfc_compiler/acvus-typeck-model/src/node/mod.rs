@@ -87,9 +87,6 @@ pub(crate) struct Reads {
     pub(crate) read: Read,
     /// The classes at the positions it reads.
     pub(crate) classes: Vec<ClassId>,
-    /// The projections on a binding's path, where the reading takes it so
-    /// (`holes.md`, O1).
-    pub(crate) path: Vec<Name>,
 }
 
 /// What a use, a lend, a projection or a binding became (l.261).
@@ -377,16 +374,17 @@ impl State {
     /// The value the node reads leaving out the relations of the nodes
     /// `excluded`, and, for a lend, a projection or a binding, which reads
     /// whether a class is a reference, of every projection other than a Deref
-    /// (l.261), and what the node becomes by it, none where it decides nothing
-    /// (l.261, l.333).
+    /// whose operand is a class it reads (l.261), and what the node becomes by
+    /// it, none where it decides nothing (l.261, l.333).
     pub(crate) fn value_read(&self, name: &Name, excluded: &BTreeSet<Name>) -> ValueRead {
         let kind = &self.nodes[name].kind;
         let mut excluded = excluded.clone();
         if kind.read() == Read::Reference {
+            let read = self.read_positions(kind);
             excluded.extend(
                 self.nodes
                     .keys()
-                    .filter(|node| self.is_inner_projection(node))
+                    .filter(|node| read.iter().any(|&class| self.projects_from(node, class)))
                     .cloned(),
             );
         }
