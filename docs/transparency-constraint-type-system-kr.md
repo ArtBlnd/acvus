@@ -330,7 +330,7 @@ method 호출의 receiver는 첫 인자다. 적힌 그대로, `&`, 그리고 rec
 | 인자마다, 차례로 | 인자의 타입 | 후보의 parameter |
 | 결과 | 후보의 결과 타입 | 결과가 넘어가는 타입 |
 
-아무것도 정하지 않는 자리는 모든 후보에 닿는다. 그 use가 읽는 값이 정하지 않는 자리, `!`, 그리고 자기 계열 안의 LitVar가 그렇다. 좁힐 때 conversion은 쓰지 않는다(types §7). LitVar의 자리 때문에만 후보가 여럿 남으면, 그 LitVar를 그 계열의 default로 보고 다시 좁힌다. 정확히 하나가 남으면 use는 그 후보로 정해진다. 인자가 `!`인 use는 실행되지 않으므로, 남는 후보와 상관없이 결과가 `!`인 것으로 정해진다(types §6).
+아무것도 정하지 않는 자리는 모든 후보에 닿는다. 그 use가 읽는 값이 정하지 않는 자리, `!`, 그리고 자기 계열 안의 LitVar가 그렇다. 좁힐 때 conversion은 쓰지 않는다(types §7). 후보가 여럿 남고 그 use가 읽은 값에 LitVar가 있으면, 그 LitVar를 그 계열의 default로 보고 다시 좁힌다. 정확히 하나가 남으면 use는 그 후보로 정해진다. 인자가 `!`인 use는 실행되지 않으므로, 남는 후보와 상관없이 결과가 `!`인 것으로 정해진다(types §6).
 
 ## `?`
 
@@ -584,5 +584,5 @@ q.nest(3)
 1. `new`에서 `Self { l, r }`는 part가 새 동치류 `P`, `Q`인 `Pair⟨P, Q⟩`를 만들고, `P ≥ L`, `Q ≥ R`이다. `L`, `R`은 parameter의 타입이라 universal이므로 이것들은 C에 남는다. `Pair::new(1u8, "s")`의 instance에서는 그 사본이 인자와 만나므로 `p`는 `Pair⟨u8, &str⟩`이다.
 2. `swap`의 receiver는 `Pair⟨A, B⟩`의 kind를 지니고, `self.r`, `self.l`은 part `B`, `A`다. 그래서 결과는 `P ≥ B`, `Q ≥ A`인 `Pair⟨P, Q⟩`다. `p.swap()`에서 `p`가 receiver로 넘어가는 경계를 쪼개면, `A`, `B`의 사본은 미지수이므로 등식으로 `u8`, `&str`이 되고, `q`는 `Pair⟨&str, u8⟩`이다.
 3. `nest`의 재귀 호출은 같은 binding group의 호출이라 instance를 만들지 않는다. 그 receiver `Self { l: self, r: 0u8 }`는 `P ≥ Pair⟨A, B⟩`, `Q ≥ u8`인 `Pair⟨P, Q⟩`다. 이 값이 receiver `Pair⟨A, B⟩`로 넘어가는 자리는 경계이고, 쪼개면 `A`, `B`는 universal이므로 경계 `P ⇝ A`, `Q ⇝ B`가 기록된다. `P`는 하한으로 `Pair⟨A, B⟩`, `Q`는 `u8`이 되며, 두 경계는 universal에 기대므로 C에 남는다.
-4. `q.nest(3)`의 instance에서 `A`, `B`의 사본은 `&str`, `u8`이다. `n == 0`과 `n - 1`은 LitVar의 자리 때문에만 후보가 여럿 남으므로, LitVar를 default `i32`로 보고 `i32`로 좁혀진다.
+4. `q.nest(3)`의 instance에서 `A`, `B`의 사본은 `&str`, `u8`이다. `n == 0`과 `n - 1`은 후보가 여럿 남고 읽은 값에 LitVar가 있으므로, LitVar를 default `i32`로 보고 `i32`로 좁혀진다.
 5. C의 사본인 경계 `Pair⟨&str, u8⟩ ⇝ &str`에는 닿는 조합도 선언된 conversion도 없다. 그래서 그 재귀 호출에서 거부된다.
