@@ -216,7 +216,7 @@ When a use makes an instance, it makes anew the equivalence classes and the uses
 
 ### Meeting and boundary
 
-Where a value passes into a type, it is a meeting when that type is an unknown of the binding group the place lies in, and a boundary otherwise. Where the type is that of a binding reached by name, its fields and parts included, and an unknown of a binding group enclosing the one the place lies in, it is a meeting too. A place that reaches an unknown of an enclosing binding group through a reference is a boundary. A body's result type is an unknown of that body, and its tail, its `return`s and its `?` exits are values passing into it. A template's result type is fixed to `String` and is not an unknown.
+Where a value passes into a type, it is a meeting when that type is an unknown of the binding group the place lies in, and a boundary otherwise. Where the type is that of a binding reached by name, its fields and parts included, and an unknown of a binding group enclosing the one the place lies in, it is a meeting too. A place that reaches an unknown of an enclosing binding group through a reference is a boundary. A body's result type is an unknown of that body, and its tail, its `return`s and its `?` exits are values passing into it. An expression that gives no value, `return e` and a block that ends in `break`, `continue` or `return`, has as its type an equivalence class made anew at that place, which nothing enters (types §4). The condition of an `if` or a `while` is a value passing into `bool`. A template's result type is fixed to `String` and is not an unknown.
 
 ### Recording
 
@@ -307,17 +307,17 @@ A pattern is projections of its scrutinee's place, and at each of its positions 
 | `V` without a payload | the same as `V(_)` |
 | `_` | nothing |
 
-A `match` applies each arm's pattern to its scrutinee.
+A `match` applies each arm's pattern to its scrutinee, and `if let p = e` and `while let p = e` apply `p` to `e`. The `x` of `for x in e` is the binding at `e`'s element place, `e[_]`, so a `for` goes over anything that is indexed (Projection). The `x` of `for x in lo..hi` is the result of that range's use (Overload resolution).
 
 ## Struct
 
-`Self { f̄: ē }` is a value whose constructor is this module's struct and whose parts are equivalence classes `T̄` made anew at that place, and each `eᵢ` is a value passing into `Tᵢ`. A struct's fields are not members but its parts in the order it declares them, so a field's kind is unified with that part and adds nothing. The equivalence class of a receiver `self`, `&self` or `&mut self` carries the kind `Self⟨T̄⟩`, `&Self⟨T̄⟩` or `&mut Self⟨T̄⟩` as the text writes it, and `T̄` is universal.
+An expression that makes a value, `(ē)`, `[ē]`, `{f̄: ē}`, `Self { f̄: ē }` or `V(e)`, is a value of its constructor whose parts are equivalence classes made anew at that place, and each component is a value passing into its part. Every component of `[ē]` passes into its one element part. The constructor of `Self { f̄: ē }` is this module's struct. A struct's fields are not members but its parts in the order it declares them, so a field's kind is unified with that part and adds nothing. The equivalence class of a receiver `self`, `&self` or `&mut self` carries the kind `Self⟨T̄⟩`, `&Self⟨T̄⟩` or `&mut Self⟨T̄⟩` as the text writes it, and `T̄` is universal.
 
-`V(e)` is a value whose payload of `V` is an equivalence class `P` made anew at that place, and `e` is a value passing into `P`. Where `V` is a member of `Option` or `Result`, its constructor is `Option` or `Result` and its other part an equivalence class made anew; where it is `E::V(e)`, it is an enum named `E` whose only member is `V`. In a `V` written without a payload, `P` has no relation.
+The part of `V(e)` is `V`'s payload `P`, into which `e` passes. Where `V` is a member of `Option` or `Result`, its constructor is `Option` or `Result` and its other part an equivalence class made anew; where it is `E::V(e)`, it is an enum named `E` whose only member is `V`. In a `V` written without a payload, `P` has no relation.
 
 ## Overload resolution
 
-The candidates of a use that calls a declaration are the declarations its name reaches. An operator, `{{ e }}` and `e?` are uses the language sets, whose candidates are a lang item's (operators §2), `core::display`'s and the two the language gives. At a structural type, the candidate of a generic function is that function called at each part (types §1). The type parameters of a candidate that is an extern declaration are unknowns made anew at each use, of the binding group the use lies in.
+The candidates of a use that calls a declaration are the declarations its name reaches. An operator, `{{ e }}`, `e?`, `e as T` and a `for`'s `lo..hi` are uses the language sets, whose candidates are a lang item's (operators §2), `core::display`'s, the two the language gives, an `(S) -> T` for each type `S` Rust casts to `T` (operators §5), and a `(T, T) -> T` for each integer `T`. The candidates of an operator that is no lang item are the language's: `(bool, bool) -> bool` for `&&` and `||`, `(bool) -> bool` for `!`, a `(T, T) -> T` for `^` at `bool` and each integer `T` and for `&` at each integer `T`, and a `(T, U) -> T` for `<<` and `>>` at each two integers `T` and `U` (operators §2). At a structural type, the candidate of a generic function is that function called at each part (types §1). The type parameters of a candidate that is an extern declaration are unknowns made anew at each use, of the binding group the use lies in.
 
 A method call's receiver is its first argument, adjusted as written, then as `&`, then as `&mut` where the receiver is a place that may be written, and the first adjustment that reaches a candidate is taken (types §6).
 

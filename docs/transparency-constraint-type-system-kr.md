@@ -216,7 +216,7 @@ use는 instance를 만들 때 C에서 그 binding group 자신의 동치류와 u
 
 ### 만남과 경계
 
-값이 어떤 타입으로 넘어가는 자리에서, 그 타입이 그 자리가 놓인 binding group의 미지수이면 만남이고, 아니면 경계다. 이름으로 닿는 binding(그 field와 part 포함)의 타입이 그 자리가 놓인 binding group을 감싸는 binding group의 미지수이면 그것도 만남이다. 감싸는 binding group의 미지수에 reference를 거쳐 닿는 자리는 경계다. body의 결과 타입은 그 body의 미지수이며, tail, `return`, `?`의 exit는 그리로 넘어가는 값이다. template의 결과 타입은 `String`으로 정해져 있어 미지수가 아니다.
+값이 어떤 타입으로 넘어가는 자리에서, 그 타입이 그 자리가 놓인 binding group의 미지수이면 만남이고, 아니면 경계다. 이름으로 닿는 binding(그 field와 part 포함)의 타입이 그 자리가 놓인 binding group을 감싸는 binding group의 미지수이면 그것도 만남이다. 감싸는 binding group의 미지수에 reference를 거쳐 닿는 자리는 경계다. body의 결과 타입은 그 body의 미지수이며, tail, `return`, `?`의 exit는 그리로 넘어가는 값이다. 값을 내지 않는 식, 곧 `return e`와 `break`, `continue`, `return`으로 끝나는 block의 타입은 그 자리에서 새로 만든 동치류이며, 그리로는 아무것도 들어오지 않는다(types §4). `if`와 `while`의 조건은 `bool`로 넘어가는 값이다. template의 결과 타입은 `String`으로 정해져 있어 미지수가 아니다.
 
 ### 기록
 
@@ -307,17 +307,17 @@ pattern은 scrutinee place의 projection들이며, 각 자리에서 다음을 �
 | payload 없는 `V` | `V(_)`와 같다 |
 | `_` | 없음 |
 
-match는 arm마다 그 pattern을 scrutinee에 건다.
+match는 arm마다 그 pattern을 scrutinee에 걸고, `if let p = e`와 `while let p = e`는 `p`를 `e`에 건다. `for x in e`의 `x`는 `e`의 element 자리, 곧 `e[_]`의 binding이므로, `for`는 index되는 모든 것을 돈다(Projection). `for x in lo..hi`의 `x`는 그 range의 use의 결과다(Overload resolution).
 
 ## Struct
 
-`Self { f̄: ē }`는 constructor가 이 module의 struct이고 part가 그 자리에서 새로 만든 동치류 `T̄`인 값이며, 각 `eᵢ`는 `Tᵢ`로 넘어가는 값이다. struct의 field는 member가 아니라 선언한 순서의 part이므로, field의 kind는 그 part와 unify되고 아무것도 더하지 않는다. receiver `self`, `&self`, `&mut self`의 동치류는 텍스트가 적은 대로 `Self⟨T̄⟩`, `&Self⟨T̄⟩`, `&mut Self⟨T̄⟩`의 kind를 지니며, `T̄`는 universal이다.
+값을 만드는 식, 곧 `(ē)`, `[ē]`, `{f̄: ē}`, `Self { f̄: ē }`, `V(e)`는 그 constructor의 값이며, 그 part는 그 자리에서 새로 만든 동치류이고, 각 성분은 자기 part로 넘어가는 값이다. `[ē]`의 성분은 모두 element part 하나로 넘어간다. `Self { f̄: ē }`의 constructor는 이 module의 struct다. struct의 field는 member가 아니라 선언한 순서의 part이므로, field의 kind는 그 part와 unify되고 아무것도 더하지 않는다. receiver `self`, `&self`, `&mut self`의 동치류는 텍스트가 적은 대로 `Self⟨T̄⟩`, `&Self⟨T̄⟩`, `&mut Self⟨T̄⟩`의 kind를 지니며, `T̄`는 universal이다.
 
-`V(e)`는 그 자리에서 새로 만든 동치류 `P`를 `V`의 payload로 가진 값이며, `e`는 `P`로 넘어가는 값이다. `V`가 `Option`이나 `Result`의 member이면 그 constructor는 `Option`이나 `Result`이고 다른 part는 새로 만든 동치류이며, `E::V(e)`이면 이름이 `E`이고 member가 `V` 하나인 enum이다. payload를 쓰지 않은 `V`에서 `P`에는 아무 관계도 없다.
+`V(e)`의 part는 `V`의 payload `P`이며, `e`는 `P`로 넘어간다. `V`가 `Option`이나 `Result`의 member이면 그 constructor는 `Option`이나 `Result`이고 다른 part는 새로 만든 동치류이며, `E::V(e)`이면 이름이 `E`이고 member가 `V` 하나인 enum이다. payload를 쓰지 않은 `V`에서 `P`에는 아무 관계도 없다.
 
 ## Overload resolution
 
-선언을 부르는 use의 후보는 이름이 닿는 선언들이다. 연산자, `{{ e }}`, `e?`는 언어가 정한 use이며, 각각 lang item(operators §2), `core::display`, 언어가 주는 두 후보를 후보로 가진다. structural type에서 generic function의 후보는, 그 function을 각 part에서 부르는 것이다(types §1). extern 선언인 후보의 type parameter는 그 use마다 새로 만든, 그 use가 놓인 binding group의 미지수다.
+선언을 부르는 use의 후보는 이름이 닿는 선언들이다. 연산자, `{{ e }}`, `e?`, `e as T`, `for`의 `lo..hi`는 언어가 정한 use이며, 각각 lang item(operators §2), `core::display`, 언어가 주는 두 후보, Rust가 `T`로 cast하는 타입 `S`마다의 `(S) -> T`(operators §5), 정수 `T`마다의 `(T, T) -> T`를 후보로 가진다. lang item이 아닌 연산자의 후보는 언어가 준다: `&&`와 `||`는 `(bool, bool) -> bool`, `!`는 `(bool) -> bool`, `^`는 `bool`과 정수의 `T`마다 `(T, T) -> T`, `&`는 정수 `T`마다 `(T, T) -> T`, `<<`와 `>>`는 정수 `T`, `U`마다 `(T, U) -> T`다(operators §2). structural type에서 generic function의 후보는, 그 function을 각 part에서 부르는 것이다(types §1). extern 선언인 후보의 type parameter는 그 use마다 새로 만든, 그 use가 놓인 binding group의 미지수다.
 
 method 호출의 receiver는 첫 인자다. 적힌 그대로, `&`, 그리고 receiver가 쓸 수 있는 place이면 `&mut` 순으로 맞추어, 처음 후보에 닿는 것을 쓴다(types §6).
 
