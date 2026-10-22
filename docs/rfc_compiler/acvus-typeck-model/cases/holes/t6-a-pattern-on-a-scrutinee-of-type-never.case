@@ -1,8 +1,11 @@
 //@ hole: T6
+//@ spec: l.278
 // let n = never();         // never() -> !
 // if let Some(x) = n { }
-// The kind "has variant Some" gives no member, so N is !, which holds no
-// payload, and the model refuses; patterns §4 has the pattern decide nothing.
+// The kind "has variant Some" gives no member, so N is !; since 87efde71 `!`,
+// which has no value, meets every kind (l.278), so the pattern decides
+// nothing, as patterns §4 has it, and x's type, which nothing enters, falls
+// back to ! (l.290).
 extern fn never() -> !;
 
 let N;
@@ -14,5 +17,6 @@ N = `never()`;
 `Some.0` = N as Some @ Some;
 X = bind `Some.0` via [Some] @ x;
 
-must fail;
-assert refused conflict at "the value of N";
+must pass;
+assert N: !;
+assert X: !;

@@ -537,6 +537,10 @@ impl Classes {
                     // The state links it along the container's view (l.156).
                     continue;
                 }
+                if let Term::Never = kind {
+                    // `!`, which has no value, meets every kind (l.278).
+                    continue;
+                }
                 let resolved = resolve(kind, fact, types)
                     .ok_or_else(|| Conflict::Fact(fact.clone(), kind.constructor()))?;
                 pairs.push(Pair {

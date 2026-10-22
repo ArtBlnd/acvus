@@ -1,0 +1,14 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
+outcome 1
+  refused
+  value 1u8: u8
+  value T: !
+  value `t.0`: !
+  value `takes_u8(t)`: ()
+  decision `t.0`: applied
+  decision takes_u8: takes_u8#0
+  check `1u8 <= t.0`: Err(None)
+  check `T ~> takes_u8.Param(0)`: Ok(Never)
+  check `takes_u8.Result <= takes_u8(t)`: Ok(Identity)
+  I* of a final state: []

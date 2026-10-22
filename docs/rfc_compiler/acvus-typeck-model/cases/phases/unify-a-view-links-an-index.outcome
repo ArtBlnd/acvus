@@ -24,7 +24,6 @@ start run
 step 1 run: decide `v[0]`
   decide `v[0]`: applied
     record #5 V: index v[0]
-  split #5 V: index v[0]: no parts
 step 2 run: solve `new()`
   join `new()`: Extern(Vec)
   split #4 new.Result <= new(): parts
@@ -41,6 +40,7 @@ step 3 run: solve V
     record #12 v[0] = link(V -> v[0])[0].Var(Type(0))
   split #1 new() <= V: parts
     record #13 new().Arg(0) = V.Arg(0)
+  split #5 V: index v[0]: no parts
   split #7 link(V -> v[0])[0].Param.Target: Vec<link(V -> v[0])[0].Var(Type(0))>: no parts
   split #8 link(V -> v[0])[0].Param: &link(V -> v[0])[0].Param.Target: no parts
   split #9 link(V -> v[0])[0].Result.Target: [link(V -> v[0])[0].Var(Type(0))]: no parts

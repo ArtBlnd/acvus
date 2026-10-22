@@ -1588,6 +1588,7 @@ fn within(from: &Value, to: &Value) -> bool {
 /// value `part` (l.148–156).
 fn has(decls: &Decls, value: &Value, projection: &Projection, part: &Value) -> bool {
     match (projection, value.term()) {
+        (_, Term::Never) => true,
         (Projection::Deref, Term::Ref(_, target)) => target == part,
         (Projection::Field(field), Term::Object(fields)) => fields.get(field) == Some(part),
         (Projection::Field(field), Term::Struct(module, args)) => decls

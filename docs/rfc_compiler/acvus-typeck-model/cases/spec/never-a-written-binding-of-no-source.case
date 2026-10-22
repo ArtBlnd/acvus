@@ -1,0 +1,17 @@
+//@ spec: l.278, l.282, l.290, l.292
+// let t; t.0 = 1u8; takes_u8(t);
+// T takes no constructor from the kind t.0 gives and falls back to ! (l.290).
+// ! meets every kind, the part it names being ! (l.278), so 1u8 enters t.0 of
+// type ! and does not reach it (l.282): refused there, so that t, which holds
+// what was written into it, never passes as u8.
+extern fn takes_u8(u8);
+let T;
+let `t.0`;
+let 1u8: u8;
+let `takes_u8(t)`;
+`t.0` = T.0 @ `t.0`;
+`t.0` = 1u8;
+`takes_u8(t)` = takes_u8(T) @ takes_u8;
+
+must fail;
+assert failing [`1u8 <= t.0`];

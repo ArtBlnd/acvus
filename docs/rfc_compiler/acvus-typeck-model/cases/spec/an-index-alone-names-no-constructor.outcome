@@ -4,8 +4,7 @@ outcome 1
   refused
   value 1: i32
   value A: !
-  value `a[0]`: i32
+  value `a[0]`: !
   decision `a[0]`: applied
-  check `1 <= a[0]`: Ok(Identity)
-  refusal conflict at "the default of A": Never vs index a[0]
+  check `1 <= a[0]`: Err(None)
   I* of a final state: []

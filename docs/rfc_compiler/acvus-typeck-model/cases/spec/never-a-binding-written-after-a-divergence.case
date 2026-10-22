@@ -1,0 +1,19 @@
+//@ spec: l.278, l.282, l.292
+// let t; if c { t = never(); } t.0 = 1u8; takes_u8(t);   // never() -> !
+// T's source gives !, whose part t.0 is ! (l.278), so 1u8 does not reach it
+// (l.282): refused there.
+extern fn never() -> !;
+extern fn takes_u8(u8);
+let T;
+let `never()`;
+let `t.0`;
+let 1u8: u8;
+let `takes_u8(t)`;
+`never()` = never() @ never;
+T = `never()`;
+`t.0` = T.0 @ `t.0`;
+`t.0` = 1u8;
+`takes_u8(t)` = takes_u8(T) @ takes_u8;
+
+must fail;
+assert failing [`1u8 <= t.0`];

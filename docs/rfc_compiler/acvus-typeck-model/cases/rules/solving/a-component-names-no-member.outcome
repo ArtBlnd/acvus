@@ -4,8 +4,7 @@ outcome 1
   refused
   value 1u8: u8
   value T: !
-  value `t.0`: u8
+  value `t.0`: !
   decision `t.0`: applied
-  check `1u8 <= t.0`: Ok(Identity)
-  refusal conflict at "the default of T": Never vs component 0: t.0
+  check `1u8 <= t.0`: Err(None)
   I* of a final state: []

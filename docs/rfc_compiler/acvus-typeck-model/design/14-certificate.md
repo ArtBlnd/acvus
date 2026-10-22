@@ -65,7 +65,7 @@ What each item and decision gives, and what holding means on closed values:
 | `Use(k)` | `k` is a candidate (l.322); each argument into its parameter, a meeting where the signature writes a variable, a boundary where it writes a type; the result type as a lower bound of the result | as above, the variables taking the values of the classes the decision made |
 | `Never` | `!` as a lower bound of the result, and an argument the use reads has the value `!` (l.335) | as above |
 | `Lend { target, mutability }` | the result is a reference of `mutability` to the place, `mutability` being the lend's own; or, where the place is a reference, to its target, `mutability` being the lesser of the lend's and the place's (l.298) | the values have those shapes |
-| `Applied` | the operand has the member or part, of the result's value (l.146–154) | its value has it |
+| `Applied` | the operand has the member or part, of the result's value (l.146–154) | its value has it, or is `!`, which meets every kind (l.278) |
 | `AppliedToTarget(m)` | the operand is a reference, of `m` where decided, to a type that has it (l.300) | as above |
 | `Read` | the position as a lower bound of the binding (l.308) | as above |
 | `BindLend { target, mutability }` | a reference to the position, or its target, as a lower bound of the binding (l.308) | as above |

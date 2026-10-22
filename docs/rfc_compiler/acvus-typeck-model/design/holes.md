@@ -210,12 +210,17 @@ Read by the sources, the clause holds of a direct lower bound only: through `let
 
 ## T6. A pattern on a scrutinee of type `!`
 
-Patterns §4 has a scrutinee of type `!` reach no arm, each slot of its pattern
-deciding nothing of its type. In the spec, a projection of the pattern gives the
-scrutinee's class a kind known in part (l.302–306), and its value must meet that
-kind (l.278). `!` has no part, so it meets none, and the program is refused; the
-spec states no exception for `!`. Witness, refused by the model
-(`cases/holes/t6-a-pattern-on-a-scrutinee-of-type-never.case`):
+Not a text since 87efde71. Patterns §4 has a scrutinee of type `!` reach no arm,
+each slot of its pattern deciding nothing of its type. In the spec, a projection of
+the pattern gives the scrutinee's class a kind known in part (l.302–306), and its
+value must meet that kind (l.278). `!` has no part, so it met none, and the program
+was refused; the spec stated no exception for `!`. Since 87efde71 `!`, which has
+no value, meets every kind, the parts that kind names being `!` (l.278, since
+27a9a960), so the program is accepted with `n: !` and `x: !`
+(`cases/holes/t6-a-pattern-on-a-scrutinee-of-type-never.case`). The parts being
+`!` keep a binding whose fallback is `!` from passing on what was written into it:
+`let t; t.0 = 1u8; takes_u8(t);` is refused where `1u8` enters `t.0`
+(`cases/spec/never-a-written-binding-of-no-source.case`):
 
 ```
 let n = never();         // never() -> !

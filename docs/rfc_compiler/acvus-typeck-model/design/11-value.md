@@ -121,4 +121,8 @@ leave out.
     carries one of them, it has no join (`State::without_two_identities`). The
     closed join does the same (`join::join`). A deeper level's identity, refused
     since 345c838c, has no witness here: the model has no loop and no level.
+14. **`!` and kinds** (l.278). `!`, which has no value, meets every kind
+    (`Classes::normalize`), and once a class takes `!`, each kind known in part
+    on it splits by recording `!` as the part it names (`State::split_fact`), so
+    that what is written into such a part is refused where it enters it.
 

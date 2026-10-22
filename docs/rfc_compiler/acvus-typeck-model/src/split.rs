@@ -61,8 +61,11 @@ impl State {
             }
             Relation::Boundary { from, to } => self.split_sides(i, from, to, Passing::Whole, from),
             Relation::Wrap { from, to } => self.split_wrap(i, from, to),
+            Relation::Fact(class, ref fact) => {
+                let part = fact.class();
+                self.split_fact(i, class, part)
+            }
             Relation::Equation(..)
-            | Relation::Fact(..)
             | Relation::Kind(..)
             | Relation::Lit(..)
             | Relation::Reference(..)
@@ -98,6 +101,25 @@ impl State {
     /// once both sides have taken a constructor (`holes.md`, T2).
     pub(crate) fn splits_now(&self, a: ClassId, b: ClassId) -> bool {
         self.is_solved(a) && self.is_solved(b)
+    }
+
+    /// Splits the kind known in part at `i` of `class`, naming `part`, once
+    /// `class` takes a constructor: where that is `!`, which has no value and
+    /// meets every kind, the part it names is `!` (l.278); otherwise the
+    /// class's kind holds the part already, and nothing is left to relate.
+    fn split_fact(&mut self, i: usize, class: ClassId, part: ClassId) -> Split {
+        let root = self.root(class);
+        if !self.is_solved(root) {
+            return Split::Unsolved;
+        }
+        self.split.insert(i);
+        if !matches!(self.classes.held(root).kind, Some((Term::Never, _))) {
+            return Split::NoParts;
+        }
+        let mut recorded = Recording::default();
+        let relation = Relation::Kind(part, Term::Never, KindSource::Written);
+        recorded.push(self.record(relation, Recorder::Split(root)));
+        Split::Parts(recorded)
     }
 
     /// Splits `e?`'s wrapping at `i` of the error value of the type `from`
