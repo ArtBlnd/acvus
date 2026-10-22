@@ -124,6 +124,16 @@ reads its position, or lends it where its path passes a reference.
    One undecided at its group's fixpoint stays in C, and one undecided once the
    run ends is refused (l.292), as the pick example's `pick` is at its call
    (l.261) and Example 13's `parse` (l.563).
+20. **`e?`** (l.339) is a use of the language's two candidates, `?(Option⟨T⟩) -> T`
+   and `?(Result⟨T, E⟩) -> T`, which every program's declarations hold
+   (`decl::TRY`), so it reads its operand's outer constructor alone, where they
+   differ. Its exit's value has a class the text gives (`Item::Use`'s `exit`),
+   which passes into the innermost body's result as the text records it (l.221,
+   l.225), and lies at the use's position, so that it, and the result it passes
+   into, wait for the use (l.240 (b)), as the text has it since d2d9903b. Decided, the
+   use records into it the value `Option⟨K⟩`, or `Result⟨O, X⟩` with the
+   candidate's `E` wrapped into `X` (`Relation::Wrap`, note 11, reading 12), `K`
+   and `O` made anew; decided as `!`, it records no exit, being not run (l.335).
 
 ## Left open for change
 

@@ -106,4 +106,12 @@ leave out.
     entering value reaches its place with no coercion. Where they are two, the
     class has no value and is refused there (`Refusal::NoFill`). A class that
     passes into no place is not filled, and falls back (l.290).
+12. **`e?`'s wrapping** (l.280, l.339). The class `X` the wrapping passes into
+    waits for the error part `E` to take a constructor (l.240 (a); `Edge::Taking`).
+    Once it does, the split records, by `Recorder::Split(E)`: where `E` is an
+    `Error` or `!`, `E ≤ X`, no wrapping; where it is a type of a name `N`, the
+    kind `Error{N(P)}` of `X` and `E ≤ P`; and otherwise the kind `Error⟨P⟩` and
+    `E ≤ P`, `P` made anew (`State::split_wrap`). An `E` nothing enters waits for
+    nothing once `?` is decided, and falls back to `!` where its group may
+    (l.290).
 

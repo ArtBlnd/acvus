@@ -1,0 +1,25 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
+outcome 1
+  accepted
+  value A: u8
+  value B: Result<u8, Error{E(E)}>
+  value `Ok(..)`: Result<u8, Error{E(E)}>
+  value P: Error{E(E)}
+  value S: u8
+  value `get()`: Result<u8, E>
+  value `{..}`: Fn/0
+  value `{..}()`: Result<u8, Error{E(E)}>
+  value `λ result`: Result<u8, Error{E(E)}>
+  decision call: calls {λ}
+  decision get: get#0
+  decision q: ?#1
+  check `call#λ/λ result <= {..}()`: Ok(Identity)
+  check `{..}() <= B`: Ok(Identity)
+  check `A <= S`: Ok(Identity)
+  check `Ok(..) <= λ result`: Ok(Identity)
+  check `get() ~> q.Param(0)`: Ok(Identity)
+  check `get.Result <= get()`: Ok(Identity)
+  check `q.Exit <= λ result`: Ok(Identity)
+  check `q.Var(Type(0)) <= A`: Ok(Identity)
+  I* of a final state: []

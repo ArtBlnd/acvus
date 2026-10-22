@@ -763,12 +763,13 @@ impl Checker<'_> {
                 callee,
                 args,
                 result,
+                exit,
             } => match self.program.function(callee) {
                 Some(function) => {
                     let function = function.clone();
                     self.call(context, i, &function, args, result)?;
                 }
-                None => self.use_(context, name, callee, args, result)?,
+                None => self.use_(context, name, callee, args, result, exit.as_ref())?,
             },
             Item::Lend {
                 name,
@@ -1028,6 +1029,7 @@ impl Checker<'_> {
         callee: &Name,
         args: &[Name],
         result: &Name,
+        exit: Option<&Name>,
     ) -> Option<()> {
         let at = format!("the use {name}");
         let DecidedAt {
@@ -1085,6 +1087,9 @@ impl Checker<'_> {
                     return None;
                 };
                 self.returns(context, &at, &returned, &result_value);
+                if let Some(exit) = exit {
+                    self.exit(context, &at, level, &owner, &sig, exit)?;
+                }
             }
             Decision::Never => {
                 let candidates: Vec<&Signature> = self
@@ -1106,6 +1111,85 @@ impl Checker<'_> {
                 );
             }
             other => self.violation(context, &at, format!("not reached: {other:?} (l.292)")),
+        }
+        Some(())
+    }
+
+    /// `e?`'s exit (l.339): its value is `Option⟨K⟩` where the use is decided
+    /// as `?(Option⟨T⟩)`, and `Result⟨O, X⟩` where it is decided as
+    /// `?(Result⟨T, E⟩)`, `E`'s value wrapped into `X`: passing into it as it
+    /// is where it is an `Error` or `!`, into the payload of an `Error` whose
+    /// one member is its name where it has one, and into that of an
+    /// `Error⟨..⟩` otherwise; and that value passes into the class the text
+    /// gives the exit, a meeting where that is an unknown (l.221).
+    fn exit(
+        &mut self,
+        context: &Context<'_>,
+        at: &str,
+        level: usize,
+        owner: &Name,
+        sig: &Signature,
+        exit: &Name,
+    ) -> Option<()> {
+        let node = |at: NodeAt| ClassName::Node(Rc::new(owner.clone()), at);
+        let class = |checker: &mut Self, name: ClassName| -> Option<Value> {
+            let Some(id) = context.sheet(level).id(&name) else {
+                checker.violation(context, at, format!("the decision made no class {name}"));
+                return None;
+            };
+            let lookup = context.lookup(level, id);
+            checker.get(context, at, &name.to_string(), lookup)
+        };
+        let value = class(self, node(NodeAt::Exit))?;
+        let exit_value = self.text(context, at, exit)?;
+        let holds = if self.text.unknown(exit) {
+            self.lower(&value, &exit_value)
+        } else {
+            self.boundary(&value, &exit_value)
+        };
+        self.require(
+            context,
+            at,
+            holds,
+            format!("the exit {value} into {exit_value} fails (l.339)"),
+        );
+        match (sig.params(), value.term()) {
+            ([SigTy::Term(param)], Term::Option(_)) if matches!(**param, Term::Option(_)) => {}
+            ([SigTy::Term(param)], Term::Result { err, .. })
+                if matches!(**param, Term::Result { .. }) =>
+            {
+                let error = class(self, node(NodeAt::Var(SigVar::Type(1))))?;
+                let into = match error.term() {
+                    term if crate::join::is_error(term) || matches!(term, Term::Never) => Some(err),
+                    Term::Enum(name, _) | Term::Struct(name, _) | Term::Extern { name, .. } => {
+                        match err.term() {
+                            Term::Enum(error_name, variants)
+                                if error_name.as_str() == crate::join::ERROR
+                                    && variants.len() == 1 =>
+                            {
+                                variants.get(name)
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => match err.term() {
+                        Term::ErrorOf(payload) => Some(payload),
+                        _ => None,
+                    },
+                };
+                let holds = into.is_some_and(|into| self.lower(&error, into));
+                self.require(
+                    context,
+                    at,
+                    holds,
+                    format!("{error} is not wrapped into {err} (l.339)"),
+                );
+            }
+            _ => self.violation(
+                context,
+                at,
+                format!("the exit {value} is not the decided candidate's (l.339)"),
+            ),
         }
         Some(())
     }

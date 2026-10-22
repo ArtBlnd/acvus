@@ -52,6 +52,7 @@ impl State {
             callee,
             args,
             result,
+            ..
         } = &node.kind
         else {
             return recorded;
@@ -141,6 +142,7 @@ impl State {
             callee,
             args,
             result,
+            ..
         } = &self.nodes[name].kind
         else {
             return Vec::new();

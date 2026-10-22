@@ -102,6 +102,7 @@ classes, and `universal A;` a universal.
 | `A == B;` | an equation |
 | `R = f(X, Y) @ n;` | a use of `f`, the node `n` |
 | `R = (F)(X) @ n;` | a call of the function value of `F` |
+| `R = ?(X) into Q @ n;` | `e?` of the operand `X`, its exit's value of the class `Q` (l.339) |
 | `R = &P @ n;`, `R = &mut P @ n;` | a lend |
 | `R = P.x @ n;`, `P.0`, `*P`, `P[]`, `P as Some`, `P as E::V` | a projection |
 | `B = bind P via [p, q] @ n;` | a binding at `P` along the projections `p`, `q` |
@@ -349,6 +350,12 @@ steps; `golden()` and every expectation read what they read without it.
   `istar/a-call-left-out-leaves-out-its-instance-relations` declared `choose` to
   give `Fn/1`, a function value no declaration makes since 80b33ad9 (l.186), and
   gives back the one its `T` takes in.
+- 6 cases under `cases/spec`, `try-*`, and `block-collects-try` test `e?`
+  (l.339): two errors of a name meet as one `Error`, an `Error` is not wrapped,
+  an `Option`, two errors of no name meet as one `Error⟨..⟩`, one of no name and
+  one of a name have no join, an error part nothing enters wraps into `!`, and a
+  block collects its `?`. Each was derived before it was run. Those with two `?`
+  are run over 200 sampled orders, every order passing 100 000 states.
 - 3 cases under `cases/spec`, `l199-*`, test a function value passing into a
   function type (l.199): refused where the lambda's result reaches the type's by
   no coercion, accepted where it does, and by a declared conversion at that

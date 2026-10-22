@@ -28,7 +28,8 @@ pub(crate) enum Edge {
     /// An equivalence class on one whose taking a constructor records
     /// relations into it: it lies within the `τ` of a lower bound or a part
     /// lower bound `τ ≤ α`, or within the `U` of a boundary `α ⇝ U`, `α`
-    /// unsolved (l.240 (a)).
+    /// unsolved, or it is the class `e?`'s wrapping passes into, its error
+    /// part unsolved (l.240 (a)).
     Taking,
     /// An equivalence class on an unsolved one that has it as a part by a kind
     /// known in part, taking a constructor (l.241). A class holding a kind is
@@ -139,6 +140,12 @@ impl State {
                         if within != from && !self.is_solved(within) {
                             add(Vertex::Class(within), Vertex::Class(from), Edge::Taking);
                         }
+                    }
+                }
+                Relation::Wrap { from, to } => {
+                    let (from, to) = (self.root(from), self.root(to));
+                    if from != to && !self.is_solved(from) && !self.is_solved(to) {
+                        add(Vertex::Class(to), Vertex::Class(from), Edge::Taking);
                     }
                 }
                 _ => {}

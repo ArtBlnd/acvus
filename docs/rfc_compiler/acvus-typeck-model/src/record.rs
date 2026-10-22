@@ -190,11 +190,13 @@ impl State {
                     callee,
                     args,
                     result,
+                    exit,
                 } => {
                     let kind = NodeKind::Use {
                         callee: callee.clone(),
                         args: args.iter().map(|arg| self.text(arg)).collect(),
                         result: self.text(result),
+                        exit: exit.as_ref().map(|exit| self.text(exit)),
                     };
                     self.add_node(name, kind);
                 }
@@ -319,6 +321,13 @@ impl State {
             recorded.push(self.record(relation, recorder.clone()));
         }
         recorded
+    }
+
+    /// A class made anew that holds nothing, an unknown of the group (l.213).
+    pub(crate) fn fresh(&mut self, name: ClassName) -> ClassId {
+        let class = self.arena.intern(name);
+        self.classes.grow(&self.arena);
+        class
     }
 
     /// A class made anew that holds `term` as a declaration writes it, the

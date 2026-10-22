@@ -266,6 +266,7 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
                 callee,
                 args,
                 result,
+                ..
             },
             decision,
         ) => {
@@ -318,7 +319,7 @@ fn into(relation: &Relation) -> Vec<ClassId> {
         Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => {
             vec![*upper]
         }
-        Relation::Boundary { to, .. } => vec![*to],
+        Relation::Boundary { to, .. } | Relation::Wrap { to, .. } => vec![*to],
         Relation::Equation(a, b) => vec![*a, *b],
         Relation::Fact(class, _)
         | Relation::Kind(class, ..)

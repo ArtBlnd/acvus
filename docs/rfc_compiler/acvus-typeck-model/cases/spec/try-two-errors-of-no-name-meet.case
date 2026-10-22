@@ -1,0 +1,35 @@
+//@ spec: l.339, l.89, l.91
+//@ orders: sampled 200
+// fn f() { let a = get1()?; let b = get2()?; Ok(a) }
+// // get1() -> Result<u8, u8>, get2() -> Result<u16, u8>
+// u8 has no name, so each error value is wrapped into Error<..> (l.339),
+// whose one part joins by ⊔ₚ (l.89, l.91).
+
+extern fn get1() -> Result<u8, u8>;
+extern fn get2() -> Result<u16, u8>;
+group f {
+    let `f result`;
+    fn f() -> `f result`;
+    let `get1()`;
+    let A;
+    let `exit 1`;
+    let `get2()`;
+    let B;
+    let `exit 2`;
+    let S;
+    let P;
+    let `Ok(a)`: Result<S, P>;
+    `get1()` = get1() @ get1;
+    A = ?(`get1()`) into `exit 1` @ q1;
+    `f result` = `exit 1`;
+    `get2()` = get2() @ get2;
+    B = ?(`get2()`) into `exit 2` @ q2;
+    `f result` = `exit 2`;
+    S = A;
+    `f result` = `Ok(a)`;
+}
+let `f()`;
+`f()` = f() @ `f()`;
+
+must pass;
+assert `f()`: Result<u8, Error<u8>>;

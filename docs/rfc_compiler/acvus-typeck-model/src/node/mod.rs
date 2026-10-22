@@ -28,11 +28,13 @@ use place::lesser;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum NodeKind {
-    /// A use that calls the declarations `callee` names (l.322).
+    /// A use that calls the declarations `callee` names (l.322); for `e?`,
+    /// with the class its exit's value passes into (l.339).
     Use {
         callee: Name,
         args: Vec<ClassId>,
         result: ClassId,
+        exit: Option<ClassId>,
     },
     /// `&ₘ p` (l.298).
     Lend {
@@ -159,6 +161,8 @@ pub enum NodeAt {
     /// The target of the reference a lend's place, or a projection's operand,
     /// is.
     Target,
+    /// The value of `e?`'s exit (l.339).
+    Exit,
 }
 
 /// A node decided (l.263), with the relations recorded once it is: its own,
@@ -400,6 +404,7 @@ impl State {
                 callee,
                 args,
                 result,
+                ..
             } => {
                 let narrowing = self.narrow(callee, args, *result, &excluded);
                 let decision = narrowing.decision.clone();
@@ -505,6 +510,62 @@ impl State {
         recorded
     }
 
+    /// `e?`'s exit, decided as the candidate of `sig` whose variables are the
+    /// classes of `vars` (l.339): as `return None`, a value `Option⟨K⟩`, or as
+    /// `return Err(x)`, a value `Result⟨O, X⟩`, `K` and `O` made anew and the
+    /// candidate's `E` wrapped into `X`. The value passes into `exit`, the
+    /// class the text gives it, a meeting where that is an unknown (l.221).
+    fn record_exit(
+        &mut self,
+        sig: &crate::sig::Signature,
+        vars: &BTreeMap<crate::sig::SigVar, ClassId>,
+        name: ClassName,
+        exit: ClassId,
+        recorder: &Recorder,
+    ) -> Recording {
+        let mut recorded = Recording::default();
+        let named = Rc::new(name.clone());
+        let part = |key: crate::ty::PartKey| ClassName::Part(named.clone(), key);
+        let some = crate::ty::PartKey::Payload(Name::new(crate::ty::SOME));
+        let ok = crate::ty::PartKey::Payload(Name::new(crate::ty::OK));
+        let err = crate::ty::PartKey::Payload(Name::new(crate::ty::ERR));
+        let term = match sig.params() {
+            [crate::sig::SigTy::Term(param)] if matches!(**param, Term::Option(_)) => {
+                Term::Option(self.fresh(part(some)))
+            }
+            [crate::sig::SigTy::Term(param)] if matches!(**param, Term::Result { .. }) => {
+                let error = *vars
+                    .get(&crate::sig::SigVar::Type(1))
+                    .expect("the argument made the candidate's `E`");
+                let wrapped = self.fresh(part(err));
+                let relation = Relation::Wrap {
+                    from: error,
+                    to: wrapped,
+                };
+                recorded.push(self.record(relation, recorder.clone()));
+                Term::Result {
+                    ok: self.fresh(part(ok)),
+                    err: wrapped,
+                }
+            }
+            _ => unreachable!("`?`'s candidates are the language's two (l.339)"),
+        };
+        let value = self.written(name, term, recorder, &mut recorded);
+        let relation = if self.is_unknown(exit) {
+            Relation::LowerBound {
+                lower: value,
+                upper: exit,
+            }
+        } else {
+            Relation::Boundary {
+                from: value,
+                to: exit,
+            }
+        };
+        recorded.push(self.record(relation, recorder.clone()));
+        recorded
+    }
+
     /// Records what the decided node records.
     pub(crate) fn record_decision(&mut self, name: &Name) -> Recording {
         let mut recorded = Recording::default();
@@ -516,7 +577,12 @@ impl State {
         let owner = Rc::new(name.clone());
         let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
         match (&node.kind, &decision) {
-            (NodeKind::Use { args, result, .. }, Decision::Use(id)) => {
+            (
+                NodeKind::Use {
+                    args, result, exit, ..
+                },
+                Decision::Use(id),
+            ) => {
                 let sig = self.decls.decl(id).sig.clone();
                 let mut vars = BTreeMap::new();
                 let var_name = |var| at(NodeAt::Var(var));
@@ -539,6 +605,15 @@ impl State {
                         &mut vars,
                         at(NodeAt::Result),
                         &var_name,
+                        &recorder,
+                    ));
+                }
+                if let Some(exit) = exit {
+                    recorded.append(self.record_exit(
+                        &sig,
+                        &vars,
+                        at(NodeAt::Exit),
+                        *exit,
                         &recorder,
                     ));
                 }

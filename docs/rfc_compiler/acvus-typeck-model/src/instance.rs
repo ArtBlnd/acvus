@@ -97,10 +97,12 @@ impl<'a> Instance<'a> {
                 callee,
                 args,
                 result,
+                exit,
             } => NodeKind::Use {
                 callee,
                 args: args.into_iter().map(|arg| self.class(here, arg)).collect(),
                 result: self.class(here, result),
+                exit: exit.map(|exit| self.class(here, exit)),
             },
             NodeKind::Lend {
                 mutability,

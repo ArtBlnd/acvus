@@ -114,6 +114,8 @@ pub enum TextItem {
         callee: String,
         args: Vec<String>,
         result: String,
+        /// `e?`'s exit, written `?(e) into X` (l.339).
+        exit: Option<String>,
     },
     CallValue {
         node: String,
@@ -771,11 +773,17 @@ impl Parser<'_> {
         let name = self.name()?;
         if self.eat_punct("(") {
             let args = self.names_until(")")?;
+            let exit = if self.eat_word("into") {
+                Some(self.name()?)
+            } else {
+                None
+            };
             return Ok(TextItem::Use {
                 node: node(self)?,
                 callee: name,
                 args,
                 result,
+                exit,
             });
         }
         if self.eat_punct(".") {

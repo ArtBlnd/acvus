@@ -49,6 +49,10 @@ met.
    result type in the environment of each lambda its callee's Values name at the
    moment (l.240 (b); note 17, row 3), so a class the call meets there waits for
    it.
+7. **`e?`'s positions** include the class of its exit's value (note 08, reading
+   20), so that the innermost body's result, which that class passes into, does
+   not take its value before the exit is recorded. Without it, the exit would
+   record into a class no node lies at, as O4's instances once did.
 
 ## Left open for change
 

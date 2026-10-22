@@ -346,12 +346,15 @@ pub enum Item {
     /// An invariant place (l.231).
     Equation(Name, Name),
     /// A use that calls the declarations or the function `callee` names
-    /// (l.194–197, l.322), its arguments' types and its result's.
+    /// (l.194–197, l.322), its arguments' types and its result's; for `e?`,
+    /// also the type of its exit's value, which passes into the innermost
+    /// body's result as the text gives it (l.221, l.339).
     Use {
         name: Name,
         callee: Name,
         args: Vec<Name>,
         result: Name,
+        exit: Option<Name>,
     },
     /// `&ₘ p`, `p`'s type `place`, giving a reference of the type `result`
     /// (l.298).
@@ -393,7 +396,9 @@ impl Item {
         match self {
             Item::Pass { value, into, .. } => vec![value, into],
             Item::Equation(a, b) => vec![a, b],
-            Item::Use { args, result, .. } => args.iter().chain([result]).collect(),
+            Item::Use {
+                args, result, exit, ..
+            } => args.iter().chain([result]).chain(exit).collect(),
             Item::CallValue {
                 callee,
                 args,
@@ -576,6 +581,19 @@ impl ProgramBuilder {
             callee: Name::new(callee),
             args: args.iter().map(|&arg| arg.clone()).collect(),
             result: result.clone(),
+            exit: None,
+        });
+    }
+
+    /// `e?`, the type of `e` `operand`, giving `result`, its exit's value of
+    /// the type `exit` (l.339).
+    pub fn try_(&mut self, name: &str, operand: &Name, result: &Name, exit: &Name) {
+        self.item(Item::Use {
+            name: Name::new(name),
+            callee: Name::new(crate::decl::TRY),
+            args: vec![operand.clone()],
+            result: result.clone(),
+            exit: Some(exit.clone()),
         });
     }
 

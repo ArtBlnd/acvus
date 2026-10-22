@@ -280,6 +280,7 @@ pub fn program(case: &Case, decls: &Decls, readings: Readings) -> Built<Program>
                 callee,
                 args,
                 result,
+                exit: None,
             } => {
                 let args = names(args);
                 p.call(
@@ -288,6 +289,24 @@ pub fn program(case: &Case, decls: &Decls, readings: Readings) -> Built<Program>
                     &args.iter().collect::<Vec<_>>(),
                     &name(result),
                 );
+            }
+            TextItem::Use {
+                node,
+                callee,
+                args,
+                result,
+                exit: Some(exit),
+            } => {
+                let [operand] = args.as_slice() else {
+                    return Err(format!(
+                        "{node}: `?` takes one operand, written {}",
+                        args.len()
+                    ));
+                };
+                if callee != crate::decl::TRY {
+                    return Err(format!("{node}: only `?` has an exit, written {callee}"));
+                }
+                p.try_(node, &name(operand), &name(result), &name(exit));
             }
             TextItem::CallValue {
                 node,

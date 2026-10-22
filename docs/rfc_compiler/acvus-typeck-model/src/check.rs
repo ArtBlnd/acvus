@@ -81,7 +81,8 @@ impl State {
                 | Relation::Kind(..)
                 | Relation::Lit(..)
                 | Relation::Reference(..)
-                | Relation::Values(..) => continue,
+                | Relation::Values(..)
+                | Relation::Wrap { .. } => continue,
             };
             let (Some(from_value), Some(to_value)) = (self.value(from), self.value(to)) else {
                 continue;

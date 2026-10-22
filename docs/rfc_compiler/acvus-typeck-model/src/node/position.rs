@@ -13,18 +13,20 @@ use super::{NodeKind, Read, Reads};
 
 impl State {
     /// The classes at a node's positions, and those within the depth its
-    /// candidates reach (l.240 (b)): for a call of a function value, the
-    /// parameters and the result type in the environment of each lambda its
-    /// callee's Values name (`design/17-environment.md`, row 3).
+    /// candidates reach (l.240 (b)): for `e?`, its exit's value too (l.339);
+    /// for a call of a function value, the parameters and the result type in
+    /// the environment of each lambda its callee's Values name
+    /// (`design/17-environment.md`, row 3).
     pub(crate) fn positions(&self, kind: &NodeKind) -> BTreeSet<ClassId> {
         match kind {
             NodeKind::Use {
                 callee,
                 args,
                 result,
+                exit,
             } => {
                 let mut positions: BTreeSet<ClassId> =
-                    args.iter().chain([result]).copied().collect();
+                    args.iter().chain([result]).chain(exit).copied().collect();
                 for candidate in self.candidates(callee, args.len()) {
                     let sig = &candidate.sig;
                     for (arg, param) in args.iter().zip(sig.params()) {
@@ -137,6 +139,7 @@ impl State {
                 callee,
                 args,
                 result,
+                ..
             } => {
                 let candidates: Vec<&Signature> = self
                     .candidates(callee, args.len())

@@ -1,0 +1,25 @@
+//@ spec: l.339, l.221, l.284
+// fn f() { let a = get()?; Some(a) }    // get() -> Option<u8>
+// ? is decided as ?(Option<T>), and its exit's value is Option<K>, K made
+// anew, as return None (l.339); K is filled with f's result's payload.
+extern fn get() -> Option<u8>;
+group f {
+    let `f result`;
+    fn f() -> `f result`;
+    let `get()`;
+    let A;
+    let exit;
+    let S;
+    let `Some(a)`: Option<S>;
+    `get()` = get() @ get;
+    A = ?(`get()`) into exit @ q;
+    `f result` = exit;
+    S = A;
+    `f result` = `Some(a)`;
+}
+let `f()`;
+`f()` = f() @ `f()`;
+
+must pass;
+assert q == ?#0;
+assert `f()`: Option<u8>;

@@ -1,0 +1,36 @@
+//@ spec: l.339, l.91, l.276, l.292
+//@ orders: sampled 200
+// fn f() { let a = get1()?; let b = get2()?; Ok(a) }
+// // get1() -> Result<u8, u8>, get2() -> Result<u16, B>
+// The exits' error parts are Error<u8> and Error{B(B)}, of two
+// constructors, which have no join (l.91): f's result's error part has no
+// value (l.276), refused there (l.292).
+extern type B;
+extern fn get1() -> Result<u8, u8>;
+extern fn get2() -> Result<u16, B>;
+group f {
+    let `f result`;
+    fn f() -> `f result`;
+    let `get1()`;
+    let A;
+    let `exit 1`;
+    let `get2()`;
+    let B;
+    let `exit 2`;
+    let S;
+    let P;
+    let `Ok(a)`: Result<S, P>;
+    `get1()` = get1() @ get1;
+    A = ?(`get1()`) into `exit 1` @ q1;
+    `f result` = `exit 1`;
+    `get2()` = get2() @ get2;
+    B = ?(`get2()`) into `exit 2` @ q2;
+    `f result` = `exit 2`;
+    S = A;
+    `f result` = `Ok(a)`;
+}
+let `f()`;
+`f()` = f() @ `f()`;
+
+must fail;
+assert refused no_join `f result.Payload(Err)`;

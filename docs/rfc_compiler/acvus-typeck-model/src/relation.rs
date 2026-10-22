@@ -36,6 +36,9 @@ pub enum Relation {
     Reference(ClassId, bool),
     /// A lambda the Values of the class's function value names (l.183).
     Values(ClassId, Name),
+    /// `e?`'s error value of the type `from` wrapped into `to`, which a split
+    /// relates once `from` takes a constructor (l.280, l.339).
+    Wrap { from: ClassId, to: ClassId },
 }
 
 impl Relation {
@@ -45,7 +48,7 @@ impl Relation {
             Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper } => {
                 vec![*lower, *upper]
             }
-            Relation::Boundary { from, to } => vec![*from, *to],
+            Relation::Boundary { from, to } | Relation::Wrap { from, to } => vec![*from, *to],
             Relation::Equation(a, b) => vec![*a, *b],
             Relation::Fact(class, fact) => vec![*class, fact.class()],
             Relation::Kind(class, term, _) => std::iter::once(*class)
@@ -90,6 +93,10 @@ impl Relation {
             Relation::Lit(class, lit) => Relation::Lit(f(class), lit),
             Relation::Reference(class, reference) => Relation::Reference(f(class), reference),
             Relation::Values(class, lambda) => Relation::Values(f(class), lambda),
+            Relation::Wrap { from, to } => Relation::Wrap {
+                from: f(from),
+                to: f(to),
+            },
         }
     }
 }
@@ -218,6 +225,7 @@ impl fmt::Display for Named<'_> {
             Relation::Values(class, lambda) => {
                 write!(f, "{}: Values contains {lambda}", name(class))
             }
+            Relation::Wrap { from, to } => write!(f, "wrap {} into {}", name(from), name(to)),
         }
     }
 }

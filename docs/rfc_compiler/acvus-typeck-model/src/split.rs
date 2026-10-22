@@ -11,12 +11,13 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, LinkAt};
+use crate::class::{ClassId, ClassName, KindSource, LinkAt};
 use crate::decl::Node;
+use crate::join::{ERROR, is_error};
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
-use crate::ty::{Constructor, Mutability, Name, Term};
+use crate::ty::{Constructor, Mutability, Name, PartKey, Term};
 
 /// How a relation's value passes into its other side (l.280).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,6 +60,7 @@ impl State {
                 self.split_sides(i, lower, upper, Passing::Part, upper)
             }
             Relation::Boundary { from, to } => self.split_sides(i, from, to, Passing::Whole, from),
+            Relation::Wrap { from, to } => self.split_wrap(i, from, to),
             Relation::Equation(..)
             | Relation::Fact(..)
             | Relation::Kind(..)
@@ -96,6 +98,57 @@ impl State {
     /// once both sides have taken a constructor (`holes.md`, T2).
     pub(crate) fn splits_now(&self, a: ClassId, b: ClassId) -> bool {
         self.is_solved(a) && self.is_solved(b)
+    }
+
+    /// Splits `e?`'s wrapping at `i` of the error value of the type `from`
+    /// into `to`, once `from` takes a constructor (l.280, l.339): an `Error`
+    /// or `!` is not wrapped and passes into `to` as it is; a type of a name
+    /// `N` passes into the payload of `to`, an `Error` whose one member is
+    /// `N`; and any other type into that of `to`, an `Error⟨..⟩`. Each payload
+    /// is made anew, an unknown the value meets (l.221, l.318).
+    fn split_wrap(&mut self, i: usize, from: ClassId, to: ClassId) -> Split {
+        let root = self.root(from);
+        if !self.is_solved(root) {
+            return Split::Unsolved;
+        }
+        self.split.insert(i);
+        let recorder = Recorder::Split(root);
+        let mut recorded = Recording::default();
+        let (term, _) = self
+            .classes
+            .held(root)
+            .kind
+            .clone()
+            .expect("a solved class holds a kind");
+        let wrapped = Rc::new(self.class_name(to));
+        let into = if is_error(&term) || matches!(term, Term::Never) {
+            to
+        } else {
+            let named = match &term {
+                Term::Enum(name, _) | Term::Struct(name, _) | Term::Extern { name, .. } => {
+                    Some(name.clone())
+                }
+                _ => None,
+            };
+            let key = match &named {
+                Some(name) => PartKey::Payload(name.clone()),
+                None => PartKey::Wrapped,
+            };
+            let payload = self.fresh(ClassName::Part(wrapped, key));
+            let kind = match named {
+                Some(name) => Term::Enum(Name::new(ERROR), [(name, payload)].into()),
+                None => Term::ErrorOf(payload),
+            };
+            let relation = Relation::Kind(to, kind, KindSource::Written);
+            recorded.push(self.record(relation, recorder.clone()));
+            payload
+        };
+        let relation = Relation::LowerBound {
+            lower: from,
+            upper: into,
+        };
+        recorded.push(self.record(relation, recorder));
+        Split::Parts(recorded)
     }
 
     /// `?N ⇝ U` unifies `?N` with `U` (l.280): where the equivalence class

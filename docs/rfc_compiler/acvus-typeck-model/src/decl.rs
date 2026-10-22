@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::sig::{DeclaredTypes, SigArgs, SigTy, Signature};
+use crate::sig::{DeclaredTypes, SigArgs, SigTy, SigVar, Signature};
 use crate::ty::{Constructor, HasTerm, Mutability, Name, Term, Ty};
 
 #[cfg(test)]
@@ -131,12 +131,40 @@ pub struct DeclsBuilder {
     by_name: BTreeMap<Name, Vec<Decl>>,
 }
 
+/// The name of `e?`'s use, whose two candidates the language gives (l.339).
+pub const TRY: &str = "?";
+
 impl DeclsBuilder {
+    /// The declarations of the program, with the language's two candidates of
+    /// `e?`: `?(Option⟨T⟩) -> T` and `?(Result⟨T, E⟩) -> T` (l.339).
     pub fn new(types: DeclaredTypes) -> DeclsBuilder {
-        DeclsBuilder {
+        let mut builder = DeclsBuilder {
             types,
             by_name: BTreeMap::new(),
-        }
+        };
+        let var = |i| SigTy::Var(SigVar::Type(i));
+        let option = Signature::new(
+            vec![Name::new("T")],
+            false,
+            vec![SigTy::term(Term::Option(var(0)))],
+            var(0),
+            &builder.types,
+        )
+        .expect("`?(Option⟨T⟩) -> T` is a signature");
+        let result = Signature::new(
+            vec![Name::new("T"), Name::new("E")],
+            false,
+            vec![SigTy::term(Term::Result {
+                ok: var(0),
+                err: var(1),
+            })],
+            var(0),
+            &builder.types,
+        )
+        .expect("`?(Result⟨T, E⟩) -> T` is a signature");
+        builder.declare(Name::new(TRY), option, Role::Fn);
+        builder.declare(Name::new(TRY), result, Role::Fn);
+        builder
     }
 
     pub fn types(&self) -> &DeclaredTypes {
