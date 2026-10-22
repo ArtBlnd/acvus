@@ -104,6 +104,13 @@ pub enum TreeError {
     NoTargetNode(DeclId),
     /// A cast changes whether it is a reference, or its mutability.
     ChangesMode(DeclId),
+    /// A cast's parameter writes its node other than with distinct type
+    /// parameters as its parts, so that some type of the node goes up by no
+    /// cast (`holes.md`, H1).
+    NarrowerThanNode(DeclId),
+    /// A cast's result writes a type parameter its parameter does not, so
+    /// that where a type goes up is not decided (`holes.md`, H1).
+    ResultUnbound(DeclId),
     /// A second cast goes up from one node.
     TwoUp {
         first: DeclId,
@@ -208,6 +215,16 @@ impl DeclsBuilder {
                     if from.mode() != to.mode() {
                         return Err(TreeError::ChangesMode(decl.id.clone()));
                     }
+                    if !writes_node_generally(param) {
+                        return Err(TreeError::NarrowerThanNode(decl.id.clone()));
+                    }
+                    let unbound = [SigVar::Identity]
+                        .into_iter()
+                        .chain((0..decl.sig.type_params().len()).map(SigVar::Type))
+                        .any(|var| decl.sig.result().mentions(var) && !param.mentions(var));
+                    if unbound {
+                        return Err(TreeError::ResultUnbound(decl.id.clone()));
+                    }
                     if let Some(first) = up.get(&from) {
                         return Err(TreeError::TwoUp {
                             first: first.decl.clone(),
@@ -233,6 +250,28 @@ impl DeclsBuilder {
             tree,
         })
     }
+}
+
+/// Whether a cast's parameter writes its node, through a reference's target
+/// where it is one, with distinct type parameters as its parts, its identity
+/// the signature's where it has one (l.78; `holes.md`, H1).
+fn writes_node_generally(param: &SigTy) -> bool {
+    let SigTy::Term(term) = param else {
+        return false;
+    };
+    let term = match &**term {
+        Term::Ref(_, SigTy::Term(target)) => &**target,
+        Term::Ref(..) => return false,
+        term => term,
+    };
+    let mut seen = Vec::new();
+    term.parts().into_iter().all(|(_, part)| match part {
+        SigTy::Var(var) if !seen.contains(var) => {
+            seen.push(*var);
+            true
+        }
+        _ => false,
+    })
 }
 
 /// The casts that go up from each node.

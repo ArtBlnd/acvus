@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::decl::Role;
 use crate::istar::Kind;
 use crate::lit::Literal;
-use crate::program::{Deferral, Place, Readings, Visibility};
+use crate::program::Place;
 use crate::ty::Mutability;
 
 /// Where in a case's file something is written.
@@ -258,8 +258,6 @@ pub enum Expect {
 pub struct Case {
     pub spec: Vec<String>,
     pub hole: Option<String>,
-    /// One run for each; none written is one run of the default readings.
-    pub readings: Vec<Readings>,
     pub orders: Orders,
     pub decls: Vec<Located<DeclItem>>,
     pub text: Vec<Located<TextItem>>,
@@ -1180,9 +1178,6 @@ fn directives(source: &str, case: &mut Case) -> Parsed<()> {
         match key.split_whitespace().collect::<Vec<_>>().as_slice() {
             ["spec"] => case.spec.push(value.to_string()),
             ["hole"] => case.hole = Some(value.to_string()),
-            ["reading"] => case
-                .readings
-                .push(readings(value).map_err(|e| format!("line {at}: {e}"))?),
             ["orders"] => {
                 if orders.is_some() {
                     return Err(format!("line {at}: the orders are written twice"));
@@ -1246,32 +1241,10 @@ fn unquote(text: &str) -> String {
         .to_string()
 }
 
-/// `default`, or `key = value` pairs, the rest as `Readings::default()`.
-fn readings(text: &str) -> Result<Readings, String> {
-    let mut readings = Readings::default();
-    if text == "default" {
-        return Ok(readings);
-    }
-    for pair in text.split(',') {
-        let (key, value) = pair
-            .split_once('=')
-            .ok_or_else(|| format!("a reading is `key = value`: {pair}"))?;
-        match (key.trim(), value.trim()) {
-            ("visibility", "by_member") => readings.visibility = Visibility::ByMember,
-            ("visibility", "by_sources") => readings.visibility = Visibility::BySources,
-            ("deferral", "recording") => readings.deferral = Deferral::Recording,
-            ("deferral", "reading") => readings.deferral = Deferral::Reading,
-            (key, value) => return Err(format!("no reading {key} = {value}")),
-        }
-    }
-    Ok(readings)
-}
-
 pub fn parse(source: &str) -> Parsed<Case> {
     let mut case = Case {
         spec: Vec::new(),
         hole: None,
-        readings: Vec::new(),
         orders: Orders::All,
         decls: Vec::new(),
         text: Vec::new(),

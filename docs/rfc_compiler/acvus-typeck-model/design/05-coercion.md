@@ -68,8 +68,8 @@ within its family.
    the universe of note 04, `along_le` reaches exactly where `le` holds.
 7. **A LitVar's position.** A LitVar reaches a LitVar of its family, and a scalar
    of its family that holds every value it holds (l.162), and nothing else. An
-   integer literal is unsigned, a sign being an operator, and `isize` and `usize`
-   are 64 bits wide, which the spec does not state.
+   integer literal of the model is unsigned: a negative literal, which is a
+   literal once `core::neg` is gone (준량, 2026-10-22), is not encoded.
 8. **A candidate's type variables decide nothing.** A candidate's type parameters
    are unknowns made anew at the use (l.320), into which only the use itself
    records, and the value the use reads leaves out the relations it records itself

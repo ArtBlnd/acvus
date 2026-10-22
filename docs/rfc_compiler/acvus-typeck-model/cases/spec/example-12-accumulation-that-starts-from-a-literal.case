@@ -8,8 +8,6 @@
 // A literal operand is a temporary of the literal's type, which & lends. x + y
 // and y + 1 depend on each other and break their dependencies (l.263); either
 // reading of what a broken dependency defers reaches the spec's outcome.
-//@ reading: deferral = recording
-//@ reading: deferral = reading
 extern fn core::add(&u8, &u8) -> u8;
 extern fn core::add(&u16, &u16) -> u16;
 extern fn core::add(&i32, &i32) -> i32;

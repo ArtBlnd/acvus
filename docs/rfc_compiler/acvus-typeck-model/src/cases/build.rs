@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::decl::{Decls, DeclsBuilder};
 use crate::lit::LitVar;
-use crate::program::{ENTRY, Origin, Program, ProgramBuilder, Projection, Readings};
+use crate::program::{ENTRY, Origin, Program, ProgramBuilder, Projection};
 use crate::sig::{DeclaredTypes, ExternDecl, SigTy, SigVar, Signature, StructDecl};
 use crate::ty::{FloatTy, IntTy, Name, Scalar, Term, Ty};
 
@@ -22,14 +22,10 @@ fn scalar(name: &str) -> Option<Scalar> {
         "i16" => int(IntTy::I16),
         "i32" => int(IntTy::I32),
         "i64" => int(IntTy::I64),
-        "i128" => int(IntTy::I128),
-        "isize" => int(IntTy::Isize),
         "u8" => int(IntTy::U8),
         "u16" => int(IntTy::U16),
         "u32" => int(IntTy::U32),
         "u64" => int(IntTy::U64),
-        "u128" => int(IntTy::U128),
-        "usize" => int(IntTy::Usize),
         "f32" => Some(Scalar::Float(FloatTy::F32)),
         "f64" => Some(Scalar::Float(FloatTy::F64)),
         "bool" => Some(Scalar::Bool),
@@ -243,11 +239,10 @@ fn projection(text: &ProjectionText) -> Projection {
     }
 }
 
-/// The program the case's text writes, under `readings`.
-pub fn program(case: &Case, decls: &Decls, readings: Readings) -> Built<Program> {
+/// The program the case's text writes.
+pub fn program(case: &Case, decls: &Decls) -> Built<Program> {
     let types = decls.types();
     let mut p = ProgramBuilder::new(decls.clone());
-    p.readings(readings);
     let name = |text: &String| Name::new(text);
     let names = |texts: &[String]| texts.iter().map(|text| Name::new(text)).collect::<Vec<_>>();
     for Located { line, item } in &case.text {

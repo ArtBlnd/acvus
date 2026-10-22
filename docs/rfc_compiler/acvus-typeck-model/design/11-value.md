@@ -84,10 +84,10 @@ leave out.
    cast going up from a shared reference to the container (l.78, l.154); a cast up
    from `&mut N` has one from `&N`. A container whose cast goes elsewhere, or that
    has none, has no view, and the kind is refused.
-8. **Visibility.** A kind gives its member where it names a field, or a variant of
-   an enum the text names (l.276). Whether a lower bound the host gives makes it
-   give none is `holes.md`, T5, and the model takes it as a reading
-   (`Visibility`).
+8. **Visibility.** A kind adds a member to a type another source gives where it
+   names a field, or a variant of an enum the text names (l.276): a field the text
+   writes grows a class a type the host gives is a lower bound of (`holes.md`, T5).
+   The reading by the sources is removed.
 9. **`!` and a kind known in part.** `!` has no part, so it meets no kind known in
    part (`holes.md`, T6).
 10. **A class nothing enters** (l.282). An unsolved class holding no kind, no

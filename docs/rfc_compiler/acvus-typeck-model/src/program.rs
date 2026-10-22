@@ -25,7 +25,6 @@ pub struct Program {
     pub universals: Vec<Name>,
     pub classes: Vec<TextClass>,
     pub items: Vec<(Name, Item)>,
-    pub readings: Readings,
     /// Which group solves each class and item, where a lambda's environment
     /// moves it from the one it lies in (l.186).
     cut: Cut,
@@ -269,38 +268,6 @@ impl Program {
     }
 }
 
-/// The readings the model takes where the spec leaves one open (I1), each
-/// stated in `design/holes.md`.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub struct Readings {
-    pub visibility: Visibility,
-    pub deferral: Deferral,
-}
-
-/// When the relations of a node that a broken dependency pointed to are
-/// recorded (l.263; `holes.md`, O2).
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub enum Deferral {
-    /// Once the node that broke the dependency is decided.
-    #[default]
-    Recording,
-    /// When their node is decided; the value the node that broke the
-    /// dependency reads leaves them out.
-    Reading,
-}
-
-/// Which members a kind gives (l.276; `holes.md`, T5).
-#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
-pub enum Visibility {
-    /// A field, and a variant of an enum the text names, whatever the class's
-    /// other sources.
-    #[default]
-    ByMember,
-    /// As `ByMember`, but none where a lower bound of the class is a type the
-    /// host gives, which does not grow (patterns §2).
-    BySources,
-}
-
 /// A type the text gives, named, in the binding group its text lies in.
 #[derive(Clone, Debug)]
 pub struct TextClass {
@@ -448,7 +415,6 @@ pub struct ProgramBuilder {
     universals: Vec<Name>,
     classes: Vec<TextClass>,
     items: Vec<(Name, Item)>,
-    readings: Readings,
     /// The group the classes and items written next lie in.
     group: Name,
 }
@@ -462,7 +428,6 @@ impl ProgramBuilder {
             universals: Vec::new(),
             classes: Vec::new(),
             items: Vec::new(),
-            readings: Readings::default(),
             group: Name::new(ENTRY),
         }
     }
@@ -511,10 +476,6 @@ impl ProgramBuilder {
 
     fn item(&mut self, item: Item) {
         self.items.push((self.group.clone(), item));
-    }
-
-    pub fn readings(&mut self, readings: Readings) {
-        self.readings = readings;
     }
 
     /// A text class of the origin. No type the text writes or a context
@@ -649,7 +610,6 @@ impl ProgramBuilder {
             universals: self.universals,
             classes: self.classes,
             items: self.items,
-            readings: self.readings,
             cut: Cut::default(),
         };
         program.cut = program.cut_environments();

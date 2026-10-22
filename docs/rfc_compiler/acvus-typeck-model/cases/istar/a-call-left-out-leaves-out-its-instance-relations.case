@@ -8,7 +8,6 @@
 // The captured environment is the enclosing group's (l.186), so make_b() ≤ X is
 // recorded where it is written, and no read leaves it out with the call: choose
 // reads B, and f(x) calls put's lambda.
-//@ reading: deferral = reading
 extern type A;
 extern type B;
 extern fn make_a() -> A;

@@ -17,7 +17,7 @@ use crate::decl::Decls;
 use crate::dep::Eligible;
 use crate::instance::Made;
 use crate::node::NodeState;
-use crate::program::{ENTRY, Function, Item, Program, Readings, TextClass};
+use crate::program::{ENTRY, Function, Item, Program, TextClass};
 use crate::read::ReadValue;
 use crate::relation::{Recorded, Recorder, Relation};
 use crate::split::Split;
@@ -50,18 +50,12 @@ pub struct State {
     /// In a state a value read is taken from, the classes found to give
     /// nothing, having no relation left (l.261).
     pub(crate) nothing: BTreeSet<ClassId>,
-    pub(crate) readings: Readings,
-    /// The classes of the types the host gives (l.276).
-    pub(crate) hosts: BTreeSet<ClassId>,
     /// The classes named by a kind "indexes `τ`" already linked along a view
     /// (l.154).
     pub(crate) viewed: BTreeSet<ClassId>,
     /// The decided nodes whose relations wait for the undecided nodes that
     /// broke their dependency on them (l.263).
     pub(crate) deferred: BTreeMap<Name, BTreeSet<Name>>,
-    /// For each undecided node, the decided nodes it broke its dependency on,
-    /// whose relations its read leaves out (`Deferral::Reading`).
-    pub(crate) broken: BTreeMap<Name, BTreeSet<Name>>,
     /// The binding group being solved.
     pub(crate) group: Name,
     /// The types of its functions' parameters, chosen by the uses that make
@@ -148,11 +142,8 @@ impl State {
             refusals: BTreeSet::new(),
             nodes: BTreeMap::new(),
             nothing: BTreeSet::new(),
-            readings: program.readings,
-            hosts: BTreeSet::new(),
             viewed: BTreeSet::new(),
             deferred: BTreeMap::new(),
-            broken: BTreeMap::new(),
             group: group.clone(),
             universals: BTreeSet::new(),
             foreign: BTreeSet::new(),
@@ -540,11 +531,8 @@ impl State {
             refusals: BTreeSet::new(),
             nodes: BTreeMap::new(),
             nothing: BTreeSet::new(),
-            readings: self.readings,
-            hosts: self.hosts.clone(),
             viewed: BTreeSet::new(),
             deferred: BTreeMap::new(),
-            broken: BTreeMap::new(),
             group: self.group.clone(),
             universals: self.universals.clone(),
             foreign: self.foreign.clone(),

@@ -114,7 +114,8 @@ never records.
   earlier encoding did not, naming an instance's relations by the instance alone:
   `let f = if c { put } else { choose(x) }; f(x);` with `put = |w| x = make_b()`,
   `choose(A)`, `choose(B)` and `make_a() ≤ X` reached `choose(A)` and `choose(B)`
-  by order under `Deferral::Reading`, and then reached `choose(A)` in every order.
+  by order under a reading of l.263 since removed, and then reached `choose(A)` in
+  every order.
   Since 8978eb70 `put`'s write is its environment, the enclosing group's (l.186),
   so `make_b() ≤ X` is recorded where it is written, no read leaves it out with
   the call, and the program reaches `choose(B)` in every order. Since 80b33ad9 no

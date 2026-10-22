@@ -129,9 +129,8 @@ reads its position, or lends it where its path passes a reference.
    lesser mutability (l.296) is then undecided, a `&mut` one, decides nothing
    until the mutability is read (reading 19; `holes.md`, O3).
 17. **A broken dependency** (l.263). A node decided while undecided nodes broke
-   their dependency on it records once they are decided; whether that holds of
-   the state or of their reads only is `holes.md`, O2, and the model takes it as a
-   reading (`Deferral`).
+   their dependency on it records once they are decided, in the state, as l.263
+   states (`holes.md`, O2); the reading of their reads only is removed.
 18. **Which nodes record into a class** (l.238 (b), l.244). The nodes that record
    relations into a class are those at whose positions it lies. For a use's read,
    which is of a value, the spec makes no narrowing such as l.242 makes for a

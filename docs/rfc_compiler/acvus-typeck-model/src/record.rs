@@ -90,13 +90,7 @@ impl State {
                 Origin::Lit(lit) => {
                     recorded.push(self.record(Relation::Lit(id, lit.clone()), Recorder::Origin));
                 }
-                Origin::Written(term) | Origin::Outward(term) => {
-                    let term = term.clone().map(|_, part| self.text(&part));
-                    let relation = Relation::Kind(id, term, KindSource::Written);
-                    recorded.push(self.record(relation, Recorder::Origin));
-                }
-                Origin::Host(term) => {
-                    self.hosts.insert(id);
+                Origin::Written(term) | Origin::Host(term) | Origin::Outward(term) => {
                     let term = term.clone().map(|_, part| self.text(&part));
                     let relation = Relation::Kind(id, term, KindSource::Written);
                     recorded.push(self.record(relation, Recorder::Origin));

@@ -54,21 +54,17 @@ pub enum Mutability {
     Exclusive,
 }
 
-/// Rust's integer types (l.56).
+/// The integer types of 8 to 64 bits (l.56).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum IntTy {
     I8,
     I16,
     I32,
     I64,
-    I128,
-    Isize,
     U8,
     U16,
     U32,
     U64,
-    U128,
-    Usize,
 }
 
 impl IntTy {
@@ -78,19 +74,15 @@ impl IntTy {
             IntTy::I16 => "i16",
             IntTy::I32 => "i32",
             IntTy::I64 => "i64",
-            IntTy::I128 => "i128",
-            IntTy::Isize => "isize",
             IntTy::U8 => "u8",
             IntTy::U16 => "u16",
             IntTy::U32 => "u32",
             IntTy::U64 => "u64",
-            IntTy::U128 => "u128",
-            IntTy::Usize => "usize",
         }
     }
 }
 
-/// Rust's float types (l.56).
+/// The float types `f32` and `f64` (l.56).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum FloatTy {
     F32,

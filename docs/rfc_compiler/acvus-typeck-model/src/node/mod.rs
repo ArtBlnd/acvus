@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, Fact, KindSource};
 use crate::decl::DeclId;
-use crate::program::{Deferral, Projection};
+use crate::program::Projection;
 use crate::read::ReadValue;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
@@ -200,9 +200,6 @@ pub struct Decided {
 pub struct DecidedBy {
     /// The node and the nodes that transitively depend on it (l.261).
     pub dependents: BTreeSet<Name>,
-    /// The decided nodes it broke its dependency on, whose relations its read
-    /// leaves out too (`Deferral::Reading`).
-    pub broke: BTreeSet<Name>,
     /// The undecided nodes that broke their dependency on it (l.263).
     pub broken_on: BTreeSet<Name>,
     pub value: ValueRead,
@@ -292,39 +289,23 @@ impl State {
             .decision = Some(decision);
     }
 
-    /// The nodes whose relations the node's read leaves out: itself and those
-    /// that transitively depend on it (l.261), and those it broke its
-    /// dependency on (`Deferral::Reading`).
-    fn read_leaves_out(&self, name: &Name) -> (BTreeSet<Name>, BTreeSet<Name>) {
-        let broke = self
-            .broken
-            .get(name)
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect();
-        (self.dependents(name), broke)
-    }
-
-    /// The value the node reads now, as deciding it would read it.
+    /// The value the node reads now, as deciding it would read it: without
+    /// itself and those that transitively depend on it (l.261).
     pub(crate) fn read_now(&self, name: &Name) -> ValueRead {
-        let (dependents, broke) = self.read_leaves_out(name);
-        self.value_read(name, &dependents.union(&broke).cloned().collect())
+        self.value_read(name, &self.dependents(name))
     }
 
     /// Decides the node by the value it reads, which decides it (`steps`),
-    /// and records what it records as the reading of l.263 takes it.
+    /// and records what it records, or defers it (l.263).
     pub(crate) fn decide(&mut self, name: &Name) -> Decided {
-        let (dependents, broke) = self.read_leaves_out(name);
-        let excluded = dependents.union(&broke).cloned().collect();
-        let value = self.value_read(name, &excluded);
+        let dependents = self.dependents(name);
+        let value = self.value_read(name, &dependents);
         let decision = value
             .decision
             .clone()
             .expect("a node is decided where the value it reads decides it");
         let broken_on = self.broken_on(name);
         self.set_decision(name, decision.clone());
-        self.broken.remove(name);
         let recorded = self.defer(name, broken_on.clone());
         Decided {
             node: name.clone(),
@@ -332,33 +313,22 @@ impl State {
             recorded,
             read: Some(DecidedBy {
                 dependents,
-                broke,
                 broken_on,
                 value,
             }),
         }
     }
 
-    /// Records what the node just decided records, or defers it, as the
-    /// reading takes l.263 (`Deferral`; `holes.md`, O2), `waiting` being the
-    /// undecided nodes that broke their dependency on it; then records what
-    /// each deferred node records once the nodes it waits for are decided.
-    /// Returns the relations recorded.
+    /// Records what the node just decided records, or defers it until the
+    /// undecided nodes that broke their dependency on it, `waiting`, are
+    /// decided (l.263); then records what each deferred node records once the
+    /// nodes it waits for are decided. Returns the relations recorded.
     pub(crate) fn defer(&mut self, name: &Name, waiting: BTreeSet<Name>) -> Recording {
         let mut recorded = Recording::default();
-        match self.readings.deferral {
-            Deferral::Recording if !waiting.is_empty() => {
-                self.deferred.insert(name.clone(), waiting);
-            }
-            Deferral::Recording => {
-                recorded.append(self.record_decision(name));
-            }
-            Deferral::Reading => {
-                for node in waiting {
-                    self.broken.entry(node).or_default().insert(name.clone());
-                }
-                recorded.append(self.record_decision(name));
-            }
+        if waiting.is_empty() {
+            recorded.append(self.record_decision(name));
+        } else {
+            self.deferred.insert(name.clone(), waiting);
         }
         loop {
             let ready: Vec<Name> = self

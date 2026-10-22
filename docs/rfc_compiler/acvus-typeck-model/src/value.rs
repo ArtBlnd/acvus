@@ -10,7 +10,6 @@ use std::rc::Rc;
 use crate::check::Refusal;
 use crate::class::{ClassId, ClassName, Fact, KindSource, Unified};
 use crate::decl::Node;
-use crate::program::Visibility;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
@@ -190,10 +189,6 @@ impl State {
                 })
                 .collect();
         }
-        let host_bound = lowers.into_iter().any(|lower| self.is_host(lower));
-        if self.readings.visibility == Visibility::BySources && host_bound {
-            return Vec::new();
-        }
         self.classes
             .held(root)
             .facts
@@ -204,15 +199,6 @@ impl State {
                 members: [member].into(),
             })
             .collect()
-    }
-
-    /// Whether the equivalence class holds a type the host gives.
-    fn is_host(&self, id: ClassId) -> bool {
-        self.classes
-            .held(id)
-            .members
-            .iter()
-            .any(|member| self.hosts.contains(member))
     }
 
     /// The constructor and members at `node` that the casts up from `head`'s

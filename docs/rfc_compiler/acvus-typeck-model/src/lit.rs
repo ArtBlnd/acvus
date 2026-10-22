@@ -110,19 +110,16 @@ fn holds(scalar: Scalar, literal: Literal) -> bool {
     }
 }
 
-/// The greatest value of an integer type, `isize` and `usize` being 64 bits
-/// wide whatever the machine the model runs on (`design/05-coercion.md`).
+/// The greatest value of an integer type.
 fn max(int: IntTy) -> u128 {
     match int {
         IntTy::I8 => i8::MAX as u128,
         IntTy::I16 => i16::MAX as u128,
         IntTy::I32 => i32::MAX as u128,
-        IntTy::I64 | IntTy::Isize => i64::MAX as u128,
-        IntTy::I128 => i128::MAX as u128,
+        IntTy::I64 => i64::MAX as u128,
         IntTy::U8 => u8::MAX as u128,
         IntTy::U16 => u16::MAX as u128,
         IntTy::U32 => u32::MAX as u128,
-        IntTy::U64 | IntTy::Usize => u64::MAX as u128,
-        IntTy::U128 => u128::MAX,
+        IntTy::U64 => u64::MAX as u128,
     }
 }

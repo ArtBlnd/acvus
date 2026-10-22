@@ -43,6 +43,12 @@ included.
    come, so the vacuous reading makes it depend on that order. Coercion says the
    same: `reborrow? ; cast*` (l.109) reaches `&Y` from `&mut X` only through `&X`'s
    cast.
+3. **A cast goes up from every type of its node.** Its parameter writes the node
+   with distinct type parameters as its parts, through a reference's target where
+   it is one, and its result writes those type parameters alone (l.78, since the
+   text's change of 2026-10-22): `Vec<u8> → Bytes` is refused
+   (`TreeError::NarrowerThanNode`), as is `A → Box<T>` (`ResultUnbound`), so a join
+   the tree gives always raises (`holes.md`, H1).
 3. **A cast steps up only from the types its parameter matches.** A cast's node is
    its parameter's constructor, and its parameter may still be narrower than the
    node (`Vec<u8>` at the node `Vec`), or its result may write a variable its

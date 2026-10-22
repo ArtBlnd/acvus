@@ -713,10 +713,7 @@ fn as_reference(state: &State, at: &str, read: &AsReference) -> String {
 
 /// The value a node read when it was decided.
 fn decided_by(state: &State, node: &Name, by: &DecidedBy) -> Lines {
-    let broke = [
-        ("broke", nodes(&by.broke)),
-        ("broken by", nodes(&by.broken_on)),
-    ];
+    let broke = [("broken by", nodes(&by.broken_on))];
     value_read(state, node, &by.value, broke)
 }
 
@@ -726,7 +723,7 @@ fn value_read(
     state: &State,
     node: &Name,
     value: &ValueRead,
-    broke: [(&str, Option<String>); 2],
+    broke: [(&str, Option<String>); 1],
 ) -> Lines {
     let mut lines = Lines::default();
     let facts = [("exclude", nodes(&value.left_out))]
@@ -896,7 +893,7 @@ pub fn waiting(state: &State) -> Lines {
         let wait = dependencies(state, waits);
         lines.push(0, attributes(line, [("wait", Some(wait))]));
         if waits_for_nothing {
-            let none = [("broke", None), ("broken by", None)];
+            let none = [("broken by", None)];
             lines.nest(1, value_read(state, node, &state.read_now(node), none));
         }
     }

@@ -250,7 +250,7 @@ fn a_view_steps_a_reference_to_a_container_up_to_a_slice_of_its_elements() {
 }
 
 #[test]
-fn raising_takes_each_cast_up_to_the_node_and_stops_where_a_cast_does_not_match() {
+fn raising_takes_each_cast_up_to_the_node() {
     let mut builder = new_builder();
     cast(
         &mut builder,
@@ -259,8 +259,19 @@ fn raising_takes_each_cast_up_to_the_node_and_stops_where_a_cast_does_not_match(
         sig_extern("Box", vec![var(0)]),
         sig_extern("Seq", vec![var(0)]),
     );
-    cast(
-        &mut builder,
+    let decls = builder.finish().unwrap();
+    let box_u16 = closed_extern("Box", vec![int(IntTy::U16)]);
+    let seq = Node::Owned(Constructor::Extern(name("Seq")));
+    let (casts, raised) = decls.raise(&box_u16, &seq).unwrap();
+    assert_eq!(casts.len(), 1);
+    assert_eq!(raised, closed_extern("Seq", vec![int(IntTy::U16)]));
+}
+
+#[test]
+fn a_cast_writes_its_node_generally_and_its_result_by_its_parameter() {
+    let mut narrow = new_builder();
+    let bytes = cast(
+        &mut narrow,
         "bytes",
         vec![],
         sig_extern(
@@ -269,22 +280,21 @@ fn raising_takes_each_cast_up_to_the_node_and_stops_where_a_cast_does_not_match(
         ),
         plain("Bytes"),
     );
-    let decls = builder.finish().unwrap();
-    let box_u16 = closed_extern("Box", vec![int(IntTy::U16)]);
-    let seq = Node::Owned(Constructor::Extern(name("Seq")));
-    let (casts, raised) = decls.raise(&box_u16, &seq).unwrap();
-    assert_eq!(casts.len(), 1);
-    assert_eq!(raised, closed_extern("Seq", vec![int(IntTy::U16)]));
-    let bytes = Node::Owned(Constructor::Extern(name("Bytes")));
     assert!(
-        decls
-            .raise(&closed_extern("Vec", vec![int(IntTy::U8)]), &bytes)
-            .is_some()
+        matches!(narrow.finish(), Err(TreeError::NarrowerThanNode(id)) if id == bytes),
+        "Vec<u8> is not Vec's every type (l.78; holes.md, H1)"
+    );
+    let mut unbound = new_builder();
+    let boxed = cast(
+        &mut unbound,
+        "boxed",
+        vec![name("T")],
+        plain("A"),
+        sig_extern("Box", vec![var(0)]),
     );
     assert!(
-        decls
-            .raise(&closed_extern("Vec", vec![int(IntTy::U16)]), &bytes)
-            .is_none()
+        matches!(unbound.finish(), Err(TreeError::ResultUnbound(id)) if id == boxed),
+        "where A goes up is not decided"
     );
 }
 

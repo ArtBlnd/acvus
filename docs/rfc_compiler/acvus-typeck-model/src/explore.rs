@@ -307,12 +307,11 @@ impl State {
         roots.sort();
         let decisions: Vec<_> = self.nodes.values().map(|node| &node.decision).collect();
         format!(
-            "{roots:?}|{}|{:?}|{:?}|{decisions:?}|{:?}|{:?}",
+            "{roots:?}|{}|{:?}|{:?}|{decisions:?}|{:?}",
             self.log.len(),
             self.split,
             self.refusals,
             self.deferred,
-            self.broken,
         )
     }
 }

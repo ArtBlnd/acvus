@@ -144,7 +144,8 @@ Since 8978eb70 the environment is cut always. The cases under
 `cases/environment/` that had a twin of one name asserting the spec's outcome of
 then, under `cases/spec/`, `cases/holes/` and `cases/istar/`, are in that twin's
 place, the twin removed: H5, both of O4, Example 6 and Example 6 called with two
-types, the lambda never called, and the call left out under `Deferral::Reading`.
+types, the lambda never called, and the call left out (then under a reading of
+l.263 since removed).
 Each keeps its outcome. Five cases written by the text of then changed:
 
 - `rules/classes/a-a-capture-shared-by-two-instances` and

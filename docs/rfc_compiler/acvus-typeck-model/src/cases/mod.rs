@@ -13,7 +13,7 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use parse::{Case, Expect, Located};
+use parse::{Expect, Located};
 use run::{Explored, Run, Tracer};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -56,21 +56,16 @@ fn check_block(block: &[Located<Expect>], what: &str) -> Result<(), String> {
 
 /// The golden outcome of the runs: every outcome in full, with the I\*
 /// violations of the final states reaching it, and a written order's trace.
-fn golden(case: &Case, runs: &[Run]) -> String {
+fn golden(runs: &[Run]) -> String {
     let mut text =
         String::from("// What the model gives, written by `BLESS=1` (design/19-cases.md).\n");
-    let readings = if case.readings.is_empty() {
-        vec![crate::program::Readings::default()]
-    } else {
-        case.readings.clone()
-    };
-    for (i, (run, readings)) in runs.iter().zip(&readings).enumerate() {
+    for run in runs {
         let explored = match &run.explored {
             Explored::All { .. } => "every order".to_string(),
             Explored::Sampled(orders) => format!("{orders} sampled orders"),
             Explored::Written(_) => "the written order".to_string(),
         };
-        writeln!(text, "run {}: {readings:?}, {explored}", i + 1).expect("writing to a string");
+        writeln!(text, "run: {explored}").expect("writing to a string");
         for (k, outcome) in run.outcomes.iter().enumerate() {
             writeln!(text, "outcome {}", k + 1).expect("writing to a string");
             text.push_str(&render::outcome(outcome));
@@ -130,32 +125,21 @@ fn run_case(
     }
     let decls = build::decls(&case)?;
     let changes = expect::changes(&decls, &case.expects)?;
-    let readings = if case.readings.is_empty() {
-        vec![crate::program::Readings::default()]
-    } else {
-        case.readings.clone()
-    };
-    let mut runs = Vec::new();
-    for readings in readings {
-        if let Some(tracer) = tracer {
-            let explored = match &case.orders {
-                parse::Orders::All => "every order".to_string(),
-                parse::Orders::Sampled(orders) => format!("{orders} sampled orders"),
-                parse::Orders::Written(_) => "the written order".to_string(),
-            };
-            tracer.line(
-                0,
-                &format!("run {}: {readings:?}, {explored}", runs.len() + 1),
-            );
-        }
-        let program = build::program(&case, &decls, readings)?;
-        runs.push(run::run(
-            &program,
-            &case.orders,
-            &changes.corruptions,
-            tracer,
-        )?);
+    if let Some(tracer) = tracer {
+        let explored = match &case.orders {
+            parse::Orders::All => "every order".to_string(),
+            parse::Orders::Sampled(orders) => format!("{orders} sampled orders"),
+            parse::Orders::Written(_) => "the written order".to_string(),
+        };
+        tracer.line(0, &format!("run: {explored}"));
     }
+    let program = build::program(&case, &decls)?;
+    let runs = vec![run::run(
+        &program,
+        &case.orders,
+        &changes.corruptions,
+        tracer,
+    )?];
     let mut messages = expect::fails(
         &decls,
         &runs,
@@ -179,7 +163,7 @@ fn run_case(
             (status, false) => status,
         };
     }
-    let text = golden(&case, &runs);
+    let text = golden(&runs);
     if bless {
         std::fs::write(golden_path, &text)
             .map_err(|error| format!("writing the golden: {error}"))?;

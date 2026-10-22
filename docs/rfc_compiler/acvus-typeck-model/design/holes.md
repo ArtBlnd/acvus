@@ -18,16 +18,13 @@ the primitive it belongs to, not here.
 
 ## H1. A cast narrower than its node
 
-A cast's node is its parameter's constructor (l.78), and nothing requires its
-parameter to match every type of that node, nor its result to write only variables
-its parameter writes: `Vec<u8> → Bytes`, or `A → Box<T>`. The join raises each type
-by casts to the nearest common ancestor node (l.86), and a type of that node the
-cast does not match, `Vec<u16>`, or one whose step up is not determined, `A`, can
-be raised by none, though its node has an ancestor. Types §3 states the tree per
-type ("every type has at most one next step up") and the spec per node. The spec
-gives no join there, so a relation that needs one is refused. Requiring a cast's
-parameter to be its node at distinct variables, and its result to write only those,
-would close the hole at the declaration.
+Not a hole since 2026-10-22: a declared cast's parameter writes its node with
+distinct type parameters as its parts, and its result writes those alone (l.78), so
+every type of a node goes up by its cast (`TreeError::NarrowerThanNode`,
+`ResultUnbound`). Before, nothing required it: `Vec<u8> → Bytes` made `Bytes` the
+node above `Vec`, but `Vec<u16>` went up by no cast, and `A → Box<T>` decided no
+`T`, so a join the tree gave had no result. A narrower step is a conversion, which
+is no part of the tree.
 
 ## H2. A value whose path up meets two variants of `Error`
 
@@ -155,10 +152,11 @@ where only LitVars enter `X`, keeps its dependencies and its one refusal
 
 ## T1. A type parameter's bound
 
-Extern fn §1 gives a type parameter one bound, any type or any type the use must
-settle, never taken as `!`. The spec states no bound, and its fallback gives `!` to
-a class nothing decides (l.288). The model follows the spec, so a declaration's
-type parameter that no use settles becomes `!` where extern fn §1 would refuse.
+Decided 2026-10-22: the spec's. Extern fn §1 gives a type parameter one bound, any
+type or any type the use must settle, never taken as `!`. The spec states no bound,
+and its fallback gives `!` to a class nothing decides (l.288), as types §5 states
+of a type variable nothing constrains. Extern fn §1's bound goes when the compiler's
+RFCs are brought up to the text.
 
 ## T2. Which side of a boundary records into the parts
 
@@ -174,41 +172,35 @@ sides"), and the model relates the parts once both sides have taken a constructo
 
 ## T3. A structural coercion that changes members and parts
 
-The spec composes at most one structural row (l.109), and its object and enum rows
-keep the parts while its part row keeps the members (l.101–103), so `{x: E{V(!)},
-y: u8} ⇝ {x: E{V(!), W(!)}}` reaches by no composition. Types §3 coerces a
-structured value by its kind's shape and part by part at once: the object narrows
-to the fields the slot names, and each remaining part coerces as its type does,
-here by `⇝ₚ` (l.109). The model reads types §3 (`design/05-coercion.md`,
-reading 1).
+Not a text since the text states the structural stage as the object, enum and part
+rows used together, changing the members and each remaining part by its coercion at
+once (l.109, 2026-10-22), as types §3 coerces a structured value by its kind's
+shape and part by part. `{x: E{V(!)}, y: u8} ⇝ {x: E{V(!), W(!)}}` reaches by one
+structural stage (`design/05-coercion.md`, reading 1).
 
 ## T4. Which scalars are numbers
 
-The spec's scalars are Rust's (l.56). Operators §1 makes the numbers the integer
-types of 8 to 64 bits and `f64`, so `i128`, `u128`, `isize`, `usize` and `f32` are
-scalars of the spec and no number of the RFC. The model follows the spec.
+Decided 2026-10-22: the scalars are the integers of 8 to 64 bits, `f32`, `f64`,
+`bool` and `char` (l.56). The text had Rust's scalars, `i128`, `u128`, `isize` and
+`usize` among them, which operators §1 does not have; `f32`, which operators §1
+lacks, stays, and goes into it when the compiler's RFCs are brought up to the text.
 
 ## T5. Which members a host's type keeps from growing
 
-A kind gives a member only where the member is visible: an object's fields and an
-enum's variants are visible since the body's text writes them, and the members of a
-type the host gives are not (l.276). Read by the member, the field `extra` in
-`a.extra` is written by the text and visible wherever `a`'s type came from, so the
-clause about the host's type changes no outcome: a class holding the host's type
-itself has an equation, which a kind cannot grow (Example 8). Patterns §2 has an
-enum grow only "where every use of the enum is visible", and an enum not visible
-there does not grow; read so, a class with a lower bound the host gives grows by no
-kind. Witness, accepted read by the member with `a: {extra: i32, name: String}`,
-refused read by the sources (`cases/holes/t5-a-field-on-a-class-the-host-bounds.case`,
-`cases/holes/t5-read-by-the-sources.case`):
+Not a text since ef0153c9: a kind adds a member to a type another source gives only
+where that member is visible to this body, and a field the text writes is visible
+(l.276), so a class a type the host gives is a lower bound of grows by it. The
+class holding the host's type itself has an equation, which a kind cannot grow
+(Example 8). Accepted with `a: {extra: i32, name: String}`
+(`cases/holes/t5-a-field-on-a-class-the-host-bounds.case`):
 
 ```
 let a = @cfg;            // @cfg is { name: String }, given by the host
 a.extra = 1;
 ```
 
-Read by the sources, the clause holds of a direct lower bound only: through `let b
-= a; b.extra = 1;` the class `b` has no lower bound the host gives, and grows.
+The reading by the sources, under which the host's type grew by no kind, is
+removed with its case.
 
 ## T6. A pattern on a scrutinee of type `!`
 
@@ -255,20 +247,14 @@ and the binding waits for its path's projection: one outcome, `x: &u8`
 
 ## O2. What a broken dependency's relations wait for
 
-"The relations recorded by a node that a broken dependency pointed to are recorded
-once the node that broke it is decided" (l.263). Until then, a third node that no
-longer waits for the first, it being decided, reads without them. The witness was
-the program of H7 under the reading H7 removes, where `probe` lay outside the cycle
-of `x + y` and `y + 1`: decided after `x + y` and before `y + 1`, it read `X` as
-`?a` alone and took `i32`, and decided after both, `u16`. Under the spec as stated
-`probe` is in that cycle, and a witness whose third node lies outside a cycle is
-not yet found.
-
-Read so that a broken dependency's relations are recorded when their node is
-decided, and only the value read by the node that broke it leaves them out
-(`Deferral::Reading`), no third node reads without them. That reading keeps what
-l.263 is for, that each node of a cycle reads without the others (Example 12, step
-3), without holding the relations from third nodes.
+Decided 2026-10-22: as l.263 states. "The relations recorded by a node that a broken
+dependency pointed to are recorded once the node that broke it is decided" (l.263).
+Until then, a third node that no longer waits for the first reads without them. The
+witness was the program of H7 under the reading H7 removes; under the spec as
+stated `probe` is in that cycle, and no witness whose third node lies outside a
+cycle is found. The reading that recorded them when their node was decided,
+leaving them out of the reads of the nodes that broke the dependency alone, is
+removed with no witness to keep it.
 
 ## O3. A reference recorded at once has no mutability
 
