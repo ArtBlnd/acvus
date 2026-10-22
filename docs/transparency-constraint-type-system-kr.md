@@ -235,13 +235,13 @@ body의 텍스트가 주는 제약은 주어지는 즉시 동치류에 기록되
 
 | 무엇이 | 무엇에 의존하는가 |
 |---|---|
-| 동치류 | 풀리지 않은 하한과 part 하한(아무것도 들어오지 않는 동치류는 빼고, 값), 그리고 다음이 아직 기록하지 않은 관계. (가) 자기가 하한이나 part 하한 `τ ≤ α`의 `τ`나 경계 `α ⇝ U`의 `U`의 part이면, `α`가 constructor를 받는 것. 자기가 `?`의 감싸기를 받는 `X`이면, 그 error part가 constructor를 받는 것. 자기가 lambda의 environment에 든 parameter이고, 그 lambda의 값이 하한과 등식을 따라 닿는 동치류 `α`가 경계 `α ⇝ U`로 함수 타입에 넘어가면, `α`가 constructor를 받는 것. (나) 자기가 그 자리에 놓이거나, 그 후보나 pattern이 닿는 깊이 안의 part인 use, lend, projection, binding. 다만 그것이 자기에게 기록하는 관계가 자기에서 나가는 경계뿐이면, 자기에게 LitVar만 들어오는 동안만 그것을 기다리며, LitVar만 들어오는지는 아무것도 들어오지 않는지와 같이 정한다(값). 함수 값을 담는 동치류는, 그 Values가 그때 가리키는 lambda마다 그 environment에 든 parameter와 결과 타입을 함수 타입의 parameter와 result 자리의 part로 지니는 것처럼 본다(Facts). 그래서 그것들은 그 함수 값을 부르는 use의 자리에도, 그 함수 값이 넘어가는 함수 타입을 쓴 후보가 닿는 깊이에도 든다. |
+| 동치류 | 풀리지 않은 하한과 part 하한(아무것도 들어오지 않는 동치류는 빼고, 값), 그리고 다음이 아직 기록하지 않은 관계. (가) 자기가 아직 쪼개지지 않은 하한, part 하한, 경계, 감싸기가 쪼개질 때 관계를 받을 쪽이면, 그 쪼갬을 일으킬 동치류가 constructor를 받는 것. 받을 쪽은 `τ ≤ α`의 `τ`의 part, `α ⇝ U`의 `U`의 part와 함수 값 `α`의 parameter 자리의 part, 그리고 `?`의 감싸기를 받는 `X`다. (나) 자기가 그 자리에 놓이거나, 그 후보나 pattern이 닿는 깊이 안의 part인 use, lend, projection, binding. 다만 그것이 자기에게 기록하는 관계가 자기에서 나가는 경계뿐이면, 자기에게 LitVar만 들어오는 동안만 그것을 기다리며, LitVar만 들어오는지는 아무것도 들어오지 않는지와 같이 정한다(값). 함수 값을 담는 동치류는, 그 Values가 그때 가리키는 lambda마다 그 environment에 든 parameter와 결과 타입을 함수 타입의 parameter와 result 자리의 part로 지니는 것처럼 본다(Facts). 그래서 그것들은 그 함수 값을 부르는 use의 자리에도, 그 함수 값이 넘어가는 함수 타입을 쓴 후보가 닿는 깊이에도 든다. |
 | part의 동치류 | 그것을 part로 가진 동치류들이 모두 constructor를 받는 것 |
 | universal | 그것을 고르는 use, 곧 그 body의 instance를 만드는 use. 그 use는 그 binding group 밖에 있다. |
 | use | 읽는 자리의 동치류에 관계를 기록하는 use, lend, projection, binding |
-| lend, projection, binding | 그 place나 operand의 동치류에 관계를 기록하는 use, lend, projection, binding 가운데, field, component, index, variant의 projection과, 그 동치류가 reference인지를 이미 기록한 use가 아닌 것 |
+| lend, projection, binding | 그 place나 operand의 동치류에 관계를 기록하는 use, lend, projection, binding 가운데, 그 동치류를 operand로 한 field, component, index, variant의 projection과, 그 동치류가 reference인지를 이미 기록한 use가 아닌 것 |
 
-동치류에 관계를 기록하는 use, lend, projection, binding은, 그 동치류와, 그것에서 동치류끼리의 의존을 따라 닿는 동치류들이 의존하는 use, lend, projection, binding이다. use, lend, projection, binding은 동치류에 의존하지 않는다.
+동치류에 관계를 기록하는 use, lend, projection, binding은, 그 동치류와, 그것에서 동치류끼리의 의존과, 아직 쪼개지지 않은 관계가 쪼개질 때 이을 두 쪽의 part끼리를 따라 닿는 동치류들이 의존하는 use, lend, projection, binding이다. use, lend, projection, binding은 동치류에 의존하지 않는다.
 
 use는 정해지기 전에도 동치류가 reference인지를 기록한다. 그 후보들이 한 동치류에 기록할 하한이나 등식의 타입이 모든 후보에서 reference이면 그 동치류가 reference라는 것을, 어느 후보에서도 reference가 아니면 reference가 아니라는 것을 바로 기록한다. 후보들이 이 점에서 서로 다르면, 그것은 그 use가 정해질 때 기록된다.
 
@@ -258,7 +258,7 @@ a = pick(a);
 - `pick`은 그 kind에 의존하므로 `A`를 `{x: τ}`로 읽고, `pick({x: i32})`가 남는다.
 - 둘째 선언이 `pick(u8) -> &u8`이면 두 후보가 이 점에서 다르므로, `a.x`는 `pick`에 의존하고 `pick`도 `a.x`에 의존한다. 둘은 서로에게 추이적으로 의존하므로 서로로의 의존을 끊으며, `pick`이 읽는 `A`는 아무것도 정하지 않아 그 호출에서 거부된다.
 
-use, lend, projection, binding이 무엇이 되는지는 그것이 읽는 값으로 정해진다. 읽는 값은 그 동치류의 값을, 자기 자신과 자기에게 추이적으로 의존하는 use, lend, projection, binding이 기록하는 관계 없이 남은 관계만으로 정한 것이다. 이때 각 동치류의 값은, 그것이 의존하는 것이 풀렸는지와 상관없이 값의 표, 쪼갬, 채움으로 정하며, 남은 관계가 하나도 없는 동치류는 아무것도 주지 않는다. 선언을 부르는 use는 후보들이 갈리는 자리를 읽고, lend, projection, binding은 그 동치류가 reference인지를 읽는다. reference인지를 읽을 때는 field, component, index, variant의 projection이 기록하는 관계도 기록되지 않았다고 본다(Place). 읽는 값이 아무것도 정하지 않는 자리는 아무것도 정하지 않는다.
+use, lend, projection, binding이 무엇이 되는지는 그것이 읽는 값으로 정해진다. 읽는 값은 그 동치류의 값을, 자기 자신과 자기에게 추이적으로 의존하는 use, lend, projection, binding이 기록하는 관계 없이 남은 관계만으로 정한 것이다. 이때 각 동치류의 값은, 그것이 의존하는 것이 풀렸는지와 상관없이 값의 표, 쪼갬, 채움으로 정하며, 남은 관계가 하나도 없는 동치류는 아무것도 주지 않는다. 선언을 부르는 use는 후보들이 갈리는 자리를 읽고, lend, projection, binding은 그 동치류가 reference인지를 읽는다. reference인지를 읽을 때는 그 동치류를 operand로 한 field, component, index, variant의 projection이 기록하는 관계도 기록되지 않았다고 본다(Place). 읽는 값이 아무것도 정하지 않는 자리는 아무것도 정하지 않는다.
 
 의존 그래프는, 그때의 동치류들과 use, lend, projection, binding을 노드로 하고 위 표의 각 행이 주는 의존을 간선으로 하는 그래프다. `Y`가 `X`에 추이적으로 의존한다는 것은 의존 그래프를 따라 `Y`에서 `X`에 닿는다는 것이다. 각 노드는 자기 자신으로의 의존과, 자기에게 추이적으로 의존하는 노드로의 의존을 끊는다. 끊긴 의존이 가리키던 노드가 기록하는 관계는, 그 의존을 끊은 노드가 정해진 뒤에 기록되어 검사된다(값).
 
@@ -323,7 +323,7 @@ method 호출의 receiver는 첫 인자다. 적힌 그대로, `&`, 그리고 rec
 
 후보가 여럿인 use는 "그 타입들이 후보의 signature 가운데 하나와 같다"는 제약으로 기록되며, 모든 후보에 공통인 부분은 이 제약에서 바로 성립한다.
 
-후보는 다음 차례로 좁혀지며, 각 차례에서 넘어감이 rank가 가장 낮은 coercion으로 되는 후보만 남는다. 각 자리의 타입은 그 use가 읽는 값이다(의존).
+후보는 다음 차례로 좁혀지며, 각 차례에서 넘어감이 rank가 가장 낮은 coercion으로 되는 후보만 남는다. 각 자리의 타입은 그 use가 읽는 값이다(의존). 결과가 넘어가는 타입이 미지수이면 그 자리는 만남이므로, 넘어감은 후보의 결과 타입이 그 미지수의 다른 출처들과 join된 타입에 `≤`로 닿는 것으로 본다(Join).
 
 | 차례 | 넘어가는 것 | 넘어가는 타입 |
 |---|---|---|
