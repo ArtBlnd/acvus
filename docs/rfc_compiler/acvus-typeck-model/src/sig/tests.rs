@@ -235,6 +235,39 @@ fn a_signature_is_checked_at_every_term_it_writes() {
         ),
         Err(SigError::FunctionValue)
     );
+    let error = SigTy::term(Term::Enum(
+        name(crate::join::ERROR),
+        [(
+            name("Vec"),
+            sig_extern("Vec", vec![SigTy::term(Term::Unit)], None),
+        )]
+        .into(),
+    ));
+    let unit = || SigTy::term(Term::Unit);
+    let function = |param: SigTy| {
+        SigTy::term(Term::Function {
+            params: vec![param],
+            ret: unit(),
+        })
+    };
+    assert!(
+        Signature::new(vec![], false, vec![error.clone()], unit(), &types).is_ok(),
+        "a parameter, where a value leaves the program, may hold an `Error` (l.91)"
+    );
+    assert_eq!(
+        Signature::new(vec![], false, vec![], error.clone(), &types),
+        Err(SigError::Error),
+        "a result, where a value enters it, holds none"
+    );
+    assert_eq!(
+        Signature::new(vec![], false, vec![function(error.clone())], unit(), &types),
+        Err(SigError::Error),
+        "a function type's parameter turns the side over"
+    );
+    assert!(
+        Signature::new(vec![], false, vec![], function(error), &types).is_ok(),
+        "and turns it over again at a result's function type"
+    );
     let bare_vec = sig_extern("Vec", vec![], None);
     assert!(matches!(
         Signature::new(

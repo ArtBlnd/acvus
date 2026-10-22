@@ -37,9 +37,10 @@ Not a hole since 17d0be51. `?` makes a variant of `Error` for each error type's 
 with casts `A → B → D`, then reached it by two compositions: `A → B` then the wrap
 in `B`, and `A → B → D` then the wrap in `D`, by the wrap rows of the Coercion
 table, though the composition toward a given type is unique (l.109). Since
-17d0be51 no type a declaration, the text or a context writes holds an `Error`, which
-`?` alone makes (l.91), and `?` wraps by a split (l.278, l.337), so the wrap rows are
-removed and no value reaches an `Error` by a coercion.
+17d0be51 an `Error`, which `?` alone makes, is written only where a value leaves the
+program (l.91), and `?` wraps by a split (l.278, l.337), so the wrap rows are removed
+and no value of another type reaches an `Error` by a coercion: what enters a written
+`Error`, a parameter's or the embedding's result's, is an `Error` already.
 
 ## H3. A view at a boundary
 

@@ -56,11 +56,11 @@ within its family.
    it. A part takes the structural stage alone, so a structural stage with a cast
    below it is a whole value's: a cast `A → E{V(!)}` then widening to `E{V(!),
    W(!)}`.
-5. **No row wraps a value in an `Error`.** No type a declaration, the text or a
-   context writes holds an `Error`, which `?` alone makes (l.91, since 17d0be51;
-   note 02, reading 2), and `?` wraps by a split (l.278, l.337), so the Coercion
-   table has no wrap row and no value reaches an `Error` by a coercion
-   (`holes.md`, H2).
+5. **No row wraps a value in an `Error`.** An `Error`, which `?` alone makes, is
+   written only where a value leaves the program (l.91; note 02, reading 2), and
+   `?` wraps by a split (l.278, l.337), so the Coercion table has no wrap row and
+   no value of another type reaches an `Error` by a coercion (`holes.md`, H2);
+   an `Error` reaches one by the enum row, its variants added.
 6. **The steps of `≤`.** `S ≤ T` joins to `T`, so the steps are those of the join
    (l.86–89): a reborrow where an exclusive reference meets a shared one, the casts
    up to `T`'s node, then members gained, fields unchanged and variants added, and

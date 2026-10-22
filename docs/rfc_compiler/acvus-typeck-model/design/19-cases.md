@@ -92,6 +92,7 @@ classes, and `universal A;` a universal.
 | `let 0: lit 0;`, `let x: lit 1.5;` | a literal's LitVar |
 | `` let `Some(a)`: Option<S>; `` | a type the text writes |
 | `` let `@cfg`: host {name: N}; `` | a type the host gives |
+| `let D: out Result<U8, E>;` | a type the embedding declares for the run's result, which may hold an `Error` (l.91) |
 | `` let F: lambda λ; `` | the function value of the lambda `λ` |
 
 **Statements.**
@@ -358,6 +359,11 @@ steps; `golden()` and every expectation read what they read without it.
   1–3, accepted with `b: G`; the same without the cast, refused at `b`; and an
   identity a body makes, made anew at each of two instances. Each was derived
   before it was run.
+- 2 cases under `cases/spec`, `l091-*`, test where an `Error` is written (l.91):
+  the run's result into the type the embedding declares (`out T`), and a
+  declaration's parameter, each derived before it was run; that the text, a
+  context and a declaration's result write none is `src/program/tests.rs` and
+  `src/sig/tests.rs`.
 - 1 case under `cases/spec`, `l341-a-try-in-a-match-arm`, tests that a match
   arm's braces are no block expression (l.341, since d6ebc326): its `?` exits the
   script, derived before it was run.

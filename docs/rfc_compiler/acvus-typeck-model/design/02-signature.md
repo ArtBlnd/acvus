@@ -43,8 +43,13 @@ fields in declared order (l.54).
    only as a type variable takes it in, as `T -> T` does (l.184). So a signature
    writes none at any depth, and `Signature::new` refuses one
    (`SigError::FunctionValue`); the text and a context write none either
-   (`ProgramBuilder::written`, `host`). Nor does any write an `Error`, which `?`
-   alone makes (l.91, since 17d0be51; `SigError::Error`).
+   (`ProgramBuilder::class`). An `Error`, which `?` alone makes, is written only
+   where a value leaves the program (l.91, since 17d0be51 and the commit after
+   1130e55f): at a declaration's parameter, turned over at a function type's
+   parameters (`SigError::Error`), and in the type the embedding declares for
+   the run's result (`Origin::Outward`, `out T` in a case), never in a
+   declaration's result, the text or a context. A function type in the
+   embedding's result is not encoded.
 
 ## Left open for change
 

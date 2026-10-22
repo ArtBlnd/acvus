@@ -9,6 +9,9 @@ use crate::decl::Decls;
 use crate::lit::LitVar;
 use crate::ty::{Mutability, Name, Term};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Debug)]
 pub struct Program {
     pub decls: Decls,
@@ -160,7 +163,9 @@ impl Program {
                     continue;
                 }
                 joined.add(&class.name);
-                if let Origin::Written(term) | Origin::Host(term) = &class.origin {
+                if let Origin::Written(term) | Origin::Host(term) | Origin::Outward(term) =
+                    &class.origin
+                {
                     for (_, part) in term.parts() {
                         joined.join(&class.name, part);
                     }
@@ -317,6 +322,10 @@ pub enum Origin {
     /// A type the host gives (l.37, l.276), its parts named by other text
     /// classes.
     Host(Term<Name>),
+    /// A type the embedding declares for the run's result, where a value
+    /// leaves the program, so it may hold an `Error` (l.91, l.197), its parts
+    /// named by other text classes.
+    Outward(Term<Name>),
     /// The value of the lambda whose function is named: a function value
     /// whose Values names that lambda alone (l.181, l.186).
     Lambda(Name),
@@ -508,7 +517,30 @@ impl ProgramBuilder {
         self.readings = readings;
     }
 
+    /// A text class of the origin. No type the text writes or a context
+    /// gives is a function value, a lambda's value alone (l.184), and none
+    /// holds an `Error`, which a value may hold only where it leaves the
+    /// program (l.91); a function type in the type the embedding declares for
+    /// the result, whose parameters a value enters the program by, is not
+    /// encoded.
     pub fn class(&mut self, name: &str, origin: Origin) -> Name {
+        match &origin {
+            Origin::Written(term) | Origin::Host(term) => {
+                assert!(
+                    !matches!(term, Term::FunctionValue { .. }),
+                    "{name}: the text writes, and a context gives, no function value (l.184)"
+                );
+                assert!(
+                    !crate::join::is_error(term),
+                    "{name}: the text writes, and a context gives, no `Error` (l.91)"
+                );
+            }
+            Origin::Outward(term) => assert!(
+                !matches!(term, Term::FunctionValue { .. } | Term::Function { .. }),
+                "{name}: a function type or value in the embedding's result is not encoded"
+            ),
+            Origin::Var | Origin::Lit(_) | Origin::Lambda(_) => {}
+        }
         let name = Name::new(name);
         self.classes.push(TextClass {
             name: name.clone(),
@@ -529,28 +561,18 @@ impl ProgramBuilder {
     /// A class holding a type the text writes, which is no function value: a
     /// function value is a lambda's value alone (l.184).
     pub fn written(&mut self, name: &str, term: Term<Name>) -> Name {
-        assert!(
-            !matches!(term, Term::FunctionValue { .. }),
-            "{name}: the text writes no function value (l.184)"
-        );
-        assert!(
-            !crate::join::is_error(&term),
-            "{name}: the text writes no `Error` (l.91)"
-        );
         self.class(name, Origin::Written(term))
+    }
+
+    /// A class holding a type the embedding declares for the run's result,
+    /// where a value leaves the program (l.91, l.197).
+    pub fn outward(&mut self, name: &str, term: Term<Name>) -> Name {
+        self.class(name, Origin::Outward(term))
     }
 
     /// A class holding a type a context gives, which is no function value
     /// (l.184).
     pub fn host(&mut self, name: &str, term: Term<Name>) -> Name {
-        assert!(
-            !matches!(term, Term::FunctionValue { .. }),
-            "{name}: a context gives no function value (l.184)"
-        );
-        assert!(
-            !crate::join::is_error(&term),
-            "{name}: a context gives no `Error` (l.91)"
-        );
         self.class(name, Origin::Host(term))
     }
 

@@ -69,6 +69,8 @@ pub enum OriginText {
     Lit(Literal),
     Written(TypeExpr),
     Host(TypeExpr),
+    /// `out T`: the type the embedding declares for the run's result (l.197).
+    Outward(TypeExpr),
     Lambda(String),
 }
 
@@ -848,6 +850,9 @@ impl Parser<'_> {
         }
         if self.eat_word("host") {
             return Ok(OriginText::Host(self.ty()?));
+        }
+        if self.eat_word("out") {
+            return Ok(OriginText::Outward(self.ty()?));
         }
         if self.eat_word("lambda") {
             return Ok(OriginText::Lambda(self.name()?));

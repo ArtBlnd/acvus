@@ -482,7 +482,7 @@ impl Text {
         for class in &program.classes {
             if matches!(
                 class.origin,
-                Origin::Written(_) | Origin::Host(_) | Origin::Lambda(_)
+                Origin::Written(_) | Origin::Host(_) | Origin::Outward(_) | Origin::Lambda(_)
             ) {
                 let root = text.root(&class.name);
                 text.decided.insert(root);
@@ -654,7 +654,7 @@ impl Checker<'_> {
         let value = self.text(context, &at, name)?;
         match origin {
             Origin::Var => {}
-            Origin::Written(term) | Origin::Host(term) => {
+            Origin::Written(term) | Origin::Host(term) | Origin::Outward(term) => {
                 let mut parts = BTreeMap::new();
                 for (_, part) in term.parts() {
                     let ty = self.text(context, &at, part)?;

@@ -260,6 +260,7 @@ pub fn program(case: &Case, decls: &Decls, readings: Readings) -> Built<Program>
                     OriginText::Lit(literal) => Origin::Lit(LitVar::of(*literal)),
                     OriginText::Written(expr) => Origin::Written(at(*line, written(types, expr))?),
                     OriginText::Host(expr) => Origin::Host(at(*line, written(types, expr))?),
+                    OriginText::Outward(expr) => Origin::Outward(at(*line, written(types, expr))?),
                     OriginText::Lambda(lambda) => Origin::Lambda(Name::new(lambda)),
                 };
                 p.class(name, origin);
@@ -370,7 +371,7 @@ fn check_names(program: &Program) -> Built<()> {
                 .classes
                 .iter()
                 .flat_map(|class| match &class.origin {
-                    Origin::Written(term) | Origin::Host(term) => {
+                    Origin::Written(term) | Origin::Host(term) | Origin::Outward(term) => {
                         term.parts().into_iter().map(|(_, part)| part).collect()
                     }
                     Origin::Var | Origin::Lit(_) | Origin::Lambda(_) => Vec::new(),

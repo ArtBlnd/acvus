@@ -290,7 +290,8 @@ pub enum SigError {
     /// A function value, which a declaration makes none of: it returns one
     /// only as a type variable takes it in (l.184).
     FunctionValue,
-    /// An `Error`, which `?` alone makes (l.91).
+    /// An `Error` where a value enters the program, which `?` alone makes
+    /// (l.91).
     Error,
 }
 
@@ -308,13 +309,23 @@ impl Signature {
             params,
             result,
         };
-        for ty in signature.params.iter().chain([&signature.result]) {
-            signature.check(ty, types, false)?;
+        for ty in &signature.params {
+            signature.check(ty, types, false, true)?;
         }
+        signature.check(&signature.result, types, false, false)?;
         Ok(signature)
     }
 
-    fn check(&self, ty: &SigTy, types: &DeclaredTypes, at_identity: bool) -> Result<(), SigError> {
+    /// Whether the type is one a signature writes: `outward` where a value
+    /// leaves the program by it, at a parameter, which alone may hold an
+    /// `Error` (l.91), turned over at a function type's parameters.
+    fn check(
+        &self,
+        ty: &SigTy,
+        types: &DeclaredTypes,
+        at_identity: bool,
+        outward: bool,
+    ) -> Result<(), SigError> {
         match ty {
             SigTy::Var(SigVar::Type(i)) => {
                 if at_identity {
@@ -341,7 +352,7 @@ impl Signature {
                 if let Term::FunctionValue { .. } = **term {
                     return Err(SigError::FunctionValue);
                 }
-                if crate::join::is_error(term) {
+                if crate::join::is_error(term) && !outward {
                     return Err(SigError::Error);
                 }
                 if let Term::Ref(_, SigTy::Term(target)) = &**term
@@ -351,7 +362,11 @@ impl Signature {
                 }
                 types.check(term).map_err(SigError::Decl)?;
                 for (key, part) in term.parts() {
-                    self.check(part, types, key == PartKey::Identity)?;
+                    let outward = match (&**term, &key) {
+                        (Term::Function { .. }, PartKey::Param(_)) => !outward,
+                        _ => outward,
+                    };
+                    self.check(part, types, key == PartKey::Identity, outward)?;
                 }
                 Ok(())
             }
