@@ -12,8 +12,6 @@ outcome 1
   decision `&a`: lend & place
   decision `&b`: lend & place
   decision `a + b`: core::add#0
-  decision make_a: make_a#0
-  decision make_b: make_b#0
   check `&a <= a + b.Common(0)`: Ok(Identity)
   check `&a ~> a + b.Param(0)`: Ok(Composition { reborrow: false, casts: [DeclId { name: up_ref, overload: 0 }], structural: None })
   check `&b <= a + b.Common(0)`: Err(None)

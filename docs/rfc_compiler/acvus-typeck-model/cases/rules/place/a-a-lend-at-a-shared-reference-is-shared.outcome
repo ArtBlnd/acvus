@@ -10,7 +10,6 @@ outcome 1
   value `put(..)`: ()
   decision `&mut r`: lend & through &
   decision `&x`: lend & place
-  decision put: put#0
   check `&mut r ~> put.Param(0)`: Err(None)
   check `&x <= R`: Ok(Identity)
   check `1u8 <= X`: Ok(Identity)

@@ -15,7 +15,6 @@ outcome 1
   decision `arm 2`: applied
   decision n: read
   decision parse: parse#0
-  decision take: take#0
   partition {`None.0`, `Some.0`}
   check `() <= M`: Ok(Identity)
   check `N ~> take.Param(0)`: Ok(Identity)

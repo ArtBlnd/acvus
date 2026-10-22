@@ -181,7 +181,7 @@ impl State {
             .filter(|recorded| {
                 matches!(
                     recorded.recorder,
-                    Recorder::Node(_) | Recorder::Instance { .. }
+                    Recorder::Node(_) | Recorder::Common(_) | Recorder::Instance { .. }
                 )
             })
             .filter_map(|recorded| match &recorded.relation {

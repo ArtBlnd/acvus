@@ -7,8 +7,6 @@ outcome 1
   value `look(..)`: ()
   value `new()`: Vec<u8>
   decision lend: lend &mut place
-  decision look: look#0
-  decision new: new#0
   check `&mut v ~> look.Param(0)`: Ok(Composition { reborrow: true, casts: [], structural: None })
   check `look.Result <= look(..)`: Ok(Identity)
   check `new() <= V`: Ok(Identity)

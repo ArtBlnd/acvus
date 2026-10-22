@@ -1,0 +1,19 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run: every order
+outcome 1
+  accepted
+  value 1u8: u8
+  value R: u8
+  value X: none
+  value `|x| x`: Fn/1
+  value `λ result`: none
+  decision apply: apply#0
+  check `1u8 <= apply.Common(0)`: Ok(Identity)
+  check `1u8 ~> apply.Param(1)`: Ok(Identity)
+  check `apply.Chosen(0) <= apply.Common(0)`: Ok(Identity)
+  check `apply.Common(0) <= R`: Ok(Identity)
+  check `apply.CommonParam(0).Param(0) <= |x| x ~> apply.CommonParam(0)#λ/X`: Ok(Identity)
+  check `|x| x ~> apply.CommonParam(0)`: Ok(Undecided)
+  check `|x| x ~> apply.CommonParam(0)#λ/X <= |x| x ~> apply.CommonParam(0)#λ/λ result`: Ok(Identity)
+  check `|x| x ~> apply.CommonParam(0)#λ/λ result ~> apply.CommonParam(0).Return`: Ok(Identity)
+  I* of a final state: []

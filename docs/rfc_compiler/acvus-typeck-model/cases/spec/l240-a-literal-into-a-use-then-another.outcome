@@ -7,7 +7,6 @@ outcome 1
   value `probe(x)`: ()
   value `takes_u8(x)`: ()
   decision probe: probe#0
-  decision takes_u8: takes_u8#0
   partition {?a, X}
   check `?a <= X`: Ok(Identity)
   check `X <= probe.Common(0)`: Ok(Identity)

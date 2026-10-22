@@ -15,6 +15,5 @@ X = 1u16;
 `take(x)` = take(X) @ take;
 
 must fail;
-assert take == take#0;
 assert X: u16;
 assert failing [`X ~> take.Param(0)`];

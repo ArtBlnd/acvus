@@ -7,7 +7,6 @@ outcome 1
   value X: none
   value `m(x)`: ()
   value `n(x)`: ()
-  decision id: id#0
   decision m: m#0
   decision n: n#1
   partition {?a, R, X}

@@ -190,16 +190,12 @@ impl State {
                 .iter()
                 .filter_map(|(name, node)| Some((name.clone(), node.decision.clone()?)))
                 .collect();
-            // A use whose constraints two groups record has a node in each,
-            // of one name, and each decides as the other (l.186).
+            // A node is one group's: a use of several candidates has one, at
+            // the positions its choice decides, which one constraint holds
+            // (l.186), and a use of one has none.
             for (name, decision) in decided {
-                let previous = outcome
-                    .decisions
-                    .insert(name.clone(), Some(decision.clone()));
-                assert!(
-                    previous.is_none_or(|previous| previous == Some(decision)),
-                    "two groups decide the node {name} apart"
-                );
+                let previous = outcome.decisions.insert(name.clone(), Some(decision));
+                assert!(previous.is_none(), "two groups have the node {name}");
             }
             let checks = group.checks();
             let checked = checks.iter().all(|check| check.coercion.is_ok());

@@ -6,7 +6,6 @@ outcome 1
   value V: Vec<u8>
   value `new()`: Vec<u8>
   value `v[0]`: u8
-  decision new: new#0
   decision `v[0]`: applied
   check `1u8 <= v[0]`: Ok(Identity)
   check `new() <= V`: Ok(Identity)
@@ -14,19 +13,18 @@ outcome 1
   I* of a final state: []
 start run
   record #0 1u8: u8
-  record #1 new() <= V
-  record #2 1u8 <= v[0]
-  decide new: new#0
-    record #3 new.Result: Vec<new.Var(Type(0))>
-    record #4 new.Result <= new()
+  record #1 new.Result: Vec<new.Var(Type(0))>
+  record #2 new.Result <= new()
+  record #3 new() <= V
+  record #4 1u8 <= v[0]
   split #0 1u8: u8: no parts
-  split #3 new.Result: Vec<new.Var(Type(0))>: no parts
+  split #1 new.Result: Vec<new.Var(Type(0))>: no parts
 step 1 run: decide `v[0]`
   decide `v[0]`: applied
     record #5 V: index v[0]
 step 2 run: solve `new()`
   join `new()`: Extern(Vec)
-  split #4 new.Result <= new(): parts
+  split #2 new.Result <= new(): parts
     record #6 new.Var(Type(0)) = new().Arg(0)
   split #6 new.Var(Type(0)) = new().Arg(0): no parts
 step 3 run: solve V
@@ -38,7 +36,7 @@ step 3 run: solve V
     record #10 link(V -> v[0])[0].Result: &link(V -> v[0])[0].Result.Target
     record #11 V.Arg(0) = link(V -> v[0])[0].Var(Type(0))
     record #12 v[0] = link(V -> v[0])[0].Var(Type(0))
-  split #1 new() <= V: parts
+  split #3 new() <= V: parts
     record #13 new().Arg(0) = V.Arg(0)
   split #5 V: index v[0]: no parts
   split #7 link(V -> v[0])[0].Param.Target: Vec<link(V -> v[0])[0].Var(Type(0))>: no parts

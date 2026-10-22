@@ -10,7 +10,6 @@ outcome 1
   value `open()`: A
   value s: &str
   decision mk: mk#0
-  decision open: open#0
   decision parse: parse#1
   check `1u8 <= mk.Common(0)`: Ok(Identity)
   check `1u8 ~> mk.Param(0)`: Ok(Identity)

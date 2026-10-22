@@ -5,7 +5,6 @@ outcome 1
   value 1u8: u8
   value 2u16: u16
   value `pair(..)`: ()
-  decision pair: pair#0
   check `pair.Result <= pair(..)`: Ok(Identity)
   refusal no_join `pair.Var(Type(0))`
   I* of a final state: []

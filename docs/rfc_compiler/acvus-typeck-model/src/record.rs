@@ -184,6 +184,16 @@ impl State {
                 }
                 Item::Use {
                     name, callee, args, ..
+                } if self.candidates(callee, args.len()).len() == 1 => {
+                    let held: Vec<(Position, ClassId)> = item
+                        .positions()
+                        .into_iter()
+                        .filter_map(|position| Some((position, held(self, position)?)))
+                        .collect();
+                    recorded.append(self.record_one(name, callee, args.len(), &held));
+                }
+                Item::Use {
+                    name, callee, args, ..
                 } => {
                     // Of several candidates, the positions where every
                     // candidate writes one closed type are recorded apart, by

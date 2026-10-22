@@ -12,8 +12,6 @@ outcome 1
   value `put(..)`: ()
   value `|v| ..`: Fn/1
   value `λ result`: ()
-  decision make_a: make_a#0
-  decision make_b: make_b#0
   decision probe: probe#1
   decision `put(..)`: calls {λ}
   check `V <= X`: Ok(Identity)

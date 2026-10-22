@@ -7,7 +7,6 @@ outcome 1
   value A: u8
   value X: none
   value `takes_u8(a)`: ()
-  decision takes_u8: takes_u8#0
   partition {1, A}
   check `1 <= A`: Ok(Identity)
   check `A ~> takes_u8.Param(0)`: Ok(Identity)

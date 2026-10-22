@@ -13,7 +13,6 @@ outcome 1
   value `takes_u8(a)`: ()
   value `|y| ..`: Fn/1
   value `λ result`: ()
-  decision takes_u8: takes_u8#0
   partition {0, X}
   check `0 <= X`: Ok(Identity)
   check `X <= put2@5/A`: Ok(Identity)

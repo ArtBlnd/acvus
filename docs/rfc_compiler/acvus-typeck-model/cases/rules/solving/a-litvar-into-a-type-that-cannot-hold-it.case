@@ -10,5 +10,4 @@ let `take(300)`;
 `take(300)` = take(300) @ take;
 
 must fail;
-assert take == take#0;
 assert refused conflict at "300 = take.Param(0)";

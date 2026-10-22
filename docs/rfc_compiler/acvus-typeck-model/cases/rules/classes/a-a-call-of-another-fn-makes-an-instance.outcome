@@ -7,7 +7,6 @@ outcome 1
   value `f result`: ()
   value `f(1u16)`: ()
   value `take_u8(x)`: ()
-  decision take_u8: take_u8#0
   check `1u16 <= f@2/X`: Ok(Identity)
   check `f@2/X ~> f@2/take_u8.Param(0)`: Err(None)
   check `f@2/f result <= f(1u16)`: Ok(Identity)

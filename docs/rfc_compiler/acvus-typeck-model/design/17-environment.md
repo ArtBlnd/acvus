@@ -85,11 +85,11 @@ call.
    and the result type in the environment of each lambda its callee's Values name
    at the moment.
 4. **A use whose constraints two groups record has a part in each.** Each group
-   records the constraints at its positions (`Cut::part`). Of declarations,
-   a node in each where its positions need one: of one candidate, each decided at
-   once as it; of several, the node where the choice is, the positions where every
-   candidate writes one closed type recorded where they lie by the common part
-   (`State::record_closed`, l.246). Two nodes of one name decide alike.
+   records the constraints at its positions (`Cut::part`). Of declarations of
+   one candidate, each group records it at its positions at once, with no node
+   (`State::record_one`); of several, the node is where the choice is, the
+   positions where every candidate writes one closed type recorded where they lie
+   by the common part (`State::record_closed`, l.246). So a node is one group's.
 5. **A call of another group's function makes, in each group that records some
    of its constraints, an instance of the parts of C at those positions**
    (`Instance::part`, l.215). Where one group records every position, the

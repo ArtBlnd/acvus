@@ -18,8 +18,6 @@ outcome 1
   decision `&mut v`: lend &mut place
   decision `f 1`: calls {λ}
   decision `f 2`: calls {λ}
-  decision new: new#0
-  decision push: push#0
   check `f 1#λ/λ result <= f(1u8)`: Ok(Identity)
   check `f 2#λ/λ result <= f(s)`: Ok(Identity)
   check `|x| .. <= F`: Ok(Identity)

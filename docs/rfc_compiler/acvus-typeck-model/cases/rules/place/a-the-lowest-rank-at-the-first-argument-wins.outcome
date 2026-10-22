@@ -6,7 +6,6 @@ outcome 1
   value R: ()
   value `make_a()`: A
   decision f: undecided
-  decision make_a: make_a#0
   check `1u16 <= f.Common(1)`: Ok(Identity)
   check `f.CommonResult <= R`: Ok(Identity)
   check `make_a() <= f.Common(0)`: Ok(Identity)

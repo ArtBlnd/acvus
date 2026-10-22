@@ -4,7 +4,6 @@ outcome 1
   refused
   value 300: none
   value `take(300)`: ()
-  decision take: take#0
   check `take.Result <= take(300)`: Ok(Identity)
   refusal conflict at "300 = take.Param(0)": ?{300}: int vs Scalar(Int(U8))
   I* of a final state: []

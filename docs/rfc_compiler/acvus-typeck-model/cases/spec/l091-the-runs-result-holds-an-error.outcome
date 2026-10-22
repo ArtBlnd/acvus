@@ -14,7 +14,6 @@ outcome 1
   value U8: u8
   value `parse_r(s)`: Result<u8, PErr>
   value s: &str
-  decision parse_r: parse_r#0
   decision q: ?#1
   check `A <= S`: Ok(Identity)
   check `Ok(a) <= R`: Ok(Identity)

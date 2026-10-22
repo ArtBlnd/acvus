@@ -6,7 +6,6 @@ outcome 1
   value V: none
   value `new()`: Vec<!>
   value `v[0]`: u8
-  decision new: new#0
   decision `v[0]`: applied
   check `1u8 <= v[0]`: Ok(Identity)
   check `new.Result <= new()`: Ok(Identity)

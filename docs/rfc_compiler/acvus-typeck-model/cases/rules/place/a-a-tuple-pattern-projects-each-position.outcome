@@ -7,6 +7,5 @@ outcome 1
   value `mk()`: none
   decision `.0`: applied
   decision `.1`: applied
-  decision mk: mk#0
   refusal conflict at "the value of mk()": Tuple(1) vs component 1: .1
   I* of a final state: []

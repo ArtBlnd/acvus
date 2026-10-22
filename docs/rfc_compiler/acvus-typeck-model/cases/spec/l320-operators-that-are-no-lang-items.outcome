@@ -12,8 +12,6 @@ outcome 1
   value S: u8
   value Xu: u16
   value `p && q`: bool
-  decision `!`: not#0
-  decision `&&`: and#0
   decision `<<`: shl#2
   decision `^`: xor#2
   check `!.Result <= B`: Ok(Identity)

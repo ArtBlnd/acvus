@@ -19,5 +19,4 @@ let `takes(..)`;
 `takes(..)` = takes(`|x| x`) @ takes;
 
 must fail;
-assert takes == takes#0;
 assert failing [`|x| x ~> takes.Param(0)#λ/λ result ~> takes.Param(0).Return`];

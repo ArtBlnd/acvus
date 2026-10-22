@@ -1,0 +1,22 @@
+//@ spec: l.78, l.278, design/14-certificate.md
+// take_rc(boxed(|x| x));   // boxed<T>(T) -> Box<T>; a cast Box<T> -> Rc<T>; take_rc<T>(Rc<T>)
+// The split links Box's part to Rc's through the cast's signature (l.278); the
+// checker carries λ's Values along it (`image`), where it panicked at a cast.
+extern type Box<T>;
+extern type Rc<T>;
+extern fn boxed<T>(T) -> Box<T>;
+#[cast] extern fn to_rc<T>(Box<T>) -> Rc<T>;
+extern fn take_rc<T>(Rc<T>);
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    `λ result` = X;
+}
+let `|x| x`: lambda λ;
+let B;
+B = boxed(`|x| x`) @ boxed;
+let `take_rc(..)`;
+`take_rc(..)` = take_rc(B) @ take_rc;
+
+must pass;

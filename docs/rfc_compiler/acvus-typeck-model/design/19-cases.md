@@ -343,6 +343,15 @@ steps; `golden()` and every expectation read what they read without it.
   `rules/solving/a-two-instances-meet-a-capture-written-by-name`, become one
   program with one derivation with `spec/example-06-called-with-two-types`, are
   merged into it.
+- 4 cases under `cases/certificate`, `a-lambda-*`, test the checker carrying
+  Values as the split does (note 14): a lambda in a payload into a function type,
+  through a cast, through a view, and into a function type both candidates write
+  whole. The first three panicked in the checker before, where the solver had
+  accepted them; each was derived before it was run, in every order.
+- Since a use of one candidate has no node (note 08, reading 1), 86 goldens lost
+  that use's decision line and nothing else, and
+  `phases/unify-a-view-links-an-index` records `new`'s relations with the text; 5
+  cases dropped an assertion of such a decision.
 - `cases/certificate/a-function-value-passed-through-a-use` tests the
   certificate's Values (note 14): a lambda reaching a call only through a use's
   instance, and the call given no lambda to call. Where Values meet what no rule

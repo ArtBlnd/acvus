@@ -14,8 +14,6 @@ outcome 1
   value `f2()`: F2
   value `g(..)`: u8
   value `g(b, b)`: u8
-  decision f1: f1#0
-  decision f2: f2#0
   check `Some(f2()) <= g@6/B`: Ok(Identity)
   check `f1() <= S1`: Ok(Identity)
   check `f1.Result <= f1()`: Ok(Identity)

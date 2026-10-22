@@ -6,7 +6,6 @@ outcome 1
   value `takes(..)`: ()
   value `|x| x`: Fn/1
   value `λ result`: none
-  decision takes: takes#0
   check `takes.Param(0).Param(0) <= |x| x ~> takes.Param(0)#λ/X`: Ok(Identity)
   check `takes.Result <= takes(..)`: Ok(Identity)
   check `|x| x ~> takes.Param(0)`: Ok(Undecided)

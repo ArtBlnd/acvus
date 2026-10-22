@@ -70,17 +70,26 @@ What each item and decision gives, and what holding means on closed values:
 | `Read` | the position as a lower bound of the binding (l.306) | as above |
 | `BindLend { target, mutability }` | a reference to the position, or its target, as a lower bound of the binding (l.306) | as above |
 | `Calls(λ̄)` | the callee's Values name exactly `λ̄`: every lambda that reaches it is called, and none it does not reach (l.181, l.196); each argument meets its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result (l.196) | as above, under each instance |
-| a function value passing into a function type (l.197) | each lambda its Values names has an instance made where that boundary was split: each parameter of the type passes into the lambda's parameter, and the lambda's result into the type's result, each a meeting or a boundary (l.219) | as above, under that instance |
+| a function value reaching a function type, at the whole value or at a part, through a cast, a conversion or a view (l.197, l.278) | each lambda its Values names has an instance made where the split met the two, at the classes they are read at: each parameter of the type passes into the lambda's parameter, and the lambda's result into the type's result, each a meeting or a boundary as the result's class is an unknown or not (l.219) | as above, under that instance |
 | `e?`'s exit (l.337) | its value is `Option⟨K⟩` under `?(Option⟨T⟩)` and `Result⟨O, X⟩` under `?(Result⟨T, E⟩)`, `E`'s value wrapped into `X`: as it is where it is an `Error` or `!`, into the payload of an `Error` whose one member is its name, or into that of an `Error⟨..⟩`; the value passes into the exit's class, a meeting where that is an unknown | as above |
-| a use's common part (l.246) | regenerated from the candidates (`CommonPart::of`): each unknown's value a reference, or not, where the common part records it so; each argument passing into the common parameter, a function value into a function type left to `Use(k)`'s row; the common result entering the use's result; under `Use(k)`, `k`'s type at each of the result's unknowns entering it | each holds, a reference's record holding of `!` too |
+| a use's common part (l.246) | regenerated from the candidates (`CommonPart::of`): each unknown's value a reference, or not, where the common part records it so; each argument passing into the common parameter; the common result entering the use's result; under `Use(k)`, `k`'s type at each of the result's unknowns entering it; a use of one candidate, which has no node, as that candidate | each holds, a reference's record holding of `!` too |
 
 Holding compares Values as part of the value. Two values are equal where their
 types are and every function value in them names the same lambdas. Where `≤` or
-a coercion reaches, each function value of the one reaching has its lambdas among
-those of the function value it reaches: at the same position where no stage changes
-it, a reborrow keeping the target; at each part both have, by that part's own
-coercion, where the structural stage changes the members. So a lambda a value carries is among the Values of every
-class the value reaches, and a call of that class calls it.
+a coercion reaches, each function value of the one reaching is carried along it as
+the split carries it (`reach`, l.278): at the same position where no stage moves
+it, a reborrow keeping the target; along a cast's, a conversion's or a view's
+signature, from where its parameter writes a variable to where its result writes
+it (`image`); at each part both have, by that part's own coercion, where the
+structural stage changes the members. Where it reaches a function value, its
+lambdas are among that one's; where it reaches a function type, the row of l.197
+holds at the classes the two are read at (`Checker::flows`), which the checker
+reads by each class's parts as its sheet keeps them. So a lambda a value carries is
+among the Values of every class the value reaches, and a call of that class calls
+it. Since the review of 2026-10-23, as 준량 asked, text, solver and checker carry
+Values alike: the checker had followed none across a cast, a conversion or a view,
+and met a function type at the top of a value alone, and panicked at
+`run(Some(|x| x))` and `take_rc(boxed(|x| x))`.
 
 The common part's row is checked on its own: it is what a use records before it
 is decided, which `Use(k)`'s rows do not name. That `!` is either a reference or
@@ -128,12 +137,11 @@ the groups solved before it, to the caller (note 13, Checks).
 Where Values meet what no rule decides yet, the checker panics, so that the case
 fails there and the rule is decided with 준량:
 
-- Values across a cast or a declared conversion, which change the type the
-  function value lies in by a signature (l.78, l.105).
-- A function value reaching a function type at a part of a value, or where the
-  two sides are read at two levels of a context: the instances of l.197 are found
-  at the whole value of a pass or an argument, at the level that split it.
-- The element an extern-defined container indexes along its view, a cast.
+- A function value reaching a function type where the two sides are read at two
+  levels of a context: the instances of l.197 are found at the level that split
+  them.
+- A function value reaching a function type where the checker reads no class: the
+  wrapping of `?`'s error, whose payload holds no function type the text writes.
 - A value a test plants, which a case writes as a type and so with no Values.
 
 ## Expected results

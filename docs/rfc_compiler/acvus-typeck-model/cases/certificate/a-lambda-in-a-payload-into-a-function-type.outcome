@@ -1,0 +1,17 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run: every order
+outcome 1
+  accepted
+  value S: Fn/1
+  value `Some(|x| x)`: Option<Fn/1>
+  value X: none
+  value `run(..)`: ()
+  value `|x| x`: Fn/1
+  value `λ result`: none
+  check `S ~> run.Param(0).Payload(Some)#λ/X <= S ~> run.Param(0).Payload(Some)#λ/λ result`: Ok(Identity)
+  check `S ~> run.Param(0).Payload(Some)#λ/λ result ~> run.Param(0).Payload(Some).Return`: Ok(Identity)
+  check `Some(|x| x) ~> run.Param(0)`: Ok(Undecided)
+  check `run.Param(0).Payload(Some).Param(0) <= S ~> run.Param(0).Payload(Some)#λ/X`: Ok(Identity)
+  check `run.Result <= run(..)`: Ok(Identity)
+  check `|x| x <= S`: Ok(Identity)
+  I* of a final state: []

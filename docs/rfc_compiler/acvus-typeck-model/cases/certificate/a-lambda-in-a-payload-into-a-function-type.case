@@ -1,0 +1,21 @@
+//@ spec: l.197, l.278, design/14-certificate.md
+// run(Some(|x| x));        // run(Option<fn(u8) -> u8>)
+// The boundary's split relates Some's payload to the function type there, and
+// makes λ's instance (l.197, l.278). The checker carries λ to that part and
+// finds the instance at those classes, where it panicked meeting a function
+// type below the top of a value.
+extern fn run(Option<fn(u8) -> u8>);
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    `λ result` = X;
+}
+let `|x| x`: lambda λ;
+let S;
+let `Some(|x| x)`: Option<S>;
+S = `|x| x`;
+let `run(..)`;
+`run(..)` = run(`Some(|x| x)`) @ run;
+
+must pass;

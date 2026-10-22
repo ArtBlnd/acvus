@@ -20,8 +20,6 @@ outcome 1
   value `get()`: Result<u8, A>
   value `get1()`: Result<u8, Error{A(A)}>
   value `get2()`: Result<u16, B>
-  decision get: get#0
-  decision get2: get2#0
   decision q1: ?#1
   decision q2: ?#1
   decision qg: ?#1

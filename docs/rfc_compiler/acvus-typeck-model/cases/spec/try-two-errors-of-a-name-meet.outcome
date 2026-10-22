@@ -13,8 +13,6 @@ outcome 1
   value `f()`: Result<u8, Error{E1(E1), E2(E2)}>
   value `get1()`: Result<u8, E1>
   value `get2()`: Result<u16, E2>
-  decision get1: get1#0
-  decision get2: get2#0
   decision q1: ?#1
   decision q2: ?#1
   check `f@8/f result <= f()`: Ok(Identity)

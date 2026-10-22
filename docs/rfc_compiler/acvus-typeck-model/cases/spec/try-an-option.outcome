@@ -9,7 +9,6 @@ outcome 1
   value `f result`: Option<u8>
   value `f()`: Option<u8>
   value `get()`: Option<u8>
-  decision get: get#0
   decision q: ?#0
   check `f@5/f result <= f()`: Ok(Identity)
   check `A <= S`: Ok(Identity)

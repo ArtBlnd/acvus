@@ -10,12 +10,8 @@ outcome 1
   value `index_of(..)`: Idx<new open 1>
   value `open() 1`: F<new open 1>
   value `open() 2`: F<new open 2>
-  decision at: at#0
-  decision index_of: index_of#0
   decision `lend 1`: lend & place
   decision `lend 2`: lend & place
-  decision `open 1`: open#0
-  decision `open 2`: open#0
   check `&a 1 ~> at.Param(0)`: Ok(Identity)
   check `&a 2 ~> index_of.Param(0)`: Ok(Identity)
   check `A <= B`: Ok(Composition { reborrow: false, casts: [DeclId { name: forget, overload: 0 }], structural: None })

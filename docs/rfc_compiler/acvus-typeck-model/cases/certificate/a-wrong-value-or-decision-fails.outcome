@@ -5,7 +5,6 @@ outcome 1
   value X: A
   value `make()`: A
   value `probe(x)`: ()
-  decision make: make#0
   decision probe: probe#0
   check `X <= probe.Common(0)`: Ok(Identity)
   check `X ~> probe.Param(0)`: Ok(Identity)

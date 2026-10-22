@@ -15,7 +15,6 @@ outcome 1
   value `λg result`: ()
   decision `f(1u8)`: calls {λf}
   decision `g()`: calls {λg}
-  decision take_u8: take_u8#0
   check `1u8 <= f(1u8)#λf/X`: Ok(Identity)
   check `f(1u8) <= λg result`: Ok(Identity)
   check `f(1u8)#λf/X ~> f(1u8)#λf/take_u8.Param(0)`: Ok(Identity)

@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, Fact, KindSource};
 use crate::decl::DeclId;
-use crate::program::Projection;
+use crate::program::{Position, Projection};
 use crate::read::ReadValue;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
@@ -250,9 +250,9 @@ pub enum Reading {
 }
 
 impl State {
-    /// Decides as it is recorded a node that reads nothing: a Deref, and a use
-    /// with one candidate (`design/08-node.md`, readings 1 and 6). A use with
-    /// none is never decided (l.333).
+    /// Decides as it is recorded a node that reads nothing: a Deref
+    /// (`design/08-node.md`, reading 6). A use of one candidate has no node
+    /// (`State::record_one`), and a use of none is never decided (l.333).
     pub(crate) fn decide_at_once(&mut self) -> Vec<Decided> {
         let at_once: Vec<(Name, Decision)> = self
             .nodes
@@ -263,12 +263,6 @@ impl State {
                     projection: Projection::Deref,
                     ..
                 } => Some((name.clone(), Decision::Applied)),
-                NodeKind::Use { callee, args, .. } => {
-                    match self.candidates(callee, args.len()).as_slice() {
-                        [one] => Some((name.clone(), Decision::Use(one.id.clone()))),
-                        _ => None,
-                    }
-                }
                 _ => None,
             })
             .collect();
@@ -557,6 +551,60 @@ impl State {
             }
         };
         recorded.push(self.record(relation, recorder.clone()));
+        recorded
+    }
+
+    /// Records the use `name` of one candidate at the positions `held`, as it
+    /// is recorded: its common part is that candidate, its type parameters
+    /// made anew (l.246, l.320), so nothing is left to decide, and it has no
+    /// node. Each argument passes into its parameter's type and the result
+    /// type into the result, an identity its result carries and no parameter
+    /// does made anew (l.347), recorded by the common part.
+    pub(crate) fn record_one(
+        &mut self,
+        name: &Name,
+        callee: &Name,
+        arity: usize,
+        held: &[(Position, ClassId)],
+    ) -> Recording {
+        let mut recorded = Recording::default();
+        let sig = match self.candidates(callee, arity).as_slice() {
+            [candidate] => candidate.sig.clone(),
+            _ => panic!("{name}: a use of one candidate"),
+        };
+        let recorder = Recorder::Common(name.clone());
+        let owner = Rc::new(name.clone());
+        let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
+        let mut vars = BTreeMap::new();
+        let var_name = |var| at(NodeAt::Var(var));
+        for &(position, class) in held {
+            recorded.append(match position {
+                Position::Arg(k) => self.record_argument(
+                    class,
+                    &sig.params()[k],
+                    &mut vars,
+                    at(NodeAt::Param(k)),
+                    &var_name,
+                    &recorder,
+                ),
+                Position::Result => self.record_result(
+                    class,
+                    sig.result(),
+                    &mut vars,
+                    at(NodeAt::Result),
+                    &var_name,
+                    &recorder,
+                ),
+                Position::Exit => unreachable!("`?`'s candidates are the language's two (l.337)"),
+            });
+        }
+        if sig.existential_identity()
+            && let Some(&identity) = vars.get(&crate::sig::SigVar::Identity)
+        {
+            let made = Term::Identity(Name::new(&format!("new {name}")));
+            let relation = Relation::Kind(identity, made, KindSource::Written);
+            recorded.push(self.record(relation, recorder));
+        }
         recorded
     }
 

@@ -15,7 +15,6 @@ outcome 1
   decision `.1`: applied through &
   decision Some: applied
   decision b: bind lend & place
-  decision mk: mk#0
   check `&x <= S`: Ok(Identity)
   check `Some(&x) <= O`: Ok(Identity)
   check `b.Lent <= Bv`: Ok(Identity)

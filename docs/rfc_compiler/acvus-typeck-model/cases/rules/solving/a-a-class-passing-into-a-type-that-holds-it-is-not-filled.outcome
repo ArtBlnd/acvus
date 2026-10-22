@@ -6,7 +6,6 @@ outcome 1
   value `&a 2`: &!
   value A: !
   value `f(..)`: ()
-  decision f: f#0
   decision `lend 1`: lend & place
   decision `lend 2`: lend & place
   check `&a 1 ~> f.Param(0)`: Ok(Identity)

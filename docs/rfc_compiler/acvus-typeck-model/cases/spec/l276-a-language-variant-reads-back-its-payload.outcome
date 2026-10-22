@@ -7,7 +7,6 @@ outcome 1
   value X: u8
   value `takes_u8(x)`: ()
   decision Some: applied
-  decision takes_u8: takes_u8#0
   decision x: read
   check `Some.0 <= X`: Ok(Identity)
   check `X ~> takes_u8.Param(0)`: Ok(Identity)

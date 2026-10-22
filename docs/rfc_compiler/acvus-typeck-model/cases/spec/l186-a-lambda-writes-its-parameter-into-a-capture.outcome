@@ -16,7 +16,6 @@ outcome 1
   value `|x| ..`: Fn/1
   value `λ result`: ()
   decision `&mut out`: lend &mut place
-  decision buf: buf#0
   decision `emit 1`: calls {λ}
   decision `emit 1#λ/write`: write#0
   decision `emit 2`: calls {λ}

@@ -26,7 +26,13 @@ reads its position, or lends it where its path passes a reference.
 1. **One candidate reads nothing.** A use's candidates are the declarations its name
    reaches with as many parameters as it has arguments (l.320). It reads the
    positions where they differ (l.261), so a use with one candidate reads nothing:
-   it is decided as that candidate as it is recorded, with no common part. A use with none is never decided (l.333; reading 19).
+   its common part is that candidate, its type parameters made anew (l.246,
+   l.320), recorded as its text is, by the common part (`State::record_one`), and
+   nothing is left to decide, so it has no node. A use with none is never decided
+   (l.333; reading 19). Until the review of the non-uniformities of 2026-10-23 it
+   had a node decided at once, which recorded a closed position by the decision
+   where a use of several recorded it by the common part, and two nodes of one
+   name where two groups recorded its constraints.
 2. **A candidate's variables are made at the decision.** They are unknowns of the
    use's binding group (l.320). Only the decided candidate records, so only its
    variables are made.
@@ -43,8 +49,8 @@ reads its position, or lends it where its path passes a reference.
    the target is the place.
 6. **A Deref records at once.** A Deref has one kind to give, "a reference to `τ`"
    (l.148), whatever its operand reads as, so it is decided as it is recorded, as a
-   use with one candidate is (reading 1), and its kind is a source of whether its
-   operand is a reference (l.298) from the start.
+   use with one candidate records its candidate (reading 1), and its kind is a
+   source of whether its operand is a reference (l.298) from the start.
 7. **Auto-deref.** A projection other than a Deref reads whether its operand is a
    reference (l.261). Where the operand reads as `&ₙ U`, it records that it is a
    reference to a class made anew, and that class takes the projection's kind

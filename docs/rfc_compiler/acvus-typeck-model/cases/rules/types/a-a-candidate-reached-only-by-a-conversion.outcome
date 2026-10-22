@@ -5,7 +5,6 @@ outcome 1
   value `f(..)`: none
   value `make()`: A
   decision f: undecided
-  decision make: make#0
   check `make.Result <= make()`: Ok(Identity)
   refusal no_value `f(..)`
   refusal no_value `f.Common(0)`

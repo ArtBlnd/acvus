@@ -13,8 +13,6 @@ outcome 1
   value `code(s)`: u8
   value `digit(s)`: Option<u8>
   value s: &str
-  decision code: code#0
-  decision digit: digit#0
   decision q: ?#0
   check `0u8 <= N`: Ok(Identity)
   check `D <= N`: Ok(Identity)

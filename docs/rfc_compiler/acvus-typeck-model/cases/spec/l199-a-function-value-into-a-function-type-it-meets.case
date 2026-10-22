@@ -14,4 +14,3 @@ let `takes(..)`;
 `takes(..)` = takes(`|x| x`) @ takes;
 
 must pass;
-assert takes == takes#0;

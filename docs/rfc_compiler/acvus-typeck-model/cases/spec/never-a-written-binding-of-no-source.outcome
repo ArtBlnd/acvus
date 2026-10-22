@@ -7,7 +7,6 @@ outcome 1
   value `t.0`: !
   value `takes_u8(t)`: ()
   decision `t.0`: applied
-  decision takes_u8: takes_u8#0
   check `1u8 <= t.0`: Err(None)
   check `T ~> takes_u8.Param(0)`: Ok(Never)
   check `takes_u8.Result <= takes_u8(t)`: Ok(Identity)

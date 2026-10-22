@@ -12,7 +12,6 @@ outcome 1
   value `{..}()`: Result<u8, Error{E(E)}>
   value `λ result`: Result<u8, Error{E(E)}>
   decision call: calls {λ}
-  decision get: get#0
   decision q: ?#1
   check `call#λ/λ result <= {..}()`: Ok(Identity)
   check `{..}() <= B`: Ok(Identity)

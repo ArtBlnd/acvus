@@ -11,7 +11,6 @@ outcome 1
   value `takes_u8(x)`: ()
   decision `&1`: lend & place
   decision `&x`: lend & place
-  decision takes_u8: takes_u8#0
   decision `x + 1`: core::add#0
   partition {?a, ?b, X}
   check `&1 <= x + 1.Common(0)`: Ok(Identity)

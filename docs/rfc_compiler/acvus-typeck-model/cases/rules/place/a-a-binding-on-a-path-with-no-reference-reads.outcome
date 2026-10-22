@@ -9,8 +9,6 @@ outcome 1
   value `take(a)`: ()
   decision `.x`: applied
   decision a: read
-  decision mk: mk#0
-  decision take: take#0
   check `.x <= A`: Ok(Identity)
   check `A ~> take.Param(0)`: Err(None)
   check `mk() <= P`: Ok(Identity)

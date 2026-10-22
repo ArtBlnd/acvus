@@ -9,7 +9,6 @@ outcome 1
   value `parse(s)`: Vec<u8>
   value `parse(s) 2`: none
   value str: str
-  decision fill_all: fill_all#0
   decision lend: lend &mut place
   decision `lend 2`: lend &mut place
   decision parse: parse#0
