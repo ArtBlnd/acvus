@@ -88,7 +88,7 @@ structural type은 member에 대해 covariant다. structural type의 part는 cas
 | `! ⊔ T = T` | `!`와 `T`는 `T`. |
 | `S ⊔ₚ T` | part의 join. cast 없이 합친다. `S`와 `T`의 constructor가 같을 때 member는 합집합으로 하고, structural type의 part는 다시 `⊔ₚ`로 합치며, 그 밖의 part는 같아야 한다. `! ⊔ₚ T = T`이고, 그 밖에는 join이 없다. 이것이 정하는 순서가 `≤ₚ`다. |
 
-`Error`는 언어의 enum이며, 그 variant는 `?`로만 만들어진다(`?`). 이름이 없는 error 타입 `E`에서 `?`는 variant 대신 `Error⟨E⟩`를 만든다. `Error⟨E⟩`는 variant가 없고 part 하나 `E`를 가진 `Error`이며, 그 constructor는 variant를 가진 `Error`의 것과 달라 둘은 join되지 않는다.
+`Error`는 언어의 enum이며, 그 variant는 `?`로만 만들어진다(`?`). 선언과 텍스트가 적는 타입과 context가 주는 타입은 `Error`를 담지 않는다. 이름이 없는 error 타입 `E`에서 `?`는 variant 대신 `Error⟨E⟩`를 만든다. `Error⟨E⟩`는 variant가 없고 part 하나 `E`를 가진 `Error`이며, 그 constructor는 variant를 가진 `Error`의 것과 달라 둘은 join되지 않는다.
 
 ### Coercion
 
@@ -101,14 +101,12 @@ coercion은 값을 다른 타입의 값으로 바꾸는 것이며, 바꾸는 함
 | `{f̄, ḡ} ⇝ {f̄}` | object를 그 field 중 일부만 가진 object로. | 언어가 정함 |
 | `E{Ā} ⇝ E{Ā, B̄}` | enum을 variant가 더 많은 enum으로. | 언어가 정함 |
 | structural type의 part마다 `S ⇝ₚ T` | 그 part를 바꾼다. object와 enum 행에서는 남는 member의 part를 바꾼다. | 언어가 정함 |
-| `E ⇝ Error{N̄(Ē)}`, `E`가 `Ē`의 하나 | 그 이름의 variant로 감싼다. | 언어가 정함 |
-| `E ⇝ Error⟨E⟩`, `E`가 이름이 없는 타입 | `Error⟨E⟩`로 감싼다. | 언어가 정함 |
 | `! ⇝ U` | `!`를 어떤 타입으로든. | 언어가 정함 |
 | 선언된 conversion `T → U`로 `T ⇝ U` | 위의 행들의 조합으로 그 타입에 닿지 않을 때. | 선언의 함수 |
 
 ### Rank
 
-coercion은 Coercion 표의 행들을 `reborrow? ; cast* ; structural?` 순서로 조합한 것이다. reborrow는 `&mut T ⇝ &T` 행, cast는 선언된 cast 행, structural은 object, enum, structural type의 part, `Error` 행이다. part의 coercion `⇝ₚ`는 object, enum, structural type의 part 행과 `! ⇝ U`만의 조합이다. 그래서 cast, reborrow, `Error`로 감싸기, conversion은 part에서 쓰이지 않는다. `! ⇝ U`와 선언된 conversion은 조합이 아니며, rank가 없다. 주어진 타입으로 가는 조합은 하나뿐이다. coercion이 필요 없으면 rank는 `empty`다. 단계의 순서는 `empty ≺ reborrow ≺ cast ≺ structural`이고, coercion의 rank는 가장 높은 단계, 그다음 cast의 수, 그다음 거치는 낮은 단계들 순으로 비교한다.
+coercion은 Coercion 표의 행들을 `reborrow? ; cast* ; structural?` 순서로 조합한 것이다. reborrow는 `&mut T ⇝ &T` 행, cast는 선언된 cast 행, structural은 object, enum, structural type의 part 행이다. part의 coercion `⇝ₚ`는 object, enum, structural type의 part 행과 `! ⇝ U`만의 조합이다. 그래서 cast, reborrow, conversion은 part에서 쓰이지 않는다. `! ⇝ U`와 선언된 conversion은 조합이 아니며, rank가 없다. 주어진 타입으로 가는 조합은 하나뿐이다. coercion이 필요 없으면 rank는 `empty`다. 단계의 순서는 `empty ≺ reborrow ≺ cast ≺ structural`이고, coercion의 rank는 가장 높은 단계, 그다음 cast의 수, 그다음 거치는 낮은 단계들 순으로 비교한다.
 
 ## 동치류
 

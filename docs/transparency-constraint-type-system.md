@@ -88,7 +88,7 @@ The join of two types, and the order `≤` the join defines (`S ≤ T` where `S 
 | `! ⊔ T = T` | Of `!` and `T`, `T`. |
 | `S ⊔ₚ T` | The join of parts, made without casts. Where `S` and `T` have one constructor, their members are united, the parts of a structural type are joined by `⊔ₚ` again, and other parts must be equal. `! ⊔ₚ T = T`, and otherwise there is no join. The order it defines is `≤ₚ`. |
 
-`Error` is the language's enum, and its variants are made only by `?` (`?`). At an error type `E` with no name, `?` makes `Error⟨E⟩` in place of a variant. `Error⟨E⟩` is an `Error` with no variant and one part `E`, and its constructor differs from that of an `Error` with variants, so the two have no join.
+`Error` is the language's enum, and its variants are made only by `?` (`?`). The types a declaration or the text writes, and those a context gives, hold no `Error`. At an error type `E` with no name, `?` makes `Error⟨E⟩` in place of a variant. `Error⟨E⟩` is an `Error` with no variant and one part `E`, and its constructor differs from that of an `Error` with variants, so the two have no join.
 
 ### Coercion
 
@@ -101,14 +101,12 @@ A coercion changes a value into a value of another type, and the function that c
 | `{f̄, ḡ} ⇝ {f̄}` | An object to one with only some of its fields. | decided by the language |
 | `E{Ā} ⇝ E{Ā, B̄}` | An enum to one with more variants. | decided by the language |
 | `S ⇝ₚ T` at each part of a structural type | Changes that part. In the object and enum rows, it changes the parts of the members that remain. | decided by the language |
-| `E ⇝ Error{N̄(Ē)}` where `E` is one of `Ē` | Wraps it in the variant of its name. | decided by the language |
-| `E ⇝ Error⟨E⟩` where `E` has no name | Wraps it in `Error⟨E⟩`. | decided by the language |
 | `! ⇝ U` | `!` to any type. | decided by the language |
 | `T ⇝ U` by a declared conversion `T → U` | Where no composition of the rows above reaches the type. | the declaration's function |
 
 ### Rank
 
-A coercion is a composition of the Coercion table's rows in the order `reborrow? ; cast* ; structural?`: reborrow is the `&mut T ⇝ &T` row, cast a declared cast's row, and structural the object, enum, structural type's part and `Error` rows. A part's coercion `⇝ₚ` is a composition of the object, enum and structural type's part rows and `! ⇝ U` alone. So a cast, a reborrow, wrapping in `Error` and a conversion are not used at a part. `! ⇝ U` and a declared conversion are no composition, and have no rank. Toward a given type, the composition is unique. Where no coercion is needed, the rank is `empty`. The stages are ordered `empty ≺ reborrow ≺ cast ≺ structural`, and the ranks of coercions are compared by their highest stage, then by their number of casts, then by the lower stages they take.
+A coercion is a composition of the Coercion table's rows in the order `reborrow? ; cast* ; structural?`: reborrow is the `&mut T ⇝ &T` row, cast a declared cast's row, and structural the object, enum and structural type's part rows. A part's coercion `⇝ₚ` is a composition of the object, enum and structural type's part rows and `! ⇝ U` alone. So a cast, a reborrow and a conversion are not used at a part. `! ⇝ U` and a declared conversion are no composition, and have no rank. Toward a given type, the composition is unique. Where no coercion is needed, the rank is `empty`. The stages are ordered `empty ≺ reborrow ≺ cast ≺ structural`, and the ranks of coercions are compared by their highest stage, then by their number of casts, then by the lower stages they take.
 
 ## Equivalence classes
 
