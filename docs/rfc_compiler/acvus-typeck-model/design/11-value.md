@@ -114,4 +114,11 @@ leave out.
     `E ≤ P`, `P` made anew (`State::split_wrap`). An `E` nothing enters waits for
     nothing once `?` is decided, and falls back to `!` where its group may
     (l.290).
+13. **Two identities** (l.353). A class whose solved lower bounds carry two
+    different identities takes the nearest node above their join that carries
+    none, along the cast tree (`join::without_identity`), each value cast up to
+    it as any lower bound's is; where no such node is, or a part lower bound
+    carries one of them, it has no join (`State::without_two_identities`). The
+    closed join does the same (`join::join`). A deeper level's identity, refused
+    since 345c838c, has no witness here: the model has no loop and no level.
 

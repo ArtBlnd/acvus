@@ -88,3 +88,8 @@ the group takes the body's own types.
    whether a receiver is a reference depends on the use that chooses it (l.242)
    and is decided in the copies, although the kind the text writes already
    decides it.
+11. **An identity a body makes** (l.349). A use decided as a declaration whose
+   result carries an identity no parameter does records a new one,
+   `Term::Identity` named after the use. It stays in C with every class whose
+   value carries it (`State::c`, `State::made_identities`), and each instance
+   makes it anew, named after the instance (`Instance::record_rest`).

@@ -1,0 +1,29 @@
+//@ spec: Example 11, l.516–532, without the cast to G; l.353
+// As in Example 11, without the cast F → G: b's two identities have no
+// ancestor that carries none, so b has no value and is refused (l.353).
+extern type F<#>;
+extern type G;
+extern type Idx<#>;
+extern fn open<#>() -> F<#>;
+extern fn index_of<#>(&F<#>) -> Idx<#>;
+extern fn at<#>(&F<#>, Idx<#>);
+let A;
+let `open() 1`;
+let `&a 1`;
+let `&a 2`;
+let `index_of(..)`;
+let `at(..)`;
+let B;
+let `open() 2`;
+`open() 1` = open() @ `open 1`;
+A = `open() 1`;
+`&a 1` = &A @ `lend 1`;
+`&a 2` = &A @ `lend 2`;
+`index_of(..)` = index_of(`&a 2`) @ index_of;
+`at(..)` = at(`&a 1`, `index_of(..)`) @ at;
+`open() 2` = open() @ `open 2`;
+B = `open() 2`;
+B = A;
+
+must fail;
+assert refused no_join B;

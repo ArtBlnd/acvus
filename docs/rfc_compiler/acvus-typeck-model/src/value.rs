@@ -144,6 +144,33 @@ impl State {
         })
     }
 
+    /// The join raised where the sources carry two different identities, which
+    /// no class holds (l.353): to the nearest node above that carries none,
+    /// each value cast up to it; none where no such node is, or where a part
+    /// lower bound carries one, which reaches with no cast.
+    fn without_two_identities(&self, sources: &Sources, joined: Head) -> Option<Head> {
+        let identities = |given: &[(ClassId, Head)]| -> BTreeSet<Ty> {
+            given
+                .iter()
+                .filter_map(|(class, _)| self.value(*class))
+                .filter_map(|value| crate::join::identity(&value).cloned())
+                .collect()
+        };
+        let (lowers, part_lowers) = (
+            identities(&sources.lowers),
+            identities(&sources.part_lowers),
+        );
+        if lowers.union(&part_lowers).count() < 2 {
+            return Some(joined);
+        }
+        if !part_lowers.is_empty() {
+            return None;
+        }
+        let node = Node::Owned(joined.constructor.clone());
+        let above = crate::join::without_identity(&self.decls, &node)?;
+        self.raise_head(&joined, &above)
+    }
+
     /// The constructors and members the kinds known in part of the class give:
     /// those of the members visible to this body (l.278).
     pub(crate) fn fact_heads(&self, root: ClassId) -> Vec<Head> {
@@ -394,6 +421,7 @@ impl State {
                         || given.constructor == joined.constructor
                 })
             });
+        let joined = joined.and_then(|joined| self.without_two_identities(&sources, joined));
         let Some(joined) = joined else {
             let refusal = Refusal::NoJoin(self.class_name(root));
             return with_sources(self.no_join(root, refusal));

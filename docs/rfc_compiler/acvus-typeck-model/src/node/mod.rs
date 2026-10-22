@@ -13,7 +13,7 @@ mod shared;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, Fact};
+use crate::class::{ClassId, ClassName, Fact, KindSource};
 use crate::decl::DeclId;
 use crate::program::{Deferral, Projection};
 use crate::read::ReadValue;
@@ -607,6 +607,13 @@ impl State {
                         &var_name,
                         &recorder,
                     ));
+                }
+                if sig.existential_identity()
+                    && let Some(&identity) = vars.get(&crate::sig::SigVar::Identity)
+                {
+                    let made = Term::Identity(Name::new(&format!("new {name}")));
+                    let relation = Relation::Kind(identity, made, KindSource::Written);
+                    recorded.push(self.record(relation, recorder.clone()));
                 }
                 if let Some(exit) = exit {
                     recorded.append(self.record_exit(

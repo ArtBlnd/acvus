@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use crate::decl::{Decls, Node};
-use crate::ty::{Mutability, Name, PartKey, Term, Ty};
+use crate::ty::{Constructor, Mutability, Name, PartKey, Term, Ty};
 
 #[cfg(test)]
 mod tests;
@@ -45,7 +45,42 @@ pub fn join(decls: &Decls, s: &Ty, t: &Ty) -> Result<Ty, JoinError> {
     };
     let s = raised(decls, s, &nca)?;
     let t = raised(decls, t, &nca)?;
+    if let (Some(a), Some(b)) = (identity(&s), identity(&t))
+        && a != b
+    {
+        let above = without_identity(decls, &nca)
+            .ok_or_else(|| JoinError::NoCommonAncestor(Node::of(&s), Node::of(&t)))?;
+        return join(
+            decls,
+            &raised(decls, &s, &above)?,
+            &raised(decls, &t, &above)?,
+        );
+    }
     combine(&s, &t)
+}
+
+/// The identity an extern-defined type carries (l.347).
+pub(crate) fn identity(ty: &Ty) -> Option<&Ty> {
+    match ty.term() {
+        Term::Extern { identity, .. } => identity.as_ref(),
+        _ => None,
+    }
+}
+
+/// The nearest node at or above `node` whose types carry no identity, to
+/// which two different identities are raised (l.353).
+pub(crate) fn without_identity(decls: &Decls, node: &Node) -> Option<Node> {
+    decls
+        .tree()
+        .ancestors(node)
+        .into_iter()
+        .find(|node| match node {
+            Node::Owned(Constructor::Extern(name)) => decls
+                .types()
+                .extern_decl(name)
+                .is_none_or(|decl| !decl.identity),
+            _ => true,
+        })
 }
 
 /// `s ≤ t`, that is `s ⊔ t = t`.

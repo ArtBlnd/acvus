@@ -1,0 +1,30 @@
+//@ spec: l.349, l.217, l.353
+// fn mk() { open() }                  // open() -> F⟨new⟩, a cast F → G
+// let a = mk(); let b = mk(); let c = if c { a } else { b };
+// The identity mk's body makes stays in its C, and each instance makes it
+// anew (l.349, l.217): a and b carry two, and c is G (l.353).
+extern type F<#>;
+extern type G;
+extern fn open<#>() -> F<#>;
+#[cast] extern fn forget<#>(F<#>) -> G;
+group mk {
+    let `mk result`;
+    fn mk() -> `mk result`;
+    let `open()`;
+    `open()` = open() @ open;
+    `mk result` = `open()`;
+}
+let A;
+let B;
+let C;
+let `mk() 1`;
+let `mk() 2`;
+`mk() 1` = mk() @ `mk 1`;
+A = `mk() 1`;
+`mk() 2` = mk() @ `mk 2`;
+B = `mk() 2`;
+C = A;
+C = B;
+
+must pass;
+assert C: G;

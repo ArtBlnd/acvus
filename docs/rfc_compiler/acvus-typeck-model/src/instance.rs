@@ -9,7 +9,7 @@ use crate::node::{NodeKind, NodeState};
 use crate::record::{Instantiated, Recording};
 use crate::relation::{Recorder, Relation, copy_name};
 use crate::solve::State;
-use crate::ty::{Name, Ty};
+use crate::ty::{Name, Term, Ty};
 
 /// An instance a state made: of the C of the binding group `group`, named `at`
 /// and made by `by`, with each root of that group's state it met and that
@@ -41,11 +41,38 @@ pub(crate) struct Instance<'a> {
 
 impl State {
     /// The roots of the classes C holds at this group's fixpoint (l.214):
-    /// those left unsolved, or whose value is not closed, and the universals.
+    /// those left unsolved, or whose value is not closed, the universals, and
+    /// those whose value carries an identity this group's body made, which
+    /// each instance makes anew (l.349).
     pub(crate) fn c(&self) -> BTreeSet<ClassId> {
+        let made = self.made_identities();
         self.classes
             .roots()
-            .filter(|&root| self.is_universal(root) || self.value(root).is_none())
+            .filter(|&root| {
+                self.is_universal(root)
+                    || self
+                        .value(root)
+                        .is_none_or(|value| carries_identity(&value, &made))
+            })
+            .collect()
+    }
+
+    /// The identities this state's body made, at calls of a declaration whose
+    /// result carries one no parameter does, or anew at the instances it made
+    /// (l.349).
+    pub(crate) fn made_identities(&self) -> BTreeSet<Name> {
+        self.log
+            .iter()
+            .filter(|recorded| {
+                matches!(
+                    recorded.recorder,
+                    Recorder::Node(_) | Recorder::Instance { .. }
+                )
+            })
+            .filter_map(|recorded| match &recorded.relation {
+                Relation::Kind(_, Term::Identity(name), _) => Some(name.clone()),
+                _ => None,
+            })
             .collect()
     }
 
@@ -236,10 +263,13 @@ impl<'a> Instance<'a> {
         let from = self.from;
         for at in from.relations_on(&self.c) {
             let recorded = &from.log[at];
-            let relation = recorded
-                .relation
-                .clone()
-                .map(|class| self.class(here, class));
+            let relation = match recorded.relation.clone() {
+                Relation::Kind(class, Term::Identity(name), source) => {
+                    Relation::Kind(class, Term::Identity(copy_name(&self.at, &name)), source)
+                }
+                relation => relation,
+            }
+            .map(|class| self.class(here, class));
             let recorder = self.recorder(&recorded.recorder);
             let entry = here.record(relation, recorder);
             if from.split.contains(&at) {
@@ -281,5 +311,16 @@ impl<'a> Instance<'a> {
             recorded: recorded.places().collect(),
         });
         recorded
+    }
+}
+
+/// Whether the value carries one of the identities, at any depth.
+fn carries_identity(value: &Ty, identities: &BTreeSet<Name>) -> bool {
+    match value.term() {
+        Term::Identity(name) => identities.contains(name),
+        term => term
+            .parts()
+            .into_iter()
+            .any(|(_, part)| carries_identity(part, identities)),
     }
 }
