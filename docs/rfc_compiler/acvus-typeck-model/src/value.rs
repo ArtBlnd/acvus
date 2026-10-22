@@ -172,12 +172,25 @@ impl State {
     }
 
     /// The constructors and members the kinds known in part of the class give:
-    /// those of the members visible to this body (l.276).
+    /// where kinds are its only sources, the constructor of each member they
+    /// name, visible or not; otherwise those of the members visible to this
+    /// body, which alone a kind adds to a type another source gives (l.276).
     pub(crate) fn fact_heads(&self, root: ClassId) -> Vec<Head> {
-        let host_bound = self
-            .lower_bounds(root)
-            .into_iter()
-            .any(|lower| self.is_host(lower));
+        let lowers = self.lower_bounds(root);
+        if lowers.is_empty() {
+            return self
+                .classes
+                .held(root)
+                .facts
+                .iter()
+                .filter_map(Fact::named_member)
+                .map(|(constructor, members)| Head {
+                    constructor,
+                    members,
+                })
+                .collect();
+        }
+        let host_bound = lowers.into_iter().any(|lower| self.is_host(lower));
         if self.readings.visibility == Visibility::BySources && host_bound {
             return Vec::new();
         }

@@ -1,0 +1,16 @@
+//@ spec: l.276, l.86, l.290
+// let o; if let Some(x) = o { } if let Ok(y) = o { }
+// The kinds name members of Option and of Result, two constructors with no
+// join (l.86): O has no value, refused (l.290).
+let O;
+let `Some.0`;
+let X;
+let `Ok.0`;
+let Y;
+`Some.0` = O as Some @ Some;
+X = bind `Some.0` via [Some] @ x;
+`Ok.0` = O as Ok @ Ok;
+Y = bind `Ok.0` via [Ok] @ y;
+
+must fail;
+assert refused no_join O;

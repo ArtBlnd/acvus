@@ -1,0 +1,13 @@
+//@ spec: l.276, l.288
+// let o; if let Some(x) = o { }
+// O's only source is the kind "variant Some", so O takes the constructor of the
+// member it names, Option, though Some is not visible (l.276, since ef0153c9);
+// the payload nothing enters falls back to ! (l.288).
+let O;
+let `Some.0`;
+let X;
+`Some.0` = O as Some @ Some;
+X = bind `Some.0` via [Some] @ x;
+
+must pass;
+assert O: Option<!>;

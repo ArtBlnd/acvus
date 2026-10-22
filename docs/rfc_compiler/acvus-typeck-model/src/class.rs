@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use crate::lit::LitVar;
 use crate::sig::{DeclaredTypes, SigVar};
-use crate::ty::{Constructor, Member, Name, PartKey, Term};
+use crate::ty::{Constructor, ERR, Member, NONE, Name, OK, PartKey, SOME, Term};
 
 #[cfg(test)]
 mod tests;
@@ -176,6 +176,35 @@ impl Fact {
     /// The member this fact names where the body's text writes it, which is
     /// visible to this body (l.276): a field, or a variant of an enum the text
     /// names.
+    /// The constructor of the member this fact names, with the members that
+    /// constructor holds of it, whether visible or not (l.276): an object's
+    /// field, an enum's variant the text names, and the language's `Some`,
+    /// `None`, `Ok` and `Err`, whose constructor holds both its members.
+    pub fn named_member(&self) -> Option<(Constructor, BTreeSet<Member>)> {
+        if let Some((constructor, member)) = self.visible_member() {
+            return Some((constructor, [member].into()));
+        }
+        let Fact::Variant {
+            enum_name: None,
+            variant,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let both = |a: &str, b: &str| -> BTreeSet<Member> {
+            [a, b]
+                .into_iter()
+                .map(|name| Member::Variant(Name::new(name)))
+                .collect()
+        };
+        match variant.as_str() {
+            SOME | NONE => Some((Constructor::Option, both(SOME, NONE))),
+            OK | ERR => Some((Constructor::Result, both(OK, ERR))),
+            _ => None,
+        }
+    }
+
     pub fn visible_member(&self) -> Option<(Constructor, Member)> {
         match self {
             Fact::Field(field, _) => Some((Constructor::Object, Member::Field(field.clone()))),

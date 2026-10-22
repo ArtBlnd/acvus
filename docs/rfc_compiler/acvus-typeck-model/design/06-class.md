@@ -28,6 +28,12 @@ turn.
    type holds both (l.276). An extern-defined container's element is not its part,
    so "indexes `τ`" meets its kind in the state, along its view (note 11, reading
    7).
+   A class whose only sources are kinds takes the constructor of each member they
+   name, visible or not, `Some` and `None` naming `Option` and `Ok` and `Err`
+   naming `Result` (`Fact::named_member`; l.276, since ef0153c9); visibility
+   governs only a kind adding a member to a type another source gives. A variant
+   of no enum's name that is none of those four names no constructor: no witness
+   shows one.
 2. **A conflict.** Where two classes' kinds have different constructors or members,
    or a LitVar meets a scalar that does not admit its values, the two are left apart
    and the relation that would make them one is refused. Unified, their kind would
