@@ -10,6 +10,7 @@ use std::rc::Rc;
 use crate::check::Refusal;
 use crate::class::{ClassId, ClassName, Fact, KindSource, Unified};
 use crate::decl::Node;
+use crate::lit::LitVar;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
@@ -69,8 +70,24 @@ pub enum Fill {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Filled {
     pub class: ClassId,
-    pub places: Vec<(ClassId, Ty)>,
+    pub places: Vec<(ClassId, PlaceValue)>,
     pub fill: Fill,
+}
+
+/// What a place gives a fill (l.282): a value, or a LitVar alone.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum PlaceValue {
+    Ty(Ty),
+    Lit(LitVar),
+}
+
+impl std::fmt::Display for PlaceValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PlaceValue::Ty(ty) => write!(f, "{ty}"),
+            PlaceValue::Lit(lit) => write!(f, "{lit}"),
+        }
+    }
 }
 
 /// What an equivalence class's value is taken from when it is solved
@@ -447,36 +464,54 @@ impl State {
         })
     }
 
-    /// Whether the equivalence class, nothing entering it, is filled now
-    /// (l.282): it passes into some place, and each place it passes into has
-    /// a value.
-    pub(crate) fn fills_now(&self, root: ClassId) -> bool {
-        let places = self.places(root);
-        !places.is_empty() && places.iter().all(|&place| self.value(place).is_some())
+    /// What a place the equivalence class passes into gives a fill (l.282):
+    /// its value, or the LitVar it alone holds once nothing more decides it
+    /// (`State::fills_now`), which takes any type of its family that holds its
+    /// values, as at a use's narrowing (l.333).
+    pub(crate) fn place_value(&self, place: ClassId) -> Option<PlaceValue> {
+        if let Some(ty) = self.value(place) {
+            return Some(PlaceValue::Ty(ty));
+        }
+        let held = self.classes.held(self.root(place));
+        match (&held.kind, &held.lit) {
+            (None, Some(lit)) => Some(PlaceValue::Lit(lit.clone())),
+            _ => None,
+        }
     }
 
     /// Fills the equivalence class nothing enters (l.282): where the places it
-    /// passes into have one type, it takes that type, solved with each of its
-    /// parts; where they have two, it has no value and is refused. Each place
-    /// has a value (`fills_now`).
+    /// passes into that have a value have one type, and each holding only a
+    /// LitVar takes it, the class takes that type, solved with each of its
+    /// parts; otherwise it has no value and is refused. Each place has a value
+    /// or holds only a LitVar nothing more decides, and one has a value
+    /// (`State::fills_now`).
     pub(crate) fn fill(&mut self, root: ClassId) -> Filled {
         let root = self.root(root);
-        let places: Vec<(ClassId, Ty)> = self
+        let places: Vec<(ClassId, PlaceValue)> = self
             .places(root)
             .into_iter()
             .map(|place| {
-                let value = self
-                    .value(place)
-                    .expect("a class is filled once each place it passes into has a value");
+                let value = self.place_value(place).expect(
+                    "a class is filled once each place it passes into has a value or a LitVar",
+                );
                 (place, value)
             })
             .collect();
         let owner = self.class_name(root);
         let ty = places
-            .first()
-            .map(|(_, ty)| ty.clone())
-            .expect("a class is filled once it passes into a place");
-        let fill = if places.iter().any(|(_, value)| *value != ty) {
+            .iter()
+            .find_map(|(_, value)| match value {
+                PlaceValue::Ty(ty) => Some(ty.clone()),
+                PlaceValue::Lit(_) => None,
+            })
+            .expect("a class is filled once a place it passes into has a value");
+        let one_type = places.iter().all(|(_, value)| match value {
+            PlaceValue::Ty(value) => *value == ty,
+            PlaceValue::Lit(lit) => {
+                matches!(ty.term(), Term::Scalar(scalar) if lit.admits(*scalar))
+            }
+        });
+        let fill = if !one_type {
             let refusal = Refusal::NoFill(owner);
             self.refuse_value(root, &refusal);
             Fill::Differ(refusal)

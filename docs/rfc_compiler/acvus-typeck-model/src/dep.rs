@@ -607,7 +607,7 @@ impl State {
             .nothing_enters
             .iter()
             .copied()
-            .filter(|&root| self.fills_now(root))
+            .filter(|&root| self.fills_now(root, &graph, &met))
             .collect();
         let decide = self
             .nodes
@@ -641,6 +641,24 @@ impl State {
             .filter(|(to, edge)| !self.satisfied(to, *edge, &met))
             .cloned()
             .collect()
+    }
+
+    /// Whether the equivalence class, nothing entering it, is filled now
+    /// (l.282): it passes into some place, each place it passes into has a
+    /// value or holds only a LitVar nothing more decides, settled and with
+    /// nothing left to take, and one has a value.
+    pub(crate) fn fills_now(&self, root: ClassId, graph: &Graph, met: &Met) -> bool {
+        let places = self.places(root);
+        let lit_alone = |place: ClassId| {
+            let place = self.root(place);
+            self.is_lit(place)
+                && met.settled.contains(&place)
+                && !self.has_work(place, graph, &met.settled)
+        };
+        places.iter().any(|&place| self.value(place).is_some())
+            && places
+                .iter()
+                .all(|&place| self.value(place).is_some() || lit_alone(place))
     }
 
     fn has_work(&self, root: ClassId, graph: &Graph, settled: &BTreeSet<ClassId>) -> bool {

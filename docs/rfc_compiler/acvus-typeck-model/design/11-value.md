@@ -20,7 +20,9 @@ elsewhere. Where a lower bound's or a boundary's two constructors differ, the
 same rule links the parts through the casts' signatures, or the targets of a
 reborrow; where a function value passes into a function type, an instance of each
 lambda its Values names links them (l.197). A class nothing enters takes the one type the places it passes into
-have, once each has one, and has no value where they have two (l.282). A value
+have, once each has one or holds only a LitVar nothing more decides, which takes
+any type of its family that holds it, and has no value where they have two
+(l.282). A value
 read is decided on a separate state that replays the relations a node does not
 leave out.
 
@@ -100,12 +102,16 @@ leave out.
     one nothing enters.
 11. **A fill** is a step, taken where the class's places, the `α` of each lower
     bound and part lower bound whose `τ` it is and the `U` of each boundary whose
-    `T` it is, are at least one and each has a closed value (l.282). Where they are
-    one type, the class takes it, each part a class made anew holding its part,
-    every one solved; its relations then split as any solved class's do, and each
-    entering value reaches its place with no coercion. Where they are two, the
-    class has no value and is refused there (`Refusal::NoFill`). A class that
-    passes into no place is not filled, and falls back (l.288).
+    `T` it is, each have a closed value or hold only a LitVar nothing more decides,
+    settled and with nothing left to take (`State::fills_now`), and one has a
+    closed value (l.282, since 13289a2f). Where the closed values are one type and
+    each such LitVar holds it (`PlaceValue`), as a LitVar decides nothing within
+    its family at a narrowing (l.333), the class takes it, each part a class made
+    anew holding its part, every one solved; its relations then split as any
+    solved class's do, and each entering value reaches its place with no
+    coercion. Otherwise the class has no value and is refused there
+    (`Refusal::NoFill`). A class that passes into no place, or whose places hold
+    only LitVars, is not filled, and falls back (l.288).
 12. **`e?`'s wrapping** (l.278, l.337). The class `X` the wrapping passes into
     waits for the error part `E` to take a constructor (l.238 (a); `Edge::Taking`).
     Once it does, the split records, by `Recorder::Split(E)`: where `E` is an

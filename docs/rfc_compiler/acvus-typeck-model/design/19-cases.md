@@ -409,6 +409,12 @@ steps; `golden()` and every expectation read what they read without it.
   outcomes compare by their typing (note 13); and a literal binding into `u8` and
   a `u16` meeting, refused at the meeting in every order. Each was derived before
   it was run.
+- 3 cases under `cases/spec`, `l282-a-fill-*`, `l282-a-literal-place-*` and
+  `l282-no-place-*`, test a fill with a place that holds only a LitVar (U5 of the
+  review of 2026-10-22, since 13289a2f): Example 4 with `Some(1)`, filled `u8`;
+  the same with y's payload passing into `u16`, which it takes first, refused;
+  and no place with a value, left to the fallback. Each was derived before it was
+  run, in every order.
 - 4 cases under `cases/spec`, `l240-*`, test l.238 (b) since 09aef04e, beside H7,
   now accepted: two uses that fill one literal, a literal into a use then
   another, a sum into a use that only reads it, and a literal through a generic

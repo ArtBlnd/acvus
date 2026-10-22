@@ -1,0 +1,20 @@
+//@ spec: l.282, l.288
+// let x = None;
+// let y = if c { x } else { Some(1) };
+// No place of x's payload has a value, so it is not filled; the fallback
+// makes it ! and the literal i32 (l.288).
+let X;
+let ?k;
+let None: Option<?k>;
+let Y;
+let S;
+let 1: lit 1;
+let `Some(1)`: Option<S>;
+X = None;
+Y = X;
+S = 1;
+Y = `Some(1)`;
+
+must pass;
+assert X: Option<!>;
+assert Y: Option<i32>;
