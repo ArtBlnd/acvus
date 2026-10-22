@@ -183,7 +183,7 @@ fact는 함수에 붙는 attribute이며, 타입의 part도 member도 아니다.
 | Values | 함수 | lambda들의 집합 ⊑ any | any | 쓰인 lambda들 |
 | Declared facts | 선언 | 적힌 것 ⊑ 아무것도 안 적힘 | 아무것도 안 적힘 | 선언 |
 
-값이 된 함수는 자기 fact를 그 함수 타입에 지니고, 호출은 callee의 effect를 그 호출이 놓인 body에서 수행한다. extern fn은 함수 값을 주지 않고 context는 함수를 담지 않으므로, instance에서 함수 값의 Values는 언제나 lambda들의 집합이다.
+값이 된 함수는 자기 fact를 그 함수 타입에 지니고, 호출은 callee의 effect를 그 호출이 놓인 body에서 수행한다. 선언과 텍스트가 적는 타입과 context가 주는 타입은 함수 값을 담지 않는다. 함수 값은 lambda의 값뿐이며, 선언은 타입 변수로 받은 함수 값을 돌려줄 수 있을 뿐 새로 만들지 않으므로, instance에서 함수 값의 Values는 언제나 lambda들의 집합이다.
 
 lambda의 텍스트가 이름으로 가리키는 감싸는 body의 binding이 그 lambda의 capture이며, 그 타입은 감싸는 binding group의 동치류다(Binding group). 텍스트가 주는 제약은 자기가 관계짓는 동치류에 걸리며, 감싸는 binding group의 free fn이나 method를 부르는 use는 그 parameter와 결과 타입에도, binding은 그 경로의 projection들의 동치류에도 걸린다. 한 제약이 두 동치류에 함께 걸리거나 하나가 다른 하나에 텍스트가 적은 kind의 part이면 둘은 이어지며, capture의 타입에 바로 또는 다른 동치류를 거쳐 이어진 동치류와 그것들에 걸린 제약이 그 lambda의 environment다. environment는 감싸는 binding group의 것이다. 그 동치류는 그 binding group의 동치류이고 텍스트가 적지 않았으면 그 미지수이며, 그 제약은 lambda가 호출되든 않든 그 binding group이 풀기 시작할 때 한 번 기록되고, 그 안에 놓인 lambda는 자기 environment를 그 텍스트의 제약으로서 먼저 기록한다. 나머지, 곧 environment에 들지 않은 parameter와 결과 타입과 제약은 그 lambda의 binding group이며, 이것을 generic part라 한다. 함수 값을 담는 동치류는 parameter와 결과 타입을 part로 지니지 않고 Values로 그 lambda를 가리킨다. 그 값의 use마다 그 lambda의 C가 instance로 새로 만들어진다(Instance).
 
