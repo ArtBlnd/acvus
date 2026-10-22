@@ -183,7 +183,7 @@ fact는 함수에 붙는 attribute이며, 타입의 part도 member도 아니다.
 
 값이 된 함수는 자기 fact를 그 함수 타입에 지니고, 호출은 callee의 effect를 그 호출이 놓인 body에서 수행한다. 선언과 텍스트가 적는 타입과 context가 주는 타입은 함수 값을 담지 않는다. 함수 값은 lambda의 값뿐이며, 선언은 타입 변수로 받은 함수 값을 돌려줄 수 있을 뿐 새로 만들지 않으므로, instance에서 함수 값의 Values는 언제나 lambda들의 집합이다.
 
-lambda의 텍스트가 이름으로 가리키는 감싸는 body의 binding이 그 lambda의 capture이며, 그 타입은 감싸는 binding group의 동치류다(Binding group). 텍스트가 주는 제약은 자기가 관계짓는 동치류에 걸리며, 감싸는 binding group의 free fn이나 method를 부르는 use는 그 parameter와 결과 타입에도, binding은 그 경로의 projection들의 동치류에도 걸린다. 한 제약이 두 동치류에 함께 걸리거나 하나가 다른 하나에 텍스트가 적은 kind의 part이면 둘은 이어지며, capture의 타입에 바로 또는 다른 동치류를 거쳐 이어진 동치류와 그것들에 걸린 제약이 그 lambda의 environment다. environment는 감싸는 binding group의 것이다. 그 동치류는 그 binding group의 동치류이고 텍스트가 적지 않았으면 그 미지수이며, 그 제약은 lambda가 호출되든 않든 그 binding group이 풀기 시작할 때 한 번 기록되고, 그 안에 놓인 lambda는 자기 environment를 그 텍스트의 제약으로서 먼저 기록한다. 나머지, 곧 environment에 들지 않은 parameter와 결과 타입과 제약은 그 lambda의 binding group이며, 이것을 generic part라 한다. 함수 값을 담는 동치류는 parameter와 결과 타입을 part로 지니지 않고 Values로 그 lambda를 가리킨다. 그 값의 use마다 그 lambda의 C가 instance로 새로 만들어진다(Instance).
+lambda의 텍스트가 이름으로 가리키는 감싸는 body의 binding이 그 lambda의 capture이며, 그 타입은 감싸는 binding group의 동치류다(Binding group). 텍스트가 주는 제약은 자기가 관계짓는 동치류에 걸리며, binding은 그 경로의 projection들의 동치류에도 걸린다. 다만 use는 callee가 함께 묶는 자리들마다 제약 하나를 준다. 선언을 부르는 use에서, 모든 후보가 같은 타입을 적고 그 타입이 type parameter도 identity도 적지 않은 자리는 저 혼자 하나다. 나머지 자리는, 후보가 하나이면 그 type parameter나 identity 하나를 함께 적은 자리들이 하나이고, 여럿이면 모두 함께 하나이며(후보의 선택이 그것들을 함께 정한다), `?`의 exit도 그것들과 함께다. 감싸는 binding group의 free fn이나 method를 부르는 use에서는 각 자리가 저 혼자 하나이며, 그 자리의 parameter나 결과 타입에도 걸린다. 그 밖의 free fn이나 method를 부르는 use에서는, 그 binding group의 C에서 이어진(Binding group) parameter와 결과 타입의 자리들이 함께 하나이고, 타입이 C에 들지 않는 자리는 저 혼자 하나다. 그 binding group은 이 lambda보다 먼저 풀리므로, lambda의 environment는 먼저 풀린 binding group들의 C로 정해진다. 한 제약이 두 동치류에 함께 걸리거나 하나가 다른 하나에 텍스트가 적은 kind의 part이면 둘은 이어지며, capture의 타입에 바로 또는 다른 동치류를 거쳐 이어진 동치류와 그것들에 걸린 제약이 그 lambda의 environment다. environment는 감싸는 binding group의 것이다. 그 동치류는 그 binding group의 동치류이고 텍스트가 적지 않았으면 그 미지수이며, 그 제약은 lambda가 호출되든 않든 그 binding group이 풀기 시작할 때 한 번 기록되고, 그 안에 놓인 lambda는 자기 environment를 그 텍스트의 제약으로서 먼저 기록한다. 나머지, 곧 environment에 들지 않은 parameter와 결과 타입과 제약은 그 lambda의 binding group이며, 이것을 generic part라 한다. 함수 값을 담는 동치류는 parameter와 결과 타입을 part로 지니지 않고 Values로 그 lambda를 가리킨다. 그 값의 use마다 그 lambda의 C가 instance로 새로 만들어진다(Instance).
 
 ## Instance
 
@@ -192,7 +192,7 @@ instance는 use 하나에서 다른 body의 타입들을 새로 만든 것이며
 | use | instance |
 |---|---|
 | use가 놓인 binding group이나 그것을 감싸는 binding group의 free fn이나 method를 호출함 | 만들지 않는다. 그 body 자신의 타입을 쓴다. |
-| 그 밖의 free fn이나 method를 호출함 | 하나 만든다. |
+| 그 밖의 free fn이나 method를 호출함 | 그 use의 제약을 기록하는 binding group마다 하나 만든다(Facts). |
 | 함수 값을 호출함 | 그 함수 값을 읽어(의존), 그 Values가 가리키는 lambda마다 하나 만든다. 각 인자는 그 lambda의 generic part에 든 parameter의 사본이나 environment에 든 parameter로 넘어가고, generic part에 든 결과 타입의 사본이나 environment의 결과 타입이 호출 결과의 하한이 된다. |
 | 함수 값이 경계를 넘어 주어진 함수 타입으로 들어감 | 그 경계를 쪼갤 때(값), 그 값의 Values가 가리키는 lambda마다 하나 만든다. 그 함수 타입이 그 lambda를 부르는 것처럼, 그 함수 타입의 각 parameter는 그 lambda의 generic part에 든 parameter의 사본이나 environment에 든 parameter로 넘어가고, generic part에 든 결과 타입의 사본이나 environment의 결과 타입은 그 함수 타입의 result로 넘어간다(만남과 경계). |
 
@@ -212,7 +212,7 @@ binding group 하나는 constraint graph 하나로 함께 풀린다.
 | C | 그 binding group이 fixpoint에 닿았을 때 풀리지 않은 동치류와 정해지지 않은 use, lend, projection, binding, 그리고 그것들에 걸린 제약. |
 | 순서 | binding group은, 그 C를 기록하는 use가 놓인 binding group보다 먼저 풀린다. |
 
-use는 instance를 만들 때 C에서 그 binding group 자신의 동치류와 use, lend, projection, binding을 새로 만들고, universal 자리에 use의 type argument를 놓아 자기 binding group에 기록한다. 그 binding group 안에 놓인 lambda도 새로 만든다. 그 사본의 environment는 그 instance가 새로 만든 동치류들이며, 사본의 함수 값의 Values는 그 사본 lambda를 가리킨다. 그 사본은 그것이 기록된 binding group에서 정해진다. type argument는 use가 놓인 binding group의 미지수다. 감싸는 binding group의 동치류는 새로 만들지 않고 함께 쓴다. C에서 이미 쪼갠 하한, part 하한, 경계는 사본에서 다시 쪼개지 않는다(값).
+use는 instance를 만들 때 C에서 그 binding group 자신의 동치류와 use, lend, projection, binding을 새로 만들고, universal 자리에 use의 type argument를 놓아 자기 binding group에 기록한다. 그 binding group 안에 놓인 lambda도 새로 만든다. 그 사본의 environment는 그 instance가 새로 만든 동치류들이며, 사본의 함수 값의 Values는 그 사본 lambda를 가리킨다. 그 사본은 그것이 기록된 binding group에서 정해진다. type argument는 use가 놓인 binding group의 미지수다. 감싸는 binding group의 동치류는 새로 만들지 않고 함께 쓴다. C의 두 동치류는, C의 제약 하나가 둘에 함께 걸리거나, 정해지지 않은 use, lend, projection, binding 하나가 둘을 함께 가리키거나(binding은 그 경로의 projection이 가리키는 동치류도), 하나가 다른 하나의 kind의 part이거나, 하나가 담은 함수 값의 Values가 그 binding group 안에 놓인 lambda를 가리키고 다른 하나가 그 lambda의 environment에 들면 이어지며, instance는 이어진 것들을 함께 새로 만든다. use의 제약을 lambda의 environment와 generic part가 나누어 기록하면(Facts), 각 binding group의 instance는 C 가운데 자기가 기록하는 자리에 이어진 것만 새로 만든다. C에서 이미 쪼갠 하한, part 하한, 경계는 사본에서 다시 쪼개지 않는다(값).
 
 ### 만남과 경계
 
