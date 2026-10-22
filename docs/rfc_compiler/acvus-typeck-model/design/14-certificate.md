@@ -9,7 +9,10 @@ with the crate's I4. The code is `src/certificate.rs`.
 ## Meaning
 
 An order of solving that accepts a program leaves a certificate: the value of every
-class each binding group's solving made, with its name, and every decision. The
+class each binding group's solving made, with its name, and every decision. A
+function value in a value carries the lambdas its Values names (`State::values_of`),
+as a function value carries its facts on its type (l.186), so that a value is
+`Option⟨Fn/1{λ}⟩` where the solver's type is `Option⟨Fn/1⟩`. The
 checker regenerates, from the program's items and the decisions alone, every
 relation the text and the decisions give, and checks each on the certificate's
 closed values. A relation that does not hold on an accepted program is a soundness
@@ -51,7 +54,7 @@ What each item and decision gives, and what holding means on closed values:
 |---|---|---|
 | `Origin::Written(τ)`, `Origin::Host(τ)` | the class's kind | its value is `τ` with each part's value |
 | `Origin::Lit(l)` | a LitVar | its value is a type of `l`'s family (l.129) |
-| `Origin::Lambda(λ)` | a function value naming `λ` | its value is `Fn/n`, `n` being `λ`'s parameters |
+| `Origin::Lambda(λ)` | a function value naming `λ` | its value is `Fn/n`, `n` being `λ`'s parameters, whose Values name `λ` |
 | `Pass` into an unknown of the place's group (l.221) | `τ ≤ α` | `≤` reaches it (l.282) |
 | `Pass` otherwise | `τ ⇝ U` | a coercion reaches it (l.282) |
 | `Equation` | `a = b` | the two values are equal |
@@ -64,8 +67,17 @@ What each item and decision gives, and what holding means on closed values:
 | `AppliedToTarget(m)` | the operand is a reference, of `m` where decided, to a type that has it (l.300) | as above |
 | `Read` | the position as a lower bound of the binding (l.308) | as above |
 | `BindLend { target, mutability }` | a reference to the position, or its target, as a lower bound of the binding (l.308) | as above |
-| `Calls(λ̄)` | each `λ` is named by a function value that reaches the callee by the regenerated lower bounds and equations (l.183); each argument meets its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result (l.198) | as above, under each instance |
+| `Calls(λ̄)` | the callee's Values name exactly `λ̄`: every lambda that reaches it is called, and none it does not reach (l.183, l.198); each argument meets its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result (l.198) | as above, under each instance |
 | a use's record of l.248 | at its result, the one position a candidate records a type it writes into (note 08, reading 13), that it is a reference where every candidate's result type is one, and no reference where none is; under `Use(k)`, as `k`'s result type | its value is, or is not, a reference, or is `!` |
+
+Holding compares Values as part of the value. Two values are equal where their
+types are and every function value in them names the same lambdas. Where `≤` or
+a coercion reaches, each function value of the one reaching has its lambdas among
+those of the function value it reaches: at the same position where no stage changes
+it, a reborrow keeping the target; at each part both have, by that part's own
+coercion, where the structural stage changes the members; and at the payload where
+the value is wrapped. So a lambda a value carries is among the Values of every
+class the value reaches, and a call of that class calls it.
 
 The l.248 row is checked on its own: it is the record a use made before it was
 decided, which `Use(k)`'s rows do not name. That `!` holds either is the solver's
@@ -104,9 +116,24 @@ the groups solved before it, to the caller (note 13, Checks).
   not this check's: any decision whose relations hold passes here. Whether the
   decision is the one its node should make is note 15's.
 - A refused program has nothing to check here.
-- Which lambdas meet a function value's class is followed along the text's passes
-  and equations alone; a function value passed through a use's result is not, so
-  a `Calls` whose lambda reached the callee that way is reported though it holds.
+- Whether a class's Values are the least its function values give: a value whose
+  Values name a lambda that no function value brings passes where every relation
+  holds, and only makes a call check one instance more.
+
+## Open
+
+Where Values meet what no rule decides yet, the checker panics, so that the case
+fails there and the rule is decided with 준량:
+
+- Values across a cast or a declared conversion, which change the type the
+  function value lies in by a signature (l.78, l.107).
+- A function value reaching a position that decides nothing, as a function value
+  passing into a function type a declaration writes (l.199) does.
+- A function value a signature or the text writes, which names no Values: a
+  declaration whose result is `Fn/n`, against l.186's extern fn giving no function
+  value.
+- The element an extern-defined container indexes along its view, a cast.
+- A value a test plants, which a case writes as a type and so with no Values.
 
 ## Expected results
 

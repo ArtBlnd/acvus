@@ -1,0 +1,22 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run 1: Readings { visibility: ByMember, binding_path: AsStated, deferral: Recording }, every order
+outcome 1
+  accepted
+  value 1u8: u8
+  value F: none
+  value X: none
+  value Y: none
+  value `app result`: none
+  value `app(..)`: u8
+  value `f(x)`: none
+  value `|y| y`: Fn/1
+  value `λ result`: none
+  decision `app@3/call`: calls {λ}
+  check `1u8 <= app@3/X`: Ok(Identity)
+  check `app@3/X <= app@3/call#λ/Y`: Ok(Identity)
+  check `app@3/app result <= app(..)`: Ok(Identity)
+  check `app@3/call#λ/Y <= app@3/call#λ/λ result`: Ok(Identity)
+  check `app@3/call#λ/λ result <= app@3/f(x)`: Ok(Identity)
+  check `app@3/f(x) <= app@3/app result`: Ok(Identity)
+  check `|y| y <= app@3/F`: Ok(Identity)
+  I* of a final state: []

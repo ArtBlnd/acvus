@@ -167,7 +167,9 @@ Each keeps its outcome. Five cases written by the text of then changed:
 - A call's candidates are the Values of the moment. Whether Values can still grow
   after a call is decided is not shown: in every witness the lambda reaches the
   callee's class by a pass recorded when the group's solving starts, so no call's
-  Values grow after it.
+  Values grow after it. The certificate reports a call whose callee's Values name
+  a lambda it does not call (note 14), so a final state where they grew fails
+  there; no case shows one yet.
 - Row 3 makes a node's result reach what it reads through a call. In
   `acc = f()` with `f = || acc + 1`, `acc + 1`'s result `R` reaches `ACC`, which it
   reads, by `R ≤ λ result ≤ f() ≤ ACC`. Probed in every order by changing the

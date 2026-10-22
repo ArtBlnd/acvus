@@ -170,7 +170,7 @@ impl State {
     /// The lambdas the Values of the class's function value names: those of
     /// the function values that meet in it, by equations or lower bounds
     /// (l.175, l.183).
-    pub(super) fn values_of(&self, id: ClassId) -> BTreeSet<Name> {
+    pub(crate) fn values_of(&self, id: ClassId) -> BTreeSet<Name> {
         let mut seen = BTreeSet::from([self.root(id)]);
         let mut work = vec![self.root(id)];
         let mut values = BTreeSet::new();

@@ -6,10 +6,11 @@
 //! program's items, never read from a state's log.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName};
-use crate::coerce::{along_le, coerce};
+use crate::coerce::{Coercion, Structural, along_le, coerce};
 use crate::decl::{Decls, Node};
 use crate::explore::Final;
 use crate::instance::Made;
@@ -18,7 +19,103 @@ use crate::program::{ENTRY, Function, Item, Origin, Place, Program, Projection};
 use crate::relation::copy_name;
 use crate::sig::{SigArgs, SigTy, SigVar, Signature};
 use crate::solve::State;
-use crate::ty::{Constructor, Mutability, Name, Term, Ty};
+use crate::ty::{Constructor, HasTerm, Mutability, Name, Term, Ty, TyError, check_term};
+
+/// A closed value as the certificate gives it: a type each of whose function
+/// values carries the lambdas its Values names, as a function value carries
+/// its facts on its type (l.183, l.186).
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct Value {
+    term: Rc<Term<Value>>,
+    /// At a function value, the lambdas its Values names; none elsewhere, and
+    /// none at a function value a signature writes, which names no Values.
+    lambdas: Option<BTreeSet<Name>>,
+}
+
+impl HasTerm for Value {
+    fn decided(&self) -> Option<&Term<Value>> {
+        Some(&self.term)
+    }
+
+    fn from_term(term: Term<Value>) -> Result<Value, TyError> {
+        check_term(&term)?;
+        Ok(Value {
+            term: Rc::new(term),
+            lambdas: None,
+        })
+    }
+}
+
+impl Value {
+    fn term(&self) -> &Term<Value> {
+        &self.term
+    }
+
+    /// The type, its function values' Values left out.
+    fn ty(&self) -> Ty {
+        let term = (*self.term).clone().map(|_, part| part.ty());
+        Ty::new(term).expect("a certified value is a type")
+    }
+
+    fn part(&self, key: &crate::ty::PartKey) -> Option<&Value> {
+        self.term.part(key)
+    }
+
+    /// Whether a function value lies in it.
+    fn holds_function(&self) -> bool {
+        matches!(*self.term, Term::FunctionValue { .. })
+            || self
+                .term
+                .parts()
+                .into_iter()
+                .any(|(_, part)| part.holds_function())
+    }
+
+    /// A value a test plants, which the case writes as a type and so with no
+    /// Values: a function value in it is not decided yet.
+    #[cfg(test)]
+    fn planted(ty: &Ty) -> Value {
+        if let Term::FunctionValue { .. } = ty.term() {
+            panic!(
+                "a planted {ty} names no Values, which a case does not write yet \
+                 (design/14-certificate.md, Open)"
+            );
+        }
+        Value {
+            term: Rc::new(ty.term().clone().map(|_, part| Value::planted(&part))),
+            lambdas: None,
+        }
+    }
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&*self.term, f)?;
+        if let Some(lambdas) = &self.lambdas {
+            let names: Vec<&str> = lambdas.iter().map(Name::as_str).collect();
+            write!(f, "{{{}}}", names.join(", "))?;
+        }
+        Ok(())
+    }
+}
+
+/// The value the state gives the class at `root`, each function value in it
+/// carrying the lambdas its Values names (l.183, l.186); none where the class
+/// has no closed value.
+fn certified(state: &State, root: ClassId) -> Option<Value> {
+    let ty = state.value(root)?;
+    let (kind, _) = state.classes.held(root).kind.clone()?;
+    let term = kind
+        .try_map(|_, part| certified(state, state.root(part)).ok_or(()))
+        .ok()?;
+    let lambdas = matches!(term, Term::FunctionValue { .. }).then(|| state.values_of(root));
+    let value = Value {
+        term: Rc::new(term),
+        lambdas,
+    };
+    assert_eq!(value.ty(), ty, "a certified value is the class's value");
+    Some(value)
+}
 
 /// What one state of a final state decided, as the checker reads it.
 pub struct Sheet {
@@ -26,7 +123,7 @@ pub struct Sheet {
     ids: BTreeMap<ClassName, ClassId>,
     roots: BTreeMap<ClassId, ClassId>,
     /// Each root's value.
-    values: BTreeMap<ClassId, Option<Ty>>,
+    values: BTreeMap<ClassId, Option<Value>>,
     decisions: BTreeMap<Name, Option<Decision>>,
     instances: Vec<Made>,
 }
@@ -43,7 +140,7 @@ impl Sheet {
         let distinct: BTreeSet<ClassId> = roots.values().copied().collect();
         let values = distinct
             .into_iter()
-            .map(|root| (root, state.value(root)))
+            .map(|root| (root, certified(state, root)))
             .collect();
         let decisions = state
             .nodes
@@ -123,7 +220,7 @@ impl Certificate {
             .id(name)
             .unwrap_or_else(|| panic!("{group} has the class {name}"));
         let root = sheet.root(id);
-        sheet.values.insert(root, Some(value));
+        sheet.values.insert(root, Some(Value::planted(&value)));
     }
 
     /// Gives the node `node` of `group`'s state the decision `decision`.
@@ -194,7 +291,7 @@ struct Context<'a> {
 
 /// What a context gives a class.
 enum Lookup {
-    Value(Ty),
+    Value(Value),
     /// An original left in C, or a class of a state other than the entry's
     /// with no value there: nothing is checked of it here (l.292).
     Absent,
@@ -219,7 +316,7 @@ enum Decided {
 /// A parameter's type, and whether an argument meets it or passes into it by a
 /// boundary (l.282).
 struct Param {
-    ty: Ty,
+    ty: Value,
     meets: bool,
 }
 
@@ -450,7 +547,7 @@ impl Checker<'_> {
 
     /// The value of a lookup, recording a violation where it is missing;
     /// none where it is absent or missing.
-    fn get(&mut self, context: &Context<'_>, at: &str, of: &str, lookup: Lookup) -> Option<Ty> {
+    fn get(&mut self, context: &Context<'_>, at: &str, of: &str, lookup: Lookup) -> Option<Value> {
         match lookup {
             Lookup::Value(ty) => Some(ty),
             Lookup::Absent => None,
@@ -462,7 +559,7 @@ impl Checker<'_> {
     }
 
     /// The value of the group's text class `name` in the context.
-    fn text(&mut self, context: &Context<'_>, at: &str, name: &Name) -> Option<Ty> {
+    fn text(&mut self, context: &Context<'_>, at: &str, name: &Name) -> Option<Value> {
         let id = context
             .own
             .id(&ClassName::Text(name.clone()))
@@ -484,12 +581,17 @@ impl Checker<'_> {
         }
     }
 
-    fn lower(&self, from: &Ty, to: &Ty) -> bool {
-        along_le(self.decls, from, to).is_ok()
+    /// `from ≤ to` (l.282), each function value's lambdas among those of the
+    /// function value it reaches (l.183, l.186).
+    fn lower(&self, from: &Value, to: &Value) -> bool {
+        along_le(self.decls, &from.ty(), &to.ty())
+            .is_ok_and(|coercion| carries(from, to, &coercion))
     }
 
-    fn boundary(&self, from: &Ty, to: &Ty) -> bool {
-        coerce(self.decls, from, to).is_ok()
+    /// `from ⇝ to` by a coercion (l.282), each function value's lambdas among
+    /// those of the function value it reaches (l.183, l.186).
+    fn boundary(&self, from: &Value, to: &Value) -> bool {
+        coerce(self.decls, &from.ty(), &to.ty()).is_ok_and(|coercion| carries(from, to, &coercion))
     }
 
     /// l.292: every class of the entry has a value, every node of the entry
@@ -547,7 +649,13 @@ impl Checker<'_> {
                     parts.insert(part.clone(), ty);
                 }
                 let written = term.clone().map(|_, part| parts[&part].clone());
-                let holds = Ty::new(written.clone()).is_ok_and(|written| written == value);
+                if let Term::FunctionValue { .. } = written {
+                    panic!(
+                        "{name} is a function value the text writes, which names no Values \
+                         (l.186; design/14-certificate.md, Open)"
+                    );
+                }
+                let holds = Value::from_term(written.clone()).is_ok_and(|written| written == value);
                 self.require(
                     context,
                     &at,
@@ -577,6 +685,16 @@ impl Checker<'_> {
                     &at,
                     holds,
                     format!("{value} is not Fn/{arity} (l.183)"),
+                );
+                let named = value
+                    .lambdas
+                    .as_ref()
+                    .is_some_and(|lambdas| lambdas.contains(lambda));
+                self.require(
+                    context,
+                    &at,
+                    named,
+                    format!("{value}'s Values do not name {lambda} (l.183)"),
                 );
             }
         }
@@ -652,7 +770,7 @@ impl Checker<'_> {
         made: &Made,
         function: &Function,
         name: &Name,
-    ) -> Option<Ty> {
+    ) -> Option<Value> {
         let from = &self.certificate.sheets[&function.group];
         let id = from
             .id(&ClassName::Text(name.clone()))
@@ -666,7 +784,7 @@ impl Checker<'_> {
     }
 
     /// Each argument into its parameter's type.
-    fn passes(&mut self, context: &Context<'_>, at: &str, args: &[Ty], params: &[Param]) {
+    fn passes(&mut self, context: &Context<'_>, at: &str, args: &[Value], params: &[Param]) {
         for (k, (arg, param)) in args.iter().zip(params).enumerate() {
             let holds = if param.meets {
                 self.lower(arg, &param.ty)
@@ -684,7 +802,7 @@ impl Checker<'_> {
     }
 
     /// The result type into the result, as a lower bound.
-    fn returns(&mut self, context: &Context<'_>, at: &str, returned: &Ty, result: &Ty) {
+    fn returns(&mut self, context: &Context<'_>, at: &str, returned: &Value, result: &Value) {
         let holds = self.lower(returned, result);
         self.require(context, at, holds, format!("{returned} <= {result} fails"));
     }
@@ -704,7 +822,7 @@ impl Checker<'_> {
         let arg_values = args
             .iter()
             .map(|arg| self.text(context, &at, arg))
-            .collect::<Option<Vec<Ty>>>()?;
+            .collect::<Option<Vec<Value>>>()?;
         let result_value = self.text(context, &at, result)?;
         let own = function.group == context.group
             || self
@@ -762,7 +880,7 @@ impl Checker<'_> {
         let arg_values = args
             .iter()
             .map(|arg| self.text(context, &at, arg))
-            .collect::<Option<Vec<Ty>>>()?;
+            .collect::<Option<Vec<Value>>>()?;
         let result_value = self.text(context, &at, result)?;
         let decided = match &decision {
             Decision::Use(id) => Some(&self.decls.decl(id).sig),
@@ -831,8 +949,8 @@ impl Checker<'_> {
         at: &str,
         callee: &Name,
         decided: Option<&Signature>,
-        args: &[Ty],
-        result: &Ty,
+        args: &[Value],
+        result: &Value,
     ) {
         let per_candidate: Vec<Option<bool>> = self
             .decls
@@ -872,8 +990,8 @@ impl Checker<'_> {
         level: usize,
         owner: &Name,
         sig: &Signature,
-    ) -> Option<SigArgs<Ty>> {
-        let mut bound: SigArgs<Ty> = sig.unbound();
+    ) -> Option<SigArgs<Value>> {
+        let mut bound: SigArgs<Value> = sig.unbound();
         let vars = (0..sig.type_params().len())
             .map(SigVar::Type)
             .chain(sig.names_identity().then_some(SigVar::Identity));
@@ -940,7 +1058,7 @@ impl Checker<'_> {
             lent == expected,
             format!("{lent:?} is not {expected:?} (l.298)"),
         );
-        let holds = Ty::new(Term::Ref(lent, target_ty)).is_ok_and(|lent| lent == result);
+        let holds = Value::from_term(Term::Ref(lent, target_ty)).is_ok_and(|lent| lent == result);
         self.require(
             context,
             &at,
@@ -1009,7 +1127,7 @@ impl Checker<'_> {
                         return None;
                     }
                 };
-                let Ok(lent) = Ty::new(Term::Ref(mutability, target)) else {
+                let Ok(lent) = Value::from_term(Term::Ref(mutability, target)) else {
                     self.violation(context, &at, "no reference is lent".to_string());
                     return None;
                 };
@@ -1052,17 +1170,32 @@ impl Checker<'_> {
         let arg_values = args
             .iter()
             .map(|arg| self.text(context, &at, arg))
-            .collect::<Option<Vec<Ty>>>()?;
+            .collect::<Option<Vec<Value>>>()?;
         let result_value = self.text(context, &at, result)?;
-        let met = self.lambdas_met(callee);
-        for lambda in &lambdas {
-            let named = met.contains(lambda);
-            self.require(
+        let callee_value = self.text(context, &at, callee)?;
+        let Some(values) = callee_value.lambdas.clone() else {
+            self.violation(
                 context,
                 &at,
-                named,
-                format!("no function value naming {lambda} meets {callee} (l.183)"),
+                format!("{callee_value} is no function value (l.198)"),
             );
+            return None;
+        };
+        for lambda in values.difference(&lambdas) {
+            self.violation(
+                context,
+                &at,
+                format!("{callee}'s Values name {lambda}, which the call does not call (l.198)"),
+            );
+        }
+        for lambda in lambdas.difference(&values) {
+            self.violation(
+                context,
+                &at,
+                format!("the call calls {lambda}, which {callee}'s Values do not name (l.183)"),
+            );
+        }
+        for lambda in &lambdas {
             let function = self
                 .program
                 .function(lambda)
@@ -1107,35 +1240,6 @@ impl Checker<'_> {
         }
         Some(())
     }
-
-    /// The lambdas whose values meet the class through the text's passes and
-    /// equations (l.175, l.183). A value passed through a use is not followed
-    /// (`design/14-certificate.md`, Not covered).
-    fn lambdas_met(&self, callee: &Name) -> BTreeSet<Name> {
-        let mut seen = BTreeSet::from([self.text.root(callee)]);
-        let mut work = vec![self.text.root(callee)];
-        let mut lambdas = BTreeSet::new();
-        while let Some(at) = work.pop() {
-            for class in &self.program.classes {
-                if let Origin::Lambda(lambda) = &class.origin
-                    && self.text.root(&class.name) == at
-                {
-                    lambdas.insert(lambda.clone());
-                }
-            }
-            for (_, item) in &self.program.items {
-                if let Item::Pass { value, into, .. } = item
-                    && self.text.root(into) == at
-                {
-                    let lower = self.text.root(value);
-                    if seen.insert(lower.clone()) {
-                        work.push(lower);
-                    }
-                }
-            }
-        }
-        lambdas
-    }
 }
 
 /// Whether a candidate of signature `sig` would record a reference into the
@@ -1154,10 +1258,87 @@ fn would_record(sig: &Signature) -> Option<bool> {
     }
 }
 
-/// Whether the closed type `ty` has the member or part the projection names,
-/// of the type `part` (l.148–156).
-fn has(decls: &Decls, ty: &Ty, projection: &Projection, part: &Ty) -> bool {
-    match (projection, ty.term()) {
+/// Whether each function value in `from` has its lambdas among those of the
+/// function value of `to` it reaches along `coercion`, a function value's
+/// Values being part of its type (l.183, l.186): at the same position where no
+/// stage changes it, a reborrow keeping the target; at each part both have, by
+/// that part's coercion, where the structural stage changes the members; and
+/// at the payload where the value is wrapped. Where Values would cross a cast
+/// or a conversion, or a position decides nothing, no rule is decided yet.
+fn carries(from: &Value, to: &Value, coercion: &Coercion) -> bool {
+    let undecided = |what: String| -> ! {
+        panic!("{what} carries Values by no rule yet (l.186; design/14-certificate.md, Open)")
+    };
+    match coercion {
+        Coercion::Identity => within(from, to),
+        Coercion::Never => true,
+        Coercion::Undecided => undecided(format!(
+            "{from} reaching {to} where a position decides nothing"
+        )),
+        Coercion::Conversion(id) => {
+            if from.holds_function() || to.holds_function() {
+                undecided(format!("the conversion {id:?} from {from} to {to}"));
+            }
+            true
+        }
+        Coercion::Composition {
+            casts, structural, ..
+        } => {
+            if !casts.is_empty() {
+                if from.holds_function() || to.holds_function() {
+                    undecided(format!("the casts {casts:?} from {from} to {to}"));
+                }
+                return true;
+            }
+            match structural {
+                None => within(from, to),
+                Some(Structural::Shape { parts, .. }) => parts.iter().all(|(key, coercion)| {
+                    let (Some(from), Some(to)) = (from.part(key), to.part(key)) else {
+                        panic!(
+                            "a structural stage changes the part {key:?} that {from} and {to} share"
+                        );
+                    };
+                    carries(from, to, coercion)
+                }),
+                Some(Structural::Wrap(variant, inner)) => {
+                    let Some(payload) = to
+                        .term()
+                        .constructor()
+                        .payload_part(variant)
+                        .and_then(|key| to.part(&key))
+                    else {
+                        panic!("{to} wraps a value in {variant}, which it has no payload of");
+                    };
+                    carries(from, payload, inner)
+                }
+            }
+        }
+    }
+}
+
+/// Whether each function value in `from` has its lambdas among those of the
+/// function value at the same position of `to`, where the two are of one
+/// type but for a reborrowed reference's mutability.
+fn within(from: &Value, to: &Value) -> bool {
+    if let Term::FunctionValue { .. } = from.term() {
+        let (Some(lambdas), Some(reached)) = (&from.lambdas, &to.lambdas) else {
+            panic!(
+                "{from} reaching {to}, a function value that names no Values, carries Values by \
+                 no rule yet (l.186; design/14-certificate.md, Open)"
+            );
+        };
+        return lambdas.is_subset(reached);
+    }
+    from.term()
+        .parts()
+        .into_iter()
+        .all(|(key, part)| to.part(&key).is_some_and(|reached| within(part, reached)))
+}
+
+/// Whether the value has the member or part the projection names, of the
+/// value `part` (l.148–156).
+fn has(decls: &Decls, value: &Value, projection: &Projection, part: &Value) -> bool {
+    match (projection, value.term()) {
         (Projection::Deref, Term::Ref(_, target)) => target == part,
         (Projection::Field(field), Term::Object(fields)) => fields.get(field) == Some(part),
         (Projection::Field(field), Term::Struct(module, args)) => decls
@@ -1167,7 +1348,15 @@ fn has(decls: &Decls, ty: &Ty, projection: &Projection, part: &Ty) -> bool {
             .is_some_and(|i| args.get(i) == Some(part)),
         (Projection::Component(i), Term::Tuple(components)) => components.get(*i) == Some(part),
         (Projection::Elem, Term::Array(_, element) | Term::Slice(element)) => element == part,
-        (Projection::Elem, Term::Extern { .. }) => view_element(decls, ty).as_ref() == Some(part),
+        (Projection::Elem, Term::Extern { .. }) => {
+            if value.holds_function() || part.holds_function() {
+                panic!(
+                    "the element of {value} along its view, a cast, carries Values by no rule \
+                     yet (l.186; design/14-certificate.md, Open)"
+                );
+            }
+            view_element(decls, &value.ty()) == Some(part.ty())
+        }
         (Projection::Payload { enum_name, variant }, term) => {
             let constructor = term.constructor();
             let named = enum_name

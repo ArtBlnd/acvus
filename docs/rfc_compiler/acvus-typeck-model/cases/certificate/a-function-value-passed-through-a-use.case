@@ -1,0 +1,34 @@
+//@ spec: design/14-certificate.md, Contract; l.183, l.186, l.198, l.217
+// fn app(f, x) { f(x) }
+// app(|y| y, 1u8)
+// In app, f(x) reads F, a universal, which decides nothing, so it stays in C
+// (l.214). The use's instance copies it, and the lambda's value meets the
+// copy of F (l.217), whose Values name λ: the copy of the call calls λ, and
+// the result is u8 (l.198). The certificate's value of F's copy is Fn/1{λ}
+// (l.186), so the call's check reads λ there, which no pass of app's text
+// brings. Given the copy of the call deciding to call no lambda, F's Values
+// name λ, which the call does not call.
+group app {
+    let F;
+    let X;
+    let `app result`;
+    fn app(F, X) -> `app result`;
+    let `f(x)`;
+    `f(x)` = (F)(X) @ call;
+    `app result` = `f(x)`;
+}
+group λ in run {
+    let Y;
+    let `λ result`;
+    fn λ(Y) -> `λ result`;
+    `λ result` = Y;
+}
+let `|y| y`: lambda λ;
+let 1u8: u8;
+let `app(..)`;
+`app(..)` = app(`|y| y`, 1u8) @ app;
+
+must pass;
+assert `app(..)`: u8;
+assert `app@3/call` == calls {λ};
+assert certificate set `app@3/call` == calls {} fails ["F's Values name λ, which the call does not call (l.198)"];
