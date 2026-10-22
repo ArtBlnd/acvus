@@ -14,7 +14,7 @@ A coercion changes a whole value into a value of another type by the rows of the
 Coercion table, composed `reborrow? ; cast* ; structural?`, or by `! ⇝ U`, or by
 exactly one declared conversion where no composition reaches. Each part of a
 structural stage is changed by its part's coercion `⇝ₚ`, which composes the
-object, enum and part rows and `! ⇝ U` alone, so no reborrow, cast, `Error` wrap or
+object, enum and part rows and `! ⇝ U` alone, so no reborrow, cast or
 conversion is taken at a part. The rank of a composition is the stages it takes
 and its number of casts, its parts' coercions adding the structural stage alone.
 Along the join's `≤`, a value is changed by the same rows at each step, but an
@@ -46,8 +46,7 @@ within its family.
    l.109 composes of the object, enum and part rows and `! ⇝ U` alone. So
    `Option⟨!⟩ ⇝ Option⟨u8⟩`, which `None` passed to a declaration needs, reaches,
    and `Option⟨u16⟩ ⇝ Option⟨u8⟩` does not, though a conversion `u16 → u8` is
-   declared; nor does `Option⟨B⟩ ⇝ Option⟨Error{B(B)}⟩`, a wrap being a row of a
-   whole value.
+   declared.
 3. **`!` and undecided positions take no stage.** `!` decides nothing (l.333), so
    `! ⇝ U` adds nothing to a rank, and a shape takes the structural stage only
    where a member changes or a part's coercion takes a stage. `Option⟨!⟩ ⇝
@@ -55,13 +54,13 @@ within its family.
 4. **Comparing ranks.** By the highest stage, then the number of casts, then the
    lower stages from the highest down, where taking a stage ranks above not taking
    it. A part takes the structural stage alone, so a structural stage with a cast
-   below it is a whole value's: `A ⇝ Error{B(B)}` casts once, then wraps.
-5. **A wrap is exact.** `E ⇝ Error{N̄(Ē)}` where `E` is one of `Ē` (l.104): after
-   the casts, the value's type is the variant's payload. Where the casts pass two
-   types that are variants, two compositions reach (`holes.md`, H2). `E ⇝ Error⟨E⟩`
-   wraps a type of no name, one neither an enum, a struct nor an extern-defined
-   type (l.105), at `Error⟨E⟩`'s one part (`Structural::Wrap(PartKey::Wrapped, ..)`);
-   an `Error`, of variants or `Error⟨..⟩`, is wrapped by neither row (l.337).
+   below it is a whole value's: a cast `A → E{V(!)}` then widening to `E{V(!),
+   W(!)}`.
+5. **No row wraps a value in an `Error`.** No type a declaration, the text or a
+   context writes holds an `Error`, which `?` alone makes (l.91, since 17d0be51;
+   note 02, reading 2), and `?` wraps by a split (l.278, l.337), so the Coercion
+   table has no wrap row and no value reaches an `Error` by a coercion
+   (`holes.md`, H2).
 6. **The steps of `≤`.** `S ≤ T` joins to `T`, so the steps are those of the join
    (l.86–89): a reborrow where an exclusive reference meets a shared one, the casts
    up to `T`'s node, then members gained, fields unchanged and variants added, and

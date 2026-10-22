@@ -546,6 +546,10 @@ impl ProgramBuilder {
             !matches!(term, Term::FunctionValue { .. }),
             "{name}: the text writes no function value (l.184)"
         );
+        assert!(
+            !crate::join::is_error(&term),
+            "{name}: the text writes no `Error` (l.91)"
+        );
         self.class(name, Origin::Written(term))
     }
 
@@ -555,6 +559,10 @@ impl ProgramBuilder {
         assert!(
             !matches!(term, Term::FunctionValue { .. }),
             "{name}: a context gives no function value (l.184)"
+        );
+        assert!(
+            !crate::join::is_error(&term),
+            "{name}: a context gives no `Error` (l.91)"
         );
         self.class(name, Origin::Host(term))
     }

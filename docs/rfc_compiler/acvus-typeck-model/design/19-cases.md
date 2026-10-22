@@ -148,7 +148,7 @@ A decision is written `f#0`, `never`, `lend &mut place`, `lend & through &mut`
 (`through _` where the value read decides no mutability), `applied`,
 `applied through &`, `read`, `bind lend & place`, `calls {λ}`, `undecided`. A
 coercion is written `identity`, `undecided`, `never`, `conversion f#0`, steps
-joined by `+` (`reborrow`, `cast f#0`, `shape`, `wrap V(…)`), or `none`,
+joined by `+` (`reborrow`, `cast f#0`, `shape`), or `none`,
 `compositions […]`, `conversions […]` for none. Both are compared with whitespace left out. A relation, a class and a
 node are named as the model names them, a copy's as its instance does
 (`nest@23/n == 0`, `put(..)#λ/V <= X`).

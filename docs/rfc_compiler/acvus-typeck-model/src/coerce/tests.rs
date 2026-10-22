@@ -180,7 +180,7 @@ fn an_object_drops_fields_and_changes_those_it_keeps_by_their_part_rows() {
 }
 
 #[test]
-fn an_enum_widens_and_a_named_type_is_wrapped_in_its_variant_of_error() {
+fn an_enum_widens_and_no_value_is_wrapped_in_an_error() {
     let decls = decls();
     let v = enumeration("E", &[("V", named("A"))]);
     let vw = enumeration("E", &[("V", named("A")), ("W", never())]);
@@ -194,31 +194,15 @@ fn an_enum_widens_and_a_named_type_is_wrapped_in_its_variant_of_error() {
     let b_c = error(&[named("B"), named("C")]);
     assert_eq!(
         coerce(&decls, &named("A"), &b_c),
-        Ok(Coercion::Composition {
-            reborrow: false,
-            casts: casts(&[0]),
-            structural: Some(Structural::Wrap(
-                PartKey::Payload(name("B")),
-                Box::new(Coercion::Identity)
-            )),
-        })
-    );
-    let some = |t: Ty| ty(Term::Option(t));
-    assert_eq!(
-        coerce(&decls, &some(named("B")), &some(b_c)),
         Err(CoerceError::None),
-        "no wrap at a part"
+        "no row wraps a value in an `Error`, which `?` alone makes (l.91)"
     );
-}
-
-#[test]
-fn a_value_whose_path_up_meets_two_variants_of_error_has_two_compositions() {
-    let decls = chain(&[]);
     let b_d = error(&[named("B"), named("D")]);
-    let Err(CoerceError::Compositions(found)) = coerce(&decls, &named("A"), &b_d) else {
-        panic!("`A` reaches `Error{{B(B), D(D)}}` by two compositions");
-    };
-    assert_eq!(found.len(), 2);
+    assert_eq!(
+        coerce(&chain(&[]), &named("A"), &b_d),
+        Err(CoerceError::None),
+        "no composition reaches an `Error` (`holes.md`, H2)"
+    );
 }
 
 #[test]
@@ -290,8 +274,32 @@ fn ranks_compare_by_highest_stage_then_casts_then_lower_stages() {
     let vw = enumeration("E", &[("V", never()), ("W", never())]);
     let reborrow = rank(&decls, mut_a.clone(), shared_a);
     let reborrow_cast = rank(&decls, mut_a, shared_b);
-    let structural = rank(&decls, v, vw);
-    let cast_structural = rank(&decls, named("A"), error(&[named("B")]));
+    let structural = rank(&decls, v, vw.clone());
+    let mut types = DeclaredTypes::default();
+    types
+        .declare_extern(
+            name("A"),
+            ExternDecl {
+                arity: 0,
+                identity: false,
+            },
+        )
+        .unwrap();
+    let mut builder = DeclsBuilder::new(types);
+    let up = Signature::new(
+        vec![],
+        false,
+        vec![plain_sig("A")],
+        SigTy::term(Term::Enum(
+            name("E"),
+            [(name("V"), SigTy::term(Term::Never))].into(),
+        )),
+        builder.types(),
+    )
+    .unwrap();
+    builder.declare(name("up"), up, Role::Cast);
+    let enum_decls = builder.finish().unwrap();
+    let cast_structural = rank(&enum_decls, named("A"), vw.clone());
     assert!(Rank::empty() < reborrow);
     assert!(reborrow < one_cast);
     assert!(one_cast < two_casts);

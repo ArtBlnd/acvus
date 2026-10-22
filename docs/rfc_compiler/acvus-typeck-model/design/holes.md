@@ -31,16 +31,15 @@ would close the hole at the declaration.
 
 ## H2. A value whose path up meets two variants of `Error`
 
-`?` makes a variant of `Error` for each error type's name (l.337), and two `Error`s
-join by uniting their variants, raising no part (l.89), so `Error{B(B), D(D)}` is a
-type where a cast goes from `B` to `D`. A value of `A`, with casts `A → B → D`, then
-reaches it by two compositions: `A → B` then the wrap in `B`, and `A → B → D` then
-the wrap in `D` (l.104, l.109). Line 109 states that the composition toward a given
-type is unique, and the two call different functions. The model refuses there
-(`CoerceError::Compositions`); taking the composition of the lowest rank would
-choose `B`. Whether a program reaches it is not yet shown. A candidate is a whole
-value passing into such an `Error`, a part taking no wrap (l.109), by a boundary
-toward a type a declaration writes.
+Not a hole since 17d0be51. `?` makes a variant of `Error` for each error type's name
+(l.337), and two `Error`s join by uniting their variants, raising no part (l.89), so
+`Error{B(B), D(D)}` was a type where a cast goes from `B` to `D`. A value of `A`,
+with casts `A → B → D`, then reached it by two compositions: `A → B` then the wrap
+in `B`, and `A → B → D` then the wrap in `D`, by the wrap rows of the Coercion
+table, though the composition toward a given type is unique (l.109). Since
+17d0be51 no type a declaration, the text or a context writes holds an `Error`, which
+`?` alone makes (l.91), and `?` wraps by a split (l.278, l.337), so the wrap rows are
+removed and no value reaches an `Error` by a coercion.
 
 ## H3. A view at a boundary
 

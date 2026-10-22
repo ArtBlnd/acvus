@@ -79,8 +79,7 @@ types are and every function value in them names the same lambdas. Where `≤` o
 a coercion reaches, each function value of the one reaching has its lambdas among
 those of the function value it reaches: at the same position where no stage changes
 it, a reborrow keeping the target; at each part both have, by that part's own
-coercion, where the structural stage changes the members; and at the payload where
-the value is wrapped. So a lambda a value carries is among the Values of every
+coercion, where the structural stage changes the members. So a lambda a value carries is among the Values of every
 class the value reaches, and a call of that class calls it.
 
 The l.246 row is checked on its own: it is the record a use made before it was

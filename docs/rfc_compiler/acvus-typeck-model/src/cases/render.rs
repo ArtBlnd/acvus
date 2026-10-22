@@ -22,7 +22,6 @@ use crate::relation::{Named, Recorder};
 use crate::solve::{State, Step};
 use crate::split::Split;
 use crate::trace::Report;
-use crate::ty::PartKey;
 use crate::ty::{HasTerm, Mutability, Name, Term};
 use crate::value::{Fill, Head, Sources, Took};
 
@@ -130,12 +129,6 @@ fn ok_coercion(coercion: &Coercion) -> String {
             if let Some(structural) = structural {
                 steps.push(match structural {
                     Structural::Shape { .. } => "shape".to_string(),
-                    Structural::Wrap(PartKey::Payload(variant), inner) => {
-                        format!("wrap {}({})", name(variant.as_str()), ok_coercion(inner))
-                    }
-                    Structural::Wrap(key, inner) => {
-                        format!("wrap {key:?}({})", ok_coercion(inner))
-                    }
                 });
             }
             steps.join(" + ")

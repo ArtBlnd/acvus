@@ -290,6 +290,8 @@ pub enum SigError {
     /// A function value, which a declaration makes none of: it returns one
     /// only as a type variable takes it in (l.184).
     FunctionValue,
+    /// An `Error`, which `?` alone makes (l.91).
+    Error,
 }
 
 impl Signature {
@@ -338,6 +340,9 @@ impl Signature {
                 }
                 if let Term::FunctionValue { .. } = **term {
                     return Err(SigError::FunctionValue);
+                }
+                if crate::join::is_error(term) {
+                    return Err(SigError::Error);
                 }
                 if let Term::Ref(_, SigTy::Term(target)) = &**term
                     && matches!(**target, Term::Ref(..))

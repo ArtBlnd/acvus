@@ -1,14 +1,30 @@
-//@ spec: l.337, l.89
+//@ spec: l.337, l.89, l.91
 //@ orders: sampled 200
-// fn f() { let a = get1()?; let b = get2()?; Ok(a) }
-// // get1() -> Result<u8, Error{A(A)}>, get2() -> Result<u16, B>
-// get1()'s error value is an Error, so it is not wrapped and passes into
+// fn g() { let x = get()?; Ok(x) }    // get() -> Result<u8, A>
+// fn f() { let a = g()?; let b = get2()?; Ok(a) }    // get2() -> Result<u16, B>
+// g's result is Result<u8, Error{A(A)}>, an Error only ? makes (l.91, l.337).
+// In f, g()'s error value is an Error, so it is not wrapped and passes into
 // the exit's error part as it is (l.337); B is wrapped into Error{B(..)}.
-// The variants unite with no nesting.
+// The variants unite with no nesting (l.89).
 extern type A;
 extern type B;
-extern fn get1() -> Result<u8, Error{A(A)}>;
+extern fn get() -> Result<u8, A>;
 extern fn get2() -> Result<u16, B>;
+group g {
+    let `g result`;
+    fn g() -> `g result`;
+    let `get()`;
+    let X;
+    let `g exit`;
+    let U;
+    let Q;
+    let `Ok(x)`: Result<U, Q>;
+    `get()` = get() @ get;
+    X = ?(`get()`) into `g exit` @ qg;
+    `g result` = `g exit`;
+    U = X;
+    `g result` = `Ok(x)`;
+}
 group f {
     let `f result`;
     fn f() -> `f result`;
@@ -21,7 +37,7 @@ group f {
     let S;
     let P;
     let `Ok(a)`: Result<S, P>;
-    `get1()` = get1() @ get1;
+    `get1()` = g() @ `g()`;
     A = ?(`get1()`) into `exit 1` @ q1;
     `f result` = `exit 1`;
     `get2()` = get2() @ get2;

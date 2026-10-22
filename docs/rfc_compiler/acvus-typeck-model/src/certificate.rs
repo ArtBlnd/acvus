@@ -1517,8 +1517,8 @@ fn would_record(sig: &Signature) -> Option<bool> {
 /// function value of `to` it reaches along `coercion`, a function value's
 /// Values being part of its type (l.181, l.184): at the same position where no
 /// stage changes it, a reborrow keeping the target; at each part both have, by
-/// that part's coercion, where the structural stage changes the members; and
-/// at the payload where the value is wrapped. Where Values would cross a cast
+/// that part's coercion, where the structural stage changes the members.
+/// Where Values would cross a cast
 /// or a conversion, or a position decides nothing, no rule is decided yet.
 fn carries(from: &Value, to: &Value, coercion: &Coercion) -> bool {
     let undecided = |what: String| -> ! {
@@ -1555,12 +1555,6 @@ fn carries(from: &Value, to: &Value, coercion: &Coercion) -> bool {
                     };
                     carries(from, to, coercion)
                 }),
-                Some(Structural::Wrap(key, inner)) => {
-                    let Some(payload) = to.part(key) else {
-                        panic!("{to} wraps a value at {key:?}, which it has no part at");
-                    };
-                    carries(from, payload, inner)
-                }
             }
         }
     }

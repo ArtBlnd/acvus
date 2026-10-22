@@ -5,7 +5,6 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::decl::{DeclId, Decls};
-use crate::join::{ERROR, is_error};
 use crate::read::ReadValue;
 use crate::ty::{HasTerm, Member, Mutability, Name, PartKey, Term, Ty};
 
@@ -108,10 +107,6 @@ pub enum Structural {
         added: BTreeSet<Member>,
         parts: Vec<(PartKey, Coercion)>,
     },
-    /// Wrapped in the `Error` at this part: the variant named after the
-    /// value's type, or `Error⟨E⟩`'s one part where the type has no name
-    /// (l.104, l.105), after the value is changed into that part's type.
-    Wrap(PartKey, Box<Coercion>),
 }
 
 impl Coercion {
@@ -160,11 +155,6 @@ impl Structural {
                 if !dropped.is_empty() || !added.is_empty() || rank.highest().is_some() {
                     rank.take(Stage::Structural);
                 }
-                Some(rank)
-            }
-            Structural::Wrap(_, inner) => {
-                let mut rank = inner.rank()?;
-                rank.take(Stage::Structural);
                 Some(rank)
             }
         }
@@ -336,38 +326,17 @@ fn conversion(
     }
 }
 
-/// The structural stage from `at` to `to`, where one reaches: an `Error` row
-/// of the whole value, or the rows `shape` takes.
+/// The structural stage from `at` to `to`, where one reaches: the rows
+/// `shape` takes (l.109).
 fn structural(at: &ReadValue, to: &ReadValue, way: Way) -> Option<Structural> {
     let (Some(a), Some(b)) = (at.decided(), to.decided()) else {
         return None;
     };
-    if let (Way::Coercion { .. }, Term::Enum(name, variants)) = (way, b)
-        && name.as_str() == ERROR
-        && !is_error(a)
-    {
-        return variants
-            .iter()
-            .find(|(_, payload)| agrees(at, payload))
-            .map(|(variant, _)| {
-                Structural::Wrap(
-                    PartKey::Payload(variant.clone()),
-                    Box::new(Coercion::Identity),
-                )
-            });
-    }
-    if let (Way::Coercion { .. }, Term::ErrorOf(wrapped)) = (way, b)
-        && !is_error(a)
-        && !matches!(a, Term::Enum(..) | Term::Struct(..) | Term::Extern { .. })
-    {
-        return agrees(at, wrapped)
-            .then(|| Structural::Wrap(PartKey::Wrapped, Box::new(Coercion::Identity)));
-    }
     shape(a, b, way)
 }
 
 /// A part's coercion `⇝ₚ`, or a part's steps along `≤` (l.89, l.109): the
-/// rows `shape` takes and `! ⇝ U` alone, so no reborrow, cast, `Error` wrap or
+/// rows `shape` takes and `! ⇝ U` alone, so no reborrow, cast or
 /// conversion. None where no row reaches, the only way `deciding_nothing`
 /// gives no result.
 fn part(x: &ReadValue, y: &ReadValue, way: Way) -> Option<Coercion> {

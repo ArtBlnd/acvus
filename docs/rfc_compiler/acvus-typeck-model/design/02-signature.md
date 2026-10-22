@@ -43,7 +43,8 @@ fields in declared order (l.54).
    only as a type variable takes it in, as `T -> T` does (l.184). So a signature
    writes none at any depth, and `Signature::new` refuses one
    (`SigError::FunctionValue`); the text and a context write none either
-   (`ProgramBuilder::written`, `host`).
+   (`ProgramBuilder::written`, `host`). Nor does any write an `Error`, which `?`
+   alone makes (l.91, since 17d0be51; `SigError::Error`).
 
 ## Left open for change
 
