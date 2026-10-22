@@ -2,10 +2,11 @@
 run 1: Readings { visibility: ByMember, deferral: Recording }, every order
 outcome 1
   refused
-  value `f(..)`: none
+  value `f(..)`: ()
   value `make()`: {x: u8, y: u8}
   decision f: undecided
   decision make: make#0
+  check `f.CommonResult <= f(..)`: Ok(Identity)
+  check `make() <= f.Common(0)`: Ok(Identity)
   check `make.Result <= make()`: Ok(Identity)
-  refusal no_value `f(..)`
   I* of a final state: []

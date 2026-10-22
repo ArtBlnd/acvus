@@ -188,8 +188,8 @@ impl State {
             .filter(|(name, _)| self.deferred.contains_key(*name));
         let mut passed_out = Vec::new();
         for (name, node) in undecided.iter().copied().chain(deferred) {
-            let only_out = self.passed_out_only(&node.kind);
-            for position in self.positions(&node.kind) {
+            let only_out = self.passed_out_only(node);
+            for position in self.positions(node) {
                 let position = self.root(position);
                 if self.is_solved(position) {
                     continue;

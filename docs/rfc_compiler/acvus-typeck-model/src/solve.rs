@@ -390,9 +390,9 @@ impl State {
             for linked in self.link_views() {
                 trace.push(Report::Linked(linked));
             }
-            let shared = self.record_at_once();
-            if !shared.is_empty() {
-                trace.push(Report::Shared(shared));
+            let common = self.record_at_once();
+            if !common.is_empty() {
+                trace.push(Report::Common(common));
             }
             let settled = self.settled();
             for i in 0..self.log.len() {

@@ -13,12 +13,15 @@ outcome 1
   decision `&x`: lend & place
   decision takes_u8: takes_u8#0
   decision `x + 1`: core::add#0
-  partition {?a, X}
+  partition {?a, ?b, X}
+  check `&1 <= x + 1.Common(0)`: Ok(Identity)
   check `&1 ~> x + 1.Param(1)`: Ok(Identity)
+  check `&x <= x + 1.Common(0)`: Ok(Identity)
   check `&x ~> x + 1.Param(0)`: Ok(Identity)
   check `?a <= X`: Ok(Identity)
   check `R <= X`: Ok(Identity)
   check `X ~> takes_u8.Param(0)`: Ok(Identity)
   check `takes_u8.Result <= takes_u8(x)`: Ok(Identity)
-  check `x + 1.Result <= R`: Ok(Identity)
+  check `x + 1.Chosen(1) <= x + 1.Common(1)`: Ok(Identity)
+  check `x + 1.Common(1) <= R`: Ok(Identity)
   I* of a final state: []

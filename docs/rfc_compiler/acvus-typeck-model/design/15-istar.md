@@ -3,7 +3,7 @@
 Rests on `docs/notes/typeck-pivot.md` §1–2 (I\*: a decision is made only where no
 relation not yet recorded could change it), and on the spec's l.261 (the value a
 node reads), l.263 (breaking), l.238 (b), l.242 and l.244 (which nodes record into
-a class) and l.246. The code is `src/istar.rs`.
+a class) and l.246 (the common part). The code is `src/istar.rs`.
 
 ## Meaning
 

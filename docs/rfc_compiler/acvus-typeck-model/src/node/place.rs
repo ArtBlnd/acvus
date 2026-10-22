@@ -54,8 +54,8 @@ impl State {
     /// What the class reads as in the value read leaving out `excluded`: none
     /// where it reads as no reference or as nothing, and a reference, of its
     /// mutability where the value read decides one (l.261, l.296). Where the
-    /// value read decides no constructor, a use's record that a class it
-    /// reaches by lower bounds is a reference still reads as a reference
+    /// value read decides no constructor, a common part's record that a class
+    /// it reaches by lower bounds is a reference still reads as a reference
     /// (l.246).
     pub(super) fn reads_as_reference(&self, id: ClassId, excluded: &BTreeSet<Name>) -> AsReference {
         let read = self.read_state(excluded);
@@ -72,8 +72,8 @@ impl State {
         }
     }
 
-    /// Whether a use recorded that the class, or one it reaches by lower
-    /// bounds, is a reference (l.246).
+    /// Whether a node's common part recorded that the class, or one it reaches
+    /// by lower bounds, is a reference (l.246).
     pub(super) fn recorded_as_reference(&self, id: ClassId) -> bool {
         let mut seen = BTreeSet::from([self.root(id)]);
         let mut work = vec![self.root(id)];

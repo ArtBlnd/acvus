@@ -22,8 +22,9 @@ the log makes, so a value read is decided by replaying the relations that remain
 2. **A use's result.** A use's result type enters its result as a lower bound the
    use records: the value table gives a use as a source (l.274), and a use's result
    reaches its value by `≤` as a lower bound does (l.280).
-3. **What a node recorded.** A node's relations are those it records once decided
-   or before (l.246, l.324), and those of every instance it makes (l.196): an
+3. **What a node recorded.** A node's relations are those it records once decided,
+   its common part before (l.246; `Recorder::Common`, which no read leaves out),
+   and those of every instance it makes (l.196): an
    instance's relations name what made it, so a value read leaving a node out
    leaves out its instances' relations too (l.261). A use of a function makes its
    instance as the text is recorded, and is no node.

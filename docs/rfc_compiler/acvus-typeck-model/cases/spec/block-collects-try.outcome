@@ -18,8 +18,10 @@ outcome 1
   check `{..}() <= B`: Ok(Identity)
   check `A <= S`: Ok(Identity)
   check `Ok(..) <= λ result`: Ok(Identity)
+  check `get() <= q.Common(0)`: Ok(Identity)
   check `get() ~> q.Param(0)`: Ok(Identity)
   check `get.Result <= get()`: Ok(Identity)
+  check `q.Common(1) <= A`: Ok(Identity)
   check `q.Exit <= λ result`: Ok(Identity)
-  check `q.Var(Type(0)) <= A`: Ok(Identity)
+  check `q.Var(Type(0)) <= q.Common(1)`: Ok(Identity)
   I* of a final state: []

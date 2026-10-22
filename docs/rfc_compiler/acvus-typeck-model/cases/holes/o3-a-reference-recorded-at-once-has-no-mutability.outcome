@@ -9,6 +9,8 @@ outcome 1
   decision `&mut r`: lend & through &
   decision first: first#0
   check `first(x) <= R`: Ok(Identity)
-  check `first.Result <= first(x)`: Ok(Identity)
+  check `first.Chosen(1) <= first.Common(1)`: Ok(Identity)
+  check `first.Common(1) <= first(x)`: Ok(Identity)
+  check `x <= first.Common(0)`: Ok(Identity)
   check `x ~> first.Param(0)`: Ok(Identity)
   I* of a final state: []

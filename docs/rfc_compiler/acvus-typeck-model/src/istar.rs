@@ -10,10 +10,9 @@ use std::rc::Rc;
 use crate::class::ClassId;
 use crate::explore::Final;
 use crate::instance::{Instance, Made};
-use crate::node::{Decision, NodeKind, NodeState, Read};
+use crate::node::{Common, Decision, NodeKind, NodeState, Read};
 use crate::program::{ENTRY, Program, Projection};
 use crate::relation::{Recorder, Relation, copy_name};
-use crate::sig::Signature;
 use crate::solve::State;
 use crate::ty::Name;
 
@@ -101,12 +100,22 @@ fn add_decided(here: &mut State, made: &Made, from: &State) {
             .iter()
             .map(|&class| copy.class(here, class))
             .collect();
+        let common = node.common.clone().map(|common| match common {
+            Common::Use { part, classes } => Common::Use {
+                part,
+                classes: classes
+                    .into_iter()
+                    .map(|class| copy.class(here, class))
+                    .collect(),
+            },
+            Common::Lend => Common::Lend,
+        });
         here.nodes.insert(
             copy_name(&made.at, name),
             NodeState {
                 kind,
                 decision: Some(decision.clone()),
-                shared: node.shared.clone(),
+                common,
                 references,
             },
         );
@@ -270,18 +279,15 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
             },
             decision,
         ) => {
-            let sigs: Vec<Signature> = match decision {
-                Some(Decision::Use(id)) => vec![view.decls.decl(id).sig.clone()],
+            let candidates: Vec<usize> = match decision {
+                Some(Decision::Use(id)) => vec![view.candidate_index(callee, args.len(), id)],
                 Some(Decision::Never) => return BTreeSet::from([view.root(*result)]),
                 Some(other) => unreachable!("a use is decided as a candidate or never: {other:?}"),
-                None => view
-                    .candidates(callee, args.len())
-                    .into_iter()
-                    .map(|decl| decl.sig.clone())
-                    .collect(),
+                None => (0..view.candidates(callee, args.len()).len()).collect(),
             };
-            sigs.iter()
-                .flat_map(|sig| view.would_record_by(args, *result, sig).into_keys())
+            candidates
+                .into_iter()
+                .flat_map(|candidate| view.would_record_by(name, candidate).into_keys())
                 .collect()
         }
         (_, Some(_)) => view
@@ -290,19 +296,24 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
             .filter(|recorded| recorded.recorder.nodes().contains(name))
             .flat_map(|recorded| into(&recorded.relation))
             .collect(),
-        (kind, None) => view.positions(kind),
+        (_, None) => view.positions(node),
     };
     let mut roots: BTreeSet<ClassId> = classes.into_iter().map(|class| view.root(class)).collect();
     if read == Read::Reference {
-        let cannot_decide: BTreeSet<ClassId> = match &node.kind {
-            NodeKind::Use { .. } => node.references.iter().copied().collect(),
-            NodeKind::Lend { place, .. } => [*place].into(),
-            NodeKind::Bind { position, .. } => [*position].into(),
+        let mut cannot_decide: BTreeSet<ClassId> = node.references.iter().copied().collect();
+        match &node.kind {
+            NodeKind::Use { .. } => {}
+            NodeKind::Lend { place, .. } => {
+                cannot_decide.insert(*place);
+            }
+            NodeKind::Bind { position, .. } => {
+                cannot_decide.insert(*position);
+            }
             NodeKind::Project { projection, .. } if *projection != Projection::Deref => {
                 return BTreeSet::new();
             }
-            NodeKind::Project { .. } | NodeKind::CallValue { .. } => BTreeSet::new(),
-        };
+            NodeKind::Project { .. } | NodeKind::CallValue { .. } => {}
+        }
         for class in cannot_decide {
             roots.remove(&view.root(class));
         }
@@ -312,8 +323,8 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
 
 /// The classes a relation records into: the upper side of a lower bound or a
 /// part lower bound, the type passed into at a boundary, both sides of an
-/// equation, and the class a kind, a fact, a LitVar, a record of l.246 or a
-/// lambda is given to.
+/// equation, and the class a kind, a fact, a LitVar, a common part's record
+/// of whether it is a reference (l.246) or a lambda is given to.
 fn into(relation: &Relation) -> Vec<ClassId> {
     match relation {
         Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => {

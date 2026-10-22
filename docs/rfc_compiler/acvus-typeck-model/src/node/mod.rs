@@ -2,13 +2,13 @@
 //! each reads, and what each records once decided (l.292–334). Here, what each
 //! is, and how it is decided and records once decided (l.261, l.263); the
 //! positions and what each reads are `position`, places `place`, overload
-//! resolution `overload`, and what an undecided use's candidates share
-//! `shared`.
+//! resolution `overload`, and the common part of all an undecided node may
+//! become `common`.
 
+pub(crate) mod common;
 mod overload;
 mod place;
 mod position;
-mod shared;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -136,13 +136,25 @@ pub enum LendTarget {
 pub struct NodeState {
     pub kind: NodeKind,
     pub decision: Option<Decision>,
-    /// The positions of a use's signature that all its candidates share, as
-    /// argument indexes with the result last, recorded before the use is
-    /// decided (l.324).
-    pub shared: BTreeSet<usize>,
-    /// The classes of which a use recorded whether they are references before
-    /// it is decided (l.246).
+    /// The common part the node recorded before it was decided (l.246).
+    pub common: Option<Common>,
+    /// The classes of which the common part recorded whether they are
+    /// references (l.246).
     pub references: BTreeSet<ClassId>,
+}
+
+/// What a node recorded before it was decided: the common part of all it may
+/// become (l.246).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Common {
+    /// A use's: the common part of its candidates' signatures, and the class
+    /// made for each of its variables.
+    Use {
+        part: Rc<common::CommonPart>,
+        classes: Vec<ClassId>,
+    },
+    /// A lend's: its result is a reference.
+    Lend,
 }
 
 /// Which class a node made anew is (l.320).
@@ -160,6 +172,15 @@ pub enum NodeAt {
     Target,
     /// The value of `e?`'s exit (l.337).
     Exit,
+    /// A variable of a use's common part (l.246).
+    Common(usize),
+    /// The type of the parameter at this place in a use's common part.
+    CommonParam(usize),
+    /// The result type in a use's common part.
+    CommonResult,
+    /// The type the candidate a use is decided as writes at a variable of its
+    /// common part.
+    Chosen(usize),
 }
 
 /// A node decided (l.261), with the relations recorded once it is: its own,
@@ -404,7 +425,7 @@ impl State {
                 result,
                 ..
             } => {
-                let narrowing = self.narrow(callee, args, *result, &excluded);
+                let narrowing = self.narrow(name, callee, args, *result, &excluded);
                 let decision = narrowing.decision.clone();
                 (Reading::Use(narrowing), decision)
             }
@@ -577,34 +598,64 @@ impl State {
         match (&node.kind, &decision) {
             (
                 NodeKind::Use {
-                    args, result, exit, ..
+                    callee,
+                    args,
+                    result,
+                    exit,
                 },
                 Decision::Use(id),
             ) => {
+                // What the common part holds is not recorded again (l.246):
+                // an argument the common part's parameter holds whole, and
+                // the result but at the common part's variables, into each
+                // of which the candidate's type there enters. An argument it
+                // does not hold whole passes whole into the candidate's
+                // parameter, a coercion being of a whole value (l.109).
                 let sig = self.decls.decl(id).sig.clone();
+                let common = match &node.common {
+                    Some(Common::Use { part, classes }) => Some((part.clone(), classes.clone())),
+                    _ => None,
+                };
                 let mut vars = BTreeMap::new();
                 let var_name = |var| at(NodeAt::Var(var));
                 for (i, (arg, param)) in args.iter().zip(sig.params()).enumerate() {
-                    if !node.shared.contains(&i) {
-                        recorded.append(self.record_argument(
-                            *arg,
-                            param,
-                            &mut vars,
-                            at(NodeAt::Param(i)),
-                            &var_name,
-                            &recorder,
-                        ));
+                    if common
+                        .as_ref()
+                        .is_some_and(|(part, _)| part.params[i].is_closed())
+                    {
+                        continue;
                     }
+                    recorded.append(self.record_argument(
+                        *arg,
+                        param,
+                        &mut vars,
+                        at(NodeAt::Param(i)),
+                        &var_name,
+                        &recorder,
+                    ));
                 }
-                if !node.shared.contains(&args.len()) {
-                    recorded.append(self.record_result(
+                match &common {
+                    None => recorded.append(self.record_result(
                         *result,
                         sig.result(),
                         &mut vars,
                         at(NodeAt::Result),
                         &var_name,
                         &recorder,
-                    ));
+                    )),
+                    Some((part, classes)) => {
+                        let candidate = self.candidate_index(callee, args.len(), id);
+                        for k in common::CommonPart::vars_in(&part.result) {
+                            recorded.append(self.record_result(
+                                classes[k],
+                                &part.vars[k][candidate],
+                                &mut vars,
+                                at(NodeAt::Chosen(k)),
+                                &var_name,
+                                &recorder,
+                            ));
+                        }
+                    }
                 }
                 if sig.existential_identity()
                     && let Some(&identity) = vars.get(&crate::sig::SigVar::Identity)

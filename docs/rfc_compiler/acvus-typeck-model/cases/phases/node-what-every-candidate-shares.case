@@ -1,7 +1,7 @@
-//@ spec: l.246, l.324
-// Both candidates write bool at the result and no variable there, so the use
-// records the result before it is decided, and that its result is no
-// reference.
+//@ spec: l.246
+// The candidates' common part is g(?0) -> bool, ?0 standing for u8 or u16,
+// which no candidate writes a reference at: before g is decided, x meets ?0,
+// ?0 is no reference, and bool enters the result.
 //@ order:
 extern fn g(u8) -> bool;
 extern fn g(u16) -> bool;
@@ -10,7 +10,8 @@ let x: u8;
 let R;
 R = g(x) @ g;
 
-assert node records `g.Result <= R`;
-assert node records `R: no reference`;
+assert node records `g.CommonResult <= R`;
+assert node records `g.Common(0): no reference`;
+assert node records `x <= g.Common(0)`;
 must pass;
 assert R: bool;

@@ -1,0 +1,34 @@
+//@ spec: l.246, l.86, l.278
+// a + b                    // add(&B, &B) -> B, add(&u8, &u8) -> u8; a = make_a(), b = make_b()
+// // a cast A -> B
+// The two operands are one variable in every candidate, so &a and &b meet in
+// it and their targets are equated (l.246, l.278): a and b are one class, whose
+// value joins A and B to B by the cast (l.86); make_a()'s A is cast to B where
+// it enters a. Decided as add(&B, &B), accepted with a: B. Where a's type is
+// written A, the two operands have no join and the program is refused.
+extern type A;
+extern type B;
+#[cast] extern fn up(A) -> B;
+#[cast] extern fn up_ref(&A) -> &B;
+extern fn make_a() -> A;
+extern fn make_b() -> B;
+extern fn core::add(&B, &B) -> B;
+extern fn core::add(&u8, &u8) -> u8;
+let X;
+let Y;
+let `make_a()`;
+let `make_b()`;
+let `&a`;
+let `&b`;
+let R;
+`make_a()` = make_a() @ make_a;
+X = `make_a()`;
+`make_b()` = make_b() @ make_b;
+Y = `make_b()`;
+`&a` = &X @ `&a`;
+`&b` = &Y @ `&b`;
+R = core::add(`&a`, `&b`) @ `a + b`;
+
+must pass;
+assert X: B;
+assert Y: B;

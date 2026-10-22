@@ -15,10 +15,13 @@ outcome 1
   decision parse: parse#0
   decision `parse 2`: undecided
   check `&mut parse(s) ~> fill_all.Param(0)`: Ok(Identity)
-  check `&str ~> parse 2.Param(0)`: Ok(Identity)
-  check `&str ~> parse.Param(0)`: Ok(Identity)
+  check `&str ~> parse 2.CommonParam(0)`: Ok(Identity)
+  check `&str ~> parse.CommonParam(0)`: Ok(Identity)
   check `fill_all.Result <= fill_all(..)`: Ok(Identity)
-  check `parse.Result <= parse(s)`: Ok(Identity)
+  check `parse.Chosen(0) <= parse.Common(0)`: Ok(Identity)
+  check `parse.CommonResult <= parse(s)`: Ok(Identity)
   refusal no_value `&mut parse(s) 2`
   refusal no_value `parse(s) 2`
+  refusal no_value `parse(s) 2.Arg(0)`
+  refusal no_value `parse 2.CommonResult`
   I* of a final state: []

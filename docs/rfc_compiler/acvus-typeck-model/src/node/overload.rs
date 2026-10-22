@@ -135,16 +135,28 @@ impl State {
         recorded
     }
 
-    /// Where the use's result class, in the value read, has no source and
-    /// passes into places, the values of those places, each with whether the
-    /// result meets it there: a lower bound into an unknown, which its value
-    /// joins (l.219, l.274), or a boundary into a type written, which it
-    /// coerces to. None where the result class has a source.
-    fn meeting_places(read: &State, result: ClassId) -> Option<Vec<(bool, ReadValue)>> {
-        if !read.lower_bounds(result).is_empty() {
+    /// Where the use's result class, in the value read, has no source but
+    /// the use's own common part (l.246) and passes into places, the values
+    /// of those places, each with whether the result meets it there: a lower
+    /// bound into an unknown, which its value joins (l.219, l.274), or a
+    /// boundary into a type written, which it coerces to. None where the
+    /// result class has another source.
+    fn meeting_places(
+        read: &State,
+        name: &Name,
+        result: ClassId,
+    ) -> Option<Vec<(bool, ReadValue)>> {
+        let root = read.root(result);
+        let own = Recorder::Common(name.clone());
+        let sourced = read.log.iter().any(|recorded| match recorded.relation {
+            Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper } => {
+                read.root(upper) == root && read.root(lower) != root && recorded.recorder != own
+            }
+            _ => false,
+        });
+        if sourced {
             return None;
         }
-        let root = read.root(result);
         let places: Vec<(bool, ReadValue)> = read
             .log
             .iter()
@@ -166,7 +178,7 @@ impl State {
     }
 
     /// The rank at which a candidate's result type passes into the places
-    /// the use's result passes into (l.324): into a meeting by the join's
+    /// the use's result passes into (l.326): into a meeting by the join's
     /// `≤`, the type reaching the join of itself and that place's other
     /// sources, as a meeting takes every value entering it (l.219); into a
     /// boundary by a coercion, as before. A position that decides nothing
@@ -190,6 +202,7 @@ impl State {
     /// where they differ, then by the result (l.326–333).
     pub(super) fn narrow(
         &self,
+        name: &Name,
         callee: &Name,
         args: &[ClassId],
         result: ClassId,
@@ -200,7 +213,7 @@ impl State {
         let sigs: Vec<&Signature> = candidates.iter().map(|decl| &decl.sig).collect();
         let differing = Self::differing(&sigs, args.len());
         let read = self.read_state(excluded);
-        let meeting = Self::meeting_places(&read, result);
+        let meeting = Self::meeting_places(&read, name, result);
         let read_at: Vec<(usize, ClassId, ReadValue)> = differing
             .iter()
             .map(|&i| {

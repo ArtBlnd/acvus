@@ -281,9 +281,9 @@ pub fn report(state: &State, report: &Report) -> Rendered {
                 recorded,
             )
         }
-        Report::Shared(recorded) => (
+        Report::Common(recorded) => (
             Phase::Node,
-            unless_empty(recorded, "shared".to_string()),
+            unless_empty(recorded, "common".to_string()),
             Some(recorded),
         ),
         Report::Decided(decided) => (
@@ -556,6 +556,7 @@ fn recorder(state: &State, recorder: &Recorder) -> String {
         Recorder::Origin => "origin".to_string(),
         Recorder::Text(item) => format!("text {item}"),
         Recorder::Node(node) => format!("node {}", name(node.as_str())),
+        Recorder::Common(node) => format!("common {}", name(node.as_str())),
         Recorder::Split(class) => format!("split {}", class_of(state, *class)),
         Recorder::Cycle => "cycle".to_string(),
         Recorder::FunctionType { from, to } => {
@@ -779,7 +780,7 @@ pub fn traced(state: &State, report: &Report) -> Lines {
     let recorded = match report {
         Report::Recorded(recorded)
         | Report::Merged(recorded)
-        | Report::Shared(recorded)
+        | Report::Common(recorded)
         | Report::LitLowers { recorded, .. }
         | Report::LitBoundaries { recorded, .. }
         | Report::LitJoined { recorded, .. }

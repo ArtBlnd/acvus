@@ -5,15 +5,17 @@ outcome 1
   value R: bool
   value x: u8
   decision g: g#0
-  check `g.Result <= R`: Ok(Identity)
+  check `g.CommonResult <= R`: Ok(Identity)
+  check `x <= g.Common(0)`: Ok(Identity)
   check `x ~> g.Param(0)`: Ok(Identity)
   I* of a final state: []
 start run
   record #0 x: u8
-  shared
-    record #1 g.Result: bool
-    record #2 g.Result <= R
-    record #3 R: no reference
+  common
+    record #1 g.Common(0): no reference
+    record #2 x <= g.Common(0)
+    record #3 g.CommonResult: bool
+    record #4 g.CommonResult <= R
   split #0 x: u8: no parts
-  split #1 g.Result: bool: no parts
-  split #3 R: no reference: no parts
+  split #1 g.Common(0): no reference: no parts
+  split #3 g.CommonResult: bool: no parts

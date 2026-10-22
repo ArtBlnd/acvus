@@ -15,12 +15,15 @@ outcome 1
   decision `&x`: lend & place
   decision call: calls {λ}
   decision `x + 1`: core::add#2
-  partition {?zero, X}
+  partition {?one, ?zero, X}
+  check `&1 <= x + 1.Common(0)`: Ok(Identity)
   check `&1 ~> x + 1.Param(1)`: Ok(Identity)
+  check `&x <= x + 1.Common(0)`: Ok(Identity)
   check `&x ~> x + 1.Param(0)`: Ok(Identity)
   check `?zero <= X`: Ok(Identity)
   check `R <= λ result`: Ok(Identity)
-  check `x + 1.Result <= R`: Ok(Identity)
+  check `x + 1.Chosen(1) <= x + 1.Common(1)`: Ok(Identity)
+  check `x + 1.Common(1) <= R`: Ok(Identity)
   check `{..}() <= X`: Ok(Identity)
   check `λ result <= {..}()`: Ok(Identity)
   I* of a final state: []

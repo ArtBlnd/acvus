@@ -74,7 +74,7 @@ once nothing else can be solved, and then only as the one type that fits.
   has not yet been through row 3, where what it reads there is not decided by
   then: a use whose read leaves several candidates because of that class's
   position, and a lend, a projection or a binding where it reads whether the class
-  is a reference (l.261), unless a use has recorded that at once (l.246).
+  is a reference (l.261), unless a common part has recorded that at once (l.246).
 
 ## Rows
 

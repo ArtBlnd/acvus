@@ -271,9 +271,9 @@ l.263 is for, that each node of a cycle reads without the others (Example 12, st
 
 ## O3. A reference recorded at once has no mutability
 
-Not an order. Where every candidate records a reference into a class, a use records
-at once that the class is a reference (l.246), and a lend that reads it no longer
-depends on the use (l.242). The record names no mutability, and a lend's
+Not an order. Where every candidate records a reference into a class, a use's
+common part records at once that the class is a reference (l.246), and a lend that
+reads it no longer depends on the use (l.242). The record names no mutability, and a lend's
 mutability is the lesser of its own and its place's (l.296), so before the use is
 decided a `&mut` lend's read decides nothing, and the lend is not decided until it
 does (l.261). Encoding found it as an order while the model decided such a lend

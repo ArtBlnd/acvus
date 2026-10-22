@@ -1,12 +1,12 @@
 # 08 Uses, lends, projections and bindings
 
 Rests on the spec's l.292–334 (place, lends, patterns, structs, overload
-resolution), with l.142–154 (projections), l.261 (what a node reads) and l.246 (a
-use's record of whether a class is a reference), l.263 (what a broken dependency
-defers) and l.324 (what all candidates share). The code is `src/node/`: what each
-node is, its decision and what it records once decided in `mod.rs`, its positions
-and what it reads in `position.rs`, places in `place.rs`, overload resolution in
-`overload.rs`, and what an undecided use's candidates share in `shared.rs`.
+resolution), with l.142–154 (projections), l.261 (what a node reads), l.246 (the
+common part of all an undecided node may become) and l.263 (what a broken
+dependency defers). The code is `src/node/`: what each node is, its decision and
+what it records once decided in `mod.rs`, its positions and what it reads in
+`position.rs`, places in `place.rs`, overload resolution in `overload.rs`, and the
+common part in `common.rs`.
 
 ## Meaning
 
@@ -25,9 +25,8 @@ reads its position, or lends it where its path passes a reference.
 
 1. **One candidate reads nothing.** A use's candidates are the declarations its name
    reaches with as many parameters as it has arguments (l.320). It reads the
-   positions where they differ (l.261), so a use with one candidate reads nothing,
-   and all of it is shared (l.324): it is decided as that candidate as it is
-   recorded. A use with none is never decided (l.333; reading 19).
+   positions where they differ (l.261), so a use with one candidate reads nothing:
+   it is decided as that candidate as it is recorded, with no common part. A use with none is never decided (l.333; reading 19).
 2. **A candidate's variables are made at the decision.** They are unknowns of the
    use's binding group (l.320). Only the decided candidate records, so only its
    variables are made.
@@ -82,8 +81,10 @@ reads its position, or lends it where its path passes a reference.
    argument, which its candidates record nothing into. The second keeps two lends
    of one place from depending on each other (Example 12's two `&y`; `holes.md`,
    O5).
-13. **What candidates would record** (l.246). A candidate records its result type
-   into its result. An argument passes into its parameter's type, a boundary that
+13. **What candidates would record** (l.246). Once the common part is recorded, a
+   candidate records its result type at the result's unknowns, into each of them,
+   and an argument the common part does not hold whole passes into its parameter's
+   type; before, its result type into the use's result. An argument passes into its parameter's type, a boundary that
    records into that type alone, and inside the argument's kind as it is at the
    moment each part passes into the parameter's part by the split's rule (l.278):
    where the parameter writes a variable, an unknown, an equation records into the
@@ -92,15 +93,38 @@ reads its position, or lends it where its path passes a reference.
    into that type, and the part's parts pass on into its parts. Two constructors
    are linked as a split links them, through a reborrow's targets and the first
    cast's parameter. A variable is an unknown, neither a reference nor not one, so
-   a candidate records whether a class is a reference at its result alone.
-14. **What all candidates share** (l.324). Each argument and the result where every
-   candidate's signature writes one type with no variable, recorded at once as the
-   decided candidate would record it. Line 246 is the reference-ness part of it.
+   a candidate records whether a class is a reference at the result's unknowns
+   alone (`State::would_record_by`).
+14. **The common part** (l.246, since the text's change of 2026-10-22). Recorded
+   once for each undecided node (`State::record_at_once`, `Recorder::Common`):
+   - a use of several candidates records the anti-unification of their
+     signatures (`CommonPart::of`): one constructor and members kept and its parts
+     generalized in turn, an unknown made anew (`NodeAt::Common(k)`) where they
+     differ, one for each tuple of the types they write there, and a reference
+     not split at the top of a parameter or of the result, a cast going between
+     two references of one constructor (l.66, l.78). Each unknown is recorded a
+     reference, or not, where every candidate agrees there. Arguments pass into
+     the common parameters and the common result into the use's result, as a
+     decided candidate's are recorded. Decided, the use records an argument the
+     common part does not hold whole passing whole into the candidate's parameter,
+     and the candidate's type at each of the result's unknowns entering it
+     (`NodeAt::Chosen(k)`); its positions are those, so its result no longer
+     waits for it but its unknowns do (`State::left_to_record`). Two arguments of
+     one unknown meet in it: the operands of an overload set whose candidates
+     type them alike are one type, and a cast between them is the user's to call.
+   - a lend records that its result is a reference; its mutability and target it
+     records when decided, so it still records into what a read of whether its
+     result is a reference reads.
+   - a projection or a binding has no common part.
+   A value read leaves out only what a node records once decided (l.261): every
+   common part is in every read, the node's own included. The model's earlier
+   records, of the positions every candidate writes alike (l.324) and of whether a
+   class is a reference (l.246), are removed into it.
 15. **An argument of `!`** (l.333). An argument position the use reads, read as
    `!`, decides it with the result `!`: the result takes `!` as a lower bound, and
    nothing else is recorded. A position the use does not read is not seen.
 16. **A reference of undecided mutability.** A class read as a reference only by a
-   use's record (l.246) has a mutability the value read does not decide; a
+   common part's record (l.246) has a mutability the value read does not decide; a
    projection applies to its target all the same, and a lend or a binding whose
    lesser mutability (l.296) is then undecided, a `&mut` one, decides nothing
    until the mutability is read (reading 19; `holes.md`, O3).
@@ -144,8 +168,7 @@ reads its position, or lends it where its path passes a reference.
 
 ## Left open for change
 
-- `State::record_at_once`: what a use records before it is decided, the positions
-  its candidates write alike (l.324) and whether a class is a reference where they
-  agree (l.246).
+- `State::record_at_once` and `CommonPart::of`: the common part of all an
+  undecided node may become (l.246).
 - `State::defer`: when a decided node's relations are recorded, and which reads
   leave them out (l.263; `holes.md`, O2).

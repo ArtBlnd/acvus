@@ -6,6 +6,8 @@ outcome 1
   value `never()`: !
   decision f: never
   decision never: never#0
+  check `f.Common(0) <= R`: Ok(Identity)
   check `f.Result <= R`: Ok(Identity)
+  check `never() <= f.Common(0)`: Ok(Identity)
   check `never.Result <= never()`: Ok(Identity)
   I* of a final state: []

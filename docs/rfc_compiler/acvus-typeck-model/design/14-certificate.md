@@ -72,7 +72,7 @@ What each item and decision gives, and what holding means on closed values:
 | `Calls(λ̄)` | the callee's Values name exactly `λ̄`: every lambda that reaches it is called, and none it does not reach (l.181, l.196); each argument meets its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result (l.196) | as above, under each instance |
 | a function value passing into a function type (l.197) | each lambda its Values names has an instance made where that boundary was split: each parameter of the type passes into the lambda's parameter, and the lambda's result into the type's result, each a meeting or a boundary (l.219) | as above, under that instance |
 | `e?`'s exit (l.337) | its value is `Option⟨K⟩` under `?(Option⟨T⟩)` and `Result⟨O, X⟩` under `?(Result⟨T, E⟩)`, `E`'s value wrapped into `X`: as it is where it is an `Error` or `!`, into the payload of an `Error` whose one member is its name, or into that of an `Error⟨..⟩`; the value passes into the exit's class, a meeting where that is an unknown | as above |
-| a use's record of l.246 | at its result, the one position a candidate records a type it writes into (note 08, reading 13), that it is a reference where every candidate's result type is one, and no reference where none is; under `Use(k)`, as `k`'s result type | its value is, or is not, a reference, or is `!` |
+| a use's common part (l.246) | regenerated from the candidates (`CommonPart::of`): each unknown's value a reference, or not, where the common part records it so; each argument passing into the common parameter, a function value into a function type left to `Use(k)`'s row; the common result entering the use's result; under `Use(k)`, `k`'s type at each of the result's unknowns entering it | each holds, a reference's record holding of `!` too |
 
 Holding compares Values as part of the value. Two values are equal where their
 types are and every function value in them names the same lambdas. Where `≤` or
@@ -82,9 +82,9 @@ it, a reborrow keeping the target; at each part both have, by that part's own
 coercion, where the structural stage changes the members. So a lambda a value carries is among the Values of every
 class the value reaches, and a call of that class calls it.
 
-The l.246 row is checked on its own: it is the record a use made before it was
-decided, which `Use(k)`'s rows do not name. That `!` holds either is the solver's
-reading (`Classes::normalize`), shared here.
+The common part's row is checked on its own: it is what a use records before it
+is decided, which `Use(k)`'s rows do not name. That `!` is either a reference or
+not is the solver's reading (`Classes::normalize`), shared here.
 
 Whether a `Pass` meets is recomputed from the program: the class passed into is an
 unknown of its own group by its text (l.211) and is equated by no regenerated

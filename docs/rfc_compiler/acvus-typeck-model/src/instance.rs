@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, KindSource};
-use crate::node::{NodeKind, NodeState};
+use crate::node::{Common, NodeKind, NodeState};
 use crate::record::{Instantiated, Recording};
 use crate::relation::{Recorder, Relation, copy_name};
 use crate::solve::State;
@@ -177,6 +177,9 @@ impl<'a> Instance<'a> {
             Recorder::Node(node) if self.from.nodes[node].decision.is_none() => {
                 Recorder::Node(self.node(node))
             }
+            Recorder::Common(node) if self.from.nodes[node].decision.is_none() => {
+                Recorder::Common(self.node(node))
+            }
             _ => Recorder::Instance {
                 at: (*self.at).clone(),
                 by: Box::new(self.by.clone()),
@@ -287,14 +290,23 @@ impl<'a> Instance<'a> {
             let kind = self.kind(here, &node.kind);
             let copy = self.node(name);
             here.add_node(&copy, kind);
-            let shared = node.shared.clone();
+            let common = node.common.clone().map(|common| match common {
+                Common::Use { part, classes } => Common::Use {
+                    part,
+                    classes: classes
+                        .into_iter()
+                        .map(|class| self.class(here, class))
+                        .collect(),
+                },
+                Common::Lend => Common::Lend,
+            });
             let references: BTreeSet<ClassId> = node
                 .references
                 .iter()
                 .map(|&class| self.class(here, class))
                 .collect();
             let state = here.nodes.get_mut(&copy).expect("the node was added");
-            state.shared = shared;
+            state.common = common;
             state.references = references;
         }
         here.instances.push(Made {

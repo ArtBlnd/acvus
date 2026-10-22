@@ -18,11 +18,14 @@ outcome 1
   decision make_a: make_a#0
   decision make_b: make_b#0
   check `PUT <= F`: Ok(Identity)
+  check `PUT <= choose.Common(1)`: Ok(Identity)
   check `PUT <= choose.Var(Type(0))`: Ok(Identity)
+  check `X <= choose.Common(0)`: Ok(Identity)
   check `X <= f(x)#λ/W`: Ok(Identity)
   check `X ~> choose.Param(0)`: Ok(Identity)
   check `choose(..) <= F`: Ok(Identity)
-  check `choose.Var(Type(0)) <= choose(..)`: Ok(Identity)
+  check `choose.Common(1) <= choose(..)`: Ok(Identity)
+  check `choose.Var(Type(0)) <= choose.Common(1)`: Ok(Identity)
   check `f(x)#λ/λ result <= f(x)`: Ok(Identity)
   check `make_a() <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
   check `make_a.Result <= make_a()`: Ok(Identity)

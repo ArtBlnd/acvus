@@ -5,21 +5,25 @@ outcome 1
   value R: u8
   value x: u8
   decision f: f#0
-  check `f.Result <= R`: Ok(Identity)
+  check `f.Chosen(0) <= f.Common(0)`: Ok(Identity)
+  check `f.Common(0) <= R`: Ok(Identity)
+  check `x <= f.Common(0)`: Ok(Identity)
   check `x ~> f.Param(0)`: Ok(Identity)
   I* of a final state: []
 start run
   record #0 x: u8
-  shared
-    record #1 R: no reference
+  common
+    record #1 f.Common(0): no reference
+    record #2 x <= f.Common(0)
+    record #3 f.Common(0) <= R
   split #0 x: u8: no parts
-  split #1 R: no reference: no parts
+  split #1 f.Common(0): no reference: no parts
 step 1 run: decide f
   decide f: f#0
-    record #2 f.Param(0): u8
-    record #3 x ~> f.Param(0)
-    record #4 f.Result: u8
-    record #5 f.Result <= R
-  split #2 f.Param(0): u8: no parts
-  split #3 x ~> f.Param(0): parts
-  split #4 f.Result: u8: no parts
+    record #4 f.Param(0): u8
+    record #5 x ~> f.Param(0)
+    record #6 f.Chosen(0): u8
+    record #7 f.Chosen(0) <= f.Common(0)
+  split #4 f.Param(0): u8: no parts
+  split #5 x ~> f.Param(0): parts
+  split #6 f.Chosen(0): u8: no parts

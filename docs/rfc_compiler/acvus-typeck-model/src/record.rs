@@ -249,7 +249,7 @@ impl State {
         let node = NodeState {
             kind,
             decision: None,
-            shared: BTreeSet::new(),
+            common: None,
             references: BTreeSet::new(),
         };
         if self.nodes.insert(name.clone(), node).is_some() {

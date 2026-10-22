@@ -15,13 +15,14 @@ outcome 1
   decision make_a: make_a#0
   decision make_b: make_b#0
   decision probe: probe#1
+  check `X <= probe.Common(0)`: Ok(Identity)
   check `X ~> probe.Param(0)`: Ok(Identity)
   check `call#λ/λ result <= {..}()`: Ok(Identity)
   check `make_a() <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
   check `make_a.Result <= make_a()`: Ok(Identity)
   check `make_b() <= X`: Ok(Identity)
   check `make_b.Result <= make_b()`: Ok(Identity)
-  check `probe.Result <= probe(x)`: Ok(Identity)
+  check `probe.CommonResult <= probe(x)`: Ok(Identity)
   check `{..}() <= Y`: Ok(Identity)
   check `0u8 <= λ result`: Ok(Identity)
   I* of a final state: []

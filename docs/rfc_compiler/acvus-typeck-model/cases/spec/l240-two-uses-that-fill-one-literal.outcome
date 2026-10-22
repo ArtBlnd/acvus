@@ -9,7 +9,7 @@ outcome 1
   decision m: m#0
   decision n: n#1
   partition {?a, X}
-  check `m.Result <= m(x)`: Ok(Identity)
-  check `n.Result <= n(x)`: Ok(Identity)
+  check `m.CommonResult <= m(x)`: Ok(Identity)
+  check `n.CommonResult <= n(x)`: Ok(Identity)
   refusal conflict at "X = n.Param(0)": Scalar(Int(U16)) vs Scalar(Int(I32))
   I* of a final state: [completeness m, completeness n]

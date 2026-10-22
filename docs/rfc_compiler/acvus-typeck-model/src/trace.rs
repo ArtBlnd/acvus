@@ -39,9 +39,9 @@ pub enum Report {
     LitJoined { bound: usize, recorded: Recording },
     /// A split: what became of the relation at `at` (l.278).
     Split { at: usize, split: Split },
-    /// The nodes: what the candidates of the uses not yet decided share
-    /// (l.246, l.324).
-    Shared(Recording),
+    /// The nodes: the common part of all the nodes not yet decided may
+    /// become (l.246).
+    Common(Recording),
     /// The nodes: a node decided (l.261).
     Decided(Decided),
     /// Fallback (l.288).

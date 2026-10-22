@@ -241,7 +241,7 @@ does not rename what an earlier one shows.
 | `refuse: <refusal>` | under `start`, `step` and `fallback`: a refusal the step made, as an outcome writes it |
 | `record #k <relation>` | the relation recorded at `#k` in the log |
 | `link X: E` | the view of `X`'s extern-defined container links its element `E` |
-| `shared` | what the candidates of the uses not yet decided share |
+| `common` | the common part of all the nodes not yet decided may become (l.246) |
 | `merge cycles` | the cycles of lower bounds alone merged |
 | `lit lowers X` | `X`'s LitVar lower bounds unified with it |
 | `lit join #k <relation>` | the LitVar lower bound at `#k` unified with the class it bounds |
@@ -295,7 +295,7 @@ A golden writes a written order's trace without the lines of `TRACE=1` alone.
 `assert <phase> records` finds a `record` under a line of its phase: directly
 under `start` or `step` (`record`), under `link` (`unify`), `merge`, `lit lowers`,
 `lit join`, `join` or `fill` (`join`), `lit boundaries` or `split` (`split`),
-`shared` or `decide` (`node`), `default` (`fallback`).
+`common` or `decide` (`node`), `default` (`fallback`).
 
 ### `TRACE=1`
 
@@ -358,6 +358,15 @@ steps; `golden()` and every expectation read what they read without it.
   1–3, accepted with `b: G`; the same without the cast, refused at `b`; and an
   identity a body makes, made anew at each of two instances. Each was derived
   before it was run.
+- 7 cases under `cases/spec`, `l246-*`, test the common part (l.246): an overload
+  chosen by its result through `?`, with the script's result typed, with no
+  tail, and refused where the tail's result is untyped and a fill has a place
+  with no value (l.282); a counter compared with a typed value (W1b of the
+  review of 2026-10-22); a reference cast at one argument of an overload set;
+  and two operands of one unknown meeting, accepted where their bindings join
+  and refused where one is written. Each was derived before it was run, two
+  derivations failing first and redone: the operands' bindings join by the
+  cast, and the untyped tail leaves a fill a place with no value.
 - 4 cases under `cases/spec`, `l240-*`, test l.238 (b) since 09aef04e, beside H7,
   now accepted: two uses that fill one literal, a literal into a use then
   another, a sum into a use that only reads it, and a literal through a generic

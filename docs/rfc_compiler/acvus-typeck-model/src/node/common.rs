@@ -1,18 +1,19 @@
-//! What all candidates of a use not yet decided share, recorded before it is
-//! decided (l.246, l.324; `design/08-node.md`, readings 13 and 14).
+//! What all a node not yet decided may become shares, recorded before it is
+//! decided (l.246; `design/08-node.md`, readings 13 and 14): a use's
+//! candidates' common part, and a lend's result being a reference.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName};
-use crate::decl::Node;
+use crate::decl::{DeclId, Node};
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
-use crate::sig::{SigTy, Signature};
+use crate::sig::{SigTy, SigVar, Signature};
 use crate::solve::State;
 use crate::ty::{Constructor, Mutability, Name, Term};
 
-use super::{NodeAt, NodeKind};
+use super::{Common, NodeAt, NodeKind};
 
 /// Whether the type a signature writes is a reference, none where it is a
 /// variable.
@@ -23,111 +24,236 @@ pub(super) fn is_reference(ty: &SigTy) -> Option<bool> {
     }
 }
 
+/// The common part of a use's candidates (l.246): the anti-unification of
+/// their signatures. Where they all write one constructor and members it is
+/// kept, and its parts are generalized in turn; elsewhere a variable
+/// `SigVar::Type(k)` stands, one for each tuple of the types the candidates
+/// write there. A reference is not split where a whole value passes, at the
+/// top of a parameter or of the result, since a cast goes between two
+/// references of one constructor (l.66, l.78).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CommonPart {
+    pub params: Vec<SigTy>,
+    pub result: SigTy,
+    /// For each variable, the type each candidate writes there, in the
+    /// candidates' order.
+    pub vars: Vec<Vec<SigTy>>,
+}
+
+impl CommonPart {
+    pub fn of(sigs: &[&Signature]) -> CommonPart {
+        let mut vars = Vec::new();
+        let arity = sigs.first().map_or(0, |sig| sig.params().len());
+        let params = (0..arity)
+            .map(|i| {
+                let tys: Vec<&SigTy> = sigs.iter().map(|sig| &sig.params()[i]).collect();
+                generalize(&tys, true, &mut vars)
+            })
+            .collect();
+        let results: Vec<&SigTy> = sigs.iter().map(|sig| sig.result()).collect();
+        let result = generalize(&results, true, &mut vars);
+        CommonPart {
+            params,
+            result,
+            vars,
+        }
+    }
+
+    /// The variables a type of the common part writes, each once, in the
+    /// order of its parts.
+    pub fn vars_in(ty: &SigTy) -> Vec<usize> {
+        let mut found = Vec::new();
+        collect_vars(ty, &mut found);
+        found
+    }
+
+    /// Whether every candidate writes a reference at the variable, or none
+    /// does; none where some write a variable or they differ (l.246).
+    pub fn is_reference(&self, k: usize) -> Option<bool> {
+        let references = self.vars[k]
+            .iter()
+            .map(is_reference)
+            .collect::<Option<Vec<bool>>>()?;
+        if references.iter().all(|&reference| reference) {
+            Some(true)
+        } else if references.iter().all(|&reference| !reference) {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
+fn collect_vars(ty: &SigTy, found: &mut Vec<usize>) {
+    match ty {
+        SigTy::Var(SigVar::Type(k)) => {
+            if !found.contains(k) {
+                found.push(*k);
+            }
+        }
+        SigTy::Var(SigVar::Identity) => {}
+        SigTy::Term(term) => {
+            for (_, part) in term.parts() {
+                collect_vars(part, found);
+            }
+        }
+    }
+}
+
+/// The generalization of the types the candidates write at one place, `whole`
+/// where a whole value passes there.
+fn generalize(tys: &[&SigTy], whole: bool, vars: &mut Vec<Vec<SigTy>>) -> SigTy {
+    let first = tys[0];
+    if first.is_closed() && tys.iter().all(|ty| *ty == first) {
+        return first.clone();
+    }
+    let terms: Option<Vec<&Term<SigTy>>> = tys
+        .iter()
+        .map(|ty| match ty {
+            SigTy::Term(term) => Some(&**term),
+            SigTy::Var(_) => None,
+        })
+        .collect();
+    if let Some(terms) = terms {
+        let head = terms[0];
+        let alike = terms.iter().all(|term| {
+            term.constructor() == head.constructor() && term.members() == head.members()
+        });
+        let split = !(whole && matches!(head, Term::Ref(..)));
+        if alike && split {
+            let term = head.clone().map(|key, _| {
+                let parts: Vec<&SigTy> = terms
+                    .iter()
+                    .map(|term| {
+                        term.part(&key).expect(
+                            "terms of one constructor and members have one part of each name",
+                        )
+                    })
+                    .collect();
+                generalize(&parts, false, vars)
+            });
+            return SigTy::term(term);
+        }
+    }
+    let tuple: Vec<SigTy> = tys.iter().map(|&ty| ty.clone()).collect();
+    let k = match vars.iter().position(|held| *held == tuple) {
+        Some(k) => k,
+        None => {
+            vars.push(tuple);
+            vars.len() - 1
+        }
+    };
+    SigTy::Var(SigVar::Type(k))
+}
+
 impl State {
-    /// Records, for each undecided use with several candidates, what all its
-    /// candidates share: each position their signatures write alike with no
-    /// variable (l.324), and whether each class they would record a lower
-    /// bound or an equation into is a reference, where they agree (l.246).
-    /// Returns the relations recorded.
+    /// Records, for each node not yet decided, the common part of all it may
+    /// become, once (l.246): for a use of several candidates, their common
+    /// part, its variables made anew as unknowns, each recorded as a
+    /// reference or not where every candidate agrees there, each argument
+    /// passing into the common part's parameter and its result entering the
+    /// use's; for a lend, that its result is a reference. Returns the
+    /// relations recorded.
     pub(crate) fn record_at_once(&mut self) -> Recording {
         let mut recorded = Recording::default();
-        let uses: Vec<Name> = self
+        let pending: Vec<Name> = self
             .nodes
             .iter()
-            .filter(|(_, node)| node.decision.is_none())
-            .filter(|(_, node)| matches!(node.kind, NodeKind::Use { .. }))
+            .filter(|(_, node)| node.decision.is_none() && node.common.is_none())
             .map(|(name, _)| name.clone())
             .collect();
-        for name in uses {
-            recorded.append(self.record_shared(&name));
-            recorded.append(self.record_references(&name));
+        for name in pending {
+            recorded.append(self.record_common(&name));
         }
         recorded
     }
 
-    pub(super) fn record_shared(&mut self, name: &Name) -> Recording {
+    fn record_common(&mut self, name: &Name) -> Recording {
         let mut recorded = Recording::default();
         let node = self.nodes[name].clone();
-        let NodeKind::Use {
-            callee,
-            args,
-            result,
-            ..
-        } = &node.kind
-        else {
-            return recorded;
-        };
-        let sigs: Vec<Signature> = self
-            .candidates(callee, args.len())
-            .into_iter()
-            .map(|decl| decl.sig.clone())
-            .collect();
-        let Some(first) = sigs.first() else {
-            return recorded;
-        };
-        let differing = Self::differing(&sigs.iter().collect::<Vec<_>>(), args.len());
-        let recorder = Recorder::Node(name.clone());
-        let owner = Rc::new(name.clone());
-        let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
-        let var_name = |var| at(NodeAt::Var(var));
-        for i in 0..=args.len() {
-            let ty = Self::at_position(first, i).clone();
-            if differing.contains(&i) || node.shared.contains(&i) || !ty.is_closed() {
-                continue;
-            }
-            let mut vars = BTreeMap::new();
-            recorded.append(match args.get(i) {
-                Some(arg) => self.record_argument(
-                    *arg,
-                    &ty,
-                    &mut vars,
-                    at(NodeAt::Param(i)),
-                    &var_name,
-                    &recorder,
-                ),
-                None => self.record_result(
+        let recorder = Recorder::Common(name.clone());
+        let (common, references) = match &node.kind {
+            NodeKind::Use {
+                callee,
+                args,
+                result,
+                ..
+            } => {
+                let sigs: Vec<Signature> = self
+                    .candidates(callee, args.len())
+                    .into_iter()
+                    .map(|decl| decl.sig.clone())
+                    .collect();
+                if sigs.len() < 2 {
+                    return recorded;
+                }
+                let part = CommonPart::of(&sigs.iter().collect::<Vec<_>>());
+                let owner = Rc::new(name.clone());
+                let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
+                let mut vars: BTreeMap<SigVar, ClassId> = BTreeMap::new();
+                let mut classes = Vec::new();
+                let mut references = BTreeSet::new();
+                for k in 0..part.vars.len() {
+                    let class = self.fresh(at(NodeAt::Common(k)));
+                    vars.insert(SigVar::Type(k), class);
+                    classes.push(class);
+                    if let Some(reference) = part.is_reference(k) {
+                        let relation = Relation::Reference(class, reference);
+                        recorded.push(self.record(relation, recorder.clone()));
+                        references.insert(class);
+                    }
+                }
+                let var_name = |var: SigVar| -> ClassName {
+                    panic!("the common part's variable {var:?} is made before its types")
+                };
+                for (i, (arg, param)) in args.iter().zip(&part.params).enumerate() {
+                    recorded.append(self.record_argument(
+                        *arg,
+                        param,
+                        &mut vars,
+                        at(NodeAt::CommonParam(i)),
+                        &var_name,
+                        &recorder,
+                    ));
+                }
+                recorded.append(self.record_result(
                     *result,
-                    &ty,
+                    &part.result,
                     &mut vars,
-                    at(NodeAt::Result),
+                    at(NodeAt::CommonResult),
                     &var_name,
                     &recorder,
-                ),
-            });
-            self.nodes
-                .get_mut(name)
-                .expect("the node is the state's")
-                .shared
-                .insert(i);
-        }
+                ));
+                let common = Common::Use {
+                    part: Rc::new(part),
+                    classes,
+                };
+                (common, references)
+            }
+            NodeKind::Lend { result, .. } => {
+                // Its mutability is still the lend's to record, which a read
+                // of whether the result is a reference reads too (l.296), so
+                // the lend still records into what such a read reads.
+                let relation = Relation::Reference(*result, true);
+                recorded.push(self.record(relation, recorder));
+                (Common::Lend, BTreeSet::new())
+            }
+            NodeKind::Project { .. } | NodeKind::Bind { .. } | NodeKind::CallValue { .. } => {
+                return recorded;
+            }
+        };
+        let state = self.nodes.get_mut(name).expect("the node is the state's");
+        state.common = Some(common);
+        state.references = references;
         recorded
     }
 
-    pub(super) fn record_references(&mut self, name: &Name) -> Recording {
-        let mut recorded = Recording::default();
-        let per_candidate = self.would_record_per_candidate(name);
-        let Some((first, rest)) = per_candidate.split_first() else {
-            return recorded;
-        };
-        let agreed: Vec<(ClassId, bool)> = first
+    /// The index among a use's candidates of the declaration `id`.
+    pub(crate) fn candidate_index(&self, callee: &Name, arity: usize, id: &DeclId) -> usize {
+        self.candidates(callee, arity)
             .iter()
-            .filter_map(|(class, reference)| Some((*class, (*reference)?)))
-            .filter(|(class, reference)| {
-                rest.iter()
-                    .all(|other| other.get(class) == Some(&Some(*reference)))
-            })
-            .filter(|(class, _)| !self.recorded_reference(name, *class))
-            .collect();
-        for (class, reference) in agreed {
-            self.nodes
-                .get_mut(name)
-                .expect("the node is the state's")
-                .references
-                .insert(class);
-            let relation = Relation::Reference(class, reference);
-            recorded.push(self.record(relation, Recorder::Node(name.clone())));
-        }
-        recorded
+            .position(|decl| decl.id == *id)
+            .expect("a use is decided as one of its candidates")
     }
 
     /// For each candidate of a use, the classes it would record a lower bound
@@ -138,35 +264,60 @@ impl State {
         &self,
         name: &Name,
     ) -> Vec<BTreeMap<ClassId, Option<bool>>> {
+        let NodeKind::Use { callee, args, .. } = &self.nodes[name].kind else {
+            return Vec::new();
+        };
+        (0..self.candidates(callee, args.len()).len())
+            .map(|candidate| self.would_record_by(name, candidate))
+            .collect()
+    }
+
+    /// The classes the use's candidate at index `candidate` would record a
+    /// lower bound or an equation into once decided, as
+    /// `would_record_per_candidate` gives them: inside each argument the
+    /// common part does not hold whole, and the result, or, once the common
+    /// part is recorded, each of its variables the result writes, into which
+    /// the candidate's type there enters (l.246).
+    pub(crate) fn would_record_by(
+        &self,
+        name: &Name,
+        candidate: usize,
+    ) -> BTreeMap<ClassId, Option<bool>> {
+        let node = &self.nodes[name];
         let NodeKind::Use {
             callee,
             args,
             result,
             ..
-        } = &self.nodes[name].kind
+        } = &node.kind
         else {
-            return Vec::new();
+            return BTreeMap::new();
         };
-        self.candidates(callee, args.len())
-            .into_iter()
-            .map(|decl| self.would_record_by(args, *result, &decl.sig))
-            .collect()
-    }
-
-    /// The classes a candidate of signature `sig` would record a lower bound
-    /// or an equation into, for a use of these arguments and result, as
-    /// `would_record_per_candidate` gives them.
-    pub(crate) fn would_record_by(
-        &self,
-        args: &[ClassId],
-        result: ClassId,
-        sig: &Signature,
-    ) -> BTreeMap<ClassId, Option<bool>> {
+        let sig = &self.candidates(callee, args.len())[candidate].sig;
+        let common = match &node.common {
+            Some(Common::Use { part, classes }) => Some((part, classes)),
+            _ => None,
+        };
         let mut found = BTreeMap::new();
-        for (arg, param) in args.iter().zip(sig.params()) {
+        for (i, (arg, param)) in args.iter().zip(sig.params()).enumerate() {
+            if common.is_some_and(|(part, _)| part.params[i].is_closed()) {
+                continue;
+            }
             self.would_record(*arg, param, &mut found);
         }
-        found.insert(self.root(result), is_reference(sig.result()));
+        match common {
+            None => {
+                found.insert(self.root(*result), is_reference(sig.result()));
+            }
+            Some((part, classes)) => {
+                for k in CommonPart::vars_in(&part.result) {
+                    found.insert(
+                        self.root(classes[k]),
+                        is_reference(&part.vars[k][candidate]),
+                    );
+                }
+            }
+        }
         found
     }
 

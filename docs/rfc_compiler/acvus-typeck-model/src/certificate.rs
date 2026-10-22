@@ -14,6 +14,7 @@ use crate::coerce::{Coercion, Structural, along_le, coerce};
 use crate::decl::{Decls, Node};
 use crate::explore::Final;
 use crate::instance::Made;
+use crate::node::common::CommonPart;
 use crate::node::{Decision, LendTarget, NodeAt};
 use crate::program::{ENTRY, Function, Item, Origin, Place, Program, Projection};
 use crate::relation::{Recorder, copy_name};
@@ -1042,11 +1043,26 @@ impl Checker<'_> {
             .map(|arg| self.text(context, &at, arg))
             .collect::<Option<Vec<Value>>>()?;
         let result_value = self.text(context, &at, result)?;
-        let decided = match &decision {
-            Decision::Use(id) => Some(&self.decls.decl(id).sig),
-            _ => None,
+        let candidates: Vec<&Signature> = self
+            .decls
+            .candidates(callee)
+            .iter()
+            .filter(|decl| decl.sig.params().len() == args.len())
+            .map(|decl| &decl.sig)
+            .collect();
+        let common = (candidates.len() >= 2).then(|| CommonPart::of(&candidates));
+        let common_values = match &common {
+            Some(part) => Some(self.common(
+                context,
+                &at,
+                level,
+                &owner,
+                part,
+                &arg_values,
+                &result_value,
+            )?),
+            None => None,
         };
-        self.references(context, &at, callee, decided, &arg_values, &result_value);
         match decision {
             Decision::Use(id) => {
                 let decl = self.decls.decl(&id);
@@ -1087,6 +1103,29 @@ impl Checker<'_> {
                     return None;
                 };
                 self.returns(context, &at, &returned, &result_value);
+                if let (Some(part), Some(values)) = (&common, &common_values) {
+                    let candidate = self
+                        .decls
+                        .candidates(callee)
+                        .iter()
+                        .filter(|decl| decl.sig.params().len() == args.len())
+                        .position(|decl| decl.id == id)
+                        .expect("a candidate is among the candidates");
+                    for k in CommonPart::vars_in(&part.result) {
+                        let Ok(chosen) = part.vars[k][candidate].substitute(&bound) else {
+                            self.violation(context, &at, format!("variable {k} has no type"));
+                            return None;
+                        };
+                        let holds = self.lower(&chosen, &values[k]);
+                        let value = &values[k];
+                        self.require(
+                            context,
+                            &at,
+                            holds,
+                            format!("{chosen} <= {value} at the common part's {k} fails (l.246)"),
+                        );
+                    }
+                }
                 if let Some(exit) = exit {
                     self.exit(context, &at, level, &owner, &sig, exit)?;
                 }
@@ -1194,46 +1233,78 @@ impl Checker<'_> {
         Some(())
     }
 
-    /// l.246: a use records that a class is, or is not, a reference where
-    /// every candidate would record a reference, or none would, into it, and
-    /// otherwise as its decided candidate would. A value `!` holds either, as
-    /// the solver reads it (`Classes::normalize`).
-    fn references(
+    /// A use's common part (l.246): the values of the classes it made for its
+    /// variables, each a reference or none where the common part records it
+    /// so; each argument passing into the common part's parameter, as at a
+    /// decided candidate's, a function value into a function type left to that
+    /// check; and the common part's result entering the use's result. Returns
+    /// the variables' values.
+    #[allow(clippy::too_many_arguments)]
+    fn common(
         &mut self,
         context: &Context<'_>,
         at: &str,
-        callee: &Name,
-        decided: Option<&Signature>,
+        level: usize,
+        owner: &Name,
+        part: &CommonPart,
         args: &[Value],
         result: &Value,
-    ) {
-        let per_candidate: Vec<Option<bool>> = self
-            .decls
-            .candidates(callee)
-            .iter()
-            .filter(|decl| decl.sig.params().len() == args.len())
-            .map(|decl| would_record(&decl.sig))
-            .collect();
-        let Some((&first, rest)) = per_candidate.split_first() else {
-            return;
-        };
-        let agreed = first.filter(|reference| rest.iter().all(|other| *other == Some(*reference)));
-        let recorded = decided.and_then(would_record).or(agreed);
-        if let Some(reference) = recorded {
-            let holds = *result.term() == Term::Never
-                || matches!(result.term(), Term::Ref(..)) == reference;
-            let is = if reference {
-                "a reference"
-            } else {
-                "no reference"
+    ) -> Option<Vec<Value>> {
+        let mut values = Vec::new();
+        for k in 0..part.vars.len() {
+            let name = ClassName::Node(Rc::new(owner.clone()), NodeAt::Common(k));
+            let Some(id) = context.sheet(level).id(&name) else {
+                self.violation(context, at, format!("the use made no class {name} (l.246)"));
+                return None;
             };
-            self.require(
+            let lookup = context.lookup(level, id);
+            let value = self.get(context, at, &name.to_string(), lookup)?;
+            if let Some(reference) = part.is_reference(k) {
+                let holds = *value.term() == Term::Never
+                    || matches!(value.term(), Term::Ref(..)) == reference;
+                let is = if reference {
+                    "a reference"
+                } else {
+                    "no reference"
+                };
+                self.require(
+                    context,
+                    at,
+                    holds,
+                    format!("{name} is recorded as {is}, and its value is {value} (l.246)"),
+                );
+            }
+            values.push(value);
+        }
+        let bound = SigArgs {
+            types: values.iter().cloned().map(Some).collect(),
+            identity: None,
+        };
+        for (k, (param, arg)) in part.params.iter().zip(args).enumerate() {
+            if matches!(arg.term(), Term::FunctionValue { .. }) {
+                continue;
+            }
+            let Ok(ty) = param.substitute(&bound) else {
+                self.violation(
+                    context,
+                    at,
+                    format!("the common part's parameter {k} has no type"),
+                );
+                return None;
+            };
+            let meets = matches!(param, SigTy::Var(_));
+            self.pass(context, at, k, arg, &Param { ty, meets });
+        }
+        let Ok(returned) = part.result.substitute(&bound) else {
+            self.violation(
                 context,
                 at,
-                holds,
-                format!("Result is recorded as {is}, and its value is {result} (l.246)"),
+                "the common part's result has no type".to_string(),
             );
-        }
+            return None;
+        };
+        self.returns(context, at, &returned, result);
+        Some(values)
     }
 
     /// The values of the variables the signature writes, those of the classes
@@ -1494,22 +1565,6 @@ impl Checker<'_> {
             self.returns(context, &at, &returned, &result_value);
         }
         Some(())
-    }
-}
-
-/// Whether a candidate of signature `sig` would record a reference into the
-/// use's result, where the type it would record there is one it writes
-/// (l.246; note 08, reading 13). The result is the one place a candidate
-/// records a type it writes into: each argument passes into its parameter's
-/// type, a boundary recording into that type, and each part of the
-/// argument's passes into that type's part, a meeting where the signature
-/// writes a variable, so that what is recorded into the argument's part is
-/// an equation with the variable, and a boundary into a type it writes
-/// elsewhere (l.278).
-fn would_record(sig: &Signature) -> Option<bool> {
-    match sig.result() {
-        SigTy::Term(term) => Some(matches!(**term, Term::Ref(..))),
-        SigTy::Var(_) => None,
     }
 }
 

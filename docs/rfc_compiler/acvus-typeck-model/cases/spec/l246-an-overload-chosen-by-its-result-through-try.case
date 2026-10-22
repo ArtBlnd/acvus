@@ -1,0 +1,29 @@
+//@ spec: l.246, l.261, l.282, l.326, l.337
+// let n = parse("7")?; take(n); Some(n)   // the script's result Option<u8>
+// // parse(&str) -> Option<u8>, parse(&str) -> Option<u16>; take(u8)
+// parse's common part gives its result Option<?0> at once (l.246), and the
+// result P no longer waits for parse but ?0 does (l.238 (b)), so ? reads P as
+// an Option and is decided (l.337). parse then reads its result passing into
+// ?'s Option<T>, T filled from n's places, u8 (l.282, l.326): parse(Option<u8>),
+// n: u8. The completeness review's W1a, which no order accepted.
+extern fn parse(&str) -> Option<u8>;
+extern fn parse(&str) -> Option<u16>;
+extern fn take(u8);
+let Str: str;
+let s: &Str;
+let P;
+let N;
+let U8: u8;
+let R: Option<U8>;
+let K;
+let `Some(n)`: Option<K>;
+let `take(n)`;
+P = parse(s) @ parse;
+N = ?(P) into R @ q;
+`take(n)` = take(N) @ take;
+K = N;
+R = `Some(n)`;
+
+must pass;
+assert parse == parse#0;
+assert N: u8;

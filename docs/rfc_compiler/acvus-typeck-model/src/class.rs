@@ -238,8 +238,8 @@ pub struct Held {
     pub kind: Option<(Term<ClassId>, KindSource)>,
     pub facts: BTreeSet<Fact>,
     pub lit: Option<LitVar>,
-    /// Whether it is a reference, as a use records it before it is decided
-    /// (l.246).
+    /// Whether it is a reference, as a node's common part records it before
+    /// the node is decided (l.246).
     pub reference: Option<bool>,
     /// The lambdas the Values of the function values met in it name, joined
     /// (l.173, l.181).

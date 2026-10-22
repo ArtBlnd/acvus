@@ -15,8 +15,10 @@ outcome 1
   check `A <= S`: Ok(Identity)
   check `Some(a) <= f result`: Ok(Identity)
   check `exit <= f result`: Ok(Identity)
+  check `get() <= q.Common(0)`: Ok(Identity)
   check `get() ~> q.Param(0)`: Ok(Identity)
   check `get.Result <= get()`: Ok(Identity)
+  check `q.Common(1) <= A`: Ok(Identity)
   check `q.Exit <= exit`: Ok(Identity)
-  check `q.Var(Type(0)) <= A`: Ok(Identity)
+  check `q.Var(Type(0)) <= q.Common(1)`: Ok(Identity)
   I* of a final state: []

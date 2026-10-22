@@ -31,8 +31,8 @@ pub enum Relation {
     Kind(ClassId, Term<ClassId>, KindSource),
     /// A literal's type (l.127).
     Lit(ClassId, LitVar),
-    /// Whether the class is a reference, which a use records before it is
-    /// decided (l.246).
+    /// Whether the class is a reference, which a node's common part records
+    /// before the node is decided (l.246).
     Reference(ClassId, bool),
     /// A lambda the Values of the class's function value names (l.181).
     Values(ClassId, Name),
@@ -111,6 +111,10 @@ pub enum Recorder {
     /// The use, lend, projection or binding of this name, when it was
     /// decided.
     Node(Name),
+    /// The use, lend, projection or binding of this name before it was
+    /// decided: the common part of all it may become, which holds whatever
+    /// it is decided as (l.246).
+    Common(Name),
     /// The equivalence class of this class taking a constructor (l.278).
     Split(ClassId),
     /// A cycle of lower bounds alone, merged into one equivalence class
@@ -141,14 +145,20 @@ impl Recorder {
         match self {
             Recorder::Split(_) | Recorder::Cycle | Recorder::FunctionType { .. } => true,
             Recorder::Instance { by, .. } => by.is_derived(),
-            Recorder::Origin | Recorder::Text(_) | Recorder::Node(_) | Recorder::Check => false,
+            Recorder::Origin
+            | Recorder::Text(_)
+            | Recorder::Node(_)
+            | Recorder::Common(_)
+            | Recorder::Check => false,
         }
     }
 
     /// The nodes it is recorded by, a value read leaving any of them out
     /// leaving it out (l.261): a node's own relation names that node, and a
     /// copy in an instance names what made the instance and, by `copy_name`,
-    /// the nodes the relation it copies is recorded by.
+    /// the nodes the relation it copies is recorded by. A node's common part
+    /// names none: it is not recorded by the node's being decided, so no
+    /// read leaves it out.
     pub fn nodes(&self) -> Vec<Name> {
         match self {
             Recorder::Node(name) => vec![name.clone()],
@@ -159,6 +169,7 @@ impl Recorder {
                 .collect(),
             Recorder::Origin
             | Recorder::Text(_)
+            | Recorder::Common(_)
             | Recorder::Split(_)
             | Recorder::Cycle
             | Recorder::FunctionType { .. }
@@ -171,7 +182,10 @@ impl Recorder {
     /// (l.280), in a copy of C as where it was recorded.
     pub fn is_entering(&self) -> bool {
         match self {
-            Recorder::Text(_) | Recorder::Node(_) | Recorder::FunctionType { .. } => true,
+            Recorder::Text(_)
+            | Recorder::Node(_)
+            | Recorder::Common(_)
+            | Recorder::FunctionType { .. } => true,
             Recorder::Instance { of, .. } => of.is_entering(),
             Recorder::Origin | Recorder::Split(_) | Recorder::Cycle | Recorder::Check => false,
         }

@@ -8,4 +8,5 @@ outcome 1
   decision make: make#0
   check `make.Result <= make()`: Ok(Identity)
   refusal no_value `f(..)`
+  refusal no_value `f.Common(0)`
   I* of a final state: []

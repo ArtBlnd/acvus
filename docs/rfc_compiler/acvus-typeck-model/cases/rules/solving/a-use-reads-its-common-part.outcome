@@ -1,10 +1,12 @@
 // What the model gives, written by `BLESS=1` (design/19-cases.md).
 run 1: Readings { visibility: ByMember, deferral: Recording }, every order
 outcome 1
-  refused
-  value R: none
-  value X: none
-  decision g: undecided
-  refusal no_value R
-  refusal no_value X
+  accepted
+  value R: u8
+  value X: u8
+  decision g: g#0
+  check `R <= X`: Ok(Identity)
+  check `X <= g.Common(0)`: Ok(Identity)
+  check `X ~> g.Param(0)`: Ok(Identity)
+  check `g.CommonResult <= R`: Ok(Identity)
   I* of a final state: []

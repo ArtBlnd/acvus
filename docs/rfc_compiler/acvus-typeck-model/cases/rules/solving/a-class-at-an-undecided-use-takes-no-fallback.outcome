@@ -7,4 +7,5 @@ outcome 1
   decision f: undecided
   refusal no_value R
   refusal no_value X
+  refusal no_value `f.Common(0)`
   I* of a final state: []

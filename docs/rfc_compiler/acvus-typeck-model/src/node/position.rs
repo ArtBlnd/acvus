@@ -9,33 +9,81 @@ use crate::sig::{SigTy, Signature};
 use crate::solve::State;
 use crate::ty::{Name, Term};
 
-use super::{NodeKind, Read, Reads};
+use super::common::CommonPart;
+use super::{Common, NodeKind, NodeState, Read, Reads};
 
 impl State {
+    /// What a use has yet to record once decided (l.238 (b), l.246): the
+    /// arguments its common part does not hold whole, by index, and the
+    /// classes its result enters, each with the type each candidate writes
+    /// there: the result, or, once the common part is recorded, each of its
+    /// variables the result writes.
+    pub(crate) fn left_to_record(
+        &self,
+        node: &NodeState,
+    ) -> (Vec<usize>, Vec<(ClassId, Vec<SigTy>)>) {
+        let NodeKind::Use {
+            callee,
+            args,
+            result,
+            ..
+        } = &node.kind
+        else {
+            return (Vec::new(), Vec::new());
+        };
+        let sigs: Vec<&Signature> = self
+            .candidates(callee, args.len())
+            .into_iter()
+            .map(|decl| &decl.sig)
+            .collect();
+        match &node.common {
+            Some(Common::Use { part, classes }) => {
+                let args = (0..args.len())
+                    .filter(|&i| !part.params[i].is_closed())
+                    .collect();
+                let results = CommonPart::vars_in(&part.result)
+                    .into_iter()
+                    .map(|k| (classes[k], part.vars[k].clone()))
+                    .collect();
+                (args, results)
+            }
+            _ => {
+                let results = sigs.iter().map(|sig| sig.result().clone()).collect();
+                ((0..args.len()).collect(), vec![(*result, results)])
+            }
+        }
+    }
+
     /// The classes at a node's positions, and those within the depth its
-    /// candidates reach (l.238 (b)): for `e?`, its exit's value too (l.337);
-    /// for a call of a function value, the parameters and the result type in
-    /// the environment of each lambda its callee's Values name
+    /// candidates reach, where it has relations yet to record (l.238 (b)):
+    /// for a use, the arguments and the classes its result enters that its
+    /// common part does not hold (l.246), and for `e?`, its exit's value too
+    /// (l.337); for a call of a function value, the parameters and the result
+    /// type in the environment of each lambda its callee's Values name
     /// (`design/17-environment.md`, row 3).
-    pub(crate) fn positions(&self, kind: &NodeKind) -> BTreeSet<ClassId> {
-        match kind {
+    pub(crate) fn positions(&self, node: &NodeState) -> BTreeSet<ClassId> {
+        match &node.kind {
             NodeKind::Use {
-                callee,
-                args,
-                result,
-                exit,
+                callee, args, exit, ..
             } => {
-                let mut positions: BTreeSet<ClassId> =
-                    args.iter().chain([result]).chain(exit).copied().collect();
-                for candidate in self.candidates(callee, args.len()) {
-                    let sig = &candidate.sig;
-                    for (arg, param) in args.iter().zip(sig.params()) {
-                        positions.extend(self.within_depth(*arg, param));
-                        let (params, results) = self.environment_within(*arg, param);
+                let (left, results) = self.left_to_record(node);
+                let mut positions: BTreeSet<ClassId> = exit.iter().copied().collect();
+                let candidates = self.candidates(callee, args.len());
+                for i in left {
+                    positions.insert(args[i]);
+                    for candidate in &candidates {
+                        let param = &candidate.sig.params()[i];
+                        positions.extend(self.within_depth(args[i], param));
+                        let (params, results) = self.environment_within(args[i], param);
                         positions.extend(params);
                         positions.extend(results);
                     }
-                    positions.extend(self.within_depth(*result, sig.result()));
+                }
+                for (class, tys) in results {
+                    positions.insert(class);
+                    for ty in &tys {
+                        positions.extend(self.within_depth(class, ty));
+                    }
                 }
                 positions
             }
@@ -119,27 +167,27 @@ impl State {
     /// writes (l.278), unless the class lies elsewhere at the use too, at its
     /// result, its exit, within the depth of its result, or at an argument a
     /// candidate writes a variable for. No other node records only so.
-    pub(crate) fn passed_out_only(&self, kind: &NodeKind) -> BTreeSet<ClassId> {
+    pub(crate) fn passed_out_only(&self, node: &NodeState) -> BTreeSet<ClassId> {
         let NodeKind::Use {
-            callee,
-            args,
-            result,
-            exit,
-        } = kind
+            callee, args, exit, ..
+        } = &node.kind
         else {
             return BTreeSet::new();
         };
+        let (left, results) = self.left_to_record(node);
         let candidates = self.candidates(callee, args.len());
         let mut out = BTreeSet::new();
-        let mut into: BTreeSet<ClassId> = [result]
-            .into_iter()
-            .chain(exit)
-            .map(|&class| self.root(class))
-            .collect();
+        let mut into: BTreeSet<ClassId> = exit.iter().map(|&class| self.root(class)).collect();
+        for (class, tys) in &results {
+            into.insert(self.root(*class));
+            for ty in tys {
+                into.extend(self.within_depth(*class, ty));
+            }
+        }
         for candidate in &candidates {
             let sig = &candidate.sig;
-            into.extend(self.within_depth(*result, sig.result()));
-            for (arg, param) in args.iter().zip(sig.params()) {
+            for &i in &left {
+                let (arg, param) = (&args[i], &sig.params()[i]);
                 match param {
                     SigTy::Term(_) => {
                         out.insert(self.root(*arg));
@@ -281,7 +329,7 @@ impl State {
         )
     }
 
-    /// Whether the node is a use that has recorded whether the class is a
+    /// Whether the node's common part recorded whether the class is a
     /// reference (l.246).
     pub(super) fn recorded_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
@@ -335,12 +383,13 @@ impl State {
 
     /// Whether what the node records may yet decide whether the class is a
     /// reference, which is decided by its lower bounds and equations (l.298):
-    /// for a use, where some candidate would record one into it and the use
-    /// has not recorded whether it is one (l.242, l.246); for a lend, a binding
-    /// and a call of a function value, where the class is the result it
-    /// records into. A lend records into its place, and a binding into its
-    /// position, only that it is a reference to a class, and only where it
-    /// already reads as one (l.296; `design/08-node.md`, reading 12).
+    /// for a use, where some candidate would record one into it and its
+    /// common part has not recorded whether it is one (l.242, l.246); for a
+    /// lend, a binding and a call of a function value, where the class is the
+    /// result it records into: a lend's common part records that its result
+    /// is a reference, but not its mutability. A lend records into its place, and a binding
+    /// into its position, only that it is a reference to a class, and only
+    /// where it already reads as one (l.296; `design/08-node.md`, reading 12).
     pub(super) fn may_decide_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
         match &self.nodes[name].kind {
