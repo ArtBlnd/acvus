@@ -237,7 +237,7 @@ body의 텍스트가 주는 제약은 주어지는 즉시 동치류에 기록되
 
 | 무엇이 | 무엇에 의존하는가 |
 |---|---|
-| 동치류 | 풀리지 않은 하한과 part 하한(아무것도 들어오지 않는 동치류는 빼고, 값), 그리고 다음이 아직 기록하지 않은 관계. (가) 자기가 하한이나 part 하한 `τ ≤ α`의 `τ`나 경계 `α ⇝ U`의 `U`의 part이면, `α`가 constructor를 받는 것. (나) 자기가 그 자리에 놓이거나, 그 후보나 pattern이 닿는 깊이 안의 part인 use, lend, projection, binding. 함수 값을 부르는 use의 자리에는, 그 callee의 Values가 그때 가리키는 lambda마다 그 environment에 든 parameter와 결과 타입도 든다(Facts). |
+| 동치류 | 풀리지 않은 하한과 part 하한(아무것도 들어오지 않는 동치류는 빼고, 값), 그리고 다음이 아직 기록하지 않은 관계. (가) 자기가 하한이나 part 하한 `τ ≤ α`의 `τ`나 경계 `α ⇝ U`의 `U`의 part이면, `α`가 constructor를 받는 것. 자기가 `?`의 감싸기를 받는 `X`이면, 그 error part가 constructor를 받는 것. (나) 자기가 그 자리에 놓이거나, 그 후보나 pattern이 닿는 깊이 안의 part인 use, lend, projection, binding. 함수 값을 부르는 use의 자리에는, 그 callee의 Values가 그때 가리키는 lambda마다 그 environment에 든 parameter와 결과 타입도 든다(Facts). |
 | part의 동치류 | 그것을 part로 가진 동치류들이 모두 constructor를 받는 것 |
 | universal | 그것을 고르는 use, 곧 그 body의 instance를 만드는 use. 그 use는 그 binding group 밖에 있다. |
 | use | 읽는 자리의 동치류에 관계를 기록하는 use, lend, projection, binding |
@@ -277,7 +277,7 @@ use, lend, projection, binding이 무엇이 되는지는 그것이 읽는 값으
 
 kind가 member를 주는 것은 그 member가 이 body에 보일 때뿐이다. object의 field와 enum의 variant는 body의 텍스트가 쓰므로 보이고, `Option`, `Result`, `Error`의 member와 host가 준 타입의 member는 바깥에서 쓰므로 보이지 않는다. 출처가 kind뿐인 동치류는 그 kind가 가리키는 member의 constructor를 받는다. 동치류의 값은 그 동치류가 지닌 kind를 만족하는 타입이다.
 
-동치류가 constructor를 받으면, 그 하한, part 하한, 경계의 두 쪽의 part마다, 값의 part가 넘어가는 자리로서 관계가 기록된다(쪼갬). 그 자리가 만남이면 structural type의 part 사이에는 part 하한이, 그 밖의 part 사이에는 등식이, 경계이면 경계가 기록된다(만남과 경계). 하한이나 경계의 두 쪽의 constructor가 다르면, 값이 선언된 cast들의 parameter로 넘어가고 그 결과가 다시 넘어가는 것으로 보아 같은 규칙으로 잇고, `&mut T`가 `&U`로 넘어가면 target끼리 잇는다. 함수 값이 함수 타입으로 넘어가면, 그 lambda들의 instance로 잇는다(Instance). `?N ⇝ U`이면 `?N`을 `U`와 unify한다.
+동치류가 constructor를 받으면, 그 하한, part 하한, 경계의 두 쪽의 part마다, 값의 part가 넘어가는 자리로서 관계가 기록된다(쪼갬). 그 자리가 만남이면 structural type의 part 사이에는 part 하한이, 그 밖의 part 사이에는 등식이, 경계이면 경계가 기록된다(만남과 경계). 하한이나 경계의 두 쪽의 constructor가 다르면, 값이 선언된 cast들의 parameter로 넘어가고 그 결과가 다시 넘어가는 것으로 보아 같은 규칙으로 잇고, `&mut T`가 `&U`로 넘어가면 target끼리 잇는다. 함수 값이 함수 타입으로 넘어가면, 그 lambda들의 instance로 잇는다(Instance). `?`의 감싸기는 그 감싸는 `Error`의 payload로 잇는다(`?`). `?N ⇝ U`이면 `?N`을 `U`와 unify한다.
 
 동치류가 풀린 뒤, 하한과 use의 결과로 들어오는 값은 Join의 `≤`로, part 하한으로 들어오는 part는 `≤ₚ`로 그 값에 닿으며, 그 단계마다 Coercion 표의 행으로 바뀐다. 다만 object에 더해진 field는 바뀌지 않고, 그 값이 통째로 쓰이기 전에 쓰인다(ownership §4). 경계로 넘어가는 값은 `U`의 값에 coercion으로 닿는다. 어느 쪽이든 그 함수는 그 값이 들어온 자리에서 호출되며, 닿지 않으면 그 자리에서 거부된다.
 
@@ -336,7 +336,7 @@ method 호출의 receiver는 첫 인자다. 적힌 그대로, `&`, 그리고 rec
 
 ## `?`
 
-`e?`는 언어가 주는 두 후보, 곧 `Option⟨T⟩`과 `Result⟨T, E⟩`에서의 후보를 가진 use이며, 그 결과는 `T`다. exit는 `return None`이나 `return Err(x)`와 같다. `x`는 `e`의 error 값을 감싼 값이다. `E`가 이름 `N`을 가진 타입(enum, struct, extern-defined type)이면 `x`는 member가 `N` 하나인 `Error`의 값 `N(..)`이고, 그 밖이면 `Error⟨E⟩`의 값이다. `E`가 `Error`이면 그 이름은 `Error`이므로, `x`는 그것을 variant `Error(..)`로 감싸 중첩한다. 이 값들은 가장 안쪽 body의 결과에서 만나므로, 그 error part는 `?`마다 variant가 더해진 `Error`가 된다. exit의 다른 part는 새로 만든 동치류이므로(Struct), 그 body가 `Ok`를 돌려주지 않으면 ok part로는 아무것도 들어오지 않고, 그것이 넘어가는 자리가 타입을 주지 않으면(값) fallback으로 `!`가 된다.
+`e?`는 언어가 주는 두 후보, 곧 `Option⟨T⟩`과 `Result⟨T, E⟩`에서의 후보를 가진 use이며, 그 결과는 `T`다. exit는 `return None`이나 `return Err(x)`와 같다. `x`는 `e`의 error 값을 감싼 값이며, 그 타입은 새로 만든 동치류 `X`다. 감싸기는 `E`가 constructor를 받으면 쪼개진다(값). `E`가 `Error`나 `!`이면 감싸지 않으므로 error 값이 그대로 `X`로 넘어간다. 이름 `N`을 가진 그 밖의 타입(enum, struct, extern-defined type)이면 `X`는 member가 `N` 하나인 `Error`이고, 그 밖이면 `Error⟨..⟩`이며, 어느 쪽이든 그 payload는 새로 만든 동치류이고 error 값은 거기로 넘어간다(Struct). 이 값들은 가장 안쪽 body의 결과에서 만나므로, 그 error part는 `?`마다 variant가 더해진 `Error`가 된다. exit의 다른 part는 새로 만든 동치류이므로(Struct), 그 body가 `Ok`를 돌려주지 않으면 ok part로는 아무것도 들어오지 않고, 그것이 넘어가는 자리가 타입을 주지 않으면(값) fallback으로 `!`가 된다.
 
 ## Block
 
