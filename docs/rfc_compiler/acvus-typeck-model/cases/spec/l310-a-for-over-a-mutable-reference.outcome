@@ -1,0 +1,15 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run: every order
+outcome 1
+  accepted
+  value `&mut v`: &mut Vec<u8>
+  value U8: u8
+  value V: Vec<u8>
+  value X: &mut u8
+  value `v[_]`: u8
+  decision `&mut v`: lend &mut place
+  decision `v elem`: applied through &mut
+  decision x: bind lend &mut place
+  partition {U8, `v[_]`}
+  check `x.Lent <= X`: Ok(Identity)
+  I* of a final state: []

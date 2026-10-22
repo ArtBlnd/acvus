@@ -1,0 +1,15 @@
+//@ spec: l.314, l.276
+// let a = [1u8, s];
+// Both components pass into the one element part, where u8 and &str have no
+// join (l.314).
+let Str: str;
+let s: &Str;
+let 1u8: u8;
+let E;
+let `[1u8, s]`: [E; 2];
+E = 1u8;
+E = s;
+let A;
+A = `[1u8, s]`;
+
+must fail;

@@ -393,6 +393,16 @@ steps; `golden()` and every expectation read what they read without it.
   before it was run, in every order. Four cases
   of the environment and the phase case of the common part changed with it, their
   values and decisions kept (note 17, G4).
+- 11 cases under `cases/spec`, `l219-*`, `l282-*`, `l310-*`, `l314-*` and
+  `l320-*`, test the constructs the recording had no rule for until 0de99302: a
+  branch that returns gives no value; a tuple, an array and an object literal,
+  and an array of two types, refused; a cast by its operand's type and the
+  operators that are no lang items, the language's candidates written as
+  declarations; a `for` over a reference, a mutable reference, an array, a `Vec`
+  by value and a range; and C1 of the review of 2026-10-22, a match on an
+  overload chosen by its result. Each was derived before it was run, in every
+  order. `1 ^ 2` reached two outcomes, the two literals' classes one in one and
+  apart in the other, every type `i32`: it is U1's, and no case holds it yet.
 - 4 cases under `cases/spec`, `l240-*`, test l.238 (b) since 09aef04e, beside H7,
   now accepted: two uses that fill one literal, a literal into a use then
   another, a sum into a use that only reads it, and a literal through a generic

@@ -1,0 +1,22 @@
+//@ spec: l.219, types §4
+// fn f() -> u8 { let x = if c { 1u8 } else { return 2u8 }; x }   f()
+// `return 2u8` gives no value: its type is made anew and nothing enters it
+// (l.219), so x takes 1u8 alone, u8, and 2u8 passes into f's result.
+group f {
+    let `f result`;
+    fn f() -> `f result`;
+    let X;
+    let 1u8: u8;
+    let 2u8: u8;
+    let `return 2u8`;
+    X = 1u8;
+    X = `return 2u8`;
+    `f result` = 2u8;
+    `f result` = X;
+}
+let `f()`;
+`f()` = f() @ `f call`;
+
+must pass;
+assert X: u8;
+assert `f()`: u8;
