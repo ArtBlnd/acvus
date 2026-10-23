@@ -1,0 +1,18 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run: every order
+outcome 1
+  refused
+  value B: Box<Fn/1>
+  value X: none
+  value Y: none
+  value `take_rc(..)`: ()
+  value `|x| x`: Fn/1
+  value `|y| y`: Fn/1
+  value `λ result`: none
+  value `μ result`: none
+  check `B ~> take_rc.Param(0)`: Ok(Conversion(DeclId { name: to_rc, overload: 0 }))  unnamed: {μ}
+  check `boxed.Result <= B`: Ok(Identity)
+  check `take_rc.Result <= take_rc(..)`: Ok(Identity)
+  check `|x| x <= take_rc.Var(Type(0))`: Ok(Identity)
+  check `|y| y <= boxed.Var(Type(0))`: Ok(Identity)
+  I* of a final state: []

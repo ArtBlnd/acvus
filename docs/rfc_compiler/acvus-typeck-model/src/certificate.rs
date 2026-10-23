@@ -1993,10 +1993,11 @@ fn reach(
 
 /// What a cast, a conversion or a view gives where `value` passes into its
 /// parameter, as the split links them through its signature (l.78, l.154,
-/// l.278): its result with each variable its parameter writes bound to the
-/// part of `value` there, and where each function value of `value` lies in
-/// it, from its path in `value`. None where `value` is not of the parameter's
-/// shape.
+/// l.278), and as a conversion carries it (l.280): its result with each
+/// variable its parameter writes bound to the part of `value` at the first
+/// place it writes it, and where each function value of `value` at each place
+/// the parameter writes a variable lies in it, from its path in `value`. None
+/// where `value` is not of the parameter's shape.
 fn image(sig: &Signature, value: &Value) -> Option<(Value, Vec<(Path, Path)>)> {
     let mut bound = BTreeMap::new();
     if !bind_sig(&sig.params()[0], value, &mut Vec::new(), &mut bound) {
@@ -2007,19 +2008,24 @@ fn image(sig: &Signature, value: &Value) -> Option<(Value, Vec<(Path, Path)>)> {
     Some((image, moved))
 }
 
-/// Binds each variable `ty` writes to the part of `value` at it, with its
-/// path; false where `value` is not of `ty`'s shape.
+/// Binds each variable `ty` writes to the part of `value` at the first place
+/// it writes it, with the path of each place; false where `value` is not of
+/// `ty`'s shape. A variable written twice takes one type (types §7), each place
+/// holding its own Values.
 fn bind_sig(
     ty: &SigTy,
     value: &Value,
     path: &mut Path,
-    bound: &mut BTreeMap<SigVar, (Value, Path)>,
+    bound: &mut BTreeMap<SigVar, (Value, Vec<Path>)>,
 ) -> bool {
     match ty {
-        SigTy::Var(var) => match bound.get(var) {
-            Some((held, _)) => held == value,
+        SigTy::Var(var) => match bound.get_mut(var) {
+            Some((held, paths)) => {
+                paths.push(path.clone());
+                held.ty() == value.ty()
+            }
             None => {
-                bound.insert(*var, (value.clone(), path.clone()));
+                bound.insert(*var, (value.clone(), vec![path.clone()]));
                 true
             }
         },
@@ -2041,20 +2047,23 @@ fn bind_sig(
 }
 
 /// The value `ty` writes with its variables bound, each function value of a
-/// bound part kept in `moved` with its path where bound and its path here.
+/// bound part kept in `moved` with its path at each place bound and its path
+/// here.
 fn build_sig(
     ty: &SigTy,
-    bound: &BTreeMap<SigVar, (Value, Path)>,
+    bound: &BTreeMap<SigVar, (Value, Vec<Path>)>,
     path: &mut Path,
     moved: &mut Vec<(Path, Path)>,
 ) -> Option<Value> {
     match ty {
         SigTy::Var(var) => {
-            let (value, from) = bound.get(var)?;
-            for inner in function_paths(value) {
-                let before = from.iter().chain(&inner).cloned().collect();
-                let after = path.iter().chain(&inner).cloned().collect();
-                moved.push((before, after));
+            let (value, froms) = bound.get(var)?;
+            for from in froms {
+                for inner in function_paths(value) {
+                    let before = from.iter().chain(&inner).cloned().collect();
+                    let after = path.iter().chain(&inner).cloned().collect();
+                    moved.push((before, after));
+                }
             }
             Some(value.clone())
         }

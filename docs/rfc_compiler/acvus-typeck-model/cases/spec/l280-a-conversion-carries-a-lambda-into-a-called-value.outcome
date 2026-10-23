@@ -1,0 +1,28 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run: every order
+outcome 1
+  refused
+  value 2u8: u8
+  value B: Box<Fn/1>
+  value F: Fn/1
+  value P: Fn/1
+  value R: Rc<Fn/1>
+  value X: none
+  value Y: none
+  value `f(2u8)`: u8
+  value `|x| x`: Fn/1
+  value `|y| want16(y)`: Fn/1
+  value `λ result`: none
+  value `μ result`: u16
+  decision `f call`: calls {λ}
+  check `2u8 <= f call#λ/X`: Ok(Identity)
+  check `B ~> R`: Ok(Conversion(DeclId { name: to_rc, overload: 0 }))  unnamed: {μ}
+  check `R ~> unwrap.Param(0)`: Ok(Identity)
+  check `boxed.Result <= B`: Ok(Identity)
+  check `f call#λ/X <= f call#λ/λ result`: Ok(Identity)
+  check `f call#λ/λ result <= f(2u8)`: Ok(Identity)
+  check `unwrap.Var(Type(0)) <= F`: Ok(Identity)
+  check `|x| x <= P`: Ok(Identity)
+  check `|y| want16(y) <= boxed.Var(Type(0))`: Ok(Identity)
+  check `want16.Result <= μ result`: Ok(Identity)
+  I* of a final state: []

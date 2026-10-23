@@ -7,10 +7,12 @@ use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, Conflict, Conflicted, NamedConflict};
 use crate::coerce::{CoerceError, Coercion, along_le, coerce};
+use crate::decl::DeclId;
 use crate::node::Decision;
 use crate::relation::{Named, Relation};
+use crate::sig::{SigTy, SigVar};
 use crate::solve::State;
-use crate::ty::{Name, Ty};
+use crate::ty::{Name, Term, Ty};
 
 /// Where a definition gives no result (l.290).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -36,6 +38,18 @@ pub enum Refusal {
 pub struct Check {
     pub relation: String,
     pub coercion: Result<Coercion, CoerceError>,
+    /// Where the coercion is a declared conversion, the lambdas a function
+    /// value it carries brings that the Values where it reaches do not name
+    /// (l.280); none elsewhere.
+    pub unnamed: BTreeSet<Name>,
+}
+
+impl Check {
+    /// Whether the value reaches: by a coercion, and, by a conversion, with
+    /// every lambda it carries named where it reaches (l.280).
+    pub fn holds(&self) -> bool {
+        self.coercion.is_ok() && self.unnamed.is_empty()
+    }
 }
 
 /// What solving decides (I3).
@@ -119,18 +133,103 @@ impl State {
             } else {
                 coerce(&self.decls, &from_value, &to_value)
             };
+            let unnamed = match &coercion {
+                Ok(Coercion::Conversion(id)) => self.unnamed(id, from, to),
+                _ => BTreeSet::new(),
+            };
             let relation = Named {
                 relation: &recorded.relation,
                 arena: &self.arena,
             }
             .to_string();
-            checks.push(Check { relation, coercion });
+            checks.push(Check {
+                relation,
+                coercion,
+                unnamed,
+            });
         }
         checks.sort_by(|a, b| {
             (&a.relation, format!("{:?}", a.coercion))
                 .cmp(&(&b.relation, format!("{:?}", b.coercion)))
         });
         checks
+    }
+
+    /// The lambdas the function values that the declared conversion `id`
+    /// carries from `from` bring where they reach in `to`, which the Values
+    /// there do not name (l.280). The split links nothing through a
+    /// conversion (l.278), so nothing records them there: each function value
+    /// at a position the conversion's parameter writes a variable reaches the
+    /// one at the same place of each position its result writes it, and its
+    /// lambdas are to be among that one's.
+    fn unnamed(&self, id: &DeclId, from: ClassId, to: ClassId) -> BTreeSet<Name> {
+        let sig = &self.decls.decl(id).sig;
+        let [param] = sig.params() else {
+            unreachable!("a conversion takes one parameter");
+        };
+        let mut params = BTreeMap::new();
+        self.classes_at_vars(param, from, &mut params);
+        let mut results = BTreeMap::new();
+        self.classes_at_vars(sig.result(), to, &mut results);
+        let mut unnamed = BTreeSet::new();
+        for (var, carried) in &params {
+            let Some(reached) = results.get(var) else {
+                continue;
+            };
+            for &at in carried {
+                for &into in reached {
+                    self.unnamed_at(at, into, &mut unnamed);
+                }
+            }
+        }
+        unnamed
+    }
+
+    /// The class at each position `ty` writes a variable, `ty` being written at
+    /// the class `at`.
+    fn classes_at_vars(&self, ty: &SigTy, at: ClassId, vars: &mut BTreeMap<SigVar, Vec<ClassId>>) {
+        match ty {
+            SigTy::Var(var) => vars.entry(*var).or_default().push(self.root(at)),
+            SigTy::Term(term) => {
+                let kind = self.held_kind(at);
+                for (key, part) in term.parts() {
+                    let held = kind
+                        .part(&key)
+                        .expect("a conversion writes the shape of the class it reaches");
+                    self.classes_at_vars(part, *held, vars);
+                }
+            }
+        }
+    }
+
+    /// Each lambda a function value in `from` brings that the function value
+    /// at its place in `to` does not name, the two of one type.
+    fn unnamed_at(&self, from: ClassId, to: ClassId, unnamed: &mut BTreeSet<Name>) {
+        let kind = self.held_kind(from);
+        if let Term::FunctionValue { .. } = kind {
+            let named = self.values_of(to);
+            unnamed.extend(
+                self.values_of(from)
+                    .into_iter()
+                    .filter(|lambda| !named.contains(lambda)),
+            );
+            return;
+        }
+        let reached = self.held_kind(to);
+        for (key, part) in kind.parts() {
+            let into = reached
+                .part(&key)
+                .expect("a conversion binds one type at a variable");
+            self.unnamed_at(*part, *into, unnamed);
+        }
+    }
+
+    /// The kind of a class with a value.
+    fn held_kind(&self, id: ClassId) -> Term<ClassId> {
+        let Some((kind, _)) = self.classes.held(self.root(id)).kind.clone() else {
+            unreachable!("a class with a value holds its kind");
+        };
+        kind
     }
 
     pub fn outcome(&self) -> Outcome {
@@ -159,7 +258,7 @@ impl State {
             .map(|(name, node)| (name.clone(), node.decision.clone()))
             .collect();
         let accepted = refusals.is_empty()
-            && checks.iter().all(|check| check.coercion.is_ok())
+            && checks.iter().all(Check::holds)
             && decisions.values().all(Option::is_some);
         Outcome {
             values,
@@ -198,7 +297,7 @@ impl State {
                 assert!(previous.is_none(), "two groups have the node {name}");
             }
             let checks = group.checks();
-            let checked = checks.iter().all(|check| check.coercion.is_ok());
+            let checked = checks.iter().all(Check::holds);
             outcome.checks.extend(checks);
             outcome.refusals.extend(group.refusals.iter().cloned());
             outcome.accepted &= checked && group.refusals.is_empty();

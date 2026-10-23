@@ -1,0 +1,31 @@
+//@ spec: l.105, l.280, design/14-certificate.md
+// take_rc(pair(|x| x, |y| y), |x| x, |y| y);   // a conversion to_rc<T>(Pair<T, T>) -> Rc<T>
+// The conversion's parameter writes T twice, of one type, Fn/1, each place
+// with its own Values: λ at the first, μ at the second. Each reaches Rc's T,
+// whose Values name both: accepted, and the checker carries each place's
+// Values along the signature, where it had asked the two to be equal.
+extern type Pair<A, B>;
+extern type Rc<T>;
+extern fn pair<A, B>(A, B) -> Pair<A, B>;
+#[conversion] extern fn to_rc<T>(Pair<T, T>) -> Rc<T>;
+extern fn take_rc<T>(Rc<T>, T, T);
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    `λ result` = X;
+}
+group μ in run {
+    let Y;
+    let `μ result`;
+    fn μ(Y) -> `μ result`;
+    `μ result` = Y;
+}
+let `|x| x`: lambda λ;
+let `|y| y`: lambda μ;
+let P;
+P = pair(`|x| x`, `|y| y`) @ pair;
+let `take_rc(..)`;
+`take_rc(..)` = take_rc(P, `|x| x`, `|y| y`) @ take_rc;
+
+must pass;

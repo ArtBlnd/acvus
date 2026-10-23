@@ -207,7 +207,7 @@ fn outcome_meets(decls: &Decls, outcome: &Outcome, expect: &Expect) -> Result<()
             let failing: Vec<&str> = outcome
                 .checks
                 .iter()
-                .filter(|check| check.coercion.is_err())
+                .filter(|check| !check.holds())
                 .map(|check| check.relation.as_str())
                 .collect();
             if failing == *relations {

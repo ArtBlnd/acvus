@@ -344,9 +344,15 @@ pub fn outcome(outcome: &Outcome) -> String {
         }
     }
     for check in &outcome.checks {
+        let unnamed = if check.unnamed.is_empty() {
+            String::new()
+        } else {
+            let lambdas = listed(check.unnamed.iter().map(|lambda| name(lambda.as_str())));
+            format!("  unnamed: {{{lambdas}}}")
+        };
         writeln!(
             text,
-            "  check {}: {:?}",
+            "  check {}: {:?}{unnamed}",
             name(&check.relation),
             check.coercion
         )

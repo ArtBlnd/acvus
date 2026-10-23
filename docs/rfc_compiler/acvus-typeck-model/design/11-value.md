@@ -18,7 +18,8 @@ an unknown of the group (l.219), recording a part lower bound between a
 structural type's parts and an equation between other parts, and a boundary
 elsewhere. Where a lower bound's or a boundary's two constructors differ, the
 same rule links the parts through the casts' signatures, or the targets of a
-reborrow; where a function value passes into a function type, an instance of each
+reborrow, and through no conversion, whose check asks for the Values it carries
+(reading 15); where a function value passes into a function type, an instance of each
 lambda its Values names links them (l.197). A class nothing enters takes the one type the places it passes into
 have, once each has one or holds only a LitVar nothing more decides, which takes
 any type of its family that holds it, and has no value where they have two
@@ -131,4 +132,17 @@ leave out.
     (`Classes::normalize`), and once a class takes `!`, each kind known in part
     on it splits by recording `!` as the part it names (`State::split_fact`), so
     that what is written into such a part is refused where it enters it.
+15. **Values along a conversion** (l.278, l.280). The split links nothing through
+    a declared conversion, which the closed types decide once both sides are
+    solved (types §7), so no relation brings the lambdas a function value it
+    carries to where it reaches. The boundary's check asks for them there: at
+    each place the conversion's parameter writes a type parameter, each lambda
+    of a function value in it is among the Values of the function value at the
+    same place of each position its result writes that type parameter
+    (`State::unnamed`); the check of a conversion that brings one they do not
+    name fails, naming it (`Check::unnamed`, `unnamed: {μ}` in a golden). Since
+    the review of 2026-10-23, as 준량 decided: the solver had accepted
+    `take_rc(boxed(|y| y), |x| x)`, and a call of the value a conversion made
+    that made no instance of the lambda it carried, where the checker found
+    each (`cases/spec/l280-*`).
 

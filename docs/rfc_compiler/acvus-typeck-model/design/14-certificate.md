@@ -80,8 +80,9 @@ a coercion reaches, each function value of the one reaching is carried along it 
 the split carries it (`reach`, l.278): at the same position where no stage moves
 it, a reborrow keeping the target; along a cast's, a conversion's or a view's
 signature, from where its parameter writes a variable to where its result writes
-it (`image`); at each part both have, by that part's own coercion, where the
-structural stage changes the members. Where it reaches a function value, its
+it (`image`), from each place it writes a variable, a variable it writes twice
+taking one type and each place its own Values; at each part both have, by that
+part's own coercion, where the structural stage changes the members. Where it reaches a function value, its
 lambdas are among that one's; where it reaches a function type, the row of l.197
 holds at the classes the two are read at (`Checker::flows`), which the checker
 reads by each class's parts as its sheet keeps them. So a lambda a value carries is
@@ -160,4 +161,9 @@ equation. A value a case plants writes each function value's Values after it,
 `cases/certificate/a-lambda-through-a-cast` and `a-lambda-through-a-view` give the
 class λ reaches through the cast or the view `Fn/1{}`, and the checker fails there
 and at the use's `T` of that class, as derived, so that Values are compared along a
-cast and a view, not only carried.
+cast and a view, not only carried. Since the solver checks the Values a
+conversion carries (note 11, reading 15), `a-lambda-through-a-conversion` is
+accepted, and gives take_rc's T `Fn/1{}`, failing at the conversion and at the
+pass of |y| y into T; `a-lambda-at-each-place-a-conversion-writes-one-variable`
+is accepted with λ and μ at the two places of one variable, which the checker
+had asked to be equal.

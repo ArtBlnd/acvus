@@ -1,0 +1,25 @@
+//@ spec: l.105, l.278, l.280, design/14-certificate.md
+// take_rc(boxed(|y| y), |y| y);   // a conversion to_rc<T>(Box<T>) -> Rc<T>; take_rc<T>(Rc<T>, T)
+// T's Values name μ, which the conversion carries from Box's part: B reaches
+// take_rc's parameter (l.280), and the checker carries μ along the
+// conversion's signature (`image`). Given T, a class of its own, Values naming
+// no lambda, μ carried along the conversion does not reach it, nor |y| y at T.
+extern type Box<T>;
+extern type Rc<T>;
+extern fn boxed<T>(T) -> Box<T>;
+#[conversion] extern fn to_rc<T>(Box<T>) -> Rc<T>;
+extern fn take_rc<T>(Rc<T>, T);
+group μ in run {
+    let Y;
+    let `μ result`;
+    fn μ(Y) -> `μ result`;
+    `μ result` = Y;
+}
+let `|y| y`: lambda μ;
+let B;
+B = boxed(`|y| y`) @ boxed;
+let `take_rc(..)`;
+`take_rc(..)` = take_rc(B, `|y| y`) @ take_rc;
+
+must pass;
+assert certificate set `take_rc.Var(Type(0))`: Fn/1{} fails ["argument 0: Box<Fn/1{μ}> into Rc<Fn/1{}> fails", "argument 1: Fn/1{μ} into Fn/1{} fails"];

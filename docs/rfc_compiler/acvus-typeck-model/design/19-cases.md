@@ -178,7 +178,8 @@ updated with it.
 
 **Golden outcomes.** Next to each case, `*.outcome` holds every run's outcomes in
 full, the I\* violations of the final states reaching each, and a written order's
-trace. A case whose golden differs, or has none, fails; `BLESS=1` writes them anew.
+trace. A check whose conversion brings a lambda the Values where it reaches do not
+name writes them after it, `unnamed: {μ}` (note 11, reading 15). A case whose golden differs, or has none, fails; `BLESS=1` writes them anew.
 This catches a change no expectation names.
 
 ## The runner
@@ -343,7 +344,8 @@ steps; `golden()` and every expectation read what they read without it.
   `rules/solving/a-two-instances-meet-a-capture-written-by-name`, become one
   program with one derivation with `spec/example-06-called-with-two-types`, are
   merged into it.
-- 4 cases under `cases/certificate`, `a-lambda-*`, test the checker carrying
+- 4 cases under `cases/certificate`, `a-lambda-*` but the two of a conversion
+  below, test the checker carrying
   Values as the split does (note 14): a lambda in a payload into a function type,
   through a cast, through a view, and into a function type both candidates write
   whole. The first three panicked in the checker before, where the solver had
@@ -444,6 +446,13 @@ steps; `golden()` and every expectation read what they read without it.
   function type (l.197): refused where the lambda's result reaches the type's by
   no coercion, accepted where it does, and by a declared conversion at that
   boundary.
+- 2 cases under `cases/spec`, `l280-*`, test a function value a declared
+  conversion carries (note 11, reading 15): refused where the Values where it
+  reaches do not name its lambda, alone and where a call of the value the
+  conversion made would make no instance of it, and 2 under `cases/certificate`
+  accepted where they name it, at one place and at the two places of one
+  variable. Each was derived before it was run; the solver had accepted the
+  first two, and the checker had found each.
 - 13 cases under `cases/phases` test each phase along a written order, by the line
   of the spec it rests on: recording (l.219, l.227–229), the join (l.80–91, l.169,
   l.269, l.274), splits (l.278), unification (l.154, l.158–163), nodes (l.246,

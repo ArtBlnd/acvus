@@ -1,0 +1,32 @@
+//@ spec: l.105, l.278, l.280
+// take_rc(boxed(|y| y), |x| x);   // a conversion to_rc<T>(Box<T>) -> Rc<T>; take_rc<T>(Rc<T>, T)
+// The split links nothing through a conversion (l.278), so T's Values name λ
+// alone, while the conversion carries μ from Box's part to Rc's T: B does not
+// reach take_rc's parameter (l.280), and the program is refused there. A cast
+// in place of the conversion links the two, and the program is accepted.
+extern type Box<T>;
+extern type Rc<T>;
+extern fn boxed<T>(T) -> Box<T>;
+#[conversion] extern fn to_rc<T>(Box<T>) -> Rc<T>;
+extern fn take_rc<T>(Rc<T>, T);
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    `λ result` = X;
+}
+group μ in run {
+    let Y;
+    let `μ result`;
+    fn μ(Y) -> `μ result`;
+    `μ result` = Y;
+}
+let `|x| x`: lambda λ;
+let `|y| y`: lambda μ;
+let B;
+B = boxed(`|y| y`) @ boxed;
+let `take_rc(..)`;
+`take_rc(..)` = take_rc(B, `|x| x`) @ take_rc;
+
+must fail;
+assert failing [`B ~> take_rc.Param(0)`];
