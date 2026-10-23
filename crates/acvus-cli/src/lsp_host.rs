@@ -461,7 +461,7 @@ mod tests {
     /// <file>` refuses it in, and accepts it where `acvus check` does.
     #[test]
     fn every_example_is_refused_in_the_words_acvus_check_refuses_it_in() {
-        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
         let sources: Vec<PathBuf> = std::fs::read_dir(&examples)
             .expect("the examples directory lists")
             .map(|entry| entry.expect("an example directory entry").path())

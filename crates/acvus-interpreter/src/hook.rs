@@ -443,5 +443,5 @@ where
 }
 
 #[cfg(doctest)]
-#[doc = include_str!("../../docs/hooks.md")]
+#[doc = include_str!("../../../docs/hooks.md")]
 struct HooksPage;

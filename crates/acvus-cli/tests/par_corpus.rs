@@ -20,7 +20,8 @@ const CASES: usize = 135 + 27;
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("the crate lies in the workspace")
+        .and_then(Path::parent)
+        .expect("the crate lies in the workspace's crates directory")
         .join("tests/acvus-interpreter-test/par_corpus")
 }
 

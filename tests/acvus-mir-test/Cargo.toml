@@ -21,9 +21,9 @@ name = "nesting_wasm"
 crate-type = ["cdylib"]
 
 [dependencies]
-acvus-ast = { path = "../../acvus-ast" }
-acvus-mir = { path = "../../acvus-mir" }
-acvus-utils = { path = "../../acvus-utils" }
+acvus-ast = { path = "../../crates/acvus-ast" }
+acvus-mir = { path = "../../crates/acvus-mir" }
+acvus-utils = { path = "../../crates/acvus-utils" }
 rustc-hash = { workspace = true }
 
 [dev-dependencies]

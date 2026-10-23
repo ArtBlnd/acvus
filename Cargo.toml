@@ -1,18 +1,18 @@
 [workspace]
 resolver = "3"
 members = [
-    "acvus-utils",
-    "acvus-interpreter",
+    "crates/acvus-utils",
+    "crates/acvus-interpreter",
     "tests/acvus-interpreter-test",
-    "acvus-ast",
-    "acvus-mir",
+    "crates/acvus-ast",
+    "crates/acvus-mir",
     "docs/rfc_compiler/acvus-typeck-model",
-    "acvus-cli",
+    "crates/acvus-cli",
     "tests/acvus-mir-test",
-    "acvus-ext",
-    "acvus-ext-net",
-    "acvus-lsp",
-    "acvus-extern",
+    "crates/acvus-ext",
+    "crates/acvus-ext-net",
+    "crates/acvus-lsp",
+    "crates/acvus-extern",
     "tests/acvus-wasm-probe",
 ]
 

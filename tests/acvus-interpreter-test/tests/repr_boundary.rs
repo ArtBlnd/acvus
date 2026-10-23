@@ -21,7 +21,7 @@ use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 /// The two boundary modules, relative to the workspace root.
-const BOUNDARY: &[&str] = &["acvus-extern/src/repr.rs", "acvus-interpreter/src/repr.rs"];
+const BOUNDARY: &[&str] = &["crates/acvus-extern/src/repr.rs", "crates/acvus-interpreter/src/repr.rs"];
 
 /// A function whose call is a cast by itself: a reinterpretation of bytes,
 /// a run rebuilt at a type and length its caller states, or a pointer made
@@ -51,7 +51,7 @@ const STAND_IN_RUNTIME: &str = "a test's stand-in runtime names a reference's ta
 
 const LEFT: &[Left] = &[
     Left {
-        path: "acvus-utils/src/astr.rs",
+        path: "crates/acvus-utils/src/astr.rs",
         form: Form::AsPointer,
         count: 1,
         reason: "the interner extends a string's lifetime from its shard's read guard to the \
@@ -59,25 +59,25 @@ const LEFT: &[Left] = &[
             (RFC-0080 rule 5)",
     },
     Left {
-        path: "acvus-ext/tests/erased.rs",
+        path: "crates/acvus-ext/tests/erased.rs",
         form: Form::AsPointer,
         count: 2,
         reason: STAND_IN_RUNTIME,
     },
     Left {
-        path: "acvus-ext/tests/hash_instances.rs",
+        path: "crates/acvus-ext/tests/hash_instances.rs",
         form: Form::AsPointer,
         count: 2,
         reason: STAND_IN_RUNTIME,
     },
     Left {
-        path: "acvus-ext/tests/owned_stage_holders.rs",
+        path: "crates/acvus-ext/tests/owned_stage_holders.rs",
         form: Form::AsPointer,
         count: 2,
         reason: STAND_IN_RUNTIME,
     },
     Left {
-        path: "acvus-ext/tests/regression_0041.rs",
+        path: "crates/acvus-ext/tests/regression_0041.rs",
         form: Form::AsPointer,
         count: 2,
         reason: STAND_IN_RUNTIME,

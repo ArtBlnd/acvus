@@ -607,7 +607,7 @@ li = li + one; \
 // -- The context --------------------------------------------------------
 
 /// A language `Vec<T>` crosses as the runtime's `Vec<Owned<Rt>>`
-/// (`acvus-ext/src/vec.rs`), so a context value of that type is that vector,
+/// (`crates/acvus-ext/src/vec.rs`), so a context value of that type is that vector,
 /// erased.
 fn vec_value(items: Vec<Value>) -> Value {
     // SAFETY: each word is moved in from `items`, and no other holder owns it.

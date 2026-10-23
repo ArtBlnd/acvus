@@ -600,7 +600,7 @@ pattern, `% _ =>` in a template included. It is not an expression.
 A parse error names what the grammar admitted at the span, in the language's
 words: `expected an expression, found `;``. The set LALRPOP reports is the
 grammar's terminal names, and a message never prints one. `Terminal` in
-`acvus-ast/src/error.rs` carries one class per terminal — `int_of` is "a
+`crates/acvus-ast/src/error.rs` carries one class per terminal — `int_of` is "a
 number", `ident` "a name", `fmt_start` "a format string", and every operator
 and delimiter its own text — and a set that covers a nonterminal's whole
 opening stands for that nonterminal:

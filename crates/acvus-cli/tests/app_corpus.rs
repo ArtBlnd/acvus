@@ -16,7 +16,8 @@ const APPS: usize = 12;
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("the crate lies in the workspace")
+        .and_then(Path::parent)
+        .expect("the crate lies in the workspace's crates directory")
         .join("tests/acvus-interpreter-test/app_corpus")
 }
 

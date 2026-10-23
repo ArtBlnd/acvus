@@ -34,7 +34,8 @@ fn source_of(name: &str) -> String {
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("the crate directory sits in the workspace root")
+        .and_then(Path::parent)
+        .expect("the crate lies in the workspace's crates directory")
         .to_path_buf()
 }
 

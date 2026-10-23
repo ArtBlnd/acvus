@@ -15,12 +15,12 @@ name = "all"
 path = "tests/all.rs"
 
 [dependencies]
-acvus-ast = { path = "../../acvus-ast" }
-acvus-mir = { path = "../../acvus-mir" }
-acvus-utils = { path = "../../acvus-utils" }
-acvus-interpreter = { path = "../../acvus-interpreter", features = ["probe", "tooling"] }
-acvus-extern = { path = "../../acvus-extern" }
-acvus-ext = { path = "../../acvus-ext" }
+acvus-ast = { path = "../../crates/acvus-ast" }
+acvus-mir = { path = "../../crates/acvus-mir" }
+acvus-utils = { path = "../../crates/acvus-utils" }
+acvus-interpreter = { path = "../../crates/acvus-interpreter", features = ["probe", "tooling"] }
+acvus-extern = { path = "../../crates/acvus-extern" }
+acvus-ext = { path = "../../crates/acvus-ext" }
 rustc-hash = { workspace = true }
 serde_json = "1.0"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }

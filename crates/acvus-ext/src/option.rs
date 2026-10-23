@@ -13,7 +13,7 @@
 //! not yet settled, two candidates that each take a closure settle only
 //! after that closure has been typed from its body alone, and the type
 //! which yields belongs to neither. Registered beside `iter::map`,
-//! `option::map` refuses `acvus-ext/tests/e2e.rs`'s and
+//! `option::map` refuses `crates/acvus-ext/tests/e2e.rs`'s and
 //! `examples/grades`'s `as_iter() | map(|p| -> p.x)` with ``no `map` takes
 //! a call of type Fn(Iterator<&Pt{label: String, x: i64}, Pure>,
 //! Fn({x: _}) -> _) -> Iterator<i64, Pure>``; registered beside

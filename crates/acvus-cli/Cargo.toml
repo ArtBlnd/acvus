@@ -41,7 +41,7 @@ tempfile = "3"
 serde_json = "1"
 # The other compile path onto the same walk: `ops` output is asserted against
 # the listing the interpreter's tests read.
-acvus-interpreter-test = { path = "../tests/acvus-interpreter-test" }
+acvus-interpreter-test = { path = "../../tests/acvus-interpreter-test" }
 url = "2"
 
 [lints]

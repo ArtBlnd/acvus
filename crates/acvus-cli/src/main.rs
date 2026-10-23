@@ -449,7 +449,7 @@ fn ms(duration: Duration) -> f64 {
     duration.as_micros() as f64 / 1_000.0
 }
 
-/// The default hook prints `thread 'main' panicked at acvus-interpreter/src/...`
+/// The default hook prints `thread 'main' panicked at crates/acvus-interpreter/src/...`
 /// where a trap is raised, before the host catches it into
 /// `HostError::Trapped` (RFC-0090 rule 4). That names this compiler's source,
 /// which is not where a script author looks, so the hook is silenced unless

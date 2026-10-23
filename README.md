@@ -306,7 +306,7 @@ async fn run() -> Result<(), HostError> {
   runs out, so how deep a script may recurse is set by the threads the
   embedder compiles and runs it on.
 - The host reads no clock, so it compiles on `wasm32-unknown-unknown` as
-  it does natively; `acvus-interpreter/examples/clockless_host.rs` runs one
+  it does natively; `crates/acvus-interpreter/examples/clockless_host.rs` runs one
   under node.
 
 ## Crates
@@ -350,7 +350,7 @@ ledger      money as whole cents: a running balance and the largest debit, no fl
 queue       a `deque` as a work queue: `push_back`, `pop_front`, and the order out
 ```
 
-`acvus-cli/tests/examples.rs` runs each of them and compares stdout to
+`crates/acvus-cli/tests/examples.rs` runs each of them and compares stdout to
 `expected.txt` byte for byte.
 
 ## Documents
