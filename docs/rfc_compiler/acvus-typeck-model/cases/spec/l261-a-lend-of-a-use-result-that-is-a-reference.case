@@ -1,0 +1,31 @@
+//@ spec: l.261, l.320, l.333, l.242, l.296, l.298
+// let rs = load(); let r = &get(&rs, 0);   // load() -> Vec<&u64>
+// get(&Vec<T>, u64) -> T, get(&Map<K, V>, K) -> V
+// The candidates' results are type parameters alone, which decide nothing
+// (l.320, l.333), so get does not read its result (l.261) and does not wait
+// for the lend whose place it is. The lend waits for get, whose candidate
+// decides through the common part that R is a reference (l.242, l.298), and
+// lends through it (l.296). get had read its result, the two had broken their
+// dependencies on each other, and the lend had taken the place before get
+// decided, a reference to a reference.
+extern type Vec<T>;
+extern type Map<K, V>;
+extern fn load() -> Vec<&u64>;
+extern fn get<T>(&Vec<T>, u64) -> T;
+extern fn get<K, V>(&Map<K, V>, K) -> V;
+
+let C;
+C = load() @ load;
+let `&rs`;
+`&rs` = &C @ `&rs`;
+let ?z: lit 0;
+let R;
+R = get(`&rs`, ?z) @ get;
+let `&get`;
+`&get` = &R @ `&get`;
+
+must pass;
+assert get == get#0;
+assert `&get` == lend & through &;
+assert R: &u64;
+assert `&get`: &u64;

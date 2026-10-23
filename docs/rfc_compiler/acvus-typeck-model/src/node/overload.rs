@@ -81,16 +81,22 @@ impl State {
         .expect("a use's node holds the positions where its candidates differ")
     }
 
-    /// The positions where a use's candidates differ, which it reads (l.261);
-    /// none where it has no candidate.
+    /// The positions where a use's candidates differ, which it reads (l.261),
+    /// each candidate's type there taken as the narrowing takes it: a type
+    /// parameter is an unknown made anew at the use (l.320), which decides
+    /// nothing, so two candidates that differ there only in their type
+    /// parameters reach any value read there alike (l.333). None where it has
+    /// no candidate.
     pub(crate) fn differing(candidates: &[&Signature], args: usize) -> Vec<usize> {
         let Some(first) = candidates.first() else {
             return Vec::new();
         };
         (0..=args)
             .filter(|&i| {
-                let at = Self::at_position(first, i);
-                candidates.iter().any(|sig| Self::at_position(sig, i) != at)
+                let at = ReadValue::of_sig(Self::at_position(first, i));
+                candidates
+                    .iter()
+                    .any(|sig| ReadValue::of_sig(Self::at_position(sig, i)) != at)
             })
             .collect()
     }

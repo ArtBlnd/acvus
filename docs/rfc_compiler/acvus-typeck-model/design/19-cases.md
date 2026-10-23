@@ -446,6 +446,11 @@ steps; `golden()` and every expectation read what they read without it.
   function type (l.197): refused where the lambda's result reaches the type's by
   no coercion, accepted where it does, and by a declared conversion at that
   boundary.
+- 2 cases under `cases/spec`, `l261-*`, test a lend of a use's result where the
+  candidates' results are type parameters alone, which the use does not read
+  (note 08, reading 11): accepted with the lend through the reference the result
+  is, where it had taken the place before the use decided, and with its place where
+  the result is no reference. Each was derived before it was run.
 - 2 cases under `cases/spec`, `l280-*`, test a function value a declared
   conversion carries (note 11, reading 15): refused where the Values where it
   reaches do not name its lambda, alone and where a call of the value the

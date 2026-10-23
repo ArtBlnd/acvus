@@ -72,10 +72,20 @@ reads its position, or lends it where its path passes a reference.
    itself, as in Rust (patterns §1). The binding learns its path's projections'
    decisions by waiting for them, since the nodes recording into its position are
    reached along the links of the splits not yet made (l.244; `holes.md`, O1).
-11. **What a use reads.** At each position where its candidates differ, the class
-   there and the classes within the depth its candidates reach there (l.238 (b)),
-   since the value read there is compared whole (l.326). Example 12 rests on it:
-   `x + y` reads `Y`, the target of `&y`, and so depends on `y + 1`.
+11. **What a use reads.** At each position where its candidates differ in a
+   constructor or a member, the class there and the classes within the depth its
+   candidates reach there (l.238 (b)), since the value read there is compared whole
+   (l.326). Example 12 rests on it: `x + y` reads `Y`, the target of `&y`, and so
+   depends on `y + 1`. A type parameter is an unknown made anew at the use (l.320),
+   which decides nothing (l.333), so a position where the candidates differ in their
+   type parameters alone reaches every candidate whatever is read there, and is not
+   read (`State::differing`, which compares each candidate's type there as the
+   narrowing reads it). Since the review of 2026-10-23, as 준량 decided: the model
+   had compared the signatures as written, so that `?`'s result, `T` in both
+   candidates, was not read and `get`'s, `T` and `V`, was, and in `&get(&rs, 0)`
+   `get` read its result, the place of the lend, the two broke their dependencies
+   on each other, and the lend took the place before `get` decided that it was a
+   reference (`cases/spec/l261-*`).
 12. **Which nodes a reference-ness read waits for** (l.242). Whether a class is a
    reference is decided by its lower bounds and equations (l.298), so a node found
    at a class (l.244) is left out where it cannot decide it: a use where no
