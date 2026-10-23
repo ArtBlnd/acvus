@@ -76,6 +76,18 @@ pub enum Token {
     #[token("as", priority = 3)]
     As,
 
+    // -- Module keywords (programs §3) --
+    #[token("struct", priority = 3)]
+    Struct,
+    #[token("impl", priority = 3)]
+    Impl,
+    /// A method's receiver, and the name its body reads it by.
+    #[token("self", priority = 3)]
+    SelfValue,
+    /// The module's struct, as `Self { f: e }` builds its value.
+    #[token("Self", priority = 3)]
+    SelfType,
+
     // -- Identifiers --
     #[regex(r"[\p{L}_][\p{L}\p{N}_]*", |lex| lex.extras.intern(lex.slice()), priority = 2)]
     Ident(Astr),
@@ -207,7 +219,8 @@ pub enum Token {
 /// Every word the lexer reserves, each as `Token::keyword` names it.
 pub const KEYWORDS: &[&str] = &[
     "true", "false", "_", "Some", "None", "Ok", "Err", "let", "if", "else", "while", "for", "in",
-    "break", "continue", "return", "anyorder", "fn", "match", "mut", "move", "as",
+    "break", "continue", "return", "anyorder", "fn", "match", "mut", "move", "as", "struct",
+    "impl", "self", "Self",
 ];
 
 impl Token {
@@ -236,6 +249,10 @@ impl Token {
             Token::Mut => Some("mut"),
             Token::Move => Some("move"),
             Token::As => Some("as"),
+            Token::Struct => Some("struct"),
+            Token::Impl => Some("impl"),
+            Token::SelfValue => Some("self"),
+            Token::SelfType => Some("Self"),
             Token::Ident(_)
             | Token::ParamRef(_)
             | Token::ContextRef(_)
@@ -324,6 +341,10 @@ impl fmt::Display for Token {
             Token::Mut => write!(f, "mut"),
             Token::Move => write!(f, "move"),
             Token::As => write!(f, "as"),
+            Token::Struct => write!(f, "struct"),
+            Token::Impl => write!(f, "impl"),
+            Token::SelfValue => write!(f, "self"),
+            Token::SelfType => write!(f, "Self"),
             Token::Amp => write!(f, "&"),
             Token::DoubleColon => write!(f, "::"),
             Token::Plus => write!(f, "+"),

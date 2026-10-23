@@ -8,8 +8,8 @@ use crate::list::{ListElem, build_list};
 use crate::nesting::{Level, Nested};
 use crate::parser::{
     BindLine, CallArgs, Declares, ForLine, Recover, binary, block_closed, build_assign, build_call,
-    expr_stmt, fn_declared, holding_one, holding_two, let_bind, literal_of, match_arm,
-    object_field, paren_or_tuple, pattern_of, qualified_name, recovered, resumed, stated,
+    expr_stmt, fn_declared, holding_one, holding_two, let_bind, literal_of, match_arm, module_of,
+    object_field, paren_or_tuple, pattern_of, qualified_name, receiver, recovered, resumed, stated,
 };
 use crate::literal::{self, IntWidth, SuffixedInt};
 
@@ -52,6 +52,10 @@ extern {
         "mut" => Token::Mut,
         "move" => Token::Move,
         "as" => Token::As,
+        "struct" => Token::Struct,
+        "impl" => Token::Impl,
+        "self" => Token::SelfValue,
+        "Self" => Token::SelfType,
         "&" => Token::Amp,
         "+" => Token::Plus,
         "-" => Token::Minus,
@@ -103,6 +107,50 @@ extern {
 pub Script: Script<S> = {
     <l:@L> <body:Body> <r:@R> =>
         Script { id: AstId::alloc(), stmts: body.0.root(), tail: body.1.map(|tail| Box::new(tail.root())), span: Span::new(l, r) }
+};
+
+// ── Module rule (programs §3) ──────────────────────────────────────────
+//
+// Free fns, and at most one struct with the fns its `impl` blocks hold. A
+// declaration holds nodes without being one, as a script does, and adds no
+// level.
+
+pub Module: Module<S> = {
+    <l:@L> <decls:ModuleDecl*> <r:@R> =>? module_of::<S>(errors, decls, Span::new(l, r)),
+};
+
+ModuleDecl: ModuleDecl<S> = {
+    <decl:FreeFn> => ModuleDecl::Fn(decl),
+    // struct Name { a, b }
+    <l:@L> "struct" <name:Binder> "{" <fields:CommaSep<Binder>> "}" <r:@R> =>
+        ModuleDecl::Struct(StructDecl { id: AstId::alloc(), name, fields, span: Span::new(l, r) }),
+    // impl Name { fn .. }
+    <l:@L> "impl" <name:Binder> "{" <fns:ImplFn*> "}" <r:@R> =>
+        ModuleDecl::Impl(ImplBlock { id: AstId::alloc(), name, fns, span: Span::new(l, r) }),
+    <node:Unparsed> => ModuleDecl::Error(node),
+};
+
+// fn name(a, b) { body }
+FreeFn: FnDecl<S> = {
+    <l:@L> "fn" <name:Binder> "(" <params:CommaSep<Binder>> ")" "{" <body:Body> "}" <r:@R> =>
+        FnDecl { id: AstId::alloc(), name, params, body: body.0.root(), tail: body.1.map(|tail| Box::new(tail.root())), span: Span::new(l, r) },
+};
+
+ImplFn: ImplFn<S> = {
+    // fn name(&self, a, b) { body }
+    <l:@L> "fn" <name:Binder> "(" <receiver:Receiver> <params:("," <Binder>)*> ","? ")" "{" <body:Body> "}" <r:@R> =>
+        ImplFn {
+            receiver: Some(receiver),
+            decl: FnDecl { id: AstId::alloc(), name, params, body: body.0.root(), tail: body.1.map(|tail| Box::new(tail.root())), span: Span::new(l, r) },
+        },
+    // fn name(a, b) { body }, called as `Name::name(..)`
+    <decl:FreeFn> => ImplFn { receiver: None, decl },
+};
+
+Receiver: Receiver = {
+    <l:@L> "self" <r:@R> => receiver(interner, ReceiverMode::Value, Span::new(l, r), Span::new(l, r)),
+    <l:@L> "&" <at:@L> "self" <r:@R> => receiver(interner, ReceiverMode::Shared, Span::new(at, r), Span::new(l, r)),
+    <l:@L> "&" "mut" <at:@L> "self" <r:@R> => receiver(interner, ReceiverMode::Exclusive, Span::new(at, r), Span::new(l, r)),
 };
 
 // ── Bodies ─────────────────────────────────────────────────────────────
@@ -608,6 +656,16 @@ PlainPrimary: Nested<Expr<S>> = {
         Nested::leaf(Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(name), ref_kind: RefKind::ExternParam, span: Span::new(l, r) }),
     <l:@L> <name:"@ref"> <r:@R> =>
         Nested::leaf(Expr::ContextRef { id: AstId::alloc(), name: QualifiedRef::root(name), span: Span::new(l, r) }),
+    // `self`: the receiver of the method whose body reads it, by its name.
+    <l:@L> "self" <r:@R> =>
+        Nested::leaf(Expr::Ident { id: AstId::alloc(), name: QualifiedRef::root(interner.intern("self")), ref_kind: RefKind::Value, span: Span::new(l, r) }),
+    // `Self { a: e, b }`: a value of the module's struct (programs §3).
+    <l:@L> "Self" "{" <fields:CommaSep<ObjectField>> "}" <r:@R> =>? {
+        let span = Span::new(l, r);
+        let mut level = Level::new();
+        let fields = level.all(fields);
+        level.node(Expr::Struct { id: AstId::alloc(), fields, span }, span)
+    },
     <l:@L> <n:"int"> <r:@R> =>
         Nested::leaf(Expr::Literal { id: AstId::alloc(), value: Literal::Int(n), span: Span::new(l, r) }),
     <l:@L> <n:"int_of"> <r:@R> =>

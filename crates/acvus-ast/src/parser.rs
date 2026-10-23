@@ -6,7 +6,8 @@ use lalrpop_util::{ErrorRecovery, ParseError as LalrpopError};
 use crate::ast::*;
 use crate::error::{BlockStatement, Expected, Found, ParseError, ParseErrorKind};
 use crate::grammar::{
-    ArmLineParser, BindLineParser, ExprParser, ForLineParser, ScriptParser, TemplateStmtParser,
+    ArmLineParser, BindLineParser, ExprParser, ForLineParser, ModuleParser, ScriptParser,
+    TemplateStmtParser,
 };
 use crate::lexer::{ExprTokenizer, Line, Piece, TagEnd, scan_template};
 use crate::nesting::{Level, Nested};
@@ -202,6 +203,67 @@ where
     }
 }
 
+/// A module of `decls` (programs §3): a module is at most one struct, and
+/// each `impl` block holds that struct's fns. A second `struct`, and an
+/// `impl` naming a struct the module does not declare, are refused where
+/// their names are written, before or after the struct they meet.
+pub(crate) fn module_of<S>(
+    errors: &mut Vec<ParseError>,
+    decls: Vec<ModuleDecl<S>>,
+    span: Span,
+) -> Result<Module<S>, GrammarError>
+where
+    S: Recover,
+{
+    let declared = decls.iter().find_map(|decl| match decl {
+        ModuleDecl::Struct(decl) => Some(decl.name.name),
+        ModuleDecl::Fn(_) | ModuleDecl::Impl(_) | ModuleDecl::Error(_) => None,
+    });
+    let mut struct_seen = false;
+    let mut checked = Vec::with_capacity(decls.len());
+    for decl in decls {
+        let refusal = match &decl {
+            ModuleDecl::Struct(decl) if struct_seen => {
+                Some((ParseErrorKind::SecondStruct, decl.name.span, decl.span))
+            }
+            ModuleDecl::Struct(_) => {
+                struct_seen = true;
+                None
+            }
+            ModuleDecl::Impl(block) if declared != Some(block.name.name) => Some((
+                ParseErrorKind::ImplOfUndeclaredStruct,
+                block.name.span,
+                block.span,
+            )),
+            ModuleDecl::Impl(_) | ModuleDecl::Fn(_) | ModuleDecl::Error(_) => None,
+        };
+        let Some((kind, at, covered)) = refusal else {
+            checked.push(decl);
+            continue;
+        };
+        let node = refused::<S>(errors, ParseError::new(kind, at), covered)?;
+        checked.push(ModuleDecl::Error(node));
+    }
+    Ok(Module {
+        id: AstId::alloc(),
+        decls: checked,
+        span,
+    })
+}
+
+/// A receiver taken as `mode`, its `self` written at `at`.
+pub(crate) fn receiver(interner: &Interner, mode: ReceiverMode, at: Span, span: Span) -> Receiver {
+    Receiver {
+        binder: Binder {
+            id: AstId::alloc(),
+            name: interner.intern("self"),
+            span: at,
+        },
+        mode,
+        span,
+    }
+}
+
 /// `x in head`: what the `for` of a `% for` line is followed by.
 pub(crate) struct ForLine<S> {
     pub(crate) binder: Binder,
@@ -290,6 +352,48 @@ fn recover_script(interner: &Interner, source: &str) -> Recovered<Script<ErrorNo
                 id: AstId::alloc(),
                 stmts: vec![Stmt::Error(node)],
                 tail: None,
+                span: whole,
+            }
+        }
+    };
+    Recovered::new(tree, errors)
+}
+
+/// Parse a module source string (programs §3): free fns, and at most one
+/// struct with its `impl` blocks.
+pub fn parse_module(
+    interner: &Interner,
+    source: &str,
+) -> Result<Module, Recovered<Module<ErrorNode>>> {
+    acvus_utils::grow(|| parse_module_level(interner, source))
+}
+
+fn parse_module_level(
+    interner: &Interner,
+    source: &str,
+) -> Result<Module, Recovered<Module<ErrorNode>>> {
+    let tokenizer = ExprTokenizer::new(source, 0, interner);
+    match ModuleParser::new().parse(interner, &mut Vec::new(), Declares::Functions, tokenizer) {
+        Ok(module) => Ok(module),
+        Err(_) => Err(recover_module(interner, source)),
+    }
+}
+
+fn recover_module(interner: &Interner, source: &str) -> Recovered<Module<ErrorNode>> {
+    let mut errors = Vec::new();
+    let tokenizer = ExprTokenizer::new(source, 0, interner);
+    let whole = Span::new(0, source.len());
+    let tree = match ModuleParser::new().parse(interner, &mut errors, Declares::Functions, tokenizer) {
+        Ok(module) => module,
+        Err(error) => {
+            let Ok(node) = ErrorNode::recovered(
+                &mut errors,
+                Reported::one(convert_lalrpop_error(error)),
+                whole,
+            );
+            Module {
+                id: AstId::alloc(),
+                decls: vec![ModuleDecl::Error(node)],
                 span: whole,
             }
         }
@@ -1409,6 +1513,22 @@ where
 {
     let mut level = Level::new();
     let pattern = match expr {
+        // `self` names a method's receiver, so no pattern binds it anew.
+        Expr::Ident { name, span, .. }
+            if name.namespace.is_root() && name.name == interner.intern("self") =>
+        {
+            return refused::<S>(
+                errors,
+                ParseError::new(
+                    ParseErrorKind::InvalidPattern(
+                        "`self` is the receiver and binds nothing".into(),
+                    ),
+                    *span,
+                ),
+                *span,
+            )
+            .map(|node| Nested::leaf(Pattern::Error(node)));
+        }
         Expr::Ident {
             name,
             ref_kind,
@@ -1636,6 +1756,183 @@ mod tests {
     fn a_template_refuses_a_fn_on_its_line_and_in_a_tag_s_block() {
         assert_eq!(refusal("% fn f() { 1 }\n"), ParseErrorKind::FnOutsideScript);
         assert_eq!(refusal("{{ { fn f() { 1 } f() } }}"), ParseErrorKind::FnOutsideScript);
+    }
+
+    fn module_refusals(src: &str) -> Recovered<Module<ErrorNode>> {
+        let interner = Interner::new();
+        parse_module(&interner, src).expect_err(src)
+    }
+
+    #[test]
+    fn a_module_holds_its_free_fns_its_struct_and_the_fns_of_its_impl() {
+        let src = "struct Point { a, b }\n\
+                   impl Point {\n\
+                   fn new(a, b) { Self { a, b } }\n\
+                   fn sum(&self) { self.a + self.b }\n\
+                   fn shift(&mut self, by) { self.a = self.a + by; }\n\
+                   fn take(self) { self }\n\
+                   }\n\
+                   fn origin() { Point::new(0, 0) }";
+        let interner = Interner::new();
+        let parsed = parse_module(&interner, src).unwrap_or_else(|e| panic!("{:?}", e.errors));
+        let [
+            ModuleDecl::Struct(point),
+            ModuleDecl::Impl(block),
+            ModuleDecl::Fn(origin),
+        ] = parsed.decls.as_slice()
+        else {
+            panic!("{:?}", parsed.decls);
+        };
+
+        assert_eq!(point.name.span, at(src, "Point"));
+        let fields_at = src.find("a, b }").expect("the fields are written");
+        let fields: Vec<Span> = point.fields.iter().map(|field| field.span).collect();
+        assert_eq!(
+            fields,
+            vec![
+                Span::new(fields_at, fields_at + 1),
+                Span::new(fields_at + 3, fields_at + 4)
+            ]
+        );
+
+        let impl_at = src.find("impl Point").expect("the impl is written") + "impl ".len();
+        assert_eq!(block.name.span, Span::new(impl_at, impl_at + "Point".len()));
+        let [new, sum, shift, take] = block.fns.as_slice() else {
+            panic!("{:?}", block.fns);
+        };
+
+        assert_eq!(new.receiver, None);
+        assert_eq!(new.decl.params.len(), 2);
+        let Some(Expr::Struct { fields, .. }) = new.decl.tail.as_deref() else {
+            panic!("{:?}", new.decl.tail);
+        };
+        let keys: Vec<Astr> = fields.iter().map(|field| field.key).collect();
+        assert_eq!(keys, vec![interner.intern("a"), interner.intern("b")]);
+
+        let shared = at(src, "&self");
+        assert_eq!(
+            sum.receiver,
+            Some(Receiver {
+                binder: Binder {
+                    id: sum.receiver.as_ref().expect("a receiver").binder.id,
+                    name: interner.intern("self"),
+                    span: Span::new(shared.start + 1, shared.end),
+                },
+                mode: ReceiverMode::Shared,
+                span: shared,
+            })
+        );
+        assert!(sum.decl.params.is_empty());
+        assert!(matches!(
+            sum.decl.tail.as_deref(),
+            Some(Expr::BinaryOp { .. })
+        ));
+
+        let exclusive = at(src, "&mut self");
+        let receiver = shift.receiver.as_ref().expect("a receiver");
+        assert_eq!(receiver.mode, ReceiverMode::Exclusive);
+        assert_eq!(receiver.span, exclusive);
+        assert_eq!(
+            receiver.binder.span,
+            Span::new(exclusive.start + "&mut ".len(), exclusive.end)
+        );
+        let by: Vec<Astr> = shift.decl.params.iter().map(|param| param.name).collect();
+        assert_eq!(by, vec![interner.intern("by")]);
+        assert!(matches!(shift.decl.body.as_slice(), [Stmt::Store { .. }]));
+        assert!(shift.decl.tail.is_none());
+
+        let by_value = src.find("take(self").expect("take is written") + "take(".len();
+        let receiver = take.receiver.as_ref().expect("a receiver");
+        assert_eq!(receiver.mode, ReceiverMode::Value);
+        assert_eq!(receiver.span, Span::new(by_value, by_value + "self".len()));
+        assert_eq!(receiver.binder.span, receiver.span);
+        let Some(Expr::Ident { name, .. }) = take.decl.tail.as_deref() else {
+            panic!("{:?}", take.decl.tail);
+        };
+        assert_eq!(*name, QualifiedRef::root(interner.intern("self")));
+
+        let Some(Expr::FuncCall { func, .. }) = origin.tail.as_deref() else {
+            panic!("{:?}", origin.tail);
+        };
+        let Expr::Ident { name, .. } = func.as_ref() else {
+            panic!("{func:?}");
+        };
+        assert_eq!(
+            *name,
+            QualifiedRef::qualified(
+                interner.namespace(&[interner.intern("Point")]),
+                interner.intern("new")
+            )
+        );
+    }
+
+    #[test]
+    fn a_module_refuses_its_second_struct_where_its_name_is_written() {
+        let src = "struct A { x }\nstruct B { y }";
+        let recovered = module_refusals(src);
+        assert_eq!(
+            recovered.errors,
+            vec![ParseError::new(ParseErrorKind::SecondStruct, at(src, "B"))]
+        );
+        let [ModuleDecl::Struct(_), ModuleDecl::Error(node)] = recovered.tree.decls.as_slice()
+        else {
+            panic!("{:?}", recovered.tree.decls);
+        };
+        assert_eq!(node.span, at(src, "struct B { y }"));
+    }
+
+    #[test]
+    fn an_impl_names_its_module_s_struct_wherever_the_struct_is_written() {
+        let src = "struct A { x }\nimpl B { fn f(&self) { 1 } }";
+        assert_eq!(
+            module_refusals(src).errors,
+            vec![ParseError::new(
+                ParseErrorKind::ImplOfUndeclaredStruct,
+                at(src, "B")
+            )]
+        );
+        let src = "impl A { }";
+        assert_eq!(
+            module_refusals(src).errors,
+            vec![ParseError::new(
+                ParseErrorKind::ImplOfUndeclaredStruct,
+                at(src, "A")
+            )]
+        );
+        let interner = Interner::new();
+        let parsed = parse_module(&interner, "impl A { fn f(&self) { 1 } }\nstruct A { x }")
+            .unwrap_or_else(|e| panic!("{:?}", e.errors));
+        assert!(matches!(
+            parsed.decls.as_slice(),
+            [ModuleDecl::Impl(_), ModuleDecl::Struct(_)]
+        ));
+    }
+
+    #[test]
+    fn self_names_the_receiver_and_no_pattern_binds_it() {
+        let interner = Interner::new();
+        let src = "match 1 { self => 1, _ => 0 }";
+        let error = first_error(parse_script(&interner, src).expect_err(src));
+        assert_eq!(
+            error,
+            ParseError::new(
+                ParseErrorKind::InvalidPattern("`self` is the receiver and binds nothing".into()),
+                at(src, "self")
+            )
+        );
+    }
+
+    #[test]
+    fn a_module_keyword_is_no_name() {
+        let interner = Interner::new();
+        for keyword in ["struct", "impl", "self", "Self"] {
+            let src = format!("let {keyword} = 1;");
+            let error = first_error(parse_script(&interner, &src).expect_err(&src));
+            assert_eq!(
+                error.kind.to_string(),
+                format!("expected a name, found `{keyword}`")
+            );
+        }
     }
 
     /// A line that does not begin with `%` is text, its newline included

@@ -253,6 +253,7 @@ type Lexed = (Result<Token, ()>, std::ops::Range<usize>);
 fn ends_a_value(token: &Token) -> bool {
     match token {
         Token::Ident(_)
+        | Token::SelfValue
         | Token::ParamRef(_)
         | Token::ContextRef(_)
         | Token::IntLit(_)
@@ -289,6 +290,9 @@ fn ends_a_value(token: &Token) -> bool {
         | Token::Mut
         | Token::Move
         | Token::As
+        | Token::Struct
+        | Token::Impl
+        | Token::SelfType
         | Token::FmtStringStart(_)
         | Token::FmtStringMid(_)
         | Token::DoubleColon

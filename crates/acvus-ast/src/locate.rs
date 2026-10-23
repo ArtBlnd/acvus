@@ -77,16 +77,52 @@ impl Nodes {
             names: Vec::new(),
             callees: Vec::new(),
         };
-        nodes.fn_decl(decl);
+        nodes.fn_decl(decl, None);
         nodes
     }
 
-    fn fn_decl<S>(&mut self, decl: &FnDecl<S>)
+    pub fn of_module<S>(module: &Module<S>) -> Self
+    where
+        S: Slot,
+    {
+        let mut nodes = Self {
+            preorder: Vec::new(),
+            names: Vec::new(),
+            callees: Vec::new(),
+        };
+        nodes.push(module.id, module.span, None);
+        for decl in &module.decls {
+            match decl {
+                ModuleDecl::Fn(decl) => nodes.fn_decl(decl, None),
+                ModuleDecl::Struct(decl) => {
+                    nodes.push(decl.id, decl.span, None);
+                    nodes.binder(&decl.name);
+                    for field in &decl.fields {
+                        nodes.binder(field);
+                    }
+                }
+                ModuleDecl::Impl(block) => {
+                    nodes.push(block.id, block.span, None);
+                    nodes.binder(&block.name);
+                    for f in &block.fns {
+                        nodes.fn_decl(&f.decl, f.receiver.as_ref());
+                    }
+                }
+                ModuleDecl::Error(node) => nodes.error(node),
+            }
+        }
+        nodes
+    }
+
+    fn fn_decl<S>(&mut self, decl: &FnDecl<S>, receiver: Option<&Receiver>)
     where
         S: Slot,
     {
         self.push(decl.id, decl.span, None);
         self.binder(&decl.name);
+        if let Some(receiver) = receiver {
+            self.binder(&receiver.binder);
+        }
         for param in &decl.params {
             self.binder(param);
         }
@@ -307,7 +343,7 @@ impl Nodes {
                 self.push(*id, *span, None);
                 self.stmts(body);
             }
-            Stmt::FnDecl(decl) => self.fn_decl(decl),
+            Stmt::FnDecl(decl) => self.fn_decl(decl, None),
             Stmt::Append { id, expr, span } => {
                 self.push(*id, *span, None);
                 self.expr(expr);
@@ -506,7 +542,7 @@ impl Nodes {
                     self.expr(element);
                 }
             }
-            Expr::Object { id, fields, span } => {
+            Expr::Object { id, fields, span } | Expr::Struct { id, fields, span } => {
                 self.push(*id, *span, None);
                 for field in fields {
                     self.push(field.id, field.span, None);
@@ -807,6 +843,35 @@ mod tests {
                 Span::new(between, source.len()),
                 Span::new(0, between),
                 Span::new(0, source.len())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_module_s_names_are_in_source_order_its_receiver_among_them() {
+        let interner = Interner::new();
+        let source = "struct P { a }\nimpl P { fn get(&self) { self.a } }";
+        let module = crate::parse_module(&interner, source).expect("the source parses");
+        let spans: Vec<Span> = Nodes::of_module(&module)
+            .names()
+            .iter()
+            .map(|name| name.span)
+            .collect();
+        let at = |written: &str, from: usize| {
+            let start = from + source[from..].find(written).expect("written in the source");
+            Span::new(start, start + written.len())
+        };
+        let block = source.find("impl").expect("the impl is written");
+        let receiver = at("self", block);
+        assert_eq!(
+            spans,
+            vec![
+                at("P", 0),
+                at("a", 0),
+                at("P", block),
+                at("get", block),
+                receiver,
+                at("self", receiver.end),
             ]
         );
     }

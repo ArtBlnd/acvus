@@ -66,6 +66,12 @@ pub enum ParseErrorKind {
     /// template or a bound literal holds. Only a script declares a function
     /// (RFC-0100 rule 1).
     FnOutsideScript,
+    /// A module's second `struct`: a module is at most one struct, with
+    /// the methods its `impl` blocks hold (programs §3).
+    SecondStruct,
+    /// An `impl` block naming a struct its module does not declare: an
+    /// `impl` holds the methods of its own module's struct.
+    ImplOfUndeclaredStruct,
     NestingTooDeep {
         max: u32,
     },
@@ -136,6 +142,15 @@ impl fmt::Display for ParseErrorKind {
             ParseErrorKind::FnOutsideScript => write!(
                 f,
                 "only a script (`.acvus`) declares a `fn`; a template declares none"
+            ),
+            ParseErrorKind::SecondStruct => write!(
+                f,
+                "a module declares at most one `struct`, and this is its second"
+            ),
+            ParseErrorKind::ImplOfUndeclaredStruct => write!(
+                f,
+                "an `impl` block holds the methods of its module's `struct`, and this \
+                 module declares no `struct` of this name"
             ),
             ParseErrorKind::NestingTooDeep { max } => write!(
                 f,
@@ -353,6 +368,10 @@ pub enum Terminal {
     Mut,
     Move,
     As,
+    Struct,
+    Impl,
+    SelfValue,
+    SelfType,
     Amp,
     Plus,
     Minus,
@@ -414,6 +433,8 @@ const OPERAND_START: &[Terminal] = &[
     Terminal::Err,
     Terminal::If,
     Terminal::Match,
+    Terminal::SelfValue,
+    Terminal::SelfType,
     Terminal::Amp,
     Terminal::Minus,
     Terminal::Star,
@@ -449,7 +470,7 @@ const LITERALS: [Terminal; 7] = [
 ];
 
 impl Terminal {
-    pub const ALL: [Terminal; 71] = [
+    pub const ALL: [Terminal; 75] = [
         Terminal::Int,
         Terminal::IntOf,
         Terminal::Char,
@@ -482,6 +503,10 @@ impl Terminal {
         Terminal::Mut,
         Terminal::Move,
         Terminal::As,
+        Terminal::Struct,
+        Terminal::Impl,
+        Terminal::SelfValue,
+        Terminal::SelfType,
         Terminal::Amp,
         Terminal::Plus,
         Terminal::Minus,
@@ -557,6 +582,10 @@ impl Terminal {
             Token::Mut => Terminal::Mut,
             Token::Move => Terminal::Move,
             Token::As => Terminal::As,
+            Token::Struct => Terminal::Struct,
+            Token::Impl => Terminal::Impl,
+            Token::SelfValue => Terminal::SelfValue,
+            Token::SelfType => Terminal::SelfType,
             Token::Amp => Terminal::Amp,
             Token::Plus => Terminal::Plus,
             Token::Minus => Terminal::Minus,
@@ -637,6 +666,10 @@ impl Terminal {
             Terminal::Mut => "mut",
             Terminal::Move => "move",
             Terminal::As => "as",
+            Terminal::Struct => "struct",
+            Terminal::Impl => "impl",
+            Terminal::SelfValue => "self",
+            Terminal::SelfType => "Self",
             Terminal::Amp => "&",
             Terminal::Plus => "+",
             Terminal::Minus => "-",
@@ -779,6 +812,10 @@ mod tests {
             Token::Mut,
             Token::Move,
             Token::As,
+            Token::Struct,
+            Token::Impl,
+            Token::SelfValue,
+            Token::SelfType,
             Token::Amp,
             Token::Plus,
             Token::Minus,
@@ -835,7 +872,7 @@ mod tests {
         let spoken = |set: &str| -> String {
             Expected::of_grammar_names(set.split(' ').filter(|n| !n.is_empty())).to_string()
         };
-        let operand = r#""int" "int_of" "char" "byte" "bytes" "float" "string" "ident" "$ref" "@ref" "true" "false" "Some" "None" "Ok" "Err" "if" "match" "&" "-" "*" "!" "(" "[" "{" "fmt_start""#;
+        let operand = r#""int" "int_of" "char" "byte" "bytes" "float" "string" "ident" "$ref" "@ref" "true" "false" "Some" "None" "Ok" "Err" "if" "match" "self" "Self" "&" "-" "*" "!" "(" "[" "{" "fmt_start""#;
         // `let x = 1 +;`
         assert_eq!(spoken(operand), "an expression");
         // `let x = ;`

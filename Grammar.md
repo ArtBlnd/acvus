@@ -362,6 +362,43 @@ The IR has one shape per write: `Assign { target, path }` with
 itself.
 
 
+## Modules
+
+A module (`.acvum`, programs §3) declares free fns, and at most one struct
+with the fns its `impl` blocks hold. No type is written: a struct states the
+names of its fields, in the order of its parts.
+
+```
+Module       = ModuleDecl*
+ModuleDecl   = FreeFn
+             | "struct" IDENT "{" CommaSep<IDENT> "}"   ← the module's struct
+             | "impl" IDENT "{" ImplFn* "}"              ← fns of that struct
+FreeFn       = "fn" IDENT "(" CommaSep<IDENT> ")" "{" Body "}"
+ImplFn       = "fn" IDENT "(" Receiver ("," IDENT)* ","? ")" "{" Body "}"
+                                                         ← a method
+             | FreeFn                                    ← called as `Name::f(..)`
+Receiver     = "self" | "&" "self" | "&" "mut" "self"
+```
+
+A method's body reads its receiver as `self`, and `Self { a: e, b }` is a
+value of the module's struct, its fields written as an object literal writes
+them, with no comma required after the last. A fn's body declares `fn`s
+wherever a statement stands, as a script's does. Only the fns of the struct's
+`impl` blocks name its fields and build its value (the type system's l.35),
+which is the checker's to refuse elsewhere. These are refused where the name
+is written:
+
+```
+a module declares at most one `struct`, and this is its second
+an `impl` block holds the methods of its module's `struct`, and this module declares no `struct` of this name
+```
+
+`self` names the receiver, so no pattern binds it:
+
+```
+invalid pattern: `self` is the receiver and binds nothing
+```
+
 ## Expression Grammar
 
 LALRPOP-based. Operator precedence (low → high):
@@ -454,6 +491,9 @@ PrimaryExpr  = IDENT                       ← identifier (value binding)
                                              than two segments
              | "$" IDENT                   ← extern parameter (immutable, injected)
              | "@" IDENT                   ← context reference (mutable storage)
+             | "self"                      ← a method's receiver (Modules)
+             | "Self" "{" CommaSep<ObjectField> "}"
+                                           ← a value of the module's struct (Modules)
              | INT                         ← integer literal
              | INT_OF                      ← suffixed integer literal (RFC-0058)
              | FLOAT                       ← float literal
@@ -581,7 +621,9 @@ pattern, `% _ =>` in a template included. It is not an expression.
 | `==` `!=` `<` `>` `<=` `>=` | comparison operators |
 | `=` | assignment (a statement) |
 | `in` | a `for` head |
-| `fn` | a function a script declares (RFC-0100) |
+| `fn` | a function a script or a module declares (RFC-0100, programs §3) |
+| `struct` `impl` | a module's struct and the blocks of its fns (programs §3) |
+| `self` `Self` | a method's receiver, and a value of the module's struct (programs §3) |
 | `return` | leaves the enclosing body with the expression that follows |
 | `->` | lambda arrow |
 | `..` `..=` `=..` | range operators |

@@ -176,6 +176,72 @@ pub struct FnDecl<S = Clean> {
     pub span: Span,
 }
 
+/// A parsed module (programs §3): free fns, and at most one struct with the
+/// methods its `impl` blocks hold.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Module<S = Clean> {
+    pub id: AstId,
+    pub decls: Vec<ModuleDecl<S>>,
+    pub span: Span,
+}
+
+/// A declaration of a module, in the order written.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModuleDecl<S = Clean> {
+    Fn(FnDecl<S>),
+    Struct(StructDecl),
+    Impl(ImplBlock<S>),
+    Error(S),
+}
+
+/// `struct Name { a, b }`: the module's struct, by the names of its fields
+/// in the order written, which is the order of its parts. No field's type
+/// is written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDecl {
+    pub id: AstId,
+    pub name: Binder,
+    pub fields: Vec<Binder>,
+    pub span: Span,
+}
+
+/// `impl Name { fn .. }`: fns of the struct `name` names, the module's own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplBlock<S = Clean> {
+    pub id: AstId,
+    /// The struct, as the `impl` names it.
+    pub name: Binder,
+    pub fns: Vec<ImplFn<S>>,
+    pub span: Span,
+}
+
+/// A `fn` of an impl block: a method where it takes a receiver, and one
+/// called by its struct's name, `Name::f(..)`, where it takes none. `decl`'s
+/// parameters follow the receiver.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplFn<S = Clean> {
+    pub receiver: Option<Receiver>,
+    pub decl: FnDecl<S>,
+}
+
+/// A method's receiver, `self`, `&self` or `&mut self`, whose binder the
+/// body reads it by as `self`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Receiver {
+    pub binder: Binder,
+    pub mode: ReceiverMode,
+    pub span: Span,
+}
+
+/// How a method takes its receiver: `Self` itself, or a shared or an
+/// exclusive reference to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiverMode {
+    Value,
+    Shared,
+    Exclusive,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Place<S = Clean> {
     Base(PlaceBase<S>),
@@ -488,6 +554,13 @@ pub enum Expr<S = Clean> {
         fields: Vec<ObjectExprField<S>>,
         span: Span,
     },
+    /// `Self { a: e, b }`: a value of the module's struct, its fields named
+    /// as an object literal names them.
+    Struct {
+        id: AstId,
+        fields: Vec<ObjectExprField<S>>,
+        span: Span,
+    },
     /// A tuple: `(a, b, c)` - 0 or 2+ elements.
     /// Elements can be expressions or wildcards `_`.
     Tuple {
@@ -627,6 +700,7 @@ where
             | Expr::List { id, .. }
             | Expr::Group { id, .. }
             | Expr::Object { id, .. }
+            | Expr::Struct { id, .. }
             | Expr::Tuple { id, .. }
             | Expr::ContextRef { id, .. }
             | Expr::Variant { id, .. }
@@ -658,6 +732,7 @@ where
             | Expr::List { span, .. }
             | Expr::Group { span, .. }
             | Expr::Object { span, .. }
+            | Expr::Struct { span, .. }
             | Expr::Tuple { span, .. }
             | Expr::ContextRef { span, .. }
             | Expr::Variant { span, .. }
@@ -1151,7 +1226,7 @@ fn walk_expr_level<S>(expr: &Expr<S>, refs: &mut ContextRefs) {
                 walk_expr(e, refs);
             }
         }
-        Expr::Object { fields, .. } => {
+        Expr::Object { fields, .. } | Expr::Struct { fields, .. } => {
             for f in fields {
                 walk_expr(&f.value, refs);
             }

@@ -27,7 +27,7 @@ pub use acvus_utils::{LocalFactory, LocalIdOps};
 pub use ast::*;
 pub use error::ParseError;
 pub use nesting::NESTING_MAX;
-pub use parser::{Recovered, parse_expr, parse_script, parse_template};
+pub use parser::{Recovered, parse_expr, parse_module, parse_script, parse_template};
 pub use span::{Span, Spanned};
 
 use acvus_utils::Interner;
