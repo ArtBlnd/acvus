@@ -17,7 +17,7 @@ use crate::cut::Cut;
 use crate::decl::Decls;
 use crate::dep::Eligible;
 use crate::instance::Made;
-use crate::node::NodeState;
+use crate::node::{LitDefaults, NodeState};
 use crate::program::{ENTRY, Function, Item, Part, Position, Program, TextClass};
 use crate::read::ReadValue;
 use crate::relation::{Recorded, Recorder, Relation};
@@ -317,21 +317,54 @@ impl State {
     /// The steps that may be taken now: each eligible class solved or filled,
     /// and each eligible node decided where the value it reads now decides it,
     /// a node whose value decides nothing staying undecided (l.261, l.333).
+    /// Where no such step is left, each eligible node its LitVars' defaults
+    /// decide (l.333), as a class falls back only then (l.288).
     pub fn steps(&self) -> Vec<Step> {
         let Eligible {
             solve,
             fill,
             decide,
         } = self.eligible();
-        let decided = decide
-            .into_iter()
-            .filter(|name| self.read_now(name).decision.is_some());
-        solve
+        let decided = |defaults: LitDefaults| -> Vec<Step> {
+            decide
+                .iter()
+                .filter(|name| self.read_now(name, defaults).decision.is_some())
+                .cloned()
+                .map(Step::Decide)
+                .collect()
+        };
+        let steps: Vec<Step> = solve
             .into_iter()
             .map(Step::Solve)
             .chain(fill.into_iter().map(Step::Fill))
-            .chain(decided.map(Step::Decide))
-            .collect()
+            .chain(decided(LitDefaults::Withheld))
+            .collect();
+        if steps.is_empty() {
+            return decided(LitDefaults::Taken);
+        }
+        steps
+    }
+
+    /// Whether a use reads its LitVars as their defaults now: where no step
+    /// is left without them (l.288, l.333).
+    #[cfg(test)]
+    pub(crate) fn lit_defaults_now(&self) -> LitDefaults {
+        let Eligible {
+            solve,
+            fill,
+            decide,
+        } = self.eligible();
+        let without = !solve.is_empty()
+            || !fill.is_empty()
+            || decide.iter().any(|name| {
+                self.read_now(name, LitDefaults::Withheld)
+                    .decision
+                    .is_some()
+            });
+        match without {
+            true => LitDefaults::Withheld,
+            false => LitDefaults::Taken,
+        }
     }
 
     /// Takes the step, and records what follows at once from it.

@@ -14,7 +14,7 @@ use crate::sig::{SigTy, Signature};
 use crate::solve::State;
 use crate::ty::{HasTerm, Name, Term};
 
-use super::Decision;
+use super::{Decision, LitDefaults};
 
 /// The candidates a use's read leaves at one position where they differ
 /// (l.326–333).
@@ -229,6 +229,7 @@ impl State {
         args: &[Option<ClassId>],
         result: Option<ClassId>,
         excluded: &BTreeSet<Name>,
+        defaults: LitDefaults,
     ) -> Narrowing {
         let candidates = self.candidates(callee, args.len());
         let ids: Vec<DeclId> = candidates.iter().map(|decl| decl.id.clone()).collect();
@@ -301,7 +302,10 @@ impl State {
         };
         let (mut remaining, stages) = narrowed(&values);
         let mut retry = None;
-        if remaining.len() > 1 && values.iter().any(|(_, value)| value.has_lit()) {
+        if defaults == LitDefaults::Taken
+            && remaining.len() > 1
+            && values.iter().any(|(_, value)| value.has_lit())
+        {
             let defaulted: Vec<(usize, ReadValue)> = values
                 .iter()
                 .map(|(i, value)| (*i, value.with_defaults()))

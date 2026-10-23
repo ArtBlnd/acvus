@@ -900,7 +900,8 @@ pub fn waiting(state: &State) -> Lines {
         lines.push(0, attributes(line, [("wait", Some(wait))]));
         if waits_for_nothing {
             let none = [("broken by", None)];
-            lines.nest(1, value_read(state, node, &state.read_now(node), none));
+            let read = state.read_now(node, state.lit_defaults_now());
+            lines.nest(1, value_read(state, node, &read, none));
         }
     }
     lines

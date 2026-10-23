@@ -1,0 +1,79 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run: 200 sampled orders
+outcome 1
+  accepted
+  value `&0 e`: none
+  value `&0 o`: none
+  value `&1 e`: none
+  value `&1 o`: none
+  value `&n e`: none
+  value `&n e 2`: none
+  value `&n o`: none
+  value `&n o 2`: none
+  value 10u8: u8
+  value ?oe: none
+  value ?oo: none
+  value ?ze: none
+  value ?zo: none
+  value CE: bool
+  value CO: bool
+  value EQE: bool
+  value EQO: bool
+  value FO: bool
+  value NE: none
+  value NO: none
+  value RE: bool
+  value RO: bool
+  value SE: none
+  value SO: none
+  value TE: bool
+  value `even(10u8)`: bool
+  value `even(n - 1)`: bool
+  value `odd(n - 1)`: bool
+  decision `&0 e`: lend & place
+  decision `&0 o`: lend & place
+  decision `&1 e`: lend & place
+  decision `&1 o`: lend & place
+  decision `even@20/&n e`: lend & place
+  decision `even@20/&n e 2`: lend & place
+  decision `even@20/&n o`: lend & place
+  decision `even@20/&n o 2`: lend & place
+  decision `even@20/n - 1 e`: core::sub#0
+  decision `even@20/n - 1 o`: core::sub#0
+  decision `even@20/n == 0 e`: core::eq#0
+  decision `even@20/n == 0 o`: core::eq#0
+  check `10u8 <= even@20/NE`: Ok(Identity)
+  check `even@20/&0 e <= even@20/n == 0 e.Common(0)`: Ok(Identity)
+  check `even@20/&0 e ~> even@20/n == 0 e.Param(1)`: Ok(Identity)
+  check `even@20/&0 o <= even@20/n == 0 o.Common(0)`: Ok(Identity)
+  check `even@20/&0 o ~> even@20/n == 0 o.Param(1)`: Ok(Identity)
+  check `even@20/&1 e <= even@20/n - 1 e.Common(0)`: Ok(Identity)
+  check `even@20/&1 e ~> even@20/n - 1 e.Param(1)`: Ok(Identity)
+  check `even@20/&1 o <= even@20/n - 1 o.Common(0)`: Ok(Identity)
+  check `even@20/&1 o ~> even@20/n - 1 o.Param(1)`: Ok(Identity)
+  check `even@20/&n e 2 <= even@20/n - 1 e.Common(0)`: Ok(Identity)
+  check `even@20/&n e 2 ~> even@20/n - 1 e.Param(0)`: Ok(Identity)
+  check `even@20/&n e <= even@20/n == 0 e.Common(0)`: Ok(Identity)
+  check `even@20/&n e ~> even@20/n == 0 e.Param(0)`: Ok(Identity)
+  check `even@20/&n o 2 <= even@20/n - 1 o.Common(0)`: Ok(Identity)
+  check `even@20/&n o 2 ~> even@20/n - 1 o.Param(0)`: Ok(Identity)
+  check `even@20/&n o <= even@20/n == 0 o.Common(0)`: Ok(Identity)
+  check `even@20/&n o ~> even@20/n == 0 o.Param(0)`: Ok(Identity)
+  check `even@20/RE <= even(10u8)`: Ok(Identity)
+  check `even@20/SE ~> even@20/NO`: Ok(Identity)
+  check `even@20/SO ~> even@20/NE`: Ok(Identity)
+  check `even@20/n - 1 e.Chosen(1) <= even@20/n - 1 e.Common(1)`: Ok(Identity)
+  check `even@20/n - 1 e.Common(1) <= even@20/SE`: Ok(Identity)
+  check `even@20/n - 1 o.Chosen(1) <= even@20/n - 1 o.Common(1)`: Ok(Identity)
+  check `even@20/n - 1 o.Common(1) <= even@20/SO`: Ok(Identity)
+  check `EQE ~> CE`: Ok(Identity)
+  check `EQO ~> CO`: Ok(Identity)
+  check `FO <= RO`: Ok(Identity)
+  check `RE <= even(n - 1)`: Ok(Identity)
+  check `RO <= odd(n - 1)`: Ok(Identity)
+  check `TE <= RE`: Ok(Identity)
+  check `even(n - 1) <= RO`: Ok(Identity)
+  check `n == 0 e.CommonResult <= EQE`: Ok(Identity)
+  check `n == 0 o.CommonResult <= EQO`: Ok(Identity)
+  check `odd(n - 1) <= RE`: Ok(Identity)
+  I* of a final state: []

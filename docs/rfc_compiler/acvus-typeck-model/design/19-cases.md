@@ -446,6 +446,16 @@ steps; `golden()` and every expectation read what they read without it.
   function type (l.197): refused where the lambda's result reaches the type's by
   no coercion, accepted where it does, and by a declared conversion at that
   boundary.
+- 2 cases under `cases/spec`, `l263-*`, test two functions that call each other,
+  `even(10u8)`, with and without an `i32` candidate of each (note 10, reading 11;
+  note 08, reading 22): two outcomes and five, by whether a broken dependency's
+  relations had waited for a node that only they decide and a LitVar's default had
+  been taken at once, now one, accepted, over 200 sampled orders. Each was derived
+  before it was run. `l240-two-uses-that-fill-one-literal` and
+  `l240-a-literal-through-a-generic-use-then-two-uses`, refused with I\* completeness
+  violations, are accepted with `x: u16`, `n` decided by the `u16` that `m`'s
+  boundary unifies `x` with; `l186-a-lambda-calls-a-function-with-a-capture-and-its-parameter`
+  keeps its outcome over 200 sampled orders, every order now passing 100 000 states.
 - 2 cases under `cases/spec`, `l261-*`, test a lend of a use's result where the
   candidates' results are type parameters alone, which the use does not read
   (note 08, reading 11): accepted with the lend through the reference the result

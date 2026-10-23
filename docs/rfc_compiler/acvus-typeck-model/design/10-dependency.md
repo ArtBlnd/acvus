@@ -89,6 +89,19 @@ met.
    and the parameter was filled first: G1 of the review of 2026-10-22, four
    outcomes, now one.
 
+11. **What a broken dependency defers** (l.263, since the review of 2026-10-23, as
+   준량 decided). The relations of a node a broken dependency pointed to wait for the
+   node that broke it only where that node reads them: into a class at a position it
+   reads, or a class those reach by lower bounds and part lower bounds, as I\* takes
+   what a node records (note 15, Definitions); the rest are recorded as the node is
+   decided (`State::reading_what_it_records`). In `even(10u8)` with `even` and `odd`
+   calling each other, `n - 1` in odd's copy, decided by its result, records into
+   its parameters' types, which `n == 0` does not read; deferred whole, its relations
+   waited for `n == 0`, which they alone decide, so the order decided whether the
+   two had broken their dependencies before, refused, or not, accepted
+   (`cases/spec/l263-*`). The pick example's `a.x` records a field kind into `A`,
+   which `pick` reads, and is deferred as before (l.259).
+
 ## Left open for change
 
 Each rule of the table that the ledger finds open is one function, so that a

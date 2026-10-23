@@ -256,6 +256,13 @@ cycle is found. The reading that recorded them when their node was decided,
 leaving them out of the reads of the nodes that broke the dependency alone, is
 removed with no witness to keep it.
 
+Revised 2026-10-23, as 준량 decided: only the relations recorded into what the node
+that broke the dependency reads wait for it, as I\* takes what a node records, and
+a LitVar's default narrows only where no other step is left (l.263, l.333; note 08,
+reading 22; note 10, reading 11). The witness is `even(10u8)` with `even` and `odd`
+calling each other, two outcomes, and five with an `i32` candidate of each, now one,
+accepted (`cases/spec/l263-*`).
+
 ## O3. A reference recorded at once has no mutability
 
 Not an order. Where every candidate records a reference into a class, a use's

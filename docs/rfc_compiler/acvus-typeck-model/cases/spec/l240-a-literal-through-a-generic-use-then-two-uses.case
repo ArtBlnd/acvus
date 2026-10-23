@@ -2,7 +2,9 @@
 // let mut x = 0; while c { x = id(x); } n(x); m(x);   // id<T>(T) -> T
 // id is decided at once, and its lower bounds make a cycle with X, merged
 // into one class (l.269) that only LitVars enter: n and m depend on each
-// other as without id, and the program is refused in every order.
+// other as without id, and are decided as there, m by the LitVar reaching no
+// &str and n by the u16 X is unified with once m records into its parameter's
+// type (l.263, l.333): accepted in every order.
 extern fn id<T>(T) -> T;
 extern fn n(u16);
 extern fn n(i32);
@@ -19,6 +21,7 @@ X = R;
 `n(x)` = n(X) @ n;
 `m(x)` = m(X) @ m;
 
-must fail;
-assert istar completeness n;
-assert istar completeness m;
+must pass;
+assert n == n#0;
+assert m == m#0;
+assert X: u16;

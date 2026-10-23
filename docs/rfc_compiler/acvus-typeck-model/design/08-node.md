@@ -185,6 +185,15 @@ reads its position, or lends it where its path passes a reference.
    boundary, by a coercion as before (`State::meeting_places`, `rank_into_places`). A
    use whose result meets a class others enter is no longer refused against that
    class's value without it (G2 of the review of 2026-10-22).
+22. **A LitVar's default narrows at a fixpoint** (l.333, l.288, since the review of
+   2026-10-23, as 준량 decided). Where several candidates remain and a value read
+   holds a LitVar, the narrowing again with the LitVar taken as its family's
+   default is a step only where no other step is left (`State::steps`,
+   `LitDefaults`), as a class falls back to its default only then: before, a use
+   took the default at once, before a node that could unify its LitVar with a type
+   was decided, and where the two were in a cycle the wait of l.238 (b) that keeps
+   the default back was broken (`cases/spec/l240-*`, `l263-*`). I\*'s decision again
+   is taken at the end, a fixpoint, and takes it.
 
 ## Left open for change
 

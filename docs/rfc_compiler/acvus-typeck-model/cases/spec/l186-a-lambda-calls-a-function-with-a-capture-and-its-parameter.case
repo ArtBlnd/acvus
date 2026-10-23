@@ -1,4 +1,5 @@
 //@ spec: l.186, l.215
+//@ orders: sampled 200
 // fn put(b, v) { write(b, v) }   // write(&mut Buf, u8), write(&mut Buf, &str)
 // let mut out = buf();
 // let emit = |x| put(&mut out, x);
@@ -6,7 +7,9 @@
 // put's text ties b and v to nothing together, so the use gives a constraint
 // at each: at &mut out the environment's, whose instance of put makes what C
 // ties to b, once; at x the lambda's, each call's instance making what C ties
-// to v, and deciding write by what it passes (l.186, l.215).
+// to v, and deciding write by what it passes (l.186, l.215). Since a broken
+// dependency defers only what its breaker reads (l.263), more orders of
+// solving are distinct, past 100 000 states, and 200 are sampled.
 extern type Buf;
 extern fn buf() -> Buf;
 extern fn write(&mut Buf, u8);

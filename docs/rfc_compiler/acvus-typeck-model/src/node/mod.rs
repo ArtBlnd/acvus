@@ -187,6 +187,15 @@ pub enum NodeAt {
     Chosen(usize),
 }
 
+/// Whether a use's narrowing may take each LitVar it reads as its family's
+/// default (l.333): only where no other step is left, as a class falls back
+/// to its default only then (l.288).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LitDefaults {
+    Withheld,
+    Taken,
+}
+
 /// A node decided (l.261), with the relations recorded once it is: its own,
 /// and those of the nodes deferred on it that it lets record (l.263). A node
 /// decided by the value it read has what it read; one decided as it is
@@ -288,23 +297,30 @@ impl State {
     }
 
     /// The value the node reads now, as deciding it would read it: without
-    /// itself and those that transitively depend on it (l.261).
-    pub(crate) fn read_now(&self, name: &Name) -> ValueRead {
-        self.value_read(name, &self.dependents(name))
+    /// itself and those that transitively depend on it (l.261), its LitVars
+    /// taken as their defaults or not as `defaults` says (l.333).
+    pub(crate) fn read_now(&self, name: &Name, defaults: LitDefaults) -> ValueRead {
+        self.value_read(name, &self.dependents(name), defaults)
     }
 
     /// Decides the node by the value it reads, which decides it (`steps`),
-    /// and records what it records, or defers it (l.263).
+    /// its LitVars taken as their defaults only where it decides nothing
+    /// without them, which `steps` offers only where no other step is left
+    /// (l.333), and records what it records, or defers it (l.263).
     pub(crate) fn decide(&mut self, name: &Name) -> Decided {
         let dependents = self.dependents(name);
-        let value = self.value_read(name, &dependents);
+        let mut value = self.value_read(name, &dependents, LitDefaults::Withheld);
+        if value.decision.is_none() {
+            value = self.value_read(name, &dependents, LitDefaults::Taken);
+        }
         let decision = value
             .decision
             .clone()
             .expect("a node is decided where the value it reads decides it");
         let broken_on = self.broken_on(name);
         self.set_decision(name, decision.clone());
-        let recorded = self.defer(name, broken_on.clone());
+        let waiting = self.reading_what_it_records(name, &broken_on);
+        let recorded = self.defer(name, waiting);
         Decided {
             node: name.clone(),
             decision,
@@ -317,10 +333,98 @@ impl State {
         }
     }
 
+    /// Those of `broken_on` whose read reaches a class the node `name`, just
+    /// decided, records into (l.244, l.263): the relations of a node a broken
+    /// dependency pointed to wait for the node that broke it only where that
+    /// node reads them. A use records into what its candidate would record
+    /// into by the splits of l.278, or its result where it is decided `!`;
+    /// another node, into what its own relations record into. A read of
+    /// whether a class is a reference reaches only what may decide it (l.242).
+    fn reading_what_it_records(&self, name: &Name, broken_on: &BTreeSet<Name>) -> BTreeSet<Name> {
+        if broken_on.is_empty() {
+            return BTreeSet::new();
+        }
+        let mut probe = self.clone();
+        probe.record_decision(name);
+        let node = &self.nodes[name];
+        let into: Vec<ClassId> = match (&node.kind, &node.decision) {
+            (NodeKind::Use { callee, args, .. }, Some(Decision::Use(id))) => {
+                let candidate = self.candidate_index(callee, args.len(), id);
+                self.would_record_by(name, candidate).into_keys().collect()
+            }
+            (NodeKind::Use { result, .. }, Some(Decision::Never)) => {
+                result.iter().copied().collect()
+            }
+            _ => probe
+                .log
+                .iter()
+                .filter(|recorded| recorded.recorder.nodes().contains(name))
+                .flat_map(|recorded| recorded_into(&recorded.relation))
+                .collect(),
+        };
+        let into: BTreeSet<ClassId> = into.into_iter().map(|class| probe.root(class)).collect();
+        let mut cannot_decide: BTreeSet<ClassId> = node
+            .references
+            .iter()
+            .map(|&class| probe.root(class))
+            .collect();
+        match &node.kind {
+            NodeKind::Lend { place, .. } => {
+                cannot_decide.insert(probe.root(*place));
+            }
+            NodeKind::Bind { position, .. } => {
+                cannot_decide.insert(probe.root(*position));
+            }
+            NodeKind::Use { .. } | NodeKind::Project { .. } | NodeKind::CallValue { .. } => {}
+        }
+        let decides_no_reference = matches!(
+            &node.kind,
+            NodeKind::Project { projection, .. } if *projection != Projection::Deref
+        );
+        broken_on
+            .iter()
+            .filter(|breaker| {
+                let Reads { read, classes } = probe.reads(breaker);
+                let reached = probe.reached_by_lower_bounds(classes);
+                match read {
+                    Read::Value => !into.is_disjoint(&reached),
+                    Read::Reference => {
+                        !decides_no_reference
+                            && into.iter().any(|class| {
+                                reached.contains(class) && !cannot_decide.contains(class)
+                            })
+                    }
+                }
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The roots of `classes` and of every class they reach along the lower
+    /// bounds and part lower bounds recorded, a split's among them.
+    fn reached_by_lower_bounds(&self, classes: Vec<ClassId>) -> BTreeSet<ClassId> {
+        let mut reached: BTreeSet<ClassId> =
+            classes.into_iter().map(|class| self.root(class)).collect();
+        let mut work: Vec<ClassId> = reached.iter().copied().collect();
+        while let Some(at) = work.pop() {
+            for recorded in &self.log {
+                if let Relation::LowerBound { lower, upper }
+                | Relation::PartLowerBound { lower, upper } = recorded.relation
+                    && self.root(upper) == at
+                    && reached.insert(self.root(lower))
+                {
+                    work.push(self.root(lower));
+                }
+            }
+        }
+        reached
+    }
+
     /// Records what the node just decided records, or defers it until the
-    /// undecided nodes that broke their dependency on it, `waiting`, are
-    /// decided (l.263); then records what each deferred node records once the
-    /// nodes it waits for are decided. Returns the relations recorded.
+    /// undecided nodes that broke their dependency on it and read what it
+    /// records, `waiting`, are decided (l.263); then records what each
+    /// deferred node records once the nodes it waits for are decided. Returns
+    /// the relations recorded.
     pub(crate) fn defer(&mut self, name: &Name, waiting: BTreeSet<Name>) -> Recording {
         let mut recorded = Recording::default();
         if waiting.is_empty() {
@@ -357,7 +461,7 @@ impl State {
         name: &Name,
         excluded: &BTreeSet<Name>,
     ) -> Option<Decision> {
-        self.value_read(name, excluded).decision
+        self.value_read(name, excluded, LitDefaults::Taken).decision
     }
 
     /// The value the node reads leaving out the relations of the nodes
@@ -365,7 +469,12 @@ impl State {
     /// whether a class is a reference, of every projection other than a Deref
     /// whose operand is a class it reads (l.261), and what the node becomes by
     /// it, none where it decides nothing (l.261, l.333).
-    pub(crate) fn value_read(&self, name: &Name, excluded: &BTreeSet<Name>) -> ValueRead {
+    pub(crate) fn value_read(
+        &self,
+        name: &Name,
+        excluded: &BTreeSet<Name>,
+        defaults: LitDefaults,
+    ) -> ValueRead {
         let kind = &self.nodes[name].kind;
         let mut excluded = excluded.clone();
         if kind.read() == Read::Reference {
@@ -393,7 +502,7 @@ impl State {
                 result,
                 ..
             } => {
-                let narrowing = self.narrow(name, callee, args, *result, &excluded);
+                let narrowing = self.narrow(name, callee, args, *result, &excluded, defaults);
                 let decision = narrowing.decision.clone();
                 (Reading::Use(narrowing), decision)
             }
@@ -787,5 +896,22 @@ impl State {
             _ => {}
         }
         recorded
+    }
+}
+
+/// The classes a relation records into (l.244): the upper side of a lower
+/// bound or a part lower bound, the type passed into at a boundary or a
+/// wrapping, both sides of an equation, and the class a kind, a fact, a
+/// LitVar, a record of whether it is a reference or a lambda is given to.
+fn recorded_into(relation: &Relation) -> Vec<ClassId> {
+    match relation {
+        Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => vec![*upper],
+        Relation::Boundary { to, .. } | Relation::Wrap { to, .. } => vec![*to],
+        Relation::Equation(a, b) => vec![*a, *b],
+        Relation::Fact(class, _)
+        | Relation::Kind(class, ..)
+        | Relation::Lit(class, _)
+        | Relation::Reference(class, _)
+        | Relation::Values(class, _) => vec![*class],
     }
 }
