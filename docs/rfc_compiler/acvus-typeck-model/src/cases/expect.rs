@@ -109,7 +109,7 @@ pub fn corruption(decls: &Decls, group: &str, change: &Change) -> Result<Corrupt
     Ok(match change {
         Change::Value { class, ty } => Corruption::Value {
             group: group.to_string(),
-            class: ClassName::Text(Name::new(class)),
+            class: class.clone(),
             ty: closed(decls.types(), ty)?,
         },
         Change::Decision {

@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use crate::certificate::Certificate;
 use crate::check::{Outcome, Refusal};
-use crate::class::{ClassId, ClassName};
+use crate::class::ClassId;
 use crate::explore::{Final, Order, explore_with, sample_with};
 use crate::node::Decision;
 use crate::program::{ENTRY, Program};
@@ -59,7 +59,8 @@ impl Tracer {
 pub enum Corruption {
     Value {
         group: String,
-        class: ClassName,
+        /// The class, named as the outcome writes it.
+        class: String,
         ty: Ty,
     },
     Decision {

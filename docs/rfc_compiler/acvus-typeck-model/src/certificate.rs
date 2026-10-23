@@ -239,13 +239,18 @@ impl Certificate {
 impl Certificate {
     /// Gives the class `name` of `group`'s state, with every class equated to
     /// it, the value `value`.
-    pub(crate) fn set_value(&mut self, group: &str, name: &ClassName, value: Ty) {
+    /// The class is named as the outcome writes it, so that a class an
+    /// instance or a node made is named as well as the text's.
+    pub(crate) fn set_value(&mut self, group: &str, name: &str, value: Ty) {
         let sheet = self
             .sheets
             .get_mut(&Name::new(group))
             .unwrap_or_else(|| panic!("the certificate has a sheet of {group}"));
         let id = sheet
-            .id(name)
+            .ids
+            .iter()
+            .find(|(class, _)| class.to_string() == name)
+            .map(|(_, &id)| id)
             .unwrap_or_else(|| panic!("{group} has the class {name}"));
         let root = sheet.root(id);
         sheet.values.insert(root, Some(Value::planted(&value)));
