@@ -1,7 +1,9 @@
 //@ spec: l.154, l.196, design/14-certificate.md
 // let v = single(|x| x); let f = v[0]; f(2u8);   // single<T>(T) -> Vec<T>; Vec's view
 // v[0] reaches Vec's element along its view (l.154); the checker carries λ's
-// Values along the view's signature, where it panicked at a view.
+// Values along the view's signature, where it panicked at a view. Given v[0],
+// of one class with single's T, Values naming no lambda, V keeping its own, the
+// element λ carried along the view is not v[0], nor does |x| x reach single's T.
 extern type Vec<T>;
 #[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
 extern fn single<T>(T) -> Vec<T>;
@@ -24,3 +26,4 @@ let `f(2u8)`;
 
 must pass;
 assert `f(2u8)`: u8;
+assert certificate set `v[0]`: Fn/1{} fails ["argument 0: Fn/1{λ} into Fn/1{} fails", "Vec<Fn/1{λ}> does not have Elem of Fn/1{}"];

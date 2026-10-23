@@ -34,8 +34,9 @@ pub enum TypeExpr {
     Object(Vec<(String, TypeExpr)>),
     /// `E{V(T)}`.
     Enum(String, Vec<(String, TypeExpr)>),
-    /// `Fn/n`.
-    FunctionValue(usize),
+    /// `Fn/n`; in a value a certificate change plants, `Fn/n{λ, …}`, the
+    /// lambdas its Values names (`design/14-certificate.md`).
+    FunctionValue(usize, Option<Vec<String>>),
     /// `fn(P̄) -> R`.
     Function(Vec<TypeExpr>, Box<TypeExpr>),
     /// A name, with the arguments written after it.
@@ -609,7 +610,13 @@ impl Parser<'_> {
         }
         if self.is_word("Fn") && matches!(self.peek_at(1), Some(Tok::Punct("/"))) {
             self.at += 2;
-            return Ok(TypeExpr::FunctionValue(self.number()?));
+            let arity = self.number()?;
+            let values = if self.eat_punct("{") {
+                Some(self.names_until("}")?)
+            } else {
+                None
+            };
+            return Ok(TypeExpr::FunctionValue(arity, values));
         }
         if self.is_word("fn") && matches!(self.peek_at(1), Some(Tok::Punct("("))) {
             self.at += 2;

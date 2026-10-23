@@ -12,7 +12,7 @@ use crate::join::{join, le};
 use crate::node::{Decision, LendTarget};
 use crate::ty::{Mutability, Name};
 
-use super::build::closed;
+use super::build::{closed, planted};
 use super::parse::{Change, Expect, Line, Located, RefusalText};
 use super::render;
 use super::run::{Checked, Corruption, Explored, Run};
@@ -110,7 +110,7 @@ pub fn corruption(decls: &Decls, group: &str, change: &Change) -> Result<Corrupt
         Change::Value { class, ty } => Corruption::Value {
             group: group.to_string(),
             class: class.clone(),
-            ty: closed(decls.types(), ty)?,
+            value: planted(decls.types(), ty)?,
         },
         Change::Decision {
             node,

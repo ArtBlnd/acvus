@@ -27,7 +27,7 @@ use crate::ty::{Constructor, HasTerm, Mutability, Name, PartKey, Term, Ty, TyErr
 /// values carries the lambdas its Values names, as a function value carries
 /// its facts on its type (l.181, l.184).
 #[derive(Clone, PartialEq, Eq, Debug)]
-struct Value {
+pub(crate) struct Value {
     term: Rc<Term<Value>>,
     /// At a function value, the lambdas its Values names; none elsewhere. No
     /// declaration, text or context writes a function value (l.184), so every
@@ -64,20 +64,23 @@ impl Value {
         self.term.part(key)
     }
 
-    /// A value a test plants, which the case writes as a type and so with no
-    /// Values: a function value in it is not decided yet.
+    /// A value a test plants, as a case writes it: a function value naming
+    /// the lambdas of its Values, `lambdas`, which no other term names.
     #[cfg(test)]
-    fn planted(ty: &Ty) -> Value {
-        if let Term::FunctionValue { .. } = ty.term() {
-            panic!(
-                "a planted {ty} names no Values, which a case does not write yet \
-                 (design/14-certificate.md, Open)"
-            );
-        }
-        Value {
-            term: Rc::new(ty.term().clone().map(|_, part| Value::planted(&part))),
-            lambdas: None,
-        }
+    pub(crate) fn planted(
+        term: Term<Value>,
+        lambdas: Option<BTreeSet<Name>>,
+    ) -> Result<Value, String> {
+        assert_eq!(
+            matches!(term, Term::FunctionValue { .. }),
+            lambdas.is_some(),
+            "a function value, and no other term, names its Values"
+        );
+        check_term(&term).map_err(|error| format!("{error:?}"))?;
+        Ok(Value {
+            term: Rc::new(term),
+            lambdas,
+        })
     }
 }
 
@@ -241,7 +244,7 @@ impl Certificate {
     /// it, the value `value`.
     /// The class is named as the outcome writes it, so that a class an
     /// instance or a node made is named as well as the text's.
-    pub(crate) fn set_value(&mut self, group: &str, name: &str, value: Ty) {
+    pub(crate) fn set_value(&mut self, group: &str, name: &str, value: Value) {
         let sheet = self
             .sheets
             .get_mut(&Name::new(group))
@@ -253,7 +256,7 @@ impl Certificate {
             .map(|(_, &id)| id)
             .unwrap_or_else(|| panic!("{group} has the class {name}"));
         let root = sheet.root(id);
-        sheet.values.insert(root, Some(Value::planted(&value)));
+        sheet.values.insert(root, Some(value));
     }
 
     /// Gives the node `node` of `group`'s state the decision `decision`.

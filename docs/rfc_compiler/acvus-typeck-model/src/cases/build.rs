@@ -2,8 +2,9 @@
 //! `Program`, recorded in the order written, as `ProgramBuilder` records them
 //! (`design/19-cases.md`, Form).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use crate::certificate::Value;
 use crate::decl::{Decls, DeclsBuilder};
 use crate::lit::LitVar;
 use crate::program::{ENTRY, Origin, Program, ProgramBuilder, Projection};
@@ -62,7 +63,13 @@ where
         TypeExpr::Identity => return Err("`#` is a signature's identity".to_string()),
         TypeExpr::Object(fields) => Term::Object(named(fields, part)?),
         TypeExpr::Enum(name, variants) => Term::Enum(Name::new(name), named(variants, part)?),
-        TypeExpr::FunctionValue(arity) => Term::FunctionValue { arity: *arity },
+        TypeExpr::FunctionValue(arity, None) => Term::FunctionValue { arity: *arity },
+        TypeExpr::FunctionValue(arity, Some(_)) => {
+            return Err(format!(
+                "`Fn/{arity}{{..}}` names Values, which only a value a certificate change \
+                 plants writes"
+            ));
+        }
         TypeExpr::Function(params, ret) => Term::Function {
             params: parts(params, part)?,
             ret: part(ret)?,
@@ -151,6 +158,28 @@ fn sig_ty(types: &DeclaredTypes, generics: &[String], expr: &TypeExpr) -> Built<
 pub fn closed(types: &DeclaredTypes, expr: &TypeExpr) -> Built<Ty> {
     let term = term(types, expr, &mut |part| closed(types, part))?;
     Ty::new(term).map_err(|error| format!("{error:?}"))
+}
+
+/// The value a certificate change plants: the closed type `expr` writes, each
+/// function value in it naming the lambdas written after it, its Values
+/// (`design/14-certificate.md`).
+pub fn planted(types: &DeclaredTypes, expr: &TypeExpr) -> Built<Value> {
+    if let TypeExpr::FunctionValue(arity, values) = expr {
+        let Some(values) = values else {
+            return Err(format!(
+                "a planted `Fn/{arity}` names its Values, `Fn/{arity}{{λ, ..}}`"
+            ));
+        };
+        let mut lambdas = BTreeSet::new();
+        for lambda in values {
+            if !lambdas.insert(Name::new(lambda)) {
+                return Err(format!("{lambda} is written twice"));
+            }
+        }
+        return Value::planted(Term::FunctionValue { arity: *arity }, Some(lambdas));
+    }
+    let term = term(types, expr, &mut |part| planted(types, part))?;
+    Value::planted(term, None)
 }
 
 /// A type the text writes: its outermost constructor, each part a class it

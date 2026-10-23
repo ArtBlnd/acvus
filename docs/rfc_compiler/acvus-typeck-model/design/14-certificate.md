@@ -142,7 +142,6 @@ fails there and the rule is decided with 준량:
   them.
 - A function value reaching a function type where the checker reads no class: the
   wrapping of `?`'s error, whose payload holds no function type the text writes.
-- A value a test plants, which a case writes as a type and so with no Values.
 
 ## Expected results
 
@@ -156,4 +155,9 @@ refused, have none), and `cases/certificate/a-wrong-value-or-decision-fails.case
 `probe(A)`'s boundary, `probe(B)` in place of `probe(A)` at its boundary, and
 `probe(x): &A` in place of `()` at its result and at the record of l.246. A lower
 bound reaches by `≤` alone (l.280), so the checker reads no class as decided by an
-equation.
+equation. A value a case plants writes each function value's Values after it,
+`Fn/1{λ}`, `Fn/1{}` naming none (note 19), as a certificate's value is written:
+`cases/certificate/a-lambda-through-a-cast` and `a-lambda-through-a-view` give the
+class λ reaches through the cast or the view `Fn/1{}`, and the checker fails there
+and at the use's `T` of that class, as derived, so that Values are compared along a
+cast and a view, not only carried.

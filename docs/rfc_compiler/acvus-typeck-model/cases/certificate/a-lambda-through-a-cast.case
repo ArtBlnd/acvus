@@ -2,6 +2,9 @@
 // take_rc(boxed(|x| x));   // boxed<T>(T) -> Box<T>; a cast Box<T> -> Rc<T>; take_rc<T>(Rc<T>)
 // The split links Box's part to Rc's through the cast's signature (l.278); the
 // checker carries λ's Values along it (`image`), where it panicked at a cast.
+// Given take_rc's T, of one class with boxed's T, Values naming no lambda, B
+// keeping its own, λ carried along the cast does not reach it, nor |x| x at
+// boxed.
 extern type Box<T>;
 extern type Rc<T>;
 extern fn boxed<T>(T) -> Box<T>;
@@ -20,3 +23,4 @@ let `take_rc(..)`;
 `take_rc(..)` = take_rc(B) @ take_rc;
 
 must pass;
+assert certificate set `take_rc.Var(Type(0))`: Fn/1{} fails ["argument 0: Fn/1{λ} into Fn/1{} fails", "argument 0: Box<Fn/1{λ}> into Rc<Fn/1{}> fails"];

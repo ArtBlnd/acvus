@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::certificate::Certificate;
+use crate::certificate::{Certificate, Value};
 use crate::check::{Outcome, Refusal};
 use crate::class::ClassId;
 use crate::explore::{Final, Order, explore_with, sample_with};
@@ -15,7 +15,7 @@ use crate::node::Decision;
 use crate::program::{ENTRY, Program};
 use crate::solve::{State, Step};
 use crate::trace::Trace;
-use crate::ty::{Name, Ty};
+use crate::ty::Name;
 
 use super::parse::{self, Orders, StepText};
 use super::render::{self, Lines, Rendered};
@@ -61,7 +61,7 @@ pub enum Corruption {
         group: String,
         /// The class, named as the outcome writes it.
         class: String,
-        ty: Ty,
+        value: Value,
     },
     Decision {
         group: String,
@@ -139,8 +139,12 @@ impl Visitor<'_> {
         for (corruption, corrupted) in self.corruptions.iter().zip(&mut self.corrupted) {
             let mut certificate = Certificate::of(self.program, end);
             match corruption {
-                Corruption::Value { group, class, ty } => {
-                    certificate.set_value(group, class, ty.clone());
+                Corruption::Value {
+                    group,
+                    class,
+                    value,
+                } => {
+                    certificate.set_value(group, class, value.clone());
                 }
                 Corruption::Decision {
                     group,

@@ -138,7 +138,7 @@ final state, of every run.
 | `assert istar completeness probe;` | an I\* violation; the final states' violations are exactly those written, none where none is |
 | `assert outcomes 2;` | the number of outcomes; one where none is written and no block is |
 | `assert partition {A, B};` | an equivalence class of exactly these |
-| `assert certificate set X: B fails ["…"];`, `assert certificate set probe == probe#1 fails ["…"];`, `in g` after `certificate` | the certificate of every final state, so changed, fails, the `what`s over them all exactly these; the class is named as the outcome writes it, a class an instance or a node made among them |
+| `assert certificate set X: B fails ["…"];`, `assert certificate set probe == probe#1 fails ["…"];`, `in g` after `certificate` | the certificate of every final state, so changed, fails, the `what`s over them all exactly these; the class is named as the outcome writes it, a class an instance or a node made among them, and a function value in the value writes its Values after it, `Fn/1{λ}`, `Fn/1{}` naming none (note 14) |
 | `assert trace "join A: nothing";` | with an order written: a line of its trace other than a `record` is that line (The trace); a `refuse` line whose text holds `"`, a conflict's, is asserted by `assert refused` |
 | `` assert split records `S <= A.Payload(Some)`; ``, `` assert no node records `...`; `` | with an order written: a `record` of the relation lies under a line of the phase (`record`, `unify`, `join`, `split`, `node`, `fallback`; The trace) |
 | `assert join(A, C) == B;`, `== none`; `assert le(A, B);`, `assert not le(B, A);` | the primitive, on the declarations |
@@ -350,6 +350,9 @@ steps; `golden()` and every expectation read what they read without it.
   accepted them; each was derived before it was run, in every order. The first
   also sets the part's instance's copy of x to `u16`, and the checker fails at
   the type's parameter `u8` into it and at its pass into λ's result, as derived.
+  The second and the third give the class λ reaches through the cast or the view,
+  one class with the use's `T`, `Fn/1{}`, and the checker fails there and at that
+  `T`, as derived.
 - Since a use of one candidate has no node (note 08, reading 1), 86 goldens lost
   that use's decision line and nothing else, and
   `phases/unify-a-view-links-an-index` records `new`'s relations with the text; 5
