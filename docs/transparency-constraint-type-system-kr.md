@@ -75,7 +75,7 @@ structural type은 member에 대해 covariant다. structural type의 part는 cas
 
 ### Cast tree
 
-선언된 cast는 extern-defined type이나 그것을 가리키는 reference에서 가며, reference인지와 그 mutability를 바꾸지 않는다. extern-defined container의 view impl, 곧 `core::as_slice`, `core::as_slice_mut`, `core::as_str`의 impl은, 그 container를 가리키는 reference에서 slice나 `str`을 가리키는 reference로 가는 선언된 cast다(operators §2, §5). cast tree의 노드는 constructor이고, reference의 노드는 mutability와 target의 constructor다. 선언된 cast들은 tree를 이룬다. 곧 한 노드에서 위로 가는 cast는 많아야 하나이고, 순환이 없으며, `&mut X`에서 `&mut Y`로 가는 cast가 있으면 `&X`에서 위로 가는 cast는 `&Y`로 간다. 선언된 cast의 parameter는 그 노드를, 서로 다른 type parameter를 part로 하여 적고, 결과는 그 type parameter만 쓴다. 그래서 한 노드의 모든 타입이 그 cast로 올라간다.
+선언된 cast는 extern-defined type이나 그것을 가리키는 reference에서 가며, reference인지와 그 mutability를 바꾸지 않는다. extern-defined container의 view impl, 곧 `core::as_slice`, `core::as_slice_mut`, `core::as_str`의 impl은, 그 container를 가리키는 reference에서 slice나 `str`을 가리키는 reference로 가는 선언된 cast다(operators §2, §5). 배열의 view, 곧 각 길이 `n`의 `&[T; n] → &[T]`와 `&mut [T; n] → &mut [T]`는 언어가 정하는 cast이며, 배열은 이것으로 선언에 닿는다(extern fn §1). cast tree의 노드는 constructor이고, reference의 노드는 mutability와 target의 constructor다. 선언된 cast들과 배열의 view는 tree를 이룬다. 곧 한 노드에서 위로 가는 cast는 많아야 하나이고, 순환이 없으며, `&mut X`에서 `&mut Y`로 가는 cast가 있으면 `&X`에서 위로 가는 cast는 `&Y`로 간다. 선언된 cast의 parameter는 그 노드를, 서로 다른 type parameter를 part로 하여 적고, 결과는 그 type parameter만 쓴다. 그래서 한 노드의 모든 타입이 그 cast로 올라간다.
 
 ### Join
 
@@ -96,7 +96,7 @@ coercion은 값을 다른 타입의 값으로 바꾸는 것이며, 바꾸는 함
 
 | 정의 | 설명 | 함수 |
 |---|---|---|
-| 선언된 cast `S → T`마다 `S ⇝ T` | cast tree를 한 걸음 올라간다. | 선언의 함수 |
+| 선언된 cast와 배열의 view `S → T`마다 `S ⇝ T` | cast tree를 한 걸음 올라간다. | 선언된 cast는 선언의 함수, 배열의 view는 언어가 정함 |
 | `&mut T ⇝ &T` | `&mut T`를 `&T`로. | 언어가 정함 |
 | `{f̄, ḡ} ⇝ {f̄}` | object를 그 field 중 일부만 가진 object로. | 언어가 정함 |
 | `E{Ā} ⇝ E{Ā, B̄}` | enum을 variant가 더 많은 enum으로. | 언어가 정함 |
@@ -106,7 +106,7 @@ coercion은 값을 다른 타입의 값으로 바꾸는 것이며, 바꾸는 함
 
 ### Rank
 
-coercion은 Coercion 표의 행들을 `reborrow? ; cast* ; structural?` 순서로 조합한 것이다. reborrow는 `&mut T ⇝ &T` 행, cast는 선언된 cast 행, structural은 object, enum, structural type의 part 행을 함께 쓰는 한 단계로, member를 바꾸면서 남는 part를 그 part의 coercion으로 바꾼다. part의 coercion `⇝ₚ`는 object, enum, structural type의 part 행과 `! ⇝ U`만의 조합이다. 그래서 cast, reborrow, conversion은 part에서 쓰이지 않는다. `! ⇝ U`와 선언된 conversion은 조합이 아니며, rank가 없다. 주어진 타입으로 가는 조합은 하나뿐이다. coercion이 필요 없으면 rank는 `empty`다. 단계의 순서는 `empty ≺ reborrow ≺ cast ≺ structural`이고, coercion의 rank는 가장 높은 단계, 그다음 cast의 수, 그다음 거치는 낮은 단계들 순으로 비교한다.
+coercion은 Coercion 표의 행들을 `reborrow? ; cast* ; structural?` 순서로 조합한 것이다. reborrow는 `&mut T ⇝ &T` 행, cast는 선언된 cast와 배열의 view의 행, structural은 object, enum, structural type의 part 행을 함께 쓰는 한 단계로, member를 바꾸면서 남는 part를 그 part의 coercion으로 바꾼다. part의 coercion `⇝ₚ`는 object, enum, structural type의 part 행과 `! ⇝ U`만의 조합이다. 그래서 cast, reborrow, conversion은 part에서 쓰이지 않는다. `! ⇝ U`와 선언된 conversion은 조합이 아니며, rank가 없다. 주어진 타입으로 가는 조합은 하나뿐이다. coercion이 필요 없으면 rank는 `empty`다. 단계의 순서는 `empty ≺ reborrow ≺ cast ≺ structural`이고, coercion의 rank는 가장 높은 단계, 그다음 cast의 수, 그다음 거치는 낮은 단계들 순으로 비교한다.
 
 ## 동치류
 
@@ -193,7 +193,7 @@ instance는 use 하나에서 다른 body의 타입들을 새로 만든 것이며
 |---|---|
 | use가 놓인 binding group이나 그것을 감싸는 binding group의 free fn이나 method를 호출함 | 만들지 않는다. 그 body 자신의 타입을 쓴다. |
 | 그 밖의 free fn이나 method를 호출함 | 그 use의 제약을 기록하는 binding group마다 하나 만든다(Facts). |
-| 함수 값을 호출함 | 그 함수 값을 읽어(의존), 그 Values가 가리키는 lambda마다 하나 만든다. 각 인자는 그 lambda의 generic part에 든 parameter의 사본이나 environment에 든 parameter로 넘어가고, generic part에 든 결과 타입의 사본이나 environment의 결과 타입이 호출 결과의 하한이 된다. |
+| 함수 값을 호출함 | 호출되는 값을, 그것이 reference이면 그 target을 읽어(의존), 그 Values가 가리키는 lambda마다 하나 만든다. 각 인자는 그 lambda의 generic part에 든 parameter의 사본이나 environment에 든 parameter로 넘어가고, generic part에 든 결과 타입의 사본이나 environment의 결과 타입이 호출 결과의 하한이 된다. |
 | 함수 값이 경계를 넘어 주어진 함수 타입으로 들어감 | 그 경계를 쪼갤 때(값), 그 값의 Values가 가리키는 lambda마다 하나 만든다. 그 함수 타입이 그 lambda를 부르는 것처럼, 그 함수 타입의 각 parameter는 그 lambda의 generic part에 든 parameter의 사본이나 environment에 든 parameter로 넘어가고, generic part에 든 결과 타입의 사본이나 environment의 결과 타입은 그 함수 타입의 result로 넘어간다(만남과 경계). |
 
 embedding이 고른 함수로 시작하는 run은, 그 함수의 instance 하나를 만든다. universal 자리에는 embedding이 그 input에 선언한 타입을 놓고, 그 결과는 embedding이 결과에 선언한 타입으로 넘어간다(programs).
@@ -279,7 +279,7 @@ kind가 다른 출처가 준 타입에 member를 더하는 것은 그 member가 
 
 동치류가 풀린 뒤, 하한과 use의 결과로 들어오는 값은 Join의 `≤`로, part 하한으로 들어오는 part는 `≤ₚ`로 그 값에 닿으며, 그 단계마다 Coercion 표의 행으로 바뀐다. 다만 object에 더해진 field는 바뀌지 않고, 그 값이 통째로 쓰이기 전에 쓰인다(ownership §4). 경계로 넘어가는 값은 `U`의 값에 coercion으로 닿는다. 쪼갬은 선언된 conversion으로는 잇지 않으므로, conversion으로는 type parameter마다, 결과가 그것을 적은 자리에 든 각 함수 값의 Values가 parameter가 그것을 적은 각 자리의 같은 곳에 든 함수 값의 lambda를 모두 가리킬 때만 닿는다. 어느 쪽이든 그 함수는 그 값이 들어온 자리에서 호출되며, 닿지 않으면 그 자리에서 거부된다.
 
-아무것도 들어오지 않는 동치류, 곧 끊기지 않은 의존이 모두 풀리거나 정해졌는데 출처가 하나도 없는 동치류는, 하한과 part 하한으로서 아무것도 주지 않는다. 그 동치류가 넘어가는 자리, 곧 그것이 `τ`인 하한과 part 하한의 `α`와 그것이 `T`인 경계의 `U`가 모두 값을 갖거나 더 정해질 것 없이(그 의존이 모두 풀리거나 정해지고, unify할 경계 `?N ⇝ U`가 남지 않은) LitVar만 들고 있으며, 그 가운데 하나라도 값을 가지면, 그 값들이 한 타입이고 각 LitVar가 그 타입을 담을 때 그 동치류는 그 타입을 받고(채움), 그렇지 않으면 값을 갖지 않는다. LitVar는 후보를 좁힐 때처럼, 그것을 담는 자기 계열의 타입이면 어느 것과도 한 타입이다(Overload resolution). 채워진 동치류는 그 자리들에 coercion 없이 닿는다. LitVar만 들어오는 동치류는 쪼갬의 `?N ⇝ U`와 LitVar의 join으로 같은 일을 한다.
+아무것도 들어오지 않는 동치류, 곧 끊기지 않은 의존이 모두 풀리거나 정해졌는데 출처가 하나도 없는 동치류는, 하한과 part 하한으로서 아무것도 주지 않는다. 그 동치류가 넘어가는 자리, 곧 그것이 `τ`인 하한과 part 하한의 `α`와 그것이 `T`인 경계의 `U`가 모두 값을 갖거나 더 정해질 것 없이(그 의존이 모두 풀리거나 정해지고, unify할 경계 `?N ⇝ U`가 남지 않은) LitVar만 들고 있으며, 그 가운데 하나라도 값을 가지면, 그 값들이 한 타입이고 각 LitVar가 그 타입을 담을 때 그 동치류는 그 타입을 받고(채움), 그 값들이 한 타입이 아니거나 그 타입을 담지 않는 LitVar가 있으면 값을 갖지 않는다. 값을 가진 자리가 하나도 없으면 채워지지 않는다. LitVar는 후보를 좁힐 때처럼, 그것을 담는 자기 계열의 타입이면 어느 것과도 한 타입이다(Overload resolution). 채워진 동치류는 그 자리들에 coercion 없이 닿는다. LitVar만 들어오는 동치류는 쪼갬의 `?N ⇝ U`와 LitVar의 join으로 같은 일을 한다.
 
 ### Fixpoint와 fallback
 
@@ -317,7 +317,7 @@ match는 arm마다 그 pattern을 scrutinee에 걸고, `if let p = e`와 `while 
 
 ## Overload resolution
 
-선언을 부르는 use의 후보는 이름이 닿는 선언들이다. 연산자, `{{ e }}`, `e?`, `e as T`, `for`의 `lo..hi`는 언어가 정한 use이며, 각각 lang item(operators §2), `core::display`, 언어가 주는 두 후보, Rust가 `T`로 cast하는 타입 `S`마다의 `(S) -> T`(operators §5), 정수 `T`마다의 `(T, T) -> T`를 후보로 가진다. lang item이 아닌 연산자의 후보는 언어가 준다: `&&`와 `||`는 `(bool, bool) -> bool`, `!`는 `(bool) -> bool`, `^`는 `bool`과 정수의 `T`마다 `(T, T) -> T`, `&`는 정수 `T`마다 `(T, T) -> T`, `<<`와 `>>`는 정수 `T`, `U`마다 `(T, U) -> T`다(operators §2). structural type에서 generic function의 후보는, 그 function을 각 part에서 부르는 것이다(types §1). extern 선언인 후보의 type parameter는 그 use마다 새로 만든, 그 use가 놓인 binding group의 미지수다.
+선언을 부르는 use의 후보는 이름이 닿는 선언들이다. 연산자, `{{ e }}`, `e?`, `e as T`, `for`의 `lo..hi`는 언어가 정한 use이며, 각각 lang item(operators §2), `core::display`, 언어가 주는 두 후보, Rust가 `T`로 cast하는 타입 `S`마다의 `(S) -> T`(operators §5), 정수 `T`마다의 `(T, T) -> T`를 후보로 가진다. `!=`는 `core::eq`의 use이며 그 식의 값은 그 결과의 부정이고, `<`, `<=`, `>`, `>=`는 `core::cmp`의 use이며 그 식의 값은 그 결과를 0과 비교한 `bool`이다. lang item이 아닌 연산자의 후보는 언어가 준다: `&&`와 `||`는 `(bool, bool) -> bool`, `!`는 `(bool) -> bool`, `^`는 `bool`과 정수의 `T`마다 `(T, T) -> T`, `&`는 정수 `T`마다 `(T, T) -> T`, `<<`와 `>>`는 정수 `T`, `U`마다 `(T, U) -> T`다(operators §2). structural type에서 generic function의 후보는, 그 function을 각 part에서 부르는 것이다(types §1). extern 선언인 후보의 type parameter는 그 use마다 새로 만든, 그 use가 놓인 binding group의 미지수다.
 
 method 호출의 receiver는 첫 인자다. 적힌 그대로, `&`, 그리고 receiver가 쓸 수 있는 place이면 `&mut` 순으로 맞추어, 처음 후보에 닿는 것을 쓴다(types §6).
 
@@ -542,10 +542,10 @@ while c {
 결과: `x`, `y`와 두 literal 모두 `u16`이다.
 
 1. `X ≥ ?a`, `X ≥ R₁`, `Y ≥ u16`, `Y ≥ R₂`가 기록된다. `?a`, `?b`는 `0`, `1`의 LitVar이고, `R₁`, `R₂`는 `x + y`, `y + 1`의 결과다.
-2. `x + y`는 `core::add(&x, &y)`의 use이고, 후보인 `add<T, O>(&T, &T) -> O`의 impl들은 `T`에서 갈린다. `y + 1`도 같다.
-3. 두 use는 모두 `&y`의 target `Y`에 관계를 기록하고 `Y`를 읽으므로, 서로에게 추이적으로 의존한다. 그래서 각 use가 읽는 값에는 두 use의 관계가 모두 없다. 그 값에서 `Y`는 텍스트가 준 `u16`이고, `R₁`, `R₂`에는 아무 관계도 없다. 각 lend는 그 place가 reference인지만 읽는데, `add`의 후보들은 어느 것도 `X`, `Y`, `R₁`, `R₂`에 reference를 기록하지 않으므로 두 use에 의존하지 않고, 그 place가 reference가 아니라고 정한다.
-4. `y + 1`에서 `Y`의 자리는 `u16`이고 `?b`의 자리는 아무것도 정하지 않으므로 `u16`의 `add`가 남는다. `x + y`에서 `X`의 자리는 LitVar `?a`뿐이라 정수 계열 안에서 아무것도 정하지 않고, `Y`의 자리는 `u16`이므로 `u16`의 `add`가 남는다.
-5. 정해진 두 `add`의 경계를 쪼개면, `u16`은 미지수가 아니므로 경계 `X ⇝ u16`, `Y ⇝ u16`, `?b ⇝ u16`이 기록되고, `R₁`, `R₂`는 결과 타입 `u16`을 받는다. `X`는 `?a`와 `R₁`의 join으로 `u16`이 되어 `?a`는 `u16`과 unify되고, `Y`는 `u16`이며, `?b`는 `?N ⇝ U`로 `u16`과 unify된다. 세 경계는 그대로 닿는다.
+2. `x + y`는 `core::add(&x, &y)`의 use이고, 후보인 `add<T, O>(&T, &T) -> O`의 impl들은 두 parameter에서 같은 것들로 갈리므로, 공통 부분은 두 parameter에 한 미지수를 둔다. `&x`와 `&y`는 그 미지수에서 만나므로, 그 쪼갬이 두 reference의 target인 `X`와 `Y`를 등식으로 잇는다. `y + 1`도 같아서 `Y`와 `?b`를 잇는다. 그래서 `X`, `Y`, `?a`, `?b`는 한 동치류다.
+3. 두 use는 그 동치류에 관계를 기록하고 그것을 읽으므로 서로에게 추이적으로 의존하고, 각 use가 읽는 값에는 두 use의 관계가 모두 없다. 그 값에서 그 동치류는 텍스트가 준 `u16`과 LitVar들의 join인 `u16`이고, `R₁`, `R₂`에는 아무 관계도 없다. 각 lend는 그 place가 reference인지만 읽는데, `add`의 후보들은 어느 것도 그 동치류, `R₁`, `R₂`에 reference를 기록하지 않으므로 두 use에 의존하지 않고, 그 place가 reference가 아니라고 정한다.
+4. 두 use 모두에서 그 동치류의 자리는 `u16`이므로, 둘 다 `u16`의 `add`로 좁혀진다.
+5. 정해진 두 `add`를 기록하면 `R₁`, `R₂`는 결과 타입 `u16`을 받고, 그 동치류의 LitVar `?a`, `?b`는 `u16`과 unify된다.
 
 ### 13. 결과로 고르는 overload
 
