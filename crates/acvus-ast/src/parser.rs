@@ -175,8 +175,9 @@ where
     S::resumed(errors, Reported::one(error)).map_err(stopped::<S>)
 }
 
-/// Whether the source being parsed declares functions: a script does, and a
-/// template or a bound literal does not (RFC-0100 rule 1).
+/// Whether the source being parsed declares functions: a script and a module
+/// do, and a template or a bound literal does not (RFC-0100 rule 1, programs
+/// §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Declares {
     Functions,

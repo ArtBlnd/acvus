@@ -162,7 +162,7 @@ fn a_template_declares_no_fn() {
     let refused = only_refusal(host().entry::<(), String>("main", Source::Template("% fn f() { 1 }\nx\n")));
     assert_eq!(
         refused.message,
-        "only a script (`.acvus`) declares a `fn`; a template declares none"
+        "only a script (`.acvus`) or a module (`.acvum`) declares a `fn`; a template declares none"
     );
 }
 
@@ -172,7 +172,7 @@ fn a_template_declares_no_fn_in_a_block_either() {
     let refused = refusals(host().entry::<(), String>("main", Source::Template(source)));
     assert!(
         refused.iter().any(|refusal| refusal.message
-            == "only a script (`.acvus`) declares a `fn`; a template declares none"
+            == "only a script (`.acvus`) or a module (`.acvum`) declares a `fn`; a template declares none"
             && refusal.span == Some(fn_name_of(source, "f", 0))),
         "{refused:?}"
     );

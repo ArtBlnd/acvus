@@ -62,9 +62,9 @@ pub enum ParseErrorKind {
     /// A `;` after the `}` closing a `for`, `while` or `anyorder` block:
     /// such a block is a statement, not an expression a `;` ends.
     SemicolonAfterBlock(BlockStatement),
-    /// A `fn` outside a script: in a template's `%` line or in a block a
-    /// template or a bound literal holds. Only a script declares a function
-    /// (RFC-0100 rule 1).
+    /// A `fn` outside a script or a module: in a template's `%` line or in a
+    /// block a template or a bound literal holds. Only a script and a module
+    /// declare functions (RFC-0100 rule 1, programs §3).
     FnOutsideScript,
     /// A module's second `struct`: a module is at most one struct, with
     /// the methods its `impl` blocks hold (programs §3).
@@ -141,7 +141,7 @@ impl fmt::Display for ParseErrorKind {
             }
             ParseErrorKind::FnOutsideScript => write!(
                 f,
-                "only a script (`.acvus`) declares a `fn`; a template declares none"
+                "only a script (`.acvus`) or a module (`.acvum`) declares a `fn`; a template declares none"
             ),
             ParseErrorKind::SecondStruct => write!(
                 f,
