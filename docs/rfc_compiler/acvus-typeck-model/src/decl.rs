@@ -19,13 +19,21 @@ pub struct DeclId {
 /// What a declaration is besides a function a call reaches by its name: a cast
 /// is a step up the cast tree, and a conversion is no part of it (extern fn §7).
 /// A view impl, an impl of `core::as_slice`, `core::as_slice_mut` or
-/// `core::as_str`, is a cast (l.78).
+/// `core::as_str`, is a cast (l.78). The language's view of an array, from a
+/// reference to it to one to the slice of its element, is a cast the language
+/// gives, from a type no declaration writes (l.78, extern fn §1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
     Fn,
     Cast,
+    ArrayView,
     Conversion,
 }
+
+/// The names of the language's views of an array, shared and exclusive
+/// (l.78).
+pub const ARRAY_VIEW: &str = "core::array_view";
+pub const ARRAY_VIEW_MUT: &str = "core::array_view_mut";
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Decl {
@@ -178,6 +186,29 @@ impl DeclsBuilder {
         &self.types
     }
 
+    /// The language's views of the arrays of length `len`, `&[T; len] -> &[T]`
+    /// and `&mut [T; len] -> &mut [T]` (l.78), each a cast of the tree.
+    pub fn array_views(&mut self, len: u64) {
+        for (name, mutability) in [
+            (ARRAY_VIEW, Mutability::Shared),
+            (ARRAY_VIEW_MUT, Mutability::Exclusive),
+        ] {
+            let element = || SigTy::Var(SigVar::Type(0));
+            let sig = Signature::new(
+                vec![Name::new("T")],
+                false,
+                vec![SigTy::term(Term::Ref(
+                    mutability,
+                    SigTy::term(Term::Array(len, element())),
+                ))],
+                SigTy::term(Term::Ref(mutability, SigTy::term(Term::Slice(element())))),
+                &self.types,
+            )
+            .expect("an array's view is a signature");
+            self.declare(Name::new(name), sig, Role::ArrayView);
+        }
+    }
+
     pub fn declare(&mut self, name: Name, sig: Signature, role: Role) -> DeclId {
         let overloads = self.by_name.entry(name.clone()).or_default();
         let id = DeclId {
@@ -203,12 +234,12 @@ impl DeclsBuilder {
                         return Err(TreeError::ConversionArity(decl.id.clone()));
                     }
                 }
-                Role::Cast => {
+                Role::Cast | Role::ArrayView => {
                     let [param] = decl.sig.params() else {
                         return Err(TreeError::CastArity(decl.id.clone()));
                     };
                     let from = Node::of_sig(param)
-                        .filter(Node::is_extern_defined)
+                        .filter(|from| decl.role == Role::ArrayView || from.is_extern_defined())
                         .ok_or_else(|| TreeError::NotFromExtern(decl.id.clone()))?;
                     let to = Node::of_sig(decl.sig.result())
                         .ok_or_else(|| TreeError::NoTargetNode(decl.id.clone()))?;

@@ -541,7 +541,7 @@ impl State {
             },
             NodeKind::CallValue { callee, .. } => {
                 let read = self.read_state(&excluded);
-                let lambdas = read.values_of(*callee);
+                let lambdas = read.values_of(read.called(*callee));
                 let decision = (!lambdas.is_empty()).then(|| Decision::Calls(lambdas.clone()));
                 let reading = Reading::Values {
                     callee: *callee,

@@ -468,6 +468,12 @@ steps; `golden()` and every expectation read what they read without it.
   accepted where they name it, at one place and at the two places of one
   variable. Each was derived before it was run; the solver had accepted the
   first two, and the checker had found each.
+- 2 cases under `cases/spec`, `l078-*`, test an array lent into a slice
+  parameter, shared and exclusive (note 03, reading 6): accepted by the array's
+  view, where no coercion had reached the parameter. 1 case, `l196-*`, tests a
+  call through a reference to a function value (note 09, reading 9): accepted,
+  calling the lambda the target names, where the call had never been decided.
+  Each was derived before it was run.
 - 13 cases under `cases/phases` test each phase along a written order, by the line
   of the spec it rests on: recording (l.219, l.227–229), the join (l.80–91, l.169,
   l.269, l.274), splits (l.278), unification (l.154, l.158–163), nodes (l.246,

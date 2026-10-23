@@ -61,6 +61,19 @@ included.
    variables.
 5. **A cast and a conversion take one parameter.** Each goes from its parameter's
    type to its result's type (extern fn §7).
+6. **An array's view is a cast of the tree** (l.78, since the review of
+   2026-10-23, as 준량 decided). No declaration carries an array, and a sequence
+   arrives at one as a slice (extern fn §1), so the language gives, at each length
+   `n`, `&[T; n] → &[T]` and `&mut [T; n] → &mut [T]` (`Role::ArrayView`,
+   `decl::ARRAY_VIEW`, `ARRAY_VIEW_MUT`), each going up from the node a reference
+   to an array of that length is (l.66: an array's length is in its constructor).
+   They meet the tree's conditions as a declared cast does, but go from no
+   extern-defined type. The model declares them at the lengths a case's types
+   write (`DeclsBuilder::array_views`, `cases::build::array_lengths`), an array's
+   length being what is written. Before, an array reached no declaration:
+   `sum(&a)` with `a: [u8; 2]` and `sum(&[u8])` was refused (`cases/spec/l078-*`).
+   Where references meet, their targets are equated all the same (note 11,
+   reading 1; `holes.md`, H3), so the view is taken at a boundary alone.
 
 ## Left open for change
 

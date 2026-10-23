@@ -1821,7 +1821,11 @@ impl Checker<'_> {
             .collect::<Option<Vec<Read>>>()?;
         let result_read = self.text_read(context, &at, result)?;
         let callee_value = self.text(context, &at, callee)?;
-        let Some(values) = callee_value.lambdas.clone() else {
+        let called = match callee_value.term() {
+            Term::Ref(_, target) => target.clone(),
+            _ => callee_value.clone(),
+        };
+        let Some(values) = called.lambdas.clone() else {
             self.violation(
                 context,
                 &at,

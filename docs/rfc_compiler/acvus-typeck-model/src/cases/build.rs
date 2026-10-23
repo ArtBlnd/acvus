@@ -252,7 +252,59 @@ pub fn decls(case: &Case) -> Built<Decls> {
         let sig = at(*line, sig.map_err(|error| format!("{error:?}")))?;
         builder.declare(Name::new(name), sig, *role);
     }
+    for len in array_lengths(case) {
+        builder.array_views(len);
+    }
     builder.finish().map_err(|error| format!("{error:?}"))
+}
+
+/// The lengths of the arrays the case writes, in its declarations and its
+/// text: the language's view of each is a cast (l.78), and no array of
+/// another length arises, an array's length being what is written.
+fn array_lengths(case: &Case) -> BTreeSet<u64> {
+    fn walk(expr: &TypeExpr, lengths: &mut BTreeSet<u64>) {
+        match expr {
+            TypeExpr::Array(len, element) => {
+                lengths.insert(*len);
+                walk(element, lengths);
+            }
+            TypeExpr::Ref(_, part) | TypeExpr::Slice(part) => walk(part, lengths),
+            TypeExpr::Tuple(parts) | TypeExpr::Named(_, parts) => {
+                for part in parts {
+                    walk(part, lengths);
+                }
+            }
+            TypeExpr::Object(fields) | TypeExpr::Enum(_, fields) => {
+                for (_, part) in fields {
+                    walk(part, lengths);
+                }
+            }
+            TypeExpr::Function(params, ret) => {
+                for part in params {
+                    walk(part, lengths);
+                }
+                walk(ret, lengths);
+            }
+            TypeExpr::Never | TypeExpr::Identity | TypeExpr::FunctionValue(..) => {}
+        }
+    }
+    let mut lengths = BTreeSet::new();
+    for Located { item, .. } in &case.decls {
+        if let DeclItem::Fn { params, result, .. } = item {
+            for expr in params.iter().chain([result]) {
+                walk(expr, &mut lengths);
+            }
+        }
+    }
+    for Located { item, .. } in &case.text {
+        if let TextItem::Class { origin, .. } = item
+            && let OriginText::Written(expr) | OriginText::Host(expr) | OriginText::Outward(expr) =
+                origin
+        {
+            walk(expr, &mut lengths);
+        }
+    }
+    lengths
 }
 
 fn projection(text: &ProjectionText) -> Projection {

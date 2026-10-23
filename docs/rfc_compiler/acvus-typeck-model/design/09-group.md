@@ -76,7 +76,12 @@ the group takes the body's own types.
    Decided, it makes an instance of each lambda's C, each argument passing into
    the copy of the generic part's parameter, or into the environment's parameter
    itself, and the copy of the generic part's result type, or the environment's,
-   entering the call's result as a lower bound (l.196; note 17, row 3). A call
+   entering the call's result as a lower bound (l.196; note 17, row 3). Where
+   the callee reads as a reference, the call reads its target's Values, as a
+   projection is taken of a reference's target (l.196, l.298; `State::called`),
+   since the review of 2026-10-23, as 준량 decided: before, `r(1u8)` with
+   `r = &f` read `r`'s class, whose Values name no lambda, and was never decided
+   (`cases/spec/l196-*`). A call
    whose callee's Values name no lambda decides nothing and is not decided then
    (note 08, reading 19). A function value passing into a function type makes the
    same instances where that boundary is split, the type's parameters passing into

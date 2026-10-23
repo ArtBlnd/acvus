@@ -345,7 +345,25 @@ impl State {
             } => Vec::new(),
             NodeKind::Project { operand, .. } => vec![*operand],
             NodeKind::Bind { position, .. } => vec![*position],
-            NodeKind::CallValue { callee, .. } => vec![*callee],
+            NodeKind::CallValue { callee, .. } => {
+                let called = self.called(*callee);
+                [*callee, called]
+                    .into_iter()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect()
+            }
+        }
+    }
+
+    /// The class whose function value a call of `callee` calls: the target of
+    /// the reference `callee` holds, as a projection is taken of a reference's
+    /// target (l.196, l.298), and `callee` itself otherwise.
+    pub(crate) fn called(&self, callee: ClassId) -> ClassId {
+        let root = self.root(callee);
+        match &self.classes.held(root).kind {
+            Some((Term::Ref(_, target), _)) => self.root(*target),
+            _ => root,
         }
     }
 

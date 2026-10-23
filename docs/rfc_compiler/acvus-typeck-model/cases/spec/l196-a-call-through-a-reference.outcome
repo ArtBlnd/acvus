@@ -1,0 +1,18 @@
+// What the model gives, written by `BLESS=1` (design/19-cases.md).
+run: every order
+outcome 1
+  accepted
+  value `&f`: &Fn/1
+  value 1u8: u8
+  value F: Fn/1
+  value X: none
+  value `r(1u8)`: u8
+  value `|x| x`: Fn/1
+  value `λ result`: none
+  decision `&f`: lend & place
+  decision call: calls {λ}
+  check `1u8 <= call#λ/X`: Ok(Identity)
+  check `call#λ/X <= call#λ/λ result`: Ok(Identity)
+  check `call#λ/λ result <= r(1u8)`: Ok(Identity)
+  check `|x| x <= F`: Ok(Identity)
+  I* of a final state: []
