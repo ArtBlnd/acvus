@@ -1,0 +1,36 @@
+//@ orders: sampled 200
+// let mk = |k| |x| same(x, k);   // same<T>(T, T)
+// let h = mk(1u8);
+// h(2u8)
+// μ's environment is λ's group, and μ's value is λ's result, which λ's C
+// holds; the call mk(1u8) makes it anew with μ's copy.
+extern fn same<T>(T, T);
+group λ in run {
+    let K;
+    let `λ result`;
+    fn λ(K) -> `λ result`;
+    let `|x| ..`: lambda μ;
+    `λ result` = `|x| ..`;
+}
+group μ in λ {
+    let X;
+    let `μ result`;
+    fn μ(X) -> `μ result`;
+    let `same(..)`;
+    `same(..)` = same(X, K) @ same;
+    `μ result` = `same(..)`;
+}
+let `|k| ..`: lambda λ;
+let MK;
+MK = `|k| ..`;
+let 1u8: u8;
+let `mk(1u8)`;
+`mk(1u8)` = (MK)(1u8) @ `mk 1`;
+let H;
+H = `mk(1u8)`;
+let 2u8: u8;
+let `h(2u8)`;
+`h(2u8)` = (H)(2u8) @ `h 1`;
+
+must pass;
+assert outcomes 1;

@@ -1,0 +1,26 @@
+// fn g(a, b) { let z = 0; }
+// let x = 1u8;
+// g(x, 2u8);
+// The use lies in the entry and records every position of g, so its
+// instance makes all of g's C anew, z's class with it, which falls back.
+group g {
+    let A;
+    let B;
+    let `g result`;
+    fn g(A, B) -> `g result`;
+    let Z;
+    let 0: lit 0;
+    Z = 0;
+    let unit: ();
+    `g result` = unit;
+}
+let 1u8: u8;
+let X;
+X = 1u8;
+let 2u8: u8;
+let `g(..)`;
+`g(..)` = g(X, 2u8) @ `g call`;
+
+must pass;
+assert outcomes 1;
+assert X: u8;

@@ -4,32 +4,30 @@ outcome 1
   accepted
   value A: u8
   value B: u16
-  value `Ok(a)`: Result<u8, Error{E1(E1), E2(E2)}>
-  value P: Error{E1(E1), E2(E2)}
+  value `Ok(a)`: none
+  value P: none
   value S: u8
-  value `exit 1`: Result<u8, Error{E1(E1)}>
-  value `exit 2`: Result<u8, Error{E2(E2)}>
+  value `exit 1`: none
+  value `exit 2`: none
   value `f result`: Result<u8, Error{E1(E1), E2(E2)}>
   value `f()`: Result<u8, Error{E1(E1), E2(E2)}>
   value `get1()`: Result<u8, E1>
   value `get2()`: Result<u16, E2>
   decision q1: ?#1
   decision q2: ?#1
+  check `f@8/Ok(a) <= f@8/f result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Identity), (Payload(Err), Never)] }) })
+  check `f@8/exit 1 <= f@8/f result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Never), (Payload(Err), Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {Variant(E2)}, parts: [(Payload(E1), Identity)] }) })] }) })
+  check `f@8/exit 2 <= f@8/f result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Never), (Payload(Err), Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {Variant(E1)}, parts: [(Payload(E2), Identity)] }) })] }) })
   check `f@8/f result <= f()`: Ok(Identity)
+  check `f@8/q1.Exit <= f@8/exit 1`: Ok(Identity)
+  check `f@8/q2.Exit <= f@8/exit 2`: Ok(Identity)
   check `A <= S`: Ok(Identity)
-  check `Ok(a) <= f result`: Ok(Identity)
-  check `exit 1 <= f result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Identity), (Payload(Err), Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {Variant(E2)}, parts: [(Payload(E1), Identity)] }) })] }) })
-  check `exit 2 <= f result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Identity), (Payload(Err), Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {Variant(E1)}, parts: [(Payload(E2), Identity)] }) })] }) })
-  check `get1() <= q1.Common(0)`: Ok(Identity)
   check `get1() ~> q1.Param(0)`: Ok(Identity)
   check `get1.Result <= get1()`: Ok(Identity)
-  check `get2() <= q2.Common(0)`: Ok(Identity)
   check `get2() ~> q2.Param(0)`: Ok(Identity)
   check `get2.Result <= get2()`: Ok(Identity)
   check `q1.Common(1) <= A`: Ok(Identity)
-  check `q1.Exit <= exit 1`: Ok(Identity)
   check `q1.Var(Type(0)) <= q1.Common(1)`: Ok(Identity)
   check `q2.Common(1) <= B`: Ok(Identity)
-  check `q2.Exit <= exit 2`: Ok(Identity)
   check `q2.Var(Type(0)) <= q2.Common(1)`: Ok(Identity)
   I* of a final state: []

@@ -16,9 +16,7 @@ outcome 1
   decision choose: choose#1
   decision `f(x)`: calls {λ}
   check `PUT <= F`: Ok(Identity)
-  check `PUT <= choose.Common(1)`: Ok(Identity)
   check `PUT <= choose.Var(Type(0))`: Ok(Identity)
-  check `X <= choose.Common(0)`: Ok(Identity)
   check `X <= f(x)#λ/W`: Ok(Identity)
   check `X ~> choose.Param(0)`: Ok(Identity)
   check `choose(..) <= F`: Ok(Identity)

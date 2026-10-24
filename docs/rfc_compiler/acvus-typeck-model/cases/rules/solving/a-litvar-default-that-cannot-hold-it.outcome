@@ -4,6 +4,6 @@ outcome 1
   refused
   value 3000000000: none
   value X: none
-  partition {3000000000, X}
-  refusal conflict at "the default of 3000000000": ?{3000000000}: int vs Scalar(Int(I32))
+  refusal conflict at "3000000000: i32": {i64, u32, u64} vs Scalar(Int(I32))
+  refusal conflict at "X: i32": {i64, u32, u64} vs Scalar(Int(I32))
   I* of a final state: []

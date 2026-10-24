@@ -9,7 +9,7 @@ use crate::class::{ClassId, Fact};
 use crate::node::Reads;
 use crate::relation::Relation;
 use crate::solve::State;
-use crate::ty::{NONE, Name, PartKey, SOME, Term};
+use crate::ty::{Constructor, NONE, Name, PartKey, SOME, Term};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Vertex {
@@ -50,8 +50,10 @@ pub(crate) enum Edge {
 /// What meets an unbroken dependency on an unsolved equivalence class
 /// besides its being solved.
 pub(crate) struct Met {
-    /// The classes holding only a LitVar that wait for nothing.
-    pub(crate) settled: BTreeSet<ClassId>,
+    /// The classes holding no kind and a range that a value reaching a class
+    /// they bound stays within, that wait for nothing: such a lower bound
+    /// gives its range at once (`State::range_up`) and is not waited for.
+    pub(crate) ranged: BTreeSet<ClassId>,
     /// The classes nothing enters.
     pub(crate) nothing_enters: BTreeSet<ClassId>,
 }
@@ -60,8 +62,6 @@ pub(crate) struct Met {
 pub(crate) struct Eligible {
     /// The equivalence classes that may be solved.
     pub(crate) solve: Vec<ClassId>,
-    /// The equivalence classes that may be filled.
-    pub(crate) fill: Vec<ClassId>,
     /// The nodes whose unbroken dependencies are all decided, which the value
     /// each reads may decide.
     pub(crate) decide: Vec<Name>,
@@ -186,40 +186,18 @@ impl State {
             .nodes
             .iter()
             .filter(|(name, _)| self.deferred.contains_key(*name));
-        let mut passed_out = Vec::new();
         for (name, node) in undecided.iter().copied().chain(deferred) {
             let only_out = self.passed_out_only(node);
             for position in self.positions(node) {
                 let position = self.root(position);
-                if self.is_solved(position) {
+                if self.is_solved(position) || only_out.contains(&position) {
                     continue;
                 }
-                if only_out.contains(&position) {
-                    passed_out.push((position, (*name).clone()));
-                } else {
-                    add(
-                        Vertex::Class(position),
-                        Vertex::Node((*name).clone()),
-                        Edge::Records,
-                    );
-                }
-            }
-        }
-        // A node that records into a class only a boundary out of it changes
-        // it only by the fill of a class nothing enters or LitVars alone
-        // enter, so the class waits for it only while it is
-        // one, judged without those dependencies.
-        let provisional = Graph {
-            component: components(&edges),
-            edges: edges.clone(),
-        };
-        let filled = self.filled_by_places_in(&provisional);
-        for (position, name) in passed_out {
-            if filled.contains(&position) {
-                edges
-                    .entry(Vertex::Class(position))
-                    .or_default()
-                    .insert((Vertex::Node(name), Edge::Records));
+                add(
+                    Vertex::Class(position),
+                    Vertex::Node((*name).clone()),
+                    Edge::Records,
+                );
             }
         }
         // The nodes that record into a class, each with the class at
@@ -427,8 +405,8 @@ impl State {
     }
 
     /// Whether an unbroken dependency on `to` is met without its being solved:
-    /// a class holding only a LitVar that waits for nothing, or a lower bound
-    /// or part lower bound nothing enters, or, in a state a value read
+    /// a lower bound or part lower bound that is ranged or that nothing
+    /// enters, or, in a state a value read
     /// is taken from, a class that gives nothing; and a node's on a
     /// node once that is decided, whose relations a class depends on until they
     /// are recorded.
@@ -436,7 +414,7 @@ impl State {
         match (to, edge) {
             (Vertex::Node(node), Edge::Reads) => self.nodes[node].decision.is_some(),
             (Vertex::Class(class), Edge::Lower) => {
-                met.settled.contains(class)
+                met.ranged.contains(class)
                     || met.nothing_enters.contains(class)
                     || self.gives_nothing(*class)
             }
@@ -445,18 +423,11 @@ impl State {
         }
     }
 
-    /// The unsolved equivalence classes holding only a LitVar that wait for
-    /// nothing. Joined, a LitVar is unified, so such a lower bound
-    /// gives its LitVar and is not waited for.
-    pub(crate) fn settled(&self) -> BTreeSet<ClassId> {
-        self.met_in(&self.graph()).settled
-    }
-
     /// What meets an unbroken dependency on an unsolved class in `graph`: the
-    /// classes nothing enters, and then the settled ones.
+    /// classes nothing enters, and then the ranged ones.
     pub(crate) fn met_in(&self, graph: &Graph) -> Met {
         let mut met = Met {
-            settled: BTreeSet::new(),
+            ranged: BTreeSet::new(),
             nothing_enters: self.nothing_enters_in(graph),
         };
         loop {
@@ -464,7 +435,9 @@ impl State {
                 .classes
                 .roots()
                 .filter(|&root| {
-                    self.is_lit(root) && !met.settled.contains(&root) && !self.is_foreign(root)
+                    self.gives_its_range_up(root)
+                        && !met.ranged.contains(&root)
+                        && !self.is_foreign(root)
                 })
                 .filter(|&root| {
                     graph
@@ -475,59 +448,24 @@ impl State {
             if more.is_empty() {
                 return met;
             }
-            met.settled.extend(more);
+            met.ranged.extend(more);
         }
     }
 
-    /// The equivalence classes that take their type from the places they pass
-    /// into: those nothing enters, and those LitVars alone enter,
-    /// judged alike, each of their lower bounds and part lower bounds one of
-    /// these and each of their unbroken dependencies met as such a lower
-    /// bound's is, one holding a LitVar or with a lower bound at least.
-    fn filled_by_places_in(&self, graph: &Graph) -> BTreeSet<ClassId> {
-        let nothing = self.nothing_enters_in(graph);
-        let mut found: BTreeSet<ClassId> = BTreeSet::new();
-        loop {
-            let alone = |class: &ClassId| found.contains(class) || nothing.contains(class);
-            let more: Vec<ClassId> = self
-                .classes
-                .roots()
-                .filter(|root| !alone(root))
-                .filter(|&root| {
-                    let held = self.classes.held(root);
-                    !self.is_solved(root)
-                        && !self.has_no_value(root)
-                        && !self.is_foreign(root)
-                        && held.kind.is_none()
-                        && held.facts.is_empty()
-                })
-                .filter(|&root| {
-                    let lowers = self.lower_bounds(root);
-                    (self.is_lit(root) || !lowers.is_empty())
-                        && lowers.into_iter().all(|lower| alone(&self.root(lower)))
-                })
-                .filter(|&root| {
-                    graph
-                        .unbroken(&Vertex::Class(root))
-                        .all(|(to, edge)| match (to, edge) {
-                            (Vertex::Class(class), Edge::Lower) => alone(class),
-                            (Vertex::Class(class), Edge::Taking | Edge::Part) => {
-                                self.gives_nothing(*class)
-                            }
-                            _ => false,
-                        })
-                })
-                .collect();
-            if more.is_empty() {
-                found.extend(nothing);
-                return found;
-            }
-            found.extend(more);
-        }
+    /// Whether the class holds no kind and a range that a value reaching a
+    /// class it bounds stays within (`Range::upward`).
+    pub(crate) fn gives_its_range_up(&self, root: ClassId) -> bool {
+        let held = self.classes.held(root);
+        held.kind.is_none()
+            && held
+                .range
+                .as_ref()
+                .is_some_and(|range| range.upward().is_some())
     }
 
     /// The equivalence classes nothing enters: unsolved, holding no
-    /// kind, no LitVar and no kind known in part, each of their lower bounds
+    /// kind, no range that admits no `!`, which only a literal, a value, gives,
+    /// and no kind known in part, each of their lower bounds
     /// and part lower bounds one nothing enters, and each of their unbroken
     /// dependencies met, as one on a lower bound or a part lower bound nothing
     /// enters is. In a state a value read is taken from, a class that
@@ -547,7 +485,10 @@ impl State {
                         && !self.has_no_value(root)
                         && !self.is_foreign(root)
                         && held.kind.is_none()
-                        && held.lit.is_none()
+                        && held
+                            .range
+                            .as_ref()
+                            .is_none_or(|range| range.admits(&Constructor::Never))
                         && held.facts.is_empty()
                 })
                 .filter(|&root| {
@@ -591,23 +532,15 @@ impl State {
     }
 
     /// What may be taken now: the equivalence classes that may be solved,
-    /// being unblocked and given something to take or a LitVar to unify by
-    /// their sources; those that may be filled, nothing entering them and each
-    /// place they pass into having a value; and the nodes whose
-    /// unbroken dependencies are all decided.
+    /// being unblocked and given something to take by their sources, and the
+    /// nodes whose unbroken dependencies are all decided.
     pub(crate) fn eligible(&self) -> Eligible {
         let graph = self.graph();
         let met = self.met_in(&graph);
         let solve = self
             .unblocked(&graph, &met)
             .into_iter()
-            .filter(|&root| self.has_work(root, &graph, &met.settled))
-            .collect();
-        let fill = met
-            .nothing_enters
-            .iter()
-            .copied()
-            .filter(|&root| self.fills_now(root, &graph, &met))
+            .filter(|&root| self.has_work(root, &graph))
             .collect();
         let decide = self
             .nodes
@@ -621,11 +554,7 @@ impl State {
             })
             .cloned()
             .collect();
-        Eligible {
-            solve,
-            fill,
-            decide,
-        }
+        Eligible { solve, decide }
     }
 
     /// The unbroken dependencies of `from` not yet met:
@@ -643,25 +572,7 @@ impl State {
             .collect()
     }
 
-    /// Whether the equivalence class, nothing entering it, is filled now:
-    /// it passes into some place, each place it passes into has a
-    /// value or holds only a LitVar nothing more decides, settled and with
-    /// nothing left to take, and one has a value.
-    pub(crate) fn fills_now(&self, root: ClassId, graph: &Graph, met: &Met) -> bool {
-        let places = self.places(root);
-        let lit_alone = |place: ClassId| {
-            let place = self.root(place);
-            self.is_lit(place)
-                && met.settled.contains(&place)
-                && !self.has_work(place, graph, &met.settled)
-        };
-        places.iter().any(|&place| self.value(place).is_some())
-            && places
-                .iter()
-                .all(|&place| self.value(place).is_some() || lit_alone(place))
-    }
-
-    fn has_work(&self, root: ClassId, graph: &Graph, settled: &BTreeSet<ClassId>) -> bool {
+    fn has_work(&self, root: ClassId, graph: &Graph) -> bool {
         let held = self.classes.held(root);
         if held.kind.is_some() {
             return true;
@@ -669,13 +580,9 @@ impl State {
         if !self.fact_heads(root).is_empty() {
             return true;
         }
-        if held.lit.is_some() && !self.boundaries_from(root).is_empty() {
-            return true;
-        }
         self.lower_bounds(root).into_iter().any(|lower| {
             let lower = self.root(lower);
-            !graph.broken(&Vertex::Class(root), &Vertex::Class(lower))
-                && (self.is_solved(lower) || settled.contains(&lower))
+            !graph.broken(&Vertex::Class(root), &Vertex::Class(lower)) && self.is_solved(lower)
         })
     }
 }

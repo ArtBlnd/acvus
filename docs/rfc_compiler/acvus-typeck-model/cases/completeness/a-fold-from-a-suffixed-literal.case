@@ -1,0 +1,36 @@
+//@ orders: sampled 200
+// fold(scores(), 0i32, |acc, s| acc + s);
+// // scores() -> Iter⟨i32⟩; fold<T, U>(Iter⟨T⟩, U, fn(U, T) -> U) -> U
+// As examples/grades folds its scores. The lambda captures nothing, so its
+// parameters are its own; the boundary into fn(U, T) -> U makes its
+// instance, U and T passing into the copies of acc and s, and the copy of
+// its result into U.
+extern type Iter<T>;
+extern fn scores() -> Iter<i32>;
+extern fn fold<T, U>(Iter<T>, U, fn(U, T) -> U) -> U;
+extern fn core::add(&i32, &i32) -> i32;
+extern fn core::add(&i64, &i64) -> i64;
+group λ in run {
+    let ACC;
+    let S;
+    let `λ result`;
+    fn λ(ACC, S) -> `λ result`;
+    let `&acc`;
+    `&acc` = &ACC @ `&acc`;
+    let `&s`;
+    `&s` = &S @ `&s`;
+    let `acc + s`;
+    `acc + s` = core::add(`&acc`, `&s`) @ add;
+    `λ result` = `acc + s`;
+}
+let `scores()`;
+`scores()` = scores() @ scores;
+let 0: i32;
+let `|acc, s| ..`: lambda λ;
+let `fold(..)`;
+`fold(..)` = fold(`scores()`, 0, `|acc, s| ..`) @ fold;
+
+must pass;
+assert outcomes 1;
+assert `fold(..)`: i32;
+

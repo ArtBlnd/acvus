@@ -2,9 +2,8 @@
 run: every order
 outcome 1
   refused
-  value 1: none
-  value `1.5`: none
+  value 1: i32
+  value `1.5`: f64
   value X: none
-  partition {1, X}
-  refusal conflict at "1.5 = X": ?{1.5}: float vs another family
+  refusal conflict at "X: {f32, f64}": {f32, f64} vs another range
   I* of a final state: []

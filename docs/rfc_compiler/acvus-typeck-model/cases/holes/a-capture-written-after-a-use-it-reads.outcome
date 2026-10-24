@@ -15,7 +15,6 @@ outcome 1
   decision probe: probe#1
   decision `put(..)`: calls {λ}
   check `V <= X`: Ok(Identity)
-  check `X <= probe.Common(0)`: Ok(Identity)
   check `X ~> probe.Param(0)`: Ok(Identity)
   check `make_a() <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
   check `make_a.Result <= make_a()`: Ok(Identity)

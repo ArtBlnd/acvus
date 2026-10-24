@@ -56,7 +56,7 @@ impl State {
             Some(Common::Use { part, classes }) => {
                 let results = CommonPart::vars_in(&part.result)
                     .into_iter()
-                    .map(|k| (classes[k], part.vars[k].clone()))
+                    .map(|k| (classes[&k], part.vars[k].clone()))
                     .collect();
                 Left {
                     args: held,
@@ -306,19 +306,15 @@ impl State {
         found
     }
 
-    /// The classes at the positions a node reads: for a use, those where its
-    /// candidates differ and those within the depth its candidates reach there;
+    /// The classes at the positions a node reads: for a use, the arguments
+    /// where its candidates differ and those within the depth its candidates
+    /// reach there;
     /// for a lend, its place; for a
     /// projection other than a Deref, its operand; for a binding, its position.
     /// A Deref reads nothing.
     pub(crate) fn read_positions(&self, kind: &NodeKind) -> Vec<ClassId> {
         match kind {
-            NodeKind::Use {
-                callee,
-                args,
-                result,
-                ..
-            } => {
+            NodeKind::Use { callee, args, .. } => {
                 let candidates: Vec<&Signature> = self
                     .candidates(callee, args.len())
                     .into_iter()
@@ -329,10 +325,10 @@ impl State {
                 }
                 let mut read = BTreeSet::new();
                 for i in Self::differing(&candidates, args.len()) {
-                    let class = Self::differing_class(args, *result, i);
+                    let class = Self::differing_class(args, i);
                     read.insert(self.root(class));
                     for sig in &candidates {
-                        read.extend(self.within_depth(class, Self::at_position(sig, i)));
+                        read.extend(self.within_depth(class, &sig.params()[i]));
                     }
                 }
                 read.into_iter().collect()

@@ -1,13 +1,13 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
-  value `&mut a`: &mut Vec<u8>
-  value A: Vec<u8>
+  refused
+  value `&mut a`: &mut Vec<!>
+  value A: Vec<!>
   value `fill_all(..)`: ()
-  value `new()`: Vec<u8>
+  value `new()`: Vec<!>
   decision lend: lend &mut place
-  check `&mut a ~> fill_all.Param(0)`: Ok(Identity)
+  check `&mut a ~> fill_all.Param(0)`: Err(None)
   check `fill_all.Result <= fill_all(..)`: Ok(Identity)
   check `new() <= A`: Ok(Identity)
   check `new.Result <= new()`: Ok(Identity)

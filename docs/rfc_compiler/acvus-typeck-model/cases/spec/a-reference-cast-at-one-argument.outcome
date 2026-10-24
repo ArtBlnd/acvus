@@ -8,7 +8,6 @@ outcome 1
   value `make()`: A
   decision `&a`: lend & place
   decision f: f#0
-  check `&a <= f.Common(0)`: Ok(Identity)
   check `&a ~> f.Param(0)`: Ok(Composition { reborrow: false, casts: [DeclId { name: up_ref, overload: 0 }], structural: None })
   check `f.CommonResult <= R`: Ok(Identity)
   check `make() <= X`: Ok(Identity)

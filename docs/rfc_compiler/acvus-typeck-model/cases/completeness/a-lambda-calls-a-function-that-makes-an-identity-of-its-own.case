@@ -1,0 +1,38 @@
+// fn g(a, b) { let h = open(); }   // open() -> F⟨new⟩
+// let x = 1u8;
+// |y| g(x, y);
+// The identity g's body makes stays in g's C with h's class, a part at no
+// position of g; the use's constraint at x is the environment's, at y and
+// the result the lambda's.
+extern type F<#>;
+extern fn open<#>() -> F<#>;
+group g {
+    let A;
+    let B;
+    let `g result`;
+    fn g(A, B) -> `g result`;
+    let H;
+    let `open()`;
+    `open()` = open() @ open;
+    H = `open()`;
+    let unit: ();
+    `g result` = unit;
+}
+group λ in run {
+    let Y;
+    let `λ result`;
+    fn λ(Y) -> `λ result`;
+    let `g(..)`;
+    `λ result` = `g(..)`;
+}
+let 1u8: u8;
+let X;
+X = 1u8;
+let `|y| ..`: lambda λ;
+group λ {
+    `g(..)` = g(X, Y) @ `g call`;
+}
+
+must pass;
+assert outcomes 1;
+assert X: u8;

@@ -2,24 +2,21 @@
 run: every order
 outcome 1
   accepted
-  value `&a`: &B
+  value `&a`: &A
   value `&b`: &B
   value R: B
-  value X: B
+  value X: A
   value Y: B
   value `make_a()`: A
   value `make_b()`: B
   decision `&a`: lend & place
   decision `&b`: lend & place
   decision `a + b`: core::add#0
-  partition {X, Y}
-  check `&a <= a + b.Common(0)`: Ok(Identity)
-  check `&a ~> a + b.Param(0)`: Ok(Identity)
-  check `&b <= a + b.Common(0)`: Ok(Identity)
+  check `&a ~> a + b.Param(0)`: Ok(Composition { reborrow: false, casts: [DeclId { name: up_ref, overload: 0 }], structural: None })
   check `&b ~> a + b.Param(1)`: Ok(Identity)
   check `a + b.Chosen(1) <= a + b.Common(1)`: Ok(Identity)
   check `a + b.Common(1) <= R`: Ok(Identity)
-  check `make_a() <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
+  check `make_a() <= X`: Ok(Identity)
   check `make_a.Result <= make_a()`: Ok(Identity)
   check `make_b() <= Y`: Ok(Identity)
   check `make_b.Result <= make_b()`: Ok(Identity)

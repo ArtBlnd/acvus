@@ -1,0 +1,21 @@
+// {{ &whole | to_string }}  // to_string<T>(&T) -> String; display<T>(&T, out: &mut String), its impls at String and str
+// As examples/ledger interpolates: {{ e }} is a use of core::display, e here
+// a String. Read as &e passing into display's first parameter.
+extern fn to_string<T>(&T) -> String;
+extern fn core::display(&String, &mut String);
+extern fn core::display(&str, &mut String);
+let WHOLE: i64;
+let `&whole`;
+`&whole` = &WHOLE @ `&whole`;
+let `to_string(..)`;
+`to_string(..)` = to_string(`&whole`) @ to_string;
+let OUT: String;
+let `&mut out`;
+`&mut out` = &mut OUT @ `&mut out`;
+let `display(..)`;
+let `&e`;
+`&e` = &`to_string(..)` @ `&e`;
+`display(..)` = core::display(`&e`, `&mut out`) @ display;
+
+must pass;
+assert outcomes 1;

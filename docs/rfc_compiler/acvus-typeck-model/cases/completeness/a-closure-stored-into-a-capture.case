@@ -1,0 +1,33 @@
+//@ orders: sampled 200
+// let slot;
+// |k| { slot = Some(|x| same(x, k)); };   // same<T>(T, T)
+// same ties x to the capture k, so μ's environment is λ's group; Some(μ)
+// passes into slot by name, so μ's value is the environment of λ, the
+// entry's.
+extern fn same<T>(T, T);
+group λ in run {
+    let K;
+    let `λ result`;
+    fn λ(K) -> `λ result`;
+    let P;
+    let `Some(..)`: Option<P>;
+    let `|x| ..`: lambda μ;
+    P = `|x| ..`;
+    #[by_name] SLOT = `Some(..)`;
+    let unit: ();
+    `λ result` = unit;
+}
+group μ in λ {
+    let X;
+    let `μ result`;
+    fn μ(X) -> `μ result`;
+    let `same(..)`;
+    `same(..)` = same(X, K) @ same;
+    `μ result` = `same(..)`;
+}
+let SLOT;
+let `|k| ..`: lambda λ;
+
+must pass;
+assert outcomes 1;
+assert SLOT: Option<Fn/1>;

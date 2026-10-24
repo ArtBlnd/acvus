@@ -1,0 +1,22 @@
+// fill(&mut make());     // make() -> Vec⟨u8⟩, make() -> Bytes; fill(&mut Vec⟨u8⟩)
+// make's candidates differ in the result's constructor, so the common part
+// puts an unknown at the result, which holds that it is no reference. The
+// lend takes R as its target; the boundary into &mut Vec⟨u8⟩ splits at the
+// reference's constructor &mut and records R ~> Vec⟨u8⟩, which fills R in
+// the value make reads, so make is decided by its result.
+extern type Vec<T>;
+extern type Bytes;
+extern fn make() -> Vec<u8>;
+extern fn make() -> Bytes;
+extern fn fill(&mut Vec<u8>);
+let R;
+R = make() @ make;
+let `&mut r`;
+`&mut r` = &mut R @ lend;
+let `fill(..)`;
+`fill(..)` = fill(`&mut r`) @ fill;
+
+must pass;
+assert R: Vec<u8>;
+assert make == make#0;
+assert lend == lend &mut place;

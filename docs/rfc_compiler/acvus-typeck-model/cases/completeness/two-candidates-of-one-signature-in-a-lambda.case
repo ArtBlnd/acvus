@@ -1,0 +1,23 @@
+// let f = |x| { probe(1u8); x };   // probe(u8), probe(u8): two declarations of one signature
+// f(2u8);
+// The use lies in the lambda's text.
+extern fn probe(u8);
+extern fn probe(u8);
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    let 1u8: u8;
+    let `probe(1u8)`;
+    `probe(1u8)` = probe(1u8) @ probe;
+    `λ result` = X;
+}
+let `|x| ..`: lambda λ;
+let F;
+F = `|x| ..`;
+let 2u8: u8;
+let `f(2u8)`;
+`f(2u8)` = (F)(2u8) @ `f 1`;
+
+must fail;
+assert outcomes 1;

@@ -1,0 +1,40 @@
+// fn g(a, b) { let z = 0u8; }
+// let x = 1u8;
+// let f = |y| g(x, y);
+// f(2u8);
+// z's class is u8 at g's fixpoint, so g's C is its universals alone, each at
+// a position of the use.
+group g {
+    let A;
+    let B;
+    let `g result`;
+    fn g(A, B) -> `g result`;
+    let Z;
+    let 0u8: u8;
+    Z = 0u8;
+    let unit: ();
+    `g result` = unit;
+}
+group λ in run {
+    let Y;
+    let `λ result`;
+    fn λ(Y) -> `λ result`;
+    let `g(..)`;
+    `λ result` = `g(..)`;
+}
+let 1u8: u8;
+let X;
+X = 1u8;
+let `|y| ..`: lambda λ;
+let F;
+F = `|y| ..`;
+let 2u8: u8;
+let `f(2u8)`;
+`f(2u8)` = (F)(2u8) @ `f 1`;
+group λ {
+    `g(..)` = g(X, Y) @ `g call`;
+}
+
+must pass;
+assert outcomes 1;
+assert X: u8;

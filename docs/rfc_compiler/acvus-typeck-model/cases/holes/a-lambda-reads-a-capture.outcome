@@ -11,7 +11,6 @@ outcome 1
   value `λ result`: ()
   decision `f()`: calls {λ}
   decision probe: probe#0
-  check `X <= probe.Common(0)`: Ok(Identity)
   check `X ~> probe.Param(0)`: Ok(Identity)
   check `f()#λ/λ result <= f()`: Ok(Identity)
   check `make() <= X`: Ok(Identity)

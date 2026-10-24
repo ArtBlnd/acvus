@@ -6,6 +6,5 @@ outcome 1
   value `make()`: {x: u8, y: u8}
   decision f: undecided
   check `f.CommonResult <= f(..)`: Ok(Identity)
-  check `make() <= f.Common(0)`: Ok(Identity)
   check `make.Result <= make()`: Ok(Identity)
   I* of a final state: []

@@ -1,54 +1,43 @@
 //! Fallback: once every binding group is at its fixpoint, each
-//! equivalence class left unsolved with no unbroken dependency takes its
-//! LitVar's family's default, or `!`.
+//! equivalence class left unsolved with no unbroken dependency takes what
+//! its range falls back to, its family's default or `!`, or `!` where it holds
+//! none. The value it takes is recorded as a decision, which every read after
+//! it takes as given.
 
-use std::rc::Rc;
-
-use crate::check::Refusal;
-use crate::class::{ClassId, KindSource, Unified};
+use crate::class::{ClassId, KindSource};
+use crate::record::Recording;
+use crate::relation::{Recorder, Relation};
 use crate::solve::State;
 use crate::ty::Term;
 
-/// An equivalence class fallen back: the default it took, with what
-/// unification did as it took it, and the refusal where it could not take it.
+/// An equivalence class fallen back: the default it took, and the relation
+/// that records it, with what unification did as it took it and the refusal
+/// where it could not take it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FellBack {
     pub class: ClassId,
     pub default: Term<ClassId>,
-    pub unified: Unified,
-    pub refused: Option<Refusal>,
+    pub recorded: Recording,
 }
 
 impl State {
-    /// The equivalence classes left to fall back to a default take it:
-    /// those that are not solved and have no unbroken dependency.
+    /// The equivalence classes left to fall back to a default take it, each
+    /// recorded by fallback: those that are not solved and have no unbroken
+    /// dependency.
     pub(crate) fn take_defaults(&mut self) -> Vec<FellBack> {
-        let targets = self.fallback_targets();
-        let decls = Rc::clone(&self.decls);
-        let types = decls.types();
         let mut fell = Vec::new();
-        for root in targets {
-            let term = match &self.classes.held(root).lit {
-                Some(lit) => Term::Scalar(lit.default_scalar()),
+        for root in self.fallback_targets() {
+            let default = match &self.classes.held(root).range {
+                Some(range) => range.fallback(),
                 None => Term::Never,
             };
-            let unified =
-                self.classes
-                    .unifying(types)
-                    .give_kind(root, term.clone(), KindSource::Solved);
-            let refused = unified.result().err().map(|conflict| {
-                let name = self.class_name(root);
-                self.refuse_conflict(format!("the default of {name}"), conflict)
-            });
-            if let Some(conflicted) = &unified.conflict {
-                self.conflicted_have_no_value(conflicted);
-            }
-            self.classes.mark_solved(root);
+            let relation = Relation::Kind(root, default.clone(), KindSource::Solved);
+            let mut recorded = Recording::default();
+            recorded.push(self.record(relation, Recorder::Fallback));
             fell.push(FellBack {
                 class: root,
-                default: term,
-                unified,
-                refused,
+                default,
+                recorded,
             });
         }
         fell

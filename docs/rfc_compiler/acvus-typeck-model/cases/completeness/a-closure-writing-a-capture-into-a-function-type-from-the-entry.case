@@ -1,0 +1,22 @@
+// let mut last = 0u8;
+// take(|x| { last = x; x });   // take(fn(u8) -> u8)
+// λ's environment and λ's value are both the entry's.
+extern fn take(fn(u8) -> u8);
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    #[by_name] LAST = X;
+    `λ result` = X;
+}
+let LAST;
+let 0u8: u8;
+LAST = 0u8;
+let `|x| ..`: lambda λ;
+let `take(..)`;
+`take(..)` = take(`|x| ..`) @ take;
+
+must pass;
+assert outcomes 1;
+assert LAST: u8;
+assert X: u8;

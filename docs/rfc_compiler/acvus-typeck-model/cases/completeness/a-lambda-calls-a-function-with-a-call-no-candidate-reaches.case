@@ -1,0 +1,44 @@
+// fn g(a, b) { let m = make_c(); probe(m); }   // make_c() -> C; probe(A), probe(B); no cast
+// let x = 1u8;
+// |y| g(x, y);
+// probe reads m as C, which reaches neither candidate, so it is left
+// undecided in g's C; every class it names is closed. The use g(x, y) gives
+// one constraint at each argument and one at its result: at x the
+// environment's, at y and the result the lambda's.
+extern type A;
+extern type B;
+extern type C;
+extern fn make_c() -> C;
+extern fn probe(A);
+extern fn probe(B);
+group g {
+    let PA;
+    let PB;
+    let `g result`;
+    fn g(PA, PB) -> `g result`;
+    let M;
+    let `make_c()`;
+    `make_c()` = make_c() @ make_c;
+    M = `make_c()`;
+    let `probe(m)`;
+    `probe(m)` = probe(M) @ probe;
+    let unit: ();
+    `g result` = unit;
+}
+group λ in run {
+    let Y;
+    let `λ result`;
+    fn λ(Y) -> `λ result`;
+    let `g(..)`;
+    `λ result` = `g(..)`;
+}
+let 1u8: u8;
+let X;
+X = 1u8;
+let `|y| ..`: lambda λ;
+group λ {
+    `g(..)` = g(X, Y) @ `g call`;
+}
+
+must fail;
+assert outcomes 1;

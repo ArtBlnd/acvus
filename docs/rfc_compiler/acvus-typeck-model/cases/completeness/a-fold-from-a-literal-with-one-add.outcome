@@ -1,0 +1,29 @@
+// What the model gives, written by `BLESS=1`.
+run: 200 sampled orders
+outcome 1
+  accepted
+  value `&acc`: none
+  value `&s`: none
+  value 0: i32
+  value ACC: none
+  value S: none
+  value `acc + s`: i32
+  value `fold(..)`: i32
+  value `scores()`: Iter<i32>
+  value `|acc, s| ..`: Fn/2
+  value `λ result`: i32
+  decision `|acc, s| .. ~> fold.Param(2)#λ/&acc`: lend & place
+  decision `|acc, s| .. ~> fold.Param(2)#λ/&s`: lend & place
+  check `0 <= fold.Var(Type(1))`: Ok(Identity)
+  check `fold.Var(Type(0)) <= |acc, s| .. ~> fold.Param(2)#λ/S`: Ok(Identity)
+  check `fold.Var(Type(1)) <= fold(..)`: Ok(Identity)
+  check `fold.Var(Type(1)) <= |acc, s| .. ~> fold.Param(2)#λ/ACC`: Ok(Identity)
+  check `scores() ~> fold.Param(0)`: Ok(Identity)
+  check `scores.Result <= scores()`: Ok(Identity)
+  check `|acc, s| .. ~> fold.Param(2)`: Ok(Undecided)
+  check `|acc, s| .. ~> fold.Param(2)#λ/&acc ~> |acc, s| .. ~> fold.Param(2)#λ/add.Param(0)`: Ok(Identity)
+  check `|acc, s| .. ~> fold.Param(2)#λ/&s ~> |acc, s| .. ~> fold.Param(2)#λ/add.Param(1)`: Ok(Identity)
+  check `|acc, s| .. ~> fold.Param(2)#λ/λ result <= fold.Var(Type(1))`: Ok(Identity)
+  check `acc + s <= λ result`: Ok(Identity)
+  check `add.Result <= acc + s`: Ok(Identity)
+  I* of a final state: []

@@ -1,0 +1,22 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value `&n 2`: &i32
+  value `&n 3`: &i32
+  value ?a: i32
+  value D: none
+  value K: i64
+  value N: i32
+  value R2: i32
+  decision `&n 2`: lend & place
+  decision `&n 3`: lend & place
+  decision `n - n`: core::sub#0
+  check `&n 2 ~> n - n.Param(0)`: Ok(Identity)
+  check `&n 3 ~> n - n.Param(1)`: Ok(Identity)
+  check `?a <= N`: Ok(Identity)
+  check `cmp_val.Result <= K`: Ok(Identity)
+  check `n - n.Chosen(1) <= n - n.Common(1)`: Ok(Identity)
+  check `n - n.Common(1) <= R2`: Ok(Identity)
+  refusal no_join D
+  I* of a final state: []

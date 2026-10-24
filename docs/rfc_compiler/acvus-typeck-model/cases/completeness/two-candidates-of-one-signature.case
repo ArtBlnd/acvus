@@ -1,0 +1,12 @@
+// probe(1u8);              // probe(u8), probe(u8): two declarations of one signature
+// Every position of both candidates writes one closed type, so both remain
+// whatever is read.
+extern fn probe(u8);
+extern fn probe(u8);
+let 1u8: u8;
+let `probe(1u8)`;
+`probe(1u8)` = probe(1u8) @ probe;
+
+must fail;
+assert outcomes 1;
+assert probe == undecided;

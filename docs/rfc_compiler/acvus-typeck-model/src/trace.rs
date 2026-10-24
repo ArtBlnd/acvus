@@ -10,7 +10,7 @@ use crate::node::Decided;
 use crate::record::Recording;
 use crate::split::Split;
 use crate::unify::Linked;
-use crate::value::{Filled, Joined};
+use crate::value::Joined;
 
 /// What one phase did, a relation named by its place in the log.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -24,18 +24,11 @@ pub enum Report {
     /// The join: the equivalence class reaches a part of its own, and is
     /// refused.
     Infinite { class: ClassId, refusal: Refusal },
-    /// The join: the equivalence class's LitVar lower bounds unified with it.
-    LitLowers { class: ClassId, recorded: Recording },
-    /// A split: `?N ⇝ U` unifying the equivalence class with each type it
-    /// passes into.
-    LitBoundaries { class: ClassId, recorded: Recording },
     /// The join: what the equivalence class took, and from what.
     Joined { class: ClassId, joined: Joined },
-    /// The fill: what the equivalence class nothing enters took.
-    Filled(Filled),
-    /// The join: the LitVar lower bound at `bound` unified with the solved
-    /// class it bounds.
-    LitJoined { bound: usize, recorded: Recording },
+    /// The join: the range the lower bound or part lower bound at `bound`
+    /// gives the class it bounds.
+    Ranged { bound: usize, recorded: Recording },
     /// A split: what became of the relation at `at`.
     Split { at: usize, split: Split },
     /// The nodes: the common part of all the nodes not yet decided may

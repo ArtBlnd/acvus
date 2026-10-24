@@ -1,0 +1,18 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value `&mut out`: &mut String
+  value `&whole`: &i64
+  value OUT: String
+  value WHOLE: i64
+  value `display(..)`: ()
+  value `to_string(..)`: String
+  decision `&mut out`: lend &mut place
+  decision `&whole`: lend & place
+  decision display: undecided
+  check `&mut out ~> display.CommonParam(1)`: Ok(Identity)
+  check `&whole ~> to_string.Param(0)`: Ok(Identity)
+  check `display.CommonResult <= display(..)`: Ok(Identity)
+  check `to_string.Result <= to_string(..)`: Ok(Identity)
+  I* of a final state: []

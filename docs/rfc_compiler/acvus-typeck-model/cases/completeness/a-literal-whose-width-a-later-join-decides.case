@@ -1,0 +1,30 @@
+// let mut n = 0;
+// let d = if c { n - n } else { cmp_val() };   // cmp_val() -> i64
+// Each operand is lent, as a literal operand is a temporary of the
+// literal's type. The if's two branch values meet d's class.
+extern fn core::add(&i32, &i32) -> i32;
+extern fn core::add(&i64, &i64) -> i64;
+extern fn core::sub(&i32, &i32) -> i32;
+extern fn core::sub(&i64, &i64) -> i64;
+extern fn cmp_val() -> i64;
+let N;
+let ?a: lit 0;
+N = ?a;
+let `&n 2`;
+`&n 2` = &N @ `&n 2`;
+let `&n 3`;
+`&n 3` = &N @ `&n 3`;
+let R2;
+R2 = core::sub(`&n 2`, `&n 3`) @ `n - n`;
+let K;
+K = cmp_val() @ cmp_val;
+let D;
+D = R2;
+D = K;
+
+must pass;
+assert outcomes 1;
+assert N: i64;
+assert ?a: i64;
+assert D: i64;
+assert `n - n` == core::sub#1;

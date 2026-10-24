@@ -524,7 +524,7 @@ impl<'a> Instance<'a> {
                     part,
                     classes: classes
                         .into_iter()
-                        .map(|class| self.class(here, class))
+                        .map(|(k, class)| (k, self.class(here, class)))
                         .collect(),
                 },
                 Common::Lend => Common::Lend,
@@ -587,7 +587,7 @@ fn named_by(node: &NodeState) -> Vec<ClassId> {
             .collect(),
     };
     if let Some(Common::Use { classes: made, .. }) = &node.common {
-        classes.extend(made);
+        classes.extend(made.values());
     }
     classes.extend(&node.references);
     classes

@@ -1,0 +1,25 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value `&a`: none
+  value `&v`: none
+  value 1u8: u8
+  value 2u8: u8
+  value A: none
+  value S: none
+  value U8: none
+  value V: none
+  value `[1u8, 2u8]`: none
+  value `make()`: Vec<u8>
+  decision `&a`: lend & place
+  decision `&v`: lend & place
+  partition {A, V}
+  check `make.Result <= make()`: Ok(Identity)
+  refusal no_join A
+  refusal no_value `&a`
+  refusal no_value `&v`
+  refusal no_value S
+  refusal no_value U8
+  refusal no_value `[1u8, 2u8]`
+  I* of a final state: []

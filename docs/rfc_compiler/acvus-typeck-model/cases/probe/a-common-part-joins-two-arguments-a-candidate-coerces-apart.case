@@ -1,0 +1,34 @@
+// let v = make();                 // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
+// let a = [1u8, 2u8];
+// same(&v, &a);                   // same(&[u8], &[u8]) -> bool, same(&[u16], &[u16]) -> bool
+// same#0 takes &v by the view and &a by the array's view, each apart.
+// The candidates differ by the same types at both parameters, so the
+// common part puts one unknown at both, and both arguments meet it.
+extern type Vec<T>;
+extern fn make() -> Vec<u8>;
+#[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
+extern fn same(&[u8], &[u8]) -> bool;
+extern fn same(&[u16], &[u16]) -> bool;
+let V;
+let `make()`;
+`make()` = make() @ make;
+V = `make()`;
+let U8;
+let `[1u8, 2u8]`: [U8; 2];
+let 1u8: u8;
+let 2u8: u8;
+U8 = 1u8;
+U8 = 2u8;
+let A;
+A = `[1u8, 2u8]`;
+let `&v`;
+`&v` = &V @ `&v`;
+let `&a`;
+`&a` = &A @ `&a`;
+let R;
+R = same(`&v`, `&a`) @ same;
+
+must pass;
+assert outcomes 1;
+assert same == same#0;
+assert R: bool;

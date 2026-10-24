@@ -1,11 +1,11 @@
 //! The value a use, a lend, a projection or a binding reads: a type
-//! some of whose positions may be left undecided, a position holding a LitVar
-//! deciding nothing within its family.
+//! some of whose positions may be left undecided, a position holding only a
+//! range deciding nothing among the constructors it admits.
 
 use std::fmt;
 use std::rc::Rc;
 
-use crate::lit::LitVar;
+use crate::range::Range;
 use crate::sig::{SigTy, SigVar};
 use crate::ty::{HasTerm, Term, Ty, TyError, check_term};
 
@@ -13,7 +13,8 @@ use crate::ty::{HasTerm, Term, Ty, TyError, check_term};
 pub enum ReadValue {
     /// A position the value read does not decide.
     Undecided,
-    Lit(LitVar),
+    /// A position holding only a range that admits no `!`.
+    Range(Range),
     Term(Rc<Term<ReadValue>>),
 }
 
@@ -48,31 +49,13 @@ impl ReadValue {
         Some(Ty::new(term).expect("a value read is checked as a closed type is"))
     }
 
-    /// Each LitVar taken as its family's default.
-    pub fn with_defaults(&self) -> ReadValue {
-        match self {
-            ReadValue::Undecided => ReadValue::Undecided,
-            ReadValue::Lit(lit) => ReadValue::Term(Rc::new(Term::Scalar(lit.default_scalar()))),
-            ReadValue::Term(term) => ReadValue::Term(Rc::new(
-                (**term).clone().map(|_, part| part.with_defaults()),
-            )),
-        }
-    }
-
-    pub fn has_lit(&self) -> bool {
-        match self {
-            ReadValue::Undecided => false,
-            ReadValue::Lit(_) => true,
-            ReadValue::Term(term) => term.parts().into_iter().any(|(_, part)| part.has_lit()),
-        }
-    }
 }
 
 impl HasTerm for ReadValue {
     fn decided(&self) -> Option<&Term<ReadValue>> {
         match self {
             ReadValue::Term(term) => Some(term),
-            ReadValue::Undecided | ReadValue::Lit(_) => None,
+            ReadValue::Undecided | ReadValue::Range(_) => None,
         }
     }
 
@@ -82,12 +65,12 @@ impl HasTerm for ReadValue {
     }
 }
 
-/// A position not decided is written `_`, and a LitVar as `LitVar` writes it.
+/// A position not decided is written `_`, and a range as `Range` writes it.
 impl fmt::Display for ReadValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReadValue::Undecided => f.write_str("_"),
-            ReadValue::Lit(lit) => write!(f, "{lit}"),
+            ReadValue::Range(range) => write!(f, "{range}"),
             ReadValue::Term(term) => write!(f, "{term}"),
         }
     }

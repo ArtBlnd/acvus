@@ -1,0 +1,26 @@
+// let run = || take(|x| x);   // take(fn(u8) -> u8)
+// run();
+// λ captures nothing, so its environment is empty.
+extern fn take(fn(u8) -> u8);
+group ν in run {
+    let `ν result`;
+    fn ν() -> `ν result`;
+    let `|x| ..`: lambda λ;
+    let `take(..)`;
+    `take(..)` = take(`|x| ..`) @ take;
+    `ν result` = `take(..)`;
+}
+group λ in ν {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    `λ result` = X;
+}
+let `|| ..`: lambda ν;
+let RUN;
+RUN = `|| ..`;
+let `run()`;
+`run()` = (RUN)() @ `run 1`;
+
+must pass;
+assert outcomes 1;

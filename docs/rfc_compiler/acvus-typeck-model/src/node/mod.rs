@@ -151,10 +151,10 @@ pub struct NodeState {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Common {
     /// A use's: the common part of its candidates' signatures, and the class
-    /// made for each of its variables.
+    /// made for each variable its result writes.
     Use {
         part: Rc<common::CommonPart>,
-        classes: Vec<ClassId>,
+        classes: BTreeMap<usize, ClassId>,
     },
     /// A lend's: its result is a reference.
     Lend,
@@ -184,15 +184,6 @@ pub enum NodeAt {
     /// The type the candidate a use is decided as writes at a variable of its
     /// common part.
     Chosen(usize),
-}
-
-/// Whether a use's narrowing may take each LitVar it reads as its family's
-/// default: only where no other step is left, as a class falls back
-/// to its default only then.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum LitDefaults {
-    Withheld,
-    Taken,
 }
 
 /// A node decided, with the relations recorded once it is: its own,
@@ -293,22 +284,16 @@ impl State {
     }
 
     /// The value the node reads now, as deciding it would read it: without
-    /// itself and those that transitively depend on it, its LitVars
-    /// taken as their defaults or not as `defaults` says.
-    pub(crate) fn read_now(&self, name: &Name, defaults: LitDefaults) -> ValueRead {
-        self.value_read(name, &self.dependents(name), defaults)
+    /// itself and those that transitively depend on it.
+    pub(crate) fn read_now(&self, name: &Name) -> ValueRead {
+        self.value_read(name, &self.dependents(name))
     }
 
     /// Decides the node by the value it reads, which decides it (`steps`),
-    /// its LitVars taken as their defaults only where it decides nothing
-    /// without them, which `steps` offers only where no other step is left,
     /// and records what it records, or defers it.
     pub(crate) fn decide(&mut self, name: &Name) -> Decided {
         let dependents = self.dependents(name);
-        let mut value = self.value_read(name, &dependents, LitDefaults::Withheld);
-        if value.decision.is_none() {
-            value = self.value_read(name, &dependents, LitDefaults::Taken);
-        }
+        let value = self.value_read(name, &dependents);
         let decision = value
             .decision
             .clone()
@@ -457,7 +442,7 @@ impl State {
         name: &Name,
         excluded: &BTreeSet<Name>,
     ) -> Option<Decision> {
-        self.value_read(name, excluded, LitDefaults::Taken).decision
+        self.value_read(name, excluded).decision
     }
 
     /// The value the node reads leaving out the relations of the nodes
@@ -469,7 +454,6 @@ impl State {
         &self,
         name: &Name,
         excluded: &BTreeSet<Name>,
-        defaults: LitDefaults,
     ) -> ValueRead {
         let kind = &self.nodes[name].kind;
         let mut excluded = excluded.clone();
@@ -492,13 +476,8 @@ impl State {
             (read, lent)
         };
         let (reading, decision) = match kind {
-            NodeKind::Use {
-                callee,
-                args,
-                result,
-                ..
-            } => {
-                let narrowing = self.narrow(name, callee, args, *result, &excluded, defaults);
+            NodeKind::Use { callee, args, .. } => {
+                let narrowing = self.narrow(callee, args, &excluded);
                 let decision = narrowing.decision.clone();
                 (Reading::Use(narrowing), decision)
             }
@@ -733,12 +712,10 @@ impl State {
                 },
                 Decision::Use(id),
             ) => {
-                // What the common part holds is not recorded again:
-                // an argument the common part's parameter holds whole, and
-                // the result but at the common part's variables, into each
-                // of which the candidate's type there enters. An argument it
-                // does not hold whole passes whole into the candidate's
-                // parameter, a coercion being of a whole value.
+                // Each argument passes whole into the candidate's parameter,
+                // a coercion being of a whole value. What the common part
+                // holds of the result is not recorded again: the candidate's
+                // type enters each of the common part's variables there.
                 let sig = self.decls.decl(id).sig.clone();
                 let common = match &node.common {
                     Some(Common::Use { part, classes }) => Some((part.clone(), classes.clone())),
@@ -778,7 +755,7 @@ impl State {
                         let candidate = self.candidate_index(callee, args.len(), id);
                         for k in common::CommonPart::vars_in(&part.result) {
                             recorded.append(self.record_result(
-                                classes[k],
+                                classes[&k],
                                 &part.vars[k][candidate],
                                 &mut vars,
                                 at(NodeAt::Chosen(k)),
@@ -898,7 +875,7 @@ impl State {
 /// The classes a relation records into: the upper side of a lower
 /// bound or a part lower bound, the type passed into at a boundary or a
 /// wrapping, both sides of an equation, and the class a kind, a fact, a
-/// LitVar, a record of whether it is a reference or a lambda is given to.
+/// range or a lambda is given to.
 fn recorded_into(relation: &Relation) -> Vec<ClassId> {
     match relation {
         Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => vec![*upper],
@@ -906,8 +883,7 @@ fn recorded_into(relation: &Relation) -> Vec<ClassId> {
         Relation::Equation(a, b) => vec![*a, *b],
         Relation::Fact(class, _)
         | Relation::Kind(class, ..)
-        | Relation::Lit(class, _)
-        | Relation::Reference(class, _)
+        | Relation::Range(class, _)
         | Relation::Values(class, _) => vec![*class],
     }
 }

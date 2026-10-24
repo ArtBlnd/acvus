@@ -23,7 +23,8 @@ use crate::solve::{State, Step};
 use crate::split::Split;
 use crate::trace::Report;
 use crate::ty::{HasTerm, Mutability, Name, Term};
-use crate::value::{Fill, Head, Sources, Took};
+use crate::fallback::FellBack;
+use crate::value::{Head, Sources, Took};
 
 use super::parse::Phase;
 
@@ -140,7 +141,6 @@ pub fn refusal(refusal: &Refusal) -> String {
     match refusal {
         Refusal::Conflict { at, conflict } => format!("conflict at {at:?}: {conflict}"),
         Refusal::NoJoin(class) => format!("no_join {}", name(&class.to_string())),
-        Refusal::NoFill(class) => format!("no_fill {}", name(&class.to_string())),
         Refusal::Infinite(class) => format!("infinite {}", name(&class.to_string())),
         Refusal::NoValue(class) => format!("no_value {}", name(&class.to_string())),
         Refusal::Undeclared(what) => format!("undeclared: {what}"),
@@ -151,7 +151,6 @@ pub fn refusal(refusal: &Refusal) -> String {
 pub fn step(state: &State, step: &Step) -> String {
     match step {
         Step::Solve(root) => format!("solve {}", name(&state.class_name(*root).to_string())),
-        Step::Fill(root) => format!("fill {}", name(&state.class_name(*root).to_string())),
         Step::Decide(node) => format!("decide {}", name(node.as_str())),
     }
 }
@@ -231,41 +230,14 @@ pub fn report(state: &State, report: &Report) -> Rendered {
             Some(format!("join {}: infinite", class(*id))),
             None,
         ),
-        Report::LitLowers {
-            class: id,
-            recorded,
-        } => (
-            Phase::Join,
-            unless_empty(recorded, format!("lit lowers {}", class(*id))),
-            Some(recorded),
-        ),
-        Report::LitBoundaries {
-            class: id,
-            recorded,
-        } => (
-            Phase::Split,
-            unless_empty(recorded, format!("lit boundaries {}", class(*id))),
-            Some(recorded),
-        ),
         Report::Joined { class: id, joined } => (
             Phase::Join,
             Some(format!("join {}: {}", class(*id), took(&joined.took))),
             None,
         ),
-        Report::Filled(filled) => {
-            let took = match &filled.fill {
-                Fill::Took { ty, .. } => ty.to_string(),
-                Fill::Differ(_) => "differ".to_string(),
-            };
-            (
-                Phase::Join,
-                Some(format!("fill {}: {took}", class(filled.class))),
-                None,
-            )
-        }
-        Report::LitJoined { bound, recorded } => (
+        Report::Ranged { bound, recorded } => (
             Phase::Join,
-            Some(format!("lit join #{bound} {}", relation(state, *bound))),
+            Some(format!("range #{bound} {}", relation(state, *bound))),
             Some(recorded),
         ),
         Report::Split { at, split } => {
@@ -300,7 +272,7 @@ pub fn report(state: &State, report: &Report) -> Rendered {
             (
                 Phase::Fallback,
                 Some(format!("default {}: {default}", class(fell.class))),
-                None,
+                Some(&fell.recorded),
             )
         }
     };
@@ -573,6 +545,7 @@ fn recorder(state: &State, recorder: &Recorder) -> String {
             )
         }
         Recorder::Check => "check".to_string(),
+        Recorder::Fallback => "fallback".to_string(),
         Recorder::Instance { at, of, .. } => {
             let made = state
                 .instances
@@ -697,10 +670,6 @@ fn narrowing(state: &State, narrowing: &Narrowing, args: usize) -> Lines {
         );
     }
     lines.nest(0, narrowed(&narrowing.stages, args));
-    if let Some(retry) = &narrowing.retry {
-        lines.push(0, "retry".to_string());
-        lines.nest(1, narrowed(retry, args));
-    }
     lines
 }
 
@@ -784,9 +753,8 @@ pub fn traced(state: &State, report: &Report) -> Lines {
         Report::Recorded(recorded)
         | Report::Merged(recorded)
         | Report::Common(recorded)
-        | Report::LitLowers { recorded, .. }
-        | Report::LitBoundaries { recorded, .. }
-        | Report::LitJoined { recorded, .. }
+        | Report::Ranged { recorded, .. }
+        | Report::FellBack(FellBack { recorded, .. })
         | Report::Split {
             split: Split::Parts(recorded),
             ..
@@ -803,19 +771,6 @@ pub fn traced(state: &State, report: &Report) -> Lines {
             if let Took::Joined { unified: made, .. } = &joined.took {
                 detail.nest(0, self::unified(state, made, None));
             }
-            None
-        }
-        Report::Filled(filled) => {
-            for (place, value) in &filled.places {
-                detail.push(0, format!("place {}: {value}", class_of(state, *place)));
-            }
-            if let Fill::Took { unified: made, .. } = &filled.fill {
-                detail.nest(0, self::unified(state, made, None));
-            }
-            None
-        }
-        Report::FellBack(fell) => {
-            detail.nest(0, self::unified(state, &fell.unified, None));
             None
         }
         Report::Infinite { .. } | Report::Split { .. } => None,
@@ -900,7 +855,7 @@ pub fn waiting(state: &State) -> Lines {
         lines.push(0, attributes(line, [("wait", Some(wait))]));
         if waits_for_nothing {
             let none = [("broken by", None)];
-            let read = state.read_now(node, state.lit_defaults_now());
+            let read = state.read_now(node);
             lines.nest(1, value_read(state, node, &read, none));
         }
     }

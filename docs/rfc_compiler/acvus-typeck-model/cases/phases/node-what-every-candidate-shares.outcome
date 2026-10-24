@@ -6,16 +6,11 @@ outcome 1
   value x: u8
   decision g: g#0
   check `g.CommonResult <= R`: Ok(Identity)
-  check `x <= g.Common(0)`: Ok(Identity)
   check `x ~> g.Param(0)`: Ok(Identity)
   I* of a final state: []
 start run
   record #0 x: u8
   record #1 g.CommonResult: bool
   record #2 g.CommonResult <= R
-  common
-    record #3 g.Common(0): no reference
-    record #4 x <= g.Common(0)
   split #0 x: u8: no parts
   split #1 g.CommonResult: bool: no parts
-  split #3 g.Common(0): no reference: no parts

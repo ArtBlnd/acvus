@@ -1,0 +1,29 @@
+// let last;
+// || take(|x| { last = x; });   // take(fn(u8) -> ())
+// The inner lambda λ writes last, a binding of the entry, so x is joined
+// to it: λ's environment, recorded in ν, whose own
+// environment then holds them, the entry's. λ's value is ν's: take's
+// parameter writes one closed type, a constraint on λ's value alone.
+extern fn take(fn(u8) -> ());
+group ν in run {
+    let `ν result`;
+    fn ν() -> `ν result`;
+    let `|x| ..`: lambda λ;
+    let `take(..)`;
+    `take(..)` = take(`|x| ..`) @ take;
+    `ν result` = `take(..)`;
+}
+group λ in ν {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    #[by_name] LAST = X;
+    let unit: ();
+    `λ result` = unit;
+}
+let LAST;
+let `|| ..`: lambda ν;
+
+must pass;
+assert outcomes 1;
+assert X: u8;

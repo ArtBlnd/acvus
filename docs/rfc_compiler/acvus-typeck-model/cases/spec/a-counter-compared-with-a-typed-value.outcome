@@ -1,34 +1,27 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
-  value `&1`: &u64
-  value `&i`: &u64
-  value `&i 2`: &u64
+  refused
+  value `&1`: &i32
+  value `&i`: &i32
+  value `&i 2`: &i32
   value `&n`: &u64
-  value ?a: u64
-  value ?b: u64
+  value ?a: i32
+  value ?b: i32
   value D: bool
-  value I: u64
+  value I: i32
   value N: u64
-  value R: u64
+  value R: i32
   value Str: str
   value s: &str
   decision `&1`: lend & place
   decision `&i`: lend & place
   decision `&i 2`: lend & place
   decision `&n`: lend & place
-  decision `i + 1`: core::add#1
-  decision `i == n`: core::eq#1
-  partition {?a, ?b, I, N}
-  check `&1 <= i + 1.Common(0)`: Ok(Identity)
+  decision `i + 1`: core::add#0
+  decision `i == n`: undecided
   check `&1 ~> i + 1.Param(1)`: Ok(Identity)
-  check `&i 2 <= i == n.Common(0)`: Ok(Identity)
-  check `&i 2 ~> i == n.Param(0)`: Ok(Identity)
-  check `&i <= i + 1.Common(0)`: Ok(Identity)
   check `&i ~> i + 1.Param(0)`: Ok(Identity)
-  check `&n <= i == n.Common(0)`: Ok(Identity)
-  check `&n ~> i == n.Param(1)`: Ok(Identity)
   check `?a <= I`: Ok(Identity)
   check `R <= I`: Ok(Identity)
   check `i + 1.Chosen(1) <= i + 1.Common(1)`: Ok(Identity)

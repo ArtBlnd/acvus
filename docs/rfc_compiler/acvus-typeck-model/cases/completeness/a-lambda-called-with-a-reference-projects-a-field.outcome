@@ -1,0 +1,20 @@
+// What the model gives, written by `BLESS=1`.
+run: 200 sampled orders
+outcome 1
+  accepted
+  value F: Fn/1
+  value S: none
+  value `f(..)`: ()
+  value `row()`: &{score: i32}
+  value `s.score`: none
+  value unit: ()
+  value `|s| ..`: Fn/1
+  value `λ result`: ()
+  decision `f 1`: calls {λ}
+  decision `f 1#λ/s.score`: applied through &
+  check `f 1#λ/λ result <= f(..)`: Ok(Identity)
+  check `row() <= f 1#λ/S`: Ok(Identity)
+  check `row.Result <= row()`: Ok(Identity)
+  check `|s| .. <= F`: Ok(Identity)
+  check `unit <= λ result`: Ok(Identity)
+  I* of a final state: []

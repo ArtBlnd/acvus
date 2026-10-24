@@ -1,0 +1,22 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value RUN: Fn/0
+  value X: none
+  value `run()`: ()
+  value `take(..)`: ()
+  value `|x| ..`: Fn/1
+  value `|| ..`: Fn/0
+  value `λ result`: none
+  value `ν result`: ()
+  decision `run 1`: calls {ν}
+  check `run 1#ν/ν result <= run()`: Ok(Identity)
+  check `|| .. <= RUN`: Ok(Identity)
+  check `take(..) <= ν result`: Ok(Identity)
+  check `take.Param(0).Param(0) <= |x| .. ~> take.Param(0)#λ/X`: Ok(Identity)
+  check `take.Result <= take(..)`: Ok(Identity)
+  check `|x| .. ~> take.Param(0)`: Ok(Undecided)
+  check `|x| .. ~> take.Param(0)#λ/X <= |x| .. ~> take.Param(0)#λ/λ result`: Ok(Identity)
+  check `|x| .. ~> take.Param(0)#λ/λ result ~> take.Param(0).Return`: Ok(Identity)
+  I* of a final state: []

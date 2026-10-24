@@ -4,8 +4,8 @@ outcome 1
   accepted
   value A: u8
   value B: Result<u8, Error{E(E)}>
-  value `Ok(..)`: Result<u8, Error{E(E)}>
-  value P: Error{E(E)}
+  value `Ok(..)`: none
+  value P: none
   value S: u8
   value `get()`: Result<u8, E>
   value `{..}`: Fn/0
@@ -13,14 +13,13 @@ outcome 1
   value `λ result`: Result<u8, Error{E(E)}>
   decision call: calls {λ}
   decision q: ?#1
+  check `call#λ/Ok(..) <= call#λ/λ result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Identity), (Payload(Err), Never)] }) })
+  check `call#λ/q.Exit <= call#λ/λ result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Never), (Payload(Err), Identity)] }) })
   check `call#λ/λ result <= {..}()`: Ok(Identity)
   check `{..}() <= B`: Ok(Identity)
   check `A <= S`: Ok(Identity)
-  check `Ok(..) <= λ result`: Ok(Identity)
-  check `get() <= q.Common(0)`: Ok(Identity)
   check `get() ~> q.Param(0)`: Ok(Identity)
   check `get.Result <= get()`: Ok(Identity)
   check `q.Common(1) <= A`: Ok(Identity)
-  check `q.Exit <= λ result`: Ok(Identity)
   check `q.Var(Type(0)) <= q.Common(1)`: Ok(Identity)
   I* of a final state: []

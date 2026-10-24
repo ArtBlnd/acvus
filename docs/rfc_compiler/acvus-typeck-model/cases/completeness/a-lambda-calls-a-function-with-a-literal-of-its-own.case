@@ -1,0 +1,36 @@
+// fn g(a, b) { let z = 0; }
+// let x = 1u8;
+// |y| g(x, y);
+// g's C holds its universals A and B, each a part alone, and z's class with
+// its literal, a part at no position of g. The use g(x, y) gives one
+// constraint at each argument and one at its result; at x it is the
+// environment's, at y and the result the lambda's.
+group g {
+    let A;
+    let B;
+    let `g result`;
+    fn g(A, B) -> `g result`;
+    let Z;
+    let 0: lit 0;
+    Z = 0;
+    let unit: ();
+    `g result` = unit;
+}
+group λ in run {
+    let Y;
+    let `λ result`;
+    fn λ(Y) -> `λ result`;
+    let `g(..)`;
+    `λ result` = `g(..)`;
+}
+let 1u8: u8;
+let X;
+X = 1u8;
+let `|y| ..`: lambda λ;
+group λ {
+    `g(..)` = g(X, Y) @ `g call`;
+}
+
+must pass;
+assert outcomes 1;
+assert X: u8;

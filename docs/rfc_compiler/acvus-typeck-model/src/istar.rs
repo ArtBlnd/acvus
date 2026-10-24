@@ -114,7 +114,7 @@ fn add_decided(here: &mut State, made: &Made, from: &State) {
                 part,
                 classes: classes
                     .into_iter()
-                    .map(|class| copy.class(here, class))
+                    .map(|(k, class)| (k, copy.class(here, class)))
                     .collect(),
             },
             Common::Lend => Common::Lend,
@@ -333,8 +333,7 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
 
 /// The classes a relation records into: the upper side of a lower bound or a
 /// part lower bound, the type passed into at a boundary, both sides of an
-/// equation, and the class a kind, a fact, a LitVar, a common part's record
-/// of whether it is a reference or a lambda is given to.
+/// equation, and the class a kind, a fact, a range or a lambda is given to.
 fn into(relation: &Relation) -> Vec<ClassId> {
     match relation {
         Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => {
@@ -344,8 +343,7 @@ fn into(relation: &Relation) -> Vec<ClassId> {
         Relation::Equation(a, b) => vec![*a, *b],
         Relation::Fact(class, _)
         | Relation::Kind(class, ..)
-        | Relation::Lit(class, _)
-        | Relation::Reference(class, _)
+        | Relation::Range(class, _)
         | Relation::Values(class, _) => vec![*class],
     }
 }

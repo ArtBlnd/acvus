@@ -1,8 +1,7 @@
 //! An equivalence class's value: a cycle of lower
 //! bounds and part lower bounds alone merged first, a class that reaches a
-//! part of its own refused, a LitVar's join unifying it, the join of the
-//! constructors and members the sources give, the kind the class takes with
-//! its parts made anew, and the fill of a class nothing enters.
+//! part of its own refused, the join of the constructors and members the
+//! sources give, and the kind the class takes with its parts made anew.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -10,7 +9,6 @@ use std::rc::Rc;
 use crate::check::Refusal;
 use crate::class::{ClassId, ClassName, Fact, KindSource, Unified};
 use crate::decl::Node;
-use crate::lit::LitVar;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
@@ -48,46 +46,6 @@ pub enum Took {
     Nothing,
     /// Its sources have no join, so it has no value and is refused.
     NoJoin(Refusal),
-}
-
-/// What an equivalence class nothing enters took at its fill.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum Fill {
-    /// The one type the places it passes into have, with what unification
-    /// did as the class took it, and the refusal where it could not take it.
-    Took {
-        ty: Ty,
-        unified: Unified,
-        refused: Option<Refusal>,
-    },
-    /// The places it passes into have two types, so it has no value and is
-    /// refused.
-    Differ(Refusal),
-}
-
-/// A fill: the equivalence class, each place it passes into with
-/// that place's value, and what it took.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Filled {
-    pub class: ClassId,
-    pub places: Vec<(ClassId, PlaceValue)>,
-    pub fill: Fill,
-}
-
-/// What a place gives a fill: a value, or a LitVar alone.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum PlaceValue {
-    Ty(Ty),
-    Lit(LitVar),
-}
-
-impl std::fmt::Display for PlaceValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PlaceValue::Ty(ty) => write!(f, "{ty}"),
-            PlaceValue::Lit(lit) => write!(f, "{lit}"),
-        }
-    }
 }
 
 /// What an equivalence class's value is taken from when it is solved.
@@ -328,21 +286,6 @@ impl State {
         Some(refusal)
     }
 
-    /// Unifies with the equivalence class each LitVar lower bound of it that
-    /// waits for nothing: the join of a LitVar. Returns the
-    /// equations recorded.
-    pub(crate) fn join_lit_lowers(&mut self, root: ClassId) -> Recording {
-        let mut recorded = Recording::default();
-        let settled = self.settled();
-        for lower in self.lower_bounds(root) {
-            if self.is_lit(lower) && settled.contains(&self.root(lower)) {
-                let relation = Relation::Equation(lower, root);
-                recorded.push(self.record(relation, Recorder::Split(root)));
-            }
-        }
-        recorded
-    }
-
     /// The sources of the equivalence class's value.
     pub(crate) fn sources(&self, root: ClassId) -> Sources {
         let root = self.root(root);
@@ -460,156 +403,45 @@ impl State {
         })
     }
 
-    /// What a place the equivalence class passes into gives a fill:
-    /// its value, or the LitVar it alone holds once nothing more decides it
-    /// (`State::fills_now`), which takes any type of its family that holds its
-    /// values, as at a use's narrowing.
-    pub(crate) fn place_value(&self, place: ClassId) -> Option<PlaceValue> {
-        if let Some(ty) = self.value(place) {
-            return Some(PlaceValue::Ty(ty));
-        }
-        let held = self.classes.held(self.root(place));
-        match (&held.kind, &held.lit) {
-            (None, Some(lit)) => Some(PlaceValue::Lit(lit.clone())),
-            _ => None,
-        }
-    }
-
-    /// Fills the equivalence class nothing enters: where the places it
-    /// passes into that have a value have one type, and each holding only a
-    /// LitVar takes it, the class takes that type, solved with each of its
-    /// parts; otherwise it has no value and is refused. Each place has a value
-    /// or holds only a LitVar nothing more decides, and one has a value
-    /// (`State::fills_now`).
-    pub(crate) fn fill(&mut self, root: ClassId) -> Filled {
-        let root = self.root(root);
-        let places: Vec<(ClassId, PlaceValue)> = self
-            .places(root)
-            .into_iter()
-            .map(|place| {
-                let value = self.place_value(place).expect(
-                    "a class is filled once each place it passes into has a value or a LitVar",
-                );
-                (place, value)
-            })
-            .collect();
-        let owner = self.class_name(root);
-        let ty = places
-            .iter()
-            .find_map(|(_, value)| match value {
-                PlaceValue::Ty(ty) => Some(ty.clone()),
-                PlaceValue::Lit(_) => None,
-            })
-            .expect("a class is filled once a place it passes into has a value");
-        let one_type = places.iter().all(|(_, value)| match value {
-            PlaceValue::Ty(value) => *value == ty,
-            PlaceValue::Lit(lit) => {
-                matches!(ty.term(), Term::Scalar(scalar) if lit.admits(*scalar))
-            }
-        });
-        let fill = if !one_type {
-            let refusal = Refusal::NoFill(owner);
-            self.refuse_value(root, &refusal);
-            Fill::Differ(refusal)
-        } else {
-            let kind = self.closed_kind(&ty, &owner);
-            let decls = Rc::clone(&self.decls);
-            let unified =
-                self.classes
-                    .unifying(decls.types())
-                    .give_kind(root, kind, KindSource::Solved);
-            let refused = unified
-                .result()
-                .err()
-                .map(|conflict| self.refuse_conflict(format!("the fill of {owner}"), conflict));
-            if let Some(conflicted) = &unified.conflict {
-                self.conflicted_have_no_value(conflicted);
-            }
-            self.classes.mark_solved(root);
-            Fill::Took {
-                ty,
-                unified,
-                refused,
-            }
-        };
-        Filled {
-            class: root,
-            places,
-            fill,
-        }
-    }
-
-    /// The kind of the closed type `ty`, each part a class made anew and named
-    /// after `owner` that holds its part of `ty`, solved.
-    fn closed_kind(&mut self, ty: &Ty, owner: &ClassName) -> Term<ClassId> {
-        let head = Head {
-            constructor: ty.term().constructor(),
-            members: ty.term().members(),
-        };
-        let kind = self.skeleton(&head, owner);
-        let decls = Rc::clone(&self.decls);
-        for (key, &part) in kind.parts() {
-            let part_ty = ty
-                .term()
-                .part(&key)
-                .expect("a closed type has the parts of its constructor and members");
-            let name = self.class_name(part);
-            let part_kind = self.closed_kind(part_ty, &name);
-            self.classes
-                .give_kind(part, part_kind, KindSource::Solved, decls.types())
-                .expect("a class made anew holds no kind");
-            self.classes.mark_solved(part);
-        }
-        kind
-    }
-
-    /// The equivalence class, holding no kind, has LitVar lower bounds whose
-    /// unification with it, their join, conflicts: two LitVars of two
-    /// families meet. Its sources have no join, so it has no value
-    /// and is refused there, by the conflict's refusal.
-    pub(crate) fn lit_no_join(&mut self, root: ClassId, refusal: Refusal) -> Joined {
-        let root = self.root(root);
-        Joined {
-            sources: self.sources(root),
-            took: self.no_join(root, refusal),
-        }
-    }
-
     /// The equivalence class's sources have no join.
     fn no_join(&mut self, root: ClassId, refusal: Refusal) -> Took {
         self.refuse_value(root, &refusal);
         Took::NoJoin(refusal)
     }
 
-    /// The equivalence class has no value, and is never solved or filled
-    /// again.
+    /// The equivalence class has no value, and is never solved again.
     fn refuse_value(&mut self, root: ClassId, refusal: &Refusal) {
         let members = self.classes.held(root).members.clone();
         self.no_value.extend(members);
         self.refusals.insert(refusal.clone());
     }
 
-    /// Unifies a LitVar lower bound or part lower bound, at `i` in the log,
-    /// with the solved equivalence class it bounds, where the LitVar's class
-    /// waits for nothing (`settled`): the join of a LitVar. It is then
-    /// marked split. Returns the equation recorded, where one is.
-    pub(crate) fn join_lit_at(
-        &mut self,
-        i: usize,
-        settled: &BTreeSet<ClassId>,
-    ) -> Option<Recording> {
+    /// Gives the class a lower bound or a part lower bound at `i` in the log
+    /// bounds the range of its lower side, where that holds no kind and a
+    /// range a value reaching the class by `≤` stays within
+    /// (`Range::upward`), unless the class's range is within it already or
+    /// either side has no value. Returns the relation recorded, where one is.
+    pub(crate) fn range_up(&mut self, i: usize) -> Option<Recording> {
         let (Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper }) =
             self.log[i].relation
         else {
             return None;
         };
-        if !(self.is_lit(lower) && self.is_solved(upper) && settled.contains(&self.root(lower))) {
+        if self.has_no_value(lower) || self.has_no_value(upper) {
             return None;
         }
-        self.split.insert(i);
+        let held = self.classes.held(self.root(lower));
+        if held.kind.is_some() {
+            return None;
+        }
+        let range = held.range.as_ref()?.upward()?;
+        let own = &self.classes.held(self.root(upper)).range;
+        if own.as_ref().is_some_and(|own| own.within(&range)) {
+            return None;
+        }
         let mut recorded = Recording::default();
-        let relation = Relation::Equation(lower, upper);
-        recorded.push(self.record(relation, Recorder::Split(upper)));
+        let relation = Relation::Range(upper, range);
+        recorded.push(self.record(relation, Recorder::Split(lower)));
         Some(recorded)
     }
 

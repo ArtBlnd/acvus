@@ -1,8 +1,8 @@
 //! Unification: the equivalence classes hold what a relation
 //! records — an equation unifies two into one, whose kind is the conjunction
 //! of theirs and whose parts of one name are unified in turn, and a
-//! kind, a kind known in part, a LitVar, whether a class is a
-//! reference, or a lambda its Values name is held by the class it is given to
+//! kind, a kind known in part, a range, or a lambda its Values name is held
+//! by the class it is given to
 //! — and a kind "indexes `τ`" an extern-defined container holds is linked to
 //! the slice's element along the signature of its view.
 
@@ -68,11 +68,10 @@ impl State {
                     };
                 }
             },
-            Relation::Lit(class, lit) => self.classes.unifying(types).give_lit(*class, lit.clone()),
-            Relation::Reference(class, reference) => self
+            Relation::Range(class, range) => self
                 .classes
                 .unifying(types)
-                .give_reference(*class, *reference),
+                .give_range(*class, range.clone()),
             Relation::Values(class, lambda) => {
                 self.classes.give_value(*class, lambda.clone());
                 Unified::default()

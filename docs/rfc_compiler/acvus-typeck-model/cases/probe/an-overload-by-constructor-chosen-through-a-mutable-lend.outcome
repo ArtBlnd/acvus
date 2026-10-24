@@ -1,0 +1,14 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value `&mut r`: none
+  value R: none
+  value `fill(..)`: ()
+  decision lend: lend &mut place
+  decision make: undecided
+  check `fill.Result <= fill(..)`: Ok(Identity)
+  refusal no_value `&mut r`
+  refusal no_value R
+  refusal no_value `make.Common(0)`
+  I* of a final state: []

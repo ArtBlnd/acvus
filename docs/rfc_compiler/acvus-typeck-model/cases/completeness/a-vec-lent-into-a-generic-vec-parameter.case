@@ -1,0 +1,22 @@
+// let v = make();          // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
+// let f = first(&v);       // first<T>(&Vec<T>) -> Option⟨&T⟩
+// &v passes into &Vec⟨T⟩, of the same node: no cast.
+extern type Vec<T>;
+extern fn make() -> Vec<u8>;
+extern fn first<T>(&Vec<T>) -> Option<&T>;
+#[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
+let V;
+let `make()`;
+`make()` = make() @ make;
+V = `make()`;
+let `&v`;
+`&v` = &V @ `&v`;
+let `first(..)`;
+`first(..)` = first(`&v`) @ first;
+let F;
+F = `first(..)`;
+
+must pass;
+assert outcomes 1;
+assert V: Vec<u8>;
+assert F: Option<&u8>;

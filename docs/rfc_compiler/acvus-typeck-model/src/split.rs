@@ -6,7 +6,7 @@
 //! and a boundary where it is not. Where the two sides' constructors differ,
 //! the parts are linked by the same rule through the declared casts'
 //! parameters and results, or between the targets where `&mut T` passes into
-//! `&U`; and `?N ⇝ U` unifies `?N` with `U`.
+//! `&U`.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -67,8 +67,7 @@ impl State {
             }
             Relation::Equation(..)
             | Relation::Kind(..)
-            | Relation::Lit(..)
-            | Relation::Reference(..)
+            | Relation::Range(..)
             | Relation::Values(..) => {
                 self.split.insert(i);
                 Split::NoParts
@@ -171,25 +170,6 @@ impl State {
         };
         recorded.push(self.record(relation, recorder));
         Split::Parts(recorded)
-    }
-
-    /// `?N ⇝ U` unifies `?N` with `U`: where the equivalence class
-    /// holds a LitVar and no kind, and only LitVars enter it, no solved lower
-    /// bound, part lower bound or kind known in part giving it a constructor,
-    /// it is unified with each type it passes into by a boundary.
-    /// Returns the equations recorded.
-    pub(crate) fn unify_lit_boundaries(&mut self, root: ClassId) -> Recording {
-        let mut recorded = Recording::default();
-        let sources = self.sources(root);
-        let lits_alone =
-            sources.lowers.is_empty() && sources.part_lowers.is_empty() && sources.facts.is_empty();
-        if self.is_lit(root) && lits_alone {
-            for to in self.boundaries_from(root) {
-                let relation = Relation::Equation(root, to);
-                recorded.push(self.record(relation, Recorder::Split(root)));
-            }
-        }
-        recorded
     }
 
     /// The relation recorded where the part `from` passes into the part `to`

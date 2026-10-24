@@ -1,6 +1,6 @@
 //! The state of a binding group's solving, and the composition of
 //! the phases on it: recording (`record.rs`), unification (`unify.rs`), the
-//! join that gives an equivalence class its value and the fill (`value.rs`),
+//! join that gives an equivalence class its value (`value.rs`),
 //! splits (`split.rs`), the decisions of uses, lends, projections and
 //! bindings (`node/`) in the order the dependencies allow (`dep.rs`),
 //! fallback (`fallback.rs`) and the checks (`check.rs`): the steps to a
@@ -17,13 +17,13 @@ use crate::cut::Cut;
 use crate::decl::Decls;
 use crate::dep::Eligible;
 use crate::instance::Made;
-use crate::node::{LitDefaults, NodeState};
+use crate::node::NodeState;
 use crate::program::{ENTRY, Function, Item, Part, Position, Program, TextClass};
 use crate::read::ReadValue;
 use crate::relation::{Recorded, Recorder, Relation};
 use crate::split::Split;
 use crate::trace::{Report, Trace};
-use crate::ty::{HasTerm, Name};
+use crate::ty::{Constructor, HasTerm, Name};
 
 #[derive(Clone, Debug)]
 pub struct State {
@@ -104,9 +104,6 @@ pub struct Started {
 pub enum Step {
     /// The equivalence class takes its constructor and members.
     Solve(ClassId),
-    /// The equivalence class nothing enters takes the one type the places it
-    /// passes into give, or has no value where they give two.
-    Fill(ClassId),
     /// The use or lend is decided by the value it reads.
     Decide(Name),
 }
@@ -288,12 +285,6 @@ impl State {
         self.classes.held(id).solved
     }
 
-    /// Holds a LitVar and no kind.
-    pub(crate) fn is_lit(&self, id: ClassId) -> bool {
-        let held = self.classes.held(id);
-        held.lit.is_some() && held.kind.is_none()
-    }
-
     pub(crate) fn has_no_value(&self, id: ClassId) -> bool {
         self.classes
             .held(id)
@@ -313,66 +304,27 @@ impl State {
             .expect("an equivalence class has a member")
     }
 
-    /// The steps that may be taken now: each eligible class solved or filled,
-    /// and each eligible node decided where the value it reads now decides it,
-    /// a node whose value decides nothing staying undecided.
-    /// Where no such step is left, each eligible node its LitVars' defaults
-    /// decide, as a class falls back only then.
+    /// The steps that may be taken now: each eligible class solved, and each
+    /// eligible node decided where the value it reads now decides it, a node
+    /// whose value decides nothing staying undecided.
     pub fn steps(&self) -> Vec<Step> {
-        let Eligible {
-            solve,
-            fill,
-            decide,
-        } = self.eligible();
-        let decided = |defaults: LitDefaults| -> Vec<Step> {
-            decide
-                .iter()
-                .filter(|name| self.read_now(name, defaults).decision.is_some())
-                .cloned()
-                .map(Step::Decide)
-                .collect()
-        };
-        let steps: Vec<Step> = solve
+        let Eligible { solve, decide } = self.eligible();
+        solve
             .into_iter()
             .map(Step::Solve)
-            .chain(fill.into_iter().map(Step::Fill))
-            .chain(decided(LitDefaults::Withheld))
-            .collect();
-        if steps.is_empty() {
-            return decided(LitDefaults::Taken);
-        }
-        steps
-    }
-
-    /// Whether a use reads its LitVars as their defaults now: where no step
-    /// is left without them.
-    #[cfg(test)]
-    pub(crate) fn lit_defaults_now(&self) -> LitDefaults {
-        let Eligible {
-            solve,
-            fill,
-            decide,
-        } = self.eligible();
-        let without = !solve.is_empty()
-            || !fill.is_empty()
-            || decide.iter().any(|name| {
-                self.read_now(name, LitDefaults::Withheld)
-                    .decision
-                    .is_some()
-            });
-        match without {
-            true => LitDefaults::Withheld,
-            false => LitDefaults::Taken,
-        }
+            .chain(
+                decide
+                    .into_iter()
+                    .filter(|name| self.read_now(name).decision.is_some())
+                    .map(Step::Decide),
+            )
+            .collect()
     }
 
     /// Takes the step, and records what follows at once from it.
     pub fn step(&mut self, step: &Step) -> Trace {
         let mut trace = match step {
             Step::Solve(root) => self.solve(*root),
-            Step::Fill(root) => Trace {
-                reports: vec![Report::Filled(self.fill(*root))],
-            },
             Step::Decide(name) => Trace {
                 reports: vec![Report::Decided(self.decide(name))],
             },
@@ -381,12 +333,8 @@ impl State {
         trace
     }
 
-    /// The equivalence class is solved, unless it reaches a part of
-    /// its own: its LitVar lower bounds joined, `?N ⇝ U` where it holds a
-    /// LitVar alone, and then its constructor and members. Where it
-    /// holds no kind and its LitVar lower bounds' join conflicts, its sources
-    /// have no join. The trace holds what the class took, and the LitVars
-    /// unified where any are.
+    /// The equivalence class is solved, unless it reaches a part of its own:
+    /// it takes its constructor and members.
     pub(crate) fn solve(&mut self, root: ClassId) -> Trace {
         if let Some(refusal) = self.refuse_infinite(root) {
             return Trace {
@@ -396,41 +344,17 @@ impl State {
                 }],
             };
         }
-        let mut trace = Trace::default();
-        let lowers = self.join_lit_lowers(root);
-        let conflicted = lowers
-            .entries
-            .iter()
-            .find_map(|entry| entry.unification.refused.clone());
-        if !lowers.is_empty() {
-            trace.push(Report::LitLowers {
-                class: root,
-                recorded: lowers,
-            });
-        }
-        let class = self.root(root);
-        if let Some(refusal) = conflicted.filter(|_| self.classes.held(class).kind.is_none()) {
-            let joined = self.lit_no_join(class, refusal);
-            trace.push(Report::Joined { class, joined });
-            return trace;
-        }
-        let boundaries = self.unify_lit_boundaries(root);
-        if !boundaries.is_empty() {
-            trace.push(Report::LitBoundaries {
-                class: root,
-                recorded: boundaries,
-            });
-        }
         let class = self.root(root);
         let joined = self.join(root);
-        trace.push(Report::Joined { class, joined });
-        trace
+        Trace {
+            reports: vec![Report::Joined { class, joined }],
+        }
     }
 
     /// What follows at once from what is recorded: cycles of lower bounds and
     /// part lower bounds merged, the parts of each lower bound, part
     /// lower bound and boundary whose two sides are solved related,
-    /// and a LitVar lower bound of a solved class unified with it.
+    /// and the range a lower bound holding no kind gives the class it bounds.
     /// The trace holds what changed the state.
     pub(crate) fn settle(&mut self) -> Trace {
         let mut trace = Trace::default();
@@ -447,15 +371,14 @@ impl State {
             if !common.is_empty() {
                 trace.push(Report::Common(common));
             }
-            let settled = self.settled();
             for i in 0..self.log.len() {
                 if self.split.contains(&i) {
                     continue;
                 }
                 match self.split_at(i) {
                     Split::Unsolved => {
-                        if let Some(recorded) = self.join_lit_at(i, &settled) {
-                            trace.push(Report::LitJoined { bound: i, recorded });
+                        if let Some(recorded) = self.range_up(i) {
+                            trace.push(Report::Ranged { bound: i, recorded });
                         }
                     }
                     split => trace.push(Report::Split { at: i, split }),
@@ -479,46 +402,6 @@ impl State {
                     if self.root(upper) == root && self.root(lower) != root =>
                 {
                     Some(lower)
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// The places the equivalence class passes into: the `α` of each
-    /// lower bound and part lower bound whose `τ` it is, and the `U` of each
-    /// boundary whose `T` it is, other than itself.
-    pub(crate) fn places(&self, id: ClassId) -> Vec<ClassId> {
-        let root = self.root(id);
-        self.log
-            .iter()
-            .filter_map(|recorded| match recorded.relation {
-                Relation::LowerBound { lower, upper }
-                | Relation::PartLowerBound { lower, upper }
-                    if self.root(lower) == root && self.root(upper) != root =>
-                {
-                    Some(upper)
-                }
-                Relation::Boundary { from, to }
-                    if self.root(from) == root && self.root(to) != root =>
-                {
-                    Some(to)
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// The types the equivalence class passes into by a boundary.
-    pub(crate) fn boundaries_from(&self, id: ClassId) -> Vec<ClassId> {
-        let root = self.root(id);
-        self.log
-            .iter()
-            .filter_map(|recorded| match recorded.relation {
-                Relation::Boundary { from, to }
-                    if self.root(from) == root && self.root(to) != root =>
-                {
-                    Some(to)
                 }
                 _ => None,
             })
@@ -558,11 +441,11 @@ impl State {
     }
 
     /// The state a node's value read is taken from: the relations
-    /// recorded by neither the nodes `excluded` nor solving, solved and filled
-    /// where each class's value is decided by the table of values, splits and
-    /// fills whatever its other dependencies, no node decided, nothing fallen
-    /// back, and a class with no relation left giving nothing. Classes are
-    /// solved and filled in one order here.
+    /// recorded by neither the nodes `excluded` nor solving, a fallback's
+    /// decisions among them, solved where each class's value is decided by
+    /// the table of values and splits whatever its other dependencies, no
+    /// node decided, and a class with no relation left giving nothing.
+    /// Classes are solved in one order here.
     pub(crate) fn read_state(&self, excluded: &BTreeSet<Name>) -> State {
         let mut read = State {
             decls: Rc::clone(&self.decls),
@@ -609,11 +492,6 @@ impl State {
                 read.settle();
                 continue;
             }
-            if let Some(&root) = eligible.fill.first() {
-                read.fill(root);
-                read.settle();
-                continue;
-            }
             let more: Vec<ClassId> = read
                 .fallback_targets()
                 .into_iter()
@@ -627,7 +505,8 @@ impl State {
     }
 
     /// The value the class has here: a position with no kind is undecided,
-    /// and one holding only a LitVar is that LitVar.
+    /// and one holding only a range that admits no `!` is that range, a value
+    /// of `!` deciding nothing.
     pub(crate) fn read_value(&self, id: ClassId) -> ReadValue {
         self.read_value_in(id, &mut BTreeSet::new())
     }
@@ -638,15 +517,17 @@ impl State {
         if self.has_no_value(root) || !visiting.insert(root) {
             return ReadValue::Undecided;
         }
-        let value = match (&held.kind, &held.lit) {
+        let value = match (&held.kind, &held.range) {
             (Some((kind, _)), _) => {
                 let term = kind
                     .clone()
                     .map(|_, part| self.read_value_in(part, visiting));
                 ReadValue::from_term(term).unwrap_or(ReadValue::Undecided)
             }
-            (None, Some(lit)) => ReadValue::Lit(lit.clone()),
-            (None, None) => ReadValue::Undecided,
+            (None, Some(range)) if !range.admits(&Constructor::Never) => {
+                ReadValue::Range(range.clone())
+            }
+            (None, _) => ReadValue::Undecided,
         };
         visiting.remove(&root);
         value

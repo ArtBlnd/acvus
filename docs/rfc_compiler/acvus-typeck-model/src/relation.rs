@@ -7,7 +7,7 @@
 use std::fmt;
 
 use crate::class::{Arena, ClassId, Fact, KindSource, NamedFact};
-use crate::lit::LitVar;
+use crate::range::Range;
 use crate::ty::{Name, Term};
 
 /// A relation recorded in equivalence classes.
@@ -29,11 +29,9 @@ pub enum Relation {
     /// or, in a copy of C, the kind the class held where its binding
     /// group was solved.
     Kind(ClassId, Term<ClassId>, KindSource),
-    /// A literal's type.
-    Lit(ClassId, LitVar),
-    /// Whether the class is a reference, which a node's common part records
-    /// before the node is decided.
-    Reference(ClassId, bool),
+    /// The constructors the class's value may take, which a literal, a node's
+    /// common part or a lend gives before the class takes one.
+    Range(ClassId, Range),
     /// A lambda the Values of the class's function value names.
     Values(ClassId, Name),
     /// `e?`'s error value of the type `from` wrapped into `to`, which a split
@@ -54,8 +52,7 @@ impl Relation {
             Relation::Kind(class, term, _) => std::iter::once(*class)
                 .chain(term.parts().into_iter().map(|(_, part)| *part))
                 .collect(),
-            Relation::Lit(class, _)
-            | Relation::Reference(class, _)
+            Relation::Range(class, _)
             | Relation::Values(class, _) => vec![*class],
         }
     }
@@ -90,8 +87,7 @@ impl Relation {
                 let class = f(class);
                 Relation::Kind(class, term.map(|_, part| f(part)), source)
             }
-            Relation::Lit(class, lit) => Relation::Lit(f(class), lit),
-            Relation::Reference(class, reference) => Relation::Reference(f(class), reference),
+            Relation::Range(class, range) => Relation::Range(f(class), range),
             Relation::Values(class, lambda) => Relation::Values(f(class), lambda),
             Relation::Wrap { from, to } => Relation::Wrap {
                 from: f(from),
@@ -126,6 +122,10 @@ pub enum Recorder {
     /// The I\* check, making an instance of a lambda's C that no call made, in
     /// a view of a state it decides nodes again in. Solving never records it.
     Check,
+    /// Fallback, once no step is left: the value it gives a class no step
+    /// solves, a decision no other relation derives, which every read after
+    /// it takes as given.
+    Fallback,
     /// The instance `at`, made by `by`, the use of a function at its item or
     /// the call of a function value, recording in its binding group
     /// the copy of what `of` recorded in C.
@@ -147,7 +147,8 @@ impl Recorder {
             | Recorder::Text(_)
             | Recorder::Node(_)
             | Recorder::Common(_)
-            | Recorder::Check => false,
+            | Recorder::Check
+            | Recorder::Fallback => false,
         }
     }
 
@@ -171,7 +172,8 @@ impl Recorder {
             | Recorder::Split(_)
             | Recorder::Cycle
             | Recorder::FunctionType { .. }
-            | Recorder::Check => Vec::new(),
+            | Recorder::Check
+            | Recorder::Fallback => Vec::new(),
         }
     }
 
@@ -185,7 +187,11 @@ impl Recorder {
             | Recorder::Common(_)
             | Recorder::FunctionType { .. } => true,
             Recorder::Instance { of, .. } => of.is_entering(),
-            Recorder::Origin | Recorder::Split(_) | Recorder::Cycle | Recorder::Check => false,
+            Recorder::Origin
+            | Recorder::Split(_)
+            | Recorder::Cycle
+            | Recorder::Check
+            | Recorder::Fallback => false,
         }
     }
 }
@@ -231,9 +237,7 @@ impl fmt::Display for Named<'_> {
                 let term = term.clone().map(|_, part| name(&part).clone());
                 write!(f, "{}: {term}", name(class))
             }
-            Relation::Lit(class, lit) => write!(f, "{}: {lit}", name(class)),
-            Relation::Reference(class, true) => write!(f, "{}: a reference", name(class)),
-            Relation::Reference(class, false) => write!(f, "{}: no reference", name(class)),
+            Relation::Range(class, range) => write!(f, "{}: {range}", name(class)),
             Relation::Values(class, lambda) => {
                 write!(f, "{}: Values contains {lambda}", name(class))
             }

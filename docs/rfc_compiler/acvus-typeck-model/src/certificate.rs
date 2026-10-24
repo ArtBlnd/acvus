@@ -1269,15 +1269,7 @@ impl Checker<'_> {
         // The common part is recorded where the use is, before it is decided,
         // so its classes are the group's own, at level 0.
         let common_values = match &common {
-            Some(part) => Some(self.common(
-                context,
-                &at,
-                0,
-                name,
-                part,
-                &node_args,
-                node_result.as_ref(),
-            )?),
+            Some(part) => Some(self.common(context, &at, 0, name, part, node_result.as_ref())?),
             None => None,
         };
         match decision {
@@ -1326,7 +1318,7 @@ impl Checker<'_> {
                         .iter()
                         .position(|decl| decl.id == id)
                         .expect("a candidate is among the candidates");
-                    for k in CommonPart::vars_in(&part.result) {
+                    for (k, value) in CommonPart::vars_in(&part.result).into_iter().zip(values) {
                         let Ok(chosen) = part.vars[k][candidate].substitute(&bound) else {
                             self.violation(context, &at, format!("variable {k} has no type"));
                             return None;
@@ -1335,8 +1327,8 @@ impl Checker<'_> {
                             value: chosen,
                             at: Self::node_at(context, level, &owner, NodeAt::Chosen(k)),
                         };
-                        let holds = self.flows(context, &at, &chosen, &values[k], true);
-                        let (chosen, value) = (&chosen.value, &values[k].value);
+                        let holds = self.flows(context, &at, &chosen, value, true);
+                        let (chosen, value) = (&chosen.value, &value.value);
                         self.require(
                             context,
                             &at,
@@ -1509,13 +1501,11 @@ impl Checker<'_> {
         Some(())
     }
 
-    /// A use's common part: the values of the classes it made for its
-    /// variables, each a reference or none where the common part records it
-    /// so; each argument passing into the common part's parameter, as at a
-    /// decided candidate's, a function value into a function type left to that
-    /// check; and the common part's result entering the use's result. Returns
-    /// the variables' values.
-    #[allow(clippy::too_many_arguments)]
+    /// A use's common part: the values of the classes it made for the
+    /// variables its result writes, each within the range the common part
+    /// gives it, and the common part's result entering the use's result.
+    /// Returns those variables' values, in the order `CommonPart::vars_in`
+    /// gives them.
     fn common(
         &mut self,
         context: &Context<'_>,
@@ -1523,11 +1513,12 @@ impl Checker<'_> {
         level: usize,
         owner: &Name,
         part: &CommonPart,
-        args: &[Option<Read>],
         result: Option<&Read>,
     ) -> Option<Vec<Read>> {
+        let vars = CommonPart::vars_in(&part.result);
         let mut values = Vec::new();
-        for k in 0..part.vars.len() {
+        let mut types = vec![None; part.vars.len()];
+        for &k in &vars {
             let name = ClassName::Node(Rc::new(owner.clone()), NodeAt::Common(k));
             let Some(id) = context.sheet(level).id(&name) else {
                 self.violation(context, at, format!("the use made no class {name}"));
@@ -1550,34 +1541,16 @@ impl Checker<'_> {
                     format!("{name} is recorded as {is}, and its value is {value}"),
                 );
             }
+            types[k] = Some(value.clone());
             values.push(Read {
                 value,
                 at: Some(At { level, class: id }),
             });
         }
         let bound = SigArgs {
-            types: values.iter().map(|read| Some(read.value.clone())).collect(),
+            types,
             identity: None,
         };
-        for (k, (param, arg)) in part.params.iter().zip(args).enumerate() {
-            let Some(arg) = arg else {
-                continue;
-            };
-            let Ok(ty) = param.substitute(&bound) else {
-                self.violation(
-                    context,
-                    at,
-                    format!("the common part's parameter {k} has no type"),
-                );
-                return None;
-            };
-            let ty = Read {
-                value: ty,
-                at: Self::node_at(context, level, owner, NodeAt::CommonParam(k)),
-            };
-            let meets = matches!(param, SigTy::Var(_));
-            self.pass(context, at, k, arg, &Param { ty, meets });
-        }
         if let Some(result) = result {
             let Ok(returned) = part.result.substitute(&bound) else {
                 self.violation(

@@ -1,25 +1,23 @@
 // What the model gives, written by `BLESS=1`.
 run: the written order
 outcome 1
-  accepted
-  value 0: u8
+  refused
+  value 0: i32
   value A: u8
   value u8: u8
-  partition {0, A}
-  check `0 <= A`: Ok(Identity)
+  check `0 <= A`: Err(None)
   check `u8 <= A`: Ok(Identity)
   I* of a final state: []
 start run
-  record #0 0: ?{0}: int
+  record #0 0: {i8, i16, i32, i64, u8, u16, u32, u64}
   record #1 u8: u8
   record #2 u8 <= A
   record #3 0 <= A
-  split #0 0: ?{0}: int: no parts
+  split #0 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
   split #1 u8: u8: no parts
+  range #3 0 <= A
+    record #4 A: {i8, i16, i32, i64, u8, u16, u32, u64}
+  split #4 A: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
 step 1 run: solve A
-  lit lowers 0
-    record #4 0 = A
-  join 0: Scalar(Int(U8))
+  join A: Scalar(Int(U8))
   split #2 u8 <= A: parts
-  split #3 0 <= A: one class
-  split #4 0 = A: no parts

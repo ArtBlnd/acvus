@@ -1,0 +1,18 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value 0u8: u8
+  value LAST: u8
+  value X: u8
+  value `take(..)`: ()
+  value `|x| ..`: Fn/1
+  value `λ result`: u8
+  check `0u8 <= LAST`: Ok(Identity)
+  check `X <= LAST`: Ok(Identity)
+  check `X <= λ result`: Ok(Identity)
+  check `take.Param(0).Param(0) <= X`: Ok(Identity)
+  check `take.Result <= take(..)`: Ok(Identity)
+  check `|x| .. ~> take.Param(0)`: Ok(Undecided)
+  check `λ result ~> take.Param(0).Return`: Ok(Identity)
+  I* of a final state: []

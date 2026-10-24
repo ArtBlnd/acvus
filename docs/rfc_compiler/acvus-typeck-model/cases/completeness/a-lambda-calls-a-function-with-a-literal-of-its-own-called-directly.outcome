@@ -1,0 +1,21 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value 0: none
+  value 1u8: u8
+  value 2u8: u8
+  value A: none
+  value B: none
+  value X: u8
+  value Z: none
+  value `g result`: ()
+  value `g(..)`: ()
+  value unit: ()
+  check `1u8 <= X`: Ok(Identity)
+  check `2u8 <= g@3/B`: Ok(Identity)
+  check `X <= g@3/A`: Ok(Identity)
+  check `g@3/0 <= g@3/Z`: Ok(Identity)
+  check `g@3/g result <= g(..)`: Ok(Identity)
+  check `unit <= g result`: Ok(Identity)
+  I* of a final state: []

@@ -1,0 +1,11 @@
+// let x = 0; take(x);    // take(u8)
+// Only a LitVar enters X, so its boundary into u8 unifies it with u8.
+extern fn take(u8);
+let X;
+let 0: lit 0;
+X = 0;
+let `take(x)`;
+`take(x)` = take(X) @ take;
+
+must pass;
+assert X: u8;

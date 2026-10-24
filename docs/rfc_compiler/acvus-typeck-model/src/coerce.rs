@@ -265,8 +265,9 @@ fn walk(
 }
 
 /// The result where no stage is taken: the two are equal, `from` is `!`, or
-/// a position decides nothing, being undecided on either side, or a LitVar,
-/// which reaches a LitVar of its family and a scalar admitting its values.
+/// a position decides nothing, being undecided on either side, or a range,
+/// which reaches a range it shares a constructor with and a type of a
+/// constructor it admits.
 fn deciding_nothing(from: &ReadValue, to: &ReadValue) -> Option<Result<Coercion, CoerceError>> {
     if from == to {
         return Some(Ok(Coercion::Identity));
@@ -274,10 +275,10 @@ fn deciding_nothing(from: &ReadValue, to: &ReadValue) -> Option<Result<Coercion,
     match (from, to) {
         (ReadValue::Undecided, _) | (_, ReadValue::Undecided) => Some(Ok(Coercion::Undecided)),
         (ReadValue::Term(term), _) if matches!(**term, Term::Never) => Some(Ok(Coercion::Never)),
-        (ReadValue::Lit(_), _) | (_, ReadValue::Lit(_)) if agrees(from, to) => {
+        (ReadValue::Range(_), _) | (_, ReadValue::Range(_)) if agrees(from, to) => {
             Some(Ok(Coercion::Undecided))
         }
-        (ReadValue::Lit(_), _) | (_, ReadValue::Lit(_)) => Some(Err(CoerceError::None)),
+        (ReadValue::Range(_), _) | (_, ReadValue::Range(_)) => Some(Err(CoerceError::None)),
         _ if agrees(from, to) => Some(Ok(Coercion::Undecided)),
         _ => None,
     }
@@ -287,11 +288,9 @@ fn deciding_nothing(from: &ReadValue, to: &ReadValue) -> Option<Result<Coercion,
 fn agrees(a: &ReadValue, b: &ReadValue) -> bool {
     match (a, b) {
         (ReadValue::Undecided, _) | (_, ReadValue::Undecided) => true,
-        (ReadValue::Lit(l), ReadValue::Lit(m)) => l.family() == m.family(),
-        (ReadValue::Lit(lit), ReadValue::Term(term))
-        | (ReadValue::Term(term), ReadValue::Lit(lit)) => {
-            matches!(**term, Term::Scalar(scalar) if lit.admits(scalar))
-        }
+        (ReadValue::Range(a), ReadValue::Range(b)) => a.meet(b).is_some(),
+        (ReadValue::Range(range), ReadValue::Term(term))
+        | (ReadValue::Term(term), ReadValue::Range(range)) => range.admits(&term.constructor()),
         (ReadValue::Term(s), ReadValue::Term(t)) => {
             s.constructor() == t.constructor()
                 && s.members() == t.members()

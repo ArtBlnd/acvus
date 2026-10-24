@@ -8,6 +8,7 @@ use std::rc::Rc;
 use crate::class::{ClassId, ClassName};
 use crate::decl::{DeclId, Node};
 use crate::program::Position;
+use crate::range::Range;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::sig::{SigTy, SigVar, Signature};
@@ -161,10 +162,11 @@ fn generalize(tys: &[&SigTy], whole: bool, vars: &mut Vec<Vec<SigTy>>) -> SigTy 
 impl State {
     /// Records, for each node not yet decided, the common part of all it may
     /// become, once: for a use of several candidates, their common
-    /// part, its variables made anew as unknowns, each recorded as a
-    /// reference or not where every candidate agrees there, each argument
-    /// passing into the common part's parameter and its result entering the
-    /// use's; for a lend, that its result is a reference. Returns the
+    /// part's result entering the use's, each variable it writes made anew as
+    /// an unknown, whose range is a reference or none where every candidate
+    /// agrees there; for a lend, that its result is a reference. An argument
+    /// passes into no part of it: every candidate takes it by a coercion of
+    /// its own, which a type common to them does not imply. Returns the
     /// relations recorded.
     pub(crate) fn record_at_once(&mut self) -> Recording {
         let mut recorded = Recording::default();
@@ -240,10 +242,7 @@ impl State {
         let recorder = Recorder::Common(name.clone());
         let (common, references) = match &node.kind {
             NodeKind::Use {
-                callee,
-                args,
-                result,
-                ..
+                callee, args, result, ..
             } => {
                 let sigs: Vec<Signature> = self
                     .candidates(callee, args.len())
@@ -257,37 +256,23 @@ impl State {
                 let owner = Rc::new(name.clone());
                 let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
                 let mut vars: BTreeMap<SigVar, ClassId> = BTreeMap::new();
-                let mut classes = Vec::new();
+                let mut classes = BTreeMap::new();
                 let mut references = BTreeSet::new();
-                for k in 0..part.vars.len() {
+                for k in CommonPart::vars_in(&part.result) {
                     let class = self.fresh(at(NodeAt::Common(k)));
                     vars.insert(SigVar::Type(k), class);
-                    classes.push(class);
-                    if let Some(reference) = part.is_reference(k) {
-                        let relation = Relation::Reference(class, reference);
-                        recorded.push(self.record(relation, recorder.clone()));
-                        references.insert(class);
-                    }
+                    classes.insert(k, class);
+                    let range = match part.is_reference(k) {
+                        Some(true) => Range::references(),
+                        Some(false) => Range::no_references(),
+                        None => continue,
+                    };
+                    recorded.push(self.record(Relation::Range(class, range), recorder.clone()));
+                    references.insert(class);
                 }
                 let var_name = |var: SigVar| -> ClassName {
                     panic!("the common part's variable {var:?} is made before its types")
                 };
-                // The node holds the positions where the common part writes
-                // no closed type; those where it does are recorded apart
-                // (`record_closed`).
-                for (i, (arg, param)) in args.iter().zip(&part.params).enumerate() {
-                    let Some(arg) = arg else {
-                        continue;
-                    };
-                    recorded.append(self.record_argument(
-                        *arg,
-                        param,
-                        &mut vars,
-                        at(NodeAt::CommonParam(i)),
-                        &var_name,
-                        &recorder,
-                    ));
-                }
                 if let Some(result) = result {
                     recorded.append(self.record_result(
                         *result,
@@ -308,7 +293,7 @@ impl State {
                 // Its mutability is still the lend's to record, which a read
                 // of whether the result is a reference reads too, so
                 // the lend still records into what such a read reads.
-                let relation = Relation::Reference(*result, true);
+                let relation = Relation::Range(*result, Range::references());
                 recorded.push(self.record(relation, recorder));
                 (Common::Lend, BTreeSet::new())
             }
@@ -388,7 +373,7 @@ impl State {
             Some((part, classes)) => {
                 for k in CommonPart::vars_in(&part.result) {
                     found.insert(
-                        self.root(classes[k]),
+                        self.root(classes[&k]),
                         is_reference(&part.vars[k][candidate]),
                     );
                 }

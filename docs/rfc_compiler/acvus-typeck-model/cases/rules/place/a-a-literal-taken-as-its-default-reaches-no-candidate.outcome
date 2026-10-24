@@ -2,10 +2,8 @@
 run: every order
 outcome 1
   refused
-  value 0: none
+  value 0: i32
   value R: ()
   decision f: undecided
   check `f.CommonResult <= R`: Ok(Identity)
-  refusal no_value 0
-  refusal no_value `f.Common(0)`
   I* of a final state: []

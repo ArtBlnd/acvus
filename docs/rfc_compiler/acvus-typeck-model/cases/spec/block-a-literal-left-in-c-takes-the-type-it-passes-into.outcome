@@ -1,15 +1,14 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
+  refused
   value ?one: none
   value X: u8
   value `{..}`: Fn/0
-  value `{..}()`: u8
+  value `{..}()`: i32
   value `λ result`: none
   decision call: calls {λ}
-  partition {X, `{..}()`}
-  check `call#λ/?one <= call#λ/?one`: Ok(Identity)
-  check `call#λ/?one <= {..}()`: Ok(Identity)
-  check `{..}() ~> X`: Ok(Identity)
+  check `call#λ/?one <= call#λ/λ result`: Ok(Identity)
+  check `call#λ/λ result <= {..}()`: Ok(Identity)
+  check `{..}() ~> X`: Err(None)
   I* of a final state: []

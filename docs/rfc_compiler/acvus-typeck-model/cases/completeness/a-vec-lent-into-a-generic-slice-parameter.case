@@ -1,0 +1,20 @@
+// let v = make();          // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
+// first(&v);               // first<T>(&[T]) -> Option⟨&T⟩
+// &v passes into &[T], which the declaration writes: a boundary.
+extern type Vec<T>;
+extern fn make() -> Vec<u8>;
+extern fn first<T>(&[T]) -> Option<&T>;
+#[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
+let V;
+let `make()`;
+`make()` = make() @ make;
+V = `make()`;
+let `&v`;
+`&v` = &V @ `&v`;
+let `first(..)`;
+`first(..)` = first(`&v`) @ first;
+
+must pass;
+assert outcomes 1;
+assert V: Vec<u8>;
+assert `first(..)`: Option<&u8>;

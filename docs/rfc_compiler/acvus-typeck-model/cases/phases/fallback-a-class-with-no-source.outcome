@@ -17,5 +17,9 @@ step 1 run: solve A
     record #2 ?k <=p A.Payload(Some)
 fallback 2 run
   default ?k: !
+    record #3 ?k: !
   default `A.Payload(Some)`: !
+    record #4 A.Payload(Some): !
   split #2 ?k <=p A.Payload(Some): parts
+  split #3 ?k: !: no parts
+  split #4 A.Payload(Some): !: no parts

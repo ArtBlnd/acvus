@@ -23,9 +23,6 @@ pub enum Refusal {
     NoJoin(ClassName),
     /// The equivalence class reaches a part of its own.
     Infinite(ClassName),
-    /// The places the equivalence class nothing enters passes into have two
-    /// types.
-    NoFill(ClassName),
     /// The equivalence class has no value once solving ends.
     NoValue(ClassName),
     /// A type the text writes disagrees with its declaration.
@@ -83,7 +80,7 @@ impl Outcome {
 impl State {
     /// Refuses at `at` what no type holds, and returns the refusal.
     /// The classes a conflict names hold a conjunction no type meets, so they
-    /// have no value, and are never solved or filled again.
+    /// have no value, and are never solved again.
     pub(crate) fn conflicted_have_no_value(&mut self, conflicted: &Conflicted) {
         let members: Vec<ClassId> = match conflicted {
             Conflicted::Apart(apart) => apart.sides.iter().flatten().copied().collect(),
@@ -120,8 +117,7 @@ impl State {
                 | Relation::Equation(..)
                 | Relation::Fact(..)
                 | Relation::Kind(..)
-                | Relation::Lit(..)
-                | Relation::Reference(..)
+                | Relation::Range(..)
                 | Relation::Values(..)
                 | Relation::Wrap { .. } => continue,
             };

@@ -1,0 +1,33 @@
+// let v = make();                    // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
+// let a = [1u8, 2u8];
+// let s: &[u8] = if c { &v } else { &a };
+// s's type is written, so each branch's value passes into it by a
+// boundary.
+extern type Vec<T>;
+extern fn make() -> Vec<u8>;
+#[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
+let V;
+let `make()`;
+`make()` = make() @ make;
+V = `make()`;
+let U8;
+let `[1u8, 2u8]`: [U8; 2];
+let 1u8: u8;
+let 2u8: u8;
+U8 = 1u8;
+U8 = 2u8;
+let A;
+A = `[1u8, 2u8]`;
+let `&v`;
+`&v` = &V @ `&v`;
+let `&a`;
+`&a` = &A @ `&a`;
+let SU8: u8;
+let SL: [SU8];
+let S: &SL;
+S = `&v`;
+S = `&a`;
+
+must pass;
+assert outcomes 1;
+assert S: &[u8];

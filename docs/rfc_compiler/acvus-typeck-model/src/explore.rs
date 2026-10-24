@@ -299,7 +299,7 @@ impl State {
                 format!(
                     "{}:{kind:?}:{:?}:{}:{}",
                     self.class_name(root),
-                    held.lit,
+                    held.range,
                     held.solved,
                     self.has_no_value(root),
                 )

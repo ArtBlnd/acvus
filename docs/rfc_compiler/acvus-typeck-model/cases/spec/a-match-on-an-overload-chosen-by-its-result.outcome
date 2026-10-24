@@ -1,27 +1,28 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
+  refused
   value `()`: ()
   value M: ()
-  value N: u8
-  value `None.0`: u8
-  value P: Option<u8>
-  value `Some.0`: u8
+  value N: none
+  value `None.0`: none
+  value P: none
+  value `Some.0`: none
   value Str: str
   value s: &str
   value `take(n)`: ()
   decision `arm 1`: applied
   decision `arm 2`: applied
   decision n: read
-  decision parse: parse#0
+  decision parse: undecided
   partition {`None.0`, `Some.0`}
   check `() <= M`: Ok(Identity)
-  check `N ~> take.Param(0)`: Ok(Identity)
-  check `Some.0 <= N`: Ok(Identity)
-  check `parse.Chosen(0) <= parse.Common(0)`: Ok(Identity)
-  check `parse.CommonResult <= P`: Ok(Identity)
   check `s ~> parse.CommonParam(0)`: Ok(Identity)
   check `take(n) <= M`: Ok(Identity)
   check `take.Result <= take(n)`: Ok(Identity)
+  refusal no_value N
+  refusal no_value `None.0`
+  refusal no_value P
+  refusal no_value `parse.Common(0)`
+  refusal no_value `parse.CommonResult`
   I* of a final state: []

@@ -1,0 +1,35 @@
+// fn g(f) { take(f) }            // take(fn(u8) -> ())
+// let last;
+// let h = |x| { last = x; };
+// g(h)
+// x is joined to the capture last, so it is the environment's, the
+// entry's. g's instance in the entry makes f anew,
+// which h meets; its boundary into fn(u8) -> () makes λ's instance there.
+extern fn take(fn(u8) -> ());
+group g {
+    let F;
+    let `g result`;
+    fn g(F) -> `g result`;
+    let `take(f)`;
+    `take(f)` = take(F) @ take;
+    `g result` = `take(f)`;
+}
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    #[by_name] LAST = X;
+    let unit: ();
+    `λ result` = unit;
+}
+let LAST;
+let `|x| ..`: lambda λ;
+let H;
+H = `|x| ..`;
+let `g(h)`;
+`g(h)` = g(H) @ `g call`;
+
+must pass;
+assert outcomes 1;
+assert LAST: u8;
+assert X: u8;

@@ -1,0 +1,9 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value 1u8: u8
+  value `probe(1u8)`: ()
+  check `1u8 ~> probe.CommonParam(0)`: Ok(Identity)
+  check `probe.CommonResult <= probe(1u8)`: Ok(Identity)
+  I* of a final state: []

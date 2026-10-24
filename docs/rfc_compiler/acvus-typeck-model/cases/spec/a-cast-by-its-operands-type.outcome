@@ -8,10 +8,8 @@ outcome 1
   value Z: u8
   decision `300 as u8`: cast_u8#6
   decision `x as u8`: cast_u8#1
-  check `300 <= 300 as u8.Common(0)`: Ok(Identity)
   check `300 as u8.CommonResult <= Z`: Ok(Identity)
   check `300 ~> 300 as u8.Param(0)`: Ok(Identity)
-  check `X <= x as u8.Common(0)`: Ok(Identity)
   check `X ~> x as u8.Param(0)`: Ok(Identity)
   check `x as u8.CommonResult <= Y`: Ok(Identity)
   I* of a final state: []

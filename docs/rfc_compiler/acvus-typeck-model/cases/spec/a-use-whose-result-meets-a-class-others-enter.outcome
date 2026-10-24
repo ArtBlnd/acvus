@@ -1,25 +1,22 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
+  refused
   value 1u8: u8
   value M: B
-  value R: B
+  value R: none
   value Str: str
-  value V: B
+  value V: none
   value `open()`: A
   value s: &str
   decision mk: mk#0
-  decision parse: parse#1
-  check `1u8 <= mk.Common(0)`: Ok(Identity)
+  decision parse: undecided
   check `1u8 ~> mk.Param(0)`: Ok(Identity)
-  check `M <= V`: Ok(Identity)
-  check `R <= V`: Ok(Identity)
   check `mk.Chosen(1) <= mk.Common(1)`: Ok(Identity)
   check `mk.Common(1) <= M`: Ok(Identity)
-  check `open() <= V`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
   check `open.Result <= open()`: Ok(Identity)
-  check `parse.Chosen(0) <= parse.Common(0)`: Ok(Identity)
-  check `parse.Common(0) <= R`: Ok(Identity)
   check `s ~> parse.CommonParam(0)`: Ok(Identity)
+  refusal no_value R
+  refusal no_value V
+  refusal no_value `parse.Common(0)`
   I* of a final state: []

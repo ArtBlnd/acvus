@@ -1,22 +1,21 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
-  value 0: u8
+  refused
+  value 0: i32
   value A: none
   value B: none
   value F: Fn/1
-  value X: u8
+  value X: i32
   value Y: none
   value `put2 result`: ()
   value `put2(..)`: ()
   value `takes_u8(a)`: ()
   value `|y| ..`: Fn/1
   value `λ result`: ()
-  partition {0, X}
   check `0 <= X`: Ok(Identity)
   check `X <= put2@5/A`: Ok(Identity)
-  check `put2@5/A ~> put2@5/takes_u8.Param(0)`: Ok(Identity)
+  check `put2@5/A ~> put2@5/takes_u8.Param(0)`: Err(None)
   check `|y| .. <= F`: Ok(Identity)
   check `takes_u8(a) <= put2 result`: Ok(Identity)
   check `takes_u8.Result <= takes_u8(a)`: Ok(Identity)

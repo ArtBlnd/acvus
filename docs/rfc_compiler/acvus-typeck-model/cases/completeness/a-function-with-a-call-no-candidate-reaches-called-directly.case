@@ -1,0 +1,34 @@
+// fn g(a, b) { let m = make_c(); probe(m); }   // make_c() -> C; probe(A), probe(B); no cast
+// let x = 1u8;
+// g(x, 2u8);
+// The use records every position of g, so its instance makes all of g's C
+// anew, the undecided probe with it.
+extern type A;
+extern type B;
+extern type C;
+extern fn make_c() -> C;
+extern fn probe(A);
+extern fn probe(B);
+group g {
+    let PA;
+    let PB;
+    let `g result`;
+    fn g(PA, PB) -> `g result`;
+    let M;
+    let `make_c()`;
+    `make_c()` = make_c() @ make_c;
+    M = `make_c()`;
+    let `probe(m)`;
+    `probe(m)` = probe(M) @ probe;
+    let unit: ();
+    `g result` = unit;
+}
+let 1u8: u8;
+let X;
+X = 1u8;
+let 2u8: u8;
+let `g(..)`;
+`g(..)` = g(X, 2u8) @ `g call`;
+
+must fail;
+assert outcomes 1;

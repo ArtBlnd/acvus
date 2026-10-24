@@ -1,0 +1,21 @@
+// let a = parse_r("7")?;    // parse_r(&str) -> Result<u8, PErr>
+// show(a)                   // show(u8) -> String
+// As in examples/ledger and examples/log-parse, the script's ? exits and its
+// tail, a String, pass into the script's result R, an unknown of its body.
+extern type PErr;
+extern fn parse_r(&str) -> Result<u8, PErr>;
+extern fn show(u8) -> String;
+let Str: str;
+let s: &Str;
+let `parse_r(s)`;
+let A;
+let R;
+`parse_r(s)` = parse_r(s) @ parse_r;
+A = ?(`parse_r(s)`) into R @ q;
+let `show(a)`;
+`show(a)` = show(A) @ show;
+R = `show(a)`;
+
+must pass;
+assert outcomes 1;
+assert A: u8;

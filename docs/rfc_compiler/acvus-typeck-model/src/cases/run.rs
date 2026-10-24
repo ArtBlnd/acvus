@@ -406,7 +406,6 @@ fn step_of(state: &State, text: &StepText) -> Result<Step, String> {
     let steps = state.steps();
     let wanted = match text {
         StepText::Solve(class) => Step::Solve(root_named(state, "solve", class)?),
-        StepText::Fill(class) => Step::Fill(root_named(state, "fill", class)?),
         StepText::Decide(node) => Step::Decide(Name::new(node)),
         StepText::Fallback => return Err("fallback is no step".to_string()),
     };

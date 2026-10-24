@@ -6,7 +6,6 @@ outcome 1
   value X: u8
   decision g: g#0
   check `R <= X`: Ok(Identity)
-  check `X <= g.Common(0)`: Ok(Identity)
   check `X ~> g.Param(0)`: Ok(Identity)
   check `g.CommonResult <= R`: Ok(Identity)
   I* of a final state: []

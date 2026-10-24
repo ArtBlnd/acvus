@@ -8,7 +8,6 @@ outcome 1
   value `|x| x`: Fn/1
   value `λ result`: none
   decision apply: apply#0
-  check `1u8 <= apply.Common(0)`: Ok(Identity)
   check `1u8 ~> apply.Param(1)`: Ok(Identity)
   check `apply.Chosen(0) <= apply.Common(0)`: Ok(Identity)
   check `apply.Common(0) <= R`: Ok(Identity)

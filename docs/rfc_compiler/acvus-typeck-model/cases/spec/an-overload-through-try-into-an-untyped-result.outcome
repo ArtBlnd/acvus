@@ -21,11 +21,9 @@ outcome 1
   refusal no_value `Some(n)`
   refusal no_value `P.Payload(Some)`
   refusal no_value `R.Payload(Some)`
-  refusal no_value `q.Common(0).Payload(Some)`
   refusal no_value `parse.Common(0)`
   refusal no_value `parse.CommonResult`
   refusal no_value `q.Var(Type(0))`
   refusal no_value `q.Param(0)`
-  refusal no_value `q.Common(0)`
   refusal no_value `q.Common(1)`
   I* of a final state: []

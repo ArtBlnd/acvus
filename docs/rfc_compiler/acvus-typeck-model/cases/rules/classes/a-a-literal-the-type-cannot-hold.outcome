@@ -2,8 +2,7 @@
 run: every order
 outcome 1
   refused
-  value 256: none
-  value `@n`: none
-  partition {256, `@n`}
-  refusal conflict at "256 = @n": ?{256}: int vs Scalar(Int(U8))
+  value 256: i32
+  value `@n`: u8
+  check `256 ~> @n`: Err(None)
   I* of a final state: []

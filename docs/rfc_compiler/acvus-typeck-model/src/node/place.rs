@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 use crate::class::{ClassId, ClassName, Fact};
 use crate::program::Projection;
+use crate::range::Range;
 use crate::read::ReadValue;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
@@ -70,13 +71,19 @@ impl State {
         }
     }
 
-    /// Whether a node's common part recorded that the class, or one it reaches
-    /// by lower bounds, is a reference.
+    /// Whether a node's common part or a lend gave the class, or one it
+    /// reaches by lower bounds, a range of references.
     pub(super) fn recorded_as_reference(&self, id: ClassId) -> bool {
         let mut seen = BTreeSet::from([self.root(id)]);
         let mut work = vec![self.root(id)];
         while let Some(at) = work.pop() {
-            if self.classes.held(at).reference == Some(true) {
+            if self
+                .classes
+                .held(at)
+                .range
+                .as_ref()
+                .is_some_and(Range::is_references)
+            {
                 return true;
             }
             for lower in self.lower_bounds(at) {

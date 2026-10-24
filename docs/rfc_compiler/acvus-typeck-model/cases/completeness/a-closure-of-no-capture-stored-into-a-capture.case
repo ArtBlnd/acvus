@@ -1,0 +1,50 @@
+//@ orders: sampled 200
+// let mut slot = None;
+// let set = |k| { slot = Some(|x| same(x, x)); };   // same<T>(T, T)
+// set(1u8);
+// if let Some(h) = slot { h(2u8) }
+// μ captures nothing, so its environment is empty; Some(μ) passes into
+// slot by name, so μ's value is λ's environment, the entry's.
+extern fn same<T>(T, T);
+group λ in run {
+    let K;
+    let `λ result`;
+    fn λ(K) -> `λ result`;
+    let P;
+    let `Some(..)`: Option<P>;
+    let `|x| ..`: lambda μ;
+    P = `|x| ..`;
+    #[by_name] SLOT = `Some(..)`;
+    let unit: ();
+    `λ result` = unit;
+}
+group μ in λ {
+    let X;
+    let `μ result`;
+    fn μ(X) -> `μ result`;
+    let `same(..)`;
+    `same(..)` = same(X, X) @ same;
+    `μ result` = `same(..)`;
+}
+let SLOT;
+let NP;
+let `None`: Option<NP>;
+SLOT = `None`;
+let `|k| ..`: lambda λ;
+let SET;
+SET = `|k| ..`;
+let 1u8: u8;
+let `set(1u8)`;
+`set(1u8)` = (SET)(1u8) @ `set 1`;
+let `slot as Some`;
+`slot as Some` = SLOT as Some @ `pat Some`;
+let H;
+H = bind `slot as Some` via [`pat Some`] @ h;
+let 2u8: u8;
+let `h(2u8)`;
+`h(2u8)` = (H)(2u8) @ `h 1`;
+
+must pass;
+assert outcomes 1;
+assert SLOT: Option<Fn/1>;
+assert `h 1` == calls {μ};

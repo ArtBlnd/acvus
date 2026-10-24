@@ -5,6 +5,7 @@ outcome 1
   value R: none
   value X: none
   decision g: undecided
-  partition {R, X}
   refusal no_value R
+  refusal no_value X
+  refusal no_value `g.Common(0)`
   I* of a final state: []

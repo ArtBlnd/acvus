@@ -139,7 +139,6 @@ fn refusal_matches(text: &RefusalText, refusal: &Refusal) -> bool {
     match (text, refusal) {
         (RefusalText::Infinite(wanted), Refusal::Infinite(class))
         | (RefusalText::NoJoin(wanted), Refusal::NoJoin(class))
-        | (RefusalText::NoFill(wanted), Refusal::NoFill(class))
         | (RefusalText::NoValue(wanted), Refusal::NoValue(class)) => named(wanted, class),
         (RefusalText::Conflict(wanted), Refusal::Conflict { at, .. }) => {
             wanted.as_ref().is_none_or(|wanted| wanted == at)

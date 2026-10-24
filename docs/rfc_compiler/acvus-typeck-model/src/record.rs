@@ -11,6 +11,7 @@ use crate::class::{ClassId, ClassName, KindSource};
 use crate::instance::Instance;
 use crate::node::{NodeKind, NodeState};
 use crate::program::{Function, Item, Origin, Part, Place, Position, Program, TextClass};
+use crate::range::Range;
 use crate::relation::{Recorded, Recorder, Relation};
 use crate::sig::{SigTy, SigVar};
 use crate::solve::State;
@@ -87,7 +88,8 @@ impl State {
             match &class.origin {
                 Origin::Var => {}
                 Origin::Lit(lit) => {
-                    recorded.push(self.record(Relation::Lit(id, lit.clone()), Recorder::Origin));
+                    let relation = Relation::Range(id, Range::of_literal(lit));
+                    recorded.push(self.record(relation, Recorder::Origin));
                 }
                 Origin::Written(term) | Origin::Host(term) | Origin::Outward(term) => {
                     let term = term.clone().map(|_, part| self.text(&part));

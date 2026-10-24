@@ -1,18 +1,18 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
-  value `&mut buf`: &mut Vec<u8>
-  value BUF: Vec<u8>
+  refused
+  value `&mut buf`: &mut Vec<!>
+  value BUF: Vec<!>
   value fill: Fn/0
   value `fill()`: ()
   value `fill_all(..)`: ()
-  value `new()`: Vec<u8>
+  value `new()`: Vec<!>
   value `|| ..`: Fn/0
   value `λ result`: ()
   decision `fill()`: calls {λ}
   decision lend: lend &mut place
-  check `&mut buf ~> fill_all.Param(0)`: Ok(Identity)
+  check `&mut buf ~> fill_all.Param(0)`: Err(None)
   check `fill()#λ/λ result <= fill()`: Ok(Identity)
   check `new() <= BUF`: Ok(Identity)
   check `new.Result <= new()`: Ok(Identity)

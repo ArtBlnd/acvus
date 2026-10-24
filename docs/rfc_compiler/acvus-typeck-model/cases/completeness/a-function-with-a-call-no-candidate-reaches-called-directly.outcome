@@ -1,0 +1,25 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value 1u8: u8
+  value 2u8: u8
+  value M: C
+  value PA: none
+  value PB: none
+  value X: u8
+  value `g result`: ()
+  value `g(..)`: ()
+  value `make_c()`: C
+  value `probe(m)`: ()
+  value unit: ()
+  decision `g@5/probe`: undecided
+  check `1u8 <= X`: Ok(Identity)
+  check `2u8 <= g@5/PB`: Ok(Identity)
+  check `X <= g@5/PA`: Ok(Identity)
+  check `g@5/g result <= g(..)`: Ok(Identity)
+  check `make_c() <= M`: Ok(Identity)
+  check `make_c.Result <= make_c()`: Ok(Identity)
+  check `probe.CommonResult <= probe(m)`: Ok(Identity)
+  check `unit <= g result`: Ok(Identity)
+  I* of a final state: []

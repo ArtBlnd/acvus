@@ -2,7 +2,7 @@
 //!
 //! A type variable is one type, represented by an equivalence class.
 //! An equivalence class holds type variables, of which the model keeps the
-//! LitVar, and at most one kind. Unifying two merges them, the kind
+//! range their values may take, and at most one kind. Unifying two merges them, the kind
 //! the conjunction of the two, and unifies their parts of one name in turn.
 //! `Unifying` reports each union it makes, with its cause, and the
 //! conflict that stops it.
@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
-use crate::lit::LitVar;
+use crate::range::Range;
 use crate::sig::{DeclaredTypes, SigVar};
 use crate::ty::{Constructor, ERR, Member, NONE, Name, OK, PartKey, SOME, Term};
 
@@ -235,10 +235,9 @@ pub struct Held {
     pub members: BTreeSet<ClassId>,
     pub kind: Option<(Term<ClassId>, KindSource)>,
     pub facts: BTreeSet<Fact>,
-    pub lit: Option<LitVar>,
-    /// Whether it is a reference, as a node's common part records it before
-    /// the node is decided.
-    pub reference: Option<bool>,
+    /// The constructors its value may take, where a literal, a common part or
+    /// a lend gives them.
+    pub range: Option<Range>,
     /// The lambdas the Values of the function values met in it name, joined.
     pub values: BTreeSet<Name>,
     /// Whether it took its constructor and members, written or joined.
@@ -250,14 +249,11 @@ pub struct Held {
 pub enum Conflict {
     /// Two kinds of different constructors or members.
     Kinds(Constructor, Constructor),
-    /// A LitVar and a constructor that does not admit its values, or
-    /// two LitVars of different families.
-    Lit(LitVar, Option<Constructor>),
+    /// A range and a constructor it does not admit, or two ranges that admit
+    /// no constructor in common.
+    Range(Range, Option<Constructor>),
     /// A fact that the kind does not meet.
     Fact(Fact, Constructor),
-    /// A record of whether the class is a reference that its kind, or another
-    /// record, does not meet.
-    Reference(bool, Option<Constructor>),
 }
 
 /// A kind known in part written with its class's name: `ref T`, `field x: T`,
@@ -298,29 +294,16 @@ pub struct NamedConflict<'a> {
 
 impl fmt::Display for NamedConflict<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let reference = |reference: bool| {
-            if reference {
-                "reference"
-            } else {
-                "no reference"
-            }
-        };
         match self.conflict {
             Conflict::Kinds(a, b) => write!(f, "{a:?} vs {b:?}"),
-            Conflict::Lit(lit, Some(constructor)) => write!(f, "{lit} vs {constructor:?}"),
-            Conflict::Lit(lit, None) => write!(f, "{lit} vs another family"),
+            Conflict::Range(range, Some(constructor)) => write!(f, "{range} vs {constructor:?}"),
+            Conflict::Range(range, None) => write!(f, "{range} vs another range"),
             Conflict::Fact(fact, constructor) => {
                 let fact = NamedFact {
                     fact,
                     arena: self.arena,
                 };
                 write!(f, "{constructor:?} vs {fact}")
-            }
-            Conflict::Reference(held, Some(constructor)) => {
-                write!(f, "{} vs {constructor:?}", reference(*held))
-            }
-            Conflict::Reference(held, None) => {
-                write!(f, "{} vs {}", reference(*held), reference(!*held))
             }
         }
     }
@@ -429,8 +412,7 @@ impl Classes {
                     members: [id].into(),
                     kind: None,
                     facts: BTreeSet::new(),
-                    lit: None,
-                    reference: None,
+                    range: None,
                     values: BTreeSet::new(),
                     solved: false,
                 },
@@ -495,14 +477,14 @@ impl Classes {
         self.unifying(types).give_fact(id, fact).result()
     }
 
-    /// As `Unifying::give_lit`, with the conflict alone.
-    pub fn give_lit(
+    /// As `Unifying::give_range`, with the conflict alone.
+    pub fn give_range(
         &mut self,
         id: ClassId,
-        lit: LitVar,
+        range: Range,
         types: &DeclaredTypes,
     ) -> Result<(), Conflict> {
-        self.unifying(types).give_lit(id, lit).result()
+        self.unifying(types).give_range(id, range).result()
     }
 
     /// Records a lambda the Values of the class of `id` names.
@@ -522,20 +504,13 @@ impl Classes {
 
     /// The pairs of classes that what the equivalence class holds makes one:
     /// facts of one part name with each other and with its kind's part, and
-    /// the LitVar checked against its kind's constructor.
+    /// its kind's constructor checked against its range.
     fn normalize(&mut self, root: ClassId, types: &DeclaredTypes) -> Result<Vec<Pair>, Conflict> {
         let held = self.held.get_mut(&root).expect("a root holds");
-        if let (Some(lit), Some((kind, _))) = (&held.lit, &held.kind) {
-            if !matches!(kind, Term::Scalar(scalar) if lit.admits(*scalar)) {
-                return Err(Conflict::Lit(lit.clone(), Some(kind.constructor())));
-            }
-            held.lit = None;
-        }
-        if let (Some(reference), Some((kind, _))) = (held.reference, &held.kind) {
+        if let (Some(range), Some((kind, _))) = (&held.range, &held.kind) {
             let constructor = kind.constructor();
-            let is_reference = matches!(constructor, Constructor::Ref(_));
-            if constructor != Constructor::Never && is_reference != reference {
-                return Err(Conflict::Reference(reference, Some(constructor)));
+            if !range.admits(&constructor) {
+                return Err(Conflict::Range(range.clone(), Some(constructor)));
             }
         }
         let mut pairs = Vec::new();
@@ -640,44 +615,24 @@ impl Unifying<'_> {
         self.finish(given)
     }
 
-    pub fn give_lit(mut self, id: ClassId, lit: LitVar) -> Unified {
-        let given = self.lit_given(id, lit);
+    /// Narrows the range of the equivalence class of `id` to what it and
+    /// `range` both admit.
+    pub fn give_range(mut self, id: ClassId, range: Range) -> Unified {
+        let given = self.range_given(id, range);
         self.finish(given)
     }
 
-    fn lit_given(&mut self, id: ClassId, lit: LitVar) -> Result<(), Conflicted> {
+    fn range_given(&mut self, id: ClassId, range: Range) -> Result<(), Conflicted> {
         let root = self.classes.find(id);
         {
             let held = self.classes.held.get_mut(&root).expect("a root holds");
-            held.lit = Some(match &held.lit {
-                Some(own) => own.union(&lit).ok_or_else(|| Conflicted::Holds {
+            held.range = Some(match &held.range {
+                Some(own) => own.meet(&range).ok_or_else(|| Conflicted::Holds {
                     members: held.members.clone(),
-                    conflict: Conflict::Lit(lit.clone(), None),
+                    conflict: Conflict::Range(range.clone(), None),
                 })?,
-                None => lit,
+                None => range,
             });
-        }
-        let pairs = self.normalize(root)?;
-        self.unify_pairs(pairs)
-    }
-
-    /// Records whether the equivalence class of `id` is a reference.
-    pub fn give_reference(mut self, id: ClassId, reference: bool) -> Unified {
-        let given = self.reference_given(id, reference);
-        self.finish(given)
-    }
-
-    fn reference_given(&mut self, id: ClassId, reference: bool) -> Result<(), Conflicted> {
-        let root = self.classes.find(id);
-        {
-            let held = self.classes.held.get_mut(&root).expect("a root holds");
-            if held.reference.is_some_and(|own| own != reference) {
-                return Err(Conflicted::Holds {
-                    members: held.members.clone(),
-                    conflict: Conflict::Reference(reference, None),
-                });
-            }
-            held.reference = Some(reference);
         }
         let pairs = self.normalize(root)?;
         self.unify_pairs(pairs)
@@ -736,18 +691,13 @@ impl Unifying<'_> {
                 }
                 (kind, other) => kind.clone().or_else(|| other.clone()),
             };
-            let lit = match (&kept.lit, &merged.lit) {
-                (Some(lit), Some(other)) => Some(
-                    lit.union(other)
-                        .ok_or_else(|| apart(Conflict::Lit(other.clone(), None)))?,
+            let range = match (&kept.range, &merged.range) {
+                (Some(range), Some(other)) => Some(
+                    range
+                        .meet(other)
+                        .ok_or_else(|| apart(Conflict::Range(other.clone(), None)))?,
                 ),
-                (lit, other) => lit.clone().or_else(|| other.clone()),
-            };
-            let reference = match (kept.reference, merged.reference) {
-                (Some(own), Some(other)) if own != other => {
-                    return Err(apart(Conflict::Reference(other, None)));
-                }
-                (own, other) => own.or(other),
+                (range, other) => range.clone().or_else(|| other.clone()),
             };
             self.classes.parent[gone.0] = keep;
             let merged = self.classes.held.remove(&gone).expect("a root holds");
@@ -756,8 +706,7 @@ impl Unifying<'_> {
             held.values.extend(merged.values);
             held.facts.extend(merged.facts);
             held.kind = kind;
-            held.lit = lit;
-            held.reference = reference;
+            held.range = range;
             held.solved |= merged.solved;
             let kind = held.kind.as_ref().map(|(kind, _)| kind.clone());
             self.unions.push(Union { cause, sides, kind });

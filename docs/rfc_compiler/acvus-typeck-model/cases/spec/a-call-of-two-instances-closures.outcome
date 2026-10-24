@@ -14,38 +14,33 @@ outcome 1
   value `adder result`: Fn/1
   value `adder(1u8)`: Fn/1
   value `adder(2u16)`: Fn/1
-  value `h(3u8)`: u8
+  value `h(3u8)`: none
   value `|x| x + k`: Fn/1
   value `λ result`: none
   decision `&x`: lend & place
   decision `adder@5/&k`: lend & place
   decision `adder@5/x + k`: core::add#0
   decision `adder@7/&k`: lend & place
-  decision `adder@7/x + k`: core::add#0
+  decision `adder@7/x + k`: undecided
   decision `h call`: calls {`adder@5/λ`, `adder@7/λ`}
   check `1u8 <= adder@5/K`: Ok(Identity)
+  check `2u16 <= adder@7/K`: Ok(Identity)
   check `3u8 <= adder@5/X`: Ok(Identity)
+  check `3u8 <= adder@7/X`: Ok(Identity)
   check `adder(1u8) <= H`: Ok(Identity)
   check `adder(2u16) <= H`: Ok(Identity)
-  check `adder@5/&k <= adder@5/x + k.Common(0)`: Ok(Identity)
   check `adder@5/&k ~> adder@5/x + k.Param(1)`: Ok(Identity)
-  check `adder@5/&x <= adder@5/x + k.Common(0)`: Ok(Identity)
   check `adder@5/&x ~> adder@5/x + k.Param(0)`: Ok(Identity)
   check `adder@5/S <= adder@5/λ result`: Ok(Identity)
   check `adder@5/adder result <= adder(1u8)`: Ok(Identity)
   check `adder@5/x + k.Chosen(1) <= adder@5/x + k.Common(1)`: Ok(Identity)
   check `adder@5/x + k.Common(1) <= adder@5/S`: Ok(Identity)
   check `adder@5/|x| x + k <= adder@5/adder result`: Ok(Identity)
-  check `adder@5/λ result <= h(3u8)`: Ok(Identity)
-  check `adder@7/S <= adder@7/λ result`: Ok(Identity)
   check `adder@7/adder result <= adder(2u16)`: Ok(Identity)
-  check `adder@7/x + k.Chosen(1) <= adder@7/x + k.Common(1)`: Ok(Identity)
-  check `adder@7/x + k.Common(1) <= adder@7/S`: Ok(Identity)
   check `adder@7/|x| x + k <= adder@7/adder result`: Ok(Identity)
-  check `adder@7/λ result <= h(3u8)`: Ok(Identity)
   check `|x| x + k <= adder result`: Ok(Identity)
-  refusal no_join `adder@7/x + k.Common(0).Target`
-  refusal no_value `adder@7/&k.Lent`
-  refusal no_value `adder@7/&x`
-  refusal no_value `adder@7/x + k.Common(0)`
+  refusal no_value `h(3u8)`
+  refusal no_value `adder@7/S`
+  refusal no_value `adder@7/λ result`
+  refusal no_value `adder@7/x + k.Common(1)`
   I* of a final state: []

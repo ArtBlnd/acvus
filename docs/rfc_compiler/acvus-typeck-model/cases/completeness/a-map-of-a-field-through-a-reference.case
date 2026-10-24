@@ -1,0 +1,27 @@
+//@ orders: sampled 200
+// map(rows(), |s| { s.score; });
+// // rows() -> Iter⟨&{score: i32}⟩; map<T, U>(Iter⟨T⟩, fn(T) -> U) -> Iter⟨U⟩
+// As examples/grades maps its rows with |s| -> s.score: s is a reference, so
+// s.score applies to its target. The lambda's result is (), the tail
+// being no part of what is refused.
+extern type Iter<T>;
+extern fn rows() -> Iter<&{score: i32}>;
+extern fn map<T, U>(Iter<T>, fn(T) -> U) -> Iter<U>;
+group λ in run {
+    let S;
+    let `λ result`;
+    fn λ(S) -> `λ result`;
+    let `s.score`;
+    `s.score` = S.score @ `s.score`;
+    let unit: ();
+    `λ result` = unit;
+}
+let `rows()`;
+`rows()` = rows() @ rows;
+let `|s| ..`: lambda λ;
+let `map(..)`;
+`map(..)` = map(`rows()`, `|s| ..`) @ map;
+
+must pass;
+assert outcomes 1;
+assert `map(..)`: Iter<()>;

@@ -9,7 +9,6 @@ outcome 1
   value `Some(1)`: Option<i32>
   value X: Option<!>
   value Y: Option<i32>
-  partition {1, S}
   check `1 <= S`: Ok(Identity)
   check `None <= X`: Ok(Identity)
   check `Some(1) <= Y`: Ok(Identity)

@@ -1,0 +1,31 @@
+// let v = make();                    // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
+// let a = [1u8, 2u8];
+// let s = if c { &v } else { &a };
+// Each branch's value meets s's class S. &Vec⟨u8⟩ and &[u8; 2] go up by
+// the view and the array's view to &[u8].
+extern type Vec<T>;
+extern fn make() -> Vec<u8>;
+#[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
+let V;
+let `make()`;
+`make()` = make() @ make;
+V = `make()`;
+let U8;
+let `[1u8, 2u8]`: [U8; 2];
+let 1u8: u8;
+let 2u8: u8;
+U8 = 1u8;
+U8 = 2u8;
+let A;
+A = `[1u8, 2u8]`;
+let `&v`;
+`&v` = &V @ `&v`;
+let `&a`;
+`&a` = &A @ `&a`;
+let S;
+S = `&v`;
+S = `&a`;
+
+must pass;
+assert outcomes 1;
+assert S: &[u8];

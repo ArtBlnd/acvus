@@ -2,12 +2,12 @@
 run: every order
 outcome 1
   accepted
-  value `Ok(x)`: Result<u8, Error{PErr(PErr)}>
-  value Q: Error{PErr(PErr)}
+  value `Ok(x)`: none
+  value Q: none
   value Str: str
   value U: u8
   value X: u8
-  value `g exit`: Result<u8, Error{PErr(PErr)}>
+  value `g exit`: none
   value `g result`: Result<u8, Error{PErr(PErr)}>
   value `g()`: Result<u8, Error{PErr(PErr)}>
   value `parse_r(s)`: Result<u8, PErr>
@@ -15,16 +15,15 @@ outcome 1
   value s: &str
   decision qg: ?#1
   check `g() ~> report.Param(0)`: Ok(Identity)
+  check `g@5/Ok(x) <= g@5/g result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Identity), (Payload(Err), Never)] }) })
+  check `g@5/g exit <= g@5/g result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Never), (Payload(Err), Identity)] }) })
   check `g@5/g result <= g()`: Ok(Identity)
+  check `g@5/qg.Exit <= g@5/g exit`: Ok(Identity)
   check `report.Result <= report(..)`: Ok(Identity)
-  check `Ok(x) <= g result`: Ok(Identity)
   check `X <= U`: Ok(Identity)
-  check `g exit <= g result`: Ok(Identity)
-  check `parse_r(s) <= qg.Common(0)`: Ok(Identity)
   check `parse_r(s) ~> qg.Param(0)`: Ok(Identity)
   check `parse_r.Result <= parse_r(s)`: Ok(Identity)
   check `qg.Common(1) <= X`: Ok(Identity)
-  check `qg.Exit <= g exit`: Ok(Identity)
   check `qg.Var(Type(0)) <= qg.Common(1)`: Ok(Identity)
   check `s ~> parse_r.Param(0)`: Ok(Identity)
   I* of a final state: []

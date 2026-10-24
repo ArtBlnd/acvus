@@ -1,0 +1,30 @@
+// What the model gives, written by `BLESS=1`.
+run: 200 sampled orders
+outcome 1
+  accepted
+  value `&acc`: none
+  value `&s`: none
+  value 0: i32
+  value ACC: none
+  value F: Fn/2
+  value S: none
+  value `acc + s`: none
+  value `f(..)`: i32
+  value `one()`: i32
+  value `|acc, s| ..`: Fn/2
+  value `λ result`: none
+  decision `f 1`: calls {λ}
+  decision `f 1#λ/&acc`: lend & place
+  decision `f 1#λ/&s`: lend & place
+  decision `f 1#λ/add`: core::add#0
+  check `0 <= f 1#λ/ACC`: Ok(Identity)
+  check `f 1#λ/&acc ~> f 1#λ/add.Param(0)`: Ok(Identity)
+  check `f 1#λ/&s ~> f 1#λ/add.Param(1)`: Ok(Identity)
+  check `f 1#λ/acc + s <= f 1#λ/λ result`: Ok(Identity)
+  check `f 1#λ/add.Chosen(1) <= f 1#λ/add.Common(1)`: Ok(Identity)
+  check `f 1#λ/add.Common(1) <= f 1#λ/acc + s`: Ok(Identity)
+  check `f 1#λ/λ result <= f(..)`: Ok(Identity)
+  check `one() <= f 1#λ/S`: Ok(Identity)
+  check `one.Result <= one()`: Ok(Identity)
+  check `|acc, s| .. <= F`: Ok(Identity)
+  I* of a final state: []

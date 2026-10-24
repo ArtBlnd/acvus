@@ -1,0 +1,21 @@
+// What the model gives, written by `BLESS=1`.
+run: 200 sampled orders
+outcome 1
+  refused
+  value S: none
+  value `map(..)`: Iter<()>
+  value `rows()`: Iter<&{score: i32}>
+  value `s.score`: none
+  value unit: ()
+  value `|s| ..`: Fn/1
+  value `λ result`: ()
+  decision `|s| .. ~> map.Param(1)#λ/s.score`: applied
+  check `map.Result <= map(..)`: Ok(Identity)
+  check `rows() ~> map.Param(0)`: Ok(Identity)
+  check `rows.Result <= rows()`: Ok(Identity)
+  check `|s| .. ~> map.Param(1)`: Ok(Undecided)
+  check `|s| .. ~> map.Param(1)#λ/λ result <= map.Var(Type(1))`: Ok(Identity)
+  check `unit <= λ result`: Ok(Identity)
+  refusal no_join `|s| .. ~> map.Param(1)#λ/S`
+  refusal no_value `|s| .. ~> map.Param(1)#λ/s.score`
+  I* of a final state: []

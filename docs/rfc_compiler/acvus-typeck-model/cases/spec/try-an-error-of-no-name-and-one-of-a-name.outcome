@@ -16,10 +16,8 @@ outcome 1
   decision q1: ?#1
   decision q2: ?#1
   check `A <= S`: Ok(Identity)
-  check `get1() <= q1.Common(0)`: Ok(Identity)
   check `get1() ~> q1.Param(0)`: Ok(Identity)
   check `get1.Result <= get1()`: Ok(Identity)
-  check `get2() <= q2.Common(0)`: Ok(Identity)
   check `get2() ~> q2.Param(0)`: Ok(Identity)
   check `get2.Result <= get2()`: Ok(Identity)
   check `q1.Common(1) <= A`: Ok(Identity)

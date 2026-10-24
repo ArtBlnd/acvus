@@ -1,0 +1,32 @@
+// What the model gives, written by `BLESS=1`.
+run: 200 sampled orders
+outcome 1
+  accepted
+  value 1u8: u8
+  value 2u8: u8
+  value H: Fn/1
+  value K: none
+  value MK: Fn/1
+  value X: none
+  value `h(2u8)`: ()
+  value `mk(1u8)`: Fn/1
+  value `same(..)`: ()
+  value `|k| ..`: Fn/1
+  value `|x| ..`: Fn/1
+  value `λ result`: Fn/1
+  value `μ result`: ()
+  decision `h 1`: calls {`mk 1#λ/μ`}
+  decision `mk 1`: calls {λ}
+  check `1u8 <= mk 1#λ/K`: Ok(Identity)
+  check `2u8 <= mk 1#λ/X`: Ok(Identity)
+  check `h 1#mk 1#λ/μ/μ result <= h(2u8)`: Ok(Identity)
+  check `mk 1#λ/K <= mk 1#λ/same.Var(Type(0))`: Ok(Identity)
+  check `mk 1#λ/X <= mk 1#λ/same.Var(Type(0))`: Ok(Identity)
+  check `mk 1#λ/|x| .. <= mk 1#λ/λ result`: Ok(Identity)
+  check `mk 1#λ/λ result <= mk(1u8)`: Ok(Identity)
+  check `mk(1u8) <= H`: Ok(Identity)
+  check `|k| .. <= MK`: Ok(Identity)
+  check `|x| .. <= λ result`: Ok(Identity)
+  check `same(..) <= μ result`: Ok(Identity)
+  check `same.Result <= same(..)`: Ok(Identity)
+  I* of a final state: []

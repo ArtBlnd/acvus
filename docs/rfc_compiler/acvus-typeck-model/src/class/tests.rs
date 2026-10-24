@@ -1,5 +1,5 @@
 use super::*;
-use crate::lit::Literal;
+use crate::lit::{LitVar, Literal};
 use crate::ty::{IntTy, Scalar};
 
 fn setup(names: &[&str]) -> (Arena, Classes, Vec<ClassId>) {
@@ -58,24 +58,23 @@ fn kinds_of_two_constructors_conflict_and_leave_both_apart() {
 }
 
 #[test]
-fn a_litvar_is_held_by_a_scalar_admitting_its_values() {
+fn a_literal_range_is_held_by_a_scalar_admitting_its_values() {
     let types = DeclaredTypes::default();
     let (_, mut classes, ids) = setup(&["L", "U", "M"]);
     let [l, u, m] = ids[..] else { unreachable!() };
     classes
-        .give_lit(l, LitVar::of(Literal::Int(255)), &types)
+        .give_range(l, Range::of_literal(&LitVar::of(Literal::Int(255))), &types)
         .unwrap();
     classes
         .give_kind(u, u8_(), KindSource::Written, &types)
         .unwrap();
     classes.unify(l, u, &types).unwrap();
-    assert_eq!(classes.held(l).lit, None);
     classes
-        .give_lit(m, LitVar::of(Literal::Int(256)), &types)
+        .give_range(m, Range::of_literal(&LitVar::of(Literal::Int(256))), &types)
         .unwrap();
     assert!(matches!(
         classes.unify(m, u, &types),
-        Err(Conflict::Lit(..))
+        Err(Conflict::Range(..))
     ));
 }
 

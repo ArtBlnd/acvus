@@ -1,0 +1,21 @@
+// let v = make();          // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
+// let e = v[0];
+// The Recording table records the projection Elem of v, and nothing of the
+// index: the literal 0 has its class, which nothing relates.
+extern type Vec<T>;
+extern fn make() -> Vec<u8>;
+#[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
+let V;
+let `make()`;
+`make()` = make() @ make;
+V = `make()`;
+let 0: lit 0;
+let `v[0]`;
+`v[0]` = V[] @ `v[0]`;
+let E;
+E = `v[0]`;
+
+must pass;
+assert outcomes 1;
+assert E: u8;
+assert 0: u64;

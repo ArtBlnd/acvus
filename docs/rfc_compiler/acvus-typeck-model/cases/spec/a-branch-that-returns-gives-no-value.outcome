@@ -7,10 +7,10 @@ outcome 1
   value X: u8
   value `f result`: u8
   value `f()`: u8
-  value `return 2u8`: u8
+  value `return 2u8`: none
   check `f@4/f result <= f()`: Ok(Identity)
+  check `f@4/return 2u8 <= f@4/X`: Ok(Never)
   check `1u8 <= X`: Ok(Identity)
   check `2u8 <= f result`: Ok(Identity)
   check `X <= f result`: Ok(Identity)
-  check `return 2u8 <= X`: Ok(Identity)
   I* of a final state: []

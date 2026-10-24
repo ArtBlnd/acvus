@@ -1,0 +1,16 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value `&v`: &Vec<u8>
+  value F: Option<&u8>
+  value V: Vec<u8>
+  value `first(..)`: Option<&u8>
+  value `make()`: Vec<u8>
+  decision `&v`: lend & place
+  check `&v ~> first.Param(0)`: Ok(Identity)
+  check `first(..) <= F`: Ok(Identity)
+  check `first.Result <= first(..)`: Ok(Identity)
+  check `make() <= V`: Ok(Identity)
+  check `make.Result <= make()`: Ok(Identity)
+  I* of a final state: []

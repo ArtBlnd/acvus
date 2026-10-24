@@ -3,6 +3,7 @@ use crate::decl::{DeclsBuilder, Role};
 use crate::fixture::*;
 use crate::join::le;
 use crate::lit::{LitVar, Literal};
+use crate::range::Range;
 use crate::sig::{DeclaredTypes, ExternDecl, SigTy, SigVar, Signature};
 use crate::ty::{IntTy, Scalar};
 
@@ -323,7 +324,7 @@ fn a_position_that_decides_nothing_reaches_every_type() {
         coerce_read(&decls, &read(&ty(Term::Option(named("A")))), &candidate),
         Ok(Coercion::Undecided)
     );
-    let big = ReadValue::Lit(LitVar::of(Literal::Int(300)));
+    let big = ReadValue::Range(Range::of_literal(&LitVar::of(Literal::Int(300))));
     assert_eq!(coerce_read(&decls, &big, &u8_), Err(CoerceError::None));
     assert_eq!(
         coerce_read(&decls, &big, &read(&int(IntTy::U16))),
@@ -333,7 +334,7 @@ fn a_position_that_decides_nothing_reaches_every_type() {
         coerce_read(&decls, &big, &read(&named("A"))),
         Err(CoerceError::None)
     );
-    let float = ReadValue::Lit(LitVar::of(Literal::float(1.5)));
+    let float = ReadValue::Range(Range::of_literal(&LitVar::of(Literal::float(1.5))));
     assert_eq!(coerce_read(&decls, &float, &big), Err(CoerceError::None));
 }
 

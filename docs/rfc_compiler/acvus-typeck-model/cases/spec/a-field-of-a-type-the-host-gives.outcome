@@ -7,7 +7,6 @@ outcome 1
   value `@cfg.extra`: i32
   value String: String
   decision `@cfg.extra`: applied
-  partition {1, `@cfg.extra`}
   check `1 <= @cfg.extra`: Ok(Identity)
   refusal conflict at "@cfg: field extra: @cfg.extra": Object vs field extra: @cfg.extra
   I* of a final state: []

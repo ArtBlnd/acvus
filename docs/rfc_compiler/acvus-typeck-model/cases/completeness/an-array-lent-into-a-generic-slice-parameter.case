@@ -1,0 +1,22 @@
+// let a = [1u8, 2u8];
+// let f = first(&a);       // first<T>(&[T]) -> Option⟨&T⟩; the array's view &[T; 2] -> &[T]
+// &a passes into &[T], which the declaration writes: a boundary.
+extern fn first<T>(&[T]) -> Option<&T>;
+let U8;
+let `[1u8, 2u8]`: [U8; 2];
+let 1u8: u8;
+let 2u8: u8;
+U8 = 1u8;
+U8 = 2u8;
+let A;
+A = `[1u8, 2u8]`;
+let `&a`;
+`&a` = &A @ `&a`;
+let `first(..)`;
+`first(..)` = first(`&a`) @ first;
+let F;
+F = `first(..)`;
+
+must pass;
+assert outcomes 1;
+assert F: Option<&u8>;

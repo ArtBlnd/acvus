@@ -1,0 +1,26 @@
+//@ orders: sampled 200
+// let f = |s| { s.score; };
+// f(row());                // row() -> &{score: i32}
+// As a-map-of-a-field-through-a-reference, the lambda called instead of
+// passed into a function type: the call makes its instance.
+extern fn row() -> &{score: i32};
+group λ in run {
+    let S;
+    let `λ result`;
+    fn λ(S) -> `λ result`;
+    let `s.score`;
+    `s.score` = S.score @ `s.score`;
+    let unit: ();
+    `λ result` = unit;
+}
+let `|s| ..`: lambda λ;
+let F;
+F = `|s| ..`;
+let `row()`;
+`row()` = row() @ row;
+let `f(..)`;
+`f(..)` = (F)(`row()`) @ `f 1`;
+
+must pass;
+assert outcomes 1;
+assert `f 1#λ/s.score` == applied through &;

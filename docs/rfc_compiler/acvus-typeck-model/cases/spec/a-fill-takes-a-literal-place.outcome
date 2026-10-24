@@ -2,19 +2,18 @@
 run: every order
 outcome 1
   accepted
-  value 1: u8
-  value ?k: u8
-  value None: Option<u8>
+  value 1: i32
+  value ?k: !
+  value None: Option<!>
   value `Option⟨u8⟩`: Option<u8>
-  value S: u8
-  value `Some(1)`: Option<u8>
-  value X: Option<u8>
-  value Y: Option<u8>
+  value S: i32
+  value `Some(1)`: Option<i32>
+  value X: Option<!>
+  value Y: Option<i32>
   value u8: u8
-  partition {1, S}
   check `1 <= S`: Ok(Identity)
   check `None <= X`: Ok(Identity)
   check `Some(1) <= Y`: Ok(Identity)
-  check `X <= Y`: Ok(Identity)
-  check `X ~> Option⟨u8⟩`: Ok(Identity)
+  check `X <= Y`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
+  check `X ~> Option⟨u8⟩`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
   I* of a final state: []
