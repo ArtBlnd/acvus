@@ -1,6 +1,6 @@
 //! What the model gives, written as a case writes it: decisions, coercions,
-//! refusals, an outcome, and a trace's facts (`design/19-cases.md`, The
-//! trace). An expectation compares its text with these, whitespace left out.
+//! refusals, an outcome, and a trace's facts. An expectation compares its text with
+//! these, whitespace left out.
 //! Under `TRACE=1`, the facts a report is made of, what a group waits for and
 //! its C, as a traced order prints them.
 
@@ -166,7 +166,7 @@ pub fn same(a: &str, b: &str) -> bool {
     squeezed(a) == squeezed(b)
 }
 
-/// A phase's report as a trace writes it (`design/19-cases.md`, The trace):
+/// A phase's report as a trace writes it:
 /// its line, none where it is only what it recorded, and the relations it
 /// recorded, each by its place in the log, named in `state`. A report that
 /// recorded nothing and has no other line writes nothing.

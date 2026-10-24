@@ -1,0 +1,12 @@
+// for x in arr {}   // arr: [u8; 3]
+// x is the binding at arr[_], whose path passes no reference, so it reads the
+// element: u8.
+let U8: u8;
+let Arr: [U8; 3];
+let `arr[_]`;
+`arr[_]` = Arr[] @ `arr elem`;
+let X;
+X = bind `arr[_]` via [`arr elem`] @ x;
+
+must pass;
+assert X: u8;

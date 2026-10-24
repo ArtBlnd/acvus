@@ -1,4 +1,4 @@
-//! The cases (`design/19-cases.md`): each `cases/**/*.case` read, built,
+//! The cases: each `cases/**/*.case` read, built,
 //! solved as its orders say, checked against its expectations and its golden
 //! outcome, and reported in one table.
 
@@ -20,10 +20,6 @@ use run::{Explored, Run, Tracer};
 enum Status {
     Pass,
     Fail,
-    /// A hole whose `wanted` block the model does not meet yet.
-    Xfail,
-    /// A hole whose `wanted` block the model meets: the hole is closed.
-    Xpass,
 }
 
 struct Ran {
@@ -34,7 +30,7 @@ struct Ran {
 
 /// The expectations a block may hold: those an outcome and its final states
 /// meet.
-fn check_block(block: &[Located<Expect>], what: &str) -> Result<(), String> {
+fn check_block(block: &[Located<Expect>]) -> Result<(), String> {
     for Located { line, item } in block {
         let allowed = matches!(
             item,
@@ -46,9 +42,9 @@ fn check_block(block: &[Located<Expect>], what: &str) -> Result<(), String> {
                 | Expect::Check { .. }
                 | Expect::Partition(_)
                 | Expect::Istar { .. }
-        ) || (what == "wanted" && matches!(item, Expect::Outcomes(_)));
+        );
         if !allowed {
-            return Err(format!("line {line}: a {what} block holds no {item:?}"));
+            return Err(format!("line {line}: an outcome block holds no {item:?}"));
         }
     }
     Ok(())
@@ -57,8 +53,7 @@ fn check_block(block: &[Located<Expect>], what: &str) -> Result<(), String> {
 /// The golden outcome of the runs: every outcome in full, with the I\*
 /// violations of the final states reaching it, and a written order's trace.
 fn golden(runs: &[Run]) -> String {
-    let mut text =
-        String::from("// What the model gives, written by `BLESS=1` (design/19-cases.md).\n");
+    let mut text = String::from("// What the model gives, written by `BLESS=1`.\n");
     for run in runs {
         let explored = match &run.explored {
             Explored::All { .. } => "every order".to_string(),
@@ -115,13 +110,7 @@ fn run_case(
 ) -> Result<Ran, String> {
     let case = parse::parse(source)?;
     for block in &case.outcomes {
-        check_block(&block.item, "outcome")?;
-    }
-    if let Some(wanted) = &case.wanted {
-        check_block(wanted, "wanted")?;
-    }
-    if case.wanted.is_some() && case.hole.is_none() {
-        return Err("a `wanted` block is a hole's".to_string());
+        check_block(&block.item)?;
     }
     let decls = build::decls(&case)?;
     let changes = expect::changes(&decls, &case.expects)?;
@@ -152,17 +141,6 @@ fn run_case(
     } else {
         Status::Fail
     };
-    if let Some(wanted) = &case.wanted {
-        let unmet = expect::fails(&decls, &runs, wanted, &[], &[]);
-        status = match (status, unmet.is_empty()) {
-            (_, true) => {
-                messages.push("the wanted block is met: the hole is closed".to_string());
-                Status::Xpass
-            }
-            (Status::Pass, false) => Status::Xfail,
-            (status, false) => status,
-        };
-    }
     let text = golden(&runs);
     if bless {
         std::fs::write(golden_path, &text)
@@ -321,10 +299,8 @@ fn cases() {
     let mut table = String::new();
     for case in &ran {
         let status = match case.status {
-            Status::Pass => "PASS ",
-            Status::Fail => "FAIL ",
-            Status::Xfail => "XFAIL",
-            Status::Xpass => "XPASS",
+            Status::Pass => "PASS",
+            Status::Fail => "FAIL",
         };
         writeln!(table, "{status} {}", case.path).expect("writing to a string");
         for message in &case.messages {
@@ -334,7 +310,7 @@ fn cases() {
     println!("{table}");
     let failed: Vec<&str> = ran
         .iter()
-        .filter(|case| matches!(case.status, Status::Fail | Status::Xpass))
+        .filter(|case| case.status == Status::Fail)
         .map(|case| case.path.as_str())
         .collect();
     assert!(

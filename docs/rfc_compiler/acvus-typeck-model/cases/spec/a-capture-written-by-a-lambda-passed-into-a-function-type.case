@@ -1,0 +1,42 @@
+// let mut a = None;
+// let g = |x| a = Some(x);
+// apply(g);                // apply(Fn(U) -> ())
+// take(a);                 // take(Option<T>); a cast U -> T
+// x's type X is the lambda's environment. The lambda's value reaches G,
+// which passes into apply's function type, so X waits for that boundary to be
+// split, and lies within apply's depth: the split
+// records U <= X, so X is U, a is Option<U>, and U reaches T at a part by no
+// cast: refused at take(a) in every order, which gave four outcomes.
+extern type U;
+extern type T;
+#[cast] extern fn up(U) -> T;
+extern fn apply(fn(U) -> ());
+extern fn take(Option<T>);
+group λ in run {
+    let X;
+    let S;
+    let `Some(x)`: Option<S>;
+    let `()`: ();
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    S = X;
+}
+let L;
+let ?k;
+let None: Option<?k>;
+let `|x| ..`: lambda λ;
+let G;
+let `apply(g)`;
+let `take(a)`;
+L = None;
+G = `|x| ..`;
+`apply(g)` = apply(G) @ apply;
+`take(a)` = take(L) @ take;
+group λ {
+    #[by_name] L = `Some(x)`;
+    `λ result` = `()`;
+}
+
+must fail;
+assert X: U;
+assert failing [`L ~> take.Param(0)`];

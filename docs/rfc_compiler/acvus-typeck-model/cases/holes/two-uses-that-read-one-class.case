@@ -1,0 +1,38 @@
+// X has the lower bound R1, which waits for x + y, so it is no class only
+// LitVars enter, and does not wait for probe, whose relation into it is a
+// boundary out of it. probe waits for x + y,
+// which records into X, and reads u16 once x + y is decided as add(u16) by
+// Y: accepted in every order.
+extern fn core::add(&u8, &u8) -> u8;
+extern fn core::add(&u16, &u16) -> u16;
+extern fn core::add(&i32, &i32) -> i32;
+extern fn probe(u16);
+extern fn probe(i32);
+
+let X;
+let ?a: lit 0;
+let Y;
+let 1u16: u16;
+let ?b: lit 1;
+let `&x`;
+let `&y`;
+let R1;
+let `&y 2`;
+let `&1`;
+let R2;
+let `probe(x)`;
+X = ?a;
+Y = 1u16;
+`&x` = &X @ `&x`;
+`&y` = &Y @ `&y`;
+R1 = core::add(`&x`, `&y`) @ `x + y`;
+X = R1;
+`&y 2` = &Y @ `&y 2`;
+`&1` = &?b @ `&1`;
+R2 = core::add(`&y 2`, `&1`) @ `y + 1`;
+Y = R2;
+`probe(x)` = probe(X) @ probe;
+
+must pass;
+assert X: u16;
+assert probe == probe#0;

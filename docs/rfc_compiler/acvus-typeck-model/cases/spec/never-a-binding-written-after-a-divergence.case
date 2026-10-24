@@ -1,7 +1,6 @@
-//@ spec: l.276, l.280, l.290
 // let t; if c { t = never(); } t.0 = 1u8; takes_u8(t);   // never() -> !
-// T's source gives !, whose part t.0 is ! (l.276), so 1u8 does not reach it
-// (l.280): refused there.
+// T's source gives !, whose part t.0 is !, so 1u8 does not reach it:
+// refused there.
 extern fn never() -> !;
 extern fn takes_u8(u8);
 let T;

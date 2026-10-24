@@ -1,0 +1,30 @@
+// let y = x as u8;   // x: u16
+// let z = 300 as u8;
+// e as u8 has a candidate (S) -> u8 for each S Rust casts to u8,
+// written here as declarations. x's u16 decides the first; 300 reaches no u8
+// or i8, and the integers left are narrowed again at the default i32.
+extern fn cast_u8(u8) -> u8;
+extern fn cast_u8(u16) -> u8;
+extern fn cast_u8(u32) -> u8;
+extern fn cast_u8(u64) -> u8;
+extern fn cast_u8(i8) -> u8;
+extern fn cast_u8(i16) -> u8;
+extern fn cast_u8(i32) -> u8;
+extern fn cast_u8(i64) -> u8;
+extern fn cast_u8(f32) -> u8;
+extern fn cast_u8(f64) -> u8;
+extern fn cast_u8(bool) -> u8;
+extern fn cast_u8(char) -> u8;
+let X: u16;
+let Y;
+Y = cast_u8(X) @ `x as u8`;
+let 300: lit 300;
+let Z;
+Z = cast_u8(300) @ `300 as u8`;
+
+must pass;
+assert `x as u8` == cast_u8#1;
+assert `300 as u8` == cast_u8#6;
+assert 300: i32;
+assert Y: u8;
+assert Z: u8;

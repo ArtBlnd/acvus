@@ -195,13 +195,13 @@ fn an_enum_widens_and_no_value_is_wrapped_in_an_error() {
     assert_eq!(
         coerce(&decls, &named("A"), &b_c),
         Err(CoerceError::None),
-        "no row wraps a value in an `Error`, which `?` alone makes (l.91)"
+        "no row wraps a value in an `Error`, which `?` alone makes"
     );
     let b_d = error(&[named("B"), named("D")]);
     assert_eq!(
         coerce(&chain(&[]), &named("A"), &b_d),
         Err(CoerceError::None),
-        "no composition reaches an `Error` (`holes.md`, H2)"
+        "no composition reaches an `Error`"
     );
 }
 

@@ -1,9 +1,8 @@
-//@ spec: l.310, l.158, l.276
 // let x = None;
 // match x { Some(1u8) => {}, Some(1u16) => {} }
-// Each arm's pattern applies to x (l.310): both Payload projections give X the
-// variant Some, whose payloads are one class (l.158), and the two literals pass
-// into it, u8 and u16, with no join (l.276). One outcome in every order, which
+// Each arm's pattern applies to x: both Payload projections give X the
+// variant Some, whose payloads are one class, and the two literals pass
+// into it, u8 and u16, with no join. One outcome in every order, which
 // the model once split into three, solving the payload before X took Option.
 let X;
 let ?k;

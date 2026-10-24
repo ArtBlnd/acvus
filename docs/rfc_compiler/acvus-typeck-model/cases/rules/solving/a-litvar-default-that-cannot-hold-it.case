@@ -1,9 +1,8 @@
-//@ spec: l.288, l.169, l.162, l.290
 // let x = 3000000000;
-// X is unified with the literal's LitVar, its only lower bound (l.169), and no
+// X is unified with the literal's LitVar, its only lower bound, and no
 // source gives it a constructor. At the fixpoint, nothing waits, so it takes
-// its family's default, i32 (l.288), which does not hold 3000000000 (l.162):
-// refused there (l.290).
+// its family's default, i32, which does not hold 3000000000:
+// refused there.
 let X;
 let 3000000000: lit 3000000000;
 X = 3000000000;

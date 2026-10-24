@@ -384,7 +384,7 @@ A method's body reads its receiver as `self`, and `Self { a: e, b }` is a
 value of the module's struct, its fields written as an object literal writes
 them, with no comma required after the last. A fn's body declares `fn`s
 wherever a statement stands, as a script's does. Only the fns of the struct's
-`impl` blocks name its fields and build its value (the type system's l.35),
+`impl` blocks name its fields and build its value,
 which is the checker's to refuse elsewhere. These are refused where the name
 is written:
 

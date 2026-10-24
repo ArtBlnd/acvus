@@ -1,0 +1,28 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value 0u8: u8
+  value A: none
+  value B: none
+  value R: u8
+  value S1: F1
+  value S2: F2
+  value `Some(f1())`: Option<F1>
+  value `Some(f2())`: Option<F2>
+  value `f1()`: F1
+  value `f2()`: F2
+  value `g(..)`: u8
+  value `g(b, b)`: u8
+  check `Some(f2()) <= g@6/B`: Ok(Identity)
+  check `f1() <= S1`: Ok(Identity)
+  check `f1.Result <= f1()`: Ok(Identity)
+  check `f2() <= S2`: Ok(Identity)
+  check `f2.Result <= f2()`: Ok(Identity)
+  check `g@6/B ~> g@6/B`: Ok(Identity)
+  check `g@6/R <= g(..)`: Ok(Identity)
+  check `0u8 <= R`: Ok(Identity)
+  check `R <= g(b, b)`: Ok(Identity)
+  refusal no_join `g@6/A.Payload(Some)`
+  refusal no_value `g@6/A`
+  I* of a final state: []

@@ -1,0 +1,25 @@
+// let mut buf = Vec::new();
+// push(&mut buf, 1u16);    // push(&mut Vec<T>, T)
+// consume(buf);            // consume(Vec<u8>)
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+extern fn push<T>(&mut Vec<T>, T);
+extern fn consume(Vec<u8>);
+
+let B;
+let `new()`;
+let `&mut buf`;
+let 1u16: u16;
+let `push(..)`;
+let `consume(..)`;
+`new()` = new() @ new;
+B = `new()`;
+`&mut buf` = &mut B @ lend;
+`push(..)` = push(`&mut buf`, 1u16) @ push;
+`consume(..)` = consume(B) @ consume;
+
+// Refused at consume(buf), as with the conversion
+// (`a-type-a-boundary-writes-decides-no-value`).
+must fail;
+assert B: Vec<u16>;
+assert failing [`B ~> consume.Param(0)`];

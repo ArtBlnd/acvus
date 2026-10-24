@@ -1,8 +1,8 @@
-//! Recording (l.217–231): the constraints a body's text gives, recorded in the
-//! equivalence classes as they are given, whatever is solved (l.223) — a
-//! meeting as a lower bound and a boundary as `T ⇝ U` (l.219), an invariant
+//! Recording: the constraints a body's text gives, recorded in the
+//! equivalence classes as they are given, whatever is solved — a
+//! meeting as a lower bound and a boundary as `T ⇝ U`, an invariant
 //! place as an equation, and a use, a lend, a projection and a binding as a
-//! node — and the classes of a type a declaration writes (l.120, l.211).
+//! node — and the classes of a type a declaration writes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -26,7 +26,7 @@ pub struct Entry {
     pub unification: Unification,
 }
 
-/// An instance made while recording (l.215): its name, what made it, the
+/// An instance made while recording: its name, what made it, the
 /// binding group whose C it copies, and the relations it recorded, by their
 /// places in the log.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -37,8 +37,8 @@ pub struct Instantiated {
     pub recorded: Vec<usize>,
 }
 
-/// What recording did (l.223): each relation recorded, in the order
-/// recorded, and each instance made (l.215).
+/// What recording did: each relation recorded, in the order
+/// recorded, and each instance made.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Recording {
     pub entries: Vec<Entry>,
@@ -66,8 +66,7 @@ impl Recording {
 }
 
 impl State {
-    /// Records the relation, which the equivalence classes take at once
-    /// (l.223).
+    /// Records the relation, which the equivalence classes take at once.
     pub(crate) fn record(&mut self, relation: Relation, recorder: Recorder) -> Entry {
         let unification = self.hold(&relation);
         let at = self.log.len();
@@ -76,7 +75,7 @@ impl State {
     }
 
     /// The types the text gives its classes: a literal's LitVar, a type the
-    /// text or the host writes, and a lambda's function value (l.223).
+    /// text or the host writes, and a lambda's function value.
     pub(crate) fn record_origins(
         &mut self,
         program: &Program,
@@ -109,7 +108,7 @@ impl State {
         recorded
     }
 
-    /// The equations the text's invariant places give (l.229).
+    /// The equations the text's invariant places give.
     pub(crate) fn record_equations(&mut self, items: &[(usize, &Item, Part)]) -> Recording {
         let mut recorded = Recording::default();
         for &(i, item, _) in items {
@@ -122,9 +121,9 @@ impl State {
     }
 
     /// The rest of the text: each value passing into a type, as a meeting or
-    /// a boundary (l.219, l.227–228), each call of a function (l.192–195), and
-    /// each other use, lend, projection and binding, as a node (l.231); of a
-    /// use, the constraints at the positions its part holds (l.186).
+    /// a boundary, each call of a function, and
+    /// each other use, lend, projection and binding, as a node; of a
+    /// use, the constraints at the positions its part holds.
     pub(crate) fn record_items(
         &mut self,
         program: &Program,
@@ -197,7 +196,7 @@ impl State {
                 } => {
                     // Of several candidates, the positions where every
                     // candidate writes one closed type are recorded apart, by
-                    // the common part; the node holds the rest (l.186, l.246).
+                    // the common part; the node holds the rest.
                     let several = self.candidates(callee, args.len()).len() >= 2;
                     let closed: BTreeSet<Position> = if several {
                         let sigs: Vec<crate::sig::Signature> = self
@@ -301,12 +300,12 @@ impl State {
         }
     }
 
-    /// A use that calls a function (l.192–195), at the positions of its
-    /// constraints this group records, none at the others (l.186). Within the
+    /// A use that calls a function, at the positions of its
+    /// constraints this group records, none at the others. Within the
     /// function's group it takes that body's own types: each argument passes
-    /// into its parameter's type, universal and so a boundary (Example 10),
+    /// into its parameter's type, universal and so a boundary,
     /// and the body's result type enters the use's result. From another group
-    /// it makes an instance of the group's C (l.215): of all of it where this
+    /// it makes an instance of the group's C: of all of it where this
     /// group records every position, and otherwise of the parts of C the
     /// positions it records lie in (`Instance::part`).
     pub(crate) fn call(
@@ -340,7 +339,7 @@ impl State {
         let from = Rc::clone(
             solved
                 .get(&function.group)
-                .unwrap_or_else(|| panic!("{} is solved first (l.213)", function.group)),
+                .unwrap_or_else(|| panic!("{} is solved first", function.group)),
         );
         let at = Name::new(&format!("{}@{item}", function.name));
         let positions: Vec<(ClassId, bool)> = function
@@ -368,9 +367,9 @@ impl State {
     }
 
     /// Each value passing into a type, as `pairs` gives them: an argument
-    /// into its parameter's type, and the result type into the result
-    /// (l.192–197), each a meeting where the type passed into is an unknown
-    /// and a boundary otherwise (l.219).
+    /// into its parameter's type, and the result type into the result,
+    /// each a meeting where the type passed into is an unknown
+    /// and a boundary otherwise.
     pub(crate) fn record_call(
         &mut self,
         pairs: &[(ClassId, ClassId)],
@@ -394,7 +393,7 @@ impl State {
         recorded
     }
 
-    /// A class made anew that holds nothing, an unknown of the group (l.211).
+    /// A class made anew that holds nothing, an unknown of the group.
     pub(crate) fn fresh(&mut self, name: ClassName) -> ClassId {
         let class = self.arena.intern(name);
         self.classes.grow(&self.arena);
@@ -423,7 +422,7 @@ impl State {
     /// The classes of a type a declaration writes: the type named `name`, its
     /// parts named after it, and its variables those of `vars`, each made
     /// where first met and named by `var_name`. A variable is an unknown, and
-    /// a written term is decided (l.211). The relations it records are kept in
+    /// a written term is decided. The relations it records are kept in
     /// `recorded`.
     pub(crate) fn instantiate<F>(
         &mut self,

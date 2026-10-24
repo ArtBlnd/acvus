@@ -1,11 +1,10 @@
-//@ spec: design/15-istar.md, what the check presupposes
 // let mut x = make_a();    // make_a() -> A, make_b() -> B; a cast A → B, a conversion B → A
 // let put = |w| x = make_b();
 // let f = if c { put } else { choose(x, put) };   // choose(A, T) -> T, choose(B, T) -> T
 // f(x);
-// choose gives back the function value its T takes in, put's, and makes none
-// (l.184). choose and f(x) break their dependencies on each other (l.263).
-// The captured environment is the enclosing group's (l.186), so make_b() ≤ X is
+// choose gives back the function value its T takes in, put's, and makes none.
+// choose and f(x) break their dependencies on each other.
+// The captured environment is the enclosing group's, so make_b() ≤ X is
 // recorded where it is written, and no read leaves it out with the call: choose
 // reads B, and f(x) calls put's lambda.
 extern type A;

@@ -1,11 +1,6 @@
 # 05 Coercion and rank
 
-Rests on the spec's l.93–109 (coercion, a part's coercion `⇝ₚ`, and rank), l.74
-(no cast, reborrow or conversion at a part), l.280 (the steps of `≤`), l.261 and
-l.333 (the value a use reads, and the positions that decide nothing in it), and
-l.127, l.162–163 and l.288 (a LitVar, what it admits and its default), with types §3
-(a structured value coerces by its kind's shape, part by part) and §7 (a
-conversion, exactly one). The code is `src/lit.rs`, `src/read.rs` and
+The code is `src/lit.rs`, `src/read.rs` and
 `src/coerce.rs`, and `src/coerce/tests.rs` exercises their contract.
 
 ## Meaning
@@ -24,60 +19,53 @@ within its family.
 
 ## Not owned here
 
-- Which value a use reads, and where narrowing compares ranks, are notes 08 and
-  11's. Narrowing takes no conversion (l.333), so `coerce_read` takes none.
-- When a coercion is checked, and where its functions are called (l.278, l.280),
-  are note 11's.
-- The fields an object gains along `≤` are written before the value is used whole
-  (l.280, ownership §4); typeck records them as added and changes none.
+- Narrowing takes no conversion, so `coerce_read` takes none.
+- The fields an object gains along `≤` are written before the value is used whole;
+  typeck records them as added and changes none.
 
 ## Readings
 
 1. **One structural stage changes members and parts at once.** The object and enum
    rows change members and keep parts, and the part row keeps members and changes
-   parts (l.101–103), and `structural?` takes at most one of them (l.109). Read so,
-   `{x: E{V(!)}, y: u8} ⇝ {x: E{V(!), W(!)}}` reaches by no composition. Types §3
-   coerces a structured value by its kind's shape and part by part at once, and
-   l.109 counts the stages of the parts' coercions inside the structural stage. So
-   the structural stage at one constructor drops the fields the target does not
+   parts, and `structural?` takes at most one of them. Read so,
+   `{x: E{V(!)}, y: u8} ⇝ {x: E{V(!), W(!)}}` reaches by no composition.
+   The structural stage at one constructor drops the fields the target does not
    name, adds the variants it names besides, and changes each part both have by
-   its `⇝ₚ` (`holes.md`, T3).
-2. **A part's coercion is `⇝ₚ`.** l.103's row changes each part by `⇝ₚ`, which
-   l.109 composes of the object, enum and part rows and `! ⇝ U` alone. So
+   its `⇝ₚ`.
+2. **A part's coercion is `⇝ₚ`.**
    `Option⟨!⟩ ⇝ Option⟨u8⟩`, which `None` passed to a declaration needs, reaches,
    and `Option⟨u16⟩ ⇝ Option⟨u8⟩` does not, though a conversion `u16 → u8` is
    declared.
-3. **`!` and undecided positions take no stage.** `!` decides nothing (l.333), so
+3. **`!` and undecided positions take no stage.** `!` decides nothing, so
    `! ⇝ U` adds nothing to a rank, and a shape takes the structural stage only
    where a member changes or a part's coercion takes a stage. `Option⟨!⟩ ⇝
-   Option⟨u8⟩` has rank `empty`. A declared conversion has no rank (l.109).
+   Option⟨u8⟩` has rank `empty`. A declared conversion has no rank.
 4. **Comparing ranks.** By the highest stage, then the number of casts, then the
    lower stages from the highest down, where taking a stage ranks above not taking
    it. A part takes the structural stage alone, so a structural stage with a cast
    below it is a whole value's: a cast `A → E{V(!)}` then widening to `E{V(!),
    W(!)}`.
 5. **No row wraps a value in an `Error`.** An `Error`, which `?` alone makes, is
-   written only where a value leaves the program (l.91; note 02, reading 2), and
-   `?` wraps by a split (l.278, l.337), so the Coercion table has no wrap row and
-   no value of another type reaches an `Error` by a coercion (`holes.md`, H2);
+   written only where a value leaves the program, and
+   `?` wraps by a split, so the Coercion table has no wrap row and
+   no value of another type reaches an `Error` by a coercion;
    an `Error` reaches one by the enum row, its variants added.
-6. **The steps of `≤`.** `S ≤ T` joins to `T`, so the steps are those of the join
-   (l.86–89): a reborrow where an exclusive reference meets a shared one, the casts
+6. **The steps of `≤`.** `S ≤ T` joins to `T`, so the steps are those of the join:
+   a reborrow where an exclusive reference meets a shared one, the casts
    up to `T`'s node, then members gained, fields unchanged and variants added, and
-   each part of a structural type along `≤ₚ`, by the same rows and no cast. Over
-   the universe of note 04, `along_le` reaches exactly where `le` holds.
+   each part of a structural type along `≤ₚ`, by the same rows and no cast.
 7. **A LitVar's position.** A LitVar reaches a LitVar of its family, and a scalar
-   of its family that holds every value it holds (l.162), and nothing else. An
+   of its family that holds every value it holds, and nothing else. An
    integer literal of the model is unsigned: a negative literal, which is a
-   literal once `core::neg` is gone (준량, 2026-10-22), is not encoded.
+   literal once `core::neg` is gone, is not encoded.
 8. **A candidate's type variables decide nothing.** A candidate's type parameters
-   are unknowns made anew at the use (l.320), into which only the use itself
-   records, and the value the use reads leaves out the relations it records itself
-   (l.261). So a candidate's type, read, is undecided at each of its variables.
+   are unknowns made anew at the use, into which only the use itself
+   records, and the value the use reads leaves out the relations it records itself.
+   So a candidate's type, read, is undecided at each of its variables.
 
 ## Left open for change
 
 - `HasTerm` is what closed types and values a use reads share, so matching a
   signature, stepping up the tree and raising take either.
 - A coercion keeps the casts, the members dropped and added, and each part's
-  coercion, so the outcome can name every function a check calls (I3).
+  coercion, so the outcome can name every function a check calls.

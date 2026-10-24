@@ -26,7 +26,7 @@ fn extern_ty(text: &str, args: Vec<Ty>, identity: Option<Ty>) -> Ty {
     })
 }
 
-/// One type, with what the shape table and l.68 give it, and its notation.
+/// One type, with what the shape table gives it, and its notation.
 struct Shape {
     ty: Ty,
     constructor: Constructor,

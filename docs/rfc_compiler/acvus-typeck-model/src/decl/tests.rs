@@ -282,7 +282,7 @@ fn a_cast_writes_its_node_generally_and_its_result_by_its_parameter() {
     );
     assert!(
         matches!(narrow.finish(), Err(TreeError::NarrowerThanNode(id)) if id == bytes),
-        "Vec<u8> is not Vec's every type (l.78; holes.md, H1)"
+        "Vec<u8> is not Vec's every type"
     );
     let mut unbound = new_builder();
     let boxed = cast(

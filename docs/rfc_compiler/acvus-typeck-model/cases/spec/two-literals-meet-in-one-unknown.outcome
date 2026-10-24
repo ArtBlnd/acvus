@@ -1,0 +1,16 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value 1: i32
+  value 2: i32
+  value K: i32
+  decision `^`: xor#3
+  partition {1, 2}
+  check `1 <= ^.Common(0)`: Ok(Identity)
+  check `1 ~> ^.Param(0)`: Ok(Identity)
+  check `2 <= ^.Common(0)`: Ok(Identity)
+  check `2 ~> ^.Param(1)`: Ok(Identity)
+  check `^.Chosen(0) <= ^.Common(0)`: Ok(Identity)
+  check `^.Common(0) <= K`: Ok(Identity)
+  I* of a final state: []

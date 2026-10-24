@@ -1,0 +1,21 @@
+// let mut v = Vec::new();  // new() -> Vec<T>
+// look(&mut v);            // look(&Vec<u8>)
+// The constructors &mut and & differ, and the split links the targets by its
+// one rule: Vec<u8> is a type the declaration writes, so V ⇝ Vec<u8>,
+// whose split records T ⇝ u8 for new's T. Nothing enters T, which is filled
+// with u8, so V = Vec<u8>.
+extern type Vec<T>;
+extern fn new<T>() -> Vec<T>;
+extern fn look(&Vec<u8>);
+
+let V;
+let `new()`;
+let `&mut v`;
+let `look(..)`;
+`new()` = new() @ new;
+V = `new()`;
+`&mut v` = &mut V @ lend;
+`look(..)` = look(`&mut v`) @ look;
+
+must pass;
+assert V: Vec<u8>;

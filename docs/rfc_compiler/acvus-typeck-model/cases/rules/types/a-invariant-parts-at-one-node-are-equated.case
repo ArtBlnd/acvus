@@ -1,10 +1,7 @@
-//@ spec: l.74, l.86, l.103
-// Vec's argument and a reference's target are invariant (l.74), and the
-// relation between invariant parts is an equation. l.86 needs parts that are
-// no structural type's equal, and A = C fails, so Vec<A> and Vec<C> have no
-// join. The part row of l.103 changes the parts of a structural type, and Vec
-// is none, so Vec<A> does not coerce to Vec<B>; after the reborrow, Option<A>
-// sits behind a reference, whose target is invariant, and A = B fails.
+// Vec's argument and a reference's target are invariant, and the
+// relation between invariant parts is an equation. A = C fails, so Vec<A> and
+// Vec<C> have no join. After the reborrow, Option<A> sits behind a reference,
+// whose target is invariant, and A = B fails.
 extern type A;
 extern type B;
 extern type C;

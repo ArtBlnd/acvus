@@ -60,8 +60,7 @@ pub fn result(ok: Ty, err: Ty) -> Ty {
     ty(Term::Result { ok, err })
 }
 
-/// The `Error` whose variants are the elements, each named after its type
-/// (l.337).
+/// The `Error` whose variants are the elements, each named after its type.
 pub fn error(elements: &[Ty]) -> Ty {
     let variants = elements
         .iter()

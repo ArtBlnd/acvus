@@ -1,7 +1,6 @@
-//@ spec: l.333
 // f(0)                     // f(u8), f(u16)
 // The LitVar decides nothing within its family, so both remain only because of
-// it; taken as its default i32, it reaches neither (l.333).
+// it; taken as its default i32, it reaches neither.
 extern fn f(u8);
 extern fn f(u16);
 

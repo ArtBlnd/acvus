@@ -1,5 +1,5 @@
 //! The positions a use, a lend, a projection or a binding lies at, and what
-//! it reads (l.238 (b), l.241–244, l.261).
+//! it reads.
 
 use std::collections::BTreeSet;
 
@@ -12,7 +12,7 @@ use crate::ty::{Name, Term};
 use super::common::CommonPart;
 use super::{Common, NodeKind, NodeState, Read, Reads};
 
-/// What a use has yet to record once decided (l.238 (b), l.246).
+/// What a use has yet to record once decided.
 pub(crate) struct Left {
     /// The arguments it holds that its common part does not hold whole, by
     /// index with their classes.
@@ -23,7 +23,7 @@ pub(crate) struct Left {
 }
 
 impl State {
-    /// What a use has yet to record once decided (l.238 (b), l.246): the
+    /// What a use has yet to record once decided: the
     /// arguments it holds, which its common part does not hold whole, by
     /// index with their classes, and the classes its result enters, each with
     /// the type each candidate writes there: the result, where it holds it,
@@ -82,12 +82,11 @@ impl State {
     }
 
     /// The classes at a node's positions, and those within the depth its
-    /// candidates reach, where it has relations yet to record (l.238 (b)):
+    /// candidates reach, where it has relations yet to record:
     /// for a use, the arguments and the classes its result enters that its
-    /// common part does not hold (l.246), and for `e?`, its exit's value too
-    /// (l.337); for a call of a function value, the parameters and the result
-    /// type in the environment of each lambda its callee's Values name
-    /// (`design/17-environment.md`, row 3).
+    /// common part does not hold, and for `e?`, its exit's value too;
+    /// for a call of a function value, the parameters and the result
+    /// type in the environment of each lambda its callee's Values name.
     pub(crate) fn positions(&self, node: &NodeState) -> BTreeSet<ClassId> {
         match &node.kind {
             NodeKind::Use {
@@ -148,14 +147,14 @@ impl State {
     }
 
     /// The parameter types of the lambda, and then its result type, each the
-    /// class here where its environment holds it (`design/17-environment.md`,
-    /// row 3), none where its binding group does: for a lambda an instance
-    /// made anew, that instance's copies (l.215).
+    /// class here where its environment holds it, none where its binding group does:
+    /// for a lambda an instance
+    /// made anew, that instance's copies.
     pub(crate) fn environment_of(&self, lambda: &Name) -> Vec<Option<ClassId>> {
         self.environment_in(lambda).unwrap_or_else(|| {
             panic!(
                 "{lambda}'s value reaches a group its environment is not in, \
-                 which is not yet encoded (design/17-environment.md, Open)"
+                 which is not yet encoded"
             )
         })
     }
@@ -180,7 +179,7 @@ impl State {
             .collect()
     }
 
-    /// The lambda of the program a lambda here is, or copies (l.215).
+    /// The lambda of the program a lambda here is, or copies.
     pub(crate) fn lambda_function(&self, lambda: &Name) -> &crate::program::Function {
         let of = self.lambdas.get(lambda).map_or(lambda, |copy| &copy.of);
         self.functions
@@ -205,10 +204,10 @@ impl State {
     }
 
     /// The classes at a node's positions into which all the node records is a
-    /// boundary out of them (l.238 (b)): for a use, an argument each candidate
+    /// boundary out of them: for a use, an argument each candidate
     /// writes a type for, and each class within the depth a candidate writes
     /// terms there, a split relating them by boundaries toward the types it
-    /// writes (l.278), unless the class lies elsewhere at the use too, at its
+    /// writes, unless the class lies elsewhere at the use too, at its
     /// result, its exit, within the depth of its result, or at an argument a
     /// candidate writes a variable for. No other node records only so.
     pub(crate) fn passed_out_only(&self, node: &NodeState) -> BTreeSet<ClassId> {
@@ -255,7 +254,7 @@ impl State {
     /// Where `ty` writes a function type at a class holding a function value,
     /// at any depth it writes terms, the parameter and the result types in the
     /// environment of each lambda its Values names, as the parts at the function
-    /// type's parameters and result (l.238 (b)): the parameters, into which the
+    /// type's parameters and result: the parameters, into which the
     /// boundary's split records, and the results, which pass out of it.
     pub(super) fn environment_within(
         &self,
@@ -308,10 +307,10 @@ impl State {
     }
 
     /// The classes at the positions a node reads: for a use, those where its
-    /// candidates differ and those within the depth its candidates reach there
-    /// (`design/08-node.md`, reading 11); for a lend, its place; for a
+    /// candidates differ and those within the depth its candidates reach there;
+    /// for a lend, its place; for a
     /// projection other than a Deref, its operand; for a binding, its position.
-    /// A Deref reads nothing (reading 6).
+    /// A Deref reads nothing.
     pub(crate) fn read_positions(&self, kind: &NodeKind) -> Vec<ClassId> {
         match kind {
             NodeKind::Use {
@@ -358,7 +357,7 @@ impl State {
 
     /// The class whose function value a call of `callee` calls: the target of
     /// the reference `callee` holds, as a projection is taken of a reference's
-    /// target (l.196, l.298), and `callee` itself otherwise.
+    /// target, and `callee` itself otherwise.
     pub(crate) fn called(&self, callee: ClassId) -> ClassId {
         let root = self.root(callee);
         match &self.classes.held(root).kind {
@@ -368,8 +367,7 @@ impl State {
     }
 
     /// The lambdas the Values of the class's function value names: those of
-    /// the function values that meet in it, by equations or lower bounds
-    /// (l.173, l.181).
+    /// the function values that meet in it, by equations or lower bounds.
     pub(crate) fn values_of(&self, id: ClassId) -> BTreeSet<Name> {
         let mut seen = BTreeSet::from([self.root(id)]);
         let mut work = vec![self.root(id)];
@@ -386,7 +384,7 @@ impl State {
     }
 
     /// Whether the node is a projection other than a Deref, whose relations a
-    /// read of whether a class is a reference leaves out (l.242, l.261, l.298).
+    /// read of whether a class is a reference leaves out.
     pub(crate) fn is_inner_projection(&self, name: &Name) -> bool {
         matches!(
             &self.nodes[name].kind,
@@ -395,7 +393,7 @@ impl State {
     }
 
     /// Whether the node's common part recorded whether the class is a
-    /// reference (l.246).
+    /// reference.
     pub(super) fn recorded_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
         self.nodes[name]
@@ -404,7 +402,7 @@ impl State {
             .any(|&recorded| self.root(recorded) == root)
     }
 
-    /// What a node reads, and on which it depends (l.241–242, l.261).
+    /// What a node reads, and on which it depends.
     pub(crate) fn reads(&self, name: &Name) -> Reads {
         let kind = &self.nodes[name].kind;
         Reads {
@@ -415,11 +413,11 @@ impl State {
 
     /// Whether the relations the node `recorder` records may change what a
     /// node reading `read` at `position` reads at `class`, a class at the
-    /// recorder's position or reached from one (l.238 (b), l.244). For a
-    /// value, every such node (`holes.md`, H7); for whether a class is a
+    /// recorder's position or reached from one. For a
+    /// value, every such node; for whether a class is a
     /// reference, a node that may decide it, other than a projection of a
     /// field, a component, an index or a variant whose operand is the class
-    /// read (l.242), whose kind on it says nothing of whether it is one.
+    /// read, whose kind on it says nothing of whether it is one.
     pub(crate) fn records_into(
         &self,
         recorder: &Name,
@@ -437,7 +435,7 @@ impl State {
     }
 
     /// Whether the node is a projection of a field, a component, an index or
-    /// a variant whose operand is the class of `class` (l.242, l.261).
+    /// a variant whose operand is the class of `class`.
     pub(crate) fn projects_from(&self, name: &Name, class: ClassId) -> bool {
         matches!(
             &self.nodes[name].kind,
@@ -447,14 +445,14 @@ impl State {
     }
 
     /// Whether what the node records may yet decide whether the class is a
-    /// reference, which is decided by its lower bounds and equations (l.298):
+    /// reference, which is decided by its lower bounds and equations:
     /// for a use, where some candidate would record one into it and its
-    /// common part has not recorded whether it is one (l.242, l.246); for a
+    /// common part has not recorded whether it is one; for a
     /// lend, a binding and a call of a function value, where the class is the
     /// result it records into: a lend's common part records that its result
     /// is a reference, but not its mutability. A lend records into its place, and a binding
     /// into its position, only that it is a reference to a class, and only
-    /// where it already reads as one (l.296; `design/08-node.md`, reading 12).
+    /// where it already reads as one.
     pub(super) fn may_decide_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
         match &self.nodes[name].kind {

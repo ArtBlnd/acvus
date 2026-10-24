@@ -1,5 +1,5 @@
-//! Every order of solving a program, up to a budget of states (I2, I3), each
-//! final state handed on with the order that reached it.
+//! Every order of solving a program, up to a budget of states, each final
+//! state handed on with the order that reached it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -21,10 +21,10 @@ pub struct Exploration {
     pub complete: bool,
 }
 
-/// An order of solving (I2): the steps that took each binding group other
-/// than the entry to its fixpoint, in the order the groups are solved
-/// (l.213), then the entry's steps to each of its fixpoints, a fallback that
-/// fell a class back taken between one fixpoint and the next steps (l.288).
+/// An order of solving: the steps that took each binding group other
+/// than the entry to its fixpoint, in the order the groups are solved,
+/// then the entry's steps to each of its fixpoints, a fallback that
+/// fell a class back taken between one fixpoint and the next steps.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Order {
     pub groups: Vec<(Name, Vec<Step>)>,
@@ -61,8 +61,8 @@ impl Default for Order {
 }
 
 /// A final state of an order of solving: the entry's, once nothing is left to
-/// fall back (l.288), with each group solved before it at its fixpoint
-/// (l.213), and the order that reached it.
+/// fall back, with each group solved before it at its fixpoint,
+/// and the order that reached it.
 pub struct Final<'a> {
     pub entry: &'a State,
     pub groups: &'a BTreeMap<Name, Rc<State>>,
@@ -70,15 +70,15 @@ pub struct Final<'a> {
 }
 
 /// Solves each binding group other than the entry to its fixpoint in every
-/// order, before the groups that make instances of it (l.213), then the entry
-/// in every order, falling back wherever no step is left (l.288). A state
+/// order, before the groups that make instances of it, then the entry
+/// in every order, falling back wherever no step is left. A state
 /// reached twice is explored once, along the order that reached it first.
 pub fn explore(program: &Program, budget: usize) -> Exploration {
     explore_with(program, budget, |_| {})
 }
 
 /// As `explore`, handing each distinct final state to `visit` before it is
-/// reduced to an outcome (`design/13-exploration.md`, Checks).
+/// reduced to an outcome.
 pub fn explore_with<F>(program: &Program, budget: usize, mut visit: F) -> Exploration
 where
     F: FnMut(&Final<'_>),
@@ -161,7 +161,7 @@ where
 }
 
 /// The distinct states at which a binding group's solving reaches its
-/// fixpoint, inside which there is no fallback (l.286), each with the steps
+/// fixpoint, inside which there is no fallback, each with the steps
 /// that first reached it, or none where the budget runs out.
 fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<(State, Vec<Step>)>> {
     let mut seen = BTreeSet::new();
@@ -197,8 +197,7 @@ fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<(Sta
 /// The outcomes of distinct typings `orders` orders of solving reach (as
 /// `Exploration::outcomes`), each taking at
 /// every state the step its own sequence picks: the first step always, the
-/// last always, then sequences a fixed generator gives. It checks I2 on a
-/// sample, for programs with too many states to explore.
+/// last always, then sequences a fixed generator gives.
 pub fn sample(program: &Program, orders: u64) -> Vec<Outcome> {
     sample_with(program, orders, |_| {})
 }

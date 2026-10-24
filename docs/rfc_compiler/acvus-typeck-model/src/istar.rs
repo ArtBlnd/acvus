@@ -1,5 +1,5 @@
 //! I\*: each decision against the one its node makes reading what is recorded
-//! once solving ends (`design/15-istar.md`).
+//! once solving ends.
 //!
 //! The dependency here is computed on its own, from what each node records at
 //! the end, never through `State::graph`, which is the means under test.
@@ -41,7 +41,7 @@ pub struct Violation {
 }
 
 /// Every decided node of a final state, decided again in each context its
-/// decision holds for (`design/15-istar.md`, Domain).
+/// decision holds for.
 pub fn check(program: &Program, end: &Final<'_>) -> Vec<Violation> {
     let accepted = end.entry.outcome_with(end.groups).accepted;
     let mut violations = Vec::new();
@@ -90,8 +90,7 @@ fn view(state: &State, groups: &BTreeMap<Name, Rc<State>>) -> State {
 
 fn add_decided(here: &mut State, made: &Made, from: &State) {
     let mut copy = Instance::resume(made, from);
-    // An instance of parts of C has the decided nodes in those parts
-    // (l.186, l.215).
+    // An instance of parts of C has the decided nodes in those parts.
     let components = made.parts.as_ref().map(|_| from.components());
     for (name, node) in &from.nodes {
         let Some(decision) = &node.decision else {
@@ -196,7 +195,7 @@ impl Records {
     }
 }
 
-/// The dependency at the end (`design/15-istar.md`, Definitions): for each
+/// The dependency at the end: for each
 /// node, the nodes it depends on.
 struct EndGraph {
     on: BTreeMap<Name, BTreeSet<Name>>,
@@ -240,8 +239,8 @@ impl EndGraph {
 }
 
 /// The nodes `name` depends on at the end: those that record into a class
-/// reached from the classes at the positions it reads (l.241, l.244), as
-/// what it reads takes them (l.242), and a binding's path (l.306).
+/// reached from the classes at the positions it reads, as
+/// what it reads takes them, and a binding's path.
 fn depends_on(
     view: &State,
     reach: &Reach,
@@ -269,14 +268,13 @@ fn depends_on(
 }
 
 /// The roots of the classes the node records into at the end, as a read of
-/// `read` takes them (`design/15-istar.md`, Definitions). A use records into
-/// what its candidate would record into by l.278 (note 08, reading 13), its
+/// `read` takes them. A use records into
+/// what its candidate would record into, its
 /// candidates' where it is not decided: the classes it makes anew are its own,
 /// and no other node reads them. Another decided node
 /// records into what its own relations record into, those of the instances it
 /// made among them; one not decided, into the classes at its positions. A
-/// read of whether a class is a reference leaves out what cannot decide it
-/// (l.242; note 08, reading 12).
+/// read of whether a class is a reference leaves out what cannot decide it.
 fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
     let node = &view.nodes[name];
     let classes: BTreeSet<ClassId> = match (&node.kind, &node.decision) {
@@ -336,7 +334,7 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
 /// The classes a relation records into: the upper side of a lower bound or a
 /// part lower bound, the type passed into at a boundary, both sides of an
 /// equation, and the class a kind, a fact, a LitVar, a common part's record
-/// of whether it is a reference (l.246) or a lambda is given to.
+/// of whether it is a reference or a lambda is given to.
 fn into(relation: &Relation) -> Vec<ClassId> {
     match relation {
         Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => {
@@ -352,10 +350,10 @@ fn into(relation: &Relation) -> Vec<ClassId> {
     }
 }
 
-/// Reach at the end (`design/15-istar.md`, Definitions): from a class to each
+/// Reach at the end: from a class to each
 /// class it has as a lower bound or a part lower bound, along every one
-/// recorded, a split's among them. Every class has taken its constructor by the end, so the rows
-/// of l.238 (a) and l.239 hold of none.
+/// recorded, a split's among them. Every class has taken its constructor by
+/// the end.
 struct Reach {
     edges: BTreeMap<ClassId, BTreeSet<ClassId>>,
 }

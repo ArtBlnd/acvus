@@ -1,5 +1,5 @@
 //! Instances: a binding group's C made anew at a use, and recorded in the use's
-//! binding group (l.188–215).
+//! binding group.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -13,7 +13,7 @@ use crate::ty::{Name, Term, Ty};
 
 /// An instance a state made: of the C of the binding group `group`, named `at`
 /// and made by `by`, with each root of that group's state it met and that
-/// root's class in the state that made it (l.215).
+/// root's class in the state that made it.
 #[derive(Clone, Debug)]
 pub struct Made {
     pub at: Name,
@@ -25,14 +25,14 @@ pub struct Made {
     pub parts: Option<BTreeSet<usize>>,
 }
 
-/// C's classes, each in its part (l.215): two of C's classes lie in one part
+/// C's classes, each in its part: two of C's classes lie in one part
 /// where one of C's relations is on both, a node left undecided names both, a
 /// binding's node and the projections on its path name them, one is a part of
 /// the other's kind, or one holds a function value whose Values name a lambda
 /// placed in the group and the other lies in that lambda's environment, which
 /// an instance makes anew with it. A part is what an instance makes anew
 /// together, and a use of the group's function ties the positions whose types
-/// lie in one part (l.186).
+/// lie in one part.
 pub(crate) struct Components {
     /// Each root of C, with its part.
     parts: BTreeMap<ClassId, usize>,
@@ -54,11 +54,10 @@ impl Components {
 }
 
 /// C of the binding group `from` reached its fixpoint in, being made anew at
-/// the use `at` (l.212, l.215).
+/// the use `at`.
 pub(crate) struct Instance<'a> {
     at: Rc<Name>,
-    /// What made the instance, which every relation it records is recorded by
-    /// (l.261).
+    /// What made the instance, which every relation it records is recorded by.
     by: Recorder,
     from: &'a State,
     /// The roots of C's classes in `from` it makes anew: those left unsolved,
@@ -76,11 +75,11 @@ pub(crate) struct Instance<'a> {
 }
 
 impl State {
-    /// The roots of the classes C holds at this group's fixpoint (l.212):
+    /// The roots of the classes C holds at this group's fixpoint:
     /// those left unsolved, or whose value is not closed, the universals,
     /// those whose value carries an identity this group's body made, and
     /// those whose function value names a lambda whose environment is here,
-    /// each of which each instance makes anew (l.215, l.347).
+    /// each of which each instance makes anew.
     pub(crate) fn c(&self) -> BTreeSet<ClassId> {
         let made = self.made_identities();
         self.classes
@@ -98,7 +97,7 @@ impl State {
             .collect()
     }
 
-    /// C's classes, each in its part (`Components`, l.215).
+    /// C's classes, each in its part (`Components`).
     pub(crate) fn components(&self) -> Components {
         let c = self.c();
         let mut edges: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
@@ -162,7 +161,7 @@ impl State {
     }
 
     /// Whether the lambda's environment holds a class of this group, which
-    /// an instance of it copies with the lambda (l.215).
+    /// an instance of it copies with the lambda.
     pub(crate) fn environment_here(&self, lambda: &Name) -> bool {
         self.environment_in(lambda).is_some_and(|environment| {
             environment
@@ -173,8 +172,7 @@ impl State {
     }
 
     /// The identities this state's body made, at calls of a declaration whose
-    /// result carries one no parameter does, or anew at the instances it made
-    /// (l.347).
+    /// result carries one no parameter does, or anew at the instances it made.
     pub(crate) fn made_identities(&self) -> BTreeSet<Name> {
         self.log
             .iter()
@@ -225,7 +223,7 @@ impl<'a> Instance<'a> {
     }
 
     /// An instance of the parts of C the positions a use records here lie in,
-    /// the use's other constraints recorded by another group (l.186, l.215).
+    /// the use's other constraints recorded by another group.
     /// `positions` are the classes of `from` at the function's parameters and
     /// result, each with whether the use records it here. The cut groups the
     /// use's positions by these parts, so no part holds positions of both.
@@ -248,7 +246,7 @@ impl<'a> Instance<'a> {
         let (here, elsewhere) = (parts_at(true), parts_at(false));
         assert!(
             here.is_disjoint(&elsewhere),
-            "{at}: the cut groups a use's positions by the parts of C (l.186)"
+            "{at}: the cut groups a use's positions by the parts of C"
         );
         let placed = |part: Option<usize>| {
             part.is_some_and(|part| here.contains(&part) || elsewhere.contains(&part))
@@ -257,7 +255,7 @@ impl<'a> Instance<'a> {
         if let Some(root) = c.iter().find(|&&root| !placed(components.of(from, root))) {
             panic!(
                 "{at}: {} lies in a part of C at no position of a use whose constraints two \
-                 groups record, which no rule places (l.186, l.215)",
+                 groups record, which no rule places",
                 from.class_name(*root)
             );
         }
@@ -270,7 +268,7 @@ impl<'a> Instance<'a> {
             if !placed(part) {
                 panic!(
                     "{at}: the node {name} left in C lies at no position of a use whose \
-                     constraints two groups record, which no rule places (l.186, l.215)"
+                     constraints two groups record, which no rule places"
                 );
             }
             if part.is_some_and(|part| here.contains(&part)) {
@@ -365,7 +363,7 @@ impl<'a> Instance<'a> {
                 Recorder::Node(self.node(node))
             }
             // A common part recorded where the node is not, at positions
-            // where every candidate writes one closed type (l.246), is as
+            // where every candidate writes one closed type, is as
             // that of a node left undecided.
             Recorder::Common(node)
                 if self
@@ -389,7 +387,7 @@ impl<'a> Instance<'a> {
     }
 
     /// The copy here of a lambda placed in the group instantiated, its
-    /// environment this instance's copies (l.215).
+    /// environment this instance's copies.
     fn lambda(&mut self, here: &mut State, lambda: &Name) -> Name {
         let copy = copy_name(&self.at, lambda);
         if !here.lambdas.contains_key(&copy) {
@@ -416,7 +414,7 @@ impl<'a> Instance<'a> {
 
     /// The class here of the class `id` of `from`: for a class of C, one made
     /// anew, holding the kind `from` solved it to; for another, its closed
-    /// type, written (`design/09-group.md`, reading 3).
+    /// type, written.
     pub(crate) fn class(&mut self, here: &mut State, id: ClassId) -> ClassId {
         let root = self.from.root(id);
         if let Some(&made) = self.made.get(&root) {
@@ -479,10 +477,10 @@ impl<'a> Instance<'a> {
     }
 
     /// Records here every relation of `from` on a class of C, makes anew each
-    /// node `from` left undecided (l.212), and keeps the instance here.
+    /// node `from` left undecided, and keeps the instance here.
     /// A relation `from` split is split here too: what its split recorded is
     /// among the relations copied, and no class of the copy takes a
-    /// constructor here that it did not hold in `from` (l.215, l.278).
+    /// constructor here that it did not hold in `from`.
     /// Returns what the instance recorded here, itself the instance made.
     pub(crate) fn record_rest(&mut self, here: &mut State) -> Recording {
         let from = self.from;

@@ -1,4 +1,4 @@
-//! Overload resolution (l.318–333): a use's candidates, the positions where
+//! Overload resolution: a use's candidates, the positions where
 //! they differ, the narrowing, and what a decided candidate's signature
 //! records.
 
@@ -16,8 +16,7 @@ use crate::ty::{HasTerm, Name, Term};
 
 use super::{Decision, LitDefaults};
 
-/// The candidates a use's read leaves at one position where they differ
-/// (l.326–333).
+/// The candidates a use's read leaves at one position where they differ.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Narrowed {
     /// The argument's index, the result's being the number of arguments.
@@ -30,7 +29,7 @@ pub struct Narrowed {
     pub remaining: Vec<DeclId>,
 }
 
-/// How a use's candidates are narrowed by the value it reads (l.324–333).
+/// How a use's candidates are narrowed by the value it reads.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Narrowing {
     pub candidates: Vec<DeclId>,
@@ -44,13 +43,13 @@ pub struct Narrowing {
     /// where several candidates remained and a value read holds a LitVar.
     pub retry: Option<Vec<Narrowed>>,
     /// The candidate it is decided as, or `!` where an argument reads as `!`;
-    /// none where not exactly one remains (l.333).
+    /// none where not exactly one remains.
     pub decision: Option<Decision>,
 }
 
 impl State {
     /// The candidates of a use: the declarations its name reaches whose
-    /// parameters are as many as its arguments (l.320).
+    /// parameters are as many as its arguments.
     pub(crate) fn candidates(&self, callee: &Name, arity: usize) -> Vec<&Decl> {
         self.decls
             .candidates(callee)
@@ -67,8 +66,7 @@ impl State {
 
     /// The class a use's node holds at the position `i` where its candidates
     /// differ, by argument index with the result last: a position where they
-    /// differ is no closed type of their common part, so the node holds it
-    /// (l.186, l.246).
+    /// differ is no closed type of their common part, so the node holds it.
     pub(crate) fn differing_class(
         args: &[Option<ClassId>],
         result: Option<ClassId>,
@@ -81,11 +79,11 @@ impl State {
         .expect("a use's node holds the positions where its candidates differ")
     }
 
-    /// The positions where a use's candidates differ, which it reads (l.261),
+    /// The positions where a use's candidates differ, which it reads,
     /// each candidate's type there taken as the narrowing takes it: a type
-    /// parameter is an unknown made anew at the use (l.320), which decides
+    /// parameter is an unknown made anew at the use, which decides
     /// nothing, so two candidates that differ there only in their type
-    /// parameters reach any value read there alike (l.333). None where it has
+    /// parameters reach any value read there alike. None where it has
     /// no candidate.
     pub(crate) fn differing(candidates: &[&Signature], args: usize) -> Vec<usize> {
         let Some(first) = candidates.first() else {
@@ -102,7 +100,7 @@ impl State {
     }
 
     /// An argument passing into its parameter: a meeting where the parameter
-    /// is an unknown, a boundary where a declaration writes it (reading 3).
+    /// is an unknown, a boundary where a declaration writes it.
     /// Returns the relations recorded.
     pub(super) fn record_argument<F>(
         &mut self,
@@ -133,8 +131,7 @@ impl State {
         recorded
     }
 
-    /// The signature's result type entering the use's result (note 07,
-    /// reading 2). Returns the relations recorded.
+    /// The signature's result type entering the use's result. Returns the relations recorded.
     pub(super) fn record_result<F>(
         &mut self,
         result: ClassId,
@@ -158,9 +155,9 @@ impl State {
     }
 
     /// Where the use's result class, in the value read, has no source but
-    /// the use's own common part (l.246) and passes into places, the values
+    /// the use's own common part and passes into places, the values
     /// of those places, each with whether the result meets it there: a lower
-    /// bound into an unknown, which its value joins (l.219, l.274), or a
+    /// bound into an unknown, which its value joins, or a
     /// boundary into a type written, which it coerces to. None where the
     /// result class has another source.
     fn meeting_places(
@@ -200,9 +197,9 @@ impl State {
     }
 
     /// The rank at which a candidate's result type passes into the places
-    /// the use's result passes into (l.326): into a meeting by the join's
+    /// the use's result passes into: into a meeting by the join's
     /// `≤`, the type reaching the join of itself and that place's other
-    /// sources, as a meeting takes every value entering it (l.219); into a
+    /// sources, as a meeting takes every value entering it; into a
     /// boundary by a coercion, as before. A position that decides nothing
     /// reaches every candidate. None where it reaches no place.
     fn rank_into_places(&self, written: &ReadValue, places: &[(bool, ReadValue)]) -> Option<Rank> {
@@ -221,7 +218,7 @@ impl State {
     }
 
     /// Narrows the candidates by the value the use reads at each position
-    /// where they differ, then by the result (l.326–333).
+    /// where they differ, then by the result.
     pub(super) fn narrow(
         &self,
         name: &Name,

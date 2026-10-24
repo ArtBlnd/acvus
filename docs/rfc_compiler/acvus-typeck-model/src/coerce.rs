@@ -1,5 +1,5 @@
 //! Coercion, the steps of the join's `≤` each taken by a row of the Coercion
-//! table, and rank (l.93–109, l.280).
+//! table, and rank.
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,7 +11,7 @@ use crate::ty::{HasTerm, Member, Mutability, Name, PartKey, Term, Ty};
 #[cfg(test)]
 mod tests;
 
-/// A stage of a composition, ordered `reborrow ≺ cast ≺ structural` (l.109).
+/// A stage of a composition, ordered `reborrow ≺ cast ≺ structural`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Stage {
     Reborrow,
@@ -20,7 +20,7 @@ pub enum Stage {
 }
 
 /// The stages a coercion takes, the structural stage counted down into the
-/// parts' coercions, which take no other (l.109), and its number of casts;
+/// parts' coercions, which take no other, and its number of casts;
 /// `empty` where it takes none.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Rank {
@@ -81,7 +81,7 @@ impl PartialOrd for Rank {
 pub enum Coercion {
     /// None is needed.
     Identity,
-    /// A position that decides nothing, which reaches every type (l.333).
+    /// A position that decides nothing, which reaches every type.
     Undecided,
     /// `reborrow? ; cast* ; structural?`, taking at least one.
     Composition {
@@ -101,7 +101,7 @@ pub enum Structural {
     /// At one constructor: the object fields the type passed into does not
     /// name are dropped, the members it names besides are added, and each part
     /// both have is changed by its coercion. Along `≤`, the fields an object
-    /// gains are added and not changed (l.280).
+    /// gains are added and not changed.
     Shape {
         dropped: BTreeSet<Member>,
         added: BTreeSet<Member>,
@@ -167,10 +167,10 @@ pub enum CoerceError {
     /// No row, and no composition of them, reaches the type, and no declared
     /// conversion goes there.
     None,
-    /// More than one composition reaches the type (`holes.md`, H2).
+    /// More than one composition reaches the type.
     Compositions(Vec<Coercion>),
     /// No composition reaches the type, and more than one declared conversion
-    /// goes there (types §7).
+    /// goes there.
     Conversions(Vec<DeclId>),
 }
 
@@ -179,7 +179,7 @@ pub enum CoerceError {
 enum Way {
     /// `⇝`, by the Coercion table, conversions included where `conversions`.
     Coercion { conversions: bool },
-    /// The join's `≤`, each step taken by a row of the Coercion table (l.280).
+    /// The join's `≤`, each step taken by a row of the Coercion table.
     Le,
 }
 
@@ -194,7 +194,7 @@ pub fn coerce(decls: &Decls, from: &Ty, to: &Ty) -> Result<Coercion, CoerceError
 }
 
 /// `from ⇝ to` between values a use reads, taking no conversion, as narrowing
-/// takes none (l.333).
+/// takes none.
 pub fn coerce_read(
     decls: &Decls,
     from: &ReadValue,
@@ -203,7 +203,7 @@ pub fn coerce_read(
     walk(decls, from, to, Way::Coercion { conversions: false })
 }
 
-/// How `from` is changed at each step of `from ≤ to` (l.280).
+/// How `from` is changed at each step of `from ≤ to`.
 pub fn along_le(decls: &Decls, from: &Ty, to: &Ty) -> Result<Coercion, CoerceError> {
     walk(
         decls,
@@ -266,8 +266,7 @@ fn walk(
 
 /// The result where no stage is taken: the two are equal, `from` is `!`, or
 /// a position decides nothing, being undecided on either side, or a LitVar,
-/// which reaches a LitVar of its family and a scalar admitting its values
-/// (l.162, l.333).
+/// which reaches a LitVar of its family and a scalar admitting its values.
 fn deciding_nothing(from: &ReadValue, to: &ReadValue) -> Option<Result<Coercion, CoerceError>> {
     if from == to {
         return Some(Ok(Coercion::Identity));
@@ -327,7 +326,7 @@ fn conversion(
 }
 
 /// The structural stage from `at` to `to`, where one reaches: the rows
-/// `shape` takes (l.109).
+/// `shape` takes.
 fn structural(at: &ReadValue, to: &ReadValue, way: Way) -> Option<Structural> {
     let (Some(a), Some(b)) = (at.decided(), to.decided()) else {
         return None;
@@ -335,7 +334,7 @@ fn structural(at: &ReadValue, to: &ReadValue, way: Way) -> Option<Structural> {
     shape(a, b, way)
 }
 
-/// A part's coercion `⇝ₚ`, or a part's steps along `≤` (l.89, l.109): the
+/// A part's coercion `⇝ₚ`, or a part's steps along `≤`: the
 /// rows `shape` takes and `! ⇝ U` alone, so no reborrow, cast or
 /// conversion. None where no row reaches, the only way `deciding_nothing`
 /// gives no result.

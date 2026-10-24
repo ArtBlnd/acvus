@@ -1,0 +1,14 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value X: none
+  value `takes(..)`: ()
+  value `|x| x`: Fn/1
+  value `λ result`: none
+  check `takes.Param(0).Param(0) <= |x| x ~> takes.Param(0)#λ/X`: Ok(Identity)
+  check `takes.Result <= takes(..)`: Ok(Identity)
+  check `|x| x ~> takes.Param(0)`: Ok(Undecided)
+  check `|x| x ~> takes.Param(0)#λ/X <= |x| x ~> takes.Param(0)#λ/λ result`: Ok(Identity)
+  check `|x| x ~> takes.Param(0)#λ/λ result ~> takes.Param(0).Return`: Err(None)
+  I* of a final state: []

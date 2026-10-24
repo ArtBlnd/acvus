@@ -1,6 +1,5 @@
-//@ spec: l.261, l.320–333
 // f reads x as u8, which leaves f(u8) alone; decided, it records what its
-// common part f(?0) -> ?0 does not hold (l.246): its argument passing whole
+// common part f(?0) -> ?0 does not hold: its argument passing whole
 // into its parameter's type, a boundary, and its result type entering ?0, a
 // lower bound.
 //@ order: decide f

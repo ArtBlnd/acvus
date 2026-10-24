@@ -1,6 +1,5 @@
-//! A case's expectations against its runs (`design/19-cases.md`,
-//! Expectations): each failure written as what was expected and what the
-//! model gives.
+//! A case's expectations against its runs: each failure written as what was
+//! expected and what the model gives.
 
 use std::collections::BTreeSet;
 

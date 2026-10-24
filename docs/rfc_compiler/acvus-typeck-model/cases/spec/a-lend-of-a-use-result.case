@@ -1,0 +1,34 @@
+// let counts = load(); let n = get(&counts, 0) + 1u64;   // load() -> Vec<u64>
+// get(&Vec<T>, u64) -> T, get(&Map<K, V>, K) -> V; core::add(&u64, &u64) -> u64,
+// core::add(&u8, &u8) -> u8
+// As where the result is a reference: get reads its arguments alone and is
+// decided by the first, and the lend waits for it and lends its place, R
+// being no reference.
+extern type Vec<T>;
+extern type Map<K, V>;
+extern fn load() -> Vec<u64>;
+extern fn get<T>(&Vec<T>, u64) -> T;
+extern fn get<K, V>(&Map<K, V>, K) -> V;
+extern fn core::add(&u64, &u64) -> u64;
+extern fn core::add(&u8, &u8) -> u8;
+
+let C;
+C = load() @ load;
+let `&counts`;
+`&counts` = &C @ `&counts`;
+let ?z: lit 0;
+let R;
+R = get(`&counts`, ?z) @ get;
+let `&get`;
+`&get` = &R @ `&get`;
+let 1u64: u64;
+let `&1u64`;
+`&1u64` = &1u64 @ `&1u64`;
+let N;
+N = core::add(`&get`, `&1u64`) @ add;
+
+must pass;
+assert get == get#0;
+assert `&get` == lend & place;
+assert add == core::add#0;
+assert N: u64;

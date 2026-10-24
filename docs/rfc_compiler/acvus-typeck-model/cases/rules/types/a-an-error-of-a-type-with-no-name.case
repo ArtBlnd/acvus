@@ -1,9 +1,8 @@
-//@ spec: l.91, l.89, l.68
 // Error⟨E⟩ is the Error with no variant and one part, a constructor of its
-// own (l.91). No value is wrapped into an Error by a coercion: `?` alone
-// makes one (l.91, l.337). Error is structural, so two Error⟨..⟩ join their
-// parts by ⊔ₚ (l.68, l.89); an Error⟨..⟩ and an Error with variants have no
-// join (l.91).
+// own. No value is wrapped into an Error by a coercion: `?` alone
+// makes one. Error is structural, so two Error⟨..⟩ join their
+// parts by ⊔ₚ; an Error⟨..⟩ and an Error with variants have no
+// join.
 extern type B;
 
 assert coerce(u8, Error<u8>) == none;

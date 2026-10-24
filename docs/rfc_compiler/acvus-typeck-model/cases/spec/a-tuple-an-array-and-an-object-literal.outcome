@@ -1,0 +1,29 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value `(1u8, s)`: (u8, &str)
+  value `1u8 a`: u8
+  value `1u8 o`: u8
+  value `1u8 t`: u8
+  value `2u8 a`: u8
+  value A: [u8; 2]
+  value E: u8
+  value O: {x: u8}
+  value P0: u8
+  value P1: &str
+  value Px: u8
+  value Str: str
+  value T: (u8, &str)
+  value `[1u8, 2u8]`: [u8; 2]
+  value s: &str
+  value `{ x: 1u8 }`: {x: u8}
+  check `(1u8, s) <= T`: Ok(Identity)
+  check `1u8 a <= E`: Ok(Identity)
+  check `1u8 o <= Px`: Ok(Identity)
+  check `1u8 t <= P0`: Ok(Identity)
+  check `2u8 a <= E`: Ok(Identity)
+  check `[1u8, 2u8] <= A`: Ok(Identity)
+  check `s <= P1`: Ok(Identity)
+  check `{ x: 1u8 } <= O`: Ok(Identity)
+  I* of a final state: []

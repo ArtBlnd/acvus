@@ -1,4 +1,3 @@
-//@ spec: l.105, l.280, design/14-certificate.md
 // take_rc(pair(|x| x, |y| y), |x| x, |y| y);   // a conversion to_rc<T>(Pair<T, T>) -> Rc<T>
 // The conversion's parameter writes T twice, of one type, Fn/1, each place
 // with its own Values: λ at the first, μ at the second. Each reaches Rc's T,

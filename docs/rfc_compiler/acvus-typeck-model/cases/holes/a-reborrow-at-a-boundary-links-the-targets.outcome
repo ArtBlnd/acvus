@@ -1,0 +1,14 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value `&mut v`: &mut Vec<u8>
+  value V: Vec<u8>
+  value `look(..)`: ()
+  value `new()`: Vec<u8>
+  decision lend: lend &mut place
+  check `&mut v ~> look.Param(0)`: Ok(Composition { reborrow: true, casts: [], structural: None })
+  check `look.Result <= look(..)`: Ok(Identity)
+  check `new() <= V`: Ok(Identity)
+  check `new.Result <= new()`: Ok(Identity)
+  I* of a final state: []

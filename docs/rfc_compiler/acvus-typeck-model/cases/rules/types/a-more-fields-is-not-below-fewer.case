@@ -1,6 +1,5 @@
-//@ spec: l.82, l.86
-// S ≤ T where S ⊔ T = T (l.82). Two objects are of one node; their members
-// are united (l.86), so {x: u8, y: u8} ⊔ {x: u8} has the members {x, y}, which
-// is not {x: u8} (l.66). An object with more fields is not below one with
+// S ≤ T where S ⊔ T = T. Two objects are of one node; their members
+// are united, so {x: u8, y: u8} ⊔ {x: u8} has the members {x, y}, which
+// is not {x: u8}. An object with more fields is not below one with
 // fewer.
 assert not le({x: u8, y: u8}, {x: u8});

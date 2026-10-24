@@ -1,7 +1,6 @@
-//@ spec: l.105, l.278, l.280, design/14-certificate.md
 // take_rc(boxed(|y| y), |y| y);   // a conversion to_rc<T>(Box<T>) -> Rc<T>; take_rc<T>(Rc<T>, T)
 // T's Values name μ, which the conversion carries from Box's part: B reaches
-// take_rc's parameter (l.280), and the checker carries μ along the
+// take_rc's parameter, and the checker carries μ along the
 // conversion's signature (`image`). Given T, a class of its own, Values naming
 // no lambda, μ carried along the conversion does not reach it, nor |y| y at T.
 extern type Box<T>;

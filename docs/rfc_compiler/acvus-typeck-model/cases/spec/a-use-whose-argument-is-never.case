@@ -1,4 +1,3 @@
-//@ spec: l.333
 // let r = f(never());      // never() -> !; f(u8) -> u8, f(u16) -> u16
 // The argument reads as !, so the use is decided with the result !.
 extern fn never() -> !;

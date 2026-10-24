@@ -1,10 +1,8 @@
-//@ spec: l.186, l.278
 // let x = 0;
 // let f = || takes_u8(x);  // takes_u8(u8)
 // f();
-// takes_u8's constraint at its argument is the enclosing group's (l.186), and
-// X, holding the literal's LitVar, is unified with u8 by its boundary
-// (l.278).
+// takes_u8's constraint at its argument is the enclosing group's, and
+// X, holding the literal's LitVar, is unified with u8 by its boundary.
 extern fn takes_u8(u8);
 
 group λ in run {

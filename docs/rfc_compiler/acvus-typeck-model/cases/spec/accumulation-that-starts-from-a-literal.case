@@ -1,0 +1,45 @@
+// let mut x = 0;
+// let mut y = 1u16;
+// while c {
+//     x = x + y;
+//     y = y + 1;
+// }
+// A literal operand is a temporary of the literal's type, which & lends. x + y
+// and y + 1 depend on each other and break their dependencies.
+extern fn core::add(&u8, &u8) -> u8;
+extern fn core::add(&u16, &u16) -> u16;
+extern fn core::add(&i32, &i32) -> i32;
+extern fn probe(u16);
+extern fn probe(i32);
+
+let X;
+let ?a: lit 0;
+let Y;
+let 1u16: u16;
+let ?b: lit 1;
+let `&x`;
+let `&y`;
+let R1;
+let `&y 2`;
+let `&1`;
+let R2;
+X = ?a;
+Y = 1u16;
+`&x` = &X @ `&x`;
+`&y` = &Y @ `&y`;
+R1 = core::add(`&x`, `&y`) @ `x + y`;
+X = R1;
+`&y 2` = &Y @ `&y 2`;
+`&1` = &?b @ `&1`;
+R2 = core::add(`&y 2`, `&1`) @ `y + 1`;
+Y = R2;
+
+must pass;
+assert X: u16;
+assert Y: u16;
+assert ?a: u16;
+assert ?b: u16;
+assert R1: u16;
+assert R2: u16;
+assert `x + y` == core::add#1;
+assert `y + 1` == core::add#1;

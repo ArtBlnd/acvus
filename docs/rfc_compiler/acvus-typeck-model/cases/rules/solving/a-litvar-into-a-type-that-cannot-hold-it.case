@@ -1,8 +1,7 @@
-//@ spec: l.278, l.162, l.290
 // take(300);               // take(u8)
 // The literal passes into take's parameter u8, a boundary ?{300} ⇝ u8, and
-// ?N ⇝ U unifies ?N with U (l.278). u8 does not hold 300 (l.162), so the
-// unification has no result: refused there (l.290).
+// ?N ⇝ U unifies ?N with U. u8 does not hold 300, so the
+// unification has no result: refused there.
 extern fn take(u8);
 
 let 300: lit 300;

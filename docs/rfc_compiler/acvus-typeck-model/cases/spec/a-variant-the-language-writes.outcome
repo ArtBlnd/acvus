@@ -1,0 +1,15 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value 1u8: u8
+  value `Ok.0`: !
+  value S: u8
+  value `Some(1u8)`: none
+  value V: !
+  decision Ok: applied
+  decision v: read
+  check `1u8 <= S`: Ok(Identity)
+  check `Ok.0 <= V`: Ok(Identity)
+  refusal conflict at "Some(1u8): variant Ok: Ok.0": Option vs variant Ok: Ok.0
+  I* of a final state: []

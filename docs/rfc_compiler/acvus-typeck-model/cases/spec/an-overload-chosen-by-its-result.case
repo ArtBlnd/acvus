@@ -1,0 +1,24 @@
+// fill_all(&mut parse(s));     // parse(&str) -> Vec<u8>, parse(&str) -> Vec<u16>
+// let _ = &mut parse(s);       // fill_all(&mut Vec<u8>)
+extern type Vec<T>;
+extern fn parse(&str) -> Vec<u8>;
+extern fn parse(&str) -> Vec<u16>;
+extern fn fill_all(&mut Vec<u8>);
+
+let str: str;
+let `&str`: &str;
+let `parse(s)`;
+let `&mut parse(s)`;
+let `fill_all(..)`;
+let `parse(s) 2`;
+let `&mut parse(s) 2`;
+`parse(s)` = parse(`&str`) @ parse;
+`&mut parse(s)` = &mut `parse(s)` @ lend;
+`fill_all(..)` = fill_all(`&mut parse(s)`) @ fill_all;
+`parse(s) 2` = parse(`&str`) @ `parse 2`;
+`&mut parse(s) 2` = &mut `parse(s) 2` @ `lend 2`;
+
+must fail;
+assert parse == parse#0;
+assert lend == lend &mut place;
+assert `parse 2` == undecided;

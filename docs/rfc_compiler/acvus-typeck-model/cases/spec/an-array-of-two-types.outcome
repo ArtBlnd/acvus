@@ -1,0 +1,15 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value 1u8: u8
+  value A: none
+  value E: none
+  value Str: str
+  value `[1u8, s]`: none
+  value s: &str
+  refusal no_join E
+  refusal no_value A
+  refusal no_value `[1u8, s]`
+  refusal no_value `A.Element`
+  I* of a final state: []

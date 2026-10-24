@@ -1,7 +1,6 @@
-//@ spec: l.197, l.278, design/14-certificate.md
 // run(Some(|x| x));        // run(Option<fn(u8) -> u8>)
 // The boundary's split relates Some's payload to the function type there, and
-// makes λ's instance (l.197, l.278). The checker carries λ to that part and
+// makes λ's instance. The checker carries λ to that part and
 // finds the instance at those classes, where it panicked meeting a function
 // type below the top of a value. Given that instance's x: u16, the type's u8
 // does not reach it, and in the instance x does not reach λ's result, u8.
@@ -20,4 +19,4 @@ let `run(..)`;
 `run(..)` = run(`Some(|x| x)`) @ run;
 
 must pass;
-assert certificate set `S ~> run.Param(0).Payload(Some)#λ/X`: u16 fails ["argument 0: u8 into u16 fails", "u16 <= u8 fails (l.280)"];
+assert certificate set `S ~> run.Param(0).Payload(Some)#λ/X`: u16 fails ["argument 0: u8 into u16 fails", "u16 <= u8 fails"];

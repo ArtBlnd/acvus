@@ -1,9 +1,8 @@
-//@ spec: l.186, l.280
 // let x = "s";
 // let f = || takes_u8(x);  // takes_u8(u8), f never called
 // takes_u8's constraint at its argument, the boundary X ⇝ u8, is the
 // lambda's environment, the enclosing group's, recorded whether or not a call
-// reaches the lambda (l.186), and &str ⇝ u8 fails (l.280). Its constraint at
+// reaches the lambda, and &str ⇝ u8 fails. Its constraint at
 // the result, which writes no variable with the argument, is the lambda's.
 extern fn takes_u8(u8);
 

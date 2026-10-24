@@ -1,5 +1,4 @@
-//@ spec: l.99
-// A cast row steps up the tree (l.99). From B no cast goes up, and no other
+// A cast row steps up the tree. From B no cast goes up, and no other
 // row takes an extern-defined type to another, so B does not coerce to A.
 extern type A;
 extern type B;

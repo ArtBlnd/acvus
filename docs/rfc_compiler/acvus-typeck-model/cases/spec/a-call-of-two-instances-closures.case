@@ -1,0 +1,44 @@
+//@ orders: sampled 200
+// let h = if c { adder(1u8) } else { adder(2u16) }; h(3u8)
+// h's Values name both copies, so the call calls both; in the copy
+// whose k is u16, x meets 3u8 and add's operands meet u8 and u16, which have
+// no join: refused.
+extern fn core::add(&u8, &u8) -> u8;
+extern fn core::add(&u16, &u16) -> u16;
+group adder {
+    let K;
+    let `adder result`;
+    fn adder(K) -> `adder result`;
+}
+group λ in adder {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    let `&x`;
+    let `&k`;
+    let S;
+    `&x` = &X @ `&x`;
+    `λ result` = S;
+}
+group adder {
+    let `|x| x + k`: lambda λ;
+    `adder result` = `|x| x + k`;
+}
+group λ {
+    `&k` = &K @ `&k`;
+    S = core::add(`&x`, `&k`) @ `x + k`;
+}
+let 1u8: u8;
+let 2u16: u16;
+let H;
+let `adder(1u8)`;
+let `adder(2u16)`;
+`adder(1u8)` = adder(1u8) @ `adder 1`;
+H = `adder(1u8)`;
+`adder(2u16)` = adder(2u16) @ `adder 2`;
+H = `adder(2u16)`;
+let 3u8: u8;
+let `h(3u8)`;
+`h(3u8)` = (H)(3u8) @ `h call`;
+
+must fail;

@@ -1,0 +1,35 @@
+// let mut v = open();        // open() -> A; a cast A -> B
+// if c { v = parse("s"); }   // parse(&str) -> A, parse(&str) -> B
+// if c { v = mk(1u8); }      // mk(u8) -> B, mk(u16) -> &B
+// Each use's result passes into V, an unknown, so the passing is a meeting:
+// a candidate's result reaches by <= its join with V's other sources. mk's argument
+// keeps mk(u8), whose B joins with A; parse's
+// two results reach A ⊔ A alike until mk is decided, and then B, which
+// parse(-> B) reaches with no cast. One outcome in every order, v: B; mk was
+// refused against V without it, and parse was decided by order.
+extern type A;
+extern type B;
+#[cast] extern fn up(A) -> B;
+extern fn open() -> A;
+extern fn parse(&str) -> A;
+extern fn parse(&str) -> B;
+extern fn mk(u8) -> B;
+extern fn mk(u16) -> &B;
+let V;
+let `open()`;
+let Str: str;
+let s: &Str;
+let R;
+let 1u8: u8;
+let M;
+`open()` = open() @ open;
+V = `open()`;
+R = parse(s) @ parse;
+V = R;
+M = mk(1u8) @ mk;
+V = M;
+
+must pass;
+assert V: B;
+assert mk == mk#0;
+assert parse == parse#1;

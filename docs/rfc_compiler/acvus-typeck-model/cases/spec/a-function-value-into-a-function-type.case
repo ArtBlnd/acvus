@@ -1,0 +1,21 @@
+// takes(|x| x);            // takes(fn(u8) -> u16)
+// The lambda's value passes into the function type takes writes, a boundary.
+// Where it is split, an instance of λ is made, as though the type
+// called it: the type's parameter u8 meets the copy of X, an
+// unknown here, and the copy of λ's result passes into the type's result u16,
+// a type the declaration writes, by a boundary. The copy of x passes into the
+// copy of the result, so it is u8, and u8 reaches u16 by no coercion: refused
+// there.
+extern fn takes(fn(u8) -> u16);
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    `λ result` = X;
+}
+let `|x| x`: lambda λ;
+let `takes(..)`;
+`takes(..)` = takes(`|x| x`) @ takes;
+
+must fail;
+assert failing [`|x| x ~> takes.Param(0)#λ/λ result ~> takes.Param(0).Return`];

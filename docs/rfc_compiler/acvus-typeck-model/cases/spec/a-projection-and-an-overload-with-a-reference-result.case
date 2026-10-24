@@ -1,0 +1,14 @@
+extern fn pick({x: i32}) -> {x: i32};
+extern fn pick(u8) -> &u8;
+
+let A;
+let `a.x`;
+let 0: lit 0;
+let `pick(a)`;
+`a.x` = A.x @ `a.x`;
+`a.x` = 0;
+`pick(a)` = pick(A) @ pick;
+A = `pick(a)`;
+
+must fail;
+assert pick == undecided;

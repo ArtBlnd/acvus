@@ -7,14 +7,14 @@ fn error_of(part: &str) -> Term<Name> {
 }
 
 #[test]
-#[should_panic(expected = "no `Error` (l.91)")]
+#[should_panic(expected = "no `Error`")]
 fn the_text_writes_no_error() {
     let mut p = ProgramBuilder::new(decls());
     p.written("E", error_of("A"));
 }
 
 #[test]
-#[should_panic(expected = "no `Error` (l.91)")]
+#[should_panic(expected = "no `Error`")]
 fn a_context_gives_no_error() {
     let mut p = ProgramBuilder::new(decls());
     p.host("E", error_of("A"));

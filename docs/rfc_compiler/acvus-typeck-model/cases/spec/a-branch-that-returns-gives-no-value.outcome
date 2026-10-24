@@ -1,0 +1,16 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value 1u8: u8
+  value 2u8: u8
+  value X: u8
+  value `f result`: u8
+  value `f()`: u8
+  value `return 2u8`: u8
+  check `f@4/f result <= f()`: Ok(Identity)
+  check `1u8 <= X`: Ok(Identity)
+  check `2u8 <= f result`: Ok(Identity)
+  check `X <= f result`: Ok(Identity)
+  check `return 2u8 <= X`: Ok(Identity)
+  I* of a final state: []

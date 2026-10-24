@@ -1,0 +1,25 @@
+// let x = 0; n(x); m(x);   // n(u16), n(i32); m(u16), m(&str)
+// Only LitVars enter X, so X waits for n and m, whose relations into it are
+// boundaries out of it, and each use depends on the other:
+// each breaks the dependency and reads X as ?a alone. m is decided by
+// it, a LitVar reaching no &str, and n is not: a LitVar's default narrows only
+// where no other step is left. What m records goes into its
+// parameter's type, which n does not read, so it is recorded at once,
+// X is unified with u16, and n reads u16: accepted in every order,
+// where n had taken the default i32 at once and X had been unified with both.
+extern fn n(u16);
+extern fn n(i32);
+extern fn m(u16);
+extern fn m(&str);
+let X;
+let ?a: lit 0;
+let `n(x)`;
+let `m(x)`;
+X = ?a;
+`n(x)` = n(X) @ n;
+`m(x)` = m(X) @ m;
+
+must pass;
+assert n == n#0;
+assert m == m#0;
+assert X: u16;

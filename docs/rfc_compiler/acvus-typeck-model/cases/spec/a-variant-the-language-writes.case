@@ -1,0 +1,12 @@
+// if let Ok(v) = Some(1u8) { }
+let S;
+let `Some(1u8)`: Option<S>;
+let 1u8: u8;
+let `Ok.0`;
+let V;
+S = 1u8;
+`Ok.0` = `Some(1u8)` as Ok @ Ok;
+V = bind `Ok.0` via [Ok] @ v;
+
+must fail;
+assert refused conflict;

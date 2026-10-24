@@ -1,0 +1,38 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value `&mut out`: &mut Buf
+  value EMIT: Fn/1
+  value OUT: Buf
+  value X: none
+  value `buf()`: Buf
+  value `emit(a)`: ()
+  value `emit(b)`: ()
+  value `make_a()`: A
+  value `make_b()`: B
+  value `write(..)`: ()
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision `&mut out`: lend &mut place
+  decision `emit 1`: calls {λ}
+  decision `emit 1#λ/write`: write#0
+  decision `emit 2`: calls {λ}
+  decision `emit 2#λ/write`: write#1
+  check `&mut out ~> write.CommonParam(0)`: Ok(Identity)
+  check `buf() <= OUT`: Ok(Identity)
+  check `buf.Result <= buf()`: Ok(Identity)
+  check `emit 1#λ/X <= emit 1#λ/write.Common(0)`: Ok(Identity)
+  check `emit 1#λ/X ~> emit 1#λ/write.Param(1)`: Ok(Identity)
+  check `emit 1#λ/λ result <= emit(a)`: Ok(Identity)
+  check `emit 2#λ/X <= emit 2#λ/write.Common(0)`: Ok(Identity)
+  check `emit 2#λ/X ~> emit 2#λ/write.Param(1)`: Ok(Identity)
+  check `emit 2#λ/λ result <= emit(b)`: Ok(Identity)
+  check `make_a() <= emit 1#λ/X`: Ok(Identity)
+  check `make_a.Result <= make_a()`: Ok(Identity)
+  check `make_b() <= emit 2#λ/X`: Ok(Identity)
+  check `make_b.Result <= make_b()`: Ok(Identity)
+  check `|x| .. <= EMIT`: Ok(Identity)
+  check `write(..) <= λ result`: Ok(Identity)
+  check `write.CommonResult <= write(..)`: Ok(Identity)
+  I* of a final state: []

@@ -1,0 +1,26 @@
+// let mut x = 0; while c { x = id(x); } n(x); m(x);   // id<T>(T) -> T
+// id is decided at once, and its lower bounds make a cycle with X, merged
+// into one class that only LitVars enter: n and m depend on each
+// other as without id, and are decided as there, m by the LitVar reaching no
+// &str and n by the u16 X is unified with once m records into its parameter's
+// type: accepted in every order.
+extern fn id<T>(T) -> T;
+extern fn n(u16);
+extern fn n(i32);
+extern fn m(u16);
+extern fn m(&str);
+let X;
+let ?a: lit 0;
+let R;
+let `n(x)`;
+let `m(x)`;
+X = ?a;
+R = id(X) @ id;
+X = R;
+`n(x)` = n(X) @ n;
+`m(x)` = m(X) @ m;
+
+must pass;
+assert n == n#0;
+assert m == m#0;
+assert X: u16;

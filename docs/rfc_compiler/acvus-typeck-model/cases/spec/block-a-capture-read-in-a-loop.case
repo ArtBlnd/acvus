@@ -1,12 +1,10 @@
-//@ spec: l.341, l.186, l.263, l.333; Example 12, l.531–549
 // let mut x = 0;
 // while c { x = { x + 1 }; }
 // x + 1 names the capture X, and the lambda's result type is joined to it, so
-// the whole block is the lambda's environment, the run's (l.186): the call
+// the whole block is the lambda's environment, the run's: the call
 // meets the environment's result type, and x + 1 is decided in the run's
-// binding group, as without the block. It reads X without its own relations
-// (l.261, l.263), as the LitVar alone, and narrows to i32 by the default
-// (l.333).
+// binding group, as without the block. It reads X without its own relations,
+// as the LitVar alone, and narrows to i32 by the default.
 extern fn core::add(&u8, &u8) -> u8;
 extern fn core::add(&u16, &u16) -> u16;
 extern fn core::add(&i32, &i32) -> i32;

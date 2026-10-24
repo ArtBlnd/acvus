@@ -1,5 +1,5 @@
 //! The types a declaration writes, over its own variables: its type
-//! parameters and, where it names one, its identity (extern fn §1, §2).
+//! parameters and, where it names one, its identity.
 //! A signature is a declaration's parameter types and result type.
 
 use std::collections::BTreeMap;
@@ -11,14 +11,14 @@ use crate::ty::{Constructor, HasTerm, Name, PartKey, Term, Ty, TyError};
 mod tests;
 
 /// An extern-defined type's declaration: how many arguments it takes, and
-/// whether it carries an identity (l.55).
+/// whether it carries an identity.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ExternDecl {
     pub arity: usize,
     pub identity: bool,
 }
 
-/// A module's struct: its fields, in the order it declares them (l.54).
+/// A module's struct: its fields, in the order it declares them.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct StructDecl {
     pub fields: Vec<Name>,
@@ -195,7 +195,7 @@ impl SigTy {
 
     /// Each bound variable's closed type put in its place. Where that makes a
     /// reference's target a reference, the two are one reference to the inner
-    /// target, exclusive only where both are (l.64).
+    /// target, exclusive only where both are.
     pub fn substitute<T>(&self, args: &SigArgs<T>) -> Result<T, SubstError>
     where
         T: HasTerm,
@@ -283,15 +283,14 @@ pub enum SigError {
     /// An identity anywhere but an extern-defined type's identity part, that
     /// part holding anything but the identity variable, or an identity a
     /// declaration makes its own. An identity is made only where a call or a
-    /// body lies (l.347).
+    /// body lies.
     IdentityPlace,
-    /// A reference whose target is a reference (l.64).
+    /// A reference whose target is a reference.
     RefTarget,
     /// A function value, which a declaration makes none of: it returns one
-    /// only as a type variable takes it in (l.184).
+    /// only as a type variable takes it in.
     FunctionValue,
-    /// An `Error` where a value enters the program, which `?` alone makes
-    /// (l.91).
+    /// An `Error` where a value enters the program, which `?` alone makes.
     Error,
 }
 
@@ -318,7 +317,7 @@ impl Signature {
 
     /// Whether the type is one a signature writes: `outward` where a value
     /// leaves the program by it, at a parameter, which alone may hold an
-    /// `Error` (l.91), turned over at a function type's parameters.
+    /// `Error`, turned over at a function type's parameters.
     fn check(
         &self,
         ty: &SigTy,
@@ -390,7 +389,7 @@ impl Signature {
     }
 
     /// The identity lies in the result and in no parameter's type, so a call
-    /// makes it anew (l.347).
+    /// makes it anew.
     pub fn existential_identity(&self) -> bool {
         self.names_identity
             && self.result.mentions(SigVar::Identity)

@@ -1,8 +1,7 @@
-//@ spec: l.341, l.337, l.219
 // let b = { Ok(get()?) };    // get() -> Result<u8, E>
-// The block is a lambda called where it lies (l.341), its own body, so the
+// The block is a lambda called where it lies, its own body, so the
 // ?'s exit passes into the block's result, an unknown of its group, and
-// meets there (l.219, l.337): b is Result<u8, Error{E(E)}>.
+// meets there: b is Result<u8, Error{E(E)}>.
 extern type E;
 extern fn get() -> Result<u8, E>;
 group λ in run {

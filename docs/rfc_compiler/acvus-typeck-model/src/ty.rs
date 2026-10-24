@@ -1,9 +1,8 @@
-//! Closed types, and the shape of a term that closed types and kinds share
-//! (l.39–74).
+//! Closed types, and the shape of a term that closed types and kinds share.
 //!
 //! A type is a finite term: one constructor, its members and its parts, each
-//! part again a type (l.41). Two types are equal when their constructors,
-//! members and parts are (l.66). Each type has one representation, so `Eq` is
+//! part again a type. Two types are equal when their constructors,
+//! members and parts are. Each type has one representation, so `Eq` is
 //! that equality.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,7 +13,7 @@ use std::rc::Rc;
 #[cfg(test)]
 mod tests;
 
-/// The names of `Option`'s and `Result`'s variants (l.49–50).
+/// The names of `Option`'s and `Result`'s variants.
 pub const SOME: &str = "Some";
 pub const NONE: &str = "None";
 pub const OK: &str = "Ok";
@@ -47,14 +46,14 @@ impl fmt::Debug for Name {
     }
 }
 
-/// A reference's mutability, the weaker first (l.62).
+/// A reference's mutability, the weaker first.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Mutability {
     Shared,
     Exclusive,
 }
 
-/// The integer types of 8 to 64 bits (l.56).
+/// The integer types of 8 to 64 bits.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum IntTy {
     I8,
@@ -82,7 +81,7 @@ impl IntTy {
     }
 }
 
-/// The float types `f32` and `f64` (l.56).
+/// The float types `f32` and `f64`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum FloatTy {
     F32,
@@ -98,7 +97,7 @@ impl FloatTy {
     }
 }
 
-/// Rust's scalar types (l.56).
+/// Rust's scalar types.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Scalar {
     Int(IntTy),
@@ -119,7 +118,7 @@ impl fmt::Display for Scalar {
 }
 
 /// A constructor, its members and its parts, each part a `P`: a closed type in
-/// `Ty`, an equivalence class in a kind (l.43–60, l.118).
+/// `Ty`, an equivalence class in a kind.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Term<P> {
     /// `&T` or `&mut T`, whose part is the target.
@@ -143,7 +142,7 @@ pub enum Term<P> {
         ret: P,
     },
     /// The type of a function value. Its parameters and result lie in its
-    /// lambdas' binding groups, and Values names those lambdas (l.186).
+    /// lambdas' binding groups, and Values names those lambdas.
     FunctionValue {
         arity: usize,
     },
@@ -152,7 +151,7 @@ pub enum Term<P> {
     /// `E{V̄(T̄)}`, by variant.
     Enum(Name, BTreeMap<Name, P>),
     /// `Error⟨E⟩`, the `Error` with no variant and one part, the value it
-    /// wraps (l.91).
+    /// wraps.
     ErrorOf(P),
     /// A module's struct, with one part for each field in declared order.
     Struct(Name, Vec<P>),
@@ -168,12 +167,12 @@ pub enum Term<P> {
     Unit,
     /// `!`.
     Never,
-    /// The name of the storage an extern-defined type's values reach (l.345):
+    /// The name of the storage an extern-defined type's values reach:
     /// a type with no parts, lying only at that type's identity.
     Identity(Name),
 }
 
-/// What remains of a term without its members and parts (l.66).
+/// What remains of a term without its members and parts.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Constructor {
     Ref(Mutability),
@@ -185,7 +184,7 @@ pub enum Constructor {
     Function(usize),
     Object,
     Enum(Name),
-    /// `Error⟨E⟩`'s, which is not that of an `Error` with variants (l.91).
+    /// `Error⟨E⟩`'s, which is not that of an `Error` with variants.
     ErrorOf,
     Struct(Name),
     Extern(Name),
@@ -204,7 +203,7 @@ pub enum Member {
 }
 
 /// The name of a part. Parts of one name in two terms of one constructor
-/// correspond (l.158).
+/// correspond.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PartKey {
     Target,
@@ -246,7 +245,7 @@ impl<P> Term<P> {
     }
 
     /// An object's fields, an enum's variants, `Option`'s `Some` and `None`,
-    /// and `Result`'s `Ok` and `Err` (l.49–53).
+    /// and `Result`'s `Ok` and `Err`.
     pub fn members(&self) -> BTreeSet<Member> {
         match self {
             Term::Option(_) => [SOME, NONE].map(|v| Member::Variant(Name::new(v))).into(),
@@ -421,10 +420,10 @@ impl<P> Term<P> {
 }
 
 impl Constructor {
-    /// Object, enum, tuple, array, option and result (l.68), `Error⟨E⟩`
-    /// among the enums as an `Error` (l.91). The parts of a structural
+    /// Object, enum, tuple, array, option and result, `Error⟨E⟩`
+    /// among the enums as an `Error`. The parts of a structural
     /// constructor are joined without casts, and every part of any other
-    /// constructor is invariant (l.74).
+    /// constructor is invariant.
     pub fn is_structural(&self) -> bool {
         matches!(
             self,
@@ -458,17 +457,17 @@ pub struct Ty(Rc<Term<Ty>>);
 /// Why a term is not a closed type.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TyError {
-    /// A reference whose target is a reference (l.64).
+    /// A reference whose target is a reference.
     RefTarget,
-    /// A tuple of no component, which is `Unit` (l.59).
+    /// A tuple of no component, which is `Unit`.
     EmptyTuple,
     /// An identity at a part other than an extern-defined type's identity, or
-    /// that part holding anything but an identity (l.55, l.345).
+    /// that part holding anything but an identity.
     IdentityPlace,
 }
 
 /// A type each of whose positions holds a term or is not decided: a closed
-/// type, every position of which holds one, or a value a use reads (note 05).
+/// type, every position of which holds one, or a value a use reads.
 pub trait HasTerm: Clone + Eq + Sized {
     /// The term at the outermost position, where one is decided.
     fn decided(&self) -> Option<&Term<Self>>;
@@ -480,7 +479,7 @@ pub trait HasTerm: Clone + Eq + Sized {
 
 /// The parts of `term` are checked already, so checking its own parts checks
 /// the whole tree. A part inside a reference's target is not restricted:
-/// `&N⟨&U⟩` is a type (l.64). A position not decided is refused nowhere.
+/// `&N⟨&U⟩` is a type. A position not decided is refused nowhere.
 pub fn check_term<P>(term: &Term<P>) -> Result<(), TyError>
 where
     P: HasTerm,
@@ -526,9 +525,6 @@ impl HasTerm for Ty {
     }
 }
 
-/// The spec's notation in ASCII, `<` and `>` for its angle brackets and `->`
-/// for its arrow (`design/19-cases.md`, Notation), with a function value
-/// written `Fn/n` for its arity, since the spec writes none for it.
 impl<P> fmt::Display for Term<P>
 where
     P: fmt::Display,

@@ -1,6 +1,5 @@
-//@ spec: l.158, l.276, l.290
-// A class equated with u8 and with u16: unified, its kind is their conjunction
-// (l.158), which no type meets, so it has no value (l.276), refused (l.290).
+// A class equated with u8 and with u16: unified, its kind is their conjunction,
+// which no type meets, so it has no value, refused.
 let A;
 let U8: u8;
 let U16: u16;

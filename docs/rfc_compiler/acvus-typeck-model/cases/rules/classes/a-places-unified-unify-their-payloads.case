@@ -1,14 +1,13 @@
-//@ spec: l.158, with l.74, l.86, l.274, l.278, l.290, l.296, l.316
 // let mut a = Some(1u8);
 // let mut b = Some(2u16);
 // let r = if c { &mut a } else { &mut b };
-// Neither A nor B is a reference, so each lend's target is its place (l.296).
+// Neither A nor B is a reference, so each lend's target is its place.
 // R's two lower bounds are &mut references, whose target is invariant, so
-// R's target equals A and equals B (l.278), and A and B are unified (l.158).
+// R's target equals A and equals B, and A and B are unified.
 // Their payloads, the same variant's, are unified in turn (congruence), or
-// the one class takes Option once with both lower bounds (l.278): either
+// the one class takes Option once with both lower bounds: either
 // way one payload class has the lower bounds u8 and u16, which have no
-// common ancestor (l.86), so it has no value (l.274, l.290).
+// common ancestor, so it has no value.
 let A;
 let S1;
 let 1u8: u8;

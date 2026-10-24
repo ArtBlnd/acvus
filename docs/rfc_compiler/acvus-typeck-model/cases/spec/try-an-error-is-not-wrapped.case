@@ -1,11 +1,10 @@
-//@ spec: l.337, l.89, l.91
 //@ orders: sampled 200
 // fn g() { let x = get()?; Ok(x) }    // get() -> Result<u8, A>
 // fn f() { let a = g()?; let b = get2()?; Ok(a) }    // get2() -> Result<u16, B>
-// g's result is Result<u8, Error{A(A)}>, an Error only ? makes (l.91, l.337).
+// g's result is Result<u8, Error{A(A)}>, an Error only ? makes.
 // In f, g()'s error value is an Error, so it is not wrapped and passes into
-// the exit's error part as it is (l.337); B is wrapped into Error{B(..)}.
-// The variants unite with no nesting (l.89).
+// the exit's error part as it is; B is wrapped into Error{B(..)}.
+// The variants unite with no nesting.
 extern type A;
 extern type B;
 extern fn get() -> Result<u8, A>;

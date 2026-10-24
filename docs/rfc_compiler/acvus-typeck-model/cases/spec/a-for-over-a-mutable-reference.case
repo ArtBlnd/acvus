@@ -1,0 +1,16 @@
+// for x in &mut v {}   // v: Vec<u8>
+// As over &v, the reference's mutability lent: &mut u8.
+extern type Vec<T>;
+#[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
+#[cast] extern fn core::as_slice_mut<T>(&mut Vec<T>) -> &mut [T];
+let U8: u8;
+let V: Vec<U8>;
+let `&mut v`;
+`&mut v` = &mut V @ `&mut v`;
+let `v[_]`;
+`v[_]` = `&mut v`[] @ `v elem`;
+let X;
+X = bind `v[_]` via [`v elem`] @ x;
+
+must pass;
+assert X: &mut u8;

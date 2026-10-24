@@ -1,7 +1,6 @@
-//@ spec: l.86, l.74
-// Box and Shared have the common ancestor Shared (l.86). Raised by the cast,
+// Box and Shared have the common ancestor Shared. Raised by the cast,
 // Box<u8> is Shared<u8> along share's signature; Shared<u8> and Shared<u16>
-// are of one node, and the argument is invariant (l.74): u8 = u16 fails, and
+// are of one node, and the argument is invariant: u8 = u16 fails, and
 // there is no join.
 extern type Box<T>;
 extern type Shared<T>;

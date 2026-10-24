@@ -1,0 +1,15 @@
+// takes(|x| x);            // takes(fn(u8) -> u8)
+// As where takes writes u16, but the copy of λ's result, u8, reaches the
+// type's result u8 by no change.
+extern fn takes(fn(u8) -> u8);
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    `λ result` = X;
+}
+let `|x| x`: lambda λ;
+let `takes(..)`;
+`takes(..)` = takes(`|x| x`) @ takes;
+
+must pass;

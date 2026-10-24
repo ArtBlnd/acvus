@@ -1,5 +1,4 @@
-//@ spec: l.86, l.89
 // Option<u8> and Option<u16> are of one node, and their payloads, parts of a
-// structural type, are joined by ⊔ₚ (l.86); u8 and u16 have two constructors
-// and neither is !, so ⊔ₚ gives no join (l.89), and neither has the whole.
+// structural type, are joined by ⊔ₚ; u8 and u16 have two constructors
+// and neither is !, so ⊔ₚ gives no join, and neither has the whole.
 assert join(Option<u8>, Option<u16>) == none;

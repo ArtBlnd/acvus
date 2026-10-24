@@ -1,6 +1,6 @@
-//! Checks and acceptance (l.278, l.280, l.290): each value the text makes
+//! Checks and acceptance: each value the text makes
 //! enter a type checked once everything is solved, the places where a
-//! definition gives no result, and what solving decides (I3).
+//! definition gives no result, and what solving decides.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -14,17 +14,17 @@ use crate::sig::{SigTy, SigVar};
 use crate::solve::State;
 use crate::ty::{Name, Term, Ty};
 
-/// Where a definition gives no result (l.290).
+/// Where a definition gives no result.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Refusal {
     /// No type holds what a relation made one equivalence class hold.
     Conflict { at: String, conflict: String },
     /// The types an equivalence class's sources give have no join.
     NoJoin(ClassName),
-    /// The equivalence class reaches a part of its own (l.269).
+    /// The equivalence class reaches a part of its own.
     Infinite(ClassName),
     /// The places the equivalence class nothing enters passes into have two
-    /// types (l.282).
+    /// types.
     NoFill(ClassName),
     /// The equivalence class has no value once solving ends.
     NoValue(ClassName),
@@ -32,27 +32,27 @@ pub enum Refusal {
     Undeclared(String),
 }
 
-/// A relation an entering value is checked by once everything is solved
-/// (l.278, l.280), with the coercion that changes it.
+/// A relation an entering value is checked by once everything is solved,
+/// with the coercion that changes it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Check {
     pub relation: String,
     pub coercion: Result<Coercion, CoerceError>,
     /// Where the coercion is a declared conversion, the lambdas a function
-    /// value it carries brings that the Values where it reaches do not name
-    /// (l.280); none elsewhere.
+    /// value it carries brings that the Values where it reaches do not name;
+    /// none elsewhere.
     pub unnamed: BTreeSet<Name>,
 }
 
 impl Check {
     /// Whether the value reaches: by a coercion, and, by a conversion, with
-    /// every lambda it carries named where it reaches (l.280).
+    /// every lambda it carries named where it reaches.
     pub fn holds(&self) -> bool {
         self.coercion.is_ok() && self.unnamed.is_empty()
     }
 }
 
-/// What solving decides (I3).
+/// What solving decides.
 #[derive(Clone, Debug)]
 pub struct Outcome {
     pub values: BTreeMap<ClassName, Option<Ty>>,
@@ -68,7 +68,7 @@ pub struct Outcome {
 
 impl Outcome {
     /// Whether the two outcomes are one typing, which is what does not depend
-    /// on the order of solving (types §6, I2): each class's value, each node's
+    /// on the order of solving: each class's value, each node's
     /// decision, each check, each refusal and whether the program is accepted.
     /// Which classes are one is no part of it.
     pub fn same_typing(&self, other: &Outcome) -> bool {
@@ -83,7 +83,7 @@ impl Outcome {
 impl State {
     /// Refuses at `at` what no type holds, and returns the refusal.
     /// The classes a conflict names hold a conjunction no type meets, so they
-    /// have no value (l.158, l.276), and are never solved or filled again.
+    /// have no value, and are never solved or filled again.
     pub(crate) fn conflicted_have_no_value(&mut self, conflicted: &Conflicted) {
         let members: Vec<ClassId> = match conflicted {
             Conflicted::Apart(apart) => apart.sides.iter().flatten().copied().collect(),
@@ -105,8 +105,8 @@ impl State {
         refusal
     }
 
-    /// Checks each value the text makes enter a type (l.280), in the order of
-    /// their relations' names, which no order of solving changes (I3).
+    /// Checks each value the text makes enter a type, in the order of
+    /// their relations' names, which no order of solving changes.
     fn checks(&self) -> Vec<Check> {
         let mut checks = Vec::new();
         for recorded in &self.log {
@@ -157,8 +157,8 @@ impl State {
 
     /// The lambdas the function values that the declared conversion `id`
     /// carries from `from` bring where they reach in `to`, which the Values
-    /// there do not name (l.280). The split links nothing through a
-    /// conversion (l.278), so nothing records them there: each function value
+    /// there do not name. The split links nothing through a
+    /// conversion, so nothing records them there: each function value
     /// at a position the conversion's parameter writes a variable reaches the
     /// one at the same place of each position its result writes it, and its
     /// lambdas are to be among that one's.
@@ -274,7 +274,7 @@ impl State {
     /// decided at its fixpoint: the values of its text's classes, its decided
     /// nodes, its checks of values entering classes it solved, and its
     /// refusals. Its classes and nodes left in C need no value and no decision
-    /// there (l.290).
+    /// there.
     pub fn outcome_with(&self, groups: &BTreeMap<Name, Rc<State>>) -> Outcome {
         let mut outcome = self.outcome();
         for group in groups.values() {
@@ -290,8 +290,8 @@ impl State {
                 .filter_map(|(name, node)| Some((name.clone(), node.decision.clone()?)))
                 .collect();
             // A node is one group's: a use of several candidates has one, at
-            // the positions its choice decides, which one constraint holds
-            // (l.186), and a use of one has none.
+            // the positions its choice decides, which one constraint holds,
+            // and a use of one has none.
             for (name, decision) in decided {
                 let previous = outcome.decisions.insert(name.clone(), Some(decision));
                 assert!(previous.is_none(), "two groups have the node {name}");

@@ -1,0 +1,25 @@
+// let x = None;
+// let y = if c { x } else { Some(1) };
+// take(x);                 // take(Option<u8>)
+// x's payload P passes into y's payload Q, which holds only a LitVar nothing
+// more decides, and into u8: the LitVar takes u8 as at a narrowing, so P is
+// filled u8, and Q joins it. Accepted in every order.
+let X;
+let ?k;
+let None: Option<?k>;
+let Y;
+let S;
+let 1: lit 1;
+let `Some(1)`: Option<S>;
+let u8: u8;
+let `Option⟨u8⟩`: Option<u8>;
+X = None;
+Y = X;
+S = 1;
+Y = `Some(1)`;
+`Option⟨u8⟩` = X;
+
+must pass;
+assert X: Option<u8>;
+assert Y: Option<u8>;
+assert 1: u8;

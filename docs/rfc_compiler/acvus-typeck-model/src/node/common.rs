@@ -1,5 +1,5 @@
 //! What all a node not yet decided may become shares, recorded before it is
-//! decided (l.246; `design/08-node.md`, readings 13 and 14): a use's
+//! decided: a use's
 //! candidates' common part, and a lend's result being a reference.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,13 +25,13 @@ pub(super) fn is_reference(ty: &SigTy) -> Option<bool> {
     }
 }
 
-/// The common part of a use's candidates (l.246): the anti-unification of
+/// The common part of a use's candidates: the anti-unification of
 /// their signatures. Where they all write one constructor and members it is
 /// kept, and its parts are generalized in turn; elsewhere a variable
 /// `SigVar::Type(k)` stands, one for each tuple of the types the candidates
 /// write there. A reference is not split where a whole value passes, at the
 /// top of a parameter or of the result, since a cast goes between two
-/// references of one constructor (l.66, l.78).
+/// references of one constructor.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CommonPart {
     pub params: Vec<SigTy>,
@@ -62,7 +62,7 @@ impl CommonPart {
 
     /// Whether the common part writes one closed type at the position, every
     /// candidate writing it there, so that the use's constraint there holds
-    /// whatever the use becomes (l.186, l.246). An exit is not.
+    /// whatever the use becomes. An exit is not.
     pub fn is_closed_at(&self, position: Position) -> bool {
         match position {
             Position::Arg(k) => self.params[k].is_closed(),
@@ -80,7 +80,7 @@ impl CommonPart {
     }
 
     /// Whether every candidate writes a reference at the variable, or none
-    /// does; none where some write a variable or they differ (l.246).
+    /// does; none where some write a variable or they differ.
     pub fn is_reference(&self, k: usize) -> Option<bool> {
         let references = self.vars[k]
             .iter()
@@ -160,7 +160,7 @@ fn generalize(tys: &[&SigTy], whole: bool, vars: &mut Vec<Vec<SigTy>>) -> SigTy 
 
 impl State {
     /// Records, for each node not yet decided, the common part of all it may
-    /// become, once (l.246): for a use of several candidates, their common
+    /// become, once: for a use of several candidates, their common
     /// part, its variables made anew as unknowns, each recorded as a
     /// reference or not where every candidate agrees there, each argument
     /// passing into the common part's parameter and its result entering the
@@ -181,8 +181,8 @@ impl State {
     }
 
     /// Records the constraints of the use `name`, of several candidates, at
-    /// the positions `closed` where its common part writes one closed type
-    /// (l.186, l.246): each argument there passing into that type, and that
+    /// the positions `closed` where its common part writes one closed type:
+    /// each argument there passing into that type, and that
     /// type entering the result, recorded by the common part whatever the use
     /// becomes. Returns the relations recorded.
     pub(crate) fn record_closed(
@@ -306,7 +306,7 @@ impl State {
             }
             NodeKind::Lend { result, .. } => {
                 // Its mutability is still the lend's to record, which a read
-                // of whether the result is a reference reads too (l.296), so
+                // of whether the result is a reference reads too, so
                 // the lend still records into what such a read reads.
                 let relation = Relation::Reference(*result, true);
                 recorded.push(self.record(relation, recorder));
@@ -351,7 +351,7 @@ impl State {
     /// `would_record_per_candidate` gives them: inside each argument the
     /// common part does not hold whole, and the result, or, once the common
     /// part is recorded, each of its variables the result writes, into which
-    /// the candidate's type there enters (l.246).
+    /// the candidate's type there enters.
     pub(crate) fn would_record_by(
         &self,
         name: &Name,
@@ -398,11 +398,11 @@ impl State {
     }
 
     /// The classes inside an argument's kind that a candidate's parameter
-    /// would record a lower bound or an equation into, by the splits of
-    /// l.278. The argument passes into the type the parameter writes, which
+    /// would record a lower bound or an equation into, by the splits. The
+    /// argument passes into the type the parameter writes, which
     /// records into that type alone, and each of its parts passes into that
     /// type's part: a meeting where the parameter writes a variable, an
-    /// unknown (l.219), recording an equation into the part, unless it is a
+    /// unknown, recording an equation into the part, unless it is a
     /// structural type's, whose part lower bound records into the variable
     /// alone; and where the parameter writes a type, the part passes into it
     /// in turn. Two constructors are linked as a split links them: the targets

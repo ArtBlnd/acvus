@@ -1,0 +1,24 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value `&a 1`: &F<new open 1>
+  value `&a 2`: &F<new open 1>
+  value A: F<new open 1>
+  value B: none
+  value `at(..)`: ()
+  value `index_of(..)`: Idx<new open 1>
+  value `open() 1`: F<new open 1>
+  value `open() 2`: F<new open 2>
+  decision `lend 1`: lend & place
+  decision `lend 2`: lend & place
+  check `&a 1 ~> at.Param(0)`: Ok(Identity)
+  check `&a 2 ~> index_of.Param(0)`: Ok(Identity)
+  check `at.Result <= at(..)`: Ok(Identity)
+  check `index_of(..) ~> at.Param(1)`: Ok(Identity)
+  check `index_of.Result <= index_of(..)`: Ok(Identity)
+  check `open 1.Result <= open() 1`: Ok(Identity)
+  check `open 2.Result <= open() 2`: Ok(Identity)
+  check `open() 1 <= A`: Ok(Identity)
+  refusal no_join B
+  I* of a final state: []

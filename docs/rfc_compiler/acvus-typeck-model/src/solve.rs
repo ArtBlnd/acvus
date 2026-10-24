@@ -1,12 +1,12 @@
-//! The state of a binding group's solving (l.201–215), and the composition of
+//! The state of a binding group's solving, and the composition of
 //! the phases on it: recording (`record.rs`), unification (`unify.rs`), the
 //! join that gives an equivalence class its value and the fill (`value.rs`),
 //! splits (`split.rs`), the decisions of uses, lends, projections and
 //! bindings (`node/`) in the order the dependencies allow (`dep.rs`),
 //! fallback (`fallback.rs`) and the checks (`check.rs`): the steps to a
-//! fixpoint and fallback after it (l.284–288), each returning the trace of
+//! fixpoint and fallback after it, each returning the trace of
 //! what its phases reported (`trace.rs`), and the state a node's value read
-//! is taken from (l.261).
+//! is taken from.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -33,14 +33,14 @@ pub struct State {
     pub(crate) log: Vec<Recorded>,
     /// The classes the text gives, in the program's order.
     pub(crate) texts: Vec<ClassId>,
-    /// The classes decided when solving starts, which are no unknowns (l.211).
+    /// The classes decided when solving starts, which are no unknowns.
     pub(crate) decided: BTreeSet<ClassId>,
     /// The lower bounds, part lower bounds and boundaries, by their place in
     /// the log, whose parts are related.
     pub(crate) split: BTreeSet<usize>,
     /// Those copied from a C where they were split, by their place in the log:
     /// what their splits recorded is copied with them, so that no state splits
-    /// them again (l.215, l.278).
+    /// them again.
     pub(crate) copied_split: BTreeSet<usize>,
     /// The classes found to reach a part of their own, or whose sources have
     /// no join.
@@ -49,40 +49,39 @@ pub struct State {
     /// The uses and lends, by name.
     pub(crate) nodes: BTreeMap<Name, NodeState>,
     /// In a state a value read is taken from, the classes found to give
-    /// nothing, having no relation left (l.261).
+    /// nothing, having no relation left.
     pub(crate) nothing: BTreeSet<ClassId>,
-    /// The classes named by a kind "indexes `τ`" already linked along a view
-    /// (l.154).
+    /// The classes named by a kind "indexes `τ`" already linked along a view.
     pub(crate) viewed: BTreeSet<ClassId>,
     /// The decided nodes whose relations wait for the undecided nodes that
-    /// broke their dependency on them (l.263).
+    /// broke their dependency on them.
     pub(crate) deferred: BTreeMap<Name, BTreeSet<Name>>,
     /// The binding group being solved.
     pub(crate) group: Name,
     /// The types of its functions' parameters, chosen by the uses that make
-    /// instances of it (l.210, l.240).
+    /// instances of it.
     pub(crate) universals: BTreeSet<ClassId>,
     /// The classes of enclosing groups its text names, shared, not solved
-    /// here (l.211, l.215), with those that are unknowns of their own group.
+    /// here, with those that are unknowns of their own group.
     pub(crate) foreign: BTreeSet<ClassId>,
     pub(crate) enclosing_unknowns: BTreeSet<ClassId>,
     /// The groups enclosing it, innermost first.
     pub(crate) enclosing: Vec<Name>,
     pub(crate) functions: Rc<Vec<Function>>,
     /// The classes the lambdas' environments hold, which the groups
-    /// enclosing them solve (`design/17-environment.md`).
+    /// enclosing them solve.
     pub(crate) environment: Rc<BTreeSet<Name>>,
-    /// Each group solved before it, at its fixpoint (l.213).
+    /// Each group solved before it, at its fixpoint.
     pub(crate) solved: BTreeMap<Name, Rc<State>>,
-    /// The instances made here, in the order made (l.215).
+    /// The instances made here, in the order made.
     pub(crate) instances: Vec<Made>,
     /// The lambdas an instance made anew, by name: each a copy of a lambda
     /// placed in the group it copied, whose environment is that instance's
-    /// copies (l.215).
+    /// copies.
     pub(crate) lambdas: BTreeMap<Name, LambdaCopy>,
 }
 
-/// A lambda an instance made anew (l.215): the instance, the lambda of the
+/// A lambda an instance made anew: the instance, the lambda of the
 /// program it copies, and the classes here its environment holds, its
 /// parameter types and then its result type, none where its own binding group
 /// holds them.
@@ -103,24 +102,24 @@ pub struct Started {
 /// A step that may be taken.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Step {
-    /// The equivalence class takes its constructor and members (l.269).
+    /// The equivalence class takes its constructor and members.
     Solve(ClassId),
     /// The equivalence class nothing enters takes the one type the places it
-    /// passes into give, or has no value where they give two (l.282).
+    /// passes into give, or has no value where they give two.
     Fill(ClassId),
-    /// The use or lend is decided by the value it reads (l.261).
+    /// The use or lend is decided by the value it reads.
     Decide(Name),
 }
 
 impl State {
     /// The state of the run's entry where the text's constraints are recorded
-    /// and nothing is solved (l.223), the program having no other group.
+    /// and nothing is solved, the program having no other group.
     pub fn new(program: &Program) -> State {
         State::of_group(program, &Name::new(ENTRY), &BTreeMap::new())
     }
 
     /// The state of the binding group `group` where its text's constraints
-    /// are recorded and nothing is solved (l.209, l.223). `solved` holds each
+    /// are recorded and nothing is solved. `solved` holds each
     /// group its uses make instances of, at its fixpoint.
     pub fn of_group(program: &Program, group: &Name, solved: &BTreeMap<Name, Rc<State>>) -> State {
         State::start(program, group, solved).state
@@ -131,7 +130,7 @@ impl State {
     /// follows at once.
     pub fn start(program: &Program, group: &Name, solved: &BTreeMap<Name, Rc<State>>) -> Started {
         // The groups solved so far cut the lambdas' environments up to this
-        // group (l.186, l.213).
+        // group.
         let cut = Cut::of(program, solved, group);
         let mut state = State {
             decls: Rc::new(program.decls.clone()),
@@ -241,7 +240,7 @@ impl State {
             .unwrap_or_else(|| panic!("the program names the class {name}"))
     }
 
-    /// A class of an enclosing group, shared here (l.215), and whether it is
+    /// A class of an enclosing group, shared here, and whether it is
     /// an unknown of its own group.
     pub(crate) fn share(&mut self, name: &Name, unknown: bool) -> ClassId {
         let id = self.arena.intern(ClassName::Text(name.clone()));
@@ -254,7 +253,7 @@ impl State {
     }
 
     /// An equivalence class not universal, not decided when solving starts,
-    /// and not of an enclosing group (l.211): none of its members is.
+    /// and not of an enclosing group: none of its members is.
     pub(crate) fn is_unknown(&self, id: ClassId) -> bool {
         let decided = self
             .classes
@@ -316,9 +315,9 @@ impl State {
 
     /// The steps that may be taken now: each eligible class solved or filled,
     /// and each eligible node decided where the value it reads now decides it,
-    /// a node whose value decides nothing staying undecided (l.261, l.333).
+    /// a node whose value decides nothing staying undecided.
     /// Where no such step is left, each eligible node its LitVars' defaults
-    /// decide (l.333), as a class falls back only then (l.288).
+    /// decide, as a class falls back only then.
     pub fn steps(&self) -> Vec<Step> {
         let Eligible {
             solve,
@@ -346,7 +345,7 @@ impl State {
     }
 
     /// Whether a use reads its LitVars as their defaults now: where no step
-    /// is left without them (l.288, l.333).
+    /// is left without them.
     #[cfg(test)]
     pub(crate) fn lit_defaults_now(&self) -> LitDefaults {
         let Eligible {
@@ -382,9 +381,9 @@ impl State {
         trace
     }
 
-    /// The equivalence class is solved (l.269), unless it reaches a part of
+    /// The equivalence class is solved, unless it reaches a part of
     /// its own: its LitVar lower bounds joined, `?N ⇝ U` where it holds a
-    /// LitVar alone (l.278), and then its constructor and members. Where it
+    /// LitVar alone, and then its constructor and members. Where it
     /// holds no kind and its LitVar lower bounds' join conflicts, its sources
     /// have no join. The trace holds what the class took, and the LitVars
     /// unified where any are.
@@ -429,9 +428,9 @@ impl State {
     }
 
     /// What follows at once from what is recorded: cycles of lower bounds and
-    /// part lower bounds merged (l.269), the parts of each lower bound, part
-    /// lower bound and boundary whose two sides are solved related (l.278),
-    /// and a LitVar lower bound of a solved class unified with it (l.169).
+    /// part lower bounds merged, the parts of each lower bound, part
+    /// lower bound and boundary whose two sides are solved related,
+    /// and a LitVar lower bound of a solved class unified with it.
     /// The trace holds what changed the state.
     pub(crate) fn settle(&mut self) -> Trace {
         let mut trace = Trace::default();
@@ -486,7 +485,7 @@ impl State {
             .collect()
     }
 
-    /// The places the equivalence class passes into (l.282): the `α` of each
+    /// The places the equivalence class passes into: the `α` of each
     /// lower bound and part lower bound whose `τ` it is, and the `U` of each
     /// boundary whose `T` it is, other than itself.
     pub(crate) fn places(&self, id: ClassId) -> Vec<ClassId> {
@@ -526,7 +525,7 @@ impl State {
             .collect()
     }
 
-    /// Falls back (l.288) and records what follows at once from it.
+    /// Falls back and records what follows at once from it.
     pub fn fall_back(&mut self) -> Trace {
         let mut trace = Trace {
             reports: self
@@ -558,7 +557,7 @@ impl State {
         }
     }
 
-    /// The state a node's value read is taken from (l.261): the relations
+    /// The state a node's value read is taken from: the relations
     /// recorded by neither the nodes `excluded` nor solving, solved and filled
     /// where each class's value is decided by the table of values, splits and
     /// fills whatever its other dependencies, no node decided, nothing fallen
@@ -655,7 +654,7 @@ impl State {
 }
 
 /// Whether a value read leaving out the relations of the nodes `excluded`
-/// leaves out a relation `recorder` recorded (l.261): one of those nodes
+/// leaves out a relation `recorder` recorded: one of those nodes
 /// recorded it.
 pub(crate) fn left_out_by(recorder: &Recorder, excluded: &BTreeSet<Name>) -> bool {
     recorder.nodes().iter().any(|node| excluded.contains(node))

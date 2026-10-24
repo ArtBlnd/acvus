@@ -1,8 +1,7 @@
-//@ spec: l.347, l.215, l.351
 // fn mk() { open() }                  // open() -> F⟨new⟩, a cast F → G
 // let a = mk(); let b = mk(); let c = if c { a } else { b };
 // The identity mk's body makes stays in its C, and each instance makes it
-// anew (l.347, l.215): a and b carry two, and c is G (l.351).
+// anew: a and b carry two, and c is G.
 extern type F<#>;
 extern type G;
 extern fn open<#>() -> F<#>;

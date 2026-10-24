@@ -1,0 +1,28 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value A: u8
+  value D: Result<u8, Error{PErr(PErr)}>
+  value E: Error{PErr(PErr)}
+  value Err: Error{PErr(PErr)}
+  value `Ok(a)`: Result<u8, Error{PErr(PErr)}>
+  value P: PErr
+  value R: Result<u8, Error{PErr(PErr)}>
+  value S: u8
+  value Str: str
+  value U8: u8
+  value `parse_r(s)`: Result<u8, PErr>
+  value s: &str
+  decision q: ?#1
+  check `A <= S`: Ok(Identity)
+  check `Ok(a) <= R`: Ok(Identity)
+  check `R ~> D`: Ok(Identity)
+  check `parse_r(s) <= q.Common(0)`: Ok(Identity)
+  check `parse_r(s) ~> q.Param(0)`: Ok(Identity)
+  check `parse_r.Result <= parse_r(s)`: Ok(Identity)
+  check `q.Common(1) <= A`: Ok(Identity)
+  check `q.Exit <= R`: Ok(Identity)
+  check `q.Var(Type(0)) <= q.Common(1)`: Ok(Identity)
+  check `s ~> parse_r.Param(0)`: Ok(Identity)
+  I* of a final state: []

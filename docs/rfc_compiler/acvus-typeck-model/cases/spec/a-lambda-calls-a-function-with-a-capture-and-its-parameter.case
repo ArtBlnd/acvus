@@ -1,0 +1,52 @@
+//@ orders: sampled 200
+// fn put(b, v) { write(b, v) }   // write(&mut Buf, u8), write(&mut Buf, &str)
+// let mut out = buf();
+// let emit = |x| put(&mut out, x);
+// emit(1u8); emit("s");
+// put's text ties b and v to nothing together, so the use gives a constraint
+// at each: at &mut out the environment's, whose instance of put makes what C
+// ties to b, once; at x the lambda's, each call's instance making what C ties
+// to v, and deciding write by what it passes. Since a broken
+// dependency defers only what its breaker reads, more orders of
+// solving are distinct, past 100 000 states, and 200 are sampled.
+extern type Buf;
+extern fn buf() -> Buf;
+extern fn write(&mut Buf, u8);
+extern fn write(&mut Buf, &str);
+group put {
+    let B;
+    let W;
+    let `put result`;
+    fn put(B, W) -> `put result`;
+    let `write(b, v)`;
+    `write(b, v)` = write(B, W) @ write;
+    `put result` = `write(b, v)`;
+}
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    let `&mut out`;
+    let `put(..)`;
+    `λ result` = `put(..)`;
+}
+let OUT;
+let `buf()`;
+`buf()` = buf() @ buf;
+OUT = `buf()`;
+let `|x| ..`: lambda λ;
+let EMIT;
+EMIT = `|x| ..`;
+let 1u8: u8;
+let Str: str;
+let s: &Str;
+let `emit(1u8)`;
+let `emit(s)`;
+`emit(1u8)` = (EMIT)(1u8) @ `emit 1`;
+`emit(s)` = (EMIT)(s) @ `emit 2`;
+group λ {
+    `&mut out` = &mut OUT @ `&mut out`;
+    `put(..)` = put(`&mut out`, X) @ `put call`;
+}
+
+must pass;

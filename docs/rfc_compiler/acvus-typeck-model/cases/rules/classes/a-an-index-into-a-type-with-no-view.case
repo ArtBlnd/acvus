@@ -1,12 +1,11 @@
-//@ spec: l.154, l.158, with l.68, l.78, l.261, l.290, l.298, l.316
 // let o = Some(1u8);
 // let x = o[0];
 // The projection o[0] reads whether O is a reference; O's only source, its
-// lower bound Some(1u8), is an Option, so it applies to O (l.261, l.298),
-// whose kind is then the conjunction of Option and "indexes τ" (l.158). An
-// Option is structural, not an extern-defined container, so it has no view
-// (l.68, l.78), and a type with no view cannot have that kind (l.154): O is
-// refused there (l.290).
+// lower bound Some(1u8), is an Option, so it applies to O,
+// whose kind is then the conjunction of Option and "indexes τ". An
+// Option is structural, not an extern-defined container, so it has no view,
+// and a type with no view cannot have that kind: O is
+// refused there.
 let O;
 let S;
 let 1u8: u8;

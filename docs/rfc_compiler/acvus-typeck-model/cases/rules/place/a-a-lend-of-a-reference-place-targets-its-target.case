@@ -1,10 +1,9 @@
-//@ spec: l.296
 // let x = 1u8;
 // let r = &x;
 // take(&r);                // take(&u16)
-// r is &X, so &r lends X itself (l.296). The boundary into &u16 records
-// X ⇝ u16 toward a type the declaration writes, which decides no value
-// (l.278): X is u8, and &u8 reaches &u16 by no coercion (l.280).
+// r is &X, so &r lends X itself. The boundary into &u16 records
+// X ⇝ u16 toward a type the declaration writes, which decides no value:
+// X is u8, and &u8 reaches &u16 by no coercion.
 extern fn take(&u16);
 
 let X;

@@ -1,8 +1,7 @@
-//@ spec: l.219, l.274, l.86, l.290
 // let e = if c { E::A(1u8) } else { F::B(2u8) };
-// Both values meet e's equivalence class V (l.219), so its value is the join
-// of two enums (l.274), of two names and so of two nodes with no common
-// ancestor: no join (l.86). Refused at V (l.290).
+// Both values meet e's equivalence class V, so its value is the join
+// of two enums, of two names and so of two nodes with no common
+// ancestor: no join. Refused at V.
 let P;
 let Q;
 let 1u8: u8;

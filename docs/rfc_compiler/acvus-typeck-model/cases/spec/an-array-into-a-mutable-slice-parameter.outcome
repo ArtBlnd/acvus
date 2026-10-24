@@ -1,0 +1,16 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value `&mut a`: &mut [u8; 2]
+  value 1u8: u8
+  value 2u8: u8
+  value A: [u8; 2]
+  value E: u8
+  value `fill(..)`: ()
+  decision `&mut a`: lend &mut place
+  check `&mut a ~> fill.Param(0)`: Ok(Composition { reborrow: false, casts: [DeclId { name: core::array_view_mut, overload: 0 }], structural: None })
+  check `1u8 <= E`: Ok(Identity)
+  check `2u8 <= E`: Ok(Identity)
+  check `fill.Result <= fill(..)`: Ok(Identity)
+  I* of a final state: []

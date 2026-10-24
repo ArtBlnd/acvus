@@ -1,0 +1,30 @@
+// report(g());          // report(Result<u8, Error{PErr(PErr)}>)
+// // fn g() { let x = parse_r("7")?; Ok(x) }, parse_r(&str) -> Result<u8, PErr>
+// A declaration's parameter is where a value leaves the program, so it may
+// hold an Error, and g's result, made by ?, passes into it.
+extern type PErr;
+extern fn report(Result<u8, Error{PErr(PErr)}>);
+extern fn parse_r(&str) -> Result<u8, PErr>;
+group g {
+    let `g result`;
+    fn g() -> `g result`;
+    let Str: str;
+    let s: &Str;
+    let `parse_r(s)`;
+    let X;
+    let `g exit`;
+    let U;
+    let Q;
+    let `Ok(x)`: Result<U, Q>;
+    `parse_r(s)` = parse_r(s) @ parse_r;
+    X = ?(`parse_r(s)`) into `g exit` @ qg;
+    `g result` = `g exit`;
+    U = X;
+    `g result` = `Ok(x)`;
+}
+let `g()`;
+let `report(..)`;
+`g()` = g() @ `g()`;
+`report(..)` = report(`g()`) @ report;
+
+must pass;

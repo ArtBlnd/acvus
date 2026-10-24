@@ -1,12 +1,11 @@
-//@ spec: l.238, l.261, l.288, l.290
 // let x;
 // let r = f(x);            // f(u8) -> u8, f(u16) -> u16
-// The candidates differ at the argument, so f reads X there (l.261); no node but
+// The candidates differ at the argument, so f reads X there; no node but
 // f records into X, and f's own relations are left out, so the value read
-// decides nothing and both candidates remain (l.333). X lies at f's position, so
-// it depends on the relations f has not yet recorded (l.238 (b)); f is never
-// decided, so X keeps an unbroken dependency and never falls back (l.288), and
-// neither does R, at f's result. Refused at f (l.290), where X and R have no
+// decides nothing and both candidates remain. X lies at f's position, so
+// it depends on the relations f has not yet recorded; f is never
+// decided, so X keeps an unbroken dependency and never falls back, and
+// neither does R, at f's result. Refused at f, where X and R have no
 // value.
 extern fn f(u8) -> u8;
 extern fn f(u16) -> u16;

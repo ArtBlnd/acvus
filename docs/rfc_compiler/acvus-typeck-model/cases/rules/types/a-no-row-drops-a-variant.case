@@ -1,5 +1,4 @@
-//@ spec: l.102, l.103
-// The enum row goes to more variants (l.102), and the part row changes parts
-// and keeps the members (l.103), so E{V(u8), W(u8)} does not coerce to
+// The enum row goes to more variants, and the part row changes parts
+// and keeps the members, so E{V(u8), W(u8)} does not coerce to
 // E{V(u8)}.
 assert coerce(E{V(u8), W(u8)}, E{V(u8)}) == none;

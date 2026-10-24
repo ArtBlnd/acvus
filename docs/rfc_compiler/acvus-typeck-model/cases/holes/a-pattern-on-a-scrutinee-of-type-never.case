@@ -1,0 +1,19 @@
+// let n = never();         // never() -> !
+// if let Some(x) = n { }
+// The kind "has variant Some" gives no member, so N is !; `!`, which has no
+// value, meets every kind, so the pattern decides nothing, and x's type, which
+// nothing enters, falls back to !.
+extern fn never() -> !;
+
+let N;
+let `never()`;
+let `Some.0`;
+let X;
+`never()` = never() @ never;
+N = `never()`;
+`Some.0` = N as Some @ Some;
+X = bind `Some.0` via [Some] @ x;
+
+must pass;
+assert N: !;
+assert X: !;

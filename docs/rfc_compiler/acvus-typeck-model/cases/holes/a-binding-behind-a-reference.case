@@ -1,0 +1,21 @@
+// let o = Some(1u8);
+// if let Some(x) = &o { }
+// The nodes recording into the binding's position are reached along the link
+// the split of O's payload will make with &o's target, so x waits for its
+// path's projection and lends through it: one outcome, x: &u8.
+
+let S;
+let `Some(1u8)`: Option<S>;
+let 1u8: u8;
+let O;
+let `&o`;
+let `Some.0`;
+let X;
+S = 1u8;
+O = `Some(1u8)`;
+`&o` = &O @ `&o`;
+`Some.0` = `&o` as Some @ Some;
+X = bind `Some.0` via [Some] @ x;
+
+must pass;
+assert X: &u8;

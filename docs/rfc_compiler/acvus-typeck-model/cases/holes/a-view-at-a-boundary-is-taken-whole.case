@@ -1,0 +1,22 @@
+// let v = make();          // make() -> Vec<u8>; the view as_slice(&Vec<T>) -> &[T]
+// take(&v);                // take(&[u8])
+// The boundary &V ⇝ &[u8] relates two references, whose constructors are
+// their mutabilities alone; its split records V ⇝ [u8] toward a type the
+// declaration writes, which decides no value. V is Vec<u8>, and the
+// whole value &Vec<u8> reaches &[u8] by the view's cast.
+extern type Vec<T>;
+#[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];
+extern fn make() -> Vec<u8>;
+extern fn take(&[u8]);
+
+let V;
+let `make()`;
+let `&v`;
+let `take(..)`;
+`make()` = make() @ make;
+V = `make()`;
+`&v` = &V @ lend;
+`take(..)` = take(`&v`) @ take;
+
+must pass;
+assert V: Vec<u8>;

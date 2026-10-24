@@ -1,8 +1,7 @@
-//@ spec: l.186, l.246
 // The candidates' common part is g(?0) -> bool, ?0 standing for u8 or u16,
 // which no candidate writes a reference at: before g is decided, x meets ?0
 // and ?0 is no reference, which the node records. bool, which every candidate
-// writes at the result, is the use's constraint there alone (l.186), and
+// writes at the result, is the use's constraint there alone, and
 // enters the result as the text is recorded.
 //@ order:
 extern fn g(u8) -> bool;

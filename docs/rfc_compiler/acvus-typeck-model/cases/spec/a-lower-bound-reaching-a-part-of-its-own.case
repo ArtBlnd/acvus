@@ -1,0 +1,13 @@
+// let mut x = None;
+// x = Some(x);
+let X;
+let ?k;
+let None: Option<?k>;
+let S;
+let `Some(x)`: Option<S>;
+X = None;
+S = X;
+X = `Some(x)`;
+
+must fail;
+assert refused infinite;

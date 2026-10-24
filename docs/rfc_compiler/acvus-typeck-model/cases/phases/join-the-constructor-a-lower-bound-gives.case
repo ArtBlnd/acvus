@@ -1,8 +1,7 @@
-//@ spec: l.269, l.274, l.278
 // A takes the constructor and members its solved lower bound gives, its part
 // made anew.
 // Once both sides of Some(1u8) ≤ A are solved, their parts are related, a
-// structural type's part by a part lower bound (l.278).
+// structural type's part by a part lower bound.
 //@ order: solve A
 let A;
 let S;

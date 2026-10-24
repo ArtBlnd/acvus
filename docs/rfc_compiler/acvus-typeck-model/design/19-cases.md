@@ -1,8 +1,5 @@
 # 19 Cases and their runner
 
-Rests on the crate's I2, I3 and I4, and on notes 13–15 (outcome and exploration,
-the certificate, I\*).
-
 ## Meaning
 
 A case is a file that states a program the model takes, at the level the model
@@ -15,18 +12,16 @@ takes and everything a test of it asserts.
 
 Three scopes are tested, each locally:
 
-- **A program**, solved in every order (I2), with the checks of notes 14 and 15 on
-  every final state.
+- **A program**, solved in every order.
 - **A phase**, along one order the case writes, by what each phase reports it did
   (`src/trace.rs`, below).
-- **A primitive** the spec defines on types alone: the join and `≤` (l.80–91), and
-  a coercion (l.93–109), on the case's own declarations.
+- **A primitive** on types alone: the join and `≤`, and a coercion, on the case's own
+  declarations.
 
 ## Not owned here
 
-- What the model decides: every expectation is checked against the model, never
-  the model against the case's own reading of the spec.
-- Generating cases (note 16).
+- What the model decides: every expectation is checked against the model.
+- Generating cases.
 - The primitives' tests that need Rust's values: `src/{ty,sig,decl,class,join,coerce}/tests.rs`
   stay as they are, over `fixture.rs`.
 
@@ -40,7 +35,6 @@ Classes, items and declarations are recorded in the order written, as
 the same states.
 
 ```
-//@ spec: Example 2, l.369–382
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 extern fn fill_all(&mut Vec<u8>);
@@ -92,7 +86,7 @@ classes, and `universal A;` a universal.
 | `let 0: lit 0;`, `let x: lit 1.5;` | a literal's LitVar |
 | `` let `Some(a)`: Option<S>; `` | a type the text writes |
 | `` let `@cfg`: host {name: N}; `` | a type the host gives |
-| `let D: out Result<U8, E>;` | a type the embedding declares for the run's result, which may hold an `Error` (l.91) |
+| `let D: out Result<U8, E>;` | a type the embedding declares for the run's result, which may hold an `Error` |
 | `` let F: lambda λ; `` | the function value of the lambda `λ` |
 
 **Statements.**
@@ -103,7 +97,7 @@ classes, and `universal A;` a universal.
 | `A == B;` | an equation |
 | `R = f(X, Y) @ n;` | a use of `f`, the node `n` |
 | `R = (F)(X) @ n;` | a call of the function value of `F` |
-| `R = ?(X) into Q @ n;` | `e?` of the operand `X`, its exit's value of the class `Q` (l.337) |
+| `R = ?(X) into Q @ n;` | `e?` of the operand `X`, its exit's value of the class `Q` |
 | `R = &P @ n;`, `R = &mut P @ n;` | a lend |
 | `R = P.x @ n;`, `P.0`, `*P`, `P[]`, `P as Some`, `P as E::V` | a projection |
 | `B = bind P via [p, q] @ n;` | a binding at `P` along the projections `p`, `q` |
@@ -114,15 +108,14 @@ classes, and `universal A;` a universal.
 
 | Directive | Means | Where none is written |
 |---|---|---|
-| `//@ spec: …`, `//@ hole: H7` | what the case witnesses | — |
 | `//@ orders: all` | every order, which must end within 100 000 states | `all` |
-| `//@ orders: sampled 200` | 200 sampled orders (note 13, reading 2) | — |
+| `//@ orders: sampled 200` | 200 sampled orders | — |
 | `//@ order: solve A, fill B, decide f, fallback` | one order: the entry's steps, then its first step until none is left, falling back where none is | — |
 | `//@ order g: solve A` | the steps of the group `g` in that order; every other group takes its first step | — |
 
 A step names a class by any of its members' names, as the arena names them
 (`A`, `A.Payload(Some)`), and a node by its name; it must be a step the state may
-take then, and `fallback` only where no step is left in the entry (l.286, l.288).
+take then, and `fallback` only where no step is left in the entry.
 
 **Expectations.** Each holds of every outcome, and an I\* expectation of every
 final state, of every run.
@@ -138,7 +131,7 @@ final state, of every run.
 | `assert istar completeness probe;` | an I\* violation; the final states' violations are exactly those written, none where none is |
 | `assert outcomes 2;` | the number of outcomes; one where none is written and no block is |
 | `assert partition {A, B};` | an equivalence class of exactly these |
-| `assert certificate set X: B fails ["…"];`, `assert certificate set probe == probe#1 fails ["…"];`, `in g` after `certificate` | the certificate of every final state, so changed, fails, the `what`s over them all exactly these; the class is named as the outcome writes it, a class an instance or a node made among them, and a function value in the value writes its Values after it, `Fn/1{λ}`, `Fn/1{}` naming none (note 14) |
+| `assert certificate set X: B fails ["…"];`, `assert certificate set probe == probe#1 fails ["…"];`, `in g` after `certificate` | the certificate of every final state, so changed, fails, the `what`s over them all exactly these; the class is named as the outcome writes it, a class an instance or a node made among them, and a function value in the value writes its Values after it, `Fn/1{λ}`, `Fn/1{}` naming none |
 | `assert trace "join A: nothing";` | with an order written: a line of its trace other than a `record` is that line (The trace); a `refuse` line whose text holds `"`, a conflict's, is asserted by `assert refused` |
 | `` assert split records `S <= A.Payload(Some)`; ``, `` assert no node records `...`; `` | with an order written: a `record` of the relation lies under a line of the phase (`record`, `unify`, `join`, `split`, `node`, `fallback`; The trace) |
 | `assert join(A, C) == B;`, `== none`; `assert le(A, B);`, `assert not le(B, A);` | the primitive, on the declarations |
@@ -170,27 +163,22 @@ reaching it meet. Where a case writes blocks, its runs have exactly as many
 outcomes, and each block meets a distinct one; what lies outside the blocks holds
 of every outcome, and its I\* expectations join each block's.
 
-**A hole.** A case under `//@ hole:` asserts what the model gives now. Where it
-also writes `wanted { … }`, what the spec's text, its examples or the RFCs it cites
-want, as `holes.md` states it, it is an expected failure: `XFAIL` while the model
-does not meet the block, `XPASS`, a failure, once it does, so that `holes.md` is
-updated with it.
-
 **Golden outcomes.** Next to each case, `*.outcome` holds every run's outcomes in
 full, the I\* violations of the final states reaching each, and a written order's
 trace. A check whose conversion brings a lambda the Values where it reaches do not
-name writes them after it, `unnamed: {μ}` (note 11, reading 15). A case whose golden differs, or has none, fails; `BLESS=1` writes them anew.
+name writes them after it, `unnamed: {μ}`. A case whose golden differs, or has none,
+fails; `BLESS=1` writes them anew.
 This catches a change no expectation names.
 
 ## The runner
 
-`src/cases/` (test only, the standard library alone, I4): `parse.rs` reads a case,
+`src/cases/` (test only, the standard library alone): `parse.rs` reads a case,
 an error naming its line; `build.rs` makes the `Decls` and the `Program`;
 `run.rs` explores, samples or follows the written order, handing each final state
 to the certificate's and I\*'s checks and to the changed certificates; `expect.rs`
 compares; `render.rs` writes what the model gives as a case writes it. One test,
 `cases::cases`, runs every case, each in a thread named after it, prints a table of
-`PASS`, `FAIL`, `XFAIL` and `XPASS`, and fails where any is `FAIL` or `XPASS`.
+`PASS` and `FAIL`, and fails where any is `FAIL`.
 `CASE=` runs the cases whose path contains it.
 
 ## The phases' reports
@@ -222,16 +210,15 @@ it. `settle`'s trace holds what changed the state.
 ## The trace
 
 What solving did along an order is written as facts, alike in a golden's written
-order and under `TRACE=1`. A line is one fact, `keyword subject: value`, either
-part left out where the fact has none, followed by its attributes, each
-`key: value` after two spaces; the facts a fact is made of are the lines indented
-under it. An attribute or a line not written is none: a union whose class holds no
-kind has no `kind:`. A phase that did nothing writes no line. A line cites no line of
-the spec; this table is where each keyword is defined. A class is named as the
-state the step left names its equivalence class, except under `union` and
-`conflict`, where each class is named by its own name and each side by the least
-of its members' names before the union, so that a later union of the same step
-does not rename what an earlier one shows.
+order and under `TRACE=1`. A line is one fact, `keyword subject: value`, either part
+left out where the fact has none, followed by its attributes, each `key: value` after
+two spaces; the facts a fact is made of are the lines indented under it. An attribute
+or a line not written is none: a union whose class holds no kind has no `kind:`. A
+phase that did nothing writes no line. This table is where each keyword is defined. A
+class is named as the state the step left names its equivalence class, except under
+`union` and `conflict`, where each class is named by its own name and each side by
+the least of its members' names before the union, so that a later union of the same
+step does not rename what an earlier one shows.
 
 | Line | Means |
 |---|---|
@@ -242,7 +229,7 @@ does not rename what an earlier one shows.
 | `refuse: <refusal>` | under `start`, `step` and `fallback`: a refusal the step made, as an outcome writes it |
 | `record #k <relation>` | the relation recorded at `#k` in the log |
 | `link X: E` | the view of `X`'s extern-defined container links its element `E` |
-| `common` | the common part of all the nodes not yet decided may become (l.246) |
+| `common` | the common part of all the nodes not yet decided may become |
 | `merge cycles` | the cycles of lower bounds alone merged |
 | `lit lowers X` | `X`'s LitVar lower bounds unified with it |
 | `lit join #k <relation>` | the LitVar lower bound at `#k` unified with the class it bounds |
@@ -324,29 +311,24 @@ steps; `golden()` and every expectation read what they read without it.
 ## Run
 
 - The 38 tests of `examples.rs` are 51 cases under `cases/spec`, `cases/holes`,
-  `cases/environment`, `cases/istar` and `cases/certificate`, a test's programs
-  and readings with other expectations each a case of its own. Over the 38, the
-  distinct dump lines of every exploration (`Exploration` with its final states'
-  fingerprints) and of every sampled order (fingerprint and outcome) are the same
-  set from the cases as from the tests at 68ea8114, and the same from the tests
-  with the phases' reports as without them; `examples.rs` is removed. Each case
-  asserts what its test asserted: a pattern the test matched (`Unreached(_)`, a
-  refusal's kind) as the same pattern, and a text it matched in part
-  (`starts_with`, `contains`) whole, as the model gives it. Example 14's copied
-  decisions, which its test found by the end of their names, are named whole.
-- Since 8978eb70, where the text took a lambda's captured environment as the
-  enclosing binding group's (l.186), the seven of those cases that asserted the
-  capture rule of then beside a twin of one name under `cases/environment` are
-  their twins, each moved to its place; 4 cases remain under `cases/environment`.
-  9 cases under `cases/spec`, `block-*`, test the Block section (l.341), a block
-  solved as a lambda called where it lies, each derived before it was run.
-  `rules/classes/a-a-capture-shared-by-two-instances` and
-  `rules/solving/a-two-instances-meet-a-capture-written-by-name`, become one
-  program with one derivation with `spec/example-06-called-with-two-types`, are
-  merged into it.
+  `cases/environment`, `cases/istar` and `cases/certificate`, a test's programs and
+  readings with other expectations each a case of its own. Over the 38, the distinct
+  dump lines of every exploration (`Exploration` with its final states' fingerprints)
+  and of every sampled order (fingerprint and outcome) are the same set from the
+  cases as from the tests, and the same from the tests with the phases' reports as
+  without them; `examples.rs` is removed. Each case asserts what its test asserted: a
+  pattern the test matched (`Unreached(_)`, a refusal's kind) as the same pattern,
+  and a text it matched in part (`starts_with`, `contains`) whole, as the model gives
+  it.
+- 9 cases under `cases/spec`, `block-*`, test a block solved as a lambda called where
+  it lies,
+  each derived before it was run. `rules/classes/a-a-capture-shared-by-two-instances`
+  and `rules/solving/a-two-instances-meet-a-capture-written-by-name`, become one
+  program with one derivation with
+  `spec/a-capture-written-by-name-called-with-two-types`, are merged into it.
 - 4 cases under `cases/certificate`, `a-lambda-*` but the two of a conversion
   below, test the checker carrying
-  Values as the split does (note 14): a lambda in a payload into a function type,
+  Values as the split does: a lambda in a payload into a function type,
   through a cast, through a view, and into a function type both candidates write
   whole. The first three panicked in the checker before, where the solver had
   accepted them; each was derived before it was run, in every order. The first
@@ -355,141 +337,101 @@ steps; `golden()` and every expectation read what they read without it.
   The second and the third give the class λ reaches through the cast or the view,
   one class with the use's `T`, `Fn/1{}`, and the checker fails there and at that
   `T`, as derived.
-- Since a use of one candidate has no node (note 08, reading 1), 86 goldens lost
-  that use's decision line and nothing else, and
-  `phases/unify-a-view-links-an-index` records `new`'s relations with the text; 5
-  cases dropped an assertion of such a decision.
-- `cases/certificate/a-function-value-passed-through-a-use` tests the
-  certificate's Values (note 14): a lambda reaching a call only through a use's
-  instance, and the call given no lambda to call. Where Values meet what no rule
-  decides yet, the checker panics (note 14, Open).
-  `istar/a-call-left-out-leaves-out-its-instance-relations` declared `choose` to
-  give `Fn/1`, a function value no declaration makes since 80b33ad9 (l.184), and
-  gives back the one its `T` takes in.
+- Since a use of one candidate has no node, 86 goldens lost that use's decision line
+  and nothing else, and `phases/unify-a-view-links-an-index` records `new`'s
+  relations with the text; 5 cases dropped an assertion of such a decision.
+- `cases/certificate/a-function-value-passed-through-a-use` tests the certificate's
+  Values: a lambda reaching a call only through a use's instance, and the call given
+  no lambda to call. Where Values meet what no rule decides yet, the checker panics.
+  `istar/a-call-left-out-leaves-out-its-instance-relations` declared `choose` to give
+  `Fn/1`, a function value no declaration makes, and gives back the one its `T` takes
+  in.
 - 2 cases under `cases/rules/classes` test a conflict, which leaves the classes it
-  names with no value (l.158, l.276), and 2 under `cases/rules/place` the
-  departure 3 of 2026-10-21, a part solved before its parent, which then gave two
-  and three outcomes and gives one now.
-- 3 cases under `cases/spec` test identities (l.347, l.351): Example 11's lines
-  1–3, accepted with `b: G`; the same without the cast, refused at `b`; and an
-  identity a body makes, made anew at each of two instances. Each was derived
-  before it was run.
-- 3 cases under `cases/spec`, `l215-*`, test a closure a function returns (l.215):
-  one instance's, two instances' apart, and a call of both, refused; each was
-  derived before it was run, over 200 sampled orders, every order of one passing
-  100 000 states.
-- 2 cases under `cases/spec`, `l091-*`, test where an `Error` is written (l.91):
-  the run's result into the type the embedding declares (`out T`), and a
-  declaration's parameter, each derived before it was run; that the text, a
-  context and a declaration's result write none is `src/program/tests.rs` and
-  `src/sig/tests.rs`.
-- 1 case under `cases/spec`, `l341-a-try-in-a-match-arm`, tests that a match
-  arm's braces are no block expression (l.341, since d6ebc326): its `?` exits the
+  names with no value, and 2 under `cases/rules/place` a part solved before its
+  parent, which then gave two and three outcomes and gives one now.
+- 3 cases under `cases/spec` test a closure a function returns: one instance's, two
+  instances' apart, and a call of both, refused; each was derived before it was run,
+  over 200 sampled orders, every order of one passing 100 000 states.
+- 2 cases under `cases/spec` test where an `Error` is written: the run's result into
+  the type the embedding declares (`out T`), and a declaration's parameter, each
+  derived before it was run; that the text, a context and a declaration's result
+  write none is `src/program/tests.rs` and `src/sig/tests.rs`.
+- 1 case under `cases/spec`, `a-try-in-a-match-arm`, tests that a match
+  arm's braces are no block expression: its `?` exits the
   script, derived before it was run.
-- 7 cases under `cases/spec`, `l246-*`, test the common part (l.246): an overload
-  chosen by its result through `?`, with the script's result typed, with no
-  tail, and refused where the tail's result is untyped and a fill has a place
-  with no value (l.282); a counter compared with a typed value (W1b of the
-  review of 2026-10-22); a reference cast at one argument of an overload set;
-  and two operands of one unknown meeting, accepted where their bindings join
-  and refused where one is written. Each was derived before it was run, two
-  derivations failing first and redone: the operands' bindings join by the
-  cast, and the untyped tail leaves a fill a place with no value.
-- 7 cases under `cases/spec`, `l186-*`, test the environment cut by constraints
-  (G4 of the review of 2026-10-22, note 17): a lambda writing its parameter into a
-  capture by an overload that writes one closed type there, accepted; pushing it
-  into a capture by `push<T>`, refused at the parameter; calling a function that
-  ties the capture and the parameter to nothing together, accepted, the
-  function's instance in two parts; passing a capture and its parameter apart,
-  accepted; never called, passing a literal capture to a function, which types
-  it `u8`; writing two types a cast joins, each call deciding its own candidate
-  where the model before G4 decided one for both; and calling a function that
-  returns a closure, which ties the capture to the result through the closure's
-  environment (l.215). Each was derived
-  before it was run, in every order. Four cases
-  of the environment and the phase case of the common part changed with it, their
-  values and decisions kept (note 17, G4).
-- 11 cases under `cases/spec`, `l219-*`, `l282-*`, `l310-*`, `l314-*` and
-  `l320-*`, test the constructs the recording had no rule for until 0de99302: a
-  branch that returns gives no value; a tuple, an array and an object literal,
-  and an array of two types, refused; a cast by its operand's type and the
-  operators that are no lang items, the language's candidates written as
-  declarations; a `for` over a reference, a mutable reference, an array, a `Vec`
-  by value and a range; and C1 of the review of 2026-10-22, a match on an
-  overload chosen by its result. Each was derived before it was run, in every
-  order.
-- 3 cases under `cases/spec`, `l333-*` and `l282-a-literal-binding-*`, test U1 of
-  the review of 2026-10-22: a sum of two literals whose result is unused, narrowed
-  again at `i32` since 2c03da17; `1 ^ 2`, whose two literals are one class along
-  some orders and apart along others, one typing and so one outcome since
-  outcomes compare by their typing (note 13); and a literal binding into `u8` and
-  a `u16` meeting, refused at the meeting in every order. Each was derived before
-  it was run.
-- 3 cases under `cases/spec`, `l282-a-fill-*`, `l282-a-literal-place-*` and
-  `l282-no-place-*`, test a fill with a place that holds only a LitVar (U5 of the
-  review of 2026-10-22, since 13289a2f): Example 4 with `Some(1)`, filled `u8`;
-  the same with y's payload passing into `u16`, which it takes first, refused;
-  and no place with a value, left to the fallback. Each was derived before it was
-  run, in every order.
-- 4 cases under `cases/spec`, `l240-*`, test l.238 (b) since 09aef04e, beside H7,
-  now accepted: two uses that fill one literal, a literal into a use then
-  another, a sum into a use that only reads it, and a literal through a generic
-  use then two uses. Each was derived before it was run; the two refused ones
+- 7 cases under `cases/spec` test the common part: an overload chosen by its result
+  through `?`, with the script's result typed, with no tail, and refused where the
+  tail's result is untyped and a fill has a place with no value; a counter compared
+  with a typed value; a reference cast at one argument of an overload set; and two
+  operands of one unknown meeting, accepted where their bindings join and refused
+  where one is written. Each was derived before it was run, two derivations failing
+  first and redone: the operands' bindings join by the cast, and the untyped tail
+  leaves a fill a place with no value.
+- 7 cases under `cases/spec` test the environment cut by constraints: a lambda
+  writing its parameter into a capture by an overload that writes one closed type
+  there, accepted; pushing it into a capture by `push<T>`, refused at the parameter;
+  calling a function that ties the capture and the parameter to nothing together,
+  accepted, the function's instance in two parts; passing a capture and its parameter
+  apart, accepted; never called, passing a literal capture to a function, which types
+  it `u8`; writing two types a cast joins, each call deciding its own candidate; and
+  calling a function that returns a closure, which ties the capture to the result
+  through the closure's environment. Each was derived before it was run, in every
+  order. Four cases of the environment and the phase case of the common part changed
+  with it, their values and decisions kept.
+- 11 cases under `cases/spec` test the constructs the recording had no rule for: a
+  branch that returns gives no value; a tuple, an array and an object literal, and an
+  array of two types, refused; a cast by its operand's type and the operators that
+  are no lang items, the language's candidates written as declarations; a `for` over
+  a reference, a mutable reference, an array, a `Vec` by value and a range; and a
+  match on an overload chosen by its result. Each was derived before it was run, in
+  every order.
+- 3 cases under `cases/spec` test a sum of two literals whose result is unused,
+  narrowed again at `i32`; `1 ^ 2`, whose two literals are one class along some
+  orders and apart along others, one typing and so one outcome since outcomes compare
+  by their typing; and a literal binding into `u8` and a `u16` meeting, refused at
+  the meeting in every order. Each was derived before it was run.
+- 4 cases under `cases/spec` test two uses that fill one literal, a literal into a
+  use then another, a sum into a use that only reads it, and a literal through a
+  generic use then two uses. Each was derived before it was run; the two refused ones
   report I\* completeness at both uses, as before.
-- 6 cases under `cases/spec`, `try-*`, and `block-collects-try` test `e?`
-  (l.337): two errors of a name meet as one `Error`, an `Error` is not wrapped,
-  an `Option`, two errors of no name meet as one `Error⟨..⟩`, one of no name and
-  one of a name have no join, an error part nothing enters wraps into `!`, and a
-  block collects its `?`. Each was derived before it was run. Those with two `?`
-  are run over 200 sampled orders, every order passing 100 000 states.
-- 3 cases under `cases/spec`, `l199-*`, test a function value passing into a
-  function type (l.197): refused where the lambda's result reaches the type's by
-  no coercion, accepted where it does, and by a declared conversion at that
-  boundary.
-- 2 cases under `cases/spec`, `l263-*`, test two functions that call each other,
-  `even(10u8)`, with and without an `i32` candidate of each (note 10, reading 11;
-  note 08, reading 22): two outcomes and five, by whether a broken dependency's
-  relations had waited for a node that only they decide and a LitVar's default had
-  been taken at once, now one, accepted, over 200 sampled orders. Each was derived
-  before it was run. `l240-two-uses-that-fill-one-literal` and
-  `l240-a-literal-through-a-generic-use-then-two-uses`, refused with I\* completeness
+- 6 cases under `cases/spec`, `try-*`, and `block-collects-try` test `e?`: two errors
+  of a name
+  meet as one `Error`, an `Error` is not wrapped, an `Option`, two errors of no name
+  meet as one `Error⟨..⟩`, one of no name and one of a name have no join, an error
+  part nothing enters wraps into `!`, and a block collects its `?`. Each was derived
+  before it was run. Those with two `?` are run over 200 sampled orders, every order
+  passing 100 000 states.
+- 3 cases under `cases/spec` test a function value passing into a function type:
+  refused where the lambda's result reaches the type's by no coercion, accepted where
+  it does, and by a declared conversion at that boundary.
+- 2 cases under `cases/spec` test two functions that call each other, `even(10u8)`,
+  with and without an `i32` candidate of each: two outcomes and five, by whether a
+  broken dependency's relations had waited for a node that only they decide and a
+  LitVar's default had been taken at once, now one, accepted, over 200 sampled
+  orders. Each was derived before it was run. `two-uses-that-fill-one-literal` and
+  `a-literal-through-a-generic-use-then-two-uses`, refused with I\* completeness
   violations, are accepted with `x: u16`, `n` decided by the `u16` that `m`'s
-  boundary unifies `x` with; `l186-a-lambda-calls-a-function-with-a-capture-and-its-parameter`
-  keeps its outcome over 200 sampled orders, every order now passing 100 000 states.
-- 2 cases under `cases/spec`, `l261-*`, test a lend of a use's result where the
-  candidates' results are type parameters alone, which the use does not read
-  (note 08, reading 11): accepted with the lend through the reference the result
-  is, where it had taken the place before the use decided, and with its place where
-  the result is no reference. Each was derived before it was run.
-- 2 cases under `cases/spec`, `l280-*`, test a function value a declared
-  conversion carries (note 11, reading 15): refused where the Values where it
-  reaches do not name its lambda, alone and where a call of the value the
-  conversion made would make no instance of it, and 2 under `cases/certificate`
-  accepted where they name it, at one place and at the two places of one
-  variable. Each was derived before it was run; the solver had accepted the
+  boundary unifies `x` with;
+  `a-lambda-calls-a-function-with-a-capture-and-its-parameter` keeps its outcome over
+  200 sampled orders, every order now passing 100 000 states.
+- 2 cases under `cases/spec` test a lend of a use's result where the candidates'
+  results are type parameters alone, which the use does not read: accepted with the
+  lend through the reference the result is, where it had taken the place before the
+  use decided, and with its place where the result is no reference. Each was derived
+  before it was run.
+- 2 cases under `cases/spec` test a function value a declared conversion carries:
+  refused where the Values where it reaches do not name its lambda, alone and where a
+  call of the value the conversion made would make no instance of it, and 2 under
+  `cases/certificate` accepted where they name it, at one place and at the two places
+  of one variable. Each was derived before it was run; the solver had accepted the
   first two, and the checker had found each.
-- 2 cases under `cases/spec`, `l078-*`, test an array lent into a slice
-  parameter, shared and exclusive (note 03, reading 6): accepted by the array's
-  view, where no coercion had reached the parameter. 1 case, `l196-*`, tests a
-  call through a reference to a function value (note 09, reading 9): accepted,
-  calling the lambda the target names, where the call had never been decided.
-  Each was derived before it was run.
-- 13 cases under `cases/phases` test each phase along a written order, by the line
-  of the spec it rests on: recording (l.219, l.227–229), the join (l.80–91, l.169,
-  l.269, l.274), splits (l.278), unification (l.154, l.158–163), nodes (l.246,
-  l.261, l.320–333) and fallback (l.286–288). 2 cases under `cases/primitives` test
-  the join, `≤` and coercion on the declarations of `fixture::decls()` without
+- 2 cases under `cases/spec` test an array lent into a slice parameter, shared and
+  exclusive: accepted by the array's view, where no coercion had reached the
+  parameter. 1 case tests a call through a reference to a function value: accepted,
+  calling the lambda the target names, where the call had never been decided. Each
+  was derived before it was run.
+- 13 cases under `cases/phases` test each phase along a written order: recording, the
+  join, splits, unification, nodes and fallback. 2 cases under `cases/primitives`
+  test the join, `≤` and coercion on the declarations of `fixture::decls()` without
   `Box`, coercion with a conversion `u16 → u8` besides.
-- 59 cases under `cases/rules` are 16 primitives under `types`, 42 programs the
-  spec's rules refuse in every order and one they accept
-  (`classes/b-a-lambda-calling-a-captured-lambda`), each derived from quoted lines
-  of its region: `types` (l.39–110), `classes` (l.1–38, l.111–216), `solving`
-  (l.217–291) and `place` (l.292–352). The model refuses each refused one at the
-  place its derivation names. Five of them passed only once a node whose read
-  decides nothing was left undecided (note 08, reading 19): the three `solving`
-  cases of a use whose read decides nothing,
-  `place/a-a-use-whose-name-reaches-no-declaration`, where the model had
-  panicked, and the accepted one. The model did not end on
-  `solving/a-two-literal-families-have-no-join` until a LitVar join that
-  conflicts was made a join with no result (note 11, reading 4).
 - Every case passes, and every golden is the model's.

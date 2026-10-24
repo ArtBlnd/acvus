@@ -1,6 +1,6 @@
 //! Uses, lends, projections and bindings: the positions each lies at, what
-//! each reads, and what each records once decided (l.292–334). Here, what each
-//! is, and how it is decided and records once decided (l.261, l.263); the
+//! each reads, and what each records once decided. Here, what each
+//! is, and how it is decided and records once decided; the
 //! positions and what each reads are `position`, places `place`, overload
 //! resolution `overload`, and the common part of all an undecided node may
 //! become `common`.
@@ -28,37 +28,37 @@ use place::lesser;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum NodeKind {
-    /// A use that calls the declarations `callee` names (l.320); for `e?`,
-    /// with the class its exit's value passes into (l.337). It holds the
+    /// A use that calls the declarations `callee` names; for `e?`,
+    /// with the class its exit's value passes into. It holds the
     /// positions of the use's constraints its group records where the choice
     /// of a candidate matters, none at the others: those another group
     /// records, and, of several candidates, those where every candidate
-    /// writes one closed type, recorded apart (l.186, l.246).
+    /// writes one closed type, recorded apart.
     Use {
         callee: Name,
         args: Vec<Option<ClassId>>,
         result: Option<ClassId>,
         exit: Option<ClassId>,
     },
-    /// `&ₘ p` (l.296).
+    /// `&ₘ p`.
     Lend {
         mutability: Mutability,
         place: ClassId,
         result: ClassId,
     },
-    /// A projection of `operand`, naming `result` (l.144).
+    /// A projection of `operand`, naming `result`.
     Project {
         projection: Projection,
         operand: ClassId,
         result: ClassId,
     },
-    /// A binding at `position`, reached by the projections `path` (l.306).
+    /// A binding at `position`, reached by the projections `path`.
     Bind {
         path: Vec<Name>,
         position: ClassId,
         binding: ClassId,
     },
-    /// A use that calls the function value of `callee` (l.196).
+    /// A use that calls the function value of `callee`.
     CallValue {
         callee: ClassId,
         args: Vec<ClassId>,
@@ -66,7 +66,7 @@ pub enum NodeKind {
     },
 }
 
-/// What a node reads at the classes at its positions (l.261).
+/// What a node reads at the classes at its positions.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Read {
     /// Their values: a use, and a call of a function value.
@@ -86,47 +86,46 @@ impl NodeKind {
     }
 }
 
-/// What a node reads (l.261), on which it depends (l.241–242).
+/// What a node reads, on which it depends.
 pub(crate) struct Reads {
     pub(crate) read: Read,
     /// The classes at the positions it reads.
     pub(crate) classes: Vec<ClassId>,
 }
 
-/// What a use, a lend, a projection or a binding became (l.261).
+/// What a use, a lend, a projection or a binding became.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Decision {
-    /// The use is decided as this candidate (l.333).
+    /// The use is decided as this candidate.
     Use(DeclId),
     /// The use's argument reads as `!`, so it is never carried out and is
-    /// decided with the result `!` (l.333).
+    /// decided with the result `!`.
     Never,
-    /// The lend gives a reference of `mutability` to `target` (l.296).
+    /// The lend gives a reference of `mutability` to `target`.
     Lend {
         target: LendTarget,
         mutability: Mutability,
     },
-    /// The projection applies to its operand (l.144).
+    /// The projection applies to its operand.
     Applied,
     /// The projection's operand is a reference, so it applies to that
-    /// reference's target (auto-deref, l.298); the mutability is the
+    /// reference's target (auto-deref); the mutability is the
     /// reference's where the value read decides it.
     AppliedToTarget(Option<Mutability>),
-    /// The binding's path passes no reference, so it reads its position
-    /// (l.306).
+    /// The binding's path passes no reference, so it reads its position.
     Read,
     /// The binding's path passes a reference, so it lends its position, giving
-    /// a reference of `mutability` to `target` (l.306).
+    /// a reference of `mutability` to `target`.
     BindLend {
         target: LendTarget,
         mutability: Mutability,
     },
     /// The call reads the function value as one whose Values names these
-    /// lambdas, and makes an instance of each (l.196).
+    /// lambdas, and makes an instance of each.
     Calls(BTreeSet<Name>),
 }
 
-/// What a lend's place reads as (l.296).
+/// What a lend's place reads as.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum LendTarget {
     /// Not a reference, so the target is the place.
@@ -140,15 +139,15 @@ pub enum LendTarget {
 pub struct NodeState {
     pub kind: NodeKind,
     pub decision: Option<Decision>,
-    /// The common part the node recorded before it was decided (l.246).
+    /// The common part the node recorded before it was decided.
     pub common: Option<Common>,
     /// The classes of which the common part recorded whether they are
-    /// references (l.246).
+    /// references.
     pub references: BTreeSet<ClassId>,
 }
 
 /// What a node recorded before it was decided: the common part of all it may
-/// become (l.246).
+/// become.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Common {
     /// A use's: the common part of its candidates' signatures, and the class
@@ -161,7 +160,7 @@ pub enum Common {
     Lend,
 }
 
-/// Which class a node made anew is (l.320).
+/// Which class a node made anew is.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum NodeAt {
     /// A variable of the signature of the candidate the use is decided as.
@@ -174,9 +173,9 @@ pub enum NodeAt {
     /// The target of the reference a lend's place, or a projection's operand,
     /// is.
     Target,
-    /// The value of `e?`'s exit (l.337).
+    /// The value of `e?`'s exit.
     Exit,
-    /// A variable of a use's common part (l.246).
+    /// A variable of a use's common part.
     Common(usize),
     /// The type of the parameter at this place in a use's common part.
     CommonParam(usize),
@@ -188,16 +187,16 @@ pub enum NodeAt {
 }
 
 /// Whether a use's narrowing may take each LitVar it reads as its family's
-/// default (l.333): only where no other step is left, as a class falls back
-/// to its default only then (l.288).
+/// default: only where no other step is left, as a class falls back
+/// to its default only then.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LitDefaults {
     Withheld,
     Taken,
 }
 
-/// A node decided (l.261), with the relations recorded once it is: its own,
-/// and those of the nodes deferred on it that it lets record (l.263). A node
+/// A node decided, with the relations recorded once it is: its own,
+/// and those of the nodes deferred on it that it lets record. A node
 /// decided by the value it read has what it read; one decided as it is
 /// recorded reads nothing.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -208,17 +207,17 @@ pub struct Decided {
     pub read: Option<DecidedBy>,
 }
 
-/// How a node was decided by the value it read (l.261, l.263).
+/// How a node was decided by the value it read.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DecidedBy {
-    /// The node and the nodes that transitively depend on it (l.261).
+    /// The node and the nodes that transitively depend on it.
     pub dependents: BTreeSet<Name>,
-    /// The undecided nodes that broke their dependency on it (l.263).
+    /// The undecided nodes that broke their dependency on it.
     pub broken_on: BTreeSet<Name>,
     pub value: ValueRead,
 }
 
-/// The value a node read, and what it became by it (l.261).
+/// The value a node read, and what it became by it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ValueRead {
     /// The nodes whose relations it leaves out: those it was given and, for
@@ -227,30 +226,27 @@ pub struct ValueRead {
     /// Their relations, by their places in the log.
     pub relations: Vec<usize>,
     pub reading: Reading,
-    /// What the node becomes by it, none where it decides nothing (l.261,
-    /// l.333).
+    /// What the node becomes by it, none where it decides nothing.
     pub decision: Option<Decision>,
 }
 
-/// What a node read at its positions (l.261).
+/// What a node read at its positions.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Reading {
     /// A Deref, and a binding whose path passes no reference, read nothing.
     Nothing,
-    /// A use: the value read where its candidates differ, and its narrowing
-    /// (l.326–333).
+    /// A use: the value read where its candidates differ, and its narrowing.
     Use(Narrowing),
-    /// A lend's place or a projection's operand, and what it reads as
-    /// (l.296, l.298).
+    /// A lend's place or a projection's operand, and what it reads as.
     Place(AsReference),
     /// A binding whose path passes a reference, the least mutability of
-    /// those passed where decided, and what its position reads as (l.306).
+    /// those passed where decided, and what its position reads as.
     Binding {
         passed: Option<Mutability>,
         position: AsReference,
     },
     /// A call of a function value: the value read at its callee, and the
-    /// lambdas its Values names there (l.196).
+    /// lambdas its Values names there.
     Values {
         callee: ClassId,
         value: ReadValue,
@@ -259,9 +255,9 @@ pub enum Reading {
 }
 
 impl State {
-    /// Decides as it is recorded a node that reads nothing: a Deref
-    /// (`design/08-node.md`, reading 6). A use of one candidate has no node
-    /// (`State::record_one`), and a use of none is never decided (l.333).
+    /// Decides as it is recorded a node that reads nothing: a Deref.
+    /// A use of one candidate has no node
+    /// (`State::record_one`), and a use of none is never decided.
     pub(crate) fn decide_at_once(&mut self) -> Vec<Decided> {
         let at_once: Vec<(Name, Decision)> = self
             .nodes
@@ -297,16 +293,16 @@ impl State {
     }
 
     /// The value the node reads now, as deciding it would read it: without
-    /// itself and those that transitively depend on it (l.261), its LitVars
-    /// taken as their defaults or not as `defaults` says (l.333).
+    /// itself and those that transitively depend on it, its LitVars
+    /// taken as their defaults or not as `defaults` says.
     pub(crate) fn read_now(&self, name: &Name, defaults: LitDefaults) -> ValueRead {
         self.value_read(name, &self.dependents(name), defaults)
     }
 
     /// Decides the node by the value it reads, which decides it (`steps`),
     /// its LitVars taken as their defaults only where it decides nothing
-    /// without them, which `steps` offers only where no other step is left
-    /// (l.333), and records what it records, or defers it (l.263).
+    /// without them, which `steps` offers only where no other step is left,
+    /// and records what it records, or defers it.
     pub(crate) fn decide(&mut self, name: &Name) -> Decided {
         let dependents = self.dependents(name);
         let mut value = self.value_read(name, &dependents, LitDefaults::Withheld);
@@ -334,12 +330,12 @@ impl State {
     }
 
     /// Those of `broken_on` whose read reaches a class the node `name`, just
-    /// decided, records into (l.244, l.263): the relations of a node a broken
+    /// decided, records into: the relations of a node a broken
     /// dependency pointed to wait for the node that broke it only where that
     /// node reads them. A use records into what its candidate would record
-    /// into by the splits of l.278, or its result where it is decided `!`;
+    /// into by the splits, or its result where it is decided `!`;
     /// another node, into what its own relations record into. A read of
-    /// whether a class is a reference reaches only what may decide it (l.242).
+    /// whether a class is a reference reaches only what may decide it.
     fn reading_what_it_records(&self, name: &Name, broken_on: &BTreeSet<Name>) -> BTreeSet<Name> {
         if broken_on.is_empty() {
             return BTreeSet::new();
@@ -422,7 +418,7 @@ impl State {
 
     /// Records what the node just decided records, or defers it until the
     /// undecided nodes that broke their dependency on it and read what it
-    /// records, `waiting`, are decided (l.263); then records what each
+    /// records, `waiting`, are decided; then records what each
     /// deferred node records once the nodes it waits for are decided. Returns
     /// the relations recorded.
     pub(crate) fn defer(&mut self, name: &Name, waiting: BTreeSet<Name>) -> Recording {
@@ -467,8 +463,8 @@ impl State {
     /// The value the node reads leaving out the relations of the nodes
     /// `excluded`, and, for a lend, a projection or a binding, which reads
     /// whether a class is a reference, of every projection other than a Deref
-    /// whose operand is a class it reads (l.261), and what the node becomes by
-    /// it, none where it decides nothing (l.261, l.333).
+    /// whose operand is a class it reads, and what the node becomes by
+    /// it, none where it decides nothing.
     pub(crate) fn value_read(
         &self,
         name: &Name,
@@ -566,11 +562,11 @@ impl State {
         }
     }
 
-    /// An instance of the lambda's C made at `at` by `by` (l.215), each value
+    /// An instance of the lambda's C made at `at` by `by`, each value
     /// of `args` passing into the copy of the lambda's parameter in its generic
     /// part, or into its parameter in the environment, and the copy of its
     /// result type in its generic part, or the environment's, passing into
-    /// `result` (l.196, l.197).
+    /// `result`.
     pub(crate) fn instantiate_lambda(
         &mut self,
         at: &Name,
@@ -583,7 +579,7 @@ impl State {
         let from = Rc::clone(
             self.solved
                 .get(&function.group)
-                .expect("a lambda's group is solved first (l.213)"),
+                .expect("a lambda's group is solved first"),
         );
         let mut copy = crate::instance::Instance::new(at, by.clone(), &from);
         let mut met = Vec::new();
@@ -608,10 +604,10 @@ impl State {
     }
 
     /// `e?`'s exit, decided as the candidate of `sig` whose variables are the
-    /// classes of `vars` (l.337): as `return None`, a value `Option⟨K⟩`, or as
+    /// classes of `vars`: as `return None`, a value `Option⟨K⟩`, or as
     /// `return Err(x)`, a value `Result⟨O, X⟩`, `K` and `O` made anew and the
     /// candidate's `E` wrapped into `X`. The value passes into `exit`, the
-    /// class the text gives it, a meeting where that is an unknown (l.219).
+    /// class the text gives it, a meeting where that is an unknown.
     fn record_exit(
         &mut self,
         sig: &crate::sig::Signature,
@@ -645,7 +641,7 @@ impl State {
                     err: wrapped,
                 }
             }
-            _ => unreachable!("`?`'s candidates are the language's two (l.337)"),
+            _ => unreachable!("`?`'s candidates are the language's two"),
         };
         let value = self.written(name, term, recorder, &mut recorded);
         let relation = if self.is_unknown(exit) {
@@ -665,10 +661,10 @@ impl State {
 
     /// Records the use `name` of one candidate at the positions `held`, as it
     /// is recorded: its common part is that candidate, its type parameters
-    /// made anew (l.246, l.320), so nothing is left to decide, and it has no
+    /// made anew, so nothing is left to decide, and it has no
     /// node. Each argument passes into its parameter's type and the result
     /// type into the result, an identity its result carries and no parameter
-    /// does made anew (l.347), recorded by the common part.
+    /// does made anew, recorded by the common part.
     pub(crate) fn record_one(
         &mut self,
         name: &Name,
@@ -704,7 +700,7 @@ impl State {
                     &var_name,
                     &recorder,
                 ),
-                Position::Exit => unreachable!("`?`'s candidates are the language's two (l.337)"),
+                Position::Exit => unreachable!("`?`'s candidates are the language's two"),
             });
         }
         if sig.existential_identity()
@@ -737,19 +733,19 @@ impl State {
                 },
                 Decision::Use(id),
             ) => {
-                // What the common part holds is not recorded again (l.246):
+                // What the common part holds is not recorded again:
                 // an argument the common part's parameter holds whole, and
                 // the result but at the common part's variables, into each
                 // of which the candidate's type there enters. An argument it
                 // does not hold whole passes whole into the candidate's
-                // parameter, a coercion being of a whole value (l.109).
+                // parameter, a coercion being of a whole value.
                 let sig = self.decls.decl(id).sig.clone();
                 let common = match &node.common {
                     Some(Common::Use { part, classes }) => Some((part.clone(), classes.clone())),
                     _ => None,
                 };
                 // The node holds no position where the common part writes a
-                // closed type, nor one another group records (l.186).
+                // closed type, nor one another group records.
                 let mut vars = BTreeMap::new();
                 let var_name = |var| at(NodeAt::Var(var));
                 for (i, (arg, param)) in args.iter().zip(sig.params()).enumerate() {
@@ -899,7 +895,7 @@ impl State {
     }
 }
 
-/// The classes a relation records into (l.244): the upper side of a lower
+/// The classes a relation records into: the upper side of a lower
 /// bound or a part lower bound, the type passed into at a boundary or a
 /// wrapping, both sides of an equation, and the class a kind, a fact, a
 /// LitVar, a record of whether it is a reference or a lambda is given to.

@@ -1,10 +1,9 @@
-//@ spec: l.66, l.78, l.86
 // A tuple's and an array's length, an enum's name, an extern-defined type's
-// name, a struct's module and a reference's mutability are in the constructor
-// (l.66), and the cast tree's nodes are constructors (l.78). Each pair below
+// name, a struct's module and a reference's mutability are in the constructor,
+// and the cast tree's nodes are constructors. Each pair below
 // is of two nodes with no declared cast, so it has no common ancestor and no
-// join (l.86). &u8 ⊔ &mut u8 is &u8 by l.87 where it is defined, which is not
-// &mut u8, so &u8 is not below &mut u8.
+// join. &u8 ⊔ &mut u8 is &u8, which is not &mut u8, so &u8 is not below
+// &mut u8.
 extern type Vec<T>;
 extern type Box<T>;
 struct P { x }

@@ -1,0 +1,38 @@
+// let mut last = None;
+// let r = &mut last;
+// let remember = |x| *r = Some(x);
+// remember(1u8);
+// *r, Some(x), S and X are joined to the capture R; the write through it is a
+// boundary whose payload, L's, takes a lower bound.
+group λ in run {
+    let X;
+    let S;
+    let `Some(x)`: Option<S>;
+    let `*r`;
+    let `()`: ();
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    S = X;
+    `λ result` = `()`;
+}
+let L;
+let ?k;
+let None: Option<?k>;
+let `&mut last`;
+let R;
+let `|x| ..`: lambda λ;
+let remember;
+let 1u8: u8;
+let `remember(1u8)`;
+L = None;
+`&mut last` = &mut L @ `&mut last`;
+R = `&mut last`;
+remember = `|x| ..`;
+`remember(1u8)` = (remember)(1u8) @ `remember(1u8)`;
+group λ {
+    `*r` = *R @ `*r`;
+    #[through_ref] `*r` = `Some(x)`;
+}
+
+must pass;
+assert L: Option<u8>;

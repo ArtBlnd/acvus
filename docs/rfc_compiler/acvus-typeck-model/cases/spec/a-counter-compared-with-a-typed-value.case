@@ -1,0 +1,39 @@
+// let n = size("abc");     // size(&str) -> u64
+// let mut i = 0; i = i + 1; let done = i == n;
+// // add and eq at i32 and at u64
+// eq's common part is eq(?0, ?0) -> bool, the two arguments one variable, a
+// reference left whole at the top: &i and &n meet in ?0, whose two
+// references' targets are equated, so I = N = u64; add's likewise
+// makes &i and &1 meet. A read leaves out only what a node records once
+// decided, so each reads u64: add(u64), eq(u64), i: u64.
+extern fn size(&str) -> u64;
+extern fn core::add(&i32, &i32) -> i32;
+extern fn core::add(&u64, &u64) -> u64;
+extern fn core::eq(&i32, &i32) -> bool;
+extern fn core::eq(&u64, &u64) -> bool;
+let Str: str;
+let s: &Str;
+let N;
+let I;
+let ?a: lit 0;
+let ?b: lit 1;
+let `&i`;
+let `&1`;
+let R;
+let `&i 2`;
+let `&n`;
+let D;
+N = size(s) @ size;
+I = ?a;
+`&i` = &I @ `&i`;
+`&1` = &?b @ `&1`;
+R = core::add(`&i`, `&1`) @ `i + 1`;
+I = R;
+`&i 2` = &I @ `&i 2`;
+`&n` = &N @ `&n`;
+D = core::eq(`&i 2`, `&n`) @ `i == n`;
+
+must pass;
+assert I: u64;
+assert `i + 1` == core::add#1;
+assert `i == n` == core::eq#1;

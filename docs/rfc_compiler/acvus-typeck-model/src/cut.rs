@@ -1,11 +1,10 @@
-//! The cut of each lambda's captured environment (l.186;
-//! `design/17-environment.md`): which binding group solves each class and each
+//! The cut of each lambda's captured environment: which binding group solves each class and each
 //! constraint of the text, a lambda's environment moving them into the group
 //! enclosing it. A use gives a constraint for each set of positions its callee
 //! ties: a declaration by its signature, a function of another group by the
-//! parts of its C, which an instance makes anew (`State::components`, l.215).
+//! parts of its C, which an instance makes anew (`State::components`).
 //! So the cut is made as the groups are solved: a lambda once the groups it
-//! makes instances of are, before it is solved itself (l.213).
+//! makes instances of are, before it is solved itself.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -17,7 +16,7 @@ use crate::ty::Name;
 /// The classes and constraints the lambdas' captured environments hold, each
 /// with the group that solves it, its enclosing one's: an item other than a
 /// use, which gives one constraint, and the positions of each constraint a use
-/// gives (l.186).
+/// gives.
 #[derive(Clone, Debug, Default)]
 pub struct Cut {
     classes: BTreeMap<Name, Name>,
@@ -25,7 +24,7 @@ pub struct Cut {
     positions: BTreeMap<(usize, Position), Name>,
 }
 
-/// A constraint an item gives (l.186): the positions it lies at, none for an
+/// A constraint an item gives: the positions it lies at, none for an
 /// item other than a use, and the classes it ties.
 struct Constraint<'a> {
     positions: Vec<Position>,
@@ -35,7 +34,7 @@ struct Constraint<'a> {
 impl Cut {
     /// The cut of each lambda solved before `through` and of `through`
     /// itself, of every lambda where `through` is the entry, in the order the
-    /// groups are solved, the lambdas inside a group before it (l.213).
+    /// groups are solved, the lambdas inside a group before it.
     /// `solved` holds each group solved before `through`.
     pub fn of(program: &Program, solved: &BTreeMap<Name, Rc<State>>, through: &Name) -> Cut {
         let order = program.group_order();
@@ -63,11 +62,11 @@ impl Cut {
         cut
     }
 
-    /// The lambda `group`'s environment, moved to `parent`
-    /// (`design/17-environment.md`, Definitions): the classes joined to a
+    /// The lambda `group`'s environment, moved to `parent`:
+    /// the classes joined to a
     /// capture by the constraints of the lambda's text, those of the lambdas
     /// inside it moved into it among them, and the constraints whose classes
-    /// those are (l.186).
+    /// those are.
     fn cut(
         &mut self,
         program: &Program,
@@ -99,7 +98,7 @@ impl Cut {
         for (i, constraint) in &constraints {
             let mut classes = constraint.classes.clone();
             // A binding is on the classes of the projections on its path as
-            // well (l.186).
+            // well.
             if let Item::Bind { path, .. } = &program.items[*i].1 {
                 for (j, other) in &constraints {
                     if let Item::Project { name, .. } = &program.items[*j].1
@@ -188,7 +187,7 @@ impl Cut {
 
     /// What of the item at `i` in `items` the group records: an item other
     /// than a use, whole where the group records it, and the positions of a
-    /// use's constraints it records (l.186); none where it records nothing of
+    /// use's constraints it records; none where it records nothing of
     /// it.
     pub fn part(&self, program: &Program, i: usize, group: &Name) -> Option<Part> {
         let (at, item) = &program.items[i];
@@ -216,7 +215,7 @@ impl Cut {
     }
 
     /// Whether the class is universal: a function's parameter type that no
-    /// environment holds, or a receiver's `T̄` (l.210, l.314).
+    /// environment holds, or a receiver's `T̄`.
     pub fn is_universal(&self, program: &Program, name: &Name) -> bool {
         let parameter = program
             .functions
@@ -226,14 +225,14 @@ impl Cut {
     }
 
     /// Whether the class is an unknown of the group that solves it, as its
-    /// text gives it (l.211): not written, and not universal.
+    /// text gives it: not written, and not universal.
     pub fn is_text_unknown(&self, program: &Program, name: &Name) -> bool {
         let class = program.class(name);
         matches!(class.origin, Origin::Var | Origin::Lit(_)) && !self.is_universal(program, name)
     }
 }
 
-/// The constraints the item at `i` gives (l.186), each with the classes it
+/// The constraints the item at `i` gives, each with the classes it
 /// ties. An item other than a use gives one, on all it relates. A use gives
 /// one for each set of positions its callee ties. Of declarations: a position
 /// where every candidate writes one closed type, alone; with one candidate,
@@ -243,7 +242,7 @@ impl Cut {
 /// alone, tied to that function's parameter or result type, the body's own
 /// types. Of another group: the positions whose types lie in one part of that
 /// group's C, which an instance makes anew together, and each whose type lies
-/// outside C alone (`State::components`, l.215).
+/// outside C alone (`State::components`).
 fn constraints<'a>(
     program: &'a Program,
     i: usize,
@@ -264,10 +263,7 @@ fn constraints<'a>(
         classes: vec![item.class_at(position)],
     };
     if let Some(function) = program.function(callee) {
-        assert!(
-            exit.is_none(),
-            "{callee}: a call of a function has no exit (l.337)"
-        );
+        assert!(exit.is_none(), "{callee}: a call of a function has no exit");
         let params = (0..args.len())
             .map(|k| (Position::Arg(k), &function.params[k]))
             .chain([(Position::Result, &function.result)]);
@@ -281,7 +277,7 @@ fn constraints<'a>(
                 .collect();
         }
         let Some(from) = solved.get(&function.group) else {
-            panic!("{} is solved before {at} (l.213)", function.group);
+            panic!("{} is solved before {at}", function.group);
         };
         let components = from.components();
         let mut by_part: BTreeMap<usize, Constraint<'a>> = BTreeMap::new();
@@ -323,10 +319,7 @@ fn constraints<'a>(
         positions,
     };
     if let [sig] = sigs.as_slice() {
-        assert!(
-            exit.is_none(),
-            "`?`'s candidates are the language's two (l.337)"
-        );
+        assert!(exit.is_none(), "`?`'s candidates are the language's two");
         let written = |position: Position| match position {
             Position::Arg(k) => &sig.params()[k],
             Position::Result => sig.result(),
@@ -375,8 +368,7 @@ fn constraints<'a>(
         .collect()
 }
 
-/// Classes joined by the constraints on them together
-/// (`design/17-environment.md`).
+/// Classes joined by the constraints on them together.
 #[derive(Default)]
 struct Joined {
     parent: BTreeMap<Name, Name>,

@@ -1,5 +1,4 @@
-//! The certificate an accepted order of solving leaves, and its checker
-//! (`design/14-certificate.md`).
+//! The certificate an accepted order of solving leaves, and its checker.
 //!
 //! The checker reads the program and the certificate alone, on closed types:
 //! every relation the text and the decisions give is regenerated from the
@@ -25,12 +24,12 @@ use crate::ty::{Constructor, HasTerm, Mutability, Name, PartKey, Term, Ty, TyErr
 
 /// A closed value as the certificate gives it: a type each of whose function
 /// values carries the lambdas its Values names, as a function value carries
-/// its facts on its type (l.181, l.184).
+/// its facts on its type.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct Value {
     term: Rc<Term<Value>>,
     /// At a function value, the lambdas its Values names; none elsewhere. No
-    /// declaration, text or context writes a function value (l.184), so every
+    /// declaration, text or context writes a function value, so every
     /// function value in a value is a class's, and names its Values.
     lambdas: Option<BTreeSet<Name>>,
 }
@@ -96,7 +95,7 @@ impl fmt::Display for Value {
 }
 
 /// The value the state gives the class at `root`, each function value in it
-/// carrying the lambdas its Values names (l.181, l.184); none where the class
+/// carrying the lambdas its Values names; none where the class
 /// has no closed value.
 fn certified(state: &State, root: ClassId) -> Option<Value> {
     let ty = state.value(root)?;
@@ -121,15 +120,14 @@ pub struct Sheet {
     /// Each root's value.
     values: BTreeMap<ClassId, Option<Value>>,
     /// Each root's parts, by their roots, where it holds a kind: where the
-    /// split linked a part's two sides (l.278).
+    /// split linked a part's two sides.
     parts: BTreeMap<ClassId, Vec<(PartKey, ClassId)>>,
-    /// The roots that are unknowns of the state's group (l.211), which a value
-    /// passing into meets (l.219).
+    /// The roots that are unknowns of the state's group, which a value
+    /// passing into meets.
     unknowns: BTreeSet<ClassId>,
     decisions: BTreeMap<Name, Option<Decision>>,
     instances: Vec<Made>,
-    /// The lambdas an instance made anew here, with their environments
-    /// (l.215).
+    /// The lambdas an instance made anew here, with their environments.
     lambdas: BTreeMap<Name, LambdaCopy>,
 }
 
@@ -215,7 +213,7 @@ impl Sheet {
 pub struct Certificate {
     sheets: BTreeMap<Name, Sheet>,
     /// Which group solves each class and constraint, as the groups the order
-    /// solved cut the lambdas' environments (l.186).
+    /// solved cut the lambdas' environments.
     cut: Cut,
     accepted: bool,
 }
@@ -274,7 +272,7 @@ impl Certificate {
 }
 
 /// A relation the text or a decision gives that the certificate's values do
-/// not satisfy, or a condition of l.290 they do not meet.
+/// not satisfy.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Violation {
     /// The binding group whose text gives it, and the instances through which
@@ -318,7 +316,7 @@ struct Step<'a> {
 
 /// Where a binding group's text is checked: its own state, or an instance of
 /// its C, through the instances that copied it on, to the state its values
-/// are read in (`design/14-certificate.md`, Domain). Level 0 is the group's
+/// are read in. Level 0 is the group's
 /// own sheet, and level `k` the sheet of `steps[k - 1]`.
 struct Context<'a> {
     group: Name,
@@ -330,7 +328,7 @@ struct Context<'a> {
 enum Lookup {
     Value(Value),
     /// An original left in C, or a class of a state other than the entry's
-    /// with no value there: nothing is checked of it here (l.290).
+    /// with no value there: nothing is checked of it here.
     Absent,
     /// A class of the entry's state with no value.
     Missing,
@@ -350,7 +348,7 @@ enum Decided {
     InC,
 }
 
-/// Where a function value passes into a function type (l.197): the level of
+/// Where a function value passes into a function type: the level of
 /// the sheet that split it, the roots there of the two sides, and whether the
 /// type's result is an unknown the lambda's result meets.
 struct IntoFunctionType {
@@ -376,7 +374,7 @@ struct Read {
 }
 
 /// A parameter's type, and whether an argument meets it or passes into it by a
-/// boundary (l.280).
+/// boundary.
 struct Param {
     ty: Read,
     meets: bool,
@@ -471,7 +469,7 @@ impl<'a> Context<'a> {
             }
         }
         if self.sheet(self.last()).is_entry() {
-            Err(format!("{name} is not decided (l.290)"))
+            Err(format!("{name} is not decided"))
         } else {
             Ok(Decided::InC)
         }
@@ -519,7 +517,7 @@ fn contexts(certificate: &Certificate) -> Vec<Context<'_>> {
 }
 
 /// What the program's text says of its classes, without solving: which its
-/// equations equate, and which its text decides or makes universal (l.211).
+/// equations equate, and which its text decides or makes universal.
 struct Text {
     parent: BTreeMap<Name, Name>,
     /// The roots of the classes that hold a type the text writes, gives from
@@ -575,14 +573,13 @@ impl Text {
     }
 
     /// Whether the class is an unknown of its own group by its text: not
-    /// decided, and not universal (l.211).
+    /// decided, and not universal.
     fn unknown(&self, name: &Name) -> bool {
         let root = self.root(name);
         !self.decided.contains(&root) && !self.universal.contains(&root)
     }
 
-    /// Whether a value passing into `into` at `place` meets it (l.219;
-    /// `design/09-group.md`, reading 8).
+    /// Whether a value passing into `into` at `place` meets it.
     fn meets(&self, program: &Program, cut: &Cut, group: &Name, into: &Name, place: Place) -> bool {
         match place {
             Place::ThroughRef => false,
@@ -593,7 +590,7 @@ impl Text {
 
     /// Whether an argument meets the copy of a parameter's type in an
     /// instance: the copy is an unknown of the group the instance is recorded
-    /// in unless the text decides the type (l.215).
+    /// in unless the text decides the type.
     fn meets_copy(&self, param: &Name) -> bool {
         !self.decided.contains(&self.root(param))
     }
@@ -630,7 +627,7 @@ impl Checker<'_> {
             Lookup::Value(ty) => Some(ty),
             Lookup::Absent => None,
             Lookup::Missing => {
-                self.violation(context, at, format!("{of} has no value (l.290)"));
+                self.violation(context, at, format!("{of} has no value"));
                 None
             }
         }
@@ -684,13 +681,13 @@ impl Checker<'_> {
         Some(At { level, class })
     }
 
-    /// A value passing into a type (l.219, l.280): `from ≤ to` where it meets
+    /// A value passing into a type: `from ≤ to` where it meets
     /// it, `from ⇝ to` by a coercion otherwise, each function value in `from`
-    /// carried along the coercion as the split carries it (`reach`, l.278).
-    /// Where it reaches a function value, its lambdas are among that one's
-    /// (l.181, l.184); where it reaches a function type, an instance of each of
+    /// carried along the coercion as the split carries it (`reach`).
+    /// Where it reaches a function value, its lambdas are among that one's;
+    /// where it reaches a function type, an instance of each of
     /// its lambdas was made where the split met the two, at the classes they
-    /// are read at, as `function_type` checks (l.197). Returns whether the
+    /// are read at, as `function_type` checks. Returns whether the
     /// coercion and the Values hold; what an instance breaks is recorded there.
     fn flows(
         &mut self,
@@ -729,7 +726,7 @@ impl Checker<'_> {
                     let (Some(lambdas), Some(named)) = (&value.lambdas, &target.lambdas) else {
                         unreachable!(
                             "{value} and {target} are function values of classes, which name \
-                             their Values (l.184)"
+                             their Values"
                         );
                     };
                     holds &= lambdas.is_subset(named);
@@ -746,7 +743,7 @@ impl Checker<'_> {
 
     /// Where the function value at `from_path` of `from` meets the function
     /// type at `to_path` of `to`, by the classes the two are read at, which the
-    /// split related there (l.197, l.278).
+    /// split related there.
     fn into_function_type(
         context: &Context<'_>,
         from: &Read,
@@ -757,7 +754,7 @@ impl Checker<'_> {
         let (Some(from_at), Some(to_at)) = (from.at, to.at) else {
             panic!(
                 "{} reaches the function type {} where the checker reads no class \
-                 (design/14-certificate.md, Open)",
+                 ",
                 from.value, to.value
             );
         };
@@ -773,7 +770,7 @@ impl Checker<'_> {
         if value.level != ty.level {
             panic!(
                 "{} and {} are read at two levels, which no rule links a function value to a \
-                 function type at yet (l.197; design/14-certificate.md, Open)",
+                 function type at yet",
                 from.value, to.value
             );
         }
@@ -788,7 +785,7 @@ impl Checker<'_> {
         }
     }
 
-    /// l.290: every class of the entry has a value, every node of the entry
+    /// Every class of the entry has a value, every node of the entry
     /// is decided, and every decided node is reached.
     fn acceptance(&mut self) {
         for (group, sheet) in &self.certificate.sheets {
@@ -798,7 +795,7 @@ impl Checker<'_> {
                         self.violations.push(Violation {
                             context: group.to_string(),
                             at: sheet.name_of(root).to_string(),
-                            what: "no value (l.290)".to_string(),
+                            what: "no value".to_string(),
                         });
                     }
                 }
@@ -808,7 +805,7 @@ impl Checker<'_> {
                     self.violations.push(Violation {
                         context: group.to_string(),
                         at: name.to_string(),
-                        what: "undecided (l.290)".to_string(),
+                        what: "undecided".to_string(),
                     });
                 }
             }
@@ -853,12 +850,7 @@ impl Checker<'_> {
             }
             Origin::Lit(lit) => {
                 let holds = matches!(value.term(), Term::Scalar(scalar) if lit.admits(*scalar));
-                self.require(
-                    context,
-                    &at,
-                    holds,
-                    format!("{value} does not admit {lit} (l.127)"),
-                );
+                self.require(context, &at, holds, format!("{value} does not admit {lit}"));
             }
             Origin::Lambda(lambda) => {
                 let arity = self
@@ -868,14 +860,9 @@ impl Checker<'_> {
                     .params
                     .len();
                 let holds = *value.term() == Term::FunctionValue { arity };
-                self.require(
-                    context,
-                    &at,
-                    holds,
-                    format!("{value} is not Fn/{arity} (l.181)"),
-                );
+                self.require(context, &at, holds, format!("{value} is not Fn/{arity}"));
                 // Each instance on the way that made the lambda anew names
-                // its copy (l.215).
+                // its copy.
                 let mut named_as = lambda.clone();
                 for step in &context.steps {
                     let copy = copy_name(&step.made.at, &named_as);
@@ -891,14 +878,14 @@ impl Checker<'_> {
                     context,
                     &at,
                     named,
-                    format!("{value}'s Values do not name {named_as} (l.181, l.215)"),
+                    format!("{value}'s Values do not name {named_as}"),
                 );
             }
         }
         Some(())
     }
 
-    /// The item's part the context's group records (l.186).
+    /// The item's part the context's group records.
     fn item(&mut self, context: &Context<'_>, i: usize, item: &Item, part: &Part) -> Option<()> {
         match item {
             Item::Pass { value, into, place } => {
@@ -911,12 +898,7 @@ impl Checker<'_> {
                 let holds = self.flows(context, &at, &from, &to, meets);
                 let way = if meets { "<=" } else { "~>" };
                 let (from, to) = (&from.value, &to.value);
-                self.require(
-                    context,
-                    &at,
-                    holds,
-                    format!("{from} {way} {to} fails (l.280)"),
-                );
+                self.require(context, &at, holds, format!("{from} {way} {to} fails"));
             }
             Item::Equation(a, b) => {
                 let at = format!("the equation {a} = {b}");
@@ -980,7 +962,7 @@ impl Checker<'_> {
             .id(&ClassName::Text(name.clone()))
             .unwrap_or_else(|| panic!("{} names the class {name}", function.group));
         let Some(&copy) = made.made.get(&from.root(id)) else {
-            self.violation(context, at, format!("{} copies no {name} (l.215)", made.at));
+            self.violation(context, at, format!("{} copies no {name}", made.at));
             return None;
         };
         let lookup = context.lookup(level, copy);
@@ -991,7 +973,7 @@ impl Checker<'_> {
         })
     }
 
-    /// The lambda of the program a lambda is, or an instance copied (l.215).
+    /// The lambda of the program a lambda is, or an instance copied.
     fn lambda_function(&self, lambda: &Name, copied: Option<&LambdaCopy>) -> Function {
         let of = copied.map_or(lambda, |copied| &copied.of);
         self.program
@@ -1002,7 +984,7 @@ impl Checker<'_> {
 
     /// The value of the parameter or result type at `i` in a lambda's
     /// environment: the text's class, or, for a lambda an instance copied,
-    /// that instance's copy (l.215), with the class it is read at.
+    /// that instance's copy, with the class it is read at.
     fn environment(
         &mut self,
         context: &Context<'_>,
@@ -1049,7 +1031,7 @@ impl Checker<'_> {
         );
     }
 
-    /// A function value passing into a function type (l.197): each lambda
+    /// A function value passing into a function type: each lambda
     /// its Values names has an instance made where that boundary was split,
     /// as though the function type called it, each parameter of the type
     /// passing into the lambda's parameter and the lambda's result into the
@@ -1066,7 +1048,7 @@ impl Checker<'_> {
             unreachable!("{ty} is a function type");
         };
         let Some(lambdas) = &value.lambdas else {
-            unreachable!("{value} is a function value of a class, which names its Values (l.184)");
+            unreachable!("{value} is a function value of a class, which names its Values");
         };
         let sheet = context.sheet(into.level);
         for lambda in lambdas {
@@ -1081,9 +1063,7 @@ impl Checker<'_> {
                 self.violation(
                     context,
                     at,
-                    format!(
-                        "no instance of {lambda} is made where {value} passes into {ty} (l.197)"
-                    ),
+                    format!("no instance of {lambda} is made where {value} passes into {ty}"),
                 );
                 continue;
             };
@@ -1145,7 +1125,7 @@ impl Checker<'_> {
                 context,
                 at,
                 holds,
-                format!("the result of {lambda}: {returned} into {ret} fails (l.197)"),
+                format!("the result of {lambda}: {returned} into {ret} fails"),
             );
         }
     }
@@ -1157,10 +1137,10 @@ impl Checker<'_> {
         self.require(context, at, holds, format!("{returned} <= {result} fails"));
     }
 
-    /// A use of a function (l.192–195), at the positions of its constraints
-    /// the context's group records (l.186): in its own group or an enclosing
+    /// A use of a function, at the positions of its constraints
+    /// the context's group records: in its own group or an enclosing
     /// one, each argument passes into its universal parameter's type by a
-    /// boundary (l.508); from another group, into its copy in the instance
+    /// boundary; from another group, into its copy in the instance
     /// made here.
     fn call(
         &mut self,
@@ -1187,7 +1167,7 @@ impl Checker<'_> {
         } else {
             let made_at = Name::new(&format!("{}@{i}", function.name));
             let Some(made) = context.own.instance(&made_at) else {
-                self.violation(context, &at, "no instance is made (l.215)".to_string());
+                self.violation(context, &at, "no instance is made".to_string());
                 return None;
             };
             Some(made)
@@ -1218,12 +1198,12 @@ impl Checker<'_> {
         Some(())
     }
 
-    /// A use of declarations (l.320–333), at the positions of its constraints
-    /// the context's group records (l.186): where its candidates' common part
-    /// writes one closed type, by that type, whatever the use becomes
-    /// (l.246); at the others, which its node holds, by its decision. A use of
+    /// A use of declarations, at the positions of its constraints
+    /// the context's group records: where its candidates' common part
+    /// writes one closed type, by that type, whatever the use becomes;
+    /// at the others, which its node holds, by its decision. A use of
     /// one candidate records that candidate at once, where its text is
-    /// recorded, as its common part, nothing left to decide (l.246, l.320).
+    /// recorded, as its common part, nothing left to decide.
     #[allow(clippy::too_many_arguments)]
     fn use_(
         &mut self,
@@ -1286,8 +1266,8 @@ impl Checker<'_> {
                 (decision, level, owner)
             }
         };
-        // The common part is recorded where the use is, before it is decided
-        // (l.246), so its classes are the group's own, at level 0.
+        // The common part is recorded where the use is, before it is decided,
+        // so its classes are the group's own, at level 0.
         let common_values = match &common {
             Some(part) => Some(self.common(
                 context,
@@ -1304,12 +1284,7 @@ impl Checker<'_> {
             Decision::Use(id) => {
                 let decl = self.decls.decl(&id);
                 let candidate = decl.id.name == *callee && decl.sig.params().len() == args.len();
-                self.require(
-                    context,
-                    &at,
-                    candidate,
-                    format!("{id:?} is no candidate (l.320)"),
-                );
+                self.require(context, &at, candidate, format!("{id:?} is no candidate"));
                 let sig = decl.sig.clone();
                 let written: Vec<&SigTy> = sig
                     .params()
@@ -1366,7 +1341,7 @@ impl Checker<'_> {
                             context,
                             &at,
                             holds,
-                            format!("{chosen} <= {value} at the common part's {k} fails (l.246)"),
+                            format!("{chosen} <= {value} at the common part's {k} fails"),
                         );
                     }
                 }
@@ -1387,17 +1362,17 @@ impl Checker<'_> {
                     context,
                     &at,
                     never,
-                    "no argument it reads is `!` (l.333)".to_string(),
+                    "no argument it reads is `!`".to_string(),
                 );
             }
-            other => self.violation(context, &at, format!("not reached: {other:?} (l.290)")),
+            other => self.violation(context, &at, format!("not reached: {other:?}")),
         }
         Some(())
     }
 
     /// A use's constraints at the positions where its candidates' common part
-    /// writes one closed type, which hold whatever the use becomes (l.186,
-    /// l.246): each argument there passing into that type, at the class the
+    /// writes one closed type, which hold whatever the use becomes: each argument
+    /// there passing into that type, at the class the
     /// common part made for it, and that type entering the result.
     fn closed(
         &mut self,
@@ -1441,13 +1416,13 @@ impl Checker<'_> {
         Some(())
     }
 
-    /// `e?`'s exit (l.337): its value is `Option⟨K⟩` where the use is decided
+    /// `e?`'s exit: its value is `Option⟨K⟩` where the use is decided
     /// as `?(Option⟨T⟩)`, and `Result⟨O, X⟩` where it is decided as
     /// `?(Result⟨T, E⟩)`, `E`'s value wrapped into `X`: passing into it as it
     /// is where it is an `Error` or `!`, into the payload of an `Error` whose
     /// one member is its name where it has one, and into that of an
     /// `Error⟨..⟩` otherwise; and that value passes into the class the text
-    /// gives the exit, a meeting where that is an unknown (l.219).
+    /// gives the exit, a meeting where that is an unknown.
     fn exit(
         &mut self,
         context: &Context<'_>,
@@ -1479,7 +1454,7 @@ impl Checker<'_> {
             context,
             at,
             holds,
-            format!("the exit {value} into {exit_value} fails (l.337)"),
+            format!("the exit {value} into {exit_value} fails"),
         );
         match (sig.params(), value.term()) {
             ([SigTy::Term(param)], Term::Option(_)) if matches!(**param, Term::Option(_)) => {}
@@ -1522,19 +1497,19 @@ impl Checker<'_> {
                     context,
                     at,
                     holds,
-                    format!("{error} is not wrapped into {err} (l.337)"),
+                    format!("{error} is not wrapped into {err}"),
                 );
             }
             _ => self.violation(
                 context,
                 at,
-                format!("the exit {value} is not the decided candidate's (l.337)"),
+                format!("the exit {value} is not the decided candidate's"),
             ),
         }
         Some(())
     }
 
-    /// A use's common part (l.246): the values of the classes it made for its
+    /// A use's common part: the values of the classes it made for its
     /// variables, each a reference or none where the common part records it
     /// so; each argument passing into the common part's parameter, as at a
     /// decided candidate's, a function value into a function type left to that
@@ -1555,7 +1530,7 @@ impl Checker<'_> {
         for k in 0..part.vars.len() {
             let name = ClassName::Node(Rc::new(owner.clone()), NodeAt::Common(k));
             let Some(id) = context.sheet(level).id(&name) else {
-                self.violation(context, at, format!("the use made no class {name} (l.246)"));
+                self.violation(context, at, format!("the use made no class {name}"));
                 return None;
             };
             let lookup = context.lookup(level, id);
@@ -1572,7 +1547,7 @@ impl Checker<'_> {
                     context,
                     at,
                     holds,
-                    format!("{name} is recorded as {is}, and its value is {value} (l.246)"),
+                    format!("{name} is recorded as {is}, and its value is {value}"),
                 );
             }
             values.push(Read {
@@ -1622,8 +1597,7 @@ impl Checker<'_> {
     }
 
     /// The values of the variables the signature writes at the positions the
-    /// node holds, `written`, those of the classes the decision made for them
-    /// (l.320).
+    /// node holds, `written`, those of the classes the decision made for them.
     fn bound(
         &mut self,
         context: &Context<'_>,
@@ -1657,7 +1631,7 @@ impl Checker<'_> {
         Some(bound)
     }
 
-    /// `&ₘ p` (l.296).
+    /// `&ₘ p`.
     fn lend(
         &mut self,
         context: &Context<'_>,
@@ -1673,7 +1647,7 @@ impl Checker<'_> {
             mutability: lent,
         } = decision
         else {
-            self.violation(context, &at, format!("not reached: {decision:?} (l.290)"));
+            self.violation(context, &at, format!("not reached: {decision:?}"));
             return None;
         };
         let place = self.text(context, &at, place)?;
@@ -1686,7 +1660,7 @@ impl Checker<'_> {
                 (mutability.min(*of), inner.clone())
             }
             (LendTarget::Through(_), _) => {
-                self.violation(context, &at, format!("{place} is no reference (l.296)"));
+                self.violation(context, &at, format!("{place} is no reference"));
                 return None;
             }
         };
@@ -1694,19 +1668,19 @@ impl Checker<'_> {
             context,
             &at,
             lent == expected,
-            format!("{lent:?} is not {expected:?} (l.296)"),
+            format!("{lent:?} is not {expected:?}"),
         );
         let holds = Value::from_term(Term::Ref(lent, target_ty)).is_ok_and(|lent| lent == result);
         self.require(
             context,
             &at,
             holds,
-            format!("{result} is not the reference lent (l.296)"),
+            format!("{result} is not the reference lent"),
         );
         Some(())
     }
 
-    /// A projection (l.144–154, l.298).
+    /// A projection.
     fn project(
         &mut self,
         context: &Context<'_>,
@@ -1729,7 +1703,7 @@ impl Checker<'_> {
                 _ => false,
             },
             other => {
-                self.violation(context, &at, format!("not reached: {other:?} (l.290)"));
+                self.violation(context, &at, format!("not reached: {other:?}"));
                 return None;
             }
         };
@@ -1742,7 +1716,7 @@ impl Checker<'_> {
         Some(())
     }
 
-    /// A binding (l.306).
+    /// A binding.
     fn bind(
         &mut self,
         context: &Context<'_>,
@@ -1767,7 +1741,7 @@ impl Checker<'_> {
                     (LendTarget::Place, _) => position.clone(),
                     (LendTarget::Through(_), Term::Ref(_, inner)) => inner.clone(),
                     (LendTarget::Through(_), _) => {
-                        self.violation(context, &at, format!("{position} is no reference (l.306)"));
+                        self.violation(context, &at, format!("{position} is no reference"));
                         return None;
                     }
                 };
@@ -1781,22 +1755,17 @@ impl Checker<'_> {
                 }
             }
             other => {
-                self.violation(context, &at, format!("not reached: {other:?} (l.290)"));
+                self.violation(context, &at, format!("not reached: {other:?}"));
                 return None;
             }
         };
         let holds = self.flows(context, &at, &read, &binding_read, true);
         let read = &read.value;
-        self.require(
-            context,
-            &at,
-            holds,
-            format!("{read} <= {binding} fails (l.306)"),
-        );
+        self.require(context, &at, holds, format!("{read} <= {binding} fails"));
         Some(())
     }
 
-    /// A call of a function value (l.181, l.196).
+    /// A call of a function value.
     fn call_value(
         &mut self,
         context: &Context<'_>,
@@ -1812,7 +1781,7 @@ impl Checker<'_> {
             owner,
         } = self.decided(context, &at, name)?;
         let Decision::Calls(lambdas) = decision else {
-            self.violation(context, &at, format!("not reached: {decision:?} (l.290)"));
+            self.violation(context, &at, format!("not reached: {decision:?}"));
             return None;
         };
         let arg_reads = args
@@ -1826,25 +1795,21 @@ impl Checker<'_> {
             _ => callee_value.clone(),
         };
         let Some(values) = called.lambdas.clone() else {
-            self.violation(
-                context,
-                &at,
-                format!("{callee_value} is no function value (l.196)"),
-            );
+            self.violation(context, &at, format!("{callee_value} is no function value"));
             return None;
         };
         for lambda in values.difference(&lambdas) {
             self.violation(
                 context,
                 &at,
-                format!("{callee}'s Values name {lambda}, which the call does not call (l.196)"),
+                format!("{callee}'s Values name {lambda}, which the call does not call"),
             );
         }
         for lambda in lambdas.difference(&values) {
             self.violation(
                 context,
                 &at,
-                format!("the call calls {lambda}, which {callee}'s Values do not name (l.181)"),
+                format!("the call calls {lambda}, which {callee}'s Values do not name"),
             );
         }
         for lambda in &lambdas {
@@ -1852,11 +1817,7 @@ impl Checker<'_> {
             let function = self.lambda_function(lambda, copied.as_ref());
             let made_at = Name::new(&format!("{owner}#{lambda}"));
             let Some(made) = context.sheet(level).instance(&made_at) else {
-                self.violation(
-                    context,
-                    &at,
-                    format!("no instance of {lambda} is made (l.196)"),
-                );
+                self.violation(context, &at, format!("no instance of {lambda} is made"));
                 continue;
             };
             let Some(params) = function
@@ -1918,7 +1879,7 @@ fn value_at<'v>(value: &'v Value, path: &[PartKey]) -> Option<&'v Value> {
 }
 
 /// Where each function value of `from` reaches in `to` along `coercion`, as
-/// the split carries it (l.278), each as its path in `from` and its path in
+/// the split carries it, each as its path in `from` and its path in
 /// `to`: at the same position where no stage moves it, a reborrow keeping the
 /// target; along a cast's or a conversion's signature, from where its
 /// parameter writes a variable to where its result writes it (`image`); and
@@ -1996,8 +1957,8 @@ fn reach(
 }
 
 /// What a cast, a conversion or a view gives where `value` passes into its
-/// parameter, as the split links them through its signature (l.78, l.154,
-/// l.278), and as a conversion carries it (l.280): its result with each
+/// parameter, as the split links them through its signature, and as a conversion
+/// carries it: its result with each
 /// variable its parameter writes bound to the part of `value` at the first
 /// place it writes it, and where each function value of `value` at each place
 /// the parameter writes a variable lies in it, from its path in `value`. None
@@ -2014,7 +1975,7 @@ fn image(sig: &Signature, value: &Value) -> Option<(Value, Vec<(Path, Path)>)> {
 
 /// Binds each variable `ty` writes to the part of `value` at the first place
 /// it writes it, with the path of each place; false where `value` is not of
-/// `ty`'s shape. A variable written twice takes one type (types §7), each place
+/// `ty`'s shape. A variable written twice takes one type, each place
 /// holding its own Values.
 fn bind_sig(
     ty: &SigTy,
@@ -2087,7 +2048,7 @@ fn build_sig(
 }
 
 /// Whether the value has the member or part the projection names, of the
-/// value `part` (l.146–154).
+/// value `part`.
 fn has(decls: &Decls, value: &Value, projection: &Projection, part: &Value) -> bool {
     match (projection, value.term()) {
         (_, Term::Never) => true,
@@ -2120,7 +2081,7 @@ fn has(decls: &Decls, value: &Value, projection: &Projection, part: &Value) -> b
 
 /// The element an extern-defined container indexes along its view, the cast
 /// going up from a shared reference to it, with the Values of each function
-/// value in it carried along the view's signature (l.78, l.154); none where it
+/// value in it carried along the view's signature; none where it
 /// has no view.
 fn view_element(decls: &Decls, value: &Value) -> Option<Value> {
     let view = decls

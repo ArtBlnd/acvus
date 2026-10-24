@@ -1,9 +1,5 @@
-//@ spec: l.78, l.86, l.87
 // Only &A → &B is declared. (&mut, A) and (&mut, B) have no cast going up, so
-// they have no common ancestor (l.86). l.87 takes &mut S as &S only where the
-// other side is a shared &T; read for two exclusives it would make
-// &mut u8 ⊔ &mut u8 both &mut u8 (l.86, one node) and &u8. So &mut A and
-// &mut B have no join.
+// they have no common ancestor. So &mut A and &mut B have no join.
 extern type A;
 extern type B;
 #[cast] extern fn a_b(&A) -> &B;

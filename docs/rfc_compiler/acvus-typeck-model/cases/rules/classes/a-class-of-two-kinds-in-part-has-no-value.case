@@ -1,7 +1,6 @@
-//@ spec: l.158, l.276, l.290
 // a.x and a.0 on one class: an object's field, which the text writes, gives
-// the class an object, which has no component 0 (l.276), so the conjunction
-// no type meets leaves it with no value, refused (l.290).
+// the class an object, which has no component 0, so the conjunction
+// no type meets leaves it with no value, refused.
 let A;
 let R1;
 let R2;

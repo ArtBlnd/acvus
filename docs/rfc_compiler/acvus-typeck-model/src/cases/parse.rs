@@ -1,5 +1,5 @@
 //! A case's text read into what it declares, what its program's text gives,
-//! and what it expects (`design/19-cases.md`, Form). Nothing is resolved here:
+//! and what it expects. Nothing is resolved here:
 //! a type is read as it is written, and the builder resolves it.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -35,7 +35,7 @@ pub enum TypeExpr {
     /// `E{V(T)}`.
     Enum(String, Vec<(String, TypeExpr)>),
     /// `Fn/n`; in a value a certificate change plants, `Fn/n{λ, …}`, the
-    /// lambdas its Values names (`design/14-certificate.md`).
+    /// lambdas its Values names.
     FunctionValue(usize, Option<Vec<String>>),
     /// `fn(P̄) -> R`.
     Function(Vec<TypeExpr>, Box<TypeExpr>),
@@ -70,7 +70,7 @@ pub enum OriginText {
     Lit(Literal),
     Written(TypeExpr),
     Host(TypeExpr),
-    /// `out T`: the type the embedding declares for the run's result (l.197).
+    /// `out T`: the type the embedding declares for the run's result.
     Outward(TypeExpr),
     Lambda(String),
 }
@@ -117,7 +117,7 @@ pub enum TextItem {
         callee: String,
         args: Vec<String>,
         result: String,
-        /// `e?`'s exit, written `?(e) into X` (l.337).
+        /// `e?`'s exit, written `?(e) into X`.
         exit: Option<String>,
     },
     CallValue {
@@ -159,7 +159,7 @@ pub enum StepText {
 pub enum Orders {
     /// Every order, which must be explored within the budget.
     All,
-    /// Orders sampled (`design/13-exploration.md`, reading 2).
+    /// Orders sampled.
     Sampled(u64),
     /// One order, the steps of each group listed by its name, each group
     /// otherwise taking its first step.
@@ -189,7 +189,7 @@ pub enum Phase {
     Fallback,
 }
 
-/// A change to a certificate (`design/14-certificate.md`).
+/// A change to a certificate.
 #[derive(Clone, Debug)]
 pub enum Change {
     Value { class: String, ty: TypeExpr },
@@ -257,8 +257,6 @@ pub enum Expect {
 
 #[derive(Clone, Debug)]
 pub struct Case {
-    pub spec: Vec<String>,
-    pub hole: Option<String>,
     pub orders: Orders,
     pub decls: Vec<Located<DeclItem>>,
     pub text: Vec<Located<TextItem>>,
@@ -266,9 +264,6 @@ pub struct Case {
     pub expects: Vec<Located<Expect>>,
     /// Each `outcome { … }`, met by exactly one outcome.
     pub outcomes: Vec<Located<Vec<Located<Expect>>>>,
-    /// A hole's `wanted { … }`: what the outcome the spec's text, its examples
-    /// or the RFCs it cites want meets, as `holes.md` states it.
-    pub wanted: Option<Vec<Located<Expect>>>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -1183,8 +1178,6 @@ fn directives(source: &str, case: &mut Case) -> Parsed<()> {
             .ok_or_else(|| format!("line {at}: a directive is `//@ key: value`"))?;
         let (key, value) = (key.trim(), value.trim());
         match key.split_whitespace().collect::<Vec<_>>().as_slice() {
-            ["spec"] => case.spec.push(value.to_string()),
-            ["hole"] => case.hole = Some(value.to_string()),
             ["orders"] => {
                 if orders.is_some() {
                     return Err(format!("line {at}: the orders are written twice"));
@@ -1250,14 +1243,11 @@ fn unquote(text: &str) -> String {
 
 pub fn parse(source: &str) -> Parsed<Case> {
     let mut case = Case {
-        spec: Vec::new(),
-        hole: None,
         orders: Orders::All,
         decls: Vec::new(),
         text: Vec::new(),
         expects: Vec::new(),
         outcomes: Vec::new(),
-        wanted: None,
     };
     directives(source, &mut case)?;
     let mut parser = Parser {
@@ -1275,13 +1265,6 @@ pub fn parse(source: &str) -> Parsed<Case> {
         if parser.eat_word("outcome") {
             let item = parser.expect_block()?;
             case.outcomes.push(Located { line, item });
-            continue;
-        }
-        if parser.eat_word("wanted") {
-            if case.wanted.is_some() {
-                return Err(format!("line {line}: a case has one `wanted` block"));
-            }
-            case.wanted = Some(parser.expect_block()?);
             continue;
         }
         if parser.is_word("extern")

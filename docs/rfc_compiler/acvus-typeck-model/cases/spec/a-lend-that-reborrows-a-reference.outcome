@@ -1,0 +1,17 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value `&mut v`: &mut Vec<!>
+  value `&r`: &Vec<!>
+  value R: &mut Vec<!>
+  value S: &Vec<!>
+  value V: Vec<!>
+  value `new()`: Vec<!>
+  decision `lend r`: lend & through &mut
+  decision `lend v`: lend &mut place
+  check `&mut v <= R`: Ok(Identity)
+  check `&r <= S`: Ok(Identity)
+  check `new() <= V`: Ok(Identity)
+  check `new.Result <= new()`: Ok(Identity)
+  I* of a final state: []

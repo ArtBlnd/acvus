@@ -1,50 +1,37 @@
 # 01 Types
 
-Rests on the spec's l.39–70 (Types) and l.72–74 (Variance), with l.158 (parts of
-one name), l.184–186 (function values), l.307 and l.316 (a variant written without
-a payload) and l.345–347 (identity). The code is `src/ty.rs`; its types, signatures
-and docs carry the interface and the contract, and `src/ty/tests.rs` exercises the
-contract. This note keeps what the code cannot carry.
+The code is `src/ty.rs`; its types, signatures and docs carry the interface and the
+contract, and `src/ty/tests.rs` exercises the contract. This note keeps what the code
+cannot carry.
 
 ## Meaning
 
 A type is a finite term: one constructor, its members and its parts, each part
-again a type (l.41). `Ty` is a closed type, one that holds no equivalence class.
+again a type. `Ty` is a closed type, one that holds no equivalence class.
 `Term<P>` is the shape of a term whose parts are `P`s, which closed types and kinds
-(note 06) share.
+share.
 
 ## Not owned here
 
-- Agreement with the declarations, such as a struct's number of fields, or an
-  extern-defined type's number of arguments and whether it carries an identity,
-  is note 02's.
-- Join is note 04's, and coercion and rank are note 05's.
-- What holds of a kind, a `Term` whose parts are equivalence classes, is note 06's.
-  `Term<P>` checks nothing about its `P`s.
-- Facts are carried beside a type, from note 06 on. A fact is neither a part nor a
-  member (l.173), and two types are equal by their constructors, members and parts
-  alone (l.66).
-- The specialization mark has no representation, since a type carries none (l.70).
+- `Term<P>` checks nothing about its `P`s.
+- Facts are carried beside a type. A fact is neither a part nor a member, and two
+  types are equal by their constructors, members and parts alone.
+- The specialization mark has no representation, since a type carries none.
 
 ## Readings
 
-The spec leaves three questions open at this level. These readings were agreed on.
-
-1. **The type of a function value.** The type table gives `Fn(P̄ → R)` the
-   parameters and the result as parts (l.51), while an equivalence class that holds
-   a function value does not carry them as parts and names its lambdas by Values
-   (l.186). Such a class still takes a constructor (l.269). So a function value's
-   type is the constructor `Function(n)` with no parts, `Term::FunctionValue`, and
-   `Term::Function` with its parts is the type a declaration writes. Function values
-   come only from lambdas (l.184), so the latter appears only in signatures.
-2. **An identity as a part.** An identity is a part of an extern-defined type
-   (l.55, l.345), and a part is again a type (l.41). So an identity is a type whose
+1. **The type of a function value.** A function value's type is the constructor
+   `Function(n)` with no parts, `Term::FunctionValue`, and `Term::Function` with its
+   parts is the type a declaration writes. Function values come only from lambdas, so
+   the latter appears only in signatures.
+2. **An identity as a part.** An identity is a part of an extern-defined type,
+   and a part is again a type. So an identity is a type whose
    constructor is its name and which has no parts, and it appears as a part only at
    an extern-defined type's identity. Two identities are then equal exactly when
-   their names are, and two different identities are never made one (l.347).
-3. **The payload of `None`.** `Option` has one payload (l.49). `None` written
-   without a payload is `None(_)` in a pattern (l.307), and the payload that `None`
-   makes anew lies in `Option`'s part (l.316, Example 1). So `None`'s payload is that
+   their names are, and two different identities are never made one.
+3. **The payload of `None`.** `Option` has one payload. `None` written
+   without a payload is `None(_)` in a pattern, and the payload that `None`
+   makes anew lies in `Option`'s part. So `None`'s payload is that
    one part, `Payload(Some)`.
 
 ## Left open for change
@@ -55,9 +42,8 @@ The spec leaves three questions open at this level. These readings were agreed o
   part, `part` is made from `parts`, and a test checks that `parts` and `map` name
   each part alike.
 - The whole constructor table is present from the start, enums, results and
-  identities included, although the first examples need none of them, so encoding
-  more of the spec later does not reshape types.
+  identities included.
 - `Name` is one string. Interning, or provenance, changes only what is inside it.
-- `HasTerm` is what a closed type shares with a value a use reads (note 05), whose
+- `HasTerm` is what a closed type shares with a value a use reads, whose
   positions may be undecided, and `check_term` is the one check of a term's own
   parts, which `Ty::new` makes.

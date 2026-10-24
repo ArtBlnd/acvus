@@ -1,12 +1,11 @@
-//@ spec: l.274, l.276, l.280, l.288, l.290
 // let t;
 // t.0 = 1u8;
 // The projection t.0 gives T the kind "has component 0: τ", and the write is
 // τ ≥ u8. T's only source is that kind, and a tuple has no members, so the kind
-// names none and T takes no constructor (l.274, l.276). Nothing waits, so T
-// falls back to ! (l.288), which meets every kind, the part it names being !
-// (l.276): 1u8 enters t.0 of type ! and does not reach it (l.280), refused
-// there (l.290).
+// names none and T takes no constructor. Nothing waits, so T
+// falls back to !, which meets every kind, the part it names being !:
+// 1u8 enters t.0 of type ! and does not reach it, refused
+// there.
 let T;
 let `t.0`;
 let 1u8: u8;

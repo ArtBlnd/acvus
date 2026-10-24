@@ -1,6 +1,5 @@
 //! A case's declarations and text made into the model's `Decls` and
-//! `Program`, recorded in the order written, as `ProgramBuilder` records them
-//! (`design/19-cases.md`, Form).
+//! `Program`, recorded in the order written, as `ProgramBuilder` records them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -161,8 +160,7 @@ pub fn closed(types: &DeclaredTypes, expr: &TypeExpr) -> Built<Ty> {
 }
 
 /// The value a certificate change plants: the closed type `expr` writes, each
-/// function value in it naming the lambdas written after it, its Values
-/// (`design/14-certificate.md`).
+/// function value in it naming the lambdas written after it, its Values.
 pub fn planted(types: &DeclaredTypes, expr: &TypeExpr) -> Built<Value> {
     if let TypeExpr::FunctionValue(arity, values) = expr {
         let Some(values) = values else {
@@ -259,7 +257,7 @@ pub fn decls(case: &Case) -> Built<Decls> {
 }
 
 /// The lengths of the arrays the case writes, in its declarations and its
-/// text: the language's view of each is a cast (l.78), and no array of
+/// text: the language's view of each is a cast, and no array of
 /// another length arises, an array's length being what is written.
 fn array_lengths(case: &Case) -> BTreeSet<u64> {
     fn walk(expr: &TypeExpr, lengths: &mut BTreeSet<u64>) {

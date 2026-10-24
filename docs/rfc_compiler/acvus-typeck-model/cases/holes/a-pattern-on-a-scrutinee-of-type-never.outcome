@@ -1,0 +1,14 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value N: !
+  value `Some.0`: !
+  value X: !
+  value `never()`: !
+  decision Some: applied
+  decision x: read
+  check `Some.0 <= X`: Ok(Identity)
+  check `never() <= N`: Ok(Identity)
+  check `never.Result <= never()`: Ok(Identity)
+  I* of a final state: []

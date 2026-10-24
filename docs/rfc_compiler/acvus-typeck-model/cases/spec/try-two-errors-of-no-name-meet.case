@@ -1,9 +1,8 @@
-//@ spec: l.337, l.89, l.91
 //@ orders: sampled 200
 // fn f() { let a = get1()?; let b = get2()?; Ok(a) }
 // // get1() -> Result<u8, u8>, get2() -> Result<u16, u8>
-// u8 has no name, so each error value is wrapped into Error<..> (l.337),
-// whose one part joins by ⊔ₚ (l.89, l.91).
+// u8 has no name, so each error value is wrapped into Error<..>,
+// whose one part joins by ⊔ₚ.
 
 extern fn get1() -> Result<u8, u8>;
 extern fn get2() -> Result<u16, u8>;

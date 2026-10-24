@@ -1,5 +1,5 @@
 //! The join of two closed types, the join of parts `⊔ₚ`, made without casts,
-//! and the order `≤` the join defines (l.80–91).
+//! and the order `≤` the join defines.
 
 use std::collections::BTreeMap;
 
@@ -9,7 +9,7 @@ use crate::ty::{Constructor, Mutability, Name, PartKey, Term, Ty};
 #[cfg(test)]
 mod tests;
 
-/// The language's enum whose variants only `?` makes (l.91).
+/// The language's enum whose variants only `?` makes.
 pub const ERROR: &str = "Error";
 
 /// Where a join gives no result.
@@ -17,12 +17,12 @@ pub const ERROR: &str = "Error";
 pub enum JoinError {
     /// The two nodes have no common ancestor.
     NoCommonAncestor(Node, Node),
-    /// No cast steps the type up to the node (`holes.md`, H1).
+    /// No cast steps the type up to the node.
     NotRaised(Ty, Node),
-    /// Invariant parts of one name are not equal (l.74).
+    /// Invariant parts of one name are not equal.
     InvariantPart(PartKey, Ty, Ty),
     /// Two parts of a structural type have no one constructor and neither is
-    /// `!`, so no join reaches both without casts (l.89).
+    /// `!`, so no join reaches both without casts.
     PartConstructors(Ty, Ty),
 }
 
@@ -59,7 +59,7 @@ pub fn join(decls: &Decls, s: &Ty, t: &Ty) -> Result<Ty, JoinError> {
     combine(&s, &t)
 }
 
-/// The identity an extern-defined type carries (l.345).
+/// The identity an extern-defined type carries.
 pub(crate) fn identity(ty: &Ty) -> Option<&Ty> {
     match ty.term() {
         Term::Extern { identity, .. } => identity.as_ref(),
@@ -68,7 +68,7 @@ pub(crate) fn identity(ty: &Ty) -> Option<&Ty> {
 }
 
 /// The nearest node at or above `node` whose types carry no identity, to
-/// which two different identities are raised (l.351).
+/// which two different identities are raised.
 pub(crate) fn without_identity(decls: &Decls, node: &Node) -> Option<Node> {
     decls
         .tree()
@@ -88,7 +88,7 @@ pub fn le(decls: &Decls, s: &Ty, t: &Ty) -> bool {
     join(decls, s, t).as_ref() == Ok(t)
 }
 
-/// `s ⊔ₚ t` (l.89): of one constructor, combined as by `⊔`; otherwise only
+/// `s ⊔ₚ t`: of one constructor, combined as by `⊔`; otherwise only
 /// `!` joins, and no cast raises either, nor is a reference taken as shared.
 fn part_join(s: &Ty, t: &Ty) -> Result<Ty, JoinError> {
     match (s.term(), t.term()) {
@@ -100,7 +100,7 @@ fn part_join(s: &Ty, t: &Ty) -> Result<Ty, JoinError> {
 }
 
 /// Whether the term is the language's enum `Error`, with variants or
-/// `Error⟨E⟩` (l.91).
+/// `Error⟨E⟩`.
 pub(crate) fn is_error<P>(term: &Term<P>) -> bool {
     matches!(term, Term::Enum(name, _) if name.as_str() == ERROR)
         || matches!(term, Term::ErrorOf(_))
@@ -114,7 +114,7 @@ fn raised(decls: &Decls, ty: &Ty, node: &Node) -> Result<Ty, JoinError> {
 }
 
 /// Two types of one constructor: their members united, each part of a
-/// structural type joined by `⊔ₚ`, and each other part equal (l.86, l.89).
+/// structural type joined by `⊔ₚ`, and each other part equal.
 fn combine(s: &Ty, t: &Ty) -> Result<Ty, JoinError> {
     let constructor = s.term().constructor();
     debug_assert_eq!(constructor, t.term().constructor());

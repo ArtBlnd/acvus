@@ -1,0 +1,18 @@
+// let n = parse("7")?; take(n);   // as above, with no tail
+// As above: n's one place is take's u8, so n: u8 and parse(Option<u8>).
+extern fn parse(&str) -> Option<u8>;
+extern fn parse(&str) -> Option<u16>;
+extern fn take(u8);
+let Str: str;
+let s: &Str;
+let P;
+let N;
+let R;
+let `take(n)`;
+P = parse(s) @ parse;
+N = ?(P) into R @ q;
+`take(n)` = take(N) @ take;
+
+must pass;
+assert parse == parse#0;
+assert N: u8;

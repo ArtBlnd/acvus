@@ -1,10 +1,9 @@
-//@ spec: l.246, l.261, l.333, l.290
 // let mut x;
 // x = g(x);                // g(u8) -> u8, g(u16) -> u16
 // The common part is g(?0) -> ?0: X meets ?0, ?0 enters R, and R enters X, so
-// they are one class (l.269) with no source. What g records once decided, its
-// result's type entering ?0, is left out of its read (l.261), so the value read
-// decides nothing and both candidates remain (l.333): refused at g (l.290).
+// they are one class with no source. What g records once decided, its
+// result's type entering ?0, is left out of its read, so the value read
+// decides nothing and both candidates remain: refused at g.
 extern fn g(u8) -> u8;
 extern fn g(u16) -> u16;
 

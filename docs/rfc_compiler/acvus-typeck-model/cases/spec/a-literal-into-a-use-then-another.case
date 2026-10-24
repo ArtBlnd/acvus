@@ -1,0 +1,17 @@
+// let x = 0; takes_u8(x); probe(x);   // probe(u8), probe(i32)
+// takes_u8 has one candidate and is decided at once; its boundary unifies X,
+// which only LitVars enter, with u8, and probe reads u8.
+extern fn takes_u8(u8);
+extern fn probe(u8);
+extern fn probe(i32);
+let X;
+let ?a: lit 0;
+let `takes_u8(x)`;
+let `probe(x)`;
+X = ?a;
+`takes_u8(x)` = takes_u8(X) @ takes_u8;
+`probe(x)` = probe(X) @ probe;
+
+must pass;
+assert X: u8;
+assert probe == probe#0;

@@ -1,0 +1,22 @@
+// let f = |x| x; let r = &f; r(1u8);
+// A call of a function value reads the target of the reference its callee
+// holds, as a projection is taken of a reference's target, so
+// r(1u8) calls λ, where the callee's Values had named nothing.
+group λ in run {
+    let X;
+    let `λ result`;
+    fn λ(X) -> `λ result`;
+    `λ result` = X;
+}
+let `|x| x`: lambda λ;
+let F;
+F = `|x| x`;
+let `&f`;
+`&f` = &F @ `&f`;
+let 1u8: u8;
+let `r(1u8)`;
+`r(1u8)` = (`&f`)(1u8) @ call;
+
+must pass;
+assert call == calls {λ};
+assert `r(1u8)`: u8;

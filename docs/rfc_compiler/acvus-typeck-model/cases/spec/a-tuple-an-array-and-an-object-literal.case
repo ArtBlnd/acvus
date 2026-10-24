@@ -1,0 +1,32 @@
+// let t = (1u8, s); let a = [1u8, 2u8]; let o = { x: 1u8 };
+// Each is a value of its constructor whose parts are made anew, each component
+// passing into its part, an array's all into its one element part.
+let Str: str;
+let s: &Str;
+let `1u8 t`: u8;
+let `1u8 a`: u8;
+let `2u8 a`: u8;
+let `1u8 o`: u8;
+let P0;
+let P1;
+let `(1u8, s)`: (P0, P1);
+P0 = `1u8 t`;
+P1 = s;
+let T;
+T = `(1u8, s)`;
+let E;
+let `[1u8, 2u8]`: [E; 2];
+E = `1u8 a`;
+E = `2u8 a`;
+let A;
+A = `[1u8, 2u8]`;
+let Px;
+let `{ x: 1u8 }`: {x: Px};
+Px = `1u8 o`;
+let O;
+O = `{ x: 1u8 }`;
+
+must pass;
+assert T: (u8, &str);
+assert A: [u8; 2];
+assert O: {x: u8};

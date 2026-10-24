@@ -1,0 +1,13 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value 1: i32
+  value `@cfg`: none
+  value `@cfg.extra`: i32
+  value String: String
+  decision `@cfg.extra`: applied
+  partition {1, `@cfg.extra`}
+  check `1 <= @cfg.extra`: Ok(Identity)
+  refusal conflict at "@cfg: field extra: @cfg.extra": Object vs field extra: @cfg.extra
+  I* of a final state: []

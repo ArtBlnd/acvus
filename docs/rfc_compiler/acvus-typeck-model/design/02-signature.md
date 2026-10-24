@@ -1,11 +1,6 @@
 # 02 Types in declarations
 
-Rests on the spec's l.54–55 (structs and extern-defined types), l.64 (what is
-reached through a reference), l.320 (an extern declaration's type parameters) and
-l.347 (an existential identity). The spec takes a declaration's form from the RFCs:
-extern fn §1 (a signature: parameters and a result, over type parameters) and §2
-(a declaration names one identity among its variables). The code is `src/sig.rs`,
-and `src/sig/tests.rs` exercises its contract.
+The code is `src/sig.rs`, and `src/sig/tests.rs` exercises its contract.
 
 ## Meaning
 
@@ -14,42 +9,35 @@ it names one, its identity. A signature is the types of a declaration's paramete
 and of its result. Substituting closed types for a signature's variables gives
 closed types, and matching a closed type against a signature's type finds them.
 Two kinds of type are declared: an extern-defined type, by its number of arguments
-and whether it carries an identity (l.55, Example 11), and a module's struct, by its
-fields in declared order (l.54).
+and whether it carries an identity, and a module's struct, by its
+fields in declared order.
 
 ## Not owned here
 
-- Which declarations a program has, their names, casts and conversions, and the cast
-  tree, are note 03's.
-- Matching against a type that is not closed is note 06's and after. A use's type
-  parameters are unknowns made anew at each use (l.320), so a signature meets
+- A use's type parameters are unknowns made anew at each use, so a signature meets
   equivalence classes there.
-- Effects, flows and declared facts have no representation, since no decision the
-  spec defines reads them.
-- A type parameter has no bound. Extern fn §1 states one, and the spec states none;
-  the model follows the spec (`holes.md`, T1).
+- Effects, flows and declared facts have no representation.
+- A type parameter has no bound.
 
 ## Readings
 
 1. **A reference substituted under a reference.** A signature may write `&T` or
    `&mut T`, and a use may make `T` a reference. No type has a reference directly as
    its target, and what is reached through a reference is reached by one reference,
-   exclusive only where both are (l.64); a lend of a reference does the same (l.296).
+   exclusive only where both are; a lend of a reference does the same.
    So such a substitution gives that one reference: `&T` and `&mut T` at `T = &U` are
    both `&U`, and `&mut T` at `T = &mut U` is `&mut U`. Matching binds a variable
    directly under a reference to the reference's target, which is never a reference,
    so substituting what matching found gives back the type matched.
-2. **No function value.** A declaration makes no function value: it returns one
-   only as a type variable takes it in, as `T -> T` does (l.184). So a signature
-   writes none at any depth, and `Signature::new` refuses one
-   (`SigError::FunctionValue`); the text and a context write none either
-   (`ProgramBuilder::class`). An `Error`, which `?` alone makes, is written only
-   where a value leaves the program (l.91, since 17d0be51 and the commit after
-   1130e55f): at a declaration's parameter, turned over at a function type's
-   parameters (`SigError::Error`), and in the type the embedding declares for
-   the run's result (`Origin::Outward`, `out T` in a case), never in a
-   declaration's result, the text or a context. A function type in the
-   embedding's result is not encoded.
+2. **No function value.** A declaration makes no function value: it returns one only
+   as a type variable takes it in, as `T -> T` does. So a signature writes none at
+   any depth, and `Signature::new` refuses one (`SigError::FunctionValue`); the text
+   and a context write none either (`ProgramBuilder::class`). An `Error`, which `?`
+   alone makes, is written only where a value leaves the program: at a declaration's
+   parameter, turned over at a function type's parameters (`SigError::Error`), and in
+   the type the embedding declares for the run's result (`Origin::Outward`, `out T`
+   in a case), never in a declaration's result, the text or a context. A function
+   type in the embedding's result is not encoded.
 
 ## Left open for change
 
@@ -58,5 +46,5 @@ fields in declared order (l.54).
 - `SigArgs` binds some of the variables, so matching can bind them one parameter at
   a time.
 - Substitution and matching take any `HasTerm`, so a signature also meets a value
-  a use reads (note 05). A term the signature writes does not match a position the
+  a use reads. A term the signature writes does not match a position the
   value leaves undecided.

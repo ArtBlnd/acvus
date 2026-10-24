@@ -1,7 +1,7 @@
-//! A program, as the constraints its text gives (l.219–231): the types its
-//! text writes and makes, split into equivalence classes (l.120), and each
+//! A program, as the constraints its text gives: the types its
+//! text writes and makes, split into equivalence classes, and each
 //! value passing into a type at a place, each in the binding group its text
-//! lies in (l.203–215).
+//! lies in.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,18 +16,18 @@ mod tests;
 pub struct Program {
     pub decls: Decls,
     /// The binding groups other than the run's entry, which holds the text
-    /// outside them (l.199), each with the group it lies inside, a lambda's
-    /// being its enclosing body's (l.23).
+    /// outside them, each with the group it lies inside, a lambda's
+    /// being its enclosing body's.
     pub groups: Vec<(Name, Option<Name>)>,
     pub functions: Vec<Function>,
     /// The classes the text makes universal besides its parameters' types: a
-    /// receiver's `T̄` (l.314).
+    /// receiver's `T̄`.
     pub universals: Vec<Name>,
     pub classes: Vec<TextClass>,
     pub items: Vec<(Name, Item)>,
 }
 
-/// A position of a use (l.186): an argument, the result, or `e?`'s exit.
+/// A position of a use: an argument, the result, or `e?`'s exit.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Position {
     Arg(usize),
@@ -35,7 +35,7 @@ pub enum Position {
     Exit,
 }
 
-/// What of an item a binding group records (l.186): an item other than a use,
+/// What of an item a binding group records: an item other than a use,
 /// whole, or the constraints a use gives at these positions.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Part {
@@ -53,14 +53,13 @@ impl Part {
     }
 }
 
-/// The binding group of the function the run starts at (l.199). Its inputs
+/// The binding group of the function the run starts at. Its inputs
 /// are the types the embedding declares, so it has no universal, and the
 /// run's instance of it is its own solving continued.
 pub const ENTRY: &str = "run";
 
 /// A free fn or a method: the binding group it lies in, its parameters'
-/// types, which are universal, and its result type, an unknown of its body
-/// (l.210, l.219).
+/// types, which are universal, and its result type, an unknown of its body.
 #[derive(Clone, Debug)]
 pub struct Function {
     pub name: Name,
@@ -100,9 +99,9 @@ impl Program {
     }
 
     /// The groups other than the entry, each before the groups whose uses
-    /// make instances of it, and before the group it lies inside (l.213). A
+    /// make instances of it, and before the group it lies inside. A
     /// use's constraints are recorded where its text lies or in a group
-    /// enclosing it (l.186), which lies after it, so the group its text lies
+    /// enclosing it, which lies after it, so the group its text lies
     /// in is solved after the groups it makes instances of.
     pub fn group_order(&self) -> Vec<Name> {
         let mut before: BTreeMap<Name, BTreeSet<Name>> = BTreeMap::new();
@@ -153,40 +152,40 @@ pub struct TextClass {
 
 #[derive(Clone, Debug)]
 pub enum Origin {
-    /// A type not yet known (l.126): a binding's type, a block's value, a
-    /// payload a constructor makes anew (l.316).
+    /// A type not yet known: a binding's type, a block's value, a
+    /// payload a constructor makes anew.
     Var,
-    /// A literal's type (l.127).
+    /// A literal's type.
     Lit(LitVar),
     /// A type the text or a declaration writes, or a value's constructor
     /// makes, its parts named by other text classes.
     Written(Term<Name>),
-    /// A type the host gives (l.37, l.276), its parts named by other text
+    /// A type the host gives, its parts named by other text
     /// classes.
     Host(Term<Name>),
     /// A type the embedding declares for the run's result, where a value
-    /// leaves the program, so it may hold an `Error` (l.91, l.197), its parts
+    /// leaves the program, so it may hold an `Error`, its parts
     /// named by other text classes.
     Outward(Term<Name>),
     /// The value of the lambda whose function is named: a function value
-    /// whose Values names that lambda alone (l.181, l.186).
+    /// whose Values names that lambda alone.
     Lambda(Name),
 }
 
 #[derive(Clone, Debug)]
 pub enum Item {
-    /// A value of the type `value` passes into the type `into` (l.219).
+    /// A value of the type `value` passes into the type `into`.
     Pass {
         value: Name,
         into: Name,
         place: Place,
     },
-    /// An invariant place (l.229).
+    /// An invariant place.
     Equation(Name, Name),
-    /// A use that calls the declarations or the function `callee` names
-    /// (l.192–195, l.320), its arguments' types and its result's; for `e?`,
+    /// A use that calls the declarations or the function `callee` names,
+    /// its arguments' types and its result's; for `e?`,
     /// also the type of its exit's value, which passes into the innermost
-    /// body's result as the text gives it (l.219, l.337).
+    /// body's result.
     Use {
         name: Name,
         callee: Name,
@@ -194,23 +193,21 @@ pub enum Item {
         result: Name,
         exit: Option<Name>,
     },
-    /// `&ₘ p`, `p`'s type `place`, giving a reference of the type `result`
-    /// (l.296).
+    /// `&ₘ p`, `p`'s type `place`, giving a reference of the type `result`.
     Lend {
         name: Name,
         mutability: Mutability,
         place: Name,
         result: Name,
     },
-    /// A projection of `operand`'s type, naming the part of the type `result`
-    /// (l.144).
+    /// A projection of `operand`'s type, naming the part of the type `result`.
     Project {
         name: Name,
         projection: Projection,
         operand: Name,
         result: Name,
     },
-    /// A use that calls the function value of the type `callee` (l.196).
+    /// A use that calls the function value of the type `callee`.
     CallValue {
         name: Name,
         callee: Name,
@@ -218,8 +215,7 @@ pub enum Item {
         result: Name,
     },
     /// A binding at a pattern's position of the type `position`, reached from
-    /// the scrutinee by the projections `path`, of the type `binding`
-    /// (l.300–306).
+    /// the scrutinee by the projections `path`, of the type `binding`.
     Bind {
         name: Name,
         path: Vec<Name>,
@@ -293,7 +289,7 @@ impl Item {
     }
 }
 
-/// A projection (l.146–152).
+/// A projection.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Projection {
     Deref,
@@ -308,7 +304,7 @@ pub enum Projection {
     },
 }
 
-/// How the place a value passes into is reached (l.219).
+/// How the place a value passes into is reached.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Place {
     /// Neither of the others: a block's value, an argument, a binding of the
@@ -321,7 +317,7 @@ pub enum Place {
     ThroughRef,
 }
 
-/// A program written item by item, as the examples' encodings write it.
+/// A program written item by item.
 pub struct ProgramBuilder {
     decls: Decls,
     groups: Vec<(Name, Option<Name>)>,
@@ -353,7 +349,7 @@ impl ProgramBuilder {
     }
 
     /// As `group`, the group lying inside `parent`, as a lambda lies inside
-    /// its enclosing body (l.23).
+    /// its enclosing body.
     pub fn group_in(&mut self, name: &str, parent: Option<&str>) {
         let name = Name::new(name);
         let declared = self.groups.iter().any(|(group, _)| *group == name);
@@ -363,7 +359,7 @@ impl ProgramBuilder {
         self.group = name;
     }
 
-    /// Makes the class universal, as a receiver's `T̄` is (l.314).
+    /// Makes the class universal, as a receiver's `T̄` is.
     pub fn universal(&mut self, class: &Name) {
         self.universals.push(class.clone());
     }
@@ -393,9 +389,9 @@ impl ProgramBuilder {
     }
 
     /// A text class of the origin. No type the text writes or a context
-    /// gives is a function value, a lambda's value alone (l.184), and none
+    /// gives is a function value, a lambda's value alone, and none
     /// holds an `Error`, which a value may hold only where it leaves the
-    /// program (l.91); a function type in the type the embedding declares for
+    /// program; a function type in the type the embedding declares for
     /// the result, whose parameters a value enters the program by, is not
     /// encoded.
     pub fn class(&mut self, name: &str, origin: Origin) -> Name {
@@ -403,11 +399,11 @@ impl ProgramBuilder {
             Origin::Written(term) | Origin::Host(term) => {
                 assert!(
                     !matches!(term, Term::FunctionValue { .. }),
-                    "{name}: the text writes, and a context gives, no function value (l.184)"
+                    "{name}: the text writes, and a context gives, no function value"
                 );
                 assert!(
                     !crate::join::is_error(term),
-                    "{name}: the text writes, and a context gives, no `Error` (l.91)"
+                    "{name}: the text writes, and a context gives, no `Error`"
                 );
             }
             Origin::Outward(term) => assert!(
@@ -434,19 +430,18 @@ impl ProgramBuilder {
     }
 
     /// A class holding a type the text writes, which is no function value: a
-    /// function value is a lambda's value alone (l.184).
+    /// function value is a lambda's value alone.
     pub fn written(&mut self, name: &str, term: Term<Name>) -> Name {
         self.class(name, Origin::Written(term))
     }
 
     /// A class holding a type the embedding declares for the run's result,
-    /// where a value leaves the program (l.91, l.197).
+    /// where a value leaves the program.
     pub fn outward(&mut self, name: &str, term: Term<Name>) -> Name {
         self.class(name, Origin::Outward(term))
     }
 
-    /// A class holding a type a context gives, which is no function value
-    /// (l.184).
+    /// A class holding a type a context gives, which is no function value.
     pub fn host(&mut self, name: &str, term: Term<Name>) -> Name {
         self.class(name, Origin::Host(term))
     }
@@ -478,7 +473,7 @@ impl ProgramBuilder {
     }
 
     /// `e?`, the type of `e` `operand`, giving `result`, its exit's value of
-    /// the type `exit` (l.337).
+    /// the type `exit`.
     pub fn try_(&mut self, name: &str, operand: &Name, result: &Name, exit: &Name) {
         self.item(Item::Use {
             name: Name::new(name),

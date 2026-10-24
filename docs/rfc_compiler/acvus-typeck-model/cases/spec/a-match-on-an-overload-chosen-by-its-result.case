@@ -1,0 +1,28 @@
+// match parse("7") { Some(n) => take(n), None => () }
+// // parse(&str) -> Option<u8>, parse(&str) -> Option<u16>; take(u8)
+// parse reads its result P, Option<?0> by its common part. In the value read,
+// nothing enters ?0, and its places, Some's payload, n and take's u8, fill it
+// u8, so parse(Option<u8>) alone reaches: n: u8. Accepted in every order.
+extern fn parse(&str) -> Option<u8>;
+extern fn parse(&str) -> Option<u16>;
+extern fn take(u8);
+let Str: str;
+let s: &Str;
+let P;
+let `Some.0`;
+let `None.0`;
+let N;
+let `take(n)`;
+let `()`: ();
+let M;
+P = parse(s) @ parse;
+`Some.0` = P as Some @ `arm 1`;
+N = bind `Some.0` via [`arm 1`] @ n;
+`take(n)` = take(N) @ take;
+`None.0` = P as None @ `arm 2`;
+M = `take(n)`;
+M = `()`;
+
+must pass;
+assert parse == parse#0;
+assert N: u8;

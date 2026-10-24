@@ -252,7 +252,7 @@ fn a_signature_is_checked_at_every_term_it_writes() {
     };
     assert!(
         Signature::new(vec![], false, vec![error.clone()], unit(), &types).is_ok(),
-        "a parameter, where a value leaves the program, may hold an `Error` (l.91)"
+        "a parameter, where a value leaves the program, may hold an `Error`"
     );
     assert_eq!(
         Signature::new(vec![], false, vec![], error.clone(), &types),

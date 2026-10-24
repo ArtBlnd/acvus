@@ -1,0 +1,111 @@
+// struct Pair { l, r }
+// impl Pair {
+//     fn new(l, r) { Self { l, r } }
+//     fn swap(self) { Self { l: self.r, r: self.l } }
+//     fn nest(self, n) { if n == 0 { 0u8 } else { Self { l: self, r: 0u8 }.nest(n - 1) } }
+// }
+// let p = Pair::new(1u8, "s");
+// let q = p.swap();
+// q.nest(3)
+// Its states are too many to explore, so the orders are sampled. The recursive
+// call's boundary into nest's receiver splits into P ⇝ A and Q ⇝ B toward the
+// universals, which C keeps; the copy q.nest(3) makes keeps them split.
+// q is Pair<&str, u8>, and the copy of the recursive call's argument,
+// Pair<Pair<&str, u8>, u8>, reaches Pair<&str, u8> by no coercion.
+//@ orders: sampled 200
+struct Pair { l, r }
+extern fn core::eq(&u8, &u8) -> bool;
+extern fn core::sub(&u8, &u8) -> u8;
+extern fn core::eq(&i32, &i32) -> bool;
+extern fn core::sub(&i32, &i32) -> i32;
+
+group new {
+    let `new L`;
+    let `new R`;
+    let `new result`;
+    fn new(`new L`, `new R`) -> `new result`;
+    let `Self { l, r }.l`;
+    let `Self { l, r }.r`;
+    let `Self { l, r }`: Pair<`Self { l, r }.l`, `Self { l, r }.r`>;
+    `Self { l, r }.l` = `new L`;
+    `Self { l, r }.r` = `new R`;
+    `new result` = `Self { l, r }`;
+}
+group swap {
+    let `swap A`;
+    let `swap B`;
+    universal `swap A`;
+    universal `swap B`;
+    let `swap self`: Pair<`swap A`, `swap B`>;
+    let `swap result`;
+    fn swap(`swap self`) -> `swap result`;
+    let `self.r`;
+    let `self.l`;
+    `self.r` = `swap self`.r @ `self.r`;
+    `self.l` = `swap self`.l @ `self.l`;
+    let `Self { l: self.r, r: self.l }.l`;
+    let `Self { l: self.r, r: self.l }.r`;
+    let `Self { l: self.r, r: self.l }`: Pair<`Self { l: self.r, r: self.l }.l`, `Self { l: self.r, r: self.l }.r`>;
+    `Self { l: self.r, r: self.l }.l` = `self.r`;
+    `Self { l: self.r, r: self.l }.r` = `self.l`;
+    `swap result` = `Self { l: self.r, r: self.l }`;
+}
+group nest {
+    let `nest A`;
+    let `nest B`;
+    universal `nest A`;
+    universal `nest B`;
+    let `nest self`: Pair<`nest A`, `nest B`>;
+    let N;
+    let `nest result`;
+    fn nest(`nest self`, N) -> `nest result`;
+    let `&n`;
+    let 0: lit 0;
+    let `&0`;
+    let `n == 0`;
+    `&n` = &N @ `&n`;
+    `&0` = &0 @ `&0`;
+    `n == 0` = core::eq(`&n`, `&0`) @ `n == 0`;
+    let 0u8: u8;
+    `nest result` = 0u8;
+    let `Self { l: self, r: 0u8 }.l`;
+    let `Self { l: self, r: 0u8 }.r`;
+    let `Self { l: self, r: 0u8 }`: Pair<`Self { l: self, r: 0u8 }.l`, `Self { l: self, r: 0u8 }.r`>;
+    let `r: 0u8`: u8;
+    `Self { l: self, r: 0u8 }.l` = `nest self`;
+    `Self { l: self, r: 0u8 }.r` = `r: 0u8`;
+    let `&n 2`;
+    let 1: lit 1;
+    let `&1`;
+    let `n - 1`;
+    `&n 2` = &N @ `&n 2`;
+    `&1` = &1 @ `&1`;
+    `n - 1` = core::sub(`&n 2`, `&1`) @ `n - 1`;
+    let `….nest(n - 1)`;
+    `….nest(n - 1)` = nest(`Self { l: self, r: 0u8 }`, `n - 1`) @ `….nest(n - 1)`;
+    `nest result` = `….nest(n - 1)`;
+}
+let 1u8: u8;
+let str: str;
+let `"s"`: &str;
+let `Pair::new(..)`;
+let p;
+`Pair::new(..)` = new(1u8, `"s"`) @ `Pair::new`;
+p = `Pair::new(..)`;
+let `p.swap()`;
+let q;
+`p.swap()` = swap(p) @ `p.swap()`;
+q = `p.swap()`;
+let 3: lit 3;
+let `q.nest(3)`;
+`q.nest(3)` = nest(q, 3) @ `q.nest(3)`;
+
+must fail;
+assert p: Pair<u8, &str>;
+assert q: Pair<&str, u8>;
+assert failing [`nest@23/Self { l: self, r: 0u8 } ~> nest@23/nest self`];
+// The copy of nest's C that q.nest(3) makes, at its item 23, narrows its uses
+// to the i32 candidates.
+assert `nest@23/n == 0` == core::eq#1;
+assert `nest@23/n - 1` == core::sub#1;
+

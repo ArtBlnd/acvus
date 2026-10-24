@@ -1,7 +1,6 @@
 //! A case's program solved as its orders say, each final state handed to the
-//! checks of notes 14 and 15 and to the case's changed certificates
-//! (`design/19-cases.md`, The runner), and under `TRACE=1` the trace of
-//! solving printed (`design/19-cases.md`, `TRACE=1`).
+//! case's changed certificates, and under `TRACE=1` the trace of solving
+//! printed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -20,7 +19,7 @@ use crate::ty::Name;
 use super::parse::{self, Orders, StepText};
 use super::render::{self, Lines, Rendered};
 
-/// The budget of states for `orders: all` (`design/13-exploration.md`).
+/// The budget of states for `orders: all`.
 pub const BUDGET: usize = 100_000;
 
 /// The steps a traced first order takes before it is stopped, a fallback
@@ -344,7 +343,7 @@ impl Follow<'_> {
         did
     }
 
-    /// Falls back (l.288), at the fixpoint of the entry; the trace's
+    /// Falls back, at the fixpoint of the entry; the trace's
     /// `fell_back` says whether a class fell back.
     fn fall_back(&mut self, state: &mut State) -> Did {
         self.taken += 1;
@@ -438,12 +437,10 @@ fn take(
         let did = match text {
             StepText::Fallback => {
                 if group != ENTRY {
-                    return Err(format!(
-                        "fallback in {group}, inside which there is none (l.286)"
-                    ));
+                    return Err(format!("fallback in {group}, inside which there is none"));
                 }
                 if !state.steps().is_empty() {
-                    return Err("fallback before the fixpoint (l.288)".to_string());
+                    return Err("fallback before the fixpoint".to_string());
                 }
                 follow.fixpoint(state, group);
                 let did = follow.fall_back(state);
@@ -468,7 +465,7 @@ fn take(
 }
 
 /// One order: each group's written steps, then its first step until none is
-/// left, the entry falling back wherever none is (l.288).
+/// left, the entry falling back wherever none is.
 fn written<F>(
     program: &Program,
     steps: &BTreeMap<String, Vec<StepText>>,
@@ -546,7 +543,7 @@ where
 }
 
 /// The first order, as sampled order 0 takes it: at every state its first
-/// step, the entry falling back wherever none is (l.288), traced, and stopped
+/// step, the entry falling back wherever none is, traced, and stopped
 /// at `LIMIT` steps, so that a program whose exploration does not end still
 /// prints what this order does.
 fn first(program: &Program, tracer: &Tracer) {

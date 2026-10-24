@@ -1,0 +1,26 @@
+// let a = parse_r("7")?; Ok(a)      // parse_r(&str) -> Result<u8, PErr>
+// The script's result is Result<u8, Error{PErr(PErr)}>, which ? alone makes;
+// the run's result passes into the type the embedding declares for
+// it, which may hold an Error, the place a value leaves the program
+// by: accepted.
+extern type PErr;
+extern fn parse_r(&str) -> Result<u8, PErr>;
+let Str: str;
+let s: &Str;
+let `parse_r(s)`;
+let A;
+let R;
+let S;
+let E;
+let `Ok(a)`: Result<S, E>;
+let U8: u8;
+let P: PErr;
+let Err: out Error{PErr(P)};
+let D: out Result<U8, Err>;
+`parse_r(s)` = parse_r(s) @ parse_r;
+A = ?(`parse_r(s)`) into R @ q;
+S = A;
+R = `Ok(a)`;
+D = R;
+
+must pass;

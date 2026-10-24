@@ -1,6 +1,5 @@
-//@ spec: l.74
-// A function type is not structural (l.68), so its parameter is invariant,
-// and no part is contravariant (l.74). A = B fails, so fn(B) -> u8 does not
+// A function type is not structural, so its parameter is invariant,
+// and no part is contravariant. A = B fails, so fn(B) -> u8 does not
 // coerce to fn(A) -> u8 though A casts to B, and fn(A) -> u8 and fn(B) -> u8
 // have no join.
 extern type A;

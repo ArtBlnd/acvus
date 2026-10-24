@@ -1,7 +1,6 @@
-//@ spec: l.337, l.219, l.282
 // fn f() { let a = get()?; Some(a) }    // get() -> Option<u8>
 // ? is decided as ?(Option<T>), and its exit's value is Option<K>, K made
-// anew, as return None (l.337); K is filled with f's result's payload.
+// anew, as return None; K is filled with f's result's payload.
 extern fn get() -> Option<u8>;
 group f {
     let `f result`;

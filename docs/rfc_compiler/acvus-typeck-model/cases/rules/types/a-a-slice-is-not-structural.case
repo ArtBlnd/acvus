@@ -1,6 +1,4 @@
-//@ spec: l.68, l.74
-// l.68 names the array among the structural types and not the slice, so a
-// slice's element is invariant (l.74), related by an equation. A = C fails, so
+// A slice's element is invariant, related by an equation. A = C fails, so
 // [A] and [C] have no join though A and C join at B; A = B fails, so no row
 // coerces [A] to [B]; ! = u8 fails, and `! ⇝ U` is a row of ! whole.
 extern type A;

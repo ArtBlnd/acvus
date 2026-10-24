@@ -1,5 +1,5 @@
 //! A program's declarations, by the name a call writes, and the tree its
-//! declared casts form (l.76–78, extern fn §5, §7).
+//! declared casts form.
 
 use std::collections::BTreeMap;
 
@@ -17,11 +17,11 @@ pub struct DeclId {
 }
 
 /// What a declaration is besides a function a call reaches by its name: a cast
-/// is a step up the cast tree, and a conversion is no part of it (extern fn §7).
+/// is a step up the cast tree, and a conversion is no part of it.
 /// A view impl, an impl of `core::as_slice`, `core::as_slice_mut` or
-/// `core::as_str`, is a cast (l.78). The language's view of an array, from a
+/// `core::as_str`, is a cast. The language's view of an array, from a
 /// reference to it to one to the slice of its element, is a cast the language
-/// gives, from a type no declaration writes (l.78, extern fn §1).
+/// gives, from a type no declaration writes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
     Fn,
@@ -30,8 +30,7 @@ pub enum Role {
     Conversion,
 }
 
-/// The names of the language's views of an array, shared and exclusive
-/// (l.78).
+/// The names of the language's views of an array, shared and exclusive.
 pub const ARRAY_VIEW: &str = "core::array_view";
 pub const ARRAY_VIEW_MUT: &str = "core::array_view_mut";
 
@@ -43,7 +42,7 @@ pub struct Decl {
 }
 
 /// A node of the cast tree: a constructor, and for a reference its mutability
-/// and its target's constructor (l.78).
+/// and its target's constructor.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Node {
     Owned(Constructor),
@@ -99,7 +98,7 @@ impl Node {
     }
 }
 
-/// Why the declared casts are not a tree (l.78), or why a declaration is not
+/// Why the declared casts are not a tree, or why a declaration is not
 /// one of its role.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TreeError {
@@ -114,10 +113,10 @@ pub enum TreeError {
     ChangesMode(DeclId),
     /// A cast's parameter writes its node other than with distinct type
     /// parameters as its parts, so that some type of the node goes up by no
-    /// cast (`holes.md`, H1).
+    /// cast.
     NarrowerThanNode(DeclId),
     /// A cast's result writes a type parameter its parameter does not, so
-    /// that where a type goes up is not decided (`holes.md`, H1).
+    /// that where a type goes up is not decided.
     ResultUnbound(DeclId),
     /// A second cast goes up from one node.
     TwoUp {
@@ -146,12 +145,12 @@ pub struct DeclsBuilder {
     by_name: BTreeMap<Name, Vec<Decl>>,
 }
 
-/// The name of `e?`'s use, whose two candidates the language gives (l.337).
+/// The name of `e?`'s use, whose two candidates the language gives.
 pub const TRY: &str = "?";
 
 impl DeclsBuilder {
     /// The declarations of the program, with the language's two candidates of
-    /// `e?`: `?(Option⟨T⟩) -> T` and `?(Result⟨T, E⟩) -> T` (l.337).
+    /// `e?`: `?(Option⟨T⟩) -> T` and `?(Result⟨T, E⟩) -> T`.
     pub fn new(types: DeclaredTypes) -> DeclsBuilder {
         let mut builder = DeclsBuilder {
             types,
@@ -187,7 +186,7 @@ impl DeclsBuilder {
     }
 
     /// The language's views of the arrays of length `len`, `&[T; len] -> &[T]`
-    /// and `&mut [T; len] -> &mut [T]` (l.78), each a cast of the tree.
+    /// and `&mut [T; len] -> &mut [T]`, each a cast of the tree.
     pub fn array_views(&mut self, len: u64) {
         for (name, mutability) in [
             (ARRAY_VIEW, Mutability::Shared),
@@ -285,7 +284,7 @@ impl DeclsBuilder {
 
 /// Whether a cast's parameter writes its node, through a reference's target
 /// where it is one, with distinct type parameters as its parts, its identity
-/// the signature's where it has one (l.78; `holes.md`, H1).
+/// the signature's where it has one.
 fn writes_node_generally(param: &SigTy) -> bool {
     let SigTy::Term(term) = param else {
         return false;
@@ -398,7 +397,7 @@ impl Decls {
         &self.tree
     }
 
-    /// The declarations a name reaches (l.320).
+    /// The declarations a name reaches.
     pub fn candidates(&self, name: &Name) -> &[Decl] {
         self.by_name.get(name).map_or(&[], Vec::as_slice)
     }
@@ -442,7 +441,7 @@ impl Decls {
 
     /// The declared conversions from `from` to `to`: those whose parameter
     /// matches `from` and whose result matches `to`, by one binding of their
-    /// variables, since the slot's type decides a conversion (types §7).
+    /// variables, since the slot's type decides a conversion.
     pub fn conversions_between(&self, from: &Ty, to: &Ty) -> Vec<DeclId> {
         self.conversions()
             .filter(|decl| {

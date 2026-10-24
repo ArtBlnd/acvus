@@ -1,0 +1,32 @@
+// a + b, with a's type written A   // as in two-operands-meet-at-one-type
+// The operands meet in the common part's variable, whose value is &A from &a;
+// &b's &B does not reach &A, so the program is refused there.
+// The reference cast &A -> &B between the two operands is not taken: a cast
+// is the user's to call by its name.
+extern type A;
+extern type B;
+#[cast] extern fn up(A) -> B;
+#[cast] extern fn up_ref(&A) -> &B;
+extern fn make_a() -> A;
+extern fn make_b() -> B;
+extern fn core::add(&B, &B) -> B;
+extern fn core::add(&u8, &u8) -> u8;
+
+let X: A;
+let Y;
+let `make_a()`;
+let `make_b()`;
+let `&a`;
+let `&b`;
+let R;
+`make_a()` = make_a() @ make_a;
+X = `make_a()`;
+`make_b()` = make_b() @ make_b;
+Y = `make_b()`;
+`&a` = &X @ `&a`;
+`&b` = &Y @ `&b`;
+R = core::add(`&a`, `&b`) @ `a + b`;
+
+must fail;
+assert X: A;
+assert failing [`&b <= a + b.Common(0)`];

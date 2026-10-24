@@ -1,0 +1,32 @@
+// let n = match code(s) {      // code(&str) -> u8
+//     0u8 => { let d = digit(s)?; d }    // digit(&str) -> Option<u8>
+//     _ => 0u8,
+// };
+// Some(n)                      // the script's result Option<u8>
+// A match arm's braces are part of the match, no block expression, so
+// the ? in it exits the script, whose result its exit meets, and
+// the arm gives d: n meets d and 0u8, and is u8.
+extern fn code(&str) -> u8;
+extern fn digit(&str) -> Option<u8>;
+let Str: str;
+let s: &Str;
+let U8: u8;
+let R: Option<U8>;
+let `code(s)`;
+let `digit(s)`;
+let D;
+let N;
+let 0u8: u8;
+let K;
+let `Some(n)`: Option<K>;
+`code(s)` = code(s) @ code;
+`digit(s)` = digit(s) @ digit;
+D = ?(`digit(s)`) into R @ q;
+N = D;
+N = 0u8;
+K = N;
+R = `Some(n)`;
+
+must pass;
+assert q == ?#0;
+assert N: u8;
