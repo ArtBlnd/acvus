@@ -186,15 +186,13 @@ impl State {
             .nodes
             .iter()
             .filter(|(name, _)| self.deferred.contains_key(*name));
-        for (name, node) in undecided.iter().copied().chain(deferred) {
-            let only_out = self.passed_out_only(node);
-            for position in self.positions(node) {
-                let position = self.root(position);
-                if self.is_solved(position) || only_out.contains(&position) {
+        for (name, _) in undecided.iter().copied().chain(deferred) {
+            for class in self.recorded_into_by(name) {
+                if self.is_solved(class) {
                     continue;
                 }
                 add(
-                    Vertex::Class(position),
+                    Vertex::Class(class),
                     Vertex::Node((*name).clone()),
                     Edge::Records,
                 );

@@ -273,7 +273,8 @@ fn depends_on(
 /// candidates' where it is not decided: the classes it makes anew are its own,
 /// and no other node reads them. Another decided node
 /// records into what its own relations record into, those of the instances it
-/// made among them; one not decided, into the classes at its positions. A
+/// made among them; one not decided, into what any decision still open to it
+/// would record into (`State::recorded_into_by`). A
 /// read of whether a class is a reference leaves out what cannot decide it.
 fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
     let node = &view.nodes[name];
@@ -306,7 +307,7 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
             .filter(|recorded| recorded.recorder.nodes().contains(name))
             .flat_map(|recorded| into(&recorded.relation))
             .collect(),
-        (_, None) => view.positions(node),
+        (_, None) => view.recorded_into_by(name),
     };
     let mut roots: BTreeSet<ClassId> = classes.into_iter().map(|class| view.root(class)).collect();
     if read == Read::Reference {

@@ -333,10 +333,11 @@ impl State {
 
     /// The classes the use's candidate at index `candidate` would record a
     /// lower bound or an equation into once decided, as
-    /// `would_record_per_candidate` gives them: inside each argument the
-    /// common part does not hold whole, and the result, or, once the common
-    /// part is recorded, each of its variables the result writes, into which
-    /// the candidate's type there enters.
+    /// `would_record_per_candidate` gives them: inside each argument, by the
+    /// splits of its passing; the result, or, once the common part is
+    /// recorded, each of its variables the result writes, into which the
+    /// candidate's type there enters, and inside it by the split; and for
+    /// `e?`, the class its exit's value enters, an `Option` or a `Result`.
     pub(crate) fn would_record_by(
         &self,
         name: &Name,
@@ -347,7 +348,7 @@ impl State {
             callee,
             args,
             result,
-            ..
+            exit,
         } = &node.kind
         else {
             return BTreeMap::new();
@@ -368,18 +369,53 @@ impl State {
             None => {
                 if let Some(result) = result {
                     found.insert(self.root(*result), is_reference(sig.result()));
+                    self.would_record_into_result(*result, sig.result(), &mut found);
                 }
             }
             Some((part, classes)) => {
                 for k in CommonPart::vars_in(&part.result) {
-                    found.insert(
-                        self.root(classes[&k]),
-                        is_reference(&part.vars[k][candidate]),
-                    );
+                    let chosen = &part.vars[k][candidate];
+                    found.insert(self.root(classes[&k]), is_reference(chosen));
+                    self.would_record_into_result(classes[&k], chosen, &mut found);
                 }
             }
         }
+        if let Some(exit) = exit {
+            found.insert(self.root(*exit), Some(false));
+        }
         found
+    }
+
+    /// The classes inside the kind of a class a use's result type `ty` enters
+    /// that the split of that lower bound would record into: each part where
+    /// `ty` writes a part, a type or a variable, which a part lower bound or
+    /// an equation relates, and inside it in turn where `ty` writes a type.
+    /// Where the two constructors differ, the casts' results relate every part
+    /// of the class, each a type parameter of the last cast's result.
+    fn would_record_into_result(
+        &self,
+        class: ClassId,
+        ty: &SigTy,
+        found: &mut BTreeMap<ClassId, Option<bool>>,
+    ) {
+        let SigTy::Term(term) = ty else {
+            return;
+        };
+        let Some((kind, _)) = &self.classes.held(self.root(class)).kind else {
+            return;
+        };
+        if kind.constructor() != term.constructor() {
+            for (_, &part) in kind.parts() {
+                found.insert(self.root(part), None);
+            }
+            return;
+        }
+        for (key, written) in term.parts() {
+            if let Some(&part) = kind.part(&key) {
+                found.insert(self.root(part), is_reference(written));
+                self.would_record_into_result(part, written, found);
+            }
+        }
     }
 
     /// The classes inside an argument's kind that a candidate's parameter
@@ -394,7 +430,10 @@ impl State {
     /// of a reborrow, and the parts of the first declared cast's parameter,
     /// into which the argument passes; the later casts' parameters and the
     /// parameter's type relate the casts' results, which are not the
-    /// argument's.
+    /// argument's. Where the parameter writes a function type and the argument
+    /// holds a function value, the split makes an instance of each lambda its
+    /// Values names, each parameter of the function type entering that
+    /// lambda's parameter in its environment.
     pub(super) fn would_record(
         &self,
         class: ClassId,
@@ -407,6 +446,18 @@ impl State {
         let Some((kind, _)) = &self.classes.held(class).kind else {
             return;
         };
+        if let (Term::Function { params, .. }, Term::FunctionValue { .. }) = (&**term, kind) {
+            for lambda in self.values_of(class) {
+                let mut held = self.environment_of(&lambda);
+                held.pop();
+                for (param, held) in params.iter().zip(held) {
+                    if let Some(env) = held {
+                        found.insert(self.root(env), is_reference(param));
+                    }
+                }
+            }
+            return;
+        }
         let (from, to) = (kind.constructor(), term.constructor());
         if from == to {
             for (key, written) in term.parts() {

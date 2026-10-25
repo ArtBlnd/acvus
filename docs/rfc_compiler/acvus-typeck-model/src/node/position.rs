@@ -1,5 +1,5 @@
-//! The positions a use, a lend, a projection or a binding lies at, and what
-//! it reads.
+//! What a use, a lend, a projection or a binding records into, on which the
+//! classes it records into depend, and what it reads.
 
 use std::collections::BTreeSet;
 
@@ -9,141 +9,63 @@ use crate::sig::{SigTy, Signature};
 use crate::solve::State;
 use crate::ty::{Name, Term};
 
-use super::common::CommonPart;
-use super::{Common, NodeKind, NodeState, Read, Reads};
-
-/// What a use has yet to record once decided.
-pub(crate) struct Left {
-    /// The arguments it holds that its common part does not hold whole, by
-    /// index with their classes.
-    pub(crate) args: Vec<(usize, ClassId)>,
-    /// The classes its result enters, each with the type each candidate
-    /// writes there.
-    pub(crate) results: Vec<(ClassId, Vec<SigTy>)>,
-}
+use super::{Decision, NodeKind, Read, Reads};
 
 impl State {
-    /// What a use has yet to record once decided: the
-    /// arguments it holds, which its common part does not hold whole, by
-    /// index with their classes, and the classes its result enters, each with
-    /// the type each candidate writes there: the result, where it holds it,
-    /// or, once the common part is recorded, each of its variables the result
-    /// writes.
-    pub(crate) fn left_to_record(&self, node: &NodeState) -> Left {
-        let NodeKind::Use {
-            callee,
-            args,
-            result,
-            ..
-        } = &node.kind
-        else {
-            return Left {
-                args: Vec::new(),
-                results: Vec::new(),
-            };
-        };
-        let sigs: Vec<&Signature> = self
-            .candidates(callee, args.len())
-            .into_iter()
-            .map(|decl| &decl.sig)
-            .collect();
-        let held: Vec<(usize, ClassId)> = args
-            .iter()
-            .enumerate()
-            .filter_map(|(i, arg)| Some((i, (*arg)?)))
-            .collect();
-        match &node.common {
-            Some(Common::Use { part, classes }) => {
-                let results = CommonPart::vars_in(&part.result)
-                    .into_iter()
-                    .map(|k| (classes[&k], part.vars[k].clone()))
-                    .collect();
-                Left {
-                    args: held,
-                    results,
-                }
-            }
-            _ => {
-                let results = result
-                    .iter()
-                    .map(|&result| {
-                        (
-                            result,
-                            sigs.iter().map(|sig| sig.result().clone()).collect(),
-                        )
-                    })
-                    .collect();
-                Left {
-                    args: held,
-                    results,
-                }
-            }
-        }
-    }
-
-    /// The classes at a node's positions, and those within the depth its
-    /// candidates reach, where it has relations yet to record:
-    /// for a use, the arguments and the classes its result enters that its
-    /// common part does not hold, and for `e?`, its exit's value too;
-    /// for a call of a function value, the parameters and the result
-    /// type in the environment of each lambda its callee's Values name.
-    pub(crate) fn positions(&self, node: &NodeState) -> BTreeSet<ClassId> {
-        match &node.kind {
+    /// The classes the node records into, by what each decision still open to
+    /// it records, directly or by the splits of what it records: a use, what
+    /// a candidate left would record into (`State::would_record_by`), and its
+    /// result where it is decided `!`; a lend, its result, and its place, which
+    /// a lend through a reference gives a target made anew, holding nothing; a
+    /// projection, its operand and its result, and the operand's target, which
+    /// it gives the member it names where it applies to the target; a binding,
+    /// its binding, and its position, which a binding that lends gives a target
+    /// made anew; a call of a function value, its result and the
+    /// parameters in the environment of each lambda its callee's Values name,
+    /// which its arguments enter. A class depends on the node, until the node
+    /// has recorded, where it is one of these alone.
+    pub(crate) fn recorded_into_by(&self, name: &Name) -> BTreeSet<ClassId> {
+        let node = &self.nodes[name];
+        let classes: BTreeSet<ClassId> = match &node.kind {
             NodeKind::Use {
-                callee, args, exit, ..
-            } => {
-                let Left {
-                    args: left,
-                    results,
-                } = self.left_to_record(node);
-                let mut positions: BTreeSet<ClassId> = exit.iter().copied().collect();
-                let candidates = self.candidates(callee, args.len());
-                for (i, arg) in left {
-                    positions.insert(arg);
-                    for candidate in &candidates {
-                        let param = &candidate.sig.params()[i];
-                        positions.extend(self.within_depth(arg, param));
-                        let (params, results) = self.environment_within(arg, param);
-                        positions.extend(params);
-                        positions.extend(results);
-                    }
-                }
-                for (class, tys) in results {
-                    positions.insert(class);
-                    for ty in &tys {
-                        positions.extend(self.within_depth(class, ty));
-                    }
-                }
-                positions
-            }
-            NodeKind::Lend { place, result, .. } => [*place, *result].into(),
-            NodeKind::Project {
-                operand, result, ..
-            } => {
-                let mut positions: BTreeSet<ClassId> = [*operand, *result].into();
-                positions.extend(self.targets(*operand));
-                positions
-            }
-            NodeKind::Bind {
-                position, binding, ..
-            } => [*position, *binding].into(),
-            NodeKind::CallValue {
                 callee,
                 args,
                 result,
-            } => {
-                let mut positions: BTreeSet<ClassId> = [callee]
-                    .into_iter()
-                    .chain(args)
-                    .chain([result])
-                    .copied()
-                    .collect();
-                for lambda in self.values_of(*callee) {
-                    positions.extend(self.environment_of(&lambda).into_iter().flatten());
+                ..
+            } => match &node.decision {
+                Some(Decision::Never) => result.iter().copied().collect(),
+                Some(Decision::Use(id)) => {
+                    let candidate = self.candidate_index(callee, args.len(), id);
+                    self.would_record_by(name, candidate).into_keys().collect()
                 }
-                positions
+                Some(other) => unreachable!("a use is decided as a candidate or never: {other:?}"),
+                None => self
+                    .would_record_per_candidate(name)
+                    .into_iter()
+                    .flat_map(|found| found.into_keys())
+                    .collect(),
+            },
+            NodeKind::Lend { place, result, .. } => [*place, *result].into_iter().collect(),
+            NodeKind::Project {
+                operand, result, ..
+            } => [*operand, *result]
+                .into_iter()
+                .chain(self.targets(*operand))
+                .collect(),
+            NodeKind::Bind {
+                position, binding, ..
+            } => [*position, *binding].into_iter().collect(),
+            NodeKind::CallValue { callee, result, .. } => {
+                let mut classes = BTreeSet::from([*result]);
+                for lambda in self.values_of(self.called(*callee)) {
+                    let mut held = self.environment_of(&lambda);
+                    held.pop();
+                    classes.extend(held.into_iter().flatten());
+                }
+                classes
             }
-        }
+        };
+        classes.into_iter().map(|class| self.root(class)).collect()
     }
 
     /// The parameter types of the lambda, and then its result type, each the
@@ -201,90 +123,6 @@ impl State {
             _ => None,
         });
         by_kind.into_iter().chain(by_fact).collect()
-    }
-
-    /// The classes at a node's positions into which all the node records is a
-    /// boundary out of them: for a use, an argument each candidate
-    /// writes a type for, and each class within the depth a candidate writes
-    /// terms there, a split relating them by boundaries toward the types it
-    /// writes, unless the class lies elsewhere at the use too, at its
-    /// result, its exit, within the depth of its result, or at an argument a
-    /// candidate writes a variable for. No other node records only so.
-    pub(crate) fn passed_out_only(&self, node: &NodeState) -> BTreeSet<ClassId> {
-        let NodeKind::Use {
-            callee, args, exit, ..
-        } = &node.kind
-        else {
-            return BTreeSet::new();
-        };
-        let Left {
-            args: left,
-            results,
-        } = self.left_to_record(node);
-        let candidates = self.candidates(callee, args.len());
-        let mut out = BTreeSet::new();
-        let mut into: BTreeSet<ClassId> = exit.iter().map(|&class| self.root(class)).collect();
-        for (class, tys) in &results {
-            into.insert(self.root(*class));
-            for ty in tys {
-                into.extend(self.within_depth(*class, ty));
-            }
-        }
-        for candidate in &candidates {
-            let sig = &candidate.sig;
-            for &(i, arg) in &left {
-                let (arg, param) = (&arg, &sig.params()[i]);
-                match param {
-                    SigTy::Term(_) => {
-                        out.insert(self.root(*arg));
-                        out.extend(self.within_depth(*arg, param));
-                        let (params, results) = self.environment_within(*arg, param);
-                        into.extend(params);
-                        out.extend(results);
-                    }
-                    SigTy::Var(_) => {
-                        into.insert(self.root(*arg));
-                    }
-                }
-            }
-        }
-        out.difference(&into).copied().collect()
-    }
-
-    /// Where `ty` writes a function type at a class holding a function value,
-    /// at any depth it writes terms, the parameter and the result types in the
-    /// environment of each lambda its Values names, as the parts at the function
-    /// type's parameters and result: the parameters, into which the
-    /// boundary's split records, and the results, which pass out of it.
-    pub(super) fn environment_within(
-        &self,
-        class: ClassId,
-        ty: &SigTy,
-    ) -> (BTreeSet<ClassId>, BTreeSet<ClassId>) {
-        let (mut params, mut results) = (BTreeSet::new(), BTreeSet::new());
-        let SigTy::Term(term) = ty else {
-            return (params, results);
-        };
-        let Some((kind, _)) = &self.classes.held(class).kind else {
-            return (params, results);
-        };
-        if let (Term::Function { .. }, Term::FunctionValue { .. }) = (&**term, kind) {
-            for lambda in self.values_of(class) {
-                let mut held = self.environment_of(&lambda);
-                let result = held.pop().expect("the result type follows the parameters");
-                params.extend(held.into_iter().flatten().map(|c| self.root(c)));
-                results.extend(result.map(|c| self.root(c)));
-            }
-            return (params, results);
-        }
-        for (key, written) in term.parts() {
-            if let Some(&part) = kind.part(&key) {
-                let (p, r) = self.environment_within(part, written);
-                params.extend(p);
-                results.extend(r);
-            }
-        }
-        (params, results)
     }
 
     /// The classes at the positions inside `class`'s kind where `ty` writes a

@@ -3,9 +3,8 @@ run: every order
 outcome 1
   refused
   value 1u8: u8
-  value R: none
-  value X: none
+  value R: !
+  value X: u8
   decision f: undecided
-  refusal no_value R
-  refusal no_value X
+  check `1u8 <= X`: Ok(Identity)
   I* of a final state: []
