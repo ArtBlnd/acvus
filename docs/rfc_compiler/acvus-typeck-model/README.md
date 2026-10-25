@@ -11,20 +11,70 @@ The model serves two ends:
 
 ## Solving
 
-Solving runs one loop of three operations, and has no other step:
+Solving is one loop, and has no other step:
 
-- **Unify.** The recorded relations make equivalence classes one, up to each
-  class whose value is the join of what enters it, where unification stops.
-- **Join.** At such a class, what is to be joined is recorded as it arrives, and
-  the class takes the join of all of it at once, when nothing more is to come.
-- **Instantiate.** A use of a function or of a lambda makes its copy of what that
-  binding group's C ties.
+```
+                  the relations the text gives
+                               │
+                               ▼
+              ┌─────────────────────────────────┐
+     ┌───────▶│ unify                           │  equations and structures make
+     │        │                                 │  classes one, and unification
+     │        │                                 │  stops at each class whose value
+     │        │                                 │  is the join of what enters it:
+     │        │                                 │  a join position
+     │        └────────────────┬────────────────┘
+     │                         ▼
+     │        ┌─────────────────────────────────┐
+     │        │ instantiate                     │  a lambda a decided type names
+     │        │                                 │  is unfolded: its C made anew
+     │        │                                 │  where a function value is called
+     │        │                                 │  or passes into a function type
+     │        └────────────────┬────────────────┘
+     │                         ▼
+     │        ┌─────────────────────────────────┐
+     │        │ join                            │  every relation reaching a join
+     │        │  + record at each join position │  position recorded there, what
+     │        │                                 │  enters it and what it enters; a
+     │        │                                 │  join position with nothing more
+     │        │                                 │  to come takes, at once, the type
+     │        │                                 │  its record gives
+     │        └────────────────┬────────────────┘
+     │                         │
+     │   something changed     │
+     └─────────────────────────┤
+                               │  nothing changed: the fixpoint
+                               ▼
+              ┌─────────────────────────────────┐
+     ┌────────┤ fallback                        │  each class left with no value
+     │        │                                 │  takes its default
+     │        └────────────────┬────────────────┘
+     │   a class fell back     │  none fell back
+     ▼                         ▼
+   unify                  the outcome
+```
 
-The loop repeats until no operation changes the state. At that fixpoint the
-classes left take their defaults, and the loop runs again.
+A type is decided once, from everything that bears on it, and the order of the
+loop gives each decision all of that:
+
+- **Unify** comes first. An equation chooses nothing: it only makes classes
+  one, so it is taken as far as it goes. It stops at a join position, whose
+  value depends on all that enters it.
+- **Instantiate** comes next. A lambda is unfolded only where its type is
+  known: the function value's Values and the call or the function type it
+  meets. Without that type there is nothing to unfold, so it waits for what
+  unify and join decide. Unfolding records new relations, which reach join
+  positions before those decide.
+- **Join** comes last. Each relation that reaches a join position is recorded
+  there, what enters it and what it enters alike, and this record is all a join
+  reads. A join position decides once nothing more is to come to it, at once,
+  from its record.
+- **Fallback** comes only when the three change nothing. A class still with no
+  value takes its default, which may give a type that unfolds more or decides
+  a join, so the loop runs again.
 
 A change to solving changes where unification stops and what a class waits for,
-or what a join takes; it adds no operation to the loop.
+or what a join position records and a join takes; it adds no step to the loop.
 
 The loop in the code, for each binding group in `Program::group_order` and then
 the entry (`explore::sample_with`, `cases::run::run`):
