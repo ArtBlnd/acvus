@@ -1,4 +1,4 @@
-// As before, with take(Option<U>): X is U by the split, a is Option<U>, and
+// As before, with take(Option<U>): X is U by the decomposition, a is Option<U>, and
 // take(a) holds: accepted in every order.
 extern type U;
 extern type T;

@@ -3,9 +3,9 @@
 // t = pick(t);             // pick((i32,)) -> (i32,), pick(u8) -> u8
 // Neither candidate's result is a reference, so pick records that at once, and
 // the projection t.0, which reads only whether T is a reference, does not
-// depend on pick: T is no reference and takes the kind "has
+// depend on pick: T is no reference and takes the structure constraint "has
 // component 0". pick reads T at its argument without its own relations,
-// and T's value is then the join of what its sources give: the kind names no member,
+// and T's value is then the join of what its sources give: the structure constraint names no member,
 // since a tuple has none, so it gives
 // nothing, the position decides nothing, and both candidates remain.
 // Refused at pick.

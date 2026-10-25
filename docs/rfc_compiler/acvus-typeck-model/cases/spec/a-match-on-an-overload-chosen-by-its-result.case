@@ -1,7 +1,7 @@
 // match parse("7") { Some(n) => take(n), None => () }
 // // parse(&str) -> Option<u8>, parse(&str) -> Option<u16>; take(u8)
-// parse reads its result P, Option<?0> by its common part. In the value read,
-// nothing enters ?0, and its places, Some's payload, n and take's u8, fill it
+// parse reads its result P, Option<?0> by its generalization. In the value read,
+// nothing enters ?0, and its upper bounds, Some's payload, n and take's u8, fill it
 // u8, so parse(Option<u8>) alone reaches: n: u8. Accepted in every order.
 extern fn parse(&str) -> Option<u8>;
 extern fn parse(&str) -> Option<u16>;

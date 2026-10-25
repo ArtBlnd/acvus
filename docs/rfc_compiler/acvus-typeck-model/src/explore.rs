@@ -292,14 +292,14 @@ impl State {
             .roots()
             .map(|root| {
                 let held = self.classes.held(root);
-                let kind = held.kind.as_ref().map(|(kind, source)| {
-                    let kind = kind.clone().map(|_, part| self.class_name(part));
-                    format!("{kind:?}/{source:?}")
+                let structure = held.structure.as_ref().map(|(structure, source)| {
+                    let structure = structure.clone().map(|_, part| self.class_name(part));
+                    format!("{structure:?}/{source:?}")
                 });
                 format!(
-                    "{}:{kind:?}:{:?}:{}:{}",
+                    "{}:{structure:?}:{:?}:{}:{}",
                     self.class_name(root),
-                    held.range,
+                    held.domain,
                     held.solved,
                     self.has_no_value(root),
                 )
@@ -310,7 +310,7 @@ impl State {
         format!(
             "{roots:?}|{}|{:?}|{:?}|{decisions:?}|{:?}",
             self.log.len(),
-            self.split,
+            self.decomposed,
             self.refusals,
             self.deferred,
         )

@@ -1,7 +1,7 @@
 // struct Pair { l, r }
 // impl Pair { fn first(self) { self.l } }
 // Pair::first(1u8)
-// The receiver self carries the kind Pair<A, B> as the text writes it, A and B
+// The receiver self carries the structure Pair<A, B> as the text writes it, A and B
 // universal. At the call's instance the argument passes into the copy of
 // that Pair, a boundary, which u8 reaches by no coercion.
 struct Pair { l, r }

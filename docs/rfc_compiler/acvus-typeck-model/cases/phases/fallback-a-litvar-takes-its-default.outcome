@@ -10,12 +10,12 @@ outcome 1
 start run
   record #0 0: ?{0}: int
   record #1 0 <= A
-  split #0 0: ?{0}: int: no parts
+  decompose #0 0: ?{0}: int: no parts
 step 1 run: solve A
   lit lowers 0
     record #2 0 = A
   join 0: nothing
-  split #1 0 <= A: one class
-  split #2 0 = A: no parts
+  decompose #1 0 <= A: one class
+  decompose #2 0 = A: no parts
 fallback 2 run
   default 0: i32

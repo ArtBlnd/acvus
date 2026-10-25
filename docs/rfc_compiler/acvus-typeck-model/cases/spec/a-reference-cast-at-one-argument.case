@@ -1,7 +1,7 @@
 // f(&a)                    // f(&B), f(&u8); a: A; casts A -> B, &A -> &B
-// The common part leaves a reference whole where a whole value passes, since a
+// The generalization leaves a reference whole where a whole value passes, since a
 // cast goes between two references of one constructor: &a meets
-// the common part's ?0, and decided as f(&B), &a passes whole into &B by the
+// the generalization's ?0, and decided as f(&B), &a passes whole into &B by the
 // cast. Split, ?0's target would have been equated with A, and the
 // cast lost; adding f(&u8) would have refused what f(&B) alone accepts.
 extern type A;

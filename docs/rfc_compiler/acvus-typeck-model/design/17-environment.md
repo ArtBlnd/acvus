@@ -5,7 +5,7 @@ callee ties, and the environment is cut by constraints, not items (Definitions, 
 4–5); a function of another group ties a use's positions by the parts of its C, so
 the cut is made as the groups are solved (Row 6). The code is `Cut::of`,
 `Cut::owner`, `Cut::part`, `Cut::is_universal` and `constraints` in `src/cut.rs`,
-`State::record_closed` in `src/node/common.rs`, `State::components` and
+`State::record_closed` in `src/node/generalization.rs`, `State::components` and
 `Instance::part` in `src/instance.rs`, `State::positions` and `State::environment_of`
 in `src/node/position.rs`, and the certificate's contexts and `call_value` in
 `src/certificate.rs`.
@@ -33,12 +33,12 @@ lambda's binding group, generalized and copied at each call.
 - The **parts of C** (`State::components`): two of C's classes lie in one part
   where one of C's relations is on both, a node left undecided names both, a
   binding's node and the projections on its path name them, one is a part of the
-  other's kind, or one holds a function value whose Values name a lambda placed
+  other's structure, or one holds a function value whose Values name a lambda placed
   in the group and the other lies in that lambda's environment. Each is what an
-  instance makes anew together: copying a relation, a node, a kind, or a lambda
+  instance makes anew together: copying a relation, a node, a structure, or a lambda
   with its environment.
 - Two classes of a lambda's text are **joined** where one constraint is on both,
-  or one is a part of a kind the text writes for the other. The **environment**
+  or one is a part of a structure the text writes for the other. The **environment**
   of a lambda is every class joined, directly or through others, to a capture,
   and every constraint on one of them, which is on them alone, its classes being
   joined. A lambda inside it records its own environment into it first, as
@@ -67,7 +67,7 @@ lambda's binding group, generalized and copied at each call.
    one candidate, each group records it at its positions at once, with no node
    (`State::record_one`); of several, the node is where the choice is, the
    positions where every candidate writes one closed type recorded where they lie
-   by the common part (`State::record_closed`). So a node is one group's.
+   by the generalization (`State::record_closed`). So a node is one group's.
 5. **A call of another group's function makes, in each group that records some
    of its constraints, an instance of the parts of C at those positions**
    (`Instance::part`). Where one group records every position, the
@@ -154,7 +154,7 @@ Derived before running:
 
 | Program | Expected |
 |---|---|
-| `emit` above | accepted; `&mut out ~> write.CommonParam(0)` once in the enclosing group; `write#0` and `write#1`, one at each call |
+| `emit` above | accepted; `&mut out ~> write.GeneralizedParam(0)` once in the enclosing group; `write#0` and `write#1`, one at each call |
 | `let f = \|x\| push(&mut v, x); f(1u8); f("s");`, `push<T>(&mut Vec<T>, T)` | refused, `no_join X`: `T` ties `x` to the capture |
 | `fn put(b, v) { write(b, v) }; let emit = \|x\| put(&mut out, x);`, called as `emit` | accepted; the enclosing group's instance of `put` holds `b`, each call's `v` and `write` |
 | `let x = 1u8; let f = \|y\| pair(x, y); f(2u8); f("s");`, `pair<A, B>(A, B)` | accepted; `pair`'s constraint at `x` the enclosing group's, at `y` each call's |
@@ -179,7 +179,7 @@ constraint, the environment's, `f(2u8)` `u8`
 (`spec/a-lambda-calls-a-function-that-returns-a-closure`). Of the four
 cases whose result constraint moved, the checks of their results are each call's
 instance's, and `phases/node-what-every-candidate-shares` records `bool`, which
-both candidates write at the result, with the text, not in the common part's
+both candidates write at the result, with the text, not in the generalization's
 phase.
 
 ## Open

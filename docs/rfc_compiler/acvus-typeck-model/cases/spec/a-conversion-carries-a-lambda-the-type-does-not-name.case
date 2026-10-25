@@ -1,5 +1,5 @@
 // take_rc(boxed(|y| y), |x| x);   // a conversion to_rc<T>(Box<T>) -> Rc<T>; take_rc<T>(Rc<T>, T)
-// The split links nothing through a conversion, so T's Values name λ
+// The decomposition links nothing through a conversion, so T's Values name λ
 // alone, while the conversion carries μ from Box's part to Rc's T: B does not
 // reach take_rc's parameter, and the program is refused there. A cast
 // in place of the conversion links the two, and the program is accepted.

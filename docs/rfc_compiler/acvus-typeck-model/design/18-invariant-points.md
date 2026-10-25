@@ -1,14 +1,14 @@
 # 18 Own relations first, invariant points last (draft, superseded)
 
 **Status.** The reading below was not implemented. A type a declaration writes is a
-part toward which a split records a boundary, and a boundary decides no value: what
+part toward which a decomposition records a boundary, and a boundary decides no value: what
 this draft calls an invariant point is such a boundary, a check by coercion, and no
-source. An equivalence class nothing enters takes the one type the places it passes
-into give, has no value where they give two, and otherwise falls back. A fill is a
-step like a solve, taken once its places have values, not a row after an own
-fixpoint. Where the places give two types, the class has no value: no candidate is
+source. An equivalence class nothing enters takes the one type its upper
+bounds give, has no value where they give two, and otherwise falls back. A fill is a
+step like a solve, taken once its upper bounds have values, not a row after an own
+fixpoint. Where its upper bounds give two types, the class has no value: no candidate is
 chosen by what fits it, nor a LitVar's default among several (row 3, steps 1 and 2),
-and a class only LitVars enter is unified by a split's `?N ⇝ U` instead. P1–P9 have
+and a class only LitVars enter is unified by a decomposition's `?N ⇝ U` instead. P1–P9 have
 no case. The rest of the note is the draft as written.
 
 A type a declaration writes reaches a class backward only where nothing else types
@@ -38,15 +38,15 @@ can be solved, and then only as the one type that fits.
   decided.
 - A class's **own relations** are every relation into it but its invariant points:
   its lower bounds, decided ones among them (a use's result, a value the text
-  writes), and what their parts give when split; the text's equations,
+  writes), and what their parts give when decomposed; the text's equations,
   and those an invariant part of a boundary gives with an unknown
-  (`push`'s `&mut Vec⟨T⟩`); kinds; and LitVars.
+  (`push`'s `&mut Vec⟨T⟩`); structures; and LitVars.
 - A class is **own-solved** where its own relations give it its constructor.
 - A node **waits for** a class that is not own-solved, has invariant points, and
   has not yet been through row 3, where what it reads there is not decided by
   then: a use whose read leaves several candidates because of that class's
   position, and a lend, a projection or a binding where it reads whether the class
-  is a reference, unless a common part has recorded that at once.
+  is a reference, unless a generalization has recorded that at once.
 
 ## Rows
 
@@ -63,7 +63,7 @@ can be solved, and then only as the one type that fits.
    not own-solved, has invariant points, and has no unbroken dependency, in the
    graph of row 2 with an edge from each node to each class it waits for, is taken
    at once, from one state. Its candidates are the types its invariant points
-   give, and of them it takes those that fit it, by its kind and its LitVar's
+   give, and of them it takes those that fit it, by its structure and its LitVar's
    family and values. Of these steps, the first that applies to some class
    is taken, and row 2 resumes:
    1. each class that exactly one candidate fits is unified with it;

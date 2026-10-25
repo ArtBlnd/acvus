@@ -3,7 +3,7 @@
 // The candidates' results are type parameters alone, which decide nothing,
 // so get does not read its result and does not wait
 // for the lend whose place it is. The lend waits for get, whose candidate
-// decides through the common part that R is a reference, and
+// decides through the generalization that R is a reference, and
 // lends through it. get had read its result, the two had broken their
 // dependencies on each other, and the lend had taken the place before get
 // decided, a reference to a reference.

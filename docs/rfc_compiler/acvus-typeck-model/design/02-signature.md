@@ -42,7 +42,7 @@ fields in declared order.
 ## Left open for change
 
 - `DeclaredTypes::check` takes a `Term<P>` and looks at no part, so closed types,
-  signatures and kinds share one check.
+  signatures and structures share one check.
 - `SigArgs` binds some of the variables, so matching can bind them one parameter at
   a time.
 - Substitution and matching take any `HasTerm`, so a signature also meets a value

@@ -24,9 +24,9 @@ outcome 1
   check `&i ~> i + 1.Param(0)`: Ok(Identity)
   check `?a <= I`: Ok(Identity)
   check `R <= I`: Ok(Identity)
-  check `i + 1.Chosen(1) <= i + 1.Common(1)`: Ok(Identity)
-  check `i + 1.Common(1) <= R`: Ok(Identity)
-  check `i == n.CommonResult <= D`: Ok(Identity)
+  check `i + 1.Chosen(1) <= i + 1.Generalized(1)`: Ok(Identity)
+  check `i + 1.Generalized(1) <= R`: Ok(Identity)
+  check `i == n.GeneralizedResult <= D`: Ok(Identity)
   check `s ~> size.Param(0)`: Ok(Identity)
   check `size.Result <= N`: Ok(Identity)
   I* of a final state: []

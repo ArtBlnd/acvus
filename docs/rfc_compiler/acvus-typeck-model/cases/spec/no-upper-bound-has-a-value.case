@@ -1,6 +1,6 @@
 // let x = None;
 // let y = if c { x } else { Some(1) };
-// No place of x's payload has a value, so it is not filled; the fallback
+// No upper bound of x's payload has a value, so it is not filled; the fallback
 // makes it ! and the literal i32.
 let X;
 let ?k;

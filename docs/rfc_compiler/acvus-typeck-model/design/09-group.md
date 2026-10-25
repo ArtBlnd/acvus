@@ -30,14 +30,14 @@ the group takes the body's own types.
    lower bound on a universal, and a node that reads one, stay in C.
 3. **What C holds.** A class whose value is not closed at the fixpoint is of C, a
    solved one among them where a part is not (`Some(x)`), as is each universal. A
-   copy is made per root, so the equations among C's classes hold in it, and a kind
+   copy is made per root, so the equations among C's classes hold in it, and a structure
    the group solved a class to is recorded in its copy with that source, so that
    "with an equation" stays as it was. A class outside C enters a copy as its closed
    type, written. Every relation of the group's log naming a class of C is copied,
-   the splits it derived included, recorded by the use that made the instance or by
-   the copy of the undecided node that recorded it. A relation the group split stays
-   split in the copy: what its split recorded is copied with it, and no class of the
-   copy takes there a constructor it did not hold in the group, so the split is not
+   the decompositions it derived included, recorded by the use that made the instance or by
+   the copy of the undecided node that recorded it. A relation the group decomposed stays
+   decomposed in the copy: what its decomposition recorded is copied with it, and no class of the
+   copy takes there a constructor it did not hold in the group, so the decomposition is not
    made again where a copied universal is an unknown.
 4. **A use of a function in its own group** passes each argument into the
    parameter's universal type, a boundary, and the body's
@@ -74,13 +74,13 @@ the group takes the body's own types.
    Values, as a projection is taken of a reference's target (`State::called`). A call
    whose callee's Values name no lambda decides nothing and is not decided then. A
    function value passing into a function type makes the same instances where that
-   boundary is split, the type's parameters passing into the lambda's and the
+   boundary is decomposed, the type's parameters passing into the lambda's and the
    lambda's result into the type's.
 10. **A receiver's `T̄`** is universal, and the receiver's class holds the
-   kind the text writes, so it is decided and universal at once: an argument
+   structure the text writes, so it is decided and universal at once: an argument
    passes into its copy by a boundary. A node that reads
    whether a receiver is a reference depends on the use that chooses it
-   and is decided in the copies, although the kind the text writes already
+   and is decided in the copies, although the structure the text writes already
    decides it.
 11. **An identity a body makes**. A use decided as a declaration whose
    result carries an identity no parameter does records a new one,

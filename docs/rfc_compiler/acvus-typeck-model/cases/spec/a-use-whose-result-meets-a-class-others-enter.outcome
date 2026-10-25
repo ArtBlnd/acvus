@@ -12,11 +12,11 @@ outcome 1
   decision mk: mk#0
   decision parse: undecided
   check `1u8 ~> mk.Param(0)`: Ok(Identity)
-  check `mk.Chosen(1) <= mk.Common(1)`: Ok(Identity)
-  check `mk.Common(1) <= M`: Ok(Identity)
+  check `mk.Chosen(1) <= mk.Generalized(1)`: Ok(Identity)
+  check `mk.Generalized(1) <= M`: Ok(Identity)
   check `open.Result <= open()`: Ok(Identity)
-  check `s ~> parse.CommonParam(0)`: Ok(Identity)
+  check `s ~> parse.GeneralizedParam(0)`: Ok(Identity)
   refusal no_value R
   refusal no_value V
-  refusal no_value `parse.Common(0)`
+  refusal no_value `parse.Generalized(0)`
   I* of a final state: []

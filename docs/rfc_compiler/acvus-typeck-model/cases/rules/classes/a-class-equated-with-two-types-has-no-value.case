@@ -1,4 +1,4 @@
-// A class equated with u8 and with u16: unified, its kind is their conjunction,
+// A class equated with u8 and with u16: unified, its structure is their conjunction,
 // which no type meets, so it has no value, refused.
 let A;
 let U8: u8;

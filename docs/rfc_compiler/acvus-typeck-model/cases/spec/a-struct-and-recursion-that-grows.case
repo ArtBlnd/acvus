@@ -8,8 +8,8 @@
 // let q = p.swap();
 // q.nest(3)
 // Its states are too many to explore, so the orders are sampled. The recursive
-// call's boundary into nest's receiver splits into P ⇝ A and Q ⇝ B toward the
-// universals, which C keeps; the copy q.nest(3) makes keeps them split.
+// call's boundary into nest's receiver decomposes into P ⇝ A and Q ⇝ B toward the
+// universals, which C keeps; the copy q.nest(3) makes keeps them decomposed.
 // q is Pair<&str, u8>, and the copy of the recursive call's argument,
 // Pair<Pair<&str, u8>, u8>, reaches Pair<&str, u8> by no coercion.
 //@ orders: sampled 200

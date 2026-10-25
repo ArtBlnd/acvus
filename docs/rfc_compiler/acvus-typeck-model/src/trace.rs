@@ -5,10 +5,10 @@
 
 use crate::check::Refusal;
 use crate::class::ClassId;
+use crate::decompose::Decomposition;
 use crate::fallback::FellBack;
 use crate::node::Decided;
 use crate::record::Recording;
-use crate::split::Split;
 use crate::unify::Linked;
 use crate::value::Joined;
 
@@ -17,7 +17,7 @@ use crate::value::Joined;
 pub enum Report {
     /// Recording: relations of the text recorded.
     Recorded(Recording),
-    /// Unification: a kind "indexes `τ`" linked along a view.
+    /// Unification: a structure constraint "indexes `τ`" linked along a view.
     Linked(Linked),
     /// The join: cycles of lower bounds alone merged.
     Merged(Recording),
@@ -26,20 +26,23 @@ pub enum Report {
     Infinite { class: ClassId, refusal: Refusal },
     /// The join: what the equivalence class took, and from what.
     Joined { class: ClassId, joined: Joined },
-    /// The join: the range the lower bound or part lower bound at `bound`
+    /// The join: the domain the lower bound or part lower bound at `bound`
     /// gives the class it bounds.
-    Ranged { bound: usize, recorded: Recording },
+    DomainGiven { bound: usize, recorded: Recording },
     /// A row of the decision table: the class it narrowed.
     Narrowed {
         row: crate::decision::Row,
         class: ClassId,
         recorded: Recording,
     },
-    /// A split: what became of the relation at `at`.
-    Split { at: usize, split: Split },
-    /// The nodes: the common part of all the nodes not yet decided may
+    /// A decomposition: what became of the relation at `at`.
+    Decomposed {
+        at: usize,
+        decomposition: Decomposition,
+    },
+    /// The nodes: the generalization of all the nodes not yet decided may
     /// become.
-    Common(Recording),
+    Generalized(Recording),
     /// The nodes: a node decided.
     Decided(Decided),
     /// Fallback.

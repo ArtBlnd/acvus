@@ -11,6 +11,6 @@ S = u8;
 A = `Some(1u8)`;
 
 assert trace "join A: Option {Variant(None), Variant(Some)}";
-assert split records `S <=p A.Payload(Some)`;
+assert decomposition records `S <=p A.Payload(Some)`;
 must pass;
 assert A: Option<u8>;

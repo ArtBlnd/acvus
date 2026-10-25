@@ -1,7 +1,7 @@
 // let r = &1u8;
 // r.f;
 // r is a reference, so the field projection applies to its target, the
-// class of 1u8, whose kind u8 has no field f: the conjunction no type meets
+// class of 1u8, whose structure u8 has no field f: the conjunction no type meets
 // leaves it with no value, refused there. One outcome in every
 // order: the target, a part of R, waits for R to take its constructor,
 // which the model once let it solve before, in two outcomes.

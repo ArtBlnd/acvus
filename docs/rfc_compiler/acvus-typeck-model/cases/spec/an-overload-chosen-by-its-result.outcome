@@ -13,8 +13,8 @@ outcome 1
   decision `lend 2`: lend &mut place
   decision parse: undecided
   decision `parse 2`: undecided
-  check `&str ~> parse 2.CommonParam(0)`: Ok(Identity)
-  check `&str ~> parse.CommonParam(0)`: Ok(Identity)
+  check `&str ~> parse 2.GeneralizedParam(0)`: Ok(Identity)
+  check `&str ~> parse.GeneralizedParam(0)`: Ok(Identity)
   check `fill_all.Result <= fill_all(..)`: Ok(Identity)
   refusal no_value `&mut parse(s)`
   refusal no_value `&mut parse(s) 2`
@@ -22,6 +22,6 @@ outcome 1
   refusal no_value `parse(s) 2`
   refusal no_value `parse(s).Arg(0)`
   refusal no_value `parse(s) 2.Arg(0)`
-  refusal no_value `parse.CommonResult`
-  refusal no_value `parse 2.CommonResult`
+  refusal no_value `parse.GeneralizedResult`
+  refusal no_value `parse 2.GeneralizedResult`
   I* of a final state: []

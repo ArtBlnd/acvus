@@ -20,10 +20,10 @@ outcome 1
   check `get1.Result <= get1()`: Ok(Identity)
   check `get2() ~> q2.Param(0)`: Ok(Identity)
   check `get2.Result <= get2()`: Ok(Identity)
-  check `q1.Common(1) <= A`: Ok(Identity)
-  check `q1.Var(Type(0)) <= q1.Common(1)`: Ok(Identity)
-  check `q2.Common(1) <= B`: Ok(Identity)
-  check `q2.Var(Type(0)) <= q2.Common(1)`: Ok(Identity)
+  check `q1.Generalized(1) <= A`: Ok(Identity)
+  check `q1.Var(Type(0)) <= q1.Generalized(1)`: Ok(Identity)
+  check `q2.Generalized(1) <= B`: Ok(Identity)
+  check `q2.Var(Type(0)) <= q2.Generalized(1)`: Ok(Identity)
   refusal no_join `f result.Payload(Err)`
   refusal no_join `f@8/f result.Payload(Err)`
   refusal no_value `f()`

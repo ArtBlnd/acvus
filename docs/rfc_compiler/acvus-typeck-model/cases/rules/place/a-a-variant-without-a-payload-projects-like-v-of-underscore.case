@@ -1,6 +1,6 @@
 // match 1u8 { None => {} }
 // None is None(_), the projection Payload at the scrutinee,
-// whose kind u8 has no variant None.
+// whose structure u8 has no variant None.
 let 1u8: u8;
 let `None.0`;
 `None.0` = 1u8 as None @ None;

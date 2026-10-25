@@ -2,7 +2,7 @@
 // probe(x);                // probe(A), probe(B)
 // Accepted as probe(A), with x: A. Given x: B, the pass of make() into X and
 // probe(A)'s boundary fail; decided as probe(B), its boundary fails; given
-// probe(x): &A, its result fails, the one its common part records at once and
+// probe(x): &A, its result fails, the one its generalization records at once and
 // the candidate's alike.
 extern type A;
 extern type B;

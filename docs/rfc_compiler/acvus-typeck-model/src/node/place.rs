@@ -3,9 +3,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::class::{ClassId, ClassName, Fact};
+use crate::class::{ClassId, ClassName, StructureConstraint};
+use crate::domain::Domain;
 use crate::program::Projection;
-use crate::range::Range;
 use crate::read::ReadValue;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
@@ -34,14 +34,14 @@ pub(super) fn lesser(a: Option<Mutability>, b: Option<Mutability>) -> Option<Mut
 }
 
 impl Projection {
-    /// The kind the projection gives the class it applies to, naming `part`.
-    pub(super) fn fact(&self, part: ClassId) -> Fact {
+    /// The structure the projection gives the class it applies to, naming `part`.
+    pub(super) fn structure_constraint(&self, part: ClassId) -> StructureConstraint {
         match self {
-            Projection::Deref => Fact::Ref(part),
-            Projection::Field(field) => Fact::Field(field.clone(), part),
-            Projection::Component(i) => Fact::Component(*i, part),
-            Projection::Elem => Fact::Indexes(part),
-            Projection::Payload { enum_name, variant } => Fact::Variant {
+            Projection::Deref => StructureConstraint::Target(part),
+            Projection::Field(field) => StructureConstraint::Field(field.clone(), part),
+            Projection::Component(i) => StructureConstraint::Component(*i, part),
+            Projection::Elem => StructureConstraint::Element(part),
+            Projection::Payload { enum_name, variant } => StructureConstraint::Payload {
                 enum_name: enum_name.clone(),
                 variant: variant.clone(),
                 payload: part,
@@ -54,7 +54,7 @@ impl State {
     /// What the class reads as in the value read leaving out `excluded`: none
     /// where it reads as no reference or as nothing, and a reference, of its
     /// mutability where the value read decides one. Where the
-    /// value read decides no constructor, a common part's record that a class
+    /// value read decides no constructor, a generalization's record that a class
     /// it reaches by lower bounds is a reference still reads as a reference.
     pub(super) fn reads_as_reference(&self, id: ClassId, excluded: &BTreeSet<Name>) -> AsReference {
         let read = self.read_state(excluded);
@@ -71,8 +71,8 @@ impl State {
         }
     }
 
-    /// Whether a node's common part or a lend gave the class, or one it
-    /// reaches by lower bounds, a range of references.
+    /// Whether a node's generalization or a lend gave the class, or one it
+    /// reaches by lower bounds, a domain of references.
     pub(super) fn recorded_as_reference(&self, id: ClassId) -> bool {
         let mut seen = BTreeSet::from([self.root(id)]);
         let mut work = vec![self.root(id)];
@@ -80,9 +80,9 @@ impl State {
             if self
                 .classes
                 .held(at)
-                .range
+                .domain
                 .as_ref()
-                .is_some_and(Range::is_references)
+                .is_some_and(Domain::is_references)
             {
                 return true;
             }
@@ -136,7 +136,8 @@ impl State {
             LendTarget::Through(_) => {
                 let target = self.arena.intern(at(NodeAt::Target));
                 self.classes.grow(&self.arena);
-                let relation = Relation::Fact(place, Fact::Ref(target));
+                let relation =
+                    Relation::StructureConstraint(place, StructureConstraint::Target(target));
                 recorded.push(self.record(relation, recorder.clone()));
                 target
             }

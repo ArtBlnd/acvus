@@ -6,5 +6,5 @@ outcome 1
   value R: u8
   decision f: f#0
   check `0 <= f.Var(Type(0))`: Ok(Identity)
-  check `f.CommonResult <= R`: Ok(Identity)
+  check `f.GeneralizedResult <= R`: Ok(Identity)
   I* of a final state: []

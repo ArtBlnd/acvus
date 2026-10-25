@@ -9,5 +9,5 @@ outcome 1
   check `X ~> probe.Param(0)`: Ok(Identity)
   check `make() <= X`: Ok(Identity)
   check `make.Result <= make()`: Ok(Identity)
-  check `probe.CommonResult <= probe(x)`: Ok(Identity)
+  check `probe.GeneralizedResult <= probe(x)`: Ok(Identity)
   I* of a final state: []

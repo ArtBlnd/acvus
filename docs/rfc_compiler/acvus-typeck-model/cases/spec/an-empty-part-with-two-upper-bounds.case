@@ -16,8 +16,8 @@ S = u16;
 Y = `Some(1u16)`;
 `Option⟨u8⟩` = X;
 
-// Nothing enters X's payload P. The places it passes into are Y's
-// payload, which is u16, and the u8 of P ⇝ u8, which the split of
+// Nothing enters X's payload P. Its upper bounds are Y's
+// payload, which is u16, and the u8 of P ⇝ u8, which the decomposition of
 // X ⇝ Option<u8> records: two types, so P is not filled and has no value.
 must fail;
 assert Y: Option<u16>;

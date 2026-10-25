@@ -1,7 +1,7 @@
 //! The state of a binding group's solving, and the composition of
 //! the phases on it: recording (`record.rs`), unification (`unify.rs`), the
 //! join that gives an equivalence class its value (`value.rs`),
-//! splits (`split.rs`), the decisions of uses, lends, projections and
+//! decompositions (`decompose.rs`), the decisions of uses, lends, projections and
 //! bindings (`node/`) in the order the dependencies allow (`dep.rs`),
 //! fallback (`fallback.rs`) and the checks (`check.rs`): the steps to a
 //! fixpoint and fallback after it, each returning the trace of
@@ -15,13 +15,13 @@ use crate::check::{Outcome, Refusal};
 use crate::class::{Arena, ClassId, ClassName, Classes};
 use crate::cut::Cut;
 use crate::decl::Decls;
+use crate::decompose::Decomposition;
 use crate::dep::Eligible;
 use crate::instance::Made;
 use crate::node::NodeState;
 use crate::program::{ENTRY, Function, Item, Part, Position, Program, TextClass};
 use crate::read::ReadValue;
 use crate::relation::{Recorded, Recorder, Relation};
-use crate::split::Split;
 use crate::trace::{Report, Trace};
 use crate::ty::{Constructor, HasTerm, Name};
 
@@ -37,11 +37,11 @@ pub struct State {
     pub(crate) decided: BTreeSet<ClassId>,
     /// The lower bounds, part lower bounds and boundaries, by their place in
     /// the log, whose parts are related.
-    pub(crate) split: BTreeSet<usize>,
-    /// Those copied from a C where they were split, by their place in the log:
-    /// what their splits recorded is copied with them, so that no state splits
+    pub(crate) decomposed: BTreeSet<usize>,
+    /// Those copied from a C where they were decomposed, by their place in the log:
+    /// what their decompositions recorded is copied with them, so that no state decomposes
     /// them again.
-    pub(crate) copied_split: BTreeSet<usize>,
+    pub(crate) copied_decomposed: BTreeSet<usize>,
     /// The classes found to reach a part of their own, or whose sources have
     /// no join.
     pub(crate) no_value: BTreeSet<ClassId>,
@@ -51,7 +51,7 @@ pub struct State {
     /// In a state a value read is taken from, the classes found to give
     /// nothing, having no relation left.
     pub(crate) nothing: BTreeSet<ClassId>,
-    /// The classes named by a kind "indexes `τ`" already linked along a view.
+    /// The classes named by a structure constraint "indexes `τ`" already linked along a view.
     pub(crate) viewed: BTreeSet<ClassId>,
     /// The decided nodes whose relations wait for the undecided nodes that
     /// broke their dependency on them.
@@ -136,8 +136,8 @@ impl State {
             log: Vec::new(),
             texts: Vec::new(),
             decided: BTreeSet::new(),
-            split: BTreeSet::new(),
-            copied_split: BTreeSet::new(),
+            decomposed: BTreeSet::new(),
+            copied_decomposed: BTreeSet::new(),
             no_value: BTreeSet::new(),
             refusals: BTreeSet::new(),
             nodes: BTreeMap::new(),
@@ -219,7 +219,7 @@ impl State {
             .texts
             .iter()
             .copied()
-            .filter(|&id| state.classes.held(id).kind.is_some())
+            .filter(|&id| state.classes.held(id).structure.is_some())
             .collect();
         trace.push(Report::Recorded(
             state.record_items(program, &items, solved),
@@ -354,12 +354,12 @@ impl State {
     /// What follows at once from what is recorded: cycles of lower bounds and
     /// part lower bounds merged, the parts of each lower bound, part
     /// lower bound and boundary whose two sides are solved related,
-    /// and the range a lower bound holding no kind gives the class it bounds.
+    /// and the domain a lower bound holding no structure gives the class it bounds.
     /// The trace holds what changed the state.
     pub(crate) fn settle(&mut self) -> Trace {
         let mut trace = Trace::default();
         loop {
-            let before = (self.log.len(), self.split.len());
+            let before = (self.log.len(), self.decomposed.len());
             let merged = self.merge_cycles();
             if !merged.is_empty() {
                 trace.push(Report::Merged(merged));
@@ -367,21 +367,24 @@ impl State {
             for linked in self.link_views() {
                 trace.push(Report::Linked(linked));
             }
-            let common = self.record_at_once();
-            if !common.is_empty() {
-                trace.push(Report::Common(common));
+            let generalized = self.record_generalizations();
+            if !generalized.is_empty() {
+                trace.push(Report::Generalized(generalized));
             }
             for i in 0..self.log.len() {
-                if self.split.contains(&i) {
+                if self.decomposed.contains(&i) {
                     continue;
                 }
-                match self.split_at(i) {
-                    Split::Unsolved => {
-                        if let Some(recorded) = self.range_up(i) {
-                            trace.push(Report::Ranged { bound: i, recorded });
+                match self.decompose_at(i) {
+                    Decomposition::Unsolved => {
+                        if let Some(recorded) = self.domain_up(i) {
+                            trace.push(Report::DomainGiven { bound: i, recorded });
                         }
                     }
-                    split => trace.push(Report::Split { at: i, split }),
+                    decomposition => trace.push(Report::Decomposed {
+                        at: i,
+                        decomposition,
+                    }),
                 }
             }
             for (class, recorded) in self.narrow_literals() {
@@ -391,7 +394,7 @@ impl State {
                     recorded,
                 });
             }
-            if (self.log.len(), self.split.len()) == before {
+            if (self.log.len(), self.decomposed.len()) == before {
                 return trace;
             }
         }
@@ -450,7 +453,7 @@ impl State {
     /// The state a node's value read is taken from: the relations
     /// recorded by neither the nodes `excluded` nor solving, a fallback's
     /// decisions among them, solved where each class's value is decided by
-    /// the table of values and splits whatever its other dependencies, no
+    /// the table of values and decompositions whatever its other dependencies, no
     /// node decided, and a class with no relation left giving nothing.
     /// Classes are solved in one order here.
     pub(crate) fn read_state(&self, excluded: &BTreeSet<Name>) -> State {
@@ -461,8 +464,8 @@ impl State {
             log: Vec::new(),
             texts: self.texts.clone(),
             decided: self.decided.clone(),
-            split: BTreeSet::new(),
-            copied_split: BTreeSet::new(),
+            decomposed: BTreeSet::new(),
+            copied_decomposed: BTreeSet::new(),
             no_value: BTreeSet::new(),
             refusals: BTreeSet::new(),
             nodes: BTreeMap::new(),
@@ -486,9 +489,9 @@ impl State {
                 continue;
             }
             let entry = read.record(recorded.relation.clone(), recorded.recorder.clone());
-            if self.copied_split.contains(&at) {
-                read.split.insert(entry.at);
-                read.copied_split.insert(entry.at);
+            if self.copied_decomposed.contains(&at) {
+                read.decomposed.insert(entry.at);
+                read.copied_decomposed.insert(entry.at);
             }
         }
         read.settle();
@@ -511,8 +514,8 @@ impl State {
         }
     }
 
-    /// The value the class has here: a position with no kind is undecided,
-    /// and one holding only a range that admits no `!` is that range, a value
+    /// The value the class has here: a position with no structure is undecided,
+    /// and one holding only a domain that admits no `!` is that domain, a value
     /// of `!` deciding nothing.
     pub(crate) fn read_value(&self, id: ClassId) -> ReadValue {
         self.read_value_in(id, &mut BTreeSet::new())
@@ -524,15 +527,15 @@ impl State {
         if self.has_no_value(root) || !visiting.insert(root) {
             return ReadValue::Undecided;
         }
-        let value = match (&held.kind, &held.range) {
-            (Some((kind, _)), _) => {
-                let term = kind
+        let value = match (&held.structure, &held.domain) {
+            (Some((structure, _)), _) => {
+                let term = structure
                     .clone()
                     .map(|_, part| self.read_value_in(part, visiting));
                 ReadValue::from_term(term).unwrap_or(ReadValue::Undecided)
             }
-            (None, Some(range)) if !range.admits(&Constructor::Never) => {
-                ReadValue::Range(range.clone())
+            (None, Some(domain)) if !domain.admits(&Constructor::Never) => {
+                ReadValue::Domain(domain.clone())
             }
             (None, _) => ReadValue::Undecided,
         };

@@ -12,6 +12,6 @@ outcome 1
   decision `+`: core::add#2
   check `&1 ~> +.Param(0)`: Ok(Identity)
   check `&2 ~> +.Param(1)`: Ok(Identity)
-  check `+.Chosen(1) <= +.Common(1)`: Ok(Identity)
-  check `+.Common(1) <= S`: Ok(Identity)
+  check `+.Chosen(1) <= +.Generalized(1)`: Ok(Identity)
+  check `+.Generalized(1) <= S`: Ok(Identity)
   I* of a final state: []

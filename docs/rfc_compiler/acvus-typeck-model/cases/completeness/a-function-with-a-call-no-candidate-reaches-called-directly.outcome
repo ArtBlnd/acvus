@@ -20,6 +20,6 @@ outcome 1
   check `g@5/g result <= g(..)`: Ok(Identity)
   check `make_c() <= M`: Ok(Identity)
   check `make_c.Result <= make_c()`: Ok(Identity)
-  check `probe.CommonResult <= probe(m)`: Ok(Identity)
+  check `probe.GeneralizedResult <= probe(m)`: Ok(Identity)
   check `unit <= g result`: Ok(Identity)
   I* of a final state: []

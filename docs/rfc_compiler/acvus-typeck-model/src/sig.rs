@@ -72,7 +72,7 @@ impl DeclaredTypes {
     }
 
     /// Whether the term's own constructor agrees with its declaration. Its parts
-    /// are not looked at, so closed types, signatures and kinds share this check.
+    /// are not looked at, so closed types, signatures and structures share this check.
     pub fn check<P>(&self, term: &Term<P>) -> Result<(), DeclError> {
         match term {
             Term::Extern {

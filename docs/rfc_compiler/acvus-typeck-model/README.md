@@ -39,12 +39,12 @@ The primitives, each assuming only those before it:
 | 03 | Declarations and the cast tree: extern fns and impls by name, casts and views, conversions |
 | 04 | Join and `≤` |
 | 05 | Coercion and rank: LitVars, values a use reads, coercion, the steps of `≤`, rank |
-| 06 | Equivalence classes: names, union-find, type variables, kinds |
+| 06 | Equivalence classes: names, union-find, type variables, structures |
 | 07 | Relations and what records them |
 | 08 | Uses, lends, projections and bindings |
 | 09 | Binding groups, universals, C and instances |
 | 10 | The dependency graph |
-| 11 | Values, splits and fills |
+| 11 | Values, decompositions and fills |
 | 12 | Steps, state, fixpoint and fallback |
 | 13 | Outcome and exploration |
 | 14 | The certificate and its checker |

@@ -12,8 +12,8 @@ start run
   record #1 u16: u16
   record #2 u8 <= A
   record #3 u16 <= A
-  split #0 u8: u8: no parts
-  split #1 u16: u16: no parts
+  decompose #0 u8: u8: no parts
+  decompose #1 u16: u16: no parts
 step 1 run: solve A
   join A: no join
   refuse: no_join A

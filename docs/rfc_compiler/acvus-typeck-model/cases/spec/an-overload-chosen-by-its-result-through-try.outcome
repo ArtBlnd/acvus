@@ -14,16 +14,16 @@ outcome 1
   decision parse: undecided
   decision q: ?#0
   check `q.Exit ~> R`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
-  check `s ~> parse.CommonParam(0)`: Ok(Identity)
+  check `s ~> parse.GeneralizedParam(0)`: Ok(Identity)
   check `take.Result <= take(n)`: Ok(Identity)
   refusal no_value K
   refusal no_value N
   refusal no_value P
   refusal no_value `Some(n)`
   refusal no_value `P.Payload(Some)`
-  refusal no_value `parse.Common(0)`
-  refusal no_value `parse.CommonResult`
+  refusal no_value `parse.Generalized(0)`
+  refusal no_value `parse.GeneralizedResult`
   refusal no_value `q.Var(Type(0))`
   refusal no_value `q.Param(0)`
-  refusal no_value `q.Common(1)`
+  refusal no_value `q.Generalized(1)`
   I* of a final state: []

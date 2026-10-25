@@ -25,5 +25,5 @@ outcome 1
   refusal no_value `|acc, s| .. ~> fold.Param(2)#λ/ACC`
   refusal no_value `|acc, s| .. ~> fold.Param(2)#λ/acc + s`
   refusal no_value `|acc, s| .. ~> fold.Param(2)#λ/λ result`
-  refusal no_value `|acc, s| .. ~> fold.Param(2)#λ/add.Common(1)`
+  refusal no_value `|acc, s| .. ~> fold.Param(2)#λ/add.Generalized(1)`
   I* of a final state: []

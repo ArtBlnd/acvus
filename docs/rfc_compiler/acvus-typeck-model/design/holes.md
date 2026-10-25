@@ -17,7 +17,7 @@ cast goes from `B` to `D`. A value of `A`, with casts `A → B → D`, then reac
 two compositions: `A → B` then the wrap in `B`, and `A → B → D` then the wrap in `D`,
 by the wrap rows of the Coercion table, though the composition toward a given type is
 unique. An `Error`, which `?` alone makes, is written only where a value leaves the
-program, and `?` wraps by a split, so the wrap rows are removed and no value of
+program, and `?` wraps by a decomposition, so the wrap rows are removed and no value of
 another type reaches an `Error` by a coercion: what enters a written `Error`, a
 parameter's or the embedding's result's, is an `Error` already.
 
@@ -26,7 +26,7 @@ parameter's or the embedding's result's, is an `Error` already.
 A view impl is a cast from a reference to a container to a reference to a slice or
 `str`, and a reference's node is its mutability and its target's constructor. A
 reference's constructor is its mutability alone, so where two references meet, they
-have one constructor, and their targets are related by the split. At a boundary `&V ⇝
+have one constructor, and their targets are related by the decomposition. At a boundary `&V ⇝
 &[u8]` records `V ⇝ [u8]` toward a type the declaration writes, which decides no
 value, so `V` takes `Vec⟨u8⟩` from `make()`, and the whole value reaches `&[u8]` by
 the view. Witness, accepted by the model
@@ -43,7 +43,7 @@ its target, an unknown, with `A` and `C`, so they have no value. A reference is 
 structural type, so its target is invariant where references meet, and the two are
 left so.
 
-## A reborrow at a split
+## A reborrow at a decomposition
 
 Where `&mut X` met `&Y` at a lower bound or a boundary, the constructors differed and
 no cast linked them, so nothing related `X` and `Y`: in `look(&mut v)` with
@@ -114,10 +114,10 @@ The scalars are the integers of 8 to 64 bits, `f32`, `f64`, `bool` and `char`.
 
 ## Which members a host's type keeps from growing
 
-A kind adds a member to a type another source gives only where that member is visible
+A structure constraint adds a member to a type another source gives only where that member is visible
 to this body, and a field the text writes is visible, so a class a type the host
 gives is a lower bound of grows by it. The class holding the host's type itself has
-an equation, which a kind cannot grow. Accepted with `a: {extra: i32, name: String}`
+an equation, which a structure constraint cannot grow. Accepted with `a: {extra: i32, name: String}`
 (`cases/holes/a-field-on-a-class-the-host-bounds.case`):
 
 ```
@@ -125,14 +125,14 @@ let a = @cfg;            // @cfg is { name: String }, given by the host
 a.extra = 1;
 ```
 
-The reading by the sources, under which the host's type grew by no kind, is
+The reading by the sources, under which the host's type grew by no structure constraint, is
 removed with its case.
 
 ## A pattern on a scrutinee of type `!`
 
-A projection of the pattern gives the scrutinee's class a kind known in part, and its
-value must meet that kind. `!` has no part, so it met none, and the program was
-refused. `!`, which has no value, meets every kind, the parts that kind names being
+A projection of the pattern gives the scrutinee's class a structure constraint, and its
+value must meet that structure constraint. `!` has no part, so it met none, and the program was
+refused. `!`, which has no value, meets every structure constraint, the parts that structure constraint names being
 `!`, so the program is accepted with `n: !` and `x: !`
 (`cases/holes/a-pattern-on-a-scrutinee-of-type-never.case`). The parts being `!` keep
 a binding whose fallback is `!` from passing on what was written into it: `let t; t.0
@@ -162,7 +162,7 @@ if let Some(x) = &o { }
 
 The exclusion is of the projections whose operand is the class read, and the nodes
 recording into a class are reached along the parts of the two sides that a relation
-not yet split will link. The binding's position, the payload of `&o`'s target, is so
+not yet decomposed will link. The binding's position, the payload of `&o`'s target, is so
 linked to `O`'s payload, and the binding waits for its path's projection: one
 outcome, `x: &u8` (`cases/holes/a-binding-behind-a-reference.case`).
 
@@ -175,7 +175,7 @@ other, two outcomes, and five with an `i32` candidate of each, now one, accepted
 
 ## A reference recorded at once has no mutability
 
-Where every candidate records a reference into a class, a use's common part records
+Where every candidate records a reference into a class, a use's generalization records
 at once that the class is a reference, and a lend that reads it no longer depends on
 the use. The record names no mutability, and a lend's mutability is the lesser of its
 own and its place's, so before the use is decided a `&mut` lend's read decides

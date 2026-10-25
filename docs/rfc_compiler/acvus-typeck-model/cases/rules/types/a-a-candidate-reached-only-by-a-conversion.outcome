@@ -7,5 +7,5 @@ outcome 1
   decision f: undecided
   check `make.Result <= make()`: Ok(Identity)
   refusal no_value `f(..)`
-  refusal no_value `f.Common(0)`
+  refusal no_value `f.Generalized(0)`
   I* of a final state: []

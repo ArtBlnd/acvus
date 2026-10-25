@@ -2,7 +2,7 @@
 // let y = if c { x } else { Some(1) };
 // take(x); take16(y);      // take(Option<u8>), take16(Option<u16>)
 // y's payload has its boundary into u16 left to unify, so P waits for
-// it, and its places are then u16 and u8: no fill, refused in every order.
+// it, and its upper bounds are then u16 and u8: no fill, refused in every order.
 let X;
 let ?k;
 let None: Option<?k>;

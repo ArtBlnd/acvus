@@ -1,7 +1,7 @@
 // let n = parse("7")?; take(n); Some(n)   // the script's result untyped
-// The common part decides ? as before, but n passes into take's u8 and into
+// The generalization decides ? as before, but n passes into take's u8 and into
 // the payload of the script's result, which nothing types: a class nothing
-// enters is filled only once every place it passes into has a value,
+// enters is filled only once every upper bound has a value,
 // so n is not filled, parse reads nothing at its result, and the program is
 // refused there. Typed, the result is accepted (the case above).
 extern fn parse(&str) -> Option<u8>;

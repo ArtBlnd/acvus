@@ -20,8 +20,8 @@ outcome 1
   check `R ~> D`: Ok(Identity)
   check `parse_r(s) ~> q.Param(0)`: Ok(Identity)
   check `parse_r.Result <= parse_r(s)`: Ok(Identity)
-  check `q.Common(1) <= A`: Ok(Identity)
   check `q.Exit <= R`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Never), (Payload(Err), Identity)] }) })
-  check `q.Var(Type(0)) <= q.Common(1)`: Ok(Identity)
+  check `q.Generalized(1) <= A`: Ok(Identity)
+  check `q.Var(Type(0)) <= q.Generalized(1)`: Ok(Identity)
   check `s ~> parse_r.Param(0)`: Ok(Identity)
   I* of a final state: []

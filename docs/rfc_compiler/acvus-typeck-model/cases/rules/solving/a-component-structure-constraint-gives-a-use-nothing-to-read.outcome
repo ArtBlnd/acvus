@@ -11,5 +11,5 @@ outcome 1
   refusal no_value T
   refusal no_value `pick(t)`
   refusal no_value `t.0`
-  refusal no_value `pick.Common(0)`
+  refusal no_value `pick.Generalized(0)`
   I* of a final state: []

@@ -1,4 +1,4 @@
-//! Closed types, and the shape of a term that closed types and kinds share.
+//! Closed types, and the shape of a term that closed types and structures share.
 //!
 //! A type is a finite term: one constructor, its members and its parts, each
 //! part again a type. Two types are equal when their constructors,
@@ -118,7 +118,7 @@ impl fmt::Display for Scalar {
 }
 
 /// A constructor, its members and its parts, each part a `P`: a closed type in
-/// `Ty`, an equivalence class in a kind.
+/// `Ty`, an equivalence class in a structure.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Term<P> {
     /// `&T` or `&mut T`, whose part is the target.

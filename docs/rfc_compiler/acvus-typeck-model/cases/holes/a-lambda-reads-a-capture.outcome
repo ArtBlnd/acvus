@@ -17,5 +17,5 @@ outcome 1
   check `make.Result <= make()`: Ok(Identity)
   check `|| .. <= f`: Ok(Identity)
   check `probe(x) <= λ result`: Ok(Identity)
-  check `probe.CommonResult <= probe(x)`: Ok(Identity)
+  check `probe.GeneralizedResult <= probe(x)`: Ok(Identity)
   I* of a final state: []

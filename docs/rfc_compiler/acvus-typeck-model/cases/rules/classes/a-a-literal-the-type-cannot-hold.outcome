@@ -4,5 +4,5 @@ outcome 1
   refused
   value 256: none
   value `@n`: u8
-  refusal conflict at "256: {}": {} vs another range
+  refusal conflict at "256: {}": {} vs another domain
   I* of a final state: []

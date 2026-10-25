@@ -19,8 +19,8 @@ outcome 1
   check `&x ~> x + 1.Param(0)`: Ok(Identity)
   check `?zero <= X`: Ok(Identity)
   check `R <= λ result`: Ok(Identity)
-  check `x + 1.Chosen(1) <= x + 1.Common(1)`: Ok(Identity)
-  check `x + 1.Common(1) <= R`: Ok(Identity)
+  check `x + 1.Chosen(1) <= x + 1.Generalized(1)`: Ok(Identity)
+  check `x + 1.Generalized(1) <= R`: Ok(Identity)
   check `{..}() <= X`: Ok(Identity)
   check `λ result <= {..}()`: Ok(Identity)
   I* of a final state: []

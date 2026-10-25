@@ -265,8 +265,8 @@ fn walk(
 }
 
 /// The result where no stage is taken: the two are equal, `from` is `!`, or
-/// a position decides nothing, being undecided on either side, or a range,
-/// which reaches a range it shares a constructor with and a type of a
+/// a position decides nothing, being undecided on either side, or a domain,
+/// which reaches a domain it shares a constructor with and a type of a
 /// constructor it admits.
 fn deciding_nothing(from: &ReadValue, to: &ReadValue) -> Option<Result<Coercion, CoerceError>> {
     if from == to {
@@ -275,10 +275,10 @@ fn deciding_nothing(from: &ReadValue, to: &ReadValue) -> Option<Result<Coercion,
     match (from, to) {
         (ReadValue::Undecided, _) | (_, ReadValue::Undecided) => Some(Ok(Coercion::Undecided)),
         (ReadValue::Term(term), _) if matches!(**term, Term::Never) => Some(Ok(Coercion::Never)),
-        (ReadValue::Range(_), _) | (_, ReadValue::Range(_)) if agrees(from, to) => {
+        (ReadValue::Domain(_), _) | (_, ReadValue::Domain(_)) if agrees(from, to) => {
             Some(Ok(Coercion::Undecided))
         }
-        (ReadValue::Range(_), _) | (_, ReadValue::Range(_)) => Some(Err(CoerceError::None)),
+        (ReadValue::Domain(_), _) | (_, ReadValue::Domain(_)) => Some(Err(CoerceError::None)),
         _ if agrees(from, to) => Some(Ok(Coercion::Undecided)),
         _ => None,
     }
@@ -288,9 +288,9 @@ fn deciding_nothing(from: &ReadValue, to: &ReadValue) -> Option<Result<Coercion,
 fn agrees(a: &ReadValue, b: &ReadValue) -> bool {
     match (a, b) {
         (ReadValue::Undecided, _) | (_, ReadValue::Undecided) => true,
-        (ReadValue::Range(a), ReadValue::Range(b)) => a.meet(b).is_some(),
-        (ReadValue::Range(range), ReadValue::Term(term))
-        | (ReadValue::Term(term), ReadValue::Range(range)) => range.admits(&term.constructor()),
+        (ReadValue::Domain(a), ReadValue::Domain(b)) => a.meet(b).is_some(),
+        (ReadValue::Domain(domain), ReadValue::Term(term))
+        | (ReadValue::Term(term), ReadValue::Domain(domain)) => domain.admits(&term.constructor()),
         (ReadValue::Term(s), ReadValue::Term(t)) => {
             s.constructor() == t.constructor()
                 && s.members() == t.members()

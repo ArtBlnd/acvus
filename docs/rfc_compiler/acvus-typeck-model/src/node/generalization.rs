@@ -1,21 +1,21 @@
 //! What all a node not yet decided may become shares, recorded before it is
 //! decided: a use's
-//! candidates' common part, and a lend's result being a reference.
+//! candidates' generalization, and a lend's result being a reference.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName};
 use crate::decl::{DeclId, Node};
+use crate::domain::Domain;
 use crate::program::Position;
-use crate::range::Range;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::sig::{SigTy, SigVar, Signature};
 use crate::solve::State;
 use crate::ty::{Constructor, Mutability, Name, Term};
 
-use super::{Common, NodeAt, NodeKind};
+use super::{Generalized, NodeAt, NodeKind};
 
 /// Whether the type a signature writes is a reference, none where it is a
 /// variable.
@@ -26,7 +26,7 @@ pub(super) fn is_reference(ty: &SigTy) -> Option<bool> {
     }
 }
 
-/// The common part of a use's candidates: the anti-unification of
+/// The generalization of a use's candidates: the anti-unification of
 /// their signatures. Where they all write one constructor and members it is
 /// kept, and its parts are generalized in turn; elsewhere a variable
 /// `SigVar::Type(k)` stands, one for each tuple of the types the candidates
@@ -34,7 +34,7 @@ pub(super) fn is_reference(ty: &SigTy) -> Option<bool> {
 /// top of a parameter or of the result, since a cast goes between two
 /// references of one constructor.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct CommonPart {
+pub struct Generalization {
     pub params: Vec<SigTy>,
     pub result: SigTy,
     /// For each variable, the type each candidate writes there, in the
@@ -42,8 +42,8 @@ pub struct CommonPart {
     pub vars: Vec<Vec<SigTy>>,
 }
 
-impl CommonPart {
-    pub fn of(sigs: &[&Signature]) -> CommonPart {
+impl Generalization {
+    pub fn of(sigs: &[&Signature]) -> Generalization {
         let mut vars = Vec::new();
         let arity = sigs.first().map_or(0, |sig| sig.params().len());
         let params = (0..arity)
@@ -54,14 +54,14 @@ impl CommonPart {
             .collect();
         let results: Vec<&SigTy> = sigs.iter().map(|sig| sig.result()).collect();
         let result = generalize(&results, true, &mut vars);
-        CommonPart {
+        Generalization {
             params,
             result,
             vars,
         }
     }
 
-    /// Whether the common part writes one closed type at the position, every
+    /// Whether the generalization writes one closed type at the position, every
     /// candidate writing it there, so that the use's constraint there holds
     /// whatever the use becomes. An exit is not.
     pub fn is_closed_at(&self, position: Position) -> bool {
@@ -72,7 +72,7 @@ impl CommonPart {
         }
     }
 
-    /// The variables a type of the common part writes, each once, in the
+    /// The variables a type of the generalization writes, each once, in the
     /// order of its parts.
     pub fn vars_in(ty: &SigTy) -> Vec<usize> {
         let mut found = Vec::new();
@@ -160,32 +160,32 @@ fn generalize(tys: &[&SigTy], whole: bool, vars: &mut Vec<Vec<SigTy>>) -> SigTy 
 }
 
 impl State {
-    /// Records, for each node not yet decided, the common part of all it may
-    /// become, once: for a use of several candidates, their common
-    /// part's result entering the use's, each variable it writes made anew as
-    /// an unknown, whose range is a reference or none where every candidate
+    /// Records, for each node not yet decided, the generalization of all it may
+    /// become, once: for a use of several candidates, their generalization's
+    /// result entering the use's, each variable it writes made anew as
+    /// an unknown, whose domain is a reference or none where every candidate
     /// agrees there; for a lend, that its result is a reference. An argument
     /// passes into no part of it: every candidate takes it by a coercion of
     /// its own, which a type common to them does not imply. Returns the
     /// relations recorded.
-    pub(crate) fn record_at_once(&mut self) -> Recording {
+    pub(crate) fn record_generalizations(&mut self) -> Recording {
         let mut recorded = Recording::default();
         let pending: Vec<Name> = self
             .nodes
             .iter()
-            .filter(|(_, node)| node.decision.is_none() && node.common.is_none())
+            .filter(|(_, node)| node.decision.is_none() && node.generalized.is_none())
             .map(|(name, _)| name.clone())
             .collect();
         for name in pending {
-            recorded.append(self.record_common(&name));
+            recorded.append(self.record_generalization(&name));
         }
         recorded
     }
 
     /// Records the constraints of the use `name`, of several candidates, at
-    /// the positions `closed` where its common part writes one closed type:
+    /// the positions `closed` where its generalization writes one closed type:
     /// each argument there passing into that type, and that
-    /// type entering the result, recorded by the common part whatever the use
+    /// type entering the result, recorded by the generalization whatever the use
     /// becomes. Returns the relations recorded.
     pub(crate) fn record_closed(
         &mut self,
@@ -200,25 +200,25 @@ impl State {
             .into_iter()
             .map(|decl| decl.sig.clone())
             .collect();
-        let part = CommonPart::of(&sigs.iter().collect::<Vec<_>>());
-        let recorder = Recorder::Common(name.clone());
+        let part = Generalization::of(&sigs.iter().collect::<Vec<_>>());
+        let recorder = Recorder::Generalization(name.clone());
         let owner = Rc::new(name.clone());
         let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
         let mut vars: BTreeMap<SigVar, ClassId> = BTreeMap::new();
         let var_name = |var: SigVar| -> ClassName {
-            panic!("a closed type of the common part writes no variable, as {var:?}")
+            panic!("a closed type of the generalization writes no variable, as {var:?}")
         };
         for &(position, class) in closed {
             assert!(
                 part.is_closed_at(position),
-                "{name}: the common part writes no closed type at {position:?}"
+                "{name}: the generalization writes no closed type at {position:?}"
             );
             recorded.append(match position {
                 Position::Arg(k) => self.record_argument(
                     class,
                     &part.params[k],
                     &mut vars,
-                    at(NodeAt::CommonParam(k)),
+                    at(NodeAt::GeneralizedParam(k)),
                     &var_name,
                     &recorder,
                 ),
@@ -226,7 +226,7 @@ impl State {
                     class,
                     &part.result,
                     &mut vars,
-                    at(NodeAt::CommonResult),
+                    at(NodeAt::GeneralizedResult),
                     &var_name,
                     &recorder,
                 ),
@@ -236,11 +236,11 @@ impl State {
         recorded
     }
 
-    fn record_common(&mut self, name: &Name) -> Recording {
+    fn record_generalization(&mut self, name: &Name) -> Recording {
         let mut recorded = Recording::default();
         let node = self.nodes[name].clone();
-        let recorder = Recorder::Common(name.clone());
-        let (common, references) = match &node.kind {
+        let recorder = Recorder::Generalization(name.clone());
+        let (generalized, references) = match &node.kind {
             NodeKind::Use {
                 callee, args, result, ..
             } => {
@@ -252,57 +252,57 @@ impl State {
                 if sigs.len() < 2 {
                     return recorded;
                 }
-                let part = CommonPart::of(&sigs.iter().collect::<Vec<_>>());
+                let part = Generalization::of(&sigs.iter().collect::<Vec<_>>());
                 let owner = Rc::new(name.clone());
                 let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
                 let mut vars: BTreeMap<SigVar, ClassId> = BTreeMap::new();
                 let mut classes = BTreeMap::new();
                 let mut references = BTreeSet::new();
-                for k in CommonPart::vars_in(&part.result) {
-                    let class = self.fresh(at(NodeAt::Common(k)));
+                for k in Generalization::vars_in(&part.result) {
+                    let class = self.fresh(at(NodeAt::Generalized(k)));
                     vars.insert(SigVar::Type(k), class);
                     classes.insert(k, class);
-                    let range = match part.is_reference(k) {
-                        Some(true) => Range::references(),
-                        Some(false) => Range::no_references(),
+                    let domain = match part.is_reference(k) {
+                        Some(true) => Domain::references(),
+                        Some(false) => Domain::no_references(),
                         None => continue,
                     };
-                    recorded.push(self.record(Relation::Range(class, range), recorder.clone()));
+                    recorded.push(self.record(Relation::Domain(class, domain), recorder.clone()));
                     references.insert(class);
                 }
                 let var_name = |var: SigVar| -> ClassName {
-                    panic!("the common part's variable {var:?} is made before its types")
+                    panic!("the generalization's variable {var:?} is made before its types")
                 };
                 if let Some(result) = result {
                     recorded.append(self.record_result(
                         *result,
                         &part.result,
                         &mut vars,
-                        at(NodeAt::CommonResult),
+                        at(NodeAt::GeneralizedResult),
                         &var_name,
                         &recorder,
                     ));
                 }
-                let common = Common::Use {
+                let generalized = Generalized::Use {
                     part: Rc::new(part),
                     classes,
                 };
-                (common, references)
+                (generalized, references)
             }
             NodeKind::Lend { result, .. } => {
                 // Its mutability is still the lend's to record, which a read
                 // of whether the result is a reference reads too, so
                 // the lend still records into what such a read reads.
-                let relation = Relation::Range(*result, Range::references());
+                let relation = Relation::Domain(*result, Domain::references());
                 recorded.push(self.record(relation, recorder));
-                (Common::Lend, BTreeSet::new())
+                (Generalized::Lend, BTreeSet::new())
             }
             NodeKind::Project { .. } | NodeKind::Bind { .. } | NodeKind::CallValue { .. } => {
                 return recorded;
             }
         };
         let state = self.nodes.get_mut(name).expect("the node is the state's");
-        state.common = Some(common);
+        state.generalized = Some(generalized);
         state.references = references;
         recorded
     }
@@ -318,7 +318,7 @@ impl State {
     /// For each candidate of a use, the classes it would record a lower bound
     /// or an equation into, each with whether that type is a reference, none
     /// where it is an unknown: its result, and the classes inside its
-    /// arguments' kinds that its parameters reach.
+    /// arguments' structures that its parameters reach.
     pub(super) fn would_record_per_candidate(
         &self,
         name: &Name,
@@ -334,9 +334,9 @@ impl State {
     /// The classes the use's candidate at index `candidate` would record a
     /// lower bound or an equation into once decided, as
     /// `would_record_per_candidate` gives them: inside each argument, by the
-    /// splits of its passing; the result, or, once the common part is
+    /// decompositions of its passing; the result, or, once the generalization is
     /// recorded, each of its variables the result writes, into which the
-    /// candidate's type there enters, and inside it by the split; and for
+    /// candidate's type there enters, and inside it by the decomposition; and for
     /// `e?`, the class its exit's value enters, an `Option` or a `Result`.
     pub(crate) fn would_record_by(
         &self,
@@ -354,8 +354,8 @@ impl State {
             return BTreeMap::new();
         };
         let sig = &self.candidates(callee, args.len())[candidate].sig;
-        let common = match &node.common {
-            Some(Common::Use { part, classes }) => Some((part, classes)),
+        let generalized = match &node.generalized {
+            Some(Generalized::Use { part, classes }) => Some((part, classes)),
             _ => None,
         };
         let mut found = BTreeMap::new();
@@ -365,7 +365,7 @@ impl State {
             };
             self.would_record(*arg, param, &mut found);
         }
-        match common {
+        match generalized {
             None => {
                 if let Some(result) = result {
                     found.insert(self.root(*result), is_reference(sig.result()));
@@ -373,7 +373,7 @@ impl State {
                 }
             }
             Some((part, classes)) => {
-                for k in CommonPart::vars_in(&part.result) {
+                for k in Generalization::vars_in(&part.result) {
                     let chosen = &part.vars[k][candidate];
                     found.insert(self.root(classes[&k]), is_reference(chosen));
                     self.would_record_into_result(classes[&k], chosen, &mut found);
@@ -386,8 +386,8 @@ impl State {
         found
     }
 
-    /// The classes inside the kind of a class a use's result type `ty` enters
-    /// that the split of that lower bound would record into: each part where
+    /// The classes inside the structure of a class a use's result type `ty` enters
+    /// that the decomposition of that lower bound would record into: each part where
     /// `ty` writes a part, a type or a variable, which a part lower bound or
     /// an equation relates, and inside it in turn where `ty` writes a type.
     /// Where the two constructors differ, the casts' results relate every part
@@ -401,37 +401,37 @@ impl State {
         let SigTy::Term(term) = ty else {
             return;
         };
-        let Some((kind, _)) = &self.classes.held(self.root(class)).kind else {
+        let Some((structure, _)) = &self.classes.held(self.root(class)).structure else {
             return;
         };
-        if kind.constructor() != term.constructor() {
-            for (_, &part) in kind.parts() {
+        if structure.constructor() != term.constructor() {
+            for (_, &part) in structure.parts() {
                 found.insert(self.root(part), None);
             }
             return;
         }
         for (key, written) in term.parts() {
-            if let Some(&part) = kind.part(&key) {
+            if let Some(&part) = structure.part(&key) {
                 found.insert(self.root(part), is_reference(written));
                 self.would_record_into_result(part, written, found);
             }
         }
     }
 
-    /// The classes inside an argument's kind that a candidate's parameter
-    /// would record a lower bound or an equation into, by the splits. The
+    /// The classes inside an argument's structure that a candidate's parameter
+    /// would record a lower bound or an equation into, by the decompositions. The
     /// argument passes into the type the parameter writes, which
     /// records into that type alone, and each of its parts passes into that
     /// type's part: a meeting where the parameter writes a variable, an
     /// unknown, recording an equation into the part, unless it is a
     /// structural type's, whose part lower bound records into the variable
     /// alone; and where the parameter writes a type, the part passes into it
-    /// in turn. Two constructors are linked as a split links them: the targets
+    /// in turn. Two constructors are linked as a decomposition links them: the targets
     /// of a reborrow, and the parts of the first declared cast's parameter,
     /// into which the argument passes; the later casts' parameters and the
     /// parameter's type relate the casts' results, which are not the
     /// argument's. Where the parameter writes a function type and the argument
-    /// holds a function value, the split makes an instance of each lambda its
+    /// holds a function value, the decomposition makes an instance of each lambda its
     /// Values names, each parameter of the function type entering that
     /// lambda's parameter in its environment.
     pub(super) fn would_record(
@@ -443,10 +443,10 @@ impl State {
         let SigTy::Term(term) = ty else {
             return;
         };
-        let Some((kind, _)) = &self.classes.held(class).kind else {
+        let Some((structure, _)) = &self.classes.held(class).structure else {
             return;
         };
-        if let (Term::Function { params, .. }, Term::FunctionValue { .. }) = (&**term, kind) {
+        if let (Term::Function { params, .. }, Term::FunctionValue { .. }) = (&**term, structure) {
             for lambda in self.values_of(class) {
                 let mut held = self.environment_of(&lambda);
                 held.pop();
@@ -458,17 +458,17 @@ impl State {
             }
             return;
         }
-        let (from, to) = (kind.constructor(), term.constructor());
+        let (from, to) = (structure.constructor(), term.constructor());
         if from == to {
             for (key, written) in term.parts() {
-                if let Some(&part) = kind.part(&key) {
+                if let Some(&part) = structure.part(&key) {
                     self.would_record_part(&to, part, written, found);
                 }
             }
             return;
         }
         if let (Term::Ref(Mutability::Exclusive, target), Term::Ref(Mutability::Shared, written)) =
-            (kind, &**term)
+            (structure, &**term)
         {
             self.would_record_part(&to, *target, written, found);
             return;

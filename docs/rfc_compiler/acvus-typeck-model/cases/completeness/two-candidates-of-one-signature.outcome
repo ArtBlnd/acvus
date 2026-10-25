@@ -4,6 +4,6 @@ outcome 1
   accepted
   value 1u8: u8
   value `probe(1u8)`: ()
-  check `1u8 ~> probe.CommonParam(0)`: Ok(Identity)
-  check `probe.CommonResult <= probe(1u8)`: Ok(Identity)
+  check `1u8 ~> probe.GeneralizedParam(0)`: Ok(Identity)
+  check `probe.GeneralizedResult <= probe(1u8)`: Ok(Identity)
   I* of a final state: []

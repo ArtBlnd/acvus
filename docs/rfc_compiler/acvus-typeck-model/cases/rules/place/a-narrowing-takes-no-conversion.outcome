@@ -5,5 +5,5 @@ outcome 1
   value 1u16: u16
   value R: ()
   decision f: undecided
-  check `f.CommonResult <= R`: Ok(Identity)
+  check `f.GeneralizedResult <= R`: Ok(Identity)
   I* of a final state: []

@@ -10,7 +10,7 @@ use std::rc::Rc;
 use crate::class::ClassId;
 use crate::explore::Final;
 use crate::instance::{Instance, Made};
-use crate::node::{Common, Decision, NodeKind, NodeState, Read};
+use crate::node::{Decision, Generalized, NodeKind, NodeState, Read};
 use crate::program::{ENTRY, Program, Projection};
 use crate::relation::{Recorder, Relation, copy_name};
 use crate::solve::State;
@@ -109,22 +109,25 @@ fn add_decided(here: &mut State, made: &Made, from: &State) {
             .iter()
             .map(|&class| copy.class(here, class))
             .collect();
-        let common = node.common.clone().map(|common| match common {
-            Common::Use { part, classes } => Common::Use {
-                part,
-                classes: classes
-                    .into_iter()
-                    .map(|(k, class)| (k, copy.class(here, class)))
-                    .collect(),
-            },
-            Common::Lend => Common::Lend,
-        });
+        let generalized = node
+            .generalized
+            .clone()
+            .map(|generalized| match generalized {
+                Generalized::Use { part, classes } => Generalized::Use {
+                    part,
+                    classes: classes
+                        .into_iter()
+                        .map(|(k, class)| (k, copy.class(here, class)))
+                        .collect(),
+                },
+                Generalized::Lend => Generalized::Lend,
+            });
         here.nodes.insert(
             copy_name(&made.at, name),
             NodeState {
                 kind,
                 decision: Some(decision.clone()),
-                common,
+                generalized,
                 references,
             },
         );
@@ -334,7 +337,7 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
 
 /// The classes a relation records into: the upper side of a lower bound or a
 /// part lower bound, the type passed into at a boundary, both sides of an
-/// equation, and the class a kind, a fact, a range or a lambda is given to.
+/// equation, and the class a structure, a structure constraint, a domain or a lambda is given to.
 fn into(relation: &Relation) -> Vec<ClassId> {
     match relation {
         Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => {
@@ -342,16 +345,16 @@ fn into(relation: &Relation) -> Vec<ClassId> {
         }
         Relation::Boundary { to, .. } | Relation::Wrap { to, .. } => vec![*to],
         Relation::Equation(a, b) => vec![*a, *b],
-        Relation::Fact(class, _)
-        | Relation::Kind(class, ..)
-        | Relation::Range(class, _)
+        Relation::StructureConstraint(class, _)
+        | Relation::Structure(class, ..)
+        | Relation::Domain(class, _)
         | Relation::Values(class, _) => vec![*class],
     }
 }
 
 /// Reach at the end: from a class to each
 /// class it has as a lower bound or a part lower bound, along every one
-/// recorded, a split's among them. Every class has taken its constructor by
+/// recorded, a decomposition's among them. Every class has taken its constructor by
 /// the end.
 struct Reach {
     edges: BTreeMap<ClassId, BTreeSet<ClassId>>,

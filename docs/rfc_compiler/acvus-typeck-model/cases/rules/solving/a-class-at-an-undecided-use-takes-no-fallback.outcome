@@ -5,6 +5,6 @@ outcome 1
   value R: !
   value X: !
   decision f: never
-  check `f.Common(0) <= R`: Ok(Identity)
+  check `f.Generalized(0) <= R`: Ok(Identity)
   check `f.Result <= R`: Ok(Identity)
   I* of a final state: []

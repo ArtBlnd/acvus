@@ -21,9 +21,9 @@ outcome 1
   check `code.Result <= code(s)`: Ok(Identity)
   check `digit(s) ~> q.Param(0)`: Ok(Identity)
   check `digit.Result <= digit(s)`: Ok(Identity)
-  check `q.Common(1) <= D`: Ok(Identity)
   check `q.Exit ~> R`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
-  check `q.Var(Type(0)) <= q.Common(1)`: Ok(Identity)
+  check `q.Generalized(1) <= D`: Ok(Identity)
+  check `q.Var(Type(0)) <= q.Generalized(1)`: Ok(Identity)
   check `s ~> code.Param(0)`: Ok(Identity)
   check `s ~> digit.Param(0)`: Ok(Identity)
   I* of a final state: []

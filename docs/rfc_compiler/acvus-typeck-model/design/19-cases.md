@@ -133,7 +133,7 @@ final state, of every run.
 | `assert partition {A, B};` | an equivalence class of exactly these |
 | `assert certificate set X: B fails ["…"];`, `assert certificate set probe == probe#1 fails ["…"];`, `in g` after `certificate` | the certificate of every final state, so changed, fails, the `what`s over them all exactly these; the class is named as the outcome writes it, a class an instance or a node made among them, and a function value in the value writes its Values after it, `Fn/1{λ}`, `Fn/1{}` naming none |
 | `assert trace "join A: nothing";` | with an order written: a line of its trace other than a `record` is that line (The trace); a `refuse` line whose text holds `"`, a conflict's, is asserted by `assert refused` |
-| `` assert split records `S <= A.Payload(Some)`; ``, `` assert no node records `...`; `` | with an order written: a `record` of the relation lies under a line of the phase (`record`, `unify`, `join`, `split`, `node`, `fallback`; The trace) |
+| `` assert decomposition records `S <= A.Payload(Some)`; ``, `` assert no node records `...`; `` | with an order written: a `record` of the relation lies under a line of the phase (`record`, `unify`, `join`, `decomposition`, `node`, `fallback`; The trace) |
 | `assert join(A, C) == B;`, `== none`; `assert le(A, B);`, `assert not le(B, A);` | the primitive, on the declarations |
 | `assert coerce(&mut A, &B) == reborrow + cast cast2#0;`, `assert along_le(…) == …;` | the coercion, on the declarations |
 
@@ -148,13 +148,13 @@ node are named as the model names them, a copy's as its instance does
 
 **Notation.** What the model writes is ASCII, the names a case gives kept as it
 writes them. A relation is `A <= B` (a lower bound), `A <=p B` (a part lower
-bound), `A ~> B` (a boundary), `A = B`, `A: <kind>`, `A: <kind known in part>`,
-`A: <LitVar>`, `A: reference`, `A: no reference`, or `A: Values contains λ`. A kind and a type are written as a
-case writes a type, `Fn(P -> R)` for a function's; a kind known in part is
+bound), `A ~> B` (a boundary), `A = B`, `A: <structure>`, `A: <structure constraint>`,
+`A: <LitVar>`, `A: reference`, `A: no reference`, or `A: Values contains λ`. A structure and a type are written as a
+case writes a type, `Fn(P -> R)` for a function's; a structure constraint is
 `ref T`, `field x: T`, `component i: T`, `index T`, `variant V: T` or
 `variant E::V: T`; a LitVar `?{1, 2}: int`. What no type holds is `<a> vs <b>`: two
 constructors; a LitVar and a constructor, or `<LitVar> vs another family`; a
-constructor and a kind known in part; `reference` or `no reference` and a
+constructor and a structure constraint; `reference` or `no reference` and a
 constructor. A run of places in the log is `#a-#b`. A certificate's and an
 expectation's messages write `<=`, `~>`, `!=` and `join(A, B)`.
 
@@ -194,16 +194,16 @@ it. `settle`'s trace holds what changed the state.
 | recording | `record` | `Entry`: its place, and the `Unification` the classes took it with |
 | | `record_origins`, `record_equations`, `record_items`, `call`, `record_call` | `Recording`: an `Entry` for each relation recorded, and each instance made (`Instantiated`: the use, its recorder, the group whose C it copies, the places of what it records) |
 | unification | `hold` | `Unification`: what unifying did, and the refusal it made |
-| | `Classes::unifying` | `Unifying`, whose `give_kind`, `give_fact`, `give_lit`, `give_reference` and `unify` return `Unified`: each `Union` in order (its `Cause`, the members of the two classes before it, the kind it made), and the `Conflicted` that stopped it (the two classes left apart with their kinds, or the class that holds what no type holds) |
+| | `Classes::unifying` | `Unifying`, whose `give_structure`, `give_structure_constraint`, `give_lit`, `give_reference` and `unify` return `Unified`: each `Union` in order (its `Cause`, the members of the two classes before it, the structure it made), and the `Conflicted` that stopped it (the two classes left apart with their structures, or the class that holds what no type holds) |
 | | `link_views`, `link_view` | `Linked`: the container, the element, the relations recorded, the refusal where no view is |
 | the join | `refuse_infinite` | the refusal |
 | | `join_lit_lowers`, `merge_cycles`, `join_lit_at` | the relations recorded |
-| | `join` | `Joined`: its `Sources` (its equations and kinds, the solved lower bounds and part lower bounds it counts, the kinds known in part, those left out) and `Took`: the kind it held, the head it joined with what unification did, nothing, or no join |
-| | `fill` | `Filled`: each place the class passes into with its value, and `Fill`: the one type they have, with what unification did as the class took it, and the refusal where it could not take it, or the refusal where they have two |
-| splits | `split_at` | `Split`: one class, the parts' relations, unsolved, or no parts |
-| | `unify_lit_boundaries`, `split_parts` | the relations recorded |
+| | `join` | `Joined`: its `Sources` (its equations and structures, the solved lower bounds and part lower bounds it counts, the structure constraints, those left out) and `Took`: the structure it held, the head it joined with what unification did, nothing, or no join |
+| | `fill` | `Filled`: each upper bound of the class with its value, and `Fill`: the one type they have, with what unification did as the class took it, and the refusal where it could not take it, or the refusal where they have two |
+| decompositions | `decompose_at` | `Decomposition`: one class, the parts' relations, unsolved, or no parts |
+| | `unify_lit_boundaries`, `decompose_parts` | the relations recorded |
 | nodes | `decide`, `decide_at_once` | `Decided`: the node, its decision, the relations recorded, and for `decide` `DecidedBy`: the nodes that depend on it, the dependencies it broke, the undecided nodes that broke theirs on it, and its `ValueRead` (the nodes and relations it leaves out, and its `Reading`: a use's `Narrowing`, what a class reads as for a lend, a projection or a binding, or a function value's Values) |
-| | `record_decision`, `record_at_once` | the relations recorded |
+| | `record_decision`, `record_generalizations` | the relations recorded |
 | instances | `Instance::record_rest` | the relations it records |
 | fallback | `take_defaults` | `FellBack`: each class, its default, what unification did, the refusal where it could not take it |
 
@@ -213,7 +213,7 @@ What solving did along an order is written as facts, alike in a golden's written
 order and under `TRACE=1`. A line is one fact, `keyword subject: value`, either part
 left out where the fact has none, followed by its attributes, each `key: value` after
 two spaces; the facts a fact is made of are the lines indented under it. An attribute
-or a line not written is none: a union whose class holds no kind has no `kind:`. A
+or a line not written is none: a union whose class holds no structure has no `structure:`. A
 phase that did nothing writes no line. This table is where each keyword is defined. A
 class is named as the state the step left names its equivalence class, except under
 `union` and `conflict`, where each class is named by its own name and each side by
@@ -229,14 +229,14 @@ step does not rename what an earlier one shows.
 | `refuse: <refusal>` | under `start`, `step` and `fallback`: a refusal the step made, as an outcome writes it |
 | `record #k <relation>` | the relation recorded at `#k` in the log |
 | `link X: E` | the view of `X`'s extern-defined container links its element `E` |
-| `common` | the common part of all the nodes not yet decided may become |
+| `generalization` | the generalization of all the nodes not yet decided may become |
 | `merge cycles` | the cycles of lower bounds alone merged |
 | `lit lowers X` | `X`'s LitVar lower bounds unified with it |
 | `lit join #k <relation>` | the LitVar lower bound at `#k` unified with the class it bounds |
-| `join X: <took>` | `X` solved, having taken `held` (its kind), a constructor and its members, `nothing`, `no join`, or `infinite` (it reaches a part of its own) |
-| `fill X: <took>` | `X`, which nothing enters, filled: the one type the places it passes into have, or `differ` where they have two |
+| `join X: <took>` | `X` solved, having taken `held` (its structure), a constructor and its members, `nothing`, `no join`, or `infinite` (it reaches a part of its own) |
+| `fill X: <took>` | `X`, which nothing enters, filled: the one type its upper bounds have, or `differ` where they have two |
 | `lit boundaries X` | `X` unified with each type it passes into |
-| `split #k <relation>: <what>` | the relation at `#k`: `one class`, `parts`, `unsolved`, `no parts` |
+| `decompose #k <relation>: <what>` | the relation at `#k`: `one class`, `parts`, `unsolved`, `no parts` |
 | `decide n: <decision>` | the node `n` decided, its decision written as an expectation writes one |
 
 Under `TRACE=1` alone:
@@ -244,19 +244,19 @@ Under `TRACE=1` alone:
 | Line | Means |
 |---|---|
 | `fixpoint g` | `g` has no step left |
-| `by: <recorder>` | of `record` and `relation`: what recorded it: `origin`, `text i`, `node n`, `split X`, `cycle`, `function type X ~> Y`, `check`, `instance m of <recorder>` (what recorded its original in the group `m` instantiates) |
+| `by: <recorder>` | of `record` and `relation`: what recorded it: `origin`, `text i`, `node n`, `decomposition X`, `cycle`, `function type X ~> Y`, `check`, `instance m of <recorder>` (what recorded its original in the group `m` instantiates) |
 | `instance m: C of g` | the instance `m` made, of the C of `g`; `by: <recorder>`, `records: #k, ...` |
 | `union A + B: {M, ...}` | `A` and `B` unified into the class of these members |
-| `by: #k`, `by: congruence <part> of A + B`, `by: kind X at <part>`, `by: fact X: <kind known in part>` | of `union` and `conflict`: the equation at `#k`; the parts `<part>` of the kinds the union of `A` and `B` conjoined; the parts `<part>` of the kind `X` held and the kind it was given; a kind known in part of `X` and what its kind, or another kind known in part, names there |
-| `kind: <kind>` | of `union`: the kind of the class it makes |
-| `conflict A + B: <conflict>` | `A` and `B` left apart, holding what no type holds; `by:`, `kinds: <kind> vs <kind>` |
+| `by: #k`, `by: congruence <part> of A + B`, `by: structure X at <part>`, `by: structure constraint X: <structure constraint>` | of `union` and `conflict`: the equation at `#k`; the parts `<part>` of the structures the union of `A` and `B` conjoined; the parts `<part>` of the structure `X` held and the structure it was given; a structure constraint of `X` and what its structure, or another structure constraint, names there |
+| `structure: <structure>` | of `union`: the structure of the class it makes |
+| `conflict A + B: <conflict>` | `A` and `B` left apart, holding what no type holds; `by:`, `structures: <structure> vs <structure>` |
 | `conflict {M, ...}: <conflict>` | the class of these members holds what no type holds |
-| `equations: #k, ...` | under `join`: the relations that give `X` its kinds |
+| `equations: #k, ...` | under `join`: the relations that give `X` its structures |
 | `lower L: <constructor>` | under `join`: a solved lower bound, and the constructor and members it gives |
 | `part lower L: <constructor>` | under `join`: a solved part lower bound, and the constructor and members it gives |
-| `fact: <constructor>` | under `join`: the constructor and members a kind known in part gives |
+| `structure constraint: <constructor>` | under `join`: the constructor and members a structure constraint gives |
 | `left out: L, ...` | under `join`: the lower bounds and part lower bounds not solved |
-| `place P: <type>` | under `fill`: a place `X` passes into, and its value |
+| `place P: <type>` | under `fill`: an upper bound of `X`, and its value |
 | `exclude: n, ...` | under `decide`: the nodes whose relations its read leaves out |
 | `broke: n, ...` | under `decide`: the decided nodes it broke its dependency on |
 | `broken by: n, ...` | under `decide`: the undecided nodes that broke theirs on it |
@@ -282,8 +282,8 @@ Under `TRACE=1` alone:
 A golden writes a written order's trace without the lines of `TRACE=1` alone.
 `assert <phase> records` finds a `record` under a line of its phase: directly
 under `start` or `step` (`record`), under `link` (`unify`), `merge`, `lit lowers`,
-`lit join`, `join` or `fill` (`join`), `lit boundaries` or `split` (`split`),
-`common` or `decide` (`node`), `default` (`fallback`).
+`lit join`, `join` or `fill` (`join`), `lit boundaries` or `decompose` (`decomposition`),
+`generalization` or `decide` (`node`), `default` (`fallback`).
 
 ### `TRACE=1`
 
@@ -328,7 +328,7 @@ steps; `golden()` and every expectation read what they read without it.
   `spec/a-capture-written-by-name-called-with-two-types`, are merged into it.
 - 4 cases under `cases/certificate`, `a-lambda-*` but the two of a conversion
   below, test the checker carrying
-  Values as the split does: a lambda in a payload into a function type,
+  Values as the decomposition does: a lambda in a payload into a function type,
   through a cast, through a view, and into a function type both candidates write
   whole. The first three panicked in the checker before, where the solver had
   accepted them; each was derived before it was run, in every order. The first
@@ -359,14 +359,14 @@ steps; `golden()` and every expectation read what they read without it.
 - 1 case under `cases/spec`, `a-try-in-a-match-arm`, tests that a match
   arm's braces are no block expression: its `?` exits the
   script, derived before it was run.
-- 7 cases under `cases/spec` test the common part: an overload chosen by its result
+- 7 cases under `cases/spec` test the generalization: an overload chosen by its result
   through `?`, with the script's result typed, with no tail, and refused where the
-  tail's result is untyped and a fill has a place with no value; a counter compared
+  tail's result is untyped and a fill has an upper bound with no value; a counter compared
   with a typed value; a reference cast at one argument of an overload set; and two
   operands of one unknown meeting, accepted where their bindings join and refused
   where one is written. Each was derived before it was run, two derivations failing
   first and redone: the operands' bindings join by the cast, and the untyped tail
-  leaves a fill a place with no value.
+  leaves a fill an upper bound with no value.
 - 7 cases under `cases/spec` test the environment cut by constraints: a lambda
   writing its parameter into a capture by an overload that writes one closed type
   there, accepted; pushing it into a capture by `push<T>`, refused at the parameter;
@@ -376,7 +376,7 @@ steps; `golden()` and every expectation read what they read without it.
   it `u8`; writing two types a cast joins, each call deciding its own candidate; and
   calling a function that returns a closure, which ties the capture to the result
   through the closure's environment. Each was derived before it was run, in every
-  order. Four cases of the environment and the phase case of the common part changed
+  order. Four cases of the environment and the phase case of the generalization changed
   with it, their values and decisions kept.
 - 11 cases under `cases/spec` test the constructs the recording had no rule for: a
   branch that returns gives no value; a tuple, an array and an object literal, and an
@@ -431,7 +431,7 @@ steps; `golden()` and every expectation read what they read without it.
   calling the lambda the target names, where the call had never been decided. Each
   was derived before it was run.
 - 13 cases under `cases/phases` test each phase along a written order: recording, the
-  join, splits, unification, nodes and fallback. 2 cases under `cases/primitives`
+  join, decompositions, unification, nodes and fallback. 2 cases under `cases/primitives`
   test the join, `≤` and coercion on the declarations of `fixture::decls()` without
   `Box`, coercion with a conversion `u16 → u8` besides.
 - Every case passes, and every golden is the model's.

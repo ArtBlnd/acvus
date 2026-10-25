@@ -57,7 +57,7 @@ impl State {
 
     /// The class a use's node holds at the argument `i` where its candidates
     /// differ: an argument where they differ is no closed type of their
-    /// common part, so the node holds it.
+    /// generalization, so the node holds it.
     pub(crate) fn differing_class(args: &[Option<ClassId>], i: usize) -> ClassId {
         args[i].expect("a use's node holds the arguments where its candidates differ")
     }

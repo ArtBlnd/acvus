@@ -9,10 +9,12 @@ use std::fmt::Write;
 
 use crate::check::{Outcome, Refusal};
 use crate::class::{
-    Apart, Cause, ClassId, Conflict, Conflicted, NamedConflict, NamedFact, Unified, Union,
+    Apart, Cause, ClassId, Conflict, Conflicted, NamedConflict, NamedStructureConstraint, Unified,
+    Union,
 };
 use crate::coerce::{CoerceError, Coercion, Rank, Structural};
 use crate::decl::DeclId;
+use crate::decompose::Decomposition;
 use crate::dep::{Edge, Vertex};
 use crate::node::{
     AsReference, DecidedBy, Decision, LendTarget, Narrowed, Narrowing, NodeKind, Reading, ValueRead,
@@ -20,7 +22,6 @@ use crate::node::{
 use crate::record::Recording;
 use crate::relation::{Named, Recorder};
 use crate::solve::{State, Step};
-use crate::split::Split;
 use crate::trace::Report;
 use crate::ty::{HasTerm, Mutability, Name, Term};
 use crate::fallback::FellBack;
@@ -235,9 +236,9 @@ pub fn report(state: &State, report: &Report) -> Rendered {
             Some(format!("join {}: {}", class(*id), took(&joined.took))),
             None,
         ),
-        Report::Ranged { bound, recorded } => (
+        Report::DomainGiven { bound, recorded } => (
             Phase::Join,
-            Some(format!("range #{bound} {}", relation(state, *bound))),
+            Some(format!("domain #{bound} {}", relation(state, *bound))),
             Some(recorded),
         ),
         Report::Narrowed {
@@ -249,22 +250,22 @@ pub fn report(state: &State, report: &Report) -> Rendered {
             Some(format!("row {} {}", row.name(), class(*id))),
             Some(recorded),
         ),
-        Report::Split { at, split } => {
-            let (what, recorded) = match split {
-                Split::OneClass => ("one class", None),
-                Split::Parts(recorded) => ("parts", Some(recorded)),
-                Split::Unsolved => ("unsolved", None),
-                Split::NoParts => ("no parts", None),
+        Report::Decomposed { at, decomposition } => {
+            let (what, recorded) = match decomposition {
+                Decomposition::OneClass => ("one class", None),
+                Decomposition::Parts(recorded) => ("parts", Some(recorded)),
+                Decomposition::Unsolved => ("unsolved", None),
+                Decomposition::NoParts => ("no parts", None),
             };
             (
-                Phase::Split,
-                Some(format!("split #{at} {}: {what}", relation(state, *at))),
+                Phase::Decomposition,
+                Some(format!("decompose #{at} {}: {what}", relation(state, *at))),
                 recorded,
             )
         }
-        Report::Common(recorded) => (
+        Report::Generalized(recorded) => (
             Phase::Node,
-            unless_empty(recorded, "common".to_string()),
+            unless_empty(recorded, "generalization".to_string()),
             Some(recorded),
         ),
         Report::Decided(decided) => (
@@ -413,9 +414,10 @@ fn side(state: &State, members: &BTreeSet<ClassId>) -> String {
     name(&least.to_string())
 }
 
-/// A kind, each part by its own name, as a relation writes it.
-fn kind_of(state: &State, kind: &Term<ClassId>) -> String {
-    kind.clone()
+/// A structure, each part by its own name, as a relation writes it.
+fn structure_of(state: &State, structure: &Term<ClassId>) -> String {
+    structure
+        .clone()
         .map(|_, part| state.arena.name(part).clone())
         .to_string()
 }
@@ -461,13 +463,21 @@ fn cause(state: &State, cause: &Cause, unions: &[Union], at: Option<usize>) -> S
                 side(state, b)
             )
         }
-        Cause::KindGiven { class, part } => format!("kind {} at {part:?}", member(state, *class)),
-        Cause::Fact { class, fact } => {
-            let fact = NamedFact {
-                fact,
+        Cause::StructureGiven { class, part } => {
+            format!("structure {} at {part:?}", member(state, *class))
+        }
+        Cause::StructureConstraint {
+            class,
+            structure_constraint,
+        } => {
+            let structure_constraint = NamedStructureConstraint {
+                structure_constraint,
                 arena: &state.arena,
             };
-            format!("fact {}: {fact}", member(state, *class))
+            format!(
+                "structure constraint {}: {structure_constraint}",
+                member(state, *class)
+            )
         }
     }
 }
@@ -493,15 +503,21 @@ fn unified(state: &State, unified: &Unified, at: Option<usize>) -> Lines {
             members(state, &merged)
         );
         let by = cause(state, &union.cause, &unified.unions, at);
-        let kind = union.kind.as_ref().map(|kind| kind_of(state, kind));
-        lines.push(0, attributes(line, [("by", Some(by)), ("kind", kind)]));
+        let structure = union
+            .structure
+            .as_ref()
+            .map(|structure| structure_of(state, structure));
+        lines.push(
+            0,
+            attributes(line, [("by", Some(by)), ("structure", structure)]),
+        );
     }
     match &unified.conflict {
         Some(Conflicted::Apart(apart)) => {
             let Apart {
                 cause: why,
                 sides: [a, b],
-                kinds,
+                structures,
                 conflict: met,
             } = &**apart;
             let line = format!(
@@ -511,14 +527,18 @@ fn unified(state: &State, unified: &Unified, at: Option<usize>) -> Lines {
                 conflict(state, met)
             );
             let by = cause(state, why, &unified.unions, at);
-            let kinds = kinds.iter().any(Option::is_some).then(|| {
-                let [a, b] = kinds.each_ref().map(|kind| {
-                    kind.as_ref()
-                        .map_or("none".to_string(), |kind| kind_of(state, kind))
+            let structures = structures.iter().any(Option::is_some).then(|| {
+                let [a, b] = structures.each_ref().map(|structure| {
+                    structure.as_ref().map_or("none".to_string(), |structure| {
+                        structure_of(state, structure)
+                    })
                 });
                 format!("{a} vs {b}")
             });
-            lines.push(0, attributes(line, [("by", Some(by)), ("kinds", kinds)]));
+            lines.push(
+                0,
+                attributes(line, [("by", Some(by)), ("structures", structures)]),
+            );
         }
         Some(Conflicted::Holds {
             members: held,
@@ -543,8 +563,8 @@ fn recorder(state: &State, recorder: &Recorder) -> String {
         Recorder::Origin => "origin".to_string(),
         Recorder::Text(item) => format!("text {item}"),
         Recorder::Node(node) => format!("node {}", name(node.as_str())),
-        Recorder::Common(node) => format!("common {}", name(node.as_str())),
-        Recorder::Split(class) => format!("split {}", class_of(state, *class)),
+        Recorder::Generalization(node) => format!("generalization {}", name(node.as_str())),
+        Recorder::Decomposition(class) => format!("decomposition {}", class_of(state, *class)),
         Recorder::Cycle => "cycle".to_string(),
         Recorder::FunctionType { from, to } => {
             format!(
@@ -622,8 +642,8 @@ fn sources(state: &State, sources: &Sources) -> Lines {
             format!("part lower {}: {}", class_of(state, *lower), head(given)),
         );
     }
-    for given in &sources.facts {
-        lines.push(0, format!("fact: {}", head(given)));
+    for given in &sources.structure_constraints {
+        lines.push(0, format!("structure constraint: {}", head(given)));
     }
     let left_out = sources.left_out.iter().map(|&lower| class_of(state, lower));
     if let Some(left_out) = some_listed(left_out) {
@@ -762,12 +782,12 @@ pub fn traced(state: &State, report: &Report) -> Lines {
     let recorded = match report {
         Report::Recorded(recorded)
         | Report::Merged(recorded)
-        | Report::Common(recorded)
-        | Report::Ranged { recorded, .. }
+        | Report::Generalized(recorded)
+        | Report::DomainGiven { recorded, .. }
         | Report::Narrowed { recorded, .. }
         | Report::FellBack(FellBack { recorded, .. })
-        | Report::Split {
-            split: Split::Parts(recorded),
+        | Report::Decomposed {
+            decomposition: Decomposition::Parts(recorded),
             ..
         } => Some(recorded),
         Report::Linked(linked) => Some(&linked.recorded),
@@ -784,7 +804,7 @@ pub fn traced(state: &State, report: &Report) -> Lines {
             }
             None
         }
-        Report::Infinite { .. } | Report::Split { .. } => None,
+        Report::Infinite { .. } | Report::Decomposed { .. } => None,
     };
     if let Some(recorded) = recorded {
         detail.nest(0, recording(state, recorded));

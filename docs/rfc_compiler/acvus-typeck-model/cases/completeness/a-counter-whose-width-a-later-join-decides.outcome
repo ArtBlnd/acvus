@@ -26,9 +26,9 @@ outcome 1
   check `?a <= N`: Ok(Identity)
   check `R1 <= N`: Ok(Identity)
   check `cmp_val.Result <= K`: Ok(Identity)
-  check `n + 1.Chosen(1) <= n + 1.Common(1)`: Ok(Identity)
-  check `n + 1.Common(1) <= R1`: Ok(Identity)
-  check `n - n.Chosen(1) <= n - n.Common(1)`: Ok(Identity)
-  check `n - n.Common(1) <= R2`: Ok(Identity)
+  check `n + 1.Chosen(1) <= n + 1.Generalized(1)`: Ok(Identity)
+  check `n + 1.Generalized(1) <= R1`: Ok(Identity)
+  check `n - n.Chosen(1) <= n - n.Generalized(1)`: Ok(Identity)
+  check `n - n.Generalized(1) <= R2`: Ok(Identity)
   refusal no_join D
   I* of a final state: []

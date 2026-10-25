@@ -17,6 +17,6 @@ outcome 1
   check `Some(a) <= f result`: Ok(Identity)
   check `get() ~> q.Param(0)`: Ok(Identity)
   check `get.Result <= get()`: Ok(Identity)
-  check `q.Common(1) <= A`: Ok(Identity)
-  check `q.Var(Type(0)) <= q.Common(1)`: Ok(Identity)
+  check `q.Generalized(1) <= A`: Ok(Identity)
+  check `q.Var(Type(0)) <= q.Generalized(1)`: Ok(Identity)
   I* of a final state: []

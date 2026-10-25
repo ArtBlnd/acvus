@@ -20,7 +20,7 @@ outcome 1
   decision `emit 1#λ/write`: write#0
   decision `emit 2`: calls {λ}
   decision `emit 2#λ/write`: write#1
-  check `&mut out ~> write.CommonParam(0)`: Ok(Identity)
+  check `&mut out ~> write.GeneralizedParam(0)`: Ok(Identity)
   check `1u8 <= emit 1#λ/X`: Ok(Identity)
   check `buf() <= OUT`: Ok(Identity)
   check `buf.Result <= buf()`: Ok(Identity)
@@ -31,5 +31,5 @@ outcome 1
   check `s <= emit 2#λ/X`: Ok(Identity)
   check `|x| .. <= EMIT`: Ok(Identity)
   check `write(..) <= λ result`: Ok(Identity)
-  check `write.CommonResult <= write(..)`: Ok(Identity)
+  check `write.GeneralizedResult <= write(..)`: Ok(Identity)
   I* of a final state: []

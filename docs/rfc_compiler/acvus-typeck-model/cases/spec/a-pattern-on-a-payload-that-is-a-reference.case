@@ -3,7 +3,7 @@
 // if let Some((_, b)) = o { }
 // .1 reads whether Some.0 is a reference, leaving out only the projections
 // whose operand is Some.0. Some.0 is O's payload, and
-// the split of O's lower bound will link it to S, the payload of Some(&x),
+// the decomposition of O's lower bound will link it to S, the payload of Some(&x),
 // which the lend makes a reference: the nodes recording into Some.0 are
 // reached along that link, so .1 waits for the lend, applies through &,
 // and b lends: b: &u8 in every order.

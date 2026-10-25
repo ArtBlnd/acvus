@@ -19,8 +19,8 @@ start run
   record #2 None <= X
   record #3 X <= S
   record #4 Some(x) <= X
-  split #0 None: Option<?k>: no parts
-  split #1 Some(x): Option<S>: no parts
+  decompose #0 None: Option<?k>: no parts
+  decompose #1 Some(x): Option<S>: no parts
 step 1 run: solve X
   join X: infinite
   refuse: infinite X

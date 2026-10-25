@@ -13,17 +13,17 @@ start run
   record #1 u8: u8
   record #2 u8 <= A
   record #3 0 <= A
-  split #0 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
-  split #1 u8: u8: no parts
-  range #3 0 <= A
+  decompose #0 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
+  decompose #1 u8: u8: no parts
+  domain #3 0 <= A
     record #4 A: {i8, i16, i32, i64, u8, u16, u32, u64}
-  split #4 A: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
+  decompose #4 A: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
 step 1 run: solve A
   join A: Scalar(Int(U8))
-  split #2 u8 <= A: parts
+  decompose #2 u8 <= A: parts
   row literal 0
     record #5 0: {u8}
-  range #3 0 <= A
+  domain #3 0 <= A
     record #6 A: {u8}
-  split #5 0: {u8}: no parts
-  split #6 A: {u8}: no parts
+  decompose #5 0: {u8}: no parts
+  decompose #6 A: {u8}: no parts

@@ -22,5 +22,5 @@ outcome 1
   check `[1u8, 2u8] <= A`: Ok(Identity)
   check `make() <= V`: Ok(Identity)
   check `make.Result <= make()`: Ok(Identity)
-  check `same.CommonResult <= R`: Ok(Identity)
+  check `same.GeneralizedResult <= R`: Ok(Identity)
   I* of a final state: []

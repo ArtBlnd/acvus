@@ -1,8 +1,8 @@
-//! Equivalence classes: their names, union-find, type variables and kinds.
+//! Equivalence classes: their names, union-find, type variables and structures.
 //!
 //! A type variable is one type, represented by an equivalence class.
 //! An equivalence class holds type variables, of which the model keeps the
-//! range their values may take, and at most one kind. Unifying two merges them, the kind
+//! domain their values may take, and at most one structure. Unifying two merges them, the structure
 //! the conjunction of the two, and unifies their parts of one name in turn.
 //! `Unifying` reports each union it makes, with its cause, and the
 //! conflict that stops it.
@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
-use crate::range::Range;
+use crate::domain::Domain;
 use crate::sig::{DeclaredTypes, SigVar};
 use crate::ty::{Constructor, ERR, Member, NONE, Name, OK, PartKey, SOME, Term};
 
@@ -118,42 +118,42 @@ impl Arena {
     }
 }
 
-/// A kind known only in part.
+/// A constraint on a class's structure before it is known.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum Fact {
+pub enum StructureConstraint {
     /// A reference to `τ`.
-    Ref(ClassId),
+    Target(ClassId),
     /// Has field `f: τ`.
     Field(Name, ClassId),
     /// Has component `i: τ`.
     Component(usize, ClassId),
     /// Indexes `τ`.
-    Indexes(ClassId),
+    Element(ClassId),
     /// Has variant `V` with payload `τ`; `enum_name` is the enum the text
     /// writes it of, `E` of `E::V`, and none for the language's `Some`,
     /// `None`, `Ok` and `Err`.
-    Variant {
+    Payload {
         enum_name: Option<Name>,
         variant: Name,
         payload: ClassId,
     },
 }
 
-impl Fact {
-    pub fn map<F>(self, mut f: F) -> Fact
+impl StructureConstraint {
+    pub fn map<F>(self, mut f: F) -> StructureConstraint
     where
         F: FnMut(ClassId) -> ClassId,
     {
         match self {
-            Fact::Ref(class) => Fact::Ref(f(class)),
-            Fact::Field(field, class) => Fact::Field(field, f(class)),
-            Fact::Component(i, class) => Fact::Component(i, f(class)),
-            Fact::Indexes(class) => Fact::Indexes(f(class)),
-            Fact::Variant {
+            StructureConstraint::Target(class) => StructureConstraint::Target(f(class)),
+            StructureConstraint::Field(field, class) => StructureConstraint::Field(field, f(class)),
+            StructureConstraint::Component(i, class) => StructureConstraint::Component(i, f(class)),
+            StructureConstraint::Element(class) => StructureConstraint::Element(f(class)),
+            StructureConstraint::Payload {
                 enum_name,
                 variant,
                 payload,
-            } => Fact::Variant {
+            } => StructureConstraint::Payload {
                 enum_name,
                 variant,
                 payload: f(payload),
@@ -163,18 +163,18 @@ impl Fact {
 
     pub fn class(&self) -> ClassId {
         match self {
-            Fact::Ref(class)
-            | Fact::Field(_, class)
-            | Fact::Component(_, class)
-            | Fact::Indexes(class) => *class,
-            Fact::Variant { payload, .. } => *payload,
+            StructureConstraint::Target(class)
+            | StructureConstraint::Field(_, class)
+            | StructureConstraint::Component(_, class)
+            | StructureConstraint::Element(class) => *class,
+            StructureConstraint::Payload { payload, .. } => *payload,
         }
     }
 
-    /// The member this fact names where the body's text writes it, which is
+    /// The member this structure constraint names where the body's text writes it, which is
     /// visible to this body: a field, or a variant of an enum the text
     /// names.
-    /// The constructor of the member this fact names, with the members that
+    /// The constructor of the member this structure constraint names, with the members that
     /// constructor holds of it, whether visible or not: an object's
     /// field, an enum's variant the text names, and the language's `Some`,
     /// `None`, `Ok` and `Err`, whose constructor holds both its members.
@@ -182,7 +182,7 @@ impl Fact {
         if let Some((constructor, member)) = self.visible_member() {
             return Some((constructor, [member].into()));
         }
-        let Fact::Variant {
+        let StructureConstraint::Payload {
             enum_name: None,
             variant,
             ..
@@ -205,8 +205,10 @@ impl Fact {
 
     pub fn visible_member(&self) -> Option<(Constructor, Member)> {
         match self {
-            Fact::Field(field, _) => Some((Constructor::Object, Member::Field(field.clone()))),
-            Fact::Variant {
+            StructureConstraint::Field(field, _) => {
+                Some((Constructor::Object, Member::Field(field.clone())))
+            }
+            StructureConstraint::Payload {
                 enum_name: Some(enum_name),
                 variant,
                 ..
@@ -219,9 +221,9 @@ impl Fact {
     }
 }
 
-/// Where the kind an equivalence class holds came from.
+/// Where the structure an equivalence class holds came from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum KindSource {
+pub enum StructureSource {
     /// A type the text or a declaration writes, held through equations from
     /// before solving decides it.
     Written,
@@ -233,11 +235,11 @@ pub enum KindSource {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Held {
     pub members: BTreeSet<ClassId>,
-    pub kind: Option<(Term<ClassId>, KindSource)>,
-    pub facts: BTreeSet<Fact>,
-    /// The constructors its value may take, where a literal, a common part or
+    pub structure: Option<(Term<ClassId>, StructureSource)>,
+    pub structure_constraints: BTreeSet<StructureConstraint>,
+    /// The constructors its value may take, where a literal, a generalization or
     /// a lend gives them.
-    pub range: Option<Range>,
+    pub domain: Option<Domain>,
     /// The lambdas the Values of the function values met in it name, joined.
     pub values: BTreeSet<Name>,
     /// Whether it took its constructor and members, written or joined.
@@ -247,37 +249,37 @@ pub struct Held {
 /// Why no type holds the conjunction of what two equivalence classes hold.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Conflict {
-    /// Two kinds of different constructors or members.
-    Kinds(Constructor, Constructor),
-    /// A range and a constructor it does not admit, or two ranges that admit
+    /// Two structures of different constructors or members.
+    Structures(Constructor, Constructor),
+    /// A domain and a constructor it does not admit, or two domains that admit
     /// no constructor in common.
-    Range(Range, Option<Constructor>),
-    /// A fact that the kind does not meet.
-    Fact(Fact, Constructor),
+    Domain(Domain, Option<Constructor>),
+    /// A structure constraint that the structure does not meet.
+    StructureConstraint(StructureConstraint, Constructor),
 }
 
-/// A kind known in part written with its class's name: `ref T`, `field x: T`,
+/// A structure constraint written with its class's name: `ref T`, `field x: T`,
 /// `component i: T`, `index T`,
 /// `variant V: T`, `variant E::V: T`.
-pub struct NamedFact<'a> {
-    pub fact: &'a Fact,
+pub struct NamedStructureConstraint<'a> {
+    pub structure_constraint: &'a StructureConstraint,
     pub arena: &'a Arena,
 }
 
-impl fmt::Display for NamedFact<'_> {
+impl fmt::Display for NamedStructureConstraint<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |id: &ClassId| self.arena.name(*id);
-        match self.fact {
-            Fact::Ref(target) => write!(f, "ref {}", name(target)),
-            Fact::Field(field, part) => write!(f, "field {field}: {}", name(part)),
-            Fact::Component(i, part) => write!(f, "component {i}: {}", name(part)),
-            Fact::Indexes(element) => write!(f, "index {}", name(element)),
-            Fact::Variant {
+        match self.structure_constraint {
+            StructureConstraint::Target(target) => write!(f, "ref {}", name(target)),
+            StructureConstraint::Field(field, part) => write!(f, "field {field}: {}", name(part)),
+            StructureConstraint::Component(i, part) => write!(f, "component {i}: {}", name(part)),
+            StructureConstraint::Element(element) => write!(f, "index {}", name(element)),
+            StructureConstraint::Payload {
                 enum_name: Some(enum_name),
                 variant,
                 payload,
             } => write!(f, "variant {enum_name}::{variant}: {}", name(payload)),
-            Fact::Variant {
+            StructureConstraint::Payload {
                 enum_name: None,
                 variant,
                 payload,
@@ -295,15 +297,15 @@ pub struct NamedConflict<'a> {
 impl fmt::Display for NamedConflict<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.conflict {
-            Conflict::Kinds(a, b) => write!(f, "{a:?} vs {b:?}"),
-            Conflict::Range(range, Some(constructor)) => write!(f, "{range} vs {constructor:?}"),
-            Conflict::Range(range, None) => write!(f, "{range} vs another range"),
-            Conflict::Fact(fact, constructor) => {
-                let fact = NamedFact {
-                    fact,
+            Conflict::Structures(a, b) => write!(f, "{a:?} vs {b:?}"),
+            Conflict::Domain(domain, Some(constructor)) => write!(f, "{domain} vs {constructor:?}"),
+            Conflict::Domain(domain, None) => write!(f, "{domain} vs another domain"),
+            Conflict::StructureConstraint(structure_constraint, constructor) => {
+                let structure_constraint = NamedStructureConstraint {
+                    structure_constraint,
                     arena: self.arena,
                 };
-                write!(f, "{constructor:?} vs {fact}")
+                write!(f, "{constructor:?} vs {structure_constraint}")
             }
         }
     }
@@ -321,16 +323,19 @@ pub struct Classes {
 pub enum Cause {
     /// They are the two the caller unifies: an equation's two sides.
     Given,
-    /// Congruence: they are the parts of one name of the two kinds the
+    /// Congruence: they are the parts of one name of the two structures the
     /// union at `parent`, of the same unifying, conjoined.
     Congruence { parent: usize, part: PartKey },
-    /// Congruence: they are the parts of one name of the kind `class` held
-    /// and the kind it was given.
-    KindGiven { class: ClassId, part: PartKey },
-    /// One is the class a kind known in part of `class` names, and the other
-    /// the class its kind, or another kind known in part of it, names at that
+    /// Congruence: they are the parts of one name of the structure `class` held
+    /// and the structure it was given.
+    StructureGiven { class: ClassId, part: PartKey },
+    /// One is the class a structure constraint of `class` names, and the other
+    /// the class its structure, or another structure constraint of it, names at that
     /// part.
-    Fact { class: ClassId, fact: Fact },
+    StructureConstraint {
+        class: ClassId,
+        structure_constraint: StructureConstraint,
+    },
 }
 
 /// Two classes to unify, and why.
@@ -347,8 +352,8 @@ pub struct Union {
     /// The members of the two classes, each as it was before the union, in
     /// the order the cause gives them.
     pub sides: [BTreeSet<ClassId>; 2],
-    /// The kind of the class they make: the conjunction of theirs.
-    pub kind: Option<Term<ClassId>>,
+    /// The structure of the class they make: the conjunction of theirs.
+    pub structure: Option<Term<ClassId>>,
 }
 
 /// What no type holds, met while unifying.
@@ -364,12 +369,12 @@ pub enum Conflicted {
 }
 
 /// Two classes that hold what no type holds together, and stay apart: those
-/// `cause` would unify, of these members and holding these kinds.
+/// `cause` would unify, of these members and holding these structures.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Apart {
     pub cause: Cause,
     pub sides: [BTreeSet<ClassId>; 2],
-    pub kinds: [Option<Term<ClassId>>; 2],
+    pub structures: [Option<Term<ClassId>>; 2],
     pub conflict: Conflict,
 }
 
@@ -410,9 +415,9 @@ impl Classes {
                 id,
                 Held {
                     members: [id].into(),
-                    kind: None,
-                    facts: BTreeSet::new(),
-                    range: None,
+                    structure: None,
+                    structure_constraints: BTreeSet::new(),
+                    domain: None,
                     values: BTreeSet::new(),
                     solved: false,
                 },
@@ -450,15 +455,17 @@ impl Classes {
         }
     }
 
-    /// As `Unifying::give_kind`, with the conflict alone.
-    pub fn give_kind(
+    /// As `Unifying::give_structure`, with the conflict alone.
+    pub fn give_structure(
         &mut self,
         id: ClassId,
         term: Term<ClassId>,
-        source: KindSource,
+        source: StructureSource,
         types: &DeclaredTypes,
     ) -> Result<(), Conflict> {
-        self.unifying(types).give_kind(id, term, source).result()
+        self.unifying(types)
+            .give_structure(id, term, source)
+            .result()
     }
 
     /// Marks the equivalence class of `id` as having taken its constructor.
@@ -467,24 +474,26 @@ impl Classes {
         self.held.get_mut(&root).expect("a root holds").solved = true;
     }
 
-    /// As `Unifying::give_fact`, with the conflict alone.
-    pub fn give_fact(
+    /// As `Unifying::give_structure_constraint`, with the conflict alone.
+    pub fn give_structure_constraint(
         &mut self,
         id: ClassId,
-        fact: Fact,
+        structure_constraint: StructureConstraint,
         types: &DeclaredTypes,
     ) -> Result<(), Conflict> {
-        self.unifying(types).give_fact(id, fact).result()
+        self.unifying(types)
+            .give_structure_constraint(id, structure_constraint)
+            .result()
     }
 
-    /// As `Unifying::give_range`, with the conflict alone.
-    pub fn give_range(
+    /// As `Unifying::give_domain`, with the conflict alone.
+    pub fn give_domain(
         &mut self,
         id: ClassId,
-        range: Range,
+        domain: Domain,
         types: &DeclaredTypes,
     ) -> Result<(), Conflict> {
-        self.unifying(types).give_range(id, range).result()
+        self.unifying(types).give_domain(id, domain).result()
     }
 
     /// Records a lambda the Values of the class of `id` names.
@@ -503,48 +512,55 @@ impl Classes {
     }
 
     /// The pairs of classes that what the equivalence class holds makes one:
-    /// facts of one part name with each other and with its kind's part, and
-    /// its kind's constructor checked against its range.
+    /// structure constraints of one part name with each other and with its structure's part, and
+    /// its structure's constructor checked against its domain.
     fn normalize(&mut self, root: ClassId, types: &DeclaredTypes) -> Result<Vec<Pair>, Conflict> {
         let held = self.held.get_mut(&root).expect("a root holds");
-        if let (Some(range), Some((kind, _))) = (&held.range, &held.kind) {
-            let constructor = kind.constructor();
-            if !range.admits(&constructor) {
-                return Err(Conflict::Range(range.clone(), Some(constructor)));
+        if let (Some(domain), Some((structure, _))) = (&held.domain, &held.structure) {
+            let constructor = structure.constructor();
+            if !domain.admits(&constructor) {
+                return Err(Conflict::Domain(domain.clone(), Some(constructor)));
             }
         }
         let mut pairs = Vec::new();
-        let mut by_part: BTreeMap<FactPart, ClassId> = BTreeMap::new();
-        for fact in &held.facts {
-            let part = FactPart::of(fact);
-            let cause = || Cause::Fact {
+        let mut by_part: BTreeMap<ConstrainedPart, ClassId> = BTreeMap::new();
+        for structure_constraint in &held.structure_constraints {
+            let part = ConstrainedPart::of(structure_constraint);
+            let cause = || Cause::StructureConstraint {
                 class: root,
-                fact: fact.clone(),
+                structure_constraint: structure_constraint.clone(),
             };
             match by_part.get(&part) {
                 Some(&first) => pairs.push(Pair {
                     a: first,
-                    b: fact.class(),
+                    b: structure_constraint.class(),
                     cause: cause(),
                 }),
                 None => {
-                    by_part.insert(part, fact.class());
+                    by_part.insert(part, structure_constraint.class());
                 }
             }
-            if let Some((kind, _)) = &held.kind {
-                if let (Term::Extern { .. }, Fact::Indexes(_)) = (kind, fact) {
+            if let Some((structure, _)) = &held.structure {
+                if let (Term::Extern { .. }, StructureConstraint::Element(_)) =
+                    (structure, structure_constraint)
+                {
                     // The state links it along the container's view.
                     continue;
                 }
-                if let Term::Never = kind {
-                    // `!`, which has no value, meets every kind.
+                if let Term::Never = structure {
+                    // `!`, which has no value, meets every structure constraint.
                     continue;
                 }
-                let resolved = resolve(kind, fact, types)
-                    .ok_or_else(|| Conflict::Fact(fact.clone(), kind.constructor()))?;
+                let resolved =
+                    resolve(structure, structure_constraint, types).ok_or_else(|| {
+                        Conflict::StructureConstraint(
+                            structure_constraint.clone(),
+                            structure.constructor(),
+                        )
+                    })?;
                 pairs.push(Pair {
                     a: resolved,
-                    b: fact.class(),
+                    b: structure_constraint.class(),
                     cause: cause(),
                 });
             }
@@ -562,38 +578,43 @@ pub struct Unifying<'a> {
 }
 
 impl Unifying<'_> {
-    /// Gives the equivalence class of `id` the kind `term`.
-    pub fn give_kind(mut self, id: ClassId, term: Term<ClassId>, source: KindSource) -> Unified {
-        let given = self.kind_given(id, term, source);
+    /// Gives the equivalence class of `id` the structure `term`.
+    pub fn give_structure(
+        mut self,
+        id: ClassId,
+        term: Term<ClassId>,
+        source: StructureSource,
+    ) -> Unified {
+        let given = self.structure_given(id, term, source);
         self.finish(given)
     }
 
-    fn kind_given(
+    fn structure_given(
         &mut self,
         id: ClassId,
         term: Term<ClassId>,
-        source: KindSource,
+        source: StructureSource,
     ) -> Result<(), Conflicted> {
         let root = self.classes.find(id);
         let held = self.classes.held.get_mut(&root).expect("a root holds");
         let mut pairs = Vec::new();
-        held.kind = Some(match held.kind.take() {
-            Some((kind, held_source)) => {
-                if let Err(conflict) = agree(&kind, &term) {
-                    held.kind = Some((kind, held_source));
+        held.structure = Some(match held.structure.take() {
+            Some((structure, held_source)) => {
+                if let Err(conflict) = agree(&structure, &term) {
+                    held.structure = Some((structure, held_source));
                     let members = held.members.clone();
                     return Err(Conflicted::Holds { members, conflict });
                 }
                 pairs.extend(
-                    part_pairs(&kind, &term)
+                    part_pairs(&structure, &term)
                         .into_iter()
                         .map(|(part, a, b)| Pair {
                             a,
                             b,
-                            cause: Cause::KindGiven { class: root, part },
+                            cause: Cause::StructureGiven { class: root, part },
                         }),
                 );
-                (kind, joined_source(held_source, source))
+                (structure, joined_source(held_source, source))
             }
             None => (term, source),
         });
@@ -601,37 +622,41 @@ impl Unifying<'_> {
         self.unify_pairs(pairs)
     }
 
-    pub fn give_fact(mut self, id: ClassId, fact: Fact) -> Unified {
+    pub fn give_structure_constraint(
+        mut self,
+        id: ClassId,
+        structure_constraint: StructureConstraint,
+    ) -> Unified {
         let root = self.classes.find(id);
         self.classes
             .held
             .get_mut(&root)
             .expect("a root holds")
-            .facts
-            .insert(fact);
+            .structure_constraints
+            .insert(structure_constraint);
         let given = self
             .normalize(root)
             .and_then(|pairs| self.unify_pairs(pairs));
         self.finish(given)
     }
 
-    /// Narrows the range of the equivalence class of `id` to what it and
-    /// `range` both admit.
-    pub fn give_range(mut self, id: ClassId, range: Range) -> Unified {
-        let given = self.range_given(id, range);
+    /// Narrows the domain of the equivalence class of `id` to what it and
+    /// `domain` both admit.
+    pub fn give_domain(mut self, id: ClassId, domain: Domain) -> Unified {
+        let given = self.domain_given(id, domain);
         self.finish(given)
     }
 
-    fn range_given(&mut self, id: ClassId, range: Range) -> Result<(), Conflicted> {
+    fn domain_given(&mut self, id: ClassId, domain: Domain) -> Result<(), Conflicted> {
         let root = self.classes.find(id);
         {
             let held = self.classes.held.get_mut(&root).expect("a root holds");
-            held.range = Some(match &held.range {
-                Some(own) => own.meet(&range).ok_or_else(|| Conflicted::Holds {
+            held.domain = Some(match &held.domain {
+                Some(own) => own.meet(&domain).ok_or_else(|| Conflicted::Holds {
                     members: held.members.clone(),
-                    conflict: Conflict::Range(range.clone(), None),
+                    conflict: Conflict::Domain(domain.clone(), None),
                 })?,
-                None => range,
+                None => domain,
             });
         }
         let pairs = self.normalize(root)?;
@@ -664,52 +689,59 @@ impl Unifying<'_> {
                 Conflicted::Apart(Box::new(Apart {
                     cause: cause.clone(),
                     sides: sides.clone(),
-                    kinds: [a, b].map(|side| {
+                    structures: [a, b].map(|side| {
                         classes.held[&side]
-                            .kind
+                            .structure
                             .as_ref()
-                            .map(|(kind, _)| kind.clone())
+                            .map(|(structure, _)| structure.clone())
                     }),
                     conflict,
                 }))
             };
             let parent = self.unions.len();
             let (kept, merged) = (&classes.held[&keep], &classes.held[&gone]);
-            let kind = match (&kept.kind, &merged.kind) {
-                (Some((kind, s)), Some((other, t))) => {
-                    agree(kind, other).map_err(apart)?;
-                    work.extend(
-                        part_pairs(kind, other)
-                            .into_iter()
-                            .map(|(part, a, b)| Pair {
+            let structure =
+                match (&kept.structure, &merged.structure) {
+                    (Some((structure, s)), Some((other, t))) => {
+                        agree(structure, other).map_err(apart)?;
+                        work.extend(part_pairs(structure, other).into_iter().map(
+                            |(part, a, b)| Pair {
                                 a,
                                 b,
                                 cause: Cause::Congruence { parent, part },
-                            }),
-                    );
-                    Some((kind.clone(), joined_source(*s, *t)))
-                }
-                (kind, other) => kind.clone().or_else(|| other.clone()),
-            };
-            let range = match (&kept.range, &merged.range) {
-                (Some(range), Some(other)) => Some(
-                    range
+                            },
+                        ));
+                        Some((structure.clone(), joined_source(*s, *t)))
+                    }
+                    (structure, other) => structure.clone().or_else(|| other.clone()),
+                };
+            let domain = match (&kept.domain, &merged.domain) {
+                (Some(domain), Some(other)) => Some(
+                    domain
                         .meet(other)
-                        .ok_or_else(|| apart(Conflict::Range(other.clone(), None)))?,
+                        .ok_or_else(|| apart(Conflict::Domain(other.clone(), None)))?,
                 ),
-                (range, other) => range.clone().or_else(|| other.clone()),
+                (domain, other) => domain.clone().or_else(|| other.clone()),
             };
             self.classes.parent[gone.0] = keep;
             let merged = self.classes.held.remove(&gone).expect("a root holds");
             let held = self.classes.held.get_mut(&keep).expect("a root holds");
             held.members.extend(merged.members);
             held.values.extend(merged.values);
-            held.facts.extend(merged.facts);
-            held.kind = kind;
-            held.range = range;
+            held.structure_constraints
+                .extend(merged.structure_constraints);
+            held.structure = structure;
+            held.domain = domain;
             held.solved |= merged.solved;
-            let kind = held.kind.as_ref().map(|(kind, _)| kind.clone());
-            self.unions.push(Union { cause, sides, kind });
+            let structure = held
+                .structure
+                .as_ref()
+                .map(|(structure, _)| structure.clone());
+            self.unions.push(Union {
+                cause,
+                sides,
+                structure,
+            });
             work.extend(self.normalize(keep)?);
         }
         Ok(())
@@ -733,9 +765,9 @@ impl Unifying<'_> {
     }
 }
 
-/// What part a fact names, so that two facts of one part name one class.
+/// What part a structure constraint names, so that two structure constraints of one part name one class.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum FactPart {
+enum ConstrainedPart {
     Target,
     Field(Name),
     Component(usize),
@@ -743,26 +775,32 @@ enum FactPart {
     Variant(Name),
 }
 
-impl FactPart {
-    fn of(fact: &Fact) -> FactPart {
-        match fact {
-            Fact::Ref(_) => FactPart::Target,
-            Fact::Field(field, _) => FactPart::Field(field.clone()),
-            Fact::Component(i, _) => FactPart::Component(*i),
-            Fact::Indexes(_) => FactPart::Element,
-            Fact::Variant { variant, .. } => FactPart::Variant(variant.clone()),
+impl ConstrainedPart {
+    fn of(structure_constraint: &StructureConstraint) -> ConstrainedPart {
+        match structure_constraint {
+            StructureConstraint::Target(_) => ConstrainedPart::Target,
+            StructureConstraint::Field(field, _) => ConstrainedPart::Field(field.clone()),
+            StructureConstraint::Component(i, _) => ConstrainedPart::Component(*i),
+            StructureConstraint::Element(_) => ConstrainedPart::Element,
+            StructureConstraint::Payload { variant, .. } => {
+                ConstrainedPart::Variant(variant.clone())
+            }
         }
     }
 }
 
-/// The part of `kind` the fact names, where the kind meets the fact. A
+/// The part of `structure` the structure constraint names, where the structure meets the structure constraint. A
 /// struct's field is the part at the field's place in the declared order.
 /// An extern-defined container's element is not a part of it.
-fn resolve(kind: &Term<ClassId>, fact: &Fact, types: &DeclaredTypes) -> Option<ClassId> {
-    match (kind, fact) {
-        (Term::Ref(_, target), Fact::Ref(_)) => Some(*target),
-        (Term::Object(fields), Fact::Field(field, _)) => fields.get(field).copied(),
-        (Term::Struct(module, args), Fact::Field(field, _)) => {
+fn resolve(
+    structure: &Term<ClassId>,
+    structure_constraint: &StructureConstraint,
+    types: &DeclaredTypes,
+) -> Option<ClassId> {
+    match (structure, structure_constraint) {
+        (Term::Ref(_, target), StructureConstraint::Target(_)) => Some(*target),
+        (Term::Object(fields), StructureConstraint::Field(field, _)) => fields.get(field).copied(),
+        (Term::Struct(module, args), StructureConstraint::Field(field, _)) => {
             let place = types
                 .struct_decl(module)?
                 .fields
@@ -770,11 +808,15 @@ fn resolve(kind: &Term<ClassId>, fact: &Fact, types: &DeclaredTypes) -> Option<C
                 .position(|declared| declared == field)?;
             args.get(place).copied()
         }
-        (Term::Tuple(components), Fact::Component(i, _)) => components.get(*i).copied(),
-        (Term::Array(_, element) | Term::Slice(element), Fact::Indexes(_)) => Some(*element),
+        (Term::Tuple(components), StructureConstraint::Component(i, _)) => {
+            components.get(*i).copied()
+        }
+        (Term::Array(_, element) | Term::Slice(element), StructureConstraint::Element(_)) => {
+            Some(*element)
+        }
         (
             term,
-            Fact::Variant {
+            StructureConstraint::Payload {
                 variant, enum_name, ..
             },
         ) => {
@@ -794,26 +836,26 @@ fn resolve(kind: &Term<ClassId>, fact: &Fact, types: &DeclaredTypes) -> Option<C
     }
 }
 
-/// A kind written by the text or a declaration keeps the equivalence class
+/// A structure written by the text or a declaration keeps the equivalence class
 /// "with an equation" whatever else it is unified with.
-fn joined_source(a: KindSource, b: KindSource) -> KindSource {
-    if a == KindSource::Written || b == KindSource::Written {
-        KindSource::Written
+fn joined_source(a: StructureSource, b: StructureSource) -> StructureSource {
+    if a == StructureSource::Written || b == StructureSource::Written {
+        StructureSource::Written
     } else {
-        KindSource::Solved
+        StructureSource::Solved
     }
 }
 
-/// Two kinds that one equivalence class may hold together.
+/// Two structures that one equivalence class may hold together.
 fn agree(a: &Term<ClassId>, b: &Term<ClassId>) -> Result<(), Conflict> {
     if a.constructor() == b.constructor() && a.members() == b.members() {
         Ok(())
     } else {
-        Err(Conflict::Kinds(a.constructor(), b.constructor()))
+        Err(Conflict::Structures(a.constructor(), b.constructor()))
     }
 }
 
-/// The parts of one name of two kinds of one constructor and members, each
+/// The parts of one name of two structures of one constructor and members, each
 /// with its name.
 fn part_pairs(a: &Term<ClassId>, b: &Term<ClassId>) -> Vec<(PartKey, ClassId, ClassId)> {
     a.parts()

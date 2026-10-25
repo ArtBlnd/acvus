@@ -14,7 +14,7 @@ use crate::cut::Cut;
 use crate::decl::{Decls, Node};
 use crate::explore::Final;
 use crate::instance::Made;
-use crate::node::common::CommonPart;
+use crate::node::generalization::Generalization;
 use crate::node::{Decision, LendTarget, NodeAt};
 use crate::program::{ENTRY, Function, Item, Origin, Part, Place, Position, Program, Projection};
 use crate::relation::{Recorder, copy_name};
@@ -99,8 +99,8 @@ impl fmt::Display for Value {
 /// has no closed value.
 fn certified(state: &State, root: ClassId) -> Option<Value> {
     let ty = state.value(root)?;
-    let (kind, _) = state.classes.held(root).kind.clone()?;
-    let term = kind
+    let (structure, _) = state.classes.held(root).structure.clone()?;
+    let term = structure
         .try_map(|_, part| certified(state, state.root(part)).ok_or(()))
         .ok()?;
     let lambdas = matches!(term, Term::FunctionValue { .. }).then(|| state.values_of(root));
@@ -119,8 +119,8 @@ pub struct Sheet {
     roots: BTreeMap<ClassId, ClassId>,
     /// Each root's value.
     values: BTreeMap<ClassId, Option<Value>>,
-    /// Each root's parts, by their roots, where it holds a kind: where the
-    /// split linked a part's two sides.
+    /// Each root's parts, by their roots, where it holds a structure: where the
+    /// decomposition linked a part's two sides.
     parts: BTreeMap<ClassId, Vec<(PartKey, ClassId)>>,
     /// The roots that are unknowns of the state's group, which a value
     /// passing into meets.
@@ -144,8 +144,8 @@ impl Sheet {
         let parts = distinct
             .iter()
             .map(|&root| {
-                let parts = match &state.classes.held(root).kind {
-                    Some((kind, _)) => kind
+                let parts = match &state.classes.held(root).structure {
+                    Some((structure, _)) => structure
                         .parts()
                         .into_iter()
                         .map(|(key, &part)| (key, state.root(part)))
@@ -349,7 +349,7 @@ enum Decided {
 }
 
 /// Where a function value passes into a function type: the level of
-/// the sheet that split it, the roots there of the two sides, and whether the
+/// the sheet that decomposed it, the roots there of the two sides, and whether the
 /// type's result is an unknown the lambda's result meets.
 struct IntoFunctionType {
     level: usize,
@@ -683,10 +683,10 @@ impl Checker<'_> {
 
     /// A value passing into a type: `from ≤ to` where it meets
     /// it, `from ⇝ to` by a coercion otherwise, each function value in `from`
-    /// carried along the coercion as the split carries it (`reach`).
+    /// carried along the coercion as the decomposition carries it (`reach`).
     /// Where it reaches a function value, its lambdas are among that one's;
     /// where it reaches a function type, an instance of each of
-    /// its lambdas was made where the split met the two, at the classes they
+    /// its lambdas was made where the decomposition met the two, at the classes they
     /// are read at, as `function_type` checks. Returns whether the
     /// coercion and the Values hold; what an instance breaks is recorded there.
     fn flows(
@@ -743,7 +743,7 @@ impl Checker<'_> {
 
     /// Where the function value at `from_path` of `from` meets the function
     /// type at `to_path` of `to`, by the classes the two are read at, which the
-    /// split related there.
+    /// decomposition related there.
     fn into_function_type(
         context: &Context<'_>,
         from: &Read,
@@ -1032,7 +1032,7 @@ impl Checker<'_> {
     }
 
     /// A function value passing into a function type: each lambda
-    /// its Values names has an instance made where that boundary was split,
+    /// its Values names has an instance made where that boundary was decomposed,
     /// as though the function type called it, each parameter of the type
     /// passing into the lambda's parameter and the lambda's result into the
     /// type's result.
@@ -1199,11 +1199,11 @@ impl Checker<'_> {
     }
 
     /// A use of declarations, at the positions of its constraints
-    /// the context's group records: where its candidates' common part
+    /// the context's group records: where its candidates' generalization
     /// writes one closed type, by that type, whatever the use becomes;
     /// at the others, which its node holds, by its decision. A use of
     /// one candidate records that candidate at once, where its text is
-    /// recorded, as its common part, nothing left to decide.
+    /// recorded, as its generalization, nothing left to decide.
     #[allow(clippy::too_many_arguments)]
     fn use_(
         &mut self,
@@ -1223,11 +1223,11 @@ impl Checker<'_> {
             .filter(|decl| decl.sig.params().len() == args.len())
             .collect();
         let candidates: Vec<&Signature> = decls.iter().map(|decl| &decl.sig).collect();
-        let common = (candidates.len() >= 2).then(|| CommonPart::of(&candidates));
+        let generalization = (candidates.len() >= 2).then(|| Generalization::of(&candidates));
         let closed = |position: Position| {
-            common
+            generalization
                 .as_ref()
-                .is_some_and(|common| common.is_closed_at(position))
+                .is_some_and(|generalization| generalization.is_closed_at(position))
         };
         let mut arg_reads: Vec<Option<Read>> = Vec::new();
         for (k, arg) in args.iter().enumerate() {
@@ -1241,8 +1241,15 @@ impl Checker<'_> {
             true => Some(self.text_read(context, &at, result)?),
             false => None,
         };
-        if let Some(common) = &common {
-            self.closed(context, &at, name, common, &arg_reads, result_read.as_ref())?;
+        if let Some(generalization) = &generalization {
+            self.closed(
+                context,
+                &at,
+                name,
+                generalization,
+                &arg_reads,
+                result_read.as_ref(),
+            )?;
         }
         // The positions the node holds.
         let node_args: Vec<Option<Read>> = arg_reads
@@ -1266,10 +1273,12 @@ impl Checker<'_> {
                 (decision, level, owner)
             }
         };
-        // The common part is recorded where the use is, before it is decided,
+        // The generalization is recorded where the use is, before it is decided,
         // so its classes are the group's own, at level 0.
-        let common_values = match &common {
-            Some(part) => Some(self.common(context, &at, 0, name, part, node_result.as_ref())?),
+        let generalization_values = match &generalization {
+            Some(part) => {
+                Some(self.generalization(context, &at, 0, name, part, node_result.as_ref())?)
+            }
             None => None,
         };
         match decision {
@@ -1313,12 +1322,15 @@ impl Checker<'_> {
                     };
                     self.returns(context, &at, &returned, result);
                 }
-                if let (Some(part), Some(values)) = (&common, &common_values) {
+                if let (Some(part), Some(values)) = (&generalization, &generalization_values) {
                     let candidate = decls
                         .iter()
                         .position(|decl| decl.id == id)
                         .expect("a candidate is among the candidates");
-                    for (k, value) in CommonPart::vars_in(&part.result).into_iter().zip(values) {
+                    for (k, value) in Generalization::vars_in(&part.result)
+                        .into_iter()
+                        .zip(values)
+                    {
                         let Ok(chosen) = part.vars[k][candidate].substitute(&bound) else {
                             self.violation(context, &at, format!("variable {k} has no type"));
                             return None;
@@ -1333,7 +1345,7 @@ impl Checker<'_> {
                             context,
                             &at,
                             holds,
-                            format!("{chosen} <= {value} at the common part's {k} fails"),
+                            format!("{chosen} <= {value} at the generalization's {k} fails"),
                         );
                     }
                 }
@@ -1362,46 +1374,46 @@ impl Checker<'_> {
         Some(())
     }
 
-    /// A use's constraints at the positions where its candidates' common part
+    /// A use's constraints at the positions where its candidates' generalization
     /// writes one closed type, which hold whatever the use becomes: each argument
     /// there passing into that type, at the class the
-    /// common part made for it, and that type entering the result.
+    /// generalization made for it, and that type entering the result.
     fn closed(
         &mut self,
         context: &Context<'_>,
         at: &str,
         name: &Name,
-        common: &CommonPart,
+        generalization: &Generalization,
         args: &[Option<Read>],
         result: Option<&Read>,
     ) -> Option<()> {
         let none: SigArgs<Value> = SigArgs {
-            types: vec![None; common.vars.len()],
+            types: vec![None; generalization.vars.len()],
             identity: None,
         };
         let closed = |ty: &SigTy| {
             ty.substitute(&none)
-                .expect("a closed type of the common part writes no variable")
+                .expect("a closed type of the generalization writes no variable")
         };
         for (k, arg) in args.iter().enumerate() {
             let Some(arg) = arg else {
                 continue;
             };
-            if !common.is_closed_at(Position::Arg(k)) {
+            if !generalization.is_closed_at(Position::Arg(k)) {
                 continue;
             }
             let ty = Read {
-                value: closed(&common.params[k]),
-                at: Self::node_at(context, 0, name, NodeAt::CommonParam(k)),
+                value: closed(&generalization.params[k]),
+                at: Self::node_at(context, 0, name, NodeAt::GeneralizedParam(k)),
             };
             self.pass(context, at, k, arg, &Param { ty, meets: false });
         }
         if let Some(result) = result
-            && common.is_closed_at(Position::Result)
+            && generalization.is_closed_at(Position::Result)
         {
             let returned = Read {
-                value: closed(&common.result),
-                at: Self::node_at(context, 0, name, NodeAt::CommonResult),
+                value: closed(&generalization.result),
+                at: Self::node_at(context, 0, name, NodeAt::GeneralizedResult),
             };
             self.returns(context, at, &returned, result);
         }
@@ -1501,25 +1513,25 @@ impl Checker<'_> {
         Some(())
     }
 
-    /// A use's common part: the values of the classes it made for the
-    /// variables its result writes, each within the range the common part
-    /// gives it, and the common part's result entering the use's result.
-    /// Returns those variables' values, in the order `CommonPart::vars_in`
+    /// A use's generalization: the values of the classes it made for the
+    /// variables its result writes, each within the domain the generalization
+    /// gives it, and the generalization's result entering the use's result.
+    /// Returns those variables' values, in the order `Generalization::vars_in`
     /// gives them.
-    fn common(
+    fn generalization(
         &mut self,
         context: &Context<'_>,
         at: &str,
         level: usize,
         owner: &Name,
-        part: &CommonPart,
+        part: &Generalization,
         result: Option<&Read>,
     ) -> Option<Vec<Read>> {
-        let vars = CommonPart::vars_in(&part.result);
+        let vars = Generalization::vars_in(&part.result);
         let mut values = Vec::new();
         let mut types = vec![None; part.vars.len()];
         for &k in &vars {
-            let name = ClassName::Node(Rc::new(owner.clone()), NodeAt::Common(k));
+            let name = ClassName::Node(Rc::new(owner.clone()), NodeAt::Generalized(k));
             let Some(id) = context.sheet(level).id(&name) else {
                 self.violation(context, at, format!("the use made no class {name}"));
                 return None;
@@ -1556,13 +1568,13 @@ impl Checker<'_> {
                 self.violation(
                     context,
                     at,
-                    "the common part's result has no type".to_string(),
+                    "the generalization's result has no type".to_string(),
                 );
                 return None;
             };
             let returned = Read {
                 value: returned,
-                at: Self::node_at(context, level, owner, NodeAt::CommonResult),
+                at: Self::node_at(context, level, owner, NodeAt::GeneralizedResult),
             };
             self.returns(context, at, &returned, result);
         }
@@ -1852,7 +1864,7 @@ fn value_at<'v>(value: &'v Value, path: &[PartKey]) -> Option<&'v Value> {
 }
 
 /// Where each function value of `from` reaches in `to` along `coercion`, as
-/// the split carries it, each as its path in `from` and its path in
+/// the decomposition carries it, each as its path in `from` and its path in
 /// `to`: at the same position where no stage moves it, a reborrow keeping the
 /// target; along a cast's or a conversion's signature, from where its
 /// parameter writes a variable to where its result writes it (`image`); and
@@ -1930,7 +1942,7 @@ fn reach(
 }
 
 /// What a cast, a conversion or a view gives where `value` passes into its
-/// parameter, as the split links them through its signature, and as a conversion
+/// parameter, as the decomposition links them through its signature, and as a conversion
 /// carries it: its result with each
 /// variable its parameter writes bound to the part of `value` at the first
 /// place it writes it, and where each function value of `value` at each place

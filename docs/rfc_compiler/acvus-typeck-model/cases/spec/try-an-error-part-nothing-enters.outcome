@@ -24,7 +24,7 @@ outcome 1
   check `f@7/g@2/g result <= f@7/g()`: Ok(Identity)
   check `f@7/q.Exit <= f@7/exit`: Ok(Identity)
   check `A <= T`: Ok(Identity)
-  check `q.Common(1) <= A`: Ok(Identity)
-  check `q.Var(Type(0)) <= q.Common(1)`: Ok(Identity)
+  check `q.Generalized(1) <= A`: Ok(Identity)
+  check `q.Var(Type(0)) <= q.Generalized(1)`: Ok(Identity)
   check `1u8 <= S`: Ok(Identity)
   I* of a final state: []

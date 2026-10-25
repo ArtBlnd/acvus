@@ -1,7 +1,7 @@
 // apply(|x| x, 1u8);       // apply(fn(u8) -> u8, u8) -> u8, apply(fn(u8) -> u8, u16) -> u16
-// Both candidates write fn(u8) -> u8 first, so the common part records it whole,
-// and its split makes λ's instance there; the checker finds it
-// at the class the common part made.
+// Both candidates write fn(u8) -> u8 first, so the generalization records it whole,
+// and its decomposition makes λ's instance there; the checker finds it
+// at the class the generalization made.
 extern fn apply(fn(u8) -> u8, u8) -> u8;
 extern fn apply(fn(u8) -> u8, u16) -> u16;
 group λ in run {

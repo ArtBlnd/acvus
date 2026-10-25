@@ -1,13 +1,13 @@
 //! An equivalence class's value: a cycle of lower
 //! bounds and part lower bounds alone merged first, a class that reaches a
 //! part of its own refused, the join of the constructors and members the
-//! sources give, and the kind the class takes with its parts made anew.
+//! sources give, and the structure the class takes with its parts made anew.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::check::Refusal;
-use crate::class::{ClassId, ClassName, Fact, KindSource, Unified};
+use crate::class::{ClassId, ClassName, StructureConstraint, StructureSource, Unified};
 use crate::decl::Node;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
@@ -32,7 +32,7 @@ pub fn head(term: &Term<ClassId>) -> Head {
 /// What an equivalence class took when it was solved.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Took {
-    /// The kind it held already.
+    /// The structure it held already.
     Held,
     /// The join of the constructors and members its sources give, its parts
     /// made anew, with what unification did as the class took it, and the
@@ -51,16 +51,16 @@ pub enum Took {
 /// What an equivalence class's value is taken from when it is solved.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Sources {
-    /// The relations of the log that make the class hold a kind, by their
-    /// places: the equations on its members, and the kinds recorded on them.
+    /// The relations of the log that make the class hold a structure, by their
+    /// places: the equations on its members, and the structures recorded on them.
     pub equations: Vec<usize>,
     /// Each solved lower bound, with the constructor and members it gives.
     pub lowers: Vec<(ClassId, Head)>,
     /// Each solved part lower bound, with the constructor and members it
     /// gives, which reach the value by `≤ₚ`.
     pub part_lowers: Vec<(ClassId, Head)>,
-    /// The constructors and members its kinds known in part give.
-    pub facts: Vec<Head>,
+    /// The constructors and members its structure constraints give.
+    pub structure_constraints: Vec<Head>,
     /// The lower bounds and part lower bounds not solved, which give
     /// nothing.
     pub left_out: Vec<ClassId>,
@@ -141,19 +141,19 @@ impl State {
         self.raise_head(&joined, &above)
     }
 
-    /// The constructors and members the kinds known in part of the class give:
-    /// where kinds are its only sources, the constructor of each member they
+    /// The constructors and members the structure constraints of the class give:
+    /// where structure constraints are its only sources, the constructor of each member they
     /// name, visible or not; otherwise those of the members visible to this
-    /// body, which alone a kind adds to a type another source gives.
-    pub(crate) fn fact_heads(&self, root: ClassId) -> Vec<Head> {
+    /// body, which alone a structure constraint adds to a type another source gives.
+    pub(crate) fn constraint_heads(&self, root: ClassId) -> Vec<Head> {
         let lowers = self.lower_bounds(root);
         if lowers.is_empty() {
             return self
                 .classes
                 .held(root)
-                .facts
+                .structure_constraints
                 .iter()
-                .filter_map(Fact::named_member)
+                .filter_map(StructureConstraint::named_member)
                 .map(|(constructor, members)| Head {
                     constructor,
                     members,
@@ -162,9 +162,9 @@ impl State {
         }
         self.classes
             .held(root)
-            .facts
+            .structure_constraints
             .iter()
-            .filter_map(Fact::visible_member)
+            .filter_map(StructureConstraint::visible_member)
             .map(|(constructor, member)| Head {
                 constructor,
                 members: [member].into(),
@@ -172,11 +172,11 @@ impl State {
             .collect()
     }
 
-    /// The constructor a range admitting one alone gives the class holding
+    /// The constructor a domain admitting one alone gives the class holding
     /// it.
-    pub(crate) fn range_head(&self, root: ClassId) -> Option<Head> {
-        let range = self.classes.held(self.root(root)).range.as_ref()?;
-        let constructor = range.single()?.clone();
+    pub(crate) fn domain_head(&self, root: ClassId) -> Option<Head> {
+        let domain = self.classes.held(self.root(root)).domain.as_ref()?;
+        let constructor = domain.single()?.clone();
         Some(Head {
             constructor,
             members: BTreeSet::new(),
@@ -203,8 +203,8 @@ impl State {
         })
     }
 
-    /// The kind of `head`, each part a class made anew and named after
-    /// `owner`. Every kind's constructor agrees with its declaration:
+    /// The structure of `head`, each part a class made anew and named after
+    /// `owner`. Every structure's constructor agrees with its declaration:
     /// the text's are checked when they are recorded, and a signature's when
     /// it is declared.
     pub(crate) fn skeleton(&mut self, head: &Head, owner: &ClassName) -> Term<ClassId> {
@@ -254,7 +254,7 @@ impl State {
                 let fields = decls
                     .types()
                     .struct_decl(module)
-                    .expect("a kind's struct is declared")
+                    .expect("a structure's struct is declared")
                     .fields
                     .len();
                 Term::Struct(
@@ -266,7 +266,7 @@ impl State {
                 let decl = decls
                     .types()
                     .extern_decl(name)
-                    .expect("a kind's extern-defined type is declared");
+                    .expect("a structure's extern-defined type is declared");
                 Term::Extern {
                     name: name.clone(),
                     args: (0..decl.arity).map(|i| part(PartKey::Arg(i))).collect(),
@@ -306,7 +306,7 @@ impl State {
             .enumerate()
             .filter(|(_, recorded)| match &recorded.relation {
                 Relation::Equation(a, b) => self.root(*a) == root || self.root(*b) == root,
-                Relation::Kind(class, ..) => self.root(*class) == root,
+                Relation::Structure(class, ..) => self.root(*class) == root,
                 _ => false,
             })
             .map(|(at, _)| at)
@@ -314,10 +314,10 @@ impl State {
         let given = |lower: ClassId| {
             self.classes
                 .held(lower)
-                .kind
+                .structure
                 .as_ref()
                 .filter(|_| self.is_solved(lower))
-                .map(|(kind, _)| head(kind))
+                .map(|(structure, _)| head(structure))
         };
         let bounds =
             |lower: ClassId, upper: ClassId| self.root(upper) == root && self.root(lower) != root;
@@ -345,15 +345,15 @@ impl State {
             equations,
             lowers,
             part_lowers,
-            facts: self.fact_heads(root),
+            structure_constraints: self.constraint_heads(root),
             left_out,
         }
     }
 
     /// The equivalence class takes its constructor and members, and is
-    /// solved: where it holds no kind, the join of the constructors
-    /// and members its solved lower bounds, part lower bounds and kinds known
-    /// in part give, its parts made anew, each part lower bound's
+    /// solved: where it holds no structure, the join of the constructors
+    /// and members its solved lower bounds, part lower bounds and structure
+    /// constraints give, its parts made anew, each part lower bound's
     /// constructor reaching it by `≤ₚ`, with no cast. Where they give
     /// none it is left unsolved, and where they have no join it is refused.
     pub(crate) fn join(&mut self, root: ClassId) -> Joined {
@@ -363,7 +363,7 @@ impl State {
             sources: sources.clone(),
             took,
         };
-        if self.classes.held(root).kind.is_some() {
+        if self.classes.held(root).structure.is_some() {
             self.classes.mark_solved(root);
             return with_sources(Took::Held);
         }
@@ -372,8 +372,8 @@ impl State {
             .iter()
             .chain(&sources.part_lowers)
             .map(|(_, given)| given.clone())
-            .chain(sources.facts.iter().cloned())
-            .chain(self.range_head(root))
+            .chain(sources.structure_constraints.iter().cloned())
+            .chain(self.domain_head(root))
             .collect();
         let Some(first) = given.first().cloned() else {
             return with_sources(Took::Nothing);
@@ -394,12 +394,13 @@ impl State {
             return with_sources(self.no_join(root, refusal));
         };
         let owner = self.class_name(root);
-        let kind = self.skeleton(&joined, &owner);
+        let structure = self.skeleton(&joined, &owner);
         let decls = Rc::clone(&self.decls);
-        let unified =
-            self.classes
-                .unifying(decls.types())
-                .give_kind(root, kind, KindSource::Solved);
+        let unified = self.classes.unifying(decls.types()).give_structure(
+            root,
+            structure,
+            StructureSource::Solved,
+        );
         let refused = unified
             .result()
             .err()
@@ -429,11 +430,11 @@ impl State {
     }
 
     /// Gives the class a lower bound or a part lower bound at `i` in the log
-    /// bounds the range of its lower side, where that holds no kind and a
-    /// range a value reaching the class by `≤` stays within
-    /// (`Range::upward`), unless the class's range is within it already or
+    /// bounds the domain of its lower side, where that holds no structure and a
+    /// domain a value reaching the class by `≤` stays within
+    /// (`Domain::upward`), unless the class's domain is within it already or
     /// either side has no value. Returns the relation recorded, where one is.
-    pub(crate) fn range_up(&mut self, i: usize) -> Option<Recording> {
+    pub(crate) fn domain_up(&mut self, i: usize) -> Option<Recording> {
         let (Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper }) =
             self.log[i].relation
         else {
@@ -443,17 +444,17 @@ impl State {
             return None;
         }
         let held = self.classes.held(self.root(lower));
-        if held.kind.is_some() {
+        if held.structure.is_some() {
             return None;
         }
-        let range = held.range.as_ref()?.upward()?;
-        let own = &self.classes.held(self.root(upper)).range;
-        if own.as_ref().is_some_and(|own| own.within(&range)) {
+        let domain = held.domain.as_ref()?.upward()?;
+        let own = &self.classes.held(self.root(upper)).domain;
+        if own.as_ref().is_some_and(|own| own.within(&domain)) {
             return None;
         }
         let mut recorded = Recording::default();
-        let relation = Relation::Range(upper, range);
-        recorded.push(self.record(relation, Recorder::Split(lower)));
+        let relation = Relation::Domain(upper, domain);
+        recorded.push(self.record(relation, Recorder::Decomposition(lower)));
         Some(recorded)
     }
 
@@ -512,9 +513,10 @@ impl State {
                 .into_iter()
                 .map(|lower| (self.root(lower), through_part))
                 .collect();
-            if let Some((kind, _)) = &self.classes.held(at).kind {
+            if let Some((structure, _)) = &self.classes.held(at).structure {
                 next.extend(
-                    kind.parts()
+                    structure
+                        .parts()
                         .into_iter()
                         .map(|(_, part)| (self.root(*part), true)),
                 );
@@ -541,8 +543,8 @@ impl State {
         if self.has_no_value(root) || !visiting.insert(root) {
             return None;
         }
-        let (kind, _) = self.classes.held(root).kind.clone()?;
-        let term = kind
+        let (structure, _) = self.classes.held(root).structure.clone()?;
+        let term = structure
             .try_map(|_, part| self.value_in(part, visiting).ok_or(()))
             .ok()?;
         visiting.remove(&root);

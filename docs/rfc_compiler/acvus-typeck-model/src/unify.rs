@@ -1,16 +1,16 @@
 //! Unification: the equivalence classes hold what a relation
-//! records — an equation unifies two into one, whose kind is the conjunction
+//! records — an equation unifies two into one, whose structure is the conjunction
 //! of theirs and whose parts of one name are unified in turn, and a
-//! kind, a kind known in part, a range, or a lambda its Values name is held
+//! structure, a structure constraint, a domain, or a lambda its Values name is held
 //! by the class it is given to
-//! — and a kind "indexes `τ`" an extern-defined container holds is linked to
+//! — and a structure constraint "indexes `τ`" an extern-defined container holds is linked to
 //! the slice's element along the signature of its view.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::check::Refusal;
-use crate::class::{ClassId, ClassName, Conflict, Fact, LinkAt, Unified};
+use crate::class::{ClassId, ClassName, Conflict, LinkAt, StructureConstraint, Unified};
 use crate::decl::Node;
 use crate::record::Recording;
 use crate::relation::{Named, Recorder, Relation};
@@ -18,7 +18,7 @@ use crate::sig::SigTy;
 use crate::solve::State;
 use crate::ty::{Mutability, Term};
 
-/// A kind "indexes `τ`" an extern-defined container's class holds, linked to
+/// A structure constraint "indexes `τ`" an extern-defined container's class holds, linked to
 /// the slice's element along the signature of its view: the relations
 /// recorded, and the refusal where the container has no view.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -47,15 +47,16 @@ impl State {
         let types = decls.types();
         let unified = match relation {
             Relation::Equation(a, b) => self.classes.unifying(types).unify(*a, *b),
-            Relation::Fact(class, fact) => {
-                self.classes.unifying(types).give_fact(*class, fact.clone())
-            }
-            Relation::Kind(class, term, source) => match types.check(term) {
+            Relation::StructureConstraint(class, structure_constraint) => self
+                .classes
+                .unifying(types)
+                .give_structure_constraint(*class, structure_constraint.clone()),
+            Relation::Structure(class, term, source) => match types.check(term) {
                 Ok(()) => {
                     let given =
                         self.classes
                             .unifying(types)
-                            .give_kind(*class, term.clone(), *source);
+                            .give_structure(*class, term.clone(), *source);
                     self.classes.mark_solved(*class);
                     given
                 }
@@ -68,10 +69,10 @@ impl State {
                     };
                 }
             },
-            Relation::Range(class, range) => self
+            Relation::Domain(class, domain) => self
                 .classes
                 .unifying(types)
-                .give_range(*class, range.clone()),
+                .give_domain(*class, domain.clone()),
             Relation::Values(class, lambda) => {
                 self.classes.give_value(*class, lambda.clone());
                 Unified::default()
@@ -99,20 +100,24 @@ impl State {
         Unification { unified, refused }
     }
 
-    /// Links each kind "indexes `τ`" an extern-defined container's class holds
+    /// Links each structure constraint "indexes `τ`" an extern-defined container's class holds
     /// to the slice's element along the signature of its view. A
-    /// container with no view cannot have the kind. Returns each link made.
+    /// container with no view cannot have the structure constraint. Returns each link made.
     pub(crate) fn link_views(&mut self) -> Vec<Linked> {
         let pending: Vec<(ClassId, ClassId)> = self
             .classes
             .roots()
             .flat_map(|root| {
                 let held = self.classes.held(root);
-                let container = matches!(held.kind, Some((Term::Extern { .. }, _)));
-                held.facts.iter().filter_map(move |fact| match fact {
-                    Fact::Indexes(element) if container => Some((root, *element)),
-                    _ => None,
-                })
+                let container = matches!(held.structure, Some((Term::Extern { .. }, _)));
+                held.structure_constraints
+                    .iter()
+                    .filter_map(move |structure_constraint| match structure_constraint {
+                        StructureConstraint::Element(element) if container => {
+                            Some((root, *element))
+                        }
+                        _ => None,
+                    })
             })
             .filter(|(_, element)| !self.viewed.contains(element))
             .collect();
@@ -132,11 +137,11 @@ impl State {
             recorded,
             refused,
         };
-        let recorder = Recorder::Split(root);
-        let Some((kind, _)) = self.classes.held(root).kind.clone() else {
+        let recorder = Recorder::Decomposition(root);
+        let Some((structure, _)) = self.classes.held(root).structure.clone() else {
             return linked(recorded, None);
         };
-        let constructor = kind.constructor();
+        let constructor = structure.constructor();
         let view = self
             .decls
             .tree()
@@ -153,8 +158,10 @@ impl State {
                 self.class_name(root),
                 self.class_name(element)
             );
-            let refused =
-                self.refuse_conflict(at, Conflict::Fact(Fact::Indexes(element), constructor));
+            let refused = self.refuse_conflict(
+                at,
+                Conflict::StructureConstraint(StructureConstraint::Element(element), constructor),
+            );
             let members = self.classes.held(root).members.clone();
             self.no_value.extend(members);
             return linked(recorded, Some(refused));
@@ -188,20 +195,24 @@ impl State {
             &recorder,
             &mut recorded,
         );
-        let target = |state: &State, id: ClassId| match &state.classes.held(id).kind {
+        let target = |state: &State, id: ClassId| match &state.classes.held(id).structure {
             Some((Term::Ref(_, target), _)) => Some(*target),
             _ => None,
         };
         let (Some(container), Some(slice)) = (target(self, param), target(self, result)) else {
             return linked(recorded, None);
         };
-        let (Some((container_kind, _)), Some((Term::Slice(slice_element), _))) = (
-            self.classes.held(container).kind.clone(),
-            self.classes.held(slice).kind.clone(),
+        let (Some((container_structure, _)), Some((Term::Slice(slice_element), _))) = (
+            self.classes.held(container).structure.clone(),
+            self.classes.held(slice).structure.clone(),
         ) else {
             return linked(recorded, None);
         };
-        for ((_, part), (_, param_part)) in kind.parts().into_iter().zip(container_kind.parts()) {
+        for ((_, part), (_, param_part)) in structure
+            .parts()
+            .into_iter()
+            .zip(container_structure.parts())
+        {
             recorded.push(self.record(Relation::Equation(*part, *param_part), recorder.clone()));
         }
         recorded.push(self.record(Relation::Equation(element, slice_element), recorder));

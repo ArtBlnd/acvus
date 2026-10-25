@@ -1,9 +1,9 @@
 // let t;
 // t.0 = 1u8;
-// The projection t.0 gives T the kind "has component 0: τ", and the write is
-// τ ≥ u8. T's only source is that kind, and a tuple has no members, so the kind
+// The projection t.0 gives T the structure constraint "has component 0: τ", and the write is
+// τ ≥ u8. T's only source is that structure constraint, and a tuple has no members, so the structure constraint
 // names none and T takes no constructor. Nothing waits, so T
-// falls back to !, which meets every kind, the part it names being !:
+// falls back to !, which meets every structure constraint, the part it names being !:
 // 1u8 enters t.0 of type ! and does not reach it, refused
 // there.
 let T;

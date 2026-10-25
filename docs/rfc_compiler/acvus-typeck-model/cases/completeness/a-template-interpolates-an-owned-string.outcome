@@ -11,8 +11,8 @@ outcome 1
   decision `&mut out`: lend &mut place
   decision `&whole`: lend & place
   decision display: undecided
-  check `&mut out ~> display.CommonParam(1)`: Ok(Identity)
+  check `&mut out ~> display.GeneralizedParam(1)`: Ok(Identity)
   check `&whole ~> to_string.Param(0)`: Ok(Identity)
-  check `display.CommonResult <= display(..)`: Ok(Identity)
+  check `display.GeneralizedResult <= display(..)`: Ok(Identity)
   check `to_string.Result <= to_string(..)`: Ok(Identity)
   I* of a final state: []

@@ -2,7 +2,7 @@
 // f(1u8, b);               // f(u8, A) -> u8, f(u16, A) -> u16
 // The candidates differ only at the first argument, so f reads that position
 // alone; 1u8 leaves f(u8, A). The second parameter, A, is
-// in the candidates' common part, so b ⇝ A holds at once. B reaches A
+// in the candidates' generalization, so b ⇝ A holds at once. B reaches A
 // by no coercion: refused at that boundary, with f decided.
 extern type A;
 extern type B;
@@ -21,4 +21,4 @@ X = `make()`;
 must fail;
 assert f == f#0;
 assert X: B;
-assert failing [`X ~> f.CommonParam(1)`];
+assert failing [`X ~> f.GeneralizedParam(1)`];

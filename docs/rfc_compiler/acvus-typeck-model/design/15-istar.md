@@ -19,22 +19,22 @@ change it, outside a cycle.
   and another group's state at its fixpoint.
 - **What a node records into** at the end, read by the relations it records, not
   by position as the solver reads. A use, the classes its candidate would record a
-  lower bound or an equation into by the splits, those
+  lower bound or an equation into by the decompositions, those
   of its remaining candidates where it is not decided as one, and its result where it is decided `Never`: the classes a use makes anew
   are its own, and no other node reads them. Another decided node, the classes its
   own relations record into, those of the instances it made among them: the upper
   side of a lower bound or a part lower bound, the type passed into at a
   boundary, both sides of an
-  equation, and the class a kind, a fact, a LitVar or a lambda is given to. A node
+  equation, and the class a structure, a structure constraint, a LitVar or a lambda is given to. A node
   not decided, the classes at its positions. For a read of whether a class is a
   reference, a use leaves out the classes it recorded that of at once, a
   lend its place, a binding its position, and a projection of a field, a
   component, an index or a variant everything.
 - **Reach at the end.** A class reaches each class it has as a lower bound or a
-  part lower bound, along every one recorded by the end, a split's among them. By the end every
+  part lower bound, along every one recorded by the end, a decomposition's among them. By the end every
   class has taken its constructor; what a class's value comes from then is
   its sources, and what its taking a constructor recorded into its
-  parts is in the log as splits.
+  parts is in the log as decompositions.
 - **Dependency at the end.** A node depends on each node that records into a class
   reached from the classes at the positions it reads, and a binding
   on the projections on its path.

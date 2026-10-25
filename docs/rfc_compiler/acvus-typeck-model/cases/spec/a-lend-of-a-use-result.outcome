@@ -19,9 +19,9 @@ outcome 1
   check `&counts ~> get.Param(0)`: Ok(Identity)
   check `&get ~> add.Param(0)`: Ok(Identity)
   check `?z ~> get.Param(1)`: Ok(Identity)
-  check `add.Chosen(1) <= add.Common(1)`: Ok(Identity)
-  check `add.Common(1) <= N`: Ok(Identity)
-  check `get.Common(2) <= R`: Ok(Identity)
-  check `get.Var(Type(0)) <= get.Common(2)`: Ok(Identity)
+  check `add.Chosen(1) <= add.Generalized(1)`: Ok(Identity)
+  check `add.Generalized(1) <= N`: Ok(Identity)
+  check `get.Generalized(2) <= R`: Ok(Identity)
+  check `get.Var(Type(0)) <= get.Generalized(2)`: Ok(Identity)
   check `load.Result <= C`: Ok(Identity)
   I* of a final state: []

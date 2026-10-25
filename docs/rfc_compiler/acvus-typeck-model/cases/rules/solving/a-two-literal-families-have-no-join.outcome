@@ -5,5 +5,5 @@ outcome 1
   value 1: i32
   value `1.5`: f64
   value X: none
-  refusal conflict at "X: {f32, f64}": {f32, f64} vs another range
+  refusal conflict at "X: {f32, f64}": {f32, f64} vs another domain
   I* of a final state: []

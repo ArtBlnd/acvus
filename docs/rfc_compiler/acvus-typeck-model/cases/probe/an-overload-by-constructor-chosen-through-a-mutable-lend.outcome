@@ -10,5 +10,5 @@ outcome 1
   check `fill.Result <= fill(..)`: Ok(Identity)
   refusal no_value `&mut r`
   refusal no_value R
-  refusal no_value `make.Common(0)`
+  refusal no_value `make.Generalized(0)`
   I* of a final state: []

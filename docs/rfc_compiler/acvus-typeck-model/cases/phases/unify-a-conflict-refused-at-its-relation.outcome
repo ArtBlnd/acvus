@@ -15,14 +15,14 @@ start run
   record #1 @cfg: {name: String}
   record #2 1: {i8, i16, i32, i64, u8, u16, u32, u64}
   record #3 1 <= @cfg.extra
-  split #0 String: String: no parts
-  split #1 @cfg: {name: String}: no parts
-  split #2 1: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
-  range #3 1 <= @cfg.extra
+  decompose #0 String: String: no parts
+  decompose #1 @cfg: {name: String}: no parts
+  decompose #2 1: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
+  domain #3 1 <= @cfg.extra
     record #4 @cfg.extra: {i8, i16, i32, i64, u8, u16, u32, u64}
-  split #4 @cfg.extra: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
+  decompose #4 @cfg.extra: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
 step 1 run: decide `@cfg.extra`
   decide `@cfg.extra`: applied
     record #5 @cfg: field extra: @cfg.extra
-  split #5 @cfg: field extra: @cfg.extra: no parts
+  decompose #5 @cfg: field extra: @cfg.extra: no parts
   refuse: conflict at "@cfg: field extra: @cfg.extra": Object vs field extra: @cfg.extra

@@ -23,7 +23,7 @@ outcome 1
   check `X <= U`: Ok(Identity)
   check `parse_r(s) ~> qg.Param(0)`: Ok(Identity)
   check `parse_r.Result <= parse_r(s)`: Ok(Identity)
-  check `qg.Common(1) <= X`: Ok(Identity)
-  check `qg.Var(Type(0)) <= qg.Common(1)`: Ok(Identity)
+  check `qg.Generalized(1) <= X`: Ok(Identity)
+  check `qg.Var(Type(0)) <= qg.Generalized(1)`: Ok(Identity)
   check `s ~> parse_r.Param(0)`: Ok(Identity)
   I* of a final state: []

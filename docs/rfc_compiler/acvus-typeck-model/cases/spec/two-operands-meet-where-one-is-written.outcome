@@ -14,8 +14,8 @@ outcome 1
   decision `a + b`: core::add#0
   check `&a ~> a + b.Param(0)`: Ok(Composition { reborrow: false, casts: [DeclId { name: up_ref, overload: 0 }], structural: None })
   check `&b ~> a + b.Param(1)`: Ok(Identity)
-  check `a + b.Chosen(1) <= a + b.Common(1)`: Ok(Identity)
-  check `a + b.Common(1) <= R`: Ok(Identity)
+  check `a + b.Chosen(1) <= a + b.Generalized(1)`: Ok(Identity)
+  check `a + b.Generalized(1) <= R`: Ok(Identity)
   check `make_a() ~> X`: Ok(Identity)
   check `make_a.Result <= make_a()`: Ok(Identity)
   check `make_b() <= Y`: Ok(Identity)

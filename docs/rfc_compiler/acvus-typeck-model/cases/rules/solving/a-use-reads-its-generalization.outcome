@@ -7,5 +7,5 @@ outcome 1
   decision g: g#0
   check `R <= X`: Ok(Identity)
   check `X ~> g.Param(0)`: Ok(Identity)
-  check `g.CommonResult <= R`: Ok(Identity)
+  check `g.GeneralizedResult <= R`: Ok(Identity)
   I* of a final state: []

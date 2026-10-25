@@ -4,5 +4,5 @@ outcome 1
   refused
   value 1: none
   value `@n`: f64
-  refusal conflict at "1: {}": {} vs another range
+  refusal conflict at "1: {}": {} vs another domain
   I* of a final state: []

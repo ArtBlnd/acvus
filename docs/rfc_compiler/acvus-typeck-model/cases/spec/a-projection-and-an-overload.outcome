@@ -11,6 +11,6 @@ outcome 1
   check `0 <= a.x`: Ok(Identity)
   check `A ~> pick.Param(0)`: Ok(Identity)
   check `pick(a) <= A`: Ok(Identity)
-  check `pick.Chosen(0) <= pick.Common(0)`: Ok(Identity)
-  check `pick.Common(0) <= pick(a)`: Ok(Identity)
+  check `pick.Chosen(0) <= pick.Generalized(0)`: Ok(Identity)
+  check `pick.Generalized(0) <= pick(a)`: Ok(Identity)
   I* of a final state: []

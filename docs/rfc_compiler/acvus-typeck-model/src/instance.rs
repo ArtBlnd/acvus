@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, KindSource};
-use crate::node::{Common, NodeKind, NodeState};
+use crate::class::{ClassId, ClassName, StructureSource};
+use crate::node::{Generalized, NodeKind, NodeState};
 use crate::record::{Instantiated, Recording};
 use crate::relation::{Recorder, Relation, copy_name};
 use crate::solve::State;
@@ -28,7 +28,7 @@ pub struct Made {
 /// C's classes, each in its part: two of C's classes lie in one part
 /// where one of C's relations is on both, a node left undecided names both, a
 /// binding's node and the projections on its path name them, one is a part of
-/// the other's kind, or one holds a function value whose Values name a lambda
+/// the other's structure, or one holds a function value whose Values name a lambda
 /// placed in the group and the other lies in that lambda's environment, which
 /// an instance makes anew with it. A part is what an instance makes anew
 /// together, and a use of the group's function ties the positions whose types
@@ -133,8 +133,8 @@ impl State {
             tie(classes);
         }
         for &root in &c {
-            if let Some((kind, _)) = &self.classes.held(root).kind {
-                let parts = kind.parts().into_iter().map(|(_, part)| *part);
+            if let Some((structure, _)) = &self.classes.held(root).structure {
+                let parts = structure.parts().into_iter().map(|(_, part)| *part);
                 tie([root].into_iter().chain(parts).collect());
             }
         }
@@ -179,11 +179,11 @@ impl State {
             .filter(|recorded| {
                 matches!(
                     recorded.recorder,
-                    Recorder::Node(_) | Recorder::Common(_) | Recorder::Instance { .. }
+                    Recorder::Node(_) | Recorder::Generalization(_) | Recorder::Instance { .. }
                 )
             })
             .filter_map(|recorded| match &recorded.relation {
-                Relation::Kind(_, Term::Identity(name), _) => Some(name.clone()),
+                Relation::Structure(_, Term::Identity(name), _) => Some(name.clone()),
                 _ => None,
             })
             .collect()
@@ -362,17 +362,17 @@ impl<'a> Instance<'a> {
             Recorder::Node(node) if self.from.nodes[node].decision.is_none() => {
                 Recorder::Node(self.node(node))
             }
-            // A common part recorded where the node is not, at positions
+            // A generalization recorded where the node is not, at positions
             // where every candidate writes one closed type, is as
             // that of a node left undecided.
-            Recorder::Common(node)
+            Recorder::Generalization(node)
                 if self
                     .from
                     .nodes
                     .get(node)
                     .is_none_or(|node| node.decision.is_none()) =>
             {
-                Recorder::Common(self.node(node))
+                Recorder::Generalization(self.node(node))
             }
             _ => Recorder::Instance {
                 at: (*self.at).clone(),
@@ -413,7 +413,7 @@ impl<'a> Instance<'a> {
     }
 
     /// The class here of the class `id` of `from`: for a class of C, one made
-    /// anew, holding the kind `from` solved it to; for another, its closed
+    /// anew, holding the structure `from` solved it to; for another, its closed
     /// type, written.
     pub(crate) fn class(&mut self, here: &mut State, id: ClassId) -> ClassId {
         let root = self.from.root(id);
@@ -467,10 +467,10 @@ impl<'a> Instance<'a> {
         {
             here.decided.insert(made);
         }
-        if let Some((kind, KindSource::Solved)) = held.kind {
-            let term = kind.map(|_, part| self.class(here, part));
-            let recorder = self.recorder(&Recorder::Split(root));
-            let relation = Relation::Kind(made, term, KindSource::Solved);
+        if let Some((structure, StructureSource::Solved)) = held.structure {
+            let term = structure.map(|_, part| self.class(here, part));
+            let recorder = self.recorder(&Recorder::Decomposition(root));
+            let relation = Relation::Structure(made, term, StructureSource::Solved);
             self.recorded.push(here.record(relation, recorder));
         }
         made
@@ -478,7 +478,7 @@ impl<'a> Instance<'a> {
 
     /// Records here every relation of `from` on a class of C, makes anew each
     /// node `from` left undecided, and keeps the instance here.
-    /// A relation `from` split is split here too: what its split recorded is
+    /// A relation `from` decomposed is decomposed here too: what its decomposition recorded is
     /// among the relations copied, and no class of the copy takes a
     /// constructor here that it did not hold in `from`.
     /// Returns what the instance recorded here, itself the instance made.
@@ -487,8 +487,8 @@ impl<'a> Instance<'a> {
         for at in from.relations_on(&self.c) {
             let recorded = &from.log[at];
             let relation = match recorded.relation.clone() {
-                Relation::Kind(class, Term::Identity(name), source) => {
-                    Relation::Kind(class, Term::Identity(copy_name(&self.at, &name)), source)
+                Relation::Structure(class, Term::Identity(name), source) => {
+                    Relation::Structure(class, Term::Identity(copy_name(&self.at, &name)), source)
                 }
                 Relation::Values(class, lambda) if from.environment_here(&lambda) => {
                     Relation::Values(class, self.lambda(here, &lambda))
@@ -498,9 +498,9 @@ impl<'a> Instance<'a> {
             .map(|class| self.class(here, class));
             let recorder = self.recorder(&recorded.recorder);
             let entry = here.record(relation, recorder);
-            if from.split.contains(&at) {
-                here.split.insert(entry.at);
-                here.copied_split.insert(entry.at);
+            if from.decomposed.contains(&at) {
+                here.decomposed.insert(entry.at);
+                here.copied_decomposed.insert(entry.at);
             }
             self.recorded.push(entry);
         }
@@ -519,23 +519,26 @@ impl<'a> Instance<'a> {
             let kind = self.kind(here, &node.kind);
             let copy = self.node(name);
             here.add_node(&copy, kind);
-            let common = node.common.clone().map(|common| match common {
-                Common::Use { part, classes } => Common::Use {
-                    part,
-                    classes: classes
-                        .into_iter()
-                        .map(|(k, class)| (k, self.class(here, class)))
-                        .collect(),
-                },
-                Common::Lend => Common::Lend,
-            });
+            let generalized = node
+                .generalized
+                .clone()
+                .map(|generalized| match generalized {
+                    Generalized::Use { part, classes } => Generalized::Use {
+                        part,
+                        classes: classes
+                            .into_iter()
+                            .map(|(k, class)| (k, self.class(here, class)))
+                            .collect(),
+                    },
+                    Generalized::Lend => Generalized::Lend,
+                });
             let references: BTreeSet<ClassId> = node
                 .references
                 .iter()
                 .map(|&class| self.class(here, class))
                 .collect();
             let state = here.nodes.get_mut(&copy).expect("the node was added");
-            state.common = common;
+            state.generalized = generalized;
             state.references = references;
         }
         here.instances.push(Made {
@@ -556,7 +559,7 @@ impl<'a> Instance<'a> {
     }
 }
 
-/// The classes a node names: those of its kind, and those its common part
+/// The classes a node names: those of its structure, and those its generalization
 /// made and recorded whether they are references.
 fn named_by(node: &NodeState) -> Vec<ClassId> {
     let mut classes: Vec<ClassId> = match &node.kind {
@@ -586,7 +589,7 @@ fn named_by(node: &NodeState) -> Vec<ClassId> {
             .chain([*result])
             .collect(),
     };
-    if let Some(Common::Use { classes: made, .. }) = &node.common {
+    if let Some(Generalized::Use { classes: made, .. }) = &node.generalized {
         classes.extend(made.values());
     }
     classes.extend(&node.references);

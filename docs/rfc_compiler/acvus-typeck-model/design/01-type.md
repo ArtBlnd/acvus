@@ -8,7 +8,7 @@ cannot carry.
 
 A type is a finite term: one constructor, its members and its parts, each part
 again a type. `Ty` is a closed type, one that holds no equivalence class.
-`Term<P>` is the shape of a term whose parts are `P`s, which closed types and kinds
+`Term<P>` is the shape of a term whose parts are `P`s, which closed types and structures
 share.
 
 ## Not owned here
@@ -36,7 +36,7 @@ share.
 
 ## Left open for change
 
-- `Term<P>` is shared by closed types and kinds. A constructor added later is added
+- `Term<P>` is shared by closed types and structures. A constructor added later is added
   in one place, and the compiler then lists every operation that must handle it.
   `parts` and `map` are the only two functions that take a term apart part by
   part, `part` is made from `parts`, and a test checks that `parts` and `map` name

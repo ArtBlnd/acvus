@@ -1,7 +1,7 @@
 // let x = if c { { Vec::new() } } else { make() };   // make() -> Vec<u8>
 // new's T is left in the lambda's C and copied by the call's instance.
 // X joins the two Vecs, and a Vec's argument is invariant, so the
-// splits equate the copy of T with u8.
+// decompositions equate the copy of T with u8.
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 extern fn make() -> Vec<u8>;

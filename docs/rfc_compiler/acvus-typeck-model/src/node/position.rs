@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::class::{ClassId, ClassName, Fact};
+use crate::class::{ClassId, ClassName, StructureConstraint};
 use crate::program::Projection;
 use crate::sig::{SigTy, Signature};
 use crate::solve::State;
@@ -13,7 +13,7 @@ use super::{Decision, NodeKind, Read, Reads};
 
 impl State {
     /// The classes the node records into, by what each decision still open to
-    /// it records, directly or by the splits of what it records: a use, what
+    /// it records, directly or by the decompositions of what it records: a use, what
     /// a candidate left would record into (`State::would_record_by`), and its
     /// result where it is decided `!`; a lend, its result, and its place, which
     /// a lend through a reference gives a target made anew, holding nothing; a
@@ -111,32 +111,38 @@ impl State {
     }
 
     /// The classes the equivalence class of `id` is known to be a reference
-    /// to, by its kind or a kind known in part.
+    /// to, by its structure or a structure constraint.
     pub(super) fn targets(&self, id: ClassId) -> BTreeSet<ClassId> {
         let held = self.classes.held(id);
-        let by_kind = match &held.kind {
+        let by_structure = match &held.structure {
             Some((Term::Ref(_, target), _)) => Some(self.root(*target)),
             _ => None,
         };
-        let by_fact = held.facts.iter().filter_map(|fact| match fact {
-            Fact::Ref(target) => Some(self.root(*target)),
-            _ => None,
-        });
-        by_kind.into_iter().chain(by_fact).collect()
+        let by_structure_constraint =
+            held.structure_constraints
+                .iter()
+                .filter_map(|structure_constraint| match structure_constraint {
+                    StructureConstraint::Target(target) => Some(self.root(*target)),
+                    _ => None,
+                });
+        by_structure
+            .into_iter()
+            .chain(by_structure_constraint)
+            .collect()
     }
 
-    /// The classes at the positions inside `class`'s kind where `ty` writes a
+    /// The classes at the positions inside `class`'s structure where `ty` writes a
     /// term, down to where it writes a variable.
     pub(super) fn within_depth(&self, class: ClassId, ty: &SigTy) -> BTreeSet<ClassId> {
         let mut found = BTreeSet::new();
         let SigTy::Term(term) = ty else {
             return found;
         };
-        let Some((kind, _)) = &self.classes.held(class).kind else {
+        let Some((structure, _)) = &self.classes.held(class).structure else {
             return found;
         };
         for (key, written) in term.parts() {
-            if let (SigTy::Term(_), Some(&part)) = (written, kind.part(&key)) {
+            if let (SigTy::Term(_), Some(&part)) = (written, structure.part(&key)) {
                 found.insert(self.root(part));
                 found.extend(self.within_depth(part, written));
             }
@@ -194,7 +200,7 @@ impl State {
     /// target, and `callee` itself otherwise.
     pub(crate) fn called(&self, callee: ClassId) -> ClassId {
         let root = self.root(callee);
-        match &self.classes.held(root).kind {
+        match &self.classes.held(root).structure {
             Some((Term::Ref(_, target), _)) => self.root(*target),
             _ => root,
         }
@@ -226,7 +232,7 @@ impl State {
         )
     }
 
-    /// Whether the node's common part recorded whether the class is a
+    /// Whether the node's generalization recorded whether the class is a
     /// reference.
     pub(super) fn recorded_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
@@ -251,7 +257,7 @@ impl State {
     /// value, every such node; for whether a class is a
     /// reference, a node that may decide it, other than a projection of a
     /// field, a component, an index or a variant whose operand is the class
-    /// read, whose kind on it says nothing of whether it is one.
+    /// read, whose structure constraint on it says nothing of whether it is one.
     pub(crate) fn records_into(
         &self,
         recorder: &Name,
@@ -281,9 +287,9 @@ impl State {
     /// Whether what the node records may yet decide whether the class is a
     /// reference, which is decided by its lower bounds and equations:
     /// for a use, where some candidate would record one into it and its
-    /// common part has not recorded whether it is one; for a
+    /// generalization has not recorded whether it is one; for a
     /// lend, a binding and a call of a function value, where the class is the
-    /// result it records into: a lend's common part records that its result
+    /// result it records into: a lend's generalization records that its result
     /// is a reference, but not its mutability. A lend records into its place, and a binding
     /// into its position, only that it is a reference to a class, and only
     /// where it already reads as one.

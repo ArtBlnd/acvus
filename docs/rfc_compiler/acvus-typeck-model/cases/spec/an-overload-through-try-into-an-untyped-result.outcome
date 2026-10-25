@@ -12,7 +12,7 @@ outcome 1
   value `take(n)`: ()
   decision parse: undecided
   decision q: ?#0
-  check `s ~> parse.CommonParam(0)`: Ok(Identity)
+  check `s ~> parse.GeneralizedParam(0)`: Ok(Identity)
   check `take.Result <= take(n)`: Ok(Identity)
   refusal no_value K
   refusal no_value N
@@ -21,9 +21,9 @@ outcome 1
   refusal no_value `Some(n)`
   refusal no_value `P.Payload(Some)`
   refusal no_value `R.Payload(Some)`
-  refusal no_value `parse.Common(0)`
-  refusal no_value `parse.CommonResult`
+  refusal no_value `parse.Generalized(0)`
+  refusal no_value `parse.GeneralizedResult`
   refusal no_value `q.Var(Type(0))`
   refusal no_value `q.Param(0)`
-  refusal no_value `q.Common(1)`
+  refusal no_value `q.Generalized(1)`
   I* of a final state: []

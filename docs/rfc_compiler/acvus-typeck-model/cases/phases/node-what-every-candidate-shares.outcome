@@ -5,12 +5,12 @@ outcome 1
   value R: bool
   value x: u8
   decision g: g#0
-  check `g.CommonResult <= R`: Ok(Identity)
+  check `g.GeneralizedResult <= R`: Ok(Identity)
   check `x ~> g.Param(0)`: Ok(Identity)
   I* of a final state: []
 start run
   record #0 x: u8
-  record #1 g.CommonResult: bool
-  record #2 g.CommonResult <= R
-  split #0 x: u8: no parts
-  split #1 g.CommonResult: bool: no parts
+  record #1 g.GeneralizedResult: bool
+  record #2 g.GeneralizedResult <= R
+  decompose #0 x: u8: no parts
+  decompose #1 g.GeneralizedResult: bool: no parts

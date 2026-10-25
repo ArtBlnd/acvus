@@ -8,6 +8,6 @@ outcome 1
   decision `^`: xor#3
   check `1 ~> ^.Param(0)`: Ok(Identity)
   check `2 ~> ^.Param(1)`: Ok(Identity)
-  check `^.Chosen(0) <= ^.Common(0)`: Ok(Identity)
-  check `^.Common(0) <= K`: Ok(Identity)
+  check `^.Chosen(0) <= ^.Generalized(0)`: Ok(Identity)
+  check `^.Generalized(0) <= K`: Ok(Identity)
   I* of a final state: []

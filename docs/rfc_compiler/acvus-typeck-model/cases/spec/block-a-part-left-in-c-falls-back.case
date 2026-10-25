@@ -1,7 +1,7 @@
 // let x = { Vec::new() };
 // new's T is an unknown of the lambda's binding group that nothing enters
 // there, so it is left in C. Its copy in the run's binding group has
-// nothing entering it and no place it passes into, and falls back to !.
+// nothing entering it and no upper bound, and falls back to !.
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 group λ in run {

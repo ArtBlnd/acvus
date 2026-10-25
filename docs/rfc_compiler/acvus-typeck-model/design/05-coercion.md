@@ -47,7 +47,7 @@ within its family.
    W(!)}`.
 5. **No row wraps a value in an `Error`.** An `Error`, which `?` alone makes, is
    written only where a value leaves the program, and
-   `?` wraps by a split, so the Coercion table has no wrap row and
+   `?` wraps by a decomposition, so the Coercion table has no wrap row and
    no value of another type reaches an `Error` by a coercion;
    an `Error` reaches one by the enum row, its variants added.
 6. **The steps of `≤`.** `S ≤ T` joins to `T`, so the steps are those of the join:

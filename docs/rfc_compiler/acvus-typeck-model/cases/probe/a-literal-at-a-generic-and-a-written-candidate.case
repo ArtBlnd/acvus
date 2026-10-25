@@ -1,6 +1,6 @@
 // let r = f(0);            // f<T>(T) -> u8, f(u16) -> u8
 // One candidate writes a variable at the argument, the other u16; the
-// literal's range reaches both. The literal lies at the use's argument where
+// literal's domain reaches both. The literal lies at the use's argument where
 // a candidate writes a variable, so it waits for the use.
 extern fn f<T>(T) -> u8;
 extern fn f(u16) -> u8;

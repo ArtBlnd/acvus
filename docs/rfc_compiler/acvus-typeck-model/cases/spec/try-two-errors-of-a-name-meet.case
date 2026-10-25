@@ -4,7 +4,7 @@
 // Each ? reads its operand's outer constructor, Result, and is decided as
 // ?(Result<T, E>). Its exit's value is Result<O, X>, which passes
 // into f's result, an unknown: a meeting. E takes E1, a type of a
-// name, so the wrapping splits X into Error{E1(..)}; the
+// name, so the wrapping decomposes X into Error{E1(..)}; the
 // other into Error{E2(..)}. f's result's error part joins the two by ⊔ₚ,
 // uniting the variants, and the exits' ok parts, which nothing
 // enters, are filled with u8.

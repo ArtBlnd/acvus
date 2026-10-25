@@ -1,6 +1,6 @@
 // let a;
 // a[0] = 1;
-// The kind "indexes τ" names no member, so A has no source that gives a
+// The structure constraint "indexes τ" names no member, so A has no source that gives a
 // constructor and falls back to !, whose element is !: the literal
 // entering it has no type there.
 let A;

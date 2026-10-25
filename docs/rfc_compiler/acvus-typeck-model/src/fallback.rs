@@ -1,10 +1,10 @@
 //! Fallback: once every binding group is at its fixpoint, each
 //! equivalence class left unsolved with no unbroken dependency takes what
-//! its range falls back to, its family's default or `!`, or `!` where it holds
+//! its domain falls back to, its family's default or `!`, or `!` where it holds
 //! none. The value it takes is recorded as a decision, which every read after
 //! it takes as given.
 
-use crate::class::{ClassId, KindSource};
+use crate::class::{ClassId, StructureSource};
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
@@ -27,13 +27,13 @@ impl State {
     pub(crate) fn take_defaults(&mut self) -> Vec<FellBack> {
         let mut fell = Vec::new();
         for root in self.fallback_targets() {
-            let default = match &self.classes.held(root).range {
-                Some(range) => self
+            let default = match &self.classes.held(root).domain {
+                Some(domain) => self
                     .literal_preference(root)
-                    .unwrap_or_else(|| range.fallback()),
+                    .unwrap_or_else(|| domain.fallback()),
                 None => Term::Never,
             };
-            let relation = Relation::Kind(root, default.clone(), KindSource::Solved);
+            let relation = Relation::Structure(root, default.clone(), StructureSource::Solved);
             let mut recorded = Recording::default();
             recorded.push(self.record(relation, Recorder::Fallback));
             fell.push(FellBack {

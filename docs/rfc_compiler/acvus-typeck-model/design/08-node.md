@@ -3,7 +3,7 @@
 The code is `src/node/`: what each node is, its decision and
 what it records once decided in `mod.rs`, its positions and what it reads in
 `position.rs`, places in `place.rs`, overload resolution in `overload.rs`, and the
-common part in `common.rs`.
+generalization in `generalization.rs`.
 
 ## Meaning
 
@@ -14,7 +14,7 @@ goes by a coercion of the lowest rank. Decided, it records its candidate's
 signature: each argument passing into its parameter, and the result type entering
 its result. A lend reads whether its place is a reference, and gives a reference
 to the place, or to the place's target at the lesser mutability. A projection
-gives the class it applies to a kind known in part, naming a part's class: its
+gives the class it applies to a structure constraint, naming a part's class: its
 operand, or its operand's target where the operand reads as a reference. A binding
 reads its position, or lends it where its path passes a reference.
 
@@ -23,8 +23,8 @@ reads its position, or lends it where its path passes a reference.
 1. **One candidate reads nothing.** A use's candidates are the declarations its name
    reaches with as many parameters as it has arguments. It reads the
    positions where they differ, so a use with one candidate reads nothing:
-   its common part is that candidate, its type parameters made anew, recorded as its
-   text is, by the common part (`State::record_one`), and
+   its generalization is that candidate, its type parameters made anew, recorded as its
+   text is, by the generalization (`State::record_one`), and
    nothing is left to decide, so it has no node. A use with none is never decided.
 2. **A candidate's variables are made at the decision.** They are unknowns of the
    use's binding group. Only the decided candidate records, so only its
@@ -40,13 +40,13 @@ reads its position, or lends it where its path passes a reference.
    that it is a reference to a class made anew, which the lend's reference targets
    at the lesser mutability. Where the place reads otherwise, or nothing,
    the target is the place.
-6. **A Deref records at once.** A Deref has one kind to give, "a reference to `τ`",
+6. **A Deref records at once.** A Deref has one structure constraint to give, "a reference to `τ`",
    whatever its operand reads as, so it is decided as it is recorded, as a
-   use with one candidate records its candidate, and its kind is a
+   use with one candidate records its candidate, and its structure constraint is a
    source of whether its operand is a reference from the start.
 7. **Auto-deref.** A projection other than a Deref reads whether its operand is a
    reference. Where the operand reads as `&ₙ U`, it records that it is a
-   reference to a class made anew, and that class takes the projection's kind;
+   reference to a class made anew, and that class takes the projection's structure constraint;
    where it reads otherwise, or nothing, the operand takes it.
 8. **The positions of a projection and a binding**. A projection's are
    its operand, the class it names, and the target its operand is known to be a
@@ -63,7 +63,7 @@ reads its position, or lends it where its path passes a reference.
    through by auto-deref after its last Deref, since `&π` matches a reference
    itself, as in Rust. The binding learns its path's projections'
    decisions by waiting for them, since the nodes recording into its position are
-   reached along the links of the splits not yet made.
+   reached along the links of the decompositions not yet made.
 11. **What a use reads.** At each position where its candidates differ in a
    constructor or a member, the class there and the classes within the depth its
    candidates reach there, since the value read there is compared whole.
@@ -81,36 +81,36 @@ reads its position, or lends it where its path passes a reference.
    only where it already reads as one; and a call of a function value at
    its arguments. The second keeps two lends
    of one place from depending on each other.
-13. **What candidates would record**. Once the common part is recorded, a
+13. **What candidates would record**. Once the generalization is recorded, a
    candidate records its result type at the result's unknowns, into each of them,
-   and an argument the common part does not hold whole passes into its parameter's
+   and an argument the generalization does not hold whole passes into its parameter's
    type; before, its result type into the use's result. An argument passes into its parameter's type, a boundary that
-   records into that type alone, and inside the argument's kind as it is at the
-   moment each part passes into the parameter's part by the split's rule:
+   records into that type alone, and inside the argument's structure as it is at the
+   moment each part passes into the parameter's part by the decomposition's rule:
    where the parameter writes a variable, an unknown, an equation records into the
    argument's part unless it is a structural type's, whose part lower bound
    records into the variable alone; where it writes a type, a boundary records
    into that type, and the part's parts pass on into its parts. Two constructors
-   are linked as a split links them, through a reborrow's targets and the first
+   are linked as a decomposition links them, through a reborrow's targets and the first
    cast's parameter. A variable is an unknown, neither a reference nor not one, so
    a candidate records whether a class is a reference at the result's unknowns
    alone (`State::would_record_by`).
-14. **The common part**. Recorded
-   once for each undecided node (`State::record_at_once`, `Recorder::Common`):
+14. **The generalization**. Recorded
+   once for each undecided node (`State::record_generalizations`, `Recorder::Generalization`):
    - a use of several candidates records the anti-unification of their
-     signatures (`CommonPart::of`): one constructor and members kept and its parts
-     generalized in turn, an unknown made anew (`NodeAt::Common(k)`) where they
+     signatures (`Generalization::of`): one constructor and members kept and its parts
+     generalized in turn, an unknown made anew (`NodeAt::Generalized(k)`) where they
      differ, one for each tuple of the types they write there, and a reference
      not split at the top of a parameter or of the result, a cast going between
      two references of one constructor. Each unknown is recorded a
      reference, or not, where every candidate agrees there. Arguments pass into
-     the common parameters and the common result into the use's result, as a
+     the generalization's parameters and result into the use's result, as a
      decided candidate's are recorded. Where every candidate writes one closed
      type, the use's constraint there is one alone, recorded with the
      text where the group that holds it lies (`State::record_closed`), the
-     recorder still `Recorder::Common`; the node holds the other positions, which
+     recorder still `Recorder::Generalization`; the node holds the other positions, which
      the choice decides (`NodeKind::Use`, none at those it does not hold).
-     Decided, the use records an argument the common part does not hold whole
+     Decided, the use records an argument the generalization does not hold whole
      passing whole into the candidate's parameter,
      and the candidate's type at each of the result's unknowns entering it
      (`NodeAt::Chosen(k)`); its positions are those, so its result no longer
@@ -120,16 +120,16 @@ reads its position, or lends it where its path passes a reference.
    - a lend records that its result is a reference; its mutability and target it
      records when decided, so it still records into what a read of whether its
      result is a reference reads.
-   - a projection or a binding has no common part.
+   - a projection or a binding has no generalization.
    A value read leaves out only what a node records once decided: every
-   common part is in every read, the node's own included. The model's earlier
+   generalization is in every read, the node's own included. The model's earlier
    records, of the positions every candidate writes alike and of whether a
    class is a reference, are removed into it.
 15. **An argument of `!`**. An argument position the use reads, read as
    `!`, decides it with the result `!`: the result takes `!` as a lower bound, and
    nothing else is recorded. A position the use does not read is not seen.
 16. **A reference of undecided mutability.** A class read as a reference only by a
-   common part's record has a mutability the value read does not decide; a
+   generalization's record has a mutability the value read does not decide; a
    projection applies to its target all the same, and a lend or a binding whose
    lesser mutability is then undecided, a `&mut` one, decides nothing
    until the mutability is read.
@@ -159,7 +159,7 @@ reads its position, or lends it where its path passes a reference.
 21. **A use's result into a meeting**. Where the use's result
    class has no source in the value read and passes into unknowns, the result step
    narrows by the join: a candidate's result type reaches by `≤` its join with each
-   such place's other sources, as a meeting takes every value entering it; into a
+   such upper bound's other sources, as a meeting takes every value entering it; into a
    boundary, by a coercion as before (`State::meeting_places`, `rank_into_places`). A
    use whose result meets a class others enter is no longer refused against that
    class's value without it.
@@ -174,7 +174,7 @@ reads its position, or lends it where its path passes a reference.
 
 ## Left open for change
 
-- `State::record_at_once` and `CommonPart::of`: the common part of all an
+- `State::record_generalizations` and `Generalization::of`: the generalization of all an
   undecided node may become.
 - `State::defer`: when a decided node's relations are recorded, and which reads
   leave them out.

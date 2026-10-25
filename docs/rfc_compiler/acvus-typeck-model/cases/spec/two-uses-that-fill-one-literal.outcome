@@ -11,6 +11,6 @@ outcome 1
   check `?a <= X`: Ok(Identity)
   check `X ~> m.Param(0)`: Ok(Identity)
   check `X ~> n.Param(0)`: Ok(Identity)
-  check `m.CommonResult <= m(x)`: Ok(Identity)
-  check `n.CommonResult <= n(x)`: Ok(Identity)
+  check `m.GeneralizedResult <= m(x)`: Ok(Identity)
+  check `n.GeneralizedResult <= n(x)`: Ok(Identity)
   I* of a final state: []

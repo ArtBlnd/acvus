@@ -19,7 +19,7 @@ B = `new()`;
 `push(..)` = push(`&mut buf`, 1u16) @ push;
 `consume(..)` = consume(B) @ consume;
 
-// A split records the boundary ?t ⇝ u8 toward a type the declaration writes,
+// A decomposition records the boundary ?t ⇝ u8 toward a type the declaration writes,
 // which decides no value, and u16 enters ?t: B is Vec<u16>,
 // which reaches Vec<u8> by no coercion at consume(buf), the conversion taking
 // no part.

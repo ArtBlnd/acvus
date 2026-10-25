@@ -1,7 +1,7 @@
 // let (_, _) = mk();       // mk() -> (u8,)
 // The pattern records a Component projection at each of its positions,
 // and _ records nothing. The scrutinee's value (u8,) has no component 1,
-// so it is no type that meets its kind.
+// so it is no type that meets its structure constraint.
 extern fn mk() -> (u8,);
 
 let `mk()`;

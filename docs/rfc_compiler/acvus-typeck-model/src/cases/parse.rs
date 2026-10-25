@@ -182,7 +182,7 @@ pub enum Phase {
     Record,
     Unify,
     Join,
-    Split,
+    Decomposition,
     Node,
     Fallback,
 }
@@ -959,7 +959,7 @@ impl Parser<'_> {
             "record" => Phase::Record,
             "unify" => Phase::Unify,
             "join" => Phase::Join,
-            "split" => Phase::Split,
+            "decomposition" => Phase::Decomposition,
             "node" => Phase::Node,
             "fallback" => Phase::Fallback,
             _ => return None,

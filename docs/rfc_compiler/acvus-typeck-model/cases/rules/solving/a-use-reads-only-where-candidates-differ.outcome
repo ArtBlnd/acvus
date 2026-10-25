@@ -8,9 +8,9 @@ outcome 1
   value `make()`: B
   decision f: f#0
   check `1u8 ~> f.Param(0)`: Ok(Identity)
-  check `X ~> f.CommonParam(1)`: Err(None)
-  check `f.Chosen(0) <= f.Common(0)`: Ok(Identity)
-  check `f.Common(0) <= f(..)`: Ok(Identity)
+  check `X ~> f.GeneralizedParam(1)`: Err(None)
+  check `f.Chosen(0) <= f.Generalized(0)`: Ok(Identity)
+  check `f.Generalized(0) <= f(..)`: Ok(Identity)
   check `make() <= X`: Ok(Identity)
   check `make.Result <= make()`: Ok(Identity)
   I* of a final state: []

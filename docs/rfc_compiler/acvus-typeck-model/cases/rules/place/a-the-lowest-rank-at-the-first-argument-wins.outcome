@@ -6,6 +6,6 @@ outcome 1
   value R: ()
   value `make_a()`: A
   decision f: undecided
-  check `f.CommonResult <= R`: Ok(Identity)
+  check `f.GeneralizedResult <= R`: Ok(Identity)
   check `make_a.Result <= make_a()`: Ok(Identity)
   I* of a final state: []

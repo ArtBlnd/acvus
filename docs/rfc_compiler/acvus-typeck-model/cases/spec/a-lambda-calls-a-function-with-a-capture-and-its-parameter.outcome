@@ -34,11 +34,11 @@ outcome 1
   check `emit 2#λ/X <= emit 2#λ/put@9/W`: Ok(Identity)
   check `emit 2#λ/put@9/W ~> emit 2#λ/put@9/write.Param(1)`: Ok(Identity)
   check `emit 2#λ/λ result <= emit(s)`: Ok(Identity)
-  check `put@9/B ~> put@9/write.CommonParam(0)`: Ok(Identity)
+  check `put@9/B ~> put@9/write.GeneralizedParam(0)`: Ok(Identity)
   check `s <= emit 2#λ/X`: Ok(Identity)
   check `|x| .. <= EMIT`: Ok(Identity)
   check `write(b, v) <= put result`: Ok(Identity)
-  check `write.CommonResult <= write(b, v)`: Ok(Identity)
+  check `write.GeneralizedResult <= write(b, v)`: Ok(Identity)
   check `put(..) <= λ result`: Ok(Identity)
   check `put@9/put result <= put(..)`: Ok(Identity)
   I* of a final state: []

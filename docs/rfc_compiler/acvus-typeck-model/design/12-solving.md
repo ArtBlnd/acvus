@@ -8,7 +8,7 @@ of what their phases reported, `src/trace.rs`.
 
 A step solves an eligible class, fills one nothing enters, or decides an eligible
 node, and what follows at once is recorded: merged cycles of lower bounds and part
-lower bounds, splits, and LitVars meeting solved classes. With no step left, the
+lower bounds, decompositions, and LitVars meeting solved classes. With no step left, the
 fixpoint, fallback gives each unsolved class with no unbroken dependency
 its family's default or `!`, and solving resumes, until nothing falls back. The
 program is accepted where no refusal was recorded, every class has a value, every
@@ -21,12 +21,12 @@ a lower bound by `≤`, and a boundary by a coercion.
    the run's instance, so fallback applies to all of it.
 2. **Fallback is no equation.** A class that falls back holds its default as a
    class holds a joined value, so its lower bounds reach it by `≤`.
-3. **What is checked.** The relations the text and the nodes record; a split's
+3. **What is checked.** The relations the text and the nodes record; a decomposition's
    relations are parts of those.
 
 ## Left open for change
 
-- `State::splits_now` in `src/split.rs`: when a lower bound's, a part lower
+- `State::decomposes_now` in `src/decompose.rs`: when a lower bound's, a part lower
   bound's or a boundary's parts are related. What they
-  are related by is `State::split_parts`, by the one rule of
+  are related by is `State::decompose_parts`, by the one rule of
   `State::part_relation`.

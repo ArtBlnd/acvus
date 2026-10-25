@@ -18,6 +18,6 @@ outcome 1
   check `R <= X`: Ok(Identity)
   check `X ~> takes_u8.Param(0)`: Ok(Identity)
   check `takes_u8.Result <= takes_u8(x)`: Ok(Identity)
-  check `x + 1.Chosen(1) <= x + 1.Common(1)`: Ok(Identity)
-  check `x + 1.Common(1) <= R`: Ok(Identity)
+  check `x + 1.Chosen(1) <= x + 1.Generalized(1)`: Ok(Identity)
+  check `x + 1.Generalized(1) <= R`: Ok(Identity)
   I* of a final state: []

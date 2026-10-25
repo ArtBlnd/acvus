@@ -1,5 +1,5 @@
 // let n = parse("7")?; take(n);   // as above, with no tail
-// As above: n's one place is take's u8, so n: u8 and parse(Option<u8>).
+// As above: n's one upper bound is take's u8, so n: u8 and parse(Option<u8>).
 extern fn parse(&str) -> Option<u8>;
 extern fn parse(&str) -> Option<u16>;
 extern fn take(u8);

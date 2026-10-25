@@ -1,8 +1,8 @@
 // let mut v = Vec::new();  // new() -> Vec<T>
 // look(&mut v);            // look(&Vec<u8>)
-// The constructors &mut and & differ, and the split links the targets by its
+// The constructors &mut and & differ, and the decomposition links the targets by its
 // one rule: Vec<u8> is a type the declaration writes, so V ⇝ Vec<u8>,
-// whose split records T ⇝ u8 for new's T. Nothing enters T, which is filled
+// whose decomposition records T ⇝ u8 for new's T. Nothing enters T, which is filled
 // with u8, so V = Vec<u8>.
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;

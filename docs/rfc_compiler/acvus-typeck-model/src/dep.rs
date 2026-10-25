@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::class::{ClassId, Fact};
+use crate::class::{ClassId, StructureConstraint};
 use crate::node::Reads;
 use crate::relation::Relation;
 use crate::solve::State;
@@ -31,8 +31,8 @@ pub(crate) enum Edge {
     /// unsolved, or it is the class `e?`'s wrapping passes into, its error
     /// part unsolved.
     Taking,
-    /// An equivalence class on an unsolved one that has it as a part by a kind
-    /// known in part, taking a constructor. A class holding a kind is
+    /// An equivalence class on an unsolved one that has it as a part by a structure constraint,
+    /// taking a constructor. A class holding a structure is
     /// solved.
     Part,
     /// An equivalence class on a node at whose position it lies, or within the
@@ -50,10 +50,10 @@ pub(crate) enum Edge {
 /// What meets an unbroken dependency on an unsolved equivalence class
 /// besides its being solved.
 pub(crate) struct Met {
-    /// The classes holding no kind and a range that a value reaching a class
+    /// The classes holding no structure and a domain that a value reaching a class
     /// they bound stays within, that wait for nothing: such a lower bound
-    /// gives its range at once (`State::range_up`) and is not waited for.
-    pub(crate) ranged: BTreeSet<ClassId>,
+    /// gives its domain at once (`State::domain_up`) and is not waited for.
+    pub(crate) giving_domains: BTreeSet<ClassId>,
     /// The classes nothing enters.
     pub(crate) nothing_enters: BTreeSet<ClassId>,
 }
@@ -140,9 +140,12 @@ impl State {
                         }
                     }
                     // A function value passing into a function type records,
-                    // at its split, into the parameters in the environment of
+                    // at its decomposition, into the parameters in the environment of
                     // each lambda whose value reaches it.
-                    if matches!(self.classes.held(to).kind, Some((Term::Function { .. }, _))) {
+                    if matches!(
+                        self.classes.held(to).structure,
+                        Some((Term::Function { .. }, _))
+                    ) {
                         for lambda in self.values_of(from) {
                             let mut held = self.environment_of(&lambda);
                             held.pop();
@@ -169,8 +172,8 @@ impl State {
                 add(Vertex::Class(root), Vertex::Outside, Edge::Chosen);
             }
             if !self.is_solved(root) {
-                for fact in &self.classes.held(root).facts {
-                    let part = self.root(fact.class());
+                for structure_constraint in &self.classes.held(root).structure_constraints {
+                    let part = self.root(structure_constraint.class());
                     if part != root && !self.is_solved(part) {
                         add(Vertex::Class(part), Vertex::Class(root), Edge::Part);
                     }
@@ -200,9 +203,9 @@ impl State {
         }
         // The nodes that record into a class, each with the class at
         // whose position it lies, reached along the dependencies between
-        // classes and the links a relation not yet split will make between
+        // classes and the links a relation not yet decomposed will make between
         // the parts of its two sides.
-        let links = self.split_links();
+        let links = self.decomposition_links();
         let recording = |class: ClassId, edges: &BTreeMap<Vertex, BTreeSet<(Vertex, Edge)>>| {
             let mut classes = BTreeSet::from([self.root(class)]);
             let mut work = vec![self.root(class)];
@@ -256,8 +259,8 @@ impl State {
         Graph { edges, component }
     }
 
-    /// For each relation not yet split, the parts its split will relate,
-    /// among those its two sides hold now, by a kind, a kind known in part or
+    /// For each relation not yet decomposed, the parts its decomposition will relate,
+    /// among those its two sides hold now, by a structure, a structure constraint or
     /// a function value's environment: each part that will
     /// take a relation, with the part of the other side it will take it from.
     /// A lower bound's or a part lower bound's upper side takes from the lower,
@@ -265,7 +268,7 @@ impl State {
     /// parameter's environment parameter from the type's parameter, a function
     /// type's result from the environment's result, and the class `e?`'s
     /// wrapping passes into from its error part.
-    pub(crate) fn split_links(&self) -> BTreeMap<ClassId, BTreeSet<ClassId>> {
+    pub(crate) fn decomposition_links(&self) -> BTreeMap<ClassId, BTreeSet<ClassId>> {
         let mut links: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
         let mut link = |taking: ClassId, from: ClassId| {
             let (taking, from) = (self.root(taking), self.root(from));
@@ -274,7 +277,7 @@ impl State {
             }
         };
         for (i, recorded) in self.log.iter().enumerate() {
-            if self.split.contains(&i) {
+            if self.decomposed.contains(&i) {
                 continue;
             }
             let (from, to) = match recorded.relation {
@@ -300,15 +303,15 @@ impl State {
         links
     }
 
-    /// The parts a class holds now, by name: those of its kind, those its
-    /// kinds known in part name, and, for a function value, the parameter and
+    /// The parts a class holds now, by name: those of its structure, those its
+    /// structure constraints name, and, for a function value, the parameter and
     /// result types in its lambdas' environments at a function type's
     /// parameters and result.
     fn parts_held(&self, id: ClassId) -> BTreeMap<PartKey, ClassId> {
         let root = self.root(id);
         let held = self.classes.held(root);
         let mut parts = BTreeMap::new();
-        match &held.kind {
+        match &held.structure {
             Some((Term::FunctionValue { .. }, _)) => {
                 for lambda in self.values_of(root) {
                     let mut environment = self.environment_of(&lambda);
@@ -322,40 +325,40 @@ impl State {
                     }
                 }
             }
-            Some((kind, _)) => {
-                for (key, &part) in kind.parts() {
+            Some((structure, _)) => {
+                for (key, &part) in structure.parts() {
                     parts.insert(key, part);
                 }
             }
             None => {
-                for fact in &held.facts {
-                    let key = match fact {
-                        Fact::Ref(_) => PartKey::Target,
-                        Fact::Field(name, _) => PartKey::Field(name.clone()),
-                        Fact::Component(i, _) => PartKey::Component(*i),
-                        Fact::Indexes(_) => PartKey::Element,
-                        Fact::Variant { variant, .. } => match variant.as_str() {
+                for structure_constraint in &held.structure_constraints {
+                    let key = match structure_constraint {
+                        StructureConstraint::Target(_) => PartKey::Target,
+                        StructureConstraint::Field(name, _) => PartKey::Field(name.clone()),
+                        StructureConstraint::Component(i, _) => PartKey::Component(*i),
+                        StructureConstraint::Element(_) => PartKey::Element,
+                        StructureConstraint::Payload { variant, .. } => match variant.as_str() {
                             SOME | NONE => PartKey::Payload(Name::new(SOME)),
                             _ => PartKey::Payload(variant.clone()),
                         },
                     };
-                    parts.insert(key, fact.class());
+                    parts.insert(key, structure_constraint.class());
                 }
             }
         }
         parts
     }
 
-    /// The roots of the classes at any depth within the kind of `id`'s
+    /// The roots of the classes at any depth within the structure of `id`'s
     /// equivalence class.
     pub(crate) fn within(&self, id: ClassId) -> BTreeSet<ClassId> {
         let mut seen = BTreeSet::new();
         let mut work = vec![self.root(id)];
         while let Some(at) = work.pop() {
-            let Some((kind, _)) = &self.classes.held(at).kind else {
+            let Some((structure, _)) = &self.classes.held(at).structure else {
                 continue;
             };
-            for (_, part) in kind.parts() {
+            for (_, part) in structure.parts() {
                 let part = self.root(*part);
                 if seen.insert(part) {
                     work.push(part);
@@ -403,7 +406,7 @@ impl State {
     }
 
     /// Whether an unbroken dependency on `to` is met without its being solved:
-    /// a lower bound or part lower bound that is ranged or that nothing
+    /// a lower bound or part lower bound that gives a domain or that nothing
     /// enters, or, in a state a value read
     /// is taken from, a class that gives nothing; and a node's on a
     /// node once that is decided, whose relations a class depends on until they
@@ -412,7 +415,7 @@ impl State {
         match (to, edge) {
             (Vertex::Node(node), Edge::Reads) => self.nodes[node].decision.is_some(),
             (Vertex::Class(class), Edge::Lower) => {
-                met.ranged.contains(class)
+                met.giving_domains.contains(class)
                     || met.nothing_enters.contains(class)
                     || self.gives_nothing(*class)
             }
@@ -422,10 +425,10 @@ impl State {
     }
 
     /// What meets an unbroken dependency on an unsolved class in `graph`: the
-    /// classes nothing enters, and then the ranged ones.
+    /// classes nothing enters, and then the ones giving a domain.
     pub(crate) fn met_in(&self, graph: &Graph) -> Met {
         let mut met = Met {
-            ranged: BTreeSet::new(),
+            giving_domains: BTreeSet::new(),
             nothing_enters: self.nothing_enters_in(graph),
         };
         loop {
@@ -433,8 +436,8 @@ impl State {
                 .classes
                 .roots()
                 .filter(|&root| {
-                    self.gives_its_range_up(root)
-                        && !met.ranged.contains(&root)
+                    self.gives_its_domain_up(root)
+                        && !met.giving_domains.contains(&root)
                         && !self.is_foreign(root)
                 })
                 .filter(|&root| {
@@ -446,24 +449,24 @@ impl State {
             if more.is_empty() {
                 return met;
             }
-            met.ranged.extend(more);
+            met.giving_domains.extend(more);
         }
     }
 
-    /// Whether the class holds no kind and a range that a value reaching a
-    /// class it bounds stays within (`Range::upward`).
-    pub(crate) fn gives_its_range_up(&self, root: ClassId) -> bool {
+    /// Whether the class holds no structure and a domain that a value reaching a
+    /// class it bounds stays within (`Domain::upward`).
+    pub(crate) fn gives_its_domain_up(&self, root: ClassId) -> bool {
         let held = self.classes.held(root);
-        held.kind.is_none()
+        held.structure.is_none()
             && held
-                .range
+                .domain
                 .as_ref()
-                .is_some_and(|range| range.upward().is_some())
+                .is_some_and(|domain| domain.upward().is_some())
     }
 
     /// The equivalence classes nothing enters: unsolved, holding no
-    /// kind, no range that admits no `!`, which only a literal, a value, gives,
-    /// and no kind known in part, each of their lower bounds
+    /// structure, no domain that admits no `!`, which only a literal, a value, gives,
+    /// and no structure constraint, each of their lower bounds
     /// and part lower bounds one nothing enters, and each of their unbroken
     /// dependencies met, as one on a lower bound or a part lower bound nothing
     /// enters is. In a state a value read is taken from, a class that
@@ -482,12 +485,12 @@ impl State {
                     !self.is_solved(root)
                         && !self.has_no_value(root)
                         && !self.is_foreign(root)
-                        && held.kind.is_none()
+                        && held.structure.is_none()
                         && held
-                            .range
+                            .domain
                             .as_ref()
-                            .is_none_or(|range| range.admits(&Constructor::Never))
-                        && held.facts.is_empty()
+                            .is_none_or(|domain| domain.admits(&Constructor::Never))
+                        && held.structure_constraints.is_empty()
                 })
                 .filter(|&root| {
                     self.lower_bounds(root)
@@ -572,10 +575,10 @@ impl State {
 
     fn has_work(&self, root: ClassId, graph: &Graph) -> bool {
         let held = self.classes.held(root);
-        if held.kind.is_some() {
+        if held.structure.is_some() {
             return true;
         }
-        if !self.fact_heads(root).is_empty() || self.range_head(root).is_some() {
+        if !self.constraint_heads(root).is_empty() || self.domain_head(root).is_some() {
             return true;
         }
         self.lower_bounds(root).into_iter().any(|lower| {

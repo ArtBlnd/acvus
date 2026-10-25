@@ -115,9 +115,9 @@ impl State {
                 Relation::Boundary { from, to } => (from, to, false),
                 Relation::PartLowerBound { .. }
                 | Relation::Equation(..)
-                | Relation::Fact(..)
-                | Relation::Kind(..)
-                | Relation::Range(..)
+                | Relation::StructureConstraint(..)
+                | Relation::Structure(..)
+                | Relation::Domain(..)
                 | Relation::Values(..)
                 | Relation::Wrap { .. } => continue,
             };
@@ -153,7 +153,7 @@ impl State {
 
     /// The lambdas the function values that the declared conversion `id`
     /// carries from `from` bring where they reach in `to`, which the Values
-    /// there do not name. The split links nothing through a
+    /// there do not name. The decomposition links nothing through a
     /// conversion, so nothing records them there: each function value
     /// at a position the conversion's parameter writes a variable reaches the
     /// one at the same place of each position its result writes it, and its
@@ -187,9 +187,9 @@ impl State {
         match ty {
             SigTy::Var(var) => vars.entry(*var).or_default().push(self.root(at)),
             SigTy::Term(term) => {
-                let kind = self.held_kind(at);
+                let structure = self.held_structure(at);
                 for (key, part) in term.parts() {
-                    let held = kind
+                    let held = structure
                         .part(&key)
                         .expect("a conversion writes the shape of the class it reaches");
                     self.classes_at_vars(part, *held, vars);
@@ -201,8 +201,8 @@ impl State {
     /// Each lambda a function value in `from` brings that the function value
     /// at its place in `to` does not name, the two of one type.
     fn unnamed_at(&self, from: ClassId, to: ClassId, unnamed: &mut BTreeSet<Name>) {
-        let kind = self.held_kind(from);
-        if let Term::FunctionValue { .. } = kind {
+        let structure = self.held_structure(from);
+        if let Term::FunctionValue { .. } = structure {
             let named = self.values_of(to);
             unnamed.extend(
                 self.values_of(from)
@@ -211,8 +211,8 @@ impl State {
             );
             return;
         }
-        let reached = self.held_kind(to);
-        for (key, part) in kind.parts() {
+        let reached = self.held_structure(to);
+        for (key, part) in structure.parts() {
             let into = reached
                 .part(&key)
                 .expect("a conversion binds one type at a variable");
@@ -220,12 +220,12 @@ impl State {
         }
     }
 
-    /// The kind of a class with a value.
-    fn held_kind(&self, id: ClassId) -> Term<ClassId> {
-        let Some((kind, _)) = self.classes.held(self.root(id)).kind.clone() else {
-            unreachable!("a class with a value holds its kind");
+    /// The structure of a class with a value.
+    fn held_structure(&self, id: ClassId) -> Term<ClassId> {
+        let Some((structure, _)) = self.classes.held(self.root(id)).structure.clone() else {
+            unreachable!("a class with a value holds its structure");
         };
-        kind
+        structure
     }
 
     pub fn outcome(&self) -> Outcome {

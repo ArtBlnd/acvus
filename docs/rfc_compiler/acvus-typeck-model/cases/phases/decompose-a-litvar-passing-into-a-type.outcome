@@ -10,11 +10,11 @@ start run
   record #0 W: u8
   record #1 0: {i8, i16, i32, i64, u8, u16, u32, u64}
   record #2 0 ~> W
-  split #0 W: u8: no parts
-  split #1 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
+  decompose #0 W: u8: no parts
+  decompose #1 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
   row literal 0
     record #3 0: {u8}
-  split #3 0: {u8}: no parts
+  decompose #3 0: {u8}: no parts
 step 1 run: solve 0
   join 0: Scalar(Int(U8))
-  split #2 0 ~> W: parts
+  decompose #2 0 ~> W: parts

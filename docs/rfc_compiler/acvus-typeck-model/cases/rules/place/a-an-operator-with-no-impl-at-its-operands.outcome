@@ -15,5 +15,5 @@ outcome 1
   check `1u8 <= X`: Ok(Identity)
   check `2u16 <= Y`: Ok(Identity)
   refusal no_value R
-  refusal no_value `x + y.Common(1)`
+  refusal no_value `x + y.Generalized(1)`
   I* of a final state: []

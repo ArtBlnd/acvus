@@ -7,11 +7,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, KindSource};
+use crate::class::{ClassId, ClassName, StructureSource};
+use crate::domain::Domain;
 use crate::instance::Instance;
 use crate::node::{NodeKind, NodeState};
 use crate::program::{Function, Item, Origin, Part, Place, Position, Program, TextClass};
-use crate::range::Range;
 use crate::relation::{Recorded, Recorder, Relation};
 use crate::sig::{SigTy, SigVar};
 use crate::solve::State;
@@ -88,19 +88,19 @@ impl State {
             match &class.origin {
                 Origin::Var => {}
                 Origin::Lit(lit) => {
-                    let relation = Relation::Range(id, Range::of_literal(lit));
+                    let relation = Relation::Domain(id, Domain::of_literal(lit));
                     recorded.push(self.record(relation, Recorder::Origin));
                 }
                 Origin::Written(term) | Origin::Host(term) | Origin::Outward(term) => {
                     let term = term.clone().map(|_, part| self.text(&part));
-                    let relation = Relation::Kind(id, term, KindSource::Written);
+                    let relation = Relation::Structure(id, term, StructureSource::Written);
                     recorded.push(self.record(relation, Recorder::Origin));
                 }
                 Origin::Lambda(lambda) => {
                     let function = program.function(lambda).expect("the lambda is a function");
                     let arity = function.params.len();
                     let term = Term::FunctionValue { arity };
-                    let relation = Relation::Kind(id, term, KindSource::Written);
+                    let relation = Relation::Structure(id, term, StructureSource::Written);
                     recorded.push(self.record(relation, Recorder::Origin));
                     let relation = Relation::Values(id, lambda.clone());
                     recorded.push(self.record(relation, Recorder::Origin));
@@ -198,7 +198,7 @@ impl State {
                 } => {
                     // Of several candidates, the positions where every
                     // candidate writes one closed type are recorded apart, by
-                    // the common part; the node holds the rest.
+                    // the generalization; the node holds the rest.
                     let several = self.candidates(callee, args.len()).len() >= 2;
                     let closed: BTreeSet<Position> = if several {
                         let sigs: Vec<crate::sig::Signature> = self
@@ -206,11 +206,12 @@ impl State {
                             .into_iter()
                             .map(|decl| decl.sig.clone())
                             .collect();
-                        let common =
-                            crate::node::common::CommonPart::of(&sigs.iter().collect::<Vec<_>>());
+                        let generalization = crate::node::generalization::Generalization::of(
+                            &sigs.iter().collect::<Vec<_>>(),
+                        );
                         item.positions()
                             .into_iter()
-                            .filter(|&position| common.is_closed_at(position))
+                            .filter(|&position| generalization.is_closed_at(position))
                             .collect()
                     } else {
                         BTreeSet::new()
@@ -294,7 +295,7 @@ impl State {
         let node = NodeState {
             kind,
             decision: None,
-            common: None,
+            generalized: None,
             references: BTreeSet::new(),
         };
         if self.nodes.insert(name.clone(), node).is_some() {
@@ -415,7 +416,7 @@ impl State {
         self.classes.grow(&self.arena);
         self.decided.insert(class);
         recorded.push(self.record(
-            Relation::Kind(class, term, KindSource::Written),
+            Relation::Structure(class, term, StructureSource::Written),
             recorder.clone(),
         ));
         class

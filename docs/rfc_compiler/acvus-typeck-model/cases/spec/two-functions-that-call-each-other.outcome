@@ -49,8 +49,8 @@ outcome 1
   check `even@20/&n e ~> even@20/n == 0 e.Param(0)`: Ok(Identity)
   check `even@20/RE <= even(10u8)`: Ok(Identity)
   check `even@20/SE ~> even@20/NO`: Err(None)
-  check `even@20/n - 1 e.Chosen(1) <= even@20/n - 1 e.Common(1)`: Ok(Identity)
-  check `even@20/n - 1 e.Common(1) <= even@20/SE`: Ok(Identity)
+  check `even@20/n - 1 e.Chosen(1) <= even@20/n - 1 e.Generalized(1)`: Ok(Identity)
+  check `even@20/n - 1 e.Generalized(1) <= even@20/SE`: Ok(Identity)
   check `EQE ~> CE`: Ok(Identity)
   check `EQO ~> CO`: Ok(Identity)
   check `FO <= RO`: Ok(Identity)
@@ -58,9 +58,9 @@ outcome 1
   check `RO <= odd(n - 1)`: Ok(Identity)
   check `TE <= RE`: Ok(Identity)
   check `even(n - 1) <= RO`: Ok(Identity)
-  check `n == 0 e.CommonResult <= EQE`: Ok(Identity)
-  check `n == 0 o.CommonResult <= EQO`: Ok(Identity)
+  check `n == 0 e.GeneralizedResult <= EQE`: Ok(Identity)
+  check `n == 0 o.GeneralizedResult <= EQO`: Ok(Identity)
   check `odd(n - 1) <= RE`: Ok(Identity)
   refusal no_value `even@20/SO`
-  refusal no_value `even@20/n - 1 o.Common(1)`
+  refusal no_value `even@20/n - 1 o.Generalized(1)`
   I* of a final state: []

@@ -12,7 +12,7 @@ outcome 1
   decision get: get#0
   check `&rs ~> get.Param(0)`: Ok(Identity)
   check `?z ~> get.Param(1)`: Ok(Identity)
-  check `get.Common(2) <= R`: Ok(Identity)
-  check `get.Var(Type(0)) <= get.Common(2)`: Ok(Identity)
+  check `get.Generalized(2) <= R`: Ok(Identity)
+  check `get.Var(Type(0)) <= get.Generalized(2)`: Ok(Identity)
   check `load.Result <= C`: Ok(Identity)
   I* of a final state: []

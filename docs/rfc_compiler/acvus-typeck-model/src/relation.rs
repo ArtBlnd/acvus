@@ -6,8 +6,10 @@
 
 use std::fmt;
 
-use crate::class::{Arena, ClassId, Fact, KindSource, NamedFact};
-use crate::range::Range;
+use crate::class::{
+    Arena, ClassId, NamedStructureConstraint, StructureConstraint, StructureSource,
+};
+use crate::domain::Domain;
 use crate::ty::{Name, Term};
 
 /// A relation recorded in equivalence classes.
@@ -16,31 +18,31 @@ pub enum Relation {
     /// `τ ≤ α`, which a meeting records, and a use's result type
     /// entering its result.
     LowerBound { lower: ClassId, upper: ClassId },
-    /// `τ ≤ₚ α`, which a split records between the parts of a structural type
-    /// where the place the value's part passes into is a meeting.
+    /// `τ ≤ₚ α`, which a decomposition records between the parts of a structural type
+    /// where the upper bound of the value's part is a meeting.
     PartLowerBound { lower: ClassId, upper: ClassId },
     /// `T ⇝ U`, which a boundary records.
     Boundary { from: ClassId, to: ClassId },
     /// An equation, which an invariant place records.
     Equation(ClassId, ClassId),
-    /// A kind known in part, which a projection records.
-    Fact(ClassId, Fact),
-    /// A kind the class holds: a type the text or a declaration writes,
-    /// or, in a copy of C, the kind the class held where its binding
+    /// A structure constraint, which a projection records.
+    StructureConstraint(ClassId, StructureConstraint),
+    /// A structure the class holds: a type the text or a declaration writes,
+    /// or, in a copy of C, the structure the class held where its binding
     /// group was solved.
-    Kind(ClassId, Term<ClassId>, KindSource),
+    Structure(ClassId, Term<ClassId>, StructureSource),
     /// The constructors the class's value may take, which a literal, a node's
-    /// common part or a lend gives before the class takes one.
-    Range(ClassId, Range),
+    /// generalization or a lend gives before the class takes one.
+    Domain(ClassId, Domain),
     /// A lambda the Values of the class's function value names.
     Values(ClassId, Name),
-    /// `e?`'s error value of the type `from` wrapped into `to`, which a split
+    /// `e?`'s error value of the type `from` wrapped into `to`, which a decomposition
     /// relates once `from` takes a constructor.
     Wrap { from: ClassId, to: ClassId },
 }
 
 impl Relation {
-    /// The classes the relation names, a kind's parts among them.
+    /// The classes the relation names, a structure's parts among them.
     pub fn classes(&self) -> Vec<ClassId> {
         match self {
             Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper } => {
@@ -48,11 +50,13 @@ impl Relation {
             }
             Relation::Boundary { from, to } | Relation::Wrap { from, to } => vec![*from, *to],
             Relation::Equation(a, b) => vec![*a, *b],
-            Relation::Fact(class, fact) => vec![*class, fact.class()],
-            Relation::Kind(class, term, _) => std::iter::once(*class)
+            Relation::StructureConstraint(class, structure_constraint) => {
+                vec![*class, structure_constraint.class()]
+            }
+            Relation::Structure(class, term, _) => std::iter::once(*class)
                 .chain(term.parts().into_iter().map(|(_, part)| *part))
                 .collect(),
-            Relation::Range(class, _)
+            Relation::Domain(class, _)
             | Relation::Values(class, _) => vec![*class],
         }
     }
@@ -79,15 +83,15 @@ impl Relation {
                 let a = f(a);
                 Relation::Equation(a, f(b))
             }
-            Relation::Fact(class, fact) => {
+            Relation::StructureConstraint(class, structure_constraint) => {
                 let class = f(class);
-                Relation::Fact(class, fact.map(f))
+                Relation::StructureConstraint(class, structure_constraint.map(f))
             }
-            Relation::Kind(class, term, source) => {
+            Relation::Structure(class, term, source) => {
                 let class = f(class);
-                Relation::Kind(class, term.map(|_, part| f(part)), source)
+                Relation::Structure(class, term.map(|_, part| f(part)), source)
             }
-            Relation::Range(class, range) => Relation::Range(f(class), range),
+            Relation::Domain(class, domain) => Relation::Domain(f(class), domain),
             Relation::Values(class, lambda) => Relation::Values(f(class), lambda),
             Relation::Wrap { from, to } => Relation::Wrap {
                 from: f(from),
@@ -108,15 +112,15 @@ pub enum Recorder {
     /// decided.
     Node(Name),
     /// The use, lend, projection or binding of this name before it was
-    /// decided: the common part of all it may become, which holds whatever
+    /// decided: the generalization of all it may become, which holds whatever
     /// it is decided as.
-    Common(Name),
+    Generalization(Name),
     /// The equivalence class of this class taking a constructor.
-    Split(ClassId),
+    Decomposition(ClassId),
     /// A cycle of lower bounds alone, merged into one equivalence class.
     Cycle,
     /// The function value `from` passing into the function type `to`, whose
-    /// split makes an instance of each lambda its Values names, as though the
+    /// decomposition makes an instance of each lambda its Values names, as though the
     /// function type called it.
     FunctionType { from: ClassId, to: ClassId },
     /// The I\* check, making an instance of a lambda's C that no call made, in
@@ -143,7 +147,7 @@ impl Recorder {
     /// read derives it again from the relations that remain.
     pub fn is_derived(&self) -> bool {
         match self {
-            Recorder::Split(_)
+            Recorder::Decomposition(_)
             | Recorder::Cycle
             | Recorder::FunctionType { .. }
             | Recorder::Row(_) => true,
@@ -151,7 +155,7 @@ impl Recorder {
             Recorder::Origin
             | Recorder::Text(_)
             | Recorder::Node(_)
-            | Recorder::Common(_)
+            | Recorder::Generalization(_)
             | Recorder::Check
             | Recorder::Fallback => false,
         }
@@ -160,7 +164,7 @@ impl Recorder {
     /// The nodes it is recorded by, a value read leaving any of them out
     /// leaving it out: a node's own relation names that node, and a
     /// copy in an instance names what made the instance and, by `copy_name`,
-    /// the nodes the relation it copies is recorded by. A node's common part
+    /// the nodes the relation it copies is recorded by. A node's generalization
     /// names none: it is not recorded by the node's being decided, so no
     /// read leaves it out.
     pub fn nodes(&self) -> Vec<Name> {
@@ -173,8 +177,8 @@ impl Recorder {
                 .collect(),
             Recorder::Origin
             | Recorder::Text(_)
-            | Recorder::Common(_)
-            | Recorder::Split(_)
+            | Recorder::Generalization(_)
+            | Recorder::Decomposition(_)
             | Recorder::Cycle
             | Recorder::FunctionType { .. }
             | Recorder::Row(_)
@@ -190,11 +194,11 @@ impl Recorder {
         match self {
             Recorder::Text(_)
             | Recorder::Node(_)
-            | Recorder::Common(_)
+            | Recorder::Generalization(_)
             | Recorder::FunctionType { .. } => true,
             Recorder::Instance { of, .. } => of.is_entering(),
             Recorder::Origin
-            | Recorder::Split(_)
+            | Recorder::Decomposition(_)
             | Recorder::Cycle
             | Recorder::Row(_)
             | Recorder::Check
@@ -233,18 +237,18 @@ impl fmt::Display for Named<'_> {
             }
             Relation::Boundary { from, to } => write!(f, "{} ~> {}", name(from), name(to)),
             Relation::Equation(a, b) => write!(f, "{} = {}", name(a), name(b)),
-            Relation::Fact(class, fact) => {
-                let fact = NamedFact {
-                    fact,
+            Relation::StructureConstraint(class, structure_constraint) => {
+                let structure_constraint = NamedStructureConstraint {
+                    structure_constraint,
                     arena: self.arena,
                 };
-                write!(f, "{}: {fact}", name(class))
+                write!(f, "{}: {structure_constraint}", name(class))
             }
-            Relation::Kind(class, term, _) => {
+            Relation::Structure(class, term, _) => {
                 let term = term.clone().map(|_, part| name(&part).clone());
                 write!(f, "{}: {term}", name(class))
             }
-            Relation::Range(class, range) => write!(f, "{}: {range}", name(class)),
+            Relation::Domain(class, domain) => write!(f, "{}: {domain}", name(class)),
             Relation::Values(class, lambda) => {
                 write!(f, "{}: Values contains {lambda}", name(class))
             }

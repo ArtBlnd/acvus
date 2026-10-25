@@ -21,16 +21,16 @@ met.
    depends on it, so the dependencies within one strongly connected
    component are broken and those between components are not.
 2. **Within, at any depth.** A class lies within the `τ` of `τ ≤ α` or the `U` of
-   `α ⇝ U` at any depth of their kinds. Read as the direct parts only,
-   a part of a part would take its value before `α`'s split records the equation an
+   `α ⇝ U` at any depth of their structures. Read as the direct parts only,
+   a part of a part would take its value before `α`'s decomposition records the equation an
    invariant part gives.
 3. **A LitVar lower bound is not waited for.** A lower bound holding only a LitVar
    and waiting for nothing gives its LitVar, which the join unifies, so the
    class it bounds may be solved.
 4. **The part row.** A part depends on the classes it is a part of taking a
-   constructor. A class holding a kind is solved, so
-   the row holds of every part of a kind already; a class a kind known in part
-   names depends on the unsolved class holding that kind (`Edge::Part`).
+   constructor. A class holding a structure is solved, so
+   the row holds of every part of a structure already; a class a structure constraint
+   names depends on the unsolved class holding that structure (`Edge::Part`).
    Without it, the target a lend makes for a place read as a reference, which
    nothing enters, was filled before its place took the constructor that equates
    it with the place's own target, and the outcome depended on the order
@@ -60,14 +60,14 @@ met.
    class has a source still to come, a use that only reads it waits for that source
    and is not waited for. Four cases refused at an undecided use now give the
    classes at its arguments their values, the refusal unchanged.
-9. **What a split not yet made will relate**.
-   One rule for every relation not yet split: the side that will take a relation
-   waits for the class whose taking a constructor splits it (`Edge::Taking`): a
+9. **What a decomposition not yet made will relate**.
+   One rule for every relation not yet decomposed: the side that will take a relation
+   waits for the class whose taking a constructor decomposes it (`Edge::Taking`): a
    part of `τ` in `τ ≤ α`, a part of `U` in `α ⇝ U`, a part at a parameter of a
    function value, and the class `e?`'s wrapping passes into. And the nodes
    recording into a class are reached along the parts of the two sides such a
-   split will link, among those they hold now by a kind, a kind known in part
-   or a function value's environment (`State::split_links`), so a pattern on a
+   decomposition will link, among those they hold now by a structure, a structure constraint
+   or a function value's environment (`State::decomposition_links`), so a pattern on a
    variant's payload waits for the lend that makes it a reference, and a binding for
    its path's projections. The exclusion of a field's, a component's, an index's and a
    variant's
@@ -80,8 +80,8 @@ met.
    parameters as classes it records into and the result types as ones it passes out
    of. And each environment parameter of a lambda whose value reaches a class passing
    by a boundary into a function type waits for that class to take its constructor,
-   the boundary's split recording into it (`Edge::Taking`). Without the second, the
-   use was decided at once, the split waited for the function value's class, and the
+   the boundary's decomposition recording into it (`Edge::Taking`). Without the second, the
+   use was decided at once, the decomposition waited for the function value's class, and the
    parameter was filled first.
 
 11. **What a broken dependency defers**. The relations of a node a broken dependency

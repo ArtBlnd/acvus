@@ -3,7 +3,7 @@
 // same(&v, &a);                   // same(&[u8], &[u8]) -> bool, same(&[u16], &[u16]) -> bool
 // same#0 takes &v by the view and &a by the array's view, each apart.
 // The candidates differ by the same types at both parameters, so the
-// common part puts one unknown at both, and both arguments meet it.
+// generalization puts one unknown at both, and both arguments meet it.
 extern type Vec<T>;
 extern fn make() -> Vec<u8>;
 #[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];

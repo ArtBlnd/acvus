@@ -2,10 +2,10 @@
 //! each reads, and what each records once decided. Here, what each
 //! is, and how it is decided and records once decided; the
 //! positions and what each reads are `position`, places `place`, overload
-//! resolution `overload`, and the common part of all an undecided node may
-//! become `common`.
+//! resolution `overload`, and the generalization of all an undecided node may
+//! become `generalization`.
 
-pub(crate) mod common;
+pub(crate) mod generalization;
 mod overload;
 mod place;
 mod position;
@@ -13,7 +13,7 @@ mod position;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, Fact, KindSource};
+use crate::class::{ClassId, ClassName, StructureConstraint, StructureSource};
 use crate::decl::DeclId;
 use crate::program::{Position, Projection};
 use crate::read::ReadValue;
@@ -139,21 +139,21 @@ pub enum LendTarget {
 pub struct NodeState {
     pub kind: NodeKind,
     pub decision: Option<Decision>,
-    /// The common part the node recorded before it was decided.
-    pub common: Option<Common>,
-    /// The classes of which the common part recorded whether they are
+    /// The generalization the node recorded before it was decided.
+    pub generalized: Option<Generalized>,
+    /// The classes of which the generalization recorded whether they are
     /// references.
     pub references: BTreeSet<ClassId>,
 }
 
-/// What a node recorded before it was decided: the common part of all it may
+/// What a node recorded before it was decided: the generalization of all it may
 /// become.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum Common {
-    /// A use's: the common part of its candidates' signatures, and the class
+pub enum Generalized {
+    /// A use's: the generalization of its candidates' signatures, and the class
     /// made for each variable its result writes.
     Use {
-        part: Rc<common::CommonPart>,
+        part: Rc<generalization::Generalization>,
         classes: BTreeMap<usize, ClassId>,
     },
     /// A lend's: its result is a reference.
@@ -175,14 +175,14 @@ pub enum NodeAt {
     Target,
     /// The value of `e?`'s exit.
     Exit,
-    /// A variable of a use's common part.
-    Common(usize),
-    /// The type of the parameter at this place in a use's common part.
-    CommonParam(usize),
-    /// The result type in a use's common part.
-    CommonResult,
+    /// A variable of a use's generalization.
+    Generalized(usize),
+    /// The type of the parameter at this place in a use's generalization.
+    GeneralizedParam(usize),
+    /// The result type in a use's generalization.
+    GeneralizedResult,
     /// The type the candidate a use is decided as writes at a variable of its
-    /// common part.
+    /// generalization.
     Chosen(usize),
 }
 
@@ -318,7 +318,7 @@ impl State {
     /// decided, records into: the relations of a node a broken
     /// dependency pointed to wait for the node that broke it only where that
     /// node reads them. A use records into what its candidate would record
-    /// into by the splits, or its result where it is decided `!`;
+    /// into by the decompositions, or its result where it is decided `!`;
     /// another node, into what its own relations record into. A read of
     /// whether a class is a reference reaches only what may decide it.
     fn reading_what_it_records(&self, name: &Name, broken_on: &BTreeSet<Name>) -> BTreeSet<Name> {
@@ -382,7 +382,7 @@ impl State {
     }
 
     /// The roots of `classes` and of every class they reach along the lower
-    /// bounds and part lower bounds recorded, a split's among them.
+    /// bounds and part lower bounds recorded, a decomposition's among them.
     fn reached_by_lower_bounds(&self, classes: Vec<ClassId>) -> BTreeSet<ClassId> {
         let mut reached: BTreeSet<ClassId> =
             classes.into_iter().map(|class| self.root(class)).collect();
@@ -639,11 +639,11 @@ impl State {
     }
 
     /// Records the use `name` of one candidate at the positions `held`, as it
-    /// is recorded: its common part is that candidate, its type parameters
+    /// is recorded: its generalization is that candidate, its type parameters
     /// made anew, so nothing is left to decide, and it has no
     /// node. Each argument passes into its parameter's type and the result
     /// type into the result, an identity its result carries and no parameter
-    /// does made anew, recorded by the common part.
+    /// does made anew, recorded by the generalization.
     pub(crate) fn record_one(
         &mut self,
         name: &Name,
@@ -656,7 +656,7 @@ impl State {
             [candidate] => candidate.sig.clone(),
             _ => panic!("{name}: a use of one candidate"),
         };
-        let recorder = Recorder::Common(name.clone());
+        let recorder = Recorder::Generalization(name.clone());
         let owner = Rc::new(name.clone());
         let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
         let mut vars = BTreeMap::new();
@@ -686,7 +686,7 @@ impl State {
             && let Some(&identity) = vars.get(&crate::sig::SigVar::Identity)
         {
             let made = Term::Identity(Name::new(&format!("new {name}")));
-            let relation = Relation::Kind(identity, made, KindSource::Written);
+            let relation = Relation::Structure(identity, made, StructureSource::Written);
             recorded.push(self.record(relation, recorder));
         }
         recorded
@@ -713,15 +713,17 @@ impl State {
                 Decision::Use(id),
             ) => {
                 // Each argument passes whole into the candidate's parameter,
-                // a coercion being of a whole value. What the common part
+                // a coercion being of a whole value. What the generalization
                 // holds of the result is not recorded again: the candidate's
-                // type enters each of the common part's variables there.
+                // type enters each of the generalization's variables there.
                 let sig = self.decls.decl(id).sig.clone();
-                let common = match &node.common {
-                    Some(Common::Use { part, classes }) => Some((part.clone(), classes.clone())),
+                let generalized = match &node.generalized {
+                    Some(Generalized::Use { part, classes }) => {
+                        Some((part.clone(), classes.clone()))
+                    }
                     _ => None,
                 };
-                // The node holds no position where the common part writes a
+                // The node holds no position where the generalization writes a
                 // closed type, nor one another group records.
                 let mut vars = BTreeMap::new();
                 let var_name = |var| at(NodeAt::Var(var));
@@ -738,7 +740,7 @@ impl State {
                         &recorder,
                     ));
                 }
-                match &common {
+                match &generalized {
                     None => {
                         if let Some(result) = result {
                             recorded.append(self.record_result(
@@ -753,7 +755,7 @@ impl State {
                     }
                     Some((part, classes)) => {
                         let candidate = self.candidate_index(callee, args.len(), id);
-                        for k in common::CommonPart::vars_in(&part.result) {
+                        for k in generalization::Generalization::vars_in(&part.result) {
                             recorded.append(self.record_result(
                                 classes[&k],
                                 &part.vars[k][candidate],
@@ -769,7 +771,7 @@ impl State {
                     && let Some(&identity) = vars.get(&crate::sig::SigVar::Identity)
                 {
                     let made = Term::Identity(Name::new(&format!("new {name}")));
-                    let relation = Relation::Kind(identity, made, KindSource::Written);
+                    let relation = Relation::Structure(identity, made, StructureSource::Written);
                     recorded.push(self.record(relation, recorder.clone()));
                 }
                 if let Some(exit) = exit {
@@ -782,7 +784,7 @@ impl State {
                     ));
                 }
             }
-            // Where the result is a closed type of the common part, the node
+            // Where the result is a closed type of the generalization, the node
             // does not hold it, and records nothing there.
             (
                 NodeKind::Use {
@@ -810,7 +812,10 @@ impl State {
                 },
                 Decision::Applied,
             ) => {
-                let relation = Relation::Fact(*operand, projection.fact(*result));
+                let relation = Relation::StructureConstraint(
+                    *operand,
+                    projection.structure_constraint(*result),
+                );
                 recorded.push(self.record(relation, recorder));
             }
             (
@@ -823,9 +828,11 @@ impl State {
             ) => {
                 let target = self.arena.intern(at(NodeAt::Target));
                 self.classes.grow(&self.arena);
-                let relation = Relation::Fact(*operand, Fact::Ref(target));
+                let relation =
+                    Relation::StructureConstraint(*operand, StructureConstraint::Target(target));
                 recorded.push(self.record(relation, recorder.clone()));
-                let relation = Relation::Fact(target, projection.fact(*result));
+                let relation =
+                    Relation::StructureConstraint(target, projection.structure_constraint(*result));
                 recorded.push(self.record(relation, recorder));
             }
             (
@@ -874,16 +881,16 @@ impl State {
 
 /// The classes a relation records into: the upper side of a lower
 /// bound or a part lower bound, the type passed into at a boundary or a
-/// wrapping, both sides of an equation, and the class a kind, a fact, a
-/// range or a lambda is given to.
+/// wrapping, both sides of an equation, and the class a structure, a structure constraint, a
+/// domain or a lambda is given to.
 fn recorded_into(relation: &Relation) -> Vec<ClassId> {
     match relation {
         Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => vec![*upper],
         Relation::Boundary { to, .. } | Relation::Wrap { to, .. } => vec![*to],
         Relation::Equation(a, b) => vec![*a, *b],
-        Relation::Fact(class, _)
-        | Relation::Kind(class, ..)
-        | Relation::Range(class, _)
+        Relation::StructureConstraint(class, _)
+        | Relation::Structure(class, ..)
+        | Relation::Domain(class, _)
         | Relation::Values(class, _) => vec![*class],
     }
 }

@@ -17,12 +17,12 @@ outcome 1
   decision parse: undecided
   partition {`None.0`, `Some.0`}
   check `() <= M`: Ok(Identity)
-  check `s ~> parse.CommonParam(0)`: Ok(Identity)
+  check `s ~> parse.GeneralizedParam(0)`: Ok(Identity)
   check `take(n) <= M`: Ok(Identity)
   check `take.Result <= take(n)`: Ok(Identity)
   refusal no_value N
   refusal no_value `None.0`
   refusal no_value P
-  refusal no_value `parse.Common(0)`
-  refusal no_value `parse.CommonResult`
+  refusal no_value `parse.Generalized(0)`
+  refusal no_value `parse.GeneralizedResult`
   I* of a final state: []

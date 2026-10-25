@@ -27,8 +27,8 @@ outcome 1
   check `?a <= X`: Ok(Identity)
   check `R1 <= X`: Ok(Identity)
   check `R2 <= Y`: Ok(Identity)
-  check `x + y.Chosen(1) <= x + y.Common(1)`: Ok(Identity)
-  check `x + y.Common(1) <= R1`: Ok(Identity)
-  check `y + 1.Chosen(1) <= y + 1.Common(1)`: Ok(Identity)
-  check `y + 1.Common(1) <= R2`: Ok(Identity)
+  check `x + y.Chosen(1) <= x + y.Generalized(1)`: Ok(Identity)
+  check `x + y.Generalized(1) <= R1`: Ok(Identity)
+  check `y + 1.Chosen(1) <= y + 1.Generalized(1)`: Ok(Identity)
+  check `y + 1.Generalized(1) <= R2`: Ok(Identity)
   I* of a final state: []

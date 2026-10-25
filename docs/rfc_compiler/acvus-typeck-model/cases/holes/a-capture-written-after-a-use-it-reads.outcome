@@ -20,7 +20,7 @@ outcome 1
   check `make_a.Result <= make_a()`: Ok(Identity)
   check `make_b() <= V`: Ok(Identity)
   check `make_b.Result <= make_b()`: Ok(Identity)
-  check `probe.CommonResult <= probe(x)`: Ok(Identity)
+  check `probe.GeneralizedResult <= probe(x)`: Ok(Identity)
   check `put(..)#λ/λ result <= put(..)`: Ok(Identity)
   check `|v| .. <= put`: Ok(Identity)
   check `() <= λ result`: Ok(Identity)
