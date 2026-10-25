@@ -1,14 +1,14 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
-  value `&1`: &u16
+  refused
+  value `&1`: &i32
   value `&x`: &u16
   value `&y`: &u16
   value `&y 2`: &u16
   value 1u16: u16
-  value ?a: u16
-  value ?b: u16
+  value ?a: i32
+  value ?b: i32
   value R1: u16
   value R2: u16
   value X: u16
@@ -19,16 +19,16 @@ outcome 1
   decision `&y 2`: lend & place
   decision `x + y`: core::add#1
   decision `y + 1`: core::add#1
-  check `&1 ~> y + 1.Param(1)`: Ok(Identity)
+  check `&1 ~> y + 1.Param(1)`: Err(None)
   check `&x ~> x + y.Param(0)`: Ok(Identity)
   check `&y 2 ~> y + 1.Param(0)`: Ok(Identity)
   check `&y ~> x + y.Param(1)`: Ok(Identity)
   check `1u16 <= Y`: Ok(Identity)
-  check `?a <= X`: Ok(Identity)
+  check `?a <= X`: Err(None)
   check `R1 <= X`: Ok(Identity)
   check `R2 <= Y`: Ok(Identity)
   check `x + y.Chosen(1) <= x + y.Generalized(1)`: Ok(Identity)
   check `x + y.Generalized(1) <= R1`: Ok(Identity)
   check `y + 1.Chosen(1) <= y + 1.Generalized(1)`: Ok(Identity)
   check `y + 1.Generalized(1) <= R2`: Ok(Identity)
-  I* of a final state: []
+  I* of a final state: [completeness `x + y`, completeness `y + 1`]

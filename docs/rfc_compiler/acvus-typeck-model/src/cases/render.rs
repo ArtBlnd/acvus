@@ -242,15 +242,6 @@ pub fn report(state: &State, report: &Report) -> Rendered {
             Some(format!("domain #{bound} {}", relation(state, *bound))),
             Some(recorded),
         ),
-        Report::Narrowed {
-            propagator,
-            class: id,
-            recorded,
-        } => (
-            Phase::Join,
-            Some(format!("propagator {} {}", propagator.name(), class(*id))),
-            Some(recorded),
-        ),
         Report::Decomposed { at, decomposition } => {
             let (what, recorded) = match decomposition {
                 Decomposition::OneClass => ("one class", None),
@@ -582,7 +573,6 @@ fn recorder(state: &State, recorder: &Recorder) -> String {
             )
         }
         Recorder::Check => "check".to_string(),
-        Recorder::Propagator(propagator) => format!("propagator {}", propagator.name()),
         Recorder::Fallback => "fallback".to_string(),
         Recorder::Instance { at, of, .. } => {
             let made = state
@@ -794,7 +784,6 @@ pub fn traced(state: &State, report: &Report) -> Lines {
         | Report::Merged(recorded)
         | Report::Generalized(recorded)
         | Report::DomainGiven { recorded, .. }
-        | Report::Narrowed { recorded, .. }
         | Report::FellBack(FellBack { recorded, .. })
         | Report::Decomposed {
             decomposition: Decomposition::Parts(recorded),

@@ -9,6 +9,53 @@ The model serves two ends:
   the constraint graph alone, whatever the order of solving, and that solving ends.
 - It is the oracle that the type checker in `acvus-mir` is compared against.
 
+## Solving
+
+Solving runs one loop of three operations, and has no other step:
+
+- **Unify.** The recorded relations make equivalence classes one, up to each
+  class whose value is the join of what enters it, where unification stops.
+- **Join.** At such a class, what is to be joined is recorded as it arrives, and
+  the class takes the join of all of it at once, when nothing more is to come.
+- **Instantiate.** A use of a function or of a lambda makes its copy of what that
+  binding group's C ties.
+
+The loop repeats until no operation changes the state. At that fixpoint the
+classes left take their defaults, and the loop runs again.
+
+A change to solving changes where unification stops and what a class waits for,
+or what a join takes; it adds no operation to the loop.
+
+The loop in the code, for each binding group in `Program::group_order` and then
+the entry (`explore::sample_with`, `cases::run::run`):
+
+```
+State::start                                 the text recorded
+├─ record_origins, record_equations          unify    (State::record → hold → Classes::unifying)
+├─ record_items                              unify; a use of a function: instantiate (Instance)
+├─ decide_at_once                            a Deref
+└─ settle
+loop
+├─ steps → eligible over graph               what has no unbroken dependency left (dep.rs)
+│  ├─ Step::Solve(class)                     join     (solve → join)
+│  └─ Step::Decide(disjunctive constraint)   join at it: its alternative chosen from the value read
+│                                            (decide → value_read); instantiate (record_decision)
+├─ step → settle
+└─ no step left
+   ├─ a binding group                        its fixpoint, kept in `solved` for its instances
+   └─ the entry                              default  (fall_back → take_defaults → settle);
+                                             nothing fell back: the outcome
+settle, until nothing changes
+├─ merge_cycles, link_views                  unify
+├─ record_generalizations                    unify: what every alternative of an undecided
+│                                            disjunctive constraint shares
+└─ for each relation not decomposed
+   ├─ decompose_at                           unify: the parts of two solved sides; a function value
+   │                                         into a function type: instantiate (instantiate_lambda)
+   └─ domain_up                              join: the domain to be joined, recorded at the class
+                                             a lower bound holding no structure bounds
+```
+
 ## Invariants
 
 - The order of solving is an input: the same choices give the same outcome.

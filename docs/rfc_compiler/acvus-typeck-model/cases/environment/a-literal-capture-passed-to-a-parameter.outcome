@@ -1,9 +1,9 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
-  value 0: u8
-  value X: u8
+  refused
+  value 0: i32
+  value X: i32
   value f: Fn/0
   value `f()`: ()
   value `takes_u8(x)`: ()
@@ -11,7 +11,7 @@ outcome 1
   value `λ result`: ()
   decision `f()`: calls {λ}
   check `0 <= X`: Ok(Identity)
-  check `X ~> takes_u8.Param(0)`: Ok(Identity)
+  check `X ~> takes_u8.Param(0)`: Err(None)
   check `f()#λ/λ result <= f()`: Ok(Identity)
   check `|| .. <= f`: Ok(Identity)
   check `takes_u8(x) <= λ result`: Ok(Identity)

@@ -29,12 +29,6 @@ pub enum Report {
     /// The join: the domain the lower bound or part lower bound at `bound`
     /// gives the class it bounds.
     DomainGiven { bound: usize, recorded: Recording },
-    /// A propagator: the class it narrowed.
-    Narrowed {
-        propagator: crate::propagator::Propagator,
-        class: ClassId,
-        recorded: Recording,
-    },
     /// A decomposition: what became of the relation at `at`.
     Decomposed {
         at: usize,

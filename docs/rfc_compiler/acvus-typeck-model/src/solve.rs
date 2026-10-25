@@ -387,13 +387,6 @@ impl State {
                     }),
                 }
             }
-            for (class, recorded) in self.narrow_literals() {
-                trace.push(Report::Narrowed {
-                    propagator: crate::propagator::Propagator::Literal,
-                    class,
-                    recorded,
-                });
-            }
             if (self.log.len(), self.decomposed.len()) == before {
                 return trace;
             }

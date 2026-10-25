@@ -28,9 +28,7 @@ impl State {
         let mut fell = Vec::new();
         for root in self.fallback_targets() {
             let default = match &self.classes.held(root).domain {
-                Some(domain) => self
-                    .literal_preference(root)
-                    .unwrap_or_else(|| domain.fallback()),
+                Some(domain) => domain.fallback(),
                 None => Term::Never,
             };
             let relation = Relation::Structure(root, default.clone(), StructureSource::Solved);

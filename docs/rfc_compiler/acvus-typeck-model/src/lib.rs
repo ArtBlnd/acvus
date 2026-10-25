@@ -22,7 +22,6 @@ pub mod istar;
 pub mod join;
 pub mod lit;
 pub mod program;
-pub mod propagator;
 pub mod read;
 pub mod record;
 pub mod relation;

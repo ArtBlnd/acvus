@@ -1,15 +1,15 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
-  value ?a: u8
-  value X: u8
+  refused
+  value ?a: i32
+  value X: i32
   value `probe(x)`: ()
   value `takes_u8(x)`: ()
-  decision probe: probe#0
+  decision probe: probe#1
   check `?a <= X`: Ok(Identity)
   check `X ~> probe.Param(0)`: Ok(Identity)
-  check `X ~> takes_u8.Param(0)`: Ok(Identity)
+  check `X ~> takes_u8.Param(0)`: Err(None)
   check `probe.GeneralizedResult <= probe(x)`: Ok(Identity)
   check `takes_u8.Result <= takes_u8(x)`: Ok(Identity)
   I* of a final state: []

@@ -128,8 +128,6 @@ pub enum Recorder {
     /// The I\* check, making an instance of a lambda's C that no call made, in
     /// a view of a state it decides disjunctive constraints again in. Solving never records it.
     Check,
-    /// A propagator, which reads where a value passes.
-    Propagator(crate::propagator::Propagator),
     /// Fallback, once no step is left: the value it gives a class no step
     /// solves, a decision no other relation derives, which every read after
     /// it takes as given.
@@ -149,10 +147,7 @@ impl Recorder {
     /// read derives it again from the relations that remain.
     pub fn is_derived(&self) -> bool {
         match self {
-            Recorder::Decomposition(_)
-            | Recorder::Cycle
-            | Recorder::FunctionType { .. }
-            | Recorder::Propagator(_) => true,
+            Recorder::Decomposition(_) | Recorder::Cycle | Recorder::FunctionType { .. } => true,
             Recorder::Instance { by, .. } => by.is_derived(),
             Recorder::Origin
             | Recorder::Text(_)
@@ -187,7 +182,6 @@ impl Recorder {
             | Recorder::Decomposition(_)
             | Recorder::Cycle
             | Recorder::FunctionType { .. }
-            | Recorder::Propagator(_)
             | Recorder::Check
             | Recorder::Fallback => Vec::new(),
         }
@@ -206,7 +200,6 @@ impl Recorder {
             Recorder::Origin
             | Recorder::Decomposition(_)
             | Recorder::Cycle
-            | Recorder::Propagator(_)
             | Recorder::Check
             | Recorder::Fallback => false,
         }
