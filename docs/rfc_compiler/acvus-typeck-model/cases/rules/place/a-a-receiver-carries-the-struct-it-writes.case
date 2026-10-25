@@ -3,7 +3,7 @@
 // Pair::first(1u8)
 // The receiver self carries the structure Pair<A, B> as the text writes it, A and B
 // universal. At the call's instance the argument passes into the copy of
-// that Pair, a boundary, which u8 reaches by no coercion.
+// that Pair, a coercion constraint, which u8 reaches by no coercion.
 struct Pair { l, r }
 
 group first {

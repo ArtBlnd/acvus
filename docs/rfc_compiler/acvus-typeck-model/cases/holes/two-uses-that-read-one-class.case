@@ -1,6 +1,6 @@
 // X has the lower bound R1, which waits for x + y, so it is no class only
 // LitVars enter, and does not wait for probe, whose relation into it is a
-// boundary out of it. probe waits for x + y,
+// coercion constraint out of it. probe waits for x + y,
 // which records into X, and reads u16 once x + y is decided as add(u16) by
 // Y: accepted in every order.
 extern fn core::add(&u8, &u8) -> u8;

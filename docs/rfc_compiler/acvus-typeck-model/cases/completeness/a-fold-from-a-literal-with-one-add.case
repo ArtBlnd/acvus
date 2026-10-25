@@ -2,7 +2,7 @@
 // fold(scores(), 0, |acc, s| acc + s);
 // // scores() -> Iter⟨i32⟩; fold<T, U>(Iter⟨T⟩, U, fn(U, T) -> U) -> U
 // With add declared at i32 alone. As examples/grades folds its scores. The lambda captures nothing, so its
-// parameters are its own; the boundary into fn(U, T) -> U makes its
+// parameters are its own; the coercion constraint into fn(U, T) -> U makes its
 // instance, U and T passing into the copies of acc and s, and the copy of
 // its result into U.
 extern type Iter<T>;

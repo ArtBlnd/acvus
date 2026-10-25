@@ -1,6 +1,6 @@
 // let mut x = 0; while c { x = x + 1; } takes_u8(x);
 // takes_u8 is decided at once. x + 1 reads X without its own relations, so
-// R gives nothing and only LitVars enter X there, which takes_u8's boundary
+// R gives nothing and only LitVars enter X there, which takes_u8's coercion constraint
 // unifies with u8: x + 1 is add(u8), and x is u8.
 extern fn core::add(&u8, &u8) -> u8;
 extern fn core::add(&u16, &u16) -> u16;

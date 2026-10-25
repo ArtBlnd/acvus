@@ -1,6 +1,6 @@
 // takes(|x| x);            // takes(fn(u8) -> u16); a conversion u8 → u16
 // As where no conversion is declared, but the copy of λ's result passes into
-// the type's result by a boundary, which a declared conversion reaches:
+// the type's result by a coercion constraint, which a declared conversion reaches:
 // accepted.
 extern fn takes(fn(u8) -> u16);
 #[conversion] extern fn widen(u8) -> u16;

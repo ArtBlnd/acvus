@@ -1,5 +1,5 @@
 // @n = 256;                // @n is the host's u8
-// The literal's type is ?{256}, and the store is the boundary
+// The literal's type is ?{256}, and the store is the coercion constraint
 // 256 ⇝ @n, which unifies ?{256} with u8. u8 does not hold 256, so the
 // unification gives no result, and the program is refused there.
 let `@n`: host u8;

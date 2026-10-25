@@ -1,6 +1,6 @@
 // let x = 1u8;
 // g(&x);                   // g<T>(T) -> &T
-// &x is &u8 and passes into the unknown T, a meeting, so T is &u8. The result
+// &x is &u8 and passes into the unknown T, a lower bound, so T is &u8. The result
 // &T would then be a reference whose target is a reference, and no type is
 // that: the use's result has no value.
 extern fn g<T>(T) -> &T;

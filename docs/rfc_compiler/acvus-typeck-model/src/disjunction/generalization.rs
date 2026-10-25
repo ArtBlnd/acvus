@@ -1,4 +1,4 @@
-//! What all a node not yet decided may become shares, recorded before it is
+//! What all a disjunctive constraint not yet decided may become shares, recorded before it is
 //! decided: a use's
 //! candidates' generalization, and a lend's result being a reference.
 
@@ -15,7 +15,7 @@ use crate::sig::{SigTy, SigVar, Signature};
 use crate::solve::State;
 use crate::ty::{Constructor, Mutability, Name, Term};
 
-use super::{Generalized, NodeAt, NodeKind};
+use super::{Disjunction, DisjunctionAt, Generalized};
 
 /// Whether the type a signature writes is a reference, none where it is a
 /// variable.
@@ -30,7 +30,7 @@ pub(super) fn is_reference(ty: &SigTy) -> Option<bool> {
 /// their signatures. Where they all write one constructor and members it is
 /// kept, and its parts are generalized in turn; elsewhere a variable
 /// `SigVar::Type(k)` stands, one for each tuple of the types the candidates
-/// write there. A reference is not split where a whole value passes, at the
+/// write there. A reference is not decomposed where a whole value passes, at the
 /// top of a parameter or of the result, since a cast goes between two
 /// references of one constructor.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -132,8 +132,8 @@ fn generalize(tys: &[&SigTy], whole: bool, vars: &mut Vec<Vec<SigTy>>) -> SigTy 
         let alike = terms.iter().all(|term| {
             term.constructor() == head.constructor() && term.members() == head.members()
         });
-        let split = !(whole && matches!(head, Term::Ref(..)));
-        if alike && split {
+        let decompose = !(whole && matches!(head, Term::Ref(..)));
+        if alike && decompose {
             let term = head.clone().map(|key, _| {
                 let parts: Vec<&SigTy> = terms
                     .iter()
@@ -160,7 +160,7 @@ fn generalize(tys: &[&SigTy], whole: bool, vars: &mut Vec<Vec<SigTy>>) -> SigTy 
 }
 
 impl State {
-    /// Records, for each node not yet decided, the generalization of all it may
+    /// Records, for each disjunctive constraint not yet decided, the generalization of all it may
     /// become, once: for a use of several candidates, their generalization's
     /// result entering the use's, each variable it writes made anew as
     /// an unknown, whose domain is a reference or none where every candidate
@@ -171,9 +171,11 @@ impl State {
     pub(crate) fn record_generalizations(&mut self) -> Recording {
         let mut recorded = Recording::default();
         let pending: Vec<Name> = self
-            .nodes
+            .disjunctions
             .iter()
-            .filter(|(_, node)| node.decision.is_none() && node.generalized.is_none())
+            .filter(|(_, disjunction)| {
+                disjunction.decision.is_none() && disjunction.generalized.is_none()
+            })
             .map(|(name, _)| name.clone())
             .collect();
         for name in pending {
@@ -203,7 +205,7 @@ impl State {
         let part = Generalization::of(&sigs.iter().collect::<Vec<_>>());
         let recorder = Recorder::Generalization(name.clone());
         let owner = Rc::new(name.clone());
-        let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
+        let at = |at: DisjunctionAt| ClassName::Disjunction(owner.clone(), at);
         let mut vars: BTreeMap<SigVar, ClassId> = BTreeMap::new();
         let var_name = |var: SigVar| -> ClassName {
             panic!("a closed type of the generalization writes no variable, as {var:?}")
@@ -218,7 +220,7 @@ impl State {
                     class,
                     &part.params[k],
                     &mut vars,
-                    at(NodeAt::GeneralizedParam(k)),
+                    at(DisjunctionAt::GeneralizedParam(k)),
                     &var_name,
                     &recorder,
                 ),
@@ -226,7 +228,7 @@ impl State {
                     class,
                     &part.result,
                     &mut vars,
-                    at(NodeAt::GeneralizedResult),
+                    at(DisjunctionAt::GeneralizedResult),
                     &var_name,
                     &recorder,
                 ),
@@ -238,10 +240,10 @@ impl State {
 
     fn record_generalization(&mut self, name: &Name) -> Recording {
         let mut recorded = Recording::default();
-        let node = self.nodes[name].clone();
+        let disjunction = self.disjunctions[name].clone();
         let recorder = Recorder::Generalization(name.clone());
-        let (generalized, references) = match &node.kind {
-            NodeKind::Use {
+        let (generalized, references) = match &disjunction.kind {
+            Disjunction::Use {
                 callee, args, result, ..
             } => {
                 let sigs: Vec<Signature> = self
@@ -254,12 +256,12 @@ impl State {
                 }
                 let part = Generalization::of(&sigs.iter().collect::<Vec<_>>());
                 let owner = Rc::new(name.clone());
-                let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
+                let at = |at: DisjunctionAt| ClassName::Disjunction(owner.clone(), at);
                 let mut vars: BTreeMap<SigVar, ClassId> = BTreeMap::new();
                 let mut classes = BTreeMap::new();
                 let mut references = BTreeSet::new();
                 for k in Generalization::vars_in(&part.result) {
-                    let class = self.fresh(at(NodeAt::Generalized(k)));
+                    let class = self.fresh(at(DisjunctionAt::Generalized(k)));
                     vars.insert(SigVar::Type(k), class);
                     classes.insert(k, class);
                     let domain = match part.is_reference(k) {
@@ -278,7 +280,7 @@ impl State {
                         *result,
                         &part.result,
                         &mut vars,
-                        at(NodeAt::GeneralizedResult),
+                        at(DisjunctionAt::GeneralizedResult),
                         &var_name,
                         &recorder,
                     ));
@@ -289,7 +291,7 @@ impl State {
                 };
                 (generalized, references)
             }
-            NodeKind::Lend { result, .. } => {
+            Disjunction::Lend { result, .. } => {
                 // Its mutability is still the lend's to record, which a read
                 // of whether the result is a reference reads too, so
                 // the lend still records into what such a read reads.
@@ -297,11 +299,16 @@ impl State {
                 recorded.push(self.record(relation, recorder));
                 (Generalized::Lend, BTreeSet::new())
             }
-            NodeKind::Project { .. } | NodeKind::Bind { .. } | NodeKind::CallValue { .. } => {
+            Disjunction::Project { .. }
+            | Disjunction::Bind { .. }
+            | Disjunction::CallValue { .. } => {
                 return recorded;
             }
         };
-        let state = self.nodes.get_mut(name).expect("the node is the state's");
+        let state = self
+            .disjunctions
+            .get_mut(name)
+            .expect("the disjunctive constraint is the state's");
         state.generalized = Some(generalized);
         state.references = references;
         recorded
@@ -323,7 +330,7 @@ impl State {
         &self,
         name: &Name,
     ) -> Vec<BTreeMap<ClassId, Option<bool>>> {
-        let NodeKind::Use { callee, args, .. } = &self.nodes[name].kind else {
+        let Disjunction::Use { callee, args, .. } = &self.disjunctions[name].kind else {
             return Vec::new();
         };
         (0..self.candidates(callee, args.len()).len())
@@ -343,18 +350,18 @@ impl State {
         name: &Name,
         candidate: usize,
     ) -> BTreeMap<ClassId, Option<bool>> {
-        let node = &self.nodes[name];
-        let NodeKind::Use {
+        let disjunction = &self.disjunctions[name];
+        let Disjunction::Use {
             callee,
             args,
             result,
             exit,
-        } = &node.kind
+        } = &disjunction.kind
         else {
             return BTreeMap::new();
         };
         let sig = &self.candidates(callee, args.len())[candidate].sig;
-        let generalized = match &node.generalized {
+        let generalized = match &disjunction.generalized {
             Some(Generalized::Use { part, classes }) => Some((part, classes)),
             _ => None,
         };
@@ -422,7 +429,7 @@ impl State {
     /// would record a lower bound or an equation into, by the decompositions. The
     /// argument passes into the type the parameter writes, which
     /// records into that type alone, and each of its parts passes into that
-    /// type's part: a meeting where the parameter writes a variable, an
+    /// type's part: a lower bound where the parameter writes a variable, an
     /// unknown, recording an equation into the part, unless it is a
     /// structural type's, whose part lower bound records into the variable
     /// alone; and where the parameter writes a type, the part passes into it

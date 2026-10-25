@@ -14,14 +14,14 @@ start run
   generalization
     record #1 f.Generalized(0): not {&, &mut}
     record #2 f.Generalized(0) <= R
-  decompose #0 x: u8: no parts
-  decompose #1 f.Generalized(0): not {&, &mut}: no parts
+  decomposition #0 x: u8: no parts
+  decomposition #1 f.Generalized(0): not {&, &mut}: no parts
 step 1 run: decide f
   decide f: f#0
     record #3 f.Param(0): u8
     record #4 x ~> f.Param(0)
     record #5 f.Chosen(0): u8
     record #6 f.Chosen(0) <= f.Generalized(0)
-  decompose #3 f.Param(0): u8: no parts
-  decompose #4 x ~> f.Param(0): parts
-  decompose #5 f.Chosen(0): u8: no parts
+  decomposition #3 f.Param(0): u8: no parts
+  decomposition #4 x ~> f.Param(0): parts
+  decomposition #5 f.Chosen(0): u8: no parts

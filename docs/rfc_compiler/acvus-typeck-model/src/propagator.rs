@@ -1,22 +1,22 @@
 //! The decisions that read the upper side of a relation: the class a value
 //! passes into, which is the `α` of a lower bound or a part lower bound, the
-//! `U` of a boundary, and the parameter and result types a use's arguments
+//! `U` of a coercion constraint, and the parameter and result types a use's arguments
 //! and result pass into or out of.
 //!
 //! A class's value is the join of its sources, and a decision reads its
 //! inputs: a use its arguments, a lend its place, a projection its operand, a
 //! binding its path and position, a call of a function value its callee, and
 //! a class its sources leave undecided its domain. Nothing else reads the upper
-//! side, so information from it reaches a typing only through a row of this
-//! table, and a row states all it does there:
+//! side, so information from it reaches a typing only through a propagator, and
+//! a propagator states all it does there:
 //!
 //! - the alternatives it adds to a decision;
 //! - the alternatives it removes: those under which what follows by the
 //!   sources alone fails a check whatever the other decisions become;
 //! - the alternative it prefers once nothing is left to remove;
-//! - what it makes wait for the nodes that record the upper side it reads.
+//! - what it makes wait for the disjunctive constraints that record the upper side it reads.
 //!
-//! Without a row, a use whose candidates differ only in their results is not
+//! Without a propagator, a use whose candidates differ only in their results is not
 //! decided, and a class nothing enters falls back.
 
 use crate::class::ClassId;
@@ -27,29 +27,29 @@ use crate::relation::{Recorder, Relation};
 use crate::solve::State;
 use crate::ty::{Constructor, Term, Ty};
 
-/// A row of the table.
+/// A propagator.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum Row {
+pub enum Propagator {
     /// A class that holds no term and a domain admitting no `!`, a literal's
     /// given or carried up, takes the type of where it passes:
     /// - alternatives: the constructors its domain admits;
     /// - removal: each the value of an upper bound does not take,
     ///   by `≤` at a lower bound, `≤ₚ` at a part lower bound and a coercion
-    ///   at a boundary;
+    ///   at a coercion constraint;
     /// - preference: the one type its upper bounds have, where its
     ///   domain admits it, and its family's default otherwise;
-    /// - waiting: none, a node reading the domain being decided only where one
+    /// - waiting: none, a disjunctive constraint reading the domain being decided only where one
     ///   of its candidates is left, which a removal keeps or refuses.
     Literal,
 }
 
-impl Row {
-    /// Every row of the table, in order.
-    pub const ALL: [Row; 1] = [Row::Literal];
+impl Propagator {
+    /// Every propagator, in order.
+    pub const ALL: [Propagator; 1] = [Propagator::Literal];
 
     pub fn name(self) -> &'static str {
         match self {
-            Row::Literal => "literal",
+            Propagator::Literal => "literal",
         }
     }
 }
@@ -59,13 +59,13 @@ impl Row {
 enum Passing {
     Lower,
     PartLower,
-    Boundary,
+    CoercionConstraint,
 }
 
 impl State {
     /// The upper bounds of the class: the `α` of each lower bound and
-    /// part lower bound whose `τ` it is, and the `U` of each boundary whose
-    /// `T` it is. Only a row reads them.
+    /// part lower bound whose `τ` it is, and the `U` of each coercion constraint whose
+    /// `T` it is. Only a propagator reads them.
     fn upper_bounds(&self, root: ClassId) -> Vec<(Passing, ClassId)> {
         let root = self.root(root);
         self.log
@@ -81,17 +81,17 @@ impl State {
                 {
                     Some((Passing::PartLower, upper))
                 }
-                Relation::Boundary { from, to } if self.root(from) == root && self.root(to) != root => {
-                    Some((Passing::Boundary, to))
+                Relation::CoercionConstraint { from, to } if self.root(from) == root && self.root(to) != root => {
+                    Some((Passing::CoercionConstraint, to))
                 }
                 _ => None,
             })
             .collect()
     }
 
-    /// The classes the literal row applies to: those holding no term, with a
+    /// The classes the literal propagator applies to: those holding no term, with a
     /// value still to come, and a domain admitting no `!`.
-    fn literal_rows(&self) -> Vec<(ClassId, Domain)> {
+    fn literal_propagators(&self) -> Vec<(ClassId, Domain)> {
         self.classes
             .roots()
             .filter(|&root| !self.has_no_value(root))
@@ -104,12 +104,12 @@ impl State {
             .collect()
     }
 
-    /// The literal row's removal: each class it applies to narrowed to the
+    /// The literal propagator's removal: each class it applies to narrowed to the
     /// constructors that the value of every upper bound takes.
     /// Returns, for each class narrowed, the relation recorded.
     pub(crate) fn narrow_literals(&mut self) -> Vec<(ClassId, Recording)> {
         let mut narrowed = Vec::new();
-        for (root, domain) in self.literal_rows() {
+        for (root, domain) in self.literal_propagators() {
             let Domain::Only(admitted) = &domain else {
                 continue;
             };
@@ -132,7 +132,7 @@ impl State {
             }
             let mut recorded = Recording::default();
             let relation = Relation::Domain(root, Domain::Only(kept));
-            recorded.push(self.record(relation, Recorder::Row(Row::Literal)));
+            recorded.push(self.record(relation, Recorder::Propagator(Propagator::Literal)));
             narrowed.push((root, recorded));
         }
         narrowed
@@ -150,11 +150,13 @@ impl State {
         match passing {
             Passing::Lower => le(&self.decls, &given, value),
             Passing::PartLower => le_part(&given, value),
-            Passing::Boundary => crate::coerce::coerce(&self.decls, &given, value).is_ok(),
+            Passing::CoercionConstraint => {
+                crate::coerce::coerce(&self.decls, &given, value).is_ok()
+            }
         }
     }
 
-    /// The literal row's preference for a class it applies to: the one type
+    /// The literal propagator's preference for a class it applies to: the one type
     /// its upper bounds have, where its domain admits it; none where
     /// they have none or two.
     pub(crate) fn literal_preference(&self, root: ClassId) -> Option<Term<ClassId>> {

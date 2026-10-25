@@ -12,10 +12,10 @@ use crate::class::{ClassId, ClassName};
 use crate::coerce::{Coercion, Structural, along_le, coerce};
 use crate::cut::Cut;
 use crate::decl::{Decls, Node};
+use crate::disjunction::generalization::Generalization;
+use crate::disjunction::{Decision, DisjunctionAt, LendTarget};
 use crate::explore::Final;
 use crate::instance::Made;
-use crate::node::generalization::Generalization;
-use crate::node::{Decision, LendTarget, NodeAt};
 use crate::program::{ENTRY, Function, Item, Origin, Part, Place, Position, Program, Projection};
 use crate::relation::{Recorder, copy_name};
 use crate::sig::{SigArgs, SigTy, SigVar, Signature};
@@ -165,9 +165,9 @@ impl Sheet {
             .map(|root| (root, certified(state, root)))
             .collect();
         let decisions = state
-            .nodes
+            .disjunctions
             .iter()
-            .map(|(name, node)| (name.clone(), node.decision.clone()))
+            .map(|(name, disjunction)| (name.clone(), disjunction.decision.clone()))
             .collect();
         Sheet {
             group: state.group.clone(),
@@ -241,7 +241,7 @@ impl Certificate {
     /// Gives the class `name` of `group`'s state, with every class equated to
     /// it, the value `value`.
     /// The class is named as the outcome writes it, so that a class an
-    /// instance or a node made is named as well as the text's.
+    /// instance or a disjunctive constraint made is named as well as the text's.
     pub(crate) fn set_value(&mut self, group: &str, name: &str, value: Value) {
         let sheet = self
             .sheets
@@ -257,16 +257,16 @@ impl Certificate {
         sheet.values.insert(root, Some(value));
     }
 
-    /// Gives the node `node` of `group`'s state the decision `decision`.
-    pub(crate) fn set_decision(&mut self, group: &str, node: &str, decision: Decision) {
+    /// Gives the disjunctive constraint `disjunction` of `group`'s state the decision `decision`.
+    pub(crate) fn set_decision(&mut self, group: &str, disjunction: &str, decision: Decision) {
         let sheet = self
             .sheets
             .get_mut(&Name::new(group))
             .unwrap_or_else(|| panic!("the certificate has a sheet of {group}"));
         let decided = sheet
             .decisions
-            .get_mut(&Name::new(node))
-            .unwrap_or_else(|| panic!("{group} has the node {node}"));
+            .get_mut(&Name::new(disjunction))
+            .unwrap_or_else(|| panic!("{group} has the disjunctive constraint {disjunction}"));
         *decided = Some(decision);
     }
 }
@@ -278,7 +278,7 @@ pub struct Violation {
     /// The binding group whose text gives it, and the instances through which
     /// the context reaches the state its values are read in.
     pub context: String,
-    /// The item, node or class that gives it.
+    /// The item, disjunctive constraint or class that gives it.
     pub at: String,
     pub what: String,
 }
@@ -334,14 +334,14 @@ enum Lookup {
     Missing,
 }
 
-/// A node's decision, the level it is made at, and the node's name there.
+/// A disjunctive constraint's decision, the level it is made at, and the disjunctive constraint's name there.
 struct DecidedAt {
     decision: Decision,
     level: usize,
     owner: Name,
 }
 
-/// What a context gives a node of the group.
+/// What a context gives a disjunctive constraint of the group.
 enum Decided {
     At(DecidedAt),
     /// Left undecided in C at the last level, which is not the entry's.
@@ -374,7 +374,7 @@ struct Read {
 }
 
 /// A parameter's type, and whether an argument meets it or passes into it by a
-/// boundary.
+/// coercion constraint.
 struct Param {
     ty: Read,
     meets: bool,
@@ -448,14 +448,17 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// The decision of the group's node `name`: its own, or its copy's in an
+    /// The decision of the group's disjunctive constraint `name`: its own, or its copy's in an
     /// instance on the way.
     fn decision(&self, name: &Name) -> Result<Decided, String> {
         let mut name = name.clone();
         for level in 0..=self.last() {
             let sheet = self.sheet(level);
             let Some(decision) = sheet.decisions.get(&name) else {
-                return Err(format!("{} has no node {name}", sheet.group));
+                return Err(format!(
+                    "{} has no disjunctive constraint {name}",
+                    sheet.group
+                ));
             };
             if let Some(decision) = decision {
                 return Ok(Decided::At(DecidedAt {
@@ -643,7 +646,7 @@ impl Checker<'_> {
         self.get(context, at, name.as_str(), lookup)
     }
 
-    /// The decided node's decision, none where it is left in C, recording a
+    /// The decided disjunctive constraint's decision, none where it is left in C, recording a
     /// violation where the certificate does not give one it must.
     fn decided(&mut self, context: &Context<'_>, at: &str, name: &Name) -> Option<DecidedAt> {
         match context.decision(name) {
@@ -673,10 +676,15 @@ impl Checker<'_> {
         })
     }
 
-    /// Where the class a node `owner` made at `made` is read at `level`, none
+    /// Where the class a disjunctive constraint `owner` made at `made` is read at `level`, none
     /// where it made none there.
-    fn node_at(context: &Context<'_>, level: usize, owner: &Name, made: NodeAt) -> Option<At> {
-        let name = ClassName::Node(Rc::new(owner.clone()), made);
+    fn disjunction_at(
+        context: &Context<'_>,
+        level: usize,
+        owner: &Name,
+        made: DisjunctionAt,
+    ) -> Option<At> {
+        let name = ClassName::Disjunction(Rc::new(owner.clone()), made);
         let class = context.sheet(level).id(&name)?;
         Some(At { level, class })
     }
@@ -785,8 +793,8 @@ impl Checker<'_> {
         }
     }
 
-    /// Every class of the entry has a value, every node of the entry
-    /// is decided, and every decided node is reached.
+    /// Every class of the entry has a value, every disjunctive constraint of the entry
+    /// is decided, and every decided disjunctive constraint is reached.
     fn acceptance(&mut self) {
         for (group, sheet) in &self.certificate.sheets {
             if sheet.is_entry() {
@@ -1032,7 +1040,7 @@ impl Checker<'_> {
     }
 
     /// A function value passing into a function type: each lambda
-    /// its Values names has an instance made where that boundary was decomposed,
+    /// its Values names has an instance made where that coercion constraint was decomposed,
     /// as though the function type called it, each parameter of the type
     /// passing into the lambda's parameter and the lambda's result into the
     /// type's result.
@@ -1140,7 +1148,7 @@ impl Checker<'_> {
     /// A use of a function, at the positions of its constraints
     /// the context's group records: in its own group or an enclosing
     /// one, each argument passes into its universal parameter's type by a
-    /// boundary; from another group, into its copy in the instance
+    /// coercion constraint; from another group, into its copy in the instance
     /// made here.
     fn call(
         &mut self,
@@ -1201,7 +1209,7 @@ impl Checker<'_> {
     /// A use of declarations, at the positions of its constraints
     /// the context's group records: where its candidates' generalization
     /// writes one closed type, by that type, whatever the use becomes;
-    /// at the others, which its node holds, by its decision. A use of
+    /// at the others, which its disjunctive constraint holds, by its decision. A use of
     /// one candidate records that candidate at once, where its text is
     /// recorded, as its generalization, nothing left to decide.
     #[allow(clippy::too_many_arguments)]
@@ -1251,15 +1259,18 @@ impl Checker<'_> {
                 result_read.as_ref(),
             )?;
         }
-        // The positions the node holds.
-        let node_args: Vec<Option<Read>> = arg_reads
+        // The positions the disjunctive constraint holds.
+        let disjunction_args: Vec<Option<Read>> = arg_reads
             .iter()
             .enumerate()
             .map(|(k, read)| read.clone().filter(|_| !closed(Position::Arg(k))))
             .collect();
-        let node_result = result_read.filter(|_| !closed(Position::Result));
-        let node_exit = exit.filter(|_| part.holds(Position::Exit));
-        if node_args.iter().all(Option::is_none) && node_result.is_none() && node_exit.is_none() {
+        let disjunction_result = result_read.filter(|_| !closed(Position::Result));
+        let disjunction_exit = exit.filter(|_| part.holds(Position::Exit));
+        if disjunction_args.iter().all(Option::is_none)
+            && disjunction_result.is_none()
+            && disjunction_exit.is_none()
+        {
             return Some(());
         }
         let (decision, level, owner) = match decls.as_slice() {
@@ -1276,9 +1287,14 @@ impl Checker<'_> {
         // The generalization is recorded where the use is, before it is decided,
         // so its classes are the group's own, at level 0.
         let generalization_values = match &generalization {
-            Some(part) => {
-                Some(self.generalization(context, &at, 0, name, part, node_result.as_ref())?)
-            }
+            Some(part) => Some(self.generalization(
+                context,
+                &at,
+                0,
+                name,
+                part,
+                disjunction_result.as_ref(),
+            )?),
             None => None,
         };
         match decision {
@@ -1290,14 +1306,14 @@ impl Checker<'_> {
                 let written: Vec<&SigTy> = sig
                     .params()
                     .iter()
-                    .zip(&node_args)
+                    .zip(&disjunction_args)
                     .filter(|(_, read)| read.is_some())
                     .map(|(param, _)| param)
-                    .chain(node_result.as_ref().map(|_| sig.result()))
+                    .chain(disjunction_result.as_ref().map(|_| sig.result()))
                     .collect();
                 let bound = self.bound(context, &at, level, &owner, &sig, &written)?;
                 for (k, param) in sig.params().iter().enumerate() {
-                    let Some(arg) = &node_args[k] else {
+                    let Some(arg) = &disjunction_args[k] else {
                         continue;
                     };
                     let Ok(ty) = param.substitute(&bound) else {
@@ -1306,19 +1322,19 @@ impl Checker<'_> {
                     };
                     let ty = Read {
                         value: ty,
-                        at: Self::node_at(context, level, &owner, NodeAt::Param(k)),
+                        at: Self::disjunction_at(context, level, &owner, DisjunctionAt::Param(k)),
                     };
                     let meets = matches!(param, SigTy::Var(_));
                     self.pass(context, &at, k, arg, &Param { ty, meets });
                 }
-                if let Some(result) = &node_result {
+                if let Some(result) = &disjunction_result {
                     let Ok(returned) = sig.result().substitute(&bound) else {
                         self.violation(context, &at, "the result has no type".to_string());
                         return None;
                     };
                     let returned = Read {
                         value: returned,
-                        at: Self::node_at(context, level, &owner, NodeAt::Result),
+                        at: Self::disjunction_at(context, level, &owner, DisjunctionAt::Result),
                     };
                     self.returns(context, &at, &returned, result);
                 }
@@ -1337,7 +1353,12 @@ impl Checker<'_> {
                         };
                         let chosen = Read {
                             value: chosen,
-                            at: Self::node_at(context, level, &owner, NodeAt::Chosen(k)),
+                            at: Self::disjunction_at(
+                                context,
+                                level,
+                                &owner,
+                                DisjunctionAt::Chosen(k),
+                            ),
                         };
                         let holds = self.flows(context, &at, &chosen, value, true);
                         let (chosen, value) = (&chosen.value, &value.value);
@@ -1349,7 +1370,7 @@ impl Checker<'_> {
                         );
                     }
                 }
-                if let Some(exit) = node_exit {
+                if let Some(exit) = disjunction_exit {
                     self.exit(context, &at, level, &owner, &sig, exit)?;
                 }
             }
@@ -1358,7 +1379,7 @@ impl Checker<'_> {
                     .into_iter()
                     .filter(|&k| k < args.len())
                     .any(|k| {
-                        node_args[k]
+                        disjunction_args[k]
                             .as_ref()
                             .is_some_and(|read| *read.value.term() == Term::Never)
                     });
@@ -1404,7 +1425,7 @@ impl Checker<'_> {
             }
             let ty = Read {
                 value: closed(&generalization.params[k]),
-                at: Self::node_at(context, 0, name, NodeAt::GeneralizedParam(k)),
+                at: Self::disjunction_at(context, 0, name, DisjunctionAt::GeneralizedParam(k)),
             };
             self.pass(context, at, k, arg, &Param { ty, meets: false });
         }
@@ -1413,7 +1434,7 @@ impl Checker<'_> {
         {
             let returned = Read {
                 value: closed(&generalization.result),
-                at: Self::node_at(context, 0, name, NodeAt::GeneralizedResult),
+                at: Self::disjunction_at(context, 0, name, DisjunctionAt::GeneralizedResult),
             };
             self.returns(context, at, &returned, result);
         }
@@ -1426,7 +1447,7 @@ impl Checker<'_> {
     /// is where it is an `Error` or `!`, into the payload of an `Error` whose
     /// one member is its name where it has one, and into that of an
     /// `Error⟨..⟩` otherwise; and that value passes into the class the text
-    /// gives the exit, a meeting where that is an unknown.
+    /// gives the exit, a lower bound where that is an unknown.
     fn exit(
         &mut self,
         context: &Context<'_>,
@@ -1436,7 +1457,7 @@ impl Checker<'_> {
         sig: &Signature,
         exit: &Name,
     ) -> Option<()> {
-        let node = |at: NodeAt| ClassName::Node(Rc::new(owner.clone()), at);
+        let disjunction = |at: DisjunctionAt| ClassName::Disjunction(Rc::new(owner.clone()), at);
         let class = |checker: &mut Self, name: ClassName| -> Option<Value> {
             let Some(id) = context.sheet(level).id(&name) else {
                 checker.violation(context, at, format!("the decision made no class {name}"));
@@ -1445,11 +1466,11 @@ impl Checker<'_> {
             let lookup = context.lookup(level, id);
             checker.get(context, at, &name.to_string(), lookup)
         };
-        let value = class(self, node(NodeAt::Exit))?;
+        let value = class(self, disjunction(DisjunctionAt::Exit))?;
         let exit_read = self.text_read(context, at, exit)?;
         let value_read = Read {
             value: value.clone(),
-            at: Self::node_at(context, level, owner, NodeAt::Exit),
+            at: Self::disjunction_at(context, level, owner, DisjunctionAt::Exit),
         };
         let meets = self.text.unknown(exit);
         let holds = self.flows(context, at, &value_read, &exit_read, meets);
@@ -1465,7 +1486,7 @@ impl Checker<'_> {
             ([SigTy::Term(param)], Term::Result { err, .. })
                 if matches!(**param, Term::Result { .. }) =>
             {
-                let error = class(self, node(NodeAt::Var(SigVar::Type(1))))?;
+                let error = class(self, disjunction(DisjunctionAt::Var(SigVar::Type(1))))?;
                 let into = match error.term() {
                     term if crate::join::is_error(term) || matches!(term, Term::Never) => Some(err),
                     Term::Enum(name, _) | Term::Struct(name, _) | Term::Extern { name, .. } => {
@@ -1531,7 +1552,8 @@ impl Checker<'_> {
         let mut values = Vec::new();
         let mut types = vec![None; part.vars.len()];
         for &k in &vars {
-            let name = ClassName::Node(Rc::new(owner.clone()), NodeAt::Generalized(k));
+            let name =
+                ClassName::Disjunction(Rc::new(owner.clone()), DisjunctionAt::Generalized(k));
             let Some(id) = context.sheet(level).id(&name) else {
                 self.violation(context, at, format!("the use made no class {name}"));
                 return None;
@@ -1574,7 +1596,7 @@ impl Checker<'_> {
             };
             let returned = Read {
                 value: returned,
-                at: Self::node_at(context, level, owner, NodeAt::GeneralizedResult),
+                at: Self::disjunction_at(context, level, owner, DisjunctionAt::GeneralizedResult),
             };
             self.returns(context, at, &returned, result);
         }
@@ -1582,7 +1604,7 @@ impl Checker<'_> {
     }
 
     /// The values of the variables the signature writes at the positions the
-    /// node holds, `written`, those of the classes the decision made for them.
+    /// disjunctive constraint holds, `written`, those of the classes the decision made for them.
     fn bound(
         &mut self,
         context: &Context<'_>,
@@ -1601,7 +1623,7 @@ impl Checker<'_> {
             if !written {
                 continue;
             }
-            let name = ClassName::Node(Rc::new(owner.clone()), NodeAt::Var(var));
+            let name = ClassName::Disjunction(Rc::new(owner.clone()), DisjunctionAt::Var(var));
             let Some(id) = context.sheet(level).id(&name) else {
                 self.violation(context, at, format!("the decision made no class {name}"));
                 return None;
@@ -1736,7 +1758,7 @@ impl Checker<'_> {
                 };
                 Read {
                     value: lent,
-                    at: Self::node_at(context, level, &owner, NodeAt::Lent),
+                    at: Self::disjunction_at(context, level, &owner, DisjunctionAt::Lent),
                 }
             }
             other => {

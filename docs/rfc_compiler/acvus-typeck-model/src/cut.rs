@@ -353,7 +353,7 @@ fn constraints<'a>(
         }
         return sets.into_values().map(together).collect();
     }
-    let part = crate::node::generalization::Generalization::of(&sigs);
+    let part = crate::disjunction::generalization::Generalization::of(&sigs);
     let (closed, chosen): (Vec<Position>, Vec<Position>) = positions
         .into_iter()
         .partition(|&position| part.is_closed_at(position));

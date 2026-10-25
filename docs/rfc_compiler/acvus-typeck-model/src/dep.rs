@@ -1,4 +1,4 @@
-//! The dependency graph: its nodes are the equivalence classes
+//! The dependency graph: its disjunctive constraints are the equivalence classes
 //! of the moment and the uses and lends, and its edges the dependencies. A
 //! dependency within a strongly connected component is broken, so the unbroken
 //! ones have no cycle.
@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::class::{ClassId, StructureConstraint};
-use crate::node::Reads;
+use crate::disjunction::Reads;
 use crate::relation::Relation;
 use crate::solve::State;
 use crate::ty::{Constructor, NONE, Name, PartKey, SOME, Term};
@@ -14,7 +14,7 @@ use crate::ty::{Constructor, NONE, Name, PartKey, SOME, Term};
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Vertex {
     Class(ClassId),
-    Node(Name),
+    Disjunction(Name),
     /// The use that chooses a universal, which lies outside the binding group
     /// and is never decided in it.
     Outside,
@@ -27,7 +27,7 @@ pub(crate) enum Edge {
     Lower,
     /// An equivalence class on one whose taking a constructor records
     /// relations into it: it lies within the `τ` of a lower bound or a part
-    /// lower bound `τ ≤ α`, or within the `U` of a boundary `α ⇝ U`, `α`
+    /// lower bound `τ ≤ α`, or within the `U` of a coercion constraint `α ⇝ U`, `α`
     /// unsolved, or it is the class `e?`'s wrapping passes into, its error
     /// part unsolved.
     Taking,
@@ -35,12 +35,12 @@ pub(crate) enum Edge {
     /// taking a constructor. A class holding a structure is
     /// solved.
     Part,
-    /// An equivalence class on a node at whose position it lies, or within the
+    /// An equivalence class on a disjunctive constraint at whose position it lies, or within the
     /// depth its candidates reach, that has not recorded its relations: one
-    /// undecided, or one decided whose relations wait for the nodes that broke
+    /// undecided, or one decided whose relations wait for the disjunctive constraints that broke
     /// their dependency on it.
     Records,
-    /// A node on an undecided node that records relations into the classes at
+    /// A disjunctive constraint on an undecided disjunctive constraint that records relations into the classes at
     /// the positions it reads.
     Reads,
     /// A universal on the use that chooses it.
@@ -62,7 +62,7 @@ pub(crate) struct Met {
 pub(crate) struct Eligible {
     /// The equivalence classes that may be solved.
     pub(crate) solve: Vec<ClassId>,
-    /// The nodes whose unbroken dependencies are all decided, which the value
+    /// The disjunctive constraints whose unbroken dependencies are all decided, which the value
     /// each reads may decide.
     pub(crate) decide: Vec<Name>,
 }
@@ -129,7 +129,7 @@ impl State {
                         }
                     }
                 }
-                Relation::Boundary { from, to } => {
+                Relation::CoercionConstraint { from, to } => {
                     let (from, to) = (self.root(from), self.root(to));
                     if from == to || self.is_solved(from) {
                         continue;
@@ -180,13 +180,13 @@ impl State {
                 }
             }
         }
-        let undecided: Vec<(&Name, &crate::node::NodeState)> = self
-            .nodes
+        let undecided: Vec<(&Name, &crate::disjunction::DisjunctionState)> = self
+            .disjunctions
             .iter()
-            .filter(|(_, node)| node.decision.is_none())
+            .filter(|(_, disjunction)| disjunction.decision.is_none())
             .collect();
         let deferred = self
-            .nodes
+            .disjunctions
             .iter()
             .filter(|(name, _)| self.deferred.contains_key(*name));
         for (name, _) in undecided.iter().copied().chain(deferred) {
@@ -196,12 +196,12 @@ impl State {
                 }
                 add(
                     Vertex::Class(class),
-                    Vertex::Node((*name).clone()),
+                    Vertex::Disjunction((*name).clone()),
                     Edge::Records,
                 );
             }
         }
-        // The nodes that record into a class, each with the class at
+        // The disjunctive constraints that record into a class, each with the class at
         // whose position it lies, reached along the dependencies between
         // classes and the links a relation not yet decomposed will make between
         // the parts of its two sides.
@@ -209,7 +209,7 @@ impl State {
         let recording = |class: ClassId, edges: &BTreeMap<Vertex, BTreeSet<(Vertex, Edge)>>| {
             let mut classes = BTreeSet::from([self.root(class)]);
             let mut work = vec![self.root(class)];
-            let mut nodes = BTreeSet::new();
+            let mut disjunctions = BTreeSet::new();
             while let Some(at) = work.pop() {
                 for &next in links.get(&at).into_iter().flatten() {
                     if classes.insert(next) {
@@ -223,14 +223,15 @@ impl State {
                                 work.push(*next);
                             }
                         }
-                        (Vertex::Node(_), Edge::Records) | (Vertex::Outside, Edge::Chosen) => {
-                            nodes.insert((to.clone(), at));
+                        (Vertex::Disjunction(_), Edge::Records)
+                        | (Vertex::Outside, Edge::Chosen) => {
+                            disjunctions.insert((to.clone(), at));
                         }
                         _ => {}
                     }
                 }
             }
-            nodes
+            disjunctions
         };
         let mut reads = Vec::new();
         for (name, _) in &undecided {
@@ -238,7 +239,7 @@ impl State {
             for position in classes {
                 for (recorder, at) in recording(position, &edges) {
                     let left_out = match &recorder {
-                        Vertex::Node(recorder) => {
+                        Vertex::Disjunction(recorder) => {
                             recorder == *name || !self.records_into(recorder, position, at, read)
                         }
                         Vertex::Class(_) | Vertex::Outside => false,
@@ -251,7 +252,7 @@ impl State {
         }
         for (from, to, edge) in reads {
             edges
-                .entry(Vertex::Node(from))
+                .entry(Vertex::Disjunction(from))
                 .or_default()
                 .insert((to, edge));
         }
@@ -264,7 +265,7 @@ impl State {
     /// a function value's environment: each part that will
     /// take a relation, with the part of the other side it will take it from.
     /// A lower bound's or a part lower bound's upper side takes from the lower,
-    /// a boundary's type passed into from the value, a function type's
+    /// a coercion constraint's type passed into from the value, a function type's
     /// parameter's environment parameter from the type's parameter, a function
     /// type's result from the environment's result, and the class `e?`'s
     /// wrapping passes into from its error part.
@@ -283,7 +284,7 @@ impl State {
             let (from, to) = match recorded.relation {
                 Relation::LowerBound { lower, upper }
                 | Relation::PartLowerBound { lower, upper } => (lower, upper),
-                Relation::Boundary { from, to } => (from, to),
+                Relation::CoercionConstraint { from, to } => (from, to),
                 Relation::Wrap { from, to } => {
                     link(to, from);
                     continue;
@@ -368,28 +369,28 @@ impl State {
         seen
     }
 
-    /// The undecided nodes that broke their dependency on the node.
+    /// The undecided disjunctive constraints that broke their dependency on the disjunctive constraint.
     pub(crate) fn broken_on(&self, name: &Name) -> BTreeSet<Name> {
         let graph = self.graph();
-        let node = Vertex::Node(name.clone());
-        self.nodes
+        let disjunction = Vertex::Disjunction(name.clone());
+        self.disjunctions
             .iter()
             .filter(|(other, state)| *other != name && state.decision.is_none())
             .map(|(other, _)| other.clone())
-            .filter(|other| graph.broken(&Vertex::Node(other.clone()), &node))
+            .filter(|other| graph.broken(&Vertex::Disjunction(other.clone()), &disjunction))
             .collect()
     }
 
-    /// The nodes whose relations the value a node reads leaves out: itself
+    /// The disjunctive constraints whose relations the value a disjunctive constraint reads leaves out: itself
     /// and those that transitively depend on it.
     pub(crate) fn dependents(&self, name: &Name) -> BTreeSet<Name> {
-        let node = Vertex::Node(name.clone());
+        let disjunction = Vertex::Disjunction(name.clone());
         let mut excluded: BTreeSet<Name> = self
             .graph()
-            .reaching(&node)
+            .reaching(&disjunction)
             .into_iter()
             .filter_map(|vertex| match vertex {
-                Vertex::Node(name) => Some(name),
+                Vertex::Disjunction(name) => Some(name),
                 Vertex::Class(_) | Vertex::Outside => None,
             })
             .collect();
@@ -408,12 +409,14 @@ impl State {
     /// Whether an unbroken dependency on `to` is met without its being solved:
     /// a lower bound or part lower bound that gives a domain or that nothing
     /// enters, or, in a state a value read
-    /// is taken from, a class that gives nothing; and a node's on a
-    /// node once that is decided, whose relations a class depends on until they
+    /// is taken from, a class that gives nothing; and a disjunctive constraint's on a
+    /// disjunctive constraint once that is decided, whose relations a class depends on until they
     /// are recorded.
     fn satisfied(&self, to: &Vertex, edge: Edge, met: &Met) -> bool {
         match (to, edge) {
-            (Vertex::Node(node), Edge::Reads) => self.nodes[node].decision.is_some(),
+            (Vertex::Disjunction(disjunction), Edge::Reads) => {
+                self.disjunctions[disjunction].decision.is_some()
+            }
             (Vertex::Class(class), Edge::Lower) => {
                 met.giving_domains.contains(class)
                     || met.nothing_enters.contains(class)
@@ -534,7 +537,7 @@ impl State {
 
     /// What may be taken now: the equivalence classes that may be solved,
     /// being unblocked and given something to take by their sources, and the
-    /// nodes whose unbroken dependencies are all decided.
+    /// disjunctive constraints whose unbroken dependencies are all decided.
     pub(crate) fn eligible(&self) -> Eligible {
         let graph = self.graph();
         let met = self.met_in(&graph);
@@ -544,13 +547,13 @@ impl State {
             .filter(|&root| self.has_work(root, &graph))
             .collect();
         let decide = self
-            .nodes
+            .disjunctions
             .iter()
-            .filter(|(_, node)| node.decision.is_none())
+            .filter(|(_, disjunction)| disjunction.decision.is_none())
             .map(|(name, _)| name)
             .filter(|name| {
                 graph
-                    .unbroken(&Vertex::Node((*name).clone()))
+                    .unbroken(&Vertex::Disjunction((*name).clone()))
                     .all(|(to, edge)| self.satisfied(to, *edge, &met))
             })
             .cloned()
@@ -559,9 +562,9 @@ impl State {
     }
 
     /// The unbroken dependencies of `from` not yet met:
-    /// what an equivalence class or a node still waits for, as a traced order
+    /// what an equivalence class or a disjunctive constraint still waits for, as a traced order
     /// prints it (`TRACE=1`). A class that waits for
-    /// nothing is unblocked, and a node that waits for nothing may be decided.
+    /// nothing is unblocked, and a disjunctive constraint that waits for nothing may be decided.
     #[cfg(test)]
     pub(crate) fn waits_for(&self, from: &Vertex) -> Vec<(Vertex, Edge)> {
         let graph = self.graph();
@@ -578,7 +581,7 @@ impl State {
         if held.structure.is_some() {
             return true;
         }
-        if !self.constraint_heads(root).is_empty() || self.domain_head(root).is_some() {
+        if !self.structure_constraint_heads(root).is_empty() || self.domain_head(root).is_some() {
             return true;
         }
         self.lower_bounds(root).into_iter().any(|lower| {

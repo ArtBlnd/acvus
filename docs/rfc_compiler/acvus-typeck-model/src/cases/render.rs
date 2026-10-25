@@ -1,7 +1,7 @@
 //! What the model gives, written as a case writes it: decisions, coercions,
-//! refusals, an outcome, and a trace's facts. An expectation compares its text with
+//! refusals, an outcome, and a trace's events. An expectation compares its text with
 //! these, whitespace left out.
-//! Under `TRACE=1`, the facts a report is made of, what a group waits for and
+//! Under `TRACE=1`, the events a report is made of, what a group waits for and
 //! its C, as a traced order prints them.
 
 use std::collections::BTreeSet;
@@ -14,10 +14,11 @@ use crate::class::{
 };
 use crate::coerce::{CoerceError, Coercion, Rank, Structural};
 use crate::decl::DeclId;
-use crate::decompose::Decomposition;
+use crate::decomposition::Decomposition;
 use crate::dep::{Edge, Vertex};
-use crate::node::{
-    AsReference, DecidedBy, Decision, LendTarget, Narrowed, Narrowing, NodeKind, Reading, ValueRead,
+use crate::disjunction::{
+    AsReference, DecidedBy, Decision, Disjunction, LendTarget, Narrowed, Narrowing, Reading,
+    ValueRead,
 };
 use crate::record::Recording;
 use crate::relation::{Named, Recorder};
@@ -152,7 +153,7 @@ pub fn refusal(refusal: &Refusal) -> String {
 pub fn step(state: &State, step: &Step) -> String {
     match step {
         Step::Solve(root) => format!("solve {}", name(&state.class_name(*root).to_string())),
-        Step::Decide(node) => format!("decide {}", name(node.as_str())),
+        Step::Decide(disjunction) => format!("decide {}", name(disjunction.as_str())),
     }
 }
 
@@ -242,12 +243,12 @@ pub fn report(state: &State, report: &Report) -> Rendered {
             Some(recorded),
         ),
         Report::Narrowed {
-            row,
+            propagator,
             class: id,
             recorded,
         } => (
             Phase::Join,
-            Some(format!("row {} {}", row.name(), class(*id))),
+            Some(format!("propagator {} {}", propagator.name(), class(*id))),
             Some(recorded),
         ),
         Report::Decomposed { at, decomposition } => {
@@ -259,20 +260,23 @@ pub fn report(state: &State, report: &Report) -> Rendered {
             };
             (
                 Phase::Decomposition,
-                Some(format!("decompose #{at} {}: {what}", relation(state, *at))),
+                Some(format!(
+                    "decomposition #{at} {}: {what}",
+                    relation(state, *at)
+                )),
                 recorded,
             )
         }
         Report::Generalized(recorded) => (
-            Phase::Node,
+            Phase::Disjunction,
             unless_empty(recorded, "generalization".to_string()),
             Some(recorded),
         ),
         Report::Decided(decided) => (
-            Phase::Node,
+            Phase::Disjunction,
             Some(format!(
                 "decide {}: {}",
-                name(decided.node.as_str()),
+                name(decided.disjunction.as_str()),
                 decision(&decided.decision)
             )),
             Some(&decided.recorded),
@@ -314,9 +318,9 @@ pub fn outcome(outcome: &Outcome) -> String {
         writeln!(text, "  value {}: {value}", name(&class.to_string()))
             .expect("writing to a string");
     }
-    for (node, decided) in &outcome.decisions {
+    for (disjunction, decided) in &outcome.decisions {
         let decided = decided.as_ref().map_or("undecided".to_string(), decision);
-        writeln!(text, "  decision {}: {decided}", name(node.as_str()))
+        writeln!(text, "  decision {}: {decided}", name(disjunction.as_str()))
             .expect("writing to a string");
     }
     for set in &outcome.partition {
@@ -346,17 +350,17 @@ pub fn outcome(outcome: &Outcome) -> String {
     text
 }
 
-/// A node or a class named in a final state's I\* violations.
-pub fn istar(kind: crate::istar::Kind, node: &Name) -> String {
+/// A disjunctive constraint or a class named in a final state's I\* violations.
+pub fn istar(kind: crate::istar::Kind, disjunction: &Name) -> String {
     let kind = match kind {
         crate::istar::Kind::Completeness => "completeness",
         crate::istar::Kind::Soundness => "soundness",
     };
-    format!("{kind} {}", name(node.as_str()))
+    format!("{kind} {}", name(disjunction.as_str()))
 }
 
 /// The lines a traced order prints of one thing (`TRACE=1`), each with its
-/// depth below the line it is a fact of.
+/// depth below the line it is an event of.
 #[derive(Default)]
 pub struct Lines(pub Vec<(usize, String)>);
 
@@ -371,9 +375,9 @@ impl Lines {
     }
 }
 
-/// A line's attributes, each `key: value` after two spaces; one with no value
-/// is none and not written.
-fn attributes<'a, I>(line: String, attributes: I) -> String
+/// A line with its attributes, each `key: value` after two spaces; one with no
+/// value is none and not written.
+fn with_attributes<'a, I>(line: String, attributes: I) -> String
 where
     I: IntoIterator<Item = (&'a str, Option<String>)>,
 {
@@ -443,11 +447,11 @@ where
     }))
 }
 
-fn nodes<'a, I>(nodes: I) -> Option<String>
+fn names<'a, I>(names: I) -> Option<String>
 where
     I: IntoIterator<Item = &'a Name>,
 {
-    some_listed(nodes.into_iter().map(|node| name(node.as_str())))
+    some_listed(names.into_iter().map(|listed| name(listed.as_str())))
 }
 
 /// Why two classes are unified, `at` the place of the relation the unifying
@@ -509,7 +513,7 @@ fn unified(state: &State, unified: &Unified, at: Option<usize>) -> Lines {
             .map(|structure| structure_of(state, structure));
         lines.push(
             0,
-            attributes(line, [("by", Some(by)), ("structure", structure)]),
+            with_attributes(line, [("by", Some(by)), ("structure", structure)]),
         );
     }
     match &unified.conflict {
@@ -537,7 +541,7 @@ fn unified(state: &State, unified: &Unified, at: Option<usize>) -> Lines {
             });
             lines.push(
                 0,
-                attributes(line, [("by", Some(by)), ("structures", structures)]),
+                with_attributes(line, [("by", Some(by)), ("structures", structures)]),
             );
         }
         Some(Conflicted::Holds {
@@ -562,8 +566,12 @@ fn recorder(state: &State, recorder: &Recorder) -> String {
     match recorder {
         Recorder::Origin => "origin".to_string(),
         Recorder::Text(item) => format!("text {item}"),
-        Recorder::Node(node) => format!("node {}", name(node.as_str())),
-        Recorder::Generalization(node) => format!("generalization {}", name(node.as_str())),
+        Recorder::Disjunction(disjunction) => {
+            format!("disjunctive constraint {}", name(disjunction.as_str()))
+        }
+        Recorder::Generalization(disjunction) => {
+            format!("generalization {}", name(disjunction.as_str()))
+        }
         Recorder::Decomposition(class) => format!("decomposition {}", class_of(state, *class)),
         Recorder::Cycle => "cycle".to_string(),
         Recorder::FunctionType { from, to } => {
@@ -574,7 +582,7 @@ fn recorder(state: &State, recorder: &Recorder) -> String {
             )
         }
         Recorder::Check => "check".to_string(),
-        Recorder::Row(row) => format!("row {}", row.name()),
+        Recorder::Propagator(propagator) => format!("propagator {}", propagator.name()),
         Recorder::Fallback => "fallback".to_string(),
         Recorder::Instance { at, of, .. } => {
             let made = state
@@ -609,13 +617,13 @@ fn recording(state: &State, recorded: &Recording) -> Lines {
         let records = places(made.recorded.iter().copied());
         lines.push(
             0,
-            attributes(line, [("by", Some(by)), ("records", records)]),
+            with_attributes(line, [("by", Some(by)), ("records", records)]),
         );
     }
     for entry in &recorded.entries {
         let line = format!("record #{} {}", entry.at, relation(state, entry.at));
         let by = recorder(state, &state.log[entry.at].recorder);
-        lines.push(0, attributes(line, [("by", Some(by))]));
+        lines.push(0, with_attributes(line, [("by", Some(by))]));
         lines.nest(
             1,
             unified(state, &entry.unification.unified, Some(entry.at)),
@@ -713,47 +721,49 @@ fn as_reference(state: &State, at: &str, read: &AsReference) -> String {
         None => "none",
     };
     let line = format!("read {at} {}: {}", class_of(state, read.class), read.value);
-    attributes(line, [("as", Some(reads_as.to_string()))])
+    with_attributes(line, [("as", Some(reads_as.to_string()))])
 }
 
-/// The value a node read when it was decided.
-fn decided_by(state: &State, node: &Name, by: &DecidedBy) -> Lines {
-    let broke = [("broken by", nodes(&by.broken_on))];
-    value_read(state, node, &by.value, broke)
+/// The value a disjunctive constraint read when it was decided.
+fn decided_by(state: &State, disjunction: &Name, by: &DecidedBy) -> Lines {
+    let broke = [("broken by", names(&by.broken_on))];
+    value_read(state, disjunction, &by.value, broke)
 }
 
-/// The value a node reads: the nodes and relations it leaves out, with the
+/// The value a disjunctive constraint reads: the disjunctive constraints and relations it leaves out, with the
 /// dependencies `broke` names, and what it reads at each position.
 fn value_read(
     state: &State,
-    node: &Name,
+    disjunction: &Name,
     value: &ValueRead,
     broke: [(&str, Option<String>); 1],
 ) -> Lines {
     let mut lines = Lines::default();
-    let facts = [("exclude", nodes(&value.left_out))]
+    let attributes = [("exclude", names(&value.left_out))]
         .into_iter()
         .chain(broke)
         .chain([("left out", places(value.relations.iter().copied()))]);
-    for (key, listed) in facts {
+    for (key, listed) in attributes {
         if let Some(listed) = listed {
             lines.push(0, format!("{key}: {listed}"));
         }
     }
-    let kind = &state.nodes[node].kind;
+    let kind = &state.disjunctions[disjunction].kind;
     match &value.reading {
         Reading::Nothing => {}
         Reading::Use(narrowed) => {
-            let NodeKind::Use { args, .. } = kind else {
+            let Disjunction::Use { args, .. } = kind else {
                 unreachable!("a use's narrowing is a use's")
             };
             lines.nest(0, narrowing(state, narrowed, args.len()));
         }
         Reading::Place(read) => {
             let at = match kind {
-                NodeKind::Lend { .. } => "place",
-                NodeKind::Project { .. } => "operand",
-                NodeKind::Use { .. } | NodeKind::CallValue { .. } | NodeKind::Bind { .. } => {
+                Disjunction::Lend { .. } => "place",
+                Disjunction::Project { .. } => "operand",
+                Disjunction::Use { .. }
+                | Disjunction::CallValue { .. }
+                | Disjunction::Bind { .. } => {
                     unreachable!("a place is read by a lend or a projection")
                 }
             };
@@ -768,13 +778,13 @@ fn value_read(
             lambdas,
         } => {
             let line = format!("read callee {}: {value}", class_of(state, *callee));
-            lines.push(0, attributes(line, [("values", nodes(lambdas))]));
+            lines.push(0, with_attributes(line, [("values", names(lambdas))]));
         }
     }
     lines
 }
 
-/// A phase's report as a traced order prints it: its line, then the facts it
+/// A phase's report as a traced order prints it: its line, then the events it
 /// is made of and what it recorded (`TRACE=1`).
 pub fn traced(state: &State, report: &Report) -> Lines {
     let rendered = self::report(state, report);
@@ -793,7 +803,7 @@ pub fn traced(state: &State, report: &Report) -> Lines {
         Report::Linked(linked) => Some(&linked.recorded),
         Report::Decided(decided) => {
             if let Some(by) = &decided.read {
-                detail.nest(0, decided_by(state, &decided.node, by));
+                detail.nest(0, decided_by(state, &decided.disjunction, by));
             }
             Some(&decided.recorded)
         }
@@ -826,7 +836,7 @@ pub fn traced(state: &State, report: &Report) -> Lines {
                 },
                 _ => None,
             };
-            lines.push(0, attributes(line, [("passed", passed)]));
+            lines.push(0, with_attributes(line, [("passed", passed)]));
             lines.nest(1, detail);
         }
         None => lines.nest(0, detail),
@@ -844,9 +854,13 @@ fn dependencies(state: &State, waits: Vec<(Vertex, Edge)>) -> String {
         (Vertex::Class(lower), Edge::Lower) => format!("lower {}", class_of(state, lower)),
         (Vertex::Class(taking), Edge::Taking) => format!("taking {}", class_of(state, taking)),
         (Vertex::Class(owner), Edge::Part) => format!("part of {}", class_of(state, owner)),
-        (Vertex::Node(node), Edge::Records) => format!("records {}", name(node.as_str())),
+        (Vertex::Disjunction(disjunction), Edge::Records) => {
+            format!("records {}", name(disjunction.as_str()))
+        }
         (Vertex::Outside, Edge::Chosen) => "chosen".to_string(),
-        (Vertex::Node(node), Edge::Reads) => format!("reads {}", name(node.as_str())),
+        (Vertex::Disjunction(disjunction), Edge::Reads) => {
+            format!("reads {}", name(disjunction.as_str()))
+        }
         (Vertex::Outside, Edge::Reads) => "reads outside".to_string(),
         (to, edge) => unreachable!("the dependency graph has no edge {edge:?} to {to:?}"),
     });
@@ -854,8 +868,8 @@ fn dependencies(state: &State, waits: Vec<(Vertex, Edge)>) -> String {
 }
 
 /// What a binding group waits for: each equivalence class not solved, and
-/// each node not decided, with the unbroken dependencies of it not yet met,
-/// and a node that waits for nothing with the value it reads, which decides
+/// each disjunctive constraint not decided, with the unbroken dependencies of it not yet met,
+/// and a disjunctive constraint that waits for nothing with the value it reads, which decides
 /// nothing.
 pub fn waiting(state: &State) -> Lines {
     let mut lines = Lines::default();
@@ -867,27 +881,27 @@ pub fn waiting(state: &State) -> Lines {
         let (no_value, enclosing) = (state.has_no_value(root), state.is_foreign(root));
         let wait = (!no_value && !enclosing).then(|| waits_for(state, &Vertex::Class(root)));
         let line = format!("unsolved {}", class_of(state, root));
-        let facts = [
+        let attributes = [
             ("universal", yes(state.is_universal(root))),
             ("no value", yes(no_value)),
             ("enclosing", yes(!no_value && enclosing)),
             ("wait", wait),
         ];
-        lines.push(0, attributes(line, facts));
+        lines.push(0, with_attributes(line, attributes));
     }
-    for (node, held) in &state.nodes {
+    for (disjunction, held) in &state.disjunctions {
         if held.decision.is_some() {
             continue;
         }
-        let waits = state.waits_for(&Vertex::Node(node.clone()));
+        let waits = state.waits_for(&Vertex::Disjunction(disjunction.clone()));
         let waits_for_nothing = waits.is_empty();
-        let line = format!("undecided {}", name(node.as_str()));
+        let line = format!("undecided {}", name(disjunction.as_str()));
         let wait = dependencies(state, waits);
-        lines.push(0, attributes(line, [("wait", Some(wait))]));
+        lines.push(0, with_attributes(line, [("wait", Some(wait))]));
         if waits_for_nothing {
             let none = [("broken by", None)];
-            let read = state.read_now(node);
-            lines.nest(1, value_read(state, node, &read, none));
+            let read = state.read_now(disjunction);
+            lines.nest(1, value_read(state, disjunction, &read, none));
         }
     }
     lines
@@ -902,17 +916,17 @@ pub fn c(state: &State) -> Lines {
         lines.push(1, format!("classes: {classes}"));
     }
     let undecided = state
-        .nodes
+        .disjunctions
         .iter()
         .filter(|(_, held)| held.decision.is_none())
-        .map(|(node, _)| node);
-    if let Some(undecided) = nodes(undecided) {
-        lines.push(1, format!("nodes: {undecided}"));
+        .map(|(disjunction, _)| disjunction);
+    if let Some(undecided) = names(undecided) {
+        lines.push(1, format!("disjunctive constraints: {undecided}"));
     }
     for at in state.relations_on(&c) {
         let line = format!("relation #{at} {}", relation(state, at));
         let by = recorder(state, &state.log[at].recorder);
-        lines.push(1, attributes(line, [("by", Some(by))]));
+        lines.push(1, with_attributes(line, [("by", Some(by))]));
     }
     lines
 }

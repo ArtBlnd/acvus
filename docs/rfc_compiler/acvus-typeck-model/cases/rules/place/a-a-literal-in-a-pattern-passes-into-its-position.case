@@ -1,7 +1,7 @@
 // let x = 1u8;
 // match x { 1u16 => {} }
 // The literal is a value passing into the type of its position, x's
-// unknown X: a meeting, a second lower bound beside 1u8, with no join.
+// unknown X: a lower bound, a second lower bound beside 1u8, with no join.
 let X;
 let 1u8: u8;
 let 1u16: u16;

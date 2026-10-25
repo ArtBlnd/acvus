@@ -1,9 +1,9 @@
 //! Decompositions: once an equivalence class takes a constructor, a relation
 //! is recorded at each part of the two sides of each of its lower bounds, part
-//! lower bounds and boundaries, as at the upper bound of the value's part: a
-//! meeting where that upper bound is an unknown, recording a part lower bound
+//! lower bounds and coercion constraints, as at the upper bound of the value's part: a
+//! lower bound where that upper bound is an unknown, recording a part lower bound
 //! between the parts of a structural type and an equation between other parts,
-//! and a boundary where it is not. Where the two sides' constructors differ,
+//! and a coercion constraint where it is not. Where the two sides' constructors differ,
 //! the parts are linked by the same rule through the declared casts'
 //! parameters and results, or between the targets where `&mut T` passes into
 //! `&U`.
@@ -22,7 +22,7 @@ use crate::ty::{Constructor, Mutability, Name, PartKey, Term};
 /// How a relation's value passes into its other side.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Passing {
-    /// By a lower bound or a boundary: the value passes whole, so that two
+    /// By a lower bound or a coercion constraint: the value passes whole, so that two
     /// constructors are linked through the declared casts or a reborrow.
     Whole,
     /// By a part lower bound: a part passes, which takes no cast.
@@ -32,16 +32,16 @@ pub(crate) enum Passing {
 /// What became of a relation of the log at a decomposition.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Decomposition {
-    /// A lower bound, a part lower bound or a boundary whose two sides are one
+    /// A lower bound, a part lower bound or a coercion constraint whose two sides are one
     /// equivalence class: marked decomposed, nothing left to relate.
     OneClass,
-    /// A lower bound, a part lower bound or a boundary whose two sides are
+    /// A lower bound, a part lower bound or a coercion constraint whose two sides are
     /// solved: marked decomposed, with the relations recorded between their parts.
     Parts(Recording),
-    /// A lower bound, a part lower bound or a boundary whose two sides are not
+    /// A lower bound, a part lower bound or a coercion constraint whose two sides are not
     /// both solved: left as it is.
     Unsolved,
-    /// No lower bound, no part lower bound and no boundary: marked decomposed,
+    /// No lower bound, no part lower bound and no coercion constraint: marked decomposed,
     /// having no parts to relate.
     NoParts,
 }
@@ -50,7 +50,7 @@ impl State {
     /// Decomposes the relation at `i` in the log where its two sides are solved,
     /// and marks it decomposed where there is nothing left to decompose: two sides of
     /// one equivalence class, or a relation that is no lower bound, no part
-    /// lower bound and no boundary.
+    /// lower bound and no coercion constraint.
     pub(crate) fn decompose_at(&mut self, i: usize) -> Decomposition {
         match self.log[i].relation {
             Relation::LowerBound { lower, upper } => {
@@ -59,7 +59,7 @@ impl State {
             Relation::PartLowerBound { lower, upper } => {
                 self.decompose_sides(i, lower, upper, Passing::Part, upper)
             }
-            Relation::Boundary { from, to } => {
+            Relation::CoercionConstraint { from, to } => {
                 self.decompose_sides(i, from, to, Passing::Whole, from)
             }
             Relation::Wrap { from, to } => self.decompose_wrap(i, from, to),
@@ -181,11 +181,11 @@ impl State {
 
     /// The relation recorded where the part `from` passes into the part `to`
     /// of a type of constructor `of`: where `to` is an unknown the
-    /// upper bound is a meeting, recording a part lower bound where `of` is
-    /// structural and an equation otherwise, and elsewhere it is a boundary.
+    /// upper bound is a lower bound, recording a part lower bound where `of` is
+    /// structural and an equation otherwise, and elsewhere it is a coercion constraint.
     fn part_relation(&self, of: &Constructor, from: ClassId, to: ClassId) -> Relation {
         if !self.is_unknown(to) {
-            Relation::Boundary { from, to }
+            Relation::CoercionConstraint { from, to }
         } else if of.is_structural() {
             Relation::PartLowerBound {
                 lower: from,

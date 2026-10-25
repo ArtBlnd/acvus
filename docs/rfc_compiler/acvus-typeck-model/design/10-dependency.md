@@ -4,15 +4,15 @@ The code is `src/dep.rs`.
 
 ## Meaning
 
-The graph's vertices are the equivalence classes of the moment and the nodes. A
+The graph's vertices are the equivalence classes of the moment and the disjunctive constraints. A
 class depends on its unsolved lower bounds and part lower bounds, on each unsolved
 class whose taking a constructor will record into it, on each unsolved class it is
-a part of, and on each node at whose position it lies that has not recorded its
+a part of, and on each disjunctive constraint at whose position it lies that has not recorded its
 relations. A dependency on a lower bound or a part lower bound nothing enters is
-met. A node depends on the nodes that record into the classes at
-the positions it reads, which are the nodes those classes, and the classes they
+met. A disjunctive constraint depends on the disjunctive constraints that record into the classes at
+the positions it reads, which are the disjunctive constraints those classes, and the classes they
 reach along dependencies between classes, depend on. Each row is of the
-moment: a dependency on a solved class is gone, and a node's on a decided node is
+moment: a dependency on a solved class is gone, and a disjunctive constraint's on a decided disjunctive constraint is
 met.
 
 ## Readings
@@ -35,10 +35,10 @@ met.
    nothing enters, was filled before its place took the constructor that equates
    it with the place's own target, and the outcome depended on the order
    (`rules/place/a-a-lend-of-a-reference-place-targets-its-target`).
-5. **A node decided whose relations wait.** A node decided while undecided nodes
+5. **A disjunctive constraint decided whose relations wait.** A disjunctive constraint decided while undecided disjunctive constraints
    broke their dependency on it records once they are decided. Until then the classes
    at its positions depend on it, as on the relations
-   not yet recorded into them; a node's dependency on it is met, it
+   not yet recorded into them; a disjunctive constraint's dependency on it is met, it
    being decided. Without it, a class at its position, which nothing
    entered until it recorded, met its dependents' dependencies on it, and the
    outcome depended on the order.
@@ -49,13 +49,13 @@ met.
 7. **`e?`'s positions** include the class of its exit's value, so that the innermost
    body's result, which that class passes into, does
    not take its value before the exit is recorded. Without it, the exit would
-   record into a class no node lies at.
-8. **A node that records only a boundary out of a class**: a use at an argument each
+   record into a class no disjunctive constraint lies at.
+8. **A disjunctive constraint that records only a coercion constraint out of a class**: a use at an argument each
    candidate writes a type for, and within the
    depth those types reach, not at its result, its exit or an argument a candidate
-   writes a variable for (`State::passed_out_only`). Such a boundary changes the
+   writes a variable for (`State::passed_out_only`). Such a coercion constraint changes the
    class only by the fill of a class nothing enters or LitVars alone enter, so the
-   class waits for the node only while it is such a class, judged on
+   class waits for the disjunctive constraint only while it is such a class, judged on
    the graph without those dependencies (`State::filled_by_places_in`). Where the
    class has a source still to come, a use that only reads it waits for that source
    and is not waited for. Four cases refused at an undecided use now give the
@@ -64,7 +64,7 @@ met.
    One rule for every relation not yet decomposed: the side that will take a relation
    waits for the class whose taking a constructor decomposes it (`Edge::Taking`): a
    part of `τ` in `τ ≤ α`, a part of `U` in `α ⇝ U`, a part at a parameter of a
-   function value, and the class `e?`'s wrapping passes into. And the nodes
+   function value, and the class `e?`'s wrapping passes into. And the disjunctive constraints
    recording into a class are reached along the parts of the two sides such a
    decomposition will link, among those they hold now by a structure, a structure constraint
    or a function value's environment (`State::decomposition_links`), so a pattern on a
@@ -79,15 +79,15 @@ met.
    a candidate writing that function type (`State::environment_within`), the
    parameters as classes it records into and the result types as ones it passes out
    of. And each environment parameter of a lambda whose value reaches a class passing
-   by a boundary into a function type waits for that class to take its constructor,
-   the boundary's decomposition recording into it (`Edge::Taking`). Without the second, the
+   by a coercion constraint into a function type waits for that class to take its constructor,
+   the coercion constraint's decomposition recording into it (`Edge::Taking`). Without the second, the
    use was decided at once, the decomposition waited for the function value's class, and the
    parameter was filled first.
 
-11. **What a broken dependency defers**. The relations of a node a broken dependency
-   pointed to wait for the node that broke it only where that node reads them: into a
+11. **What a broken dependency defers**. The relations of a disjunctive constraint a broken dependency
+   pointed to wait for the disjunctive constraint that broke it only where that disjunctive constraint reads them: into a
    class at a position it reads, or a class those reach by lower bounds and part
-   lower bounds, as I\* takes what a node records; the rest are recorded as the node
+   lower bounds, as I\* takes what a disjunctive constraint records; the rest are recorded as the disjunctive constraint
    is decided (`State::reading_what_it_records`). In `even(10u8)` with `even` and
    `odd` calling each other, `n - 1` in odd's copy, decided by its result, records
    into its parameters' types, which `n == 0` does not read; deferred whole, its
@@ -96,7 +96,7 @@ met.
 
 ## Left open for change
 
-- `State::reads`: what a node reads, and the projections on a binding's path it
+- `State::reads`: what a disjunctive constraint reads, and the projections on a binding's path it
   depends on.
-- `State::records_into`: which nodes at a class's position may change what a node
+- `State::records_into`: which disjunctive constraints at a class's position may change what a disjunctive constraint
   reads there.

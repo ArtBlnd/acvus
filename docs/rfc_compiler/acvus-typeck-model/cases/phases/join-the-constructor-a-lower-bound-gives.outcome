@@ -14,9 +14,9 @@ start run
   record #1 Some(1u8): Option<S>
   record #2 u8 <= S
   record #3 Some(1u8) <= A
-  decompose #0 u8: u8: no parts
-  decompose #1 Some(1u8): Option<S>: no parts
+  decomposition #0 u8: u8: no parts
+  decomposition #1 Some(1u8): Option<S>: no parts
 step 1 run: solve A
   join A: Option {Variant(None), Variant(Some)}
-  decompose #3 Some(1u8) <= A: parts
+  decomposition #3 Some(1u8) <= A: parts
     record #4 S <=p A.Payload(Some)

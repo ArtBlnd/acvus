@@ -113,7 +113,7 @@ pub enum TextItem {
     },
     Equation(String, String),
     Use {
-        node: String,
+        disjunction: String,
         callee: String,
         args: Vec<String>,
         result: String,
@@ -121,25 +121,25 @@ pub enum TextItem {
         exit: Option<String>,
     },
     CallValue {
-        node: String,
+        disjunction: String,
         callee: String,
         args: Vec<String>,
         result: String,
     },
     Lend {
-        node: String,
+        disjunction: String,
         mutability: Mutability,
         place: String,
         result: String,
     },
     Project {
-        node: String,
+        disjunction: String,
         projection: ProjectionText,
         operand: String,
         result: String,
     },
     Bind {
-        node: String,
+        disjunction: String,
         path: Vec<String>,
         position: String,
         binding: String,
@@ -183,15 +183,21 @@ pub enum Phase {
     Unify,
     Join,
     Decomposition,
-    Node,
+    Disjunction,
     Fallback,
 }
 
 /// A change to a certificate.
 #[derive(Clone, Debug)]
 pub enum Change {
-    Value { class: String, ty: TypeExpr },
-    Decision { node: String, decision: String },
+    Value {
+        class: String,
+        ty: TypeExpr,
+    },
+    Decision {
+        disjunction: String,
+        decision: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -202,9 +208,9 @@ pub enum Expect {
         class: String,
         ty: Option<TypeExpr>,
     },
-    /// The node's decision, as `render::decision` writes it.
+    /// The disjunctive constraint's decision, as `render::decision` writes it.
     Decision {
-        node: String,
+        disjunction: String,
         decision: String,
     },
     Refused(RefusalText),
@@ -219,7 +225,7 @@ pub enum Expect {
     },
     Istar {
         kind: Kind,
-        node: String,
+        disjunction: String,
     },
     Outcomes(usize),
     Partition(BTreeSet<String>),
@@ -716,7 +722,7 @@ impl Parser<'_> {
 
     /// What follows `=` in a statement, giving `result`.
     fn rhs(&mut self, result: String) -> Parsed<TextItem> {
-        let node = |parser: &mut Self| -> Parsed<String> {
+        let disjunction = |parser: &mut Self| -> Parsed<String> {
             parser.punct("@")?;
             parser.name()
         };
@@ -728,7 +734,7 @@ impl Parser<'_> {
             };
             let place = self.name()?;
             return Ok(TextItem::Lend {
-                node: node(self)?,
+                disjunction: disjunction(self)?,
                 mutability,
                 place,
                 result,
@@ -737,7 +743,7 @@ impl Parser<'_> {
         if self.eat_punct("*") {
             let operand = self.name()?;
             return Ok(TextItem::Project {
-                node: node(self)?,
+                disjunction: disjunction(self)?,
                 projection: ProjectionText::Deref,
                 operand,
                 result,
@@ -749,7 +755,7 @@ impl Parser<'_> {
             self.punct("(")?;
             let args = self.names_until(")")?;
             return Ok(TextItem::CallValue {
-                node: node(self)?,
+                disjunction: disjunction(self)?,
                 callee,
                 args,
                 result,
@@ -764,7 +770,7 @@ impl Parser<'_> {
             self.punct("[")?;
             let path = self.names_until("]")?;
             return Ok(TextItem::Bind {
-                node: node(self)?,
+                disjunction: disjunction(self)?,
                 path,
                 position,
                 binding: result,
@@ -779,7 +785,7 @@ impl Parser<'_> {
                 None
             };
             return Ok(TextItem::Use {
-                node: node(self)?,
+                disjunction: disjunction(self)?,
                 callee: name,
                 args,
                 result,
@@ -793,7 +799,7 @@ impl Parser<'_> {
                 Err(_) => ProjectionText::Field(part),
             };
             return Ok(TextItem::Project {
-                node: node(self)?,
+                disjunction: disjunction(self)?,
                 projection,
                 operand: name,
                 result,
@@ -802,7 +808,7 @@ impl Parser<'_> {
         if self.eat_punct("[") {
             self.punct("]")?;
             return Ok(TextItem::Project {
-                node: node(self)?,
+                disjunction: disjunction(self)?,
                 projection: ProjectionText::Elem,
                 operand: name,
                 result,
@@ -821,7 +827,7 @@ impl Parser<'_> {
                 },
             };
             return Ok(TextItem::Project {
-                node: node(self)?,
+                disjunction: disjunction(self)?,
                 projection,
                 operand: name,
                 result,
@@ -960,7 +966,7 @@ impl Parser<'_> {
             "unify" => Phase::Unify,
             "join" => Phase::Join,
             "decomposition" => Phase::Decomposition,
-            "node" => Phase::Node,
+            "disjunction" => Phase::Disjunction,
             "fallback" => Phase::Fallback,
             _ => return None,
         })
@@ -1010,7 +1016,7 @@ impl Parser<'_> {
                 };
                 Expect::Istar {
                     kind,
-                    node: self.name()?,
+                    disjunction: self.name()?,
                 }
             }
             (Some("outcomes"), Some(Tok::Word(_))) => {
@@ -1037,7 +1043,7 @@ impl Parser<'_> {
                 } else {
                     self.punct("==")?;
                     Change::Decision {
-                        node: target,
+                        disjunction: target,
                         decision: self.raw_until(Some("fails"))?,
                     }
                 };
@@ -1119,7 +1125,7 @@ impl Parser<'_> {
                 } else {
                     self.punct("==")?;
                     return Ok(Expect::Decision {
-                        node: name,
+                        disjunction: name,
                         decision: self.raw_until(None)?,
                     });
                 }
@@ -1204,7 +1210,7 @@ fn directives(source: &str, case: &mut Case) -> Parsed<()> {
                     .filter(|step| !step.is_empty())
                     .map(|step| match step.split_once(' ') {
                         Some(("solve", class)) => Ok(StepText::Solve(unquote(class))),
-                        Some(("decide", node)) => Ok(StepText::Decide(unquote(node))),
+                        Some(("decide", disjunction)) => Ok(StepText::Decide(unquote(disjunction))),
                         None if step == "fallback" => Ok(StepText::Fallback),
                         _ => Err(format!("line {at}: no step {step}")),
                     })

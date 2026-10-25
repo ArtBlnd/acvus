@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, StructureSource};
-use crate::node::{Generalized, NodeKind, NodeState};
+use crate::disjunction::{Disjunction, DisjunctionState, Generalized};
 use crate::record::{Instantiated, Recording};
 use crate::relation::{Recorder, Relation, copy_name};
 use crate::solve::State;
@@ -26,8 +26,8 @@ pub struct Made {
 }
 
 /// C's classes, each in its part: two of C's classes lie in one part
-/// where one of C's relations is on both, a node left undecided names both, a
-/// binding's node and the projections on its path name them, one is a part of
+/// where one of C's relations is on both, a disjunctive constraint left undecided names both, a
+/// binding's disjunctive constraint and the projections on its path name them, one is a part of
 /// the other's structure, or one holds a function value whose Values name a lambda
 /// placed in the group and the other lies in that lambda's environment, which
 /// an instance makes anew with it. A part is what an instance makes anew
@@ -44,10 +44,14 @@ impl Components {
         self.parts.get(&state.root(class)).copied()
     }
 
-    /// The part of C a node left undecided lies in, none where it names no
+    /// The part of C a disjunctive constraint left undecided lies in, none where it names no
     /// class of C.
-    pub(crate) fn of_node(&self, state: &State, node: &NodeState) -> Option<usize> {
-        named_by(node)
+    pub(crate) fn of_disjunction(
+        &self,
+        state: &State,
+        disjunction: &DisjunctionState,
+    ) -> Option<usize> {
+        named_by(disjunction)
             .into_iter()
             .find_map(|class| self.of(state, class))
     }
@@ -66,8 +70,8 @@ pub(crate) struct Instance<'a> {
     c: BTreeSet<ClassId>,
     /// The parts of C it makes anew, none naming all of C.
     parts: Option<BTreeSet<usize>>,
-    /// The nodes `from` left undecided it makes anew, none naming them all.
-    nodes: Option<BTreeSet<Name>>,
+    /// The disjunctive constraints `from` left undecided it makes anew, none naming them all.
+    disjunctions: Option<BTreeSet<Name>>,
     /// Each root of `from` met so far, with its class here.
     made: BTreeMap<ClassId, ClassId>,
     /// The relations it has recorded here so far.
@@ -123,11 +127,21 @@ impl State {
             }
             tie(classes);
         }
-        for node in self.nodes.values().filter(|node| node.decision.is_none()) {
-            let mut classes = named_by(node);
-            if let NodeKind::Bind { path, .. } = &node.kind {
+        for disjunction in self
+            .disjunctions
+            .values()
+            .filter(|disjunction| disjunction.decision.is_none())
+        {
+            let mut classes = named_by(disjunction);
+            if let Disjunction::Bind { path, .. } = &disjunction.kind {
                 for step in path {
-                    classes.extend(self.nodes.get(step).map(named_by).into_iter().flatten());
+                    classes.extend(
+                        self.disjunctions
+                            .get(step)
+                            .map(named_by)
+                            .into_iter()
+                            .flatten(),
+                    );
                 }
             }
             tie(classes);
@@ -179,7 +193,9 @@ impl State {
             .filter(|recorded| {
                 matches!(
                     recorded.recorder,
-                    Recorder::Node(_) | Recorder::Generalization(_) | Recorder::Instance { .. }
+                    Recorder::Disjunction(_)
+                        | Recorder::Generalization(_)
+                        | Recorder::Instance { .. }
                 )
             })
             .filter_map(|recorded| match &recorded.relation {
@@ -216,7 +232,7 @@ impl<'a> Instance<'a> {
             from,
             c: from.c(),
             parts: None,
-            nodes: None,
+            disjunctions: None,
             made: BTreeMap::new(),
             recorded: Recording::default(),
         }
@@ -227,7 +243,7 @@ impl<'a> Instance<'a> {
     /// `positions` are the classes of `from` at the function's parameters and
     /// result, each with whether the use records it here. The cut groups the
     /// use's positions by these parts, so no part holds positions of both.
-    /// Panics where a part of C, or a node left in it, lies at no position,
+    /// Panics where a part of C, or a disjunctive constraint left in it, lies at no position,
     /// which no rule places.
     pub(crate) fn part(
         at: &Name,
@@ -259,20 +275,20 @@ impl<'a> Instance<'a> {
                 from.class_name(*root)
             );
         }
-        let mut nodes = BTreeSet::new();
-        for (name, node) in &from.nodes {
-            if node.decision.is_some() {
+        let mut disjunctions = BTreeSet::new();
+        for (name, disjunction) in &from.disjunctions {
+            if disjunction.decision.is_some() {
                 continue;
             }
-            let part = components.of_node(from, node);
+            let part = components.of_disjunction(from, disjunction);
             if !placed(part) {
                 panic!(
-                    "{at}: the node {name} left in C lies at no position of a use whose \
+                    "{at}: the disjunctive constraint {name} left in C lies at no position of a use whose \
                      constraints two groups record, which no rule places"
                 );
             }
             if part.is_some_and(|part| here.contains(&part)) {
-                nodes.insert(name.clone());
+                disjunctions.insert(name.clone());
             }
         }
         Instance {
@@ -284,7 +300,7 @@ impl<'a> Instance<'a> {
                 })
                 .collect(),
             parts: Some(here),
-            nodes: Some(nodes),
+            disjunctions: Some(disjunctions),
             ..Instance::new(at, by, from)
         }
     }
@@ -298,16 +314,16 @@ impl<'a> Instance<'a> {
         }
     }
 
-    /// A node's kind here, its classes those here and a binding's path the
+    /// A disjunctive constraint's kind here, its classes those here and a binding's path the
     /// copies of its projections.
-    pub(crate) fn kind(&mut self, here: &mut State, kind: &NodeKind) -> NodeKind {
+    pub(crate) fn kind(&mut self, here: &mut State, kind: &Disjunction) -> Disjunction {
         match kind.clone() {
-            NodeKind::Use {
+            Disjunction::Use {
                 callee,
                 args,
                 result,
                 exit,
-            } => NodeKind::Use {
+            } => Disjunction::Use {
                 callee,
                 args: args
                     .into_iter()
@@ -316,38 +332,38 @@ impl<'a> Instance<'a> {
                 result: result.map(|result| self.class(here, result)),
                 exit: exit.map(|exit| self.class(here, exit)),
             },
-            NodeKind::Lend {
+            Disjunction::Lend {
                 mutability,
                 place,
                 result,
-            } => NodeKind::Lend {
+            } => Disjunction::Lend {
                 mutability,
                 place: self.class(here, place),
                 result: self.class(here, result),
             },
-            NodeKind::Project {
+            Disjunction::Project {
                 projection,
                 operand,
                 result,
-            } => NodeKind::Project {
+            } => Disjunction::Project {
                 projection,
                 operand: self.class(here, operand),
                 result: self.class(here, result),
             },
-            NodeKind::Bind {
+            Disjunction::Bind {
                 path,
                 position,
                 binding,
-            } => NodeKind::Bind {
-                path: path.iter().map(|step| self.node(step)).collect(),
+            } => Disjunction::Bind {
+                path: path.iter().map(|step| self.disjunction(step)).collect(),
                 position: self.class(here, position),
                 binding: self.class(here, binding),
             },
-            NodeKind::CallValue {
+            Disjunction::CallValue {
                 callee,
                 args,
                 result,
-            } => NodeKind::CallValue {
+            } => Disjunction::CallValue {
                 callee: self.class(here, callee),
                 args: args.into_iter().map(|arg| self.class(here, arg)).collect(),
                 result: self.class(here, result),
@@ -355,24 +371,26 @@ impl<'a> Instance<'a> {
         }
     }
 
-    /// What records a copied relation here: the copy of an undecided node, or
+    /// What records a copied relation here: the copy of an undecided disjunctive constraint, or
     /// the instance, made by what made it.
     fn recorder(&self, of: &Recorder) -> Recorder {
         match of {
-            Recorder::Node(node) if self.from.nodes[node].decision.is_none() => {
-                Recorder::Node(self.node(node))
+            Recorder::Disjunction(disjunction)
+                if self.from.disjunctions[disjunction].decision.is_none() =>
+            {
+                Recorder::Disjunction(self.disjunction(disjunction))
             }
-            // A generalization recorded where the node is not, at positions
+            // A generalization recorded where the disjunctive constraint is not, at positions
             // where every candidate writes one closed type, is as
-            // that of a node left undecided.
-            Recorder::Generalization(node)
+            // that of a disjunctive constraint left undecided.
+            Recorder::Generalization(disjunction)
                 if self
                     .from
-                    .nodes
-                    .get(node)
-                    .is_none_or(|node| node.decision.is_none()) =>
+                    .disjunctions
+                    .get(disjunction)
+                    .is_none_or(|disjunction| disjunction.decision.is_none()) =>
             {
-                Recorder::Generalization(self.node(node))
+                Recorder::Generalization(self.disjunction(disjunction))
             }
             _ => Recorder::Instance {
                 at: (*self.at).clone(),
@@ -382,7 +400,7 @@ impl<'a> Instance<'a> {
         }
     }
 
-    pub(crate) fn node(&self, name: &Name) -> Name {
+    pub(crate) fn disjunction(&self, name: &Name) -> Name {
         copy_name(&self.at, name)
     }
 
@@ -477,7 +495,7 @@ impl<'a> Instance<'a> {
     }
 
     /// Records here every relation of `from` on a class of C, makes anew each
-    /// node `from` left undecided, and keeps the instance here.
+    /// disjunctive constraint `from` left undecided, and keeps the instance here.
     /// A relation `from` decomposed is decomposed here too: what its decomposition recorded is
     /// among the relations copied, and no class of the copy takes a
     /// constructor here that it did not hold in `from`.
@@ -504,40 +522,44 @@ impl<'a> Instance<'a> {
             }
             self.recorded.push(entry);
         }
-        let undecided: Vec<(&Name, &NodeState)> = from
-            .nodes
+        let undecided: Vec<(&Name, &DisjunctionState)> = from
+            .disjunctions
             .iter()
-            .filter(|(name, node)| {
-                node.decision.is_none()
+            .filter(|(name, disjunction)| {
+                disjunction.decision.is_none()
                     && self
-                        .nodes
+                        .disjunctions
                         .as_ref()
-                        .is_none_or(|nodes| nodes.contains(*name))
+                        .is_none_or(|disjunctions| disjunctions.contains(*name))
             })
             .collect();
-        for (name, node) in undecided {
-            let kind = self.kind(here, &node.kind);
-            let copy = self.node(name);
-            here.add_node(&copy, kind);
-            let generalized = node
-                .generalized
-                .clone()
-                .map(|generalized| match generalized {
-                    Generalized::Use { part, classes } => Generalized::Use {
-                        part,
-                        classes: classes
-                            .into_iter()
-                            .map(|(k, class)| (k, self.class(here, class)))
-                            .collect(),
-                    },
-                    Generalized::Lend => Generalized::Lend,
-                });
-            let references: BTreeSet<ClassId> = node
+        for (name, disjunction) in undecided {
+            let kind = self.kind(here, &disjunction.kind);
+            let copy = self.disjunction(name);
+            here.add_disjunction(&copy, kind);
+            let generalized =
+                disjunction
+                    .generalized
+                    .clone()
+                    .map(|generalized| match generalized {
+                        Generalized::Use { part, classes } => Generalized::Use {
+                            part,
+                            classes: classes
+                                .into_iter()
+                                .map(|(k, class)| (k, self.class(here, class)))
+                                .collect(),
+                        },
+                        Generalized::Lend => Generalized::Lend,
+                    });
+            let references: BTreeSet<ClassId> = disjunction
                 .references
                 .iter()
                 .map(|&class| self.class(here, class))
                 .collect();
-            let state = here.nodes.get_mut(&copy).expect("the node was added");
+            let state = here
+                .disjunctions
+                .get_mut(&copy)
+                .expect("the disjunctive constraint was added");
             state.generalized = generalized;
             state.references = references;
         }
@@ -559,11 +581,11 @@ impl<'a> Instance<'a> {
     }
 }
 
-/// The classes a node names: those of its structure, and those its generalization
+/// The classes a disjunctive constraint names: those of its structure, and those its generalization
 /// made and recorded whether they are references.
-fn named_by(node: &NodeState) -> Vec<ClassId> {
-    let mut classes: Vec<ClassId> = match &node.kind {
-        NodeKind::Use {
+fn named_by(disjunction: &DisjunctionState) -> Vec<ClassId> {
+    let mut classes: Vec<ClassId> = match &disjunction.kind {
+        Disjunction::Use {
             args, result, exit, ..
         } => args
             .iter()
@@ -572,14 +594,14 @@ fn named_by(node: &NodeState) -> Vec<ClassId> {
             .chain(exit)
             .copied()
             .collect(),
-        NodeKind::Lend { place, result, .. } => vec![*place, *result],
-        NodeKind::Project {
+        Disjunction::Lend { place, result, .. } => vec![*place, *result],
+        Disjunction::Project {
             operand, result, ..
         } => vec![*operand, *result],
-        NodeKind::Bind {
+        Disjunction::Bind {
             position, binding, ..
         } => vec![*position, *binding],
-        NodeKind::CallValue {
+        Disjunction::CallValue {
             callee,
             args,
             result,
@@ -589,10 +611,10 @@ fn named_by(node: &NodeState) -> Vec<ClassId> {
             .chain([*result])
             .collect(),
     };
-    if let Some(Generalized::Use { classes: made, .. }) = &node.generalized {
+    if let Some(Generalized::Use { classes: made, .. }) = &disjunction.generalized {
         classes.extend(made.values());
     }
-    classes.extend(&node.references);
+    classes.extend(&disjunction.references);
     classes
 }
 

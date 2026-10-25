@@ -1,16 +1,16 @@
-//! I\*: each decision against the one its node makes reading what is recorded
+//! I\*: each decision against the one its disjunctive constraint makes reading what is recorded
 //! once solving ends.
 //!
-//! The dependency here is computed on its own, from what each node records at
+//! The dependency here is computed on its own, from what each disjunctive constraint records at
 //! the end, never through `State::graph`, which is the means under test.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::class::ClassId;
+use crate::disjunction::{Decision, Disjunction, DisjunctionState, Generalized, Read};
 use crate::explore::Final;
 use crate::instance::{Instance, Made};
-use crate::node::{Decision, Generalized, NodeKind, NodeState, Read};
 use crate::program::{ENTRY, Program, Projection};
 use crate::relation::{Recorder, Relation, copy_name};
 use crate::solve::State;
@@ -25,22 +25,22 @@ pub enum Kind {
     Soundness,
 }
 
-/// A decision that is not the one its node makes reading what is recorded at
+/// A decision that is not the one its disjunctive constraint makes reading what is recorded at
 /// the end.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Violation {
     pub kind: Kind,
-    /// The binding group of the state the node is decided again in.
+    /// The binding group of the state the disjunctive constraint is decided again in.
     pub group: Name,
-    pub node: Name,
+    pub disjunction: Name,
     pub decided: Decision,
     /// What it becomes decided again, none where that decides nothing.
     pub again: Option<Decision>,
-    /// The nodes whose relations the decision again leaves out.
+    /// The disjunctive constraints whose relations the decision again leaves out.
     pub left_out: BTreeSet<Name>,
 }
 
-/// Every decided node of a final state, decided again in each context its
+/// Every decided disjunctive constraint of a final state, decided again in each context its
 /// decision holds for.
 pub fn check(program: &Program, end: &Final<'_>) -> Vec<Violation> {
     let accepted = end.entry.outcome_with(end.groups).accepted;
@@ -76,9 +76,9 @@ pub fn check(program: &Program, end: &Final<'_>) -> Vec<Violation> {
     violations
 }
 
-/// The state with, for each instance it made, a node for each node the
+/// The state with, for each instance it made, a disjunctive constraint for each disjunctive constraint the
 /// instantiated group decided, under the name of its copy, so that the
-/// relations copied from it are that node's (`Recorder::nodes`).
+/// relations copied from it are that disjunctive constraint's (`Recorder::disjunctions`).
 fn view(state: &State, groups: &BTreeMap<Name, Rc<State>>) -> State {
     let mut view = state.clone();
     for made in &state.instances {
@@ -90,26 +90,26 @@ fn view(state: &State, groups: &BTreeMap<Name, Rc<State>>) -> State {
 
 fn add_decided(here: &mut State, made: &Made, from: &State) {
     let mut copy = Instance::resume(made, from);
-    // An instance of parts of C has the decided nodes in those parts.
+    // An instance of parts of C has the decided disjunctive constraints in those parts.
     let components = made.parts.as_ref().map(|_| from.components());
-    for (name, node) in &from.nodes {
-        let Some(decision) = &node.decision else {
+    for (name, disjunction) in &from.disjunctions {
+        let Some(decision) = &disjunction.decision else {
             continue;
         };
         if let (Some(parts), Some(components)) = (&made.parts, &components)
             && !components
-                .of_node(from, node)
+                .of_disjunction(from, disjunction)
                 .is_some_and(|part| parts.contains(&part))
         {
             continue;
         }
-        let kind = copy.kind(here, &node.kind);
-        let references = node
+        let kind = copy.kind(here, &disjunction.kind);
+        let references = disjunction
             .references
             .iter()
             .map(|&class| copy.class(here, class))
             .collect();
-        let generalized = node
+        let generalized = disjunction
             .generalized
             .clone()
             .map(|generalized| match generalized {
@@ -122,9 +122,9 @@ fn add_decided(here: &mut State, made: &Made, from: &State) {
                 },
                 Generalized::Lend => Generalized::Lend,
             });
-        here.nodes.insert(
+        here.disjunctions.insert(
             copy_name(&made.at, name),
-            NodeState {
+            DisjunctionState {
                 kind,
                 decision: Some(decision.clone()),
                 generalized,
@@ -134,7 +134,7 @@ fn add_decided(here: &mut State, made: &Made, from: &State) {
     }
 }
 
-/// Decides again each decided node `subject` admits, in a final state whose
+/// Decides again each decided disjunctive constraint `subject` admits, in a final state whose
 /// program is `accepted` or not.
 fn check_view<F>(view: &State, accepted: bool, subject: F) -> Vec<Violation>
 where
@@ -142,21 +142,21 @@ where
 {
     let graph = EndGraph::of(view);
     let mut violations = Vec::new();
-    for (name, node) in &view.nodes {
-        let Some(decided) = node.decision.clone() else {
+    for (name, disjunction) in &view.disjunctions {
+        let Some(decided) = disjunction.decision.clone() else {
             continue;
         };
         if !subject(name) {
             continue;
         }
         let left_out = graph.exclusion(name);
-        let again = match &node.kind {
-            NodeKind::Bind { path, .. } if path.iter().any(|step| left_out.contains(step)) => {
+        let again = match &disjunction.kind {
+            Disjunction::Bind { path, .. } if path.iter().any(|step| left_out.contains(step)) => {
                 let mut cut = view.clone();
                 for step in path.iter().filter(|step| left_out.contains(*step)) {
-                    cut.nodes
+                    cut.disjunctions
                         .get_mut(step)
-                        .expect("a binding's path is of the view's nodes")
+                        .expect("a binding's path is of the view's disjunctive constraints")
                         .decision = None;
                 }
                 cut.decision_under(name, &left_out)
@@ -174,7 +174,7 @@ where
         violations.push(Violation {
             kind,
             group: view.group.clone(),
-            node: name.clone(),
+            disjunction: name.clone(),
             decided,
             again,
             left_out,
@@ -183,7 +183,7 @@ where
     violations
 }
 
-/// What each node records into at the end, as each of the two reads takes it.
+/// What each disjunctive constraint records into at the end, as each of the two reads takes it.
 struct Records {
     value: BTreeSet<ClassId>,
     reference: BTreeSet<ClassId>,
@@ -199,7 +199,7 @@ impl Records {
 }
 
 /// The dependency at the end: for each
-/// node, the nodes it depends on.
+/// disjunctive constraint, the disjunctive constraints it depends on.
 struct EndGraph {
     on: BTreeMap<Name, BTreeSet<Name>>,
 }
@@ -208,7 +208,7 @@ impl EndGraph {
     fn of(view: &State) -> EndGraph {
         let reach = Reach::of(view);
         let records: BTreeMap<Name, Records> = view
-            .nodes
+            .disjunctions
             .keys()
             .map(|name| {
                 let records = Records {
@@ -219,21 +219,21 @@ impl EndGraph {
             })
             .collect();
         let on = view
-            .nodes
+            .disjunctions
             .keys()
             .map(|name| (name.clone(), depends_on(view, &reach, &records, name)))
             .collect();
         EndGraph { on }
     }
 
-    /// `n` and every node that transitively depends on it.
+    /// `n` and every disjunctive constraint that transitively depends on it.
     fn exclusion(&self, n: &Name) -> BTreeSet<Name> {
         let mut left_out = BTreeSet::from([n.clone()]);
         let mut work = vec![n.clone()];
         while let Some(at) = work.pop() {
-            for (node, on) in &self.on {
-                if on.contains(&at) && left_out.insert(node.clone()) {
-                    work.push(node.clone());
+            for (disjunction, on) in &self.on {
+                if on.contains(&at) && left_out.insert(disjunction.clone()) {
+                    work.push(disjunction.clone());
                 }
             }
         }
@@ -241,7 +241,7 @@ impl EndGraph {
     }
 }
 
-/// The nodes `name` depends on at the end: those that record into a class
+/// The disjunctive constraints `name` depends on at the end: those that record into a class
 /// reached from the classes at the positions it reads, as
 /// what it reads takes them, and a binding's path.
 fn depends_on(
@@ -250,7 +250,7 @@ fn depends_on(
     records: &BTreeMap<Name, Records>,
     name: &Name,
 ) -> BTreeSet<Name> {
-    let kind = &view.nodes[name].kind;
+    let kind = &view.disjunctions[name].kind;
     let read = kind.read();
     let reached = reach.from(view, view.read_positions(kind));
     let mut on: BTreeSet<Name> = records
@@ -258,11 +258,11 @@ fn depends_on(
         .filter(|(other, records)| *other != name && !records.of(read).is_disjoint(&reached))
         .map(|(other, _)| other.clone())
         .collect();
-    if let NodeKind::Bind { path, .. } = kind {
+    if let Disjunction::Bind { path, .. } = kind {
         for step in path {
             assert!(
-                view.nodes.contains_key(step),
-                "a binding's path is of the view's nodes"
+                view.disjunctions.contains_key(step),
+                "a binding's path is of the view's disjunctive constraints"
             );
             on.insert(step.clone());
         }
@@ -270,20 +270,20 @@ fn depends_on(
     on
 }
 
-/// The roots of the classes the node records into at the end, as a read of
+/// The roots of the classes the disjunctive constraint records into at the end, as a read of
 /// `read` takes them. A use records into
 /// what its candidate would record into, its
 /// candidates' where it is not decided: the classes it makes anew are its own,
-/// and no other node reads them. Another decided node
+/// and no other disjunctive constraint reads them. Another decided disjunctive constraint
 /// records into what its own relations record into, those of the instances it
 /// made among them; one not decided, into what any decision still open to it
 /// would record into (`State::recorded_into_by`). A
 /// read of whether a class is a reference leaves out what cannot decide it.
 fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
-    let node = &view.nodes[name];
-    let classes: BTreeSet<ClassId> = match (&node.kind, &node.decision) {
+    let disjunction = &view.disjunctions[name];
+    let classes: BTreeSet<ClassId> = match (&disjunction.kind, &disjunction.decision) {
         (
-            NodeKind::Use {
+            Disjunction::Use {
                 callee,
                 args,
                 result,
@@ -307,26 +307,26 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
         (_, Some(_)) => view
             .log
             .iter()
-            .filter(|recorded| recorded.recorder.nodes().contains(name))
+            .filter(|recorded| recorded.recorder.disjunctions().contains(name))
             .flat_map(|recorded| into(&recorded.relation))
             .collect(),
         (_, None) => view.recorded_into_by(name),
     };
     let mut roots: BTreeSet<ClassId> = classes.into_iter().map(|class| view.root(class)).collect();
     if read == Read::Reference {
-        let mut cannot_decide: BTreeSet<ClassId> = node.references.iter().copied().collect();
-        match &node.kind {
-            NodeKind::Use { .. } => {}
-            NodeKind::Lend { place, .. } => {
+        let mut cannot_decide: BTreeSet<ClassId> = disjunction.references.iter().copied().collect();
+        match &disjunction.kind {
+            Disjunction::Use { .. } => {}
+            Disjunction::Lend { place, .. } => {
                 cannot_decide.insert(*place);
             }
-            NodeKind::Bind { position, .. } => {
+            Disjunction::Bind { position, .. } => {
                 cannot_decide.insert(*position);
             }
-            NodeKind::Project { projection, .. } if *projection != Projection::Deref => {
+            Disjunction::Project { projection, .. } if *projection != Projection::Deref => {
                 return BTreeSet::new();
             }
-            NodeKind::Project { .. } | NodeKind::CallValue { .. } => {}
+            Disjunction::Project { .. } | Disjunction::CallValue { .. } => {}
         }
         for class in cannot_decide {
             roots.remove(&view.root(class));
@@ -336,14 +336,14 @@ fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
 }
 
 /// The classes a relation records into: the upper side of a lower bound or a
-/// part lower bound, the type passed into at a boundary, both sides of an
+/// part lower bound, the type passed into at a coercion constraint, both sides of an
 /// equation, and the class a structure, a structure constraint, a domain or a lambda is given to.
 fn into(relation: &Relation) -> Vec<ClassId> {
     match relation {
         Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => {
             vec![*upper]
         }
-        Relation::Boundary { to, .. } | Relation::Wrap { to, .. } => vec![*to],
+        Relation::CoercionConstraint { to, .. } | Relation::Wrap { to, .. } => vec![*to],
         Relation::Equation(a, b) => vec![*a, *b],
         Relation::StructureConstraint(class, _)
         | Relation::Structure(class, ..)

@@ -1,8 +1,8 @@
 // let f = || { @n = 1u16; };   // @n is the host's u8; f is never called
-// The store is in the lambda's text, its constraint: the boundary
+// The store is in the lambda's text, its constraint: the coercion constraint
 // 1u16 ⇝ @n, both of whose types are decided when solving starts. C holds the classes
-// left unsolved, the nodes left
-// undecided and the constraints on them; this boundary is on
+// left unsolved, the disjunctive constraints left
+// undecided and the constraints on them; this coercion constraint is on
 // neither, so it is no original left in C, and its value must reach u8 by a
 // coercion, which nothing gives, called or not.
 group λ in run {

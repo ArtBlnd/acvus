@@ -9,6 +9,6 @@ let 1: lit 1;
 `@cfg.extra` = 1;
 
 assert trace "decide `@cfg.extra`: applied";
-assert node records `@cfg: field extra: @cfg.extra`;
+assert disjunction records `@cfg: field extra: @cfg.extra`;
 must fail;
 assert refused conflict at "@cfg: field extra: @cfg.extra";

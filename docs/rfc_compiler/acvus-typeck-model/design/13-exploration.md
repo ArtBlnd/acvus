@@ -6,7 +6,7 @@ The code is `src/explore.rs` and `Outcome` in
 ## Meaning
 
 The outcome is each text class's value, the partition the text classes fall into,
-each node's decision, each checked relation with its coercion, the refusals, and
+each disjunctive constraint's decision, each checked relation with its coercion, the refusals, and
 whether the program is accepted. Exploration takes every step each state allows,
 explores a state reached twice once, falls back where no step is left, and collects
 the outcomes of distinct typings: two outcomes are one where all but the partition

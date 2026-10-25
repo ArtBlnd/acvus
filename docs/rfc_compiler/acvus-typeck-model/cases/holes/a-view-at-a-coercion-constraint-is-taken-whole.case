@@ -1,6 +1,6 @@
 // let v = make();          // make() -> Vec<u8>; the view as_slice(&Vec<T>) -> &[T]
 // take(&v);                // take(&[u8])
-// The boundary &V ⇝ &[u8] relates two references, whose constructors are
+// The coercion constraint &V ⇝ &[u8] relates two references, whose constructors are
 // their mutabilities alone; its decomposition records V ⇝ [u8] toward a type the
 // declaration writes, which decides no value. V is Vec<u8>, and the
 // whole value &Vec<u8> reaches &[u8] by the view's cast.

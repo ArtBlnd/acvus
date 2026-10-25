@@ -22,7 +22,7 @@ pub struct AsReference {
     pub reads_as: Option<Option<Mutability>>,
 }
 
-use super::{Decision, LendTarget, NodeAt};
+use super::{Decision, DisjunctionAt, LendTarget};
 
 /// The lesser of two mutabilities, where either may be undecided.
 pub(super) fn lesser(a: Option<Mutability>, b: Option<Mutability>) -> Option<Mutability> {
@@ -71,7 +71,7 @@ impl State {
         }
     }
 
-    /// Whether a node's generalization or a lend gave the class, or one it
+    /// Whether a disjunctive constraint's generalization or a lend gave the class, or one it
     /// reaches by lower bounds, a domain of references.
     pub(super) fn recorded_as_reference(&self, id: ClassId) -> bool {
         let mut seen = BTreeSet::from([self.root(id)]);
@@ -106,7 +106,7 @@ impl State {
             .map_or(0, |deref| deref + 1);
         let passed: Vec<Option<Mutability>> = path[after_deref..]
             .iter()
-            .filter_map(|step| match self.nodes[step].decision {
+            .filter_map(|step| match self.disjunctions[step].decision {
                 Some(Decision::AppliedToTarget(mutability)) => Some(mutability),
                 _ => None,
             })
@@ -129,12 +129,12 @@ impl State {
         recorded: &mut Recording,
     ) -> ClassId
     where
-        F: Fn(NodeAt) -> ClassName,
+        F: Fn(DisjunctionAt) -> ClassName,
     {
         let target = match target {
             LendTarget::Place => place,
             LendTarget::Through(_) => {
-                let target = self.arena.intern(at(NodeAt::Target));
+                let target = self.arena.intern(at(DisjunctionAt::Target));
                 self.classes.grow(&self.arena);
                 let relation =
                     Relation::StructureConstraint(place, StructureConstraint::Target(target));
@@ -143,6 +143,6 @@ impl State {
             }
         };
         let lent = Term::Ref(mutability, target);
-        self.written(at(NodeAt::Lent), lent, recorder, recorded)
+        self.written(at(DisjunctionAt::Lent), lent, recorder, recorded)
     }
 }

@@ -9,10 +9,10 @@ use crate::sig::{SigTy, Signature};
 use crate::solve::State;
 use crate::ty::{Name, Term};
 
-use super::{Decision, NodeKind, Read, Reads};
+use super::{Decision, Disjunction, Read, Reads};
 
 impl State {
-    /// The classes the node records into, by what each decision still open to
+    /// The classes the disjunctive constraint records into, by what each decision still open to
     /// it records, directly or by the decompositions of what it records: a use, what
     /// a candidate left would record into (`State::would_record_by`), and its
     /// result where it is decided `!`; a lend, its result, and its place, which
@@ -22,17 +22,17 @@ impl State {
     /// its binding, and its position, which a binding that lends gives a target
     /// made anew; a call of a function value, its result and the
     /// parameters in the environment of each lambda its callee's Values name,
-    /// which its arguments enter. A class depends on the node, until the node
+    /// which its arguments enter. A class depends on the disjunctive constraint, until the disjunctive constraint
     /// has recorded, where it is one of these alone.
     pub(crate) fn recorded_into_by(&self, name: &Name) -> BTreeSet<ClassId> {
-        let node = &self.nodes[name];
-        let classes: BTreeSet<ClassId> = match &node.kind {
-            NodeKind::Use {
+        let disjunction = &self.disjunctions[name];
+        let classes: BTreeSet<ClassId> = match &disjunction.kind {
+            Disjunction::Use {
                 callee,
                 args,
                 result,
                 ..
-            } => match &node.decision {
+            } => match &disjunction.decision {
                 Some(Decision::Never) => result.iter().copied().collect(),
                 Some(Decision::Use(id)) => {
                     let candidate = self.candidate_index(callee, args.len(), id);
@@ -45,17 +45,17 @@ impl State {
                     .flat_map(|found| found.into_keys())
                     .collect(),
             },
-            NodeKind::Lend { place, result, .. } => [*place, *result].into_iter().collect(),
-            NodeKind::Project {
+            Disjunction::Lend { place, result, .. } => [*place, *result].into_iter().collect(),
+            Disjunction::Project {
                 operand, result, ..
             } => [*operand, *result]
                 .into_iter()
                 .chain(self.targets(*operand))
                 .collect(),
-            NodeKind::Bind {
+            Disjunction::Bind {
                 position, binding, ..
             } => [*position, *binding].into_iter().collect(),
-            NodeKind::CallValue { callee, result, .. } => {
+            Disjunction::CallValue { callee, result, .. } => {
                 let mut classes = BTreeSet::from([*result]);
                 for lambda in self.values_of(self.called(*callee)) {
                     let mut held = self.environment_of(&lambda);
@@ -150,15 +150,15 @@ impl State {
         found
     }
 
-    /// The classes at the positions a node reads: for a use, the arguments
+    /// The classes at the positions a disjunctive constraint reads: for a use, the arguments
     /// where its candidates differ and those within the depth its candidates
     /// reach there;
     /// for a lend, its place; for a
     /// projection other than a Deref, its operand; for a binding, its position.
     /// A Deref reads nothing.
-    pub(crate) fn read_positions(&self, kind: &NodeKind) -> Vec<ClassId> {
+    pub(crate) fn read_positions(&self, kind: &Disjunction) -> Vec<ClassId> {
         match kind {
-            NodeKind::Use { callee, args, .. } => {
+            Disjunction::Use { callee, args, .. } => {
                 let candidates: Vec<&Signature> = self
                     .candidates(callee, args.len())
                     .into_iter()
@@ -177,14 +177,14 @@ impl State {
                 }
                 read.into_iter().collect()
             }
-            NodeKind::Lend { place, .. } => vec![*place],
-            NodeKind::Project {
+            Disjunction::Lend { place, .. } => vec![*place],
+            Disjunction::Project {
                 projection: Projection::Deref,
                 ..
             } => Vec::new(),
-            NodeKind::Project { operand, .. } => vec![*operand],
-            NodeKind::Bind { position, .. } => vec![*position],
-            NodeKind::CallValue { callee, .. } => {
+            Disjunction::Project { operand, .. } => vec![*operand],
+            Disjunction::Bind { position, .. } => vec![*position],
+            Disjunction::CallValue { callee, .. } => {
                 let called = self.called(*callee);
                 [*callee, called]
                     .into_iter()
@@ -223,39 +223,39 @@ impl State {
         values
     }
 
-    /// Whether the node is a projection other than a Deref, whose relations a
+    /// Whether the disjunctive constraint is a projection other than a Deref, whose relations a
     /// read of whether a class is a reference leaves out.
     pub(crate) fn is_inner_projection(&self, name: &Name) -> bool {
         matches!(
-            &self.nodes[name].kind,
-            NodeKind::Project { projection, .. } if *projection != Projection::Deref
+            &self.disjunctions[name].kind,
+            Disjunction::Project { projection, .. } if *projection != Projection::Deref
         )
     }
 
-    /// Whether the node's generalization recorded whether the class is a
+    /// Whether the disjunctive constraint's generalization recorded whether the class is a
     /// reference.
     pub(super) fn recorded_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
-        self.nodes[name]
+        self.disjunctions[name]
             .references
             .iter()
             .any(|&recorded| self.root(recorded) == root)
     }
 
-    /// What a node reads, and on which it depends.
+    /// What a disjunctive constraint reads, and on which it depends.
     pub(crate) fn reads(&self, name: &Name) -> Reads {
-        let kind = &self.nodes[name].kind;
+        let kind = &self.disjunctions[name].kind;
         Reads {
             read: kind.read(),
             classes: self.read_positions(kind),
         }
     }
 
-    /// Whether the relations the node `recorder` records may change what a
-    /// node reading `read` at `position` reads at `class`, a class at the
+    /// Whether the relations the disjunctive constraint `recorder` records may change what a
+    /// disjunctive constraint reading `read` at `position` reads at `class`, a class at the
     /// recorder's position or reached from one. For a
-    /// value, every such node; for whether a class is a
-    /// reference, a node that may decide it, other than a projection of a
+    /// value, every such disjunctive constraint; for whether a class is a
+    /// reference, a disjunctive constraint that may decide it, other than a projection of a
     /// field, a component, an index or a variant whose operand is the class
     /// read, whose structure constraint on it says nothing of whether it is one.
     pub(crate) fn records_into(
@@ -274,17 +274,17 @@ impl State {
         }
     }
 
-    /// Whether the node is a projection of a field, a component, an index or
+    /// Whether the disjunctive constraint is a projection of a field, a component, an index or
     /// a variant whose operand is the class of `class`.
     pub(crate) fn projects_from(&self, name: &Name, class: ClassId) -> bool {
         matches!(
-            &self.nodes[name].kind,
-            NodeKind::Project { projection, operand, .. }
+            &self.disjunctions[name].kind,
+            Disjunction::Project { projection, operand, .. }
                 if *projection != Projection::Deref && self.root(*operand) == self.root(class)
         )
     }
 
-    /// Whether what the node records may yet decide whether the class is a
+    /// Whether what the disjunctive constraint records may yet decide whether the class is a
     /// reference, which is decided by its lower bounds and equations:
     /// for a use, where some candidate would record one into it and its
     /// generalization has not recorded whether it is one; for a
@@ -295,19 +295,19 @@ impl State {
     /// where it already reads as one.
     pub(super) fn may_decide_reference(&self, name: &Name, class: ClassId) -> bool {
         let root = self.root(class);
-        match &self.nodes[name].kind {
-            NodeKind::Use { .. } => {
+        match &self.disjunctions[name].kind {
+            Disjunction::Use { .. } => {
                 !self.recorded_reference(name, class)
                     && self
                         .would_record_per_candidate(name)
                         .iter()
                         .any(|found| found.contains_key(&root))
             }
-            NodeKind::Lend { result, .. } | NodeKind::CallValue { result, .. } => {
+            Disjunction::Lend { result, .. } | Disjunction::CallValue { result, .. } => {
                 self.root(*result) == root
             }
-            NodeKind::Bind { binding, .. } => self.root(*binding) == root,
-            NodeKind::Project { .. } => true,
+            Disjunction::Bind { binding, .. } => self.root(*binding) == root,
+            Disjunction::Project { .. } => true,
         }
     }
 }

@@ -55,11 +55,13 @@ impl State {
             .collect()
     }
 
-    /// The class a use's node holds at the argument `i` where its candidates
+    /// The class a use's disjunctive constraint holds at the argument `i` where its candidates
     /// differ: an argument where they differ is no closed type of their
-    /// generalization, so the node holds it.
+    /// generalization, so the disjunctive constraint holds it.
     pub(crate) fn differing_class(args: &[Option<ClassId>], i: usize) -> ClassId {
-        args[i].expect("a use's node holds the arguments where its candidates differ")
+        args[i].expect(
+            "a use's disjunctive constraint holds the arguments where its candidates differ",
+        )
     }
 
     /// The arguments where a use's candidates differ, which it reads, each
@@ -82,8 +84,8 @@ impl State {
             .collect()
     }
 
-    /// An argument passing into its parameter: a meeting where the parameter
-    /// is an unknown, a boundary where a declaration writes it.
+    /// An argument passing into its parameter: a lower bound where the parameter
+    /// is an unknown, a coercion constraint where a declaration writes it.
     /// Returns the relations recorded.
     pub(super) fn record_argument<F>(
         &mut self,
@@ -105,7 +107,7 @@ impl State {
                 upper: param,
             }
         } else {
-            Relation::Boundary {
+            Relation::CoercionConstraint {
                 from: arg,
                 to: param,
             }

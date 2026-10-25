@@ -27,7 +27,7 @@ pub enum ClassName {
     /// takes a constructor, or written with it.
     Part(Rc<ClassName>, PartKey),
     /// A class a use or a lend of this name made anew.
-    Node(Rc<Name>, crate::node::NodeAt),
+    Disjunction(Rc<Name>, crate::disjunction::DisjunctionAt),
     /// The copy of a class of another binding group's C that the use `at`
     /// made anew, or of a class outside C, whose closed type it writes.
     Copy { at: Rc<Name>, of: Rc<ClassName> },
@@ -55,7 +55,7 @@ impl fmt::Display for ClassName {
         match self {
             ClassName::Text(name) => write!(f, "{name}"),
             ClassName::Part(class, key) => write!(f, "{class}.{key:?}"),
-            ClassName::Node(node, at) => write!(f, "{node}.{at:?}"),
+            ClassName::Disjunction(disjunction, at) => write!(f, "{disjunction}.{at:?}"),
             ClassName::Copy { at, of } => write!(f, "{at}/{of}"),
             ClassName::Link { from, to, step, at } => {
                 write!(f, "link({from} -> {to})[{step}].{at:?}")

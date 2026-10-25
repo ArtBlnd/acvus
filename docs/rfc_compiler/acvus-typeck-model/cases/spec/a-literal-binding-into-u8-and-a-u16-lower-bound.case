@@ -1,5 +1,5 @@
 // let a = 1; takes_u8(a); let x = a; x = 2u16;
-// x waits for its lower bound a, which is unified with u8 by its boundary
+// x waits for its lower bound a, which is unified with u8 by its coercion constraint
 // before x is joined, so x has no join of u8 and u16 in every order.
 extern fn takes_u8(u8);
 let 1: lit 1;

@@ -1,9 +1,9 @@
 // let a;
 // f(&a, &a);               // f<T>(&T, &Vec<T>)
 // Each lend's target is A, which is a reference in no reading. Each argument
-// passes into a reference the declaration gives, a boundary, whose decomposition links
+// passes into a reference the declaration gives, a coercion constraint, whose decomposition links
 // the targets: toward the unknown T, an equation A = T; toward the
-// written Vec<T>, the boundary A ⇝ Vec<T>. Nothing enters A, and the one upper bound
+// written Vec<T>, the coercion constraint A ⇝ Vec<T>. Nothing enters A, and the one upper bound
 // it has, Vec<T>, has a value only once A has one, so A is not filled
 // and falls back to !. &! reaches &Vec<!> by no coercion.
 extern type Vec<T>;

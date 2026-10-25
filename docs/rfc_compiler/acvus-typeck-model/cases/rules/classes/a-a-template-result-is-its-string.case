@@ -1,7 +1,7 @@
 // A template whose control line returns 1u8:
 // % return 1u8;
 // A template's result type is fixed to String, no unknown, so
-// the returned value passes into it at the boundary 1u8 ⇝ R, and u8 reaches
+// the returned value passes into it at the coercion constraint 1u8 ⇝ R, and u8 reaches
 // String by no coercion. Its text, the String it formats, is
 // its tail.
 let R: String;

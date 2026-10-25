@@ -60,7 +60,7 @@ included.
    (`DeclsBuilder::array_views`, `cases::build::array_lengths`), an array's length
    being what is written. Before, an array reached no declaration: `sum(&a)` with `a:
    [u8; 2]` and `sum(&[u8])` was refused. Where references meet, their targets are
-   equated all the same, so the view is taken at a boundary alone.
+   equated all the same, so the view is taken at a coercion constraint alone.
 
 ## Left open for change
 

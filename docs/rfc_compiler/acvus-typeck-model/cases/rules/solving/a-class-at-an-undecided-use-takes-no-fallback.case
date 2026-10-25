@@ -1,6 +1,6 @@
 // let x;
 // let r = f(x);            // f(u8) -> u8, f(u16) -> u16
-// The candidates differ at the argument, so f reads X there; no node but
+// The candidates differ at the argument, so f reads X there; no disjunctive constraint but
 // f records into X, and f's own relations are left out, so the value read
 // decides nothing and both candidates remain. X lies at f's position, so
 // it depends on the relations f has not yet recorded; f is never

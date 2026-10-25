@@ -2,7 +2,7 @@
 //! each reads, and what each records once decided. Here, what each
 //! is, and how it is decided and records once decided; the
 //! positions and what each reads are `position`, places `place`, overload
-//! resolution `overload`, and the generalization of all an undecided node may
+//! resolution `overload`, and the generalization of all an undecided disjunctive constraint may
 //! become `generalization`.
 
 pub(crate) mod generalization;
@@ -27,7 +27,7 @@ pub use place::AsReference;
 use place::lesser;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum NodeKind {
+pub enum Disjunction {
     /// A use that calls the declarations `callee` names; for `e?`,
     /// with the class its exit's value passes into. It holds the
     /// positions of the use's constraints its group records where the choice
@@ -66,7 +66,7 @@ pub enum NodeKind {
     },
 }
 
-/// What a node reads at the classes at its positions.
+/// What a disjunctive constraint reads at the classes at its positions.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Read {
     /// Their values: a use, and a call of a function value.
@@ -75,18 +75,18 @@ pub(crate) enum Read {
     Reference,
 }
 
-impl NodeKind {
+impl Disjunction {
     pub(crate) fn read(&self) -> Read {
         match self {
-            NodeKind::Lend { .. } | NodeKind::Project { .. } | NodeKind::Bind { .. } => {
+            Disjunction::Lend { .. } | Disjunction::Project { .. } | Disjunction::Bind { .. } => {
                 Read::Reference
             }
-            NodeKind::Use { .. } | NodeKind::CallValue { .. } => Read::Value,
+            Disjunction::Use { .. } | Disjunction::CallValue { .. } => Read::Value,
         }
     }
 }
 
-/// What a node reads, on which it depends.
+/// What a disjunctive constraint reads, on which it depends.
 pub(crate) struct Reads {
     pub(crate) read: Read,
     /// The classes at the positions it reads.
@@ -136,17 +136,17 @@ pub enum LendTarget {
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct NodeState {
-    pub kind: NodeKind,
+pub struct DisjunctionState {
+    pub kind: Disjunction,
     pub decision: Option<Decision>,
-    /// The generalization the node recorded before it was decided.
+    /// The generalization the disjunctive constraint recorded before it was decided.
     pub generalized: Option<Generalized>,
     /// The classes of which the generalization recorded whether they are
     /// references.
     pub references: BTreeSet<ClassId>,
 }
 
-/// What a node recorded before it was decided: the generalization of all it may
+/// What a disjunctive constraint recorded before it was decided: the generalization of all it may
 /// become.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Generalized {
@@ -160,9 +160,9 @@ pub enum Generalized {
     Lend,
 }
 
-/// Which class a node made anew is.
+/// Which class a disjunctive constraint made anew is.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum NodeAt {
+pub enum DisjunctionAt {
     /// A variable of the signature of the candidate the use is decided as.
     Var(crate::sig::SigVar),
     /// The type of the parameter at this place.
@@ -186,42 +186,42 @@ pub enum NodeAt {
     Chosen(usize),
 }
 
-/// A node decided, with the relations recorded once it is: its own,
-/// and those of the nodes deferred on it that it lets record. A node
+/// A disjunctive constraint decided, with the relations recorded once it is: its own,
+/// and those of the disjunctive constraints deferred on it that it lets record. A disjunctive constraint
 /// decided by the value it read has what it read; one decided as it is
 /// recorded reads nothing.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Decided {
-    pub node: Name,
+    pub disjunction: Name,
     pub decision: Decision,
     pub recorded: Recording,
     pub read: Option<DecidedBy>,
 }
 
-/// How a node was decided by the value it read.
+/// How a disjunctive constraint was decided by the value it read.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DecidedBy {
-    /// The node and the nodes that transitively depend on it.
+    /// The disjunctive constraint and the disjunctive constraints that transitively depend on it.
     pub dependents: BTreeSet<Name>,
-    /// The undecided nodes that broke their dependency on it.
+    /// The undecided disjunctive constraints that broke their dependency on it.
     pub broken_on: BTreeSet<Name>,
     pub value: ValueRead,
 }
 
-/// The value a node read, and what it became by it.
+/// The value a disjunctive constraint read, and what it became by it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ValueRead {
-    /// The nodes whose relations it leaves out: those it was given and, for
+    /// The disjunctive constraints whose relations it leaves out: those it was given and, for
     /// whether a class is a reference, every projection other than a Deref.
     pub left_out: BTreeSet<Name>,
     /// Their relations, by their places in the log.
     pub relations: Vec<usize>,
     pub reading: Reading,
-    /// What the node becomes by it, none where it decides nothing.
+    /// What the disjunctive constraint becomes by it, none where it decides nothing.
     pub decision: Option<Decision>,
 }
 
-/// What a node read at its positions.
+/// What a disjunctive constraint read at its positions.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Reading {
     /// A Deref, and a binding whose path passes no reference, read nothing.
@@ -246,16 +246,16 @@ pub enum Reading {
 }
 
 impl State {
-    /// Decides as it is recorded a node that reads nothing: a Deref.
-    /// A use of one candidate has no node
+    /// Decides as it is recorded a disjunctive constraint that reads nothing: a Deref.
+    /// A use of one candidate has no disjunctive constraint
     /// (`State::record_one`), and a use of none is never decided.
     pub(crate) fn decide_at_once(&mut self) -> Vec<Decided> {
         let at_once: Vec<(Name, Decision)> = self
-            .nodes
+            .disjunctions
             .iter()
-            .filter(|(_, node)| node.decision.is_none())
-            .filter_map(|(name, node)| match &node.kind {
-                NodeKind::Project {
+            .filter(|(_, disjunction)| disjunction.decision.is_none())
+            .filter_map(|(name, disjunction)| match &disjunction.kind {
+                Disjunction::Project {
                     projection: Projection::Deref,
                     ..
                 } => Some((name.clone(), Decision::Applied)),
@@ -267,7 +267,7 @@ impl State {
             self.set_decision(&name, decision.clone());
             let recorded = self.record_decision(&name);
             decided.push(Decided {
-                node: name,
+                disjunction: name,
                 decision,
                 recorded,
                 read: None,
@@ -277,19 +277,19 @@ impl State {
     }
 
     pub(crate) fn set_decision(&mut self, name: &Name, decision: Decision) {
-        self.nodes
+        self.disjunctions
             .get_mut(name)
-            .expect("the node is the state's")
+            .expect("the disjunctive constraint is the state's")
             .decision = Some(decision);
     }
 
-    /// The value the node reads now, as deciding it would read it: without
+    /// The value the disjunctive constraint reads now, as deciding it would read it: without
     /// itself and those that transitively depend on it.
     pub(crate) fn read_now(&self, name: &Name) -> ValueRead {
         self.value_read(name, &self.dependents(name))
     }
 
-    /// Decides the node by the value it reads, which decides it (`steps`),
+    /// Decides the disjunctive constraint by the value it reads, which decides it (`steps`),
     /// and records what it records, or defers it.
     pub(crate) fn decide(&mut self, name: &Name) -> Decided {
         let dependents = self.dependents(name);
@@ -297,13 +297,13 @@ impl State {
         let decision = value
             .decision
             .clone()
-            .expect("a node is decided where the value it reads decides it");
+            .expect("a disjunctive constraint is decided where the value it reads decides it");
         let broken_on = self.broken_on(name);
         self.set_decision(name, decision.clone());
         let waiting = self.reading_what_it_records(name, &broken_on);
         let recorded = self.defer(name, waiting);
         Decided {
-            node: name.clone(),
+            disjunction: name.clone(),
             decision,
             recorded,
             read: Some(DecidedBy {
@@ -314,12 +314,12 @@ impl State {
         }
     }
 
-    /// Those of `broken_on` whose read reaches a class the node `name`, just
-    /// decided, records into: the relations of a node a broken
-    /// dependency pointed to wait for the node that broke it only where that
-    /// node reads them. A use records into what its candidate would record
+    /// Those of `broken_on` whose read reaches a class the disjunctive constraint `name`, just
+    /// decided, records into: the relations of a disjunctive constraint a broken
+    /// dependency pointed to wait for the disjunctive constraint that broke it only where that
+    /// disjunctive constraint reads them. A use records into what its candidate would record
     /// into by the decompositions, or its result where it is decided `!`;
-    /// another node, into what its own relations record into. A read of
+    /// another disjunctive constraint, into what its own relations record into. A read of
     /// whether a class is a reference reaches only what may decide it.
     fn reading_what_it_records(&self, name: &Name, broken_on: &BTreeSet<Name>) -> BTreeSet<Name> {
         if broken_on.is_empty() {
@@ -327,40 +327,42 @@ impl State {
         }
         let mut probe = self.clone();
         probe.record_decision(name);
-        let node = &self.nodes[name];
-        let into: Vec<ClassId> = match (&node.kind, &node.decision) {
-            (NodeKind::Use { callee, args, .. }, Some(Decision::Use(id))) => {
+        let disjunction = &self.disjunctions[name];
+        let into: Vec<ClassId> = match (&disjunction.kind, &disjunction.decision) {
+            (Disjunction::Use { callee, args, .. }, Some(Decision::Use(id))) => {
                 let candidate = self.candidate_index(callee, args.len(), id);
                 self.would_record_by(name, candidate).into_keys().collect()
             }
-            (NodeKind::Use { result, .. }, Some(Decision::Never)) => {
+            (Disjunction::Use { result, .. }, Some(Decision::Never)) => {
                 result.iter().copied().collect()
             }
             _ => probe
                 .log
                 .iter()
-                .filter(|recorded| recorded.recorder.nodes().contains(name))
+                .filter(|recorded| recorded.recorder.disjunctions().contains(name))
                 .flat_map(|recorded| recorded_into(&recorded.relation))
                 .collect(),
         };
         let into: BTreeSet<ClassId> = into.into_iter().map(|class| probe.root(class)).collect();
-        let mut cannot_decide: BTreeSet<ClassId> = node
+        let mut cannot_decide: BTreeSet<ClassId> = disjunction
             .references
             .iter()
             .map(|&class| probe.root(class))
             .collect();
-        match &node.kind {
-            NodeKind::Lend { place, .. } => {
+        match &disjunction.kind {
+            Disjunction::Lend { place, .. } => {
                 cannot_decide.insert(probe.root(*place));
             }
-            NodeKind::Bind { position, .. } => {
+            Disjunction::Bind { position, .. } => {
                 cannot_decide.insert(probe.root(*position));
             }
-            NodeKind::Use { .. } | NodeKind::Project { .. } | NodeKind::CallValue { .. } => {}
+            Disjunction::Use { .. }
+            | Disjunction::Project { .. }
+            | Disjunction::CallValue { .. } => {}
         }
         let decides_no_reference = matches!(
-            &node.kind,
-            NodeKind::Project { projection, .. } if *projection != Projection::Deref
+            &disjunction.kind,
+            Disjunction::Project { projection, .. } if *projection != Projection::Deref
         );
         broken_on
             .iter()
@@ -401,10 +403,10 @@ impl State {
         reached
     }
 
-    /// Records what the node just decided records, or defers it until the
-    /// undecided nodes that broke their dependency on it and read what it
+    /// Records what the disjunctive constraint just decided records, or defers it until the
+    /// undecided disjunctive constraints that broke their dependency on it and read what it
     /// records, `waiting`, are decided; then records what each
-    /// deferred node records once the nodes it waits for are decided. Returns
+    /// deferred disjunctive constraint records once the disjunctive constraints it waits for are decided. Returns
     /// the relations recorded.
     pub(crate) fn defer(&mut self, name: &Name, waiting: BTreeSet<Name>) -> Recording {
         let mut recorded = Recording::default();
@@ -420,7 +422,7 @@ impl State {
                 .filter(|(_, waiting)| {
                     waiting
                         .iter()
-                        .all(|node| self.nodes[node].decision.is_some())
+                        .all(|disjunction| self.disjunctions[disjunction].decision.is_some())
                 })
                 .map(|(name, _)| name.clone())
                 .collect();
@@ -434,8 +436,8 @@ impl State {
         }
     }
 
-    /// What the node becomes by the value it reads leaving out the relations
-    /// of the nodes `excluded`, as `value_read` reads it; none where that
+    /// What the disjunctive constraint becomes by the value it reads leaving out the relations
+    /// of the disjunctive constraints `excluded`, as `value_read` reads it; none where that
     /// value decides nothing.
     pub(crate) fn decision_under(
         &self,
@@ -445,24 +447,27 @@ impl State {
         self.value_read(name, excluded).decision
     }
 
-    /// The value the node reads leaving out the relations of the nodes
+    /// The value the disjunctive constraint reads leaving out the relations of the disjunctive constraints
     /// `excluded`, and, for a lend, a projection or a binding, which reads
     /// whether a class is a reference, of every projection other than a Deref
-    /// whose operand is a class it reads, and what the node becomes by
+    /// whose operand is a class it reads, and what the disjunctive constraint becomes by
     /// it, none where it decides nothing.
     pub(crate) fn value_read(
         &self,
         name: &Name,
         excluded: &BTreeSet<Name>,
     ) -> ValueRead {
-        let kind = &self.nodes[name].kind;
+        let kind = &self.disjunctions[name].kind;
         let mut excluded = excluded.clone();
         if kind.read() == Read::Reference {
             let read = self.read_positions(kind);
             excluded.extend(
-                self.nodes
+                self.disjunctions
                     .keys()
-                    .filter(|node| read.iter().any(|&class| self.projects_from(node, class)))
+                    .filter(|disjunction| {
+                        read.iter()
+                            .any(|&class| self.projects_from(disjunction, class))
+                    })
                     .cloned(),
             );
         }
@@ -476,12 +481,12 @@ impl State {
             (read, lent)
         };
         let (reading, decision) = match kind {
-            NodeKind::Use { callee, args, .. } => {
+            Disjunction::Use { callee, args, .. } => {
                 let narrowing = self.narrow(callee, args, &excluded);
                 let decision = narrowing.decision.clone();
                 (Reading::Use(narrowing), decision)
             }
-            NodeKind::Lend {
+            Disjunction::Lend {
                 mutability, place, ..
             } => {
                 let (read, lent) = lend(Some(*mutability), *place);
@@ -489,11 +494,11 @@ impl State {
                     lent.map(|(target, mutability)| Decision::Lend { target, mutability });
                 (Reading::Place(read), decision)
             }
-            NodeKind::Project {
+            Disjunction::Project {
                 projection: Projection::Deref,
                 ..
             } => (Reading::Nothing, Some(Decision::Applied)),
-            NodeKind::Project { operand, .. } => {
+            Disjunction::Project { operand, .. } => {
                 let read = self.reads_as_reference(*operand, &excluded);
                 let decision = match read.reads_as {
                     Some(mutability) => Decision::AppliedToTarget(mutability),
@@ -501,7 +506,7 @@ impl State {
                 };
                 (Reading::Place(read), Some(decision))
             }
-            NodeKind::Bind { path, position, .. } => match self.passed(path) {
+            Disjunction::Bind { path, position, .. } => match self.passed(path) {
                 None => (Reading::Nothing, Some(Decision::Read)),
                 Some(passed) => {
                     let (read, lent) = lend(passed, *position);
@@ -514,7 +519,7 @@ impl State {
                     (reading, decision)
                 }
             },
-            NodeKind::CallValue { callee, .. } => {
+            Disjunction::CallValue { callee, .. } => {
                 let read = self.read_state(&excluded);
                 let lambdas = read.values_of(read.called(*callee));
                 let decision = (!lambdas.is_empty()).then(|| Decision::Calls(lambdas.clone()));
@@ -586,7 +591,7 @@ impl State {
     /// classes of `vars`: as `return None`, a value `Option⟨K⟩`, or as
     /// `return Err(x)`, a value `Result⟨O, X⟩`, `K` and `O` made anew and the
     /// candidate's `E` wrapped into `X`. The value passes into `exit`, the
-    /// class the text gives it, a meeting where that is an unknown.
+    /// class the text gives it, a lower bound where that is an unknown.
     fn record_exit(
         &mut self,
         sig: &crate::sig::Signature,
@@ -629,7 +634,7 @@ impl State {
                 upper: exit,
             }
         } else {
-            Relation::Boundary {
+            Relation::CoercionConstraint {
                 from: value,
                 to: exit,
             }
@@ -641,7 +646,7 @@ impl State {
     /// Records the use `name` of one candidate at the positions `held`, as it
     /// is recorded: its generalization is that candidate, its type parameters
     /// made anew, so nothing is left to decide, and it has no
-    /// node. Each argument passes into its parameter's type and the result
+    /// disjunctive constraint. Each argument passes into its parameter's type and the result
     /// type into the result, an identity its result carries and no parameter
     /// does made anew, recorded by the generalization.
     pub(crate) fn record_one(
@@ -658,16 +663,16 @@ impl State {
         };
         let recorder = Recorder::Generalization(name.clone());
         let owner = Rc::new(name.clone());
-        let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
+        let at = |at: DisjunctionAt| ClassName::Disjunction(owner.clone(), at);
         let mut vars = BTreeMap::new();
-        let var_name = |var| at(NodeAt::Var(var));
+        let var_name = |var| at(DisjunctionAt::Var(var));
         for &(position, class) in held {
             recorded.append(match position {
                 Position::Arg(k) => self.record_argument(
                     class,
                     &sig.params()[k],
                     &mut vars,
-                    at(NodeAt::Param(k)),
+                    at(DisjunctionAt::Param(k)),
                     &var_name,
                     &recorder,
                 ),
@@ -675,7 +680,7 @@ impl State {
                     class,
                     sig.result(),
                     &mut vars,
-                    at(NodeAt::Result),
+                    at(DisjunctionAt::Result),
                     &var_name,
                     &recorder,
                 ),
@@ -692,19 +697,19 @@ impl State {
         recorded
     }
 
-    /// Records what the decided node records.
+    /// Records what the decided disjunctive constraint records.
     pub(crate) fn record_decision(&mut self, name: &Name) -> Recording {
         let mut recorded = Recording::default();
-        let node = self.nodes[name].clone();
-        let Some(decision) = node.decision else {
+        let disjunction = self.disjunctions[name].clone();
+        let Some(decision) = disjunction.decision else {
             return recorded;
         };
-        let recorder = Recorder::Node(name.clone());
+        let recorder = Recorder::Disjunction(name.clone());
         let owner = Rc::new(name.clone());
-        let at = |at: NodeAt| ClassName::Node(owner.clone(), at);
-        match (&node.kind, &decision) {
+        let at = |at: DisjunctionAt| ClassName::Disjunction(owner.clone(), at);
+        match (&disjunction.kind, &decision) {
             (
-                NodeKind::Use {
+                Disjunction::Use {
                     callee,
                     args,
                     result,
@@ -717,16 +722,16 @@ impl State {
                 // holds of the result is not recorded again: the candidate's
                 // type enters each of the generalization's variables there.
                 let sig = self.decls.decl(id).sig.clone();
-                let generalized = match &node.generalized {
+                let generalized = match &disjunction.generalized {
                     Some(Generalized::Use { part, classes }) => {
                         Some((part.clone(), classes.clone()))
                     }
                     _ => None,
                 };
-                // The node holds no position where the generalization writes a
+                // The disjunctive constraint holds no position where the generalization writes a
                 // closed type, nor one another group records.
                 let mut vars = BTreeMap::new();
-                let var_name = |var| at(NodeAt::Var(var));
+                let var_name = |var| at(DisjunctionAt::Var(var));
                 for (i, (arg, param)) in args.iter().zip(sig.params()).enumerate() {
                     let Some(arg) = arg else {
                         continue;
@@ -735,7 +740,7 @@ impl State {
                         *arg,
                         param,
                         &mut vars,
-                        at(NodeAt::Param(i)),
+                        at(DisjunctionAt::Param(i)),
                         &var_name,
                         &recorder,
                     ));
@@ -747,7 +752,7 @@ impl State {
                                 *result,
                                 sig.result(),
                                 &mut vars,
-                                at(NodeAt::Result),
+                                at(DisjunctionAt::Result),
                                 &var_name,
                                 &recorder,
                             ));
@@ -760,7 +765,7 @@ impl State {
                                 classes[&k],
                                 &part.vars[k][candidate],
                                 &mut vars,
-                                at(NodeAt::Chosen(k)),
+                                at(DisjunctionAt::Chosen(k)),
                                 &var_name,
                                 &recorder,
                             ));
@@ -778,34 +783,39 @@ impl State {
                     recorded.append(self.record_exit(
                         &sig,
                         &vars,
-                        at(NodeAt::Exit),
+                        at(DisjunctionAt::Exit),
                         *exit,
                         &recorder,
                     ));
                 }
             }
-            // Where the result is a closed type of the generalization, the node
+            // Where the result is a closed type of the generalization, the disjunctive constraint
             // does not hold it, and records nothing there.
             (
-                NodeKind::Use {
+                Disjunction::Use {
                     result: Some(result),
                     ..
                 },
                 Decision::Never,
             ) => {
-                let never = self.written(at(NodeAt::Result), Term::Never, &recorder, &mut recorded);
+                let never = self.written(
+                    at(DisjunctionAt::Result),
+                    Term::Never,
+                    &recorder,
+                    &mut recorded,
+                );
                 let relation = Relation::LowerBound {
                     lower: never,
                     upper: *result,
                 };
                 recorded.push(self.record(relation, recorder));
             }
-            (NodeKind::Lend { place, result, .. }, Decision::Lend { target, mutability }) => {
+            (Disjunction::Lend { place, result, .. }, Decision::Lend { target, mutability }) => {
                 let lent = self.lend(*mutability, *place, *target, &at, &recorder, &mut recorded);
                 recorded.push(self.record(Relation::Equation(*result, lent), recorder));
             }
             (
-                NodeKind::Project {
+                Disjunction::Project {
                     projection,
                     operand,
                     result,
@@ -819,14 +829,14 @@ impl State {
                 recorded.push(self.record(relation, recorder));
             }
             (
-                NodeKind::Project {
+                Disjunction::Project {
                     projection,
                     operand,
                     result,
                 },
                 Decision::AppliedToTarget(_),
             ) => {
-                let target = self.arena.intern(at(NodeAt::Target));
+                let target = self.arena.intern(at(DisjunctionAt::Target));
                 self.classes.grow(&self.arena);
                 let relation =
                     Relation::StructureConstraint(*operand, StructureConstraint::Target(target));
@@ -836,7 +846,7 @@ impl State {
                 recorded.push(self.record(relation, recorder));
             }
             (
-                NodeKind::Bind {
+                Disjunction::Bind {
                     position, binding, ..
                 },
                 Decision::Read,
@@ -847,14 +857,14 @@ impl State {
                 };
                 recorded.push(self.record(relation, recorder));
             }
-            (NodeKind::CallValue { args, result, .. }, Decision::Calls(lambdas)) => {
+            (Disjunction::CallValue { args, result, .. }, Decision::Calls(lambdas)) => {
                 for lambda in lambdas {
                     let at = Name::new(&format!("{name}#{lambda}"));
                     recorded.append(self.instantiate_lambda(&at, &recorder, lambda, args, *result));
                 }
             }
             (
-                NodeKind::Bind {
+                Disjunction::Bind {
                     position, binding, ..
                 },
                 Decision::BindLend { target, mutability },
@@ -880,13 +890,13 @@ impl State {
 }
 
 /// The classes a relation records into: the upper side of a lower
-/// bound or a part lower bound, the type passed into at a boundary or a
+/// bound or a part lower bound, the type passed into at a coercion constraint or a
 /// wrapping, both sides of an equation, and the class a structure, a structure constraint, a
 /// domain or a lambda is given to.
 fn recorded_into(relation: &Relation) -> Vec<ClassId> {
     match relation {
         Relation::LowerBound { upper, .. } | Relation::PartLowerBound { upper, .. } => vec![*upper],
-        Relation::Boundary { to, .. } | Relation::Wrap { to, .. } => vec![*to],
+        Relation::CoercionConstraint { to, .. } | Relation::Wrap { to, .. } => vec![*to],
         Relation::Equation(a, b) => vec![*a, *b],
         Relation::StructureConstraint(class, _)
         | Relation::Structure(class, ..)

@@ -7,8 +7,8 @@ use crate::check::{Outcome, Refusal};
 use crate::class::ClassName;
 use crate::coerce::{along_le, coerce};
 use crate::decl::{DeclId, Decls};
+use crate::disjunction::{Decision, LendTarget};
 use crate::join::{join, le};
-use crate::node::{Decision, LendTarget};
 use crate::ty::{Mutability, Name};
 
 use super::build::{closed, planted};
@@ -112,11 +112,11 @@ pub fn corruption(decls: &Decls, group: &str, change: &Change) -> Result<Corrupt
             value: planted(decls.types(), ty)?,
         },
         Change::Decision {
-            node,
+            disjunction,
             decision: text,
         } => Corruption::Decision {
             group: group.to_string(),
-            node: node.clone(),
+            disjunction: disjunction.clone(),
             decision: decision(text)?,
         },
     })
@@ -176,9 +176,12 @@ fn outcome_meets(decls: &Decls, outcome: &Outcome, expect: &Expect) -> Result<()
                 Err(format!("{class} is {shown}"))
             }
         }
-        Expect::Decision { node, decision } => {
-            let Some(decided) = outcome.decisions.get(&Name::new(node)) else {
-                return Err(format!("no node {node}"));
+        Expect::Decision {
+            disjunction,
+            decision,
+        } => {
+            let Some(decided) = outcome.decisions.get(&Name::new(disjunction)) else {
+                return Err(format!("no disjunctive constraint {disjunction}"));
             };
             let shown = decided
                 .as_ref()
@@ -186,7 +189,7 @@ fn outcome_meets(decls: &Decls, outcome: &Outcome, expect: &Expect) -> Result<()
             if render::same(decision, &shown) {
                 Ok(())
             } else {
-                Err(format!("{node} is {shown}"))
+                Err(format!("{disjunction} is {shown}"))
             }
         }
         Expect::Refused(text) => {
@@ -260,7 +263,9 @@ fn istar_of(expects: &[Located<Expect>]) -> BTreeSet<String> {
     expects
         .iter()
         .filter_map(|Located { item, .. }| match item {
-            Expect::Istar { kind, node } => Some(render::istar(*kind, &Name::new(node))),
+            Expect::Istar { kind, disjunction } => {
+                Some(render::istar(*kind, &Name::new(disjunction)))
+            }
             _ => None,
         })
         .collect()

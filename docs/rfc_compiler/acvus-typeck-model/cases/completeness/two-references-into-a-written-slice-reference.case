@@ -2,7 +2,7 @@
 // let a = [1u8, 2u8];
 // let s: &[u8] = if c { &v } else { &a };
 // s's type is written, so each branch's value passes into it by a
-// boundary.
+// coercion constraint.
 extern type Vec<T>;
 extern fn make() -> Vec<u8>;
 #[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];

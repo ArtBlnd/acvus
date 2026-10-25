@@ -145,7 +145,7 @@ impl State {
     /// where structure constraints are its only sources, the constructor of each member they
     /// name, visible or not; otherwise those of the members visible to this
     /// body, which alone a structure constraint adds to a type another source gives.
-    pub(crate) fn constraint_heads(&self, root: ClassId) -> Vec<Head> {
+    pub(crate) fn structure_constraint_heads(&self, root: ClassId) -> Vec<Head> {
         let lowers = self.lower_bounds(root);
         if lowers.is_empty() {
             return self
@@ -345,7 +345,7 @@ impl State {
             equations,
             lowers,
             part_lowers,
-            structure_constraints: self.constraint_heads(root),
+            structure_constraints: self.structure_constraint_heads(root),
             left_out,
         }
     }

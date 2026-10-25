@@ -21,16 +21,16 @@ program, and `?` wraps by a decomposition, so the wrap rows are removed and no v
 another type reaches an `Error` by a coercion: what enters a written `Error`, a
 parameter's or the embedding's result's, is an `Error` already.
 
-## A view at a boundary
+## A view at a coercion constraint
 
 A view impl is a cast from a reference to a container to a reference to a slice or
 `str`, and a reference's node is its mutability and its target's constructor. A
 reference's constructor is its mutability alone, so where two references meet, they
-have one constructor, and their targets are related by the decomposition. At a boundary `&V ⇝
+have one constructor, and their targets are related by the decomposition. At a coercion constraint `&V ⇝
 &[u8]` records `V ⇝ [u8]` toward a type the declaration writes, which decides no
 value, so `V` takes `Vec⟨u8⟩` from `make()`, and the whole value reaches `&[u8]` by
 the view. Witness, accepted by the model
-(`cases/holes/a-view-at-a-boundary-is-taken-whole.case`):
+(`cases/holes/a-view-at-a-coercion constraint-is-taken-whole.case`):
 
 ```
 let v = make();          // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
@@ -45,13 +45,13 @@ left so.
 
 ## A reborrow at a decomposition
 
-Where `&mut X` met `&Y` at a lower bound or a boundary, the constructors differed and
+Where `&mut X` met `&Y` at a lower bound or a coercion constraint, the constructors differed and
 no cast linked them, so nothing related `X` and `Y`: in `look(&mut v)` with
 `look(&Vec⟨u8⟩)` and `v = Vec::new()`, `v`'s argument had no relation and fell back
 to `!`, and `&mut Vec⟨!⟩ ⇝ &Vec⟨u8⟩` failed. The model accepts it
-(`cases/holes/a-reborrow-at-a-boundary-links-the-targets.case`).
+(`cases/holes/a-reborrow-at-a-coercion constraint-links-the-targets.case`).
 
-## A lambda's node that reads a capture
+## A lambda's disjunctive constraint that reads a capture
 
 A lambda was a binding group of its own, solved before the group in which a use
 records its C, which for a lambda is its enclosing body's. A capture's type is a
@@ -73,8 +73,8 @@ outcome, accepted, in every order (`cases/holes/a-lambda-reads-a-capture.case`).
 
 ## Two uses that read one class
 
-A use depended on the nodes that record relations into the classes at the positions
-it reads, and a class on every node at whose position it lay. So two uses that both
+A use depended on the disjunctive constraints that record relations into the classes at the positions
+it reads, and a class on every disjunctive constraint at whose position it lay. So two uses that both
 read a class depended on each other, each broke its dependency on the other, and each
 read the class without the other's relations:
 
@@ -88,16 +88,16 @@ while c {
 probe(x);                // probe(u16), probe(i32)
 ```
 
-`probe` passes `x` into a parameter its declarations write, a boundary out of `X`,
+`probe` passes `x` into a parameter its declarations write, a coercion constraint out of `X`,
 and `x + y` depended on it, since while only LitVars enter `X`, `?N ⇝ U`
 unifies it with the parameter. So `probe` read `X` without `x + y`'s
 relations, as `?a` alone, took the default `i32`, and `X ⇝ i32` failed once
 `X` was `u16`: refused in every order. A reading that left that dependency out
 whatever entered `X` made `let x = 0; n(x); m(x);` depend on the order.
 
-A class waits for a node whose only relation into it is a boundary out of it only
+A class waits for a disjunctive constraint whose only relation into it is a coercion constraint out of it only
 while only LitVars enter it, judged as whether nothing enters it is, the condition of
-the fill that boundary would take part in. `X` has the lower bound `R1`, which waits
+the fill that coercion constraint would take part in. `X` has the lower bound `R1`, which waits
 for `x + y`, so it does not wait for `probe`; `probe` waits for `x + y` and reads
 `u16`: accepted in every order, `probe(u16)`
 (`cases/holes/two-uses-that-read-one-class.case`). `n(x); m(x)`, where only LitVars
@@ -149,7 +149,7 @@ if let Some(x) = n { }
 A binding reads its position where its path passes no reference, and lends it where
 the path passes one. Whether the path passes one is what the projections on it
 became: each applies to its operand's target where the operand is a reference. A
-binding depended on the nodes that record into its place, other than projections of a
+binding depended on the disjunctive constraints that record into its place, other than projections of a
 field, a component, an index or a variant, which are the projections on its path, so
 a binding decided before its path's projection read its position, and one decided
 after lent it: two outcomes, `x: u8` and `x: &u8`, which a reading of the model took
@@ -160,7 +160,7 @@ let o = Some(1u8);
 if let Some(x) = &o { }
 ```
 
-The exclusion is of the projections whose operand is the class read, and the nodes
+The exclusion is of the projections whose operand is the class read, and the disjunctive constraints
 recording into a class are reached along the parts of the two sides that a relation
 not yet decomposed will link. The binding's position, the payload of `&o`'s target, is so
 linked to `O`'s payload, and the binding waits for its path's projection: one
@@ -168,8 +168,8 @@ outcome, `x: &u8` (`cases/holes/a-binding-behind-a-reference.case`).
 
 ## What a broken dependency's relations wait for
 
-Only the relations recorded into what the node that broke the dependency reads wait
-for it, as I\* takes what a node records, and a LitVar's default narrows only where
+Only the relations recorded into what the disjunctive constraint that broke the dependency reads wait
+for it, as I\* takes what a disjunctive constraint records, and a LitVar's default narrows only where
 no other step is left. The witness is `even(10u8)` with `even` and `odd` calling each
 other, two outcomes, and five with an `i32` candidate of each, now one, accepted.
 
@@ -190,7 +190,7 @@ let s = &mut r;
 
 ## A capture written after a use reads it
 
-A lambda's write to a capture reached by name was a meeting, and stayed in the
+A lambda's write to a capture reached by name was a lower bound, and stayed in the
 lambda's C; it was recorded into the capture's class only when a call of the lambda's
 value was decided and made its instance. Until then nothing at the capture's class
 waited for that call: the class lay at no position of it. So the capture's class
@@ -208,7 +208,7 @@ put(make_b());
 
 Without `probe(x)`, two outcomes: `x: B` accepted, and `x: A` refused at `V ≤ X`.
 
-The invariant broken was that a node recording into a class is seen as the class's
+The invariant broken was that a disjunctive constraint recording into a class is seen as the class's
 dependency before it records and stays after: a lambda's instance wrote classes
 its call does not lie at.
 
@@ -223,16 +223,16 @@ one outcome too (`cases/spec/block-a-write-to-a-capture.case`).
 
 ## Two lends of one place
 
-A lend depends on the nodes that record into its place's class, other than
+A lend depends on the disjunctive constraints that record into its place's class, other than
 projections of a field, a component, an index or a variant, and uses that have
-already recorded whether that class is a reference; the nodes that record into a
+already recorded whether that class is a reference; the disjunctive constraints that record into a
 class include those at whose position it lies. Two lends of one place each lie at it,
 so each depends on the other, and each breaks its dependency on the other.
 
 A lend records into its place only that it is a reference, and only where it already
 reads as one, so it cannot decide whether its place is one. The model leaves out of a
-read of whether a class is a reference every node that cannot decide it: a use whose
+read of whether a class is a reference every disjunctive constraint that cannot decide it: a use whose
 candidates would record no lower bound or equation into the class; a lend at its
 place and a binding at its position; and a call of a function value at its arguments.
-A lend, a projection or a binding waits for the nodes that can decide whether its
+A lend, a projection or a binding waits for the disjunctive constraints that can decide whether its
 class is a reference.

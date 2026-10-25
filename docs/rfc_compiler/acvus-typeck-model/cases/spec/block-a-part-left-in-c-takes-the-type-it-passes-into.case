@@ -1,7 +1,7 @@
 // let x: Vec<u8> = { Vec::new() };
 // new's T is left in the lambda's C, and the call's instance copies it.
 // The call's result passes into the Vec<u8> the text writes, a
-// boundary whose decomposition records a boundary toward u8, and the copy of
+// coercion constraint whose decomposition records a coercion constraint toward u8, and the copy of
 // T, which nothing enters, is filled with u8.
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;

@@ -1,7 +1,7 @@
 // let x: u8 = { 1 };
 // As without the type, the LitVar is left in the lambda's C and copied by
 // the call's instance. The call's result passes into the u8 the text
-// writes, a boundary, and only LitVars enter it, so it is unified with u8,
+// writes, a coercion constraint, and only LitVars enter it, so it is unified with u8,
 // and the copy of the LitVar with it.
 group λ in run {
     let `λ result`;

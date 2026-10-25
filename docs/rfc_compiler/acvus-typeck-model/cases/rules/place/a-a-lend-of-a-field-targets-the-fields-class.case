@@ -2,7 +2,7 @@
 // a.x = 1u8;
 // take(&a.x);              // take(&u16)
 // The place a.x has the type the projection names, so the lend targets
-// that class by an equation. The boundary into &u16 records a.x ⇝ u16
+// that class by an equation. The coercion constraint into &u16 records a.x ⇝ u16
 // toward a type the declaration writes, which decides no value: a.x is
 // u8, and &u8 reaches &u16 by no coercion.
 extern fn take(&u16);

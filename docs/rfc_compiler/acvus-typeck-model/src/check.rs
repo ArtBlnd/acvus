@@ -8,7 +8,7 @@ use std::rc::Rc;
 use crate::class::{ClassId, ClassName, Conflict, Conflicted, NamedConflict};
 use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::decl::DeclId;
-use crate::node::Decision;
+use crate::disjunction::Decision;
 use crate::relation::{Named, Relation};
 use crate::sig::{SigTy, SigVar};
 use crate::solve::State;
@@ -65,7 +65,7 @@ pub struct Outcome {
 
 impl Outcome {
     /// Whether the two outcomes are one typing, which is what does not depend
-    /// on the order of solving: each class's value, each node's
+    /// on the order of solving: each class's value, each disjunctive constraint's
     /// decision, each check, each refusal and whether the program is accepted.
     /// Which classes are one is no part of it.
     pub fn same_typing(&self, other: &Outcome) -> bool {
@@ -112,7 +112,7 @@ impl State {
             }
             let (from, to, lower) = match recorded.relation {
                 Relation::LowerBound { lower, upper } => (lower, upper, true),
-                Relation::Boundary { from, to } => (from, to, false),
+                Relation::CoercionConstraint { from, to } => (from, to, false),
                 Relation::PartLowerBound { .. }
                 | Relation::Equation(..)
                 | Relation::StructureConstraint(..)
@@ -249,9 +249,9 @@ impl State {
             }
         }
         let decisions: BTreeMap<Name, Option<Decision>> = self
-            .nodes
+            .disjunctions
             .iter()
-            .map(|(name, node)| (name.clone(), node.decision.clone()))
+            .map(|(name, disjunction)| (name.clone(), disjunction.decision.clone()))
             .collect();
         let accepted = refusals.is_empty()
             && checks.iter().all(Check::holds)
@@ -268,8 +268,8 @@ impl State {
 
     /// The outcome of the entry's state, with what each other binding group
     /// decided at its fixpoint: the values of its text's classes, its decided
-    /// nodes, its checks of values entering classes it solved, and its
-    /// refusals. Its classes and nodes left in C need no value and no decision
+    /// disjunctive constraints, its checks of values entering classes it solved, and its
+    /// refusals. Its classes and disjunctive constraints left in C need no value and no decision
     /// there.
     pub fn outcome_with(&self, groups: &BTreeMap<Name, Rc<State>>) -> Outcome {
         let mut outcome = self.outcome();
@@ -281,16 +281,21 @@ impl State {
                     .map(|&id| (group.arena.name(id).clone(), group.value(id))),
             );
             let decided: Vec<(Name, Decision)> = group
-                .nodes
+                .disjunctions
                 .iter()
-                .filter_map(|(name, node)| Some((name.clone(), node.decision.clone()?)))
+                .filter_map(|(name, disjunction)| {
+                    Some((name.clone(), disjunction.decision.clone()?))
+                })
                 .collect();
-            // A node is one group's: a use of several candidates has one, at
+            // A disjunctive constraint is one group's: a use of several candidates has one, at
             // the positions its choice decides, which one constraint holds,
             // and a use of one has none.
             for (name, decision) in decided {
                 let previous = outcome.decisions.insert(name.clone(), Some(decision));
-                assert!(previous.is_none(), "two groups have the node {name}");
+                assert!(
+                    previous.is_none(),
+                    "two groups have the disjunctive constraint {name}"
+                );
             }
             let checks = group.checks();
             let checked = checks.iter().all(Check::holds);

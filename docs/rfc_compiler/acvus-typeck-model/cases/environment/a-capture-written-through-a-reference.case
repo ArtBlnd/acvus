@@ -3,7 +3,7 @@
 // let remember = |x| *r = Some(x);
 // remember(1u8);
 // *r, Some(x), S and X are joined to the capture R; the write through it is a
-// boundary whose payload, L's, takes a lower bound.
+// coercion constraint whose payload, L's, takes a lower bound.
 group λ in run {
     let X;
     let S;

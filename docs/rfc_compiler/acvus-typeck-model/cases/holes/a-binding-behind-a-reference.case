@@ -1,6 +1,6 @@
 // let o = Some(1u8);
 // if let Some(x) = &o { }
-// The nodes recording into the binding's position are reached along the link
+// The disjunctive constraints recording into the binding's position are reached along the link
 // the decomposition of O's payload will make with &o's target, so x waits for its
 // path's projection and lends through it: one outcome, x: &u8.
 

@@ -1,5 +1,5 @@
-// A value passing into an unknown is a meeting, recorded as a lower bound; into
-// a type the text writes, a boundary; an invariant place gives an equation.
+// A value passing into an unknown is a lower bound, recorded as a lower bound; into
+// a type the text writes, a coercion constraint; an invariant place gives an equation.
 // Each is recorded as the text gives it, before anything is solved.
 //@ order:
 let A;

@@ -9,8 +9,8 @@ use std::rc::Rc;
 use crate::certificate::{Certificate, Value};
 use crate::check::{Outcome, Refusal};
 use crate::class::ClassId;
+use crate::disjunction::Decision;
 use crate::explore::{Final, Order, explore_with, sample_with};
-use crate::node::Decision;
 use crate::program::{ENTRY, Program};
 use crate::solve::{State, Step};
 use crate::trace::Trace;
@@ -64,7 +64,7 @@ pub enum Corruption {
     },
     Decision {
         group: String,
-        node: String,
+        disjunction: String,
         decision: Decision,
     },
 }
@@ -133,7 +133,7 @@ impl Visitor<'_> {
             .collect();
         let istar = crate::istar::check(self.program, end)
             .into_iter()
-            .map(|violation| render::istar(violation.kind, &violation.node))
+            .map(|violation| render::istar(violation.kind, &violation.disjunction))
             .collect();
         for (corruption, corrupted) in self.corruptions.iter().zip(&mut self.corrupted) {
             let mut certificate = Certificate::of(self.program, end);
@@ -147,9 +147,9 @@ impl Visitor<'_> {
                 }
                 Corruption::Decision {
                     group,
-                    node,
+                    disjunction,
                     decision,
-                } => certificate.set_decision(group, node, decision.clone()),
+                } => certificate.set_decision(group, disjunction, decision.clone()),
             }
             let violations = crate::certificate::check(self.program, &certificate);
             if violations.is_empty() {
@@ -406,7 +406,7 @@ fn step_of(state: &State, text: &StepText) -> Result<Step, String> {
     let steps = state.steps();
     let wanted = match text {
         StepText::Solve(class) => Step::Solve(root_named(state, "solve", class)?),
-        StepText::Decide(node) => Step::Decide(Name::new(node)),
+        StepText::Decide(disjunction) => Step::Decide(Name::new(disjunction)),
         StepText::Fallback => return Err("fallback is no step".to_string()),
     };
     if steps.contains(&wanted) {

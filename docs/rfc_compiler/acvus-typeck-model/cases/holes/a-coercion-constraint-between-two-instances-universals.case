@@ -1,6 +1,6 @@
 // fn g(a, b) { g(b, b); 0u8 }
 // g(Some(f1()), Some(f2()))    // f1() -> F1, f2() -> F2; casts F1 → G, F2 → G
-// The copied boundary B' ⇝ A' relates the payloads once both are solved, so A''s
+// The copied coercion constraint B' ⇝ A' relates the payloads once both are solved, so A''s
 // payload has F1 and F2 entering it in every order, each by a part lower bound.
 // A part takes no cast, so the two have no join, and
 // the program is refused there in every order.

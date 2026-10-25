@@ -17,15 +17,15 @@ start run
   record #2 s: Shared<P>
   record #3 u8 <= S
   record #4 b ~> s
-  decompose #0 u8: u8: no parts
-  decompose #1 b: Box<S>: no parts
-  decompose #2 s: Shared<P>: no parts
-  decompose #4 b ~> s: parts
+  decomposition #0 u8: u8: no parts
+  decomposition #1 b: Box<S>: no parts
+  decomposition #2 s: Shared<P>: no parts
+  decomposition #4 b ~> s: parts
     record #5 link(b -> s)[0].Param: Box<link(b -> s)[0].Var(Type(0))>
     record #6 link(b -> s)[0].Result: Shared<link(b -> s)[0].Var(Type(0))>
     record #7 S = link(b -> s)[0].Var(Type(0))
     record #8 link(b -> s)[0].Var(Type(0)) = P
-  decompose #5 link(b -> s)[0].Param: Box<link(b -> s)[0].Var(Type(0))>: no parts
-  decompose #6 link(b -> s)[0].Result: Shared<link(b -> s)[0].Var(Type(0))>: no parts
-  decompose #7 S = link(b -> s)[0].Var(Type(0)): no parts
-  decompose #8 link(b -> s)[0].Var(Type(0)) = P: no parts
+  decomposition #5 link(b -> s)[0].Param: Box<link(b -> s)[0].Var(Type(0))>: no parts
+  decomposition #6 link(b -> s)[0].Result: Shared<link(b -> s)[0].Var(Type(0))>: no parts
+  decomposition #7 S = link(b -> s)[0].Var(Type(0)): no parts
+  decomposition #8 link(b -> s)[0].Var(Type(0)) = P: no parts

@@ -4,10 +4,10 @@
 // f();
 // The write in the lambda names the capture R, so it is the lambda's
 // environment, recorded in the enclosing group, and it reaches X, an
-// unknown of that group, through the reference r, so it is a boundary,
-// 2u16 ⇝ *r, and the Deref makes *r X. A boundary is no source, so X is u8, from 1u8
-// alone, and the value entering by the boundary reaches u8 by no coercion:
-// refused at that boundary.
+// unknown of that group, through the reference r, so it is a coercion constraint,
+// 2u16 ⇝ *r, and the Deref makes *r X. A coercion constraint is no source, so X is u8, from 1u8
+// alone, and the value entering by the coercion constraint reaches u8 by no coercion:
+// refused at that coercion constraint.
 group λ in run {
     let `*r`;
     let 2u16: u16;

@@ -306,7 +306,11 @@ impl State {
             })
             .collect();
         roots.sort();
-        let decisions: Vec<_> = self.nodes.values().map(|node| &node.decision).collect();
+        let decisions: Vec<_> = self
+            .disjunctions
+            .values()
+            .map(|disjunction| &disjunction.decision)
+            .collect();
         format!(
             "{roots:?}|{}|{:?}|{:?}|{decisions:?}|{:?}",
             self.log.len(),

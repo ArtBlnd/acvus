@@ -1,9 +1,9 @@
 // takes(|x| x);            // takes(fn(u8) -> u16)
-// The lambda's value passes into the function type takes writes, a boundary.
+// The lambda's value passes into the function type takes writes, a coercion constraint.
 // Where it is decomposed, an instance of λ is made, as though the type
 // called it: the type's parameter u8 meets the copy of X, an
 // unknown here, and the copy of λ's result passes into the type's result u16,
-// a type the declaration writes, by a boundary. The copy of x passes into the
+// a type the declaration writes, by a coercion constraint. The copy of x passes into the
 // copy of the result, so it is u8, and u8 reaches u16 by no coercion: refused
 // there.
 extern fn takes(fn(u8) -> u16);

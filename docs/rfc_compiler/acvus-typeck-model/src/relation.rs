@@ -15,14 +15,14 @@ use crate::ty::{Name, Term};
 /// A relation recorded in equivalence classes.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Relation {
-    /// `τ ≤ α`, which a meeting records, and a use's result type
+    /// `τ ≤ α`, which a lower bound records, and a use's result type
     /// entering its result.
     LowerBound { lower: ClassId, upper: ClassId },
     /// `τ ≤ₚ α`, which a decomposition records between the parts of a structural type
-    /// where the upper bound of the value's part is a meeting.
+    /// where the upper bound of the value's part is a lower bound.
     PartLowerBound { lower: ClassId, upper: ClassId },
-    /// `T ⇝ U`, which a boundary records.
-    Boundary { from: ClassId, to: ClassId },
+    /// `T ⇝ U`, which a coercion constraint records.
+    CoercionConstraint { from: ClassId, to: ClassId },
     /// An equation, which an invariant place records.
     Equation(ClassId, ClassId),
     /// A structure constraint, which a projection records.
@@ -31,7 +31,7 @@ pub enum Relation {
     /// or, in a copy of C, the structure the class held where its binding
     /// group was solved.
     Structure(ClassId, Term<ClassId>, StructureSource),
-    /// The constructors the class's value may take, which a literal, a node's
+    /// The constructors the class's value may take, which a literal, a disjunctive constraint's
     /// generalization or a lend gives before the class takes one.
     Domain(ClassId, Domain),
     /// A lambda the Values of the class's function value names.
@@ -48,7 +48,9 @@ impl Relation {
             Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper } => {
                 vec![*lower, *upper]
             }
-            Relation::Boundary { from, to } | Relation::Wrap { from, to } => vec![*from, *to],
+            Relation::CoercionConstraint { from, to } | Relation::Wrap { from, to } => {
+                vec![*from, *to]
+            }
             Relation::Equation(a, b) => vec![*a, *b],
             Relation::StructureConstraint(class, structure_constraint) => {
                 vec![*class, structure_constraint.class()]
@@ -75,7 +77,7 @@ impl Relation {
                 lower: f(lower),
                 upper: f(upper),
             },
-            Relation::Boundary { from, to } => Relation::Boundary {
+            Relation::CoercionConstraint { from, to } => Relation::CoercionConstraint {
                 from: f(from),
                 to: f(to),
             },
@@ -110,7 +112,7 @@ pub enum Recorder {
     Text(usize),
     /// The use, lend, projection or binding of this name, when it was
     /// decided.
-    Node(Name),
+    Disjunction(Name),
     /// The use, lend, projection or binding of this name before it was
     /// decided: the generalization of all it may become, which holds whatever
     /// it is decided as.
@@ -124,10 +126,10 @@ pub enum Recorder {
     /// function type called it.
     FunctionType { from: ClassId, to: ClassId },
     /// The I\* check, making an instance of a lambda's C that no call made, in
-    /// a view of a state it decides nodes again in. Solving never records it.
+    /// a view of a state it decides disjunctive constraints again in. Solving never records it.
     Check,
-    /// A row of the decision table, which reads where a value passes.
-    Row(crate::decision::Row),
+    /// A propagator, which reads where a value passes.
+    Propagator(crate::propagator::Propagator),
     /// Fallback, once no step is left: the value it gives a class no step
     /// solves, a decision no other relation derives, which every read after
     /// it takes as given.
@@ -150,30 +152,34 @@ impl Recorder {
             Recorder::Decomposition(_)
             | Recorder::Cycle
             | Recorder::FunctionType { .. }
-            | Recorder::Row(_) => true,
+            | Recorder::Propagator(_) => true,
             Recorder::Instance { by, .. } => by.is_derived(),
             Recorder::Origin
             | Recorder::Text(_)
-            | Recorder::Node(_)
+            | Recorder::Disjunction(_)
             | Recorder::Generalization(_)
             | Recorder::Check
             | Recorder::Fallback => false,
         }
     }
 
-    /// The nodes it is recorded by, a value read leaving any of them out
-    /// leaving it out: a node's own relation names that node, and a
+    /// The disjunctive constraints it is recorded by, a value read leaving any of them out
+    /// leaving it out: a disjunctive constraint's own relation names that disjunctive constraint, and a
     /// copy in an instance names what made the instance and, by `copy_name`,
-    /// the nodes the relation it copies is recorded by. A node's generalization
-    /// names none: it is not recorded by the node's being decided, so no
+    /// the disjunctive constraints the relation it copies is recorded by. A disjunctive constraint's generalization
+    /// names none: it is not recorded by the disjunctive constraint's being decided, so no
     /// read leaves it out.
-    pub fn nodes(&self) -> Vec<Name> {
+    pub fn disjunctions(&self) -> Vec<Name> {
         match self {
-            Recorder::Node(name) => vec![name.clone()],
+            Recorder::Disjunction(name) => vec![name.clone()],
             Recorder::Instance { at, by, of } => by
-                .nodes()
+                .disjunctions()
                 .into_iter()
-                .chain(of.nodes().iter().map(|node| copy_name(at, node)))
+                .chain(
+                    of.disjunctions()
+                        .iter()
+                        .map(|disjunction| copy_name(at, disjunction)),
+                )
                 .collect(),
             Recorder::Origin
             | Recorder::Text(_)
@@ -181,26 +187,26 @@ impl Recorder {
             | Recorder::Decomposition(_)
             | Recorder::Cycle
             | Recorder::FunctionType { .. }
-            | Recorder::Row(_)
+            | Recorder::Propagator(_)
             | Recorder::Check
             | Recorder::Fallback => Vec::new(),
         }
     }
 
-    /// Whether the text, a node, or a function value passing into a function
+    /// Whether the text, a disjunctive constraint, or a function value passing into a function
     /// type records it, so that a value it makes enter a type is checked,
     /// in a copy of C as where it was recorded.
     pub fn is_entering(&self) -> bool {
         match self {
             Recorder::Text(_)
-            | Recorder::Node(_)
+            | Recorder::Disjunction(_)
             | Recorder::Generalization(_)
             | Recorder::FunctionType { .. } => true,
             Recorder::Instance { of, .. } => of.is_entering(),
             Recorder::Origin
             | Recorder::Decomposition(_)
             | Recorder::Cycle
-            | Recorder::Row(_)
+            | Recorder::Propagator(_)
             | Recorder::Check
             | Recorder::Fallback => false,
         }
@@ -208,9 +214,9 @@ impl Recorder {
 }
 
 /// The name, in the binding group an instance `at` is recorded in, of the
-/// node `node` of the group instantiated.
-pub fn copy_name(at: &Name, node: &Name) -> Name {
-    Name::new(&format!("{at}/{node}"))
+/// disjunctive constraint `disjunction` of the group instantiated.
+pub fn copy_name(at: &Name, disjunction: &Name) -> Name {
+    Name::new(&format!("{at}/{disjunction}"))
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -235,7 +241,9 @@ impl fmt::Display for Named<'_> {
             Relation::PartLowerBound { lower, upper } => {
                 write!(f, "{} <=p {}", name(lower), name(upper))
             }
-            Relation::Boundary { from, to } => write!(f, "{} ~> {}", name(from), name(to)),
+            Relation::CoercionConstraint { from, to } => {
+                write!(f, "{} ~> {}", name(from), name(to))
+            }
             Relation::Equation(a, b) => write!(f, "{} = {}", name(a), name(b)),
             Relation::StructureConstraint(class, structure_constraint) => {
                 let structure_constraint = NamedStructureConstraint {

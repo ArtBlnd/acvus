@@ -1,6 +1,6 @@
 # 08 Uses, lends, projections and bindings
 
-The code is `src/node/`: what each node is, its decision and
+The code is `src/disjunction/`: what each disjunctive constraint is, its decision and
 what it records once decided in `mod.rs`, its positions and what it reads in
 `position.rs`, places in `place.rs`, overload resolution in `overload.rs`, and the
 generalization in `generalization.rs`.
@@ -25,15 +25,15 @@ reads its position, or lends it where its path passes a reference.
    positions where they differ, so a use with one candidate reads nothing:
    its generalization is that candidate, its type parameters made anew, recorded as its
    text is, by the generalization (`State::record_one`), and
-   nothing is left to decide, so it has no node. A use with none is never decided.
+   nothing is left to decide, so it has no disjunctive constraint. A use with none is never decided.
 2. **A candidate's variables are made at the decision.** They are unknowns of the
    use's binding group. Only the decided candidate records, so only its
    variables are made.
-3. **Meeting or boundary at a parameter.** An argument passing into a parameter the
-   signature writes as a variable passes into that unknown, a meeting; one passing
+3. **Lower bound or coercion constraint at a parameter.** An argument passing into a parameter the
+   signature writes as a variable passes into that unknown, a lower bound; one passing
    into a written type passes into a type a declaration gives, decided, a
-   boundary.
-4. **The positions of a node**. A use's are its arguments and result,
+   coercion constraint.
+4. **The positions of a disjunctive constraint**. A use's are its arguments and result,
    and the classes inside them down to where a candidate's signature writes a
    variable; a lend's are its place and the reference it gives.
 5. **A lend through a reference.** Where the place reads as `&ₙ U`, the place records
@@ -59,10 +59,10 @@ reads its position, or lends it where its path passes a reference.
    binding that lends reads as a lend reads its place; so "the position's
    own" mutability is that lend's `n`. A read of the position passes its
    value into the binding's type, and a lend passes its reference into it, both
-   meetings. The references a path passes are those its projections applied
+   lower bounds. The references a path passes are those its projections applied
    through by auto-deref after its last Deref, since `&π` matches a reference
    itself, as in Rust. The binding learns its path's projections'
-   decisions by waiting for them, since the nodes recording into its position are
+   decisions by waiting for them, since the disjunctive constraints recording into its position are
    reached along the links of the decompositions not yet made.
 11. **What a use reads.** At each position where its candidates differ in a
    constructor or a member, the class there and the classes within the depth its
@@ -72,8 +72,8 @@ reads its position, or lends it where its path passes a reference.
    type parameters alone reaches every candidate whatever is read there, and is not
    read (`State::differing`, which compares each candidate's type there as the
    narrowing reads it).
-12. **Which nodes a reference-ness read waits for**. Whether a class is a
-   reference is decided by its lower bounds and equations, so a node found
+12. **Which disjunctive constraints a reference-ness read waits for**. Whether a class is a
+   reference is decided by its lower bounds and equations, so a disjunctive constraint found
    at a class is left out where it cannot decide it: a use where no
    candidate would record a lower bound or an equation into that class, or where
    it has recorded whether the class is a reference; a lend at its place and a
@@ -84,36 +84,36 @@ reads its position, or lends it where its path passes a reference.
 13. **What candidates would record**. Once the generalization is recorded, a
    candidate records its result type at the result's unknowns, into each of them,
    and an argument the generalization does not hold whole passes into its parameter's
-   type; before, its result type into the use's result. An argument passes into its parameter's type, a boundary that
+   type; before, its result type into the use's result. An argument passes into its parameter's type, a coercion constraint that
    records into that type alone, and inside the argument's structure as it is at the
    moment each part passes into the parameter's part by the decomposition's rule:
    where the parameter writes a variable, an unknown, an equation records into the
    argument's part unless it is a structural type's, whose part lower bound
-   records into the variable alone; where it writes a type, a boundary records
+   records into the variable alone; where it writes a type, a coercion constraint records
    into that type, and the part's parts pass on into its parts. Two constructors
    are linked as a decomposition links them, through a reborrow's targets and the first
    cast's parameter. A variable is an unknown, neither a reference nor not one, so
    a candidate records whether a class is a reference at the result's unknowns
    alone (`State::would_record_by`).
 14. **The generalization**. Recorded
-   once for each undecided node (`State::record_generalizations`, `Recorder::Generalization`):
+   once for each undecided disjunctive constraint (`State::record_generalizations`, `Recorder::Generalization`):
    - a use of several candidates records the anti-unification of their
      signatures (`Generalization::of`): one constructor and members kept and its parts
-     generalized in turn, an unknown made anew (`NodeAt::Generalized(k)`) where they
+     generalized in turn, an unknown made anew (`DisjunctionAt::Generalized(k)`) where they
      differ, one for each tuple of the types they write there, and a reference
-     not split at the top of a parameter or of the result, a cast going between
+     not decomposed at the top of a parameter or of the result, a cast going between
      two references of one constructor. Each unknown is recorded a
      reference, or not, where every candidate agrees there. Arguments pass into
      the generalization's parameters and result into the use's result, as a
      decided candidate's are recorded. Where every candidate writes one closed
      type, the use's constraint there is one alone, recorded with the
      text where the group that holds it lies (`State::record_closed`), the
-     recorder still `Recorder::Generalization`; the node holds the other positions, which
-     the choice decides (`NodeKind::Use`, none at those it does not hold).
+     recorder still `Recorder::Generalization`; the disjunctive constraint holds the other positions, which
+     the choice decides (`Disjunction::Use`, none at those it does not hold).
      Decided, the use records an argument the generalization does not hold whole
      passing whole into the candidate's parameter,
      and the candidate's type at each of the result's unknowns entering it
-     (`NodeAt::Chosen(k)`); its positions are those, so its result no longer
+     (`DisjunctionAt::Chosen(k)`); its positions are those, so its result no longer
      waits for it but its unknowns do (`State::left_to_record`). Two arguments of
      one unknown meet in it: the operands of an overload set whose candidates
      type them alike are one type, and a cast between them is the user's to call.
@@ -121,8 +121,8 @@ reads its position, or lends it where its path passes a reference.
      records when decided, so it still records into what a read of whether its
      result is a reference reads.
    - a projection or a binding has no generalization.
-   A value read leaves out only what a node records once decided: every
-   generalization is in every read, the node's own included. The model's earlier
+   A value read leaves out only what a disjunctive constraint records once decided: every
+   generalization is in every read, the disjunctive constraint's own included. The model's earlier
    records, of the positions every candidate writes alike and of whether a
    class is a reference, are removed into it.
 15. **An argument of `!`**. An argument position the use reads, read as
@@ -133,16 +133,16 @@ reads its position, or lends it where its path passes a reference.
    projection applies to its target all the same, and a lend or a binding whose
    lesser mutability is then undecided, a `&mut` one, decides nothing
    until the mutability is read.
-17. **A broken dependency**. A node decided while undecided nodes broke
+17. **A broken dependency**. A disjunctive constraint decided while undecided disjunctive constraints broke
    their dependency on it records once they are decided, in the state;
    the reading of their reads only is removed.
-18. **Which nodes record into a class**. The nodes that record
+18. **Which disjunctive constraints record into a class**. The disjunctive constraints that record
    relations into a class are those at whose positions it lies. For a use's read,
-19. **A read that decides nothing**. A node is decided only by a
+19. **A read that decides nothing**. A disjunctive constraint is decided only by a
    value read that decides it: a use where exactly one candidate remains or an
    argument it reads is `!`, a lend and a binding where their lesser mutability is
    read, a call of a function value where its Values name a lambda; a projection,
-   and a binding whose path passes no reference, always are. A node whose read decides nothing
+   and a binding whose path passes no reference, always are. A disjunctive constraint whose read decides nothing
    is not decided then and waits, undecided, for relations that make it decide.
    One undecided at its group's fixpoint stays in C, and one undecided once the
    run ends is refused.
@@ -156,11 +156,11 @@ reads its position, or lends it where its path passes a reference.
    use records into it the value `Option⟨K⟩`, or `Result⟨O, X⟩` with the
    candidate's `E` wrapped into `X` (`Relation::Wrap`), `K`
    and `O` made anew; decided as `!`, it records no exit, being not run.
-21. **A use's result into a meeting**. Where the use's result
+21. **A use's result into a lower bound**. Where the use's result
    class has no source in the value read and passes into unknowns, the result step
    narrows by the join: a candidate's result type reaches by `≤` its join with each
-   such upper bound's other sources, as a meeting takes every value entering it; into a
-   boundary, by a coercion as before (`State::meeting_places`, `rank_into_places`). A
+   such upper bound's other sources, as a lower bound takes every value entering it; into a
+   coercion constraint, by a coercion as before (`State::meeting_places`, `rank_into_places`). A
    use whose result meets a class others enter is no longer refused against that
    class's value without it.
 22. **A LitVar's default narrows at a fixpoint**. Where several candidates remain
@@ -168,13 +168,13 @@ reads its position, or lends it where its path passes a reference.
    family's
    default is a step only where no other step is left (`State::steps`,
    `LitDefaults`), as a class falls back to its default only then: before, a use
-   took the default at once, before a node that could unify its LitVar with a type
+   took the default at once, before a disjunctive constraint that could unify its LitVar with a type
    was decided. I\*'s decision again
    is taken at the end, a fixpoint, and takes it.
 
 ## Left open for change
 
 - `State::record_generalizations` and `Generalization::of`: the generalization of all an
-  undecided node may become.
-- `State::defer`: when a decided node's relations are recorded, and which reads
+  undecided disjunctive constraint may become.
+- `State::defer`: when a decided disjunctive constraint's relations are recorded, and which reads
   leave them out.

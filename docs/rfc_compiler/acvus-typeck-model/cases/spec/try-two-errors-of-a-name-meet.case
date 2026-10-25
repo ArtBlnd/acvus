@@ -3,7 +3,7 @@
 // // get1() -> Result<u8, E1>, get2() -> Result<u16, E2>
 // Each ? reads its operand's outer constructor, Result, and is decided as
 // ?(Result<T, E>). Its exit's value is Result<O, X>, which passes
-// into f's result, an unknown: a meeting. E takes E1, a type of a
+// into f's result, an unknown: a lower bound. E takes E1, a type of a
 // name, so the wrapping decomposes X into Error{E1(..)}; the
 // other into Error{E2(..)}. f's result's error part joins the two by ⊔ₚ,
 // uniting the variants, and the exits' ok parts, which nothing

@@ -3,7 +3,7 @@
 // The candidates differ only at the first argument, so f reads that position
 // alone; 1u8 leaves f(u8, A). The second parameter, A, is
 // in the candidates' generalization, so b ⇝ A holds at once. B reaches A
-// by no coercion: refused at that boundary, with f decided.
+// by no coercion: refused at that coercion constraint, with f decided.
 extern type A;
 extern type B;
 extern fn make() -> B;

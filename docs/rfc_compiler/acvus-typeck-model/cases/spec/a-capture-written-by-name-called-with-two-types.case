@@ -2,7 +2,7 @@
 // let remember = |x| last = Some(x);
 // remember(1u8); remember(2u16);
 // last is reached by name and its type L is an unknown of the enclosing binding
-// group, so the write is a meeting, L ≥ Some(x). It names the capture L,
+// group, so the write is a lower bound, L ≥ Some(x). It names the capture L,
 // and x's type X is joined to it through S, so the write, S and X are the
 // lambda's environment, recorded once in the enclosing binding group:
 // X is no universal but one unknown of that group, which both calls'

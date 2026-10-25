@@ -2,7 +2,7 @@
 // x = g(x);                // g(u8) -> u8, g(u16) -> u8
 // Both candidates give u8 at the result, so the generalization records that the
 // result is u8 before g is decided, and R passes into X. A read leaves
-// out only what a node records once decided, so g reads X as u8 at its
+// out only what a disjunctive constraint records once decided, so g reads X as u8 at its
 // argument, where the candidates differ, and is decided as g(u8).
 extern fn g(u8) -> u8;
 extern fn g(u16) -> u8;

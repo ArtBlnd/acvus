@@ -29,7 +29,7 @@ Three scopes are tested, each locally:
 
 A case is `cases/**/*.case`. `//` begins a comment, `//@` a directive. A name is a
 word of letters, digits, `_` and `?`, or words joined by `::`; any other name is
-written in backquotes: `` `fill_all(..)` ``. Class names and node names are apart.
+written in backquotes: `` `fill_all(..)` ``. Class names and disjunctive constraint names are apart.
 Classes, items and declarations are recorded in the order written, as
 `ProgramBuilder` records them, so that a case and the Rust test it replaced reach
 the same states.
@@ -43,9 +43,9 @@ let A;
 let `new()`;
 let `&mut a`;
 let `fill_all(..)`;
-`new()` = new() @ new;              // a use, the node `new`
+`new()` = new() @ new;              // a use, the disjunctive constraint `new`
 A = `new()`;                        // `new()` passes into A
-`&mut a` = &mut A @ lend;           // a lend, the node `lend`
+`&mut a` = &mut A @ lend;           // a lend, the disjunctive constraint `lend`
 `fill_all(..)` = fill_all(`&mut a`) @ fill_all;
 
 must pass;
@@ -95,7 +95,7 @@ classes, and `universal A;` a universal.
 |---|---|
 | `S = A;` | `A` passes into `S` (`Place::Slot`); `#[by_name]`, `#[through_ref]` before it for the other places |
 | `A == B;` | an equation |
-| `R = f(X, Y) @ n;` | a use of `f`, the node `n` |
+| `R = f(X, Y) @ n;` | a use of `f`, the disjunctive constraint `n` |
 | `R = (F)(X) @ n;` | a call of the function value of `F` |
 | `R = ?(X) into Q @ n;` | `e?` of the operand `X`, its exit's value of the class `Q` |
 | `R = &P @ n;`, `R = &mut P @ n;` | a lend |
@@ -114,7 +114,7 @@ classes, and `universal A;` a universal.
 | `//@ order g: solve A` | the steps of the group `g` in that order; every other group takes its first step | — |
 
 A step names a class by any of its members' names, as the arena names them
-(`A`, `A.Payload(Some)`), and a node by its name; it must be a step the state may
+(`A`, `A.Payload(Some)`), and a disjunctive constraint by its name; it must be a step the state may
 take then, and `fallback` only where no step is left in the entry.
 
 **Expectations.** Each holds of every outcome, and an I\* expectation of every
@@ -124,16 +124,16 @@ final state, of every run.
 |---|---|
 | `must pass;`, `must fail;` | the outcome is accepted, refused |
 | `assert A: Vec<u8>;`, `assert S: none;` | the class has the value, or none |
-| `assert f == f#1;` | the node's decision, as below |
+| `assert f == f#1;` | the disjunctive constraint's decision, as below |
 | `assert refused infinite X;`, `no_join`, `no_fill`, `no_value`, `conflict at "…"`, `undeclared` | some refusal is that, of that class where one is written |
 | `` assert failing [`g@2/A ~> g@2/B`]; `` | the failing checks' relations are exactly these, in the outcome's order |
 | `` assert check `X ~> probe.Param(0)` == conversion down#0; `` | a check of the relation has that coercion |
 | `assert istar completeness probe;` | an I\* violation; the final states' violations are exactly those written, none where none is |
 | `assert outcomes 2;` | the number of outcomes; one where none is written and no block is |
 | `assert partition {A, B};` | an equivalence class of exactly these |
-| `assert certificate set X: B fails ["…"];`, `assert certificate set probe == probe#1 fails ["…"];`, `in g` after `certificate` | the certificate of every final state, so changed, fails, the `what`s over them all exactly these; the class is named as the outcome writes it, a class an instance or a node made among them, and a function value in the value writes its Values after it, `Fn/1{λ}`, `Fn/1{}` naming none |
+| `assert certificate set X: B fails ["…"];`, `assert certificate set probe == probe#1 fails ["…"];`, `in g` after `certificate` | the certificate of every final state, so changed, fails, the `what`s over them all exactly these; the class is named as the outcome writes it, a class an instance or a disjunctive constraint made among them, and a function value in the value writes its Values after it, `Fn/1{λ}`, `Fn/1{}` naming none |
 | `assert trace "join A: nothing";` | with an order written: a line of its trace other than a `record` is that line (The trace); a `refuse` line whose text holds `"`, a conflict's, is asserted by `assert refused` |
-| `` assert decomposition records `S <= A.Payload(Some)`; ``, `` assert no node records `...`; `` | with an order written: a `record` of the relation lies under a line of the phase (`record`, `unify`, `join`, `decomposition`, `node`, `fallback`; The trace) |
+| `` assert decomposition records `S <= A.Payload(Some)`; ``, `` assert no disjunction records `...`; `` | with an order written: a `record` of the relation lies under a line of the phase (`record`, `unify`, `join`, `decomposition`, `disjunction`, `fallback`; The trace) |
 | `assert join(A, C) == B;`, `== none`; `assert le(A, B);`, `assert not le(B, A);` | the primitive, on the declarations |
 | `assert coerce(&mut A, &B) == reborrow + cast cast2#0;`, `assert along_le(…) == …;` | the coercion, on the declarations |
 
@@ -143,12 +143,12 @@ A decision is written `f#0`, `never`, `lend &mut place`, `lend & through &mut`
 coercion is written `identity`, `undecided`, `never`, `conversion f#0`, steps
 joined by `+` (`reborrow`, `cast f#0`, `shape`), or `none`,
 `compositions […]`, `conversions […]` for none. Both are compared with whitespace left out. A relation, a class and a
-node are named as the model names them, a copy's as its instance does
+disjunctive constraint are named as the model names them, a copy's as its instance does
 (`nest@23/n == 0`, `put(..)#λ/V <= X`).
 
 **Notation.** What the model writes is ASCII, the names a case gives kept as it
 writes them. A relation is `A <= B` (a lower bound), `A <=p B` (a part lower
-bound), `A ~> B` (a boundary), `A = B`, `A: <structure>`, `A: <structure constraint>`,
+bound), `A ~> B` (a coercion constraint), `A = B`, `A: <structure>`, `A: <structure constraint>`,
 `A: <LitVar>`, `A: reference`, `A: no reference`, or `A: Values contains λ`. A structure and a type are written as a
 case writes a type, `Fn(P -> R)` for a function's; a structure constraint is
 `ref T`, `field x: T`, `component i: T`, `index T`, `variant V: T` or
@@ -201,18 +201,18 @@ it. `settle`'s trace holds what changed the state.
 | | `join` | `Joined`: its `Sources` (its equations and structures, the solved lower bounds and part lower bounds it counts, the structure constraints, those left out) and `Took`: the structure it held, the head it joined with what unification did, nothing, or no join |
 | | `fill` | `Filled`: each upper bound of the class with its value, and `Fill`: the one type they have, with what unification did as the class took it, and the refusal where it could not take it, or the refusal where they have two |
 | decompositions | `decompose_at` | `Decomposition`: one class, the parts' relations, unsolved, or no parts |
-| | `unify_lit_boundaries`, `decompose_parts` | the relations recorded |
-| nodes | `decide`, `decide_at_once` | `Decided`: the node, its decision, the relations recorded, and for `decide` `DecidedBy`: the nodes that depend on it, the dependencies it broke, the undecided nodes that broke theirs on it, and its `ValueRead` (the nodes and relations it leaves out, and its `Reading`: a use's `Narrowing`, what a class reads as for a lend, a projection or a binding, or a function value's Values) |
+| | `unify_lit_coercion_constraints`, `decompose_parts` | the relations recorded |
+| disjunctive constraints | `decide`, `decide_at_once` | `Decided`: the disjunctive constraint, its decision, the relations recorded, and for `decide` `DecidedBy`: the disjunctive constraints that depend on it, the dependencies it broke, the undecided disjunctive constraints that broke theirs on it, and its `ValueRead` (the disjunctive constraints and relations it leaves out, and its `Reading`: a use's `Narrowing`, what a class reads as for a lend, a projection or a binding, or a function value's Values) |
 | | `record_decision`, `record_generalizations` | the relations recorded |
 | instances | `Instance::record_rest` | the relations it records |
 | fallback | `take_defaults` | `FellBack`: each class, its default, what unification did, the refusal where it could not take it |
 
 ## The trace
 
-What solving did along an order is written as facts, alike in a golden's written
-order and under `TRACE=1`. A line is one fact, `keyword subject: value`, either part
-left out where the fact has none, followed by its attributes, each `key: value` after
-two spaces; the facts a fact is made of are the lines indented under it. An attribute
+What solving did along an order is written as events, alike in a golden's written
+order and under `TRACE=1`. A line is one event, `keyword subject: value`, either part
+left out where the event has none, followed by its attributes, each `key: value` after
+two spaces; the events an event is made of are the lines indented under it. An attribute
 or a line not written is none: a union whose class holds no structure has no `structure:`. A
 phase that did nothing writes no line. This table is where each keyword is defined. A
 class is named as the state the step left names its equivalence class, except under
@@ -229,22 +229,22 @@ step does not rename what an earlier one shows.
 | `refuse: <refusal>` | under `start`, `step` and `fallback`: a refusal the step made, as an outcome writes it |
 | `record #k <relation>` | the relation recorded at `#k` in the log |
 | `link X: E` | the view of `X`'s extern-defined container links its element `E` |
-| `generalization` | the generalization of all the nodes not yet decided may become |
+| `generalization` | the generalization of all the disjunctive constraints not yet decided may become |
 | `merge cycles` | the cycles of lower bounds alone merged |
 | `lit lowers X` | `X`'s LitVar lower bounds unified with it |
 | `lit join #k <relation>` | the LitVar lower bound at `#k` unified with the class it bounds |
 | `join X: <took>` | `X` solved, having taken `held` (its structure), a constructor and its members, `nothing`, `no join`, or `infinite` (it reaches a part of its own) |
 | `fill X: <took>` | `X`, which nothing enters, filled: the one type its upper bounds have, or `differ` where they have two |
-| `lit boundaries X` | `X` unified with each type it passes into |
-| `decompose #k <relation>: <what>` | the relation at `#k`: `one class`, `parts`, `unsolved`, `no parts` |
-| `decide n: <decision>` | the node `n` decided, its decision written as an expectation writes one |
+| `lit coercion constraints X` | `X` unified with each type it passes into |
+| `decomposition #k <relation>: <what>` | the relation at `#k`: `one class`, `parts`, `unsolved`, `no parts` |
+| `decide n: <decision>` | the disjunctive constraint `n` decided, its decision written as an expectation writes one |
 
 Under `TRACE=1` alone:
 
 | Line | Means |
 |---|---|
 | `fixpoint g` | `g` has no step left |
-| `by: <recorder>` | of `record` and `relation`: what recorded it: `origin`, `text i`, `node n`, `decomposition X`, `cycle`, `function type X ~> Y`, `check`, `instance m of <recorder>` (what recorded its original in the group `m` instantiates) |
+| `by: <recorder>` | of `record` and `relation`: what recorded it: `origin`, `text i`, `disjunctive constraint n`, `decomposition X`, `cycle`, `function type X ~> Y`, `check`, `instance m of <recorder>` (what recorded its original in the group `m` instantiates) |
 | `instance m: C of g` | the instance `m` made, of the C of `g`; `by: <recorder>`, `records: #k, ...` |
 | `union A + B: {M, ...}` | `A` and `B` unified into the class of these members |
 | `by: #k`, `by: congruence <part> of A + B`, `by: structure X at <part>`, `by: structure constraint X: <structure constraint>` | of `union` and `conflict`: the equation at `#k`; the parts `<part>` of the structures the union of `A` and `B` conjoined; the parts `<part>` of the structure `X` held and the structure it was given; a structure constraint of `X` and what its structure, or another structure constraint, names there |
@@ -257,9 +257,9 @@ Under `TRACE=1` alone:
 | `structure constraint: <constructor>` | under `join`: the constructor and members a structure constraint gives |
 | `left out: L, ...` | under `join`: the lower bounds and part lower bounds not solved |
 | `place P: <type>` | under `fill`: an upper bound of `X`, and its value |
-| `exclude: n, ...` | under `decide`: the nodes whose relations its read leaves out |
-| `broke: n, ...` | under `decide`: the decided nodes it broke its dependency on |
-| `broken by: n, ...` | under `decide`: the undecided nodes that broke theirs on it |
+| `exclude: n, ...` | under `decide`: the disjunctive constraints whose relations its read leaves out |
+| `broke: n, ...` | under `decide`: the decided disjunctive constraints it broke its dependency on |
+| `broken by: n, ...` | under `decide`: the undecided disjunctive constraints that broke theirs on it |
 | `left out: #k, ...` | under `decide`: the relations its read leaves out |
 | `read <at> X: <value>` | under `decide`: the value read at `X`, at `argN`, `result`, `place`, `operand`, `position` or `callee`, `_` where it decides nothing |
 | `as: <reference>` | of the `read` of a lend, a projection or a binding: `&`, `&mut`, `reference` (recorded, its mutability not decided), `no reference`, `none` |
@@ -271,7 +271,7 @@ Under `TRACE=1` alone:
 | `unsolved X` | `X` is not solved; `universal: yes` for a universal, and `no value: yes`, `enclosing: yes` (of an enclosing group) or `wait:` |
 | `undecided n` | `n` is not decided; `wait:` |
 | `wait: <dependency>, ...` | of `unsolved` and `undecided`: the unbroken dependencies not yet met: `lower L`, `taking T`, `part of O`, `records n`, `reads n`, `reads outside`, `path n`, `chosen`; `none` where none is |
-| `C g` | what `g` leaves in C at its fixpoint: under it `classes: ...`, `nodes: ...` and each `relation #k <relation>` with its `by:` |
+| `C g` | what `g` leaves in C at its fixpoint: under it `classes: ...`, `disjunctive constraints: ...` and each `relation #k <relation>` with its `by:` |
 | `written order`, `first order` | the order traced |
 | `limit: 10000` | the first order did not end within 10 000 steps |
 | `end` | where the first order ends; under it its outcome, as a golden writes one |
@@ -282,8 +282,8 @@ Under `TRACE=1` alone:
 A golden writes a written order's trace without the lines of `TRACE=1` alone.
 `assert <phase> records` finds a `record` under a line of its phase: directly
 under `start` or `step` (`record`), under `link` (`unify`), `merge`, `lit lowers`,
-`lit join`, `join` or `fill` (`join`), `lit boundaries` or `decompose` (`decomposition`),
-`generalization` or `decide` (`node`), `default` (`fallback`).
+`lit join`, `join` or `fill` (`join`), `lit coercion constraints` or `decomposition` (`decomposition`),
+`generalization` or `decide` (`disjunction`), `default` (`fallback`).
 
 ### `TRACE=1`
 
@@ -337,7 +337,7 @@ steps; `golden()` and every expectation read what they read without it.
   The second and the third give the class λ reaches through the cast or the view,
   one class with the use's `T`, `Fn/1{}`, and the checker fails there and at that
   `T`, as derived.
-- Since a use of one candidate has no node, 86 goldens lost that use's decision line
+- Since a use of one candidate has no disjunctive constraint, 86 goldens lost that use's decision line
   and nothing else, and `phases/unify-a-view-links-an-index` records `new`'s
   relations with the text; 5 cases dropped an assertion of such a decision.
 - `cases/certificate/a-function-value-passed-through-a-use` tests the certificate's
@@ -388,8 +388,8 @@ steps; `golden()` and every expectation read what they read without it.
 - 3 cases under `cases/spec` test a sum of two literals whose result is unused,
   narrowed again at `i32`; `1 ^ 2`, whose two literals are one class along some
   orders and apart along others, one typing and so one outcome since outcomes compare
-  by their typing; and a literal binding into `u8` and a `u16` meeting, refused at
-  the meeting in every order. Each was derived before it was run.
+  by their typing; and a literal binding into `u8` and a `u16` lower bound, refused at
+  the lower bound in every order. Each was derived before it was run.
 - 4 cases under `cases/spec` test two uses that fill one literal, a literal into a
   use then another, a sum into a use that only reads it, and a literal through a
   generic use then two uses. Each was derived before it was run; the two refused ones
@@ -403,15 +403,15 @@ steps; `golden()` and every expectation read what they read without it.
   passing 100 000 states.
 - 3 cases under `cases/spec` test a function value passing into a function type:
   refused where the lambda's result reaches the type's by no coercion, accepted where
-  it does, and by a declared conversion at that boundary.
+  it does, and by a declared conversion at that coercion constraint.
 - 2 cases under `cases/spec` test two functions that call each other, `even(10u8)`,
   with and without an `i32` candidate of each: two outcomes and five, by whether a
-  broken dependency's relations had waited for a node that only they decide and a
+  broken dependency's relations had waited for a disjunctive constraint that only they decide and a
   LitVar's default had been taken at once, now one, accepted, over 200 sampled
   orders. Each was derived before it was run. `two-uses-that-fill-one-literal` and
   `a-literal-through-a-generic-use-then-two-uses`, refused with I\* completeness
   violations, are accepted with `x: u16`, `n` decided by the `u16` that `m`'s
-  boundary unifies `x` with;
+  coercion constraint unifies `x` with;
   `a-lambda-calls-a-function-with-a-capture-and-its-parameter` keeps its outcome over
   200 sampled orders, every order now passing 100 000 states.
 - 2 cases under `cases/spec` test a lend of a use's result where the candidates'
@@ -431,7 +431,7 @@ steps; `golden()` and every expectation read what they read without it.
   calling the lambda the target names, where the call had never been decided. Each
   was derived before it was run.
 - 13 cases under `cases/phases` test each phase along a written order: recording, the
-  join, decompositions, unification, nodes and fallback. 2 cases under `cases/primitives`
+  join, decompositions, unification, disjunctive constraints and fallback. 2 cases under `cases/primitives`
   test the join, `≤` and coercion on the declarations of `fixture::decls()` without
   `Box`, coercion with a conversion `u16 → u8` besides.
 - Every case passes, and every golden is the model's.

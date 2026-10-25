@@ -351,7 +351,7 @@ pub fn program(case: &Case, decls: &Decls) -> Built<Program> {
             TextItem::Pass { value, into, place } => p.pass_at(&name(value), &name(into), *place),
             TextItem::Equation(a, b) => p.equation(&name(a), &name(b)),
             TextItem::Use {
-                node,
+                disjunction,
                 callee,
                 args,
                 result,
@@ -359,14 +359,14 @@ pub fn program(case: &Case, decls: &Decls) -> Built<Program> {
             } => {
                 let args = names(args);
                 p.call(
-                    node,
+                    disjunction,
                     callee,
                     &args.iter().collect::<Vec<_>>(),
                     &name(result),
                 );
             }
             TextItem::Use {
-                node,
+                disjunction,
                 callee,
                 args,
                 result,
@@ -374,49 +374,51 @@ pub fn program(case: &Case, decls: &Decls) -> Built<Program> {
             } => {
                 let [operand] = args.as_slice() else {
                     return Err(format!(
-                        "{node}: `?` takes one operand, written {}",
+                        "{disjunction}: `?` takes one operand, written {}",
                         args.len()
                     ));
                 };
                 if callee != crate::decl::TRY {
-                    return Err(format!("{node}: only `?` has an exit, written {callee}"));
+                    return Err(format!(
+                        "{disjunction}: only `?` has an exit, written {callee}"
+                    ));
                 }
-                p.try_(node, &name(operand), &name(result), &name(exit));
+                p.try_(disjunction, &name(operand), &name(result), &name(exit));
             }
             TextItem::CallValue {
-                node,
+                disjunction,
                 callee,
                 args,
                 result,
             } => {
                 let args = names(args);
                 p.call_value(
-                    node,
+                    disjunction,
                     &name(callee),
                     &args.iter().collect::<Vec<_>>(),
                     &name(result),
                 );
             }
             TextItem::Lend {
-                node,
+                disjunction,
                 mutability,
                 place,
                 result,
-            } => p.lend(node, *mutability, &name(place), &name(result)),
+            } => p.lend(disjunction, *mutability, &name(place), &name(result)),
             TextItem::Project {
-                node,
+                disjunction,
                 projection: text,
                 operand,
                 result,
-            } => p.project(node, projection(text), &name(operand), &name(result)),
+            } => p.project(disjunction, projection(text), &name(operand), &name(result)),
             TextItem::Bind {
-                node,
+                disjunction,
                 path,
                 position,
                 binding,
             } => {
                 let path: Vec<&str> = path.iter().map(String::as_str).collect();
-                p.bind(node, &path, &name(position), &name(binding));
+                p.bind(disjunction, &path, &name(position), &name(binding));
             }
         }
     }

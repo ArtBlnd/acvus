@@ -3,7 +3,7 @@
 The code is `src/program.rs` (groups and functions), `src/instance.rs`,
 `State::of_group` in `src/solve.rs`, `State::call` in `src/record.rs`, and
 `src/explore.rs`.
-Passing a function value across a boundary into a given function type,
+Passing a function value across a coercion constraint into a given function type,
 the facts other than Values, and a receiver's adjustments are not yet
 encoded.
 
@@ -14,7 +14,7 @@ fixpoint, in every order, before the groups whose uses make instances of it.
 Its functions' parameters' types are universal: each depends on the use
 that chooses it, which lies outside the group and is never decided there, so what
 reaches a universal stays in C. At the fixpoint, C is the group's classes whose
-values are not closed, its universals, its undecided nodes and every relation on
+values are not closed, its universals, its undecided disjunctive constraints and every relation on
 them. A use in another group makes C anew and records it there; a use in
 the group takes the body's own types.
 
@@ -27,7 +27,7 @@ the group takes the body's own types.
    and what it leaves unsolved reaches fallback only as a copy,
    so a fallback after a group's C was copied out does not change that copy.
 2. **A universal's dependency** is a vertex its group never decides. A class with a
-   lower bound on a universal, and a node that reads one, stay in C.
+   lower bound on a universal, and a disjunctive constraint that reads one, stay in C.
 3. **What C holds.** A class whose value is not closed at the fixpoint is of C, a
    solved one among them where a part is not (`Some(x)`), as is each universal. A
    copy is made per root, so the equations among C's classes hold in it, and a structure
@@ -35,15 +35,15 @@ the group takes the body's own types.
    "with an equation" stays as it was. A class outside C enters a copy as its closed
    type, written. Every relation of the group's log naming a class of C is copied,
    the decompositions it derived included, recorded by the use that made the instance or by
-   the copy of the undecided node that recorded it. A relation the group decomposed stays
+   the copy of the undecided disjunctive constraint that recorded it. A relation the group decomposed stays
    decomposed in the copy: what its decomposition recorded is copied with it, and no class of the
    copy takes there a constructor it did not hold in the group, so the decomposition is not
    made again where a copied universal is an unknown.
 4. **A use of a function in its own group** passes each argument into the
-   parameter's universal type, a boundary, and the body's
+   parameter's universal type, a coercion constraint, and the body's
    result type enters the use's result as a lower bound, as a use's result does.
 5. **A group's outcome.** A group's text classes are reported with the values it
-   solved them to, its decided nodes with their decisions, its checks where both
+   solved them to, its decided disjunctive constraints with their decisions, its checks where both
    sides are closed there, and its refusals. What it leaves in C needs neither a
    value nor a decision; its copies are checked where they are recorded.
 6. **Several fixpoints.** A group whose solving reaches distinct fixpoints in
@@ -56,12 +56,12 @@ the group takes the body's own types.
    It names no class of an enclosing group, so its C holds none, and no
    copy records into one. A block expression is such a lambda, called
    where it lies.
-8. **Meeting and boundary**. A value passing into an unknown of the
+8. **Lower bound and coercion constraint**. A value passing into an unknown of the
    place's own group meets it. One passing into a binding of an enclosing group
    reached by name meets it where that binding's type is an unknown of its own
    group, judged by its text: a type the text writes, and a universal, are not.
    One passing through a reference from a binding of an enclosing group
-   is a boundary, whatever class the place's last projection names, since that
+   is a coercion constraint, whatever class the place's last projection names, since that
    class is the lambda's own until the reference's target is known.
    A constraint of a lambda's environment keeps the place its text gives, and is
    recorded in the enclosing group.
@@ -74,11 +74,11 @@ the group takes the body's own types.
    Values, as a projection is taken of a reference's target (`State::called`). A call
    whose callee's Values name no lambda decides nothing and is not decided then. A
    function value passing into a function type makes the same instances where that
-   boundary is decomposed, the type's parameters passing into the lambda's and the
+   coercion constraint is decomposed, the type's parameters passing into the lambda's and the
    lambda's result into the type's.
 10. **A receiver's `T̄`** is universal, and the receiver's class holds the
    structure the text writes, so it is decided and universal at once: an argument
-   passes into its copy by a boundary. A node that reads
+   passes into its copy by a coercion constraint. A disjunctive constraint that reads
    whether a receiver is a reference depends on the use that chooses it
    and is decided in the copies, although the structure the text writes already
    decides it.

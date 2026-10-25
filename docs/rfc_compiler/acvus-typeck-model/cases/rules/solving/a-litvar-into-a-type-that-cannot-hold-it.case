@@ -1,5 +1,5 @@
 // take(300);               // take(u8)
-// The literal passes into take's parameter u8, a boundary ?{300} ⇝ u8, and
+// The literal passes into take's parameter u8, a coercion constraint ?{300} ⇝ u8, and
 // ?N ⇝ U unifies ?N with U. u8 does not hold 300, so the
 // unification has no result: refused there.
 extern fn take(u8);

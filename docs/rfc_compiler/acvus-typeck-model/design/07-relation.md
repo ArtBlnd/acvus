@@ -20,8 +20,8 @@ the log makes, so a value read is decided by replaying the relations that remain
 2. **A use's result.** A use's result type enters its result as a lower bound the
    use records: the value table gives a use as a source, and a use's result
    reaches its value by `≤` as a lower bound does.
-3. **What a node recorded.** A node's relations are those it records once decided,
+3. **What a disjunctive constraint recorded.** A disjunctive constraint's relations are those it records once decided,
    its generalization before (`Recorder::Generalization`, which no read leaves out), and those
    of every instance it makes: an instance's relations name what made it, so a value
-   read leaving a node out leaves out its instances' relations too. A use of a
-   function makes its instance as the text is recorded, and is no node.
+   read leaving a disjunctive constraint out leaves out its instances' relations too. A use of a
+   function makes its instance as the text is recorded, and is no disjunctive constraint.

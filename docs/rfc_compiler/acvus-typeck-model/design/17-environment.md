@@ -5,9 +5,9 @@ callee ties, and the environment is cut by constraints, not items (Definitions, 
 4–5); a function of another group ties a use's positions by the parts of its C, so
 the cut is made as the groups are solved (Row 6). The code is `Cut::of`,
 `Cut::owner`, `Cut::part`, `Cut::is_universal` and `constraints` in `src/cut.rs`,
-`State::record_closed` in `src/node/generalization.rs`, `State::components` and
+`State::record_closed` in `src/disjunction/generalization.rs`, `State::components` and
 `Instance::part` in `src/instance.rs`, `State::positions` and `State::environment_of`
-in `src/node/position.rs`, and the certificate's contexts and `call_value` in
+in `src/disjunction/position.rs`, and the certificate's contexts and `call_value` in
 `src/certificate.rs`.
 
 ## Meaning
@@ -31,11 +31,11 @@ lambda's binding group, generalized and copied at each call.
   in one part of that group's C, together, and each whose type lies outside C,
   alone.
 - The **parts of C** (`State::components`): two of C's classes lie in one part
-  where one of C's relations is on both, a node left undecided names both, a
-  binding's node and the projections on its path name them, one is a part of the
+  where one of C's relations is on both, a disjunctive constraint left undecided names both, a
+  binding's disjunctive constraint and the projections on its path name them, one is a part of the
   other's structure, or one holds a function value whose Values name a lambda placed
   in the group and the other lies in that lambda's environment. Each is what an
-  instance makes anew together: copying a relation, a node, a structure, or a lambda
+  instance makes anew together: copying a relation, a disjunctive constraint, a structure, or a lambda
   with its environment.
 - Two classes of a lambda's text are **joined** where one constraint is on both,
   or one is a part of a structure the text writes for the other. The **environment**
@@ -50,7 +50,7 @@ lambda's binding group, generalized and copied at each call.
 
 1. **The environment is the enclosing group's.** Its classes are classes of that
    group, each an unknown of it unless the text writes it. Its
-   constraints are recorded there, and its nodes made there, once, when that group's solving
+   constraints are recorded there, and its disjunctive constraints made there, once, when that group's solving
    starts, whether or not a call reaches the lambda.
 2. **The lambda's binding group is its generic part**. Its C is the generic
    part's, copied at each instance. It names no capture, so no
@@ -64,10 +64,10 @@ lambda's binding group, generalized and copied at each call.
    at the moment.
 4. **A use whose constraints two groups record has a part in each.** Each group
    records the constraints at its positions (`Cut::part`). Of declarations of
-   one candidate, each group records it at its positions at once, with no node
-   (`State::record_one`); of several, the node is where the choice is, the
+   one candidate, each group records it at its positions at once, with no disjunctive constraint
+   (`State::record_one`); of several, the disjunctive constraint is where the choice is, the
    positions where every candidate writes one closed type recorded where they lie
-   by the generalization (`State::record_closed`). So a node is one group's.
+   by the generalization (`State::record_closed`). So a disjunctive constraint is one group's.
 5. **A call of another group's function makes, in each group that records some
    of its constraints, an instance of the parts of C at those positions**
    (`Instance::part`). Where one group records every position, the
@@ -81,7 +81,7 @@ What each row excludes:
 
 - Row 1: the environment generalized or copied, and a capture taking a relation
   from an instance. A lambda no call reaches still has its environment recorded,
-  and the nodes there are decided.
+  and the disjunctive constraints there are decided.
 - Row 2: a class of an enclosing group in a lambda's C.
 - Row 3: a parameter in the environment solved before a call whose Values name its
   lambda is decided.
@@ -93,7 +93,7 @@ What each row excludes:
   instance, or in none (`spec/a-lambda-never-called`).
 - Row 5: an instance in one group of a part of C at a position another group
   records. The cut groups the positions by the same parts, so no part lies at
-  positions of both. Where some of C, or a node left in it, lies at no position of
+  positions of both. Where some of C, or a disjunctive constraint left in it, lies at no position of
   a use whose constraints two groups record, which no rule places, the model
   panics.
 - Row 6: a lambda cut by the text of the groups it makes instances of, which ties
@@ -178,14 +178,14 @@ case kept its outcome, and the program above is accepted, `adder(cap)` one
 constraint, the environment's, `f(2u8)` `u8`
 (`spec/a-lambda-calls-a-function-that-returns-a-closure`). Of the four
 cases whose result constraint moved, the checks of their results are each call's
-instance's, and `phases/node-what-every-candidate-shares` records `bool`, which
+instance's, and `phases/disjunction-what-every-candidate-shares` records `bool`, which
 both candidates write at the result, with the text, not in the generalization's
 phase.
 
 ## Open
 
 - Where a call of another group's function has constraints two groups record,
-  some of C, or a node left in it, lying at no position of it panics
+  some of C, or a disjunctive constraint left in it, lying at no position of it panics
   (`Instance::part`, Row 5): no witness shows one.
 - Whether a function group reaches more than one fixpoint, whose C's parts
   differ, which would cut a lambda that calls it differently along two orders
@@ -204,9 +204,9 @@ phase.
   Values grow after it. The certificate reports a call whose callee's Values name
   a lambda it does not call, so a final state where they grew fails
   there; no case shows one yet.
-- Row 3 makes a node's result reach what it reads through a call. In
+- Row 3 makes a disjunctive constraint's result reach what it reads through a call. In
   `acc = f()` with `f = || acc + 1`, `acc + 1`'s result `R` reaches `ACC`, which it
   reads, by `R ≤ λ result ≤ f() ≤ ACC`. Probed in every order by changing the
-  model, `f()` is decided first, no node breaks a dependency on another,
+  model, `f()` is decided first, no disjunctive constraint breaks a dependency on another,
   nothing is deferred, and `acc + 1`'s read leaves out its own relations alone.
-  Whether row 3 makes a cycle between distinct nodes, no witness yet shows.
+  Whether row 3 makes a cycle between distinct disjunctive constraints, no witness yet shows.

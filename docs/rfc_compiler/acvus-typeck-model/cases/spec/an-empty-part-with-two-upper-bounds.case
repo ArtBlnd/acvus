@@ -1,6 +1,6 @@
 // let x = None;
 // let y = if c { x } else { Some(1u16) };
-// take(x);                 // take(Option<u8>), encoded as the boundary it records
+// take(x);                 // take(Option<u8>), encoded as the coercion constraint it records
 let X;
 let ?k;
 let None: Option<?k>;

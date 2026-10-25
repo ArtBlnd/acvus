@@ -10,16 +10,16 @@ outcome 1
 start run
   record #0 None: Option<?k>
   record #1 None <= A
-  decompose #0 None: Option<?k>: no parts
+  decomposition #0 None: Option<?k>: no parts
 step 1 run: solve A
   join A: Option {Variant(None), Variant(Some)}
-  decompose #1 None <= A: parts
+  decomposition #1 None <= A: parts
     record #2 ?k <=p A.Payload(Some)
 fallback 2 run
   default ?k: !
     record #3 ?k: !
   default `A.Payload(Some)`: !
     record #4 A.Payload(Some): !
-  decompose #2 ?k <=p A.Payload(Some): parts
-  decompose #3 ?k: !: no parts
-  decompose #4 A.Payload(Some): !: no parts
+  decomposition #2 ?k <=p A.Payload(Some): parts
+  decomposition #3 ?k: !: no parts
+  decomposition #4 A.Payload(Some): !: no parts

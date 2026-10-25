@@ -1,5 +1,5 @@
 // let x = 0; takes_u8(x); probe(x);   // probe(u8), probe(i32)
-// takes_u8 has one candidate and is decided at once; its boundary unifies X,
+// takes_u8 has one candidate and is decided at once; its coercion constraint unifies X,
 // which only LitVars enter, with u8, and probe reads u8.
 extern fn takes_u8(u8);
 extern fn probe(u8);

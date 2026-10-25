@@ -3,7 +3,7 @@
 // let f = || *r = Some(1u8);
 // f();
 // The write names the capture R, so it is the lambda's environment, recorded
-// in the enclosing group, and through the captured r it is a boundary,
+// in the enclosing group, and through the captured r it is a coercion constraint,
 // whose payload, an unknown of that group, takes a lower bound.
 group λ in run {
     let `*r`;

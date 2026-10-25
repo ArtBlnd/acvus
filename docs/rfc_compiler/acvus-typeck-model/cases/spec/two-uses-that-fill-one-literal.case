@@ -1,6 +1,6 @@
 // let x = 0; n(x); m(x);   // n(u16), n(i32); m(u16), m(&str)
 // Only LitVars enter X, so X waits for n and m, whose relations into it are
-// boundaries out of it, and each use depends on the other:
+// coercion constraints out of it, and each use depends on the other:
 // each breaks the dependency and reads X as ?a alone. m is decided by
 // it, a LitVar reaching no &str, and n is not: a LitVar's default narrows only
 // where no other step is left. What m records goes into its

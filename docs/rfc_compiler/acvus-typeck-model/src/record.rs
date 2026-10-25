@@ -1,16 +1,16 @@
 //! Recording: the constraints a body's text gives, recorded in the
 //! equivalence classes as they are given, whatever is solved — a
-//! meeting as a lower bound and a boundary as `T ⇝ U`, an invariant
+//! lower bound as `τ ≤ α` and a coercion constraint as `T ⇝ U`, an invariant
 //! place as an equation, and a use, a lend, a projection and a binding as a
-//! node — and the classes of a type a declaration writes.
+//! disjunctive constraint — and the classes of a type a declaration writes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, StructureSource};
+use crate::disjunction::{Disjunction, DisjunctionState};
 use crate::domain::Domain;
 use crate::instance::Instance;
-use crate::node::{NodeKind, NodeState};
 use crate::program::{Function, Item, Origin, Part, Place, Position, Program, TextClass};
 use crate::relation::{Recorded, Recorder, Relation};
 use crate::sig::{SigTy, SigVar};
@@ -122,9 +122,9 @@ impl State {
         recorded
     }
 
-    /// The rest of the text: each value passing into a type, as a meeting or
-    /// a boundary, each call of a function, and
-    /// each other use, lend, projection and binding, as a node; of a
+    /// The rest of the text: each value passing into a type, as a lower bound or
+    /// a coercion constraint, each call of a function, and
+    /// each other use, lend, projection and binding, as a disjunctive constraint; of a
     /// use, the constraints at the positions its part holds.
     pub(crate) fn record_items(
         &mut self,
@@ -142,20 +142,20 @@ impl State {
             match item {
                 Item::Pass { value, into, place } => {
                     let (value, into) = (self.text(value), self.text(into));
-                    let meeting = match place {
+                    let lower_bound = match place {
                         Place::ThroughRef => false,
                         Place::ByName => {
                             self.is_unknown(into) || self.enclosing_unknowns.contains(&into)
                         }
                         Place::Slot => self.is_unknown(into),
                     };
-                    let relation = if meeting {
+                    let relation = if lower_bound {
                         Relation::LowerBound {
                             lower: value,
                             upper: into,
                         }
                     } else {
-                        Relation::Boundary {
+                        Relation::CoercionConstraint {
                             from: value,
                             to: into,
                         }
@@ -168,12 +168,12 @@ impl State {
                     args,
                     result,
                 } => {
-                    let kind = NodeKind::CallValue {
+                    let kind = Disjunction::CallValue {
                         callee: self.text(callee),
                         args: args.iter().map(|arg| self.text(arg)).collect(),
                         result: self.text(result),
                     };
-                    self.add_node(name, kind);
+                    self.add_disjunction(name, kind);
                 }
                 Item::Use { callee, args, .. } if program.function(callee).is_some() => {
                     let function = program.function(callee).expect("the function is declared");
@@ -198,7 +198,7 @@ impl State {
                 } => {
                     // Of several candidates, the positions where every
                     // candidate writes one closed type are recorded apart, by
-                    // the generalization; the node holds the rest.
+                    // the generalization; the disjunctive constraint holds the rest.
                     let several = self.candidates(callee, args.len()).len() >= 2;
                     let closed: BTreeSet<Position> = if several {
                         let sigs: Vec<crate::sig::Signature> = self
@@ -206,7 +206,7 @@ impl State {
                             .into_iter()
                             .map(|decl| decl.sig.clone())
                             .collect();
-                        let generalization = crate::node::generalization::Generalization::of(
+                        let generalization = crate::disjunction::generalization::Generalization::of(
                             &sigs.iter().collect::<Vec<_>>(),
                         );
                         item.positions()
@@ -223,27 +223,29 @@ impl State {
                     if !apart.is_empty() {
                         recorded.append(self.record_closed(name, callee, args.len(), &apart));
                     }
-                    let node = |position: Position| {
+                    let disjunction = |position: Position| {
                         held(self, position).filter(|_| !closed.contains(&position))
                     };
-                    let kind = NodeKind::Use {
+                    let kind = Disjunction::Use {
                         callee: callee.clone(),
-                        args: (0..args.len()).map(|k| node(Position::Arg(k))).collect(),
-                        result: node(Position::Result),
+                        args: (0..args.len())
+                            .map(|k| disjunction(Position::Arg(k)))
+                            .collect(),
+                        result: disjunction(Position::Result),
                         exit: item
                             .positions()
                             .contains(&Position::Exit)
-                            .then(|| node(Position::Exit))
+                            .then(|| disjunction(Position::Exit))
                             .flatten(),
                     };
-                    let NodeKind::Use {
+                    let Disjunction::Use {
                         args, result, exit, ..
                     } = &kind
                     else {
                         unreachable!("the kind is a use's");
                     };
                     if args.iter().any(Option::is_some) || result.is_some() || exit.is_some() {
-                        self.add_node(name, kind);
+                        self.add_disjunction(name, kind);
                     }
                 }
                 Item::Lend {
@@ -252,12 +254,12 @@ impl State {
                     place,
                     result,
                 } => {
-                    let kind = NodeKind::Lend {
+                    let kind = Disjunction::Lend {
                         mutability: *mutability,
                         place: self.text(place),
                         result: self.text(result),
                     };
-                    self.add_node(name, kind);
+                    self.add_disjunction(name, kind);
                 }
                 Item::Project {
                     name,
@@ -265,12 +267,12 @@ impl State {
                     operand,
                     result,
                 } => {
-                    let kind = NodeKind::Project {
+                    let kind = Disjunction::Project {
                         projection: projection.clone(),
                         operand: self.text(operand),
                         result: self.text(result),
                     };
-                    self.add_node(name, kind);
+                    self.add_disjunction(name, kind);
                 }
                 Item::Bind {
                     name,
@@ -278,12 +280,12 @@ impl State {
                     position,
                     binding,
                 } => {
-                    let kind = NodeKind::Bind {
+                    let kind = Disjunction::Bind {
                         path: path.clone(),
                         position: self.text(position),
                         binding: self.text(binding),
                     };
-                    self.add_node(name, kind);
+                    self.add_disjunction(name, kind);
                 }
                 Item::Equation(..) => {}
             }
@@ -291,22 +293,26 @@ impl State {
         recorded
     }
 
-    pub(crate) fn add_node(&mut self, name: &Name, kind: NodeKind) {
-        let node = NodeState {
+    pub(crate) fn add_disjunction(&mut self, name: &Name, kind: Disjunction) {
+        let disjunction = DisjunctionState {
             kind,
             decision: None,
             generalized: None,
             references: BTreeSet::new(),
         };
-        if self.nodes.insert(name.clone(), node).is_some() {
-            panic!("the program names the node {name} once");
+        if self
+            .disjunctions
+            .insert(name.clone(), disjunction)
+            .is_some()
+        {
+            panic!("the program names the disjunctive constraint {name} once");
         }
     }
 
     /// A use that calls a function, at the positions of its
     /// constraints this group records, none at the others. Within the
     /// function's group it takes that body's own types: each argument passes
-    /// into its parameter's type, universal and so a boundary,
+    /// into its parameter's type, universal and so a coercion constraint,
     /// and the body's result type enters the use's result. From another group
     /// it makes an instance of the group's C: of all of it where this
     /// group records every position, and otherwise of the parts of C the
@@ -371,8 +377,8 @@ impl State {
 
     /// Each value passing into a type, as `pairs` gives them: an argument
     /// into its parameter's type, and the result type into the result,
-    /// each a meeting where the type passed into is an unknown
-    /// and a boundary otherwise.
+    /// each a lower bound where the type passed into is an unknown
+    /// and a coercion constraint otherwise.
     pub(crate) fn record_call(
         &mut self,
         pairs: &[(ClassId, ClassId)],
@@ -386,7 +392,7 @@ impl State {
                     upper: into,
                 }
             } else {
-                Relation::Boundary {
+                Relation::CoercionConstraint {
                     from: value,
                     to: into,
                 }

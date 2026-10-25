@@ -1,6 +1,6 @@
 // let v = make();          // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
 // first(&v);               // first<T>(&[T]) -> Option⟨&T⟩
-// &v passes into &[T], which the declaration writes: a boundary.
+// &v passes into &[T], which the declaration writes: a coercion constraint.
 extern type Vec<T>;
 extern fn make() -> Vec<u8>;
 extern fn first<T>(&[T]) -> Option<&T>;

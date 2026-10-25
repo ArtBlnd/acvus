@@ -1,11 +1,11 @@
 //! The state of a binding group's solving, and the composition of
 //! the phases on it: recording (`record.rs`), unification (`unify.rs`), the
 //! join that gives an equivalence class its value (`value.rs`),
-//! decompositions (`decompose.rs`), the decisions of uses, lends, projections and
-//! bindings (`node/`) in the order the dependencies allow (`dep.rs`),
+//! decompositions (`decomposition.rs`), the decisions of uses, lends, projections and
+//! bindings (`disjunction/`) in the order the dependencies allow (`dep.rs`),
 //! fallback (`fallback.rs`) and the checks (`check.rs`): the steps to a
 //! fixpoint and fallback after it, each returning the trace of
-//! what its phases reported (`trace.rs`), and the state a node's value read
+//! what its phases reported (`trace.rs`), and the state a disjunctive constraint's value read
 //! is taken from.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,10 +15,10 @@ use crate::check::{Outcome, Refusal};
 use crate::class::{Arena, ClassId, ClassName, Classes};
 use crate::cut::Cut;
 use crate::decl::Decls;
-use crate::decompose::Decomposition;
+use crate::decomposition::Decomposition;
 use crate::dep::Eligible;
+use crate::disjunction::DisjunctionState;
 use crate::instance::Made;
-use crate::node::NodeState;
 use crate::program::{ENTRY, Function, Item, Part, Position, Program, TextClass};
 use crate::read::ReadValue;
 use crate::relation::{Recorded, Recorder, Relation};
@@ -35,7 +35,7 @@ pub struct State {
     pub(crate) texts: Vec<ClassId>,
     /// The classes decided when solving starts, which are no unknowns.
     pub(crate) decided: BTreeSet<ClassId>,
-    /// The lower bounds, part lower bounds and boundaries, by their place in
+    /// The lower bounds, part lower bounds and coercion constraints, by their place in
     /// the log, whose parts are related.
     pub(crate) decomposed: BTreeSet<usize>,
     /// Those copied from a C where they were decomposed, by their place in the log:
@@ -47,13 +47,13 @@ pub struct State {
     pub(crate) no_value: BTreeSet<ClassId>,
     pub(crate) refusals: BTreeSet<Refusal>,
     /// The uses and lends, by name.
-    pub(crate) nodes: BTreeMap<Name, NodeState>,
+    pub(crate) disjunctions: BTreeMap<Name, DisjunctionState>,
     /// In a state a value read is taken from, the classes found to give
     /// nothing, having no relation left.
     pub(crate) nothing: BTreeSet<ClassId>,
     /// The classes named by a structure constraint "indexes `τ`" already linked along a view.
     pub(crate) viewed: BTreeSet<ClassId>,
-    /// The decided nodes whose relations wait for the undecided nodes that
+    /// The decided disjunctive constraints whose relations wait for the undecided disjunctive constraints that
     /// broke their dependency on them.
     pub(crate) deferred: BTreeMap<Name, BTreeSet<Name>>,
     /// The binding group being solved.
@@ -123,7 +123,7 @@ impl State {
     }
 
     /// As `of_group`, with the trace of what its phases reported: the text's
-    /// relations recorded, the nodes decided as they are recorded, and what
+    /// relations recorded, the disjunctive constraints decided as they are recorded, and what
     /// follows at once.
     pub fn start(program: &Program, group: &Name, solved: &BTreeMap<Name, Rc<State>>) -> Started {
         // The groups solved so far cut the lambdas' environments up to this
@@ -140,7 +140,7 @@ impl State {
             copied_decomposed: BTreeSet::new(),
             no_value: BTreeSet::new(),
             refusals: BTreeSet::new(),
-            nodes: BTreeMap::new(),
+            disjunctions: BTreeMap::new(),
             nothing: BTreeSet::new(),
             viewed: BTreeSet::new(),
             deferred: BTreeMap::new(),
@@ -305,7 +305,7 @@ impl State {
     }
 
     /// The steps that may be taken now: each eligible class solved, and each
-    /// eligible node decided where the value it reads now decides it, a node
+    /// eligible disjunctive constraint decided where the value it reads now decides it, a disjunctive constraint
     /// whose value decides nothing staying undecided.
     pub fn steps(&self) -> Vec<Step> {
         let Eligible { solve, decide } = self.eligible();
@@ -353,7 +353,7 @@ impl State {
 
     /// What follows at once from what is recorded: cycles of lower bounds and
     /// part lower bounds merged, the parts of each lower bound, part
-    /// lower bound and boundary whose two sides are solved related,
+    /// lower bound and coercion constraint whose two sides are solved related,
     /// and the domain a lower bound holding no structure gives the class it bounds.
     /// The trace holds what changed the state.
     pub(crate) fn settle(&mut self) -> Trace {
@@ -389,7 +389,7 @@ impl State {
             }
             for (class, recorded) in self.narrow_literals() {
                 trace.push(Report::Narrowed {
-                    row: crate::decision::Row::Literal,
+                    propagator: crate::propagator::Propagator::Literal,
                     class,
                     recorded,
                 });
@@ -450,11 +450,11 @@ impl State {
         }
     }
 
-    /// The state a node's value read is taken from: the relations
-    /// recorded by neither the nodes `excluded` nor solving, a fallback's
+    /// The state a disjunctive constraint's value read is taken from: the relations
+    /// recorded by neither the disjunctive constraints `excluded` nor solving, a fallback's
     /// decisions among them, solved where each class's value is decided by
     /// the table of values and decompositions whatever its other dependencies, no
-    /// node decided, and a class with no relation left giving nothing.
+    /// disjunctive constraint decided, and a class with no relation left giving nothing.
     /// Classes are solved in one order here.
     pub(crate) fn read_state(&self, excluded: &BTreeSet<Name>) -> State {
         let mut read = State {
@@ -468,7 +468,7 @@ impl State {
             copied_decomposed: BTreeSet::new(),
             no_value: BTreeSet::new(),
             refusals: BTreeSet::new(),
-            nodes: BTreeMap::new(),
+            disjunctions: BTreeMap::new(),
             nothing: BTreeSet::new(),
             viewed: BTreeSet::new(),
             deferred: BTreeMap::new(),
@@ -544,9 +544,12 @@ impl State {
     }
 }
 
-/// Whether a value read leaving out the relations of the nodes `excluded`
-/// leaves out a relation `recorder` recorded: one of those nodes
+/// Whether a value read leaving out the relations of the disjunctive constraints `excluded`
+/// leaves out a relation `recorder` recorded: one of those disjunctive constraints
 /// recorded it.
 pub(crate) fn left_out_by(recorder: &Recorder, excluded: &BTreeSet<Name>) -> bool {
-    recorder.nodes().iter().any(|node| excluded.contains(node))
+    recorder
+        .disjunctions()
+        .iter()
+        .any(|disjunction| excluded.contains(disjunction))
 }

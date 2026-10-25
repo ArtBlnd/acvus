@@ -1,6 +1,6 @@
 // @n = 1;                  // @n is the host's f64
 // The literal's type is the LitVar ?{1} of the integer family. The
-// host's f64 is decided when solving starts, so the store is the boundary
+// host's f64 is decided when solving starts, so the store is the coercion constraint
 // 1 ⇝ @n. ?N ⇝ U unifies ?N with U: f64 is a float, so the unification
 // gives no result, and the program is refused there.
 let `@n`: host f64;

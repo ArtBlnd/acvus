@@ -1,6 +1,6 @@
 // let a = [1u8, 2u8];
 // let f = first(&a);       // first<T>(&[T]) -> Option⟨&T⟩; the array's view &[T; 2] -> &[T]
-// &a passes into &[T], which the declaration writes: a boundary.
+// &a passes into &[T], which the declaration writes: a coercion constraint.
 extern fn first<T>(&[T]) -> Option<&T>;
 let U8;
 let `[1u8, 2u8]`: [U8; 2];

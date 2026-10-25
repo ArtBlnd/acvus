@@ -1,6 +1,6 @@
 // f reads x as u8, which leaves f(u8) alone; decided, it records what its
 // generalization f(?0) -> ?0 does not hold: its argument passing whole
-// into its parameter's type, a boundary, and its result type entering ?0, a
+// into its parameter's type, a coercion constraint, and its result type entering ?0, a
 // lower bound.
 //@ order: decide f
 extern fn f(u8) -> u8;
@@ -11,7 +11,7 @@ let R;
 R = f(x) @ f;
 
 assert trace "decide f: f#0";
-assert node records `x ~> f.Param(0)`;
-assert node records `f.Chosen(0) <= f.Generalized(0)`;
+assert disjunction records `x ~> f.Param(0)`;
+assert disjunction records `f.Chosen(0) <= f.Generalized(0)`;
 must pass;
 assert R: u8;

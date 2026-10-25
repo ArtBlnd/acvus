@@ -5,6 +5,7 @@ extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 extern fn push<T>(&mut Vec<T>, T);
 extern fn consume(Vec<u8>);
+#[conversion] extern fn narrow(u16) -> u8;
 
 let B;
 let `new()`;
@@ -18,8 +19,10 @@ B = `new()`;
 `push(..)` = push(`&mut buf`, 1u16) @ push;
 `consume(..)` = consume(B) @ consume;
 
-// Refused at consume(buf), as with the conversion
-// (`a-type-a-boundary-writes-decides-no-value`).
+// A decomposition records the coercion constraint ?t ⇝ u8 toward a type the declaration writes,
+// which decides no value, and u16 enters ?t: B is Vec<u16>,
+// which reaches Vec<u8> by no coercion at consume(buf), the conversion taking
+// no part.
 must fail;
 assert B: Vec<u16>;
 assert failing [`B ~> consume.Param(0)`];

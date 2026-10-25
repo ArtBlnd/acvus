@@ -1,6 +1,6 @@
 // let mut x = 1;
 // x = 1.5;
-// The initializer and the assignment are meetings, 1 <= X and 1.5 <= X.
+// The initializer and the assignment are lower bounds, 1 <= X and 1.5 <= X.
 // X has no equation, so its value is the join of its sources,
 // and a LitVar's join unifies it with X. Two LitVars of two families
 // have no rule, so the join has no result: X has no value, and the

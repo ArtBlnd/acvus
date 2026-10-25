@@ -1,7 +1,7 @@
 // let mut v = open();        // open() -> A; a cast A -> B
 // if c { v = parse("s"); }   // parse(&str) -> A, parse(&str) -> B
 // if c { v = mk(1u8); }      // mk(u8) -> B, mk(u16) -> &B
-// Each use's result passes into V, an unknown, so the passing is a meeting:
+// Each use's result passes into V, an unknown, so the passing is a lower bound:
 // a candidate's result reaches by <= its join with V's other sources. mk's argument
 // keeps mk(u8), whose B joins with A; parse's
 // two results reach A ⊔ A alike until mk is decided, and then B, which

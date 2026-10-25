@@ -79,7 +79,7 @@ impl State {
             }
             Relation::LowerBound { .. }
             | Relation::PartLowerBound { .. }
-            | Relation::Boundary { .. }
+            | Relation::CoercionConstraint { .. }
             | Relation::Wrap { .. } => Unified::default(),
         };
         let Some(conflict) = unified.conflict.as_ref().map(|c| c.conflict().clone()) else {

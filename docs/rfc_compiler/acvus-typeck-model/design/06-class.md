@@ -34,7 +34,7 @@ turn.
 4. **A written type is solved.** A type the text or a declaration writes is decided
    when solving starts, and nothing records into it, so it is solved as it
    is recorded. A class unified with a solved one is solved: its value is decided
-   once, and its lower bounds, part lower bounds and boundaries are
+   once, and its lower bounds, part lower bounds and coercion constraints are
    decomposed as they come.
 5. **Names.** A text class keeps its name. A part made when a class is solved is
    named after the least of that class's members' names at that moment, a class a

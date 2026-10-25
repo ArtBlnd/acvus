@@ -16,7 +16,7 @@ start run
   record #2 A = B
   record #3 1u8 <= A
   record #4 1u8 ~> W
-  decompose #0 W: u8: no parts
-  decompose #1 1u8: u8: no parts
-  decompose #2 A = B: no parts
-  decompose #4 1u8 ~> W: parts
+  decomposition #0 W: u8: no parts
+  decomposition #1 1u8: u8: no parts
+  decomposition #2 A = B: no parts
+  decomposition #4 1u8 ~> W: parts

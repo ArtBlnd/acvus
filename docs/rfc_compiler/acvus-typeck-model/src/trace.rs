@@ -5,9 +5,9 @@
 
 use crate::check::Refusal;
 use crate::class::ClassId;
-use crate::decompose::Decomposition;
+use crate::decomposition::Decomposition;
+use crate::disjunction::Decided;
 use crate::fallback::FellBack;
-use crate::node::Decided;
 use crate::record::Recording;
 use crate::unify::Linked;
 use crate::value::Joined;
@@ -29,9 +29,9 @@ pub enum Report {
     /// The join: the domain the lower bound or part lower bound at `bound`
     /// gives the class it bounds.
     DomainGiven { bound: usize, recorded: Recording },
-    /// A row of the decision table: the class it narrowed.
+    /// A propagator: the class it narrowed.
     Narrowed {
-        row: crate::decision::Row,
+        propagator: crate::propagator::Propagator,
         class: ClassId,
         recorded: Recording,
     },
@@ -40,10 +40,10 @@ pub enum Report {
         at: usize,
         decomposition: Decomposition,
     },
-    /// The nodes: the generalization of all the nodes not yet decided may
+    /// The disjunctive constraints: the generalization of all the disjunctive constraints not yet decided may
     /// become.
     Generalized(Recording),
-    /// The nodes: a node decided.
+    /// The disjunctive constraints: a disjunctive constraint decided.
     Decided(Decided),
     /// Fallback.
     FellBack(FellBack),
