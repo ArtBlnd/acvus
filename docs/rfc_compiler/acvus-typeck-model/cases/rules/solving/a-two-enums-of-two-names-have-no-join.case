@@ -1,5 +1,5 @@
 // let e = if c { E::A(1u8) } else { F::B(2u8) };
-// Both values meet e's equivalence class V, so its value is the join
+// Both values enter e's equivalence class V, so its value is the join
 // of two enums, of two names and so of two nodes with no common
 // ancestor: no join. Refused at V.
 let P;

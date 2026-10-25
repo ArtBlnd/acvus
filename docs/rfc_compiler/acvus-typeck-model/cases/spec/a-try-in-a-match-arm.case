@@ -4,8 +4,8 @@
 // };
 // Some(n)                      // the script's result Option<u8>
 // A match arm's braces are part of the match, no block expression, so
-// the ? in it exits the script, whose result its exit meets, and
-// the arm gives d: n meets d and 0u8, and is u8.
+// the ? in it exits the script, whose result its exit enters, and
+// the arm gives d: d and 0u8 enter n, which is u8.
 extern fn code(&str) -> u8;
 extern fn digit(&str) -> Option<u8>;
 let Str: str;

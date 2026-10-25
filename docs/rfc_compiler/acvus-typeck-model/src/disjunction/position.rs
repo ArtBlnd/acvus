@@ -207,7 +207,7 @@ impl State {
     }
 
     /// The lambdas the Values of the class's function value names: those of
-    /// the function values that meet in it, by equations or lower bounds.
+    /// the function values that reach it, by equations or lower bounds.
     pub(crate) fn values_of(&self, id: ClassId) -> BTreeSet<Name> {
         let mut seen = BTreeSet::from([self.root(id)]);
         let mut work = vec![self.root(id)];

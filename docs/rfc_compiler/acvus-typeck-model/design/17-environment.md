@@ -55,8 +55,8 @@ lambda's binding group, generalized and copied at each call.
 2. **The lambda's binding group is its generic part**. Its C is the generic
    part's, copied at each instance. It names no capture, so no
    instance records into one.
-3. **A call of a function value meets the environment where it is.** Each argument
-   meets the copy of its candidate lambda's generic parameter, or that lambda's
+3. **A call of a function value records into the environment where it is.** Each argument
+   enters the copy of its candidate lambda's generic parameter, or that lambda's
    parameter in the environment, an unknown of the call's group; the call's result
    takes the copy of a generic result type, or the environment's. Within the depth
    its candidates reach, the call's positions include the parameters

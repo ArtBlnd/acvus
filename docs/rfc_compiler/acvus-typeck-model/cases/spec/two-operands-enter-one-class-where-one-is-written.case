@@ -1,5 +1,5 @@
-// a + b, with a's type written A   // as in two-operands-meet-at-one-type
-// The operands meet in the generalization's variable, whose value is &A from &a;
+// a + b, with a's type written A   // as in two-operands-enter-one-class
+// The operands enter the generalization's variable, whose value is &A from &a;
 // &b's &B does not reach &A, so the program is refused there.
 // The reference cast &A -> &B between the two operands is not taken: a cast
 // is the user's to call by its name.

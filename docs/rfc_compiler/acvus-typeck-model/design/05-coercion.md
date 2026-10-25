@@ -51,7 +51,7 @@ within its family.
    no value of another type reaches an `Error` by a coercion;
    an `Error` reaches one by the enum row, its variants added.
 6. **The steps of `≤`.** `S ≤ T` joins to `T`, so the steps are those of the join:
-   a reborrow where an exclusive reference meets a shared one, the casts
+   a reborrow where an exclusive reference passes into a shared one, the casts
    up to `T`'s node, then members gained, fields unchanged and variants added, and
    each part of a structural type along `≤ₚ`, by the same rows and no cast.
 7. **A LitVar's position.** A LitVar reaches a LitVar of its family, and a scalar

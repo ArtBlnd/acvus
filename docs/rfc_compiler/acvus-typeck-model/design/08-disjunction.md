@@ -115,7 +115,7 @@ reads its position, or lends it where its path passes a reference.
      and the candidate's type at each of the result's unknowns entering it
      (`DisjunctionAt::Chosen(k)`); its positions are those, so its result no longer
      waits for it but its unknowns do (`State::left_to_record`). Two arguments of
-     one unknown meet in it: the operands of an overload set whose candidates
+     one unknown enter it: the operands of an overload set whose candidates
      type them alike are one type, and a cast between them is the user's to call.
    - a lend records that its result is a reference; its mutability and target it
      records when decided, so it still records into what a read of whether its
@@ -161,7 +161,7 @@ reads its position, or lends it where its path passes a reference.
    narrows by the join: a candidate's result type reaches by `≤` its join with each
    such upper bound's other sources, as a lower bound takes every value entering it; into a
    coercion constraint, by a coercion as before (`State::meeting_places`, `rank_into_places`). A
-   use whose result meets a class others enter is no longer refused against that
+   use whose result enters a class others enter is no longer refused against that
    class's value without it.
 22. **A LitVar's default narrows at a fixpoint**. Where several candidates remain
    and a value read holds a LitVar, the narrowing again with the LitVar taken as its

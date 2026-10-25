@@ -106,7 +106,7 @@ impl State {
 
     /// Decomposes the structure constraint at `i` of `class`, naming `part`, once
     /// `class` takes a constructor: where that is `!`, which has no value and
-    /// meets every structure constraint, the part it names is `!`; otherwise the
+    /// satisfies every structure constraint, the part it names is `!`; otherwise the
     /// class's structure holds the part already, and nothing is left to relate.
     fn decompose_structure_constraint(
         &mut self,
@@ -133,7 +133,7 @@ impl State {
     /// or `!` is not wrapped and passes into `to` as it is; a type of a name
     /// `N` passes into the payload of `to`, an `Error` whose one member is
     /// `N`; and any other type into that of `to`, an `Error⟨..⟩`. Each payload
-    /// is made anew, an unknown the value meets.
+    /// is made anew, an unknown the value enters.
     fn decompose_wrap(&mut self, i: usize, from: ClassId, to: ClassId) -> Decomposition {
         let root = self.root(from);
         if !self.is_solved(root) {

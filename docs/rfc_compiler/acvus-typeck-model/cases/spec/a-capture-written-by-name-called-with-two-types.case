@@ -6,7 +6,7 @@
 // and x's type X is joined to it through S, so the write, S and X are the
 // lambda's environment, recorded once in the enclosing binding group:
 // X is no universal but one unknown of that group, which both calls'
-// arguments meet, X ≥ u8 and X ≥ u16, which have no common ancestor,
+// arguments enter, X ≥ u8 and X ≥ u16, which have no common ancestor,
 // so X has no value: refused at X.
 group λ in run {
     let X;

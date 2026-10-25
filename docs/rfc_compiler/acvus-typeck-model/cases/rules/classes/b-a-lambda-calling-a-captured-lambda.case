@@ -6,7 +6,7 @@
 // f's lambda's value, is recorded as the text gives it. The call reads
 // F, whose Values are {λf}, and makes an instance of that
 // lambda: x's type names no capture, so it is λf's generic part, and its copy
-// X' meets 1u8; its copy u8 ⇝ u8 holds. The program is accepted and
+// 1u8 enters X'; its copy u8 ⇝ u8 holds. The program is accepted and
 // g() is ().
 extern fn take_u8(u8);
 

@@ -87,7 +87,7 @@ fn a_literal_domain_is_held_by_a_scalar_admitting_its_values() {
 }
 
 #[test]
-fn structure_constraints_of_one_part_name_one_class_and_meet_the_structure() {
+fn structure_constraints_of_one_part_name_one_class_and_are_satisfied_by_the_structure() {
     let types = DeclaredTypes::default();
     let (_, mut classes, ids) = setup(&["A", "T1", "T2", "X"]);
     let [a, t1, t2, x] = ids[..] else {

@@ -4,7 +4,7 @@
 // g(h)
 // x is joined to the capture last, so it is the environment's, the
 // entry's. g's instance in the entry makes f anew,
-// which h meets; its coercion constraint into fn(u8) -> () makes λ's instance there.
+// which h enters; its coercion constraint into fn(u8) -> () makes λ's instance there.
 extern fn take(fn(u8) -> ());
 group g {
     let F;

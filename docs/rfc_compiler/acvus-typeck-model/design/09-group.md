@@ -57,8 +57,8 @@ the group takes the body's own types.
    copy records into one. A block expression is such a lambda, called
    where it lies.
 8. **Lower bound and coercion constraint**. A value passing into an unknown of the
-   place's own group meets it. One passing into a binding of an enclosing group
-   reached by name meets it where that binding's type is an unknown of its own
+   place's own group enters it. One passing into a binding of an enclosing group
+   reached by name enters it where that binding's type is an unknown of its own
    group, judged by its text: a type the text writes, and a universal, are not.
    One passing through a reference from a binding of an enclosing group
    is a coercion constraint, whatever class the place's last projection names, since that
@@ -66,7 +66,7 @@ the group takes the body's own types.
    A constraint of a lambda's environment keeps the place its text gives, and is
    recorded in the enclosing group.
 9. **A call of a function value** reads the value's Values: the lambdas of the
-   function values met in its class by equations or lower bounds. Decided, it makes
+   function values reaching its class by equations or lower bounds. Decided, it makes
    an instance of each lambda's C, each argument passing into the copy of the generic
    part's parameter, or into the environment's parameter itself, and the copy of the
    generic part's result type, or the environment's, entering the call's result as a

@@ -1,5 +1,5 @@
 // The candidates' generalization is g(?0) -> bool, ?0 standing for u8 or u16,
-// which no candidate writes a reference at: before g is decided, x meets ?0
+// which no candidate writes a reference at: before g is decided, x enters ?0
 // and ?0 is no reference, which the disjunctive constraint records. bool, which every candidate
 // writes at the result, is the use's constraint there alone, and
 // enters the result as the text is recorded.

@@ -1,7 +1,7 @@
 // let a = open();                     // open() -> F⟨new⟩, a cast F → G, G with no identity
 // at(&a, index_of(&a));               // index_of(&F⟨p⟩) -> Idx⟨p⟩, at(&F⟨p⟩, Idx⟨p⟩)
 // let b = if c { open() } else { a };
-// Each open() makes an identity anew. index_of's and at's p meet
+// Each open() makes an identity anew. index_of's and at's p are unified with
 // a's identity by the decomposition's equations, so the second line holds with one
 // identity. b's lower bounds carry two different identities, which no class
 // holds, so its value is G, the nearest ancestor that carries none, and each

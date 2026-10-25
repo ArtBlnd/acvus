@@ -1,6 +1,6 @@
 // let t; t.0 = 1u8; takes_u8(t);
 // T takes no constructor from the structure constraint t.0 gives and falls back to !.
-// ! meets every structure constraint, the part it names being !, so 1u8 enters t.0 of
+// ! satisfies every structure constraint, the part it names being !, so 1u8 enters t.0 of
 // type ! and does not reach it: refused there, so that t, which holds
 // what was written into it, never passes as u8.
 extern fn takes_u8(u8);

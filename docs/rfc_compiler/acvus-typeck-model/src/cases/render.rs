@@ -522,13 +522,13 @@ fn unified(state: &State, unified: &Unified, at: Option<usize>) -> Lines {
                 cause: why,
                 sides: [a, b],
                 structures,
-                conflict: met,
+                conflict: found,
             } = &**apart;
             let line = format!(
                 "conflict {} + {}: {}",
                 side(state, a),
                 side(state, b),
-                conflict(state, met)
+                conflict(state, found)
             );
             let by = cause(state, why, &unified.unions, at);
             let structures = structures.iter().any(Option::is_some).then(|| {
@@ -546,13 +546,13 @@ fn unified(state: &State, unified: &Unified, at: Option<usize>) -> Lines {
         }
         Some(Conflicted::Holds {
             members: held,
-            conflict: met,
+            conflict: found,
         }) => lines.push(
             0,
             format!(
                 "conflict {}: {}",
                 members(state, held),
-                conflict(state, met)
+                conflict(state, found)
             ),
         ),
         None => {}
@@ -844,7 +844,7 @@ pub fn traced(state: &State, report: &Report) -> Lines {
     lines
 }
 
-/// The unbroken dependencies of `from` not yet met.
+/// The unbroken dependencies of `from` not yet satisfied.
 fn waits_for(state: &State, from: &Vertex) -> String {
     dependencies(state, state.waits_for(from))
 }
@@ -868,7 +868,7 @@ fn dependencies(state: &State, waits: Vec<(Vertex, Edge)>) -> String {
 }
 
 /// What a binding group waits for: each equivalence class not solved, and
-/// each disjunctive constraint not decided, with the unbroken dependencies of it not yet met,
+/// each disjunctive constraint not decided, with the unbroken dependencies of it not yet satisfied,
 /// and a disjunctive constraint that waits for nothing with the value it reads, which decides
 /// nothing.
 pub fn waiting(state: &State) -> Lines {

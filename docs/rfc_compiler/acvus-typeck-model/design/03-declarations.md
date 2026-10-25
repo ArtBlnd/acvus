@@ -54,12 +54,12 @@ included.
    sequence arrives at one as a slice, so the language gives, at each length `n`,
    `&[T; n] → &[T]` and `&mut [T; n] → &mut [T]` (`Role::ArrayView`,
    `decl::ARRAY_VIEW`, `ARRAY_VIEW_MUT`), each going up from the node a reference to
-   an array of that length is (an array's length is in its constructor). They meet
+   an array of that length is (an array's length is in its constructor). They satisfy
    the tree's conditions as a declared cast does, but go from no extern-defined type.
    The model declares them at the lengths a case's types write
    (`DeclsBuilder::array_views`, `cases::build::array_lengths`), an array's length
    being what is written. Before, an array reached no declaration: `sum(&a)` with `a:
-   [u8; 2]` and `sum(&[u8])` was refused. Where references meet, their targets are
+   [u8; 2]` and `sum(&[u8])` was refused. Where references enter one class, their targets are
    equated all the same, so the view is taken at a coercion constraint alone.
 
 ## Left open for change

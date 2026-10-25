@@ -1,6 +1,6 @@
 // let x = 1u16;
 // take(x);                 // take(u8)
-// x's type is an unknown, so 1u16 meets it: X ≥ u16. take's
+// x's type is an unknown, so 1u16 enters it: X ≥ u16. take's
 // parameter u8 is decided, not an unknown, so x passing into it is a coercion constraint,
 // X ⇝ u8, which gives X no source: X is u16. A value
 // entering by a coercion constraint reaches by a coercion, and none goes from u16

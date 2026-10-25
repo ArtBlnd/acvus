@@ -1,7 +1,7 @@
 // let v = make();                    // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩) -> &[T]
 // let a = [1u8, 2u8];
 // let s = if c { &v } else { &a };
-// Each branch's value meets s's class S. &Vec⟨u8⟩ and &[u8; 2] go up by
+// Each branch's value enters s's class S. &Vec⟨u8⟩ and &[u8; 2] go up by
 // the view and the array's view to &[u8].
 extern type Vec<T>;
 extern fn make() -> Vec<u8>;

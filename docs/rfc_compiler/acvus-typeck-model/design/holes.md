@@ -9,7 +9,7 @@ parts, and its result writes those alone, so every type of a node goes up by its
 cast, and `A → Box<T>` decided no `T`, so a join the tree gave had no result. A
 narrower step is a conversion, which is no part of the tree.
 
-## A value whose path up meets two variants of `Error`
+## A value whose path up reaches two variants of `Error`
 
 `?` makes a variant of `Error` for each error type's name, and two `Error`s join by
 uniting their variants, raising no part, so `Error{B(B), D(D)}` was a type where a
@@ -25,7 +25,7 @@ parameter's or the embedding's result's, is an `Error` already.
 
 A view impl is a cast from a reference to a container to a reference to a slice or
 `str`, and a reference's node is its mutability and its target's constructor. A
-reference's constructor is its mutability alone, so where two references meet, they
+reference's constructor is its mutability alone, so where two references enter one class, they
 have one constructor, and their targets are related by the decomposition. At a coercion constraint `&V ⇝
 &[u8]` records `V ⇝ [u8]` toward a type the declaration writes, which decides no
 value, so `V` takes `Vec⟨u8⟩` from `make()`, and the whole value reaches `&[u8]` by
@@ -37,15 +37,15 @@ let v = make();          // make() -> Vec⟨u8⟩; the view as_slice(&Vec⟨T⟩
 take(&v);                // take(&[u8])
 ```
 
-Where two references meet, `&A ⊔ &C` is `&B` by the casts `&A → &B` and `&C → &B`,
+Where two references enter one class, `&A ⊔ &C` is `&B` by the casts `&A → &B` and `&C → &B`,
 while two lower bounds `&A ≤ R` and `&C ≤ R` give `R` the constructor `&` and equate
 its target, an unknown, with `A` and `C`, so they have no value. A reference is no
-structural type, so its target is invariant where references meet, and the two are
+structural type, so its target is invariant where references enter one class, and the two are
 left so.
 
 ## A reborrow at a decomposition
 
-Where `&mut X` met `&Y` at a lower bound or a coercion constraint, the constructors differed and
+Where `&mut X` passed into `&Y` at a lower bound or a coercion constraint, the constructors differed and
 no cast linked them, so nothing related `X` and `Y`: in `look(&mut v)` with
 `look(&Vec⟨u8⟩)` and `v = Vec::new()`, `v`'s argument had no relation and fell back
 to `!`, and `&mut Vec⟨!⟩ ⇝ &Vec⟨u8⟩` failed. The model accepts it
@@ -131,8 +131,8 @@ removed with its case.
 ## A pattern on a scrutinee of type `!`
 
 A projection of the pattern gives the scrutinee's class a structure constraint, and its
-value must meet that structure constraint. `!` has no part, so it met none, and the program was
-refused. `!`, which has no value, meets every structure constraint, the parts that structure constraint names being
+value must satisfy that structure constraint. `!` has no part, so it satisfied none, and the program was
+refused. `!`, which has no value, satisfies every structure constraint, the parts that structure constraint names being
 `!`, so the program is accepted with `n: !` and `x: !`
 (`cases/holes/a-pattern-on-a-scrutinee-of-type-never.case`). The parts being `!` keep
 a binding whose fallback is `!` from passing on what was written into it: `let t; t.0

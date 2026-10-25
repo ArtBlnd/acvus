@@ -3,7 +3,7 @@
 // let f = |y| put2(x, y);   // f never called
 // The use's constraint at x is the environment's, recorded whether or not a
 // call reaches the lambda: its instance of put2 makes what C ties to a, so
-// x meets a, which passes into u8, and x is u8.
+// x enters a, which passes into u8, and x is u8.
 extern fn takes_u8(u8);
 group put2 {
     let A;

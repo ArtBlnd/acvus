@@ -148,9 +148,9 @@ fn refusal_matches(text: &RefusalText, refusal: &Refusal) -> bool {
     }
 }
 
-/// Whether the outcome meets the expectation, which is one an outcome
-/// meets; `Err` says how it does not.
-fn outcome_meets(decls: &Decls, outcome: &Outcome, expect: &Expect) -> Result<(), String> {
+/// Whether the outcome satisfies the expectation, which is one an outcome
+/// satisfies; `Err` says how it does not.
+fn outcome_satisfies(decls: &Decls, outcome: &Outcome, expect: &Expect) -> Result<(), String> {
     match expect {
         Expect::Accepted(accepted) => {
             if outcome.accepted == *accepted {
@@ -245,7 +245,7 @@ fn outcome_meets(decls: &Decls, outcome: &Outcome, expect: &Expect) -> Result<()
     }
 }
 
-/// Whether the expectation is one an outcome meets.
+/// Whether the expectation is one an outcome satisfies.
 fn of_outcome(expect: &Expect) -> bool {
     matches!(
         expect,
@@ -284,7 +284,7 @@ fn block_fails(
         .iter()
         .filter(|located| of_outcome(&located.item))
         .filter_map(|Located { line, item }| {
-            outcome_meets(decls, outcome, item)
+            outcome_satisfies(decls, outcome, item)
                 .err()
                 .map(|error| format!("line {line}: {error}"))
         })
@@ -305,23 +305,23 @@ fn block_fails(
     fails
 }
 
-/// The blocks matched to distinct outcomes among `outcomes`, each meeting its
+/// The blocks matched to distinct outcomes among `outcomes`, each satisfying its
 /// own; `None` where no such matching is.
-fn matching(meets: &[Vec<bool>], outcomes: usize) -> Option<Vec<usize>> {
+fn matching(satisfies: &[Vec<bool>], outcomes: usize) -> Option<Vec<usize>> {
     fn assign(
         block: usize,
-        meets: &[Vec<bool>],
+        satisfies: &[Vec<bool>],
         taken: &mut Vec<bool>,
         chosen: &mut Vec<usize>,
     ) -> bool {
-        if block == meets.len() {
+        if block == satisfies.len() {
             return true;
         }
-        for (outcome, &meets_it) in meets[block].iter().enumerate() {
-            if meets_it && !taken[outcome] {
+        for (outcome, &satisfies_it) in satisfies[block].iter().enumerate() {
+            if satisfies_it && !taken[outcome] {
                 taken[outcome] = true;
                 chosen.push(outcome);
-                if assign(block + 1, meets, taken, chosen) {
+                if assign(block + 1, satisfies, taken, chosen) {
                     return true;
                 }
                 chosen.pop();
@@ -332,7 +332,7 @@ fn matching(meets: &[Vec<bool>], outcomes: usize) -> Option<Vec<usize>> {
     }
     let mut taken = vec![false; outcomes];
     let mut chosen = Vec::new();
-    assign(0, meets, &mut taken, &mut chosen).then_some(chosen)
+    assign(0, satisfies, &mut taken, &mut chosen).then_some(chosen)
 }
 
 /// The failures of `expects` and `blocks` against one run.
@@ -374,7 +374,7 @@ fn run_fails(
     let top_istar = istar_of(expects);
     for outcome in &run.outcomes {
         for Located { line, item } in expects.iter().filter(|located| of_outcome(&located.item)) {
-            if let Err(error) = outcome_meets(decls, outcome, item) {
+            if let Err(error) = outcome_satisfies(decls, outcome, item) {
                 fails.push(format!("line {line}: {error}"));
             }
         }
@@ -393,7 +393,7 @@ fn run_fails(
             .iter()
             .map(|block| top_istar.union(&istar_of(&block.item)).cloned().collect())
             .collect();
-        let meets: Vec<Vec<bool>> = blocks
+        let satisfies: Vec<Vec<bool>> = blocks
             .iter()
             .zip(&istars)
             .map(|(block, istar)| {
@@ -403,13 +403,13 @@ fn run_fails(
                     .collect()
             })
             .collect();
-        if matching(&meets, run.outcomes.len()).is_none() {
-            let mut unmet = false;
-            for ((block, istar), meets) in blocks.iter().zip(&istars).zip(&meets) {
-                if meets.iter().any(|&met| met) {
+        if matching(&satisfies, run.outcomes.len()).is_none() {
+            let mut unsatisfied = false;
+            for ((block, istar), satisfies) in blocks.iter().zip(&istars).zip(&satisfies) {
+                if satisfies.iter().any(|&satisfied| satisfied) {
                     continue;
                 }
-                unmet = true;
+                unsatisfied = true;
                 for (i, outcome) in run.outcomes.iter().enumerate() {
                     for fail in block_fails(decls, run, outcome, &block.item, istar) {
                         fails.push(format!(
@@ -420,8 +420,8 @@ fn run_fails(
                     }
                 }
             }
-            if !unmet {
-                fails.push("the outcome blocks meet no distinct outcomes each".to_string());
+            if !unsatisfied {
+                fails.push("no distinct outcomes satisfy the outcome blocks each".to_string());
             }
         }
     }
@@ -566,7 +566,7 @@ fn primitive_fails(decls: &Decls, expects: &[Located<Expect>]) -> Failures {
     fails
 }
 
-/// Whether the expectation is a primitive's, met by the declarations alone.
+/// Whether the expectation is a primitive's, satisfied by the declarations alone.
 fn is_primitive(expect: &Expect) -> bool {
     matches!(
         expect,

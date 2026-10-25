@@ -1,7 +1,7 @@
 // fn app(f, x) { f(x) }
 // app(|y| y, 1u8)
 // In app, f(x) reads F, a universal, which decides nothing, so it stays in C.
-// The use's instance copies it, and the lambda's value meets the
+// The use's instance copies it, and the lambda's value enters the
 // copy of F, whose Values name λ: the copy of the call calls λ, and
 // the result is u8. The certificate's value of F's copy is Fn/1{λ},
 // so the call's check reads λ there, which no pass of app's text

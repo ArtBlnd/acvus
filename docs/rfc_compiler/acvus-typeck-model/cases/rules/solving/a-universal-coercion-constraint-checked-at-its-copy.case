@@ -3,7 +3,7 @@
 // x's type X is universal and depends on the use that chooses it, outside g's
 // binding group, so X is never solved in g, takes no fallback,
 // and the coercion constraint X ⇝ u8 stays in g's C. The call makes an instance: X' is an
-// unknown of the entry that 1u16 meets, so X' is u16, and the
+// unknown of the entry that 1u16 enters, so X' is u16, and the
 // copy of the coercion constraint reaches u8 by no coercion: refused at that copy.
 // The original X is left in C and needs no value.
 extern fn take_u8(u8);

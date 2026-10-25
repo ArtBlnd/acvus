@@ -49,7 +49,7 @@ impl State {
     /// unblocked.
     pub(crate) fn fallback_targets(&self) -> Vec<ClassId> {
         let graph = self.graph();
-        let met = self.met_in(&graph);
-        self.unblocked(&graph, &met)
+        let satisfied = self.satisfied_in(&graph);
+        self.unblocked(&graph, &satisfied)
     }
 }

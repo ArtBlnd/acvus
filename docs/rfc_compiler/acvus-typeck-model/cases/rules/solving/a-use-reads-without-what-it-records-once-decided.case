@@ -1,6 +1,6 @@
 // let mut x;
 // x = g(x);                // g(u8) -> u8, g(u16) -> u16
-// The generalization is g(?0) -> ?0: X meets ?0, ?0 enters R, and R enters X, so
+// The generalization is g(?0) -> ?0: X enters ?0, ?0 enters R, and R enters X, so
 // they are one class with no source. What g records once decided, its
 // result's type entering ?0, is left out of its read, so the value read
 // decides nothing and both candidates remain: refused at g.

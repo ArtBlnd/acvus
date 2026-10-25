@@ -47,9 +47,9 @@ pub(crate) enum Edge {
     Chosen,
 }
 
-/// What meets an unbroken dependency on an unsolved equivalence class
+/// What satisfies an unbroken dependency on an unsolved equivalence class
 /// besides its being solved.
-pub(crate) struct Met {
+pub(crate) struct Satisfied {
     /// The classes holding no structure and a domain that a value reaching a class
     /// they bound stays within, that wait for nothing: such a lower bound
     /// gives its domain at once (`State::domain_up`) and is not waited for.
@@ -406,20 +406,20 @@ impl State {
             .any(|member| self.nothing.contains(member))
     }
 
-    /// Whether an unbroken dependency on `to` is met without its being solved:
+    /// Whether an unbroken dependency on `to` is satisfied without its being solved:
     /// a lower bound or part lower bound that gives a domain or that nothing
     /// enters, or, in a state a value read
     /// is taken from, a class that gives nothing; and a disjunctive constraint's on a
     /// disjunctive constraint once that is decided, whose relations a class depends on until they
     /// are recorded.
-    fn satisfied(&self, to: &Vertex, edge: Edge, met: &Met) -> bool {
+    fn satisfied(&self, to: &Vertex, edge: Edge, satisfied: &Satisfied) -> bool {
         match (to, edge) {
             (Vertex::Disjunction(disjunction), Edge::Reads) => {
                 self.disjunctions[disjunction].decision.is_some()
             }
             (Vertex::Class(class), Edge::Lower) => {
-                met.giving_domains.contains(class)
-                    || met.nothing_enters.contains(class)
+                satisfied.giving_domains.contains(class)
+                    || satisfied.nothing_enters.contains(class)
                     || self.gives_nothing(*class)
             }
             (Vertex::Class(class), Edge::Taking | Edge::Part) => self.gives_nothing(*class),
@@ -427,10 +427,10 @@ impl State {
         }
     }
 
-    /// What meets an unbroken dependency on an unsolved class in `graph`: the
+    /// What satisfies an unbroken dependency on an unsolved class in `graph`: the
     /// classes nothing enters, and then the ones giving a domain.
-    pub(crate) fn met_in(&self, graph: &Graph) -> Met {
-        let mut met = Met {
+    pub(crate) fn satisfied_in(&self, graph: &Graph) -> Satisfied {
+        let mut satisfied = Satisfied {
             giving_domains: BTreeSet::new(),
             nothing_enters: self.nothing_enters_in(graph),
         };
@@ -440,19 +440,19 @@ impl State {
                 .roots()
                 .filter(|&root| {
                     self.gives_its_domain_up(root)
-                        && !met.giving_domains.contains(&root)
+                        && !satisfied.giving_domains.contains(&root)
                         && !self.is_foreign(root)
                 })
                 .filter(|&root| {
                     graph
                         .unbroken(&Vertex::Class(root))
-                        .all(|(to, edge)| self.satisfied(to, *edge, &met))
+                        .all(|(to, edge)| self.satisfied(to, *edge, &satisfied))
                 })
                 .collect();
             if more.is_empty() {
-                return met;
+                return satisfied;
             }
-            met.giving_domains.extend(more);
+            satisfied.giving_domains.extend(more);
         }
     }
 
@@ -471,9 +471,9 @@ impl State {
     /// structure, no domain that admits no `!`, which only a literal, a value, gives,
     /// and no structure constraint, each of their lower bounds
     /// and part lower bounds one nothing enters, and each of their unbroken
-    /// dependencies met, as one on a lower bound or a part lower bound nothing
+    /// dependencies satisfied, as one on a lower bound or a part lower bound nothing
     /// enters is. In a state a value read is taken from, a class that
-    /// gives nothing is not one, but is met as one is.
+    /// gives nothing is not one, but is satisfied as one is.
     fn nothing_enters_in(&self, graph: &Graph) -> BTreeSet<ClassId> {
         let mut found = BTreeSet::new();
         loop {
@@ -520,8 +520,8 @@ impl State {
     }
 
     /// The unsolved equivalence classes whose unbroken dependencies are all
-    /// solved or met.
-    pub(crate) fn unblocked(&self, graph: &Graph, met: &Met) -> Vec<ClassId> {
+    /// solved or satisfied.
+    pub(crate) fn unblocked(&self, graph: &Graph, satisfied: &Satisfied) -> Vec<ClassId> {
         self.classes
             .roots()
             .filter(|&root| {
@@ -530,7 +530,7 @@ impl State {
             .filter(|&root| {
                 graph
                     .unbroken(&Vertex::Class(root))
-                    .all(|(to, edge)| self.satisfied(to, *edge, met))
+                    .all(|(to, edge)| self.satisfied(to, *edge, satisfied))
             })
             .collect()
     }
@@ -540,9 +540,9 @@ impl State {
     /// disjunctive constraints whose unbroken dependencies are all decided.
     pub(crate) fn eligible(&self) -> Eligible {
         let graph = self.graph();
-        let met = self.met_in(&graph);
+        let satisfied = self.satisfied_in(&graph);
         let solve = self
-            .unblocked(&graph, &met)
+            .unblocked(&graph, &satisfied)
             .into_iter()
             .filter(|&root| self.has_work(root, &graph))
             .collect();
@@ -554,24 +554,24 @@ impl State {
             .filter(|name| {
                 graph
                     .unbroken(&Vertex::Disjunction((*name).clone()))
-                    .all(|(to, edge)| self.satisfied(to, *edge, &met))
+                    .all(|(to, edge)| self.satisfied(to, *edge, &satisfied))
             })
             .cloned()
             .collect();
         Eligible { solve, decide }
     }
 
-    /// The unbroken dependencies of `from` not yet met:
+    /// The unbroken dependencies of `from` not yet satisfied:
     /// what an equivalence class or a disjunctive constraint still waits for, as a traced order
     /// prints it (`TRACE=1`). A class that waits for
     /// nothing is unblocked, and a disjunctive constraint that waits for nothing may be decided.
     #[cfg(test)]
     pub(crate) fn waits_for(&self, from: &Vertex) -> Vec<(Vertex, Edge)> {
         let graph = self.graph();
-        let met = self.met_in(&graph);
+        let satisfied = self.satisfied_in(&graph);
         graph
             .unbroken(from)
-            .filter(|(to, edge)| !self.satisfied(to, *edge, &met))
+            .filter(|(to, edge)| !self.satisfied(to, *edge, &satisfied))
             .cloned()
             .collect()
     }

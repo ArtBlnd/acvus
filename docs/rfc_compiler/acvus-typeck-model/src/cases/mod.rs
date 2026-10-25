@@ -29,7 +29,7 @@ struct Ran {
 }
 
 /// The expectations a block may hold: those an outcome and its final states
-/// meet.
+/// satisfy.
 fn check_block(block: &[Located<Expect>]) -> Result<(), String> {
     for Located { line, item } in block {
         let allowed = matches!(

@@ -3,7 +3,7 @@
 // g's call of itself is a call within its binding group, so it makes no
 // instance and takes g's own types: 1u8 passes into g's A, a universal
 // and no unknown, the coercion constraint 1u8 ⇝ A, resting on A, in g's C.
-// g("s") makes an instance whose A' is an unknown the argument meets,
+// g("s") makes an instance whose A' is an unknown the argument enters,
 // &str, and the copied u8 ⇝ &str has no coercion.
 group g {
     let A;

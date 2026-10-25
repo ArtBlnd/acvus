@@ -1,10 +1,10 @@
 // let f = if c { |x| take_u8(x) } else { |x| take_u16(x) };
 // f(1u8);                  // take_u8(u8), take_u16(u16)
 // Each lambda's use reads its universal, which decides nothing, and
-// its x ⇝ u8 or x ⇝ u16 rests on it, in its C. Both function values meet in
+// its x ⇝ u8 or x ⇝ u16 rests on it, in its C. Both function values enter
 // F, whose Values are joined: a set of lambdas, since at an instance
 // Values is always one, so {λ1, λ2}. The call reads F and makes an
-// instance for each; each instance's X' meets 1u8, and λ2's copied
+// instance for each; 1u8 enters each instance's X', and λ2's copied
 // u8 ⇝ u16 has no coercion.
 extern fn take_u8(u8);
 extern fn take_u16(u16);

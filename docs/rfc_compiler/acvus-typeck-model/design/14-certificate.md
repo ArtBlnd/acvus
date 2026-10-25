@@ -38,7 +38,7 @@ Every binding group, in every context its text is solved for:
 A relation is checked in each context that gives every class it names a value. A
 lambda's relations on enclosing groups' classes are its environment's,
 checked in the enclosing group's contexts whether or not the lambda is
-instantiated, and an instance's argument meets the environment's parameter
+instantiated, and an instance's argument enters the environment's parameter
 there.
 
 Besides the relations: no refusal, every class outside C with a
@@ -61,12 +61,12 @@ What each item and decision gives, and what holding means on closed values:
 | `Use(k)` | `k` is a candidate; each argument into its parameter, a lower bound where the signature writes a variable, a coercion constraint where it writes a type; the result type as a lower bound of the result | as above, the variables taking the values of the classes the decision made |
 | `Never` | `!` as a lower bound of the result, and an argument the use reads has the value `!` | as above |
 | `Lend { target, mutability }` | the result is a reference of `mutability` to the place, `mutability` being the lend's own; or, where the place is a reference, to its target, `mutability` being the lesser of the lend's and the place's | the values have those shapes |
-| `Applied` | the operand has the member or part, of the result's value | its value has it, or is `!`, which meets every structure constraint |
+| `Applied` | the operand has the member or part, of the result's value | its value has it, or is `!`, which satisfies every structure constraint |
 | `AppliedToTarget(m)` | the operand is a reference, of `m` where decided, to a type that has it | as above |
 | `Read` | the position as a lower bound of the binding | as above |
 | `BindLend { target, mutability }` | a reference to the position, or its target, as a lower bound of the binding | as above |
-| `Calls(λ̄)` | the callee's Values name exactly `λ̄`: every lambda that reaches it is called, and none it does not reach; each argument meets its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result | as above, under each instance |
-| a function value reaching a function type, at the whole value or at a part, through a cast, a conversion or a view | each lambda its Values names has an instance made where the decomposition met the two, at the classes they are read at: each parameter of the type passes into the lambda's parameter, and the lambda's result into the type's result, each a lower bound or a coercion constraint as the result's class is an unknown or not | as above, under that instance |
+| `Calls(λ̄)` | the callee's Values name exactly `λ̄`: every lambda that reaches it is called, and none it does not reach; each argument enters its copy of `λ`'s parameter, and the copy of its result type is a lower bound of the result | as above, under each instance |
+| a function value reaching a function type, at the whole value or at a part, through a cast, a conversion or a view | each lambda its Values names has an instance made where the decomposition found the two, at the classes they are read at: each parameter of the type passes into the lambda's parameter, and the lambda's result into the type's result, each a lower bound or a coercion constraint as the result's class is an unknown or not | as above, under that instance |
 | `e?`'s exit | its value is `Option⟨K⟩` under `?(Option⟨T⟩)` and `Result⟨O, X⟩` under `?(Result⟨T, E⟩)`, `E`'s value wrapped into `X`: as it is where it is an `Error` or `!`, into the payload of an `Error` whose one member is its name, or into that of an `Error⟨..⟩`; the value passes into the exit's class, a lower bound where that is an unknown | as above |
 | a use's generalization | regenerated from the candidates (`Generalization::of`): each unknown's value a reference, or not, where the generalization records it so; each argument passing into the generalization's parameter; the generalization's result entering the use's result; under `Use(k)`, `k`'s type at each of the result's unknowns entering it; a use of one candidate, which has no disjunctive constraint, as that candidate | each holds, a reference's record holding of `!` too |
 
@@ -87,7 +87,7 @@ The generalization's row is checked on its own: it is what a use records before 
 is decided, which `Use(k)`'s rows do not name. That `!` is either a reference or
 not is the solver's reading (`Classes::normalize`), shared here.
 
-Whether a `Pass` meets is recomputed from the program: the class passed into is an
+Whether a `Pass` enters is recomputed from the program: the class passed into is an
 unknown of its own group by its text and is equated by no regenerated
 equation to a class the text writes, and its group is the place's, or it is
 reached by name; a place reached through a reference is a coercion constraint. The relations a decomposition
@@ -123,7 +123,7 @@ the groups solved before it, to the caller.
 
 ## Open
 
-Where Values meet what no rule decides yet, the checker panics, so that the case
+Where Values reach what no rule decides yet, the checker panics, so that the case
 fails there and the rule is decided:
 
 - A function value reaching a function type where the two sides are read at two

@@ -1,6 +1,6 @@
 // a + b                    // add(&B, &B) -> B, add(&u8, &u8) -> u8; a = make_a(), b = make_b()
 // // a cast A -> B
-// The two operands are one variable in every candidate, so &a and &b meet in
+// The two operands are one variable in every candidate, so &a and &b enter
 // it and their targets are equated: a and b are one class, whose
 // value joins A and B to B by the cast; make_a()'s A is cast to B where
 // it enters a. Decided as add(&B, &B), accepted with a: B. Where a's type is

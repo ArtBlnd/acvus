@@ -566,21 +566,21 @@ impl State {
                 .expect("a lambda's group is solved first"),
         );
         let mut copy = crate::instance::Instance::new(at, by.clone(), &from);
-        let mut met = Vec::new();
+        let mut found = Vec::new();
         let held = self.environment_of(lambda);
         for (name, held) in function.params.iter().chain([&function.result]).zip(held) {
             let class = match held {
                 Some(class) => class,
                 None => copy.class(self, from.text(name)),
             };
-            met.push(class);
+            found.push(class);
         }
-        let returned = met.pop().expect("the result type follows the parameters");
+        let returned = found.pop().expect("the result type follows the parameters");
         let mut recorded = copy.record_rest(self);
         let pairs: Vec<(ClassId, ClassId)> = args
             .iter()
             .copied()
-            .zip(met)
+            .zip(found)
             .chain([(returned, result)])
             .collect();
         recorded.append(self.record_call(&pairs, by));

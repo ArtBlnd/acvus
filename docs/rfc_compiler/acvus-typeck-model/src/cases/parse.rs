@@ -264,9 +264,9 @@ pub struct Case {
     pub orders: Orders,
     pub decls: Vec<Located<DeclItem>>,
     pub text: Vec<Located<TextItem>>,
-    /// What every outcome and final state meets.
+    /// What every outcome and final state satisfies.
     pub expects: Vec<Located<Expect>>,
-    /// Each `outcome { … }`, met by exactly one outcome.
+    /// Each `outcome { … }`, satisfied by exactly one outcome.
     pub outcomes: Vec<Located<Vec<Located<Expect>>>>,
 }
 

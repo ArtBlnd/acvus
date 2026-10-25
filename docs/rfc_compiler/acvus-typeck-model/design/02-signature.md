@@ -14,8 +14,8 @@ fields in declared order.
 
 ## Not owned here
 
-- A use's type parameters are unknowns made anew at each use, so a signature meets
-  equivalence classes there.
+- A use's type parameters are unknowns made anew at each use, so a signature is
+  instantiated with equivalence classes there.
 - Effects, flows and declared facts have no representation.
 - A type parameter has no bound.
 
@@ -45,6 +45,6 @@ fields in declared order.
   signatures and structures share one check.
 - `SigArgs` binds some of the variables, so matching can bind them one parameter at
   a time.
-- Substitution and matching take any `HasTerm`, so a signature also meets a value
-  a use reads. A term the signature writes does not match a position the
+- Substitution and matching take any `HasTerm`, so a signature is also matched
+  against a value a use reads. A term the signature writes does not match a position the
   value leaves undecided.

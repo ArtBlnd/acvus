@@ -1,5 +1,5 @@
 // let k = 1 ^ 2;   // ^ at bool and three integers
-// Narrowed again at i32. Each literal meets the generalization's unknown
+// Narrowed again at i32. Each literal enters the generalization's unknown
 // and passes into the chosen candidate's parameter: unified at the one where
 // the unknown is solved first, at the other where its coercion constraint is decomposed first,
 // so the two literals are one class along some orders and apart along others,

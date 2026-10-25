@@ -240,7 +240,7 @@ pub struct Held {
     /// The constructors its value may take, where a literal, a generalization or
     /// a lend gives them.
     pub domain: Option<Domain>,
-    /// The lambdas the Values of the function values met in it name, joined.
+    /// The lambdas the Values of the function values reaching it name, joined.
     pub values: BTreeSet<Name>,
     /// Whether it took its constructor and members, written or joined.
     pub solved: bool,
@@ -254,7 +254,7 @@ pub enum Conflict {
     /// A domain and a constructor it does not admit, or two domains that admit
     /// no constructor in common.
     Domain(Domain, Option<Constructor>),
-    /// A structure constraint that the structure does not meet.
+    /// A structure constraint that the structure does not satisfy.
     StructureConstraint(StructureConstraint, Constructor),
 }
 
@@ -356,7 +356,7 @@ pub struct Union {
     pub structure: Option<Term<ClassId>>,
 }
 
-/// What no type holds, met while unifying.
+/// What no type holds, found while unifying.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Conflicted {
     Apart(Box<Apart>),
@@ -548,7 +548,7 @@ impl Classes {
                     continue;
                 }
                 if let Term::Never = structure {
-                    // `!`, which has no value, meets every structure constraint.
+                    // `!`, which has no value, satisfies every structure constraint.
                     continue;
                 }
                 let resolved =
@@ -789,7 +789,7 @@ impl ConstrainedPart {
     }
 }
 
-/// The part of `structure` the structure constraint names, where the structure meets the structure constraint. A
+/// The part of `structure` the structure constraint names, where the structure satisfies the structure constraint. A
 /// struct's field is the part at the field's place in the declared order.
 /// An extern-defined container's element is not a part of it.
 fn resolve(

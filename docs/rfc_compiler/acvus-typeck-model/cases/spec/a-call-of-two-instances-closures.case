@@ -1,7 +1,7 @@
 //@ orders: sampled 200
 // let h = if c { adder(1u8) } else { adder(2u16) }; h(3u8)
 // h's Values name both copies, so the call calls both; in the copy
-// whose k is u16, x meets 3u8 and add's operands meet u8 and u16, which have
+// whose k is u16, 3u8 enters x and u8 and u16 enter add's operands, which have
 // no join: refused.
 extern fn core::add(&u8, &u8) -> u8;
 extern fn core::add(&u16, &u16) -> u16;

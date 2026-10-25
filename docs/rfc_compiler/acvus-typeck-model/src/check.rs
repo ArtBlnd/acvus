@@ -79,7 +79,7 @@ impl Outcome {
 
 impl State {
     /// Refuses at `at` what no type holds, and returns the refusal.
-    /// The classes a conflict names hold a conjunction no type meets, so they
+    /// The classes a conflict names hold a conjunction no type satisfies, so they
     /// have no value, and are never solved again.
     pub(crate) fn conflicted_have_no_value(&mut self, conflicted: &Conflicted) {
         let members: Vec<ClassId> = match conflicted {

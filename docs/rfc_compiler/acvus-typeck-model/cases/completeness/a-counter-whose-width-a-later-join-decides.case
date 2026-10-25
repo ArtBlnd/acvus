@@ -3,7 +3,7 @@
 // n = n + 1;
 // let d = if c { n - n } else { cmp_val() };   // cmp_val() -> i64
 // Each operand is lent, as a literal operand is a temporary of the
-// literal's type. The if's two branch values meet d's class.
+// literal's type. The if's two branch values enter d's class.
 extern fn core::add(&i32, &i32) -> i32;
 extern fn core::add(&i64, &i64) -> i64;
 extern fn core::sub(&i32, &i32) -> i32;

@@ -30,7 +30,7 @@ leave out.
 ## Readings
 
 1. **Two references join whatever their targets.** A reference's constructor is its
-   mutability alone, so two references meet at the lesser mutability, and
+   mutability alone, so two references join at the lesser mutability, and
    the decomposition relates their targets: toward an unknown, an
    equation. Two lower bounds `&A ≤ R` and `&C ≤ R` then equate `A` and `C`,
    where the join would raise them to a common ancestor.
@@ -91,12 +91,12 @@ leave out.
    names a field, or a variant of an enum the text names: a field the text
    writes grows a class a type the host gives is a lower bound of.
    The reading by the sources is removed.
-9. **`!` and a structure constraint.** `!` has no part, so it meets no structure
+9. **`!` and a structure constraint.** `!` has no part, so it satisfies no structure
    constraint.
 10. **A class nothing enters**. An unsolved class holding no structure, no
     LitVar and no structure constraint, each of whose lower bounds and part lower
-    bounds is one nothing enters, and each of whose unbroken dependencies is met,
-    a dependency on a lower bound or a part lower bound nothing enters being met.
+    bounds is one nothing enters, and each of whose unbroken dependencies is satisfied,
+    a dependency on a lower bound or a part lower bound nothing enters being satisfied.
     The unbroken dependencies have no cycle, so such classes are
     found from those with no lower bound up. A structure constraint is a source,
     even one that gives no member, so a class holding one is not
@@ -127,7 +127,7 @@ leave out.
     carries one of them, it has no join (`State::without_two_identities`). The
     closed join does the same (`join::join`). A deeper level's identity, refused,
     has no witness here: the model has no loop and no level.
-14. **`!` and structure constraints**. `!`, which has no value, meets every structure constraint
+14. **`!` and structure constraints**. `!`, which has no value, satisfies every structure constraint
     (`Classes::normalize`), and once a class takes `!`, each structure constraint
     on it is decomposed by recording `!` as the part it names (`State::decompose_structure_constraint`), so
     that what is written into such a part is refused where it enters it.

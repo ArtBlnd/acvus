@@ -26,7 +26,7 @@ group λ {
 }
 
 // X, S and Some(x) are the environment's, solved in the enclosing group, where
-// the call meets X.
+// the call records into X.
 must pass;
 assert L: Option<u8>;
 assert S: u8;

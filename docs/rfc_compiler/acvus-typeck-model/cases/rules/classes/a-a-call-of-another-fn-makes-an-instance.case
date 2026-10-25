@@ -3,7 +3,7 @@
 // In f, take_u8 reads X, a universal with no relation left, which decides
 // nothing: it is take_u8, and x ⇝ u8 rests on X, in f's C.
 // The script's call is of another binding group's fn, so it makes one
-// instance: its X' is an unknown the argument meets, u16, and
+// instance: its X' is an unknown the argument enters, u16, and
 // the copied u16 ⇝ u8 has no coercion.
 extern fn take_u8(u8);
 

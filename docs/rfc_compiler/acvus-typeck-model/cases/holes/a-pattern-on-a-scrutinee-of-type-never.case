@@ -1,7 +1,7 @@
 // let n = never();         // never() -> !
 // if let Some(x) = n { }
 // The structure constraint "has variant Some" gives no member, so N is !; `!`, which has no
-// value, meets every structure constraint, so the pattern decides nothing, and x's type, which
+// value, satisfies every structure constraint, so the pattern decides nothing, and x's type, which
 // nothing enters, falls back to !.
 extern fn never() -> !;
 

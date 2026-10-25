@@ -159,8 +159,8 @@ constructor. A run of places in the log is `#a-#b`. A certificate's and an
 expectation's messages write `<=`, `~>`, `!=` and `join(A, B)`.
 
 **Outcome blocks.** `outcome { … }` holds what one outcome and the final states
-reaching it meet. Where a case writes blocks, its runs have exactly as many
-outcomes, and each block meets a distinct one; what lies outside the blocks holds
+reaching it satisfy. Where a case writes blocks, its runs have exactly as many
+outcomes, and each block is satisfied by a distinct one; what lies outside the blocks holds
 of every outcome, and its I\* expectations join each block's.
 
 **Golden outcomes.** Next to each case, `*.outcome` holds every run's outcomes in
@@ -270,7 +270,7 @@ Under `TRACE=1` alone:
 | `retry` | under the `decide` of a use: the narrowing again, each LitVar taken as its family's default |
 | `unsolved X` | `X` is not solved; `universal: yes` for a universal, and `no value: yes`, `enclosing: yes` (of an enclosing group) or `wait:` |
 | `undecided n` | `n` is not decided; `wait:` |
-| `wait: <dependency>, ...` | of `unsolved` and `undecided`: the unbroken dependencies not yet met: `lower L`, `taking T`, `part of O`, `records n`, `reads n`, `reads outside`, `path n`, `chosen`; `none` where none is |
+| `wait: <dependency>, ...` | of `unsolved` and `undecided`: the unbroken dependencies not yet satisfied: `lower L`, `taking T`, `part of O`, `records n`, `reads n`, `reads outside`, `path n`, `chosen`; `none` where none is |
 | `C g` | what `g` leaves in C at its fixpoint: under it `classes: ...`, `disjunctive constraints: ...` and each `relation #k <relation>` with its `by:` |
 | `written order`, `first order` | the order traced |
 | `limit: 10000` | the first order did not end within 10 000 steps |
@@ -342,7 +342,7 @@ steps; `golden()` and every expectation read what they read without it.
   relations with the text; 5 cases dropped an assertion of such a decision.
 - `cases/certificate/a-function-value-passed-through-a-use` tests the certificate's
   Values: a lambda reaching a call only through a use's instance, and the call given
-  no lambda to call. Where Values meet what no rule decides yet, the checker panics.
+  no lambda to call. Where Values reach what no rule decides yet, the checker panics.
   `istar/a-call-left-out-leaves-out-its-instance-relations` declared `choose` to give
   `Fn/1`, a function value no declaration makes, and gives back the one its `T` takes
   in.
@@ -363,7 +363,7 @@ steps; `golden()` and every expectation read what they read without it.
   through `?`, with the script's result typed, with no tail, and refused where the
   tail's result is untyped and a fill has an upper bound with no value; a counter compared
   with a typed value; a reference cast at one argument of an overload set; and two
-  operands of one unknown meeting, accepted where their bindings join and refused
+  operands entering one unknown, accepted where their bindings join and refused
   where one is written. Each was derived before it was run, two derivations failing
   first and redone: the operands' bindings join by the cast, and the untyped tail
   leaves a fill an upper bound with no value.
@@ -396,8 +396,8 @@ steps; `golden()` and every expectation read what they read without it.
   report I\* completeness at both uses, as before.
 - 6 cases under `cases/spec`, `try-*`, and `block-collects-try` test `e?`: two errors
   of a name
-  meet as one `Error`, an `Error` is not wrapped, an `Option`, two errors of no name
-  meet as one `Error⟨..⟩`, one of no name and one of a name have no join, an error
+  enter one class as one `Error`, an `Error` is not wrapped, an `Option`, two errors of no name
+  enter one class as one `Error⟨..⟩`, one of no name and one of a name have no join, an error
   part nothing enters wraps into `!`, and a block collects its `?`. Each was derived
   before it was run. Those with two `?` are run over 200 sampled orders, every order
   passing 100 000 states.

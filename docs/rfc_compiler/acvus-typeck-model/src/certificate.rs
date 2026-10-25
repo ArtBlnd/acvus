@@ -123,7 +123,7 @@ pub struct Sheet {
     /// decomposition linked a part's two sides.
     parts: BTreeMap<ClassId, Vec<(PartKey, ClassId)>>,
     /// The roots that are unknowns of the state's group, which a value
-    /// passing into meets.
+    /// passing into one enters.
     unknowns: BTreeSet<ClassId>,
     decisions: BTreeMap<Name, Option<Decision>>,
     instances: Vec<Made>,
@@ -350,12 +350,12 @@ enum Decided {
 
 /// Where a function value passes into a function type: the level of
 /// the sheet that decomposed it, the roots there of the two sides, and whether the
-/// type's result is an unknown the lambda's result meets.
+/// type's result is an unknown the lambda's result enters.
 struct IntoFunctionType {
     level: usize,
     from: ClassId,
     to: ClassId,
-    ret_meets: bool,
+    ret_enters: bool,
 }
 
 /// Where a value is read: a class at a level of a context (`Context::locate`).
@@ -373,11 +373,11 @@ struct Read {
     at: Option<At>,
 }
 
-/// A parameter's type, and whether an argument meets it or passes into it by a
+/// A parameter's type, and whether an argument enters it or passes into it by a
 /// coercion constraint.
 struct Param {
     ty: Read,
-    meets: bool,
+    enters: bool,
 }
 
 /// A path of parts from the top of a value.
@@ -582,8 +582,15 @@ impl Text {
         !self.decided.contains(&root) && !self.universal.contains(&root)
     }
 
-    /// Whether a value passing into `into` at `place` meets it.
-    fn meets(&self, program: &Program, cut: &Cut, group: &Name, into: &Name, place: Place) -> bool {
+    /// Whether a value passing into `into` at `place` enters it.
+    fn enters(
+        &self,
+        program: &Program,
+        cut: &Cut,
+        group: &Name,
+        into: &Name,
+        place: Place,
+    ) -> bool {
         match place {
             Place::ThroughRef => false,
             Place::ByName => self.unknown(into),
@@ -591,10 +598,10 @@ impl Text {
         }
     }
 
-    /// Whether an argument meets the copy of a parameter's type in an
+    /// Whether an argument enters the copy of a parameter's type in an
     /// instance: the copy is an unknown of the group the instance is recorded
     /// in unless the text decides the type.
-    fn meets_copy(&self, param: &Name) -> bool {
+    fn enters_copy(&self, param: &Name) -> bool {
         !self.decided.contains(&self.root(param))
     }
 }
@@ -689,12 +696,12 @@ impl Checker<'_> {
         Some(At { level, class })
     }
 
-    /// A value passing into a type: `from ≤ to` where it meets
+    /// A value passing into a type: `from ≤ to` where it enters
     /// it, `from ⇝ to` by a coercion otherwise, each function value in `from`
     /// carried along the coercion as the decomposition carries it (`reach`).
     /// Where it reaches a function value, its lambdas are among that one's;
     /// where it reaches a function type, an instance of each of
-    /// its lambdas was made where the decomposition met the two, at the classes they
+    /// its lambdas was made where the decomposition found the two, at the classes they
     /// are read at, as `function_type` checks. Returns whether the
     /// coercion and the Values hold; what an instance breaks is recorded there.
     fn flows(
@@ -703,10 +710,10 @@ impl Checker<'_> {
         at: &str,
         from: &Read,
         to: &Read,
-        meets: bool,
+        enters: bool,
     ) -> bool {
         let (from_ty, to_ty) = (from.value.ty(), to.value.ty());
-        let coercion = if meets {
+        let coercion = if enters {
             along_le(self.decls, &from_ty, &to_ty)
         } else {
             coerce(self.decls, &from_ty, &to_ty)
@@ -749,7 +756,7 @@ impl Checker<'_> {
         holds
     }
 
-    /// Where the function value at `from_path` of `from` meets the function
+    /// Where the function value at `from_path` of `from` reaches the function
     /// type at `to_path` of `to`, by the classes the two are read at, which the
     /// decomposition related there.
     fn into_function_type(
@@ -782,14 +789,14 @@ impl Checker<'_> {
                 from.value, to.value
             );
         }
-        let ret_meets = context
+        let ret_enters = context
             .part_at(ty, &[PartKey::Return])
             .is_some_and(|ret| context.sheet(ret.level).unknowns.contains(&ret.class));
         IntoFunctionType {
             level: value.level,
             from: value.class,
             to: ty.class,
-            ret_meets,
+            ret_enters,
         }
     }
 
@@ -900,11 +907,11 @@ impl Checker<'_> {
                 let at = format!("the pass of {value} into {into}");
                 let from = self.text_read(context, &at, value)?;
                 let to = self.text_read(context, &at, into)?;
-                let meets = self
+                let enters = self
                     .text
-                    .meets(self.program, self.cut, &context.group, into, *place);
-                let holds = self.flows(context, &at, &from, &to, meets);
-                let way = if meets { "<=" } else { "~>" };
+                    .enters(self.program, self.cut, &context.group, into, *place);
+                let holds = self.flows(context, &at, &from, &to, enters);
+                let way = if enters { "<=" } else { "~>" };
                 let (from, to) = (&from.value, &to.value);
                 self.require(context, &at, holds, format!("{from} {way} {to} fails"));
             }
@@ -1029,7 +1036,7 @@ impl Checker<'_> {
 
     /// The `k`th argument into its parameter's type.
     fn pass(&mut self, context: &Context<'_>, at: &str, k: usize, arg: &Read, param: &Param) {
-        let holds = self.flows(context, at, arg, &param.ty, param.meets);
+        let holds = self.flows(context, at, arg, &param.ty, param.enters);
         let (arg, ty) = (&arg.value, &param.ty.value);
         self.require(
             context,
@@ -1083,12 +1090,12 @@ impl Checker<'_> {
                     if self.cut.in_environment(param) {
                         let ty =
                             self.environment(context, at, into.level, copied.as_ref(), i, param)?;
-                        let meets = self.text.unknown(param);
-                        return Some(Param { ty, meets });
+                        let enters = self.text.unknown(param);
+                        return Some(Param { ty, enters });
                     }
                     let ty = self.copy(context, at, into.level, made, &function, param)?;
-                    let meets = self.text.meets_copy(param);
-                    Some(Param { ty, meets })
+                    let enters = self.text.enters_copy(param);
+                    Some(Param { ty, enters })
                 })
                 .collect::<Option<Vec<_>>>()
             else {
@@ -1127,7 +1134,7 @@ impl Checker<'_> {
                 .collect();
             self.passes(context, at, &type_params, &lambda_params);
             let ret = part(PartKey::Return, ret);
-            let holds = self.flows(context, at, &returned, &ret, into.ret_meets);
+            let holds = self.flows(context, at, &returned, &ret, into.ret_enters);
             let (returned, ret) = (&returned.value, &ret.value);
             self.require(
                 context,
@@ -1184,12 +1191,12 @@ impl Checker<'_> {
             match made {
                 None => {
                     let ty = checker.text_read(context, &at, name)?;
-                    Some(Param { ty, meets: false })
+                    Some(Param { ty, enters: false })
                 }
                 Some(made) => {
                     let ty = checker.copy(context, &at, 0, made, function, name)?;
-                    let meets = checker.text.meets_copy(name);
-                    Some(Param { ty, meets })
+                    let enters = checker.text.enters_copy(name);
+                    Some(Param { ty, enters })
                 }
             }
         };
@@ -1324,8 +1331,8 @@ impl Checker<'_> {
                         value: ty,
                         at: Self::disjunction_at(context, level, &owner, DisjunctionAt::Param(k)),
                     };
-                    let meets = matches!(param, SigTy::Var(_));
-                    self.pass(context, &at, k, arg, &Param { ty, meets });
+                    let enters = matches!(param, SigTy::Var(_));
+                    self.pass(context, &at, k, arg, &Param { ty, enters });
                 }
                 if let Some(result) = &disjunction_result {
                     let Ok(returned) = sig.result().substitute(&bound) else {
@@ -1427,7 +1434,7 @@ impl Checker<'_> {
                 value: closed(&generalization.params[k]),
                 at: Self::disjunction_at(context, 0, name, DisjunctionAt::GeneralizedParam(k)),
             };
-            self.pass(context, at, k, arg, &Param { ty, meets: false });
+            self.pass(context, at, k, arg, &Param { ty, enters: false });
         }
         if let Some(result) = result
             && generalization.is_closed_at(Position::Result)
@@ -1472,8 +1479,8 @@ impl Checker<'_> {
             value: value.clone(),
             at: Self::disjunction_at(context, level, owner, DisjunctionAt::Exit),
         };
-        let meets = self.text.unknown(exit);
-        let holds = self.flows(context, at, &value_read, &exit_read, meets);
+        let enters = self.text.unknown(exit);
+        let holds = self.flows(context, at, &value_read, &exit_read, enters);
         let exit_value = &exit_read.value;
         self.require(
             context,
@@ -1835,12 +1842,12 @@ impl Checker<'_> {
                     if self.cut.in_environment(param) {
                         let ty =
                             self.environment(context, &at, level, copied.as_ref(), i, param)?;
-                        let meets = self.text.unknown(param);
-                        return Some(Param { ty, meets });
+                        let enters = self.text.unknown(param);
+                        return Some(Param { ty, enters });
                     }
                     let ty = self.copy(context, &at, level, made, &function, param)?;
-                    let meets = self.text.meets_copy(param);
-                    Some(Param { ty, meets })
+                    let enters = self.text.enters_copy(param);
+                    Some(Param { ty, enters })
                 })
                 .collect::<Option<Vec<_>>>()
             else {

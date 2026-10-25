@@ -430,7 +430,7 @@ impl State {
 
     /// The classes of a type a declaration writes: the type named `name`, its
     /// parts named after it, and its variables those of `vars`, each made
-    /// where first met and named by `var_name`. A variable is an unknown, and
+    /// where first found and named by `var_name`. A variable is an unknown, and
     /// a written term is decided. The relations it records are kept in
     /// `recorded`.
     pub(crate) fn instantiate<F>(

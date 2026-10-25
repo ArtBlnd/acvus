@@ -9,11 +9,11 @@ class depends on its unsolved lower bounds and part lower bounds, on each unsolv
 class whose taking a constructor will record into it, on each unsolved class it is
 a part of, and on each disjunctive constraint at whose position it lies that has not recorded its
 relations. A dependency on a lower bound or a part lower bound nothing enters is
-met. A disjunctive constraint depends on the disjunctive constraints that record into the classes at
+satisfied. A disjunctive constraint depends on the disjunctive constraints that record into the classes at
 the positions it reads, which are the disjunctive constraints those classes, and the classes they
 reach along dependencies between classes, depend on. Each row is of the
 moment: a dependency on a solved class is gone, and a disjunctive constraint's on a decided disjunctive constraint is
-met.
+satisfied.
 
 ## Readings
 
@@ -38,13 +38,13 @@ met.
 5. **A disjunctive constraint decided whose relations wait.** A disjunctive constraint decided while undecided disjunctive constraints
    broke their dependency on it records once they are decided. Until then the classes
    at its positions depend on it, as on the relations
-   not yet recorded into them; a disjunctive constraint's dependency on it is met, it
+   not yet recorded into them; a disjunctive constraint's dependency on it is satisfied, it
    being decided. Without it, a class at its position, which nothing
-   entered until it recorded, met its dependents' dependencies on it, and the
+   entered until it recorded, satisfied its dependents' dependencies on it, and the
    outcome depended on the order.
 6. **A call of a function value's positions** include the parameters and the
    result type in the environment of each lambda its callee's Values name at the
-   moment, so a class the call meets there waits for
+   moment, so a class the call lies at there waits for
    it.
 7. **`e?`'s positions** include the class of its exit's value, so that the innermost
    body's result, which that class passes into, does

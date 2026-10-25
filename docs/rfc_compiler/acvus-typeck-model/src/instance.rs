@@ -12,7 +12,7 @@ use crate::solve::State;
 use crate::ty::{Name, Term, Ty};
 
 /// An instance a state made: of the C of the binding group `group`, named `at`
-/// and made by `by`, with each root of that group's state it met and that
+/// and made by `by`, with each root of that group's state it found and that
 /// root's class in the state that made it.
 #[derive(Clone, Debug)]
 pub struct Made {
@@ -72,7 +72,7 @@ pub(crate) struct Instance<'a> {
     parts: Option<BTreeSet<usize>>,
     /// The disjunctive constraints `from` left undecided it makes anew, none naming them all.
     disjunctions: Option<BTreeSet<Name>>,
-    /// Each root of `from` met so far, with its class here.
+    /// Each root of `from` found so far, with its class here.
     made: BTreeMap<ClassId, ClassId>,
     /// The relations it has recorded here so far.
     recorded: Recording,
