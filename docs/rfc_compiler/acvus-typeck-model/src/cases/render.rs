@@ -240,6 +240,15 @@ pub fn report(state: &State, report: &Report) -> Rendered {
             Some(format!("range #{bound} {}", relation(state, *bound))),
             Some(recorded),
         ),
+        Report::Narrowed {
+            row,
+            class: id,
+            recorded,
+        } => (
+            Phase::Join,
+            Some(format!("row {} {}", row.name(), class(*id))),
+            Some(recorded),
+        ),
         Report::Split { at, split } => {
             let (what, recorded) = match split {
                 Split::OneClass => ("one class", None),
@@ -545,6 +554,7 @@ fn recorder(state: &State, recorder: &Recorder) -> String {
             )
         }
         Recorder::Check => "check".to_string(),
+        Recorder::Row(row) => format!("row {}", row.name()),
         Recorder::Fallback => "fallback".to_string(),
         Recorder::Instance { at, of, .. } => {
             let made = state
@@ -754,6 +764,7 @@ pub fn traced(state: &State, report: &Report) -> Lines {
         | Report::Merged(recorded)
         | Report::Common(recorded)
         | Report::Ranged { recorded, .. }
+        | Report::Narrowed { recorded, .. }
         | Report::FellBack(FellBack { recorded, .. })
         | Report::Split {
             split: Split::Parts(recorded),

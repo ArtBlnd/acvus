@@ -43,8 +43,8 @@ outcome 1
   decision `even@20/n == 0 e`: core::eq#0
   decision `even@20/n == 0 o`: undecided
   check `10u8 <= even@20/NE`: Ok(Identity)
-  check `even@20/&0 e ~> even@20/n == 0 e.Param(1)`: Err(None)
-  check `even@20/&1 e ~> even@20/n - 1 e.Param(1)`: Err(None)
+  check `even@20/&0 e ~> even@20/n == 0 e.Param(1)`: Ok(Identity)
+  check `even@20/&1 e ~> even@20/n - 1 e.Param(1)`: Ok(Identity)
   check `even@20/&n e 2 ~> even@20/n - 1 e.Param(0)`: Ok(Identity)
   check `even@20/&n e ~> even@20/n == 0 e.Param(0)`: Ok(Identity)
   check `even@20/RE <= even(10u8)`: Ok(Identity)
@@ -63,4 +63,4 @@ outcome 1
   check `odd(n - 1) <= RE`: Ok(Identity)
   refusal no_value `even@20/SO`
   refusal no_value `even@20/n - 1 o.Common(1)`
-  I* of a final state: [completeness `even@20/n - 1 e`, completeness `even@20/n == 0 e`]
+  I* of a final state: []

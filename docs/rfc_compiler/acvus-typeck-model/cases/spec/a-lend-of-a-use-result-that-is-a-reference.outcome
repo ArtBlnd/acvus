@@ -1,18 +1,18 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
+  accepted
   value `&get`: &u64
   value `&rs`: &Vec<&u64>
-  value ?z: i32
+  value ?z: u64
   value C: Vec<&u64>
   value R: &u64
   decision `&get`: lend & through &
   decision `&rs`: lend & place
   decision get: get#0
   check `&rs ~> get.Param(0)`: Ok(Identity)
-  check `?z ~> get.Param(1)`: Err(None)
+  check `?z ~> get.Param(1)`: Ok(Identity)
   check `get.Common(2) <= R`: Ok(Identity)
   check `get.Var(Type(0)) <= get.Common(2)`: Ok(Identity)
   check `load.Result <= C`: Ok(Identity)
-  I* of a final state: [completeness get]
+  I* of a final state: []

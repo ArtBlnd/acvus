@@ -122,6 +122,8 @@ pub enum Recorder {
     /// The I\* check, making an instance of a lambda's C that no call made, in
     /// a view of a state it decides nodes again in. Solving never records it.
     Check,
+    /// A row of the decision table, which reads where a value passes.
+    Row(crate::decision::Row),
     /// Fallback, once no step is left: the value it gives a class no step
     /// solves, a decision no other relation derives, which every read after
     /// it takes as given.
@@ -141,7 +143,10 @@ impl Recorder {
     /// read derives it again from the relations that remain.
     pub fn is_derived(&self) -> bool {
         match self {
-            Recorder::Split(_) | Recorder::Cycle | Recorder::FunctionType { .. } => true,
+            Recorder::Split(_)
+            | Recorder::Cycle
+            | Recorder::FunctionType { .. }
+            | Recorder::Row(_) => true,
             Recorder::Instance { by, .. } => by.is_derived(),
             Recorder::Origin
             | Recorder::Text(_)
@@ -172,6 +177,7 @@ impl Recorder {
             | Recorder::Split(_)
             | Recorder::Cycle
             | Recorder::FunctionType { .. }
+            | Recorder::Row(_)
             | Recorder::Check
             | Recorder::Fallback => Vec::new(),
         }
@@ -190,6 +196,7 @@ impl Recorder {
             Recorder::Origin
             | Recorder::Split(_)
             | Recorder::Cycle
+            | Recorder::Row(_)
             | Recorder::Check
             | Recorder::Fallback => false,
         }

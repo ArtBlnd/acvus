@@ -172,6 +172,17 @@ impl State {
             .collect()
     }
 
+    /// The constructor a range admitting one alone gives the class holding
+    /// it.
+    pub(crate) fn range_head(&self, root: ClassId) -> Option<Head> {
+        let range = self.classes.held(self.root(root)).range.as_ref()?;
+        let constructor = range.single()?.clone();
+        Some(Head {
+            constructor,
+            members: BTreeSet::new(),
+        })
+    }
+
     /// The constructor and members at `node` that the casts up from `head`'s
     /// node reach: those of the last cast's result.
     fn raise_head(&self, head: &Head, node: &Node) -> Option<Head> {
@@ -362,6 +373,7 @@ impl State {
             .chain(&sources.part_lowers)
             .map(|(_, given)| given.clone())
             .chain(sources.facts.iter().cloned())
+            .chain(self.range_head(root))
             .collect();
         let Some(first) = given.first().cloned() else {
             return with_sources(Took::Nothing);

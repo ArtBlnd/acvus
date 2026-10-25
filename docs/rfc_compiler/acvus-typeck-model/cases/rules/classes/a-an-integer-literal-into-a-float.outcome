@@ -2,7 +2,7 @@
 run: every order
 outcome 1
   refused
-  value 1: i32
+  value 1: none
   value `@n`: f64
-  check `1 ~> @n`: Err(None)
+  refusal conflict at "1: {}": {} vs another range
   I* of a final state: []

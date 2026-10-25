@@ -1,14 +1,14 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
+  accepted
   value ?one: none
   value X: u8
   value `{..}`: Fn/0
-  value `{..}()`: i32
+  value `{..}()`: u8
   value `λ result`: none
   decision call: calls {λ}
   check `call#λ/?one <= call#λ/λ result`: Ok(Identity)
   check `call#λ/λ result <= {..}()`: Ok(Identity)
-  check `{..}() ~> X`: Err(None)
+  check `{..}() ~> X`: Ok(Identity)
   I* of a final state: []

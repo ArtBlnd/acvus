@@ -88,6 +88,11 @@ pub fn le(decls: &Decls, s: &Ty, t: &Ty) -> bool {
     join(decls, s, t).as_ref() == Ok(t)
 }
 
+/// `s ≤ₚ t`, that is `s ⊔ₚ t = t`.
+pub fn le_part(s: &Ty, t: &Ty) -> bool {
+    part_join(s, t).as_ref() == Ok(t)
+}
+
 /// `s ⊔ₚ t`: of one constructor, combined as by `⊔`; otherwise only
 /// `!` joins, and no cast raises either, nor is a reference taken as shared.
 fn part_join(s: &Ty, t: &Ty) -> Result<Ty, JoinError> {

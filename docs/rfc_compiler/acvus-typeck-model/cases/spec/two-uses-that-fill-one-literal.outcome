@@ -1,16 +1,16 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
-  value ?a: i32
-  value X: i32
+  accepted
+  value ?a: u16
+  value X: u16
   value `m(x)`: ()
   value `n(x)`: ()
   decision m: m#0
-  decision n: n#1
+  decision n: n#0
   check `?a <= X`: Ok(Identity)
-  check `X ~> m.Param(0)`: Err(None)
+  check `X ~> m.Param(0)`: Ok(Identity)
   check `X ~> n.Param(0)`: Ok(Identity)
   check `m.CommonResult <= m(x)`: Ok(Identity)
   check `n.CommonResult <= n(x)`: Ok(Identity)
-  I* of a final state: [completeness m]
+  I* of a final state: []

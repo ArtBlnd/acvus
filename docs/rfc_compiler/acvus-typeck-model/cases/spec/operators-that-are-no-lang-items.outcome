@@ -1,8 +1,8 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
-  value 1: i32
+  accepted
+  value 1: u16
   value `2 s`: i32
   value B: bool
   value K: u16
@@ -16,7 +16,7 @@ outcome 1
   decision `^`: xor#2
   check `!.Result <= B`: Ok(Identity)
   check `&&.Result <= p && q`: Ok(Identity)
-  check `1 ~> ^.Param(1)`: Err(None)
+  check `1 ~> ^.Param(1)`: Ok(Identity)
   check `2 s ~> <<.Param(1)`: Ok(Identity)
   check `<<.Chosen(0) <= <<.Common(0)`: Ok(Identity)
   check `<<.Common(0) <= S`: Ok(Identity)
@@ -27,4 +27,4 @@ outcome 1
   check `^.Chosen(0) <= ^.Common(0)`: Ok(Identity)
   check `^.Common(0) <= K`: Ok(Identity)
   check `p && q ~> !.Param(0)`: Ok(Identity)
-  I* of a final state: [completeness `^`]
+  I* of a final state: []

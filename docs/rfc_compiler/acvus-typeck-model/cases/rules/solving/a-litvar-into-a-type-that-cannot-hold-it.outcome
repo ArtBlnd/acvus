@@ -2,8 +2,8 @@
 run: every order
 outcome 1
   refused
-  value 300: i32
+  value 300: none
   value `take(300)`: ()
-  check `300 ~> take.Param(0)`: Err(None)
   check `take.Result <= take(300)`: Ok(Identity)
+  refusal conflict at "300: {}": {} vs another range
   I* of a final state: []

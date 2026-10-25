@@ -25,7 +25,7 @@ const FLOATS: [FloatTy; 2] = [FloatTy::F32, FloatTy::F64];
 /// constructor like any other here: a range admits it only where it says so.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Range {
-    /// These constructors alone, at least one.
+    /// These constructors alone; where none, no type's, refused where given.
     Only(BTreeSet<Constructor>),
     /// Every constructor but these.
     Except(BTreeSet<Constructor>),
@@ -93,6 +93,14 @@ impl Range {
         match &met {
             Range::Only(admitted) if admitted.is_empty() => None,
             _ => Some(met),
+        }
+    }
+
+    /// The one constructor it admits, where it admits one alone.
+    pub fn single(&self) -> Option<&Constructor> {
+        match self {
+            Range::Only(admitted) if admitted.len() == 1 => admitted.iter().next(),
+            Range::Only(_) | Range::Except(_) => None,
         }
     }
 

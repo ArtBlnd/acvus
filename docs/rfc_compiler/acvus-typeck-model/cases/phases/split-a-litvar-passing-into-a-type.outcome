@@ -4,18 +4,17 @@ outcome 1
   accepted
   value 0: u8
   value W: u8
-  partition {0, W}
   check `0 ~> W`: Ok(Identity)
   I* of a final state: []
 start run
   record #0 W: u8
-  record #1 0: ?{0}: int
+  record #1 0: {i8, i16, i32, i64, u8, u16, u32, u64}
   record #2 0 ~> W
   split #0 W: u8: no parts
-  split #1 0: ?{0}: int: no parts
+  split #1 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
+  row literal 0
+    record #3 0: {u8}
+  split #3 0: {u8}: no parts
 step 1 run: solve 0
-  lit boundaries 0
-    record #3 0 = W
-  join 0: held
-  split #2 0 ~> W: one class
-  split #3 0 = W: no parts
+  join 0: Scalar(Int(U8))
+  split #2 0 ~> W: parts

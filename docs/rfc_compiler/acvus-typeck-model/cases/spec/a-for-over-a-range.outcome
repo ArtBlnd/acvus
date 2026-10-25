@@ -1,13 +1,13 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
-  value 0: i32
+  accepted
+  value 0: u64
   value I: u64
   value N: u64
   decision `0..n`: range#1
-  check `0 ~> 0..n.Param(0)`: Err(None)
+  check `0 ~> 0..n.Param(0)`: Ok(Identity)
   check `0..n.Chosen(0) <= 0..n.Common(0)`: Ok(Identity)
   check `0..n.Common(0) <= I`: Ok(Identity)
   check `N ~> 0..n.Param(1)`: Ok(Identity)
-  I* of a final state: [completeness `0..n`]
+  I* of a final state: []

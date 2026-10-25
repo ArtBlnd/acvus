@@ -1,11 +1,11 @@
 // What the model gives, written by `BLESS=1`.
 run: the written order
 outcome 1
-  refused
-  value 0: i32
+  accepted
+  value 0: u8
   value A: u8
   value u8: u8
-  check `0 <= A`: Err(None)
+  check `0 <= A`: Ok(Identity)
   check `u8 <= A`: Ok(Identity)
   I* of a final state: []
 start run
@@ -21,3 +21,9 @@ start run
 step 1 run: solve A
   join A: Scalar(Int(U8))
   split #2 u8 <= A: parts
+  row literal 0
+    record #5 0: {u8}
+  range #3 0 <= A
+    record #6 A: {u8}
+  split #5 0: {u8}: no parts
+  split #6 A: {u8}: no parts

@@ -28,7 +28,9 @@ impl State {
         let mut fell = Vec::new();
         for root in self.fallback_targets() {
             let default = match &self.classes.held(root).range {
-                Some(range) => range.fallback(),
+                Some(range) => self
+                    .literal_preference(root)
+                    .unwrap_or_else(|| range.fallback()),
                 None => Term::Never,
             };
             let relation = Relation::Kind(root, default.clone(), KindSource::Solved);

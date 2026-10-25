@@ -384,6 +384,13 @@ impl State {
                     split => trace.push(Report::Split { at: i, split }),
                 }
             }
+            for (class, recorded) in self.narrow_literals() {
+                trace.push(Report::Narrowed {
+                    row: crate::decision::Row::Literal,
+                    class,
+                    recorded,
+                });
+            }
             if (self.log.len(), self.split.len()) == before {
                 return trace;
             }

@@ -575,7 +575,7 @@ impl State {
         if held.kind.is_some() {
             return true;
         }
-        if !self.fact_heads(root).is_empty() {
+        if !self.fact_heads(root).is_empty() || self.range_head(root).is_some() {
             return true;
         }
         self.lower_bounds(root).into_iter().any(|lower| {

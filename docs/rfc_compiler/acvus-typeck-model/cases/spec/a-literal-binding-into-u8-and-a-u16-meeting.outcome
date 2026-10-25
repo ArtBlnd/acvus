@@ -2,14 +2,13 @@
 run: every order
 outcome 1
   refused
-  value 1: i32
+  value 1: u8
   value 2u16: u16
-  value A: i32
-  value X: u16
+  value A: u8
+  value X: none
   value `takes_u8(a)`: ()
   check `1 <= A`: Ok(Identity)
-  check `2u16 <= X`: Ok(Identity)
-  check `A <= X`: Err(None)
-  check `A ~> takes_u8.Param(0)`: Err(None)
+  check `A ~> takes_u8.Param(0)`: Ok(Identity)
   check `takes_u8.Result <= takes_u8(a)`: Ok(Identity)
+  refusal no_join X
   I* of a final state: []

@@ -29,6 +29,12 @@ pub enum Report {
     /// The join: the range the lower bound or part lower bound at `bound`
     /// gives the class it bounds.
     Ranged { bound: usize, recorded: Recording },
+    /// A row of the decision table: the class it narrowed.
+    Narrowed {
+        row: crate::decision::Row,
+        class: ClassId,
+        recorded: Recording,
+    },
     /// A split: what became of the relation at `at`.
     Split { at: usize, split: Split },
     /// The nodes: the common part of all the nodes not yet decided may
