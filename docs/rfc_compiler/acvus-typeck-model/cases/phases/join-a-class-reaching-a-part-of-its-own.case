@@ -1,6 +1,6 @@
 // X ≥ Some(x), whose payload S ≥ X: X reaches a part of its own along lower
 // bounds and parts, and no finite type holds it.
-//@ order: solve X
+//@ order: join X
 let X;
 let ?k;
 let None: Option<?k>;

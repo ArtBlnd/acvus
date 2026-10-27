@@ -8,8 +8,8 @@ outcome 1
   value Str: str
   value `[1u8, s]`: none
   value s: &str
-  refusal no_join E
-  refusal no_value A
-  refusal no_value `[1u8, s]`
-  refusal no_value `A.Element`
+  refusal no_value {A} by {`A: Text`, `A: [A.Element; 2]`, `[1u8, s] <= A`}
+  refusal no_join {E} by {`1u8 <= E`, `E <=p A.Element`, `E: Text`, `[1u8, s]: [E; 2]`, `s <= E`}
+  refusal no_value {`[1u8, s]`} by {`[1u8, s] <= A`, `[1u8, s]: Text`, `[1u8, s]: [E; 2]`}
+  refusal no_value {`A.Element`} by {`A: [A.Element; 2]`, `E <=p A.Element`}
   I* of a final state: []

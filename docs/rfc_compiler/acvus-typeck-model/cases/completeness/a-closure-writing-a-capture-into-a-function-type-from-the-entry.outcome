@@ -8,6 +8,7 @@ outcome 1
   value `take(..)`: ()
   value `|x| ..`: Fn/1
   value `λ result`: u8
+  decision take: take#0
   check `0u8 <= LAST`: Ok(Identity)
   check `X <= LAST`: Ok(Identity)
   check `X <= λ result`: Ok(Identity)

@@ -15,8 +15,8 @@ outcome 1
   value `f(2u8)`: u8
   value `|x| x + k`: Fn/1
   value `λ result`: none
+  decision `&k`: lend & place
   decision `&x`: lend & place
-  decision `adder@5/&k`: lend & place
   decision `adder@5/x + k`: core::add#0
   decision `f call`: calls {`adder@5/λ`}
   check `1u8 <= adder@5/K`: Ok(Identity)

@@ -10,7 +10,7 @@ outcome 1
   value `Some.0`: u8
   value X: &u8
   decision `&o`: lend & place
-  decision Some: applied through &
+  decision Some: applied through
   decision x: bind lend & place
   check `1u8 <= S`: Ok(Identity)
   check `Some(1u8) <= O`: Ok(Identity)

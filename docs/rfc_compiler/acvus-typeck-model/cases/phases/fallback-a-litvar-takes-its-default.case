@@ -1,7 +1,7 @@
 // Solving A unifies its LitVar lower bound with it, and no source gives
 // a constructor; at the fixpoint, the class falls back to the LitVar's family's
 // default, i32 for an integer.
-//@ order: solve A, fallback
+//@ order: join A, fallback
 let A;
 let 0: lit 0;
 A = 0;

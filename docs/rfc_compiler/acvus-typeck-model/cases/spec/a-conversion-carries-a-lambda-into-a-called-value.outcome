@@ -14,7 +14,10 @@ outcome 1
   value `|y| want16(y)`: Fn/1
   value `λ result`: none
   value `μ result`: u16
+  decision boxed: boxed#0
   decision `f call`: calls {λ}
+  decision unwrap: unwrap#0
+  decision want16: want16#0
   check `2u8 <= f call#λ/X`: Ok(Identity)
   check `B ~> R`: Ok(Conversion(DeclId { name: to_rc, overload: 0 }))  unnamed: {μ}
   check `R ~> unwrap.Param(0)`: Ok(Identity)

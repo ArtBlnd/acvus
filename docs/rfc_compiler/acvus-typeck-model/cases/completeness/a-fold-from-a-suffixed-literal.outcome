@@ -1,29 +1,33 @@
 // What the model gives, written by `BLESS=1`.
 run: 200 sampled orders
 outcome 1
-  refused
+  accepted
   value `&acc`: none
   value `&s`: none
   value 0: i32
   value ACC: none
   value S: none
   value `acc + s`: none
-  value `fold(..)`: none
+  value `fold(..)`: i32
   value `scores()`: Iter<i32>
   value `|acc, s| ..`: Fn/2
   value `λ result`: none
-  decision `|acc, s| .. ~> fold.Param(2)#λ/&acc`: lend & place
-  decision `|acc, s| .. ~> fold.Param(2)#λ/&s`: lend & place
-  decision `|acc, s| .. ~> fold.Param(2)#λ/add`: undecided
+  decision `&acc`: lend & place
+  decision `&s`: lend & place
+  decision fold: fold#0
+  decision scores: scores#0
+  decision `|acc, s| .. ~> fold.Param(2)#λ/add`: core::add#0
+  check `0 <= fold.Var(Type(1))`: Ok(Identity)
   check `fold.Var(Type(0)) <= |acc, s| .. ~> fold.Param(2)#λ/S`: Ok(Identity)
+  check `fold.Var(Type(1)) <= fold(..)`: Ok(Identity)
+  check `fold.Var(Type(1)) <= |acc, s| .. ~> fold.Param(2)#λ/ACC`: Ok(Identity)
   check `scores() ~> fold.Param(0)`: Ok(Identity)
   check `scores.Result <= scores()`: Ok(Identity)
-  refusal no_value `fold(..)`
-  refusal no_value `fold.Var(Type(1))`
-  refusal no_value `fold.Param(2)`
-  refusal no_value `|acc, s| .. ~> fold.Param(2)#λ/&acc.Lent`
-  refusal no_value `|acc, s| .. ~> fold.Param(2)#λ/ACC`
-  refusal no_value `|acc, s| .. ~> fold.Param(2)#λ/acc + s`
-  refusal no_value `|acc, s| .. ~> fold.Param(2)#λ/λ result`
-  refusal no_value `|acc, s| .. ~> fold.Param(2)#λ/add.Generalized(1)`
+  check `|acc, s| .. ~> fold.Param(2)`: Ok(Undecided)
+  check `|acc, s| .. ~> fold.Param(2)#λ/&acc ~> |acc, s| .. ~> fold.Param(2)#λ/add.Param(0)`: Ok(Identity)
+  check `|acc, s| .. ~> fold.Param(2)#λ/&s ~> |acc, s| .. ~> fold.Param(2)#λ/add.Param(1)`: Ok(Identity)
+  check `|acc, s| .. ~> fold.Param(2)#λ/acc + s <= |acc, s| .. ~> fold.Param(2)#λ/λ result`: Ok(Identity)
+  check `|acc, s| .. ~> fold.Param(2)#λ/add.Chosen(1) <= |acc, s| .. ~> fold.Param(2)#λ/add.Generalized(1)`: Ok(Identity)
+  check `|acc, s| .. ~> fold.Param(2)#λ/add.Generalized(1) <= |acc, s| .. ~> fold.Param(2)#λ/acc + s`: Ok(Identity)
+  check `|acc, s| .. ~> fold.Param(2)#λ/λ result <= fold.Var(Type(1))`: Ok(Identity)
   I* of a final state: []

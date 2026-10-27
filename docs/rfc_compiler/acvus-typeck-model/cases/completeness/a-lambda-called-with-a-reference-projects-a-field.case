@@ -23,4 +23,4 @@ let `f(..)`;
 
 must pass;
 assert outcomes 1;
-assert `f 1#λ/s.score` == applied through &;
+assert `f 1#λ/s.score` == applied through;

@@ -14,5 +14,5 @@ R = `&1u8`;
 `r.f` = R.f @ `r.f`;
 
 must fail;
-assert `r.f` == applied through &;
+assert `r.f` == applied through;
 assert refused conflict at "1u8 = R.Target";

@@ -6,43 +6,59 @@ outcome 1
   value V: Vec<u8>
   value `new()`: Vec<u8>
   value `v[0]`: u8
+  decision new: new#0
   decision `v[0]`: applied
   check `1u8 <= v[0]`: Ok(Identity)
   check `new() <= V`: Ok(Identity)
   check `new.Result <= new()`: Ok(Identity)
   I* of a final state: []
 start run
-  record #0 1u8: u8
-  record #1 new.Result: Vec<new.Var(Type(0))>
-  record #2 new.Result <= new()
-  record #3 new() <= V
-  record #4 1u8 <= v[0]
-  decomposition #0 1u8: u8: no parts
-  decomposition #1 new.Result: Vec<new.Var(Type(0))>: no parts
+  record #0 V: Text
+  record #1 new(): Text
+  record #2 v[0]: Text
+  record #3 1u8: Text
+  record #4 1u8: u8
+  record #5 disjunctive constraint new
+  record #6 new.Result: Vec<new.Var(Type(0))>
+  record #7 new.Result <= new()
+  record #8 new() <= V
+  record #9 disjunctive constraint `v[0]`
+  record #10 1u8 <= v[0]
+  decomposition #0 V: Text: no parts
+  decomposition #1 new(): Text: no parts
+  decomposition #2 v[0]: Text: no parts
+  decomposition #3 1u8: Text: no parts
+  decomposition #4 1u8: u8: no parts
+  decomposition #5 disjunctive constraint new: no parts
+  decomposition #6 new.Result: Vec<new.Var(Type(0))>: no parts
+  decomposition #9 disjunctive constraint `v[0]`: no parts
 step 1 run: decide `v[0]`
   decide `v[0]`: applied
-    record #5 V: index v[0]
-step 2 run: solve `new()`
-  join `new()`: Extern(Vec)
-  decomposition #2 new.Result <= new(): parts
-    record #6 new.Var(Type(0)) = new().Arg(0)
-  decomposition #6 new.Var(Type(0)) = new().Arg(0): no parts
-step 3 run: solve V
-  join V: Extern(Vec)
-  link V: `v[0]`
-    record #7 link(V -> v[0])[0].Param.Target: Vec<link(V -> v[0])[0].Var(Type(0))>
-    record #8 link(V -> v[0])[0].Param: &link(V -> v[0])[0].Param.Target
-    record #9 link(V -> v[0])[0].Result.Target: [link(V -> v[0])[0].Var(Type(0))]
-    record #10 link(V -> v[0])[0].Result: &link(V -> v[0])[0].Result.Target
-    record #11 V.Arg(0) = link(V -> v[0])[0].Var(Type(0))
-    record #12 v[0] = link(V -> v[0])[0].Var(Type(0))
-  decomposition #3 new() <= V: parts
-    record #13 new().Arg(0) = V.Arg(0)
-  decomposition #5 V: index v[0]: no parts
-  decomposition #7 link(V -> v[0])[0].Param.Target: Vec<link(V -> v[0])[0].Var(Type(0))>: no parts
-  decomposition #8 link(V -> v[0])[0].Param: &link(V -> v[0])[0].Param.Target: no parts
-  decomposition #9 link(V -> v[0])[0].Result.Target: [link(V -> v[0])[0].Var(Type(0))]: no parts
-  decomposition #10 link(V -> v[0])[0].Result: &link(V -> v[0])[0].Result.Target: no parts
-  decomposition #11 V.Arg(0) = link(V -> v[0])[0].Var(Type(0)): no parts
-  decomposition #12 v[0] = link(V -> v[0])[0].Var(Type(0)): no parts
-  decomposition #13 new().Arg(0) = V.Arg(0): no parts
+    record #11 V: index v[0]
+step 2 run: join `new()`
+  join `new()`: Owned(Extern(Vec))
+    record #12 new(): Vec<new().Arg(0)>
+  decomposition #7 new.Result <= new(): parts
+    record #13 new.Var(Type(0)) = new().Arg(0)
+  decomposition #12 new(): Vec<new().Arg(0)>: no parts
+  decomposition #13 new.Var(Type(0)) = new().Arg(0): no parts
+step 3 run: join V
+  join V: Owned(Extern(Vec))
+    record #14 V: Vec<V.Arg(0)>
+  decomposition #8 new() <= V: parts
+    record #15 new().Arg(0) = V.Arg(0)
+  decomposition #11 V: index v[0]: parts
+    record #16 link(V -> v[0])[0].Param.Target: Vec<link(V -> v[0])[0].Var(Type(0))>
+    record #17 link(V -> v[0])[0].Param: &link(V -> v[0])[0].Param.Target
+    record #18 link(V -> v[0])[0].Result.Target: [link(V -> v[0])[0].Var(Type(0))]
+    record #19 link(V -> v[0])[0].Result: &link(V -> v[0])[0].Result.Target
+    record #20 V.Arg(0) = link(V -> v[0])[0].Var(Type(0))
+    record #21 v[0] = link(V -> v[0])[0].Var(Type(0))
+  decomposition #14 V: Vec<V.Arg(0)>: no parts
+  decomposition #15 new().Arg(0) = V.Arg(0): no parts
+  decomposition #16 link(V -> v[0])[0].Param.Target: Vec<link(V -> v[0])[0].Var(Type(0))>: no parts
+  decomposition #17 link(V -> v[0])[0].Param: &link(V -> v[0])[0].Param.Target: no parts
+  decomposition #18 link(V -> v[0])[0].Result.Target: [link(V -> v[0])[0].Var(Type(0))]: no parts
+  decomposition #19 link(V -> v[0])[0].Result: &link(V -> v[0])[0].Result.Target: no parts
+  decomposition #20 V.Arg(0) = link(V -> v[0])[0].Var(Type(0)): no parts
+  decomposition #21 v[0] = link(V -> v[0])[0].Var(Type(0)): no parts

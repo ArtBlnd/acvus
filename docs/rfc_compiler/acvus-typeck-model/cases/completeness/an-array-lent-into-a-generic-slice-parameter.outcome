@@ -6,15 +6,16 @@ outcome 1
   value 1u8: u8
   value 2u8: u8
   value A: [u8; 2]
-  value F: Option<&!>
+  value F: Option<!>
   value U8: u8
   value `[1u8, 2u8]`: [u8; 2]
-  value `first(..)`: Option<&!>
+  value `first(..)`: Option<!>
   decision `&a`: lend & place
+  decision first: first#0
   check `&a ~> first.Param(0)`: Err(None)
   check `1u8 <= U8`: Ok(Identity)
   check `2u8 <= U8`: Ok(Identity)
   check `[1u8, 2u8] <= A`: Ok(Identity)
   check `first(..) <= F`: Ok(Identity)
-  check `first.Result <= first(..)`: Ok(Identity)
-  I* of a final state: []
+  check `first.Result <= first(..)`: Err(None)
+  I* of a final state: [completeness first]

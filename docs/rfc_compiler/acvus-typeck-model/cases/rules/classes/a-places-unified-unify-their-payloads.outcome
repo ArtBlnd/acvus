@@ -18,9 +18,153 @@ outcome 1
   partition {A, B}
   check `1u8 <= S1`: Ok(Identity)
   check `2u16 <= S2`: Ok(Identity)
-  refusal no_join `A.Payload(Some)`
-  refusal no_value `&mut a`
-  refusal no_value `&mut b`
-  refusal no_value A
-  refusal no_value R
+  refusal no_value {`&mut a`, `lend a.Lent`} by {`&mut a <= R`, `&mut a = lend a.Lent`, `&mut a: Text`, `&mut a: {&, &mut, !}`, `disjunctive constraint lend a`, `lend a.Lent: &mut A`}
+  refusal no_value {`&mut b`, `lend b.Lent`} by {`&mut b <= R`, `&mut b = lend b.Lent`, `&mut b: Text`, `&mut b: {&, &mut, !}`, `disjunctive constraint lend b`, `lend b.Lent: &mut B`}
+  refusal no_value {A, B, `R.Target`} by {`A = R.Target`, `A: Option<A.Payload(Some)>`, `A: Text`, `B = R.Target`, `B: Text`, `R: &mut R.Target`, `Some(1u8) <= A`, `Some(2u16) <= B`, `disjunctive constraint lend a`, `disjunctive constraint lend b`, `lend a.Lent: &mut A`, `lend b.Lent: &mut B`}
+  refusal no_value {R} by {`&mut a <= R`, `&mut b <= R`, `R: &mut R.Target`, `R: Text`}
+  refusal no_join {`A.Payload(Some)`} by {`A: Option<A.Payload(Some)>`, `S1 <=p A.Payload(Some)`, `S2 <=p A.Payload(Some)`}
+  I* of a final state: []
+outcome 2
+  refused
+  value `&mut a`: &mut Option<u16>
+  value `&mut b`: &mut Option<u16>
+  value 1u8: u8
+  value 2u16: u16
+  value A: Option<u16>
+  value B: Option<u16>
+  value R: &mut Option<u16>
+  value S1: u8
+  value S2: u16
+  value `Some(1u8)`: Option<u8>
+  value `Some(2u16)`: Option<u16>
+  decision `lend a`: lend &mut place
+  decision `lend b`: lend &mut place
+  partition {A, B}
+  check `&mut a <= R`: Ok(Identity)
+  check `&mut b <= R`: Ok(Identity)
+  check `1u8 <= S1`: Ok(Identity)
+  check `2u16 <= S2`: Ok(Identity)
+  check `Some(1u8) <= A`: Err(None)
+  check `Some(2u16) <= B`: Ok(Identity)
+  I* of a final state: []
+outcome 3
+  refused
+  value `&mut a`: none
+  value `&mut b`: none
+  value 1u8: u8
+  value 2u16: u16
+  value A: none
+  value B: none
+  value R: none
+  value S1: u8
+  value S2: u16
+  value `Some(1u8)`: Option<u8>
+  value `Some(2u16)`: Option<u16>
+  decision `lend a`: lend &mut place
+  decision `lend b`: lend &mut place
+  partition {A, B}
+  check `1u8 <= S1`: Ok(Identity)
+  check `2u16 <= S2`: Ok(Identity)
+  refusal no_value {`&mut a`, `lend a.Lent`} by {`&mut a <= R`, `&mut a = lend a.Lent`, `&mut a: Text`, `&mut a: {&, &mut, !}`, `disjunctive constraint lend a`, `lend a.Lent: &mut A`}
+  refusal no_value {`&mut b`, `lend b.Lent`} by {`&mut b <= R`, `&mut b = lend b.Lent`, `&mut b: Text`, `&mut b: {&, &mut, !}`, `disjunctive constraint lend b`, `lend b.Lent: &mut B`}
+  refusal no_value {A, B, `R.Target`} by {`A = R.Target`, `A: Option<A.Payload(Some)>`, `A: Text`, `B = R.Target`, `B: Option<B.Payload(Some)>`, `B: Text`, `R: &mut R.Target`, `Some(1u8) <= A`, `Some(2u16) <= B`, `disjunctive constraint lend a`, `disjunctive constraint lend b`, `lend a.Lent: &mut A`, `lend b.Lent: &mut B`}
+  refusal no_value {R} by {`&mut a <= R`, `&mut b <= R`, `R: &mut R.Target`, `R: Text`}
+  refusal conflict: Scalar(Int(U16)) vs Scalar(Int(U8)) {`A.Payload(Some)`} by {`A.Payload(Some): u8`, `A: Option<A.Payload(Some)>`, `S1 <=p A.Payload(Some)`}
+  refusal conflict: Scalar(Int(U16)) vs Scalar(Int(U8)) {`B.Payload(Some)`} by {`B.Payload(Some): u16`, `B: Option<B.Payload(Some)>`, `S2 <=p B.Payload(Some)`}
+  I* of a final state: []
+outcome 4
+  refused
+  value `&mut a`: none
+  value `&mut b`: none
+  value 1u8: u8
+  value 2u16: u16
+  value A: none
+  value B: none
+  value R: none
+  value S1: u8
+  value S2: u16
+  value `Some(1u8)`: Option<u8>
+  value `Some(2u16)`: Option<u16>
+  decision `lend a`: lend &mut place
+  decision `lend b`: lend &mut place
+  partition {A, B}
+  check `1u8 <= S1`: Ok(Identity)
+  check `2u16 <= S2`: Ok(Identity)
+  refusal no_value {`&mut a`, `lend a.Lent`} by {`&mut a <= R`, `&mut a = lend a.Lent`, `&mut a: Text`, `&mut a: {&, &mut, !}`, `disjunctive constraint lend a`, `lend a.Lent: &mut A`}
+  refusal no_value {`&mut b`, `lend b.Lent`} by {`&mut b <= R`, `&mut b = lend b.Lent`, `&mut b: Text`, `&mut b: {&, &mut, !}`, `disjunctive constraint lend b`, `lend b.Lent: &mut B`}
+  refusal no_value {A, B, `R.Target`} by {`A = R.Target`, `A: Text`, `B = R.Target`, `B: Option<B.Payload(Some)>`, `B: Text`, `R: &mut R.Target`, `Some(1u8) <= A`, `Some(2u16) <= B`, `disjunctive constraint lend a`, `disjunctive constraint lend b`, `lend a.Lent: &mut A`, `lend b.Lent: &mut B`}
+  refusal no_value {R} by {`&mut a <= R`, `&mut b <= R`, `R: &mut R.Target`, `R: Text`}
+  refusal no_join {`B.Payload(Some)`} by {`B: Option<B.Payload(Some)>`, `S1 <=p B.Payload(Some)`, `S2 <=p B.Payload(Some)`}
+  I* of a final state: []
+outcome 5
+  refused
+  value `&mut a`: &mut Option<u8>
+  value `&mut b`: &mut Option<u8>
+  value 1u8: u8
+  value 2u16: u16
+  value A: Option<u8>
+  value B: Option<u8>
+  value R: &mut Option<u8>
+  value S1: u8
+  value S2: u16
+  value `Some(1u8)`: Option<u8>
+  value `Some(2u16)`: Option<u16>
+  decision `lend a`: lend &mut place
+  decision `lend b`: lend &mut place
+  partition {A, B}
+  check `&mut a <= R`: Ok(Identity)
+  check `&mut b <= R`: Ok(Identity)
+  check `1u8 <= S1`: Ok(Identity)
+  check `2u16 <= S2`: Ok(Identity)
+  check `Some(1u8) <= A`: Ok(Identity)
+  check `Some(2u16) <= B`: Err(None)
+  I* of a final state: []
+outcome 6
+  refused
+  value `&mut a`: none
+  value `&mut b`: none
+  value 1u8: u8
+  value 2u16: u16
+  value A: none
+  value B: none
+  value R: none
+  value S1: u8
+  value S2: u16
+  value `Some(1u8)`: Option<u8>
+  value `Some(2u16)`: Option<u16>
+  decision `lend a`: lend &mut place
+  decision `lend b`: lend &mut place
+  partition {A, B}
+  check `1u8 <= S1`: Ok(Identity)
+  check `2u16 <= S2`: Ok(Identity)
+  refusal no_value {`&mut a`, `lend a.Lent`} by {`&mut a <= R`, `&mut a = lend a.Lent`, `&mut a: Text`, `&mut a: {&, &mut, !}`, `disjunctive constraint lend a`, `lend a.Lent: &mut A`}
+  refusal no_value {`&mut b`, `lend b.Lent`} by {`&mut b <= R`, `&mut b = lend b.Lent`, `&mut b: Text`, `&mut b: {&, &mut, !}`, `disjunctive constraint lend b`, `lend b.Lent: &mut B`}
+  refusal no_value {A, B, `R.Target`} by {`A = R.Target`, `A: Option<A.Payload(Some)>`, `A: Text`, `B = R.Target`, `B: Option<B.Payload(Some)>`, `B: Text`, `R: &mut R.Target`, `Some(1u8) <= A`, `Some(2u16) <= B`, `disjunctive constraint lend a`, `disjunctive constraint lend b`, `lend a.Lent: &mut A`, `lend b.Lent: &mut B`}
+  refusal no_value {R} by {`&mut a <= R`, `&mut b <= R`, `R: &mut R.Target`, `R: Text`}
+  refusal no_join {`A.Payload(Some)`, `B.Payload(Some)`} by {`A: Option<A.Payload(Some)>`, `B: Option<B.Payload(Some)>`, `S1 <=p A.Payload(Some)`, `S2 <=p B.Payload(Some)`}
+  I* of a final state: []
+outcome 7
+  refused
+  value `&mut a`: none
+  value `&mut b`: none
+  value 1u8: u8
+  value 2u16: u16
+  value A: none
+  value B: none
+  value R: none
+  value S1: u8
+  value S2: u16
+  value `Some(1u8)`: Option<u8>
+  value `Some(2u16)`: Option<u16>
+  decision `lend a`: lend &mut place
+  decision `lend b`: lend &mut place
+  partition {A, B}
+  check `1u8 <= S1`: Ok(Identity)
+  check `2u16 <= S2`: Ok(Identity)
+  refusal no_value {`&mut a`, `lend a.Lent`} by {`&mut a <= R`, `&mut a = lend a.Lent`, `&mut a: Text`, `&mut a: {&, &mut, !}`, `disjunctive constraint lend a`, `lend a.Lent: &mut A`}
+  refusal no_value {`&mut b`, `lend b.Lent`} by {`&mut b <= R`, `&mut b = lend b.Lent`, `&mut b: Text`, `&mut b: {&, &mut, !}`, `disjunctive constraint lend b`, `lend b.Lent: &mut B`}
+  refusal no_value {A, B, `R.Target`} by {`A = R.Target`, `A: Option<A.Payload(Some)>`, `A: Text`, `B = R.Target`, `B: Option<B.Payload(Some)>`, `B: Text`, `R: &mut R.Target`, `Some(1u8) <= A`, `Some(2u16) <= B`, `disjunctive constraint lend a`, `disjunctive constraint lend b`, `lend a.Lent: &mut A`, `lend b.Lent: &mut B`}
+  refusal no_value {R} by {`&mut a <= R`, `&mut b <= R`, `R: &mut R.Target`, `R: Text`}
+  refusal conflict: Scalar(Int(U8)) vs Scalar(Int(U16)) {`A.Payload(Some)`} by {`A.Payload(Some): u8`, `A: Option<A.Payload(Some)>`, `S1 <=p A.Payload(Some)`}
+  refusal conflict: Scalar(Int(U8)) vs Scalar(Int(U16)) {`B.Payload(Some)`} by {`B.Payload(Some): u16`, `B: Option<B.Payload(Some)>`, `S2 <=p B.Payload(Some)`}
   I* of a final state: []

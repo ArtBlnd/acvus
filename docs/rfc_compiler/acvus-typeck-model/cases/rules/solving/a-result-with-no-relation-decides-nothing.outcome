@@ -5,7 +5,7 @@ outcome 1
   value A: none
   value R: none
   decision mk: undecided
-  refusal no_value A
-  refusal no_value R
-  refusal no_value `mk.Generalized(0)`
+  refusal no_value {A} by {`A: Text`, `R <= A`}
+  refusal no_value {R} by {`R <= A`, `R: Text`, `disjunctive constraint mk`, `mk.Generalized(0) <= R`}
+  refusal no_value {`mk.Generalized(0)`} by {`disjunctive constraint mk`, `mk.Generalized(0) <= R`, `mk.Generalized(0): not {&, &mut}`}
   I* of a final state: []

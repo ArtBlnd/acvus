@@ -13,6 +13,7 @@ outcome 1
   value `t == t`: bool
   decision `&t`: lend & place
   decision `&t 2`: lend & place
+  decision eq: core::eq#0
   check `&t 2 ~> eq.Param(1)`: Err(None)
   check `&t ~> eq.Param(0)`: Err(None)
   check `(1u8, 2u8) <= T`: Ok(Identity)

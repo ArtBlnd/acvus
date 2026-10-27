@@ -6,5 +6,6 @@ outcome 1
   value U16: none
   value U8: none
   partition {A, U8}
-  refusal conflict at "A = U16": Scalar(Int(U8)) vs Scalar(Int(U16))
+  refusal conflict: Scalar(Int(U8)) vs Scalar(Int(U16)) {A, U8} by {`A = U16`, `A = U8`, `A: Text`, `U8: Text`, `U8: u8`}
+  refusal conflict: Scalar(Int(U8)) vs Scalar(Int(U16)) {U16} by {`A = U16`, `U16: Text`, `U16: u16`}
   I* of a final state: []

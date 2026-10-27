@@ -2,21 +2,20 @@
 run: every order
 outcome 1
   refused
-  value 1: u16
-  value ?k: !
-  value None: Option<!>
+  value 1: i32
+  value ?k: u8
+  value None: Option<u8>
   value `Option⟨u16⟩`: Option<u16>
   value `Option⟨u8⟩`: Option<u8>
-  value S: u16
-  value `Some(1)`: Option<u16>
-  value X: none
-  value Y: Option<u16>
+  value S: i32
+  value `Some(1)`: Option<i32>
+  value X: Option<u8>
+  value Y: none
   value u16: u16
   value u8: u8
-  partition {1, S, u16}
   check `1 <= S`: Ok(Identity)
-  check `Some(1) <= Y`: Ok(Identity)
-  check `Y ~> Option⟨u16⟩`: Ok(Identity)
-  refusal no_fill `X.Payload(Some)`
-  refusal no_value X
+  check `None <= X`: Ok(Identity)
+  check `X ~> Option⟨u8⟩`: Ok(Identity)
+  refusal no_value {Y} by {`Some(1) <= Y`, `X <= Y`, `Y ~> Option⟨u16⟩`, `Y: Option<Y.Payload(Some)>`, `Y: Text`}
+  refusal no_join {`Y.Payload(Some)`} by {`S <=p Y.Payload(Some)`, `X.Payload(Some) <=p Y.Payload(Some)`, `Y.Payload(Some) ~> u16`, `Y: Option<Y.Payload(Some)>`}
   I* of a final state: []

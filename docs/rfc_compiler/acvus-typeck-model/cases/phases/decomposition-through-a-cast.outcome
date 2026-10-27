@@ -12,20 +12,30 @@ outcome 1
   check `u8 <= S`: Ok(Identity)
   I* of a final state: []
 start run
-  record #0 u8: u8
-  record #1 b: Box<S>
-  record #2 s: Shared<P>
-  record #3 u8 <= S
-  record #4 b ~> s
-  decomposition #0 u8: u8: no parts
-  decomposition #1 b: Box<S>: no parts
-  decomposition #2 s: Shared<P>: no parts
-  decomposition #4 b ~> s: parts
-    record #5 link(b -> s)[0].Param: Box<link(b -> s)[0].Var(Type(0))>
-    record #6 link(b -> s)[0].Result: Shared<link(b -> s)[0].Var(Type(0))>
-    record #7 S = link(b -> s)[0].Var(Type(0))
-    record #8 link(b -> s)[0].Var(Type(0)) = P
-  decomposition #5 link(b -> s)[0].Param: Box<link(b -> s)[0].Var(Type(0))>: no parts
-  decomposition #6 link(b -> s)[0].Result: Shared<link(b -> s)[0].Var(Type(0))>: no parts
-  decomposition #7 S = link(b -> s)[0].Var(Type(0)): no parts
-  decomposition #8 link(b -> s)[0].Var(Type(0)) = P: no parts
+  record #0 S: Text
+  record #1 P: Text
+  record #2 u8: Text
+  record #3 b: Text
+  record #4 s: Text
+  record #5 u8: u8
+  record #6 b: Box<S>
+  record #7 s: Shared<P>
+  record #8 u8 <= S
+  record #9 b ~> s
+  decomposition #0 S: Text: no parts
+  decomposition #1 P: Text: no parts
+  decomposition #2 u8: Text: no parts
+  decomposition #3 b: Text: no parts
+  decomposition #4 s: Text: no parts
+  decomposition #5 u8: u8: no parts
+  decomposition #6 b: Box<S>: no parts
+  decomposition #7 s: Shared<P>: no parts
+  decomposition #9 b ~> s: parts
+    record #10 link(b -> s)[0].Param: Box<link(b -> s)[0].Var(Type(0))>
+    record #11 link(b -> s)[0].Result: Shared<link(b -> s)[0].Var(Type(0))>
+    record #12 S = link(b -> s)[0].Var(Type(0))
+    record #13 link(b -> s)[0].Var(Type(0)) = P
+  decomposition #10 link(b -> s)[0].Param: Box<link(b -> s)[0].Var(Type(0))>: no parts
+  decomposition #11 link(b -> s)[0].Result: Shared<link(b -> s)[0].Var(Type(0))>: no parts
+  decomposition #12 S = link(b -> s)[0].Var(Type(0)): no parts
+  decomposition #13 link(b -> s)[0].Var(Type(0)) = P: no parts

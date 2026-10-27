@@ -1,10 +1,12 @@
-//! Fallback: once every binding group is at its fixpoint, each
-//! equivalence class left unsolved with no unbroken dependency takes what
-//! its domain falls back to, its family's default or `!`, or `!` where it holds
-//! none. The value it takes is recorded as a decision, which every read after
-//! it takes as given.
+//! Fallback: at the entry's fixpoint, each class the judgment leaves with
+//! nothing to decide it (`Verdict::Rest`) takes a default. The classes whose
+//! record gives them a domain take its default first, a literal's family's
+//! default; only where no class takes one do the classes with no domain take
+//! `!`. The structure taken is recorded, and every judgment after it takes
+//! it as given.
 
 use crate::class::{ClassId, StructureSource};
+use crate::judgment::Verdict;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
@@ -21,16 +23,31 @@ pub struct FellBack {
 }
 
 impl State {
-    /// The equivalence classes left to fall back to a default take it, each
-    /// recorded by fallback: those that are not solved and have no unbroken
-    /// dependency.
+    /// The equivalence classes left to fall back take a default, each
+    /// recorded by fallback: those with a domain its default, and, where
+    /// none has one, those without `!`.
     pub(crate) fn take_defaults(&mut self) -> Vec<FellBack> {
+        let rest: Vec<(ClassId, Option<Term<ClassId>>)> = self
+            .unsolved()
+            .into_iter()
+            .filter_map(|root| match self.verdict(root) {
+                Verdict::Rest(domain) => Some((root, domain.map(|domain| domain.fallback()))),
+                Verdict::Join(_) | Verdict::Fill(_) | Verdict::Waiting => None,
+            })
+            .collect();
+        let with_domain: Vec<(ClassId, Term<ClassId>)> = rest
+            .iter()
+            .filter_map(|(root, default)| Some((*root, default.clone()?)))
+            .collect();
+        let taking: Vec<(ClassId, Term<ClassId>)> = if with_domain.is_empty() {
+            rest.into_iter()
+                .map(|(root, _)| (root, Term::Never))
+                .collect()
+        } else {
+            with_domain
+        };
         let mut fell = Vec::new();
-        for root in self.fallback_targets() {
-            let default = match &self.classes.held(root).domain {
-                Some(domain) => domain.fallback(),
-                None => Term::Never,
-            };
+        for (root, default) in taking {
             let relation = Relation::Structure(root, default.clone(), StructureSource::Solved);
             let mut recorded = Recording::default();
             recorded.push(self.record(relation, Recorder::Fallback));
@@ -41,13 +58,5 @@ impl State {
             });
         }
         fell
-    }
-
-    /// The equivalence classes to fall back once nothing is eligible: those
-    /// unblocked.
-    pub(crate) fn fallback_targets(&self) -> Vec<ClassId> {
-        let graph = self.graph();
-        let satisfied = self.satisfied_in(&graph);
-        self.unblocked(&graph, &satisfied)
     }
 }

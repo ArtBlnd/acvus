@@ -1,34 +1,36 @@
 // What the model gives, written by `BLESS=1`.
 run: 200 sampled orders
 outcome 1
-  refused
-  value `&1`: &i32
-  value `&n`: &i32
-  value `&n 2`: &i32
-  value `&n 3`: &i32
-  value ?a: i32
-  value ?b: i32
-  value D: none
+  accepted
+  value `&1`: &i64
+  value `&n`: &i64
+  value `&n 2`: &i64
+  value `&n 3`: &i64
+  value ?a: i64
+  value ?b: i64
+  value D: i64
   value K: i64
-  value N: i32
-  value R1: i32
-  value R2: i32
+  value N: i64
+  value R1: i64
+  value R2: i64
   decision `&1`: lend & place
   decision `&n`: lend & place
   decision `&n 2`: lend & place
   decision `&n 3`: lend & place
-  decision `n + 1`: core::add#0
-  decision `n - n`: core::sub#0
+  decision cmp_val: cmp_val#0
+  decision `n + 1`: core::add#1
+  decision `n - n`: core::sub#1
   check `&1 ~> n + 1.Param(1)`: Ok(Identity)
   check `&n 2 ~> n - n.Param(0)`: Ok(Identity)
   check `&n 3 ~> n - n.Param(1)`: Ok(Identity)
   check `&n ~> n + 1.Param(0)`: Ok(Identity)
   check `?a <= N`: Ok(Identity)
+  check `K <= D`: Ok(Identity)
   check `R1 <= N`: Ok(Identity)
+  check `R2 <= D`: Ok(Identity)
   check `cmp_val.Result <= K`: Ok(Identity)
   check `n + 1.Chosen(1) <= n + 1.Generalized(1)`: Ok(Identity)
   check `n + 1.Generalized(1) <= R1`: Ok(Identity)
   check `n - n.Chosen(1) <= n - n.Generalized(1)`: Ok(Identity)
   check `n - n.Generalized(1) <= R2`: Ok(Identity)
-  refusal no_join D
   I* of a final state: []

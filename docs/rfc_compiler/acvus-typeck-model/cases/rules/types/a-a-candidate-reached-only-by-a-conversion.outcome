@@ -5,7 +5,8 @@ outcome 1
   value `f(..)`: none
   value `make()`: A
   decision f: undecided
+  decision make: make#0
   check `make.Result <= make()`: Ok(Identity)
-  refusal no_value `f(..)`
-  refusal no_value `f.Generalized(0)`
+  refusal no_value {`f(..)`} by {`disjunctive constraint f`, `f(..): Text`, `f.Generalized(0) <= f(..)`}
+  refusal no_value {`f.Generalized(0)`} by {`disjunctive constraint f`, `f.Generalized(0) <= f(..)`, `f.Generalized(0): not {&, &mut}`}
   I* of a final state: []

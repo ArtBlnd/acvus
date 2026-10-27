@@ -8,8 +8,9 @@ outcome 1
   value S: &Vec<!>
   value V: Vec<!>
   value `new()`: Vec<!>
-  decision `lend r`: lend & through &mut
+  decision `lend r`: lend & through
   decision `lend v`: lend &mut place
+  decision new: new#0
   check `&mut v <= R`: Ok(Identity)
   check `&r <= S`: Ok(Identity)
   check `new() <= V`: Ok(Identity)

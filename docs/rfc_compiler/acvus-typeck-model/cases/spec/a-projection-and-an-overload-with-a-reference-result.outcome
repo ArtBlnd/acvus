@@ -1,15 +1,16 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
+  accepted
   value 0: i32
-  value A: none
-  value `a.x`: none
-  value `pick(a)`: none
+  value A: {x: i32}
+  value `a.x`: i32
+  value `pick(a)`: {x: i32}
   decision `a.x`: applied
-  decision pick: undecided
-  refusal no_value A
-  refusal no_value `a.x`
-  refusal no_value `pick(a)`
-  refusal no_value `pick.Generalized(1)`
+  decision pick: pick#0
+  check `0 <= a.x`: Ok(Identity)
+  check `A ~> pick.Param(0)`: Ok(Identity)
+  check `pick(a) <= A`: Ok(Identity)
+  check `pick.Chosen(1) <= pick.Generalized(1)`: Ok(Identity)
+  check `pick.Generalized(1) <= pick(a)`: Ok(Identity)
   I* of a final state: []

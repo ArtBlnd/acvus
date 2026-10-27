@@ -8,6 +8,7 @@ outcome 1
   value `run(..)`: ()
   value `|x| x`: Fn/1
   value `λ result`: none
+  decision run: run#0
   check `S ~> run.Param(0).Payload(Some)#λ/X <= S ~> run.Param(0).Payload(Some)#λ/λ result`: Ok(Identity)
   check `S ~> run.Param(0).Payload(Some)#λ/λ result ~> run.Param(0).Payload(Some).Return`: Ok(Identity)
   check `Some(|x| x) ~> run.Param(0)`: Ok(Undecided)

@@ -1,5 +1,5 @@
 // ?k has no source; once nothing is left to solve it falls back to !.
-//@ order: solve A, fallback
+//@ order: join A, fallback
 let A;
 let ?k;
 let None: Option<?k>;

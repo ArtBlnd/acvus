@@ -2,7 +2,7 @@
 // made anew.
 // Once both sides of Some(1u8) ≤ A are solved, their parts are related, a
 // structural type's part by a part lower bound.
-//@ order: solve A
+//@ order: join A
 let A;
 let S;
 let u8: u8;

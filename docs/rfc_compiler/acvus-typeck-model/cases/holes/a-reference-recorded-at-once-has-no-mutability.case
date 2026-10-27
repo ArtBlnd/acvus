@@ -19,4 +19,4 @@ R = `first(x)`;
 `&mut r` = &mut R @ `&mut r`;
 
 must pass;
-assert `&mut r` == lend & through &;
+assert `&mut r` == lend & through;

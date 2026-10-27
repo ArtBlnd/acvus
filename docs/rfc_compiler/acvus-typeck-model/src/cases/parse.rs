@@ -146,10 +146,10 @@ pub enum TextItem {
     },
 }
 
-/// A step of an order a case writes.
+/// An item of an order a case writes: a judgment, or a fallback.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum StepText {
-    Solve(String),
+pub enum ItemText {
+    Join(String),
     Decide(String),
     Fallback,
 }
@@ -160,9 +160,9 @@ pub enum Orders {
     All,
     /// Orders sampled.
     Sampled(u64),
-    /// One order, the steps of each group listed by its name, each group
-    /// otherwise taking its first step.
-    Written(BTreeMap<String, Vec<StepText>>),
+    /// One order, the items of each group listed by its name, each group
+    /// otherwise taking its first judgment.
+    Written(BTreeMap<String, Vec<ItemText>>),
 }
 
 /// A refusal an expectation names: its kind, and where it names one, its
@@ -1204,15 +1204,15 @@ fn directives(source: &str, case: &mut Case) -> Parsed<()> {
                     [group] => group.to_string(),
                     _ => return Err(format!("line {at}: `order: ...` or `order <group>: ...`")),
                 };
-                let steps = value
+                let items = value
                     .split(',')
                     .map(str::trim)
-                    .filter(|step| !step.is_empty())
-                    .map(|step| match step.split_once(' ') {
-                        Some(("solve", class)) => Ok(StepText::Solve(unquote(class))),
-                        Some(("decide", disjunction)) => Ok(StepText::Decide(unquote(disjunction))),
-                        None if step == "fallback" => Ok(StepText::Fallback),
-                        _ => Err(format!("line {at}: no step {step}")),
+                    .filter(|item| !item.is_empty())
+                    .map(|item| match item.split_once(' ') {
+                        Some(("join", class)) => Ok(ItemText::Join(unquote(class))),
+                        Some(("decide", disjunction)) => Ok(ItemText::Decide(unquote(disjunction))),
+                        None if item == "fallback" => Ok(ItemText::Fallback),
+                        _ => Err(format!("line {at}: no item {item}")),
                     })
                     .collect::<Parsed<Vec<_>>>()?;
                 let written = match orders.get_or_insert_with(|| Orders::Written(BTreeMap::new())) {
@@ -1221,7 +1221,7 @@ fn directives(source: &str, case: &mut Case) -> Parsed<()> {
                         return Err(format!("line {at}: a written order with `orders`"));
                     }
                 };
-                if written.insert(group.clone(), steps).is_some() {
+                if written.insert(group.clone(), items).is_some() {
                     return Err(format!("line {at}: the order of {group} is written twice"));
                 }
             }

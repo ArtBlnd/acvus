@@ -8,6 +8,8 @@ outcome 1
   value `first(..)`: Option<&u8>
   value `make()`: Vec<u8>
   decision `&v`: lend & place
+  decision first: first#0
+  decision make: make#0
   check `&v ~> first.Param(0)`: Ok(Identity)
   check `first(..) <= F`: Ok(Identity)
   check `first.Result <= first(..)`: Ok(Identity)

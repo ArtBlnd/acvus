@@ -10,6 +10,8 @@ outcome 1
   value `|y| y`: Fn/1
   value `λ result`: none
   value `μ result`: none
+  decision pair: pair#0
+  decision take_rc: take_rc#0
   check `P ~> take_rc.Param(0)`: Ok(Conversion(DeclId { name: to_rc, overload: 0 }))
   check `pair.Result <= P`: Ok(Identity)
   check `take_rc.Result <= take_rc(..)`: Ok(Identity)

@@ -2,13 +2,14 @@
 run: every order
 outcome 1
   accepted
-  value O: Option<!>
-  value `Some.0`: !
-  value X: !
+  value O: Option<u8>
+  value `Some.0`: u8
+  value X: u8
   value `takes_u8(x)`: ()
   decision Some: applied
+  decision takes_u8: takes_u8#0
   decision x: read
   check `Some.0 <= X`: Ok(Identity)
-  check `X ~> takes_u8.Param(0)`: Ok(Never)
+  check `X ~> takes_u8.Param(0)`: Ok(Identity)
   check `takes_u8.Result <= takes_u8(x)`: Ok(Identity)
   I* of a final state: []

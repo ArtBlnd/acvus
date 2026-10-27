@@ -7,6 +7,8 @@ outcome 1
   value `take_rc(..)`: ()
   value `|x| x`: Fn/1
   value `λ result`: none
+  decision boxed: boxed#0
+  decision take_rc: take_rc#0
   check `B ~> take_rc.Param(0)`: Ok(Composition { reborrow: false, casts: [DeclId { name: to_rc, overload: 0 }], structural: None })
   check `boxed.Result <= B`: Ok(Identity)
   check `take_rc.Result <= take_rc(..)`: Ok(Identity)

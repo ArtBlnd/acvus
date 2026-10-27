@@ -9,8 +9,14 @@ outcome 1
   check `x ~> g.Param(0)`: Ok(Identity)
   I* of a final state: []
 start run
-  record #0 x: u8
-  record #1 g.GeneralizedResult: bool
-  record #2 g.GeneralizedResult <= R
-  decomposition #0 x: u8: no parts
-  decomposition #1 g.GeneralizedResult: bool: no parts
+  record #0 x: Text
+  record #1 R: Text
+  record #2 x: u8
+  record #3 disjunctive constraint g
+  record #4 g.GeneralizedResult: bool
+  record #5 g.GeneralizedResult <= R
+  decomposition #0 x: Text: no parts
+  decomposition #1 R: Text: no parts
+  decomposition #2 x: u8: no parts
+  decomposition #3 disjunctive constraint g: no parts
+  decomposition #4 g.GeneralizedResult: bool: no parts

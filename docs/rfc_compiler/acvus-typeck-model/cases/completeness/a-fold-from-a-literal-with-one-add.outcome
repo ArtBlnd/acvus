@@ -12,8 +12,11 @@ outcome 1
   value `scores()`: Iter<i32>
   value `|acc, s| ..`: Fn/2
   value `λ result`: i32
-  decision `|acc, s| .. ~> fold.Param(2)#λ/&acc`: lend & place
-  decision `|acc, s| .. ~> fold.Param(2)#λ/&s`: lend & place
+  decision `&acc`: lend & place
+  decision `&s`: lend & place
+  decision add: core::add#0
+  decision fold: fold#0
+  decision scores: scores#0
   check `0 <= fold.Var(Type(1))`: Ok(Identity)
   check `fold.Var(Type(0)) <= |acc, s| .. ~> fold.Param(2)#λ/S`: Ok(Identity)
   check `fold.Var(Type(1)) <= fold(..)`: Ok(Identity)

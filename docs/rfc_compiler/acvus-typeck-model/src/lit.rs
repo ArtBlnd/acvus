@@ -69,14 +69,6 @@ impl LitVar {
     pub fn admits(&self, scalar: Scalar) -> bool {
         self.values.iter().all(|&literal| holds(scalar, literal))
     }
-
-    /// The family's default.
-    pub fn default_scalar(&self) -> Scalar {
-        match self.family {
-            Family::Int => Scalar::Int(IntTy::I32),
-            Family::Float => Scalar::Float(FloatTy::F64),
-        }
-    }
 }
 
 /// `?{n, …}: int` or `?{x, …}: float`.

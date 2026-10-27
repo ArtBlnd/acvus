@@ -9,6 +9,7 @@ outcome 1
   value `parse(s)`: none
   value `parse(s) 2`: none
   value str: str
+  decision fill_all: fill_all#0
   decision lend: lend &mut place
   decision `lend 2`: lend &mut place
   decision parse: undecided
@@ -16,12 +17,12 @@ outcome 1
   check `&str ~> parse 2.GeneralizedParam(0)`: Ok(Identity)
   check `&str ~> parse.GeneralizedParam(0)`: Ok(Identity)
   check `fill_all.Result <= fill_all(..)`: Ok(Identity)
-  refusal no_value `&mut parse(s)`
-  refusal no_value `&mut parse(s) 2`
-  refusal no_value `parse(s)`
-  refusal no_value `parse(s) 2`
-  refusal no_value `parse(s).Arg(0)`
-  refusal no_value `parse(s) 2.Arg(0)`
-  refusal no_value `parse.GeneralizedResult`
-  refusal no_value `parse 2.GeneralizedResult`
+  refusal no_value {`&mut parse(s)`, `lend.Lent`} by {`&mut parse(s) = lend.Lent`, `&mut parse(s) ~> fill_all.Param(0)`, `&mut parse(s): Text`, `&mut parse(s): {&, &mut, !}`, `disjunctive constraint fill_all`, `disjunctive constraint lend`, `lend.Lent: &mut parse(s)`}
+  refusal no_value {`&mut parse(s) 2`, `lend 2.Lent`} by {`&mut parse(s) 2 = lend 2.Lent`, `&mut parse(s) 2: Text`, `&mut parse(s) 2: {&, &mut, !}`, `disjunctive constraint lend 2`, `lend 2.Lent: &mut parse(s) 2`}
+  refusal no_value {`parse(s)`} by {`disjunctive constraint lend`, `disjunctive constraint parse`, `lend.Lent: &mut parse(s)`, `parse(s) ~> fill_all.Param(0).Target`, `parse(s): Text`, `parse.GeneralizedResult <= parse(s)`}
+  refusal no_value {`parse(s) 2`} by {`disjunctive constraint lend 2`, `disjunctive constraint parse 2`, `lend 2.Lent: &mut parse(s) 2`, `parse 2.GeneralizedResult <= parse(s) 2`, `parse(s) 2: Text`}
+  refusal no_value {`parse.Generalized(0)`} by {`disjunctive constraint parse`, `parse.Generalized(0): not {&, &mut}`, `parse.GeneralizedResult: Vec<parse.Generalized(0)>`}
+  refusal no_value {`parse.GeneralizedResult`} by {`disjunctive constraint parse`, `parse.GeneralizedResult <= parse(s)`, `parse.GeneralizedResult: Vec<parse.Generalized(0)>`}
+  refusal no_value {`parse 2.Generalized(0)`} by {`disjunctive constraint parse 2`, `parse 2.Generalized(0): not {&, &mut}`, `parse 2.GeneralizedResult: Vec<parse 2.Generalized(0)>`}
+  refusal no_value {`parse 2.GeneralizedResult`} by {`disjunctive constraint parse 2`, `parse 2.GeneralizedResult <= parse(s) 2`, `parse 2.GeneralizedResult: Vec<parse 2.Generalized(0)>`}
   I* of a final state: []

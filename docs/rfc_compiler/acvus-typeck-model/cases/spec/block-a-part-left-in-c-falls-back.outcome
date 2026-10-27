@@ -8,6 +8,7 @@ outcome 1
   value `{..}()`: Vec<!>
   value `λ result`: none
   decision call: calls {λ}
+  decision new: new#0
   check `call#λ/new() <= call#λ/λ result`: Ok(Identity)
   check `call#λ/new.Result <= call#λ/new()`: Ok(Identity)
   check `call#λ/λ result <= {..}()`: Ok(Identity)

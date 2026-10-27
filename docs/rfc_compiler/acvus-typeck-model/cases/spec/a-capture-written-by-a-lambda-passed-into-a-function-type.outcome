@@ -5,7 +5,7 @@ outcome 1
   value `()`: ()
   value ?k: !
   value G: Fn/1
-  value L: Option<U>
+  value L: none
   value None: Option<!>
   value S: U
   value `Some(x)`: Option<U>
@@ -14,10 +14,39 @@ outcome 1
   value `take(a)`: ()
   value `|x| ..`: Fn/1
   value `λ result`: ()
+  decision apply: apply#0
+  decision take: take#0
+  check `G ~> apply.Param(0)`: Ok(Undecided)
+  check `G ~> apply.Param(0)#λ/λ result ~> apply.Param(0).Return`: Ok(Identity)
+  check `X <= S`: Ok(Identity)
+  check `apply.Param(0).Param(0) <= X`: Ok(Identity)
+  check `apply.Result <= apply(g)`: Ok(Identity)
+  check `take.Result <= take(a)`: Ok(Identity)
+  check `|x| .. <= G`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
+  refusal no_value {L} by {`L ~> take.Param(0)`, `L: Option<L.Payload(Some)>`, `L: Text`, `None <= L`, `Some(x) <= L`, `disjunctive constraint take`}
+  refusal no_join {`L.Payload(Some)`} by {`?k <=p L.Payload(Some)`, `L.Payload(Some) ~> take.Param(0).Payload(Some)`, `L: Option<L.Payload(Some)>`, `S <=p L.Payload(Some)`}
+  I* of a final state: []
+outcome 2
+  refused
+  value `()`: ()
+  value ?k: U
+  value G: Fn/1
+  value L: Option<U>
+  value None: Option<U>
+  value S: U
+  value `Some(x)`: Option<U>
+  value X: U
+  value `apply(g)`: ()
+  value `take(a)`: ()
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision apply: apply#0
+  decision take: take#0
   check `G ~> apply.Param(0)`: Ok(Undecided)
   check `G ~> apply.Param(0)#λ/λ result ~> apply.Param(0).Return`: Ok(Identity)
   check `L ~> take.Param(0)`: Err(None)
-  check `None <= L`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
+  check `None <= L`: Ok(Identity)
   check `Some(x) <= L`: Ok(Identity)
   check `X <= S`: Ok(Identity)
   check `apply.Param(0).Param(0) <= X`: Ok(Identity)
@@ -25,4 +54,115 @@ outcome 1
   check `take.Result <= take(a)`: Ok(Identity)
   check `|x| .. <= G`: Ok(Identity)
   check `() <= λ result`: Ok(Identity)
+  I* of a final state: []
+outcome 3
+  refused
+  value `()`: ()
+  value ?k: T
+  value G: Fn/1
+  value L: Option<T>
+  value None: Option<T>
+  value S: U
+  value `Some(x)`: Option<U>
+  value X: U
+  value `apply(g)`: ()
+  value `take(a)`: ()
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision apply: apply#0
+  decision take: take#0
+  check `G ~> apply.Param(0)`: Ok(Undecided)
+  check `G ~> apply.Param(0)#λ/λ result ~> apply.Param(0).Return`: Ok(Identity)
+  check `L ~> take.Param(0)`: Ok(Identity)
+  check `None <= L`: Ok(Identity)
+  check `Some(x) <= L`: Err(None)
+  check `X <= S`: Ok(Identity)
+  check `apply.Param(0).Param(0) <= X`: Ok(Identity)
+  check `apply.Result <= apply(g)`: Ok(Identity)
+  check `take.Result <= take(a)`: Ok(Identity)
+  check `|x| .. <= G`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
+  I* of a final state: []
+outcome 4
+  accepted
+  value `()`: ()
+  value ?k: T
+  value G: Fn/1
+  value L: Option<T>
+  value None: Option<T>
+  value S: T
+  value `Some(x)`: Option<T>
+  value X: U
+  value `apply(g)`: ()
+  value `take(a)`: ()
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision apply: apply#0
+  decision take: take#0
+  check `G ~> apply.Param(0)`: Ok(Undecided)
+  check `G ~> apply.Param(0)#λ/λ result ~> apply.Param(0).Return`: Ok(Identity)
+  check `L ~> take.Param(0)`: Ok(Identity)
+  check `None <= L`: Ok(Identity)
+  check `Some(x) <= L`: Ok(Identity)
+  check `X <= S`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
+  check `apply.Param(0).Param(0) <= X`: Ok(Identity)
+  check `apply.Result <= apply(g)`: Ok(Identity)
+  check `take.Result <= take(a)`: Ok(Identity)
+  check `|x| .. <= G`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
+  I* of a final state: []
+outcome 5
+  accepted
+  value `()`: ()
+  value ?k: T
+  value G: Fn/1
+  value L: Option<T>
+  value None: Option<T>
+  value S: T
+  value `Some(x)`: Option<T>
+  value X: T
+  value `apply(g)`: ()
+  value `take(a)`: ()
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision apply: apply#0
+  decision take: take#0
+  check `G ~> apply.Param(0)`: Ok(Undecided)
+  check `G ~> apply.Param(0)#λ/λ result ~> apply.Param(0).Return`: Ok(Identity)
+  check `L ~> take.Param(0)`: Ok(Identity)
+  check `None <= L`: Ok(Identity)
+  check `Some(x) <= L`: Ok(Identity)
+  check `X <= S`: Ok(Identity)
+  check `apply.Param(0).Param(0) <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
+  check `apply.Result <= apply(g)`: Ok(Identity)
+  check `take.Result <= take(a)`: Ok(Identity)
+  check `|x| .. <= G`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
+  I* of a final state: []
+outcome 6
+  refused
+  value `()`: ()
+  value ?k: T
+  value G: Fn/1
+  value L: none
+  value None: Option<T>
+  value S: U
+  value `Some(x)`: Option<U>
+  value X: U
+  value `apply(g)`: ()
+  value `take(a)`: ()
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision apply: apply#0
+  decision take: take#0
+  check `G ~> apply.Param(0)`: Ok(Undecided)
+  check `G ~> apply.Param(0)#λ/λ result ~> apply.Param(0).Return`: Ok(Identity)
+  check `X <= S`: Ok(Identity)
+  check `apply.Param(0).Param(0) <= X`: Ok(Identity)
+  check `apply.Result <= apply(g)`: Ok(Identity)
+  check `take.Result <= take(a)`: Ok(Identity)
+  check `|x| .. <= G`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
+  refusal no_value {L} by {`L ~> take.Param(0)`, `L: Option<L.Payload(Some)>`, `L: Text`, `None <= L`, `Some(x) <= L`, `disjunctive constraint take`}
+  refusal no_join {`L.Payload(Some)`} by {`?k <=p L.Payload(Some)`, `L.Payload(Some) ~> take.Param(0).Payload(Some)`, `L: Option<L.Payload(Some)>`, `S <=p L.Payload(Some)`}
   I* of a final state: []

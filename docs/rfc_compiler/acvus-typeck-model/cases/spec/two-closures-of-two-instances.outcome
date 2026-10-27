@@ -20,10 +20,9 @@ outcome 1
   value `g(4u16)`: u16
   value `|x| x + k`: Fn/1
   value `λ result`: none
+  decision `&k`: lend & place
   decision `&x`: lend & place
-  decision `adder@5/&k`: lend & place
   decision `adder@5/x + k`: core::add#0
-  decision `adder@7/&k`: lend & place
   decision `adder@7/x + k`: core::add#1
   decision `f call`: calls {`adder@5/λ`}
   decision `g call`: calls {`adder@7/λ`}

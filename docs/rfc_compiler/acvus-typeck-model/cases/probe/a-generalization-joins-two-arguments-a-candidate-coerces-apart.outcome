@@ -14,6 +14,7 @@ outcome 1
   value `make()`: Vec<u8>
   decision `&a`: lend & place
   decision `&v`: lend & place
+  decision make: make#0
   decision same: same#0
   check `&a ~> same.Param(1)`: Ok(Composition { reborrow: false, casts: [DeclId { name: core::array_view, overload: 0 }], structural: None })
   check `&v ~> same.Param(0)`: Ok(Composition { reborrow: false, casts: [DeclId { name: core::as_slice, overload: 0 }], structural: None })

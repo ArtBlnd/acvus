@@ -20,5 +20,5 @@ R = `&x`;
 
 must fail;
 assert `&x` == lend & place;
-assert `&r` == lend & through &;
+assert `&r` == lend & through;
 assert failing [`&r ~> take.Param(0)`];

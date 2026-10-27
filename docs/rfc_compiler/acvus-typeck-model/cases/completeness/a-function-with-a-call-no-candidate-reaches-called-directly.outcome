@@ -1,7 +1,7 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
+  accepted
   value 1u8: u8
   value 2u8: u8
   value M: C
@@ -13,7 +13,7 @@ outcome 1
   value `make_c()`: C
   value `probe(m)`: ()
   value unit: ()
-  decision `g@5/probe`: undecided
+  decision make_c: make_c#0
   check `1u8 <= X`: Ok(Identity)
   check `2u8 <= g@5/PB`: Ok(Identity)
   check `X <= g@5/PA`: Ok(Identity)

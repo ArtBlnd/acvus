@@ -13,10 +13,11 @@ outcome 1
   value `one()`: i32
   value `|acc, s| ..`: Fn/2
   value `λ result`: none
+  decision `&acc`: lend & place
+  decision `&s`: lend & place
   decision `f 1`: calls {λ}
-  decision `f 1#λ/&acc`: lend & place
-  decision `f 1#λ/&s`: lend & place
   decision `f 1#λ/add`: core::add#0
+  decision one: one#0
   check `0 <= f 1#λ/ACC`: Ok(Identity)
   check `f 1#λ/&acc ~> f 1#λ/add.Param(0)`: Ok(Identity)
   check `f 1#λ/&s ~> f 1#λ/add.Param(1)`: Ok(Identity)

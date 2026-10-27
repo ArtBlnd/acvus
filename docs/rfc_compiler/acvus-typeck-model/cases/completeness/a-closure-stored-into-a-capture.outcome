@@ -1,0 +1,22 @@
+// What the model gives, written by `BLESS=1`.
+run: 200 sampled orders
+outcome 1
+  accepted
+  value K: none
+  value P: Fn/1
+  value SLOT: Option<Fn/1>
+  value `Some(..)`: Option<Fn/1>
+  value X: none
+  value `same(..)`: ()
+  value unit: ()
+  value `|k| ..`: Fn/1
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  value `μ result`: ()
+  decision same: same#0
+  check `Some(..) <= SLOT`: Ok(Identity)
+  check `|x| .. <= P`: Ok(Identity)
+  check `unit <= λ result`: Ok(Identity)
+  check `same(..) <= μ result`: Ok(Identity)
+  check `same.Result <= same(..)`: Ok(Identity)
+  I* of a final state: []

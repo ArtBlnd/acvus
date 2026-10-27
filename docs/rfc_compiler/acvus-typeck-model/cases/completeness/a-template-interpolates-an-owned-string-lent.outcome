@@ -13,6 +13,7 @@ outcome 1
   decision `&mut out`: lend &mut place
   decision `&whole`: lend & place
   decision display: core::display#0
+  decision to_string: to_string#0
   check `&e ~> display.Param(0)`: Ok(Identity)
   check `&mut out ~> display.GeneralizedParam(1)`: Ok(Identity)
   check `&whole ~> to_string.Param(0)`: Ok(Identity)

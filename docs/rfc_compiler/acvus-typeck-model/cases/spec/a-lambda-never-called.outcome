@@ -9,6 +9,7 @@ outcome 1
   value `takes_u8(x)`: ()
   value `|| ..`: Fn/0
   value `λ result`: ()
+  decision takes_u8: takes_u8#0
   check `"s" <= X`: Ok(Identity)
   check `X ~> takes_u8.Param(0)`: Err(None)
   check `|| .. <= f`: Ok(Identity)

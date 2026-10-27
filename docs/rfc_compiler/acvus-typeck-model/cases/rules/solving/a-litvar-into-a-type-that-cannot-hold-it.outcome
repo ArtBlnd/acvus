@@ -2,8 +2,9 @@
 run: every order
 outcome 1
   refused
-  value 300: i32
+  value 300: none
   value `take(300)`: ()
-  check `300 ~> take.Param(0)`: Err(None)
+  decision take: take#0
   check `take.Result <= take(300)`: Ok(Identity)
+  refusal conflict: {i16, i32, i64, u16, u32, u64} vs Scalar(Int(U8)) {300} by {`300 ~> take.Param(0)`, `300: Text`, `300: u8`, `300: {i16, i32, i64, u16, u32, u64}`, `disjunctive constraint take`}
   I* of a final state: []

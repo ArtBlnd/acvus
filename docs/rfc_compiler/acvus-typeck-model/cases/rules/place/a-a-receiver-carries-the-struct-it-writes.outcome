@@ -9,8 +9,8 @@ outcome 1
   value `first result`: none
   value self: none
   value `self.l`: none
-  decision `first@2/self.l`: applied
+  decision `self.l`: applied
   check `1u8 ~> first@2/self`: Err(None)
+  check `first@2/first A <= first@2/first result`: Ok(Identity)
   check `first@2/first result <= Pair::first(1u8)`: Ok(Identity)
-  check `first@2/self.l <= first@2/first result`: Ok(Identity)
   I* of a final state: []

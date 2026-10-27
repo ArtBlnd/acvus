@@ -1,5 +1,6 @@
 use super::*;
 use crate::lit::{LitVar, Literal};
+use crate::relation::{Item, Recorder, Relation};
 use crate::ty::{IntTy, Scalar};
 
 fn setup(names: &[&str]) -> (Arena, Classes, Vec<ClassId>) {
@@ -11,6 +12,30 @@ fn setup(names: &[&str]) -> (Arena, Classes, Vec<ClassId>) {
     let mut classes = Classes::default();
     classes.grow(&arena);
     (arena, classes, ids)
+}
+
+/// Records the domain on the class of `id`, and unifies what it holds then.
+fn give_domain(
+    classes: &mut Classes,
+    id: ClassId,
+    domain: Domain,
+    types: &DeclaredTypes,
+) -> Result<(), Conflict> {
+    classes.record(Item::Relation(Relation::Domain(id, domain.clone())), Recorder::Origin);
+    classes.unifying(types).domain_given(id, &domain).result()
+}
+
+/// Records the structure constraint on the class of `id`, and unifies what it
+/// holds then.
+fn give_structure_constraint(
+    classes: &mut Classes,
+    id: ClassId,
+    structure_constraint: StructureConstraint,
+    types: &DeclaredTypes,
+) -> Result<(), Conflict> {
+    let relation = Relation::StructureConstraint(id, structure_constraint);
+    classes.record(Item::Relation(relation), Recorder::Origin);
+    classes.unifying(types).constrained(id).result()
 }
 
 fn u8_() -> Term<ClassId> {
@@ -62,24 +87,24 @@ fn a_literal_domain_is_held_by_a_scalar_admitting_its_values() {
     let types = DeclaredTypes::default();
     let (_, mut classes, ids) = setup(&["L", "U", "M"]);
     let [l, u, m] = ids[..] else { unreachable!() };
-    classes
-        .give_domain(
-            l,
-            Domain::of_literal(&LitVar::of(Literal::Int(255))),
-            &types,
-        )
-        .unwrap();
+    give_domain(
+        &mut classes,
+        l,
+        Domain::of_literal(&LitVar::of(Literal::Int(255))),
+        &types,
+    )
+    .unwrap();
     classes
         .give_structure(u, u8_(), StructureSource::Written, &types)
         .unwrap();
     classes.unify(l, u, &types).unwrap();
-    classes
-        .give_domain(
-            m,
-            Domain::of_literal(&LitVar::of(Literal::Int(256))),
-            &types,
-        )
-        .unwrap();
+    give_domain(
+        &mut classes,
+        m,
+        Domain::of_literal(&LitVar::of(Literal::Int(256))),
+        &types,
+    )
+    .unwrap();
     assert!(matches!(
         classes.unify(m, u, &types),
         Err(Conflict::Domain(..))
@@ -93,12 +118,20 @@ fn structure_constraints_of_one_part_name_one_class_and_are_satisfied_by_the_str
     let [a, t1, t2, x] = ids[..] else {
         unreachable!()
     };
-    classes
-        .give_structure_constraint(a, StructureConstraint::Field(Name::new("x"), t1), &types)
-        .unwrap();
-    classes
-        .give_structure_constraint(a, StructureConstraint::Field(Name::new("x"), t2), &types)
-        .unwrap();
+    give_structure_constraint(
+        &mut classes,
+        a,
+        StructureConstraint::Field(Name::new("x"), t1),
+        &types,
+    )
+    .unwrap();
+    give_structure_constraint(
+        &mut classes,
+        a,
+        StructureConstraint::Field(Name::new("x"), t2),
+        &types,
+    )
+    .unwrap();
     assert!(classes.same(t1, t2));
     let fields = [(Name::new("x"), x)].into();
     classes
@@ -111,7 +144,7 @@ fn structure_constraints_of_one_part_name_one_class_and_are_satisfied_by_the_str
         payload: t1,
     };
     assert!(matches!(
-        classes.give_structure_constraint(a, variant, &types),
+        give_structure_constraint(&mut classes, a, variant, &types),
         Err(Conflict::StructureConstraint(..))
     ));
 }

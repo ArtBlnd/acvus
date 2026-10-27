@@ -1,9 +1,10 @@
 //! Equivalence classes: their names, union-find, type variables and structures.
 //!
 //! A type variable is one type, represented by an equivalence class.
-//! An equivalence class holds type variables, of which the model keeps the
-//! domain their values may take, and at most one structure. Unifying two merges them, the structure
-//! the conjunction of the two, and unifies their parts of one name in turn.
+//! An equivalence class holds type variables and at most one structure, and
+//! the domains the record gives it bound the constructors their values may
+//! take. Unifying two merges them, the structure the conjunction of the two,
+//! and unifies their parts of one name in turn.
 //! `Unifying` reports each union it makes, with its cause, and the
 //! conflict that stops it.
 
@@ -11,9 +12,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
+use crate::check::Cause as Refused;
+use crate::disjunction::{Decision, Disjunction};
 use crate::domain::Domain;
+use crate::relation::{Item, Recorded, Recorder, Relation, Role, Standing};
 use crate::sig::{DeclaredTypes, SigVar};
-use crate::ty::{Constructor, ERR, Member, NONE, Name, OK, PartKey, SOME, Term};
+use crate::ty::{Constructor, Member, Name, PartKey, Term};
 
 #[cfg(test)]
 mod tests;
@@ -23,8 +27,8 @@ mod tests;
 pub enum ClassName {
     /// A type the text gives, by the name the program gives it.
     Text(Name),
-    /// The part `key` of the named class: made anew when its equivalence class
-    /// takes a constructor, or written with it.
+    /// The part `key` of the named class, made with the structure that names
+    /// it.
     Part(Rc<ClassName>, PartKey),
     /// A class a use or a lend of this name made anew.
     Disjunction(Rc<Name>, crate::disjunction::DisjunctionAt),
@@ -171,52 +175,14 @@ impl StructureConstraint {
         }
     }
 
-    /// The member this structure constraint names where the body's text writes it, which is
-    /// visible to this body: a field, or a variant of an enum the text
-    /// names.
-    /// The constructor of the member this structure constraint names, with the members that
-    /// constructor holds of it, whether visible or not: an object's
-    /// field, an enum's variant the text names, and the language's `Some`,
-    /// `None`, `Ok` and `Err`, whose constructor holds both its members.
-    pub fn named_member(&self) -> Option<(Constructor, BTreeSet<Member>)> {
-        if let Some((constructor, member)) = self.visible_member() {
-            return Some((constructor, [member].into()));
-        }
-        let StructureConstraint::Payload {
-            enum_name: None,
-            variant,
-            ..
-        } = self
-        else {
-            return None;
-        };
-        let both = |a: &str, b: &str| -> BTreeSet<Member> {
-            [a, b]
-                .into_iter()
-                .map(|name| Member::Variant(Name::new(name)))
-                .collect()
-        };
-        match variant.as_str() {
-            SOME | NONE => Some((Constructor::Option, both(SOME, NONE))),
-            OK | ERR => Some((Constructor::Result, both(OK, ERR))),
-            _ => None,
-        }
-    }
-
-    pub fn visible_member(&self) -> Option<(Constructor, Member)> {
+    /// The key of the part it names.
+    pub fn key(&self) -> PartKey {
         match self {
-            StructureConstraint::Field(field, _) => {
-                Some((Constructor::Object, Member::Field(field.clone())))
-            }
-            StructureConstraint::Payload {
-                enum_name: Some(enum_name),
-                variant,
-                ..
-            } => Some((
-                Constructor::Enum(enum_name.clone()),
-                Member::Variant(variant.clone()),
-            )),
-            _ => None,
+            StructureConstraint::Target(_) => PartKey::Target,
+            StructureConstraint::Field(field, _) => PartKey::Field(field.clone()),
+            StructureConstraint::Component(i, _) => PartKey::Component(*i),
+            StructureConstraint::Element(_) => PartKey::Element,
+            StructureConstraint::Payload { variant, .. } => PartKey::Payload(variant.clone()),
         }
     }
 }
@@ -224,26 +190,61 @@ impl StructureConstraint {
 /// Where the structure an equivalence class holds came from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum StructureSource {
-    /// A type the text or a declaration writes, held through equations from
-    /// before solving decides it.
+    /// A term the text, a declaration or a decided alternative writes, held
+    /// through equations.
     Written,
-    /// The equivalence class took it when it was solved.
+    /// A term solving gives the class: a decomposition's, fallback's, or an
+    /// identity made anew.
     Solved,
 }
 
-/// What one equivalence class holds.
+/// Which side of a relation a class it names is.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Side {
+    /// The value passes from it: the `τ` of `τ ≤ α` and of `τ ≤ₚ α`, the `T`
+    /// of `T ⇝ U`, and the error value of a wrap.
+    Lower,
+    /// The value passes into it: the `α`, the `U`, and the class the error
+    /// value is wrapped into.
+    Upper,
+    /// The relation is on it: a structure, a structure constraint, a domain
+    /// or a lambda its Values names.
+    Own,
+    /// A part a structure writes or a structure constraint names.
+    Part,
+    /// A side of an equation.
+    Equated,
+}
+
+/// An occurrence of a class in an item of the record: the item's place, and
+/// the role of the class in it.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct Occurrence {
+    pub at: usize,
+    pub role: Role,
+}
+
+impl Occurrence {
+    /// The side of the item the class is, as the judgment reads it; none for
+    /// an item's bookkeeping.
+    pub fn side(&self) -> Option<Side> {
+        self.role.side()
+    }
+}
+
+/// What one equivalence class holds: what unification made of it, and every
+/// occurrence of its members in the record.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Held {
     pub members: BTreeSet<ClassId>,
     pub structure: Option<(Term<ClassId>, StructureSource)>,
-    pub structure_constraints: BTreeSet<StructureConstraint>,
-    /// The constructors its value may take, where a literal, a generalization or
-    /// a lend gives them.
-    pub domain: Option<Domain>,
-    /// The lambdas the Values of the function values reaching it name, joined.
-    pub values: BTreeSet<Name>,
-    /// Whether it took its constructor and members, written or joined.
-    pub solved: bool,
+    /// Why it has no value, where it has none: what it holds no type holds,
+    /// what enters it has no join, or it reaches a part of its own. The
+    /// first cause found is kept; a refusal names the class, not the cause's
+    /// order.
+    pub no_value: Option<Refused>,
+    /// The occurrences of its members, in the order recorded.
+    pub occurrences: Vec<Occurrence>,
 }
 
 /// Why no type holds the conjunction of what two equivalence classes hold.
@@ -311,11 +312,15 @@ impl fmt::Display for NamedConflict<'_> {
     }
 }
 
-/// The equivalence classes over one arena.
+/// The record: every item recorded, in order, and the equivalence classes
+/// over one arena, each holding the items that name its members.
 #[derive(Clone, Default, Debug)]
 pub struct Classes {
     parent: Vec<ClassId>,
     held: BTreeMap<ClassId, Held>,
+    items: Vec<Recorded>,
+    /// Each disjunctive constraint's place in the record, by its name.
+    names: BTreeMap<Name, usize>,
 }
 
 /// Why two equivalence classes are unified.
@@ -416,10 +421,8 @@ impl Classes {
                 Held {
                     members: [id].into(),
                     structure: None,
-                    structure_constraints: BTreeSet::new(),
-                    domain: None,
-                    values: BTreeSet::new(),
-                    solved: false,
+                    no_value: None,
+                    occurrences: Vec::new(),
                 },
             );
         }
@@ -468,43 +471,170 @@ impl Classes {
             .result()
     }
 
-    /// Marks the equivalence class of `id` as having taken its constructor.
-    pub fn mark_solved(&mut self, id: ClassId) {
-        let root = self.find(id);
-        self.held.get_mut(&root).expect("a root holds").solved = true;
+    /// Records the item: it is kept at its place in the record, and each
+    /// class occurring in it holds the occurrence. Returns its place. Panics
+    /// where a disjunctive constraint of the item's name is recorded already.
+    pub fn record(&mut self, item: Item, recorder: Recorder) -> usize {
+        let at = self.items.len();
+        if let Item::Disjunction { name, .. } = &item
+            && self.names.insert(name.clone(), at).is_some()
+        {
+            panic!("the record names the disjunctive constraint {name} once");
+        }
+        let occurrences = item.occurrences();
+        self.items.push(Recorded {
+            item,
+            recorder,
+            decomposed: false,
+        });
+        for (class, role) in occurrences {
+            self.attach(at, class, role);
+        }
+        at
     }
 
-    /// As `Unifying::give_structure_constraint`, with the conflict alone.
-    pub fn give_structure_constraint(
-        &mut self,
-        id: ClassId,
-        structure_constraint: StructureConstraint,
-        types: &DeclaredTypes,
-    ) -> Result<(), Conflict> {
-        self.unifying(types)
-            .give_structure_constraint(id, structure_constraint)
-            .result()
-    }
-
-    /// As `Unifying::give_domain`, with the conflict alone.
-    pub fn give_domain(
-        &mut self,
-        id: ClassId,
-        domain: Domain,
-        types: &DeclaredTypes,
-    ) -> Result<(), Conflict> {
-        self.unifying(types).give_domain(id, domain).result()
-    }
-
-    /// Records a lambda the Values of the class of `id` names.
-    pub fn give_value(&mut self, id: ClassId, lambda: Name) {
-        let root = self.find(id);
+    /// Attaches the class to the item at `at` in `role`: the one way a class
+    /// comes to participate in an item, as the item is recorded and as the
+    /// item makes classes anew afterwards.
+    pub fn attach(&mut self, at: usize, class: ClassId, role: Role) {
+        let root = self.find(class);
         self.held
             .get_mut(&root)
             .expect("a root holds")
-            .values
-            .insert(lambda);
+            .occurrences
+            .push(Occurrence { at, role });
     }
+
+    /// The class in `role` of the item at `at`, where one is.
+    pub fn in_role(&self, at: usize, role: &Role) -> Option<ClassId> {
+        self.held.iter().find_map(|(&root, held)| {
+            held.occurrences
+                .iter()
+                .any(|occurrence| occurrence.at == at && occurrence.role == *role)
+                .then_some(root)
+        })
+    }
+
+    /// Every class of the item at `at`, each with its role, in the order
+    /// attached.
+    pub fn roles_of(&self, at: usize) -> Vec<(ClassId, Role)> {
+        let mut found: Vec<(usize, ClassId, Role)> = Vec::new();
+        for (&root, held) in &self.held {
+            for (i, occurrence) in held.occurrences.iter().enumerate() {
+                if occurrence.at == at {
+                    found.push((i, root, occurrence.role.clone()));
+                }
+            }
+        }
+        found.sort();
+        found.into_iter().map(|(_, class, role)| (class, role)).collect()
+    }
+
+    /// The standing of the class of `id`, where the record gives it one.
+    pub fn standing(&self, id: ClassId) -> Option<&Standing> {
+        self.relations_at(id, Side::Own)
+            .find_map(|relation| match relation {
+                Relation::Standing(_, standing) => Some(standing),
+                _ => None,
+            })
+    }
+
+    /// Every item recorded, in order.
+    pub fn items(&self) -> &[Recorded] {
+        &self.items
+    }
+
+    /// The place in the record of the disjunctive constraint of this name.
+    pub fn disjunction_at(&self, name: &Name) -> Option<usize> {
+        self.names.get(name).copied()
+    }
+
+    /// Every disjunctive constraint of the record, in order: its place,
+    /// name, kind and decision.
+    pub fn disjunctions(
+        &self,
+    ) -> impl Iterator<Item = (usize, &Name, &Disjunction, Option<&Decision>)> + '_ {
+        self.items.iter().enumerate().filter_map(|(at, recorded)| {
+            recorded
+                .disjunction()
+                .map(|(name, kind, decision)| (at, name, kind, decision))
+        })
+    }
+
+    /// Gives the disjunctive constraint at `at` its decision, or takes it
+    /// back where `decision` is none.
+    pub fn decide(&mut self, at: usize, decision: Option<Decision>) {
+        let Item::Disjunction { decision: held, .. } = &mut self.items[at].item else {
+            panic!("the item at {at} is a disjunctive constraint");
+        };
+        *held = decision;
+    }
+
+    /// The occurrences of the members of the class of `id`, in order.
+    pub fn occurrences(&self, id: ClassId) -> &[Occurrence] {
+        &self.held(id).occurrences
+    }
+
+    /// The relations a member of the class of `id` occurs in on the side
+    /// `side`.
+    fn relations_at(&self, id: ClassId, side: Side) -> impl Iterator<Item = &Relation> + '_ {
+        self.occurrences(id)
+            .iter()
+            .filter(move |occurrence| occurrence.side() == Some(side))
+            .filter_map(|occurrence| self.items[occurrence.at].relation())
+    }
+
+    /// The constructors the value of the class of `id` may take: what every
+    /// domain on it admits; none where no domain is on it.
+    pub fn domain(&self, id: ClassId) -> Option<Domain> {
+        self.relations_at(id, Side::Own)
+            .filter_map(|relation| match relation {
+                Relation::Domain(_, domain) => Some(domain.clone()),
+                _ => None,
+            })
+            .reduce(|met, domain| {
+                met.meet(&domain)
+                    .unwrap_or_else(|| Domain::Only(BTreeSet::new()))
+            })
+    }
+
+    /// The structure constraints on the class of `id`.
+    pub fn structure_constraints(&self, id: ClassId) -> BTreeSet<StructureConstraint> {
+        self.relations_at(id, Side::Own)
+            .filter_map(|relation| match relation {
+                Relation::StructureConstraint(_, structure_constraint) => {
+                    Some(structure_constraint.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The lambdas the Values of the class of `id` names.
+    pub fn values(&self, id: ClassId) -> BTreeSet<Name> {
+        self.relations_at(id, Side::Own)
+            .filter_map(|relation| match relation {
+                Relation::Values(_, lambda) => Some(lambda.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Records that the equivalence class of `id` has no value, for `cause`,
+    /// where no cause is recorded yet.
+    pub fn refuse(&mut self, id: ClassId, cause: Refused) {
+        let root = self.find(id);
+        let held = self.held.get_mut(&root).expect("a root holds");
+        if held.no_value.is_none() {
+            held.no_value = Some(cause);
+        }
+    }
+
+    /// Marks the relation at `at` as decomposed.
+    pub fn mark_decomposed(&mut self, at: usize) {
+        self.items[at].decomposed = true;
+    }
+
 
     /// As `Unifying::unify`, with the conflict alone.
     pub fn unify(&mut self, a: ClassId, b: ClassId, types: &DeclaredTypes) -> Result<(), Conflict> {
@@ -515,8 +645,10 @@ impl Classes {
     /// structure constraints of one part name with each other and with its structure's part, and
     /// its structure's constructor checked against its domain.
     fn normalize(&mut self, root: ClassId, types: &DeclaredTypes) -> Result<Vec<Pair>, Conflict> {
-        let held = self.held.get_mut(&root).expect("a root holds");
-        if let (Some(domain), Some((structure, _))) = (&held.domain, &held.structure) {
+        let domain = self.domain(root);
+        let structure_constraints = self.structure_constraints(root);
+        let held = &self.held[&root];
+        if let (Some(domain), Some((structure, _))) = (&domain, &held.structure) {
             let constructor = structure.constructor();
             if !domain.admits(&constructor) {
                 return Err(Conflict::Domain(domain.clone(), Some(constructor)));
@@ -524,7 +656,7 @@ impl Classes {
         }
         let mut pairs = Vec::new();
         let mut by_part: BTreeMap<ConstrainedPart, ClassId> = BTreeMap::new();
-        for structure_constraint in &held.structure_constraints {
+        for structure_constraint in &structure_constraints {
             let part = ConstrainedPart::of(structure_constraint);
             let cause = || Cause::StructureConstraint {
                 class: root,
@@ -544,7 +676,7 @@ impl Classes {
                 if let (Term::Extern { .. }, StructureConstraint::Element(_)) =
                     (structure, structure_constraint)
                 {
-                    // The state links it along the container's view.
+                    // Its decomposition links it along the container's view.
                     continue;
                 }
                 if let Term::Never = structure {
@@ -622,45 +754,35 @@ impl Unifying<'_> {
         self.unify_pairs(pairs)
     }
 
-    pub fn give_structure_constraint(
-        mut self,
-        id: ClassId,
-        structure_constraint: StructureConstraint,
-    ) -> Unified {
+    /// Unifies what the class of `id` holds now that the record has a new
+    /// structure constraint on it.
+    pub fn constrained(mut self, id: ClassId) -> Unified {
         let root = self.classes.find(id);
-        self.classes
-            .held
-            .get_mut(&root)
-            .expect("a root holds")
-            .structure_constraints
-            .insert(structure_constraint);
         let given = self
             .normalize(root)
             .and_then(|pairs| self.unify_pairs(pairs));
         self.finish(given)
     }
 
-    /// Narrows the domain of the equivalence class of `id` to what it and
-    /// `domain` both admit.
-    pub fn give_domain(mut self, id: ClassId, domain: Domain) -> Unified {
-        let given = self.domain_given(id, domain);
-        self.finish(given)
-    }
-
-    fn domain_given(&mut self, id: ClassId, domain: Domain) -> Result<(), Conflicted> {
+    /// Unifies what the class of `id` holds now that the record has the
+    /// domain `domain` on it: its domains admit nothing in common where they
+    /// conflict.
+    pub fn domain_given(mut self, id: ClassId, domain: &Domain) -> Unified {
         let root = self.classes.find(id);
-        {
-            let held = self.classes.held.get_mut(&root).expect("a root holds");
-            held.domain = Some(match &held.domain {
-                Some(own) => own.meet(&domain).ok_or_else(|| Conflicted::Holds {
-                    members: held.members.clone(),
-                    conflict: Conflict::Domain(domain.clone(), None),
-                })?,
-                None => domain,
-            });
-        }
-        let pairs = self.normalize(root)?;
-        self.unify_pairs(pairs)
+        let admitted = self.classes.domain(root).is_some_and(|met| match met {
+            Domain::Only(admitted) => !admitted.is_empty(),
+            Domain::Except(_) => true,
+        });
+        let given = if admitted {
+            self.normalize(root)
+                .and_then(|pairs| self.unify_pairs(pairs))
+        } else {
+            Err(Conflicted::Holds {
+                members: self.classes.held[&root].members.clone(),
+                conflict: Conflict::Domain(domain.clone(), None),
+            })
+        };
+        self.finish(given)
     }
 
     /// Merges the two equivalence classes, and their parts of one name in turn.
@@ -715,24 +837,21 @@ impl Unifying<'_> {
                     }
                     (structure, other) => structure.clone().or_else(|| other.clone()),
                 };
-            let domain = match (&kept.domain, &merged.domain) {
-                (Some(domain), Some(other)) => Some(
-                    domain
-                        .meet(other)
-                        .ok_or_else(|| apart(Conflict::Domain(other.clone(), None)))?,
-                ),
-                (domain, other) => domain.clone().or_else(|| other.clone()),
-            };
+            if let (Some(domain), Some(other)) = (classes.domain(keep), classes.domain(gone)) {
+                domain
+                    .meet(&other)
+                    .ok_or_else(|| apart(Conflict::Domain(other.clone(), None)))?;
+            }
             self.classes.parent[gone.0] = keep;
             let merged = self.classes.held.remove(&gone).expect("a root holds");
             let held = self.classes.held.get_mut(&keep).expect("a root holds");
             held.members.extend(merged.members);
-            held.values.extend(merged.values);
-            held.structure_constraints
-                .extend(merged.structure_constraints);
+            held.occurrences.extend(merged.occurrences);
+            held.occurrences.sort();
             held.structure = structure;
-            held.domain = domain;
-            held.solved |= merged.solved;
+            if held.no_value.is_none() {
+                held.no_value = merged.no_value;
+            }
             let structure = held
                 .structure
                 .as_ref()
@@ -836,8 +955,8 @@ fn resolve(
     }
 }
 
-/// A structure written by the text or a declaration keeps the equivalence class
-/// "with an equation" whatever else it is unified with.
+/// A written structure keeps the equivalence class written whatever else it is
+/// unified with.
 fn joined_source(a: StructureSource, b: StructureSource) -> StructureSource {
     if a == StructureSource::Written || b == StructureSource::Written {
         StructureSource::Written

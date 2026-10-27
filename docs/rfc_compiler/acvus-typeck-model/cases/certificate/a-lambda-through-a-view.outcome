@@ -11,6 +11,7 @@ outcome 1
   value `|x| x`: Fn/1
   value `λ result`: none
   decision `f call`: calls {λ}
+  decision single: single#0
   decision `v[0]`: applied
   check `2u8 <= f call#λ/X`: Ok(Identity)
   check `f call#λ/X <= f call#λ/λ result`: Ok(Identity)

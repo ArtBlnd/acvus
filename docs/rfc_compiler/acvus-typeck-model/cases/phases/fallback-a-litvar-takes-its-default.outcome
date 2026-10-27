@@ -4,18 +4,25 @@ outcome 1
   accepted
   value 0: i32
   value A: i32
-  partition {0, A}
   check `0 <= A`: Ok(Identity)
   I* of a final state: []
 start run
-  record #0 0: ?{0}: int
-  record #1 0 <= A
-  decomposition #0 0: ?{0}: int: no parts
-step 1 run: solve A
-  lit lowers 0
-    record #2 0 = A
-  join 0: nothing
-  decomposition #1 0 <= A: one class
-  decomposition #2 0 = A: no parts
+  record #0 A: Text
+  record #1 0: Text
+  record #2 0: {i8, i16, i32, i64, u8, u16, u32, u64}
+  record #3 0 <= A
+  decomposition #0 A: Text: no parts
+  decomposition #1 0: Text: no parts
+  decomposition #2 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
+step 1 run: join A
+  join A: bounded {i8, i16, i32, i64, u8, u16, u32, u64}
+    record #4 A: {i8, i16, i32, i64, u8, u16, u32, u64}
+  decomposition #4 A: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
 fallback 2 run
+  default A: i32
+    record #5 A: i32
   default 0: i32
+    record #6 0: i32
+  decomposition #3 0 <= A: parts
+  decomposition #5 A: i32: no parts
+  decomposition #6 0: i32: no parts

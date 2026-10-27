@@ -1,6 +1,58 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
+  refused
+  value A: none
+  value B: none
+  value C: none
+  value `mk result`: F<new open>
+  value `mk() 1`: none
+  value `mk() 2`: none
+  value `open()`: F<new open>
+  decision open: open#0
+  check `open() <= mk result`: Ok(Identity)
+  check `open.Result <= open()`: Ok(Identity)
+  refusal no_value {A} by {`A <= C`, `A: F<A.Identity>`, `A: Text`, `mk() 1 <= A`}
+  refusal no_value {B} by {`B <= C`, `B: F<B.Identity>`, `B: Text`, `mk() 2 <= B`}
+  refusal no_value {C} by {`A <= C`, `B <= C`, `C: F<C.Identity>`, `C: Text`}
+  refusal no_value {`mk() 1`} by {`mk() 1 <= A`, `mk() 1: F<mk() 1.Identity>`, `mk() 1: Text`, `mk@2/mk result <= mk() 1`}
+  refusal no_value {`mk() 2`} by {`mk() 2 <= B`, `mk() 2: F<mk() 2.Identity>`, `mk() 2: Text`, `mk@4/mk result <= mk() 2`}
+  refusal conflict: Identity(mk@2/new open) vs Identity(mk@4/new open) {`A.Identity`, `mk() 1.Identity`, `mk@2/mk result.Identity`} by {`A.Identity = C.Identity`, `A: F<A.Identity>`, `instance mk@2`, `mk() 1.Identity = A.Identity`, `mk() 1: F<mk() 1.Identity>`, `mk@2/mk result.Identity = mk() 1.Identity`, `mk@2/mk result.Identity: mk@2/new open`, `mk@2/mk result: F<mk@2/mk result.Identity>`, `mk@2/open(): F<mk@2/mk result.Identity>`, `mk@2/open.Result: F<mk@2/mk result.Identity>`}
+  refusal conflict: Identity(mk@2/new open) vs Identity(mk@4/new open) {`B.Identity`, `C.Identity`, `mk() 2.Identity`, `mk@4/mk result.Identity`} by {`A.Identity = C.Identity`, `B.Identity = C.Identity`, `B: F<B.Identity>`, `C: F<C.Identity>`, `instance mk@4`, `mk() 2.Identity = B.Identity`, `mk() 2: F<mk() 2.Identity>`, `mk@4/mk result.Identity = mk() 2.Identity`, `mk@4/mk result.Identity: mk@4/new open`, `mk@4/mk result: F<mk@4/mk result.Identity>`, `mk@4/open(): F<mk@4/mk result.Identity>`, `mk@4/open.Result: F<mk@4/mk result.Identity>`}
+  refusal no_value {`mk@2/mk result`} by {`instance mk@2`, `mk@2/mk result <= mk() 1`, `mk@2/mk result: F<mk@2/mk result.Identity>`, `mk@2/open() <= mk@2/mk result`}
+  refusal no_value {`mk@2/open()`} by {`instance mk@2`, `mk@2/open() <= mk@2/mk result`, `mk@2/open(): F<mk@2/mk result.Identity>`, `mk@2/open.Result <= mk@2/open()`}
+  refusal no_value {`mk@2/open.Result`} by {`instance mk@2`, `mk@2/open.Result <= mk@2/open()`, `mk@2/open.Result: F<mk@2/mk result.Identity>`}
+  refusal no_value {`mk@4/mk result`} by {`instance mk@4`, `mk@4/mk result <= mk() 2`, `mk@4/mk result: F<mk@4/mk result.Identity>`, `mk@4/open() <= mk@4/mk result`}
+  refusal no_value {`mk@4/open()`} by {`instance mk@4`, `mk@4/open() <= mk@4/mk result`, `mk@4/open(): F<mk@4/mk result.Identity>`, `mk@4/open.Result <= mk@4/open()`}
+  refusal no_value {`mk@4/open.Result`} by {`instance mk@4`, `mk@4/open.Result <= mk@4/open()`, `mk@4/open.Result: F<mk@4/mk result.Identity>`}
+  I* of a final state: []
+outcome 2
+  refused
+  value A: none
+  value B: none
+  value C: none
+  value `mk result`: F<new open>
+  value `mk() 1`: none
+  value `mk() 2`: none
+  value `open()`: F<new open>
+  decision open: open#0
+  check `open() <= mk result`: Ok(Identity)
+  check `open.Result <= open()`: Ok(Identity)
+  refusal no_value {A} by {`A <= C`, `A: F<A.Identity>`, `A: Text`, `mk() 1 <= A`}
+  refusal no_value {B} by {`B <= C`, `B: F<B.Identity>`, `B: Text`, `mk() 2 <= B`}
+  refusal no_value {C} by {`A <= C`, `B <= C`, `C: F<C.Identity>`, `C: Text`}
+  refusal no_value {`mk() 1`} by {`mk() 1 <= A`, `mk() 1: F<mk() 1.Identity>`, `mk() 1: Text`, `mk@2/mk result <= mk() 1`}
+  refusal no_value {`mk() 2`} by {`mk() 2 <= B`, `mk() 2: F<mk() 2.Identity>`, `mk() 2: Text`, `mk@4/mk result <= mk() 2`}
+  refusal conflict: Identity(mk@2/new open) vs Identity(mk@4/new open) {`A.Identity`, `C.Identity`, `mk() 1.Identity`, `mk@2/mk result.Identity`} by {`A.Identity = C.Identity`, `A: F<A.Identity>`, `B.Identity = C.Identity`, `C: F<C.Identity>`, `instance mk@2`, `mk() 1.Identity = A.Identity`, `mk() 1: F<mk() 1.Identity>`, `mk@2/mk result.Identity = mk() 1.Identity`, `mk@2/mk result.Identity: mk@2/new open`, `mk@2/mk result: F<mk@2/mk result.Identity>`, `mk@2/open(): F<mk@2/mk result.Identity>`, `mk@2/open.Result: F<mk@2/mk result.Identity>`}
+  refusal conflict: Identity(mk@2/new open) vs Identity(mk@4/new open) {`B.Identity`, `mk() 2.Identity`, `mk@4/mk result.Identity`} by {`B.Identity = C.Identity`, `B: F<B.Identity>`, `instance mk@4`, `mk() 2.Identity = B.Identity`, `mk() 2: F<mk() 2.Identity>`, `mk@4/mk result.Identity = mk() 2.Identity`, `mk@4/mk result.Identity: mk@4/new open`, `mk@4/mk result: F<mk@4/mk result.Identity>`, `mk@4/open(): F<mk@4/mk result.Identity>`, `mk@4/open.Result: F<mk@4/mk result.Identity>`}
+  refusal no_value {`mk@2/mk result`} by {`instance mk@2`, `mk@2/mk result <= mk() 1`, `mk@2/mk result: F<mk@2/mk result.Identity>`, `mk@2/open() <= mk@2/mk result`}
+  refusal no_value {`mk@2/open()`} by {`instance mk@2`, `mk@2/open() <= mk@2/mk result`, `mk@2/open(): F<mk@2/mk result.Identity>`, `mk@2/open.Result <= mk@2/open()`}
+  refusal no_value {`mk@2/open.Result`} by {`instance mk@2`, `mk@2/open.Result <= mk@2/open()`, `mk@2/open.Result: F<mk@2/mk result.Identity>`}
+  refusal no_value {`mk@4/mk result`} by {`instance mk@4`, `mk@4/mk result <= mk() 2`, `mk@4/mk result: F<mk@4/mk result.Identity>`, `mk@4/open() <= mk@4/mk result`}
+  refusal no_value {`mk@4/open()`} by {`instance mk@4`, `mk@4/open() <= mk@4/mk result`, `mk@4/open(): F<mk@4/mk result.Identity>`, `mk@4/open.Result <= mk@4/open()`}
+  refusal no_value {`mk@4/open.Result`} by {`instance mk@4`, `mk@4/open.Result <= mk@4/open()`, `mk@4/open.Result: F<mk@4/mk result.Identity>`}
+  I* of a final state: []
+outcome 3
   accepted
   value A: F<mk@2/new open>
   value B: F<mk@4/new open>
@@ -9,6 +61,7 @@ outcome 1
   value `mk() 1`: F<mk@2/new open>
   value `mk() 2`: F<mk@4/new open>
   value `open()`: F<new open>
+  decision open: open#0
   check `A <= C`: Ok(Composition { reborrow: false, casts: [DeclId { name: forget, overload: 0 }], structural: None })
   check `B <= C`: Ok(Composition { reborrow: false, casts: [DeclId { name: forget, overload: 0 }], structural: None })
   check `mk() 1 <= A`: Ok(Identity)
@@ -21,4 +74,56 @@ outcome 1
   check `mk@4/open.Result <= mk@4/open()`: Ok(Identity)
   check `open() <= mk result`: Ok(Identity)
   check `open.Result <= open()`: Ok(Identity)
+  I* of a final state: []
+outcome 4
+  refused
+  value A: none
+  value B: none
+  value C: none
+  value `mk result`: F<new open>
+  value `mk() 1`: none
+  value `mk() 2`: none
+  value `open()`: F<new open>
+  decision open: open#0
+  check `open() <= mk result`: Ok(Identity)
+  check `open.Result <= open()`: Ok(Identity)
+  refusal no_value {A} by {`A <= C`, `A: F<A.Identity>`, `A: Text`, `mk() 1 <= A`}
+  refusal no_value {B} by {`B <= C`, `B: F<B.Identity>`, `B: Text`, `mk() 2 <= B`}
+  refusal no_value {C} by {`A <= C`, `B <= C`, `C: F<C.Identity>`, `C: Text`}
+  refusal no_value {`mk() 1`} by {`mk() 1 <= A`, `mk() 1: F<mk() 1.Identity>`, `mk() 1: Text`, `mk@2/mk result <= mk() 1`}
+  refusal no_value {`mk() 2`} by {`mk() 2 <= B`, `mk() 2: F<mk() 2.Identity>`, `mk() 2: Text`, `mk@4/mk result <= mk() 2`}
+  refusal conflict: Identity(mk@2/new open) vs Identity(mk@4/new open) {`A.Identity`, `B.Identity`, `C.Identity`, `mk() 2.Identity`, `mk@4/mk result.Identity`} by {`A.Identity = C.Identity`, `A: F<A.Identity>`, `B.Identity = C.Identity`, `B: F<B.Identity>`, `C: F<C.Identity>`, `instance mk@4`, `mk() 1.Identity = A.Identity`, `mk() 2.Identity = B.Identity`, `mk() 2: F<mk() 2.Identity>`, `mk@4/mk result.Identity = mk() 2.Identity`, `mk@4/mk result.Identity: mk@4/new open`, `mk@4/mk result: F<mk@4/mk result.Identity>`, `mk@4/open(): F<mk@4/mk result.Identity>`, `mk@4/open.Result: F<mk@4/mk result.Identity>`}
+  refusal conflict: Identity(mk@2/new open) vs Identity(mk@4/new open) {`mk() 1.Identity`, `mk@2/mk result.Identity`} by {`instance mk@2`, `mk() 1.Identity = A.Identity`, `mk() 1: F<mk() 1.Identity>`, `mk@2/mk result.Identity = mk() 1.Identity`, `mk@2/mk result.Identity: mk@2/new open`, `mk@2/mk result: F<mk@2/mk result.Identity>`, `mk@2/open(): F<mk@2/mk result.Identity>`, `mk@2/open.Result: F<mk@2/mk result.Identity>`}
+  refusal no_value {`mk@2/mk result`} by {`instance mk@2`, `mk@2/mk result <= mk() 1`, `mk@2/mk result: F<mk@2/mk result.Identity>`, `mk@2/open() <= mk@2/mk result`}
+  refusal no_value {`mk@2/open()`} by {`instance mk@2`, `mk@2/open() <= mk@2/mk result`, `mk@2/open(): F<mk@2/mk result.Identity>`, `mk@2/open.Result <= mk@2/open()`}
+  refusal no_value {`mk@2/open.Result`} by {`instance mk@2`, `mk@2/open.Result <= mk@2/open()`, `mk@2/open.Result: F<mk@2/mk result.Identity>`}
+  refusal no_value {`mk@4/mk result`} by {`instance mk@4`, `mk@4/mk result <= mk() 2`, `mk@4/mk result: F<mk@4/mk result.Identity>`, `mk@4/open() <= mk@4/mk result`}
+  refusal no_value {`mk@4/open()`} by {`instance mk@4`, `mk@4/open() <= mk@4/mk result`, `mk@4/open(): F<mk@4/mk result.Identity>`, `mk@4/open.Result <= mk@4/open()`}
+  refusal no_value {`mk@4/open.Result`} by {`instance mk@4`, `mk@4/open.Result <= mk@4/open()`, `mk@4/open.Result: F<mk@4/mk result.Identity>`}
+  I* of a final state: []
+outcome 5
+  refused
+  value A: none
+  value B: none
+  value C: none
+  value `mk result`: F<new open>
+  value `mk() 1`: none
+  value `mk() 2`: none
+  value `open()`: F<new open>
+  decision open: open#0
+  check `open() <= mk result`: Ok(Identity)
+  check `open.Result <= open()`: Ok(Identity)
+  refusal no_value {A} by {`A <= C`, `A: F<A.Identity>`, `A: Text`, `mk() 1 <= A`}
+  refusal no_value {B} by {`B <= C`, `B: F<B.Identity>`, `B: Text`, `mk() 2 <= B`}
+  refusal no_value {C} by {`A <= C`, `B <= C`, `C: F<C.Identity>`, `C: Text`}
+  refusal no_value {`mk() 1`} by {`mk() 1 <= A`, `mk() 1: F<mk() 1.Identity>`, `mk() 1: Text`, `mk@2/mk result <= mk() 1`}
+  refusal no_value {`mk() 2`} by {`mk() 2 <= B`, `mk() 2: F<mk() 2.Identity>`, `mk() 2: Text`, `mk@4/mk result <= mk() 2`}
+  refusal conflict: Identity(mk@2/new open) vs Identity(mk@4/new open) {`A.Identity`, `B.Identity`, `C.Identity`, `mk() 1.Identity`, `mk@2/mk result.Identity`} by {`A.Identity = C.Identity`, `A: F<A.Identity>`, `B.Identity = C.Identity`, `B: F<B.Identity>`, `C: F<C.Identity>`, `instance mk@2`, `mk() 1.Identity = A.Identity`, `mk() 1: F<mk() 1.Identity>`, `mk() 2.Identity = B.Identity`, `mk@2/mk result.Identity = mk() 1.Identity`, `mk@2/mk result.Identity: mk@2/new open`, `mk@2/mk result: F<mk@2/mk result.Identity>`, `mk@2/open(): F<mk@2/mk result.Identity>`, `mk@2/open.Result: F<mk@2/mk result.Identity>`}
+  refusal conflict: Identity(mk@2/new open) vs Identity(mk@4/new open) {`mk() 2.Identity`, `mk@4/mk result.Identity`} by {`instance mk@4`, `mk() 2.Identity = B.Identity`, `mk() 2: F<mk() 2.Identity>`, `mk@4/mk result.Identity = mk() 2.Identity`, `mk@4/mk result.Identity: mk@4/new open`, `mk@4/mk result: F<mk@4/mk result.Identity>`, `mk@4/open(): F<mk@4/mk result.Identity>`, `mk@4/open.Result: F<mk@4/mk result.Identity>`}
+  refusal no_value {`mk@2/mk result`} by {`instance mk@2`, `mk@2/mk result <= mk() 1`, `mk@2/mk result: F<mk@2/mk result.Identity>`, `mk@2/open() <= mk@2/mk result`}
+  refusal no_value {`mk@2/open()`} by {`instance mk@2`, `mk@2/open() <= mk@2/mk result`, `mk@2/open(): F<mk@2/mk result.Identity>`, `mk@2/open.Result <= mk@2/open()`}
+  refusal no_value {`mk@2/open.Result`} by {`instance mk@2`, `mk@2/open.Result <= mk@2/open()`, `mk@2/open.Result: F<mk@2/mk result.Identity>`}
+  refusal no_value {`mk@4/mk result`} by {`instance mk@4`, `mk@4/mk result <= mk() 2`, `mk@4/mk result: F<mk@4/mk result.Identity>`, `mk@4/open() <= mk@4/mk result`}
+  refusal no_value {`mk@4/open()`} by {`instance mk@4`, `mk@4/open() <= mk@4/mk result`, `mk@4/open(): F<mk@4/mk result.Identity>`, `mk@4/open.Result <= mk@4/open()`}
+  refusal no_value {`mk@4/open.Result`} by {`instance mk@4`, `mk@4/open.Result <= mk@4/open()`, `mk@4/open.Result: F<mk@4/mk result.Identity>`}
   I* of a final state: []

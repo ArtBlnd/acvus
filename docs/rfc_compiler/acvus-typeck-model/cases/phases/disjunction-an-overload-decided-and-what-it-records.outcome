@@ -10,18 +10,23 @@ outcome 1
   check `x ~> f.Param(0)`: Ok(Identity)
   I* of a final state: []
 start run
-  record #0 x: u8
-  generalization
-    record #1 f.Generalized(0): not {&, &mut}
-    record #2 f.Generalized(0) <= R
-  decomposition #0 x: u8: no parts
-  decomposition #1 f.Generalized(0): not {&, &mut}: no parts
+  record #0 x: Text
+  record #1 R: Text
+  record #2 x: u8
+  record #3 disjunctive constraint f
+  record #4 f.Generalized(0): not {&, &mut}
+  record #5 f.Generalized(0) <= R
+  decomposition #0 x: Text: no parts
+  decomposition #1 R: Text: no parts
+  decomposition #2 x: u8: no parts
+  decomposition #3 disjunctive constraint f: no parts
+  decomposition #4 f.Generalized(0): not {&, &mut}: no parts
 step 1 run: decide f
   decide f: f#0
-    record #3 f.Param(0): u8
-    record #4 x ~> f.Param(0)
-    record #5 f.Chosen(0): u8
-    record #6 f.Chosen(0) <= f.Generalized(0)
-  decomposition #3 f.Param(0): u8: no parts
-  decomposition #4 x ~> f.Param(0): parts
-  decomposition #5 f.Chosen(0): u8: no parts
+    record #6 f.Param(0): u8
+    record #7 x ~> f.Param(0)
+    record #8 f.Chosen(0): u8
+    record #9 f.Chosen(0) <= f.Generalized(0)
+  decomposition #6 f.Param(0): u8: no parts
+  decomposition #7 x ~> f.Param(0): parts
+  decomposition #8 f.Chosen(0): u8: no parts

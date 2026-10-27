@@ -8,17 +8,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::class::{ClassId, ClassName, StructureSource};
-use crate::disjunction::{Disjunction, DisjunctionState};
+use crate::disjunction::{Disjunction, DisjunctionAt};
 use crate::domain::Domain;
 use crate::instance::Instance;
 use crate::program::{Function, Item, Origin, Part, Place, Position, Program, TextClass};
-use crate::relation::{Recorded, Recorder, Relation};
+use crate::relation::{Item as RecordItem, Recorder, Relation, Role};
 use crate::sig::{SigTy, SigVar};
 use crate::solve::State;
 use crate::ty::{Name, PartKey, Term, Ty};
 use crate::unify::Unification;
 
-/// A relation's place in the log, and what unification did as the
+/// A relation's place in the record, and what unification did as the
 /// equivalence classes took it.
 #[must_use]
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -29,7 +29,7 @@ pub struct Entry {
 
 /// An instance made while recording: its name, what made it, the
 /// binding group whose C it copies, and the relations it recorded, by their
-/// places in the log.
+/// places in the record.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Instantiated {
     pub at: Name,
@@ -56,7 +56,7 @@ impl Recording {
         self.instances.append(&mut other.instances);
     }
 
-    /// The relations recorded, by their places in the log.
+    /// The relations recorded, by their places in the record.
     pub fn places(&self) -> impl Iterator<Item = usize> + '_ {
         self.entries.iter().map(|entry| entry.at)
     }
@@ -67,12 +67,34 @@ impl Recording {
 }
 
 impl State {
-    /// Records the relation, which the equivalence classes take at once.
+    /// Records the relation in the record, which the equivalence classes take
+    /// at once, having no value where they cannot.
     pub(crate) fn record(&mut self, relation: Relation, recorder: Recorder) -> Entry {
+        let at = self
+            .classes
+            .record(RecordItem::Relation(relation.clone()), recorder);
         let unification = self.hold(&relation);
-        let at = self.log.len();
-        self.log.push(Recorded { relation, recorder });
         Entry { at, unification }
+    }
+
+    /// Records the disjunctive constraint `name` in the record, undecided.
+    /// The equivalence classes take nothing from it until it is decided.
+    pub(crate) fn add_disjunction(
+        &mut self,
+        name: &Name,
+        kind: Disjunction,
+        recorder: Recorder,
+    ) -> Entry {
+        let item = RecordItem::Disjunction {
+            name: name.clone(),
+            kind,
+            decision: None,
+        };
+        let at = self.classes.record(item, recorder);
+        Entry {
+            at,
+            unification: Unification::default(),
+        }
     }
 
     /// The types the text gives its classes: a literal's LitVar, a type the
@@ -145,7 +167,7 @@ impl State {
                     let lower_bound = match place {
                         Place::ThroughRef => false,
                         Place::ByName => {
-                            self.is_unknown(into) || self.enclosing_unknowns.contains(&into)
+                            self.is_unknown(into) || self.is_enclosing_unknown(into)
                         }
                         Place::Slot => self.is_unknown(into),
                     };
@@ -173,7 +195,7 @@ impl State {
                         args: args.iter().map(|arg| self.text(arg)).collect(),
                         result: self.text(result),
                     };
-                    self.add_disjunction(name, kind);
+                    recorded.push(self.add_disjunction(name, kind, Recorder::Text(i)));
                 }
                 Item::Use { callee, args, .. } if program.function(callee).is_some() => {
                     let function = program.function(callee).expect("the function is declared");
@@ -191,7 +213,15 @@ impl State {
                         .into_iter()
                         .filter_map(|position| Some((position, held(self, position)?)))
                         .collect();
-                    recorded.append(self.record_one(name, callee, args.len(), &held));
+                    let kind = Disjunction::Use {
+                        callee: callee.clone(),
+                        args: (0..args.len())
+                            .map(|k| held.iter().find(|(p, _)| *p == Position::Arg(k)).map(|(_, c)| *c))
+                            .collect(),
+                        result: held.iter().find(|(p, _)| *p == Position::Result).map(|(_, c)| *c),
+                        exit: held.iter().find(|(p, _)| *p == Position::Exit).map(|(_, c)| *c),
+                    };
+                    recorded.append(self.record_one(name, callee, kind, Recorder::Text(i)));
                 }
                 Item::Use {
                     name, callee, args, ..
@@ -220,9 +250,6 @@ impl State {
                         .iter()
                         .filter_map(|&position| Some((position, held(self, position)?)))
                         .collect();
-                    if !apart.is_empty() {
-                        recorded.append(self.record_closed(name, callee, args.len(), &apart));
-                    }
                     let disjunction = |position: Position| {
                         held(self, position).filter(|_| !closed.contains(&position))
                     };
@@ -238,14 +265,13 @@ impl State {
                             .then(|| disjunction(Position::Exit))
                             .flatten(),
                     };
-                    let Disjunction::Use {
-                        args, result, exit, ..
-                    } = &kind
-                    else {
-                        unreachable!("the kind is a use's");
-                    };
-                    if args.iter().any(Option::is_some) || result.is_some() || exit.is_some() {
-                        self.add_disjunction(name, kind);
+                    // The use is an item of every group that records a
+                    // position of it; one holding no position where the
+                    // candidates differ has nothing to decide here.
+                    recorded.push(self.add_disjunction(name, kind, Recorder::Text(i)));
+                    recorded.append(self.record_shared(name));
+                    if !apart.is_empty() {
+                        recorded.append(self.record_closed(name, callee, args.len(), &apart));
                     }
                 }
                 Item::Lend {
@@ -259,7 +285,8 @@ impl State {
                         place: self.text(place),
                         result: self.text(result),
                     };
-                    self.add_disjunction(name, kind);
+                    recorded.push(self.add_disjunction(name, kind, Recorder::Text(i)));
+                    recorded.append(self.record_shared(name));
                 }
                 Item::Project {
                     name,
@@ -272,7 +299,7 @@ impl State {
                         operand: self.text(operand),
                         result: self.text(result),
                     };
-                    self.add_disjunction(name, kind);
+                    recorded.push(self.add_disjunction(name, kind, Recorder::Text(i)));
                 }
                 Item::Bind {
                     name,
@@ -285,28 +312,12 @@ impl State {
                         position: self.text(position),
                         binding: self.text(binding),
                     };
-                    self.add_disjunction(name, kind);
+                    recorded.push(self.add_disjunction(name, kind, Recorder::Text(i)));
                 }
                 Item::Equation(..) => {}
             }
         }
         recorded
-    }
-
-    pub(crate) fn add_disjunction(&mut self, name: &Name, kind: Disjunction) {
-        let disjunction = DisjunctionState {
-            kind,
-            decision: None,
-            generalized: None,
-            references: BTreeSet::new(),
-        };
-        if self
-            .disjunctions
-            .insert(name.clone(), disjunction)
-            .is_some()
-        {
-            panic!("the program names the disjunctive constraint {name} once");
-        }
     }
 
     /// A use that calls a function, at the positions of its
@@ -402,10 +413,20 @@ impl State {
         recorded
     }
 
-    /// A class made anew that holds nothing, an unknown of the group.
-    pub(crate) fn fresh(&mut self, name: ClassName) -> ClassId {
-        let class = self.arena.intern(name);
+    /// A class made anew that holds nothing, labelled `label`: the parts a
+    /// structure writes, which the structure's relation attaches, and the
+    /// text's classes, which their standing attaches.
+    pub(crate) fn fresh(&mut self, label: ClassName) -> ClassId {
+        let class = self.arena.intern(label);
         self.classes.grow(&self.arena);
+        class
+    }
+
+    /// A class made anew by an item, in a role of it: made, labelled and
+    /// attached to the item at once.
+    pub(crate) fn make(&mut self, making: Making) -> ClassId {
+        let class = self.fresh(making.label);
+        self.classes.attach(making.item, class, making.role);
         class
     }
 
@@ -413,14 +434,12 @@ impl State {
     /// relation it records kept in `recorded`.
     pub(crate) fn written(
         &mut self,
-        name: ClassName,
+        making: Making,
         term: Term<ClassId>,
         recorder: &Recorder,
         recorded: &mut Recording,
     ) -> ClassId {
-        let class = self.arena.intern(name);
-        self.classes.grow(&self.arena);
-        self.decided.insert(class);
+        let class = self.make(making);
         recorded.push(self.record(
             Relation::Structure(class, term, StructureSource::Written),
             recorder.clone(),
@@ -428,58 +447,157 @@ impl State {
         class
     }
 
-    /// The classes of a type a declaration writes: the type named `name`, its
-    /// parts named after it, and its variables those of `vars`, each made
-    /// where first found and named by `var_name`. A variable is an unknown, and
-    /// a written term is decided. The relations it records are kept in
-    /// `recorded`.
+    /// The classes of a type a declaration writes: the type made by `making`,
+    /// its parts labelled after it, and its variables those of `vars`, each
+    /// made where first found by `var`. A variable is an unknown, and a term
+    /// is written. The relations it records are kept in `recorded`.
     pub(crate) fn instantiate<F>(
         &mut self,
         ty: &SigTy,
         vars: &mut BTreeMap<SigVar, ClassId>,
-        name: ClassName,
-        var_name: &F,
+        making: Making,
+        var: &F,
         recorder: &Recorder,
         recorded: &mut Recording,
     ) -> ClassId
     where
-        F: Fn(SigVar) -> ClassName,
+        F: Fn(SigVar) -> Making,
     {
         match ty {
-            SigTy::Var(var) => {
-                if let Some(&class) = vars.get(var) {
+            SigTy::Var(v) => {
+                if let Some(&class) = vars.get(v) {
                     return class;
                 }
-                let class = self.arena.intern(var_name(*var));
-                self.classes.grow(&self.arena);
-                vars.insert(*var, class);
+                let class = self.make(var(*v));
+                vars.insert(*v, class);
                 class
             }
             SigTy::Term(term) => {
-                let shared = Rc::new(name.clone());
+                let shared = Rc::new(making.label.clone());
                 let term = (**term).clone().map(|key: PartKey, part| {
-                    let part_name = ClassName::Part(shared.clone(), key);
-                    self.instantiate(&part, vars, part_name, var_name, recorder, recorded)
+                    let part = self.instantiate_part(&part, vars, shared.clone(), key, var, recorder, recorded);
+                    part
                 });
-                self.written(name, term, recorder, recorded)
+                self.written(making, term, recorder, recorded)
             }
         }
     }
 
-    /// A class made anew that holds the closed type `ty`, written, the
-    /// relations it records kept in `recorded`.
+    /// A part of a type a declaration writes, labelled after the class
+    /// `owner` whose part of key `key` it is: a variable as `instantiate`
+    /// makes it, and a term written, whose structure attaches its parts.
+    #[allow(clippy::too_many_arguments)]
+    fn instantiate_part<F>(
+        &mut self,
+        ty: &SigTy,
+        vars: &mut BTreeMap<SigVar, ClassId>,
+        owner: Rc<ClassName>,
+        key: PartKey,
+        var: &F,
+        recorder: &Recorder,
+        recorded: &mut Recording,
+    ) -> ClassId
+    where
+        F: Fn(SigVar) -> Making,
+    {
+        match ty {
+            SigTy::Var(v) => {
+                if let Some(&class) = vars.get(v) {
+                    return class;
+                }
+                let class = self.make(var(*v));
+                vars.insert(*v, class);
+                class
+            }
+            SigTy::Term(term) => {
+                let label = ClassName::Part(owner, key);
+                let shared = Rc::new(label.clone());
+                let term = (**term).clone().map(|key: PartKey, part| {
+                    self.instantiate_part(&part, vars, shared.clone(), key, var, recorder, recorded)
+                });
+                let class = self.fresh(label);
+                recorded.push(self.record(
+                    Relation::Structure(class, term, StructureSource::Written),
+                    recorder.clone(),
+                ));
+                class
+            }
+        }
+    }
+
+    /// A class made anew by `making` that holds the closed type `ty`,
+    /// written, its parts labelled after it, the relations it records kept
+    /// in `recorded`.
     pub(crate) fn closed(
         &mut self,
-        name: ClassName,
+        making: Making,
         ty: &Ty,
         recorder: &Recorder,
         recorded: &mut Recording,
     ) -> ClassId {
-        let shared = Rc::new(name.clone());
+        let shared = Rc::new(making.label.clone());
         let term = ty.term().clone().map(|key, part| {
-            let part_name = ClassName::Part(shared.clone(), key);
-            self.closed(part_name, &part, recorder, recorded)
+            self.closed_part(shared.clone(), key, &part, recorder, recorded)
         });
-        self.written(name, term, recorder, recorded)
+        self.written(making, term, recorder, recorded)
+    }
+
+    fn closed_part(
+        &mut self,
+        owner: Rc<ClassName>,
+        key: PartKey,
+        ty: &Ty,
+        recorder: &Recorder,
+        recorded: &mut Recording,
+    ) -> ClassId {
+        let label = ClassName::Part(owner, key);
+        let shared = Rc::new(label.clone());
+        let term = ty.term().clone().map(|key, part| {
+            self.closed_part(shared.clone(), key, &part, recorder, recorded)
+        });
+        let class = self.fresh(label);
+        recorded.push(self.record(
+            Relation::Structure(class, term, StructureSource::Written),
+            recorder.clone(),
+        ));
+        class
+    }
+}
+
+/// A class an item is to make anew: the item, the class's role in it, and
+/// its label.
+#[derive(Clone, Debug)]
+pub struct Making {
+    pub item: usize,
+    pub role: Role,
+    pub label: ClassName,
+}
+
+/// A disjunctive constraint as the maker of classes: each class it makes
+/// is labelled after it and takes the role of what it is made as.
+#[derive(Clone, Debug)]
+pub(crate) struct Owner {
+    pub(crate) item: usize,
+    pub(crate) name: Rc<Name>,
+}
+
+impl Owner {
+    /// The making of the class the disjunctive constraint makes as `at`.
+    pub(crate) fn made(&self, at: DisjunctionAt) -> Making {
+        Making {
+            item: self.item,
+            role: Role::Made(at.clone()),
+            label: ClassName::Disjunction(Rc::clone(&self.name), at),
+        }
+    }
+}
+
+impl State {
+    /// The disjunctive constraint of this name as a maker of classes.
+    pub(crate) fn owner(&self, name: &Name) -> Owner {
+        Owner {
+            item: self.disjunction_at(name),
+            name: Rc::new(name.clone()),
+        }
     }
 }

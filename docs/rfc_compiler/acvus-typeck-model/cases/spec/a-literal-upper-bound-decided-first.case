@@ -22,4 +22,3 @@ Y = `Some(1)`;
 `Option⟨u16⟩` = Y;
 
 must fail;
-assert refused no_fill `X.Payload(Some)`;

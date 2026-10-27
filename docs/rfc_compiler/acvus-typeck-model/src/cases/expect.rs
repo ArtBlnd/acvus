@@ -3,8 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::check::{Outcome, Refusal};
-use crate::class::ClassName;
+use crate::check::{Cause, Outcome, Refusal};
 use crate::coerce::{along_le, coerce};
 use crate::decl::{DeclId, Decls};
 use crate::disjunction::{Decision, LendTarget};
@@ -40,13 +39,9 @@ pub fn decision(text: &str) -> Result<Decision, String> {
         "&mut" => Ok(Mutability::Exclusive),
         other => Err(format!("a reference's mutability, not {other}")),
     };
-    let through = |word: &str| match word {
-        "_" => Ok(None),
-        word => reference(word).map(Some),
-    };
     let target = |words: &[&str]| match words {
         ["place"] => Ok(LendTarget::Place),
-        ["through", mutability] => Ok(LendTarget::Through(through(mutability)?)),
+        ["through"] => Ok(LendTarget::Through),
         _ => Err(format!("a lend's target, not {}", words.join(" "))),
     };
     let decl = |text: &str| -> Result<DeclId, String> {
@@ -78,7 +73,7 @@ pub fn decision(text: &str) -> Result<Decision, String> {
     Ok(match words.as_slice() {
         ["never"] => Decision::Never,
         ["applied"] => Decision::Applied,
-        ["applied", "through", mutability] => Decision::AppliedToTarget(through(mutability)?),
+        ["applied", "through"] => Decision::AppliedToTarget,
         ["read"] => Decision::Read,
         ["lend", mutability, rest @ ..] => Decision::Lend {
             target: target(rest)?,
@@ -131,19 +126,26 @@ fn value_of<'a>(outcome: &'a Outcome, class: &str) -> Option<&'a Option<crate::t
 }
 
 fn refusal_matches(text: &RefusalText, refusal: &Refusal) -> bool {
-    let named = |wanted: &Option<String>, class: &ClassName| {
-        wanted
-            .as_ref()
-            .is_none_or(|wanted| *wanted == class.to_string())
+    let named = |wanted: &Option<String>| {
+        wanted.as_ref().is_none_or(|wanted| {
+            refusal
+                .members
+                .iter()
+                .any(|member| member.to_string() == *wanted)
+        })
     };
-    match (text, refusal) {
-        (RefusalText::Infinite(wanted), Refusal::Infinite(class))
-        | (RefusalText::NoJoin(wanted), Refusal::NoJoin(class))
-        | (RefusalText::NoValue(wanted), Refusal::NoValue(class)) => named(wanted, class),
-        (RefusalText::Conflict(wanted), Refusal::Conflict { at, .. }) => {
-            wanted.as_ref().is_none_or(|wanted| wanted == at)
-        }
-        (RefusalText::Undeclared, Refusal::Undeclared(_)) => true,
+    match (text, &refusal.cause) {
+        (RefusalText::Infinite(wanted), Cause::Infinite)
+        | (RefusalText::NoJoin(wanted), Cause::NoJoin)
+        | (RefusalText::NoValue(wanted), Cause::NoValue) => named(wanted),
+        (RefusalText::Conflict(wanted), Cause::Conflict(_)) => wanted.as_ref().is_none_or(|wanted| {
+            refusal
+                .members
+                .iter()
+                .any(|member| member.to_string() == *wanted)
+                || refusal.items.contains(wanted)
+        }),
+        (RefusalText::Undeclared, Cause::Undeclared(_)) => true,
         _ => false,
     }
 }

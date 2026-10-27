@@ -9,6 +9,7 @@ outcome 1
   value E: u8
   value `sum(..)`: u8
   decision `&a`: lend & place
+  decision sum: sum#0
   check `&a ~> sum.Param(0)`: Ok(Composition { reborrow: false, casts: [DeclId { name: core::array_view, overload: 0 }], structural: None })
   check `1u8 <= E`: Ok(Identity)
   check `2u8 <= E`: Ok(Identity)

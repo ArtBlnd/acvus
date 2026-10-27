@@ -5,6 +5,7 @@ outcome 1
   value 1u8: u8
   value 2u16: u16
   value `pair(..)`: ()
+  decision pair: pair#0
   check `pair.Result <= pair(..)`: Ok(Identity)
-  refusal no_join `pair.Var(Type(0))`
+  refusal no_join {`pair.Var(Type(0))`} by {`1u8 <= pair.Var(Type(0))`, `2u16 <= pair.Var(Type(0))`, `disjunctive constraint pair`}
   I* of a final state: []

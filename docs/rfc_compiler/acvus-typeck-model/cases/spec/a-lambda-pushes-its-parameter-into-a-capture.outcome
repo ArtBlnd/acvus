@@ -18,17 +18,143 @@ outcome 1
   decision `&mut v`: lend &mut place
   decision `f 1`: calls {λ}
   decision `f 2`: calls {λ}
+  decision new: new#0
+  decision push: push#0
   check `f 1#λ/λ result <= f(1u8)`: Ok(Identity)
   check `f 2#λ/λ result <= f(s)`: Ok(Identity)
   check `|x| .. <= F`: Ok(Identity)
   check `push(..) <= λ result`: Ok(Identity)
   check `push.Result <= push(..)`: Ok(Identity)
-  refusal no_join X
-  refusal no_value `&mut v`
-  refusal no_value V
-  refusal no_value `new()`
-  refusal no_value `V.Arg(0)`
-  refusal no_value `push.Param(0).Target`
-  refusal no_value `new.Result`
-  refusal no_value `push.Param(0)`
+  refusal no_value {`&mut v`, `&mut v.Lent`} by {`&mut v = &mut v.Lent`, `&mut v ~> push.Param(0)`, `&mut v.Lent: &mut V`, `&mut v: Text`, `&mut v: {&, &mut, !}`, `disjunctive constraint &mut v`, `disjunctive constraint push`}
+  refusal no_value {V} by {`&mut v.Lent: &mut V`, `V ~> push.Param(0).Target`, `V: Text`, `V: Vec<V.Arg(0)>`, `disjunctive constraint &mut v`, `new() <= V`}
+  refusal no_join {X} by {`1u8 <= X`, `X <= push.Var(Type(0))`, `X: Text`, `disjunctive constraint push`, `s <= X`}
+  refusal no_value {`new()`} by {`disjunctive constraint new`, `new() <= V`, `new(): Text`, `new(): Vec<new().Arg(0)>`, `new.Result <= new()`}
+  refusal no_value {`V.Arg(0)`, `new().Arg(0)`, `new.Var(Type(0))`, `push.Var(Type(0))`} by {`V.Arg(0) = push.Var(Type(0))`, `V: Vec<V.Arg(0)>`, `X <= push.Var(Type(0))`, `disjunctive constraint new`, `disjunctive constraint push`, `new().Arg(0) = V.Arg(0)`, `new(): Vec<new().Arg(0)>`, `new.Result: Vec<new.Var(Type(0))>`, `new.Var(Type(0)) = new().Arg(0)`, `push.Param(0).Target: Vec<push.Var(Type(0))>`}
+  refusal no_value {`push.Param(0).Target`} by {`V ~> push.Param(0).Target`, `push.Param(0).Target: Vec<push.Var(Type(0))>`, `push.Param(0): &mut push.Param(0).Target`}
+  refusal no_value {`new.Result`} by {`disjunctive constraint new`, `new.Result <= new()`, `new.Result: Vec<new.Var(Type(0))>`}
+  refusal no_value {`push.Param(0)`} by {`&mut v ~> push.Param(0)`, `disjunctive constraint push`, `push.Param(0): &mut push.Param(0).Target`}
+  I* of a final state: []
+outcome 2
+  refused
+  value `&mut v`: &mut Vec<&!>
+  value 1u8: u8
+  value F: Fn/1
+  value Str: str
+  value V: Vec<&!>
+  value X: none
+  value `f(1u8)`: ()
+  value `f(s)`: ()
+  value `new()`: Vec<&!>
+  value `push(..)`: ()
+  value s: &str
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision `&mut v`: lend &mut place
+  decision `f 1`: calls {λ}
+  decision `f 2`: calls {λ}
+  decision new: new#0
+  decision push: push#0
+  check `&mut v ~> push.Param(0)`: Ok(Identity)
+  check `f 1#λ/λ result <= f(1u8)`: Ok(Identity)
+  check `f 2#λ/λ result <= f(s)`: Ok(Identity)
+  check `new() <= V`: Ok(Identity)
+  check `new.Result <= new()`: Ok(Identity)
+  check `|x| .. <= F`: Ok(Identity)
+  check `push(..) <= λ result`: Ok(Identity)
+  check `push.Result <= push(..)`: Ok(Identity)
+  refusal no_join {X} by {`1u8 <= X`, `X <= push.Var(Type(0))`, `X: Text`, `disjunctive constraint push`, `s <= X`}
+  I* of a final state: []
+outcome 3
+  refused
+  value `&mut v`: &mut Vec<&str>
+  value 1u8: u8
+  value F: Fn/1
+  value Str: str
+  value V: Vec<&str>
+  value X: &str
+  value `f(1u8)`: ()
+  value `f(s)`: ()
+  value `new()`: Vec<&str>
+  value `push(..)`: ()
+  value s: &str
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision `&mut v`: lend &mut place
+  decision `f 1`: calls {λ}
+  decision `f 2`: calls {λ}
+  decision new: new#0
+  decision push: push#0
+  check `&mut v ~> push.Param(0)`: Ok(Identity)
+  check `1u8 <= X`: Err(None)
+  check `X <= push.Var(Type(0))`: Ok(Identity)
+  check `f 1#λ/λ result <= f(1u8)`: Ok(Identity)
+  check `f 2#λ/λ result <= f(s)`: Ok(Identity)
+  check `new() <= V`: Ok(Identity)
+  check `new.Result <= new()`: Ok(Identity)
+  check `s <= X`: Ok(Identity)
+  check `|x| .. <= F`: Ok(Identity)
+  check `push(..) <= λ result`: Ok(Identity)
+  check `push.Result <= push(..)`: Ok(Identity)
+  I* of a final state: []
+outcome 4
+  refused
+  value `&mut v`: &mut Vec<u8>
+  value 1u8: u8
+  value F: Fn/1
+  value Str: str
+  value V: Vec<u8>
+  value X: none
+  value `f(1u8)`: ()
+  value `f(s)`: ()
+  value `new()`: Vec<u8>
+  value `push(..)`: ()
+  value s: &str
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision `&mut v`: lend &mut place
+  decision `f 1`: calls {λ}
+  decision `f 2`: calls {λ}
+  decision new: new#0
+  decision push: push#0
+  check `&mut v ~> push.Param(0)`: Ok(Identity)
+  check `f 1#λ/λ result <= f(1u8)`: Ok(Identity)
+  check `f 2#λ/λ result <= f(s)`: Ok(Identity)
+  check `new() <= V`: Ok(Identity)
+  check `new.Result <= new()`: Ok(Identity)
+  check `|x| .. <= F`: Ok(Identity)
+  check `push(..) <= λ result`: Ok(Identity)
+  check `push.Result <= push(..)`: Ok(Identity)
+  refusal no_join {X} by {`1u8 <= X`, `X <= push.Var(Type(0))`, `X: Text`, `disjunctive constraint push`, `s <= X`}
+  I* of a final state: []
+outcome 5
+  refused
+  value `&mut v`: &mut Vec<u8>
+  value 1u8: u8
+  value F: Fn/1
+  value Str: str
+  value V: Vec<u8>
+  value X: u8
+  value `f(1u8)`: ()
+  value `f(s)`: ()
+  value `new()`: Vec<u8>
+  value `push(..)`: ()
+  value s: &str
+  value `|x| ..`: Fn/1
+  value `λ result`: ()
+  decision `&mut v`: lend &mut place
+  decision `f 1`: calls {λ}
+  decision `f 2`: calls {λ}
+  decision new: new#0
+  decision push: push#0
+  check `&mut v ~> push.Param(0)`: Ok(Identity)
+  check `1u8 <= X`: Ok(Identity)
+  check `X <= push.Var(Type(0))`: Ok(Identity)
+  check `f 1#λ/λ result <= f(1u8)`: Ok(Identity)
+  check `f 2#λ/λ result <= f(s)`: Ok(Identity)
+  check `new() <= V`: Ok(Identity)
+  check `new.Result <= new()`: Ok(Identity)
+  check `s <= X`: Err(None)
+  check `|x| .. <= F`: Ok(Identity)
+  check `push(..) <= λ result`: Ok(Identity)
+  check `push.Result <= push(..)`: Ok(Identity)
   I* of a final state: []

@@ -2,9 +2,9 @@
 run: every order
 outcome 1
   refused
-  value 1: i32
+  value 1: none
   value A: !
-  value `a[0]`: none
+  value `a[0]`: !
   decision `a[0]`: applied
-  refusal conflict at "a[0]: !": {i8, i16, i32, i64, u8, u16, u32, u64} vs Never
+  refusal conflict: {i8, i16, i32, i64, u8, u16, u32, u64} vs Never {1} by {`1 <= a[0]`, `1: !`, `1: Text`, `1: {i8, i16, i32, i64, u8, u16, u32, u64}`}
   I* of a final state: []

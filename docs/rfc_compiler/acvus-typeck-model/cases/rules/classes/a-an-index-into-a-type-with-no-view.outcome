@@ -11,5 +11,5 @@ outcome 1
   decision `o[0]`: applied
   check `1u8 <= S`: Ok(Identity)
   check `o[0] <= X`: Ok(Identity)
-  refusal conflict at "the value of O": Option vs index o[0]
+  refusal conflict: Option vs index o[0] {O} by {`O: Option<O.Payload(Some)>`, `O: Text`, `O: index o[0]`, `Some(1u8) <= O`, `disjunctive constraint o[0]`}
   I* of a final state: []

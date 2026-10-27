@@ -5,8 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::check::Outcome;
+use crate::judgment::Judgment;
 use crate::program::{ENTRY, Program};
-use crate::solve::{State, Step};
+use crate::solve::State;
 use crate::ty::Name;
 
 /// The outcomes every order of solving reaches.
@@ -21,18 +22,18 @@ pub struct Exploration {
     pub complete: bool,
 }
 
-/// An order of solving: the steps that took each binding group other
+/// An order of solving: the judgments that took each binding group other
 /// than the entry to its fixpoint, in the order the groups are solved,
-/// then the entry's steps to each of its fixpoints, a fallback that
-/// fell a class back taken between one fixpoint and the next steps.
+/// then the entry's judgments to each of its fixpoints, a fallback that
+/// fell a class back taken between one fixpoint and the next judgments.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Order {
-    pub groups: Vec<(Name, Vec<Step>)>,
-    pub entry: Vec<Vec<Step>>,
+    pub groups: Vec<(Name, Vec<Judgment>)>,
+    pub entry: Vec<Vec<Judgment>>,
 }
 
 impl Order {
-    /// The order of no step, before any group is solved.
+    /// The order of no judgment, before any group is solved.
     pub fn new() -> Order {
         Order {
             groups: Vec::new(),
@@ -40,12 +41,12 @@ impl Order {
         }
     }
 
-    /// Takes `step` next in the entry.
-    pub fn push_step(&mut self, step: Step) {
+    /// Takes `judgment` next in the entry.
+    pub fn push_judgment(&mut self, judgment: Judgment) {
         self.entry
             .last_mut()
-            .expect("the entry's steps have a fixpoint to reach")
-            .push(step);
+            .expect("the entry's judgments have a fixpoint to reach")
+            .push(judgment);
     }
 
     /// Takes a fallback next in the entry, which fell a class back.
@@ -71,7 +72,7 @@ pub struct Final<'a> {
 
 /// Solves each binding group other than the entry to its fixpoint in every
 /// order, before the groups that make instances of it, then the entry
-/// in every order, falling back wherever no step is left. A state
+/// in every order, falling back wherever no judgment is left. A state
 /// reached twice is explored once, along the order that reached it first.
 pub fn explore(program: &Program, budget: usize) -> Exploration {
     explore_with(program, budget, |_| {})
@@ -97,11 +98,11 @@ where
                     complete: false,
                 };
             };
-            for (fixpoint, steps) in fixpoints {
+            for (fixpoint, judgments) in fixpoints {
                 let mut solved = solved.clone();
                 solved.insert(group.clone(), Rc::new(fixpoint));
                 let mut order = order.clone();
-                order.groups.push((group.clone(), steps));
+                order.groups.push((group.clone(), judgments));
                 next.push((solved, order));
             }
         }
@@ -124,8 +125,8 @@ where
                     complete: false,
                 };
             }
-            let steps = state.steps();
-            if steps.is_empty() {
+            let judgments = state.judgments();
+            if judgments.is_empty() {
                 let mut next = state.clone();
                 if next.fall_back().fell_back() {
                     let mut order = order.clone();
@@ -144,11 +145,11 @@ where
                 }
                 continue;
             }
-            for step in steps {
+            for judgment in judgments {
                 let mut next = state.clone();
-                next.step(&step);
+                next.step(&judgment);
                 let mut order = order.clone();
-                order.push_step(step);
+                order.push_judgment(judgment);
                 work.push((next, order));
             }
         }
@@ -161,9 +162,13 @@ where
 }
 
 /// The distinct states at which a binding group's solving reaches its
-/// fixpoint, inside which there is no fallback, each with the steps
+/// fixpoint, inside which there is no fallback, each with the judgments
 /// that first reached it, or none where the budget runs out.
-fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<(State, Vec<Step>)>> {
+fn fixpoints(
+    start: State,
+    budget: usize,
+    states: &mut usize,
+) -> Option<Vec<(State, Vec<Judgment>)>> {
     let mut seen = BTreeSet::new();
     let mut reached = BTreeSet::new();
     let mut fixpoints = Vec::new();
@@ -176,18 +181,18 @@ fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<(Sta
         if *states > budget {
             return None;
         }
-        let steps = state.steps();
-        if steps.is_empty() {
+        let judgments = state.judgments();
+        if judgments.is_empty() {
             if reached.insert(state.fingerprint()) {
                 fixpoints.push((state, taken));
             }
             continue;
         }
-        for step in steps {
+        for judgment in judgments {
             let mut next = state.clone();
-            next.step(&step);
+            next.step(&judgment);
             let mut taken = taken.clone();
-            taken.push(step);
+            taken.push(judgment);
             work.push((next, taken));
         }
     }
@@ -196,7 +201,7 @@ fn fixpoints(start: State, budget: usize, states: &mut usize) -> Option<Vec<(Sta
 
 /// The outcomes of distinct typings `orders` orders of solving reach (as
 /// `Exploration::outcomes`), each taking at
-/// every state the step its own sequence picks: the first step always, the
+/// every state the judgment its own sequence picks: the first judgment always, the
 /// last always, then sequences a fixed generator gives.
 pub fn sample(program: &Program, orders: u64) -> Vec<Outcome> {
     sample_with(program, orders, |_| {})
@@ -215,26 +220,26 @@ where
         let mut solved: BTreeMap<Name, Rc<State>> = BTreeMap::new();
         for group in program.group_order() {
             let mut state = State::of_group(program, &group, &solved);
-            let mut steps_taken = Vec::new();
+            let mut judgments_taken = Vec::new();
             loop {
-                let steps = state.steps();
-                if steps.is_empty() {
+                let judgments = state.judgments();
+                if judgments.is_empty() {
                     break;
                 }
-                let step = steps[picks.next(steps.len())].clone();
-                state.step(&step);
-                steps_taken.push(step);
+                let judgment = judgments[picks.next(judgments.len())].clone();
+                state.step(&judgment);
+                judgments_taken.push(judgment);
             }
-            taken.groups.push((group.clone(), steps_taken));
+            taken.groups.push((group.clone(), judgments_taken));
             solved.insert(group, Rc::new(state));
         }
         let mut state = State::of_group(program, &Name::new(ENTRY), &solved);
         loop {
-            let steps = state.steps();
-            if !steps.is_empty() {
-                let step = steps[picks.next(steps.len())].clone();
-                state.step(&step);
-                taken.push_step(step);
+            let judgments = state.judgments();
+            if !judgments.is_empty() {
+                let judgment = judgments[picks.next(judgments.len())].clone();
+                state.step(&judgment);
+                taken.push_judgment(judgment);
                 continue;
             }
             if !state.fall_back().fell_back() {
@@ -255,7 +260,7 @@ where
     outcomes
 }
 
-/// The steps one sampled order picks.
+/// The judgments one sampled order picks.
 struct Picks {
     order: u64,
     state: u64,
@@ -269,15 +274,15 @@ impl Picks {
         }
     }
 
-    fn next(&mut self, steps: usize) -> usize {
+    fn next(&mut self, judgments: usize) -> usize {
         match self.order {
             0 => 0,
-            1 => steps - 1,
+            1 => judgments - 1,
             _ => {
                 self.state ^= self.state << 13;
                 self.state ^= self.state >> 7;
                 self.state ^= self.state << 17;
-                (self.state % steps as u64) as usize
+                (self.state % judgments as u64) as usize
             }
         }
     }
@@ -297,26 +302,27 @@ impl State {
                     format!("{structure:?}/{source:?}")
                 });
                 format!(
-                    "{}:{structure:?}:{:?}:{}:{}",
+                    "{}:{structure:?}:{:?}:{}",
                     self.class_name(root),
-                    held.domain,
-                    held.solved,
+                    self.classes.domain(root),
                     self.has_no_value(root),
                 )
             })
             .collect();
         roots.sort();
-        let decisions: Vec<_> = self
-            .disjunctions
-            .values()
-            .map(|disjunction| &disjunction.decision)
+        let decisions: Vec<_> = self.decisions().into_values().collect();
+        let decomposed: Vec<usize> = self
+            .classes
+            .items()
+            .iter()
+            .enumerate()
+            .filter(|(_, recorded)| recorded.decomposed)
+            .map(|(at, _)| at)
             .collect();
         format!(
-            "{roots:?}|{}|{:?}|{:?}|{decisions:?}|{:?}",
-            self.log.len(),
-            self.decomposed,
-            self.refusals,
-            self.deferred,
+            "{roots:?}|{}|{decomposed:?}|{:?}|{decisions:?}",
+            self.classes.items().len(),
+            self.refusals(),
         )
     }
 }

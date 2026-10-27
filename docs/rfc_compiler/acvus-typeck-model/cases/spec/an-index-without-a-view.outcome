@@ -6,8 +6,9 @@ outcome 1
   value V: none
   value `new()`: Vec<!>
   value `v[0]`: u8
+  decision new: new#0
   decision `v[0]`: applied
   check `1u8 <= v[0]`: Ok(Identity)
   check `new.Result <= new()`: Ok(Identity)
-  refusal conflict at "V: indexes v[0]": Extern(Vec) vs index v[0]
+  refusal conflict: Extern(Vec) vs index v[0] {V} by {`V: Text`, `V: Vec<V.Arg(0)>`, `V: index v[0]`, `disjunctive constraint v[0]`, `new() <= V`}
   I* of a final state: []

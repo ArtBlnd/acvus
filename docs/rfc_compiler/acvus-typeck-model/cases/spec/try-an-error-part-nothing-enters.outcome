@@ -17,7 +17,7 @@ outcome 1
   value `g()`: none
   decision q: ?#1
   check `f@7/Ok(a) <= f@7/f result`: Ok(Identity)
-  check `f@7/exit <= f@7/f result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Ok), Never), (Payload(Err), Identity)] }) })
+  check `f@7/exit <= f@7/f result`: Ok(Identity)
   check `f@7/f result <= f()`: Ok(Identity)
   check `f@7/g() ~> f@7/q.Param(0)`: Ok(Identity)
   check `f@7/g@2/Ok(1u8) <= f@7/g@2/g result`: Ok(Identity)

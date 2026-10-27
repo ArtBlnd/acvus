@@ -2,13 +2,13 @@
 run: every order
 outcome 1
   accepted
-  value ?k: !
+  value ?k: u8
   value A: Option<u8>
-  value None: Option<!>
+  value None: Option<u8>
   value S: u8
   value `Some(1u8)`: Option<u8>
   value u8: u8
-  check `None <= A`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
+  check `None <= A`: Ok(Identity)
   check `Some(1u8) <= A`: Ok(Identity)
   check `u8 <= S`: Ok(Identity)
   I* of a final state: []

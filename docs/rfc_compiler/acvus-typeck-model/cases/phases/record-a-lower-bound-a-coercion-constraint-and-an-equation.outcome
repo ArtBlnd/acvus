@@ -11,12 +11,20 @@ outcome 1
   check `1u8 ~> W`: Ok(Identity)
   I* of a final state: []
 start run
-  record #0 W: u8
-  record #1 1u8: u8
-  record #2 A = B
-  record #3 1u8 <= A
-  record #4 1u8 ~> W
-  decomposition #0 W: u8: no parts
-  decomposition #1 1u8: u8: no parts
-  decomposition #2 A = B: no parts
-  decomposition #4 1u8 ~> W: parts
+  record #0 A: Text
+  record #1 W: Text
+  record #2 B: Text
+  record #3 1u8: Text
+  record #4 W: u8
+  record #5 1u8: u8
+  record #6 A = B
+  record #7 1u8 <= A
+  record #8 1u8 ~> W
+  decomposition #0 A: Text: no parts
+  decomposition #1 W: Text: no parts
+  decomposition #2 B: Text: no parts
+  decomposition #3 1u8: Text: no parts
+  decomposition #4 W: u8: no parts
+  decomposition #5 1u8: u8: no parts
+  decomposition #6 A = B: no parts
+  decomposition #8 1u8 ~> W: parts

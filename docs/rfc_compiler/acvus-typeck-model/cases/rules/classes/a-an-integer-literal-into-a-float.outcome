@@ -2,7 +2,7 @@
 run: every order
 outcome 1
   refused
-  value 1: i32
+  value 1: none
   value `@n`: f64
-  check `1 ~> @n`: Err(None)
+  refusal conflict: {i8, i16, i32, i64, u8, u16, u32, u64} vs Scalar(Float(F64)) {1} by {`1 ~> @n`, `1: Text`, `1: f64`, `1: {i8, i16, i32, i64, u8, u16, u32, u64}`}
   I* of a final state: []

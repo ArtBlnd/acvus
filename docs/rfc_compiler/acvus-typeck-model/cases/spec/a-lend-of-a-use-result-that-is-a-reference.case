@@ -25,6 +25,6 @@ let `&get`;
 
 must pass;
 assert get == get#0;
-assert `&get` == lend & through &;
+assert `&get` == lend & through;
 assert R: &u64;
 assert `&get`: &u64;

@@ -15,6 +15,8 @@ outcome 1
   value `λ result`: ()
   decision choose: choose#1
   decision `f(x)`: calls {λ}
+  decision make_a: make_a#0
+  decision make_b: make_b#0
   check `PUT <= F`: Ok(Identity)
   check `PUT <= choose.Var(Type(0))`: Ok(Identity)
   check `X <= f(x)#λ/W`: Ok(Identity)

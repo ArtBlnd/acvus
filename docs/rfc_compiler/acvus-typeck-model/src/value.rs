@@ -1,115 +1,134 @@
-//! An equivalence class's value: a cycle of lower
-//! bounds and part lower bounds alone merged first, a class that reaches a
-//! part of its own refused, the join of the constructors and members the
-//! sources give, and the structure the class takes with its parts made anew.
+//! An equivalence class's value: the node of the cast tree and the members
+//! its sources give, joined, the structure the class takes at that node with
+//! its parts made anew, the closed type it holds once every part is decided,
+//! and a class that reaches a part of its own, which no finite type holds.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::check::Refusal;
-use crate::class::{ClassId, ClassName, StructureConstraint, StructureSource, Unified};
+use crate::check::Cause;
+use crate::domain::Domain;
+use crate::class::{ClassId, ClassName, Side, StructureConstraint, StructureSource};
 use crate::decl::Node;
 use crate::record::Recording;
 use crate::relation::{Recorder, Relation};
 use crate::solve::State;
-use crate::ty::{Constructor, Member, Name, PartKey, Term, Ty};
+use crate::ty::{Constructor, Member, Mutability, Name, PartKey, Term, Ty};
 
-/// A constructor and its members: what an equivalence class takes when it is
-/// solved, each part then solved on its own.
+/// What a source gives at a join: a node of the cast tree, and the members of
+/// the type at it. A join reads no deeper: the cast tree is a tree over nodes,
+/// so the casts that raise a value are decided by its node alone, and what
+/// lies below a node passes through them as type parameters, which the
+/// decomposition relates.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Head {
-    pub constructor: Constructor,
+    pub node: Node,
     pub members: BTreeSet<Member>,
 }
 
-pub fn head(term: &Term<ClassId>) -> Head {
-    Head {
-        constructor: term.constructor(),
-        members: term.members(),
+impl Head {
+    /// The constructor at the node: a reference's mutability, or the
+    /// constructor itself.
+    pub fn constructor(&self) -> Constructor {
+        match &self.node {
+            Node::Owned(constructor) => constructor.clone(),
+            Node::Ref(mutability, _) => Constructor::Ref(*mutability),
+        }
     }
 }
 
-/// What an equivalence class took when it was solved.
+/// The sources of an equivalence class's value, as the judgment reads them
+/// from the record.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct Sources {
+    /// Each solved lower bound, with what it gives.
+    pub lowers: Vec<(ClassId, Head)>,
+    /// Each solved part lower bound, with what it gives, which reaches the
+    /// value by `≤ₚ`.
+    pub part_lowers: Vec<(ClassId, Head)>,
+    /// What the structure constraints on the class give.
+    pub structure_constraints: Vec<Head>,
+}
+
+impl Sources {
+    pub fn is_empty(&self) -> bool {
+        self.lowers.is_empty() && self.part_lowers.is_empty() && self.structure_constraints.is_empty()
+    }
+}
+
+/// What an equivalence class took at its judgment.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Took {
-    /// The structure it held already.
-    Held,
-    /// The join of the constructors and members its sources give, its parts
-    /// made anew, with what unification did as the class took it, and the
-    /// refusal where the class could not take it.
-    Joined {
-        head: Head,
-        unified: Unified,
-        refused: Option<Refusal>,
-    },
-    /// No source gives a constructor, so it is left unsolved.
-    Nothing,
-    /// Its sources have no join, so it has no value and is refused.
-    NoJoin(Refusal),
-}
-
-/// What an equivalence class's value is taken from when it is solved.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Sources {
-    /// The relations of the log that make the class hold a structure, by their
-    /// places: the equations on its members, and the structures recorded on them.
-    pub equations: Vec<usize>,
-    /// Each solved lower bound, with the constructor and members it gives.
-    pub lowers: Vec<(ClassId, Head)>,
-    /// Each solved part lower bound, with the constructor and members it
-    /// gives, which reach the value by `≤ₚ`.
-    pub part_lowers: Vec<(ClassId, Head)>,
-    /// The constructors and members its structure constraints give.
-    pub structure_constraints: Vec<Head>,
-    /// The lower bounds and part lower bounds not solved, which give
-    /// nothing.
-    pub left_out: Vec<ClassId>,
-}
-
-/// What an equivalence class took when it was solved, and its sources then.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Joined {
-    pub sources: Sources,
-    pub took: Took,
+    /// The join of what its sources give, its parts made anew: the structures
+    /// recorded, with what unification did as the class took them.
+    Joined { head: Head, recorded: Recording },
+    /// Nothing enters it: the one node of the classes it passes into, taken
+    /// with its parts made anew.
+    Filled { head: Head, recorded: Recording },
+    /// Its sources give it no node but a domain: it takes the domain,
+    /// recorded, which bounds its value and which fallback reads.
+    Bounded { domain: Domain, recorded: Recording },
+    /// Its sources, or the classes it passes into, have no join: it has no
+    /// value.
+    NoJoin,
+    /// It reaches a part of its own: no finite type holds it, so it has no
+    /// value.
+    Infinite,
 }
 
 impl State {
-    /// The join of two sources' constructors and members: `!` below
-    /// every one, two references at the lesser mutability, and two others
-    /// raised by casts to their nearest common ancestor node, their members
-    /// united. A reference's target is a part, and the constructor of a
-    /// reference is its mutability alone, so two references join
-    /// whatever their targets.
-    pub(crate) fn head_join(&self, a: &Head, b: &Head) -> Option<Head> {
-        match (&a.constructor, &b.constructor) {
-            (Constructor::Never, _) => return Some(b.clone()),
-            (_, Constructor::Never) => return Some(a.clone()),
-            (Constructor::Ref(m), Constructor::Ref(n)) => {
-                return Some(Head {
-                    constructor: Constructor::Ref(*m.min(n)),
-                    members: BTreeSet::new(),
-                });
+    /// The node and members of a solved class's structure, none where the
+    /// class is a reference whose target has not taken a constructor.
+    pub(crate) fn head_of(&self, id: ClassId) -> Option<Head> {
+        let root = self.root(id);
+        let (structure, _) = self.classes.held(root).structure.as_ref()?;
+        let node = match structure {
+            Term::Ref(mutability, target) => {
+                let (target, _) = self.classes.held(self.root(*target)).structure.as_ref()?;
+                Node::Ref(*mutability, target.constructor())
             }
-            (Constructor::Ref(_), _) | (_, Constructor::Ref(_)) => return None,
-            _ => {}
-        }
-        let nca = self.decls.tree().nca(
-            &Node::Owned(a.constructor.clone()),
-            &Node::Owned(b.constructor.clone()),
-        )?;
-        let (a, b) = (self.raise_head(a, &nca)?, self.raise_head(b, &nca)?);
-        if a.constructor != b.constructor {
+            term => Node::Owned(term.constructor()),
+        };
+        Some(Head {
+            node,
+            members: structure.members(),
+        })
+    }
+
+    /// The join of two sources' nodes and members: `!` below every one, two
+    /// references of two mutabilities at the shared one, and two nodes raised
+    /// by casts to their nearest common ancestor node, their members united.
+    pub(crate) fn head_join(&self, a: &Head, b: &Head) -> Option<Head> {
+        let (a, b) = match (&a.node, &b.node) {
+            (Node::Owned(Constructor::Never), _) => return Some(b.clone()),
+            (_, Node::Owned(Constructor::Never)) => return Some(a.clone()),
+            (Node::Ref(m, c), Node::Ref(n, d)) if m != n => (
+                Head {
+                    node: Node::Ref(Mutability::Shared, c.clone()),
+                    members: a.members.clone(),
+                },
+                Head {
+                    node: Node::Ref(Mutability::Shared, d.clone()),
+                    members: b.members.clone(),
+                },
+            ),
+            (Node::Ref(..), Node::Owned(_)) | (Node::Owned(_), Node::Ref(..)) => return None,
+            _ => (a.clone(), b.clone()),
+        };
+        let nca = self.decls.tree().nca(&a.node, &b.node)?;
+        let (a, b) = (self.raise_head(&a, &nca)?, self.raise_head(&b, &nca)?);
+        if a.node != b.node {
             return None;
         }
-        let members = match a.constructor {
-            Constructor::Object | Constructor::Enum(_) => {
+        let members = match a.node {
+            Node::Owned(Constructor::Object | Constructor::Enum(_)) => {
                 a.members.union(&b.members).cloned().collect()
             }
             _ if a.members == b.members => a.members,
             _ => return None,
         };
         Some(Head {
-            constructor: a.constructor,
+            node: a.node,
             members,
         })
     }
@@ -136,60 +155,43 @@ impl State {
         if !part_lowers.is_empty() {
             return None;
         }
-        let node = Node::Owned(joined.constructor.clone());
-        let above = crate::join::without_identity(&self.decls, &node)?;
+        let above = crate::join::without_identity(&self.decls, &joined.node)?;
         self.raise_head(&joined, &above)
     }
 
-    /// The constructors and members the structure constraints of the class give:
-    /// where structure constraints are its only sources, the constructor of each member they
-    /// name, visible or not; otherwise those of the members visible to this
-    /// body, which alone a structure constraint adds to a type another source gives.
-    pub(crate) fn structure_constraint_heads(&self, root: ClassId) -> Vec<Head> {
-        let lowers = self.lower_bounds(root);
-        if lowers.is_empty() {
-            return self
-                .classes
-                .held(root)
-                .structure_constraints
+    /// What structure constraints give: where they are the only sources
+    /// (`alone`), the constructor of each member they name, visible or not;
+    /// otherwise those of the members visible to this body, which alone a
+    /// structure constraint adds to a type another source gives.
+    pub(crate) fn constraint_heads(
+        &self,
+        constraints: &[StructureConstraint],
+        alone: bool,
+    ) -> Vec<Head> {
+        if alone {
+            return constraints
                 .iter()
-                .filter_map(StructureConstraint::named_member)
+                .filter_map(named_member)
                 .map(|(constructor, members)| Head {
-                    constructor,
+                    node: Node::Owned(constructor),
                     members,
                 })
                 .collect();
         }
-        self.classes
-            .held(root)
-            .structure_constraints
+        constraints
             .iter()
-            .filter_map(StructureConstraint::visible_member)
+            .filter_map(visible_member)
             .map(|(constructor, member)| Head {
-                constructor,
+                node: Node::Owned(constructor),
                 members: [member].into(),
             })
             .collect()
     }
 
-    /// The constructor a domain admitting one alone gives the class holding
-    /// it.
-    pub(crate) fn domain_head(&self, root: ClassId) -> Option<Head> {
-        let domain = self.classes.held(self.root(root)).domain.as_ref()?;
-        let constructor = domain.single()?.clone();
-        Some(Head {
-            constructor,
-            members: BTreeSet::new(),
-        })
-    }
-
-    /// The constructor and members at `node` that the casts up from `head`'s
-    /// node reach: those of the last cast's result.
+    /// The node and members that the casts up from `head`'s node reach at
+    /// `node`: those of the last cast's result.
     fn raise_head(&self, head: &Head, node: &Node) -> Option<Head> {
-        let path = self
-            .decls
-            .tree()
-            .path(&Node::Owned(head.constructor.clone()), node)?;
+        let path = self.decls.tree().path(&head.node, node)?;
         let Some(last) = path.last() else {
             return Some(head.clone());
         };
@@ -197,24 +199,71 @@ impl State {
         let crate::sig::SigTy::Term(term) = result else {
             return None;
         };
+        let node = match &*term {
+            Term::Ref(mutability, crate::sig::SigTy::Term(target)) => {
+                Node::Ref(*mutability, target.constructor())
+            }
+            Term::Ref(_, crate::sig::SigTy::Var(_)) => return None,
+            term => Node::Owned(term.constructor()),
+        };
         Some(Head {
-            constructor: term.constructor(),
+            node,
             members: term.members(),
         })
     }
 
-    /// The structure of `head`, each part a class made anew and named after
-    /// `owner`. Every structure's constructor agrees with its declaration:
-    /// the text's are checked when they are recorded, and a signature's when
-    /// it is declared.
-    pub(crate) fn skeleton(&mut self, head: &Head, owner: &ClassName) -> Term<ClassId> {
+    /// The structure at `head`'s node, each part a class made anew and named
+    /// after `owner`, recorded as solved. A reference's target is a part,
+    /// made anew with the structure of the node's target constructor where
+    /// `target_structure`, and holding nothing otherwise: the targets of the
+    /// references entering the class are then equated with it by the
+    /// decomposition. Every structure's constructor agrees with its
+    /// declaration: the text's are checked when they are recorded, and a
+    /// signature's when it is declared. Returns the relations recorded.
+    pub(crate) fn take_skeleton(
+        &mut self,
+        root: ClassId,
+        head: &Head,
+        owner: &ClassName,
+        target_structure: bool,
+        recorder: &Recorder,
+    ) -> Recording {
+        let mut recorded = Recording::default();
+        let (constructor, target) = match &head.node {
+            Node::Owned(constructor) => (constructor.clone(), None),
+            Node::Ref(mutability, target) => {
+                let owner = Rc::new(owner.clone());
+                let class = self.fresh(ClassName::Part(owner, PartKey::Target));
+                let structure = Term::Ref(*mutability, class);
+                let relation = Relation::Structure(root, structure, StructureSource::Solved);
+                recorded.push(self.record(relation, recorder.clone()));
+                if !target_structure {
+                    return recorded;
+                }
+                (target.clone(), Some(class))
+            }
+        };
+        let (class, owner, members) = match target {
+            Some(class) => (class, self.class_name(class), BTreeSet::new()),
+            None => (root, owner.clone(), head.members.clone()),
+        };
+        let structure = self.skeleton(&constructor, &members, &owner);
+        let relation = Relation::Structure(class, structure, StructureSource::Solved);
+        recorded.push(self.record(relation, recorder.clone()));
+        recorded
+    }
+
+    /// The structure of `constructor` with `members`, each part a class made
+    /// anew and named after `owner`.
+    pub(crate) fn skeleton(
+        &mut self,
+        constructor: &Constructor,
+        members: &BTreeSet<Member>,
+        owner: &ClassName,
+    ) -> Term<ClassId> {
         let owner = Rc::new(owner.clone());
         let decls = Rc::clone(&self.decls);
-        let mut part = |key: PartKey| {
-            let class = self.arena.intern(ClassName::Part(owner.clone(), key));
-            self.classes.grow(&self.arena);
-            class
-        };
+        let mut part = |key: PartKey| self.fresh(ClassName::Part(owner.clone(), key));
         let named = |members: &BTreeSet<Member>| -> Vec<Name> {
             members
                 .iter()
@@ -223,7 +272,7 @@ impl State {
                 })
                 .collect()
         };
-        match &head.constructor {
+        match constructor {
             Constructor::Ref(mutability) => Term::Ref(*mutability, part(PartKey::Target)),
             Constructor::Tuple(n) => {
                 Term::Tuple((0..*n).map(|i| part(PartKey::Component(i))).collect())
@@ -237,14 +286,14 @@ impl State {
             },
             Constructor::Function(arity) => Term::FunctionValue { arity: *arity },
             Constructor::Object => Term::Object(
-                named(&head.members)
+                named(members)
                     .into_iter()
                     .map(|field| (field.clone(), part(PartKey::Field(field))))
                     .collect(),
             ),
             Constructor::Enum(name) => Term::Enum(
                 name.clone(),
-                named(&head.members)
+                named(members)
                     .into_iter()
                     .map(|variant| (variant.clone(), part(PartKey::Payload(variant))))
                     .collect(),
@@ -281,91 +330,18 @@ impl State {
             Constructor::Identity(name) => Term::Identity(name.clone()),
         }
     }
-}
 
-impl State {
-    /// Refuses the equivalence class where it reaches a part of its own along
-    /// recorded lower bounds, part lower bounds and parts: no finite type
-    /// holds it, so it has no value. Returns the refusal, where it is
-    /// refused.
-    pub(crate) fn refuse_infinite(&mut self, root: ClassId) -> Option<Refusal> {
-        if !self.reaches_own_part(root) {
-            return None;
-        }
-        let refusal = Refusal::Infinite(self.class_name(root));
-        self.refuse_value(root, &refusal);
-        Some(refusal)
-    }
-
-    /// The sources of the equivalence class's value.
-    pub(crate) fn sources(&self, root: ClassId) -> Sources {
+    /// The equivalence class takes the join of what its sources give, its
+    /// parts made anew, each part lower bound's node reaching it by `≤ₚ`,
+    /// with no cast; where they have no join it is refused.
+    pub(crate) fn take_join(&mut self, root: ClassId, sources: &Sources) -> Took {
         let root = self.root(root);
-        let equations = self
-            .log
-            .iter()
-            .enumerate()
-            .filter(|(_, recorded)| match &recorded.relation {
-                Relation::Equation(a, b) => self.root(*a) == root || self.root(*b) == root,
-                Relation::Structure(class, ..) => self.root(*class) == root,
-                _ => false,
-            })
-            .map(|(at, _)| at)
-            .collect();
-        let given = |lower: ClassId| {
-            self.classes
-                .held(lower)
-                .structure
-                .as_ref()
-                .filter(|_| self.is_solved(lower))
-                .map(|(structure, _)| head(structure))
-        };
-        let bounds =
-            |lower: ClassId, upper: ClassId| self.root(upper) == root && self.root(lower) != root;
-        let mut lowers = Vec::new();
-        let mut part_lowers = Vec::new();
-        let mut left_out = Vec::new();
-        for recorded in &self.log {
-            match recorded.relation {
-                Relation::LowerBound { lower, upper } if bounds(lower, upper) => {
-                    match given(lower) {
-                        Some(given) => lowers.push((lower, given)),
-                        None => left_out.push(lower),
-                    }
-                }
-                Relation::PartLowerBound { lower, upper } if bounds(lower, upper) => {
-                    match given(lower) {
-                        Some(given) => part_lowers.push((lower, given)),
-                        None => left_out.push(lower),
-                    }
-                }
-                _ => {}
+        let cycle = self.own_part_cycle(root);
+        if !cycle.is_empty() {
+            for class in cycle {
+                self.classes.refuse(class, Cause::Infinite);
             }
-        }
-        Sources {
-            equations,
-            lowers,
-            part_lowers,
-            structure_constraints: self.structure_constraint_heads(root),
-            left_out,
-        }
-    }
-
-    /// The equivalence class takes its constructor and members, and is
-    /// solved: where it holds no structure, the join of the constructors
-    /// and members its solved lower bounds, part lower bounds and structure
-    /// constraints give, its parts made anew, each part lower bound's
-    /// constructor reaching it by `≤ₚ`, with no cast. Where they give
-    /// none it is left unsolved, and where they have no join it is refused.
-    pub(crate) fn join(&mut self, root: ClassId) -> Joined {
-        let root = self.root(root);
-        let sources = self.sources(root);
-        let with_sources = |took| Joined {
-            sources: sources.clone(),
-            took,
-        };
-        if self.classes.held(root).structure.is_some() {
-            self.classes.mark_solved(root);
-            return with_sources(Took::Held);
+            return Took::Infinite;
         }
         let given: Vec<Head> = sources
             .lowers
@@ -373,10 +349,9 @@ impl State {
             .chain(&sources.part_lowers)
             .map(|(_, given)| given.clone())
             .chain(sources.structure_constraints.iter().cloned())
-            .chain(self.domain_head(root))
             .collect();
         let Some(first) = given.first().cloned() else {
-            return with_sources(Took::Nothing);
+            unreachable!("a class is joined where a source gives something");
         };
         let joined = given
             .iter()
@@ -384,128 +359,85 @@ impl State {
             .try_fold(first, |joined, source| self.head_join(&joined, source))
             .filter(|joined| {
                 sources.part_lowers.iter().all(|(_, given)| {
-                    given.constructor == Constructor::Never
-                        || given.constructor == joined.constructor
+                    given.node == Node::Owned(Constructor::Never) || given.node == joined.node
                 })
             });
-        let joined = joined.and_then(|joined| self.without_two_identities(&sources, joined));
+        let joined = joined.and_then(|joined| self.without_two_identities(sources, joined));
         let Some(joined) = joined else {
-            let refusal = Refusal::NoJoin(self.class_name(root));
-            return with_sources(self.no_join(root, refusal));
+            self.classes.refuse(root, Cause::NoJoin);
+            return Took::NoJoin;
         };
+        // A reference's target is made with its node's structure only where
+        // a source is raised by a cast to reach the join; otherwise the
+        // targets entering are equated with it, a reference's target being
+        // invariant.
+        let raised = given.iter().any(|source| {
+            source.node != joined.node && source.node != Node::Owned(Constructor::Never)
+        });
         let owner = self.class_name(root);
-        let structure = self.skeleton(&joined, &owner);
-        let decls = Rc::clone(&self.decls);
-        let unified = self.classes.unifying(decls.types()).give_structure(
-            root,
-            structure,
-            StructureSource::Solved,
-        );
-        let refused = unified
-            .result()
-            .err()
-            .map(|conflict| self.refuse_conflict(format!("the value of {owner}"), conflict));
-        if let Some(conflicted) = &unified.conflict {
-            self.conflicted_have_no_value(conflicted);
-        }
-        self.classes.mark_solved(root);
-        with_sources(Took::Joined {
+        let recorded = self.take_skeleton(root, &joined, &owner, raised, &Recorder::Join(root));
+        Took::Joined {
             head: joined,
-            unified,
-            refused,
-        })
+            recorded,
+        }
     }
 
-    /// The equivalence class's sources have no join.
-    fn no_join(&mut self, root: ClassId, refusal: Refusal) -> Took {
-        self.refuse_value(root, &refusal);
-        Took::NoJoin(refusal)
-    }
-
-    /// The equivalence class has no value, and is never solved again.
-    fn refuse_value(&mut self, root: ClassId, refusal: &Refusal) {
-        let members = self.classes.held(root).members.clone();
-        self.no_value.extend(members);
-        self.refusals.insert(refusal.clone());
-    }
-
-    /// Gives the class a lower bound or a part lower bound at `i` in the log
-    /// bounds the domain of its lower side, where that holds no structure and a
-    /// domain a value reaching the class by `≤` stays within
-    /// (`Domain::upward`), unless the class's domain is within it already or
-    /// either side has no value. Returns the relation recorded, where one is.
-    pub(crate) fn domain_up(&mut self, i: usize) -> Option<Recording> {
-        let (Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper }) =
-            self.log[i].relation
-        else {
-            return None;
+    /// The equivalence class, which nothing enters, takes the one type of the
+    /// classes it passes into, `uppers`, at their node with its parts made
+    /// anew; where they are not one it is refused.
+    pub(crate) fn take_fill(&mut self, root: ClassId, uppers: &[Head]) -> Took {
+        let root = self.root(root);
+        let Some(first) = uppers.first().cloned() else {
+            unreachable!("a class is filled where an upper bound has a node");
         };
-        if self.has_no_value(lower) || self.has_no_value(upper) {
-            return None;
+        if uppers.iter().any(|head| *head != first) {
+            self.classes.refuse(root, Cause::NoJoin);
+            return Took::NoJoin;
         }
-        let held = self.classes.held(self.root(lower));
-        if held.structure.is_some() {
-            return None;
-        }
-        let domain = held.domain.as_ref()?.upward()?;
-        let own = &self.classes.held(self.root(upper)).domain;
-        if own.as_ref().is_some_and(|own| own.within(&domain)) {
-            return None;
-        }
-        let mut recorded = Recording::default();
-        let relation = Relation::Domain(upper, domain);
-        recorded.push(self.record(relation, Recorder::Decomposition(lower)));
-        Some(recorded)
+        let owner = self.class_name(root);
+        let recorded = self.take_skeleton(root, &first, &owner, true, &Recorder::Join(root));
+        Took::Filled { head: first, recorded }
     }
 
-    /// Merges each cycle of lower bounds and part lower bounds alone into one
-    /// equivalence class. Returns the equations recorded.
-    pub(crate) fn merge_cycles(&mut self) -> Recording {
+    /// The equivalence class, whose sources give it no node, takes the domain
+    /// they give, recorded by its judgment.
+    pub(crate) fn take_domain(&mut self, root: ClassId, domain: Domain) -> Took {
+        let root = self.root(root);
         let mut recorded = Recording::default();
-        let mut edges: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
-        for recorded in &self.log {
-            if let Relation::LowerBound { lower, upper }
-            | Relation::PartLowerBound { lower, upper } = recorded.relation
-            {
-                let (lower, upper) = (self.root(lower), self.root(upper));
-                if lower != upper {
-                    edges.entry(upper).or_default().insert(lower);
-                }
-            }
-        }
-        let reach = |from: ClassId| {
-            let mut seen = BTreeSet::new();
-            let mut work = vec![from];
-            while let Some(at) = work.pop() {
-                for &next in edges.get(&at).into_iter().flatten() {
-                    if seen.insert(next) {
-                        work.push(next);
-                    }
-                }
-            }
-            seen
-        };
-        let mut merges = Vec::new();
-        for &from in edges.keys() {
-            for to in reach(from) {
-                if to != from && reach(to).contains(&from) && from < to {
-                    merges.push((from, to));
-                }
-            }
-        }
-        for (a, b) in merges {
-            if self.root(a) != self.root(b) {
-                recorded.push(self.record(Relation::Equation(a, b), Recorder::Cycle));
-            }
-        }
-        recorded
+        let relation = Relation::Domain(root, domain.clone());
+        recorded.push(self.record(relation, Recorder::Join(root)));
+        Took::Bounded { domain, recorded }
     }
 
-    /// Whether the equivalence class reaches a part of its own along recorded
-    /// lower bounds, part lower bounds and parts.
-    fn reaches_own_part(&self, root: ClassId) -> bool {
+    /// The lower bounds and part lower bounds of the equivalence class, other
+    /// than itself.
+    pub(crate) fn lower_bounds(&self, id: ClassId) -> Vec<ClassId> {
+        let root = self.root(id);
+        self.classes
+            .occurrences(root)
+            .iter()
+            .filter(|occurrence| occurrence.side() == Some(Side::Upper))
+            .filter_map(|occurrence| self.classes.items()[occurrence.at].relation())
+            .filter_map(|relation| match relation {
+                Relation::LowerBound { lower, .. } | Relation::PartLowerBound { lower, .. }
+                    if self.root(*lower) != root =>
+                {
+                    Some(*lower)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The classes on a path by which the equivalence class reaches a part
+    /// of its own along recorded lower bounds, part lower bounds and parts,
+    /// the class itself among them; empty where it reaches none. Every class
+    /// on such a path reaches a part of its own, and no finite type holds
+    /// any of them.
+    fn own_part_cycle(&self, root: ClassId) -> Vec<ClassId> {
         let root = self.root(root);
         let mut seen: BTreeSet<(ClassId, bool)> = BTreeSet::new();
+        let mut came_from: BTreeMap<(ClassId, bool), (ClassId, bool)> = BTreeMap::new();
         let mut work = vec![(root, false)];
         while let Some((at, through_part)) = work.pop() {
             let mut next: Vec<(ClassId, bool)> = self
@@ -521,16 +453,26 @@ impl State {
                         .map(|(_, part)| (self.root(*part), true)),
                 );
             }
-            for (class, through_part) in next {
-                if class == root && through_part {
-                    return true;
+            for step in next {
+                if step.0 == root && step.1 {
+                    let mut path = vec![root];
+                    let mut back = (at, through_part);
+                    while back.0 != root || back.1 {
+                        path.push(back.0);
+                        let Some(previous) = came_from.get(&back) else {
+                            break;
+                        };
+                        back = *previous;
+                    }
+                    return path;
                 }
-                if seen.insert((class, through_part)) {
-                    work.push((class, through_part));
+                if seen.insert(step) {
+                    came_from.insert(step, (at, through_part));
+                    work.push(step);
                 }
             }
         }
-        false
+        Vec::new()
     }
 
     /// The closed type the equivalence class holds, where it has one.
@@ -549,5 +491,54 @@ impl State {
             .ok()?;
         visiting.remove(&root);
         Ty::new(term).ok()
+    }
+}
+
+/// The constructor of the member the structure constraint names, with the
+/// members that constructor holds of it, whether visible or not: an object's
+/// field, an enum's variant the text names, and the language's `Some`,
+/// `None`, `Ok` and `Err`, whose constructor holds both its members.
+fn named_member(structure_constraint: &StructureConstraint) -> Option<(Constructor, BTreeSet<Member>)> {
+    if let Some((constructor, member)) = visible_member(structure_constraint) {
+        return Some((constructor, [member].into()));
+    }
+    let StructureConstraint::Payload {
+        enum_name: None,
+        variant,
+        ..
+    } = structure_constraint
+    else {
+        return None;
+    };
+    let both = |a: &str, b: &str| -> BTreeSet<Member> {
+        [a, b]
+            .into_iter()
+            .map(|name| Member::Variant(Name::new(name)))
+            .collect()
+    };
+    match variant.as_str() {
+        crate::ty::SOME | crate::ty::NONE => Some((Constructor::Option, both(crate::ty::SOME, crate::ty::NONE))),
+        crate::ty::OK | crate::ty::ERR => Some((Constructor::Result, both(crate::ty::OK, crate::ty::ERR))),
+        _ => None,
+    }
+}
+
+/// The member the structure constraint names where the body's text writes
+/// it, which is visible to this body: a field, or a variant of an enum the
+/// text names.
+fn visible_member(structure_constraint: &StructureConstraint) -> Option<(Constructor, Member)> {
+    match structure_constraint {
+        StructureConstraint::Field(field, _) => {
+            Some((Constructor::Object, Member::Field(field.clone())))
+        }
+        StructureConstraint::Payload {
+            enum_name: Some(enum_name),
+            variant,
+            ..
+        } => Some((
+            Constructor::Enum(enum_name.clone()),
+            Member::Variant(variant.clone()),
+        )),
+        _ => None,
     }
 }

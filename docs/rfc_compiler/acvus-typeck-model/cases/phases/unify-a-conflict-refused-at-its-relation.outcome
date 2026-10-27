@@ -8,21 +8,28 @@ outcome 1
   value String: String
   decision `@cfg.extra`: applied
   check `1 <= @cfg.extra`: Ok(Identity)
-  refusal conflict at "@cfg: field extra: @cfg.extra": Object vs field extra: @cfg.extra
+  refusal conflict: Object vs field extra: @cfg.extra {`@cfg`} by {`@cfg: Text`, `@cfg: field extra: @cfg.extra`, `@cfg: {name: String}`, `disjunctive constraint @cfg.extra`}
   I* of a final state: []
 start run
-  record #0 String: String
-  record #1 @cfg: {name: String}
-  record #2 1: {i8, i16, i32, i64, u8, u16, u32, u64}
-  record #3 1 <= @cfg.extra
-  decomposition #0 String: String: no parts
-  decomposition #1 @cfg: {name: String}: no parts
-  decomposition #2 1: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
-  domain #3 1 <= @cfg.extra
-    record #4 @cfg.extra: {i8, i16, i32, i64, u8, u16, u32, u64}
-  decomposition #4 @cfg.extra: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
+  record #0 String: Text
+  record #1 @cfg: Text
+  record #2 @cfg.extra: Text
+  record #3 1: Text
+  record #4 String: String
+  record #5 @cfg: {name: String}
+  record #6 1: {i8, i16, i32, i64, u8, u16, u32, u64}
+  record #7 disjunctive constraint `@cfg.extra`
+  record #8 1 <= @cfg.extra
+  decomposition #0 String: Text: no parts
+  decomposition #1 @cfg: Text: no parts
+  decomposition #2 @cfg.extra: Text: no parts
+  decomposition #3 1: Text: no parts
+  decomposition #4 String: String: no parts
+  decomposition #5 @cfg: {name: String}: no parts
+  decomposition #6 1: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
+  decomposition #7 disjunctive constraint `@cfg.extra`: no parts
 step 1 run: decide `@cfg.extra`
   decide `@cfg.extra`: applied
-    record #5 @cfg: field extra: @cfg.extra
-  decomposition #5 @cfg: field extra: @cfg.extra: no parts
-  refuse: conflict at "@cfg: field extra: @cfg.extra": Object vs field extra: @cfg.extra
+    record #9 @cfg: field extra: @cfg.extra
+  decomposition #9 @cfg: field extra: @cfg.extra: no parts
+  refuse: conflict: Object vs field extra: @cfg.extra {`@cfg`} by {`@cfg: Text`, `@cfg: field extra: @cfg.extra`, `@cfg: {name: String}`, `disjunctive constraint @cfg.extra`}

@@ -1,6 +1,6 @@
 // Once V holds Vec<?>, its structure constraint "indexes v[0]" is linked to the slice's element
 // along the signature of Vec's view.
-//@ order: decide `v[0]`, solve `new()`, solve V
+//@ order: decide `v[0]`, join `new()`, join V
 extern type Vec<T>;
 extern fn new<T>() -> Vec<T>;
 #[cast] extern fn core::as_slice<T>(&Vec<T>) -> &[T];

@@ -10,15 +10,15 @@ outcome 1
   value `take(n)`: ()
   decision parse: undecided
   decision q: ?#0
+  decision take: take#0
   check `q.Exit <= R`: Ok(Identity)
   check `s ~> parse.GeneralizedParam(0)`: Ok(Identity)
   check `take.Result <= take(n)`: Ok(Identity)
-  refusal no_value N
-  refusal no_value P
-  refusal no_value `P.Payload(Some)`
-  refusal no_value `parse.Generalized(0)`
-  refusal no_value `parse.GeneralizedResult`
-  refusal no_value `q.Var(Type(0))`
-  refusal no_value `q.Param(0)`
-  refusal no_value `q.Generalized(1)`
+  refusal no_value {N} by {`N ~> take.Param(0)`, `N: Text`, `disjunctive constraint q`, `disjunctive constraint take`, `q.Generalized(1) <= N`}
+  refusal no_value {P} by {`P ~> q.Param(0)`, `P: Text`, `disjunctive constraint parse`, `disjunctive constraint q`, `parse.GeneralizedResult <= P`}
+  refusal no_value {`parse.Generalized(0)`} by {`disjunctive constraint parse`, `parse.Generalized(0): not {&, &mut}`, `parse.GeneralizedResult: Option<parse.Generalized(0)>`}
+  refusal no_value {`parse.GeneralizedResult`} by {`disjunctive constraint parse`, `parse.GeneralizedResult <= P`, `parse.GeneralizedResult: Option<parse.Generalized(0)>`}
+  refusal no_value {`q.Var(Type(0))`} by {`disjunctive constraint q`, `q.Param(0): Option<q.Var(Type(0))>`, `q.Var(Type(0)) <= q.Generalized(1)`}
+  refusal no_value {`q.Param(0)`} by {`P ~> q.Param(0)`, `disjunctive constraint q`, `q.Param(0): Option<q.Var(Type(0))>`}
+  refusal no_value {`q.Generalized(1)`} by {`disjunctive constraint q`, `q.Generalized(1) <= N`, `q.Var(Type(0)) <= q.Generalized(1)`}
   I* of a final state: []

@@ -2,14 +2,12 @@
 run: every order
 outcome 1
   refused
-  value ?k: none
-  value None: none
+  value ?k: !
+  value None: Option<!>
   value S: none
   value `Some(x)`: none
   value X: none
-  refusal infinite X
-  refusal no_value ?k
-  refusal no_value None
-  refusal no_value S
-  refusal no_value `Some(x)`
+  refusal infinite {S} by {`S: Text`, `Some(x): Option<S>`, `X <= S`}
+  refusal infinite {`Some(x)`} by {`Some(x) <= X`, `Some(x): Option<S>`, `Some(x): Text`}
+  refusal infinite {X} by {`None <= X`, `Some(x) <= X`, `X <= S`, `X: Text`}
   I* of a final state: []

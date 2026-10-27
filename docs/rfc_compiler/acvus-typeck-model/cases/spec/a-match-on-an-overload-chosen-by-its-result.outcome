@@ -15,14 +15,15 @@ outcome 1
   decision `arm 2`: applied
   decision n: read
   decision parse: undecided
-  partition {`None.0`, `Some.0`}
+  decision take: take#0
   check `() <= M`: Ok(Identity)
   check `s ~> parse.GeneralizedParam(0)`: Ok(Identity)
   check `take(n) <= M`: Ok(Identity)
   check `take.Result <= take(n)`: Ok(Identity)
-  refusal no_value N
-  refusal no_value `None.0`
-  refusal no_value P
-  refusal no_value `parse.Generalized(0)`
-  refusal no_value `parse.GeneralizedResult`
+  refusal no_value {N} by {`N ~> take.Param(0)`, `N: Text`, `Some.0 <= N`, `disjunctive constraint n`, `disjunctive constraint take`}
+  refusal no_value {`None.0`} by {`None.0: Text`, `P: variant None: None.0`, `disjunctive constraint arm 2`}
+  refusal no_value {P} by {`P: Text`, `P: variant None: None.0`, `P: variant Some: Some.0`, `disjunctive constraint arm 1`, `disjunctive constraint arm 2`, `disjunctive constraint parse`, `parse.GeneralizedResult <= P`}
+  refusal no_value {`Some.0`} by {`P: variant Some: Some.0`, `Some.0 <= N`, `Some.0: Text`, `disjunctive constraint arm 1`, `disjunctive constraint n`}
+  refusal no_value {`parse.Generalized(0)`} by {`disjunctive constraint parse`, `parse.Generalized(0): not {&, &mut}`, `parse.GeneralizedResult: Option<parse.Generalized(0)>`}
+  refusal no_value {`parse.GeneralizedResult`} by {`disjunctive constraint parse`, `parse.GeneralizedResult <= P`, `parse.GeneralizedResult: Option<parse.Generalized(0)>`}
   I* of a final state: []

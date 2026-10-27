@@ -6,8 +6,8 @@ outcome 1
   value 2u8: u8
   value H: Fn/1
   value K: none
-  value NP: !
-  value None: Option<!>
+  value NP: Fn/1
+  value None: Option<Fn/1>
   value P: Fn/1
   value SET: Fn/1
   value SLOT: Option<Fn/1>
@@ -25,10 +25,11 @@ outcome 1
   decision h: read
   decision `h 1`: calls {μ}
   decision `pat Some`: applied
+  decision same: same#0
   decision `set 1`: calls {λ}
   check `1u8 <= set 1#λ/K`: Ok(Identity)
   check `2u8 <= h 1#μ/X`: Ok(Identity)
-  check `None <= SLOT`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
+  check `None <= SLOT`: Ok(Identity)
   check `Some(..) <= SLOT`: Ok(Identity)
   check `h 1#μ/X <= h 1#μ/same.Var(Type(0))`: Ok(Identity)
   check `h 1#μ/X <= h 1#μ/same.Var(Type(0))`: Ok(Identity)

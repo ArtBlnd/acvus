@@ -7,6 +7,8 @@ outcome 1
   value `make()`: Vec<u8>
   value `take(..)`: ()
   decision lend: lend & place
+  decision make: make#0
+  decision take: take#0
   check `&v ~> take.Param(0)`: Ok(Composition { reborrow: false, casts: [DeclId { name: core::as_slice, overload: 0 }], structural: None })
   check `make() <= V`: Ok(Identity)
   check `make.Result <= make()`: Ok(Identity)

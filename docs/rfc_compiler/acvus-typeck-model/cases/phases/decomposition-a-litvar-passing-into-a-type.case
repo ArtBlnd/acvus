@@ -1,5 +1,5 @@
 // ?N ⇝ U unifies ?N with U.
-//@ order: solve 0
+//@ order: join 0
 let W: u8;
 let 0: lit 0;
 W = 0;

@@ -2,82 +2,62 @@
 //! records — an equation unifies two into one, whose structure is the conjunction
 //! of theirs and whose parts of one name are unified in turn, and a
 //! structure, a structure constraint, a domain, or a lambda its Values name is held
-//! by the class it is given to
-//! — and a structure constraint "indexes `τ`" an extern-defined container holds is linked to
-//! the slice's element along the signature of its view.
+//! by the class it is given to — and a cycle of lower bounds and part lower
+//! bounds alone is merged into one class. Where no type holds what a relation
+//! records, the classes it names have no value, for that cause.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::check::Refusal;
-use crate::class::{ClassId, ClassName, Conflict, LinkAt, StructureConstraint, Unified};
-use crate::decl::Node;
+use crate::check::Cause;
+use crate::class::{ClassId, Conflict, Conflicted, NamedConflict, Unified};
 use crate::record::Recording;
-use crate::relation::{Named, Recorder, Relation};
-use crate::sig::SigTy;
+use crate::relation::{Recorder, Relation};
 use crate::solve::State;
-use crate::ty::{Mutability, Term};
-
-/// A structure constraint "indexes `τ`" an extern-defined container's class holds, linked to
-/// the slice's element along the signature of its view: the relations
-/// recorded, and the refusal where the container has no view.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Linked {
-    pub container: ClassId,
-    pub element: ClassId,
-    pub recorded: Recording,
-    pub refused: Option<Refusal>,
-}
 
 /// What the equivalence classes did as they took a relation: the
-/// unions made, and the refusal where no type holds what it records or a type
-/// the text writes disagrees with its declaration.
+/// unions made, and the cause where no type holds what it records or a type
+/// the text writes disagrees with its declaration, for which the classes it
+/// names have no value.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Unification {
     pub unified: Unified,
-    pub refused: Option<Refusal>,
+    pub refused: Option<Cause>,
 }
 
 impl State {
     /// The equivalence classes take what `relation` records, as it is recorded.
-    /// What no type holds is refused at the relation, and
-    /// a type the text writes that disagrees with its declaration is refused.
+    /// Where no type holds it, or a type the text writes disagrees with its
+    /// declaration, the classes it names have no value.
     pub(crate) fn hold(&mut self, relation: &Relation) -> Unification {
         let decls = Rc::clone(&self.decls);
         let types = decls.types();
         let unified = match relation {
             Relation::Equation(a, b) => self.classes.unifying(types).unify(*a, *b),
-            Relation::StructureConstraint(class, structure_constraint) => self
-                .classes
-                .unifying(types)
-                .give_structure_constraint(*class, structure_constraint.clone()),
+            Relation::StructureConstraint(class, _) => {
+                self.classes.unifying(types).constrained(*class)
+            }
             Relation::Structure(class, term, source) => match types.check(term) {
                 Ok(()) => {
-                    let given =
-                        self.classes
-                            .unifying(types)
-                            .give_structure(*class, term.clone(), *source);
-                    self.classes.mark_solved(*class);
-                    given
+                    self.classes
+                        .unifying(types)
+                        .give_structure(*class, term.clone(), *source)
                 }
                 Err(error) => {
-                    let refusal = Refusal::Undeclared(format!("{error:?}"));
-                    self.refusals.insert(refusal.clone());
+                    let cause = Cause::Undeclared(format!("{error:?}"));
+                    self.classes.refuse(*class, cause.clone());
                     return Unification {
                         unified: Unified::default(),
-                        refused: Some(refusal),
+                        refused: Some(cause),
                     };
                 }
             },
-            Relation::Domain(class, domain) => self
-                .classes
-                .unifying(types)
-                .give_domain(*class, domain.clone()),
-            Relation::Values(class, lambda) => {
-                self.classes.give_value(*class, lambda.clone());
-                Unified::default()
+            Relation::Domain(class, domain) => {
+                self.classes.unifying(types).domain_given(*class, domain)
             }
-            Relation::LowerBound { .. }
+            Relation::Values(..)
+            | Relation::Standing(..)
+            | Relation::LowerBound { .. }
             | Relation::PartLowerBound { .. }
             | Relation::CoercionConstraint { .. }
             | Relation::Wrap { .. } => Unified::default(),
@@ -88,134 +68,79 @@ impl State {
                 refused: None,
             };
         };
-        let at = Named {
-            relation,
-            arena: &self.arena,
-        }
-        .to_string();
-        let refused = Some(self.refuse_conflict(at, conflict));
+        let cause = self.conflict_cause(conflict);
         if let Some(conflicted) = &unified.conflict {
-            self.conflicted_have_no_value(conflicted);
+            self.conflicted_have_no_value(conflicted, &cause);
         }
-        Unification { unified, refused }
+        Unification {
+            unified,
+            refused: Some(cause),
+        }
     }
 
-    /// Links each structure constraint "indexes `τ`" an extern-defined container's class holds
-    /// to the slice's element along the signature of its view. A
-    /// container with no view cannot have the structure constraint. Returns each link made.
-    pub(crate) fn link_views(&mut self) -> Vec<Linked> {
-        let pending: Vec<(ClassId, ClassId)> = self
-            .classes
-            .roots()
-            .flat_map(|root| {
-                let held = self.classes.held(root);
-                let container = matches!(held.structure, Some((Term::Extern { .. }, _)));
-                held.structure_constraints
-                    .iter()
-                    .filter_map(move |structure_constraint| match structure_constraint {
-                        StructureConstraint::Element(element) if container => {
-                            Some((root, *element))
-                        }
-                        _ => None,
-                    })
-            })
-            .filter(|(_, element)| !self.viewed.contains(element))
-            .collect();
-        let mut linked = Vec::new();
-        for (root, element) in pending {
-            self.viewed.insert(element);
-            linked.push(self.link_view(root, element));
-        }
-        linked
-    }
-
-    pub(crate) fn link_view(&mut self, root: ClassId, element: ClassId) -> Linked {
+    /// Merges each cycle of lower bounds and part lower bounds alone into one
+    /// equivalence class. Returns the equations recorded.
+    pub(crate) fn merge_cycles(&mut self) -> Recording {
         let mut recorded = Recording::default();
-        let linked = |recorded, refused| Linked {
-            container: root,
-            element,
-            recorded,
-            refused,
-        };
-        let recorder = Recorder::Decomposition(root);
-        let Some((structure, _)) = self.classes.held(root).structure.clone() else {
-            return linked(recorded, None);
-        };
-        let constructor = structure.constructor();
-        let view = self
-            .decls
-            .tree()
-            .up(&Node::Ref(Mutability::Shared, constructor.clone()))
-            .cloned()
-            .filter(|cast| {
-                matches!(self.decls.decl(cast).sig.result(), SigTy::Term(term)
-                    if matches!(&**term, Term::Ref(_, SigTy::Term(target))
-                        if matches!(&**target, Term::Slice(_))))
-            });
-        let Some(view) = view else {
-            let at = format!(
-                "{}: indexes {}",
-                self.class_name(root),
-                self.class_name(element)
-            );
-            let refused = self.refuse_conflict(
-                at,
-                Conflict::StructureConstraint(StructureConstraint::Element(element), constructor),
-            );
-            let members = self.classes.held(root).members.clone();
-            self.no_value.extend(members);
-            return linked(recorded, Some(refused));
-        };
-        let sig = self.decls.decl(&view).sig.clone();
-        let (from, to) = (
-            Rc::new(self.class_name(root)),
-            Rc::new(self.class_name(element)),
-        );
-        let link = |at: LinkAt| ClassName::Link {
-            from: from.clone(),
-            to: to.clone(),
-            step: 0,
-            at,
-        };
-        let mut vars = BTreeMap::new();
-        let var_name = |var| link(LinkAt::Var(var));
-        let param = self.instantiate(
-            &sig.params()[0],
-            &mut vars,
-            link(LinkAt::Param),
-            &var_name,
-            &recorder,
-            &mut recorded,
-        );
-        let result = self.instantiate(
-            sig.result(),
-            &mut vars,
-            link(LinkAt::Result),
-            &var_name,
-            &recorder,
-            &mut recorded,
-        );
-        let target = |state: &State, id: ClassId| match &state.classes.held(id).structure {
-            Some((Term::Ref(_, target), _)) => Some(*target),
-            _ => None,
-        };
-        let (Some(container), Some(slice)) = (target(self, param), target(self, result)) else {
-            return linked(recorded, None);
-        };
-        let (Some((container_structure, _)), Some((Term::Slice(slice_element), _))) = (
-            self.classes.held(container).structure.clone(),
-            self.classes.held(slice).structure.clone(),
-        ) else {
-            return linked(recorded, None);
-        };
-        for ((_, part), (_, param_part)) in structure
-            .parts()
-            .into_iter()
-            .zip(container_structure.parts())
-        {
-            recorded.push(self.record(Relation::Equation(*part, *param_part), recorder.clone()));
+        let mut edges: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
+        for recorded in self.classes.items() {
+            if let Some(
+                Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper },
+            ) = recorded.relation()
+            {
+                let (lower, upper) = (*lower, *upper);
+                let (lower, upper) = (self.root(lower), self.root(upper));
+                if lower != upper {
+                    edges.entry(upper).or_default().insert(lower);
+                }
+            }
         }
-        recorded.push(self.record(Relation::Equation(element, slice_element), recorder));
-        linked(recorded, None)
+        let reach = |from: ClassId| {
+            let mut seen = BTreeSet::new();
+            let mut work = vec![from];
+            while let Some(at) = work.pop() {
+                for &next in edges.get(&at).into_iter().flatten() {
+                    if seen.insert(next) {
+                        work.push(next);
+                    }
+                }
+            }
+            seen
+        };
+        let mut merges = Vec::new();
+        for &from in edges.keys() {
+            for to in reach(from) {
+                if to != from && reach(to).contains(&from) && from < to {
+                    merges.push((from, to));
+                }
+            }
+        }
+        for (a, b) in merges {
+            if self.root(a) != self.root(b) {
+                recorded.push(self.record(Relation::Equation(a, b), Recorder::Cycle));
+            }
+        }
+        recorded
+    }
+
+    /// The classes a conflict names hold a conjunction no type satisfies, so
+    /// they have no value.
+    pub(crate) fn conflicted_have_no_value(&mut self, conflicted: &Conflicted, cause: &Cause) {
+        let members: Vec<ClassId> = match conflicted {
+            Conflicted::Apart(apart) => apart.sides.iter().flatten().copied().collect(),
+            Conflicted::Holds { members, .. } => members.iter().copied().collect(),
+        };
+        for member in members {
+            self.classes.refuse(member, cause.clone());
+        }
+    }
+
+    /// The cause of a class's having no value: what no type holds.
+    pub(crate) fn conflict_cause(&self, conflict: Conflict) -> Cause {
+        let conflict = NamedConflict {
+            conflict: &conflict,
+            arena: &self.arena,
+        };
+        Cause::Conflict(conflict.to_string())
     }
 }

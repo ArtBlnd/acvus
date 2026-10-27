@@ -1,19 +1,22 @@
 //! Instances: a binding group's C made anew at a use, and recorded in the use's
-//! binding group.
+//! binding group, and a lambda's C made anew where a function value is called
+//! or passes into a function type.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, StructureSource};
-use crate::disjunction::{Disjunction, DisjunctionState, Generalized};
-use crate::record::{Instantiated, Recording};
-use crate::relation::{Recorder, Relation, copy_name};
+use crate::class::{ClassId, ClassName, Side};
+use crate::relation::{Role, Standing};
+use crate::disjunction::Disjunction;
+use crate::record::{Instantiated, Making, Recording};
+use crate::relation::{Item, Recorder, Relation, copy_name};
 use crate::solve::State;
 use crate::ty::{Name, Term, Ty};
 
-/// An instance a state made: of the C of the binding group `group`, named `at`
-/// and made by `by`, with each root of that group's state it found and that
-/// root's class in the state that made it.
+/// An instance a state made, as the record gives it: of the C of the
+/// binding group `group`, named `at` and made by `by`, with each root of
+/// that group's state it copied and that root's class in the state that
+/// made it, read from the instance item's copies.
 #[derive(Clone, Debug)]
 pub struct Made {
     pub at: Name,
@@ -23,6 +26,114 @@ pub struct Made {
     /// The parts of that C it made anew (`State::components`), none naming
     /// all of it.
     pub parts: Option<BTreeSet<usize>>,
+}
+
+/// A lambda an instance made anew, as the record gives it: the instance,
+/// the lambda of the program it copies, and the classes here its
+/// environment holds, its parameter types and then its result type, none
+/// where its own binding group holds them.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LambdaCopy {
+    pub at: Name,
+    pub of: Name,
+    pub environment: Vec<Option<ClassId>>,
+}
+
+impl State {
+    /// Every instance this state made, in the order made.
+    pub(crate) fn instances(&self) -> Vec<Made> {
+        self.classes
+            .items()
+            .iter()
+            .enumerate()
+            .filter_map(|(at, recorded)| match &recorded.item {
+                Item::Instance {
+                    at: name,
+                    by,
+                    group,
+                    parts,
+                } => Some(Made {
+                    at: name.clone(),
+                    by: by.clone(),
+                    group: group.clone(),
+                    made: self.copies(at, group),
+                    parts: parts.clone(),
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The instance named `at` this state made.
+    pub(crate) fn instance(&self, at: &Name) -> Option<Made> {
+        self.instances().into_iter().find(|made| made.at == *at)
+    }
+
+    /// Each root of the group `group`'s state the instance item at `item`
+    /// copied, with its class here.
+    fn copies(&self, item: usize, group: &Name) -> BTreeMap<ClassId, ClassId> {
+        let from = self
+            .solved
+            .get(group)
+            .expect("the group an instance copies is solved before it");
+        self.classes
+            .roles_of(item)
+            .into_iter()
+            .filter_map(|(class, role)| match role {
+                Role::Copy(name) => {
+                    let original = from
+                        .arena
+                        .get(&name)
+                        .expect("a copy names a class of the group instantiated");
+                    Some((from.root(original), class))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The lambda copies this state holds, by the copy's name.
+    pub(crate) fn lambda_copies(&self) -> BTreeMap<Name, LambdaCopy> {
+        self.classes
+            .items()
+            .iter()
+            .enumerate()
+            .filter_map(|(item, recorded)| match &recorded.item {
+                Item::Lambda { name, of, at } => {
+                    let roles = self.classes.roles_of(item);
+                    let places = roles
+                        .iter()
+                        .filter_map(|(_, role)| match role {
+                            Role::Environment(i) => Some(*i),
+                            _ => None,
+                        })
+                        .max()
+                        .map_or(0, |i| i + 1);
+                    let environment = (0..places)
+                        .map(|i| {
+                            roles.iter().find_map(|(class, role)| {
+                                (*role == Role::Environment(i)).then_some(*class)
+                            })
+                        })
+                        .collect();
+                    Some((
+                        name.clone(),
+                        LambdaCopy {
+                            at: at.clone(),
+                            of: of.clone(),
+                            environment,
+                        },
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The lambda copy of this name, where the record holds one.
+    pub(crate) fn lambda_copy(&self, name: &Name) -> Option<LambdaCopy> {
+        self.lambda_copies().remove(name)
+    }
 }
 
 /// C's classes, each in its part: two of C's classes lie in one part
@@ -46,12 +157,8 @@ impl Components {
 
     /// The part of C a disjunctive constraint left undecided lies in, none where it names no
     /// class of C.
-    pub(crate) fn of_disjunction(
-        &self,
-        state: &State,
-        disjunction: &DisjunctionState,
-    ) -> Option<usize> {
-        named_by(disjunction)
+    pub(crate) fn of_disjunction(&self, state: &State, kind: &Disjunction) -> Option<usize> {
+        kind.classes()
             .into_iter()
             .find_map(|class| self.of(state, class))
     }
@@ -72,8 +179,8 @@ pub(crate) struct Instance<'a> {
     parts: Option<BTreeSet<usize>>,
     /// The disjunctive constraints `from` left undecided it makes anew, none naming them all.
     disjunctions: Option<BTreeSet<Name>>,
-    /// Each root of `from` found so far, with its class here.
-    made: BTreeMap<ClassId, ClassId>,
+    /// The instance's item in the record it records in, once recorded.
+    item: Option<usize>,
     /// The relations it has recorded here so far.
     recorded: Recording,
 }
@@ -118,31 +225,27 @@ impl State {
             }
         };
         for at in self.relations_on(&c) {
-            let relation = &self.log[at].relation;
-            let mut classes = relation.classes();
-            if let Relation::Values(_, lambda) = relation
-                && self.environment_here(lambda)
-            {
-                classes.extend(self.environment_of(lambda).into_iter().flatten());
-            }
-            tie(classes);
-        }
-        for disjunction in self
-            .disjunctions
-            .values()
-            .filter(|disjunction| disjunction.decision.is_none())
-        {
-            let mut classes = named_by(disjunction);
-            if let Disjunction::Bind { path, .. } = &disjunction.kind {
-                for step in path {
-                    classes.extend(
-                        self.disjunctions
-                            .get(step)
-                            .map(named_by)
-                            .into_iter()
-                            .flatten(),
-                    );
+            let item = &self.classes.items()[at].item;
+            let mut classes: Vec<ClassId> = self
+                .classes
+                .roles_of(at)
+                .into_iter()
+                .map(|(class, _)| class)
+                .collect();
+            match item {
+                Item::Relation(Relation::Values(_, lambda)) if self.environment_here(lambda) => {
+                    classes.extend(self.environment_of(lambda).into_iter().flatten());
                 }
+                Item::Disjunction {
+                    kind: Disjunction::Bind { path, .. },
+                    ..
+                } => {
+                    for step in path {
+                        let (kind, _) = self.disjunction(step);
+                        classes.extend(kind.classes());
+                    }
+                }
+                _ => {}
             }
             tie(classes);
         }
@@ -188,7 +291,8 @@ impl State {
     /// The identities this state's body made, at calls of a declaration whose
     /// result carries one no parameter does, or anew at the instances it made.
     pub(crate) fn made_identities(&self) -> BTreeSet<Name> {
-        self.log
+        self.classes
+            .items()
             .iter()
             .filter(|recorded| {
                 matches!(
@@ -198,26 +302,31 @@ impl State {
                         | Recorder::Instance { .. }
                 )
             })
-            .filter_map(|recorded| match &recorded.relation {
-                Relation::Structure(_, Term::Identity(name), _) => Some(name.clone()),
+            .filter_map(|recorded| match recorded.relation() {
+                Some(Relation::Structure(_, Term::Identity(name), _)) => Some(name.clone()),
                 _ => None,
             })
             .collect()
     }
 
-    /// The relations of the log on a class of `c` that an instance copies, by
-    /// their places: an equation is kept by the classes it unified.
+    /// The items of the record on a class of `c` that an instance copies, by
+    /// their places: every relation but an equation, which is kept by the
+    /// classes it unified, and every disjunctive constraint left undecided,
+    /// a decided one's relations being its own.
     pub(crate) fn relations_on(&self, c: &BTreeSet<ClassId>) -> Vec<usize> {
-        self.log
+        self.classes
+            .items()
             .iter()
             .enumerate()
-            .filter(|(_, recorded)| {
-                !matches!(recorded.relation, Relation::Equation(..))
-                    && recorded
-                        .relation
-                        .classes()
-                        .into_iter()
-                        .any(|class| c.contains(&self.root(class)))
+            .filter(|(at, recorded)| match &recorded.item {
+                Item::Relation(Relation::Equation(..) | Relation::Standing(..)) => false,
+                Item::Disjunction { decision, .. } if decision.is_some() => false,
+                Item::Instance { .. } | Item::Lambda { .. } => false,
+                _ => self
+                    .classes
+                    .roles_of(*at)
+                    .into_iter()
+                    .any(|(class, _)| c.contains(&self.root(class))),
             })
             .map(|(at, _)| at)
             .collect()
@@ -233,9 +342,25 @@ impl<'a> Instance<'a> {
             c: from.c(),
             parts: None,
             disjunctions: None,
-            made: BTreeMap::new(),
+            item: None,
             recorded: Recording::default(),
         }
+    }
+
+    /// The instance's item in `here`, recorded where it is not yet.
+    fn item(&mut self, here: &mut State) -> usize {
+        if let Some(item) = self.item {
+            return item;
+        }
+        let item = Item::Instance {
+            at: (*self.at).clone(),
+            by: self.by.clone(),
+            group: self.from.group.clone(),
+            parts: self.parts.clone(),
+        };
+        let at = here.classes.record(item, self.by.clone());
+        self.item = Some(at);
+        at
     }
 
     /// An instance of the parts of C the positions a use records here lie in,
@@ -276,11 +401,11 @@ impl<'a> Instance<'a> {
             );
         }
         let mut disjunctions = BTreeSet::new();
-        for (name, disjunction) in &from.disjunctions {
-            if disjunction.decision.is_some() {
+        for (_, name, kind, decision) in from.classes.disjunctions() {
+            if decision.is_some() {
                 continue;
             }
-            let part = components.of_disjunction(from, disjunction);
+            let part = components.of_disjunction(from, kind);
             if !placed(part) {
                 panic!(
                     "{at}: the disjunctive constraint {name} left in C lies at no position of a use whose \
@@ -305,11 +430,18 @@ impl<'a> Instance<'a> {
         }
     }
 
-    /// The instance `made` by `by` resumed, to map more of `from` the way it
-    /// did.
-    pub(crate) fn resume(made: &Made, from: &'a State) -> Instance<'a> {
+    /// The instance `made`, recorded in `here`, resumed, to map more of
+    /// `from` the way it did.
+    pub(crate) fn resume(here: &State, made: &Made, from: &'a State) -> Instance<'a> {
+        let item = here
+            .classes
+            .items()
+            .iter()
+            .position(|recorded| matches!(&recorded.item, Item::Instance { at, .. } if *at == made.at))
+            .expect("an instance resumed is recorded");
         Instance {
-            made: made.made.clone(),
+            item: Some(item),
+            parts: made.parts.clone(),
             ..Instance::new(&made.at, made.by.clone(), from)
         }
     }
@@ -317,78 +449,28 @@ impl<'a> Instance<'a> {
     /// A disjunctive constraint's kind here, its classes those here and a binding's path the
     /// copies of its projections.
     pub(crate) fn kind(&mut self, here: &mut State, kind: &Disjunction) -> Disjunction {
-        match kind.clone() {
-            Disjunction::Use {
-                callee,
-                args,
-                result,
-                exit,
-            } => Disjunction::Use {
-                callee,
-                args: args
-                    .into_iter()
-                    .map(|arg| arg.map(|arg| self.class(here, arg)))
-                    .collect(),
-                result: result.map(|result| self.class(here, result)),
-                exit: exit.map(|exit| self.class(here, exit)),
-            },
-            Disjunction::Lend {
-                mutability,
-                place,
-                result,
-            } => Disjunction::Lend {
-                mutability,
-                place: self.class(here, place),
-                result: self.class(here, result),
-            },
-            Disjunction::Project {
-                projection,
-                operand,
-                result,
-            } => Disjunction::Project {
-                projection,
-                operand: self.class(here, operand),
-                result: self.class(here, result),
-            },
-            Disjunction::Bind {
-                path,
-                position,
-                binding,
-            } => Disjunction::Bind {
-                path: path.iter().map(|step| self.disjunction(step)).collect(),
-                position: self.class(here, position),
-                binding: self.class(here, binding),
-            },
-            Disjunction::CallValue {
-                callee,
-                args,
-                result,
-            } => Disjunction::CallValue {
-                callee: self.class(here, callee),
-                args: args.into_iter().map(|arg| self.class(here, arg)).collect(),
-                result: self.class(here, result),
-            },
-        }
+        let at = Rc::clone(&self.at);
+        kind.clone()
+            .map(|class| self.class(here, class), |step| copy_name(&at, step))
     }
 
-    /// What records a copied relation here: the copy of an undecided disjunctive constraint, or
-    /// the instance, made by what made it.
+    /// What records a copied relation here: the copy of an undecided disjunctive constraint's
+    /// generalization, or the instance, made by what made it.
     fn recorder(&self, of: &Recorder) -> Recorder {
         match of {
-            Recorder::Disjunction(disjunction)
-                if self.from.disjunctions[disjunction].decision.is_none() =>
-            {
-                Recorder::Disjunction(self.disjunction(disjunction))
-            }
             // A generalization recorded where the disjunctive constraint is not, at positions
             // where every candidate writes one closed type, is as
             // that of a disjunctive constraint left undecided.
             Recorder::Generalization(disjunction)
                 if self
                     .from
-                    .disjunctions
-                    .get(disjunction)
-                    .is_none_or(|disjunction| disjunction.decision.is_none()) =>
+                    .classes
+                    .disjunction_at(disjunction)
+                    .is_none_or(|at| {
+                        self.from.classes.items()[at]
+                            .disjunction()
+                            .is_some_and(|(_, _, decision)| decision.is_none())
+                    }) =>
             {
                 Recorder::Generalization(self.disjunction(disjunction))
             }
@@ -408,34 +490,41 @@ impl<'a> Instance<'a> {
     /// environment this instance's copies.
     fn lambda(&mut self, here: &mut State, lambda: &Name) -> Name {
         let copy = copy_name(&self.at, lambda);
-        if !here.lambdas.contains_key(&copy) {
+        if here.lambda_copy(&copy).is_none() {
             let of = self
                 .from
-                .lambdas
-                .get(lambda)
-                .map_or(lambda.clone(), |copied| copied.of.clone());
-            let environment = self
+                .lambda_copy(lambda)
+                .map_or(lambda.clone(), |copied| copied.of);
+            let environment: Vec<Option<ClassId>> = self
                 .from
                 .environment_of(lambda)
                 .into_iter()
                 .map(|class| class.map(|class| self.class(here, class)))
                 .collect();
-            let made = crate::solve::LambdaCopy {
-                at: (*self.at).clone(),
+            let item = Item::Lambda {
+                name: copy.clone(),
                 of,
-                environment,
+                at: (*self.at).clone(),
             };
-            here.lambdas.insert(copy.clone(), made);
+            let at = here.classes.record(item, self.by.clone());
+            for (i, class) in environment.into_iter().enumerate() {
+                if let Some(class) = class {
+                    here.classes.attach(at, class, Role::Environment(i));
+                }
+            }
         }
         copy
     }
 
     /// The class here of the class `id` of `from`: for a class of C, one made
-    /// anew, holding the structure `from` solved it to; for another, its closed
-    /// type, written.
+    /// anew, which the relations copied with C give what `from` gave it; for
+    /// another, its closed type, written.
     pub(crate) fn class(&mut self, here: &mut State, id: ClassId) -> ClassId {
         let root = self.from.root(id);
-        if let Some(&made) = self.made.get(&root) {
+        let of = self.from.class_name(root);
+        if let Some(item) = self.item
+            && let Some(made) = here.classes.in_role(item, &Role::Copy(of.clone()))
+        {
             return made;
         }
         let shared = self
@@ -444,53 +533,43 @@ impl<'a> Instance<'a> {
             .held(root)
             .members
             .iter()
-            .find(|member| self.from.foreign.contains(member))
+            .find(|&&member| self.from.classes.standing(member).is_some_and(|standing| {
+                matches!(standing, Standing::Shared { .. })
+            }))
             .copied();
         if let Some(shared) = shared {
             let ClassName::Text(name) = self.from.arena.name(shared).clone() else {
                 unreachable!("a class of an enclosing group is the text's");
             };
-            let made = match here.arena.get(&ClassName::Text(name.clone())) {
+            return match here.arena.get(&ClassName::Text(name.clone())) {
                 Some(made) => made,
                 None => {
-                    let unknown = self.from.enclosing_unknowns.contains(&shared);
-                    here.share(&name, unknown)
+                    let unknown = self.from.is_enclosing_unknown(shared);
+                    let entry = here.share(&name, unknown);
+                    self.recorded.push(entry);
+                    here.text(&name)
                 }
             };
-            self.made.insert(root, made);
-            return made;
         }
-        let name = ClassName::Copy {
-            at: Rc::clone(&self.at),
-            of: Rc::new(self.from.class_name(root)),
+        let item = self.item(here);
+        let making = Making {
+            item,
+            role: Role::Copy(of.clone()),
+            label: ClassName::Copy {
+                at: Rc::clone(&self.at),
+                of: Rc::new(of),
+            },
         };
-        if !self.c.contains(&root) {
+        let made = if self.c.contains(&root) {
+            here.make(making)
+        } else {
             let ty: Ty = self
                 .from
                 .value(root)
                 .expect("a class outside C has a closed value");
             let recorder = self.recorder(&Recorder::Origin);
-            let made = here.closed(name, &ty, &recorder, &mut self.recorded);
-            self.made.insert(root, made);
-            return made;
-        }
-        let made = here.arena.intern(name);
-        here.classes.grow(&here.arena);
-        self.made.insert(root, made);
-        let held = self.from.classes.held(root).clone();
-        if held
-            .members
-            .iter()
-            .any(|member| self.from.decided.contains(member))
-        {
-            here.decided.insert(made);
-        }
-        if let Some((structure, StructureSource::Solved)) = held.structure {
-            let term = structure.map(|_, part| self.class(here, part));
-            let recorder = self.recorder(&Recorder::Decomposition(root));
-            let relation = Relation::Structure(made, term, StructureSource::Solved);
-            self.recorded.push(here.record(relation, recorder));
-        }
+            here.closed(making, &ty, &recorder, &mut self.recorded)
+        };
         made
     }
 
@@ -503,73 +582,55 @@ impl<'a> Instance<'a> {
     pub(crate) fn record_rest(&mut self, here: &mut State) -> Recording {
         let from = self.from;
         for at in from.relations_on(&self.c) {
-            let recorded = &from.log[at];
-            let relation = match recorded.relation.clone() {
-                Relation::Structure(class, Term::Identity(name), source) => {
-                    Relation::Structure(class, Term::Identity(copy_name(&self.at, &name)), source)
-                }
-                Relation::Values(class, lambda) if from.environment_here(&lambda) => {
-                    Relation::Values(class, self.lambda(here, &lambda))
-                }
-                relation => relation,
-            }
-            .map(|class| self.class(here, class));
+            let recorded = &from.classes.items()[at];
             let recorder = self.recorder(&recorded.recorder);
-            let entry = here.record(relation, recorder);
-            if from.decomposed.contains(&at) {
-                here.decomposed.insert(entry.at);
-                here.copied_decomposed.insert(entry.at);
+            let entry = match &recorded.item {
+                Item::Relation(relation) => {
+                    let relation = match relation.clone() {
+                        Relation::Structure(class, Term::Identity(name), source) => {
+                            Relation::Structure(
+                                class,
+                                Term::Identity(copy_name(&self.at, &name)),
+                                source,
+                            )
+                        }
+                        Relation::Values(class, lambda) if from.environment_here(&lambda) => {
+                            Relation::Values(class, self.lambda(here, &lambda))
+                        }
+                        relation => relation,
+                    }
+                    .map(|class| self.class(here, class));
+                    here.record(relation, recorder)
+                }
+                Item::Disjunction { name, kind, .. } => {
+                    if self
+                        .disjunctions
+                        .as_ref()
+                        .is_some_and(|disjunctions| !disjunctions.contains(name))
+                    {
+                        continue;
+                    }
+                    let kind = self.kind(here, kind);
+                    let copy = self.disjunction(name);
+                    let entry = here.add_disjunction(&copy, kind, recorder);
+                    // The classes the original made anew in each role are
+                    // the copy's, in the same roles.
+                    for (class, role) in from.classes.roles_of(at) {
+                        if let Role::Made(made) = role {
+                            let class = self.class(here, class);
+                            here.classes.attach(entry.at, class, Role::Made(made));
+                        }
+                    }
+                    entry
+                }
+                Item::Instance { .. } | Item::Lambda { .. } => continue,
+            };
+            if recorded.decomposed {
+                here.classes.mark_decomposed(entry.at);
             }
             self.recorded.push(entry);
         }
-        let undecided: Vec<(&Name, &DisjunctionState)> = from
-            .disjunctions
-            .iter()
-            .filter(|(name, disjunction)| {
-                disjunction.decision.is_none()
-                    && self
-                        .disjunctions
-                        .as_ref()
-                        .is_none_or(|disjunctions| disjunctions.contains(*name))
-            })
-            .collect();
-        for (name, disjunction) in undecided {
-            let kind = self.kind(here, &disjunction.kind);
-            let copy = self.disjunction(name);
-            here.add_disjunction(&copy, kind);
-            let generalized =
-                disjunction
-                    .generalized
-                    .clone()
-                    .map(|generalized| match generalized {
-                        Generalized::Use { part, classes } => Generalized::Use {
-                            part,
-                            classes: classes
-                                .into_iter()
-                                .map(|(k, class)| (k, self.class(here, class)))
-                                .collect(),
-                        },
-                        Generalized::Lend => Generalized::Lend,
-                    });
-            let references: BTreeSet<ClassId> = disjunction
-                .references
-                .iter()
-                .map(|&class| self.class(here, class))
-                .collect();
-            let state = here
-                .disjunctions
-                .get_mut(&copy)
-                .expect("the disjunctive constraint was added");
-            state.generalized = generalized;
-            state.references = references;
-        }
-        here.instances.push(Made {
-            at: (*self.at).clone(),
-            by: self.by.clone(),
-            group: from.group.clone(),
-            made: self.made.clone(),
-            parts: self.parts.clone(),
-        });
+        self.item(here);
         let mut recorded = std::mem::take(&mut self.recorded);
         recorded.instances.push(Instantiated {
             at: (*self.at).clone(),
@@ -581,43 +642,6 @@ impl<'a> Instance<'a> {
     }
 }
 
-/// The classes a disjunctive constraint names: those of its structure, and those its generalization
-/// made and recorded whether they are references.
-fn named_by(disjunction: &DisjunctionState) -> Vec<ClassId> {
-    let mut classes: Vec<ClassId> = match &disjunction.kind {
-        Disjunction::Use {
-            args, result, exit, ..
-        } => args
-            .iter()
-            .flatten()
-            .chain(result)
-            .chain(exit)
-            .copied()
-            .collect(),
-        Disjunction::Lend { place, result, .. } => vec![*place, *result],
-        Disjunction::Project {
-            operand, result, ..
-        } => vec![*operand, *result],
-        Disjunction::Bind {
-            position, binding, ..
-        } => vec![*position, *binding],
-        Disjunction::CallValue {
-            callee,
-            args,
-            result,
-        } => [*callee]
-            .into_iter()
-            .chain(args.iter().copied())
-            .chain([*result])
-            .collect(),
-    };
-    if let Some(Generalized::Use { classes: made, .. }) = &disjunction.generalized {
-        classes.extend(made.values());
-    }
-    classes.extend(&disjunction.references);
-    classes
-}
-
 /// Whether the value carries one of the identities, at any depth.
 fn carries_identity(value: &Ty, identities: &BTreeSet<Name>) -> bool {
     match value.term() {
@@ -626,5 +650,118 @@ fn carries_identity(value: &Ty, identities: &BTreeSet<Name>) -> bool {
             .parts()
             .into_iter()
             .any(|(_, part)| carries_identity(part, identities)),
+    }
+}
+
+impl State {
+    /// An instance of the lambda's C made at `at` by `by`, each value
+    /// of `args` passing into the copy of the lambda's parameter in its generic
+    /// part, or into its parameter in the environment, and the copy of its
+    /// result type in its generic part, or the environment's, passing into
+    /// `result`.
+    pub(crate) fn instantiate_lambda(
+        &mut self,
+        at: &Name,
+        by: &Recorder,
+        lambda: &Name,
+        args: &[ClassId],
+        result: ClassId,
+    ) -> Recording {
+        let function = self.lambda_function(lambda).clone();
+        let from = Rc::clone(
+            self.solved
+                .get(&function.group)
+                .expect("a lambda's group is solved first"),
+        );
+        let mut copy = Instance::new(at, by.clone(), &from);
+        let mut found = Vec::new();
+        let held = self.environment_of(lambda);
+        for (name, held) in function.params.iter().chain([&function.result]).zip(held) {
+            let class = match held {
+                Some(class) => class,
+                None => copy.class(self, from.text(name)),
+            };
+            found.push(class);
+        }
+        let returned = found.pop().expect("the result type follows the parameters");
+        let mut recorded = copy.record_rest(self);
+        let pairs: Vec<(ClassId, ClassId)> = args
+            .iter()
+            .copied()
+            .zip(found)
+            .chain([(returned, result)])
+            .collect();
+        recorded.append(self.record_call(&pairs, by));
+        recorded
+    }
+
+    /// The parameter types of the lambda, and then its result type, each the
+    /// class here where its environment holds it, none where its binding group does:
+    /// for a lambda an instance
+    /// made anew, that instance's copies.
+    pub(crate) fn environment_of(&self, lambda: &Name) -> Vec<Option<ClassId>> {
+        self.environment_in(lambda).unwrap_or_else(|| {
+            panic!(
+                "{lambda}'s value reaches a group its environment is not in, \
+                 which is not yet encoded"
+            )
+        })
+    }
+
+    /// As `environment_of`, none where its environment is not here.
+    pub(crate) fn environment_in(&self, lambda: &Name) -> Option<Vec<Option<ClassId>>> {
+        if let Some(copy) = self.lambda_copy(lambda) {
+            return Some(copy.environment);
+        }
+        let function = self.lambda_function(lambda);
+        function
+            .params
+            .iter()
+            .chain([&function.result])
+            .map(|name| {
+                if self.environment.contains(name) {
+                    self.arena.get(&ClassName::Text(name.clone())).map(Some)
+                } else {
+                    Some(None)
+                }
+            })
+            .collect()
+    }
+
+    /// The lambda of the program a lambda here is, or copies.
+    pub(crate) fn lambda_function(&self, lambda: &Name) -> &crate::program::Function {
+        let of = self.lambda_copy(lambda).map_or(lambda.clone(), |copy| copy.of);
+        self.functions
+            .iter()
+            .find(|function| function.name == of)
+            .expect("a lambda is a function")
+    }
+
+    /// The lambdas the Values of the class's function value names: those of
+    /// the function values that reach it, by equations or lower bounds.
+    pub(crate) fn values_of(&self, id: ClassId) -> BTreeSet<Name> {
+        let mut seen = BTreeSet::from([self.root(id)]);
+        let mut work = vec![self.root(id)];
+        let mut values = BTreeSet::new();
+        while let Some(at) = work.pop() {
+            values.extend(self.classes.values(at));
+            for occurrence in self.classes.occurrences(at) {
+                if occurrence.side() != Some(Side::Upper) {
+                    continue;
+                }
+                let Some(
+                    Relation::LowerBound { lower, .. } | Relation::PartLowerBound { lower, .. },
+                ) = self.classes.items()[occurrence.at].relation()
+                else {
+                    continue;
+                };
+                let lower = *lower;
+                let lower = self.root(lower);
+                if seen.insert(lower) {
+                    work.push(lower);
+                }
+            }
+        }
+        values
     }
 }

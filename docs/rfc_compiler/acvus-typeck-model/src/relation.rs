@@ -1,16 +1,23 @@
-//! Relations and what records them.
+//! Relations, disjunctive constraints, and what records them.
 //!
-//! Every relation is kept in a log with what recorded it, and the
-//! equivalence classes are what the log makes of them. So the value a use
-//! reads can be decided from the remaining relations alone.
+//! Every item is kept in the record with what recorded it, each class
+//! holding its occurrences in them, and the equivalence classes are what the
+//! record makes of them. An item is a relation, or a disjunctive constraint:
+//! one of several alternatives, each a set of relations, which the judgment
+//! decides reading the record.
 
 use std::fmt;
 
+use std::collections::BTreeSet;
+
 use crate::class::{
-    Arena, ClassId, NamedStructureConstraint, StructureConstraint, StructureSource,
+    Arena, ClassId, ClassName, LinkAt, NamedStructureConstraint, Side, StructureConstraint,
+    StructureSource,
 };
+use crate::disjunction::{Decision, Disjunction, DisjunctionAt};
 use crate::domain::Domain;
-use crate::ty::{Name, Term};
+use crate::program::Position;
+use crate::ty::{Name, PartKey, Term};
 
 /// A relation recorded in equivalence classes.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -27,9 +34,9 @@ pub enum Relation {
     Equation(ClassId, ClassId),
     /// A structure constraint, which a projection records.
     StructureConstraint(ClassId, StructureConstraint),
-    /// A structure the class holds: a type the text or a declaration writes,
-    /// or, in a copy of C, the structure the class held where its binding
-    /// group was solved.
+    /// A structure the class holds: one the text, a declaration or a decided
+    /// alternative writes, or one solving gives it, a decomposition's,
+    /// fallback's or an identity made anew.
     Structure(ClassId, Term<ClassId>, StructureSource),
     /// The constructors the class's value may take, which a literal, a disjunctive constraint's
     /// generalization or a lend gives before the class takes one.
@@ -39,6 +46,24 @@ pub enum Relation {
     /// `e?`'s error value of the type `from` wrapped into `to`, which a decomposition
     /// relates once `from` takes a constructor.
     Wrap { from: ClassId, to: ClassId },
+    /// The standing of a class in the group: what it is to the group before
+    /// anything is solved.
+    Standing(ClassId, Standing),
+}
+
+/// What a class is to the binding group whose record holds it.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Standing {
+    /// A class the text gives, by the name the program gives it: one of the
+    /// outcome's.
+    Text,
+    /// The type of a parameter, which the use that makes an instance
+    /// chooses: no unknown of the group.
+    Universal,
+    /// A class of an enclosing group, shared here and not made anew by an
+    /// instance; `unknown` where it is an unknown of its own group, so that a
+    /// value passing into it by name enters it.
+    Shared { unknown: bool },
 }
 
 impl Relation {
@@ -59,7 +84,37 @@ impl Relation {
                 .chain(term.parts().into_iter().map(|(_, part)| *part))
                 .collect(),
             Relation::Domain(class, _)
-            | Relation::Values(class, _) => vec![*class],
+            | Relation::Values(class, _)
+            | Relation::Standing(class, _) => vec![*class],
+        }
+    }
+
+    /// The classes occurring in the relation, each with its role in it.
+    pub fn occurrences(&self) -> Vec<(ClassId, Role)> {
+        match self {
+            Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper } => {
+                vec![(*lower, Role::Lower), (*upper, Role::Upper)]
+            }
+            Relation::CoercionConstraint { from, to } | Relation::Wrap { from, to } => {
+                vec![(*from, Role::Lower), (*to, Role::Upper)]
+            }
+            Relation::Equation(a, b) => vec![(*a, Role::Equated), (*b, Role::Equated)],
+            Relation::StructureConstraint(class, structure_constraint) => {
+                vec![
+                    (*class, Role::Own),
+                    (structure_constraint.class(), Role::Part(structure_constraint.key())),
+                ]
+            }
+            Relation::Structure(class, term, _) => std::iter::once((*class, Role::Own))
+                .chain(
+                    term.parts()
+                        .into_iter()
+                        .map(|(key, part)| (*part, Role::Part(key))),
+                )
+                .collect(),
+            Relation::Domain(class, _)
+            | Relation::Values(class, _)
+            | Relation::Standing(class, _) => vec![(*class, Role::Own)],
         }
     }
 
@@ -99,6 +154,7 @@ impl Relation {
                 from: f(from),
                 to: f(to),
             },
+            Relation::Standing(class, standing) => Relation::Standing(f(class), standing),
         }
     }
 }
@@ -117,9 +173,13 @@ pub enum Recorder {
     /// decided: the generalization of all it may become, which holds whatever
     /// it is decided as.
     Generalization(Name),
+    /// The judgment of the equivalence class of this class: the structure it
+    /// takes at its join or its fill.
+    Join(ClassId),
     /// The equivalence class of this class taking a constructor.
     Decomposition(ClassId),
-    /// A cycle of lower bounds alone, merged into one equivalence class.
+    /// A cycle of lower bounds and part lower bounds alone, merged into one
+    /// equivalence class.
     Cycle,
     /// The function value `from` passing into the function type `to`, whose
     /// decomposition makes an instance of each lambda its Values names, as though the
@@ -128,9 +188,8 @@ pub enum Recorder {
     /// The I\* check, making an instance of a lambda's C that no call made, in
     /// a view of a state it decides disjunctive constraints again in. Solving never records it.
     Check,
-    /// Fallback, once no step is left: the value it gives a class no step
-    /// solves, a decision no other relation derives, which every read after
-    /// it takes as given.
+    /// Fallback, at the fixpoint: the default it gives a class no judgment
+    /// decided, which every judgment after it takes as given.
     Fallback,
     /// The instance `at`, made by `by`, the use of a function at its item or
     /// the call of a function value, recording in its binding group
@@ -143,27 +202,12 @@ pub enum Recorder {
 }
 
 impl Recorder {
-    /// Whether solving derives it from the other relations, so that a value
-    /// read derives it again from the relations that remain.
-    pub fn is_derived(&self) -> bool {
-        match self {
-            Recorder::Decomposition(_) | Recorder::Cycle | Recorder::FunctionType { .. } => true,
-            Recorder::Instance { by, .. } => by.is_derived(),
-            Recorder::Origin
-            | Recorder::Text(_)
-            | Recorder::Disjunction(_)
-            | Recorder::Generalization(_)
-            | Recorder::Check
-            | Recorder::Fallback => false,
-        }
-    }
-
-    /// The disjunctive constraints it is recorded by, a value read leaving any of them out
+    /// The disjunctive constraints it is recorded by, a judgment leaving any of them out
     /// leaving it out: a disjunctive constraint's own relation names that disjunctive constraint, and a
     /// copy in an instance names what made the instance and, by `copy_name`,
     /// the disjunctive constraints the relation it copies is recorded by. A disjunctive constraint's generalization
     /// names none: it is not recorded by the disjunctive constraint's being decided, so no
-    /// read leaves it out.
+    /// judgment leaves it out.
     pub fn disjunctions(&self) -> Vec<Name> {
         match self {
             Recorder::Disjunction(name) => vec![name.clone()],
@@ -179,6 +223,7 @@ impl Recorder {
             Recorder::Origin
             | Recorder::Text(_)
             | Recorder::Generalization(_)
+            | Recorder::Join(_)
             | Recorder::Decomposition(_)
             | Recorder::Cycle
             | Recorder::FunctionType { .. }
@@ -198,6 +243,7 @@ impl Recorder {
             | Recorder::FunctionType { .. } => true,
             Recorder::Instance { of, .. } => of.is_entering(),
             Recorder::Origin
+            | Recorder::Join(_)
             | Recorder::Decomposition(_)
             | Recorder::Cycle
             | Recorder::Check
@@ -212,10 +258,161 @@ pub fn copy_name(at: &Name, disjunction: &Name) -> Name {
     Name::new(&format!("{at}/{disjunction}"))
 }
 
+/// An item of the record.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Item {
+    /// A relation: an item of one alternative.
+    Relation(Relation),
+    /// A disjunctive constraint of this name: a use, a lend, a projection, a
+    /// binding or a call of a function value, whose alternatives are what it
+    /// may become, and whose decision is the alternative it became, none
+    /// while it is undecided. What the decided alternative records is
+    /// recorded as relations of its own, by `Recorder::Disjunction`, and the
+    /// classes it makes anew are the item's, by the role each is made in.
+    Disjunction {
+        name: Name,
+        kind: Disjunction,
+        decision: Option<Decision>,
+    },
+    /// An instance named `at`, made by `by`: the C of the binding group
+    /// `group` made anew here, or, of a use whose constraints two groups
+    /// record, the parts of C at the positions recorded here (`parts`). Each
+    /// class made anew is the item's, in the role of the copy of the class
+    /// it copies, named as that group's record names it.
+    Instance {
+        at: Name,
+        by: Recorder,
+        group: Name,
+        parts: Option<BTreeSet<usize>>,
+    },
+    /// A lambda placed in a group instantiated, made anew here under the
+    /// name `name` by the instance `at`, copying the lambda `of`: the classes
+    /// of its environment, its parameters and then its result, are the
+    /// item's, each in the role of its place.
+    Lambda { name: Name, of: Name, at: Name },
+}
+
+impl Item {
+    /// The classes occurring in the item as it is recorded, each with its
+    /// role in it. The classes an item makes anew afterwards are attached to
+    /// it as they are made (`Classes::attach`).
+    pub fn occurrences(&self) -> Vec<(ClassId, Role)> {
+        match self {
+            Item::Relation(relation) => relation.occurrences(),
+            Item::Disjunction { kind, .. } => kind.occurrences(),
+            Item::Instance { .. } | Item::Lambda { .. } => Vec::new(),
+        }
+    }
+
+    /// The relation, where the item is one.
+    pub fn relation(&self) -> Option<&Relation> {
+        match self {
+            Item::Relation(relation) => Some(relation),
+            Item::Disjunction { .. } | Item::Instance { .. } | Item::Lambda { .. } => None,
+        }
+    }
+}
+
+/// A class's role in an item of the record. The side of it the class is,
+/// which the judgment reads, is a function of the role (`Role::side`).
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Role {
+    /// The value passes from it: the `τ` of `τ ≤ α` and of `τ ≤ₚ α`, the `T`
+    /// of `T ⇝ U`, and the error value of a wrap.
+    Lower,
+    /// The value passes into it: the `α`, the `U`, and the class the error
+    /// value is wrapped into.
+    Upper,
+    /// A side of an equation.
+    Equated,
+    /// The relation is on it: a structure, a structure constraint, a domain,
+    /// a standing, or a lambda its Values names.
+    Own,
+    /// The part of this key a structure writes or a structure constraint
+    /// names.
+    Part(PartKey),
+    /// A position of a use or a call of a function value.
+    Position(Position),
+    /// A lend's place.
+    Place,
+    /// A projection's operand.
+    Operand,
+    /// A binding's position.
+    Bound,
+    /// A binding's binding.
+    Binding,
+    /// A call's callee.
+    Callee,
+    /// A class a disjunctive constraint made anew, in this role.
+    Made(DisjunctionAt),
+    /// A class a decomposition made anew linking a relation's two sides
+    /// through the cast at `step` of the path between them.
+    Link { step: usize, at: LinkAt },
+    /// A class an instance made anew, copying the class of this name of the
+    /// group instantiated.
+    Copy(ClassName),
+    /// The class at this place of a lambda's environment: its parameter `i`,
+    /// or, past the parameters, its result.
+    Environment(usize),
+}
+
+impl Role {
+    /// The side of the item the class is, as the judgment reads it: what the
+    /// alternative taken records into a class is its upper side, what passes
+    /// into the alternative its lower side, and what the item carries or
+    /// reads of a class its own; a class made anew at a decision, a copy and
+    /// an environment are the item's bookkeeping, and no side.
+    pub fn side(&self) -> Option<Side> {
+        Some(match self {
+            Role::Lower => Side::Lower,
+            Role::Upper => Side::Upper,
+            Role::Equated => Side::Equated,
+            Role::Own => Side::Own,
+            Role::Part(_) => Side::Part,
+            Role::Position(Position::Arg(_)) => Side::Lower,
+            Role::Position(Position::Result | Position::Exit) => Side::Upper,
+            Role::Place | Role::Operand | Role::Callee => Side::Own,
+            Role::Bound => Side::Lower,
+            Role::Binding => Side::Upper,
+            Role::Made(DisjunctionAt::Generalized(_)) => Side::Upper,
+            Role::Made(_) | Role::Link { .. } | Role::Copy(_) | Role::Environment(_) => {
+                return None;
+            }
+        })
+    }
+}
+
+/// An item of the record: what recorded it, and whether it is decomposed.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Recorded {
-    pub relation: Relation,
+    pub item: Item,
     pub recorder: Recorder,
+    /// Whether its decomposition is recorded: the parts of its two sides
+    /// related, or a structure constraint "indexes `τ`" linked along the view
+    /// of its container. A copy of a decomposed relation is decomposed, since
+    /// what its decomposition recorded is copied with it. A disjunctive
+    /// constraint has no decomposition.
+    pub decomposed: bool,
+}
+
+impl Recorded {
+    /// The relation, where the item is one.
+    pub fn relation(&self) -> Option<&Relation> {
+        self.item.relation()
+    }
+
+    /// The disjunctive constraint's name, kind and decision, where the item
+    /// is one.
+    pub fn disjunction(&self) -> Option<(&Name, &Disjunction, Option<&Decision>)> {
+        match &self.item {
+            Item::Disjunction {
+                name,
+                kind,
+                decision,
+            } => Some((name, kind, decision.as_ref())),
+            Item::Relation(_) | Item::Instance { .. } | Item::Lambda { .. } => None,
+        }
+    }
 }
 
 /// A relation written with its classes' names.
@@ -254,6 +451,7 @@ impl fmt::Display for Named<'_> {
                 write!(f, "{}: Values contains {lambda}", name(class))
             }
             Relation::Wrap { from, to } => write!(f, "wrap {} into {}", name(from), name(to)),
+            Relation::Standing(class, standing) => write!(f, "{}: {standing:?}", name(class)),
         }
     }
 }

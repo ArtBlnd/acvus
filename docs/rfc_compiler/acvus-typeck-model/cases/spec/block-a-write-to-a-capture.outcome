@@ -12,6 +12,8 @@ outcome 1
   value `{..}()`: u8
   value `λ result`: u8
   decision call: calls {λ}
+  decision make_a: make_a#0
+  decision make_b: make_b#0
   decision probe: probe#1
   check `X ~> probe.Param(0)`: Ok(Identity)
   check `call#λ/λ result <= {..}()`: Ok(Identity)

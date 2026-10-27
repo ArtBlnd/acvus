@@ -1,23 +1,28 @@
 // What the model gives, written by `BLESS=1`.
 run: the written order
 outcome 1
-  refused
-  value 0: i32
+  accepted
+  value 0: u8
   value A: u8
   value u8: u8
-  check `0 <= A`: Err(None)
+  check `0 <= A`: Ok(Identity)
   check `u8 <= A`: Ok(Identity)
   I* of a final state: []
 start run
-  record #0 0: {i8, i16, i32, i64, u8, u16, u32, u64}
-  record #1 u8: u8
-  record #2 u8 <= A
-  record #3 0 <= A
-  decomposition #0 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
-  decomposition #1 u8: u8: no parts
-  domain #3 0 <= A
-    record #4 A: {i8, i16, i32, i64, u8, u16, u32, u64}
-  decomposition #4 A: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
-step 1 run: solve A
-  join A: Scalar(Int(U8))
-  decomposition #2 u8 <= A: parts
+  record #0 A: Text
+  record #1 0: Text
+  record #2 u8: Text
+  record #3 0: {i8, i16, i32, i64, u8, u16, u32, u64}
+  record #4 u8: u8
+  record #5 u8 <= A
+  record #6 0 <= A
+  decomposition #0 A: Text: no parts
+  decomposition #1 0: Text: no parts
+  decomposition #2 u8: Text: no parts
+  decomposition #3 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
+  decomposition #4 u8: u8: no parts
+step 1 run: join A
+  join A: Owned(Scalar(Int(U8)))
+    record #7 A: u8
+  decomposition #5 u8 <= A: parts
+  decomposition #7 A: u8: no parts

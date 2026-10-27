@@ -4,14 +4,12 @@ outcome 1
   refused
   value 1u8: u8
   value 2u8: u8
-  value `E::A(1u8)`: none
-  value `F::B(2u8)`: none
-  value P: none
-  value Q: none
+  value `E::A(1u8)`: E{A(u8)}
+  value `F::B(2u8)`: F{B(u8)}
+  value P: u8
+  value Q: u8
   value V: none
-  refusal no_join V
-  refusal no_value `E::A(1u8)`
-  refusal no_value `F::B(2u8)`
-  refusal no_value P
-  refusal no_value Q
+  check `1u8 <= P`: Ok(Identity)
+  check `2u8 <= Q`: Ok(Identity)
+  refusal no_join {V} by {`E::A(1u8) <= V`, `F::B(2u8) <= V`, `V: Text`}
   I* of a final state: []

@@ -2,14 +2,15 @@
 run: every order
 outcome 1
   refused
-  value 0: i32
+  value 0: none
   value T: none
   value `pick(t)`: none
   value `t.0`: none
   decision pick: undecided
   decision `t.0`: applied
-  refusal no_value T
-  refusal no_value `pick(t)`
-  refusal no_value `t.0`
-  refusal no_value `pick.Generalized(0)`
+  refusal no_value {0} by {`0 <= t.0`, `0: Text`, `0: {i8, i16, i32, i64, u8, u16, u32, u64}`}
+  refusal no_value {T} by {`T: Text`, `T: component 0: t.0`, `disjunctive constraint pick`, `disjunctive constraint t.0`, `pick(t) <= T`}
+  refusal no_value {`pick(t)`} by {`disjunctive constraint pick`, `pick(t) <= T`, `pick(t): Text`, `pick.Generalized(0) <= pick(t)`}
+  refusal no_value {`t.0`} by {`0 <= t.0`, `T: component 0: t.0`, `disjunctive constraint t.0`, `t.0: Text`}
+  refusal no_value {`pick.Generalized(0)`} by {`disjunctive constraint pick`, `pick.Generalized(0) <= pick(t)`, `pick.Generalized(0): not {&, &mut}`}
   I* of a final state: []

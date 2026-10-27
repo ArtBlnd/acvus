@@ -7,8 +7,8 @@ outcome 1
   value R: none
   value `r.f`: !
   decision `&1u8`: lend & place
-  decision `r.f`: applied through &
-  refusal conflict at "1u8 = R.Target": Scalar(Int(U8)) vs field f: r.f
-  refusal no_value `&1u8`
-  refusal no_value R
+  decision `r.f`: applied through
+  refusal no_value {`&1u8`, `&1u8.Lent`} by {`&1u8 <= R`, `&1u8 = &1u8.Lent`, `&1u8.Lent: &1u8`, `&1u8: Text`, `&1u8: {&, &mut, !}`, `disjunctive constraint &1u8`}
+  refusal conflict: Scalar(Int(U8)) vs field f: r.f {1u8, `R.Target`, `r.f.Target`} by {`&1u8.Lent: &1u8`, `1u8 = R.Target`, `1u8: Text`, `1u8: u8`, `R: &R.Target`, `R: ref r.f.Target`, `disjunctive constraint &1u8`, `disjunctive constraint r.f`, `r.f.Target: field f: r.f`}
+  refusal no_value {R} by {`&1u8 <= R`, `R: &R.Target`, `R: Text`, `R: ref r.f.Target`, `disjunctive constraint r.f`}
   I* of a final state: []

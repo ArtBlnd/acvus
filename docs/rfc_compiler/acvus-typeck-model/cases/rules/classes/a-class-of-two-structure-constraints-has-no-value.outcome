@@ -7,5 +7,5 @@ outcome 1
   value R2: !
   decision p0: applied
   decision px: applied
-  refusal conflict at "the value of A": Object vs component 0: R2
+  refusal conflict: Object vs component 0: R2 {A} by {`A: Text`, `A: component 0: R2`, `A: field x: R1`, `A: {x: A.Field(x)}`, `disjunctive constraint p0`, `disjunctive constraint px`}
   I* of a final state: []

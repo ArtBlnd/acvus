@@ -1,15 +1,15 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
-  value 300: i32
+  refused
+  value 300: none
   value X: u16
   value Y: u8
   value Z: u8
-  decision `300 as u8`: cast_u8#6
+  decision `300 as u8`: undecided
   decision `x as u8`: cast_u8#1
   check `300 as u8.GeneralizedResult <= Z`: Ok(Identity)
-  check `300 ~> 300 as u8.Param(0)`: Ok(Identity)
   check `X ~> x as u8.Param(0)`: Ok(Identity)
   check `x as u8.GeneralizedResult <= Y`: Ok(Identity)
+  refusal no_value {300} by {`300: Text`, `300: {i16, i32, i64, u16, u32, u64}`, `disjunctive constraint 300 as u8`}
   I* of a final state: []

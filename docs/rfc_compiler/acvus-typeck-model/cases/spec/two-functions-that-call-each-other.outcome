@@ -1,7 +1,7 @@
 // What the model gives, written by `BLESS=1`.
 run: 200 sampled orders
 outcome 1
-  refused
+  accepted
   value `&0 e`: none
   value `&0 o`: none
   value `&1 e`: none
@@ -34,23 +34,30 @@ outcome 1
   decision `&0 o`: lend & place
   decision `&1 e`: lend & place
   decision `&1 o`: lend & place
-  decision `even@20/&n e`: lend & place
-  decision `even@20/&n e 2`: lend & place
-  decision `even@20/&n o`: lend & place
-  decision `even@20/&n o 2`: lend & place
+  decision `&n e`: lend & place
+  decision `&n e 2`: lend & place
+  decision `&n o`: lend & place
+  decision `&n o 2`: lend & place
   decision `even@20/n - 1 e`: core::sub#0
-  decision `even@20/n - 1 o`: undecided
+  decision `even@20/n - 1 o`: core::sub#0
   decision `even@20/n == 0 e`: core::eq#0
-  decision `even@20/n == 0 o`: undecided
+  decision `even@20/n == 0 o`: core::eq#0
   check `10u8 <= even@20/NE`: Ok(Identity)
-  check `even@20/&0 e ~> even@20/n == 0 e.Param(1)`: Err(None)
-  check `even@20/&1 e ~> even@20/n - 1 e.Param(1)`: Err(None)
+  check `even@20/&0 e ~> even@20/n == 0 e.Param(1)`: Ok(Identity)
+  check `even@20/&0 o ~> even@20/n == 0 o.Param(1)`: Ok(Identity)
+  check `even@20/&1 e ~> even@20/n - 1 e.Param(1)`: Ok(Identity)
+  check `even@20/&1 o ~> even@20/n - 1 o.Param(1)`: Ok(Identity)
   check `even@20/&n e 2 ~> even@20/n - 1 e.Param(0)`: Ok(Identity)
   check `even@20/&n e ~> even@20/n == 0 e.Param(0)`: Ok(Identity)
+  check `even@20/&n o 2 ~> even@20/n - 1 o.Param(0)`: Ok(Identity)
+  check `even@20/&n o ~> even@20/n == 0 o.Param(0)`: Ok(Identity)
   check `even@20/RE <= even(10u8)`: Ok(Identity)
-  check `even@20/SE ~> even@20/NO`: Err(None)
+  check `even@20/SE ~> even@20/NO`: Ok(Identity)
+  check `even@20/SO ~> even@20/NE`: Ok(Identity)
   check `even@20/n - 1 e.Chosen(1) <= even@20/n - 1 e.Generalized(1)`: Ok(Identity)
   check `even@20/n - 1 e.Generalized(1) <= even@20/SE`: Ok(Identity)
+  check `even@20/n - 1 o.Chosen(1) <= even@20/n - 1 o.Generalized(1)`: Ok(Identity)
+  check `even@20/n - 1 o.Generalized(1) <= even@20/SO`: Ok(Identity)
   check `EQE ~> CE`: Ok(Identity)
   check `EQO ~> CO`: Ok(Identity)
   check `FO <= RO`: Ok(Identity)
@@ -61,6 +68,4 @@ outcome 1
   check `n == 0 e.GeneralizedResult <= EQE`: Ok(Identity)
   check `n == 0 o.GeneralizedResult <= EQO`: Ok(Identity)
   check `odd(n - 1) <= RE`: Ok(Identity)
-  refusal no_value `even@20/SO`
-  refusal no_value `even@20/n - 1 o.Generalized(1)`
-  I* of a final state: [completeness `even@20/n - 1 e`, completeness `even@20/n == 0 e`]
+  I* of a final state: []

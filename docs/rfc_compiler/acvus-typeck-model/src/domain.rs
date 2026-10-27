@@ -74,6 +74,18 @@ impl Domain {
         )
     }
 
+    /// Whether the domain admits a constructor that is no reference and not
+    /// `!`.
+    pub fn admits_no_reference(&self) -> bool {
+        let reference_or_never = |constructor: &Constructor| {
+            matches!(constructor, Constructor::Ref(_) | Constructor::Never)
+        };
+        match self {
+            Domain::Only(admitted) => admitted.iter().any(|c| !reference_or_never(c)),
+            Domain::Except(_) => true,
+        }
+    }
+
     pub fn admits(&self, constructor: &Constructor) -> bool {
         match self {
             Domain::Only(admitted) => admitted.contains(constructor),
@@ -95,46 +107,6 @@ impl Domain {
         match &met {
             Domain::Only(admitted) if admitted.is_empty() => None,
             _ => Some(met),
-        }
-    }
-
-    /// The one constructor it admits, where it admits one alone.
-    pub fn single(&self) -> Option<&Constructor> {
-        match self {
-            Domain::Only(admitted) if admitted.len() == 1 => admitted.iter().next(),
-            Domain::Only(_) | Domain::Except(_) => None,
-        }
-    }
-
-    /// Whether every constructor it admits it admits too.
-    pub fn within(&self, other: &Domain) -> bool {
-        self.meet(other).as_ref() == Some(self)
-    }
-
-    /// Whether it admits nothing but references and `!`.
-    pub fn is_references(&self) -> bool {
-        match self {
-            Domain::Only(admitted) => admitted
-                .iter()
-                .all(|constructor| matches!(constructor, Constructor::Ref(_) | Constructor::Never)),
-            Domain::Except(_) => false,
-        }
-    }
-
-    /// The domain a class this one is a lower bound of takes from it: itself,
-    /// where it admits no `!` and only scalars, from which no cast goes up, so
-    /// that a value reaching the class by `≤` is one it admits; none
-    /// otherwise, a value of `!` reaching every type.
-    pub fn upward(&self) -> Option<Domain> {
-        match self {
-            Domain::Only(admitted)
-                if admitted
-                    .iter()
-                    .all(|constructor| matches!(constructor, Constructor::Scalar(_))) =>
-            {
-                Some(self.clone())
-            }
-            Domain::Only(_) | Domain::Except(_) => None,
         }
     }
 

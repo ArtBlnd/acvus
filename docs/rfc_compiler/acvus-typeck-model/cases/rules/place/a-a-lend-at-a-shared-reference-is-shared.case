@@ -18,5 +18,5 @@ R = `&x`;
 `put(..)` = put(`&mut r`) @ put;
 
 must fail;
-assert `&mut r` == lend & through &;
+assert `&mut r` == lend & through;
 assert failing [`&mut r ~> put.Param(0)`];

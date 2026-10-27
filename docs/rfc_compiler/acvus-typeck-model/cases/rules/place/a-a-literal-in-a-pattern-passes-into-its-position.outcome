@@ -5,5 +5,5 @@ outcome 1
   value 1u16: u16
   value 1u8: u8
   value X: none
-  refusal no_join X
+  refusal no_join {X} by {`1u16 <= X`, `1u8 <= X`, `X: Text`}
   I* of a final state: []

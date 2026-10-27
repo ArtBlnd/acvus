@@ -11,11 +11,59 @@ outcome 1
   value `put(..)`: ()
   value `|v| ..`: Fn/1
   value `λ result`: ()
+  decision make_a: make_a#0
+  decision make_b: make_b#0
   decision `put(..)`: calls {λ}
   check `V <= X`: Ok(Identity)
   check `make_a() <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
   check `make_a.Result <= make_a()`: Ok(Identity)
   check `make_b() <= V`: Ok(Identity)
+  check `make_b.Result <= make_b()`: Ok(Identity)
+  check `put(..)#λ/λ result <= put(..)`: Ok(Identity)
+  check `|v| .. <= put`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
+  I* of a final state: []
+outcome 2
+  refused
+  value `()`: ()
+  value V: B
+  value X: A
+  value `make_a()`: A
+  value `make_b()`: B
+  value put: Fn/1
+  value `put(..)`: ()
+  value `|v| ..`: Fn/1
+  value `λ result`: ()
+  decision make_a: make_a#0
+  decision make_b: make_b#0
+  decision `put(..)`: calls {λ}
+  check `V <= X`: Err(None)
+  check `make_a() <= X`: Ok(Identity)
+  check `make_a.Result <= make_a()`: Ok(Identity)
+  check `make_b() <= V`: Ok(Identity)
+  check `make_b.Result <= make_b()`: Ok(Identity)
+  check `put(..)#λ/λ result <= put(..)`: Ok(Identity)
+  check `|v| .. <= put`: Ok(Identity)
+  check `() <= λ result`: Ok(Identity)
+  I* of a final state: []
+outcome 3
+  refused
+  value `()`: ()
+  value V: A
+  value X: A
+  value `make_a()`: A
+  value `make_b()`: B
+  value put: Fn/1
+  value `put(..)`: ()
+  value `|v| ..`: Fn/1
+  value `λ result`: ()
+  decision make_a: make_a#0
+  decision make_b: make_b#0
+  decision `put(..)`: calls {λ}
+  check `V <= X`: Ok(Identity)
+  check `make_a() <= X`: Ok(Identity)
+  check `make_a.Result <= make_a()`: Ok(Identity)
+  check `make_b() <= V`: Err(None)
   check `make_b.Result <= make_b()`: Ok(Identity)
   check `put(..)#λ/λ result <= put(..)`: Ok(Identity)
   check `|v| .. <= put`: Ok(Identity)

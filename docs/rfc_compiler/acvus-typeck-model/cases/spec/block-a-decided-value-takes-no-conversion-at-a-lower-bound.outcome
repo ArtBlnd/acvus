@@ -11,5 +11,5 @@ outcome 1
   decision call: calls {λ}
   check `call#λ/λ result <= {..}()`: Ok(Identity)
   check `1u16 <= λ result`: Ok(Identity)
-  refusal no_join X
+  refusal no_join {X} by {`0u8 <= X`, `X: Text`, `{..}() <= X`}
   I* of a final state: []

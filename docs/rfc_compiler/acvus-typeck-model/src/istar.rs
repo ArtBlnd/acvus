@@ -1,17 +1,15 @@
-//! I\*: each decision against the one its disjunctive constraint makes reading what is recorded
-//! once solving ends.
-//!
-//! The dependency here is computed on its own, from what each disjunctive constraint records at
-//! the end, never through `State::graph`, which is the means under test.
+//! I\*: each decision against the one the judgment gives its disjunctive constraint reading
+//! what is recorded once solving ends, without what the decision and the decisions that
+//! depend on it recorded.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::class::ClassId;
-use crate::disjunction::{Decision, Disjunction, DisjunctionState, Generalized, Read};
+use crate::disjunction::{Decision, Disjunction};
 use crate::explore::Final;
 use crate::instance::{Instance, Made};
-use crate::program::{ENTRY, Program, Projection};
+use crate::program::{ENTRY, Program};
 use crate::relation::{Recorder, Relation, copy_name};
 use crate::solve::State;
 use crate::ty::Name;
@@ -64,10 +62,8 @@ pub fn check(program: &Program, end: &Final<'_>) -> Vec<Violation> {
         let mut copy = Instance::new(&at, Recorder::Check, &lambda);
         copy.record_rest(&mut here);
         let made = here
-            .instances
-            .last()
-            .expect("an instance is kept where it is recorded")
-            .clone();
+            .instance(&at)
+            .expect("an instance is kept where it is recorded");
         add_decided(&mut here, &made, &lambda);
         violations.extend(check_view(&here, accepted, |name| {
             name.as_str().starts_with(&format!("{at}/"))
@@ -81,56 +77,32 @@ pub fn check(program: &Program, end: &Final<'_>) -> Vec<Violation> {
 /// relations copied from it are that disjunctive constraint's (`Recorder::disjunctions`).
 fn view(state: &State, groups: &BTreeMap<Name, Rc<State>>) -> State {
     let mut view = state.clone();
-    for made in &state.instances {
+    for made in state.instances() {
         let from = self::view(&groups[&made.group], groups);
-        add_decided(&mut view, made, &from);
+        add_decided(&mut view, &made, &from);
     }
     view
 }
 
 fn add_decided(here: &mut State, made: &Made, from: &State) {
-    let mut copy = Instance::resume(made, from);
+    let mut copy = Instance::resume(here, made, from);
     // An instance of parts of C has the decided disjunctive constraints in those parts.
     let components = made.parts.as_ref().map(|_| from.components());
-    for (name, disjunction) in &from.disjunctions {
-        let Some(decision) = &disjunction.decision else {
+    for (_, name, kind, decision) in from.classes.disjunctions() {
+        let Some(decision) = decision else {
             continue;
         };
         if let (Some(parts), Some(components)) = (&made.parts, &components)
             && !components
-                .of_disjunction(from, disjunction)
+                .of_disjunction(from, kind)
                 .is_some_and(|part| parts.contains(&part))
         {
             continue;
         }
-        let kind = copy.kind(here, &disjunction.kind);
-        let references = disjunction
-            .references
-            .iter()
-            .map(|&class| copy.class(here, class))
-            .collect();
-        let generalized = disjunction
-            .generalized
-            .clone()
-            .map(|generalized| match generalized {
-                Generalized::Use { part, classes } => Generalized::Use {
-                    part,
-                    classes: classes
-                        .into_iter()
-                        .map(|(k, class)| (k, copy.class(here, class)))
-                        .collect(),
-                },
-                Generalized::Lend => Generalized::Lend,
-            });
-        here.disjunctions.insert(
-            copy_name(&made.at, name),
-            DisjunctionState {
-                kind,
-                decision: Some(decision.clone()),
-                generalized,
-                references,
-            },
-        );
+        let kind = copy.kind(here, kind);
+        let copied = copy_name(&made.at, name);
+        let entry = here.add_disjunction(&copied, kind, Recorder::Check);
+        here.classes.decide(entry.at, Some(decision.clone()));
     }
 }
 
@@ -142,26 +114,24 @@ where
 {
     let graph = EndGraph::of(view);
     let mut violations = Vec::new();
-    for (name, disjunction) in &view.disjunctions {
-        let Some(decided) = disjunction.decision.clone() else {
+    for (_, name, kind, decision) in view.classes.disjunctions() {
+        let Some(decided) = decision.cloned() else {
             continue;
         };
         if !subject(name) {
             continue;
         }
         let left_out = graph.exclusion(name);
-        let again = match &disjunction.kind {
+        let again = match kind {
             Disjunction::Bind { path, .. } if path.iter().any(|step| left_out.contains(step)) => {
                 let mut cut = view.clone();
                 for step in path.iter().filter(|step| left_out.contains(*step)) {
-                    cut.disjunctions
-                        .get_mut(step)
-                        .expect("a binding's path is of the view's disjunctive constraints")
-                        .decision = None;
+                    let at = cut.disjunction_at(step);
+                    cut.classes.decide(at, None);
                 }
-                cut.decision_under(name, &left_out)
+                cut.decision(name, &left_out)
             }
-            _ => view.decision_under(name, &left_out),
+            _ => view.decision(name, &left_out),
         };
         if again.as_ref() == Some(&decided) {
             continue;
@@ -183,21 +153,6 @@ where
     violations
 }
 
-/// What each disjunctive constraint records into at the end, as each of the two reads takes it.
-struct Records {
-    value: BTreeSet<ClassId>,
-    reference: BTreeSet<ClassId>,
-}
-
-impl Records {
-    fn of(&self, read: Read) -> &BTreeSet<ClassId> {
-        match read {
-            Read::Value => &self.value,
-            Read::Reference => &self.reference,
-        }
-    }
-}
-
 /// The dependency at the end: for each
 /// disjunctive constraint, the disjunctive constraints it depends on.
 struct EndGraph {
@@ -207,20 +162,17 @@ struct EndGraph {
 impl EndGraph {
     fn of(view: &State) -> EndGraph {
         let reach = Reach::of(view);
-        let records: BTreeMap<Name, Records> = view
-            .disjunctions
-            .keys()
-            .map(|name| {
-                let records = Records {
-                    value: records(view, name, Read::Value),
-                    reference: records(view, name, Read::Reference),
-                };
-                (name.clone(), records)
-            })
+        let names: Vec<Name> = view
+            .classes
+            .disjunctions()
+            .map(|(_, name, _, _)| name.clone())
             .collect();
-        let on = view
-            .disjunctions
-            .keys()
+        let records: BTreeMap<Name, BTreeSet<ClassId>> = names
+            .iter()
+            .map(|name| (name.clone(), records(view, name)))
+            .collect();
+        let on = names
+            .iter()
             .map(|name| (name.clone(), depends_on(view, &reach, &records, name)))
             .collect();
         EndGraph { on }
@@ -242,26 +194,24 @@ impl EndGraph {
 }
 
 /// The disjunctive constraints `name` depends on at the end: those that record into a class
-/// reached from the classes at the positions it reads, as
-/// what it reads takes them, and a binding's path.
+/// reached from the classes it reads, and a binding's path.
 fn depends_on(
     view: &State,
     reach: &Reach,
-    records: &BTreeMap<Name, Records>,
+    records: &BTreeMap<Name, BTreeSet<ClassId>>,
     name: &Name,
 ) -> BTreeSet<Name> {
-    let kind = &view.disjunctions[name].kind;
-    let read = kind.read();
-    let reached = reach.from(view, view.read_positions(kind));
+    let (kind, _) = view.disjunction(name);
+    let reached = reach.from(view, view.reads(name));
     let mut on: BTreeSet<Name> = records
         .iter()
-        .filter(|(other, records)| *other != name && !records.of(read).is_disjoint(&reached))
+        .filter(|(other, records)| *other != name && !records.is_disjoint(&reached))
         .map(|(other, _)| other.clone())
         .collect();
     if let Disjunction::Bind { path, .. } = kind {
         for step in path {
             assert!(
-                view.disjunctions.contains_key(step),
+                view.classes.disjunction_at(step).is_some(),
                 "a binding's path is of the view's disjunctive constraints"
             );
             on.insert(step.clone());
@@ -270,69 +220,22 @@ fn depends_on(
     on
 }
 
-/// The roots of the classes the disjunctive constraint records into at the end, as a read of
-/// `read` takes them. A use records into
-/// what its candidate would record into, its
-/// candidates' where it is not decided: the classes it makes anew are its own,
-/// and no other disjunctive constraint reads them. Another decided disjunctive constraint
-/// records into what its own relations record into, those of the instances it
-/// made among them; one not decided, into what any decision still open to it
-/// would record into (`State::recorded_into_by`). A
-/// read of whether a class is a reference leaves out what cannot decide it.
-fn records(view: &State, name: &Name, read: Read) -> BTreeSet<ClassId> {
-    let disjunction = &view.disjunctions[name];
-    let classes: BTreeSet<ClassId> = match (&disjunction.kind, &disjunction.decision) {
-        (
-            Disjunction::Use {
-                callee,
-                args,
-                result,
-                ..
-            },
-            decision,
-        ) => {
-            let candidates: Vec<usize> = match decision {
-                Some(Decision::Use(id)) => vec![view.candidate_index(callee, args.len(), id)],
-                Some(Decision::Never) => {
-                    return result.iter().map(|&result| view.root(result)).collect();
-                }
-                Some(other) => unreachable!("a use is decided as a candidate or never: {other:?}"),
-                None => (0..view.candidates(callee, args.len()).len()).collect(),
-            };
-            candidates
-                .into_iter()
-                .flat_map(|candidate| view.would_record_by(name, candidate).into_keys())
-                .collect()
-        }
-        (_, Some(_)) => view
-            .log
+/// The roots of the classes the disjunctive constraint records into at the end: a decided
+/// one's, what the relations it recorded record into; one not decided, what a decision
+/// still open to it would record into.
+fn records(view: &State, name: &Name) -> BTreeSet<ClassId> {
+    let classes: BTreeSet<ClassId> = match view.disjunction(name).1 {
+        Some(_) => view
+            .classes
+            .items()
             .iter()
             .filter(|recorded| recorded.recorder.disjunctions().contains(name))
-            .flat_map(|recorded| into(&recorded.relation))
+            .filter_map(|recorded| recorded.relation())
+            .flat_map(into)
             .collect(),
-        (_, None) => view.recorded_into_by(name),
+        None => view.records_into(name),
     };
-    let mut roots: BTreeSet<ClassId> = classes.into_iter().map(|class| view.root(class)).collect();
-    if read == Read::Reference {
-        let mut cannot_decide: BTreeSet<ClassId> = disjunction.references.iter().copied().collect();
-        match &disjunction.kind {
-            Disjunction::Use { .. } => {}
-            Disjunction::Lend { place, .. } => {
-                cannot_decide.insert(*place);
-            }
-            Disjunction::Bind { position, .. } => {
-                cannot_decide.insert(*position);
-            }
-            Disjunction::Project { projection, .. } if *projection != Projection::Deref => {
-                return BTreeSet::new();
-            }
-            Disjunction::Project { .. } | Disjunction::CallValue { .. } => {}
-        }
-        for class in cannot_decide {
-            roots.remove(&view.root(class));
-        }
-    }
-    roots
+    classes.into_iter().map(|class| view.root(class)).collect()
 }
 
 /// The classes a relation records into: the upper side of a lower bound or a
@@ -348,7 +251,8 @@ fn into(relation: &Relation) -> Vec<ClassId> {
         Relation::StructureConstraint(class, _)
         | Relation::Structure(class, ..)
         | Relation::Domain(class, _)
-        | Relation::Values(class, _) => vec![*class],
+        | Relation::Values(class, _)
+        | Relation::Standing(class, _) => vec![*class],
     }
 }
 
@@ -363,10 +267,12 @@ struct Reach {
 impl Reach {
     fn of(view: &State) -> Reach {
         let mut edges: BTreeMap<ClassId, BTreeSet<ClassId>> = BTreeMap::new();
-        for recorded in &view.log {
-            if let Relation::LowerBound { lower, upper }
-            | Relation::PartLowerBound { lower, upper } = recorded.relation
+        for recorded in view.classes.items() {
+            if let Some(
+                Relation::LowerBound { lower, upper } | Relation::PartLowerBound { lower, upper },
+            ) = recorded.relation()
             {
+                let (lower, upper) = (*lower, *upper);
                 let (lower, upper) = (view.root(lower), view.root(upper));
                 if lower != upper {
                     edges.entry(upper).or_default().insert(lower);

@@ -8,5 +8,5 @@ outcome 1
   value String: String
   decision `@cfg.extra`: applied
   check `1 <= @cfg.extra`: Ok(Identity)
-  refusal conflict at "@cfg: field extra: @cfg.extra": Object vs field extra: @cfg.extra
+  refusal conflict: Object vs field extra: @cfg.extra {`@cfg`} by {`@cfg: Text`, `@cfg: field extra: @cfg.extra`, `@cfg: {name: String}`, `disjunctive constraint @cfg.extra`}
   I* of a final state: []

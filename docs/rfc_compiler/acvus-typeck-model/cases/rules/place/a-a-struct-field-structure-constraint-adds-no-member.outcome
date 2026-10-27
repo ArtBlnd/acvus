@@ -11,5 +11,5 @@ outcome 1
   decision `.z`: applied
   check `1u8 <= L`: Ok(Identity)
   check `2u8 <= Rr`: Ok(Identity)
-  refusal conflict at "Self {..}: field z: .z": Struct(Pair) vs field z: .z
+  refusal conflict: Struct(Pair) vs field z: .z {`Self {..}`} by {`Self {..}: Pair<L, Rr>`, `Self {..}: Text`, `Self {..}: field z: .z`, `disjunctive constraint .z`}
   I* of a final state: []

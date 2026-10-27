@@ -81,29 +81,31 @@ the entry (`explore::sample_with`, `cases::run::run`):
 
 ```
 State::start                                 the text recorded
-├─ record_origins, record_equations          unify    (State::record → hold → Classes::unifying)
+├─ record_origins, record_equations          unify    (State::record → Classes::record, hold →
+│                                            Classes::unifying)
 ├─ record_items                              unify; a use of a function: instantiate (Instance)
-├─ decide_at_once                            a Deref
 └─ settle
 loop
-├─ steps → eligible over graph               what has no unbroken dependency left (dep.rs)
-│  ├─ Step::Solve(class)                     join     (solve → join)
-│  └─ Step::Decide(disjunctive constraint)   join at it: its alternative chosen from the value read
-│                                            (decide → value_read); instantiate (record_decision)
-├─ step → settle
-└─ no step left
+├─ judgments                                 what the record allows to be decided (judgment.rs):
+│                                            none where no class is unsolved (State::unsolved)
+│                                            and no disjunctive constraint undecided
+│  ├─ Judgment::Join(class)                  join: the type its record gives
+│  └─ Judgment::Decide(disjunctive           join at it: the alternative its record gives;
+│     constraint)                            instantiate (record_decision)
+├─ step → judge, settle
+└─ no judgment left
    ├─ a binding group                        its fixpoint, kept in `solved` for its instances
-   └─ the entry                              default  (fall_back → take_defaults → settle);
+   └─ the entry                              default  (fall_back → take_defaults over
+                                             State::unsolved → settle);
                                              nothing fell back: the outcome
 settle, until nothing changes
-├─ merge_cycles, link_views                  unify
+├─ merge_cycles                              unify
 ├─ record_generalizations                    unify: what every alternative of an undecided
 │                                            disjunctive constraint shares
-└─ for each relation not decomposed
-   ├─ decompose_at                           unify: the parts of two solved sides; a function value
-   │                                         into a function type: instantiate (instantiate_lambda)
-   └─ domain_up                              join: the domain to be joined, recorded at the class
-                                             a lower bound holding no structure bounds
+└─ decompose_at, for each relation           unify: the parts of two solved sides; "indexes τ" on
+   not decomposed                            an extern-defined container linked along its view; a
+                                             function value into a function type: instantiate
+                                             (instantiate_lambda)
 ```
 
 ## Invariants
@@ -135,7 +137,7 @@ The primitives, each assuming only those before it:
 | 02 | Types in declarations: declared types, signatures, substitution and matching |
 | 03 | Declarations and the cast tree: extern fns and impls by name, casts and views, conversions |
 | 04 | Join and `≤` |
-| 05 | Coercion and rank: LitVars, values a use reads, coercion, the steps of `≤`, rank |
+| 05 | Coercion and rank: LitVars, coercion, the steps of `≤`, rank |
 | 06 | Equivalence classes: names, union-find, type variables, structures |
 | 07 | Relations and what records them |
 | 08 | Uses, lends, projections and bindings |

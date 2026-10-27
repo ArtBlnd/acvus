@@ -1,6 +1,6 @@
 // A LitVar lower bound of a class that waits for nothing is unified with it
 // as the class is solved.
-//@ order: solve A
+//@ order: join A
 let A;
 let 0: lit 0;
 let u8: u8;

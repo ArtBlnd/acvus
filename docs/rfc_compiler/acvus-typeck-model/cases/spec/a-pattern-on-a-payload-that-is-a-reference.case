@@ -28,4 +28,4 @@ Bv = bind `.1` via [Some, `.1`] @ b;
 
 must pass;
 assert Bv: &u8;
-assert `.1` == applied through &;
+assert `.1` == applied through;

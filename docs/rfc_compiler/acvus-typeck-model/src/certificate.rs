@@ -2,7 +2,7 @@
 //!
 //! The checker reads the program and the certificate alone, on closed types:
 //! every relation the text and the decisions give is regenerated from the
-//! program's items, never read from a state's log.
+//! program's items, never read from a state's record.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -14,12 +14,14 @@ use crate::cut::Cut;
 use crate::decl::{Decls, Node};
 use crate::disjunction::generalization::Generalization;
 use crate::disjunction::{Decision, DisjunctionAt, LendTarget};
+use crate::relation::Role;
 use crate::explore::Final;
 use crate::instance::Made;
 use crate::program::{ENTRY, Function, Item, Origin, Part, Place, Position, Program, Projection};
 use crate::relation::{Recorder, copy_name};
 use crate::sig::{SigArgs, SigTy, SigVar, Signature};
-use crate::solve::{LambdaCopy, State};
+use crate::instance::LambdaCopy;
+use crate::solve::State;
 use crate::ty::{Constructor, HasTerm, Mutability, Name, PartKey, Term, Ty, TyError, check_term};
 
 /// A closed value as the certificate gives it: a type each of whose function
@@ -115,7 +117,15 @@ fn certified(state: &State, root: ClassId) -> Option<Value> {
 /// What one state of a final state decided, as the checker reads it.
 pub struct Sheet {
     group: Name,
-    ids: BTreeMap<ClassName, ClassId>,
+    /// Each class by its label, as the outcome and the case language name
+    /// it: what a case's change names a class by, and what a violation
+    /// names it by. A lookup by the record's own structure is by a text
+    /// class's name alone, the program's interface, or by an item and a
+    /// role.
+    labels: BTreeMap<ClassName, ClassId>,
+    /// The class each disjunctive constraint made anew in each role, read
+    /// from the record's items.
+    made: BTreeMap<(Name, DisjunctionAt), ClassId>,
     roots: BTreeMap<ClassId, ClassId>,
     /// Each root's value.
     values: BTreeMap<ClassId, Option<Value>>,
@@ -133,13 +143,27 @@ pub struct Sheet {
 
 impl Sheet {
     fn of(state: &State) -> Sheet {
-        let ids: BTreeMap<ClassName, ClassId> = state
+        let labels: BTreeMap<ClassName, ClassId> = state
             .arena
             .classes()
             .map(|(id, name)| (name.clone(), id))
             .collect();
+        let made: BTreeMap<(Name, DisjunctionAt), ClassId> = state
+            .classes
+            .disjunctions()
+            .flat_map(|(at, name, _, _)| {
+                state
+                    .classes
+                    .roles_of(at)
+                    .into_iter()
+                    .filter_map(move |(class, role)| match role {
+                        Role::Made(made) => Some(((name.clone(), made), class)),
+                        _ => None,
+                    })
+            })
+            .collect();
         let roots: BTreeMap<ClassId, ClassId> =
-            ids.values().map(|&id| (id, state.root(id))).collect();
+            labels.values().map(|&id| (id, state.root(id))).collect();
         let distinct: BTreeSet<ClassId> = roots.values().copied().collect();
         let parts = distinct
             .iter()
@@ -164,21 +188,18 @@ impl Sheet {
             .into_iter()
             .map(|root| (root, certified(state, root)))
             .collect();
-        let decisions = state
-            .disjunctions
-            .iter()
-            .map(|(name, disjunction)| (name.clone(), disjunction.decision.clone()))
-            .collect();
+        let decisions = state.decisions();
         Sheet {
             group: state.group.clone(),
-            ids,
+            labels,
+            made,
             roots,
             values,
             parts,
             unknowns,
             decisions,
-            instances: state.instances.clone(),
-            lambdas: state.lambdas.clone(),
+            instances: state.instances(),
+            lambdas: state.lambda_copies(),
         }
     }
 
@@ -186,8 +207,19 @@ impl Sheet {
         self.group.as_str() == ENTRY
     }
 
+    /// The class of the text class of this name.
     fn id(&self, name: &ClassName) -> Option<ClassId> {
-        self.ids.get(name).copied()
+        assert!(
+            matches!(name, ClassName::Text(_)),
+            "a lookup by name is of a text class, not {name}"
+        );
+        self.labels.get(name).copied()
+    }
+
+    /// The class the disjunctive constraint `owner` made anew in the role
+    /// `made`, where it made one.
+    fn made(&self, owner: &Name, made: &DisjunctionAt) -> Option<ClassId> {
+        self.made.get(&(owner.clone(), made.clone())).copied()
     }
 
     fn root(&self, id: ClassId) -> ClassId {
@@ -196,7 +228,7 @@ impl Sheet {
 
     /// A name of a member of the root.
     fn name_of(&self, root: ClassId) -> &ClassName {
-        self.ids
+        self.labels
             .iter()
             .find(|(_, id)| self.root(**id) == root)
             .map(|(name, _)| name)
@@ -248,7 +280,7 @@ impl Certificate {
             .get_mut(&Name::new(group))
             .unwrap_or_else(|| panic!("the certificate has a sheet of {group}"));
         let id = sheet
-            .ids
+            .labels
             .iter()
             .find(|(class, _)| class.to_string() == name)
             .map(|(_, &id)| id)
@@ -691,8 +723,7 @@ impl Checker<'_> {
         owner: &Name,
         made: DisjunctionAt,
     ) -> Option<At> {
-        let name = ClassName::Disjunction(Rc::new(owner.clone()), made);
-        let class = context.sheet(level).id(&name)?;
+        let class = context.sheet(level).made(owner, &made)?;
         Some(At { level, class })
     }
 
@@ -1291,19 +1322,6 @@ impl Checker<'_> {
                 (decision, level, owner)
             }
         };
-        // The generalization is recorded where the use is, before it is decided,
-        // so its classes are the group's own, at level 0.
-        let generalization_values = match &generalization {
-            Some(part) => Some(self.generalization(
-                context,
-                &at,
-                0,
-                name,
-                part,
-                disjunction_result.as_ref(),
-            )?),
-            None => None,
-        };
         match decision {
             Decision::Use(id) => {
                 let decl = self.decls.decl(&id);
@@ -1344,38 +1362,6 @@ impl Checker<'_> {
                         at: Self::disjunction_at(context, level, &owner, DisjunctionAt::Result),
                     };
                     self.returns(context, &at, &returned, result);
-                }
-                if let (Some(part), Some(values)) = (&generalization, &generalization_values) {
-                    let candidate = decls
-                        .iter()
-                        .position(|decl| decl.id == id)
-                        .expect("a candidate is among the candidates");
-                    for (k, value) in Generalization::vars_in(&part.result)
-                        .into_iter()
-                        .zip(values)
-                    {
-                        let Ok(chosen) = part.vars[k][candidate].substitute(&bound) else {
-                            self.violation(context, &at, format!("variable {k} has no type"));
-                            return None;
-                        };
-                        let chosen = Read {
-                            value: chosen,
-                            at: Self::disjunction_at(
-                                context,
-                                level,
-                                &owner,
-                                DisjunctionAt::Chosen(k),
-                            ),
-                        };
-                        let holds = self.flows(context, &at, &chosen, value, true);
-                        let (chosen, value) = (&chosen.value, &value.value);
-                        self.require(
-                            context,
-                            &at,
-                            holds,
-                            format!("{chosen} <= {value} at the generalization's {k} fails"),
-                        );
-                    }
                 }
                 if let Some(exit) = disjunction_exit {
                     self.exit(context, &at, level, &owner, &sig, exit)?;
@@ -1464,16 +1450,15 @@ impl Checker<'_> {
         sig: &Signature,
         exit: &Name,
     ) -> Option<()> {
-        let disjunction = |at: DisjunctionAt| ClassName::Disjunction(Rc::new(owner.clone()), at);
-        let class = |checker: &mut Self, name: ClassName| -> Option<Value> {
-            let Some(id) = context.sheet(level).id(&name) else {
-                checker.violation(context, at, format!("the decision made no class {name}"));
+        let class = |checker: &mut Self, made: DisjunctionAt| -> Option<Value> {
+            let Some(id) = context.sheet(level).made(owner, &made) else {
+                checker.violation(context, at, format!("the decision made no {owner}.{made:?}"));
                 return None;
             };
             let lookup = context.lookup(level, id);
-            checker.get(context, at, &name.to_string(), lookup)
+            checker.get(context, at, &format!("{owner}.{made:?}"), lookup)
         };
-        let value = class(self, disjunction(DisjunctionAt::Exit))?;
+        let value = class(self, DisjunctionAt::Exit)?;
         let exit_read = self.text_read(context, at, exit)?;
         let value_read = Read {
             value: value.clone(),
@@ -1493,7 +1478,7 @@ impl Checker<'_> {
             ([SigTy::Term(param)], Term::Result { err, .. })
                 if matches!(**param, Term::Result { .. }) =>
             {
-                let error = class(self, disjunction(DisjunctionAt::Var(SigVar::Type(1))))?;
+                let error = class(self, DisjunctionAt::Var(SigVar::Type(1)))?;
                 let into = match error.term() {
                     term if crate::join::is_error(term) || matches!(term, Term::Never) => Some(err),
                     Term::Enum(name, _) | Term::Struct(name, _) | Term::Extern { name, .. } => {
@@ -1541,75 +1526,6 @@ impl Checker<'_> {
         Some(())
     }
 
-    /// A use's generalization: the values of the classes it made for the
-    /// variables its result writes, each within the domain the generalization
-    /// gives it, and the generalization's result entering the use's result.
-    /// Returns those variables' values, in the order `Generalization::vars_in`
-    /// gives them.
-    fn generalization(
-        &mut self,
-        context: &Context<'_>,
-        at: &str,
-        level: usize,
-        owner: &Name,
-        part: &Generalization,
-        result: Option<&Read>,
-    ) -> Option<Vec<Read>> {
-        let vars = Generalization::vars_in(&part.result);
-        let mut values = Vec::new();
-        let mut types = vec![None; part.vars.len()];
-        for &k in &vars {
-            let name =
-                ClassName::Disjunction(Rc::new(owner.clone()), DisjunctionAt::Generalized(k));
-            let Some(id) = context.sheet(level).id(&name) else {
-                self.violation(context, at, format!("the use made no class {name}"));
-                return None;
-            };
-            let lookup = context.lookup(level, id);
-            let value = self.get(context, at, &name.to_string(), lookup)?;
-            if let Some(reference) = part.is_reference(k) {
-                let holds = *value.term() == Term::Never
-                    || matches!(value.term(), Term::Ref(..)) == reference;
-                let is = if reference {
-                    "a reference"
-                } else {
-                    "no reference"
-                };
-                self.require(
-                    context,
-                    at,
-                    holds,
-                    format!("{name} is recorded as {is}, and its value is {value}"),
-                );
-            }
-            types[k] = Some(value.clone());
-            values.push(Read {
-                value,
-                at: Some(At { level, class: id }),
-            });
-        }
-        let bound = SigArgs {
-            types,
-            identity: None,
-        };
-        if let Some(result) = result {
-            let Ok(returned) = part.result.substitute(&bound) else {
-                self.violation(
-                    context,
-                    at,
-                    "the generalization's result has no type".to_string(),
-                );
-                return None;
-            };
-            let returned = Read {
-                value: returned,
-                at: Self::disjunction_at(context, level, owner, DisjunctionAt::GeneralizedResult),
-            };
-            self.returns(context, at, &returned, result);
-        }
-        Some(values)
-    }
-
     /// The values of the variables the signature writes at the positions the
     /// disjunctive constraint holds, `written`, those of the classes the decision made for them.
     fn bound(
@@ -1630,13 +1546,13 @@ impl Checker<'_> {
             if !written {
                 continue;
             }
-            let name = ClassName::Disjunction(Rc::new(owner.clone()), DisjunctionAt::Var(var));
-            let Some(id) = context.sheet(level).id(&name) else {
-                self.violation(context, at, format!("the decision made no class {name}"));
+            let made = DisjunctionAt::Var(var);
+            let Some(id) = context.sheet(level).made(owner, &made) else {
+                self.violation(context, at, format!("the decision made no {owner}.{made:?}"));
                 return None;
             };
             let lookup = context.lookup(level, id);
-            let ty = self.get(context, at, &name.to_string(), lookup)?;
+            let ty = self.get(context, at, &format!("{owner}.{made:?}"), lookup)?;
             match var {
                 SigVar::Type(k) => bound.types[k] = Some(ty),
                 SigVar::Identity => bound.identity = Some(ty),
@@ -1668,12 +1584,8 @@ impl Checker<'_> {
         let result = self.text(context, &at, result)?;
         let (expected, target_ty) = match (target, place.term()) {
             (LendTarget::Place, _) => (mutability, place.clone()),
-            (LendTarget::Through(read), Term::Ref(of, inner)) => {
-                let agrees = read.is_none_or(|read| read == *of);
-                self.require(context, &at, agrees, format!("{place} is not of {read:?}"));
-                (mutability.min(*of), inner.clone())
-            }
-            (LendTarget::Through(_), _) => {
+            (LendTarget::Through, Term::Ref(of, inner)) => (mutability.min(*of), inner.clone()),
+            (LendTarget::Through, _) => {
                 self.violation(context, &at, format!("{place} is no reference"));
                 return None;
             }
@@ -1709,11 +1621,8 @@ impl Checker<'_> {
         let result = self.text(context, &at, result)?;
         let holds = match decision {
             Decision::Applied => has(self.decls, &operand, projection, &result),
-            Decision::AppliedToTarget(read) => match operand.term() {
-                Term::Ref(of, target) => {
-                    read.is_none_or(|read| read == *of)
-                        && has(self.decls, target, projection, &result)
-                }
+            Decision::AppliedToTarget => match operand.term() {
+                Term::Ref(_, target) => has(self.decls, target, projection, &result),
                 _ => false,
             },
             other => {
@@ -1753,8 +1662,8 @@ impl Checker<'_> {
             Decision::BindLend { target, mutability } => {
                 let target = match (target, position.term()) {
                     (LendTarget::Place, _) => position.clone(),
-                    (LendTarget::Through(_), Term::Ref(_, inner)) => inner.clone(),
-                    (LendTarget::Through(_), _) => {
+                    (LendTarget::Through, Term::Ref(_, inner)) => inner.clone(),
+                    (LendTarget::Through, _) => {
                         self.violation(context, &at, format!("{position} is no reference"));
                         return None;
                     }

@@ -3,30 +3,55 @@
 //! definition gives no result, and what solving decides.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::rc::Rc;
 
-use crate::class::{ClassId, ClassName, Conflict, Conflicted, NamedConflict};
+use crate::class::{ClassId, ClassName};
 use crate::coerce::{CoerceError, Coercion, along_le, coerce};
 use crate::decl::DeclId;
 use crate::disjunction::Decision;
-use crate::relation::{Named, Relation};
+use crate::relation::{Item, Named, Relation};
 use crate::sig::{SigTy, SigVar};
 use crate::solve::State;
 use crate::ty::{Name, Term, Ty};
 
-/// Where a definition gives no result.
+/// Why an equivalence class has no value.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum Refusal {
-    /// No type holds what a relation made one equivalence class hold.
-    Conflict { at: String, conflict: String },
-    /// The types an equivalence class's sources give have no join.
-    NoJoin(ClassName),
-    /// The equivalence class reaches a part of its own.
-    Infinite(ClassName),
-    /// The equivalence class has no value once solving ends.
-    NoValue(ClassName),
-    /// A type the text writes disagrees with its declaration.
+pub enum Cause {
+    /// No type holds the conjunction of what its relations give it.
+    Conflict(String),
+    /// What enters it has no join.
+    NoJoin,
+    /// It reaches a part of its own.
+    Infinite,
+    /// A type the text writes for it disagrees with its declaration.
     Undeclared(String),
+    /// Nothing decided it once solving ended.
+    NoValue,
+}
+
+impl fmt::Display for Cause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Cause::Conflict(conflict) => write!(f, "conflict: {conflict}"),
+            Cause::NoJoin => f.write_str("no_join"),
+            Cause::Infinite => f.write_str("infinite"),
+            Cause::Undeclared(what) => write!(f, "undeclared: {what}"),
+            Cause::NoValue => f.write_str("no_value"),
+        }
+    }
+}
+
+/// Where a definition gives no result: an equivalence class, with every
+/// type variable it holds, the items of the record on it, which cannot hold
+/// together, and why. A refusal is read from the record once solving ends,
+/// so it depends on no order of solving.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct Refusal {
+    pub members: BTreeSet<ClassName>,
+    /// The items on the class, each as the record names it.
+    pub items: BTreeSet<String>,
+    pub cause: Cause,
 }
 
 /// A relation an entering value is checked by once everything is solved,
@@ -78,48 +103,60 @@ impl Outcome {
 }
 
 impl State {
-    /// Refuses at `at` what no type holds, and returns the refusal.
-    /// The classes a conflict names hold a conjunction no type satisfies, so they
-    /// have no value, and are never solved again.
-    pub(crate) fn conflicted_have_no_value(&mut self, conflicted: &Conflicted) {
-        let members: Vec<ClassId> = match conflicted {
-            Conflicted::Apart(apart) => apart.sides.iter().flatten().copied().collect(),
-            Conflicted::Holds { members, .. } => members.iter().copied().collect(),
-        };
-        self.no_value.extend(members);
+    /// Every refusal the record gives: one for each equivalence class with no
+    /// value, with its members, the items on it and the cause.
+    pub fn refusals(&self) -> BTreeSet<Refusal> {
+        self.classes
+            .roots()
+            .filter_map(|root| {
+                let cause = self.classes.held(root).no_value.clone()?;
+                Some(self.refusal(root, cause))
+            })
+            .collect()
     }
 
-    pub(crate) fn refuse_conflict(&mut self, at: String, conflict: Conflict) -> Refusal {
-        let conflict = NamedConflict {
-            conflict: &conflict,
-            arena: &self.arena,
-        };
-        let refusal = Refusal::Conflict {
-            at,
-            conflict: conflict.to_string(),
-        };
-        self.refusals.insert(refusal.clone());
-        refusal
+    /// The refusal of the class of `id` for `cause`.
+    pub(crate) fn refusal(&self, id: ClassId, cause: Cause) -> Refusal {
+        let root = self.root(id);
+        let held = self.classes.held(root);
+        let members = held
+            .members
+            .iter()
+            .map(|&member| self.arena.name(member).clone())
+            .collect();
+        let items = held
+            .occurrences
+            .iter()
+            .map(|occurrence| match &self.classes.items()[occurrence.at].item {
+                Item::Relation(relation) => Named {
+                    relation,
+                    arena: &self.arena,
+                }
+                .to_string(),
+                Item::Disjunction { name, .. } => format!("disjunctive constraint {name}"),
+                Item::Instance { at, .. } => format!("instance {at}"),
+                Item::Lambda { name, .. } => format!("lambda {name}"),
+            })
+            .collect();
+        Refusal {
+            members,
+            items,
+            cause,
+        }
     }
 
     /// Checks each value the text makes enter a type, in the order of
     /// their relations' names, which no order of solving changes.
     fn checks(&self) -> Vec<Check> {
         let mut checks = Vec::new();
-        for recorded in &self.log {
+        for recorded in self.classes.items() {
             if !recorded.recorder.is_entering() {
                 continue;
             }
-            let (from, to, lower) = match recorded.relation {
-                Relation::LowerBound { lower, upper } => (lower, upper, true),
-                Relation::CoercionConstraint { from, to } => (from, to, false),
-                Relation::PartLowerBound { .. }
-                | Relation::Equation(..)
-                | Relation::StructureConstraint(..)
-                | Relation::Structure(..)
-                | Relation::Domain(..)
-                | Relation::Values(..)
-                | Relation::Wrap { .. } => continue,
+            let (from, to, lower) = match recorded.relation() {
+                Some(Relation::LowerBound { lower, upper }) => (*lower, *upper, true),
+                Some(Relation::CoercionConstraint { from, to }) => (*from, *to, false),
+                _ => continue,
             };
             let (Some(from_value), Some(to_value)) = (self.value(from), self.value(to)) else {
                 continue;
@@ -134,7 +171,7 @@ impl State {
                 _ => BTreeSet::new(),
             };
             let relation = Named {
-                relation: &recorded.relation,
+                relation: recorded.relation().expect("a lower bound or a coercion constraint"),
                 arena: &self.arena,
             }
             .to_string();
@@ -229,30 +266,26 @@ impl State {
     }
 
     pub fn outcome(&self) -> Outcome {
-        let values = self
-            .texts
+        let texts = self.texts();
+        let values = texts
             .iter()
             .map(|&id| (self.arena.name(id).clone(), self.value(id)))
             .collect();
         let mut partition: BTreeMap<ClassId, BTreeSet<ClassName>> = BTreeMap::new();
-        for &id in &self.texts {
+        for &id in &texts {
             partition
                 .entry(self.root(id))
                 .or_default()
                 .insert(self.arena.name(id).clone());
         }
         let checks = self.checks();
-        let mut refusals = self.refusals.clone();
+        let mut refusals = self.refusals();
         for root in self.classes.roots() {
             if self.value(root).is_none() && !self.has_no_value(root) {
-                refusals.insert(Refusal::NoValue(self.class_name(root)));
+                refusals.insert(self.refusal(root, Cause::NoValue));
             }
         }
-        let decisions: BTreeMap<Name, Option<Decision>> = self
-            .disjunctions
-            .iter()
-            .map(|(name, disjunction)| (name.clone(), disjunction.decision.clone()))
-            .collect();
+        let decisions: BTreeMap<Name, Option<Decision>> = self.decisions();
         let accepted = refusals.is_empty()
             && checks.iter().all(Check::holds)
             && decisions.values().all(Option::is_some);
@@ -276,32 +309,33 @@ impl State {
         for group in groups.values() {
             outcome.values.extend(
                 group
-                    .texts
-                    .iter()
-                    .map(|&id| (group.arena.name(id).clone(), group.value(id))),
+                    .texts()
+                    .into_iter()
+                    .map(|id| (group.arena.name(id).clone(), group.value(id))),
             );
             let decided: Vec<(Name, Decision)> = group
-                .disjunctions
-                .iter()
-                .filter_map(|(name, disjunction)| {
-                    Some((name.clone(), disjunction.decision.clone()?))
-                })
+                .decisions()
+                .into_iter()
+                .filter_map(|(name, decision)| Some((name, decision?)))
                 .collect();
-            // A disjunctive constraint is one group's: a use of several candidates has one, at
-            // the positions its choice decides, which one constraint holds,
-            // and a use of one has none.
+            // A disjunctive constraint is one: a use of several candidates is
+            // decided in the one group that records the positions where
+            // they differ, and a use of one candidate, decided as it is
+            // recorded in each group that records a position of it, is
+            // decided alike in each.
             for (name, decision) in decided {
-                let previous = outcome.decisions.insert(name.clone(), Some(decision));
+                let previous = outcome.decisions.insert(name.clone(), Some(decision.clone()));
                 assert!(
-                    previous.is_none(),
-                    "two groups have the disjunctive constraint {name}"
+                    previous.is_none_or(|previous| previous == Some(decision)),
+                    "two groups decide the disjunctive constraint {name} apart"
                 );
             }
             let checks = group.checks();
             let checked = checks.iter().all(Check::holds);
             outcome.checks.extend(checks);
-            outcome.refusals.extend(group.refusals.iter().cloned());
-            outcome.accepted &= checked && group.refusals.is_empty();
+            let refusals = group.refusals();
+            outcome.accepted &= checked && refusals.is_empty();
+            outcome.refusals.extend(refusals);
         }
         outcome
     }

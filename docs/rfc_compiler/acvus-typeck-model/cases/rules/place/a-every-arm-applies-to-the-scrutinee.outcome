@@ -12,6 +12,6 @@ outcome 1
   decision `arm 1`: applied
   decision `arm 2`: applied
   partition {`Some.0`, `Some.0 2`}
-  refusal no_join `Some.0`
-  refusal no_value X
+  refusal no_join {`Some.0`, `Some.0 2`, `X.Payload(Some)`} by {`1u16 <= Some.0 2`, `1u8 <= Some.0`, `?k <=p X.Payload(Some)`, `Some.0 2: Text`, `Some.0: Text`, `X: Option<X.Payload(Some)>`, `X: variant Some: Some.0`, `X: variant Some: Some.0 2`, `disjunctive constraint arm 1`, `disjunctive constraint arm 2`}
+  refusal no_value {X} by {`None <= X`, `X: Option<X.Payload(Some)>`, `X: Text`, `X: variant Some: Some.0`, `X: variant Some: Some.0 2`, `disjunctive constraint arm 1`, `disjunctive constraint arm 2`}
   I* of a final state: []

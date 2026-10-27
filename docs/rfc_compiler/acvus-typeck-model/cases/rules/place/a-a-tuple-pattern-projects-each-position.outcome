@@ -7,5 +7,6 @@ outcome 1
   value `mk()`: none
   decision `.0`: applied
   decision `.1`: applied
-  refusal conflict at "the value of mk()": Tuple(1) vs component 1: .1
+  decision mk: mk#0
+  refusal conflict: Tuple(1) vs component 1: .1 {`mk()`} by {`disjunctive constraint .0`, `disjunctive constraint .1`, `disjunctive constraint mk`, `mk(): (mk().Component(0),)`, `mk(): Text`, `mk(): component 0: .0`, `mk(): component 1: .1`, `mk.Result <= mk()`}
   I* of a final state: []

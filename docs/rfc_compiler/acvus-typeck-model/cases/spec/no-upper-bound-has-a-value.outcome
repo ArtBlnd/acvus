@@ -3,14 +3,14 @@ run: every order
 outcome 1
   accepted
   value 1: i32
-  value ?k: !
-  value None: Option<!>
+  value ?k: i32
+  value None: Option<i32>
   value S: i32
   value `Some(1)`: Option<i32>
-  value X: Option<!>
+  value X: Option<i32>
   value Y: Option<i32>
   check `1 <= S`: Ok(Identity)
   check `None <= X`: Ok(Identity)
   check `Some(1) <= Y`: Ok(Identity)
-  check `X <= Y`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
+  check `X <= Y`: Ok(Identity)
   I* of a final state: []

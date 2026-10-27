@@ -5,5 +5,5 @@ outcome 1
   value 1u8: none
   value `None.0`: !
   decision None: applied
-  refusal conflict at "1u8: variant None: None.0": Scalar(Int(U8)) vs variant None: None.0
+  refusal conflict: Scalar(Int(U8)) vs variant None: None.0 {1u8} by {`1u8: Text`, `1u8: u8`, `1u8: variant None: None.0`, `disjunctive constraint None`}
   I* of a final state: []

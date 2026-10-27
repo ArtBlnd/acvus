@@ -2,25 +2,35 @@
 run: the written order
 outcome 1
   refused
-  value ?k: none
-  value None: none
+  value ?k: !
+  value None: Option<!>
   value S: none
   value `Some(x)`: none
   value X: none
-  refusal infinite X
-  refusal no_value ?k
-  refusal no_value None
-  refusal no_value S
-  refusal no_value `Some(x)`
+  refusal infinite {S} by {`S: Text`, `Some(x): Option<S>`, `X <= S`}
+  refusal infinite {`Some(x)`} by {`Some(x) <= X`, `Some(x): Option<S>`, `Some(x): Text`}
+  refusal infinite {X} by {`None <= X`, `Some(x) <= X`, `X <= S`, `X: Text`}
   I* of a final state: []
 start run
-  record #0 None: Option<?k>
-  record #1 Some(x): Option<S>
-  record #2 None <= X
-  record #3 X <= S
-  record #4 Some(x) <= X
-  decomposition #0 None: Option<?k>: no parts
-  decomposition #1 Some(x): Option<S>: no parts
-step 1 run: solve X
+  record #0 X: Text
+  record #1 ?k: Text
+  record #2 None: Text
+  record #3 S: Text
+  record #4 Some(x): Text
+  record #5 None: Option<?k>
+  record #6 Some(x): Option<S>
+  record #7 None <= X
+  record #8 X <= S
+  record #9 Some(x) <= X
+  decomposition #0 X: Text: no parts
+  decomposition #1 ?k: Text: no parts
+  decomposition #2 None: Text: no parts
+  decomposition #3 S: Text: no parts
+  decomposition #4 Some(x): Text: no parts
+  decomposition #5 None: Option<?k>: no parts
+  decomposition #6 Some(x): Option<S>: no parts
+step 1 run: join X
   join X: infinite
-  refuse: infinite X
+  refuse: infinite {S} by {`S: Text`, `Some(x): Option<S>`, `X <= S`}
+  refuse: infinite {`Some(x)`} by {`Some(x) <= X`, `Some(x): Option<S>`, `Some(x): Text`}
+  refuse: infinite {X} by {`None <= X`, `Some(x) <= X`, `X <= S`, `X: Text`}

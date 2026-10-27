@@ -47,12 +47,12 @@ outcome 1
   value `….nest(n - 1)`: u8
   decision `&0`: lend & place
   decision `&1`: lend & place
-  decision `nest@23/&n`: lend & place
-  decision `nest@23/&n 2`: lend & place
+  decision `&n`: lend & place
+  decision `&n 2`: lend & place
   decision `nest@23/n - 1`: core::sub#1
   decision `nest@23/n == 0`: core::eq#1
-  decision `swap@21/self.l`: applied
-  decision `swap@21/self.r`: applied
+  decision `self.l`: applied
+  decision `self.r`: applied
   check `"s" <= new@19/new R`: Ok(Identity)
   check `1u8 <= new@19/new L`: Ok(Identity)
   check `3 <= nest@23/N`: Ok(Identity)

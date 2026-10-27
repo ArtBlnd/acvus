@@ -5,18 +5,19 @@ outcome 1
   value A: u8
   value S: u8
   value `Some(a)`: Option<u8>
-  value exit: none
+  value exit: Option<u8>
   value `f result`: Option<u8>
   value `f()`: Option<u8>
   value `get()`: Option<u8>
+  decision get: get#0
   decision q: ?#0
-  check `f@5/exit <= f@5/f result`: Ok(Composition { reborrow: false, casts: [], structural: Some(Shape { dropped: {}, added: {}, parts: [(Payload(Some), Never)] }) })
   check `f@5/f result <= f()`: Ok(Identity)
-  check `f@5/q.Exit <= f@5/exit`: Ok(Identity)
   check `A <= S`: Ok(Identity)
   check `Some(a) <= f result`: Ok(Identity)
+  check `exit <= f result`: Ok(Identity)
   check `get() ~> q.Param(0)`: Ok(Identity)
   check `get.Result <= get()`: Ok(Identity)
+  check `q.Exit <= exit`: Ok(Identity)
   check `q.Generalized(1) <= A`: Ok(Identity)
   check `q.Var(Type(0)) <= q.Generalized(1)`: Ok(Identity)
   I* of a final state: []

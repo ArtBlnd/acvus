@@ -9,13 +9,14 @@ outcome 1
   value unit: ()
   value `|s| ..`: Fn/1
   value `λ result`: ()
-  decision `|s| .. ~> map.Param(1)#λ/s.score`: applied
+  decision map: map#0
+  decision rows: rows#0
+  decision `s.score`: applied
   check `map.Result <= map(..)`: Ok(Identity)
   check `rows() ~> map.Param(0)`: Ok(Identity)
   check `rows.Result <= rows()`: Ok(Identity)
   check `|s| .. ~> map.Param(1)`: Ok(Undecided)
   check `|s| .. ~> map.Param(1)#λ/λ result <= map.Var(Type(1))`: Ok(Identity)
   check `unit <= λ result`: Ok(Identity)
-  refusal no_join `|s| .. ~> map.Param(1)#λ/S`
-  refusal no_value `|s| .. ~> map.Param(1)#λ/s.score`
+  refusal no_join {`|s| .. ~> map.Param(1)#λ/S`} by {`instance |s| .. ~> map.Param(1)#λ`, `map.Var(Type(0)) <= |s| .. ~> map.Param(1)#λ/S`, `|s| .. ~> map.Param(1)#λ/S: field score: |s| .. ~> map.Param(1)#λ/s.score`}
   I* of a final state: []

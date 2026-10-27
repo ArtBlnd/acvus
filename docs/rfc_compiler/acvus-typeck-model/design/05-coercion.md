@@ -1,7 +1,7 @@
 # 05 Coercion and rank
 
-The code is `src/lit.rs`, `src/read.rs` and
-`src/coerce.rs`, and `src/coerce/tests.rs` exercises their contract.
+The code is `src/lit.rs` and `src/coerce.rs`, and `src/coerce/tests.rs`
+exercises their contract.
 
 ## Meaning
 
@@ -13,13 +13,10 @@ object, enum and part rows and `! ⇝ U` alone, so no reborrow, cast or
 conversion is taken at a part. The rank of a composition is the stages it takes
 and its number of casts, its parts' coercions adding the structural stage alone.
 Along the join's `≤`, a value is changed by the same rows at each step, but an
-object gains fields instead of dropping them. A value a use reads is a type some
-of whose positions are undecided, and a position holding a LitVar decides nothing
-within its family.
+object gains fields instead of dropping them.
 
 ## Not owned here
 
-- Narrowing takes no conversion, so `coerce_read` takes none.
 - The fields an object gains along `≤` are written before the value is used whole;
   typeck records them as added and changes none.
 
@@ -36,7 +33,7 @@ within its family.
    `Option⟨!⟩ ⇝ Option⟨u8⟩`, which `None` passed to a declaration needs, reaches,
    and `Option⟨u16⟩ ⇝ Option⟨u8⟩` does not, though a conversion `u16 → u8` is
    declared.
-3. **`!` and undecided positions take no stage.** `!` decides nothing, so
+3. **`!` takes no stage.** `!` decides nothing, so
    `! ⇝ U` adds nothing to a rank, and a shape takes the structural stage only
    where a member changes or a part's coercion takes a stage. `Option⟨!⟩ ⇝
    Option⟨u8⟩` has rank `empty`. A declared conversion has no rank.
@@ -54,18 +51,14 @@ within its family.
    a reborrow where an exclusive reference passes into a shared one, the casts
    up to `T`'s node, then members gained, fields unchanged and variants added, and
    each part of a structural type along `≤ₚ`, by the same rows and no cast.
-7. **A LitVar's position.** A LitVar reaches a LitVar of its family, and a scalar
-   of its family that holds every value it holds, and nothing else. An
-   integer literal of the model is unsigned: a negative literal, which is a
-   literal once `core::neg` is gone, is not encoded.
-8. **A candidate's type variables decide nothing.** A candidate's type parameters
-   are unknowns made anew at the use, into which only the use itself
-   records, and the value the use reads leaves out the relations it records itself.
-   So a candidate's type, read, is undecided at each of its variables.
+7. **A LitVar.** A LitVar admits a scalar of its family that holds every value
+   it holds, and nothing else. An integer literal of the model is unsigned: a
+   negative literal, which is a literal once `core::neg` is gone, is not
+   encoded.
 
 ## Left open for change
 
-- `HasTerm` is what closed types and values a use reads share, so matching a
-  signature, stepping up the tree and raising take either.
+- `HasTerm` is what closed types and the certificate's values share, so
+  matching a signature, stepping up the tree and raising take either.
 - A coercion keeps the casts, the members dropped and added, and each part's
   coercion, so the outcome can name every function a check calls.

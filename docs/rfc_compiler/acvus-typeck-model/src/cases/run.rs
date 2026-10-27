@@ -11,19 +11,20 @@ use crate::check::{Outcome, Refusal};
 use crate::class::ClassId;
 use crate::disjunction::Decision;
 use crate::explore::{Final, Order, explore_with, sample_with};
+use crate::judgment::Judgment;
 use crate::program::{ENTRY, Program};
-use crate::solve::{State, Step};
+use crate::solve::State;
 use crate::trace::Trace;
 use crate::ty::Name;
 
-use super::parse::{self, Orders, StepText};
+use super::parse::{self, ItemText, Orders};
 use super::render::{self, Lines, Rendered};
 
 /// The budget of states for `orders: all`.
 pub const BUDGET: usize = 100_000;
 
-/// The steps a traced first order takes before it is stopped, a fallback
-/// counted as one, as a written order writes it (`TRACE=1`).
+/// The steps a traced first order takes before it is stopped, a judgment or
+/// a fallback each counted as one (`TRACE=1`).
 pub const LIMIT: usize = 10_000;
 
 /// Where a traced run prints (`TRACE=1`): stdout, each line prefixed with the
@@ -222,8 +223,8 @@ pub fn run(
             }
             (Explored::Sampled(*orders), outcomes)
         }
-        Orders::Written(steps) => {
-            let (taken, outcome) = written(program, steps, tracer, &mut |end| visitor.visit(end))?;
+        Orders::Written(items) => {
+            let (taken, outcome) = written(program, items, tracer, &mut |end| visitor.visit(end))?;
             (Explored::Written(taken), vec![outcome])
         }
     };
@@ -306,38 +307,38 @@ impl Follow<'_> {
         let did = Did {
             line,
             trace: started.trace,
-            refused: started.state.refusals.iter().cloned().collect(),
+            refused: started.state.refusals().into_iter().collect(),
         };
         self.did(&started.state, &did);
         if let Some(tracer) = self.tracer {
-            tracer.lines(3, render::waiting(&started.state));
+            tracer.lines(3, render::undecided(&started.state));
         }
         (started.state, did)
     }
 
-    /// Takes the step, which `state` may take now.
-    fn step(&mut self, state: &mut State, group: &str, step: &Step) -> Did {
+    /// Takes the judgment, which `state` may take now.
+    fn step(&mut self, state: &mut State, group: &str, judgment: &Judgment) -> Did {
         self.taken += 1;
         let line = format!(
             "step {} {}: {}",
             self.taken,
             render::name(group),
-            render::step(state, step)
+            render::judgment(state, judgment)
         );
         if self.tracer.is_some() {
-            let steps: Vec<String> = state
-                .steps()
+            let judgments: Vec<String> = state
+                .judgments()
                 .iter()
-                .map(|step| render::step(state, step))
+                .map(|judgment| render::judgment(state, judgment))
                 .collect();
-            self.print(2, &format!("{line}  steps: {}", steps.join(", ")));
+            self.print(2, &format!("{line}  judgments: {}", judgments.join(", ")));
         }
-        let before = state.refusals.clone();
-        let trace = state.step(step);
+        let before = state.refusals();
+        let trace = state.step(judgment);
         let did = Did {
             line,
             trace,
-            refused: state.refusals.difference(&before).cloned().collect(),
+            refused: state.refusals().difference(&before).cloned().collect(),
         };
         self.did(state, &did);
         did
@@ -349,25 +350,25 @@ impl Follow<'_> {
         self.taken += 1;
         let line = format!("fallback {} {ENTRY}", self.taken);
         self.print(2, &line);
-        let before = state.refusals.clone();
+        let before = state.refusals();
         let trace = state.fall_back();
         let did = Did {
             line,
             trace,
-            refused: state.refusals.difference(&before).cloned().collect(),
+            refused: state.refusals().difference(&before).cloned().collect(),
         };
         self.did(state, &did);
         did
     }
 
-    /// What a group waits for at its fixpoint, and what a group other than
-    /// the entry leaves in C.
+    /// What a group leaves undecided at its fixpoint, and what a group other
+    /// than the entry leaves in C.
     fn fixpoint(&self, state: &State, group: &str) {
         let Some(tracer) = self.tracer else {
             return;
         };
         tracer.line(2, &format!("fixpoint {}", render::name(group)));
-        tracer.lines(3, render::waiting(state));
+        tracer.lines(3, render::undecided(state));
         if group != ENTRY {
             tracer.lines(3, render::c(state));
         }
@@ -384,8 +385,8 @@ impl Follow<'_> {
     }
 }
 
-/// The root of the classes a written step names, which must be one.
-fn root_named(state: &State, step: &str, class: &str) -> Result<ClassId, String> {
+/// The root of the classes a written judgment names, which must be one.
+fn root_named(state: &State, judgment: &str, class: &str) -> Result<ClassId, String> {
     let roots: BTreeSet<_> = state
         .arena
         .classes()
@@ -393,52 +394,55 @@ fn root_named(state: &State, step: &str, class: &str) -> Result<ClassId, String>
         .map(|(id, _)| state.root(id))
         .collect();
     match roots.into_iter().collect::<Vec<_>>().as_slice() {
-        [] => Err(format!("{step} {class}: no class of that name")),
+        [] => Err(format!("{judgment} {class}: no class of that name")),
         [root] => Ok(*root),
         _ => Err(format!(
-            "{step} {class}: classes of two roots have that name"
+            "{judgment} {class}: classes of two roots have that name"
         )),
     }
 }
 
-/// A step a case writes, as a step the state may take now.
-fn step_of(state: &State, text: &StepText) -> Result<Step, String> {
-    let steps = state.steps();
+/// A judgment a case writes, as a judgment the state may take now.
+fn judgment_of(state: &State, text: &ItemText) -> Result<Judgment, String> {
+    let judgments = state.judgments();
     let wanted = match text {
-        StepText::Solve(class) => Step::Solve(root_named(state, "solve", class)?),
-        StepText::Decide(disjunction) => Step::Decide(Name::new(disjunction)),
-        StepText::Fallback => return Err("fallback is no step".to_string()),
+        ItemText::Join(class) => Judgment::Join(root_named(state, "join", class)?),
+        ItemText::Decide(disjunction) => Judgment::Decide(Name::new(disjunction)),
+        ItemText::Fallback => return Err("fallback is no judgment".to_string()),
     };
-    if steps.contains(&wanted) {
+    if judgments.contains(&wanted) {
         Ok(wanted)
     } else {
-        let listed: Vec<String> = steps.iter().map(|step| render::step(state, step)).collect();
+        let listed: Vec<String> = judgments
+            .iter()
+            .map(|judgment| render::judgment(state, judgment))
+            .collect();
         Err(format!(
-            "{} is not a step now; the steps are [{}]",
-            render::step(state, &wanted),
+            "{} is not a judgment now; the judgments are [{}]",
+            render::judgment(state, &wanted),
             listed.join(", ")
         ))
     }
 }
 
-/// The written steps of one group, each with its phases' reports, the steps
-/// taken pushed onto the group's last steps to a fixpoint in `rounds`, and a
-/// fallback that fell a class back starting the next.
+/// The written items of one group, each with its phases' reports, the
+/// judgments taken pushed onto the group's last judgments to a fixpoint in
+/// `rounds`, and a fallback that fell a class back starting the next.
 fn take(
     follow: &mut Follow<'_>,
     state: &mut State,
     group: &str,
-    steps: &[StepText],
-    rounds: &mut Vec<Vec<Step>>,
+    items: &[ItemText],
+    rounds: &mut Vec<Vec<Judgment>>,
     taken: &mut Vec<Taken>,
 ) -> Result<(), String> {
-    for text in steps {
+    for text in items {
         let did = match text {
-            StepText::Fallback => {
+            ItemText::Fallback => {
                 if group != ENTRY {
                     return Err(format!("fallback in {group}, inside which there is none"));
                 }
-                if !state.steps().is_empty() {
+                if !state.judgments().is_empty() {
                     return Err("fallback before the fixpoint".to_string());
                 }
                 follow.fixpoint(state, group);
@@ -449,12 +453,12 @@ fn take(
                 did
             }
             _ => {
-                let step = step_of(state, text)?;
-                let did = follow.step(state, group, &step);
+                let judgment = judgment_of(state, text)?;
+                let did = follow.step(state, group, &judgment);
                 rounds
                     .last_mut()
-                    .expect("a group's steps have a fixpoint to reach")
-                    .push(step);
+                    .expect("a group's judgments have a fixpoint to reach")
+                    .push(judgment);
                 did
             }
         };
@@ -463,11 +467,11 @@ fn take(
     Ok(())
 }
 
-/// One order: each group's written steps, then its first step until none is
-/// left, the entry falling back wherever none is.
+/// One order: each group's written items, then its first judgment until none
+/// is left, the entry falling back wherever none is.
 fn written<F>(
     program: &Program,
-    steps: &BTreeMap<String, Vec<StepText>>,
+    items: &BTreeMap<String, Vec<ItemText>>,
     tracer: Option<&Tracer>,
     visit: &mut F,
 ) -> Result<(Vec<Taken>, Outcome), String>
@@ -475,7 +479,7 @@ where
     F: FnMut(&Final<'_>),
 {
     let groups = program.group_order();
-    for group in steps.keys() {
+    for group in items.keys() {
         if group != ENTRY && !groups.iter().any(|name| name.as_str() == group) {
             return Err(format!("the order of {group}, which is no group"));
         }
@@ -489,42 +493,42 @@ where
         let (mut state, did) = follow.start(program, &group, &solved);
         taken.push(did.taken(&state));
         let mut rounds = vec![Vec::new()];
-        if let Some(steps) = steps.get(group.as_str()) {
+        if let Some(group_items) = items.get(group.as_str()) {
             take(
                 &mut follow,
                 &mut state,
                 group.as_str(),
-                steps,
+                group_items,
                 &mut rounds,
                 &mut taken,
             )?;
         }
-        let [mut group_steps] = <[Vec<Step>; 1]>::try_from(rounds)
+        let [mut group_judgments] = <[Vec<Judgment>; 1]>::try_from(rounds)
             .expect("a group other than the entry has no fallback");
-        while let Some(step) = state.steps().first().cloned() {
-            follow.step(&mut state, group.as_str(), &step);
-            group_steps.push(step);
+        while let Some(judgment) = state.judgments().first().cloned() {
+            follow.step(&mut state, group.as_str(), &judgment);
+            group_judgments.push(judgment);
         }
         follow.fixpoint(&state, group.as_str());
-        order.groups.push((group.clone(), group_steps));
+        order.groups.push((group.clone(), group_judgments));
         solved.insert(group, Rc::new(state));
     }
     let (mut state, did) = follow.start(program, &Name::new(ENTRY), &solved);
     taken.push(did.taken(&state));
-    if let Some(steps) = steps.get(ENTRY) {
+    if let Some(group_items) = items.get(ENTRY) {
         take(
             &mut follow,
             &mut state,
             ENTRY,
-            steps,
+            group_items,
             &mut order.entry,
             &mut taken,
         )?;
     }
     loop {
-        if let Some(step) = state.steps().first().cloned() {
-            follow.step(&mut state, ENTRY, &step);
-            order.push_step(step);
+        if let Some(judgment) = state.judgments().first().cloned() {
+            follow.step(&mut state, ENTRY, &judgment);
+            order.push_judgment(judgment);
             continue;
         }
         follow.fixpoint(&state, ENTRY);
@@ -554,11 +558,11 @@ fn first(program: &Program, tracer: &Tracer) {
     let mut solved: BTreeMap<Name, Rc<State>> = BTreeMap::new();
     for group in program.group_order() {
         let (mut state, _) = follow.start(program, &group, &solved);
-        while let Some(step) = state.steps().first().cloned() {
+        while let Some(judgment) = state.judgments().first().cloned() {
             if follow.at_limit() {
                 return;
             }
-            follow.step(&mut state, group.as_str(), &step);
+            follow.step(&mut state, group.as_str(), &judgment);
         }
         follow.fixpoint(&state, group.as_str());
         solved.insert(group, Rc::new(state));
@@ -568,8 +572,8 @@ fn first(program: &Program, tracer: &Tracer) {
         if follow.at_limit() {
             return;
         }
-        if let Some(step) = state.steps().first().cloned() {
-            follow.step(&mut state, ENTRY, &step);
+        if let Some(judgment) = state.judgments().first().cloned() {
+            follow.step(&mut state, ENTRY, &judgment);
             continue;
         }
         follow.fixpoint(&state, ENTRY);
@@ -583,15 +587,15 @@ fn first(program: &Program, tracer: &Tracer) {
     }
 }
 
-/// An item of an order: a step, or a fallback that fell a class back.
+/// An item of an order: a judgment, or a fallback that fell a class back.
 enum Item<'a> {
-    Step(&'a Step),
+    Judgment(&'a Judgment),
     Fallback,
 }
 
-/// Follows `order` from the program's start, taking its steps, captured as
+/// Follows `order` from the program's start, taking its judgments, captured as
 /// the model's own values, as they were taken: each group's to its fixpoint,
-/// then the entry's, a fallback between one fixpoint and the next steps, and
+/// then the entry's, a fallback between one fixpoint and the next judgments, and
 /// at the end a fallback that falls no class back. `at` sees each item in the
 /// state it is taken in. The final state is the entry's before that last
 /// fallback, as the exploration hands it on.
@@ -605,32 +609,32 @@ where
     F: FnMut(&State, &str, Item<'_>) -> Result<(), String>,
 {
     let mut solved: BTreeMap<Name, Rc<State>> = BTreeMap::new();
-    let step = |follow: &mut Follow<'_>, state: &mut State, group: &str, step: &Step| {
-        if !state.steps().contains(step) {
+    let take = |follow: &mut Follow<'_>, state: &mut State, group: &str, judgment: &Judgment| {
+        if !state.judgments().contains(judgment) {
             return Err(format!(
-                "{} in {group} is not a step now",
-                render::step(state, step)
+                "{} in {group} is not a judgment now",
+                render::judgment(state, judgment)
             ));
         }
-        follow.step(state, group, step);
+        follow.step(state, group, judgment);
         Ok(())
     };
-    for (group, steps) in &order.groups {
+    for (group, judgments) in &order.groups {
         let (mut state, _) = follow.start(program, group, &solved);
-        for taken in steps {
-            at(&state, group.as_str(), Item::Step(taken))?;
-            step(follow, &mut state, group.as_str(), taken)?;
+        for taken in judgments {
+            at(&state, group.as_str(), Item::Judgment(taken))?;
+            take(follow, &mut state, group.as_str(), taken)?;
         }
-        if !state.steps().is_empty() {
+        if !state.judgments().is_empty() {
             return Err(format!(
-                "{group} is not at its fixpoint where its steps end"
+                "{group} is not at its fixpoint where its judgments end"
             ));
         }
         follow.fixpoint(&state, group.as_str());
         solved.insert(group.clone(), Rc::new(state));
     }
     let (mut state, _) = follow.start(program, &Name::new(ENTRY), &solved);
-    for (round, steps) in order.entry.iter().enumerate() {
+    for (round, judgments) in order.entry.iter().enumerate() {
         if round > 0 {
             at(&state, ENTRY, Item::Fallback)?;
             follow.fixpoint(&state, ENTRY);
@@ -638,13 +642,13 @@ where
                 return Err("a fallback of the order falls no class back".to_string());
             }
         }
-        for taken in steps {
-            at(&state, ENTRY, Item::Step(taken))?;
-            step(follow, &mut state, ENTRY, taken)?;
+        for taken in judgments {
+            at(&state, ENTRY, Item::Judgment(taken))?;
+            take(follow, &mut state, ENTRY, taken)?;
         }
-        if !state.steps().is_empty() {
+        if !state.judgments().is_empty() {
             return Err(format!(
-                "{ENTRY} is not at its fixpoint where its steps end"
+                "{ENTRY} is not at its fixpoint where its judgments end"
             ));
         }
     }
@@ -657,7 +661,7 @@ where
 }
 
 /// A witness's order as a case writes it: a `//@ order g:` line for each
-/// group, then the entry's `//@ order:` line, each step named in the state it
+/// group, then the entry's `//@ order:` line, each judgment named in the state it
 /// is taken in.
 fn written_lines(program: &Program, order: &Order) -> Result<Vec<String>, String> {
     let mut texts: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -670,7 +674,7 @@ fn written_lines(program: &Program, order: &Order) -> Result<Vec<String>, String
         },
         |state, group, item| {
             let text = match item {
-                Item::Step(step) => render::step(state, step),
+                Item::Judgment(judgment) => render::judgment(state, judgment),
                 Item::Fallback => "fallback".to_string(),
             };
             texts.entry(group.to_string()).or_default().push(text);
@@ -681,18 +685,18 @@ fn written_lines(program: &Program, order: &Order) -> Result<Vec<String>, String
         .groups
         .iter()
         .map(|(group, _)| {
-            let steps = texts.remove(group.as_str()).unwrap_or_default();
-            format!("//@ order {group}: {}", steps.join(", "))
+            let items = texts.remove(group.as_str()).unwrap_or_default();
+            format!("//@ order {group}: {}", items.join(", "))
         })
         .collect();
-    let steps = texts.remove(ENTRY).unwrap_or_default();
-    lines.push(format!("//@ order: {}", steps.join(", ")));
+    let items = texts.remove(ENTRY).unwrap_or_default();
+    lines.push(format!("//@ order: {}", items.join(", ")));
     Ok(lines)
 }
 
 /// Whether the lines round-trip: whether parsing them and resolving their
-/// steps with `step_of`, each in the state it is taken in, gives back the
-/// order's steps; `Err` names where they do not.
+/// judgments with `judgment_of`, each in the state it is taken in, gives back the
+/// order's judgments; `Err` names where they do not.
 fn round_trip(program: &Program, order: &Order, lines: &[String]) -> Result<(), String> {
     let source = lines.join("\n");
     let Orders::Written(written) = parse::parse(&source)?.orders else {
@@ -708,33 +712,35 @@ fn round_trip(program: &Program, order: &Order, lines: &[String]) -> Result<(), 
         },
         |state, group, item| {
             let at = items.entry(group.to_string()).or_default();
-            let text = written.get(group).and_then(|steps| steps.get(*at));
+            let text = written
+                .get(group)
+                .and_then(|written_items| written_items.get(*at));
             *at += 1;
             match (item, text) {
-                (Item::Fallback, Some(StepText::Fallback)) => Ok(()),
-                (Item::Step(step), Some(text)) => match step_of(state, text) {
-                    Ok(resolved) if resolved == *step => Ok(()),
+                (Item::Fallback, Some(ItemText::Fallback)) => Ok(()),
+                (Item::Judgment(judgment), Some(text)) => match judgment_of(state, text) {
+                    Ok(resolved) if resolved == *judgment => Ok(()),
                     Ok(resolved) => Err(format!(
                         "{text:?} in {group} resolves to {}, and the order takes {}",
-                        render::step(state, &resolved),
-                        render::step(state, step)
+                        render::judgment(state, &resolved),
+                        render::judgment(state, judgment)
                     )),
                     Err(error) => Err(format!("{text:?} in {group}: {error}")),
                 },
                 (Item::Fallback, text) => Err(format!("{group} writes {text:?} at a fallback")),
-                (Item::Step(step), None) => Err(format!(
+                (Item::Judgment(judgment), None) => Err(format!(
                     "{group} writes nothing at {}",
-                    render::step(state, step)
+                    render::judgment(state, judgment)
                 )),
             }
         },
     )?;
-    for (group, steps) in &written {
+    for (group, written_items) in &written {
         let followed = items.get(group).copied().unwrap_or_default();
-        if steps.len() != followed {
+        if written_items.len() != followed {
             return Err(format!(
                 "{group} writes {} items, and the order takes {followed}",
-                steps.len()
+                written_items.len()
             ));
         }
     }

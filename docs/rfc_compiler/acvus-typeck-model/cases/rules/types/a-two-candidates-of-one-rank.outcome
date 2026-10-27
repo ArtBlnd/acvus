@@ -5,6 +5,7 @@ outcome 1
   value `f(..)`: ()
   value `make()`: {x: u8, y: u8}
   decision f: undecided
+  decision make: make#0
   check `f.GeneralizedResult <= f(..)`: Ok(Identity)
   check `make.Result <= make()`: Ok(Identity)
   I* of a final state: []

@@ -3,8 +3,9 @@ run: every order
 outcome 1
   refused
   value 1u8: u8
-  value R: !
+  value R: none
   value X: u8
   decision f: undecided
   check `1u8 <= X`: Ok(Identity)
+  refusal no_value {R} by {`R: Text`, `disjunctive constraint f`}
   I* of a final state: []

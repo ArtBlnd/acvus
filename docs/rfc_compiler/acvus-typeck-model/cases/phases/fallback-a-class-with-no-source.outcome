@@ -8,18 +8,26 @@ outcome 1
   check `None <= A`: Ok(Identity)
   I* of a final state: []
 start run
-  record #0 None: Option<?k>
-  record #1 None <= A
-  decomposition #0 None: Option<?k>: no parts
-step 1 run: solve A
-  join A: Option {Variant(None), Variant(Some)}
-  decomposition #1 None <= A: parts
-    record #2 ?k <=p A.Payload(Some)
+  record #0 A: Text
+  record #1 ?k: Text
+  record #2 None: Text
+  record #3 None: Option<?k>
+  record #4 None <= A
+  decomposition #0 A: Text: no parts
+  decomposition #1 ?k: Text: no parts
+  decomposition #2 None: Text: no parts
+  decomposition #3 None: Option<?k>: no parts
+step 1 run: join A
+  join A: Owned(Option)
+    record #5 A: Option<A.Payload(Some)>
+  decomposition #4 None <= A: parts
+    record #6 ?k <=p A.Payload(Some)
+  decomposition #5 A: Option<A.Payload(Some)>: no parts
 fallback 2 run
   default ?k: !
-    record #3 ?k: !
+    record #7 ?k: !
   default `A.Payload(Some)`: !
-    record #4 A.Payload(Some): !
-  decomposition #2 ?k <=p A.Payload(Some): parts
-  decomposition #3 ?k: !: no parts
-  decomposition #4 A.Payload(Some): !: no parts
+    record #8 A.Payload(Some): !
+  decomposition #6 ?k <=p A.Payload(Some): parts
+  decomposition #7 ?k: !: no parts
+  decomposition #8 A.Payload(Some): !: no parts

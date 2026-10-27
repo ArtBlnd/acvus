@@ -2,8 +2,9 @@
 run: every order
 outcome 1
   refused
-  value 0: i32
+  value 0: none
   value R: ()
   decision f: undecided
   check `f.GeneralizedResult <= R`: Ok(Identity)
+  refusal no_value {0} by {`0: Text`, `0: {i8, i16, i32, i64, u8, u16, u32, u64}`, `disjunctive constraint f`}
   I* of a final state: []
