@@ -3,11 +3,12 @@
 //! constraint takes the alternative its record gives. I\* asks the same
 //! judgment again, with relations left out of the record.
 //!
-//! A judgment reads every occurrence of its class in the record, in one
-//! order: the structure the class holds and its equations, then the lower
-//! bounds that have a node, joined at the node, then, where no lower bound
-//! gives a node, the decided classes it passes into, which fill it, and
-//! otherwise the domain alone, which fallback reads. A bound that is a
+//! A judgment reads every occurrence of its class in the record, and decides
+//! by one rule (`State::decided`): the structure the class holds and its
+//! equations, then the join of the lower bounds that have a node, then,
+//! where no lower bound gives a node, the meet of the decided classes it
+//! passes into, and otherwise nothing, the domain alone being left for
+//! fallback to read. `!` is no candidate of the rule. A bound that is a
 //! class not yet decided gives its own bounds in its place, so that a class
 //! and the undecided classes it is bound by are decided together; a class
 //! waits only for a disjunctive constraint that may still record into it or
@@ -44,9 +45,9 @@ pub enum Judgment {
 pub(crate) enum Verdict {
     /// Its lower bounds give nodes: it takes their join.
     Join(Sources),
-    /// No lower bound gives a node, and the classes it passes into give one
-    /// node: it takes that.
-    Fill(Vec<Head>),
+    /// No lower bound gives a node, and the classes it passes into give
+    /// nodes: it takes their meet.
+    Meet(Vec<Head>),
     /// Something that bears on it is not yet decided: a disjunctive
     /// constraint that may record into it, or into a class whose bounds it
     /// takes.
@@ -54,6 +55,24 @@ pub(crate) enum Verdict {
     /// Nothing decides it: the domain the record gives it, which fallback
     /// reads.
     Rest(Option<Domain>),
+}
+
+/// What bounds decide for an equivalence class, by the one rule of a
+/// judgment: the join of what enters it where something does, the meet of
+/// what it passes into where nothing enters it, and nothing otherwise.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum Decided {
+    /// Something enters it: the join of what enters it.
+    Join(Head),
+    /// Something enters it, and what enters it has no join.
+    NoJoin,
+    /// Nothing enters it: the meet of what it passes into.
+    Meet(Head),
+    /// Nothing enters it, and what it passes into has no meet.
+    NoMeet,
+    /// Nothing enters it and it passes into nothing: the bounds decide
+    /// nothing.
+    Nothing,
 }
 
 /// What a disjunctive constraint reads and becomes.
@@ -107,7 +126,7 @@ impl State {
         let mut judgments = Vec::new();
         for root in self.unsolved() {
             match self.verdict(root) {
-                Verdict::Join(_) | Verdict::Fill(_) => judgments.push(Judgment::Join(root)),
+                Verdict::Join(_) | Verdict::Meet(_) => judgments.push(Judgment::Join(root)),
                 Verdict::Rest(Some(domain)) if self.bounds_anew(root, &domain) => {
                     judgments.push(Judgment::Join(root));
                 }
@@ -130,7 +149,7 @@ impl State {
                 let root = self.root(*class);
                 let took = match self.verdict(root) {
                     Verdict::Join(sources) => self.take_join(root, &sources),
-                    Verdict::Fill(uppers) => self.take_fill(root, &uppers),
+                    Verdict::Meet(uppers) => self.take_meet(root, &uppers),
                     Verdict::Rest(Some(domain)) if self.bounds_anew(root, &domain) => {
                         self.take_domain(root, domain)
                     }
@@ -163,35 +182,55 @@ impl State {
         self.reading(name, left_out).decision
     }
 
-    /// What the record gives the unsolved class `root` now, by its bounds.
+    /// What the record gives the unsolved class `root` now: what its bounds
+    /// decide, where no undecided disjunctive constraint may still change
+    /// the bounds that decide it.
     pub(crate) fn verdict(&self, root: ClassId) -> Verdict {
         let root = self.root(root);
         let bounds = self.bounds(root, &BTreeSet::new());
         if bounds.lower_pending {
             return Verdict::Waiting;
         }
-        let sources = Sources {
+        match self.decided(&bounds) {
+            Decided::Join(_) | Decided::NoJoin => Verdict::Join(self.sources_of(&bounds)),
+            Decided::Meet(_) | Decided::NoMeet if bounds.upper_pending => Verdict::Waiting,
+            Decided::Meet(_) | Decided::NoMeet => Verdict::Meet(bounds.uppers),
+            Decided::Nothing if bounds.upper_pending => Verdict::Waiting,
+            Decided::Nothing => Verdict::Rest(domain_of(bounds.domains)),
+        }
+    }
+
+    /// What the bounds decide, by the one rule: the join of what enters the
+    /// class, where something does; the meet of what it passes into, where
+    /// nothing enters it; and nothing otherwise.
+    pub(crate) fn decided(&self, bounds: &Bounds) -> Decided {
+        let sources = self.sources_of(bounds);
+        if !sources.is_empty() {
+            return match self.join_of(&sources) {
+                Some(head) => Decided::Join(head),
+                None => Decided::NoJoin,
+            };
+        }
+        if !bounds.uppers.is_empty() {
+            return match self.meet_of(&bounds.uppers) {
+                Some(head) => Decided::Meet(head),
+                None => Decided::NoMeet,
+            };
+        }
+        Decided::Nothing
+    }
+
+    /// What enters the class, as the join reads it: its lower bounds, its
+    /// part lower bounds and what its structure constraints give.
+    fn sources_of(&self, bounds: &Bounds) -> Sources {
+        Sources {
             structure_constraints: self.constraint_heads(
                 &bounds.constraints,
                 bounds.lowers.is_empty() && bounds.part_lowers.is_empty(),
             ),
-            lowers: bounds.lowers,
-            part_lowers: bounds.part_lowers,
-        };
-        if !sources.is_empty() {
-            return Verdict::Join(sources);
+            lowers: bounds.lowers.clone(),
+            part_lowers: bounds.part_lowers.clone(),
         }
-        if bounds.upper_pending {
-            return Verdict::Waiting;
-        }
-        if !bounds.uppers.is_empty() {
-            return Verdict::Fill(bounds.uppers);
-        }
-        let domain = bounds
-            .domains
-            .into_iter()
-            .reduce(|met, domain| met.meet(&domain).unwrap_or(Domain::Only(BTreeSet::new())));
-        Verdict::Rest(domain)
     }
 
     /// The bounds of the class, read without the relations the disjunctive
@@ -439,7 +478,7 @@ impl State {
         if target.lower_pending {
             return None;
         }
-        let joined = self.join_of(&target)?;
+        let joined = self.join_of(&self.sources_of(&target))?;
         Some(Head {
             node: crate::decl::Node::Ref(*mutability, joined.constructor()),
             members: BTreeSet::new(),
@@ -461,34 +500,24 @@ impl State {
         bounds
     }
 
-    /// The node `bounds` give a class: that its lower bounds and structure
-    /// constraints join at, or, where they give none, the one node of what
-    /// it passes into; none where they give none.
+    /// The node `bounds` decide for a class, none where they decide none or
+    /// what they give has no join or no meet.
     fn value_head(&self, bounds: &Bounds) -> Option<Head> {
-        if let Some(head) = self.join_of(bounds) {
-            return Some(head);
+        match self.decided(bounds) {
+            Decided::Join(head) | Decided::Meet(head) => Some(head),
+            Decided::NoJoin | Decided::NoMeet | Decided::Nothing => None,
         }
-        let first = bounds.uppers.first()?;
-        bounds
-            .uppers
-            .iter()
-            .all(|head| head == first)
-            .then(|| first.clone())
     }
 
-    /// The node the lower bounds and structure constraints of `bounds` join
-    /// at, none where they give none or have no join.
-    fn join_of(&self, bounds: &Bounds) -> Option<Head> {
-        let constraints = self.constraint_heads(
-            &bounds.constraints,
-            bounds.lowers.is_empty() && bounds.part_lowers.is_empty(),
-        );
-        let given: Vec<&Head> = bounds
+    /// The node the sources join at, none where they give none or have no
+    /// join.
+    fn join_of(&self, sources: &Sources) -> Option<Head> {
+        let given: Vec<&Head> = sources
             .lowers
             .iter()
-            .chain(&bounds.part_lowers)
+            .chain(&sources.part_lowers)
             .map(|(_, head)| head)
-            .chain(constraints.iter())
+            .chain(sources.structure_constraints.iter())
             .collect();
         let first = (*given.first()?).clone();
         given
@@ -711,12 +740,7 @@ impl State {
                 let bounds = self.bounds(root, left_out);
                 match self.value_head(&bounds) {
                     Some(head) => head_value(head),
-                    None => bounds
-                        .domains
-                        .into_iter()
-                        .reduce(|met, domain| {
-                            met.meet(&domain).unwrap_or(Domain::Only(BTreeSet::new()))
-                        })
+                    None => domain_of(bounds.domains)
                         .map_or(ReadValue::Undecided, ReadValue::Domain),
                 }
             }
@@ -724,6 +748,14 @@ impl State {
         visiting.remove(&root);
         value
     }
+}
+
+/// The one domain the domains on a class give: their meet, which admits
+/// nothing where two have none; none where there are none.
+fn domain_of(domains: Vec<Domain>) -> Option<Domain> {
+    domains
+        .into_iter()
+        .reduce(|met, domain| met.meet(&domain).unwrap_or(Domain::Only(BTreeSet::new())))
 }
 
 /// A head read as a value: its node, each part undecided; a reference's

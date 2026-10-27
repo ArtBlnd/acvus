@@ -125,7 +125,7 @@ final state, of every run.
 | `must pass;`, `must fail;` | the outcome is accepted, refused |
 | `assert A: Vec<u8>;`, `assert S: none;` | the class has the value, or none |
 | `assert f == f#1;` | the disjunctive constraint's decision, as below |
-| `assert refused infinite X;`, `no_join`, `no_fill`, `no_value`, `conflict at "…"`, `undeclared` | some refusal is that, of that class where one is written |
+| `assert refused infinite X;`, `no_join`, `no_meet`, `no_value`, `conflict at "…"`, `undeclared` | some refusal is that, of that class where one is written |
 | `` assert failing [`g@2/A ~> g@2/B`]; `` | the failing checks' relations are exactly these, in the outcome's order |
 | `` assert check `X ~> probe.Param(0)` == conversion down#0; `` | a check of the relation has that coercion |
 | `assert istar completeness probe;` | an I\* violation; the final states' violations are exactly those written, none where none is |
@@ -199,7 +199,7 @@ it. `settle`'s trace holds what changed the state.
 | the join | `refuse_infinite` | the refusal |
 | | `join_lit_lowers`, `merge_cycles`, `join_lit_at` | the relations recorded |
 | | `join` | `Joined`: its `Sources` (its equations and structures, the solved lower bounds and part lower bounds it counts, the structure constraints, those left out) and `Took`: the structure it held, the head it joined with what unification did, nothing, or no join |
-| | `fill` | `Filled`: each upper bound of the class with its value, and `Fill`: the one type they have, with what unification did as the class took it, and the refusal where it could not take it, or the refusal where they have two |
+| | `take_meet` | `Took::Met`: the meet of the upper bounds' heads, taken with its parts made anew, or `Took::NoMeet`, the refusal where they have none |
 | decompositions | `decompose_at` | `Decomposition`: one class, the parts' relations, unsolved, or no parts |
 | | `unify_lit_coercion_constraints`, `decompose_parts` | the relations recorded |
 | disjunctive constraints | `decide`, `decide_at_once` | `Decided`: the disjunctive constraint, its decision, the relations recorded, and for `decide` `DecidedBy`: the disjunctive constraints that depend on it, the dependencies it broke, the undecided disjunctive constraints that broke theirs on it, and its `ValueRead` (the disjunctive constraints and relations it leaves out, and its `Reading`: a use's `Narrowing`, what a class reads as for a lend, a projection or a binding, or a function value's Values) |
@@ -233,8 +233,7 @@ step does not rename what an earlier one shows.
 | `merge cycles` | the cycles of lower bounds alone merged |
 | `lit lowers X` | `X`'s LitVar lower bounds unified with it |
 | `lit join #k <relation>` | the LitVar lower bound at `#k` unified with the class it bounds |
-| `join X: <took>` | `X` solved, having taken `held` (its structure), a constructor and its members, `nothing`, `no join`, or `infinite` (it reaches a part of its own) |
-| `fill X: <took>` | `X`, which nothing enters, filled: the one type its upper bounds have, or `differ` where they have two |
+| `join X: <took>` | `X` judged: the node its sources join at; `met <node>`, the meet of what it passes into, where nothing enters it; `bounded <domain>`, the domain its sources give where they give no node; `no join`; `no meet`; or `infinite` (it reaches a part of its own) |
 | `lit coercion constraints X` | `X` unified with each type it passes into |
 | `decomposition #k <relation>: <what>` | the relation at `#k`: `one class`, `parts`, `unsolved`, `no parts` |
 | `decide n: <decision>` | the disjunctive constraint `n` decided, its decision written as an expectation writes one |
@@ -256,7 +255,6 @@ Under `TRACE=1` alone:
 | `part lower L: <constructor>` | under `join`: a solved part lower bound, and the constructor and members it gives |
 | `structure constraint: <constructor>` | under `join`: the constructor and members a structure constraint gives |
 | `left out: L, ...` | under `join`: the lower bounds and part lower bounds not solved |
-| `place P: <type>` | under `fill`: an upper bound of `X`, and its value |
 | `exclude: n, ...` | under `decide`: the disjunctive constraints whose relations its read leaves out |
 | `broke: n, ...` | under `decide`: the decided disjunctive constraints it broke its dependency on |
 | `broken by: n, ...` | under `decide`: the undecided disjunctive constraints that broke theirs on it |

@@ -22,6 +22,8 @@ pub enum Cause {
     Conflict(String),
     /// What enters it has no join.
     NoJoin,
+    /// Nothing enters it, and what it passes into has no meet.
+    NoMeet,
     /// It reaches a part of its own.
     Infinite,
     /// A type the text writes for it disagrees with its declaration.
@@ -35,6 +37,7 @@ impl fmt::Display for Cause {
         match self {
             Cause::Conflict(conflict) => write!(f, "conflict: {conflict}"),
             Cause::NoJoin => f.write_str("no_join"),
+            Cause::NoMeet => f.write_str("no_meet"),
             Cause::Infinite => f.write_str("infinite"),
             Cause::Undeclared(what) => write!(f, "undeclared: {what}"),
             Cause::NoValue => f.write_str("no_value"),

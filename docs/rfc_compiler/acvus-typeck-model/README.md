@@ -143,8 +143,8 @@ The primitives, each assuming only those before it:
 | 08 | Uses, lends, projections and bindings |
 | 09 | Binding groups, universals, C and instances |
 | 10 | The dependency graph |
-| 11 | Values, decompositions and fills |
-| 12 | Steps, state, fixpoint and fallback |
+| 11 | Values and decompositions |
+| 12 | The judgment, the loop and fallback |
 | 13 | Outcome and exploration |
 | 14 | The certificate and its checker |
 | 15 | I\* |

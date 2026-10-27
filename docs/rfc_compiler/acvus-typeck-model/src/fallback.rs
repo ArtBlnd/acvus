@@ -32,7 +32,7 @@ impl State {
             .into_iter()
             .filter_map(|root| match self.verdict(root) {
                 Verdict::Rest(domain) => Some((root, domain.map(|domain| domain.fallback()))),
-                Verdict::Join(_) | Verdict::Fill(_) | Verdict::Waiting => None,
+                Verdict::Join(_) | Verdict::Meet(_) | Verdict::Waiting => None,
             })
             .collect();
         let with_domain: Vec<(ClassId, Term<ClassId>)> = rest

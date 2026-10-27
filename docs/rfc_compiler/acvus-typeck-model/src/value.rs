@@ -62,15 +62,17 @@ pub enum Took {
     /// The join of what its sources give, its parts made anew: the structures
     /// recorded, with what unification did as the class took them.
     Joined { head: Head, recorded: Recording },
-    /// Nothing enters it: the one node of the classes it passes into, taken
-    /// with its parts made anew.
-    Filled { head: Head, recorded: Recording },
+    /// Nothing enters it: the meet of the classes it passes into, taken with
+    /// its parts made anew.
+    Met { head: Head, recorded: Recording },
     /// Its sources give it no node but a domain: it takes the domain,
     /// recorded, which bounds its value and which fallback reads.
     Bounded { domain: Domain, recorded: Recording },
-    /// Its sources, or the classes it passes into, have no join: it has no
-    /// value.
+    /// Its sources have no join: it has no value.
     NoJoin,
+    /// Nothing enters it, and the classes it passes into have no meet: it
+    /// has no value.
+    NoMeet,
     /// It reaches a part of its own: no finite type holds it, so it has no
     /// value.
     Infinite,
@@ -131,6 +133,49 @@ impl State {
             node: a.node,
             members,
         })
+    }
+
+    /// The meet of two upper bounds' nodes and members: the greatest node
+    /// that reaches both. `!` is no candidate, so a bound of `!` has no meet;
+    /// an exclusive reference reaches a shared one by a reborrow, so two
+    /// references of two mutabilities meet at the exclusive one; and of two
+    /// nodes the one below the other, along the casts, reaches both, so it is
+    /// the meet, and two nodes neither of which is below the other have none.
+    /// A type that reaches two objects or two enums has the members of both.
+    pub(crate) fn head_meet(&self, a: &Head, b: &Head) -> Option<Head> {
+        if a.node == Node::Owned(Constructor::Never) || b.node == Node::Owned(Constructor::Never) {
+            return None;
+        }
+        let (a, b) = match (&a.node, &b.node) {
+            (Node::Ref(m, c), Node::Ref(n, d)) if m != n => (
+                Head {
+                    node: Node::Ref(Mutability::Exclusive, c.clone()),
+                    members: a.members.clone(),
+                },
+                Head {
+                    node: Node::Ref(Mutability::Exclusive, d.clone()),
+                    members: b.members.clone(),
+                },
+            ),
+            (Node::Ref(..), Node::Owned(_)) | (Node::Owned(_), Node::Ref(..)) => return None,
+            _ => (a.clone(), b.clone()),
+        };
+        let tree = self.decls.tree();
+        let node = if tree.ancestors(&a.node).contains(&b.node) {
+            a.node.clone()
+        } else if tree.ancestors(&b.node).contains(&a.node) {
+            b.node.clone()
+        } else {
+            return None;
+        };
+        let members = match node {
+            Node::Owned(Constructor::Object | Constructor::Enum(_)) => {
+                a.members.union(&b.members).cloned().collect()
+            }
+            _ if a.members == b.members => a.members,
+            _ => return None,
+        };
+        Some(Head { node, members })
     }
 
     /// The join raised where the sources carry two different identities, which
@@ -382,21 +427,28 @@ impl State {
         }
     }
 
-    /// The equivalence class, which nothing enters, takes the one type of the
-    /// classes it passes into, `uppers`, at their node with its parts made
-    /// anew; where they are not one it is refused.
-    pub(crate) fn take_fill(&mut self, root: ClassId, uppers: &[Head]) -> Took {
+    /// The equivalence class, which nothing enters, takes the meet of the
+    /// classes it passes into, `uppers`, at its node with its parts made
+    /// anew; where they have no meet it is refused.
+    pub(crate) fn take_meet(&mut self, root: ClassId, uppers: &[Head]) -> Took {
         let root = self.root(root);
-        let Some(first) = uppers.first().cloned() else {
-            unreachable!("a class is filled where an upper bound has a node");
+        let Some(met) = self.meet_of(uppers) else {
+            self.classes.refuse(root, Cause::NoMeet);
+            return Took::NoMeet;
         };
-        if uppers.iter().any(|head| *head != first) {
-            self.classes.refuse(root, Cause::NoJoin);
-            return Took::NoJoin;
-        }
         let owner = self.class_name(root);
-        let recorded = self.take_skeleton(root, &first, &owner, true, &Recorder::Join(root));
-        Took::Filled { head: first, recorded }
+        let recorded = self.take_skeleton(root, &met, &owner, true, &Recorder::Join(root));
+        Took::Met { head: met, recorded }
+    }
+
+    /// The meet of the upper bounds' heads, none where they are none or have
+    /// no meet.
+    pub(crate) fn meet_of(&self, uppers: &[Head]) -> Option<Head> {
+        let first = uppers.first()?.clone();
+        uppers
+            .iter()
+            .skip(1)
+            .try_fold(first, |met, head| self.head_meet(&met, head))
     }
 
     /// The equivalence class, whose sources give it no node, takes the domain

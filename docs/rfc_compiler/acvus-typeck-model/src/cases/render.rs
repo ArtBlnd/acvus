@@ -221,11 +221,10 @@ pub fn report(state: &State, report: &Report) -> Rendered {
         Report::Joined { class: root, took } => {
             let (what, recorded) = match took {
                 Took::Joined { head, recorded } => (format!("{:?}", head.node), Some(recorded)),
-                Took::Filled { head, recorded } => {
-                    (format!("filled {:?}", head.node), Some(recorded))
-                }
+                Took::Met { head, recorded } => (format!("met {:?}", head.node), Some(recorded)),
                 Took::Bounded { domain, recorded } => (format!("bounded {domain}"), Some(recorded)),
                 Took::NoJoin => ("no join".to_string(), None),
+                Took::NoMeet => ("no meet".to_string(), None),
                 Took::Infinite => ("infinite".to_string(), None),
             };
             (
@@ -610,7 +609,7 @@ pub fn traced(state: &State, report: &Report) -> Lines {
         Report::Joined {
             took:
                 Took::Joined { recorded, .. }
-                | Took::Filled { recorded, .. }
+                | Took::Met { recorded, .. }
                 | Took::Bounded { recorded, .. },
             ..
         } => Some(recorded),

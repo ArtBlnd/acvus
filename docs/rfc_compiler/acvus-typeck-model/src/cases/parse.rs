@@ -171,6 +171,7 @@ pub enum Orders {
 pub enum RefusalText {
     Infinite(Option<String>),
     NoJoin(Option<String>),
+    NoMeet(Option<String>),
     NoValue(Option<String>),
     Conflict(Option<String>),
     Undeclared,
@@ -947,6 +948,7 @@ impl Parser<'_> {
         Ok(match kind.as_str() {
             "infinite" => RefusalText::Infinite(named(self)?),
             "no_join" => RefusalText::NoJoin(named(self)?),
+            "no_meet" => RefusalText::NoMeet(named(self)?),
             "no_value" => RefusalText::NoValue(named(self)?),
             "conflict" => {
                 if self.eat_word("at") {

@@ -1,4 +1,4 @@
-# 11 Values, decompositions and fills
+# 11 Values and decompositions
 
 The code is `src/value.rs`, the decompositions
 in `src/decomposition.rs`, a structure constraint "indexes `τ`" linked along a view in `src/unify.rs`, the
@@ -93,45 +93,28 @@ leave out.
    The reading by the sources is removed.
 9. **`!` and a structure constraint.** `!` has no part, so it satisfies no structure
    constraint.
-10. **A class nothing enters**. An unsolved class holding no structure, no
-    LitVar and no structure constraint, each of whose lower bounds and part lower
-    bounds is one nothing enters, and each of whose unbroken dependencies is satisfied,
-    a dependency on a lower bound or a part lower bound nothing enters being satisfied.
-    The unbroken dependencies have no cycle, so such classes are
-    found from those with no lower bound up. A structure constraint is a source,
-    even one that gives no member, so a class holding one is not
-    one nothing enters.
-11. **A fill** is a step, taken where the class's upper bounds, the `α` of each lower
-    bound and part lower bound whose `τ` it is and the `U` of each coercion constraint whose
-    `T` it is, each have a closed value or hold only a LitVar nothing more decides,
-    settled and with nothing left to take (`State::fills_now`), and one has a
-    closed value. Where the closed values are one type and
-    each such LitVar holds it (`PlaceValue`), as a LitVar decides nothing within
-    its family at a narrowing, the class takes it, each part a class made
-    anew holding its part, every one solved; its relations are then decomposed as any
-    solved class's are, and each entering value reaches its upper bound with no
-    coercion. Otherwise the class has no value and is refused there
-    (`Refusal::NoFill`). A class that passes into no upper bound, or whose upper bounds hold
-    only LitVars, is not filled, and falls back.
-12. **`e?`'s wrapping**. The class `X` the wrapping passes into
+10. **A class nothing enters** takes the meet of what it passes into, by the
+    rule of note 12; its parts are made anew and its relations decomposed as
+    any judged class's are.
+11. **`e?`'s wrapping**. The class `X` the wrapping passes into
     waits for the error part `E` to take a constructor (`Edge::Taking`).
     Once it does, the decomposition records, by `Recorder::Decomposition(E)`: where `E` is an
     `Error` or `!`, `E ≤ X`, no wrapping; where it is a type of a name `N`, the
     structure `Error{N(P)}` of `X` and `E ≤ P`; and otherwise the structure `Error⟨P⟩` and
     `E ≤ P`, `P` made anew (`State::decompose_wrap`). An `E` nothing enters waits for
     nothing once `?` is decided, and falls back to `!` where its group may.
-13. **Two identities**. A class whose solved lower bounds carry two
+12. **Two identities**. A class whose solved lower bounds carry two
     different identities takes the nearest node above their join that carries
     none, along the cast tree (`join::without_identity`), each value cast up to
     it as any lower bound's is; where no such node is, or a part lower bound
     carries one of them, it has no join (`State::without_two_identities`). The
     closed join does the same (`join::join`). A deeper level's identity, refused,
     has no witness here: the model has no loop and no level.
-14. **`!` and structure constraints**. `!`, which has no value, satisfies every structure constraint
+13. **`!` and structure constraints**. `!`, which has no value, satisfies every structure constraint
     (`Classes::normalize`), and once a class takes `!`, each structure constraint
     on it is decomposed by recording `!` as the part it names (`State::decompose_structure_constraint`), so
     that what is written into such a part is refused where it enters it.
-15. **Values along a conversion**. The decomposition links nothing through
+14. **Values along a conversion**. The decomposition links nothing through
     a declared conversion, which the closed types decide once both sides are
     solved, so no relation brings the lambdas a function value it
     carries to where it reaches. The coercion constraint's check asks for them there: at

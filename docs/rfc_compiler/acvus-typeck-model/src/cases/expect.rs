@@ -137,6 +137,7 @@ fn refusal_matches(text: &RefusalText, refusal: &Refusal) -> bool {
     match (text, &refusal.cause) {
         (RefusalText::Infinite(wanted), Cause::Infinite)
         | (RefusalText::NoJoin(wanted), Cause::NoJoin)
+        | (RefusalText::NoMeet(wanted), Cause::NoMeet)
         | (RefusalText::NoValue(wanted), Cause::NoValue) => named(wanted),
         (RefusalText::Conflict(wanted), Cause::Conflict(_)) => wanted.as_ref().is_none_or(|wanted| {
             refusal
