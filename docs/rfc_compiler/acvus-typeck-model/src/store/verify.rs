@@ -2,40 +2,48 @@
 
 use std::collections::BTreeSet;
 
-use crate::primitive::class::{Bound, Class, State};
+use crate::primitive::ItemId;
+use crate::primitive::class::{Bound, Class, ClassKind, State};
 use crate::primitive::id::Id;
 use crate::primitive::ty::PartKey;
-use crate::primitive::{ClassId, ItemId};
 
 use super::classes::{Classes, Slot};
 
 /// An invariant of the store that does not hold.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum Violation {
+pub enum Violation<K>
+where
+    K: ClassKind,
+{
     /// A link that does not point to a smaller id, so that `find` might not
     /// end.
-    Link { from: ClassId, to: ClassId },
+    Link { from: K::Id, to: K::Id },
     /// An id that `holder` holds and that names no class made.
-    Dangling { holder: ClassId, id: ClassId },
+    Dangling { holder: K::Id, id: K::Id },
     /// A part of an undecided class that no item names.
-    Unnamed { class: ClassId, key: PartKey },
+    Unnamed { class: K::Id, key: PartKey },
     /// A bound between two undecided classes that only one of them holds.
-    OneSided { bound: Bound, by: ItemId },
+    OneSided { bound: Bound<K>, by: ItemId },
 }
 
-impl Classes {
+impl<K> Classes<K>
+where
+    K: ClassKind,
+{
     /// Checks every invariant of the store.
     ///
     /// The links and the ids held are checked first: where one fails, `find`
     /// cannot be trusted, and the rest is left unchecked.
-    pub fn verify(&self) -> Result<(), Vec<Violation>> {
+    pub fn verify(&self) -> Result<(), Vec<Violation<K>>> {
         let mut violations = Vec::new();
         for (id, slot) in self.slots.iter() {
             match slot {
                 Slot::Link(to) if *to >= id => violations.push(Violation::Link { from: id, to: *to }),
                 Slot::Link(_) => {}
                 Slot::Root(class) => {
-                    let dangling = held(class)
+                    let dangling = class
+                        .state
+                        .held()
                         .into_iter()
                         .filter(|held| held.index() >= self.slots.len())
                         .map(|held| Violation::Dangling { holder: id, id: held });
@@ -90,36 +98,15 @@ impl Classes {
         if violations.is_empty() { Ok(()) } else { Err(violations) }
     }
 
-    fn rooted(&self, bound: Bound) -> Bound {
+    fn rooted(&self, bound: Bound<K>) -> Bound<K> {
         Bound {
             lower: self.find(bound.lower).id(),
             upper: self.find(bound.upper).id(),
         }
     }
 
-    fn is_undecided(&self, class: ClassId) -> bool {
-        matches!(self.get(self.find(class)).state, State::Undecided(_))
-    }
-}
-
-/// Every id a class holds: its parts, the other classes of its bounds, the
-/// classes of its calls, and the parts of its shape.
-fn held(class: &Class) -> Vec<ClassId> {
-    match &class.state {
-        State::Undecided(constraints) => constraints
-            .parts
-            .values()
-            .map(|part| part.class)
-            .chain(constraints.lower.keys().copied())
-            .chain(constraints.upper.keys().copied())
-            .chain(
-                constraints
-                    .calls
-                    .iter()
-                    .flat_map(|(call, _)| call.args.iter().copied().chain([call.result])),
-            )
-            .collect(),
-        State::Decided(decided) => decided.shape.places().into_iter().map(|(_, class)| *class).collect(),
+    fn is_undecided(&self, class: K::Id) -> bool {
+        !self.get(self.find(class)).state.is_decided()
     }
 }
 
@@ -128,13 +115,13 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::primitive::Name;
-    use crate::primitive::class::{Part, Side};
+    use crate::primitive::class::{Constraints, Live, Part, Side, Template};
     use crate::primitive::id::Arena;
-    use crate::store::scopes::Scopes;
+    use crate::primitive::scope::Scopes;
+    use crate::primitive::{ClassId, Name};
 
     struct World {
-        classes: Classes,
+        classes: Classes<Live>,
         scopes: Scopes,
         items: Arena<ItemId, ()>,
     }
@@ -152,7 +139,7 @@ mod tests {
             self.classes.undecided(self.scopes.root())
         }
 
-        fn constraints(&mut self, class: ClassId) -> &mut crate::primitive::class::Constraints {
+        fn constraints(&mut self, class: ClassId) -> &mut Constraints<Live> {
             let Slot::Root(Class {
                 state: State::Undecided(constraints),
                 ..
@@ -177,6 +164,24 @@ mod tests {
             .expect("an undecided class names any part");
         world.classes.unify(&world.scopes, a, b, at);
         assert_eq!(world.classes.verify(), Ok(()));
+    }
+
+    #[test]
+    fn a_template_store_is_kept_by_the_same_operations() {
+        let scopes = Scopes::new();
+        let mut items: Arena<ItemId, ()> = Arena::default();
+        let mut templates = Classes::<Template>::default();
+        let hole = templates.undecided(scopes.root());
+        let at = items.push(());
+        let reference = templates.decided(
+            scopes.root(),
+            crate::primitive::ty::Shape::Ref(crate::primitive::ty::Mutability::Shared, hole),
+            BTreeSet::from([at]),
+        );
+        let other = templates.undecided(scopes.root());
+        templates.bound(Bound { lower: other, upper: hole }, at);
+        templates.unify(&scopes, other, reference, at);
+        assert_eq!(templates.verify(), Ok(()));
     }
 
     #[test]
@@ -226,7 +231,7 @@ mod tests {
     fn an_id_of_no_class_made_is_found() {
         let mut world = World::new();
         let a = world.undecided();
-        let mut elsewhere = Classes::default();
+        let mut elsewhere = Classes::<Live>::default();
         let stray = (0..4).map(|_| elsewhere.undecided(world.scopes.root())).last().expect("four classes were made");
         let at = world.items.push(());
         world.constraints(a).parts.insert(

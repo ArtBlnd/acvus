@@ -1,36 +1,54 @@
-//! The classes: a union-find over [`ClassId`], each root holding its class.
+//! The classes of one kind: a union-find over their ids, each root holding
+//! its class.
 
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 use std::mem;
 
-use crate::primitive::class::{Bound, Bounds, Call, Class, Constraints, Decided, Part, Side, State};
+use crate::primitive::ItemId;
+use crate::primitive::ScopeId;
+use crate::primitive::class::{Bound, Call, Class, ClassKind, Constraints, Decided, Part, Pending, Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::refusal::{Cause, Refusal};
+use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{PartKey, Shape};
-use crate::primitive::{ClassId, ItemId, ScopeId};
 
-use super::scopes::Scopes;
-
-/// Every class made, by id.
+/// Every class of the kind `K` made, by id.
 ///
 /// An id stays valid forever, as a handle, but once classes are unified
 /// several ids name one class, and only one of them, the root, holds it.
 /// [`Classes::find`] gives the root as a [`Root`], and a class is read, and
 /// two classes compared, through roots alone.
-#[derive(Clone, Debug, Default)]
-pub struct Classes {
+#[derive(Clone, Debug)]
+pub struct Classes<K>
+where
+    K: ClassKind,
+{
     /// Open to the rest of the store for [`Classes::verify`] alone.
-    pub(super) slots: Arena<ClassId, Slot>,
+    pub(super) slots: Arena<K::Id, Slot<K>>,
+}
+
+// Written out, as a derive would ask an id to have a default, and none has.
+impl<K> Default for Classes<K>
+where
+    K: ClassKind,
+{
+    fn default() -> Self {
+        Self {
+            slots: Arena::default(),
+        }
+    }
 }
 
 /// The class itself where the id is a root, or the id it was unified into.
 #[derive(Clone, Debug)]
-pub(super) enum Slot {
-    Root(Class),
-    Link(ClassId),
+pub(super) enum Slot<K>
+where
+    K: ClassKind,
+{
+    Root(Class<K>),
+    Link(K::Id),
 }
 
 /// The id that holds a class now, as [`Classes::find`] gives it.
@@ -40,13 +58,14 @@ pub(super) enum Slot {
 ///
 /// ```compile_fail
 /// use acvus_typeck_model::primitive::ItemId;
+/// use acvus_typeck_model::primitive::class::Live;
 /// use acvus_typeck_model::primitive::id::Arena;
+/// use acvus_typeck_model::primitive::scope::Scopes;
 /// use acvus_typeck_model::store::classes::Classes;
-/// use acvus_typeck_model::store::scopes::Scopes;
 ///
 /// let scopes = Scopes::new();
 /// let mut items: Arena<ItemId, ()> = Arena::default();
-/// let mut classes = Classes::default();
+/// let mut classes = Classes::<Live>::default();
 /// let a = classes.undecided(scopes.root());
 /// let b = classes.undecided(scopes.root());
 /// let root = classes.find(b);
@@ -58,13 +77,14 @@ pub(super) enum Slot {
 ///
 /// ```
 /// use acvus_typeck_model::primitive::ItemId;
+/// use acvus_typeck_model::primitive::class::Live;
 /// use acvus_typeck_model::primitive::id::Arena;
+/// use acvus_typeck_model::primitive::scope::Scopes;
 /// use acvus_typeck_model::store::classes::Classes;
-/// use acvus_typeck_model::store::scopes::Scopes;
 ///
 /// let scopes = Scopes::new();
 /// let mut items: Arena<ItemId, ()> = Arena::default();
-/// let mut classes = Classes::default();
+/// let mut classes = Classes::<Live>::default();
 /// let a = classes.undecided(scopes.root());
 /// let b = classes.undecided(scopes.root());
 /// classes.unify(&scopes, a, b, items.push(()));
@@ -73,40 +93,42 @@ pub(super) enum Slot {
 /// classes.get(root);
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct Root<'a> {
-    id: ClassId,
-    classes: PhantomData<&'a Classes>,
+pub struct Root<'a, K>
+where
+    K: ClassKind,
+{
+    id: K::Id,
+    classes: PhantomData<&'a Classes<K>>,
 }
 
-impl Root<'_> {
+impl<K> Root<'_, K>
+where
+    K: ClassKind,
+{
     /// The root's id, as a handle to be stored.
-    pub fn id(self) -> ClassId {
+    pub fn id(self) -> K::Id {
         self.id
     }
 }
 
 /// What a union, or a record on a decided class, leaves to its caller.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct Unified {
+pub struct Unified<K>
+where
+    K: ClassKind,
+{
     pub refusals: Vec<Refusal>,
-    pub pending: Vec<Pending>,
+    pub pending: Vec<Pending<K>>,
     /// Bounds that no undecided class holds any more, between the roots of
     /// their classes: the caller checks that the lower reaches the upper.
-    pub bounds: BTreeSet<(Bound, ItemId)>,
+    pub bounds: BTreeSet<(Bound<K>, ItemId)>,
 }
 
-/// What an undecided class held besides its parts when it became decided,
-/// or what was recorded on a class already decided. The store does not judge
-/// these; its caller checks each against the class's shape.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Pending {
-    pub class: ClassId,
-    pub calls: BTreeSet<(Call, ItemId)>,
-    pub domains: BTreeSet<(Domain, ItemId)>,
-}
-
-impl Classes {
-    pub fn undecided(&mut self, scope: ScopeId) -> ClassId {
+impl<K> Classes<K>
+where
+    K: ClassKind,
+{
+    pub fn undecided(&mut self, scope: ScopeId) -> K::Id {
         self.slots.push(Slot::Root(Class {
             scope,
             state: State::Undecided(Constraints::default()),
@@ -114,14 +136,14 @@ impl Classes {
     }
 
     /// A class decided from the start: one the text or a signature writes.
-    pub fn decided(&mut self, scope: ScopeId, shape: Shape<ClassId>, by: BTreeSet<ItemId>) -> ClassId {
+    pub fn decided(&mut self, scope: ScopeId, shape: Shape<K::Id>, by: BTreeSet<ItemId>) -> K::Id {
         self.slots.push(Slot::Root(Class {
             scope,
             state: State::Decided(Decided { shape, by }),
         }))
     }
 
-    pub fn find(&self, class: ClassId) -> Root<'_> {
+    pub fn find(&self, class: K::Id) -> Root<'_, K> {
         let mut id = class;
         while let Slot::Link(next) = self.slots.get(id) {
             id = *next;
@@ -132,20 +154,20 @@ impl Classes {
         }
     }
 
-    pub fn get(&self, root: Root<'_>) -> &Class {
+    pub fn get(&self, root: Root<'_, K>) -> &Class<K> {
         self.root(root.id)
     }
 
     /// The classes that enter `root`, each with the items that recorded the
     /// bound, `root` itself among them where it is its own lower bound. A
     /// decided class holds none.
-    pub fn lowers(&self, root: Root<'_>) -> BTreeMap<Root<'_>, BTreeSet<ItemId>> {
+    pub fn lowers(&self, root: Root<'_, K>) -> BTreeMap<Root<'_, K>, BTreeSet<ItemId>> {
         self.side(root, Side::Lower)
     }
 
     /// The classes `root` goes to, as [`Classes::lowers`] gives those that
     /// enter it.
-    pub fn uppers(&self, root: Root<'_>) -> BTreeMap<Root<'_>, BTreeSet<ItemId>> {
+    pub fn uppers(&self, root: Root<'_, K>) -> BTreeMap<Root<'_, K>, BTreeSet<ItemId>> {
         self.side(root, Side::Upper)
     }
 
@@ -153,7 +175,7 @@ impl Classes {
     ///
     /// Each of the two classes that is undecided holds the bound. Where
     /// neither is, it is given back to be checked.
-    pub fn bound(&mut self, bound: Bound, at: ItemId) -> Option<(Bound, ItemId)> {
+    pub fn bound(&mut self, bound: Bound<K>, at: ItemId) -> Option<(Bound<K>, ItemId)> {
         let lower = self.find(bound.lower).id;
         let upper = self.find(bound.upper).id;
         let mut held = false;
@@ -173,22 +195,21 @@ impl Classes {
     /// An undecided class keeps the name, and makes the part a class where
     /// nothing has named it yet. A decided class gives the part in its place,
     /// and is refused where its shape has no place for it.
-    pub fn part(&mut self, class: ClassId, key: PartKey, side: Side, at: ItemId) -> Result<ClassId, Refusal> {
+    pub fn part(&mut self, class: K::Id, key: PartKey, side: Side, at: ItemId) -> Result<K::Id, Refusal> {
         let root = self.find(class).id;
         let owner = self.root(root);
-        let scope = owner.scope;
-        let named = match &owner.state {
-            State::Decided(decided) => {
-                return decided.shape.place(&key).copied().ok_or_else(|| Refusal {
-                    cause: Cause::NotHeld,
-                    items: decided.by.iter().copied().chain([at]).collect(),
-                });
-            }
-            State::Undecided(constraints) => constraints.parts.get(&key).map(|part| part.class),
-        };
-        let part_class = match named {
+        if let State::Decided(decided) = &owner.state {
+            return owner.state.part(&key).ok_or_else(|| Refusal {
+                cause: Cause::NotHeld,
+                items: decided.by.iter().copied().chain([at]).collect(),
+            });
+        }
+        let part_class = match owner.state.part(&key) {
             Some(part_class) => part_class,
-            None => self.undecided(scope),
+            None => {
+                let scope = owner.scope;
+                self.undecided(scope)
+            }
         };
         let State::Undecided(constraints) = &mut self.root_mut(root).state else {
             unreachable!("a decided class returned above, and making a class decides none");
@@ -208,7 +229,7 @@ impl Classes {
 
     /// Records a call on `class`. A decided class does not keep it, and
     /// gives it back to be checked against its shape.
-    pub fn call(&mut self, class: ClassId, call: Call, at: ItemId) -> Option<Pending> {
+    pub fn call(&mut self, class: K::Id, call: Call<K>, at: ItemId) -> Option<Pending<K>> {
         let root = self.find(class).id;
         match &mut self.root_mut(root).state {
             State::Undecided(constraints) => {
@@ -225,7 +246,7 @@ impl Classes {
 
     /// Records a domain on `class`. A decided class does not keep it, and
     /// gives it back to be checked against its shape.
-    pub fn domain(&mut self, class: ClassId, domain: Domain, at: ItemId) -> Option<Pending> {
+    pub fn domain(&mut self, class: K::Id, domain: Domain, at: ItemId) -> Option<Pending<K>> {
         let root = self.find(class).id;
         match &mut self.root_mut(root).state {
             State::Undecided(constraints) => {
@@ -243,15 +264,11 @@ impl Classes {
     /// Makes `a` and `b` one class, by `at`, and with them each pair of their
     /// parts of one name, at any depth.
     ///
-    /// Of two ids the smaller is kept as the root, and the class belongs to
-    /// the outer of the two scopes. Two undecided classes hold the bounds of
-    /// both, and a bound between them becomes the class's bound on itself.
-    /// Two decided classes must be of one layer. An undecided class unified
-    /// with a decided one gives each of its parts to the decided one's place
-    /// for it, gives back each bound that no undecided class holds any more,
-    /// and leaves its calls and domains to the caller ([`Pending`]). Deciding
-    /// a class is unifying it with a decided class.
-    pub fn unify(&mut self, scopes: &Scopes, a: ClassId, b: ClassId, at: ItemId) -> Unified {
+    /// Of two ids the smaller is kept as the root, and the two classes are
+    /// merged there ([`Class::merge`]). Of the bounds a merge leaves, each
+    /// that no undecided class holds any more is given back. Deciding a class
+    /// is unifying it with a decided class.
+    pub fn unify(&mut self, scopes: &Scopes, a: K::Id, b: K::Id, at: ItemId) -> Unified<K> {
         let mut unified = Unified::default();
         let mut pairs = vec![(a, b)];
         let mut merged = BTreeSet::new();
@@ -264,10 +281,22 @@ impl Classes {
             let Slot::Root(gone_class) = mem::replace(self.slots.get_mut(gone), Slot::Link(kept)) else {
                 unreachable!("find gives a root");
             };
-            let kept_class = self.root_mut(kept);
-            kept_class.scope = scopes.outer(kept_class.scope, gone_class.scope);
-            let kept_state = mem::replace(&mut kept_class.state, State::Undecided(Constraints::default()));
-            kept_class.state = merge(kept, kept_state, gone_class.state, at, &mut pairs, &mut unified);
+            // The kept slot holds an empty class only while the two merge,
+            // which reads nothing of the store.
+            let scope = self.root(kept).scope;
+            let placeholder = Slot::Root(Class {
+                scope,
+                state: State::Undecided(Constraints::default()),
+            });
+            let Slot::Root(kept_class) = mem::replace(self.slots.get_mut(kept), placeholder) else {
+                unreachable!("find gives a root");
+            };
+            let merge = kept_class.merge(gone_class, kept, scopes, at);
+            *self.slots.get_mut(kept) = Slot::Root(merge.class);
+            pairs.extend(merge.pairs);
+            unified.refusals.extend(merge.refusals);
+            unified.pending.extend(merge.pending);
+            unified.bounds.extend(merge.bounds);
             merged.insert(kept);
         }
         // A bound an undecided class still holds stays with it: that class
@@ -280,9 +309,9 @@ impl Classes {
                 let upper = self.find(bound.upper).id;
                 (Bound { lower, upper }, at)
             })
-            .filter(|(bound, _)| self.is_decided(bound.lower) && self.is_decided(bound.upper))
+            .filter(|(bound, _)| self.root(bound.lower).state.is_decided() && self.root(bound.upper).state.is_decided())
             .collect();
-        let roots: BTreeSet<ClassId> = merged.into_iter().map(|class| self.find(class).id).collect();
+        let roots: BTreeSet<K::Id> = merged.into_iter().map(|class| self.find(class).id).collect();
         if roots.into_iter().any(|root| self.occurs(root)) {
             unified.refusals.push(Refusal {
                 cause: Cause::Occurs,
@@ -292,33 +321,25 @@ impl Classes {
         unified
     }
 
-    fn root(&self, id: ClassId) -> &Class {
+    fn root(&self, id: K::Id) -> &Class<K> {
         let Slot::Root(class) = self.slots.get(id) else {
             unreachable!("{id:?} is not a root");
         };
         class
     }
 
-    fn root_mut(&mut self, id: ClassId) -> &mut Class {
+    fn root_mut(&mut self, id: K::Id) -> &mut Class<K> {
         let Slot::Root(class) = self.slots.get_mut(id) else {
             unreachable!("{id:?} is not a root");
         };
         class
     }
 
-    fn is_decided(&self, root: ClassId) -> bool {
-        matches!(self.root(root).state, State::Decided(_))
-    }
-
-    fn side(&self, root: Root<'_>, side: Side) -> BTreeMap<Root<'_>, BTreeSet<ItemId>> {
-        let State::Undecided(constraints) = &self.get(root).state else {
+    fn side(&self, root: Root<'_, K>, side: Side) -> BTreeMap<Root<'_, K>, BTreeSet<ItemId>> {
+        let Some(bounds) = self.get(root).state.bounds(side) else {
             return BTreeMap::new();
         };
-        let bounds = match side {
-            Side::Lower => &constraints.lower,
-            Side::Upper => &constraints.upper,
-        };
-        let mut found: BTreeMap<Root<'_>, BTreeSet<ItemId>> = BTreeMap::new();
+        let mut found: BTreeMap<Root<'_, K>, BTreeSet<ItemId>> = BTreeMap::new();
         for (other, items) in bounds {
             found.entry(self.find(*other)).or_default().extend(items);
         }
@@ -326,121 +347,19 @@ impl Classes {
     }
 
     /// Whether the class held at `root` is a part of itself, at any depth.
-    fn occurs(&self, root: ClassId) -> bool {
+    fn occurs(&self, root: K::Id) -> bool {
         let mut seen = BTreeSet::new();
-        let mut stack = self.parts_of(root);
+        let mut stack = self.root(root).state.parts();
         while let Some(class) = stack.pop() {
             let class = self.find(class).id;
             if class == root {
                 return true;
             }
             if seen.insert(class) {
-                stack.extend(self.parts_of(class));
+                stack.extend(self.root(class).state.parts());
             }
         }
         false
-    }
-
-    fn parts_of(&self, root: ClassId) -> Vec<ClassId> {
-        match &self.root(root).state {
-            State::Undecided(constraints) => constraints.parts.values().map(|part| part.class).collect(),
-            State::Decided(decided) => decided.shape.places().into_iter().map(|(_, class)| *class).collect(),
-        }
-    }
-}
-
-/// The state of two classes made one, held at `root`. Each pair of parts
-/// that must be one class is pushed to `pairs`.
-fn merge(
-    root: ClassId,
-    kept: State,
-    gone: State,
-    at: ItemId,
-    pairs: &mut Vec<(ClassId, ClassId)>,
-    unified: &mut Unified,
-) -> State {
-    match (kept, gone) {
-        (State::Undecided(mut kept), State::Undecided(gone)) => {
-            unite(&mut kept.lower, gone.lower);
-            unite(&mut kept.upper, gone.upper);
-            for (key, part) in gone.parts {
-                match kept.parts.entry(key) {
-                    Entry::Vacant(vacant) => {
-                        vacant.insert(part);
-                    }
-                    Entry::Occupied(mut occupied) => {
-                        let mine = occupied.get_mut();
-                        pairs.push((mine.class, part.class));
-                        mine.lower.extend(part.lower);
-                        mine.upper.extend(part.upper);
-                    }
-                }
-            }
-            kept.calls.extend(gone.calls);
-            kept.domains.extend(gone.domains);
-            State::Undecided(kept)
-        }
-        (State::Decided(kept), State::Decided(gone)) => {
-            if kept.shape.layer() != gone.shape.layer() {
-                // The class keeps the shape at its root; the program is refused.
-                unified.refusals.push(Refusal {
-                    cause: Cause::Mismatch,
-                    items: kept.by.iter().chain(&gone.by).copied().chain([at]).collect(),
-                });
-                return State::Decided(kept);
-            }
-            for ((_, mine), (_, theirs)) in kept.shape.places().into_iter().zip(gone.shape.places()) {
-                pairs.push((*mine, *theirs));
-            }
-            let mut by = kept.by;
-            by.extend(gone.by);
-            State::Decided(Decided { shape: kept.shape, by })
-        }
-        (State::Undecided(undecided), State::Decided(decided))
-        | (State::Decided(decided), State::Undecided(undecided)) => {
-            for (key, part) in undecided.parts {
-                match decided.shape.place(&key) {
-                    Some(&place) => pairs.push((place, part.class)),
-                    None => unified.refusals.push(Refusal {
-                        cause: Cause::NotHeld,
-                        items: part
-                            .lower
-                            .iter()
-                            .chain(&part.upper)
-                            .chain(&decided.by)
-                            .copied()
-                            .chain([at])
-                            .collect(),
-                    }),
-                }
-            }
-            // Every bound goes back for now; `unify` keeps, once every pair
-            // is made one, those that no undecided class holds.
-            for (lower, items) in undecided.lower {
-                for by in items {
-                    unified.bounds.insert((Bound { lower, upper: root }, by));
-                }
-            }
-            for (upper, items) in undecided.upper {
-                for by in items {
-                    unified.bounds.insert((Bound { lower: root, upper }, by));
-                }
-            }
-            if !undecided.calls.is_empty() || !undecided.domains.is_empty() {
-                unified.pending.push(Pending {
-                    class: root,
-                    calls: undecided.calls,
-                    domains: undecided.domains,
-                });
-            }
-            State::Decided(decided)
-        }
-    }
-}
-
-fn unite(into: &mut Bounds, from: Bounds) {
-    for (class, items) in from {
-        into.entry(class).or_default().extend(items);
     }
 }
 
@@ -448,10 +367,12 @@ fn unite(into: &mut Bounds, from: Bounds) {
 mod tests {
     use super::*;
     use crate::primitive::Name;
+    use crate::primitive::ClassId;
+    use crate::primitive::class::Live;
     use crate::primitive::ty::{Mutability, Scalar};
 
     struct World {
-        classes: Classes,
+        classes: Classes<Live>,
         scopes: Scopes,
         items: Arena<ItemId, &'static str>,
     }
@@ -487,14 +408,14 @@ mod tests {
             (part, at)
         }
 
-        fn unify(&mut self, a: ClassId, b: ClassId) -> (Unified, ItemId) {
+        fn unify(&mut self, a: ClassId, b: ClassId) -> (Unified<Live>, ItemId) {
             let at = self.item("unify");
             let unified = self.classes.unify(&self.scopes, a, b, at);
             self.verify();
             (unified, at)
         }
 
-        fn bound(&mut self, lower: ClassId, upper: ClassId) -> (Option<(Bound, ItemId)>, ItemId) {
+        fn bound(&mut self, lower: ClassId, upper: ClassId) -> (Option<(Bound<Live>, ItemId)>, ItemId) {
             let at = self.item("bound");
             let given_back = self.classes.bound(Bound { lower, upper }, at);
             self.verify();
@@ -531,7 +452,7 @@ mod tests {
             self.classes.find(a) == self.classes.find(b)
         }
 
-        fn state(&self, class: ClassId) -> &State {
+        fn state(&self, class: ClassId) -> &State<Live> {
             &self.classes.get(self.classes.find(class)).state
         }
     }

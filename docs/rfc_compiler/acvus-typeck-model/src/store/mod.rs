@@ -7,5 +7,4 @@
 //! needs one.
 
 pub mod classes;
-pub mod scopes;
 pub mod verify;

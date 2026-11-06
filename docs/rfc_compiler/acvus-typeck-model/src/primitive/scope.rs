@@ -2,8 +2,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::primitive::ScopeId;
-use crate::primitive::id::Arena;
+use super::ScopeId;
+use super::id::Arena;
 
 #[derive(Clone, Debug)]
 pub struct Scopes {

@@ -31,9 +31,12 @@ macro_rules! id {
 }
 
 id! {
-    /// An equivalence class. Once classes are unified, several ids name one
-    /// class; `store::classes::Classes::find` gives the one that holds it.
+    /// A live class, one that is solved. Once classes are unified, several
+    /// ids name one class; `store::classes::Classes::find` gives the one that
+    /// holds it.
     ClassId,
+    /// A class of a template: recorded once, never solved, and only copied.
+    TemplateId,
     /// What recorded something (Constraints, O22).
     ItemId,
     /// A use (Uses).
