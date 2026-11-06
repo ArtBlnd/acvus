@@ -27,6 +27,6 @@ Y = `make_b()`;
 `&b` = &Y @ `&b`;
 R = core::add(`&a`, `&b`) @ `a + b`;
 
-must fail;
+must pass;
 assert X: A;
-assert failing [`&b <= a + b.Generalized(0)`];
+assert Y: B;

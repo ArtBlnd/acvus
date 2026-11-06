@@ -1,0 +1,12 @@
+// let r = f(1u8);              // f(u8) -> u8, f(u16) -> u16
+// The argument narrows the choice at the parameter to the u8 candidate, and
+// the result position sees the same choice: r is u8 with nothing else said.
+extern fn f(u8) -> u8;
+extern fn f(u16) -> u16;
+let 1u8: u8;
+let R;
+R = f(1u8) @ f;
+
+must pass;
+assert f == f#0;
+assert R: u8;

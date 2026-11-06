@@ -1,12 +1,12 @@
 // let o; if let Some(x) = o { }
-// O's only source is the structure constraint "variant Some", so O takes the constructor of the
-// member it names, Option, though Some is not visible;
-// the payload nothing enters falls back to !.
+// The pattern is a use of o's value, and the text shows no value entering O.
+// The variant it names makes no type, and `!` would promise that no value of
+// O exists where the pattern reads one. O gets no type.
 let O;
 let `Some.0`;
 let X;
 `Some.0` = O as Some @ Some;
 X = bind `Some.0` via [Some] @ x;
 
-must pass;
-assert O: Option<!>;
+must fail;
+assert refused no_value O;

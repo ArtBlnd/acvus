@@ -3,8 +3,9 @@ run: every order
 outcome 1
   refused
   value 1u8: u8
-  value T: !
-  value `t.0`: !
-  decision `t.0`: applied
-  check `1u8 <= t.0`: Err(None)
+  value T: none
+  value `t.0`: none
+  decision `t.0`: refused
+  refusal no_value {T} by {`T: Text`, `disjunctive constraint t.0`}
+  refusal no_value {`t.0`} by {`1u8 <= t.0`, `disjunctive constraint t.0`, `t.0: Text`}
   I* of a final state: []

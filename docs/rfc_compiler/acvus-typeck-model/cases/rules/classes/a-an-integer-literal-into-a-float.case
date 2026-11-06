@@ -8,4 +8,4 @@ let 1: lit 1;
 `@n` = 1;
 
 must fail;
-assert refused conflict at "1 = @n";
+assert refused conflict at "1 ~> @n";

@@ -1,10 +1,10 @@
 // a + b                    // add(&B, &B) -> B, add(&u8, &u8) -> u8; a = make_a(), b = make_b()
 // // a cast A -> B
 // The two operands are one variable in every candidate, so &a and &b enter
-// it and their targets are equated: a and b are one class, whose
-// value joins A and B to B by the cast; make_a()'s A is cast to B where
-// it enters a. Decided as add(&B, &B), accepted with a: B. Where a's type is
-// written A, the two operands have no join and the program is refused.
+// it, and the targets of the two references are one class, a reference's
+// target being invariant: a and b are that class. Its lower bounds are
+// make_a()'s A and make_b()'s B, which have no join: the cast A -> B decides
+// nothing. The program is refused there, no_join.
 extern type A;
 extern type B;
 #[cast] extern fn up(A) -> B;
@@ -28,6 +28,5 @@ Y = `make_b()`;
 `&b` = &Y @ `&b`;
 R = core::add(`&a`, `&b`) @ `a + b`;
 
-must pass;
-assert X: B;
-assert Y: B;
+must fail;
+assert refused no_join X;

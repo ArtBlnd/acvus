@@ -17,14 +17,15 @@ outcome 1
   check `take.Result <= take(n)`: Ok(Identity)
   refusal no_value {K} by {`K <=p R.Payload(Some)`, `K: Text`, `N <= K`, `Some(n): Option<K>`}
   refusal no_value {N} by {`N <= K`, `N ~> take.Param(0)`, `N: Text`, `disjunctive constraint q`, `disjunctive constraint take`, `q.Generalized(1) <= N`}
-  refusal no_value {P} by {`P ~> q.Param(0)`, `P: Text`, `disjunctive constraint parse`, `disjunctive constraint q`, `parse.GeneralizedResult <= P`}
+  refusal no_value {P} by {`P ~> q.Param(0)`, `P: Option<P.Payload(Some)>`, `P: Text`, `disjunctive constraint parse`, `disjunctive constraint q`, `parse.GeneralizedResult <= P`}
   refusal no_value {R} by {`R: Option<R.Payload(Some)>`, `R: Text`, `Some(n) <= R`, `disjunctive constraint q`, `q.Exit <= R`}
   refusal no_value {`Some(n)`} by {`Some(n) <= R`, `Some(n): Option<K>`, `Some(n): Text`}
+  refusal no_value {`P.Payload(Some)`} by {`P.Payload(Some) <=p q.Var(Type(0))`, `P: Option<P.Payload(Some)>`, `parse.Generalized(0) <=p P.Payload(Some)`}
   refusal no_value {`R.Payload(Some)`} by {`K <=p R.Payload(Some)`, `R: Option<R.Payload(Some)>`, `q.Exit.Payload(Some) <=p R.Payload(Some)`}
   refusal no_value {`q.Exit.Payload(Some)`} by {`q.Exit.Payload(Some) <=p R.Payload(Some)`, `q.Exit: Option<q.Exit.Payload(Some)>`}
-  refusal no_value {`parse.Generalized(0)`} by {`disjunctive constraint parse`, `parse.Generalized(0): not {&, &mut}`, `parse.GeneralizedResult: Option<parse.Generalized(0)>`}
+  refusal no_value {`parse.Generalized(0)`} by {`disjunctive constraint parse`, `parse.Generalized(0) <=p P.Payload(Some)`, `parse.Generalized(0): not {&, &mut}`, `parse.GeneralizedResult: Option<parse.Generalized(0)>`}
   refusal no_value {`parse.GeneralizedResult`} by {`disjunctive constraint parse`, `parse.GeneralizedResult <= P`, `parse.GeneralizedResult: Option<parse.Generalized(0)>`}
-  refusal no_value {`q.Var(Type(0))`} by {`disjunctive constraint q`, `q.Param(0): Option<q.Var(Type(0))>`, `q.Var(Type(0)) <= q.Generalized(1)`}
+  refusal no_value {`q.Var(Type(0))`} by {`P.Payload(Some) <=p q.Var(Type(0))`, `disjunctive constraint q`, `q.Param(0): Option<q.Var(Type(0))>`, `q.Var(Type(0)) <= q.Generalized(1)`}
   refusal no_value {`q.Param(0)`} by {`P ~> q.Param(0)`, `disjunctive constraint q`, `q.Param(0): Option<q.Var(Type(0))>`}
   refusal no_value {`q.Exit`} by {`disjunctive constraint q`, `q.Exit <= R`, `q.Exit: Option<q.Exit.Payload(Some)>`}
   refusal no_value {`q.Generalized(1)`} by {`disjunctive constraint q`, `q.Generalized(1) <= N`, `q.Var(Type(0)) <= q.Generalized(1)`}

@@ -1,0 +1,19 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value ?k: u8
+  value ?m: u8
+  value None: Option<u8>
+  value `None 2`: Option<u8>
+  value S: u8
+  value `Some(1u8)`: Option<u8>
+  value X: Option<u8>
+  value Y: Option<u8>
+  value Z: Option<u8>
+  check `None 2 <= Z`: Ok(Identity)
+  check `None <= X`: Ok(Identity)
+  check `Some(1u8) <= Y`: Ok(Identity)
+  check `X <= Y`: Ok(Identity)
+  check `Y <= Z`: Ok(Identity)
+  I* of a final state: []

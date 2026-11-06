@@ -1,0 +1,7 @@
+// let x; let a = &x;
+// Nothing enters X. The one lend reads X leaving out itself.
+let X;
+let A;
+A = &X @ `lend a`;
+
+must pass;

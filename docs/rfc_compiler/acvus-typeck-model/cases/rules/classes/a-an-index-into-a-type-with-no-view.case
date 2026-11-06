@@ -19,4 +19,4 @@ X = `o[0]`;
 
 must fail;
 assert `o[0]` == applied;
-assert refused conflict at "the value of O";
+assert refused conflict at "O: index o[0]";

@@ -13,4 +13,4 @@ let `.1`;
 
 must fail;
 assert `.1` == applied;
-assert refused conflict at "the value of mk()";
+assert refused conflict at "mk(): component 1: .1";

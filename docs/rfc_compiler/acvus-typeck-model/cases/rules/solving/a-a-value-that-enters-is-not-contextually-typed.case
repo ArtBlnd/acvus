@@ -1,0 +1,20 @@
+// let x = make_a(); take_b(x);         // extern types A, B; a cast A → B
+// A enters X, so X is A by its lower bound, and the context B is a check,
+// which A passes by the cast. The context did not change x: a value that
+// enters a class types it, and what the class passes into is checked
+// against that type.
+extern type A;
+extern type B;
+#[cast] extern fn up(A) -> B;
+extern fn make_a() -> A;
+extern fn take_b(B);
+let `make_a()`;
+let X;
+let `take_b(x)`;
+`make_a()` = make_a() @ make_a;
+X = `make_a()`;
+`take_b(x)` = take_b(X) @ take_b;
+
+must pass;
+assert X: A;
+assert check `X ~> take_b.Param(0)` == cast up#0;

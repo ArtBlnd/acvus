@@ -1,6 +1,10 @@
 // let mut a;
 // a.x = 0;
 // a = pick(a);             // pick({x: i32}) -> {x: i32}, pick(u8) -> u8
+// A's only lower bound is pick's result, which is one of two constructors
+// until a candidate remains; the candidate is read off A, which waits for
+// that result. The projection a.x makes no type. Nothing gives A a value, so
+// the program is refused.
 extern fn pick({x: i32}) -> {x: i32};
 extern fn pick(u8) -> u8;
 
@@ -13,7 +17,4 @@ let `pick(a)`;
 `pick(a)` = pick(A) @ pick;
 A = `pick(a)`;
 
-must pass;
-assert pick == pick#0;
-assert `a.x` == applied;
-assert A: {x: i32};
+must fail;

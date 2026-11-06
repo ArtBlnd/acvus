@@ -1,0 +1,12 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value R: &mut u8
+  value X: u8
+  value `f(..)`: ()
+  decision f: undecided
+  decision lend: lend &mut place
+  check `R <= f.Generalized(0)`: Ok(Identity)
+  check `f.GeneralizedResult <= f(..)`: Ok(Identity)
+  I* of a final state: []

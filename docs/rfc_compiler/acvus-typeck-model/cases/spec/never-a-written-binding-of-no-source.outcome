@@ -3,12 +3,12 @@ run: every order
 outcome 1
   refused
   value 1u8: u8
-  value T: none
-  value `t.0`: u8
+  value T: !
+  value `t.0`: !
   value `takes_u8(t)`: ()
   decision `t.0`: applied
   decision takes_u8: takes_u8#0
-  check `1u8 <= t.0`: Ok(Identity)
+  check `1u8 <= t.0`: Err(None)
+  check `T ~> takes_u8.Param(0)`: Ok(Never)
   check `takes_u8.Result <= takes_u8(t)`: Ok(Identity)
-  refusal conflict: Scalar(Int(U8)) vs component 0: t.0 {T} by {`T ~> takes_u8.Param(0)`, `T: Text`, `T: component 0: t.0`, `T: u8`, `disjunctive constraint t.0`, `disjunctive constraint takes_u8`}
   I* of a final state: []

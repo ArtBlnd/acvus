@@ -1,0 +1,13 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value X: none
+  value `take_a(x)`: ()
+  value `take_b(x)`: ()
+  decision take_a: take_a#0
+  decision take_b: take_b#0
+  check `take_a.Result <= take_a(x)`: Ok(Identity)
+  check `take_b.Result <= take_b(x)`: Ok(Identity)
+  refusal contexts {X} by {`X ~> take_a.Param(0)`, `X ~> take_b.Param(0)`, `X: Text`, `disjunctive constraint take_a`, `disjunctive constraint take_b`}
+  I* of a final state: []

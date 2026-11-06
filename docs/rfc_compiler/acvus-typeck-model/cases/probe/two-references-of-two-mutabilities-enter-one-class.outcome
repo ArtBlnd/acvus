@@ -1,0 +1,20 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value `&a`: none
+  value `&mut b`: none
+  value A: none
+  value B: none
+  value S: none
+  value `s.f`: none
+  decision `&a`: refused
+  decision `&mut b`: refused
+  decision `s.f`: refused
+  refusal no_value {`&a`} by {`&a <= S`, `&a: Text`, `&a: {&, &mut, !}`, `disjunctive constraint &a`}
+  refusal no_value {`&mut b`} by {`&mut b <= S`, `&mut b: Text`, `&mut b: {&, &mut, !}`, `disjunctive constraint &mut b`}
+  refusal no_value {A} by {`A: Text`, `disjunctive constraint &a`}
+  refusal no_value {B} by {`B: Text`, `disjunctive constraint &mut b`}
+  refusal no_value {S} by {`&a <= S`, `&mut b <= S`, `S: Text`, `disjunctive constraint s.f`}
+  refusal no_value {`s.f`} by {`disjunctive constraint s.f`, `s.f: Text`}
+  I* of a final state: []

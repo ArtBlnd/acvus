@@ -18,5 +18,5 @@ let `f(..)`;
 `f(..)` = f(`&a 1`, `&a 2`) @ f;
 
 must fail;
-assert A: !;
-assert failing [`&a 2 ~> f.Param(1)`];
+assert A: none;
+assert refused no_value A;

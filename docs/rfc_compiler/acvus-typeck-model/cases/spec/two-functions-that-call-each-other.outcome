@@ -1,7 +1,7 @@
 // What the model gives, written by `BLESS=1`.
 run: 200 sampled orders
 outcome 1
-  accepted
+  refused
   value `&0 e`: none
   value `&0 o`: none
   value `&1 e`: none
@@ -34,25 +34,21 @@ outcome 1
   decision `&0 o`: lend & place
   decision `&1 e`: lend & place
   decision `&1 o`: lend & place
-  decision `&n e`: lend & place
-  decision `&n e 2`: lend & place
-  decision `&n o`: lend & place
-  decision `&n o 2`: lend & place
+  decision `even@20/&n e`: lend & place
+  decision `even@20/&n e 2`: lend & place
+  decision `even@20/&n o`: undecided
+  decision `even@20/&n o 2`: undecided
   decision `even@20/n - 1 e`: core::sub#0
   decision `even@20/n - 1 o`: core::sub#0
   decision `even@20/n == 0 e`: core::eq#0
-  decision `even@20/n == 0 o`: core::eq#0
+  decision `even@20/n == 0 o`: undecided
   check `10u8 <= even@20/NE`: Ok(Identity)
   check `even@20/&0 e ~> even@20/n == 0 e.Param(1)`: Ok(Identity)
-  check `even@20/&0 o ~> even@20/n == 0 o.Param(1)`: Ok(Identity)
   check `even@20/&1 e ~> even@20/n - 1 e.Param(1)`: Ok(Identity)
   check `even@20/&1 o ~> even@20/n - 1 o.Param(1)`: Ok(Identity)
   check `even@20/&n e 2 ~> even@20/n - 1 e.Param(0)`: Ok(Identity)
   check `even@20/&n e ~> even@20/n == 0 e.Param(0)`: Ok(Identity)
-  check `even@20/&n o 2 ~> even@20/n - 1 o.Param(0)`: Ok(Identity)
-  check `even@20/&n o ~> even@20/n == 0 o.Param(0)`: Ok(Identity)
   check `even@20/RE <= even(10u8)`: Ok(Identity)
-  check `even@20/SE ~> even@20/NO`: Ok(Identity)
   check `even@20/SO ~> even@20/NE`: Ok(Identity)
   check `even@20/n - 1 e.Chosen(1) <= even@20/n - 1 e.Generalized(1)`: Ok(Identity)
   check `even@20/n - 1 e.Generalized(1) <= even@20/SE`: Ok(Identity)
@@ -68,4 +64,7 @@ outcome 1
   check `n == 0 e.GeneralizedResult <= EQE`: Ok(Identity)
   check `n == 0 o.GeneralizedResult <= EQO`: Ok(Identity)
   check `odd(n - 1) <= RE`: Ok(Identity)
+  refusal no_value {`even@20/&n o`} by {`disjunctive constraint even@20/&n o`, `disjunctive constraint even@20/n == 0 o`, `even@20/&n o: {&, &mut, !}`, `instance even@20`}
+  refusal no_value {`even@20/&n o 2`} by {`disjunctive constraint even@20/&n o 2`, `disjunctive constraint even@20/n - 1 o`, `even@20/&n o 2 ~> even@20/n - 1 o.Param(0)`, `even@20/&n o 2: {&, &mut, !}`, `instance even@20`}
+  refusal no_value {`even@20/NO`} by {`disjunctive constraint even@20/&n o`, `disjunctive constraint even@20/&n o 2`, `even@20/SE ~> even@20/NO`, `instance even@20`}
   I* of a final state: []

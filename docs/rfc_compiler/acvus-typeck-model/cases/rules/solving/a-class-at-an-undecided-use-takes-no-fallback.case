@@ -1,12 +1,8 @@
 // let x;
 // let r = f(x);            // f(u8) -> u8, f(u16) -> u16
-// The candidates differ at the argument, so f reads X there; no disjunctive constraint but
-// f records into X, and f's own relations are left out, so the value read
-// decides nothing and both candidates remain. X lies at f's position, so
-// it depends on the relations f has not yet recorded; f is never
-// decided, so X keeps an unbroken dependency and never falls back, and
-// neither does R, at f's result. Refused at f, where X and R have no
-// value.
+// No lower bound, no domain and no requirement is on X, so X takes `!` at
+// the fixpoint. The argument of f then holds `!`, so by the never rule f is
+// never, and the program is accepted.
 extern fn f(u8) -> u8;
 extern fn f(u16) -> u16;
 
@@ -14,7 +10,6 @@ let X;
 let R;
 R = f(X) @ f;
 
-must fail;
-assert f == undecided;
-assert X: none;
-assert R: none;
+must pass;
+assert f == never;
+assert X: !;

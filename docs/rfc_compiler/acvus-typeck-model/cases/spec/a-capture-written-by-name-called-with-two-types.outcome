@@ -5,41 +5,11 @@ outcome 1
   value `()`: ()
   value 1u8: u8
   value 2u16: u16
-  value ?k: none
-  value L: none
-  value None: none
-  value S: none
-  value `Some(x)`: none
-  value X: none
-  value remember: Fn/1
-  value `remember(1u8)`: ()
-  value `remember(2u16)`: ()
-  value `|x| ..`: Fn/1
-  value `λ result`: ()
-  decision `remember(1u8)`: calls {λ}
-  decision `remember(2u16)`: calls {λ}
-  check `remember(1u8)#λ/λ result <= remember(1u8)`: Ok(Identity)
-  check `remember(2u16)#λ/λ result <= remember(2u16)`: Ok(Identity)
-  check `|x| .. <= remember`: Ok(Identity)
-  check `() <= λ result`: Ok(Identity)
-  refusal no_value {?k} by {`?k <=p L.Payload(Some)`, `?k: Text`, `None: Option<?k>`}
-  refusal no_value {L} by {`L: Option<L.Payload(Some)>`, `L: Text`, `None <= L`, `Some(x) <= L`}
-  refusal no_value {None} by {`None <= L`, `None: Option<?k>`, `None: Text`}
-  refusal no_value {S} by {`S <=p L.Payload(Some)`, `S: Text`, `Some(x): Option<S>`, `X <= S`}
-  refusal no_value {`Some(x)`} by {`Some(x) <= L`, `Some(x): Option<S>`, `Some(x): Text`}
-  refusal no_join {X} by {`1u8 <= X`, `2u16 <= X`, `X <= S`, `X: Text`}
-  refusal no_value {`L.Payload(Some)`} by {`?k <=p L.Payload(Some)`, `L: Option<L.Payload(Some)>`, `S <=p L.Payload(Some)`}
-  I* of a final state: []
-outcome 2
-  refused
-  value `()`: ()
-  value 1u8: u8
-  value 2u16: u16
-  value ?k: u16
-  value L: Option<u16>
-  value None: Option<u16>
-  value S: none
-  value `Some(x)`: none
+  value ?k: !
+  value L: Option<!>
+  value None: Option<!>
+  value S: !
+  value `Some(x)`: Option<!>
   value X: none
   value remember: Fn/1
   value `remember(1u8)`: ()
@@ -49,15 +19,14 @@ outcome 2
   decision `remember(1u8)`: calls {λ}
   decision `remember(2u16)`: calls {λ}
   check `None <= L`: Ok(Identity)
+  check `Some(x) <= L`: Ok(Identity)
   check `remember(1u8)#λ/λ result <= remember(1u8)`: Ok(Identity)
   check `remember(2u16)#λ/λ result <= remember(2u16)`: Ok(Identity)
   check `|x| .. <= remember`: Ok(Identity)
   check `() <= λ result`: Ok(Identity)
-  refusal no_value {S} by {`S <=p L.Payload(Some)`, `S: Text`, `Some(x): Option<S>`, `X <= S`}
-  refusal no_value {`Some(x)`} by {`Some(x) <= L`, `Some(x): Option<S>`, `Some(x): Text`}
   refusal no_join {X} by {`1u8 <= X`, `2u16 <= X`, `X <= S`, `X: Text`}
   I* of a final state: []
-outcome 3
+outcome 2
   refused
   value `()`: ()
   value 1u8: u8
@@ -83,7 +52,7 @@ outcome 3
   check `() <= λ result`: Ok(Identity)
   refusal no_join {X} by {`1u8 <= X`, `2u16 <= X`, `X <= S`, `X: Text`}
   I* of a final state: []
-outcome 4
+outcome 3
   refused
   value `()`: ()
   value 1u8: u8
@@ -111,62 +80,7 @@ outcome 4
   check `|x| .. <= remember`: Ok(Identity)
   check `() <= λ result`: Ok(Identity)
   I* of a final state: []
-outcome 5
-  refused
-  value `()`: ()
-  value 1u8: u8
-  value 2u16: u16
-  value ?k: u16
-  value L: none
-  value None: Option<u16>
-  value S: none
-  value `Some(x)`: none
-  value X: none
-  value remember: Fn/1
-  value `remember(1u8)`: ()
-  value `remember(2u16)`: ()
-  value `|x| ..`: Fn/1
-  value `λ result`: ()
-  decision `remember(1u8)`: calls {λ}
-  decision `remember(2u16)`: calls {λ}
-  check `remember(1u8)#λ/λ result <= remember(1u8)`: Ok(Identity)
-  check `remember(2u16)#λ/λ result <= remember(2u16)`: Ok(Identity)
-  check `|x| .. <= remember`: Ok(Identity)
-  check `() <= λ result`: Ok(Identity)
-  refusal no_value {L} by {`L: Option<L.Payload(Some)>`, `L: Text`, `None <= L`, `Some(x) <= L`}
-  refusal no_value {S} by {`S <=p L.Payload(Some)`, `S: Text`, `Some(x): Option<S>`, `X <= S`}
-  refusal no_value {`Some(x)`} by {`Some(x) <= L`, `Some(x): Option<S>`, `Some(x): Text`}
-  refusal no_join {X} by {`1u8 <= X`, `2u16 <= X`, `X <= S`, `X: Text`}
-  refusal no_value {`L.Payload(Some)`} by {`?k <=p L.Payload(Some)`, `L: Option<L.Payload(Some)>`, `S <=p L.Payload(Some)`}
-  I* of a final state: []
-outcome 6
-  refused
-  value `()`: ()
-  value 1u8: u8
-  value 2u16: u16
-  value ?k: u8
-  value L: Option<u8>
-  value None: Option<u8>
-  value S: none
-  value `Some(x)`: none
-  value X: none
-  value remember: Fn/1
-  value `remember(1u8)`: ()
-  value `remember(2u16)`: ()
-  value `|x| ..`: Fn/1
-  value `λ result`: ()
-  decision `remember(1u8)`: calls {λ}
-  decision `remember(2u16)`: calls {λ}
-  check `None <= L`: Ok(Identity)
-  check `remember(1u8)#λ/λ result <= remember(1u8)`: Ok(Identity)
-  check `remember(2u16)#λ/λ result <= remember(2u16)`: Ok(Identity)
-  check `|x| .. <= remember`: Ok(Identity)
-  check `() <= λ result`: Ok(Identity)
-  refusal no_value {S} by {`S <=p L.Payload(Some)`, `S: Text`, `Some(x): Option<S>`, `X <= S`}
-  refusal no_value {`Some(x)`} by {`Some(x) <= L`, `Some(x): Option<S>`, `Some(x): Text`}
-  refusal no_join {X} by {`1u8 <= X`, `2u16 <= X`, `X <= S`, `X: Text`}
-  I* of a final state: []
-outcome 7
+outcome 4
   refused
   value `()`: ()
   value 1u8: u8
@@ -192,7 +106,7 @@ outcome 7
   check `() <= λ result`: Ok(Identity)
   refusal no_join {X} by {`1u8 <= X`, `2u16 <= X`, `X <= S`, `X: Text`}
   I* of a final state: []
-outcome 8
+outcome 5
   refused
   value `()`: ()
   value 1u8: u8
@@ -219,32 +133,4 @@ outcome 8
   check `remember(2u16)#λ/λ result <= remember(2u16)`: Ok(Identity)
   check `|x| .. <= remember`: Ok(Identity)
   check `() <= λ result`: Ok(Identity)
-  I* of a final state: []
-outcome 9
-  refused
-  value `()`: ()
-  value 1u8: u8
-  value 2u16: u16
-  value ?k: u8
-  value L: none
-  value None: Option<u8>
-  value S: none
-  value `Some(x)`: none
-  value X: none
-  value remember: Fn/1
-  value `remember(1u8)`: ()
-  value `remember(2u16)`: ()
-  value `|x| ..`: Fn/1
-  value `λ result`: ()
-  decision `remember(1u8)`: calls {λ}
-  decision `remember(2u16)`: calls {λ}
-  check `remember(1u8)#λ/λ result <= remember(1u8)`: Ok(Identity)
-  check `remember(2u16)#λ/λ result <= remember(2u16)`: Ok(Identity)
-  check `|x| .. <= remember`: Ok(Identity)
-  check `() <= λ result`: Ok(Identity)
-  refusal no_value {L} by {`L: Option<L.Payload(Some)>`, `L: Text`, `None <= L`, `Some(x) <= L`}
-  refusal no_value {S} by {`S <=p L.Payload(Some)`, `S: Text`, `Some(x): Option<S>`, `X <= S`}
-  refusal no_value {`Some(x)`} by {`Some(x) <= L`, `Some(x): Option<S>`, `Some(x): Text`}
-  refusal no_join {X} by {`1u8 <= X`, `2u16 <= X`, `X <= S`, `X: Text`}
-  refusal no_value {`L.Payload(Some)`} by {`?k <=p L.Payload(Some)`, `L: Option<L.Payload(Some)>`, `S <=p L.Payload(Some)`}
   I* of a final state: []

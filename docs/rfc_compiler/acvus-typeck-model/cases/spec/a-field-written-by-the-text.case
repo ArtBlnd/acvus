@@ -1,11 +1,14 @@
 // let a;
 // a.x = 0;
+// The projection is a use of a's value, and the text shows no value entering
+// A: no lower bound, no occurrence. A type made from the projection would come
+// from no value, and `!` would promise that no value of A exists where the
+// text uses one. A gets no type.
 let A;
 let `a.x`;
 let 0: lit 0;
 `a.x` = A.x @ `a.x`;
 `a.x` = 0;
 
-must pass;
-assert A: {x: i32};
-assert `a.x` == applied;
+must fail;
+assert refused no_value A;

@@ -36,41 +36,6 @@ outcome 1
   refusal no_value {`open 2.Result`} by {`disjunctive constraint open 2`, `open 2.Result <= open() 2`, `open 2.Result: F<open 2.Var(Identity)>`}
   I* of a final state: []
 outcome 2
-  refused
-  value `&a 1`: none
-  value `&a 2`: none
-  value A: none
-  value B: none
-  value `at(..)`: ()
-  value `index_of(..)`: none
-  value `open() 1`: none
-  value `open() 2`: none
-  decision at: at#0
-  decision index_of: index_of#0
-  decision `lend 1`: lend & place
-  decision `lend 2`: lend & place
-  decision `open 1`: open#0
-  decision `open 2`: open#0
-  check `at.Result <= at(..)`: Ok(Identity)
-  refusal no_value {`&a 1`, `lend 1.Lent`} by {`&a 1 = lend 1.Lent`, `&a 1 ~> at.Param(0)`, `&a 1: Text`, `&a 1: {&, &mut, !}`, `disjunctive constraint at`, `disjunctive constraint lend 1`, `lend 1.Lent: &A`}
-  refusal no_value {`&a 2`, `lend 2.Lent`} by {`&a 2 = lend 2.Lent`, `&a 2 ~> index_of.Param(0)`, `&a 2: Text`, `&a 2: {&, &mut, !}`, `disjunctive constraint index_of`, `disjunctive constraint lend 2`, `lend 2.Lent: &A`}
-  refusal no_value {A} by {`A <= B`, `A ~> at.Param(0).Target`, `A ~> index_of.Param(0).Target`, `A: F<A.Identity>`, `A: Text`, `disjunctive constraint lend 1`, `disjunctive constraint lend 2`, `lend 1.Lent: &A`, `lend 2.Lent: &A`, `open() 1 <= A`}
-  refusal no_value {B} by {`A <= B`, `B: F<B.Identity>`, `B: Text`, `open() 2 <= B`}
-  refusal no_value {`index_of(..)`} by {`disjunctive constraint at`, `disjunctive constraint index_of`, `index_of(..) ~> at.Param(1)`, `index_of(..): Idx<index_of(..).Identity>`, `index_of(..): Text`, `index_of.Result <= index_of(..)`}
-  refusal no_value {`open() 1`} by {`disjunctive constraint open 1`, `open 1.Result <= open() 1`, `open() 1 <= A`, `open() 1: F<open() 1.Identity>`, `open() 1: Text`}
-  refusal no_value {`open() 2`} by {`disjunctive constraint open 2`, `open 2.Result <= open() 2`, `open() 2 <= B`, `open() 2: F<open() 2.Identity>`, `open() 2: Text`}
-  refusal conflict: Identity(new open 1) vs Identity(new open 2) {`A.Identity`, `B.Identity`, `index_of(..).Identity`, `open() 2.Identity`, `at.Var(Identity)`, `index_of.Var(Identity)`, `open 2.Var(Identity)`} by {`A.Identity = B.Identity`, `A.Identity = at.Var(Identity)`, `A.Identity = index_of.Var(Identity)`, `A: F<A.Identity>`, `B: F<B.Identity>`, `at.Param(0).Target: F<at.Var(Identity)>`, `at.Param(1): Idx<at.Var(Identity)>`, `disjunctive constraint at`, `disjunctive constraint index_of`, `disjunctive constraint open 2`, `index_of(..).Identity = at.Var(Identity)`, `index_of(..): Idx<index_of(..).Identity>`, `index_of.Param(0).Target: F<index_of.Var(Identity)>`, `index_of.Result: Idx<index_of.Var(Identity)>`, `index_of.Var(Identity) = index_of(..).Identity`, `open 2.Result: F<open 2.Var(Identity)>`, `open 2.Var(Identity) = open() 2.Identity`, `open 2.Var(Identity): new open 2`, `open() 1.Identity = A.Identity`, `open() 2.Identity = B.Identity`, `open() 2: F<open() 2.Identity>`}
-  refusal conflict: Identity(new open 1) vs Identity(new open 2) {`open() 1.Identity`, `open 1.Var(Identity)`} by {`disjunctive constraint open 1`, `open 1.Result: F<open 1.Var(Identity)>`, `open 1.Var(Identity) = open() 1.Identity`, `open 1.Var(Identity): new open 1`, `open() 1.Identity = A.Identity`, `open() 1: F<open() 1.Identity>`}
-  refusal no_value {`at.Param(0).Target`} by {`A ~> at.Param(0).Target`, `at.Param(0).Target: F<at.Var(Identity)>`, `at.Param(0): &at.Param(0).Target`}
-  refusal no_value {`index_of.Param(0).Target`} by {`A ~> index_of.Param(0).Target`, `index_of.Param(0).Target: F<index_of.Var(Identity)>`, `index_of.Param(0): &index_of.Param(0).Target`}
-  refusal no_value {`at.Param(0)`} by {`&a 1 ~> at.Param(0)`, `at.Param(0): &at.Param(0).Target`, `disjunctive constraint at`}
-  refusal no_value {`at.Param(1)`} by {`at.Param(1): Idx<at.Var(Identity)>`, `disjunctive constraint at`, `index_of(..) ~> at.Param(1)`}
-  refusal no_value {`index_of.Param(0)`} by {`&a 2 ~> index_of.Param(0)`, `disjunctive constraint index_of`, `index_of.Param(0): &index_of.Param(0).Target`}
-  refusal no_value {`index_of.Result`} by {`disjunctive constraint index_of`, `index_of.Result <= index_of(..)`, `index_of.Result: Idx<index_of.Var(Identity)>`}
-  refusal no_value {`open 1.Result`} by {`disjunctive constraint open 1`, `open 1.Result <= open() 1`, `open 1.Result: F<open 1.Var(Identity)>`}
-  refusal no_value {`open 2.Result`} by {`disjunctive constraint open 2`, `open 2.Result <= open() 2`, `open 2.Result: F<open 2.Var(Identity)>`}
-  I* of a final state: []
-outcome 3
   accepted
   value `&a 1`: &F<new open 1>
   value `&a 2`: &F<new open 1>
@@ -96,39 +61,4 @@ outcome 3
   check `open 2.Result <= open() 2`: Ok(Identity)
   check `open() 1 <= A`: Ok(Identity)
   check `open() 2 <= B`: Ok(Composition { reborrow: false, casts: [DeclId { name: forget, overload: 0 }], structural: None })
-  I* of a final state: []
-outcome 4
-  refused
-  value `&a 1`: none
-  value `&a 2`: none
-  value A: none
-  value B: none
-  value `at(..)`: ()
-  value `index_of(..)`: none
-  value `open() 1`: none
-  value `open() 2`: none
-  decision at: at#0
-  decision index_of: index_of#0
-  decision `lend 1`: lend & place
-  decision `lend 2`: lend & place
-  decision `open 1`: open#0
-  decision `open 2`: open#0
-  check `at.Result <= at(..)`: Ok(Identity)
-  refusal no_value {`&a 1`, `lend 1.Lent`} by {`&a 1 = lend 1.Lent`, `&a 1 ~> at.Param(0)`, `&a 1: Text`, `&a 1: {&, &mut, !}`, `disjunctive constraint at`, `disjunctive constraint lend 1`, `lend 1.Lent: &A`}
-  refusal no_value {`&a 2`, `lend 2.Lent`} by {`&a 2 = lend 2.Lent`, `&a 2 ~> index_of.Param(0)`, `&a 2: Text`, `&a 2: {&, &mut, !}`, `disjunctive constraint index_of`, `disjunctive constraint lend 2`, `lend 2.Lent: &A`}
-  refusal no_value {A} by {`A <= B`, `A ~> at.Param(0).Target`, `A ~> index_of.Param(0).Target`, `A: F<A.Identity>`, `A: Text`, `disjunctive constraint lend 1`, `disjunctive constraint lend 2`, `lend 1.Lent: &A`, `lend 2.Lent: &A`, `open() 1 <= A`}
-  refusal no_value {B} by {`A <= B`, `B: F<B.Identity>`, `B: Text`, `open() 2 <= B`}
-  refusal no_value {`index_of(..)`} by {`disjunctive constraint at`, `disjunctive constraint index_of`, `index_of(..) ~> at.Param(1)`, `index_of(..): Idx<index_of(..).Identity>`, `index_of(..): Text`, `index_of.Result <= index_of(..)`}
-  refusal no_value {`open() 1`} by {`disjunctive constraint open 1`, `open 1.Result <= open() 1`, `open() 1 <= A`, `open() 1: F<open() 1.Identity>`, `open() 1: Text`}
-  refusal no_value {`open() 2`} by {`disjunctive constraint open 2`, `open 2.Result <= open() 2`, `open() 2 <= B`, `open() 2: F<open() 2.Identity>`, `open() 2: Text`}
-  refusal conflict: Identity(new open 1) vs Identity(new open 2) {`A.Identity`, `B.Identity`, `index_of(..).Identity`, `open() 1.Identity`, `at.Var(Identity)`, `index_of.Var(Identity)`, `open 1.Var(Identity)`} by {`A.Identity = B.Identity`, `A.Identity = at.Var(Identity)`, `A.Identity = index_of.Var(Identity)`, `A: F<A.Identity>`, `B: F<B.Identity>`, `at.Param(0).Target: F<at.Var(Identity)>`, `at.Param(1): Idx<at.Var(Identity)>`, `disjunctive constraint at`, `disjunctive constraint index_of`, `disjunctive constraint open 1`, `index_of(..).Identity = at.Var(Identity)`, `index_of(..): Idx<index_of(..).Identity>`, `index_of.Param(0).Target: F<index_of.Var(Identity)>`, `index_of.Result: Idx<index_of.Var(Identity)>`, `index_of.Var(Identity) = index_of(..).Identity`, `open 1.Result: F<open 1.Var(Identity)>`, `open 1.Var(Identity) = open() 1.Identity`, `open 1.Var(Identity): new open 1`, `open() 1.Identity = A.Identity`, `open() 1: F<open() 1.Identity>`, `open() 2.Identity = B.Identity`}
-  refusal conflict: Identity(new open 1) vs Identity(new open 2) {`open() 2.Identity`, `open 2.Var(Identity)`} by {`disjunctive constraint open 2`, `open 2.Result: F<open 2.Var(Identity)>`, `open 2.Var(Identity) = open() 2.Identity`, `open 2.Var(Identity): new open 2`, `open() 2.Identity = B.Identity`, `open() 2: F<open() 2.Identity>`}
-  refusal no_value {`at.Param(0).Target`} by {`A ~> at.Param(0).Target`, `at.Param(0).Target: F<at.Var(Identity)>`, `at.Param(0): &at.Param(0).Target`}
-  refusal no_value {`index_of.Param(0).Target`} by {`A ~> index_of.Param(0).Target`, `index_of.Param(0).Target: F<index_of.Var(Identity)>`, `index_of.Param(0): &index_of.Param(0).Target`}
-  refusal no_value {`at.Param(0)`} by {`&a 1 ~> at.Param(0)`, `at.Param(0): &at.Param(0).Target`, `disjunctive constraint at`}
-  refusal no_value {`at.Param(1)`} by {`at.Param(1): Idx<at.Var(Identity)>`, `disjunctive constraint at`, `index_of(..) ~> at.Param(1)`}
-  refusal no_value {`index_of.Param(0)`} by {`&a 2 ~> index_of.Param(0)`, `disjunctive constraint index_of`, `index_of.Param(0): &index_of.Param(0).Target`}
-  refusal no_value {`index_of.Result`} by {`disjunctive constraint index_of`, `index_of.Result <= index_of(..)`, `index_of.Result: Idx<index_of.Var(Identity)>`}
-  refusal no_value {`open 1.Result`} by {`disjunctive constraint open 1`, `open 1.Result <= open() 1`, `open 1.Result: F<open 1.Var(Identity)>`}
-  refusal no_value {`open 2.Result`} by {`disjunctive constraint open 2`, `open 2.Result <= open() 2`, `open 2.Result: F<open 2.Var(Identity)>`}
   I* of a final state: []

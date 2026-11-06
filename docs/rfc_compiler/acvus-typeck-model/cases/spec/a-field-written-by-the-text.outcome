@@ -1,10 +1,11 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
+  refused
   value 0: i32
-  value A: {x: i32}
-  value `a.x`: i32
-  decision `a.x`: applied
-  check `0 <= a.x`: Ok(Identity)
+  value A: none
+  value `a.x`: none
+  decision `a.x`: refused
+  refusal no_value {A} by {`A: Text`, `disjunctive constraint a.x`}
+  refusal no_value {`a.x`} by {`0 <= a.x`, `a.x: Text`, `disjunctive constraint a.x`}
   I* of a final state: []

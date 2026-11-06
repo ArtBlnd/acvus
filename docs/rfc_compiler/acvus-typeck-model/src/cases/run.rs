@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use crate::certificate::{Certificate, Value};
 use crate::check::{Outcome, Refusal};
+use crate::choice::Chosen;
 use crate::class::ClassId;
 use crate::disjunction::Decision;
 use crate::explore::{Final, Order, explore_with, sample_with};
@@ -67,6 +68,12 @@ pub enum Corruption {
         group: String,
         disjunction: String,
         decision: Decision,
+    },
+    /// What a use became.
+    Choice {
+        group: String,
+        used: String,
+        chosen: Chosen,
     },
 }
 
@@ -151,6 +158,11 @@ impl Visitor<'_> {
                     disjunction,
                     decision,
                 } => certificate.set_decision(group, disjunction, decision.clone()),
+                Corruption::Choice {
+                    group,
+                    used,
+                    chosen,
+                } => certificate.set_choice(group, used, chosen.clone()),
             }
             let violations = crate::certificate::check(self.program, &certificate);
             if violations.is_empty() {

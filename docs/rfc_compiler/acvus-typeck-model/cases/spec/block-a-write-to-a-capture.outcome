@@ -1,9 +1,9 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
+  refused
   value 0u8: u8
-  value X: B
+  value X: none
   value Y: u8
   value `make_a()`: A
   value `make_b()`: B
@@ -14,14 +14,14 @@ outcome 1
   decision call: calls {λ}
   decision make_a: make_a#0
   decision make_b: make_b#0
-  decision probe: probe#1
-  check `X ~> probe.Param(0)`: Ok(Identity)
+  decision probe: undecided
   check `call#λ/λ result <= {..}()`: Ok(Identity)
-  check `make_a() <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
   check `make_a.Result <= make_a()`: Ok(Identity)
-  check `make_b() <= X`: Ok(Identity)
   check `make_b.Result <= make_b()`: Ok(Identity)
   check `probe.GeneralizedResult <= probe(x)`: Ok(Identity)
   check `{..}() <= Y`: Ok(Identity)
   check `0u8 <= λ result`: Ok(Identity)
+  refusal no_join {X} by {`X <= probe.Generalized(0)`, `X: Text`, `choice probe`, `make_a() <= X`, `make_b() <= X`}
+  refusal no_value {`probe.Generalized(0)`} by {`X <= probe.Generalized(0)`, `choice probe`, `probe.Generalized(0): choice probe[Extern(A), Extern(B)]`}
+  refusal ambiguous {`probe.Generalized(0)`} by {`choice probe`, `probe.Generalized(0)`}
   I* of a final state: []

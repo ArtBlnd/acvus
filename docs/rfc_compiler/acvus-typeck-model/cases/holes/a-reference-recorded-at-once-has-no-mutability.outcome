@@ -13,17 +13,3 @@ outcome 1
   check `first.Generalized(1) <= first(x)`: Ok(Identity)
   check `x ~> first.Param(0)`: Ok(Identity)
   I* of a final state: []
-outcome 2
-  refused
-  value `&mut r`: none
-  value R: &u8
-  value `first(x)`: &u8
-  value x: A
-  decision `&mut r`: lend &mut place
-  decision first: first#0
-  check `first(x) <= R`: Ok(Identity)
-  check `first.Chosen(1) <= first.Generalized(1)`: Ok(Identity)
-  check `first.Generalized(1) <= first(x)`: Ok(Identity)
-  check `x ~> first.Param(0)`: Ok(Identity)
-  refusal no_value {`&mut r`, `&mut r.Lent`} by {`&mut r = &mut r.Lent`, `&mut r.Lent: &mut R`, `&mut r: Text`, `&mut r: {&, &mut, !}`, `disjunctive constraint &mut r`}
-  I* of a final state: [completeness `&mut r`]

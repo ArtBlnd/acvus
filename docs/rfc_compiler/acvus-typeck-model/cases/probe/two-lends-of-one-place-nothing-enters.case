@@ -1,0 +1,10 @@
+// let x; let a = &x; let b = &x;
+// Nothing enters X. Each lend reads X leaving out itself alone, and the other
+// lend keeps X pending: do the two lends wait for each other at the fixpoint?
+let X;
+let A;
+let B;
+A = &X @ `lend a`;
+B = &X @ `lend b`;
+
+must pass;

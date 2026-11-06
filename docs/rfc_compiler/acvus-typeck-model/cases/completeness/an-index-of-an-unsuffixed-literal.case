@@ -18,4 +18,4 @@ E = `v[0]`;
 must pass;
 assert outcomes 1;
 assert E: u8;
-assert 0: u64;
+assert 0: i32;

@@ -1,0 +1,14 @@
+// let x; *x; take(x);                  // take(&u8)
+// Nothing enters X; a Deref gives it the structure constraint "a reference
+// to τ", which names no member and so gives no head; X passes into &u8.
+// Undecided: whether the constraint counts as something entering X, so
+// that X is not contextually typed, or as a check on the type the context
+// gives.
+extern fn take(&u8);
+let X;
+let `*x`;
+`*x` = *X @ deref;
+let `take(x)`;
+`take(x)` = take(X) @ take;
+
+must pass;

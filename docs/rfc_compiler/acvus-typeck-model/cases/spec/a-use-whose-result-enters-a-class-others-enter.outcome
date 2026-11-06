@@ -1,22 +1,25 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
+  accepted
   value 1u8: u8
-  value M: none
-  value R: A
+  value M: B
+  value R: B
   value Str: str
-  value V: none
+  value V: B
   value `open()`: A
   value s: &str
-  decision mk: undecided
+  decision mk: mk#0
   decision open: open#0
-  decision parse: parse#0
+  decision parse: parse#1
+  check `1u8 ~> mk.Param(0)`: Ok(Identity)
+  check `M <= V`: Ok(Identity)
+  check `R <= V`: Ok(Identity)
+  check `mk.Chosen(1) <= mk.Generalized(1)`: Ok(Identity)
+  check `mk.Generalized(1) <= M`: Ok(Identity)
+  check `open() <= V`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
   check `open.Result <= open()`: Ok(Identity)
   check `parse.Chosen(0) <= parse.Generalized(0)`: Ok(Identity)
   check `parse.Generalized(0) <= R`: Ok(Identity)
   check `s ~> parse.GeneralizedParam(0)`: Ok(Identity)
-  refusal no_value {M} by {`M <= V`, `M: Text`, `disjunctive constraint mk`, `mk.Generalized(1) <= M`}
-  refusal no_value {V} by {`M <= V`, `R <= V`, `V: Text`, `open() <= V`}
-  refusal no_value {`mk.Generalized(1)`} by {`disjunctive constraint mk`, `mk.Generalized(1) <= M`}
   I* of a final state: []

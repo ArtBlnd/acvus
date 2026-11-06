@@ -5,8 +5,9 @@
 // choose gives back the function value its T takes in, put's, and makes none.
 // choose and f(x) break their dependencies on each other.
 // The captured environment is the enclosing group's, so make_b() ≤ X is
-// recorded where it is written, and no read leaves it out with the call: choose
-// reads B, and f(x) calls put's lambda.
+// recorded where it is written, and no read leaves it out with the call: f(x)
+// calls put's lambda. make_a() and make_b() enter X, A and B, two constructors
+// with no join, so X is refused no_join; the cast A → B decides nothing.
 extern type A;
 extern type B;
 extern fn make_a() -> A;
@@ -43,6 +44,6 @@ group λ {
     #[by_name] X = `make_b()`;
 }
 
-must pass;
-assert choose == choose#1;
+must fail;
+assert refused no_join X;
 assert `f(x)` == calls {λ};

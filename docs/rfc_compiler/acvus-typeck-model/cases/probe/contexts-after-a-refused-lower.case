@@ -1,0 +1,17 @@
+// let k = if c { 1u8 } else { s }; let l = k; take_u16(l);
+// K has no join, u8 and &str. L has the refused K as its lower bound and
+// passes into u16. Undecided: whether L is contextually typed u16, the
+// refusal staying at K, or has no value, the refusal reaching it.
+extern fn take_u16(u16);
+let Str: str;
+let s: &Str;
+let 1u8: u8;
+let K;
+K = 1u8;
+K = s;
+let L;
+L = K;
+let `take_u16(l)`;
+`take_u16(l)` = take_u16(L) @ take;
+
+must fail;

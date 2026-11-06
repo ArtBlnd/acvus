@@ -1,0 +1,25 @@
+// let x = None;
+// let y = if c { x } else { Some(1u8) };
+// let z = if d { y } else { None };
+// X: Option<?k> enters Y with Some(1u8); Y joins at Option by X's structure
+// alone, ?k and u8 enter Y's payload as parts; Z likewise. ?k is decided last,
+// by its context, and nothing waits for it.
+let X;
+let ?k;
+let None: Option<?k>;
+let Y;
+let S: u8;
+let `Some(1u8)`: Option<S>;
+let Z;
+let ?m;
+let `None 2`: Option<?m>;
+X = None;
+Y = X;
+Y = `Some(1u8)`;
+Z = Y;
+Z = `None 2`;
+
+must pass;
+assert X: Option<u8>;
+assert Y: Option<u8>;
+assert Z: Option<u8>;

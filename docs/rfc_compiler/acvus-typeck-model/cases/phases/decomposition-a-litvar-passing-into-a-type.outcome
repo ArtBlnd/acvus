@@ -17,7 +17,7 @@ start run
   decomposition #2 W: u8: no parts
   decomposition #3 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
 step 1 run: join 0
-  join 0: met Owned(Scalar(Int(U8)))
+  join 0: contextual Scalar(Int(U8))
     record #5 0: u8
   decomposition #4 0 ~> W: parts
   decomposition #5 0: u8: no parts

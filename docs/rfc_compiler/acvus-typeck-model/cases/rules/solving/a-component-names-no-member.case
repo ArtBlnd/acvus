@@ -1,11 +1,8 @@
 // let t;
 // t.0 = 1u8;
-// The projection t.0 gives T the structure constraint "has component 0: τ", and the write is
-// τ ≥ u8. T's only source is that structure constraint, and a tuple has no members, so the structure constraint
-// names none and T takes no constructor. Nothing waits, so T
-// falls back to !, which satisfies every structure constraint, the part it names being !:
-// 1u8 enters t.0 of type ! and does not reach it, refused
-// there.
+// The projection t.0 is a use of t's value, and the text shows no value
+// entering T. The component it names makes no type, and `!` would promise
+// that no value of T exists where the text writes into one. T gets no type.
 let T;
 let `t.0`;
 let 1u8: u8;
@@ -13,6 +10,4 @@ let 1u8: u8;
 `t.0` = 1u8;
 
 must fail;
-assert `t.0` == applied;
-assert `t.0`: !;
-assert failing [`1u8 <= t.0`];
+assert refused no_value T;

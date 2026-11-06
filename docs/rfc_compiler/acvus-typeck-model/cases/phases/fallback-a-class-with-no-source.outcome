@@ -18,16 +18,12 @@ start run
   decomposition #2 None: Text: no parts
   decomposition #3 None: Option<?k>: no parts
 step 1 run: join A
-  join A: Owned(Option)
+  join A: Option
     record #5 A: Option<A.Payload(Some)>
   decomposition #4 None <= A: parts
     record #6 ?k <=p A.Payload(Some)
   decomposition #5 A: Option<A.Payload(Some)>: no parts
 fallback 2 run
-  default ?k: !
-    record #7 ?k: !
   default `A.Payload(Some)`: !
-    record #8 A.Payload(Some): !
-  decomposition #6 ?k <=p A.Payload(Some): parts
-  decomposition #7 ?k: !: no parts
-  decomposition #8 A.Payload(Some): !: no parts
+    record #7 A.Payload(Some): !
+  decomposition #7 A.Payload(Some): !: no parts

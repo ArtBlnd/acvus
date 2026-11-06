@@ -4,10 +4,11 @@
 //! Under `TRACE=1`, the events a report is made of, what a group leaves
 //! undecided and its C, as a traced order prints them.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
-use crate::check::{Outcome, Refusal};
+use crate::check::{DecisionAtEnd, Outcome, Refusal};
+use crate::choice::Chosen;
 use crate::class::{
     Apart, Cause, ClassId, Conflict, Conflicted, NamedConflict, NamedStructureConstraint, Unified,
     Union,
@@ -16,11 +17,10 @@ use crate::coerce::{CoerceError, Coercion, Structural};
 use crate::decl::DeclId;
 use crate::decomposition::Decomposition;
 use crate::disjunction::{Decision, LendTarget};
-use crate::fallback::FellBack;
-use crate::judgment::Judgment;
+use crate::judgment::fallback::Fallen;
+use crate::judgment::{FellBack, Judgment, Took};
 use crate::record::Recording;
 use crate::relation::{Item, Named, Recorder};
-use crate::value::Took;
 use crate::solve::State;
 use crate::trace::Report;
 use crate::ty::{Mutability, Name, Term};
@@ -68,10 +68,19 @@ where
     items.into_iter().collect::<Vec<_>>().join(", ")
 }
 
+/// A disjunctive constraint as the outcome writes it once solving ends: its
+/// decision; `undecided`; or `refused`, where a class it reads has no value
+/// (D5).
+pub fn decision_at_end(at_end: &DecisionAtEnd) -> String {
+    match at_end {
+        DecisionAtEnd::Decided(decided) => decision(decided),
+        DecisionAtEnd::Undecided => "undecided".to_string(),
+        DecisionAtEnd::RefusedWith => "refused".to_string(),
+    }
+}
+
 pub fn decision(decision: &Decision) -> String {
     match decision {
-        Decision::Use(id) => decl(id),
-        Decision::Never => "never".to_string(),
         Decision::Lend {
             target: lent,
             mutability,
@@ -87,6 +96,14 @@ pub fn decision(decision: &Decision) -> String {
             "calls {{{}}}",
             listed(lambdas.iter().map(|lambda| name(lambda.as_str())))
         ),
+    }
+}
+
+/// What a use became: `f#0`, or `never`.
+pub fn chosen(chosen: &Chosen) -> String {
+    match chosen {
+        Chosen::Candidate(id) => decl(id),
+        Chosen::Never => "never".to_string(),
     }
 }
 
@@ -184,6 +201,7 @@ fn relation(state: &State, at: usize) -> String {
         Item::Lambda { name: copy, of, .. } => {
             format!("lambda {} of {}", name(copy.as_str()), name(of.as_str()))
         }
+        Item::Choice { name: chosen, .. } => format!("choice {}", name(chosen.as_str())),
     }
 }
 
@@ -220,11 +238,13 @@ pub fn report(state: &State, report: &Report) -> Rendered {
         }
         Report::Joined { class: root, took } => {
             let (what, recorded) = match took {
-                Took::Joined { head, recorded } => (format!("{:?}", head.node), Some(recorded)),
-                Took::Met { head, recorded } => (format!("met {:?}", head.node), Some(recorded)),
-                Took::Bounded { domain, recorded } => (format!("bounded {domain}"), Some(recorded)),
+                Took::Joined { head, recorded } => (format!("{:?}", head.constructor), Some(recorded)),
+                Took::Contextual { head, recorded } => {
+                    (format!("contextual {:?}", head.constructor), Some(recorded))
+                }
                 Took::NoJoin => ("no join".to_string(), None),
-                Took::NoMeet => ("no meet".to_string(), None),
+                Took::Contexts => ("contexts".to_string(), None),
+                Took::Conflict => ("conflict".to_string(), None),
                 Took::Infinite => ("infinite".to_string(), None),
             };
             (
@@ -246,13 +266,38 @@ pub fn report(state: &State, report: &Report) -> Rendered {
             )),
             Some(recorded),
         ),
-        Report::FellBack(fell) => {
-            let default = fell.default.clone().map(|_, part| state.class_name(part));
+        Report::Narrowed {
+            choice,
+            remaining,
+            chosen: became,
+            recorded,
+        } => {
+            let what = match became {
+                Some(became) => self::chosen(became),
+                None => format!("{{{}}}", listed(remaining.iter().map(decl))),
+            };
             (
-                Phase::Fallback,
-                Some(format!("default {}: {default}", class(fell.class))),
-                Some(&fell.recorded),
+                Phase::Choice,
+                Some(format!("narrow {}: {what}", name(choice.as_str()))),
+                Some(recorded),
             )
+        }
+        Report::FellBack(fell) => {
+            let line = match &fell.fallen {
+                Fallen::Default(_) => {
+                    let default = match &state.classes.held(fell.class).structure {
+                        Some((structure, _)) => structure
+                            .clone()
+                            .map(|_, part| state.class_name(part))
+                            .to_string(),
+                        None => "none".to_string(),
+                    };
+                    format!("default {}: {default}", class(fell.class))
+                }
+                Fallen::NoType(_) => format!("fallback {}: conflict", class(fell.class)),
+                Fallen::NoValue => format!("fallback {}: no_value", class(fell.class)),
+            };
+            (Phase::Fallback, Some(line), Some(&fell.recorded))
         }
     };
     Rendered {
@@ -283,9 +328,21 @@ pub fn outcome(outcome: &Outcome) -> String {
         writeln!(text, "  value {}: {value}", name(&class.to_string()))
             .expect("writing to a string");
     }
-    for (disjunction, decided) in &outcome.decisions {
-        let decided = decided.as_ref().map_or("undecided".to_string(), decision);
-        writeln!(text, "  decision {}: {decided}", name(disjunction.as_str()))
+    // The disjunctive constraints and the uses, by their names, which are
+    // apart.
+    let decided: BTreeMap<&Name, String> = outcome
+        .decisions
+        .iter()
+        .map(|(disjunction, at_end)| (disjunction, decision_at_end(at_end)))
+        .chain(outcome.choices.iter().map(|(used, became)| {
+            let shown = became
+                .as_ref()
+                .map_or_else(|| "undecided".to_string(), chosen);
+            (used, shown)
+        }))
+        .collect();
+    for (named, shown) in decided {
+        writeln!(text, "  decision {}: {shown}", name(named.as_str()))
             .expect("writing to a string");
     }
     for set in &outcome.partition {
@@ -537,6 +594,7 @@ fn recorder(state: &State, recorder: &Recorder) -> String {
         Recorder::Generalization(disjunction) => {
             format!("generalization {}", name(disjunction.as_str()))
         }
+        Recorder::Choice(chosen) => format!("choice {}", name(chosen.as_str())),
         Recorder::Join(class) => format!("join {}", class_of(state, *class)),
         Recorder::Decomposition(class) => format!("decomposition {}", class_of(state, *class)),
         Recorder::Cycle => "cycle".to_string(),
@@ -605,12 +663,9 @@ pub fn traced(state: &State, report: &Report) -> Lines {
             decomposition: Decomposition::Parts(recorded),
             ..
         } => Some(recorded),
-        Report::Decided { recorded, .. } => Some(recorded),
+        Report::Decided { recorded, .. } | Report::Narrowed { recorded, .. } => Some(recorded),
         Report::Joined {
-            took:
-                Took::Joined { recorded, .. }
-                | Took::Met { recorded, .. }
-                | Took::Bounded { recorded, .. },
+            took: Took::Joined { recorded, .. } | Took::Contextual { recorded, .. },
             ..
         } => Some(recorded),
         Report::Joined { .. } | Report::Decomposed { .. } => None,

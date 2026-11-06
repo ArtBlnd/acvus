@@ -30,3 +30,32 @@ outcome 1
   check `same(..) <= μ result`: Ok(Identity)
   check `same.Result <= same(..)`: Ok(Identity)
   I* of a final state: []
+outcome 2
+  refused
+  value 1u8: u8
+  value 2u8: u8
+  value H: Fn/1
+  value K: none
+  value MK: Fn/1
+  value X: none
+  value `h(2u8)`: !
+  value `mk(1u8)`: Fn/1
+  value `same(..)`: ()
+  value `|k| ..`: Fn/1
+  value `|x| ..`: Fn/1
+  value `λ result`: Fn/1
+  value `μ result`: ()
+  decision `h 1`: calls {`mk 1#λ/μ`}
+  decision `mk 1`: calls {λ}
+  decision same: same#0
+  check `1u8 <= mk 1#λ/K`: Ok(Identity)
+  check `mk 1#λ/K <= mk 1#λ/same.Var(Type(0))`: Ok(Identity)
+  check `mk 1#λ/|x| .. <= mk 1#λ/λ result`: Ok(Identity)
+  check `mk 1#λ/λ result <= mk(1u8)`: Ok(Identity)
+  check `mk(1u8) <= H`: Ok(Identity)
+  check `|k| .. <= MK`: Ok(Identity)
+  check `|x| .. <= λ result`: Ok(Identity)
+  check `same(..) <= μ result`: Ok(Identity)
+  check `same.Result <= same(..)`: Ok(Identity)
+  refusal contexts {`mk 1#λ/X`} by {`instance mk 1#λ`, `lambda mk 1#λ/μ`, `mk 1#λ/X <= h(2u8)`, `mk 1#λ/X <= mk 1#λ/same.Var(Type(0))`}
+  I* of a final state: []

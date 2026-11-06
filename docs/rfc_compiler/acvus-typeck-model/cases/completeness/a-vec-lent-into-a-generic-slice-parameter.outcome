@@ -4,13 +4,13 @@ outcome 1
   refused
   value `&v`: &Vec<u8>
   value V: Vec<u8>
-  value `first(..)`: Option<!>
+  value `first(..)`: Option<&!>
   value `make()`: Vec<u8>
   decision `&v`: lend & place
   decision first: first#0
   decision make: make#0
   check `&v ~> first.Param(0)`: Err(None)
-  check `first.Result <= first(..)`: Err(None)
+  check `first.Result <= first(..)`: Ok(Identity)
   check `make() <= V`: Ok(Identity)
   check `make.Result <= make()`: Ok(Identity)
-  I* of a final state: [completeness first]
+  I* of a final state: []

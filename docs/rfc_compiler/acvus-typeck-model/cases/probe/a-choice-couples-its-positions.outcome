@@ -1,0 +1,12 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value 1u8: u8
+  value R: u8
+  decision f: f#0
+  check `1u8 <= f.Generalized(0)`: Ok(Identity)
+  check `f.Chosen(0) <= f.Generalized(0)`: Ok(Identity)
+  check `f.Generalized(0) <= R`: Ok(Identity)
+  check `f.Generalized(0) ~> f.Chosen(0)`: Ok(Identity)
+  I* of a final state: []

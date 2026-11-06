@@ -14,7 +14,7 @@ V = `new()`;
 `v[0]` = V[] @ `v[0]`;
 `v[0]` = 1u8;
 
-assert trace "link V: `v[0]`";
-assert unify records `v[0] = link(V -> v[0])[0].Var(Type(0))`;
+assert trace "decomposition #11 V: index v[0]: parts";
+assert decomposition records `v[0] = link(V -> v[0])[0].Var(Type(0))`;
 must pass;
 assert V: Vec<u8>;

@@ -5,5 +5,5 @@ outcome 1
   value 1: i32
   value `1.5`: f64
   value X: none
-  refusal conflict: {} vs another domain {X} by {`1 <= X`, `1.5 <= X`, `X: Text`, `X: {}`}
+  refusal no_join {X} by {`1 <= X`, `1.5 <= X`, `X: Text`}
   I* of a final state: []

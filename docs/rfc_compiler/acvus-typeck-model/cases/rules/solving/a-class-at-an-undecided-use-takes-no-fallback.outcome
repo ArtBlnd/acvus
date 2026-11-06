@@ -1,11 +1,11 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
-  value R: none
-  value X: none
-  decision f: undecided
-  refusal no_value {R} by {`R: Text`, `disjunctive constraint f`, `f.Generalized(0) <= R`}
-  refusal no_value {X} by {`X: Text`, `disjunctive constraint f`}
-  refusal no_value {`f.Generalized(0)`} by {`disjunctive constraint f`, `f.Generalized(0) <= R`, `f.Generalized(0): not {&, &mut}`}
+  accepted
+  value R: !
+  value X: !
+  decision f: never
+  check `X <= f.Generalized(0)`: Ok(Identity)
+  check `f.Generalized(0) <= R`: Ok(Identity)
+  check `f.Result <= R`: Ok(Identity)
   I* of a final state: []

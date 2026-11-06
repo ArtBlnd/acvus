@@ -1,0 +1,14 @@
+// let x: u8; f(&mut x);        // f(&u8), f(&mut u8)
+// The lend's reference reaches both candidates' parameters, one by identity
+// and one by a cast; no rank prefers one, so the choice stays at two and is
+// refused ambiguous at the end.
+extern fn f(&u8);
+extern fn f(&mut u8);
+let X: u8;
+let R;
+R = &mut X @ lend;
+let `f(..)`;
+`f(..)` = f(R) @ f;
+
+must fail;
+assert refused ambiguous;

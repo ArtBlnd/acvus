@@ -36,14 +36,14 @@ step 1 run: decide `v[0]`
   decide `v[0]`: applied
     record #11 V: index v[0]
 step 2 run: join `new()`
-  join `new()`: Owned(Extern(Vec))
+  join `new()`: Extern(Vec)
     record #12 new(): Vec<new().Arg(0)>
   decomposition #7 new.Result <= new(): parts
     record #13 new.Var(Type(0)) = new().Arg(0)
   decomposition #12 new(): Vec<new().Arg(0)>: no parts
   decomposition #13 new.Var(Type(0)) = new().Arg(0): no parts
 step 3 run: join V
-  join V: Owned(Extern(Vec))
+  join V: Extern(Vec)
     record #14 V: Vec<V.Arg(0)>
   decomposition #8 new() <= V: parts
     record #15 new().Arg(0) = V.Arg(0)

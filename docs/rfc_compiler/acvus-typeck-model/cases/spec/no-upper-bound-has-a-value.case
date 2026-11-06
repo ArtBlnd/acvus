@@ -15,5 +15,5 @@ S = 1;
 Y = `Some(1)`;
 
 must pass;
-assert X: Option<!>;
+assert X: Option<i32>;
 assert Y: Option<i32>;

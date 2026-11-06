@@ -1,0 +1,13 @@
+// let x; take_u16(x);
+// Nothing enters X, so X is contextually typed: it is unified with the one
+// type of the context it passes into, u16, and reaches it by identity. No
+// coercion is taken at a context: the type a context gives is the type
+// written there.
+extern fn take_u16(u16);
+let X;
+let `take_u16(x)`;
+`take_u16(x)` = take_u16(X) @ take;
+
+must pass;
+assert X: u16;
+assert check `X ~> take.Param(0)` == identity;

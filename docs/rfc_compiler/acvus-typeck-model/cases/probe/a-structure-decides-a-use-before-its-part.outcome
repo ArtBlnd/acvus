@@ -1,0 +1,14 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value ?k: u8
+  value None: Option<u8>
+  value X: Option<u8>
+  value `take(x)`: ()
+  decision take: take#0
+  check `None <= X`: Ok(Identity)
+  check `X <= take.Generalized(0)`: Ok(Identity)
+  check `take.Generalized(0) ~> take.Chosen(0)`: Ok(Identity)
+  check `take.GeneralizedResult <= take(x)`: Ok(Identity)
+  I* of a final state: []

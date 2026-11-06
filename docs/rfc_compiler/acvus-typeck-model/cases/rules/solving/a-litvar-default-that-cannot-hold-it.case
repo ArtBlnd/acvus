@@ -8,4 +8,4 @@ let 3000000000: lit 3000000000;
 X = 3000000000;
 
 must fail;
-assert refused conflict at "the default of 3000000000";
+assert refused conflict at "3000000000: i32";

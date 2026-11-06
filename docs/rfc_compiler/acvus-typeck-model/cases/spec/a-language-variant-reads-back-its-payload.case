@@ -1,6 +1,7 @@
 // let o; if let Some(x) = o { takes_u8(x) }
-// O takes Option from the structure constraint alone, and x, which nothing enters, is
-// filled with the u8 it passes into: o is read back as Option<u8>.
+// The pattern is a use of o's value, and the text shows no value entering O.
+// x's context gives x a type, but O itself is used and never given a value:
+// O gets no type, whatever its payload's context says.
 extern fn takes_u8(u8);
 let O;
 let `Some.0`;
@@ -10,6 +11,5 @@ let `takes_u8(x)`;
 X = bind `Some.0` via [Some] @ x;
 `takes_u8(x)` = takes_u8(X) @ takes_u8;
 
-must pass;
-assert O: Option<u8>;
-assert X: u8;
+must fail;
+assert refused no_value O;

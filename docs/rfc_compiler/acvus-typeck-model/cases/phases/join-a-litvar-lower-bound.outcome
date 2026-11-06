@@ -22,7 +22,7 @@ start run
   decomposition #3 0: {i8, i16, i32, i64, u8, u16, u32, u64}: no parts
   decomposition #4 u8: u8: no parts
 step 1 run: join A
-  join A: Owned(Scalar(Int(U8)))
+  join A: Scalar(Int(U8))
     record #7 A: u8
   decomposition #5 u8 <= A: parts
   decomposition #7 A: u8: no parts

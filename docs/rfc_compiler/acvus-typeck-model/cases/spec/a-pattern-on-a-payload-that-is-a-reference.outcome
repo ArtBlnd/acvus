@@ -1,51 +1,6 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
-  value `&x`: &(u8, u8)
-  value `.1`: !
-  value Bv: !
-  value O: none
-  value S: &(u8, u8)
-  value `Some(&x)`: Option<&(u8, u8)>
-  value `Some.0`: none
-  value X: (u8, u8)
-  value `mk()`: (u8, u8)
-  decision `&x`: lend & place
-  decision `.1`: applied
-  decision Some: applied
-  decision b: read
-  decision mk: mk#0
-  check `&x <= S`: Ok(Identity)
-  check `.1 <= Bv`: Ok(Identity)
-  check `mk() <= X`: Ok(Identity)
-  check `mk.Result <= mk()`: Ok(Identity)
-  refusal no_value {O} by {`O: Option<O.Payload(Some)>`, `O: Text`, `O: variant Some: Some.0`, `Some(&x) <= O`, `disjunctive constraint Some`}
-  refusal conflict: Ref(Shared) vs component 1: .1 {`Some.0`, `O.Payload(Some)`} by {`O: Option<O.Payload(Some)>`, `O: variant Some: Some.0`, `S <=p O.Payload(Some)`, `Some.0: &Some.0.Target`, `Some.0: Text`, `Some.0: component 1: .1`, `disjunctive constraint .1`, `disjunctive constraint Some`}
-  I* of a final state: []
-outcome 2
-  accepted
-  value `&x`: &(u8, u8)
-  value `.1`: u8
-  value Bv: u8
-  value O: Option<&(u8, u8)>
-  value S: &(u8, u8)
-  value `Some(&x)`: Option<&(u8, u8)>
-  value `Some.0`: &(u8, u8)
-  value X: (u8, u8)
-  value `mk()`: (u8, u8)
-  decision `&x`: lend & place
-  decision `.1`: applied through
-  decision Some: applied
-  decision b: read
-  decision mk: mk#0
-  check `&x <= S`: Ok(Identity)
-  check `.1 <= Bv`: Ok(Identity)
-  check `Some(&x) <= O`: Ok(Identity)
-  check `mk() <= X`: Ok(Identity)
-  check `mk.Result <= mk()`: Ok(Identity)
-  I* of a final state: [soundness b]
-outcome 3
   accepted
   value `&x`: &(u8, u8)
   value `.1`: u8

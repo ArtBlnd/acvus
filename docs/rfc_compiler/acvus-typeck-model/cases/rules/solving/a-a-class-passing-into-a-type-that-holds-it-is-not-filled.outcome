@@ -7,13 +7,14 @@ outcome 1
   value A: none
   value `f(..)`: ()
   decision f: f#0
-  decision `lend 1`: lend & place
-  decision `lend 2`: lend & place
+  decision `lend 1`: undecided
+  decision `lend 2`: undecided
   check `f.Result <= f(..)`: Ok(Identity)
-  refusal no_value {`&a 1`, `lend 1.Lent`} by {`&a 1 = lend 1.Lent`, `&a 1 ~> f.Param(0)`, `&a 1: Text`, `&a 1: {&, &mut, !}`, `disjunctive constraint f`, `disjunctive constraint lend 1`, `lend 1.Lent: &A`}
-  refusal no_value {`&a 2`, `lend 2.Lent`} by {`&a 2 = lend 2.Lent`, `&a 2 ~> f.Param(1)`, `&a 2: Text`, `&a 2: {&, &mut, !}`, `disjunctive constraint f`, `disjunctive constraint lend 2`, `lend 2.Lent: &A`}
-  refusal no_value {A, `f.Var(Type(0))`} by {`A = f.Var(Type(0))`, `A ~> f.Param(1).Target`, `A: Text`, `disjunctive constraint f`, `disjunctive constraint lend 1`, `disjunctive constraint lend 2`, `f.Param(0): &f.Var(Type(0))`, `f.Param(1).Target: Vec<f.Var(Type(0))>`, `lend 1.Lent: &A`, `lend 2.Lent: &A`}
-  refusal no_value {`f.Param(1).Target`} by {`A ~> f.Param(1).Target`, `f.Param(1).Target: Vec<f.Var(Type(0))>`, `f.Param(1): &f.Param(1).Target`}
+  refusal no_value {`&a 1`} by {`&a 1 ~> f.Param(0)`, `&a 1: Text`, `&a 1: {&, &mut, !}`, `disjunctive constraint f`, `disjunctive constraint lend 1`}
+  refusal no_value {`&a 2`} by {`&a 2 ~> f.Param(1)`, `&a 2: Text`, `&a 2: {&, &mut, !}`, `disjunctive constraint f`, `disjunctive constraint lend 2`}
+  refusal no_value {A} by {`A: Text`, `disjunctive constraint lend 1`, `disjunctive constraint lend 2`}
+  refusal no_value {`f.Param(1).Target`} by {`f.Param(1).Target: Vec<f.Var(Type(0))>`, `f.Param(1): &f.Param(1).Target`}
+  refusal no_value {`f.Var(Type(0))`} by {`disjunctive constraint f`, `f.Param(0): &f.Var(Type(0))`, `f.Param(1).Target: Vec<f.Var(Type(0))>`}
   refusal no_value {`f.Param(0)`} by {`&a 1 ~> f.Param(0)`, `disjunctive constraint f`, `f.Param(0): &f.Var(Type(0))`}
   refusal no_value {`f.Param(1)`} by {`&a 2 ~> f.Param(1)`, `disjunctive constraint f`, `f.Param(1): &f.Param(1).Target`}
   I* of a final state: []

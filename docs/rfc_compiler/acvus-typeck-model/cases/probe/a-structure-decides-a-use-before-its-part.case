@@ -1,0 +1,18 @@
+// let x = None;
+// take(x);                 // take(Option<u8>), take(&u8)
+// X: Option<?k> holds its structure while ?k holds nothing; the use reads X
+// and its candidates differ in the constructor alone, so the structure decides
+// the use now, and what the use records then decides ?k: ?k ~> u8, u8 by
+// context. Nothing waits for ?k.
+extern fn take(Option<u8>);
+extern fn take(&u8);
+let X;
+let ?k;
+let None: Option<?k>;
+X = None;
+let `take(x)`;
+`take(x)` = take(X) @ take;
+
+must pass;
+assert take == take#0;
+assert X: Option<u8>;

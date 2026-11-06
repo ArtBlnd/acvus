@@ -1,6 +1,8 @@
 // let o; if let Some(x) = o { } if let Ok(y) = o { }
-// The structure constraints name members of Option and of Result, two constructors with no
-// join: O has no value, refused.
+// Both patterns are uses of o's value, and the text shows no value entering O.
+// O gets no type before the two variants could be compared: no lower bound and
+// no occurrence gives it one, and `!` would promise no value where two
+// patterns read one.
 let O;
 let `Some.0`;
 let X;
@@ -12,4 +14,4 @@ X = bind `Some.0` via [Some] @ x;
 Y = bind `Ok.0` via [Ok] @ y;
 
 must fail;
-assert refused no_join O;
+assert refused no_value O;

@@ -1,24 +1,6 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
-  value `&get`: none
-  value `&rs`: &Vec<&u64>
-  value ?z: u64
-  value C: Vec<&u64>
-  value R: &u64
-  decision `&get`: lend & place
-  decision `&rs`: lend & place
-  decision get: get#0
-  decision load: load#0
-  check `&rs ~> get.Param(0)`: Ok(Identity)
-  check `?z ~> get.Param(1)`: Ok(Identity)
-  check `get.Generalized(2) <= R`: Ok(Identity)
-  check `get.Var(Type(0)) <= get.Generalized(2)`: Ok(Identity)
-  check `load.Result <= C`: Ok(Identity)
-  refusal no_value {`&get`, `&get.Lent`} by {`&get = &get.Lent`, `&get.Lent: &R`, `&get: Text`, `&get: {&, &mut, !}`, `disjunctive constraint &get`}
-  I* of a final state: [completeness `&get`]
-outcome 2
   accepted
   value `&get`: &u64
   value `&rs`: &Vec<&u64>

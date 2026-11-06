@@ -11,6 +11,6 @@ S = X;
 X = `Some(x)`;
 
 assert trace "join X: infinite";
-assert trace "refuse: infinite X";
+assert trace "refuse: infinite {X} by {`None <= X`, `Some(x) <= X`, `X <= S`, `X: Text`}";
 must fail;
 assert refused infinite X;

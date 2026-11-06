@@ -1,0 +1,13 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value A: none
+  value B: none
+  value X: none
+  decision `lend a`: undecided
+  decision `lend b`: undecided
+  refusal no_value {A} by {`A: Text`, `A: {&, &mut, !}`, `disjunctive constraint lend a`}
+  refusal no_value {B} by {`B: Text`, `B: {&, &mut, !}`, `disjunctive constraint lend b`}
+  refusal no_value {X} by {`X: Text`, `disjunctive constraint lend a`, `disjunctive constraint lend b`}
+  I* of a final state: []

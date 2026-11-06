@@ -7,4 +7,4 @@ let 256: lit 256;
 `@n` = 256;
 
 must fail;
-assert refused conflict at "256 = @n";
+assert refused conflict at "256 ~> @n";

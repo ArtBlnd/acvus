@@ -3,15 +3,17 @@ run: every order
 outcome 1
   refused
   value O: none
-  value `Ok.0`: !
-  value `Some.0`: !
-  value X: !
-  value Y: !
-  decision Ok: applied
-  decision Some: applied
-  decision x: read
-  decision y: read
-  check `Ok.0 <= Y`: Ok(Identity)
-  check `Some.0 <= X`: Ok(Identity)
-  refusal no_join {O} by {`O: Text`, `O: variant Ok: Ok.0`, `O: variant Some: Some.0`, `disjunctive constraint Ok`, `disjunctive constraint Some`}
+  value `Ok.0`: none
+  value `Some.0`: none
+  value X: none
+  value Y: none
+  decision Ok: refused
+  decision Some: refused
+  decision x: refused
+  decision y: refused
+  refusal no_value {O} by {`O: Text`, `disjunctive constraint Ok`, `disjunctive constraint Some`}
+  refusal no_value {`Ok.0`} by {`Ok.0: Text`, `disjunctive constraint Ok`, `disjunctive constraint y`}
+  refusal no_value {`Some.0`} by {`Some.0: Text`, `disjunctive constraint Some`, `disjunctive constraint x`}
+  refusal no_value {X} by {`X: Text`, `disjunctive constraint x`}
+  refusal no_value {Y} by {`Y: Text`, `disjunctive constraint y`}
   I* of a final state: []

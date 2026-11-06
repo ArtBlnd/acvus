@@ -3,7 +3,8 @@
 // probe(x);                // probe(A), probe(B)
 // The write names the capture X, so it and make_b() are the lambda's
 // environment, recorded once in the run's binding group when its solving
-// starts: X joins A and B by the cast, B, and probe reads B.
+// starts: make_a() and make_b() enter X, A and B, two constructors with no
+// join, so X is refused no_join; the cast A → B decides nothing.
 // One outcome in every order.
 extern type A;
 extern type B;
@@ -36,6 +37,5 @@ group λ {
     #[by_name] X = `make_b()`;
 }
 
-must pass;
-assert X: B;
-assert probe == probe#1;
+must fail;
+assert refused no_join X;

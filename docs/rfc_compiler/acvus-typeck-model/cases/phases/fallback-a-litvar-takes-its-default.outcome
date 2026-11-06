@@ -21,8 +21,4 @@ step 1 run: join A
 fallback 2 run
   default A: i32
     record #5 A: i32
-  default 0: i32
-    record #6 0: i32
-  decomposition #3 0 <= A: parts
   decomposition #5 A: i32: no parts
-  decomposition #6 0: i32: no parts

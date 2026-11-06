@@ -1,13 +1,13 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  refused
-  value 1: none
-  value 2: none
-  value K: none
-  decision `^`: undecided
-  refusal no_value {1} by {`1: Text`, `1: {i8, i16, i32, i64, u8, u16, u32, u64}`, `disjunctive constraint ^`}
-  refusal no_value {2} by {`2: Text`, `2: {i8, i16, i32, i64, u8, u16, u32, u64}`, `disjunctive constraint ^`}
-  refusal no_value {K} by {`K: Text`, `^.Generalized(0) <= K`, `disjunctive constraint ^`}
-  refusal no_value {`^.Generalized(0)`} by {`^.Generalized(0) <= K`, `^.Generalized(0): not {&, &mut}`, `disjunctive constraint ^`}
+  accepted
+  value 1: i32
+  value 2: i32
+  value K: i32
+  decision `^`: xor#3
+  check `1 ~> ^.Param(0)`: Ok(Identity)
+  check `2 ~> ^.Param(1)`: Ok(Identity)
+  check `^.Chosen(0) <= ^.Generalized(0)`: Ok(Identity)
+  check `^.Generalized(0) <= K`: Ok(Identity)
   I* of a final state: []

@@ -1,0 +1,15 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  refused
+  value 1u8: u8
+  value K: none
+  value L: u16
+  value Str: str
+  value s: &str
+  value `take_u16(l)`: ()
+  decision take: take_u16#0
+  check `L ~> take.Param(0)`: Ok(Identity)
+  check `take.Result <= take_u16(l)`: Ok(Identity)
+  refusal no_join {K} by {`1u8 <= K`, `K <= L`, `K: Text`, `s <= K`}
+  I* of a final state: []

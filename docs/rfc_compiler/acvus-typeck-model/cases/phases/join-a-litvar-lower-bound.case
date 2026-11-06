@@ -7,7 +7,7 @@ let u8: u8;
 A = u8;
 A = 0;
 
-assert join records `0 = A`;
+assert join records `A: u8`;
 must pass;
 assert A: u8;
 assert 0: u8;

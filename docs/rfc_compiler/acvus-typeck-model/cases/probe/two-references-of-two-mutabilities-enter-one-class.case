@@ -1,0 +1,19 @@
+// let r1 = &a; let r2 = &mut b; let s = if c { r1 } else { r2 }; s.f;
+// Two references enter S: one shared, one exclusive. Both are Ref, and the
+// language orders the mutabilities, so S is the shared reference and its
+// target is one class A and B share. s.f reads through the reference and is
+// a use of that target's value, which the text shows no value entering: the
+// target gets no type.
+let A;
+let B;
+let `&a`;
+let `&mut b`;
+`&a` = &A @ `&a`;
+`&mut b` = &mut B @ `&mut b`;
+let S;
+S = `&a`;
+S = `&mut b`;
+let `s.f`;
+`s.f` = S.f @ `s.f`;
+
+must fail;

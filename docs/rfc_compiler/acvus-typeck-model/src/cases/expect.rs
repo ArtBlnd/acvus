@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use crate::check::{Cause, Outcome, Refusal};
+use crate::choice::Chosen;
 use crate::coerce::{along_le, coerce};
 use crate::decl::{DeclId, Decls};
 use crate::disjunction::{Decision, LendTarget};
@@ -44,19 +45,6 @@ pub fn decision(text: &str) -> Result<Decision, String> {
         ["through"] => Ok(LendTarget::Through),
         _ => Err(format!("a lend's target, not {}", words.join(" "))),
     };
-    let decl = |text: &str| -> Result<DeclId, String> {
-        let (name, overload) = text
-            .trim()
-            .rsplit_once('#')
-            .ok_or_else(|| format!("a declaration `name#n`, not {text}"))?;
-        let overload = overload
-            .parse()
-            .map_err(|_| format!("an overload's number, not {overload}"))?;
-        Ok(DeclId {
-            name: Name::new(name.trim().trim_matches('`')),
-            overload,
-        })
-    };
     let listed = |text: &str, open: char, close: char| -> Result<Vec<String>, String> {
         let inner = text
             .trim()
@@ -71,7 +59,6 @@ pub fn decision(text: &str) -> Result<Decision, String> {
             .collect())
     };
     Ok(match words.as_slice() {
-        ["never"] => Decision::Never,
         ["applied"] => Decision::Applied,
         ["applied", "through"] => Decision::AppliedToTarget,
         ["read"] => Decision::Read,
@@ -94,11 +81,31 @@ pub fn decision(text: &str) -> Result<Decision, String> {
                 .collect();
             Decision::Calls(lambdas)
         }
-        _ => Decision::Use(decl(text)?),
+        _ => return Err(format!("a decision, not {text}")),
     })
 }
 
-/// A certificate change resolved against the declarations.
+/// What a use became as `render::chosen` writes it: `never`, or a
+/// declaration `name#n`.
+pub fn chosen(text: &str) -> Result<Chosen, String> {
+    if text.trim() == "never" {
+        return Ok(Chosen::Never);
+    }
+    let (name, overload) = text
+        .trim()
+        .rsplit_once('#')
+        .ok_or_else(|| format!("a declaration `name#n`, not {text}"))?;
+    let overload = overload
+        .parse()
+        .map_err(|_| format!("an overload's number, not {overload}"))?;
+    Ok(Chosen::Candidate(DeclId {
+        name: Name::new(name.trim().trim_matches('`')),
+        overload,
+    }))
+}
+
+/// A certificate change resolved against the declarations: a decision where
+/// the text is one, and what a use became otherwise.
 pub fn corruption(decls: &Decls, group: &str, change: &Change) -> Result<Corruption, String> {
     Ok(match change {
         Change::Value { class, ty } => Corruption::Value {
@@ -109,10 +116,17 @@ pub fn corruption(decls: &Decls, group: &str, change: &Change) -> Result<Corrupt
         Change::Decision {
             disjunction,
             decision: text,
-        } => Corruption::Decision {
-            group: group.to_string(),
-            disjunction: disjunction.clone(),
-            decision: decision(text)?,
+        } => match decision(text) {
+            Ok(decision) => Corruption::Decision {
+                group: group.to_string(),
+                disjunction: disjunction.clone(),
+                decision,
+            },
+            Err(_) => Corruption::Choice {
+                group: group.to_string(),
+                used: disjunction.clone(),
+                chosen: chosen(text)?,
+            },
         },
     })
 }
@@ -137,8 +151,10 @@ fn refusal_matches(text: &RefusalText, refusal: &Refusal) -> bool {
     match (text, &refusal.cause) {
         (RefusalText::Infinite(wanted), Cause::Infinite)
         | (RefusalText::NoJoin(wanted), Cause::NoJoin)
-        | (RefusalText::NoMeet(wanted), Cause::NoMeet)
-        | (RefusalText::NoValue(wanted), Cause::NoValue) => named(wanted),
+        | (RefusalText::Contexts(wanted), Cause::Contexts)
+        | (RefusalText::NoValue(wanted), Cause::NoValue)
+        | (RefusalText::NoCandidate(wanted), Cause::NoCandidate)
+        | (RefusalText::Ambiguous(wanted), Cause::Ambiguous) => named(wanted),
         (RefusalText::Conflict(wanted), Cause::Conflict(_)) => wanted.as_ref().is_none_or(|wanted| {
             refusal
                 .members
@@ -183,12 +199,16 @@ fn outcome_satisfies(decls: &Decls, outcome: &Outcome, expect: &Expect) -> Resul
             disjunction,
             decision,
         } => {
-            let Some(decided) = outcome.decisions.get(&Name::new(disjunction)) else {
-                return Err(format!("no disjunctive constraint {disjunction}"));
+            let named = Name::new(disjunction);
+            let shown = match (outcome.decisions.get(&named), outcome.choices.get(&named)) {
+                (Some(at_end), _) => render::decision_at_end(at_end),
+                (None, Some(became)) => became
+                    .as_ref()
+                    .map_or_else(|| "undecided".to_string(), render::chosen),
+                (None, None) => {
+                    return Err(format!("no disjunctive constraint or use {disjunction}"));
+                }
             };
-            let shown = decided
-                .as_ref()
-                .map_or("undecided".to_string(), render::decision);
             if render::same(decision, &shown) {
                 Ok(())
             } else {

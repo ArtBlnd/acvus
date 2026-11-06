@@ -1,0 +1,20 @@
+// let x; take_b(x); take_a(x);         // extern types A, B; a cast A → B
+// Nothing enters X, and X passes into two contexts of two types, B and A.
+// The meet of the two along the cast, A, would type X, and then binding x
+// into one more place would change its type: a context chooses no type.
+// X is unified with the one type of its contexts, and two types refuse it,
+// at X, whatever the order.
+extern type A;
+extern type B;
+#[cast] extern fn up(A) -> B;
+extern fn take_b(B);
+extern fn take_a(A);
+let X;
+let `take_b(x)`;
+let `take_a(x)`;
+`take_b(x)` = take_b(X) @ take_b;
+`take_a(x)` = take_a(X) @ take_a;
+
+must fail;
+assert X: none;
+assert refused contexts X;

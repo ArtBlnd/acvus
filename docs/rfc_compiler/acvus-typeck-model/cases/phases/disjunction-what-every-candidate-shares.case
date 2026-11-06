@@ -11,8 +11,7 @@ let x: u8;
 let R;
 R = g(x) @ g;
 
+assert record records `g.GeneralizedResult: bool`;
 assert record records `g.GeneralizedResult <= R`;
-assert disjunction records `g.Generalized(0): no reference`;
-assert disjunction records `x <= g.Generalized(0)`;
 must pass;
 assert R: bool;

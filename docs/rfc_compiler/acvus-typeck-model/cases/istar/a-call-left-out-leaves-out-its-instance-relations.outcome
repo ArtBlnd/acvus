@@ -1,34 +1,32 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
+  refused
   value `()`: ()
-  value F: Fn/1
+  value F: none
   value PUT: Fn/1
   value W: none
-  value X: B
-  value `choose(..)`: Fn/1
+  value X: none
+  value `choose(..)`: none
   value `f(x)`: ()
   value `make_a()`: A
   value `make_b()`: B
   value `|w| ..`: Fn/1
   value `λ result`: ()
-  decision choose: choose#1
+  decision choose: undecided
   decision `f(x)`: calls {λ}
   decision make_a: make_a#0
   decision make_b: make_b#0
-  check `PUT <= F`: Ok(Identity)
-  check `PUT <= choose.Var(Type(0))`: Ok(Identity)
-  check `X <= f(x)#λ/W`: Ok(Identity)
-  check `X ~> choose.Param(0)`: Ok(Identity)
-  check `choose(..) <= F`: Ok(Identity)
-  check `choose.Generalized(1) <= choose(..)`: Ok(Identity)
-  check `choose.Var(Type(0)) <= choose.Generalized(1)`: Ok(Identity)
   check `f(x)#λ/λ result <= f(x)`: Ok(Identity)
-  check `make_a() <= X`: Ok(Composition { reborrow: false, casts: [DeclId { name: up, overload: 0 }], structural: None })
   check `make_a.Result <= make_a()`: Ok(Identity)
-  check `make_b() <= X`: Ok(Identity)
   check `make_b.Result <= make_b()`: Ok(Identity)
   check `|w| .. <= PUT`: Ok(Identity)
   check `() <= λ result`: Ok(Identity)
+  refusal no_value {F} by {`F: Text`, `PUT <= F`, `choose(..) <= F`, `disjunctive constraint f(x)`}
+  refusal no_join {X} by {`X <= choose.Generalized(0)`, `X <= f(x)#λ/W`, `X: Text`, `choice choose`, `disjunctive constraint f(x)`, `make_a() <= X`, `make_b() <= X`}
+  refusal no_value {`choose(..)`} by {`choice choose`, `choose(..) <= F`, `choose(..): Text`, `choose.Generalized(1) <= choose(..)`}
+  refusal no_value {`choose.Generalized(0)`} by {`X <= choose.Generalized(0)`, `choice choose`, `choose.Generalized(0): choice choose[Extern(A), Extern(B)]`}
+  refusal ambiguous {`choose.Generalized(0)`, `choose.Generalized(1)`} by {`choice choose`, `choose.Generalized(0)`, `choose.Generalized(1)`}
+  refusal no_value {`choose.Generalized(1)`} by {`PUT <= choose.Generalized(1)`, `choice choose`, `choose.Generalized(1) <= choose(..)`, `choose.Generalized(1): choice choose[_, _]`}
+  refusal no_value {`f(x)#λ/W`} by {`X <= f(x)#λ/W`, `instance f(x)#λ`}
   I* of a final state: []

@@ -1,16 +1,15 @@
 // What the model gives, written by `BLESS=1`.
 run: every order
 outcome 1
-  accepted
+  refused
   value 0: i32
-  value A: {x: i32}
-  value `a.x`: i32
-  value `pick(a)`: {x: i32}
-  decision `a.x`: applied
-  decision pick: pick#0
-  check `0 <= a.x`: Ok(Identity)
-  check `A ~> pick.Param(0)`: Ok(Identity)
-  check `pick(a) <= A`: Ok(Identity)
-  check `pick.Chosen(0) <= pick.Generalized(0)`: Ok(Identity)
-  check `pick.Generalized(0) <= pick(a)`: Ok(Identity)
+  value A: none
+  value `a.x`: none
+  value `pick(a)`: none
+  decision `a.x`: refused
+  decision pick: undecided
+  partition {A, `pick(a)`}
+  refusal ambiguous {A, `pick(a)`, `pick.Generalized(0)`} by {A, `choice pick`}
+  refusal no_value {A, `pick(a)`, `pick.Generalized(0)`} by {`A <= pick.Generalized(0)`, `A = pick(a)`, `A = pick.Generalized(0)`, `A: Text`, `choice pick`, `disjunctive constraint a.x`, `pick(a) <= A`, `pick(a): Text`, `pick.Generalized(0) <= pick(a)`, `pick.Generalized(0): choice pick[Object, u8]`}
+  refusal no_value {`a.x`} by {`0 <= a.x`, `a.x: Text`, `disjunctive constraint a.x`}
   I* of a final state: []

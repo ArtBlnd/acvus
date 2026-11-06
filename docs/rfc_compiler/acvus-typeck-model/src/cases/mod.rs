@@ -2,9 +2,9 @@
 //! solved as its orders say, checked against its expectations and its golden
 //! outcome, and reported in one table.
 
-mod build;
+pub(crate) mod build;
 mod expect;
-mod parse;
+pub(crate) mod parse;
 mod render;
 mod run;
 

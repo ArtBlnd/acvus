@@ -1,0 +1,8 @@
+// What the model gives, written by `BLESS=1`.
+run: every order
+outcome 1
+  accepted
+  value A: &!
+  value X: !
+  decision `lend a`: lend & place
+  I* of a final state: []

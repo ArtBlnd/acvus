@@ -25,7 +25,7 @@ start run
   decomposition #4 u8: u8: no parts
   decomposition #5 Some(1u8): Option<S>: no parts
 step 1 run: join A
-  join A: Owned(Option)
+  join A: Option
     record #8 A: Option<A.Payload(Some)>
   decomposition #7 Some(1u8) <= A: parts
     record #9 S <=p A.Payload(Some)

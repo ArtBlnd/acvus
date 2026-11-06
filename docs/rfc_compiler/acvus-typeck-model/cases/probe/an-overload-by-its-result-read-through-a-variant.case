@@ -1,0 +1,21 @@
+// let p = parse("7");          // parse(&str) -> Option<u8>, parse(&str) -> Option<u16>
+// match p { Some(n) => take(n), None => () }   // take(u8)
+// The candidates differ in the result's payload alone. P should take Option
+// from what every candidate writes, n = P's Some payload, and take gives n
+// its context u8; the use is then read off n. Does the use wait for n and n
+// for the use?
+extern fn parse(&str) -> Option<u8>;
+extern fn parse(&str) -> Option<u16>;
+extern fn take(u8);
+let S: str;
+let `"7"`: &S;
+let P;
+P = parse(`"7"`) @ parse;
+let N;
+N = P as Some @ `arm`;
+let `take(n)`;
+`take(n)` = take(N) @ take;
+
+must pass;
+assert parse == parse#0;
+assert P: Option<u8>;
