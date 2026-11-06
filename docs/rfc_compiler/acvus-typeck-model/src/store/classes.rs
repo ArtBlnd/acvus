@@ -124,6 +124,18 @@ where
     pub bounds: BTreeSet<(Bound<K>, ItemId)>,
 }
 
+impl<K> Unified<K>
+where
+    K: ClassKind,
+{
+    /// Takes in what another union left.
+    pub fn absorb(&mut self, other: Self) {
+        self.refusals.extend(other.refusals);
+        self.pending.extend(other.pending);
+        self.bounds.extend(other.bounds);
+    }
+}
+
 impl<K> Classes<K>
 where
     K: ClassKind,

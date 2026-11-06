@@ -259,6 +259,67 @@ impl<K> Class<K>
 where
     K: ClassKind,
 {
+    /// The same class, with every id it holds given by `f`, as a class of the
+    /// kind `J`. Two keys of one side that `f` gives one id become one key,
+    /// with the items of both.
+    pub fn translate<J, F>(self, mut f: F) -> Class<J>
+    where
+        J: ClassKind,
+        F: FnMut(K::Id) -> J::Id,
+    {
+        let state = match self.state {
+            State::Decided(decided) => State::Decided(Decided {
+                shape: decided.shape.map(|class| f(*class)),
+                by: decided.by,
+            }),
+            State::Undecided(constraints) => {
+                let mut lower: Bounds<J> = BTreeMap::new();
+                for (class, items) in constraints.lower {
+                    lower.entry(f(class)).or_default().extend(items);
+                }
+                let mut upper: Bounds<J> = BTreeMap::new();
+                for (class, items) in constraints.upper {
+                    upper.entry(f(class)).or_default().extend(items);
+                }
+                let parts = constraints
+                    .parts
+                    .into_iter()
+                    .map(|(key, part)| {
+                        let part = Part {
+                            class: f(part.class),
+                            lower: part.lower,
+                            upper: part.upper,
+                        };
+                        (key, part)
+                    })
+                    .collect();
+                let calls = constraints
+                    .calls
+                    .into_iter()
+                    .map(|(call, by)| {
+                        let args = call.args.into_iter().map(&mut f).collect();
+                        let call = Call {
+                            args,
+                            result: f(call.result),
+                        };
+                        (call, by)
+                    })
+                    .collect();
+                State::Undecided(Constraints {
+                    lower,
+                    upper,
+                    parts,
+                    calls,
+                    domains: constraints.domains,
+                })
+            }
+        };
+        Class {
+            scope: self.scope,
+            state,
+        }
+    }
+
     /// Makes this class and `other` one class, held at `root`, by `at`.
     ///
     /// The class belongs to the outer of the two scopes. Two undecided
