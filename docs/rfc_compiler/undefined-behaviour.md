@@ -38,7 +38,7 @@ A run that breaks a premise the language takes as given has no meaning.
 
 - Integer arithmetic stays within its type: overflow is undefined. The meaning of integer arithmetic is the integers', and the premise is on the run as written: every value it computes lies within its type. So a transformation may compute any integer expression anywhere and reason over the integers exactly; a value it computes that the run as written does not may steer the run only where that value is proven to lie within its type, or is computed wider.
 - Every declaration the program relies on is true: every declared fact of an extern fn, and every `anyorder` the program writes.
-- No value has a layout the language states. A reference to a value of a transparent structured type is its parts' references (ownership §5), so reading it as one run of storage is undefined.
+- No value has a layout the language states. A reference to a value of a transparent type is its parts' references (ownership §5), so reading it as one run of storage is undefined.
 
 ## 3. Implementation limits
 

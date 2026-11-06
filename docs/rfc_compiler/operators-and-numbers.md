@@ -2,7 +2,7 @@
 
 ## 1. Numbers
 
-The numbers are the integer types of 8 to 64 bits and `f64`. An unsuffixed integer literal defaults as types §5 states. Integer overflow is undefined. Arithmetic that checks, wraps, saturates or reports overflow is written as the extern fns that state it, with Rust's meanings. Integer division or remainder by zero traps; a later build flag may choose otherwise. `f64` follows IEEE: division by zero gives an infinity, not a trap.
+The numbers are the integer types, those of 8 to 64 bits and `usize`, and the float types `f32` and `f64` ([the type system](../transparency-constraint-type-system.md), Types). `usize` is an integer type of its own, whose width the host gives: it is a different type from an integer of that width, and no coercion relates the two. An unsuffixed integer literal defaults as types §5 states. Integer overflow is undefined. Arithmetic that checks, wraps, saturates or reports overflow is written as the extern fns that state it, with Rust's meanings. Integer division or remainder by zero traps; a later build flag may choose otherwise. `f32` and `f64` follow IEEE: division by zero gives an infinity, not a trap.
 
 A string literal is a `&str`, as in Rust.
 
@@ -10,7 +10,7 @@ A string literal is a `&str`, as in Rust.
 
 `core` is declared inside the compiler and implements nothing. Its generic functions are the lang items, the ones the language's syntax lowers to; they mean something only through the extern fns that impl them.
 
-Each operator is a call of a lang item: `+` of `core::add`, `-` of `core::sub`, `*` of `core::mul`, `/` of `core::div`, `%` of `core::rem`, unary `-` of `core::neg`, `==` of `core::eq`, the orderings of `core::cmp`. The operands' types decide which impl answers. Where no impl answers, the program is refused. An extern type joins an operator by declaring an impl.
+Each operator is a call of a lang item: `+` of `core::add`, `-` of `core::sub`, `*` of `core::mul`, `/` of `core::div`, `%` of `core::rem`, unary `-` of `core::neg`, `==` of `core::eq`, the orderings of `core::cmp`. The call is a use whose candidates are the lang item's impls, decided as types §6 states: as the one impl that what is decided of its operands and its result reaches ([the type system](../transparency-constraint-type-system.md), O15). Where no impl answers, the program is refused. An extern type joins an operator by declaring an impl.
 
 The lang items are Rust's, but for two:
 
@@ -21,7 +21,7 @@ The lang items are Rust's, but for two:
 - `display<T>(&T, out: &mut String)`, appending to `out`.
 - `as_slice<C, T>(&C) -> &[T]`, `as_slice_mut<C, T>(&mut C) -> &mut [T]`, `as_str<S>(&S) -> &str`: the views.
 - `unwrap<W, T>(W) -> T`, at `Option<T>` and `Result<T, E>`. Its meaning is the language's, since both types are primitive: `Some(x)` and `Ok(x)` give `x`, and `None` and `Err(_)` trap.
-- `as_ref`, `as_mut`: a `&S` to `S` with each part lent `&`, a `&mut S` to `S` with each part lent `&mut`, one level, for a transparent structured type `S` (types §1): `(&(a, b)).as_ref()` is `(&a, &b)`, `(&x).as_ref()` of an `Option<T>` is an `Option<&T>`. Their meaning is the language's (ownership §5): they are used, and no declaration gives them impls.
+- `as_ref`, `as_mut`: a `&S` to `S` with each part lent `&`, a `&mut S` to `S` with each part lent `&mut`, one level, for a transparent type `S` (types §1): `(&(a, b)).as_ref()` is `(&a, &b)`, `(&x).as_ref()` of an `Option<T>` is an `Option<&T>`. Their meaning is the language's (ownership §5): they are used, and no declaration gives them impls.
 
 `&&`, `||` and `!` on `bool`, `^` on `bool` and the integers, and `&`, `<<` and `>>` on the integers are the language's own operations, as Rust defines them, with overflow as §1 states. They are not calls. `|` is the pipe (`x | f` is `f(x)`); bitwise or has no operator.
 
@@ -31,19 +31,19 @@ A value is a sequence of atom `X` when its parts have positions in a total order
 
 A type gives `core::as_slice` and `core::as_slice_mut` only where it is a sequence, and each gives that slice. What such an impl states is trusted, as a declared fact is (extern fn §3): an impl that gives another slice is its declarer's error.
 
-`a[i]` reaches an element through its container's `core::as_slice`, or `core::as_slice_mut` where the place is written or lent mutably. A `for` over `&v` or `&mut v` reaches its elements through the same impl. Any type that gives these impls is indexed and iterated as a slice. An index is a `u64`, as Rust's `usize`. An index outside its container traps.
+`a[i]` reaches an element through its container's `core::as_slice`, or `core::as_slice_mut` where the place is written or lent mutably. A `for` over `&v` or `&mut v` reaches its elements through the same impl. Any type that gives these impls is indexed and iterated as a slice. The class of `i` in `a[i]` has the upper bound `usize` ([the type system](../transparency-constraint-type-system.md), Structural constraints). An index outside its container traps.
 
 A sequence's length, `core::len`, is the length of that slice. No other value has a length.
 
 ## 4. Equality and ordering
 
-Equality and ordering mean what they mean in Rust, with one exception: `NaN == NaN` is true. A transparent structured type (types §1) compares part by part where its parts compare. An enum, `Option` and `Result` have equality but no order: which variant comes first is not defined, so ordering one is refused. Any other type compares through its `core::eq` and `core::cmp` impls.
+Equality and ordering mean what they mean in Rust, with one exception: `NaN == NaN` is true. A transparent type (types §1) compares part by part where its parts compare. An enum, `Option` and `Result` have equality but no order: which variant comes first is not defined, so ordering one is refused. Any other type compares through its `core::eq` and `core::cmp` impls.
 
 ## 5. Casts and coercion
 
 `as` casts between the numbers, `bool` and `char` as Rust casts them.
 
-A coercion is applied without being written. A reference to an extern-defined container reads as its view: `&Vec<T>` as `&[T]`. A built-in container has no such view: `&String` reads as `&str` only through `as_str()`. A declared extern cast coerces as types §3 and §7 state.
+A coercion is applied without being written; the coercions are the language's (types §3). A reference to an extern-defined container reaches its view, `&Vec<T>` to `&[T]`, by the conversion its `core::as_slice` impl is, made at a boundary alone (types §7; O10). A built-in container has no such view: `&String` reads as `&str` only through `as_str()`.
 
 ## 6. Deref
 

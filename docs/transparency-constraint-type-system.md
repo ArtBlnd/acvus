@@ -1,16 +1,20 @@
 # Transparency-constraint type system
 
-## Compilation graph
+This document defines how the types of a program are decided. The system is as simple as it can be and deterministic, refuses a program at what registered the constraints a rule fails on, and has no type declarations.
 
-A program is one compilation graph. Its nodes are units, extern fns and contexts, and its edges are uses: a body, the text of a free fn, a method or a lambda, uses what it names.
+The rules are the obligations (Obligations), each stated once under its identifier. Every other statement of this document is a definition an obligation uses, a consequence of obligations, or an example. An implementation implements the obligations and nothing besides: a consequence implemented as a rule of its own is a rule added. Each obligation is witnessed by at least one case whose outcome changes where the obligation is left out; the examples name the obligations they witness.
 
-| Node | Sort | Use |
+## Definitions
+
+### Compilation graph
+
+A program is one compilation graph. Its compilation nodes are units, extern fns and contexts, and its edges are uses: a body, the text of a free fn, a method or a lambda, uses what it names.
+
+| Compilation node | Sort | Use |
 |---|---|---|
 | Unit | module, script, template | calls its free fns and methods |
 | Extern fn | a declaration of an external function | calls it |
-| Context | a declared `@x` | assigns a value to it and takes its value out |
-
-### Unit
+| Context | a declared `@x` | reads it, takes from it, lends it and commits into it (context §3) |
 
 | Unit | Free fns | Struct |
 |---|---|---|
@@ -20,9 +24,9 @@ A program is one compilation graph. Its nodes are units, extern fns and contexts
 
 A template is a script whose body is the `String` formatted from its text, and whose result type is fixed to `String`. `{{ e }}` is a use of `core::display`. A script's or a template's input `$x` is a parameter of its function (programs §4).
 
-A lambda lies inside another body, its enclosing body. A call made by a lambda that lies in the text of a free fn or a method is a call of that free fn or method. Free fns and methods that reach one another by calls form one binding group, and a lambda, but for its environment (Facts), is a binding group of its own, lying inside the binding group of its enclosing body.
+A lambda lies inside another body, its enclosing body. Free fns and methods that reach one another by calls form one binding group, and a lambda is a binding group of its own, lying inside the binding group of its enclosing body.
 
-## Transparency
+### Transparency
 
 A body sees the target of a use at one of three levels.
 
@@ -32,13 +36,11 @@ A body sees the target of a use at one of three levels.
 | another body: a free fn, a method or a lambda | its text, separately at each use | Semi-transparent |
 | an extern fn, a context | its declaration | Opaque |
 
-A module's struct has its fields named, and its values made, only inside that module's impl blocks.
+A module's struct is constructed, and has its fields named, only inside that module's impl blocks. A context's type is given by the host, and is called its context type. A context type is external and has no hole, it holds neither a reference nor a function, and a brand type in it is that context's own, never made one with another (context §3).
 
-A context's type is given by the host. A value in a context outlives the run, so its type has no positions (context §3, ownership §5), and a context holds neither a reference nor a function.
+### Types
 
-## Types
-
-A type is a finite term. A term consists of one constructor, its members and its parts, and each part is again a type.
+A type is a finite term: one constructor, its members and its parts, and each part is again a type.
 
 | Constructor | Notation | Parts | Members |
 |---|---|---|---|
@@ -48,325 +50,327 @@ A type is a finite term. A term consists of one constructor, its members and its
 | Slice | `[T]` | the element | |
 | Option | `Option⟨T⟩` | the payload | `Some`, `None` |
 | Result | `Result⟨T, E⟩` | the ok, the error | `Ok`, `Err` |
-| Function | `Fn(P̄ → R)` | each parameter, the result | |
+| Error | `Error{V̄(T̄)}`, `Error⟨E⟩` | each payload; `E` | its variants; none |
+| Function type | `Fn(P̄ → R)` | each parameter, the result | |
+| Function value type | `λ̄` | none | its closures |
 | Object | `{f̄: T̄}` | each field's type | its fields |
 | Enum | `E{V̄(T̄)}` | each payload | its variants |
 | Struct | `Self⟨T̄⟩` | one type parameter for each field, in the order the struct declares them | |
-| Extern-defined type | `N⟨T̄, ι⟩` | each argument, and the identity | |
-| Scalar | the integers of 8 to 64 bits, `f32`, `f64`, `bool`, `char` | none | |
+| Extern-defined type | `N⟨T̄, ι⟩` | each argument, and the brand type | |
+| Scalar | the integers of 8 to 64 bits, `usize`, `f32`, `f64`, `bool`, `char` | none | |
 | String | `String` | none | |
 | str | `str` | none | |
 | Unit type | `()` | none | |
 | Bottom | `!` | none | |
 
-A reference has a mutability: `&` is shared, and `&mut` is exclusive.
+`usize` is an integer type of its own, whose width the host gives. It is not any integer of that width: the two are different types, and no coercion relates them.
 
-No type has a reference directly as its target. A reference's lifetime holds several loans; it is not written in the text, and is decided at each use as the least one. This is because another body is Semi-transparent, so what that body does with a reference is seen at each use. So the lifetimes of two references need not be told apart, and what is reached through a reference is reached by one reference: its lifetime holds the loans of both references, and it is exclusive only where both are (ownership §5). The parts inside a target are not subject to this rule, the argument of `&N⟨&U⟩` for example.
+A function type is written only by a declaration. A function value is what a lambda expression gives (O29), and its type is a function value type: its parameter and result types are no parts of it, as each use of it makes them anew (O26).
+
+A reference has a mutability: `&` is shared, and `&mut` is exclusive. A reference's lifetime is not written in the text, and is decided at each use as the least one.
 
 Two types are equal when their constructors, members and parts are all equal. A constructor is what remains of the notation without its members and parts: a reference's mutability, an enum's name, a struct's module, an extern-defined type's name, and a tuple's or an array's length are in it.
 
-An object, enum, tuple, array, option or result type is a structural type, and is known by the names it carries.
+The specialization mark of an extern-defined type (types §8) is not handled by this type system.
 
-The specialization mark of an extern-defined type (types §8) is not handled by this type system. A type carries no mark, and turning an unmarked value into a marked one is the optimizer's.
+### Equivalence classes
 
-### Variance
+A type variable is one type, represented by an equivalence class (a class).
 
-A structural type is covariant in its members. The parts of a structural type are joined without casts. The relation between them is a part lower bound, whose join and `≤` consist only of the union of members, `!`, and the same of the structural types inside (Join, Coercion). The parts of any other type are invariant, and the relation between them is an equation. Nothing is contravariant. A cast, a reborrow or a conversion takes place only on a whole value, never on a part.
-
-### Cast tree
-
-A declared cast goes from an extern-defined type or a reference to one, and changes neither whether it is a reference nor its mutability. An extern-defined container's view impl, an impl of `core::as_slice`, `core::as_slice_mut` or `core::as_str`, is a declared cast from a reference to that container to a reference to a slice or a `str` (operators §2, §5). An array's view, `&[T; n] → &[T]` and `&mut [T; n] → &mut [T]` at each length `n`, is a cast the language gives, by which an array reaches a declaration (extern fn §1). The nodes of the cast tree are constructors, and a reference's node is its mutability and its target's constructor. The declared casts and the arrays' views form a tree: at most one cast goes up from a node, they form no cycle, and where a cast goes from `&mut X` to `&mut Y`, the cast going up from `&X` goes to `&Y`. A declared cast's parameter writes its node with distinct type parameters as its parts, and its result writes those type parameters alone, so every type of a node goes up by its cast.
-
-### Join
-
-The join of two types, and the order `≤` the join defines (`S ≤ T` where `S ⊔ T = T`):
-
-| Definition | Description |
+| Record | What it holds |
 |---|---|
-| `S ⊔ T = nca(S, T)` | Where `S` and `T` have a common ancestor node, each is raised by casts to their nearest common ancestor node, and left as it is where they are of one node; then their members are united. The parts of a structural type are joined by `⊔ₚ`, and other parts must be equal. Where they cannot be joined, there is no join. |
-| `&mut S ⊔ &T = &S ⊔ &T` | `&mut S` is taken as `&S`, and joined. |
-| `! ⊔ T = T` | Of `!` and `T`, `T`. |
-| `S ⊔ₚ T` | The join of parts, made without casts. Where `S` and `T` have one constructor, their members are united, the parts of a structural type are joined by `⊔ₚ` again, and other parts must be equal. `! ⊔ₚ T = T`, and otherwise there is no join. The order it defines is `≤ₚ`. |
+| lower bounds | what enters the class: what the text writes (Lower bounds), what meets in it (Meetings), and the classes O2 and O14 make its lower bounds |
+| upper bounds | what the class goes to: the types given it, the classes it is a lower bound of, and the upper bounds of each class whose class node its head is in (Upper bounds) |
+| structural constraints | the parts and members its projections require the type to have, before its head is decided |
+| parts | the structural components of the class, each connected to a class of its own, named as the constructor names it: the target, a component, a field, the element, a payload, an argument |
+| domain | the domain registered in it by a literal with no suffix (Domains) |
 
-`Error` is the language's enum, and its variants are made only by `?` (`?`). So `Error` may be written only where a value leaves the program: a declaration's parameters and the type the embedding declares for the result may hold `Error`, and a declaration's result, the types the embedding declares for the inputs, those a context gives and those the text writes hold none. At a function type's parameter, the side a value leaves by is turned over. At an error type `E` with no name, `?` makes `Error⟨E⟩` in place of a variant. `Error⟨E⟩` is an `Error` with no variant and one part `E`, and its constructor differs from that of an `Error` with variants, so the two have no join.
-
-### Coercion
-
-A coercion changes a value into a value of another type, and the function that changes it is called. A coercion decides no type. It takes place once the types of both sides are all decided, where a whole value passes (Value).
-
-| Definition | Description | Function |
-|---|---|---|
-| `S ⇝ T` for each declared cast or array's view `S → T` | One step up the cast tree. | a declared cast's, the declaration's function; an array's view's, decided by the language |
-| `&mut T ⇝ &T` | `&mut T` to `&T`. | decided by the language |
-| `{f̄, ḡ} ⇝ {f̄}` | An object to one with only some of its fields. | decided by the language |
-| `E{Ā} ⇝ E{Ā, B̄}` | An enum to one with more variants. | decided by the language |
-| `S ⇝ₚ T` at each part of a structural type | Changes that part. In the object and enum rows, it changes the parts of the members that remain. | decided by the language |
-| `! ⇝ U` | `!` to any type. | decided by the language |
-| `T ⇝ U` by a declared conversion `T → U` | Where no composition of the rows above reaches the type. | the declaration's function |
-
-### Rank
-
-A coercion is a composition of the Coercion table's rows in the order `reborrow? ; cast* ; structural?`: reborrow is the `&mut T ⇝ &T` row, cast the row of a declared cast or an array's view, and structural the object, enum and structural type's part rows used together as one stage, which changes the members and each remaining part by that part's coercion. A part's coercion `⇝ₚ` is a composition of the object, enum and structural type's part rows and `! ⇝ U` alone. So a cast, a reborrow and a conversion are not used at a part. `! ⇝ U` and a declared conversion are no composition, and have no rank. Toward a given type, the composition is unique. Where no coercion is needed, the rank is `empty`. The stages are ordered `empty ≺ reborrow ≺ cast ≺ structural`, and the ranks of coercions are compared by their highest stage, then by their number of casts, then by the lower stages they take.
-
-## Equivalence classes
-
-A type variable is one type, represented by an equivalence class kept by union-find. An equivalence class and a kind are different things.
-
-| | What it is | What it holds |
-|---|---|---|
-| Equivalence class | a collection of equal types | type variables, and at most one kind |
-| Kind | a structure | a constructor, members, and each part's equivalence class |
-
-Every type is split into these. For example, `Vec⟨T⟩` is one equivalence class holding the kind `Vec(·)`, whose part is `T`'s equivalence class.
-
-### Type variables
-
-| Sort | Notation | Description |
-|---|---|---|
-| `Var` | `?0` | A type not yet known. |
-| `LitVar` | `?N: int`, `?N: float` | A literal's type: `N` the literal values it holds, a literal `n` being `?{n}`. It decides nothing. |
-
-### Kind
-
-A kind may be known only in part, without a constructor. Below, `τ` is that type's equivalence class.
-
-| Kind | Meaning |
+| Decision | What it holds |
 |---|---|
-| a constructor, members, parts | One constructor of the type table, its members, and each part's equivalence class. |
-| a reference to `τ` | Its target is `τ`. |
-| has field `f: τ` | |
-| has component `i: τ` | |
-| indexes `τ` | Its element is `τ`. |
-| has variant `V` with payload `τ` | |
+| head | the type's constructor and its members (Types) |
 
-### Projection
+The class node of a type is what a change goes by: for a reference, its mutability and its target's constructor; for any other type, its constructor. As no reference has a reference as its target (O23), a class node never reaches deeper than that.
 
-A projection names a part of a type not yet known: it gives the operand's equivalence class a kind known in part, and names that part's equivalence class `τ`.
+### Domains
 
-| Primitive | Notation | Example | Kind the operand's equivalence class takes |
+A class's domain is the set of types the class may be. A literal with no suffix registers a domain in its class: the types of its family that hold its value, among the integer types for `10` and among the float types for `1.5`.
+
+| Domain | Its types | Fallback type |
+|---|---|---|
+| every type | every type | `!` |
+| the integer types | the integers of 8 to 64 bits, and `usize` | `i32` |
+| the float types | `f32`, `f64` | `f64` |
+
+### Constraints
+
+A lower bound and an upper bound are each a type. Each is read as its constructor, its members and its parts:
+
+| Read | What it holds |
+|---|---|
+| constructor | the constructor of the type, with what it holds: a reference's mutability, a tuple's or an array's length, an enum's name, a struct's module, an extern-defined type's name, which `Error` it is, a function type's number of parameters, which scalar |
+| members | an object's fields, an enum's or an `Error`'s variants, a function value type's closures. An `Option`'s and a `Result`'s members are given by the constructor |
+| parts | each part, a class of its own, read in the same order |
+
+Every type registered as a constructor, members or parts, and every domain registered (Domains), is kept, so that a refusal names what registered it (O22).
+
+### Lower bounds
+
+| Read | Relation to the class's head (O6) |
+|---|---|
+| constructor, members | is joined into the head (Joins), and reaches it at its own place by the reborrow where its mutability is exclusive and the head's shared; the reborrow is recorded with it |
+| parts | each part is one type with the corresponding part of the class, and what that records is told by the state of the corresponding part (O9) |
+
+| What the text writes | constructor | members | parts |
 |---|---|---|---|
-| `Deref` | `*?0` | `*r` | a reference to `τ` |
-| `Field` | `?0.f` | `p.f` | has field `f: τ` |
-| `Component` | `?0.i` | `t.0` | has component `i: τ` |
-| `Elem` | `?0[]` | `a[i]` | indexes `τ` |
-| `Payload` | `?0 as V` | `x` in `if let Some(x) = o` | has variant `V` with payload `τ` |
+| a literal of one type: `1u32`, `true`, `'a'`, `()` | that type's | — | — |
+| a lend `&ₘ p` (O23) | reference, with its mutability | — | the target: the class of the place's type with the references above it taken off |
+| a constructor application: `(a, b)`, `[a, b]`, `{f: a}`, `V(a)`, `Some(a)`, `None`, `Ok(a)`, `Err(e)` | its constructor | its members | each argument's class |
+| a lambda (O29) | function value type | its closure | — |
+| `return e` (Meetings) | `!` | — | — |
+| `e?` (O25) | as O25 states | as O25 states | as O25 states |
 
-The kind "indexes `τ`" is unified with the element part at an array or a slice, and is linked to the slice's element along the signature of its view at an extern-defined container (operators §3). A type with no view cannot have this kind.
+### Upper bounds
 
-### Unify
-
-Unifying two equivalence classes merges them into one, whose kind is the conjunction of the two. Parts of one name, that is the same field, the component at the same position, the target, the element and the payload of the same variant, have their equivalence classes unified in turn (congruence).
-
-| Held in one equivalence class | Rule |
-|---|---|
-| A LitVar `?N` and a constructor | The constructor is one of `?N`'s family, integer or float, that holds every value in `N`. |
-| LitVars `?N` and `?M` | Two of one family become one `?(N ∪ M)`. |
-
-### Join of a LitVar
-
-| Definition | Description |
-|---|---|
-| `?N ⊔ τ = τ` | `?N` and `τ` are unified. |
-
-## Facts
-
-A fact is an attribute a function carries, neither a part nor a member of a type. A fact is a join-semilattice with a top, nothing known; where a join is not defined, or no source decides it, a fact is the top. The facts of the function values that meet in one equivalence class are joined. A fact is decided once, from its sources, and inference chooses by no fact that is decided after it.
-
-| Fact | Carried by | Order | Top | Sources |
-|---|---|---|---|---|
-| Effect | a function; an extern-defined type | pure ⊑ opaque | opaque | a function's body; for an extern-defined type, the functions its values hold |
-| Flows | a function | listed flows ⊑ every flow | every flow | the function's body |
-| Calls | a function | many ⊑ once | once | after inference, how its captures are used |
-| Holds | a function | nothing ⊑ shared ⊑ exclusive | exclusive | after inference, its captures |
-| Values | a function | sets of lambdas ⊑ any | any | the lambdas written |
-| Declared facts | a declaration | what is stated ⊑ nothing stated | nothing stated | the declaration |
-
-A function that becomes a value carries its facts in its function type, and a call performs the callee's effect in the body it is in. The types a declaration or the text writes, and those a context gives, hold no function value. A function value is a lambda's value alone, and a declaration can return a function value a type variable took in but makes none, so a function value's Values at an instance is always a set of lambdas.
-
-A binding of the enclosing body that a lambda's text names is a capture of that lambda, and its type is an equivalence class of the enclosing binding group (Binding group). A constraint the text gives is on the equivalence classes it relates, and a binding on the equivalence classes of the projections on its path as well. A use, though, gives one constraint for each set of positions its callee ties together. Of a use calling declarations, a position where every candidate writes one type, and that type writes no type parameter and no identity, is one alone. The rest are, with one candidate, those writing one of its type parameters or its identity together, and with several, all together (the choice of a candidate decides them together), `?`'s exit with them. Of a use calling a free fn or a method of an enclosing binding group, each position is one alone, on that position's parameter or result type as well. Of a use calling another free fn or method, the positions whose parameter and result types are joined in that binding group's C (Binding group) are one together, and a position whose type is not in C is one alone. That binding group is solved before this lambda, so the lambda's environment is decided by the C of the binding groups solved before it. Two equivalence classes are joined where one constraint is on both, or one is a part of a kind the text writes for the other, and the equivalence classes joined to a capture's type, directly or through others, with the constraints on them, are the lambda's environment. The environment is the enclosing binding group's. Its equivalence classes are that binding group's, each an unknown of it unless the text writes it; its constraints are recorded there once, when that binding group's solving starts, whether or not a call reaches the lambda; and a lambda inside it records its own environment first, as constraints of its text. The rest, the parameter and result types and the constraints not in the environment, is the lambda's binding group, called its generic part. An equivalence class that holds a function value does not carry the parameter and result types as parts but names the lambda by Values. At each use of the value, that lambda's C is made anew as an instance (Instance).
-
-## Instance
-
-An instance is another body's types made anew at one use, and is made at that use's place, its call site (let polymorphism).
-
-| Use | Instance |
-|---|---|
-| calls a free fn or a method of the binding group the use lies in, or of one enclosing it | none is made: the use takes that body's own types |
-| calls any other free fn or method | one is made in each binding group that records its constraints (Facts) |
-| calls a function value | it reads the value called, or its target where that is a reference (Dependency), and one is made for each lambda its Values names. Each argument passes into the copy of that lambda's parameter in its generic part, or into its parameter in the environment, and the copy of the result type in its generic part, or the environment's result type, is a lower bound of the call's result. |
-| passes a function value across a boundary into a given function type | where the boundary is split (Value), one is made for each lambda the value's Values names. As though the function type called the lambda, each parameter of the function type passes into the copy of that lambda's parameter in its generic part, or into its parameter in the environment, and the copy of the result type in its generic part, or the environment's result type, passes into the function type's result (Meeting and boundary). |
-
-A run, which starts at a function the embedding chooses, makes one instance of that function: the types the embedding declares for its inputs are put in the universals' places, and its result passes into the type the embedding declares for its result (programs).
-
-## Solving
-
-### Binding group
-
-A binding group is solved as one constraint graph.
-
-| | Definition |
-|---|---|
-| Constraints | The constraints the binding group's text records, without the text of the binding groups lying inside it but with the environments of the lambdas lying inside it, and the C each use in it records. |
-| Universal | The type of a parameter. The use chooses it. A capture's type is not universal but an equivalence class of the enclosing binding group. Nor is the type of a parameter in an environment, which is an equivalence class of the enclosing binding group (Facts). |
-| Unknown | An equivalence class in those constraints that is not universal, is not decided when solving starts, and is not of an enclosing binding group. |
-| C | The equivalence classes left unsolved and the uses, lends, projections and bindings left undecided when the binding group reaches its fixpoint, and the constraints on them. |
-| Order | A binding group is solved before the binding group in which a use records its C. |
-
-When a use makes an instance, it makes anew the equivalence classes and the uses, lends, projections and bindings of C that are that binding group's own, puts its type arguments in the universals' places, and records them in its own binding group. It makes anew, too, the lambdas placed in that binding group: a copy's environment is the equivalence classes the instance made anew, and the Values of a copy's function value name the copied lambdas. Those copies are decided in the binding group they are recorded in. The type arguments are unknowns of the binding group the use lies in. The equivalence classes of an enclosing binding group are not made anew but shared. Two equivalence classes of C are joined where one constraint of C is on both, one use, lend, projection or binding left undecided names both (a binding, the equivalence classes the projections on its path name as well), one is a part of the other's kind, or one holds a function value whose Values name a lambda placed in that binding group and the other is in that lambda's environment; an instance makes anew together what is joined. Where a lambda's environment and its generic part record a use's constraints apart (Facts), each binding group's instance makes anew only what of C is joined to the positions it records. A lower bound, part lower bound or boundary already split in C is not split again in the copies (Value).
-
-### Meeting and boundary
-
-Where a value passes into a type, it is a meeting when that type is an unknown of the binding group the place lies in, and a boundary otherwise. Where the type is that of a binding reached by name, its fields and parts included, and an unknown of a binding group enclosing the one the place lies in, it is a meeting too. A place that reaches an unknown of an enclosing binding group through a reference is a boundary. A body's result type is an unknown of that body, and its tail, its `return`s and its `?` exits are values passing into it. An expression that gives no value, `return e` and a block that ends in `break`, `continue` or `return`, has as its type an equivalence class made anew at that place, which nothing enters (types §4). The condition of an `if` or a `while` is a value passing into `bool`. A template's result type is fixed to `String` and is not an unknown.
-
-### Recording
-
-The constraints a body's text gives are recorded in equivalence classes as soon as they are given, on no condition of what has been solved.
-
-| Text | Recorded |
-|---|---|
-| a meeting | a lower bound `τ ≤ α` |
-| a boundary | `T ⇝ U` |
-| an invariant place | an equation |
-| a projection | a kind |
-| a use | The constraint that its types equal one of its candidates' signatures (Overload resolution), and where it makes an instance, that C. |
-| a block expression | what the lambda it is solved as, called where it lies, records (Block) |
-
-### Dependency
-
-| What | What it depends on |
-|---|---|
-| an equivalence class | its unsolved lower bounds and part lower bounds, other than equivalence classes nothing enters (Value), and the relations not yet recorded into it by: (a) where it is the side that takes a relation when a lower bound, a part lower bound, a boundary or a wrapping not yet split is split, the equivalence class whose taking a constructor splits it; that side is a part of `τ` in `τ ≤ α`, a part of `U` in `α ⇝ U` and a part at a parameter of a function value `α`, and the `X` a `?`'s wrapping passes into; (b) a use, lend, projection or binding at whose position it lies, or within the depth its candidates or pattern reach; but where all such a node records into it is a boundary out of it, it waits for that node only while only LitVars enter it, which is judged as whether nothing enters it is (Value). An equivalence class that holds a function value is taken as holding, for each lambda its Values names at the moment, the parameter and result types in that lambda's environment as the parts at a function type's parameters and result (Facts). So they lie at the position of a use that calls that function value, and within the depth a candidate reaches that writes the function type the function value passes into. |
-| a part's equivalence class | every equivalence class it is a part of taking a constructor |
-| a universal | the use that chooses it, that is, a use that makes an instance of that body; that use lies outside the binding group |
-| a use | the uses, lends, projections and bindings that record relations into the equivalence classes at the positions it reads |
-| a lend, a projection, a binding | the uses, lends, projections and bindings that can decide whether the equivalence class of its place or operand is a reference, that is, that can record into it a source that decides it (Place). So projections of a field, a component, an index or a variant whose operand is that equivalence class, uses that have already recorded whether it is a reference or none of whose candidates records a lower bound or an equation into it, lends whose place it is and bindings whose position it is, and calls of a function value that pass it as an argument are left out. |
-
-The uses, lends, projections and bindings that record relations into an equivalence class are the uses, lends, projections and bindings that class, and the equivalence classes it reaches along dependencies between equivalence classes and between the parts of the two sides that a relation not yet split will link when it is split, depend on. A use, a lend, a projection or a binding depends on no equivalence class.
-
-A use, a lend, a projection or a binding records at once, even before it is decided, the part common to all it may become (Common part). What a use may become is its candidates, and what a lend may become is borrowing its place and borrowing its place's target. The common part keeps, in their types, each place where all of them hold one constructor and members, and puts at each place where they differ an unknown made anew, one unknown for the places where they differ by the same types. But where a whole value passes, at the top of a parameter or of the result, a reference is not split, since a cast goes between two references of one constructor (Cast tree). That unknown holds that it is a reference where the types at its place are all references, and that it is not one where none is. A use records its common part as it records a decided candidate: each argument passes into the common part's parameter, and the common part's result passes into the use's result (Meeting and boundary). The relations the use has then yet to record are only an argument passing that the common part does not hold whole, and what it records into the result's unknowns. Once decided, such an argument passes whole into the decided candidate's parameter, a coercion being of a whole value, and at each of the result's unknowns the decided candidate's result type at that place passes into that unknown. A lend's common part is that its result is a reference; its mutability and target are recorded when the lend is decided. What a projection or a binding may become has no part in common.
-
-For example, under the two declarations `pick({x: i32}) -> {x: i32}` and `pick(u8) -> u8`:
-
-```
-let mut a;
-a.x = 0;
-a = pick(a);
-```
-
-- The two candidates' common part is `pick(?0) -> ?0`, and `?0` holds that it is not a reference, being one in no candidate. `A` meets in `?0`, `?0` passes into `pick`'s result `R`, and `R` into `A`, so the three are one by a cycle of lower bounds.
-- The projection `a.x` reads only whether `A` is a reference, so it does not depend on `pick`. `A` is not a reference, and the kind "has field `x: τ`" applies to `A`.
-- `pick` depends on that kind, so it reads `A` as `{x: τ}`, and `pick({x: i32})` remains.
-- Were the second declaration `pick(u8) -> &u8`, the two candidates would differ in this, so `a.x` would depend on `pick` and `pick` on `a.x`. Each transitively depends on the other, so each breaks its dependency on the other, and the `A` that `pick` reads decides nothing, so the call is refused.
-
-What a use, a lend, a projection or a binding becomes is decided by the value it reads. The value it reads is its equivalence class's value decided from the remaining relations alone, without the relations recorded, in being decided, by itself and by the uses, lends, projections and bindings that transitively depend on it. A common part holds whatever they are decided as, and is not left out. Here each equivalence class's value is decided by the table of values, by splits and by fills, whether or not what it depends on is solved, and an equivalence class with no relation remaining gives nothing. A use that calls a declaration reads the positions where its candidates differ in a constructor or a member, and a lend, a projection or a binding reads whether its equivalence class is a reference. In reading whether it is a reference, the relations recorded by projections of a field, a component, an index or a variant whose operand is that equivalence class are not taken as recorded either (Place). A position where the value read decides nothing decides nothing.
-
-The dependency graph has as its nodes the equivalence classes of the moment and the uses, lends, projections and bindings, and as its edges the dependencies the rows of the table above give. That `Y` transitively depends on `X` means that `Y` reaches `X` along the dependency graph. Each node breaks its dependency on itself and on every node that transitively depends on it. Of the relations recorded by a node that a broken dependency pointed to, those it records into a class at a position the node that broke it reads, or into a class those reach by lower bounds and part lower bounds, are recorded once that node is decided, and checked (Value); the others are recorded as it is decided.
-
-The unbroken dependencies have no cycle. Were there one, for any node on it, the next node would transitively depend on it along that cycle, so that dependency would have been broken.
-
-### Value
-
-An equivalence class takes its constructor and members once everything its unbroken dependencies point to is solved or decided, and is then said to be solved; each part is solved on its own. A cycle of lower bounds and part lower bounds alone is first merged into one equivalence class. Where an equivalence class reaches a part of its own along recorded lower bounds, part lower bounds and parts, no finite type holds it, so it has no value and is split no further.
-
-| | Value |
-|---|---|
-| with an equation | The type every equation gives. |
-| without one | The join of the types its sources give, except a lower bound or a part lower bound that a broken dependency points to: the least type that the types its lower bounds and uses give reach by `≤`, and the types its part lower bounds give reach by `≤ₚ`. A lower bound and a part lower bound give their own type, a use the result type of the signature it chose, and a kind the member it names. |
-
-A kind adds a member to a type another source gives only where that member is visible to this body. An object's fields and an enum's variants are visible, since the body's text writes them; the members of `Option`, `Result` and `Error`, and of a type the host gives, are written outside and are not. An equivalence class whose only sources are kinds takes the constructor of the members they name, whether those members are visible or not. An equivalence class's value is a type that meets the kind it holds, and `!`, which has no value, meets every kind, the parts that kind names being `!`.
-
-When an equivalence class takes a constructor, a relation is recorded at each part of the two sides of each of its lower bounds, part lower bounds and boundaries, as at a place the value's part passes into (a split). Where that place is a meeting, a part lower bound is recorded between the parts of a structural type, and an equation between other parts; where it is a boundary, a boundary (Meeting and boundary). Where the constructors of the two sides of a lower bound or a boundary differ, the parts are linked by the same rule, the value taken as passing into the parameters of the declared casts and their results as passing on, and where `&mut T` passes into `&U`, the targets are linked. Where a function value passes into a function type, the instances of its lambdas link them (Instance). A `?`'s wrapping is linked through the payload of the `Error` it wraps in (`?`). `?N ⇝ U` unifies `?N` with `U`.
-
-Once an equivalence class is solved, a value entering by a lower bound or a use's result reaches its value by the join's `≤`, and a part entering by a part lower bound by `≤ₚ`, and is changed at each step by a row of the Coercion table; but the fields an object gains are not changed, and are written before the value is used whole (ownership §4). A value passing by a boundary reaches the value of `U` by a coercion. The split links nothing through a declared conversion, so by one a value reaches only where, for each type parameter, the Values of each function value at a position the result writes it name every lambda of the function value at the same place in each position the parameter writes it. Either way, its functions are called where the value enters, and where it does not reach, it is refused there.
-
-An equivalence class nothing enters, that is, one whose unbroken dependencies are all solved or decided and which has no source, gives nothing as a lower bound or a part lower bound. Where the places it passes into, the `α` of each lower bound and part lower bound whose `τ` it is and the `U` of each boundary whose `T` it is, each have a value or hold only a LitVar nothing more decides (its dependencies all solved or decided, and no boundary `?N ⇝ U` left to unify it), and one has a value, it takes that type where those values are one type and each LitVar holds it (a fill), and has no value where they are not one type or a LitVar does not hold it. Where none of them has a value, it is not filled. A LitVar is one type with any type of its family that holds it, as at a use's narrowing (Overload resolution). A filled equivalence class reaches those places with no coercion. An equivalence class only LitVars enter does the same by a split's `?N ⇝ U` and the LitVars' join.
-
-### Fixpoint and fallback
-
-A binding group is solved until no more equivalence classes are solved or filled: its fixpoint. Inside a binding group, there is no fallback.
-
-Once every binding group has reached its fixpoint, fallback is applied. An equivalence class that has no unbroken dependency and is unsolved takes its family's default if it is a LitVar, `i32` for an integer and `f64` for a float, and `!` otherwise. Fallback is not applied to the equivalence classes left in C, only to the copies a use makes anew. Solving then resumes to the fixpoint, and fallback and the fixpoint are repeated until no equivalence class is left to fall back.
-
-A program is accepted where its declared casts follow the cast tree, every equivalence class that is not an original left in C has a value, every use, lend, projection and binding that is not an original left in C is decided, and every value that enters or passes reaches. Any other program is refused at the place where a definition gives no result.
-
-## Place
-
-A place is a root, a binding, followed by projections, and its type is the equivalence class its last projection names.
-
-A lend `&ₘ p` gives a reference. Where, in the value the lend reads, the place is `&ₙ U`, its target is `U` and its mutability the lesser of `m` and `n`; otherwise its target is the place's equivalence class. The relation to its target is an equation. Where `m` is not `&` and the value the lend reads makes the place a reference but does not decide its mutability, the lend is not decided until it does (Dependency).
-
-A projection other than a Deref whose operand is a reference applies to its target (auto-deref). Whether an equivalence class is a reference is decided by its sources other than the kinds of a field, a component, an index or a variant: its lower bounds, part lower bounds, equations, uses and the kind of a Deref.
-
-A pattern is projections of its scrutinee's place, and at each of its positions records:
-
-| Position | Recorded |
-|---|---|
-| `(π̄)`, `{f̄: π̄}`, `&π`, `V(π)` | the projection at that position: Component, Field, Deref, Payload |
-| a literal | a value passing into the type of that position |
-| a binding | a read of that position where the path passes no reference; where it passes one, a lend of that position, at the least mutability of the references passed and of the position's own |
-| `V` without a payload | the same as `V(_)` |
-| `_` | nothing |
-
-A `match` applies each arm's pattern to its scrutinee, and `if let p = e` and `while let p = e` apply `p` to `e`. The `x` of `for x in e` is the binding at `e`'s element place, `e[_]`, so a `for` goes over anything that is indexed (Projection). The `x` of `for x in lo..hi` is the result of that range's use (Overload resolution).
-
-## Struct
-
-An expression that makes a value, `(ē)`, `[ē]`, `{f̄: ē}`, `Self { f̄: ē }` or `V(e)`, is a value of its constructor whose parts are equivalence classes made anew at that place, and each component is a value passing into its part. Every component of `[ē]` passes into its one element part. The constructor of `Self { f̄: ē }` is this module's struct. A struct's fields are not members but its parts in the order it declares them, so a field's kind is unified with that part and adds nothing. The equivalence class of a receiver `self`, `&self` or `&mut self` carries the kind `Self⟨T̄⟩`, `&Self⟨T̄⟩` or `&mut Self⟨T̄⟩` as the text writes it, and `T̄` is universal.
-
-The part of `V(e)` is `V`'s payload `P`, into which `e` passes. Where `V` is a member of `Option` or `Result`, its constructor is `Option` or `Result` and its other part an equivalence class made anew; where it is `E::V(e)`, it is an enum named `E` whose only member is `V`. In a `V` written without a payload, `P` has no relation.
-
-## Overload resolution
-
-The candidates of a use that calls a declaration are the declarations its name reaches. An operator, `{{ e }}`, `e?`, `e as T` and a `for`'s `lo..hi` are uses the language sets, whose candidates are a lang item's (operators §2), `core::display`'s, the two the language gives, an `(S) -> T` for each type `S` Rust casts to `T` (operators §5), and a `(T, T) -> T` for each integer `T`. `!=` is a use of `core::eq` whose expression's value is its result negated, and `<`, `<=`, `>` and `>=` are uses of `core::cmp` whose expression's value is the `bool` its result compared with 0 gives. The candidates of an operator that is no lang item are the language's: `(bool, bool) -> bool` for `&&` and `||`, `(bool) -> bool` for `!`, a `(T, T) -> T` for `^` at `bool` and each integer `T` and for `&` at each integer `T`, and a `(T, U) -> T` for `<<` and `>>` at each two integers `T` and `U` (operators §2). At a structural type, the candidate of a generic function is that function called at each part (types §1). The type parameters of a candidate that is an extern declaration are unknowns made anew at each use, of the binding group the use lies in.
-
-A method call's receiver is its first argument, adjusted as written, then as `&`, then as `&mut` where the receiver is a place that may be written, and the first adjustment that reaches a candidate is taken (types §6).
-
-A use with several candidates is recorded as the constraint "its types equal one of its candidates' signatures", and what all candidates share is recorded before it is decided (Dependency).
-
-The candidates are narrowed in the following order, and at each step only the candidates whose passing goes by a coercion of the lowest rank remain. Each position's type is the value the use reads (Dependency). Where the type the result passes into is an unknown, that place is a meeting, so the passing is the candidate's result type reaching by `≤` its join with that unknown's other sources (Join).
-
-| Step | What passes | The type it passes into |
+| Where | constructor, members | parts |
 |---|---|---|
-| each argument, in order | the argument's type | the candidate's parameter |
-| the result | the candidate's result type | the type the result passes into |
+| at a boundary (O2) | the class reaches it by exactly one change: one stage of coercion, then one chain of conversions (O11) | each part below its class node is one type with the corresponding part of the type the change goes to, and what that records is told by the state of the corresponding part (O9). Through a conversion, its signature gives the correspondence (O12) |
+| at a part (O9) | equal: no change is made at a part | the same, at each part |
 
-A position that decides nothing reaches every candidate: a position the value the use reads does not decide, `!`, and a LitVar within its family. Narrowing takes no conversion (types §7). Where several candidates remain and a value the use reads holds a LitVar, once its binding group has nothing more to solve, fill or decide without it, that LitVar is taken as its family's default and the candidates are narrowed again (Fixpoint and fallback). Where exactly one candidate remains, the use is decided as that candidate. A use whose argument is `!` is never carried out, so whatever candidates remain, it is decided with the result `!` (types §6).
+| What gives it | Where |
+|---|---|
+| a parameter type a declaration writes | at a boundary (O2) |
+| the common part's parameter, until the use is decided | at a boundary (O14) |
+| a context type, at a commit into its context | at a boundary (O2) |
+| the external part corresponding to a part, at a change | at a part (O9) |
+| `usize`, of an index's class | at the index's class (Structural constraints) |
 
-## `?`
+These are the types given a class. A class's head is in the class node of each class it is a lower bound of, whose head is the join of its lower bounds' heads (Joins), and of each reference whose target it is. A class's upper bounds are the types given it, the classes it is a lower bound of, and the upper bounds of each class whose class node its head is in.
 
-`e?` is a use with two candidates the language gives, at `Option⟨T⟩` and at `Result⟨T, E⟩`, and its result is `T`. Its exit is as `return None` or `return Err(x)`, where `x` wraps the error value of `e`, and its type is an equivalence class `X` made anew. The type of the exit's value is an equivalence class made anew where it lies, which passes into the innermost body's result (Meeting and boundary) and lies at the use's position (Dependency). The wrapping is split once `E` takes a constructor (Value). Where `E` is an `Error` or `!`, nothing is wrapped, and the error value passes into `X` as it is. Where `E` is another type of a name `N`, an enum, a struct or an extern-defined type, `X` is an `Error` whose one member is `N`, and otherwise an `Error⟨..⟩`; either way its payload is an equivalence class made anew, which the error value passes into (Struct). These values meet at the result of the innermost body, so its error part is an `Error` with a variant added at each `?`. The exit's other parts are equivalence classes made anew (Struct), so where the body returns no `Ok`, nothing enters the ok part, and where the places it passes into give no type (Value), it falls back to `!`.
+Each upper bound is reached through a class node: the class's own, for a type given it and for a class it is a lower bound of, and that class's, for an upper bound of a class whose class node its head is in. What of that class node is decided is kept, and the class's head fills in what is not.
 
-## Block
+An upper bound gives the class heads for what is not decided of the class node it is reached through: a type, or a class with a head, gives what its class node has there; a class with lower bounds and no head yet gives the join of the heads they have given; and a class of the common part of a use not yet decided gives what each candidate writes in its place, every head where a candidate writes a hole (O13). The use not yet decided of whose common part a class is a class gives it the same. A head goes to an upper bound where the class node the upper bound is reached through, so filled in, goes to it: to one given at a boundary, by a change, the empty change included (O11), and, for a class of the common part of a use not yet decided, to one of the heads the candidates write there; to one given at a part, by the empty change; and to a class it is a lower bound of, where that class gives no head or its join with the head that class gives is that head (Joins).
 
-A block expression `{ e }`, one that stands as an expression by itself and is part of no other construct, is solved as a lambda with no parameter whose result is `e`, called where it lies: `(|| e)()` (Facts, Instance). The braces of an if's or a match's branch, of a loop and of a body are part of that construct, and are no block expression. So what in `e` is joined to a capture is solved with the enclosing binding group, and the rest is solved first in its own binding group to its fixpoint: what is decided there is used as it is, and what is left undecided in C is decided in the enclosing binding group, as the call's instance.
+The head a class's upper bounds give it is the one head, of those it is given and in its domain, that goes to every one of its upper bounds. Upper bounds check the head a class's lower bounds decide, and decide the head of a class whose dimension is upper (O17, O19).
 
-## Identity
+### Structural constraints
 
-An identity is a part of an extern-defined type, the name of the storage its values reach (ownership §6). A struct or a structural type carries no identity; only its parts may each carry one. A type carries at most one identity.
+A projection records a structural constraint on its operand's class, names that part's class `τ`, and records the upper bound the table gives.
 
-An identity in a declaration's result that no parameter's type carries is existential, and a call makes it anew where it lies. An identity a body makes stays in C even where its binding group solves it, and is made anew at each instance. Two different identities are never made one.
+| Projection | Example | Structural constraint | Upper bound |
+|---|---|---|---|
+| Deref | `*r` | a reference to `τ` | none |
+| Field | `p.f` | has field `f: τ` | none |
+| Component | `t.0` | has component `i: τ` | none |
+| Elem | `a[i]` | indexes `τ` | `usize`, of the class of `i` |
+| Payload | `x` in `if let Some(x) = o` | has variant `V` with payload `τ` | none |
+| Call | `f(ā)` | called with the arguments `ā`, giving the result `τ` | none |
 
-An execution is one call of a body or a lambda, or one iteration of a loop, and a level is its depth among nested executions. An equivalence class has the level of the place it arises at, and two merged into one have the shallower level. An identity a call makes anew has the level of the execution the call lies in.
+### Closures and instances
 
-An equivalence class holds no two different identities. This is a constraint on its value, so where the sources of an equivalence class with no equation carry such identities, its value is the least type that meets the constraint, their nearest common ancestor that carries no identity, and each value is coerced to it. A part lower bound must reach without casts, so where a part lower bound carries such identities, the equivalence class has no value. An equivalence class holds no identity of a level deeper than its own, and a value carrying one that enters it is refused there.
+A closure is a lambda together with the classes its captures are where its expression lies (Landin 1964). A closure enters a class when a lower bound of the class has it among its members.
+
+An instance of a body at a use is that body's text recorded anew at the use (O26).
+
+### Meetings
+
+Values meet where the text puts them in one place: an expression assigned to a place, or bound to it by `let`, meets in the place's class; the branches of an `if` or a `match` meet in its class; and a body's tail, its `return`s and its `?` exits meet in the body's result class.
+
+### Changes
+
+A change goes from one type to another by their class nodes and members, made of coercions and conversions; the change made of none is the empty change. A coercion is a change the language gives:
+
+| Coercion | What changes |
+|---|---|
+| `&mut T → &T` | the mutability |
+| `! → U` | the class node |
+| an object to one with only some of its fields | the members |
+| an enum, or an `Error`, to one with more variants | the members |
+| `&[T; n] → &[T]`, `&mut [T; n] → &mut [T]` | the target's constructor |
+| a function value type to one with more closures | the members |
+| a function value type to a function type | the class node; the function type's parameters and result are unified with the parameter and result classes of each closure's instance (O30) |
+
+A conversion is a declared function `S → T`. An auto-conversion is a chain of conversions, `S → U → T` from the conversions `S → U` and `U → T`.
+
+### Joins
+
+The heads a class's lower bounds give are joined, and the join is the class's head (O6). `!` has no values: it is the least head, and its join with any head is that head. The head classes are the references, the objects, the function value types, the slices, the `Option`s, the `Result`s, the tuples of each length, the arrays of each length, the enums of each name, the `Error`s with variants, the `Error⟨E⟩`s, the function types of each number of parameters, the structs of each module, the extern-defined types of each name, each scalar, `String`, `str` and `()`. Two heads of one head class join as that head class, with the shared mutability where either is a shared reference, and with the union of their members; two heads of two head classes are a type mismatch (O22).
+
+### Common part
+
+The common part of a use's candidates is their least general generalization, by anti-unification (Plotkin 1970, Reynolds 1970). It keeps each constructor all candidates share, puts a class made anew wherever they differ, and one class wherever they differ by the same types. The rest of a candidate is what its signature writes beyond the common part. Each candidate is an instance of it.
+
+| Candidates | Common part |
+|---|---|
+| `pick({x: i32}) -> {x: i32}`, `pick(u8) -> u8` | `pick(?a) -> ?a` |
+| `push(&mut Vec⟨T⟩, T)`, `push(&mut Vec⟨u8⟩, u8)` | `push(&mut Vec⟨?a⟩, ?a)` |
+| `f(T, T)`, `f(u8, u16)` | `f(?a, ?b)` |
+| `new() -> Vec⟨T⟩` alone | `new() -> Vec⟨?t⟩` |
+
+### Adjustments
+
+An adjustment is an operation the language applies where the text gives one:
+
+- the auto-deref, by which a projection other than a Deref applies to its operand's target;
+- the adjustment of a method call's receiver: the first of the receiver as written, its `&` and its `&mut` that reaches a candidate, each lend taken as far as the place allows.
+
+### Brand types
+
+A brand type is a part of an extern-defined type, the name of a storage (ownership §6). Only an extern-defined type has a brand type among its parts; a part of any type may be branded. A scope is the text of a body or a lambda, or one iteration of a loop, and scopes nest. A class belongs to the scope in whose text it is made, and two classes unified into one belong to the outer of their scopes.
+
+## Obligations
+
+### Where types are decided
+
+**O1.** What meets within one transparency is a lower bound of the class it meets in (Meetings).
+
+**O2.** Where an argument of a use is passed to a parameter of the signature or the common part made anew at that use (O13), which is parameter passing, and where an expression is committed into a context (context §3), what is recorded is told by the parameter's type, or the context type:
+
+| That type | What is recorded |
+|---|---|
+| a hole | the argument's class is a lower bound of that class |
+| any other type | a class made anew there, the boundary's class, whose lower bound is the class of the argument or of the expression committed, and whose upper bound is that type |
+
+**O3.** A class's head is decided along one of three dimensions (O17): lower, as the join of what enters it (O6); upper, as the head its upper bounds give it (O19); and domain, as its domain's fallback type (O20).
+
+### Classes
+
+**O4.** Solving only adds to a class's records, and makes each of its decisions once.
+
+**O5.** No class is a part of itself, or a part of one of its parts, at any depth (the occurs check, Robinson 1965).
+
+**O6.** Classes that enter one another, at any depth, are one class (cycle elimination, Fähndrich et al. 1998). The head of a class that a lower bound enters is the join of the heads its lower bounds give (Joins).
+**O7.** A structural constraint gives the part it names a class, decides no head, and holds of the head decided, which has every part it names.
+
+**O8.** A class's domain is the intersection of every domain registered in it, and every type where none is. A domain holds at least one type, and holds the head decided for its class and the type fallback gives it.
+
+### Changes
+
+**O9.** A change changes a type's class node and members, and the type of no part below its class node: each such part is one type with the corresponding part of the type the change goes to, and what that records is told by the state of the corresponding part:
+
+| The corresponding part (O13) | What is recorded |
+|---|---|
+| free | the two classes are unified |
+| external | the corresponding part is an upper bound of that part |
+
+**O10.** The one coercion made within a class is the reborrow, where a lower bound reaches its class's head (Lower bounds). Every other coercion, and each auto-conversion, is made at a boundary alone, and an auto-conversion once, after the class node of the boundary's class is decided.
+
+**O11.** No coercion follows a boundary's conversions: the change at a boundary is one stage of coercion followed by one chain of conversions. Exactly one such change goes from the class node of the boundary's class to the upper bound's class node.
+
+**O12.** The parameter of a conversion writes its class node with distinct holes as the parts below the class node. The signatures of the chosen conversions are made anew at the boundary (O13), and their functions are called at the boundary.
+
+### Uses
+
+**O13.** At each use, the signature its candidate writes, or the common part of its candidates, is made anew as classes with maximal sharing: one class for each distinct type it writes, at any depth, so that one type is one class wherever the signature writes it. The class of a hole, and each class the common part puts where the candidates differ, is free; every other class is external, with the head the signature writes. At each use of a context, its context type is made anew in the same way, every class of it external, with the head the host gives; the class of the place `@x` is the one it makes.
+
+**O14.** A use records the common part of its candidates before it is decided, and until then the upper bound of each argument's boundary is the common part of the candidates' parameters. Once the use is decided, the candidate it is decided as is recorded as at a use with that candidate alone (O13, O2): each class of the candidate is unified with the class the common part has in its place, and each boundary with the boundary the argument already has; where the candidate writes a hole as that parameter, the argument's boundary class is a lower bound of the hole's class, as at O2, and no change is made at that boundary.
+
+**O15.** A use is decided as the one candidate that what is decided of its arguments and its result reaches: each argument by a change to the candidate's parameter, and the result by equality to the candidate's result type.
+
+**O16.** A use's result is unified with the class of the result type its candidate writes (O13). No change is made there.
+
+### Solving
+
+**O17.** A class's dimension is lower where a lower bound enters it; upper where none does and its upper bounds, or the use not yet decided of whose common part it is a class, give it a head (Upper bounds); and domain otherwise. Only its dimension decides its head; where that dimension gives no one head, the class waits.
+
+**O18.** Solving records every constraint the text gives as soon as it is given, on no condition of what has been decided, and settles: it decides the head of each class whose dimension is lower once each of its lower bounds has given its head and each use not yet decided of whose common part it is a class is decided (O6, O14), makes the change at each boundary whose two class nodes are decided (O11), takes the adjustment of each method call's receiver once the receiver's class node is decided (Adjustments), and decides each use with one candidate left (O15), until nothing changes: the fixpoint. The outcome, and what every refusal names, do not depend on the order in which settling takes its steps.
+
+**O19.** At the fixpoint, each class with no head whose dimension is upper takes the head its upper bounds give it (Upper bounds), where there is one, all at once. Where a class takes one, solving returns to settling.
+
+**O20.** Where O19 gives no class a head, each class with no head whose dimension is domain takes the fallback type of the least domain in Domains that contains its domain, all at once. Where a class takes one, solving returns to settling.
+
+**O21.** Solving ends where neither O19 nor O20 gives a class a head. A class with no head, and a use not decided, when solving ends are refused (O22).
+
+**O22.** A program is refused wherever a rule fails, at what registered the constraints it fails on (Constraints).
+
+### References
+
+**O23.** No type has a reference directly as its target; the parts inside a target are not subject to this, the argument of `&N⟨&U⟩` for example. A lend `&ₘ p` gives a reference whose target is the place's type with the references above it taken off, and whose mutability is exclusive where `m` and every reference taken off are exclusive, and shared otherwise.
+
+**O24.** Each lower bound records the coercion it takes (Lower bounds), and each projection and each method call's receiver records the adjustment it takes (Adjustments).
+
+### Error
+
+**O25.** `Error` is a keyword, the language's enum, and its variants are made only by `?`. What `e?` puts into the result's error is told by the error type `E` it exits with:
+
+| `E` | What enters the result's error |
+|---|---|
+| a type of a name `N`: an enum, a struct, an extern-defined type | an `Error` with the one variant `N(E)` |
+| an `Error` | that `Error`, whose variants are united with the result's, side by side |
+| a type with no name, `i32` for example | `Error⟨E⟩`, which has no variant |
+
+`Error⟨E⟩` and an `Error` with variants have different constructors, and the variants of one `Error` have different names.
+
+### Other bodies
+
+**O26.** At recording, each use of another body records an instance of that body at the use: the classes of the body's own text are made anew, and every other class its text names is that same class. The instance's parameter and result classes are unified with the use's arguments and result.
+
+**O27.** A use that lies in the binding group of the body it reaches, or in an instance of that body, records no instance, and takes the classes of that body's text, or of the instance it lies in.
+
+### Brand types
+
+**O28.** A type is branded by at most one brand type, and two different brand types are never made one. A brand type in the result of a declaration or a body that no parameter's type is branded by is made anew, as a free class, at each use, in the scope the use lies in. A brand type does not leave the scope it is made in: a program is refused where a class outside that scope would be branded by it (the skolem escape check, Läufer & Odersky 1994).
+
+### Function values
+
+**O29.** A lambda expression gives its class a lower bound: a function value type whose one member is the closure of that lambda (Lower bounds).
+
+**O30.** A use of a function value is a Call constraint on a class, or an external function type given a class as an upper bound (Upper bounds). For each closure that enters the class and each use on it, the instance of O26 is recorded, whose captures are the classes the closure holds, and whose parameter and result classes are unified with the Call's arguments and result, or with the function type's parameters and result. The head decided for a class has, at each use on it, an instance of each of its members.
+
+**O31.** The text of a free fn, a method or a lambda is recorded once more, with every class it names made anew, and only settled (O18).
+
+## Consequences
+
+Each statement below follows from the obligations it names, and is no rule of its own.
+
+- **Upper bounds decide only a class that no lower bound enters** (O9, O17, O19). A part that a lower bound enters must satisfy its upper bound, the corresponding external part, and a part that none enters takes the head its upper bounds give at the fixpoint. So `take(Some(&mut x))` with `take(Option⟨&T⟩)` is refused at `take`'s argument: the payload's head is `&mut`, from `&mut x`, and no change alters a part.
+- **No coercion follows a conversion** (O11). An argument of type `&mut Vec⟨u8⟩` passed to a parameter of type `&[u8]` goes by `&mut → &` and then `as_slice`; `as_slice_mut` ends at `&mut [u8]`, and no coercion follows it.
+- **Within a class, the heads joined are of one head class** (O6, O10, Joins). Apart from `!`, which every join absorbs, the join is of heads of one head class, and conversions are made at a boundary alone, so lower bounds of two head classes in one class are refused there (O22).
+- **The reborrow is the coercion a lower bound takes** (O6, O10). In `if c { &mut x } else { &y }`, the join of the two heads is the shared reference, and the lower bound `&mut x` reaches it at its own place by the reborrow, which it records.
+- **A value that meets in a place keeps its own class** (O1, O10). It is a lower bound of the place's class, so the place's class is the join of what meets there, and the value reaches that join at its own place, by the reborrow where it is an exclusive reference and the join is shared; its own class is unchanged.
+- **A branch that does not complete leaves its `if` the other branch's head** (O1, O6, Joins). `return e` gives `!`, the least head, and the join of `!` with a head is that head.
+- **A class of the common part of a use not yet decided joins what enters it only once the use is decided** (O14, O18). The decision unifies it with the class its candidate writes, and, where that candidate writes a hole as a parameter, makes the argument's boundary class a lower bound of it, so what enters it before the decision is not all that will enter it. So where a candidate writes one hole at a parameter and at the result, what enters the result's class does not decide the use (O15).
+- **A class that no lower bound enters takes the head its upper bounds give before any fallback** (O17, O19, O20). The class of a literal passed to a boundary with `u8` has that `u8` among its upper bounds, so its dimension is upper and it takes `u8` at the fixpoint; fallback gives `i32` only to a literal's class that no upper bound gives a head.
+- **The heads a class may take are the heads the program gives** (O6, O19, O20, Upper bounds). A join is of heads lower bounds give, the head of a class's upper bounds is one they give, and a fallback type is one the Domains table gives; so a class takes from its upper bounds only a head one of them gives, and never a type that only a conversion goes from, or `!` where none of them gives it.
+- **`!` holds no structural constraint** (O7, O20, O22). Fallback gives `!` to a class whose domain is every type; `!` has no part, so no structural constraint holds of it, and a class with a structural constraint that falls back to `!` is refused. There are no higher-kinded types: in `Option⟨?k⟩`, `?k` may be `!`, and `Option` may not.
+- **The signature's sharing is the type's equality** (O13). A class is one type and equality is structural, so one type is one class wherever a signature writes it: in `x(T) -> T` the parameter and the result are the one class `T`, and in `pop(&mut Vec⟨T⟩) -> Option⟨T⟩` the parameter and the result are two classes sharing the part `T`. A hole is one class wherever it is written, and the common part's one class for one difference is the same sharing.
+- **Settling is order-independent** (O4, O6, O8, O17, O18, O26, O30). A class whose dimension is lower takes its head only once each of its lower bounds has given its head; a domain only narrows; candidates only decrease; a class node is decided once; and what upper bounds give and fallback are taken only at the fixpoint, for every class at once (O19, O20). Settling is a monotone operator on the records, and every fair order of its steps reaches the same fixpoint (chaotic iteration, Cousot and Cousot 1977). This is what makes the last sentence of O18 attainable.
+- **Instances are made at recording** (O18, O26). An instance unifies its parameters with the use's arguments, and its text may add a lower bound to an argument's class, as `|x| x = &b` does. Were an instance recorded after a decision, that class's head could be decided before the lower bound is added, and the outcome would depend on the order. So every instance is recorded at recording.
+- **A lambda's captures are the enclosing body's classes** (O26, O30). Every instance of a closure names the same classes for its captures, as the substitution of a let-bound term at each use keeps its free variables bound to the enclosing binders (Pierce, TAPL §22.7). A capture written by a lambda is decided with every instance's writes, and a lambda waits for no capture.
+- **A closure that only a decision lets enter a class is refused at its uses** (O14, O22, O30). A closure entering through the rest of a decided candidate has no instance recorded, so the head decided does not satisfy O30.
+- **A lambda's own text is checked once** (O31). Its refusals that depend on no use and no capture are found once. Its parameters and captures are left to its instances: the recording makes them anew, so it writes into no class of the enclosing body, and it is only settled (O18), so what decides them there is only what enters them.
+- **Polymorphic recursion is not admitted** (O27). A recursion that changes its parameters' types (Mycroft 1984) unifies them in the body's own types, and a lambda reached within its own instance takes that instance's classes, so recording ends.
+- **A context type never changes** (O2, O4, O6, O9, O13, O22). Every class of it has the head the host gives, and a head is decided once (O4). What is committed into a context reaches its context type by the change at a boundary (O2, O11), a lower bound of one of its classes is joined into that class's head (O6), and no change alters a part below a class node (O9), so a lend of a context reaches no other target. Anything else is refused (O22).
 
 ## Examples
 
 Below, `c` is a `bool`, and a function whose signature is in a comment is an extern declaration.
 
-### 1. An if with information on one side
+### 1. A literal and a `u32` in one `if` (O1, O6, O8, O19)
+
+```
+let a = 1u32;
+let b = if c { a } else { 10 };
+```
+
+Outcome: `a`, `b` and `10` are `u32`. The class of `a` and the class of `10` meet in the `if`'s class, which enters `b`'s class. The class of `10` has no lower bound, and its domain is the integer types that hold `10`; its upper bound, the `if`'s class, gives it `u32`, the join of what has entered it, so at the fixpoint it takes `u32`, which lies in that domain. The `if`'s class and `b`'s are then `u32`.
+
+### 2. An `if` with information on one side (O1, O6)
 
 ```
 let a = if c { Some(1u8) } else { None };
 ```
 
-Outcome: `a` is `Option⟨u8⟩`.
+Outcome: `a` is `Option⟨u8⟩`. The lower bounds `Some(1u8)` and `None` both have the constructor `Option`, and their payloads are unified with the class's payload. The payload's one lower bound is `u8`.
 
-1. The values of both branches meet `a`'s equivalence class `A`, recording `A ≥ Option⟨S⟩` and `A ≥ Option⟨?k⟩`. `S` is the payload `Some` makes anew, with `S ≥ u8`, and `?k` is the payload `None` makes anew, with no relation.
-2. Both lower bounds are solved with the constructor `Option`, so `A` takes `Option`, and its payload `P` records the part lower bounds `S ≤ₚ P` and `?k ≤ₚ P`.
-3. `S` is `u8`, and nothing enters `?k`, so it gives nothing, and `P = u8`. `?k` is filled with the `u8` of `P`, the place it passes into.
+### 3. A reborrow within a class (O6, O10, O24)
 
-### 2. A part a boundary fills
+```
+let r = if c { &mut x } else { &y };
+```
+
+Outcome: `r` is a `&`, and the lower bound `&mut x` records the reborrow.
+
+### 4. A part a boundary decides (O2, O9, O13, O18, O19)
 
 ```
 let a = Vec::new();      // new() -> Vec⟨T⟩
@@ -375,56 +379,105 @@ fill_all(&mut a);        // fill_all(&mut Vec⟨u8⟩)
 
 Outcome: `a` is `Vec⟨u8⟩`.
 
-1. `new`'s `T` is an unknown `?t` made anew at this use, and `A ≥ Vec⟨?t⟩` is recorded.
-2. `&mut a` gives a `&mut` whose target is `A`. Its value passes into `&mut Vec⟨u8⟩`, which the declaration gives, so it is a boundary.
-3. Splitting the boundary, the target's side `Vec⟨u8⟩` is not an unknown, so the boundary `A ⇝ Vec⟨u8⟩` is recorded. When `A` takes `Vec` by its lower bound, `Vec`'s argument is invariant, so at the lower bound an equation makes `A`'s part one with `?t`, and at this boundary `u8` is not an unknown, so the boundary `?t ⇝ u8` is recorded.
-4. Nothing enters `?t`, so it is filled with the `u8` of the place it passes into. `A` is `Vec⟨u8⟩`.
+1. `new`'s `T` is `?0`, and `a`'s class is `Vec⟨?0⟩`.
+2. The boundary's class node is `(&mut, Vec)`, and so is its upper bound's. Settling makes the empty change, and the part `?0` has the upper bound `u8`.
+3. No lower bound enters `?0`, and its upper bound gives it `u8`, so its dimension is upper, and at the fixpoint it takes `u8`.
 
-### 3. A type a boundary writes decides no value
+### 5. A conversion through a hole (O11, O12, O19)
 
 ```
-let mut buf = Vec::new();
-push(&mut buf, 1u16);    // push(&mut Vec⟨T⟩, T)
-consume(buf);            // consume(Vec⟨u8⟩)
+let v = Vec::new();      // new() -> Vec⟨T⟩
+sum(&v);                 // sum(&[u8]); a conversion as_slice: &Vec⟨T⟩ → &[T]
 ```
 
-Outcome: refused. `buf` is `Vec⟨u16⟩`, and at `consume(buf)` `Vec⟨u16⟩` does not reach `Vec⟨u8⟩`. Even with a declared conversion `u16 → u8`, it is not used at a part.
+Outcome: `v` is `Vec⟨u8⟩`.
 
-1. As in 2, `B ≥ Vec⟨?t⟩`.
-2. `push`'s `T` is a new unknown `?T`. The first argument is the boundary `&mut B ⇝ &mut Vec⟨?T⟩`; splitting it records the boundary `B ⇝ Vec⟨?T⟩`, and splitting that, `?T` is an unknown, so the equation `?t = ?T` is recorded. The second argument passes into the unknown `?T`, so it is a meeting: `?T ≥ u16`.
-3. `consume(buf)` is the boundary `B ⇝ Vec⟨u8⟩`; splitting it, `u8` is not an unknown, so the boundary `?t ⇝ u8` is recorded.
-4. `u16` enters `?t`, which is `?T`, so its value is `u16`. The `u8` the boundary writes decides no value.
-5. `B` is `Vec⟨u16⟩`. At `consume`'s argument, no coercion changes `Vec⟨u16⟩` into `Vec⟨u8⟩`, so it is refused.
+1. `v`'s class is `Vec⟨?0⟩`. The boundary's class node is `(&, Vec)`, and its upper bound's `(&, [])`.
+2. One change goes between the two class nodes: no coercion, then `as_slice`. Its `T` is made anew as `?t`.
+3. On the parameter's side `?0` and `?t` are one type and are unified; on the result's side `&[?t]` corresponds to `&[u8]`, so `?t` has the upper bound `u8`, which gives it `u8` at the fixpoint.
 
-### 4. An empty part passing into two places
+### 6. A boundary does not change what enters a part (O2, O9, O17, O22)
+
+```
+let mut buf = Vec::new();   // new() -> Vec⟨T⟩
+push(&mut buf, 1u16);       // push(&mut Vec⟨T⟩, T)
+consume(buf);               // consume(Vec⟨u8⟩)
+```
+
+Outcome: refused at `consume`'s argument.
+
+1. `buf` is `Vec⟨?t⟩`, and `push`'s `T` is `?T`.
+2. At the first argument, the two class nodes are `(&mut, Vec)`, so `?t` and `?T` are unified. The second argument is passed to a parameter whose type is `T`, the free class `?T`, so `u16` is a lower bound of `?T`, and `?T` is `u16`.
+3. At `consume`, the class nodes are `Vec` on both sides, and the part `?t`, which what enters it decided as `u16`, does not satisfy its upper bound `u8`.
+
+### 7. Upper bounds reached through a reference (O3, O19)
+
+```
+let a;
+g(&a);                   // g(&[u8])
+h(&a);                   // h(&Vec⟨u8⟩); a conversion as_slice: &Vec⟨T⟩ → &[T]
+```
+
+Outcome: `a` is `Vec⟨u8⟩`.
+
+1. No lower bound enters `a`'s class, so neither boundary's class node is decided, and settling reaches its fixpoint.
+2. `a`'s class is the target of both boundaries' references, so their upper bounds, `&[u8]` and `&Vec⟨u8⟩`, are its upper bounds, and its dimension is upper. What of the two class nodes is decided is `&`, and for the target's constructor the upper bounds give `[]` and `Vec`. From `(&, Vec)` a change goes to both; from `(&, [])` none goes to `&Vec⟨u8⟩`. So the head they give `a`'s class is `Vec`, and it takes `Vec`.
+3. Solving returns to settling, and the two boundaries proceed as in 4 and 5.
+
+### 8. Upper bounds that give no one head (O19, O21)
+
+```
+let a;
+g(&a);                   // g(&[u8])
+k(&a);                   // k(&str)
+```
+
+Outcome: refused at `a`, with the two boundaries. For the target's constructor the upper bounds give `[]` and `str`, and no change goes between the two, so they give it no one head, and `a`'s class has no head when solving ends.
+
+### 9. A literal passed to a boundary (O8, O17, O19)
+
+```
+let x = 0;
+take(x);                 // take(u8)
+```
+
+Outcome: `x` is `u8`. The class of `0` has no lower bound, and its domain is the integer types that hold `0`. It enters `x`'s class, which enters the boundary's class, whose upper bound is `u8`; so its upper bounds give it `u8`, and its dimension is upper. At the fixpoint it takes `u8`, which lies in that domain, and `x`'s class and the boundary's class are then `u8`, as joins.
+
+### 10. A structural constraint with nothing that gives a head (O7, O20, O22)
+
+```
+let a;
+a.x = 0;
+```
+
+Outcome: refused at `a.x`. The structural constraint "has field `x`" gives no head, and `a`'s class has no lower bound and no upper bound, so its dimension is domain. Its domain is every type, so fallback gives it `!`, of which the structural constraint does not hold.
+
+### 11. A payload nothing enters (O20)
 
 ```
 let x = None;
-let y = if c { x } else { Some(1u16) };
-take(x);                 // take(Option⟨u8⟩)
 ```
 
-Outcome: refused. `y` is `Option⟨u16⟩`, and `x`'s payload is not filled, since the places it passes into give `u16` and `u8`.
+Outcome: `x` is `Option⟨!⟩`. The payload's class has no lower bound and no upper bound, so its dimension is domain, and its domain is every type, so it falls back to `!`.
 
-1. `X ≥ Option⟨?k⟩`, `Y ≥ X`, `Y ≥ Option⟨S⟩` and `S ≥ u16`.
-2. When `X` takes `Option`, its payload `P` records the part lower bound `?k ≤ₚ P`. `take(x)` is the boundary `X ⇝ Option⟨u8⟩`; splitting it, `u8` is not an unknown, so the boundary `P ⇝ u8` is recorded.
-3. When `Y` takes `Option`, its payload `Q` records the part lower bounds `P ≤ₚ Q` and `S ≤ₚ Q`. Nothing enters `?k` and `P`, so they give nothing, and `Q` is `u16`.
-4. The places `P` passes into are `Q` and `take`'s `u8`, and their values `u16` and `u8` are not one type. So `P` has no value, and it is refused.
-
-### 5. A lower bound reaching a part of its own
+### 12. A part whose head what enters it decides, at a boundary (O9, O17, O22)
 
 ```
-let mut x = None;
-x = Some(x);
+take(Some(&mut x));      // take(Option⟨&T⟩)
 ```
 
-Outcome: refused.
+Outcome: refused at `take`'s argument. The payload's head is `&mut`, from `&mut x`; the change at the boundary between the two `Option` class nodes is empty, and alters no part, so the payload does not satisfy its upper bound `&T`.
 
-1. `X ≥ Option⟨?k⟩`, and `Some(x)` is an `Option⟨S⟩` with a new payload `S` and `S ≥ X`, so `X ≥ Option⟨S⟩`.
-2. When `X` takes `Option`, its payload `P` records the part lower bounds `?k ≤ₚ P` and `S ≤ₚ P`.
-3. `X` reaches `P` along a part, `P` reaches `S` along a part lower bound, and `S` reaches `X` again along a lower bound. `X` appears again inside a part of its own, so no finite type holds it, and it is refused.
+### 13. A coercion before a conversion (O11)
 
-### 6. A capture written by name
+```
+let mut v = bytes();     // bytes() -> Vec⟨u8⟩
+sum(&mut v);             // sum(&[u8]); conversions as_slice: &Vec⟨T⟩ → &[T], as_slice_mut: &mut Vec⟨T⟩ → &mut [T]
+```
+
+Outcome: accepted, by `&mut → &` and then `as_slice`, the one change from `(&mut, Vec)` to `(&, [])`.
+
+### 14. A capture its lambda writes (O26, O29, O30)
 
 ```
 let mut last = None;
@@ -434,155 +487,120 @@ remember(1u8);
 
 Outcome: `last` is `Option⟨u8⟩`.
 
-1. `L ≥ Option⟨?k⟩`.
-2. `last = Some(x)` names the capture `L`, and `x`'s type `X` is joined to it through `Some(x)`'s payload `S` and `S ≥ X`, so these are the lambda's environment and the enclosing binding group's (Facts). `X` is not universal but an unknown of that binding group. `last` is reached by name and `L` is an unknown of that binding group, so the write is a meeting: `L ≥ Option⟨S⟩` with `S ≥ X`. The generic part keeps the result's `()` alone.
-3. `remember(1u8)` calls a function value whose Values is this lambda alone, so it makes an instance. `X` is in the environment, so the argument meets `X` itself: `X ≥ u8`. Nothing is left in the generic part's C, so the copy adds nothing.
-4. `L`'s payload `P` records the part lower bounds `?k ≤ₚ P` and `S ≤ₚ P`. `S`'s only lower bound is `X`, and `X = u8`, so `S = u8`; `?k` gives nothing, so `P = u8`.
+1. The closure of the lambda enters the class of `remember`, and the call is a Call constraint on that class.
+2. At recording, the call records an instance: `x` is made anew as `x'` and unified with the class of `1u8`, and `last` is the class of `last` itself.
+3. The instance's `last = Some(x')` is a meeting at the call, so `Some(x')` is a lower bound of `last`'s class, with `None`. The class's constructor is `Option`, and its payload has the lower bound `u8`.
 
-### 7. A write through a reference
+### 15. One capture, two types (O6, O22, O26, O30)
 
 ```
-let mut x = None;
-let r = &mut x;
-*r = Some(1u8);
+let mut last = None;
+let remember = |x| last = Some(x);
+remember(1u8);
+remember(1u16);
 ```
 
-Outcome: `x` is `Option⟨u8⟩`.
+Outcome: refused. The two instances put `u8` and `u16` into the one payload of `last`, and no coercion relates them.
 
-1. `X ≥ Option⟨?k⟩`. `X` is not a reference, so `r`'s type is a `&mut` whose target is `X`.
-2. `*r`'s type is `r`'s target, `X`. The write lies in the same binding group and `X` is its unknown, so it is a meeting: `X ≥ Option⟨S⟩` with `S ≥ u8`.
-3. `X`'s payload records `?k` and `S` as part lower bounds. `S` is `u8` and `?k` gives nothing, so the payload is `u8`.
+### 16. A lambda never used (O20, O31)
 
-The same write made inside a lambda through a captured `r` is a boundary: although `X` is an unknown of the enclosing binding group, the place is reached through a reference.
+```
+let mut last = None;
+let remember = |x| last = Some(x);
+```
 
-### 8. Kinds and visibility
+Outcome: `last` is `Option⟨!⟩`. No instance is recorded, and the text's own recording makes every class it names anew and is only settled. The payload of `last` has no lower bound and no upper bound, so it falls back to `!`.
+
+### 17. A closure that only a decision lets enter (O13, O14, O22, O30)
+
+```
+choose(|x| x, 1u8)(2u8); // choose(F, u8) -> F, choose(u8, F) -> F
+```
+
+Outcome: refused at the call of the result. The common part is `choose(?a, ?b) -> ?c`, with three classes, so at recording no closure enters `?c` and the call records no instance. The use of `choose` is decided as the first candidate, whose rest unifies `?c` with the class the closure enters, and the head decided for `?c` then has a member with no instance at the call.
+
+### 18. A literal passed to overloaded candidates (O14, O19)
+
+```
+let y = pick(0);         // pick(i32) -> i32, pick(String) -> String
+```
+
+Outcome: `y` is `i32`.
+
+1. The common part is `pick(?a) -> ?a`, and `?a`, the use's result, enters `y`'s class. The argument's boundary class has the lower bound `X`, the class of `0`, and the upper bound `?a`.
+2. Nothing enters `X` or `?a`. The use, not yet decided, gives `?a` the heads the candidates write in its place, `i32` and `String`, and `?a` gives them to `X` through the boundary's class node. Settling reaches its fixpoint.
+3. Of `i32` and `String`, `i32` alone lies in `X`'s domain, the integer types that hold `0`, so `X` takes `i32`. `?a` is given two, and waits.
+4. Solving returns to settling: the boundary's class is `i32`, the argument reaches `pick(i32)` alone, the use is decided, and `?a` and `y` are `i32`.
+
+### 19. Two candidates in one domain (O17, O21)
+
+```
+let y = pick(0);         // pick(i32) -> i32, pick(u8) -> u8
+```
+
+Outcome: refused at `0`, at `y` and at the use. `?a` gives `i32` and `u8`, both in the integer types, and no change goes between the two, so the upper bounds of the class of `0` give it no one head. Its dimension is upper, and only that dimension decides it (O17), so fallback, which would give `i32`, does not reach it. When solving ends, the class of `0`, the boundary's class, `?a` and `y`'s class have no head, and the use is not decided.
+
+### 20. A head that another class's upper bounds settle (O19, O21)
+
+```
+let y;
+take(y);                 // take(u8)
+pick2(0, y);             // pick2(i32, i32), pick2(u8, u8)
+```
+
+Outcome: `y` and `0` are `u8`.
+
+1. The common part is `pick2(?a, ?a)`, and settling reaches its fixpoint with no head decided.
+2. `y`'s class has the upper bounds `u8`, from `take`, and `?a`, which gives `i32` and `u8`; `u8` alone goes to both, so `y`'s class takes `u8`. At the same time the class of `0` has `i32` and `u8` from `?a`, both in its domain, and waits.
+3. Settling decides the use as `pick2(u8, u8)`, the one candidate `y` reaches, and `?a` is `u8`.
+4. At the next fixpoint the class of `0` takes `u8`. Were a class refused where its upper bounds give it no one head at one fixpoint, this program would be refused at step 2.
+
+### 21. A literal passed to a hole with a typed argument (O6, O19)
+
+```
+f(0, 1u8);               // f(T, T)
+```
+
+Outcome: `T` and `0` are `u8`. `T`'s lower bounds are the classes of `0` and of `1u8`, and its head waits for both. The class of `1u8` gives `u8`. The class of `0` has no lower bound, and its upper bound `T` gives it `u8`, the join of what has entered `T`, which lies in its domain; so at the fixpoint it takes `u8`, and `T`'s head is then `u8`.
+
+### 22. Literals passed to a hole alone (O17, O20)
+
+```
+f(0, 1);                 // f(T, T)
+```
+
+Outcome: `T`, `0` and `1` are `i32`. The classes of `0` and `1` have no lower bound, and their upper bound `T` gives them no head, as no head has entered it; so their dimension is domain, and they fall back to `i32`. `T`'s head is then their join, `i32`.
+
+### 23. Fallback after what upper bounds give (O20)
 
 ```
 let a;
-a.x = 0;
+if let Some(v) = a {}
+take(a);                 // take(Option⟨u8⟩)
 ```
 
-Outcome: `a` is `{x: i32}`.
+Outcome: `v` is `u8`.
 
-1. The projection `a.x` gives `A` the kind "has field `x: τ`", and the write is `τ ≥ ?{0}`.
-2. `A`'s only source is the kind, so `A` takes the object, the constructor of the member it names, and is `{x: τ}`.
-3. `τ` has only a LitVar, so fallback makes it `i32`.
+1. `a`'s class has the structural constraint "has variant `Some` with payload `τ`", where `τ` is `v`'s class, and no lower bound. It enters the boundary's class, whose upper bound `Option⟨u8⟩` gives it `Option`, so its dimension is upper. `τ` has no lower bound and no upper bound yet.
+2. At the fixpoint `a`'s class takes `Option`. Solving returns to settling before any fallback: the boundary's class, as its join, is `Option`, the change is empty, and the payload, which is `τ`, has the upper bound `u8`.
+3. At the next fixpoint `τ` takes `u8`. Were fallback taken with what upper bounds give, `τ` would be `!`, and refused at its upper bound.
 
-```
-@cfg.extra = 1;          // @cfg is { name }, given by the host
-```
-
-Outcome: refused. `@cfg`'s members are written by the host and are not visible, so the kind "has field `extra`" adds no member. No type has the conjunction of `{name}` and that kind.
+### 24. A branch that does not complete (O1, O6)
 
 ```
-if let Ok(v) = Some(1u8) { }
+let a = if c { return 0u8 } else { 1u8 };
 ```
 
-Outcome: refused. `Option`'s members are written by the language and are not visible, so the kind "has variant `Ok` with payload `τ`" adds no member.
+Outcome: `a` is `u8`. `return 0u8` gives the `if`'s class the lower bound `!`, and `1u8` gives it `u8`; their join is `u8`, as `!` is the least head (Joins). Were `!` a head class of its own, the two would be a type mismatch.
 
-### 9. A lend that reborrows a reference
-
-```
-let mut v = Vec::new();
-let r = &mut v;
-let s = &r;
-```
-
-Outcome: `s` is a `&` whose target is `v`'s equivalence class.
-
-1. `r`'s type is a `&mut` whose target is `V`.
-2. `&r` lends the place `r`. Its equivalence class is the reference `&mut V`, so the target is `V`, and the mutability the lesser of shared and exclusive, shared.
-
-### 10. Recursion by name
+### 25. A value that meets in a place keeps its own class (O1, O10)
 
 ```
-fn g(a, b) { g(b, a) }
+let mut x = 1u8;
+let y = 2u8;
+let p = &mut x;
+let r = if c { p } else { &y };
+touch(p);                // touch(&mut u8)
 ```
 
-```
-g(1u8, "s")
-```
-
-Outcome: refused at the recursive call inside the instance of `g(1u8, "s")`.
-
-1. `g`'s recursive call is a call within its binding group, so it makes no instance and takes `g`'s own types. The parameters' types `A` and `B` are universal, not unknowns, so where the arguments pass into them are boundaries: `B ⇝ A` and `A ⇝ B`. Both rest on universals and stay in `g`'s C.
-2. `g(1u8, "s")` is a call from another binding group, so it makes an instance. `A'` and `B'` are new unknowns that the arguments meet: `A' = u8` and `B' = &str`.
-3. The copied boundary `&str ⇝ u8` has neither a composition nor a declared conversion that reaches it, and it is refused.
-
-Recursion within one binding group makes no new instance, so a recursion that swaps its parameters' types is not admitted.
-
-### 11. Identity
-
-```
-let a = open();                     // open() -> F⟨new⟩; a cast from F to G, which carries no identity, is declared
-at(&a, index_of(&a));               // index_of(&F⟨p⟩) -> Idx⟨p⟩, at(&F⟨p⟩, Idx⟨p⟩)
-let b = if c { open() } else { a };
-let mut v = Vec::new();
-while c { push(&mut v, open()); }   // push(&mut Vec⟨T⟩, T)
-```
-
-Outcome: the second line is admitted with one identity, `b` is `G`, and the `push` is refused. Without the cast to `G`, `let b` is refused too.
-
-1. The identity `ι₀` the first `open()` makes belongs to this body's execution, and `a: F⟨ι₀⟩` is at the same level.
-2. `index_of`'s `p` is a new unknown of this use. Splitting the boundary where `&F⟨ι₀⟩` passes into `&F⟨p⟩`, the identity `p` is an unknown, so an equation makes it `ι₀`, and the result is `Idx⟨ι₀⟩`. `at`'s `p` fits as the one `ι₀` too.
-3. The `if`'s result `B` records `F⟨ι₁⟩` and `F⟨ι₀⟩` as lower bounds. `B` holds no two different identities, so its value is their nearest common ancestor that carries no identity, `G`, and each value is cast to `G`.
-4. The `ι₂` the `open()` in the loop makes belongs to its iteration. `push`'s `T` arises at this use, but splitting the boundary into `&mut Vec⟨T⟩`, `T` is an unknown, so an equation merges it with `v`'s element, and it has the shallower, outer level. That equivalence class holds no deeper `ι₂`, so the value of `open()` is refused there.
-
-### 12. Accumulation that starts from a literal
-
-```
-let mut x = 0;
-let mut y = 1u16;
-while c {
-    x = x + y;
-    y = y + 1;
-}
-```
-
-Outcome: `x`, `y` and both literals are `u16`.
-
-1. `X ≥ ?a`, `X ≥ R₁`, `Y ≥ u16` and `Y ≥ R₂` are recorded. `?a` and `?b` are the LitVars of `0` and `1`, and `R₁` and `R₂` the results of `x + y` and `y + 1`.
-2. `x + y` is a use of `core::add(&x, &y)`, and its candidates, the impls of `add<T, O>(&T, &T) -> O`, differ alike at both parameters, so the common part puts one unknown at both. `&x` and `&y` meet in it, so its split links `X` and `Y`, the targets of the two references, by an equation; `y + 1` likewise links `Y` and `?b`. So `X`, `Y`, `?a` and `?b` are one equivalence class.
-3. Both uses record relations into that class and read it, so each transitively depends on the other, and the value each reads has the relations of neither. In that value the class is `u16`, the join of the text's `u16` and the LitVars, and `R₁` and `R₂` have no relation. Each lend reads only whether its place is a reference, and since none of `add`'s candidates records a reference into that class, `R₁` or `R₂`, it does not depend on the two uses, and decides that its place is not a reference.
-4. In both uses that class's position is `u16`, so `u16`'s `add` remains for each.
-5. Recording the two decided `add`s, `R₁` and `R₂` take the result type `u16`, and the class's LitVars `?a` and `?b` are unified with `u16`.
-
-### 13. An overload chosen by its result
-
-```
-fill_all(&mut parse(s));     // two declarations, parse(&str) -> Vec⟨u8⟩ and parse(&str) -> Vec⟨u16⟩; fill_all(&mut Vec⟨u8⟩)
-let _ = &mut parse(s);
-```
-
-Outcome: the first line's `parse` is `→ Vec⟨u8⟩`, and the second line is refused.
-
-1. The result `Vec⟨?0⟩` of `parse`'s two candidates' common part is recorded at once as a lower bound of `R`, so `R` is not a reference, and what `parse` has yet to record is only what it records into `?0`. So the first line's lend does not depend on `parse`, and takes `R` as its target. That reference passes into `&mut Vec⟨u8⟩`, which the declaration gives, so it is a boundary; splitting it, `Vec⟨u8⟩` is not an unknown, so the boundary `R ⇝ Vec⟨u8⟩` is recorded.
-2. The two candidates do not differ by their arguments, so they are narrowed by the result. In the value `parse` reads, nothing enters `R`, so `R` is filled with the `Vec⟨u8⟩` of the place it passes into. Only `→ Vec⟨u8⟩` reaches it.
-3. In the second line, the value of `R` that `parse` reads decides nothing. Both candidates remain, and the call is refused.
-
-### 14. A struct, and recursion that grows
-
-```
-struct Pair { l, r }
-impl Pair {
-    fn new(l, r) { Self { l, r } }
-    fn swap(self) { Self { l: self.r, r: self.l } }
-    fn nest(self, n) { if n == 0 { 0u8 } else { Self { l: self, r: 0u8 }.nest(n - 1) } }
-}
-```
-
-```
-let p = Pair::new(1u8, "s");
-let q = p.swap();
-q.nest(3)
-```
-
-Below, `Pair⟨A, B⟩` is the `Self` whose fields `l` and `r` are of types `A` and `B`.
-
-Outcome: `p` is `Pair⟨u8, &str⟩` and `q` is `Pair⟨&str, u8⟩`, and `q.nest(3)` is refused at the recursive call inside its instance.
-
-1. In `new`, `Self { l, r }` makes a `Pair⟨P, Q⟩` whose parts are new equivalence classes `P` and `Q`, with `P ≥ L` and `Q ≥ R`. `L` and `R` are parameters' types, universal, so these stay in C. In the instance of `Pair::new(1u8, "s")` their copies meet the arguments, so `p` is `Pair⟨u8, &str⟩`.
-2. `swap`'s receiver carries the kind `Pair⟨A, B⟩`, and `self.r` and `self.l` are the parts `B` and `A`. So its result is a `Pair⟨P, Q⟩` with `P ≥ B` and `Q ≥ A`. Splitting the boundary where `p.swap()` passes `p` into the receiver, the copies of `A` and `B` are unknowns, so equations make them `u8` and `&str`, and `q` is `Pair⟨&str, u8⟩`.
-3. `nest`'s recursive call is a call within its binding group, so it makes no instance. Its receiver `Self { l: self, r: 0u8 }` is a `Pair⟨P, Q⟩` with `P ≥ Pair⟨A, B⟩` and `Q ≥ u8`. Where this value passes into the receiver `Pair⟨A, B⟩` is a boundary; splitting it, `A` and `B` are universals, so the boundaries `P ⇝ A` and `Q ⇝ B` are recorded. `P` is `Pair⟨A, B⟩` by its lower bound and `Q` is `u8`, and since both boundaries rest on universals, they stay in C.
-4. In the instance of `q.nest(3)`, the copies of `A` and `B` are `&str` and `u8`. `n == 0` and `n - 1` keep several candidates, and the values they read hold LitVars, so the LitVars are taken as the default `i32` and both narrow to `i32`.
-5. In the copy of C, the boundary `Pair⟨&str, u8⟩ ⇝ &str` is reached by neither a composition nor a declared conversion. So it is refused at that recursive call.
+Outcome: accepted; `r` is `&u8`, and `p` is `&mut u8`. `p`'s class meets in the `if`'s class with `&y`, so the `if`'s class is their join, the shared reference, and `p`'s class reaches it at its own place by the reborrow. `p`'s class itself stays `&mut u8`, so `touch(p)` goes by the empty change. Were what meets unified into one class, `p` would be `&u8`, and refused at `touch`.

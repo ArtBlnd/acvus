@@ -10,7 +10,7 @@ Compile cost is polynomial in the size of the program. A type the program builds
 
 ## 3. Types
 
-A pass keeps types, the identity of an extern-defined type included. A pass that rebuilds a value of such a type as a structural one erases what a backend needs, and it is a defect.
+A pass keeps types, the brand type of an extern-defined type included. A pass that rebuilds a value of such a type as a value of a transparent type erases what a backend needs, and it is a defect.
 
 ## 4. Loops
 

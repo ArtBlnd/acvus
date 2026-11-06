@@ -2,7 +2,7 @@
 
 An extern fn is a declaration. A program knows nothing of an extern fn beyond its declaration.
 
-**The compiler trusts every part of a declaration, absolutely.** Its signature, effect, declared facts (§3), flows, impls and casts are axioms. Nothing checks them against the body behind them, and the compiler builds on them as far as they reach: it reorders, removes, fuses and proves by them. Any behaviour of the body that departs from its declaration, in any part, is undefined behaviour.
+**The compiler trusts every part of a declaration, absolutely.** Its signature, effect, declared facts (§3), flows, impls and conversions are axioms. Nothing checks them against the body behind them, and the compiler builds on them as far as they reach: it reorders, removes, fuses and proves by them. Any behaviour of the body that departs from its declaration, in any part, is undefined behaviour.
 
 An extern fn author therefore carries the compiler's burden. We expect the author to understand the compiler well enough to have written it: what each part of a declaration licenses, and what the compiler will do on the strength of it.
 
@@ -24,7 +24,7 @@ A declaration states whether it has a body that may suspend.
 
 Everything a declaration writes that runs carries an effect, always, since what it runs is unknown: a function type, a closure parameter, and a generic function's signature, at which a required impl is called. An extern-defined type may carry an effect (§8).
 
-An extern fn and an impl each name one effect and one identity among their variables, as they name type variables, and that effect is the effect of everything they write that runs, a closure parameter included, though no variable is written on it. How the effect and the identity of the parameters reach the result is derived from the signature, from where each variable stands: a variable is written as itself, and no alias stands for one. Where the result does not carry the effect, the extern fn or impl must consume it as its own.
+An extern fn and an impl each name one effect and one brand type among their variables, as they name type variables, and that effect is the effect of everything they write that runs, a closure parameter included, though no variable is written on it. How the effect and the brand type of the parameters reach the result is derived from the signature, from where each variable stands: a variable is written as itself, and no alias stands for one. Where the result does not carry the effect, the extern fn or impl must consume it as its own.
 
 ## 3. Declared facts: access, action, source, relation
 
@@ -45,19 +45,19 @@ A function value a call gives, as its result or a part of it, has the flows its 
 
 ## 5. Parameters and overloading
 
-Several declarations may share a name. A call reaches the one its arguments' types decide (types §6).
+Several declarations may share a name. A call of that name is a use whose candidates are those declarations, decided as the one candidate that what is decided of its arguments and its result reaches ([the type system](../transparency-constraint-type-system.md), O15; types §6).
 
 ## 6. Generic functions and impls
 
-A generic function is a name with a signature and no body, so it states nothing a body states: no declared fact and no requirement. Its effect, which it always has, and its identity are type parameters of that signature, as its type variables are; it does nothing without an impl, so it consumes neither. A declaration may be an impl of one; its signature is the generic function's at a choice of its type variables. A call of a generic function is a call of the impl it reaches. A declaration may require impls of generic functions at its own type variables, and may name a declared fact (§3) such an impl must state. A requirement is answered by an impl, so only an impl's requirements lead on to further ones: an impl requires impls only at types smaller than its own, so the requirements a call reaches end and never cycle. A declaration that is no impl is reached by its calls alone; its requirements start a chain and are no link of one.
+A generic function is a name with a signature and no body, so it states nothing a body states: no declared fact and no requirement. Its effect, which it always has, and its brand type are type parameters of that signature, as its type variables are; it does nothing without an impl, so it consumes neither. A declaration may be an impl of one; its signature is the generic function's at a choice of its type variables. A call of a generic function is a call of the impl it reaches. A declaration may require impls of generic functions at its own type variables, and may name a declared fact (§3) such an impl must state. A requirement is answered by an impl, so only an impl's requirements lead on to further ones: an impl requires impls only at types smaller than its own, so the requirements a call reaches end and never cycle. A declaration that is no impl is reached by its calls alone; its requirements start a chain and are no link of one.
 
 ## 7. Conversions
 
-A declaration may be a cast from its parameter's type to its result's type, which is a step up in the tree of types §3, or a conversion, which is no part of that tree; a type may have several conversions (types §7).
+A declaration may be a conversion, a declared function from its parameter's type to its result's type; a type may have several conversions (types §7).
 
 ## 8. Types an extern fn defines
 
-Every type a declaration writes, except a type parameter, is extern-defined, with all its parts, and follows the transparency rule (types §1). An extern-defined type may declare lifetimes; each is a position of its values (ownership §5).
+Every type a declaration writes, except a hole, a type parameter, is external at each use of the declaration, with the head the signature writes; the class of a hole is free (O13; types §1). An extern-defined type may declare lifetimes; each is a position of its values (ownership §5).
 
 An extern-defined type may carry one effect, apart from its type arguments: `T<…> with E`. It bounds from above the effects of the work its values hold, which runs later. A type is covariant in its effect: widening an upper bound moves toward the opaque effect, which is always sound (effects).
 

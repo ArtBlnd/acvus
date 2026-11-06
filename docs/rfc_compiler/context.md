@@ -8,9 +8,9 @@ A program may take a context's value and put a value back.
 
 "Filled" is an invariant wherever the page is seen beyond the program: at every call whose effect may read or write the context, and on every path on which the run ends. Between those points a context may be empty after a take. What a run that traps or does not end leaves in a context is not stated.
 
-## 2. Invariance
+## 2. Opacity
 
-A context's type is invariant by the transparency rule: its uses beyond the program are not visible, so it is never widened or joined, and it equals only itself.
+A body sees a context by its declaration, at the Opaque level, and a context's type is given by the host ([the type system](../transparency-constraint-type-system.md), Transparency). That type is external at every position it is used at (the type system, Type states).
 
 ## 3. Take, lend, and commit
 
@@ -22,4 +22,4 @@ Between those calls, nothing beyond the program sees the page. A read, take, len
 
 A context may be declared volatile. A volatile context is never promoted: each read, take, lend and commit of it is an effect, and is ordered as effects are (effects §2). Nothing merges or removes them, and against them only an effect, or what depends on their values, keeps its order. Pure work passes them freely.
 
-A value stored into a context outlives the run, so its type has no positions (ownership §5). It may carry an identity, which is fresh, one per context: each context is storage of its own, apart from every other, so its identity meets no other (types §3).
+A value stored into a context outlives the run, so its type has no positions (ownership §5). Its type may be branded, by a brand type fresh for each context: each context is storage of its own, apart from every other, so its brand type is never made one with another (types §3).
