@@ -185,6 +185,16 @@ where
         self.root(root.id)
     }
 
+    /// Every class, by its root, in the order of their ids.
+    pub fn roots(&self) -> impl Iterator<Item = Root<'_, K>> {
+        self.slots.iter().filter_map(|(id, slot)| {
+            matches!(slot, Slot::Root(_)).then_some(Root {
+                id,
+                classes: PhantomData,
+            })
+        })
+    }
+
     /// Whether the class `class` names is decided.
     pub fn is_decided(&self, class: K::Id) -> bool {
         self.root(self.find(class).id).state.is_decided()

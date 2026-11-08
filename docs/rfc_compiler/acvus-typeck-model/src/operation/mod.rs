@@ -1,6 +1,6 @@
 //! Operations above the store: the judgments it leaves to its callers.
 
-pub mod lower;
+pub mod bound;
 pub mod projection;
 
 use crate::primitive::adjustment::Adjustments;
