@@ -57,13 +57,18 @@ where
         let mut unplaced = self.take_in(unified);
         while let Some(Unplaced { class, key, part, at }) = unplaced.pop() {
             let named = target_of(classes, class).and_then(|target| name_again(classes, target, &key, &part));
-            let mut items: BTreeSet<ItemId> = part.lower.iter().chain(&part.upper).copied().collect();
+            let mut projections: BTreeSet<ItemId> = part.lower.iter().chain(&part.upper).copied().collect();
             let Some(named) = named else {
-                items.insert(at);
-                self.refusals.push(not_held(classes, class, items));
+                // A name only carried here leaves nothing to do. The class a
+                // projection named it on holds that part too, and connects it
+                // or refuses it there.
+                if !projections.is_empty() {
+                    projections.insert(at);
+                    self.refusals.push(not_held(classes, class, projections));
+                }
                 continue;
             };
-            for item in items {
+            for item in projections {
                 self.adjustments.entry(item).or_default().push(Adjustment::Deref);
             }
             let unified = classes.unify(scopes, named, part.class, at);
@@ -86,8 +91,9 @@ where
     }
 }
 
-/// Names `key` on `target` by every item that named `part`, on the side each
-/// named it. It gives none where `target` is decided with no place for it.
+/// Names `key` on `target` by every projection that named `part`, on the side
+/// each named it. It gives none where `target` is decided with no place for it,
+/// and where no projection named the part.
 fn name_again<K>(classes: &mut Classes<K>, target: K::Id, key: &PartKey, part: &Part<K>) -> Option<K::Id>
 where
     K: ClassKind,

@@ -2,9 +2,9 @@
 //! bound once both of its ends are decided.
 //!
 //! Deciding a class and connecting parts are two steps. The join gives the head
-//! alone. Each bound then connects the parts it holds to the head's when the
-//! store gives it back, so a part is connected the same way whichever class was
-//! decided first.
+//! alone, and each bound connects the parts it holds to the head's when the store
+//! gives it back. That a class is decided only once nothing more can enter it is
+//! the order settling takes these in (`settle`), not anything here.
 //!
 //! Classes that enter one another would wait for one another, so they are made
 //! one class first (O6). A bound that went between them is then the class's bound
@@ -17,7 +17,7 @@ use std::mem;
 use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::bound::{Bound, BoundOf};
-use crate::primitive::class::{Bounds, ClassKind, State};
+use crate::primitive::class::{Bounds, ClassKind, Pending, State};
 use crate::primitive::refusal::{Cause, Refusal};
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{Mutability, Shape};
@@ -45,7 +45,7 @@ where
 
 /// The head `bound` gives its upper end, where it gives one and its lower end
 /// is decided. A change and an equality decide no head.
-fn given<K>(classes: &Classes<K>, bound: &Bound<K>) -> Option<Shape<K::Id>>
+pub(super) fn given<K>(classes: &Classes<K>, bound: &Bound<K>) -> Option<Shape<K::Id>>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
@@ -59,7 +59,7 @@ where
     }
 }
 
-fn shape_of<K>(classes: &Classes<K>, class: K::Id) -> Option<&Shape<K::Id>>
+pub(super) fn shape_of<K>(classes: &Classes<K>, class: K::Id) -> Option<&Shape<K::Id>>
 where
     K: ClassKind,
 {
@@ -234,6 +234,32 @@ where
             queue.append(&mut self.bounds);
         }
         self.bounds = others;
+        self.judge_domains(classes);
+    }
+
+    /// A domain holds the head decided for its class (O8), and is done with. A
+    /// call stays with the caller, as nothing here judges one yet.
+    fn judge_domains(&mut self, classes: &Classes<K>) {
+        for pending in mem::take(&mut self.pending) {
+            let held = shape_of(classes, pending.class);
+            for (domain, by) in &pending.domains {
+                if !matches!(held, Some(Shape::Scalar(scalar)) if domain.0.contains(scalar)) {
+                    let mut items = decided_by(classes, pending.class);
+                    items.insert(*by);
+                    self.refuse_once(Refusal {
+                        cause: Cause::EmptyDomain,
+                        items,
+                    });
+                }
+            }
+            if !pending.calls.is_empty() {
+                self.pending.push(Pending {
+                    class: pending.class,
+                    calls: pending.calls,
+                    domains: BTreeSet::new(),
+                });
+            }
+        }
     }
 
     /// No change is made at a part (O9): the two heads are equal, members
@@ -326,147 +352,10 @@ mod tests {
 
     use super::*;
     use crate::primitive::adjustment::Adjustments;
+    use crate::operation::testing::{EXCLUSIVE, SHARED, U8, World};
     use crate::primitive::class::{Live, Side};
-    use crate::primitive::id::Arena;
     use crate::primitive::ty::{PartKey, Scalar};
     use crate::primitive::{ClassId, Name};
-
-    const SHARED: Mutability = Mutability::Shared;
-    const EXCLUSIVE: Mutability = Mutability::Exclusive;
-    const U8: Shape<ClassId> = Shape::Scalar(Scalar::U8);
-
-    struct World {
-        classes: Classes<Live>,
-        scopes: Scopes,
-        items: Arena<ItemId, &'static str>,
-        outcome: Outcome<Live>,
-        /// Every undecided class made here, in the order settling visits them.
-        open: Vec<ClassId>,
-    }
-
-    impl World {
-        fn new() -> Self {
-            Self {
-                classes: Classes::default(),
-                scopes: Scopes::new(),
-                items: Arena::default(),
-                outcome: Outcome::default(),
-                open: Vec::new(),
-            }
-        }
-
-        fn undecided(&mut self) -> ClassId {
-            let class = self.classes.undecided(self.scopes.root());
-            self.open.push(class);
-            class
-        }
-
-        /// The class of an expression, whose lower bound is the head the text
-        /// writes.
-        fn text(&mut self, shape: Shape<ClassId>) -> ClassId {
-            let by = self.items.push("written");
-            let written = self.classes.decided(self.scopes.root(), shape, BTreeSet::from([by]));
-            let class = self.undecided();
-            self.enter(written, class);
-            class
-        }
-
-        fn external(&mut self, shape: Shape<ClassId>) -> ClassId {
-            let by = self.items.push("declared");
-            self.classes.external(self.scopes.root(), shape, BTreeSet::from([by]))
-        }
-
-        fn enter(&mut self, lower: ClassId, upper: ClassId) -> ItemId {
-            self.record(Bound::Enter { lower, upper })
-        }
-
-        fn record(&mut self, bound: Bound<Live>) -> ItemId {
-            let at = self.items.push("bound");
-            self.outcome.bounds.extend(self.classes.bound(bound, at));
-            at
-        }
-
-        fn lend(&mut self, place: ClassId, mutability: Mutability) -> (ClassId, ItemId) {
-            let reference = self.undecided();
-            let at = self.record(Bound::Lend {
-                lower: place,
-                upper: reference,
-                mutability,
-            });
-            (reference, at)
-        }
-
-        /// `let name = lower`, or a branch of an `if`.
-        fn meets(&mut self, lower: ClassId) -> ClassId {
-            let place = self.undecided();
-            self.enter(lower, place);
-            place
-        }
-
-        fn decide(&mut self, class: ClassId, shape: Shape<ClassId>) {
-            let at = self.items.push("decision");
-            self.outcome
-                .decide(&mut self.classes, &self.scopes, class, shape, BTreeSet::from([at]), at);
-        }
-
-        /// The lower dimension of settling alone: makes classes that enter one
-        /// another one, and decides each class that a lower bound enters, once
-        /// all of them have given their heads, until nothing changes.
-        fn settle(&mut self) {
-            self.outcome.judge(&mut self.classes, &self.scopes);
-            loop {
-                let mut changed = self.outcome.merge_cycles(&mut self.classes, &self.scopes);
-                for class in self.open.clone() {
-                    if self.classes.is_decided(class) {
-                        continue;
-                    }
-                    match join_lowers(&self.classes, class) {
-                        Join::Head { shape, by } => {
-                            let at = self.items.push("decision");
-                            self.outcome.decide(&mut self.classes, &self.scopes, class, shape, by, at);
-                            changed = true;
-                        }
-                        Join::Mismatch(refusal) => {
-                            if !self.outcome.refusals.contains(&refusal) {
-                                self.outcome.refusals.push(refusal);
-                            }
-                        }
-                        Join::Nothing | Join::Waits => {}
-                    }
-                }
-                if !changed {
-                    break;
-                }
-            }
-        }
-
-        fn shape(&self, class: ClassId) -> Shape<ClassId> {
-            shape_of(&self.classes, class).expect("the class is decided").clone()
-        }
-
-        fn same(&self, a: ClassId, b: ClassId) -> bool {
-            self.classes.find(a) == self.classes.find(b)
-        }
-
-        fn target(&self, class: ClassId) -> (Mutability, ClassId) {
-            let Shape::Ref(mutability, target) = self.shape(class) else {
-                panic!("{class:?} is a reference");
-            };
-            (mutability, target)
-        }
-
-        fn no_refusals(&self) {
-            assert_eq!(self.outcome.refusals, Vec::new());
-        }
-    }
-
-    impl Drop for World {
-        fn drop(&mut self) {
-            if !std::thread::panicking() {
-                assert_eq!(self.classes.verify(), Ok(()));
-            }
-        }
-    }
 
     fn adjusted(entries: &[(ItemId, &[Adjustment])]) -> Adjustments {
         entries.iter().map(|(item, kinds)| (*item, kinds.to_vec())).collect()
@@ -1325,6 +1214,32 @@ mod tests {
 
         world.no_refusals();
         assert!(world.same(q, lent));
+        assert!(world.same(x_part, field_class));
+        assert_eq!(world.outcome.adjustments, adjusted(&[(x_at, &[Adjustment::Deref])]));
+    }
+
+    /// `let v = q.x; Some(q)` entering what is decided already as `Some(&{x})`.
+    /// Nothing is carried to a decided class, so only judging the bound makes `q`
+    /// the reference, which leaves `x` with no place on it.
+    #[test]
+    fn a_judgment_against_a_decided_class_releases_what_its_union_leaves() {
+        let mut world = World::new();
+        let q = world.undecided();
+        let (x_part, x_at) = project(&mut world, q, field("x"));
+        let first = world.text(Shape::Option(q));
+        let field_class = world.text(U8);
+        let by = world.items.push("written");
+        let root = world.scopes.root();
+        let fields = BTreeMap::from([(Name::new("x"), field_class)]);
+        let object = world.classes.decided(root, Shape::Object(fields), BTreeSet::from([by]));
+        let reference = world.classes.decided(root, Shape::Ref(SHARED, object), BTreeSet::from([by]));
+        let decided = world.classes.decided(root, Shape::Option(reference), BTreeSet::from([by]));
+        world.enter(first, decided);
+
+        world.settle();
+
+        world.no_refusals();
+        assert!(world.same(q, reference));
         assert!(world.same(x_part, field_class));
         assert_eq!(world.outcome.adjustments, adjusted(&[(x_at, &[Adjustment::Deref])]));
     }

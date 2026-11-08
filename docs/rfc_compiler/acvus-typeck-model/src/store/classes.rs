@@ -265,10 +265,12 @@ where
             class: part_class,
             lower: BTreeSet::new(),
             upper: BTreeSet::new(),
+            carried: BTreeSet::new(),
         });
         let items = match side {
             Side::Lower => &mut part.lower,
             Side::Upper => &mut part.upper,
+            Side::Carried => &mut part.carried,
         };
         items.insert(at);
         Some(part_class)
@@ -633,6 +635,7 @@ mod tests {
                     class: part,
                     lower: BTreeSet::new(),
                     upper: BTreeSet::from([named_at]),
+                    carried: BTreeSet::new(),
                 },
                 at,
             }]

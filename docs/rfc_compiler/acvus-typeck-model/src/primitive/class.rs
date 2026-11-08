@@ -110,19 +110,22 @@ where
 /// end is undecided, it is given back.
 pub type Bounds<K> = BTreeSet<(<K as ClassKind>::Bound, ItemId)>;
 
-/// The side a part is named on.
+/// How a part came to be named on a class.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Side {
-    /// It enters the class: a write.
+    /// A projection writes into it.
     Lower,
-    /// The class goes to it: a read.
+    /// A projection reads it.
     Upper,
+    /// A bound carried it here from what enters the class. No projection named
+    /// it on this class, so none takes an adjustment for it here.
+    Carried,
 }
 
-/// A part of an undecided class, and the bounds that named it.
+/// A part of an undecided class, and the items that named it.
 ///
-/// A part is added only together with the item that names it, so `lower` and
-/// `upper` are never both empty.
+/// A part is added only together with the item that names it, so `lower`,
+/// `upper` and `carried` are never all empty.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Part<K>
 where
@@ -133,6 +136,8 @@ where
     pub lower: BTreeSet<ItemId>,
     /// Items that named the part as an upper bound: a read of it.
     pub upper: BTreeSet<ItemId>,
+    /// Bounds that carried the name here.
+    pub carried: BTreeSet<ItemId>,
 }
 
 /// `f(ā)`: the class is called with the arguments `ā`, giving `result`.
@@ -303,6 +308,7 @@ where
                             class: f(part.class),
                             lower: part.lower,
                             upper: part.upper,
+                            carried: part.carried,
                         };
                         (key, part)
                     })
@@ -362,6 +368,7 @@ where
                             pairs.push((mine.class, part.class));
                             mine.lower.extend(part.lower);
                             mine.upper.extend(part.upper);
+                            mine.carried.extend(part.carried);
                         }
                     }
                 }

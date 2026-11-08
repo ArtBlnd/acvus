@@ -2,6 +2,10 @@
 
 pub mod bound;
 pub mod projection;
+pub mod settle;
+
+#[cfg(test)]
+mod testing;
 
 use crate::primitive::adjustment::Adjustments;
 use crate::primitive::class::{Bounds, ClassKind, Pending, Unplaced};
@@ -15,6 +19,7 @@ where
     K: ClassKind,
 {
     pub refusals: Vec<Refusal>,
+    /// The calls on classes decided, which no operation here judges yet.
     pub pending: Vec<Pending<K>>,
     /// Bounds given back that no operation here judges yet.
     pub bounds: Bounds<K>,
@@ -31,5 +36,13 @@ where
         self.pending.extend(unified.pending);
         self.bounds.extend(unified.bounds);
         unified.unplaced
+    }
+
+    /// Records `refusal`, unless the same refusal stands already. A class that
+    /// stays as it is gives the same one each time it is looked at.
+    fn refuse_once(&mut self, refusal: Refusal) {
+        if !self.refusals.contains(&refusal) {
+            self.refusals.push(refusal);
+        }
     }
 }

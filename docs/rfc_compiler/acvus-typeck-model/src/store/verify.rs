@@ -65,7 +65,7 @@ where
                 continue;
             };
             for (key, part) in &constraints.parts {
-                if part.lower.is_empty() && part.upper.is_empty() {
+                if part.lower.is_empty() && part.upper.is_empty() && part.carried.is_empty() {
                     violations.push(Violation::Unnamed {
                         class: id,
                         key: key.clone(),
@@ -220,6 +220,7 @@ mod tests {
                 class: part,
                 lower: BTreeSet::new(),
                 upper: BTreeSet::new(),
+                carried: BTreeSet::new(),
             },
         );
         assert_eq!(world.classes.verify(), Err(vec![Violation::Unnamed { class: a, key }]));
@@ -247,6 +248,7 @@ mod tests {
                 class: stray,
                 lower: BTreeSet::from([at]),
                 upper: BTreeSet::new(),
+                carried: BTreeSet::new(),
             },
         );
         assert_eq!(world.classes.verify(), Err(vec![Violation::Dangling { holder: a, id: stray }]));
