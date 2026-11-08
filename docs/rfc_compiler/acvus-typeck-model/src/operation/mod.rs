@@ -1,6 +1,7 @@
 //! Operations above the store: the judgments it leaves to its callers.
 
 pub mod bound;
+pub mod change;
 pub mod projection;
 pub mod settle;
 
@@ -21,7 +22,7 @@ where
     pub refusals: Vec<Refusal>,
     /// The calls on classes decided, which no operation here judges yet.
     pub pending: Vec<Pending<K>>,
-    /// Bounds given back that no operation here judges yet.
+    /// Changes given back that cannot be made yet.
     pub bounds: Bounds<K>,
     pub adjustments: Adjustments,
 }

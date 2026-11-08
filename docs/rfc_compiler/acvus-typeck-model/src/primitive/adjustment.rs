@@ -7,14 +7,16 @@
 use std::collections::BTreeMap;
 
 use super::ItemId;
+use super::record::Coercion;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Adjustment {
     /// A reference is read through: `p.f` is `(*p).f`, and `&a` is `&*a`. One
     /// is enough, as no reference has a reference as its target (O23).
     Deref,
-    /// `&mut T` reaches `&T` where it enters a class that is shared (O10).
-    Reborrow,
+    /// A coercion the language gives: the reborrow where a lower bound reaches a
+    /// shared head (O10), and any of them at a boundary (O11).
+    Coerce(Coercion),
 }
 
 /// The adjustments of each item, in the order they apply.

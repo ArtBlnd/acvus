@@ -37,8 +37,8 @@ use super::bound::{Join, given, join_lowers};
 pub enum Settled {
     /// No rung changes anything. What is still undecided has been refused.
     Finished,
-    /// What upper bounds give, or a change at a boundary, is owed. Neither is
-    /// made yet, so solving stops here: a fallback taken now could decide a class
+    /// What upper bounds give is owed, which is not made yet, or a change cannot
+    /// be made yet. Solving stops here: a fallback taken now could decide a class
     /// they would decide otherwise.
     AwaitsUpper,
 }
@@ -813,8 +813,10 @@ mod tests {
     fn a_change_not_made_yet_stops_the_fallbacks() {
         let mut world = World::new();
         let other = world.undecided();
-        let parameter = world.external(U8);
-        let argument = world.text(U8);
+        let target = world.undecided();
+        let argument = world.external(Shape::Ref(SHARED, target));
+        let declared = world.external(U8);
+        let parameter = world.external(Shape::Ref(SHARED, declared));
         let at = world.record(Bound::Change {
             lower: argument,
             upper: parameter,
@@ -823,6 +825,7 @@ mod tests {
         assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
 
         assert!(!world.classes.is_decided(other));
+        assert!(!world.classes.is_decided(target));
         assert_eq!(
             world.outcome.bounds,
             BTreeSet::from([(

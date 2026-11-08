@@ -91,6 +91,32 @@ pub enum Shape<P> {
 }
 
 impl<P> Shape<P> {
+    /// What remains of the notation without members and parts, for anything but
+    /// a reference, whose class node holds it (O23).
+    pub fn constructor(&self) -> Option<Constructor> {
+        Some(match self {
+            Shape::Ref(..) => return None,
+            Shape::Tuple(components) => Constructor::Tuple(components.len()),
+            Shape::Array(len, _) => Constructor::Array(*len),
+            Shape::Slice(_) => Constructor::Slice,
+            Shape::Option(_) => Constructor::Option,
+            Shape::Result(..) => Constructor::Result,
+            Shape::Error(_) => Constructor::Error,
+            Shape::ErrorOf(_) => Constructor::ErrorOf,
+            Shape::Fn(params, _) => Constructor::Fn(params.len()),
+            Shape::FnValue(_) => Constructor::FnValue,
+            Shape::Object(_) => Constructor::Object,
+            Shape::Enum(name, _) => Constructor::Enum(name.clone()),
+            Shape::Struct(module, _) => Constructor::Struct(module.clone()),
+            Shape::Extern(name, ..) => Constructor::Extern(name.clone()),
+            Shape::Scalar(scalar) => Constructor::Scalar(*scalar),
+            Shape::String => Constructor::String,
+            Shape::Str => Constructor::Str,
+            Shape::Unit => Constructor::Unit,
+            Shape::Never => Constructor::Never,
+        })
+    }
+
     /// Each part, with the key that names it, in the order the shape holds
     /// them. Two shapes of one layer give their keys in one order.
     pub fn places(&self) -> Vec<(PartKey, &P)> {

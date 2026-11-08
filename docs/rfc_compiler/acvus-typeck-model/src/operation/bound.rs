@@ -16,6 +16,7 @@ use std::mem;
 
 use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
+use crate::primitive::record::Coercion;
 use crate::primitive::bound::{Bound, BoundOf};
 use crate::primitive::class::{Bounds, ClassKind, Pending, State};
 use crate::primitive::refusal::{Cause, Refusal};
@@ -69,7 +70,7 @@ where
     }
 }
 
-fn decided_by<K>(classes: &Classes<K>, class: K::Id) -> BTreeSet<ItemId>
+pub(super) fn decided_by<K>(classes: &Classes<K>, class: K::Id) -> BTreeSet<ItemId>
 where
     K: ClassKind,
 {
@@ -212,7 +213,8 @@ where
     }
 
     /// Judges each lower bound given back, along with those its judgment gives
-    /// back in turn. Other bounds stay given back to the caller.
+    /// back in turn. A change that cannot be made yet stays given back to the caller,
+    /// and is looked at again next time.
     pub fn judge(&mut self, classes: &mut Classes<K>, scopes: &Scopes) {
         let mut queue = mem::take(&mut self.bounds);
         let mut others = Bounds::<K>::new();
@@ -228,7 +230,9 @@ where
                 Bound::Enter { .. } | Bound::Lend { .. } => self.judge_lower(classes, scopes, bound, at),
                 Bound::Equal { .. } => self.judge_equal(classes, scopes, bound, at),
                 Bound::Change { .. } => {
-                    others.insert((bound, at));
+                    if !self.judge_change(classes, scopes, bound, at) {
+                        others.insert((bound, at));
+                    }
                 }
             }
             queue.append(&mut self.bounds);
@@ -297,7 +301,7 @@ where
             (&head, &upper),
             (Shape::Ref(Mutability::Exclusive, _), Shape::Ref(Mutability::Shared, _))
         ) {
-            self.adjustments.entry(at).or_default().push(Adjustment::Reborrow);
+            self.adjustments.entry(at).or_default().push(Adjustment::Coerce(Coercion::Reborrow));
         }
         self.connect_parts(classes, scopes, &head, &upper, at);
     }
@@ -332,7 +336,7 @@ where
 
     /// Makes `part` one type with the part that corresponds to it, as the
     /// state of that part tells (O9).
-    fn one_type(&mut self, classes: &mut Classes<K>, scopes: &Scopes, part: K::Id, corresponding: K::Id, at: ItemId) {
+    pub(super) fn one_type(&mut self, classes: &mut Classes<K>, scopes: &Scopes, part: K::Id, corresponding: K::Id, at: ItemId) {
         if classes.is_external(corresponding) {
             let equal = Bound::Equal {
                 lower: part,
@@ -403,7 +407,7 @@ mod tests {
         assert_eq!(world.target(r).0, SHARED);
         assert_eq!(world.target(exclusive).0, EXCLUSIVE);
         assert!(world.same(x, y));
-        assert_eq!(world.outcome.adjustments, adjusted(&[(exclusive_meets, &[Adjustment::Reborrow])]));
+        assert_eq!(world.outcome.adjustments, adjusted(&[(exclusive_meets, &[Adjustment::Coerce(Coercion::Reborrow)])]));
     }
 
     /// Example 24: `let a = if c { return 0u8 } else { 1u8 };`
@@ -441,7 +445,7 @@ mod tests {
             let declared_u8 = world.external(U8);
             let parameter = world.external(Shape::Ref(EXCLUSIVE, declared_u8));
             let boundary = world.meets(p);
-            let changes = world.record(Bound::Change {
+            world.record(Bound::Change {
                 lower: boundary,
                 upper: parameter,
             });
@@ -456,17 +460,8 @@ mod tests {
             assert_eq!(world.target(r).0, SHARED);
             assert_eq!(world.target(boundary).0, EXCLUSIVE);
             assert!(world.same(x, y));
-            assert_eq!(world.outcome.adjustments, adjusted(&[(p_meets, &[Adjustment::Reborrow])]));
-            assert_eq!(
-                world.outcome.bounds,
-                BTreeSet::from([(
-                    Bound::Change {
-                        lower: boundary,
-                        upper: parameter
-                    },
-                    changes
-                )])
-            );
+            assert_eq!(world.outcome.adjustments, adjusted(&[(p_meets, &[Adjustment::Coerce(Coercion::Reborrow)])]));
+            assert_eq!(world.outcome.bounds, Bounds::<Live>::new());
         }
     }
 
@@ -1067,7 +1062,7 @@ mod tests {
             assert!(world.same(a, b));
             assert_eq!(world.target(a).0, SHARED);
             assert_eq!(world.target(exclusive).0, EXCLUSIVE);
-            assert_eq!(world.outcome.adjustments, adjusted(&[(exclusive_meets, &[Adjustment::Reborrow])]));
+            assert_eq!(world.outcome.adjustments, adjusted(&[(exclusive_meets, &[Adjustment::Coerce(Coercion::Reborrow)])]));
         }
     }
 
@@ -1293,7 +1288,7 @@ mod tests {
 
         world.no_refusals();
         assert!(world.same(hole, shared));
-        assert_eq!(world.outcome.adjustments, adjusted(&[(meets, &[Adjustment::Reborrow])]));
+        assert_eq!(world.outcome.adjustments, adjusted(&[(meets, &[Adjustment::Coerce(Coercion::Reborrow)])]));
         assert!(world.same(x, target));
     }
 }
