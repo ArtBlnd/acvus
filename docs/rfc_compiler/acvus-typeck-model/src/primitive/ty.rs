@@ -12,6 +12,17 @@ pub enum Mutability {
     Exclusive,
 }
 
+impl Mutability {
+    /// Exclusive where both are, and shared otherwise: what two references
+    /// join as (Joins), and what a lend through a reference gives (O23).
+    pub fn join(self, other: Self) -> Self {
+        match (self, other) {
+            (Mutability::Exclusive, Mutability::Exclusive) => Mutability::Exclusive,
+            _ => Mutability::Shared,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Scalar {
     I8,
@@ -197,6 +208,48 @@ impl<P> Shape<P> {
     }
 }
 
+impl<P> Shape<P>
+where
+    P: Clone,
+{
+    /// The head two heads join as, or none where they are of two head classes
+    /// (Joins). `!` is the least head.
+    ///
+    /// A place both heads have keeps this head's part: that the two parts are
+    /// one type is the judgment of each bound that enters the class, not of
+    /// the join.
+    pub fn join(&self, other: &Self) -> Option<Self> {
+        match (self, other) {
+            (Shape::Never, head) | (head, Shape::Never) => Some(head.clone()),
+            (Shape::Ref(mine, target), Shape::Ref(theirs, _)) => Some(Shape::Ref(mine.join(*theirs), target.clone())),
+            (Shape::Object(mine), Shape::Object(theirs)) => Some(Shape::Object(united(mine, theirs))),
+            (Shape::Error(mine), Shape::Error(theirs)) => Some(Shape::Error(united(mine, theirs))),
+            (Shape::Enum(name, mine), Shape::Enum(other_name, theirs)) if name == other_name => {
+                Some(Shape::Enum(name.clone(), united(mine, theirs)))
+            }
+            (Shape::FnValue(mine), Shape::FnValue(theirs)) => Some(Shape::FnValue(mine.union(theirs).copied().collect())),
+            (mine, theirs) if mine.layer() == theirs.layer() => Some(mine.clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether this head reaches `head` by entering it: their join is `head`.
+    pub fn enters(&self, head: &Self) -> bool {
+        self.join(head).is_some_and(|joined| joined.layer() == head.layer())
+    }
+}
+
+fn united<P>(mine: &BTreeMap<Name, P>, theirs: &BTreeMap<Name, P>) -> BTreeMap<Name, P>
+where
+    P: Clone,
+{
+    let mut united = mine.clone();
+    for (name, part) in theirs {
+        united.entry(name.clone()).or_insert_with(|| part.clone());
+    }
+    united
+}
+
 /// A finite term, as the text or a signature writes it.
 ///
 /// It is made into classes where it is recorded (O13), and solving sees only
@@ -274,4 +327,72 @@ pub enum PartKey {
     /// or the `E` of `Error⟨E⟩`.
     Arg(usize),
     Brand,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::primitive::id::Arena;
+
+    const SHARED: Mutability = Mutability::Shared;
+    const EXCLUSIVE: Mutability = Mutability::Exclusive;
+
+    fn object(fields: &[&str]) -> Shape<u32> {
+        Shape::Object(fields.iter().map(|field| (Name::new(*field), 0)).collect())
+    }
+
+    #[test]
+    fn a_mutability_is_exclusive_only_where_both_are() {
+        assert_eq!(EXCLUSIVE.join(EXCLUSIVE), EXCLUSIVE);
+        assert_eq!(EXCLUSIVE.join(SHARED), SHARED);
+        assert_eq!(SHARED.join(EXCLUSIVE), SHARED);
+        assert_eq!(SHARED.join(SHARED), SHARED);
+    }
+
+    #[test]
+    fn never_is_the_least_head() {
+        let u8_head = Shape::<u32>::Scalar(Scalar::U8);
+        assert_eq!(Shape::Never.join(&u8_head), Some(u8_head.clone()));
+        assert_eq!(u8_head.join(&Shape::Never), Some(u8_head.clone()));
+        assert!(Shape::Never.enters(&u8_head));
+        assert!(!u8_head.enters(&Shape::Never));
+    }
+
+    #[test]
+    fn references_join_as_shared_where_either_is_and_keep_the_first_target() {
+        let joined = Shape::Ref(EXCLUSIVE, 1).join(&Shape::Ref(SHARED, 2));
+        assert_eq!(joined, Some(Shape::Ref(SHARED, 1)));
+        assert!(Shape::Ref(EXCLUSIVE, 1).enters(&Shape::Ref(SHARED, 2)));
+        assert!(!Shape::Ref(SHARED, 1).enters(&Shape::Ref(EXCLUSIVE, 2)));
+    }
+
+    #[test]
+    fn members_are_united_and_enter_only_a_head_that_has_them_all() {
+        let (x, x_and_y) = (object(&["x"]), object(&["x", "y"]));
+        assert_eq!(x.join(&x_and_y), Some(x_and_y.clone()));
+        assert!(x.enters(&x_and_y));
+        assert!(!x_and_y.enters(&x));
+
+        let mut closures = Arena::<ClosureId, ()>::default();
+        let (first, second) = (closures.push(()), closures.push(()));
+        let values = |ids: &[ClosureId]| Shape::<u32>::FnValue(ids.iter().copied().collect());
+        assert_eq!(values(&[first]).join(&values(&[second])), Some(values(&[first, second])));
+    }
+
+    #[test]
+    fn enums_of_two_names_are_two_head_classes() {
+        let of = |name: &str| Shape::<u32>::Enum(Name::new(name), BTreeMap::new());
+        assert_eq!(of("E").join(&of("F")), None);
+        assert_eq!(of("E").join(&of("E")), Some(of("E")));
+    }
+
+    #[test]
+    fn heads_of_two_head_classes_do_not_join() {
+        let scalar = |scalar| Shape::<u32>::Scalar(scalar);
+        assert_eq!(scalar(Scalar::U8).join(&scalar(Scalar::U16)), None);
+        assert_eq!(Shape::Tuple(vec![1]).join(&Shape::Tuple(vec![1, 2])), None);
+        assert_eq!(Shape::Array(1, 1).join(&Shape::Array(2, 1)), None);
+        assert_eq!(Shape::Slice(1).join(&Shape::Option(1)), None);
+        assert_eq!(Shape::Tuple(vec![1, 2]).join(&Shape::Tuple(vec![3, 4])), Some(Shape::Tuple(vec![1, 2])));
+    }
 }

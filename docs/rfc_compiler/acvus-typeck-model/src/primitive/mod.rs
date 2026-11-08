@@ -1,8 +1,10 @@
 //! The domain primitives of type checking: types, classes and their
-//! constraints, declarations, uses, bodies and refusals. Operations on them
-//! and the solvers over those operations live outside this module.
+//! constraints, declarations, uses, bodies and refusals. The operations that
+//! read a store of classes, and the solvers over them, live outside this module.
 
+pub mod adjustment;
 pub mod body;
+pub mod bound;
 pub mod class;
 pub mod decl;
 pub mod domain;

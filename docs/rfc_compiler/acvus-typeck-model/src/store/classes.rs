@@ -7,7 +7,10 @@ use std::mem;
 
 use crate::primitive::ItemId;
 use crate::primitive::ScopeId;
-use crate::primitive::class::{Bound, Call, Class, ClassKind, Constraints, Decided, Part, Pending, Side, State};
+use crate::primitive::bound::BoundOf;
+use crate::primitive::class::{
+    Bounds, Call, Class, ClassKind, Constraints, Decided, Origin, Part, Pending, Side, State, Unplaced,
+};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::refusal::{Cause, Refusal};
@@ -119,9 +122,10 @@ where
 {
     pub refusals: Vec<Refusal>,
     pub pending: Vec<Pending<K>>,
-    /// Bounds that no undecided class holds any more, between the roots of
-    /// their classes: the caller checks that the lower reaches the upper.
-    pub bounds: BTreeSet<(Bound<K>, ItemId)>,
+    /// Bounds that no undecided class holds any more, as they were recorded:
+    /// the caller judges each, through the roots of its ends.
+    pub bounds: Bounds<K>,
+    pub unplaced: Vec<Unplaced<K>>,
 }
 
 impl<K> Unified<K>
@@ -133,6 +137,7 @@ where
         self.refusals.extend(other.refusals);
         self.pending.extend(other.pending);
         self.bounds.extend(other.bounds);
+        self.unplaced.extend(other.unplaced);
     }
 }
 
@@ -147,11 +152,21 @@ where
         }))
     }
 
-    /// A class decided from the start: one the text or a signature writes.
+    /// A class decided from the start, as the text writes it or solving decides
+    /// it.
     pub fn decided(&mut self, scope: ScopeId, shape: Shape<K::Id>, by: BTreeSet<ItemId>) -> K::Id {
+        self.decided_from(scope, shape, by, Origin::Free)
+    }
+
+    /// A class a declaration or the host writes.
+    pub fn external(&mut self, scope: ScopeId, shape: Shape<K::Id>, by: BTreeSet<ItemId>) -> K::Id {
+        self.decided_from(scope, shape, by, Origin::External)
+    }
+
+    fn decided_from(&mut self, scope: ScopeId, shape: Shape<K::Id>, by: BTreeSet<ItemId>, origin: Origin) -> K::Id {
         self.slots.push(Slot::Root(Class {
             scope,
-            state: State::Decided(Decided { shape, by }),
+            state: State::Decided(Decided { shape, by, origin }),
         }))
     }
 
@@ -170,51 +185,61 @@ where
         self.root(root.id)
     }
 
-    /// The classes that enter `root`, each with the items that recorded the
-    /// bound, `root` itself among them where it is its own lower bound. A
+    /// Whether the class `class` names is decided.
+    pub fn is_decided(&self, class: K::Id) -> bool {
+        self.root(self.find(class).id).state.is_decided()
+    }
+
+    /// Whether the class `class` names is one a declaration or the host writes.
+    pub fn is_external(&self, class: K::Id) -> bool {
+        matches!(
+            &self.root(self.find(class).id).state,
+            State::Decided(Decided {
+                origin: Origin::External,
+                ..
+            })
+        )
+    }
+
+    /// The bounds `root` holds as their upper end, by the class at their lower
+    /// end, `root` itself among those where it is its own lower bound. A
     /// decided class holds none.
-    pub fn lowers(&self, root: Root<'_, K>) -> BTreeMap<Root<'_, K>, BTreeSet<ItemId>> {
-        self.side(root, Side::Lower)
+    pub fn lowers(&self, root: Root<'_, K>) -> BTreeMap<Root<'_, K>, Bounds<K>> {
+        self.side(root, |bound| (bound.upper(), bound.lower()))
     }
 
-    /// The classes `root` goes to, as [`Classes::lowers`] gives those that
-    /// enter it.
-    pub fn uppers(&self, root: Root<'_, K>) -> BTreeMap<Root<'_, K>, BTreeSet<ItemId>> {
-        self.side(root, Side::Upper)
+    /// The bounds `root` holds as their lower end, by the class at their upper
+    /// end, as [`Classes::lowers`] gives the others.
+    pub fn uppers(&self, root: Root<'_, K>) -> BTreeMap<Root<'_, K>, Bounds<K>> {
+        self.side(root, |bound| (bound.lower(), bound.upper()))
     }
 
-    /// Records that `bound.lower` enters `bound.upper`, by `at`.
+    /// Records `bound`, by `at`.
     ///
-    /// Each of the two classes that is undecided holds the bound. Where
-    /// neither is, it is given back to be checked.
-    pub fn bound(&mut self, bound: Bound<K>, at: ItemId) -> Option<(Bound<K>, ItemId)> {
-        let lower = self.find(bound.lower).id;
-        let upper = self.find(bound.upper).id;
+    /// Each of its two ends that is undecided holds it. Where neither is, it
+    /// is given back to be judged.
+    pub fn bound(&mut self, bound: K::Bound, at: ItemId) -> Option<(K::Bound, ItemId)> {
+        let ends = BTreeSet::from([self.find(bound.lower()).id, self.find(bound.upper()).id]);
         let mut held = false;
-        if let State::Undecided(constraints) = &mut self.root_mut(lower).state {
-            constraints.upper.entry(upper).or_default().insert(at);
-            held = true;
+        for end in ends {
+            if let State::Undecided(constraints) = &mut self.root_mut(end).state {
+                constraints.bounds.insert((bound.clone(), at));
+                held = true;
+            }
         }
-        if let State::Undecided(constraints) = &mut self.root_mut(upper).state {
-            constraints.lower.entry(lower).or_default().insert(at);
-            held = true;
-        }
-        (!held).then_some((Bound { lower, upper }, at))
+        (!held).then_some((bound, at))
     }
 
     /// The class of the part `key` of `class`, named on `side` by `at`.
     ///
     /// An undecided class keeps the name, and makes the part a class where
     /// nothing has named it yet. A decided class gives the part in its place,
-    /// and is refused where its shape has no place for it.
-    pub fn part(&mut self, class: K::Id, key: PartKey, side: Side, at: ItemId) -> Result<K::Id, Refusal> {
+    /// and gives none where its shape has no place for it.
+    pub fn part(&mut self, class: K::Id, key: PartKey, side: Side, at: ItemId) -> Option<K::Id> {
         let root = self.find(class).id;
         let owner = self.root(root);
-        if let State::Decided(decided) = &owner.state {
-            return owner.state.part(&key).ok_or_else(|| Refusal {
-                cause: Cause::NotHeld,
-                items: decided.by.iter().copied().chain([at]).collect(),
-            });
+        if owner.state.is_decided() {
+            return owner.state.part(&key);
         }
         let part_class = match owner.state.part(&key) {
             Some(part_class) => part_class,
@@ -236,7 +261,7 @@ where
             Side::Upper => &mut part.upper,
         };
         items.insert(at);
-        Ok(part_class)
+        Some(part_class)
     }
 
     /// Records a call on `class`. A decided class does not keep it, and
@@ -309,20 +334,14 @@ where
             unified.refusals.extend(merge.refusals);
             unified.pending.extend(merge.pending);
             unified.bounds.extend(merge.bounds);
+            unified.unplaced.extend(merge.unplaced);
             merged.insert(kept);
         }
         // A bound an undecided class still holds stays with it: that class
         // was undecided when the bound was recorded, and so holds it too.
-        let given_back = mem::take(&mut unified.bounds);
-        unified.bounds = given_back
-            .into_iter()
-            .map(|(bound, at)| {
-                let lower = self.find(bound.lower).id;
-                let upper = self.find(bound.upper).id;
-                (Bound { lower, upper }, at)
-            })
-            .filter(|(bound, _)| self.root(bound.lower).state.is_decided() && self.root(bound.upper).state.is_decided())
-            .collect();
+        unified
+            .bounds
+            .retain(|(bound, _)| self.is_decided(bound.lower()) && self.is_decided(bound.upper()));
         let roots: BTreeSet<K::Id> = merged.into_iter().map(|class| self.find(class).id).collect();
         if roots.into_iter().any(|root| self.occurs(root)) {
             unified.refusals.push(Refusal {
@@ -347,13 +366,21 @@ where
         class
     }
 
-    fn side(&self, root: Root<'_, K>, side: Side) -> BTreeMap<Root<'_, K>, BTreeSet<ItemId>> {
-        let Some(bounds) = self.get(root).state.bounds(side) else {
+    /// The bounds `root` holds at the end `ends` gives first, by the root of
+    /// the end it gives second.
+    fn side<F>(&self, root: Root<'_, K>, ends: F) -> BTreeMap<Root<'_, K>, Bounds<K>>
+    where
+        F: Fn(&K::Bound) -> (K::Id, K::Id),
+    {
+        let Some(bounds) = self.get(root).state.bounds() else {
             return BTreeMap::new();
         };
-        let mut found: BTreeMap<Root<'_, K>, BTreeSet<ItemId>> = BTreeMap::new();
-        for (other, items) in bounds {
-            found.entry(self.find(*other)).or_default().extend(items);
+        let mut found: BTreeMap<Root<'_, K>, Bounds<K>> = BTreeMap::new();
+        for (bound, at) in bounds {
+            let (this, other) = ends(bound);
+            if self.find(this).id == root.id {
+                found.entry(self.find(other)).or_default().insert((bound.clone(), *at));
+            }
         }
         found
     }
@@ -375,11 +402,35 @@ where
     }
 }
 
+/// What the bounds of a class relate it to, by root and by item alone, for a
+/// test that does not ask what kind they are, or which ids recorded them.
+#[cfg(test)]
+impl<K> Classes<K>
+where
+    K: ClassKind,
+{
+    pub(crate) fn lower_items(&self, class: K::Id) -> BTreeMap<K::Id, BTreeSet<ItemId>> {
+        Self::items(self.lowers(self.find(class)))
+    }
+
+    pub(crate) fn upper_items(&self, class: K::Id) -> BTreeMap<K::Id, BTreeSet<ItemId>> {
+        Self::items(self.uppers(self.find(class)))
+    }
+
+    fn items(found: BTreeMap<Root<'_, K>, Bounds<K>>) -> BTreeMap<K::Id, BTreeSet<ItemId>> {
+        found
+            .into_iter()
+            .map(|(other, bounds)| (other.id(), bounds.into_iter().map(|(_, at)| at).collect()))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitive::Name;
     use crate::primitive::ClassId;
+    use crate::primitive::Name;
+    use crate::primitive::bound::Bound;
     use crate::primitive::class::Live;
     use crate::primitive::ty::{Mutability, Scalar};
 
@@ -429,7 +480,7 @@ mod tests {
 
         fn bound(&mut self, lower: ClassId, upper: ClassId) -> (Option<(Bound<Live>, ItemId)>, ItemId) {
             let at = self.item("bound");
-            let given_back = self.classes.bound(Bound { lower, upper }, at);
+            let given_back = self.classes.bound(Bound::Enter { lower, upper }, at);
             self.verify();
             (given_back, at)
         }
@@ -439,21 +490,11 @@ mod tests {
         }
 
         fn lowers(&self, class: ClassId) -> BTreeMap<ClassId, BTreeSet<ItemId>> {
-            let root = self.classes.find(class);
-            self.classes
-                .lowers(root)
-                .into_iter()
-                .map(|(lower, items)| (lower.id(), items))
-                .collect()
+            self.classes.lower_items(class)
         }
 
         fn uppers(&self, class: ClassId) -> BTreeMap<ClassId, BTreeSet<ItemId>> {
-            let root = self.classes.find(class);
-            self.classes
-                .uppers(root)
-                .into_iter()
-                .map(|(upper, items)| (upper.id(), items))
-                .collect()
+            self.classes.upper_items(class)
         }
 
         fn root(&self, class: ClassId) -> ClassId {
@@ -566,35 +607,36 @@ mod tests {
     }
 
     #[test]
-    fn a_part_the_shape_has_no_place_for_is_refused() {
+    fn a_part_the_shape_has_no_place_for_goes_to_the_caller() {
         let mut world = World::new();
         let u = world.undecided();
-        let (_, named_at) = world.part(u, field("x"), Side::Upper);
-        let (d, written) = world.decided(Shape::Scalar(Scalar::U8));
+        let (part, named_at) = world.part(u, field("x"), Side::Upper);
+        let (d, _) = world.decided(Shape::Scalar(Scalar::U8));
         let (unified, at) = world.unify(u, d);
+        assert_eq!(unified.refusals, Vec::new());
         assert_eq!(
-            unified.refusals,
-            vec![Refusal {
-                cause: Cause::NotHeld,
-                items: BTreeSet::from([named_at, written, at]),
+            unified.unplaced,
+            vec![Unplaced {
+                class: world.root(u),
+                key: field("x"),
+                part: Part {
+                    class: part,
+                    lower: BTreeSet::new(),
+                    upper: BTreeSet::from([named_at]),
+                },
+                at,
             }]
         );
     }
 
     #[test]
-    fn a_decided_class_gives_a_part_in_its_place_or_refuses_it() {
+    fn a_decided_class_gives_a_part_in_its_place_or_gives_none() {
         let mut world = World::new();
         let p = world.undecided();
-        let (d, written) = world.decided(Shape::Option(p));
+        let (d, _) = world.decided(Shape::Option(p));
         let at = world.item("projection");
-        assert_eq!(world.classes.part(d, some(), Side::Upper, at), Ok(p));
-        assert_eq!(
-            world.classes.part(d, field("x"), Side::Upper, at),
-            Err(Refusal {
-                cause: Cause::NotHeld,
-                items: BTreeSet::from([written, at]),
-            })
-        );
+        assert_eq!(world.classes.part(d, some(), Side::Upper, at), Some(p));
+        assert_eq!(world.classes.part(d, field("x"), Side::Upper, at), None);
     }
 
     #[test]
@@ -617,7 +659,7 @@ mod tests {
         let mut world = World::new();
         let u = world.undecided();
         let registered = world.item("literal");
-        let domain = Domain::Of(BTreeSet::from([Scalar::U8, Scalar::I32]));
+        let domain = Domain(BTreeSet::from([Scalar::U8, Scalar::I32]));
         assert_eq!(world.classes.domain(u, domain.clone(), registered), None);
         let (d, _) = world.decided(Shape::Scalar(Scalar::U8));
         let (unified, _) = world.unify(u, d);
@@ -636,13 +678,14 @@ mod tests {
         let mut world = World::new();
         let (d, _) = world.decided(Shape::Scalar(Scalar::U8));
         let at = world.item("literal");
-        let pending = world.classes.domain(d, Domain::Every, at);
+        let domain = Domain(BTreeSet::from([Scalar::U8]));
+        let pending = world.classes.domain(d, domain.clone(), at);
         assert_eq!(
             pending,
             Some(Pending {
                 class: d,
                 calls: BTreeSet::new(),
-                domains: BTreeSet::from([(Domain::Every, at)]),
+                domains: BTreeSet::from([(domain, at)]),
             })
         );
     }
@@ -696,7 +739,7 @@ mod tests {
         let (d, _) = world.decided(Shape::Scalar(Scalar::U8));
         let (e, _) = world.decided(Shape::Scalar(Scalar::U8));
         let (given_back, at) = world.bound(d, e);
-        assert_eq!(given_back, Some((Bound { lower: d, upper: e }, at)));
+        assert_eq!(given_back, Some((Bound::Enter { lower: d, upper: e }, at)));
     }
 
     #[test]
@@ -710,8 +753,29 @@ mod tests {
 
         let (e, _) = world.decided(Shape::Scalar(Scalar::U8));
         let (unified, _) = world.unify(u, e);
-        let ue = world.root(u);
-        assert_eq!(unified.bounds, BTreeSet::from([(Bound { lower: d, upper: ue }, at)]));
+        assert_eq!(unified.bounds, BTreeSet::from([(Bound::Enter { lower: d, upper: u }, at)]));
+    }
+
+    #[test]
+    fn bounds_of_two_kinds_on_one_pair_of_classes_stay_two() {
+        let mut world = World::new();
+        let a = world.undecided();
+        let b = world.undecided();
+        let at = world.item("bound");
+        let enter = Bound::Enter { lower: a, upper: b };
+        let change = Bound::Change { lower: a, upper: b };
+        assert_eq!(world.classes.bound(enter, at), None);
+        assert_eq!(world.classes.bound(change, at), None);
+        let expected = BTreeSet::from([(enter, at), (change, at)]);
+        let b_root = world.classes.find(b);
+        assert_eq!(world.classes.lowers(b_root)[&world.classes.find(a)], expected);
+        let a_root = world.classes.find(a);
+        assert_eq!(world.classes.uppers(a_root)[&world.classes.find(b)], expected);
+
+        let (d, _) = world.decided(Shape::Scalar(Scalar::U8));
+        let (e, _) = world.decided(Shape::Scalar(Scalar::U8));
+        assert_eq!(world.unify(a, d).0.bounds, BTreeSet::new());
+        assert_eq!(world.unify(b, e).0.bounds, expected);
     }
 
     #[test]
@@ -725,6 +789,25 @@ mod tests {
         assert_eq!(unified.bounds, BTreeSet::new());
         assert_eq!(world.lowers(b), BTreeMap::from([(world.root(d), BTreeSet::from([at]))]));
         assert_eq!(world.uppers(a), BTreeMap::new());
+    }
+
+    #[test]
+    fn what_a_declaration_writes_stays_external_whatever_it_is_made_one_with() {
+        let mut world = World::new();
+        let root = world.scopes.root();
+        let at = world.item("declared");
+        let u8_head = Shape::Scalar(Scalar::U8);
+        let hole = world.undecided();
+        let declared = world.classes.external(root, u8_head.clone(), BTreeSet::from([at]));
+        assert!(!world.classes.is_external(hole));
+        world.unify(hole, declared);
+        assert!(world.classes.is_external(hole));
+
+        let (solved, _) = world.decided(u8_head.clone());
+        assert!(!world.classes.is_external(solved));
+        let declared = world.classes.external(root, u8_head, BTreeSet::from([at]));
+        world.unify(solved, declared);
+        assert!(world.classes.is_external(solved));
     }
 
     #[test]

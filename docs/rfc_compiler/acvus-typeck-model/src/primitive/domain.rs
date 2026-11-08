@@ -16,9 +16,7 @@ pub enum Family {
 }
 
 /// The domain a literal with no suffix registers: the types that hold its
-/// value (O8).
+/// value (O8). A class no domain is registered in may be every type, so every
+/// type is written by registering nothing.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum Domain {
-    Every,
-    Of(BTreeSet<Scalar>),
-}
+pub struct Domain(pub BTreeSet<Scalar>);

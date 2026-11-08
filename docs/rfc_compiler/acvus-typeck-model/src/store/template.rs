@@ -2,9 +2,9 @@
 //! copied whole at each use.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::mem;
 
-use crate::primitive::class::{Bound, Class, ClassKind, State};
+use crate::primitive::bound::BoundInto;
+use crate::primitive::class::{Class, ClassKind};
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::Ty;
 use crate::primitive::{ItemId, ScopeId};
@@ -39,8 +39,8 @@ impl<K> Classes<K>
 where
     K: ClassKind,
 {
-    /// Writes `ty` as classes in `scope`, by `by`: each node a decided class,
-    /// and each hole an undecided one.
+    /// Writes `ty` as classes in `scope`, by `by`: each node an external class,
+    /// and each hole an undecided one (O13).
     ///
     /// `written` holds the classes already written for one signature, so that
     /// one type, a hole included, is one class wherever the signature writes
@@ -53,7 +53,7 @@ where
             Ty::Hole(_) => self.undecided(scope),
             Ty::Node(shape) => {
                 let shape = shape.map(|part| self.write(scope, part, by, written));
-                self.decided(scope, shape, BTreeSet::from([by]))
+                self.external(scope, shape, BTreeSet::from([by]))
             }
         };
         written.insert(ty.clone(), class);
@@ -64,9 +64,9 @@ where
     /// as `fate` gives each.
     ///
     /// Each class is made anew holding what its original holds, every id in
-    /// it given as the class its original became, and its bounds recorded
-    /// anew. Then each class kept is made one with its copy. The template is
-    /// not changed.
+    /// it given as the class its original became, so that each bound is held
+    /// by the copies of the classes that hold it. Then each class kept is made
+    /// one with its copy. The template is not changed.
     pub fn copy_from<S, F>(
         &mut self,
         template: &Classes<S>,
@@ -77,43 +77,27 @@ where
     ) -> Copied<S, K>
     where
         S: ClassKind,
+        S::Bound: BoundInto<S, K>,
         F: FnMut(Root<'_, S>) -> Fate<K::Id>,
     {
         let mut copies = BTreeMap::new();
-        let mut originals = Vec::new();
         let mut kept = Vec::new();
         for (id, slot) in template.slots.iter() {
-            let Slot::Root(class) = slot else {
+            let Slot::Root(_) = slot else {
                 continue;
             };
             if let Fate::Keep(target) = fate(template.find(id)) {
                 kept.push((id, target));
             }
-            originals.push((id, class.clone().translate::<S, _>(|held| template.find(held).id())));
             copies.insert(id, self.undecided(scope));
         }
 
-        let mut bounds = Vec::new();
-        for (id, original) in originals {
-            let copy = copies[&id];
-            let Class { state, .. } = original.translate(|held| copies[&held]);
-            let state = match state {
-                State::Undecided(mut constraints) => {
-                    for (lower, items) in mem::take(&mut constraints.lower) {
-                        bounds.extend(items.into_iter().map(|by| (Bound { lower, upper: copy }, by)));
-                    }
-                    for (upper, items) in mem::take(&mut constraints.upper) {
-                        bounds.extend(items.into_iter().map(|by| (Bound { lower: copy, upper }, by)));
-                    }
-                    State::Undecided(constraints)
-                }
-                decided @ State::Decided(_) => decided,
+        for (id, slot) in template.slots.iter() {
+            let Slot::Root(class) = slot else {
+                continue;
             };
-            *self.slots.get_mut(copy) = Slot::Root(Class { scope, state });
-        }
-        for (bound, by) in bounds {
-            let given_back = self.bound(bound, by);
-            debug_assert!(given_back.is_none(), "a bound is copied from the undecided class that holds it");
+            let Class { state, .. } = class.clone().translate::<K, _>(|held| copies[&template.find(held).id()]);
+            *self.slots.get_mut(copies[&id]) = Slot::Root(Class { scope, state });
         }
         for (id, slot) in template.slots.iter() {
             if let Slot::Link(_) = slot {
@@ -138,7 +122,8 @@ where
 mod tests {
     use super::*;
     use crate::primitive::Name;
-    use crate::primitive::class::{Live, Side, Template};
+    use crate::primitive::bound::Bound;
+    use crate::primitive::class::{Live, Side, State, Template};
     use crate::primitive::id::Arena;
     use crate::primitive::ty::{Mutability, PartKey, Shape};
     use crate::primitive::{ClassId, TemplateId};
@@ -216,6 +201,16 @@ mod tests {
         };
         assert_eq!(option.shape, Shape::Option(second));
         assert!(!template.get(template.find(second)).state.is_decided());
+        assert!(template.is_external(first));
+    }
+
+    #[test]
+    fn a_copy_keeps_what_a_declaration_writes_external_and_a_hole_free() {
+        let mut world = World::new();
+        let (template, [first, second]) = world.push();
+        let copied = world.copy(&template, |_| Fate::Anew);
+        assert!(world.live.is_external(copied.classes[&first]));
+        assert!(!world.live.is_external(copied.classes[&second]));
     }
 
     #[test]
@@ -250,7 +245,7 @@ mod tests {
         let wrote = world.items.push("Some(x)");
         let some = template.decided(root, Shape::Option(x), BTreeSet::from([wrote]));
         let meets = world.items.push("last = Some(x)");
-        template.bound(Bound { lower: some, upper: last }, meets);
+        template.bound(Bound::Enter { lower: some, upper: last }, meets);
         (template, last, some, meets)
     }
 
@@ -266,9 +261,8 @@ mod tests {
 
         assert_eq!(copied.unified, Unified::default());
         assert_eq!(copied.classes[&stand_in], last);
-        let some = world.live.find(copied.classes[&some]);
-        let last = world.live.find(last);
-        assert_eq!(world.live.lowers(last), BTreeMap::from([(some, BTreeSet::from([meets]))]));
+        let some = world.live.find(copied.classes[&some]).id();
+        assert_eq!(world.live.lower_items(last), BTreeMap::from([(some, BTreeSet::from([meets]))]));
     }
 
     #[test]
@@ -281,10 +275,9 @@ mod tests {
             if reached.id() == stand_in { Fate::Keep(last) } else { Fate::Anew }
         });
         assert_eq!(template.verify(), Ok(()));
-        let stand_in = template.find(stand_in);
         assert_eq!(
-            template.lowers(stand_in),
-            BTreeMap::from([(template.find(some), BTreeSet::from([meets]))])
+            template.lower_items(stand_in),
+            BTreeMap::from([(template.find(some).id(), BTreeSet::from([meets]))])
         );
         assert_eq!(format!("{template:?}"), format!("{before:?}"));
     }
@@ -318,11 +311,12 @@ mod tests {
         let a = template.undecided(root);
         let b = template.undecided(root);
         let at = world.items.push("a into b");
-        template.bound(Bound { lower: a, upper: b }, at);
+        template.bound(Bound::Change { lower: a, upper: b }, at);
         let copied = world.copy(&template, |_| Fate::Anew);
-        let (a, b) = (world.live.find(copied.classes[&a]), world.live.find(copied.classes[&b]));
-        assert_eq!(world.live.uppers(a), BTreeMap::from([(b, BTreeSet::from([at]))]));
-        assert_eq!(world.live.lowers(b), BTreeMap::from([(a, BTreeSet::from([at]))]));
+        let (a, b) = (copied.classes[&a], copied.classes[&b]);
+        let held = BTreeSet::from([(Bound::Change { lower: a, upper: b }, at)]);
+        assert_eq!(world.live.uppers(world.live.find(a))[&world.live.find(b)], held);
+        assert_eq!(world.live.lowers(world.live.find(b))[&world.live.find(a)], held);
     }
 
     #[test]
@@ -339,8 +333,7 @@ mod tests {
             if reached.id() == stand_in { Fate::Keep(last) } else { Fate::Anew }
         });
         assert_eq!(enclosing.verify(), Ok(()));
-        let some = enclosing.find(copied.classes[&some]);
-        let last = enclosing.find(last);
-        assert_eq!(enclosing.lowers(last), BTreeMap::from([(some, BTreeSet::from([meets]))]));
+        let some = enclosing.find(copied.classes[&some]).id();
+        assert_eq!(enclosing.lower_items(last), BTreeMap::from([(some, BTreeSet::from([meets]))]));
     }
 }

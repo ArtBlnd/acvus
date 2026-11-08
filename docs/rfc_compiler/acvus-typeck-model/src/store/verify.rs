@@ -1,9 +1,8 @@
 //! The invariants the store keeps, checked.
 
-use std::collections::BTreeSet;
-
 use crate::primitive::ItemId;
-use crate::primitive::class::{Bound, Class, ClassKind, State};
+use crate::primitive::bound::BoundOf;
+use crate::primitive::class::{Class, ClassKind, State};
 use crate::primitive::id::Id;
 use crate::primitive::ty::PartKey;
 
@@ -23,7 +22,9 @@ where
     /// A part of an undecided class that no item names.
     Unnamed { class: K::Id, key: PartKey },
     /// A bound between two undecided classes that only one of them holds.
-    OneSided { bound: Bound<K>, by: ItemId },
+    OneSided { bound: K::Bound, by: ItemId },
+    /// A bound held by a class that is neither of its ends.
+    Stray { holder: K::Id, bound: K::Bound, by: ItemId },
 }
 
 impl<K> Classes<K>
@@ -55,8 +56,6 @@ where
             return Err(violations);
         }
 
-        let mut held_as_upper = BTreeSet::new();
-        let mut held_as_lower = BTreeSet::new();
         for (id, slot) in self.slots.iter() {
             let Slot::Root(Class {
                 state: State::Undecided(constraints),
@@ -73,40 +72,35 @@ where
                     });
                 }
             }
-            for (upper, items) in &constraints.upper {
-                for by in items {
-                    held_as_upper.insert((self.rooted(Bound { lower: id, upper: *upper }), *by));
+            for (bound, by) in &constraints.bounds {
+                let ends = [bound.lower(), bound.upper()];
+                if !ends.iter().any(|end| self.find(*end).id() == id) {
+                    violations.push(Violation::Stray {
+                        holder: id,
+                        bound: bound.clone(),
+                        by: *by,
+                    });
+                    continue;
                 }
-            }
-            for (lower, items) in &constraints.lower {
-                for by in items {
-                    held_as_lower.insert((self.rooted(Bound { lower: *lower, upper: id }), *by));
+                for end in ends {
+                    if !self.holds_or_is_decided(end, bound, *by) {
+                        violations.push(Violation::OneSided {
+                            bound: bound.clone(),
+                            by: *by,
+                        });
+                    }
                 }
             }
         }
-        let one_sided = held_as_upper
-            .iter()
-            .filter(|(bound, by)| self.is_undecided(bound.upper) && !held_as_lower.contains(&(*bound, *by)))
-            .chain(
-                held_as_lower
-                    .iter()
-                    .filter(|(bound, by)| self.is_undecided(bound.lower) && !held_as_upper.contains(&(*bound, *by))),
-            )
-            .map(|(bound, by)| Violation::OneSided { bound: *bound, by: *by });
-        violations.extend(one_sided);
 
         if violations.is_empty() { Ok(()) } else { Err(violations) }
     }
 
-    fn rooted(&self, bound: Bound<K>) -> Bound<K> {
-        Bound {
-            lower: self.find(bound.lower).id(),
-            upper: self.find(bound.upper).id(),
+    fn holds_or_is_decided(&self, class: K::Id, bound: &K::Bound, by: ItemId) -> bool {
+        match &self.get(self.find(class)).state {
+            State::Undecided(constraints) => constraints.bounds.contains(&(bound.clone(), by)),
+            State::Decided(_) => true,
         }
-    }
-
-    fn is_undecided(&self, class: K::Id) -> bool {
-        !self.get(self.find(class)).state.is_decided()
     }
 }
 
@@ -115,6 +109,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::primitive::bound::Bound;
     use crate::primitive::class::{Constraints, Live, Part, Side, Template};
     use crate::primitive::id::Arena;
     use crate::primitive::scope::Scopes;
@@ -157,7 +152,7 @@ mod tests {
         let a = world.undecided();
         let b = world.undecided();
         let at = world.items.push(());
-        world.classes.bound(Bound { lower: a, upper: b }, at);
+        world.classes.bound(Bound::Enter { lower: a, upper: b }, at);
         world
             .classes
             .part(a, PartKey::Field(Name::new("x")), Side::Upper, at)
@@ -179,7 +174,7 @@ mod tests {
             BTreeSet::from([at]),
         );
         let other = templates.undecided(scopes.root());
-        templates.bound(Bound { lower: other, upper: hole }, at);
+        templates.bound(Bound::Enter { lower: other, upper: hole }, at);
         templates.unify(&scopes, other, reference, at);
         assert_eq!(templates.verify(), Ok(()));
     }
@@ -190,15 +185,27 @@ mod tests {
         let a = world.undecided();
         let b = world.undecided();
         let at = world.items.push(());
-        world.classes.bound(Bound { lower: a, upper: b }, at);
-        world.constraints(b).lower.clear();
+        world.classes.bound(Bound::Enter { lower: a, upper: b }, at);
+        world.constraints(b).bounds.clear();
         assert_eq!(
             world.classes.verify(),
             Err(vec![Violation::OneSided {
-                bound: Bound { lower: a, upper: b },
+                bound: Bound::Enter { lower: a, upper: b },
                 by: at,
             }])
         );
+    }
+
+    #[test]
+    fn a_bound_held_by_a_class_that_is_neither_end_is_found() {
+        let mut world = World::new();
+        let a = world.undecided();
+        let b = world.undecided();
+        let holder = world.undecided();
+        let at = world.items.push(());
+        let bound = Bound::Enter { lower: a, upper: b };
+        world.constraints(holder).bounds.insert((bound, at));
+        assert_eq!(world.classes.verify(), Err(vec![Violation::Stray { holder, bound, by: at }]));
     }
 
     #[test]
