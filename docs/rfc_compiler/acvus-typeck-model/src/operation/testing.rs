@@ -80,6 +80,17 @@ impl World {
         (reference, at)
     }
 
+    /// `argument` passed to a parameter of the type `upper`: the argument's class
+    /// enters the boundary's, which goes to the parameter's (O2).
+    pub(super) fn pass(&mut self, argument: ClassId, upper: ClassId) -> (ClassId, ItemId) {
+        let boundary = self.meets(argument);
+        let at = self.record(Bound::Change {
+            lower: boundary,
+            upper,
+        });
+        (boundary, at)
+    }
+
     /// `let name = lower`, or a branch of an `if`.
     pub(super) fn meets(&mut self, lower: ClassId) -> ClassId {
         let place = self.undecided();

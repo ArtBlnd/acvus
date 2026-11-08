@@ -26,7 +26,7 @@ use super::bound::{decided_by, shape_of};
 
 /// The class node of `class`, once it is decided. No class node is partly
 /// decided: a reference has none until its target has a head.
-fn class_node<K>(classes: &Classes<K>, class: K::Id) -> Option<ClassNode>
+pub(super) fn class_node<K>(classes: &Classes<K>, class: K::Id) -> Option<ClassNode>
 where
     K: ClassKind,
 {
@@ -209,17 +209,6 @@ mod tests {
         }
     }
 
-    /// `argument` passed to a parameter of the type `upper`: the argument's
-    /// class enters the boundary's, which goes to the parameter's (O2).
-    fn pass(world: &mut World, argument: ClassId, upper: ClassId) -> (ClassId, ItemId) {
-        let boundary = world.meets(argument);
-        let at = world.record(Bound::Change {
-            lower: boundary,
-            upper,
-        });
-        (boundary, at)
-    }
-
     fn coerced(at: ItemId, coercions: &[Coercion]) -> Adjustments {
         let adjustments = coercions.iter().copied().map(Adjustment::Coerce).collect();
         BTreeMap::from([(at, adjustments)])
@@ -236,7 +225,7 @@ mod tests {
         let mut world = World::new();
         let argument = world.text(U8);
         let parameter = world.external(U8);
-        pass(&mut world, argument, parameter);
+        world.pass(argument, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -251,7 +240,7 @@ mod tests {
         let mut world = World::new();
         let argument = world.text(Shape::Never);
         let parameter = world.external(U8);
-        let (_, at) = pass(&mut world, argument, parameter);
+        let (_, at) = world.pass(argument, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -264,7 +253,7 @@ mod tests {
         let mut world = World::new();
         let argument = world.text(Shape::Never);
         let parameter = world.external(Shape::Never);
-        pass(&mut world, argument, parameter);
+        world.pass(argument, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -277,7 +266,7 @@ mod tests {
         let mut world = World::new();
         let argument = world.text(U8);
         let parameter = world.external(Shape::Never);
-        let (_, at) = pass(&mut world, argument, parameter);
+        let (_, at) = world.pass(argument, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -291,7 +280,7 @@ mod tests {
         let (exclusive, _) = world.lend(x, EXCLUSIVE);
         let declared = world.external(U8);
         let parameter = world.external(Shape::Ref(SHARED, declared));
-        let (_, at) = pass(&mut world, exclusive, parameter);
+        let (_, at) = world.pass(exclusive, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -303,7 +292,7 @@ mod tests {
         let (shared, _) = world.lend(x, SHARED);
         let declared = world.external(U8);
         let parameter = world.external(Shape::Ref(EXCLUSIVE, declared));
-        let (_, at) = pass(&mut world, shared, parameter);
+        let (_, at) = world.pass(shared, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -325,7 +314,7 @@ mod tests {
             let hole = world.undecided();
             let slice = world.external(Shape::Slice(hole));
             let parameter = world.external(Shape::Ref(SHARED, slice));
-            let (_, at) = pass(&mut world, lent, parameter);
+            let (_, at) = world.pass(lent, parameter);
 
             assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -343,7 +332,7 @@ mod tests {
         let array = world.text(Shape::Array(2, elem));
         let hole = world.undecided();
         let slice = world.external(Shape::Slice(hole));
-        let (_, at) = pass(&mut world, array, slice);
+        let (_, at) = world.pass(array, slice);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -359,7 +348,7 @@ mod tests {
         let declared = world.external(U8);
         let array = world.external(Shape::Array(2, declared));
         let parameter = world.external(Shape::Ref(SHARED, array));
-        let (_, at) = pass(&mut world, lent, parameter);
+        let (_, at) = world.pass(lent, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -371,7 +360,7 @@ mod tests {
         let mut world = World::new();
         let argument = object(&mut world, &["x", "y"], false);
         let parameter = object(&mut world, &["x"], true);
-        let (_, at) = pass(&mut world, argument, parameter);
+        let (_, at) = world.pass(argument, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -384,7 +373,7 @@ mod tests {
         let mut world = World::new();
         let argument = object(&mut world, &["x"], false);
         let parameter = object(&mut world, &["x", "y"], true);
-        let (_, at) = pass(&mut world, argument, parameter);
+        let (_, at) = world.pass(argument, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -403,7 +392,7 @@ mod tests {
             (Name::new("y"), y),
         ])));
         let parameter = object(&mut world, &["x"], true);
-        let (_, at) = pass(&mut world, argument, parameter);
+        let (_, at) = world.pass(argument, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -419,7 +408,7 @@ mod tests {
         let (lent, _) = world.lend(argument, SHARED);
         let target = object(&mut world, &["x"], true);
         let parameter = world.external(Shape::Ref(SHARED, target));
-        let (_, at) = pass(&mut world, lent, parameter);
+        let (_, at) = world.pass(lent, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -439,7 +428,7 @@ mod tests {
         let (lent, _) = world.lend(argument, SHARED);
         let target = world.external(Shape::Enum(Name::new("E"), two));
         let parameter = world.external(Shape::Ref(SHARED, target));
-        let (_, at) = pass(&mut world, lent, parameter);
+        let (_, at) = world.pass(lent, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -459,7 +448,7 @@ mod tests {
             let payload = world.external(U8);
             let argument = world.external(kind(enumerate(&["A"], payload)));
             let parameter = world.external(kind(enumerate(&["A", "B"], payload)));
-            let (_, at) = pass(&mut world, argument, parameter);
+            let (_, at) = world.pass(argument, parameter);
             assert_eq!(world.settle_fully(), Settled::Finished);
             world.no_refusals();
             assert_eq!(world.outcome.adjustments, coerced(at, &[Coercion::AddVariants]));
@@ -468,7 +457,7 @@ mod tests {
             let payload = world.external(U8);
             let argument = world.external(kind(enumerate(&["A", "B"], payload)));
             let parameter = world.external(kind(enumerate(&["A"], payload)));
-            let (_, at) = pass(&mut world, argument, parameter);
+            let (_, at) = world.pass(argument, parameter);
             assert_eq!(world.settle_fully(), Settled::Finished);
             refused_at(&world, Cause::NoChange, at);
         }
@@ -479,7 +468,7 @@ mod tests {
         let mut world = World::new();
         let argument = world.external(Shape::Enum(Name::new("E"), BTreeMap::new()));
         let parameter = world.external(Shape::Enum(Name::new("F"), BTreeMap::new()));
-        let (_, at) = pass(&mut world, argument, parameter);
+        let (_, at) = world.pass(argument, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -495,7 +484,7 @@ mod tests {
         let mut world = World::new();
         let argument = world.external(values(&[first]));
         let parameter = world.external(values(&[first, second]));
-        let (_, at) = pass(&mut world, argument, parameter);
+        let (_, at) = world.pass(argument, parameter);
         assert_eq!(world.settle_fully(), Settled::Finished);
         world.no_refusals();
         assert_eq!(world.outcome.adjustments, coerced(at, &[Coercion::AddClosures]));
@@ -503,7 +492,7 @@ mod tests {
         let mut world = World::new();
         let argument = world.external(values(&[first, second]));
         let parameter = world.external(values(&[first]));
-        let (_, at) = pass(&mut world, argument, parameter);
+        let (_, at) = world.pass(argument, parameter);
         assert_eq!(world.settle_fully(), Settled::Finished);
         refused_at(&world, Cause::NoChange, at);
     }
@@ -518,9 +507,9 @@ mod tests {
         let argument = world.external(Shape::FnValue(BTreeSet::from([closure])));
         let result = world.external(U8);
         let parameter = world.external(Shape::Fn(Vec::new(), result));
-        let (boundary, at) = pass(&mut world, argument, parameter);
+        let (boundary, at) = world.pass(argument, parameter);
 
-        assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
+        assert_eq!(world.settle_fully(), Settled::AwaitsInstances);
 
         world.no_refusals();
         assert_eq!(
@@ -540,7 +529,7 @@ mod tests {
         let mut world = World::new();
         let argument = world.text(U16);
         let parameter = world.external(U8);
-        let (_, at) = pass(&mut world, argument, parameter);
+        let (_, at) = world.pass(argument, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -548,8 +537,8 @@ mod tests {
     }
 
     /// `let a; g(&a);`, with `g(&[u8])`: the boundary's head is `&`, and what its
-    /// target is is not known, so no change can be chosen. `a` is given a head by
-    /// hand here, as upper bounds will give it.
+    /// target is is not known, so no change can be chosen. The head is given by hand
+    /// here, to one upper bounds would not give: it is the wait that is looked at.
     #[test]
     fn a_change_waits_for_the_target_of_a_reference() {
         let mut world = World::new();
@@ -558,9 +547,9 @@ mod tests {
         let declared = world.external(U8);
         let slice = world.external(Shape::Slice(declared));
         let parameter = world.external(Shape::Ref(SHARED, slice));
-        let (boundary, at) = pass(&mut world, lent, parameter);
+        let (boundary, at) = world.pass(lent, parameter);
 
-        assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
+        world.settle();
 
         world.no_refusals();
         assert!(!world.classes.is_decided(boundary));
@@ -589,7 +578,7 @@ mod tests {
         });
         world.enter(argument, boundary);
 
-        assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
+        world.settle();
 
         assert_eq!(
             world.outcome.bounds,
@@ -641,13 +630,18 @@ mod tests {
             let (from, to) = kind(part, declared);
             let argument = world.text(from);
             let parameter = world.external(to);
-            pass(&mut world, argument, parameter);
+            world.pass(argument, parameter);
 
-            assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
+            world.settle();
 
             world.no_refusals();
             assert!(!world.classes.is_decided(part));
             assert!(world.classes.upper_items(part).contains_key(&world.classes.find(declared).id()));
+
+            assert_eq!(world.settle_fully(), Settled::Finished);
+
+            world.no_refusals();
+            assert_eq!(world.shape(part), U8);
         }
     }
 
@@ -662,13 +656,18 @@ mod tests {
         let declared = world.external(U8);
         let slice = world.external(Shape::Slice(declared));
         let parameter = world.external(Shape::Ref(SHARED, slice));
-        pass(&mut world, lent, parameter);
+        world.pass(lent, parameter);
 
-        assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
+        world.settle();
 
         world.no_refusals();
         assert!(!world.classes.is_decided(elem));
         assert!(world.classes.upper_items(elem).contains_key(&world.classes.find(declared).id()));
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.shape(elem), U8);
     }
 
     /// Example 12: `take(Some(&mut x));`, with `take(Option<&T>)`. The change
@@ -682,7 +681,7 @@ mod tests {
         let hole = world.undecided();
         let reference = world.external(Shape::Ref(SHARED, hole));
         let parameter = world.external(Shape::Option(reference));
-        let (_, at) = pass(&mut world, some, parameter);
+        let (_, at) = world.pass(some, parameter);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
@@ -705,13 +704,13 @@ mod tests {
             let push_option = world.external(Shape::Option(push_hole));
             let push_first = world.external(Shape::Ref(EXCLUSIVE, push_option));
             let (lent, _) = world.lend(buf, EXCLUSIVE);
-            pass(&mut world, lent, push_first);
+            world.pass(lent, push_first);
             let sixteen = world.text(U16);
             world.enter(sixteen, push_hole);
 
             let declared_u8 = world.external(U8);
             let consume = world.external(Shape::Option(declared_u8));
-            let (_, consume_at) = pass(&mut world, buf, consume);
+            let (_, consume_at) = world.pass(buf, consume);
             if reversed {
                 world.open.reverse();
             }
@@ -725,9 +724,9 @@ mod tests {
         }
     }
 
-    /// Example 4, up to what upper bounds give: `let a = new(); fill_all(&mut a);`,
+    /// Example 4: `let a = new(); fill_all(&mut a);`,
     /// with `new() -> Option<T>` and `fill_all(&mut Option<u8>)`. The part has the
-    /// upper bound `u8`, which nothing here gives it yet.
+    /// upper bound `u8`, and takes it once nothing else moves.
     #[test]
     fn a_part_a_boundary_reaches_has_the_part_it_corresponds_to_as_an_upper_bound() {
         let mut world = World::new();
@@ -738,14 +737,19 @@ mod tests {
         let declared_u8 = world.external(U8);
         let declared = world.external(Shape::Option(declared_u8));
         let parameter = world.external(Shape::Ref(EXCLUSIVE, declared));
-        pass(&mut world, lent, parameter);
+        world.pass(lent, parameter);
 
-        assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
+        world.settle();
 
         world.no_refusals();
         assert!(!world.classes.is_decided(hole));
         let uppers: Vec<ClassId> = world.classes.upper_items(hole).into_keys().collect();
         assert_eq!(uppers, vec![world.classes.find(declared_u8).id()]);
         assert_eq!(world.outcome.bounds, crate::primitive::class::Bounds::<Live>::new());
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.shape(hole), U8);
     }
 }

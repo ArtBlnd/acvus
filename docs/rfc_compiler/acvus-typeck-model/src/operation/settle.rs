@@ -8,8 +8,8 @@
 //! |---|---|---|
 //! | 0. structure | connects parts, and merges cycles, to a fixpoint | no |
 //! | 1. lower | a class takes the join of what enters it (O6) | yes |
-//! | 2. upper | a class takes the one head its upper bounds give it (O19) | not here yet |
-//! | 3. domain | a literal's class takes its row's fallback type (O20) | yes |
+//! | 2. upper | a class nothing enters takes the one head its upper bounds give it (O19) | yes |
+//! | 3. domain | a literal's class no upper bound gives a head takes its row's fallback type (O20) | yes |
 //! | 4. never | a class nothing says anything about takes `!` | yes |
 //! | end | a class still undecided is refused (O21) | |
 //!
@@ -21,7 +21,7 @@
 use std::collections::BTreeSet;
 
 use crate::primitive::ItemId;
-use crate::primitive::bound::Bound;
+use crate::primitive::bound::{Bound, BoundOf};
 use crate::primitive::class::{ClassKind, Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::{Cause, Refusal};
@@ -30,17 +30,19 @@ use crate::primitive::ty::{PartKey, Shape};
 use crate::store::classes::Classes;
 
 use super::Outcome;
-use super::bound::{Join, given, join_lowers};
+use super::bound::{Join, join_lowers};
+use super::change::class_node;
+use super::upper::{Given, given_by_uppers};
 
 /// Where solving stopped.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Settled {
     /// No rung changes anything. What is still undecided has been refused.
     Finished,
-    /// What upper bounds give is owed, which is not made yet, or a change cannot
-    /// be made yet. Solving stops here: a fallback taken now could decide a class
-    /// they would decide otherwise.
-    AwaitsUpper,
+    /// A function value goes to a function type, whose instances are not recorded
+    /// yet (O30). Solving stops here: they may decide classes that a fallback
+    /// taken now would decide otherwise.
+    AwaitsInstances,
 }
 
 /// What is known of a class's head before the class is decided.
@@ -97,45 +99,23 @@ where
     }
 }
 
-/// Whether going up from `class`, a head is there to be given: a decided class,
-/// or a class something has entered.
-fn upper_gives_a_head<K>(classes: &Classes<K>, class: K::Id) -> bool
-where
-    K: ClassKind<Bound = Bound<K>>,
-{
-    let mut seen = BTreeSet::new();
-    let mut stack = vec![class];
-    while let Some(class) = stack.pop() {
-        let root = classes.find(class);
-        if !seen.insert(root.id()) {
-            continue;
-        }
-        for (upper, _) in classes.uppers(root) {
-            if upper == root {
-                continue;
-            }
-            if classes.get(upper).state.is_decided() {
-                return true;
-            }
-            let entered = classes
-                .lowers(upper)
-                .into_values()
-                .flatten()
-                .any(|(bound, _)| given(classes, &bound).is_some());
-            if entered {
-                return true;
-            }
-            stack.push(upper.id());
-        }
-    }
-    false
-}
-
 fn every_root<K>(classes: &Classes<K>) -> Vec<K::Id>
 where
     K: ClassKind,
 {
     classes.roots().map(|root| root.id()).collect()
+}
+
+/// The undecided classes `visit` gives, of those no lower bound enters.
+fn nothing_enters<K, F>(classes: &Classes<K>, visit: &F) -> Vec<K::Id>
+where
+    K: ClassKind<Bound = Bound<K>>,
+    F: Fn(&Classes<K>) -> Vec<K::Id>,
+{
+    visit(classes)
+        .into_iter()
+        .filter(|class| !classes.is_decided(*class) && join_lowers(classes, *class) == Join::Nothing)
+        .collect()
 }
 
 impl<K> Outcome<K>
@@ -161,22 +141,57 @@ where
     {
         loop {
             self.settle_lower(classes, scopes, at, visit);
-            let owed = !self.bounds.is_empty()
-                || visit(classes).into_iter().any(|class| {
-                    !classes.is_decided(class)
-                        && join_lowers(classes, class) == Join::Nothing
-                        && upper_gives_a_head(classes, class)
-                });
-            if owed {
-                return Settled::AwaitsUpper;
+            if self.instances_owed(classes) {
+                return Settled::AwaitsInstances;
             }
-            if self.fall_back_to_domains(classes, scopes, at, visit) || self.fall_back_to_never(classes, scopes, at, visit)
+            if self.decide_by_uppers(classes, scopes, at, visit)
+                || self.fall_back_to_domains(classes, scopes, at, visit)
+                || self.fall_back_to_never(classes, scopes, at, visit)
             {
                 continue;
             }
             self.refuse_undecided(classes, visit);
             return Settled::Finished;
         }
+    }
+
+    /// Whether a change is left whose class nodes are both decided, which only a
+    /// function type's waiting for its instances leaves.
+    fn instances_owed(&self, classes: &Classes<K>) -> bool {
+        self.bounds
+            .iter()
+            .any(|(bound, _)| class_node(classes, bound.lower()).is_some() && class_node(classes, bound.upper()).is_some())
+    }
+
+    /// Rung 2: each class nothing enters takes the one head its upper bounds give
+    /// it, where there is one, all at once.
+    fn decide_by_uppers<F>(&mut self, classes: &mut Classes<K>, scopes: &Scopes, at: ItemId, visit: &F) -> bool
+    where
+        F: Fn(&Classes<K>) -> Vec<K::Id>,
+    {
+        let mut decided = false;
+        for (class, given) in given_by_uppers(classes, &self.bounds, nothing_enters(classes, visit)) {
+            if let Given::Head { shape, by } = given
+                && !classes.is_decided(class)
+            {
+                self.decide_with_new_parts(classes, scopes, class, &shape, by, at);
+                decided = true;
+            }
+        }
+        decided
+    }
+
+    /// The classes whose dimension is neither lower nor upper (O17). A class its
+    /// upper bounds give heads to is not among them, even where no one of those
+    /// heads will do.
+    fn may_fall_back<F>(&self, classes: &Classes<K>, visit: &F) -> Vec<K::Id>
+    where
+        F: Fn(&Classes<K>) -> Vec<K::Id>,
+    {
+        given_by_uppers(classes, &self.bounds, nothing_enters(classes, visit))
+            .into_iter()
+            .filter_map(|(class, given)| (given == Given::Nothing).then_some(class))
+            .collect()
     }
 
     /// Rungs 0 and 1, until neither changes anything.
@@ -326,17 +341,14 @@ where
         decided
     }
 
-    /// Rung 3: each class that nothing enters and a literal has registered a
-    /// domain in takes its row's fallback type, all at once.
+    /// Rung 3: each class a literal has registered a domain in, and that neither
+    /// lower nor upper bounds decide, takes its row's fallback type, all at once.
     fn fall_back_to_domains<F>(&mut self, classes: &mut Classes<K>, scopes: &Scopes, at: ItemId, visit: &F) -> bool
     where
         F: Fn(&Classes<K>) -> Vec<K::Id>,
     {
         let mut falling = Vec::new();
-        for class in visit(classes) {
-            if classes.is_decided(class) || join_lowers(classes, class) != Join::Nothing {
-                continue;
-            }
+        for class in self.may_fall_back(classes, visit) {
             let State::Undecided(constraints) = &classes.get(classes.find(class)).state else {
                 continue;
             };
@@ -363,21 +375,20 @@ where
         fell
     }
 
-    /// Rung 4: each class that nothing enters and no literal has registered a
-    /// domain in takes `!`, all at once.
+    /// Rung 4: each class no literal has registered a domain in, and that neither
+    /// lower nor upper bounds decide, takes `!`, all at once.
     fn fall_back_to_never<F>(&mut self, classes: &mut Classes<K>, scopes: &Scopes, at: ItemId, visit: &F) -> bool
     where
         F: Fn(&Classes<K>) -> Vec<K::Id>,
     {
-        let falling: Vec<K::Id> = visit(classes)
+        let falling: Vec<K::Id> = self
+            .may_fall_back(classes, visit)
             .into_iter()
             .filter(|class| {
-                !classes.is_decided(*class)
-                    && join_lowers(classes, *class) == Join::Nothing
-                    && matches!(
-                        &classes.get(classes.find(*class)).state,
-                        State::Undecided(constraints) if constraints.domains.is_empty()
-                    )
+                matches!(
+                    &classes.get(classes.find(*class)).state,
+                    State::Undecided(constraints) if constraints.domains.is_empty()
+                )
             })
             .collect();
         let mut fell = false;
@@ -422,8 +433,10 @@ mod tests {
     use crate::operation::bound::shape_of;
     use crate::operation::testing::{EXCLUSIVE, SHARED, U8, World};
     use crate::primitive::adjustment::{Adjustment, Adjustments};
-    use crate::primitive::ty::Scalar;
-    use crate::primitive::{ClassId, Name};
+    use crate::primitive::id::Arena;
+    use crate::primitive::record::Coercion;
+    use crate::primitive::ty::{Mutability, Scalar};
+    use crate::primitive::{ClassId, ClosureId, Name};
 
     fn describe(world: &World, class: ClassId, depth: usize) -> String {
         if depth == 0 {
@@ -434,6 +447,7 @@ mod tests {
         };
         match shape {
             Shape::Option(payload) => format!("Option<{}>", describe(world, *payload, depth - 1)),
+            Shape::Slice(elem) => format!("[{}]", describe(world, *elem, depth - 1)),
             Shape::Ref(SHARED, target) => format!("&{}", describe(world, *target, depth - 1)),
             Shape::Ref(EXCLUSIVE, target) => format!("&mut {}", describe(world, *target, depth - 1)),
             Shape::Object(fields) => {
@@ -751,8 +765,8 @@ mod tests {
     }
 
     /// `let y; let z = if c { y } else { 0 };`: `!` waits for what the literal
-    /// falls back to, which `z` then has to give `y`. All at once, `y` would be
-    /// `!`, though what it holds has a type.
+    /// falls back to, which `z` then gives `y`. All at once, `y` would be `!`,
+    /// though what it holds has a type.
     #[test]
     fn never_waits_for_what_a_literal_falls_back_to() {
         let mut world = World::new();
@@ -760,82 +774,373 @@ mod tests {
         let zero = literal(&mut world, &INTEGERS);
         let z = meet(&mut world, y, zero);
 
-        assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
+        assert_eq!(world.settle_fully(), Settled::Finished);
 
         world.no_refusals();
         assert_eq!(world.shape(zero), Shape::Scalar(Scalar::I32));
-        assert!(!world.classes.is_decided(y));
-        assert!(!world.classes.is_decided(z));
+        assert_eq!(world.shape(y), Shape::Scalar(Scalar::I32));
+        assert_eq!(world.shape(z), Shape::Scalar(Scalar::I32));
     }
 
-    /// Example 9: `let x = 0; take(x);`, with `take(u8)`. Falling back here would
-    /// make the literal `i32`, and refuse the program.
+    fn reference_to_slice(world: &mut World, mutability: Mutability) -> ClassId {
+        let declared = world.external(U8);
+        let slice = world.external(Shape::Slice(declared));
+        world.external(Shape::Ref(mutability, slice))
+    }
+
     #[test]
-    fn no_fallback_is_taken_while_an_upper_bound_has_a_head_to_give() {
+    fn what_upper_bounds_give_comes_out_the_same_in_every_order() {
+        type Program = (&'static str, &'static str, fn(&mut World) -> ClassId);
+        let programs: [Program; 24] = [
+            ("example 1: let a = 1u32; let b = if c { a } else { 10 };", "u32", |w| {
+                let written = w.text(Shape::Scalar(Scalar::U32));
+                let a = w.meets(written);
+                let ten = literal(w, &INTEGERS);
+                let if_class = meet(w, a, ten);
+                w.meets(if_class);
+                ten
+            }),
+            ("example 9: let x = 0; take(x);, take(u8)", "u8", |w| {
+                let zero = literal(w, &INTEGERS);
+                let x = w.meets(zero);
+                let parameter = w.external(U8);
+                w.pass(x, parameter);
+                zero
+            }),
+            ("example 21: f(0, 1u8);, f(T, T)", "u8", |w| {
+                let hole = w.undecided();
+                let zero = literal(w, &INTEGERS);
+                let one = w.text(U8);
+                w.enter(zero, hole);
+                w.enter(one, hole);
+                zero
+            }),
+            ("example 23: let a; if let Some(v) = a {} take(a);, take(Option<u8>)", "u8", |w| {
+                let a = w.undecided();
+                let (v, _) = project(w, a, PartKey::Payload(Name::new("Some")), Side::Upper);
+                let declared = w.external(U8);
+                let parameter = w.external(Shape::Option(declared));
+                w.pass(a, parameter);
+                v
+            }),
+            ("let y; let z = if c { y } else { 0 };", "i32", |w| {
+                let y = w.undecided();
+                let zero = literal(w, &INTEGERS);
+                meet(w, y, zero);
+                y
+            }),
+            ("let y; let x = 0; let z = if c { y } else { x };", "i32", |w| {
+                let y = w.undecided();
+                let zero = literal(w, &INTEGERS);
+                let x = w.meets(zero);
+                meet(w, y, x);
+                y
+            }),
+            ("let v = new(); let a = first(&v); let z = if c { a } else { 0 };", "i32", |w| {
+                let new_hole = w.undecided();
+                let result = w.external(Shape::Option(new_hole));
+                let v = w.meets(result);
+                let (lent, _) = w.lend(v, SHARED);
+                let first_hole = w.undecided();
+                let option = w.external(Shape::Option(first_hole));
+                let parameter = w.external(Shape::Ref(SHARED, option));
+                w.pass(lent, parameter);
+                let a = w.meets(first_hole);
+                let zero = literal(w, &INTEGERS);
+                meet(w, a, zero);
+                new_hole
+            }),
+            ("let a; g(&a);, g(&[u8])", "[u8]", |w| {
+                let a = w.undecided();
+                let (lent, _) = w.lend(a, SHARED);
+                let parameter = reference_to_slice(w, SHARED);
+                w.pass(lent, parameter);
+                a
+            }),
+            ("let a; let r = &a; let s = r; g(s);, g(&[u8])", "[u8]", |w| {
+                let a = w.undecided();
+                let (lent, _) = w.lend(a, SHARED);
+                let r = w.meets(lent);
+                let s = w.meets(r);
+                let parameter = reference_to_slice(w, SHARED);
+                w.pass(s, parameter);
+                a
+            }),
+            ("let a; g(&mut a);, g(&[u8])", "[u8]", |w| {
+                let a = w.undecided();
+                let (lent, _) = w.lend(a, EXCLUSIVE);
+                let parameter = reference_to_slice(w, SHARED);
+                w.pass(lent, parameter);
+                a
+            }),
+            ("let a; g(&mut a);, g(&mut [u8])", "[u8]", |w| {
+                let a = w.undecided();
+                let (lent, _) = w.lend(a, EXCLUSIVE);
+                let parameter = reference_to_slice(w, EXCLUSIVE);
+                w.pass(lent, parameter);
+                a
+            }),
+            ("let a; g(&a);, g(&mut [u8])", "refused:UndecidedClass", |w| {
+                let a = w.undecided();
+                let (lent, _) = w.lend(a, SHARED);
+                let parameter = reference_to_slice(w, EXCLUSIVE);
+                w.pass(lent, parameter);
+                a
+            }),
+            ("example 8: let a; g(&a); k(&a);, g(&[u8]), k(&str)", "refused:UndecidedClass", |w| {
+                let a = w.undecided();
+                let (first, _) = w.lend(a, SHARED);
+                let parameter = reference_to_slice(w, SHARED);
+                w.pass(first, parameter);
+                let (second, _) = w.lend(a, SHARED);
+                let text = w.external(Shape::Str);
+                let parameter = w.external(Shape::Ref(SHARED, text));
+                w.pass(second, parameter);
+                a
+            }),
+            ("let x = 0; f(x); g(x);, f(i32), g(u8)", "refused:UndecidedClass", |w| {
+                let zero = literal(w, &INTEGERS);
+                let x = w.meets(zero);
+                let (first, second) = (w.external(Shape::Scalar(Scalar::I32)), w.external(U8));
+                w.pass(x, first);
+                w.pass(x, second);
+                zero
+            }),
+            ("f(0);, f(String)", "refused:UndecidedClass", |w| {
+                let zero = literal(w, &INTEGERS);
+                let parameter = w.external(Shape::String);
+                w.pass(zero, parameter);
+                zero
+            }),
+            ("let a; f(a); g(a);, f({x}), g({x, y})", "{x,y}", |w| {
+                let a = w.undecided();
+                let declared = w.external(U8);
+                let x = BTreeMap::from([(Name::new("x"), declared)]);
+                let x_and_y = BTreeMap::from([(Name::new("x"), declared), (Name::new("y"), declared)]);
+                let (first, second) = (w.external(Shape::Object(x)), w.external(Shape::Object(x_and_y)));
+                w.pass(a, first);
+                w.pass(a, second);
+                a
+            }),
+            ("let p; let v = p.x; take(p);, take(&{x: u8})", "u8", |w| {
+                let p = w.undecided();
+                let (v, _) = project(w, p, field("x"), Side::Upper);
+                let declared = w.external(U8);
+                let target = w.external(Shape::Object(BTreeMap::from([(Name::new("x"), declared)])));
+                let parameter = w.external(Shape::Ref(SHARED, target));
+                w.pass(p, parameter);
+                v
+            }),
+            ("let a; h(Some(&a));, h(Option<&u8>)", "u8", |w| {
+                let a = w.undecided();
+                let (lent, _) = w.lend(a, SHARED);
+                let some = some_of(w, lent);
+                let declared = w.external(U8);
+                let reference = w.external(Shape::Ref(SHARED, declared));
+                let parameter = w.external(Shape::Option(reference));
+                w.pass(some, parameter);
+                a
+            }),
+            ("let a; h(Some(&a));, h(Option<&mut u8>)", "refused:UndecidedClass", |w| {
+                let a = w.undecided();
+                let (lent, _) = w.lend(a, SHARED);
+                let some = some_of(w, lent);
+                let declared = w.external(U8);
+                let reference = w.external(Shape::Ref(EXCLUSIVE, declared));
+                let parameter = w.external(Shape::Option(reference));
+                w.pass(some, parameter);
+                a
+            }),
+            ("let a; if c { &a } else { &1u8 }", "u8", |w| {
+                let a = w.undecided();
+                let one = w.text(U8);
+                let (first, second) = (w.lend(a, SHARED).0, w.lend(one, SHARED).0);
+                meet(w, first, second);
+                a
+            }),
+            ("let b; take(b); let z = if c { b } else { 0 };, take(u8)", "u8", |w| {
+                let b = w.undecided();
+                let parameter = w.external(U8);
+                w.pass(b, parameter);
+                let zero = literal(w, &INTEGERS);
+                meet(w, b, zero);
+                zero
+            }),
+            ("let y; take(y); if c { y } else { 1u16 }, take(u8)", "refused:UndecidedClass", |w| {
+                let y = w.undecided();
+                let parameter = w.external(U8);
+                w.pass(y, parameter);
+                let sixteen = w.text(Shape::Scalar(Scalar::U16));
+                meet(w, y, sixteen);
+                y
+            }),
+            ("let p; h(Some(p)); k(p);, h(Option<u8>), k(u16)", "refused:UndecidedClass", |w| {
+                let p = w.undecided();
+                let some = some_of(w, p);
+                let declared = w.external(U8);
+                let parameter = w.external(Shape::Option(declared));
+                w.pass(some, parameter);
+                let other = w.external(Shape::Scalar(Scalar::U16));
+                w.pass(p, other);
+                p
+            }),
+            ("let a; f(a); if c { a } else { {x, y} }, f({x})", "refused:UndecidedClass", |w| {
+                let a = w.undecided();
+                let declared = w.external(U8);
+                let parameter = w.external(Shape::Object(BTreeMap::from([(Name::new("x"), declared)])));
+                w.pass(a, parameter);
+                let (x, y) = (w.text(U8), w.text(U8));
+                let both = w.text(Shape::Object(BTreeMap::from([(Name::new("x"), x), (Name::new("y"), y)])));
+                meet(w, a, both);
+                a
+            }),
+        ];
+        for (name, expected, build) in programs {
+            in_every_order(build, expected, name);
+        }
+    }
+
+    /// Example 9: the literal takes what the boundary's type gives, and the classes
+    /// it enters take it from it, as joins.
+    #[test]
+    fn a_literal_takes_what_its_upper_bounds_give_rather_than_falling_back() {
         let mut world = World::new();
         let zero = literal(&mut world, &INTEGERS);
         let x = world.meets(zero);
-        let boundary = world.meets(x);
         let parameter = world.external(U8);
-        world.record(Bound::Change {
-            lower: boundary,
-            upper: parameter,
-        });
+        let (boundary, _) = world.pass(x, parameter);
 
-        assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
+        assert_eq!(world.settle_fully(), Settled::Finished);
 
         world.no_refusals();
-        assert!(!world.classes.is_decided(zero));
+        for class in [zero, x, boundary] {
+            assert_eq!(world.shape(class), U8);
+        }
+        assert_eq!(world.outcome.adjustments, Adjustments::new());
     }
 
-    /// Example 23: `let a; if let Some(v) = a {} take(a);`. `v` says nothing of
-    /// itself, and `!` would refuse it at the upper bound it gets later.
+    /// Example 19's reason, with no overload: two upper bounds give two heads, both
+    /// in the literal's domain, and neither goes to the other. The dimension is
+    /// upper, and it alone decides, so `i32`, the fallback, does not reach it.
     #[test]
-    fn no_class_falls_back_to_never_while_another_has_a_head_to_take() {
+    fn a_class_given_heads_it_cannot_choose_among_does_not_fall_back() {
+        let mut world = World::new();
+        let zero = literal(&mut world, &INTEGERS);
+        let x = world.meets(zero);
+        let (first, second) = (world.external(Shape::Scalar(Scalar::I32)), world.external(U8));
+        let (_, first_at) = world.pass(x, first);
+        let (_, second_at) = world.pass(x, second);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        assert!(!world.classes.is_decided(zero));
+        let named: BTreeSet<ItemId> = world.outcome.refusals.iter().flat_map(|refusal| refusal.items.clone()).collect();
+        assert!(world.outcome.refusals.iter().all(|refusal| refusal.cause == Cause::UndecidedClass));
+        assert!(named.contains(&first_at) && named.contains(&second_at));
+    }
+
+    /// A class that heads go to takes the one that goes to them all, and the bound
+    /// it goes to by a change records it there alone.
+    #[test]
+    fn the_head_that_goes_to_every_upper_bound_records_its_change_where_it_makes_one() {
         let mut world = World::new();
         let a = world.undecided();
-        let (v, _) = project(&mut world, a, PartKey::Payload(Name::new("Some")), Side::Upper);
-        let boundary = world.meets(a);
-        let declared_u8 = world.external(U8);
-        let parameter = world.external(Shape::Option(declared_u8));
-        world.record(Bound::Change {
-            lower: boundary,
-            upper: parameter,
-        });
+        let declared = world.external(U8);
+        let x = BTreeMap::from([(Name::new("x"), declared)]);
+        let x_and_y = BTreeMap::from([(Name::new("x"), declared), (Name::new("y"), declared)]);
+        let (first, second) = (world.external(Shape::Object(x)), world.external(Shape::Object(x_and_y)));
+        let (_, first_at) = world.pass(a, first);
+        world.pass(a, second);
 
-        assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
+        assert_eq!(world.settle_fully(), Settled::Finished);
 
         world.no_refusals();
-        assert!(!world.classes.is_decided(v));
+        let expected: Adjustments = [(first_at, vec![Adjustment::Coerce(Coercion::DropFields)])].into_iter().collect();
+        assert_eq!(world.outcome.adjustments, expected);
     }
 
+    /// `let p; let v = p.x; take(p);`, with `take(&{x: u8})`. The head of `p` comes
+    /// from above, and the projection derefs it, wherever that was found out.
     #[test]
-    fn a_change_not_made_yet_stops_the_fallbacks() {
+    fn a_projection_derefs_a_head_its_operand_was_given_from_above() {
+        let mut world = World::new();
+        let p = world.undecided();
+        let (v, projected) = project(&mut world, p, field("x"), Side::Upper);
+        let declared = world.external(U8);
+        let target = world.external(Shape::Object(BTreeMap::from([(Name::new("x"), declared)])));
+        let parameter = world.external(Shape::Ref(SHARED, target));
+        world.pass(p, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.shape(v), U8);
+        assert!(!world.same(v, declared));
+        let expected: Adjustments = [(projected, vec![Adjustment::Deref])].into_iter().collect();
+        assert_eq!(world.outcome.adjustments, expected);
+    }
+
+    /// A head taken from above has parts of its own: what the upper bound holds is
+    /// what they are connected to, not what they are.
+    #[test]
+    fn a_head_given_from_above_has_parts_of_its_own() {
+        let mut world = World::new();
+        let a = world.undecided();
+        let declared = world.external(U8);
+        let parameter = world.external(Shape::Option(declared));
+        world.pass(a, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        let Shape::Option(payload) = world.shape(a) else {
+            panic!("`a` takes the head its upper bound gives");
+        };
+        assert!(!world.same(payload, declared));
+        assert_eq!(world.shape(payload), U8);
+        assert!(!world.classes.is_external(a));
+    }
+
+    /// Its instances could decide classes, so no fallback is taken while they are
+    /// owed.
+    #[test]
+    fn a_function_type_waiting_for_instances_stops_the_fallbacks() {
+        let mut closures = Arena::<ClosureId, ()>::default();
+        let closure = closures.push(());
         let mut world = World::new();
         let other = world.undecided();
-        let target = world.undecided();
-        let argument = world.external(Shape::Ref(SHARED, target));
-        let declared = world.external(U8);
-        let parameter = world.external(Shape::Ref(SHARED, declared));
-        let at = world.record(Bound::Change {
-            lower: argument,
-            upper: parameter,
-        });
+        let argument = world.external(Shape::FnValue(BTreeSet::from([closure])));
+        let result = world.external(U8);
+        let parameter = world.external(Shape::Fn(Vec::new(), result));
+        world.pass(argument, parameter);
 
-        assert_eq!(world.settle_fully(), Settled::AwaitsUpper);
+        assert_eq!(world.settle_fully(), Settled::AwaitsInstances);
 
+        world.no_refusals();
         assert!(!world.classes.is_decided(other));
-        assert!(!world.classes.is_decided(target));
-        assert_eq!(
-            world.outcome.bounds,
-            BTreeSet::from([(
-                Bound::Change {
-                    lower: argument,
-                    upper: parameter
-                },
-                at
-            )])
-        );
+    }
+
+    /// A change that waits on a class node is no reason to stop: the class it waits
+    /// for is decided by a fallback like any other.
+    #[test]
+    fn a_change_waiting_on_a_target_nothing_speaks_of_does_not_stop_the_fallbacks() {
+        let mut world = World::new();
+        let hole = world.undecided();
+        let parameter = world.external(Shape::Ref(SHARED, hole));
+        let target = world.undecided();
+        let argument = world.text(Shape::Ref(SHARED, target));
+        let (boundary, _) = world.pass(argument, parameter);
+
+        world.settle();
+        assert!(world.classes.is_decided(boundary));
+        assert_eq!(world.outcome.bounds.len(), 1);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.shape(target), Shape::Never);
+        assert!(world.same(target, hole));
+        assert_eq!(world.outcome.bounds.len(), 0);
     }
 
     /// O8: a domain holds the head decided, whichever rung decided it.

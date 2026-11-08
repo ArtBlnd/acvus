@@ -4,6 +4,7 @@ pub mod bound;
 pub mod change;
 pub mod projection;
 pub mod settle;
+mod upper;
 
 #[cfg(test)]
 mod testing;
