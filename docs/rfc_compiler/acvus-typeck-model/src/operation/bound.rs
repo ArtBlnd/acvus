@@ -213,8 +213,8 @@ where
     }
 
     /// Judges each lower bound given back, along with those its judgment gives
-    /// back in turn. A change that cannot be made yet stays given back to the caller,
-    /// and is looked at again next time.
+    /// back in turn. A change stays given back to the caller, which settling makes
+    /// with the conversions declared.
     pub fn judge(&mut self, classes: &mut Classes<K>, scopes: &Scopes) {
         let mut queue = mem::take(&mut self.bounds);
         let mut others = Bounds::<K>::new();
@@ -230,9 +230,7 @@ where
                 Bound::Enter { .. } | Bound::Lend { .. } => self.judge_lower(classes, scopes, bound, at),
                 Bound::Equal { .. } => self.judge_equal(classes, scopes, bound, at),
                 Bound::Change { .. } => {
-                    if !self.judge_change(classes, scopes, bound, at) {
-                        others.insert((bound, at));
-                    }
+                    others.insert((bound, at));
                 }
             }
             queue.append(&mut self.bounds);

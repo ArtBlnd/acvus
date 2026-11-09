@@ -1,182 +1,664 @@
 //! Changes: what a boundary's class reaches its upper bound by (O11).
 //!
-//! A change goes by class nodes and members, so it waits for both class nodes to
-//! be decided, which for a reference takes its target's head too. It changes
-//! nothing below the class node: each part there is one type with the part it
-//! corresponds to (O9).
+//! A change goes by what it sees of each end: a class node and members. Of a
+//! reference it sees the mutability alone where the target shows no class node:
+//! the argument's target is not decided yet, or the type given writes a hole there,
+//! which takes whatever target comes. Ways to go are taken in this order, each only
+//! where the one before it does not go:
 //!
-//! Only the stage of coercion is made here. No conversion is made yet, so what
-//! no coercion reaches is refused, and a function value going to a function type
-//! waits, as its instances are not recorded yet (O30).
+//! | Order | What goes | Chosen by |
+//! |---|---|---|
+//! | 1 | one stage of coercion | what each end shows |
+//! | 2 | a coercion, then a chain of views | class nodes |
+//! | 3 | a coercion, then a chain with a value conversion | whole types, once the argument's is decided at every depth |
+//!
+//! A view is a conversion between references whose parameter writes nothing its
+//! class node does not show, as `&Vec<T> -> &[T]`. Any value with that class node
+//! fits it, so choosing it early is never contradicted, and what a part takes
+//! through it comes from the text. Any other conversion runs a function the text
+//! does not call, so it is chosen only once the argument's type is known whole, and
+//! it decides none of the argument's types. Within one order, exactly one way must
+//! go.
+//!
+//! No coercion follows a conversion. A change alters nothing below what it sees:
+//! each part there is one type with the part it corresponds to (O9), through each
+//! conversion's signature, made anew at the boundary (O12).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::bound::{Bound, BoundOf};
-use crate::primitive::class::ClassKind;
+use crate::primitive::class::{ClassKind, Template};
+use crate::primitive::decl::Conversion;
 use crate::primitive::record::Coercion;
 use crate::primitive::refusal::{Cause, Refusal};
 use crate::primitive::scope::Scopes;
-use crate::primitive::ty::{ClassNode, Constructor, Mutability, Shape};
+use crate::primitive::ty::{ClassNode, Constructor, Mutability, Shape, Ty};
+use crate::primitive::{ItemId, Name, TemplateId};
 use crate::store::classes::Classes;
+use crate::store::template::Fate;
 
 use super::Outcome;
 use super::bound::{decided_by, shape_of};
 
-/// The class node of `class`, once it is decided. No class node is partly
-/// decided: a reference has none until its target has a head.
-pub(super) fn class_node<K>(classes: &Classes<K>, class: K::Id) -> Option<ClassNode>
-where
-    K: ClassKind,
-{
-    match shape_of(classes, class)? {
-        Shape::Ref(mutability, target) => Some(ClassNode::Ref(*mutability, shape_of(classes, *target)?.constructor()?)),
-        shape => Some(ClassNode::Plain(shape.constructor()?)),
+/// A class node, and the members of the head.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+struct Point {
+    node: ClassNode,
+    layer: Shape<()>,
+}
+
+impl Point {
+    /// The point of `head`, `target` being its target's head where it is a
+    /// reference. No class node is partly decided.
+    fn new<P, Q>(head: &Shape<P>, target: Option<&Shape<Q>>) -> Option<Self> {
+        let node = match head {
+            Shape::Ref(mutability, _) => ClassNode::Ref(*mutability, target?.constructor()?),
+            head => ClassNode::Plain(head.constructor()?),
+        };
+        Some(Self {
+            node,
+            layer: head.layer(),
+        })
     }
 }
 
-/// What a stage of coercion comes to.
+/// What a change sees of one of its ends.
 #[derive(Clone, PartialEq, Eq, Debug)]
-enum Stage<I> {
-    /// It goes by these coercions, none being the empty change, and these pairs
-    /// of parts below the class node are one type, the second corresponding to
-    /// the first.
-    Goes {
-        coercions: BTreeSet<Coercion>,
-        parts: Vec<(I, I)>,
-    },
-    /// A function value type going to a function type, whose instances are not
-    /// recorded yet.
-    ToFnType,
-    NoChange,
+enum Seen {
+    At(Point),
+    /// A reference whose target shows no class node.
+    Reference(Mutability),
 }
 
-/// The parts of `fewer` with the part `more` has in the same place, where `more`
-/// has a place for each.
-fn in_places_of<P>(fewer: &Shape<P>, more: &Shape<P>) -> Option<Vec<(P, P)>>
-where
-    P: Copy,
-{
-    fewer
-        .places()
-        .into_iter()
-        .map(|(key, part)| more.place(&key).map(|other| (*part, *other)))
-        .collect()
-}
-
-/// The one stage of coercion that goes from `from` to `to`, which are decided,
-/// with their class nodes (Changes).
-fn stage<K>(classes: &Classes<K>, from: &Shape<K::Id>, to: &Shape<K::Id>, nodes: (&ClassNode, &ClassNode)) -> Stage<K::Id>
+fn point_of_shape<K>(classes: &Classes<K>, shape: &Shape<K::Id>) -> Option<Point>
 where
     K: ClassKind,
 {
-    let goes = |coercions: &[Coercion], parts| Stage::Goes {
-        coercions: coercions.iter().copied().collect(),
-        parts,
+    let target = match shape {
+        Shape::Ref(_, target) => Some(shape_of(classes, *target)?),
+        _ => None,
     };
-    match nodes {
-        (ClassNode::Plain(Constructor::Never), ClassNode::Plain(Constructor::Never)) => goes(&[], Vec::new()),
-        (ClassNode::Plain(Constructor::Never), _) => goes(&[Coercion::Never], Vec::new()),
+    Point::new(shape, target)
+}
+
+/// What a change sees of `shape` as its lower end: a reference whose target is not
+/// decided yet shows its mutability alone.
+fn seen_from<K>(classes: &Classes<K>, shape: &Shape<K::Id>) -> Option<Seen>
+where
+    K: ClassKind,
+{
+    match shape {
+        Shape::Ref(mutability, target) if shape_of(classes, *target).is_none() => Some(Seen::Reference(*mutability)),
+        shape => point_of_shape(classes, shape).map(Seen::At),
+    }
+}
+
+/// What a change sees of `shape` as its upper end, the type given: a reference
+/// whose target is a hole shows its mutability alone, whether the hole is decided
+/// yet or not, as a hole takes whatever comes.
+fn seen_to<K>(classes: &Classes<K>, shape: &Shape<K::Id>) -> Option<Seen>
+where
+    K: ClassKind,
+{
+    match shape {
+        Shape::Ref(mutability, target) if !classes.is_external(*target) => Some(Seen::Reference(*mutability)),
+        shape => point_of_shape(classes, shape).map(Seen::At),
+    }
+}
+
+/// What one stage of coercion comes to.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Stage {
+    /// It goes by these coercions, none being the empty change.
+    Goes(BTreeSet<Coercion>),
+    /// A function value type going to a function type, whose instances are not
+    /// recorded yet (O30).
+    ToFnType,
+    /// Only the target's class node, not decided yet, can tell.
+    Waits,
+    NoChange,
+}
+
+fn reborrow(from: Mutability, into: Mutability) -> Stage {
+    match (from, into) {
+        (Mutability::Shared, Mutability::Exclusive) => Stage::NoChange,
+        (Mutability::Exclusive, Mutability::Shared) => Stage::Goes(BTreeSet::from([Coercion::Reborrow])),
+        _ => Stage::Goes(BTreeSet::new()),
+    }
+}
+
+/// The one stage of coercion from what is seen of one end to what is seen of the
+/// other (Changes).
+fn coercion(from: &Seen, to: &Seen) -> Stage {
+    match (from, to) {
+        (Seen::At(from), Seen::At(to)) => stage(from, to),
+        (
+            Seen::At(Point {
+                node: ClassNode::Plain(Constructor::Never),
+                ..
+            }),
+            Seen::Reference(_),
+        ) => Stage::Goes(BTreeSet::from([Coercion::Never])),
+        (
+            Seen::At(Point {
+                node: ClassNode::Ref(from, _),
+                ..
+            })
+            | Seen::Reference(from),
+            Seen::Reference(into),
+        ) => reborrow(*from, *into),
+        (Seen::At(_), Seen::Reference(_)) => Stage::NoChange,
+        (
+            Seen::Reference(from),
+            Seen::At(Point {
+                node: ClassNode::Ref(into, _),
+                ..
+            }),
+        ) => match reborrow(*from, *into) {
+            Stage::Goes(_) => Stage::Waits,
+            refused => refused,
+        },
+        (Seen::Reference(_), Seen::At(_)) => Stage::NoChange,
+    }
+}
+
+/// The one stage of coercion between two points.
+fn stage(from: &Point, to: &Point) -> Stage {
+    let goes = |coercions: &[Coercion]| Stage::Goes(coercions.iter().copied().collect());
+    match (&from.node, &to.node) {
+        (ClassNode::Plain(Constructor::Never), ClassNode::Plain(Constructor::Never)) => goes(&[]),
+        (ClassNode::Plain(Constructor::Never), _) => goes(&[Coercion::Never]),
         (ClassNode::Ref(from_mutability, from_target), ClassNode::Ref(to_mutability, to_target)) => {
-            let (Shape::Ref(_, from_class), Shape::Ref(_, to_class)) = (from, to) else {
-                unreachable!("a class node is a reference's where the head is one");
+            let Stage::Goes(mut coercions) = reborrow(*from_mutability, *to_mutability) else {
+                return Stage::NoChange;
             };
-            let mut coercions = BTreeSet::new();
-            match (from_mutability, to_mutability) {
-                (Mutability::Exclusive, Mutability::Shared) => {
-                    coercions.insert(Coercion::Reborrow);
-                }
-                (Mutability::Shared, Mutability::Exclusive) => return Stage::NoChange,
-                _ => {}
-            }
-            let parts = match (from_target, to_target) {
+            match (from_target, to_target) {
                 (Constructor::Array(_), Constructor::Slice) => {
                     coercions.insert(Coercion::Unsize);
-                    let (Some(Shape::Array(_, from_elem)), Some(Shape::Slice(to_elem))) =
-                        (shape_of(classes, *from_class), shape_of(classes, *to_class))
-                    else {
-                        unreachable!("a class node holds the constructor of its target's head");
-                    };
-                    vec![(*from_elem, *to_elem)]
                 }
-                (same, other) if same == other => vec![(*from_class, *to_class)],
+                (same, other) if same == other => {}
                 _ => return Stage::NoChange,
-            };
-            Stage::Goes { coercions, parts }
+            }
+            Stage::Goes(coercions)
         }
         (ClassNode::Plain(Constructor::FnValue), ClassNode::Plain(Constructor::Fn(_))) => Stage::ToFnType,
         (ClassNode::Plain(same), ClassNode::Plain(other)) if same == other => {
-            let widened = from.layer() != to.layer();
+            let same_members = from.layer == to.layer;
             match same {
-                Constructor::Object => match in_places_of(to, from) {
-                    Some(fields) if widened => goes(&[Coercion::DropFields], flipped(fields)),
-                    Some(fields) => goes(&[], flipped(fields)),
-                    None => Stage::NoChange,
-                },
-                Constructor::Enum(_) | Constructor::Error => match in_places_of(from, to) {
-                    Some(variants) if widened => goes(&[Coercion::AddVariants], variants),
-                    Some(variants) => goes(&[], variants),
-                    None => Stage::NoChange,
-                },
-                Constructor::FnValue => match (from, to) {
-                    (Shape::FnValue(fewer), Shape::FnValue(more)) if !fewer.is_subset(more) => Stage::NoChange,
-                    _ if widened => goes(&[Coercion::AddClosures], Vec::new()),
-                    _ => goes(&[], Vec::new()),
-                },
-                _ => match in_places_of(from, to) {
-                    Some(parts) => goes(&[], parts),
-                    None => Stage::NoChange,
-                },
+                Constructor::Object if in_places_of(&to.layer, &from.layer).is_none() => Stage::NoChange,
+                Constructor::Object if !same_members => goes(&[Coercion::DropFields]),
+                Constructor::Enum(_) | Constructor::Error if in_places_of(&from.layer, &to.layer).is_none() => {
+                    Stage::NoChange
+                }
+                Constructor::Enum(_) | Constructor::Error if !same_members => goes(&[Coercion::AddVariants]),
+                Constructor::FnValue if !closures_are_held(&from.layer, &to.layer) => Stage::NoChange,
+                Constructor::FnValue if !same_members => goes(&[Coercion::AddClosures]),
+                _ if same_members => goes(&[]),
+                _ => Stage::NoChange,
             }
         }
         _ => Stage::NoChange,
     }
 }
 
-fn flipped<P>(pairs: Vec<(P, P)>) -> Vec<(P, P)> {
-    pairs.into_iter().map(|(first, second)| (second, first)).collect()
+fn closures_are_held(fewer: &Shape<()>, more: &Shape<()>) -> bool {
+    matches!((fewer, more), (Shape::FnValue(fewer), Shape::FnValue(more)) if fewer.is_subset(more))
+}
+
+/// The parts of `fewer` with the part `more` has in the same place, where `more`
+/// has a place for each.
+fn in_places_of<P>(fewer: &Shape<P>, more: &Shape<P>) -> Option<Vec<(P, P)>>
+where
+    P: Clone,
+{
+    fewer
+        .places()
+        .into_iter()
+        .map(|(key, part)| more.place(&key).map(|other| (part.clone(), other.clone())))
+        .collect()
+}
+
+/// Each pair of parts below what a change by `coercions` from `from` to `to` sees,
+/// the second corresponding to the first (O9). `shape_at` gives the head at a
+/// part, where there is one.
+fn below<P, F>(from: &Shape<P>, to: &Shape<P>, coercions: &BTreeSet<Coercion>, shape_at: F) -> Vec<(P, P)>
+where
+    P: Clone,
+    F: Fn(&P) -> Option<Shape<P>>,
+{
+    match (from, to) {
+        (Shape::Never, _) => Vec::new(),
+        (Shape::Ref(_, from), Shape::Ref(_, to)) if coercions.contains(&Coercion::Unsize) => {
+            let (Some(Shape::Array(_, from)), Some(Shape::Slice(to))) = (shape_at(from), shape_at(to)) else {
+                unreachable!("an unsizing goes from a reference to an array to one to a slice");
+            };
+            vec![(from, to)]
+        }
+        (Shape::Ref(_, from), Shape::Ref(_, to)) => vec![(from.clone(), to.clone())],
+        (Shape::Object(_), Shape::Object(_)) => in_places_of(to, from)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(kept, field)| (field, kept))
+            .collect(),
+        _ => in_places_of(from, to).unwrap_or_default(),
+    }
+}
+
+/// Whether a coercion may go from `head` to `to`, as rung 2 asks of a head an upper
+/// bound gives, before the class has parts of its own. The head is the class's own
+/// where `within` is none, and the target of a reference of mutability `within`
+/// otherwise. A reference's own target is a part, made anew, so of a reference
+/// only its mutability is seen. No conversion chooses a head.
+pub(super) fn may_coerce<K>(classes: &Classes<K>, head: &Shape<K::Id>, within: Option<Mutability>, to: &Shape<K::Id>) -> bool
+where
+    K: ClassKind,
+{
+    let from = match (within, head) {
+        (Some(mutability), head) => Point::new(&Shape::Ref(mutability, ()), Some(head)).map(Seen::At),
+        (None, Shape::Ref(mutability, _)) => Some(Seen::Reference(*mutability)),
+        (None, head) => Point::new(head, None::<&Shape<()>>).map(Seen::At),
+    };
+    let (Some(from), Some(to)) = (from, seen_to(classes, to)) else {
+        return false;
+    };
+    coercion(&from, &to) != Stage::NoChange
+}
+
+/// Whether `bound` is a function value going to a function type, which waits for
+/// instances not recorded yet.
+pub(super) fn awaits_instances<K>(classes: &Classes<K>, bound: &Bound<K>) -> bool
+where
+    K: ClassKind<Bound = Bound<K>>,
+{
+    let (Some(from), Some(to)) = (shape_of(classes, bound.lower()), shape_of(classes, bound.upper())) else {
+        return false;
+    };
+    let (Some(from), Some(to)) = (seen_from(classes, from), seen_to(classes, to)) else {
+        return false;
+    };
+    coercion(&from, &to) == Stage::ToFnType
+}
+
+/// A way to go: one stage of coercion, then a chain of conversions.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct Route {
+    coercions: BTreeSet<Coercion>,
+    chain: Vec<Name>,
+}
+
+/// A conversion's signature, written once and made anew at each boundary that
+/// takes it (O12, O13).
+#[derive(Clone, Debug)]
+struct Declared {
+    template: Classes<Template>,
+    from: TemplateId,
+    to: TemplateId,
+    from_point: Point,
+    to_point: Point,
+    parameter: Ty,
+    result: Ty,
+    view: bool,
+}
+
+/// A conversion writes no class node at one of its ends, so no change could reach
+/// it or go on from it (O12).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct NoClassNode;
+
+/// Whether a conversion is a view: both its ends are references, and its parameter
+/// writes nothing its class node does not show, which is its target's constructor
+/// with no members and a distinct hole at each part.
+fn is_view(parameter: &Ty, result: &Ty) -> bool {
+    let (Ty::Node(parameter), Ty::Node(result)) = (parameter, result) else {
+        return false;
+    };
+    let (Shape::Ref(_, Ty::Node(target)), Shape::Ref(..)) = (&**parameter, &**result) else {
+        return false;
+    };
+    let holds_members = matches!(
+        **target,
+        Shape::Object(_) | Shape::Enum(..) | Shape::Error(_) | Shape::FnValue(_)
+    );
+    let mut holes = BTreeSet::new();
+    !holds_members
+        && target
+            .places()
+            .into_iter()
+            .all(|(_, part)| matches!(part, Ty::Hole(hole) if holes.insert(hole.clone())))
+}
+
+/// What a chain of conversions comes to at a boundary.
+enum Chosen {
+    One(Route),
+    /// Only the argument's whole type can tell, and it is not decided yet.
+    Waits,
+    NoChange,
+}
+
+fn exactly_one(mut routes: Vec<Route>) -> Chosen {
+    match (routes.pop(), routes.is_empty()) {
+        (Some(route), true) => Chosen::One(route),
+        _ => Chosen::NoChange,
+    }
+}
+
+/// Every conversion declared.
+#[derive(Clone, Debug, Default)]
+pub struct Conversions {
+    declared: BTreeMap<Name, Declared>,
+}
+
+impl Conversions {
+    /// Writes `conversion` as a template, with one class for each type it writes.
+    pub fn declare(&mut self, name: Name, conversion: &Conversion, scopes: &Scopes, by: ItemId) -> Result<(), NoClassNode> {
+        let mut template = Classes::default();
+        let mut written = BTreeMap::new();
+        let from = template.write(scopes.root(), &conversion.from, by, &mut written);
+        let to = template.write(scopes.root(), &conversion.to, by, &mut written);
+        let point = |class| point_of_shape(&template, shape_of(&template, class)?);
+        let from_point = point(from).ok_or(NoClassNode)?;
+        let to_point = point(to).ok_or(NoClassNode)?;
+        let declared = Declared {
+            from,
+            to,
+            from_point,
+            to_point,
+            parameter: conversion.from.clone(),
+            result: conversion.to.clone(),
+            view: is_view(&conversion.from, &conversion.to),
+            template,
+        };
+        self.declared.insert(name, declared);
+        Ok(())
+    }
+
+    /// The one chain that goes from `from` to `to`, `argument` being the class at
+    /// the boundary: a chain of views where any goes, and a chain with a value
+    /// conversion otherwise, once the argument is decided at every depth.
+    fn choose<K>(&self, classes: &Classes<K>, argument: K::Id, from: &Point, to: &Point) -> Chosen
+    where
+        K: ClassKind,
+    {
+        let (views, values): (Vec<Route>, Vec<Route>) = self
+            .routes(from, to)
+            .into_iter()
+            .partition(|route| route.chain.iter().all(|name| self.declared[name].view));
+        if !views.is_empty() {
+            return exactly_one(views);
+        }
+        if values.is_empty() {
+            return Chosen::NoChange;
+        }
+        let Some(argument) = written_whole(classes, argument) else {
+            return Chosen::Waits;
+        };
+        exactly_one(values.into_iter().filter(|route| self.fits(&argument, route)).collect())
+    }
+
+    /// Every chain from `from` to `to`, after one stage of coercion. No chain comes
+    /// back to a point it has been at, or it would make another way out of one that
+    /// is there already.
+    fn routes(&self, from: &Point, to: &Point) -> Vec<Route> {
+        let mut routes = Vec::new();
+        for (name, declared) in &self.declared {
+            if let Stage::Goes(coercions) = stage(from, &declared.from_point) {
+                let mut seen = BTreeSet::from([from.clone()]);
+                let mut chain = Vec::new();
+                self.follow(name, declared, to, &coercions, &mut chain, &mut seen, &mut routes);
+            }
+        }
+        routes
+    }
+
+    /// Takes the conversion `name`, and whatever chains on from where it ends.
+    #[expect(clippy::too_many_arguments, reason = "a walk's state, which only this walk reads")]
+    fn follow(
+        &self,
+        name: &Name,
+        declared: &Declared,
+        to: &Point,
+        coercions: &BTreeSet<Coercion>,
+        chain: &mut Vec<Name>,
+        seen: &mut BTreeSet<Point>,
+        routes: &mut Vec<Route>,
+    ) {
+        if !seen.insert(declared.to_point.clone()) {
+            return;
+        }
+        chain.push(name.clone());
+        if declared.to_point == *to {
+            routes.push(Route {
+                coercions: coercions.clone(),
+                chain: chain.clone(),
+            });
+        } else {
+            for (next_name, next) in &self.declared {
+                if next.from_point == declared.to_point {
+                    self.follow(next_name, next, to, coercions, chain, seen, routes);
+                }
+            }
+        }
+        chain.pop();
+        seen.remove(&declared.to_point);
+    }
+
+    /// Whether every parameter of `route`'s chain takes what comes to it, starting
+    /// from `argument`, a type with no hole.
+    fn fits(&self, argument: &Ty, route: &Route) -> bool {
+        let ty_shape = |ty: &Ty| match ty {
+            Ty::Node(shape) => Some((**shape).clone()),
+            Ty::Hole(_) => None,
+        };
+        let mut current = argument.clone();
+        let mut coercions = route.coercions.clone();
+        for name in &route.chain {
+            let declared = &self.declared[name];
+            let (Ty::Node(from), Ty::Node(parameter)) = (&current, &declared.parameter) else {
+                unreachable!("both ends of a conversion write a class node, and so does the argument");
+            };
+            let mut binding = BTreeMap::new();
+            let fits = below(from, parameter, &coercions, ty_shape)
+                .iter()
+                .all(|(part, pattern)| bind(pattern, part, &mut binding));
+            if !fits {
+                return false;
+            }
+            current = instantiate(&declared.result, &binding);
+            coercions = BTreeSet::new();
+        }
+        true
+    }
+}
+
+/// The type of `class` written out, where it is decided at every depth. A class
+/// refused as its own part has no finite type, and gives none.
+fn written_whole<K>(classes: &Classes<K>, class: K::Id) -> Option<Ty>
+where
+    K: ClassKind,
+{
+    fn within<K>(classes: &Classes<K>, class: K::Id, path: &mut BTreeSet<K::Id>) -> Option<Ty>
+    where
+        K: ClassKind,
+    {
+        let root = classes.find(class).id();
+        if !path.insert(root) {
+            return None;
+        }
+        let parts = shape_of(classes, root)?.map(|part| within(classes, *part, path));
+        path.remove(&root);
+        if parts.places().iter().any(|(_, part)| part.is_none()) {
+            return None;
+        }
+        Some(Ty::Node(Box::new(parts.map(|part| part.clone().expect("every part was written")))))
+    }
+    within(classes, class, &mut BTreeSet::new())
+}
+
+/// Whether `ty` is an instance of `pattern`, each hole of `pattern` bound to one
+/// type. A hole of `ty` is a part a result left open, which takes whatever comes.
+fn bind(pattern: &Ty, ty: &Ty, binding: &mut BTreeMap<Name, Ty>) -> bool {
+    match (pattern, ty) {
+        (_, Ty::Hole(_)) => true,
+        (Ty::Hole(hole), ty) => match binding.get(hole) {
+            Some(bound) => same(bound, ty),
+            None => {
+                binding.insert(hole.clone(), ty.clone());
+                true
+            }
+        },
+        (Ty::Node(pattern), Ty::Node(ty)) => {
+            pattern.layer() == ty.layer()
+                && pattern
+                    .places()
+                    .into_iter()
+                    .zip(ty.places())
+                    .all(|((_, pattern), (_, ty))| bind(pattern, ty, binding))
+        }
+    }
+}
+
+/// Whether two types are one, a hole being whatever the other is.
+fn same(first: &Ty, second: &Ty) -> bool {
+    match (first, second) {
+        (Ty::Hole(_), _) | (_, Ty::Hole(_)) => true,
+        (Ty::Node(first), Ty::Node(second)) => {
+            first.layer() == second.layer()
+                && first
+                    .places()
+                    .into_iter()
+                    .zip(second.places())
+                    .all(|((_, first), (_, second))| same(first, second))
+        }
+    }
+}
+
+fn instantiate(ty: &Ty, binding: &BTreeMap<Name, Ty>) -> Ty {
+    match ty {
+        Ty::Hole(hole) => binding.get(hole).cloned().unwrap_or_else(|| ty.clone()),
+        Ty::Node(shape) => Ty::Node(Box::new(shape.map(|part| instantiate(part, binding)))),
+    }
 }
 
 impl<K> Outcome<K>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
-    /// Makes the change `bound` asks for, and says whether it is done with. It
-    /// is not while a class node is undecided, or a function type waits for its
-    /// instances.
-    pub(super) fn judge_change(&mut self, classes: &mut Classes<K>, scopes: &Scopes, bound: Bound<K>, at: ItemId) -> bool {
-        let (Some(from_node), Some(to_node)) = (class_node(classes, bound.lower()), class_node(classes, bound.upper())) else {
+    /// Makes each change that can be made, and says whether it made any.
+    pub(super) fn make_changes(&mut self, classes: &mut Classes<K>, scopes: &Scopes, conversions: &Conversions) -> bool {
+        let mut made = false;
+        for (bound, at) in std::mem::take(&mut self.bounds) {
+            if self.make_change(classes, scopes, conversions, bound, at) {
+                made = true;
+            } else {
+                self.bounds.insert((bound, at));
+            }
+        }
+        self.judge(classes, scopes);
+        made
+    }
+
+    /// Makes the change `bound` asks for, and says whether it is done with.
+    fn make_change(
+        &mut self,
+        classes: &mut Classes<K>,
+        scopes: &Scopes,
+        conversions: &Conversions,
+        bound: Bound<K>,
+        at: ItemId,
+    ) -> bool {
+        let (Some(from), Some(to)) = (shape_of(classes, bound.lower()), shape_of(classes, bound.upper())) else {
             return false;
         };
-        let (Some(from), Some(to)) = (
-            shape_of(classes, bound.lower()).cloned(),
-            shape_of(classes, bound.upper()).cloned(),
-        ) else {
-            unreachable!("a class node is of a decided class");
+        let (Some(from), Some(to)) = (seen_from(classes, from), seen_to(classes, to)) else {
+            return false;
         };
-        match stage(classes, &from, &to, (&from_node, &to_node)) {
-            Stage::ToFnType => false,
-            Stage::NoChange => {
-                let mut items = decided_by(classes, bound.lower());
-                items.extend(decided_by(classes, bound.upper()));
-                items.insert(at);
-                self.refusals.push(Refusal {
-                    cause: Cause::NoChange,
-                    items,
-                });
-                true
-            }
-            Stage::Goes { coercions, parts } => {
-                let adjustments = coercions.into_iter().map(Adjustment::Coerce);
-                if adjustments.len() > 0 {
-                    self.adjustments.entry(at).or_default().extend(adjustments);
+        let route = match coercion(&from, &to) {
+            Stage::Goes(coercions) => Route {
+                coercions,
+                chain: Vec::new(),
+            },
+            Stage::ToFnType | Stage::Waits => return false,
+            Stage::NoChange => match (&from, &to) {
+                (Seen::At(from), Seen::At(to)) => match conversions.choose(classes, bound.lower(), from, to) {
+                    Chosen::One(route) => route,
+                    Chosen::Waits => return false,
+                    Chosen::NoChange => {
+                        self.refuse_no_change(classes, &bound, at);
+                        return true;
+                    }
+                },
+                // Its class node may yet let a conversion go.
+                (Seen::Reference(_), Seen::At(_)) => return false,
+                // No conversion reaches a hole, which takes only what comes.
+                (_, Seen::Reference(_)) => {
+                    self.refuse_no_change(classes, &bound, at);
+                    return true;
                 }
-                for (part, corresponding) in parts {
-                    self.one_type(classes, scopes, part, corresponding, at);
-                }
-                true
-            }
+            },
+        };
+        self.take(classes, scopes, conversions, &bound, at, &route);
+        true
+    }
+
+    fn refuse_no_change(&mut self, classes: &Classes<K>, bound: &Bound<K>, at: ItemId) {
+        let mut items = decided_by(classes, bound.lower());
+        items.extend(decided_by(classes, bound.upper()));
+        items.insert(at);
+        self.refusals.push(Refusal {
+            cause: Cause::NoChange,
+            items,
+        });
+    }
+
+    /// Takes `route` at the boundary: records it, makes each conversion's signature
+    /// anew, and connects the parts below each step.
+    fn take(
+        &mut self,
+        classes: &mut Classes<K>,
+        scopes: &Scopes,
+        conversions: &Conversions,
+        bound: &Bound<K>,
+        at: ItemId,
+        route: &Route,
+    ) {
+        let adjustments = route
+            .coercions
+            .iter()
+            .copied()
+            .map(Adjustment::Coerce)
+            .chain(route.chain.iter().cloned().map(Adjustment::Convert));
+        for adjustment in adjustments {
+            self.adjustments.entry(at).or_default().push(adjustment);
+        }
+        let scope = classes.get(classes.find(bound.lower())).scope;
+        let mut current = bound.lower();
+        let mut coercions = route.coercions.clone();
+        for name in &route.chain {
+            let declared = &conversions.declared[name];
+            let copied = classes.copy_from(&declared.template, scopes, scope, at, |_| Fate::Anew);
+            self.connect(classes, scopes, current, copied.classes[&declared.from], &coercions, at);
+            coercions = BTreeSet::new();
+            current = copied.classes[&declared.to];
+        }
+        self.connect(classes, scopes, current, bound.upper(), &coercions, at);
+    }
+
+    fn connect(
+        &mut self,
+        classes: &mut Classes<K>,
+        scopes: &Scopes,
+        from: K::Id,
+        to: K::Id,
+        coercions: &BTreeSet<Coercion>,
+        at: ItemId,
+    ) {
+        let (Some(from), Some(to)) = (shape_of(classes, from), shape_of(classes, to)) else {
+            unreachable!("a change is made between decided classes");
+        };
+        let pairs = below(from, to, coercions, |class: &K::Id| shape_of(classes, *class).cloned());
+        for (part, corresponding) in pairs {
+            self.one_type(classes, scopes, part, corresponding, at);
         }
     }
 }
@@ -191,8 +673,8 @@ mod tests {
     use crate::primitive::adjustment::Adjustments;
     use crate::primitive::class::Live;
     use crate::primitive::id::Arena;
-    use crate::primitive::ty::Scalar;
-    use crate::primitive::{ClassId, ClosureId, Name};
+    use crate::primitive::ty::{Scalar, Ty};
+    use crate::primitive::{ClassId, ClosureId};
 
     const U16: Shape<ClassId> = Shape::Scalar(Scalar::U16);
 
@@ -670,6 +1152,284 @@ mod tests {
         assert_eq!(world.shape(elem), U8);
     }
 
+    fn vec_of(element: Ty) -> Ty {
+        node(Shape::Struct(Name::new("Vec"), vec![element]))
+    }
+
+    fn node(shape: Shape<Ty>) -> Ty {
+        Ty::Node(Box::new(shape))
+    }
+
+    fn hole() -> Ty {
+        Ty::Hole(Name::new("T"))
+    }
+
+    /// `as_slice: &Vec<T> -> &[T]`.
+    fn declare_as_slice(world: &mut World) {
+        let from = node(Shape::Ref(SHARED, vec_of(hole())));
+        let to = node(Shape::Ref(SHARED, node(Shape::Slice(hole()))));
+        world.declare("as_slice", from, to);
+    }
+
+    /// `as_slice_mut: &mut Vec<T> -> &mut [T]`.
+    fn declare_as_slice_mut(world: &mut World) {
+        let from = node(Shape::Ref(EXCLUSIVE, vec_of(hole())));
+        let to = node(Shape::Ref(EXCLUSIVE, node(Shape::Slice(hole()))));
+        world.declare("as_slice_mut", from, to);
+    }
+
+    fn vec_class(world: &mut World, element: ClassId) -> ClassId {
+        world.external(Shape::Struct(Name::new("Vec"), vec![element]))
+    }
+
+    fn reference_to_slice(world: &mut World, mutability: Mutability, element: ClassId) -> ClassId {
+        let slice = world.external(Shape::Slice(element));
+        world.external(Shape::Ref(mutability, slice))
+    }
+
+    fn conversions(coercions: &[Coercion], names: &[&str]) -> Vec<Adjustment> {
+        coercions
+            .iter()
+            .copied()
+            .map(Adjustment::Coerce)
+            .chain(names.iter().map(|name| Adjustment::Convert(Name::new(*name))))
+            .collect()
+    }
+
+    /// Example 5: `let v = new(); sum(&v);`, with `new() -> Vec<T>`, `sum(&[u8])`
+    /// and `as_slice`. Its `T` is made anew: the parameter's side makes it one with
+    /// `v`'s element, and the result's side gives it the upper bound `u8`.
+    #[test]
+    fn a_conversion_connects_a_hole_on_both_its_sides() {
+        let mut world = World::new();
+        declare_as_slice(&mut world);
+        let element = world.undecided();
+        let result = vec_class(&mut world, element);
+        let v = world.meets(result);
+        let (lent, _) = world.lend(v, SHARED);
+        let declared = world.external(U8);
+        let parameter = reference_to_slice(&mut world, SHARED, declared);
+        let (_, at) = world.pass(lent, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.shape(element), U8);
+        assert!(!world.same(element, declared));
+        assert_eq!(world.outcome.adjustments, BTreeMap::from([(at, conversions(&[], &["as_slice"]))]));
+    }
+
+    /// Example 13: `let mut v = bytes(); sum(&mut v);`, with `bytes() -> Vec<u8>` and
+    /// `sum(&[u8])`. `&mut -> &` then `as_slice` is the one change: `as_slice_mut`
+    /// ends at `&mut [u8]`, and no coercion follows it.
+    #[test]
+    fn a_coercion_goes_before_a_conversion_and_none_after() {
+        let mut world = World::new();
+        declare_as_slice(&mut world);
+        declare_as_slice_mut(&mut world);
+        let byte = world.external(U8);
+        let result = vec_class(&mut world, byte);
+        let v = world.meets(result);
+        let (lent, _) = world.lend(v, EXCLUSIVE);
+        let declared = world.external(U8);
+        let parameter = reference_to_slice(&mut world, SHARED, declared);
+        let (_, at) = world.pass(lent, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(
+            world.outcome.adjustments,
+            BTreeMap::from([(at, conversions(&[Coercion::Reborrow], &["as_slice"]))])
+        );
+    }
+
+    #[test]
+    fn no_coercion_follows_a_conversion() {
+        let mut world = World::new();
+        declare_as_slice_mut(&mut world);
+        let byte = world.external(U8);
+        let result = vec_class(&mut world, byte);
+        let v = world.meets(result);
+        let (lent, _) = world.lend(v, EXCLUSIVE);
+        let declared = world.external(U8);
+        let parameter = reference_to_slice(&mut world, SHARED, declared);
+        let (_, at) = world.pass(lent, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        refused_at(&world, Cause::NoChange, at);
+    }
+
+    /// A class takes a head an upper bound gives, and never one only a conversion
+    /// goes from: `let a; g(&a);` does not make `a` a `Vec`.
+    #[test]
+    fn a_head_only_a_conversion_goes_from_is_not_given() {
+        let mut world = World::new();
+        declare_as_slice(&mut world);
+        let a = world.undecided();
+        let (lent, _) = world.lend(a, SHARED);
+        let declared = world.external(U8);
+        let parameter = reference_to_slice(&mut world, SHARED, declared);
+        world.pass(lent, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert!(matches!(world.shape(a), Shape::Slice(_)));
+        assert_eq!(world.outcome.adjustments, Adjustments::new());
+    }
+
+    /// `A -> B -> C`, an auto-conversion, each signature made anew.
+    #[test]
+    fn conversions_chain() {
+        let mut world = World::new();
+        let named = |name: &str| node(Shape::Struct(Name::new(name), Vec::new()));
+        world.declare("a_to_b", named("A"), named("B"));
+        world.declare("b_to_c", named("B"), named("C"));
+        let argument = world.text(Shape::Struct(Name::new("A"), Vec::new()));
+        let parameter = world.external(Shape::Struct(Name::new("C"), Vec::new()));
+        let (_, at) = world.pass(argument, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.outcome.adjustments, BTreeMap::from([(at, conversions(&[], &["a_to_b", "b_to_c"]))]));
+    }
+
+    /// `Vec<u16>` to `&[u8]`: the conversion goes, and what lies below it does not
+    /// change, so the element is refused there.
+    #[test]
+    fn a_conversion_does_not_change_what_lies_below_it() {
+        let mut world = World::new();
+        declare_as_slice(&mut world);
+        let sixteen = world.external(U16);
+        let result = vec_class(&mut world, sixteen);
+        let v = world.meets(result);
+        let (lent, _) = world.lend(v, SHARED);
+        let declared = world.external(U8);
+        let parameter = reference_to_slice(&mut world, SHARED, declared);
+        let (_, at) = world.pass(lent, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        refused_at(&world, Cause::Mismatch, at);
+    }
+
+    /// Each boundary makes the signature anew, so its `T` is its own.
+    #[test]
+    fn each_boundary_has_its_own_copy_of_a_conversion() {
+        let mut world = World::new();
+        declare_as_slice(&mut world);
+        for head in [U8, U16] {
+            let element = world.external(head.clone());
+            let result = vec_class(&mut world, element);
+            let v = world.meets(result);
+            let (lent, _) = world.lend(v, SHARED);
+            let declared = world.external(head);
+            let parameter = reference_to_slice(&mut world, SHARED, declared);
+            world.pass(lent, parameter);
+        }
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+    }
+
+    /// Exactly one change must go (O11).
+    #[test]
+    fn two_ways_to_go_are_no_change() {
+        let mut world = World::new();
+        let named = |name: &str| node(Shape::Struct(Name::new(name), Vec::new()));
+        world.declare("one", named("A"), named("B"));
+        world.declare("other", named("A"), named("B"));
+        let argument = world.text(Shape::Struct(Name::new("A"), Vec::new()));
+        let parameter = world.external(Shape::Struct(Name::new("B"), Vec::new()));
+        let (_, at) = world.pass(argument, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        refused_at(&world, Cause::NoChange, at);
+    }
+
+    /// `A -> B`, `B -> A`: going round is no second way from `A` to `A`, and the
+    /// search ends.
+    #[test]
+    fn a_chain_does_not_come_back_to_where_it_has_been() {
+        let mut world = World::new();
+        let named = |name: &str| node(Shape::Struct(Name::new(name), Vec::new()));
+        world.declare("a_to_b", named("A"), named("B"));
+        world.declare("b_to_a", named("B"), named("A"));
+        let argument = world.text(Shape::Struct(Name::new("A"), Vec::new()));
+        let same = world.external(Shape::Struct(Name::new("A"), Vec::new()));
+        world.pass(argument, same);
+        let other = world.text(Shape::Struct(Name::new("A"), Vec::new()));
+        let nowhere = world.external(Shape::Struct(Name::new("C"), Vec::new()));
+        let (_, at) = world.pass(other, nowhere);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        refused_at(&world, Cause::NoChange, at);
+        assert_eq!(world.outcome.adjustments, Adjustments::new());
+    }
+
+    /// `take(return 0);`, with `take(&[u8])` and a conversion that ends there. A
+    /// coercion goes from `!` to anything, so no conversion is looked at.
+    #[test]
+    fn never_goes_by_the_coercion_alone() {
+        let mut world = World::new();
+        declare_as_slice(&mut world);
+        let argument = world.text(Shape::Never);
+        let declared = world.external(U8);
+        let parameter = reference_to_slice(&mut world, SHARED, declared);
+        let (_, at) = world.pass(argument, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.outcome.adjustments, coerced(at, &[Coercion::Never]));
+    }
+
+    /// A signature writes the class node of both its ends (O12).
+    #[test]
+    fn a_conversion_with_no_class_node_is_not_declared() {
+        let scopes = Scopes::new();
+        let mut items = Arena::<ItemId, ()>::default();
+        let mut declared = Conversions::default();
+        let to = node(Shape::Slice(hole()));
+        let conversion = Conversion { from: hole(), to };
+        assert_eq!(
+            declared.declare(Name::new("from_a_hole"), &conversion, &scopes, items.push(())),
+            Err(NoClassNode)
+        );
+        let target_is_a_hole = node(Shape::Ref(SHARED, hole()));
+        let conversion = Conversion {
+            from: target_is_a_hole,
+            to: node(Shape::Unit),
+        };
+        assert_eq!(
+            declared.declare(Name::new("through_a_hole"), &conversion, &scopes, items.push(())),
+            Err(NoClassNode)
+        );
+    }
+
+    /// A coercion goes before the chain, and nowhere in it: `A -> &mut V` and
+    /// `&V -> C` do not chain, though `&mut V` could reach `&V`.
+    #[test]
+    fn no_coercion_goes_between_conversions() {
+        let mut world = World::new();
+        let named = |name: &str| node(Shape::Struct(Name::new(name), Vec::new()));
+        world.declare("a_to_v", named("A"), node(Shape::Ref(EXCLUSIVE, named("V"))));
+        world.declare("v_to_c", node(Shape::Ref(SHARED, named("V"))), named("C"));
+        let argument = world.text(Shape::Struct(Name::new("A"), Vec::new()));
+        let parameter = world.external(Shape::Struct(Name::new("C"), Vec::new()));
+        let (_, at) = world.pass(argument, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        refused_at(&world, Cause::NoChange, at);
+    }
+
     /// Example 12: `take(Some(&mut x));`, with `take(Option<&T>)`. The change
     /// between the two `Option`s is empty, and alters no part.
     #[test]
@@ -751,5 +1511,391 @@ mod tests {
 
         world.no_refusals();
         assert_eq!(world.shape(hole), U8);
+    }
+
+    /// Example 7: `let a; g(&a); h(&a);`, with `g(&[u8])`, `h(&Vec<u8>)` and
+    /// `as_slice`, and `let x; f(x); g(x);`, with `f(A)`, `g(B)` and `a_to_b: A -> B`.
+    /// A head goes to a boundary by a coercion alone, so in each, no one head goes to
+    /// both, and the class is refused.
+    #[test]
+    fn no_conversion_chooses_a_head() {
+        let mut world = World::new();
+        declare_as_slice(&mut world);
+        let a = world.undecided();
+        let (first, _) = world.lend(a, SHARED);
+        let declared = world.external(U8);
+        let parameter = reference_to_slice(&mut world, SHARED, declared);
+        world.pass(first, parameter);
+        let (second, _) = world.lend(a, SHARED);
+        let declared = world.external(U8);
+        let vector = vec_class(&mut world, declared);
+        let parameter = world.external(Shape::Ref(SHARED, vector));
+        world.pass(second, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        assert!(!world.classes.is_decided(a));
+        assert!(world.outcome.refusals.iter().all(|refusal| refusal.cause == Cause::UndecidedClass));
+        assert_eq!(world.outcome.adjustments, Adjustments::new());
+
+        let mut world = World::new();
+        let named = |name: &str| node(Shape::Struct(Name::new(name), Vec::new()));
+        world.declare("a_to_b", named("A"), named("B"));
+        let x = world.undecided();
+        let a = world.external(Shape::Struct(Name::new("A"), Vec::new()));
+        let b = world.external(Shape::Struct(Name::new("B"), Vec::new()));
+        world.pass(x, a);
+        world.pass(x, b);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        assert!(!world.classes.is_decided(x));
+        assert!(world.outcome.refusals.iter().all(|refusal| refusal.cause == Cause::UndecidedClass));
+    }
+
+    /// `let v = Vec::new(); read(&mut v);`, with `read(&mut [u8])` and
+    /// `as_slice_mut`. A view is chosen by class nodes, so the element is what
+    /// `read` writes.
+    #[test]
+    fn a_view_lets_a_parameter_decide_what_lies_below_it() {
+        let mut world = World::new();
+        declare_as_slice_mut(&mut world);
+        let element = world.undecided();
+        let result = vec_class(&mut world, element);
+        let v = world.meets(result);
+        let (lent, _) = world.lend(v, EXCLUSIVE);
+        let declared = world.external(U8);
+        let parameter = reference_to_slice(&mut world, EXCLUSIVE, declared);
+        let (_, at) = world.pass(lent, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.shape(element), U8);
+        assert_eq!(world.outcome.adjustments, BTreeMap::from([(at, conversions(&[], &["as_slice_mut"]))]));
+    }
+
+    #[test]
+    fn a_view_is_a_conversion_between_references_whose_parameter_shows_all_it_writes() {
+        let mut world = World::new();
+        let named = |name: &str, parts: Vec<Ty>| node(Shape::Struct(Name::new(name), parts));
+        let reference = |ty: Ty| node(Shape::Ref(SHARED, ty));
+        let u = || Ty::Hole(Name::new("U"));
+        let fields = BTreeMap::from([(Name::new("x"), hole())]);
+        let cases = [
+            ("as_slice", reference(vec_of(hole())), reference(node(Shape::Slice(hole()))), true),
+            ("pair", reference(named("Pair", vec![hole(), u()])), reference(node(Shape::Str)), true),
+            ("same_twice", reference(named("Pair", vec![hole(), hole()])), reference(node(Shape::Str)), false),
+            ("written_below", reference(vec_of(node(Shape::Scalar(Scalar::U8)))), reference(node(Shape::Str)), false),
+            ("members", reference(node(Shape::Object(fields))), reference(node(Shape::Str)), false),
+            ("by_value", vec_of(hole()), reference(node(Shape::Slice(hole()))), false),
+            ("to_a_value", reference(vec_of(hole())), node(Shape::Slice(hole())), false),
+        ];
+        for (name, from, to, view) in cases {
+            world.declare(name, from, to);
+            assert_eq!(world.conversions.declared[&Name::new(name)].view, view, "{name}");
+        }
+    }
+
+    /// `as_bytes: &Vec<u8> -> &str` and `as_words: &Vec<u16> -> &str` write below
+    /// their class node, so they wait for the argument's whole type, and are chosen
+    /// by it.
+    #[test]
+    fn a_value_conversion_is_chosen_by_the_whole_type() {
+        for (element, declared, expected) in [
+            (U16, &["as_bytes", "as_words"][..], Some("as_words")),
+            (U8, &["as_bytes", "as_words"][..], Some("as_bytes")),
+            (U16, &["as_bytes"][..], None),
+        ] {
+            let mut world = World::new();
+            for name in declared {
+                let scalar = if *name == "as_bytes" { Scalar::U8 } else { Scalar::U16 };
+                let from = node(Shape::Ref(SHARED, vec_of(node(Shape::Scalar(scalar)))));
+                world.declare(name, from, node(Shape::Ref(SHARED, node(Shape::Str))));
+            }
+            let element = world.external(element);
+            let result = vec_class(&mut world, element);
+            let v = world.meets(result);
+            let (lent, _) = world.lend(v, SHARED);
+            let text = world.external(Shape::Str);
+            let parameter = world.external(Shape::Ref(SHARED, text));
+            let (_, at) = world.pass(lent, parameter);
+
+            assert_eq!(world.settle_fully(), Settled::Finished);
+
+            match expected {
+                Some(name) => {
+                    world.no_refusals();
+                    assert_eq!(world.outcome.adjustments, BTreeMap::from([(at, conversions(&[], &[name]))]));
+                }
+                None => refused_at(&world, Cause::NoChange, at),
+            }
+        }
+    }
+
+    /// `let a = 1u8; let b; f((a, b));`, with `f(P)`. A value conversion waits for
+    /// `b`, and gives it nothing: it falls back to `!` as if no conversion were
+    /// declared. `pair: (T, T) -> P` then does not fit `(u8, !)`, and `(T, U) -> P`
+    /// does.
+    #[test]
+    fn a_value_conversion_decides_none_of_its_arguments_types() {
+        let u = || Ty::Hole(Name::new("U"));
+        let p = || node(Shape::Struct(Name::new("P"), Vec::new()));
+        for (second, fits) in [(hole(), false), (u(), true)] {
+            let mut world = World::new();
+            world.declare("pair", node(Shape::Tuple(vec![hole(), second])), p());
+            let a = world.text(U8);
+            let b = world.undecided();
+            let tuple = world.text(Shape::Tuple(vec![a, b]));
+            let parameter = world.external(Shape::Struct(Name::new("P"), Vec::new()));
+            let (_, at) = world.pass(tuple, parameter);
+
+            assert_eq!(world.settle_fully(), Settled::Finished);
+
+            assert_eq!(world.shape(b), Shape::Never);
+            assert!(!world.same(a, b));
+            if fits {
+                world.no_refusals();
+                assert_eq!(world.outcome.adjustments, BTreeMap::from([(at, conversions(&[], &["pair"]))]));
+            } else {
+                refused_at(&world, Cause::NoChange, at);
+            }
+        }
+    }
+
+    /// `f((1u8, 'c'))`, with `f(P)` and `pair: (T, T) -> P`: the conversion is not
+    /// taken, rather than taken and refused.
+    #[test]
+    fn a_value_conversion_its_argument_does_not_fit_is_not_taken() {
+        let mut world = World::new();
+        let p = node(Shape::Struct(Name::new("P"), Vec::new()));
+        world.declare("pair", node(Shape::Tuple(vec![hole(), hole()])), p);
+        let (a, b) = (world.text(U8), world.text(Shape::Scalar(Scalar::Char)));
+        let tuple = world.text(Shape::Tuple(vec![a, b]));
+        let parameter = world.external(Shape::Struct(Name::new("P"), Vec::new()));
+        let (_, at) = world.pass(tuple, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        refused_at(&world, Cause::NoChange, at);
+        assert!(!world.same(a, b));
+        assert_eq!(world.outcome.adjustments, Adjustments::new());
+    }
+
+    /// `A -> B -> C` as values, the argument's type being known whole.
+    #[test]
+    fn a_chain_carries_its_parts_through_every_signature() {
+        let mut world = World::new();
+        let of = |name: &str| node(Shape::Struct(Name::new(name), vec![hole()]));
+        world.declare("box_to_opt", of("Box"), of("Opt"));
+        world.declare("opt_to_list", of("Opt"), of("List"));
+        let element = world.text(U8);
+        let argument = world.text(Shape::Struct(Name::new("Box"), vec![element]));
+        let declared = world.external(U8);
+        let parameter = world.external(Shape::Struct(Name::new("List"), vec![declared]));
+        let (_, at) = world.pass(argument, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(
+            world.outcome.adjustments,
+            BTreeMap::from([(at, conversions(&[], &["box_to_opt", "opt_to_list"]))])
+        );
+    }
+
+    /// The same chain from `Box<?x>`: the conversions wait for `?x`, which nothing
+    /// decides but its fallback, and `List<!>` is refused where `List<u8>` is given.
+    #[test]
+    fn a_chain_of_value_conversions_gives_no_part_a_type() {
+        let mut world = World::new();
+        let of = |name: &str| node(Shape::Struct(Name::new(name), vec![hole()]));
+        world.declare("box_to_opt", of("Box"), of("Opt"));
+        world.declare("opt_to_list", of("Opt"), of("List"));
+        let element = world.undecided();
+        let argument = world.text(Shape::Struct(Name::new("Box"), vec![element]));
+        let declared = world.external(U8);
+        let parameter = world.external(Shape::Struct(Name::new("List"), vec![declared]));
+        let (_, at) = world.pass(argument, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        assert_eq!(world.shape(element), Shape::Never);
+        refused_at(&world, Cause::Mismatch, at);
+    }
+
+    /// A coercion goes first, and a conversion only where none does: one declared
+    /// from `&[T; 2]` to `&[T]` is never taken.
+    #[test]
+    fn a_coercion_is_taken_before_any_conversion() {
+        let mut world = World::new();
+        let array = node(Shape::Ref(SHARED, node(Shape::Array(2, hole()))));
+        let slice = node(Shape::Ref(SHARED, node(Shape::Slice(hole()))));
+        world.declare("array_as_slice", array, slice);
+        let element = world.text(U8);
+        let value = world.text(Shape::Array(2, element));
+        let (lent, _) = world.lend(value, SHARED);
+        let declared = world.external(U8);
+        let parameter = reference_to_slice(&mut world, SHARED, declared);
+        let (_, at) = world.pass(lent, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.outcome.adjustments, coerced(at, &[Coercion::Unsize]));
+    }
+
+    /// `f(&x)`, with `f(&T)` and the like: a hole at a reference's target takes the
+    /// target that comes, and only the reference itself changes.
+    #[test]
+    fn a_hole_at_the_target_takes_the_target_that_comes() {
+        type Case = (&'static str, Mutability, Mutability, fn(&mut World) -> ClassId, Option<&'static [Coercion]>);
+        let cases: [Case; 5] = [
+            ("f(&x)", SHARED, SHARED, |w| w.text(U8), Some(&[])),
+            ("f(&mut x)", EXCLUSIVE, SHARED, |w| w.text(U8), Some(&[Coercion::Reborrow])),
+            ("f(&[1u8, 2])", SHARED, SHARED, |w| {
+                let element = w.text(U8);
+                w.text(Shape::Array(2, element))
+            }, Some(&[])),
+            ("f(&x), f(&mut T)", SHARED, EXCLUSIVE, |w| w.text(U8), None),
+            ("f(&return 0), f(&T)", SHARED, SHARED, |w| w.text(Shape::Never), Some(&[])),
+        ];
+        for (name, lent_as, given_as, place, expected) in cases {
+            let mut world = World::new();
+            let place = place(&mut world);
+            let (lent, _) = world.lend(place, lent_as);
+            let hole = world.undecided();
+            let parameter = world.external(Shape::Ref(given_as, hole));
+            let (_, at) = world.pass(lent, parameter);
+
+            assert_eq!(world.settle_fully(), Settled::Finished, "{name}");
+
+            match expected {
+                Some(coercions) => {
+                    world.no_refusals();
+                    assert!(world.same(place, hole), "{name}");
+                    let expected = if coercions.is_empty() { Adjustments::new() } else { coerced(at, coercions) };
+                    assert_eq!(world.outcome.adjustments, expected, "{name}");
+                }
+                None => refused_at(&world, Cause::NoChange, at),
+            }
+        }
+    }
+
+    /// `f(x)`, with `f(&T)`: a value is no reference, and no conversion reaches a
+    /// hole.
+    #[test]
+    fn what_is_no_reference_does_not_go_to_a_hole_behind_one() {
+        let mut world = World::new();
+        declare_as_slice(&mut world);
+        let element = world.external(U8);
+        let vector = vec_class(&mut world, element);
+        let argument = world.meets(vector);
+        let hole = world.undecided();
+        let parameter = world.external(Shape::Ref(SHARED, hole));
+        let (_, at) = world.pass(argument, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        refused_at(&world, Cause::NoChange, at);
+    }
+
+    /// `take(return 0);`, with `take(&T)`.
+    #[test]
+    fn never_goes_to_a_hole_behind_a_reference() {
+        let mut world = World::new();
+        let argument = world.text(Shape::Never);
+        let hole = world.undecided();
+        let parameter = world.external(Shape::Ref(SHARED, hole));
+        let (_, at) = world.pass(argument, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.outcome.adjustments, coerced(at, &[Coercion::Never]));
+    }
+
+    /// `f(g());`, with `g() -> &U` and `f(&T)`: the two targets are one class at
+    /// once, before either is decided, as a hole takes whatever comes.
+    #[test]
+    fn a_target_not_decided_yet_is_one_class_with_the_hole_at_once() {
+        let mut world = World::new();
+        let target = world.undecided();
+        let argument = world.external(Shape::Ref(SHARED, target));
+        let hole = world.undecided();
+        let parameter = world.external(Shape::Ref(SHARED, hole));
+        world.pass(argument, parameter);
+
+        world.settle();
+
+        world.no_refusals();
+        assert!(!world.classes.is_decided(target));
+        assert!(world.same(target, hole));
+    }
+
+    /// `f(&[1u8, 2]);`, with `f(&str)` and the view `as_str: &[T] -> &str`: the one
+    /// stage of coercion goes before the chain, into its parameter alone.
+    #[test]
+    fn a_coercion_goes_before_a_view_and_parts_connect_through_it() {
+        let mut world = World::new();
+        let slice = node(Shape::Ref(SHARED, node(Shape::Slice(hole()))));
+        world.declare("as_str", slice, node(Shape::Ref(SHARED, node(Shape::Str))));
+        let element = world.text(U8);
+        let array = world.text(Shape::Array(2, element));
+        let (lent, _) = world.lend(array, SHARED);
+        let text = world.external(Shape::Str);
+        let parameter = world.external(Shape::Ref(SHARED, text));
+        let (_, at) = world.pass(lent, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(
+            world.outcome.adjustments,
+            BTreeMap::from([(at, conversions(&[Coercion::Unsize], &["as_str"]))])
+        );
+    }
+
+    /// `f(g());`, with `g() -> &T`, `T` decided by what enters it as `Vec<u8>`,
+    /// `f(String)` and the value conversion `to_string: &Vec<U> -> String`. The
+    /// target is not decided when the change is first looked at, so it waits for it,
+    /// and the conversion goes once it is: refused at once, the outcome would depend
+    /// on which is looked at first.
+    #[test]
+    fn a_reference_whose_target_is_not_decided_yet_waits_for_a_conversion() {
+        let mut world = World::new();
+        let from = node(Shape::Ref(SHARED, vec_of(Ty::Hole(Name::new("U")))));
+        world.declare("to_string", from, node(Shape::String));
+        let target = world.undecided();
+        let argument = world.external(Shape::Ref(SHARED, target));
+        let parameter = world.external(Shape::String);
+        let (_, at) = world.pass(argument, parameter);
+        let element = world.text(U8);
+        let vector = world.text(Shape::Struct(Name::new("Vec"), vec![element]));
+        world.enter(vector, target);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.outcome.adjustments, BTreeMap::from([(at, conversions(&[], &["to_string"]))]));
+    }
+
+    /// `A -> B`, `B -> A` and `A -> C`: from `A` to `C` goes `a_to_c` alone, as a
+    /// chain that comes back to `A` is no second way.
+    #[test]
+    fn a_chain_round_a_cycle_is_no_second_way() {
+        let mut world = World::new();
+        let named = |name: &str| node(Shape::Struct(Name::new(name), Vec::new()));
+        world.declare("a_to_b", named("A"), named("B"));
+        world.declare("b_to_a", named("B"), named("A"));
+        world.declare("a_to_c", named("A"), named("C"));
+        let argument = world.text(Shape::Struct(Name::new("A"), Vec::new()));
+        let parameter = world.external(Shape::Struct(Name::new("C"), Vec::new()));
+        let (_, at) = world.pass(argument, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.outcome.adjustments, BTreeMap::from([(at, conversions(&[], &["a_to_c"]))]));
     }
 }

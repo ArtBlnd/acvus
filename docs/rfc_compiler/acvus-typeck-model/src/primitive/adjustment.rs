@@ -6,10 +6,10 @@
 
 use std::collections::BTreeMap;
 
-use super::ItemId;
+use super::{ItemId, Name};
 use super::record::Coercion;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Adjustment {
     /// A reference is read through: `p.f` is `(*p).f`, and `&a` is `&*a`. One
     /// is enough, as no reference has a reference as its target (O23).
@@ -17,6 +17,8 @@ pub enum Adjustment {
     /// A coercion the language gives: the reborrow where a lower bound reaches a
     /// shared head (O10), and any of them at a boundary (O11).
     Coerce(Coercion),
+    /// A declared conversion is called, in the order of the chain (O12).
+    Convert(Name),
 }
 
 /// The adjustments of each item, in the order they apply.

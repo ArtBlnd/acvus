@@ -6,7 +6,8 @@
 //! the class's own place or at the target's place of a reference.
 //!
 //! The heads the upper bounds give are candidates. The class takes the one of
-//! them, in its domain, that goes to every upper bound. Where upper bounds give
+//! them, in its domain, that goes to every upper bound. It goes to a boundary by a
+//! coercion alone: no conversion chooses a head. Where upper bounds give
 //! heads and no one head goes to them all, the class waits: it has information,
 //! and no fallback may overrule it (O17).
 
@@ -21,6 +22,7 @@ use crate::store::classes::Classes;
 
 use super::Outcome;
 use super::bound::{given, shape_of};
+use super::change::may_coerce;
 
 /// Where a class's head stands in the class node an upper bound is reached
 /// through.
@@ -188,29 +190,6 @@ where
     }
 }
 
-/// Whether one stage of coercion goes from `head` to `to`, a class's own class
-/// node being filled in by `head`.
-fn changes_to<P>(head: &Shape<P>, to: &Shape<P>) -> bool
-where
-    P: Clone,
-{
-    match (head, to) {
-        (Shape::Never, _) | (Shape::FnValue(_), Shape::Fn(..)) => true,
-        (Shape::Ref(from, _), Shape::Ref(into, _)) => mutability_reaches(*from, *into),
-        (Shape::Object(fields), Shape::Object(kept)) => kept.keys().all(|field| fields.contains_key(field)),
-        (Shape::Enum(name, variants), Shape::Enum(other, more)) => {
-            name == other && variants.keys().all(|variant| more.contains_key(variant))
-        }
-        (Shape::Error(variants), Shape::Error(more)) => variants.keys().all(|variant| more.contains_key(variant)),
-        (Shape::FnValue(closures), Shape::FnValue(more)) => closures.is_subset(more),
-        (head, to) => head.layer() == to.layer(),
-    }
-}
-
-fn mutability_reaches(from: Mutability, into: Mutability) -> bool {
-    from == into || (from == Mutability::Exclusive && into == Mutability::Shared)
-}
-
 /// Whether `head`, filling in what the class node `upper` is reached through
 /// leaves open, goes to `upper`.
 fn goes_to<K>(classes: &Classes<K>, head: &Shape<K::Id>, upper: &Upper<K::Id>) -> bool
@@ -220,26 +199,24 @@ where
     let Some(to) = &upper.gives else {
         return true;
     };
-    let Through::Target(mutability) = upper.through else {
-        return match upper.how {
-            How::Enters => head.enters(to),
-            How::Changes => changes_to(head, to),
-            How::Equals => head.layer() == to.layer(),
-        };
+    let within = match upper.through {
+        Through::Own => None,
+        Through::Target(mutability) => Some(mutability),
     };
-    let Shape::Ref(into, target) = to else {
-        return false;
-    };
-    let target = shape_of(classes, *target);
-    match upper.how {
-        How::Enters => mutability.join(*into) == *into && target.is_none_or(|target| head.enters(target)),
-        How::Equals => mutability == *into && target.is_none_or(|target| head.layer() == target.layer()),
-        How::Changes => {
-            mutability_reaches(mutability, *into)
-                && target.is_none_or(|target| {
-                    head.layer() == target.layer() || matches!((head, target), (Shape::Array(..), Shape::Slice(_)))
-                })
-        }
+    match (upper.how, within) {
+        (How::Changes, within) => may_coerce(classes, head, within, to),
+        (How::Enters, None) => head.enters(to),
+        (How::Equals, None) => head.layer() == to.layer(),
+        (How::Enters, Some(mutability)) => matches!(
+            to,
+            Shape::Ref(into, target) if mutability.join(*into) == *into
+                && shape_of(classes, *target).is_none_or(|target| head.enters(target))
+        ),
+        (How::Equals, Some(mutability)) => matches!(
+            to,
+            Shape::Ref(into, target) if mutability == *into
+                && shape_of(classes, *target).is_none_or(|target| head.layer() == target.layer())
+        ),
     }
 }
 

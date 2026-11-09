@@ -6,12 +6,14 @@ use crate::primitive::bound::Bound;
 use crate::primitive::class::Live;
 use crate::primitive::id::Arena;
 use crate::primitive::scope::Scopes;
-use crate::primitive::ty::{Mutability, Scalar, Shape};
-use crate::primitive::{ClassId, ItemId};
+use crate::primitive::decl::Conversion;
+use crate::primitive::ty::{Mutability, Scalar, Shape, Ty};
+use crate::primitive::{ClassId, ItemId, Name};
 use crate::store::classes::Classes;
 
 use super::Outcome;
 use super::bound::shape_of;
+use super::change::Conversions;
 use super::settle::Settled;
 
 pub(super) const SHARED: Mutability = Mutability::Shared;
@@ -23,6 +25,7 @@ pub(super) struct World {
     pub(super) scopes: Scopes,
     pub(super) items: Arena<ItemId, &'static str>,
     pub(super) outcome: Outcome<Live>,
+    pub(super) conversions: Conversions,
     /// The classes made here, in the order settling visits them, ahead of any
     /// other class.
     pub(super) open: Vec<ClassId>,
@@ -35,6 +38,7 @@ impl World {
             scopes: Scopes::new(),
             items: Arena::default(),
             outcome: Outcome::default(),
+            conversions: Conversions::default(),
             open: Vec::new(),
         }
     }
@@ -80,6 +84,14 @@ impl World {
         (reference, at)
     }
 
+    /// Declares the conversion `name: from -> to`.
+    pub(super) fn declare(&mut self, name: &str, from: Ty, to: Ty) {
+        let by = self.items.push("declared");
+        self.conversions
+            .declare(Name::new(name), &Conversion { from, to }, &self.scopes, by)
+            .expect("the conversion writes a class node at both its ends");
+    }
+
     /// `argument` passed to a parameter of the type `upper`: the argument's class
     /// enters the boundary's, which goes to the parameter's (O2).
     pub(super) fn pass(&mut self, argument: ClassId, upper: ClassId) -> (ClassId, ItemId) {
@@ -117,7 +129,7 @@ impl World {
         let at = self.items.push("settling");
         let open = self.open.clone();
         self.outcome
-            .settle_lower(&mut self.classes, &self.scopes, at, &|classes: &Classes<Live>| {
+            .settle_lower(&mut self.classes, &self.scopes, &self.conversions, at, &|classes: &Classes<Live>| {
                 Self::visiting(&open, classes)
             });
     }
@@ -127,7 +139,7 @@ impl World {
         let at = self.items.push("settling");
         let open = self.open.clone();
         self.outcome
-            .settle_visiting(&mut self.classes, &self.scopes, at, &|classes: &Classes<Live>| {
+            .settle_visiting(&mut self.classes, &self.scopes, &self.conversions, at, &|classes: &Classes<Live>| {
                 Self::visiting(&open, classes)
             })
     }

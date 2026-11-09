@@ -21,7 +21,7 @@
 use std::collections::BTreeSet;
 
 use crate::primitive::ItemId;
-use crate::primitive::bound::{Bound, BoundOf};
+use crate::primitive::bound::Bound;
 use crate::primitive::class::{ClassKind, Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::{Cause, Refusal};
@@ -31,7 +31,7 @@ use crate::store::classes::Classes;
 
 use super::Outcome;
 use super::bound::{Join, join_lowers};
-use super::change::class_node;
+use super::change::{Conversions, awaits_instances};
 use super::upper::{Given, given_by_uppers};
 
 /// Where solving stopped.
@@ -123,8 +123,8 @@ where
     K: ClassKind<Bound = Bound<K>>,
 {
     /// Takes every rung there is, `at` being the item a decision here goes by.
-    pub fn settle(&mut self, classes: &mut Classes<K>, scopes: &Scopes, at: ItemId) -> Settled {
-        self.settle_visiting(classes, scopes, at, &every_root)
+    pub fn settle(&mut self, classes: &mut Classes<K>, scopes: &Scopes, conversions: &Conversions, at: ItemId) -> Settled {
+        self.settle_visiting(classes, scopes, conversions, at, &every_root)
     }
 
     /// As [`Outcome::settle`], visiting classes in the order `visit` gives, which
@@ -133,6 +133,7 @@ where
         &mut self,
         classes: &mut Classes<K>,
         scopes: &Scopes,
+        conversions: &Conversions,
         at: ItemId,
         visit: &F,
     ) -> Settled
@@ -140,7 +141,7 @@ where
         F: Fn(&Classes<K>) -> Vec<K::Id>,
     {
         loop {
-            self.settle_lower(classes, scopes, at, visit);
+            self.settle_lower(classes, scopes, conversions, at, visit);
             if self.instances_owed(classes) {
                 return Settled::AwaitsInstances;
             }
@@ -155,17 +156,20 @@ where
         }
     }
 
-    /// Whether a change is left whose class nodes are both decided, which only a
-    /// function type's waiting for its instances leaves.
+    /// Whether a function value waits to go to a function type.
     fn instances_owed(&self, classes: &Classes<K>) -> bool {
-        self.bounds
-            .iter()
-            .any(|(bound, _)| class_node(classes, bound.lower()).is_some() && class_node(classes, bound.upper()).is_some())
+        self.bounds.iter().any(|(bound, _)| awaits_instances(classes, bound))
     }
 
     /// Rung 2: each class nothing enters takes the one head its upper bounds give
     /// it, where there is one, all at once.
-    fn decide_by_uppers<F>(&mut self, classes: &mut Classes<K>, scopes: &Scopes, at: ItemId, visit: &F) -> bool
+    fn decide_by_uppers<F>(
+        &mut self,
+        classes: &mut Classes<K>,
+        scopes: &Scopes,
+        at: ItemId,
+        visit: &F,
+    ) -> bool
     where
         F: Fn(&Classes<K>) -> Vec<K::Id>,
     {
@@ -195,12 +199,19 @@ where
     }
 
     /// Rungs 0 and 1, until neither changes anything.
-    pub(super) fn settle_lower<F>(&mut self, classes: &mut Classes<K>, scopes: &Scopes, at: ItemId, visit: &F)
+    pub(super) fn settle_lower<F>(
+        &mut self,
+        classes: &mut Classes<K>,
+        scopes: &Scopes,
+        conversions: &Conversions,
+        at: ItemId,
+        visit: &F,
+    )
     where
         F: Fn(&Classes<K>) -> Vec<K::Id>,
     {
         loop {
-            let connected = self.connect_structure(classes, scopes);
+            let connected = self.connect_structure(classes, scopes, conversions);
             let decided = self.decide_by_join(classes, scopes, at, visit);
             if !connected && !decided {
                 break;
@@ -208,15 +219,17 @@ where
         }
     }
 
-    /// Rung 0: connects what can be connected with no head decided, to a
-    /// fixpoint, and says whether it connected anything.
-    fn connect_structure(&mut self, classes: &mut Classes<K>, scopes: &Scopes) -> bool {
+    /// Rung 0: connects what can be connected with no head decided, and makes
+    /// each change whose class nodes are decided, to a fixpoint, and says whether it
+    /// did anything.
+    fn connect_structure(&mut self, classes: &mut Classes<K>, scopes: &Scopes, conversions: &Conversions) -> bool {
         let mut connected = false;
         loop {
             let merged = self.merge_cycles(classes, scopes);
             let carried = self.carry_parts(classes, scopes);
             let lent = self.connect_lends(classes, scopes);
-            if !merged && !carried && !lent {
+            let changed = self.make_changes(classes, scopes, conversions);
+            if !merged && !carried && !lent && !changed {
                 return connected;
             }
             connected = true;
@@ -343,7 +356,13 @@ where
 
     /// Rung 3: each class a literal has registered a domain in, and that neither
     /// lower nor upper bounds decide, takes its row's fallback type, all at once.
-    fn fall_back_to_domains<F>(&mut self, classes: &mut Classes<K>, scopes: &Scopes, at: ItemId, visit: &F) -> bool
+    fn fall_back_to_domains<F>(
+        &mut self,
+        classes: &mut Classes<K>,
+        scopes: &Scopes,
+        at: ItemId,
+        visit: &F,
+    ) -> bool
     where
         F: Fn(&Classes<K>) -> Vec<K::Id>,
     {
@@ -377,7 +396,13 @@ where
 
     /// Rung 4: each class no literal has registered a domain in, and that neither
     /// lower nor upper bounds decide, takes `!`, all at once.
-    fn fall_back_to_never<F>(&mut self, classes: &mut Classes<K>, scopes: &Scopes, at: ItemId, visit: &F) -> bool
+    fn fall_back_to_never<F>(
+        &mut self,
+        classes: &mut Classes<K>,
+        scopes: &Scopes,
+        at: ItemId,
+        visit: &F,
+    ) -> bool
     where
         F: Fn(&Classes<K>) -> Vec<K::Id>,
     {
@@ -435,7 +460,7 @@ mod tests {
     use crate::primitive::adjustment::{Adjustment, Adjustments};
     use crate::primitive::id::Arena;
     use crate::primitive::record::Coercion;
-    use crate::primitive::ty::{Mutability, Scalar};
+    use crate::primitive::ty::{Mutability, Scalar, Ty};
     use crate::primitive::{ClassId, ClosureId, Name};
 
     fn describe(world: &World, class: ClassId, depth: usize) -> String {
@@ -448,6 +473,11 @@ mod tests {
         match shape {
             Shape::Option(payload) => format!("Option<{}>", describe(world, *payload, depth - 1)),
             Shape::Slice(elem) => format!("[{}]", describe(world, *elem, depth - 1)),
+            Shape::Array(len, elem) => format!("[{};{len}]", describe(world, *elem, depth - 1)),
+            Shape::Struct(name, args) => {
+                let args: Vec<String> = args.iter().map(|arg| describe(world, *arg, depth - 1)).collect();
+                format!("{}<{}>", name.0, args.join(","))
+            }
             Shape::Ref(SHARED, target) => format!("&{}", describe(world, *target, depth - 1)),
             Shape::Ref(EXCLUSIVE, target) => format!("&mut {}", describe(world, *target, depth - 1)),
             Shape::Object(fields) => {
@@ -791,7 +821,7 @@ mod tests {
     #[test]
     fn what_upper_bounds_give_comes_out_the_same_in_every_order() {
         type Program = (&'static str, &'static str, fn(&mut World) -> ClassId);
-        let programs: [Program; 24] = [
+        let programs: [Program; 26] = [
             ("example 1: let a = 1u32; let b = if c { a } else { 10 };", "u32", |w| {
                 let written = w.text(Shape::Scalar(Scalar::U32));
                 let a = w.meets(written);
@@ -834,6 +864,23 @@ mod tests {
                 let zero = literal(w, &INTEGERS);
                 let x = w.meets(zero);
                 meet(w, y, x);
+                y
+            }),
+            ("let y; h(y); if c { y } else { return }, h(&T)", "!", |w| {
+                let y = w.undecided();
+                let hole = w.undecided();
+                let parameter = w.external(Shape::Ref(SHARED, hole));
+                w.pass(y, parameter);
+                let returns = w.text(Shape::Never);
+                meet(w, y, returns);
+                y
+            }),
+            ("let y; f(y); g(y);, f(&T), g(&mut U)", "&mut !", |w| {
+                let y = w.undecided();
+                let (t, u) = (w.undecided(), w.undecided());
+                let (shared, exclusive) = (w.external(Shape::Ref(SHARED, t)), w.external(Shape::Ref(EXCLUSIVE, u)));
+                w.pass(y, shared);
+                w.pass(y, exclusive);
                 y
             }),
             ("let v = new(); let a = first(&v); let z = if c { a } else { 0 };", "i32", |w| {
@@ -1000,6 +1047,68 @@ mod tests {
         }
     }
 
+    #[test]
+    fn what_a_conversion_connects_comes_out_the_same_in_every_order() {
+        fn node(shape: Shape<Ty>) -> Ty {
+            Ty::Node(Box::new(shape))
+        }
+        fn declare(world: &mut World, name: &str, mutability: Mutability) {
+            let hole = || Ty::Hole(Name::new("T"));
+            let vector = node(Shape::Struct(Name::new("Vec"), vec![hole()]));
+            let from = node(Shape::Ref(mutability, vector));
+            let to = node(Shape::Ref(mutability, node(Shape::Slice(hole()))));
+            world.declare(name, from, to);
+        }
+        fn vector(world: &mut World, element: ClassId) -> ClassId {
+            world.external(Shape::Struct(Name::new("Vec"), vec![element]))
+        }
+        fn slice_parameter(world: &mut World) -> ClassId {
+            let declared = world.external(U8);
+            let slice = world.external(Shape::Slice(declared));
+            world.external(Shape::Ref(SHARED, slice))
+        }
+        type Program = (&'static str, &'static str, fn(&mut World) -> ClassId);
+        let programs: [Program; 3] = [
+            ("example 5: let v = new(); sum(&v);", "Vec<u8>", |w| {
+                declare(w, "as_slice", SHARED);
+                let element = w.undecided();
+                let result = vector(w, element);
+                let v = w.meets(result);
+                let (lent, _) = w.lend(v, SHARED);
+                let parameter = slice_parameter(w);
+                w.pass(lent, parameter);
+                v
+            }),
+            ("example 7: let a; g(&a); h(&a);", "refused:UndecidedClass", |w| {
+                declare(w, "as_slice", SHARED);
+                let a = w.undecided();
+                let (first, _) = w.lend(a, SHARED);
+                let parameter = slice_parameter(w);
+                w.pass(first, parameter);
+                let (second, _) = w.lend(a, SHARED);
+                let declared = w.external(U8);
+                let wanted = vector(w, declared);
+                let parameter = w.external(Shape::Ref(SHARED, wanted));
+                w.pass(second, parameter);
+                a
+            }),
+            ("example 13: let mut v = bytes(); sum(&mut v);", "Vec<u8>", |w| {
+                declare(w, "as_slice", SHARED);
+                declare(w, "as_slice_mut", EXCLUSIVE);
+                let byte = w.external(U8);
+                let result = vector(w, byte);
+                let v = w.meets(result);
+                let (lent, _) = w.lend(v, EXCLUSIVE);
+                let parameter = slice_parameter(w);
+                w.pass(lent, parameter);
+                v
+            }),
+        ];
+        for (name, expected, build) in programs {
+            in_every_order(build, expected, name);
+        }
+    }
+
     /// Example 9: the literal takes what the boundary's type gives, and the classes
     /// it enters take it from it, as joins.
     #[test]
@@ -1120,27 +1229,121 @@ mod tests {
         assert!(!world.classes.is_decided(other));
     }
 
-    /// A change that waits on a class node is no reason to stop: the class it waits
-    /// for is decided by a fallback like any other.
+    /// A change that waits for its argument's whole type is no reason to stop: what
+    /// it waits for is decided by a fallback like any other, as the conversion gives
+    /// it nothing. `let b; f((1u8, b));`, with `f(P)` and `pair: (T, U) -> P`.
     #[test]
-    fn a_change_waiting_on_a_target_nothing_speaks_of_does_not_stop_the_fallbacks() {
+    fn a_change_waiting_for_its_argument_does_not_stop_the_fallbacks() {
         let mut world = World::new();
-        let hole = world.undecided();
-        let parameter = world.external(Shape::Ref(SHARED, hole));
-        let target = world.undecided();
-        let argument = world.text(Shape::Ref(SHARED, target));
-        let (boundary, _) = world.pass(argument, parameter);
+        let parts = vec![Ty::Hole(Name::new("T")), Ty::Hole(Name::new("U"))];
+        world.declare("pair", ty(Shape::Tuple(parts)), ty(Shape::Struct(Name::new("P"), Vec::new())));
+        let a = world.text(U8);
+        let b = world.undecided();
+        let tuple = world.text(Shape::Tuple(vec![a, b]));
+        let parameter = world.external(Shape::Struct(Name::new("P"), Vec::new()));
+        world.pass(tuple, parameter);
 
         world.settle();
-        assert!(world.classes.is_decided(boundary));
         assert_eq!(world.outcome.bounds.len(), 1);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
         world.no_refusals();
-        assert_eq!(world.shape(target), Shape::Never);
-        assert!(world.same(target, hole));
+        assert_eq!(world.shape(b), Shape::Never);
         assert_eq!(world.outcome.bounds.len(), 0);
+    }
+
+    fn ty(shape: Shape<Ty>) -> Ty {
+        Ty::Node(Box::new(shape))
+    }
+
+    fn reference_to_hole(world: &mut World, mutability: Mutability) -> (ClassId, ClassId) {
+        let hole = world.undecided();
+        (world.external(Shape::Ref(mutability, hole)), hole)
+    }
+
+    /// A hole at a reference's target takes the target that comes, whatever else
+    /// decides the hole and in whichever order.
+    #[test]
+    fn what_a_hole_at_a_target_takes_comes_out_the_same_in_every_order() {
+        type Program = (&'static str, &'static str, fn(&mut World) -> ClassId);
+        let programs: [Program; 5] = [
+            ("let x = 1u8; f(&x);, f(&T)", "u8", |w| {
+                let x = w.text(U8);
+                let (lent, _) = w.lend(x, SHARED);
+                let (parameter, hole) = reference_to_hole(w, SHARED);
+                w.pass(lent, parameter);
+                hole
+            }),
+            ("f(&[1u8, 2]);, f(&T)", "[u8;2]", |w| {
+                let element = w.text(U8);
+                let array = w.text(Shape::Array(2, element));
+                let (lent, _) = w.lend(array, SHARED);
+                let (parameter, hole) = reference_to_hole(w, SHARED);
+                w.pass(lent, parameter);
+                hole
+            }),
+            ("let x = 1u8; let y = id(&x);, id(&T) -> &T", "&u8", |w| {
+                let x = w.text(U8);
+                let (lent, _) = w.lend(x, SHARED);
+                let (parameter, _) = reference_to_hole(w, SHARED);
+                w.pass(lent, parameter);
+                w.meets(parameter)
+            }),
+            ("let y; f(y); g(y);, f(&T), g(&[u8])", "&[u8]", |w| {
+                let y = w.undecided();
+                let (first, _) = reference_to_hole(w, SHARED);
+                w.pass(y, first);
+                let second = reference_to_slice(w, SHARED);
+                w.pass(y, second);
+                y
+            }),
+            ("g(&[1u8, 2], &s);, g(&T, &T), s: [u8]", "refused:Mismatch", |w| {
+                let element = w.text(U8);
+                let array = w.text(Shape::Array(2, element));
+                let (lent_array, _) = w.lend(array, SHARED);
+                let other = w.text(U8);
+                let slice = w.text(Shape::Slice(other));
+                let (lent_slice, _) = w.lend(slice, SHARED);
+                let hole = w.undecided();
+                let (first, second) = (w.external(Shape::Ref(SHARED, hole)), w.external(Shape::Ref(SHARED, hole)));
+                w.pass(lent_array, first);
+                w.pass(lent_slice, second);
+                hole
+            }),
+        ];
+        for (name, expected, build) in programs {
+            in_every_order(build, expected, name);
+        }
+    }
+
+    /// `let mut v = new(); f(&v); push(&mut v, 1u16);`, with `f(&Vec<u8>)` and a
+    /// value conversion `widen: &Vec<u16> -> &Vec<u8>`. A coercion goes, so it is
+    /// taken whatever the element turns out to be, and the element is refused there
+    /// in every order, never converted.
+    #[test]
+    fn a_coercion_that_goes_is_taken_before_a_conversion_in_every_order() {
+        fn vector(element: Shape<Ty>) -> Ty {
+            ty(Shape::Ref(SHARED, ty(Shape::Struct(Name::new("Vec"), vec![ty(element)]))))
+        }
+        in_every_order(
+            |w| {
+                w.declare("widen", vector(Shape::Scalar(Scalar::U16)), vector(Shape::Scalar(Scalar::U8)));
+                let element = w.undecided();
+                let result = w.external(Shape::Struct(Name::new("Vec"), vec![element]));
+                let v = w.meets(result);
+                let (lent, _) = w.lend(v, SHARED);
+                let declared = w.external(U8);
+                let wanted = w.external(Shape::Struct(Name::new("Vec"), vec![declared]));
+                let parameter = w.external(Shape::Ref(SHARED, wanted));
+                w.pass(lent, parameter);
+                let sixteen = w.text(Shape::Scalar(Scalar::U16));
+                w.enter(sixteen, element);
+                element
+            },
+            "refused:Mismatch",
+            "a coercion that goes is taken before a conversion",
+        );
     }
 
     /// O8: a domain holds the head decided, whichever rung decided it.
@@ -1296,7 +1499,7 @@ mod tests {
         assert!(!world.open.contains(&part));
         let at = world.items.push("settling");
 
-        let settled = world.outcome.settle(&mut world.classes, &world.scopes, at);
+        let settled = world.outcome.settle(&mut world.classes, &world.scopes, &world.conversions, at);
 
         assert_eq!(settled, Settled::Finished);
         world.no_refusals();
