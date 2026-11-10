@@ -11,7 +11,7 @@
 //! | 2. upper | a class nothing enters takes the one head its upper bounds give it (O19) | yes |
 //! | 3. domain | a literal's class no upper bound gives a head takes its row's fallback type (O20) | yes |
 //! | 4. never | a class nothing says anything about takes `!` | yes |
-//! | end | a class still undecided is refused (O21) | |
+//! | end | a class still undecided is refused (O21), and so is a class that is a part of itself (O5) | |
 //!
 //! Rung 0 comes first because deciding the head of a class that a later union
 //! would give more to fixes it too early. The two fallbacks are apart because
@@ -30,7 +30,7 @@ use crate::primitive::ty::{PartKey, Shape};
 use crate::store::classes::Classes;
 
 use super::Outcome;
-use super::bound::{Join, join_lowers};
+use super::bound::{Join, decided_by, join_lowers};
 use super::change::{Conversions, awaits_instances};
 use super::upper::{Given, given_by_uppers};
 
@@ -151,6 +151,7 @@ where
             {
                 continue;
             }
+            self.refuse_own_parts(classes, visit);
             self.refuse_undecided(classes, visit);
             return Settled::Finished;
         }
@@ -426,6 +427,33 @@ where
         fell
     }
 
+    /// The end: refuses each class that is a part of itself (O5), naming what
+    /// wrote or decided it and what named its parts. The union that closed the
+    /// cycle is not named, as which union closes it depends on the order unions
+    /// are made in.
+    fn refuse_own_parts<F>(&mut self, classes: &Classes<K>, visit: &F)
+    where
+        F: Fn(&Classes<K>) -> Vec<K::Id>,
+    {
+        for class in visit(classes) {
+            if !classes.is_own_part(class) {
+                continue;
+            }
+            let mut items = decided_by(classes, class);
+            if let State::Undecided(constraints) = &classes.get(classes.find(class)).state {
+                let named = constraints
+                    .parts
+                    .values()
+                    .flat_map(|part| part.lower.iter().chain(&part.upper).chain(&part.carried).copied());
+                items.extend(named);
+            }
+            self.refuse_once(Refusal {
+                cause: Cause::Occurs,
+                items,
+            });
+        }
+    }
+
     /// The end: refuses each class still undecided (O21), naming what was
     /// recorded on it.
     fn refuse_undecided<F>(&mut self, classes: &Classes<K>, visit: &F)
@@ -552,7 +580,23 @@ mod tests {
     ];
     const FLOATS: [Scalar; 2] = [Scalar::F32, Scalar::F64];
 
-    /// The same outcome in every visit order: as written, reversed, and shuffled.
+    /// The visit order `order` names: as written, reversed, and shuffled.
+    fn reorder(open: &mut [ClassId], order: u64) {
+        match order {
+            0 => {}
+            1 => open.reverse(),
+            seed => {
+                let mut state = seed.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+                for i in (1..open.len()).rev() {
+                    state = state.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+                    let j = usize::try_from(state >> 33).expect("a shifted word fits") % (i + 1);
+                    open.swap(i, j);
+                }
+            }
+        }
+    }
+
+    /// The same outcome in every visit order.
     fn in_every_order<F>(build: F, expected: &str, name: &str)
     where
         F: Fn(&mut World) -> ClassId,
@@ -560,19 +604,7 @@ mod tests {
         for order in 0..24u64 {
             let mut world = World::new();
             let observed = build(&mut world);
-            let count = world.open.len();
-            match order {
-                0 => {}
-                1 => world.open.reverse(),
-                seed => {
-                    let mut state = seed.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
-                    for i in (1..count).rev() {
-                        state = state.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
-                        let j = usize::try_from(state >> 33).expect("a shifted word fits") % (i + 1);
-                        world.open.swap(i, j);
-                    }
-                }
-            }
+            reorder(&mut world.open, order);
             assert_eq!(world.settle_fully(), Settled::Finished, "{name}, order {order}");
             assert_eq!(summary(&world, observed), expected, "{name}, order {order}");
         }
@@ -1680,5 +1712,61 @@ mod tests {
 
         assert!(world.classes.is_own_part(slice));
         assert_eq!(world.shape(a), Shape::Never);
+    }
+
+    /// A program random settling found, whose cycles are closed by unions that
+    /// depend on the visit order: which unions close them decided which items the
+    /// occurs refusals named, and how many there were. The refusals name what wrote
+    /// each class that is a part of itself, and are the same in every order.
+    #[test]
+    fn an_occurs_refusal_names_the_same_items_in_every_order() {
+        let mut seen = BTreeSet::new();
+        for order in 0..24u64 {
+            let mut world = World::new();
+            let first_hole = world.undecided();
+            let option = world.external(Shape::Option(first_hole));
+            literal(&mut world, &INTEGERS);
+            let second_hole = world.undecided();
+            world.pass(option, option);
+            let slice = world.external(Shape::Slice(second_hole));
+            let alone = world.undecided();
+            literal(&mut world, &INTEGERS);
+            world.enter(second_hole, slice);
+            world.enter(first_hole, slice);
+            let place = meet(&mut world, alone, alone);
+            meet(&mut world, place, option);
+            reorder(&mut world.open, order);
+
+            assert_eq!(world.settle_fully(), Settled::Finished);
+
+            let mut refusals: Vec<String> = world.outcome.refusals.iter().map(|refusal| format!("{refusal:?}")).collect();
+            refusals.sort();
+            assert!(refusals.iter().any(|refusal| refusal.contains("Occurs")), "{refusals:?}");
+            seen.insert(refusals);
+        }
+        assert_eq!(seen.len(), 1, "{seen:#?}");
+    }
+
+    /// `p.f = p; p = p.f; take_u8(p); take_u16(p);`: the cycle makes `p` its own
+    /// field, and `p` is left undecided. Nothing decided it, so the occurs refusal
+    /// names the projection that named the part.
+    #[test]
+    fn an_undecided_class_that_is_its_own_part_is_refused_at_what_named_the_part() {
+        let mut world = World::new();
+        let p = world.undecided();
+        let (f, named) = project(&mut world, p, field("f"), Side::Lower);
+        world.enter(p, f);
+        world.enter(f, p);
+        let (first, second) = (world.external(U8), world.external(Shape::Scalar(Scalar::U16)));
+        world.pass(p, first);
+        world.pass(p, second);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        assert!(!world.classes.is_decided(p));
+        assert!(world.classes.is_own_part(p));
+        let occurs: Vec<&Refusal> = world.outcome.refusals.iter().filter(|refusal| refusal.cause == Cause::Occurs).collect();
+        assert_eq!(occurs.len(), 1);
+        assert!(occurs[0].items.contains(&named));
     }
 }

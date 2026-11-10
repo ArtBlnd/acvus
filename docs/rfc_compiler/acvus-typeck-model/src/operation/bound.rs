@@ -719,11 +719,9 @@ mod tests {
         let first_option = world.external(Shape::Option(first));
         let second_option = world.external(Shape::Option(second));
         let at = world.items.push("cycle");
-        let occurs = [
-            world.classes.unify(&world.scopes, first, first_option, at),
-            world.classes.unify(&world.scopes, second, second_option, at),
-        ];
-        assert!(occurs.iter().all(|unified| unified.refusals[0].cause == Cause::Occurs));
+        world.classes.unify(&world.scopes, first, first_option, at);
+        world.classes.unify(&world.scopes, second, second_option, at);
+        assert!(world.classes.is_own_part(first) && world.classes.is_own_part(second));
         world.record(Bound::Equal {
             lower: first_option,
             upper: second_option,
@@ -1147,7 +1145,7 @@ mod tests {
         let some = world.text(Shape::Option(x));
         world.enter(some, x);
 
-        world.settle();
+        world.settle_fully();
 
         assert!(world.outcome.refusals.iter().any(|refusal| refusal.cause == Cause::Occurs));
     }

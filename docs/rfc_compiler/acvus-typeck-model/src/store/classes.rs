@@ -13,7 +13,7 @@ use crate::primitive::class::{
 };
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
-use crate::primitive::refusal::{Cause, Refusal};
+use crate::primitive::refusal::Refusal;
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{PartKey, Shape};
 
@@ -322,10 +322,13 @@ where
     /// merged there ([`Class::merge`]). Of the bounds a merge leaves, each
     /// that no undecided class holds any more is given back. Deciding a class
     /// is unifying it with a decided class.
+    ///
+    /// A union may make a class a part of itself. That is a fact of structure,
+    /// asked of [`Classes::is_own_part`], and refusing it is the caller's: which
+    /// union closes a cycle depends on the order unions are made in.
     pub fn unify(&mut self, scopes: &Scopes, a: K::Id, b: K::Id, at: ItemId) -> Unified<K> {
         let mut unified = Unified::default();
         let mut pairs = vec![(a, b)];
-        let mut merged = BTreeSet::new();
         while let Some((a, b)) = pairs.pop() {
             let (a, b) = (self.find(a).id, self.find(b).id);
             if a == b {
@@ -352,20 +355,12 @@ where
             unified.pending.extend(merge.pending);
             unified.bounds.extend(merge.bounds);
             unified.unplaced.extend(merge.unplaced);
-            merged.insert(kept);
         }
         // A bound an undecided class still holds stays with it: that class
         // was undecided when the bound was recorded, and so holds it too.
         unified
             .bounds
             .retain(|(bound, _)| self.is_decided(bound.lower()) && self.is_decided(bound.upper()));
-        let roots: BTreeSet<K::Id> = merged.into_iter().map(|class| self.find(class).id).collect();
-        if roots.into_iter().any(|root| self.occurs(root)) {
-            unified.refusals.push(Refusal {
-                cause: Cause::Occurs,
-                items: BTreeSet::from([at]),
-            });
-        }
         unified
     }
 
@@ -445,6 +440,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::primitive::refusal::Cause;
     use crate::primitive::ClassId;
     use crate::primitive::Name;
     use crate::primitive::bound::Bound;
@@ -658,18 +654,15 @@ mod tests {
     }
 
     #[test]
-    fn a_class_that_becomes_its_own_part_is_refused() {
+    fn a_class_that_becomes_its_own_part_is_found_and_not_refused() {
         let mut world = World::new();
         let a = world.undecided();
         let (reference, _) = world.decided(Shape::Ref(Mutability::Shared, a));
-        let (unified, at) = world.unify(a, reference);
-        assert_eq!(
-            unified.refusals,
-            vec![Refusal {
-                cause: Cause::Occurs,
-                items: BTreeSet::from([at]),
-            }]
-        );
+        assert!(!world.classes.is_own_part(reference));
+        let (unified, _) = world.unify(a, reference);
+        assert_eq!(unified.refusals, Vec::new());
+        assert!(world.classes.is_own_part(a));
+        assert!(world.classes.is_own_part(reference));
     }
 
     #[test]
