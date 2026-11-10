@@ -141,7 +141,7 @@ where
                 return Given::Nothing;
             }
             let reborrowed = loosened(Subtyping::Reborrow, of_argument != of_given);
-            match behind_a_reference(from, *target, to, *given_target, read) {
+            match behind_a_reference(from, *target, to, *given_target, *of_given, read) {
                 Given::Goes { pairs, adjustments } => goes(pairs, adjustments.into_iter().chain(reborrowed).collect()),
                 other => other,
             }
@@ -191,9 +191,18 @@ where
 /// A hole takes what comes, as it is. A head written is matched as it is where
 /// the argument's target has that head, with every part below one type. Else an
 /// array's length is loosened to a slice, or one reference more is read through,
-/// which must be a shared one, as it is copied out. No field is dropped here: a
-/// reference points at the value as it lies.
-fn behind_a_reference<A, G>(from: &A, mut target: A::Id, to: &G, given: G::Id, read: &mut BTreeSet<A::Id>) -> Given<A::Id, G::Id>
+/// which must be a shared one, as it is copied out, and so only where the type
+/// given is a shared reference: what is copied out of a shared reference is not
+/// written through. No field is dropped here: a reference points at the value
+/// as it lies.
+fn behind_a_reference<A, G>(
+    from: &A,
+    mut target: A::Id,
+    to: &G,
+    given: G::Id,
+    of_given: Mutability,
+    read: &mut BTreeSet<A::Id>,
+) -> Given<A::Id, G::Id>
 where
     A: Written,
     G: Written,
@@ -221,7 +230,7 @@ where
                 read_through.push(Adjustment::Subtype(Subtyping::Unsize));
                 return goes(vec![(*element, *given_element)], read_through);
             }
-            (Shape::Ref(Mutability::Shared, inner), _) => {
+            (Shape::Ref(Mutability::Shared, inner), _) if of_given == Mutability::Shared => {
                 read_through.push(Adjustment::Deref);
                 target = *inner;
             }
