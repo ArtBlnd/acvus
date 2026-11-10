@@ -2,13 +2,14 @@
 //!
 //! | The law is asked | The rule | Where |
 //! |---|---|---|
-//! | what a bound comes to | by the relation the bound is: entering, being equal, being passed | [`enter`], [`equal`], [`passing`] |
+//! | what a bound comes to | by the relation the bound is: entering, being equal, being passed, `as _` | [`enter`], [`equal`], [`passing`], [`alone`] |
 //! | which functions are declared | a table, and no rule | [`functions`] |
 //! | which classes are one type by the bounds as a whole | classes that enter one another | [`enter::entering_one_another`] |
 //! | where a named part lies | read through a reference | [`Language::place`] |
 //! | what head a class may take | the rungs, in order | [`rungs`] |
 //! | what is refused at the end | a class still undecided, a class that is its own part | [`rungs::end`] |
 
+pub mod alone;
 pub mod enter;
 pub mod equal;
 pub mod functions;
@@ -161,6 +162,7 @@ where
         Bound::Enter { .. } => enter::look(view, lower, upper, at),
         Bound::Equal { .. } => equal::look(view, lower, upper, at),
         Bound::Change { .. } => passing::look(view, functions, lower, upper, at),
+        Bound::Alone { .. } => alone::look(view, lower, upper),
     }
 }
 

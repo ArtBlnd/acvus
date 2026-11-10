@@ -33,7 +33,9 @@ where
         F: FnMut(K::Id) -> J::Id;
 }
 
-/// The bounds of the language. They differ only at the top layer.
+/// The bounds of the language, which differ only at the top layer, and with them
+/// the one suspended constraint a store holds as it holds a bound: [`Bound::Alone`]
+/// is recorded, looked at and finished as they are.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Bound<K>
 where
@@ -49,6 +51,10 @@ where
     /// The two heads are equal (O9). It decides neither head and makes no
     /// change, so it can be judged one layer at a time.
     Equal { lower: K::Id, upper: K::Id },
+    /// `lower as _`: the type `lower` comes to by itself enters `upper`. No head
+    /// is asked of `lower`, and it gives `upper` none until that type has a head
+    /// at every depth.
+    Alone { lower: K::Id, upper: K::Id },
 }
 
 impl<K> BoundOf<K> for Bound<K>
@@ -59,7 +65,8 @@ where
         match self {
             Bound::Enter { lower, .. }
             | Bound::Change { lower, .. }
-            | Bound::Equal { lower, .. } => *lower,
+            | Bound::Equal { lower, .. }
+            | Bound::Alone { lower, .. } => *lower,
         }
     }
 
@@ -67,7 +74,8 @@ where
         match self {
             Bound::Enter { upper, .. }
             | Bound::Change { upper, .. }
-            | Bound::Equal { upper, .. } => *upper,
+            | Bound::Equal { upper, .. }
+            | Bound::Alone { upper, .. } => *upper,
         }
     }
 }
@@ -91,6 +99,10 @@ where
                 upper: f(upper),
             },
             Bound::Equal { lower, upper } => Bound::Equal {
+                lower: f(lower),
+                upper: f(upper),
+            },
+            Bound::Alone { lower, upper } => Bound::Alone {
                 lower: f(lower),
                 upper: f(upper),
             },

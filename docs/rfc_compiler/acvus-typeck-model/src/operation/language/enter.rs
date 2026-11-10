@@ -54,18 +54,21 @@ where
     );
     Told::done(Looked::Holds {
         pairs,
+        bounds: Vec::new(),
         adjustments: reborrowed.then_some(Adjustment::Subtype(Subtyping::Reborrow)).into_iter().collect(),
     })
 }
 
-/// The head `bound` gives its upper end to be joined: none where it is no
-/// entering, and none yet where what enters is undecided.
+/// The head `bound` gives its upper end to be joined: none where nothing enters
+/// by it, and none yet where what enters is not decided, at every depth where
+/// the bound asks that.
 pub(super) fn given<K>(view: &View<'_, K>, bound: &Bound<K>) -> Option<Option<Shape<K::Id>>>
 where
     K: ClassKind,
 {
     match bound {
         Bound::Enter { lower, .. } => Some(view.head(*lower).cloned()),
+        Bound::Alone { .. } => Some(None),
         Bound::Equal { .. } | Bound::Change { .. } => None,
     }
 }

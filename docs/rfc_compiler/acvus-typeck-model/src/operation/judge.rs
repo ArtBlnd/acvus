@@ -17,7 +17,7 @@ use super::law::{Law, Looked, Scribe};
 ///
 /// | The law's answer | What is done |
 /// |---|---|
-/// | it holds | The bound is finished, its adjustments are recorded, and its pairs are connected. |
+/// | it holds | The bound is finished, its adjustments and the bounds that take its place are recorded, and its pairs are connected. |
 /// | it does not hold | The bound is finished, and the refusal recorded. |
 /// | it cannot be told yet | The store is told what the bound waits on and what it holds apart, and the pairs known already are connected. |
 ///
@@ -31,8 +31,11 @@ where
 {
     let looked = law.look(&mut Scribe::new(classes, scopes), &bound, at);
     let (pairs, changed) = match looked {
-        Looked::Holds { pairs, adjustments } => {
+        Looked::Holds { pairs, adjustments, bounds } => {
             classes.finish(&bound, at);
+            for bound in bounds {
+                classes.bound(bound, at);
+            }
             if !adjustments.is_empty() {
                 outcome.adjustments.entry(at).or_default().extend(adjustments);
             }

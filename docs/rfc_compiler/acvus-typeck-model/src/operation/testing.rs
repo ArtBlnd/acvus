@@ -80,6 +80,16 @@ impl World {
         place
     }
 
+    /// `value as _`: the class of the expression.
+    pub(super) fn alone(&mut self, value: ClassId) -> ClassId {
+        let place = self.undecided();
+        self.record(Bound::Alone {
+            lower: value,
+            upper: place,
+        });
+        place
+    }
+
     /// `argument` passed to a parameter of the type `given`: the item of the
     /// boundary. The argument enters the boundary's class, which is passed.
     pub(super) fn pass(&mut self, argument: ClassId, given: ClassId) -> ItemId {

@@ -9,7 +9,7 @@ is complete, its content goes into the docs.
 | Thing | What it is | Its life |
 |---|---|---|
 | a class | an equivalence class of types | undecided, holding the names of its parts, then decided, holding its head and its own parts. It changes once. |
-| a bound | a relation of two classes: entering, being equal, being passed | recorded, looked at, perhaps many times, then finished. The store holds it throughout. |
+| a bound | a relation of two classes: entering, being equal, being passed. A suspended constraint, `as _`, has the same life and is held with them. | recorded, looked at, perhaps many times, then finished. The store holds it throughout. |
 | what a class holds of bounds | guards, bounds that hold it apart, waiters | set and lifted as bounds are looked at and finished |
 
 ## 2. The three operations
@@ -19,7 +19,7 @@ Each is done in one place, and there is no other way to do what it does.
 | Operation | Contract | Place |
 |---|---|---|
 | connecting | Makes two classes one type. Neither decided: one class. One decided by solving or the text: the other is that class. One a declaration writes: nothing is merged, and the other is compared with it. Both decided: one head, parts connected in turn. | `operation::connect::connect` |
-| looking at a bound | Asks the law what the bound comes to, and does what follows: finishes it and connects its pairs, or finishes it and refuses, or states what it waits on and holds apart. | `operation::judge::look` |
+| looking at a bound | Asks the law what the bound comes to, and does what follows: finishes it, connects its pairs and records the bounds that take its place, or finishes it and refuses, or states what it waits on and holds apart. | `operation::judge::look` |
 | deciding | Gathers what a rung offers, and gives those heads together through `Classes::deciding`. | `operation::decide::decide` |
 
 `operation::settle::settle` takes them in turn: every bound woken is looked at until none is,
@@ -33,7 +33,7 @@ and finishes nothing.
 
 | The law is asked | It answers |
 |---|---|
-| what a bound comes to | `Looked`: it holds, with these pairs and adjustments; it is refused; or it waits on these classes, holds these apart, and these pairs are one type already |
+| what a bound comes to | `Looked`: it holds, with these pairs and adjustments, and these bounds in its place; it is refused; or it waits on these classes, holds these apart, and these pairs are one type already |
 | which classes are one type by the bounds as a whole | pairs |
 | where a part named on a class lies, once the class's head has no place of that name | `Place`: within another part, with an adjustment, or nowhere |
 | whether a literal's class may take a head | yes or no |
@@ -52,6 +52,7 @@ The language's law is `operation::language`, one rule in one place:
 | entering: the parts of one name are one type, and the head that enters is one the join took in | `enter` |
 | being equal: the parts of one name are one type, and the two heads are of one layer | `equal` |
 | being passed: the type given is read as far as it is written, and each index of the argument's head is loosened or left; else through one way of declared functions | `passing` |
+| `e as _`: it asks `e` no head, waits until the type of `e` has a head at every depth, and then that type enters | `alone` |
 | the functions declared: a table, and no rule | `functions` |
 | classes that enter one another are one class | `enter::entering_one_another` |
 | a part named on a reference is read through it | `Language::place` |
@@ -92,10 +93,10 @@ bound nothing has happened to is not looked at again.
   having a passing hold nothing apart, fails `a_hole_a_passing_not_told_yet_may_reach_is_not_decided`.
 - **A function value passed to a function type**, left as a `todo`.
 - **Calls** on a class, which no law judges.
-- **A part read through more than one reference**, by a projection.
 
 ## 6. How other systems hold a constraint that waits
 
+- **A part read through more than one reference**, by a projection.
 Gathered by a research agent from each project's sources on 2026-11-10, keeping only what it
 marked as read. Not read by the author of this file.
 

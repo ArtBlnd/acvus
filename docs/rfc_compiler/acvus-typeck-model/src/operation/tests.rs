@@ -932,6 +932,91 @@ fn no_row_is_taken_before_every_row_is_told_of() {
     comes_to_with(&rows(), "u16", build(CHAR));
 }
 
+// `e as _` decides alone: the type `e` comes to by itself is a declared type to
+// what is outside.
+
+#[test]
+fn a_literal_as_underscore_falls_back_and_takes_no_head_from_what_it_is_passed_to() {
+    // `let x = 0 as _; f(x);` with `f(u8)`.
+    let build = |alone: bool| {
+        move |w: &mut World, lets: usize| {
+            let zero = w.literal(&INTEGERS);
+            let value = if alone { w.alone(zero) } else { zero };
+            let x = behind(w, value, lets);
+            let parameter = w.external(U8);
+            w.pass(x, parameter);
+            x
+        }
+    };
+    comes_to("u8", build(false));
+    comes_to("refused: NoChange", build(true));
+}
+
+#[test]
+fn what_as_underscore_writes_is_decided_at_every_depth() {
+    // `Some(0) as _`, and `None as _`.
+    comes_to("Option<i32>", |w, lets| {
+        let zero = w.literal(&INTEGERS);
+        let option = some(w, zero);
+        let alone = w.alone(option);
+        behind(w, alone, lets)
+    });
+    comes_to("Option<!>", |w, lets| {
+        let payload = w.undecided();
+        let none = some(w, payload);
+        let alone = w.alone(none);
+        behind(w, alone, lets)
+    });
+}
+
+#[test]
+fn a_part_as_underscore_writes_is_compared_with_what_it_meets_and_not_merged() {
+    // `if c { None } else { Some(1u8) }`, and the same with `None as _`.
+    let build = |alone: bool| {
+        move |w: &mut World, lets: usize| {
+            let payload = w.undecided();
+            let none = some(w, payload);
+            let none = if alone { w.alone(none) } else { none };
+            let none = behind(w, none, lets);
+            let one = w.text(U8);
+            let one = some(w, one);
+            either(w, none, one)
+        }
+    };
+    comes_to("Option<u8>", build(false));
+    comes_to("refused: Mismatch", build(true));
+}
+
+#[test]
+fn as_underscore_waits_for_a_class_it_names_and_does_not_decide_it() {
+    // `let x = 0; let y = x as _; f(x);` with `f(u8)`: `x` is `u8`, and so is `y`.
+    let build = |observe_y: bool| {
+        move |w: &mut World, lets: usize| {
+            let zero = w.literal(&INTEGERS);
+            let x = w.meets(zero);
+            let y = w.alone(x);
+            let y = behind(w, y, lets);
+            let parameter = w.external(U8);
+            w.pass(x, parameter);
+            if observe_y { y } else { x }
+        }
+    };
+    comes_to("u8", build(false));
+    comes_to("u8", build(true));
+}
+
+#[test]
+fn as_underscore_of_what_has_no_type_gives_none() {
+    // `let x; x = Some(x); let y = x as _;`
+    comes_to("refused: Occurs, UndecidedClass", |w, lets| {
+        let x = w.undecided();
+        let option = some(w, x);
+        w.enter(option, x);
+        let y = w.alone(x);
+        behind(w, y, lets)
+    });
+}
+
 // The contracts admit any law: a law that is not the language's runs through the
 // same three operations.
 
@@ -949,6 +1034,7 @@ impl Law<Live> for Odd {
                 key: PartKey::Payload(Name::new("Some")),
             }],
             adjustments: vec![Adjustment::Deref],
+            bounds: Vec::new(),
         }
     }
 

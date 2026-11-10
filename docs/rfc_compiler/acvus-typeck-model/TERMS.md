@@ -70,7 +70,7 @@ takes the join of what enters it.
 | Primitive | What it is | Gives a head while it waits | Examples |
 |---|---|---|---|
 | Bound | a relation of two classes that leaves them two | yes | enter, change, equal |
-| Suspended constraint | waits for one class's head, then branches and adds constraints | no | a projection, a receiver's adjustment, `?` |
+| Suspended constraint | waits for one class's head, then branches and adds constraints | no | a projection, a receiver's adjustment, `?`, `as _` |
 | Adjustment | a record of what solving came to | it is no constraint | a deref, a receiver's `&`, a reborrow, any subtyping the language gives, a declared function's call |
 
 An adjustment is an output of solving and never an input to it: no constraint reads one, and
@@ -134,18 +134,43 @@ from a signature given from outside, so a value meets one in two ways:
 | It is passed as an argument. | A change to the parameter's type, which is the upper end. |
 | It is the result of a call. | The result's type enters as a lower bound. |
 
-No value enters a declared type as its upper bound. `e as T`, once the language has a way to
-write `T`, is the passing of `e` to a function `T -> T`, and adds no third way.
+No value enters a declared type as its upper bound. `e as T` is the passing of `e` to a
+function `T -> T`, and adds no third way. The one `T` the text can write so far is `_`.
 
-## A block decides alone
+## `e as _` decides alone
 
-A standalone block `{ e }` decides everything inside it by itself, fallback included, and
-gives what is outside only the finished type, as a lower bound. Nothing outside reaches in.
-It is a call of a function whose result type is what its body comes to.
+`e as T` is the passing of `e` to a function `T -> T`. In `e as _`, the `_` writes the type `e`
+comes to by itself: every class `e` makes is decided with nothing outside reaching in, fallback
+included, and that finished type is the `T`. So what is outside is given a declared type, as a
+lower bound, and compares with it.
 
-`let x = { 0 }; f(x);` with `f(u8)` is refused: `0` falls back to `i32` inside the block, and
-no change goes from `i32` to `u8`. `{ None }` is `Option<!>`, and its payload is compared with
-what it meets outside, and not merged.
+The `_` is no hole. A hole is one class with what is passed to it, and `e as _` would then do
+nothing.
+
+A type decided at every depth is compared with whatever it meets, as a declared type is, and
+is changed by nothing. So no declared type is written anew for the `_`: the type of `e`
+enters as it is, once nothing in it is undecided.
+
+| Program | Outcome |
+|---|---|
+| `let x = 0 as _; f(x);` with `f(u8)` | Refused: `0` falls back to `i32`, and `i32` does not go to `u8`. |
+| `None as _` | `Option<!>`. Its payload is compared with what it meets outside, and not merged. |
+| `0 as u8` | `u8`: the type is written, so the literal is given its head from above. |
+
+What decides alone is what `e` makes, and not what `e` names. A class made outside `e` is
+decided as the rules outside decide it, and `e as _` waits for it:
+
+```text
+let x = 0;
+let y = x as _;
+f(x);            // f(u8)
+```
+
+`x` is `u8`, by the passing to `f`, and `y` is given `u8` once `x` is decided.
+
+`as _` follows any expression: an `if`, a `match`, a call. A block `{ e }` is a scope and an
+order of statements, and does nothing to types. This replaces the earlier rule that a
+standalone block decides alone.
 
 ## A hole is where types meet
 
@@ -185,6 +210,7 @@ What follows from types being matched as they are written:
 | Program | Outcome |
 |---|---|
 | `f(&r)` with `f(&T)` and `r: &u8` | `T` is `&u8`. Nothing is read through, as `&&u8` matches `&T` as it is. |
+- How many references a projection reads through, now that a target may be a reference.
 | `f(&r)` with `f(&u8)` and `r: &u8` | Accepted: `&&u8` goes to `&u8`. |
 | `f(r)` with `f(U) -> &U` and `r: &T` | The result is `&&T`. |
 | `if c { &r } else { &x }` with `r: &u8`, `x: u8` | Refused: `&&u8` and `&u8` do not join. |
@@ -210,4 +236,3 @@ A projection `p.f` asks it of `p`, to know whether `f` is a part of `p` or of wh
 
 - The head of a class that only parts are recorded on, as in `let a; a.x`.
 - A refusal naming the connection that merged two classes.
-- How many references a projection reads through, now that a target may be a reference.

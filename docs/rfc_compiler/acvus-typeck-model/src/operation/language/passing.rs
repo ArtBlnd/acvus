@@ -426,7 +426,11 @@ where
             adjustments.push(Adjustment::Row(functions.rows[*row].name.clone()));
         }
     }
-    Looked::Holds { pairs, adjustments }
+    Looked::Holds {
+        pairs,
+        adjustments,
+        bounds: Vec::new(),
+    }
 }
 
 /// What `argument` being passed to `given` comes to.
@@ -448,7 +452,11 @@ where
     match language(view, argument, view, given, &mut read) {
         Given::Goes { pairs, adjustments } => {
             let pairs = pairs.into_iter().map(|(a, g)| Pair::Classes(a, g)).collect();
-            return Told::done(Looked::Holds { pairs, adjustments });
+            return Told::done(Looked::Holds {
+                pairs,
+                adjustments,
+                bounds: Vec::new(),
+            });
         }
         Given::Reads(class, against) => {
             return Told {
@@ -472,6 +480,7 @@ where
             looked: Looked::Holds {
                 pairs: Vec::new(),
                 adjustments: Vec::new(),
+                bounds: Vec::new(),
             },
             asks: Vec::new(),
             way: Some(way),

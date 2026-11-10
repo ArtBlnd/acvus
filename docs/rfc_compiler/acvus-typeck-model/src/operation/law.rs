@@ -35,9 +35,14 @@ pub enum Looked<K>
 where
     K: ClassKind,
 {
-    /// It holds, and is finished. These pairs are one type by it, and these
-    /// adjustments are what it takes.
-    Holds { pairs: Vec<Pair<K>>, adjustments: Vec<Adjustment> },
+    /// It holds, and is finished. These pairs are one type by it, these
+    /// adjustments are what it takes, and these bounds are recorded in its place,
+    /// by the item that recorded it.
+    Holds {
+        pairs: Vec<Pair<K>>,
+        adjustments: Vec<Adjustment>,
+        bounds: Vec<K::Bound>,
+    },
     /// It does not hold, and is finished.
     Refused(Refusal),
     /// It cannot be told yet. It is looked at again when a class of `on` is

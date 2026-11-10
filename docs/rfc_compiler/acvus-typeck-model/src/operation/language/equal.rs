@@ -40,6 +40,7 @@ where
     }
     Told::done(Looked::Holds {
         pairs,
+        bounds: Vec::new(),
         adjustments: Vec::new(),
     })
 }
