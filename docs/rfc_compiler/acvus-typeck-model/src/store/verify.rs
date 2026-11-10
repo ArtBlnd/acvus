@@ -23,6 +23,13 @@ where
     Unnamed { class: K::Id, key: PartKey },
     /// A bound the store holds, an end of which names no class made.
     Unbound { bound: K::Bound, by: ItemId },
+    /// A class holding something of a bound the store does not hold: one
+    /// finished, or one never recorded.
+    Guard { class: K::Id, bound: K::Bound, by: ItemId },
+    /// A class that a bound guards and should not, or does not and should: what
+    /// a bound guards is every class below one it holds apart, but for those it
+    /// holds apart.
+    Guarded { class: K::Id, bound: K::Bound, by: ItemId },
 }
 
 impl<K> Classes<K>
@@ -60,6 +67,43 @@ where
         }
         if !violations.is_empty() {
             return Err(violations);
+        }
+
+        for (id, slot) in self.slots.iter() {
+            let Slot::Root(class) = slot else {
+                continue;
+            };
+            let held = &class.held;
+            for guard in held.guards.iter().chain(&held.apart).chain(&held.waiters) {
+                if !self.bounds.contains(guard) {
+                    violations.push(Violation::Guard {
+                        class: id,
+                        bound: guard.0.clone(),
+                        by: guard.1,
+                    });
+                }
+            }
+        }
+        // What each bound guards, found anew by walking down from what it holds
+        // apart, against the guards the store kept as structure grew.
+        for recorded in &self.bounds {
+            let apart: std::collections::BTreeSet<K::Id> = self
+                .roots()
+                .filter(|root| self.get(*root).held.apart.contains(recorded))
+                .map(|root| root.id())
+                .collect();
+            let below = self.below(apart.iter().copied());
+            for root in self.roots() {
+                let guarded = self.get(root).held.guards.contains(recorded);
+                let expected = below.contains(&root.id()) && !apart.contains(&root.id());
+                if guarded != expected {
+                    violations.push(Violation::Guarded {
+                        class: root.id(),
+                        bound: recorded.0.clone(),
+                        by: recorded.1,
+                    });
+                }
+            }
         }
 
         for (id, slot) in self.slots.iter() {

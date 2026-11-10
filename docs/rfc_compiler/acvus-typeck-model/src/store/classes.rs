@@ -9,7 +9,7 @@ use crate::primitive::ItemId;
 use crate::primitive::ScopeId;
 use crate::primitive::bound::BoundOf;
 use crate::primitive::class::{
-    Bounds, Call, Class, ClassKind, Constraints, Decided, Origin, Part, Pending, Side, State, Unplaced,
+    Bounds, Call, Class, ClassKind, Constraints, Decided, Held, Origin, Part, Pending, Side, State, Unplaced,
 };
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
@@ -37,6 +37,14 @@ where
     /// Every bound finished. A bound is recorded once: what connects parts by
     /// name comes to the same pair again, and recording it again does nothing.
     finished: Bounds<K>,
+    /// The bounds to look at: each recorded and not looked at yet, and each that
+    /// waits on a class that has changed since.
+    woken: Bounds<K>,
+    /// How many unions have joined a decided class with an undecided one that
+    /// was an upper end of a bound, other than a decision. Such a union takes
+    /// what entered the undecided class after the head it would have been joined
+    /// into was already fixed.
+    late: usize,
 }
 
 // Written out, as a derive would ask an id to have a default, and none has.
@@ -49,6 +57,8 @@ where
             slots: Arena::default(),
             bounds: Bounds::<K>::new(),
             finished: Bounds::<K>::new(),
+            woken: Bounds::<K>::new(),
+            late: 0,
         }
     }
 }
@@ -123,6 +133,85 @@ where
     }
 }
 
+/// The one way a class is decided by solving.
+///
+/// A class is decided once, and only when nothing can still be merged into it:
+/// its head is the join of what enters it, and a merge brings more to enter. So a
+/// class is held, and not decided, while a bound guards it ([`Classes::guard`]),
+/// and while it is named as a part on an undecided class that it does not hold in
+/// turn. What is held is found once, when this is made, and this borrows the
+/// store for as long as it lives: nothing is recorded and nothing is merged
+/// between that finding and the decisions, and the classes it decides are decided
+/// together.
+///
+/// ```compile_fail
+/// use acvus_typeck_model::primitive::ItemId;
+/// use acvus_typeck_model::primitive::bound::Bound;
+/// use acvus_typeck_model::primitive::class::Live;
+/// use acvus_typeck_model::primitive::id::Arena;
+/// use acvus_typeck_model::primitive::scope::Scopes;
+/// use acvus_typeck_model::store::classes::Classes;
+///
+/// let scopes = Scopes::new();
+/// let mut items: Arena<ItemId, ()> = Arena::default();
+/// let mut classes = Classes::<Live>::default();
+/// let a = classes.undecided(scopes.root());
+/// let b = classes.undecided(scopes.root());
+/// let deciding = classes.deciding();
+/// classes.bound(Bound::Change { lower: a, upper: b }, items.push(()));
+/// deciding.is_held(a);
+/// ```
+#[derive(Debug)]
+pub struct Deciding<'a, K>
+where
+    K: ClassKind,
+{
+    classes: &'a mut Classes<K>,
+    held: BTreeSet<K::Id>,
+}
+
+impl<K> Deciding<'_, K>
+where
+    K: ClassKind,
+{
+    /// The store, to read what a decision goes by.
+    pub fn classes(&self) -> &Classes<K> {
+        self.classes
+    }
+
+    /// Whether `class` may not be decided now.
+    pub fn is_held(&self, class: K::Id) -> bool {
+        self.held.contains(&self.classes.find(class).id)
+    }
+
+    /// Decides `class` as the head `shape` gives, by `at`. It gives none, and does
+    /// nothing, where the class is held or is decided already.
+    ///
+    /// Only the constructor and members of `shape` are taken. The parts of the
+    /// head are the class's own: the part already named on it, or a class made
+    /// anew where none is. A part of what gave the head is another class, to be
+    /// made one type with this one as any two parts are, and not put in its place.
+    pub fn decide<P>(&mut self, scopes: &Scopes, class: K::Id, shape: &Shape<P>, by: BTreeSet<ItemId>, at: ItemId) -> Option<Unified<K>> {
+        if self.is_held(class) || self.classes.is_decided(class) {
+            return None;
+        }
+        let root = self.classes.find(class).id;
+        let scope = self.classes.root(root).scope;
+        let mut count = 0;
+        let numbered = shape.map(|_| {
+            count += 1;
+            count - 1
+        });
+        let keys: BTreeMap<usize, PartKey> = numbered.places().into_iter().map(|(key, number)| (*number, key)).collect();
+        let own = numbered.map(|number| match self.classes.root(root).state.part(&keys[number]) {
+            Some(named) => named,
+            None => self.classes.undecided(scope),
+        });
+        let head = self.classes.decided(scope, own, by);
+        Some(self.classes.unite(scopes, class, head, at, true))
+    }
+}
+
 /// What a union, or a record on a decided class, leaves to its caller.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Unified<K>
@@ -154,6 +243,7 @@ where
         self.slots.push(Slot::Root(Class {
             scope,
             state: State::Undecided(Constraints::default()),
+            held: Held::default(),
         }))
     }
 
@@ -172,6 +262,7 @@ where
         self.slots.push(Slot::Root(Class {
             scope,
             state: State::Decided(Decided { shape, by, origin }),
+            held: Held::default(),
         }))
     }
 
@@ -238,7 +329,77 @@ where
     /// store holds it until it is finished.
     pub fn bound(&mut self, bound: K::Bound, at: ItemId) -> bool {
         let recorded = (bound, at);
-        !self.finished.contains(&recorded) && self.bounds.insert(recorded)
+        if self.finished.contains(&recorded) || !self.bounds.insert(recorded.clone()) {
+            return false;
+        }
+        self.woken.insert(recorded);
+        true
+    }
+
+    /// The bounds to look at, which are then to look at no longer until a class
+    /// one of them waits on is merged or decided.
+    pub fn take_woken(&mut self) -> Bounds<K> {
+        mem::take(&mut self.woken)
+    }
+
+    /// States anew which classes `bound`, recorded by `at`, waits on: it is to be
+    /// looked at again when one of them is merged with another or decided.
+    pub fn wait(&mut self, bound: &K::Bound, at: ItemId, on: &BTreeSet<K::Id>) {
+        let recorded = (bound.clone(), at);
+        for root in self.root_ids() {
+            self.root_mut(root).held.waiters.remove(&recorded);
+        }
+        if !self.bounds.contains(&recorded) {
+            return;
+        }
+        for class in on {
+            let root = self.find(*class).id;
+            self.root_mut(root).held.waiters.insert(recorded.clone());
+        }
+    }
+
+    /// How many late unions there have been: see the field.
+    pub fn late_unions(&self) -> usize {
+        self.late
+    }
+
+    fn root_ids(&self) -> Vec<K::Id> {
+        self.roots().map(|root| root.id).collect()
+    }
+
+    /// Wakes what waits on the class held at `root`, which has been merged or
+    /// decided.
+    fn wake(&mut self, root: K::Id) {
+        let waiters = self.root(root).held.waiters.clone();
+        self.woken.extend(waiters);
+    }
+
+    /// Gives each part of the class held at `root`, and each part below, the
+    /// guards that reach it: those of the class above it, and those the class
+    /// above it holds apart, but for a guard the part holds apart itself.
+    fn push_down(&mut self, root: K::Id) {
+        let mut stack = vec![root];
+        while let Some(class) = stack.pop() {
+            let class = self.find(class).id;
+            let above = &self.root(class).held;
+            let reaching: Bounds<K> = above.guards.union(&above.apart).cloned().collect();
+            if reaching.is_empty() {
+                continue;
+            }
+            for part in self.root(class).state.parts() {
+                let part = self.find(part).id;
+                let held = &mut self.root_mut(part).held;
+                let new: Vec<(K::Bound, ItemId)> = reaching
+                    .iter()
+                    .filter(|guard| !held.apart.contains(guard) && !held.guards.contains(guard))
+                    .cloned()
+                    .collect();
+                if !new.is_empty() {
+                    held.guards.extend(new);
+                    stack.push(part);
+                }
+            }
+        }
     }
 
     /// Every bound recorded and not finished.
@@ -262,10 +423,94 @@ where
         let recorded = (bound.clone(), at);
         let held = self.bounds.remove(&recorded);
         if held {
+            self.lift(&recorded);
+            for root in self.root_ids() {
+                self.root_mut(root).held.waiters.remove(&recorded);
+            }
+            self.woken.remove(&recorded);
             self.finished.insert(recorded);
         }
         held
     }
+
+    /// States anew what `bound`, recorded by `at`, guards: every class below one
+    /// of `apart`, at any depth, but for the classes of `apart` themselves. Those
+    /// are the classes it may still merge with another before it is finished, and
+    /// what it guarded before and does not now is free of it.
+    ///
+    /// A class of `apart` is an end of the bound, or a class it reads and never
+    /// merges. The guard goes down to each part such a class comes to have, as
+    /// structure grows, without the bound being looked at again. The store reads
+    /// no more of a bound here than anywhere: whoever knows what the bound means
+    /// says what it holds apart, and says it again as that changes.
+    pub fn guard(&mut self, bound: &K::Bound, at: ItemId, apart: &BTreeSet<K::Id>) {
+        let recorded = (bound.clone(), at);
+        self.lift(&recorded);
+        if !self.bounds.contains(&recorded) {
+            return;
+        }
+        let apart: BTreeSet<K::Id> = apart.iter().map(|class| self.find(*class).id).collect();
+        for root in &apart {
+            self.root_mut(*root).held.apart.insert(recorded.clone());
+        }
+        for root in apart {
+            self.push_down(root);
+        }
+    }
+
+    fn lift(&mut self, recorded: &(K::Bound, ItemId)) {
+        for root in self.root_ids() {
+            let held = &mut self.root_mut(root).held;
+            held.guards.remove(recorded);
+            held.apart.remove(recorded);
+        }
+    }
+
+    /// Every class below `classes`: their parts, and the parts of those, at any
+    /// depth, by root. A class of `classes` is among them only where it is a part
+    /// of one of them.
+    pub fn below<I>(&self, classes: I) -> BTreeSet<K::Id>
+    where
+        I: IntoIterator<Item = K::Id>,
+    {
+        let mut found = BTreeSet::new();
+        let mut stack: Vec<K::Id> = classes
+            .into_iter()
+            .flat_map(|class| self.root(self.find(class).id).state.parts())
+            .collect();
+        while let Some(class) = stack.pop() {
+            let root = self.find(class).id;
+            if found.insert(root) {
+                stack.extend(self.root(root).state.parts());
+            }
+        }
+        found
+    }
+
+    /// The one way a class is decided by solving: see [`Deciding`].
+    pub fn deciding(&mut self) -> Deciding<'_, K> {
+        let mut held: BTreeSet<K::Id> = self
+            .roots()
+            .filter(|root| !self.get(*root).held.guards.is_empty())
+            .map(|root| root.id)
+            .collect();
+        // A part is decided no earlier than the class it is named on. Where the
+        // part holds that class in turn, the order asks nothing of the two, and
+        // they are decided together.
+        for owner in self.roots() {
+            let State::Undecided(constraints) = &self.get(owner).state else {
+                continue;
+            };
+            for part in constraints.parts.values() {
+                let part = self.find(part.class).id;
+                if !self.below([part]).contains(&owner.id) && part != owner.id {
+                    held.insert(part);
+                }
+            }
+        }
+        Deciding { classes: self, held }
+    }
+
 
     /// The class of the part `key` of `class`, named on `side` by `at`.
     ///
@@ -288,6 +533,7 @@ where
         let State::Undecided(constraints) = &mut self.root_mut(root).state else {
             unreachable!("a decided class returned above, and making a class decides none");
         };
+        let named_anew = !constraints.parts.contains_key(&key);
         let part = constraints.parts.entry(key).or_insert_with(|| Part {
             class: part_class,
             lower: BTreeSet::new(),
@@ -300,6 +546,9 @@ where
             Side::Carried => &mut part.carried,
         };
         items.insert(at);
+        if named_anew {
+            self.push_down(root);
+        }
         Some(part_class)
     }
 
@@ -348,12 +597,26 @@ where
     /// asked of [`Classes::is_own_part`], and refusing it is the caller's: which
     /// union closes a cycle depends on the order unions are made in.
     pub fn unify(&mut self, scopes: &Scopes, a: K::Id, b: K::Id, at: ItemId) -> Unified<K> {
+        self.unite(scopes, a, b, at, false)
+    }
+
+    fn unite(&mut self, scopes: &Scopes, a: K::Id, b: K::Id, at: ItemId, mut deciding: bool) -> Unified<K> {
         let mut unified = Unified::default();
         let mut pairs = vec![(a, b)];
         while let Some((a, b)) = pairs.pop() {
             let (a, b) = (self.find(a).id, self.find(b).id);
             if a == b {
                 continue;
+            }
+            if !mem::replace(&mut deciding, false) {
+                let late = |decided: K::Id, other: K::Id| {
+                    self.root(decided).state.is_decided()
+                        && !self.root(other).state.is_decided()
+                        && self.bounds.iter().any(|(bound, _)| self.find(bound.upper()).id == other && self.find(bound.lower()).id != other)
+                };
+                if late(a, b) || late(b, a) {
+                    self.late += 1;
+                }
             }
             let (kept, gone) = (a.min(b), a.max(b));
             let Slot::Root(gone_class) = mem::replace(self.slots.get_mut(gone), Slot::Link(kept)) else {
@@ -365,12 +628,15 @@ where
             let placeholder = Slot::Root(Class {
                 scope,
                 state: State::Undecided(Constraints::default()),
+                held: Held::default(),
             });
             let Slot::Root(kept_class) = mem::replace(self.slots.get_mut(kept), placeholder) else {
                 unreachable!("find gives a root");
             };
             let merge = kept_class.merge(gone_class, kept, scopes, at);
             *self.slots.get_mut(kept) = Slot::Root(merge.class);
+            self.push_down(kept);
+            self.wake(kept);
             pairs.extend(merge.pairs);
             unified.refusals.extend(merge.refusals);
             unified.pending.extend(merge.pending);

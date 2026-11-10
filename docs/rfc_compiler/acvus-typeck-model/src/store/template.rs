@@ -96,8 +96,8 @@ where
             let Slot::Root(class) = slot else {
                 continue;
             };
-            let Class { state, .. } = class.clone().translate::<K, _>(|held| copies[&template.find(held).id()]);
-            *self.slots.get_mut(copies[&id]) = Slot::Root(Class { scope, state });
+            let Class { state, held, .. } = class.clone().translate::<K, _>(|held| copies[&template.find(held).id()]);
+            *self.slots.get_mut(copies[&id]) = Slot::Root(Class { scope, state, held });
         }
         for (id, slot) in template.slots.iter() {
             if let Slot::Link(_) = slot {
@@ -107,7 +107,7 @@ where
         }
         for (bound, by) in &template.bounds {
             let copied = bound.clone().translate(|held| copies[&template.find(held).id()]);
-            self.bounds.insert((copied, *by));
+            self.bound(copied, *by);
         }
 
         let mut unified = Unified::default();

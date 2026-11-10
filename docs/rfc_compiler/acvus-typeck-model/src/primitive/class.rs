@@ -66,6 +66,52 @@ where
     /// Where two classes are merged, the outer of their scopes (Brand types).
     pub scope: ScopeId,
     pub state: State<K>,
+    /// What the store keeps of the bounds not finished that have to do with this
+    /// class. Where two classes are merged, those of both.
+    pub held: Held<K>,
+}
+
+/// The bounds not finished that have to do with a class, by what they have to do
+/// with it. A store keeps these without reading what a bound means.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Held<K>
+where
+    K: ClassKind,
+{
+    /// The bounds that may still merge this class with another. While there is
+    /// one, what enters the class is not all known, and the class is not decided.
+    pub guards: Bounds<K>,
+    /// The bounds that guard what lies below this class and not the class
+    /// itself: one of their ends, or a class they read and never merge. A part
+    /// this class comes to have is guarded by each.
+    pub apart: Bounds<K>,
+    /// The bounds to look at again when this class is merged with another or
+    /// decided.
+    pub waiters: Bounds<K>,
+}
+
+impl<K> Default for Held<K>
+where
+    K: ClassKind,
+{
+    fn default() -> Self {
+        Self {
+            guards: Bounds::<K>::new(),
+            apart: Bounds::<K>::new(),
+            waiters: Bounds::<K>::new(),
+        }
+    }
+}
+
+impl<K> Held<K>
+where
+    K: ClassKind,
+{
+    fn absorb(&mut self, other: Self) {
+        self.guards.extend(other.guards);
+        self.apart.extend(other.apart);
+        self.waiters.extend(other.waiters);
+    }
 }
 
 /// A class is undecided, holding what has been recorded on it, or decided,
@@ -309,6 +355,7 @@ where
         Class {
             scope: self.scope,
             state,
+            held: Held::default(),
         }
     }
 
@@ -322,6 +369,8 @@ where
     /// each part with no place, its calls and domains to its caller.
     pub fn merge(self, other: Self, root: K::Id, scopes: &Scopes, at: ItemId) -> Merged<K> {
         let scope = scopes.outer(self.scope, other.scope);
+        let mut held = self.held;
+        held.absorb(other.held);
         let mut pairs = Vec::new();
         let mut refusals = Vec::new();
         let mut pending = None;
@@ -393,7 +442,7 @@ where
             }
         };
         Merged {
-            class: Class { scope, state },
+            class: Class { scope, state, held },
             pairs,
             refusals,
             pending,
