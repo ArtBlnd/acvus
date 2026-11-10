@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::primitive::bound::BoundInto;
+use crate::primitive::constraint::ConstraintInto;
 use crate::primitive::class::{Class, ClassKind};
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::Ty;
@@ -64,7 +64,7 @@ where
     /// as `fate` gives each.
     ///
     /// Each class is made anew holding what its original holds, every id in
-    /// it given as the class its original became, and each bound the template
+    /// it given as the class its original became, and each constraint the template
     /// holds is recorded between the copies of its ends. Then each class kept is
     /// made one with its copy. The template is not changed.
     pub fn copy_from<S, F>(
@@ -77,7 +77,7 @@ where
     ) -> Copied<S, K>
     where
         S: ClassKind,
-        S::Bound: BoundInto<S, K>,
+        S::Constraint: ConstraintInto<S, K>,
         F: FnMut(Root<'_, S>) -> Fate<K::Id>,
     {
         let mut copies = BTreeMap::new();
@@ -112,9 +112,9 @@ where
                 copies.insert(id, copy);
             }
         }
-        for (bound, by) in &template.bounds {
-            let copied = bound.clone().translate(|held| copies[&template.find(held).id()]);
-            self.bound(copied, *by);
+        for (constraint, by) in &template.constraints {
+            let copied = constraint.clone().translate(|held| copies[&template.find(held).id()]);
+            self.constrain(copied, *by);
         }
 
         let mut unified = Unified::default();
@@ -133,7 +133,7 @@ where
 mod tests {
     use super::*;
     use crate::primitive::Name;
-    use crate::primitive::bound::{Bound, BoundOf};
+    use crate::primitive::constraint::{Bound, ConstraintOf};
     use crate::primitive::class::{Live, Side, State, Template};
     use crate::primitive::id::Arena;
     use crate::primitive::ty::{Mutability, PartKey, Shape};
@@ -248,16 +248,16 @@ mod tests {
     }
 
     /// `|x| last = Some(x)`, whose text writes into the capture `last`.
-    /// The classes at the lower end of the bounds whose upper end is `upper`,
-    /// each with the items that recorded those bounds.
+    /// The classes at the lower end of the constraints whose upper end is `upper`,
+    /// each with the items that recorded those constraints.
     fn entering<K>(classes: &Classes<K>, upper: K::Id) -> BTreeMap<K::Id, BTreeSet<ItemId>>
     where
         K: ClassKind,
     {
         let mut found = BTreeMap::<K::Id, BTreeSet<ItemId>>::new();
-        for (bound, at) in classes.bounds() {
-            if classes.find(bound.upper()) == classes.find(upper) {
-                found.entry(classes.find(bound.lower()).id()).or_default().insert(*at);
+        for (constraint, at) in classes.constraints() {
+            if classes.find(constraint.upper()) == classes.find(upper) {
+                found.entry(classes.find(constraint.lower()).id()).or_default().insert(*at);
             }
         }
         found
@@ -271,7 +271,7 @@ mod tests {
         let wrote = world.items.push("Some(x)");
         let some = template.decided(root, Shape::Option(x), BTreeSet::from([wrote]));
         let meets = world.items.push("last = Some(x)");
-        template.bound(Bound::Enter { lower: some, upper: last }, meets);
+        template.constrain(Bound::Enter { lower: some, upper: last }.into(), meets);
         (template, last, some, meets)
     }
 
@@ -337,10 +337,10 @@ mod tests {
         let a = template.undecided(root);
         let b = template.undecided(root);
         let at = world.items.push("a into b");
-        template.bound(Bound::Change { lower: a, upper: b }, at);
+        template.constrain(Bound::Change { lower: a, upper: b }.into(), at);
         let copied = world.copy(&template, |_| Fate::Anew);
         let (a, b) = (copied.classes[&a], copied.classes[&b]);
-        assert_eq!(world.live.bounds(), &BTreeSet::from([(Bound::Change { lower: a, upper: b }, at)]));
+        assert_eq!(world.live.constraints(), &BTreeSet::from([(Bound::Change { lower: a, upper: b }.into(), at)]));
     }
 
     #[test]

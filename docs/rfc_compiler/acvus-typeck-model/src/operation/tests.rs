@@ -10,7 +10,7 @@ use super::language::Language;
 use super::law::{Law, Looked, Offer, Pair, Place, Scribe};
 use super::testing::{EXCLUSIVE, SHARED, U8, World, reorder};
 use crate::primitive::adjustment::{Adjustment, Adjustments};
-use crate::primitive::bound::{Bound, BoundOf};
+use crate::primitive::constraint::{Bound, Constraint, ConstraintOf};
 use crate::primitive::class::{Live, Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
@@ -769,7 +769,7 @@ fn a_function_value_is_passed_only_to_one_of_the_same_closures() {
 }
 
 // Deciding from above: a class nothing enters takes the one head, of those it
-// will be held against, that every bound waiting on it would have it take.
+// will be held against, that every constraint waiting on it would have it take.
 
 #[test]
 fn a_literal_takes_the_head_it_is_passed_to() {
@@ -1407,23 +1407,24 @@ fn parts_made_one_because_what_holds_them_is_one_are_refused_naming_what_made_th
 struct Odd;
 
 impl Law<Live> for Odd {
-    fn look(&self, _: &mut Scribe<'_, Live>, bound: &Bound<Live>, _: ItemId) -> Looked<Live> {
+    fn look(&self, _: &mut Scribe<'_, Live>, constraint: &Constraint<Live>, _: ItemId) -> Looked<Live> {
         Looked::Holds {
             pairs: vec![Pair::Part {
-                part: bound.lower(),
-                of: bound.upper(),
+                part: constraint.lower(),
+                of: constraint.upper(),
                 key: PartKey::Payload(VariantOf::Option, Name::new("Some")),
             }],
             adjustments: vec![Adjustment::Deref],
-            bounds: Vec::new(),
+            constraints: Vec::new(),
         }
     }
 
-    fn same(&self, part: ClassId, declared: ClassId) -> Bound<Live> {
+    fn same(&self, part: ClassId, declared: ClassId) -> Constraint<Live> {
         Bound::Equal {
             lower: part,
             upper: declared,
         }
+        .into()
     }
 
     fn one(&self, _: &Classes<Live>) -> Vec<(ClassId, ClassId, ItemId)> {
@@ -1443,10 +1444,10 @@ impl Law<Live> for Odd {
     }
 
     fn offer(&self, classes: &Classes<Live>, _: usize, class: ClassId) -> Offer<Live> {
-        let State::Undecided(constraints) = &classes.get(classes.find(class)).state else {
+        let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
             return Offer::Nothing;
         };
-        let shape = if constraints.parts.is_empty() { U8 } else { Shape::Option(class) };
+        let shape = if undecided.parts.is_empty() { U8 } else { Shape::Option(class) };
         Offer::Head {
             shape,
             by: BTreeSet::new(),

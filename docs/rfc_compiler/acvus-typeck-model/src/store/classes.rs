@@ -1,5 +1,5 @@
 //! The classes of one kind: a union-find over their ids, each root holding
-//! its class, and every bound recorded between them that is not finished yet.
+//! its class, and every constraint recorded between them that is not finished yet.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
@@ -8,7 +8,7 @@ use std::mem;
 use crate::primitive::ItemId;
 use crate::primitive::ScopeId;
 use crate::primitive::class::{
-    Bounds, Call, Class, ClassKind, Connections, Constraints, Decided, Held, Origin, Part, Pending, Side, State, Unplaced,
+    Call, Class, ClassKind, Connections, Constraints, Decided, Held, Origin, Part, Pending, Side, State, Undecided, Unplaced,
 };
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
@@ -29,16 +29,16 @@ where
 {
     /// Open to the rest of the store for [`Classes::verify`] alone.
     pub(super) slots: Arena<K::Id, Slot<K>>,
-    /// Every bound recorded and not finished, from its recording until whoever
+    /// Every constraint recorded and not finished, from its recording until whoever
     /// judges or makes it finishes it. Open to the rest of the store for
     /// [`Classes::verify`] and for copying a template.
-    pub(super) bounds: Bounds<K>,
-    /// Every bound finished. A bound is recorded once: what connects parts by
+    pub(super) constraints: Constraints<K>,
+    /// Every constraint finished. A constraint is recorded once: what connects parts by
     /// name comes to the same pair again, and recording it again does nothing.
-    finished: Bounds<K>,
-    /// The bounds to look at: each recorded and not looked at yet, and each that
+    finished: Constraints<K>,
+    /// The constraints to look at: each recorded and not looked at yet, and each that
     /// waits on a class that has changed since.
-    woken: Bounds<K>,
+    woken: Constraints<K>,
 }
 
 // Written out, as a derive would ask an id to have a default, and none has.
@@ -49,9 +49,9 @@ where
     fn default() -> Self {
         Self {
             slots: Arena::default(),
-            bounds: Bounds::<K>::new(),
-            finished: Bounds::<K>::new(),
-            woken: Bounds::<K>::new(),
+            constraints: Constraints::<K>::new(),
+            finished: Constraints::<K>::new(),
+            woken: Constraints::<K>::new(),
         }
     }
 }
@@ -130,7 +130,7 @@ where
 ///
 /// A class is decided once, and only when nothing can still be merged into it:
 /// its head is the join of what enters it, and a merge brings more to enter. So a
-/// class is held, and not decided, while a bound guards it ([`Classes::guard`]),
+/// class is held, and not decided, while a constraint guards it ([`Classes::guard`]),
 /// and while it is named as a part on an undecided class that it does not hold in
 /// turn. What is held is found once, when this is made, and this borrows the
 /// store for as long as it lives: nothing is recorded and nothing is merged
@@ -139,7 +139,7 @@ where
 ///
 /// ```compile_fail
 /// use acvus_typeck_model::primitive::ItemId;
-/// use acvus_typeck_model::primitive::bound::Bound;
+/// use acvus_typeck_model::primitive::constraint::Bound;
 /// use acvus_typeck_model::primitive::class::Live;
 /// use acvus_typeck_model::primitive::id::Arena;
 /// use acvus_typeck_model::primitive::scope::Scopes;
@@ -151,7 +151,7 @@ where
 /// let a = classes.undecided(scopes.root());
 /// let b = classes.undecided(scopes.root());
 /// let deciding = classes.deciding();
-/// classes.bound(Bound::Change { lower: a, upper: b }, items.push(()));
+/// classes.constraint(Bound::Change { lower: a, upper: b }, items.push(()));
 /// deciding.is_held(a);
 /// ```
 #[derive(Debug)]
@@ -235,7 +235,7 @@ where
     pub fn undecided(&mut self, scope: ScopeId) -> K::Id {
         self.slots.push(Slot::Root(Class {
             scope,
-            state: State::Undecided(Constraints::default()),
+            state: State::Undecided(Undecided::default()),
             held: Held::default(),
             connections: Connections::<K>::new(),
         }))
@@ -307,31 +307,31 @@ where
         )
     }
 
-    /// Records `bound`, by `at`, and says whether it was not recorded before. The
+    /// Records `constraint`, by `at`, and says whether it was not recorded before. The
     /// store holds it until it is finished.
-    pub fn bound(&mut self, bound: K::Bound, at: ItemId) -> bool {
-        let recorded = (bound, at);
-        if self.finished.contains(&recorded) || !self.bounds.insert(recorded.clone()) {
+    pub fn constrain(&mut self, constraint: K::Constraint, at: ItemId) -> bool {
+        let recorded = (constraint, at);
+        if self.finished.contains(&recorded) || !self.constraints.insert(recorded.clone()) {
             return false;
         }
         self.woken.insert(recorded);
         true
     }
 
-    /// The bounds to look at, which are then to look at no longer until a class
+    /// The constraints to look at, which are then to look at no longer until a class
     /// one of them waits on is merged or decided.
-    pub fn take_woken(&mut self) -> Bounds<K> {
+    pub fn take_woken(&mut self) -> Constraints<K> {
         mem::take(&mut self.woken)
     }
 
-    /// States anew which classes `bound`, recorded by `at`, waits on: it is to be
+    /// States anew which classes `constraint`, recorded by `at`, waits on: it is to be
     /// looked at again when one of them is merged with another or decided.
-    pub fn wait(&mut self, bound: &K::Bound, at: ItemId, on: &BTreeSet<K::Id>) {
-        let recorded = (bound.clone(), at);
+    pub fn wait(&mut self, constraint: &K::Constraint, at: ItemId, on: &BTreeSet<K::Id>) {
+        let recorded = (constraint.clone(), at);
         for root in self.root_ids() {
             self.root_mut(root).held.waiters.remove(&recorded);
         }
-        if !self.bounds.contains(&recorded) {
+        if !self.constraints.contains(&recorded) {
             return;
         }
         for class in on {
@@ -359,14 +359,14 @@ where
         while let Some(class) = stack.pop() {
             let class = self.find(class).id;
             let above = &self.root(class).held;
-            let reaching: Bounds<K> = above.guards.union(&above.apart).cloned().collect();
+            let reaching: Constraints<K> = above.guards.union(&above.apart).cloned().collect();
             if reaching.is_empty() {
                 continue;
             }
             for part in self.root(class).state.parts() {
                 let part = self.find(part).id;
                 let held = &mut self.root_mut(part).held;
-                let new: Vec<(K::Bound, ItemId)> = reaching
+                let new: Vec<(K::Constraint, ItemId)> = reaching
                     .iter()
                     .filter(|guard| !held.apart.contains(guard) && !held.guards.contains(guard))
                     .cloned()
@@ -379,16 +379,16 @@ where
         }
     }
 
-    /// Every bound recorded and not finished.
-    pub fn bounds(&self) -> &Bounds<K> {
-        &self.bounds
+    /// Every constraint recorded and not finished.
+    pub fn constraints(&self) -> &Constraints<K> {
+        &self.constraints
     }
 
-    /// Finishes `bound`, recorded by `at`: it has been judged or made, and the
+    /// Finishes `constraint`, recorded by `at`: it has been judged or made, and the
     /// store holds it no longer. It says whether the store held it.
-    pub fn finish(&mut self, bound: &K::Bound, at: ItemId) -> bool {
-        let recorded = (bound.clone(), at);
-        let held = self.bounds.remove(&recorded);
+    pub fn finish(&mut self, constraint: &K::Constraint, at: ItemId) -> bool {
+        let recorded = (constraint.clone(), at);
+        let held = self.constraints.remove(&recorded);
         if held {
             self.lift(&recorded);
             for root in self.root_ids() {
@@ -400,20 +400,20 @@ where
         held
     }
 
-    /// States anew what `bound`, recorded by `at`, guards: every class below one
+    /// States anew what `constraint`, recorded by `at`, guards: every class below one
     /// of `apart`, at any depth, but for the classes of `apart` themselves. Those
     /// are the classes it may still merge with another before it is finished, and
     /// what it guarded before and does not now is free of it.
     ///
-    /// A class of `apart` is an end of the bound, or a class it reads and never
+    /// A class of `apart` is an end of the constraint, or a class it reads and never
     /// merges. The guard goes down to each part such a class comes to have, as
-    /// structure grows, without the bound being looked at again. The store reads
-    /// no more of a bound here than anywhere: whoever knows what the bound means
+    /// structure grows, without the constraint being looked at again. The store reads
+    /// no more of a constraint here than anywhere: whoever knows what the constraint means
     /// says what it holds apart, and says it again as that changes.
-    pub fn guard(&mut self, bound: &K::Bound, at: ItemId, apart: &BTreeSet<K::Id>) {
-        let recorded = (bound.clone(), at);
+    pub fn guard(&mut self, constraint: &K::Constraint, at: ItemId, apart: &BTreeSet<K::Id>) {
+        let recorded = (constraint.clone(), at);
         self.lift(&recorded);
-        if !self.bounds.contains(&recorded) {
+        if !self.constraints.contains(&recorded) {
             return;
         }
         let apart: BTreeSet<K::Id> = apart.iter().map(|class| self.find(*class).id).collect();
@@ -425,7 +425,7 @@ where
         }
     }
 
-    fn lift(&mut self, recorded: &(K::Bound, ItemId)) {
+    fn lift(&mut self, recorded: &(K::Constraint, ItemId)) {
         for root in self.root_ids() {
             let held = &mut self.root_mut(root).held;
             held.guards.remove(recorded);
@@ -465,10 +465,10 @@ where
         // part holds that class in turn, the order asks nothing of the two, and
         // they are decided together.
         for owner in self.roots() {
-            let State::Undecided(constraints) = &self.get(owner).state else {
+            let State::Undecided(undecided) = &self.get(owner).state else {
                 continue;
             };
-            for part in constraints.parts.values() {
+            for part in undecided.parts.values() {
                 let part = self.find(part.class).id;
                 if !self.below([part]).contains(&owner.id) && part != owner.id {
                     held.insert(part);
@@ -497,11 +497,11 @@ where
                 self.undecided(scope)
             }
         };
-        let State::Undecided(constraints) = &mut self.root_mut(root).state else {
+        let State::Undecided(undecided) = &mut self.root_mut(root).state else {
             unreachable!("a decided class returned above, and making a class decides none");
         };
-        let named_anew = !constraints.parts.contains_key(&key);
-        let part = constraints.parts.entry(key).or_insert_with(|| Part {
+        let named_anew = !undecided.parts.contains_key(&key);
+        let part = undecided.parts.entry(key).or_insert_with(|| Part {
             class: part_class,
             lower: BTreeSet::new(),
             upper: BTreeSet::new(),
@@ -524,8 +524,8 @@ where
     pub fn call(&mut self, class: K::Id, call: Call<K>, at: ItemId) -> Option<Pending<K>> {
         let root = self.find(class).id;
         match &mut self.root_mut(root).state {
-            State::Undecided(constraints) => {
-                constraints.calls.insert((call, at));
+            State::Undecided(undecided) => {
+                undecided.calls.insert((call, at));
                 None
             }
             State::Decided(_) => Some(Pending {
@@ -541,8 +541,8 @@ where
     pub fn domain(&mut self, class: K::Id, domain: Domain, at: ItemId) -> Option<Pending<K>> {
         let root = self.find(class).id;
         match &mut self.root_mut(root).state {
-            State::Undecided(constraints) => {
-                constraints.domains.insert((domain, at));
+            State::Undecided(undecided) => {
+                undecided.domains.insert((domain, at));
                 None
             }
             State::Decided(_) => Some(Pending {
@@ -615,7 +615,7 @@ where
             let scope = self.root(kept).scope;
             let placeholder = Slot::Root(Class {
                 scope,
-                state: State::Undecided(Constraints::default()),
+                state: State::Undecided(Undecided::default()),
                 held: Held::default(),
             connections: Connections::<K>::new(),
             });
@@ -671,7 +671,7 @@ mod tests {
     use crate::primitive::refusal::Cause;
     use crate::primitive::ClassId;
     use crate::primitive::Name;
-    use crate::primitive::bound::Bound;
+    use crate::primitive::constraint::{Bound, Constraint};
     use crate::primitive::class::Live;
     use crate::primitive::ty::{Mutability, Scalar};
 
@@ -719,9 +719,9 @@ mod tests {
             (unified, at)
         }
 
-        fn bound(&mut self, lower: ClassId, upper: ClassId) -> ItemId {
+        fn enter(&mut self, lower: ClassId, upper: ClassId) -> ItemId {
             let at = self.item("bound");
-            self.classes.bound(Bound::Enter { lower, upper }, at);
+            self.classes.constrain(Bound::Enter { lower, upper }.into(), at);
             self.verify();
             at
         }
@@ -781,10 +781,10 @@ mod tests {
         assert!(!world.same(read, written));
         world.unify(a, b);
         assert!(world.same(read, written));
-        let State::Undecided(constraints) = world.state(a) else {
+        let State::Undecided(undecided) = world.state(a) else {
             panic!("two undecided classes stay undecided");
         };
-        let part = &constraints.parts[&field("x")];
+        let part = &undecided.parts[&field("x")];
         assert_eq!(part.lower, BTreeSet::from([written_at]));
         assert_eq!(part.upper, BTreeSet::from([read_at]));
     }
@@ -923,17 +923,17 @@ mod tests {
     }
 
     #[test]
-    fn a_bound_is_held_until_it_is_finished_and_no_longer() {
+    fn a_constraint_is_held_until_it_is_finished_and_no_longer() {
         let mut world = World::new();
         let (d, _) = world.decided(Shape::Scalar(Scalar::U8));
         let (e, _) = world.decided(Shape::Scalar(Scalar::U8));
-        let at = world.bound(d, e);
-        let bound = Bound::Enter { lower: d, upper: e };
-        assert_eq!(world.classes.bounds(), &BTreeSet::from([(bound, at)]));
+        let at = world.enter(d, e);
+        let constraint = Constraint::Bound(Bound::Enter { lower: d, upper: e });
+        assert_eq!(world.classes.constraints(), &BTreeSet::from([(constraint, at)]));
 
-        assert!(world.classes.finish(&bound, at));
-        assert_eq!(world.classes.bounds(), &BTreeSet::new());
-        assert!(!world.classes.finish(&bound, at));
+        assert!(world.classes.finish(&constraint, at));
+        assert_eq!(world.classes.constraints(), &BTreeSet::new());
+        assert!(!world.classes.finish(&constraint, at));
     }
 
     #[test]
@@ -942,11 +942,11 @@ mod tests {
         let a = world.undecided();
         let b = world.undecided();
         let at = world.item("bound");
-        let enter = Bound::Enter { lower: a, upper: b };
-        let change = Bound::Change { lower: a, upper: b };
-        world.classes.bound(enter, at);
-        world.classes.bound(change, at);
-        assert_eq!(world.classes.bounds(), &BTreeSet::from([(enter, at), (change, at)]));
+        let enter = Constraint::Bound(Bound::Enter { lower: a, upper: b });
+        let change = Constraint::Bound(Bound::Change { lower: a, upper: b });
+        world.classes.constrain(enter, at);
+        world.classes.constrain(change, at);
+        assert_eq!(world.classes.constraints(), &BTreeSet::from([(enter, at), (change, at)]));
     }
 
     #[test]

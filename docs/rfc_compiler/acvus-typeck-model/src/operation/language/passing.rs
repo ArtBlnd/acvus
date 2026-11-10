@@ -406,7 +406,7 @@ where
 /// function called in its turn.
 pub(super) fn take<K>(scribe: &mut Scribe<'_, K>, functions: &Functions, way: Way<K>, argument: K::Id, at: ItemId) -> Looked<K>
 where
-    K: ClassKind<Bound = crate::primitive::bound::Bound<K>>,
+    K: ClassKind<Constraint = crate::primitive::constraint::Constraint<K>>,
 {
     let scope = scribe.classes().get(scribe.classes().find(argument)).scope;
     let made: Vec<BTreeMap<TemplateId, K::Id>> = way
@@ -429,7 +429,7 @@ where
     Looked::Holds {
         pairs,
         adjustments,
-        bounds: Vec::new(),
+        constraints: Vec::new(),
     }
 }
 
@@ -455,7 +455,7 @@ where
             return Told::done(Looked::Holds {
                 pairs,
                 adjustments,
-                bounds: Vec::new(),
+                constraints: Vec::new(),
             });
         }
         Given::Reads(class, against) => {
@@ -480,7 +480,7 @@ where
             looked: Looked::Holds {
                 pairs: Vec::new(),
                 adjustments: Vec::new(),
-                bounds: Vec::new(),
+                constraints: Vec::new(),
             },
             asks: Vec::new(),
             then: Some(Then::Way(way)),

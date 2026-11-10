@@ -3,11 +3,11 @@
 //! | Operation | What it does | The one place it is done |
 //! |---|---|---|
 //! | connecting | makes two classes one type | [`connect::connect`] |
-//! | looking at a bound | judges a bound between two classes, or says what it waits for | [`judge::look`] |
+//! | looking at a constraint | judges a constraint between two classes, or says what it waits for | [`judge::look`] |
 //! | deciding | gives an undecided class its head | [`decide::decide`] |
 //!
 //! [`settle::settle`] takes them in turn until nothing is left to do. None of them
-//! knows a rule of the language: each asks a [`law::Law`], which says what a bound
+//! knows a rule of the language: each asks a [`law::Law`], which says what a constraint
 //! comes to, what head a class may take, and where a named part lies. The
 //! language's own rules are [`language::Language`], and any other law that keeps
 //! the contracts of [`law`] runs as well.

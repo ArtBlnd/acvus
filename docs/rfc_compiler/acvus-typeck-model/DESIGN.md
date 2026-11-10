@@ -9,8 +9,8 @@ is complete, its content goes into the docs.
 | Thing | What it is | Its life |
 |---|---|---|
 | a class | an equivalence class of types | undecided, holding the names of its parts, then decided, holding its head and its own parts. It changes once. |
-| a bound | a relation of two classes: entering, being equal, being passed. A suspended constraint, `as _` or the exit of `?`, has the same life and is held with them. | recorded, looked at, perhaps many times, then finished. The store holds it throughout. |
-| what a class holds of bounds | guards, bounds that hold it apart, waiters | set and lifted as bounds are looked at and finished |
+| a constraint | a bound, which is a relation of two classes: entering, being equal, being passed; or a suspended constraint, which waits for a head and then adds constraints: `as _`, the exit of `?` | recorded, looked at, perhaps many times, then finished. The store holds it throughout. |
+| what a class holds of constraints | guards, constraints that hold it apart, waiters | set and lifted as constraints are looked at and finished |
 | the connections of a class | each connection made of it: the two ids connected and the item it went by | added to where the class is connected, merged where two classes are, never taken out. A decision adds none. |
 
 ## 2. The three operations
@@ -20,10 +20,10 @@ Each is done in one place, and there is no other way to do what it does.
 | Operation | Contract | Place |
 |---|---|---|
 | connecting | Makes two classes one type. Neither decided: one class. One decided by solving or the text: the other is that class. One a declaration writes: nothing is merged, and the other is compared with it. Both decided: one head, parts connected in turn. | `operation::connect::connect` |
-| looking at a bound | Asks the law what the bound comes to, and does what follows: finishes it, connects its pairs and records the bounds that take its place, or finishes it and refuses, or states what it waits on and holds apart. | `operation::judge::look` |
+| looking at a constraint | Asks the law what the constraint comes to, and does what follows: finishes it, connects its pairs and records the constraints that take its place, or finishes it and refuses, or states what it waits on and holds apart. | `operation::judge::look` |
 | deciding | Gathers what a rung offers, and gives those heads together through `Classes::deciding`. | `operation::decide::decide` |
 
-`operation::settle::settle` takes them in turn: every bound woken is looked at until none is,
+`operation::settle::settle` takes them in turn: every constraint woken is looked at until none is,
 then every class that may be decided is, and back to looking while anything was decided.
 
 ## 3. The law
@@ -34,8 +34,8 @@ and finishes nothing.
 
 | The law is asked | It answers |
 |---|---|
-| what a bound comes to | `Looked`: it holds, with these pairs and adjustments, and these bounds in its place; it is refused; or it waits on these classes, holds these apart, and these pairs are one type already |
-| which classes are one type by the bounds as a whole | pairs |
+| what a constraint comes to | `Looked`: it holds, with these pairs and adjustments, and these constraints in its place; it is refused; or it waits on these classes, holds these apart, and these pairs are one type already |
+| which classes are one type by the constraints as a whole | pairs |
 | where a part named on a class lies, once the class's head has no place of that name | `Place`: within another part, with an adjustment, or nowhere |
 | whether a literal's class may take a head | yes or no |
 | what head a rung offers a class | `Offer`: nothing, a head, or a refusal |
@@ -47,7 +47,7 @@ That is the only place the connections of a class are read. A law is given the w
 read, so no type keeps a rule from reading them: what keeps it is that nothing a law answers
 has a place to carry them, other than a refusal's own items.
 
-A rule cannot leave a bound half done: a guard, a wait and a finished bound all follow from
+A rule cannot leave a constraint half done: a guard, a wait and a finished constraint all follow from
 what the rule answers, and none is the rule's to do. A law of no language, one that keeps the
 contracts and states rules that are wrong for this language, runs through the same three
 operations, which `operation::tests` does.
@@ -69,7 +69,7 @@ The language's law is `operation::language`, one rule in one place:
 
 A rule reads through a `View`, which is the store as it is, or with heads supposed of some
 undecided classes. The rung that gives a head from above uses that: a class takes the one head,
-of those the bounds waiting on it say they will hold it against, that every such bound would
+of those the constraints waiting on it say they will hold it against, that every such one would
 have it take, and "would" is the same rule looked at again with the head supposed.
 
 ## 4. What makes deciding safe
@@ -79,9 +79,9 @@ still be merged into it.
 
 | What may still merge into a class | How the store sees it |
 |---|---|
-| a bound not finished that says it may | The bound holds classes apart, and every class below one of those is guarded by it. |
+| a constraint not finished that says it may | The constraint holds classes apart, and every class below one of those is guarded by it. |
 | the class is named as a part on an undecided class | The names the store keeps. A part is decided no earlier than the class it is named on, and where the part holds that class in turn, the two are decided together. |
-| looking has not run to its end | Deciding is taken only once no bound is woken. |
+| looking has not run to its end | Deciding is taken only once no constraint is woken. |
 
 `Classes::deciding` gives a `Deciding`, which finds what is held once and borrows the store for
 as long as it lives. Nothing is recorded and nothing is merged between that finding and the
@@ -89,14 +89,14 @@ decisions made through it. A head decided has the class's own parts: the part al
 it, or a class made anew. So what gives a head gives its constructor and members alone, and a
 bound connects its parts.
 
-A bound is woken when it is recorded and when a class it waits on is merged or decided, so a
-bound nothing has happened to is not looked at again.
+A constraint is woken when it is recorded and when a class it waits on is merged or decided, so a
+constraint nothing has happened to is not looked at again.
 
 ## 5. What is not tested, and what is not there
 
 - **Guards going down as structure grows.** The store gives a part that comes to be named, or
   merged in, the guards of the class above it. Turning that off fails no test: a guard is read
-  only when a `Deciding` is made, after looking has run to its end, and by then every bound
+  only when a `Deciding` is made, after looking has run to its end, and by then every constraint
   that waits has stated its guards anew. The guards themselves are tested: turning them off, or
   having a passing hold nothing apart, fails `a_hole_a_passing_not_told_yet_may_reach_is_not_decided`.
 - **Where the rung of parts stands.** Putting it after the literal's fallback, or before the
@@ -106,7 +106,7 @@ bound nothing has happened to is not looked at again.
 - **When a refusal is gathered.** Gathering each refusal as it is made, and not at the end,
   fails no test: no program has been found where a class a refusal is of is connected again
   after the refusal. The orders the tests run differ in which class is asked first, and not
-  in which bound is looked at first.
+  in which constraint is looked at first.
 - **A function value passed to a function type**, left as a `todo`.
 - **Calls** on a class, which no law judges.
 

@@ -2,9 +2,9 @@
 //!
 //! | The law is asked | The rule | Where |
 //! |---|---|---|
-//! | what a bound comes to | by the relation the bound is: entering, being equal, being passed, `as _`, the exit of `?` | [`enter`], [`equal`], [`passing`], [`alone`], [`exit`] |
+//! | what a constraint comes to | by the relation the constraint is: entering, being equal, being passed, `as _`, the exit of `?` | [`enter`], [`equal`], [`passing`], [`alone`], [`exit`] |
 //! | which functions are declared | a table, and no rule | [`functions`] |
-//! | which classes are one type by the bounds as a whole | classes that enter one another | [`enter::entering_one_another`] |
+//! | which classes are one type by the constraints as a whole | classes that enter one another | [`enter::entering_one_another`] |
 //! | where a named part lies | read through a reference | [`Language::place`] |
 //! | what head a class may take | the rungs, in order | [`rungs`] |
 //! | what is refused at the end | a class still undecided, a class that is its own part | [`rungs::end`] |
@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
-use crate::primitive::bound::{Bound, BoundOf};
+use crate::primitive::constraint::{Bound, Constraint, ConstraintOf, Suspended};
 use crate::primitive::class::{ClassKind, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::Refused;
@@ -38,31 +38,32 @@ pub struct Language {
 
 impl<K> Law<K> for Language
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
-    fn look(&self, scribe: &mut Scribe<'_, K>, bound: &Bound<K>, at: ItemId) -> Looked<K> {
-        let told = tell(&View::of(scribe.classes()), &self.functions, bound, at);
+    fn look(&self, scribe: &mut Scribe<'_, K>, constraint: &Constraint<K>, at: ItemId) -> Looked<K> {
+        let told = tell(&View::of(scribe.classes()), &self.functions, constraint, at);
         match told.then {
-            Some(Then::Way(way)) => passing::take(scribe, &self.functions, way, bound.lower(), at),
+            Some(Then::Way(way)) => passing::take(scribe, &self.functions, way, constraint.lower(), at),
             Some(Then::Enters(shape)) => {
-                let upper = bound.upper();
+                let upper = constraint.upper();
                 let scope = scribe.classes().get(scribe.classes().find(upper)).scope;
                 let written = scribe.written(scope, shape, [at].into_iter().collect());
                 Looked::Holds {
                     pairs: Vec::new(),
                     adjustments: Vec::new(),
-                    bounds: vec![Bound::Enter { lower: written, upper }],
+                    constraints: vec![Bound::Enter { lower: written, upper }.into()],
                 }
             }
             None => told.looked,
         }
     }
 
-    fn same(&self, part: K::Id, declared: K::Id) -> Bound<K> {
+    fn same(&self, part: K::Id, declared: K::Id) -> Constraint<K> {
         Bound::Equal {
             lower: part,
             upper: declared,
         }
+        .into()
     }
 
     fn one(&self, classes: &Classes<K>) -> Vec<(K::Id, K::Id, ItemId)> {
@@ -100,7 +101,7 @@ where
 }
 
 /// The store as a relation reads it: as it is, or with heads supposed of some
-/// undecided classes, to ask what a bound would come to if they took them.
+/// undecided classes, to ask what a constraint would come to if they took them.
 #[derive(Clone, Debug)]
 pub(super) struct View<'a, K>
 where
@@ -137,7 +138,7 @@ where
     }
 }
 
-/// What a relation tells of a bound: what it comes to, and, where it waits for a
+/// What a relation tells of a constraint: what it comes to, and, where it waits for a
 /// class's head, the head it will hold that class's head against.
 pub(super) struct Told<K>
 where
@@ -145,12 +146,12 @@ where
 {
     pub(super) looked: Looked<K>,
     pub(super) asks: Vec<(K::Id, Shape<K::Id>)>,
-    /// What is still to be made in the store for the bound to come to what it
-    /// does. Telling only reads, so `looked` then says only that the bound holds.
+    /// What is still to be made in the store for the constraint to come to what it
+    /// does. Telling only reads, so `looked` then says only that the constraint holds.
     pub(super) then: Option<Then<K>>,
 }
 
-/// What a bound that holds has still to make in the store.
+/// What a constraint that holds has still to make in the store.
 pub(super) enum Then<K>
 where
     K: ClassKind,
@@ -174,18 +175,18 @@ where
     }
 }
 
-/// What the bound comes to in `view`, by the relation it is.
-pub(super) fn tell<K>(view: &View<'_, K>, functions: &functions::Functions, bound: &Bound<K>, at: ItemId) -> Told<K>
+/// What the constraint comes to in `view`, by the relation it is.
+pub(super) fn tell<K>(view: &View<'_, K>, functions: &functions::Functions, constraint: &Constraint<K>, at: ItemId) -> Told<K>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
-    let (lower, upper) = (bound.lower(), bound.upper());
-    match bound {
-        Bound::Enter { .. } => enter::look(view, lower, upper, at),
-        Bound::Equal { .. } => equal::look(view, lower, upper, at),
-        Bound::Change { .. } => passing::look(view, functions, lower, upper, at),
-        Bound::Alone { .. } => alone::look(view, lower, upper),
-        Bound::Exit { .. } => exit::look(view, lower, upper),
+    let (lower, upper) = (constraint.lower(), constraint.upper());
+    match constraint {
+        Constraint::Bound(Bound::Enter { .. }) => enter::look(view, lower, upper, at),
+        Constraint::Bound(Bound::Equal { .. }) => equal::look(view, lower, upper, at),
+        Constraint::Bound(Bound::Change { .. }) => passing::look(view, functions, lower, upper, at),
+        Constraint::Suspended(Suspended::Alone { .. }) => alone::look(view, lower, upper),
+        Constraint::Suspended(Suspended::Exit { .. }) => exit::look(view, lower, upper),
     }
 }
 
@@ -198,7 +199,7 @@ where
 {
     let known: Vec<(PartKey, K::Id)> = match &classes.get(classes.find(lower)).state {
         State::Decided(decided) => decided.shape.places().into_iter().map(|(key, part)| (key, *part)).collect(),
-        State::Undecided(constraints) => constraints.parts.iter().map(|(key, part)| (key.clone(), part.class)).collect(),
+        State::Undecided(undecided) => undecided.parts.iter().map(|(key, part)| (key.clone(), part.class)).collect(),
     };
     known
         .into_iter()

@@ -6,8 +6,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::primitive::bound::Bound;
 use crate::primitive::class::ClassKind;
+use crate::primitive::constraint::{Bound, Constraint};
 
 use super::super::law::Looked;
 use super::{Told, View};
@@ -20,7 +20,7 @@ use super::{Told, View};
 /// as a declared one does, and nothing outside reaches into it.
 pub(super) fn look<K>(view: &View<'_, K>, lower: K::Id, upper: K::Id) -> Told<K>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let on = without_a_type(view, lower);
     if !on.is_empty() {
@@ -33,7 +33,7 @@ where
     Told::done(Looked::Holds {
         pairs: Vec::new(),
         adjustments: Vec::new(),
-        bounds: vec![Bound::Enter { lower, upper }],
+        constraints: vec![Bound::Enter { lower, upper }.into()],
     })
 }
 

@@ -1,9 +1,9 @@
 //! The domain primitives of type checking: types, classes and what they hold,
-//! bounds, adjustments and refusals. The store of classes, and the operations
+//! constraints, adjustments and refusals. The store of classes, and the operations
 //! that solve over it, live outside this module.
 
 pub mod adjustment;
-pub mod bound;
+pub mod constraint;
 pub mod class;
 pub mod domain;
 pub mod id;

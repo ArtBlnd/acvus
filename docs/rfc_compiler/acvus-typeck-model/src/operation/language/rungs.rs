@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::{ItemId, Name};
-use crate::primitive::bound::{Bound, BoundOf};
+use crate::primitive::constraint::{Bound, Constraint, ConstraintOf};
 use crate::primitive::class::{ClassKind, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::{Cause, Refused};
@@ -31,7 +31,7 @@ pub const COUNT: usize = 5;
 
 pub fn offer<K>(classes: &Classes<K>, functions: &Functions, rung: usize, class: K::Id) -> Offer<K>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     match rung {
         0 => join(classes, class),
@@ -45,29 +45,29 @@ where
 
 /// What enters a class by one bound: its head, where it has one yet, the bound,
 /// and the item that recorded the bound.
-type Entering<K> = (Option<Shape<<K as ClassKind>::Id>>, Bound<K>, ItemId);
+type Entering<K> = (Option<Shape<<K as ClassKind>::Id>>, Constraint<K>, ItemId);
 
 /// The heads that enter `class`, each with the bound it enters by: none where
 /// nothing enters, and a head not given yet where what enters is undecided. A
 /// class's entering itself gives nothing to wait for.
 fn entering<K>(classes: &Classes<K>, class: K::Id) -> Vec<Entering<K>>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let root = classes.find(class);
     let view = View::of(classes);
     classes
-        .bounds()
+        .constraints()
         .iter()
-        .filter(|(bound, _)| classes.find(bound.upper()) == root && classes.find(bound.lower()) != root)
-        .filter_map(|(bound, at)| enter::given(&view, bound).map(|head| (head, *bound, *at)))
+        .filter(|(constraint, _)| classes.find(constraint.upper()) == root && classes.find(constraint.lower()) != root)
+        .filter_map(|(constraint, at)| enter::given(&view, constraint).map(|head| (head, *constraint, *at)))
         .collect()
 }
 
 /// Rung 0: the join of the heads that enter the class, once each has a head.
 fn join<K>(classes: &Classes<K>, class: K::Id) -> Offer<K>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let entering = entering(classes, class);
     let Some(heads) = entering.iter().map(|(head, ..)| head.clone()).collect::<Option<Vec<_>>>() else {
@@ -91,7 +91,7 @@ where
         None => Offer::Refused(Refused {
             cause: Cause::Mismatch,
             items: by,
-            of: [class].into_iter().chain(entering.iter().map(|(_, bound, _)| bound.lower())).collect(),
+            of: [class].into_iter().chain(entering.iter().map(|(_, constraint, _)| constraint.lower())).collect(),
         }),
     }
 }
@@ -99,7 +99,7 @@ where
 /// Whether nothing enters `class`.
 fn nothing_enters<K>(classes: &Classes<K>, class: K::Id) -> bool
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     entering(classes, class).is_empty()
 }
@@ -108,14 +108,14 @@ where
 /// enters each, so what is asked of each is asked of `class` too.
 fn entered<K>(classes: &Classes<K>, class: K::Id) -> Vec<K::Id>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let root = classes.find(class);
     classes
-        .bounds()
+        .constraints()
         .iter()
-        .filter_map(|(bound, _)| match bound {
-            Bound::Enter { lower, upper }
+        .filter_map(|(constraint, _)| match constraint {
+            Constraint::Bound(Bound::Enter { lower, upper })
                 if classes.find(*lower) == root && classes.find(*upper) != root && !classes.is_decided(*upper) =>
             {
                 Some(classes.find(*upper).id())
@@ -125,12 +125,12 @@ where
         .collect()
 }
 
-/// Every head `class` will be held against: what each bound that waits on it
+/// Every head `class` will be held against: what each constraint that waits on it
 /// asks of it, the heads that have entered a class it enters, and what is asked
 /// of that class in turn. `!` is the least head and asks nothing of what meets it.
 fn asked<K>(classes: &Classes<K>, functions: &Functions, class: K::Id, seen: &mut BTreeSet<K::Id>) -> Vec<Shape<K::Id>>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let root = classes.find(class).id();
     if !seen.insert(root) {
@@ -142,7 +142,7 @@ where
         .held
         .waiters
         .iter()
-        .flat_map(|(bound, at)| tell(&view, functions, bound, *at).asks)
+        .flat_map(|(constraint, at)| tell(&view, functions, constraint, *at).asks)
         .filter(|(of, _)| classes.find(*of).id() == root)
         .map(|(_, head)| head)
         .collect();
@@ -154,12 +154,12 @@ where
     heads
 }
 
-/// Whether every bound that waits on `class` would have it take `head`: none
+/// Whether every constraint that waits on `class` would have it take `head`: none
 /// would be refused, were that its head. A class it enters would then take the
 /// join of `head` and what has entered it, and is asked the same of that.
 fn taken<K>(view: View<'_, K>, functions: &Functions, class: K::Id, head: &Shape<K::Id>, seen: &mut BTreeSet<K::Id>) -> bool
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let classes = view.classes;
     let root = classes.find(class).id();
@@ -172,7 +172,7 @@ where
         .held
         .waiters
         .iter()
-        .any(|(bound, at)| matches!(tell(&view, functions, bound, *at), Told { looked: Looked::Refused(_), .. }));
+        .any(|(constraint, at)| matches!(tell(&view, functions, constraint, *at), Told { looked: Looked::Refused(_), .. }));
     if refused {
         return false;
     }
@@ -190,11 +190,11 @@ where
 }
 
 /// Rung 1: a class nothing enters takes the one head, of those it will be held
-/// against, that every bound waiting on it would have it take. A literal's class
+/// against, that every constraint waiting on it would have it take. A literal's class
 /// takes one of its domain alone.
 fn from_above<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     if !nothing_enters(classes, class) {
         return Offer::Nothing;
@@ -224,7 +224,7 @@ where
 /// will do.
 fn nothing_asked<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> bool
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     asked(classes, functions, class, &mut BTreeSet::new()).is_empty()
 }
@@ -234,11 +234,11 @@ fn domain_of<K>(classes: &Classes<K>, class: K::Id) -> Option<(Domain, BTreeSet<
 where
     K: ClassKind,
 {
-    let State::Undecided(constraints) = &classes.get(classes.find(class)).state else {
+    let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
         return None;
     };
-    let domain = Domain::intersection(constraints.domains.iter().map(|(domain, _)| domain))?;
-    Some((domain, constraints.domains.iter().map(|(_, by)| *by).collect()))
+    let domain = Domain::intersection(undecided.domains.iter().map(|(domain, _)| domain))?;
+    Some((domain, undecided.domains.iter().map(|(_, by)| *by).collect()))
 }
 
 /// The parts named on `class` and on each class with no head that it enters, in
@@ -247,15 +247,15 @@ where
 /// is asked of it.
 fn parts_named<K>(classes: &Classes<K>, class: K::Id, seen: &mut BTreeSet<K::Id>) -> BTreeMap<PartKey, BTreeSet<ItemId>>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let root = classes.find(class).id();
     if !seen.insert(root) {
         return BTreeMap::new();
     }
     let mut named: BTreeMap<PartKey, BTreeSet<ItemId>> = BTreeMap::new();
-    if let State::Undecided(constraints) = &classes.get(classes.find(root)).state {
-        for (key, part) in &constraints.parts {
+    if let State::Undecided(undecided) = &classes.get(classes.find(root)).state {
+        for (key, part) in &undecided.parts {
             named
                 .entry(key.clone())
                 .or_default()
@@ -280,7 +280,7 @@ where
 /// class's own parts.
 fn made_of_parts<K>(classes: &Classes<K>, class: K::Id) -> Option<(Shape<K::Id>, BTreeSet<ItemId>)>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let named = parts_named(classes, class, &mut BTreeSet::new());
     let by = named.values().flatten().copied().collect();
@@ -320,7 +320,7 @@ where
 /// from the parts named of it.
 fn from_parts<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     if !nothing_enters(classes, class) || !nothing_asked(classes, functions, class) {
         return Offer::Nothing;
@@ -335,7 +335,7 @@ where
 /// fallback type of its domain's row.
 fn domain<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     if !nothing_enters(classes, class) || !nothing_asked(classes, functions, class) {
         return Offer::Nothing;
@@ -363,7 +363,7 @@ where
 /// a head.
 fn never<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     if !nothing_enters(classes, class) || !nothing_asked(classes, functions, class) || domain_of(classes, class).is_some() {
         return Offer::Nothing;
@@ -378,11 +378,11 @@ where
 /// part of itself has no finite type, and a class still undecided has no type.
 pub fn end<K>(classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let root = classes.find(class);
     let named: BTreeSet<ItemId> = match &classes.get(root).state {
-        State::Undecided(constraints) => constraints
+        State::Undecided(undecided) => undecided
             .parts
             .values()
             .flat_map(|part| part.lower.iter().chain(&part.upper).chain(&part.carried).copied())
@@ -397,16 +397,16 @@ where
             of: vec![class],
         });
     }
-    if let State::Undecided(constraints) = &classes.get(root).state {
-        let bounds = classes
-            .bounds()
+    if let State::Undecided(undecided) = &classes.get(root).state {
+        let constraints = classes
+            .constraints()
             .iter()
-            .filter(|(bound, _)| classes.find(bound.lower()) == root || classes.find(bound.upper()) == root)
+            .filter(|(constraint, _)| classes.find(constraint.lower()) == root || classes.find(constraint.upper()) == root)
             .map(|(_, at)| *at);
-        let domains = constraints.domains.iter().map(|(_, at)| *at);
+        let domains = undecided.domains.iter().map(|(_, at)| *at);
         refusals.push(Refused {
             cause: Cause::UndecidedClass,
-            items: bounds.chain(named.iter().copied()).chain(domains).collect(),
+            items: constraints.chain(named.iter().copied()).chain(domains).collect(),
             of: vec![class],
         });
     }

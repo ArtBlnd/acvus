@@ -38,7 +38,7 @@ where
     }
     Told::done(Looked::Holds {
         pairs,
-        bounds: Vec::new(),
+        constraints: Vec::new(),
         adjustments: Vec::new(),
     })
 }

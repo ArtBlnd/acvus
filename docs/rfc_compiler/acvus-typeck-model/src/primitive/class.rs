@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use super::bound::{Bound, BoundOf};
+use super::constraint::{Constraint, ConstraintOf};
 use super::domain::Domain;
 use super::id::Id;
 use super::refusal::{Cause, Refused};
@@ -36,7 +36,7 @@ pub trait ClassKind: Copy + Ord + Hash + Debug + Default {
     type Id: Id + Ord + Hash + Debug;
     /// What relates two classes of this kind. A store holds it until it is
     /// finished, without reading what it means.
-    type Bound: BoundOf<Self>;
+    type Constraint: ConstraintOf<Self>;
 }
 
 /// The classes that are solved.
@@ -45,7 +45,7 @@ pub struct Live;
 
 impl ClassKind for Live {
     type Id = ClassId;
-    type Bound = Bound<Self>;
+    type Constraint = Constraint<Self>;
 }
 
 /// The classes of a template: a signature or the text of a body, recorded
@@ -55,7 +55,7 @@ pub struct Template;
 
 impl ClassKind for Template {
     type Id = TemplateId;
-    type Bound = Bound<Self>;
+    type Constraint = Constraint<Self>;
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -66,7 +66,7 @@ where
     /// Where two classes are merged, the outer of their scopes.
     pub scope: ScopeId,
     pub state: State<K>,
-    /// What the store keeps of the bounds not finished that have to do with this
+    /// What the store keeps of the constraints not finished that have to do with this
     /// class. Where two classes are merged, those of both.
     pub held: Held<K>,
     /// Every connection that made this class of the classes it was: the two ids
@@ -79,23 +79,23 @@ where
 /// Connections, each the two ids connected and the item it went by.
 pub type Connections<K> = BTreeSet<(<K as ClassKind>::Id, <K as ClassKind>::Id, ItemId)>;
 
-/// The bounds not finished that have to do with a class, by what they have to do
-/// with it. A store keeps these without reading what a bound means.
+/// The constraints not finished that have to do with a class, by what they have to do
+/// with it. A store keeps these without reading what a constraint means.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Held<K>
 where
     K: ClassKind,
 {
-    /// The bounds that may still merge this class with another. While there is
+    /// The constraints that may still merge this class with another. While there is
     /// one, what enters the class is not all known, and the class is not decided.
-    pub guards: Bounds<K>,
-    /// The bounds that guard what lies below this class and not the class
+    pub guards: Constraints<K>,
+    /// The constraints that guard what lies below this class and not the class
     /// itself: one of their ends, or a class they read and never merge. A part
     /// this class comes to have is guarded by each.
-    pub apart: Bounds<K>,
-    /// The bounds to look at again when this class is merged with another or
+    pub apart: Constraints<K>,
+    /// The constraints to look at again when this class is merged with another or
     /// decided.
-    pub waiters: Bounds<K>,
+    pub waiters: Constraints<K>,
 }
 
 impl<K> Default for Held<K>
@@ -104,9 +104,9 @@ where
 {
     fn default() -> Self {
         Self {
-            guards: Bounds::<K>::new(),
-            apart: Bounds::<K>::new(),
-            waiters: Bounds::<K>::new(),
+            guards: Constraints::<K>::new(),
+            apart: Constraints::<K>::new(),
+            waiters: Constraints::<K>::new(),
         }
     }
 }
@@ -132,14 +132,14 @@ pub enum State<K>
 where
     K: ClassKind,
 {
-    Undecided(Constraints<K>),
+    Undecided(Undecided<K>),
     Decided(Decided<K>),
 }
 
 /// What has been recorded on an undecided class, each with what recorded it.
 /// Deciding the class consumes them.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct Constraints<K>
+pub struct Undecided<K>
 where
     K: ClassKind,
 {
@@ -154,12 +154,12 @@ where
     pub domains: BTreeSet<(Domain, ItemId)>,
 }
 
-/// Bounds, each with the item that recorded it.
+/// Constraints, each with the item that recorded it.
 ///
-/// A bound keeps the ids it was recorded with: they may name classes since
+/// A constraint keeps the ids it was recorded with: they may name classes since
 /// merged into others, and both may name one class, as a class can be its own
 /// lower bound.
-pub type Bounds<K> = BTreeSet<(<K as ClassKind>::Bound, ItemId)>;
+pub type Constraints<K> = BTreeSet<(<K as ClassKind>::Constraint, ItemId)>;
 
 /// How a part came to be named on a class.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -284,7 +284,7 @@ where
     /// have named it by.
     pub fn part(&self, key: &PartKey) -> Option<K::Id> {
         match self {
-            State::Undecided(constraints) => constraints.parts.get(key).map(|part| part.class),
+            State::Undecided(undecided) => undecided.parts.get(key).map(|part| part.class),
             State::Decided(decided) => decided.shape.place(key).copied(),
         }
     }
@@ -292,17 +292,17 @@ where
     /// The class of every part.
     pub fn parts(&self) -> Vec<K::Id> {
         match self {
-            State::Undecided(constraints) => constraints.parts.values().map(|part| part.class).collect(),
+            State::Undecided(undecided) => undecided.parts.values().map(|part| part.class).collect(),
             State::Decided(decided) => decided.shape.places().into_iter().map(|(_, class)| *class).collect(),
         }
     }
 
     /// Every id the state holds: its parts, and the classes of its calls.
     pub fn held(&self) -> Vec<K::Id> {
-        let State::Undecided(constraints) = self else {
+        let State::Undecided(undecided) = self else {
             return self.parts();
         };
-        let calls = constraints
+        let calls = undecided
             .calls
             .iter()
             .flat_map(|(call, _)| call.args.iter().copied().chain([call.result]));
@@ -327,8 +327,8 @@ where
                 by: decided.by,
                 origin: decided.origin,
             }),
-            State::Undecided(constraints) => {
-                let parts = constraints
+            State::Undecided(undecided) => {
+                let parts = undecided
                     .parts
                     .into_iter()
                     .map(|(key, part)| {
@@ -341,7 +341,7 @@ where
                         (key, part)
                     })
                     .collect();
-                let calls = constraints
+                let calls = undecided
                     .calls
                     .into_iter()
                     .map(|(call, by)| {
@@ -353,10 +353,10 @@ where
                         (call, by)
                     })
                     .collect();
-                State::Undecided(Constraints {
+                State::Undecided(Undecided {
                     parts,
                     calls,
-                    domains: constraints.domains,
+                    domains: undecided.domains,
                 })
             }
         };

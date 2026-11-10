@@ -57,7 +57,7 @@ where
             (false, false) => None,
         };
         match compared {
-            Some(bound) => connected |= classes.bound(bound, at),
+            Some(constraint) => connected |= classes.constrain(constraint, at),
             None => {
                 let unified = classes.unify(scopes, a, b, at);
                 connected = true;

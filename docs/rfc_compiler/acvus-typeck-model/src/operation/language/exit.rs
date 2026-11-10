@@ -9,8 +9,8 @@
 use std::collections::BTreeSet;
 
 use crate::primitive::Name;
-use crate::primitive::bound::Bound;
 use crate::primitive::class::ClassKind;
+use crate::primitive::constraint::{Bound, Constraint};
 use crate::primitive::ty::Shape;
 
 use super::super::law::Looked;
@@ -29,7 +29,7 @@ use super::{Then, Told, View};
 /// It asks no head of `lower`: what exits is as it is.
 pub(super) fn look<K>(view: &View<'_, K>, lower: K::Id, upper: K::Id) -> Told<K>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let Some(head) = view.head(lower) else {
         return Told::done(Looked::Waits {
@@ -38,15 +38,15 @@ where
             pairs: Vec::new(),
         });
     };
-    let holds = |bounds| Looked::Holds {
+    let holds = |constraints| Looked::Holds {
         pairs: Vec::new(),
         adjustments: Vec::new(),
-        bounds,
+        constraints,
     };
     let variant = |name: &Name| Shape::Error([(name.clone(), lower)].into_iter().collect());
     let wrapped = match head {
         Shape::Enum(name, _) | Shape::Struct(name, _) | Shape::Extern(name, ..) => variant(name),
-        Shape::Error(_) | Shape::Never => return Told::done(holds(vec![Bound::Enter { lower, upper }])),
+        Shape::Error(_) | Shape::Never => return Told::done(holds(vec![Bound::Enter { lower, upper }.into()])),
         Shape::Ref(..)
         | Shape::Tuple(_)
         | Shape::Array(..)

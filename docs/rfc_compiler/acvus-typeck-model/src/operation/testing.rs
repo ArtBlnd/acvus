@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::primitive::bound::Bound;
+use crate::primitive::constraint::{Bound, Constraint, Suspended};
 use crate::primitive::class::{Live, Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
@@ -64,14 +64,14 @@ impl World {
         self.classes.external(self.scopes.root(), shape, BTreeSet::from([by]))
     }
 
-    pub(super) fn record(&mut self, bound: Bound<Live>) -> ItemId {
+    pub(super) fn record(&mut self, constraint: Constraint<Live>) -> ItemId {
         let at = self.items.push("bound");
-        self.classes.bound(bound, at);
+        self.classes.constrain(constraint, at);
         at
     }
 
     pub(super) fn enter(&mut self, lower: ClassId, upper: ClassId) -> ItemId {
-        self.record(Bound::Enter { lower, upper })
+        self.record(Bound::Enter { lower, upper }.into())
     }
 
     /// `let name = value`, or a branch of an `if`: a place `value` enters.
@@ -84,10 +84,13 @@ impl World {
     /// `value as _`: the class of the expression.
     pub(super) fn alone(&mut self, value: ClassId) -> ClassId {
         let place = self.undecided();
-        self.record(Bound::Alone {
-            lower: value,
-            upper: place,
-        });
+        self.record(
+            Suspended::Alone {
+                lower: value,
+                upper: place,
+            }
+            .into(),
+        );
         place
     }
 
@@ -103,10 +106,13 @@ impl World {
         let (ok, error) = (self.undecided(), self.undecided());
         let exit = self.text(Shape::Result(ok, error));
         self.enter(exit, result);
-        self.record(Bound::Exit {
-            lower: exits_with,
-            upper: error,
-        });
+        self.record(
+            Suspended::Exit {
+                lower: exits_with,
+                upper: error,
+            }
+            .into(),
+        );
         value
     }
 
@@ -114,10 +120,13 @@ impl World {
     /// boundary. The argument enters the boundary's class, which is passed.
     pub(super) fn pass(&mut self, argument: ClassId, given: ClassId) -> ItemId {
         let boundary = self.meets(argument);
-        self.record(Bound::Change {
-            lower: boundary,
-            upper: given,
-        })
+        self.record(
+            Bound::Change {
+                lower: boundary,
+                upper: given,
+            }
+            .into(),
+        )
     }
 
     /// `&place` or `&mut place`: the class of the expression, and the item by

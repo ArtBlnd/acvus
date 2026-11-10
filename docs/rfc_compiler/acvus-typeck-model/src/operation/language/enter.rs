@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
-use crate::primitive::bound::Bound;
 use crate::primitive::class::ClassKind;
+use crate::primitive::constraint::{Bound, Constraint, Suspended};
 use crate::primitive::adjustment::Subtyping;
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{Mutability, Shape};
@@ -52,22 +52,22 @@ where
     );
     Told::done(Looked::Holds {
         pairs,
-        bounds: Vec::new(),
+        constraints: Vec::new(),
         adjustments: reborrowed.then_some(Adjustment::Subtype(Subtyping::Reborrow)).into_iter().collect(),
     })
 }
 
-/// The head `bound` gives its upper end to be joined: none where nothing enters
+/// The head `constraint` gives its upper end to be joined: none where nothing enters
 /// by it, and none yet where what enters is not decided, at every depth where
-/// the bound asks that.
-pub(super) fn given<K>(view: &View<'_, K>, bound: &Bound<K>) -> Option<Option<Shape<K::Id>>>
+/// the constraint asks that.
+pub(super) fn given<K>(view: &View<'_, K>, constraint: &Constraint<K>) -> Option<Option<Shape<K::Id>>>
 where
     K: ClassKind,
 {
-    match bound {
-        Bound::Enter { lower, .. } => Some(view.head(*lower).cloned()),
-        Bound::Alone { .. } | Bound::Exit { .. } => Some(None),
-        Bound::Equal { .. } | Bound::Change { .. } => None,
+    match constraint {
+        Constraint::Bound(Bound::Enter { lower, .. }) => Some(view.head(*lower).cloned()),
+        Constraint::Suspended(Suspended::Alone { .. } | Suspended::Exit { .. }) => Some(None),
+        Constraint::Bound(Bound::Equal { .. } | Bound::Change { .. }) => None,
     }
 }
 
@@ -75,11 +75,11 @@ where
 /// enter one another would each wait for the other's head, and are one type.
 pub fn entering_one_another<K>(classes: &Classes<K>) -> Vec<(K::Id, K::Id, ItemId)>
 where
-    K: ClassKind<Bound = Bound<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let mut entered: BTreeMap<K::Id, BTreeSet<(K::Id, ItemId)>> = BTreeMap::new();
-    for (bound, at) in classes.bounds() {
-        if let Bound::Enter { lower, upper } = bound {
+    for (constraint, at) in classes.constraints() {
+        if let Constraint::Bound(Bound::Enter { lower, upper }) = constraint {
             let (lower, upper) = (classes.find(*lower).id(), classes.find(*upper).id());
             if lower != upper {
                 entered.entry(lower).or_default().insert((upper, *at));

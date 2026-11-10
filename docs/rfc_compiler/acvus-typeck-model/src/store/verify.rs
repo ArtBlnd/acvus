@@ -1,7 +1,7 @@
 //! The invariants the store keeps, checked.
 
 use crate::primitive::ItemId;
-use crate::primitive::bound::BoundOf;
+use crate::primitive::constraint::ConstraintOf;
 use crate::primitive::class::{Class, ClassKind, State};
 use crate::primitive::id::Id;
 use crate::primitive::ty::PartKey;
@@ -21,15 +21,15 @@ where
     Dangling { holder: K::Id, id: K::Id },
     /// A part of an undecided class that no item names.
     Unnamed { class: K::Id, key: PartKey },
-    /// A bound the store holds, an end of which names no class made.
-    Unbound { bound: K::Bound, by: ItemId },
-    /// A class holding something of a bound the store does not hold: one
+    /// A constraint the store holds, an end of which names no class made.
+    Unanchored { constraint: K::Constraint, by: ItemId },
+    /// A class holding something of a constraint the store does not hold: one
     /// finished, or one never recorded.
-    Guard { class: K::Id, bound: K::Bound, by: ItemId },
-    /// A class that a bound guards and should not, or does not and should: what
-    /// a bound guards is every class below one it holds apart, but for those it
+    Guard { class: K::Id, constraint: K::Constraint, by: ItemId },
+    /// A class that a constraint guards and should not, or does not and should: what
+    /// a constraint guards is every class below one it holds apart, but for those it
     /// holds apart.
-    Guarded { class: K::Id, bound: K::Bound, by: ItemId },
+    Guarded { class: K::Id, constraint: K::Constraint, by: ItemId },
 }
 
 impl<K> Classes<K>
@@ -58,10 +58,10 @@ where
                 }
             }
         }
-        for (bound, by) in &self.bounds {
-            if [bound.lower(), bound.upper()].iter().any(|end| end.index() >= self.slots.len()) {
-                violations.push(Violation::Unbound {
-                    bound: bound.clone(),
+        for (constraint, by) in &self.constraints {
+            if [constraint.lower(), constraint.upper()].iter().any(|end| end.index() >= self.slots.len()) {
+                violations.push(Violation::Unanchored {
+                    constraint: constraint.clone(),
                     by: *by,
                 });
             }
@@ -76,18 +76,18 @@ where
             };
             let held = &class.held;
             for guard in held.guards.iter().chain(&held.apart).chain(&held.waiters) {
-                if !self.bounds.contains(guard) {
+                if !self.constraints.contains(guard) {
                     violations.push(Violation::Guard {
                         class: id,
-                        bound: guard.0.clone(),
+                        constraint: guard.0.clone(),
                         by: guard.1,
                     });
                 }
             }
         }
-        // What each bound guards, found anew by walking down from what it holds
+        // What each constraint guards, found anew by walking down from what it holds
         // apart, against the guards the store kept as structure grew.
-        for recorded in &self.bounds {
+        for recorded in &self.constraints {
             let apart: std::collections::BTreeSet<K::Id> = self
                 .roots()
                 .filter(|root| self.get(*root).held.apart.contains(recorded))
@@ -100,7 +100,7 @@ where
                 if guarded != expected {
                     violations.push(Violation::Guarded {
                         class: root.id(),
-                        bound: recorded.0.clone(),
+                        constraint: recorded.0.clone(),
                         by: recorded.1,
                     });
                 }
@@ -109,13 +109,13 @@ where
 
         for (id, slot) in self.slots.iter() {
             let Slot::Root(Class {
-                state: State::Undecided(constraints),
+                state: State::Undecided(undecided),
                 ..
             }) = slot
             else {
                 continue;
             };
-            for (key, part) in &constraints.parts {
+            for (key, part) in &undecided.parts {
                 if part.lower.is_empty() && part.upper.is_empty() && part.carried.is_empty() {
                     violations.push(Violation::Unnamed {
                         class: id,
@@ -134,8 +134,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::primitive::bound::Bound;
-    use crate::primitive::class::{Constraints, Live, Part, Side, Template};
+    use crate::primitive::class::{Live, Part, Side, Template, Undecided};
+    use crate::primitive::constraint::{Bound, Constraint};
     use crate::primitive::id::Arena;
     use crate::primitive::scope::Scopes;
     use crate::primitive::{ClassId, Name};
@@ -159,15 +159,15 @@ mod tests {
             self.classes.undecided(self.scopes.root())
         }
 
-        fn constraints(&mut self, class: ClassId) -> &mut Constraints<Live> {
+        fn undecided_of(&mut self, class: ClassId) -> &mut Undecided<Live> {
             let Slot::Root(Class {
-                state: State::Undecided(constraints),
+                state: State::Undecided(undecided),
                 ..
             }) = self.classes.slots.get_mut(class)
             else {
                 panic!("{class:?} is an undecided root");
             };
-            constraints
+            undecided
         }
     }
 
@@ -177,7 +177,7 @@ mod tests {
         let a = world.undecided();
         let b = world.undecided();
         let at = world.items.push(());
-        world.classes.bound(Bound::Enter { lower: a, upper: b }, at);
+        world.classes.constrain(Bound::Enter { lower: a, upper: b }.into(), at);
         world
             .classes
             .part(a, PartKey::Field(Name::new("x")), Side::Upper, at)
@@ -199,21 +199,21 @@ mod tests {
             BTreeSet::from([at]),
         );
         let other = templates.undecided(scopes.root());
-        templates.bound(Bound::Enter { lower: other, upper: hole }, at);
+        templates.constrain(Bound::Enter { lower: other, upper: hole }.into(), at);
         templates.unify(&scopes, other, reference, at);
         assert_eq!(templates.verify(), Ok(()));
     }
 
     #[test]
-    fn a_bound_to_no_class_made_is_found() {
+    fn a_constraint_to_no_class_made_is_found() {
         let mut world = World::new();
         let a = world.undecided();
         let mut elsewhere = Classes::<Live>::default();
         let stray = (0..4).map(|_| elsewhere.undecided(world.scopes.root())).last().expect("four classes were made");
         let at = world.items.push(());
-        let bound = Bound::Enter { lower: a, upper: stray };
-        world.classes.bounds.insert((bound, at));
-        assert_eq!(world.classes.verify(), Err(vec![Violation::Unbound { bound, by: at }]));
+        let constraint = Constraint::Bound(Bound::Enter { lower: a, upper: stray });
+        world.classes.constraints.insert((constraint, at));
+        assert_eq!(world.classes.verify(), Err(vec![Violation::Unanchored { constraint, by: at }]));
     }
 
     #[test]
@@ -222,7 +222,7 @@ mod tests {
         let a = world.undecided();
         let part = world.undecided();
         let key = PartKey::Field(Name::new("x"));
-        world.constraints(a).parts.insert(
+        world.undecided_of(a).parts.insert(
             key.clone(),
             Part {
                 class: part,
@@ -250,7 +250,7 @@ mod tests {
         let mut elsewhere = Classes::<Live>::default();
         let stray = (0..4).map(|_| elsewhere.undecided(world.scopes.root())).last().expect("four classes were made");
         let at = world.items.push(());
-        world.constraints(a).parts.insert(
+        world.undecided_of(a).parts.insert(
             PartKey::Target,
             Part {
                 class: stray,

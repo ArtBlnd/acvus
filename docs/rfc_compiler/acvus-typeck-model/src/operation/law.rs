@@ -2,7 +2,7 @@
 //!
 //! A law reads the store and answers. It merges nothing, decides nothing and
 //! finishes nothing: the operations do those, from what it answers. So a rule
-//! cannot leave a bound half done, and every rule is one answer in one place.
+//! cannot leave a constraint half done, and every rule is one answer in one place.
 
 use std::collections::BTreeSet;
 
@@ -29,19 +29,19 @@ where
     Part { part: K::Id, of: K::Id, key: PartKey },
 }
 
-/// What a bound comes to, as its two ends stand.
+/// What a constraint comes to, as its two ends stand.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Looked<K>
 where
     K: ClassKind,
 {
     /// It holds, and is finished. These pairs are one type by it, these
-    /// adjustments are what it takes, and these bounds are recorded in its place,
+    /// adjustments are what it takes, and these constraints are recorded in its place,
     /// by the item that recorded it.
     Holds {
         pairs: Vec<Pair<K>>,
         adjustments: Vec<Adjustment>,
-        bounds: Vec<K::Bound>,
+        constraints: Vec<K::Constraint>,
     },
     /// It does not hold, and is finished.
     Refused(Refused<K>),
@@ -80,7 +80,7 @@ pub enum Place {
     Nowhere,
 }
 
-/// The store as a law may use it while it looks at a bound: all of it to read,
+/// The store as a law may use it while it looks at a constraint: all of it to read,
 /// and classes to make anew, as a signature made at a boundary needs, or a head
 /// a rule writes. It merges nothing, and decides no class that was there.
 #[derive(Debug)]
@@ -123,7 +123,7 @@ where
     pub fn anew<S>(&mut self, template: &Classes<S>, scope: ScopeId, at: ItemId) -> std::collections::BTreeMap<S::Id, K::Id>
     where
         S: ClassKind,
-        S::Bound: crate::primitive::bound::BoundInto<S, K>,
+        S::Constraint: crate::primitive::constraint::ConstraintInto<S, K>,
     {
         self.classes
             .copy_from(template, self.scopes, scope, at, |_| crate::store::template::Fate::Anew)
@@ -136,16 +136,16 @@ pub trait Law<K>
 where
     K: ClassKind,
 {
-    /// What `bound`, recorded by `at`, comes to as its ends stand.
-    fn look(&self, scribe: &mut Scribe<'_, K>, bound: &K::Bound, at: ItemId) -> Looked<K>;
+    /// What `constraint`, recorded by `at`, comes to as its ends stand.
+    fn look(&self, scribe: &mut Scribe<'_, K>, constraint: &K::Constraint, at: ItemId) -> Looked<K>;
 
     /// The bound that says `part` has the head of `declared`, a class a
     /// declaration writes. Such a class never changes, so nothing is merged with
     /// it, and what is one type with it is compared with it by this bound.
-    fn same(&self, part: K::Id, declared: K::Id) -> K::Bound;
+    fn same(&self, part: K::Id, declared: K::Id) -> K::Constraint;
 
-    /// The classes that are one type by how the bounds stand as a whole, and by
-    /// no one bound, each pair with the item it goes by.
+    /// The classes that are one type by how the constraints stand as a whole, and by
+    /// no one constraint, each pair with the item it goes by.
     fn one(&self, classes: &Classes<K>) -> Vec<(K::Id, K::Id, ItemId)>;
 
     /// Where the part `key` lies on a class decided as `head`, which has no place

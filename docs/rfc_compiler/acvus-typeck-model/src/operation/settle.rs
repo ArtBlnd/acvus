@@ -14,17 +14,17 @@ use super::law::{Law, Pair};
 /// Solves what has been recorded.
 ///
 /// ```text
-/// look:    each bound woken is looked at, and each pair the law finds one type is
-///          connected, until no bound is woken.
+/// look:    each constraint woken is looked at, and each pair the law finds one type is
+///          connected, until no constraint is woken.
 /// decide:  every class that may be decided now is decided, by the first rung that
 ///          decides any. Where one was, back to look.
 /// end:     what the law refuses of each class is refused, and what settled the
 ///          classes of each refusal is gathered.
 /// ```
 ///
-/// A bound is woken when it is recorded, and when a class it waits on is merged
+/// A constraint is woken when it is recorded, and when a class it waits on is merged
 /// or decided, so nothing is looked at that nothing has happened to. A class is
-/// decided only after looking has run to its end, so every guard is as its bound
+/// decided only after looking has run to its end, so every guard is as its constraint
 /// last stated it.
 pub fn settle<K, L, F>(classes: &mut Classes<K>, scopes: &Scopes, law: &L, outcome: &mut Outcome<K>, at: ItemId, visit: &F)
 where
@@ -40,9 +40,9 @@ where
             }
             let woken = classes.take_woken();
             let none_woken = woken.is_empty();
-            for (bound, by) in woken {
-                if classes.bounds().contains(&(bound.clone(), by)) {
-                    changed |= look(classes, scopes, law, outcome, bound, by);
+            for (constraint, by) in woken {
+                if classes.constraints().contains(&(constraint.clone(), by)) {
+                    changed |= look(classes, scopes, law, outcome, constraint, by);
                 }
             }
             if !changed && none_woken {
