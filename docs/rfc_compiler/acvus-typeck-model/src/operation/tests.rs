@@ -218,6 +218,40 @@ fn a_part_named_on_a_reference_is_read_through_it_and_the_projection_derefs() {
 }
 
 #[test]
+fn a_part_named_on_references_to_a_reference_is_read_through_each_and_derefs_once_for_each() {
+    // `r.x` with `r: &&{x: u8}`, and with `r: &&&{x: u8}`.
+    let build = |references: usize| {
+        move |w: &mut World, lets: usize| {
+            let x = w.text(U8);
+            let o = object(w, &[("x", x)]);
+            let mut r = behind(w, o, lets);
+            for _ in 0..references {
+                let (lent, _) = w.lend(r, SHARED);
+                r = behind(w, lent, lets);
+            }
+            let r = w.meets(r);
+            w.project(r, field("x"), Side::Upper)
+        }
+    };
+    for references in 2..4 {
+        comes_to("u8", |w, lets| build(references)(w, lets).0);
+        for lets in 0..4 {
+            for order in 0..24 {
+                let mut world = World::new();
+                let (_, projection) = build(references)(&mut world, lets);
+                reorder(&mut world.open, order);
+                world.settle(&Language::default());
+                assert_eq!(
+                    world.outcome.adjustments.get(&projection),
+                    Some(&vec![Adjustment::Deref; references]),
+                    "behind {lets} lets, in order {order}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn a_part_named_on_a_class_with_no_place_for_it_is_refused() {
     comes_to("refused: NotHeld", |w, lets| {
         let x = w.text(U8);

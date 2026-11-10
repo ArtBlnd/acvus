@@ -205,12 +205,15 @@ only where an argument is passed, and never in a join. It copies the inner refer
 the inner reference must be one that can be copied: a shared one. The outer one may be
 exclusive: `&mut &U` goes to `&U`.
 
+A projection `p.f` reads through every reference above the part, however many, and derefs once
+for each. It asks whether `p` is a reference, and what `p` refers to is asked the same in turn,
+so no count is stated anywhere.
+
 What follows from types being matched as they are written:
 
 | Program | Outcome |
 |---|---|
 | `f(&r)` with `f(&T)` and `r: &u8` | `T` is `&u8`. Nothing is read through, as `&&u8` matches `&T` as it is. |
-- How many references a projection reads through, now that a target may be a reference.
 | `f(&r)` with `f(&u8)` and `r: &u8` | Accepted: `&&u8` goes to `&u8`. |
 | `f(r)` with `f(U) -> &U` and `r: &T` | The result is `&&T`. |
 | `if c { &r } else { &x }` with `r: &u8`, `x: u8` | Refused: `&&u8` and `&u8` do not join. |

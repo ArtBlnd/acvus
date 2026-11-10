@@ -96,7 +96,6 @@ bound nothing has happened to is not looked at again.
 
 ## 6. How other systems hold a constraint that waits
 
-- **A part read through more than one reference**, by a projection.
 Gathered by a research agent from each project's sources on 2026-11-10, keeping only what it
 marked as read. Not read by the author of this file.
 
