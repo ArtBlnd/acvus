@@ -113,6 +113,23 @@ where
     }
 }
 
+/// `shape` with the reference just below its own read through: `&ₘ &U` as `&U`.
+/// The inner reference is copied out, so it must be a shared one, and the outer
+/// one may be either. There is none where `shape` is no reference to a reference
+/// decided as shared.
+fn read_through_once<K>(classes: &Classes<K>, shape: &Shape<K::Id>) -> Option<Shape<K::Id>>
+where
+    K: ClassKind,
+{
+    let Shape::Ref(_, target) = shape else {
+        return None;
+    };
+    match shape_of(classes, *target)? {
+        Shape::Ref(Mutability::Shared, inner) => Some(Shape::Ref(Mutability::Shared, *inner)),
+        _ => None,
+    }
+}
+
 /// What one stage of coercion comes to.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Stage {
@@ -198,18 +215,12 @@ fn stage(from: &Point, to: &Point) -> Stage {
                     Stage::NoChange
                 }
                 Constructor::Enum(_) | Constructor::Error if !same_members => goes(&[Coercion::AddVariants]),
-                Constructor::FnValue if !closures_are_held(&from.layer, &to.layer) => Stage::NoChange,
-                Constructor::FnValue if !same_members => goes(&[Coercion::AddClosures]),
                 _ if same_members => goes(&[]),
                 _ => Stage::NoChange,
             }
         }
         _ => Stage::NoChange,
     }
-}
-
-fn closures_are_held(fewer: &Shape<()>, more: &Shape<()>) -> bool {
-    matches!((fewer, more), (Shape::FnValue(fewer), Shape::FnValue(more)) if fewer.is_subset(more))
 }
 
 /// The parts of `fewer` with the part `more` has in the same place, where `more`
@@ -289,6 +300,8 @@ where
 /// A way to go: one stage of coercion, then a chain of conversions.
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct Route {
+    /// The references read through, `&ⁿ U` going as `&U`, before anything else.
+    read_through: usize,
     coercions: BTreeSet<Coercion>,
     chain: Vec<Name>,
 }
@@ -379,10 +392,10 @@ impl Conversions {
         Ok(())
     }
 
-    /// The one chain that goes from `from` to `to`, `argument` being the class at
-    /// the boundary: a chain of views where any goes, and a chain with a value
+    /// The one chain that goes from `from` to `to`, `argument` being what is passed
+    /// into it: a chain of views where any goes, and a chain with a value
     /// conversion otherwise, once the argument is decided at every depth.
-    fn choose<K>(&self, classes: &Classes<K>, argument: K::Id, from: &Point, to: &Point) -> Chosen
+    fn choose<K>(&self, classes: &Classes<K>, argument: &Shape<K::Id>, from: &Point, to: &Point) -> Chosen
     where
         K: ClassKind,
     {
@@ -396,7 +409,7 @@ impl Conversions {
         if values.is_empty() {
             return Chosen::NoChange;
         }
-        let Some(argument) = written_whole(classes, argument) else {
+        let Some(argument) = written_shape(classes, argument) else {
             return Chosen::Waits;
         };
         exactly_one(values.into_iter().filter(|route| self.fits(&argument, route)).collect())
@@ -435,6 +448,7 @@ impl Conversions {
         chain.push(name.clone());
         if declared.to_point == *to {
             routes.push(Route {
+                read_through: 0,
                 coercions: coercions.clone(),
                 chain: chain.clone(),
             });
@@ -499,6 +513,19 @@ where
         Some(Ty::Node(Box::new(parts.map(|part| part.clone().expect("every part was written")))))
     }
     within(classes, class, &mut BTreeSet::new())
+}
+
+/// The type `shape` heads written out, where each of its parts is decided at every
+/// depth.
+fn written_shape<K>(classes: &Classes<K>, shape: &Shape<K::Id>) -> Option<Ty>
+where
+    K: ClassKind,
+{
+    let parts = shape.map(|part| written_whole(classes, *part));
+    if parts.places().iter().any(|(_, part)| part.is_none()) {
+        return None;
+    }
+    Some(Ty::Node(Box::new(parts.map(|part| part.clone().expect("every part was written")))))
 }
 
 /// Whether `ty` is an instance of `pattern`, each hole of `pattern` bound to one
@@ -573,35 +600,71 @@ where
         bound: Bound<K>,
         at: ItemId,
     ) -> bool {
-        let (Some(from), Some(to)) = (shape_of(classes, bound.lower()), shape_of(classes, bound.upper())) else {
+        let (Some(written), Some(to)) = (shape_of(classes, bound.lower()), shape_of(classes, bound.upper())) else {
             return false;
         };
-        let (Some(from), Some(to)) = (seen_from(classes, from), seen_to(classes, to)) else {
+        let Some(to) = seen_to(classes, to) else {
             return false;
         };
-        let route = match coercion(&from, &to) {
-            Stage::Goes(coercions) => Route {
-                coercions,
-                chain: Vec::new(),
-            },
-            Stage::ToFnType | Stage::Waits => return false,
-            Stage::NoChange => match (&from, &to) {
-                (Seen::At(from), Seen::At(to)) => match conversions.choose(classes, bound.lower(), from, to) {
-                    Chosen::One(route) => route,
-                    Chosen::Waits => return false,
-                    Chosen::NoChange => {
+        // The argument as it is written, then with one more reference read through
+        // each time: an index is loosened only where the types do not match as they
+        // are (Subtyping the language gives).
+        let mut from_shape = written.clone();
+        let mut read_through = 0;
+        let route = loop {
+            let Some(from) = seen_from(classes, &from_shape) else {
+                return false;
+            };
+            match coercion(&from, &to) {
+                Stage::Goes(coercions) => {
+                    let route = Route {
+                        read_through,
+                        coercions,
+                        chain: Vec::new(),
+                    };
+                    break Some(route);
+                }
+                Stage::ToFnType | Stage::Waits => return false,
+                Stage::NoChange => {}
+            }
+            let Some(inner) = read_through_once(classes, &from_shape) else {
+                break None;
+            };
+            from_shape = inner;
+            read_through += 1;
+        };
+        let route = match route {
+            Some(route) => route,
+            // Nothing the language gives goes alone, so a declared conversion is
+            // looked at. What the language gives is taken on the way into it, the
+            // reading through of references among it, as few as will do.
+            None => {
+                let mut passed = written.clone();
+                let mut read_through = 0;
+                loop {
+                    let Some(from) = seen_from(classes, &passed) else {
+                        return false;
+                    };
+                    let chosen = match (&from, &to) {
+                        (Seen::At(from), Seen::At(to)) => conversions.choose(classes, &passed, from, to),
+                        // Its class node may yet let a conversion go.
+                        (Seen::Reference(_), Seen::At(_)) => Chosen::Waits,
+                        // No conversion reaches a hole, which takes only what comes.
+                        (_, Seen::Reference(_)) => Chosen::NoChange,
+                    };
+                    match chosen {
+                        Chosen::One(route) => break Route { read_through, ..route },
+                        Chosen::Waits => return false,
+                        Chosen::NoChange => {}
+                    }
+                    let Some(inner) = read_through_once(classes, &passed) else {
                         self.refuse_no_change(classes, &bound, at);
                         return true;
-                    }
-                },
-                // Its class node may yet let a conversion go.
-                (Seen::Reference(_), Seen::At(_)) => return false,
-                // No conversion reaches a hole, which takes only what comes.
-                (_, Seen::Reference(_)) => {
-                    self.refuse_no_change(classes, &bound, at);
-                    return true;
+                    };
+                    passed = inner;
+                    read_through += 1;
                 }
-            },
+            }
         };
         self.take(classes, scopes, conversions, &bound, at, &route);
         true
@@ -628,38 +691,46 @@ where
         at: ItemId,
         route: &Route,
     ) {
-        let adjustments = route
-            .coercions
-            .iter()
-            .copied()
-            .map(Adjustment::Coerce)
+        let adjustments = std::iter::repeat_n(Adjustment::Deref, route.read_through)
+            .chain(route.coercions.iter().copied().map(Adjustment::Coerce))
             .chain(route.chain.iter().cloned().map(Adjustment::Convert));
         for adjustment in adjustments {
             self.adjustments.entry(at).or_default().push(adjustment);
         }
         let scope = classes.get(classes.find(bound.lower())).scope;
-        let mut current = bound.lower();
+        let Some(mut current) = shape_of(classes, bound.lower()).cloned() else {
+            unreachable!("a change is made between decided classes");
+        };
+        for _ in 0..route.read_through {
+            let Some(inner) = read_through_once(classes, &current) else {
+                unreachable!("the route counts the references that can be read through");
+            };
+            current = inner;
+        }
         let mut coercions = route.coercions.clone();
         for name in &route.chain {
             let declared = &conversions.declared[name];
             let copied = classes.copy_from(&declared.template, scopes, scope, at, |_| Fate::Anew);
-            self.connect(classes, scopes, current, copied.classes[&declared.from], &coercions, at);
+            self.connect(classes, scopes, &current, copied.classes[&declared.from], &coercions, at);
             coercions = BTreeSet::new();
-            current = copied.classes[&declared.to];
+            let Some(result) = shape_of(classes, copied.classes[&declared.to]).cloned() else {
+                unreachable!("a conversion writes a class node at its result");
+            };
+            current = result;
         }
-        self.connect(classes, scopes, current, bound.upper(), &coercions, at);
+        self.connect(classes, scopes, &current, bound.upper(), &coercions, at);
     }
 
     fn connect(
         &mut self,
         classes: &mut Classes<K>,
         scopes: &Scopes,
-        from: K::Id,
+        from: &Shape<K::Id>,
         to: K::Id,
         coercions: &BTreeSet<Coercion>,
         at: ItemId,
     ) {
-        let (Some(from), Some(to)) = (shape_of(classes, from), shape_of(classes, to)) else {
+        let Some(to) = shape_of(classes, to) else {
             unreachable!("a change is made between decided classes");
         };
         let pairs = below(from, to, coercions, |class: &K::Id| shape_of(classes, *class).cloned());
@@ -963,19 +1034,28 @@ mod tests {
         refused_at(&world, Cause::NoChange, at);
     }
 
+    /// Where a function value is passed its closures are neither added to nor taken
+    /// from: their parameters carry bounds, so it is invariant there.
     #[test]
-    fn a_function_value_goes_to_one_with_more_closures_and_not_fewer() {
+    fn a_function_value_goes_only_to_one_with_the_same_closures() {
         let mut closures = Arena::<ClosureId, ()>::default();
         let (first, second) = (closures.push(()), closures.push(()));
         let values = |ids: &[ClosureId]| Shape::<ClassId>::FnValue(ids.iter().copied().collect());
+
+        let mut world = World::new();
+        let argument = world.external(values(&[first, second]));
+        let parameter = world.external(values(&[first, second]));
+        world.pass(argument, parameter);
+        assert_eq!(world.settle_fully(), Settled::Finished);
+        world.no_refusals();
+        assert_eq!(world.outcome.adjustments, Adjustments::new());
 
         let mut world = World::new();
         let argument = world.external(values(&[first]));
         let parameter = world.external(values(&[first, second]));
         let (_, at) = world.pass(argument, parameter);
         assert_eq!(world.settle_fully(), Settled::Finished);
-        world.no_refusals();
-        assert_eq!(world.outcome.adjustments, coerced(at, &[Coercion::AddClosures]));
+        refused_at(&world, Cause::NoChange, at);
 
         let mut world = World::new();
         let argument = world.external(values(&[first, second]));
@@ -1905,5 +1985,162 @@ mod tests {
 
         world.no_refusals();
         assert_eq!(world.outcome.adjustments, BTreeMap::from([(at, conversions(&[], &["a_to_c"]))]));
+    }
+
+    /// `let r = &x; f(&r);`, the reference to a reference `&r` passed to each kind of
+    /// parameter. The argument's class, the item of its boundary, and `r` and `x`.
+    fn reference_to_reference(
+        world: &mut World,
+        of_outer: Mutability,
+        of_inner: Mutability,
+        parameter: ClassId,
+    ) -> (ItemId, ClassId, ClassId) {
+        let x = world.text(U8);
+        let (lent_x, _) = world.lend(x, of_inner);
+        let r = world.meets(lent_x);
+        let (lent_r, _) = world.lend(r, of_outer);
+        let (_, at) = world.pass(lent_r, parameter);
+        (at, r, x)
+    }
+
+    fn read_through(at: ItemId, times: usize) -> Adjustments {
+        Adjustments::from([(at, vec![Adjustment::Deref; times])])
+    }
+
+    /// `f(&r)` with `f(&T)` and `r: &u8`: `&&u8` matches `&T` as it is written, so
+    /// `T` is `&u8` and no reference is read through.
+    #[test]
+    fn a_hole_at_a_target_takes_a_reference_as_it_is() {
+        let mut world = World::new();
+        let hole = world.undecided();
+        let parameter = world.external(Shape::Ref(SHARED, hole));
+        let (_, r, _) = reference_to_reference(&mut world, SHARED, SHARED, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert!(world.same(hole, r));
+        assert_eq!(world.outcome.adjustments, Adjustments::new());
+    }
+
+    /// `f(&r)` with `f(&u8)` and `r: &u8`: `&&u8` goes to `&u8`, and so does
+    /// `&mut &u8`, as the inner reference is copied out.
+    #[test]
+    fn a_reference_to_a_shared_reference_is_read_through() {
+        for of_outer in [SHARED, EXCLUSIVE] {
+            let mut world = World::new();
+            let declared = world.external(U8);
+            let parameter = world.external(Shape::Ref(SHARED, declared));
+            let (at, r, x) = reference_to_reference(&mut world, of_outer, SHARED, parameter);
+
+            assert_eq!(world.settle_fully(), Settled::Finished);
+
+            world.no_refusals();
+            assert_eq!(world.outcome.adjustments, read_through(at, 1));
+            assert_eq!(world.shape(x), U8);
+            assert_eq!(world.target(r).0, SHARED);
+        }
+    }
+
+    /// `f(&r)` with `f(&u8)` and `r: &mut u8`: an exclusive reference is not copied
+    /// out, so it is not read through.
+    #[test]
+    fn a_reference_to_an_exclusive_reference_is_not_read_through() {
+        for of_outer in [SHARED, EXCLUSIVE] {
+            let mut world = World::new();
+            let declared = world.external(U8);
+            let parameter = world.external(Shape::Ref(SHARED, declared));
+            let (at, ..) = reference_to_reference(&mut world, of_outer, EXCLUSIVE, parameter);
+
+            assert_eq!(world.settle_fully(), Settled::Finished);
+
+            refused_at(&world, Cause::NoChange, at);
+        }
+    }
+
+    /// `let r = &x; let q = &r; f(&q);` with `f(&u8)`: every reference above the
+    /// last is read through in the one step.
+    #[test]
+    fn each_reference_above_the_last_is_read_through() {
+        let mut world = World::new();
+        let declared = world.external(U8);
+        let parameter = world.external(Shape::Ref(SHARED, declared));
+        let x = world.text(U8);
+        let (lent_x, _) = world.lend(x, SHARED);
+        let r = world.meets(lent_x);
+        let (lent_r, _) = world.lend(r, SHARED);
+        let q = world.meets(lent_r);
+        let (lent_q, _) = world.lend(q, SHARED);
+        let (_, at) = world.pass(lent_q, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        assert_eq!(world.outcome.adjustments, read_through(at, 2));
+    }
+
+    /// `let r = &[1u8, 2]; f(&r);` with `f(&[u8])`: the reference is read through
+    /// and the array unsized in the one step, and the element below is one type.
+    #[test]
+    fn a_reference_is_read_through_and_its_array_unsized_together() {
+        let mut world = World::new();
+        let declared = world.external(U8);
+        let slice = world.external(Shape::Slice(declared));
+        let parameter = world.external(Shape::Ref(SHARED, slice));
+        let element = world.text(U8);
+        let array = world.text(Shape::Array(2, element));
+        let (lent_array, _) = world.lend(array, SHARED);
+        let r = world.meets(lent_array);
+        let (lent_r, _) = world.lend(r, SHARED);
+        let (_, at) = world.pass(lent_r, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        let expected = Adjustments::from([(at, vec![Adjustment::Deref, Adjustment::Coerce(Coercion::Unsize)])]);
+        assert_eq!(world.outcome.adjustments, expected);
+    }
+
+    /// `if c { &r } else { &x }` with `r: &u8` and `x: u8`: no reference is read
+    /// through where values meet, so `&&u8` and `&u8` do not join.
+    #[test]
+    fn no_reference_is_read_through_where_values_meet() {
+        let mut world = World::new();
+        let x = world.text(U8);
+        let (lent_x, _) = world.lend(x, SHARED);
+        let r = world.meets(lent_x);
+        let (lent_r, _) = world.lend(r, SHARED);
+        let y = world.text(U8);
+        let (lent_y, _) = world.lend(y, SHARED);
+        let place = world.meets(lent_r);
+        world.enter(lent_y, place);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        assert!(world.outcome.refusals.iter().any(|refusal| refusal.cause == Cause::Mismatch));
+        assert_eq!(world.outcome.adjustments, Adjustments::new());
+    }
+
+    /// `let r = &v; sum(&r);` with `sum(&[u8])` and `as_slice`: the reference is
+    /// read through on the way into the conversion, as a reborrow is.
+    #[test]
+    fn a_reference_is_read_through_on_the_way_into_a_conversion() {
+        let mut world = World::new();
+        declare_as_slice(&mut world);
+        let declared = world.external(U8);
+        let parameter = reference_to_slice(&mut world, SHARED, declared);
+        let element = world.text(U8);
+        let v = vec_class(&mut world, element);
+        let (lent_v, _) = world.lend(v, SHARED);
+        let r = world.meets(lent_v);
+        let (lent_r, _) = world.lend(r, SHARED);
+        let (_, at) = world.pass(lent_r, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        world.no_refusals();
+        let mut expected = vec![Adjustment::Deref];
+        expected.extend(conversions(&[], &["as_slice"]));
+        assert_eq!(world.outcome.adjustments, Adjustments::from([(at, expected)]));
     }
 }

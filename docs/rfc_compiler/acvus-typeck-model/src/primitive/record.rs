@@ -49,8 +49,6 @@ pub enum Coercion {
     AddVariants,
     /// `&[T; n] → &[T]`, `&mut [T; n] → &mut [T]`
     Unsize,
-    /// A function value type to one with more closures.
-    AddClosures,
     /// `λ̄ → Fn(P̄ → R)` (O30)
     ToFnType,
 }
