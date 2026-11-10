@@ -11,6 +11,7 @@ is complete, its content goes into the docs.
 | a class | an equivalence class of types | undecided, holding the names of its parts, then decided, holding its head and its own parts. It changes once. |
 | a bound | a relation of two classes: entering, being equal, being passed. A suspended constraint, `as _`, has the same life and is held with them. | recorded, looked at, perhaps many times, then finished. The store holds it throughout. |
 | what a class holds of bounds | guards, bounds that hold it apart, waiters | set and lifted as bounds are looked at and finished |
+| the connections of a class | each connection made of it: the two ids connected and the item it went by | added to where the class is connected, merged where two classes are, never taken out. A decision adds none. |
 
 ## 2. The three operations
 
@@ -38,7 +39,13 @@ and finishes nothing.
 | where a part named on a class lies, once the class's head has no place of that name | `Place`: within another part, with an adjustment, or nowhere |
 | whether a literal's class may take a head | yes or no |
 | what head a rung offers a class | `Offer`: nothing, a head, or a refusal |
-| what is refused of a class at the end | refusals |
+| what is refused of a class at the end | what is refused, and of which classes |
+
+What a law refuses, it refuses of classes. What decided those classes, and every connection
+that made them, is gathered in one place, `Outcome::gather`, once settling has run to its end.
+That is the only place the connections of a class are read. A law is given the whole store to
+read, so no type keeps a rule from reading them: what keeps it is that nothing a law answers
+has a place to carry them, other than a refusal's own items.
 
 A rule cannot leave a bound half done: a guard, a wait and a finished bound all follow from
 what the rule answers, and none is the rule's to do. A law of no language, one that keeps the
@@ -95,6 +102,10 @@ bound nothing has happened to is not looked at again.
   head from above, fails no test. It gives a head only where none is asked from above, so its
   order with that rung shows nowhere, and no program has been found where a head made from
   parts gives a literal its head.
+- **When a refusal is gathered.** Gathering each refusal as it is made, and not at the end,
+  fails no test: no program has been found where a class a refusal is of is connected again
+  after the refusal. The orders the tests run differ in which class is asked first, and not
+  in which bound is looked at first.
 - **A function value passed to a function type**, left as a `todo`.
 - **Calls** on a class, which no law judges.
 

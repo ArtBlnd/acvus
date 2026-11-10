@@ -34,14 +34,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::class::{ClassKind, State, Template};
 use crate::primitive::adjustment::Subtyping;
-use crate::primitive::refusal::{Cause, Refusal};
+use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{Mutability, Shape};
 use crate::primitive::{ItemId, TemplateId};
 use crate::store::classes::Classes;
 
 use super::super::law::{Looked, Pair, Scribe};
 use super::functions::{Functions, Row};
-use super::{Told, View, decided_by};
+use super::{Told, View};
 
 /// Types as they are written somewhere: in the store being solved, or in a row of
 /// the table, not made into classes of that store yet.
@@ -486,12 +486,10 @@ where
             way: Some(way),
         },
         _ => {
-            let mut items = decided_by(view.classes, argument);
-            items.extend(decided_by(view.classes, given));
-            items.insert(at);
-            Told::done(Looked::Refused(Refusal {
+            Told::done(Looked::Refused(Refused {
                 cause: Cause::NoChange,
-                items,
+                items: BTreeSet::from([at]),
+                of: vec![argument, given],
             }))
         }
     }

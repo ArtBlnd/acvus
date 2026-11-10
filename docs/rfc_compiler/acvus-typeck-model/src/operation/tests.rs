@@ -15,7 +15,7 @@ use crate::primitive::class::{Live, Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::adjustment::Subtyping;
-use crate::primitive::refusal::Refusal;
+use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{PartKey, Scalar, Shape, Ty, VariantOf};
 use crate::primitive::{ClassId, ClosureId, ItemId, Name};
 use crate::store::classes::Classes;
@@ -61,6 +61,19 @@ fn behind(world: &mut World, mut value: ClassId, lets: usize) -> ClassId {
     value
 }
 
+/// The refusals of a world in one order, to compare what two orders of asking
+/// come to: a refusal names the same items whichever class is asked first.
+fn refusals_of(world: &World) -> Vec<(Cause, BTreeSet<ItemId>, BTreeSet<ItemId>)> {
+    let mut refusals: Vec<_> = world
+        .outcome
+        .refusals
+        .iter()
+        .map(|refusal| (refusal.cause, refusal.items.clone(), refusal.connections.clone()))
+        .collect();
+    refusals.sort();
+    refusals
+}
+
 /// The one outcome `build` comes to, the value it marks being read behind each
 /// count of `let`s and its classes asked in each order.
 fn comes_to<F>(expected: &str, build: F)
@@ -68,12 +81,16 @@ where
     F: Fn(&mut World, usize) -> ClassId,
 {
     for lets in 0..4 {
+        let mut first = None;
         for order in 0..24 {
             let mut world = World::new();
             let observed = build(&mut world, lets);
             reorder(&mut world.open, order);
             world.settle(&Language::default());
             assert_eq!(world.outcome_of(observed), expected, "behind {lets} lets, in order {order}");
+            let refusals = refusals_of(&world);
+            let first = first.get_or_insert_with(|| refusals.clone());
+            assert_eq!(&refusals, first, "what the refusals name behind {lets} lets, in order {order}");
         }
     }
 }
@@ -881,6 +898,7 @@ where
     F: Fn(&mut World, usize) -> ClassId,
 {
     for lets in 0..4 {
+        let mut first = None;
         for order in 0..24 {
             let mut world = World::new();
             let law = law_with(&mut world, rows);
@@ -888,6 +906,9 @@ where
             reorder(&mut world.open, order);
             world.settle(&law);
             assert_eq!(world.outcome_of(observed), expected, "behind {lets} lets, in order {order}");
+            let refusals = refusals_of(&world);
+            let first = first.get_or_insert_with(|| refusals.clone());
+            assert_eq!(&refusals, first, "what the refusals name behind {lets} lets, in order {order}");
         }
     }
 }
@@ -1182,6 +1203,80 @@ fn as_underscore_of_what_has_no_type_gives_none() {
     });
 }
 
+// A refusal names what made the classes it is of meet.
+
+/// The item recorded last.
+fn last_item(world: &World) -> ItemId {
+    world.items.iter().last().expect("an item was recorded").0
+}
+
+/// The connections the one refusal by `cause` names, the same in each order of
+/// asking, with the items `build` gives.
+fn connections_of<F>(cause: Cause, build: F) -> (BTreeSet<ItemId>, BTreeSet<ItemId>)
+where
+    F: Fn(&mut World) -> Vec<ItemId>,
+{
+    let mut named = None;
+    let mut given = BTreeSet::new();
+    for order in 0..24 {
+        let mut world = World::new();
+        given = build(&mut world).into_iter().collect();
+        reorder(&mut world.open, order);
+        world.settle(&Language::default());
+        let mut refusals = world.outcome.refusals.iter().filter(|refusal| refusal.cause == cause);
+        let refusal = refusals.next().expect("the program is refused by the cause");
+        assert_eq!(refusals.next(), None, "one refusal by the cause, in order {order}");
+        let named = named.get_or_insert_with(|| refusal.connections.clone());
+        assert_eq!(&refusal.connections, named, "in order {order}");
+    }
+    (named.expect("an order was run"), given)
+}
+
+#[test]
+fn parts_that_do_not_join_are_refused_naming_each_entering_that_made_them_meet() {
+    // `let p = Some(1u8); let q = Some(2u16); let r = if c { p } else { q }; let s = r;`
+    // Each of the five enterings made the two payloads one class with another.
+    let (named, enterings) = connections_of(Cause::Mismatch, |w| {
+        let one = w.text(U8);
+        let p = some(w, one);
+        let written_into_p = last_item(w);
+        let two = w.text(U16);
+        let q = some(w, two);
+        let written_into_q = last_item(w);
+        let r = w.undecided();
+        let s = w.undecided();
+        vec![written_into_p, written_into_q, w.enter(p, r), w.enter(q, r), w.enter(r, s)]
+    });
+    assert_eq!(named, enterings);
+}
+
+#[test]
+fn arguments_that_do_not_join_in_a_hole_are_refused_naming_each_passing() {
+    // `h(a, b)` with `h(T, T)`, `a: u8`, `b: u16`.
+    let (named, passings) = connections_of(Cause::Mismatch, |w| {
+        let hole = w.undecided();
+        let a = w.text(U8);
+        let b = w.text(U16);
+        vec![w.pass(a, hole), w.pass(b, hole)]
+    });
+    assert_eq!(named, passings);
+}
+
+#[test]
+fn parts_made_one_because_what_holds_them_is_one_are_refused_naming_what_made_that_one() {
+    // `h(Some(1u8), Some(2u16))` with `h(T, T)`: the payloads meet because the
+    // two options meet in the hole.
+    let (named, passings) = connections_of(Cause::Mismatch, |w| {
+        let hole = w.undecided();
+        let one = w.text(U8);
+        let p = some(w, one);
+        let two = w.text(U16);
+        let q = some(w, two);
+        vec![w.pass(p, hole), w.pass(q, hole)]
+    });
+    assert!(named.is_superset(&passings), "{named:?} names {passings:?}");
+}
+
 // The contracts admit any law: a law that is not the language's runs through the
 // same three operations.
 
@@ -1237,7 +1332,7 @@ impl Law<Live> for Odd {
         }
     }
 
-    fn end(&self, _: &Classes<Live>, _: ClassId) -> Vec<Refusal> {
+    fn end(&self, _: &Classes<Live>, _: ClassId) -> Vec<Refused<Live>> {
         Vec::new()
     }
 }

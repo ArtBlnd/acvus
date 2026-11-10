@@ -51,6 +51,7 @@ where
                         .state
                         .held()
                         .into_iter()
+                        .chain(class.connections.iter().flat_map(|(a, b, _)| [*a, *b]))
                         .filter(|held| held.index() >= self.slots.len())
                         .map(|held| Violation::Dangling { holder: id, id: held });
                     violations.extend(dangling);

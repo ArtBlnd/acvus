@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::primitive::ItemId;
 use crate::primitive::class::{ClassKind, Pending, Side, State, Unplaced};
-use crate::primitive::refusal::{Cause, Refusal};
+use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::scope::Scopes;
 use crate::store::classes::{Classes, Unified};
 
@@ -81,14 +81,13 @@ where
         outcome.refuse(refusal);
     }
     for Pending { class, calls, domains } in unified.pending {
-        let (head, by) = decided(classes, class);
+        let head = decided(classes, class);
         for (domain, registered) in &domains {
             if !law.admits(&head, domain) {
-                let mut items = by.clone();
-                items.insert(*registered);
-                outcome.refuse(Refusal {
+                outcome.refuse(Refused {
                     cause: Cause::EmptyDomain,
-                    items,
+                    items: BTreeSet::from([*registered]),
+                    of: vec![class],
                 });
             }
         }
@@ -113,7 +112,7 @@ where
         if projections.is_empty() {
             continue;
         }
-        let (head, by) = decided(classes, class);
+        let head = decided(classes, class);
         let named = match law.place(&head, &key) {
             Place::Within { through, adjustment } => head.place(&through).copied().and_then(|owner| {
                 let mut named = None;
@@ -132,12 +131,10 @@ where
                 pairs.push((Pair::Classes(named, part.class), at));
             }
             None => {
-                let mut items = by;
-                items.extend(projections.iter().map(|(_, item)| *item));
-                items.insert(at);
-                outcome.refuse(Refusal {
+                outcome.refuse(Refused {
                     cause: Cause::NotHeld,
-                    items,
+                    items: projections.iter().map(|(_, item)| *item).chain([at]).collect(),
+                    of: vec![class],
                 });
             }
         }
@@ -145,12 +142,13 @@ where
     pairs
 }
 
-fn decided<K>(classes: &Classes<K>, class: K::Id) -> (crate::primitive::ty::Shape<K::Id>, BTreeSet<ItemId>)
+/// The head of `class`, which a union or a decision left decided.
+fn decided<K>(classes: &Classes<K>, class: K::Id) -> crate::primitive::ty::Shape<K::Id>
 where
     K: ClassKind,
 {
     match &classes.get(classes.find(class)).state {
-        State::Decided(decided) => (decided.shape.clone(), decided.by.clone()),
+        State::Decided(decided) => decided.shape.clone(),
         State::Undecided(_) => unreachable!("what a union leaves is left of a class that came to be decided"),
     }
 }

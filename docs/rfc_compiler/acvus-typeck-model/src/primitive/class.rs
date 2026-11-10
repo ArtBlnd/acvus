@@ -8,7 +8,7 @@ use std::hash::Hash;
 use super::bound::{Bound, BoundOf};
 use super::domain::Domain;
 use super::id::Id;
-use super::refusal::{Cause, Refusal};
+use super::refusal::{Cause, Refused};
 use super::scope::Scopes;
 use super::ty::{PartKey, Shape};
 use super::{ClassId, ItemId, ScopeId, TemplateId};
@@ -69,7 +69,15 @@ where
     /// What the store keeps of the bounds not finished that have to do with this
     /// class. Where two classes are merged, those of both.
     pub held: Held<K>,
+    /// Every connection that made this class of the classes it was: the two ids
+    /// connected, as they were given, and the item it went by. Where two classes
+    /// are merged, those of both. Nothing is taken out, and no rule reads it: it
+    /// is kept to say, of a refusal, what made the classes meet.
+    pub connections: Connections<K>,
 }
+
+/// Connections, each the two ids connected and the item it went by.
+pub type Connections<K> = BTreeSet<(<K as ClassKind>::Id, <K as ClassKind>::Id, ItemId)>;
 
 /// The bounds not finished that have to do with a class, by what they have to do
 /// with it. A store keeps these without reading what a bound means.
@@ -258,7 +266,7 @@ where
     pub class: Class<K>,
     /// Pairs of parts of one name, each of which must be one class in turn.
     pub pairs: Vec<(K::Id, K::Id)>,
-    pub refusals: Vec<Refusal>,
+    pub refusals: Vec<Refused<K>>,
     pub pending: Option<Pending<K>>,
     pub unplaced: Vec<Unplaced<K>>,
 }
@@ -356,6 +364,7 @@ where
             scope: self.scope,
             state,
             held: Held::default(),
+            connections: self.connections.into_iter().map(|(a, b, at)| (f(a), f(b), at)).collect(),
         }
     }
 
@@ -371,6 +380,8 @@ where
         let scope = scopes.outer(self.scope, other.scope);
         let mut held = self.held;
         held.absorb(other.held);
+        let mut connections = self.connections;
+        connections.extend(other.connections);
         let mut pairs = Vec::new();
         let mut refusals = Vec::new();
         let mut pending = None;
@@ -411,9 +422,12 @@ where
                         origin,
                     })
                 } else {
-                    refusals.push(Refusal {
+                    // The head that is not kept is gone with its class, so what
+                    // decided it is said here.
+                    refusals.push(Refused {
                         cause: Cause::Mismatch,
-                        items: kept.by.iter().chain(&gone.by).copied().chain([at]).collect(),
+                        items: gone.by.iter().copied().chain([at]).collect(),
+                        of: vec![root],
                     });
                     State::Decided(kept)
                 }
@@ -442,7 +456,12 @@ where
             }
         };
         Merged {
-            class: Class { scope, state, held },
+            class: Class {
+                scope,
+                state,
+                held,
+                connections,
+            },
             pairs,
             refusals,
             pending,

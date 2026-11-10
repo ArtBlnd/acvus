@@ -10,12 +10,12 @@ use crate::primitive::adjustment::Adjustment;
 use crate::primitive::bound::Bound;
 use crate::primitive::class::ClassKind;
 use crate::primitive::adjustment::Subtyping;
-use crate::primitive::refusal::{Cause, Refusal};
+use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{Mutability, Shape};
 use crate::store::classes::Classes;
 
 use super::super::law::Looked;
-use super::{Told, View, decided_by, parts_by_name};
+use super::{Told, View, parts_by_name};
 
 /// What `lower` entering `upper` comes to.
 ///
@@ -40,12 +40,10 @@ where
         return Told { looked, asks, way: None };
     };
     if !entering.enters(head) {
-        let mut items = decided_by(classes, lower);
-        items.extend(decided_by(classes, upper));
-        items.insert(at);
-        return Told::done(Looked::Refused(Refusal {
+        return Told::done(Looked::Refused(Refused {
             cause: Cause::Mismatch,
-            items,
+            items: BTreeSet::from([at]),
+            of: vec![lower, upper],
         }));
     }
     let reborrowed = matches!(

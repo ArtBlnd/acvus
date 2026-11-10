@@ -18,7 +18,8 @@ use super::law::{Law, Pair};
 ///          connected, until no bound is woken.
 /// decide:  every class that may be decided now is decided, by the first rung that
 ///          decides any. Where one was, back to look.
-/// end:     what the law refuses of each class is refused.
+/// end:     what the law refuses of each class is refused, and what settled the
+///          classes of each refusal is gathered.
 /// ```
 ///
 /// A bound is woken when it is recorded, and when a class it waits on is merged
@@ -53,8 +54,9 @@ where
         }
     }
     for class in visit(classes) {
-        for refusal in law.end(classes, class) {
-            outcome.refuse(refusal);
+        for refused in law.end(classes, class) {
+            outcome.refuse(refused);
         }
     }
+    outcome.gather(classes);
 }

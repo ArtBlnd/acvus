@@ -193,6 +193,17 @@ A fact read carries what settled it, so that a refusal that follows names that t
 
 Refusals are gathered. One cause may give several refusals, and each is kept where it is true.
 
+A refusal names what made the classes it is of meet: every connection that made each one
+class, and every connection that made one class of what holds it as a part. It names all of
+them, and not the fewest that would do: which of several connections merged two classes
+depends on the order they were made in, and that all were made does not. The connections are
+kept as they were made, each with the two classes it connected, so a later stage may name
+fewer.
+
+What a refusal names is an output, as an adjustment is. No rule reads it, and it decides no
+head. A rule says what it refuses and of which classes, and what settled those classes is
+gathered once, after everything has been connected and decided.
+
 ## References
 
 `&&T` is a type, and a type other than `&T`. A reference may be the target of a reference.
@@ -263,4 +274,14 @@ A projection `p.f` asks it of `p`, to know whether `f` is a part of `p` or of wh
 
 ## Not settled yet
 
-- A refusal naming the connection that merged two classes.
+### Calls and function values
+
+Left to the end, and to be explained before anything is derived. The model is complete without
+them, and they are added without changing what is here. What is known to need ruling:
+
+- Recursion: a lambda that takes itself as a parameter.
+- Brand types: which brand a returned value has, and whether a brand may be a hole.
+- Where a call makes types equal and where one only enters the other (the transparency rule).
+
+What depends on calls waits with them: a receiver's adjustment, and a use with several
+candidates.

@@ -8,11 +8,11 @@ use std::mem;
 use crate::primitive::ItemId;
 use crate::primitive::ScopeId;
 use crate::primitive::class::{
-    Bounds, Call, Class, ClassKind, Constraints, Decided, Held, Origin, Part, Pending, Side, State, Unplaced,
+    Bounds, Call, Class, ClassKind, Connections, Constraints, Decided, Held, Origin, Part, Pending, Side, State, Unplaced,
 };
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
-use crate::primitive::refusal::Refusal;
+use crate::primitive::refusal::Refused;
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{PartKey, Shape};
 
@@ -201,7 +201,7 @@ where
             None => self.classes.undecided(scope),
         });
         let head = self.classes.decided(scope, own, by);
-        Some(self.classes.unify(scopes, class, head, at))
+        Some(self.classes.unite(scopes, class, head, at))
     }
 }
 
@@ -211,7 +211,7 @@ pub struct Unified<K>
 where
     K: ClassKind,
 {
-    pub refusals: Vec<Refusal>,
+    pub refusals: Vec<Refused<K>>,
     pub pending: Vec<Pending<K>>,
     pub unplaced: Vec<Unplaced<K>>,
 }
@@ -237,6 +237,7 @@ where
             scope,
             state: State::Undecided(Constraints::default()),
             held: Held::default(),
+            connections: Connections::<K>::new(),
         }))
     }
 
@@ -256,6 +257,7 @@ where
             scope,
             state: State::Decided(Decided { shape, by, origin }),
             held: Held::default(),
+            connections: Connections::<K>::new(),
         }))
     }
 
@@ -561,7 +563,42 @@ where
     /// A union may make a class a part of itself. That is a fact of structure,
     /// asked of [`Classes::is_own_part`], and refusing it is the caller's: which
     /// union closes a cycle depends on the order unions are made in.
+    ///
+    /// The class keeps the connection, whether or not the two were one class
+    /// already: which of several connections merges two classes depends on the
+    /// order they are made in, and that they were all made does not.
     pub fn unify(&mut self, scopes: &Scopes, a: K::Id, b: K::Id, at: ItemId) -> Unified<K> {
+        let unified = self.unite(scopes, a, b, at);
+        let root = self.find(a).id;
+        self.root_mut(root).connections.insert((a, b, at));
+        unified
+    }
+
+    /// Every connection that made `class` the class it is: those that made it
+    /// one class, and those that made one class of a class that holds it as a
+    /// part, in turn. Parts of one name are one class because the classes that
+    /// hold them are, so what made those one made these one.
+    pub fn connections(&self, class: K::Id) -> Connections<K> {
+        let mut found = Connections::<K>::new();
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![self.find(class).id];
+        while let Some(class) = stack.pop() {
+            if !seen.insert(class) {
+                continue;
+            }
+            found.extend(self.root(class).connections.iter().copied());
+            let holders = self
+                .roots()
+                .filter(|holder| self.get(*holder).state.parts().into_iter().any(|part| self.find(part).id == class))
+                .map(|holder| holder.id);
+            stack.extend(holders);
+        }
+        found
+    }
+
+    /// Makes `a` and `b` one class, as [`Classes::unify`] does, and keeps no
+    /// connection: a decision is one, and connects nothing.
+    fn unite(&mut self, scopes: &Scopes, a: K::Id, b: K::Id, at: ItemId) -> Unified<K> {
         let mut unified = Unified::default();
         let mut pairs = vec![(a, b)];
         while let Some((a, b)) = pairs.pop() {
@@ -580,6 +617,7 @@ where
                 scope,
                 state: State::Undecided(Constraints::default()),
                 held: Held::default(),
+            connections: Connections::<K>::new(),
             });
             let Slot::Root(kept_class) = mem::replace(self.slots.get_mut(kept), placeholder) else {
                 unreachable!("find gives a root");
@@ -776,14 +814,15 @@ mod tests {
     fn decided_classes_of_two_layers_are_refused() {
         let mut world = World::new();
         let target = world.undecided();
-        let (shared, shared_by) = world.decided(Shape::Ref(Mutability::Shared, target));
+        let (shared, _) = world.decided(Shape::Ref(Mutability::Shared, target));
         let (exclusive, exclusive_by) = world.decided(Shape::Ref(Mutability::Exclusive, target));
         let (unified, at) = world.unify(shared, exclusive);
         assert_eq!(
             unified.refusals,
-            vec![Refusal {
+            vec![Refused {
                 cause: Cause::Mismatch,
-                items: BTreeSet::from([shared_by, exclusive_by, at]),
+                items: BTreeSet::from([exclusive_by, at]),
+                of: vec![shared],
             }]
         );
     }
@@ -908,6 +947,28 @@ mod tests {
         world.classes.bound(enter, at);
         world.classes.bound(change, at);
         assert_eq!(world.classes.bounds(), &BTreeSet::from([(enter, at), (change, at)]));
+    }
+
+    #[test]
+    fn a_class_keeps_every_connection_made_of_it_whichever_merged_it() {
+        let mut world = World::new();
+        let (a, b, c) = (world.undecided(), world.undecided(), world.undecided());
+        let (_, first) = world.unify(a, b);
+        let (_, second) = world.unify(b, c);
+        // The three are one class already, and this is kept as the others are.
+        let (_, third) = world.unify(a, c);
+        assert_eq!(world.classes.connections(c), BTreeSet::from([(a, b, first), (b, c, second), (a, c, third)]));
+    }
+
+    #[test]
+    fn what_made_a_class_one_made_its_parts_one() {
+        let mut world = World::new();
+        let (a, b) = (world.undecided(), world.undecided());
+        let (x, _) = world.part(a, field("x"), Side::Upper);
+        let (y, _) = world.part(b, field("x"), Side::Upper);
+        let (_, at) = world.unify(a, b);
+        assert!(world.same(x, y));
+        assert_eq!(world.classes.connections(y), BTreeSet::from([(a, b, at)]));
     }
 
     #[test]

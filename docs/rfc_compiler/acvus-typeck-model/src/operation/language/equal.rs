@@ -4,10 +4,10 @@ use std::collections::BTreeSet;
 
 use crate::primitive::ItemId;
 use crate::primitive::class::ClassKind;
-use crate::primitive::refusal::{Cause, Refusal};
+use crate::primitive::refusal::{Cause, Refused};
 
 use super::super::law::Looked;
-use super::{Told, View, decided_by, parts_by_name};
+use super::{Told, View, parts_by_name};
 
 /// What `lower` being equal to `upper` comes to.
 ///
@@ -30,12 +30,10 @@ where
         return Told { looked, asks, way: None };
     };
     if head.layer() != declared.layer() {
-        let mut items = decided_by(classes, lower);
-        items.extend(decided_by(classes, upper));
-        items.insert(at);
-        return Told::done(Looked::Refused(Refusal {
+        return Told::done(Looked::Refused(Refused {
             cause: Cause::Mismatch,
-            items,
+            items: BTreeSet::from([at]),
+            of: vec![lower, upper],
         }));
     }
     Told::done(Looked::Holds {

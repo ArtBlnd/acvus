@@ -10,7 +10,7 @@ use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::class::ClassKind;
 use crate::primitive::domain::Domain;
-use crate::primitive::refusal::Refusal;
+use crate::primitive::refusal::Refused;
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{PartKey, Shape};
 use crate::primitive::ScopeId;
@@ -44,7 +44,7 @@ where
         bounds: Vec<K::Bound>,
     },
     /// It does not hold, and is finished.
-    Refused(Refusal),
+    Refused(Refused<K>),
     /// It cannot be told yet. It is looked at again when a class of `on` is
     /// merged or decided. Until it is finished it may still merge what lies below
     /// each class of `apart`, though not those classes themselves, so none of
@@ -67,7 +67,7 @@ where
     /// head decided are the class's own.
     Head { shape: Shape<K::Id>, by: BTreeSet<ItemId> },
     /// The class cannot take a head by this rung, and the program is refused.
-    Refused(Refusal),
+    Refused(Refused<K>),
 }
 
 /// Where a part named on a class lies, once the class is decided as a head that
@@ -157,5 +157,5 @@ where
     fn offer(&self, classes: &Classes<K>, rung: usize, class: K::Id) -> Offer<K>;
 
     /// What is refused of `class` when nothing more can be done.
-    fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refusal>;
+    fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>>;
 }

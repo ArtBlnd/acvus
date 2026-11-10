@@ -16,14 +16,14 @@ pub mod functions;
 pub mod passing;
 pub mod rungs;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::bound::{Bound, BoundOf};
 use crate::primitive::class::{ClassKind, State};
 use crate::primitive::domain::Domain;
-use crate::primitive::refusal::Refusal;
+use crate::primitive::refusal::Refused;
 use crate::primitive::ty::{PartKey, Shape};
 use crate::store::classes::Classes;
 
@@ -83,7 +83,7 @@ where
         rungs::offer(classes, &self.functions, rung, class)
     }
 
-    fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refusal> {
+    fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>> {
         rungs::end(classes, class)
     }
 }
@@ -163,17 +163,6 @@ where
         Bound::Equal { .. } => equal::look(view, lower, upper, at),
         Bound::Change { .. } => passing::look(view, functions, lower, upper, at),
         Bound::Alone { .. } => alone::look(view, lower, upper),
-    }
-}
-
-/// The items that decided `class`, where it is decided.
-pub(super) fn decided_by<K>(classes: &Classes<K>, class: K::Id) -> BTreeSet<ItemId>
-where
-    K: ClassKind,
-{
-    match &classes.get(classes.find(class)).state {
-        State::Decided(decided) => decided.by.clone(),
-        State::Undecided(_) => BTreeSet::new(),
     }
 }
 

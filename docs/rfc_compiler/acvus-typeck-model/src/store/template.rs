@@ -96,8 +96,15 @@ where
             let Slot::Root(class) = slot else {
                 continue;
             };
-            let Class { state, held, .. } = class.clone().translate::<K, _>(|held| copies[&template.find(held).id()]);
-            *self.slots.get_mut(copies[&id]) = Slot::Root(Class { scope, state, held });
+            let Class {
+                state, held, connections, ..
+            } = class.clone().translate::<K, _>(|held| copies[&template.find(held).id()]);
+            *self.slots.get_mut(copies[&id]) = Slot::Root(Class {
+                scope,
+                state,
+                held,
+                connections,
+            });
         }
         for (id, slot) in template.slots.iter() {
             if let Slot::Link(_) = slot {

@@ -19,13 +19,13 @@ use crate::primitive::{ItemId, Name};
 use crate::primitive::bound::{Bound, BoundOf};
 use crate::primitive::class::{ClassKind, State};
 use crate::primitive::domain::Domain;
-use crate::primitive::refusal::{Cause, Refusal};
+use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{PartKey, Shape, VariantOf};
 use crate::store::classes::Classes;
 
 use super::super::law::Offer;
 use super::functions::Functions;
-use super::{Looked, Told, View, decided_by, enter, tell};
+use super::{Looked, Told, View, enter, tell};
 
 pub const COUNT: usize = 5;
 
@@ -88,16 +88,11 @@ where
             None => Offer::Head { shape: Shape::Never, by },
         },
         Some(shape) => Offer::Head { shape, by },
-        None => {
-            let mut items = by;
-            for (_, bound, _) in &entering {
-                items.extend(decided_by(classes, bound.lower()));
-            }
-            Offer::Refused(Refusal {
-                cause: Cause::Mismatch,
-                items,
-            })
-        }
+        None => Offer::Refused(Refused {
+            cause: Cause::Mismatch,
+            items: by,
+            of: [class].into_iter().chain(entering.iter().map(|(_, bound, _)| bound.lower())).collect(),
+        }),
     }
 }
 
@@ -349,9 +344,10 @@ where
         return Offer::Nothing;
     };
     if domain.0.is_empty() {
-        return Offer::Refused(Refusal {
+        return Offer::Refused(Refused {
             cause: Cause::EmptyDomain,
             items: by,
+            of: vec![class],
         });
     }
     match domain.family() {
@@ -380,7 +376,7 @@ where
 
 /// What is refused of `class` when nothing more can be done: a class that is a
 /// part of itself has no finite type, and a class still undecided has no type.
-pub fn end<K>(classes: &Classes<K>, class: K::Id) -> Vec<Refusal>
+pub fn end<K>(classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
@@ -395,11 +391,10 @@ where
     };
     let mut refusals = Vec::new();
     if classes.is_own_part(class) {
-        let mut items = decided_by(classes, class);
-        items.extend(&named);
-        refusals.push(Refusal {
+        refusals.push(Refused {
             cause: Cause::Occurs,
-            items,
+            items: named.clone(),
+            of: vec![class],
         });
     }
     if let State::Undecided(constraints) = &classes.get(root).state {
@@ -409,9 +404,10 @@ where
             .filter(|(bound, _)| classes.find(bound.lower()) == root || classes.find(bound.upper()) == root)
             .map(|(_, at)| *at);
         let domains = constraints.domains.iter().map(|(_, at)| *at);
-        refusals.push(Refusal {
+        refusals.push(Refused {
             cause: Cause::UndecidedClass,
             items: bounds.chain(named.iter().copied()).chain(domains).collect(),
+            of: vec![class],
         });
     }
     refusals
