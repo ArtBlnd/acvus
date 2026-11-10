@@ -1,0 +1,11 @@
+// from cases/spec/a-lower-bound-reaching-a-part-of-its-own.case
+// let mut x = None;
+// x = Some(x);
+none <- Option<k>;
+some_x <- Option<s>;
+x <- none;
+s <- x;
+x <- some_x;
+
+assert refused ..;
+assert refused Occurs, ..;

@@ -1,0 +1,12 @@
+// from cases/phases/join-two-sources-with-no-join.case
+// u8 and u16 have no common ancestor, so A's sources have no join and A is
+// refused.
+// not asserted here: //@ order: join A
+// not asserted here: assert trace "join A: no join";
+// not asserted here: assert trace "refuse: no_join {A} by {`A: Text`, `u16 <= A`, `u8 <= A`}";
+u8_ <- u8;
+u16_ <- u16;
+a <- u8_;
+a <- u16_;
+
+assert refused Mismatch, ..;

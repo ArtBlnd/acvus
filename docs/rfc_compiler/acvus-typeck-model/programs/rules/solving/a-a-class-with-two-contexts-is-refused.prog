@@ -1,0 +1,20 @@
+// from cases/rules/solving/a-a-class-with-two-contexts-is-refused.case
+// let x; take_b(x); take_a(x);         // extern types A, B; a cast A -> B
+// Nothing enters X, and X passes into two contexts of two types, B and A.
+// The meet of the two along the cast, A, would type X, and then binding x
+// into one more place would change its type: a context chooses no type.
+// X is unified with the one type of its contexts, and two types refuse it,
+// at X, whatever the order.
+// not asserted here: assert X: none;
+// not asserted here: assert refused contexts X;
+row up: A -> B;
+declare take_b_p0 = B;
+declare take_b_result = ();
+take_b_0: pass x to take_b_p0;
+take_b_x <- take_b_result;
+declare take_a_p0 = A;
+declare take_a_result = ();
+take_a_0: pass x to take_a_p0;
+take_a_x <- take_a_result;
+
+assert refused ..;

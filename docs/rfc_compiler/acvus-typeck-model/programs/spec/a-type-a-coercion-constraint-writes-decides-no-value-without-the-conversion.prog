@@ -1,0 +1,25 @@
+// from cases/spec/a-type-a-coercion-constraint-writes-decides-no-value-without-the-conversion.case
+// let mut buf = Vec::new();
+// push(&mut buf, 1u16);    // push(&mut Vec<T>, T)
+// consume(buf);            // consume(Vec<u8>)
+// not asserted here: assert failing [`B ~> consume.Param(0)`];
+one_u16 <- u16;
+declare new_result = Vec<new_t>;
+new <- new_result;
+b <- new;
+lend: ref_mut_buf <- &mut b;
+declare push_p0 = &mut Vec<push_t>;
+declare push_p1 = push_t;
+declare push_result = ();
+push_0: pass ref_mut_buf to push_p0;
+push_1: pass one_u16 to push_p1;
+push <- push_result;
+declare consume_p0 = Vec<u8>;
+declare consume_result = ();
+consume_0: pass b to consume_p0;
+consume <- consume_result;
+
+// Refused at consume(buf), as with the conversion
+// (`a-type-a-coercion constraint-writes-decides-no-value`).
+assert refused ..;
+assert b: Vec<u16>;

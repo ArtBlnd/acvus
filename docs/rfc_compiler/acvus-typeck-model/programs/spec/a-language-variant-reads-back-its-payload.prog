@@ -1,0 +1,13 @@
+// from cases/spec/a-language-variant-reads-back-its-payload.case
+// let o; if let Some(x) = o { takes_u8(x) }
+// The pattern is a use of o's value, and the text shows no value entering O.
+// x's context gives x a type, but O itself is used and never given a value:
+// O gets no type, whatever its payload's context says.
+some: some_0 <- o.Some;
+x: x <- some_0;
+declare takes_u8_p0 = u8;
+declare takes_u8_result = ();
+takes_u8_0: pass x to takes_u8_p0;
+takes_u8_x <- takes_u8_result;
+
+assert refused UndecidedClass, ..;

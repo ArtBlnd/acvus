@@ -1,0 +1,11 @@
+// from cases/phases/decomposition-a-litvar-passing-into-a-type.case
+// ?N ~> U unifies ?N with U.
+// not asserted here: //@ order: join 0
+// not asserted here: assert record records `0 ~> W`;
+// not asserted here: assert join records `0: u8`;
+w <- u8;
+zero <- {integer};
+w <- zero;
+
+assert accepted;
+assert zero: u8;

@@ -1,0 +1,22 @@
+// from cases/spec/a-fill-takes-a-literal-upper-bound.case
+// let x = None;
+// let y = if c { x } else { Some(1) };
+// take(x);                 // take(Option<u8>)
+// x's payload P passes into y's payload Q, which holds only a LitVar nothing
+// more decides, and into u8: the LitVar takes u8 as at a narrowing, so P is
+// filled u8, and Q joins it. Accepted in every order.
+none <- Option<k>;
+one <- {integer};
+some_1 <- Option<s>;
+u8_ <- u8;
+option_u8 <- Option<u8_>;
+x <- none;
+y <- x;
+s <- one;
+y <- some_1;
+option_u8 <- x;
+
+assert accepted;
+assert x: Option<u8>;
+assert y: Option<u8>;
+assert one: u8;

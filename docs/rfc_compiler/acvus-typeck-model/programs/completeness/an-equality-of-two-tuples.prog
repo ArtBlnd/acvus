@@ -1,0 +1,24 @@
+// from cases/completeness/an-equality-of-two-tuples.case
+// let t = (1u8, 2u8);
+// t == t;                  // core::eq(&u8, &u8) -> bool, the impl of eq<T>(&T, &T) -> bool at u8
+// == is a use of core::eq, each operand lent. At the structural type
+// (u8, u8) the candidate of the generic function is eq called at each part.
+// not asserted here: assert outcomes 1;
+tuple_one_u8_two_u8 <- (c0, c1);
+one_u8 <- u8;
+two_u8 <- u8;
+c0 <- one_u8;
+c1 <- two_u8;
+t <- tuple_one_u8_two_u8;
+ref_t: ref_t <- &t;
+ref_t_2: ref_t_2 <- &t;
+declare eq_p0 = &u8;
+declare eq_p1 = &u8;
+declare eq_result = bool;
+eq_0: pass ref_t to eq_p0;
+eq_1: pass ref_t_2 to eq_p1;
+t_eq_t <- eq_result;
+
+assert accepted;
+assert t: (u8, u8);
+assert t_eq_t: bool;

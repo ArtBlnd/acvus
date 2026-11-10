@@ -1,0 +1,13 @@
+// from cases/spec/an-array-of-two-types.case
+// let a = [1u8, s];
+// Both components pass into the one element part, where u8 and &str have no
+// join.
+str_ <- str;
+s <- &str_;
+one_u8 <- u8;
+array_one_u8_s <- [e; 2];
+e <- one_u8;
+e <- s;
+a <- array_one_u8_s;
+
+assert refused ..;

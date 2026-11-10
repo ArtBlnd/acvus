@@ -1,0 +1,14 @@
+// from cases/rules/place/a-one-type-parameter-is-entered-by-both-arguments.case
+// pair(1u8, 2u16)          // pair<T>(T, T)
+// pair's T is an unknown of the entry made at this use, so both
+// arguments enter it: two lower bounds, u8 and u16, with no join.
+one_u8 <- u8;
+two_u16 <- u16;
+declare pair_p0 = pair_t;
+declare pair_p1 = pair_t;
+declare pair_result = ();
+pair_0: pass one_u8 to pair_p0;
+pair_1: pass two_u16 to pair_p1;
+pair_call <- pair_result;
+
+assert refused Mismatch, ..;

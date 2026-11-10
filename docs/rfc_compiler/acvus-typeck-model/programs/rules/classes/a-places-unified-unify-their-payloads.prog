@@ -1,0 +1,27 @@
+// from cases/rules/classes/a-places-unified-unify-their-payloads.case
+// let mut a = Some(1u8);
+// let mut b = Some(2u16);
+// let r = if c { &mut a } else { &mut b };
+// Neither A nor B is a reference, so each lend's target is its place.
+// R's two lower bounds are &mut references, whose target is invariant, so
+// R's target equals A and equals B, and A and B are unified.
+// Their payloads, the same variant's, are unified in turn (congruence), or
+// the one class takes Option once with both lower bounds: either
+// way one payload class has the lower bounds u8 and u16, which have no
+// common ancestor, so it has no value.
+// not asserted here: assert `lend a` == lend &mut place;
+// not asserted here: assert `lend b` == lend &mut place;
+one_u8 <- u8;
+some_one_u8 <- Option<s1>;
+two_u16 <- u16;
+some_two_u16 <- Option<s2>;
+s1 <- one_u8;
+a <- some_one_u8;
+s2 <- two_u16;
+b <- some_two_u16;
+lend_a: ref_mut_a <- &mut a;
+lend_b: ref_mut_b <- &mut b;
+r <- ref_mut_a;
+r <- ref_mut_b;
+
+assert refused Mismatch, ..;

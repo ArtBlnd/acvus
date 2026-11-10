@@ -1,0 +1,19 @@
+// from cases/rules/classes/a-an-index-into-a-type-with-no-view.case
+// let o = Some(1u8);
+// let x = o[0];
+// The projection o[0] reads whether O is a reference; O's only source, its
+// lower bound Some(1u8), is an Option, so it applies to O,
+// whose structure is then the conjunction of Option and "indexes T". An
+// Option is structural, not an extern-defined container, so it has no view,
+// and a type with no view cannot have that structure constraint: O is
+// refused there.
+// not asserted here: assert `o[0]` == applied;
+// not asserted here: assert refused conflict at "O: index o[0]";
+one_u8 <- u8;
+some_one_u8 <- Option<s>;
+s <- one_u8;
+o <- some_one_u8;
+o_0: o_0 <- o.[];
+x <- o_0;
+
+assert refused ..;

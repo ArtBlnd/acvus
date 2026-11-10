@@ -1,0 +1,15 @@
+// from cases/holes/a-pattern-on-a-scrutinee-of-type-never.case
+// let n = never();         // never() -> !
+// if let Some(x) = n { }
+// The structure constraint "has variant Some" gives no member, so N is !; `!`, which has no
+// value, satisfies every structure constraint, so the pattern decides nothing, and x's type, which
+// nothing enters, falls back to !.
+declare never_result = !;
+never <- never_result;
+n <- never;
+some: some_0 <- n.Some;
+x: x <- some_0;
+
+assert accepted;
+assert n: !;
+assert x: !;

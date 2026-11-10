@@ -1,0 +1,14 @@
+// from cases/holes/a-field-on-a-class-the-host-bounds.case
+// let a = @cfg;            // @cfg is { name: String }, given by the host
+// a.extra = 1;
+// Read by the member, extra is written by the text and visible, and a grows to
+// {extra, name}.
+string <- String;
+declare cfg = {name: string};
+one <- {integer};
+a <- cfg;
+a_extra: a_extra <- a.extra;
+a_extra <- one;
+
+assert accepted;
+assert a: {extra: i32, name: String};

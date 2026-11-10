@@ -1,0 +1,12 @@
+// from cases/rules/solving/a-litvar-into-a-type-that-cannot-hold-it.case
+// take(300);               // take(u8)
+// The literal passes into take's parameter u8, a coercion constraint ?{300} ~> u8, and
+// ?N ~> U unifies ?N with U. u8 does not hold 300, so the
+// unification has no result: refused there.
+three_hundred <- {integer};
+declare take_p0 = u8;
+declare take_result = ();
+take_0: pass three_hundred to take_p0;
+take_three_hundred <- take_result;
+
+assert refused EmptyDomain, ..;

@@ -1,0 +1,16 @@
+// from cases/rules/place/a-a-field-through-a-reference-lands-on-the-target.case
+// let r = &1u8;
+// r.f;
+// r is a reference, so the field projection applies to its target, the
+// class of 1u8, whose structure u8 has no field f: the conjunction no type satisfies
+// leaves it with no value, refused there. One outcome in every
+// order: the target, a part of R, waits for R to take its constructor,
+// which the model once let it solve before, in two outcomes.
+// not asserted here: assert `r.f` == applied through;
+// not asserted here: assert refused conflict at "1u8 = R.Target";
+one_u8 <- u8;
+ref_one_u8: ref_one_u8 <- &one_u8;
+r <- ref_one_u8;
+r_f: r_f <- r.f;
+
+assert refused ..;

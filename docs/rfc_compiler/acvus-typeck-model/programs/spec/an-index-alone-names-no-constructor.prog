@@ -1,0 +1,11 @@
+// from cases/spec/an-index-alone-names-no-constructor.case
+// let a;
+// a[0] = 1;
+// The structure constraint "indexes t" names no member, so A has no source that gives a
+// constructor and falls back to !, whose element is !: the literal
+// entering it has no type there.
+one <- {integer};
+a_0: a_0 <- a.[];
+a_0 <- one;
+
+assert refused ..;

@@ -1,0 +1,17 @@
+// from cases/probe/contexts-after-a-refused-lower.case
+// let k = if c { 1u8 } else { s }; let l = k; take_u16(l);
+// K has no join, u8 and &str. L has the refused K as its lower bound and
+// passes into u16. Undecided: whether L is contextually typed u16, the
+// refusal staying at K, or has no value, the refusal reaching it.
+str_ <- str;
+s <- &str_;
+one_u8 <- u8;
+k <- one_u8;
+k <- s;
+l <- k;
+declare take_p0 = u16;
+declare take_result = ();
+take_0: pass l to take_p0;
+take_u16_l <- take_result;
+
+assert refused ..;

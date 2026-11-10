@@ -1,0 +1,14 @@
+// from cases/probe/a-deref-constraint-and-a-context.case
+// let x; *x; take(x);                  // take(&u8)
+// Nothing enters X; a Deref gives it the structure constraint "a reference
+// to tau", which names no member and so gives no head; X passes into &u8.
+// Undecided: whether the constraint counts as something entering X, so
+// that X is not contextually typed, or as a check on the type the context
+// gives.
+deref: deref_x <- x.*;
+declare take_p0 = &u8;
+declare take_result = ();
+take_0: pass x to take_p0;
+take_x <- take_result;
+
+assert accepted;

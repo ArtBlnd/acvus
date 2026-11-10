@@ -1,0 +1,15 @@
+// from cases/spec/a-literal-binding-into-u8-and-a-u16-lower-bound.case
+// let a = 1; takes_u8(a); let x = a; x = 2u16;
+// x waits for its lower bound a, which is unified with u8 by its coercion constraint
+// before x is joined, so x has no join of u8 and u16 in every order.
+one <- {integer};
+a <- one;
+declare takes_u8_p0 = u8;
+declare takes_u8_result = ();
+takes_u8_0: pass a to takes_u8_p0;
+takes_u8_a <- takes_u8_result;
+x <- a;
+two_u16 <- u16;
+x <- two_u16;
+
+assert refused ..;

@@ -1,0 +1,9 @@
+// from cases/spec/a-language-variant-names-its-constructor.case
+// let o; if let Some(x) = o { }
+// The pattern is a use of o's value, and the text shows no value entering O.
+// The variant it names makes no type, and `!` would promise that no value of
+// O exists where the pattern reads one. O gets no type.
+some: some_0 <- o.Some;
+x: x <- some_0;
+
+assert refused UndecidedClass, ..;

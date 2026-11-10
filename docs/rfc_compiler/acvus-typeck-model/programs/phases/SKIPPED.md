@@ -1,0 +1,2 @@
+- disjunction-an-overload-decided-and-what-it-records.case: a use of `f`, which two declarations give
+- disjunction-what-every-candidate-shares.case: a use of `g`, which two declarations give

@@ -1,0 +1,13 @@
+// from cases/phases/join-a-class-reaching-a-part-of-its-own.case
+// X >= Some(x), whose payload S >= X: X reaches a part of its own along lower
+// bounds and parts, and no finite type holds it.
+// not asserted here: //@ order: join X
+// not asserted here: assert trace "join X: infinite";
+// not asserted here: assert trace "refuse: infinite {X} by {`None <= X`, `Some(x) <= X`, `X <= S`, `X: Text`}";
+none <- Option<k>;
+some_x <- Option<s>;
+x <- none;
+s <- x;
+x <- some_x;
+
+assert refused Occurs, ..;

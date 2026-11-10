@@ -1,0 +1,17 @@
+// from cases/phases/record-a-lower-bound-a-coercion-constraint-and-an-equation.case
+// A value passing into an unknown is a lower bound, recorded as a lower bound; into
+// a type the text writes, a coercion constraint; an invariant place gives an equation.
+// Each is recorded as the text gives it, before anything is solved.
+// not asserted here: //@ order:
+// not asserted here: assert record records `1u8 <= A`;
+// not asserted here: assert record records `1u8 ~> W`;
+// not asserted here: assert record records `A = B`;
+w <- u8;
+one_u8 <- u8;
+a <- one_u8;
+w <- one_u8;
+a <- b;
+b <- a;
+
+assert accepted;
+assert b: u8;

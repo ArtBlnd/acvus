@@ -1,0 +1,15 @@
+// from cases/phases/join-the-constructor-a-lower-bound-gives.case
+// A takes the constructor and members its solved lower bound gives, its part
+// made anew.
+// Once both sides of Some(1u8) <= A are solved, their parts are related, a
+// structural type's part by a part lower bound.
+// not asserted here: //@ order: join A
+// not asserted here: assert trace "join A: Option";
+// not asserted here: assert decomposition records `S <=p A.Payload(Some)`;
+u8_ <- u8;
+some_1u8 <- Option<s>;
+s <- u8_;
+a <- some_1u8;
+
+assert accepted;
+assert a: Option<u8>;

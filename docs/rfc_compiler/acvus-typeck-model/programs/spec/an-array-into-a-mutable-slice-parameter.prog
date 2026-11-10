@@ -1,0 +1,17 @@
+// from cases/spec/an-array-into-a-mutable-slice-parameter.case
+// let mut a = [1u8, 2u8]; fill(&mut a);   // fill(&mut [u8])
+// As with a shared reference, by the exclusive view.
+// not asserted here: assert `&mut a` == lend &mut place;
+// not asserted here: assert check `&mut a ~> fill.Param(0)` == cast core::array_view_mut#0;
+one_u8 <- u8;
+two_u8 <- u8;
+a <- [e; 2];
+e <- one_u8;
+e <- two_u8;
+ref_mut_a: ref_mut_a <- &mut a;
+declare fill_p0 = &mut [u8];
+declare fill_result = ();
+fill_0: pass ref_mut_a to fill_p0;
+fill <- fill_result;
+
+assert accepted;

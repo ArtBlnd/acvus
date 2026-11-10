@@ -1,0 +1,21 @@
+// from cases/rules/place/a-a-lend-of-a-field-targets-the-fields-class.case
+// let a;
+// a.x = 1u8;
+// take(&a.x);              // take(&u16)
+// The place a.x has the type the projection names, so the lend targets
+// that class by an equation. The coercion constraint into &u16 records a.x ~> u16
+// toward a type the declaration writes, which decides no value: a.x is
+// u8, and &u8 reaches &u16 by no coercion.
+// not asserted here: assert `a.x` == applied;
+// not asserted here: assert lend == lend & place;
+// not asserted here: assert failing [`&a.x ~> take.Param(0)`];
+one_u8 <- u8;
+a_x: a_x <- a.x;
+a_x <- one_u8;
+lend: ref_a_x <- &a_x;
+declare take_p0 = &u16;
+declare take_result = ();
+take_0: pass ref_a_x to take_p0;
+take_call <- take_result;
+
+assert refused ..;

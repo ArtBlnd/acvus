@@ -1,0 +1,13 @@
+// from cases/rules/place/a-a-tuple-pattern-projects-each-position.case
+// let (_, _) = mk();       // mk() -> (u8,)
+// The pattern records a Component projection at each of its positions,
+// and _ records nothing. The scrutinee's value (u8,) has no component 1,
+// so it is no type that satisfies its structure constraint.
+// not asserted here: assert `.1` == applied;
+// not asserted here: assert refused conflict at "mk(): component 1: .1";
+declare mk_result = (u8,);
+mk_call <- mk_result;
+dot_0: dot_0 <- mk_call.0;
+dot_1: dot_1 <- mk_call.1;
+
+assert refused ..;

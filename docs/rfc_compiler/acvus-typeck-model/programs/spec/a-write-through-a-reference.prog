@@ -1,0 +1,17 @@
+// from cases/spec/a-write-through-a-reference.case
+// let mut x = None;
+// let r = &mut x;
+// *r = Some(1u8);
+// not asserted here: assert `&mut x` == lend &mut place;
+none <- Option<k>;
+some_one_u8 <- Option<s>;
+one_u8 <- u8;
+x <- none;
+ref_mut_x: ref_mut_x <- &mut x;
+r <- ref_mut_x;
+deref_r: deref_r <- r.*;
+s <- one_u8;
+deref_r <- some_one_u8;
+
+assert accepted;
+assert x: Option<u8>;

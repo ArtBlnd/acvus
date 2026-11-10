@@ -1,0 +1,12 @@
+// from cases/spec/a-for-over-a-vec-by-value.case
+// for x in v {}   // v: Vec<u8>
+// Anything that is indexed is gone over: x reads Vec's element by value, u8.
+row core_as_slice<T>: &Vec<T> -> &[T];
+row core_as_slice_mut<T>: &mut Vec<T> -> &mut [T];
+u8_ <- u8;
+v <- Vec<u8_>;
+v_elem: v_any <- v.[];
+x: x <- v_any;
+
+assert accepted;
+assert x: u8;

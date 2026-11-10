@@ -1,0 +1,21 @@
+// from cases/rules/place/a-a-lend-of-a-reference-place-targets-its-target.case
+// let x = 1u8;
+// let r = &x;
+// take(&r);                // take(&u16)
+// r is &X, so &r lends X itself. The coercion constraint into &u16 records
+// X ~> u16 toward a type the declaration writes, which decides no value:
+// X is u8, and &u8 reaches &u16 by no coercion.
+// not asserted here: assert `&x` == lend & place;
+// not asserted here: assert `&r` == lend & through;
+// not asserted here: assert failing [`&r ~> take.Param(0)`];
+one_u8 <- u8;
+x <- one_u8;
+ref_x: ref_x <- &x;
+r <- ref_x;
+ref_r: ref_r <- &r;
+declare take_p0 = &u16;
+declare take_result = ();
+take_0: pass ref_r to take_p0;
+take_call <- take_result;
+
+assert refused ..;

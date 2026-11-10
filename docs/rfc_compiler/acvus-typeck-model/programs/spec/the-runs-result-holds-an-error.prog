@@ -1,0 +1,25 @@
+// from cases/spec/the-runs-result-holds-an-error.case
+// let a = parse_r("7")?; Ok(a)      // parse_r(&str) -> Result<u8, PErr>
+// The script's result is Result<u8, Error{PErr(PErr)}>, which ? alone makes;
+// the run's result passes into the type the embedding declares for
+// it, which may hold an Error, the place a value leaves the program
+// by: accepted.
+str_ <- str;
+s <- &str_;
+ok_a <- Result<cap_s, e>;
+u8_ <- u8;
+p <- PErr;
+declare err = Error{PErr(p)};
+declare d = Result<u8_, err>;
+declare parse_r_p0 = &str;
+declare parse_r_result = Result<u8, PErr>;
+parse_r_0: pass s to parse_r_p0;
+parse_r_s <- parse_r_result;
+q: a <- parse_r_s.Ok;
+r <- Result<q_ok, q_error>;
+exit parse_r_s.Err to q_error;
+cap_s <- a;
+r <- ok_a;
+d <- r;
+
+assert accepted;

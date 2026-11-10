@@ -1,0 +1,27 @@
+// from cases/completeness/two-references-into-a-written-slice-reference.case
+// let v = make();                    // make() -> Vec<u8>; the view as_slice(&Vec<T>) -> &[T]
+// let a = [1u8, 2u8];
+// let s: &[u8] = if c { &v } else { &a };
+// s's type is written, so each branch's value passes into it by a
+// coercion constraint.
+// not asserted here: assert outcomes 1;
+row as_slice<T>: &Vec<T> -> &[T];
+declare make_result = Vec<u8>;
+make <- make_result;
+v <- make;
+array_one_u8_two_u8 <- [u8_; 2];
+one_u8 <- u8;
+two_u8 <- u8;
+u8_ <- one_u8;
+u8_ <- two_u8;
+a <- array_one_u8_two_u8;
+ref_v: ref_v <- &v;
+ref_a: ref_a <- &a;
+su8 <- u8;
+sl <- [su8];
+s <- &sl;
+s <- ref_v;
+s <- ref_a;
+
+assert accepted;
+assert s: &[u8];

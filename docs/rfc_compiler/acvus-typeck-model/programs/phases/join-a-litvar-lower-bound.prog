@@ -1,0 +1,13 @@
+// from cases/phases/join-a-litvar-lower-bound.case
+// A LitVar lower bound of a class that waits for nothing is unified with it
+// as the class is solved.
+// not asserted here: //@ order: join A
+// not asserted here: assert join records `A: u8`;
+zero <- {integer};
+u8_ <- u8;
+a <- u8_;
+a <- zero;
+
+assert accepted;
+assert a: u8;
+assert zero: u8;

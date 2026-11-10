@@ -1,0 +1,14 @@
+// from cases/phases/unify-a-conflict-refused-at-its-relation.case
+// The projection, decided, records that @cfg has the field extra, which the
+// object {name} the host gives does not hold: refused at that relation.
+// not asserted here: //@ order: decide `@cfg.extra`
+// not asserted here: assert trace "decide `@cfg.extra`: applied";
+// not asserted here: assert disjunction records `@cfg: field extra: @cfg.extra`;
+// not asserted here: assert refused conflict at "@cfg: field extra: @cfg.extra";
+string <- String;
+declare cfg = {name: string};
+one <- {integer};
+cfg_extra: cfg_extra <- cfg.extra;
+cfg_extra <- one;
+
+assert refused ..;

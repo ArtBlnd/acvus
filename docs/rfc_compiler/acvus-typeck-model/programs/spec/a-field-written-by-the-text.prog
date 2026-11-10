@@ -1,0 +1,12 @@
+// from cases/spec/a-field-written-by-the-text.case
+// let a;
+// a.x = 0;
+// The projection is a use of a's value, and the text shows no value entering
+// A: no lower bound, no occurrence. A type made from the projection would come
+// from no value, and `!` would promise that no value of A exists where the
+// text uses one. A gets no type.
+zero <- {integer};
+a_x: a_x <- a.x;
+a_x <- zero;
+
+assert refused UndecidedClass, ..;

@@ -1,0 +1,28 @@
+- a-branch-that-returns-gives-no-value.case: a group's fn and a use of it
+- a-call-of-two-instances-closures.case: a group and a lambda
+- a-call-through-a-reference.case: a lambda and a call of a function value
+- a-capture-written-by-a-lambda-passed-into-a-function-type-accepted.case: a lambda
+- a-capture-written-by-a-lambda-passed-into-a-function-type.case: a lambda
+- a-capture-written-by-name-called-with-two-types.case: a lambda
+- a-capture-written-by-name.case: a lambda
+- a-cast-by-its-operands-type.case: a name several declarations give (cast_u8)
+- accumulation-that-starts-from-a-literal.case: a name several declarations give (core::add)
+- a-closure-returned-from-a-function.case: a group and a lambda
+- a-conversion-carries-a-lambda-into-a-called-value.case: a lambda
+- a-conversion-carries-a-lambda-the-type-does-not-name.case: a lambda
+- a-counter-compared-with-a-typed-value.case: a name several declarations give (core::add, core::eq)
+- a-for-over-a-mutable-reference.case: a bind that lends through a reference
+- a-for-over-a-range.case: a name several declarations give (range)
+- a-for-over-a-reference.case: a bind that lends through a reference
+- a-function-value-into-a-function-type-by-a-conversion.case: a lambda
+- a-function-value-into-a-function-type.case: a lambda
+- a-function-value-into-a-function-type-it-satisfies.case: a lambda
+- a-lambda-calls-a-function-that-returns-a-closure.case: a group and a lambda
+- a-lambda-calls-a-function-with-a-capture-and-its-parameter.case: a group and a lambda
+- a-lambda-never-called.case: a lambda
+- a-lambda-never-called-passes-a-literal-capture-to-a-function.case: a group and a lambda
+- a-lambda-passes-a-capture-and-its-parameter-apart.case: a lambda
+- a-lambda-pushes-its-parameter-into-a-capture.case: a lambda
+- a-lambda-writes-its-parameter-into-a-capture.case: a lambda
+- a-lambda-writes-two-types-a-cast-joins.case: a lambda
+- a-lend-of-a-use-result.case: a name several declarations give (get, core::add)

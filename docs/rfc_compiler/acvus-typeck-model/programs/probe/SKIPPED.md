@@ -1,0 +1,7 @@
+- a-choice-couples-its-positions.case: a use of `f`, which two declarations give
+- a-generalization-joins-two-arguments-a-candidate-coerces-apart.case: a use of `same`, which two declarations give
+- a-literal-at-a-generic-and-a-written-candidate.case: a use of `f`, which two declarations give
+- a-structure-decides-a-use-before-its-part.case: a use of `take`, which two declarations give
+- an-overload-by-constructor-chosen-through-a-mutable-lend.case: a use of `make`, which two declarations give
+- an-overload-by-its-result-read-through-a-variant.case: a use of `parse`, which two declarations give
+- two-candidates-of-two-ranks-are-ambiguous.case: a use of `f`, which two declarations give

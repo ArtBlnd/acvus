@@ -1,0 +1,19 @@
+// from cases/rules/place/a-a-binding-on-a-path-with-no-reference-reads.case
+// let p = mk();            // mk() -> {x: u8}
+// let {x: a} = p;
+// take(a);                 // take(&u8)
+// No class on a's path is a reference, so the binding reads its position:
+// a is u8, and u8 reaches &u8 by no coercion.
+// not asserted here: assert a == read;
+// not asserted here: assert failing [`A ~> take.Param(0)`];
+declare mk_result = {x: u8};
+mk_call <- mk_result;
+p <- mk_call;
+dot_x: dot_x <- p.x;
+a: a <- dot_x;
+declare take_p0 = &u8;
+declare take_result = ();
+take_0: pass a to take_p0;
+take_a <- take_result;
+
+assert refused ..;

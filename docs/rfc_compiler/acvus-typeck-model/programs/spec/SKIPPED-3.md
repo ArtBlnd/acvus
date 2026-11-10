@@ -1,0 +1,29 @@
+- a-write-through-a-captured-reference.case: a lambda and a call of a function value
+- block-a-capture-read-in-a-loop.case: a lambda
+- block-a-decided-value-takes-no-conversion-at-a-lower-bound.case: a lambda
+- block-a-literal-left-in-c-falls-back.case: a lambda
+- block-a-literal-left-in-c-takes-the-type-it-passes-into.case: a lambda
+- block-a-part-left-in-c-falls-back.case: a lambda
+- block-a-part-left-in-c-takes-the-type-it-passes-into.case: a lambda
+- block-a-write-to-a-capture.case: a lambda
+- block-collects-try.case: a lambda
+- block-joined-with-an-invariant-part.case: a lambda
+- block-joined-with-a-structural-value.case: a lambda
+- identity-made-anew-at-each-instance.case: an extern-defined type with an identity (F<#>)
+- one-identity-and-two.case: an extern-defined type with an identity (F<#>)
+- operators-that-are-no-lang-items.case: a name several declarations give (xor, shl)
+- recursion-by-name.case: a group's fn and a use of it
+- try-an-error-is-not-wrapped.case: a group's fn and a use of it
+- try-an-error-of-no-name-and-one-of-a-name.case: a group's fn and a use of it
+- try-an-error-part-nothing-enters.case: a group's fn and a use of it
+- try-an-option.case: a group's fn and a use of it
+- try-two-errors-of-a-name-enter-one-class.case: a group's fn and a use of it
+- try-two-errors-of-no-name-enter-one-class.case: a group's fn and a use of it
+- two-closures-of-two-instances.case: a group and a lambda
+- two-functions-that-call-each-other.case: a group's fn and a use of it
+- two-functions-that-call-each-other-with-i32.case: a group's fn and a use of it
+- two-identities-with-no-ancestor.case: an extern-defined type with an identity (F<#>)
+- two-literals-enter-one-unknown.case: a name several declarations give (xor)
+- two-operands-enter-one-class.case: a name several declarations give (core::add)
+- two-operands-enter-one-class-where-one-is-written.case: a name several declarations give (core::add)
+- two-uses-that-fill-one-literal.case: a name several declarations give (n, m)

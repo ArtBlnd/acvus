@@ -1,0 +1,10 @@
+// from cases/rules/classes/a-class-equated-with-two-types-has-no-value.case
+// A class equated with u8 and with u16: unified, its structure is their conjunction,
+// which no type satisfies, so it has no value, refused.
+// not asserted here: assert A: none;
+u8_ <- u8;
+u16_ <- u16;
+a <- u8_; u8_ <- a;
+a <- u16_; u16_ <- a;
+
+assert refused ..;

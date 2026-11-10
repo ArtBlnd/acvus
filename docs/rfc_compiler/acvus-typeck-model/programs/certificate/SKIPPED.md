@@ -1,0 +1,8 @@
+- a-function-value-passed-through-a-use.case: a `group` and a use of its `fn`
+- a-lambda-at-each-place-a-conversion-writes-one-variable.case: a `lambda`
+- a-lambda-in-a-payload-into-a-function-type.case: a `lambda`
+- a-lambda-into-a-closed-function-type.case: a `lambda`
+- a-lambda-through-a-cast.case: a `lambda`
+- a-lambda-through-a-conversion.case: a `lambda`
+- a-lambda-through-a-view.case: a `lambda`
+- a-wrong-value-or-decision-fails.case: a use of `probe`, which two declarations give

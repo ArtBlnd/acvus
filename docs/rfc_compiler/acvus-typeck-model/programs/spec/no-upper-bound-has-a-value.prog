@@ -1,0 +1,16 @@
+// from cases/spec/no-upper-bound-has-a-value.case
+// let x = None;
+// let y = if c { x } else { Some(1) };
+// No upper bound of x's payload has a value, so it is not filled; the fallback
+// makes it ! and the literal i32.
+none <- Option<k>;
+one <- {integer};
+some_one <- Option<s>;
+x <- none;
+y <- x;
+s <- one;
+y <- some_one;
+
+assert accepted;
+assert x: Option<i32>;
+assert y: Option<i32>;

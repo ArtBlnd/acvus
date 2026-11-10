@@ -1,0 +1,20 @@
+// from cases/rules/solving/a-a-class-passing-into-a-type-that-holds-it-is-not-filled.case
+// let a;
+// f(&a, &a);               // f<T>(&T, &Vec<T>)
+// Each lend's target is A, which is a reference in no reading. Each argument
+// passes into a reference the declaration gives, a coercion constraint, whose decomposition links
+// the targets: toward the unknown T, an equation A = T; toward the
+// written Vec<T>, the coercion constraint A ~> Vec<T>. Nothing enters A, and the one upper bound
+// it has, Vec<T>, has a value only once A has one, so A is not filled
+// and falls back to !. &! reaches &Vec<!> by no coercion.
+// not asserted here: assert A: none;
+lend_1: ref_a_1 <- &a;
+lend_2: ref_a_2 <- &a;
+declare f_p0 = &f_t;
+declare f_p1 = &Vec<f_t>;
+declare f_result = ();
+f_0: pass ref_a_1 to f_p0;
+f_1: pass ref_a_2 to f_p1;
+f_call <- f_result;
+
+assert refused UndecidedClass, ..;

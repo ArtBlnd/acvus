@@ -1,0 +1,12 @@
+// from cases/spec/an-if-with-information-on-one-side.case
+// let a = if c { Some(1u8) } else { None };
+u8_ <- u8;
+some_one_u8 <- Option<s>;
+none <- Option<k>;
+s <- u8_;
+a <- some_one_u8;
+a <- none;
+
+assert accepted;
+assert a: Option<u8>;
+assert k: u8;

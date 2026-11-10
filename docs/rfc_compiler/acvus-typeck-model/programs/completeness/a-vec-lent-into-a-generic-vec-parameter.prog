@@ -1,0 +1,19 @@
+// from cases/completeness/a-vec-lent-into-a-generic-vec-parameter.case
+// let v = make();          // make() -> Vec<u8>; the view as_slice(&Vec<T>) -> &[T]
+// let f = first(&v);       // first<T>(&Vec<T>) -> Option<&T>
+// &v passes into &Vec<T>, of the same node: no cast.
+// not asserted here: assert outcomes 1;
+row as_slice<T>: &Vec<T> -> &[T];
+declare make_result = Vec<u8>;
+make <- make_result;
+v <- make;
+ref_v: ref_v <- &v;
+declare first_p0 = &Vec<first_t>;
+declare first_result = Option<&first_t>;
+first_0: pass ref_v to first_p0;
+first <- first_result;
+f <- first;
+
+assert accepted;
+assert v: Vec<u8>;
+assert f: Option<&u8>;

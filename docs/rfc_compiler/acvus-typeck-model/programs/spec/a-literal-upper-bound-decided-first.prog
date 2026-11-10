@@ -1,0 +1,21 @@
+// from cases/spec/a-literal-upper-bound-decided-first.case
+// let x = None;
+// let y = if c { x } else { Some(1) };
+// take(x); take16(y);      // take(Option<u8>), take16(Option<u16>)
+// y's payload has its coercion constraint into u16 left to unify, so P waits for
+// it, and its upper bounds are then u16 and u8: no fill, refused in every order.
+none <- Option<k>;
+one <- {integer};
+some_one <- Option<s>;
+u8_ <- u8;
+option_u8 <- Option<u8_>;
+u16_ <- u16;
+option_u16 <- Option<u16_>;
+x <- none;
+y <- x;
+s <- one;
+y <- some_one;
+option_u8 <- x;
+option_u16 <- y;
+
+assert refused ..;

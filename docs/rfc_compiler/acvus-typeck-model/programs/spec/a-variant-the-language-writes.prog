@@ -1,0 +1,10 @@
+// from cases/spec/a-variant-the-language-writes.case
+// if let Ok(v) = Some(1u8) { }
+// not asserted here: assert refused conflict;
+some_one_u8 <- Option<s>;
+one_u8 <- u8;
+s <- one_u8;
+ok: ok_0 <- some_one_u8.Ok;
+v: v <- ok_0;
+
+assert refused ..;

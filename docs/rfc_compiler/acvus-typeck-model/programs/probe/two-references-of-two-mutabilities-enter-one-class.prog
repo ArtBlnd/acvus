@@ -1,0 +1,14 @@
+// from cases/probe/two-references-of-two-mutabilities-enter-one-class.case
+// let r1 = &a; let r2 = &mut b; let s = if c { r1 } else { r2 }; s.f;
+// Two references enter S: one shared, one exclusive. Both are Ref, and the
+// language orders the mutabilities, so S is the shared reference and its
+// target is one class A and B share. s.f reads through the reference and is
+// a use of that target's value, which the text shows no value entering: the
+// target gets no type.
+ref_a: ref_a <- &a;
+ref_mut_b: ref_mut_b <- &mut b;
+s <- ref_a;
+s <- ref_mut_b;
+s_f: s_f <- s.f;
+
+assert refused ..;

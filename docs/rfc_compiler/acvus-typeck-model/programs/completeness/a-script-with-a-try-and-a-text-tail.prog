@@ -1,0 +1,23 @@
+// from cases/completeness/a-script-with-a-try-and-a-text-tail.case
+// let a = parse_r("7")?;    // parse_r(&str) -> Result<u8, PErr>
+// show(a)                   // show(u8) -> String
+// As in examples/ledger and examples/log-parse, the script's ? exits and its
+// tail, a String, pass into the script's result R, an unknown of its body.
+// not asserted here: assert outcomes 1;
+str_ <- str;
+s <- &str_;
+declare parse_r_p0 = &str;
+declare parse_r_result = Result<u8, PErr>;
+parse_r_0: pass s to parse_r_p0;
+parse_r_s <- parse_r_result;
+q: a <- parse_r_s.Ok;
+r <- Result<q_ok, q_error>;
+exit parse_r_s.Err to q_error;
+declare show_p0 = u8;
+declare show_result = String;
+show_0: pass a to show_p0;
+show_a <- show_result;
+r <- show_a;
+
+assert accepted;
+assert a: u8;

@@ -1,0 +1,13 @@
+// from cases/rules/solving/a-two-literal-families-have-no-join.case
+// let mut x = 1;
+// x = 1.5;
+// The initializer and the assignment are lower bounds, 1 <= X and 1.5 <= X.
+// Nothing enters the two literals, so each takes its family's default: 1
+// takes i32 and 1.5 takes f64. X has no equation, so its value is the join of
+// its lower bounds, and i32 and f64 have no join: X is refused no_join.
+one <- {integer};
+one_point_five <- {float};
+x <- one;
+x <- one_point_five;
+
+assert refused Mismatch, ..;

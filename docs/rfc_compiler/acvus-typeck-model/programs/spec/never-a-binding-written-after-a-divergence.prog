@@ -1,0 +1,17 @@
+// from cases/spec/never-a-binding-written-after-a-divergence.case
+// let t; if c { t = never(); } t.0 = 1u8; takes_u8(t);   // never() -> !
+// T's source gives !, whose part t.0 is !, so 1u8 does not reach it:
+// refused there.
+// not asserted here: assert failing [`1u8 <= t.0`];
+one_u8 <- u8;
+declare never_result = !;
+never <- never_result;
+t <- never;
+t_0: t_0 <- t.0;
+t_0 <- one_u8;
+declare takes_u8_p0 = u8;
+declare takes_u8_result = ();
+takes_u8_0: pass t to takes_u8_p0;
+takes_u8_t <- takes_u8_result;
+
+assert refused ..;

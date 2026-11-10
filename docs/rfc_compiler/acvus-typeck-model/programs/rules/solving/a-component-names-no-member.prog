@@ -1,0 +1,11 @@
+// from cases/rules/solving/a-component-names-no-member.case
+// let t;
+// t.0 = 1u8;
+// The projection t.0 is a use of t's value, and the text shows no value
+// entering T. The component it names makes no type, and `!` would promise
+// that no value of T exists where the text writes into one. T gets no type.
+one_u8 <- u8;
+t_0: t_0 <- t.0;
+t_0 <- one_u8;
+
+assert refused UndecidedClass, ..;

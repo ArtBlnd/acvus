@@ -1,0 +1,12 @@
+// from cases/probe/a-literal-into-a-written-parameter.case
+// let x = 0; take(x);    // take(u8)
+// Only a LitVar enters X, so its coercion constraint into u8 unifies it with u8.
+zero <- {integer};
+x <- zero;
+declare take_p0 = u8;
+declare take_result = ();
+take_0: pass x to take_p0;
+take_x <- take_result;
+
+assert accepted;
+assert x: u8;

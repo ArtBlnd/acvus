@@ -1,0 +1,18 @@
+// from cases/rules/solving/a-a-value-that-enters-is-not-contextually-typed.case
+// let x = make_a(); take_b(x);         // extern types A, B; a cast A -> B
+// A enters X, so X is A by its lower bound, and the context B is a check,
+// which A passes by the cast. The context did not change x: a value that
+// enters a class types it, and what the class passes into is checked
+// against that type.
+// not asserted here: assert check `X ~> take_b.Param(0)` == cast up#0;
+row up: A -> B;
+declare make_a_result = A;
+make_a_call <- make_a_result;
+x <- make_a_call;
+declare take_b_p0 = B;
+declare take_b_result = ();
+take_b_0: pass x to take_b_p0;
+take_b_x <- take_b_result;
+
+assert accepted;
+assert x: A;

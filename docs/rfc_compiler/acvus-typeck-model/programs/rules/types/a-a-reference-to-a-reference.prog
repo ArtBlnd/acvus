@@ -1,0 +1,16 @@
+// from cases/rules/types/a-a-reference-to-a-reference.case
+// let x = 1u8;
+// g(&x);                   // g<T>(T) -> &T
+// &x is &u8 and passes into the unknown T, a lower bound, so T is &u8. The result
+// &T would then be a reference whose target is a reference, and no type is
+// that: the use's result has no value.
+// not asserted here: assert `g(&x)`: none;
+one_u8 <- u8;
+x <- one_u8;
+lend: ref_x <- &x;
+declare g_p0 = g_t;
+declare g_result = &g_t;
+g_0: pass ref_x to g_p0;
+g_ref_x <- g_result;
+
+assert refused UndecidedClass, ..;

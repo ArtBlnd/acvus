@@ -1,0 +1,10 @@
+// from cases/rules/solving/a-litvar-default-that-cannot-hold-it.case
+// let x = 3000000000;
+// X is unified with the literal's LitVar, its only lower bound, and no
+// source gives it a constructor. At the fixpoint, nothing waits, so it takes
+// its family's default, i32, which does not hold 3000000000:
+// refused there.
+three_billion <- {integer};
+x <- three_billion;
+
+assert refused EmptyDomain, ..;

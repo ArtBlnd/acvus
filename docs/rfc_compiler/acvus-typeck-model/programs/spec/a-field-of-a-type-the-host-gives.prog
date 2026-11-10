@@ -1,0 +1,10 @@
+// from cases/spec/a-field-of-a-type-the-host-gives.case
+// @cfg.extra = 1;          // @cfg is the host's {name: String}
+// not asserted here: assert refused conflict;
+string <- String;
+declare cfg = {name: string};
+one <- {integer};
+cfg_extra: cfg_extra <- cfg.extra;
+cfg_extra <- one;
+
+assert refused ..;

@@ -1,0 +1,1 @@
+- a-call-left-out-leaves-out-its-instance-relations.case: a `lambda`

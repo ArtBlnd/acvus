@@ -1,0 +1,2 @@
+- coerce.case: a primitive on declarations alone (`assert coerce(..)`, `assert along_le(..)`), no program
+- join-and-le.case: a primitive on declarations alone (`assert join(..)`, `assert le(..)`), no program

@@ -1,0 +1,15 @@
+// from cases/rules/place/a-two-enum-names-have-no-join.case
+// let x = if c { E::A(1u8) } else { F::A(1u8) };
+// E::A(e) is an enum named E whose only member is A, and F::A(e) one
+// named F. The name is in the constructor, so the two have no common
+// node and no join.
+one_u8 <- u8;
+e_a_one_u8 <- E{A(p1)};
+one_u8_2 <- u8;
+f_a_one_u8 <- F{A(p2)};
+p1 <- one_u8;
+p2 <- one_u8_2;
+x <- e_a_one_u8;
+x <- f_a_one_u8;
+
+assert refused Mismatch, ..;

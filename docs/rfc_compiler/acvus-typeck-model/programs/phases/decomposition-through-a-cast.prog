@@ -1,0 +1,15 @@
+// from cases/phases/decomposition-through-a-cast.case
+// The two sides of b ~> s have different constructors, so their parts are
+// linked through the signature of the cast between them: S equals the cast's
+// variable, which equals s's argument P.
+// not asserted here: //@ order:
+// not asserted here: assert decomposition records `S = link(b -> s)[0].Var(Type(0))`;
+row share<T>: Box<T> -> Shared<T>;
+u8_ <- u8;
+b <- Box<cap_s>;
+s <- Shared<p>;
+cap_s <- u8_;
+s <- b;
+
+assert accepted;
+assert p: u8;

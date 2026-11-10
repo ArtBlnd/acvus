@@ -1,0 +1,13 @@
+// from cases/spec/an-index-through-a-view.case
+// let mut v = Vec::new();  // new() -> Vec<T>; the view as_slice(&Vec<T>) -> &[T]
+// v[0] = 1u8;
+row as_slice<T>: &Vec<T> -> &[T];
+one_u8 <- u8;
+declare new_result = Vec<new_t>;
+new <- new_result;
+v <- new;
+v_0: v_0 <- v.[];
+v_0 <- one_u8;
+
+assert accepted;
+assert v: Vec<u8>;

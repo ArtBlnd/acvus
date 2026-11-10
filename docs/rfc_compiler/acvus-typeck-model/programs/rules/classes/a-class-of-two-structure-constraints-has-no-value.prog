@@ -1,0 +1,9 @@
+// from cases/rules/classes/a-class-of-two-structure-constraints-has-no-value.case
+// a.x and a.0 on one class: an object's field, which the text writes, gives
+// the class an object, which has no component 0, so the conjunction
+// no type satisfies leaves it with no value, refused.
+// not asserted here: assert A: none;
+px: r1 <- a.x;
+p0: r2 <- a.0;
+
+assert refused ..;

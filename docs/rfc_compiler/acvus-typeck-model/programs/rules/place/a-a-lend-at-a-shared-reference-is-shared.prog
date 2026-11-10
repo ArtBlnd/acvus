@@ -1,0 +1,19 @@
+// from cases/rules/place/a-a-lend-at-a-shared-reference-is-shared.case
+// let x = 1u8;
+// let r = &x;
+// put(&mut r);             // put(&mut u8)
+// r is a shared &X, so &mut r is a shared reference to X, the lesser of the two
+// mutabilities, and &u8 reaches &mut u8 by no coercion.
+// not asserted here: assert `&mut r` == lend & through;
+// not asserted here: assert failing [`&mut r ~> put.Param(0)`];
+one_u8 <- u8;
+x <- one_u8;
+ref_x: ref_x <- &x;
+r <- ref_x;
+ref_mut_r: ref_mut_r <- &mut r;
+declare put_p0 = &mut u8;
+declare put_result = ();
+put_0: pass ref_mut_r to put_p0;
+put_call <- put_result;
+
+assert refused ..;

@@ -1,0 +1,19 @@
+- a-lend-of-a-use-result-that-is-a-reference.case: a use of get, which two declarations give
+- a-literal-into-a-use-then-another.case: a use of probe, which two declarations give
+- a-literal-through-a-generic-use-then-two-uses.case: uses of n and m, which two declarations each give
+- a-match-on-an-overload-chosen-by-its-result.case: a use of parse, which two declarations give
+- an-overload-chosen-by-its-result.case: a use of parse, which two declarations give
+- an-overload-chosen-by-its-result-through-try.case: a use of parse, which two declarations give
+- an-overload-chosen-by-its-result-through-try-with-no-tail.case: a use of parse, which two declarations give
+- an-overload-through-try-into-an-untyped-result.case: a use of parse, which two declarations give
+- a-parameter-holds-an-error.case: a group g, its fn and a use of it
+- a-pattern-on-a-payload-that-is-a-reference.case: a bind that lends, more than a path of projections
+- a-projection-and-an-overload.case: a use of pick, which two declarations give
+- a-projection-and-an-overload-with-a-reference-result.case: a use of pick, which two declarations give
+- a-reference-cast-at-one-argument.case: a use of f, which two declarations give
+- a-struct-and-recursion-that-grows.case: groups new, swap and nest, their fns and uses of them
+- a-sum-into-a-use-that-only-reads-it.case: a use of core::add, which three declarations give
+- a-sum-of-two-literals-its-result-unused.case: a use of core::add, which three declarations give
+- a-try-in-a-match-arm.case: ? of an Option; the form of ? reads a Result's Ok and Err
+- a-use-whose-argument-is-never.case: a use of f, which two declarations give
+- a-use-whose-result-enters-a-class-others-enter.case: uses of parse and mk, which two declarations each give

@@ -1,0 +1,18 @@
+// from cases/holes/a-reborrow-at-a-coercion-constraint-links-the-targets.case
+// let mut v = Vec::new();  // new() -> Vec<T>
+// look(&mut v);            // look(&Vec<u8>)
+// The constructors &mut and & differ, and the decomposition links the targets by its
+// one rule: Vec<u8> is a type the declaration writes, so V ~> Vec<u8>,
+// whose decomposition records T ~> u8 for new's T. Nothing enters T, which is filled
+// with u8, so V = Vec<u8>.
+declare new_result = Vec<new_t>;
+new <- new_result;
+v <- new;
+lend: ref_mut_v <- &mut v;
+declare look_p0 = &Vec<u8>;
+declare look_result = ();
+look_0: pass ref_mut_v to look_p0;
+look <- look_result;
+
+assert accepted;
+assert v: Vec<u8>;

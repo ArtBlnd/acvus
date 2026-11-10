@@ -1,0 +1,21 @@
+// from cases/spec/an-empty-part-with-two-upper-bounds.case
+// let x = None;
+// let y = if c { x } else { Some(1u16) };
+// take(x);                 // take(Option<u8>), encoded as the coercion constraint it records
+// not asserted here: assert X: none;
+none <- Option<k>;
+u16_ <- u16;
+some_one_u16 <- Option<s>;
+u8_ <- u8;
+option_u8 <- Option<u8_>;
+x <- none;
+y <- x;
+s <- u16_;
+y <- some_one_u16;
+option_u8 <- x;
+
+// Nothing enters X's payload P. Its upper bounds are Y's
+// payload, which is u16, and the u8 of P ~> u8, which the decomposition of
+// X ~> Option<u8> records: two types, so P is not filled and has no value.
+assert refused ..;
+assert y: Option<u16>;

@@ -1,0 +1,15 @@
+// from cases/rules/solving/a-two-enums-of-two-names-have-no-join.case
+// let e = if c { E::A(1u8) } else { F::B(2u8) };
+// Both values enter e's equivalence class V, so its value is the join
+// of two enums, of two names and so of two nodes with no common
+// ancestor: no join. Refused at V.
+one_u8 <- u8;
+two_u8 <- u8;
+e_a_one_u8 <- E{A(p)};
+f_b_two_u8 <- F{B(q)};
+p <- one_u8;
+q <- two_u8;
+v <- e_a_one_u8;
+v <- f_b_two_u8;
+
+assert refused Mismatch, ..;

@@ -1,0 +1,6 @@
+// from cases/probe/one-lend-of-one-place-nothing-enters.case
+// let x; let a = &x;
+// Nothing enters X. The one lend reads X leaving out itself.
+lend_a: a <- &x;
+
+assert accepted;

@@ -1,0 +1,21 @@
+// from cases/probe/a-structure-decides-a-join-before-its-part.case
+// let x = None;
+// let y = if c { x } else { Some(1u8) };
+// let z = if d { y } else { None };
+// X: Option<?k> enters Y with Some(1u8); Y joins at Option by X's structure
+// alone, ?k and u8 enter Y's payload as parts; Z likewise. ?k is decided last,
+// by its context, and nothing waits for it.
+none <- Option<k>;
+s <- u8;
+some_1u8 <- Option<s>;
+none_2 <- Option<m>;
+x <- none;
+y <- x;
+y <- some_1u8;
+z <- y;
+z <- none_2;
+
+assert accepted;
+assert x: Option<u8>;
+assert y: Option<u8>;
+assert z: Option<u8>;

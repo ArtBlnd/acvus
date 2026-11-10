@@ -1,0 +1,4 @@
+- a-capture-lent-in-a-lambda.case: a `lambda`
+- a-capture-written-by-the-lambdas-result.case: a `lambda`
+- a-capture-written-through-a-reference.case: a `lambda`
+- a-literal-capture-passed-to-a-parameter.case: a `lambda`

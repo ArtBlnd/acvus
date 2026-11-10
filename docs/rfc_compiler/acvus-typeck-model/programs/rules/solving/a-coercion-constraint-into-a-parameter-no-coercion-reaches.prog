@@ -1,0 +1,18 @@
+// from cases/rules/solving/a-coercion-constraint-into-a-parameter-no-coercion-reaches.case
+// let x = 1u16;
+// take(x);                 // take(u8)
+// x's type is an unknown, so 1u16 enters it: X >= u16. take's
+// parameter u8 is decided, not an unknown, so x passing into it is a coercion constraint,
+// X ~> u8, which gives X no source: X is u16. A value
+// entering by a coercion constraint reaches by a coercion, and none goes from u16
+// to u8, so the program is refused at that coercion constraint.
+// not asserted here: assert failing [`X ~> take.Param(0)`];
+one_u16 <- u16;
+x <- one_u16;
+declare take_p0 = u8;
+declare take_result = ();
+take_0: pass x to take_p0;
+take_x <- take_result;
+
+assert refused ..;
+assert x: u16;

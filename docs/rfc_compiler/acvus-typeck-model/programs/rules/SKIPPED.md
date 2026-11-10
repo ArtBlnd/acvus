@@ -1,0 +1,40 @@
+- classes/a-a-call-of-another-fn-makes-an-instance.case: a group `f` and a use of its `fn`
+- classes/a-a-lambdas-own-coercion-constraint-is-checked-uncalled.case: a lambda
+- classes/a-a-recursive-call-passes-into-its-own-universal.case: a group `g` and a use of its `fn`
+- classes/a-a-template-result-is-its-string.case: the entry's `fn run() -> R`, a group's `fn`
+- classes/a-two-lambdas-in-one-class-each-make-an-instance.case: a lambda
+- classes/b-a-lambda-calling-a-captured-lambda.case: a lambda
+- place/a-a-literal-taken-as-its-default-reaches-no-candidate.case: a use of `f`, which two declarations give
+- place/a-an-operator-with-no-impl-at-its-operands.case: a use of `core::add`, which two declarations give
+- place/a-a-receiver-carries-the-struct-it-writes.case: a group `first` and a use of its `fn`
+- place/a-a-struct-field-structure-constraint-adds-no-member.case: a field read on the struct `Pair`
+- place/a-a-use-whose-name-reaches-no-declaration.case: a use of `f`, which no declaration gives
+- place/a-a-variant-without-a-payload-projects-like-v-of-underscore.case: a projection `as None`, which the text has no segment for
+- place/a-narrowing-takes-no-conversion.case: a use of `f`, which two declarations give
+- place/a-the-lowest-rank-at-the-first-argument-wins.case: a use of `f`, which two declarations give
+- solving/a-class-at-an-undecided-use-takes-no-fallback.case: a use of `f`, which two declarations give
+- solving/a-component-structure-constraint-gives-a-use-nothing-to-read.case: a use of `pick`, which two declarations give
+- solving/a-result-with-no-relation-decides-nothing.case: a use of `mk`, which two declarations give
+- solving/a-universal-coercion-constraint-checked-at-its-copy.case: a group `g` and a use of its `fn`
+- solving/a-use-reads-its-generalization.case: a use of `g`, which two declarations give
+- solving/a-use-reads-only-where-candidates-differ.case: a use of `f`, which two declarations give
+- solving/a-use-reads-without-what-it-records-once-decided.case: a use of `g`, which two declarations give
+- solving/a-write-through-a-captured-reference-no-coercion-reaches.case: a lambda
+- types/a-a-candidate-reached-only-by-a-conversion.case: a use of `f`, which two declarations give
+- types/a-a-constructor-holds-names-and-lengths.case: primitives on declarations alone (`join`, `le`), no program
+- types/a-an-error-of-a-type-with-no-name.case: primitives on declarations alone (`coerce`, `join`), no program
+- types/a-an-error-part-has-no-join-of-its-own.case: a primitive on declarations alone (`join`), no program
+- types/a-a-part-with-no-coercion.case: a primitive on declarations alone (`coerce`), no program
+- types/a-a-raised-type-keeps-its-argument.case: a primitive on declarations alone (`join`), no program
+- types/a-a-slice-is-not-structural.case: primitives on declarations alone (`join`, `coerce`), no program
+- types/a-invariant-parts-at-one-node-are-equated.case: primitives on declarations alone (`join`, `coerce`), no program
+- types/a-more-fields-is-not-below-fewer.case: a primitive on declarations alone (`le`), no program
+- types/a-no-cast-steps-down-the-tree.case: a primitive on declarations alone (`coerce`), no program
+- types/a-no-part-is-contravariant.case: primitives on declarations alone (`coerce`, `join`), no program
+- types/a-no-row-adds-a-field.case: a primitive on declarations alone (`coerce`), no program
+- types/a-no-row-drops-a-variant.case: a primitive on declarations alone (`coerce`), no program
+- types/a-no-row-makes-a-shared-reference-exclusive.case: a primitive on declarations alone (`coerce`), no program
+- types/a-owned-casts-give-no-reference-casts.case: primitives on declarations alone (`join`, `coerce`), no program
+- types/a-structural-parts-of-two-constructors-have-no-join.case: a primitive on declarations alone (`join`), no program
+- types/a-two-candidates-of-one-rank.case: a use of `f`, which two declarations give
+- types/a-two-exclusive-references-join-at-no-shared-one.case: a primitive on declarations alone (`join`), no program

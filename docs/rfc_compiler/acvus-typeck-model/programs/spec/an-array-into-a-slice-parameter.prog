@@ -1,0 +1,20 @@
+// from cases/spec/an-array-into-a-slice-parameter.case
+// sum(&[1u8, 2u8]);   // sum(&[u8]) -> u8
+// No declaration writes an array; the language's view of an
+// array, from a reference to it to one to the slice of its element, is a cast
+// of the tree, so &[u8; 2] reaches sum's &[u8] by it,
+// where no coercion had reached it.
+// not asserted here: assert check `&a ~> sum.Param(0)` == cast core::array_view#0;
+one_u8 <- u8;
+two_u8 <- u8;
+a <- [e; 2];
+e <- one_u8;
+e <- two_u8;
+ref_a: ref_a <- &a;
+declare sum_p0 = &[u8];
+declare sum_result = u8;
+sum_0: pass ref_a to sum_p0;
+sum <- sum_result;
+
+assert accepted;
+assert a: [u8; 2];

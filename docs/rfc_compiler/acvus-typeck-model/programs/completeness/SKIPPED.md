@@ -1,0 +1,25 @@
+- a-closure-of-no-capture-into-a-function-type-from-a-lambda.case: a lambda
+- a-closure-of-no-capture-stored-into-a-capture.case: a lambda
+- a-closure-returned-by-a-lambda.case: a lambda
+- a-closure-stored-into-a-capture.case: a lambda
+- a-closure-writing-a-capture-into-a-function-type-from-the-entry.case: a lambda
+- a-closure-writing-a-capture-through-a-function-into-a-function-type.case: a lambda
+- a-closure-writing-an-outer-capture-into-a-function-type-from-a-lambda.case: a lambda
+- a-counter-whose-width-a-later-join-decides.case: a use of `core::add`, which two declarations give
+- a-fold-from-a-literal.case: a lambda
+- a-fold-from-a-literal-with-one-add.case: a lambda
+- a-fold-from-a-suffixed-literal.case: a lambda
+- a-function-with-a-call-no-candidate-reaches-called-directly.case: a group `g` and a use of its `fn`
+- a-lambda-called-with-a-literal-and-a-value.case: a lambda
+- a-lambda-called-with-a-reference-projects-a-field.case: a lambda
+- a-lambda-calls-a-function-that-makes-an-identity-of-its-own.case: a lambda
+- a-lambda-calls-a-function-with-a-call-no-candidate-reaches.case: a lambda
+- a-lambda-calls-a-function-with-a-literal-of-its-own-called-directly.case: a group `g` and a use of its `fn`
+- a-lambda-calls-a-function-with-a-literal-of-its-own.case: a lambda
+- a-lambda-calls-a-function-with-a-suffixed-literal-of-its-own.case: a lambda
+- a-literal-whose-width-a-later-join-decides.case: a use of `core::sub`, which two declarations give
+- a-map-of-a-field-through-a-reference.case: a lambda
+- a-template-interpolates-an-owned-string.case: a use of `core::display`, which two declarations give
+- a-template-interpolates-an-owned-string-lent.case: a use of `core::display`, which two declarations give
+- two-candidates-of-one-signature.case: a use of `probe`, which two declarations give
+- two-candidates-of-one-signature-in-a-lambda.case: a lambda

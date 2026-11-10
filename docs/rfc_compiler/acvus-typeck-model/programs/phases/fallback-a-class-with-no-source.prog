@@ -1,0 +1,9 @@
+// from cases/phases/fallback-a-class-with-no-source.case
+// ?k has no source; once nothing is left to solve it falls back to !.
+// not asserted here: //@ order: join A, fallback
+// not asserted here: assert trace "default ?k: !";
+none <- Option<k>;
+a <- none;
+
+assert accepted;
+assert a: Option<!>;

@@ -1,0 +1,16 @@
+// from cases/phases/unify-a-view-links-an-index.case
+// Once V holds Vec<?>, its structure constraint "indexes v[0]" is linked to the slice's element
+// along the signature of Vec's view.
+// not asserted here: //@ order: decide `v[0]`, join `new()`, join V
+// not asserted here: assert trace "decomposition #11 V: index v[0]: parts";
+// not asserted here: assert decomposition records `v[0] = link(V -> v[0])[0].Var(Type(0))`;
+row as_slice<T>: &Vec<T> -> &[T];
+one_u8 <- u8;
+declare new_result = Vec<new_t>;
+new <- new_result;
+v <- new;
+v_0: v_0 <- v.[];
+v_0 <- one_u8;
+
+assert accepted;
+assert v: Vec<u8>;

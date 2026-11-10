@@ -1,0 +1,15 @@
+// from cases/spec/a-lend-that-reborrows-a-reference.case
+// let mut v = Vec::new();
+// let r = &mut v;
+// let s = &r;
+// not asserted here: assert `lend r` == lend & through;
+declare new_result = Vec<new_t>;
+new <- new_result;
+v <- new;
+lend_v: ref_mut_v <- &mut v;
+r <- ref_mut_v;
+lend_r: ref_r <- &r;
+s <- ref_r;
+
+assert accepted;
+assert s: &Vec<!>;

@@ -1,0 +1,7 @@
+- a-binding-behind-a-reference.case: a `bind` that lends through the reference on its path
+- a-capture-written-after-a-use.case: a `lambda`
+- a-capture-written-after-a-use-it-reads.case: a `lambda`
+- a-coercion-constraint-between-two-instances-universals.case: a `group` and a use of its `fn`
+- a-lambda-reads-a-capture.case: a `lambda`
+- a-reference-recorded-at-once-has-no-mutability.case: a use of `first`, which two declarations give
+- two-uses-that-read-one-class.case: a use of `core::add`, which three declarations give

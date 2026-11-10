@@ -1,0 +1,11 @@
+// from cases/rules/place/a-a-literal-in-a-pattern-passes-into-its-position.case
+// let x = 1u8;
+// match x { 1u16 => {} }
+// The literal is a value passing into the type of its position, x's
+// unknown X: a lower bound, a second lower bound beside 1u8, with no join.
+one_u8 <- u8;
+one_u16 <- u16;
+x <- one_u8;
+x <- one_u16;
+
+assert refused Mismatch, ..;

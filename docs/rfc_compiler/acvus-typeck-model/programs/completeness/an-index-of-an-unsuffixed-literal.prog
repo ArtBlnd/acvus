@@ -1,0 +1,17 @@
+// from cases/completeness/an-index-of-an-unsuffixed-literal.case
+// let v = make();          // make() -> Vec<u8>; the view as_slice(&Vec<T>) -> &[T]
+// let e = v[0];
+// The Recording table records the projection Elem of v, and nothing of the
+// index: the literal 0 has its class, which nothing relates.
+// not asserted here: assert outcomes 1;
+row as_slice<T>: &Vec<T> -> &[T];
+declare make_result = Vec<u8>;
+make <- make_result;
+v <- make;
+zero <- {integer};
+v_0: v_0 <- v.[];
+e <- v_0;
+
+assert accepted;
+assert e: u8;
+assert zero: i32;

@@ -1,0 +1,11 @@
+// from cases/phases/fallback-a-litvar-takes-its-default.case
+// Solving A unifies its LitVar lower bound with it, and no source gives
+// a constructor; at the fixpoint, the class falls back to the LitVar's family's
+// default, i32 for an integer.
+// not asserted here: //@ order: join A, fallback
+// not asserted here: assert trace "default 0: i32";
+zero <- {integer};
+a <- zero;
+
+assert accepted;
+assert a: i32;

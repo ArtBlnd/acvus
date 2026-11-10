@@ -1,0 +1,12 @@
+// from cases/spec/two-language-variants-of-two-constructors.case
+// let o; if let Some(x) = o { } if let Ok(y) = o { }
+// Both patterns are uses of o's value, and the text shows no value entering O.
+// O gets no type before the two variants could be compared: no lower bound and
+// no occurrence gives it one, and `!` would promise no value where two
+// patterns read one.
+some: some_0 <- o.Some;
+x: x <- some_0;
+ok: ok_0 <- o.Ok;
+y: y <- ok_0;
+
+assert refused UndecidedClass, ..;

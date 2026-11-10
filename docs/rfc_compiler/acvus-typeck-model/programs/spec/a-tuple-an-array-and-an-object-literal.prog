@@ -1,0 +1,26 @@
+// from cases/spec/a-tuple-an-array-and-an-object-literal.case
+// let t = (1u8, s); let a = [1u8, 2u8]; let o = { x: 1u8 };
+// Each is a value of its constructor whose parts are made anew, each component
+// passing into its part, an array's all into its one element part.
+str_ <- str;
+s <- &str_;
+one_u8_t <- u8;
+one_u8_a <- u8;
+two_u8_a <- u8;
+one_u8_o <- u8;
+tuple_one_u8_s <- (p0, p1);
+p0 <- one_u8_t;
+p1 <- s;
+t <- tuple_one_u8_s;
+array_one_u8_two_u8 <- [e; 2];
+e <- one_u8_a;
+e <- two_u8_a;
+a <- array_one_u8_two_u8;
+object_x_one_u8 <- {x: px};
+px <- one_u8_o;
+o <- object_x_one_u8;
+
+assert accepted;
+assert t: (u8, &str);
+assert a: [u8; 2];
+assert o: {x: u8};
