@@ -149,13 +149,6 @@ where
                     }
                     Bound::Change { .. } => found.push(reached(How::Changes, shape_of(classes, upper).cloned())),
                     Bound::Equal { .. } => found.push(reached(How::Equals, shape_of(classes, upper).cloned())),
-                    Bound::Lend { mutability, .. } => {
-                        let of_reference = match through {
-                            Through::Own => *mutability,
-                            Through::Target(already) => already.join(*mutability),
-                        };
-                        stack.push((upper, Through::Target(of_reference)));
-                    }
                 }
             }
         }

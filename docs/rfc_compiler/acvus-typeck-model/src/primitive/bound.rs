@@ -8,7 +8,6 @@
 use std::fmt::Debug;
 
 use super::class::ClassKind;
-use super::ty::Mutability;
 
 /// A bound as a store of the kind `K` sees it.
 ///
@@ -44,15 +43,6 @@ where
     /// one operation `lower` may take to reach it is the reborrow. Classes
     /// that enter one another are one class.
     Enter { lower: K::Id, upper: K::Id },
-    /// `upper` is the reference `&mutability lower` gives (O23): its target is
-    /// `lower` with the reference above it taken off, and its mutability is the
-    /// join of `mutability` and that reference's. It enters `upper` as a lower
-    /// bound does, and `lower`'s own head is not changed.
-    Lend {
-        lower: K::Id,
-        upper: K::Id,
-        mutability: Mutability,
-    },
     /// One change goes from `lower` to `upper` (O2, O11). It decides neither
     /// head, and it is made once both class nodes are decided, as a coercion
     /// may read a reference and its target together.
@@ -69,7 +59,6 @@ where
     fn lower(&self) -> K::Id {
         match self {
             Bound::Enter { lower, .. }
-            | Bound::Lend { lower, .. }
             | Bound::Change { lower, .. }
             | Bound::Equal { lower, .. } => *lower,
         }
@@ -78,7 +67,6 @@ where
     fn upper(&self) -> K::Id {
         match self {
             Bound::Enter { upper, .. }
-            | Bound::Lend { upper, .. }
             | Bound::Change { upper, .. }
             | Bound::Equal { upper, .. } => *upper,
         }
@@ -98,15 +86,6 @@ where
             Bound::Enter { lower, upper } => Bound::Enter {
                 lower: f(lower),
                 upper: f(upper),
-            },
-            Bound::Lend {
-                lower,
-                upper,
-                mutability,
-            } => Bound::Lend {
-                lower: f(lower),
-                upper: f(upper),
-                mutability,
             },
             Bound::Change { lower, upper } => Bound::Change {
                 lower: f(lower),

@@ -12,7 +12,7 @@ use super::record::Coercion;
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Adjustment {
     /// A reference is read through: `p.f` is `(*p).f`, and `&a` is `&*a`. One
-    /// is enough, as no reference has a reference as its target (O23).
+    /// is recorded for each reference read through.
     Deref,
     /// A coercion the language gives: the reborrow where a lower bound reaches a
     /// shared head (O10), and any of them at a boundary (O11).

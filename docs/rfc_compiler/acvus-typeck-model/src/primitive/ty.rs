@@ -14,7 +14,7 @@ pub enum Mutability {
 
 impl Mutability {
     /// Exclusive where both are, and shared otherwise: what two references
-    /// join as (Joins), and what a lend through a reference gives (O23).
+    /// join as (Joins).
     pub fn join(self, other: Self) -> Self {
         match (self, other) {
             (Mutability::Exclusive, Mutability::Exclusive) => Mutability::Exclusive,
@@ -92,7 +92,7 @@ pub enum Shape<P> {
 
 impl<P> Shape<P> {
     /// What remains of the notation without members and parts, for anything but
-    /// a reference, whose class node holds it (O23).
+    /// a reference, whose class node holds it.
     pub fn constructor(&self) -> Option<Constructor> {
         Some(match self {
             Shape::Ref(..) => return None,
@@ -291,9 +291,8 @@ pub enum Ty {
 /// A constructor other than a reference: what remains of the notation
 /// without its members and parts.
 ///
-/// A reference is held by [`ClassNode::Ref`], together with its target's
-/// constructor. No reference is the target of a reference (O23), so there is
-/// no reference here.
+/// A reference is held by [`ClassNode::Ref`], together with what its target
+/// shows, so there is no reference here.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Constructor {
     Tuple(usize),
@@ -324,7 +323,17 @@ pub enum Constructor {
 /// is partly decided.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum ClassNode {
-    Ref(Mutability, Constructor),
+    Ref(Mutability, TargetNode),
+    Plain(Constructor),
+}
+
+/// What a reference's class node shows of its target: the target's constructor,
+/// or, of a target that is a reference itself, its mutability alone. `&&T` is a
+/// type other than `&T`, and what lies below the inner reference is no part of
+/// the outer one's class node.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum TargetNode {
+    Ref(Mutability),
     Plain(Constructor),
 }
 

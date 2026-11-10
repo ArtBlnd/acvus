@@ -52,10 +52,6 @@ where
 {
     match bound {
         Bound::Enter { lower, .. } => shape_of(classes, *lower).cloned(),
-        Bound::Lend { lower, mutability, .. } => Some(match shape_of(classes, *lower)? {
-            Shape::Ref(of_place, target) => Shape::Ref(mutability.join(*of_place), *target),
-            _ => Shape::Ref(*mutability, *lower),
-        }),
         Bound::Change { .. } | Bound::Equal { .. } => None,
     }
 }
@@ -94,7 +90,6 @@ where
         for (bound, at) in bounds {
             let gives_a_head = match bound {
                 Bound::Enter { .. } => lower != root,
-                Bound::Lend { .. } => true,
                 Bound::Change { .. } | Bound::Equal { .. } => false,
             };
             if gives_a_head {
@@ -227,7 +222,7 @@ where
                 continue;
             }
             match bound {
-                Bound::Enter { .. } | Bound::Lend { .. } => self.judge_lower(classes, scopes, bound, at),
+                Bound::Enter { .. } => self.judge_lower(classes, scopes, bound, at),
                 Bound::Equal { .. } => self.judge_equal(classes, scopes, bound, at),
                 Bound::Change { .. } => {
                     others.insert((bound, at));
@@ -289,11 +284,6 @@ where
         if !head.enters(&upper) {
             self.refuse_mismatch(classes, &bound, at);
             return;
-        }
-        if let Bound::Lend { lower, .. } = bound
-            && matches!(shape_of(classes, lower), Some(Shape::Ref(..)))
-        {
-            self.adjustments.entry(at).or_default().push(Adjustment::Deref);
         }
         if matches!(
             (&head, &upper),
@@ -463,32 +453,26 @@ mod tests {
         }
     }
 
-    /// `let a = &ₘ x; let r = &ₙ a;`, for each `m` and `n` (O23): no reference
-    /// to a reference, the join of the two for its mutability, and `a` as it
-    /// was.
+    /// `let a = &ₘ x; let r = &ₙ a;`, for each `m` and `n`: `r` is `&ₙ &ₘ u8`. Its
+    /// target is `a`, a reference as it is, and nothing is read through.
     #[test]
-    fn a_lend_through_a_reference_takes_it_off_and_joins_its_mutability() {
-        let cases = [
-            (SHARED, SHARED, SHARED),
-            (SHARED, EXCLUSIVE, SHARED),
-            (EXCLUSIVE, SHARED, SHARED),
-            (EXCLUSIVE, EXCLUSIVE, EXCLUSIVE),
-        ];
-        for (of_a, of_r, expected) in cases {
+    fn a_lend_of_a_reference_is_a_reference_to_it() {
+        for (of_a, of_r) in [(SHARED, SHARED), (SHARED, EXCLUSIVE), (EXCLUSIVE, SHARED), (EXCLUSIVE, EXCLUSIVE)] {
             let mut world = World::new();
             let x = world.text(U8);
             let (lent_x, _) = world.lend(x, of_a);
             let a = world.meets(lent_x);
-            let (lent_a, lend_at) = world.lend(a, of_r);
+            let (lent_a, _) = world.lend(a, of_r);
             let r = world.meets(lent_a);
 
             world.settle();
 
             world.no_refusals();
-            assert_eq!(world.target(r).0, expected);
-            assert!(world.same(world.target(r).1, x));
+            assert_eq!(world.target(r).0, of_r);
+            assert!(world.same(world.target(r).1, a));
             assert_eq!(world.target(a).0, of_a);
-            assert_eq!(world.outcome.adjustments, adjusted(&[(lend_at, &[Adjustment::Deref])]));
+            assert!(world.same(world.target(a).1, x));
+            assert_eq!(world.outcome.adjustments, Adjustments::new());
         }
     }
 
@@ -507,22 +491,20 @@ mod tests {
         assert_eq!(world.outcome.adjustments, Adjustments::new());
     }
 
-    /// `let a; let r = &a;`: the reference waits for `a` by the rule every
-    /// lower bound waits by, and nothing else in this module decides `a`.
+    /// `let a; let r = &a;`: the reference is `&` at once, with `a` as its target,
+    /// whatever `a` comes to be.
     #[test]
-    fn a_lend_waits_for_its_place() {
+    fn a_lend_waits_for_nothing() {
         let mut world = World::new();
         let a = world.undecided();
         let (lent, _) = world.lend(a, SHARED);
 
         world.settle();
-        assert_eq!(join_lowers(&world.classes, lent), Join::Waits);
-        assert!(!world.classes.is_decided(lent));
 
-        world.decide(a, Shape::Never);
-        world.settle();
-        assert_eq!(world.target(lent), (SHARED, world.classes.find(a).id()));
         world.no_refusals();
+        assert_eq!(world.target(lent).0, SHARED);
+        assert!(world.same(world.target(lent).1, a));
+        assert!(!world.classes.is_decided(a));
     }
 
     /// `let x = if c { {x: 1u8} } else { {x: 2u8, y: 3u8} };`: members are
@@ -948,14 +930,9 @@ mod tests {
     /// meet the other way round must still make its change.
     #[test]
     fn a_cycle_through_any_other_bound_stays_two_classes() {
-        let kinds: [fn(ClassId, ClassId) -> Bound<Live>; 3] = [
+        let kinds: [fn(ClassId, ClassId) -> Bound<Live>; 2] = [
             |lower, upper| Bound::Change { lower, upper },
             |lower, upper| Bound::Equal { lower, upper },
-            |lower, upper| Bound::Lend {
-                lower,
-                upper,
-                mutability: SHARED,
-            },
         ];
         for kind in kinds {
             let mut world = World::new();
@@ -968,11 +945,10 @@ mod tests {
         }
     }
 
-    /// `let mut x = &y; x = &x;`. Neither enters the other's way round: the
-    /// reference waits for `x`, and `x` for the reference, so both are still
-    /// undecided. This is where the model stands, not what is settled to be right.
+    /// `let mut x = &y; x = &x;`: `&x` is a reference to a reference, and does not
+    /// join with `&y`, as their targets are not one type.
     #[test]
-    fn a_lend_of_the_class_it_enters_waits_as_that_class_does() {
+    fn a_reference_to_a_place_does_not_enter_that_place() {
         let mut world = World::new();
         let y = world.text(U8);
         let (lent_y, _) = world.lend(y, SHARED);
@@ -982,9 +958,8 @@ mod tests {
 
         world.settle();
 
-        world.no_refusals();
-        assert_eq!(join_lowers(&world.classes, x), Join::Waits);
-        assert_eq!(join_lowers(&world.classes, lent_x), Join::Waits);
+        assert_eq!(world.outcome.refusals.len(), 1);
+        assert_eq!(world.outcome.refusals[0].cause, Cause::Mismatch);
     }
 
     /// Two cycles, one entering the other: `a` and `b` are one class, `c` and

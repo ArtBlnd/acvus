@@ -33,7 +33,7 @@ use crate::primitive::decl::Conversion;
 use crate::primitive::record::Coercion;
 use crate::primitive::refusal::{Cause, Refusal};
 use crate::primitive::scope::Scopes;
-use crate::primitive::ty::{ClassNode, Constructor, Mutability, Shape, Ty};
+use crate::primitive::ty::{ClassNode, Constructor, Mutability, Shape, TargetNode, Ty};
 use crate::primitive::{ItemId, Name, TemplateId};
 use crate::store::classes::Classes;
 use crate::store::template::Fate;
@@ -53,7 +53,13 @@ impl Point {
     /// reference. No class node is partly decided.
     fn new<P, Q>(head: &Shape<P>, target: Option<&Shape<Q>>) -> Option<Self> {
         let node = match head {
-            Shape::Ref(mutability, _) => ClassNode::Ref(*mutability, target?.constructor()?),
+            Shape::Ref(mutability, _) => {
+                let target = match target? {
+                    Shape::Ref(of_target, _) => TargetNode::Ref(*of_target),
+                    target => TargetNode::Plain(target.constructor()?),
+                };
+                ClassNode::Ref(*mutability, target)
+            }
             head => ClassNode::Plain(head.constructor()?),
         };
         Some(Self {
@@ -174,7 +180,7 @@ fn stage(from: &Point, to: &Point) -> Stage {
                 return Stage::NoChange;
             };
             match (from_target, to_target) {
-                (Constructor::Array(_), Constructor::Slice) => {
+                (TargetNode::Plain(Constructor::Array(_)), TargetNode::Plain(Constructor::Slice)) => {
                     coercions.insert(Coercion::Unsize);
                 }
                 (same, other) if same == other => {}
@@ -1034,7 +1040,9 @@ mod tests {
         world.settle();
 
         world.no_refusals();
-        assert!(!world.classes.is_decided(boundary));
+        assert!(world.classes.is_decided(boundary));
+        assert_eq!(world.outcome.bounds.len(), 1);
+        assert_eq!(world.outcome.adjustments, Adjustments::new());
 
         let elem = world.external(U8);
         world.decide(a, Shape::Array(2, elem));

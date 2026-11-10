@@ -45,60 +45,6 @@ pub enum Settled {
     AwaitsInstances,
 }
 
-/// What is known of a class's head before the class is decided.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum HeadKind {
-    Reference,
-    /// Anything else. A join cannot turn it into a reference: two head classes
-    /// that meet are refused, whichever enters first. `!` alone is this too.
-    NoReference,
-    Unknown,
-}
-
-/// Whether what enters `class` makes it a reference, without deciding it. This
-/// is all a lend needs to know to find its target.
-fn head_kind<K>(classes: &Classes<K>, class: K::Id) -> HeadKind
-where
-    K: ClassKind<Bound = Bound<K>>,
-{
-    let mut seen = BTreeSet::new();
-    let mut stack = vec![class];
-    let mut no_reference = false;
-    let mut unknown = false;
-    while let Some(class) = stack.pop() {
-        let root = classes.find(class);
-        if !seen.insert(root.id()) {
-            continue;
-        }
-        if let State::Decided(decided) = &classes.get(root).state {
-            match decided.shape {
-                Shape::Ref(..) => return HeadKind::Reference,
-                Shape::Never => {}
-                _ => no_reference = true,
-            }
-            continue;
-        }
-        let mut entered = false;
-        for (lower, bounds) in classes.lowers(root) {
-            for (bound, _) in bounds {
-                match bound {
-                    Bound::Lend { .. } => return HeadKind::Reference,
-                    Bound::Enter { .. } if lower != root => {
-                        entered = true;
-                        stack.push(lower.id());
-                    }
-                    Bound::Enter { .. } | Bound::Change { .. } | Bound::Equal { .. } => {}
-                }
-            }
-        }
-        unknown |= !entered;
-    }
-    match (no_reference, unknown) {
-        (true, _) | (false, false) => HeadKind::NoReference,
-        (false, true) => HeadKind::Unknown,
-    }
-}
-
 fn every_root<K>(classes: &Classes<K>) -> Vec<K::Id>
 where
     K: ClassKind,
@@ -228,9 +174,8 @@ where
         loop {
             let merged = self.merge_cycles(classes, scopes);
             let carried = self.carry_parts(classes, scopes);
-            let lent = self.connect_lends(classes, scopes);
             let changed = self.make_changes(classes, scopes, conversions);
-            if !merged && !carried && !lent && !changed {
+            if !merged && !carried && !changed {
                 return connected;
             }
             connected = true;
@@ -269,36 +214,6 @@ where
         }
         self.judge(classes, scopes);
         carried
-    }
-
-    /// Finds the target of each lend whose place is known to be a reference or
-    /// not, as a part of the reference it gives. Its mutability and its head wait
-    /// for the place to be decided, and the bound is judged then.
-    fn connect_lends(&mut self, classes: &mut Classes<K>, scopes: &Scopes) -> bool {
-        let mut lends = Vec::new();
-        for root in classes.roots() {
-            for (bound, at) in classes.get(root).state.bounds().into_iter().flatten() {
-                if let Bound::Lend { lower, upper, .. } = bound {
-                    lends.push((*lower, *upper, *at));
-                }
-            }
-        }
-        let mut connected = false;
-        for (place, reference, at) in lends {
-            if classes.is_decided(reference) {
-                continue;
-            }
-            let target = match head_kind(classes, place) {
-                HeadKind::Unknown => continue,
-                HeadKind::NoReference => Some(place),
-                HeadKind::Reference => classes.part(place, PartKey::Target, Side::Carried, at),
-            };
-            if let Some(target) = target {
-                connected |= self.make_one(classes, scopes, reference, PartKey::Target, target, at);
-            }
-        }
-        self.judge(classes, scopes);
-        connected
     }
 
     /// Makes `part` one class with the part `key` names on `class`, and says
@@ -689,7 +604,7 @@ mod tests {
                 let (lent_a, lent_y) = (w.lend(a, SHARED).0, w.lend(y, SHARED).0);
                 meet(w, lent_a, lent_y)
             }),
-            ("let p = &mut {x}; let q = &{y}; if c { &p } else { &q }", "&{x,y}", |w| {
+            ("let p = &mut {x}; let q = &{y}; if c { &p } else { &q }", "&&{x,y}", |w| {
                 let (x, y) = (object_of(w, "x"), object_of(w, "y"));
                 let lent_x = w.lend(x, EXCLUSIVE).0;
                 let p = w.meets(lent_x);
@@ -1020,7 +935,7 @@ mod tests {
                 w.pass(some, parameter);
                 a
             }),
-            ("let a; h(Some(&a));, h(Option<&mut u8>)", "refused:UndecidedClass", |w| {
+            ("let a; h(Some(&a));, h(Option<&mut u8>)", "refused:Mismatch", |w| {
                 let a = w.undecided();
                 let (lent, _) = w.lend(a, SHARED);
                 let some = some_of(w, lent);
@@ -1464,10 +1379,11 @@ mod tests {
         assert!(world.outcome.refusals[0].items.contains(&projected));
     }
 
-    /// `let mut x = &y; x = &x;`: it ends refused, as both still wait, and which
-    /// way it should go is not settled.
+    /// `let mut x = &y; x = &x;`: the targets of the two references are one type,
+    /// so `x` is its own target, and `u8` meets a reference there. `x` is still
+    /// undecided when solving ends, and each of the three is refused.
     #[test]
-    fn a_class_that_still_waits_when_solving_ends_is_refused() {
+    fn a_place_that_takes_a_reference_to_itself_is_refused() {
         let mut world = World::new();
         let y = world.text(U8);
         let (lent_y, _) = world.lend(y, SHARED);
@@ -1477,32 +1393,28 @@ mod tests {
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
-        assert_eq!(world.shape(y), U8);
         assert!(!world.classes.is_decided(x));
-        assert!(world.outcome.refusals.iter().all(|refusal| refusal.cause == Cause::UndecidedClass));
-        assert!(!world.outcome.refusals.is_empty());
+        let causes: BTreeSet<Cause> = world.outcome.refusals.iter().map(|refusal| refusal.cause).collect();
+        assert_eq!(causes, BTreeSet::from([Cause::Mismatch, Cause::Occurs, Cause::UndecidedClass]));
     }
 
-    /// `let a; let r = &a;`, `a` turning out to be a reference: its target is
-    /// `a`'s, so nothing may connect it to `a` before that is known. Here the head
-    /// is given by hand, as the upper bounds will give it.
+    /// `let a; let r = &a;`, `a` turning out to be a reference: `r`'s target is `a`
+    /// still, and not what `a` refers to. Here the head is given by hand, as the
+    /// upper bounds will give it.
     #[test]
-    fn a_lend_of_a_place_not_known_yet_connects_nothing() {
+    fn a_lend_of_a_place_that_comes_to_be_a_reference_keeps_the_place_as_its_target() {
         let mut world = World::new();
         let a = world.undecided();
         let (lent, _) = world.lend(a, SHARED);
-
-        world.settle();
-        assert!(!world.classes.is_decided(lent));
-
         let target = world.text(U8);
         world.decide(a, Shape::Ref(SHARED, target));
+
         world.settle();
 
         world.no_refusals();
-        assert_eq!(world.target(lent).0, SHARED);
-        assert!(world.same(world.target(lent).1, target));
-        assert!(!world.same(world.target(lent).1, a));
+        assert!(world.same(world.target(lent).1, a));
+        assert!(world.same(world.target(a).1, target));
+        assert!(!world.same(world.target(lent).1, target));
     }
 
     /// What enters a literal's class decides it. Its row's fallback is for a class
@@ -1637,7 +1549,7 @@ mod tests {
                 w.pass(a, parameter);
                 a
             }),
-            ("let a; &a into a place declared &mut u8", "refused:UndecidedClass", |w| {
+            ("let a; &a into a place declared &mut u8", "refused:Mismatch", |w| {
                 let a = w.undecided();
                 let declared = w.external(U8);
                 let place = w.external(Shape::Ref(EXCLUSIVE, declared));

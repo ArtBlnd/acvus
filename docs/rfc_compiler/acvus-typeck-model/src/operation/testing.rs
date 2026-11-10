@@ -74,14 +74,17 @@ impl World {
         at
     }
 
+    /// `&place` or `&mut place`: the class of the expression, whose lower bound is
+    /// the reference the text writes with `place` as its target, and the item by
+    /// which that reference enters it.
     pub(super) fn lend(&mut self, place: ClassId, mutability: Mutability) -> (ClassId, ItemId) {
-        let reference = self.undecided();
-        let at = self.record(Bound::Lend {
-            lower: place,
-            upper: reference,
-            mutability,
-        });
-        (reference, at)
+        let by = self.items.push("written");
+        let written = self
+            .classes
+            .decided(self.scopes.root(), Shape::Ref(mutability, place), BTreeSet::from([by]));
+        let class = self.undecided();
+        let at = self.enter(written, class);
+        (class, at)
     }
 
     /// Declares the conversion `name: from -> to`.
