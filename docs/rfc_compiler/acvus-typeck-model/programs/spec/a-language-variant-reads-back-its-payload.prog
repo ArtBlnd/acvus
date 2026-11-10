@@ -8,6 +8,6 @@ x: x <- some_0;
 declare takes_u8_p0 = u8;
 declare takes_u8_result = ();
 takes_u8_0: pass x to takes_u8_p0;
-takes_u8_x <- takes_u8_result;
+takes_u8_call <- takes_u8_result;
 
 assert refused UndecidedClass, ..;

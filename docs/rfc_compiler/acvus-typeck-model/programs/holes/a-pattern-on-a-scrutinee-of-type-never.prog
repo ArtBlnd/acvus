@@ -5,8 +5,8 @@
 // value, satisfies every structure constraint, so the pattern decides nothing, and x's type, which
 // nothing enters, falls back to !.
 declare never_result = !;
-never <- never_result;
-n <- never;
+never_call <- never_result;
+n <- never_call;
 some: some_0 <- n.Some;
 x: x <- some_0;
 

@@ -5,14 +5,14 @@
 // not asserted here: assert outcomes 1;
 row as_slice<T>: &Vec<T> -> &[T];
 declare make_result = Vec<u8>;
-make <- make_result;
-v <- make;
+make_call <- make_result;
+v <- make_call;
 ref_v: ref_v <- &v;
 declare first_p0 = &Vec<first_t>;
 declare first_result = Option<&first_t>;
 first_0: pass ref_v to first_p0;
-first <- first_result;
-f <- first;
+first_call <- first_result;
+f <- first_call;
 
 assert accepted;
 assert v: Vec<u8>;

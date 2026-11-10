@@ -12,6 +12,6 @@ ref_mut_a: ref_mut_a <- &mut a;
 declare fill_p0 = &mut [u8];
 declare fill_result = ();
 fill_0: pass ref_mut_a to fill_p0;
-fill <- fill_result;
+fill_call <- fill_result;
 
 assert accepted;

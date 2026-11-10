@@ -6,13 +6,13 @@
 // whose decomposition records T ~> u8 for new's T. Nothing enters T, which is filled
 // with u8, so V = Vec<u8>.
 declare new_result = Vec<new_t>;
-new <- new_result;
-v <- new;
+new_call <- new_result;
+v <- new_call;
 lend: ref_mut_v <- &mut v;
 declare look_p0 = &Vec<u8>;
 declare look_result = ();
 look_0: pass ref_mut_v to look_p0;
-look <- look_result;
+look_call <- look_result;
 
 assert accepted;
 assert v: Vec<u8>;

@@ -7,8 +7,7 @@ string <- String;
 declare cfg = {name: string};
 one <- {integer};
 a <- cfg;
-a_extra: a_extra <- a.extra;
-a_extra <- one;
+a_extra: a.extra <- one;
 
 assert accepted;
 assert a: {extra: i32, name: String};

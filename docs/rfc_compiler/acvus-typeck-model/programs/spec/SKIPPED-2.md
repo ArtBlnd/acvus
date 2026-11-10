@@ -14,6 +14,5 @@
 - a-struct-and-recursion-that-grows.case: groups new, swap and nest, their fns and uses of them
 - a-sum-into-a-use-that-only-reads-it.case: a use of core::add, which three declarations give
 - a-sum-of-two-literals-its-result-unused.case: a use of core::add, which three declarations give
-- a-try-in-a-match-arm.case: ? of an Option; the form of ? reads a Result's Ok and Err
 - a-use-whose-argument-is-never.case: a use of f, which two declarations give
 - a-use-whose-result-enters-a-class-others-enter.case: uses of parse and mk, which two declarations each give

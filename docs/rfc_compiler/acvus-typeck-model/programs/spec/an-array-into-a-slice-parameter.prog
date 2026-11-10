@@ -14,7 +14,7 @@ ref_a: ref_a <- &a;
 declare sum_p0 = &[u8];
 declare sum_result = u8;
 sum_0: pass ref_a to sum_p0;
-sum <- sum_result;
+sum_call <- sum_result;
 
 assert accepted;
 assert a: [u8; 2];

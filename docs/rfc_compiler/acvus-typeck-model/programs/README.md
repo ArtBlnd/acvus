@@ -61,10 +61,23 @@ The causes are `Mismatch`, `NoChange`, `EmptyDomain`, `Occurs`, `NotHeld`, `Unde
 ### Names
 
 A class of the case is a class here, by a small-letter name made from its own: `A` is `a`,
-`` `Some(a)` `` is `some_a`, `` `f result` `` is `f_result`, `0` is `zero`. Two classes of a
-case keep two names, and a name that is a taken word is given a `_` after it. A `let` that
-only gives a type variable (`let A;`) writes nothing: a name is a class from where it is
-first written.
+`` `Some(a)` `` is `some_a`, `` `f result` `` is `f_result`. Two classes of a case keep two
+names. A `let` that only gives a type variable (`let A;`) writes nothing: a name is a class
+from where it is first written.
+
+| The case's name | The name here |
+|---|---|
+| a taken word, as `u8`, `str`, `to` | the word and `_`: `u8_`, `str_`, `to_` |
+| `&x`, `&mut x`, `*x` | `ref_x`, `ref_mut_x`, `deref_x` |
+| `f(..)`, `mk()` | `f_call`, `mk_call` |
+| one that begins with a digit, as `0`, `1u8`, `256` | the number spelled out: `zero`, `one_u8`, `two_hundred_fifty_six` |
+| `?k`, `@cfg` | the sign dropped: `k`, `cfg` |
+| two that differ by capitals alone, `s` and `S` | the small one as it is, the other `cap_s` |
+| a second class of a name already taken here | the name and `_2` |
+| a declared function `core::as_slice` | its last word: `as_slice` |
+
+Comments of the case are copied in ASCII: a sign that is not ASCII is written by the ASCII
+that reads nearest, as `~>` for the arrow of a coercion and `<=` for the order.
 
 ### Classes and statements
 
@@ -78,14 +91,34 @@ first written.
 | `S = A;` | `s <- a;` |
 | `A == B;` | `a <- b; b <- a;` (classes that enter one another are one class) |
 | `R = &P @ n;` `R = &mut P @ n;` | `n: r <- &p;` `n: r <- &mut p;` |
-| `R = *P @ n;` | `n: r <- p.*;` |
-| `R = P.x @ n;` `R = P.0 @ n;` `R = P[] @ n;` | `n: r <- p.x;` `n: r <- p.0;` `n: r <- p.[];` |
+| `R = *P @ n;`, read | `n: r <- p.*;` |
+| `R = P.x @ n;` `R = P.0 @ n;` `R = P[] @ n;`, read | `n: r <- p.x;` `n: r <- p.0;` `n: r <- p.[];` |
 | `R = P as Some @ n;` `R = P as E::V @ n;` | `n: r <- p.Some;` `n: r <- p.E::V;` |
+| a projection written into (below) | `n: p.x <- v;` |
 | `#[cast] extern fn up(A) -> B;` | `row up: A -> B;` |
 | `#[conversion] extern fn narrow(u16) -> u8;` | `row narrow: u16 -> u8;` |
 | `extern type Vec<T>;` | nothing: `Vec<..>` is written where it is used |
 
 `let R = ...;` is the statement alone.
+
+### A projection is read or written
+
+The earlier language names a part by a projection, `R = P.x @ n;`, and does not say whether
+it is read or written. The text says it by where the path stands, so the translation tells
+them apart by what the case does with the class `R` the projection gives:
+
+| In the case, `R` | The program writes |
+|---|---|
+| passes into something, or is an operand: `S = R;`, `f(R)`, `&R`, `R.y` | a read: `n: r <- p.x;`, and `r` wherever the case writes `R` |
+| has something pass into it: `R = V;` | a write: `n: p.x <- v;`. The name `r` is not written |
+| both | the write `n: p.x <- v;`, and a read of its own for the rest: `r <- p.x;` |
+| neither | a read: `n: r <- p.x;` |
+
+Where several values pass into `R`, each is a write, and the first has the label. This holds
+of every projection that names a place: a field, a component, an element, a deref. A
+payload named by a pattern is only read.
+
+A `bind` whose path passes no reference reads its position: `label: b <- position;`.
 
 The views of an array the earlier language declared by itself (`core::array_view`,
 `core::array_view_mut`) are not written: an array behind a reference goes to a slice by the
@@ -126,11 +159,13 @@ exit x.Err to n_error;
 | The case writes | The program writes |
 |---|---|
 | `must pass;` | `assert accepted;` |
-| `must fail;` with no kind of refusal | `assert refused ..;` |
+| `must fail;` with no kind of refusal that has a row here | `assert refused ..;` |
+| `must fail;` with a kind that has a row here | the row of the kind alone |
 | `assert refused no_join ...;` | `assert refused Mismatch, ..;` |
 | `assert refused infinite ...;` | `assert refused Occurs, ..;` |
 | `assert refused no_value ...;` | `assert refused UndecidedClass, ..;` |
 | `assert refused conflict ...;` on a literal and a type that does not hold it | `assert refused EmptyDomain, ..;` |
+| `assert refused conflict ...;` on anything else | no row: the line is kept as a comment |
 | `assert X: T;` | `assert x: T;` |
 
 Several kinds a case expects are written as one assertion: `assert refused Mismatch, Occurs, ..;`.
@@ -154,8 +189,14 @@ of these, which have no form in the text yet:
 - a function type `fn(P) -> R`, a function value `Fn/n`;
 - an extern-defined type with an identity (`#`);
 - a `universal`;
-- a `bind`, where it is more than a path of projections from its position;
+- a `bind` whose path passes a reference, so that it lends;
+- a projection of a variant with no payload, `P as None`;
+- a function at a type of parts, where the earlier model takes a candidate at each part (`==`
+  of two tuples);
 - a case that tests a primitive on declarations alone (`assert join(..)`, `assert le(..)`,
   `assert coerce(..)`, `assert along_le(..)`) and records no program.
 
-All of these but the last wait for calls and instances.
+Most of these wait for calls and instances.
+
+`?` is translated whatever its operand is, an `Option` included: it is one construct of the
+language, and a program that the present model refuses is what the translation is for.

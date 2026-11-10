@@ -5,7 +5,6 @@
 // entering T. The component it names makes no type, and `!` would promise
 // that no value of T exists where the text writes into one. T gets no type.
 one_u8 <- u8;
-t_0: t_0 <- t.0;
-t_0 <- one_u8;
+t_0: t.0 <- one_u8;
 
 assert refused UndecidedClass, ..;

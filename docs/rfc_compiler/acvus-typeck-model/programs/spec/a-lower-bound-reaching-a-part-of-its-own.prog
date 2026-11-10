@@ -7,5 +7,4 @@ x <- none;
 s <- x;
 x <- some_x;
 
-assert refused ..;
 assert refused Occurs, ..;

@@ -19,6 +19,7 @@
 - a-lambda-calls-a-function-with-a-suffixed-literal-of-its-own.case: a lambda
 - a-literal-whose-width-a-later-join-decides.case: a use of `core::sub`, which two declarations give
 - a-map-of-a-field-through-a-reference.case: a lambda
+- an-equality-of-two-tuples.case: a function at a type of parts, `==` of two tuples, where the earlier model takes a candidate of `core::eq` at each part
 - a-template-interpolates-an-owned-string.case: a use of `core::display`, which two declarations give
 - a-template-interpolates-an-owned-string-lent.case: a use of `core::display`, which two declarations give
 - two-candidates-of-one-signature.case: a use of `probe`, which two declarations give

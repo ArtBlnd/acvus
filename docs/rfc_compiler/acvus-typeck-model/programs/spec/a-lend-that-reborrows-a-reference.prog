@@ -4,8 +4,8 @@
 // let s = &r;
 // not asserted here: assert `lend r` == lend & through;
 declare new_result = Vec<new_t>;
-new <- new_result;
-v <- new;
+new_call <- new_result;
+v <- new_call;
 lend_v: ref_mut_v <- &mut v;
 r <- ref_mut_v;
 lend_r: ref_r <- &r;

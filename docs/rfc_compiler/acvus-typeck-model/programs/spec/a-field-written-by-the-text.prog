@@ -6,7 +6,6 @@
 // from no value, and `!` would promise that no value of A exists where the
 // text uses one. A gets no type.
 zero <- {integer};
-a_x: a_x <- a.x;
-a_x <- zero;
+a_x: a.x <- zero;
 
 assert refused UndecidedClass, ..;

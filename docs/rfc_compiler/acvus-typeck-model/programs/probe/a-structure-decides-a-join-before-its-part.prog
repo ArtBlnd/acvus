@@ -7,11 +7,11 @@
 // by its context, and nothing waits for it.
 none <- Option<k>;
 s <- u8;
-some_1u8 <- Option<s>;
+some_one_u8 <- Option<s>;
 none_2 <- Option<m>;
 x <- none;
 y <- x;
-y <- some_1u8;
+y <- some_one_u8;
 z <- y;
 z <- none_2;
 

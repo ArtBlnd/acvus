@@ -1,0 +1,34 @@
+// from cases/spec/a-try-in-a-match-arm.case
+// let n = match code(s) {      // code(&str) -> u8
+//     0u8 => { let d = digit(s)?; d }    // digit(&str) -> Option<u8>
+//     _ => 0u8,
+// };
+// Some(n)                      // the script's result Option<u8>
+// A match arm's braces are part of the match, no block expression, so
+// the ? in it exits the script, whose result its exit enters, and
+// the arm gives d: d and 0u8 enter n, which is u8.
+// not asserted here: assert q == ?#0;
+str_ <- str;
+s <- &str_;
+u8_ <- u8;
+r <- Option<u8_>;
+zero_u8 <- u8;
+some_n <- Option<k>;
+declare code_p0 = &str;
+declare code_result = u8;
+code_0: pass s to code_p0;
+code_call <- code_result;
+declare digit_p0 = &str;
+declare digit_result = Option<u8>;
+digit_0: pass s to digit_p0;
+digit_call <- digit_result;
+q: d <- digit_call.Ok;
+r <- Result<q_ok, q_error>;
+exit digit_call.Err to q_error;
+n <- d;
+n <- zero_u8;
+k <- n;
+r <- some_n;
+
+assert accepted;
+assert n: u8;

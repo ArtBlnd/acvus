@@ -3,13 +3,13 @@
 // fill_all(&mut a);        // fill_all(&mut Vec<u8>)
 // not asserted here: assert lend == lend &mut place;
 declare new_result = Vec<new_t>;
-new <- new_result;
-a <- new;
+new_call <- new_result;
+a <- new_call;
 lend: ref_mut_a <- &mut a;
 declare fill_all_p0 = &mut Vec<u8>;
 declare fill_all_result = ();
 fill_all_0: pass ref_mut_a to fill_all_p0;
-fill_all <- fill_all_result;
+fill_all_call <- fill_all_result;
 
 assert accepted;
 assert a: Vec<u8>;

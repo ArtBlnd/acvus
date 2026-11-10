@@ -5,7 +5,6 @@
 // constructor and falls back to !, whose element is !: the literal
 // entering it has no type there.
 one <- {integer};
-a_0: a_0 <- a.[];
-a_0 <- one;
+a_0: a.[] <- one;
 
 assert refused ..;

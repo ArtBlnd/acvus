@@ -10,8 +10,8 @@
 // not asserted here: assert lend == lend & place;
 // not asserted here: assert failing [`&a.x ~> take.Param(0)`];
 one_u8 <- u8;
-a_x: a_x <- a.x;
-a_x <- one_u8;
+a_x: a.x <- one_u8;
+a_x <- a.x;
 lend: ref_a_x <- &a_x;
 declare take_p0 = &u16;
 declare take_result = ();

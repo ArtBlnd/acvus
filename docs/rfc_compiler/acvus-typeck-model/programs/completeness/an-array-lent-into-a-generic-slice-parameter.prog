@@ -13,8 +13,8 @@ ref_a: ref_a <- &a;
 declare first_p0 = &[first_t];
 declare first_result = Option<&first_t>;
 first_0: pass ref_a to first_p0;
-first <- first_result;
-f <- first;
+first_call <- first_result;
+f <- first_call;
 
 assert accepted;
 assert f: Option<&u8>;

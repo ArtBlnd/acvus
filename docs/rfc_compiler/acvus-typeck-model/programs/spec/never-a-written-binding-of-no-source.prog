@@ -6,11 +6,10 @@
 // what was written into it, never passes as u8.
 // not asserted here: assert failing [`1u8 <= t.0`];
 one_u8 <- u8;
-t_0: t_0 <- t.0;
-t_0 <- one_u8;
+t_0: t.0 <- one_u8;
 declare takes_u8_p0 = u8;
 declare takes_u8_result = ();
 takes_u8_0: pass t to takes_u8_p0;
-takes_u8_t <- takes_u8_result;
+takes_u8_call <- takes_u8_result;
 
 assert refused ..;

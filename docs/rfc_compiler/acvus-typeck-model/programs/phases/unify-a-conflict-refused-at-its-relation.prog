@@ -8,7 +8,6 @@
 string <- String;
 declare cfg = {name: string};
 one <- {integer};
-cfg_extra: cfg_extra <- cfg.extra;
-cfg_extra <- one;
+cfg_extra: cfg.extra <- one;
 
 assert refused ..;

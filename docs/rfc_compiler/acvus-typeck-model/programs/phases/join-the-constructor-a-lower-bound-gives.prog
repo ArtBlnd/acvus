@@ -7,9 +7,9 @@
 // not asserted here: assert trace "join A: Option";
 // not asserted here: assert decomposition records `S <=p A.Payload(Some)`;
 u8_ <- u8;
-some_1u8 <- Option<s>;
+some_one_u8 <- Option<s>;
 s <- u8_;
-a <- some_1u8;
+a <- some_one_u8;
 
 assert accepted;
 assert a: Option<u8>;

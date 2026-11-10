@@ -3,9 +3,8 @@
 // v[0] = 1u8;
 one_u8 <- u8;
 declare new_result = Vec<new_t>;
-new <- new_result;
-v <- new;
-v_0: v_0 <- v.[];
-v_0 <- one_u8;
+new_call <- new_result;
+v <- new_call;
+v_0: v.[] <- one_u8;
 
 assert refused ..;
