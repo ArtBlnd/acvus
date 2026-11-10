@@ -39,18 +39,10 @@ id! {
     TemplateId,
     /// What recorded something (Constraints, O22).
     ItemId,
-    /// A use (Uses).
-    UseId,
-    /// The body of a free fn, a method or a lambda.
-    BodyId,
     /// A lambda together with its captures (Closures and instances).
     ClosureId,
-    /// A body recorded anew at a use (O26).
-    InstanceId,
     /// The text of a body or a lambda, or one iteration of a loop (Brand types).
     ScopeId,
-    /// A binding group.
-    GroupId,
 }
 
 /// A sequence of `T`, each issued an id `I` when it is pushed.

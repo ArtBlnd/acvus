@@ -43,9 +43,8 @@ where
     /// one operation `lower` may take to reach it is the reborrow. Classes
     /// that enter one another are one class.
     Enter { lower: K::Id, upper: K::Id },
-    /// One change goes from `lower` to `upper` (O2, O11). It decides neither
-    /// head, and it is made once both class nodes are decided, as a coercion
-    /// may read a reference and its target together.
+    /// `lower` is passed to `upper`: by subtyping the language gives, or else
+    /// through declared functions. It decides neither head.
     Change { lower: K::Id, upper: K::Id },
     /// The two heads are equal (O9). It decides neither head and makes no
     /// change, so it can be judged one layer at a time.

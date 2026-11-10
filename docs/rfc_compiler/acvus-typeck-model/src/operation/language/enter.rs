@@ -9,7 +9,7 @@ use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::bound::Bound;
 use crate::primitive::class::ClassKind;
-use crate::primitive::record::Coercion;
+use crate::primitive::adjustment::Subtyping;
 use crate::primitive::refusal::{Cause, Refusal};
 use crate::primitive::ty::{Mutability, Shape};
 use crate::store::classes::Classes;
@@ -54,7 +54,7 @@ where
     );
     Told::done(Looked::Holds {
         pairs,
-        adjustments: reborrowed.then_some(Adjustment::Coerce(Coercion::Reborrow)).into_iter().collect(),
+        adjustments: reborrowed.then_some(Adjustment::Subtype(Subtyping::Reborrow)).into_iter().collect(),
     })
 }
 

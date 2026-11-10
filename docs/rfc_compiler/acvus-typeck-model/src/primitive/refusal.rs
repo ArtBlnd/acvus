@@ -1,4 +1,4 @@
-//! Refusals (O22).
+//! Refusals: what solving refuses of a program, and the items that met there.
 
 use std::collections::BTreeSet;
 
@@ -6,25 +6,20 @@ use super::ItemId;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Cause {
-    /// Two shapes of constructors that do not join (Joins, O6).
+    /// Two heads that do not join, or that are not of one layer where they are
+    /// compared.
     Mismatch,
-    /// No change goes at a boundary (O11).
+    /// An argument does not go to the type it is passed to: the language gives
+    /// nothing, and not exactly one way through declared functions goes.
     NoChange,
-    /// O8
+    /// The domains registered on a class admit no head, or not the head it has.
     EmptyDomain,
-    /// O5
+    /// A class is a part of itself.
     Occurs,
-    /// A part named on a class has no place in the shape the class is
-    /// decided as (O7).
+    /// A part named on a class has no place in the head the class is decided as.
     NotHeld,
-    /// A closure has no instance at a use (O30).
-    NoInstance,
-    /// A brand type leaves its scope (O28).
-    Escape,
-    /// A class is still undecided when solving ends (O21).
+    /// A class is still undecided when solving ends.
     UndecidedClass,
-    /// A use is still undecided when solving ends (O21).
-    UndecidedUse,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]

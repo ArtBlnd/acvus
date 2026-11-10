@@ -1,20 +1,17 @@
-//! The domain primitives of type checking: types, classes and their
-//! constraints, declarations, uses, bodies and refusals. The operations that
-//! read a store of classes, and the solvers over them, live outside this module.
+//! The domain primitives of type checking: types, classes and what they hold,
+//! bounds, adjustments and refusals. The store of classes, and the operations
+//! that solve over it, live outside this module.
 
 pub mod adjustment;
-pub mod body;
 pub mod bound;
 pub mod class;
-pub mod decl;
 pub mod domain;
 pub mod id;
-pub mod record;
 pub mod refusal;
 pub mod scope;
 pub mod ty;
 
-pub use id::{BodyId, ClassId, ClosureId, GroupId, InstanceId, ItemId, ScopeId, TemplateId, UseId};
+pub use id::{ClassId, ClosureId, ItemId, ScopeId, TemplateId};
 
 /// The name of a field, a variant, an enum, a module, an extern declaration,
 /// a hole, or a place in the text.

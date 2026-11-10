@@ -14,7 +14,7 @@ use crate::primitive::bound::{Bound, BoundOf};
 use crate::primitive::class::{Live, Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
-use crate::primitive::record::Coercion;
+use crate::primitive::adjustment::Subtyping;
 use crate::primitive::refusal::Refusal;
 use crate::primitive::ty::{PartKey, Scalar, Shape, Ty};
 use crate::primitive::{ClassId, ClosureId, ItemId, Name};
@@ -98,7 +98,7 @@ fn an_exclusive_and_a_shared_reference_meet_as_shared_and_the_exclusive_one_is_r
     let exclusive_enters = world.items.iter().last().expect("an item was recorded").0;
     world.enter(shared, place);
     world.settle(&Language::default());
-    let reborrow = vec![Adjustment::Coerce(Coercion::Reborrow)];
+    let reborrow = vec![Adjustment::Subtype(Subtyping::Reborrow)];
     assert_eq!(world.outcome.adjustments.get(&exclusive_enters), Some(&reborrow));
 }
 
@@ -343,8 +343,8 @@ where
     Ok(taken)
 }
 
-fn coerced(coercions: &[Coercion]) -> Result<Vec<Adjustment>, String> {
-    Ok(coercions.iter().copied().map(Adjustment::Coerce).collect())
+fn subtyped(taken: &[Subtyping]) -> Result<Vec<Adjustment>, String> {
+    Ok(taken.iter().copied().map(Adjustment::Subtype).collect())
 }
 
 #[test]
@@ -440,7 +440,7 @@ fn never_is_passed_to_any_type() {
             let returns = w.text(Shape::Never);
             w.pass(returns, declared)
         }),
-        coerced(&[Coercion::Never])
+        subtyped(&[Subtyping::Never])
     );
 }
 
@@ -455,9 +455,9 @@ fn an_exclusive_reference_is_passed_as_a_shared_one_and_not_the_other_way() {
             w.pass(lent, parameter)
         })
     };
-    assert_eq!(passed(EXCLUSIVE, SHARED), coerced(&[Coercion::Reborrow]));
-    assert_eq!(passed(SHARED, SHARED), coerced(&[]));
-    assert_eq!(passed(EXCLUSIVE, EXCLUSIVE), coerced(&[]));
+    assert_eq!(passed(EXCLUSIVE, SHARED), subtyped(&[Subtyping::Reborrow]));
+    assert_eq!(passed(SHARED, SHARED), subtyped(&[]));
+    assert_eq!(passed(EXCLUSIVE, EXCLUSIVE), subtyped(&[]));
     assert_eq!(passed(SHARED, EXCLUSIVE), Err("NoChange".to_owned()));
 }
 
@@ -482,11 +482,11 @@ fn an_object_is_passed_as_one_with_fewer_fields_where_no_reference_is_above_it()
             }
         })
     };
-    assert_eq!(passed(&["x", "y"], &["x"], false), coerced(&[Coercion::DropFields]));
-    assert_eq!(passed(&["x"], &["x"], false), coerced(&[]));
+    assert_eq!(passed(&["x", "y"], &["x"], false), subtyped(&[Subtyping::DropFields]));
+    assert_eq!(passed(&["x"], &["x"], false), subtyped(&[]));
     assert_eq!(passed(&["x"], &["x", "y"], false), Err("NoChange".to_owned()));
     assert_eq!(passed(&["x", "y"], &["x"], true), Err("NoChange".to_owned()));
-    assert_eq!(passed(&["x"], &["x"], true), coerced(&[]));
+    assert_eq!(passed(&["x"], &["x"], true), subtyped(&[]));
 }
 
 #[test]
@@ -502,8 +502,8 @@ fn an_array_behind_a_reference_is_passed_as_a_slice() {
             w.pass(lent, parameter)
         })
     };
-    assert_eq!(passed(SHARED, SHARED), coerced(&[Coercion::Unsize]));
-    assert_eq!(passed(EXCLUSIVE, SHARED), coerced(&[Coercion::Unsize, Coercion::Reborrow]));
+    assert_eq!(passed(SHARED, SHARED), subtyped(&[Subtyping::Unsize]));
+    assert_eq!(passed(EXCLUSIVE, SHARED), subtyped(&[Subtyping::Unsize, Subtyping::Reborrow]));
     assert_eq!(
         taken_at(|w| {
             let declared = w.external(U8);
@@ -532,7 +532,7 @@ fn references_above_a_shared_reference_are_read_through_where_the_types_do_not_m
     assert_eq!(passed(SHARED, SHARED), Ok(vec![Adjustment::Deref]));
     assert_eq!(
         passed(SHARED, EXCLUSIVE),
-        Ok(vec![Adjustment::Deref, Adjustment::Coerce(Coercion::Reborrow)])
+        Ok(vec![Adjustment::Deref, Adjustment::Subtype(Subtyping::Reborrow)])
     );
     assert_eq!(passed(EXCLUSIVE, SHARED), Err("NoChange".to_owned()));
     assert_eq!(passed(EXCLUSIVE, EXCLUSIVE), Err("NoChange".to_owned()));
@@ -565,7 +565,7 @@ fn references_above_a_shared_reference_are_read_through_where_the_types_do_not_m
             let (lent_r, _) = w.lend(r, SHARED);
             w.pass(lent_r, parameter)
         }),
-        Ok(vec![Adjustment::Deref, Adjustment::Coerce(Coercion::Unsize)])
+        Ok(vec![Adjustment::Deref, Adjustment::Subtype(Subtyping::Unsize)])
     );
 }
 
@@ -581,7 +581,7 @@ fn a_function_value_is_passed_only_to_one_of_the_same_closures() {
             w.pass(argument, given)
         })
     };
-    assert_eq!(passed(&[0, 1], &[0, 1]), coerced(&[]));
+    assert_eq!(passed(&[0, 1], &[0, 1]), subtyped(&[]));
     assert_eq!(passed(&[0], &[0, 1]), Err("NoChange".to_owned()));
     assert_eq!(passed(&[0, 1], &[0]), Err("NoChange".to_owned()));
 }
@@ -744,7 +744,7 @@ where
 }
 
 fn called(name: &str) -> Adjustment {
-    Adjustment::Convert(Name::new(name))
+    Adjustment::Row(Name::new(name))
 }
 
 fn vec_class(world: &mut World, element: ClassId) -> ClassId {
@@ -791,7 +791,7 @@ fn what_the_language_gives_is_taken_on_the_way_into_a_row() {
     assert_eq!(passed(None, SHARED), Ok(vec![called("as_slice")]));
     assert_eq!(
         passed(None, EXCLUSIVE),
-        Ok(vec![Adjustment::Coerce(Coercion::Reborrow), called("as_slice")])
+        Ok(vec![Adjustment::Subtype(Subtyping::Reborrow), called("as_slice")])
     );
     assert_eq!(passed(Some(SHARED), SHARED), Ok(vec![Adjustment::Deref, called("as_slice")]));
 }
@@ -836,7 +836,7 @@ fn a_row_is_looked_for_only_where_the_language_gives_nothing() {
         let (lent, _) = w.lend(array, SHARED);
         w.pass(lent, parameter)
     });
-    assert_eq!(taken, coerced(&[Coercion::Unsize]));
+    assert_eq!(taken, subtyped(&[Subtyping::Unsize]));
 }
 
 #[test]

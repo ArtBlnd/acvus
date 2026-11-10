@@ -33,7 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::class::{ClassKind, State, Template};
-use crate::primitive::record::Coercion;
+use crate::primitive::adjustment::Subtyping;
 use crate::primitive::refusal::{Cause, Refusal};
 use crate::primitive::ty::{Mutability, Shape};
 use crate::primitive::{ItemId, TemplateId};
@@ -108,8 +108,8 @@ enum Given<A, G> {
     Nothing,
 }
 
-fn loosened(by: Coercion, where_loosened: bool) -> Vec<Adjustment> {
-    where_loosened.then_some(Adjustment::Coerce(by)).into_iter().collect()
+fn loosened(by: Subtyping, where_loosened: bool) -> Vec<Adjustment> {
+    where_loosened.then_some(Adjustment::Subtype(by)).into_iter().collect()
 }
 
 /// What the language gives between what `from` writes at `argument` and what `to`
@@ -135,12 +135,12 @@ where
     let paired = |parts: Vec<(&A::Id, &G::Id)>| parts.into_iter().map(|(a, g)| (*a, *g)).collect();
     match (head, wanted) {
         (Shape::Never, Shape::Never) => goes(Vec::new(), Vec::new()),
-        (Shape::Never, _) => goes(Vec::new(), vec![Adjustment::Coerce(Coercion::Never)]),
+        (Shape::Never, _) => goes(Vec::new(), vec![Adjustment::Subtype(Subtyping::Never)]),
         (Shape::Ref(of_argument, target), Shape::Ref(of_given, given_target)) => {
             if (*of_argument, *of_given) == (Mutability::Shared, Mutability::Exclusive) {
                 return Given::Nothing;
             }
-            let reborrowed = loosened(Coercion::Reborrow, of_argument != of_given);
+            let reborrowed = loosened(Subtyping::Reborrow, of_argument != of_given);
             match behind_a_reference(from, *target, to, *given_target, read) {
                 Given::Goes { pairs, adjustments } => goes(pairs, adjustments.into_iter().chain(reborrowed).collect()),
                 other => other,
@@ -154,7 +154,7 @@ where
             else {
                 return Given::Nothing;
             };
-            goes(paired(kept), loosened(Coercion::DropFields, given_fields.len() < fields.len()))
+            goes(paired(kept), loosened(Subtyping::DropFields, given_fields.len() < fields.len()))
         }
         (Shape::Enum(name, variants), Shape::Enum(given_name, given_variants)) if name == given_name => {
             let Some(held) = variants
@@ -164,7 +164,7 @@ where
             else {
                 return Given::Nothing;
             };
-            goes(paired(held), loosened(Coercion::AddVariants, variants.len() < given_variants.len()))
+            goes(paired(held), loosened(Subtyping::AddVariants, variants.len() < given_variants.len()))
         }
         (Shape::Error(variants), Shape::Error(given_variants)) => {
             let Some(held) = variants
@@ -174,7 +174,7 @@ where
             else {
                 return Given::Nothing;
             };
-            goes(paired(held), loosened(Coercion::AddVariants, variants.len() < given_variants.len()))
+            goes(paired(held), loosened(Subtyping::AddVariants, variants.len() < given_variants.len()))
         }
         (Shape::FnValue(_), Shape::Fn(..)) => todo!("a function value passed to a function type: its instances"),
         _ if head.layer() == wanted.layer() => {
@@ -218,7 +218,7 @@ where
         }
         match (head, wanted) {
             (Shape::Array(_, element), Shape::Slice(given_element)) => {
-                read_through.push(Adjustment::Coerce(Coercion::Unsize));
+                read_through.push(Adjustment::Subtype(Subtyping::Unsize));
                 return goes(vec![(*element, *given_element)], read_through);
             }
             (Shape::Ref(Mutability::Shared, inner), _) => {
@@ -423,7 +423,7 @@ where
     for (step, taken) in way.taken.into_iter().enumerate() {
         adjustments.extend(taken);
         if let Some(row) = way.rows.get(step) {
-            adjustments.push(Adjustment::Convert(functions.rows[*row].name.clone()));
+            adjustments.push(Adjustment::Row(functions.rows[*row].name.clone()));
         }
     }
     Looked::Holds { pairs, adjustments }

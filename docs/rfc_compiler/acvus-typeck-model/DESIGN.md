@@ -90,10 +90,6 @@ bound nothing has happened to is not looked at again.
   only when a `Deciding` is made, after looking has run to its end, and by then every bound
   that waits has stated its guards anew. The guards themselves are tested: turning them off, or
   having a passing hold nothing apart, fails `a_hole_a_passing_not_told_yet_may_reach_is_not_decided`.
-- **Late unions.** The store counts each union, other than a decision, of a decided class with
-  an undecided one that is the upper end of a bound. Nothing reads the count. One program of
-  the law makes such a union, and rightly: a row's hole made one with a part already decided,
-  where `!` had entered the hole.
 - **A function value passed to a function type**, left as a `todo`.
 - **Calls** on a class, which no law judges.
 - **A part read through more than one reference**, by a projection.

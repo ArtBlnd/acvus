@@ -126,7 +126,7 @@ where
 mod tests {
     use super::*;
     use crate::primitive::Name;
-    use crate::primitive::bound::Bound;
+    use crate::primitive::bound::{Bound, BoundOf};
     use crate::primitive::class::{Live, Side, State, Template};
     use crate::primitive::id::Arena;
     use crate::primitive::ty::{Mutability, PartKey, Shape};
@@ -241,6 +241,21 @@ mod tests {
     }
 
     /// `|x| last = Some(x)`, whose text writes into the capture `last`.
+    /// The classes at the lower end of the bounds whose upper end is `upper`,
+    /// each with the items that recorded those bounds.
+    fn entering<K>(classes: &Classes<K>, upper: K::Id) -> BTreeMap<K::Id, BTreeSet<ItemId>>
+    where
+        K: ClassKind,
+    {
+        let mut found = BTreeMap::<K::Id, BTreeSet<ItemId>>::new();
+        for (bound, at) in classes.bounds() {
+            if classes.find(bound.upper()) == classes.find(upper) {
+                found.entry(classes.find(bound.lower()).id()).or_default().insert(*at);
+            }
+        }
+        found
+    }
+
     fn remember(world: &mut World) -> (Classes<Template>, TemplateId, TemplateId, ItemId) {
         let root = world.scopes.root();
         let mut template = Classes::<Template>::default();
@@ -266,7 +281,7 @@ mod tests {
         assert_eq!(copied.unified, Unified::default());
         assert_eq!(copied.classes[&stand_in], last);
         let some = world.live.find(copied.classes[&some]).id();
-        assert_eq!(world.live.lower_items(last), BTreeMap::from([(some, BTreeSet::from([meets]))]));
+        assert_eq!(entering(&world.live, last), BTreeMap::from([(some, BTreeSet::from([meets]))]));
     }
 
     #[test]
@@ -280,7 +295,7 @@ mod tests {
         });
         assert_eq!(template.verify(), Ok(()));
         assert_eq!(
-            template.lower_items(stand_in),
+            entering(&template, stand_in),
             BTreeMap::from([(template.find(some).id(), BTreeSet::from([meets]))])
         );
         assert_eq!(format!("{template:?}"), format!("{before:?}"));
@@ -308,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bound_between_two_copies_is_held_by_both() {
+    fn a_bound_between_two_copies_is_recorded_between_them() {
         let mut world = World::new();
         let root = world.scopes.root();
         let mut template = Classes::<Template>::default();
@@ -318,9 +333,7 @@ mod tests {
         template.bound(Bound::Change { lower: a, upper: b }, at);
         let copied = world.copy(&template, |_| Fate::Anew);
         let (a, b) = (copied.classes[&a], copied.classes[&b]);
-        let held = BTreeSet::from([(Bound::Change { lower: a, upper: b }, at)]);
-        assert_eq!(world.live.uppers(world.live.find(a))[&world.live.find(b)], held);
-        assert_eq!(world.live.lowers(world.live.find(b))[&world.live.find(a)], held);
+        assert_eq!(world.live.bounds(), &BTreeSet::from([(Bound::Change { lower: a, upper: b }, at)]));
     }
 
     #[test]
@@ -338,6 +351,6 @@ mod tests {
         });
         assert_eq!(enclosing.verify(), Ok(()));
         let some = enclosing.find(copied.classes[&some]).id();
-        assert_eq!(enclosing.lower_items(last), BTreeMap::from([(some, BTreeSet::from([meets]))]));
+        assert_eq!(entering(&enclosing, last), BTreeMap::from([(some, BTreeSet::from([meets]))]));
     }
 }
