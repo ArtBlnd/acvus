@@ -163,7 +163,7 @@ fn a_class_only_parts_are_named_on_takes_the_head_they_make() {
         "a.x <- u8;
          b <- a;
          b.y <- {integer};
-         assert a: {x: u8, y: i32};
+         assert a: {x: u8};
          assert b: {x: u8, y: i32};",
     );
     holds("x <- a.E::V; assert a: E{V(!)};");

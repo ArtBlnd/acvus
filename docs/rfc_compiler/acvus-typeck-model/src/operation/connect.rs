@@ -126,9 +126,12 @@ where
                 break None;
             };
             adjustments.push(adjustment);
+            // The part is read there, whatever it was where it was named: a
+            // part reached through another is not written into the class that
+            // holds it.
             let mut named = None;
-            for (side, item) in &projections {
-                named = classes.part(owner, key.clone(), *side, *item);
+            for (_, item) in &projections {
+                named = classes.part(owner, key.clone(), Side::Upper, *item);
             }
             if named.is_some() {
                 break named;

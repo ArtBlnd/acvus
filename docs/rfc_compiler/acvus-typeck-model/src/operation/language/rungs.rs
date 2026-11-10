@@ -5,13 +5,14 @@
 //! |---|---|---|
 //! | 0 | the join of what enters it | every class something enters, once each of those has a head |
 //! | 1 | the one head its upper bounds give it | a class nothing enters |
-//! | 2 | the head made from the parts named of it | a class nothing enters and no upper bound gives a head |
+//! | 2 | the head made from the parts named on it | a class nothing enters and no upper bound gives a head |
 //! | 3 | the fallback of its literals' domain | a class nothing enters and no upper bound gives a head |
 //! | 4 | `!` | a class nothing else gives a head |
 //!
-//! `!` says nothing: where the join of what enters a class is `!`, rung 0 gives
-//! the head made from the parts named of the class, as rung 2 does where nothing
-//! enters.
+//! What is written into a class enters it: the fields written make an object,
+//! which rung 0 joins with what enters. `!` says nothing: where the join of what
+//! enters a class is `!`, rung 0 gives the head the parts named on the class make,
+//! read or written, as rung 2 does where nothing enters.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -64,7 +65,38 @@ where
         .collect()
 }
 
-/// Rung 0: the join of the heads that enter the class, once each has a head.
+/// The object of the fields written into `class`, with the items that wrote
+/// them: none where no field is written into it.
+///
+/// A write `a.x = v` says a field `x` is there, which is all an object's head
+/// says, so it writes that head as a lend writes a reference. A component, an
+/// element and a target say no whole head, and write none.
+fn written<K>(classes: &Classes<K>, class: K::Id) -> Option<(Shape<K::Id>, BTreeSet<ItemId>)>
+where
+    K: ClassKind,
+{
+    let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
+        return None;
+    };
+    let mut fields = BTreeMap::new();
+    let mut by = BTreeSet::new();
+    for (key, part) in &undecided.parts {
+        if let (PartKey::Field(field), false) = (key, part.lower.is_empty()) {
+            fields.insert(field.clone(), class);
+            by.extend(&part.lower);
+        }
+    }
+    (!fields.is_empty()).then_some((Shape::Object(fields), by))
+}
+
+/// Rung 0: the join of the heads that enter the class, once each has a head,
+/// and of the object of the fields written into it.
+///
+/// What is written joins as what enters does, so an object that entered has the
+/// fields written besides its own. A head that is no object is not joined with
+/// what is written: a part written into a reference is written through it, and
+/// what it refers to is as it lies. Where the join is `!`, which says nothing,
+/// the class takes the head its parts make, read or written.
 fn join<K>(classes: &Classes<K>, class: K::Id) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
@@ -75,18 +107,27 @@ where
     };
     let by: BTreeSet<ItemId> = entering.iter().map(|(.., at)| *at).collect();
     let mut heads = heads.into_iter();
-    let Some(first) = heads.next() else {
-        return Offer::Nothing;
-    };
-    match heads.try_fold(first, |joined, head| joined.join(&head)) {
-        // `!` is the least head, so what the class's parts make is joined with it.
-        Some(Shape::Never) => match made_of_parts(classes, class) {
-            Some((shape, named)) => Offer::Head {
-                shape,
-                by: by.into_iter().chain(named).collect(),
-            },
-            None => Offer::Head { shape: Shape::Never, by },
+    let joined = match heads.next() {
+        Some(first) => heads.try_fold(first, |joined, head| joined.join(&head)),
+        // Nothing enters: what is written is all there is to join.
+        None => match written(classes, class) {
+            Some((shape, by)) => return Offer::Head { shape, by },
+            None => return Offer::Nothing,
         },
+    };
+    let with = |made: Option<(Shape<K::Id>, BTreeSet<ItemId>)>, joined: Shape<K::Id>| match made {
+        Some((made, named)) => match joined.join(&made) {
+            Some(shape) => Offer::Head {
+                shape,
+                by: by.iter().copied().chain(named).collect(),
+            },
+            None => Offer::Head { shape: joined, by: by.clone() },
+        },
+        None => Offer::Head { shape: joined, by: by.clone() },
+    };
+    match joined {
+        Some(Shape::Never) => with(made_of_parts(classes, class), Shape::Never),
+        Some(object @ Shape::Object(_)) => with(written(classes, class), object),
         Some(shape) => Offer::Head { shape, by },
         None => Offer::Refused(Refused {
             cause: Cause::Mismatch,
@@ -241,49 +282,27 @@ where
     Some((domain, undecided.domains.iter().map(|(_, by)| *by).collect()))
 }
 
-/// The parts named on `class` and on each class with no head that it enters, in
-/// turn, each with the items that named it. The head `class` takes enters each of
-/// those, so a part named there is named of `class` too, as a head asked there
-/// is asked of it.
-fn parts_named<K>(classes: &Classes<K>, class: K::Id, seen: &mut BTreeSet<K::Id>) -> BTreeMap<PartKey, BTreeSet<ItemId>>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    let root = classes.find(class).id();
-    if !seen.insert(root) {
-        return BTreeMap::new();
-    }
-    let mut named: BTreeMap<PartKey, BTreeSet<ItemId>> = BTreeMap::new();
-    if let State::Undecided(undecided) = &classes.get(classes.find(root)).state {
-        for (key, part) in &undecided.parts {
-            named
-                .entry(key.clone())
-                .or_default()
-                .extend(part.lower.iter().chain(&part.upper).chain(&part.carried));
-        }
-    }
-    for upper in entered(classes, root) {
-        for (key, items) in parts_named(classes, upper, seen) {
-            named.entry(key).or_default().extend(items);
-        }
-    }
-    named
-}
-
-/// The head made from the parts named of `class`, with the items that named
-/// them: an object of the fields named, or the type whose variants the payloads
-/// named are of. None where no part is named, where the names are not all of one
-/// such type, and where a name does not say the whole head: a target does not say
-/// which reference, nor a component how many, nor an element what holds it.
+/// The head made from the parts named on `class`, read or written, with the
+/// items that named them: an object of the fields named, or the type whose
+/// variants the payloads named are of. None where no part is named, where the
+/// names are not all of one such type, and where a name does not say the whole
+/// head: a target does not say which reference, nor a component how many, nor an
+/// element what holds it.
 ///
 /// The parts of the head given stand for no class: a head decided has the
 /// class's own parts.
 fn made_of_parts<K>(classes: &Classes<K>, class: K::Id) -> Option<(Shape<K::Id>, BTreeSet<ItemId>)>
 where
-    K: ClassKind<Constraint = Constraint<K>>,
+    K: ClassKind,
 {
-    let named = parts_named(classes, class, &mut BTreeSet::new());
-    let by = named.values().flatten().copied().collect();
+    let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
+        return None;
+    };
+    let named = &undecided.parts;
+    let by = named
+        .values()
+        .flat_map(|part| part.lower.iter().chain(&part.upper).chain(&part.carried).copied())
+        .collect();
     let shape = match named.keys().next()? {
         PartKey::Field(_) => Shape::Object(
             named
@@ -317,7 +336,7 @@ where
 }
 
 /// Rung 2: a class that neither lower nor upper bounds decide takes the head made
-/// from the parts named of it.
+/// from the parts named on it.
 fn from_parts<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,

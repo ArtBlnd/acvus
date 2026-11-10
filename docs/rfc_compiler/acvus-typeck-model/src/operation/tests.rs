@@ -311,23 +311,124 @@ fn variant(of: VariantOf, name: &str) -> PartKey {
 }
 
 #[test]
-fn a_class_nothing_gives_a_head_is_the_object_of_the_fields_named_of_it() {
-    // `let a; a.x = 1u8;`, `let a; a.x`, and `let a; a.x = 1u8; a.y = 0`.
-    comes_to("{x: u8}", |w, lets| written_field(w, lets).0);
+fn a_class_nothing_gives_a_head_takes_the_head_the_parts_named_on_it_make() {
+    // `let a; a.x`, read behind each count of `let`s: the class read is an
+    // object, and the variable nothing was said of is `!`.
+    let read = |observe_read: bool| {
+        move |w: &mut World, lets: usize| {
+            let a = w.undecided();
+            let last = behind(w, a, lets + 1);
+            w.project(last, field("x"), Side::Upper);
+            if observe_read { last } else { a }
+        }
+    };
+    comes_to("{x: !}", read(true));
+    comes_to("!", read(false));
+}
+
+#[test]
+fn a_field_written_into_a_class_is_a_field_of_it() {
+    // `let a; a.x = 1u8;`
     comes_to("{x: u8}", |w, lets| written_field(w, lets).1);
-    comes_to("{x: !}", |w, lets| {
-        let a = w.undecided();
-        let last = behind(w, a, lets);
-        w.project(last, field("x"), Side::Upper);
+    // `let a = {y: 1u8}; a.x = 2u8;`: an object that entered has the field
+    // written besides its own.
+    comes_to("{x: u8, y: u8}", |w, lets| {
+        let y = w.text(U8);
+        let a = object(w, &[("y", y)]);
+        let a = behind(w, a, lets + 1);
+        let (x, _) = w.project(a, field("x"), Side::Lower);
+        let two = w.text(U8);
+        w.enter(two, x);
         a
     });
-    comes_to("{x: u8, y: i32}", |w, lets| {
-        let (a, _) = written_field(w, 0);
-        let last = behind(w, a, lets);
-        let (y, _) = w.project(last, field("y"), Side::Lower);
-        let zero = w.literal(&INTEGERS);
-        w.enter(zero, y);
+    // `let a = @cfg; a.extra = 1;`: so has one a declared object entered.
+    comes_to("{extra: i32, name: String}", |w, lets| {
+        let name = w.external(Shape::String);
+        let cfg = w.external(Shape::Object([(Name::new("name"), name)].into_iter().collect()));
+        let a = w.meets(cfg);
+        let a = behind(w, a, lets);
+        let (extra, _) = w.project(a, field("extra"), Side::Lower);
+        let one = w.literal(&INTEGERS);
+        w.enter(one, extra);
         a
+    });
+}
+
+#[test]
+fn a_field_is_written_into_the_class_it_is_written_on_and_no_other() {
+    // `let a; a.x = 1u8; let b = a; b.y = 0;`: `b` has both, and `a` its own.
+    let build = |observe_b: bool| {
+        move |w: &mut World, lets: usize| {
+            let (a, _) = written_field(w, 0);
+            let b = behind(w, a, lets + 1);
+            let (y, _) = w.project(b, field("y"), Side::Lower);
+            let zero = w.literal(&INTEGERS);
+            w.enter(zero, y);
+            if observe_b { b } else { a }
+        }
+    };
+    comes_to("{x: u8, y: i32}", build(true));
+    comes_to("{x: u8}", build(false));
+}
+
+#[test]
+fn a_field_read_is_no_field_of_an_object_that_entered() {
+    // `let a = {y: 1u8}; a.x`
+    comes_to("refused: NotHeld", |w, lets| {
+        let y = w.text(U8);
+        let a = object(w, &[("y", y)]);
+        let a = behind(w, a, lets + 1);
+        w.project(a, field("x"), Side::Upper).0
+    });
+}
+
+#[test]
+fn a_field_written_through_a_reference_is_no_field_of_what_it_refers_to() {
+    // `let o = {y: 1u8}; let r = &mut o; r.x = 2u8;`, and the same with `@cfg`.
+    let build = |declared: bool| {
+        move |w: &mut World, lets: usize| {
+            let o = if declared {
+                let y = w.external(U8);
+                w.external(Shape::Object([(Name::new("y"), y)].into_iter().collect()))
+            } else {
+                let y = w.text(U8);
+                let o = object(w, &[("y", y)]);
+                w.meets(o)
+            };
+            let (lent, _) = w.lend(o, EXCLUSIVE);
+            let r = behind(w, lent, lets);
+            let (x, _) = w.project(r, field("x"), Side::Lower);
+            let two = w.text(U8);
+            w.enter(two, x);
+            r
+        }
+    };
+    comes_to("refused: NotHeld", build(false));
+    comes_to("refused: NotHeld", build(true));
+}
+
+#[test]
+fn a_part_written_that_says_no_whole_head_writes_none() {
+    // `let t; t.0 = 1u8;`, `let x; x[i] = 1u8;`, `let r; *r = 1u8;`
+    for key in [PartKey::Component(0), PartKey::Elem, PartKey::Target] {
+        comes_to("refused: NotHeld", |w, lets| {
+            let a = w.undecided();
+            let a = behind(w, a, lets);
+            let (part, _) = w.project(a, key.clone(), Side::Lower);
+            let one = w.text(U8);
+            w.enter(one, part);
+            a
+        });
+    }
+    // `let x = [return; 3]; x[0] = 1u8;`: what is written goes into the place.
+    comes_to("[u8; 3]", |w, lets| {
+        let element = w.text(Shape::Never);
+        let x = w.text(Shape::Array(3, element));
+        let x = behind(w, x, lets);
+        let (part, _) = w.project(x, PartKey::Elem, Side::Lower);
+        let one = w.text(U8);
+        w.enter(one, part);
+        x
     });
 }
 
@@ -352,7 +453,7 @@ fn a_payload_named_makes_the_type_its_variant_is_of() {
             let a = w.undecided();
             let last = behind(w, a, lets);
             w.project(last, key.clone(), Side::Upper);
-            a
+            last
         }
     };
     comes_to("A{V(!)}", build(variant(VariantOf::Enum(Name::new("A")), "V")));
@@ -389,38 +490,41 @@ fn parts_whose_names_do_not_say_one_head_make_none() {
 }
 
 #[test]
-fn a_head_from_above_comes_before_the_head_parts_make() {
-    // `let a; a.x = 1u8; f(a)` with `f(&mut {x: u8})`.
-    comes_to("&mut {x: u8}", |w, lets| {
-        let (a, last) = written_field(w, lets);
-        let declared = w.external(U8);
-        let object = w.external(Shape::Object([(Name::new("x"), declared)].into_iter().collect()));
-        let parameter = w.external(Shape::Ref(EXCLUSIVE, object));
-        w.pass(last, parameter);
-        a
-    });
+fn a_head_from_above_comes_before_the_head_parts_read_make_and_after_what_is_written() {
+    // `let a; a.x; f(a)` and `let a; a.x = 1u8; f(a)`, with `f(&mut {x: u8})`.
+    let build = |side: Side| {
+        move |w: &mut World, lets: usize| {
+            let a = w.undecided();
+            let (x, _) = w.project(a, field("x"), side);
+            if side == Side::Lower {
+                let one = w.text(U8);
+                w.enter(one, x);
+            }
+            let last = behind(w, a, lets);
+            let declared = w.external(U8);
+            let object = w.external(Shape::Object([(Name::new("x"), declared)].into_iter().collect()));
+            let parameter = w.external(Shape::Ref(EXCLUSIVE, object));
+            w.pass(last, parameter);
+            a
+        }
+    };
+    comes_to("&mut {x: u8}", build(Side::Upper));
+    // What is written gives the class its head as what enters does, and an
+    // object is not passed as a reference to one.
+    comes_to("refused: NoChange", build(Side::Lower));
 }
 
 #[test]
 fn a_class_asked_two_heads_takes_none_from_its_parts() {
-    // `let a; a.x = 1u8; f(a); g(a)` with `f(u8)` and `g(u16)`.
+    // `let a; a.x; f(a); g(a)` with `f(u8)` and `g(u16)`.
     comes_to("refused: UndecidedClass", |w, lets| {
-        let (a, last) = written_field(w, lets);
+        let a = w.undecided();
+        w.project(a, field("x"), Side::Upper);
+        let last = behind(w, a, lets);
         let (eight, sixteen) = (w.external(U8), w.external(U16));
         w.pass(last, eight);
         w.pass(last, sixteen);
         a
-    });
-}
-
-#[test]
-fn a_head_that_entered_is_not_widened_by_a_part_named() {
-    // `let a = {y: 1u8}; a.x`
-    comes_to("refused: NotHeld", |w, lets| {
-        let y = w.text(U8);
-        let a = object(w, &[("y", y)]);
-        let a = behind(w, a, lets + 1);
-        w.project(a, field("x"), Side::Upper).0
     });
 }
 

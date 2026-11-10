@@ -63,8 +63,8 @@ The language's law is `operation::language`, one rule in one place:
 | the exit of `e?`: it waits for the head of what `e` exits with, and then an `Error` made by that head enters the error of the body's result | `exit` |
 | the functions declared: a table, and no rule | `functions` |
 | classes that enter one another are one class | `enter::entering_one_another` |
-| a part named on a reference is read through it | `Language::place` |
-| the rungs: the join of what enters, the one head from above, the head the parts named make, a literal's fallback, `!` | `rungs` |
+| a part named on a reference is read through it, and is read where it lies, whatever it was where it was named | `Language::place`, `connect::take_in` |
+| the rungs: the join of what enters and of what is written, the one head from above, the head the parts named make, a literal's fallback, `!` | `rungs` |
 | at the end: a class that is its own part, a class still undecided | `rungs::end` |
 
 A rule reads through a `View`, which is the store as it is, or with heads supposed of some

@@ -122,8 +122,8 @@ head asked of that part. The rung that gives a class a head from above looks at 
   is preferred.
 - The fallback of a literal's domain and the fallback to `!` are two rungs, the domain's first.
   `!` says nothing at all is known, and what a literal falls back to may yet give a class a head.
-  The head a class's parts make comes before both: it is what a written head would be, and a
-  written head is there before any fallback.
+  The head the parts read on a class make comes before both: it is what a written head would
+  be, and a written head is there before any fallback.
 - A head is decided at a fixpoint: a class waits until nothing more can enter it.
 
 ## Where a declared type is met
@@ -269,10 +269,38 @@ A head that has parts is made from those parts, and a head with none is made fro
 So a class nothing has given a part to has a head with no parts, and a class a part is recorded
 on has a head with a place for it.
 
-A class nothing gives a head takes the head its parts make. Where nothing enters a class, or
-the join of what enters it is `!`, and no head is asked of it from above, it is:
+A write `a.x = v` writes a head, as a lend does: an object with the field `x`, which enters
+`a`. So the head of a class is the join of what enters it and of the object of the fields
+written into it, and an object that entered has those fields besides its own.
 
-| Parts named of it | Its head |
+| Program | `a` |
+|---|---|
+| `let a; a.x = 1u8;` | `{x: u8}` |
+| `let a = {y: 1u8}; a.x = 2u8;` | `{x: u8, y: u8}` |
+| `let a = @cfg; a.extra = 1;`, with `@cfg: {name: String}` | `{extra: i32, name: String}` |
+| `let a = {y: 1u8}; a.x` | refused: a field read is no field written |
+| `let a = &mut o; a.x = 2u8;`, with `o: {y: u8}` | refused: `o` has no `x` |
+
+What decides this is whether what is written can then be used: `let a = @cfg; a.extra = 1;
+let b = a.extra;` reads what it wrote.
+
+Only a field writes a head. A field says all an object's head says, that it is there, and
+such bounds are gathered by the join. A component, an element and a target say no whole head:
+not how many components, nor what holds the element, nor which reference. What is written to
+one goes into its place, and the class that holds the place has its head from elsewhere:
+`let x = [return; 3]; x[0] = 1u8;` is `[u8; 3]`, and `let t; t.0 = 1u8;` is refused.
+
+A field is written into the class it is written on, and no other. `let a; a.x = 1u8; let b =
+a; b.y = 0;` makes `b` `{x: u8, y: i32}` and leaves `a` `{x: u8}`. A field written through a
+reference is written into nothing: a reference points at the value as it lies, so no field is
+added behind one, as none is dropped. What it refers to must have the field already. A
+declared class is not written into either, as it never changes.
+
+A class nothing gives a head, by entering or by writing, takes the head the parts named on it
+make, read or written. That is where nothing enters it, or the join of what enters it is `!`,
+and no head is asked of it from above:
+
+| Parts named on it | Its head |
 |---|---|
 | fields `x`, `y` | `{x, y}` |
 | payloads of variants of the enum `A` | `A`, with those variants |
@@ -280,15 +308,8 @@ the join of what enters it is `!`, and no head is asked of it from above, it is:
 | a target, a component, an element | none: the name does not say which reference, how many components, or what holds the element |
 | names of more than one of these | none |
 
-So `let a; a.x = 1u8;` gives `a` the type `a = {x: 1u8}` gives it, and `let A::V(x) = a` makes
-`a` an `A`. A part only read counts as one written does: `let a; a.x` is `{x: !}`. Where the
-parts make no head the class is `!`, and the part is refused as having no place.
-
-A part named of a class is one named on it, or on a class with no head that it enters, in
-turn: the head it takes enters that class, so the part must be there. So a `let` between
-changes nothing: `let a; let b = a; b.x = 1u8;` makes both `{x: u8}`.
-
-A head that entered is not widened by a part named: `let a = {y: 1u8}; a.x` is refused.
+So `let a; a.x` is `{x: !}`, and `let A::V(x) = a` makes `a` an `A`. Where the parts make no
+head the class is `!`, and the part is refused as having no place.
 
 The name of a payload says which type its variant is of, as the pattern that names it does. So
 `let Some(x) = a` is held only by an `Option`, and not by an enum that has a variant `Some`.
