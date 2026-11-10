@@ -16,7 +16,7 @@ use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::adjustment::Subtyping;
 use crate::primitive::refusal::Refusal;
-use crate::primitive::ty::{PartKey, Scalar, Shape, Ty};
+use crate::primitive::ty::{PartKey, Scalar, Shape, Ty, VariantOf};
 use crate::primitive::{ClassId, ClosureId, ItemId, Name};
 use crate::store::classes::Classes;
 
@@ -273,6 +273,137 @@ fn a_part_written_through_a_reference_is_one_class_with_the_part_it_lies_at() {
         let two = w.text(U8);
         w.enter(two, part);
         part
+    });
+}
+
+// A class nothing gives a head takes the head made from the parts named of it.
+
+/// `let a; a.x = 1u8;`, the write made behind `lets` bindings of `a`: the class
+/// of `a`, and the class written through.
+fn written_field(world: &mut World, lets: usize) -> (ClassId, ClassId) {
+    let a = world.undecided();
+    let last = behind(world, a, lets);
+    let (part, _) = world.project(last, field("x"), Side::Lower);
+    let one = world.text(U8);
+    world.enter(one, part);
+    (a, last)
+}
+
+fn variant(of: VariantOf, name: &str) -> PartKey {
+    PartKey::Payload(of, Name::new(name))
+}
+
+#[test]
+fn a_class_nothing_gives_a_head_is_the_object_of_the_fields_named_of_it() {
+    // `let a; a.x = 1u8;`, `let a; a.x`, and `let a; a.x = 1u8; a.y = 0`.
+    comes_to("{x: u8}", |w, lets| written_field(w, lets).0);
+    comes_to("{x: u8}", |w, lets| written_field(w, lets).1);
+    comes_to("{x: !}", |w, lets| {
+        let a = w.undecided();
+        let last = behind(w, a, lets);
+        w.project(last, field("x"), Side::Upper);
+        a
+    });
+    comes_to("{x: u8, y: i32}", |w, lets| {
+        let (a, _) = written_field(w, 0);
+        let last = behind(w, a, lets);
+        let (y, _) = w.project(last, field("y"), Side::Lower);
+        let zero = w.literal(&INTEGERS);
+        w.enter(zero, y);
+        a
+    });
+}
+
+#[test]
+fn never_says_nothing_so_a_class_it_enters_takes_the_head_its_parts_make() {
+    // `let b = return; b.x = 1u8;`
+    comes_to("{x: u8}", |w, lets| {
+        let b = w.text(Shape::Never);
+        let last = behind(w, b, lets);
+        let (part, _) = w.project(last, field("x"), Side::Lower);
+        let one = w.text(U8);
+        w.enter(one, part);
+        last
+    });
+}
+
+#[test]
+fn a_payload_named_makes_the_type_its_variant_is_of() {
+    // `let A::V(x) = a`, and `let Some(x) = a`.
+    let build = |key: PartKey| {
+        move |w: &mut World, lets: usize| {
+            let a = w.undecided();
+            let last = behind(w, a, lets);
+            w.project(last, key.clone(), Side::Upper);
+            a
+        }
+    };
+    comes_to("A{V(!)}", build(variant(VariantOf::Enum(Name::new("A")), "V")));
+    comes_to("Option<!>", build(variant(VariantOf::Option, "Some")));
+}
+
+#[test]
+fn a_payload_is_held_only_by_the_type_its_variant_is_of() {
+    // `let Some(x) = a` with `a` an `A{Some(u8)}`.
+    comes_to("refused: NotHeld", |w, lets| {
+        let payload = w.text(U8);
+        let a = w.text(Shape::Enum(Name::new("A"), [(Name::new("Some"), payload)].into_iter().collect()));
+        let a = behind(w, a, lets + 1);
+        w.project(a, variant(VariantOf::Option, "Some"), Side::Upper).0
+    });
+}
+
+#[test]
+fn parts_whose_names_do_not_say_one_head_make_none() {
+    // `let a; a.0`, `let a; *a`, and `let a; a.x; let A::V(y) = a`.
+    let build = |keys: Vec<PartKey>| {
+        move |w: &mut World, lets: usize| {
+            let a = w.undecided();
+            let last = behind(w, a, lets);
+            for key in &keys {
+                w.project(last, key.clone(), Side::Upper);
+            }
+            a
+        }
+    };
+    comes_to("refused: NotHeld", build(vec![PartKey::Component(0)]));
+    comes_to("refused: NotHeld", build(vec![PartKey::Target]));
+    comes_to("refused: NotHeld", build(vec![field("x"), variant(VariantOf::Enum(Name::new("A")), "V")]));
+}
+
+#[test]
+fn a_head_from_above_comes_before_the_head_parts_make() {
+    // `let a; a.x = 1u8; f(a)` with `f(&mut {x: u8})`.
+    comes_to("&mut {x: u8}", |w, lets| {
+        let (a, last) = written_field(w, lets);
+        let declared = w.external(U8);
+        let object = w.external(Shape::Object([(Name::new("x"), declared)].into_iter().collect()));
+        let parameter = w.external(Shape::Ref(EXCLUSIVE, object));
+        w.pass(last, parameter);
+        a
+    });
+}
+
+#[test]
+fn a_class_asked_two_heads_takes_none_from_its_parts() {
+    // `let a; a.x = 1u8; f(a); g(a)` with `f(u8)` and `g(u16)`.
+    comes_to("refused: UndecidedClass", |w, lets| {
+        let (a, last) = written_field(w, lets);
+        let (eight, sixteen) = (w.external(U8), w.external(U16));
+        w.pass(last, eight);
+        w.pass(last, sixteen);
+        a
+    });
+}
+
+#[test]
+fn a_head_that_entered_is_not_widened_by_a_part_named() {
+    // `let a = {y: 1u8}; a.x`
+    comes_to("refused: NotHeld", |w, lets| {
+        let y = w.text(U8);
+        let a = object(w, &[("y", y)]);
+        let a = behind(w, a, lets + 1);
+        w.project(a, field("x"), Side::Upper).0
     });
 }
 
@@ -665,7 +796,7 @@ fn a_variable_takes_the_head_it_is_passed_to_and_a_part_named_on_it_is_placed_th
         let declared = w.external(U8);
         let parameter = w.external(Shape::Option(declared));
         let a = w.undecided();
-        let (payload, _) = w.project(a, PartKey::Payload(Name::new("Some")), Side::Upper);
+        let (payload, _) = w.project(a, PartKey::Payload(VariantOf::Option, Name::new("Some")), Side::Upper);
         let a_read = behind(w, a, lets);
         w.pass(a_read, parameter);
         payload
@@ -1065,7 +1196,7 @@ impl Law<Live> for Odd {
             pairs: vec![Pair::Part {
                 part: bound.lower(),
                 of: bound.upper(),
-                key: PartKey::Payload(Name::new("Some")),
+                key: PartKey::Payload(VariantOf::Option, Name::new("Some")),
             }],
             adjustments: vec![Adjustment::Deref],
             bounds: Vec::new(),

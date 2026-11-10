@@ -180,6 +180,10 @@ impl World {
                 let fields: Vec<String> = fields.iter().map(|(name, part)| format!("{}: {}", name.0, at(part))).collect();
                 format!("{{{}}}", fields.join(", "))
             }
+            Shape::Enum(name, variants) => {
+                let variants: Vec<String> = variants.iter().map(|(variant, payload)| format!("{}({})", variant.0, at(payload))).collect();
+                format!("{}{{{}}}", name.0, variants.join(", "))
+            }
             Shape::Scalar(scalar) => format!("{scalar:?}").to_lowercase(),
             Shape::Never => "!".to_owned(),
             other => format!("{:?}", other.layer()),

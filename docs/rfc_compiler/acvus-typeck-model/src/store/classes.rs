@@ -719,7 +719,7 @@ mod tests {
     }
 
     fn some() -> PartKey {
-        PartKey::Payload(Name::new("Some"))
+        PartKey::Payload(crate::primitive::ty::VariantOf::Option, Name::new("Some"))
     }
 
     #[test]

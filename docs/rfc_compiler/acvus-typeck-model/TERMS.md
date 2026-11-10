@@ -122,6 +122,8 @@ head asked of that part. The rung that gives a class a head from above looks at 
   is preferred.
 - The fallback of a literal's domain and the fallback to `!` are two rungs, the domain's first.
   `!` says nothing at all is known, and what a literal falls back to may yet give a class a head.
+  The head a class's parts make comes before both: it is what a written head would be, and a
+  written head is there before any fallback.
 - A head is decided at a fixpoint: a class waits until nothing more can enter it.
 
 ## Where a declared type is met
@@ -231,11 +233,34 @@ A head that has parts is made from those parts, and a head with none is made fro
 So a class nothing has given a part to has a head with no parts, and a class a part is recorded
 on has a head with a place for it.
 
+A class nothing gives a head takes the head its parts make. Where nothing enters a class, or
+the join of what enters it is `!`, and no head is asked of it from above, it is:
+
+| Parts named of it | Its head |
+|---|---|
+| fields `x`, `y` | `{x, y}` |
+| payloads of variants of the enum `A` | `A`, with those variants |
+| the payload of `Some`; of `Ok`, `Err`; of variants of an `Error` | `Option`; `Result`; that `Error` |
+| a target, a component, an element | none: the name does not say which reference, how many components, or what holds the element |
+| names of more than one of these | none |
+
+So `let a; a.x = 1u8;` gives `a` the type `a = {x: 1u8}` gives it, and `let A::V(x) = a` makes
+`a` an `A`. A part only read counts as one written does: `let a; a.x` is `{x: !}`. Where the
+parts make no head the class is `!`, and the part is refused as having no place.
+
+A part named of a class is one named on it, or on a class with no head that it enters, in
+turn: the head it takes enters that class, so the part must be there. So a `let` between
+changes nothing: `let a; let b = a; b.x = 1u8;` makes both `{x: u8}`.
+
+A head that entered is not widened by a part named: `let a = {y: 1u8}; a.x` is refused.
+
+The name of a payload says which type its variant is of, as the pattern that names it does. So
+`let Some(x) = a` is held only by an `Option`, and not by an enum that has a variant `Some`.
+
 Whether a class is a reference is whether anything has given it a target. This is a question
 about parts, which a class holds before it is decided, and not one about its decided head.
 A projection `p.f` asks it of `p`, to know whether `f` is a part of `p` or of what `p` refers to.
 
 ## Not settled yet
 
-- The head of a class that only parts are recorded on, as in `let a; a.x`.
 - A refusal naming the connection that merged two classes.

@@ -56,7 +56,7 @@ The language's law is `operation::language`, one rule in one place:
 | the functions declared: a table, and no rule | `functions` |
 | classes that enter one another are one class | `enter::entering_one_another` |
 | a part named on a reference is read through it | `Language::place` |
-| the rungs: the join of what enters, the one head from above, a literal's fallback, `!` | `rungs` |
+| the rungs: the join of what enters, the one head from above, the head the parts named make, a literal's fallback, `!` | `rungs` |
 | at the end: a class that is its own part, a class still undecided | `rungs::end` |
 
 A rule reads through a `View`, which is the store as it is, or with heads supposed of some
@@ -91,6 +91,10 @@ bound nothing has happened to is not looked at again.
   only when a `Deciding` is made, after looking has run to its end, and by then every bound
   that waits has stated its guards anew. The guards themselves are tested: turning them off, or
   having a passing hold nothing apart, fails `a_hole_a_passing_not_told_yet_may_reach_is_not_decided`.
+- **Where the rung of parts stands.** Putting it after the literal's fallback, or before the
+  head from above, fails no test. It gives a head only where none is asked from above, so its
+  order with that rung shows nowhere, and no program has been found where a head made from
+  parts gives a literal its head.
 - **A function value passed to a function type**, left as a `todo`.
 - **Calls** on a class, which no law judges.
 

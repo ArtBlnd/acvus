@@ -5,24 +5,29 @@
 //! |---|---|---|
 //! | 0 | the join of what enters it | every class something enters, once each of those has a head |
 //! | 1 | the one head its upper bounds give it | a class nothing enters |
-//! | 2 | the fallback of its literals' domain | a class nothing enters and no upper bound gives a head |
-//! | 3 | `!` | a class nothing at all is said of |
+//! | 2 | the head made from the parts named of it | a class nothing enters and no upper bound gives a head |
+//! | 3 | the fallback of its literals' domain | a class nothing enters and no upper bound gives a head |
+//! | 4 | `!` | a class nothing else gives a head |
+//!
+//! `!` says nothing: where the join of what enters a class is `!`, rung 0 gives
+//! the head made from the parts named of the class, as rung 2 does where nothing
+//! enters.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::primitive::ItemId;
+use crate::primitive::{ItemId, Name};
 use crate::primitive::bound::{Bound, BoundOf};
 use crate::primitive::class::{ClassKind, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::{Cause, Refusal};
-use crate::primitive::ty::Shape;
+use crate::primitive::ty::{PartKey, Shape, VariantOf};
 use crate::store::classes::Classes;
 
 use super::super::law::Offer;
 use super::functions::Functions;
 use super::{Looked, Told, View, decided_by, enter, tell};
 
-pub const COUNT: usize = 4;
+pub const COUNT: usize = 5;
 
 pub fn offer<K>(classes: &Classes<K>, functions: &Functions, rung: usize, class: K::Id) -> Offer<K>
 where
@@ -31,8 +36,9 @@ where
     match rung {
         0 => join(classes, class),
         1 => from_above(classes, functions, class),
-        2 => domain(classes, functions, class),
-        3 => never(classes, functions, class),
+        2 => from_parts(classes, functions, class),
+        3 => domain(classes, functions, class),
+        4 => never(classes, functions, class),
         _ => unreachable!("there are {COUNT} rungs"),
     }
 }
@@ -73,6 +79,14 @@ where
         return Offer::Nothing;
     };
     match heads.try_fold(first, |joined, head| joined.join(&head)) {
+        // `!` is the least head, so what the class's parts make is joined with it.
+        Some(Shape::Never) => match made_of_parts(classes, class) {
+            Some((shape, named)) => Offer::Head {
+                shape,
+                by: by.into_iter().chain(named).collect(),
+            },
+            None => Offer::Head { shape: Shape::Never, by },
+        },
         Some(shape) => Offer::Head { shape, by },
         None => {
             let mut items = by;
@@ -232,7 +246,97 @@ where
     Some((domain, constraints.domains.iter().map(|(_, by)| *by).collect()))
 }
 
-/// Rung 2: a literal's class that neither lower nor upper bounds decide takes the
+/// The parts named on `class` and on each class with no head that it enters, in
+/// turn, each with the items that named it. The head `class` takes enters each of
+/// those, so a part named there is named of `class` too, as a head asked there
+/// is asked of it.
+fn parts_named<K>(classes: &Classes<K>, class: K::Id, seen: &mut BTreeSet<K::Id>) -> BTreeMap<PartKey, BTreeSet<ItemId>>
+where
+    K: ClassKind<Bound = Bound<K>>,
+{
+    let root = classes.find(class).id();
+    if !seen.insert(root) {
+        return BTreeMap::new();
+    }
+    let mut named: BTreeMap<PartKey, BTreeSet<ItemId>> = BTreeMap::new();
+    if let State::Undecided(constraints) = &classes.get(classes.find(root)).state {
+        for (key, part) in &constraints.parts {
+            named
+                .entry(key.clone())
+                .or_default()
+                .extend(part.lower.iter().chain(&part.upper).chain(&part.carried));
+        }
+    }
+    for upper in entered(classes, root) {
+        for (key, items) in parts_named(classes, upper, seen) {
+            named.entry(key).or_default().extend(items);
+        }
+    }
+    named
+}
+
+/// The head made from the parts named of `class`, with the items that named
+/// them: an object of the fields named, or the type whose variants the payloads
+/// named are of. None where no part is named, where the names are not all of one
+/// such type, and where a name does not say the whole head: a target does not say
+/// which reference, nor a component how many, nor an element what holds it.
+///
+/// The parts of the head given stand for no class: a head decided has the
+/// class's own parts.
+fn made_of_parts<K>(classes: &Classes<K>, class: K::Id) -> Option<(Shape<K::Id>, BTreeSet<ItemId>)>
+where
+    K: ClassKind<Bound = Bound<K>>,
+{
+    let named = parts_named(classes, class, &mut BTreeSet::new());
+    let by = named.values().flatten().copied().collect();
+    let shape = match named.keys().next()? {
+        PartKey::Field(_) => Shape::Object(
+            named
+                .keys()
+                .map(|key| match key {
+                    PartKey::Field(field) => Some((field.clone(), class)),
+                    _ => None,
+                })
+                .collect::<Option<_>>()?,
+        ),
+        PartKey::Payload(of, _) => {
+            let variants: BTreeMap<Name, K::Id> = named
+                .keys()
+                .map(|key| match key {
+                    PartKey::Payload(other, variant) if other == of => Some((variant.clone(), class)),
+                    _ => None,
+                })
+                .collect::<Option<_>>()?;
+            match of {
+                VariantOf::Option => Shape::Option(class),
+                VariantOf::Result => Shape::Result(class, class),
+                VariantOf::Error => Shape::Error(variants),
+                VariantOf::Enum(name) => Shape::Enum(name.clone(), variants),
+            }
+        }
+        PartKey::Target | PartKey::Component(_) | PartKey::Elem | PartKey::Param(_) | PartKey::Result | PartKey::Arg(_) | PartKey::Brand => {
+            return None;
+        }
+    };
+    Some((shape, by))
+}
+
+/// Rung 2: a class that neither lower nor upper bounds decide takes the head made
+/// from the parts named of it.
+fn from_parts<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
+where
+    K: ClassKind<Bound = Bound<K>>,
+{
+    if !nothing_enters(classes, class) || !nothing_asked(classes, functions, class) {
+        return Offer::Nothing;
+    }
+    match made_of_parts(classes, class) {
+        Some((shape, by)) => Offer::Head { shape, by },
+        None => Offer::Nothing,
+    }
+}
+
+/// Rung 3: a literal's class that neither lower nor upper bounds decide takes the
 /// fallback type of its domain's row.
 fn domain<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
 where
@@ -259,8 +363,8 @@ where
     }
 }
 
-/// Rung 3: a class nothing enters, with no literal, takes `!`: nothing at all is
-/// known of it.
+/// Rung 4: a class nothing enters, with no literal, takes `!`: nothing gives it
+/// a head.
 fn never<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
 where
     K: ClassKind<Bound = Bound<K>>,

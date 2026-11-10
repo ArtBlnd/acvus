@@ -120,7 +120,7 @@ impl<P> Shape<P> {
     /// Each part, with the key that names it, in the order the shape holds
     /// them. Two shapes of one layer give their keys in one order.
     pub fn places(&self) -> Vec<(PartKey, &P)> {
-        let payload = |variant: &str| PartKey::Payload(Name::new(variant));
+        let payload = |of: VariantOf, variant: &str| PartKey::Payload(of, Name::new(variant));
         match self {
             Shape::Ref(_, target) => vec![(PartKey::Target, target)],
             Shape::Tuple(components) => components
@@ -129,11 +129,15 @@ impl<P> Shape<P> {
                 .map(|(index, component)| (PartKey::Component(index), component))
                 .collect(),
             Shape::Array(_, elem) | Shape::Slice(elem) => vec![(PartKey::Elem, elem)],
-            Shape::Option(some) => vec![(payload("Some"), some)],
-            Shape::Result(ok, err) => vec![(payload("Ok"), ok), (payload("Err"), err)],
-            Shape::Error(variants) | Shape::Enum(_, variants) => variants
+            Shape::Option(some) => vec![(payload(VariantOf::Option, "Some"), some)],
+            Shape::Result(ok, err) => vec![(payload(VariantOf::Result, "Ok"), ok), (payload(VariantOf::Result, "Err"), err)],
+            Shape::Error(variants) => variants
                 .iter()
-                .map(|(variant, payload)| (PartKey::Payload(variant.clone()), payload))
+                .map(|(variant, payload)| (PartKey::Payload(VariantOf::Error, variant.clone()), payload))
+                .collect(),
+            Shape::Enum(name, variants) => variants
+                .iter()
+                .map(|(variant, payload)| (PartKey::Payload(VariantOf::Enum(name.clone()), variant.clone()), payload))
                 .collect(),
             Shape::ErrorOf(error) => vec![(PartKey::Arg(0), error)],
             Shape::Fn(params, result) => params
@@ -337,6 +341,20 @@ pub enum TargetNode {
     Plain(Constructor),
 }
 
+/// The type a variant is of. A pattern writes it with the variant, so the name
+/// of a payload says which type has it.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum VariantOf {
+    /// `Some`.
+    Option,
+    /// `Ok`, `Err`.
+    Result,
+    /// A variant of an `Error{V̄(T̄)}`.
+    Error,
+    /// A variant of the enum of this name.
+    Enum(Name),
+}
+
 /// The name of a part.
 ///
 /// An undecided class's constraints name its parts before it has a shape, so
@@ -353,9 +371,9 @@ pub enum PartKey {
     Elem,
     /// Named by `p.f`.
     Field(Name),
-    /// Of `Some`, `Ok`, `Err`, or a variant of an enum or an `Error`; named
-    /// by `if let V(x) = o`.
-    Payload(Name),
+    /// The payload of a variant of the type the name says: named by
+    /// `if let Some(x) = o`, or by `if let E::V(x) = o`.
+    Payload(VariantOf, Name),
     Param(usize),
     Result,
     /// A type parameter of a struct, an argument of an extern-defined type,
