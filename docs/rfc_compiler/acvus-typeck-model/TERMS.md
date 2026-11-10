@@ -109,8 +109,23 @@ before every row is told of, as one not told of yet may be a second way.
 There are no kinds of rows. A row once called a view is one whose parameter writes little, and
 that is all that made it chosen early.
 
-A row gives type inference nothing: the head it holds a part of the argument against is no
-head asked of that part. The rung that gives a class a head from above looks at no row.
+A row gives no candidate to type inference: the head it holds a part of the argument against
+is no head asked of that part. The rung that gives a class a head from above gathers the heads
+asked of the class, and no row asks one. Whether a candidate would be taken is judged by
+being passed as it is, rows included: there is one rule of being passed, and a class supposed
+to have a head is passed as a class that has it.
+
+| Program, with the row `up: A -> B` | `x` |
+|---|---|
+| `let x; take_b(x);` | `B`: the one head asked. `A` would go too, through `up`, and is not asked |
+| `let x; take_b(x); take_a(x);` | `A`: of the two asked, the one that goes to both |
+| the same with no row | refused: neither goes to both |
+
+A projection goes through no row. It reads a place the head of its class has, and subtyping is
+only where a value is passed. So `v[0]` with `v: Vec<u8>` is refused, though `&v` is passed
+as `&[u8]`: indexing a type from outside is a call, and a call passes its arguments. A part
+read through a reference is no exception, as that is the language's rule of a projection and
+no row.
 
 ## Other rulings
 
@@ -319,6 +334,24 @@ about parts, which a class holds before it is decided, and not one about its dec
 A projection `p.f` asks it of `p`, to know whether `f` is a part of `p` or of what `p` refers to.
 
 ## Not settled yet
+
+### Programs of the earlier model that differ, not looked into
+
+`programs/` holds the cases of the earlier model that the text can write. Of the 26 that do
+not come to what their case expected, these have not been opened, to tell a change of the law
+from a mistake of translation or of the model:
+
+- refused as expected, by another cause: `rules/classes/a-an-integer-literal-into-a-float`,
+  `rules/place/a-every-arm-applies-to-the-scrutinee`,
+  `rules/solving/a-a-class-passing-into-a-type-that-holds-it-is-not-filled`,
+  `rules/solving/a-component-names-no-member`, `spec/two-language-variants-of-two-constructors`;
+- cause unknown: `completeness/a-script-with-a-try-and-a-text-tail`,
+  `spec/an-empty-part-with-two-upper-bounds`.
+
+### What the text cannot write
+
+- The value of a literal: that `256` is not held by `u8`. `{integer}` writes every integer type.
+- A variant with no payload, named by a pattern.
 
 ### Calls and function values
 

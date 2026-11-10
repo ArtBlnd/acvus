@@ -110,7 +110,29 @@ constraint nothing has happened to is not looked at again.
 - **A function value passed to a function type**, left as a `todo`.
 - **Calls** on a class, which no law judges.
 
-## 6. How other systems hold a constraint that waits
+## 6. The text
+
+`src/text` writes a program as the operations that record it, one to a statement, and reads
+it into a store with no judgment of its own (`src/text/mod.rs` states the text). It is made
+for a generator: a name is a class from where it is first written, so a text that is read is
+a program, but for the few `record::record` names. Assertions say what solving is to come to
+and are no part of what is recorded.
+
+`record::run` solves a text in each order of asking, verifies the store, holds the text to its
+assertions and compares the refusals of the orders. `cargo run --bin check -- <paths>` runs
+files of programs. `programs/` holds the cases of the earlier model written so, by the rules
+in `programs/README.md`.
+
+What is not there yet:
+
+- **The order of statements is not shuffled.** `run` changes which class is asked first, and
+  not which constraint is recorded or looked at first. Shuffling the statements would, and is
+  what may show the two things section 5 says no test observes.
+- **No generator.** Programs are written by hand or translated.
+- **The tests of the law are not in the text.** `operation::tests` records each program by
+  hand through `operation::testing::World`.
+
+## 7. How other systems hold a constraint that waits
 
 Gathered by a research agent from each project's sources on 2026-11-10, keeping only what it
 marked as read. Not read by the author of this file.
