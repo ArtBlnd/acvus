@@ -866,7 +866,7 @@ mod tests {
                 meet(w, y, x);
                 y
             }),
-            ("let y; h(y); if c { y } else { return }, h(&T)", "!", |w| {
+            ("let y; h(y); if c { y } else { return }, h(&T)", "&!", |w| {
                 let y = w.undecided();
                 let hole = w.undecided();
                 let parameter = w.external(Shape::Ref(SHARED, hole));
@@ -1504,5 +1504,118 @@ mod tests {
         assert_eq!(settled, Settled::Finished);
         world.no_refusals();
         assert_eq!(world.shape(part), U8);
+    }
+
+    /// `!` is the least head, so a join that has come to `!` alone gives nothing
+    /// from above: what else enters decides, or a fallback does. A class decided as
+    /// `!` still gives `!`, which no literal takes.
+    #[test]
+    fn a_join_of_never_alone_gives_no_head_from_above() {
+        type Program = (&'static str, &'static str, fn(&mut World) -> ClassId);
+        let programs: [Program; 4] = [
+            ("let z = if c { 0 } else { return };", "i32", |w| {
+                let zero = literal(w, &INTEGERS);
+                let returns = w.text(Shape::Never);
+                meet(w, zero, returns)
+            }),
+            ("f(0, return);, f(T, T)", "i32", |w| {
+                let hole = w.undecided();
+                let zero = literal(w, &INTEGERS);
+                let returns = w.text(Shape::Never);
+                w.enter(zero, hole);
+                w.enter(returns, hole);
+                hole
+            }),
+            ("let a; if c { a } else { return }; if c { &a } else { &1u8 }", "u8", |w| {
+                let a = w.undecided();
+                let returns = w.text(Shape::Never);
+                meet(w, a, returns);
+                let one = w.text(U8);
+                let (first, second) = (w.lend(a, SHARED).0, w.lend(one, SHARED).0);
+                meet(w, first, second);
+                a
+            }),
+            ("0 entering a declared !", "refused:UndecidedClass", |w| {
+                let zero = literal(w, &INTEGERS);
+                let never = w.external(Shape::Never);
+                w.enter(zero, never);
+                zero
+            }),
+        ];
+        for (name, expected, build) in programs {
+            in_every_order(build, expected, name);
+        }
+    }
+
+    /// `let a; f(a); if c { &a } else { &{x: 1u8, y: 2u8} }`, with `f({x: u8})`.
+    /// At the reference's target `a` is one type with `{x, y}`, so `{x}`, which only
+    /// enters it, is no head that goes there, and `{x, y}` is the one that goes to
+    /// both.
+    #[test]
+    fn a_head_at_a_targets_place_is_the_targets_own() {
+        in_every_order(
+            |w| {
+                let a = w.undecided();
+                let declared = w.external(U8);
+                let parameter = w.external(Shape::Object(BTreeMap::from([(Name::new("x"), declared)])));
+                w.pass(a, parameter);
+                let (x, y) = (w.text(U8), w.text(U8));
+                let both = w.text(Shape::Object(BTreeMap::from([(Name::new("x"), x), (Name::new("y"), y)])));
+                let (first, second) = (w.lend(a, SHARED).0, w.lend(both, SHARED).0);
+                meet(w, first, second);
+                a
+            },
+            "{x,y}",
+            "a head at a target's place",
+        );
+    }
+
+    /// What has entered an undecided class so far is not its head, which the class
+    /// being decided joins into: a head goes there where it joins with what is
+    /// there. A decided head is checked as it is.
+    #[test]
+    fn a_head_goes_into_an_undecided_class_where_it_joins_with_what_is_there() {
+        type Program = (&'static str, &'static str, fn(&mut World) -> ClassId);
+        let programs: [Program; 4] = [
+            ("let a; let d: {x: u8} = a; if c { a } else { {x: 1u8, y: 2u8} }", "{x}", |w| {
+                let a = w.undecided();
+                let declared = w.external(U8);
+                let written = w.external(Shape::Object(BTreeMap::from([(Name::new("x"), declared)])));
+                w.enter(a, written);
+                let (x, y) = (w.text(U8), w.text(U8));
+                let both = w.text(Shape::Object(BTreeMap::from([(Name::new("x"), x), (Name::new("y"), y)])));
+                meet(w, a, both);
+                a
+            }),
+            ("let a; if c { &mut x } else { &a }", "u8", |w| {
+                let x = w.text(U8);
+                let a = w.undecided();
+                let (first, second) = (w.lend(x, EXCLUSIVE).0, w.lend(a, SHARED).0);
+                meet(w, first, second);
+                a
+            }),
+            ("let a; if c { a } else { {x: 1u8} }; f(a);, f({x: u8, y: u8})", "{x,y}", |w| {
+                let a = w.undecided();
+                let one = w.text(U8);
+                let x = w.text(Shape::Object(BTreeMap::from([(Name::new("x"), one)])));
+                meet(w, a, x);
+                let declared = w.external(U8);
+                let fields = BTreeMap::from([(Name::new("x"), declared), (Name::new("y"), declared)]);
+                let parameter = w.external(Shape::Object(fields));
+                w.pass(a, parameter);
+                a
+            }),
+            ("let a; &a into a place declared &mut u8", "refused:UndecidedClass", |w| {
+                let a = w.undecided();
+                let declared = w.external(U8);
+                let place = w.external(Shape::Ref(EXCLUSIVE, declared));
+                let (lent, _) = w.lend(a, SHARED);
+                w.enter(lent, place);
+                a
+            }),
+        ];
+        for (name, expected, build) in programs {
+            in_every_order(build, expected, name);
+        }
     }
 }

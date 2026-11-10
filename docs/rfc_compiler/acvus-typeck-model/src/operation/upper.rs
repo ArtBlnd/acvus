@@ -45,6 +45,8 @@ enum How {
 
 /// One upper bound, as a class reaches it.
 struct Upper<I> {
+    /// The root of the upper end.
+    class: I,
     how: How,
     through: Through,
     /// The head the upper end gives, where it gives one: its own, or the join of
@@ -133,6 +135,7 @@ where
             for (bound, by) in self.going_up.get(&at_class).into_iter().flatten() {
                 let upper = classes.find(bound.upper()).id();
                 let reached = |how, gives| Upper {
+                    class: upper,
                     how,
                     through,
                     gives,
@@ -161,7 +164,9 @@ where
 }
 
 /// The head a class gives what enters it: its own, or the join of the heads its
-/// lower bounds have given so far, where they join.
+/// lower bounds have given so far, where they join. `!` is the least head, so a
+/// join that has come to `!` alone tells nothing of the head the class will take,
+/// and gives none. A class decided as `!` gives `!`, as only `!` enters it.
 fn join_given<K>(classes: &Classes<K>, class: K::Id) -> Option<Shape<K::Id>>
 where
     K: ClassKind<Bound = Bound<K>>,
@@ -175,7 +180,8 @@ where
         .flatten()
         .filter_map(|(bound, _)| given(classes, &bound));
     let first = heads.next()?;
-    heads.try_fold(first, |joined, head| joined.join(&head))
+    let joined = heads.try_fold(first, |joined, head| joined.join(&head))?;
+    (joined != Shape::Never).then_some(joined)
 }
 
 /// The head `upper` gives the class that reaches it.
@@ -191,7 +197,14 @@ where
 }
 
 /// Whether `head`, filling in what the class node `upper` is reached through
-/// leaves open, goes to `upper`.
+/// leaves open, goes to `upper`. At a reference's target it fills in a part, which
+/// is one type with the target, so there it must be the target's own head, and
+/// only the reference joins.
+///
+/// What has entered an undecided class so far is not its head: the head is the
+/// join of all that enters, this head included. So a head goes into an undecided
+/// class where it joins with what is there, and into a decided one where it enters
+/// its head.
 fn goes_to<K>(classes: &Classes<K>, head: &Shape<K::Id>, upper: &Upper<K::Id>) -> bool
 where
     K: ClassKind,
@@ -203,14 +216,16 @@ where
         Through::Own => None,
         Through::Target(mutability) => Some(mutability),
     };
+    let decided = classes.is_decided(upper.class);
     match (upper.how, within) {
         (How::Changes, within) => may_coerce(classes, head, within, to),
-        (How::Enters, None) => head.enters(to),
+        (How::Enters, None) if decided => head.enters(to),
+        (How::Enters, None) => head.join(to).is_some(),
         (How::Equals, None) => head.layer() == to.layer(),
         (How::Enters, Some(mutability)) => matches!(
             to,
-            Shape::Ref(into, target) if mutability.join(*into) == *into
-                && shape_of(classes, *target).is_none_or(|target| head.enters(target))
+            Shape::Ref(into, target) if (!decided || mutability.join(*into) == *into)
+                && shape_of(classes, *target).is_none_or(|target| head.layer() == target.layer())
         ),
         (How::Equals, Some(mutability)) => matches!(
             to,
