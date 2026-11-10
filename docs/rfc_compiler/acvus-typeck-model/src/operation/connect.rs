@@ -112,21 +112,37 @@ where
         if projections.is_empty() {
             continue;
         }
-        let head = decided(classes, class);
-        let named = match law.place(&head, &key) {
-            Place::Within { through, adjustment } => head.place(&through).copied().and_then(|owner| {
-                let mut named = None;
-                for (side, item) in &projections {
-                    named = Some(classes.part(owner, key.clone(), *side, *item)?);
-                }
-                named.map(|named| (named, adjustment))
-            }),
-            Place::Nowhere => None,
+        // The law says the part lies within another part. Where that part is
+        // decided as a head with no place of the name either, the law is asked
+        // of that head in turn, and each answer is one more adjustment.
+        let mut head = decided(classes, class);
+        let mut adjustments = Vec::new();
+        let mut asked = BTreeSet::from([classes.find(class).id()]);
+        let named = loop {
+            let Place::Within { through, adjustment } = law.place(&head, &key) else {
+                break None;
+            };
+            let Some(owner) = head.place(&through).copied() else {
+                break None;
+            };
+            adjustments.push(adjustment);
+            let mut named = None;
+            for (side, item) in &projections {
+                named = classes.part(owner, key.clone(), *side, *item);
+            }
+            if named.is_some() {
+                break named;
+            }
+            // A class that holds itself has no end to ask to.
+            if !asked.insert(classes.find(owner).id()) {
+                break None;
+            }
+            head = decided(classes, owner);
         };
         match named {
-            Some((named, adjustment)) => {
+            Some(named) => {
                 for (_, item) in &projections {
-                    outcome.adjustments.entry(*item).or_default().push(adjustment.clone());
+                    outcome.adjustments.entry(*item).or_default().extend(adjustments.iter().cloned());
                 }
                 pairs.push((Pair::Classes(named, part.class), at));
             }
