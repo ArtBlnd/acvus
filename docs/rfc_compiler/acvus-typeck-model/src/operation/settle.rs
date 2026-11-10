@@ -182,22 +182,25 @@ where
         }
     }
 
-    /// Makes each part of a class one type with the part of that name on each
-    /// undecided class it enters, as judging the bound would once both have
-    /// heads. It stops at a decided class, which nothing changes: judging the
-    /// bound connects the two there.
+    /// Makes each part known on the lower end of an `Enter` or an `Equal` one type
+    /// with the part of that name on its upper end. The pairs are the parts of one
+    /// name whatever heads the two ends take, so nothing is read to find them, and
+    /// they are connected as soon as a name is known, ahead of either head.
+    ///
+    /// An undecided class an `Enter` reaches is given the name. A decided class
+    /// has the part in its place, or no place for it, which the bound's judgment
+    /// tells of.
     fn carry_parts(&mut self, classes: &mut Classes<K>, scopes: &Scopes) -> bool {
-        let mut entering = Vec::new();
+        let mut by_name = Vec::new();
         for (bound, at) in classes.bounds() {
-            if let Bound::Enter { lower, upper } = bound {
-                entering.push((*lower, *upper, *at));
+            match bound {
+                Bound::Enter { lower, upper } => by_name.push((*lower, *upper, *at, true)),
+                Bound::Equal { lower, upper } => by_name.push((*lower, *upper, *at, false)),
+                Bound::Change { .. } => {}
             }
         }
         let mut carried = false;
-        for (lower, upper, at) in entering {
-            if classes.is_decided(upper) {
-                continue;
-            }
+        for (lower, upper, at, names) in by_name {
             let parts: Vec<(PartKey, K::Id)> = match &classes.get(classes.find(lower)).state {
                 State::Decided(decided) => decided.shape.places().into_iter().map(|(key, part)| (key, *part)).collect(),
                 State::Undecided(constraints) => constraints
@@ -207,34 +210,26 @@ where
                     .collect(),
             };
             for (key, part) in parts {
-                carried |= self.make_one(classes, scopes, upper, key, part, at);
+                // A place of a decided class may be one a declaration writes, and so
+                // may a part of what enters an undecided one: the other is compared
+                // with it either way.
+                match &classes.get(classes.find(upper)).state {
+                    State::Decided(decided) => {
+                        if let Some(place) = decided.shape.place(&key).copied() {
+                            carried |= self.one_type(classes, scopes, part, place, at);
+                        }
+                    }
+                    State::Undecided(_) if names => {
+                        if let Some(named) = classes.part(upper, key, Side::Carried, at) {
+                            carried |= self.one_type(classes, scopes, named, part, at);
+                        }
+                    }
+                    State::Undecided(_) => {}
+                }
             }
         }
         self.judge(classes, scopes);
         carried
-    }
-
-    /// Makes `part` one class with the part `key` names on `class`, and says
-    /// whether they were not one before.
-    fn make_one(
-        &mut self,
-        classes: &mut Classes<K>,
-        scopes: &Scopes,
-        class: K::Id,
-        key: PartKey,
-        part: K::Id,
-        at: ItemId,
-    ) -> bool {
-        let existing = classes.get(classes.find(class)).state.part(&key);
-        if existing.is_some_and(|existing| classes.find(existing) == classes.find(part)) {
-            return false;
-        }
-        let Some(named) = classes.part(class, key, Side::Carried, at) else {
-            return false;
-        };
-        let unified = classes.unify(scopes, named, part, at);
-        self.release(classes, scopes, unified);
-        true
     }
 
     /// Rung 1: decides every class all that enters it has given a head to. They

@@ -135,7 +135,8 @@ what it meets outside, and not merged.
 
 An argument's part and the hole it is passed to are one class. A class's head is the join of
 everything that enters the class once every connection that may merge it has been made.
-A part of a declared type is compared with, and not merged.
+A part of a declared type is compared with, and not merged. A hole
+is the other case: a hole that corresponds to a part, a declared one included, is that part.
 
 ## Reading and deciding
 

@@ -34,6 +34,9 @@ where
     /// judges or makes it finishes it. Open to the rest of the store for
     /// [`Classes::verify`] and for copying a template.
     pub(super) bounds: Bounds<K>,
+    /// Every bound finished. A bound is recorded once: what connects parts by
+    /// name comes to the same pair again, and recording it again does nothing.
+    finished: Bounds<K>,
 }
 
 // Written out, as a derive would ask an id to have a default, and none has.
@@ -45,6 +48,7 @@ where
         Self {
             slots: Arena::default(),
             bounds: Bounds::<K>::new(),
+            finished: Bounds::<K>::new(),
         }
     }
 }
@@ -230,9 +234,11 @@ where
         self.side(root, |bound| (bound.lower(), bound.upper()))
     }
 
-    /// Records `bound`, by `at`. The store holds it until it is finished.
-    pub fn bound(&mut self, bound: K::Bound, at: ItemId) {
-        self.bounds.insert((bound, at));
+    /// Records `bound`, by `at`, and says whether it was not recorded before. The
+    /// store holds it until it is finished.
+    pub fn bound(&mut self, bound: K::Bound, at: ItemId) -> bool {
+        let recorded = (bound, at);
+        !self.finished.contains(&recorded) && self.bounds.insert(recorded)
     }
 
     /// Every bound recorded and not finished.
@@ -253,7 +259,12 @@ where
     /// Finishes `bound`, recorded by `at`: it has been judged or made, and the
     /// store holds it no longer. It says whether the store held it.
     pub fn finish(&mut self, bound: &K::Bound, at: ItemId) -> bool {
-        self.bounds.remove(&(bound.clone(), at))
+        let recorded = (bound.clone(), at);
+        let held = self.bounds.remove(&recorded);
+        if held {
+            self.finished.insert(recorded);
+        }
+        held
     }
 
     /// The class of the part `key` of `class`, named on `side` by `at`.

@@ -18,7 +18,7 @@ use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::record::Coercion;
 use crate::primitive::bound::{Bound, BoundOf};
-use crate::primitive::class::{Bounds, ClassKind, Pending, State};
+use crate::primitive::class::{ClassKind, Pending, State};
 use crate::primitive::refusal::{Cause, Refusal};
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{Mutability, Shape};
@@ -212,10 +212,9 @@ where
     /// along with those its judgment makes so in turn. A change stays with the
     /// store, for settling to make with the conversions declared.
     pub fn judge(&mut self, classes: &mut Classes<K>, scopes: &Scopes) {
-        // A class refused as its own part stays cyclic, so an `Equal` going
-        // down two such classes comes back to itself. A second judgment of one
-        // bound would say nothing the first did not.
-        let mut judged = Bounds::<K>::new();
+        // A class refused as its own part stays cyclic, so an `Equal` going down
+        // two such classes comes back to itself. The store records a bound once,
+        // so it is not judged a second time.
         loop {
             let next = classes
                 .between_decided()
@@ -225,9 +224,6 @@ where
                 break;
             };
             classes.finish(&bound, at);
-            if !judged.insert((bound, at)) {
-                continue;
-            }
             match bound {
                 Bound::Enter { .. } => self.judge_lower(classes, scopes, bound, at),
                 Bound::Equal { .. } => self.judge_equal(classes, scopes, bound, at),
@@ -301,7 +297,9 @@ where
         let mut items = decided_by(classes, bound.lower());
         items.extend(decided_by(classes, bound.upper()));
         items.insert(at);
-        self.refusals.push(Refusal {
+        // Parts connected by name and again at the judgment come to one pair, and
+        // the second refusal of it would say what the first does.
+        self.refuse_once(Refusal {
             cause: Cause::Mismatch,
             items,
         });
@@ -325,18 +323,27 @@ where
         }
     }
 
-    /// Makes `part` one type with the part that corresponds to it, as the
-    /// state of that part tells (O9).
-    pub(super) fn one_type(&mut self, classes: &mut Classes<K>, scopes: &Scopes, part: K::Id, corresponding: K::Id, at: ItemId) {
+    /// Makes `part` one type with the part that corresponds to it, and says whether
+    /// the two were not so already. This is the one way parts are connected.
+    ///
+    /// A part a declaration writes never changes, so where the corresponding part
+    /// is one, `part` is compared with it. Any other two are made one class: a hole
+    /// that corresponds to anything, a declared part included, is that thing (O9).
+    pub(super) fn one_type(&mut self, classes: &mut Classes<K>, scopes: &Scopes, part: K::Id, corresponding: K::Id, at: ItemId) -> bool {
+        let (part, corresponding) = (classes.find(part).id(), classes.find(corresponding).id());
+        if part == corresponding {
+            return false;
+        }
         if classes.is_external(corresponding) {
             let equal = Bound::Equal {
                 lower: part,
                 upper: corresponding,
             };
-            classes.bound(equal, at);
+            classes.bound(equal, at)
         } else {
             let unified = classes.unify(scopes, part, corresponding, at);
             self.release(classes, scopes, unified);
+            true
         }
     }
 }
@@ -348,7 +355,7 @@ mod tests {
     use super::*;
     use crate::primitive::adjustment::Adjustments;
     use crate::operation::testing::{EXCLUSIVE, SHARED, U8, World};
-    use crate::primitive::class::{Live, Side};
+    use crate::primitive::class::{Bounds, Live, Side};
     use crate::primitive::ty::{PartKey, Scalar};
     use crate::primitive::{ClassId, Name};
 
