@@ -4,3 +4,4 @@
 pub mod operation;
 pub mod primitive;
 pub mod store;
+pub mod text;

@@ -4,5 +4,11 @@ version = "0.1.0"
 edition = "2024"
 license-file.workspace = true
 
+[dependencies]
+lalrpop-util = { version = "0.22", features = ["lexer"] }
+
+[build-dependencies]
+lalrpop = "0.22"
+
 [lints]
 workspace = true

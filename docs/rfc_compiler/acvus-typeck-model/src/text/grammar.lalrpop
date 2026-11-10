@@ -1,0 +1,173 @@
+use std::collections::BTreeMap;
+
+use lalrpop_util::ParseError;
+
+use crate::primitive::Name;
+use crate::primitive::adjustment::{Adjustment, Subtyping};
+use crate::primitive::refusal::Cause;
+use crate::primitive::ty::{Mutability, Scalar};
+use crate::text::ast::{Assertion, Op, Path, Program, Segment, Statement, Type, Variant};
+
+grammar;
+
+extern {
+    type Error = String;
+}
+
+match {
+    r"\s*" => { },
+    r"//[^\n\r]*" => { },
+    "{integer}",
+    "{float}",
+    "<-",
+    "->",
+    "::",
+    _
+}
+
+pub Program: Program = <lines:Line*> => {
+    let mut program = Program::default();
+    for line in lines {
+        match line {
+            Ok(statement) => program.statements.push(statement),
+            Err(assertion) => program.assertions.push(assertion),
+        }
+    }
+    program
+};
+
+Line: Result<Statement, Assertion> = {
+    Statement => Ok(<>),
+    "assert" <Assertion> ";" => Err(<>),
+};
+
+Assertion: Assertion = {
+    <class:Path> ":" <ty:Type> => Assertion::Type { class, ty },
+    "refused" <causes:Comma<Cause>> => Assertion::Refused { causes: causes.into_iter().collect() },
+    "refused" <cause:Cause> "names" <labels:Comma<Lower>> => Assertion::Names { cause, labels: labels.into_iter().collect() },
+    <label:Lower> <at:("at" <Path>)?> "takes" <adjustments:Comma<Adjustment>> => Assertion::Takes { label, at, adjustments },
+};
+
+Cause: Cause = Upper =>? match <>.as_str() {
+    "Mismatch" => Ok(Cause::Mismatch),
+    "NoChange" => Ok(Cause::NoChange),
+    "EmptyDomain" => Ok(Cause::EmptyDomain),
+    "Occurs" => Ok(Cause::Occurs),
+    "NotHeld" => Ok(Cause::NotHeld),
+    "UndecidedClass" => Ok(Cause::UndecidedClass),
+    other => Err(ParseError::User {
+        error: format!("`{other}` is no cause of a refusal"),
+    }),
+};
+
+Adjustment: Adjustment = {
+    Lower => Adjustment::Row(Name::new(<>)),
+    Upper =>? match <>.as_str() {
+        "Deref" => Ok(Adjustment::Deref),
+        "Reborrow" => Ok(Adjustment::Subtype(Subtyping::Reborrow)),
+        "Never" => Ok(Adjustment::Subtype(Subtyping::Never)),
+        "DropFields" => Ok(Adjustment::Subtype(Subtyping::DropFields)),
+        "AddVariants" => Ok(Adjustment::Subtype(Subtyping::AddVariants)),
+        "Unsize" => Ok(Adjustment::Subtype(Subtyping::Unsize)),
+        other => Err(ParseError::User {
+            error: format!("`{other}` is no adjustment"),
+        }),
+    },
+};
+
+Statement: Statement = <label:(<Lower> ":")?> <op:Op> ";" => Statement { label, op };
+
+Op: Op = {
+    <upper:Path> "<-" <lower:Type> <alone:("as" "_")?> => Op::Enter { upper, lower, alone: alone.is_some() },
+    "pass" <argument:Path> "to" <given:Path> => Op::Pass { argument, given },
+    "exit" <exits_with:Path> "to" <error:Path> => Op::Exit { exits_with, error },
+    "declare" <name:Lower> "=" <ty:Type> => Op::Declare { name, ty },
+    "row" <name:Lower> <holes:("<" <Comma<Upper>> ">")?> ":" <parameter:Type> "->" <result:Type> => Op::Row {
+        name,
+        holes: holes.unwrap_or_default(),
+        parameter,
+        result,
+    },
+};
+
+Path: Path = <root:Lower> <segments:Segment*> => Path { root, segments };
+
+Segment: Segment = {
+    "." <Lower> => Segment::Field(<>),
+    "." <Number> => Segment::Component(<>),
+    "." "*" => Segment::Target,
+    "." "[" "]" => Segment::Element,
+    "." "Some" => Segment::Payload(Variant::Some),
+    "." "Ok" => Segment::Payload(Variant::Ok),
+    "." "Err" => Segment::Payload(Variant::Err),
+    "." "Error" "::" <Upper> => Segment::Payload(Variant::Error(<>)),
+    "." <of:Upper> "::" <variant:Upper> => Segment::Payload(Variant::Enum(of, variant)),
+};
+
+Type: Type = {
+    Path => Type::Class(<>),
+    "{integer}" => Type::Integer,
+    "{float}" => Type::Float,
+    "!" => Type::Never,
+    Scalar => Type::Scalar(<>),
+    "String" => Type::String,
+    "str" => Type::Str,
+    "&" <Type> => Type::Ref(Mutability::Shared, Box::new(<>)),
+    "&" "mut" <Type> => Type::Ref(Mutability::Exclusive, Box::new(<>)),
+    "(" ")" => Type::Tuple(Vec::new()),
+    "(" <first:Type> "," <rest:Comma<Type>> ")" => Type::Tuple([first].into_iter().chain(rest).collect()),
+    "[" <element:Type> ";" <length:Number> "]" => Type::Array(length, Box::new(element)),
+    "[" <Type> "]" => Type::Slice(Box::new(<>)),
+    "Option" "<" <Type> ">" => Type::Option(Box::new(<>)),
+    "Result" "<" <ok:Type> "," <error:Type> ">" => Type::Result(Box::new(ok), Box::new(error)),
+    "Error" "{" <Members<Payload>> "}" => Type::Error(<>),
+    "Error" "<" <Type> ">" => Type::ErrorOf(Box::new(<>)),
+    "{" <Members<Field>> "}" => Type::Object(<>),
+    <name:Upper> "{" <variants:Members<Payload>> "}" => Type::Enum(name, variants),
+    <name:Upper> <arguments:("<" <Comma<Type>> ">")?> => Type::Named(name, arguments.unwrap_or_default()),
+};
+
+Field: (String, Type) = <Lower> ":" <Type>;
+
+Payload: (String, Type) = <Upper> "(" <Type> ")";
+
+/// Members of one name each: a name written twice is an error of the text.
+Members<Member>: BTreeMap<String, Type> = <members:Comma<Member>> =>? {
+    let mut named = BTreeMap::new();
+    for (name, ty) in members {
+        if named.insert(name.clone(), ty).is_some() {
+            return Err(ParseError::User {
+                error: format!("`{name}` is written twice"),
+            });
+        }
+    }
+    Ok(named)
+};
+
+Comma<Item>: Vec<Item> = {
+    <items:(<Item> ",")*> <last:Item?> => items.into_iter().chain(last).collect(),
+};
+
+Scalar: Scalar = {
+    "i8" => Scalar::I8,
+    "i16" => Scalar::I16,
+    "i32" => Scalar::I32,
+    "i64" => Scalar::I64,
+    "u8" => Scalar::U8,
+    "u16" => Scalar::U16,
+    "u32" => Scalar::U32,
+    "u64" => Scalar::U64,
+    "usize" => Scalar::Usize,
+    "f32" => Scalar::F32,
+    "f64" => Scalar::F64,
+    "bool" => Scalar::Bool,
+    "char" => Scalar::Char,
+};
+
+Number: usize = r"[0-9]+" =>? <>.parse().map_err(|_| ParseError::User {
+    error: format!("`{}` is too large a number", <>),
+});
+
+Lower: String = r"[a-z_][a-zA-Z0-9_]*" => <>.to_owned();
+
+Upper: String = r"[A-Z][a-zA-Z0-9_]*" => <>.to_owned();

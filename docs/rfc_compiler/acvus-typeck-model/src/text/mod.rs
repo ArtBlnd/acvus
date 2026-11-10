@@ -1,0 +1,59 @@
+//! The text of the model: a program written as the operations that record it.
+//!
+//! One statement is one operation over classes, and an operand is a class: a
+//! name, or a part of one. So a program is read into the store with no judgment
+//! of its own, and one is made by choosing operations and names.
+//!
+//! | Statement | What is recorded |
+//! |---|---|
+//! | `a <- b;` | `b` enters `a` |
+//! | `a <- Option<b>;` | a class with that head, whose payload is `b`, enters `a` |
+//! | `a <- {integer};` | a literal with no suffix enters `a` |
+//! | `a <- b as _;` | what `b` comes to by itself enters `a` |
+//! | `a.x <- b;`, `b <- a.x;` | the part `x` of `a` is written into, or read |
+//! | `pass a to p;` | `a` is passed to `p` |
+//! | `exit e to w;` | the exit of a `?`: `e` is what it exits with, `w` the error |
+//! | `declare p = Option<t>;` | `p` is a class a declaration writes, and `t` a hole of it |
+//! | `row as_slice<T>: &Vec<T> -> &[T];` | a declared function |
+//! | `first: pass a to p;` | the statement's items are found by the label `first` |
+//!
+//! A word that begins with a small letter is a class, a field or a label, and one
+//! that begins with a capital is a type or a variant. [`ast`] is the program,
+//! [`parse`] reads one, a program is written out as it is read, and
+//! [`record::record`] writes one into a store.
+//!
+//! | Assertion | What solving is to come to |
+//! |---|---|
+//! | `assert a: Option<u8>;` | the type of `a` |
+//! | `assert refused Mismatch, UndecidedClass;` | the causes the program is refused by. With no such assertion, none |
+//! | `assert refused Mismatch names first, second;` | the connections that refusal names |
+//! | `assert first takes Deref, Reborrow;` | the adjustments the constraint of the statement labelled `first` takes |
+//! | `assert first at r.x takes Deref;` | those the projection that names `r.x` in that statement takes |
+
+pub mod ast;
+mod print;
+pub mod record;
+
+use lalrpop_util::lalrpop_mod;
+
+lalrpop_mod!(
+    #[allow(clippy::all, clippy::pedantic, unused)]
+    grammar,
+    "/text/grammar.rs"
+);
+
+/// Reads a program, or says where the text is none, by its line and column.
+pub fn parse(text: &str) -> Result<ast::Program, String> {
+    grammar::ProgramParser::new().parse(text).map_err(|error| {
+        let at = |offset: usize| {
+            let before = &text[..offset.min(text.len())];
+            let line = before.matches('\n').count() + 1;
+            let column = before.rfind('\n').map_or(before.len(), |start| before.len() - start - 1) + 1;
+            format!("{line}:{column}")
+        };
+        error.map_location(at).to_string()
+    })
+}
+
+#[cfg(test)]
+mod tests;
