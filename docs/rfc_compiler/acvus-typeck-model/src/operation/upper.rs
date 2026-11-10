@@ -184,13 +184,17 @@ where
     (joined != Shape::Never).then_some(joined)
 }
 
-/// The head `upper` gives the class that reaches it.
+/// The head `upper` gives the class that reaches it. A class that is a part of
+/// itself has no finite type, so it gives none: a head taken from it would hold a
+/// part made anew that takes the same head in turn, without end.
 fn offered<K>(classes: &Classes<K>, upper: &Upper<K::Id>) -> Option<Shape<K::Id>>
 where
     K: ClassKind,
 {
     match (upper.through, upper.gives.as_ref()?) {
+        (Through::Own, _) if classes.is_own_part(upper.class) => None,
         (Through::Own, gives) => Some(gives.clone()),
+        (Through::Target(_), Shape::Ref(_, target)) if classes.is_own_part(*target) => None,
         (Through::Target(_), Shape::Ref(_, target)) => shape_of(classes, *target).cloned(),
         (Through::Target(_), _) => None,
     }

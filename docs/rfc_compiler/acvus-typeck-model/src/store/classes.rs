@@ -195,6 +195,11 @@ where
         })
     }
 
+    /// Whether the class `class` names is a part of itself, at any depth (O5).
+    pub fn is_own_part(&self, class: K::Id) -> bool {
+        self.occurs(self.find(class).id)
+    }
+
     /// Whether the class `class` names is decided.
     pub fn is_decided(&self, class: K::Id) -> bool {
         self.root(self.find(class).id).state.is_decided()

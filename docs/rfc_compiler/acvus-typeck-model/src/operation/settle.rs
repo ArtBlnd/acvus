@@ -1618,4 +1618,67 @@ mod tests {
             in_every_order(build, expected, name);
         }
     }
+
+    /// `T = [T]`, written by a declaration and refused as its own part, with `x`
+    /// passed to it. A class that is a part of itself has no finite type, so it
+    /// gives `x` no head, and settling ends.
+    #[test]
+    fn a_class_that_is_its_own_part_gives_no_head() {
+        let mut world = World::new();
+        let hole = world.undecided();
+        let slice = world.external(Shape::Slice(hole));
+        world.enter(hole, slice);
+        world.enter(slice, hole);
+        let argument = world.undecided();
+        world.pass(argument, slice);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        assert!(world.classes.is_own_part(slice));
+        assert!(world.outcome.refusals.iter().any(|refusal| refusal.cause == Cause::Occurs));
+        assert_eq!(world.shape(argument), Shape::Never);
+    }
+
+    /// `let y; let mut a = return; a = f(a, Some(y));`, with
+    /// `f(Option<T>, Option<T>) -> Option<&T>`: `T = &T`, and `y` goes to `T` at a
+    /// part.
+    #[test]
+    fn a_part_that_goes_to_a_class_that_is_its_own_part_takes_no_head_from_it() {
+        let mut world = World::new();
+        let y = world.undecided();
+        let a = world.text(Shape::Never);
+        let hole = world.undecided();
+        let (first, second) = (world.external(Shape::Option(hole)), world.external(Shape::Option(hole)));
+        let reference = world.external(Shape::Ref(SHARED, hole));
+        let result = world.external(Shape::Option(reference));
+        world.pass(a, first);
+        let some = some_of(&mut world, y);
+        world.pass(some, second);
+        world.enter(result, a);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        assert!(world.classes.is_own_part(hole));
+        assert!(world.outcome.refusals.iter().any(|refusal| refusal.cause == Cause::Occurs));
+    }
+
+    /// `let a; g(&a);`, with `g(&S)` and `S = [S]`: at a reference's target too, a
+    /// class that is a part of itself gives no head.
+    #[test]
+    fn a_target_that_is_its_own_part_gives_no_head() {
+        let mut world = World::new();
+        let hole = world.undecided();
+        let slice = world.external(Shape::Slice(hole));
+        world.enter(hole, slice);
+        world.enter(slice, hole);
+        let parameter = world.external(Shape::Ref(SHARED, slice));
+        let a = world.undecided();
+        let (lent, _) = world.lend(a, SHARED);
+        world.pass(lent, parameter);
+
+        assert_eq!(world.settle_fully(), Settled::Finished);
+
+        assert!(world.classes.is_own_part(slice));
+        assert_eq!(world.shape(a), Shape::Never);
+    }
 }
