@@ -37,7 +37,7 @@ where
             apart: BTreeSet::new(),
             pairs,
         };
-        return Told { looked, asks, way: None };
+        return Told { looked, asks, then: None };
     };
     if !entering.enters(head) {
         return Told::done(Looked::Refused(Refused {
@@ -66,7 +66,7 @@ where
 {
     match bound {
         Bound::Enter { lower, .. } => Some(view.head(*lower).cloned()),
-        Bound::Alone { .. } => Some(None),
+        Bound::Alone { .. } | Bound::Exit { .. } => Some(None),
         Bound::Equal { .. } | Bound::Change { .. } => None,
     }
 }

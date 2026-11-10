@@ -2,7 +2,7 @@
 //!
 //! | The law is asked | The rule | Where |
 //! |---|---|---|
-//! | what a bound comes to | by the relation the bound is: entering, being equal, being passed, `as _` | [`enter`], [`equal`], [`passing`], [`alone`] |
+//! | what a bound comes to | by the relation the bound is: entering, being equal, being passed, `as _`, the exit of `?` | [`enter`], [`equal`], [`passing`], [`alone`], [`exit`] |
 //! | which functions are declared | a table, and no rule | [`functions`] |
 //! | which classes are one type by the bounds as a whole | classes that enter one another | [`enter::entering_one_another`] |
 //! | where a named part lies | read through a reference | [`Language::place`] |
@@ -12,6 +12,7 @@
 pub mod alone;
 pub mod enter;
 pub mod equal;
+pub mod exit;
 pub mod functions;
 pub mod passing;
 pub mod rungs;
@@ -41,8 +42,18 @@ where
 {
     fn look(&self, scribe: &mut Scribe<'_, K>, bound: &Bound<K>, at: ItemId) -> Looked<K> {
         let told = tell(&View::of(scribe.classes()), &self.functions, bound, at);
-        match told.way {
-            Some(way) => passing::take(scribe, &self.functions, way, bound.lower(), at),
+        match told.then {
+            Some(Then::Way(way)) => passing::take(scribe, &self.functions, way, bound.lower(), at),
+            Some(Then::Enters(shape)) => {
+                let upper = bound.upper();
+                let scope = scribe.classes().get(scribe.classes().find(upper)).scope;
+                let written = scribe.written(scope, shape, [at].into_iter().collect());
+                Looked::Holds {
+                    pairs: Vec::new(),
+                    adjustments: Vec::new(),
+                    bounds: vec![Bound::Enter { lower: written, upper }],
+                }
+            }
             None => told.looked,
         }
     }
@@ -134,9 +145,20 @@ where
 {
     pub(super) looked: Looked<K>,
     pub(super) asks: Vec<(K::Id, Shape<K::Id>)>,
-    /// The one way through declared functions the bound goes by, where it goes by
-    /// one. Its signatures are not made yet, so `looked` says only that it holds.
-    pub(super) way: Option<passing::Way<K>>,
+    /// What is still to be made in the store for the bound to come to what it
+    /// does. Telling only reads, so `looked` then says only that the bound holds.
+    pub(super) then: Option<Then<K>>,
+}
+
+/// What a bound that holds has still to make in the store.
+pub(super) enum Then<K>
+where
+    K: ClassKind,
+{
+    /// The signatures of the one way through declared functions it goes by.
+    Way(passing::Way<K>),
+    /// A class with this head, written by the bound, which enters its upper end.
+    Enters(Shape<K::Id>),
 }
 
 impl<K> Told<K>
@@ -147,7 +169,7 @@ where
         Self {
             looked,
             asks: Vec::new(),
-            way: None,
+            then: None,
         }
     }
 }
@@ -163,6 +185,7 @@ where
         Bound::Equal { .. } => equal::look(view, lower, upper, at),
         Bound::Change { .. } => passing::look(view, functions, lower, upper, at),
         Bound::Alone { .. } => alone::look(view, lower, upper),
+        Bound::Exit { .. } => exit::look(view, lower, upper),
     }
 }
 

@@ -174,6 +174,31 @@ f(x);            // f(u8)
 order of statements, and does nothing to types. This replaces the earlier rule that a
 standalone block decides alone.
 
+## `e?` exits with an error
+
+`e?` does two things, and calls nothing. A body has a result class, where its tail, its
+`return`s and the exits of its `?`s meet.
+
+| | What | What it is |
+|---|---|---|
+| 1 | The payload of `Ok` of `e` is the value of `e?`, and the payload of `Err` is what it exits with, `E`. | Two parts are named on `e`, as a projection names one. |
+| 2 | A `Result` whose error is a class of its own, `W`, enters the body's result. | A written head enters, at once. |
+| 3 | What enters `W` is told by the head of `E`. | A suspended constraint: it waits for that head. |
+
+| The head of `E` | What enters `W` |
+|---|---|
+| a type of a name `N`: an enum, a struct, an extern-defined type | `Error{N(E)}`, with that one variant |
+| an `Error` with variants | that `Error`, and the join unites its variants with the others |
+| `!` | `!`: nothing exits |
+| any other, as `i32` | `Error<E>` |
+
+So `parse(s)?` and `read(p)?` in one body give it the error `Error{ParseError(..), IoError(..)}`.
+
+`Error<E>` and an `Error` with variants are two constructors and do not join: a body that exits
+with `i32` in one place and with `ParseError` in another is refused.
+
+`?` names `Ok` and `Err`, which an `Option` has no place for, so `?` of an `Option` is refused.
+
 ## A hole is where types meet
 
 An argument's part and the hole it is passed to are one class. A class's head is the join of

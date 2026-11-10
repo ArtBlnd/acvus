@@ -41,7 +41,7 @@ use crate::store::classes::Classes;
 
 use super::super::law::{Looked, Pair, Scribe};
 use super::functions::{Functions, Row};
-use super::{Told, View};
+use super::{Then, Told, View};
 
 /// Types as they are written somewhere: in the store being solved, or in a row of
 /// the table, not made into classes of that store yet.
@@ -462,7 +462,7 @@ where
             return Told {
                 looked: waits(BTreeSet::from([class]), read),
                 asks: vec![(class, against)],
-                way: None,
+                then: None,
             };
         }
         // A declared function is looked for only where the language gives nothing.
@@ -483,7 +483,7 @@ where
                 bounds: Vec::new(),
             },
             asks: Vec::new(),
-            way: Some(way),
+            then: Some(Then::Way(way)),
         },
         _ => {
             Told::done(Looked::Refused(Refused {

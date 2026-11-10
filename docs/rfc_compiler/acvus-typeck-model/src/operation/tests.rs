@@ -1203,6 +1203,127 @@ fn as_underscore_of_what_has_no_type_gives_none() {
     });
 }
 
+// `e?`: its value is the payload of `Ok`, and what it exits with puts an error
+// into the body's result.
+
+/// A type of the name `name`.
+fn of_name(world: &mut World, name: &str) -> ClassId {
+    world.text(Shape::Struct(Name::new(name), Vec::new()))
+}
+
+/// An expression of the type `Result<ok, error>`.
+fn result_of(world: &mut World, ok: ClassId, error: ClassId) -> ClassId {
+    world.text(Shape::Result(ok, error))
+}
+
+/// The tail `Ok(value)` of the body whose result is `body`.
+fn tail_ok(world: &mut World, value: ClassId, body: ClassId) {
+    let error = world.undecided();
+    let tail = result_of(world, value, error);
+    world.enter(tail, body);
+}
+
+/// `let a = e?; Ok(a)`, with `e: Result<u8, error>` read behind `lets` bindings:
+/// the result of the body.
+fn exits_with<F>(world: &mut World, lets: usize, error: F) -> ClassId
+where
+    F: Fn(&mut World) -> ClassId,
+{
+    let body = world.undecided();
+    let ok = world.text(U8);
+    let error = error(world);
+    let e = result_of(world, ok, error);
+    let e = behind(world, e, lets);
+    let a = world.question(e, body);
+    tail_ok(world, a, body);
+    body
+}
+
+#[test]
+fn an_exit_with_a_named_type_puts_a_variant_of_that_name_into_the_error() {
+    comes_to("Result<u8, Error{ParseError(ParseError)}>", |w, lets| {
+        exits_with(w, lets, |w| of_name(w, "ParseError"))
+    });
+}
+
+#[test]
+fn exits_with_named_types_unite_their_variants() {
+    // `let a = parse()?; read()?; Ok(a)`
+    comes_to("Result<u8, Error{IoError(IoError), ParseError(ParseError)}>", |w, lets| {
+        let body = exits_with(w, lets, |w| of_name(w, "ParseError"));
+        let ok = w.text(U16);
+        let error = of_name(w, "IoError");
+        let read = result_of(w, ok, error);
+        w.question(read, body);
+        body
+    });
+}
+
+#[test]
+fn an_exit_with_an_error_puts_its_variants_among_the_others() {
+    comes_to("Result<u8, Error{A(A), B(B)}>", |w, lets| {
+        let body = exits_with(w, lets, |w| {
+            let a = of_name(w, "A");
+            w.text(Shape::Error([(Name::new("A"), a)].into_iter().collect()))
+        });
+        let ok = w.text(U16);
+        let error = of_name(w, "B");
+        let other = result_of(w, ok, error);
+        w.question(other, body);
+        body
+    });
+}
+
+#[test]
+fn an_exit_with_a_type_of_no_name_puts_an_error_of_it() {
+    comes_to("Result<u8, Error<u16>>", |w, lets| exits_with(w, lets, |w| w.text(U16)));
+}
+
+#[test]
+fn an_error_of_a_type_and_an_error_with_variants_do_not_join() {
+    // `let a = e?; parse()?; Ok(a)` with `e: Result<u8, u16>`.
+    comes_to("refused: Mismatch, UndecidedClass", |w, lets| {
+        let body = exits_with(w, lets, |w| w.text(U16));
+        let ok = w.text(U16);
+        let error = of_name(w, "ParseError");
+        let parse = result_of(w, ok, error);
+        w.question(parse, body);
+        body
+    });
+}
+
+#[test]
+fn an_exit_with_never_puts_nothing_into_the_error() {
+    comes_to("Result<u8, !>", |w, lets| exits_with(w, lets, |w| w.text(Shape::Never)));
+}
+
+#[test]
+fn an_option_has_no_exit() {
+    // `let a = o?; Ok(a)` with `o: Option<u8>`.
+    comes_to("refused: NotHeld", |w, lets| {
+        let body = w.undecided();
+        let payload = w.text(U8);
+        let o = some(w, payload);
+        let o = behind(w, o, lets);
+        let a = w.question(o, body);
+        tail_ok(w, a, body);
+        body
+    });
+}
+
+#[test]
+fn a_class_only_an_exit_names_parts_of_is_a_result() {
+    // `let e; let a = e?; Ok(a)`
+    comes_to("Result<!, !>", |w, lets| {
+        let body = w.undecided();
+        let e = w.undecided();
+        let e = behind(w, e, lets);
+        let a = w.question(e, body);
+        tail_ok(w, a, body);
+        body
+    });
+}
+
 // A refusal names what made the classes it is of meet.
 
 /// The item recorded last.

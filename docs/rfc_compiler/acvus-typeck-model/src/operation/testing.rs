@@ -7,7 +7,8 @@ use crate::primitive::class::{Live, Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::scope::Scopes;
-use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape};
+use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape, VariantOf};
+use crate::primitive::Name;
 use crate::primitive::{ClassId, ItemId};
 use crate::store::classes::Classes;
 
@@ -90,6 +91,25 @@ impl World {
         place
     }
 
+    /// `operand?` in a body whose result is `result`: the class of the expression.
+    ///
+    /// The payload of `Ok` is the value, and that of `Err` is what it exits with.
+    /// A `Result` whose error is a class of its own enters the result, and the
+    /// exit says what enters that class.
+    pub(super) fn question(&mut self, operand: ClassId, result: ClassId) -> ClassId {
+        let payload = |variant: &str| PartKey::Payload(VariantOf::Result, Name::new(variant));
+        let (value, _) = self.project(operand, payload("Ok"), Side::Upper);
+        let (exits_with, _) = self.project(operand, payload("Err"), Side::Upper);
+        let (ok, error) = (self.undecided(), self.undecided());
+        let exit = self.text(Shape::Result(ok, error));
+        self.enter(exit, result);
+        self.record(Bound::Exit {
+            lower: exits_with,
+            upper: error,
+        });
+        value
+    }
+
     /// `argument` passed to a parameter of the type `given`: the item of the
     /// boundary. The argument enters the boundary's class, which is passed.
     pub(super) fn pass(&mut self, argument: ClassId, given: ClassId) -> ItemId {
@@ -170,10 +190,17 @@ impl World {
             Shape::Option(payload) => format!("Option<{}>", at(payload)),
             Shape::Ref(SHARED, target) => format!("&{}", at(target)),
             Shape::Ref(EXCLUSIVE, target) => format!("&mut {}", at(target)),
+            Shape::Struct(name, arguments) if arguments.is_empty() => name.0.clone(),
             Shape::Struct(name, arguments) => {
                 let arguments: Vec<String> = arguments.iter().map(at).collect();
                 format!("{}<{}>", name.0, arguments.join(", "))
             }
+            Shape::Result(ok, error) => format!("Result<{}, {}>", at(ok), at(error)),
+            Shape::Error(variants) => {
+                let variants: Vec<String> = variants.iter().map(|(variant, payload)| format!("{}({})", variant.0, at(payload))).collect();
+                format!("Error{{{}}}", variants.join(", "))
+            }
+            Shape::ErrorOf(error) => format!("Error<{}>", at(error)),
             Shape::Slice(element) => format!("[{}]", at(element)),
             Shape::Array(length, element) => format!("[{}; {length}]", at(element)),
             Shape::Object(fields) => {

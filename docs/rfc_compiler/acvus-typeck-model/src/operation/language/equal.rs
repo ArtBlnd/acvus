@@ -27,7 +27,7 @@ where
             apart: BTreeSet::new(),
             pairs,
         };
-        return Told { looked, asks, way: None };
+        return Told { looked, asks, then: None };
     };
     if head.layer() != declared.layer() {
         return Told::done(Looked::Refused(Refused {

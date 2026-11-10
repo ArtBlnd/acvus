@@ -34,8 +34,8 @@ where
 }
 
 /// The bounds of the language, which differ only at the top layer, and with them
-/// the one suspended constraint a store holds as it holds a bound: [`Bound::Alone`]
-/// is recorded, looked at and finished as they are.
+/// the suspended constraints a store holds as it holds a bound: [`Bound::Alone`]
+/// and [`Bound::Exit`] are recorded, looked at and finished as they are.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Bound<K>
 where
@@ -55,6 +55,10 @@ where
     /// is asked of `lower`, and it gives `upper` none until that type has a head
     /// at every depth.
     Alone { lower: K::Id, upper: K::Id },
+    /// The exit of `e?`: `lower` is what `e` exits with, and `upper` the error of
+    /// the body's result. What enters `upper` is told by the head of `lower`, and
+    /// nothing enters it until that head is there.
+    Exit { lower: K::Id, upper: K::Id },
 }
 
 impl<K> BoundOf<K> for Bound<K>
@@ -66,7 +70,8 @@ where
             Bound::Enter { lower, .. }
             | Bound::Change { lower, .. }
             | Bound::Equal { lower, .. }
-            | Bound::Alone { lower, .. } => *lower,
+            | Bound::Alone { lower, .. }
+            | Bound::Exit { lower, .. } => *lower,
         }
     }
 
@@ -75,7 +80,8 @@ where
             Bound::Enter { upper, .. }
             | Bound::Change { upper, .. }
             | Bound::Equal { upper, .. }
-            | Bound::Alone { upper, .. } => *upper,
+            | Bound::Alone { upper, .. }
+            | Bound::Exit { upper, .. } => *upper,
         }
     }
 }
@@ -103,6 +109,10 @@ where
                 upper: f(upper),
             },
             Bound::Alone { lower, upper } => Bound::Alone {
+                lower: f(lower),
+                upper: f(upper),
+            },
+            Bound::Exit { lower, upper } => Bound::Exit {
                 lower: f(lower),
                 upper: f(upper),
             },

@@ -9,7 +9,7 @@ is complete, its content goes into the docs.
 | Thing | What it is | Its life |
 |---|---|---|
 | a class | an equivalence class of types | undecided, holding the names of its parts, then decided, holding its head and its own parts. It changes once. |
-| a bound | a relation of two classes: entering, being equal, being passed. A suspended constraint, `as _`, has the same life and is held with them. | recorded, looked at, perhaps many times, then finished. The store holds it throughout. |
+| a bound | a relation of two classes: entering, being equal, being passed. A suspended constraint, `as _` or the exit of `?`, has the same life and is held with them. | recorded, looked at, perhaps many times, then finished. The store holds it throughout. |
 | what a class holds of bounds | guards, bounds that hold it apart, waiters | set and lifted as bounds are looked at and finished |
 | the connections of a class | each connection made of it: the two ids connected and the item it went by | added to where the class is connected, merged where two classes are, never taken out. A decision adds none. |
 
@@ -60,6 +60,7 @@ The language's law is `operation::language`, one rule in one place:
 | being equal: the parts of one name are one type, and the two heads are of one layer | `equal` |
 | being passed: the type given is read as far as it is written, and each index of the argument's head is loosened or left; else through one way of declared functions | `passing` |
 | `e as _`: it asks `e` no head, waits until the type of `e` has a head at every depth, and then that type enters | `alone` |
+| the exit of `e?`: it waits for the head of what `e` exits with, and then an `Error` made by that head enters the error of the body's result | `exit` |
 | the functions declared: a table, and no rule | `functions` |
 | classes that enter one another are one class | `enter::entering_one_another` |
 | a part named on a reference is read through it | `Language::place` |

@@ -81,8 +81,8 @@ pub enum Place {
 }
 
 /// The store as a law may use it while it looks at a bound: all of it to read,
-/// and classes to make anew, as a signature made at a boundary needs. It merges
-/// and decides nothing.
+/// and classes to make anew, as a signature made at a boundary needs, or a head
+/// a rule writes. It merges nothing, and decides no class that was there.
 #[derive(Debug)]
 pub struct Scribe<'a, K>
 where
@@ -110,6 +110,12 @@ where
 
     pub fn undecided(&mut self, scope: ScopeId) -> K::Id {
         self.classes.undecided(scope)
+    }
+
+    /// Makes a class with the head `shape`, as the text writes one, in `scope`, by
+    /// `by`.
+    pub fn written(&mut self, scope: ScopeId, shape: Shape<K::Id>, by: BTreeSet<ItemId>) -> K::Id {
+        self.classes.decided(scope, shape, by)
     }
 
     /// Makes every class of `template` anew in `scope`, by `at`, and gives each
