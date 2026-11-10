@@ -21,10 +21,8 @@ where
     Dangling { holder: K::Id, id: K::Id },
     /// A part of an undecided class that no item names.
     Unnamed { class: K::Id, key: PartKey },
-    /// A bound between two undecided classes that only one of them holds.
-    OneSided { bound: K::Bound, by: ItemId },
-    /// A bound held by a class that is neither of its ends.
-    Stray { holder: K::Id, bound: K::Bound, by: ItemId },
+    /// A bound the store holds, an end of which names no class made.
+    Unbound { bound: K::Bound, by: ItemId },
 }
 
 impl<K> Classes<K>
@@ -52,6 +50,14 @@ where
                 }
             }
         }
+        for (bound, by) in &self.bounds {
+            if [bound.lower(), bound.upper()].iter().any(|end| end.index() >= self.slots.len()) {
+                violations.push(Violation::Unbound {
+                    bound: bound.clone(),
+                    by: *by,
+                });
+            }
+        }
         if !violations.is_empty() {
             return Err(violations);
         }
@@ -72,35 +78,9 @@ where
                     });
                 }
             }
-            for (bound, by) in &constraints.bounds {
-                let ends = [bound.lower(), bound.upper()];
-                if !ends.iter().any(|end| self.find(*end).id() == id) {
-                    violations.push(Violation::Stray {
-                        holder: id,
-                        bound: bound.clone(),
-                        by: *by,
-                    });
-                    continue;
-                }
-                for end in ends {
-                    if !self.holds_or_is_decided(end, bound, *by) {
-                        violations.push(Violation::OneSided {
-                            bound: bound.clone(),
-                            by: *by,
-                        });
-                    }
-                }
-            }
         }
 
         if violations.is_empty() { Ok(()) } else { Err(violations) }
-    }
-
-    fn holds_or_is_decided(&self, class: K::Id, bound: &K::Bound, by: ItemId) -> bool {
-        match &self.get(self.find(class)).state {
-            State::Undecided(constraints) => constraints.bounds.contains(&(bound.clone(), by)),
-            State::Decided(_) => true,
-        }
     }
 }
 
@@ -180,32 +160,15 @@ mod tests {
     }
 
     #[test]
-    fn a_bound_only_one_undecided_class_holds_is_found() {
+    fn a_bound_to_no_class_made_is_found() {
         let mut world = World::new();
         let a = world.undecided();
-        let b = world.undecided();
+        let mut elsewhere = Classes::<Live>::default();
+        let stray = (0..4).map(|_| elsewhere.undecided(world.scopes.root())).last().expect("four classes were made");
         let at = world.items.push(());
-        world.classes.bound(Bound::Enter { lower: a, upper: b }, at);
-        world.constraints(b).bounds.clear();
-        assert_eq!(
-            world.classes.verify(),
-            Err(vec![Violation::OneSided {
-                bound: Bound::Enter { lower: a, upper: b },
-                by: at,
-            }])
-        );
-    }
-
-    #[test]
-    fn a_bound_held_by_a_class_that_is_neither_end_is_found() {
-        let mut world = World::new();
-        let a = world.undecided();
-        let b = world.undecided();
-        let holder = world.undecided();
-        let at = world.items.push(());
-        let bound = Bound::Enter { lower: a, upper: b };
-        world.constraints(holder).bounds.insert((bound, at));
-        assert_eq!(world.classes.verify(), Err(vec![Violation::Stray { holder, bound, by: at }]));
+        let bound = Bound::Enter { lower: a, upper: stray };
+        world.classes.bounds.insert((bound, at));
+        assert_eq!(world.classes.verify(), Err(vec![Violation::Unbound { bound, by: at }]));
     }
 
     #[test]

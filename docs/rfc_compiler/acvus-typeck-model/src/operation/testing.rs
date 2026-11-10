@@ -70,7 +70,7 @@ impl World {
 
     pub(super) fn record(&mut self, bound: Bound<Live>) -> ItemId {
         let at = self.items.push("bound");
-        self.outcome.bounds.extend(self.classes.bound(bound, at));
+        self.classes.bound(bound, at);
         at
     }
 

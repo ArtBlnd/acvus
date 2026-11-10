@@ -580,11 +580,10 @@ where
     /// Makes each change that can be made, and says whether it made any.
     pub(super) fn make_changes(&mut self, classes: &mut Classes<K>, scopes: &Scopes, conversions: &Conversions) -> bool {
         let mut made = false;
-        for (bound, at) in std::mem::take(&mut self.bounds) {
-            if self.make_change(classes, scopes, conversions, bound, at) {
+        for (bound, at) in classes.between_decided() {
+            if matches!(bound, Bound::Change { .. }) && self.make_change(classes, scopes, conversions, bound, at) {
+                classes.finish(&bound, at);
                 made = true;
-            } else {
-                self.bounds.insert((bound, at));
             }
         }
         self.judge(classes, scopes);
@@ -790,7 +789,7 @@ mod tests {
 
         world.no_refusals();
         assert_eq!(world.outcome.adjustments, Adjustments::new());
-        assert_eq!(world.outcome.bounds.len(), 0);
+        assert_eq!(world.classes.between_decided().len(), 0);
     }
 
     /// `take(return 0);`, with `take(u8)`.
@@ -1081,7 +1080,7 @@ mod tests {
 
         world.no_refusals();
         assert_eq!(
-            world.outcome.bounds,
+            world.classes.between_decided(),
             BTreeSet::from([(
                 Bound::Change {
                     lower: boundary,
@@ -1121,7 +1120,7 @@ mod tests {
 
         world.no_refusals();
         assert!(world.classes.is_decided(boundary));
-        assert_eq!(world.outcome.bounds.len(), 1);
+        assert_eq!(world.classes.between_decided().len(), 1);
         assert_eq!(world.outcome.adjustments, Adjustments::new());
 
         let elem = world.external(U8);
@@ -1151,7 +1150,7 @@ mod tests {
         world.settle();
 
         assert_eq!(
-            world.outcome.bounds,
+            world.classes.between_decided(),
             BTreeSet::from([(
                 Bound::Change {
                     lower: boundary,
@@ -1593,7 +1592,7 @@ mod tests {
         assert!(!world.classes.is_decided(hole));
         let uppers: Vec<ClassId> = world.classes.upper_items(hole).into_keys().collect();
         assert_eq!(uppers, vec![world.classes.find(declared_u8).id()]);
-        assert_eq!(world.outcome.bounds, crate::primitive::class::Bounds::<Live>::new());
+        assert_eq!(world.classes.between_decided(), crate::primitive::class::Bounds::<Live>::new());
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 

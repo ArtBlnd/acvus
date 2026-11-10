@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
-use super::bound::{Bound, BoundInto, BoundOf};
+use super::bound::{Bound, BoundOf};
 use super::domain::Domain;
 use super::id::Id;
 use super::refusal::{Cause, Refusal};
@@ -34,8 +34,8 @@ use super::{ClassId, ItemId, ScopeId, TemplateId};
 /// records of its classes derive, as a derive asks them of the kind.
 pub trait ClassKind: Copy + Ord + Hash + Debug + Default {
     type Id: Id + Ord + Hash + Debug;
-    /// What relates two classes of this kind. A store holds it on those of
-    /// the two that are undecided, without reading what it means.
+    /// What relates two classes of this kind. A store holds it until it is
+    /// finished, without reading what it means.
     type Bound: BoundOf<Self>;
 }
 
@@ -89,8 +89,6 @@ pub struct Constraints<K>
 where
     K: ClassKind,
 {
-    /// The bounds this class is an end of.
-    pub bounds: Bounds<K>,
     /// The parts projections have named, each waiting for the class's head.
     /// They give the class no head (O7). A name has one class, however many
     /// projections name it on either side.
@@ -104,10 +102,9 @@ where
 
 /// Bounds, each with the item that recorded it.
 ///
-/// Each end of a bound that is undecided holds it. A bound keeps the ids it was
-/// recorded with: they may name classes since merged into others, and both may
-/// name the class that holds it, as a class can be its own lower bound. Once no
-/// end is undecided, it is given back.
+/// A bound keeps the ids it was recorded with: they may name classes since
+/// merged into others, and both may name one class, as a class can be its own
+/// lower bound.
 pub type Bounds<K> = BTreeSet<(<K as ClassKind>::Bound, ItemId)>;
 
 /// How a part came to be named on a class.
@@ -217,10 +214,6 @@ where
     pub pairs: Vec<(K::Id, K::Id)>,
     pub refusals: Vec<Refusal>,
     pub pending: Option<Pending<K>>,
-    /// The bounds an undecided class held when it became decided. Of these,
-    /// a bound an undecided class still holds stays with that class; the
-    /// rest are given back.
-    pub bounds: Bounds<K>,
     pub unplaced: Vec<Unplaced<K>>,
 }
 
@@ -250,29 +243,16 @@ where
         }
     }
 
-    /// The bounds it holds. A decided class holds none.
-    pub fn bounds(&self) -> Option<&Bounds<K>> {
-        let State::Undecided(constraints) = self else {
-            return None;
-        };
-        Some(&constraints.bounds)
-    }
-
-    /// Every id the state holds: its parts, the ends of its bounds, and the
-    /// classes of its calls.
+    /// Every id the state holds: its parts, and the classes of its calls.
     pub fn held(&self) -> Vec<K::Id> {
         let State::Undecided(constraints) = self else {
             return self.parts();
         };
-        let bounds = constraints
-            .bounds
-            .iter()
-            .flat_map(|(bound, _)| [bound.lower(), bound.upper()]);
         let calls = constraints
             .calls
             .iter()
             .flat_map(|(call, _)| call.args.iter().copied().chain([call.result]));
-        self.parts().into_iter().chain(bounds).chain(calls).collect()
+        self.parts().into_iter().chain(calls).collect()
     }
 }
 
@@ -285,7 +265,6 @@ where
     pub fn translate<J, F>(self, mut f: F) -> Class<J>
     where
         J: ClassKind,
-        K::Bound: BoundInto<K, J>,
         F: FnMut(K::Id) -> J::Id,
     {
         let state = match self.state {
@@ -295,11 +274,6 @@ where
                 origin: decided.origin,
             }),
             State::Undecided(constraints) => {
-                let bounds = constraints
-                    .bounds
-                    .into_iter()
-                    .map(|(bound, by)| (bound.translate(&mut f), by))
-                    .collect();
                 let parts = constraints
                     .parts
                     .into_iter()
@@ -326,7 +300,6 @@ where
                     })
                     .collect();
                 State::Undecided(Constraints {
-                    bounds,
                     parts,
                     calls,
                     domains: constraints.domains,
@@ -342,22 +315,19 @@ where
     /// Makes this class and `other` one class, held at `root`, by `at`.
     ///
     /// The class belongs to the outer of the two scopes. Two undecided
-    /// classes hold the constraints of both, and a bound between them
-    /// becomes the class's bound on itself. Two decided classes must be of
+    /// classes hold the constraints of both. Two decided classes must be of
     /// one layer; where they are not, this class's shape is kept and the
     /// program is refused. An undecided class merged with a decided one
     /// gives each of its parts to the decided one's place for it, and leaves
-    /// each part with no place, its bounds, calls and domains to its caller.
+    /// each part with no place, its calls and domains to its caller.
     pub fn merge(self, other: Self, root: K::Id, scopes: &Scopes, at: ItemId) -> Merged<K> {
         let scope = scopes.outer(self.scope, other.scope);
         let mut pairs = Vec::new();
         let mut refusals = Vec::new();
         let mut pending = None;
-        let mut bounds = BTreeSet::new();
         let mut unplaced = Vec::new();
         let state = match (self.state, other.state) {
             (State::Undecided(mut kept), State::Undecided(gone)) => {
-                kept.bounds.extend(gone.bounds);
                 for (key, part) in gone.parts {
                     match kept.parts.entry(key) {
                         Entry::Vacant(vacant) => {
@@ -412,7 +382,6 @@ where
                         }),
                     }
                 }
-                bounds = undecided.bounds;
                 if !undecided.calls.is_empty() || !undecided.domains.is_empty() {
                     pending = Some(Pending {
                         class: root,
@@ -428,7 +397,6 @@ where
             pairs,
             refusals,
             pending,
-            bounds,
             unplaced,
         }
     }

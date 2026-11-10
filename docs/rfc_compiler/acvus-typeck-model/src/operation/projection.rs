@@ -344,8 +344,8 @@ mod tests {
         let (usize_class, _) = world.written(Shape::Scalar(Scalar::Usize));
         let usize_enters = Bound::Enter { lower: usize_class, upper: index };
         let i_enters = Bound::Enter { lower: i, upper: index };
-        assert_eq!(world.classes.bound(usize_enters, elem_at), None);
-        assert_eq!(world.classes.bound(i_enters, elem_at), None);
+        world.classes.bound(usize_enters, elem_at);
+        world.classes.bound(i_enters, elem_at);
 
         let t = world.undecided();
         let (slice, _) = world.written(Shape::Slice(t));
@@ -356,7 +356,7 @@ mod tests {
         assert_eq!(world.outcome.adjustments, deref_of([elem_at]));
         assert!(!world.classes.is_decided(index));
         assert!(!world.classes.is_decided(i));
-        assert_eq!(world.outcome.bounds, BTreeSet::new());
+        assert_eq!(world.classes.between_decided(), BTreeSet::new());
     }
 
     #[test]
@@ -435,13 +435,13 @@ mod tests {
         let (literal, _) = world.written(Shape::Scalar(Scalar::U8));
         let at = world.items.push("meeting");
         let enters = Bound::Enter { lower: literal, upper: part };
-        assert_eq!(world.classes.bound(enters, at), None);
+        world.classes.bound(enters, at);
 
         let (field, _) = world.written(Shape::Scalar(Scalar::U8));
         let object = world.object_with_x(field);
         let (reference, _) = world.written(Shape::Ref(Mutability::Shared, object));
         world.decide(operand, reference);
 
-        assert_eq!(world.outcome.bounds, BTreeSet::from([(enters, at)]));
+        assert_eq!(world.classes.between_decided(), BTreeSet::from([(enters, at)]));
     }
 }

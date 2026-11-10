@@ -2,8 +2,8 @@
 //! bound once both of its ends are decided.
 //!
 //! Deciding a class and connecting parts are two steps. The join gives the head
-//! alone, and each bound connects the parts it holds to the head's when the store
-//! gives it back. That a class is decided only once nothing more can enter it is
+//! alone, and each bound connects the parts it holds to the head's once both its
+//! ends are decided, and is finished then. That a class is decided only once nothing more can enter it is
 //! the order settling takes these in (`settle`), not anything here.
 //!
 //! Classes that enter one another would wait for one another, so they are made
@@ -128,21 +128,22 @@ where
 /// Each `Enter` both of whose ends lie on one cycle of `Enter`s, with the item
 /// that recorded it.
 ///
-/// A bound between two decided classes is not among them, as no class holds it
-/// any more. Each direction of it has been judged, so their heads are equal, and
+/// A bound between two decided classes is not among them. Each direction of it
+/// is judged, so their heads are equal, and
 /// a cycle through them decides the same heads without their being one class.
 fn entering_on_cycles<K>(classes: &Classes<K>) -> Vec<(K::Id, K::Id, ItemId)>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
     let mut entered: BTreeMap<K::Id, BTreeSet<(K::Id, ItemId)>> = BTreeMap::new();
-    for root in classes.roots() {
-        for (bound, at) in classes.get(root).state.bounds().into_iter().flatten() {
-            if let Bound::Enter { lower, upper } = bound {
-                let (lower, upper) = (classes.find(*lower).id(), classes.find(*upper).id());
-                if lower != upper {
-                    entered.entry(lower).or_default().insert((upper, *at));
-                }
+    for (bound, at) in classes.bounds() {
+        if let Bound::Enter { lower, upper } = bound {
+            if classes.is_decided(*lower) && classes.is_decided(*upper) {
+                continue;
+            }
+            let (lower, upper) = (classes.find(*lower).id(), classes.find(*upper).id());
+            if lower != upper {
+                entered.entry(lower).or_default().insert((upper, *at));
             }
         }
     }
@@ -207,30 +208,32 @@ where
         self.judge(classes, scopes);
     }
 
-    /// Judges each lower bound given back, along with those its judgment gives
-    /// back in turn. A change stays given back to the caller, which settling makes
-    /// with the conversions declared.
+    /// Judges and finishes each `Enter` and `Equal` both of whose ends are decided,
+    /// along with those its judgment makes so in turn. A change stays with the
+    /// store, for settling to make with the conversions declared.
     pub fn judge(&mut self, classes: &mut Classes<K>, scopes: &Scopes) {
-        let mut queue = mem::take(&mut self.bounds);
-        let mut others = Bounds::<K>::new();
         // A class refused as its own part stays cyclic, so an `Equal` going
         // down two such classes comes back to itself. A second judgment of one
         // bound would say nothing the first did not.
         let mut judged = Bounds::<K>::new();
-        while let Some((bound, at)) = queue.pop_first() {
+        loop {
+            let next = classes
+                .between_decided()
+                .into_iter()
+                .find(|(bound, _)| !matches!(bound, Bound::Change { .. }));
+            let Some((bound, at)) = next else {
+                break;
+            };
+            classes.finish(&bound, at);
             if !judged.insert((bound, at)) {
                 continue;
             }
             match bound {
                 Bound::Enter { .. } => self.judge_lower(classes, scopes, bound, at),
                 Bound::Equal { .. } => self.judge_equal(classes, scopes, bound, at),
-                Bound::Change { .. } => {
-                    others.insert((bound, at));
-                }
+                Bound::Change { .. } => unreachable!("a change is not taken to be judged"),
             }
-            queue.append(&mut self.bounds);
         }
-        self.bounds = others;
         self.judge_domains(classes);
     }
 
@@ -268,7 +271,7 @@ where
             shape_of(classes, bound.lower()).cloned(),
             shape_of(classes, bound.upper()).cloned(),
         ) else {
-            unreachable!("a bound is given back once both of its ends are decided");
+            unreachable!("a bound is judged once both of its ends are decided");
         };
         if lower.layer() != upper.layer() {
             self.refuse_mismatch(classes, &bound, at);
@@ -279,7 +282,7 @@ where
 
     fn judge_lower(&mut self, classes: &mut Classes<K>, scopes: &Scopes, bound: Bound<K>, at: ItemId) {
         let (Some(head), Some(upper)) = (given(classes, &bound), shape_of(classes, bound.upper()).cloned()) else {
-            unreachable!("a bound is given back once both of its ends are decided");
+            unreachable!("a bound is judged once both of its ends are decided");
         };
         if !head.enters(&upper) {
             self.refuse_mismatch(classes, &bound, at);
@@ -330,7 +333,7 @@ where
                 lower: part,
                 upper: corresponding,
             };
-            self.bounds.extend(classes.bound(equal, at));
+            classes.bound(equal, at);
         } else {
             let unified = classes.unify(scopes, part, corresponding, at);
             self.release(classes, scopes, unified);
@@ -449,7 +452,7 @@ mod tests {
             assert_eq!(world.target(boundary).0, EXCLUSIVE);
             assert!(world.same(x, y));
             assert_eq!(world.outcome.adjustments, adjusted(&[(p_meets, &[Adjustment::Coerce(Coercion::Reborrow)])]));
-            assert_eq!(world.outcome.bounds, Bounds::<Live>::new());
+            assert_eq!(world.classes.between_decided(), Bounds::<Live>::new());
         }
     }
 
@@ -599,7 +602,7 @@ mod tests {
         assert_eq!(world.outcome.refusals.len(), 1);
         assert_eq!(world.outcome.refusals[0].cause, Cause::Mismatch);
         assert!(world.outcome.refusals[0].items.contains(&meets));
-        assert_eq!(world.outcome.bounds, Bounds::<Live>::new());
+        assert_eq!(world.classes.between_decided(), Bounds::<Live>::new());
     }
 
     #[test]
@@ -613,7 +616,7 @@ mod tests {
 
         world.no_refusals();
         assert!(!world.same(lower, declared));
-        assert_eq!(world.outcome.bounds, Bounds::<Live>::new());
+        assert_eq!(world.classes.between_decided(), Bounds::<Live>::new());
     }
 
     /// No change is made at a part, so none of what a boundary or a meeting
@@ -666,7 +669,7 @@ mod tests {
 
             assert!(!world.same(payload, declared_u8));
             assert_eq!(world.outcome.refusals.is_empty(), !refused);
-            assert_eq!(world.outcome.bounds, Bounds::<Live>::new());
+            assert_eq!(world.classes.between_decided(), Bounds::<Live>::new());
         }
     }
 
@@ -712,7 +715,7 @@ mod tests {
         world.settle();
 
         world.no_refusals();
-        assert_eq!(world.outcome.bounds, Bounds::<Live>::new());
+        assert_eq!(world.classes.between_decided(), Bounds::<Live>::new());
     }
 
     /// `&?a` against `&u8` needs nothing of `?a` to be judged: `?a` takes the
@@ -731,7 +734,7 @@ mod tests {
 
             world.no_refusals();
             assert!(!world.classes.is_decided(target));
-            assert_eq!(world.outcome.bounds, Bounds::<Live>::new());
+            assert_eq!(world.classes.between_decided(), Bounds::<Live>::new());
             let held = world.classes.upper_items(target);
             assert_eq!(held, BTreeMap::from([(world.classes.find(declared_u8).id(), BTreeSet::from([at]))]));
 
@@ -755,7 +758,7 @@ mod tests {
 
         world.no_refusals();
         assert_eq!(world.shape(y), Shape::Option(declared_u8));
-        assert_eq!(world.outcome.bounds, Bounds::<Live>::new());
+        assert_eq!(world.classes.between_decided(), Bounds::<Live>::new());
     }
 
     /// O9 goes by where a class comes from and not by whether it is decided
@@ -777,7 +780,7 @@ mod tests {
 
             world.no_refusals();
             assert!(world.same(hole, one));
-            assert_eq!(world.outcome.bounds, Bounds::<Live>::new());
+            assert_eq!(world.classes.between_decided(), Bounds::<Live>::new());
         }
     }
 

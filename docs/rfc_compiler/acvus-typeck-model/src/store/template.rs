@@ -64,9 +64,9 @@ where
     /// as `fate` gives each.
     ///
     /// Each class is made anew holding what its original holds, every id in
-    /// it given as the class its original became, so that each bound is held
-    /// by the copies of the classes that hold it. Then each class kept is made
-    /// one with its copy. The template is not changed.
+    /// it given as the class its original became, and each bound the template
+    /// holds is recorded between the copies of its ends. Then each class kept is
+    /// made one with its copy. The template is not changed.
     pub fn copy_from<S, F>(
         &mut self,
         template: &Classes<S>,
@@ -104,6 +104,10 @@ where
                 let copy = copies[&template.find(id).id()];
                 copies.insert(id, copy);
             }
+        }
+        for (bound, by) in &template.bounds {
+            let copied = bound.clone().translate(|held| copies[&template.find(held).id()]);
+            self.bounds.insert((copied, *by));
         }
 
         let mut unified = Unified::default();

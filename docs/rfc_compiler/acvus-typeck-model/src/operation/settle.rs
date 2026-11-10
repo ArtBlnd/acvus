@@ -21,7 +21,7 @@
 use std::collections::BTreeSet;
 
 use crate::primitive::ItemId;
-use crate::primitive::bound::Bound;
+use crate::primitive::bound::{Bound, BoundOf};
 use crate::primitive::class::{ClassKind, Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::{Cause, Refusal};
@@ -105,7 +105,7 @@ where
 
     /// Whether a function value waits to go to a function type.
     fn instances_owed(&self, classes: &Classes<K>) -> bool {
-        self.bounds.iter().any(|(bound, _)| awaits_instances(classes, bound))
+        classes.between_decided().iter().any(|(bound, _)| awaits_instances(classes, bound))
     }
 
     /// Rung 2: each class nothing enters takes the one head its upper bounds give
@@ -121,7 +121,7 @@ where
         F: Fn(&Classes<K>) -> Vec<K::Id>,
     {
         let mut decided = false;
-        for (class, given) in given_by_uppers(classes, &self.bounds, nothing_enters(classes, visit)) {
+        for (class, given) in given_by_uppers(classes, nothing_enters(classes, visit)) {
             if let Given::Head { shape, by } = given
                 && !classes.is_decided(class)
             {
@@ -139,7 +139,7 @@ where
     where
         F: Fn(&Classes<K>) -> Vec<K::Id>,
     {
-        given_by_uppers(classes, &self.bounds, nothing_enters(classes, visit))
+        given_by_uppers(classes, nothing_enters(classes, visit))
             .into_iter()
             .filter_map(|(class, given)| (given == Given::Nothing).then_some(class))
             .collect()
@@ -188,11 +188,9 @@ where
     /// bound connects the two there.
     fn carry_parts(&mut self, classes: &mut Classes<K>, scopes: &Scopes) -> bool {
         let mut entering = Vec::new();
-        for root in classes.roots() {
-            for (bound, at) in classes.get(root).state.bounds().into_iter().flatten() {
-                if let Bound::Enter { lower, upper } = bound {
-                    entering.push((*lower, *upper, *at));
-                }
+        for (bound, at) in classes.bounds() {
+            if let Bound::Enter { lower, upper } = bound {
+                entering.push((*lower, *upper, *at));
             }
         }
         let mut carried = false;
@@ -379,7 +377,12 @@ where
             let State::Undecided(constraints) = &classes.get(classes.find(class)).state else {
                 continue;
             };
-            let bounds = constraints.bounds.iter().map(|(_, at)| *at);
+            let root = classes.find(class);
+            let bounds = classes
+                .bounds()
+                .iter()
+                .filter(|(bound, _)| classes.find(bound.lower()) == root || classes.find(bound.upper()) == root)
+                .map(|(_, at)| *at);
             let parts = constraints
                 .parts
                 .values()
@@ -1191,13 +1194,13 @@ mod tests {
         world.pass(tuple, parameter);
 
         world.settle();
-        assert_eq!(world.outcome.bounds.len(), 1);
+        assert_eq!(world.classes.between_decided().len(), 1);
 
         assert_eq!(world.settle_fully(), Settled::Finished);
 
         world.no_refusals();
         assert_eq!(world.shape(b), Shape::Never);
-        assert_eq!(world.outcome.bounds.len(), 0);
+        assert_eq!(world.classes.between_decided().len(), 0);
     }
 
     fn ty(shape: Shape<Ty>) -> Ty {

@@ -10,7 +10,7 @@ mod upper;
 mod testing;
 
 use crate::primitive::adjustment::Adjustments;
-use crate::primitive::class::{Bounds, ClassKind, Pending, Unplaced};
+use crate::primitive::class::{ClassKind, Pending, Unplaced};
 use crate::primitive::refusal::Refusal;
 use crate::store::classes::Unified;
 
@@ -23,8 +23,6 @@ where
     pub refusals: Vec<Refusal>,
     /// The calls on classes decided, which no operation here judges yet.
     pub pending: Vec<Pending<K>>,
-    /// Changes given back that cannot be made yet.
-    pub bounds: Bounds<K>,
     pub adjustments: Adjustments,
 }
 
@@ -36,7 +34,6 @@ where
     fn take_in(&mut self, unified: Unified<K>) -> Vec<Unplaced<K>> {
         self.refusals.extend(unified.refusals);
         self.pending.extend(unified.pending);
-        self.bounds.extend(unified.bounds);
         unified.unplaced
     }
 

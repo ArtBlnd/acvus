@@ -72,9 +72,8 @@ where
     },
 }
 
-/// The bounds that matter here by the root of their lower end, and each reference
-/// by the root of its target. A change waiting for a class node is held by no
-/// class once both its ends are decided, so it comes from `waiting`.
+/// The bounds not finished by the root of their lower end, and each reference by
+/// the root of its target.
 struct Index<K>
 where
     K: ClassKind,
@@ -87,33 +86,23 @@ impl<K> Index<K>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
-    fn new(classes: &Classes<K>, waiting: &Bounds<K>) -> Self {
+    fn new(classes: &Classes<K>) -> Self {
         let mut going_up: BTreeMap<K::Id, Bounds<K>> = BTreeMap::new();
         let mut references: BTreeMap<K::Id, Vec<(K::Id, Mutability)>> = BTreeMap::new();
-        let mut hold = |bound: &Bound<K>, at: ItemId| {
+        for (bound, at) in classes.bounds() {
             going_up
                 .entry(classes.find(bound.lower()).id())
                 .or_default()
-                .insert((*bound, at));
-        };
-        for (bound, at) in waiting {
-            hold(bound, *at);
+                .insert((*bound, *at));
         }
         for root in classes.roots() {
-            match &classes.get(root).state {
-                State::Undecided(constraints) => {
-                    for (bound, at) in &constraints.bounds {
-                        hold(bound, *at);
-                    }
-                }
-                State::Decided(decided) => {
-                    if let Shape::Ref(mutability, target) = decided.shape {
-                        references
-                            .entry(classes.find(target).id())
-                            .or_default()
-                            .push((root.id(), mutability));
-                    }
-                }
+            if let State::Decided(decided) = &classes.get(root).state
+                && let Shape::Ref(mutability, target) = decided.shape
+            {
+                references
+                    .entry(classes.find(target).id())
+                    .or_default()
+                    .push((root.id(), mutability));
             }
         }
         Self { going_up, references }
@@ -269,11 +258,11 @@ where
 }
 
 /// Each of `classes` as its upper bounds find it.
-pub(super) fn given_by_uppers<K>(classes: &Classes<K>, waiting: &Bounds<K>, visit: Vec<K::Id>) -> Vec<(K::Id, Given<K>)>
+pub(super) fn given_by_uppers<K>(classes: &Classes<K>, visit: Vec<K::Id>) -> Vec<(K::Id, Given<K>)>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
-    let index = Index::new(classes, waiting);
+    let index = Index::new(classes);
     visit
         .into_iter()
         .map(|class| (class, index.given(classes, class)))
