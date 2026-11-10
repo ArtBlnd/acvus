@@ -45,12 +45,15 @@ impl Display for Assertion {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Assertion::Type { class, ty } => write!(f, "{class}: {ty}"),
-            Assertion::Refused { causes } => {
-                f.write_str("refused")?;
-                if !causes.is_empty() {
-                    f.write_str(" ")?;
+            Assertion::Accepted => f.write_str("accepted"),
+            Assertion::Refused { causes, others } => {
+                f.write_str("refused ")?;
+                separated(f, causes, |f, cause| write!(f, "{cause:?}"))?;
+                match (*others, causes.is_empty()) {
+                    (true, true) => f.write_str(".."),
+                    (true, false) => f.write_str(", .."),
+                    (false, _) => Ok(()),
                 }
-                separated(f, causes, |f, cause| write!(f, "{cause:?}"))
             }
             Assertion::Names { cause, labels } => {
                 write!(f, "refused {cause:?} names")?;

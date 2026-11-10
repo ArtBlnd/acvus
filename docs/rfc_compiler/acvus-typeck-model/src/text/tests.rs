@@ -32,7 +32,9 @@ row wrap<T, U>: (T, U) -> Pair<T, U>;
 row unit: () -> u8;
 assert a: Option<u8>;
 assert a.x.*: &mut {x: (), y: Error{V(E)}};
-assert refused;
+assert accepted;
+assert refused ..;
+assert refused Mismatch, ..;
 assert refused Mismatch, NoChange, EmptyDomain, Occurs, NotHeld, UndecidedClass;
 assert refused Mismatch names;
 assert refused Mismatch names first, second;
@@ -180,7 +182,13 @@ fn a_program_that_does_not_come_to_what_it_asserts_says_what_it_came_to() {
     );
     assert_eq!(
         run("a <- u8; a <- u16;", 2),
-        Err("in order 0, `assert refused;` does not hold: refused by {Mismatch, UndecidedClass}".to_owned())
+        Err("in order 0, `assert accepted;` does not hold: refused by {Mismatch, UndecidedClass}".to_owned())
+    );
+    assert_eq!(run("a <- u8; a <- u16; assert refused Mismatch, ..;", 2), Ok(()));
+    assert_eq!(run("a <- u8; a <- u16; assert refused ..;", 2), Ok(()));
+    assert_eq!(
+        run("a <- u8; assert refused ..;", 2),
+        Err("in order 0, `assert refused ..;` does not hold: accepted".to_owned())
     );
 }
 
@@ -190,4 +198,12 @@ fn what_cannot_be_recorded_is_said_before_anything_is_solved() {
     assert_eq!(run("declare p = Option<p>;", 1), Err("`p` is declared as a type that names it".to_owned()));
     assert_eq!(run("row f: a -> u8;", 1), Err("a row names the class `a`".to_owned()));
     assert_eq!(run("row f: {integer} -> u8;", 1), Err("a row holds a literal".to_owned()));
+}
+
+#[test]
+fn a_shared_reference_read_through_is_not_passed_as_an_exclusive_one() {
+    // `put(&mut r)` with `r: &u8`, to `put(&mut u8)` and to `put(&u8)`.
+    let program = |given: &str, expected: &str| format!("x <- u8; r <- &x; m <- &mut r; declare p = {given}; call: pass m to p; {expected}");
+    holds(&program("&mut u8", "assert refused NoChange;"));
+    holds(&program("&u8", "assert call takes Deref, Reborrow;"));
 }

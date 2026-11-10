@@ -25,7 +25,8 @@
 //! | Assertion | What solving is to come to |
 //! |---|---|
 //! | `assert a: Option<u8>;` | the type of `a` |
-//! | `assert refused Mismatch, UndecidedClass;` | the causes the program is refused by. With no such assertion, none |
+//! | `assert accepted;` | the program is refused by no cause. A program that says neither this nor the next is held to this |
+//! | `assert refused Mismatch, UndecidedClass;` | the causes it is refused by, and no other. `Mismatch, ..`: these at least. `..`: some cause |
 //! | `assert refused Mismatch names first, second;` | the connections that refusal names |
 //! | `assert first takes Deref, Reborrow;` | the adjustments the constraint of the statement labelled `first` takes |
 //! | `assert first at r.x takes Deref;` | those the projection that names `r.x` in that statement takes |

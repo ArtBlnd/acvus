@@ -288,9 +288,18 @@ impl Recorded {
                 let (written, expected) = (self.written(found), ty.to_string());
                 if written == expected { Ok(()) } else { Err(format!("`{class}` is `{written}`")) }
             }
-            Assertion::Refused { causes } => {
+            Assertion::Accepted | Assertion::Refused { .. } => {
                 let refused: BTreeSet<Cause> = self.outcome.refusals.iter().map(|refusal| refusal.cause).collect();
-                if refused == *causes { Ok(()) } else { Err(format!("refused by {refused:?}")) }
+                let holds = match assertion {
+                    Assertion::Refused { causes, others: false } => refused == *causes,
+                    Assertion::Refused { causes, others: true } => !refused.is_empty() && refused.is_superset(causes),
+                    _ => refused.is_empty(),
+                };
+                match (holds, refused.is_empty()) {
+                    (true, _) => Ok(()),
+                    (false, true) => Err("accepted".to_owned()),
+                    (false, false) => Err(format!("refused by {refused:?}")),
+                }
             }
             Assertion::Names { cause, labels } => {
                 let mut refusals = self.outcome.refusals.iter().filter(|refusal| refusal.cause == *cause);
@@ -412,12 +421,16 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
 
 /// Reads `text`, and solves it in each of `orders` orders of asking: what it
 /// asserts holds in each, and every order comes to the same refusals. A program
-/// that asserts no refusal is to have none.
+/// that asserts neither that it is accepted nor that it is refused is to be
+/// accepted.
 pub fn run(text: &str, orders: u64) -> Result<(), String> {
     let program = super::parse(text)?;
-    let unrefused = Assertion::Refused { causes: BTreeSet::new() };
-    let says_refused = program.assertions.iter().any(|assertion| matches!(assertion, Assertion::Refused { .. }));
-    let assertions = program.assertions.iter().chain((!says_refused).then_some(&unrefused));
+    let accepted = Assertion::Accepted;
+    let says = program
+        .assertions
+        .iter()
+        .any(|assertion| matches!(assertion, Assertion::Accepted | Assertion::Refused { .. }));
+    let assertions = program.assertions.iter().chain((!says).then_some(&accepted));
     let mut first = None;
     for order in 0..orders {
         let mut recorded = record(&program)?;

@@ -24,9 +24,13 @@ pub struct Program {
 pub enum Assertion {
     /// `assert a: T;`: the class has the type, decided at every depth.
     Type { class: Path, ty: Type },
-    /// `assert refused A, B;`: the causes the program is refused by, and no
-    /// other. A program with no such assertion is to be refused by none.
-    Refused { causes: BTreeSet<Cause> },
+    /// `assert accepted;`: the program is refused by no cause. A program that
+    /// asserts neither this nor a refusal is held to this.
+    Accepted,
+    /// `assert refused A, B;`: the program is refused by these causes and no
+    /// other. `assert refused A, ..;`: by these, and by others or none besides.
+    /// `assert refused ..;`: by some cause.
+    Refused { causes: BTreeSet<Cause>, others: bool },
     /// `assert refused A names first, second;`: the connections the one refusal
     /// by the cause names are those of the statements labelled so.
     Names { cause: Cause, labels: BTreeSet<String> },

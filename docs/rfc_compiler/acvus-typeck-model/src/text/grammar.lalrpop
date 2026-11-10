@@ -21,6 +21,7 @@ match {
     "{float}",
     "<-",
     "->",
+    "..",
     "::",
     _
 }
@@ -43,7 +44,12 @@ Line: Result<Statement, Assertion> = {
 
 Assertion: Assertion = {
     <class:Path> ":" <ty:Type> => Assertion::Type { class, ty },
-    "refused" <causes:Comma<Cause>> => Assertion::Refused { causes: causes.into_iter().collect() },
+    "accepted" => Assertion::Accepted,
+    "refused" ".." => Assertion::Refused { causes: Default::default(), others: true },
+    "refused" <first:Cause> <rest:("," <Cause>)*> <others:("," "..")?> => Assertion::Refused {
+        causes: [first].into_iter().chain(rest).collect(),
+        others: others.is_some(),
+    },
     "refused" <cause:Cause> "names" <labels:Comma<Lower>> => Assertion::Names { cause, labels: labels.into_iter().collect() },
     <label:Lower> <at:("at" <Path>)?> "takes" <adjustments:Comma<Adjustment>> => Assertion::Takes { label, at, adjustments },
 };
