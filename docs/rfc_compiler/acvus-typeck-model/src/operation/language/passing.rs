@@ -18,100 +18,122 @@
 //! index, and they are taken together in the one look. A function value's
 //! closures are no such index: they carry the bounds of their parameters, and a
 //! function value is passed only to one of the same closures. `!` is passed to
-//! any type.
+//! any type. An index is loosened only where the two do not match as they are
+//! written, so `&&u8` passed to `&T` leaves `T` as `&u8`, and passed to `&u8` it
+//! is read through.
 //!
-//! An index is loosened only where the two do not match as they are written, so
-//! `&&u8` passed to `&T` leaves `T` as `&u8`, and passed to `&u8` it is read
-//! through.
+//! Where the language gives nothing between the two, the argument goes through a
+//! declared function `P -> R`, and that is being passed twice: the argument is
+//! passed to `P`, by what the language gives alone, and what the function gives is
+//! passed to the type given, by the language or through a function again. Exactly
+//! one such way must go. A row of the table is read as any type given is, as far
+//! as it is written, so a row that writes a head deeper is told later.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
-use crate::primitive::class::ClassKind;
+use crate::primitive::class::{ClassKind, State, Template};
 use crate::primitive::record::Coercion;
 use crate::primitive::refusal::{Cause, Refusal};
 use crate::primitive::ty::{Mutability, Shape};
+use crate::primitive::{ItemId, TemplateId};
+use crate::store::classes::Classes;
 
-use super::super::law::{Looked, Pair};
+use super::super::law::{Looked, Pair, Scribe};
+use super::functions::{Functions, Row};
 use super::{Told, View, decided_by};
 
-/// What the language gives between an argument and the type it is passed to.
-enum Given<K>
+/// Types as they are written somewhere: in the store being solved, or in a row of
+/// the table, not made into classes of that store yet.
+pub(super) trait Written {
+    type Id: Copy + Ord;
+
+    /// The head written at `id`, where one is.
+    fn head(&self, id: Self::Id) -> Option<&Shape<Self::Id>>;
+
+    /// Whether a declaration writes what is at `id`, which then never changes.
+    fn declared(&self, id: Self::Id) -> bool;
+
+    /// Whether `id` is a hole of a signature not made yet. It has no head and
+    /// will have none to wait for: it is whatever it is made one type with.
+    fn open(&self, id: Self::Id) -> bool;
+}
+
+impl<K> Written for View<'_, K>
 where
     K: ClassKind,
 {
+    type Id = K::Id;
+
+    fn head(&self, id: K::Id) -> Option<&Shape<K::Id>> {
+        View::head(self, id)
+    }
+
+    fn declared(&self, id: K::Id) -> bool {
+        self.classes.is_external(id)
+    }
+
+    fn open(&self, _: K::Id) -> bool {
+        false
+    }
+}
+
+impl Written for Classes<Template> {
+    type Id = TemplateId;
+
+    fn head(&self, id: TemplateId) -> Option<&Shape<TemplateId>> {
+        match &self.get(self.find(id)).state {
+            State::Decided(decided) => Some(&decided.shape),
+            State::Undecided(_) => None,
+        }
+    }
+
+    fn declared(&self, id: TemplateId) -> bool {
+        self.is_decided(id)
+    }
+
+    fn open(&self, id: TemplateId) -> bool {
+        !self.is_decided(id)
+    }
+}
+
+/// What the language gives between an argument and a type given.
+enum Given<A, G> {
     /// The argument goes: these parts are one type, and these are taken.
-    Goes { pairs: Vec<Pair<K>>, adjustments: Vec<Adjustment> },
-    /// It cannot be told until this class has a head, which will be held against
-    /// this one, where the type given writes one there.
-    Reads(K::Id, Option<Shape<K::Id>>),
+    Goes { pairs: Vec<(A, G)>, adjustments: Vec<Adjustment> },
+    /// It cannot be told until this part of the argument has a head, which will
+    /// be held against this one.
+    Reads(A, Shape<G>),
     /// The language gives nothing between the two.
     Nothing,
-}
-
-/// What `argument` being passed to `given` comes to.
-///
-/// While a class it has to read has no head, it waits on that class. Until it is
-/// told, it may still make what lies below its two ends one type with a hole, so
-/// it holds apart its ends and each class it has read or has yet to read: those
-/// it only compares, and what lies below them is not decided.
-pub(super) fn look<K>(view: &View<'_, K>, argument: K::Id, given: K::Id, at: ItemId) -> Told<K>
-where
-    K: ClassKind,
-{
-    let classes = view.classes;
-    let mut read = BTreeSet::from([argument, given]);
-    let looked = match language(view, argument, given, &mut read) {
-        Given::Goes { pairs, adjustments } => Looked::Holds { pairs, adjustments },
-        Given::Reads(class, against) => {
-            let looked = Looked::Waits {
-                on: BTreeSet::from([class]),
-                apart: read,
-                pairs: Vec::new(),
-            };
-            let asks = against.map(|head| (class, head)).into_iter().collect();
-            return Told { looked, asks };
-        }
-        // A declared function is looked for only where the language gives nothing.
-        // None is declared in this law yet, so none goes.
-        Given::Nothing => {
-            let mut items = decided_by(classes, argument);
-            items.extend(decided_by(classes, given));
-            items.insert(at);
-            Looked::Refused(Refusal {
-                cause: Cause::NoChange,
-                items,
-            })
-        }
-    };
-    Told::done(looked)
-}
-
-fn goes<K>(pairs: Vec<Pair<K>>, adjustments: Vec<Adjustment>) -> Given<K>
-where
-    K: ClassKind,
-{
-    Given::Goes { pairs, adjustments }
 }
 
 fn loosened(by: Coercion, where_loosened: bool) -> Vec<Adjustment> {
     where_loosened.then_some(Adjustment::Coerce(by)).into_iter().collect()
 }
 
-/// What the language gives between the heads of `argument` and `given`.
-fn language<K>(view: &View<'_, K>, argument: K::Id, given: K::Id, read: &mut BTreeSet<K::Id>) -> Given<K>
+/// What the language gives between what `from` writes at `argument` and what `to`
+/// writes at `given`. `read` takes each part of the argument that is read.
+fn language<A, G>(from: &A, argument: A::Id, to: &G, given: G::Id, read: &mut BTreeSet<A::Id>) -> Given<A::Id, G::Id>
 where
-    K: ClassKind,
+    A: Written,
+    G: Written,
 {
-    let Some(to) = view.head(given) else {
-        return Given::Reads(given, None);
+    let goes = |pairs, adjustments| Given::Goes { pairs, adjustments };
+    // A hole takes what comes, as it comes.
+    let Some(wanted) = to.head(given) else {
+        return goes(vec![(argument, given)], Vec::new());
     };
-    let Some(from) = view.head(argument) else {
-        return Given::Reads(argument, Some(to.clone()));
+    read.insert(argument);
+    let Some(head) = from.head(argument) else {
+        return if from.open(argument) {
+            goes(vec![(argument, given)], Vec::new())
+        } else {
+            Given::Reads(argument, wanted.clone())
+        };
     };
-    let by_name = |parts: Vec<(&K::Id, &K::Id)>| parts.into_iter().map(|(a, b)| Pair::Classes(*a, *b)).collect();
-    match (from, to) {
+    let paired = |parts: Vec<(&A::Id, &G::Id)>| parts.into_iter().map(|(a, g)| (*a, *g)).collect();
+    match (head, wanted) {
         (Shape::Never, Shape::Never) => goes(Vec::new(), Vec::new()),
         (Shape::Never, _) => goes(Vec::new(), vec![Adjustment::Coerce(Coercion::Never)]),
         (Shape::Ref(of_argument, target), Shape::Ref(of_given, given_target)) => {
@@ -119,7 +141,7 @@ where
                 return Given::Nothing;
             }
             let reborrowed = loosened(Coercion::Reborrow, of_argument != of_given);
-            match behind_a_reference(view, *target, *given_target, read) {
+            match behind_a_reference(from, *target, to, *given_target, read) {
                 Given::Goes { pairs, adjustments } => goes(pairs, adjustments.into_iter().chain(reborrowed).collect()),
                 other => other,
             }
@@ -132,7 +154,7 @@ where
             else {
                 return Given::Nothing;
             };
-            goes(by_name(kept), loosened(Coercion::DropFields, given_fields.len() < fields.len()))
+            goes(paired(kept), loosened(Coercion::DropFields, given_fields.len() < fields.len()))
         }
         (Shape::Enum(name, variants), Shape::Enum(given_name, given_variants)) if name == given_name => {
             let Some(held) = variants
@@ -142,7 +164,7 @@ where
             else {
                 return Given::Nothing;
             };
-            goes(by_name(held), loosened(Coercion::AddVariants, variants.len() < given_variants.len()))
+            goes(paired(held), loosened(Coercion::AddVariants, variants.len() < given_variants.len()))
         }
         (Shape::Error(variants), Shape::Error(given_variants)) => {
             let Some(held) = variants
@@ -152,12 +174,12 @@ where
             else {
                 return Given::Nothing;
             };
-            goes(by_name(held), loosened(Coercion::AddVariants, variants.len() < given_variants.len()))
+            goes(paired(held), loosened(Coercion::AddVariants, variants.len() < given_variants.len()))
         }
         (Shape::FnValue(_), Shape::Fn(..)) => todo!("a function value passed to a function type: its instances"),
-        _ if from.layer() == to.layer() => {
-            let parts = from.places().into_iter().zip(to.places()).map(|((_, a), (_, b))| (a, b)).collect();
-            goes(by_name(parts), Vec::new())
+        _ if head.layer() == wanted.layer() => {
+            let parts = head.places().into_iter().zip(wanted.places()).map(|((_, a), (_, g))| (a, g)).collect();
+            goes(paired(parts), Vec::new())
         }
         _ => Given::Nothing,
     }
@@ -171,35 +193,297 @@ where
 /// array's length is loosened to a slice, or one reference more is read through,
 /// which must be a shared one, as it is copied out. No field is dropped here: a
 /// reference points at the value as it lies.
-fn behind_a_reference<K>(view: &View<'_, K>, mut target: K::Id, given: K::Id, read: &mut BTreeSet<K::Id>) -> Given<K>
+fn behind_a_reference<A, G>(from: &A, mut target: A::Id, to: &G, given: G::Id, read: &mut BTreeSet<A::Id>) -> Given<A::Id, G::Id>
 where
-    K: ClassKind,
+    A: Written,
+    G: Written,
 {
-    if !view.classes.is_external(given) {
-        return goes(vec![Pair::Classes(target, given)], Vec::new());
-    }
-    let Some(to) = view.head(given) else {
-        unreachable!("a class a declaration writes is decided");
+    let goes = |pairs, adjustments| Given::Goes { pairs, adjustments };
+    let wanted = match to.head(given) {
+        Some(wanted) if to.declared(given) => wanted,
+        _ => return goes(vec![(target, given)], Vec::new()),
     };
     let mut read_through = Vec::new();
     loop {
         read.insert(target);
-        let Some(from) = view.head(target) else {
-            return Given::Reads(target, Some(to.clone()));
+        let Some(head) = from.head(target) else {
+            return if from.open(target) {
+                goes(vec![(target, given)], read_through)
+            } else {
+                Given::Reads(target, wanted.clone())
+            };
         };
-        if from.layer() == to.layer() {
-            return goes(vec![Pair::Classes(target, given)], read_through);
+        if head.layer() == wanted.layer() {
+            return goes(vec![(target, given)], read_through);
         }
-        match (from, to) {
+        match (head, wanted) {
             (Shape::Array(_, element), Shape::Slice(given_element)) => {
                 read_through.push(Adjustment::Coerce(Coercion::Unsize));
-                return goes(vec![Pair::Classes(*element, *given_element)], read_through);
+                return goes(vec![(*element, *given_element)], read_through);
             }
             (Shape::Ref(Mutability::Shared, inner), _) => {
                 read_through.push(Adjustment::Deref);
                 target = *inner;
             }
             _ => return Given::Nothing,
+        }
+    }
+}
+
+/// Whether what `from` writes at `part` is the type `to` writes at `given`.
+enum Same<A> {
+    Yes,
+    /// It cannot be told until this part has a head.
+    Reads(A),
+    No,
+}
+
+/// Whether the part of an argument is the type a row writes for it. Nothing the
+/// language gives goes at a part, so the two are of one head wherever the row
+/// writes one, at every depth it writes. A hole is any type.
+fn same<A, G>(from: &A, part: A::Id, to: &G, given: G::Id, read: &mut BTreeSet<A::Id>) -> Same<A::Id>
+where
+    A: Written,
+    G: Written,
+{
+    let Some(wanted) = to.head(given) else {
+        return Same::Yes;
+    };
+    read.insert(part);
+    let Some(head) = from.head(part) else {
+        return if from.open(part) { Same::Yes } else { Same::Reads(part) };
+    };
+    if head.layer() != wanted.layer() {
+        return Same::No;
+    }
+    let mut waits = None;
+    for ((_, below), (_, given_below)) in head.places().into_iter().zip(wanted.places()) {
+        match same(from, *below, to, *given_below, read) {
+            Same::Yes => {}
+            Same::Reads(class) => waits = waits.or(Some(class)),
+            Same::No => return Same::No,
+        }
+    }
+    waits.map_or(Same::Yes, Same::Reads)
+}
+
+/// Whether each of `pairs` is of one type as far as `to` writes it.
+fn all_same<A, G>(from: &A, to: &G, pairs: &[(A::Id, G::Id)], read: &mut BTreeSet<A::Id>) -> Same<A::Id>
+where
+    A: Written,
+    G: Written,
+{
+    let mut waits = None;
+    for (part, given) in pairs {
+        match same(from, *part, to, *given, read) {
+            Same::Yes => {}
+            Same::Reads(class) => waits = waits.or(Some(class)),
+            Same::No => return Same::No,
+        }
+    }
+    waits.map_or(Same::Yes, Same::Reads)
+}
+
+/// Where a class written in a way lies: in the store being solved, or in the
+/// signature of the step of that number.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Site<K> {
+    Solved(K),
+    Step(usize, TemplateId),
+}
+
+/// Two classes written along a way that are one type.
+type Joined<K> = (Site<<K as ClassKind>::Id>, Site<<K as ClassKind>::Id>);
+
+/// One way through declared functions: each row taken in turn, and the parts that
+/// are one type along it.
+pub(in crate::operation) struct Way<K>
+where
+    K: ClassKind,
+{
+    rows: Vec<usize>,
+    pairs: Vec<Joined<K>>,
+    /// What is taken on the way into each row, then on the way out of the last.
+    taken: Vec<Vec<Adjustment>>,
+}
+
+/// Every way from `argument` to `given` through the rows of `functions`, and each
+/// part of the argument that has to have a head before a row can be told of.
+///
+/// The way into the first row is told by the argument, read as far as that row's
+/// parameter writes. Every way after it is told by the rows alone. No row is taken
+/// twice on one way.
+fn ways<K>(view: &View<'_, K>, functions: &Functions, argument: K::Id, given: K::Id, read: &mut BTreeSet<K::Id>) -> (Vec<Way<K>>, BTreeSet<K::Id>)
+where
+    K: ClassKind,
+{
+    let mut found = Vec::new();
+    let mut waits = BTreeSet::new();
+    for (index, row) in functions.rows.iter().enumerate() {
+        match language(view, argument, &row.template, row.parameter, read) {
+            Given::Goes { pairs, adjustments } => {
+                // A row is chosen among rows, so the argument is read as far as
+                // the row writes: its parts are the types the row writes for them.
+                match all_same(view, &row.template, &pairs, read) {
+                    Same::Yes => {}
+                    Same::Reads(class) => {
+                        waits.insert(class);
+                        continue;
+                    }
+                    Same::No => continue,
+                }
+                let pairs = pairs
+                    .into_iter()
+                    .map(|(a, p)| (Site::Solved(a), Site::Step(0, p)))
+                    .collect();
+                let way = Way {
+                    rows: vec![index],
+                    pairs,
+                    taken: vec![adjustments],
+                };
+                onward(view, functions, row, way, given, &mut found);
+            }
+            Given::Reads(class, _) => {
+                waits.insert(class);
+            }
+            Given::Nothing => {}
+        }
+    }
+    (found, waits)
+}
+
+/// Each way that goes on from `way`, whose last row is `row`, to `given`: what
+/// the row gives is passed to the type given, by the language, or through one
+/// more row.
+fn onward<K>(view: &View<'_, K>, functions: &Functions, row: &Row, way: Way<K>, given: K::Id, found: &mut Vec<Way<K>>)
+where
+    K: ClassKind,
+{
+    let step = way.rows.len() - 1;
+    match language(&row.template, row.result, view, given, &mut BTreeSet::new()) {
+        Given::Goes { pairs, adjustments } => {
+            if !matches!(all_same(&row.template, view, &pairs, &mut BTreeSet::new()), Same::Yes) {
+                return;
+            }
+            let mut way = way;
+            way.pairs
+                .extend(pairs.into_iter().map(|(r, g)| (Site::Step(step, r), Site::Solved(g))));
+            way.taken.push(adjustments);
+            found.push(way);
+        }
+        Given::Reads(..) => unreachable!("a row's result is written, and has nothing to wait for"),
+        Given::Nothing => {
+            for (index, next) in functions.rows.iter().enumerate() {
+                if way.rows.contains(&index) {
+                    continue;
+                }
+                let Given::Goes { pairs, adjustments } =
+                    language(&row.template, row.result, &next.template, next.parameter, &mut BTreeSet::new())
+                else {
+                    continue;
+                };
+                if !matches!(all_same(&row.template, &next.template, &pairs, &mut BTreeSet::new()), Same::Yes) {
+                    continue;
+                }
+                let mut longer = Way {
+                    rows: way.rows.clone(),
+                    pairs: way.pairs.clone(),
+                    taken: way.taken.clone(),
+                };
+                longer.rows.push(index);
+                longer
+                    .pairs
+                    .extend(pairs.into_iter().map(|(r, p)| (Site::Step(step, r), Site::Step(step + 1, p))));
+                longer.taken.push(adjustments);
+                onward(view, functions, next, longer, given, found);
+            }
+        }
+    }
+}
+
+/// Makes the signature of each row of `way` anew in the store, and gives what the
+/// way comes to: the parts that are one type along it, and what is taken, each
+/// function called in its turn.
+pub(super) fn take<K>(scribe: &mut Scribe<'_, K>, functions: &Functions, way: Way<K>, argument: K::Id, at: ItemId) -> Looked<K>
+where
+    K: ClassKind<Bound = crate::primitive::bound::Bound<K>>,
+{
+    let scope = scribe.classes().get(scribe.classes().find(argument)).scope;
+    let made: Vec<BTreeMap<TemplateId, K::Id>> = way
+        .rows
+        .iter()
+        .map(|row| scribe.anew(&functions.rows[*row].template, scope, at))
+        .collect();
+    let solved = |written: Site<K::Id>| match written {
+        Site::Solved(class) => class,
+        Site::Step(step, class) => made[step][&class],
+    };
+    let pairs = way.pairs.iter().map(|(a, b)| Pair::Classes(solved(*a), solved(*b))).collect();
+    let mut adjustments = Vec::new();
+    for (step, taken) in way.taken.into_iter().enumerate() {
+        adjustments.extend(taken);
+        if let Some(row) = way.rows.get(step) {
+            adjustments.push(Adjustment::Convert(functions.rows[*row].name.clone()));
+        }
+    }
+    Looked::Holds { pairs, adjustments }
+}
+
+/// What `argument` being passed to `given` comes to.
+///
+/// While a part of the argument it has to read has no head, it waits on that
+/// part. Until it is told, it may still make what lies below its two ends one type
+/// with a hole, so it holds apart its ends and each part it has read or has yet to
+/// read: those it only compares, and what lies below them is not decided.
+pub(super) fn look<K>(view: &View<'_, K>, functions: &Functions, argument: K::Id, given: K::Id, at: ItemId) -> Told<K>
+where
+    K: ClassKind,
+{
+    let mut read = BTreeSet::from([argument, given]);
+    let waits = |on: BTreeSet<K::Id>, read: BTreeSet<K::Id>| Looked::Waits {
+        on,
+        apart: read,
+        pairs: Vec::new(),
+    };
+    match language(view, argument, view, given, &mut read) {
+        Given::Goes { pairs, adjustments } => {
+            let pairs = pairs.into_iter().map(|(a, g)| Pair::Classes(a, g)).collect();
+            return Told::done(Looked::Holds { pairs, adjustments });
+        }
+        Given::Reads(class, against) => {
+            return Told {
+                looked: waits(BTreeSet::from([class]), read),
+                asks: vec![(class, against)],
+                way: None,
+            };
+        }
+        // A declared function is looked for only where the language gives nothing.
+        Given::Nothing => {}
+    }
+    let (mut found, on) = ways(view, functions, argument, given, &mut read);
+    // A row not told of yet may be a second way, so none is taken before all are
+    // told. What a row holds the argument against is no head asked of it: a
+    // function called gives type inference nothing.
+    if !on.is_empty() {
+        return Told::done(waits(on, read));
+    }
+    match (found.pop(), found.is_empty()) {
+        (Some(way), true) => Told {
+            looked: Looked::Holds {
+                pairs: Vec::new(),
+                adjustments: Vec::new(),
+            },
+            asks: Vec::new(),
+            way: Some(way),
+        },
+        _ => {
+            let mut items = decided_by(view.classes, argument);
+            items.extend(decided_by(view.classes, given));
+            items.insert(at);
+            Told::done(Looked::Refused(Refusal {
+                cause: Cause::NoChange,
+                items,
+            }))
         }
     }
 }

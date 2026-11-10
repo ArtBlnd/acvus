@@ -3,6 +3,7 @@
 //! | The law is asked | The rule | Where |
 //! |---|---|---|
 //! | what a bound comes to | by the relation the bound is: entering, being equal, being passed | [`enter`], [`equal`], [`passing`] |
+//! | which functions are declared | a table, and no rule | [`functions`] |
 //! | which classes are one type by the bounds as a whole | classes that enter one another | [`enter::entering_one_another`] |
 //! | where a named part lies | read through a reference | [`Language::place`] |
 //! | what head a class may take | the rungs, in order | [`rungs`] |
@@ -10,6 +11,7 @@
 
 pub mod enter;
 pub mod equal;
+pub mod functions;
 pub mod passing;
 pub mod rungs;
 
@@ -26,16 +28,22 @@ use crate::store::classes::Classes;
 
 use super::law::{Law, Looked, Offer, Pair, Place, Scribe};
 
-/// The rules of the language.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct Language;
+/// The rules of the language, with the functions declared from outside.
+#[derive(Clone, Debug, Default)]
+pub struct Language {
+    pub functions: functions::Functions,
+}
 
 impl<K> Law<K> for Language
 where
     K: ClassKind<Bound = Bound<K>>,
 {
     fn look(&self, scribe: &mut Scribe<'_, K>, bound: &Bound<K>, at: ItemId) -> Looked<K> {
-        tell(&View::of(scribe.classes()), bound, at).looked
+        let told = tell(&View::of(scribe.classes()), &self.functions, bound, at);
+        match told.way {
+            Some(way) => passing::take(scribe, &self.functions, way, bound.lower(), at),
+            None => told.looked,
+        }
     }
 
     fn same(&self, part: K::Id, declared: K::Id) -> Bound<K> {
@@ -71,7 +79,7 @@ where
     }
 
     fn offer(&self, classes: &Classes<K>, rung: usize, class: K::Id) -> Offer<K> {
-        rungs::offer(classes, rung, class)
+        rungs::offer(classes, &self.functions, rung, class)
     }
 
     fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refusal> {
@@ -125,6 +133,9 @@ where
 {
     pub(super) looked: Looked<K>,
     pub(super) asks: Vec<(K::Id, Shape<K::Id>)>,
+    /// The one way through declared functions the bound goes by, where it goes by
+    /// one. Its signatures are not made yet, so `looked` says only that it holds.
+    pub(super) way: Option<passing::Way<K>>,
 }
 
 impl<K> Told<K>
@@ -135,12 +146,13 @@ where
         Self {
             looked,
             asks: Vec::new(),
+            way: None,
         }
     }
 }
 
 /// What the bound comes to in `view`, by the relation it is.
-pub(super) fn tell<K>(view: &View<'_, K>, bound: &Bound<K>, at: ItemId) -> Told<K>
+pub(super) fn tell<K>(view: &View<'_, K>, functions: &functions::Functions, bound: &Bound<K>, at: ItemId) -> Told<K>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
@@ -148,7 +160,7 @@ where
     match bound {
         Bound::Enter { .. } => enter::look(view, lower, upper, at),
         Bound::Equal { .. } => equal::look(view, lower, upper, at),
-        Bound::Change { .. } => passing::look(view, lower, upper, at),
+        Bound::Change { .. } => passing::look(view, functions, lower, upper, at),
     }
 }
 

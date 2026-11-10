@@ -19,19 +19,20 @@ use crate::primitive::ty::Shape;
 use crate::store::classes::Classes;
 
 use super::super::law::Offer;
+use super::functions::Functions;
 use super::{Looked, Told, View, decided_by, enter, tell};
 
 pub const COUNT: usize = 4;
 
-pub fn offer<K>(classes: &Classes<K>, rung: usize, class: K::Id) -> Offer<K>
+pub fn offer<K>(classes: &Classes<K>, functions: &Functions, rung: usize, class: K::Id) -> Offer<K>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
     match rung {
         0 => join(classes, class),
-        1 => from_above(classes, class),
-        2 => domain(classes, class),
-        3 => never(classes, class),
+        1 => from_above(classes, functions, class),
+        2 => domain(classes, functions, class),
+        3 => never(classes, functions, class),
         _ => unreachable!("there are {COUNT} rungs"),
     }
 }
@@ -118,7 +119,7 @@ where
 /// Every head `class` will be held against: what each bound that waits on it
 /// asks of it, the heads that have entered a class it enters, and what is asked
 /// of that class in turn. `!` is the least head and asks nothing of what meets it.
-fn asked<K>(classes: &Classes<K>, class: K::Id, seen: &mut BTreeSet<K::Id>) -> Vec<Shape<K::Id>>
+fn asked<K>(classes: &Classes<K>, functions: &Functions, class: K::Id, seen: &mut BTreeSet<K::Id>) -> Vec<Shape<K::Id>>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
@@ -132,13 +133,13 @@ where
         .held
         .waiters
         .iter()
-        .flat_map(|(bound, at)| tell(&view, bound, *at).asks)
+        .flat_map(|(bound, at)| tell(&view, functions, bound, *at).asks)
         .filter(|(of, _)| classes.find(*of).id() == root)
         .map(|(_, head)| head)
         .collect();
     for upper in entered(classes, root) {
         heads.extend(entering(classes, upper).into_iter().filter_map(|(head, ..)| head));
-        heads.extend(asked(classes, upper, seen));
+        heads.extend(asked(classes, functions, upper, seen));
     }
     heads.retain(|head| *head != Shape::Never);
     heads
@@ -147,7 +148,7 @@ where
 /// Whether every bound that waits on `class` would have it take `head`: none
 /// would be refused, were that its head. A class it enters would then take the
 /// join of `head` and what has entered it, and is asked the same of that.
-fn taken<K>(view: View<'_, K>, class: K::Id, head: &Shape<K::Id>, seen: &mut BTreeSet<K::Id>) -> bool
+fn taken<K>(view: View<'_, K>, functions: &Functions, class: K::Id, head: &Shape<K::Id>, seen: &mut BTreeSet<K::Id>) -> bool
 where
     K: ClassKind<Bound = Bound<K>>,
 {
@@ -162,7 +163,7 @@ where
         .held
         .waiters
         .iter()
-        .any(|(bound, at)| matches!(tell(&view, bound, *at), Told { looked: Looked::Refused(_), .. }));
+        .any(|(bound, at)| matches!(tell(&view, functions, bound, *at), Told { looked: Looked::Refused(_), .. }));
     if refused {
         return false;
     }
@@ -175,14 +176,14 @@ where
                 (None, _) => None,
             };
         }
-        joined.is_some_and(|joined| taken(view.clone(), upper, &joined, seen))
+        joined.is_some_and(|joined| taken(view.clone(), functions, upper, &joined, seen))
     })
 }
 
 /// Rung 1: a class nothing enters takes the one head, of those it will be held
 /// against, that every bound waiting on it would have it take. A literal's class
 /// takes one of its domain alone.
-fn from_above<K>(classes: &Classes<K>, class: K::Id) -> Offer<K>
+fn from_above<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
@@ -190,7 +191,7 @@ where
         return Offer::Nothing;
     }
     let mut candidates: BTreeMap<Shape<()>, Shape<K::Id>> = BTreeMap::new();
-    for head in asked(classes, class, &mut BTreeSet::new()) {
+    for head in asked(classes, functions, class, &mut BTreeSet::new()) {
         candidates.entry(head.layer()).or_insert(head);
     }
     let domain = domain_of(classes, class);
@@ -198,7 +199,7 @@ where
         let in_domain = domain
             .as_ref()
             .is_none_or(|(domain, _)| matches!(head, Shape::Scalar(scalar) if domain.0.contains(scalar)));
-        in_domain && taken(View::of(classes), class, head, &mut BTreeSet::new())
+        in_domain && taken(View::of(classes), functions, class, head, &mut BTreeSet::new())
     });
     match (taken_heads.next(), taken_heads.next()) {
         (Some(shape), None) => Offer::Head {
@@ -212,11 +213,11 @@ where
 /// Whether no head is asked of `class` from above. Where one is, the class has
 /// something said of it, and no fallback overrules that, even where no one head
 /// will do.
-fn nothing_asked<K>(classes: &Classes<K>, class: K::Id) -> bool
+fn nothing_asked<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> bool
 where
     K: ClassKind<Bound = Bound<K>>,
 {
-    asked(classes, class, &mut BTreeSet::new()).is_empty()
+    asked(classes, functions, class, &mut BTreeSet::new()).is_empty()
 }
 
 /// The domain the literals of `class` leave, where any registered one.
@@ -233,11 +234,11 @@ where
 
 /// Rung 2: a literal's class that neither lower nor upper bounds decide takes the
 /// fallback type of its domain's row.
-fn domain<K>(classes: &Classes<K>, class: K::Id) -> Offer<K>
+fn domain<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
-    if !nothing_enters(classes, class) || !nothing_asked(classes, class) {
+    if !nothing_enters(classes, class) || !nothing_asked(classes, functions, class) {
         return Offer::Nothing;
     }
     let Some((domain, by)) = domain_of(classes, class) else {
@@ -260,11 +261,11 @@ where
 
 /// Rung 3: a class nothing enters, with no literal, takes `!`: nothing at all is
 /// known of it.
-fn never<K>(classes: &Classes<K>, class: K::Id) -> Offer<K>
+fn never<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
 where
     K: ClassKind<Bound = Bound<K>>,
 {
-    if !nothing_enters(classes, class) || !nothing_asked(classes, class) || domain_of(classes, class).is_some() {
+    if !nothing_enters(classes, class) || !nothing_asked(classes, functions, class) || domain_of(classes, class).is_some() {
         return Offer::Nothing;
     }
     Offer::Head {

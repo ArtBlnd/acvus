@@ -160,6 +160,10 @@ impl World {
             Shape::Option(payload) => format!("Option<{}>", at(payload)),
             Shape::Ref(SHARED, target) => format!("&{}", at(target)),
             Shape::Ref(EXCLUSIVE, target) => format!("&mut {}", at(target)),
+            Shape::Struct(name, arguments) => {
+                let arguments: Vec<String> = arguments.iter().map(at).collect();
+                format!("{}<{}>", name.0, arguments.join(", "))
+            }
             Shape::Slice(element) => format!("[{}]", at(element)),
             Shape::Array(length, element) => format!("[{}; {length}]", at(element)),
             Shape::Object(fields) => {

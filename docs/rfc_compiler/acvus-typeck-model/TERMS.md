@@ -80,21 +80,37 @@ cast, a call. A domain, a fallback, a join and the connecting of parts leave non
 adjustments. So subtyping the language gives is recorded though the two types it goes between
 would tell it again, and a declared function is recorded as the call it is.
 
-## Conversions
+## Declared functions
 
-A declared conversion is of one of two kinds, and they are chosen differently.
+A function declared from outside is a row of a table: a name, and a signature `P -> R`. The
+language states one rule of them, and a row adds none.
 
-| Kind | What it is | Chosen by | When |
-|---|---|---|---|
-| View | Both ends are references, and the parameter writes its class node with a distinct hole at each part below, as `&Vec<T> -> &[T]`. | class nodes | before the argument is decided below its class node |
-| Value conversion | any other | the argument's whole type | once the argument is decided at every depth |
+> An argument goes through a row `P -> R` by being passed to `P`, and what the row gives being
+> passed to the type given.
 
-A view takes any value of its class node, so choosing it early is never contradicted, and what
-a part takes through it comes from the text. A value conversion runs a function that makes a
-new value, so none is chosen while a type is undecided, and it gives type inference nothing:
-it decides none of the argument's types.
+So passing through a row is being passed, twice, and what holds of being passed holds of each:
 
-Rung 2, which gives a class the head its upper bounds give, looks at no conversion.
+| What follows | From |
+|---|---|
+| A value goes through a chain of rows. | What a row gives is passed to the type given, by the language or through a row again. |
+| No row is taken on the way into a row. | The argument is passed to `P` by what the language gives alone. |
+| What the language gives is taken at each row, and not once before them all. | Each row is a passing. |
+| A row is looked for only where the language gives nothing between the argument and the type given. | Subtyping the language gives is looked at first. |
+| A row's signature is made anew wherever it is taken. | It is a signature. |
+
+Exactly one way through rows must go, or the program is refused.
+
+A row is read as any type given is: as far as it is written. The argument is read that far, and
+its parts are the types the row writes for them, at every depth the row writes. So a row that
+writes only a constructor, as `&Vec<T> -> &[T]`, is told as soon as the argument's constructor
+is read, and a row that writes deeper, as `(u8, T) -> Vec<T>`, is told later. No row is taken
+before every row is told of, as one not told of yet may be a second way.
+
+There are no kinds of rows. A row once called a view is one whose parameter writes little, and
+that is all that made it chosen early.
+
+A row gives type inference nothing: the head it holds a part of the argument against is no
+head asked of that part. The rung that gives a class a head from above looks at no row.
 
 ## Other rulings
 
@@ -192,11 +208,6 @@ A projection `p.f` asks it of `p`, to know whether `f` is a part of `p` or of wh
 
 ## Not settled yet
 
-- Whether subtyping the language gives is taken once, before the chain of declared functions,
-  as the model does, or also where a value is passed to each function of the chain.
-
-- How a connection knows that nothing more will be given to a class, where a part may still
-  come through a declared function not yet chosen.
 - The head of a class that only parts are recorded on, as in `let a; a.x`.
 - A refusal naming the connection that merged two classes.
 - How many references a projection reads through, now that a target may be a reference.

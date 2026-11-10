@@ -16,7 +16,7 @@ use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::record::Coercion;
 use crate::primitive::refusal::Refusal;
-use crate::primitive::ty::{PartKey, Scalar, Shape};
+use crate::primitive::ty::{PartKey, Scalar, Shape, Ty};
 use crate::primitive::{ClassId, ClosureId, ItemId, Name};
 use crate::store::classes::Classes;
 
@@ -72,7 +72,7 @@ where
             let mut world = World::new();
             let observed = build(&mut world, lets);
             reorder(&mut world.open, order);
-            world.settle(&Language);
+            world.settle(&Language::default());
             assert_eq!(world.outcome_of(observed), expected, "behind {lets} lets, in order {order}");
         }
     }
@@ -97,7 +97,7 @@ fn an_exclusive_and_a_shared_reference_meet_as_shared_and_the_exclusive_one_is_r
     let place = world.meets(exclusive);
     let exclusive_enters = world.items.iter().last().expect("an item was recorded").0;
     world.enter(shared, place);
-    world.settle(&Language);
+    world.settle(&Language::default());
     let reborrow = vec![Adjustment::Coerce(Coercion::Reborrow)];
     assert_eq!(world.outcome.adjustments.get(&exclusive_enters), Some(&reborrow));
 }
@@ -213,7 +213,7 @@ fn a_part_named_on_a_reference_is_read_through_it_and_the_projection_derefs() {
     let (lent, _) = world.lend(o, SHARED);
     let r = world.meets(lent);
     let (_, projection) = world.project(r, field("x"), Side::Upper);
-    world.settle(&Language);
+    world.settle(&Language::default());
     assert_eq!(world.outcome.adjustments, Adjustments::from([(projection, vec![Adjustment::Deref])]));
 }
 
@@ -332,7 +332,7 @@ where
 {
     let mut world = World::new();
     let at = build(&mut world);
-    world.settle(&Language);
+    world.settle(&Language::default());
     if !world.outcome.refusals.is_empty() {
         let causes: BTreeSet<String> = world.outcome.refusals.iter().map(|refusal| format!("{:?}", refusal.cause)).collect();
         return Err(causes.into_iter().collect::<Vec<_>>().join(", "));
@@ -664,11 +664,272 @@ fn a_class_a_declared_result_enters_has_parts_of_its_own_compared_with_the_decla
     let declared_u8 = world.external(U8);
     let result = world.external(Shape::Option(declared_u8));
     let y = world.meets(result);
-    world.settle(&Language);
+    world.settle(&Language::default());
     let Some(Shape::Option(payload)) = world.head(y) else {
         panic!("`y` is an option");
     };
     assert!(!world.same(payload, declared_u8));
+}
+
+// Declared functions: a table, and one rule. An argument goes through a row
+// `P -> R` by being passed to `P` and what the row gives being passed on.
+
+fn hole() -> Ty {
+    Ty::Hole(Name::new("T"))
+}
+
+fn node(shape: Shape<Ty>) -> Ty {
+    Ty::Node(Box::new(shape))
+}
+
+fn vec_of(element: Ty) -> Ty {
+    node(Shape::Struct(Name::new("Vec"), vec![element]))
+}
+
+fn named(name: &str) -> Ty {
+    node(Shape::Struct(Name::new(name), Vec::new()))
+}
+
+/// `as_slice: &Vec<T> -> &[T]`, and the same for `&mut`.
+fn as_slice(mutability: crate::primitive::ty::Mutability) -> (&'static str, Ty, Ty) {
+    let name = if mutability == SHARED { "as_slice" } else { "as_slice_mut" };
+    (
+        name,
+        node(Shape::Ref(mutability, vec_of(hole()))),
+        node(Shape::Ref(mutability, node(Shape::Slice(hole())))),
+    )
+}
+
+/// The language's law with `rows` declared.
+fn law_with(world: &mut World, rows: &[(&'static str, Ty, Ty)]) -> Language {
+    let mut law = Language::default();
+    for (name, parameter, result) in rows {
+        let by = world.items.push("declared");
+        law.functions.declare(Name::new(*name), parameter, result, &world.scopes, by);
+    }
+    law
+}
+
+/// As [`comes_to`], by the law with `rows` declared.
+fn comes_to_with<F>(rows: &[(&'static str, Ty, Ty)], expected: &str, build: F)
+where
+    F: Fn(&mut World, usize) -> ClassId,
+{
+    for lets in 0..4 {
+        for order in 0..24 {
+            let mut world = World::new();
+            let law = law_with(&mut world, rows);
+            let observed = build(&mut world, lets);
+            reorder(&mut world.open, order);
+            world.settle(&law);
+            assert_eq!(world.outcome_of(observed), expected, "behind {lets} lets, in order {order}");
+        }
+    }
+}
+
+/// As [`taken_at`], by the law with `rows` declared.
+fn taken_with<F>(rows: &[(&'static str, Ty, Ty)], build: F) -> Result<Vec<Adjustment>, String>
+where
+    F: Fn(&mut World) -> ItemId,
+{
+    let mut world = World::new();
+    let law = law_with(&mut world, rows);
+    let at = build(&mut world);
+    world.settle(&law);
+    if !world.outcome.refusals.is_empty() {
+        let causes: BTreeSet<String> = world.outcome.refusals.iter().map(|refusal| format!("{:?}", refusal.cause)).collect();
+        return Err(causes.into_iter().collect::<Vec<_>>().join(", "));
+    }
+    Ok(world.outcome.adjustments.get(&at).cloned().unwrap_or_default())
+}
+
+fn called(name: &str) -> Adjustment {
+    Adjustment::Convert(Name::new(name))
+}
+
+fn vec_class(world: &mut World, element: ClassId) -> ClassId {
+    world.text(Shape::Struct(Name::new("Vec"), vec![element]))
+}
+
+/// `f(&[u8])`.
+fn reference_to_slice(world: &mut World) -> ClassId {
+    let declared = world.external(U8);
+    let slice = world.external(Shape::Slice(declared));
+    world.external(Shape::Ref(SHARED, slice))
+}
+
+#[test]
+fn an_argument_goes_through_a_row_and_a_hole_of_the_row_connects_both_its_sides() {
+    // `let v = new(); sum(&v);` with `new() -> Vec<T>`, `sum(&[u8])`: the element
+    // of `v` takes `u8` through the row.
+    comes_to_with(&[as_slice(SHARED)], "Vec<u8>", |w, lets| {
+        let parameter = reference_to_slice(w);
+        let element = w.undecided();
+        let result = w.external(Shape::Struct(Name::new("Vec"), vec![element]));
+        let v = behind(w, result, lets + 1);
+        let (lent, _) = w.lend(v, SHARED);
+        w.pass(lent, parameter);
+        v
+    });
+}
+
+#[test]
+fn what_the_language_gives_is_taken_on_the_way_into_a_row() {
+    let passed = |of_inner: Option<crate::primitive::ty::Mutability>, of_outer| {
+        taken_with(&[as_slice(SHARED)], move |w| {
+            let parameter = reference_to_slice(w);
+            let element = w.text(U8);
+            let v = vec_class(w, element);
+            let (mut lent, _) = w.lend(v, of_inner.unwrap_or(of_outer));
+            if of_inner.is_some() {
+                let r = w.meets(lent);
+                lent = w.lend(r, of_outer).0;
+            }
+            w.pass(lent, parameter)
+        })
+    };
+    assert_eq!(passed(None, SHARED), Ok(vec![called("as_slice")]));
+    assert_eq!(
+        passed(None, EXCLUSIVE),
+        Ok(vec![Adjustment::Coerce(Coercion::Reborrow), called("as_slice")])
+    );
+    assert_eq!(passed(Some(SHARED), SHARED), Ok(vec![Adjustment::Deref, called("as_slice")]));
+}
+
+#[test]
+fn what_a_row_gives_goes_through_another_row() {
+    let rows = [("a_to_b", named("A"), named("B")), ("b_to_c", named("B"), named("C"))];
+    let taken = taken_with(&rows, |w| {
+        let parameter = w.external(Shape::Struct(Name::new("C"), Vec::new()));
+        let a = w.text(Shape::Struct(Name::new("A"), Vec::new()));
+        w.pass(a, parameter)
+    });
+    assert_eq!(taken, Ok(vec![called("a_to_b"), called("b_to_c")]));
+}
+
+#[test]
+fn exactly_one_way_through_rows_must_go() {
+    let two = [("first", named("A"), named("B")), ("second", named("A"), named("B"))];
+    let through = |rows: &'static [(&'static str, Ty, Ty)]| {
+        taken_with(rows, |w| {
+            let parameter = w.external(Shape::Struct(Name::new("B"), Vec::new()));
+            let a = w.text(Shape::Struct(Name::new("A"), Vec::new()));
+            w.pass(a, parameter)
+        })
+    };
+    assert_eq!(through(Box::leak(Box::new(two))), Err("NoChange".to_owned()));
+    assert_eq!(through(&[]), Err("NoChange".to_owned()));
+}
+
+#[test]
+fn a_row_is_looked_for_only_where_the_language_gives_nothing() {
+    // `&mut [u8; 2]` passed to `&[u8]` goes by the language, though a row would go.
+    let rows = [(
+        "array_as_slice",
+        node(Shape::Ref(SHARED, node(Shape::Array(2, hole())))),
+        node(Shape::Ref(SHARED, node(Shape::Slice(hole())))),
+    )];
+    let taken = taken_with(&rows, |w| {
+        let parameter = reference_to_slice(w);
+        let element = w.text(U8);
+        let array = w.text(Shape::Array(2, element));
+        let (lent, _) = w.lend(array, SHARED);
+        w.pass(lent, parameter)
+    });
+    assert_eq!(taken, coerced(&[Coercion::Unsize]));
+}
+
+#[test]
+fn each_passing_makes_the_signature_of_a_row_anew() {
+    let mut world = World::new();
+    let law = law_with(&mut world, &[as_slice(SHARED)]);
+    for head in [U8, U16] {
+        let declared = world.external(head.clone());
+        let slice = world.external(Shape::Slice(declared));
+        let parameter = world.external(Shape::Ref(SHARED, slice));
+        let element = world.text(head);
+        let v = vec_class(&mut world, element);
+        let (lent, _) = world.lend(v, SHARED);
+        world.pass(lent, parameter);
+    }
+    world.settle(&law);
+    assert_eq!(world.outcome.refusals, Vec::new());
+}
+
+#[test]
+fn what_lies_below_a_row_is_compared_and_not_changed() {
+    // `Vec<u16>` passed to `&[u8]`: the row goes, and its hole is held against
+    // both `u16` and `u8`, which no one head is.
+    comes_to_with(&[as_slice(SHARED)], "refused: UndecidedClass", |w, lets| {
+        let parameter = reference_to_slice(w);
+        let sixteen = w.external(U16);
+        let result = w.external(Shape::Struct(Name::new("Vec"), vec![sixteen]));
+        let v = behind(w, result, lets + 1);
+        let (lent, _) = w.lend(v, SHARED);
+        w.pass(lent, parameter);
+        v
+    });
+}
+
+#[test]
+fn a_hole_a_passing_not_told_yet_may_reach_is_not_decided() {
+    // `take((x, 1u16), return);` with `take(Vec<U>, U)` and the row
+    // `(u8, T) -> Vec<T>`. The row writes `u8` at the first component, so it is
+    // told only once `x` has a head, which comes later the more `let`s `x` is read
+    // behind. Until then `U` is not decided from the `!` that enters it alone.
+    let row = (
+        "second",
+        node(Shape::Tuple(vec![node(Shape::Scalar(Scalar::U8)), hole()])),
+        vec_of(hole()),
+    );
+    comes_to_with(&[row], "u16", |w, lets| {
+        let hole = w.undecided();
+        let parameter = w.external(Shape::Struct(Name::new("Vec"), vec![hole]));
+        let one = w.text(U8);
+        let x = behind(w, one, lets + 2);
+        let sixteen = w.text(U16);
+        let pair = w.text(Shape::Tuple(vec![x, sixteen]));
+        let returns = w.text(Shape::Never);
+        w.pass(pair, parameter);
+        w.enter(returns, hole);
+        hole
+    });
+}
+
+#[test]
+fn no_row_is_taken_before_every_row_is_told_of() {
+    // `take((x, 1u16));` with `take(Vec<U>)` and two rows: `(A, T) -> Vec<T>`,
+    // which any pair goes to, and `(u8, T) -> Vec<T>`, which is told only once `x`
+    // has a head. Where `x` is `u8` both go, and the program is refused, however
+    // late `x` comes to its head.
+    let rows = || {
+        [
+            (
+                "any",
+                node(Shape::Tuple(vec![Ty::Hole(Name::new("A")), hole()])),
+                vec_of(hole()),
+            ),
+            (
+                "of_u8",
+                node(Shape::Tuple(vec![node(Shape::Scalar(Scalar::U8)), hole()])),
+                vec_of(hole()),
+            ),
+        ]
+    };
+    let build = |first: Shape<ClassId>| {
+        move |w: &mut World, lets: usize| {
+            let hole = w.undecided();
+            let parameter = w.external(Shape::Struct(Name::new("Vec"), vec![hole]));
+            let x = w.text(first.clone());
+            let x = behind(w, x, lets + 2);
+            let sixteen = w.text(U16);
+            let pair = w.text(Shape::Tuple(vec![x, sixteen]));
+            w.pass(pair, parameter);
+            hole
+        }
+    };
+    comes_to_with(&rows(), "refused: NoChange", build(U8));
+    comes_to_with(&rows(), "u16", build(CHAR));
 }
 
 // The contracts admit any law: a law that is not the language's runs through the

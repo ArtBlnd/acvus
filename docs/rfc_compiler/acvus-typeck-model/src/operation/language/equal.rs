@@ -27,7 +27,7 @@ where
             apart: BTreeSet::new(),
             pairs,
         };
-        return Told { looked, asks };
+        return Told { looked, asks, way: None };
     };
     if head.layer() != declared.layer() {
         let mut items = decided_by(classes, lower);

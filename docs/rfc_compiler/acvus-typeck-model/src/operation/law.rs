@@ -106,6 +106,18 @@ where
     pub fn undecided(&mut self, scope: ScopeId) -> K::Id {
         self.classes.undecided(scope)
     }
+
+    /// Makes every class of `template` anew in `scope`, by `at`, and gives each
+    /// class of the template with the class it became.
+    pub fn anew<S>(&mut self, template: &Classes<S>, scope: ScopeId, at: ItemId) -> std::collections::BTreeMap<S::Id, K::Id>
+    where
+        S: ClassKind,
+        S::Bound: crate::primitive::bound::BoundInto<S, K>,
+    {
+        self.classes
+            .copy_from(template, self.scopes, scope, at, |_| crate::store::template::Fate::Anew)
+            .classes
+    }
 }
 
 /// The rules solving asks.
