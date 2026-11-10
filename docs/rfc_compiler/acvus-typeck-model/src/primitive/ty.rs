@@ -14,7 +14,7 @@ pub enum Mutability {
 
 impl Mutability {
     /// Exclusive where both are, and shared otherwise: what two references
-    /// join as (Joins).
+    /// join as.
     pub fn join(self, other: Self) -> Self {
         match (self, other) {
             (Mutability::Exclusive, Mutability::Exclusive) => Mutability::Exclusive,
@@ -69,8 +69,7 @@ pub enum Shape<P> {
     ErrorOf(P),
     /// `Fn(P̄ → R)`. Parts: each parameter, the result.
     Fn(Vec<P>, P),
-    /// `λ̄`. Members: its closures. No parts, as each use makes them anew
-    /// (O26).
+    /// `λ̄`. Members: its closures. No parts, as each use makes them anew.
     FnValue(BTreeSet<ClosureId>),
     /// `{f̄: T̄}`. Members: its fields. Parts: each field's type.
     Object(BTreeMap<Name, P>),
@@ -91,32 +90,6 @@ pub enum Shape<P> {
 }
 
 impl<P> Shape<P> {
-    /// What remains of the notation without members and parts, for anything but
-    /// a reference, whose class node holds it.
-    pub fn constructor(&self) -> Option<Constructor> {
-        Some(match self {
-            Shape::Ref(..) => return None,
-            Shape::Tuple(components) => Constructor::Tuple(components.len()),
-            Shape::Array(len, _) => Constructor::Array(*len),
-            Shape::Slice(_) => Constructor::Slice,
-            Shape::Option(_) => Constructor::Option,
-            Shape::Result(..) => Constructor::Result,
-            Shape::Error(_) => Constructor::Error,
-            Shape::ErrorOf(_) => Constructor::ErrorOf,
-            Shape::Fn(params, _) => Constructor::Fn(params.len()),
-            Shape::FnValue(_) => Constructor::FnValue,
-            Shape::Object(_) => Constructor::Object,
-            Shape::Enum(name, _) => Constructor::Enum(name.clone()),
-            Shape::Struct(module, _) => Constructor::Struct(module.clone()),
-            Shape::Extern(name, ..) => Constructor::Extern(name.clone()),
-            Shape::Scalar(scalar) => Constructor::Scalar(*scalar),
-            Shape::String => Constructor::String,
-            Shape::Str => Constructor::Str,
-            Shape::Unit => Constructor::Unit,
-            Shape::Never => Constructor::Never,
-        })
-    }
-
     /// Each part, with the key that names it, in the order the shape holds
     /// them. Two shapes of one layer give their keys in one order.
     pub fn places(&self) -> Vec<(PartKey, &P)> {
@@ -242,8 +215,8 @@ impl<P> Shape<P>
 where
     P: Clone,
 {
-    /// The head two heads join as, or none where they are of two head classes
-    /// (Joins). `!` is the least head.
+    /// The head two heads join as, or none where they do not join. `!` is the
+    /// least head.
     ///
     /// A place both heads have keeps this head's part: that the two parts are
     /// one type is the judgment of each bound that enters the class, not of
@@ -282,7 +255,7 @@ where
 
 /// A finite term, as the text or a signature writes it.
 ///
-/// It is made into classes where it is recorded (O13), and solving sees only
+/// It is made into classes where it is recorded, and solving sees only
 /// the classes after that: each node a decided class, and each hole one
 /// undecided class, however many times the signature writes it.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -290,55 +263,6 @@ pub enum Ty {
     /// A hole of a signature, `T`.
     Hole(Name),
     Node(Box<Shape<Ty>>),
-}
-
-/// A constructor other than a reference: what remains of the notation
-/// without its members and parts.
-///
-/// A reference is held by [`ClassNode::Ref`], together with what its target
-/// shows, so there is no reference here.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum Constructor {
-    Tuple(usize),
-    Array(usize),
-    Slice,
-    Option,
-    Result,
-    Error,
-    ErrorOf,
-    /// The number of parameters.
-    Fn(usize),
-    FnValue,
-    Object,
-    Enum(Name),
-    Struct(Name),
-    Extern(Name),
-    Scalar(Scalar),
-    String,
-    Str,
-    Unit,
-    Never,
-}
-
-/// What a change goes by (Equivalence classes).
-///
-/// A reference's comes from its own class and its target's class, both
-/// decided. Where either is not decided there is no class node: no class node
-/// is partly decided.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum ClassNode {
-    Ref(Mutability, TargetNode),
-    Plain(Constructor),
-}
-
-/// What a reference's class node shows of its target: the target's constructor,
-/// or, of a target that is a reference itself, its mutability alone. `&&T` is a
-/// type other than `&T`, and what lies below the inner reference is no part of
-/// the outer one's class node.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum TargetNode {
-    Ref(Mutability),
-    Plain(Constructor),
 }
 
 /// The type a variant is of. A pattern writes it with the variant, so the name

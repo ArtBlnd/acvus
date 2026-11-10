@@ -40,7 +40,7 @@ where
     K: ClassKind,
 {
     /// Writes `ty` as classes in `scope`, by `by`: each node an external class,
-    /// and each hole an undecided one (O13).
+    /// and each hole an undecided one.
     ///
     /// `written` holds the classes already written for one signature, so that
     /// one type, a hole included, is one class wherever the signature writes

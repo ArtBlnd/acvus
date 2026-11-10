@@ -286,7 +286,7 @@ where
         })
     }
 
-    /// Whether the class `class` names is a part of itself, at any depth (O5).
+    /// Whether the class `class` names is a part of itself, at any depth.
     pub fn is_own_part(&self, class: K::Id) -> bool {
         self.occurs(self.find(class).id)
     }

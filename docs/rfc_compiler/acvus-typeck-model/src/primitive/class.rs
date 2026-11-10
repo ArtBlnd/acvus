@@ -63,7 +63,7 @@ pub struct Class<K>
 where
     K: ClassKind,
 {
-    /// Where two classes are merged, the outer of their scopes (Brand types).
+    /// Where two classes are merged, the outer of their scopes.
     pub scope: ScopeId,
     pub state: State<K>,
     /// What the store keeps of the bounds not finished that have to do with this
@@ -144,13 +144,13 @@ where
     K: ClassKind,
 {
     /// The parts projections have named, each waiting for the class's head.
-    /// They give the class no head (O7). A name has one class, however many
+    /// They give the class no head by themselves. A name has one class, however many
     /// projections name it on either side.
     pub parts: BTreeMap<PartKey, Part<K>>,
     /// Calls made on the class. A function value has no parts, so a call is
     /// no part, and it is only ever an upper bound.
     pub calls: BTreeSet<(Call<K>, ItemId)>,
-    /// Every domain registered. Their intersection is computed (O8).
+    /// Every domain registered. Their intersection is computed.
     pub domains: BTreeSet<(Domain, ItemId)>,
 }
 
@@ -217,16 +217,16 @@ where
     pub origin: Origin,
 }
 
-/// Where a decided class's head comes from (O13). It outlasts the decision, so
+/// Where a decided class's head comes from. It outlasts the decision, so
 /// a hole once decided stays apart from what a declaration writes. An undecided
 /// class is free, so only a decided class holds this.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Origin {
     /// Solving or the text decided it. A part that corresponds to it is
-    /// unified with it (O9).
+    /// unified with it.
     Free,
     /// A declaration or the host writes it. It never changes, so a part that
-    /// corresponds to it takes it as an upper bound (O9).
+    /// corresponds to it is compared with it.
     External,
 }
 

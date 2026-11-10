@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use super::ty::Scalar;
 
-/// A row of the Domains table that gives a fallback type (O20). A class no
+/// A family of scalars that gives a fallback type. A class no
 /// domain is registered in has no row here: it falls back to `!`, once every
 /// class that has one has fallen back.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -41,14 +41,13 @@ impl Family {
 }
 
 /// The domain a literal with no suffix registers: the types that hold its
-/// value (O8). A class no domain is registered in may be every type, so every
+/// value. A class no domain is registered in may be every type, so every
 /// type is written by registering nothing.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Domain(pub BTreeSet<Scalar>);
 
 impl Domain {
-    /// The types every one of `domains` holds, where there is a domain at all
-    /// (O8).
+    /// The types every one of `domains` holds, where there is a domain at all.
     pub fn intersection<'a, I>(domains: I) -> Option<Domain>
     where
         I: IntoIterator<Item = &'a Domain>,
@@ -60,7 +59,7 @@ impl Domain {
     }
 
     /// The least row that holds this domain, whose fallback type it may not
-    /// itself hold (O8).
+    /// itself hold.
     pub fn family(&self) -> Option<Family> {
         [Family::Integer, Family::Float]
             .into_iter()

@@ -37,11 +37,11 @@ id! {
     ClassId,
     /// A class of a template: recorded once, never solved, and only copied.
     TemplateId,
-    /// What recorded something (Constraints, O22).
+    /// What recorded something: a place in the text, or solving itself.
     ItemId,
-    /// A lambda together with its captures (Closures and instances).
+    /// A lambda together with its captures.
     ClosureId,
-    /// The text of a body or a lambda, or one iteration of a loop (Brand types).
+    /// The text of a body or a lambda, or one iteration of a loop.
     ScopeId,
 }
 

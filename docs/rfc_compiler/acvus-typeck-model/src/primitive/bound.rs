@@ -41,14 +41,14 @@ pub enum Bound<K>
 where
     K: ClassKind,
 {
-    /// `upper`'s head is the join of the heads that enter it (O1, O2, O6). The
+    /// `upper`'s head is the join of the heads that enter it. The
     /// one operation `lower` may take to reach it is the reborrow. Classes
     /// that enter one another are one class.
     Enter { lower: K::Id, upper: K::Id },
     /// `lower` is passed to `upper`: by subtyping the language gives, or else
     /// through declared functions. It decides neither head.
     Change { lower: K::Id, upper: K::Id },
-    /// The two heads are equal (O9). It decides neither head and makes no
+    /// The two heads are equal. It decides neither head and makes no
     /// change, so it can be judged one layer at a time.
     Equal { lower: K::Id, upper: K::Id },
     /// `lower as _`: the type `lower` comes to by itself enters `upper`. No head
