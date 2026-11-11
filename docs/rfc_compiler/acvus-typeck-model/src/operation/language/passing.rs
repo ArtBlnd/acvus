@@ -595,9 +595,13 @@ where
 /// part. Until it is told, it may still make what lies below its two ends one type
 /// with a hole, so it holds apart its ends and each part it has read or has yet to
 /// read: those it only compares, and what lies below them is not decided.
+///
+/// A class with no head is a hole only where nothing says what its head is. To
+/// one bound to be one type with a declared class nothing is made one type: the
+/// argument is passed to the declared class instead.
 pub(super) fn look<K>(view: &View<'_, K>, functions: &Functions, argument: K::Id, given: K::Id, at: ItemId) -> Told<K>
 where
-    K: ClassKind,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let mut read = BTreeSet::from([argument, given]);
     let waits = |on: BTreeSet<K::Id>, read: BTreeSet<K::Id>| Looked::Waits {
@@ -605,6 +609,19 @@ where
         apart: read,
         pairs: Vec::new(),
     };
+    if let Some(declared) = view.declared_for(given) {
+        return Told::done(Looked::Holds {
+            pairs: Vec::new(),
+            adjustments: Vec::new(),
+            constraints: vec![
+                Bound::Change {
+                    lower: argument,
+                    upper: declared,
+                }
+                .into(),
+            ],
+        });
+    }
     match by_the_language(view, argument, view, given, &mut read) {
         Given::Goes { pairs, adjustments } => {
             let pairs = pairs.into_iter().map(|(a, g)| Pair::Classes(a, g)).collect();

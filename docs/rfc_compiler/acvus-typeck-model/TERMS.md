@@ -441,6 +441,12 @@ the text; a brand is not.
   language gives, and `R` is one type with `S`. So `Fn(&u8) -> u8` is passed to
   `Fn(&mut u8) -> u8` and not the other way, and what a function gives is changed in neither.
   Nothing of this is behind a reference or at a part of another type.
+- **A class with no head is a hole only where nothing says what its head is.** Nothing is
+  merged with a declared class, so what is one type with it is bound to it and takes its head
+  where classes are next decided. An argument passed to such a class before then is passed to
+  the declared class instead. So a variable a declared function type enters is called as
+  the declared one is: `g <- d; g(a)` with `d: Fn(&u8) -> u8` and `a: &mut u8` reborrows, and
+  a parameter that writes a function type is called in the body.
 - **A function goes to a function type wherever a function is chosen by what goes to it.**
   Whether a closure can be used as a function type is told by its copy and not by reading. So
   a function is a receiver of every function of the name whose first parameter writes a
@@ -506,11 +512,6 @@ the text; a brand is not.
 
 Marked, not ruled:
 
-- A variable a declared function type enters, called. The variable's head has parts of its
-  own, each one type with the declared part by a bound, and with no head until that bound
-  gives one. An argument passed to such a part meanwhile is passed to a hole, and is one type
-  with it: `g <- d; g(a)` with `d: Fn(&u8) -> u8` and `a: &mut u8` is refused, where `d(a)` is
-  not. A parameter that writes a function type is such a variable (`DESIGN.md`, section 5).
 - A recursion through a class that two lambdas entered.
 - A brand that nothing enters.
 - Two lambdas that meet and are not called: no copy is made where they meet, so results that

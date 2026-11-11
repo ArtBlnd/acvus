@@ -154,6 +154,27 @@ where
     }
 }
 
+impl<K> View<'_, K>
+where
+    K: ClassKind<Constraint = Constraint<K>>,
+{
+    /// The class a declaration writes that `class` is bound to be one type with,
+    /// by a bound not finished yet.
+    ///
+    /// Nothing is merged with a declared class: what is one type with it is
+    /// bound to it instead, and takes its head where classes are next decided.
+    /// Until then it has no head, and is not a class nothing is said of. An
+    /// `Equal` is recorded by [`Law::same`] alone, with the declared class as its
+    /// upper end; the declared class is an end of it too, and is bound to none.
+    pub(super) fn declared_for(&self, class: K::Id) -> Option<K::Id> {
+        let root = self.classes.find(class).id();
+        self.classes.constraints_of(class).find_map(|(constraint, _)| match constraint {
+            Constraint::Bound(Bound::Equal { lower, upper }) if self.classes.find(*lower).id() == root => Some(*upper),
+            _ => None,
+        })
+    }
+}
+
 /// What a relation tells of a constraint: what it comes to, and, where it waits for a
 /// class's head, the head it will hold that class's head against.
 pub(super) struct Told<K>

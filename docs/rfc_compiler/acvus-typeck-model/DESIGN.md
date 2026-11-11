@@ -116,14 +116,6 @@ constraint nothing has happened to is not looked at again.
   fails no test: no program has been found where a class a refusal is of is connected again
   after the refusal. The orders the tests run differ in which class is asked first, and not
   in which constraint is looked at first.
-- **A variable a declared function type enters is refused where it is called with an argument
-  that is not the parameter's type as it is.** The variable is decided `Fn(P) -> R` with parts
-  of its own, `P` being one type with the declared parameter by an `Equal` that gives it a
-  head only at the next deciding. The call passes its argument to `P` before that, and a
-  passing takes a class with no head for a hole, so the two are merged and the `Equal` is
-  refused. `a_variable_a_declared_function_type_enters_is_called_as_a_hole_is` holds it as it
-  is. A lambda whose parameter writes a function type and whose body calls it is refused so
-  where it is defined, its argument there being `!`.
 - **That solving ends.** A call within a copy of what it calls makes no copy, and making one
   there does not end; but each copy names the closures its body defines anew, and that no
   chain of those goes on without end is argued and not tested.

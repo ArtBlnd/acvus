@@ -741,12 +741,27 @@ fn a_function_type_goes_where_a_function_value_goes() {
     holds("row adder: u8 -> Fn(u8) -> u8; declare p = Fn(u8) -> u8; u <- u8; c: pass u to p; assert c takes adder;");
 }
 
-/// Not what is wanted: `DESIGN.md`, section 5. Called as it is declared, each
-/// of these is accepted.
+/// The variable's head has parts of its own, each bound to the declared part and
+/// with no head until classes are next decided. An argument is passed to the
+/// head such a part is to have, and is not made one type with it as with a hole.
 #[test]
-fn a_variable_a_declared_function_type_enters_is_called_as_a_hole_is() {
-    holds("declare d = Fn(&u8) -> u8; g <- d; u <- u8; a <- &u; call g(a) to r; assert r: u8;");
-    holds("declare d = Fn(&u8) -> u8; g <- d; u <- u8; a <- &mut u; call g(a) to r; assert refused Mismatch, ..;");
-    holds("h <- fn (g: Fn(u8) -> u8, v) -> r { call g(v) to r; }; assert refused Mismatch, ..;");
+fn a_variable_a_declared_function_type_enters_is_called_as_the_declared_one_is() {
+    let called = |program: &str| holds(&format!("declare d = Fn(&u8) -> u8; g <- d; u <- u8; {program}"));
+    called("a <- &u; call g(a) to r; assert r: u8;");
+    called("a <- &mut u; c: call g(a) to r; assert r: u8;");
+    called("n <- nothing as _; call g(n) to r; assert r: u8;");
+    called("call g(u) to r; assert refused NoChange, ..;");
 }
 
+/// A parameter that writes a function type is such a variable, and where the
+/// lambda is defined its argument is `!`.
+#[test]
+fn a_parameter_that_writes_a_function_type_is_called_in_the_body() {
+    let f = "f <- fn (x) -> r { r <- x; }; u <- u8;";
+    holds("h <- fn (g: Fn(u8) -> u8, v) -> r { call g(v) to r; }; assert accepted;");
+    holds(&format!("h <- fn (g: Fn(u8) -> u8, v) -> r {{ call g(v) to r; }}; {f} call h(f, u) to n; assert n: u8;"));
+    holds("h <- fn (g: Fn(&u8) -> u8, a: &mut u8) -> r { call g(a) to r; }; assert accepted;");
+    holds(&format!("module M [k] {{ run <- fn (g: Fn(u8) -> u8, v) -> r {{ call g(v) to r; }}; }}; {f} call M::run(f, u) to n; assert n: u8;"));
+    holds(&format!("module M [k] {{ run <- fn (g: Fn(u8) -> u8, v) -> r {{ call g(v) to r; }}; }}; {f} call f::run(u) to n; assert n: u8;"));
+    holds(&format!("h <- fn (g: Fn(u8) -> u8, v) -> r {{ call g(v) to r; }}; {f} c <- char; call h(f, c) to n; assert refused NoChange, ..;"));
+}
