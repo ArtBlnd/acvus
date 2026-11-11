@@ -392,7 +392,11 @@ where
 
 /// What is refused of `class` when nothing more can be done: a class that is a
 /// part of itself has no finite type, and a class still undecided has no type.
-pub fn end<K>(classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>>
+///
+/// A literal's class that heads are asked of, none of them of its domain, is
+/// undecided for that: rung 1 passes over such a head, as another may come, and
+/// here none has.
+pub fn end<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Vec<Refused<K>>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
@@ -416,8 +420,12 @@ where
     if let State::Undecided(undecided) = &classes.get(root).state {
         let constraints = classes.constraints_of(class).map(|(_, at)| *at);
         let domains = undecided.domains.iter().map(|(_, at)| *at);
+        let heads = asked(classes, functions, class, &mut BTreeSet::new());
+        let outside = domain_of(classes, class).is_some_and(|(domain, _)| {
+            !heads.is_empty() && heads.iter().all(|head| !matches!(head, Shape::Scalar(scalar) if domain.0.contains(scalar)))
+        });
         refusals.push(Refused {
-            cause: Cause::UndecidedClass,
+            cause: if outside { Cause::EmptyDomain } else { Cause::UndecidedClass },
             items: constraints.chain(named.iter().copied()).chain(domains).collect(),
             of: vec![class],
         });

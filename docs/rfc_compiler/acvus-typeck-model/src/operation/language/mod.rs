@@ -112,7 +112,7 @@ where
     }
 
     fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>> {
-        rungs::end(classes, class)
+        rungs::end(classes, &self.functions, class)
     }
 }
 

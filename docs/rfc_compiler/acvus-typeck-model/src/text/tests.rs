@@ -227,6 +227,17 @@ fn a_part_read_through_a_reference_that_refers_to_itself_lies_nowhere() {
     holds("r <- &r; v <- r.x; assert refused NotHeld, ..;");
 }
 
+/// A head outside a literal's domain is passed over where the literal is decided,
+/// as another may be asked of it. Where none is, that is what is refused; where
+/// one of its domain is asked too and no one head will do, it has no type.
+#[test]
+fn a_literal_asked_only_heads_outside_its_domain_is_refused_for_its_domain() {
+    holds("declare n = f64; one <- {integer}; pass one to n; assert refused EmptyDomain, ..;");
+    holds("declare n = f64; one <- {integer}; n <- one; assert refused EmptyDomain, ..;");
+    holds("declare n = String; one <- {integer}; pass one to n; assert refused EmptyDomain, ..;");
+    holds("declare n = f64; declare m = u8; one <- {integer}; pass one to n; pass one to m; assert refused UndecidedClass;");
+}
+
 #[test]
 fn a_literal_made_one_type_with_a_head_outside_its_domain_is_refused() {
     holds("o <- {f: {integer}}; o <- {f: String}; assert refused EmptyDomain, ..;");
