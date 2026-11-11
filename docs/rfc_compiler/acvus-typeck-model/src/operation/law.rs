@@ -75,6 +75,20 @@ where
     },
 }
 
+impl<K> Looked<K>
+where
+    K: ClassKind,
+{
+    /// It holds, and nothing follows from it.
+    pub fn holds_alone() -> Self {
+        Looked::Holds {
+            pairs: Vec::new(),
+            adjustments: Vec::new(),
+            constraints: Vec::new(),
+        }
+    }
+}
+
 /// The heads classes take now, and what was refused in finding them.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Heads<K>

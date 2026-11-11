@@ -89,50 +89,56 @@ where
 }
 
 /// Rung 0: the join of the heads that enter the class, once each has a head,
-/// and of the object of the fields written into it.
+/// and of what its own parts say.
 ///
-/// What is written joins as what enters does, so an object that entered has the
-/// fields written besides its own. A head that is no object is not joined with
-/// what is written: a part written into a reference is written through it, and
-/// what it refers to is as it lies. Where the join is `!`, which says nothing,
-/// the class takes the head its parts make, read or written.
+/// | What enters | The head |
+/// |---|---|
+/// | nothing | the object of the fields written into the class, where any is |
+/// | a head not given yet | none yet |
+/// | heads that do not join | none: the program is refused |
+/// | heads whose join is an object | that, with the fields written besides its own |
+/// | heads whose join is `!`, which says nothing | the head the parts make, read or written, or else `!` |
+/// | heads of any other join | the join |
+///
+/// What is written joins as what enters does. A head that is no object is not
+/// joined with what is written: a part written into a reference is written
+/// through it, and what it refers to is as it lies.
 fn join<K>(classes: &Classes<K>, class: K::Id) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
     let entering = entering(classes, class);
+    if entering.is_empty() {
+        return match written(classes, class) {
+            Some((shape, by)) => Offer::Head { shape, by },
+            None => Offer::Nothing,
+        };
+    }
     let Some(heads) = entering.iter().map(|(head, ..)| head.clone()).collect::<Option<Vec<_>>>() else {
         return Offer::Nothing;
     };
-    let by: BTreeSet<ItemId> = entering.iter().map(|(.., at)| *at).collect();
+    let mut by: BTreeSet<ItemId> = entering.iter().map(|(.., at)| *at).collect();
     let mut heads = heads.into_iter();
-    let joined = match heads.next() {
-        Some(first) => heads.try_fold(first, |joined, head| joined.join(&head)),
-        // Nothing enters: what is written is all there is to join.
-        None => match written(classes, class) {
-            Some((shape, by)) => return Offer::Head { shape, by },
-            None => return Offer::Nothing,
-        },
-    };
-    let with = |made: Option<(Shape<K::Id>, BTreeSet<ItemId>)>, joined: Shape<K::Id>| match made {
-        Some((made, named)) => match joined.join(&made) {
-            Some(shape) => Offer::Head {
-                shape,
-                by: by.iter().copied().chain(named).collect(),
-            },
-            None => Offer::Head { shape: joined, by: by.clone() },
-        },
-        None => Offer::Head { shape: joined, by: by.clone() },
-    };
-    match joined {
-        Some(Shape::Never) => with(made_of_parts(classes, class), Shape::Never),
-        Some(object @ Shape::Object(_)) => with(written(classes, class), object),
-        Some(shape) => Offer::Head { shape, by },
-        None => Offer::Refused(Refused {
+    let first = heads.next().expect("something enters");
+    let Some(joined) = heads.try_fold(first, |joined, head| joined.join(&head)) else {
+        return Offer::Refused(Refused {
             cause: Cause::Mismatch,
             items: by,
             of: [class].into_iter().chain(entering.iter().map(|(_, constraint, _)| constraint.lower())).collect(),
-        }),
+        });
+    };
+    let of_its_parts = match joined {
+        Shape::Never => made_of_parts(classes, class),
+        Shape::Object(_) => written(classes, class),
+        _ => None,
+    };
+    let Some((made, named)) = of_its_parts else {
+        return Offer::Head { shape: joined, by };
+    };
+    by.extend(named);
+    Offer::Head {
+        shape: joined.join(&made).expect("`!` joins with any head, and an object with an object"),
+        by,
     }
 }
 
@@ -209,17 +215,16 @@ where
     if refused {
         return false;
     }
-    entered(classes, root).into_iter().all(|upper| {
-        let mut joined = Some(head.clone());
-        for (other, ..) in entering(classes, upper) {
-            joined = match (joined, other) {
-                (Some(joined), Some(other)) => joined.join(&other),
-                (joined, None) => joined,
-                (None, _) => None,
-            };
+    for upper in entered(classes, root) {
+        let entered_already = entering(classes, upper).into_iter().filter_map(|(other, ..)| other);
+        let Some(joined) = entered_already.into_iter().try_fold(head.clone(), |joined, other| joined.join(&other)) else {
+            return false;
+        };
+        if !taken(view.clone(), functions, upper, &joined, seen) {
+            return false;
         }
-        joined.is_some_and(|joined| taken(view.clone(), functions, upper, &joined, seen))
-    })
+    }
+    true
 }
 
 /// Rung 1: a class nothing enters takes the one head, of those it will be held

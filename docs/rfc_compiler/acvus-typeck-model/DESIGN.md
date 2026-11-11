@@ -94,11 +94,20 @@ constraint nothing has happened to is not looked at again.
 
 ## 5. What is not tested, and what is not there
 
-- **Guards going down as structure grows.** The store gives a part that comes to be named, or
-  merged in, the guards of the class above it. Turning that off fails no test: a guard is read
-  only when a `Deciding` is made, after looking has run to its end, and by then every constraint
-  that waits has stated its guards anew. The guards themselves are tested: turning them off, or
-  having a passing hold nothing apart, fails `a_hole_a_passing_not_told_yet_may_reach_is_not_decided`.
+- **Guards going down as structure grows, in a program.** The ledger gives a part that comes
+  to be named, or merged in, the guards of the class above it, and its own tests hold it to
+  that. No program run through the law shows it: a guard is read only when a `Deciding` is
+  made, after looking has run to its end, and by then every constraint that waits has stated
+  its guards anew.
+- **The order of the last two rungs.** A literal's fallback and `!` offer heads to no class in
+  common, one taking a class with a domain and the other a class with none, so which stands
+  first shows nowhere.
+- **Deciding from above, through what a class enters.** A head is taken from above only where
+  every class the class enters would take it too, joined with what has entered that class
+  already. Leaving out either, the asking of the class above or the join, fails no test.
+- **What names the parts a head is made of.** A head joined with what the parts say is decided
+  by the items that named those parts too, for a refusal to name. Leaving them out fails no
+  test.
 - **Where the rung of parts stands.** Putting it after the literal's fallback, or before the
   head from above, fails no test. It gives a head only where none is asked from above, so its
   order with that rung shows nowhere, and no program has been found where a head made from
@@ -107,8 +116,10 @@ constraint nothing has happened to is not looked at again.
   fails no test: no program has been found where a class a refusal is of is connected again
   after the refusal. The orders the tests run differ in which class is asked first, and not
   in which constraint is looked at first.
-- **A function value passed to a function type**, left as a `todo`.
-- **Calls** on a class, which no law judges.
+- **A function value passed to a function type a row writes**, left as a `todo`, and a call of a
+  closure within a copy of it.
+- **That a copy lies in a scope of its own.** Nothing reads which closure a scope is a copy of
+  until a call within a copy is decided.
 
 ## 6. The text
 

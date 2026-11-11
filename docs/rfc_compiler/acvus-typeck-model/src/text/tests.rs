@@ -217,3 +217,19 @@ fn a_part_read_through_a_reference_that_refers_to_itself_lies_nowhere() {
 fn a_literal_made_one_type_with_a_head_outside_its_domain_is_refused() {
     holds("o <- {f: {integer}}; o <- {f: String}; assert refused EmptyDomain, ..;");
 }
+
+#[test]
+fn variants_are_passed_to_more_variants_and_to_no_fewer() {
+    holds("declare p = E{A(u8), B(u16)}; a <- E{A(u8)}; first: pass a to p; assert first takes AddVariants;");
+    holds("declare p = E{A(u8)}; a <- E{A(u8)}; first: pass a to p; assert first takes;");
+    holds("declare p = E{A(u8)}; a <- E{A(u8), B(u16)}; pass a to p; assert refused NoChange;");
+    holds("declare p = Error{A(u8), B(u16)}; a <- Error{A(u8)}; first: pass a to p; assert first takes AddVariants;");
+    holds("declare p = Error{A(u8)}; a <- Error{A(u8), B(u16)}; pass a to p; assert refused NoChange;");
+}
+
+#[test]
+fn a_row_is_taken_only_where_the_argument_is_what_it_writes_at_every_depth() {
+    let rows = "row f: Wrap<Option<u8>> -> u8; declare p = u8;";
+    holds(&format!("{rows} a <- Wrap<Option<u8>>; first: pass a to p; assert first takes f;"));
+    holds(&format!("{rows} a <- Wrap<Option<u16>>; pass a to p; assert refused NoChange;"));
+}

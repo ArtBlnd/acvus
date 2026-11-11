@@ -31,13 +31,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::primitive::adjustment::Adjustment;
+use crate::primitive::adjustment::{Adjustment, Subtyping};
 use crate::primitive::class::{ClassKind, State, Template};
 use crate::primitive::constraint::Constraint;
-use crate::primitive::adjustment::Subtyping;
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{Mutability, Shape};
-use crate::primitive::{ItemId, TemplateId};
+use crate::primitive::{ItemId, Name, TemplateId};
 use crate::store::classes::Classes;
 
 use super::super::law::{Looked, Pair, Scribe};
@@ -118,7 +117,7 @@ fn loosened(by: Subtyping, where_loosened: bool) -> Vec<Adjustment> {
 
 /// What the language gives between what `from` writes at `argument` and what `to`
 /// writes at `given`. `read` takes each part of the argument that is read.
-fn language<A, G>(from: &A, argument: A::Id, to: &G, given: G::Id, read: &mut BTreeSet<A::Id>) -> Given<A::Id, G::Id>
+fn by_the_language<A, G>(from: &A, argument: A::Id, to: &G, given: G::Id, read: &mut BTreeSet<A::Id>) -> Given<A::Id, G::Id>
 where
     A: Written,
     G: Written,
@@ -161,31 +160,36 @@ where
             goes(paired(kept), loosened(Subtyping::DropFields, given_fields.len() < fields.len()))
         }
         (Shape::Enum(name, variants), Shape::Enum(given_name, given_variants)) if name == given_name => {
-            let Some(held) = variants
-                .iter()
-                .map(|(variant, part)| given_variants.get(variant).map(|other| (part, other)))
-                .collect::<Option<Vec<_>>>()
-            else {
-                return Given::Nothing;
-            };
-            goes(paired(held), loosened(Subtyping::AddVariants, variants.len() < given_variants.len()))
+            into_more_variants(variants, given_variants)
         }
-        (Shape::Error(variants), Shape::Error(given_variants)) => {
-            let Some(held) = variants
-                .iter()
-                .map(|(variant, part)| given_variants.get(variant).map(|other| (part, other)))
-                .collect::<Option<Vec<_>>>()
-            else {
-                return Given::Nothing;
-            };
-            goes(paired(held), loosened(Subtyping::AddVariants, variants.len() < given_variants.len()))
-        }
+        (Shape::Error(variants), Shape::Error(given_variants)) => into_more_variants(variants, given_variants),
         (Shape::FnValue(_), Shape::Fn(..)) => Given::Calls,
         _ if head.layer() == wanted.layer() => {
             let parts = head.places().into_iter().zip(wanted.places()).map(|((_, a), (_, g))| (a, g)).collect();
             goes(paired(parts), Vec::new())
         }
         _ => Given::Nothing,
+    }
+}
+
+/// What the language gives between variants and the variants given: each variant
+/// of the argument is one given, its payload one type with that one's, and more
+/// may be given besides.
+fn into_more_variants<A, G>(variants: &BTreeMap<Name, A>, given: &BTreeMap<Name, G>) -> Given<A, G>
+where
+    A: Copy,
+    G: Copy,
+{
+    let Some(pairs) = variants
+        .iter()
+        .map(|(variant, payload)| given.get(variant).map(|given_payload| (*payload, *given_payload)))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Given::Nothing;
+    };
+    Given::Goes {
+        pairs,
+        adjustments: loosened(Subtyping::AddVariants, variants.len() < given.len()),
     }
 }
 
@@ -269,15 +273,13 @@ where
     if head.layer() != wanted.layer() {
         return Same::No;
     }
-    let mut waits = None;
-    for ((_, below), (_, given_below)) in head.places().into_iter().zip(wanted.places()) {
-        match same(from, *below, to, *given_below, read) {
-            Same::Yes => {}
-            Same::Reads(class) => waits = waits.or(Some(class)),
-            Same::No => return Same::No,
-        }
-    }
-    waits.map_or(Same::Yes, Same::Reads)
+    let below: Vec<(A::Id, G::Id)> = head
+        .places()
+        .into_iter()
+        .zip(wanted.places())
+        .map(|((_, below), (_, given_below))| (*below, *given_below))
+        .collect();
+    all_same(from, to, &below, read)
 }
 
 /// Whether each of `pairs` is of one type as far as `to` writes it.
@@ -300,8 +302,8 @@ where
 /// Where a class written in a way lies: in the store being solved, or in the
 /// signature of the step of that number.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum Site<K> {
-    Solved(K),
+enum Site<I> {
+    Solved(I),
     Step(usize, TemplateId),
 }
 
@@ -333,7 +335,7 @@ where
     let mut found = Vec::new();
     let mut waits = BTreeSet::new();
     for (index, row) in functions.rows.iter().enumerate() {
-        match language(view, argument, &row.template, row.parameter, read) {
+        match by_the_language(view, argument, &row.template, row.parameter, read) {
             Given::Goes { pairs, adjustments } => {
                 // A row is chosen among rows, so the argument is read as far as
                 // the row writes: its parts are the types the row writes for them.
@@ -374,7 +376,7 @@ where
     K: ClassKind,
 {
     let step = way.rows.len() - 1;
-    match language(&row.template, row.result, view, given, &mut BTreeSet::new()) {
+    match by_the_language(&row.template, row.result, view, given, &mut BTreeSet::new()) {
         Given::Goes { pairs, adjustments } => {
             if !matches!(all_same(&row.template, view, &pairs, &mut BTreeSet::new()), Same::Yes) {
                 return;
@@ -393,7 +395,7 @@ where
                     continue;
                 }
                 let Given::Goes { pairs, adjustments } =
-                    language(&row.template, row.result, &next.template, next.parameter, &mut BTreeSet::new())
+                    by_the_language(&row.template, row.result, &next.template, next.parameter, &mut BTreeSet::new())
                 else {
                     continue;
                 };
@@ -464,7 +466,7 @@ where
         apart: read,
         pairs: Vec::new(),
     };
-    match language(view, argument, view, given, &mut read) {
+    match by_the_language(view, argument, view, given, &mut read) {
         Given::Goes { pairs, adjustments } => {
             let pairs = pairs.into_iter().map(|(a, g)| Pair::Classes(a, g)).collect();
             return Told::done(Looked::Holds {
@@ -482,11 +484,7 @@ where
         }
         Given::Calls => {
             return Told {
-                looked: Looked::Holds {
-                    pairs: Vec::new(),
-                    adjustments: Vec::new(),
-                    constraints: Vec::new(),
-                },
+                looked: Looked::holds_alone(),
                 asks: Vec::new(),
                 then: Some(Then::Calls),
             };
@@ -501,22 +499,17 @@ where
     if !on.is_empty() {
         return Told::done(waits(on, read));
     }
-    match (found.pop(), found.is_empty()) {
-        (Some(way), true) => Told {
-            looked: Looked::Holds {
-                pairs: Vec::new(),
-                adjustments: Vec::new(),
-                constraints: Vec::new(),
-            },
-            asks: Vec::new(),
-            then: Some(Then::Way(way)),
-        },
-        _ => {
-            Told::done(Looked::Refused(Refused {
-                cause: Cause::NoChange,
-                items: BTreeSet::from([at]),
-                of: vec![argument, given],
-            }))
-        }
+    // Exactly one way must go: none goes nowhere, and of two neither is chosen.
+    let (Some(way), true) = (found.pop(), found.is_empty()) else {
+        return Told::done(Looked::Refused(Refused {
+            cause: Cause::NoChange,
+            items: BTreeSet::from([at]),
+            of: vec![argument, given],
+        }));
+    };
+    Told {
+        looked: Looked::holds_alone(),
+        asks: Vec::new(),
+        then: Some(Then::Way(way)),
     }
 }
