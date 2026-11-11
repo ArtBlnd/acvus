@@ -23,8 +23,17 @@ Each is done in one place, and there is no other way to do what it does.
 | looking at a constraint | Asks the law what the constraint comes to, and does what follows: finishes it, connects its pairs and records the constraints that take its place, or finishes it and refuses, or states what it waits on and holds apart. | `operation::judge::look` |
 | deciding | Gathers what a rung offers, and gives those heads together through `Classes::deciding`. | `operation::decide::decide` |
 
-`operation::settle::settle` takes them in turn: every constraint awake is looked at until none is,
-then every class that may be decided is, and back to looking while anything was decided.
+`operation::settle::settle` takes them in turn: every constraint awake is looked at until none
+is; then every class that what is recorded gives a head is decided, and back to looking while
+any was. Where none is, what is recorded is at its fixpoint. Only then is a class decided
+because nothing more is to come to it, and back to looking while any was.
+
+| What gives a head | When | It is right of |
+|---|---|---|
+| what is recorded of the class: what has entered it, the declared class it is bound to | wherever it is there | any class, whatever is still to come to it |
+| that nothing more is to come to the class: what it is passed to, the parts named on it, a literal's fallback, `!` | at the fixpoint | a class nothing more is to come to |
+
+The refusal of a class with no head, at the end, is of the second sort too.
 
 ## 3. The law
 
@@ -38,7 +47,8 @@ and finishes nothing.
 | which classes are one type by the constraints as a whole | pairs |
 | where a part named on a class lies, once the class's head has no place of that name | `Place`: within another part, with an adjustment, or nowhere |
 | whether a literal's class may take a head | yes or no |
-| what head a rung offers a class | `Offer`: nothing, a head, or a refusal |
+| what heads classes take by what is recorded of them | `Heads` |
+| what heads classes take because nothing more is to come to them | `Heads` |
 | what is refused of a class at the end | what is refused, and of which classes |
 
 What a law refuses, it refuses of classes. What decided those classes, and every connection
@@ -64,7 +74,8 @@ The language's law is `operation::language`, one rule in one place:
 | the functions declared: a table, and no rule | `functions` |
 | classes that enter one another are one class | `enter::entering_one_another` |
 | a part named on a reference is read through it, and is read where it lies, whatever it was where it was named | `Language::place`, `connect::take_in` |
-| the rungs: the join of what enters and of what is written, the one head from above, the head the parts named make, a literal's fallback, `!` | `rungs` |
+| the rungs of what is recorded: the join of what enters and of what is written, the head of the declared class a class is bound to | `rungs::settled` |
+| the rungs of nothing more to come: the one head a class is passed to, the head the parts named make, a literal's fallback, `!` | `rungs::fallback` |
 | at the end: a class that is its own part, a class still undecided | `rungs::end` |
 
 A rule reads through a `View`, which is the store as it is, or with heads supposed of some

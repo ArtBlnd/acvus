@@ -9,20 +9,25 @@ use crate::store::classes::Classes;
 
 use super::Outcome;
 use super::connect::connect;
-use super::decide::decide;
+use super::decide::{Giving, decide};
 use super::judge::look;
 use super::law::{Law, Pair};
 
 /// Solves what has been recorded.
 ///
 /// ```text
-/// look:    each constraint awake is looked at, and each pair the law finds one type is
-///          connected, until no constraint is awake.
-/// decide:  every class that may be decided now is decided, by the first rung that
-///          decides any. Where one was, back to look.
-/// end:     what the law refuses of each class is refused, and what settled the
-///          classes of each refusal is gathered.
+/// look:       each constraint awake is looked at, and each pair the law finds one type
+///             is connected, until no constraint is awake.
+/// settle:     every class that what is recorded gives a head is decided. Where one
+///             was, back to look. Where none is, what is recorded is at its fixpoint.
+/// fall back:  every class that takes a head because nothing more is to come to it is
+///             decided. Where one was, back to look.
+/// end:        what the law refuses of each class is refused, and what settled the
+///             classes of each refusal is gathered.
 /// ```
+///
+/// The first two take what is recorded as far as it goes, whatever is still to come.
+/// The last two finish it: they are right only of what nothing more is to come to.
 ///
 /// A constraint is awake when it is recorded, and when a class it waits on is merged
 /// or decided, so nothing is looked at that nothing has happened to. A class is
@@ -49,7 +54,10 @@ where
                 break;
             }
         }
-        if !decide(store, law, outcome, at, visit) {
+        if decide(store, law, outcome, at, visit, Giving::WhatIsRecorded) {
+            continue;
+        }
+        if !decide(store, law, outcome, at, visit, Giving::NothingMoreToCome) {
             break;
         }
     }

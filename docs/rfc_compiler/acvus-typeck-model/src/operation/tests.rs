@@ -1543,7 +1543,14 @@ impl Law<Live> for Odd {
         true
     }
 
-    fn heads(&self, classes: &Classes<Live>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
+    fn settled(&self, _: &Classes<Live>, _: &[ClassId], _: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
+        Heads {
+            heads: Vec::new(),
+            refused: Vec::new(),
+        }
+    }
+
+    fn fallback(&self, classes: &Classes<Live>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
         let only = |class: ClassId| {
             let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
                 return Offer::Nothing;
