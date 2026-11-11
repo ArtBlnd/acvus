@@ -1,0 +1,8 @@
+// let f = |x, y| x.plus(y);                 // plus(u8, u8) -> u8, plus(u16, u16) -> u16
+// Which `plus` is told by what is passed to `x`, and nothing is where the
+// lambda is written.
+row plus: u8, u8 -> u8;
+row plus: u16, u16 -> u16;
+f <- fn (x, y) -> r { call x::plus(y) to r; };
+
+assert accepted;

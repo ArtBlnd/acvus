@@ -1,0 +1,7 @@
+// let h = if c { |x| 0u8 } else { |x| "a" };
+f <- fn (x) -> r { r <- u8; };
+g <- fn (x) -> r { r <- String; };
+h <- f;
+h <- g;
+
+assert refused Mismatch, ..;

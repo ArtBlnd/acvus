@@ -1,0 +1,8 @@
+// let f = |v| v.len(); f(w)                // len<T>(&Vec<T>) -> usize, w: Vec<u8>
+row len<T>: &Vec<T> -> usize;
+f <- fn (v) -> r { call v::len() to r; };
+u <- u8;
+w <- Vec<u>;
+call f(w) to n;
+
+assert n: usize;

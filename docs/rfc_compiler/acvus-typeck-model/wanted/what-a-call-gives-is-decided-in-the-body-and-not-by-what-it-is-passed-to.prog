@@ -1,0 +1,10 @@
+// let f = || 1; take(f());                   // take(u16)
+// A use is the body written where it is used, as `{ 1 } as _`: the literal falls
+// back in the body, and what the call gives is `i32`.
+f <- fn () -> r { r <- {integer}; };
+declare p = u16;
+call f() to n;
+pass n to p;
+
+assert n: i32;
+assert refused NoChange, ..;

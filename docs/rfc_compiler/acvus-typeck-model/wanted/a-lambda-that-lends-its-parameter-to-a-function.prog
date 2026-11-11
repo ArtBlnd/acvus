@@ -1,0 +1,8 @@
+// let f = |x, y| add(&x, &y); f(1u8, 2u8)   // add(&u8, &u8) -> u8
+row add: &u8, &u8 -> u8;
+f <- fn (x, y) -> r { a <- &x; b <- &y; call a::add(b) to r; };
+u <- u8;
+v <- u8;
+call f(u, v) to n;
+
+assert n: u8;

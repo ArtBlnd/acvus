@@ -1,0 +1,13 @@
+// let f = |x, y| x.plus(y); f(1u8, 2u8); f(1u16, 2u16)
+row plus: u8, u8 -> u8;
+row plus: u16, u16 -> u16;
+f <- fn (x, y) -> r { call x::plus(y) to r; };
+a <- u8;
+b <- u8;
+call f(a, b) to n;
+c <- u16;
+d <- u16;
+call f(c, d) to m;
+
+assert n: u8;
+assert m: u16;

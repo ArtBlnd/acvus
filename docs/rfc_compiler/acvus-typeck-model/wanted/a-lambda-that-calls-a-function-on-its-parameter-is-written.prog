@@ -1,0 +1,7 @@
+// let f = |v| v.len();                    // len<T>(&Vec<T>) -> usize
+// Where the lambda is written nothing is passed to `v`: its body is settled and
+// no more, so `v` has no head and which `len` is called is not told.
+row len<T>: &Vec<T> -> usize;
+f <- fn (v) -> r { call v::len() to r; };
+
+assert accepted;

@@ -1,0 +1,10 @@
+// struct Point { x, y }  impl Point { fn add(&self, o) { .. self.x + o.x .. } }
+// Where the module is written nothing is given its fields.
+row plus: u8, u8 -> u8;
+row plus: u16, u16 -> u16;
+module Point [x, y] {
+    new <- fn (a, b) -> r { x <- a; y <- b; r <- Point<x, y>; };
+    add <- fn (s: &Point<x, y>, o: &Point<x, y>) -> r { sx <- s.x; ox <- o.x; call sx::plus(ox) to nx; r <- Point<nx, y>; };
+};
+
+assert accepted;
