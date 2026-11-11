@@ -18,6 +18,7 @@
 //! | `f <- fn [a] (x) -> r { r <- x; };` | a closure of the lambda, over `a`, is named, and its function value enters `f` |
 //! | `f <- fn (s: &Point<a, b>, x) -> r { .. };` | a parameter that writes a type: what is passed is passed to it as to a declared type |
 //! | `row map<T, U>: Option<T>, Fn(T) -> U -> Option<U>;` | a function type: what a function value is passed to |
+//! | `row open<B>: u8 -> Handle<; B>;`, `a <- Handle<u8; b>;` | a type that has a brand, written last: in a row a hole, in a program a class |
 //! | `struct Point {x, y};` | a struct: `Point<T, U>` has the field `x` of the type `T` and `y` of `U` |
 //! | `module Point [x, y] { new <- fn (a, b) -> r { .. }; };` | a struct and its functions: a lambda that takes nothing and gives them |
 //! | `call Point::new(u, v) to p;` | the module is used, and that function of it called |

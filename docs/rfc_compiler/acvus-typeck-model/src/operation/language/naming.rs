@@ -23,7 +23,7 @@ use crate::primitive::ty::{PartKey, Shape};
 use crate::primitive::{ItemId, NameId, ScopeId};
 
 use super::super::law::{Looked, Pair, Scribe};
-use super::functions::{Functions, Method, Row};
+use super::functions::{Functions, Method, Row, Used};
 use super::passing::{self, Named, Received};
 use super::{Then, Told, View};
 
@@ -123,12 +123,21 @@ where
             of: vec![call.receiver, call.wanted],
         });
     }
-    let made = scribe.anew(&row.template, call.scope, call.at);
-    let mut pairs: Vec<Pair<K>> = received.pairs.iter().map(|(part, written)| Pair::Classes(*part, made[written])).collect();
-    pairs.push(Pair::Classes(made[&row.result], call.result));
-    let passed = received.passed.iter().map(|(value, written)| (*value, made[written]));
-    let arguments = call.arguments.iter().zip(after_the_receiver).map(|(argument, parameter)| (*argument, made[parameter]));
-    let constraints = passed.chain(arguments).map(|(lower, upper)| Bound::Change { lower, upper }.into()).collect();
+    let Used { classes: made, brands } = row.used(scribe, call.scope, call.at);
+
+    // One type: each part of the receiver the row reads with what the row writes
+    // there, the row's result with the call's, and each brand the row makes
+    // with the one made for this call.
+    let of_the_receiver = received.pairs.iter().map(|(part, written)| Pair::Classes(*part, made[written]));
+    let of_the_result = Pair::Classes(made[&row.result], call.result);
+    let pairs = of_the_receiver.chain([of_the_result]).chain(brands).collect();
+
+    // Passed: a receiver that is a function, to the function type the row
+    // writes for it, and each argument after it, to its parameter.
+    let the_receiver = received.passed.iter().map(|(value, written)| (*value, made[written]));
+    let the_arguments = call.arguments.iter().zip(after_the_receiver).map(|(argument, parameter)| (*argument, made[parameter]));
+    let constraints = the_receiver.chain(the_arguments).map(|(lower, upper)| Bound::Change { lower, upper }.into()).collect();
+
     let called = Adjustment::Row(row.name.clone());
     Looked::Holds {
         pairs,

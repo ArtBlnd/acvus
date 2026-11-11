@@ -32,6 +32,9 @@ row wrap<T, U>: (T, U) -> Pair<T, U>;
 row unit: () -> u8;
 row push<T>: &mut Vec<T>, T -> ();
 row now: -> u64;
+row map<T, U>: Option<T>, Fn(T) -> U -> Option<U>;
+row open<B>: u8 -> Handle<u8, T; B>;
+declare g = Fn() -> Fn(u8, &str) -> F<; b>;
 struct Point {x, y};
 struct Unit {};
 module Point [x, y] { new <- fn (a, b) -> r { x <- a; r <- Point<x, y>; }; x <- u8; };
@@ -45,6 +48,7 @@ call f() to w;
 call a.x::push(b) to w;
 call v::len() to n;
 assert a: Option<u8>;
+assert a: X<X<u8; #0>; #12>;
 assert a.x.*: &mut {x: (), y: Error{V(E)}};
 assert accepted;
 assert refused ..;
@@ -212,6 +216,15 @@ fn what_cannot_be_recorded_is_said_before_anything_is_solved() {
     assert_eq!(run("declare p = Option<p>;", 1), Err(Failed::Unread("`p` is declared as a type that names it".to_owned())));
     assert_eq!(run("row f: a -> u8;", 1), Err(Failed::Unread("a row names the class `a`".to_owned())));
     assert_eq!(run("row f: {integer} -> u8;", 1), Err(Failed::Unread("a row holds a literal".to_owned())));
+    // What stands at a brand is a class in a program and a hole in a row, and a
+    // brand by its number in neither.
+    let a_brand_is_written = Err(Failed::Unread("a brand is written: a call makes one, and an assertion alone writes it".to_owned()));
+    assert_eq!(run("a <- F<; #0>;", 1), a_brand_is_written);
+    assert_eq!(run("row f: u8 -> F<; #0>;", 1), a_brand_is_written);
+    assert_eq!(run("a <- F<; B>;", 1), Err(Failed::Unread("`B` is written at a brand, and a program has no hole".to_owned())));
+    assert_eq!(run("row f<T>: u8 -> F<; B>;", 1), Err(Failed::Unread("`B` is written at a brand, and is no hole of the row".to_owned())));
+    assert_eq!(run("row f: u8 -> F<; b>;", 1), Err(Failed::Unread("a row names the class `b`".to_owned())));
+    assert!(matches!(run("a <- F<; u8>;", 1), Err(Failed::Unread(_))));
 }
 
 #[test]
@@ -765,3 +778,49 @@ fn a_parameter_that_writes_a_function_type_is_called_in_the_body() {
     holds(&format!("module M [k] {{ run <- fn (g: Fn(u8) -> u8, v) -> r {{ call g(v) to r; }}; }}; {f} call f::run(u) to n; assert n: u8;"));
     holds(&format!("h <- fn (g: Fn(u8) -> u8, v) -> r {{ call g(v) to r; }}; {f} c <- char; call h(f, c) to n; assert refused NoChange, ..;"));
 }
+
+// Brands.
+
+const HANDLES: &str = "row open<B>: u8 -> F<; B>; row index_of<B>: &F<; B> -> Idx<; B>; row get<B>: &F<; B>, Idx<; B> -> (); u <- u8;";
+
+/// `open` writes its brand in no parameter, so it makes one: each call makes a
+/// brand of its own, which is a head unlike any other.
+#[test]
+fn a_brand_no_parameter_writes_is_made_anew_by_each_call() {
+    let handles = |program: &str| holds(&format!("{HANDLES} {program}"));
+    handles("call u::open() to a; call u::open() to b; assert a: F<; #0>; assert b: F<; #1>;");
+    handles("call u::open() to a; call u::open() to b; c <- a; c <- b; assert refused Mismatch, ..;");
+    handles("call u::open() to a; c <- a; c <- a; assert c: F<; #0>;");
+    // A hole that is no brand is a hole still, and is what is passed later.
+    holds("row new<T>: u8 -> Vec<T>; row push<T>: &mut Vec<T>, T -> (); u <- u8; call u::new() to v; m <- &mut v; c <- char; call m::push(c) to n; assert v: Vec<char>;");
+}
+
+/// `index_of` and `get` write their brand in a parameter: it is the brand of
+/// what is passed, as any hole is what is passed.
+#[test]
+fn a_brand_a_parameter_writes_is_the_brand_of_what_is_passed() {
+    let handles = |program: &str| holds(&format!("{HANDLES} call u::open() to a; call u::open() to b; ra <- &a; rb <- &b; call ra::index_of() to i; {program}"));
+    handles("assert i: Idx<; #0>;");
+    handles("call ra::get(i) to n; assert n: ();");
+    handles("call rb::get(i) to n; assert refused Mismatch, ..;");
+    handles("call rb::index_of() to j; c <- i; c <- j; assert refused Mismatch, ..;");
+}
+
+/// A call within a copy makes its signature anew, so each call of a lambda
+/// that calls `open` makes a brand.
+#[test]
+fn each_call_of_a_lambda_that_makes_a_brand_makes_one() {
+    let made = |program: &str| holds(&format!("{HANDLES} mk <- fn (x) -> r {{ call x::open() to r; }}; call mk(u) to a; {program}"));
+    made("call mk(u) to b; c <- a; c <- b; assert refused Mismatch, ..;");
+    made("ra <- &a; call ra::index_of() to i; call ra::get(i) to n; assert n: ();");
+}
+
+#[test]
+fn a_type_with_a_brand_stands_where_any_type_does() {
+    holds("row wrap<T, B>: T -> X<T; B>; u <- u8; call u::wrap() to a; call a::wrap() to b; assert b: X<X<u8; #0>; #1>;");
+    // Through a row that is passed through.
+    holds("row open<B>: u8 -> F<; B>; row forget<B>: F<; B> -> G; declare p = G; u <- u8; call u::open() to a; c: pass a to p; assert c takes forget;");
+    // Passed through `open` twice, to two types that are to have one brand.
+    holds("row open<B>: u8 -> F<; B>; declare p = F<; k>; declare q = F<; k>; u <- u8; pass u to p; pass u to q; assert refused Mismatch, ..;");
+}
+

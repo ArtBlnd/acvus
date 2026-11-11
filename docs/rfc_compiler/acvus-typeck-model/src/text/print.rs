@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::ty::{Mutability, Scalar};
 
-use super::ast::{Assertion, Lambda, Op, Path, Program, Segment, Statement, Type, Variant};
+use super::ast::{Assertion, Brand, Lambda, Op, Path, Program, Segment, Statement, Type, Variant};
 
 /// `items`, each written by `write`, with `, ` between them.
 fn separated<I, T, F>(f: &mut Formatter<'_>, items: I, mut write: F) -> fmt::Result
@@ -237,6 +237,16 @@ pub(super) fn scalar(scalar: Scalar) -> &'static str {
     }
 }
 
+impl Display for Brand {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Brand::Class(path) => write!(f, "{path}"),
+            Brand::Hole(hole) => f.write_str(hole),
+            Brand::Made(number) => write!(f, "#{number}"),
+        }
+    }
+}
+
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -274,6 +284,11 @@ impl Display for Type {
             Type::Enum(name, variants) => {
                 f.write_str(name)?;
                 payloads(f, variants)
+            }
+            Type::Branded(name, arguments, brand) => {
+                write!(f, "{name}<")?;
+                separated(f, arguments, |f, argument| write!(f, "{argument}"))?;
+                write!(f, "; {brand}>")
             }
             Type::Fn(parameters, result) => {
                 f.write_str("Fn(")?;

@@ -14,7 +14,9 @@ pub mod template;
 pub mod verify;
 
 use crate::primitive::class::ClassKind;
+use crate::primitive::id::Arena;
 use crate::primitive::scope::Scopes;
+use crate::primitive::{BrandId, ItemId};
 
 /// What is solved: the classes, the scopes they lie in, and the closures named
 /// over them. Solving takes the three together, as each names the others: a
@@ -28,4 +30,6 @@ where
     pub classes: classes::Classes<K>,
     pub scopes: Scopes,
     pub closures: closures::Closures<K>,
+    /// Every brand made, with the item it was made by.
+    pub brands: Arena<BrandId, ItemId>,
 }

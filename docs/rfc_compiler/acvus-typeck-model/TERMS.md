@@ -365,8 +365,8 @@ them, and they are added without changing what is here. What is known to need ru
 A call by name, `x.m(a)`, is ruled below with the rest.
 
 What has been said so far. A lambda, its captures and its calls, a recursive one included, and
-a module, used by its name or by a call on a value of its type, are implemented and written by
-the text; a brand is not.
+a module, used by its name or by a call on a value of its type, and a brand are implemented
+and written by the text.
 
 - **A lambda has two phases, its body and its instantiation.** From outside its body a lambda
   value shows its signature and nothing else; inside, the body stands where it is written.
@@ -501,6 +501,19 @@ the text; a brand is not.
 - **A brand is a generic parameter.** Which brand a returned value has is what the type
   variable of the signature became in that call. There is no brand that is itself a variable
   with a bound.
+- **A function makes the brands its signature writes and no parameter writes.** A brand a
+  parameter writes is the brand of what is passed, as any hole is what is passed: with
+  `index_of<B>(&F<B>) -> Idx<B>` the index has the brand of the argument. Nothing passed can
+  be a brand that no parameter writes, so the function makes it, and each use of the
+  function makes one of its own, decided where the signature is made: with `open<B>() -> F<B>`,
+  `let a = open(); let b = open();` are of two brands, and `if c { a } else { b }` is refused.
+  A brand is a head unlike any other, so two do not join, and were it decided later the two
+  classes would have been merged before. A lambda that calls `open` makes a brand at each
+  call of it, its body being copied.
+- **A type has one brand, and a brand is no type.** A type of a name that has a brand has it
+  at one place. What stands there is a brand a call made, and never a type that is written. A
+  type that has a brand stands wherever a type does, as an argument of another:
+  `X<X<usize, #0>, #1>`.
 - **Recursion: a call of a closure within a copy of it is a call of that copy.** No copy is
   made, and nothing else differs from any call: each argument is passed to the copy's parameter,
   and the result is one type with the copy's result. Which copy that is, is read from the scope
@@ -513,7 +526,6 @@ the text; a brand is not.
 Marked, not ruled:
 
 - A recursion through a class that two lambdas entered.
-- A brand that nothing enters.
 - Two lambdas that meet and are not called: no copy is made where they meet, so results that
   do not depend on a parameter and differ are refused only where the two are called.
 - Whether solving ends: each copy of a definition names a closure anew, which the rule of one

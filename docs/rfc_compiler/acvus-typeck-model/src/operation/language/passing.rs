@@ -40,7 +40,7 @@ use crate::primitive::{ItemId, Name, TemplateId};
 use crate::store::classes::Classes;
 
 use super::super::law::{Looked, Pair, Scribe};
-use super::functions::{Functions, Row};
+use super::functions::{Functions, Row, Used};
 use super::{Then, Told, View};
 
 /// Types as they are written somewhere: in the store being solved, or in a row of
@@ -554,16 +554,18 @@ where
     K: ClassKind<Constraint = Constraint<K>>,
 {
     let scope = scribe.classes().get(scribe.classes().find(argument)).scope;
-    let made: Vec<BTreeMap<TemplateId, K::Id>> = way
-        .rows
-        .iter()
-        .map(|row| scribe.anew(&functions.rows[*row].template, scope, at))
-        .collect();
+    // The signature of each row on the way, made anew.
+    let used: Vec<Used<K>> = way.rows.iter().map(|row| functions.rows[*row].used(scribe, scope, at)).collect();
     let solved = |written: Site<K::Id>| match written {
         Site::Solved(class) => class,
-        Site::Step(step, class) => made[step][&class],
+        Site::Step(step, class) => used[step].classes[&class],
     };
-    let pairs = way.pairs.iter().map(|(a, b)| Pair::Classes(solved(*a), solved(*b))).collect();
+
+    // One type: the parts joined along the way, and each brand a row makes with
+    // the one made for this use of it.
+    let along_the_way = way.pairs.iter().map(|(a, b)| Pair::Classes(solved(*a), solved(*b)));
+    let brands = used.iter().flat_map(|used| used.brands.iter().cloned());
+    let pairs = along_the_way.chain(brands).collect();
     let constraints = way
         .passed
         .iter()

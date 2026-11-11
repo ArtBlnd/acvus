@@ -222,6 +222,12 @@ where
         self.store.closures.name(lambda, captures)
     }
 
+    /// Makes a brand anew, by `at`, and gives a class of it in `scope`.
+    pub fn brand(&mut self, scope: ScopeId, at: ItemId) -> K::Id {
+        let brand = self.store.brands.push(at);
+        self.store.classes.decided(scope, Shape::Brand(brand), BTreeSet::from([at]))
+    }
+
     /// Makes a class with no head in `scope`: one a rule names, for what it
     /// records to be about.
     pub fn undecided(&mut self, scope: ScopeId) -> K::Id {

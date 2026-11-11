@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{ClosureId, Name};
+use super::{BrandId, ClosureId, Name};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Mutability {
@@ -80,6 +80,9 @@ pub enum Shape<P> {
     Struct(Name, Vec<P>),
     /// `N⟨T̄, ι⟩`. Parts: each argument, and the brand type.
     Extern(Name, Vec<P>, P),
+    /// A brand, by its name: what stands at the brand of an [`Shape::Extern`]
+    /// once it is made. Two of two names are two heads, and do not join.
+    Brand(BrandId),
     Scalar(Scalar),
     String,
     Str,
@@ -139,6 +142,7 @@ impl<P> Shape<P> {
             | Shape::String
             | Shape::Str
             | Shape::Unit
+            | Shape::Brand(_)
             | Shape::Never => Vec::new(),
         }
     }
@@ -200,6 +204,7 @@ impl<P> Shape<P> {
             Shape::String => Shape::String,
             Shape::Str => Shape::Str,
             Shape::Unit => Shape::Unit,
+            Shape::Brand(brand) => Shape::Brand(*brand),
             Shape::Never => Shape::Never,
         }
     }

@@ -18,7 +18,7 @@ use crate::operation::settle::settle;
 use crate::primitive::class::{ClassKind, Live, Origin, Side, State, Template};
 use crate::primitive::constraint::{Bound, Constraint, Suspended};
 use crate::primitive::domain::Domain;
-use crate::primitive::id::Arena;
+use crate::primitive::id::{Arena, Id};
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape, Ty, VariantOf};
 use crate::primitive::scope::Scopes;
@@ -26,7 +26,7 @@ use crate::primitive::{ClassId, ItemId, LambdaId, Name, ScopeId, TemplateId};
 use crate::store::Store;
 use crate::store::classes::Classes;
 
-use super::ast::{self, Assertion, Op, Path, Program, Segment, Statement, Type, Variant};
+use super::ast::{self, Assertion, Brand, Op, Path, Program, Segment, Statement, Type, Variant};
 use super::print;
 
 /// A program recorded, and then solved.
@@ -165,23 +165,38 @@ where
     }
 
     /// The class that has the type `ty`, written by `origin`, by `item`.
-    fn class_of(&mut self, ty: &Type, origin: Origin, item: ItemId, label: &str) -> K::Id {
+    fn class_of(&mut self, ty: &Type, origin: Origin, item: ItemId, label: &str) -> Result<K::Id, String> {
         let literal = |writer: &mut Self, scalars: &[Scalar]| {
             let class = writer.undecided();
             let pending = writer.classes.domain(class, Domain(scalars.iter().copied().collect()), item);
             debug_assert_eq!(pending, None, "a class just made is undecided");
             class
         };
+        let part = |writer: &mut Self, part: &Type| writer.class_of(part, origin, item, label);
         let shape = match ty {
-            Type::Class(path) => return self.path(path, Side::Upper, label),
-            Type::Integer => return literal(self, &INTEGERS),
-            Type::Float => return literal(self, &[Scalar::F32, Scalar::F64]),
-            written => shape(written).map(|part| self.class_of(part, origin, item, label)),
+            Type::Class(path) => return Ok(self.path(path, Side::Upper, label)),
+            Type::Integer => return Ok(literal(self, &INTEGERS)),
+            Type::Float => return Ok(literal(self, &[Scalar::F32, Scalar::F64])),
+            Type::Branded(name, arguments, brand) => {
+                let arguments = arguments.iter().map(|argument| part(self, argument)).collect::<Result<_, _>>()?;
+                Shape::Extern(Name::new(name), arguments, self.at_a_brand(brand, label)?)
+            }
+            written => shape(written).try_map(|of| part(self, of))?,
         };
         let by = BTreeSet::from([item]);
-        match origin {
+        Ok(match origin {
             Origin::Free => self.classes.decided(self.scope, shape, by),
             Origin::External => self.classes.external(self.scope, shape, by),
+        })
+    }
+
+    /// The class that stands at a brand the program writes: a class of the
+    /// program, which is one type with the brand a call makes.
+    fn at_a_brand(&mut self, brand: &Brand, label: &str) -> Result<K::Id, String> {
+        match brand {
+            Brand::Class(path) => Ok(self.path(path, Side::Upper, label)),
+            Brand::Hole(hole) => Err(format!("`{hole}` is written at a brand, and a program has no hole")),
+            Brand::Made(_) => Err(A_BRAND_IS_WRITTEN.to_owned()),
         }
     }
 
@@ -274,7 +289,7 @@ where
                 parameters.push(variable);
                 continue;
             };
-            let declared = body.class_of(ty, Origin::External, item, label);
+            let declared = body.class_of(ty, Origin::External, item, label)?;
             body.classes.constrain(
                 Bound::Enter {
                     lower: declared,
@@ -408,7 +423,7 @@ where
         match op {
             Op::Enter { upper, lower, alone } => {
                 let item = self.items.item(label.to_owned());
-                let lower = self.class_of(lower, Origin::Free, item, label);
+                let lower = self.class_of(lower, Origin::Free, item, label)?;
                 let upper = self.path(upper, Side::Lower, label);
                 let constraint = if *alone {
                     Suspended::Alone { lower, upper }.into()
@@ -580,8 +595,11 @@ impl Recorded {
             Shape::String => "String".to_owned(),
             Shape::Str => "str".to_owned(),
             Shape::Never => "!".to_owned(),
-            // The text writes none of these, so no class it records has one.
-            other @ (Shape::Fn(..) | Shape::FnValue(_) | Shape::Extern(..)) => format!("{:?}", other.layer()),
+            Shape::Extern(name, arguments, brand) => format!("{}<{}; {}>", name.0, listed(arguments), at(brand)),
+            Shape::Brand(brand) => format!("#{}", brand.index()),
+            Shape::Fn(parameters, result) => format!("Fn({}) -> {}", listed(parameters), at(result)),
+            // The text writes no function value.
+            other @ Shape::FnValue(_) => format!("{:?}", other.layer()),
         }
     }
 
@@ -657,6 +675,9 @@ fn key(segment: &Segment) -> PartKey {
     }
 }
 
+/// Why a program that writes a brand by its number is no program to record.
+const A_BRAND_IS_WRITTEN: &str = "a brand is written: a call makes one, and an assertion alone writes it";
+
 /// The head `ty` writes, with the types of its parts. A path and a literal write
 /// no head: each gives a class of its own.
 fn shape(ty: &Type) -> Shape<&Type> {
@@ -665,6 +686,7 @@ fn shape(ty: &Type) -> Shape<&Type> {
     }
     match ty {
         Type::Class(_) | Type::Integer | Type::Float => unreachable!("a path and a literal write no head"),
+        Type::Branded(..) => unreachable!("a brand is no type, and is written by whoever writes the type"),
         Type::Never => Shape::Never,
         Type::Scalar(scalar) => Shape::Scalar(*scalar),
         Type::String => Shape::String,
@@ -692,6 +714,16 @@ fn signature(ty: &Type, holes: &[String]) -> Result<Ty, String> {
         Type::Class(path) => Err(format!("a row names the class `{path}`")),
         Type::Integer | Type::Float => Err("a row holds a literal".to_owned()),
         Type::Named(name, arguments) if arguments.is_empty() && holes.contains(name) => Ok(Ty::Hole(Name::new(name))),
+        Type::Branded(name, arguments, brand) => {
+            let arguments = arguments.iter().map(|argument| signature(argument, holes)).collect::<Result<_, _>>()?;
+            let brand = match brand {
+                Brand::Hole(hole) if holes.contains(hole) => Ty::Hole(Name::new(hole)),
+                Brand::Hole(hole) => return Err(format!("`{hole}` is written at a brand, and is no hole of the row")),
+                Brand::Class(path) => return Err(format!("a row names the class `{path}`")),
+                Brand::Made(_) => return Err(A_BRAND_IS_WRITTEN.to_owned()),
+            };
+            Ok(Ty::Node(Box::new(Shape::Extern(Name::new(name), arguments, brand))))
+        }
         written => Ok(Ty::Node(Box::new(shape(written).try_map(|part| signature(part, holes))?))),
     }
 }
@@ -720,7 +752,7 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
         return Err(format!("`{unknown}` is no module"));
     }
     let Recorded {
-        store: Store { classes, scopes, closures },
+        store: Store { classes, scopes, closures, .. },
         law: Language { functions, lambdas, structs },
         outcome,
         items,
@@ -772,7 +804,7 @@ fn declare(writer: &mut Writer<'_, Live>, structs: &mut BTreeMap<Name, Vec<Name>
                 return Err(format!("`{name}` is declared twice"));
             }
             let item = writer.items.item(label.to_owned());
-            let class = writer.class_of(ty, Origin::External, item, label);
+            let class = writer.class_of(ty, Origin::External, item, label)?;
             // Writing the type made a class of the name where the type names
             // it: a declaration writes a finite type, and none that holds
             // itself.

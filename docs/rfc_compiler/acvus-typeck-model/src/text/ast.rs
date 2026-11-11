@@ -168,6 +168,19 @@ pub enum Variant {
     Enum(String, String),
 }
 
+/// What is written at the brand of a type. A brand is no type: it is made by a
+/// call, so what stands there is what it is one type with, or its number.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Brand {
+    /// `b`: a class of the program.
+    Class(Path),
+    /// `B`: a hole of the row.
+    Hole(String),
+    /// `#0`: a brand a call made, by its number in the order they are made. An
+    /// assertion alone writes one.
+    Made(usize),
+}
+
 /// A type as the text writes one. Where a class is to be given, a type gives the
 /// class that has it: a path gives its class, a literal a class of its own, and
 /// any other a class with that head, whose parts are the classes its parts give.
@@ -205,6 +218,8 @@ pub enum Type {
     Object(BTreeMap<String, Type>),
     /// `E{V(T), W(U)}`
     Enum(String, BTreeMap<String, Type>),
+    /// `N<T, U; b>`: a type of a name that has a brand, which is written last.
+    Branded(String, Vec<Type>, Brand),
     /// `Fn(T, U) -> R`
     Fn(Vec<Type>, Box<Type>),
     /// `N`, `N<T, U>`: a type of a name, or, in a row, one of its holes.

@@ -45,6 +45,9 @@ id! {
     LambdaId,
     /// A name a function is called by.
     NameId,
+    /// A brand: what a call of a function that makes one made, unlike what any
+    /// other call made.
+    BrandId,
     /// The text of a body or a lambda, or one iteration of a loop.
     ScopeId,
 }
