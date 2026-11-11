@@ -25,6 +25,10 @@ pub enum Giving {
 /// was decided. `at` is the item a decision goes by, and `visit` gives the
 /// classes in the order they are asked in, which the outcome does not depend on.
 ///
+/// That nothing more is to come is true of a class of a body that is finished,
+/// and of none of a frozen one ([`Store::is_frozen`]), so it gives no head to
+/// those.
+///
 /// What is held is found once ([`Classes::deciding`]), the law says which classes
 /// not held take which heads, and each is given through the one way a class is
 /// decided. A head decided has the class's own parts, so what the law gives
@@ -39,6 +43,9 @@ where
 {
     let mut undecided = asked(&store.classes, visit);
     undecided.retain(|class| !store.classes.is_decided(*class));
+    if giving == Giving::NothingMoreToCome {
+        undecided.retain(|class| !store.is_frozen(*class));
+    }
     let mut deciding = store.classes.deciding();
     let held = |class| deciding.is_held(class);
     let Heads { heads, refused } = match giving {

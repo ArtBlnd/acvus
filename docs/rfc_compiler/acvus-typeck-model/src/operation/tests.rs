@@ -1502,6 +1502,93 @@ fn parts_made_one_because_what_holds_them_is_one_are_refused_naming_what_made_th
     assert!(named.is_superset(&passings), "{named:?} names {passings:?}");
 }
 
+// A frozen body: what is recorded gives its classes their heads, and it is not
+// finished. A class of it takes no head because nothing more is to come to it,
+// and is not refused for having none.
+
+/// A class of a frozen body, nothing entering it.
+fn of_a_frozen_body(world: &mut World) -> ClassId {
+    let scope = world.store.scopes.frozen_child(world.store.scopes.root());
+    let class = world.store.classes.undecided(scope);
+    world.open.push(class);
+    class
+}
+
+#[test]
+fn a_class_of_a_frozen_body_that_nothing_enters_has_no_head_and_is_not_refused() {
+    let mut world = World::new();
+    let frozen = of_a_frozen_body(&mut world);
+    // The same of a body that is finished is `!`.
+    let finished = world.undecided();
+    world.settle(&Language::default());
+    assert_eq!(world.outcome_of(frozen), "?");
+    assert_eq!(world.ty(finished), "!");
+}
+
+#[test]
+fn what_enters_a_class_of_a_frozen_body_gives_it_its_head() {
+    let mut world = World::new();
+    let frozen = of_a_frozen_body(&mut world);
+    let value = world.text(U8);
+    world.enter(value, frozen);
+    world.settle(&Language::default());
+    assert_eq!(world.outcome_of(frozen), "u8");
+}
+
+#[test]
+fn a_class_of_a_frozen_body_bound_to_a_declared_class_takes_its_head() {
+    let mut world = World::new();
+    let frozen = of_a_frozen_body(&mut world);
+    let declared = world.external(U8);
+    world.record(Bound::Equal { lower: frozen, upper: declared }.into());
+    world.settle(&Language::default());
+    assert_eq!(world.outcome_of(frozen), "u8");
+}
+
+/// What a class is passed to gives it a head only where nothing more is to come
+/// to it, and more is to come to a class of a frozen body.
+#[test]
+fn a_class_of_a_frozen_body_takes_no_head_from_what_it_is_passed_to() {
+    let mut world = World::new();
+    let frozen = of_a_frozen_body(&mut world);
+    let declared = world.external(U8);
+    world.record(Bound::Change { lower: frozen, upper: declared }.into());
+    // The same of a body that is finished takes `u8`.
+    let finished = world.undecided();
+    world.record(Bound::Change { lower: finished, upper: declared }.into());
+    world.settle(&Language::default());
+    assert_eq!(world.outcome_of(frozen), "?");
+    assert_eq!(world.ty(finished), "u8");
+}
+
+#[test]
+fn a_literal_of_a_frozen_body_does_not_fall_back() {
+    let mut world = World::new();
+    let scope = world.store.scopes.frozen_child(world.store.scopes.root());
+    let frozen = world.store.classes.undecided(scope);
+    world.open.push(frozen);
+    let at = world.items.push("literal");
+    assert_eq!(world.store.classes.domain(frozen, Domain(INTEGERS.into_iter().collect()), at), None);
+    let finished = world.literal(&INTEGERS);
+    world.settle(&Language::default());
+    assert_eq!(world.outcome_of(frozen), "?");
+    assert_eq!(world.ty(finished), "i32");
+}
+
+/// That a class is a part of itself is so by what is recorded, whatever is still
+/// to come.
+#[test]
+fn a_class_of_a_frozen_body_that_is_its_own_part_is_refused() {
+    let mut world = World::new();
+    let frozen = of_a_frozen_body(&mut world);
+    let by = world.items.push("written");
+    let scope = world.store.classes.get(world.store.classes.find(frozen)).scope;
+    let holds_itself = world.store.classes.decided(scope, Shape::Option(frozen), BTreeSet::from([by]));
+    world.enter(holds_itself, frozen);
+    world.settle(&Language::default());
+    assert_eq!(world.outcome_of(frozen), "refused: Occurs");
+}
+
 // The contracts admit any law: a law that is not the language's runs through the
 // same three operations.
 
@@ -1563,6 +1650,10 @@ impl Law<Live> for Odd {
         };
         let ladder: [&dyn Fn(ClassId) -> Offer<Live>; 1] = [&only];
         Heads::of_ladder(ladder, asked, held)
+    }
+
+    fn amiss(&self, _: &Classes<Live>, _: ClassId) -> Vec<Refused<Live>> {
+        Vec::new()
     }
 
     fn end(&self, _: &Classes<Live>, _: ClassId) -> Vec<Refused<Live>> {

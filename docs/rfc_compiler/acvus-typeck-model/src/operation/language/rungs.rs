@@ -506,8 +506,39 @@ where
     }
 }
 
-/// What is refused of `class` when nothing more can be done: a class that is a
-/// part of itself has no finite type, and a class still undecided has no type.
+/// The items that named a part on `class`, where it is undecided.
+fn named_on<K>(classes: &Classes<K>, class: K::Id) -> BTreeSet<ItemId>
+where
+    K: ClassKind,
+{
+    match &classes.get(classes.find(class)).state {
+        State::Undecided(undecided) => undecided
+            .parts
+            .values()
+            .flat_map(|part| part.lower.iter().chain(&part.upper).chain(&part.carried).copied())
+            .collect(),
+        State::Decided(_) => BTreeSet::new(),
+    }
+}
+
+/// What is refused of `class` by what is recorded of it: a class that is a part
+/// of itself has no finite type, whatever is still to come to it.
+pub fn amiss<K>(classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>>
+where
+    K: ClassKind,
+{
+    if !classes.is_own_part(class) {
+        return Vec::new();
+    }
+    vec![Refused {
+        cause: Cause::Occurs,
+        items: named_on(classes, class),
+        of: vec![class],
+    }]
+}
+
+/// What is refused of `class` where nothing more is to come to it: a class still
+/// undecided has no type.
 ///
 /// A class that heads are asked of, none of which it may take, is undecided for
 /// that: a head asked is passed over where it may not be taken, as another may
@@ -516,33 +547,16 @@ pub fn end<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Vec<
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    let root = classes.find(class);
-    let named: BTreeSet<ItemId> = match &classes.get(root).state {
-        State::Undecided(undecided) => undecided
-            .parts
-            .values()
-            .flat_map(|part| part.lower.iter().chain(&part.upper).chain(&part.carried).copied())
-            .collect(),
-        State::Decided(_) => BTreeSet::new(),
+    let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
+        return Vec::new();
     };
-    let mut refusals = Vec::new();
-    if classes.is_own_part(class) {
-        refusals.push(Refused {
-            cause: Cause::Occurs,
-            items: named.clone(),
-            of: vec![class],
-        });
-    }
-    if let State::Undecided(undecided) = &classes.get(root).state {
-        let constraints = classes.constraints_of(class).map(|(_, at)| *at);
-        let domains = undecided.domains.iter().map(|(_, at)| *at);
-        let said = Said::of(classes, functions, class);
-        let cause = if said.may_take_none_of_what_is_asked() { Cause::EmptyDomain } else { Cause::UndecidedClass };
-        refusals.push(Refused {
-            cause,
-            items: constraints.chain(named.iter().copied()).chain(domains).collect(),
-            of: vec![class],
-        });
-    }
-    refusals
+    let constraints = classes.constraints_of(class).map(|(_, at)| *at);
+    let domains = undecided.domains.iter().map(|(_, at)| *at);
+    let said = Said::of(classes, functions, class);
+    let cause = if said.may_take_none_of_what_is_asked() { Cause::EmptyDomain } else { Cause::UndecidedClass };
+    vec![Refused {
+        cause,
+        items: constraints.chain(named_on(classes, class)).chain(domains).collect(),
+        of: vec![class],
+    }]
 }

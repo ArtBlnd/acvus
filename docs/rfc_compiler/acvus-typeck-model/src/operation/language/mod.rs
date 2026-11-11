@@ -114,6 +114,10 @@ where
         rungs::fallback(classes, &self.functions, asked, held)
     }
 
+    fn amiss(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>> {
+        rungs::amiss(classes, class)
+    }
+
     fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>> {
         rungs::end(classes, &self.functions, class)
     }

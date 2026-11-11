@@ -27,7 +27,9 @@ use super::law::{Law, Pair};
 /// ```
 ///
 /// The first two take what is recorded as far as it goes, whatever is still to come.
-/// The last two finish it: they are right only of what nothing more is to come to.
+/// The last two finish it: they are right only of what nothing more is to come to,
+/// and so are done of the classes of a body that is finished, and of none of a
+/// frozen one ([`Store::is_frozen`]).
 ///
 /// A constraint is awake when it is recorded, and when a class it waits on is merged
 /// or decided, so nothing is looked at that nothing has happened to. A class is
@@ -62,6 +64,13 @@ where
         }
     }
     for class in asked(&store.classes, visit) {
+        for refused in law.amiss(&store.classes, class) {
+            outcome.refuse(refused);
+        }
+        // A class of a frozen body may yet be given its head, where the body is used.
+        if store.is_frozen(class) {
+            continue;
+        }
         for refused in law.end(&store.classes, class) {
             outcome.refuse(refused);
         }
