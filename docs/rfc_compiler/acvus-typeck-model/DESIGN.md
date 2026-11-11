@@ -117,11 +117,6 @@ constraint nothing has happened to is not looked at again.
   after the refusal. The orders the tests run differ in which class is asked first, and not
   in which constraint is looked at first.
 - **A function value passed to a function type a row writes**, left as a `todo`.
-- **That an argument is passed to a parameter of a lambda and does not enter it.** A parameter
-  of a lambda writes no type, and a hole takes what comes as it comes; two arguments of one
-  parameter, as a recursion gives, are then one class that joins what enters it, as it would
-  were they to enter. A declared function's parameter writes a type, and there the two are
-  told apart and tested.
 - **That solving ends.** A call within a copy of what it calls makes no copy, and making one
   there does not end; but each copy names the closures its body defines anew, and that no
   chain of those goes on without end is argued and not tested.

@@ -32,7 +32,10 @@ row wrap<T, U>: (T, U) -> Pair<T, U>;
 row unit: () -> u8;
 row push<T>: &mut Vec<T>, T -> ();
 row now: -> u64;
+struct Point {x, y};
+struct Unit {};
 f <- fn () -> r { };
+f <- fn (x: &Vec<a>, y, z: u8) -> r { };
 f.x <- fn [a, b] (x, y) -> r { a <- Option<x>; first: r <- y; g <- fn [x] () -> s { s <- x; }; call g() to r; };
 call f(a, b.x) to w.0;
 call f() to w;
@@ -421,4 +424,67 @@ fn a_function_of_a_name_is_told_from_another_below_the_head_of_the_receiver() {
 fn an_argument_is_passed_to_a_parameter_that_writes_a_type_and_does_not_enter_it() {
     // `&&u8` is passed to `&u8`, read through; it does not enter it.
     holds("row put: &mut Vec<u8>, &u8 -> (); v <- Vec<u8>; y <- u8; r <- &y; x <- &r; c: call v::put(x) to n; assert n: ();");
+}
+
+// A parameter that writes a type.
+
+#[test]
+fn what_is_passed_to_a_parameter_that_writes_a_type_is_passed_as_to_a_declared_type() {
+    let f = "f <- fn (x: &u8) -> r { r <- x; };";
+    holds(&format!("{f} v <- u8; a <- &mut v; call f(a) to m; assert m: &u8;"));
+    // Read through, which what enters is not.
+    holds(&format!("{f} v <- u8; a <- &v; b <- &a; call f(b) to m; assert m: &u8;"));
+    holds(&format!("{f} a <- char; call f(a) to m; assert refused NoChange, ..;"));
+    // Lent to no parameter but a receiver's.
+    holds(&format!("{f} a <- u8; call f(a) to m; assert refused NoChange, ..;"));
+    holds("f <- fn (x: &mut u8) -> r { r <- u8; }; v <- u8; a <- &v; call f(a) to m; assert refused NoChange, ..;");
+    holds("f <- fn (x: u8) -> r { r <- x; }; a <- {integer}; call f(a) to m; assert m: u8; assert a: u8;");
+}
+
+#[test]
+fn the_type_a_parameter_writes_names_classes_of_the_lambda() {
+    holds("f <- fn [t] (x: Option<t>) -> r { r <- x; }; t <- u8; a <- Option<u8>; call f(a) to m; assert m: Option<u8>;");
+    let f = "f <- fn (y, x: Option<y>) -> r { r <- x; };";
+    holds(&format!("{f} b <- u8; a <- Option<u8>; call f(b, a) to m; assert m: Option<u8>;"));
+    holds(&format!("{f} b <- char; a <- Option<u8>; call f(b, a) to m; assert refused ..;"));
+}
+
+#[test]
+fn a_parameter_that_writes_a_type_is_read_in_the_body_as_a_value_of_it() {
+    holds("f <- fn (s: &{x: u8}) -> r { r <- s.x; }; o <- {x: u8}; a <- &o; call f(a) to m; assert m: u8;");
+}
+
+// The fields of a struct.
+
+#[test]
+fn a_field_of_a_struct_is_its_type_parameter_at_the_place_the_struct_declares() {
+    let point = |program: &str| holds(&format!("struct Point {{x, y}}; {program}"));
+    point("p <- Point<u8, char>; a <- p.x; b <- p.y; assert a: u8; assert b: char;");
+    point("v <- p.x; p <- Point<u8, char>; assert v: u8;");
+    point("p <- Point<u8, char>; r <- &p; rr <- &r; c: b <- rr.y; assert b: char; assert c at rr.y takes Deref, Deref;");
+    point("p <- Point<t, char>; p.x <- u8; assert p: Point<u8, char>;");
+    point("p <- Point<u8, char>; p.x <- bool; assert refused ..;");
+    point("p <- Point<u8, char>; a <- p.z; assert refused NotHeld;");
+    point("p <- Point<u8, char>; a <- p.0; assert refused NotHeld;");
+    point("p <- Other<u8>; a <- p.x; assert refused NotHeld;");
+    point("f <- fn (s: &Point<a, b>) -> r { r <- s.x; }; p <- Point<u8, char>; q <- &p; call f(q) to m; assert m: u8;");
+}
+
+#[test]
+fn a_struct_declared_twice_or_with_one_field_twice_is_no_program() {
+    let unread = |text: &str| match run(text, 1) {
+        Err(Failed::Unread(why)) => why,
+        other => panic!("`{text}` is read: {other:?}"),
+    };
+    assert!(unread("struct P {x}; struct P {y};").contains("the struct `P` is declared twice"));
+    assert!(unread("struct P {x, x};").contains("the struct `P` has the field `x` twice"));
+    assert!(unread("f <- fn () -> r { struct P {x}; };").contains("a declaration is written where a statement is"));
+}
+
+#[test]
+fn a_field_of_a_struct_found_through_a_reference_decided_already_takes_the_way_there() {
+    holds(
+        "struct Point {x, y}; o <- {f: a}; o <- {f: &Point<u8, char>};
+         c: b <- a.y; assert b: char; assert c at a.y takes Deref;",
+    );
 }

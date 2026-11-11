@@ -163,6 +163,9 @@ pub enum Place {
     /// It is the part of that name of the head's part `through`, and each
     /// projection that named it takes `adjustment`.
     Within { through: PartKey, adjustment: Adjustment },
+    /// It is the head's own part of the key `at`, which the head names
+    /// otherwise.
+    At(PartKey),
     Nowhere,
 }
 

@@ -93,8 +93,9 @@ where
 }
 
 /// Follows the law from `class` through each part it says `key` lies within, to
-/// the first class that has a part of that name: that part, named there by
-/// `projections`, and the adjustment each step takes. None where the law says the
+/// the first class that has a part of that name, or whose head the law says has
+/// it under another key: that part, named there by `projections`, and the
+/// adjustment each step takes. None where the law says the
 /// part lies nowhere.
 fn through<K, L>(classes: &mut Classes<K>, law: &L, class: K::Id, key: &PartKey, projections: &[ItemId]) -> Option<(K::Id, Vec<Adjustment>)>
 where
@@ -106,8 +107,10 @@ where
     let mut at = class;
     loop {
         let head = decided(classes, at);
-        let Place::Within { through, adjustment } = law.place(&head, key) else {
-            return None;
+        let (through, adjustment) = match law.place(&head, key) {
+            Place::Within { through, adjustment } => (through, adjustment),
+            Place::At(own) => return head.place(&own).map(|found| (*found, adjustments)),
+            Place::Nowhere => return None,
         };
         let owner = *head.place(&through)?;
         adjustments.push(adjustment);

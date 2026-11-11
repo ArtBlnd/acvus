@@ -434,6 +434,14 @@ implemented and written by the text; a module and a brand are not.
   gives, to the type the parameter writes. A parameter that writes none is a hole, which takes
   what comes as it comes, so the argument and the parameter are one type. Nothing enters in a
   call; a value enters where it flows into a variable.
+- **A parameter may write a type, and a struct's field is its type parameter.** What is passed
+  to a parameter that writes a type is passed as to a declared type, with what the language
+  gives: `&&u8` is passed to `x: &u8`, read through, and `u8` is not, a lend being a
+  receiver's alone. In the body the parameter is a variable that the declared value enters.
+  The type a parameter writes names classes of the lambda, a capture or another parameter. A
+  struct declares its fields in an order, and its type has one parameter for each: a field
+  named on a value of the struct is the parameter at the field's place, found through
+  references as any part is.
 - **A call by name calls the one function of that name the receiver goes to.** The functions
   of a name are rows of the one table of declared functions, which have one parameter or
   several. In `x.m(a)` the receiver `x` goes to the first parameter of a row as any argument is

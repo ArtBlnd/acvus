@@ -123,6 +123,11 @@ impl Display for Op {
                 }
                 write!(f, " -> {result}")
             }
+            Op::Struct { name, fields } => {
+                write!(f, "struct {name} {{")?;
+                separated(f, fields, |f, field| f.write_str(field))?;
+                f.write_str("}")
+            }
             Op::Define { upper, lambda } => write!(f, "{upper} <- {lambda}"),
             Op::CallNamed {
                 receiver,
@@ -156,7 +161,10 @@ impl Display for Lambda {
             f.write_str("] ")?;
         }
         f.write_str("(")?;
-        separated(f, &self.parameters, |f, parameter| f.write_str(parameter))?;
+        separated(f, &self.parameters, |f, parameter| match &parameter.ty {
+            Some(ty) => write!(f, "{}: {ty}", parameter.name),
+            None => f.write_str(&parameter.name),
+        })?;
         write!(f, ") -> {} {{", self.result)?;
         for statement in &self.body {
             write!(f, " {statement}")?;

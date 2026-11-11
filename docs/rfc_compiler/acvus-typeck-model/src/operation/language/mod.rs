@@ -25,7 +25,7 @@ pub mod rungs;
 
 use std::collections::BTreeMap;
 
-use crate::primitive::ItemId;
+use crate::primitive::{ItemId, Name};
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::constraint::{Bound, Constraint, ConstraintOf, Suspended};
 use crate::primitive::class::{ClassKind, State};
@@ -36,12 +36,15 @@ use crate::store::classes::Classes;
 
 use super::law::{Heads, Law, Looked, Pair, Place, Scribe};
 
-/// The rules of the language, with the functions declared from outside and the
-/// lambdas the text writes.
+/// The rules of the language, with the functions declared from outside, and the
+/// lambdas and the structs the text writes.
 #[derive(Clone, Debug, Default)]
 pub struct Language {
     pub functions: functions::Functions,
     pub lambdas: lambdas::Lambdas,
+    /// The fields of each struct, in the order it declares them: the type of the
+    /// field at a place is the struct's type parameter at that place.
+    pub structs: BTreeMap<Name, Vec<Name>>,
 }
 
 impl<K> Law<K> for Language
@@ -82,12 +85,19 @@ where
 
     /// A part named on a reference is the part of that name of what it refers to,
     /// read through it. The target is the one part a reference has a place for.
+    ///
+    /// A field named on a struct is the struct's type parameter at the place its
+    /// declaration gives the field.
     fn place(&self, head: &Shape<K::Id>, key: &PartKey) -> Place {
-        match head {
-            Shape::Ref(..) if *key != PartKey::Target => Place::Within {
+        match (head, key) {
+            (Shape::Ref(..), key) if *key != PartKey::Target => Place::Within {
                 through: PartKey::Target,
                 adjustment: Adjustment::Deref,
             },
+            (Shape::Struct(name, _), PartKey::Field(field)) => {
+                let declared = self.structs.get(name).and_then(|fields| fields.iter().position(|of| of == field));
+                declared.map_or(Place::Nowhere, |at| Place::At(PartKey::Arg(at)))
+            }
             _ => Place::Nowhere,
         }
     }

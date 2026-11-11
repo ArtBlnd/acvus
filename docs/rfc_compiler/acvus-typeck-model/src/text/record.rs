@@ -188,9 +188,14 @@ where
         );
     }
 
-    /// Writes the template of `lambda`, and gives it with the classes written
-    /// here that it captures.
-    fn lambda(&mut self, lambda: &ast::Lambda, label: &str) -> Result<(LambdaId, Vec<K::Id>), String> {
+    /// Writes the template of `lambda`, by `item`, and gives it with the classes
+    /// written here that it captures.
+    ///
+    /// The name of a parameter is a variable of the body. A parameter that writes
+    /// no type is that variable, a hole. One that writes a type is the class a
+    /// declaration writes, which what is passed is passed to, and which enters
+    /// the variable, as a declared value enters what it is assigned to.
+    fn lambda(&mut self, lambda: &ast::Lambda, item: ItemId, label: &str) -> Result<(LambdaId, Vec<K::Id>), String> {
         let mut template = Classes::<Template>::default();
         let mut names = BTreeMap::new();
         let scope = self.scope;
@@ -206,7 +211,8 @@ where
             Ok(classes)
         };
         let captures = open(&lambda.captures)?;
-        let parameters = open(&lambda.parameters)?;
+        let named: Vec<String> = lambda.parameters.iter().map(|parameter| parameter.name.clone()).collect();
+        let variables = open(&named)?;
         let result = open(std::slice::from_ref(&lambda.result))?[0];
 
         let (mut made, mut not_held, mut defines) = (Vec::new(), Vec::new(), Vec::new());
@@ -231,6 +237,23 @@ where
             lambdas: &mut *self.lambdas,
             define: &mut define,
         };
+        let mut parameters = Vec::new();
+        for (parameter, variable) in lambda.parameters.iter().zip(variables) {
+            let Some(ty) = &parameter.ty else {
+                parameters.push(variable);
+                continue;
+            };
+            let declared = body.class_of(ty, Origin::External, item, label);
+            body.classes.constrain(
+                Bound::Enter {
+                    lower: declared,
+                    upper: variable,
+                }
+                .into(),
+                item,
+            );
+            parameters.push(declared);
+        }
         for (index, statement) in lambda.body.iter().enumerate() {
             let label = statement.label.clone().unwrap_or_else(|| format!("{label}.{}", index + 1));
             body.statement(&statement.op, &label)?;
@@ -277,7 +300,7 @@ where
             }
             Op::Define { upper, lambda } => {
                 let item = self.items.item(label.to_owned());
-                let (written, captured) = self.lambda(lambda, label)?;
+                let (written, captured) = self.lambda(lambda, item, label)?;
                 let value = (self.define)(self.classes, written, captured, item);
                 let upper = self.path(upper, Side::Lower, label);
                 self.classes.constrain(Bound::Enter { lower: value, upper }.into(), item);
@@ -319,7 +342,7 @@ where
                     item,
                 );
             }
-            Op::Declare { .. } | Op::Row { .. } => return Err("a declaration is written where a statement is".to_owned()),
+            Op::Declare { .. } | Op::Row { .. } | Op::Struct { .. } => return Err("a declaration is written where a statement is".to_owned()),
         }
         Ok(())
     }
@@ -551,7 +574,7 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
         .collect();
     let Recorded {
         store: Store { classes, scopes, closures },
-        law: Language { functions, lambdas },
+        law: Language { functions, lambdas, structs },
         outcome,
         items,
         names,
@@ -577,10 +600,10 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
         define: &mut define,
     };
     for (statement, label) in program.statements.iter().zip(&labelled) {
-        declare(&mut writer, scopes, &statement.op, label)?;
+        declare(&mut writer, structs, scopes, &statement.op, label)?;
     }
     for (statement, label) in program.statements.iter().zip(&labelled) {
-        if !matches!(statement.op, Op::Declare { .. } | Op::Row { .. }) {
+        if !matches!(statement.op, Op::Declare { .. } | Op::Row { .. } | Op::Struct { .. }) {
             writer.statement(&statement.op, label)?;
         }
     }
@@ -590,9 +613,10 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
     Ok(recorded)
 }
 
-/// Records what a declaration writes: a class of the name it declares, or a row
-/// of the table of functions. Any other statement declares nothing.
-fn declare(writer: &mut Writer<'_, Live>, scopes: &Scopes, op: &Op, label: &str) -> Result<(), String> {
+/// Records what a declaration writes: a class of the name it declares, a row of
+/// the table of functions, or the fields of a struct. Any other statement
+/// declares nothing.
+fn declare(writer: &mut Writer<'_, Live>, structs: &mut BTreeMap<Name, Vec<Name>>, scopes: &Scopes, op: &Op, label: &str) -> Result<(), String> {
     match op {
         Op::Declare { name, ty } => {
             if writer.names.contains_key(name) {
@@ -617,6 +641,15 @@ fn declare(writer: &mut Writer<'_, Live>, scopes: &Scopes, op: &Op, label: &str)
             let parameters = parameters.iter().map(|parameter| signature(parameter, holes)).collect::<Result<Vec<_>, _>>()?;
             let result = signature(result, holes)?;
             writer.functions.declare(Name::new(name), &parameters, &result, scopes, item);
+        }
+        Op::Struct { name, fields } => {
+            let named: Vec<Name> = fields.iter().map(Name::new).collect();
+            if let Some(twice) = fields.iter().enumerate().find_map(|(at, field)| fields[..at].contains(field).then_some(field)) {
+                return Err(format!("the struct `{name}` has the field `{twice}` twice"));
+            }
+            if structs.insert(Name::new(name), named).is_some() {
+                return Err(format!("the struct `{name}` is declared twice"));
+            }
         }
         Op::Enter { .. } | Op::Pass { .. } | Op::Exit { .. } | Op::Define { .. } | Op::Call { .. } | Op::CallNamed { .. } => {}
     }

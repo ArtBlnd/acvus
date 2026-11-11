@@ -70,6 +70,9 @@ pub enum Op {
         parameters: Vec<Type>,
         result: Type,
     },
+    /// `struct Name { fields };`: a struct, whose type `Name<T, U>` has one type
+    /// parameter for each field, in their order.
+    Struct { name: String, fields: Vec<String> },
     /// `upper <- fn [captures] (parameters) -> result { body };`: the function
     /// value of a closure of the lambda enters `upper`.
     Define { upper: Path, lambda: Lambda },
@@ -98,11 +101,19 @@ pub struct Lambda {
     /// The names of the classes captured, each a name where the lambda is
     /// written.
     pub captures: Vec<String>,
-    pub parameters: Vec<String>,
+    pub parameters: Vec<Parameter>,
     pub result: String,
     /// A body declares nothing: what a declaration writes comes from outside
     /// the text.
     pub body: Vec<Statement>,
+}
+
+/// A parameter of a lambda: `x`, which takes what is passed as it comes, or
+/// `x: T`, to which what is passed is passed as to a declared type.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Parameter {
+    pub name: String,
+    pub ty: Option<Type>,
 }
 
 /// A class: one a name stands for, or a part of one, named by each segment in
