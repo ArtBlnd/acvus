@@ -216,6 +216,16 @@ impl<P> Shape<P> {
         })
     }
 
+    /// As [`Shape::map`], where `f` may fail: the first failure, and no shape.
+    pub fn try_map<Q, E, F>(&self, f: F) -> Result<Shape<Q>, E>
+    where
+        F: FnMut(&P) -> Result<Q, E>,
+    {
+        let parts: Vec<Q> = self.places().into_iter().map(|(_, part)| part).map(f).collect::<Result<_, _>>()?;
+        let mut parts = parts.into_iter();
+        Ok(self.map(|_| parts.next().expect("`map` visits the parts `places` names, in its order")))
+    }
+
     /// The constructor and members alone. Two shapes are of one layer where
     /// these are equal, whatever their parts.
     pub fn layer(&self) -> Shape<()> {
@@ -338,10 +348,10 @@ mod tests {
         assert_eq!(SHARED.join(SHARED), SHARED);
     }
 
-    /// `map_keyed` pairs keys with parts by the order `map` and `places` visit
-    /// them in, which is one order for every shape of several parts.
+    /// `map_keyed` and `try_map` pair what `places` gives with what `map` visits
+    /// by their order, which is one order for every shape of several parts.
     #[test]
-    fn a_keyed_map_gives_each_part_the_key_places_names_it_by() {
+    fn map_and_places_visit_the_parts_of_a_shape_in_one_order() {
         let named = |names: &[&str]| names.iter().zip(0u32..).map(|(name, part)| (Name::new(*name), part)).collect::<BTreeMap<_, _>>();
         let shapes = [
             Shape::Tuple(vec![0, 1, 2]),
@@ -355,6 +365,8 @@ mod tests {
         ];
         for shape in shapes {
             let keyed = shape.map_keyed(|key, part| (key.clone(), *part));
+            assert_eq!(shape.try_map(|part| Ok::<_, ()>(*part)), Ok(shape.clone()));
+            assert_eq!(shape.try_map(|part| if *part == 1 { Err(*part) } else { Ok(*part) }), Err(1));
             let places: Vec<(PartKey, u32)> = shape.places().into_iter().map(|(key, part)| (key, *part)).collect();
             assert_eq!(keyed.places().into_iter().map(|(_, pair)| pair.clone()).collect::<Vec<_>>(), places);
         }

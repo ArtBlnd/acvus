@@ -691,17 +691,7 @@ fn signature(ty: &Type, holes: &[String]) -> Result<Ty, String> {
         Type::Class(path) => Err(format!("a row names the class `{path}`")),
         Type::Integer | Type::Float => Err("a row holds a literal".to_owned()),
         Type::Named(name, arguments) if arguments.is_empty() && holes.contains(name) => Ok(Ty::Hole(Name::new(name))),
-        written => {
-            let mut failed = None;
-            let shape = shape(written).map(|part| match signature(part, holes) {
-                Ok(part) => part,
-                Err(error) => {
-                    failed.get_or_insert(error);
-                    Ty::Hole(Name::new(""))
-                }
-            });
-            failed.map_or(Ok(Ty::Node(Box::new(shape))), Err)
-        }
+        written => Ok(Ty::Node(Box::new(shape(written).try_map(|part| signature(part, holes))?))),
     }
 }
 
