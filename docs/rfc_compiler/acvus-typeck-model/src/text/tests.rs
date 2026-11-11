@@ -607,3 +607,12 @@ fn a_literal_argument_of_a_call_by_name_is_what_the_parameter_is() {
     holds("row plus: u8, u8 -> u8; f <- fn (x) -> r { r <- x; }; t <- u8; call f(t) to s; w <- {integer}; call s::plus(w) to n; assert w: u8; assert n: u8;");
     holds("row opt: u8, Option<u8> -> u8; f <- fn (x) -> r { r <- x; }; t <- u8; call f(t) to s; w <- {integer}; g <- Option<w>; call s::opt(g) to n; assert w: u8;");
 }
+
+/// A receiver is decided by what enters it and not by the functions of the name:
+/// a literal nothing else enters is `i32`, and it is that the function is found
+/// by.
+#[test]
+fn a_literal_receiver_is_decided_before_the_function_is_found_and_not_by_it() {
+    holds("row plus: u8, u8 -> u8; u <- {integer}; w <- u8; call u::plus(w) to n; assert u: i32; assert refused NoChange, ..;");
+    holds("row plus: i32, u8 -> u8; u <- {integer}; w <- u8; call u::plus(w) to n; assert u: i32; assert n: u8;");
+}

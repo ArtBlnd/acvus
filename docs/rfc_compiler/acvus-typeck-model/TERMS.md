@@ -457,7 +457,9 @@ the text; a brand is not.
   one row must take the receiver: none goes nowhere, and of two neither is chosen. The
   arguments after the receiver are passed to their parameters, and the result is one type
   with the result the call writes. A row of one parameter is also what a value is passed
-  through; a row of another count is not.
+  through; a row of another count is not. The receiver is decided by what enters it, and
+  the functions of the name decide nothing of it: `1.plus(2u8)` with `plus(u8, u8)` alone
+  is refused, the receiver being `i32`, though `x.plus(1)` with `x: u8` is not.
 - **A template says which lambdas its body defines, and a copy names a closure of each
   anew**, over the copies of the classes written where it captures. Copying itself makes no
   closure and knows of none, and two copies share a class only where a closure captures it.
