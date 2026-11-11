@@ -32,7 +32,7 @@ use crate::primitive::refusal::Refused;
 use crate::primitive::ty::{PartKey, Shape};
 use crate::store::classes::Classes;
 
-use super::law::{Law, Looked, Offer, Pair, Place, Scribe};
+use super::law::{Heads, Law, Looked, Pair, Place, Scribe};
 
 /// The rules of the language, with the functions declared from outside and the
 /// lambdas the text writes.
@@ -94,12 +94,8 @@ where
         matches!(head, Shape::Scalar(scalar) if domain.0.contains(scalar))
     }
 
-    fn rungs(&self) -> usize {
-        rungs::COUNT
-    }
-
-    fn offer(&self, classes: &Classes<K>, rung: usize, class: K::Id) -> Offer<K> {
-        rungs::offer(classes, &self.functions, rung, class)
+    fn heads(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
+        rungs::heads(classes, &self.functions, asked, held)
     }
 
     fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>> {

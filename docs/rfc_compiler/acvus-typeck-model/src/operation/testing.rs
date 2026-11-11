@@ -6,12 +6,11 @@ use crate::primitive::constraint::{Bound, Constraint, Suspended};
 use crate::primitive::class::{Live, Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
-use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape, VariantOf};
 use crate::primitive::Name;
 use crate::primitive::{ClassId, ItemId, LambdaId};
+use crate::store::Store;
 use crate::store::classes::Classes;
-use crate::store::closures::Closures;
 
 use super::Outcome;
 use super::law::Law;
@@ -22,9 +21,7 @@ pub(super) const EXCLUSIVE: Mutability = Mutability::Exclusive;
 pub(super) const U8: Shape<ClassId> = Shape::Scalar(Scalar::U8);
 
 pub(super) struct World {
-    pub(super) classes: Classes<Live>,
-    pub(super) scopes: Scopes,
-    pub(super) closures: Closures<Live>,
+    pub(super) store: Store<Live>,
     pub(super) items: Arena<ItemId, &'static str>,
     pub(super) outcome: Outcome<Live>,
     /// The classes made here, in the order settling asks them in, ahead of any
@@ -35,9 +32,7 @@ pub(super) struct World {
 impl World {
     pub(super) fn new() -> Self {
         Self {
-            classes: Classes::default(),
-            scopes: Scopes::new(),
-            closures: Closures::default(),
+            store: Store::default(),
             items: Arena::default(),
             outcome: Outcome::default(),
             open: Vec::new(),
@@ -46,7 +41,7 @@ impl World {
 
     /// A variable, or a hole of a signature.
     pub(super) fn undecided(&mut self) -> ClassId {
-        let class = self.classes.undecided(self.scopes.root());
+        let class = self.store.classes.undecided(self.store.scopes.root());
         self.open.push(class);
         class
     }
@@ -55,7 +50,7 @@ impl World {
     /// writes enters it.
     pub(super) fn text(&mut self, shape: Shape<ClassId>) -> ClassId {
         let by = self.items.push("written");
-        let written = self.classes.decided(self.scopes.root(), shape, BTreeSet::from([by]));
+        let written = self.store.classes.decided(self.store.scopes.root(), shape, BTreeSet::from([by]));
         let class = self.undecided();
         self.enter(written, class);
         class
@@ -64,12 +59,12 @@ impl World {
     /// A class a declaration writes.
     pub(super) fn external(&mut self, shape: Shape<ClassId>) -> ClassId {
         let by = self.items.push("declared");
-        self.classes.external(self.scopes.root(), shape, BTreeSet::from([by]))
+        self.store.classes.external(self.store.scopes.root(), shape, BTreeSet::from([by]))
     }
 
     pub(super) fn record(&mut self, constraint: Constraint<Live>) -> ItemId {
         let at = self.items.push("bound");
-        self.classes.constrain(constraint, at);
+        self.store.classes.constrain(constraint, at);
         at
     }
 
@@ -137,7 +132,7 @@ impl World {
     /// definition is a use that passes nothing, so it is called with arguments
     /// nothing enters.
     pub(super) fn define(&mut self, lambda: LambdaId, captures: Vec<ClassId>, parameters: usize) -> ClassId {
-        let closure = self.closures.name(lambda, captures);
+        let closure = self.store.closures.name(lambda, captures);
         let value = self.text(Shape::FnValue(BTreeSet::from([closure])));
         let nothing: Vec<ClassId> = (0..parameters).map(|_| self.undecided()).collect();
         self.call(value, &nothing);
@@ -150,9 +145,10 @@ impl World {
         let result = self.undecided();
         let by = self.items.push("call");
         let written = self
+            .store
             .classes
-            .decided(self.scopes.root(), Shape::Fn(arguments.to_vec(), result), BTreeSet::from([by]));
-        self.classes.constrain(
+            .decided(self.store.scopes.root(), Shape::Fn(arguments.to_vec(), result), BTreeSet::from([by]));
+        self.store.classes.constrain(
             Bound::Change {
                 lower: callee,
                 upper: written,
@@ -168,8 +164,9 @@ impl World {
     pub(super) fn lend(&mut self, place: ClassId, mutability: Mutability) -> (ClassId, ItemId) {
         let by = self.items.push("written");
         let written = self
+            .store
             .classes
-            .decided(self.scopes.root(), Shape::Ref(mutability, place), BTreeSet::from([by]));
+            .decided(self.store.scopes.root(), Shape::Ref(mutability, place), BTreeSet::from([by]));
         let class = self.undecided();
         let at = self.enter(written, class);
         (class, at)
@@ -179,7 +176,7 @@ impl World {
     /// projection.
     pub(super) fn project(&mut self, operand: ClassId, key: PartKey, side: Side) -> (ClassId, ItemId) {
         let at = self.items.push("projection");
-        let part = self.classes.part(operand, key, side, at).expect("the operand is not decided when it is projected");
+        let part = self.store.classes.part(operand, key, side, at).expect("the operand is not decided when it is projected");
         self.open.push(part);
         (part, at)
     }
@@ -188,7 +185,7 @@ impl World {
     pub(super) fn literal(&mut self, domain: &[Scalar]) -> ClassId {
         let class = self.undecided();
         let at = self.items.push("literal");
-        assert_eq!(self.classes.domain(class, Domain(domain.iter().copied().collect()), at), None);
+        assert_eq!(self.store.classes.domain(class, Domain(domain.iter().copied().collect()), at), None);
         class
     }
 
@@ -202,18 +199,18 @@ impl World {
         let visit = |classes: &Classes<Live>| -> Vec<ClassId> {
             open.iter().copied().chain(classes.roots().map(|root| root.id())).collect()
         };
-        settle(&mut self.classes, &mut self.scopes, &mut self.closures, law, &mut self.outcome, at, &visit);
+        settle(&mut self.store, law, &mut self.outcome, at, &visit);
     }
 
     pub(super) fn head(&self, class: ClassId) -> Option<Shape<ClassId>> {
-        match &self.classes.get(self.classes.find(class)).state {
+        match &self.store.classes.get(self.store.classes.find(class)).state {
             State::Decided(decided) => Some(decided.shape.clone()),
             State::Undecided(_) => None,
         }
     }
 
     pub(super) fn same(&self, a: ClassId, b: ClassId) -> bool {
-        self.classes.find(a) == self.classes.find(b)
+        self.store.classes.find(a) == self.store.classes.find(b)
     }
 
     /// The type of `class` written out, `?` standing for a class not decided.
@@ -274,7 +271,7 @@ impl World {
 impl Drop for World {
     fn drop(&mut self) {
         if !std::thread::panicking() {
-            assert_eq!(self.classes.verify(), Ok(()));
+            assert_eq!(self.store.classes.verify(), Ok(()));
         }
     }
 }

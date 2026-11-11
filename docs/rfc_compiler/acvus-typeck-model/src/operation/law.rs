@@ -3,19 +3,37 @@
 //! A law reads the store and answers. It merges nothing, decides nothing and
 //! finishes nothing: the operations do those, from what it answers. So a rule
 //! cannot leave a constraint half done, and every rule is one answer in one place.
+//!
+//! | Who asks | What it asks | The answer | What is done with it |
+//! |---|---|---|---|
+//! | looking | what a constraint comes to ([`Law::look`]) | [`Looked`] | the constraint is finished or left waiting, and its pairs are connected |
+//! | connecting | how a class is compared with one a declaration writes ([`Law::same`]) | a constraint | it is recorded in place of a union |
+//! | connecting | where a part lies that a head has no place for ([`Law::place`]) | [`Place`] | the part is named there, or refused |
+//! | connecting | whether a literal's class may take a head ([`Law::admits`]) | yes or no | it is refused where not |
+//! | settling | which classes are one type by the constraints as a whole ([`Law::one`]) | pairs | they are connected |
+//! | deciding | which classes take which heads now ([`Law::heads`]) | [`Heads`] | each head is given, and what that leaves is connected |
+//! | settling, at its end | what is refused of a class ([`Law::end`]) | refusals | they are gathered |
+//!
+//! Every question but the first is answered from the classes as they stand. The
+//! first may need something made before it can be answered, a signature at a
+//! boundary or the copy of a template, and is given a [`Scribe`] to make it
+//! with.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::class::ClassKind;
+use crate::primitive::constraint::ConstraintInto;
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::Refused;
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{PartKey, Shape};
 use crate::primitive::{ClosureId, LambdaId, ScopeId};
+use crate::store::Store;
 use crate::store::classes::Classes;
 use crate::store::closures::Closures;
+use crate::store::template::Fate;
 
 /// Two classes that are one type.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -57,6 +75,61 @@ where
     },
 }
 
+/// The heads classes take now, and what was refused in finding them.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Heads<K>
+where
+    K: ClassKind,
+{
+    pub heads: Vec<Head<K>>,
+    pub refused: Vec<Refused<K>>,
+}
+
+/// A head a class takes. Only its constructor and members are taken: the parts
+/// of the head decided are the class's own.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Head<K>
+where
+    K: ClassKind,
+{
+    pub class: K::Id,
+    pub shape: Shape<K::Id>,
+    /// The items that give it, for a refusal to name.
+    pub by: BTreeSet<ItemId>,
+}
+
+impl<K> Heads<K>
+where
+    K: ClassKind,
+{
+    /// The heads of a ladder: those of its first rung that offers a head to any
+    /// class of `asked` that is not held, with what that rung and those before
+    /// it refused, of a class held or not. A rung is a rule that offers one class a head; a later rung is
+    /// one that holds only where no earlier one gives anything, so it is asked
+    /// only then.
+    pub fn of_ladder<'a, R>(ladder: R, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Self
+    where
+        R: IntoIterator<Item = &'a dyn Fn(K::Id) -> Offer<K>>,
+        K: 'a,
+    {
+        let mut refused = Vec::new();
+        for rung in ladder {
+            let mut heads = Vec::new();
+            for class in asked.iter().copied() {
+                match rung(class) {
+                    Offer::Head { shape, by } if !held(class) => heads.push(Head { class, shape, by }),
+                    Offer::Head { .. } | Offer::Nothing => {}
+                    Offer::Refused(refusal) => refused.push(refusal),
+                }
+            }
+            if !heads.is_empty() {
+                return Self { heads, refused };
+            }
+        }
+        Self { heads: Vec::new(), refused }
+    }
+}
+
 /// What a rung offers an undecided class.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Offer<K>
@@ -64,8 +137,6 @@ where
     K: ClassKind,
 {
     Nothing,
-    /// This head. Only its constructor and members are taken: the parts of the
-    /// head decided are the class's own.
     Head { shape: Shape<K::Id>, by: BTreeSet<ItemId> },
     /// The class cannot take a head by this rung, and the program is refused.
     Refused(Refused<K>),
@@ -81,74 +152,72 @@ pub enum Place {
     Nowhere,
 }
 
-/// The store as a law may use it while it looks at a constraint: all of it to read,
-/// and classes to make anew, as a signature made at a boundary needs, or a head
-/// a rule writes. It merges nothing, and decides no class that was there.
+/// The store as a law may use it while it looks at a constraint: all of it to
+/// read, and to add to. It merges nothing, decides no class that was there, and
+/// changes no scope and no closure that was there.
 ///
-/// A copy of a closure's template is made in a scope of its own, and a closure
-/// is named where a copy defines one: both are added to what is there, and
-/// change nothing of it.
+/// | What is added | For what |
+/// |---|---|
+/// | a class with a head ([`Scribe::written`]) | a head a rule writes |
+/// | the classes of a template ([`Scribe::anew`]) | a signature at a boundary, the copy of a lambda |
+/// | a scope for a copy ([`Scribe::copy_of`]) | the copy of a lambda lies in a scope of its own |
+/// | a closure ([`Scribe::name`]) | a copy names a closure of each lambda its body defines |
 #[derive(Debug)]
 pub struct Scribe<'a, K>
 where
     K: ClassKind,
 {
-    classes: &'a mut Classes<K>,
-    scopes: &'a mut Scopes,
-    closures: &'a mut Closures<K>,
+    store: &'a mut Store<K>,
 }
 
 impl<'a, K> Scribe<'a, K>
 where
     K: ClassKind,
 {
-    pub(super) fn new(classes: &'a mut Classes<K>, scopes: &'a mut Scopes, closures: &'a mut Closures<K>) -> Self {
-        Self { classes, scopes, closures }
+    pub(super) fn new(store: &'a mut Store<K>) -> Self {
+        Self { store }
     }
 
     pub fn classes(&self) -> &Classes<K> {
-        self.classes
+        &self.store.classes
     }
 
     pub fn scopes(&self) -> &Scopes {
-        self.scopes
+        &self.store.scopes
     }
 
     pub fn closures(&self) -> &Closures<K> {
-        self.closures
+        &self.store.closures
     }
 
     /// Makes a scope within `scope` for a copy of the template of `closure`.
     pub fn copy_of(&mut self, closure: ClosureId, scope: ScopeId) -> ScopeId {
-        let copy = self.scopes.child(scope);
-        self.closures.copied(copy, closure);
+        let copy = self.store.scopes.child(scope);
+        self.store.closures.copied(copy, closure);
         copy
     }
 
     /// Names a closure anew, `lambda` over `captures`.
     pub fn name(&mut self, lambda: LambdaId, captures: Vec<K::Id>) -> ClosureId {
-        self.closures.name(lambda, captures)
-    }
-
-    pub fn undecided(&mut self, scope: ScopeId) -> K::Id {
-        self.classes.undecided(scope)
+        self.store.closures.name(lambda, captures)
     }
 
     /// Makes a class with the head `shape`, as the text writes one, in `scope`, by
     /// `by`.
     pub fn written(&mut self, scope: ScopeId, shape: Shape<K::Id>, by: BTreeSet<ItemId>) -> K::Id {
-        self.classes.decided(scope, shape, by)
+        self.store.classes.decided(scope, shape, by)
     }
 
     /// Makes every class of `template` anew in `scope`, by `at`, and gives each
     /// class of the template with the class it became.
-    pub fn anew<S>(&mut self, template: &Classes<S>, scope: ScopeId, at: ItemId) -> std::collections::BTreeMap<S::Id, K::Id>
+    pub fn anew<S>(&mut self, template: &Classes<S>, scope: ScopeId, at: ItemId) -> BTreeMap<S::Id, K::Id>
     where
         S: ClassKind,
-        S::Constraint: crate::primitive::constraint::ConstraintInto<S, K>,
+        S::Constraint: ConstraintInto<S, K>,
     {
-        self.classes
-            .copy_from(template, self.scopes, scope, at, |_| crate::store::template::Fate::Anew)
+        self.store
+            .classes
+            .copy_from(template, &self.store.scopes, scope, at, |_| Fate::Anew)
             .classes
     }
 }
@@ -177,12 +246,9 @@ where
     /// Whether a class a literal registered `domain` in may be decided as `head`.
     fn admits(&self, head: &Shape<K::Id>, domain: &Domain) -> bool;
 
-    /// How many rungs deciding takes, the first being rung 0. A rung is taken
-    /// only where no rung before it decides anything.
-    fn rungs(&self) -> usize;
-
-    /// What the rung `rung` offers the undecided class `class`.
-    fn offer(&self, classes: &Classes<K>, rung: usize, class: K::Id) -> Offer<K>;
+    /// The heads the classes of `asked`, each undecided, take now. A class that
+    /// `held` says is held may still be merged with another, and takes none.
+    fn heads(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>;
 
     /// What is refused of `class` when nothing more can be done.
     fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>>;

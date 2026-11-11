@@ -5,7 +5,8 @@ use std::collections::BTreeSet;
 use crate::primitive::ItemId;
 use crate::primitive::class::{ClassKind, Pending, Side, State, Unplaced};
 use crate::primitive::refusal::{Cause, Refused};
-use crate::primitive::scope::Scopes;
+use crate::primitive::ty::Shape;
+use crate::store::Store;
 use crate::store::classes::{Classes, Unified};
 
 use super::Outcome;
@@ -25,27 +26,23 @@ use super::law::{Law, Pair, Place};
 /// decided as a head with no place of that name is asked of the law
 /// ([`Law::place`]), and so is the head a literal's class takes
 /// ([`Law::admits`]).
-pub fn connect<K, L>(
-    classes: &mut Classes<K>,
-    scopes: &Scopes,
-    law: &L,
-    outcome: &mut Outcome<K>,
-    pair: Pair<K>,
-    at: ItemId,
-) -> bool
+pub fn connect<K, L>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, pair: Pair<K>, at: ItemId) -> bool
 where
     K: ClassKind,
     L: Law<K>,
 {
+    let Store { classes, scopes, .. } = store;
     let mut pairs = vec![(pair, at)];
     let mut connected = false;
     while let Some((pair, at)) = pairs.pop() {
         let (a, b) = match pair {
             Pair::Classes(a, b) => (a, b),
-            Pair::Part { part, of, key } => match classes.part(of, key, Side::Carried, at) {
-                Some(named) => (named, part),
-                None => continue,
-            },
+            Pair::Part { part, of, key } => {
+                let Some(named) = classes.part(of, key, Side::Carried, at) else {
+                    continue;
+                };
+                (named, part)
+            }
         };
         let (a, b) = (classes.find(a).id(), classes.find(b).id());
         if a == b {
@@ -162,12 +159,12 @@ where
 }
 
 /// The head of `class`, which a union or a decision left decided.
-fn decided<K>(classes: &Classes<K>, class: K::Id) -> crate::primitive::ty::Shape<K::Id>
+fn decided<K>(classes: &Classes<K>, class: K::Id) -> Shape<K::Id>
 where
     K: ClassKind,
 {
-    match &classes.get(classes.find(class)).state {
-        State::Decided(decided) => decided.shape.clone(),
-        State::Undecided(_) => unreachable!("what a union leaves is left of a class that came to be decided"),
-    }
+    let State::Decided(decided) = &classes.get(classes.find(class)).state else {
+        unreachable!("what a union leaves is left of a class that came to be decided");
+    };
+    decided.shape.clone()
 }

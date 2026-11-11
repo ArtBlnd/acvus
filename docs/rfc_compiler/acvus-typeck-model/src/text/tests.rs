@@ -1,5 +1,5 @@
 use super::parse;
-use super::record::run;
+use super::record::{Failed, run};
 
 /// Every form the text has, written as it is written out.
 const EVERY_FORM: &str = "\
@@ -178,26 +178,26 @@ fn a_part_a_declared_type_has_no_place_for_is_refused_where_it_is_written() {
 fn a_program_that_does_not_come_to_what_it_asserts_says_what_it_came_to() {
     assert_eq!(
         run("a <- u8; assert a: u16;", 2),
-        Err("in order 0, `assert a: u16;` does not hold: `a` is `u8`".to_owned())
+        Err(Failed::Differs("in order 0, `assert a: u16;` does not hold: `a` is `u8`".to_owned()))
     );
     assert_eq!(
         run("a <- u8; a <- u16;", 2),
-        Err("in order 0, `assert accepted;` does not hold: refused by {Mismatch, UndecidedClass}".to_owned())
+        Err(Failed::Differs("in order 0, `assert accepted;` does not hold: refused by {Mismatch, UndecidedClass}".to_owned()))
     );
     assert_eq!(run("a <- u8; a <- u16; assert refused Mismatch, ..;", 2), Ok(()));
     assert_eq!(run("a <- u8; a <- u16; assert refused ..;", 2), Ok(()));
     assert_eq!(
         run("a <- u8; assert refused ..;", 2),
-        Err("in order 0, `assert refused ..;` does not hold: accepted".to_owned())
+        Err(Failed::Differs("in order 0, `assert refused ..;` does not hold: accepted".to_owned()))
     );
 }
 
 #[test]
 fn what_cannot_be_recorded_is_said_before_anything_is_solved() {
-    assert_eq!(run("declare p = u8; declare p = u16;", 1), Err("`p` is declared twice".to_owned()));
-    assert_eq!(run("declare p = Option<p>;", 1), Err("`p` is declared as a type that names it".to_owned()));
-    assert_eq!(run("row f: a -> u8;", 1), Err("a row names the class `a`".to_owned()));
-    assert_eq!(run("row f: {integer} -> u8;", 1), Err("a row holds a literal".to_owned()));
+    assert_eq!(run("declare p = u8; declare p = u16;", 1), Err(Failed::Unread("`p` is declared twice".to_owned())));
+    assert_eq!(run("declare p = Option<p>;", 1), Err(Failed::Unread("`p` is declared as a type that names it".to_owned())));
+    assert_eq!(run("row f: a -> u8;", 1), Err(Failed::Unread("a row names the class `a`".to_owned())));
+    assert_eq!(run("row f: {integer} -> u8;", 1), Err(Failed::Unread("a row holds a literal".to_owned())));
 }
 
 #[test]

@@ -5,6 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 use std::mem;
 
+use crate::primitive::components::components;
+use crate::primitive::constraint::ConstraintOf;
+
 use crate::primitive::ItemId;
 use crate::primitive::ScopeId;
 use crate::primitive::class::{
@@ -27,7 +30,8 @@ pub struct Classes<K>
 where
     K: ClassKind,
 {
-    /// Open to the rest of the store for [`Classes::verify`] alone.
+    /// Open to the rest of the store for [`Classes::verify`] and for copying a
+    /// template.
     pub(super) slots: Arena<K::Id, Slot<K>>,
     /// Every constraint recorded and not finished, from its recording until whoever
     /// judges or makes it finishes it. Open to the rest of the store for
@@ -39,6 +43,14 @@ where
     /// The constraints to look at: each recorded and not looked at yet, and each that
     /// waits on a class that has changed since.
     woken: Constraints<K>,
+    /// For each constraint not finished, the classes it was put on, to wait on or
+    /// to guard: where it is held is looked for among these and not among every
+    /// class. An id here may since have been merged into another, and a class may
+    /// hold the constraint no longer.
+    pub(super) put_on: BTreeMap<(K::Constraint, ItemId), BTreeSet<K::Id>>,
+    /// For each class, by its root, the constraints not finished that have it as
+    /// an end.
+    pub(super) of_end: BTreeMap<K::Id, Constraints<K>>,
 }
 
 // Written out, as a derive would ask an id to have a default, and none has.
@@ -52,6 +64,8 @@ where
             constraints: Constraints::<K>::new(),
             finished: Constraints::<K>::new(),
             woken: Constraints::<K>::new(),
+            put_on: BTreeMap::new(),
+            of_end: BTreeMap::new(),
         }
     }
 }
@@ -314,6 +328,9 @@ where
         if self.finished.contains(&recorded) || !self.constraints.insert(recorded.clone()) {
             return false;
         }
+        for end in self.ends(&recorded.0) {
+            self.of_end.entry(end).or_default().insert(recorded.clone());
+        }
         self.woken.insert(recorded);
         true
     }
@@ -328,7 +345,7 @@ where
     /// looked at again when one of them is merged with another or decided.
     pub fn wait(&mut self, constraint: &K::Constraint, at: ItemId, on: &BTreeSet<K::Id>) {
         let recorded = (constraint.clone(), at);
-        for root in self.root_ids() {
+        for root in self.holding(&recorded) {
             self.root_mut(root).held.waiters.remove(&recorded);
         }
         if !self.constraints.contains(&recorded) {
@@ -337,11 +354,28 @@ where
         for class in on {
             let root = self.find(*class).id;
             self.root_mut(root).held.waiters.insert(recorded.clone());
+            self.put_on.entry(recorded.clone()).or_default().insert(root);
         }
     }
 
-    fn root_ids(&self) -> Vec<K::Id> {
-        self.roots().map(|root| root.id).collect()
+    /// The two ends of `constraint`, each as the class it is now.
+    fn ends(&self, constraint: &K::Constraint) -> [K::Id; 2] {
+        [self.find(constraint.lower()).id, self.find(constraint.upper()).id]
+    }
+
+    /// The constraints not finished that have `class` as an end.
+    pub fn constraints_of(&self, class: K::Id) -> impl Iterator<Item = &(K::Constraint, ItemId)> {
+        self.of_end.get(&self.find(class).id).into_iter().flatten()
+    }
+
+    /// The classes `recorded` was put on, each as the class it is now.
+    pub(super) fn holding(&self, recorded: &(K::Constraint, ItemId)) -> BTreeSet<K::Id> {
+        self.put_on
+            .get(recorded)
+            .into_iter()
+            .flatten()
+            .map(|class| self.find(*class).id)
+            .collect()
     }
 
     /// Wakes what waits on the class held at `root`, which has been merged or
@@ -372,7 +406,10 @@ where
                     .cloned()
                     .collect();
                 if !new.is_empty() {
-                    held.guards.extend(new);
+                    held.guards.extend(new.iter().cloned());
+                    for guard in new {
+                        self.put_on.entry(guard).or_default().insert(part);
+                    }
                     stack.push(part);
                 }
             }
@@ -391,8 +428,14 @@ where
         let held = self.constraints.remove(&recorded);
         if held {
             self.lift(&recorded);
-            for root in self.root_ids() {
+            for root in self.holding(&recorded) {
                 self.root_mut(root).held.waiters.remove(&recorded);
+            }
+            self.put_on.remove(&recorded);
+            for end in self.ends(&recorded.0) {
+                if let Some(of_end) = self.of_end.get_mut(&end) {
+                    of_end.remove(&recorded);
+                }
             }
             self.woken.remove(&recorded);
             self.finished.insert(recorded);
@@ -419,6 +462,7 @@ where
         let apart: BTreeSet<K::Id> = apart.iter().map(|class| self.find(*class).id).collect();
         for root in &apart {
             self.root_mut(*root).held.apart.insert(recorded.clone());
+            self.put_on.entry(recorded.clone()).or_default().insert(*root);
         }
         for root in apart {
             self.push_down(root);
@@ -426,7 +470,7 @@ where
     }
 
     fn lift(&mut self, recorded: &(K::Constraint, ItemId)) {
-        for root in self.root_ids() {
+        for root in self.holding(recorded) {
             let held = &mut self.root_mut(root).held;
             held.guards.remove(recorded);
             held.apart.remove(recorded);
@@ -463,17 +507,18 @@ where
             .collect();
         // A part is decided no earlier than the class it is named on. Where the
         // part holds that class in turn, the order asks nothing of the two, and
-        // they are decided together.
-        for owner in self.roots() {
-            let State::Undecided(undecided) = &self.get(owner).state else {
+        // they are decided together: a part holds its owner where the two reach
+        // one another through parts.
+        let parts: BTreeMap<K::Id, Vec<K::Id>> = self
+            .roots()
+            .map(|owner| (owner.id, self.get(owner).state.parts().into_iter().map(|part| self.find(part).id).collect()))
+            .collect();
+        let component = components(&parts);
+        for (owner, parts) in &parts {
+            if self.root(*owner).state.is_decided() {
                 continue;
-            };
-            for part in undecided.parts.values() {
-                let part = self.find(part.class).id;
-                if !self.below([part]).contains(&owner.id) && part != owner.id {
-                    held.insert(part);
-                }
             }
+            held.extend(parts.iter().filter(|part| component[*part] != component[owner]));
         }
         Deciding { classes: self, held }
     }
@@ -579,6 +624,12 @@ where
     /// part, in turn. Parts of one name are one class because the classes that
     /// hold them are, so what made those one made these one.
     pub fn connections(&self, class: K::Id) -> Connections<K> {
+        let mut holders: BTreeMap<K::Id, Vec<K::Id>> = BTreeMap::new();
+        for holder in self.roots() {
+            for part in self.get(holder).state.parts() {
+                holders.entry(self.find(part).id).or_default().push(holder.id);
+            }
+        }
         let mut found = Connections::<K>::new();
         let mut seen = BTreeSet::new();
         let mut stack = vec![self.find(class).id];
@@ -587,11 +638,7 @@ where
                 continue;
             }
             found.extend(self.root(class).connections.iter().copied());
-            let holders = self
-                .roots()
-                .filter(|holder| self.get(*holder).state.parts().into_iter().any(|part| self.find(part).id == class))
-                .map(|holder| holder.id);
-            stack.extend(holders);
+            stack.extend(holders.get(&class).into_iter().flatten());
         }
         found
     }
@@ -624,6 +671,9 @@ where
             };
             let merge = kept_class.merge(gone_class, kept, scopes, at);
             *self.slots.get_mut(kept) = Slot::Root(merge.class);
+            if let Some(of_gone) = self.of_end.remove(&gone) {
+                self.of_end.entry(kept).or_default().extend(of_gone);
+            }
             self.push_down(kept);
             self.wake(kept);
             pairs.extend(merge.pairs);

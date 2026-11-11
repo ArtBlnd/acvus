@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use acvus_typeck_model::text::record::run;
+use acvus_typeck_model::text::record::{Failed, run};
 
 /// The orders of asking each program is solved in.
 const ORDERS: u64 = 24;
@@ -56,11 +56,11 @@ fn main() -> ExitCode {
                 holds += 1;
                 println!("HOLDS    {}", path.display());
             }
-            Err(found) if found.starts_with("in order ") || found.starts_with("order ") => {
+            Err(Failed::Differs(found)) => {
                 differs += 1;
                 println!("DIFFERS  {}: {found}", path.display());
             }
-            Err(why) => {
+            Err(Failed::Unread(why)) => {
                 unread += 1;
                 println!("UNREAD   {}: {}", path.display(), why.replace('\n', " "));
             }

@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
+use crate::primitive::components::components;
 use crate::primitive::class::ClassKind;
 use crate::primitive::constraint::{Bound, Constraint, Suspended};
 use crate::primitive::adjustment::Subtyping;
@@ -73,35 +74,27 @@ where
 
 /// The two ends of each entering that lies on a cycle of enterings: classes that
 /// enter one another would each wait for the other's head, and are one type.
+///
+/// An entering lies on a cycle where its two ends reach one another, which is
+/// where they are of one strongly connected component of the enterings.
 pub fn entering_one_another<K>(classes: &Classes<K>) -> Vec<(K::Id, K::Id, ItemId)>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    let mut entered: BTreeMap<K::Id, BTreeSet<(K::Id, ItemId)>> = BTreeMap::new();
+    let mut enterings = Vec::new();
+    let mut entered: BTreeMap<K::Id, Vec<K::Id>> = BTreeMap::new();
     for (constraint, at) in classes.constraints() {
         if let Constraint::Bound(Bound::Enter { lower, upper }) = constraint {
             let (lower, upper) = (classes.find(*lower).id(), classes.find(*upper).id());
             if lower != upper {
-                entered.entry(lower).or_default().insert((upper, *at));
+                enterings.push((lower, upper, *at));
+                entered.entry(lower).or_default().push(upper);
             }
         }
     }
-    let reaches = |from: K::Id, to: K::Id| {
-        let mut seen = BTreeSet::new();
-        let mut stack = vec![from];
-        while let Some(class) = stack.pop() {
-            if class == to {
-                return true;
-            }
-            if seen.insert(class) {
-                stack.extend(entered.get(&class).into_iter().flatten().map(|(next, _)| *next));
-            }
-        }
-        false
-    };
-    entered
-        .iter()
-        .flat_map(|(lower, uppers)| uppers.iter().map(|(upper, at)| (*lower, *upper, *at)))
-        .filter(|(lower, upper, _)| reaches(*upper, *lower))
+    let component = components(&entered);
+    enterings
+        .into_iter()
+        .filter(|(lower, upper, _)| component.get(lower).is_some_and(|of_lower| component.get(upper) == Some(of_lower)))
         .collect()
 }

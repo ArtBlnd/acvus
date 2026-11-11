@@ -38,9 +38,11 @@ pub(super) fn take<K>(scribe: &mut Scribe<'_, K>, lambdas: &Lambdas, value: K::I
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    let head = |class: K::Id| match &scribe.classes().get(scribe.classes().find(class)).state {
-        State::Decided(decided) => decided.shape.clone(),
-        State::Undecided(_) => unreachable!("a call is told once both its ends have a head"),
+    let head = |class: K::Id| {
+        let State::Decided(decided) = &scribe.classes().get(scribe.classes().find(class)).state else {
+            unreachable!("a call is told once both its ends have a head");
+        };
+        decided.shape.clone()
     };
     let (Shape::FnValue(called), Shape::Fn(arguments, result)) = (head(value), head(wanted)) else {
         unreachable!("a call is a function value passed to a function type");

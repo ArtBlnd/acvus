@@ -1,10 +1,11 @@
 //! Settling: taking the three operations in turn until nothing is left to do.
 
+use std::collections::BTreeSet;
+
 use crate::primitive::ItemId;
 use crate::primitive::class::ClassKind;
-use crate::primitive::scope::Scopes;
+use crate::store::Store;
 use crate::store::classes::Classes;
-use crate::store::closures::Closures;
 
 use super::Outcome;
 use super::connect::connect;
@@ -27,15 +28,7 @@ use super::law::{Law, Pair};
 /// or decided, so nothing is looked at that nothing has happened to. A class is
 /// decided only after looking has run to its end, so every guard is as its constraint
 /// last stated it.
-pub fn settle<K, L, F>(
-    classes: &mut Classes<K>,
-    scopes: &mut Scopes,
-    closures: &mut Closures<K>,
-    law: &L,
-    outcome: &mut Outcome<K>,
-    at: ItemId,
-    visit: &F,
-)
+pub fn settle<K, L, F>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, at: ItemId, visit: &F)
 where
     K: ClassKind,
     L: Law<K>,
@@ -44,28 +37,43 @@ where
     loop {
         loop {
             let mut changed = false;
-            for (a, b, by) in law.one(classes) {
-                changed |= connect(classes, scopes, law, outcome, Pair::Classes(a, b), by);
+            for (a, b, by) in law.one(&store.classes) {
+                changed |= connect(store, law, outcome, Pair::Classes(a, b), by);
             }
-            let woken = classes.take_woken();
+            let woken = store.classes.take_woken();
             let none_woken = woken.is_empty();
             for (constraint, by) in woken {
-                if classes.constraints().contains(&(constraint.clone(), by)) {
-                    changed |= look(classes, scopes, closures, law, outcome, constraint, by);
+                if store.classes.constraints().contains(&(constraint.clone(), by)) {
+                    changed |= look(store, law, outcome, constraint, by);
                 }
             }
             if !changed && none_woken {
                 break;
             }
         }
-        if !decide(classes, scopes, law, outcome, at, visit) {
+        if !decide(store, law, outcome, at, visit) {
             break;
         }
     }
-    for class in visit(classes) {
-        for refused in law.end(classes, class) {
+    for class in asked(&store.classes, visit) {
+        for refused in law.end(&store.classes, class) {
             outcome.refuse(refused);
         }
     }
-    outcome.gather(classes);
+    outcome.gather(&store.classes);
+}
+
+/// The classes `visit` gives, each once, by its root, in the order it first
+/// gives them.
+pub(super) fn asked<K, F>(classes: &Classes<K>, visit: &F) -> Vec<K::Id>
+where
+    K: ClassKind,
+    F: Fn(&Classes<K>) -> Vec<K::Id>,
+{
+    let mut seen = BTreeSet::new();
+    visit(classes)
+        .into_iter()
+        .map(|class| classes.find(class).id())
+        .filter(|root| seen.insert(*root))
+        .collect()
 }

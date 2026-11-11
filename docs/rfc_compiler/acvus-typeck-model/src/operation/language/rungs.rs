@@ -24,24 +24,24 @@ use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{PartKey, Shape, VariantOf};
 use crate::store::classes::Classes;
 
-use super::super::law::Offer;
+use super::super::law::{Heads, Offer};
 use super::functions::Functions;
 use super::{Looked, Told, View, enter, tell};
 
-pub const COUNT: usize = 5;
-
-pub fn offer<K>(classes: &Classes<K>, functions: &Functions, rung: usize, class: K::Id) -> Offer<K>
+/// The heads classes take now: those of the first rung of the language's ladder
+/// that gives any.
+pub fn heads<K>(classes: &Classes<K>, functions: &Functions, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    match rung {
-        0 => join(classes, class),
-        1 => from_above(classes, functions, class),
-        2 => from_parts(classes, functions, class),
-        3 => domain(classes, functions, class),
-        4 => never(classes, functions, class),
-        _ => unreachable!("there are {COUNT} rungs"),
-    }
+    let ladder: [&dyn Fn(K::Id) -> Offer<K>; 5] = [
+        &|class| join(classes, class),
+        &|class| from_above(classes, functions, class),
+        &|class| from_parts(classes, functions, class),
+        &|class| domain(classes, functions, class),
+        &|class| never(classes, functions, class),
+    ];
+    Heads::of_ladder(ladder, asked, held)
 }
 
 /// What enters a class by one bound: its head, where it has one yet, the bound,
@@ -58,8 +58,7 @@ where
     let root = classes.find(class);
     let view = View::of(classes);
     classes
-        .constraints()
-        .iter()
+        .constraints_of(class)
         .filter(|(constraint, _)| classes.find(constraint.upper()) == root && classes.find(constraint.lower()) != root)
         .filter_map(|(constraint, at)| enter::given(&view, constraint).map(|head| (head, *constraint, *at)))
         .collect()
@@ -153,8 +152,7 @@ where
 {
     let root = classes.find(class);
     classes
-        .constraints()
-        .iter()
+        .constraints_of(class)
         .filter_map(|(constraint, _)| match constraint {
             Constraint::Bound(Bound::Enter { lower, upper })
                 if classes.find(*lower) == root && classes.find(*upper) != root && !classes.is_decided(*upper) =>
@@ -417,11 +415,7 @@ where
         });
     }
     if let State::Undecided(undecided) = &classes.get(root).state {
-        let constraints = classes
-            .constraints()
-            .iter()
-            .filter(|(constraint, _)| classes.find(constraint.lower()) == root || classes.find(constraint.upper()) == root)
-            .map(|(_, at)| *at);
+        let constraints = classes.constraints_of(class).map(|(_, at)| *at);
         let domains = undecided.domains.iter().map(|(_, at)| *at);
         refusals.push(Refused {
             cause: Cause::UndecidedClass,

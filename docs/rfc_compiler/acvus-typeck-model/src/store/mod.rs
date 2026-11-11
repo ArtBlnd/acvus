@@ -10,3 +10,20 @@ pub mod classes;
 pub mod closures;
 pub mod template;
 pub mod verify;
+
+use crate::primitive::class::ClassKind;
+use crate::primitive::scope::Scopes;
+
+/// What is solved: the classes, the scopes they lie in, and the closures named
+/// over them. Solving takes the three together, as each names the others: a
+/// class lies in a scope, and a closure captures classes and is copied into a
+/// scope.
+#[derive(Clone, Debug, Default)]
+pub struct Store<K>
+where
+    K: ClassKind,
+{
+    pub classes: classes::Classes<K>,
+    pub scopes: Scopes,
+    pub closures: closures::Closures<K>,
+}

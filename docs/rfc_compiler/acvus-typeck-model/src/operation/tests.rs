@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::language::Language;
-use super::law::{Law, Looked, Offer, Pair, Place, Scribe};
+use super::law::{Heads, Law, Looked, Offer, Pair, Place, Scribe};
 use super::testing::{EXCLUSIVE, SHARED, U8, World, reorder};
 use crate::primitive::adjustment::{Adjustment, Adjustments};
 use crate::primitive::constraint::{Bound, Constraint, ConstraintOf};
@@ -991,7 +991,7 @@ fn law_with(world: &mut World, rows: &[(&'static str, Ty, Ty)]) -> Language {
     let mut law = Language::default();
     for (name, parameter, result) in rows {
         let by = world.items.push("declared");
-        law.functions.declare(Name::new(*name), parameter, result, &world.scopes, by);
+        law.functions.declare(Name::new(*name), parameter, result, &world.store.scopes, by);
     }
     law
 }
@@ -1543,19 +1543,19 @@ impl Law<Live> for Odd {
         true
     }
 
-    fn rungs(&self) -> usize {
-        1
-    }
-
-    fn offer(&self, classes: &Classes<Live>, _: usize, class: ClassId) -> Offer<Live> {
-        let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
-            return Offer::Nothing;
+    fn heads(&self, classes: &Classes<Live>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
+        let only = |class: ClassId| {
+            let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
+                return Offer::Nothing;
+            };
+            let shape = if undecided.parts.is_empty() { U8 } else { Shape::Option(class) };
+            Offer::Head {
+                shape,
+                by: BTreeSet::new(),
+            }
         };
-        let shape = if undecided.parts.is_empty() { U8 } else { Shape::Option(class) };
-        Offer::Head {
-            shape,
-            by: BTreeSet::new(),
-        }
+        let ladder: [&dyn Fn(ClassId) -> Offer<Live>; 1] = [&only];
+        Heads::of_ladder(ladder, asked, held)
     }
 
     fn end(&self, _: &Classes<Live>, _: ClassId) -> Vec<Refused<Live>> {

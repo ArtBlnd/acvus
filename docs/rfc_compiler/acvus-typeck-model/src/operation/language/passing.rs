@@ -33,6 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::class::{ClassKind, State, Template};
+use crate::primitive::constraint::Constraint;
 use crate::primitive::adjustment::Subtyping;
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{Mutability, Shape};
@@ -420,7 +421,7 @@ where
 /// function called in its turn.
 pub(super) fn take<K>(scribe: &mut Scribe<'_, K>, functions: &Functions, way: Way<K>, argument: K::Id, at: ItemId) -> Looked<K>
 where
-    K: ClassKind<Constraint = crate::primitive::constraint::Constraint<K>>,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
     let scope = scribe.classes().get(scribe.classes().find(argument)).scope;
     let made: Vec<BTreeMap<TemplateId, K::Id>> = way

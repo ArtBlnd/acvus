@@ -1,5 +1,7 @@
 //! The invariants the store keeps, checked.
 
+use std::collections::BTreeSet;
+
 use crate::primitive::ItemId;
 use crate::primitive::constraint::ConstraintOf;
 use crate::primitive::class::{Class, ClassKind, State};
@@ -30,6 +32,12 @@ where
     /// a constraint guards is every class below one it holds apart, but for those it
     /// holds apart.
     Guarded { class: K::Id, constraint: K::Constraint, by: ItemId },
+    /// A class holding something of a constraint that is not among the classes
+    /// the store keeps the constraint as put on, so that it would be left there.
+    Unlisted { class: K::Id, constraint: K::Constraint, by: ItemId },
+    /// A constraint the store keeps as having `class` as an end and that has not,
+    /// or one that has and is not kept so.
+    Misfiled { class: K::Id, constraint: K::Constraint, by: ItemId },
 }
 
 impl<K> Classes<K>
@@ -70,6 +78,24 @@ where
             return Err(violations);
         }
 
+        // The constraints kept by end, against those of each class found anew.
+        for root in self.roots() {
+            let kept: BTreeSet<_> = self.constraints_of(root.id()).cloned().collect();
+            let found: BTreeSet<_> = self
+                .constraints
+                .iter()
+                .filter(|(constraint, _)| self.find(constraint.lower()) == root || self.find(constraint.upper()) == root)
+                .cloned()
+                .collect();
+            for (constraint, by) in kept.symmetric_difference(&found) {
+                violations.push(Violation::Misfiled {
+                    class: root.id(),
+                    constraint: constraint.clone(),
+                    by: *by,
+                });
+            }
+        }
+
         for (id, slot) in self.slots.iter() {
             let Slot::Root(class) = slot else {
                 continue;
@@ -83,12 +109,19 @@ where
                         by: guard.1,
                     });
                 }
+                if !self.holding(guard).contains(&id) {
+                    violations.push(Violation::Unlisted {
+                        class: id,
+                        constraint: guard.0.clone(),
+                        by: guard.1,
+                    });
+                }
             }
         }
         // What each constraint guards, found anew by walking down from what it holds
         // apart, against the guards the store kept as structure grew.
         for recorded in &self.constraints {
-            let apart: std::collections::BTreeSet<K::Id> = self
+            let apart: BTreeSet<K::Id> = self
                 .roots()
                 .filter(|root| self.get(*root).held.apart.contains(recorded))
                 .map(|root| root.id())

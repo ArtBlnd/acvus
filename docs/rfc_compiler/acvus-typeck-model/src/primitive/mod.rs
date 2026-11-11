@@ -3,6 +3,7 @@
 //! that solve over it, live outside this module.
 
 pub mod adjustment;
+pub mod components;
 pub mod constraint;
 pub mod class;
 pub mod domain;

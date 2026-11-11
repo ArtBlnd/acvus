@@ -18,11 +18,10 @@ use crate::primitive::constraint::{Bound, Suspended};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::refusal::{Cause, Refused};
-use crate::primitive::scope::Scopes;
-use crate::primitive::ty::{PartKey, Scalar, Shape, Ty, VariantOf};
+use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape, Ty, VariantOf};
 use crate::primitive::{ClassId, ItemId, Name};
+use crate::store::Store;
 use crate::store::classes::Classes;
-use crate::store::closures::Closures;
 
 use super::ast::{Assertion, Op, Path, Program, Segment, Type, Variant};
 use super::print;
@@ -30,9 +29,7 @@ use super::print;
 /// A program recorded, and then solved.
 #[derive(Debug)]
 pub struct Recorded {
-    pub classes: Classes<Live>,
-    pub scopes: Scopes,
-    pub closures: Closures<Live>,
+    pub store: Store<Live>,
     pub law: Language,
     pub outcome: Outcome<Live>,
     /// Each item, with what it is found by: the label of its statement, or the
@@ -55,9 +52,7 @@ enum Writer {
 impl Recorded {
     fn new() -> Self {
         Self {
-            classes: Classes::default(),
-            scopes: Scopes::new(),
-            closures: Closures::default(),
+            store: Store::default(),
             law: Language::default(),
             outcome: Outcome::default(),
             items: Arena::default(),
@@ -74,7 +69,7 @@ impl Recorded {
     }
 
     fn undecided(&mut self) -> ClassId {
-        let class = self.classes.undecided(self.scopes.root());
+        let class = self.store.classes.undecided(self.store.scopes.root());
         self.made.push(class);
         class
     }
@@ -103,7 +98,7 @@ impl Recorded {
         for segment in &path.segments {
             so_far.segments.push(segment.clone());
             let item = self.item(format!("{label}:{so_far}"));
-            class = match self.classes.part(class, key(segment), side, item) {
+            class = match self.store.classes.part(class, key(segment), side, item) {
                 Some(part) => {
                     self.made.push(part);
                     part
@@ -125,7 +120,7 @@ impl Recorded {
     fn class_of(&mut self, ty: &Type, writer: Writer, item: ItemId, label: &str) -> ClassId {
         let literal = |recorded: &mut Self, scalars: &[Scalar]| {
             let class = recorded.undecided();
-            let pending = recorded.classes.domain(class, Domain(scalars.iter().copied().collect()), item);
+            let pending = recorded.store.classes.domain(class, Domain(scalars.iter().copied().collect()), item);
             debug_assert_eq!(pending, None, "a class just made is undecided");
             class
         };
@@ -135,10 +130,10 @@ impl Recorded {
             Type::Float => return literal(self, &[Scalar::F32, Scalar::F64]),
             written => shape(written).map(|part| self.class_of(part, writer, item, label)),
         };
-        let (root, by) = (self.scopes.root(), BTreeSet::from([item]));
+        let (root, by) = (self.store.scopes.root(), BTreeSet::from([item]));
         match writer {
-            Writer::Text => self.classes.decided(root, shape, by),
-            Writer::Declaration => self.classes.external(root, shape, by),
+            Writer::Text => self.store.classes.decided(root, shape, by),
+            Writer::Declaration => self.store.classes.external(root, shape, by),
         }
     }
 
@@ -165,7 +160,7 @@ impl Recorded {
             } => {
                 let item = self.item(label.to_owned());
                 let (parameter, result) = (signature(parameter, holes)?, signature(result, holes)?);
-                self.law.functions.declare(Name::new(name), &parameter, &result, &self.scopes, item);
+                self.law.functions.declare(Name::new(name), &parameter, &result, &self.store.scopes, item);
             }
             Op::Enter { .. } | Op::Pass { .. } | Op::Exit { .. } => {}
         }
@@ -183,19 +178,19 @@ impl Recorded {
                 } else {
                     Bound::Enter { lower, upper }.into()
                 };
-                self.classes.constrain(constraint, item);
+                self.store.classes.constrain(constraint, item);
             }
             Op::Pass { argument, given } => {
                 let item = self.item(label.to_owned());
                 let lower = self.path(argument, Side::Upper, label);
                 let upper = self.path(given, Side::Upper, label);
-                self.classes.constrain(Bound::Change { lower, upper }.into(), item);
+                self.store.classes.constrain(Bound::Change { lower, upper }.into(), item);
             }
             Op::Exit { exits_with, error } => {
                 let item = self.item(label.to_owned());
                 let lower = self.path(exits_with, Side::Upper, label);
                 let upper = self.path(error, Side::Lower, label);
-                self.classes.constrain(Suspended::Exit { lower, upper }.into(), item);
+                self.store.classes.constrain(Suspended::Exit { lower, upper }.into(), item);
             }
             Op::Declare { .. } | Op::Row { .. } => {}
         }
@@ -221,7 +216,7 @@ impl Recorded {
         let visit = |classes: &Classes<Live>| -> Vec<ClassId> {
             asked.iter().copied().chain(classes.roots().map(|root| root.id())).collect()
         };
-        settle(&mut self.classes, &mut self.scopes, &mut self.closures, &self.law, &mut self.outcome, at, &visit);
+        settle(&mut self.store, &self.law, &mut self.outcome, at, &visit);
     }
 
     /// The class `path` gives as the store stands, recording nothing: none where
@@ -229,7 +224,7 @@ impl Recorded {
     pub fn class(&self, path: &Path) -> Option<ClassId> {
         let mut class = *self.names.get(&path.root)?;
         for segment in &path.segments {
-            class = self.classes.get(self.classes.find(class)).state.part(&key(segment))?;
+            class = self.store.classes.get(self.store.classes.find(class)).state.part(&key(segment))?;
         }
         Some(class)
     }
@@ -244,7 +239,7 @@ impl Recorded {
         if depth == 0 {
             return "...".to_owned();
         }
-        let State::Decided(decided) = &self.classes.get(self.classes.find(class)).state else {
+        let State::Decided(decided) = &self.store.classes.get(self.store.classes.find(class)).state else {
             return "?".to_owned();
         };
         let at = |part: &ClassId| self.written_to(*part, depth - 1);
@@ -254,8 +249,8 @@ impl Recorded {
         };
         let listed = |parts: &[ClassId]| parts.iter().map(at).collect::<Vec<_>>().join(", ");
         match &decided.shape {
-            Shape::Ref(crate::primitive::ty::Mutability::Shared, target) => format!("&{}", at(target)),
-            Shape::Ref(crate::primitive::ty::Mutability::Exclusive, target) => format!("&mut {}", at(target)),
+            Shape::Ref(Mutability::Shared, target) => format!("&{}", at(target)),
+            Shape::Ref(Mutability::Exclusive, target) => format!("&mut {}", at(target)),
             Shape::Tuple(components) if components.len() == 1 => format!("({},)", listed(components)),
             Shape::Tuple(components) => format!("({})", listed(components)),
             Shape::Unit => "()".to_owned(),
@@ -422,12 +417,22 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
     Ok(recorded)
 }
 
+/// Why a text did not run to what it asserts.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Failed {
+    /// It is no program: it does not parse, or cannot be recorded.
+    Unread(String),
+    /// It is a program, and solving it comes to something else than it asserts,
+    /// or to one thing in one order and another in another.
+    Differs(String),
+}
+
 /// Reads `text`, and solves it in each of `orders` orders of asking: what it
 /// asserts holds in each, and every order comes to the same refusals. A program
 /// that asserts neither that it is accepted nor that it is refused is to be
 /// accepted.
-pub fn run(text: &str, orders: u64) -> Result<(), String> {
-    let program = super::parse(text)?;
+pub fn run(text: &str, orders: u64) -> Result<(), Failed> {
+    let program = super::parse(text).map_err(Failed::Unread)?;
     let accepted = Assertion::Accepted;
     let says = program
         .assertions
@@ -436,13 +441,15 @@ pub fn run(text: &str, orders: u64) -> Result<(), String> {
     let assertions = program.assertions.iter().chain((!says).then_some(&accepted));
     let mut first = None;
     for order in 0..orders {
-        let mut recorded = record(&program)?;
+        let mut recorded = record(&program).map_err(Failed::Unread)?;
         recorded.settle(order);
-        if let Err(violations) = recorded.classes.verify() {
-            return Err(format!("in order {order}, the store is broken: {violations:?}"));
+        if let Err(violations) = recorded.store.classes.verify() {
+            return Err(Failed::Differs(format!("in order {order}, the store is broken: {violations:?}")));
         }
         for assertion in assertions.clone() {
-            recorded.check(assertion).map_err(|found| format!("in order {order}, `assert {assertion};` does not hold: {found}"))?;
+            recorded
+                .check(assertion)
+                .map_err(|found| Failed::Differs(format!("in order {order}, `assert {assertion};` does not hold: {found}")))?;
         }
         let mut refusals: Vec<_> = recorded
             .outcome
@@ -453,7 +460,7 @@ pub fn run(text: &str, orders: u64) -> Result<(), String> {
         refusals.sort();
         let first = first.get_or_insert_with(|| refusals.clone());
         if refusals != *first {
-            return Err(format!("order {order} is refused otherwise than order 0: {refusals:?} and {first:?}"));
+            return Err(Failed::Differs(format!("order {order} is refused otherwise than order 0: {refusals:?} and {first:?}")));
         }
     }
     Ok(())
