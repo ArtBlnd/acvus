@@ -32,7 +32,7 @@ use crate::primitive::ty::{PartKey, Shape};
 use crate::primitive::{ClosureId, LambdaId, ScopeId};
 use crate::store::Store;
 use crate::store::classes::Classes;
-use crate::store::closures::Closures;
+use crate::store::closures::{Closures, Copy};
 use crate::store::template::Fate;
 
 /// Two classes that are one type.
@@ -174,7 +174,7 @@ pub enum Place {
 /// |---|---|
 /// | a class with a head ([`Scribe::written`]) | a head a rule writes |
 /// | the classes of a template ([`Scribe::anew`]) | a signature at a boundary, the copy of a lambda |
-/// | a scope for a copy ([`Scribe::copy_of`]) | the copy of a lambda lies in a scope of its own |
+/// | a scope, and what copy lies in it ([`Scribe::scope_within`], [`Scribe::copied`]) | the copy of a lambda lies in a scope of its own |
 /// | a closure ([`Scribe::name`]) | a copy names a closure of each lambda its body defines |
 #[derive(Debug)]
 pub struct Scribe<'a, K>
@@ -204,11 +204,14 @@ where
         &self.store.closures
     }
 
-    /// Makes a scope within `scope` for a copy of the template of `closure`.
-    pub fn copy_of(&mut self, closure: ClosureId, scope: ScopeId) -> ScopeId {
-        let copy = self.store.scopes.child(scope);
-        self.store.closures.copied(copy, closure);
-        copy
+    /// Makes a scope within `scope`, for a copy to lie in.
+    pub fn scope_within(&mut self, scope: ScopeId) -> ScopeId {
+        self.store.scopes.child(scope)
+    }
+
+    /// Says that the classes of `scope` are `copy`.
+    pub fn copied(&mut self, scope: ScopeId, copy: Copy<K>) {
+        self.store.closures.copied(scope, copy);
     }
 
     /// Names a closure anew, `lambda` over `captures`.

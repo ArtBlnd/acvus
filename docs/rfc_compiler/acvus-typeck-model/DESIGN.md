@@ -116,10 +116,10 @@ constraint nothing has happened to is not looked at again.
   fails no test: no program has been found where a class a refusal is of is connected again
   after the refusal. The orders the tests run differ in which class is asked first, and not
   in which constraint is looked at first.
-- **A function value passed to a function type a row writes**, left as a `todo`, and a call of a
-  closure within a copy of it.
-- **That a copy lies in a scope of its own.** Nothing reads which closure a scope is a copy of
-  until a call within a copy is decided.
+- **A function value passed to a function type a row writes**, left as a `todo`.
+- **That solving ends.** A call within a copy of what it calls makes no copy, and making one
+  there does not end; but each copy names the closures its body defines anew, and that no
+  chain of those goes on without end is argued and not tested.
 
 ## 6. The text
 

@@ -256,13 +256,12 @@ fn an_argument_enters_a_capture_through_the_copy() {
     comes_to("Option<u8>", |w, law, lets| remembering(w, law, lets, &[U8, U8]));
 }
 
-/// The parameter of the definition is one class with the capture's payload, and
-/// it is a class nothing enters: it takes the head it is held against where there
-/// is one, and here there are two, so it takes none, as `let x; a = x; a = 0u8;
-/// a = 0u16;` takes none.
+/// What enters below the top of a type is one type with what is there, so the
+/// parameter of each copy is the payload of the capture, and the two arguments
+/// meet there.
 #[test]
 fn the_arguments_of_two_calls_meet_in_a_capture() {
-    comes_to("refused: UndecidedClass", |w, law, lets| remembering(w, law, lets, &[U8, U16]));
+    comes_to("refused: Mismatch, UndecidedClass", |w, law, lets| remembering(w, law, lets, &[U8, U16]));
 }
 
 // What a body refuses apart from its parameters.

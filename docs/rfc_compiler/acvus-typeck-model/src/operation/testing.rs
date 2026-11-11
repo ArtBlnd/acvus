@@ -130,11 +130,16 @@ impl World {
     /// A lambda over `captures`, where the text defines it: the class of the
     /// expression, which the function value of a closure named anew enters. A
     /// definition is a use that passes nothing, so it is called with arguments
-    /// nothing enters.
+    /// that are each `nothing as _`, of a class nothing enters.
     pub(super) fn define(&mut self, lambda: LambdaId, captures: Vec<ClassId>, parameters: usize) -> ClassId {
         let closure = self.store.closures.name(lambda, captures);
         let value = self.text(Shape::FnValue(BTreeSet::from([closure])));
-        let nothing: Vec<ClassId> = (0..parameters).map(|_| self.undecided()).collect();
+        let nothing: Vec<ClassId> = (0..parameters)
+            .map(|_| {
+                let nothing = self.undecided();
+                self.alone(nothing)
+            })
+            .collect();
         self.call(value, &nothing);
         value
     }

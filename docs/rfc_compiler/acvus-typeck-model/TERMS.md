@@ -365,8 +365,8 @@ them, and they are added without changing what is here. What is known to need ru
 What depends on calls waits with them: a receiver's adjustment, and a use with several
 candidates.
 
-What has been said so far. A lambda, its captures and its calls are implemented and written by
-the text; a module, a brand and a recursive call are not.
+What has been said so far. A lambda, its captures and its calls, a recursive one included, are
+implemented and written by the text; a module and a brand are not.
 
 - **A lambda has two phases, its body and its instantiation.** From outside its body a lambda
   value shows its signature and nothing else; inside, the body stands where it is written.
@@ -402,13 +402,14 @@ the text; a module, a brand and a recursive call are not.
   copied once, as where it is called, with no argument entering its parameters. That copy is
   the first phase: what the body says of a capture is said there, and
   `|x| { let z: u8 = "a"; x }` is refused there whether the lambda is called or not. Its
-  parameter is a class that nothing enters, and it is decided as any such class is: as the
-  head it is held against where there is one, and else last and as `!`, which adds nothing to
-  what it enters. With `let a = None; let f = |x| a = Some(x);`, `a` is `Option<!>` where `f`
-  is not called, `Option<u8>` after `f(0u8)`, and refused after `f(0u8); f(1u16)`. That last
-  is refused as `let x; a = x; a = 0u8; a = 0u16;` is, a class left undecided: what enters
-  below the top of a type is one type with what is there, so the parameter is the payload of
-  `a`. A constraint from a parameter into a capture is one that enters, as any.
+  argument is `nothing as _`, of a class nothing enters: what the body does with the
+  parameter asks no head of it, so it is `!`, decided last, and adds nothing to what it
+  enters. With `let a = None; let f = |x| a = Some(x);`, `a` is `Option<!>` where `f` is not
+  called, `Option<u8>` after `f(0u8)`, and refused after `f(0u8); f(1u16)`: what enters below
+  the top of a type is one type with what is there, so the parameter of each copy is the
+  payload of `a`, and the two arguments do not join there. Were the argument a class that
+  takes a head from what it is held against, `|g| g(g)` would give its parameter the type of
+  a function that takes itself, which holds itself. A constraint from a parameter into a capture is one that enters, as any.
   The same copy is made where two lambdas meet, of both together.
 - **What the last rung decided is finished, and a call that comes to be known after it is held
   against that.** A call is known when what it calls is decided, which the earlier rungs do,
@@ -445,15 +446,17 @@ the text; a module, a brand and a recursive call are not.
 - **A brand is a generic parameter.** Which brand a returned value has is what the type
   variable of the signature became in that call. There is no brand that is itself a variable
   with a bound.
-- **Recursion: one instance of a closure.** Where a bound of an instance of a closure calls
-  that closure again, no new instance is made; the call is held against the instance the bound
-  came from. Which instance that is, is read from what made the call and not from when it is
-  solved. A recursion that changes its type is then refused as a mismatch, and one that grows
-  it as a class that is a part of itself.
+- **Recursion: a call of a closure within a copy of it is a call of that copy.** No copy is
+  made, and nothing else differs from any call: each argument enters the copy's parameter, and
+  the result is one type with the copy's result. Which copy that is, is read from the scope
+  the call lies in and not from when it is solved. So `let f = |g, n| if .. { 0u8 } else
+  { g(g, n) }; f(f, 1u8)` gives `u8`, a lambda that captures the class it is assigned to calls
+  itself the same way, and two lambdas call one another. The arguments of the call and of the
+  call within it join in the one parameter, so a recursion that changes its type or grows it
+  is refused as a mismatch, and `|g| g(g)`, which no branch gives a value, gives `!`.
 
 Marked, not ruled:
 
-- Whether a recursive call is equal to the instance it is held against or enters it.
 - A recursion through a class that two lambdas entered.
 - A brand that nothing enters.
 - Two lambdas that meet and are not called: no copy is made where they meet, so results that

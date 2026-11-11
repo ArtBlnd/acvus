@@ -13,11 +13,13 @@
 
 use std::collections::BTreeSet;
 
-use crate::primitive::ItemId;
+use crate::primitive::{ClosureId, ItemId, ScopeId};
 use crate::primitive::class::{ClassKind, State};
 use crate::primitive::constraint::{Bound, Constraint};
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::Shape;
+
+use crate::store::closures::Copy;
 
 use super::super::law::{Looked, Pair, Scribe};
 use super::lambdas::Lambdas;
@@ -59,32 +61,18 @@ where
     let mut pairs = Vec::new();
     let mut constraints = Vec::new();
     for closure in called {
-        if scribe.closures().within(scribe.scopes(), scope, closure).is_some() {
-            todo!("a call of a closure within a copy of it: whether it is equal to that copy or enters it");
-        }
-        let closed = scribe.closures().get(closure).clone();
-        let lambda = lambdas.get(closed.lambda);
-        let copy = scribe.copy_of(closure, scope);
-        let made = scribe.anew(&lambda.template, copy, at);
-        pairs.extend(lambda.captures.iter().zip(closed.captures).map(|(stands, captured)| Pair::Classes(made[stands], captured)));
-        pairs.push(Pair::Classes(made[&lambda.result], result));
-        for (parameter, argument) in lambda.parameters.iter().zip(&arguments) {
+        // A call within a copy of the closure it calls is a call of that copy,
+        // and makes none: what is called is being used already.
+        let used = match scribe.closures().within(scribe.scopes(), scope, closure).cloned() {
+            Some(within) => within,
+            None => copy(scribe, lambdas, closure, scope, at, &mut pairs, &mut constraints),
+        };
+        pairs.push(Pair::Classes(used.result, result));
+        for (parameter, argument) in used.parameters.iter().zip(&arguments) {
             constraints.push(
                 Bound::Enter {
                     lower: *argument,
-                    upper: made[parameter],
-                }
-                .into(),
-            );
-        }
-        for defined in &lambda.defines {
-            let captures = defined.captures.iter().map(|captured| made[captured]).collect();
-            let named = scribe.name(defined.lambda, captures);
-            let written = scribe.written(copy, Shape::FnValue(BTreeSet::from([named])), BTreeSet::from([defined.by]));
-            constraints.push(
-                Bound::Enter {
-                    lower: written,
-                    upper: made[&defined.value],
+                    upper: *parameter,
                 }
                 .into(),
             );
@@ -95,4 +83,46 @@ where
         adjustments: Vec::new(),
         constraints,
     }
+}
+
+/// Copies the template of `closure` into a scope of its own within `scope`, by
+/// `at`, and gives the copy. Each class standing for a capture is one type with
+/// what the closure captures, and each lambda the body defines is a closure named
+/// anew, whose function value enters the class of the lambda.
+fn copy<K>(
+    scribe: &mut Scribe<'_, K>,
+    lambdas: &Lambdas,
+    closure: ClosureId,
+    scope: ScopeId,
+    at: ItemId,
+    pairs: &mut Vec<Pair<K>>,
+    constraints: &mut Vec<Constraint<K>>,
+) -> Copy<K>
+where
+    K: ClassKind<Constraint = Constraint<K>>,
+{
+    let closed = scribe.closures().get(closure).clone();
+    let lambda = lambdas.get(closed.lambda);
+    let lies_in = scribe.scope_within(scope);
+    let made = scribe.anew(&lambda.template, lies_in, at);
+    let copy = Copy {
+        closure,
+        parameters: lambda.parameters.iter().map(|parameter| made[parameter]).collect(),
+        result: made[&lambda.result],
+    };
+    scribe.copied(lies_in, copy.clone());
+    pairs.extend(lambda.captures.iter().zip(closed.captures).map(|(stands, captured)| Pair::Classes(made[stands], captured)));
+    for defined in &lambda.defines {
+        let captures = defined.captures.iter().map(|captured| made[captured]).collect();
+        let named = scribe.name(defined.lambda, captures);
+        let written = scribe.written(lies_in, Shape::FnValue(BTreeSet::from([named])), BTreeSet::from([defined.by]));
+        constraints.push(
+            Bound::Enter {
+                lower: written,
+                upper: made[&defined.value],
+            }
+            .into(),
+        );
+    }
+    copy
 }

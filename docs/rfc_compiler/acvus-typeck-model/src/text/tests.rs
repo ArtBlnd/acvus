@@ -307,3 +307,44 @@ fn a_lambda_that_names_one_class_twice_or_declares_is_no_program() {
 fn each_capture_is_the_class_of_its_own_name() {
     holds("f <- fn [a, b] () -> r { a <- u8; b <- u16; }; assert a: u8; assert b: u16;");
 }
+
+// A call of a closure within a copy of it.
+
+#[test]
+fn a_lambda_calls_itself_passed_to_itself() {
+    // `let f = |g, n| if .. { 0u8 } else { g(g, n) }; f(f, 1u8)`
+    holds("f <- fn (g, n) -> r { r <- u8; call g(g, n) to s; r <- s; }; x <- u8; call f(f, x) to w; assert w: u8;");
+    // What is never given by any branch never returns.
+    holds("f <- fn (g) -> r { call g(g) to r; }; call f(f) to w; assert w: !;");
+}
+
+#[test]
+fn a_lambda_calls_itself_captured() {
+    holds("f <- fn [f] (n) -> r { r <- u8; call f(n) to s; r <- s; }; x <- u8; call f(x) to w; assert w: u8;");
+}
+
+#[test]
+fn two_lambdas_call_one_another() {
+    holds(
+        "even <- fn [odd] (n) -> r { r <- bool; call odd(n) to s; r <- s; };
+         odd <- fn [even] (n) -> r { call even(n) to r; };
+         x <- u8; call even(x) to w; assert w: bool;",
+    );
+}
+
+#[test]
+fn the_arguments_of_a_call_and_of_the_call_within_it_enter_one_parameter() {
+    let body = |inner: &str| format!("f <- fn (g, x) -> r {{ y <- {inner}; call g(g, y) to s; r <- x; }};");
+    holds(&format!("{} x <- Option<nothing>; call f(f, x) to w; assert w: Option<u8>;", body("Option<u8>")));
+    holds(&format!("{} x <- u8; call f(f, x) to w; assert refused Mismatch, UndecidedClass;", body("u16")));
+    holds(&format!("{} x <- Option<u8>; call f(f, x) to w; assert refused Mismatch;", body("Option<x>")));
+}
+
+#[test]
+fn the_arguments_of_two_calls_meet_in_a_capture() {
+    holds(
+        "a <- Option<nothing>; f <- fn [a] (x) -> r { a <- Option<x>; };
+         u <- u8; v <- u16; call f(u) to p; call f(v) to q;
+         assert refused Mismatch, UndecidedClass;",
+    );
+}
