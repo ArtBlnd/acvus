@@ -204,25 +204,23 @@ language, and a program that the present model refuses is what the translation i
 ## The programs that differ, and why
 
 25 of the 87 do not come to what their case expected. Each is here once, by what makes the
-difference. "Opened" says the program was read and run in parts to find the cause; the rest
-are placed by their name and what they come to.
+difference. Each was read and run in parts to find the cause.
 
-| Why | Programs | Opened |
-|---|---|---|
-| The case was wrong: `?` exits into the class the tail enters, so a body with a `?` and a tail that is no `Result` is refused (`Ok(show(a))` is what is meant) | `completeness/a-script-with-a-try-and-a-text-tail` | yes |
-| The present law, as `TERMS.md` rules it: `&&T` is a type | `spec/a-lend-that-reborrows-a-reference`, `rules/types/a-a-reference-to-a-reference` | yes |
-| The present law: a part read or written gives its class a head | `spec/a-field-written-by-the-text`, `spec/a-language-variant-names-its-constructor`, `spec/a-language-variant-reads-back-its-payload`, `probe/two-references-of-two-mutabilities-enter-one-class` | yes |
-| The present law: a part named on a class `!` entered | `holes/a-pattern-on-a-scrutinee-of-type-never` | yes |
-| The present law: a join makes the parts one type, so two types that meet at a part are a `Mismatch` and leave the classes above with no type | `spec/an-empty-part-with-two-upper-bounds` | yes |
-| The present law: a part nothing enters, with two upper bounds, is not filled; both refuse, for another cause | `rules/place/a-every-arm-applies-to-the-scrutinee` | yes |
-| The present law: a part named on a class that is `!`, or on a head that has no place for it, is `NotHeld`; both refuse, for another cause | `rules/solving/a-component-names-no-member`, `spec/two-language-variants-of-two-constructors` | yes |
-| The present model says more: a class passed into a type that holds it is `Occurs` | `rules/solving/a-a-class-passing-into-a-type-that-holds-it-is-not-filled` | yes |
-| A join uses no view and no cast | `completeness/two-references-into-a-written-slice-reference`, `completeness/two-references-of-two-nodes-enter-one-class`, `phases/decomposition-through-a-cast` | yes |
-| The text cannot write the value of a literal | `rules/classes/a-a-literal-the-type-cannot-hold`, `rules/solving/a-litvar-default-that-cannot-hold-it`, `rules/solving/a-litvar-into-a-type-that-cannot-hold-it` | yes |
-| The element of a `Vec` read as a part | `spec/an-index-through-a-view`, `phases/unify-a-view-links-an-index`, `spec/a-for-over-a-vec-by-value`, `completeness/an-index-of-an-unsuffixed-literal` | the last is not |
-| Two heads from above and a row | `rules/solving/a-a-class-with-two-contexts-is-refused` | yes |
-| `?` of an `Option`, which the present law refuses | `spec/a-try-in-a-match-arm` | yes |
+| Why | Programs |
+|---|---|
+| The case was wrong: `?` exits into the class the tail enters, so a body with a `?` and a tail that is no `Result` is refused (`Ok(show(a))` is what is meant) | `completeness/a-script-with-a-try-and-a-text-tail` |
+| The present law, as `TERMS.md` rules it: `&&T` is a type | `spec/a-lend-that-reborrows-a-reference`, `rules/types/a-a-reference-to-a-reference` |
+| The present law: a part read or written gives its class a head | `spec/a-field-written-by-the-text`, `spec/a-language-variant-names-its-constructor`, `spec/a-language-variant-reads-back-its-payload`, `probe/two-references-of-two-mutabilities-enter-one-class` |
+| The present law: a part named on a class `!` entered | `holes/a-pattern-on-a-scrutinee-of-type-never` |
+| The present law: a join makes the parts one type, so two types that meet at a part are a `Mismatch` and leave the classes above with no type | `spec/an-empty-part-with-two-upper-bounds` |
+| The present law: a part nothing enters, with two upper bounds, is not filled; both refuse, for another cause | `rules/place/a-every-arm-applies-to-the-scrutinee` |
+| The present law: a part named on a class that is `!`, or on a head that has no place for it, is `NotHeld`; both refuse, for another cause | `rules/solving/a-component-names-no-member`, `spec/two-language-variants-of-two-constructors` |
+| The present model says more: a class passed into a type that holds it is `Occurs` | `rules/solving/a-a-class-passing-into-a-type-that-holds-it-is-not-filled` |
+| The present law: a value is changed only where it is passed, to a parameter or by `as`. What enters a class is joined, and a join goes through no row, so a `&Vec<u8>` and a `&[u8; 2]` that enter a class written `&[u8]` are a `Mismatch`. Passed to it, each goes | `completeness/two-references-into-a-written-slice-reference`, `completeness/two-references-of-two-nodes-enter-one-class`, `phases/decomposition-through-a-cast` |
+| The text cannot write the value of a literal, so `256` is not told from `1` | `rules/classes/a-a-literal-the-type-cannot-hold`, `rules/solving/a-litvar-default-that-cannot-hold-it`, `rules/solving/a-litvar-into-a-type-that-cannot-hold-it` |
+| The present law: a projection goes through no row, and indexing a type from outside is a call. The case reads `v[0]` as a part of a `Vec` | `spec/an-index-through-a-view`, `phases/unify-a-view-links-an-index`, `spec/a-for-over-a-vec-by-value`, `completeness/an-index-of-an-unsuffixed-literal` |
+| The present law: of two heads asked of a class, the one that goes to both is taken, so `x` passed to `A` and to `B` with a row `A -> B` is `A` | `rules/solving/a-a-class-with-two-contexts-is-refused` |
+| `?` of an `Option`, which the present law refuses | `spec/a-try-in-a-match-arm` |
 
-The first eight rows and the last are differences the present law means or a case that was
-wrong. Four are not settled, each a thing to rule or to write: a join through a view or a
-cast, the value of a literal, the element of a `Vec`, and two heads from above.
+The law answers every one. The three of the literal's value wait for the text to write one;
+each of the others differs as the present law means it to, or by a case that was wrong.
