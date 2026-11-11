@@ -27,7 +27,7 @@ use crate::store::classes::Classes;
 
 use super::super::law::{Heads, Offer};
 use super::functions::Functions;
-use super::{Looked, Told, View, enter, tell};
+use super::{Looked, Told, View, admits, enter, tell};
 
 /// The heads classes take now: those of the first rung of the language's ladder
 /// that gives any.
@@ -86,6 +86,19 @@ where
     /// Every head the class will be held against: see [`asked`].
     fn asked(&self) -> &[Shape<K::Id>] {
         self.asked.get_or_init(|| asked(self.classes, self.functions, self.class, &mut BTreeSet::new()))
+    }
+
+    /// The heads asked of the class that it may take: each of the domain its
+    /// literals leave, and every one where it holds no literal.
+    fn may_take(&self) -> impl Iterator<Item = &Shape<K::Id>> {
+        let domain = domain_of(self.classes, self.class);
+        self.asked().iter().filter(move |head| domain.as_ref().is_none_or(|(domain, _)| admits(head, domain)))
+    }
+
+    /// Whether heads are asked of the class and it may take none of them: it
+    /// holds a literal, and each head asked is outside the literal's domain.
+    fn may_take_none_of_what_is_asked(&self) -> bool {
+        !self.asked().is_empty() && self.may_take().next().is_none()
     }
 
     /// Whether neither a lower nor an upper bound says anything of the class:
@@ -272,9 +285,11 @@ where
     true
 }
 
-/// Rung 1: a class nothing enters takes the one head, of those it will be held
-/// against, that every constraint waiting on it would have it take. A literal's class
-/// takes one of its domain alone.
+/// Rung 1: a class nothing enters takes the one head, of those asked of it
+/// that it may take, that every constraint waiting on it would have it take.
+///
+/// Two heads asked of one layer are one candidate: which of them gives the
+/// head makes no difference, as only its constructor and members are taken.
 fn from_above<K>(said: &Said<'_, K>) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
@@ -283,17 +298,12 @@ where
     if !said.entering().is_empty() {
         return Offer::Nothing;
     }
-    let mut candidates: BTreeMap<Shape<()>, Shape<K::Id>> = BTreeMap::new();
-    for head in said.asked() {
-        candidates.entry(head.layer()).or_insert_with(|| head.clone());
+    let mut candidates: BTreeMap<Shape<()>, &Shape<K::Id>> = BTreeMap::new();
+    for head in said.may_take() {
+        candidates.entry(head.layer()).or_insert(head);
     }
-    let domain = domain_of(classes, class);
-    let mut taken_heads = candidates.into_values().filter(|head| {
-        let in_domain = domain
-            .as_ref()
-            .is_none_or(|(domain, _)| matches!(head, Shape::Scalar(scalar) if domain.0.contains(scalar)));
-        in_domain && taken(View::of(classes), functions, class, head, &mut BTreeSet::new())
-    });
+    let would_be_taken = |head: &&Shape<K::Id>| taken(View::of(classes), functions, class, head, &mut BTreeSet::new());
+    let mut taken_heads = candidates.into_values().filter(would_be_taken).cloned();
     match (taken_heads.next(), taken_heads.next()) {
         (Some(shape), None) => Offer::Head {
             shape,
@@ -430,9 +440,8 @@ where
 /// What is refused of `class` when nothing more can be done: a class that is a
 /// part of itself has no finite type, and a class still undecided has no type.
 ///
-/// A literal's class that heads are asked of, none of them of its domain, is
-/// undecided for that: rung 1 passes over such a head, as another may come, and
-/// here none has.
+/// A class that heads are asked of, none of which it may take, is undecided for
+/// that: rung 1 passes over such a head, as another may come, and here none has.
 pub fn end<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Vec<Refused<K>>
 where
     K: ClassKind<Constraint = Constraint<K>>,
@@ -457,12 +466,10 @@ where
     if let State::Undecided(undecided) = &classes.get(root).state {
         let constraints = classes.constraints_of(class).map(|(_, at)| *at);
         let domains = undecided.domains.iter().map(|(_, at)| *at);
-        let heads = asked(classes, functions, class, &mut BTreeSet::new());
-        let outside = domain_of(classes, class).is_some_and(|(domain, _)| {
-            !heads.is_empty() && heads.iter().all(|head| !matches!(head, Shape::Scalar(scalar) if domain.0.contains(scalar)))
-        });
+        let said = Said::of(classes, functions, class);
+        let cause = if said.may_take_none_of_what_is_asked() { Cause::EmptyDomain } else { Cause::UndecidedClass };
         refusals.push(Refused {
-            cause: if outside { Cause::EmptyDomain } else { Cause::UndecidedClass },
+            cause,
             items: constraints.chain(named.iter().copied()).chain(domains).collect(),
             of: vec![class],
         });

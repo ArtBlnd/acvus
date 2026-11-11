@@ -102,9 +102,8 @@ where
         }
     }
 
-    /// A literal's class is a scalar of the literal's domain.
     fn admits(&self, head: &Shape<K::Id>, domain: &Domain) -> bool {
-        matches!(head, Shape::Scalar(scalar) if domain.0.contains(scalar))
+        admits(head, domain)
     }
 
     fn heads(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
@@ -114,6 +113,12 @@ where
     fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>> {
         rungs::end(classes, &self.functions, class)
     }
+}
+
+/// Whether a class a literal registered `domain` in may have the head `head`: a
+/// literal's class is a scalar of the literal's domain.
+pub(super) fn admits<P>(head: &Shape<P>, domain: &Domain) -> bool {
+    matches!(head, Shape::Scalar(scalar) if domain.0.contains(scalar))
 }
 
 /// The store as a relation reads it: as it is, or with heads supposed of some
