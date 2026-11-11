@@ -3,9 +3,11 @@
 //! `f(ā)` passes `f` to `Fn(ā) → r`, a type the call writes. A function value is
 //! a set of closures, and nothing is compared inside one, so what it is to pass
 //! one to a function type is to use each of its closures: the template of each
-//! is copied, each argument enters the copy's parameter, and the copy's result
+//! is copied, each argument is passed to the copy's parameter, and the copy's result
 //! is the type the function type writes. So an argument keeps the bounds of
-//! every closure, and the results of all are one type.
+//! every closure, and the results of all are one type. An argument is passed, as it
+//! is to a declared function, and does not enter: a parameter that writes no type
+//! is a hole, one type with what is passed.
 //!
 //! A copy is solved by the rules of any class. It is made in a scope of its
 //! own, within the scope of the call, so what a call within a copy is a copy of
@@ -30,7 +32,7 @@ use super::lambdas::Lambdas;
 /// | Of each closure | In its copy |
 /// |---|---|
 /// | a class standing for a capture | is one type with the class the closure captures |
-/// | a parameter | is entered by the argument in its place |
+/// | a parameter | is what the argument in its place is passed to |
 /// | the result | is one type with the result of the function type |
 /// | a lambda the body defines | is a closure named anew, over the copies of what it captures |
 ///
@@ -70,7 +72,7 @@ where
         pairs.push(Pair::Classes(used.result, result));
         for (parameter, argument) in used.parameters.iter().zip(&arguments) {
             constraints.push(
-                Bound::Enter {
+                Bound::Change {
                     lower: *argument,
                     upper: *parameter,
                 }

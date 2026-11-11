@@ -427,9 +427,14 @@ implemented and written by the text; a module and a brand are not.
 - **A call is a function value passed to a function type.** `f(a, b)` passes `f` to
   `Fn(a, b) -> r`, a type the call writes, and what the language gives between the two is
   that each closure is used: its template is copied, each class that stands for a capture is
-  one type with what the closure captures, each argument enters its parameter, and the result
+  one type with what the closure captures, each argument is passed to its parameter, and the result
   is one type with `r`. A call of another count of arguments is refused. The copy that passes
   nothing is such a call, written where the lambda is, with arguments nothing enters.
+- **An argument is passed to its parameter, whatever is called.** A declared function, a
+  function type and a lambda take an argument the same way: it is passed, by what the language
+  gives, to the type the parameter writes. A parameter that writes none is a hole, which takes
+  what comes as it comes, so the argument and the parameter are one type. Nothing enters in a
+  call; a value enters where it flows into a variable.
 - **A template says which lambdas its body defines, and a copy names a closure of each
   anew**, over the copies of the classes written where it captures. Copying itself makes no
   closure and knows of none, and two copies share a class only where a closure captures it.
@@ -447,13 +452,13 @@ implemented and written by the text; a module and a brand are not.
   variable of the signature became in that call. There is no brand that is itself a variable
   with a bound.
 - **Recursion: a call of a closure within a copy of it is a call of that copy.** No copy is
-  made, and nothing else differs from any call: each argument enters the copy's parameter, and
-  the result is one type with the copy's result. Which copy that is, is read from the scope
+  made, and nothing else differs from any call: each argument is passed to the copy's parameter,
+  and the result is one type with the copy's result. Which copy that is, is read from the scope
   the call lies in and not from when it is solved. So `let f = |g, n| if .. { 0u8 } else
   { g(g, n) }; f(f, 1u8)` gives `u8`, a lambda that captures the class it is assigned to calls
   itself the same way, and two lambdas call one another. The arguments of the call and of the
-  call within it join in the one parameter, so a recursion that changes its type or grows it
-  is refused as a mismatch, and `|g| g(g)`, which no branch gives a value, gives `!`.
+  call within it are passed to the one parameter, so a recursion that changes its type or
+  grows it is refused, and `|g| g(g)`, which no branch gives a value, gives `!`.
 
 Marked, not ruled:
 
