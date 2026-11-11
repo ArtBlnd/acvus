@@ -9,6 +9,7 @@ use crate::primitive::id::Id;
 use crate::primitive::ty::PartKey;
 
 use super::classes::{Classes, Slot};
+use super::ledger::{ROLES, Recorded, Role};
 
 /// An invariant of the store that does not hold.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -23,20 +24,13 @@ where
     Dangling { holder: K::Id, id: K::Id },
     /// A part of an undecided class that no item names.
     Unnamed { class: K::Id, key: PartKey },
-    /// A constraint the store holds, an end of which names no class made.
-    Unanchored { constraint: K::Constraint, by: ItemId },
-    /// A class holding something of a constraint the store does not hold: one
-    /// finished, or one never recorded.
-    Guard { class: K::Id, constraint: K::Constraint, by: ItemId },
     /// A class that a constraint guards and should not, or does not and should: what
     /// a constraint guards is every class below one it holds apart, but for those it
     /// holds apart.
     Guarded { class: K::Id, constraint: K::Constraint, by: ItemId },
-    /// A class holding something of a constraint that is not among the classes
-    /// the store keeps the constraint as put on, so that it would be left there.
-    Unlisted { class: K::Id, constraint: K::Constraint, by: ItemId },
-    /// A constraint the store keeps as having `class` as an end and that has not,
-    /// or one that has and is not kept so.
+    /// What the ledger says `class` is to a constraint by the constraint and by
+    /// the class do not agree, or the class is no root, or it is said to be an
+    /// end of a constraint and is not, or is one and is not said to be.
     Misfiled { class: K::Id, constraint: K::Constraint, by: ItemId },
 }
 
@@ -57,7 +51,7 @@ where
                 Slot::Root(class) => {
                     let dangling = class
                         .state
-                        .held()
+                        .parts()
                         .into_iter()
                         .chain(class.connections.iter().flat_map(|(a, b, _)| [*a, *b]))
                         .filter(|held| held.index() >= self.slots.len())
@@ -66,69 +60,50 @@ where
                 }
             }
         }
-        for (constraint, by) in &self.constraints {
-            if [constraint.lower(), constraint.upper()].iter().any(|end| end.index() >= self.slots.len()) {
-                violations.push(Violation::Unanchored {
-                    constraint: constraint.clone(),
-                    by: *by,
-                });
-            }
-        }
         if !violations.is_empty() {
             return Err(violations);
         }
 
-        // The constraints kept by end, against those of each class found anew.
-        for root in self.roots() {
-            let kept: BTreeSet<_> = self.constraints_of(root.id()).cloned().collect();
-            let found: BTreeSet<_> = self
-                .constraints
-                .iter()
-                .filter(|(constraint, _)| self.find(constraint.lower()) == root || self.find(constraint.upper()) == root)
-                .cloned()
-                .collect();
-            for (constraint, by) in kept.symmetric_difference(&found) {
-                violations.push(Violation::Misfiled {
-                    class: root.id(),
-                    constraint: constraint.clone(),
-                    by: *by,
-                });
+        // The ledger says what each constraint has to do with which class twice,
+        // by constraint and by class: the two agree, name roots alone, and have
+        // the ends the constraint has.
+        let (classes_of, constraints_of) = self.ledger().both_ways();
+        let misfiled = |class: K::Id, recorded: &Recorded<K>| Violation::Misfiled {
+            class,
+            constraint: recorded.0.clone(),
+            by: recorded.1,
+        };
+        for (recorded, classes) in classes_of {
+            for role in ROLES {
+                for class in classes.of(role) {
+                    let is_root = class.index() < self.slots.len() && self.find(*class).id() == *class;
+                    let both = constraints_of.get(class).is_some_and(|constraints| constraints.of(role).contains(recorded));
+                    if !is_root || !both {
+                        violations.push(misfiled(*class, recorded));
+                    }
+                }
+            }
+            let ends = BTreeSet::from([self.find(recorded.0.lower()).id(), self.find(recorded.0.upper()).id()]);
+            for class in ends.symmetric_difference(classes.of(Role::End)) {
+                violations.push(misfiled(*class, recorded));
             }
         }
-
-        for (id, slot) in self.slots.iter() {
-            let Slot::Root(class) = slot else {
-                continue;
-            };
-            let held = &class.held;
-            for guard in held.guards.iter().chain(&held.apart).chain(&held.waiters) {
-                if !self.constraints.contains(guard) {
-                    violations.push(Violation::Guard {
-                        class: id,
-                        constraint: guard.0.clone(),
-                        by: guard.1,
-                    });
-                }
-                if !self.holding(guard).contains(&id) {
-                    violations.push(Violation::Unlisted {
-                        class: id,
-                        constraint: guard.0.clone(),
-                        by: guard.1,
-                    });
+        for (class, constraints) in constraints_of {
+            for role in ROLES {
+                for recorded in constraints.of(role) {
+                    if !classes_of.get(recorded).is_some_and(|classes| classes.of(role).contains(class)) {
+                        violations.push(misfiled(*class, recorded));
+                    }
                 }
             }
         }
         // What each constraint guards, found anew by walking down from what it holds
-        // apart, against the guards the store kept as structure grew.
-        for recorded in &self.constraints {
-            let apart: BTreeSet<K::Id> = self
-                .roots()
-                .filter(|root| self.get(*root).held.apart.contains(recorded))
-                .map(|root| root.id())
-                .collect();
+        // apart, against what the ledger kept as structure grew.
+        for (recorded, classes) in classes_of {
+            let apart = classes.of(Role::Apart);
             let below = self.below(apart.iter().copied());
             for root in self.roots() {
-                let guarded = self.get(root).held.guards.contains(recorded);
+                let guarded = classes.of(Role::Guarded).contains(&root.id());
                 let expected = below.contains(&root.id()) && !apart.contains(&root.id());
                 if guarded != expected {
                     violations.push(Violation::Guarded {
@@ -168,7 +143,7 @@ mod tests {
 
     use super::*;
     use crate::primitive::class::{Live, Part, Side, Template, Undecided};
-    use crate::primitive::constraint::{Bound, Constraint};
+    use crate::primitive::constraint::Bound;
     use crate::primitive::id::Arena;
     use crate::primitive::scope::Scopes;
     use crate::primitive::{ClassId, Name};
@@ -235,18 +210,6 @@ mod tests {
         templates.constrain(Bound::Enter { lower: other, upper: hole }.into(), at);
         templates.unify(&scopes, other, reference, at);
         assert_eq!(templates.verify(), Ok(()));
-    }
-
-    #[test]
-    fn a_constraint_to_no_class_made_is_found() {
-        let mut world = World::new();
-        let a = world.undecided();
-        let mut elsewhere = Classes::<Live>::default();
-        let stray = (0..4).map(|_| elsewhere.undecided(world.scopes.root())).last().expect("four classes were made");
-        let at = world.items.push(());
-        let constraint = Constraint::Bound(Bound::Enter { lower: a, upper: stray });
-        world.classes.constraints.insert((constraint, at));
-        assert_eq!(world.classes.verify(), Err(vec![Violation::Unanchored { constraint, by: at }]));
     }
 
     #[test]

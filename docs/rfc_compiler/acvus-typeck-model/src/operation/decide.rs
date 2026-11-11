@@ -6,9 +6,10 @@ use crate::store::Store;
 use crate::store::classes::Classes;
 
 use super::Outcome;
-use super::connect::{connect, take_in};
+use super::connect::connect;
 use super::law::{Head, Heads, Law};
 use super::settle::asked;
+use super::take_in::take_in;
 
 /// Decides every class that may be decided now, and says whether one was
 /// decided. `at` is the item a decision goes by, and `visit` gives the classes in

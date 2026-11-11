@@ -8,6 +8,7 @@
 
 pub mod classes;
 pub mod closures;
+pub mod ledger;
 pub mod template;
 pub mod verify;
 

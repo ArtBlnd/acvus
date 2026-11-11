@@ -177,10 +177,7 @@ where
     }
     let view = View::of(classes);
     let mut heads: Vec<Shape<K::Id>> = classes
-        .get(classes.find(root))
-        .held
-        .waiters
-        .iter()
+        .waiting_on(root)
         .flat_map(|(constraint, at)| tell(&view, functions, constraint, *at).asks)
         .filter(|(of, _)| classes.find(*of).id() == root)
         .map(|(_, head)| head)
@@ -207,10 +204,7 @@ where
     }
     let view = view.supposing(root, head.clone());
     let refused = classes
-        .get(classes.find(root))
-        .held
-        .waiters
-        .iter()
+        .waiting_on(root)
         .any(|(constraint, at)| matches!(tell(&view, functions, constraint, *at), Told { looked: Looked::Refused(_), .. }));
     if refused {
         return false;
@@ -252,7 +246,7 @@ where
     match (taken_heads.next(), taken_heads.next()) {
         (Some(shape), None) => Offer::Head {
             shape,
-            by: classes.get(classes.find(class)).held.waiters.iter().map(|(_, at)| *at).collect(),
+            by: classes.waiting_on(class).map(|(_, at)| *at).collect(),
         },
         _ => Offer::Nothing,
     }

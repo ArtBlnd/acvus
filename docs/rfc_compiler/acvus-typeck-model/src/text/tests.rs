@@ -207,3 +207,13 @@ fn a_shared_reference_read_through_is_not_passed_as_an_exclusive_one() {
     holds(&program("&mut u8", "assert refused NoChange;"));
     holds(&program("&u8", "assert call takes Deref, Reborrow;"));
 }
+
+#[test]
+fn a_part_read_through_a_reference_that_refers_to_itself_lies_nowhere() {
+    holds("r <- &r; v <- r.x; assert refused NotHeld, ..;");
+}
+
+#[test]
+fn a_literal_made_one_type_with_a_head_outside_its_domain_is_refused() {
+    holds("o <- {f: {integer}}; o <- {f: String}; assert refused EmptyDomain, ..;");
+}

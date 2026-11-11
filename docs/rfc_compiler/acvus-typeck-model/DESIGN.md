@@ -23,7 +23,7 @@ Each is done in one place, and there is no other way to do what it does.
 | looking at a constraint | Asks the law what the constraint comes to, and does what follows: finishes it, connects its pairs and records the constraints that take its place, or finishes it and refuses, or states what it waits on and holds apart. | `operation::judge::look` |
 | deciding | Gathers what a rung offers, and gives those heads together through `Classes::deciding`. | `operation::decide::decide` |
 
-`operation::settle::settle` takes them in turn: every constraint woken is looked at until none is,
+`operation::settle::settle` takes them in turn: every constraint awake is looked at until none is,
 then every class that may be decided is, and back to looking while anything was decided.
 
 ## 3. The law
@@ -81,7 +81,7 @@ still be merged into it.
 |---|---|
 | a constraint not finished that says it may | The constraint holds classes apart, and every class below one of those is guarded by it. |
 | the class is named as a part on an undecided class | The names the store keeps. A part is decided no earlier than the class it is named on, and where the part holds that class in turn, the two are decided together. |
-| looking has not run to its end | Deciding is taken only once no constraint is woken. |
+| looking has not run to its end | Deciding is taken only once no constraint is awake. |
 
 `Classes::deciding` gives a `Deciding`, which finds what is held once and borrows the store for
 as long as it lives. Nothing is recorded and nothing is merged between that finding and the
@@ -89,7 +89,7 @@ decisions made through it. A head decided has the class's own parts: the part al
 it, or a class made anew. So what gives a head gives its constructor and members alone, and a
 bound connects its parts.
 
-A constraint is woken when it is recorded and when a class it waits on is merged or decided, so a
+A constraint is awake when it is recorded and when a class it waits on is merged or decided, so a
 constraint nothing has happened to is not looked at again.
 
 ## 5. What is not tested, and what is not there

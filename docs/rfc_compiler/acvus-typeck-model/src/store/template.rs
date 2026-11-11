@@ -96,15 +96,8 @@ where
             let Slot::Root(class) = slot else {
                 continue;
             };
-            let Class {
-                state, held, connections, ..
-            } = class.clone().translate::<K, _>(|held| copies[&template.find(held).id()]);
-            *self.slots.get_mut(copies[&id]) = Slot::Root(Class {
-                scope,
-                state,
-                held,
-                connections,
-            });
+            let Class { state, connections, .. } = class.clone().translate::<K, _>(|held| copies[&template.find(held).id()]);
+            *self.slots.get_mut(copies[&id]) = Slot::Root(Class { scope, state, connections });
         }
         for (id, slot) in template.slots.iter() {
             if let Slot::Link(_) = slot {
@@ -112,7 +105,7 @@ where
                 copies.insert(id, copy);
             }
         }
-        for (constraint, by) in &template.constraints {
+        for (constraint, by) in template.constraints() {
             let copied = constraint.clone().translate(|held| copies[&template.find(held).id()]);
             self.constrain(copied, *by);
         }
@@ -340,7 +333,7 @@ mod tests {
         template.constrain(Bound::Change { lower: a, upper: b }.into(), at);
         let copied = world.copy(&template, |_| Fate::Anew);
         let (a, b) = (copied.classes[&a], copied.classes[&b]);
-        assert_eq!(world.live.constraints(), &BTreeSet::from([(Bound::Change { lower: a, upper: b }.into(), at)]));
+        assert_eq!(world.live.constraints().cloned().collect::<BTreeSet<_>>(), BTreeSet::from([(Bound::Change { lower: a, upper: b }.into(), at)]));
     }
 
     #[test]

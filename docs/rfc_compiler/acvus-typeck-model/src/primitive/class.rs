@@ -66,9 +66,6 @@ where
     /// Where two classes are merged, the outer of their scopes.
     pub scope: ScopeId,
     pub state: State<K>,
-    /// What the store keeps of the constraints not finished that have to do with this
-    /// class. Where two classes are merged, those of both.
-    pub held: Held<K>,
     /// Every connection that made this class of the classes it was: the two ids
     /// connected, as they were given, and the item it went by. Where two classes
     /// are merged, those of both. Nothing is taken out, and no rule reads it: it
@@ -78,49 +75,6 @@ where
 
 /// Connections, each the two ids connected and the item it went by.
 pub type Connections<K> = BTreeSet<(<K as ClassKind>::Id, <K as ClassKind>::Id, ItemId)>;
-
-/// The constraints not finished that have to do with a class, by what they have to do
-/// with it. A store keeps these without reading what a constraint means.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Held<K>
-where
-    K: ClassKind,
-{
-    /// The constraints that may still merge this class with another. While there is
-    /// one, what enters the class is not all known, and the class is not decided.
-    pub guards: Constraints<K>,
-    /// The constraints that guard what lies below this class and not the class
-    /// itself: one of their ends, or a class they read and never merge. A part
-    /// this class comes to have is guarded by each.
-    pub apart: Constraints<K>,
-    /// The constraints to look at again when this class is merged with another or
-    /// decided.
-    pub waiters: Constraints<K>,
-}
-
-impl<K> Default for Held<K>
-where
-    K: ClassKind,
-{
-    fn default() -> Self {
-        Self {
-            guards: Constraints::<K>::new(),
-            apart: Constraints::<K>::new(),
-            waiters: Constraints::<K>::new(),
-        }
-    }
-}
-
-impl<K> Held<K>
-where
-    K: ClassKind,
-{
-    fn absorb(&mut self, other: Self) {
-        self.guards.extend(other.guards);
-        self.apart.extend(other.apart);
-        self.waiters.extend(other.waiters);
-    }
-}
 
 /// A class is undecided, holding what has been recorded on it, or decided,
 /// holding its shape alone.
@@ -147,9 +101,6 @@ where
     /// They give the class no head by themselves. A name has one class, however many
     /// projections name it on either side.
     pub parts: BTreeMap<PartKey, Part<K>>,
-    /// Calls made on the class. A function value has no parts, so a call is
-    /// no part, and it is only ever an upper bound.
-    pub calls: BTreeSet<(Call<K>, ItemId)>,
     /// Every domain registered. Their intersection is computed.
     pub domains: BTreeSet<(Domain, ItemId)>,
 }
@@ -191,16 +142,6 @@ where
     pub carried: BTreeSet<ItemId>,
 }
 
-/// `f(ā)`: the class is called with the arguments `ā`, giving `result`.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct Call<K>
-where
-    K: ClassKind,
-{
-    pub args: Vec<K::Id>,
-    pub result: K::Id,
-}
-
 /// A decided class: its constructor and members, and a class at each part.
 ///
 /// A part is a class of its own, decided or not, so a decided class may hold
@@ -230,16 +171,15 @@ pub enum Origin {
     External,
 }
 
-/// What an undecided class held besides its parts and bounds when it became
-/// decided, or what was recorded on a class already decided. Nothing in the
-/// store judges these; its caller checks each against the class's shape.
+/// The domains an undecided class held when it became decided, or one
+/// registered on a class already decided. Nothing in the store judges these; its
+/// caller checks each against the class's shape.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Pending<K>
 where
     K: ClassKind,
 {
     pub class: K::Id,
-    pub calls: BTreeSet<(Call<K>, ItemId)>,
     pub domains: BTreeSet<(Domain, ItemId)>,
 }
 
@@ -296,18 +236,6 @@ where
             State::Decided(decided) => decided.shape.places().into_iter().map(|(_, class)| *class).collect(),
         }
     }
-
-    /// Every id the state holds: its parts, and the classes of its calls.
-    pub fn held(&self) -> Vec<K::Id> {
-        let State::Undecided(undecided) = self else {
-            return self.parts();
-        };
-        let calls = undecided
-            .calls
-            .iter()
-            .flat_map(|(call, _)| call.args.iter().copied().chain([call.result]));
-        self.parts().into_iter().chain(calls).collect()
-    }
 }
 
 impl<K> Class<K>
@@ -341,21 +269,8 @@ where
                         (key, part)
                     })
                     .collect();
-                let calls = undecided
-                    .calls
-                    .into_iter()
-                    .map(|(call, by)| {
-                        let args = call.args.into_iter().map(&mut f).collect();
-                        let call = Call {
-                            args,
-                            result: f(call.result),
-                        };
-                        (call, by)
-                    })
-                    .collect();
                 State::Undecided(Undecided {
                     parts,
-                    calls,
                     domains: undecided.domains,
                 })
             }
@@ -363,7 +278,6 @@ where
         Class {
             scope: self.scope,
             state,
-            held: Held::default(),
             connections: self.connections.into_iter().map(|(a, b, at)| (f(a), f(b), at)).collect(),
         }
     }
@@ -378,8 +292,6 @@ where
     /// each part with no place, its calls and domains to its caller.
     pub fn merge(self, other: Self, root: K::Id, scopes: &Scopes, at: ItemId) -> Merged<K> {
         let scope = scopes.outer(self.scope, other.scope);
-        let mut held = self.held;
-        held.absorb(other.held);
         let mut connections = self.connections;
         connections.extend(other.connections);
         let mut pairs = Vec::new();
@@ -402,7 +314,6 @@ where
                         }
                     }
                 }
-                kept.calls.extend(gone.calls);
                 kept.domains.extend(gone.domains);
                 State::Undecided(kept)
             }
@@ -445,10 +356,9 @@ where
                         }),
                     }
                 }
-                if !undecided.calls.is_empty() || !undecided.domains.is_empty() {
+                if !undecided.domains.is_empty() {
                     pending = Some(Pending {
                         class: root,
-                        calls: undecided.calls,
                         domains: undecided.domains,
                     });
                 }
@@ -459,7 +369,6 @@ where
             class: Class {
                 scope,
                 state,
-                held,
                 connections,
             },
             pairs,

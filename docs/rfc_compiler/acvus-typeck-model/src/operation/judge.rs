@@ -1,8 +1,8 @@
 //! Looking at a constraint: judging it, or learning what it waits for.
 
-use crate::primitive::ItemId;
 use crate::primitive::class::ClassKind;
 use crate::store::Store;
+use crate::store::ledger::Awake;
 
 use super::Outcome;
 use super::connect::connect;
@@ -23,15 +23,16 @@ use super::law::{Law, Looked, Scribe};
 /// This is the only place a constraint is finished, and the only place a guard or a
 /// wait is stated. So a rule cannot finish a constraint without judging it, nor leave
 /// one waiting on nothing.
-pub fn look<K, L>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, constraint: K::Constraint, at: ItemId) -> bool
+pub fn look<K, L>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, awake: Awake<K>) -> bool
 where
     K: ClassKind,
     L: Law<K>,
 {
-    let looked = law.look(&mut Scribe::new(store), &constraint, at);
+    let at = awake.at();
+    let looked = law.look(&mut Scribe::new(store), awake.constraint(), at);
     let (pairs, changed) = match looked {
         Looked::Holds { pairs, adjustments, constraints } => {
-            store.classes.finish(&constraint, at);
+            store.classes.finish(awake);
             for constraint in constraints {
                 store.classes.constrain(constraint, at);
             }
@@ -41,13 +42,12 @@ where
             (pairs, true)
         }
         Looked::Refused(refusal) => {
-            store.classes.finish(&constraint, at);
+            store.classes.finish(awake);
             outcome.refuse(refusal);
             (Vec::new(), true)
         }
         Looked::Waits { on, apart, pairs } => {
-            store.classes.guard(&constraint, at, &apart);
-            store.classes.wait(&constraint, at, &on);
+            store.classes.sleep(awake, &on, &apart);
             (pairs, false)
         }
     };

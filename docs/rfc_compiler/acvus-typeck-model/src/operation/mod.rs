@@ -18,6 +18,7 @@ pub mod judge;
 pub mod language;
 pub mod law;
 pub mod settle;
+mod take_in;
 
 #[cfg(test)]
 mod calls;
@@ -29,7 +30,7 @@ mod tests;
 use crate::primitive::adjustment::Adjustments;
 use std::collections::BTreeSet;
 
-use crate::primitive::class::{ClassKind, Pending, State};
+use crate::primitive::class::{ClassKind, State};
 use crate::primitive::refusal::{Refusal, Refused};
 use crate::store::classes::Classes;
 
@@ -45,8 +46,6 @@ where
     /// What has been refused and not gathered yet.
     pub refused: Vec<Refused<K>>,
     pub adjustments: Adjustments,
-    /// The calls on classes decided, which no law judges yet.
-    pub calls: Vec<Pending<K>>,
 }
 
 impl<K> Outcome<K>

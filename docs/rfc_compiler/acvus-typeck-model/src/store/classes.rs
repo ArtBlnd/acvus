@@ -1,23 +1,23 @@
 //! The classes of one kind: a union-find over their ids, each root holding
-//! its class, and every constraint recorded between them that is not finished yet.
+//! its class, and the ledger of every constraint recorded between them that is
+//! not finished yet.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 use std::mem;
 
-use crate::primitive::components::components;
-use crate::primitive::constraint::ConstraintOf;
-
 use crate::primitive::ItemId;
 use crate::primitive::ScopeId;
-use crate::primitive::class::{
-    Call, Class, ClassKind, Connections, Constraints, Decided, Held, Origin, Part, Pending, Side, State, Undecided, Unplaced,
-};
+use crate::primitive::class::{Class, ClassKind, Connections, Decided, Origin, Part, Pending, Side, State, Undecided, Unplaced};
+use crate::primitive::components::components;
+use crate::primitive::constraint::ConstraintOf;
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::refusal::Refused;
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{PartKey, Shape};
+
+use super::ledger::{Awake, Ledger, Recorded, Role};
 
 /// Every class of the kind `K` made, by id.
 ///
@@ -33,24 +33,9 @@ where
     /// Open to the rest of the store for [`Classes::verify`] and for copying a
     /// template.
     pub(super) slots: Arena<K::Id, Slot<K>>,
-    /// Every constraint recorded and not finished, from its recording until whoever
-    /// judges or makes it finishes it. Open to the rest of the store for
-    /// [`Classes::verify`] and for copying a template.
-    pub(super) constraints: Constraints<K>,
-    /// Every constraint finished. A constraint is recorded once: what connects parts by
-    /// name comes to the same pair again, and recording it again does nothing.
-    finished: Constraints<K>,
-    /// The constraints to look at: each recorded and not looked at yet, and each that
-    /// waits on a class that has changed since.
-    woken: Constraints<K>,
-    /// For each constraint not finished, the classes it was put on, to wait on or
-    /// to guard: where it is held is looked for among these and not among every
-    /// class. An id here may since have been merged into another, and a class may
-    /// hold the constraint no longer.
-    pub(super) put_on: BTreeMap<(K::Constraint, ItemId), BTreeSet<K::Id>>,
-    /// For each class, by its root, the constraints not finished that have it as
-    /// an end.
-    pub(super) of_end: BTreeMap<K::Id, Constraints<K>>,
+    /// The constraints not finished, and what each has to do with which class.
+    /// It is told of every union and every part named, here and nowhere else.
+    ledger: Ledger<K>,
 }
 
 // Written out, as a derive would ask an id to have a default, and none has.
@@ -61,13 +46,31 @@ where
     fn default() -> Self {
         Self {
             slots: Arena::default(),
-            constraints: Constraints::<K>::new(),
-            finished: Constraints::<K>::new(),
-            woken: Constraints::<K>::new(),
-            put_on: BTreeMap::new(),
-            of_end: BTreeMap::new(),
+            ledger: Ledger::default(),
         }
     }
+}
+
+/// The root of the class `id` names.
+fn root_in<K>(slots: &Arena<K::Id, Slot<K>>, mut id: K::Id) -> K::Id
+where
+    K: ClassKind,
+{
+    while let Slot::Link(next) = slots.get(id) {
+        id = *next;
+    }
+    id
+}
+
+/// The parts of the class at `root`, each by its root.
+fn parts_in<K>(slots: &Arena<K::Id, Slot<K>>, root: K::Id) -> Vec<K::Id>
+where
+    K: ClassKind,
+{
+    let Slot::Root(class) = slots.get(root) else {
+        unreachable!("{root:?} is not a root");
+    };
+    class.state.parts().into_iter().map(|part| root_in(slots, part)).collect()
 }
 
 /// The class itself where the id is a root, or the id it was unified into.
@@ -144,7 +147,7 @@ where
 ///
 /// A class is decided once, and only when nothing can still be merged into it:
 /// its head is the join of what enters it, and a merge brings more to enter. So a
-/// class is held, and not decided, while a constraint guards it ([`Classes::guard`]),
+/// class is held, and not decided, while a constraint guards it ([`Classes::sleep`]),
 /// and while it is named as a part on an undecided class that it does not hold in
 /// turn. What is held is found once, when this is made, and this borrows the
 /// store for as long as it lives: nothing is recorded and nothing is merged
@@ -250,7 +253,6 @@ where
         self.slots.push(Slot::Root(Class {
             scope,
             state: State::Undecided(Undecided::default()),
-            held: Held::default(),
             connections: Connections::<K>::new(),
         }))
     }
@@ -270,18 +272,13 @@ where
         self.slots.push(Slot::Root(Class {
             scope,
             state: State::Decided(Decided { shape, by, origin }),
-            held: Held::default(),
             connections: Connections::<K>::new(),
         }))
     }
 
     pub fn find(&self, class: K::Id) -> Root<'_, K> {
-        let mut id = class;
-        while let Slot::Link(next) = self.slots.get(id) {
-            id = *next;
-        }
         Root {
-            id,
+            id: root_in(&self.slots, class),
             classes: PhantomData,
         }
     }
@@ -321,160 +318,60 @@ where
         )
     }
 
-    /// Records `constraint`, by `at`, and says whether it was not recorded before. The
-    /// store holds it until it is finished.
+    /// Records `constraint`, by `at`, and says whether it was not recorded before.
+    /// It is awake, and the store holds it until it is finished.
     pub fn constrain(&mut self, constraint: K::Constraint, at: ItemId) -> bool {
-        let recorded = (constraint, at);
-        if self.finished.contains(&recorded) || !self.constraints.insert(recorded.clone()) {
-            return false;
-        }
-        for end in self.ends(&recorded.0) {
-            self.of_end.entry(end).or_default().insert(recorded.clone());
-        }
-        self.woken.insert(recorded);
-        true
+        let ends = [self.find(constraint.lower()).id, self.find(constraint.upper()).id];
+        self.ledger.record(constraint, at, ends)
     }
 
-    /// The constraints to look at, which are then to look at no longer until a class
-    /// one of them waits on is merged or decided.
-    pub fn take_woken(&mut self) -> Constraints<K> {
-        mem::take(&mut self.woken)
+    /// Takes out every constraint to look at: each recorded and not looked at
+    /// yet, and each that waits on a class merged or decided since it was last
+    /// looked at. Each is then finished ([`Classes::finish`]) or put to sleep
+    /// ([`Classes::sleep`]).
+    pub fn awake(&mut self) -> Vec<Awake<K>> {
+        self.ledger.awake()
     }
 
-    /// States anew which classes `constraint`, recorded by `at`, waits on: it is to be
-    /// looked at again when one of them is merged with another or decided.
-    pub fn wait(&mut self, constraint: &K::Constraint, at: ItemId, on: &BTreeSet<K::Id>) {
-        let recorded = (constraint.clone(), at);
-        for root in self.holding(&recorded) {
-            self.root_mut(root).held.waiters.remove(&recorded);
-        }
-        if !self.constraints.contains(&recorded) {
-            return;
-        }
-        for class in on {
-            let root = self.find(*class).id;
-            self.root_mut(root).held.waiters.insert(recorded.clone());
-            self.put_on.entry(recorded.clone()).or_default().insert(root);
-        }
+    /// Finishes a constraint looked at: it has been judged or made, and the store
+    /// holds it no longer.
+    pub fn finish(&mut self, looked: Awake<K>) {
+        self.ledger.finish(looked);
     }
 
-    /// The two ends of `constraint`, each as the class it is now.
-    fn ends(&self, constraint: &K::Constraint) -> [K::Id; 2] {
-        [self.find(constraint.lower()).id, self.find(constraint.upper()).id]
-    }
-
-    /// The constraints not finished that have `class` as an end.
-    pub fn constraints_of(&self, class: K::Id) -> impl Iterator<Item = &(K::Constraint, ItemId)> {
-        self.of_end.get(&self.find(class).id).into_iter().flatten()
-    }
-
-    /// The classes `recorded` was put on, each as the class it is now.
-    pub(super) fn holding(&self, recorded: &(K::Constraint, ItemId)) -> BTreeSet<K::Id> {
-        self.put_on
-            .get(recorded)
-            .into_iter()
-            .flatten()
-            .map(|class| self.find(*class).id)
-            .collect()
-    }
-
-    /// Wakes what waits on the class held at `root`, which has been merged or
-    /// decided.
-    fn wake(&mut self, root: K::Id) {
-        let waiters = self.root(root).held.waiters.clone();
-        self.woken.extend(waiters);
-    }
-
-    /// Gives each part of the class held at `root`, and each part below, the
-    /// guards that reach it: those of the class above it, and those the class
-    /// above it holds apart, but for a guard the part holds apart itself.
-    fn push_down(&mut self, root: K::Id) {
-        let mut stack = vec![root];
-        while let Some(class) = stack.pop() {
-            let class = self.find(class).id;
-            let above = &self.root(class).held;
-            let reaching: Constraints<K> = above.guards.union(&above.apart).cloned().collect();
-            if reaching.is_empty() {
-                continue;
-            }
-            for part in self.root(class).state.parts() {
-                let part = self.find(part).id;
-                let held = &mut self.root_mut(part).held;
-                let new: Vec<(K::Constraint, ItemId)> = reaching
-                    .iter()
-                    .filter(|guard| !held.apart.contains(guard) && !held.guards.contains(guard))
-                    .cloned()
-                    .collect();
-                if !new.is_empty() {
-                    held.guards.extend(new.iter().cloned());
-                    for guard in new {
-                        self.put_on.entry(guard).or_default().insert(part);
-                    }
-                    stack.push(part);
-                }
-            }
-        }
+    /// Puts a constraint looked at to sleep. It is looked at again when a class of
+    /// `on` is merged with another or decided. Until it is finished it may still
+    /// merge what lies below each class of `apart`, though not those classes
+    /// themselves, so no class below one of them is decided: it guards them, and
+    /// each part such a class comes to have, as structure grows.
+    ///
+    /// The store reads no more of a constraint here than anywhere: whoever knows
+    /// what the constraint means says what it waits on and holds apart, and says
+    /// it again each time the constraint is looked at.
+    pub fn sleep(&mut self, looked: Awake<K>, on: &BTreeSet<K::Id>, apart: &BTreeSet<K::Id>) {
+        let root = |class: &K::Id| root_in(&self.slots, *class);
+        let (on, apart) = (on.iter().map(root).collect(), apart.iter().map(root).collect());
+        self.ledger.sleep(looked, &on, &apart, |class| parts_in(&self.slots, class));
     }
 
     /// Every constraint recorded and not finished.
-    pub fn constraints(&self) -> &Constraints<K> {
-        &self.constraints
+    pub fn constraints(&self) -> impl Iterator<Item = &Recorded<K>> {
+        self.ledger.held()
     }
 
-    /// Finishes `constraint`, recorded by `at`: it has been judged or made, and the
-    /// store holds it no longer. It says whether the store held it.
-    pub fn finish(&mut self, constraint: &K::Constraint, at: ItemId) -> bool {
-        let recorded = (constraint.clone(), at);
-        let held = self.constraints.remove(&recorded);
-        if held {
-            self.lift(&recorded);
-            for root in self.holding(&recorded) {
-                self.root_mut(root).held.waiters.remove(&recorded);
-            }
-            self.put_on.remove(&recorded);
-            for end in self.ends(&recorded.0) {
-                if let Some(of_end) = self.of_end.get_mut(&end) {
-                    of_end.remove(&recorded);
-                }
-            }
-            self.woken.remove(&recorded);
-            self.finished.insert(recorded);
-        }
-        held
+    /// The constraints not finished that have `class` as an end.
+    pub fn constraints_of(&self, class: K::Id) -> impl Iterator<Item = &Recorded<K>> {
+        self.ledger.constraints(self.find(class).id, Role::End)
     }
 
-    /// States anew what `constraint`, recorded by `at`, guards: every class below one
-    /// of `apart`, at any depth, but for the classes of `apart` themselves. Those
-    /// are the classes it may still merge with another before it is finished, and
-    /// what it guarded before and does not now is free of it.
-    ///
-    /// A class of `apart` is an end of the constraint, or a class it reads and never
-    /// merges. The guard goes down to each part such a class comes to have, as
-    /// structure grows, without the constraint being looked at again. The store reads
-    /// no more of a constraint here than anywhere: whoever knows what the constraint means
-    /// says what it holds apart, and says it again as that changes.
-    pub fn guard(&mut self, constraint: &K::Constraint, at: ItemId, apart: &BTreeSet<K::Id>) {
-        let recorded = (constraint.clone(), at);
-        self.lift(&recorded);
-        if !self.constraints.contains(&recorded) {
-            return;
-        }
-        let apart: BTreeSet<K::Id> = apart.iter().map(|class| self.find(*class).id).collect();
-        for root in &apart {
-            self.root_mut(*root).held.apart.insert(recorded.clone());
-            self.put_on.entry(recorded.clone()).or_default().insert(*root);
-        }
-        for root in apart {
-            self.push_down(root);
-        }
+    /// The constraints that wait on `class`.
+    pub fn waiting_on(&self, class: K::Id) -> impl Iterator<Item = &Recorded<K>> {
+        self.ledger.constraints(self.find(class).id, Role::Waited)
     }
 
-    fn lift(&mut self, recorded: &(K::Constraint, ItemId)) {
-        for root in self.holding(recorded) {
-            let held = &mut self.root_mut(root).held;
-            held.guards.remove(recorded);
-            held.apart.remove(recorded);
-        }
+    /// The ledger, for [`Classes::verify`].
+    pub(super) fn ledger(&self) -> &Ledger<K> {
+        &self.ledger
     }
 
     /// Every class below `classes`: their parts, and the parts of those, at any
@@ -500,11 +397,7 @@ where
 
     /// The one way a class is decided by solving: see [`Deciding`].
     pub fn deciding(&mut self) -> Deciding<'_, K> {
-        let mut held: BTreeSet<K::Id> = self
-            .roots()
-            .filter(|root| !self.get(*root).held.guards.is_empty())
-            .map(|root| root.id)
-            .collect();
+        let mut held: BTreeSet<K::Id> = self.roots().map(|root| root.id).filter(|root| self.ledger.guards(*root)).collect();
         // A part is decided no earlier than the class it is named on. Where the
         // part holds that class in turn, the order asks nothing of the two, and
         // they are decided together: a part holds its owner where the two reach
@@ -559,26 +452,9 @@ where
         };
         items.insert(at);
         if named_anew {
-            self.push_down(root);
+            self.ledger.grew(root, |class| parts_in(&self.slots, class));
         }
         Some(part_class)
-    }
-
-    /// Records a call on `class`. A decided class does not keep it, and
-    /// gives it back to be checked against its shape.
-    pub fn call(&mut self, class: K::Id, call: Call<K>, at: ItemId) -> Option<Pending<K>> {
-        let root = self.find(class).id;
-        match &mut self.root_mut(root).state {
-            State::Undecided(undecided) => {
-                undecided.calls.insert((call, at));
-                None
-            }
-            State::Decided(_) => Some(Pending {
-                class: root,
-                calls: BTreeSet::from([(call, at)]),
-                domains: BTreeSet::new(),
-            }),
-        }
     }
 
     /// Records a domain on `class`. A decided class does not keep it, and
@@ -592,7 +468,6 @@ where
             }
             State::Decided(_) => Some(Pending {
                 class: root,
-                calls: BTreeSet::new(),
                 domains: BTreeSet::from([(domain, at)]),
             }),
         }
@@ -663,19 +538,14 @@ where
             let placeholder = Slot::Root(Class {
                 scope,
                 state: State::Undecided(Undecided::default()),
-                held: Held::default(),
-            connections: Connections::<K>::new(),
+                connections: Connections::<K>::new(),
             });
             let Slot::Root(kept_class) = mem::replace(self.slots.get_mut(kept), placeholder) else {
                 unreachable!("find gives a root");
             };
             let merge = kept_class.merge(gone_class, kept, scopes, at);
             *self.slots.get_mut(kept) = Slot::Root(merge.class);
-            if let Some(of_gone) = self.of_end.remove(&gone) {
-                self.of_end.entry(kept).or_default().extend(of_gone);
-            }
-            self.push_down(kept);
-            self.wake(kept);
+            self.ledger.merged(kept, gone, |class| parts_in(&self.slots, class));
             pairs.extend(merge.pairs);
             unified.refusals.extend(merge.refusals);
             unified.pending.extend(merge.pending);
@@ -937,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn calls_and_domains_on_a_class_that_becomes_decided_go_to_the_caller() {
+    fn the_domains_on_a_class_that_becomes_decided_go_to_the_caller() {
         let mut world = World::new();
         let u = world.undecided();
         let registered = world.item("literal");
@@ -949,7 +819,6 @@ mod tests {
             unified.pending,
             vec![Pending {
                 class: world.classes.find(d).id(),
-                calls: BTreeSet::new(),
                 domains: BTreeSet::from([(domain, registered)]),
             }]
         );
@@ -966,7 +835,6 @@ mod tests {
             pending,
             Some(Pending {
                 class: d,
-                calls: BTreeSet::new(),
                 domains: BTreeSet::from([(domain, at)]),
             })
         );
@@ -979,11 +847,16 @@ mod tests {
         let (e, _) = world.decided(Shape::Scalar(Scalar::U8));
         let at = world.enter(d, e);
         let constraint = Constraint::Bound(Bound::Enter { lower: d, upper: e });
-        assert_eq!(world.classes.constraints(), &BTreeSet::from([(constraint, at)]));
+        assert_eq!(world.classes.constraints().collect::<Vec<_>>(), [&(constraint, at)]);
 
-        assert!(world.classes.finish(&constraint, at));
-        assert_eq!(world.classes.constraints(), &BTreeSet::new());
-        assert!(!world.classes.finish(&constraint, at));
+        let awake = world.classes.awake();
+        assert_eq!(awake.len(), 1);
+        for looked in awake {
+            world.classes.finish(looked);
+        }
+        assert_eq!(world.classes.constraints().count(), 0);
+        assert!(world.classes.awake().is_empty());
+        assert!(!world.classes.constrain(constraint, at), "a constraint finished is recorded no more");
     }
 
     #[test]
@@ -996,7 +869,7 @@ mod tests {
         let change = Constraint::Bound(Bound::Change { lower: a, upper: b });
         world.classes.constrain(enter, at);
         world.classes.constrain(change, at);
-        assert_eq!(world.classes.constraints(), &BTreeSet::from([(enter, at), (change, at)]));
+        assert_eq!(world.classes.constraints().cloned().collect::<BTreeSet<_>>(), BTreeSet::from([(enter, at), (change, at)]));
     }
 
     #[test]

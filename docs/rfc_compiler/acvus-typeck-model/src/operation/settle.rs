@@ -16,15 +16,15 @@ use super::law::{Law, Pair};
 /// Solves what has been recorded.
 ///
 /// ```text
-/// look:    each constraint woken is looked at, and each pair the law finds one type is
-///          connected, until no constraint is woken.
+/// look:    each constraint awake is looked at, and each pair the law finds one type is
+///          connected, until no constraint is awake.
 /// decide:  every class that may be decided now is decided, by the first rung that
 ///          decides any. Where one was, back to look.
 /// end:     what the law refuses of each class is refused, and what settled the
 ///          classes of each refusal is gathered.
 /// ```
 ///
-/// A constraint is woken when it is recorded, and when a class it waits on is merged
+/// A constraint is awake when it is recorded, and when a class it waits on is merged
 /// or decided, so nothing is looked at that nothing has happened to. A class is
 /// decided only after looking has run to its end, so every guard is as its constraint
 /// last stated it.
@@ -40,14 +40,12 @@ where
             for (a, b, by) in law.one(&store.classes) {
                 changed |= connect(store, law, outcome, Pair::Classes(a, b), by);
             }
-            let woken = store.classes.take_woken();
-            let none_woken = woken.is_empty();
-            for (constraint, by) in woken {
-                if store.classes.constraints().contains(&(constraint.clone(), by)) {
-                    changed |= look(store, law, outcome, constraint, by);
-                }
+            let awake = store.classes.awake();
+            let none_awake = awake.is_empty();
+            for constraint in awake {
+                changed |= look(store, law, outcome, constraint);
             }
-            if !changed && none_woken {
+            if !changed && none_awake {
                 break;
             }
         }
