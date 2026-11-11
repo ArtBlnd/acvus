@@ -207,13 +207,7 @@ where
         }
         let root = self.classes.find(class).id;
         let scope = self.classes.root(root).scope;
-        let mut count = 0;
-        let numbered = shape.map(|_| {
-            count += 1;
-            count - 1
-        });
-        let keys: BTreeMap<usize, PartKey> = numbered.places().into_iter().map(|(key, number)| (*number, key)).collect();
-        let own = numbered.map(|number| match self.classes.root(root).state.part(&keys[number]) {
+        let own = shape.map_keyed(|key, _| match self.classes.root(root).state.part(key) {
             Some(named) => named,
             None => self.classes.undecided(scope),
         });
