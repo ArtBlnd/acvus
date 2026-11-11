@@ -14,6 +14,7 @@
 //! enters a class is `!`, rung 0 gives the head the parts named on the class make,
 //! read or written, as rung 2 does where nothing enters.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::{ItemId, Name};
@@ -34,14 +35,65 @@ pub fn heads<K>(classes: &Classes<K>, functions: &Functions, asked: &[K::Id], he
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
+    let said: BTreeMap<K::Id, Said<'_, K>> = asked.iter().map(|class| (*class, Said::of(classes, functions, *class))).collect();
     let ladder: [&dyn Fn(K::Id) -> Offer<K>; 5] = [
-        &|class| join(classes, class),
-        &|class| from_above(classes, functions, class),
-        &|class| from_parts(classes, functions, class),
-        &|class| domain(classes, functions, class),
-        &|class| never(classes, functions, class),
+        &|class| join(&said[&class]),
+        &|class| from_above(&said[&class]),
+        &|class| from_parts(&said[&class]),
+        &|class| domain(&said[&class]),
+        &|class| never(&said[&class]),
     ];
     Heads::of_ladder(ladder, asked, held)
+}
+
+/// What the rungs read of one undecided class.
+///
+/// The rungs are asked of a class one after another, and each reads the same
+/// few things of it: what enters it, and what is asked of it from above. The
+/// store does not change while heads are found, as [`heads`] borrows it. So each
+/// is found once, when a rung first reads it, and kept here for the rungs after;
+/// a rung that is never reached costs nothing.
+struct Said<'a, K>
+where
+    K: ClassKind,
+{
+    classes: &'a Classes<K>,
+    functions: &'a Functions,
+    class: K::Id,
+    entering: OnceCell<Vec<Entering<K>>>,
+    asked: OnceCell<Vec<Shape<K::Id>>>,
+}
+
+impl<'a, K> Said<'a, K>
+where
+    K: ClassKind<Constraint = Constraint<K>>,
+{
+    fn of(classes: &'a Classes<K>, functions: &'a Functions, class: K::Id) -> Self {
+        Self {
+            classes,
+            functions,
+            class,
+            entering: OnceCell::new(),
+            asked: OnceCell::new(),
+        }
+    }
+
+    /// The heads that enter the class: see [`entering`].
+    fn entering(&self) -> &[Entering<K>] {
+        self.entering.get_or_init(|| entering(self.classes, self.class))
+    }
+
+    /// Every head the class will be held against: see [`asked`].
+    fn asked(&self) -> &[Shape<K::Id>] {
+        self.asked.get_or_init(|| asked(self.classes, self.functions, self.class, &mut BTreeSet::new()))
+    }
+
+    /// Whether neither a lower nor an upper bound says anything of the class:
+    /// nothing enters it, and no head is asked of it from above. Where one is
+    /// asked, no fallback overrules that, even where no one head will do.
+    fn nothing_said(&self) -> bool {
+        self.entering().is_empty() && self.asked().is_empty()
+    }
 }
 
 /// What enters a class by one bound: its head, where it has one yet, the bound,
@@ -103,11 +155,12 @@ where
 /// What is written joins as what enters does. A head that is no object is not
 /// joined with what is written: a part written into a reference is written
 /// through it, and what it refers to is as it lies.
-fn join<K>(classes: &Classes<K>, class: K::Id) -> Offer<K>
+fn join<K>(said: &Said<'_, K>) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    let entering = entering(classes, class);
+    let (classes, class) = (said.classes, said.class);
+    let entering = said.entering();
     if entering.is_empty() {
         return match written(classes, class) {
             Some((shape, by)) => Offer::Head { shape, by },
@@ -140,14 +193,6 @@ where
         shape: joined.join(&made).expect("`!` joins with any head, and an object with an object"),
         by,
     }
-}
-
-/// Whether nothing enters `class`.
-fn nothing_enters<K>(classes: &Classes<K>, class: K::Id) -> bool
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    entering(classes, class).is_empty()
 }
 
 /// The classes `class` enters that have no head yet. The head `class` takes
@@ -230,16 +275,17 @@ where
 /// Rung 1: a class nothing enters takes the one head, of those it will be held
 /// against, that every constraint waiting on it would have it take. A literal's class
 /// takes one of its domain alone.
-fn from_above<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
+fn from_above<K>(said: &Said<'_, K>) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    if !nothing_enters(classes, class) {
+    let (classes, functions, class) = (said.classes, said.functions, said.class);
+    if !said.entering().is_empty() {
         return Offer::Nothing;
     }
     let mut candidates: BTreeMap<Shape<()>, Shape<K::Id>> = BTreeMap::new();
-    for head in asked(classes, functions, class, &mut BTreeSet::new()) {
-        candidates.entry(head.layer()).or_insert(head);
+    for head in said.asked() {
+        candidates.entry(head.layer()).or_insert_with(|| head.clone());
     }
     let domain = domain_of(classes, class);
     let mut taken_heads = candidates.into_values().filter(|head| {
@@ -255,16 +301,6 @@ where
         },
         _ => Offer::Nothing,
     }
-}
-
-/// Whether no head is asked of `class` from above. Where one is, the class has
-/// something said of it, and no fallback overrules that, even where no one head
-/// will do.
-fn nothing_asked<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> bool
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    asked(classes, functions, class, &mut BTreeSet::new()).is_empty()
 }
 
 /// The domain the literals of `class` leave, where any registered one.
@@ -334,14 +370,14 @@ where
 
 /// Rung 2: a class that neither lower nor upper bounds decide takes the head made
 /// from the parts named on it.
-fn from_parts<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
+fn from_parts<K>(said: &Said<'_, K>) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    if !nothing_enters(classes, class) || !nothing_asked(classes, functions, class) {
+    if !said.nothing_said() {
         return Offer::Nothing;
     }
-    match made_of_parts(classes, class) {
+    match made_of_parts(said.classes, said.class) {
         Some((shape, by)) => Offer::Head { shape, by },
         None => Offer::Nothing,
     }
@@ -349,11 +385,12 @@ where
 
 /// Rung 3: a literal's class that neither lower nor upper bounds decide takes the
 /// fallback type of its domain's row.
-fn domain<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
+fn domain<K>(said: &Said<'_, K>) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    if !nothing_enters(classes, class) || !nothing_asked(classes, functions, class) {
+    let (classes, class) = (said.classes, said.class);
+    if !said.nothing_said() {
         return Offer::Nothing;
     }
     let Some((domain, by)) = domain_of(classes, class) else {
@@ -377,11 +414,11 @@ where
 
 /// Rung 4: a class nothing enters, with no literal, takes `!`: nothing gives it
 /// a head.
-fn never<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Offer<K>
+fn never<K>(said: &Said<'_, K>) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    if !nothing_enters(classes, class) || !nothing_asked(classes, functions, class) || domain_of(classes, class).is_some() {
+    if !said.nothing_said() || domain_of(said.classes, said.class).is_some() {
         return Offer::Nothing;
     }
     Offer::Head {
