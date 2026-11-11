@@ -26,18 +26,83 @@ use crate::store::closures::Copy;
 use super::super::law::{Looked, Pair, Scribe};
 use super::lambdas::Lambdas;
 
-/// Uses each closure of `value`, a function value, as `wanted`, a function
-/// type, by `at`.
+/// A call as it is written: the function type `Fn(arguments) -> result`.
+struct Call<K>
+where
+    K: ClassKind,
+{
+    arguments: Vec<K::Id>,
+    result: K::Id,
+}
+
+/// What a function takes and gives: the classes of its parameters and of its
+/// result.
+struct Signature<K>
+where
+    K: ClassKind,
+{
+    parameters: Vec<K::Id>,
+    result: K::Id,
+}
+
+/// One function that is called.
+enum Called<K>
+where
+    K: ClassKind,
+{
+    /// A closure of a function value. Its signature is that of a copy of its
+    /// template.
+    Closure(ClosureId),
+    /// A value of a function type, which writes its signature.
+    OfAType(Signature<K>),
+}
+
+/// What a call comes to: the classes that are one type, and the constraints
+/// recorded in its place.
+struct Follows<K>
+where
+    K: ClassKind,
+{
+    pairs: Vec<Pair<K>>,
+    constraints: Vec<Constraint<K>>,
+}
+
+impl<K> Call<K>
+where
+    K: ClassKind<Constraint = Constraint<K>>,
+{
+    /// Uses a function of `signature` for this call: each argument is passed to
+    /// the parameter in its place, and what the function gives is one type with
+    /// the result of the call.
+    fn uses(&self, signature: &Signature<K>, follows: &mut Follows<K>) {
+        follows.pairs.push(Pair::Classes(signature.result, self.result));
+        for (argument, parameter) in self.arguments.iter().zip(&signature.parameters) {
+            follows.constraints.push(
+                Bound::Change {
+                    lower: *argument,
+                    upper: *parameter,
+                }
+                .into(),
+            );
+        }
+    }
+}
+
+/// Uses `value`, a function, as `wanted`, a function type, by `at`: each
+/// function called is used for the call `wanted` writes ([`Call::uses`]).
 ///
-/// | Of each closure | In its copy |
+/// A function value calls each of its closures, and a value of a function type
+/// calls the one function its type writes. A closure is used by a copy of its
+/// template:
+///
+/// | Of the closure | In its copy |
 /// |---|---|
 /// | a class standing for a capture | is one type with the class the closure captures |
-/// | a parameter | is what the argument in its place is passed to |
-/// | the result | is one type with the result of the function type |
+/// | a parameter, the result | is the signature the call uses |
 /// | a lambda the body defines | is a closure named anew, over the copies of what it captures |
 ///
-/// A closure whose lambda takes another count of parameters is refused, and
-/// then no copy is made.
+/// A function that takes another count of parameters than the call passes is
+/// refused, and then no copy is made.
 pub(super) fn take<K>(scribe: &mut Scribe<'_, K>, lambdas: &Lambdas, value: K::Id, wanted: K::Id, at: ItemId) -> Looked<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
@@ -51,83 +116,67 @@ where
     let Shape::Fn(arguments, result) = head(wanted) else {
         unreachable!("a call is a function passed to a function type");
     };
-    let called = match head(value) {
-        Shape::FnValue(called) => called,
-        Shape::Fn(parameters, given) => return of_a_function_type(parameters, given, arguments, result, value, wanted, at),
+    let call = Call { arguments, result };
+    let called: Vec<Called<K>> = match head(value) {
+        Shape::FnValue(closures) => closures.into_iter().map(Called::Closure).collect(),
+        Shape::Fn(parameters, result) => vec![Called::OfAType(Signature { parameters, result })],
         _ => unreachable!("a call is a function passed to a function type"),
     };
-    let scope = scribe.classes().get(scribe.classes().find(wanted)).scope;
-    let counts = |closure| lambdas.get(scribe.closures().get(closure).lambda).parameters.len();
-    if called.iter().any(|closure| counts(*closure) != arguments.len()) {
+
+    let takes = |called: &Called<K>| match called {
+        Called::Closure(closure) => lambdas.get(scribe.closures().get(*closure).lambda).parameters.len(),
+        Called::OfAType(signature) => signature.parameters.len(),
+    };
+    if called.iter().any(|called| takes(called) != call.arguments.len()) {
         return Looked::Refused(Refused {
             cause: Cause::Mismatch,
             items: BTreeSet::from([at]),
             of: vec![value, wanted],
         });
     }
-    let mut pairs = Vec::new();
-    let mut constraints = Vec::new();
-    for closure in called {
-        // A call within a copy of the closure it calls is a call of that copy,
-        // and makes none: what is called is being used already.
-        let used = match scribe.closures().within(scribe.scopes(), scope, closure).cloned() {
-            Some(within) => within,
-            None => copy(scribe, lambdas, closure, scope, at, &mut pairs, &mut constraints),
+
+    let scope = scribe.classes().get(scribe.classes().find(wanted)).scope;
+    let mut follows = Follows {
+        pairs: Vec::new(),
+        constraints: Vec::new(),
+    };
+    for called in called {
+        let signature = match called {
+            Called::Closure(closure) => of_a_closure(scribe, lambdas, closure, scope, at, &mut follows),
+            Called::OfAType(signature) => signature,
         };
-        pairs.push(Pair::Classes(used.result, result));
-        for (parameter, argument) in used.parameters.iter().zip(&arguments) {
-            constraints.push(
-                Bound::Change {
-                    lower: *argument,
-                    upper: *parameter,
-                }
-                .into(),
-            );
-        }
+        call.uses(&signature, &mut follows);
     }
     Looked::Holds {
-        pairs,
+        pairs: follows.pairs,
         adjustments: Vec::new(),
-        constraints,
+        constraints: follows.constraints,
     }
 }
 
-/// Uses a value of the function type `Fn(parameters) -> given` as the function
-/// type `Fn(arguments) -> result`: each argument is passed to the parameter in
-/// its place, and what the function gives is one type with the result. So a
-/// function is used the same whether it is a value or of a type that is
-/// written. A function type of another count of parameters is refused.
-fn of_a_function_type<K>(parameters: Vec<K::Id>, given: K::Id, arguments: Vec<K::Id>, result: K::Id, value: K::Id, wanted: K::Id, at: ItemId) -> Looked<K>
+/// The signature `closure` is used by where it is called in `scope`: that of
+/// the copy the call lies within, where it lies within one, and else of a copy
+/// made for the call.
+///
+/// A call within a copy of the closure it calls is a call of that copy, and
+/// makes none: what is called is being used already.
+fn of_a_closure<K>(scribe: &mut Scribe<'_, K>, lambdas: &Lambdas, closure: ClosureId, scope: ScopeId, at: ItemId, follows: &mut Follows<K>) -> Signature<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    if parameters.len() != arguments.len() {
-        return Looked::Refused(Refused {
-            cause: Cause::Mismatch,
-            items: BTreeSet::from([at]),
-            of: vec![value, wanted],
-        });
-    }
-    Looked::Holds {
-        pairs: vec![Pair::Classes(given, result)],
-        adjustments: Vec::new(),
-        constraints: arguments.into_iter().zip(parameters).map(|(lower, upper)| Bound::Change { lower, upper }.into()).collect(),
-    }
+    let within = scribe.closures().within(scribe.scopes(), scope, closure).cloned();
+    let Copy { parameters, result, .. } = match within {
+        Some(in_use) => in_use,
+        None => copy(scribe, lambdas, closure, scope, at, follows),
+    };
+    Signature { parameters, result }
 }
 
 /// Copies the template of `closure` into a scope of its own within `scope`, by
 /// `at`, and gives the copy. Each class standing for a capture is one type with
 /// what the closure captures, and each lambda the body defines is a closure named
 /// anew, whose function value enters the class of the lambda.
-fn copy<K>(
-    scribe: &mut Scribe<'_, K>,
-    lambdas: &Lambdas,
-    closure: ClosureId,
-    scope: ScopeId,
-    at: ItemId,
-    pairs: &mut Vec<Pair<K>>,
-    constraints: &mut Vec<Constraint<K>>,
-) -> Copy<K>
+fn copy<K>(scribe: &mut Scribe<'_, K>, lambdas: &Lambdas, closure: ClosureId, scope: ScopeId, at: ItemId, follows: &mut Follows<K>) -> Copy<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
@@ -141,12 +190,15 @@ where
         result: made[&lambda.result],
     };
     scribe.copied(lies_in, copy.clone());
-    pairs.extend(lambda.captures.iter().zip(closed.captures).map(|(stands, captured)| Pair::Classes(made[stands], captured)));
+
+    let captured = lambda.captures.iter().zip(closed.captures);
+    follows.pairs.extend(captured.map(|(stands_for, captured)| Pair::Classes(made[stands_for], captured)));
+
     for defined in &lambda.defines {
         let captures = defined.captures.iter().map(|captured| made[captured]).collect();
         let named = scribe.name(defined.lambda, captures);
         let written = scribe.written(lies_in, Shape::FnValue(BTreeSet::from([named])), BTreeSet::from([defined.by]));
-        constraints.push(
+        follows.constraints.push(
             Bound::Enter {
                 lower: written,
                 upper: made[&defined.value],
