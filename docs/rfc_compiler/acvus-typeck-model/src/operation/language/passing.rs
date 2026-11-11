@@ -299,24 +299,32 @@ where
     waits.map_or(Same::Yes, Same::Reads)
 }
 
-/// A row a receiver goes to: the parts of the receiver that are one type with
-/// parts of the row's first parameter, and what the receiver takes to go.
+/// A function called by name: a row of the table, or a function of a module.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::operation) enum Named {
+    Row(usize),
+    Method(usize),
+}
+
+/// A function a receiver goes to: the parts of the receiver that are one type
+/// with parts of the function's first parameter, and what the receiver takes to
+/// go.
 pub(in crate::operation) struct Received<K>
 where
     K: ClassKind,
 {
-    pub(super) row: usize,
+    pub(super) function: Named,
     pub(super) pairs: Vec<(K::Id, TemplateId)>,
     pub(super) adjustments: Vec<Adjustment>,
 }
 
-/// Every row of the name `name` that `receiver` goes to, and each part of the
-/// receiver that has to have a head before a row can be told of.
+/// Every function of the name `name` that `receiver` goes to, and each part of
+/// the receiver that has to have a head before a function can be told of.
 ///
-/// A receiver goes to the first parameter of a row as any argument is passed,
-/// by what the language gives alone, and is read as far as the row writes. One
-/// thing more is given a receiver: one that is no reference is lent where the
-/// parameter is a reference.
+/// A receiver goes to the first parameter of a function as any argument is
+/// passed, by what the language gives alone, and is read as far as the function
+/// writes. One thing more is given a receiver: one that is no reference is lent
+/// where the parameter is a reference.
 pub(super) fn receivers<K>(
     view: &View<'_, K>,
     functions: &Functions,
@@ -327,16 +335,20 @@ pub(super) fn receivers<K>(
 where
     K: ClassKind,
 {
+    let rows = functions.rows.iter().enumerate().filter_map(|(index, row)| {
+        let first = row.parameters.first()?;
+        (row.name == *name).then_some((Named::Row(index), &row.template, *first))
+    });
+    let methods = functions.methods.iter().enumerate().filter_map(|(index, method)| {
+        (method.name == *name).then_some((Named::Method(index), &method.template, method.receiver))
+    });
     let mut found = Vec::new();
     let mut waits = BTreeSet::new();
-    for (index, row) in functions.rows.iter().enumerate() {
-        let (true, Some(first)) = (row.name == *name, row.parameters.first()) else {
-            continue;
-        };
-        match received(view, receiver, &row.template, *first, read) {
-            Given::Goes { pairs, adjustments } => match all_same(view, &row.template, &pairs, read) {
+    for (function, template, first) in rows.chain(methods) {
+        match received(view, receiver, template, first, read) {
+            Given::Goes { pairs, adjustments } => match all_same(view, template, &pairs, read) {
                 Same::Yes => found.push(Received {
-                    row: index,
+                    function,
                     pairs,
                     adjustments,
                 }),
@@ -348,7 +360,7 @@ where
             Given::Reads(class, _) => {
                 waits.insert(class);
             }
-            Given::Calls => todo!("a function value as the receiver of a function type a row writes"),
+            Given::Calls => todo!("a function value as the receiver of a function type a function writes"),
             Given::Nothing => {}
         }
     }

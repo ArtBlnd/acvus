@@ -302,10 +302,27 @@ where
         Ok((written, captured))
     }
 
+    /// Writes `upper <- lambda`, and gives the lambda written: its class enters
+    /// `upper`, and is called once with nothing passed, a definition being a use
+    /// that passes nothing.
+    fn defined(&mut self, upper: &Path, lambda: &ast::Lambda, label: &str) -> Result<LambdaId, String> {
+        let item = self.items.item(label.to_owned());
+        let (written, captured) = self.lambda(lambda, item, label)?;
+        let value = (self.define)(self.classes, written, captured, item);
+        let upper = self.path(upper, Side::Lower, label);
+        self.classes.constrain(Bound::Enter { lower: value, upper }.into(), item);
+        let nothing = lambda.parameters.iter().map(|_| self.nothing(item)).collect();
+        let result = self.undecided();
+        self.call(value, nothing, result, item);
+        Ok(written)
+    }
+
     /// Writes the module `name`, of the fields `fields`, whose body is `body`: a
     /// lambda that takes nothing and gives its functions by their names. A
     /// function is a lambda the body assigns to a name, and it captures each field
-    /// and each function it does not name otherwise.
+    /// and each function it does not name otherwise. A function whose first
+    /// parameter writes a type is told to the table of functions, to be called
+    /// by name on a receiver.
     fn module(&mut self, name: &str, fields: &[String], body: &[Statement], label: &str) -> Result<(), String> {
         let functions: Vec<&String> = body
             .iter()
@@ -365,7 +382,24 @@ where
             root: name.to_owned(),
             segments: Vec::new(),
         };
-        self.statement(&Op::Define { upper, lambda: whole }, label)
+        let module = self.defined(&upper, &whole, label)?;
+
+        // A function whose first parameter writes a type takes a receiver, and
+        // is found by a call by name. The lambdas a body defines are kept in the
+        // order its statements define them.
+        let defining = whole.body.iter().filter_map(|statement| match &statement.op {
+            Op::Define { upper, .. } => Some(upper),
+            _ => None,
+        });
+        let defined: Vec<LambdaId> = self.lambdas.get(module).defines.iter().map(|defined| defined.lambda).collect();
+        for (upper, function) in defining.zip(defined) {
+            let written = self.lambdas.get(function);
+            let receiver = written.parameters.first().copied().filter(|first| written.template.is_decided(*first));
+            if let (true, Some(receiver)) = (upper.segments.is_empty(), receiver) {
+                self.functions.method(Name::new(&upper.root), module, written.template.clone(), receiver);
+            }
+        }
+        Ok(())
     }
 
     /// Records the one operation `op` writes. A declaration is no statement of
@@ -396,15 +430,7 @@ where
                 self.classes.constrain(Suspended::Exit { lower, upper }.into(), item);
             }
             Op::Define { upper, lambda } => {
-                let item = self.items.item(label.to_owned());
-                let (written, captured) = self.lambda(lambda, item, label)?;
-                let value = (self.define)(self.classes, written, captured, item);
-                let upper = self.path(upper, Side::Lower, label);
-                self.classes.constrain(Bound::Enter { lower: value, upper }.into(), item);
-                // A definition is a use that passes nothing.
-                let nothing = lambda.parameters.iter().map(|_| self.nothing(item)).collect();
-                let result = self.undecided();
-                self.call(value, nothing, result, item);
+                self.defined(upper, lambda, label)?;
             }
             Op::Call {
                 callee,

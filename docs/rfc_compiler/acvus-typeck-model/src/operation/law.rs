@@ -175,7 +175,7 @@ pub enum Place {
 ///
 /// | What is added | For what |
 /// |---|---|
-/// | a class with a head ([`Scribe::written`]) | a head a rule writes |
+/// | a class with a head, or with none ([`Scribe::written`], [`Scribe::undecided`]) | a head a rule writes, a class a rule names |
 /// | the classes of a template ([`Scribe::anew`]) | a signature at a boundary, the copy of a lambda |
 /// | a scope, and what copy lies in it ([`Scribe::scope_within`], [`Scribe::copied`]) | the copy of a lambda lies in a scope of its own |
 /// | a closure ([`Scribe::name`]) | a copy names a closure of each lambda its body defines |
@@ -220,6 +220,12 @@ where
     /// Names a closure anew, `lambda` over `captures`.
     pub fn name(&mut self, lambda: LambdaId, captures: Vec<K::Id>) -> ClosureId {
         self.store.closures.name(lambda, captures)
+    }
+
+    /// Makes a class with no head in `scope`: one a rule names, for what it
+    /// records to be about.
+    pub fn undecided(&mut self, scope: ScopeId) -> K::Id {
+        self.store.classes.undecided(scope)
     }
 
     /// Makes a class with the head `shape`, as the text writes one, in `scope`, by

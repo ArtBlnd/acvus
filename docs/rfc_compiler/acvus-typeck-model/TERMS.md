@@ -365,8 +365,8 @@ them, and they are added without changing what is here. What is known to need ru
 A call by name, `x.m(a)`, is ruled below with the rest.
 
 What has been said so far. A lambda, its captures and its calls, a recursive one included, and
-a module used by its name are implemented and written by the text; a method called on a value
-of a module's type and a brand are not.
+a module, used by its name or by a call on a value of its type, are implemented and written by
+the text; a brand is not.
 
 - **A lambda has two phases, its body and its instantiation.** From outside its body a lambda
   value shows its signature and nothing else; inside, the body stands where it is written.
@@ -435,6 +435,10 @@ of a module's type and a brand are not.
   gives, to the type the parameter writes. A parameter that writes none is a hole, which takes
   what comes as it comes, so the argument and the parameter are one type. Nothing enters in a
   call; a value enters where it flows into a variable.
+- **A function of a module that takes a receiver is found as a declared one is.** It is one
+  whose first parameter writes a type. `p.m(a)` finds it by the receiver going to that type,
+  among the declared functions of the name and by the one rule, and then writes what
+  `M::m(p, a)` writes, the receiver lent where it is lent.
 - **A parameter may write a type, and a struct's field is its type parameter.** What is passed
   to a parameter that writes a type is passed as to a declared type, with what the language
   gives: `&&u8` is passed to `x: &u8`, read through, and `u8` is not, a lend being a

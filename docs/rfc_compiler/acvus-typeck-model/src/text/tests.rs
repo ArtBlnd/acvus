@@ -554,3 +554,56 @@ fn a_lambda_that_uses_a_module_uses_the_module_of_the_program() {
     // A function of a module that uses the module makes a value of another type.
     holds(&format!("{pair} u <- u8; c <- char; call Pair::new(u) to p; call Pair::other(c) to q; assert p: Pair<u8>; assert q: Pair<char>;"));
 }
+
+// A function of a module called by name on a value.
+
+const METHODS: &str = "row plus: u8, u8 -> u8;
+    module Point [x, y] {
+        new <- fn (a, b) -> r { x <- a; y <- b; r <- Point<x, y>; };
+        add <- fn (s: &Point<x, y>, o: &Point<x, y>) -> r { sx <- s.x; ox <- o.x; call sx::plus(ox) to nx; r <- Point<nx, y>; };
+        set <- fn (s: &mut Point<x, y>, v) -> r { x <- v; r <- (); };
+        into_x <- fn (s: Point<x, y>) -> r { r <- s.x; };
+    };
+    u <- u8; v <- char; call Point::new(u, v) to p; call Point::new(u, v) to o; b <- &o;";
+
+#[test]
+fn a_function_of_a_module_whose_first_parameter_writes_a_type_is_called_on_a_receiver() {
+    let called = |program: &str| holds(&format!("{METHODS} {program}"));
+    called("a <- &p; c: call a::add(b) to q; assert q: Point<u8, char>; assert c takes;");
+    called("c: call p::add(b) to q; assert q: Point<u8, char>; assert c takes Lend;");
+    called("a <- &mut p; c: call a::add(b) to q; assert q: Point<u8, char>; assert c takes Reborrow;");
+    called("a <- &p; aa <- &a; c: call aa::add(b) to q; assert q: Point<u8, char>;");
+    called("w <- u8; c: call p::set(w) to q; assert q: (); assert c takes LendMut;");
+    called("c: call p::into_x() to q; assert q: u8;");
+}
+
+#[test]
+fn a_receiver_goes_to_a_function_of_a_module_as_to_a_declared_one_or_not_at_all() {
+    let called = |program: &str| holds(&format!("{METHODS} {program}"));
+    called("a <- &p; w <- u8; call a::set(w) to q; assert refused NoChange, ..;");
+    called("a <- &p; call a::into_x() to q; assert refused NoChange, ..;");
+    // `new` writes no type for its first parameter, and takes no receiver.
+    called("call p::new(u) to q; assert refused NoChange, ..;");
+    called("call p::nope() to q; assert refused NoChange, ..;");
+    called("call p::add() to q; assert refused Mismatch, ..;");
+    called("w <- u8; call p::add(w) to q; assert refused ..;");
+}
+
+/// The receiver is not decided before a reference to it is, and a call that
+/// guarded such an argument while it waited for the receiver waited for itself.
+#[test]
+fn a_call_on_a_receiver_with_an_argument_that_refers_to_it_is_the_call_that_names_the_function() {
+    let called = |program: &str| holds(&format!("{METHODS} {program}"));
+    called("a <- &p; c <- &p; call Point::add(a, c) to q; assert q: Point<u8, char>;");
+    called("a <- &p; call p::add(a) to q; assert q: Point<u8, char>;");
+    called("a <- &p; c <- &p; call a::add(c) to q; assert q: Point<u8, char>;");
+    called("a <- &p; call a::add(a) to q; assert q: Point<u8, char>;");
+}
+
+/// An argument held apart is not decided to what a literal is by default before
+/// the function is found, the receiver being decided no later than it.
+#[test]
+fn a_literal_argument_of_a_call_by_name_is_what_the_parameter_is() {
+    holds("row plus: u8, u8 -> u8; f <- fn (x) -> r { r <- x; }; t <- u8; call f(t) to s; w <- {integer}; call s::plus(w) to n; assert w: u8; assert n: u8;");
+    holds("row opt: u8, Option<u8> -> u8; f <- fn (x) -> r { r <- x; }; t <- u8; call f(t) to s; w <- {integer}; g <- Option<w>; call s::opt(g) to n; assert w: u8;");
+}
