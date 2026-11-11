@@ -364,8 +364,9 @@ them, and they are added without changing what is here. What is known to need ru
 
 A call by name, `x.m(a)`, is ruled below with the rest.
 
-What has been said so far. A lambda, its captures and its calls, a recursive one included, are
-implemented and written by the text; a module and a brand are not.
+What has been said so far. A lambda, its captures and its calls, a recursive one included, and
+a module used by its name are implemented and written by the text; a method called on a value
+of a module's type and a brand are not.
 
 - **A lambda has two phases, its body and its instantiation.** From outside its body a lambda
   value shows its signature and nothing else; inside, the body stands where it is written.
@@ -462,6 +463,13 @@ implemented and written by the text; a module and a brand are not.
   copy and is one refusal; what a call's argument is refused for names that argument and is
   one for each call. Where a capture is in it, the refusal names every copy that connected to
   the capture, as it names every connection.
+- **A module is a lambda that takes nothing and gives its functions.** Its fields are classes
+  of the body, which each function captures with the other functions, and using the module
+  is calling that lambda. So what is said of a lambda is said of a module and nothing more
+  is: each use copies it whole, a function calls another of the same copy by its name, and a
+  function that uses the module by the module's name makes a copy anew, as a call of it from
+  anywhere does, the copy of a function lying under where it is called and not under the
+  module's.
 - **A module is copied whole, and a method not called is a lambda not called.** The template
   of a module holds the definitions of its methods, and a definition is a use that passes
   nothing. So a copy made for `Point::new(1u8, 2u8)` holds what `add` says of `Self` with

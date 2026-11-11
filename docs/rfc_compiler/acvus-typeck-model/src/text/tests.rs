@@ -34,6 +34,9 @@ row push<T>: &mut Vec<T>, T -> ();
 row now: -> u64;
 struct Point {x, y};
 struct Unit {};
+module Point [x, y] { new <- fn (a, b) -> r { x <- a; r <- Point<x, y>; }; x <- u8; };
+module Empty [] { };
+call Point::new(a, b.x) to p.0;
 f <- fn () -> r { };
 f <- fn (x: &Vec<a>, y, z: u8) -> r { };
 f.x <- fn [a, b] (x, y) -> r { a <- Option<x>; first: r <- y; g <- fn [x] () -> s { s <- x; }; call g() to r; };
@@ -487,4 +490,67 @@ fn a_field_of_a_struct_found_through_a_reference_decided_already_takes_the_way_t
         "struct Point {x, y}; o <- {f: a}; o <- {f: &Point<u8, char>};
          c: b <- a.y; assert b: char; assert c at a.y takes Deref;",
     );
+}
+
+// A module.
+
+const POINT: &str = "row plus: u8, u8 -> u8;
+    module Point [x, y] {
+        new <- fn (a, b) -> r { x <- a; y <- b; r <- Point<x, y>; };
+        add <- fn (s: &Point<x, y>, o: &Point<x, y>) -> r { sx <- s.x; ox <- o.x; call sx::plus(ox) to nx; r <- Point<nx, y>; };
+    };";
+
+#[test]
+fn each_use_of_a_module_copies_it_whole() {
+    holds(&format!("{POINT} u <- u8; v <- char; call Point::new(u, v) to p; assert p: Point<u8, char>;"));
+    holds(&format!(
+        "{POINT} u <- u8; v <- char; w <- u16; call Point::new(u, v) to p; call Point::new(u, w) to q;
+         assert p: Point<u8, char>; assert q: Point<u8, u16>;"
+    ));
+    holds(&format!("{POINT} assert accepted;"));
+}
+
+#[test]
+fn what_one_function_of_a_module_asks_of_a_field_every_function_keeps() {
+    // `add` adds `x` to `x`, so `new` makes no `Point` whose `x` has no `plus`,
+    // whether `add` is called or not.
+    holds(&format!("{POINT} u <- char; v <- char; call Point::new(u, v) to p; assert refused NoChange, ..;"));
+}
+
+#[test]
+fn a_function_of_a_module_is_called_as_any_function_value_is() {
+    holds(&format!("{POINT} u <- u8; v <- char; call Point::new(u, v) to p; a <- &p; call Point::add(a, a) to q; assert q: Point<u8, char>;"));
+    holds(&format!("{POINT} u <- u8; call Point::new(u) to p; assert refused Mismatch, ..;"));
+    holds(&format!("{POINT} u <- u8; call Point::nope(u) to p; assert refused NotHeld, ..;"));
+}
+
+#[test]
+fn a_function_of_a_module_calls_another_of_the_same_copy() {
+    holds(
+        "module Pair [x] {
+             new <- fn (a) -> r { x <- a; r <- Pair<x>; };
+             twice <- fn (a) -> r { call new(a) to r; };
+         };
+         u <- u8; call Pair::twice(u) to p; assert p: Pair<u8>;",
+    );
+}
+
+#[test]
+fn a_module_that_is_not_declared_or_is_written_in_a_body_is_no_program() {
+    let unread = |text: &str| match run(text, 1) {
+        Err(Failed::Unread(why)) => why,
+        other => panic!("`{text}` is read: {other:?}"),
+    };
+    assert!(unread("u <- u8; call Nope::new(u) to p;").contains("`Nope` is no module"));
+    assert!(unread("f <- fn () -> r { call Nope::new() to r; };").contains("`Nope` is no module"));
+    assert!(unread("module P [x] { }; module P [y] { };").contains("the struct `P` is declared twice"));
+    assert!(unread("f <- fn () -> r { module P [x] { }; };").contains("a declaration is written where a statement is"));
+}
+
+#[test]
+fn a_lambda_that_uses_a_module_uses_the_module_of_the_program() {
+    let pair = "module Pair [x] { new <- fn (a) -> r { x <- a; r <- Pair<x>; }; other <- fn (a) -> r { call Pair::new(a) to r; }; };";
+    holds(&format!("{pair} f <- fn (a) -> r {{ call Pair::new(a) to r; }}; u <- u8; call f(u) to p; assert p: Pair<u8>;"));
+    // A function of a module that uses the module makes a value of another type.
+    holds(&format!("{pair} u <- u8; c <- char; call Pair::new(u) to p; call Pair::other(c) to q; assert p: Pair<u8>; assert q: Pair<char>;"));
 }

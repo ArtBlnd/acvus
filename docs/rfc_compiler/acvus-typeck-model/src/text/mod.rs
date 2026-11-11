@@ -18,6 +18,8 @@
 //! | `f <- fn [a] (x) -> r { r <- x; };` | a closure of the lambda, over `a`, is named, and its function value enters `f` |
 //! | `f <- fn (s: &Point<a, b>, x) -> r { .. };` | a parameter that writes a type: what is passed is passed to it as to a declared type |
 //! | `struct Point {x, y};` | a struct: `Point<T, U>` has the field `x` of the type `T` and `y` of `U` |
+//! | `module Point [x, y] { new <- fn (a, b) -> r { .. }; };` | a struct and its functions: a lambda that takes nothing and gives them |
+//! | `call Point::new(u, v) to p;` | the module is used, and that function of it called |
 //! | `call f(u, v) to w;` | `f` is passed to the function type of those arguments and the result `w` |
 //! | `call x::m(u) to w;` | the function of the name `m` that takes `x` as its receiver is called |
 //! | `first: pass a to p;` | the statement's items are found by the label `first` |

@@ -26,7 +26,7 @@ use crate::primitive::{ClassId, ItemId, LambdaId, Name, ScopeId, TemplateId};
 use crate::store::Store;
 use crate::store::classes::Classes;
 
-use super::ast::{self, Assertion, Op, Path, Program, Segment, Type, Variant};
+use super::ast::{self, Assertion, Op, Path, Program, Segment, Statement, Type, Variant};
 use super::print;
 
 /// A program recorded, and then solved.
@@ -83,6 +83,33 @@ where
     functions: &'a mut Functions,
     lambdas: &'a mut Lambdas,
     define: &'a mut Define<'a, K>,
+}
+
+/// The name of what the lambda of a module gives: its functions, by their names.
+const MODULE: &str = "module";
+
+/// The modules the statements `body` use, at any depth: each is a class of where
+/// the program is written, which a lambda that uses it captures.
+fn modules_used(body: &[Statement]) -> BTreeSet<String> {
+    let mut used = BTreeSet::new();
+    for statement in body {
+        match &statement.op {
+            Op::CallOf { module, .. } => {
+                used.insert(module.clone());
+            }
+            Op::Define { lambda, .. } => used.extend(modules_used(&lambda.body)),
+            Op::Module { body, .. } => used.extend(modules_used(body)),
+            Op::Enter { .. }
+            | Op::Pass { .. }
+            | Op::Exit { .. }
+            | Op::Declare { .. }
+            | Op::Row { .. }
+            | Op::Struct { .. }
+            | Op::Call { .. }
+            | Op::CallNamed { .. } => {}
+        }
+    }
+    used
 }
 
 impl<K> Writer<'_, K>
@@ -210,7 +237,11 @@ where
             }
             Ok(classes)
         };
-        let captures = open(&lambda.captures)?;
+        // A module the body uses is captured, as what it names is written where
+        // the program is.
+        let implicit = modules_used(&lambda.body).into_iter().filter(|module| !lambda.captures.contains(module));
+        let captured_names: Vec<String> = lambda.captures.iter().cloned().chain(implicit).collect();
+        let captures = open(&captured_names)?;
         let named: Vec<String> = lambda.parameters.iter().map(|parameter| parameter.name.clone()).collect();
         let variables = open(&named)?;
         let result = open(std::slice::from_ref(&lambda.result))?[0];
@@ -267,8 +298,74 @@ where
             captures,
             defines,
         });
-        let captured = lambda.captures.iter().map(|name| self.named(name)).collect();
+        let captured = captured_names.iter().map(|name| self.named(name)).collect();
         Ok((written, captured))
+    }
+
+    /// Writes the module `name`, of the fields `fields`, whose body is `body`: a
+    /// lambda that takes nothing and gives its functions by their names. A
+    /// function is a lambda the body assigns to a name, and it captures each field
+    /// and each function it does not name otherwise.
+    fn module(&mut self, name: &str, fields: &[String], body: &[Statement], label: &str) -> Result<(), String> {
+        let functions: Vec<&String> = body
+            .iter()
+            .filter_map(|statement| match &statement.op {
+                Op::Define { upper, .. } if upper.segments.is_empty() => Some(&upper.root),
+                _ => None,
+            })
+            .collect();
+        let mut statements = Vec::new();
+        for statement in body {
+            let op = match &statement.op {
+                Op::Define { upper, lambda } if upper.segments.is_empty() => {
+                    let mut lambda = lambda.clone();
+                    for shared in fields.iter().chain(functions.iter().copied()) {
+                        let named = lambda.captures.contains(shared)
+                            || lambda.parameters.iter().any(|parameter| parameter.name == *shared)
+                            || lambda.result == *shared;
+                        if !named {
+                            lambda.captures.push(shared.clone());
+                        }
+                    }
+                    Op::Define {
+                        upper: upper.clone(),
+                        lambda,
+                    }
+                }
+                other => other.clone(),
+            };
+            statements.push(Statement {
+                label: statement.label.clone(),
+                op,
+            });
+        }
+        for function in functions {
+            statements.push(Statement {
+                label: None,
+                op: Op::Enter {
+                    upper: Path {
+                        root: MODULE.to_owned(),
+                        segments: vec![Segment::Field(function.clone())],
+                    },
+                    lower: Type::Class(Path {
+                        root: function.clone(),
+                        segments: Vec::new(),
+                    }),
+                    alone: false,
+                },
+            });
+        }
+        let whole = ast::Lambda {
+            captures: Vec::new(),
+            parameters: Vec::new(),
+            result: MODULE.to_owned(),
+            body: statements,
+        };
+        let upper = Path {
+            root: name.to_owned(),
+            segments: Vec::new(),
+        };
+        self.statement(&Op::Define { upper, lambda: whole }, label)
     }
 
     /// Records the one operation `op` writes. A declaration is no statement of
@@ -342,7 +439,29 @@ where
                     item,
                 );
             }
-            Op::Declare { .. } | Op::Row { .. } | Op::Struct { .. } => return Err("a declaration is written where a statement is".to_owned()),
+            Op::CallOf {
+                module,
+                name,
+                arguments,
+                result,
+            } => {
+                let item = self.items.item(label.to_owned());
+                // The module is used: its lambda is called, and gives its
+                // functions.
+                let of = self.named(module);
+                let used = self.undecided();
+                self.call(of, Vec::new(), used, item);
+                let named = self.items.item(format!("{label}:{module}::{name}"));
+                let function = self
+                    .classes
+                    .part(used, PartKey::Field(Name::new(name)), Side::Upper, named)
+                    .expect("a class just made names any part");
+                self.made.push(function);
+                let arguments = arguments.iter().map(|argument| self.path(argument, Side::Upper, label)).collect();
+                let result = self.path(result, Side::Lower, label);
+                self.call(function, arguments, result, item);
+            }
+            Op::Declare { .. } | Op::Row { .. } | Op::Struct { .. } | Op::Module { .. } => return Err("a declaration is written where a statement is".to_owned()),
         }
         Ok(())
     }
@@ -572,6 +691,17 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
         .enumerate()
         .map(|(index, statement)| statement.label.clone().unwrap_or_else(|| (index + 1).to_string()))
         .collect();
+    let declared: BTreeSet<&String> = program
+        .statements
+        .iter()
+        .filter_map(|statement| match &statement.op {
+            Op::Module { name, .. } => Some(name),
+            _ => None,
+        })
+        .collect();
+    if let Some(unknown) = modules_used(&program.statements).iter().find(|module| !declared.contains(module)) {
+        return Err(format!("`{unknown}` is no module"));
+    }
     let Recorded {
         store: Store { classes, scopes, closures },
         law: Language { functions, lambdas, structs },
@@ -603,8 +733,10 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
         declare(&mut writer, structs, scopes, &statement.op, label)?;
     }
     for (statement, label) in program.statements.iter().zip(&labelled) {
-        if !matches!(statement.op, Op::Declare { .. } | Op::Row { .. } | Op::Struct { .. }) {
-            writer.statement(&statement.op, label)?;
+        match &statement.op {
+            Op::Declare { .. } | Op::Row { .. } | Op::Struct { .. } => {}
+            Op::Module { name, fields, body } => writer.module(name, fields, body, label)?,
+            op => writer.statement(op, label)?,
         }
     }
     for refused in not_held {
@@ -642,7 +774,7 @@ fn declare(writer: &mut Writer<'_, Live>, structs: &mut BTreeMap<Name, Vec<Name>
             let result = signature(result, holes)?;
             writer.functions.declare(Name::new(name), &parameters, &result, scopes, item);
         }
-        Op::Struct { name, fields } => {
+        Op::Struct { name, fields } | Op::Module { name, fields, .. } => {
             let named: Vec<Name> = fields.iter().map(Name::new).collect();
             if let Some(twice) = fields.iter().enumerate().find_map(|(at, field)| fields[..at].contains(field).then_some(field)) {
                 return Err(format!("the struct `{name}` has the field `{twice}` twice"));
@@ -651,7 +783,7 @@ fn declare(writer: &mut Writer<'_, Live>, structs: &mut BTreeMap<Name, Vec<Name>
                 return Err(format!("the struct `{name}` is declared twice"));
             }
         }
-        Op::Enter { .. } | Op::Pass { .. } | Op::Exit { .. } | Op::Define { .. } | Op::Call { .. } | Op::CallNamed { .. } => {}
+        Op::Enter { .. } | Op::Pass { .. } | Op::Exit { .. } | Op::Define { .. } | Op::Call { .. } | Op::CallNamed { .. } | Op::CallOf { .. } => {}
     }
     Ok(())
 }

@@ -83,6 +83,25 @@ pub enum Op {
         arguments: Vec<Path>,
         result: Path,
     },
+    /// `module Name [fields] { body };`: a struct of that name and those fields,
+    /// and the functions of it. The body is the body of a lambda that takes
+    /// nothing: a field is a class of it, and each lambda a statement of the body
+    /// assigns to a name is a function of the module, which captures the fields
+    /// and the other functions. The module is what that lambda gives, the
+    /// functions by their names, so each use of the module copies it whole.
+    Module {
+        name: String,
+        fields: Vec<String>,
+        body: Vec<Statement>,
+    },
+    /// `call Name::function(arguments) to result;`: the module is used, and that
+    /// function of it called.
+    CallOf {
+        module: String,
+        name: String,
+        arguments: Vec<Path>,
+        result: Path,
+    },
     /// `call receiver::name(arguments) to result;`: the function of that name
     /// that takes the receiver is called.
     CallNamed {

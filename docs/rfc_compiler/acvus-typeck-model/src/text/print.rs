@@ -123,6 +123,25 @@ impl Display for Op {
                 }
                 write!(f, " -> {result}")
             }
+            Op::Module { name, fields, body } => {
+                write!(f, "module {name} [")?;
+                separated(f, fields, |f, field| f.write_str(field))?;
+                f.write_str("] {")?;
+                for statement in body {
+                    write!(f, " {statement}")?;
+                }
+                f.write_str(" }")
+            }
+            Op::CallOf {
+                module,
+                name,
+                arguments,
+                result,
+            } => {
+                write!(f, "call {module}::{name}(")?;
+                separated(f, arguments, |f, argument| write!(f, "{argument}"))?;
+                write!(f, ") to {result}")
+            }
             Op::Struct { name, fields } => {
                 write!(f, "struct {name} {{")?;
                 separated(f, fields, |f, field| f.write_str(field))?;
