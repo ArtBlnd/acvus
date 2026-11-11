@@ -15,7 +15,15 @@
 //! | `exit e to w;` | the exit of a `?`: `e` is what it exits with, `w` the error |
 //! | `declare p = Option<t>;` | `p` is a class a declaration writes, and `t` a hole of it |
 //! | `row as_slice<T>: &Vec<T> -> &[T];` | a declared function |
+//! | `f <- fn [a] (x) -> r { r <- x; };` | a closure of the lambda, over `a`, is named, and its function value enters `f` |
+//! | `call f(u, v) to w;` | `f` is passed to the function type of those arguments and the result `w` |
 //! | `first: pass a to p;` | the statement's items are found by the label `first` |
+//!
+//! In the body of a lambda a name is a class of the lambda: one it captures, a
+//! parameter, its result, or a class of its own from where the body first writes
+//! it. The body is written into a template, by the statements a program is
+//! written by, and a lambda written is called once with arguments nothing
+//! enters.
 //!
 //! A word that begins with a small letter is a class, a field or a label, and one
 //! that begins with a capital is a type or a variant. [`ast`] is the program,

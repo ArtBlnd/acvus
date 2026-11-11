@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::ty::{Mutability, Scalar};
 
-use super::ast::{Assertion, Op, Path, Program, Segment, Statement, Type, Variant};
+use super::ast::{Assertion, Lambda, Op, Path, Program, Segment, Statement, Type, Variant};
 
 /// `items`, each written by `write`, with `, ` between them.
 fn separated<I, T, F>(f: &mut Formatter<'_>, items: I, mut write: F) -> fmt::Result
@@ -117,7 +117,35 @@ impl Display for Op {
                 }
                 write!(f, ": {parameter} -> {result}")
             }
+            Op::Define { upper, lambda } => write!(f, "{upper} <- {lambda}"),
+            Op::Call {
+                callee,
+                arguments,
+                result,
+            } => {
+                write!(f, "call {callee}(")?;
+                separated(f, arguments, |f, argument| write!(f, "{argument}"))?;
+                write!(f, ") to {result}")
+            }
         }
+    }
+}
+
+impl Display for Lambda {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("fn ")?;
+        if !self.captures.is_empty() {
+            f.write_str("[")?;
+            separated(f, &self.captures, |f, capture| f.write_str(capture))?;
+            f.write_str("] ")?;
+        }
+        f.write_str("(")?;
+        separated(f, &self.parameters, |f, parameter| f.write_str(parameter))?;
+        write!(f, ") -> {} {{", self.result)?;
+        for statement in &self.body {
+            write!(f, " {statement}")?;
+        }
+        f.write_str(" }")
     }
 }
 

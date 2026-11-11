@@ -6,7 +6,7 @@ use crate::primitive::Name;
 use crate::primitive::adjustment::{Adjustment, Subtyping};
 use crate::primitive::refusal::Cause;
 use crate::primitive::ty::{Mutability, Scalar};
-use crate::text::ast::{Assertion, Op, Path, Program, Segment, Statement, Type, Variant};
+use crate::text::ast::{Assertion, Lambda, Op, Path, Program, Segment, Statement, Type, Variant};
 
 grammar;
 
@@ -85,6 +85,8 @@ Statement: Statement = <label:(<Lower> ":")?> <op:Op> ";" => Statement { label, 
 
 Op: Op = {
     <upper:Path> "<-" <lower:Type> <alone:("as" "_")?> => Op::Enter { upper, lower, alone: alone.is_some() },
+    <upper:Path> "<-" <lambda:Lambda> => Op::Define { upper, lambda },
+    "call" <callee:Path> "(" <arguments:Comma<Path>> ")" "to" <result:Path> => Op::Call { callee, arguments, result },
     "pass" <argument:Path> "to" <given:Path> => Op::Pass { argument, given },
     "exit" <exits_with:Path> "to" <error:Path> => Op::Exit { exits_with, error },
     "declare" <name:Lower> "=" <ty:Type> => Op::Declare { name, ty },
@@ -94,6 +96,13 @@ Op: Op = {
         parameter,
         result,
     },
+};
+
+Lambda: Lambda = "fn" <captures:("[" <Comma<Lower>> "]")?> "(" <parameters:Comma<Lower>> ")" "->" <result:Lower> "{" <body:Statement*> "}" => Lambda {
+    captures: captures.unwrap_or_default(),
+    parameters,
+    result,
+    body,
 };
 
 Path: Path = <root:Lower> <segments:Segment*> => Path { root, segments };

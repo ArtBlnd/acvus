@@ -70,6 +70,31 @@ pub enum Op {
         parameter: Type,
         result: Type,
     },
+    /// `upper <- fn [captures] (parameters) -> result { body };`: the function
+    /// value of a closure of the lambda enters `upper`.
+    Define { upper: Path, lambda: Lambda },
+    /// `call callee(arguments) to result;`: `callee` is passed to the function
+    /// type of those arguments and that result.
+    Call {
+        callee: Path,
+        arguments: Vec<Path>,
+        result: Path,
+    },
+}
+
+/// A lambda as the text writes it. In its body a name is a class of the lambda:
+/// a parameter, the result, a class the lambda captures from where it is written,
+/// or a class of its own from where the body first writes it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Lambda {
+    /// The names of the classes captured, each a name where the lambda is
+    /// written.
+    pub captures: Vec<String>,
+    pub parameters: Vec<String>,
+    pub result: String,
+    /// A body declares nothing: what a declaration writes comes from outside
+    /// the text.
+    pub body: Vec<Statement>,
 }
 
 /// A class: one a name stands for, or a part of one, named by each segment in

@@ -30,6 +30,10 @@ declare q = &mut {x: u8};
 row as_slice<T>: &Vec<T> -> &[T];
 row wrap<T, U>: (T, U) -> Pair<T, U>;
 row unit: () -> u8;
+f <- fn () -> r { };
+f.x <- fn [a, b] (x, y) -> r { a <- Option<x>; first: r <- y; g <- fn [x] () -> s { s <- x; }; call g() to r; };
+call f(a, b.x) to w.0;
+call f() to w;
 assert a: Option<u8>;
 assert a.x.*: &mut {x: (), y: Error{V(E)}};
 assert accepted;
@@ -152,8 +156,8 @@ fn a_value_goes_through_a_row_and_what_it_takes_is_recorded() {
          declare p = &[u8];
          v <- Vec<u8>;
          r <- &mut v;
-         call: pass r to p;
-         assert call takes Reborrow, as_slice;",
+         passed: pass r to p;
+         assert passed takes Reborrow, as_slice;",
     );
 }
 
@@ -203,9 +207,9 @@ fn what_cannot_be_recorded_is_said_before_anything_is_solved() {
 #[test]
 fn a_shared_reference_read_through_is_not_passed_as_an_exclusive_one() {
     // `put(&mut r)` with `r: &u8`, to `put(&mut u8)` and to `put(&u8)`.
-    let program = |given: &str, expected: &str| format!("x <- u8; r <- &x; m <- &mut r; declare p = {given}; call: pass m to p; {expected}");
+    let program = |given: &str, expected: &str| format!("x <- u8; r <- &x; m <- &mut r; declare p = {given}; passed: pass m to p; {expected}");
     holds(&program("&mut u8", "assert refused NoChange;"));
-    holds(&program("&u8", "assert call takes Deref, Reborrow;"));
+    holds(&program("&u8", "assert passed takes Deref, Reborrow;"));
 }
 
 #[test]
@@ -232,4 +236,74 @@ fn a_row_is_taken_only_where_the_argument_is_what_it_writes_at_every_depth() {
     let rows = "row f: Wrap<Option<u8>> -> u8; declare p = u8;";
     holds(&format!("{rows} a <- Wrap<Option<u8>>; first: pass a to p; assert first takes f;"));
     holds(&format!("{rows} a <- Wrap<Option<u16>>; pass a to p; assert refused NoChange;"));
+}
+
+// Lambdas and calls.
+
+#[test]
+fn what_a_body_says_of_a_capture_reaches_it_whether_the_lambda_is_called_or_not() {
+    holds("a <- Option<nothing>; f <- fn [a] () -> r { a <- Option<u8>; }; assert a: Option<u8>;");
+    holds("a <- Option<nothing>; f <- fn [a] (x) -> r { a <- Option<x>; }; assert a: Option<!>;");
+    holds("a <- Option<nothing>; f <- fn [a] (x) -> r { a <- Option<x>; }; u <- u8; call f(u) to w; assert a: Option<u8>;");
+}
+
+#[test]
+fn each_call_copies_the_template_anew() {
+    holds("id <- fn (x) -> r { r <- x; }; p <- u8; q <- u16; call id(p) to m; call id(q) to n; assert m: u8; assert n: u16;");
+}
+
+#[test]
+fn a_call_is_refused_of_what_is_no_function_and_of_another_count_of_arguments() {
+    holds("f <- u8; u <- u8; call f(u) to w; assert refused NoChange, ..;");
+    holds("f <- fn (x) -> r { r <- x; }; u <- u8; call f(u, u) to w; assert refused Mismatch, ..;");
+    holds("f <- fn (x) -> r { r <- x; }; call f() to w; assert refused Mismatch, ..;");
+}
+
+#[test]
+fn a_body_is_refused_where_it_is_written_and_the_same_however_often_it_is_called() {
+    let body = "f <- fn (x) -> r { z <- u8; z <- char; r <- x; };";
+    holds(&format!("{body} assert refused Mismatch, UndecidedClass;"));
+    holds(&format!("{body} u <- u8; call f(u) to v; call f(u) to w; assert refused Mismatch, UndecidedClass; assert v: u8;"));
+}
+
+#[test]
+fn the_results_of_two_lambdas_that_met_are_one_type() {
+    let met = "f <- fn (x) -> r { r <- x; }; f <- fn (x) -> r { r <- u8; };";
+    holds(&format!("{met} q <- u8; call f(q) to m; assert m: u8;"));
+    holds(&format!("{met} q <- u16; call f(q) to m; assert refused Mismatch, ..;"));
+}
+
+#[test]
+fn each_copy_defines_a_closure_over_its_own_classes() {
+    let made = "make <- fn (x) -> g { g <- fn [x] (y) -> r { r <- Option<x>; }; };
+        a <- u8; b <- u16; c <- char;
+        call make(a) to p; call make(b) to q;";
+    holds(&format!("{made} call p(c) to m; call q(c) to n; assert m: Option<u8>; assert n: Option<u16>;"));
+    holds(&format!("{made} both <- p; both <- q; call both(c) to m; assert refused Mismatch, ..;"));
+}
+
+#[test]
+fn a_lambda_in_a_body_captures_what_the_body_captures() {
+    holds(
+        "a <- Option<nothing>;
+         outer <- fn [a] () -> inner { inner <- fn [a] (x) -> r { a <- Option<x>; }; };
+         call outer() to f; u <- u8; call f(u) to w;
+         assert a: Option<u8>;",
+    );
+}
+
+#[test]
+fn a_lambda_that_names_one_class_twice_or_declares_is_no_program() {
+    let unread = |text: &str| match run(text, 1) {
+        Err(Failed::Unread(why)) => why,
+        other => panic!("`{text}` is read: {other:?}"),
+    };
+    assert!(unread("f <- fn [a] (a) -> r { };").contains("`a` is named twice"));
+    assert!(unread("f <- fn (x) -> x { };").contains("`x` is named twice"));
+    assert!(unread("f <- fn () -> r { declare p = u8; };").contains("a declaration is written where a statement is"));
+}
+
+#[test]
+fn each_capture_is_the_class_of_its_own_name() {
+    holds("f <- fn [a, b] () -> r { a <- u8; b <- u16; }; assert a: u8; assert b: u16;");
 }

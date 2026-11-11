@@ -365,8 +365,8 @@ them, and they are added without changing what is here. What is known to need ru
 What depends on calls waits with them: a receiver's adjustment, and a use with several
 candidates.
 
-What has been said so far. None of it is implemented, and it is not yet put together into one
-rule.
+What has been said so far. A lambda, its captures and its calls are implemented and written by
+the text; a module, a brand and a recursive call are not.
 
 - **A lambda has two phases, its body and its instantiation.** From outside its body a lambda
   value shows its signature and nothing else; inside, the body stands where it is written.

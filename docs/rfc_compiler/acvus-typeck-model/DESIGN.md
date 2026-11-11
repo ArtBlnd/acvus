@@ -141,7 +141,10 @@ What is not there yet:
   what may show the two things section 5 says no test observes.
 - **No generator.** Programs are written by hand or translated.
 - **The tests of the law are not in the text.** `operation::tests` records each program by
-  hand through `operation::testing::World`.
+  hand through `operation::testing::World`, and `operation::calls` writes each template by
+  hand. The text writes what both write, a lambda included.
+- **No assertion of a function value's type, nor of a class of a body.** What a lambda gives
+  is asserted of the result of a call.
 
 ## 7. How other systems hold a constraint that waits
 
