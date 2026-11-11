@@ -67,7 +67,7 @@ where
 {
     match constraint {
         Constraint::Bound(Bound::Enter { lower, .. }) => Some(view.head(*lower).cloned()),
-        Constraint::Suspended(Suspended::Alone { .. } | Suspended::Exit { .. }) => Some(None),
+        Constraint::Suspended(Suspended::Alone { .. } | Suspended::Exit { .. } | Suspended::Named { .. }) => Some(None),
         Constraint::Bound(Bound::Equal { .. } | Bound::Change { .. }) => None,
     }
 }

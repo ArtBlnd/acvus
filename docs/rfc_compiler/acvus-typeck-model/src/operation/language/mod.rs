@@ -6,6 +6,7 @@
 //! | which functions are declared | a table, and no rule | [`functions`] |
 //! | which lambdas the text writes | a table, and no rule | [`lambdas`] |
 //! | what a function value passed to a function type comes to | a copy of each closure | [`calling`] |
+//! | which function a call by name calls | the one row of that name the receiver goes to | [`naming`] |
 //! | which classes are one type by the constraints as a whole | classes that enter one another | [`enter::entering_one_another`] |
 //! | where a named part lies | read through a reference | [`Language::place`] |
 //! | what head a class may take | the rungs, in order | [`rungs`] |
@@ -18,6 +19,7 @@ pub mod equal;
 pub mod exit;
 pub mod functions;
 pub mod lambdas;
+pub mod naming;
 pub mod passing;
 pub mod rungs;
 
@@ -51,6 +53,7 @@ where
         match told.then {
             Some(Then::Way(way)) => passing::take(scribe, &self.functions, way, constraint.lower(), at),
             Some(Then::Calls) => calling::take(scribe, &self.lambdas, constraint.lower(), constraint.upper(), at),
+            Some(Then::Named(received)) => naming::take(scribe, &self.functions, received, constraint.lower(), constraint.upper(), at),
             Some(Then::Enters(shape)) => {
                 let upper = constraint.upper();
                 let scope = scribe.classes().get(scribe.classes().find(upper)).scope;
@@ -165,6 +168,8 @@ where
     Enters(Shape<K::Id>),
     /// A copy of the template of each closure of its lower end, a function value.
     Calls,
+    /// The signature of the row its receiver goes to.
+    Named(passing::Received<K>),
 }
 
 impl<K> Told<K>
@@ -192,6 +197,7 @@ where
         Constraint::Bound(Bound::Change { .. }) => passing::look(view, functions, lower, upper, at),
         Constraint::Suspended(Suspended::Alone { .. }) => alone::look(view, lower, upper),
         Constraint::Suspended(Suspended::Exit { .. }) => exit::look(view, lower, upper),
+        Constraint::Suspended(Suspended::Named { name, .. }) => naming::look(view, functions, *name, lower, upper, at),
     }
 }
 

@@ -43,6 +43,8 @@ id! {
     ClosureId,
     /// A lambda as the text writes it: its template.
     LambdaId,
+    /// A name a function is called by.
+    NameId,
     /// The text of a body or a lambda, or one iteration of a loop.
     ScopeId,
 }

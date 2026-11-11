@@ -10,6 +10,7 @@
 
 use std::fmt::Debug;
 
+use super::NameId;
 use super::class::ClassKind;
 
 /// A constraint as a store of the kind `K` sees it.
@@ -80,6 +81,10 @@ where
     /// the body's result. What enters `upper` is told by the head of `lower`, and
     /// nothing enters it until that head is there.
     Exit { lower: K::Id, upper: K::Id },
+    /// `lower::name(ā)`: `lower` is the receiver, and `upper` the function type
+    /// `Fn(ā) → r` the call writes. Which function of that name is called is told
+    /// by the head of the receiver, and waits for it.
+    Named { lower: K::Id, upper: K::Id, name: NameId },
 }
 
 impl<K> From<Bound<K>> for Constraint<K>
@@ -127,13 +132,13 @@ where
 {
     fn lower(&self) -> K::Id {
         match self {
-            Suspended::Alone { lower, .. } | Suspended::Exit { lower, .. } => *lower,
+            Suspended::Alone { lower, .. } | Suspended::Exit { lower, .. } | Suspended::Named { lower, .. } => *lower,
         }
     }
 
     fn upper(&self) -> K::Id {
         match self {
-            Suspended::Alone { upper, .. } | Suspended::Exit { upper, .. } => *upper,
+            Suspended::Alone { upper, .. } | Suspended::Exit { upper, .. } | Suspended::Named { upper, .. } => *upper,
         }
     }
 }
@@ -190,6 +195,12 @@ where
             Constraint::Suspended(Suspended::Exit { lower, upper }) => Suspended::Exit {
                 lower: f(lower),
                 upper: f(upper),
+            }
+            .into(),
+            Constraint::Suspended(Suspended::Named { lower, upper, name }) => Suspended::Named {
+                lower: f(lower),
+                upper: f(upper),
+                name,
             }
             .into(),
         }

@@ -14,9 +14,10 @@
 //! | `pass a to p;` | `a` is passed to `p` |
 //! | `exit e to w;` | the exit of a `?`: `e` is what it exits with, `w` the error |
 //! | `declare p = Option<t>;` | `p` is a class a declaration writes, and `t` a hole of it |
-//! | `row as_slice<T>: &Vec<T> -> &[T];` | a declared function |
+//! | `row as_slice<T>: &Vec<T> -> &[T];`, `row push<T>: &mut Vec<T>, T -> ();` | a declared function, of one parameter or of several |
 //! | `f <- fn [a] (x) -> r { r <- x; };` | a closure of the lambda, over `a`, is named, and its function value enters `f` |
 //! | `call f(u, v) to w;` | `f` is passed to the function type of those arguments and the result `w` |
+//! | `call x::m(u) to w;` | the function of the name `m` that takes `x` as its receiver is called |
 //! | `first: pass a to p;` | the statement's items are found by the label `first` |
 //!
 //! In the body of a lambda a name is a class of the lambda: one it captures, a

@@ -30,10 +30,14 @@ declare q = &mut {x: u8};
 row as_slice<T>: &Vec<T> -> &[T];
 row wrap<T, U>: (T, U) -> Pair<T, U>;
 row unit: () -> u8;
+row push<T>: &mut Vec<T>, T -> ();
+row now: -> u64;
 f <- fn () -> r { };
 f.x <- fn [a, b] (x, y) -> r { a <- Option<x>; first: r <- y; g <- fn [x] () -> s { s <- x; }; call g() to r; };
 call f(a, b.x) to w.0;
 call f() to w;
+call a.x::push(b) to w;
+call v::len() to n;
 assert a: Option<u8>;
 assert a.x.*: &mut {x: (), y: Error{V(E)}};
 assert accepted;
@@ -43,7 +47,7 @@ assert refused Mismatch, NoChange, EmptyDomain, Occurs, NotHeld, UndecidedClass;
 assert refused Mismatch names;
 assert refused Mismatch names first, second;
 assert first takes;
-assert first takes Deref, Reborrow, Never, DropFields, AddVariants, Unsize, as_slice;
+assert first takes Deref, Lend, LendMut, Reborrow, Never, DropFields, AddVariants, Unsize, as_slice;
 assert first at r.x.* takes Deref;
 ";
 
@@ -347,4 +351,74 @@ fn the_arguments_of_two_calls_meet_in_a_capture() {
          u <- u8; v <- u16; call f(u) to p; call f(v) to q;
          assert refused Mismatch, UndecidedClass;",
     );
+}
+
+// Declared functions of several parameters.
+
+#[test]
+fn a_value_is_passed_through_a_row_of_one_parameter_and_of_no_other_count() {
+    holds("row one: char -> u8; declare p = u8; a <- char; first: pass a to p; assert first takes one;");
+    holds("row two: char, char -> u8; declare p = u8; a <- char; pass a to p; assert refused NoChange;");
+    holds("row none: -> u8; declare p = u8; a <- char; pass a to p; assert refused NoChange;");
+    holds("row two: char, bool -> i8; row one: i8 -> u8; row first: char -> i8; declare p = u8; a <- char; way: pass a to p; assert way takes first, one;");
+}
+
+// A call by name.
+
+const NAMED: &str = "row len<T>: &Vec<T> -> usize; row push<T>: &mut Vec<T>, T -> ();
+    row into_inner<T>: Vec<T> -> T; row len: &String -> usize;";
+
+#[test]
+fn a_receiver_goes_to_the_first_parameter_as_an_argument_is_passed() {
+    let called = |program: &str| holds(&format!("{NAMED} v <- Vec<u8>; {program}"));
+    called("r <- &v; c: call r::len() to n; assert n: usize; assert c takes len;");
+    called("r <- &mut v; c: call r::len() to n; assert c takes Reborrow, len;");
+    called("r <- &v; rr <- &r; c: call rr::len() to n; assert c takes Deref, len;");
+    called("c: call v::into_inner() to n; assert n: u8; assert c takes into_inner;");
+    called("r <- &v; x <- u8; call r::push(x) to n; assert refused NoChange;");
+    called("r <- &v; call r::into_inner() to n; assert refused NoChange;");
+}
+
+#[test]
+fn a_receiver_that_is_no_reference_is_lent_where_the_parameter_is_one() {
+    let called = |program: &str| holds(&format!("{NAMED} v <- Vec<u8>; {program}"));
+    called("c: call v::len() to n; assert n: usize; assert c takes Lend, len;");
+    called("x <- u8; c: call v::push(x) to n; assert n: (); assert c takes LendMut, push;");
+}
+
+#[test]
+fn the_function_of_a_name_is_the_one_the_receiver_goes_to() {
+    holds(&format!("{NAMED} s <- String; c: call s::len() to n; assert n: usize; assert c takes Lend, len;"));
+    holds(&format!("{NAMED} v <- Vec<char>; call v::into_inner() to n; assert n: char;"));
+    holds(&format!("{NAMED} v <- Vec<u8>; call v::nope() to n; assert refused NoChange;"));
+    holds(&format!("{NAMED} v <- u8; call v::len() to n; assert refused NoChange;"));
+    holds("row twice<T>: T -> u8; row twice: char -> u16; v <- char; call v::twice() to n; assert refused NoChange;");
+    holds("row twice<T>: T -> u8; row twice: char -> u16; v <- bool; call v::twice() to n; assert n: u8;");
+}
+
+#[test]
+fn the_arguments_after_the_receiver_are_passed_to_their_parameters() {
+    holds(&format!("{NAMED} v <- Vec<u8>; call v::push() to n; assert refused Mismatch, ..;"));
+    holds(&format!("{NAMED} v <- Vec<u8>; x <- char; call v::push(x) to n; assert refused ..;"));
+    holds(&format!("{NAMED} v <- Vec<u8>; y <- u8; x <- &mut y; c: call v::push(x) to n; assert refused ..;"));
+    holds("row put: &mut Vec<u8>, &u8 -> (); v <- Vec<u8>; y <- u8; x <- &mut y; call v::put(x) to n; assert n: ();");
+}
+
+#[test]
+fn a_call_by_name_in_a_body_is_made_in_each_copy() {
+    holds(&format!("{NAMED} f <- fn (x) -> r {{ call x::into_inner() to r; }}; a <- Vec<u8>; b <- Vec<char>; call f(a) to m; call f(b) to n; assert m: u8; assert n: char;"));
+}
+
+#[test]
+fn a_function_of_a_name_is_told_from_another_below_the_head_of_the_receiver() {
+    let rows = "row first: &Vec<u8> -> u8; row first: &Vec<char> -> char;";
+    holds(&format!("{rows} v <- Vec<char>; call v::first() to n; assert n: char;"));
+    holds(&format!("{rows} v <- Vec<u8>; call v::first() to n; assert n: u8;"));
+    holds(&format!("{rows} v <- Vec<bool>; call v::first() to n; assert refused NoChange;"));
+}
+
+#[test]
+fn an_argument_is_passed_to_a_parameter_that_writes_a_type_and_does_not_enter_it() {
+    // `&&u8` is passed to `&u8`, read through; it does not enter it.
+    holds("row put: &mut Vec<u8>, &u8 -> (); v <- Vec<u8>; y <- u8; r <- &y; x <- &r; c: call v::put(x) to n; assert n: ();");
 }

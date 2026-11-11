@@ -73,6 +73,8 @@ impl Display for Assertion {
                 }
                 separated(f, adjustments, |f, adjustment| match adjustment {
                     Adjustment::Deref => f.write_str("Deref"),
+                    Adjustment::Lend(Mutability::Shared) => f.write_str("Lend"),
+                    Adjustment::Lend(Mutability::Exclusive) => f.write_str("LendMut"),
                     Adjustment::Subtype(subtyping) => write!(f, "{subtyping:?}"),
                     Adjustment::Row(name) => f.write_str(&name.0),
                 })
@@ -106,7 +108,7 @@ impl Display for Op {
             Op::Row {
                 name,
                 holes,
-                parameter,
+                parameters,
                 result,
             } => {
                 write!(f, "row {name}")?;
@@ -115,9 +117,23 @@ impl Display for Op {
                     separated(f, holes, |f, hole| f.write_str(hole))?;
                     f.write_str(">")?;
                 }
-                write!(f, ": {parameter} -> {result}")
+                f.write_str(":")?;
+                for (index, parameter) in parameters.iter().enumerate() {
+                    write!(f, "{}{parameter}", if index == 0 { " " } else { ", " })?;
+                }
+                write!(f, " -> {result}")
             }
             Op::Define { upper, lambda } => write!(f, "{upper} <- {lambda}"),
+            Op::CallNamed {
+                receiver,
+                name,
+                arguments,
+                result,
+            } => {
+                write!(f, "call {receiver}::{name}(")?;
+                separated(f, arguments, |f, argument| write!(f, "{argument}"))?;
+                write!(f, ") to {result}")
+            }
             Op::Call {
                 callee,
                 arguments,

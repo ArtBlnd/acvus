@@ -362,8 +362,7 @@ them, and they are added without changing what is here. What is known to need ru
 - Brand types: which brand a returned value has, and whether a brand may be a hole.
 - Where a call makes types equal and where one only enters the other (the transparency rule).
 
-What depends on calls waits with them: a receiver's adjustment, and a use with several
-candidates.
+A call by name, `x.m(a)`, is ruled below with the rest.
 
 What has been said so far. A lambda, its captures and its calls, a recursive one included, are
 implemented and written by the text; a module and a brand are not.
@@ -435,6 +434,17 @@ implemented and written by the text; a module and a brand are not.
   gives, to the type the parameter writes. A parameter that writes none is a hole, which takes
   what comes as it comes, so the argument and the parameter are one type. Nothing enters in a
   call; a value enters where it flows into a variable.
+- **A call by name calls the one function of that name the receiver goes to.** The functions
+  of a name are rows of the one table of declared functions, which have one parameter or
+  several. In `x.m(a)` the receiver `x` goes to the first parameter of a row as any argument is
+  passed, by what the language gives alone and read as far as the row writes, at every depth:
+  `&mut T` to `&self` by a reborrow, `&&T` to `&self` read through, and `&T` to neither `self`
+  nor `&mut self`. One thing more is given a receiver and no other argument: one that is no
+  reference is lent where the parameter is a reference, so `v.len()` is `(&v).len()`. Exactly
+  one row must take the receiver: none goes nowhere, and of two neither is chosen. The
+  arguments after the receiver are passed to their parameters, and the result is one type
+  with the result the call writes. A row of one parameter is also what a value is passed
+  through; a row of another count is not.
 - **A template says which lambdas its body defines, and a copy names a closure of each
   anew**, over the copies of the classes written where it captures. Copying itself makes no
   closure and knows of none, and two copies share a class only where a closure captures it.

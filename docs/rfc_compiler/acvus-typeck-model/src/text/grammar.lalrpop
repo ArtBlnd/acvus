@@ -70,6 +70,8 @@ Adjustment: Adjustment = {
     Lower => Adjustment::Row(Name::new(<>)),
     Upper =>? match <>.as_str() {
         "Deref" => Ok(Adjustment::Deref),
+        "Lend" => Ok(Adjustment::Lend(Mutability::Shared)),
+        "LendMut" => Ok(Adjustment::Lend(Mutability::Exclusive)),
         "Reborrow" => Ok(Adjustment::Subtype(Subtyping::Reborrow)),
         "Never" => Ok(Adjustment::Subtype(Subtyping::Never)),
         "DropFields" => Ok(Adjustment::Subtype(Subtyping::DropFields)),
@@ -87,13 +89,19 @@ Op: Op = {
     <upper:Path> "<-" <lower:Type> <alone:("as" "_")?> => Op::Enter { upper, lower, alone: alone.is_some() },
     <upper:Path> "<-" <lambda:Lambda> => Op::Define { upper, lambda },
     "call" <callee:Path> "(" <arguments:Comma<Path>> ")" "to" <result:Path> => Op::Call { callee, arguments, result },
+    "call" <receiver:Path> "::" <name:Lower> "(" <arguments:Comma<Path>> ")" "to" <result:Path> => Op::CallNamed {
+        receiver,
+        name,
+        arguments,
+        result,
+    },
     "pass" <argument:Path> "to" <given:Path> => Op::Pass { argument, given },
     "exit" <exits_with:Path> "to" <error:Path> => Op::Exit { exits_with, error },
     "declare" <name:Lower> "=" <ty:Type> => Op::Declare { name, ty },
-    "row" <name:Lower> <holes:("<" <Comma<Upper>> ">")?> ":" <parameter:Type> "->" <result:Type> => Op::Row {
+    "row" <name:Lower> <holes:("<" <Comma<Upper>> ">")?> ":" <parameters:Comma<Type>> "->" <result:Type> => Op::Row {
         name,
         holes: holes.unwrap_or_default(),
-        parameter,
+        parameters,
         result,
     },
 };

@@ -299,6 +299,87 @@ where
     waits.map_or(Same::Yes, Same::Reads)
 }
 
+/// A row a receiver goes to: the parts of the receiver that are one type with
+/// parts of the row's first parameter, and what the receiver takes to go.
+pub(in crate::operation) struct Received<K>
+where
+    K: ClassKind,
+{
+    pub(super) row: usize,
+    pub(super) pairs: Vec<(K::Id, TemplateId)>,
+    pub(super) adjustments: Vec<Adjustment>,
+}
+
+/// Every row of the name `name` that `receiver` goes to, and each part of the
+/// receiver that has to have a head before a row can be told of.
+///
+/// A receiver goes to the first parameter of a row as any argument is passed,
+/// by what the language gives alone, and is read as far as the row writes. One
+/// thing more is given a receiver: one that is no reference is lent where the
+/// parameter is a reference.
+pub(super) fn receivers<K>(
+    view: &View<'_, K>,
+    functions: &Functions,
+    name: &Name,
+    receiver: K::Id,
+    read: &mut BTreeSet<K::Id>,
+) -> (Vec<Received<K>>, BTreeSet<K::Id>)
+where
+    K: ClassKind,
+{
+    let mut found = Vec::new();
+    let mut waits = BTreeSet::new();
+    for (index, row) in functions.rows.iter().enumerate() {
+        let (true, Some(first)) = (row.name == *name, row.parameters.first()) else {
+            continue;
+        };
+        match received(view, receiver, &row.template, *first, read) {
+            Given::Goes { pairs, adjustments } => match all_same(view, &row.template, &pairs, read) {
+                Same::Yes => found.push(Received {
+                    row: index,
+                    pairs,
+                    adjustments,
+                }),
+                Same::Reads(class) => {
+                    waits.insert(class);
+                }
+                Same::No => {}
+            },
+            Given::Reads(class, _) => {
+                waits.insert(class);
+            }
+            Given::Calls => todo!("a function value as the receiver of a function type a row writes"),
+            Given::Nothing => {}
+        }
+    }
+    (found, waits)
+}
+
+/// What the language gives between a receiver and the first parameter of a
+/// function called by name: what it gives any argument, and, where the receiver
+/// is no reference and the parameter is one, the receiver lent.
+fn received<A, G>(from: &A, receiver: A::Id, to: &G, parameter: G::Id, read: &mut BTreeSet<A::Id>) -> Given<A::Id, G::Id>
+where
+    A: Written,
+    G: Written,
+{
+    let lent = match (from.head(receiver), to.head(parameter)) {
+        (Some(Shape::Ref(..)), _) | (None, _) => None,
+        (Some(_), Some(Shape::Ref(mutability, target))) => Some((*mutability, *target)),
+        (Some(_), _) => None,
+    };
+    let Some((mutability, target)) = lent else {
+        return by_the_language(from, receiver, to, parameter, read);
+    };
+    match behind_a_reference(from, receiver, to, target, mutability, read) {
+        Given::Goes { pairs, adjustments } => Given::Goes {
+            pairs,
+            adjustments: [Adjustment::Lend(mutability)].into_iter().chain(adjustments).collect(),
+        },
+        other => other,
+    }
+}
+
 /// Where a class written in a way lies: in the store being solved, or in the
 /// signature of the step of that number.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -335,7 +416,10 @@ where
     let mut found = Vec::new();
     let mut waits = BTreeSet::new();
     for (index, row) in functions.rows.iter().enumerate() {
-        match by_the_language(view, argument, &row.template, row.parameter, read) {
+        let Some(parameter) = row.only_parameter() else {
+            continue;
+        };
+        match by_the_language(view, argument, &row.template, parameter, read) {
             Given::Goes { pairs, adjustments } => {
                 // A row is chosen among rows, so the argument is read as far as
                 // the row writes: its parts are the types the row writes for them.
@@ -394,8 +478,11 @@ where
                 if way.rows.contains(&index) {
                     continue;
                 }
+                let Some(parameter) = next.only_parameter() else {
+                    continue;
+                };
                 let Given::Goes { pairs, adjustments } =
-                    by_the_language(&row.template, row.result, &next.template, next.parameter, &mut BTreeSet::new())
+                    by_the_language(&row.template, row.result, &next.template, parameter, &mut BTreeSet::new())
                 else {
                     continue;
                 };

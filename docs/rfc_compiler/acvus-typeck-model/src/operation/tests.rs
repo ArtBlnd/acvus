@@ -991,7 +991,7 @@ fn law_with(world: &mut World, rows: &[(&'static str, Ty, Ty)]) -> Language {
     let mut law = Language::default();
     for (name, parameter, result) in rows {
         let by = world.items.push("declared");
-        law.functions.declare(Name::new(*name), parameter, result, &world.store.scopes, by);
+        law.functions.declare(Name::new(*name), std::slice::from_ref(parameter), result, &world.store.scopes, by);
     }
     law
 }

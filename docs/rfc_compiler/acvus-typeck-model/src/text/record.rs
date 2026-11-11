@@ -80,6 +80,7 @@ where
     /// Each part named on a class decided as a head with no place for it.
     not_held: &'a mut Vec<Refused<K>>,
     items: &'a mut Items,
+    functions: &'a mut Functions,
     lambdas: &'a mut Lambdas,
     define: &'a mut Define<'a, K>,
 }
@@ -226,6 +227,7 @@ where
             made: &mut made,
             not_held: &mut not_held,
             items: &mut *self.items,
+            functions: &mut *self.functions,
             lambdas: &mut *self.lambdas,
             define: &mut define,
         };
@@ -294,6 +296,28 @@ where
                 let arguments = arguments.iter().map(|argument| self.path(argument, Side::Upper, label)).collect();
                 let result = self.path(result, Side::Lower, label);
                 self.call(callee, arguments, result, item);
+            }
+            Op::CallNamed {
+                receiver,
+                name,
+                arguments,
+                result,
+            } => {
+                let item = self.items.item(label.to_owned());
+                let receiver = self.path(receiver, Side::Upper, label);
+                let arguments = arguments.iter().map(|argument| self.path(argument, Side::Upper, label)).collect();
+                let result = self.path(result, Side::Lower, label);
+                let written = self.classes.decided(self.scope, Shape::Fn(arguments, result), BTreeSet::from([item]));
+                let name = self.functions.called(&Name::new(name));
+                self.classes.constrain(
+                    Suspended::Named {
+                        lower: receiver,
+                        upper: written,
+                        name,
+                    }
+                    .into(),
+                    item,
+                );
             }
             Op::Declare { .. } | Op::Row { .. } => return Err("a declaration is written where a statement is".to_owned()),
         }
@@ -548,11 +572,12 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
         made,
         not_held: &mut not_held,
         items,
+        functions,
         lambdas,
         define: &mut define,
     };
     for (statement, label) in program.statements.iter().zip(&labelled) {
-        declare(&mut writer, functions, scopes, &statement.op, label)?;
+        declare(&mut writer, scopes, &statement.op, label)?;
     }
     for (statement, label) in program.statements.iter().zip(&labelled) {
         if !matches!(statement.op, Op::Declare { .. } | Op::Row { .. }) {
@@ -567,7 +592,7 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
 
 /// Records what a declaration writes: a class of the name it declares, or a row
 /// of the table of functions. Any other statement declares nothing.
-fn declare(writer: &mut Writer<'_, Live>, functions: &mut Functions, scopes: &Scopes, op: &Op, label: &str) -> Result<(), String> {
+fn declare(writer: &mut Writer<'_, Live>, scopes: &Scopes, op: &Op, label: &str) -> Result<(), String> {
     match op {
         Op::Declare { name, ty } => {
             if writer.names.contains_key(name) {
@@ -585,14 +610,15 @@ fn declare(writer: &mut Writer<'_, Live>, functions: &mut Functions, scopes: &Sc
         Op::Row {
             name,
             holes,
-            parameter,
+            parameters,
             result,
         } => {
             let item = writer.items.item(label.to_owned());
-            let (parameter, result) = (signature(parameter, holes)?, signature(result, holes)?);
-            functions.declare(Name::new(name), &parameter, &result, scopes, item);
+            let parameters = parameters.iter().map(|parameter| signature(parameter, holes)).collect::<Result<Vec<_>, _>>()?;
+            let result = signature(result, holes)?;
+            writer.functions.declare(Name::new(name), &parameters, &result, scopes, item);
         }
-        Op::Enter { .. } | Op::Pass { .. } | Op::Exit { .. } | Op::Define { .. } | Op::Call { .. } => {}
+        Op::Enter { .. } | Op::Pass { .. } | Op::Exit { .. } | Op::Define { .. } | Op::Call { .. } | Op::CallNamed { .. } => {}
     }
     Ok(())
 }

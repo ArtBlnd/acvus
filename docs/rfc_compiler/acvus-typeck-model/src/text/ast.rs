@@ -63,11 +63,11 @@ pub enum Op {
     Exit { exits_with: Path, error: Path },
     /// `declare name = ty;`: `name` is a class a declaration writes.
     Declare { name: String, ty: Type },
-    /// `row name<holes>: parameter -> result;`: a declared function.
+    /// `row name<holes>: parameters -> result;`: a declared function.
     Row {
         name: String,
         holes: Vec<String>,
-        parameter: Type,
+        parameters: Vec<Type>,
         result: Type,
     },
     /// `upper <- fn [captures] (parameters) -> result { body };`: the function
@@ -77,6 +77,14 @@ pub enum Op {
     /// type of those arguments and that result.
     Call {
         callee: Path,
+        arguments: Vec<Path>,
+        result: Path,
+    },
+    /// `call receiver::name(arguments) to result;`: the function of that name
+    /// that takes the receiver is called.
+    CallNamed {
+        receiver: Path,
+        name: String,
         arguments: Vec<Path>,
         result: Path,
     },
