@@ -55,7 +55,7 @@ where
         let told = tell(&View::of(scribe.classes()), &self.functions, constraint, at);
         match told.then {
             Some(Then::Way(way)) => passing::take(scribe, &self.functions, way, constraint.lower(), at),
-            Some(Then::Calls) => calling::take(scribe, &self.lambdas, constraint.lower(), constraint.upper(), at),
+            Some(Then::Calls(wanted)) => calling::take(scribe, &self.lambdas, constraint.lower(), wanted, at),
             Some(Then::Named(received)) => naming::take(scribe, &self.functions, received, constraint.lower(), constraint.upper(), at),
             Some(Then::Enters(shape)) => {
                 let upper = constraint.upper();
@@ -202,8 +202,9 @@ where
     Way(passing::Way<K>),
     /// A class with this head, written by the bound, which enters its upper end.
     Enters(Shape<K::Id>),
-    /// A copy of the template of each closure of its lower end, a function value.
-    Calls,
+    /// The call its lower end, a function, is used by: it is passed to this
+    /// class, a function type.
+    Calls(K::Id),
     /// The signature of the row its receiver goes to.
     Named(passing::Received<K>),
 }

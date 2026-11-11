@@ -115,6 +115,13 @@ pub struct Method {
     pub(super) receiver: TemplateId,
 }
 
+/// A function called by name: a row of the table, or a function of a module.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::operation) enum Named {
+    Row(usize),
+    Method(usize),
+}
+
 /// Every function declared, in the order declared, every function of a module
 /// that takes a receiver, and every name a function is called by.
 #[derive(Clone, Debug, Default)]
@@ -134,6 +141,20 @@ impl Functions {
     /// The name `id` is the id of.
     pub fn name(&self, id: NameId) -> &Name {
         self.called.get(id)
+    }
+
+    /// Each function of the name `name` that may take a receiver, with the
+    /// template that writes its signature and its first parameter there: a row
+    /// that has a parameter, and a function of a module whose first parameter
+    /// writes a type.
+    pub(super) fn taking_a_receiver<'a>(&'a self, name: &'a Name) -> impl Iterator<Item = (Named, &'a Classes<Template>, TemplateId)> {
+        let rows = self.rows.iter().enumerate().filter(move |(_, row)| row.name == *name).filter_map(|(index, row)| {
+            let first = row.parameters.first()?;
+            Some((Named::Row(index), &row.template, *first))
+        });
+        let methods = self.methods.iter().enumerate().filter(move |(_, method)| method.name == *name);
+        let methods = methods.map(|(index, method)| (Named::Method(index), &method.template, method.receiver));
+        rows.chain(methods)
     }
 
     /// Says that the function `name` of the module whose lambda is `module` takes

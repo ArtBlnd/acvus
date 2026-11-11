@@ -23,8 +23,8 @@ use crate::primitive::ty::{PartKey, Shape};
 use crate::primitive::{ItemId, NameId, ScopeId};
 
 use super::super::law::{Looked, Pair, Scribe};
-use super::functions::{Functions, Method, Row, Used};
-use super::passing::{self, Named, Received};
+use super::functions::{Functions, Method, Named, Row, Used};
+use super::passing::{self, Received};
 use super::{Then, Told, View};
 
 /// What calling the function `name` on `receiver` comes to, `wanted` being the
@@ -45,10 +45,10 @@ where
         unreachable!("a call writes its function type");
     };
     read.extend(arguments.iter().copied());
-    let (mut found, on) = passing::receivers(view, functions, functions.name(name), receiver, &mut read);
-    if !on.is_empty() {
+    let (mut found, undecided) = passing::receivers(view, functions, functions.name(name), receiver, &mut read);
+    if !undecided.is_empty() {
         return Told::done(Looked::Waits {
-            on,
+            on: undecided,
             apart: read,
             pairs: Vec::new(),
         });
@@ -125,23 +125,25 @@ where
     }
     let Used { classes: made, brands } = row.used(scribe, call.scope, call.at);
 
+    let Received { fit: receiver, .. } = received;
+
     // One type: each part of the receiver the row reads with what the row writes
     // there, the row's result with the call's, and each brand the row makes
     // with the one made for this call.
-    let of_the_receiver = received.pairs.iter().map(|(part, written)| Pair::Classes(*part, made[written]));
+    let of_the_receiver = receiver.pairs.iter().map(|(part, written)| Pair::Classes(*part, made[written]));
     let of_the_result = Pair::Classes(made[&row.result], call.result);
     let pairs = of_the_receiver.chain([of_the_result]).chain(brands).collect();
 
     // Passed: a receiver that is a function, to the function type the row
     // writes for it, and each argument after it, to its parameter.
-    let the_receiver = received.passed.iter().map(|(value, written)| (*value, made[written]));
+    let the_receiver = receiver.passed.iter().map(|(function, written)| (*function, made[written]));
     let the_arguments = call.arguments.iter().zip(after_the_receiver).map(|(argument, parameter)| (*argument, made[parameter]));
     let constraints = the_receiver.chain(the_arguments).map(|(lower, upper)| Bound::Change { lower, upper }.into()).collect();
 
     let called = Adjustment::Row(row.name.clone());
     Looked::Holds {
         pairs,
-        adjustments: received.adjustments.into_iter().chain([called]).collect(),
+        adjustments: receiver.adjustments.into_iter().chain([called]).collect(),
         constraints,
     }
 }
@@ -170,7 +172,7 @@ where
     let functions = scribe.undecided(scope);
     let used = scribe.written(scope, Shape::Fn(Vec::new(), functions), by());
     let function = scribe.undecided(scope);
-    let lent = received.adjustments.iter().find_map(|adjustment| match adjustment {
+    let lent = received.fit.adjustments.iter().find_map(|adjustment| match adjustment {
         Adjustment::Lend(mutability) => Some(*mutability),
         _ => None,
     });

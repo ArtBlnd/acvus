@@ -272,6 +272,23 @@ fn a_row_is_taken_only_where_the_argument_is_what_it_writes_at_every_depth() {
     holds(&format!("{rows} a <- Wrap<Option<u16>>; pass a to p; assert refused NoChange;"));
 }
 
+/// A row is looked for only where the language gives nothing. Between `Vec<u8>`
+/// and `Vec<u16>` it gives that the one goes, its part being the other's, and
+/// the part differs: the way ends there, and no row is taken to change the part.
+#[test]
+fn a_way_goes_on_through_a_row_only_where_the_language_gives_nothing() {
+    let rows = "row make: u8 -> Vec<u8>; row widen: Vec<u8> -> Vec<u16>; u <- u8;";
+    holds(&format!("{rows} declare p = Vec<u8>; first: pass u to p; assert first takes make;"));
+    holds(&format!("{rows} declare p = Vec<u16>; pass u to p; assert refused NoChange;"));
+}
+
+/// Two rows that lead to one another would be gone through without end.
+#[test]
+fn no_row_is_taken_twice_on_one_way() {
+    holds("row there: A -> B; row back: B -> A; declare p = C; a <- A; pass a to p; assert refused NoChange;");
+    holds("row there: A -> B; row back: B -> A; declare p = B; a <- A; first: pass a to p; assert first takes there;");
+}
+
 // Lambdas and calls.
 
 #[test]
@@ -719,6 +736,16 @@ fn a_function_value_goes_through_a_row_whose_parameter_is_a_function_type() {
     let twice = |program: &str| holds(&format!("row conv<T>: Fn(u8) -> T -> Box<T>; row unbox<T>: Box<T> -> Wrapped<T>; declare p = Wrapped<u8>; {program}"));
     twice("f <- fn (x) -> r { r <- x; }; pass f to p; assert accepted;");
     twice("f <- fn (x) -> r { r <- u16; }; pass f to p; assert refused Mismatch, ..;");
+}
+
+/// A function type a row gives fits a function type the next row takes as a
+/// function value fits one: it is passed to it once both signatures are made.
+#[test]
+fn a_function_type_a_row_gives_goes_on_through_a_row_whose_parameter_is_a_function_type() {
+    let through = |adder: &str, conv: &str, expected: &str| holds(&format!("row adder: u8 -> {adder}; row conv: {conv} -> W; declare p = W; u <- u8; c: pass u to p; {expected}"));
+    through("Fn(u8) -> u8", "Fn(u8) -> u8", "assert c takes adder, conv;");
+    through("Fn(u8) -> u8", "Fn(u8, u8) -> u8", "assert refused Mismatch, ..;");
+    through("Fn(u8) -> u16", "Fn(u8) -> u8", "assert refused Mismatch, ..;");
 }
 
 // A function type used as a function type.
