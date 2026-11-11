@@ -156,6 +156,7 @@ Type: Type = {
     "Error" "{" <Members<Payload>> "}" => Type::Error(<>),
     "Error" "<" <Type> ">" => Type::ErrorOf(Box::new(<>)),
     "{" <Members<Field>> "}" => Type::Object(<>),
+    "Fn" "(" <parameters:Comma<Type>> ")" "->" <result:Type> => Type::Fn(parameters, Box::new(result)),
     <name:Upper> "{" <variants:Members<Payload>> "}" => Type::Enum(name, variants),
     <name:Upper> <arguments:("<" <Comma<Type>> ">")?> => Type::Named(name, arguments.unwrap_or_default()),
 };

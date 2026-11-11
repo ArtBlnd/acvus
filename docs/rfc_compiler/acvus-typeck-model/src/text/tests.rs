@@ -627,3 +627,126 @@ fn a_literal_receiver_is_decided_before_the_function_is_found_and_not_by_it() {
     holds("row plus: u8, u8 -> u8; u <- {integer}; w <- u8; call u::plus(w) to n; assert u: i32; assert refused NoChange, ..;");
     holds("row plus: i32, u8 -> u8; u <- {integer}; w <- u8; call u::plus(w) to n; assert u: i32; assert n: u8;");
 }
+
+// A function value passed to a function type a declaration writes.
+
+const MAP: &str = "row map<T, U>: Option<T>, Fn(T) -> U -> Option<U>; row widen: u8 -> u16;";
+
+/// The argument is passed to the function type the row writes as it is to one a
+/// call writes: each closure is copied, what the type takes is passed to the
+/// copy's parameters, and the copy's result is one type with what the type gives.
+#[test]
+fn a_function_value_is_passed_to_a_function_type_a_row_writes() {
+    let mapped = |program: &str| holds(&format!("{MAP} u <- u8; o <- Option<u>; {program}"));
+    mapped("f <- fn (x) -> r { call x::widen() to r; }; call o::map(f) to n; assert n: Option<u16>;");
+    mapped("f <- fn (x) -> r { r <- x; }; call o::map(f) to n; assert n: Option<u8>;");
+    mapped("k <- u16; f <- fn [k] (x) -> r { r <- k; }; call o::map(f) to n; assert n: Option<u16>;");
+    // Each use copies the closure, so one function value is used at two types.
+    mapped("f <- fn (x) -> r { r <- x; }; call o::map(f) to n; c <- char; q <- Option<c>; call q::map(f) to m; assert n: Option<u8>; assert m: Option<char>;");
+}
+
+#[test]
+fn a_function_value_that_cannot_be_used_as_the_function_type_is_refused() {
+    let mapped = |program: &str| holds(&format!("{MAP} {program}"));
+    // What the body refuses is refused in the copy.
+    mapped("u <- u16; o <- Option<u>; f <- fn (x) -> r { call x::widen() to r; }; call o::map(f) to n; assert refused NoChange, ..;");
+    mapped("u <- u8; o <- Option<u>; f <- fn (x, y) -> r { r <- x; }; call o::map(f) to n; assert refused Mismatch, ..;");
+    mapped("u <- u8; o <- Option<u>; f <- u8; call o::map(f) to n; assert refused NoChange, ..;");
+}
+
+#[test]
+fn a_function_value_is_passed_to_a_declared_function_type() {
+    holds("declare p = Fn(u8) -> u8; f <- fn (x) -> r { r <- x; }; pass f to p; assert accepted;");
+    holds("declare p = Fn(u8) -> u16; f <- fn (x) -> r { r <- u8; }; pass f to p; assert refused Mismatch, ..;");
+}
+
+/// A function value is no function type, and nothing is changed at a part or
+/// behind a reference.
+#[test]
+fn a_function_value_is_passed_to_a_function_type_only_as_the_whole_argument() {
+    holds("row run<T>: Option<Fn(u8) -> T> -> T; declare p = u8; f <- fn (x) -> r { r <- x; }; o <- Option<f>; pass o to p; assert refused NoChange, ..;");
+    holds("declare p = &Fn(u8) -> u8; f <- fn (x) -> r { r <- x; }; a <- &f; pass a to p; assert refused NoChange, ..;");
+}
+
+// A function chosen by a function value.
+
+const APPLY: &str = "row apply<T, U>: Fn(T) -> U, T -> U; row widen: u8 -> u16;";
+
+/// Whether a closure can be used as a function type is told by its copy and not
+/// by reading, so a function value goes to a function type where a function is
+/// chosen by its receiver, and is passed to it once the function is found.
+#[test]
+fn a_function_value_is_the_receiver_of_a_function_whose_first_parameter_is_a_function_type() {
+    let applied = |program: &str| holds(&format!("{APPLY} {program}"));
+    applied("f <- fn (x) -> r { r <- x; }; u <- u8; call f::apply(u) to n; assert n: u8;");
+    applied("f <- fn (x) -> r { call x::widen() to r; }; u <- u8; call f::apply(u) to n; assert n: u16;");
+    // A function of the name that takes no function is not the one.
+    applied("row apply: u8, u8 -> u8; f <- fn (x) -> r { r <- x; }; u <- u8; call f::apply(u) to n; assert n: u8;");
+    applied("a <- u8; u <- u8; call a::apply(u) to n; assert refused NoChange, ..;");
+}
+
+/// What the copy refuses is refused, and is no reason to choose another
+/// function: two functions that write a function type both take the receiver,
+/// whatever each type takes.
+#[test]
+fn a_function_value_goes_to_every_function_type_and_its_copy_says_whether_it_can() {
+    let applied = |program: &str| holds(&format!("{APPLY} {program}"));
+    applied("f <- fn (x) -> r { call x::widen() to r; }; u <- u16; call f::apply(u) to n; assert refused NoChange, ..;");
+    applied("f <- fn (x, y) -> r { r <- x; }; u <- u8; call f::apply(u) to n; assert refused Mismatch, ..;");
+    applied("row apply<T, U>: Fn(T, T) -> U, T -> U; f <- fn (x) -> r { r <- x; }; u <- u8; call f::apply(u) to n; assert refused NoChange;");
+}
+
+#[test]
+fn a_function_value_goes_through_a_row_whose_parameter_is_a_function_type() {
+    let converted = |program: &str| holds(&format!("row conv: Fn(u8) -> u8 -> W; declare p = W; {program}"));
+    converted("f <- fn (x) -> r { r <- x; }; c: pass f to p; assert accepted; assert c takes conv;");
+    converted("f <- fn (x) -> r { r <- u16; }; pass f to p; assert refused Mismatch, ..;");
+    converted("row other: Fn(u16) -> u16 -> W; f <- fn (x) -> r { r <- x; }; pass f to p; assert refused NoChange;");
+    // Through two rows: the function value is passed where the first is made.
+    let twice = |program: &str| holds(&format!("row conv<T>: Fn(u8) -> T -> Box<T>; row unbox<T>: Box<T> -> Wrapped<T>; declare p = Wrapped<u8>; {program}"));
+    twice("f <- fn (x) -> r { r <- x; }; pass f to p; assert accepted;");
+    twice("f <- fn (x) -> r { r <- u16; }; pass f to p; assert refused Mismatch, ..;");
+}
+
+// A function type used as a function type.
+
+/// What the type given takes is passed to what the function takes, and what the
+/// function gives is one type with what the type given gives.
+#[test]
+fn a_function_type_is_passed_to_a_function_type_as_a_function_value_is() {
+    holds("declare g = Fn(&u8) -> u8; declare p = Fn(&u8) -> u8; pass g to p; assert accepted;");
+    holds("declare g = Fn(&u8) -> u8; declare p = Fn(&mut u8) -> u8; pass g to p; assert accepted;");
+    holds("declare g = Fn(&mut u8) -> u8; declare p = Fn(&u8) -> u8; pass g to p; assert refused NoChange, ..;");
+    holds("declare g = Fn(u8) -> &mut u8; declare p = Fn(u8) -> &u8; pass g to p; assert refused Mismatch, ..;");
+    holds("declare g = Fn(u8) -> u8; declare p = Fn(u8, u8) -> u8; pass g to p; assert refused Mismatch, ..;");
+    // The same of a function value.
+    holds("declare p = Fn(&mut u8) -> u8; f <- fn (x: &u8) -> r { r <- u8; }; pass f to p; assert accepted;");
+}
+
+#[test]
+fn a_value_of_a_function_type_is_called_with_arguments_passed_to_its_parameters() {
+    let called = |program: &str| holds(&format!("declare g = Fn(&u8) -> u8; u <- u8; {program}"));
+    called("a <- &u; c: call g(a) to r; assert r: u8; assert c takes;");
+    called("a <- &mut u; call g(a) to r; assert r: u8;");
+    called("n <- nothing as _; call g(n) to r; assert r: u8;");
+    called("call g(u) to r; assert refused NoChange, ..;");
+    called("a <- &u; call g(a, a) to r; assert refused Mismatch, ..;");
+}
+
+#[test]
+fn a_function_type_goes_where_a_function_value_goes() {
+    holds(&format!("{MAP} h <- fn (g: Fn(u8) -> u16, o) -> r {{ call o::map(g) to r; }}; f <- fn (x) -> r {{ call x::widen() to r; }}; u <- u8; o <- Option<u>; call h(f, o) to n; assert n: Option<u16>;"));
+    holds(&format!("{APPLY} declare g = Fn(u8) -> u16; u <- u8; call g::apply(u) to n; assert n: u16;"));
+    holds("row adder: u8 -> Fn(u8) -> u8; u <- u8; call u::adder() to g; v <- u8; call g(v) to n; assert n: u8;");
+    holds("row adder: u8 -> Fn(u8) -> u8; declare p = Fn(u8) -> u8; u <- u8; c: pass u to p; assert c takes adder;");
+}
+
+/// Not what is wanted: `DESIGN.md`, section 5. Called as it is declared, each
+/// of these is accepted.
+#[test]
+fn a_variable_a_declared_function_type_enters_is_called_as_a_hole_is() {
+    holds("declare d = Fn(&u8) -> u8; g <- d; u <- u8; a <- &u; call g(a) to r; assert r: u8;");
+    holds("declare d = Fn(&u8) -> u8; g <- d; u <- u8; a <- &mut u; call g(a) to r; assert refused Mismatch, ..;");
+    holds("h <- fn (g: Fn(u8) -> u8, v) -> r { call g(v) to r; }; assert refused Mismatch, ..;");
+}
+

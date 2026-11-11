@@ -435,6 +435,18 @@ the text; a brand is not.
   gives, to the type the parameter writes. A parameter that writes none is a hole, which takes
   what comes as it comes, so the argument and the parameter are one type. Nothing enters in a
   call; a value enters where it flows into a variable.
+- **A function is used as a function type the same, a value or of a type that is written.**
+  A function passed to a function type is a call. Of a function value each closure is copied;
+  of a function type `Fn(P) -> R` passed to `Fn(A) -> S`, `A` is passed to `P`, by what the
+  language gives, and `R` is one type with `S`. So `Fn(&u8) -> u8` is passed to
+  `Fn(&mut u8) -> u8` and not the other way, and what a function gives is changed in neither.
+  Nothing of this is behind a reference or at a part of another type.
+- **A function goes to a function type wherever a function is chosen by what goes to it.**
+  Whether a closure can be used as a function type is told by its copy and not by reading. So
+  a function is a receiver of every function of the name whose first parameter writes a
+  function type, and goes through every row whose parameter does, and is passed to that type
+  once the signature is made: what the copy refuses is refused, and is no reason to choose
+  another. Two such functions both take it, whatever each type takes.
 - **A function of a module that takes a receiver is found as a declared one is.** It is one
   whose first parameter writes a type. `p.m(a)` finds it by the receiver going to that type,
   among the declared functions of the name and by the one rule, and then writes what
@@ -494,6 +506,11 @@ the text; a brand is not.
 
 Marked, not ruled:
 
+- A variable a declared function type enters, called. The variable's head has parts of its
+  own, each one type with the declared part by a bound, and with no head until that bound
+  gives one. An argument passed to such a part meanwhile is passed to a hole, and is one type
+  with it: `g <- d; g(a)` with `d: Fn(&u8) -> u8` and `a: &mut u8` is refused, where `d(a)` is
+  not. A parameter that writes a function type is such a variable (`DESIGN.md`, section 5).
 - A recursion through a class that two lambdas entered.
 - A brand that nothing enters.
 - Two lambdas that meet and are not called: no copy is made where they meet, so results that

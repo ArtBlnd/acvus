@@ -126,18 +126,9 @@ where
     let made = scribe.anew(&row.template, call.scope, call.at);
     let mut pairs: Vec<Pair<K>> = received.pairs.iter().map(|(part, written)| Pair::Classes(*part, made[written])).collect();
     pairs.push(Pair::Classes(made[&row.result], call.result));
-    let constraints = call
-        .arguments
-        .iter()
-        .zip(after_the_receiver)
-        .map(|(argument, parameter)| {
-            Bound::Change {
-                lower: *argument,
-                upper: made[parameter],
-            }
-            .into()
-        })
-        .collect();
+    let passed = received.passed.iter().map(|(value, written)| (*value, made[written]));
+    let arguments = call.arguments.iter().zip(after_the_receiver).map(|(argument, parameter)| (*argument, made[parameter]));
+    let constraints = passed.chain(arguments).map(|(lower, upper)| Bound::Change { lower, upper }.into()).collect();
     let called = Adjustment::Row(row.name.clone());
     Looked::Holds {
         pairs,

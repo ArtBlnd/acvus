@@ -33,7 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::adjustment::{Adjustment, Subtyping};
 use crate::primitive::class::{ClassKind, State, Template};
-use crate::primitive::constraint::Constraint;
+use crate::primitive::constraint::{Bound, Constraint};
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{Mutability, Shape};
 use crate::primitive::{ItemId, Name, TemplateId};
@@ -104,8 +104,11 @@ enum Given<A, G> {
     /// It cannot be told until this part of the argument has a head, which will
     /// be held against this one.
     Reads(A, Shape<G>),
-    /// The argument is a function value and the type given a function type: it
-    /// goes as each of its closures does, used as that type.
+    /// The argument is a function, a value or of a function type, and the type
+    /// given a function type: it goes as it is used as that type, what that type
+    /// takes being passed to what it takes (`calling`). Whether it can be is not
+    /// told by reading, so where a function is chosen by what goes to it, a
+    /// function goes to a function type.
     Calls,
     /// The language gives nothing between the two.
     Nothing,
@@ -163,7 +166,7 @@ where
             into_more_variants(variants, given_variants)
         }
         (Shape::Error(variants), Shape::Error(given_variants)) => into_more_variants(variants, given_variants),
-        (Shape::FnValue(_), Shape::Fn(..)) => Given::Calls,
+        (Shape::FnValue(_) | Shape::Fn(..), Shape::Fn(..)) => Given::Calls,
         _ if head.layer() == wanted.layer() => {
             let parts = head.places().into_iter().zip(wanted.places()).map(|((_, a), (_, g))| (a, g)).collect();
             goes(paired(parts), Vec::new())
@@ -307,8 +310,9 @@ pub(in crate::operation) enum Named {
 }
 
 /// A function a receiver goes to: the parts of the receiver that are one type
-/// with parts of the function's first parameter, and what the receiver takes to
-/// go.
+/// with parts of the function's first parameter, what the receiver takes to go,
+/// and, where it is a function that goes to a function type, the receiver and
+/// that type, which it is passed to once the signature is made.
 pub(in crate::operation) struct Received<K>
 where
     K: ClassKind,
@@ -316,6 +320,7 @@ where
     pub(super) function: Named,
     pub(super) pairs: Vec<(K::Id, TemplateId)>,
     pub(super) adjustments: Vec<Adjustment>,
+    pub(super) passed: Vec<(K::Id, TemplateId)>,
 }
 
 /// Every function of the name `name` that `receiver` goes to, and each part of
@@ -351,6 +356,7 @@ where
                     function,
                     pairs,
                     adjustments,
+                    passed: Vec::new(),
                 }),
                 Same::Reads(class) => {
                     waits.insert(class);
@@ -360,7 +366,12 @@ where
             Given::Reads(class, _) => {
                 waits.insert(class);
             }
-            Given::Calls => todo!("a function value as the receiver of a function type a function writes"),
+            Given::Calls => found.push(Received {
+                function,
+                pairs: Vec::new(),
+                adjustments: Vec::new(),
+                passed: vec![(receiver, first)],
+            }),
             Given::Nothing => {}
         }
     }
@@ -411,6 +422,9 @@ where
 {
     rows: Vec<usize>,
     pairs: Vec<Joined<K>>,
+    /// A function and the function type it is passed to, once the signatures of
+    /// the rows are made: one of the two at least is what a row writes.
+    passed: Vec<Joined<K>>,
     /// What is taken on the way into each row, then on the way out of the last.
     taken: Vec<Vec<Adjustment>>,
 }
@@ -450,6 +464,7 @@ where
                 let way = Way {
                     rows: vec![index],
                     pairs,
+                    passed: Vec::new(),
                     taken: vec![adjustments],
                 };
                 onward(view, functions, row, way, given, &mut found);
@@ -457,7 +472,15 @@ where
             Given::Reads(class, _) => {
                 waits.insert(class);
             }
-            Given::Calls => todo!("a function value passed to a function type a row writes"),
+            Given::Calls => {
+                let way = Way {
+                    rows: vec![index],
+                    pairs: Vec::new(),
+                    passed: vec![(Site::Solved(argument), Site::Step(0, parameter))],
+                    taken: vec![Vec::new()],
+                };
+                onward(view, functions, row, way, given, &mut found);
+            }
             Given::Nothing => {}
         }
     }
@@ -484,7 +507,12 @@ where
             found.push(way);
         }
         Given::Reads(..) => unreachable!("a row's result is written, and has nothing to wait for"),
-        Given::Calls => todo!("a function value a row gives, passed to a function type"),
+        Given::Calls => {
+            let mut way = way;
+            way.passed.push((Site::Step(step, row.result), Site::Solved(given)));
+            way.taken.push(Vec::new());
+            found.push(way);
+        }
         Given::Nothing => {
             for (index, next) in functions.rows.iter().enumerate() {
                 if way.rows.contains(&index) {
@@ -504,6 +532,7 @@ where
                 let mut longer = Way {
                     rows: way.rows.clone(),
                     pairs: way.pairs.clone(),
+                    passed: way.passed.clone(),
                     taken: way.taken.clone(),
                 };
                 longer.rows.push(index);
@@ -535,6 +564,17 @@ where
         Site::Step(step, class) => made[step][&class],
     };
     let pairs = way.pairs.iter().map(|(a, b)| Pair::Classes(solved(*a), solved(*b))).collect();
+    let constraints = way
+        .passed
+        .iter()
+        .map(|(value, written)| {
+            Bound::Change {
+                lower: solved(*value),
+                upper: solved(*written),
+            }
+            .into()
+        })
+        .collect();
     let mut adjustments = Vec::new();
     for (step, taken) in way.taken.into_iter().enumerate() {
         adjustments.extend(taken);
@@ -545,7 +585,7 @@ where
     Looked::Holds {
         pairs,
         adjustments,
-        constraints: Vec::new(),
+        constraints,
     }
 }
 

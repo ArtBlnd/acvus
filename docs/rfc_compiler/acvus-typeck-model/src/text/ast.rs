@@ -205,6 +205,8 @@ pub enum Type {
     Object(BTreeMap<String, Type>),
     /// `E{V(T), W(U)}`
     Enum(String, BTreeMap<String, Type>),
+    /// `Fn(T, U) -> R`
+    Fn(Vec<Type>, Box<Type>),
     /// `N`, `N<T, U>`: a type of a name, or, in a row, one of its holes.
     Named(String, Vec<Type>),
 }

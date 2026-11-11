@@ -275,6 +275,11 @@ impl Display for Type {
                 f.write_str(name)?;
                 payloads(f, variants)
             }
+            Type::Fn(parameters, result) => {
+                f.write_str("Fn(")?;
+                separated(f, parameters, |f, parameter| write!(f, "{parameter}"))?;
+                write!(f, ") -> {result}")
+            }
             Type::Named(name, arguments) => {
                 f.write_str(name)?;
                 if !arguments.is_empty() {

@@ -680,6 +680,7 @@ fn shape(ty: &Type) -> Shape<&Type> {
         Type::ErrorOf(error) => Shape::ErrorOf(error),
         Type::Object(fields) => Shape::Object(named(fields)),
         Type::Enum(name, variants) => Shape::Enum(Name::new(name), named(variants)),
+        Type::Fn(parameters, result) => Shape::Fn(parameters.iter().collect(), result),
         Type::Named(name, arguments) => Shape::Struct(Name::new(name), arguments.iter().collect()),
     }
 }

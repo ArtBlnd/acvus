@@ -1,4 +1,4 @@
-//! Calling: a function value passed to a function type.
+//! Calling: a function passed to a function type.
 //!
 //! `f(ā)` passes `f` to `Fn(ā) → r`, a type the call writes. A function value is
 //! a set of closures, and nothing is compared inside one, so what it is to pass
@@ -48,8 +48,13 @@ where
         };
         decided.shape.clone()
     };
-    let (Shape::FnValue(called), Shape::Fn(arguments, result)) = (head(value), head(wanted)) else {
-        unreachable!("a call is a function value passed to a function type");
+    let Shape::Fn(arguments, result) = head(wanted) else {
+        unreachable!("a call is a function passed to a function type");
+    };
+    let called = match head(value) {
+        Shape::FnValue(called) => called,
+        Shape::Fn(parameters, given) => return of_a_function_type(parameters, given, arguments, result, value, wanted, at),
+        _ => unreachable!("a call is a function passed to a function type"),
     };
     let scope = scribe.classes().get(scribe.classes().find(wanted)).scope;
     let counts = |closure| lambdas.get(scribe.closures().get(closure).lambda).parameters.len();
@@ -84,6 +89,29 @@ where
         pairs,
         adjustments: Vec::new(),
         constraints,
+    }
+}
+
+/// Uses a value of the function type `Fn(parameters) -> given` as the function
+/// type `Fn(arguments) -> result`: each argument is passed to the parameter in
+/// its place, and what the function gives is one type with the result. So a
+/// function is used the same whether it is a value or of a type that is
+/// written. A function type of another count of parameters is refused.
+fn of_a_function_type<K>(parameters: Vec<K::Id>, given: K::Id, arguments: Vec<K::Id>, result: K::Id, value: K::Id, wanted: K::Id, at: ItemId) -> Looked<K>
+where
+    K: ClassKind<Constraint = Constraint<K>>,
+{
+    if parameters.len() != arguments.len() {
+        return Looked::Refused(Refused {
+            cause: Cause::Mismatch,
+            items: BTreeSet::from([at]),
+            of: vec![value, wanted],
+        });
+    }
+    Looked::Holds {
+        pairs: vec![Pair::Classes(given, result)],
+        adjustments: Vec::new(),
+        constraints: arguments.into_iter().zip(parameters).map(|(lower, upper)| Bound::Change { lower, upper }.into()).collect(),
     }
 }
 
