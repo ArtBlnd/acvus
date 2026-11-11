@@ -1,14 +1,15 @@
 //! The invariants the store keeps, checked.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::ItemId;
+use crate::primitive::components::components;
 use crate::primitive::constraint::ConstraintOf;
 use crate::primitive::class::{Class, ClassKind, State};
 use crate::primitive::id::Id;
 use crate::primitive::ty::PartKey;
 
-use super::classes::{Classes, Slot};
+use super::classes::{Classes, Slot, parts_in};
 use super::ledger::{ROLES, Recorded, Role};
 
 /// An invariant of the store that does not hold.
@@ -32,6 +33,14 @@ where
     /// the class do not agree, or the class is no root, or it is said to be an
     /// end of a constraint and is not, or is one and is not said to be.
     Misfiled { class: K::Id, constraint: K::Constraint, by: ItemId },
+    /// `part` is a part of the undecided class `owner` and the owners do not
+    /// say so both ways, or they say so and it is not.
+    Owned { owner: K::Id, part: K::Id },
+    /// An undecided class that is held and should not be, or is not and should:
+    /// what is held is found from the ledger and the owners, and here anew
+    /// from every class, a part and its owner being decided together where they
+    /// are of one strongly connected component of the parts.
+    Held { class: K::Id },
 }
 
 impl<K> Classes<K>
@@ -133,6 +142,41 @@ where
             }
         }
 
+        // What each undecided class owns, found anew from its parts, against what
+        // the owners kept both ways.
+        let owned: BTreeSet<(K::Id, K::Id)> = self
+            .roots()
+            .flat_map(|owner| self.owned_by(owner.id()).into_iter().map(move |part| (owner.id(), part)))
+            .collect();
+        let (parts_of, owners_of) = self.owners.both_ways();
+        let by_owner: BTreeSet<(K::Id, K::Id)> = parts_of.iter().flat_map(|(owner, parts)| parts.iter().map(|part| (*owner, *part))).collect();
+        let by_part: BTreeSet<(K::Id, K::Id)> = owners_of.iter().flat_map(|(part, owners)| owners.iter().map(|owner| (*owner, *part))).collect();
+        for (owner, part) in owned.iter().chain(&by_owner).chain(&by_part).collect::<BTreeSet<_>>() {
+            if [&owned, &by_owner, &by_part].iter().any(|said| !said.contains(&(*owner, *part))) {
+                violations.push(Violation::Owned {
+                    owner: *owner,
+                    part: *part,
+                });
+            }
+        }
+
+        // What is held, found anew from every class.
+        let parts: BTreeMap<K::Id, Vec<K::Id>> = self.roots().map(|owner| (owner.id(), parts_in(&self.slots, owner.id()))).collect();
+        let component = components(&parts);
+        let mut expected: BTreeSet<K::Id> = self.roots().map(|root| root.id()).filter(|root| self.ledger().guards(*root)).collect();
+        for (owner, parts) in &parts {
+            if !self.is_decided(*owner) {
+                expected.extend(parts.iter().filter(|part| component[*part] != component[owner]));
+            }
+        }
+        let held = self.held();
+        for root in self.roots() {
+            let class = root.id();
+            if !self.is_decided(class) && held.contains(&class) != expected.contains(&class) {
+                violations.push(Violation::Held { class });
+            }
+        }
+
         if violations.is_empty() { Ok(()) } else { Err(violations) }
     }
 }
@@ -212,8 +256,10 @@ mod tests {
         assert_eq!(templates.verify(), Ok(()));
     }
 
+    /// The part is written past the store's own operations: no item names it,
+    /// the owners were not told of it, and so it is not held as a part is.
     #[test]
-    fn a_part_no_item_names_is_found() {
+    fn a_part_written_past_the_store_is_found_unnamed_unowned_and_not_held() {
         let mut world = World::new();
         let a = world.undecided();
         let part = world.undecided();
@@ -227,7 +273,10 @@ mod tests {
                 carried: BTreeSet::new(),
             },
         );
-        assert_eq!(world.classes.verify(), Err(vec![Violation::Unnamed { class: a, key }]));
+        assert_eq!(
+            world.classes.verify(),
+            Err(vec![Violation::Unnamed { class: a, key }, Violation::Owned { owner: a, part }, Violation::Held { class: part }])
+        );
     }
 
     #[test]

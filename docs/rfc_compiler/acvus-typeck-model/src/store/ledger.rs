@@ -312,6 +312,11 @@ where
         self.classes_of.keys()
     }
 
+    /// Every class a constraint guards.
+    pub(super) fn guarded(&self) -> impl Iterator<Item = K::Id> {
+        self.constraints_of.iter().filter(|(_, constraints)| !constraints.of(Role::Guarded).is_empty()).map(|(class, _)| *class)
+    }
+
     /// Whether a constraint guards `class`.
     pub(super) fn guards(&self, class: K::Id) -> bool {
         self.constraints(class, Role::Guarded).next().is_some()

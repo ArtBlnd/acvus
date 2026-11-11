@@ -9,7 +9,6 @@ use std::mem;
 use crate::primitive::ItemId;
 use crate::primitive::ScopeId;
 use crate::primitive::class::{Class, ClassKind, Connections, Decided, Origin, Part, Pending, Side, State, Undecided, Unplaced};
-use crate::primitive::components::components;
 use crate::primitive::constraint::ConstraintOf;
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
@@ -18,6 +17,7 @@ use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{PartKey, Shape};
 
 use super::ledger::{Awake, Ledger, Recorded, Role};
+use super::owners::Owners;
 
 /// Every class of the kind `K` made, by id.
 ///
@@ -36,6 +36,10 @@ where
     /// The constraints not finished, and what each has to do with which class.
     /// It is told of every union and every part named, here and nowhere else.
     ledger: Ledger<K>,
+    /// Each undecided class with the parts named on it. It is told of every
+    /// part named, every class written whole and every union, here and where a
+    /// template is copied.
+    pub(super) owners: Owners<K::Id>,
 }
 
 // Written out, as a derive would ask an id to have a default, and none has.
@@ -47,6 +51,7 @@ where
         Self {
             slots: Arena::default(),
             ledger: Ledger::default(),
+            owners: Owners::default(),
         }
     }
 }
@@ -63,7 +68,7 @@ where
 }
 
 /// The parts of the class at `root`, each by its root.
-fn parts_in<K>(slots: &Arena<K::Id, Slot<K>>, root: K::Id) -> Vec<K::Id>
+pub(super) fn parts_in<K>(slots: &Arena<K::Id, Slot<K>>, root: K::Id) -> Vec<K::Id>
 where
     K: ClassKind,
 {
@@ -391,25 +396,38 @@ where
 
     /// The one way a class is decided by solving: see [`Deciding`].
     pub fn deciding(&mut self) -> Deciding<'_, K> {
-        let mut held: BTreeSet<K::Id> = self.roots().map(|root| root.id).filter(|root| self.ledger.guards(*root)).collect();
-        // A part is decided no earlier than the class it is named on. Where the
-        // part holds that class in turn, the order asks nothing of the two, and
-        // they are decided together: a part holds its owner where the two reach
-        // one another through parts.
-        let parts: BTreeMap<K::Id, Vec<K::Id>> = self
-            .roots()
-            .map(|owner| (owner.id, self.get(owner).state.parts().into_iter().map(|part| self.find(part).id).collect()))
-            .collect();
-        let component = components(&parts);
-        for (owner, parts) in &parts {
-            if self.root(*owner).state.is_decided() {
-                continue;
-            }
-            held.extend(parts.iter().filter(|part| component[*part] != component[owner]));
-        }
+        let held = self.held();
         Deciding { classes: self, held }
     }
 
+    /// Every undecided class that may not be decided now: one a constraint
+    /// guards, and one named as a part on an undecided class that it does not
+    /// hold in turn.
+    ///
+    /// A part is decided no earlier than the class it is named on. Where the
+    /// part holds that class in turn, the order asks nothing of the two, and
+    /// they are decided together: a part holds its owner where the owner lies
+    /// below it.
+    pub(super) fn held(&self) -> BTreeSet<K::Id> {
+        let mut held: BTreeSet<K::Id> = self.ledger.guarded().filter(|class| !self.is_decided(*class)).collect();
+        for part in self.owners.owned() {
+            if self.is_decided(part) || held.contains(&part) {
+                continue;
+            }
+            let below = self.below([part]);
+            if self.owners.of(part).any(|owner| !below.contains(&owner)) {
+                held.insert(part);
+            }
+        }
+        held
+    }
+
+
+    /// What the class at `root` owns: its parts where it is undecided, and
+    /// nothing where it is decided.
+    pub(super) fn owned_by(&self, root: K::Id) -> Vec<K::Id> {
+        if self.root(root).state.is_decided() { Vec::new() } else { parts_in(&self.slots, root) }
+    }
 
     /// The class of the part `key` of `class`, named on `side` by `at`.
     ///
@@ -446,6 +464,7 @@ where
         };
         items.insert(at);
         if named_anew {
+            self.owners.named(root, root_in(&self.slots, part_class));
             self.ledger.grew(root, |class| parts_in(&self.slots, class));
         }
         Some(part_class)
@@ -540,6 +559,7 @@ where
             let merge = kept_class.merge(gone_class, kept, scopes, at);
             *self.slots.get_mut(kept) = Slot::Root(merge.class);
             self.ledger.merged(kept, gone, |class| parts_in(&self.slots, class));
+            self.owners.merged(kept, gone, self.owned_by(kept));
             pairs.extend(merge.pairs);
             unified.refusals.extend(merge.refusals);
             unified.pending.extend(merge.pending);

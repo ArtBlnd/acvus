@@ -98,6 +98,7 @@ where
             };
             let Class { state, connections, .. } = class.clone().translate::<K, _>(|held| copies[&template.find(held).id()]);
             *self.slots.get_mut(copies[&id]) = Slot::Root(Class { scope, state, connections });
+            self.owners.written(copies[&id], self.owned_by(copies[&id]));
         }
         for (id, slot) in template.slots.iter() {
             if let Slot::Link(_) = slot {
@@ -187,6 +188,20 @@ mod tests {
 
     fn node(shape: Shape<Ty>) -> Ty {
         Ty::Node(Box::new(shape))
+    }
+
+    /// A copy is written whole and not through the naming of a part, so the
+    /// owners are told of it there (`World` verifies the store when it ends).
+    #[test]
+    fn a_copy_of_an_undecided_class_owns_the_copies_of_its_parts() {
+        let mut world = World::new();
+        let named = world.items.push("a.x");
+        let mut template: Classes<Template> = Classes::default();
+        let owner = template.undecided(world.scopes.root());
+        let part = template.part(owner, PartKey::Field(Name::new("x")), Side::Upper, named).expect("an undecided class names any part");
+        let copied = world.copy(&template, |_| Fate::Anew);
+        assert_eq!(world.live.owned_by(copied.classes[&owner]), [copied.classes[&part]]);
+        assert!(world.live.held().contains(&copied.classes[&part]));
     }
 
     #[test]
