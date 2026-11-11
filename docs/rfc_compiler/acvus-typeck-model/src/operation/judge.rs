@@ -4,6 +4,7 @@ use crate::primitive::ItemId;
 use crate::primitive::class::ClassKind;
 use crate::primitive::scope::Scopes;
 use crate::store::classes::Classes;
+use crate::store::closures::Closures;
 
 use super::Outcome;
 use super::connect::connect;
@@ -24,12 +25,20 @@ use super::law::{Law, Looked, Scribe};
 /// This is the only place a constraint is finished, and the only place a guard or a
 /// wait is stated. So a rule cannot finish a constraint without judging it, nor leave
 /// one waiting on nothing.
-pub fn look<K, L>(classes: &mut Classes<K>, scopes: &Scopes, law: &L, outcome: &mut Outcome<K>, constraint: K::Constraint, at: ItemId) -> bool
+pub fn look<K, L>(
+    classes: &mut Classes<K>,
+    scopes: &mut Scopes,
+    closures: &mut Closures<K>,
+    law: &L,
+    outcome: &mut Outcome<K>,
+    constraint: K::Constraint,
+    at: ItemId,
+) -> bool
 where
     K: ClassKind,
     L: Law<K>,
 {
-    let looked = law.look(&mut Scribe::new(classes, scopes), &constraint, at);
+    let looked = law.look(&mut Scribe::new(classes, scopes, closures), &constraint, at);
     let (pairs, changed) = match looked {
         Looked::Holds { pairs, adjustments, constraints } => {
             classes.finish(&constraint, at);

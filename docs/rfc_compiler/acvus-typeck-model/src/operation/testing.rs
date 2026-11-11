@@ -9,8 +9,9 @@ use crate::primitive::id::Arena;
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape, VariantOf};
 use crate::primitive::Name;
-use crate::primitive::{ClassId, ItemId};
+use crate::primitive::{ClassId, ItemId, LambdaId};
 use crate::store::classes::Classes;
+use crate::store::closures::Closures;
 
 use super::Outcome;
 use super::law::Law;
@@ -23,6 +24,7 @@ pub(super) const U8: Shape<ClassId> = Shape::Scalar(Scalar::U8);
 pub(super) struct World {
     pub(super) classes: Classes<Live>,
     pub(super) scopes: Scopes,
+    pub(super) closures: Closures<Live>,
     pub(super) items: Arena<ItemId, &'static str>,
     pub(super) outcome: Outcome<Live>,
     /// The classes made here, in the order settling asks them in, ahead of any
@@ -35,6 +37,7 @@ impl World {
         Self {
             classes: Classes::default(),
             scopes: Scopes::new(),
+            closures: Closures::default(),
             items: Arena::default(),
             outcome: Outcome::default(),
             open: Vec::new(),
@@ -129,6 +132,37 @@ impl World {
         )
     }
 
+    /// A lambda over `captures`, where the text defines it: the class of the
+    /// expression, which the function value of a closure named anew enters. A
+    /// definition is a use that passes nothing, so it is called with arguments
+    /// nothing enters.
+    pub(super) fn define(&mut self, lambda: LambdaId, captures: Vec<ClassId>, parameters: usize) -> ClassId {
+        let closure = self.closures.name(lambda, captures);
+        let value = self.text(Shape::FnValue(BTreeSet::from([closure])));
+        let nothing: Vec<ClassId> = (0..parameters).map(|_| self.undecided()).collect();
+        self.call(value, &nothing);
+        value
+    }
+
+    /// `callee(arguments)`: the class of the expression. The callee is passed to
+    /// the function type the call writes.
+    pub(super) fn call(&mut self, callee: ClassId, arguments: &[ClassId]) -> ClassId {
+        let result = self.undecided();
+        let by = self.items.push("call");
+        let written = self
+            .classes
+            .decided(self.scopes.root(), Shape::Fn(arguments.to_vec(), result), BTreeSet::from([by]));
+        self.classes.constrain(
+            Bound::Change {
+                lower: callee,
+                upper: written,
+            }
+            .into(),
+            by,
+        );
+        result
+    }
+
     /// `&place` or `&mut place`: the class of the expression, and the item by
     /// which the reference the text writes enters it.
     pub(super) fn lend(&mut self, place: ClassId, mutability: Mutability) -> (ClassId, ItemId) {
@@ -168,7 +202,7 @@ impl World {
         let visit = |classes: &Classes<Live>| -> Vec<ClassId> {
             open.iter().copied().chain(classes.roots().map(|root| root.id())).collect()
         };
-        settle(&mut self.classes, &self.scopes, law, &mut self.outcome, at, &visit);
+        settle(&mut self.classes, &mut self.scopes, &mut self.closures, law, &mut self.outcome, at, &visit);
     }
 
     pub(super) fn head(&self, class: ClassId) -> Option<Shape<ClassId>> {

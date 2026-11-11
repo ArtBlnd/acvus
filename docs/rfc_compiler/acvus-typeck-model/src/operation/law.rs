@@ -13,8 +13,9 @@ use crate::primitive::domain::Domain;
 use crate::primitive::refusal::Refused;
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{PartKey, Shape};
-use crate::primitive::ScopeId;
+use crate::primitive::{ClosureId, LambdaId, ScopeId};
 use crate::store::classes::Classes;
+use crate::store::closures::Closures;
 
 /// Two classes that are one type.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -83,21 +84,26 @@ pub enum Place {
 /// The store as a law may use it while it looks at a constraint: all of it to read,
 /// and classes to make anew, as a signature made at a boundary needs, or a head
 /// a rule writes. It merges nothing, and decides no class that was there.
+///
+/// A copy of a closure's template is made in a scope of its own, and a closure
+/// is named where a copy defines one: both are added to what is there, and
+/// change nothing of it.
 #[derive(Debug)]
 pub struct Scribe<'a, K>
 where
     K: ClassKind,
 {
     classes: &'a mut Classes<K>,
-    scopes: &'a Scopes,
+    scopes: &'a mut Scopes,
+    closures: &'a mut Closures<K>,
 }
 
 impl<'a, K> Scribe<'a, K>
 where
     K: ClassKind,
 {
-    pub(super) fn new(classes: &'a mut Classes<K>, scopes: &'a Scopes) -> Self {
-        Self { classes, scopes }
+    pub(super) fn new(classes: &'a mut Classes<K>, scopes: &'a mut Scopes, closures: &'a mut Closures<K>) -> Self {
+        Self { classes, scopes, closures }
     }
 
     pub fn classes(&self) -> &Classes<K> {
@@ -106,6 +112,22 @@ where
 
     pub fn scopes(&self) -> &Scopes {
         self.scopes
+    }
+
+    pub fn closures(&self) -> &Closures<K> {
+        self.closures
+    }
+
+    /// Makes a scope within `scope` for a copy of the template of `closure`.
+    pub fn copy_of(&mut self, closure: ClosureId, scope: ScopeId) -> ScopeId {
+        let copy = self.scopes.child(scope);
+        self.closures.copied(copy, closure);
+        copy
+    }
+
+    /// Names a closure anew, `lambda` over `captures`.
+    pub fn name(&mut self, lambda: LambdaId, captures: Vec<K::Id>) -> ClosureId {
+        self.closures.name(lambda, captures)
     }
 
     pub fn undecided(&mut self, scope: ScopeId) -> K::Id {

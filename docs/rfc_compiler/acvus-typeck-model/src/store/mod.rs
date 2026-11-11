@@ -7,5 +7,6 @@
 //! is its caller's, and the store returns what needs one.
 
 pub mod classes;
+pub mod closures;
 pub mod template;
 pub mod verify;

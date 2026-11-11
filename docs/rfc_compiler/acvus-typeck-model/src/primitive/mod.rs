@@ -11,7 +11,7 @@ pub mod refusal;
 pub mod scope;
 pub mod ty;
 
-pub use id::{ClassId, ClosureId, ItemId, ScopeId, TemplateId};
+pub use id::{ClassId, ClosureId, ItemId, LambdaId, ScopeId, TemplateId};
 
 /// The name of a field, a variant, an enum, a module, an extern declaration,
 /// a hole, or a place in the text.

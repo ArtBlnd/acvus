@@ -41,6 +41,8 @@ id! {
     ItemId,
     /// A lambda together with its captures.
     ClosureId,
+    /// A lambda as the text writes it: its template.
+    LambdaId,
     /// The text of a body or a lambda, or one iteration of a loop.
     ScopeId,
 }

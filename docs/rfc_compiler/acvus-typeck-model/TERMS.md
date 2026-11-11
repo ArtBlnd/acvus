@@ -364,3 +364,101 @@ them, and they are added without changing what is here. What is known to need ru
 
 What depends on calls waits with them: a receiver's adjustment, and a use with several
 candidates.
+
+What has been said so far. None of it is implemented, and it is not yet put together into one
+rule.
+
+- **A lambda has two phases, its body and its instantiation.** From outside its body a lambda
+  value shows its signature and nothing else; inside, the body stands where it is written.
+- **A capture is transparent.** A captured name is the one class inside the body and outside
+  it, and it is decided with what surrounds the lambda, before and apart from any
+  instantiation. `let a = None; let f = || a = Some(0u8);` gives `a: Option<u8>`. However many
+  times the lambda is instantiated, a captured class stays one.
+- **What is not captured is opaque.** The body makes a template: a parameter is a type variable
+  with the bounds the body puts on it, and each call checks its arguments against those bounds
+  anew. Two calls may give a parameter two types.
+- **Where two lambdas meet, their parameters keep the bounds of both and their results are
+  equal.** An argument has to keep every bound of every lambda. A result is not joined: it
+  comes already decided, so nothing is adjusted there, and `!` is no exception. A result that
+  is not decided depends on a parameter, and its being equal is then a bound on that parameter,
+  checked at each call. `|x| 0u8` and `|x| "a"` do not meet, called or not;
+  `|x| x.to_string()` and `|x| x.to_int()` are refused where they are called. The condition is
+  of the meeting and not of either lambda: the closures of one function value are copied
+  together, each takes the arguments, and their results are equal, at every use.
+- **A module is a template as a lambda is.** A struct and its `impl` make one template, whose
+  variables are the type parameters of `Self`, one for each field. Inside a method they are
+  what a capture is inside a lambda: classes of what surrounds it, one class in every method.
+  The rule is one, that inside a template a name of the surrounding scope is that scope's
+  class; a capture is decided once because what surrounds a lambda is decided once, and a
+  parameter of `Self` is a variable because what surrounds a method is a template. So a bound
+  a method puts on a parameter of `Self` is a bound of `Self`, and every method keeps it: with
+  `fn add(&self, other) { .. self.x + other.x .. }` in the `impl`, `new` makes no `Self` whose
+  `x` has no `+`, whether `add` is called or not. Two uses may give `Self` two types.
+- **A template is written once, is not solved, and does not change; what is solved is a copy.**
+  A copy is solved by the rules of any class, and nothing else is said of one. A bound is a
+  constraint of the template, and a bound checked is that constraint finished or refused in a
+  copy.
+- **A definition is a use that passes nothing.** Where a lambda is written its template is
+  copied once, as where it is called, with no argument entering its parameters. That copy is
+  the first phase: what the body says of a capture is said there, and
+  `|x| { let z: u8 = "a"; x }` is refused there whether the lambda is called or not. Its
+  parameter is a class that nothing enters, and it is decided as any such class is: as the
+  head it is held against where there is one, and else last and as `!`, which adds nothing to
+  what it enters. With `let a = None; let f = |x| a = Some(x);`, `a` is `Option<!>` where `f`
+  is not called, `Option<u8>` after `f(0u8)`, and refused after `f(0u8); f(1u16)`. That last
+  is refused as `let x; a = x; a = 0u8; a = 0u16;` is, a class left undecided: what enters
+  below the top of a type is one type with what is there, so the parameter is the payload of
+  `a`. A constraint from a parameter into a capture is one that enters, as any.
+  The same copy is made where two lambdas meet, of both together.
+- **What the last rung decided is finished, and a call that comes to be known after it is held
+  against that.** A call is known when what it calls is decided, which the earlier rungs do,
+  so the copies of a call are there before `!` is given. Where what is called is itself
+  decided only by the last rung, as in `let g = (f, None) as _; g.0(0u8);`, the classes that
+  call would have entered are decided already.
+- **A closure is a template and the classes that stand where it captures, and a function value
+  is a set of closures by name.** Nothing is compared inside a function value: two that meet
+  are joined, the set of both, and there is no other way between them, no parameter widened
+  and no result narrowed. A capture is therefore of the closure and not a part of the type.
+  Two closures of one template are two closures: in
+  `let f = |x| { let g = |y| x + y; g }; let p = f(0u8); let q = f(1u16);` each copy of `f`
+  defines `g` anew, over its own `x`. A module copied makes the closures of its methods anew
+  in the same way, over that copy's parameters of `Self`.
+- **A call is a function value passed to a function type.** `f(a, b)` passes `f` to
+  `Fn(a, b) -> r`, a type the call writes, and what the language gives between the two is
+  that each closure is used: its template is copied, each class that stands for a capture is
+  one type with what the closure captures, each argument enters its parameter, and the result
+  is one type with `r`. A call of another count of arguments is refused. The copy that passes
+  nothing is such a call, written where the lambda is, with arguments nothing enters.
+- **A template says which lambdas its body defines, and a copy names a closure of each
+  anew**, over the copies of the classes written where it captures. Copying itself makes no
+  closure and knows of none, and two copies share a class only where a closure captures it.
+- **A refusal made in several copies is one refusal where it names the same.** A copy records
+  each constraint by the item its template wrote it by, and a refusal is its cause, its items
+  and its connections. What a body refuses apart from its parameters names the same in every
+  copy and is one refusal; what a call's argument is refused for names that argument and is
+  one for each call. Where a capture is in it, the refusal names every copy that connected to
+  the capture, as it names every connection.
+- **A module is copied whole, and a method not called is a lambda not called.** The template
+  of a module holds the definitions of its methods, and a definition is a use that passes
+  nothing. So a copy made for `Point::new(1u8, 2u8)` holds what `add` says of `Self` with
+  nothing entering `other`, and the bound is checked there.
+- **A brand is a generic parameter.** Which brand a returned value has is what the type
+  variable of the signature became in that call. There is no brand that is itself a variable
+  with a bound.
+- **Recursion: one instance of a closure.** Where a bound of an instance of a closure calls
+  that closure again, no new instance is made; the call is held against the instance the bound
+  came from. Which instance that is, is read from what made the call and not from when it is
+  solved. A recursion that changes its type is then refused as a mismatch, and one that grows
+  it as a class that is a part of itself.
+
+Marked, not ruled:
+
+- Whether a recursive call is equal to the instance it is held against or enters it.
+- A recursion through a class that two lambdas entered.
+- A brand that nothing enters.
+- Two lambdas that meet and are not called: no copy is made where they meet, so results that
+  do not depend on a parameter and differ are refused only where the two are called.
+- Whether solving ends: each copy of a definition names a closure anew, which the rule of one
+  instance of a closure does not hold back. A closure made in a copy is of a template written
+  one level inside the one copied, which is not yet shown to be enough where a closure leaves
+  through a capture and is called again.

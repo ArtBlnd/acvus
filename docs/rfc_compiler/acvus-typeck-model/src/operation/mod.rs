@@ -20,6 +20,8 @@ pub mod law;
 pub mod settle;
 
 #[cfg(test)]
+mod calls;
+#[cfg(test)]
 mod testing;
 #[cfg(test)]
 mod tests;

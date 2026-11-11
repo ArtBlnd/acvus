@@ -104,6 +104,9 @@ enum Given<A, G> {
     /// It cannot be told until this part of the argument has a head, which will
     /// be held against this one.
     Reads(A, Shape<G>),
+    /// The argument is a function value and the type given a function type: it
+    /// goes as each of its closures does, used as that type.
+    Calls,
     /// The language gives nothing between the two.
     Nothing,
 }
@@ -176,7 +179,7 @@ where
             };
             goes(paired(held), loosened(Subtyping::AddVariants, variants.len() < given_variants.len()))
         }
-        (Shape::FnValue(_), Shape::Fn(..)) => todo!("a function value passed to a function type: its instances"),
+        (Shape::FnValue(_), Shape::Fn(..)) => Given::Calls,
         _ if head.layer() == wanted.layer() => {
             let parts = head.places().into_iter().zip(wanted.places()).map(|((_, a), (_, g))| (a, g)).collect();
             goes(paired(parts), Vec::new())
@@ -355,6 +358,7 @@ where
             Given::Reads(class, _) => {
                 waits.insert(class);
             }
+            Given::Calls => todo!("a function value passed to a function type a row writes"),
             Given::Nothing => {}
         }
     }
@@ -381,6 +385,7 @@ where
             found.push(way);
         }
         Given::Reads(..) => unreachable!("a row's result is written, and has nothing to wait for"),
+        Given::Calls => todo!("a function value a row gives, passed to a function type"),
         Given::Nothing => {
             for (index, next) in functions.rows.iter().enumerate() {
                 if way.rows.contains(&index) {
@@ -472,6 +477,17 @@ where
                 looked: waits(BTreeSet::from([class]), read),
                 asks: vec![(class, against)],
                 then: None,
+            };
+        }
+        Given::Calls => {
+            return Told {
+                looked: Looked::Holds {
+                    pairs: Vec::new(),
+                    adjustments: Vec::new(),
+                    constraints: Vec::new(),
+                },
+                asks: Vec::new(),
+                then: Some(Then::Calls),
             };
         }
         // A declared function is looked for only where the language gives nothing.

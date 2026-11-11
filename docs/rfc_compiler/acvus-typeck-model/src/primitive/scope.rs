@@ -33,6 +33,11 @@ impl Scopes {
         self.parents.push(Some(parent))
     }
 
+    /// The scope `scope` lies in; the root lies in none.
+    pub fn parent(&self, scope: ScopeId) -> Option<ScopeId> {
+        *self.parents.get(scope)
+    }
+
     /// The innermost scope that holds both: of two scopes one of which lies
     /// in the other, the outer.
     pub fn outer(&self, a: ScopeId, b: ScopeId) -> ScopeId {

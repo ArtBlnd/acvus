@@ -4,6 +4,7 @@ use crate::primitive::ItemId;
 use crate::primitive::class::ClassKind;
 use crate::primitive::scope::Scopes;
 use crate::store::classes::Classes;
+use crate::store::closures::Closures;
 
 use super::Outcome;
 use super::connect::connect;
@@ -26,7 +27,15 @@ use super::law::{Law, Pair};
 /// or decided, so nothing is looked at that nothing has happened to. A class is
 /// decided only after looking has run to its end, so every guard is as its constraint
 /// last stated it.
-pub fn settle<K, L, F>(classes: &mut Classes<K>, scopes: &Scopes, law: &L, outcome: &mut Outcome<K>, at: ItemId, visit: &F)
+pub fn settle<K, L, F>(
+    classes: &mut Classes<K>,
+    scopes: &mut Scopes,
+    closures: &mut Closures<K>,
+    law: &L,
+    outcome: &mut Outcome<K>,
+    at: ItemId,
+    visit: &F,
+)
 where
     K: ClassKind,
     L: Law<K>,
@@ -42,7 +51,7 @@ where
             let none_woken = woken.is_empty();
             for (constraint, by) in woken {
                 if classes.constraints().contains(&(constraint.clone(), by)) {
-                    changed |= look(classes, scopes, law, outcome, constraint, by);
+                    changed |= look(classes, scopes, closures, law, outcome, constraint, by);
                 }
             }
             if !changed && none_woken {

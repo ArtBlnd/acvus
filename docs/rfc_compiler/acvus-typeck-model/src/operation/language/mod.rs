@@ -4,16 +4,20 @@
 //! |---|---|---|
 //! | what a constraint comes to | by the relation the constraint is: entering, being equal, being passed, `as _`, the exit of `?` | [`enter`], [`equal`], [`passing`], [`alone`], [`exit`] |
 //! | which functions are declared | a table, and no rule | [`functions`] |
+//! | which lambdas the text writes | a table, and no rule | [`lambdas`] |
+//! | what a function value passed to a function type comes to | a copy of each closure | [`calling`] |
 //! | which classes are one type by the constraints as a whole | classes that enter one another | [`enter::entering_one_another`] |
 //! | where a named part lies | read through a reference | [`Language::place`] |
 //! | what head a class may take | the rungs, in order | [`rungs`] |
 //! | what is refused at the end | a class still undecided, a class that is its own part | [`rungs::end`] |
 
 pub mod alone;
+pub mod calling;
 pub mod enter;
 pub mod equal;
 pub mod exit;
 pub mod functions;
+pub mod lambdas;
 pub mod passing;
 pub mod rungs;
 
@@ -30,10 +34,12 @@ use crate::store::classes::Classes;
 
 use super::law::{Law, Looked, Offer, Pair, Place, Scribe};
 
-/// The rules of the language, with the functions declared from outside.
+/// The rules of the language, with the functions declared from outside and the
+/// lambdas the text writes.
 #[derive(Clone, Debug, Default)]
 pub struct Language {
     pub functions: functions::Functions,
+    pub lambdas: lambdas::Lambdas,
 }
 
 impl<K> Law<K> for Language
@@ -44,6 +50,7 @@ where
         let told = tell(&View::of(scribe.classes()), &self.functions, constraint, at);
         match told.then {
             Some(Then::Way(way)) => passing::take(scribe, &self.functions, way, constraint.lower(), at),
+            Some(Then::Calls) => calling::take(scribe, &self.lambdas, constraint.lower(), constraint.upper(), at),
             Some(Then::Enters(shape)) => {
                 let upper = constraint.upper();
                 let scope = scribe.classes().get(scribe.classes().find(upper)).scope;
@@ -160,6 +167,8 @@ where
     Way(passing::Way<K>),
     /// A class with this head, written by the bound, which enters its upper end.
     Enters(Shape<K::Id>),
+    /// A copy of the template of each closure of its lower end, a function value.
+    Calls,
 }
 
 impl<K> Told<K>

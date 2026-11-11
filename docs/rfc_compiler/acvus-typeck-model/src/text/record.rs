@@ -22,6 +22,7 @@ use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{PartKey, Scalar, Shape, Ty, VariantOf};
 use crate::primitive::{ClassId, ItemId, Name};
 use crate::store::classes::Classes;
+use crate::store::closures::Closures;
 
 use super::ast::{Assertion, Op, Path, Program, Segment, Type, Variant};
 use super::print;
@@ -31,6 +32,7 @@ use super::print;
 pub struct Recorded {
     pub classes: Classes<Live>,
     pub scopes: Scopes,
+    pub closures: Closures<Live>,
     pub law: Language,
     pub outcome: Outcome<Live>,
     /// Each item, with what it is found by: the label of its statement, or the
@@ -55,6 +57,7 @@ impl Recorded {
         Self {
             classes: Classes::default(),
             scopes: Scopes::new(),
+            closures: Closures::default(),
             law: Language::default(),
             outcome: Outcome::default(),
             items: Arena::default(),
@@ -218,7 +221,7 @@ impl Recorded {
         let visit = |classes: &Classes<Live>| -> Vec<ClassId> {
             asked.iter().copied().chain(classes.roots().map(|root| root.id())).collect()
         };
-        settle(&mut self.classes, &self.scopes, &self.law, &mut self.outcome, at, &visit);
+        settle(&mut self.classes, &mut self.scopes, &mut self.closures, &self.law, &mut self.outcome, at, &visit);
     }
 
     /// The class `path` gives as the store stands, recording nothing: none where
