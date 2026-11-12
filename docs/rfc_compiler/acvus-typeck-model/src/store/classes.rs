@@ -232,18 +232,6 @@ where
     pub unplaced: Vec<Unplaced<K>>,
 }
 
-impl<K> Unified<K>
-where
-    K: ClassKind,
-{
-    /// Takes in what another union left.
-    pub fn absorb(&mut self, other: Self) {
-        self.refusals.extend(other.refusals);
-        self.pending.extend(other.pending);
-        self.unplaced.extend(other.unplaced);
-    }
-}
-
 impl<K> Classes<K>
 where
     K: ClassKind,

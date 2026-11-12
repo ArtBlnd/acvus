@@ -142,7 +142,7 @@ where
     };
     for called in called {
         let signature = match called {
-            Called::Closure(closure) => of_a_closure(scribe, lambdas, closure, scope, at, &mut follows),
+            Called::Closure(closure) => of_a_closure(scribe, lambdas, closure, scope, &mut follows),
             Called::OfAType(signature) => signature,
         };
         call.uses(&signature, &mut follows);
@@ -160,30 +160,30 @@ where
 ///
 /// A call within a copy of the closure it calls is a call of that copy, and
 /// makes none: what is called is being used already.
-fn of_a_closure<K>(scribe: &mut Scribe<'_, K>, lambdas: &Lambdas, closure: ClosureId, scope: ScopeId, at: ItemId, follows: &mut Follows<K>) -> Signature<K>
+fn of_a_closure<K>(scribe: &mut Scribe<'_, K>, lambdas: &Lambdas, closure: ClosureId, scope: ScopeId, follows: &mut Follows<K>) -> Signature<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
     let within = scribe.closures().within(scribe.scopes(), scope, closure).cloned();
     let Copy { parameters, result, .. } = match within {
         Some(in_use) => in_use,
-        None => copy(scribe, lambdas, closure, scope, at, follows),
+        None => copy(scribe, lambdas, closure, scope, follows),
     };
     Signature { parameters, result }
 }
 
-/// Copies the template of `closure` into a scope of its own within `scope`, by
-/// `at`, and gives the copy. Each class standing for a capture is one type with
+/// Copies the template of `closure` into a scope of its own within `scope`, and
+/// gives the copy. Each class standing for a capture is one type with
 /// what the closure captures, and each lambda the body defines is a closure named
 /// anew, whose function value enters the class of the lambda.
-fn copy<K>(scribe: &mut Scribe<'_, K>, lambdas: &Lambdas, closure: ClosureId, scope: ScopeId, at: ItemId, follows: &mut Follows<K>) -> Copy<K>
+fn copy<K>(scribe: &mut Scribe<'_, K>, lambdas: &Lambdas, closure: ClosureId, scope: ScopeId, follows: &mut Follows<K>) -> Copy<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
     let closed = scribe.closures().get(closure).clone();
     let lambda = lambdas.get(closed.lambda);
     let lies_in = scribe.scope_within(scope);
-    let made = scribe.anew(&lambda.template, lies_in, at);
+    let made = scribe.anew(&lambda.template, lies_in);
     let copy = Copy {
         closure,
         parameters: lambda.parameters.iter().map(|parameter| made[parameter]).collect(),

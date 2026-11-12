@@ -5,35 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::constraint::ConstraintInto;
 use crate::primitive::class::{Class, ClassKind};
-use crate::primitive::scope::Scopes;
 use crate::primitive::ty::Ty;
 use crate::primitive::{ItemId, ScopeId};
 
-use super::classes::{Classes, Root, Slot, Unified};
-
-/// What becomes of a class of a template in a copy.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Fate<J> {
-    /// It is made anew.
-    Anew,
-    /// It stands for this class of the store copied into: it is made anew and
-    /// then made one with it, so that whatever the template records on it is
-    /// recorded on this class.
-    Keep(J),
-}
-
-/// A template copied.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Copied<S, K>
-where
-    S: ClassKind,
-    K: ClassKind,
-{
-    /// Every id of the template, with the class it became.
-    pub classes: BTreeMap<S::Id, K::Id>,
-    /// What making the classes kept one with their copies left.
-    pub unified: Unified<K>,
-}
+use super::classes::{Classes, Slot};
 
 impl<K> Classes<K>
 where
@@ -60,35 +35,23 @@ where
         class
     }
 
-    /// Copies every class of `template` into this store, in `scope`, by `at`,
-    /// as `fate` gives each.
+    /// Copies every class of `template` into this store, in `scope`, and gives
+    /// every id of the template with the class it became.
     ///
     /// Each class is made anew holding what its original holds, every id in
     /// it given as the class its original became, and each constraint the template
-    /// holds is recorded between the copies of its ends. Then each class kept is
-    /// made one with its copy. The template is not changed.
-    pub fn copy_from<S, F>(
-        &mut self,
-        template: &Classes<S>,
-        scopes: &Scopes,
-        scope: ScopeId,
-        at: ItemId,
-        mut fate: F,
-    ) -> Copied<S, K>
+    /// holds is recorded between the copies of its ends. The template is not
+    /// changed.
+    pub fn copy_from<S>(&mut self, template: &Classes<S>, scope: ScopeId) -> BTreeMap<S::Id, K::Id>
     where
         S: ClassKind,
         S::Constraint: ConstraintInto<S, K>,
-        F: FnMut(Root<'_, S>) -> Fate<K::Id>,
     {
         let mut copies = BTreeMap::new();
-        let mut kept = Vec::new();
         for (id, slot) in template.slots.iter() {
             let Slot::Root(_) = slot else {
                 continue;
             };
-            if let Fate::Keep(target) = fate(template.find(id)) {
-                kept.push((id, target));
-            }
             copies.insert(id, self.undecided(scope));
         }
 
@@ -110,16 +73,7 @@ where
             let copied = constraint.clone().translate(|held| copies[&template.find(held).id()]);
             self.constrain(copied, *by);
         }
-
-        let mut unified = Unified::default();
-        for (id, target) in kept {
-            unified.absorb(self.unify(scopes, copies[&id], target, at));
-            copies.insert(id, target);
-        }
-        Copied {
-            classes: copies,
-            unified,
-        }
+        copies
     }
 }
 
@@ -130,6 +84,7 @@ mod tests {
     use crate::primitive::constraint::{Bound, ConstraintOf};
     use crate::primitive::class::{Live, Side, State, Template};
     use crate::primitive::id::Arena;
+    use crate::primitive::scope::Scopes;
     use crate::primitive::ty::{Mutability, PartKey, Shape};
     use crate::primitive::{ClassId, TemplateId};
 
@@ -162,12 +117,8 @@ mod tests {
             (template, [first, second])
         }
 
-        fn copy<F>(&mut self, template: &Classes<Template>, fate: F) -> Copied<Template, Live>
-        where
-            F: FnMut(Root<'_, Template>) -> Fate<ClassId>,
-        {
-            let at = self.items.push("use");
-            self.live.copy_from(template, &self.scopes, self.scopes.root(), at, fate)
+        fn copy(&mut self, template: &Classes<Template>) -> BTreeMap<TemplateId, ClassId> {
+            self.live.copy_from(template, self.scopes.root())
         }
 
         fn shape(&self, class: ClassId) -> &Shape<ClassId> {
@@ -199,9 +150,9 @@ mod tests {
         let mut template: Classes<Template> = Classes::default();
         let owner = template.undecided(world.scopes.root());
         let part = template.part(owner, PartKey::Field(Name::new("x")), Side::Upper, named).expect("an undecided class names any part");
-        let copied = world.copy(&template, |_| Fate::Anew);
-        assert_eq!(world.live.owned_by(copied.classes[&owner]), [copied.classes[&part]]);
-        assert!(world.live.held().contains(&copied.classes[&part]));
+        let copied = world.copy(&template);
+        assert_eq!(world.live.owned_by(copied[&owner]), [copied[&part]]);
+        assert!(world.live.held().contains(&copied[&part]));
     }
 
     #[test]
@@ -227,18 +178,17 @@ mod tests {
     fn a_copy_keeps_what_a_declaration_writes_external_and_a_hole_free() {
         let mut world = World::new();
         let (template, [first, second]) = world.push();
-        let copied = world.copy(&template, |_| Fate::Anew);
-        assert!(world.live.is_external(copied.classes[&first]));
-        assert!(!world.live.is_external(copied.classes[&second]));
+        let copied = world.copy(&template);
+        assert!(world.live.is_external(copied[&first]));
+        assert!(!world.live.is_external(copied[&second]));
     }
 
     #[test]
     fn a_copy_makes_every_class_anew_and_keeps_one_class_one() {
         let mut world = World::new();
         let (template, [first, second]) = world.push();
-        let copied = world.copy(&template, |_| Fate::Anew);
-        assert_eq!(copied.unified, Unified::default());
-        let (first, second) = (copied.classes[&first], copied.classes[&second]);
+        let copied = world.copy(&template);
+        let (first, second) = (copied[&first], copied[&second]);
         let Shape::Ref(Mutability::Exclusive, option) = *world.shape(first) else {
             panic!("the copy of `&mut Option<T>` is a reference");
         };
@@ -250,8 +200,8 @@ mod tests {
     fn each_use_makes_its_own_copy() {
         let mut world = World::new();
         let (template, [_, t]) = world.push();
-        let at_first_use = world.copy(&template, |_| Fate::Anew).classes[&t];
-        let at_second_use = world.copy(&template, |_| Fate::Anew).classes[&t];
+        let at_first_use = world.copy(&template)[&t];
+        let at_second_use = world.copy(&template)[&t];
         assert_ne!(world.live.find(at_first_use), world.live.find(at_second_use));
     }
 
@@ -284,57 +234,17 @@ mod tests {
     }
 
     #[test]
-    fn a_class_kept_takes_what_the_template_records_on_it() {
-        let mut world = World::new();
-        let (template, stand_in, some, meets) = remember(&mut world);
-        let last = world.live.undecided(world.scopes.root());
-
-        let copied = world.copy(&template, |reached| {
-            if reached.id() == stand_in { Fate::Keep(last) } else { Fate::Anew }
-        });
-
-        assert_eq!(copied.unified, Unified::default());
-        assert_eq!(copied.classes[&stand_in], last);
-        let some = world.live.find(copied.classes[&some]).id();
-        assert_eq!(entering(&world.live, last), BTreeMap::from([(some, BTreeSet::from([meets]))]));
-    }
-
-    #[test]
     fn a_template_is_not_changed_by_its_copies() {
         let mut world = World::new();
         let (template, stand_in, some, meets) = remember(&mut world);
         let before = template.clone();
-        let last = world.live.undecided(world.scopes.root());
-        world.copy(&template, |reached| {
-            if reached.id() == stand_in { Fate::Keep(last) } else { Fate::Anew }
-        });
+        world.copy(&template);
         assert_eq!(template.verify(), Ok(()));
         assert_eq!(
             entering(&template, stand_in),
             BTreeMap::from([(template.find(some).id(), BTreeSet::from([meets]))])
         );
         assert_eq!(format!("{template:?}"), format!("{before:?}"));
-    }
-
-    #[test]
-    fn a_part_the_template_names_on_a_class_kept_is_named_on_it() {
-        let mut world = World::new();
-        let root = world.scopes.root();
-        let mut template = Classes::<Template>::default();
-        let stand_in = template.undecided(root);
-        let named = world.items.push("last.x");
-        let x = PartKey::Field(Name::new("x"));
-        let field = template
-            .part(stand_in, x.clone(), Side::Upper, named)
-            .expect("an undecided class names any part");
-        let last = world.live.undecided(root);
-
-        let copied = world.copy(&template, |reached| {
-            if reached.id() == stand_in { Fate::Keep(last) } else { Fate::Anew }
-        });
-
-        let last = world.live.find(last);
-        assert_eq!(world.live.get(last).state.part(&x).map(|part| world.live.find(part)), Some(world.live.find(copied.classes[&field])));
     }
 
     #[test]
@@ -346,8 +256,8 @@ mod tests {
         let b = template.undecided(root);
         let at = world.items.push("a into b");
         template.constrain(Bound::Change { lower: a, upper: b }.into(), at);
-        let copied = world.copy(&template, |_| Fate::Anew);
-        let (a, b) = (copied.classes[&a], copied.classes[&b]);
+        let copied = world.copy(&template);
+        let (a, b) = (copied[&a], copied[&b]);
         assert_eq!(world.live.constraints().cloned().collect::<BTreeSet<_>>(), BTreeSet::from([(Bound::Change { lower: a, upper: b }.into(), at)]));
     }
 
@@ -356,16 +266,12 @@ mod tests {
         let mut world = World::new();
         let root = world.scopes.root();
         // A call of `remember` within the text of an enclosing body: the copy
-        // is a template too, and its stand-in is a class of the enclosing one.
+        // is a template too.
         let (inner, stand_in, some, meets) = remember(&mut world);
         let mut enclosing = Classes::<Template>::default();
-        let last = enclosing.undecided(root);
-        let at = world.items.push("remember(..)");
-        let copied = enclosing.copy_from(&inner, &world.scopes, root, at, |reached| {
-            if reached.id() == stand_in { Fate::Keep(last) } else { Fate::Anew }
-        });
+        let copied = enclosing.copy_from(&inner, root);
         assert_eq!(enclosing.verify(), Ok(()));
-        let some = enclosing.find(copied.classes[&some]).id();
-        assert_eq!(entering(&enclosing, last), BTreeMap::from([(some, BTreeSet::from([meets]))]));
+        let some = enclosing.find(copied[&some]).id();
+        assert_eq!(entering(&enclosing, copied[&stand_in]), BTreeMap::from([(some, BTreeSet::from([meets]))]));
     }
 }

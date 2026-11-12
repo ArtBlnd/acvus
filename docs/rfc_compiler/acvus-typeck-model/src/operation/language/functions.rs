@@ -87,7 +87,7 @@ impl Row {
     where
         K: ClassKind<Constraint = Constraint<K>>,
     {
-        let classes = scribe.anew(&self.template, scope, at);
+        let classes = scribe.anew(&self.template, scope);
         let brands = self.makes.iter().map(|stands_for| Pair::Classes(classes[stands_for], scribe.brand(scope, at))).collect();
         Used { classes, brands }
     }

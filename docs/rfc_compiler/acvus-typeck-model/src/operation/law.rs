@@ -33,7 +33,6 @@ use crate::primitive::{ClosureId, LambdaId, ScopeId};
 use crate::store::Store;
 use crate::store::classes::Classes;
 use crate::store::closures::{Closures, Copy};
-use crate::store::template::Fate;
 
 /// Two classes that are one type.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -240,17 +239,14 @@ where
         self.store.classes.decided(scope, shape, by)
     }
 
-    /// Makes every class of `template` anew in `scope`, by `at`, and gives each
-    /// class of the template with the class it became.
-    pub fn anew<S>(&mut self, template: &Classes<S>, scope: ScopeId, at: ItemId) -> BTreeMap<S::Id, K::Id>
+    /// Makes every class of `template` anew in `scope`, and gives each class of
+    /// the template with the class it became.
+    pub fn anew<S>(&mut self, template: &Classes<S>, scope: ScopeId) -> BTreeMap<S::Id, K::Id>
     where
         S: ClassKind,
         S::Constraint: ConstraintInto<S, K>,
     {
-        self.store
-            .classes
-            .copy_from(template, &self.store.scopes, scope, at, |_| Fate::Anew)
-            .classes
+        self.store.classes.copy_from(template, scope)
     }
 }
 
