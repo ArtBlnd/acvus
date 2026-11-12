@@ -398,19 +398,6 @@ and written by the text.
   A copy is solved by the rules of any class, and nothing else is said of one. A bound is a
   constraint of the template, and a bound checked is that constraint finished or refused in a
   copy.
-- **A definition is a use that passes nothing.** Where a lambda is written its template is
-  copied once, as where it is called, with no argument entering its parameters. That copy is
-  the first phase: what the body says of a capture is said there, and
-  `|x| { let z: u8 = "a"; x }` is refused there whether the lambda is called or not. Its
-  argument is `nothing as _`, of a class nothing enters: what the body does with the
-  parameter asks no head of it, so it is `!`, decided last, and adds nothing to what it
-  enters. With `let a = None; let f = |x| a = Some(x);`, `a` is `Option<!>` where `f` is not
-  called, `Option<u8>` after `f(0u8)`, and refused after `f(0u8); f(1u16)`: what enters below
-  the top of a type is one type with what is there, so the parameter of each copy is the
-  payload of `a`, and the two arguments do not join there. Were the argument a class that
-  takes a head from what it is held against, `|g| g(g)` would give its parameter the type of
-  a function that takes itself, which holds itself. A constraint from a parameter into a capture is one that enters, as any.
-  The same copy is made where two lambdas meet, of both together.
 - **What the last rung decided is finished, and a call that comes to be known after it is held
   against that.** A call is known when what it calls is decided, which the earlier rungs do,
   so the copies of a call are there before `!` is given. Where what is called is itself
@@ -428,8 +415,7 @@ and written by the text.
   `Fn(a, b) -> r`, a type the call writes, and what the language gives between the two is
   that each closure is used: its template is copied, each class that stands for a capture is
   one type with what the closure captures, each argument is passed to its parameter, and the result
-  is one type with `r`. A call of another count of arguments is refused. The copy that passes
-  nothing is such a call, written where the lambda is, with arguments nothing enters.
+  is one type with `r`. A call of another count of arguments is refused.
 - **An argument is passed to its parameter, whatever is called.** A declared function, a
   function type and a lambda take an argument the same way: it is passed, by what the language
   gives, to the type the parameter writes. A parameter that writes none is a hole, which takes
@@ -494,10 +480,7 @@ and written by the text.
   function that uses the module by the module's name makes a copy anew, as a call of it from
   anywhere does, the copy of a function lying under where it is called and not under the
   module's.
-- **A module is copied whole, and a method not called is a lambda not called.** The template
-  of a module holds the definitions of its methods, and a definition is a use that passes
-  nothing. So a copy made for `Point::new(1u8, 2u8)` holds what `add` says of `Self` with
-  nothing entering `other`, and the bound is checked there.
+- **A module is copied whole, and a method not called is a lambda not called.**
 - **A brand is a generic parameter.** Which brand a returned value has is what the type
   variable of the signature became in that call. There is no brand that is itself a variable
   with a bound.

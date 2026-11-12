@@ -793,8 +793,7 @@ fn a_variable_a_declared_function_type_enters_is_called_as_the_declared_one_is()
     called("call g(u) to r; assert refused NoChange, ..;");
 }
 
-/// A parameter that writes a function type is such a variable, and where the
-/// lambda is defined its argument is `!`.
+/// A parameter that writes a function type is such a variable.
 #[test]
 fn a_parameter_that_writes_a_function_type_is_called_in_the_body() {
     let f = "f <- fn (x) -> r { r <- x; }; u <- u8;";

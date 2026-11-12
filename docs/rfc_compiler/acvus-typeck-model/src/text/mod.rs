@@ -29,8 +29,7 @@
 //! In the body of a lambda a name is a class of the lambda: one it captures, a
 //! parameter, its result, or a class of its own from where the body first writes
 //! it. The body is written into a template, by the statements a program is
-//! written by, and a lambda written is called once with arguments nothing
-//! enters.
+//! written by.
 //!
 //! A word that begins with a small letter is a class, a field or a label, and one
 //! that begins with a capital is a type or a variant. [`ast`] is the program,

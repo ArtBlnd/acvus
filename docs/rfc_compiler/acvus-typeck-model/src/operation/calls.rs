@@ -187,7 +187,7 @@ where
 fn a_call_gives_what_the_body_gives_of_its_argument() {
     comes_to("u8", |w, law, lets| {
         let identity = identity(w, law);
-        let f = w.define(identity, Vec::new(), 1);
+        let f = w.define(identity, Vec::new());
         let f = behind(w, f, lets);
         let argument = w.text(U8);
         w.call(f, &[argument])
@@ -199,7 +199,7 @@ fn two_calls_give_a_parameter_two_types() {
     for (observed, expected) in [(0, "u8"), (1, "u16")] {
         comes_to(expected, |w, law, lets| {
             let identity = identity(w, law);
-            let f = w.define(identity, Vec::new(), 1);
+            let f = w.define(identity, Vec::new());
             let f = behind(w, f, lets);
             let (first, second) = (w.text(U8), w.text(U16));
             [w.call(f, &[first]), w.call(f, &[second])][observed]
@@ -211,7 +211,7 @@ fn two_calls_give_a_parameter_two_types() {
 fn a_call_with_another_count_of_arguments_is_refused() {
     comes_to("refused: Mismatch", |w, law, lets| {
         let identity = identity(w, law);
-        let f = w.define(identity, Vec::new(), 1);
+        let f = w.define(identity, Vec::new());
         let f = behind(w, f, lets);
         let (first, second) = (w.text(U8), w.text(U8));
         w.call(f, &[first, second])
@@ -236,7 +236,7 @@ fn remembering(w: &mut World, law: &mut Language, lets: usize, arguments: &[Shap
     let nothing = w.undecided();
     let a = w.text(Shape::Option(nothing));
     let remember = remember(w, law);
-    let f = w.define(remember, vec![a], 1);
+    let f = w.define(remember, vec![a]);
     let f = behind(w, f, lets);
     for argument in arguments {
         let argument = w.text(argument.clone());
@@ -272,7 +272,7 @@ fn a_body_is_refused_where_it_is_defined_and_once_however_often_it_is_called() {
         let mut world = World::new();
         let mut law = Language::default();
         let broken = broken(&mut world, &mut law);
-        let f = world.define(broken, Vec::new(), 1);
+        let f = world.define(broken, Vec::new());
         for _ in 0..calls {
             let argument = world.text(U8);
             world.call(f, &[argument]);
@@ -289,7 +289,7 @@ fn a_body_is_refused_where_it_is_defined_and_once_however_often_it_is_called() {
 /// `if c { |x| x } else { |x| 0u8 }`, called with a value of the type `argument`.
 fn either(w: &mut World, law: &mut Language, lets: usize, argument: Shape<ClassId>) -> ClassId {
     let (identity, constant) = (identity(w, law), constant(w, law, Shape::Scalar(Scalar::U8)));
-    let (first, second) = (w.define(identity, Vec::new(), 1), w.define(constant, Vec::new(), 1));
+    let (first, second) = (w.define(identity, Vec::new()), w.define(constant, Vec::new()));
     let f = w.meets(first);
     w.enter(second, f);
     let f = behind(w, f, lets);
@@ -308,7 +308,7 @@ fn the_results_of_two_lambdas_that_met_are_one_type() {
 /// `let f = |x| |y| Some(x); let p = f(0u8); let q = f(0u16);`
 fn two_closures(w: &mut World, law: &mut Language, lets: usize) -> (ClassId, ClassId) {
     let defining = defining(w, law);
-    let f = w.define(defining, Vec::new(), 1);
+    let f = w.define(defining, Vec::new());
     let f = behind(w, f, lets);
     let (first, second) = (w.text(U8), w.text(U16));
     (w.call(f, &[first]), w.call(f, &[second]))

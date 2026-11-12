@@ -200,22 +200,6 @@ where
         }
     }
 
-    /// An argument that passes nothing: `nothing as _`, of a class nothing
-    /// enters. What it is passed to asks no head of it, so it is `!`, decided
-    /// last, and adds nothing to what it enters.
-    fn nothing(&mut self, item: ItemId) -> K::Id {
-        let (nothing, argument) = (self.undecided(), self.undecided());
-        self.classes.constrain(
-            Suspended::Alone {
-                lower: nothing,
-                upper: argument,
-            }
-            .into(),
-            item,
-        );
-        argument
-    }
-
     /// `callee(arguments)`, giving `result`: the callee is passed to the function
     /// type the call writes.
     fn call(&mut self, callee: K::Id, arguments: Vec<K::Id>, result: K::Id, item: ItemId) {
@@ -318,17 +302,13 @@ where
     }
 
     /// Writes `upper <- lambda`, and gives the lambda written: its class enters
-    /// `upper`, and is called once with nothing passed, a definition being a use
-    /// that passes nothing.
+    /// `upper`.
     fn defined(&mut self, upper: &Path, lambda: &ast::Lambda, label: &str) -> Result<LambdaId, String> {
         let item = self.items.item(label.to_owned());
         let (written, captured) = self.lambda(lambda, item, label)?;
         let value = (self.define)(self.classes, written, captured, item);
         let upper = self.path(upper, Side::Lower, label);
         self.classes.constrain(Bound::Enter { lower: value, upper }.into(), item);
-        let nothing = lambda.parameters.iter().map(|_| self.nothing(item)).collect();
-        let result = self.undecided();
-        self.call(value, nothing, result, item);
         Ok(written)
     }
 
