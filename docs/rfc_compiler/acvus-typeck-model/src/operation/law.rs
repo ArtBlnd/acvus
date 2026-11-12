@@ -11,10 +11,8 @@
 //! | connecting | where a part lies that a head has no place for ([`Law::place`]) | [`Place`] | the part is named there, or refused |
 //! | connecting | whether a literal's class may take a head ([`Law::admits`]) | yes or no | it is refused where not |
 //! | settling | which classes are one type by the constraints as a whole ([`Law::one`]) | pairs | they are connected |
-//! | deciding | which classes take which heads by what is recorded of them ([`Law::settled`]) | [`Heads`] | each head is given, and what that leaves is connected |
-//! | deciding, where that gives none | which classes take which heads because nothing more is to come to them ([`Law::fallback`]) | [`Heads`] | the same |
-//! | settling, at its end | what is refused of a class by what is recorded of it ([`Law::amiss`]) | refusals | they are gathered |
-//! | settling, at its end | what is refused of a class nothing more is to come to ([`Law::end`]) | refusals | they are gathered |
+//! | deciding | which classes take which heads now ([`Law::heads`]) | [`Heads`] | each head is given, and what that leaves is connected |
+//! | settling, at its end | what is refused of a class ([`Law::end`]) | refusals | they are gathered |
 //!
 //! Every question but the first is answered from the classes as they stand. The
 //! first may need something made before it can be answered, a signature at a
@@ -280,23 +278,10 @@ where
     /// Whether a class a literal registered `domain` in may be decided as `head`.
     fn admits(&self, head: &Shape<K::Id>, domain: &Domain) -> bool;
 
-    /// The heads the classes of `asked`, each undecided, take by what is recorded
-    /// of them: what has entered a class, and the declared class it is bound to.
-    /// Nothing still to come to a class changes such a head. A class that `held`
-    /// says is held may still be merged with another, and takes none.
-    fn settled(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>;
+    /// The heads the classes of `asked`, each undecided, take now. A class that
+    /// `held` says is held may still be merged with another, and takes none.
+    fn heads(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>;
 
-    /// The heads the classes of `asked` take where what is recorded gives no class
-    /// a head, because nothing more is to come to them: what a class nothing has
-    /// entered is passed to, or what it falls back to. A class that `held` says
-    /// is held takes none.
-    fn fallback(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>;
-
-    /// What is refused of `class` by what is recorded of it, whatever is still to
-    /// come to it.
-    fn amiss(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>>;
-
-    /// What is refused of `class` where nothing more is to come to it and nothing
-    /// more can be done.
+    /// What is refused of `class` when nothing more can be done.
     fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>>;
 }

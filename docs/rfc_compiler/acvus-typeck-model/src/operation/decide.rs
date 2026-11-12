@@ -11,31 +11,18 @@ use super::law::{Head, Heads, Law};
 use super::settle::asked;
 use super::take_in::take_in;
 
-/// What gives a class its head.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Giving {
-    /// What is recorded of the class ([`Law::settled`]). Nothing still to come to
-    /// the class changes this.
-    WhatIsRecorded,
-    /// That nothing more is to come to the class ([`Law::fallback`]).
-    NothingMoreToCome,
-}
-
-/// Decides every class that `giving` gives a head now, and says whether one
-/// was decided. `at` is the item a decision goes by, and `visit` gives the
-/// classes in the order they are asked in, which the outcome does not depend on.
-///
-/// That nothing more is to come is true of a class of a body that is finished,
-/// and of none of a frozen one ([`Store::is_frozen`]), so it gives no head to
-/// those.
+/// Decides every class that may be decided now, and says whether one was
+/// decided. `at` is the item a decision goes by, and `visit` gives the classes in
+/// the order they are asked in, which the outcome does not depend on.
 ///
 /// What is held is found once ([`Classes::deciding`]), the law says which classes
-/// not held take which heads, and each is given through the one way a class is
-/// decided. A head decided has the class's own parts, so what the law gives
-/// decides the head alone, and the bounds on the class connect its parts.
+/// not held take which heads ([`Law::heads`]), and each is given through the one
+/// way a class is decided. A head decided has the class's own parts, so what the
+/// law gives decides the head alone, and the bounds on the class connect its
+/// parts.
 ///
 /// This is the only place a class is decided by solving.
-pub fn decide<K, L, F>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, at: ItemId, visit: &F, giving: Giving) -> bool
+pub fn decide<K, L, F>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, at: ItemId, visit: &F) -> bool
 where
     K: ClassKind,
     L: Law<K>,
@@ -43,15 +30,8 @@ where
 {
     let mut undecided = asked(&store.classes, visit);
     undecided.retain(|class| !store.classes.is_decided(*class));
-    if giving == Giving::NothingMoreToCome {
-        undecided.retain(|class| !store.is_frozen(*class));
-    }
     let mut deciding = store.classes.deciding();
-    let held = |class| deciding.is_held(class);
-    let Heads { heads, refused } = match giving {
-        Giving::WhatIsRecorded => law.settled(deciding.classes(), &undecided, &held),
-        Giving::NothingMoreToCome => law.fallback(deciding.classes(), &undecided, &held),
-    };
+    let Heads { heads, refused } = law.heads(deciding.classes(), &undecided, &|class| deciding.is_held(class));
     for refusal in refused {
         outcome.refuse(refusal);
     }

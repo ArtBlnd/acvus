@@ -23,31 +23,8 @@ Each is done in one place, and there is no other way to do what it does.
 | looking at a constraint | Asks the law what the constraint comes to, and does what follows: finishes it, connects its pairs and records the constraints that take its place, or finishes it and refuses, or states what it waits on and holds apart. | `operation::judge::look` |
 | deciding | Gathers what a rung offers, and gives those heads together through `Classes::deciding`. | `operation::decide::decide` |
 
-`operation::settle::settle` takes them in turn: every constraint awake is looked at until none
-is; then every class that what is recorded gives a head is decided, and back to looking while
-any was. Where none is, what is recorded is at its fixpoint. Only then is a class decided
-because nothing more is to come to it, and back to looking while any was.
-
-| What gives a head | When | It is right of |
-|---|---|---|
-| what is recorded of the class: what has entered it, the declared class it is bound to | wherever it is there | any class, whatever is still to come to it |
-| that nothing more is to come to the class: what it is passed to, the parts named on it, a literal's fallback, `!` | at the fixpoint | a class nothing more is to come to |
-
-The refusal of a class with no head, at the end, is of the second sort too.
-
-Whether more is to come to a class is told by the body it is of, and a body is a scope
-(`primitive::scope`). A body is finished where nothing more is to come to it: the root, which
-nothing is passed to, and a body where it is used, which has what was passed. A body where it
-is written is frozen (`Scopes::frozen_child`), and so is what lies in it. What is of the second
-sort is done of the classes of a finished body alone, and two places hold it to that:
-
-| Place | What it leaves out for a class of a frozen body |
-|---|---|
-| `operation::decide::decide` | asking the law for a head because nothing more is to come |
-| the end of `operation::settle::settle` | refusing the class for having no head |
-
-What is recorded of a class gives it its head, and refuses a class that is its own part, in a
-frozen body as in a finished one.
+`operation::settle::settle` takes them in turn: every constraint awake is looked at until none is,
+then every class that may be decided is, and back to looking while anything was decided.
 
 ## 3. The law
 
@@ -61,10 +38,8 @@ and finishes nothing.
 | which classes are one type by the constraints as a whole | pairs |
 | where a part named on a class lies, once the class's head has no place of that name | `Place`: within another part, with an adjustment, or nowhere |
 | whether a literal's class may take a head | yes or no |
-| what heads classes take by what is recorded of them | `Heads` |
-| what heads classes take because nothing more is to come to them | `Heads` |
-| what is refused of a class by what is recorded of it | what is refused, and of which classes |
-| what is refused of a class nothing more is to come to | the same |
+| what head a rung offers a class | `Offer`: nothing, a head, or a refusal |
+| what is refused of a class at the end | what is refused, and of which classes |
 
 What a law refuses, it refuses of classes. What decided those classes, and every connection
 that made them, is gathered in one place, `Outcome::gather`, once settling has run to its end.
@@ -89,10 +64,8 @@ The language's law is `operation::language`, one rule in one place:
 | the functions declared: a table, and no rule | `functions` |
 | classes that enter one another are one class | `enter::entering_one_another` |
 | a part named on a reference is read through it, and is read where it lies, whatever it was where it was named | `Language::place`, `connect::take_in` |
-| the rungs of what is recorded: the join of what enters and of what is written, the head of the declared class a class is bound to | `rungs::settled` |
-| the rungs of nothing more to come: the one head a class is passed to, the head the parts named make, a literal's fallback, `!` | `rungs::fallback` |
-| refused by what is recorded: a class that is its own part | `rungs::amiss` |
-| refused where nothing more is to come: a class still undecided | `rungs::end` |
+| the rungs: the join of what enters and of what is written, the one head from above, the head the parts named make, a literal's fallback, `!` | `rungs` |
+| at the end: a class that is its own part, a class still undecided | `rungs::end` |
 
 A rule reads through a `View`, which is the store as it is, or with heads supposed of some
 undecided classes. The rung that gives a head from above uses that: a class takes the one head,
@@ -121,10 +94,6 @@ constraint nothing has happened to is not looked at again.
 
 ## 5. What is not tested, and what is not there
 
-- **A frozen body, in a program.** Nothing the text records and no rule of the law makes a
-  frozen scope: the text records a definition as a use that passes nothing, in a scope that is
-  finished. Only `operation::tests` makes one, by hand, and holds the two places of §2 to what
-  they leave out.
 - **Guards going down as structure grows, in a program.** The ledger gives a part that comes
   to be named, or merged in, the guards of the class above it, and its own tests hold it to
   that. No program run through the law shows it: a guard is read only when a `Deciding` is

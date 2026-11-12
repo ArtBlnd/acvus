@@ -33,14 +33,3 @@ where
     /// Every brand made, with the item it was made by.
     pub brands: Arena<BrandId, ItemId>,
 }
-
-impl<K> Store<K>
-where
-    K: ClassKind,
-{
-    /// Whether more is still to come to `class`: it is of a frozen body
-    /// ([`Scopes::is_frozen`]).
-    pub fn is_frozen(&self, class: K::Id) -> bool {
-        self.scopes.is_frozen(self.classes.get(self.classes.find(class)).scope)
-    }
-}

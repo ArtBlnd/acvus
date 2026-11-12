@@ -1,28 +1,18 @@
 //! The rungs: the head a class may take, each rung only where none before it
 //! decides anything.
 //!
-//! What is recorded of a class settles its head, whatever is still to come to
-//! it ([`settled`]):
-//!
-//! | A class takes | Where |
-//! |---|---|
-//! | the join of what enters it | every class something enters, once each of those has a head |
-//! | the head of the declared class it is bound to | a class nothing enters |
-//!
-//! Where that gives no class a head, a class takes one because nothing more is
-//! to come to it ([`fallback`]):
-//!
-//! | A class takes | Where |
-//! |---|---|
-//! | the one head it is passed to | a class nothing enters |
-//! | the head made from the parts named on it | a class nothing enters and that is passed to no head |
-//! | the fallback of its literals' domain | a class nothing enters and that is passed to no head |
-//! | `!` | a class nothing else gives a head |
+//! | Rung | A class takes | Where |
+//! |---|---|---|
+//! | 0 | the join of what enters it | every class something enters, once each of those has a head |
+//! | 1 | the one head its upper bounds give it | a class nothing enters |
+//! | 2 | the head made from the parts named on it | a class nothing enters and no upper bound gives a head |
+//! | 3 | the fallback of its literals' domain | a class nothing enters and no upper bound gives a head |
+//! | 4 | `!` | a class nothing else gives a head |
 //!
 //! What is written into a class enters it: the fields written make an object,
-//! which the join joins with what enters. `!` says nothing: where the join of
-//! what enters a class is `!`, the class takes the head the parts named on it
-//! make, read or written, as it does where nothing enters.
+//! which rung 0 joins with what enters. `!` says nothing: where the join of what
+//! enters a class is `!`, rung 0 gives the head the parts named on the class make,
+//! read or written, as rung 2 does where nothing enters.
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,25 +29,15 @@ use super::super::law::{Heads, Offer};
 use super::functions::Functions;
 use super::{Looked, Told, View, admits, enter, tell};
 
-/// The heads classes take by what is recorded of them: those of the first of
-/// these rungs that gives any.
-pub fn settled<K>(classes: &Classes<K>, functions: &Functions, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>
+/// The heads classes take now: those of the first rung of the language's ladder
+/// that gives any.
+pub fn heads<K>(classes: &Classes<K>, functions: &Functions, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
     let said: BTreeMap<K::Id, Said<'_, K>> = asked.iter().map(|class| (*class, Said::of(classes, functions, *class))).collect();
-    let ladder: [&dyn Fn(K::Id) -> Offer<K>; 2] = [&|class| join(&said[&class]), &|class| from_the_declared(&said[&class])];
-    Heads::of_ladder(ladder, asked, held)
-}
-
-/// The heads classes take because nothing more is to come to them: those of the
-/// first of these rungs that gives any.
-pub fn fallback<K>(classes: &Classes<K>, functions: &Functions, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    let said: BTreeMap<K::Id, Said<'_, K>> = asked.iter().map(|class| (*class, Said::of(classes, functions, *class))).collect();
-    let ladder: [&dyn Fn(K::Id) -> Offer<K>; 4] = [
+    let ladder: [&dyn Fn(K::Id) -> Offer<K>; 5] = [
+        &|class| join(&said[&class]),
         &|class| from_above(&said[&class]),
         &|class| from_parts(&said[&class]),
         &|class| domain(&said[&class]),
@@ -70,7 +50,7 @@ where
 ///
 /// The rungs are asked of a class one after another, and each reads the same
 /// few things of it: what enters it, and what is asked of it from above. The
-/// store does not change while heads are found, as it is borrowed. So each
+/// store does not change while heads are found, as [`heads`] borrows it. So each
 /// is found once, when a rung first reads it, and kept here for the rungs after;
 /// a rung that is never reached costs nothing.
 struct Said<'a, K>
@@ -113,33 +93,6 @@ where
     fn may_take(&self) -> impl Iterator<Item = &Shape<K::Id>> {
         let domain = domain_of(self.classes, self.class);
         self.asked().iter().filter(move |head| domain.as_ref().is_none_or(|(domain, _)| admits(head, domain)))
-    }
-
-    /// The one head of `candidates` the class takes: the one that every
-    /// constraint waiting on it would have it take ([`taken`]), where there is
-    /// exactly one such.
-    ///
-    /// Two candidates of one layer are one: which of them gives the head makes
-    /// no difference, as only its constructor and members are taken.
-    fn the_one_taken<'h, I>(&self, candidates: I) -> Offer<K>
-    where
-        I: IntoIterator<Item = &'h Shape<K::Id>>,
-        K: 'h,
-    {
-        let (classes, functions, class) = (self.classes, self.functions, self.class);
-        let mut of_each_layer: BTreeMap<Shape<()>, &Shape<K::Id>> = BTreeMap::new();
-        for head in candidates {
-            of_each_layer.entry(head.layer()).or_insert(head);
-        }
-        let would_be_taken = |head: &&Shape<K::Id>| taken(View::of(classes), functions, class, head, &mut BTreeSet::new());
-        let mut taken_heads = of_each_layer.into_values().filter(would_be_taken).cloned();
-        match (taken_heads.next(), taken_heads.next()) {
-            (Some(shape), None) => Offer::Head {
-                shape,
-                by: classes.waiting_on(class).map(|(_, at)| *at).collect(),
-            },
-            _ => Offer::Nothing,
-        }
     }
 
     /// Whether heads are asked of the class and it may take none of them: it
@@ -200,7 +153,7 @@ where
     (!fields.is_empty()).then_some((Shape::Object(fields), by))
 }
 
-/// The join of the heads that enter the class, once each has a head,
+/// Rung 0: the join of the heads that enter the class, once each has a head,
 /// and of what its own parts say.
 ///
 /// | What enters | The head |
@@ -332,55 +285,32 @@ where
     true
 }
 
-/// The head of each declared class `class` is bound to be one type with: what
-/// each such bound asks of it. `!` asks nothing of what meets it.
-fn declared<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Vec<Shape<K::Id>>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    let root = classes.find(class).id();
-    let view = View::of(classes);
-    classes
-        .waiting_on(root)
-        .filter(|(constraint, _)| matches!(constraint, Constraint::Bound(Bound::Equal { .. })))
-        .flat_map(|(constraint, at)| tell(&view, functions, constraint, *at).asks)
-        .filter(|(of, head)| classes.find(*of).id() == root && *head != Shape::Never)
-        .map(|(_, head)| head)
-        .collect()
-}
-
-/// A class nothing enters takes the head of the declared class it is bound to
-/// be one type with, where it may take it.
+/// Rung 1: a class nothing enters takes the one head, of those asked of it
+/// that it may take, that every constraint waiting on it would have it take.
 ///
-/// This is settled by what is recorded: the class is that type whatever comes to
-/// it, and what comes is held against it.
-fn from_the_declared<K>(said: &Said<'_, K>) -> Offer<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    if !said.entering().is_empty() {
-        return Offer::Nothing;
-    }
-    let declared = declared(said.classes, said.functions, said.class);
-    let domain = domain_of(said.classes, said.class);
-    let may_take = declared.iter().filter(|head| domain.as_ref().is_none_or(|(domain, _)| admits(head, domain)));
-    said.the_one_taken(may_take)
-}
-
-/// A class nothing enters takes the one head, of those asked of it that it may
-/// take, that every constraint waiting on it would have it take.
-///
-/// What asks is what the class is passed to. It gives the class its head only
-/// because nothing more is to come to the class: what entered it would have
-/// given the head, and been held against what it is passed to.
+/// Two heads asked of one layer are one candidate: which of them gives the
+/// head makes no difference, as only its constructor and members are taken.
 fn from_above<K>(said: &Said<'_, K>) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
+    let (classes, functions, class) = (said.classes, said.functions, said.class);
     if !said.entering().is_empty() {
         return Offer::Nothing;
     }
-    said.the_one_taken(said.may_take())
+    let mut candidates: BTreeMap<Shape<()>, &Shape<K::Id>> = BTreeMap::new();
+    for head in said.may_take() {
+        candidates.entry(head.layer()).or_insert(head);
+    }
+    let would_be_taken = |head: &&Shape<K::Id>| taken(View::of(classes), functions, class, head, &mut BTreeSet::new());
+    let mut taken_heads = candidates.into_values().filter(would_be_taken).cloned();
+    match (taken_heads.next(), taken_heads.next()) {
+        (Some(shape), None) => Offer::Head {
+            shape,
+            by: classes.waiting_on(class).map(|(_, at)| *at).collect(),
+        },
+        _ => Offer::Nothing,
+    }
 }
 
 /// The domain the literals of `class` leave, where any registered one.
@@ -448,8 +378,8 @@ where
     Some((shape, by))
 }
 
-/// A class that neither lower nor upper bounds decide takes the head made from
-/// the parts named on it.
+/// Rung 2: a class that neither lower nor upper bounds decide takes the head made
+/// from the parts named on it.
 fn from_parts<K>(said: &Said<'_, K>) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
@@ -463,7 +393,7 @@ where
     }
 }
 
-/// A literal's class that neither lower nor upper bounds decide takes the
+/// Rung 3: a literal's class that neither lower nor upper bounds decide takes the
 /// fallback type of its domain's row.
 fn domain<K>(said: &Said<'_, K>) -> Offer<K>
 where
@@ -492,7 +422,8 @@ where
     }
 }
 
-/// A class nothing enters, with no literal, takes `!`: nothing gives it a head.
+/// Rung 4: a class nothing enters, with no literal, takes `!`: nothing gives it
+/// a head.
 fn never<K>(said: &Said<'_, K>) -> Offer<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
@@ -506,57 +437,42 @@ where
     }
 }
 
-/// The items that named a part on `class`, where it is undecided.
-fn named_on<K>(classes: &Classes<K>, class: K::Id) -> BTreeSet<ItemId>
+/// What is refused of `class` when nothing more can be done: a class that is a
+/// part of itself has no finite type, and a class still undecided has no type.
+///
+/// A class that heads are asked of, none of which it may take, is undecided for
+/// that: rung 1 passes over such a head, as another may come, and here none has.
+pub fn end<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Vec<Refused<K>>
 where
-    K: ClassKind,
+    K: ClassKind<Constraint = Constraint<K>>,
 {
-    match &classes.get(classes.find(class)).state {
+    let root = classes.find(class);
+    let named: BTreeSet<ItemId> = match &classes.get(root).state {
         State::Undecided(undecided) => undecided
             .parts
             .values()
             .flat_map(|part| part.lower.iter().chain(&part.upper).chain(&part.carried).copied())
             .collect(),
         State::Decided(_) => BTreeSet::new(),
-    }
-}
-
-/// What is refused of `class` by what is recorded of it: a class that is a part
-/// of itself has no finite type, whatever is still to come to it.
-pub fn amiss<K>(classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>>
-where
-    K: ClassKind,
-{
-    if !classes.is_own_part(class) {
-        return Vec::new();
-    }
-    vec![Refused {
-        cause: Cause::Occurs,
-        items: named_on(classes, class),
-        of: vec![class],
-    }]
-}
-
-/// What is refused of `class` where nothing more is to come to it: a class still
-/// undecided has no type.
-///
-/// A class that heads are asked of, none of which it may take, is undecided for
-/// that: a head asked is passed over where it may not be taken, as another may
-/// come, and here none has.
-pub fn end<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Vec<Refused<K>>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
-        return Vec::new();
     };
-    let constraints = classes.constraints_of(class).map(|(_, at)| *at);
-    let domains = undecided.domains.iter().map(|(_, at)| *at);
-    let said = Said::of(classes, functions, class);
-    let cause = if said.may_take_none_of_what_is_asked() { Cause::EmptyDomain } else { Cause::UndecidedClass };
-    vec![Refused {
-        cause,
-        items: constraints.chain(named_on(classes, class)).chain(domains).collect(),
-        of: vec![class],
-    }]
+    let mut refusals = Vec::new();
+    if classes.is_own_part(class) {
+        refusals.push(Refused {
+            cause: Cause::Occurs,
+            items: named.clone(),
+            of: vec![class],
+        });
+    }
+    if let State::Undecided(undecided) = &classes.get(root).state {
+        let constraints = classes.constraints_of(class).map(|(_, at)| *at);
+        let domains = undecided.domains.iter().map(|(_, at)| *at);
+        let said = Said::of(classes, functions, class);
+        let cause = if said.may_take_none_of_what_is_asked() { Cause::EmptyDomain } else { Cause::UndecidedClass };
+        refusals.push(Refused {
+            cause,
+            items: constraints.chain(named.iter().copied()).chain(domains).collect(),
+            of: vec![class],
+        });
+    }
+    refusals
 }

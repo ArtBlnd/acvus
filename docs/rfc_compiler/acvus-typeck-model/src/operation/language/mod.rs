@@ -106,16 +106,8 @@ where
         admits(head, domain)
     }
 
-    fn settled(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
-        rungs::settled(classes, &self.functions, asked, held)
-    }
-
-    fn fallback(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
-        rungs::fallback(classes, &self.functions, asked, held)
-    }
-
-    fn amiss(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>> {
-        rungs::amiss(classes, class)
+    fn heads(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
+        rungs::heads(classes, &self.functions, asked, held)
     }
 
     fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>> {
