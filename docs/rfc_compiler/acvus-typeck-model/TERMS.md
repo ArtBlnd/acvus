@@ -364,9 +364,7 @@ them, and they are added without changing what is here. What is known to need ru
 
 A call by name, `x.m(a)`, is ruled below with the rest.
 
-What has been said so far. A lambda, its captures and its calls, a recursive one included, and
-a module, used by its name or by a call on a value of its type, and a brand are implemented
-and written by the text.
+What has been said so far.
 
 - **A lambda has two phases, its body and its instantiation.** From outside its body a lambda
   value shows its signature and nothing else; inside, the body stands where it is written.
@@ -394,10 +392,8 @@ and written by the text.
   a method puts on a parameter of `Self` is a bound of `Self`, and every method keeps it: with
   `fn add(&self, other) { .. self.x + other.x .. }` in the `impl`, `new` makes no `Self` whose
   `x` has no `+`, whether `add` is called or not. Two uses may give `Self` two types.
-- **A template is written once, is not solved, and does not change; what is solved is a copy.**
-  A copy is solved by the rules of any class, and nothing else is said of one. A bound is a
-  constraint of the template, and a bound checked is that constraint finished or refused in a
-  copy.
+- A bound is a constraint of the template, and a bound checked is that constraint finished or
+  refused in a copy.
 - **What the last rung decided is finished, and a call that comes to be known after it is held
   against that.** A call is known when what it calls is decided, which the earlier rungs do,
   so the copies of a call are there before `!` is given. Where what is called is itself
@@ -480,7 +476,6 @@ and written by the text.
   function that uses the module by the module's name makes a copy anew, as a call of it from
   anywhere does, the copy of a function lying under where it is called and not under the
   module's.
-- **A module is copied whole, and a method not called is a lambda not called.**
 - **A brand is a generic parameter.** Which brand a returned value has is what the type
   variable of the signature became in that call. There is no brand that is itself a variable
   with a bound.

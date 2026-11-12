@@ -1,8 +1,4 @@
 //! The lambdas of the text: a table, each row a template and its openings.
-//!
-//! A template is written once from the text of a body, and is not solved and
-//! does not change. What is solved is a copy, made where a function value is
-//! called ([`super::calling`]).
 
 use crate::primitive::class::Template;
 use crate::primitive::id::Arena;
