@@ -1,6 +1,6 @@
 //! The law, as programs: each test is a ruling of `TERMS.md` run.
 //!
-//! A program is built behind each count of `let`s from none to three and settled
+//! A program is built behind each count of `let`s from none to three and solved
 //! in 24 orders of asking, and comes to one outcome in all of them: a class is
 //! decided once, and only when nothing can still be merged into it.
 
@@ -86,7 +86,7 @@ where
             let mut world = World::new();
             let observed = build(&mut world, lets);
             reorder(&mut world.open, order);
-            world.settle(&Language::default());
+            world.solve(&Language::default());
             assert_eq!(world.outcome_of(observed), expected, "behind {lets} lets, in order {order}");
             let refusals = refusals_of(&world);
             let first = first.get_or_insert_with(|| refusals.clone());
@@ -114,7 +114,7 @@ fn an_exclusive_and_a_shared_reference_meet_as_shared_and_the_exclusive_one_is_r
     let place = world.meets(exclusive);
     let exclusive_enters = world.items.iter().last().expect("an item was recorded").0;
     world.enter(shared, place);
-    world.settle(&Language::default());
+    world.solve(&Language::default());
     let reborrow = vec![Adjustment::Subtype(Subtyping::Reborrow)];
     assert_eq!(world.outcome.adjustments.get(&exclusive_enters), Some(&reborrow));
 }
@@ -230,7 +230,7 @@ fn a_part_named_on_a_reference_is_read_through_it_and_the_projection_derefs() {
     let (lent, _) = world.lend(o, SHARED);
     let r = world.meets(lent);
     let (_, projection) = world.project(r, field("x"), Side::Upper);
-    world.settle(&Language::default());
+    world.solve(&Language::default());
     assert_eq!(world.outcome.adjustments, Adjustments::from([(projection, vec![Adjustment::Deref])]));
 }
 
@@ -257,7 +257,7 @@ fn a_part_named_on_references_to_a_reference_is_read_through_each_and_derefs_onc
                 let mut world = World::new();
                 let (_, projection) = build(references)(&mut world, lets);
                 reorder(&mut world.open, order);
-                world.settle(&Language::default());
+                world.solve(&Language::default());
                 assert_eq!(
                     world.outcome.adjustments.get(&projection),
                     Some(&vec![Adjustment::Deref; references]),
@@ -618,7 +618,7 @@ where
 {
     let mut world = World::new();
     let at = build(&mut world);
-    world.settle(&Language::default());
+    world.solve(&Language::default());
     if !world.outcome.refusals.is_empty() {
         let causes: BTreeSet<String> = world.outcome.refusals.iter().map(|refusal| format!("{:?}", refusal.cause)).collect();
         return Err(causes.into_iter().collect::<Vec<_>>().join(", "));
@@ -950,7 +950,7 @@ fn a_class_a_declared_result_enters_has_parts_of_its_own_compared_with_the_decla
     let declared_u8 = world.external(U8);
     let result = world.external(Shape::Option(declared_u8));
     let y = world.meets(result);
-    world.settle(&Language::default());
+    world.solve(&Language::default());
     let Some(Shape::Option(payload)) = world.head(y) else {
         panic!("`y` is an option");
     };
@@ -1008,7 +1008,7 @@ where
             let law = law_with(&mut world, rows);
             let observed = build(&mut world, lets);
             reorder(&mut world.open, order);
-            world.settle(&law);
+            world.solve(&law);
             assert_eq!(world.outcome_of(observed), expected, "behind {lets} lets, in order {order}");
             let refusals = refusals_of(&world);
             let first = first.get_or_insert_with(|| refusals.clone());
@@ -1025,7 +1025,7 @@ where
     let mut world = World::new();
     let law = law_with(&mut world, rows);
     let at = build(&mut world);
-    world.settle(&law);
+    world.solve(&law);
     if !world.outcome.refusals.is_empty() {
         let causes: BTreeSet<String> = world.outcome.refusals.iter().map(|refusal| format!("{:?}", refusal.cause)).collect();
         return Err(causes.into_iter().collect::<Vec<_>>().join(", "));
@@ -1142,7 +1142,7 @@ fn each_passing_makes_the_signature_of_a_row_anew() {
         let (lent, _) = world.lend(v, SHARED);
         world.pass(lent, parameter);
     }
-    world.settle(&law);
+    world.solve(&law);
     assert_eq!(world.outcome.refusals, Vec::new());
 }
 
@@ -1447,7 +1447,7 @@ where
         let mut world = World::new();
         given = build(&mut world).into_iter().collect();
         reorder(&mut world.open, order);
-        world.settle(&Language::default());
+        world.solve(&Language::default());
         let mut refusals = world.outcome.refusals.iter().filter(|refusal| refusal.cause == cause);
         let refusal = refusals.next().expect("the program is refused by the cause");
         assert_eq!(refusals.next(), None, "one refusal by the cause, in order {order}");
@@ -1558,6 +1558,13 @@ impl Law<Live> for Odd {
         Heads::of_ladder(ladder, asked, held)
     }
 
+    fn fixpoint(&self, _: &Classes<Live>, _: &[ClassId], _: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
+        Heads {
+            heads: Vec::new(),
+            refused: Vec::new(),
+        }
+    }
+
     fn end(&self, _: &Classes<Live>, _: ClassId) -> Vec<Refused<Live>> {
         Vec::new()
     }
@@ -1571,7 +1578,7 @@ fn a_law_of_no_language_runs_through_the_same_operations() {
         let a_into_b = world.enter(a, b);
         let b_into_c = world.enter(b, c);
         reorder(&mut world.open, order);
-        world.settle(&Odd);
+        world.solve(&Odd);
         assert_eq!(world.outcome.refusals, Vec::new());
         assert_eq!(world.ty(c), "Option<Option<u8>>", "in order {order}");
         let deref = vec![Adjustment::Deref];

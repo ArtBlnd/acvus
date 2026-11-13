@@ -1,4 +1,4 @@
-//! Settling: taking the three operations in turn until nothing is left to do.
+//! Settling: taking the three operations in turn until nothing changes.
 
 use std::collections::BTreeSet;
 
@@ -13,16 +13,16 @@ use super::decide::decide;
 use super::judge::look;
 use super::law::{Law, Pair};
 
-/// Solves what has been recorded.
+/// Settles what has been recorded (O18).
 ///
 /// ```text
 /// look:    each constraint awake is looked at, and each pair the law finds one type is
 ///          connected, until no constraint is awake.
-/// decide:  every class that may be decided now is decided, by the first rung that
-///          decides any. Where one was, back to look.
-/// end:     what the law refuses of each class is refused, and what settled the
-///          classes of each refusal is gathered.
+/// decide:  every class the law gives a head as solving settles is decided
+///          ([`Law::heads`]). Where one was, back to look.
 /// ```
+///
+/// Where none is decided nothing changes any more: the fixpoint.
 ///
 /// A constraint is awake when it is recorded, and when a class it waits on is merged
 /// or decided, so nothing is looked at that nothing has happened to. A class is
@@ -49,16 +49,10 @@ where
                 break;
             }
         }
-        if !decide(store, law, outcome, at, visit) {
+        if !decide(store, law, outcome, at, visit, L::heads) {
             break;
         }
     }
-    for class in asked(&store.classes, visit) {
-        for refused in law.end(&store.classes, class) {
-            outcome.refuse(refused);
-        }
-    }
-    outcome.gather(&store.classes);
 }
 
 /// The classes `visit` gives, each once, by its root, in the order it first

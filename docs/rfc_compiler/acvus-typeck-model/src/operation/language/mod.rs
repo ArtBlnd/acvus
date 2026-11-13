@@ -110,6 +110,10 @@ where
         rungs::heads(classes, &self.functions, asked, held)
     }
 
+    fn fixpoint(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
+        rungs::fixpoint(classes, &self.functions, asked, held)
+    }
+
     fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>> {
         rungs::end(classes, &self.functions, class)
     }

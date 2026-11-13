@@ -1,4 +1,4 @@
-//! A world to record a program in and settle it, for the tests of the law.
+//! A world to record a program in and solve it, for the tests of the law.
 
 use std::collections::BTreeSet;
 
@@ -14,7 +14,7 @@ use crate::store::classes::Classes;
 
 use super::Outcome;
 use super::law::Law;
-use super::settle::settle;
+use super::solve::solve;
 
 pub(super) const SHARED: Mutability = Mutability::Shared;
 pub(super) const EXCLUSIVE: Mutability = Mutability::Exclusive;
@@ -24,7 +24,7 @@ pub(super) struct World {
     pub(super) store: Store<Live>,
     pub(super) items: Arena<ItemId, &'static str>,
     pub(super) outcome: Outcome<Live>,
-    /// The classes made here, in the order settling asks them in, ahead of any
+    /// The classes made here, in the order solving asks them in, ahead of any
     /// other class.
     pub(super) open: Vec<ClassId>,
 }
@@ -184,17 +184,17 @@ impl World {
         class
     }
 
-    /// Settles by `law`, asking classes in the order `open` holds them.
-    pub(super) fn settle<L>(&mut self, law: &L)
+    /// Solves by `law`, asking classes in the order `open` holds them.
+    pub(super) fn solve<L>(&mut self, law: &L)
     where
         L: Law<Live>,
     {
-        let at = self.items.push("settling");
+        let at = self.items.push("solving");
         let open = self.open.clone();
         let visit = |classes: &Classes<Live>| -> Vec<ClassId> {
             open.iter().copied().chain(classes.roots().map(|root| root.id())).collect()
         };
-        settle(&mut self.store, law, &mut self.outcome, at, &visit);
+        solve(&mut self.store, law, &mut self.outcome, at, &visit);
     }
 
     pub(super) fn head(&self, class: ClassId) -> Option<Shape<ClassId>> {

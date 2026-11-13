@@ -24,7 +24,9 @@ Each is done in one place, and there is no other way to do what it does.
 | deciding | Gathers what a rung offers, and gives those heads together through `Classes::deciding`. | `operation::decide::decide` |
 
 `operation::settle::settle` takes them in turn: every constraint awake is looked at until none is,
-then every class that may be decided is, and back to looking while anything was decided.
+then every class the law gives a head as solving settles is decided, and back to looking while
+anything was decided. `operation::solve::solve` settles, decides every class the law gives a head
+at the fixpoint, and settles again while anything was decided.
 
 ## 3. The law
 
@@ -42,7 +44,7 @@ and finishes nothing.
 | what is refused of a class at the end | what is refused, and of which classes |
 
 What a law refuses, it refuses of classes. What decided those classes, and every connection
-that made them, is gathered in one place, `Outcome::gather`, once settling has run to its end.
+that made them, is gathered in one place, `Outcome::gather`, once solving has run to its end.
 That is the only place the connections of a class are read. A law is given the whole store to
 read, so no type keeps a rule from reading them: what keeps it is that nothing a law answers
 has a place to carry them, other than a refusal's own items.
@@ -64,7 +66,7 @@ The language's law is `operation::language`, one rule in one place:
 | the functions declared: a table, and no rule | `functions` |
 | classes that enter one another are one class | `enter::entering_one_another` |
 | a part named on a reference is read through it, and is read where it lies, whatever it was where it was named | `Language::place`, `connect::take_in` |
-| the rungs: the join of what enters and of what is written, the one head from above, the head the parts named make, a literal's fallback, `!` | `rungs` |
+| the rungs: the join of what enters and of what is written, the head of the declared class a class is bound to, the one head from above, the head the parts named make, a literal's fallback, `!` | `rungs` |
 | at the end: a class that is its own part, a class still undecided | `rungs::end` |
 
 A rule reads through a `View`, which is the store as it is, or with heads supposed of some

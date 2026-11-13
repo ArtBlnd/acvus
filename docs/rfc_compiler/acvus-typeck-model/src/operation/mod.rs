@@ -6,7 +6,8 @@
 //! | looking at a constraint | judges a constraint between two classes, or says what it waits for | [`judge::look`] |
 //! | deciding | gives an undecided class its head | [`decide::decide`] |
 //!
-//! [`settle::settle`] takes them in turn until nothing is left to do. None of them
+//! [`settle::settle`] takes them in turn to the fixpoint, and [`solve::solve`]
+//! goes on from each fixpoint until nothing is left to do. None of them
 //! knows a rule of the language: each asks a [`law::Law`], which says what a constraint
 //! comes to, what head a class may take, and where a named part lies. The
 //! language's own rules are [`language::Language`], and any other law that keeps
@@ -18,6 +19,7 @@ pub mod judge;
 pub mod language;
 pub mod law;
 pub mod settle;
+pub mod solve;
 mod take_in;
 
 #[cfg(test)]
@@ -41,7 +43,7 @@ where
     K: ClassKind,
 {
     /// The refusals, each with what settled the classes it is of. They are
-    /// gathered when settling ends ([`Outcome::gather`]).
+    /// gathered when solving ends ([`Outcome::gather`]).
     pub refusals: Vec<Refusal>,
     /// What has been refused and not gathered yet.
     pub refused: Vec<Refused<K>>,

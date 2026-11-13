@@ -14,7 +14,7 @@ use crate::operation::Outcome;
 use crate::operation::language::Language;
 use crate::operation::language::functions::Functions;
 use crate::operation::language::lambdas::{Defined, Lambda, Lambdas};
-use crate::operation::settle::settle;
+use crate::operation::solve::solve;
 use crate::primitive::class::{ClassKind, Live, Origin, Side, State, Template};
 use crate::primitive::constraint::{Bound, Constraint, Suspended};
 use crate::primitive::domain::Domain;
@@ -502,7 +502,7 @@ impl Recorded {
 
     /// Solves what is recorded, asking the classes the text made in the order
     /// `order` names: as made, reversed, or shuffled by it.
-    pub fn settle(&mut self, order: u64) {
+    pub fn solve(&mut self, order: u64) {
         let mut asked = self.made.clone();
         match order {
             0 => {}
@@ -516,11 +516,11 @@ impl Recorded {
                 }
             }
         }
-        let at = self.items.item("settling".to_owned());
+        let at = self.items.item("solving".to_owned());
         let visit = |classes: &Classes<Live>| -> Vec<ClassId> {
             asked.iter().copied().chain(classes.roots().map(|root| root.id())).collect()
         };
-        settle(&mut self.store, &self.law, &mut self.outcome, at, &visit);
+        solve(&mut self.store, &self.law, &mut self.outcome, at, &visit);
     }
 
     /// The class `path` gives as the store stands, recording nothing: none where
@@ -842,7 +842,7 @@ pub fn run(text: &str, orders: u64) -> Result<(), Failed> {
     let mut first = None;
     for order in 0..orders {
         let mut recorded = record(&program).map_err(Failed::Unread)?;
-        recorded.settle(order);
+        recorded.solve(order);
         if let Err(violations) = recorded.store.classes.verify() {
             return Err(Failed::Differs(format!("in order {order}, the store is broken: {violations:?}")));
         }

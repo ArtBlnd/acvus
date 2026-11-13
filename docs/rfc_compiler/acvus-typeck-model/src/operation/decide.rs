@@ -16,22 +16,25 @@ use super::take_in::take_in;
 /// the order they are asked in, which the outcome does not depend on.
 ///
 /// What is held is found once ([`Classes::deciding`]), the law says which classes
-/// not held take which heads ([`Law::heads`]), and each is given through the one
-/// way a class is decided. A head decided has the class's own parts, so what the
-/// law gives decides the head alone, and the bounds on the class connect its
-/// parts.
+/// not held take which heads, and each is given through the one way a class is
+/// decided. A head decided has the class's own parts, so what the law gives
+/// decides the head alone, and the bounds on the class connect its parts.
+///
+/// `ask` is the question the law is asked: [`Law::heads`] as solving settles,
+/// and [`Law::fixpoint`] at the fixpoint.
 ///
 /// This is the only place a class is decided by solving.
-pub fn decide<K, L, F>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, at: ItemId, visit: &F) -> bool
+pub fn decide<K, L, F, H>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, at: ItemId, visit: &F, ask: H) -> bool
 where
     K: ClassKind,
     L: Law<K>,
     F: Fn(&Classes<K>) -> Vec<K::Id>,
+    H: Fn(&L, &Classes<K>, &[K::Id], &dyn Fn(K::Id) -> bool) -> Heads<K>,
 {
     let mut undecided = asked(&store.classes, visit);
     undecided.retain(|class| !store.classes.is_decided(*class));
     let mut deciding = store.classes.deciding();
-    let Heads { heads, refused } = law.heads(deciding.classes(), &undecided, &|class| deciding.is_held(class));
+    let Heads { heads, refused } = ask(law, deciding.classes(), &undecided, &|class| deciding.is_held(class));
     for refusal in refused {
         outcome.refuse(refusal);
     }

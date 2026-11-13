@@ -166,7 +166,7 @@ where
             let mut law = Language::default();
             let observed = build(&mut world, &mut law, lets);
             reorder(&mut world.open, order);
-            world.settle(&law);
+            world.solve(&law);
             assert_eq!(world.outcome_of(observed), expected, "behind {lets} lets, in order {order}");
             let mut refusals: Vec<(Cause, BTreeSet<ItemId>, BTreeSet<ItemId>)> = world
                 .outcome
@@ -277,7 +277,7 @@ fn a_body_is_refused_where_it_is_defined_and_once_however_often_it_is_called() {
             let argument = world.text(U8);
             world.call(f, &[argument]);
         }
-        world.settle(&law);
+        world.solve(&law);
         let causes: Vec<Cause> = world.outcome.refusals.iter().map(|refusal| refusal.cause).collect();
         // The class that takes no head is refused as undecided besides, as anywhere.
         assert_eq!(causes, vec![Cause::Mismatch, Cause::UndecidedClass], "called {calls} times");
