@@ -991,7 +991,8 @@ fn law_with(world: &mut World, rows: &[(&'static str, Ty, Ty)]) -> Language {
     let mut law = Language::default();
     for (name, parameter, result) in rows {
         let by = world.items.push("declared");
-        law.functions.declare(Name::new(*name), std::slice::from_ref(parameter), result, &world.store.scopes, by);
+        let crate::store::Store { classes, scopes, closures, .. } = &mut world.store;
+        law.functions.declare(classes, scopes, closures, Name::new(*name), std::slice::from_ref(parameter), result, by);
     }
     law
 }
@@ -1543,7 +1544,7 @@ impl Law<Live> for Odd {
         true
     }
 
-    fn heads(&self, classes: &Classes<Live>, _: &super::law::Bodies<'_>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
+    fn heads(&self, classes: &Classes<Live>, _: &super::law::Bodies<'_, Live>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
         let only = |class: ClassId| {
             let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
                 return Offer::Nothing;
@@ -1558,14 +1559,14 @@ impl Law<Live> for Odd {
         Heads::of_ladder(ladder, asked, held)
     }
 
-    fn fixpoint(&self, _: &Classes<Live>, _: &super::law::Bodies<'_>, _: &[ClassId], _: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
+    fn fixpoint(&self, _: &Classes<Live>, _: &super::law::Bodies<'_, Live>, _: &[ClassId], _: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
         Heads {
             heads: Vec::new(),
             refused: Vec::new(),
         }
     }
 
-    fn end(&self, _: &Classes<Live>, _: &super::law::Bodies<'_>, _: ClassId) -> Vec<Refused<Live>> {
+    fn end(&self, _: &Classes<Live>, _: &super::law::Bodies<'_, Live>, _: ClassId) -> Vec<Refused<Live>> {
         Vec::new()
     }
 

@@ -11,24 +11,9 @@ use super::id::Id;
 use super::refusal::{Cause, Refused};
 use super::scope::Scopes;
 use super::ty::{PartKey, Shape};
-use super::{ClassId, ItemId, ScopeId, TemplateId};
+use super::{ClassId, ItemId, ScopeId};
 
 /// A kind of class, which gives its classes their ids.
-///
-/// Classes of two kinds are kept in two stores, and an id of one kind names
-/// no class of the other:
-///
-/// ```compile_fail
-/// use acvus_typeck_model::primitive::class::{Live, Template};
-/// use acvus_typeck_model::primitive::scope::Scopes;
-/// use acvus_typeck_model::store::classes::Classes;
-///
-/// let scopes = Scopes::new();
-/// let mut templates = Classes::<Template>::default();
-/// let live = Classes::<Live>::default();
-/// let hole = templates.undecided(scopes.root());
-/// live.find(hole);
-/// ```
 ///
 /// A kind is a marker with no value of its own; it asks for the traits the
 /// records of its classes derive, as a derive asks them of the kind.
@@ -45,16 +30,6 @@ pub struct Live;
 
 impl ClassKind for Live {
     type Id = ClassId;
-    type Constraint = Constraint<Self>;
-}
-
-/// The classes of a signature: recorded once, never solved, and copied at each
-/// use.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
-pub struct Template;
-
-impl ClassKind for Template {
-    type Id = TemplateId;
     type Constraint = Constraint<Self>;
 }
 
@@ -242,12 +217,10 @@ impl<K> Class<K>
 where
     K: ClassKind,
 {
-    /// The same class, with every id it holds given by `f`, as a class of the
-    /// kind `J`.
-    pub fn translate<J, F>(self, mut f: F) -> Class<J>
+    /// The same class, with every id it holds given by `f`.
+    pub fn renamed<F>(self, mut f: F) -> Self
     where
-        J: ClassKind,
-        F: FnMut(K::Id) -> J::Id,
+        F: FnMut(K::Id) -> K::Id,
     {
         let state = match self.state {
             State::Decided(decided) => State::Decided(Decided {

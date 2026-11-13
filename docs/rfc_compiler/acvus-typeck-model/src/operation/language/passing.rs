@@ -37,20 +37,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::adjustment::{Adjustment, Subtyping};
-use crate::primitive::class::{ClassKind, State, Template};
+use crate::primitive::class::{ClassKind, State};
 use crate::primitive::constraint::{Bound, Constraint};
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{Mutability, Shape};
-use crate::primitive::{ItemId, Name, TemplateId};
+use crate::primitive::{ItemId, Name};
 use crate::store::classes::Classes;
 
 use super::super::law::{Looked, Pair, Scribe};
+use super::calling::Used;
 use super::functions::{Functions, Named, Row};
-use super::templates::Used;
 use super::{Then, Told, View};
 
-/// Types as they are written somewhere: in the store being solved, or in a row of
-/// the table, not made into classes of that store yet.
+/// Types as they are written somewhere: by what is being solved, or in the body
+/// of a function, read where it lies and not made anew yet.
 pub(super) trait Written {
     type Id: Copy + Ord;
 
@@ -84,22 +84,35 @@ where
     }
 }
 
-impl Written for Classes<Template> {
-    type Id = TemplateId;
+/// The body of a function, read where it lies. A class of it with no head is a
+/// hole of a signature not made yet.
+///
+/// What is read here is of the body and not of a use: it is one type with
+/// nothing, and a class of it is given as the class it becomes once the body is
+/// made anew.
+pub(super) struct Lying<'a, K>(pub(super) &'a Classes<K>)
+where
+    K: ClassKind;
 
-    fn head(&self, id: TemplateId) -> Option<&Shape<TemplateId>> {
-        match &self.get(self.find(id)).state {
+impl<K> Written for Lying<'_, K>
+where
+    K: ClassKind,
+{
+    type Id = K::Id;
+
+    fn head(&self, id: K::Id) -> Option<&Shape<K::Id>> {
+        match &self.0.get(self.0.find(id)).state {
             State::Decided(decided) => Some(&decided.shape),
             State::Undecided(_) => None,
         }
     }
 
-    fn declared(&self, id: TemplateId) -> bool {
-        self.is_decided(id)
+    fn declared(&self, id: K::Id) -> bool {
+        self.0.is_decided(id)
     }
 
-    fn open(&self, id: TemplateId) -> bool {
-        !self.is_decided(id)
+    fn open(&self, id: K::Id) -> bool {
+        !self.0.is_decided(id)
     }
 }
 
@@ -440,7 +453,7 @@ where
     K: ClassKind,
 {
     pub(super) function: Named,
-    pub(super) fit: Fit<K::Id, TemplateId>,
+    pub(super) fit: Fit<K::Id, K::Id>,
 }
 
 /// Every function of the name `name` that `receiver` goes to, and each
@@ -460,8 +473,11 @@ where
 {
     let mut found = Vec::new();
     let mut undecided = BTreeSet::new();
-    for (function, template, first) in functions.taking_a_receiver(name) {
-        match receiver_fits(view, receiver, template, first, read) {
+    for (function, closure) in functions.named(name) {
+        let Some(first) = view.closures.get(closure).parameters.first().copied() else {
+            continue;
+        };
+        match receiver_fits(view, receiver, &Lying(view.classes), first, read) {
             Fits::Yes(fit) => found.push(Received { function, fit }),
             Fits::Undecided(part) => {
                 undecided.insert(part);
@@ -477,7 +493,7 @@ where
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Site<I> {
     Solved(I),
-    Step(usize, TemplateId),
+    Step(usize, I),
 }
 
 /// A step of a way: how what comes to it fits what it goes to, each class by
@@ -511,10 +527,10 @@ where
     let mut found = Vec::new();
     let mut undecided = BTreeSet::new();
     for (index, row) in functions.rows.iter().enumerate() {
-        let Some(parameter) = row.only_parameter() else {
+        let [parameter] = view.closures.get(row.closure).parameters[..] else {
             continue;
         };
-        match fits(view, argument, &row.template.classes, parameter, read) {
+        match fits(view, argument, &Lying(view.classes), parameter, read) {
             Fits::Yes(fit) => {
                 let into_the_row = fit.placed(Site::Solved, |written| Site::Step(0, written));
                 let begun = Way {
@@ -547,7 +563,9 @@ where
 {
     let step = way.rows.len() - 1;
     let of_the_row = |written| Site::Step(step, written);
-    match fits(&row.template.classes, row.template.result, view, given, &mut BTreeSet::new()) {
+    let lying = Lying(view.classes);
+    let gives = view.closures.get(row.closure).result;
+    match fits(&lying, gives, view, given, &mut BTreeSet::new()) {
         Fits::Yes(fit) => {
             let mut ended = way;
             ended.steps.push(fit.placed(of_the_row, Site::Solved));
@@ -560,10 +578,10 @@ where
                 if way.rows.contains(&index) {
                     continue;
                 }
-                let Some(parameter) = next.only_parameter() else {
+                let [parameter] = view.closures.get(next.closure).parameters[..] else {
                     continue;
                 };
-                let Fits::Yes(fit) = fits(&row.template.classes, row.template.result, &next.template.classes, parameter, &mut BTreeSet::new()) else {
+                let Fits::Yes(fit) = fits(&lying, gives, &lying, parameter, &mut BTreeSet::new()) else {
                     continue;
                 };
                 let mut longer = way.clone();
@@ -583,10 +601,17 @@ where
 {
     let scope = scribe.classes().get(scribe.classes().find(argument)).scope;
     // The signature of each row on the way, made anew.
-    let used: Vec<Used<K>> = way.rows.iter().map(|row| functions.rows[*row].template.used(scribe, scope, at)).collect();
+    let used: Vec<Used<K>> = way
+        .rows
+        .iter()
+        .map(|row| {
+            let declared = scribe.closures().get(functions.rows[*row].closure).clone();
+            Used::of(scribe, &declared, scope, at)
+        })
+        .collect();
     let solved = |written: Site<K::Id>| match written {
         Site::Solved(class) => class,
-        Site::Step(step, class) => used[step].classes[&class],
+        Site::Step(step, class) => used[step].became(class),
     };
 
     // One type: what each step pairs, and each brand a row makes with the one

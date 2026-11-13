@@ -23,18 +23,12 @@ where
 {
     fn lower(&self) -> K::Id;
     fn upper(&self) -> K::Id;
-}
 
-/// A constraint of the kind `K` written as one of the kind `J`, as a copy of a
-/// template needs it.
-pub trait ConstraintInto<K, J>
-where
-    K: ClassKind,
-    J: ClassKind,
-{
-    fn translate<F>(self, f: F) -> J::Constraint
+    /// The same constraint, with every id it holds given by `f`, as a body made
+    /// anew needs it.
+    fn renamed<F>(self, f: F) -> Self
     where
-        F: FnMut(K::Id) -> J::Id;
+        F: FnMut(K::Id) -> K::Id;
 }
 
 /// What solving records between two classes, and holds until it is finished: a
@@ -109,6 +103,17 @@ impl<K> ConstraintOf<K> for Bound<K>
 where
     K: ClassKind,
 {
+    fn renamed<F>(self, mut f: F) -> Self
+    where
+        F: FnMut(K::Id) -> K::Id,
+    {
+        match self {
+            Bound::Enter { lower, upper } => Bound::Enter { lower: f(lower), upper: f(upper) },
+            Bound::Equal { lower, upper } => Bound::Equal { lower: f(lower), upper: f(upper) },
+            Bound::Change { lower, upper } => Bound::Change { lower: f(lower), upper: f(upper) },
+        }
+    }
+
     fn lower(&self) -> K::Id {
         match self {
             Bound::Enter { lower, .. }
@@ -130,6 +135,17 @@ impl<K> ConstraintOf<K> for Suspended<K>
 where
     K: ClassKind,
 {
+    fn renamed<F>(self, mut f: F) -> Self
+    where
+        F: FnMut(K::Id) -> K::Id,
+    {
+        match self {
+            Suspended::Alone { lower, upper } => Suspended::Alone { lower: f(lower), upper: f(upper) },
+            Suspended::Exit { lower, upper } => Suspended::Exit { lower: f(lower), upper: f(upper) },
+            Suspended::Named { lower, upper, name } => Suspended::Named { lower: f(lower), upper: f(upper), name },
+        }
+    }
+
     fn lower(&self) -> K::Id {
         match self {
             Suspended::Alone { lower, .. } | Suspended::Exit { lower, .. } | Suspended::Named { lower, .. } => *lower,
@@ -147,6 +163,16 @@ impl<K> ConstraintOf<K> for Constraint<K>
 where
     K: ClassKind,
 {
+    fn renamed<F>(self, f: F) -> Self
+    where
+        F: FnMut(K::Id) -> K::Id,
+    {
+        match self {
+            Constraint::Bound(bound) => Constraint::Bound(bound.renamed(f)),
+            Constraint::Suspended(suspended) => Constraint::Suspended(suspended.renamed(f)),
+        }
+    }
+
     fn lower(&self) -> K::Id {
         match self {
             Constraint::Bound(bound) => bound.lower(),
@@ -158,51 +184,6 @@ where
         match self {
             Constraint::Bound(bound) => bound.upper(),
             Constraint::Suspended(suspended) => suspended.upper(),
-        }
-    }
-}
-
-impl<K, J> ConstraintInto<K, J> for Constraint<K>
-where
-    K: ClassKind,
-    J: ClassKind<Constraint = Constraint<J>>,
-{
-    fn translate<F>(self, mut f: F) -> Constraint<J>
-    where
-        F: FnMut(K::Id) -> J::Id,
-    {
-        match self {
-            Constraint::Bound(Bound::Enter { lower, upper }) => Bound::Enter {
-                lower: f(lower),
-                upper: f(upper),
-            }
-            .into(),
-            Constraint::Bound(Bound::Change { lower, upper }) => Bound::Change {
-                lower: f(lower),
-                upper: f(upper),
-            }
-            .into(),
-            Constraint::Bound(Bound::Equal { lower, upper }) => Bound::Equal {
-                lower: f(lower),
-                upper: f(upper),
-            }
-            .into(),
-            Constraint::Suspended(Suspended::Alone { lower, upper }) => Suspended::Alone {
-                lower: f(lower),
-                upper: f(upper),
-            }
-            .into(),
-            Constraint::Suspended(Suspended::Exit { lower, upper }) => Suspended::Exit {
-                lower: f(lower),
-                upper: f(upper),
-            }
-            .into(),
-            Constraint::Suspended(Suspended::Named { lower, upper, name }) => Suspended::Named {
-                lower: f(lower),
-                upper: f(upper),
-                name,
-            }
-            .into(),
         }
     }
 }

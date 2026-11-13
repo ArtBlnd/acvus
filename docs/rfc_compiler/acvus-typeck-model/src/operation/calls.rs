@@ -59,6 +59,7 @@ impl<'a> Body<'a> {
             body: scope,
             parameters: parameters.clone(),
             result,
+            makes: BTreeSet::new(),
         });
         world.store.closures.copied(scope, Copy { closure, parameters, result });
         let by = world.items.push("definition");

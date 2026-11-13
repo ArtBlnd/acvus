@@ -18,10 +18,11 @@ use crate::primitive::id::Arena;
 use crate::primitive::scope::Scopes;
 use crate::primitive::{BrandId, ItemId};
 
-/// What is solved: the classes, the scopes they lie in, and the closures named
-/// over them. Solving takes the three together, as each names the others: a
-/// class lies in a scope, and a closure captures classes and is copied into a
-/// scope.
+/// What solving reads and writes: the classes, the scopes they lie in, and the
+/// closures named of those scopes. Solving takes the three together, as each
+/// names the others: a class lies in a scope, and a closure is a scope with
+/// classes of it, and is made anew into a scope. Not all of it is solved: what a
+/// declaration writes is read and made anew, and never changed.
 #[derive(Clone, Debug, Default)]
 pub struct Store<K>
 where

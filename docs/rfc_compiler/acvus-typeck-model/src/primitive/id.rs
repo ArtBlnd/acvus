@@ -35,8 +35,6 @@ id! {
     /// ids name one class; `store::classes::Classes::find` gives the one that
     /// holds it.
     ClassId,
-    /// A class of a signature: recorded once, never solved, and only copied.
-    TemplateId,
     /// What recorded something: a place in the text, or solving itself.
     ItemId,
     /// A body of the store, with the classes of its parameters and its result.

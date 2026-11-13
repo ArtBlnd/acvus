@@ -186,7 +186,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::primitive::class::{Live, Part, Side, Template, Undecided};
+    use crate::primitive::class::{Live, Part, Side, Undecided};
     use crate::primitive::constraint::Bound;
     use crate::primitive::id::Arena;
     use crate::primitive::scope::Scopes;
@@ -236,24 +236,6 @@ mod tests {
             .expect("an undecided class names any part");
         world.classes.unify(&world.scopes, a, b, at);
         assert_eq!(world.classes.verify(), Ok(()));
-    }
-
-    #[test]
-    fn a_template_store_is_kept_by_the_same_operations() {
-        let scopes = Scopes::new();
-        let mut items: Arena<ItemId, ()> = Arena::default();
-        let mut templates = Classes::<Template>::default();
-        let hole = templates.undecided(scopes.root());
-        let at = items.push(());
-        let reference = templates.decided(
-            scopes.root(),
-            crate::primitive::ty::Shape::Ref(crate::primitive::ty::Mutability::Shared, hole),
-            BTreeSet::from([at]),
-        );
-        let other = templates.undecided(scopes.root());
-        templates.constrain(Bound::Enter { lower: other, upper: hole }.into(), at);
-        templates.unify(&scopes, other, reference, at);
-        assert_eq!(templates.verify(), Ok(()));
     }
 
     /// The part is written past the store's own operations: no item names it,

@@ -29,11 +29,11 @@ where
     K: ClassKind,
     L: Law<K>,
     F: Fn(&Classes<K>) -> Vec<K::Id>,
-    H: Fn(&L, &Classes<K>, &Bodies<'_>, &[K::Id], &dyn Fn(K::Id) -> bool) -> Heads<K>,
+    H: Fn(&L, &Classes<K>, &Bodies<'_, K>, &[K::Id], &dyn Fn(K::Id) -> bool) -> Heads<K>,
 {
     let mut undecided = asked(&store.classes, visit);
     undecided.retain(|class| !store.classes.is_decided(*class));
-    let bodies = Bodies::new(&store.scopes, law.awaiting(store));
+    let bodies = Bodies::new(&store.scopes, &store.closures, law.awaiting(store));
     let mut deciding = store.classes.deciding();
     let Heads { heads, refused } = ask(law, deciding.classes(), &bodies, &undecided, &|class| deciding.is_held(class));
     for refusal in refused {

@@ -6,7 +6,7 @@
 //! named where its body is written, in the text or in a copy of a body that
 //! holds it, and never changed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::class::ClassKind;
 use crate::primitive::id::Arena;
@@ -24,6 +24,9 @@ where
     pub body: ScopeId,
     pub parameters: Vec<K::Id>,
     pub result: K::Id,
+    /// The classes of the body that stand for the brands a use makes: each is
+    /// one type with a brand made anew for the use.
+    pub makes: BTreeSet<K::Id>,
 }
 
 /// A copy of the body of a closure: the classes its parameters and its result
@@ -122,6 +125,7 @@ mod tests {
             body: scopes.root(),
             parameters: Vec::new(),
             result,
+            makes: BTreeSet::new(),
         };
         let mut closures = Closures::<Live>::default();
         let (first, second) = (closures.name(of_one_body()), closures.name(of_one_body()));

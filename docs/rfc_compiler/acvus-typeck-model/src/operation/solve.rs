@@ -31,7 +31,7 @@ where
             break;
         }
     }
-    let bodies = Bodies::new(&store.scopes, law.awaiting(store));
+    let bodies = Bodies::new(&store.scopes, &store.closures, law.awaiting(store));
     for class in asked(&store.classes, visit) {
         for refused in law.end(&store.classes, &bodies, class) {
             outcome.refuse(refused);

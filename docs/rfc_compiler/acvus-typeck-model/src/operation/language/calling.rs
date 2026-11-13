@@ -14,7 +14,7 @@
 //! it is making that body anew: what lies in the body is made anew, and what
 //! its text names outside it is the same class.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::class::{ClassKind, State};
 use crate::primitive::constraint::{Bound, Constraint};
@@ -22,7 +22,7 @@ use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::Shape;
 use crate::primitive::{ClosureId, ItemId, ScopeId};
 
-use crate::store::closures::Copy;
+use crate::store::closures::{Closure, Copy};
 
 use super::super::law::{Looked, Pair, Scribe};
 
@@ -140,7 +140,7 @@ where
     };
     for called in called {
         let signature = match called {
-            Called::Closure(named) => of_a_closure(scribe, named, scope),
+            Called::Closure(named) => of_a_closure(scribe, named, scope, at, &mut follows),
             Called::OfAType(signature) => signature,
         };
         call.uses(&signature, &mut follows);
@@ -159,7 +159,7 @@ where
 /// A call within a copy of the closure it calls, or within the body of that
 /// closure, is a call of that one, and makes none: what is called is being used
 /// already.
-fn of_a_closure<K>(scribe: &mut Scribe<'_, K>, closure: ClosureId, scope: ScopeId) -> Signature<K>
+fn of_a_closure<K>(scribe: &mut Scribe<'_, K>, closure: ClosureId, scope: ScopeId, at: ItemId, follows: &mut Follows<K>) -> Signature<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
@@ -168,16 +168,61 @@ where
         Some(in_use) => in_use,
         None => {
             let written = scribe.closures().get(closure).clone();
-            let made = scribe.anew_body(written.body, scope);
-            let became = |class: &K::Id| made.classes.get(class).copied().unwrap_or(*class);
+            let made = Used::of(scribe, &written, scope, at);
             let copy = Copy {
                 closure,
-                parameters: written.parameters.iter().map(became).collect(),
-                result: became(&written.result),
+                parameters: written.parameters.iter().map(|parameter| made.became(*parameter)).collect(),
+                result: made.became(written.result),
             };
             scribe.copied(made.scope, copy.clone());
+            follows.pairs.extend(made.pairs);
             copy
         }
     };
     Signature { parameters, result }
+}
+
+/// The body of a closure made anew for one use of it.
+pub(super) struct Used<K>
+where
+    K: ClassKind,
+{
+    /// The scope the copy lies in.
+    pub(super) scope: ScopeId,
+    /// Each class of the body, with the class it became.
+    classes: BTreeMap<K::Id, K::Id>,
+    /// What is one type by the use: each class that stands for a brand the
+    /// closure makes with the brand made for this use.
+    pub(super) pairs: Vec<Pair<K>>,
+}
+
+impl<K> Used<K>
+where
+    K: ClassKind<Constraint = Constraint<K>>,
+{
+    /// Makes the body of `closure` anew within `scope`, by `at`, and a brand
+    /// for each the closure makes.
+    ///
+    /// This is the only place a body is made anew for a use: of a declared
+    /// function, whose body holds its signature alone, as of a lambda.
+    pub(super) fn of(scribe: &mut Scribe<'_, K>, closure: &Closure<K>, scope: ScopeId, at: ItemId) -> Self {
+        let made = scribe.anew_body(closure.body, scope);
+        let pairs = closure
+            .makes
+            .iter()
+            .map(|stands_for| Pair::Classes(made.classes.get(stands_for).copied().unwrap_or(*stands_for), scribe.brand(scope, at)))
+            .collect();
+        Self {
+            scope: made.scope,
+            classes: made.classes,
+            pairs,
+        }
+    }
+
+    /// The class `class`, of the body or named by it, is in the copy: the one
+    /// made anew for it where it lies in the body, and itself where it lies
+    /// outside.
+    pub(super) fn became(&self, class: K::Id) -> K::Id {
+        self.classes.get(&class).copied().unwrap_or(class)
+    }
 }

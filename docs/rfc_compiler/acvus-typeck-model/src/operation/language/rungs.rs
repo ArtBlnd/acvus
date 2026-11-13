@@ -35,7 +35,7 @@ use super::{Looked, Told, View, admits, enter, tell};
 
 /// The heads classes take as solving settles: those of the first of rungs 0 and
 /// 1 that gives any.
-pub fn heads<K>(classes: &Classes<K>, bodies: &Bodies<'_>, functions: &Functions, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>
+pub fn heads<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, functions: &Functions, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
@@ -46,7 +46,7 @@ where
 
 /// The heads classes take at the fixpoint: those of the first of rungs 2 to 5
 /// that gives any.
-pub fn fixpoint<K>(classes: &Classes<K>, bodies: &Bodies<'_>, functions: &Functions, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>
+pub fn fixpoint<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, functions: &Functions, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
@@ -76,7 +76,7 @@ where
     K: ClassKind,
 {
     classes: &'a Classes<K>,
-    bodies: &'a Bodies<'a>,
+    bodies: &'a Bodies<'a, K>,
     functions: &'a Functions,
     class: K::Id,
     entering: OnceCell<Vec<Entering<K>>>,
@@ -87,7 +87,7 @@ impl<'a, K> Said<'a, K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    fn of(classes: &'a Classes<K>, bodies: &'a Bodies<'a>, functions: &'a Functions, class: K::Id) -> Self {
+    fn of(classes: &'a Classes<K>, bodies: &'a Bodies<'a, K>, functions: &'a Functions, class: K::Id) -> Self {
         Self {
             classes,
             bodies,
@@ -140,7 +140,7 @@ where
         for head in candidates {
             of_each_layer.entry(head.layer()).or_insert(head);
         }
-        let would_be_taken = |head: &&Shape<K::Id>| taken(View::of(classes), bodies, functions, class, head, &mut BTreeSet::new());
+        let would_be_taken = |head: &&Shape<K::Id>| taken(View::of(classes, bodies.closures()), bodies, functions, class, head, &mut BTreeSet::new());
         let mut taken_heads = of_each_layer.into_values().filter(would_be_taken).cloned();
         match (taken_heads.next(), taken_heads.next()) {
             (Some(shape), None) => Offer::Head {
@@ -171,12 +171,12 @@ type Entering<K> = (Option<Shape<<K as ClassKind>::Id>>, Constraint<K>, ItemId);
 /// outside, is not given to `class`: nothing gives that body what it lacks, a
 /// use giving it to a body made anew. So it is left out, and `class` does not
 /// wait for it.
-fn entering<K>(classes: &Classes<K>, bodies: &Bodies<'_>, class: K::Id) -> Vec<Entering<K>>
+fn entering<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, class: K::Id) -> Vec<Entering<K>>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
     let root = classes.find(class);
-    let view = View::of(classes);
+    let view = View::of(classes, bodies.closures());
     classes
         .constraints_of(class)
         .filter(|(constraint, _)| classes.find(constraint.upper()) == root && classes.find(constraint.lower()) != root)
@@ -295,7 +295,7 @@ where
 /// Every head `class` will be held against: what each constraint that waits on it
 /// asks of it, the heads that have entered a class it enters, and what is asked
 /// of that class in turn. `!` is the least head and asks nothing of what meets it.
-fn asked<K>(classes: &Classes<K>, bodies: &Bodies<'_>, functions: &Functions, class: K::Id, seen: &mut BTreeSet<K::Id>) -> Vec<Shape<K::Id>>
+fn asked<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, functions: &Functions, class: K::Id, seen: &mut BTreeSet<K::Id>) -> Vec<Shape<K::Id>>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
@@ -303,7 +303,7 @@ where
     if !seen.insert(root) {
         return Vec::new();
     }
-    let view = View::of(classes);
+    let view = View::of(classes, bodies.closures());
     let mut heads: Vec<Shape<K::Id>> = classes
         .waiting_on(root)
         .flat_map(|(constraint, at)| tell(&view, functions, constraint, *at).asks)
@@ -321,7 +321,7 @@ where
 /// Whether every constraint that waits on `class` would have it take `head`: none
 /// would be refused, were that its head. A class it enters would then take the
 /// join of `head` and what has entered it, and is asked the same of that.
-fn taken<K>(view: View<'_, K>, bodies: &Bodies<'_>, functions: &Functions, class: K::Id, head: &Shape<K::Id>, seen: &mut BTreeSet<K::Id>) -> bool
+fn taken<K>(view: View<'_, K>, bodies: &Bodies<'_, K>, functions: &Functions, class: K::Id, head: &Shape<K::Id>, seen: &mut BTreeSet<K::Id>) -> bool
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
@@ -351,12 +351,12 @@ where
 
 /// The head of each declared class `class` is bound to be one type with: what
 /// each such bound asks of it. `!` asks nothing of what meets it.
-fn declared<K>(classes: &Classes<K>, functions: &Functions, class: K::Id) -> Vec<Shape<K::Id>>
+fn declared<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, functions: &Functions, class: K::Id) -> Vec<Shape<K::Id>>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
     let root = classes.find(class).id();
-    let view = View::of(classes);
+    let view = View::of(classes, bodies.closures());
     classes
         .waiting_on(root)
         .filter(|(constraint, _)| matches!(constraint, Constraint::Bound(Bound::Equal { .. })))
@@ -380,7 +380,7 @@ where
     if !said.entering().is_empty() {
         return Offer::Nothing;
     }
-    let declared = declared(said.classes, said.functions, said.class);
+    let declared = declared(said.classes, said.bodies, said.functions, said.class);
     said.the_one_taken(said.may_take(&declared))
 }
 
@@ -525,7 +525,7 @@ where
 ///
 /// A class that heads are asked of, none of which it may take, is undecided for
 /// that: rung 2 passes over such a head, as another may come, and here none has.
-pub fn end<K>(classes: &Classes<K>, bodies: &Bodies<'_>, functions: &Functions, class: K::Id) -> Vec<Refused<K>>
+pub fn end<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, functions: &Functions, class: K::Id) -> Vec<Refused<K>>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {

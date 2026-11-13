@@ -43,6 +43,6 @@ pub enum Adjustment {
 
 /// The adjustments of each item, in the order they apply.
 ///
-/// Every copy of a template keeps the items of its text, so all instances of
+/// Every copy of a body keeps the items of its text, so all instances of
 /// one text share an entry here, though each may take its own adjustment.
 pub type Adjustments = BTreeMap<ItemId, Vec<Adjustment>>;

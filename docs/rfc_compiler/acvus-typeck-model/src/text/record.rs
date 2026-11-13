@@ -15,7 +15,7 @@ use crate::operation::language::Language;
 use crate::operation::language::functions::Functions;
 use crate::operation::language::units::Units;
 use crate::operation::solve::solve;
-use crate::primitive::class::{ClassKind, Live, Origin, Side, State, Template};
+use crate::primitive::class::{ClassKind, Live, Origin, Side, State};
 use crate::primitive::constraint::{Bound, Constraint, Suspended};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::{Arena, Id};
@@ -284,6 +284,7 @@ where
             body: scope,
             parameters: parameters.clone(),
             result,
+            makes: BTreeSet::new(),
         });
         self.closures.copied(scope, Copy { closure, parameters, result });
         Ok(closure)
@@ -368,24 +369,27 @@ where
         let module = self.defined(&upper, &whole, label)?;
 
         // A function whose first parameter writes a type takes a receiver, and
-        // is found by a call by name, by that type as the text writes it.
-        for statement in &whole.body {
-            let Op::Define { upper, lambda } = &statement.op else {
-                continue;
-            };
-            let writes_a_head = |ty: &&Type| !matches!(ty, Type::Class(_) | Type::Integer | Type::Float);
-            let Some(ty) = lambda.parameters.first().and_then(|first| first.ty.as_ref()).filter(writes_a_head) else {
-                continue;
-            };
-            if !upper.segments.is_empty() {
-                continue;
+        // is found by a call by name. The closures of the functions are those
+        // of the bodies written directly in the module's body, in the order its
+        // statements define them.
+        let body = self.closures.get(module).body;
+        let functions: Vec<(ClosureId, K::Id)> = self
+            .closures
+            .iter()
+            .filter(|(_, closure)| self.scopes.parent(closure.body) == Some(body))
+            .filter_map(|(id, closure)| Some((id, *closure.parameters.first()?)))
+            .collect();
+        let defining = whole.body.iter().filter_map(|statement| match &statement.op {
+            Op::Define { upper, lambda } => Some((upper, lambda)),
+            _ => None,
+        });
+        let with_a_parameter = defining.filter(|(_, lambda)| !lambda.parameters.is_empty());
+        for ((upper, _), (function, first)) in with_a_parameter.zip(functions) {
+            if upper.segments.is_empty() && self.classes.is_decided(first) {
+                let name = Name::new(&upper.root);
+                let told = self.functions.told(name.clone(), function);
+                self.units.method(told, name, module);
             }
-            let item = self.items.item(label.to_owned());
-            let mut classes = Classes::<Template>::default();
-            let receiver = classes.write(Scopes::new().root(), &written_alone(ty)?, item, &mut BTreeMap::new());
-            let name = Name::new(&upper.root);
-            let told = self.functions.told(name.clone(), classes, receiver);
-            self.units.method(told, name, module);
         }
         Ok(())
     }
@@ -701,27 +705,6 @@ fn signature(ty: &Type, holes: &[String]) -> Result<Ty, String> {
     }
 }
 
-/// The type a parameter writes, as a signature of its own: a class it names is
-/// a hole of that signature.
-fn written_alone(ty: &Type) -> Result<Ty, String> {
-    let hole = |name: String| Ty::Hole(Name::new(&name));
-    match ty {
-        Type::Class(path) => Ok(hole(path.to_string())),
-        Type::Integer => Ok(hole("{integer}".to_owned())),
-        Type::Float => Ok(hole("{float}".to_owned())),
-        Type::Branded(name, arguments, brand) => {
-            let arguments = arguments.iter().map(written_alone).collect::<Result<_, _>>()?;
-            let brand = match brand {
-                Brand::Class(path) => hole(path.to_string()),
-                Brand::Hole(named) => hole(named.clone()),
-                Brand::Made(_) => return Err(A_BRAND_IS_WRITTEN.to_owned()),
-            };
-            Ok(Ty::Node(Box::new(Shape::Extern(Name::new(name), arguments, brand))))
-        }
-        written => Ok(Ty::Node(Box::new(shape(written).try_map(|part| written_alone(part))?))),
-    }
-}
-
 /// Records `program`: what its declarations write, and then each constraint in
 /// the order of its statements. It is no program to record where a name is
 /// declared twice or by a type that names it, or a row names a class or holds a
@@ -810,7 +793,7 @@ fn declare(writer: &mut Writer<'_, Live>, structs: &mut BTreeMap<Name, Vec<Name>
             let item = writer.items.item(label.to_owned());
             let parameters = parameters.iter().map(|parameter| signature(parameter, holes)).collect::<Result<Vec<_>, _>>()?;
             let result = signature(result, holes)?;
-            writer.functions.declare(Name::new(name), &parameters, &result, writer.scopes, item);
+            writer.functions.declare(writer.classes, writer.scopes, writer.closures, Name::new(name), &parameters, &result, item);
         }
         Op::Struct { name, fields } | Op::Module { name, fields, .. } => {
             let named: Vec<Name> = fields.iter().map(Name::new).collect();
