@@ -27,22 +27,22 @@ use super::super::law::{Looked, Pair, Scribe};
 use super::lambdas::Lambdas;
 
 /// A call as it is written: the function type `Fn(arguments) -> result`.
-struct Call<K>
+pub(super) struct Call<K>
 where
     K: ClassKind,
 {
-    arguments: Vec<K::Id>,
-    result: K::Id,
+    pub(super) arguments: Vec<K::Id>,
+    pub(super) result: K::Id,
 }
 
 /// What a function takes and gives: the classes of its parameters and of its
 /// result.
-struct Signature<K>
+pub(super) struct Signature<K>
 where
     K: ClassKind,
 {
-    parameters: Vec<K::Id>,
-    result: K::Id,
+    pub(super) parameters: Vec<K::Id>,
+    pub(super) result: K::Id,
 }
 
 /// One function that is called.
@@ -59,22 +59,33 @@ where
 
 /// What a call comes to: the classes that are one type, and the constraints
 /// recorded in its place.
-struct Follows<K>
+pub(super) struct Follows<K>
 where
     K: ClassKind,
 {
-    pairs: Vec<Pair<K>>,
-    constraints: Vec<Constraint<K>>,
+    pub(super) pairs: Vec<Pair<K>>,
+    pub(super) constraints: Vec<Constraint<K>>,
 }
 
 impl<K> Call<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
+    /// What is refused where this call is of a function that takes `parameters`
+    /// parameters, by `at`: a call of another count of arguments, of the
+    /// function and the function type the call writes.
+    pub(super) fn count(&self, parameters: usize, of: [K::Id; 2], at: ItemId) -> Option<Refused<K>> {
+        (parameters != self.arguments.len()).then(|| Refused {
+            cause: Cause::Mismatch,
+            items: BTreeSet::from([at]),
+            of: of.to_vec(),
+        })
+    }
+
     /// Uses a function of `signature` for this call: each argument is passed to
     /// the parameter in its place, and what the function gives is one type with
     /// the result of the call.
-    fn uses(&self, signature: &Signature<K>, follows: &mut Follows<K>) {
+    pub(super) fn uses(&self, signature: &Signature<K>, follows: &mut Follows<K>) {
         follows.pairs.push(Pair::Classes(signature.result, self.result));
         for (argument, parameter) in self.arguments.iter().zip(&signature.parameters) {
             follows.constraints.push(
@@ -127,12 +138,8 @@ where
         Called::Closure(closure) => lambdas.get(scribe.closures().get(*closure).lambda).parameters.len(),
         Called::OfAType(signature) => signature.parameters.len(),
     };
-    if called.iter().any(|called| takes(called) != call.arguments.len()) {
-        return Looked::Refused(Refused {
-            cause: Cause::Mismatch,
-            items: BTreeSet::from([at]),
-            of: vec![value, wanted],
-        });
+    if let Some(refused) = called.iter().find_map(|called| call.count(takes(called), [value, wanted], at)) {
+        return Looked::Refused(refused);
     }
 
     let scope = scribe.classes().get(scribe.classes().find(wanted)).scope;

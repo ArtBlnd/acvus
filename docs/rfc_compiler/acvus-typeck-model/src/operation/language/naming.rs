@@ -23,6 +23,7 @@ use crate::primitive::ty::{PartKey, Shape};
 use crate::primitive::{ItemId, NameId, ScopeId};
 
 use super::super::law::{Looked, Pair, Scribe};
+use super::calling;
 use super::functions::{Functions, Method, Named, Row, Used};
 use super::passing::{self, Received};
 use super::{Then, Told, View};
@@ -116,35 +117,45 @@ where
     K: ClassKind<Constraint = Constraint<K>>,
 {
     let after_the_receiver = &row.parameters[1..];
-    if after_the_receiver.len() != call.arguments.len() {
-        return Looked::Refused(Refused {
-            cause: Cause::Mismatch,
-            items: BTreeSet::from([call.at]),
-            of: vec![call.receiver, call.wanted],
-        });
+    let written = calling::Call {
+        arguments: call.arguments,
+        result: call.result,
+    };
+    if let Some(refused) = written.count(after_the_receiver.len(), [call.receiver, call.wanted], call.at) {
+        return Looked::Refused(refused);
     }
     let Used { classes: made, brands } = row.used(scribe, call.scope, call.at);
 
     let Received { fit: receiver, .. } = received;
 
-    // One type: each part of the receiver the row reads with what the row writes
-    // there, the row's result with the call's, and each brand the row makes
-    // with the one made for this call.
+    // What the receiver brings, which was told where the row was found: each
+    // part of it the row reads is one type with what the row writes there, and
+    // a receiver that is a function is passed to the function type the row
+    // writes for it.
     let of_the_receiver = receiver.pairs.iter().map(|(part, written)| Pair::Classes(*part, made[written]));
-    let of_the_result = Pair::Classes(made[&row.result], call.result);
-    let pairs = of_the_receiver.chain([of_the_result]).chain(brands).collect();
+    let the_receiver = receiver.passed.iter().map(|(function, written)| Bound::Change { lower: *function, upper: made[written] }.into());
+    let mut follows = calling::Follows {
+        pairs: of_the_receiver.collect(),
+        constraints: the_receiver.collect(),
+    };
 
-    // Passed: a receiver that is a function, to the function type the row
-    // writes for it, and each argument after it, to its parameter.
-    let the_receiver = receiver.passed.iter().map(|(function, written)| (*function, made[written]));
-    let the_arguments = call.arguments.iter().zip(after_the_receiver).map(|(argument, parameter)| (*argument, made[parameter]));
-    let constraints = the_receiver.chain(the_arguments).map(|(lower, upper)| Bound::Change { lower, upper }.into()).collect();
+    // The arguments after the receiver and the result, as any call uses a
+    // signature.
+    let signature = calling::Signature {
+        parameters: after_the_receiver.iter().map(|parameter| made[parameter]).collect(),
+        result: made[&row.result],
+    };
+    written.uses(&signature, &mut follows);
+
+    // One type besides: each brand the row makes with the one made for this
+    // call.
+    follows.pairs.extend(brands);
 
     let called = Adjustment::Row(row.name.clone());
     Looked::Holds {
-        pairs,
+        pairs: follows.pairs,
         adjustments: receiver.adjustments.into_iter().chain([called]).collect(),
-        constraints,
+        constraints: follows.constraints,
     }
 }
 
