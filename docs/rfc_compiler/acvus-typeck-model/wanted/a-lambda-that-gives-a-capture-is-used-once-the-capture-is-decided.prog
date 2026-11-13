@@ -1,0 +1,13 @@
+// let a = 1; let f = || a; take(f());        // take(u16)
+// `f` gives the type of `a`, so its type is not closed, and `f` is not used, before `a`
+// is decided. What `f()` is passed to says nothing to `a`: nothing asks a head of it, it
+// falls back to `i32`, `f` is `() -> i32`, and the call gives `i32`.
+a <- {integer};
+f <- fn [a] () -> r { r <- a; };
+declare p = u16;
+call f() to n;
+pass n to p;
+
+assert a: i32;
+assert n: i32;
+assert refused NoChange, ..;

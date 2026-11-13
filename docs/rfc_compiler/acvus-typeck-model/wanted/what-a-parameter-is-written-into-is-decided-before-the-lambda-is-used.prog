@@ -1,0 +1,13 @@
+// let mut last = None; let remember = |x| last = Some(x); remember(1u8);
+// `last` waits for its payload, the payload for `x`, `x` for a use, and a use for the
+// type of `remember`, which waits for `last`. Nothing more closes, so at the fixpoint
+// the payload falls back to `!`. `remember` is then closed, and `x` goes into `!`
+// alone: an argument of any other type is refused where it is passed. Were `remember`
+// used while `last` is `Option<?>`, `x` would be held to nothing.
+last <- Option<nothing>;
+remember <- fn [last] (x) -> r { last <- Option<x>; r <- (); };
+u <- u8;
+call remember(u) to w;
+
+assert last: Option<!>;
+assert refused ..;
