@@ -5,10 +5,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::primitive::ClassId;
 use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::components::components;
-use crate::primitive::class::ClassKind;
 use crate::primitive::constraint::{Bound, Constraint, Suspended};
 use crate::primitive::adjustment::Subtyping;
 use crate::primitive::refusal::{Cause, Refused};
@@ -24,10 +24,7 @@ use super::{Told, View, parts_by_name};
 /// heads, the lower one must be a head the join took in: its join with the upper
 /// head is the upper head. An exclusive reference that enters a shared one is
 /// reborrowed.
-pub(super) fn look<K>(view: &View<'_, K>, lower: K::Id, upper: K::Id, at: ItemId) -> Told<K>
-where
-    K: ClassKind,
-{
+pub(super) fn look(view: &View<'_>, lower: ClassId, upper: ClassId, at: ItemId) -> Told {
     let classes = view.classes;
     let pairs = parts_by_name(classes, lower, upper);
     let (Some(entering), Some(head)) = (view.head(lower), view.head(upper)) else {
@@ -61,10 +58,7 @@ where
 /// The head `constraint` gives its upper end to be joined: none where nothing enters
 /// by it, and none yet where what enters is not decided, at every depth where
 /// the constraint asks that.
-pub(super) fn given<K>(view: &View<'_, K>, constraint: &Constraint<K>) -> Option<Option<Shape<K::Id>>>
-where
-    K: ClassKind,
-{
+pub(super) fn given(view: &View<'_>, constraint: &Constraint) -> Option<Option<Shape<ClassId>>> {
     match constraint {
         Constraint::Bound(Bound::Enter { lower, .. }) => Some(view.head(*lower).cloned()),
         Constraint::Suspended(Suspended::Alone { .. } | Suspended::Exit { .. } | Suspended::Named { .. }) => Some(None),
@@ -77,12 +71,9 @@ where
 ///
 /// An entering lies on a cycle where its two ends reach one another, which is
 /// where they are of one strongly connected component of the enterings.
-pub fn entering_one_another<K>(classes: &Classes<K>) -> Vec<(K::Id, K::Id, ItemId)>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+pub fn entering_one_another(classes: &Classes<Constraint>) -> Vec<(ClassId, ClassId, ItemId)> {
     let mut enterings = Vec::new();
-    let mut entered: BTreeMap<K::Id, Vec<K::Id>> = BTreeMap::new();
+    let mut entered: BTreeMap<ClassId, Vec<ClassId>> = BTreeMap::new();
     for (constraint, at) in classes.constraints() {
         if let Constraint::Bound(Bound::Enter { lower, upper }) = constraint {
             let (lower, upper) = (classes.find(*lower).id(), classes.find(*upper).id());

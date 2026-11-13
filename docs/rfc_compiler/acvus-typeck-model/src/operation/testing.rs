@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::primitive::constraint::{Bound, Constraint, Suspended};
-use crate::primitive::class::{Live, Side, State};
+use crate::primitive::class::{Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape, VariantOf};
@@ -21,9 +21,9 @@ pub(super) const EXCLUSIVE: Mutability = Mutability::Exclusive;
 pub(super) const U8: Shape<ClassId> = Shape::Scalar(Scalar::U8);
 
 pub(super) struct World {
-    pub(super) store: Store<Live>,
+    pub(super) store: Store<Constraint>,
     pub(super) items: Arena<ItemId, &'static str>,
-    pub(super) outcome: Outcome<Live>,
+    pub(super) outcome: Outcome,
     /// The classes made here, in the order solving asks them in, ahead of any
     /// other class.
     pub(super) open: Vec<ClassId>,
@@ -62,7 +62,7 @@ impl World {
         self.store.classes.external(self.store.scopes.root(), shape, BTreeSet::from([by]))
     }
 
-    pub(super) fn record(&mut self, constraint: Constraint<Live>) -> ItemId {
+    pub(super) fn record(&mut self, constraint: Constraint) -> ItemId {
         let at = self.items.push("bound");
         self.store.classes.constrain(constraint, at);
         at
@@ -180,11 +180,11 @@ impl World {
     /// Solves by `law`, asking classes in the order `open` holds them.
     pub(super) fn solve<L>(&mut self, law: &L)
     where
-        L: Law<Live>,
+        L: Law<Constraint>,
     {
         let at = self.items.push("solving");
         let open = self.open.clone();
-        let visit = |classes: &Classes<Live>| -> Vec<ClassId> {
+        let visit = |classes: &Classes<Constraint>| -> Vec<ClassId> {
             open.iter().copied().chain(classes.roots().map(|root| root.id())).collect()
         };
         solve(&mut self.store, law, &mut self.outcome, at, &visit);

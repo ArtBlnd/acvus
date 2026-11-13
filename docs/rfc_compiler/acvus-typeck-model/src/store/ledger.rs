@@ -19,11 +19,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::primitive::ClassId;
 use crate::primitive::ItemId;
-use crate::primitive::class::{ClassKind, Constraints};
+use crate::primitive::class::Constraints;
+use crate::primitive::constraint::ConstraintOf;
 
 /// A constraint, with the item that recorded it.
-pub type Recorded<K> = (<K as ClassKind>::Constraint, ItemId);
+pub type Recorded<C> = (C, ItemId);
 
 /// What a class is to a constraint not finished.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -88,18 +90,18 @@ impl<T> ByRole<T> {
 /// the ledger makes one, and it is not copied.
 #[must_use = "a constraint looked at is finished or put to sleep"]
 #[derive(Debug)]
-pub struct Awake<K>
+pub struct Awake<C>
 where
-    K: ClassKind,
+    C: ConstraintOf,
 {
-    recorded: Recorded<K>,
+    recorded: Recorded<C>,
 }
 
-impl<K> Awake<K>
+impl<C> Awake<C>
 where
-    K: ClassKind,
+    C: ConstraintOf,
 {
-    pub fn constraint(&self) -> &K::Constraint {
+    pub fn constraint(&self) -> &C {
         &self.recorded.0
     }
 
@@ -110,49 +112,49 @@ where
 }
 
 /// Each constraint not finished, with the classes it has to do with.
-pub(super) type ClassesOf<K> = BTreeMap<Recorded<K>, ByRole<<K as ClassKind>::Id>>;
+pub(super) type ClassesOf<C> = BTreeMap<Recorded<C>, ByRole<ClassId>>;
 
 /// Each class, with the constraints that have to do with it.
-pub(super) type ConstraintsOf<K> = BTreeMap<<K as ClassKind>::Id, ByRole<Recorded<K>>>;
+pub(super) type ConstraintsOf<C> = BTreeMap<ClassId, ByRole<Recorded<C>>>;
 
 #[derive(Clone, Debug)]
-pub struct Ledger<K>
+pub struct Ledger<C>
 where
-    K: ClassKind,
+    C: ConstraintOf,
 {
-    classes_of: ClassesOf<K>,
+    classes_of: ClassesOf<C>,
     /// The same the other way round.
-    constraints_of: ConstraintsOf<K>,
+    constraints_of: ConstraintsOf<C>,
     /// The constraints to look at: each recorded and not looked at yet, and each
     /// that waits on a class that has changed since.
-    awake: Constraints<K>,
+    awake: Constraints<C>,
     /// Every constraint finished. A constraint is recorded once: what connects
     /// parts by name comes to the same pair again, and recording it again does
     /// nothing.
-    finished: Constraints<K>,
+    finished: Constraints<C>,
 }
 
-impl<K> Default for Ledger<K>
+impl<C> Default for Ledger<C>
 where
-    K: ClassKind,
+    C: ConstraintOf,
 {
     fn default() -> Self {
         Self {
             classes_of: BTreeMap::new(),
             constraints_of: BTreeMap::new(),
-            awake: Constraints::<K>::new(),
-            finished: Constraints::<K>::new(),
+            awake: Constraints::<C>::new(),
+            finished: Constraints::<C>::new(),
         }
     }
 }
 
-impl<K> Ledger<K>
+impl<C> Ledger<C>
 where
-    K: ClassKind,
+    C: ConstraintOf,
 {
     /// Says `class` is `role` to `recorded`, and whether it was not so already.
     /// With [`Ledger::take`], the only place either side is written.
-    fn put(&mut self, recorded: &Recorded<K>, role: Role, class: K::Id) -> bool {
+    fn put(&mut self, recorded: &Recorded<C>, role: Role, class: ClassId) -> bool {
         let classes = self.classes_of.get_mut(recorded).expect("a constraint is given a role while it is held");
         if !classes.of_mut(role).insert(class) {
             return false;
@@ -162,7 +164,7 @@ where
     }
 
     /// Says `class` is `role` to `recorded` no longer.
-    fn take(&mut self, recorded: &Recorded<K>, role: Role, class: K::Id) {
+    fn take(&mut self, recorded: &Recorded<C>, role: Role, class: ClassId) {
         if let Some(classes) = self.classes_of.get_mut(recorded) {
             classes.of_mut(role).remove(&class);
         }
@@ -172,7 +174,7 @@ where
     }
 
     /// The classes that are `role` to `recorded`.
-    fn classes(&self, recorded: &Recorded<K>, role: Role) -> Vec<K::Id> {
+    fn classes(&self, recorded: &Recorded<C>, role: Role) -> Vec<ClassId> {
         self.classes_of
             .get(recorded)
             .into_iter()
@@ -181,13 +183,13 @@ where
     }
 
     /// The constraints `class` is `role` to.
-    pub(super) fn constraints(&self, class: K::Id, role: Role) -> impl Iterator<Item = &Recorded<K>> {
+    pub(super) fn constraints(&self, class: ClassId, role: Role) -> impl Iterator<Item = &Recorded<C>> {
         self.constraints_of.get(&class).into_iter().flat_map(move |constraints| constraints.of(role))
     }
 
     /// Records `constraint`, whose ends are the classes `ends`, by `at`, and says
     /// whether it was not recorded before. It is awake.
-    pub(super) fn record(&mut self, constraint: K::Constraint, at: ItemId, ends: [K::Id; 2]) -> bool {
+    pub(super) fn record(&mut self, constraint: C, at: ItemId, ends: [ClassId; 2]) -> bool {
         let recorded = (constraint, at);
         if self.finished.contains(&recorded) || self.classes_of.contains_key(&recorded) {
             return false;
@@ -201,13 +203,13 @@ where
     }
 
     /// Takes out every constraint that is awake, to be looked at.
-    pub(super) fn awake(&mut self) -> Vec<Awake<K>> {
+    pub(super) fn awake(&mut self) -> Vec<Awake<C>> {
         std::mem::take(&mut self.awake).into_iter().map(|recorded| Awake { recorded }).collect()
     }
 
     /// Finishes a constraint looked at: it has been judged, and is held no
     /// longer.
-    pub(super) fn finish(&mut self, looked: Awake<K>) {
+    pub(super) fn finish(&mut self, looked: Awake<C>) {
         let recorded = looked.recorded;
         for role in ROLES {
             for class in self.classes(&recorded, role) {
@@ -222,9 +224,9 @@ where
     /// Puts a constraint looked at to sleep: it waits on the classes `on`, and
     /// holds the classes `apart` apart, so it guards every class below one of
     /// those. What it waited on and held apart before, it does no longer.
-    pub(super) fn sleep<P>(&mut self, looked: Awake<K>, on: &BTreeSet<K::Id>, apart: &BTreeSet<K::Id>, parts: P)
+    pub(super) fn sleep<P>(&mut self, looked: Awake<C>, on: &BTreeSet<ClassId>, apart: &BTreeSet<ClassId>, parts: P)
     where
-        P: Fn(K::Id) -> Vec<K::Id>,
+        P: Fn(ClassId) -> Vec<ClassId>,
     {
         let recorded = looked.recorded;
         for role in [Role::Waited, Role::Apart, Role::Guarded] {
@@ -245,9 +247,9 @@ where
 
     /// Guards, by `recorded`, every class below `class` that it does not hold
     /// apart.
-    fn guard_below<P>(&mut self, recorded: &Recorded<K>, class: K::Id, parts: &P)
+    fn guard_below<P>(&mut self, recorded: &Recorded<C>, class: ClassId, parts: &P)
     where
-        P: Fn(K::Id) -> Vec<K::Id>,
+        P: Fn(ClassId) -> Vec<ClassId>,
     {
         let mut above = vec![class];
         while let Some(class) = above.pop() {
@@ -262,11 +264,11 @@ where
 
     /// `class` has come to have a part: each constraint that guards the class or
     /// holds it apart guards the part too, and what lies below it.
-    pub(super) fn grew<P>(&mut self, class: K::Id, parts: P)
+    pub(super) fn grew<P>(&mut self, class: ClassId, parts: P)
     where
-        P: Fn(K::Id) -> Vec<K::Id>,
+        P: Fn(ClassId) -> Vec<ClassId>,
     {
-        let reaching: Vec<Recorded<K>> = self
+        let reaching: Vec<Recorded<C>> = self
             .constraints(class, Role::Apart)
             .chain(self.constraints(class, Role::Guarded))
             .cloned()
@@ -279,9 +281,9 @@ where
     /// The class `gone` has been merged into `kept`: what `gone` was to each
     /// constraint, `kept` is. Each constraint that waited on either is awake, and
     /// what guards the class guards its parts.
-    pub(super) fn merged<P>(&mut self, kept: K::Id, gone: K::Id, parts: P)
+    pub(super) fn merged<P>(&mut self, kept: ClassId, gone: ClassId, parts: P)
     where
-        P: Fn(K::Id) -> Vec<K::Id>,
+        P: Fn(ClassId) -> Vec<ClassId>,
     {
         if let Some(of_gone) = self.constraints_of.remove(&gone) {
             for role in ROLES {
@@ -294,7 +296,7 @@ where
             }
         }
         // A class held apart is not guarded by what holds it apart.
-        let both: Vec<Recorded<K>> = self
+        let both: Vec<Recorded<C>> = self
             .constraints(kept, Role::Apart)
             .filter(|recorded| self.classes_of[*recorded].of(Role::Guarded).contains(&kept))
             .cloned()
@@ -302,30 +304,30 @@ where
         for recorded in both {
             self.take(&recorded, Role::Guarded, kept);
         }
-        let waiting: Vec<Recorded<K>> = self.constraints(kept, Role::Waited).cloned().collect();
+        let waiting: Vec<Recorded<C>> = self.constraints(kept, Role::Waited).cloned().collect();
         self.awake.extend(waiting);
         self.grew(kept, parts);
     }
 
     /// Every constraint not finished.
-    pub(super) fn held(&self) -> impl Iterator<Item = &Recorded<K>> {
+    pub(super) fn held(&self) -> impl Iterator<Item = &Recorded<C>> {
         self.classes_of.keys()
     }
 
     /// Every class a constraint guards.
-    pub(super) fn guarded(&self) -> impl Iterator<Item = K::Id> {
+    pub(super) fn guarded(&self) -> impl Iterator<Item = ClassId> {
         self.constraints_of.iter().filter(|(_, constraints)| !constraints.of(Role::Guarded).is_empty()).map(|(class, _)| *class)
     }
 
     /// Whether a constraint guards `class`.
-    pub(super) fn guards(&self, class: K::Id) -> bool {
+    pub(super) fn guards(&self, class: ClassId) -> bool {
         self.constraints(class, Role::Guarded).next().is_some()
     }
 
     /// Each constraint not finished with the classes it has to do with, and each
     /// class with the constraints that have to do with it, for these to be
     /// checked against one another and against the classes.
-    pub(super) fn both_ways(&self) -> (&ClassesOf<K>, &ConstraintsOf<K>) {
+    pub(super) fn both_ways(&self) -> (&ClassesOf<C>, &ConstraintsOf<C>) {
         (&self.classes_of, &self.constraints_of)
     }
 }
@@ -334,14 +336,13 @@ where
 mod tests {
     use super::*;
     use crate::primitive::ClassId;
-    use crate::primitive::class::Live;
-    use crate::primitive::constraint::Bound;
+    use crate::primitive::constraint::{Bound, Constraint};
     use crate::primitive::id::Arena;
 
     /// A ledger, with classes that are ids and parts alone.
     #[derive(Default)]
     struct World {
-        ledger: Ledger<Live>,
+        ledger: Ledger<Constraint>,
         ids: Arena<ClassId, ()>,
         items: Arena<ItemId, ()>,
         parts: BTreeMap<ClassId, Vec<ClassId>>,
@@ -361,7 +362,7 @@ mod tests {
             part
         }
 
-        fn record(&mut self, lower: ClassId, upper: ClassId) -> Recorded<Live> {
+        fn record(&mut self, lower: ClassId, upper: ClassId) -> Recorded<Constraint> {
             let recorded = (Bound::Enter { lower, upper }.into(), self.items.push(()));
             assert!(self.ledger.record(recorded.0, recorded.1, [lower, upper]));
             recorded
@@ -390,7 +391,7 @@ mod tests {
             self.ledger.merged(kept, gone, |class| parts.get(&class).cloned().unwrap_or_default());
         }
 
-        fn awake(&mut self) -> Vec<Recorded<Live>> {
+        fn awake(&mut self) -> Vec<Recorded<Constraint>> {
             self.ledger.awake().into_iter().map(|looked| looked.recorded).collect()
         }
     }

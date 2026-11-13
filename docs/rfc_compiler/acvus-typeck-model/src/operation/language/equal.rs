@@ -2,8 +2,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::primitive::ClassId;
 use crate::primitive::ItemId;
-use crate::primitive::class::ClassKind;
 use crate::primitive::refusal::{Cause, Refused};
 
 use super::super::law::Looked;
@@ -14,10 +14,7 @@ use super::{Told, View, parts_by_name};
 /// The parts of one name on the two are one type from the start. Once both have
 /// heads, the two are of one constructor and the same members: nothing the
 /// language gives goes at a part.
-pub(super) fn look<K>(view: &View<'_, K>, lower: K::Id, upper: K::Id, at: ItemId) -> Told<K>
-where
-    K: ClassKind,
-{
+pub(super) fn look(view: &View<'_>, lower: ClassId, upper: ClassId, at: ItemId) -> Told {
     let classes = view.classes;
     let pairs = parts_by_name(classes, lower, upper);
     let (Some(head), Some(declared)) = (view.head(lower), view.head(upper)) else {

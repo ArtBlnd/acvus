@@ -15,7 +15,7 @@ use crate::operation::language::Language;
 use crate::operation::language::functions::Functions;
 use crate::operation::language::units::Units;
 use crate::operation::solve::solve;
-use crate::primitive::class::{ClassKind, Live, Origin, Side, State};
+use crate::primitive::class::{Origin, Side, State};
 use crate::primitive::constraint::{Bound, Constraint, Suspended};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::{Arena, Id};
@@ -33,9 +33,9 @@ use super::print;
 /// A program recorded, and then solved.
 #[derive(Debug)]
 pub struct Recorded {
-    pub store: Store<Live>,
+    pub store: Store<Constraint>,
     pub law: Language,
-    pub outcome: Outcome<Live>,
+    pub outcome: Outcome,
     items: Items,
     names: BTreeMap<String, ClassId>,
     /// The classes the text made, in the order it made them.
@@ -63,20 +63,17 @@ impl Items {
 /// Statements being written into a scope of the store: those of the program,
 /// or those of the body of a lambda, which lies in a scope of its own within
 /// the scope the lambda is written in. The two are written the same way.
-struct Writer<'a, K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    classes: &'a mut Classes<K>,
+struct Writer<'a> {
+    classes: &'a mut Classes<Constraint>,
     scopes: &'a mut Scopes,
-    closures: &'a mut Closures<K>,
+    closures: &'a mut Closures,
     scope: ScopeId,
     /// The class each name stands for: the one it was first written as.
-    names: &'a mut BTreeMap<String, K::Id>,
+    names: &'a mut BTreeMap<String, ClassId>,
     /// The classes written, in the order they were.
-    made: &'a mut Vec<K::Id>,
+    made: &'a mut Vec<ClassId>,
     /// Each part named on a class decided as a head with no place for it.
-    not_held: &'a mut Vec<Refused<K>>,
+    not_held: &'a mut Vec<Refused>,
     items: &'a mut Items,
     functions: &'a mut Functions,
     units: &'a mut Units,
@@ -109,18 +106,15 @@ fn modules_used(body: &[Statement]) -> BTreeSet<String> {
     used
 }
 
-impl<K> Writer<'_, K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    fn undecided(&mut self) -> K::Id {
+impl Writer<'_> {
+    fn undecided(&mut self) -> ClassId {
         let class = self.classes.undecided(self.scope);
         self.made.push(class);
         class
     }
 
     /// The class `name` stands for: the one it was first written as.
-    fn named(&mut self, name: &str) -> K::Id {
+    fn named(&mut self, name: &str) -> ClassId {
         if let Some(class) = self.names.get(name) {
             return *class;
         }
@@ -134,7 +128,7 @@ where
     ///
     /// A part a decided class has no place for is refused as solving refuses one,
     /// and the path goes on from a class of its own.
-    fn path(&mut self, path: &Path, side: Side, label: &str) -> K::Id {
+    fn path(&mut self, path: &Path, side: Side, label: &str) -> ClassId {
         let mut class = self.named(&path.root);
         let mut so_far = Path {
             root: path.root.clone(),
@@ -162,7 +156,7 @@ where
     }
 
     /// The class that has the type `ty`, written by `origin`, by `item`.
-    fn class_of(&mut self, ty: &Type, origin: Origin, item: ItemId, label: &str) -> Result<K::Id, String> {
+    fn class_of(&mut self, ty: &Type, origin: Origin, item: ItemId, label: &str) -> Result<ClassId, String> {
         let literal = |writer: &mut Self, scalars: &[Scalar]| {
             let class = writer.undecided();
             let pending = writer.classes.domain(class, Domain(scalars.iter().copied().collect()), item);
@@ -189,7 +183,7 @@ where
 
     /// The class that stands at a brand the program writes: a class of the
     /// program, which is one type with the brand a call makes.
-    fn at_a_brand(&mut self, brand: &Brand, label: &str) -> Result<K::Id, String> {
+    fn at_a_brand(&mut self, brand: &Brand, label: &str) -> Result<ClassId, String> {
         match brand {
             Brand::Class(path) => Ok(self.path(path, Side::Upper, label)),
             Brand::Hole(hole) => Err(format!("`{hole}` is written at a brand, and a program has no hole")),
@@ -199,7 +193,7 @@ where
 
     /// `callee(arguments)`, giving `result`: the callee is passed to the function
     /// type the call writes.
-    fn call(&mut self, callee: K::Id, arguments: Vec<K::Id>, result: K::Id, item: ItemId) {
+    fn call(&mut self, callee: ClassId, arguments: Vec<ClassId>, result: ClassId, item: ItemId) {
         let written = self.classes.decided(self.scope, Shape::Fn(arguments, result), BTreeSet::from([item]));
         self.classes.constrain(
             Bound::Change {
@@ -225,7 +219,7 @@ where
     fn lambda(&mut self, lambda: &ast::Lambda, item: ItemId, label: &str) -> Result<ClosureId, String> {
         let scope = self.scopes.child(self.scope);
         let mut names = BTreeMap::new();
-        let mut name_once = |name: &String, class: K::Id| match names.insert(name.clone(), class) {
+        let mut name_once = |name: &String, class: ClassId| match names.insert(name.clone(), class) {
             Some(_) => Err(format!("`{name}` is named twice among what a lambda captures, takes and gives")),
             None => Ok(()),
         };
@@ -373,7 +367,7 @@ where
         // of the bodies written directly in the module's body, in the order its
         // statements define them.
         let body = self.closures.get(module).body;
-        let functions: Vec<(ClosureId, K::Id)> = self
+        let functions: Vec<(ClosureId, ClassId)> = self
             .closures
             .iter()
             .filter(|(_, closure)| self.scopes.parent(closure.body) == Some(body))
@@ -514,7 +508,7 @@ impl Recorded {
             }
         }
         let at = self.items.item("solving".to_owned());
-        let visit = |classes: &Classes<Live>| -> Vec<ClassId> {
+        let visit = |classes: &Classes<Constraint>| -> Vec<ClassId> {
             asked.iter().copied().chain(classes.roots().map(|root| root.id())).collect()
         };
         solve(&mut self.store, &self.law, &mut self.outcome, at, &visit);
@@ -769,7 +763,7 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
 /// Records what a declaration writes: a class of the name it declares, a row of
 /// the table of functions, or the fields of a struct. Any other statement
 /// declares nothing.
-fn declare(writer: &mut Writer<'_, Live>, structs: &mut BTreeMap<Name, Vec<Name>>, op: &Op, label: &str) -> Result<(), String> {
+fn declare(writer: &mut Writer<'_>, structs: &mut BTreeMap<Name, Vec<Name>>, op: &Op, label: &str) -> Result<(), String> {
     match op {
         Op::Declare { name, ty } => {
             if writer.names.contains_key(name) {

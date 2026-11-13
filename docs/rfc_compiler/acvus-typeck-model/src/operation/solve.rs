@@ -1,7 +1,8 @@
 //! Solving: settling, and what is done at each fixpoint and at the end.
 
+use crate::primitive::ClassId;
 use crate::primitive::ItemId;
-use crate::primitive::class::ClassKind;
+use crate::primitive::constraint::ConstraintOf;
 use crate::store::Store;
 use crate::store::classes::Classes;
 
@@ -19,11 +20,11 @@ use super::settle::{asked, settle};
 /// end:       what the law refuses of each class is refused (O21), and what settled
 ///            the classes of each refusal is gathered.
 /// ```
-pub fn solve<K, L, F>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, at: ItemId, visit: &F)
+pub fn solve<C, L, F>(store: &mut Store<C>, law: &L, outcome: &mut Outcome, at: ItemId, visit: &F)
 where
-    K: ClassKind,
-    L: Law<K>,
-    F: Fn(&Classes<K>) -> Vec<K::Id>,
+    C: ConstraintOf,
+    L: Law<C>,
+    F: Fn(&Classes<C>) -> Vec<ClassId>,
 {
     loop {
         settle(store, law, outcome, at, visit);

@@ -21,9 +21,9 @@
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::primitive::{ItemId, Name, ScopeId};
+use crate::primitive::{ClassId, ItemId, Name, ScopeId};
 use crate::primitive::constraint::{Bound, Constraint, ConstraintOf};
-use crate::primitive::class::{ClassKind, State};
+use crate::primitive::class::State;
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{PartKey, Shape, VariantOf};
@@ -35,27 +35,21 @@ use super::{Looked, Told, View, admits, enter, tell};
 
 /// The heads classes take as solving settles: those of the first of rungs 0 and
 /// 1 that gives any.
-pub fn heads<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, functions: &Functions, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    let said: BTreeMap<K::Id, Said<'_, K>> = asked.iter().map(|class| (*class, Said::of(classes, bodies, functions, *class))).collect();
-    let ladder: [&dyn Fn(K::Id) -> Offer<K>; 2] = [&|class| join(&said[&class]), &|class| from_the_declared(&said[&class])];
+pub fn heads(classes: &Classes<Constraint>, bodies: &Bodies<'_>, functions: &Functions, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads {
+    let said: BTreeMap<ClassId, Said<'_>> = asked.iter().map(|class| (*class, Said::of(classes, bodies, functions, *class))).collect();
+    let ladder: [&dyn Fn(ClassId) -> Offer; 2] = [&|class| join(&said[&class]), &|class| from_the_declared(&said[&class])];
     Heads::of_ladder(ladder, asked, held)
 }
 
 /// The heads classes take at the fixpoint: those of the first of rungs 2 to 5
 /// that gives any.
-pub fn fixpoint<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, functions: &Functions, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+pub fn fixpoint(classes: &Classes<Constraint>, bodies: &Bodies<'_>, functions: &Functions, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads {
     // A class of a body that awaits a use is given what it lacks by that use,
     // and takes no head here.
-    let asked: Vec<K::Id> = asked.iter().copied().filter(|class| !bodies.awaits(scope_of(classes, *class))).collect();
+    let asked: Vec<ClassId> = asked.iter().copied().filter(|class| !bodies.awaits(scope_of(classes, *class))).collect();
     let asked = &asked[..];
-    let said: BTreeMap<K::Id, Said<'_, K>> = asked.iter().map(|class| (*class, Said::of(classes, bodies, functions, *class))).collect();
-    let ladder: [&dyn Fn(K::Id) -> Offer<K>; 4] = [
+    let said: BTreeMap<ClassId, Said<'_>> = asked.iter().map(|class| (*class, Said::of(classes, bodies, functions, *class))).collect();
+    let ladder: [&dyn Fn(ClassId) -> Offer; 4] = [
         &|class| from_above(&said[&class]),
         &|class| from_parts(&said[&class]),
         &|class| domain(&said[&class]),
@@ -71,23 +65,17 @@ where
 /// store does not change while heads are found, as it is borrowed. So each
 /// is found once, when a rung first reads it, and kept here for the rungs after;
 /// a rung that is never reached costs nothing.
-struct Said<'a, K>
-where
-    K: ClassKind,
-{
-    classes: &'a Classes<K>,
-    bodies: &'a Bodies<'a, K>,
+struct Said<'a> {
+    classes: &'a Classes<Constraint>,
+    bodies: &'a Bodies<'a>,
     functions: &'a Functions,
-    class: K::Id,
-    entering: OnceCell<Vec<Entering<K>>>,
-    asked: OnceCell<Vec<Shape<K::Id>>>,
+    class: ClassId,
+    entering: OnceCell<Vec<Entering>>,
+    asked: OnceCell<Vec<Shape<ClassId>>>,
 }
 
-impl<'a, K> Said<'a, K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    fn of(classes: &'a Classes<K>, bodies: &'a Bodies<'a, K>, functions: &'a Functions, class: K::Id) -> Self {
+impl<'a> Said<'a> {
+    fn of(classes: &'a Classes<Constraint>, bodies: &'a Bodies<'a>, functions: &'a Functions, class: ClassId) -> Self {
         Self {
             classes,
             bodies,
@@ -99,21 +87,20 @@ where
     }
 
     /// The heads that enter the class: see [`entering`].
-    fn entering(&self) -> &[Entering<K>] {
+    fn entering(&self) -> &[Entering] {
         self.entering.get_or_init(|| entering(self.classes, self.bodies, self.class))
     }
 
     /// Every head the class will be held against: see [`asked`].
-    fn asked(&self) -> &[Shape<K::Id>] {
+    fn asked(&self) -> &[Shape<ClassId>] {
         self.asked.get_or_init(|| asked(self.classes, self.bodies, self.functions, self.class, &mut BTreeSet::new()))
     }
 
     /// Those of `heads` the class may take: each of the domain its literals
     /// leave, and every one where it holds no literal.
-    fn may_take<'h, I>(&self, heads: I) -> impl Iterator<Item = &'h Shape<K::Id>>
+    fn may_take<'h, I>(&self, heads: I) -> impl Iterator<Item = &'h Shape<ClassId>>
     where
-        I: IntoIterator<Item = &'h Shape<K::Id>>,
-        K: 'h,
+        I: IntoIterator<Item = &'h Shape<ClassId>>,
     {
         let domain = domain_of(self.classes, self.class);
         heads.into_iter().filter(move |head| domain.as_ref().is_none_or(|(domain, _)| admits(head, domain)))
@@ -130,17 +117,16 @@ where
     ///
     /// Two candidates of one layer are one: which of them gives the head makes
     /// no difference, as only its constructor and members are taken.
-    fn the_one_taken<'h, I>(&self, candidates: I) -> Offer<K>
+    fn the_one_taken<'h, I>(&self, candidates: I) -> Offer
     where
-        I: IntoIterator<Item = &'h Shape<K::Id>>,
-        K: 'h,
+        I: IntoIterator<Item = &'h Shape<ClassId>>,
     {
         let (classes, bodies, functions, class) = (self.classes, self.bodies, self.functions, self.class);
-        let mut of_each_layer: BTreeMap<Shape<()>, &Shape<K::Id>> = BTreeMap::new();
+        let mut of_each_layer: BTreeMap<Shape<()>, &Shape<ClassId>> = BTreeMap::new();
         for head in candidates {
             of_each_layer.entry(head.layer()).or_insert(head);
         }
-        let would_be_taken = |head: &&Shape<K::Id>| taken(View::of(classes, bodies.closures()), bodies, functions, class, head, &mut BTreeSet::new());
+        let would_be_taken = |head: &&Shape<ClassId>| taken(View::of(classes, bodies.closures()), bodies, functions, class, head, &mut BTreeSet::new());
         let mut taken_heads = of_each_layer.into_values().filter(would_be_taken).cloned();
         match (taken_heads.next(), taken_heads.next()) {
             (Some(shape), None) => Offer::Head {
@@ -161,7 +147,7 @@ where
 
 /// What enters a class by one bound: its head, where it has one yet, the bound,
 /// and the item that recorded the bound.
-type Entering<K> = (Option<Shape<<K as ClassKind>::Id>>, Constraint<K>, ItemId);
+type Entering = (Option<Shape<ClassId>>, Constraint, ItemId);
 
 /// The heads that enter `class`, each with the bound it enters by: none where
 /// nothing enters, and a head not given yet where what enters is undecided. A
@@ -171,10 +157,7 @@ type Entering<K> = (Option<Shape<<K as ClassKind>::Id>>, Constraint<K>, ItemId);
 /// outside, is not given to `class`: nothing gives that body what it lacks, a
 /// use giving it to a body made anew. So it is left out, and `class` does not
 /// wait for it.
-fn entering<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, class: K::Id) -> Vec<Entering<K>>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn entering(classes: &Classes<Constraint>, bodies: &Bodies<'_>, class: ClassId) -> Vec<Entering> {
     let root = classes.find(class);
     let view = View::of(classes, bodies.closures());
     classes
@@ -186,10 +169,7 @@ where
 }
 
 /// The scope `class` lies in.
-fn scope_of<K>(classes: &Classes<K>, class: K::Id) -> ScopeId
-where
-    K: ClassKind,
-{
+fn scope_of(classes: &Classes<Constraint>, class: ClassId) -> ScopeId {
     classes.get(classes.find(class)).scope
 }
 
@@ -199,10 +179,7 @@ where
 /// A write `a.x = v` says a field `x` is there, which is all an object's head
 /// says, so it writes that head as a lend writes a reference. A component, an
 /// element and a target say no whole head, and write none.
-fn written<K>(classes: &Classes<K>, class: K::Id) -> Option<(Shape<K::Id>, BTreeSet<ItemId>)>
-where
-    K: ClassKind,
-{
+fn written(classes: &Classes<Constraint>, class: ClassId) -> Option<(Shape<ClassId>, BTreeSet<ItemId>)> {
     let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
         return None;
     };
@@ -232,10 +209,7 @@ where
 /// What is written joins as what enters does. A head that is no object is not
 /// joined with what is written: a part written into a reference is written
 /// through it, and what it refers to is as it lies.
-fn join<K>(said: &Said<'_, K>) -> Offer<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn join(said: &Said<'_>) -> Offer {
     let (classes, class) = (said.classes, said.class);
     let entering = said.entering();
     if entering.is_empty() {
@@ -274,10 +248,7 @@ where
 
 /// The classes `class` enters that have no head yet. The head `class` takes
 /// enters each, so what is asked of each is asked of `class` too.
-fn entered<K>(classes: &Classes<K>, class: K::Id) -> Vec<K::Id>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn entered(classes: &Classes<Constraint>, class: ClassId) -> Vec<ClassId> {
     let root = classes.find(class);
     classes
         .constraints_of(class)
@@ -295,16 +266,13 @@ where
 /// Every head `class` will be held against: what each constraint that waits on it
 /// asks of it, the heads that have entered a class it enters, and what is asked
 /// of that class in turn. `!` is the least head and asks nothing of what meets it.
-fn asked<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, functions: &Functions, class: K::Id, seen: &mut BTreeSet<K::Id>) -> Vec<Shape<K::Id>>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn asked(classes: &Classes<Constraint>, bodies: &Bodies<'_>, functions: &Functions, class: ClassId, seen: &mut BTreeSet<ClassId>) -> Vec<Shape<ClassId>> {
     let root = classes.find(class).id();
     if !seen.insert(root) {
         return Vec::new();
     }
     let view = View::of(classes, bodies.closures());
-    let mut heads: Vec<Shape<K::Id>> = classes
+    let mut heads: Vec<Shape<ClassId>> = classes
         .waiting_on(root)
         .flat_map(|(constraint, at)| tell(&view, functions, constraint, *at).asks)
         .filter(|(of, _)| classes.find(*of).id() == root)
@@ -321,10 +289,7 @@ where
 /// Whether every constraint that waits on `class` would have it take `head`: none
 /// would be refused, were that its head. A class it enters would then take the
 /// join of `head` and what has entered it, and is asked the same of that.
-fn taken<K>(view: View<'_, K>, bodies: &Bodies<'_, K>, functions: &Functions, class: K::Id, head: &Shape<K::Id>, seen: &mut BTreeSet<K::Id>) -> bool
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn taken(view: View<'_>, bodies: &Bodies<'_>, functions: &Functions, class: ClassId, head: &Shape<ClassId>, seen: &mut BTreeSet<ClassId>) -> bool {
     let classes = view.classes;
     let root = classes.find(class).id();
     if !seen.insert(root) {
@@ -351,10 +316,7 @@ where
 
 /// The head of each declared class `class` is bound to be one type with: what
 /// each such bound asks of it. `!` asks nothing of what meets it.
-fn declared<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, functions: &Functions, class: K::Id) -> Vec<Shape<K::Id>>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn declared(classes: &Classes<Constraint>, bodies: &Bodies<'_>, functions: &Functions, class: ClassId) -> Vec<Shape<ClassId>> {
     let root = classes.find(class).id();
     let view = View::of(classes, bodies.closures());
     classes
@@ -373,10 +335,7 @@ where
 /// Such a bound says what the head is, whatever is still to come to the class,
 /// so the head is given as solving settles. What a class is passed to gives it
 /// a head only at the fixpoint ([`from_above`]).
-fn from_the_declared<K>(said: &Said<'_, K>) -> Offer<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn from_the_declared(said: &Said<'_>) -> Offer {
     if !said.entering().is_empty() {
         return Offer::Nothing;
     }
@@ -386,10 +345,7 @@ where
 
 /// Rung 2: a class nothing enters takes the one head, of those asked of it
 /// that it may take, that every constraint waiting on it would have it take.
-fn from_above<K>(said: &Said<'_, K>) -> Offer<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn from_above(said: &Said<'_>) -> Offer {
     if !said.entering().is_empty() {
         return Offer::Nothing;
     }
@@ -397,10 +353,7 @@ where
 }
 
 /// The domain the literals of `class` leave, where any registered one.
-fn domain_of<K>(classes: &Classes<K>, class: K::Id) -> Option<(Domain, BTreeSet<ItemId>)>
-where
-    K: ClassKind,
-{
+fn domain_of(classes: &Classes<Constraint>, class: ClassId) -> Option<(Domain, BTreeSet<ItemId>)> {
     let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
         return None;
     };
@@ -417,10 +370,7 @@ where
 ///
 /// The parts of the head given stand for no class: a head decided has the
 /// class's own parts.
-fn made_of_parts<K>(classes: &Classes<K>, class: K::Id) -> Option<(Shape<K::Id>, BTreeSet<ItemId>)>
-where
-    K: ClassKind,
-{
+fn made_of_parts(classes: &Classes<Constraint>, class: ClassId) -> Option<(Shape<ClassId>, BTreeSet<ItemId>)> {
     let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
         return None;
     };
@@ -440,7 +390,7 @@ where
                 .collect::<Option<_>>()?,
         ),
         PartKey::Payload(of, _) => {
-            let variants: BTreeMap<Name, K::Id> = named
+            let variants: BTreeMap<Name, ClassId> = named
                 .keys()
                 .map(|key| match key {
                     PartKey::Payload(other, variant) if other == of => Some((variant.clone(), class)),
@@ -463,10 +413,7 @@ where
 
 /// Rung 3: a class that neither lower nor upper bounds decide takes the head made
 /// from the parts named on it.
-fn from_parts<K>(said: &Said<'_, K>) -> Offer<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn from_parts(said: &Said<'_>) -> Offer {
     if !said.nothing_said() {
         return Offer::Nothing;
     }
@@ -478,10 +425,7 @@ where
 
 /// Rung 4: a literal's class that neither lower nor upper bounds decide takes the
 /// fallback type of its domain's row.
-fn domain<K>(said: &Said<'_, K>) -> Offer<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn domain(said: &Said<'_>) -> Offer {
     let (classes, class) = (said.classes, said.class);
     if !said.nothing_said() {
         return Offer::Nothing;
@@ -507,10 +451,7 @@ where
 
 /// Rung 5: a class nothing enters, with no literal, takes `!`: nothing gives it
 /// a head.
-fn never<K>(said: &Said<'_, K>) -> Offer<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn never(said: &Said<'_>) -> Offer {
     if !said.nothing_said() || domain_of(said.classes, said.class).is_some() {
         return Offer::Nothing;
     }
@@ -525,10 +466,7 @@ where
 ///
 /// A class that heads are asked of, none of which it may take, is undecided for
 /// that: rung 2 passes over such a head, as another may come, and here none has.
-pub fn end<K>(classes: &Classes<K>, bodies: &Bodies<'_, K>, functions: &Functions, class: K::Id) -> Vec<Refused<K>>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+pub fn end(classes: &Classes<Constraint>, bodies: &Bodies<'_>, functions: &Functions, class: ClassId) -> Vec<Refused> {
     // A class of a body that awaits a use has no type before the use, and is
     // refused for none.
     if bodies.awaits(scope_of(classes, class)) {

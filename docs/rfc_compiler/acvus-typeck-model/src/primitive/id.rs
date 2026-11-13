@@ -31,9 +31,8 @@ macro_rules! id {
 }
 
 id! {
-    /// A live class, one that is solved. Once classes are unified, several
-    /// ids name one class; `store::classes::Classes::find` gives the one that
-    /// holds it.
+    /// A class. Once classes are unified, several ids name one class;
+    /// `store::classes::Classes::find` gives the one that holds it.
     ClassId,
     /// What recorded something: a place in the text, or solving itself.
     ItemId,

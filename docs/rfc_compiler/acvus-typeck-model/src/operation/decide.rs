@@ -1,7 +1,8 @@
 //! Deciding: giving an undecided class its head.
 
+use crate::primitive::ClassId;
 use crate::primitive::ItemId;
-use crate::primitive::class::ClassKind;
+use crate::primitive::constraint::ConstraintOf;
 use crate::store::Store;
 use crate::store::classes::Classes;
 
@@ -24,12 +25,12 @@ use super::take_in::take_in;
 /// and [`Law::fixpoint`] at the fixpoint.
 ///
 /// This is the only place a class is decided by solving.
-pub fn decide<K, L, F, H>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, at: ItemId, visit: &F, ask: H) -> bool
+pub fn decide<C, L, F, H>(store: &mut Store<C>, law: &L, outcome: &mut Outcome, at: ItemId, visit: &F, ask: H) -> bool
 where
-    K: ClassKind,
-    L: Law<K>,
-    F: Fn(&Classes<K>) -> Vec<K::Id>,
-    H: Fn(&L, &Classes<K>, &Bodies<'_, K>, &[K::Id], &dyn Fn(K::Id) -> bool) -> Heads<K>,
+    C: ConstraintOf,
+    L: Law<C>,
+    F: Fn(&Classes<C>) -> Vec<ClassId>,
+    H: Fn(&L, &Classes<C>, &Bodies<'_>, &[ClassId], &dyn Fn(ClassId) -> bool) -> Heads,
 {
     let mut undecided = asked(&store.classes, visit);
     undecided.retain(|class| !store.classes.is_decided(*class));

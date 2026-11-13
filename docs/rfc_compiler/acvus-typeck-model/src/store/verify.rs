@@ -2,10 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::primitive::ClassId;
 use crate::primitive::ItemId;
 use crate::primitive::components::components;
 use crate::primitive::constraint::ConstraintOf;
-use crate::primitive::class::{Class, ClassKind, State};
+use crate::primitive::class::{Class, State};
 use crate::primitive::id::Id;
 use crate::primitive::ty::PartKey;
 
@@ -14,44 +15,44 @@ use super::ledger::{ROLES, Recorded, Role};
 
 /// An invariant of the store that does not hold.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum Violation<K>
+pub enum Violation<C>
 where
-    K: ClassKind,
+    C: ConstraintOf,
 {
     /// A link that does not point to a smaller id, so that `find` might not
     /// end.
-    Link { from: K::Id, to: K::Id },
+    Link { from: ClassId, to: ClassId },
     /// An id that `holder` holds and that names no class made.
-    Dangling { holder: K::Id, id: K::Id },
+    Dangling { holder: ClassId, id: ClassId },
     /// A part of an undecided class that no item names.
-    Unnamed { class: K::Id, key: PartKey },
+    Unnamed { class: ClassId, key: PartKey },
     /// A class that a constraint guards and should not, or does not and should: what
     /// a constraint guards is every class below one it holds apart, but for those it
     /// holds apart.
-    Guarded { class: K::Id, constraint: K::Constraint, by: ItemId },
+    Guarded { class: ClassId, constraint: C, by: ItemId },
     /// What the ledger says `class` is to a constraint by the constraint and by
     /// the class do not agree, or the class is no root, or it is said to be an
     /// end of a constraint and is not, or is one and is not said to be.
-    Misfiled { class: K::Id, constraint: K::Constraint, by: ItemId },
+    Misfiled { class: ClassId, constraint: C, by: ItemId },
     /// `part` is a part of the undecided class `owner` and the owners do not
     /// say so both ways, or they say so and it is not.
-    Owned { owner: K::Id, part: K::Id },
+    Owned { owner: ClassId, part: ClassId },
     /// An undecided class that is held and should not be, or is not and should:
     /// what is held is found from the ledger and the owners, and here anew
     /// from every class, a part and its owner being decided together where they
     /// are of one strongly connected component of the parts.
-    Held { class: K::Id },
+    Held { class: ClassId },
 }
 
-impl<K> Classes<K>
+impl<C> Classes<C>
 where
-    K: ClassKind,
+    C: ConstraintOf,
 {
     /// Checks every invariant of the store.
     ///
     /// The links and the ids held are checked first: where one fails, `find`
     /// cannot be trusted, and the rest is left unchecked.
-    pub fn verify(&self) -> Result<(), Vec<Violation<K>>> {
+    pub fn verify(&self) -> Result<(), Vec<Violation<C>>> {
         let mut violations = Vec::new();
         for (id, slot) in self.slots.iter() {
             match slot {
@@ -77,7 +78,7 @@ where
         // by constraint and by class: the two agree, name roots alone, and have
         // the ends the constraint has.
         let (classes_of, constraints_of) = self.ledger().both_ways();
-        let misfiled = |class: K::Id, recorded: &Recorded<K>| Violation::Misfiled {
+        let misfiled = |class: ClassId, recorded: &Recorded<C>| Violation::Misfiled {
             class,
             constraint: recorded.0.clone(),
             by: recorded.1,
@@ -144,13 +145,13 @@ where
 
         // What each undecided class owns, found anew from its parts, against what
         // the owners kept both ways.
-        let owned: BTreeSet<(K::Id, K::Id)> = self
+        let owned: BTreeSet<(ClassId, ClassId)> = self
             .roots()
             .flat_map(|owner| self.owned_by(owner.id()).into_iter().map(move |part| (owner.id(), part)))
             .collect();
         let (parts_of, owners_of) = self.owners.both_ways();
-        let by_owner: BTreeSet<(K::Id, K::Id)> = parts_of.iter().flat_map(|(owner, parts)| parts.iter().map(|part| (*owner, *part))).collect();
-        let by_part: BTreeSet<(K::Id, K::Id)> = owners_of.iter().flat_map(|(part, owners)| owners.iter().map(|owner| (*owner, *part))).collect();
+        let by_owner: BTreeSet<(ClassId, ClassId)> = parts_of.iter().flat_map(|(owner, parts)| parts.iter().map(|part| (*owner, *part))).collect();
+        let by_part: BTreeSet<(ClassId, ClassId)> = owners_of.iter().flat_map(|(part, owners)| owners.iter().map(|owner| (*owner, *part))).collect();
         for (owner, part) in owned.iter().chain(&by_owner).chain(&by_part).collect::<BTreeSet<_>>() {
             if [&owned, &by_owner, &by_part].iter().any(|said| !said.contains(&(*owner, *part))) {
                 violations.push(Violation::Owned {
@@ -161,9 +162,9 @@ where
         }
 
         // What is held, found anew from every class.
-        let parts: BTreeMap<K::Id, Vec<K::Id>> = self.roots().map(|owner| (owner.id(), parts_in(&self.slots, owner.id()))).collect();
+        let parts: BTreeMap<ClassId, Vec<ClassId>> = self.roots().map(|owner| (owner.id(), parts_in(&self.slots, owner.id()))).collect();
         let component = components(&parts);
-        let mut expected: BTreeSet<K::Id> = self.roots().map(|root| root.id()).filter(|root| self.ledger().guards(*root)).collect();
+        let mut expected: BTreeSet<ClassId> = self.roots().map(|root| root.id()).filter(|root| self.ledger().guards(*root)).collect();
         for (owner, parts) in &parts {
             if !self.is_decided(*owner) {
                 expected.extend(parts.iter().filter(|part| component[*part] != component[owner]));
@@ -186,14 +187,14 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::primitive::class::{Live, Part, Side, Undecided};
-    use crate::primitive::constraint::Bound;
+    use crate::primitive::class::{Part, Side, Undecided};
+    use crate::primitive::constraint::{Bound, Constraint};
     use crate::primitive::id::Arena;
     use crate::primitive::scope::Scopes;
     use crate::primitive::{ClassId, Name};
 
     struct World {
-        classes: Classes<Live>,
+        classes: Classes<Constraint>,
         scopes: Scopes,
         items: Arena<ItemId, ()>,
     }
@@ -211,7 +212,7 @@ mod tests {
             self.classes.undecided(self.scopes.root())
         }
 
-        fn undecided_of(&mut self, class: ClassId) -> &mut Undecided<Live> {
+        fn undecided_of(&mut self, class: ClassId) -> &mut Undecided {
             let Slot::Root(Class {
                 state: State::Undecided(undecided),
                 ..
@@ -274,7 +275,7 @@ mod tests {
     fn an_id_of_no_class_made_is_found() {
         let mut world = World::new();
         let a = world.undecided();
-        let mut elsewhere = Classes::<Live>::default();
+        let mut elsewhere = Classes::<Constraint>::default();
         let stray = (0..4).map(|_| elsewhere.undecided(world.scopes.root())).last().expect("four classes were made");
         let at = world.items.push(());
         world.undecided_of(a).parts.insert(

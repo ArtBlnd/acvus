@@ -37,11 +37,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::adjustment::{Adjustment, Subtyping};
-use crate::primitive::class::{ClassKind, State};
+use crate::primitive::class::State;
 use crate::primitive::constraint::{Bound, Constraint};
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{Mutability, Shape};
-use crate::primitive::{ItemId, Name};
+use crate::primitive::{ClassId, ItemId, Name};
 use crate::store::classes::Classes;
 
 use super::super::law::{Looked, Pair, Scribe};
@@ -65,21 +65,18 @@ pub(super) trait Written {
     fn open(&self, id: Self::Id) -> bool;
 }
 
-impl<K> Written for View<'_, K>
-where
-    K: ClassKind,
-{
-    type Id = K::Id;
+impl Written for View<'_> {
+    type Id = ClassId;
 
-    fn head(&self, id: K::Id) -> Option<&Shape<K::Id>> {
+    fn head(&self, id: ClassId) -> Option<&Shape<ClassId>> {
         View::head(self, id)
     }
 
-    fn declared(&self, id: K::Id) -> bool {
+    fn declared(&self, id: ClassId) -> bool {
         self.classes.is_external(id)
     }
 
-    fn open(&self, _: K::Id) -> bool {
+    fn open(&self, _: ClassId) -> bool {
         false
     }
 }
@@ -90,28 +87,23 @@ where
 /// What is read here is of the body and not of a use: it is one type with
 /// nothing, and a class of it is given as the class it becomes once the body is
 /// made anew.
-pub(super) struct Lying<'a, K>(pub(super) &'a Classes<K>)
-where
-    K: ClassKind;
+pub(super) struct Lying<'a>(pub(super) &'a Classes<Constraint>);
 
-impl<K> Written for Lying<'_, K>
-where
-    K: ClassKind,
-{
-    type Id = K::Id;
+impl Written for Lying<'_> {
+    type Id = ClassId;
 
-    fn head(&self, id: K::Id) -> Option<&Shape<K::Id>> {
+    fn head(&self, id: ClassId) -> Option<&Shape<ClassId>> {
         match &self.0.get(self.0.find(id)).state {
             State::Decided(decided) => Some(&decided.shape),
             State::Undecided(_) => None,
         }
     }
 
-    fn declared(&self, id: K::Id) -> bool {
+    fn declared(&self, id: ClassId) -> bool {
         self.0.is_decided(id)
     }
 
-    fn open(&self, id: K::Id) -> bool {
+    fn open(&self, id: ClassId) -> bool {
         !self.0.is_decided(id)
     }
 }
@@ -448,12 +440,9 @@ where
 
 /// A function a receiver goes to, and how the receiver fits its first
 /// parameter.
-pub(in crate::operation) struct Received<K>
-where
-    K: ClassKind,
-{
+pub(in crate::operation) struct Received {
     pub(super) function: Named,
-    pub(super) fit: Fit<K::Id, K::Id>,
+    pub(super) fit: Fit<ClassId, ClassId>,
 }
 
 /// Every function of the name `name` that `receiver` goes to, and each
@@ -461,16 +450,13 @@ where
 ///
 /// A receiver goes to a function whose first parameter it fits
 /// ([`receiver_fits`]).
-pub(super) fn receivers<K>(
-    view: &View<'_, K>,
+pub(super) fn receivers(
+    view: &View<'_>,
     functions: &Functions,
     name: &Name,
-    receiver: K::Id,
-    read: &mut BTreeSet<K::Id>,
-) -> (Vec<Received<K>>, BTreeSet<K::Id>)
-where
-    K: ClassKind,
-{
+    receiver: ClassId,
+    read: &mut BTreeSet<ClassId>,
+) -> (Vec<Received>, BTreeSet<ClassId>) {
     let mut found = Vec::new();
     let mut undecided = BTreeSet::new();
     for (function, closure) in functions.named(name) {
@@ -498,7 +484,7 @@ enum Site<I> {
 
 /// A step of a way: how what comes to it fits what it goes to, each class by
 /// where it lies.
-type Step<K> = Fit<Site<<K as ClassKind>::Id>, Site<<K as ClassKind>::Id>>;
+type Step = Fit<Site<ClassId>, Site<ClassId>>;
 
 /// One way through declared functions: each row taken in turn, and each step
 /// between.
@@ -507,12 +493,9 @@ type Step<K> = Fit<Site<<K as ClassKind>::Id>, Site<<K as ClassKind>::Id>>;
 /// the parameter of the next, and what the last gives fits the type given. So a
 /// way that is found has one step more than it has rows.
 #[derive(Clone)]
-pub(in crate::operation) struct Way<K>
-where
-    K: ClassKind,
-{
+pub(in crate::operation) struct Way {
     rows: Vec<usize>,
-    steps: Vec<Step<K>>,
+    steps: Vec<Step>,
 }
 
 /// Every way from `argument` to `given` through the rows of `functions`, and each
@@ -520,10 +503,7 @@ where
 ///
 /// A way begins with a row whose parameter the argument fits, and goes on from
 /// what that row gives ([`onward`]). No row is taken twice on one way.
-fn ways<K>(view: &View<'_, K>, functions: &Functions, argument: K::Id, given: K::Id, read: &mut BTreeSet<K::Id>) -> (Vec<Way<K>>, BTreeSet<K::Id>)
-where
-    K: ClassKind,
-{
+fn ways(view: &View<'_>, functions: &Functions, argument: ClassId, given: ClassId, read: &mut BTreeSet<ClassId>) -> (Vec<Way>, BTreeSet<ClassId>) {
     let mut found = Vec::new();
     let mut undecided = BTreeSet::new();
     for (index, row) in functions.rows.iter().enumerate() {
@@ -557,10 +537,7 @@ where
 /// | the one does not go to the other by the language | goes on through each row whose parameter what the row gives fits |
 ///
 /// A row's result is written, so no part of it is undecided.
-fn onward<K>(view: &View<'_, K>, functions: &Functions, row: &Row, way: Way<K>, given: K::Id, found: &mut Vec<Way<K>>)
-where
-    K: ClassKind,
-{
+fn onward(view: &View<'_>, functions: &Functions, row: &Row, way: Way, given: ClassId, found: &mut Vec<Way>) {
     let step = way.rows.len() - 1;
     let of_the_row = |written| Site::Step(step, written);
     let lying = Lying(view.classes);
@@ -595,13 +572,10 @@ where
 
 /// Makes the signature of each row of `way` anew in the store, and gives what the
 /// way comes to: what holds at each step of it, each function called in its turn.
-pub(super) fn take<K>(scribe: &mut Scribe<'_, K>, functions: &Functions, way: Way<K>, argument: K::Id, at: ItemId) -> Looked<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+pub(super) fn take(scribe: &mut Scribe<'_, Constraint>, functions: &Functions, way: Way, argument: ClassId, at: ItemId) -> Looked<Constraint> {
     let scope = scribe.classes().get(scribe.classes().find(argument)).scope;
     // The signature of each row on the way, made anew.
-    let used: Vec<Used<K>> = way
+    let used: Vec<Used> = way
         .rows
         .iter()
         .map(|row| {
@@ -609,7 +583,7 @@ where
             Used::of(scribe, &declared, scope, at)
         })
         .collect();
-    let solved = |written: Site<K::Id>| match written {
+    let solved = |written: Site<ClassId>| match written {
         Site::Solved(class) => class,
         Site::Step(step, class) => used[step].became(class),
     };
@@ -661,10 +635,7 @@ where
 /// What is passed to a class bound to be one type with a declared class is
 /// passed to the declared class. Such a class has no head yet and is to have
 /// that one, so it is no hole: a hole is a class nothing says the head of.
-pub(super) fn look<K>(view: &View<'_, K>, functions: &Functions, argument: K::Id, given: K::Id, at: ItemId) -> Told<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+pub(super) fn look(view: &View<'_>, functions: &Functions, argument: ClassId, given: ClassId, at: ItemId) -> Told {
     let given = view.declared_for(given).unwrap_or(given);
     let mut read = BTreeSet::from([argument, given]);
     match by_the_language(view, argument, view, given, &mut read) {
@@ -697,10 +668,7 @@ where
 /// be a second way, so none is taken before all are told of. What a row holds
 /// the argument against is no head asked of it: a function called gives type
 /// inference nothing.
-fn through_declared_functions<K>(view: &View<'_, K>, functions: &Functions, argument: K::Id, given: K::Id, mut read: BTreeSet<K::Id>, at: ItemId) -> Told<K>
-where
-    K: ClassKind,
-{
+fn through_declared_functions(view: &View<'_>, functions: &Functions, argument: ClassId, given: ClassId, mut read: BTreeSet<ClassId>, at: ItemId) -> Told {
     let (mut found, undecided) = ways(view, functions, argument, given, &mut read);
     if !undecided.is_empty() {
         return Told::done(waiting(undecided, read));
@@ -725,10 +693,7 @@ where
 /// Until it is told, it may still make what lies below its two ends one type
 /// with a hole. So it holds apart its ends and each part it has read or has yet
 /// to read: those it only compares, and what lies below them is not decided.
-fn waiting<K>(on: BTreeSet<K::Id>, read: BTreeSet<K::Id>) -> Looked<K>
-where
-    K: ClassKind,
-{
+fn waiting(on: BTreeSet<ClassId>, read: BTreeSet<ClassId>) -> Looked<Constraint> {
     Looked::Waits {
         on,
         apart: read,

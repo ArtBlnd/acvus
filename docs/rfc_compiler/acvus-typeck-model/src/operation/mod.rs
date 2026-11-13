@@ -32,31 +32,26 @@ mod tests;
 use crate::primitive::adjustment::Adjustments;
 use std::collections::BTreeSet;
 
-use crate::primitive::class::{ClassKind, State};
+use crate::primitive::class::State;
+use crate::primitive::constraint::ConstraintOf;
 use crate::primitive::refusal::{Refusal, Refused};
 use crate::store::classes::Classes;
 
 /// What solving comes to besides the classes themselves.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct Outcome<K>
-where
-    K: ClassKind,
-{
+pub struct Outcome {
     /// The refusals, each with what settled the classes it is of. They are
     /// gathered when solving ends ([`Outcome::gather`]).
     pub refusals: Vec<Refusal>,
     /// What has been refused and not gathered yet.
-    pub refused: Vec<Refused<K>>,
+    pub refused: Vec<Refused>,
     pub adjustments: Adjustments,
 }
 
-impl<K> Outcome<K>
-where
-    K: ClassKind,
-{
+impl Outcome {
     /// Records what is refused, unless the same stands already. What stays as it
     /// is gives the same one each time it is looked at.
-    pub fn refuse(&mut self, refused: Refused<K>) {
+    pub fn refuse(&mut self, refused: Refused) {
         if !self.refused.contains(&refused) {
             self.refused.push(refused);
         }
@@ -68,7 +63,10 @@ where
     /// This is the only place that is read, and it is read once nothing more is
     /// to be connected or decided. So a refusal names everything that met,
     /// whichever of it came first, and no rule sees what a refusal names.
-    pub fn gather(&mut self, classes: &Classes<K>) {
+    pub fn gather<C>(&mut self, classes: &Classes<C>)
+    where
+        C: ConstraintOf,
+    {
         for refused in std::mem::take(&mut self.refused) {
             let mut items = refused.items;
             let mut connections = BTreeSet::new();

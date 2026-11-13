@@ -6,8 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use super::ItemId;
-use super::class::ClassKind;
+use super::{ClassId, ItemId};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Cause {
@@ -30,15 +29,12 @@ pub enum Cause {
 /// What is refused, as whoever refuses it says it: of these classes, by these
 /// items.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Refused<K>
-where
-    K: ClassKind,
-{
+pub struct Refused {
     pub cause: Cause,
     /// What was judged: the bounds, the projections, the literals.
     pub items: BTreeSet<ItemId>,
     /// The classes it was judged of.
-    pub of: Vec<K::Id>,
+    pub of: Vec<ClassId>,
 }
 
 /// A refusal, with what settled the classes it is of.

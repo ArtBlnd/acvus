@@ -26,10 +26,10 @@ pub mod units;
 
 use std::collections::BTreeMap;
 
-use crate::primitive::{ItemId, Name, ScopeId};
+use crate::primitive::{ClassId, ItemId, Name, ScopeId};
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::constraint::{Bound, Constraint, ConstraintOf, Suspended};
-use crate::primitive::class::{ClassKind, State};
+use crate::primitive::class::State;
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::Refused;
 use crate::primitive::ty::{PartKey, Shape};
@@ -50,11 +50,8 @@ pub struct Language {
     pub structs: BTreeMap<Name, Vec<Name>>,
 }
 
-impl<K> Law<K> for Language
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    fn look(&self, scribe: &mut Scribe<'_, K>, constraint: &Constraint<K>, at: ItemId) -> Looked<K> {
+impl Law<Constraint> for Language {
+    fn look(&self, scribe: &mut Scribe<'_, Constraint>, constraint: &Constraint, at: ItemId) -> Looked<Constraint> {
         let told = tell(&View::of(scribe.classes(), scribe.closures()), &self.functions, constraint, at);
         match told.then {
             Some(Then::Way(way)) => passing::take(scribe, &self.functions, way, constraint.lower(), at),
@@ -74,7 +71,7 @@ where
         }
     }
 
-    fn same(&self, part: K::Id, declared: K::Id) -> Constraint<K> {
+    fn same(&self, part: ClassId, declared: ClassId) -> Constraint {
         Bound::Equal {
             lower: part,
             upper: declared,
@@ -82,7 +79,7 @@ where
         .into()
     }
 
-    fn one(&self, classes: &Classes<K>) -> Vec<(K::Id, K::Id, ItemId)> {
+    fn one(&self, classes: &Classes<Constraint>) -> Vec<(ClassId, ClassId, ItemId)> {
         enter::entering_one_another(classes)
     }
 
@@ -91,7 +88,7 @@ where
     ///
     /// A field named on a struct is the struct's type parameter at the place its
     /// declaration gives the field.
-    fn place(&self, head: &Shape<K::Id>, key: &PartKey) -> Place {
+    fn place(&self, head: &Shape<ClassId>, key: &PartKey) -> Place {
         match (head, key) {
             (Shape::Ref(..), key) if *key != PartKey::Target => Place::Within {
                 through: PartKey::Target,
@@ -105,25 +102,25 @@ where
         }
     }
 
-    fn admits(&self, head: &Shape<K::Id>, domain: &Domain) -> bool {
+    fn admits(&self, head: &Shape<ClassId>, domain: &Domain) -> bool {
         admits(head, domain)
     }
 
-    fn heads(&self, classes: &Classes<K>, bodies: &Bodies<'_, K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
+    fn heads(&self, classes: &Classes<Constraint>, bodies: &Bodies<'_>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads {
         rungs::heads(classes, bodies, &self.functions, asked, held)
     }
 
-    fn fixpoint(&self, classes: &Classes<K>, bodies: &Bodies<'_, K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
+    fn fixpoint(&self, classes: &Classes<Constraint>, bodies: &Bodies<'_>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads {
         rungs::fixpoint(classes, bodies, &self.functions, asked, held)
     }
 
-    fn end(&self, classes: &Classes<K>, bodies: &Bodies<'_, K>, class: K::Id) -> Vec<Refused<K>> {
+    fn end(&self, classes: &Classes<Constraint>, bodies: &Bodies<'_>, class: ClassId) -> Vec<Refused> {
         rungs::end(classes, bodies, &self.functions, class)
     }
 
     /// The body of each closure: a call gives its parameters what they lack, to
     /// a body made anew.
-    fn awaiting(&self, store: &Store<K>) -> Vec<ScopeId> {
+    fn awaiting(&self, store: &Store<Constraint>) -> Vec<ScopeId> {
         store.closures.iter().map(|(_, closure)| closure.body).collect()
     }
 }
@@ -138,20 +135,14 @@ pub(super) fn admits<P>(head: &Shape<P>, domain: &Domain) -> bool {
 /// bodies, as they are, or with heads supposed of some undecided classes, to
 /// ask what a constraint would come to if they took them.
 #[derive(Clone, Debug)]
-pub(super) struct View<'a, K>
-where
-    K: ClassKind,
-{
-    pub(super) classes: &'a Classes<K>,
-    pub(super) closures: &'a Closures<K>,
-    supposed: BTreeMap<K::Id, Shape<K::Id>>,
+pub(super) struct View<'a> {
+    pub(super) classes: &'a Classes<Constraint>,
+    pub(super) closures: &'a Closures,
+    supposed: BTreeMap<ClassId, Shape<ClassId>>,
 }
 
-impl<'a, K> View<'a, K>
-where
-    K: ClassKind,
-{
-    pub(super) fn of(classes: &'a Classes<K>, closures: &'a Closures<K>) -> Self {
+impl<'a> View<'a> {
+    pub(super) fn of(classes: &'a Classes<Constraint>, closures: &'a Closures) -> Self {
         Self {
             classes,
             closures,
@@ -160,13 +151,13 @@ where
     }
 
     /// This view, with `class` supposed to have the head `head`.
-    pub(super) fn supposing(mut self, class: K::Id, head: Shape<K::Id>) -> Self {
+    pub(super) fn supposing(mut self, class: ClassId, head: Shape<ClassId>) -> Self {
         self.supposed.insert(self.classes.find(class).id(), head);
         self
     }
 
     /// The head of `class`: its own where it is decided, or the one supposed.
-    pub(super) fn head(&self, class: K::Id) -> Option<&Shape<K::Id>> {
+    pub(super) fn head(&self, class: ClassId) -> Option<&Shape<ClassId>> {
         let root = self.classes.find(class);
         match &self.classes.get(root).state {
             State::Decided(decided) => Some(&decided.shape),
@@ -175,10 +166,7 @@ where
     }
 }
 
-impl<K> View<'_, K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+impl View<'_> {
     /// The class a declaration writes that `class` is bound to be one type with,
     /// by a bound not finished yet.
     ///
@@ -187,7 +175,7 @@ where
     /// Until then it has no head, and is not a class nothing is said of. An
     /// `Equal` is recorded by [`Law::same`] alone, with the declared class as its
     /// upper end; the declared class is an end of it too, and is bound to none.
-    pub(super) fn declared_for(&self, class: K::Id) -> Option<K::Id> {
+    pub(super) fn declared_for(&self, class: ClassId) -> Option<ClassId> {
         let root = self.classes.find(class).id();
         self.classes.constraints_of(class).find_map(|(constraint, _)| match constraint {
             Constraint::Bound(Bound::Equal { lower, upper }) if self.classes.find(*lower).id() == root => Some(*upper),
@@ -198,38 +186,29 @@ where
 
 /// What a relation tells of a constraint: what it comes to, and, where it waits for a
 /// class's head, the head it will hold that class's head against.
-pub(super) struct Told<K>
-where
-    K: ClassKind,
-{
-    pub(super) looked: Looked<K>,
-    pub(super) asks: Vec<(K::Id, Shape<K::Id>)>,
+pub(super) struct Told {
+    pub(super) looked: Looked<Constraint>,
+    pub(super) asks: Vec<(ClassId, Shape<ClassId>)>,
     /// What is still to be made in the store for the constraint to come to what it
     /// does. Telling only reads, so `looked` then says only that the constraint holds.
-    pub(super) then: Option<Then<K>>,
+    pub(super) then: Option<Then>,
 }
 
 /// What a constraint that holds has still to make in the store.
-pub(super) enum Then<K>
-where
-    K: ClassKind,
-{
+pub(super) enum Then {
     /// The signatures of the one way through declared functions it goes by.
-    Way(passing::Way<K>),
+    Way(passing::Way),
     /// A class with this head, written by the bound, which enters its upper end.
-    Enters(Shape<K::Id>),
+    Enters(Shape<ClassId>),
     /// The call its lower end, a function, is used by: it is passed to this
     /// class, a function type.
-    Calls(K::Id),
+    Calls(ClassId),
     /// The signature of the row its receiver goes to.
-    Named(passing::Received<K>),
+    Named(passing::Received),
 }
 
-impl<K> Told<K>
-where
-    K: ClassKind,
-{
-    pub(super) fn done(looked: Looked<K>) -> Self {
+impl Told {
+    pub(super) fn done(looked: Looked<Constraint>) -> Self {
         Self {
             looked,
             asks: Vec::new(),
@@ -239,10 +218,7 @@ where
 }
 
 /// What the constraint comes to in `view`, by the relation it is.
-pub(super) fn tell<K>(view: &View<'_, K>, functions: &functions::Functions, constraint: &Constraint<K>, at: ItemId) -> Told<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+pub(super) fn tell(view: &View<'_>, functions: &functions::Functions, constraint: &Constraint, at: ItemId) -> Told {
     let (lower, upper) = (constraint.lower(), constraint.upper());
     match constraint {
         Constraint::Bound(Bound::Enter { .. }) => enter::look(view, lower, upper, at),
@@ -257,11 +233,8 @@ where
 /// Each part known on `lower`, as one type with the part of its name on `upper`:
 /// what holds of two classes one of which enters, or is equal to, the other,
 /// whatever heads the two take.
-pub(super) fn parts_by_name<K>(classes: &Classes<K>, lower: K::Id, upper: K::Id) -> Vec<Pair<K>>
-where
-    K: ClassKind,
-{
-    let known: Vec<(PartKey, K::Id)> = match &classes.get(classes.find(lower)).state {
+pub(super) fn parts_by_name(classes: &Classes<Constraint>, lower: ClassId, upper: ClassId) -> Vec<Pair> {
+    let known: Vec<(PartKey, ClassId)> = match &classes.get(classes.find(lower)).state {
         State::Decided(decided) => decided.shape.places().into_iter().map(|(key, part)| (key, *part)).collect(),
         State::Undecided(undecided) => undecided.parts.iter().map(|(key, part)| (key.clone(), part.class)).collect(),
     };

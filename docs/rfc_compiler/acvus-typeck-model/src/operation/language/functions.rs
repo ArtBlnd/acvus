@@ -14,11 +14,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::primitive::class::{ClassKind, State};
+use crate::primitive::class::State;
+use crate::primitive::constraint::Constraint;
 use crate::primitive::id::Arena;
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{Shape, Ty};
-use crate::primitive::{ClosureId, ItemId, Name, NameId};
+use crate::primitive::{ClassId, ClosureId, ItemId, Name, NameId};
 use crate::store::classes::Classes;
 use crate::store::closures::{Closure, Closures};
 
@@ -87,13 +88,10 @@ impl Functions {
     /// Declares `name: parameters -> result`, by `by`: its signature is written
     /// as a body of its own, within `within`, and a closure is named of it.
     #[allow(clippy::too_many_arguments)]
-    pub fn declare<K>(&mut self, classes: &mut Classes<K>, scopes: &mut Scopes, closures: &mut Closures<K>, name: Name, parameters: &[Ty], result: &Ty, by: ItemId)
-    where
-        K: ClassKind,
-    {
+    pub fn declare(&mut self, classes: &mut Classes<Constraint>, scopes: &mut Scopes, closures: &mut Closures, name: Name, parameters: &[Ty], result: &Ty, by: ItemId) {
         let body = scopes.child(scopes.root());
         let mut written = BTreeMap::new();
-        let parameters: Vec<K::Id> = parameters.iter().map(|parameter| classes.write(body, parameter, by, &mut written)).collect();
+        let parameters: Vec<ClassId> = parameters.iter().map(|parameter| classes.write(body, parameter, by, &mut written)).collect();
         let result = classes.write(body, result, by, &mut written);
         let makes = made_by(classes, &written, &parameters);
         let closure = closures.name(Closure {
@@ -113,11 +111,8 @@ impl Functions {
 /// A brand a parameter writes is the brand of what is passed. Nothing passed can
 /// be any other brand the signature writes, so the function makes that one, and
 /// each use of it makes one of its own.
-fn made_by<K>(classes: &Classes<K>, written: &BTreeMap<Ty, K::Id>, parameters: &[K::Id]) -> BTreeSet<K::Id>
-where
-    K: ClassKind,
-{
-    let brand_of = |class: &K::Id| {
+fn made_by(classes: &Classes<Constraint>, written: &BTreeMap<Ty, ClassId>, parameters: &[ClassId]) -> BTreeSet<ClassId> {
+    let brand_of = |class: &ClassId| {
         let State::Decided(decided) = &classes.get(classes.find(*class)).state else {
             return None;
         };
@@ -126,9 +121,9 @@ where
         };
         Some(classes.find(*brand).id())
     };
-    let at_a_brand: BTreeSet<K::Id> = written.values().filter_map(brand_of).collect();
+    let at_a_brand: BTreeSet<ClassId> = written.values().filter_map(brand_of).collect();
     let themselves = parameters.iter().map(|parameter| classes.find(*parameter).id());
-    let by_a_parameter: BTreeSet<K::Id> = themselves.chain(classes.below(parameters.iter().copied())).collect();
+    let by_a_parameter: BTreeSet<ClassId> = themselves.chain(classes.below(parameters.iter().copied())).collect();
     &at_a_brand - &by_a_parameter
 }
 
@@ -136,7 +131,6 @@ where
 mod tests {
     use super::*;
     use crate::primitive::ClassId;
-    use crate::primitive::class::Live;
     use crate::primitive::ty::{Mutability, Scalar};
 
     fn hole(name: &str) -> Ty {
@@ -153,7 +147,7 @@ mod tests {
         let scopes = Scopes::new();
         let mut items: Arena<ItemId, ()> = Arena::default();
         let by = items.push(());
-        let mut classes = Classes::<Live>::default();
+        let mut classes = Classes::<Constraint>::default();
         let mut written = BTreeMap::new();
         let parameters: Vec<ClassId> = parameters.iter().map(|parameter| classes.write(scopes.root(), parameter, by, &mut written)).collect();
         classes.write(scopes.root(), result, by, &mut written);

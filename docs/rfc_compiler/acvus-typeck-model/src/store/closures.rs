@@ -8,98 +8,73 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::primitive::class::ClassKind;
 use crate::primitive::id::Arena;
 use crate::primitive::scope::Scopes;
-use crate::primitive::{ClosureId, ScopeId};
+use crate::primitive::{ClassId, ClosureId, ScopeId};
 
 /// A body, the scope its text is written in, with the classes of its
 /// parameters and of its result. What the body captures is whatever class
 /// outside that scope its text names.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Closure<K>
-where
-    K: ClassKind,
-{
+pub struct Closure {
     pub body: ScopeId,
-    pub parameters: Vec<K::Id>,
-    pub result: K::Id,
+    pub parameters: Vec<ClassId>,
+    pub result: ClassId,
     /// The classes of the body that stand for the brands a use makes: each is
     /// one type with a brand made anew for the use.
-    pub makes: BTreeSet<K::Id>,
+    pub makes: BTreeSet<ClassId>,
 }
 
 /// A copy of the body of a closure: the classes its parameters and its result
 /// became.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Copy<K>
-where
-    K: ClassKind,
-{
+pub struct Copy {
     pub closure: ClosureId,
-    pub parameters: Vec<K::Id>,
-    pub result: K::Id,
+    pub parameters: Vec<ClassId>,
+    pub result: ClassId,
 }
 
-#[derive(Clone, Debug)]
-pub struct Closures<K>
-where
-    K: ClassKind,
-{
-    closures: Arena<ClosureId, Closure<K>>,
+#[derive(Clone, Debug, Default)]
+pub struct Closures {
+    closures: Arena<ClosureId, Closure>,
     /// Each copy, by the scope its classes lie in.
-    copies: BTreeMap<ScopeId, Copy<K>>,
+    copies: BTreeMap<ScopeId, Copy>,
 }
 
-impl<K> Default for Closures<K>
-where
-    K: ClassKind,
-{
-    fn default() -> Self {
-        Self {
-            closures: Arena::default(),
-            copies: BTreeMap::new(),
-        }
-    }
-}
-
-impl<K> Closures<K>
-where
-    K: ClassKind,
-{
+impl Closures {
     /// Names a closure anew.
-    pub fn name(&mut self, closure: Closure<K>) -> ClosureId {
+    pub fn name(&mut self, closure: Closure) -> ClosureId {
         self.closures.push(closure)
     }
 
-    pub fn get(&self, closure: ClosureId) -> &Closure<K> {
+    pub fn get(&self, closure: ClosureId) -> &Closure {
         self.closures.get(closure)
     }
 
     /// The closure, for [`super::template::anew`] to give it the classes its own
     /// became.
-    pub(super) fn get_mut(&mut self, closure: ClosureId) -> &mut Closure<K> {
+    pub(super) fn get_mut(&mut self, closure: ClosureId) -> &mut Closure {
         self.closures.get_mut(closure)
     }
 
     /// Every copy said, with the scope its classes lie in.
-    pub fn copies(&self) -> impl Iterator<Item = (ScopeId, &Copy<K>)> {
+    pub fn copies(&self) -> impl Iterator<Item = (ScopeId, &Copy)> {
         self.copies.iter().map(|(scope, copy)| (*scope, copy))
     }
 
     /// Every closure named, in the order they were named.
-    pub fn iter(&self) -> impl Iterator<Item = (ClosureId, &Closure<K>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (ClosureId, &Closure)> {
         self.closures.iter()
     }
 
     /// Says that the classes of `scope` are `copy`.
-    pub fn copied(&mut self, scope: ScopeId, copy: Copy<K>) {
+    pub fn copied(&mut self, scope: ScopeId, copy: Copy) {
         let before = self.copies.insert(scope, copy);
         debug_assert_eq!(before, None, "a scope is one copy");
     }
 
     /// The copy of `closure` that `scope` is or lies in: the innermost such.
-    pub fn within(&self, scopes: &Scopes, scope: ScopeId, closure: ClosureId) -> Option<&Copy<K>> {
+    pub fn within(&self, scopes: &Scopes, scope: ScopeId, closure: ClosureId) -> Option<&Copy> {
         let mut scope = Some(scope);
         while let Some(current) = scope {
             if let Some(copy) = self.copies.get(&current).filter(|copy| copy.closure == closure) {
@@ -115,10 +90,9 @@ where
 mod tests {
     use super::*;
     use crate::primitive::ClassId;
-    use crate::primitive::class::Live;
     use crate::primitive::id::Arena;
 
-    fn two_closures() -> (Closures<Live>, ClosureId, ClosureId) {
+    fn two_closures() -> (Closures, ClosureId, ClosureId) {
         let scopes = Scopes::new();
         let [result, _] = classes();
         let of_one_body = || Closure {
@@ -127,7 +101,7 @@ mod tests {
             result,
             makes: BTreeSet::new(),
         };
-        let mut closures = Closures::<Live>::default();
+        let mut closures = Closures::default();
         let (first, second) = (closures.name(of_one_body()), closures.name(of_one_body()));
         (closures, first, second)
     }
@@ -140,7 +114,7 @@ mod tests {
     }
 
     /// A copy of `closure` with no parameter, whose result is `result`.
-    fn copy(closure: ClosureId, result: ClassId) -> Copy<Live> {
+    fn copy(closure: ClosureId, result: ClassId) -> Copy {
         Copy {
             closure,
             parameters: Vec::new(),

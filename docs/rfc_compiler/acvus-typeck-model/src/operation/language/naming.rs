@@ -16,11 +16,11 @@
 use std::collections::BTreeSet;
 
 use crate::primitive::adjustment::Adjustment;
-use crate::primitive::class::{ClassKind, State};
+use crate::primitive::class::State;
 use crate::primitive::constraint::{Bound, Constraint};
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::Shape;
-use crate::primitive::{ItemId, NameId, ScopeId};
+use crate::primitive::{ClassId, ItemId, NameId, ScopeId};
 
 use super::super::law::{Looked, Pair, Scribe};
 use super::calling;
@@ -37,10 +37,7 @@ use super::{Then, Told, View};
 /// and each argument apart as the passing to come holds its lower end, which may
 /// be decided while what lies below it is not; and the result, which is an end
 /// of no passing, is not decided before.
-pub(super) fn look<K>(view: &View<'_, K>, functions: &Functions, name: NameId, receiver: K::Id, wanted: K::Id, at: ItemId) -> Told<K>
-where
-    K: ClassKind,
-{
+pub(super) fn look(view: &View<'_>, functions: &Functions, name: NameId, receiver: ClassId, wanted: ClassId, at: ItemId) -> Told {
     let mut read = BTreeSet::from([receiver, wanted]);
     let Some(Shape::Fn(arguments, _)) = view.head(wanted) else {
         unreachable!("a call writes its function type");
@@ -74,21 +71,17 @@ where
 ///
 /// Naming knows such a function by its place in the table and by the type its
 /// first parameter writes alone.
-pub(super) trait ToldOf<K>
-where
-    K: ClassKind,
-{
+pub(super) trait ToldOf {
     /// What `call` comes to, `function` being the one called and `received` how
     /// the receiver fits its first parameter.
-    fn called(&self, scribe: &mut Scribe<'_, K>, function: usize, received: Received<K>, call: Call<K>) -> Looked<K>;
+    fn called(&self, scribe: &mut Scribe<'_, Constraint>, function: usize, received: Received, call: Call) -> Looked<Constraint>;
 }
 
 /// What the call comes to, the function `received` names being the one called:
 /// a row by its closure, and a function the table was told of as `told` says.
-pub(super) fn take<K, T>(scribe: &mut Scribe<'_, K>, functions: &Functions, told: &T, received: Received<K>, receiver: K::Id, wanted: K::Id, at: ItemId) -> Looked<K>
+pub(super) fn take<T>(scribe: &mut Scribe<'_, Constraint>, functions: &Functions, told: &T, received: Received, receiver: ClassId, wanted: ClassId, at: ItemId) -> Looked<Constraint>
 where
-    K: ClassKind<Constraint = Constraint<K>>,
-    T: ToldOf<K>,
+    T: ToldOf,
 {
     let of_wanted = scribe.classes().get(scribe.classes().find(wanted));
     let (State::Decided(decided), scope) = (&of_wanted.state, of_wanted.scope) else {
@@ -113,14 +106,11 @@ where
 
 /// A call by name as it is written: its receiver, the function type it writes
 /// and what that type holds, the scope it lies in and the item it goes by.
-pub(super) struct Call<K>
-where
-    K: ClassKind,
-{
-    pub(super) receiver: K::Id,
-    pub(super) wanted: K::Id,
-    pub(super) arguments: Vec<K::Id>,
-    pub(super) result: K::Id,
+pub(super) struct Call {
+    pub(super) receiver: ClassId,
+    pub(super) wanted: ClassId,
+    pub(super) arguments: Vec<ClassId>,
+    pub(super) result: ClassId,
     pub(super) scope: ScopeId,
     pub(super) at: ItemId,
 }
@@ -128,10 +118,7 @@ where
 /// Makes the signature of `row` anew: each argument after the receiver is passed
 /// to its parameter, and the row's result is one type with the call's. A call of
 /// another count of arguments is refused.
-fn of_a_row<K>(scribe: &mut Scribe<'_, K>, row: &Row, received: Received<K>, call: Call<K>) -> Looked<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+fn of_a_row(scribe: &mut Scribe<'_, Constraint>, row: &Row, received: Received, call: Call) -> Looked<Constraint> {
     let declared = scribe.closures().get(row.closure).clone();
     let after_the_receiver = &declared.parameters[1..];
     let written = calling::Call {

@@ -13,7 +13,7 @@ mod owners;
 pub mod template;
 pub mod verify;
 
-use crate::primitive::class::ClassKind;
+use crate::primitive::constraint::ConstraintOf;
 use crate::primitive::id::Arena;
 use crate::primitive::scope::Scopes;
 use crate::primitive::{BrandId, ItemId};
@@ -23,14 +23,30 @@ use crate::primitive::{BrandId, ItemId};
 /// names the others: a class lies in a scope, and a closure is a scope with
 /// classes of it, and is made anew into a scope. Not all of it is solved: what a
 /// declaration writes is read and made anew, and never changed.
-#[derive(Clone, Debug, Default)]
-pub struct Store<K>
+#[derive(Clone, Debug)]
+pub struct Store<C>
 where
-    K: ClassKind,
+    C: ConstraintOf,
 {
-    pub classes: classes::Classes<K>,
+    pub classes: classes::Classes<C>,
     pub scopes: Scopes,
-    pub closures: closures::Closures<K>,
+    pub closures: closures::Closures,
     /// Every brand made, with the item it was made by.
     pub brands: Arena<BrandId, ItemId>,
+}
+
+// Written out, as a derive would ask a constraint to have a default, and none
+// has.
+impl<C> Default for Store<C>
+where
+    C: ConstraintOf,
+{
+    fn default() -> Self {
+        Self {
+            classes: classes::Classes::default(),
+            scopes: Scopes::default(),
+            closures: closures::Closures::default(),
+            brands: Arena::default(),
+        }
+    }
 }

@@ -8,9 +8,9 @@
 
 use std::collections::BTreeSet;
 
+use crate::primitive::ClassId;
 use crate::primitive::Name;
-use crate::primitive::class::ClassKind;
-use crate::primitive::constraint::{Bound, Constraint};
+use crate::primitive::constraint::Bound;
 use crate::primitive::ty::Shape;
 
 use super::super::law::Looked;
@@ -27,10 +27,7 @@ use super::{Then, Told, View};
 /// | any other | `Error⟨lower⟩` |
 ///
 /// It asks no head of `lower`: what exits is as it is.
-pub(super) fn look<K>(view: &View<'_, K>, lower: K::Id, upper: K::Id) -> Told<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+pub(super) fn look(view: &View<'_>, lower: ClassId, upper: ClassId) -> Told {
     let Some(head) = view.head(lower) else {
         return Told::done(Looked::Waits {
             on: BTreeSet::from([lower]),

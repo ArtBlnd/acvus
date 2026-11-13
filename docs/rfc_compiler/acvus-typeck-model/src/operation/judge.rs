@@ -1,6 +1,6 @@
 //! Looking at a constraint: judging it, or learning what it waits for.
 
-use crate::primitive::class::ClassKind;
+use crate::primitive::constraint::ConstraintOf;
 use crate::store::Store;
 use crate::store::ledger::Awake;
 
@@ -23,10 +23,10 @@ use super::law::{Law, Looked, Scribe};
 /// This is the only place a constraint is finished, and the only place a guard or a
 /// wait is stated. So a rule cannot finish a constraint without judging it, nor leave
 /// one waiting on nothing.
-pub fn look<K, L>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, awake: Awake<K>) -> bool
+pub fn look<C, L>(store: &mut Store<C>, law: &L, outcome: &mut Outcome, awake: Awake<C>) -> bool
 where
-    K: ClassKind,
-    L: Law<K>,
+    C: ConstraintOf,
+    L: Law<C>,
 {
     let at = awake.at();
     let looked = law.look(&mut Scribe::new(store), awake.constraint(), at);

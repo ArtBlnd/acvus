@@ -2,54 +2,27 @@
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Debug;
-use std::hash::Hash;
 
-use super::constraint::{Constraint, ConstraintOf};
 use super::domain::Domain;
-use super::id::Id;
 use super::refusal::{Cause, Refused};
 use super::scope::Scopes;
 use super::ty::{PartKey, Shape};
 use super::{ClassId, ItemId, ScopeId};
 
-/// A kind of class, which gives its classes their ids.
-///
-/// A kind is a marker with no value of its own; it asks for the traits the
-/// records of its classes derive, as a derive asks them of the kind.
-pub trait ClassKind: Copy + Ord + Hash + Debug + Default {
-    type Id: Id + Ord + Hash + Debug;
-    /// What relates two classes of this kind. A store holds it until it is
-    /// finished, without reading what it means.
-    type Constraint: ConstraintOf<Self>;
-}
-
-/// The classes that are solved.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
-pub struct Live;
-
-impl ClassKind for Live {
-    type Id = ClassId;
-    type Constraint = Constraint<Self>;
-}
-
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Class<K>
-where
-    K: ClassKind,
-{
+pub struct Class {
     /// Where two classes are merged, the outer of their scopes.
     pub scope: ScopeId,
-    pub state: State<K>,
+    pub state: State,
     /// Every connection that made this class of the classes it was: the two ids
     /// connected, as they were given, and the item it went by. Where two classes
     /// are merged, those of both. Nothing is taken out, and no rule reads it: it
     /// is kept to say, of a refusal, what made the classes meet.
-    pub connections: Connections<K>,
+    pub connections: Connections,
 }
 
 /// Connections, each the two ids connected and the item it went by.
-pub type Connections<K> = BTreeSet<(<K as ClassKind>::Id, <K as ClassKind>::Id, ItemId)>;
+pub type Connections = BTreeSet<(ClassId, ClassId, ItemId)>;
 
 /// A class is undecided, holding what has been recorded on it, or decided,
 /// holding its shape alone.
@@ -57,25 +30,19 @@ pub type Connections<K> = BTreeSet<(<K as ClassKind>::Id, <K as ClassKind>::Id, 
 /// A decided class never changes: a constraint that reaches it afterwards is
 /// checked against its shape at once and is not kept.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum State<K>
-where
-    K: ClassKind,
-{
-    Undecided(Undecided<K>),
-    Decided(Decided<K>),
+pub enum State {
+    Undecided(Undecided),
+    Decided(Decided),
 }
 
 /// What has been recorded on an undecided class, each with what recorded it.
 /// Deciding the class consumes them.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct Undecided<K>
-where
-    K: ClassKind,
-{
+pub struct Undecided {
     /// The parts projections have named, each waiting for the class's head.
     /// They give the class no head by themselves. A name has one class, however many
     /// projections name it on either side.
-    pub parts: BTreeMap<PartKey, Part<K>>,
+    pub parts: BTreeMap<PartKey, Part>,
     /// Every domain registered. Their intersection is computed.
     pub domains: BTreeSet<(Domain, ItemId)>,
 }
@@ -85,7 +52,7 @@ where
 /// A constraint keeps the ids it was recorded with: they may name classes since
 /// merged into others, and both may name one class, as a class can be its own
 /// lower bound.
-pub type Constraints<K> = BTreeSet<(<K as ClassKind>::Constraint, ItemId)>;
+pub type Constraints<C> = BTreeSet<(C, ItemId)>;
 
 /// How a part came to be named on a class.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -104,11 +71,8 @@ pub enum Side {
 /// A part is added only together with the item that names it, so `lower`,
 /// `upper` and `carried` are never all empty.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Part<K>
-where
-    K: ClassKind,
-{
-    pub class: K::Id,
+pub struct Part {
+    pub class: ClassId,
     /// Items that named the part as a lower bound: a write into it.
     pub lower: BTreeSet<ItemId>,
     /// Items that named the part as an upper bound: a read of it.
@@ -123,11 +87,8 @@ where
 /// undecided ones: a signature's hole is an undecided class its decided
 /// classes hold as a part.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Decided<K>
-where
-    K: ClassKind,
-{
-    pub shape: Shape<K::Id>,
+pub struct Decided {
+    pub shape: Shape<ClassId>,
     /// The items that decided it, for a refusal to name.
     pub by: BTreeSet<ItemId>,
     pub origin: Origin,
@@ -150,46 +111,34 @@ pub enum Origin {
 /// registered on a class already decided. Nothing in the store judges these; its
 /// caller checks each against the class's shape.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Pending<K>
-where
-    K: ClassKind,
-{
-    pub class: K::Id,
+pub struct Pending {
+    pub class: ClassId,
     pub domains: BTreeSet<(Domain, ItemId)>,
 }
 
 /// A part named on a class whose shape has no place for it. Nothing in the
 /// store judges this: it is its caller's to refuse, or to take elsewhere.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Unplaced<K>
-where
-    K: ClassKind,
-{
-    pub class: K::Id,
+pub struct Unplaced {
+    pub class: ClassId,
     pub key: PartKey,
-    pub part: Part<K>,
+    pub part: Part,
     /// The item that decided the class.
     pub at: ItemId,
 }
 
 /// Two classes made one, and what that leaves to whoever merged them.
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Merged<K>
-where
-    K: ClassKind,
-{
-    pub class: Class<K>,
+pub struct Merged {
+    pub class: Class,
     /// Pairs of parts of one name, each of which must be one class in turn.
-    pub pairs: Vec<(K::Id, K::Id)>,
-    pub refusals: Vec<Refused<K>>,
-    pub pending: Option<Pending<K>>,
-    pub unplaced: Vec<Unplaced<K>>,
+    pub pairs: Vec<(ClassId, ClassId)>,
+    pub refusals: Vec<Refused>,
+    pub pending: Option<Pending>,
+    pub unplaced: Vec<Unplaced>,
 }
 
-impl<K> State<K>
-where
-    K: ClassKind,
-{
+impl State {
     pub fn is_decided(&self) -> bool {
         matches!(self, State::Decided(_))
     }
@@ -197,7 +146,7 @@ where
     /// The class of the part `key` names, where the state has one: the
     /// shape's place for it, or the class the bounds of an undecided class
     /// have named it by.
-    pub fn part(&self, key: &PartKey) -> Option<K::Id> {
+    pub fn part(&self, key: &PartKey) -> Option<ClassId> {
         match self {
             State::Undecided(undecided) => undecided.parts.get(key).map(|part| part.class),
             State::Decided(decided) => decided.shape.place(key).copied(),
@@ -205,7 +154,7 @@ where
     }
 
     /// The class of every part.
-    pub fn parts(&self) -> Vec<K::Id> {
+    pub fn parts(&self) -> Vec<ClassId> {
         match self {
             State::Undecided(undecided) => undecided.parts.values().map(|part| part.class).collect(),
             State::Decided(decided) => decided.shape.places().into_iter().map(|(_, class)| *class).collect(),
@@ -213,14 +162,11 @@ where
     }
 }
 
-impl<K> Class<K>
-where
-    K: ClassKind,
-{
+impl Class {
     /// The same class, with every id it holds given by `f`.
     pub fn renamed<F>(self, mut f: F) -> Self
     where
-        F: FnMut(K::Id) -> K::Id,
+        F: FnMut(ClassId) -> ClassId,
     {
         let state = match self.state {
             State::Decided(decided) => State::Decided(Decided {
@@ -263,7 +209,7 @@ where
     /// program is refused. An undecided class merged with a decided one
     /// gives each of its parts to the decided one's place for it, and leaves
     /// each part with no place, its calls and domains to its caller.
-    pub fn merge(self, other: Self, root: K::Id, scopes: &Scopes, at: ItemId) -> Merged<K> {
+    pub fn merge(self, other: Self, root: ClassId, scopes: &Scopes, at: ItemId) -> Merged {
         let scope = scopes.outer(self.scope, other.scope);
         let mut connections = self.connections;
         connections.extend(other.connections);

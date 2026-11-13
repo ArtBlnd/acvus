@@ -9,7 +9,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::primitive::adjustment::Adjustment;
-use crate::primitive::class::ClassKind;
 use crate::primitive::constraint::{Bound, Constraint};
 use crate::primitive::ty::{PartKey, Shape};
 use crate::primitive::{ClosureId, Name};
@@ -43,10 +42,7 @@ impl Units {
     }
 }
 
-impl<K> ToldOf<K> for Units
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+impl ToldOf for Units {
     /// Uses the module the function is of, and calls that function of it with
     /// the receiver as its first argument, lent where the receiver is lent.
     ///
@@ -56,7 +52,7 @@ where
     /// its name of what that gives, and it is passed to the function type of the
     /// receiver, the arguments and the result. What the receiver takes besides a
     /// lend, the passing of it to the function's first parameter records.
-    fn called(&self, scribe: &mut Scribe<'_, K>, function: usize, received: Received<K>, call: Call<K>) -> Looked<K> {
+    fn called(&self, scribe: &mut Scribe<'_, Constraint>, function: usize, received: Received, call: Call) -> Looked<Constraint> {
         let method = &self.methods[&function];
         let Call { scope, at, .. } = call;
         let by = || BTreeSet::from([at]);

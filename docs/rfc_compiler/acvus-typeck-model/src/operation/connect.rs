@@ -1,7 +1,8 @@
 //! Connecting: making two classes one type.
 
 use crate::primitive::ItemId;
-use crate::primitive::class::{ClassKind, Side};
+use crate::primitive::class::Side;
+use crate::primitive::constraint::ConstraintOf;
 use crate::store::Store;
 
 use super::Outcome;
@@ -22,10 +23,10 @@ use super::take_in::take_in;
 /// decided as a head with no place of that name is asked of the law
 /// ([`Law::place`]), and so is the head a literal's class takes
 /// ([`Law::admits`]).
-pub fn connect<K, L>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, pair: Pair<K>, at: ItemId) -> bool
+pub fn connect<C, L>(store: &mut Store<C>, law: &L, outcome: &mut Outcome, pair: Pair, at: ItemId) -> bool
 where
-    K: ClassKind,
-    L: Law<K>,
+    C: ConstraintOf,
+    L: Law<C>,
 {
     let Store { classes, scopes, .. } = store;
     let mut pairs = vec![(pair, at)];

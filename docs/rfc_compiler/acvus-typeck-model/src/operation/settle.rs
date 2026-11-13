@@ -2,8 +2,9 @@
 
 use std::collections::BTreeSet;
 
+use crate::primitive::ClassId;
 use crate::primitive::ItemId;
-use crate::primitive::class::ClassKind;
+use crate::primitive::constraint::ConstraintOf;
 use crate::store::Store;
 use crate::store::classes::Classes;
 
@@ -28,11 +29,11 @@ use super::law::{Law, Pair};
 /// or decided, so nothing is looked at that nothing has happened to. A class is
 /// decided only after looking has run to its end, so every guard is as its constraint
 /// last stated it.
-pub fn settle<K, L, F>(store: &mut Store<K>, law: &L, outcome: &mut Outcome<K>, at: ItemId, visit: &F)
+pub fn settle<C, L, F>(store: &mut Store<C>, law: &L, outcome: &mut Outcome, at: ItemId, visit: &F)
 where
-    K: ClassKind,
-    L: Law<K>,
-    F: Fn(&Classes<K>) -> Vec<K::Id>,
+    C: ConstraintOf,
+    L: Law<C>,
+    F: Fn(&Classes<C>) -> Vec<ClassId>,
 {
     loop {
         loop {
@@ -57,10 +58,10 @@ where
 
 /// The classes `visit` gives, each once, by its root, in the order it first
 /// gives them.
-pub(super) fn asked<K, F>(classes: &Classes<K>, visit: &F) -> Vec<K::Id>
+pub(super) fn asked<C, F>(classes: &Classes<C>, visit: &F) -> Vec<ClassId>
 where
-    K: ClassKind,
-    F: Fn(&Classes<K>) -> Vec<K::Id>,
+    C: ConstraintOf,
+    F: Fn(&Classes<C>) -> Vec<ClassId>,
 {
     let mut seen = BTreeSet::new();
     visit(classes)

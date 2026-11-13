@@ -6,8 +6,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::primitive::class::ClassKind;
-use crate::primitive::constraint::{Bound, Constraint};
+use crate::primitive::ClassId;
+use crate::primitive::constraint::Bound;
 
 use super::super::law::Looked;
 use super::{Told, View};
@@ -18,10 +18,7 @@ use super::{Told, View};
 /// No class of that type is undecided by then, and a decided class is compared
 /// with whatever it is connected to and never changed by it. So the type enters
 /// as a declared one does, and nothing outside reaches into it.
-pub(super) fn look<K>(view: &View<'_, K>, lower: K::Id, upper: K::Id) -> Told<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
+pub(super) fn look(view: &View<'_>, lower: ClassId, upper: ClassId) -> Told {
     let on = without_a_type(view, lower);
     if !on.is_empty() {
         return Told::done(Looked::Waits {
@@ -39,10 +36,7 @@ where
 
 /// The classes within the type of `class` that have no type yet: each with no
 /// head, and each that is a part of itself, which never comes to have one.
-fn without_a_type<K>(view: &View<'_, K>, class: K::Id) -> BTreeSet<K::Id>
-where
-    K: ClassKind,
-{
+fn without_a_type(view: &View<'_>, class: ClassId) -> BTreeSet<ClassId> {
     let classes = view.classes;
     let mut found = BTreeSet::new();
     let mut seen = BTreeSet::new();

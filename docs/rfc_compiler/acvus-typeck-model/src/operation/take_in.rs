@@ -12,9 +12,11 @@
 
 use std::collections::BTreeSet;
 
+use crate::primitive::ClassId;
 use crate::primitive::ItemId;
 use crate::primitive::adjustment::Adjustment;
-use crate::primitive::class::{ClassKind, Pending, Side, State, Unplaced};
+use crate::primitive::class::{Pending, Side, State, Unplaced};
+use crate::primitive::constraint::ConstraintOf;
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{PartKey, Shape};
 use crate::store::classes::{Classes, Unified};
@@ -24,10 +26,10 @@ use super::law::{Law, Pair, Place};
 
 /// Takes in what `unified` left, and gives the pairs that are one type by where
 /// the law says a part lies.
-pub(super) fn take_in<K, L>(classes: &mut Classes<K>, law: &L, outcome: &mut Outcome<K>, unified: Unified<K>) -> Vec<(Pair<K>, ItemId)>
+pub(super) fn take_in<C, L>(classes: &mut Classes<C>, law: &L, outcome: &mut Outcome, unified: Unified) -> Vec<(Pair, ItemId)>
 where
-    K: ClassKind,
-    L: Law<K>,
+    C: ConstraintOf,
+    L: Law<C>,
 {
     for refusal in unified.refusals {
         outcome.refuse(refusal);
@@ -44,10 +46,10 @@ where
 
 /// Refuses each domain a literal registered on a class that the head the class
 /// came to have is not of.
-fn refuse_outside_domain<K, L>(classes: &Classes<K>, law: &L, outcome: &mut Outcome<K>, pending: Pending<K>)
+fn refuse_outside_domain<C, L>(classes: &Classes<C>, law: &L, outcome: &mut Outcome, pending: Pending)
 where
-    K: ClassKind,
-    L: Law<K>,
+    C: ConstraintOf,
+    L: Law<C>,
 {
     let Pending { class, domains } = pending;
     let head = decided(classes, class);
@@ -66,10 +68,10 @@ where
 /// one type with the part found where the law says it lies, and each projection
 /// that named it takes the adjustments of the way there. Where it lies nowhere,
 /// the program is refused.
-fn place<K, L>(classes: &mut Classes<K>, law: &L, outcome: &mut Outcome<K>, unplaced: Unplaced<K>) -> Option<(Pair<K>, ItemId)>
+fn place<C, L>(classes: &mut Classes<C>, law: &L, outcome: &mut Outcome, unplaced: Unplaced) -> Option<(Pair, ItemId)>
 where
-    K: ClassKind,
-    L: Law<K>,
+    C: ConstraintOf,
+    L: Law<C>,
 {
     let Unplaced { class, key, part, at } = unplaced;
     let projections: Vec<ItemId> = part.lower.iter().chain(&part.upper).copied().collect();
@@ -97,10 +99,10 @@ where
 /// it under another key: that part, named there by `projections`, and the
 /// adjustment each step takes. None where the law says the
 /// part lies nowhere.
-fn through<K, L>(classes: &mut Classes<K>, law: &L, class: K::Id, key: &PartKey, projections: &[ItemId]) -> Option<(K::Id, Vec<Adjustment>)>
+fn through<C, L>(classes: &mut Classes<C>, law: &L, class: ClassId, key: &PartKey, projections: &[ItemId]) -> Option<(ClassId, Vec<Adjustment>)>
 where
-    K: ClassKind,
-    L: Law<K>,
+    C: ConstraintOf,
+    L: Law<C>,
 {
     let mut adjustments = Vec::new();
     let mut asked = BTreeSet::from([classes.find(class).id()]);
@@ -130,9 +132,9 @@ where
 ///
 /// The part is read there, whatever it was where it was named: a part reached
 /// through another is not written into the class that holds it.
-fn read_on<K>(classes: &mut Classes<K>, owner: K::Id, key: &PartKey, projections: &[ItemId]) -> Option<K::Id>
+fn read_on<C>(classes: &mut Classes<C>, owner: ClassId, key: &PartKey, projections: &[ItemId]) -> Option<ClassId>
 where
-    K: ClassKind,
+    C: ConstraintOf,
 {
     let mut found = None;
     for projection in projections {
@@ -142,9 +144,9 @@ where
 }
 
 /// The head of `class`, which a union or a decision left decided.
-fn decided<K>(classes: &Classes<K>, class: K::Id) -> Shape<K::Id>
+fn decided<C>(classes: &Classes<C>, class: ClassId) -> Shape<ClassId>
 where
-    K: ClassKind,
+    C: ConstraintOf,
 {
     let State::Decided(decided) = &classes.get(classes.find(class)).state else {
         unreachable!("what a union leaves is left of a class that came to be decided");

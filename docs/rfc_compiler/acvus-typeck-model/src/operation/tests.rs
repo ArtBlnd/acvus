@@ -11,7 +11,7 @@ use super::law::{Heads, Law, Looked, Offer, Pair, Place, Scribe};
 use super::testing::{EXCLUSIVE, SHARED, U8, World, reorder};
 use crate::primitive::adjustment::{Adjustment, Adjustments};
 use crate::primitive::constraint::{Bound, Constraint, ConstraintOf};
-use crate::primitive::class::{Live, Side, State};
+use crate::primitive::class::{Side, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::adjustment::Subtyping;
@@ -1511,8 +1511,8 @@ fn parts_made_one_because_what_holds_them_is_one_are_refused_naming_what_made_th
 /// class is `u8`.
 struct Odd;
 
-impl Law<Live> for Odd {
-    fn look(&self, _: &mut Scribe<'_, Live>, constraint: &Constraint<Live>, _: ItemId) -> Looked<Live> {
+impl Law<Constraint> for Odd {
+    fn look(&self, _: &mut Scribe<'_, Constraint>, constraint: &Constraint, _: ItemId) -> Looked<Constraint> {
         Looked::Holds {
             pairs: vec![Pair::Part {
                 part: constraint.lower(),
@@ -1524,7 +1524,7 @@ impl Law<Live> for Odd {
         }
     }
 
-    fn same(&self, part: ClassId, declared: ClassId) -> Constraint<Live> {
+    fn same(&self, part: ClassId, declared: ClassId) -> Constraint {
         Bound::Equal {
             lower: part,
             upper: declared,
@@ -1532,7 +1532,7 @@ impl Law<Live> for Odd {
         .into()
     }
 
-    fn one(&self, _: &Classes<Live>) -> Vec<(ClassId, ClassId, ItemId)> {
+    fn one(&self, _: &Classes<Constraint>) -> Vec<(ClassId, ClassId, ItemId)> {
         Vec::new()
     }
 
@@ -1544,7 +1544,7 @@ impl Law<Live> for Odd {
         true
     }
 
-    fn heads(&self, classes: &Classes<Live>, _: &super::law::Bodies<'_, Live>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
+    fn heads(&self, classes: &Classes<Constraint>, _: &super::law::Bodies<'_>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads {
         let only = |class: ClassId| {
             let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
                 return Offer::Nothing;
@@ -1555,22 +1555,22 @@ impl Law<Live> for Odd {
                 by: BTreeSet::new(),
             }
         };
-        let ladder: [&dyn Fn(ClassId) -> Offer<Live>; 1] = [&only];
+        let ladder: [&dyn Fn(ClassId) -> Offer; 1] = [&only];
         Heads::of_ladder(ladder, asked, held)
     }
 
-    fn fixpoint(&self, _: &Classes<Live>, _: &super::law::Bodies<'_, Live>, _: &[ClassId], _: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
+    fn fixpoint(&self, _: &Classes<Constraint>, _: &super::law::Bodies<'_>, _: &[ClassId], _: &dyn Fn(ClassId) -> bool) -> Heads {
         Heads {
             heads: Vec::new(),
             refused: Vec::new(),
         }
     }
 
-    fn end(&self, _: &Classes<Live>, _: &super::law::Bodies<'_, Live>, _: ClassId) -> Vec<Refused<Live>> {
+    fn end(&self, _: &Classes<Constraint>, _: &super::law::Bodies<'_>, _: ClassId) -> Vec<Refused> {
         Vec::new()
     }
 
-    fn awaiting(&self, _: &crate::store::Store<Live>) -> Vec<crate::primitive::ScopeId> {
+    fn awaiting(&self, _: &crate::store::Store<Constraint>) -> Vec<crate::primitive::ScopeId> {
         Vec::new()
     }
 }
