@@ -8,7 +8,7 @@ use crate::primitive::domain::Domain;
 use crate::primitive::id::Arena;
 use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape, VariantOf};
 use crate::primitive::Name;
-use crate::primitive::{ClassId, ItemId, LambdaId};
+use crate::primitive::{ClassId, ItemId};
 use crate::store::Store;
 use crate::store::classes::Classes;
 
@@ -125,13 +125,6 @@ impl World {
             }
             .into(),
         )
-    }
-
-    /// A lambda over `captures`, where the text defines it: the class of the
-    /// expression, which the function value of a closure named anew enters.
-    pub(super) fn define(&mut self, lambda: LambdaId, captures: Vec<ClassId>) -> ClassId {
-        let closure = self.store.closures.name(lambda, captures);
-        self.text(Shape::FnValue(BTreeSet::from([closure])))
     }
 
     /// `callee(arguments)`: the class of the expression. The callee is passed to

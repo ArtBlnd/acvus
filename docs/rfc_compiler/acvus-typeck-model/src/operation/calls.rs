@@ -1,148 +1,129 @@
 //! Calls, as programs: each test is a ruling of `TERMS.md` on function values
-//! run, with the templates written by hand.
+//! run, with the bodies written by hand.
 
 use std::collections::BTreeSet;
 
 use super::language::Language;
-use super::language::lambdas::{Defined, Lambda};
 use super::testing::{U8, World, reorder};
-use crate::primitive::class::Template;
 use crate::primitive::constraint::Bound;
 use crate::primitive::refusal::Cause;
-use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{Scalar, Shape};
-use crate::primitive::{ClassId, ItemId, LambdaId, TemplateId};
-use crate::store::classes::Classes;
+use crate::primitive::{ClassId, ItemId, ScopeId};
+use crate::store::closures::{Closure, Copy};
 
 const U16: Shape<ClassId> = Shape::Scalar(Scalar::U16);
 
-/// A template being written: its classes, and the item each thing it writes
-/// goes by.
+/// The body of a lambda being written: a scope of the world's store, within the
+/// scope the lambda is written in.
 struct Body<'a> {
-    template: Classes<Template>,
-    scopes: Scopes,
+    scope: ScopeId,
+    /// The scope the lambda is written in.
+    lies_in: ScopeId,
     world: &'a mut World,
 }
 
 impl<'a> Body<'a> {
+    /// The body of a lambda written where the program is.
     fn new(world: &'a mut World) -> Self {
-        Self {
-            template: Classes::default(),
-            scopes: Scopes::new(),
-            world,
-        }
+        let root = world.store.scopes.root();
+        Self::within(world, root)
     }
 
-    fn undecided(&mut self) -> TemplateId {
-        self.template.undecided(self.scopes.root())
+    /// The body of a lambda written in the scope `lies_in`.
+    fn within(world: &'a mut World, lies_in: ScopeId) -> Self {
+        let scope = world.store.scopes.child(lies_in);
+        Self { scope, lies_in, world }
     }
 
-    fn text(&mut self, shape: Shape<TemplateId>) -> TemplateId {
+    fn undecided(&mut self) -> ClassId {
+        self.world.store.classes.undecided(self.scope)
+    }
+
+    fn text(&mut self, shape: Shape<ClassId>) -> ClassId {
         let by = self.world.items.push("written in a body");
-        self.template.decided(self.scopes.root(), shape, BTreeSet::from([by]))
+        self.world.store.classes.decided(self.scope, shape, BTreeSet::from([by]))
     }
 
-    fn enter(&mut self, lower: TemplateId, upper: TemplateId) -> ItemId {
+    fn enter(&mut self, lower: ClassId, upper: ClassId) -> ItemId {
         let by = self.world.items.push("bound in a body");
-        self.template.constrain(Bound::Enter { lower, upper }.into(), by);
+        self.world.store.classes.constrain(Bound::Enter { lower, upper }.into(), by);
         by
+    }
+
+    /// Names the closure of the body, which takes `parameters` and gives
+    /// `result`, and gives the class of the lambda as an expression where it is
+    /// written: one with the function value of that closure.
+    fn defined(self, parameters: Vec<ClassId>, result: ClassId) -> ClassId {
+        let Self { scope, lies_in, world } = self;
+        let closure = world.store.closures.name(Closure {
+            body: scope,
+            parameters: parameters.clone(),
+            result,
+        });
+        world.store.closures.copied(scope, Copy { closure, parameters, result });
+        let by = world.items.push("definition");
+        world.store.classes.decided(lies_in, Shape::FnValue(BTreeSet::from([closure])), BTreeSet::from([by]))
     }
 }
 
 /// `|x| x`
-fn identity(world: &mut World, law: &mut Language) -> LambdaId {
+fn identity(world: &mut World) -> ClassId {
     let mut body = Body::new(world);
     let (x, result) = (body.undecided(), body.undecided());
     body.enter(x, result);
-    law.lambdas.write(Lambda {
-        template: body.template,
-        parameters: vec![x],
-        result,
-        captures: Vec::new(),
-        defines: Vec::new(),
-    })
+    body.defined(vec![x], result)
 }
 
 /// `|x| v`, `v` a value of the type `of`.
-fn constant(world: &mut World, law: &mut Language, of: Shape<TemplateId>) -> LambdaId {
+fn constant(world: &mut World, of: Shape<ClassId>) -> ClassId {
     let mut body = Body::new(world);
     let (x, result) = (body.undecided(), body.undecided());
     let value = body.text(of);
     body.enter(value, result);
-    law.lambdas.write(Lambda {
-        template: body.template,
-        parameters: vec![x],
-        result,
-        captures: Vec::new(),
-        defines: Vec::new(),
-    })
+    body.defined(vec![x], result)
 }
 
 /// `|x| a = Some(x)`, `a` captured.
-fn remember(world: &mut World, law: &mut Language) -> LambdaId {
+fn remember(world: &mut World, a: ClassId) -> ClassId {
     let mut body = Body::new(world);
-    let (a, x, result) = (body.undecided(), body.undecided(), body.undecided());
+    let (x, result) = (body.undecided(), body.undecided());
     let some = body.text(Shape::Option(x));
     body.enter(some, a);
     let unit = body.text(Shape::Unit);
     body.enter(unit, result);
-    law.lambdas.write(Lambda {
-        template: body.template,
-        parameters: vec![x],
-        result,
-        captures: vec![a],
-        defines: Vec::new(),
-    })
+    body.defined(vec![x], result)
 }
 
 /// `|x| { let z: u8 = 'c'; x }`
-fn broken(world: &mut World, law: &mut Language) -> LambdaId {
+fn broken(world: &mut World) -> ClassId {
     let mut body = Body::new(world);
     let (x, z, result) = (body.undecided(), body.undecided(), body.undecided());
     let (declared, written) = (body.text(Shape::Scalar(Scalar::U8)), body.text(Shape::Scalar(Scalar::Char)));
     body.enter(declared, z);
     body.enter(written, z);
     body.enter(x, result);
-    law.lambdas.write(Lambda {
-        template: body.template,
-        parameters: vec![x],
-        result,
-        captures: Vec::new(),
-        defines: Vec::new(),
-    })
+    body.defined(vec![x], result)
 }
 
 /// `|x| |y| Some(x)`: a lambda that defines one over its parameter.
-fn defining(world: &mut World, law: &mut Language) -> LambdaId {
-    let inner = {
-        let mut body = Body::new(world);
-        let (x, y, result) = (body.undecided(), body.undecided(), body.undecided());
-        let some = body.text(Shape::Option(x));
-        body.enter(some, result);
-        law.lambdas.write(Lambda {
-            template: body.template,
-            parameters: vec![y],
-            result,
-            captures: vec![x],
-            defines: Vec::new(),
-        })
+fn defining(world: &mut World) -> ClassId {
+    let mut outer = Body::new(world);
+    let (x, result) = (outer.undecided(), outer.undecided());
+    let (outer_scope, lies_in) = (outer.scope, outer.lies_in);
+
+    let mut inner = Body::within(world, outer_scope);
+    let (y, given) = (inner.undecided(), inner.undecided());
+    let some = inner.text(Shape::Option(x));
+    inner.enter(some, given);
+    let value = inner.defined(vec![y], given);
+
+    let mut outer = Body {
+        scope: outer_scope,
+        lies_in,
+        world,
     };
-    let by = world.items.push("definition in a body");
-    let mut body = Body::new(world);
-    let (x, value, result) = (body.undecided(), body.undecided(), body.undecided());
-    body.enter(value, result);
-    law.lambdas.write(Lambda {
-        template: body.template,
-        parameters: vec![x],
-        result,
-        captures: Vec::new(),
-        defines: vec![Defined {
-            lambda: inner,
-            captures: vec![x],
-            value,
-            by,
-        }],
-    })
+    outer.enter(value, result);
+    outer.defined(vec![x], result)
 }
 
 fn behind(world: &mut World, mut value: ClassId, lets: usize) -> ClassId {
@@ -157,14 +138,14 @@ fn behind(world: &mut World, mut value: ClassId, lets: usize) -> ClassId {
 /// asked in each order. Every order names the same in each refusal.
 fn comes_to<F>(expected: &str, build: F)
 where
-    F: Fn(&mut World, &mut Language, usize) -> ClassId,
+    F: Fn(&mut World, usize) -> ClassId,
 {
     for lets in 0..4 {
         let mut first = None;
         for order in 0..24 {
             let mut world = World::new();
-            let mut law = Language::default();
-            let observed = build(&mut world, &mut law, lets);
+            let law = Language::default();
+            let observed = build(&mut world, lets);
             reorder(&mut world.open, order);
             world.solve(&law);
             assert_eq!(world.outcome_of(observed), expected, "behind {lets} lets, in order {order}");
@@ -185,9 +166,8 @@ where
 
 #[test]
 fn a_call_gives_what_the_body_gives_of_its_argument() {
-    comes_to("u8", |w, law, lets| {
-        let identity = identity(w, law);
-        let f = w.define(identity, Vec::new());
+    comes_to("u8", |w, lets| {
+        let f = identity(w);
         let f = behind(w, f, lets);
         let argument = w.text(U8);
         w.call(f, &[argument])
@@ -197,9 +177,8 @@ fn a_call_gives_what_the_body_gives_of_its_argument() {
 #[test]
 fn two_calls_give_a_parameter_two_types() {
     for (observed, expected) in [(0, "u8"), (1, "u16")] {
-        comes_to(expected, |w, law, lets| {
-            let identity = identity(w, law);
-            let f = w.define(identity, Vec::new());
+        comes_to(expected, |w, lets| {
+            let f = identity(w);
             let f = behind(w, f, lets);
             let (first, second) = (w.text(U8), w.text(U16));
             [w.call(f, &[first]), w.call(f, &[second])][observed]
@@ -209,9 +188,8 @@ fn two_calls_give_a_parameter_two_types() {
 
 #[test]
 fn a_call_with_another_count_of_arguments_is_refused() {
-    comes_to("refused: Mismatch", |w, law, lets| {
-        let identity = identity(w, law);
-        let f = w.define(identity, Vec::new());
+    comes_to("refused: Mismatch", |w, lets| {
+        let f = identity(w);
         let f = behind(w, f, lets);
         let (first, second) = (w.text(U8), w.text(U8));
         w.call(f, &[first, second])
@@ -220,7 +198,7 @@ fn a_call_with_another_count_of_arguments_is_refused() {
 
 #[test]
 fn what_is_no_function_is_not_called() {
-    comes_to("refused: NoChange", |w, _, lets| {
+    comes_to("refused: NoChange", |w, lets| {
         let f = w.text(U8);
         let f = behind(w, f, lets);
         let argument = w.text(U8);
@@ -232,11 +210,10 @@ fn what_is_no_function_is_not_called() {
 
 /// `let a = None; let f = |x| a = Some(x);`, then `f` called with each of
 /// `arguments`: the class of `a`.
-fn remembering(w: &mut World, law: &mut Language, lets: usize, arguments: &[Shape<ClassId>]) -> ClassId {
+fn remembering(w: &mut World, lets: usize, arguments: &[Shape<ClassId>]) -> ClassId {
     let nothing = w.undecided();
     let a = w.text(Shape::Option(nothing));
-    let remember = remember(w, law);
-    let f = w.define(remember, vec![a]);
+    let f = remember(w, a);
     let f = behind(w, f, lets);
     for argument in arguments {
         let argument = w.text(argument.clone());
@@ -247,13 +224,13 @@ fn remembering(w: &mut World, law: &mut Language, lets: usize, arguments: &[Shap
 
 #[test]
 fn a_parameter_nothing_is_passed_to_adds_nothing_to_a_capture() {
-    comes_to("Option<!>", |w, law, lets| remembering(w, law, lets, &[]));
+    comes_to("Option<!>", |w, lets| remembering(w, lets, &[]));
 }
 
 #[test]
 fn an_argument_enters_a_capture_through_the_copy() {
-    comes_to("Option<u8>", |w, law, lets| remembering(w, law, lets, &[U8]));
-    comes_to("Option<u8>", |w, law, lets| remembering(w, law, lets, &[U8, U8]));
+    comes_to("Option<u8>", |w, lets| remembering(w, lets, &[U8]));
+    comes_to("Option<u8>", |w, lets| remembering(w, lets, &[U8, U8]));
 }
 
 /// What enters below the top of a type is one type with what is there, so the
@@ -261,7 +238,7 @@ fn an_argument_enters_a_capture_through_the_copy() {
 /// meet there.
 #[test]
 fn the_arguments_of_two_calls_meet_in_a_capture() {
-    comes_to("refused: Mismatch, UndecidedClass", |w, law, lets| remembering(w, law, lets, &[U8, U16]));
+    comes_to("refused: Mismatch, UndecidedClass", |w, lets| remembering(w, lets, &[U8, U16]));
 }
 
 // What a body refuses apart from its parameters.
@@ -270,9 +247,8 @@ fn the_arguments_of_two_calls_meet_in_a_capture() {
 fn a_body_is_refused_where_it_is_defined_and_once_however_often_it_is_called() {
     for calls in 0..3 {
         let mut world = World::new();
-        let mut law = Language::default();
-        let broken = broken(&mut world, &mut law);
-        let f = world.define(broken, Vec::new());
+        let law = Language::default();
+        let f = broken(&mut world);
         for _ in 0..calls {
             let argument = world.text(U8);
             world.call(f, &[argument]);
@@ -287,9 +263,8 @@ fn a_body_is_refused_where_it_is_defined_and_once_however_often_it_is_called() {
 // Where two lambdas meet.
 
 /// `if c { |x| x } else { |x| 0u8 }`, called with a value of the type `argument`.
-fn either(w: &mut World, law: &mut Language, lets: usize, argument: Shape<ClassId>) -> ClassId {
-    let (identity, constant) = (identity(w, law), constant(w, law, Shape::Scalar(Scalar::U8)));
-    let (first, second) = (w.define(identity, Vec::new()), w.define(constant, Vec::new()));
+fn either(w: &mut World, lets: usize, argument: Shape<ClassId>) -> ClassId {
+    let (first, second) = (identity(w), constant(w, Shape::Scalar(Scalar::U8)));
     let f = w.meets(first);
     w.enter(second, f);
     let f = behind(w, f, lets);
@@ -299,16 +274,15 @@ fn either(w: &mut World, law: &mut Language, lets: usize, argument: Shape<ClassI
 
 #[test]
 fn the_results_of_two_lambdas_that_met_are_one_type() {
-    comes_to("u8", |w, law, lets| either(w, law, lets, U8));
-    comes_to("refused: Mismatch, UndecidedClass", |w, law, lets| either(w, law, lets, U16));
+    comes_to("u8", |w, lets| either(w, lets, U8));
+    comes_to("refused: Mismatch, UndecidedClass", |w, lets| either(w, lets, U16));
 }
 
 // A lambda defined in a body is a closure of each copy.
 
 /// `let f = |x| |y| Some(x); let p = f(0u8); let q = f(0u16);`
-fn two_closures(w: &mut World, law: &mut Language, lets: usize) -> (ClassId, ClassId) {
-    let defining = defining(w, law);
-    let f = w.define(defining, Vec::new());
+fn two_closures(w: &mut World, lets: usize) -> (ClassId, ClassId) {
+    let f = defining(w);
     let f = behind(w, f, lets);
     let (first, second) = (w.text(U8), w.text(U16));
     (w.call(f, &[first]), w.call(f, &[second]))
@@ -317,8 +291,8 @@ fn two_closures(w: &mut World, law: &mut Language, lets: usize) -> (ClassId, Cla
 #[test]
 fn each_copy_defines_a_closure_over_its_own_classes() {
     for (observed, expected) in [(0, "Option<u8>"), (1, "Option<u16>")] {
-        comes_to(expected, |w, law, lets| {
-            let (p, q) = two_closures(w, law, lets);
+        comes_to(expected, |w, lets| {
+            let (p, q) = two_closures(w, lets);
             let argument = w.text(U8);
             w.call([p, q][observed], &[argument])
         });
@@ -327,8 +301,8 @@ fn each_copy_defines_a_closure_over_its_own_classes() {
 
 #[test]
 fn two_closures_of_one_lambda_that_met_are_both_called() {
-    comes_to("refused: Mismatch", |w, law, lets| {
-        let (p, q) = two_closures(w, law, lets);
+    comes_to("refused: Mismatch", |w, lets| {
+        let (p, q) = two_closures(w, lets);
         let g = w.meets(p);
         w.enter(q, g);
         let argument = w.text(U8);

@@ -30,10 +30,11 @@ use crate::primitive::domain::Domain;
 use crate::primitive::refusal::Refused;
 use crate::primitive::scope::Scopes;
 use crate::primitive::ty::{PartKey, Shape};
-use crate::primitive::{ClosureId, LambdaId, ScopeId};
+use crate::primitive::{ClosureId, ScopeId};
 use crate::store::Store;
 use crate::store::classes::Classes;
-use crate::store::closures::{Closures, Copy};
+use crate::store::closures::{Closure, Closures, Copy};
+use crate::store::template::{self, Anew};
 
 /// Two classes that are one type.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -177,8 +178,8 @@ pub enum Place {
 /// |---|---|
 /// | a class with a head, or with none ([`Scribe::written`], [`Scribe::undecided`]) | a head a rule writes, a class a rule names |
 /// | the classes of a template ([`Scribe::anew`]) | a signature at a boundary, the copy of a lambda |
-/// | a scope, and what copy lies in it ([`Scribe::scope_within`], [`Scribe::copied`]) | the copy of a lambda lies in a scope of its own |
-/// | a closure ([`Scribe::name`]) | a copy names a closure of each lambda its body defines |
+/// | a body of the store made anew, and what it is a copy of ([`Scribe::anew_body`], [`Scribe::copied`]) | a use of a closure |
+/// | a closure ([`Scribe::name`]) | a body written by a rule |
 #[derive(Debug)]
 pub struct Scribe<'a, K>
 where
@@ -207,19 +208,22 @@ where
         &self.store.closures
     }
 
-    /// Makes a scope within `scope`, for a copy to lie in.
-    pub fn scope_within(&mut self, scope: ScopeId) -> ScopeId {
-        self.store.scopes.child(scope)
-    }
-
     /// Says that the classes of `scope` are `copy`.
     pub fn copied(&mut self, scope: ScopeId, copy: Copy<K>) {
         self.store.closures.copied(scope, copy);
     }
 
-    /// Names a closure anew, `lambda` over `captures`.
-    pub fn name(&mut self, lambda: LambdaId, captures: Vec<K::Id>) -> ClosureId {
-        self.store.closures.name(lambda, captures)
+    /// Names a closure anew.
+    pub fn name(&mut self, closure: Closure<K>) -> ClosureId {
+        self.store.closures.name(closure)
+    }
+
+    /// Makes the body `body` anew within `scope` ([`template::anew`]).
+    pub fn anew_body(&mut self, body: ScopeId, scope: ScopeId) -> Anew<K>
+    where
+        K::Constraint: ConstraintInto<K, K>,
+    {
+        template::anew(self.store, body, scope)
     }
 
     /// Makes a brand anew, by `at`, and gives a class of it in `scope`.
@@ -251,6 +255,34 @@ where
     }
 }
 
+/// The bodies that await a use, as the law names them ([`Law::awaiting`]), among
+/// the scopes of the store.
+///
+/// A body awaits a use where a use is still to give it what it lacks. What lies
+/// in such a body, at any depth, awaits that use with it.
+#[derive(Clone, Debug)]
+pub struct Bodies<'a> {
+    scopes: &'a Scopes,
+    awaiting: Vec<ScopeId>,
+}
+
+impl<'a> Bodies<'a> {
+    pub fn new(scopes: &'a Scopes, awaiting: Vec<ScopeId>) -> Self {
+        Self { scopes, awaiting }
+    }
+
+    /// Whether `scope` lies in a body that awaits a use.
+    pub fn awaits(&self, scope: ScopeId) -> bool {
+        self.awaiting.iter().any(|body| self.scopes.lies_within(scope, *body))
+    }
+
+    /// Whether `inner` lies in a body that awaits a use and that `outer` lies
+    /// outside.
+    pub fn apart(&self, inner: ScopeId, outer: ScopeId) -> bool {
+        self.awaiting.iter().any(|body| self.scopes.lies_within(inner, *body) && !self.scopes.lies_within(outer, *body))
+    }
+}
+
 /// The rules solving asks.
 pub trait Law<K>
 where
@@ -278,12 +310,16 @@ where
     /// The heads the classes of `asked`, each undecided, take as solving
     /// settles. A class that `held` says is held may still be merged with
     /// another, and takes none.
-    fn heads(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>;
+    fn heads(&self, classes: &Classes<K>, bodies: &Bodies<'_>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>;
 
     /// The heads the classes of `asked`, each undecided, take at the fixpoint,
     /// where settling gives none. A class that `held` says is held takes none.
-    fn fixpoint(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>;
+    fn fixpoint(&self, classes: &Classes<K>, bodies: &Bodies<'_>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K>;
 
     /// What is refused of `class` when nothing more can be done.
-    fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>>;
+    fn end(&self, classes: &Classes<K>, bodies: &Bodies<'_>, class: K::Id) -> Vec<Refused<K>>;
+
+    /// The bodies of `store` that await a use: each the scope its text is
+    /// written in.
+    fn awaiting(&self, store: &Store<K>) -> Vec<ScopeId>;
 }

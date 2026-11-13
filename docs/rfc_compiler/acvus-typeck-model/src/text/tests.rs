@@ -298,6 +298,17 @@ fn what_a_body_says_of_a_capture_reaches_it_whether_the_lambda_is_called_or_not(
     holds("a <- Option<nothing>; f <- fn [a] (x) -> r { a <- Option<x>; }; u <- u8; call f(u) to w; assert a: Option<u8>;");
 }
 
+/// `|x| g(x, capture)`, `g` taking two `u8`: what the body asks of the capture
+/// decides it where the lambda is written, and what it asks of the parameter
+/// waits for a call.
+#[test]
+fn what_a_body_asks_of_a_capture_decides_it_and_what_it_asks_of_a_parameter_waits_for_a_call() {
+    let body = "declare g = Fn(u8, u8) -> (); f <- fn [g, capture] (x) -> r { call g(x, capture) to r; };";
+    holds(&format!("{body} assert capture: u8;"));
+    holds(&format!("{body} u <- u8; call f(u) to w; assert capture: u8; assert w: ();"));
+    holds(&format!("{body} v <- char; call f(v) to w; assert refused ..;"));
+}
+
 #[test]
 fn each_call_copies_the_template_anew() {
     holds("id <- fn (x) -> r { r <- x; }; p <- u8; q <- u16; call id(p) to m; call id(q) to n; assert m: u8; assert n: u16;");

@@ -45,7 +45,8 @@ use crate::primitive::{ItemId, Name, TemplateId};
 use crate::store::classes::Classes;
 
 use super::super::law::{Looked, Pair, Scribe};
-use super::functions::{Functions, Named, Row, Used};
+use super::functions::{Functions, Named, Row};
+use super::templates::Used;
 use super::{Then, Told, View};
 
 /// Types as they are written somewhere: in the store being solved, or in a row of
@@ -513,7 +514,7 @@ where
         let Some(parameter) = row.only_parameter() else {
             continue;
         };
-        match fits(view, argument, &row.template, parameter, read) {
+        match fits(view, argument, &row.template.classes, parameter, read) {
             Fits::Yes(fit) => {
                 let into_the_row = fit.placed(Site::Solved, |written| Site::Step(0, written));
                 let begun = Way {
@@ -546,7 +547,7 @@ where
 {
     let step = way.rows.len() - 1;
     let of_the_row = |written| Site::Step(step, written);
-    match fits(&row.template, row.result, view, given, &mut BTreeSet::new()) {
+    match fits(&row.template.classes, row.template.result, view, given, &mut BTreeSet::new()) {
         Fits::Yes(fit) => {
             let mut ended = way;
             ended.steps.push(fit.placed(of_the_row, Site::Solved));
@@ -562,7 +563,7 @@ where
                 let Some(parameter) = next.only_parameter() else {
                     continue;
                 };
-                let Fits::Yes(fit) = fits(&row.template, row.result, &next.template, parameter, &mut BTreeSet::new()) else {
+                let Fits::Yes(fit) = fits(&row.template.classes, row.template.result, &next.template.classes, parameter, &mut BTreeSet::new()) else {
                     continue;
                 };
                 let mut longer = way.clone();
@@ -582,7 +583,7 @@ where
 {
     let scope = scribe.classes().get(scribe.classes().find(argument)).scope;
     // The signature of each row on the way, made anew.
-    let used: Vec<Used<K>> = way.rows.iter().map(|row| functions.rows[*row].used(scribe, scope, at)).collect();
+    let used: Vec<Used<K>> = way.rows.iter().map(|row| functions.rows[*row].template.used(scribe, scope, at)).collect();
     let solved = |written: Site<K::Id>| match written {
         Site::Solved(class) => class,
         Site::Step(step, class) => used[step].classes[&class],
@@ -591,8 +592,8 @@ where
     // One type: what each step pairs, and each brand a row makes with the one
     // made for this use of it.
     let of_the_steps = way.steps.iter().flat_map(|step| &step.pairs).map(|(a, b)| Pair::Classes(solved(*a), solved(*b)));
-    let brands = used.iter().flat_map(|used| used.brands.iter().cloned());
-    let pairs = of_the_steps.chain(brands).collect();
+    let of_the_uses = used.iter().flat_map(|used| used.pairs.iter().cloned());
+    let pairs = of_the_steps.chain(of_the_uses).collect();
 
     // Passed: each function a step brings to a function type, now that the
     // signature that writes the type is made.

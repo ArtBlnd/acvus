@@ -7,7 +7,7 @@ use crate::store::classes::Classes;
 
 use super::Outcome;
 use super::decide::decide;
-use super::law::Law;
+use super::law::{Bodies, Law};
 use super::settle::{asked, settle};
 
 /// Solves what has been recorded.
@@ -31,8 +31,9 @@ where
             break;
         }
     }
+    let bodies = Bodies::new(&store.scopes, law.awaiting(store));
     for class in asked(&store.classes, visit) {
-        for refused in law.end(&store.classes, class) {
+        for refused in law.end(&store.classes, &bodies, class) {
             outcome.refuse(refused);
         }
     }

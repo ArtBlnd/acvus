@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::operation::Outcome;
 use crate::operation::language::Language;
 use crate::operation::language::functions::Functions;
-use crate::operation::language::lambdas::{Defined, Lambda, Lambdas};
+use crate::operation::language::units::Units;
 use crate::operation::solve::solve;
 use crate::primitive::class::{ClassKind, Live, Origin, Side, State, Template};
 use crate::primitive::constraint::{Bound, Constraint, Suspended};
@@ -22,9 +22,10 @@ use crate::primitive::id::{Arena, Id};
 use crate::primitive::refusal::{Cause, Refused};
 use crate::primitive::ty::{Mutability, PartKey, Scalar, Shape, Ty, VariantOf};
 use crate::primitive::scope::Scopes;
-use crate::primitive::{ClassId, ItemId, LambdaId, Name, ScopeId, TemplateId};
+use crate::primitive::{ClassId, ClosureId, ItemId, Name, ScopeId};
 use crate::store::Store;
 use crate::store::classes::Classes;
+use crate::store::closures::{Closure, Closures, Copy};
 
 use super::ast::{self, Assertion, Brand, Op, Path, Program, Segment, Statement, Type, Variant};
 use super::print;
@@ -59,19 +60,16 @@ impl Items {
     }
 }
 
-/// What the class of a lambda written in some classes is: where the program is
-/// written it has the function value of a closure named there, and in a body it
-/// is a class the body's template says a lambda is defined at.
-type Define<'a, K> = dyn FnMut(&mut Classes<K>, LambdaId, Vec<<K as ClassKind>::Id>, ItemId) -> <K as ClassKind>::Id + 'a;
-
-/// Statements being written into classes: those of the program, or those of the
-/// template of a lambda's body. The two are written the same way, and differ in
-/// what a lambda written there is ([`Define`]).
+/// Statements being written into a scope of the store: those of the program,
+/// or those of the body of a lambda, which lies in a scope of its own within
+/// the scope the lambda is written in. The two are written the same way.
 struct Writer<'a, K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
     classes: &'a mut Classes<K>,
+    scopes: &'a mut Scopes,
+    closures: &'a mut Closures<K>,
     scope: ScopeId,
     /// The class each name stands for: the one it was first written as.
     names: &'a mut BTreeMap<String, K::Id>,
@@ -81,8 +79,7 @@ where
     not_held: &'a mut Vec<Refused<K>>,
     items: &'a mut Items,
     functions: &'a mut Functions,
-    lambdas: &'a mut Lambdas,
-    define: &'a mut Define<'a, K>,
+    units: &'a mut Units,
 }
 
 /// The name of what the lambda of a module gives: its functions, by their names.
@@ -214,58 +211,52 @@ where
         );
     }
 
-    /// Writes the template of `lambda`, by `item`, and gives it with the classes
-    /// written here that it captures.
+    /// Writes the body of `lambda` in a scope of its own within this one, by
+    /// `item`, and gives the closure named of it.
     ///
-    /// The name of a parameter is a variable of the body. A parameter that writes
-    /// no type is that variable, a hole. One that writes a type is the class a
-    /// declaration writes, which what is passed is passed to, and which enters
-    /// the variable, as a declared value enters what it is assigned to.
-    fn lambda(&mut self, lambda: &ast::Lambda, item: ItemId, label: &str) -> Result<(LambdaId, Vec<K::Id>), String> {
-        let mut template = Classes::<Template>::default();
+    /// A name the lambda captures is the class it stands for here. The name of a
+    /// parameter is a variable of the body. A parameter that writes no type is
+    /// that variable, a hole. One that writes a type is the class a declaration
+    /// writes, which what is passed is passed to, and which enters the variable,
+    /// as a declared value enters what it is assigned to.
+    ///
+    /// The body is said to be a copy of its own closure, so a call within it of
+    /// that closure is a call of the body itself.
+    fn lambda(&mut self, lambda: &ast::Lambda, item: ItemId, label: &str) -> Result<ClosureId, String> {
+        let scope = self.scopes.child(self.scope);
         let mut names = BTreeMap::new();
-        let scope = self.scope;
-        let mut open = |names_of: &[String]| -> Result<Vec<TemplateId>, String> {
-            let mut classes = Vec::new();
-            for name in names_of {
-                let class = template.undecided(scope);
-                if names.insert(name.clone(), class).is_some() {
-                    return Err(format!("`{name}` is named twice among what a lambda captures, takes and gives"));
-                }
-                classes.push(class);
-            }
-            Ok(classes)
+        let mut name_once = |name: &String, class: K::Id| match names.insert(name.clone(), class) {
+            Some(_) => Err(format!("`{name}` is named twice among what a lambda captures, takes and gives")),
+            None => Ok(()),
         };
         // A module the body uses is captured, as what it names is written where
         // the program is.
         let implicit = modules_used(&lambda.body).into_iter().filter(|module| !lambda.captures.contains(module));
-        let captured_names: Vec<String> = lambda.captures.iter().cloned().chain(implicit).collect();
-        let captures = open(&captured_names)?;
-        let named: Vec<String> = lambda.parameters.iter().map(|parameter| parameter.name.clone()).collect();
-        let variables = open(&named)?;
-        let result = open(std::slice::from_ref(&lambda.result))?[0];
+        let captured: Vec<String> = lambda.captures.iter().cloned().chain(implicit).collect();
+        for name in &captured {
+            let class = self.named(name);
+            name_once(name, class)?;
+        }
+        let mut variables = Vec::new();
+        for parameter in &lambda.parameters {
+            let variable = self.classes.undecided(scope);
+            name_once(&parameter.name, variable)?;
+            variables.push(variable);
+        }
+        let result = self.classes.undecided(scope);
+        name_once(&lambda.result, result)?;
 
-        let (mut made, mut not_held, mut defines) = (Vec::new(), Vec::new(), Vec::new());
-        let mut define = |classes: &mut Classes<Template>, lambda: LambdaId, captures: Vec<TemplateId>, by: ItemId| {
-            let value = classes.undecided(scope);
-            defines.push(Defined {
-                lambda,
-                captures,
-                value,
-                by,
-            });
-            value
-        };
         let mut body = Writer {
-            classes: &mut template,
+            classes: &mut *self.classes,
+            scopes: &mut *self.scopes,
+            closures: &mut *self.closures,
             scope,
             names: &mut names,
-            made: &mut made,
-            not_held: &mut not_held,
+            made: &mut *self.made,
+            not_held: &mut *self.not_held,
             items: &mut *self.items,
             functions: &mut *self.functions,
-            lambdas: &mut *self.lambdas,
-            define: &mut define,
+            units: &mut *self.units,
         };
         let mut parameters = Vec::new();
         for (parameter, variable) in lambda.parameters.iter().zip(variables) {
@@ -288,28 +279,25 @@ where
             let label = statement.label.clone().unwrap_or_else(|| format!("{label}.{}", index + 1));
             body.statement(&statement.op, &label)?;
         }
-        debug_assert!(not_held.is_empty(), "a body names parts on classes not decided");
 
-        let written = self.lambdas.write(Lambda {
-            template,
-            parameters,
+        let closure = self.closures.name(Closure {
+            body: scope,
+            parameters: parameters.clone(),
             result,
-            captures,
-            defines,
         });
-        let captured = captured_names.iter().map(|name| self.named(name)).collect();
-        Ok((written, captured))
+        self.closures.copied(scope, Copy { closure, parameters, result });
+        Ok(closure)
     }
 
-    /// Writes `upper <- lambda`, and gives the lambda written: its class enters
-    /// `upper`.
-    fn defined(&mut self, upper: &Path, lambda: &ast::Lambda, label: &str) -> Result<LambdaId, String> {
+    /// Writes `upper <- lambda`, and gives the closure named of the lambda: the
+    /// function value of that closure enters `upper`.
+    fn defined(&mut self, upper: &Path, lambda: &ast::Lambda, label: &str) -> Result<ClosureId, String> {
         let item = self.items.item(label.to_owned());
-        let (written, captured) = self.lambda(lambda, item, label)?;
-        let value = (self.define)(self.classes, written, captured, item);
+        let closure = self.lambda(lambda, item, label)?;
+        let value = self.classes.decided(self.scope, Shape::FnValue(BTreeSet::from([closure])), BTreeSet::from([item]));
         let upper = self.path(upper, Side::Lower, label);
         self.classes.constrain(Bound::Enter { lower: value, upper }.into(), item);
-        Ok(written)
+        Ok(closure)
     }
 
     /// Writes the module `name`, of the fields `fields`, whose body is `body`: a
@@ -380,19 +368,24 @@ where
         let module = self.defined(&upper, &whole, label)?;
 
         // A function whose first parameter writes a type takes a receiver, and
-        // is found by a call by name. The lambdas a body defines are kept in the
-        // order its statements define them.
-        let defining = whole.body.iter().filter_map(|statement| match &statement.op {
-            Op::Define { upper, .. } => Some(upper),
-            _ => None,
-        });
-        let defined: Vec<LambdaId> = self.lambdas.get(module).defines.iter().map(|defined| defined.lambda).collect();
-        for (upper, function) in defining.zip(defined) {
-            let written = self.lambdas.get(function);
-            let receiver = written.parameters.first().copied().filter(|first| written.template.is_decided(*first));
-            if let (true, Some(receiver)) = (upper.segments.is_empty(), receiver) {
-                self.functions.method(Name::new(&upper.root), module, written.template.clone(), receiver);
+        // is found by a call by name, by that type as the text writes it.
+        for statement in &whole.body {
+            let Op::Define { upper, lambda } = &statement.op else {
+                continue;
+            };
+            let writes_a_head = |ty: &&Type| !matches!(ty, Type::Class(_) | Type::Integer | Type::Float);
+            let Some(ty) = lambda.parameters.first().and_then(|first| first.ty.as_ref()).filter(writes_a_head) else {
+                continue;
+            };
+            if !upper.segments.is_empty() {
+                continue;
             }
+            let item = self.items.item(label.to_owned());
+            let mut classes = Classes::<Template>::default();
+            let receiver = classes.write(Scopes::new().root(), &written_alone(ty)?, item, &mut BTreeMap::new());
+            let name = Name::new(&upper.root);
+            let told = self.functions.told(name.clone(), classes, receiver);
+            self.units.method(told, name, module);
         }
         Ok(())
     }
@@ -708,6 +701,27 @@ fn signature(ty: &Type, holes: &[String]) -> Result<Ty, String> {
     }
 }
 
+/// The type a parameter writes, as a signature of its own: a class it names is
+/// a hole of that signature.
+fn written_alone(ty: &Type) -> Result<Ty, String> {
+    let hole = |name: String| Ty::Hole(Name::new(&name));
+    match ty {
+        Type::Class(path) => Ok(hole(path.to_string())),
+        Type::Integer => Ok(hole("{integer}".to_owned())),
+        Type::Float => Ok(hole("{float}".to_owned())),
+        Type::Branded(name, arguments, brand) => {
+            let arguments = arguments.iter().map(written_alone).collect::<Result<_, _>>()?;
+            let brand = match brand {
+                Brand::Class(path) => hole(path.to_string()),
+                Brand::Hole(named) => hole(named.clone()),
+                Brand::Made(_) => return Err(A_BRAND_IS_WRITTEN.to_owned()),
+            };
+            Ok(Ty::Node(Box::new(Shape::Extern(Name::new(name), arguments, brand))))
+        }
+        written => Ok(Ty::Node(Box::new(shape(written).try_map(|part| written_alone(part))?))),
+    }
+}
+
 /// Records `program`: what its declarations write, and then each constraint in
 /// the order of its statements. It is no program to record where a name is
 /// declared twice or by a type that names it, or a row names a class or holds a
@@ -733,7 +747,7 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
     }
     let Recorded {
         store: Store { classes, scopes, closures, .. },
-        law: Language { functions, lambdas, structs },
+        law: Language { functions, units, structs },
         outcome,
         items,
         names,
@@ -741,25 +755,20 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
     } = &mut recorded;
     let root = scopes.root();
     let mut not_held = Vec::new();
-    // Where the program is written a lambda is a closure named at once, over the
-    // classes it captures, and its class has that function value.
-    let mut define = |classes: &mut Classes<Live>, lambda: LambdaId, captures: Vec<ClassId>, by: ItemId| {
-        let closure = closures.name(lambda, captures);
-        classes.decided(root, Shape::FnValue(BTreeSet::from([closure])), BTreeSet::from([by]))
-    };
     let mut writer = Writer {
         classes,
+        scopes,
+        closures,
         scope: root,
         names,
         made,
         not_held: &mut not_held,
         items,
         functions,
-        lambdas,
-        define: &mut define,
+        units,
     };
     for (statement, label) in program.statements.iter().zip(&labelled) {
-        declare(&mut writer, structs, scopes, &statement.op, label)?;
+        declare(&mut writer, structs, &statement.op, label)?;
     }
     for (statement, label) in program.statements.iter().zip(&labelled) {
         match &statement.op {
@@ -777,7 +786,7 @@ pub fn record(program: &Program) -> Result<Recorded, String> {
 /// Records what a declaration writes: a class of the name it declares, a row of
 /// the table of functions, or the fields of a struct. Any other statement
 /// declares nothing.
-fn declare(writer: &mut Writer<'_, Live>, structs: &mut BTreeMap<Name, Vec<Name>>, scopes: &Scopes, op: &Op, label: &str) -> Result<(), String> {
+fn declare(writer: &mut Writer<'_, Live>, structs: &mut BTreeMap<Name, Vec<Name>>, op: &Op, label: &str) -> Result<(), String> {
     match op {
         Op::Declare { name, ty } => {
             if writer.names.contains_key(name) {
@@ -801,7 +810,7 @@ fn declare(writer: &mut Writer<'_, Live>, structs: &mut BTreeMap<Name, Vec<Name>
             let item = writer.items.item(label.to_owned());
             let parameters = parameters.iter().map(|parameter| signature(parameter, holes)).collect::<Result<Vec<_>, _>>()?;
             let result = signature(result, holes)?;
-            writer.functions.declare(Name::new(name), &parameters, &result, scopes, item);
+            writer.functions.declare(Name::new(name), &parameters, &result, writer.scopes, item);
         }
         Op::Struct { name, fields } | Op::Module { name, fields, .. } => {
             let named: Vec<Name> = fields.iter().map(Name::new).collect();

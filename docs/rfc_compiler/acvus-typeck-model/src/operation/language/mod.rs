@@ -4,9 +4,11 @@
 //! |---|---|---|
 //! | what a constraint comes to | by the relation the constraint is: entering, being equal, being passed, `as _`, the exit of `?` | [`enter`], [`equal`], [`passing`], [`alone`], [`exit`] |
 //! | which functions are declared | a table, and no rule | [`functions`] |
-//! | which lambdas the text writes | a table, and no rule | [`lambdas`] |
-//! | what a function value passed to a function type comes to | a copy of each closure | [`calling`] |
-//! | which function a call by name calls | the one row of that name the receiver goes to | [`naming`] |
+//! | what a use of a declared function makes anew | its template | [`templates`] |
+//! | what a function value passed to a function type comes to | the body of each closure made anew | [`calling`] |
+//! | which bodies await a use | the body of each closure | [`Language::awaiting`] |
+//! | which function a call by name calls | the one function of that name the receiver goes to | [`naming`] |
+//! | what calling a function of a module comes to | the module used, and the function called | [`units`] |
 //! | which classes are one type by the constraints as a whole | classes that enter one another | [`enter::entering_one_another`] |
 //! | where a named part lies | read through a reference | [`Language::place`] |
 //! | what head a class may take | the rungs, in order | [`rungs`] |
@@ -18,30 +20,32 @@ pub mod enter;
 pub mod equal;
 pub mod exit;
 pub mod functions;
-pub mod lambdas;
 pub mod naming;
 pub mod passing;
 pub mod rungs;
+pub mod templates;
+pub mod units;
 
 use std::collections::BTreeMap;
 
-use crate::primitive::{ItemId, Name};
+use crate::primitive::{ItemId, Name, ScopeId};
 use crate::primitive::adjustment::Adjustment;
 use crate::primitive::constraint::{Bound, Constraint, ConstraintOf, Suspended};
 use crate::primitive::class::{ClassKind, State};
 use crate::primitive::domain::Domain;
 use crate::primitive::refusal::Refused;
 use crate::primitive::ty::{PartKey, Shape};
+use crate::store::Store;
 use crate::store::classes::Classes;
 
-use super::law::{Heads, Law, Looked, Pair, Place, Scribe};
+use super::law::{Bodies, Heads, Law, Looked, Pair, Place, Scribe};
 
 /// The rules of the language, with the functions declared from outside, and the
-/// lambdas and the structs the text writes.
+/// structs the text writes.
 #[derive(Clone, Debug, Default)]
 pub struct Language {
     pub functions: functions::Functions,
-    pub lambdas: lambdas::Lambdas,
+    pub units: units::Units,
     /// The fields of each struct, in the order it declares them: the type of the
     /// field at a place is the struct's type parameter at that place.
     pub structs: BTreeMap<Name, Vec<Name>>,
@@ -55,8 +59,8 @@ where
         let told = tell(&View::of(scribe.classes()), &self.functions, constraint, at);
         match told.then {
             Some(Then::Way(way)) => passing::take(scribe, &self.functions, way, constraint.lower(), at),
-            Some(Then::Calls(wanted)) => calling::take(scribe, &self.lambdas, constraint.lower(), wanted, at),
-            Some(Then::Named(received)) => naming::take(scribe, &self.functions, received, constraint.lower(), constraint.upper(), at),
+            Some(Then::Calls(wanted)) => calling::take(scribe, constraint.lower(), wanted, at),
+            Some(Then::Named(received)) => naming::take(scribe, &self.functions, &self.units, received, constraint.lower(), constraint.upper(), at),
             Some(Then::Enters(shape)) => {
                 let upper = constraint.upper();
                 let scope = scribe.classes().get(scribe.classes().find(upper)).scope;
@@ -106,16 +110,22 @@ where
         admits(head, domain)
     }
 
-    fn heads(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
-        rungs::heads(classes, &self.functions, asked, held)
+    fn heads(&self, classes: &Classes<K>, bodies: &Bodies<'_>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
+        rungs::heads(classes, bodies, &self.functions, asked, held)
     }
 
-    fn fixpoint(&self, classes: &Classes<K>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
-        rungs::fixpoint(classes, &self.functions, asked, held)
+    fn fixpoint(&self, classes: &Classes<K>, bodies: &Bodies<'_>, asked: &[K::Id], held: &dyn Fn(K::Id) -> bool) -> Heads<K> {
+        rungs::fixpoint(classes, bodies, &self.functions, asked, held)
     }
 
-    fn end(&self, classes: &Classes<K>, class: K::Id) -> Vec<Refused<K>> {
-        rungs::end(classes, &self.functions, class)
+    fn end(&self, classes: &Classes<K>, bodies: &Bodies<'_>, class: K::Id) -> Vec<Refused<K>> {
+        rungs::end(classes, bodies, &self.functions, class)
+    }
+
+    /// The body of each closure: a call gives its parameters what they lack, to
+    /// a body made anew.
+    fn awaiting(&self, store: &Store<K>) -> Vec<ScopeId> {
+        store.closures.iter().map(|(_, closure)| closure.body).collect()
     }
 }
 

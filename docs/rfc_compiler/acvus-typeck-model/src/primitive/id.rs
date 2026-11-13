@@ -35,14 +35,12 @@ id! {
     /// ids name one class; `store::classes::Classes::find` gives the one that
     /// holds it.
     ClassId,
-    /// A class of a template: recorded once, never solved, and only copied.
+    /// A class of a signature: recorded once, never solved, and only copied.
     TemplateId,
     /// What recorded something: a place in the text, or solving itself.
     ItemId,
-    /// A lambda together with its captures.
+    /// A body of the store, with the classes of its parameters and its result.
     ClosureId,
-    /// A lambda as the text writes it: its template.
-    LambdaId,
     /// A name a function is called by.
     NameId,
     /// A brand: what a call of a function that makes one made, unlike what any

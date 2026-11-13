@@ -1543,7 +1543,7 @@ impl Law<Live> for Odd {
         true
     }
 
-    fn heads(&self, classes: &Classes<Live>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
+    fn heads(&self, classes: &Classes<Live>, _: &super::law::Bodies<'_>, asked: &[ClassId], held: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
         let only = |class: ClassId| {
             let State::Undecided(undecided) = &classes.get(classes.find(class)).state else {
                 return Offer::Nothing;
@@ -1558,14 +1558,18 @@ impl Law<Live> for Odd {
         Heads::of_ladder(ladder, asked, held)
     }
 
-    fn fixpoint(&self, _: &Classes<Live>, _: &[ClassId], _: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
+    fn fixpoint(&self, _: &Classes<Live>, _: &super::law::Bodies<'_>, _: &[ClassId], _: &dyn Fn(ClassId) -> bool) -> Heads<Live> {
         Heads {
             heads: Vec::new(),
             refused: Vec::new(),
         }
     }
 
-    fn end(&self, _: &Classes<Live>, _: ClassId) -> Vec<Refused<Live>> {
+    fn end(&self, _: &Classes<Live>, _: &super::law::Bodies<'_>, _: ClassId) -> Vec<Refused<Live>> {
+        Vec::new()
+    }
+
+    fn awaiting(&self, _: &crate::store::Store<Live>) -> Vec<crate::primitive::ScopeId> {
         Vec::new()
     }
 }

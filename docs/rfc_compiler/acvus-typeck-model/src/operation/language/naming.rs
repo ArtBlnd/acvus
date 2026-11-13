@@ -10,8 +10,8 @@
 //!
 //! A row found, its signature is made anew: each argument after the receiver is
 //! passed to its parameter, and its result is one type with the result the call
-//! writes. A function of a module found, the module is used and the function
-//! called, the receiver being its first argument.
+//! writes. A function the table was told of found, what the call comes to is
+//! said by whoever told of it (`ToldOf`).
 
 use std::collections::BTreeSet;
 
@@ -19,13 +19,14 @@ use crate::primitive::adjustment::Adjustment;
 use crate::primitive::class::{ClassKind, State};
 use crate::primitive::constraint::{Bound, Constraint};
 use crate::primitive::refusal::{Cause, Refused};
-use crate::primitive::ty::{PartKey, Shape};
+use crate::primitive::ty::Shape;
 use crate::primitive::{ItemId, NameId, ScopeId};
 
 use super::super::law::{Looked, Pair, Scribe};
 use super::calling;
-use super::functions::{Functions, Method, Named, Row, Used};
+use super::functions::{Functions, Named, Row};
 use super::passing::{self, Received};
+use super::templates::Used;
 use super::{Then, Told, View};
 
 /// What calling the function `name` on `receiver` comes to, `wanted` being the
@@ -69,10 +70,26 @@ where
     }
 }
 
-/// What the call comes to, the function `received` names being the one called.
-pub(super) fn take<K>(scribe: &mut Scribe<'_, K>, functions: &Functions, received: Received<K>, receiver: K::Id, wanted: K::Id, at: ItemId) -> Looked<K>
+/// What calling a function the table of functions was told of comes to, as
+/// whoever told of it says.
+///
+/// Naming knows such a function by its place in the table and by the type its
+/// first parameter writes alone.
+pub(super) trait ToldOf<K>
+where
+    K: ClassKind,
+{
+    /// What `call` comes to, `function` being the one called and `received` how
+    /// the receiver fits its first parameter.
+    fn called(&self, scribe: &mut Scribe<'_, K>, function: usize, received: Received<K>, call: Call<K>) -> Looked<K>;
+}
+
+/// What the call comes to, the function `received` names being the one called:
+/// a row by its template, and a function the table was told of as `told` says.
+pub(super) fn take<K, T>(scribe: &mut Scribe<'_, K>, functions: &Functions, told: &T, received: Received<K>, receiver: K::Id, wanted: K::Id, at: ItemId) -> Looked<K>
 where
     K: ClassKind<Constraint = Constraint<K>>,
+    T: ToldOf<K>,
 {
     let of_wanted = scribe.classes().get(scribe.classes().find(wanted));
     let (State::Decided(decided), scope) = (&of_wanted.state, of_wanted.scope) else {
@@ -91,22 +108,22 @@ where
     };
     match received.function {
         Named::Row(row) => of_a_row(scribe, &functions.rows[row], received, call),
-        Named::Method(method) => of_a_module(scribe, &functions.methods[method], received, call),
+        Named::Told(function) => told.called(scribe, function, received, call),
     }
 }
 
 /// A call by name as it is written: its receiver, the function type it writes
 /// and what that type holds, the scope it lies in and the item it goes by.
-struct Call<K>
+pub(super) struct Call<K>
 where
     K: ClassKind,
 {
-    receiver: K::Id,
-    wanted: K::Id,
-    arguments: Vec<K::Id>,
-    result: K::Id,
-    scope: ScopeId,
-    at: ItemId,
+    pub(super) receiver: K::Id,
+    pub(super) wanted: K::Id,
+    pub(super) arguments: Vec<K::Id>,
+    pub(super) result: K::Id,
+    pub(super) scope: ScopeId,
+    pub(super) at: ItemId,
 }
 
 /// Makes the signature of `row` anew: each argument after the receiver is passed
@@ -116,7 +133,7 @@ fn of_a_row<K>(scribe: &mut Scribe<'_, K>, row: &Row, received: Received<K>, cal
 where
     K: ClassKind<Constraint = Constraint<K>>,
 {
-    let after_the_receiver = &row.parameters[1..];
+    let after_the_receiver = &row.template.parameters[1..];
     let written = calling::Call {
         arguments: call.arguments,
         result: call.result,
@@ -124,7 +141,7 @@ where
     if let Some(refused) = written.count(after_the_receiver.len(), [call.receiver, call.wanted], call.at) {
         return Looked::Refused(refused);
     }
-    let Used { classes: made, brands } = row.used(scribe, call.scope, call.at);
+    let Used { classes: made, pairs: of_the_use } = row.template.used(scribe, call.scope, call.at);
 
     let Received { fit: receiver, .. } = received;
 
@@ -143,74 +160,18 @@ where
     // signature.
     let signature = calling::Signature {
         parameters: after_the_receiver.iter().map(|parameter| made[parameter]).collect(),
-        result: made[&row.result],
+        result: made[&row.template.result],
     };
     written.uses(&signature, &mut follows);
 
-    // One type besides: each brand the row makes with the one made for this
-    // call.
-    follows.pairs.extend(brands);
+    // What making the row's template anew for this call leaves besides: each
+    // brand the row makes is one type with the one made for the call.
+    follows.pairs.extend(of_the_use);
 
     let called = Adjustment::Row(row.name.clone());
     Looked::Holds {
         pairs: follows.pairs,
         adjustments: receiver.adjustments.into_iter().chain([called]).collect(),
         constraints: follows.constraints,
-    }
-}
-
-/// Uses the module `method` is of, and calls that function of it with the
-/// receiver as its first argument, lent where the receiver is lent.
-///
-/// Using a module is calling its lambda, which gives its functions by their
-/// names. So this writes what `M::m(x, ā)` writes: the module's lambda is passed
-/// to a function type of no argument, the function is the field of its name of
-/// what that gives, and it is passed to the function type of the receiver, the
-/// arguments and the result. What the receiver takes besides a lend, the passing
-/// of it to the function's first parameter records.
-fn of_a_module<K>(scribe: &mut Scribe<'_, K>, method: &Method, received: Received<K>, call: Call<K>) -> Looked<K>
-where
-    K: ClassKind<Constraint = Constraint<K>>,
-{
-    let Call { scope, at, .. } = call;
-    let by = || BTreeSet::from([at]);
-    let closure = scribe
-        .closures()
-        .iter()
-        .find_map(|(closure, closed)| (closed.lambda == method.module).then_some(closure))
-        .expect("a module is a lambda written where the program is, and a closure of it is named there");
-    let module = scribe.written(scope, Shape::FnValue(BTreeSet::from([closure])), by());
-    let functions = scribe.undecided(scope);
-    let used = scribe.written(scope, Shape::Fn(Vec::new(), functions), by());
-    let function = scribe.undecided(scope);
-    let lent = received.fit.adjustments.iter().find_map(|adjustment| match adjustment {
-        Adjustment::Lend(mutability) => Some(*mutability),
-        _ => None,
-    });
-    let receiver = match lent {
-        Some(mutability) => scribe.written(scope, Shape::Ref(mutability, call.receiver), by()),
-        None => call.receiver,
-    };
-    let passed = [receiver].into_iter().chain(call.arguments).collect();
-    let called = scribe.written(scope, Shape::Fn(passed, call.result), by());
-    Looked::Holds {
-        pairs: vec![Pair::Part {
-            part: function,
-            of: functions,
-            key: PartKey::Field(method.name.clone()),
-        }],
-        adjustments: lent.map(Adjustment::Lend).into_iter().collect(),
-        constraints: vec![
-            Bound::Change {
-                lower: module,
-                upper: used,
-            }
-            .into(),
-            Bound::Change {
-                lower: function,
-                upper: called,
-            }
-            .into(),
-        ],
     }
 }

@@ -48,8 +48,8 @@ impl ClassKind for Live {
     type Constraint = Constraint<Self>;
 }
 
-/// The classes of a template: a signature or the text of a body, recorded
-/// once, never solved, and copied at each use.
+/// The classes of a signature: recorded once, never solved, and copied at each
+/// use.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct Template;
 

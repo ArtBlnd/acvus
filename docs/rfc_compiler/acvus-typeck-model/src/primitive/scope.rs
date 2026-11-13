@@ -38,6 +38,18 @@ impl Scopes {
         *self.parents.get(scope)
     }
 
+    /// Whether `scope` is `of`, or lies in it at any depth.
+    pub fn lies_within(&self, scope: ScopeId, of: ScopeId) -> bool {
+        let mut scope = Some(scope);
+        while let Some(current) = scope {
+            if current == of {
+                return true;
+            }
+            scope = *self.parents.get(current);
+        }
+        false
+    }
+
     /// The innermost scope that holds both: of two scopes one of which lies
     /// in the other, the outer.
     pub fn outer(&self, a: ScopeId, b: ScopeId) -> ScopeId {
@@ -67,6 +79,19 @@ mod tests {
         assert_eq!(scopes.outer(lambda, body), body);
         assert_eq!(scopes.outer(body, lambda), body);
         assert_eq!(scopes.outer(lambda, lambda), lambda);
+    }
+
+    #[test]
+    fn a_scope_lies_within_itself_and_what_holds_it_and_not_within_what_it_holds() {
+        let mut scopes = Scopes::new();
+        let body = scopes.child(scopes.root());
+        let lambda = scopes.child(body);
+        let other = scopes.child(scopes.root());
+        assert!(scopes.lies_within(lambda, lambda));
+        assert!(scopes.lies_within(lambda, body));
+        assert!(scopes.lies_within(lambda, scopes.root()));
+        assert!(!scopes.lies_within(body, lambda));
+        assert!(!scopes.lies_within(lambda, other));
     }
 
     #[test]

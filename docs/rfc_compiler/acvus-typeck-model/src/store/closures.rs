@@ -1,31 +1,33 @@
-//! Closures: each a lambda and the classes that stand where it captures, and
-//! which closure each copy of a template is a copy of.
+//! Closures: each a body of the store and the classes of it a call gives and
+//! takes, and which closure each copy of a body is a copy of.
 //!
 //! A function value holds closures by name alone, so nothing is compared inside
 //! one. What a name stands for is kept here, and only added to: a closure is
-//! named where its lambda is defined, in the text or in a copy of the template
-//! that defines it, and never changed.
+//! named where its body is written, in the text or in a copy of a body that
+//! holds it, and never changed.
 
 use std::collections::BTreeMap;
 
 use crate::primitive::class::ClassKind;
 use crate::primitive::id::Arena;
 use crate::primitive::scope::Scopes;
-use crate::primitive::{ClosureId, LambdaId, ScopeId};
+use crate::primitive::{ClosureId, ScopeId};
 
-/// A lambda over the classes it captures, one for each capture its template
-/// writes, in that order.
+/// A body, the scope its text is written in, with the classes of its
+/// parameters and of its result. What the body captures is whatever class
+/// outside that scope its text names.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Closure<K>
 where
     K: ClassKind,
 {
-    pub lambda: LambdaId,
-    pub captures: Vec<K::Id>,
+    pub body: ScopeId,
+    pub parameters: Vec<K::Id>,
+    pub result: K::Id,
 }
 
-/// A copy of the template of a closure: the classes its parameters and its
-/// result became.
+/// A copy of the body of a closure: the classes its parameters and its result
+/// became.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Copy<K>
 where
@@ -62,13 +64,24 @@ impl<K> Closures<K>
 where
     K: ClassKind,
 {
-    /// Names a closure anew: `lambda` over `captures`.
-    pub fn name(&mut self, lambda: LambdaId, captures: Vec<K::Id>) -> ClosureId {
-        self.closures.push(Closure { lambda, captures })
+    /// Names a closure anew.
+    pub fn name(&mut self, closure: Closure<K>) -> ClosureId {
+        self.closures.push(closure)
     }
 
     pub fn get(&self, closure: ClosureId) -> &Closure<K> {
         self.closures.get(closure)
+    }
+
+    /// The closure, for [`super::template::anew`] to give it the classes its own
+    /// became.
+    pub(super) fn get_mut(&mut self, closure: ClosureId) -> &mut Closure<K> {
+        self.closures.get_mut(closure)
+    }
+
+    /// Every copy said, with the scope its classes lie in.
+    pub fn copies(&self) -> impl Iterator<Item = (ScopeId, &Copy<K>)> {
+        self.copies.iter().map(|(scope, copy)| (*scope, copy))
     }
 
     /// Every closure named, in the order they were named.
@@ -103,15 +116,20 @@ mod tests {
     use crate::primitive::id::Arena;
 
     fn two_closures() -> (Closures<Live>, ClosureId, ClosureId) {
-        let mut lambdas = Arena::<LambdaId, ()>::default();
-        let lambda = lambdas.push(());
+        let scopes = Scopes::new();
+        let [result, _] = classes();
+        let of_one_body = || Closure {
+            body: scopes.root(),
+            parameters: Vec::new(),
+            result,
+        };
         let mut closures = Closures::<Live>::default();
-        let (first, second) = (closures.name(lambda, Vec::new()), closures.name(lambda, Vec::new()));
+        let (first, second) = (closures.name(of_one_body()), closures.name(of_one_body()));
         (closures, first, second)
     }
 
     #[test]
-    fn two_closures_of_one_lambda_are_two() {
+    fn two_closures_of_one_body_are_two() {
         let (closures, first, second) = two_closures();
         assert_ne!(first, second);
         assert_eq!(closures.get(first), closures.get(second));
