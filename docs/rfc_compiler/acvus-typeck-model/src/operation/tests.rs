@@ -1,4 +1,4 @@
-//! The law, as programs: each test is a ruling of `TERMS.md` run.
+//! The law, as programs: each test runs one rule of it.
 //!
 //! A program is built behind each count of `let`s from none to three and solved
 //! in 24 orders of asking, and comes to one outcome in all of them: a class is

@@ -1,4 +1,4 @@
-//! The language's law: what `TERMS.md` rules, one rule in one place.
+//! The language's law, one rule in one place.
 //!
 //! | The law is asked | The rule | Where |
 //! |---|---|---|

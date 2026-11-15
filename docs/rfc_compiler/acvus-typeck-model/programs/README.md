@@ -209,7 +209,7 @@ difference. Each was read and run in parts to find the cause.
 | Why | Programs |
 |---|---|
 | The case was wrong: `?` exits into the class the tail enters, so a body with a `?` and a tail that is no `Result` is refused (`Ok(show(a))` is what is meant) | `completeness/a-script-with-a-try-and-a-text-tail` |
-| The present law, as `TERMS.md` rules it: `&&T` is a type | `spec/a-lend-that-reborrows-a-reference`, `rules/types/a-a-reference-to-a-reference` |
+| The present law: `&&T` is a type | `spec/a-lend-that-reborrows-a-reference`, `rules/types/a-a-reference-to-a-reference` |
 | The present law: a part read or written gives its class a head | `spec/a-field-written-by-the-text`, `spec/a-language-variant-names-its-constructor`, `spec/a-language-variant-reads-back-its-payload`, `probe/two-references-of-two-mutabilities-enter-one-class` |
 | The present law: a part named on a class `!` entered | `holes/a-pattern-on-a-scrutinee-of-type-never` |
 | The present law: a join makes the parts one type, so two types that meet at a part are a `Mismatch` and leave the classes above with no type | `spec/an-empty-part-with-two-upper-bounds` |
